@@ -1,0 +1,11 @@
+{
+  "format": "ojas-oracle-fixture-v1",
+  "op": "rms_norm",
+  "eps": 1e-6,
+  "input_shape": [4],
+  "input": [0.5, -1.25, 0.75, 2.0],
+  "weight_shape": [4],
+  "weight": [1.0, 0.5, -1.0, 1.5],
+  "expected_shape": [4],
+  "expected": [0.39605889293691887, -0.4950736161711486, -0.5940883394053783, 2.3763533576215132]
+}

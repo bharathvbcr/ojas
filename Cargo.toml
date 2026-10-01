@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "ojas-core",
+    "ojas-cpu",
+    "ojas-autograd",
+    "ojas-oracle",
+    "ojas-nn",
+    "ojas-optim",
+    "ojas-data",
+    "ojas-io",
+    "ojas-infer",
+    "ojas-metal",
+    "ojas-engine",
+    "ojas-device",
+    "ojas-wgpu",
+    "ojas-cuda",
+    "ojas-hip",
+    "ojas-capi",
+    "ojas-gusset-engine",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+# MSRV. ojas-core uses the standard library and syntax that is stable in
+# 1.82. The development compiler may be newer. Do not raise this field to match
+# that compiler unless a crate actually needs a newer language or library item.
+rust-version = "1.82"
+publish = false
+
+# panic = "unwind" is Cargo's default. It is set here so a profile cannot
+# switch the libraries to abort.
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+overflow-checks = true

@@ -1,0 +1,207 @@
+--- ojas-capi/src/lib.rs ---
+1: //! In-process load, step, generate, and free for the Go API.
+8: #![forbid(unsafe_code)]
+23: set_model_root, try_free, Session,
+--- ojas-capi/src/engine.rs ---
+40: OP_FREE => op_free(input),
+41: OP_PANIC => panic!("ojas: induced panic"),
+56: fn op_free(input: &[u8]) -> Result<Vec<u8>, String> {
+58: return Err("free: shape: payload must be one u64 id".to_string());
+62: session::try_free(id)?;
+197: /// the payload before anything is allocated.
+--- ojas-capi/src/session.rs ---
+36: // A panic while the table was held leaves whatever mutation
+102: pub fn try_free(id: u64) -> Result<(), String> {
+126: panic!("ojas test: poison the session table");
+--- ojas-capi/src/load.rs ---
+12: /// Official safetensors header-length cap.
+16: /// are refused rather than allocated.
+--- ojas-capi/src/step.rs ---
+--- ojas-capi/src/generate.rs ---
+--- ojas-capi/src/tests.rs ---
+92: fn free_unknown_and_double_free_fail() {
+96: session::try_free(id).unwrap();
+97: let err = session::try_free(id).unwrap_err();
+99: let err = session::try_free(99).unwrap_err();
+113: session::try_free(ids[0]).unwrap();
+116: session::try_free(again).unwrap();
+118: session::try_free(id).unwrap();
+124: fn step_logits_match_cpu_cross_entropy_and_a_bad_shape_does_not_free() {
+201: session::try_free(id).unwrap();
+267: session::try_free(id).unwrap();
+314: session::try_free(id).unwrap();
+372: fn free_payload(id: u64) -> Vec<u8> {
+386: // The first lock after the panic drops whatever the panic left behind.
+392: session::try_free(after).unwrap();
+406: session::try_free(id).unwrap();
+440: call(crate::OP_FREE, &free_payload(id)).unwrap();
+441: let err = call(crate::OP_FREE, &free_payload(id)).unwrap_err();
+448: call(crate::OP_FREE, &free_payload(id)).unwrap();
+487: session::try_free(id).unwrap();
+493: fn malformed_payloads_are_errors_and_never_panic() {
+497: let no_panic = |opcode: u32, payload: &[u8]| -> Result<Vec<u8>, String> {
+498: std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(opcode, payload)))
+499: .unwrap_or_else(|_| panic!("opcode {opcode} panicked on {payload:?}"))
+507: (crate::OP_FREE, free_payload(u64::MAX)),
+512: no_panic(*opcode, payload).unwrap();
+516: no_panic(*opcode, &payload[..cut]).unwrap_err();
+520: no_panic(*opcode, &long).unwrap_err();
+524: // Count fields at their limits must fail on length, not allocate or wrap.
+544: no_panic(crate::OP_STEP, &header(mode, batch, seq, classes)).unwrap_err();
+552: no_panic(crate::OP_GENERATE, &p).unwrap_err();
+554: let err = no_panic(crate::OP_STEP, &logits_step(id, 2, &[0.0, 0.0], &[5])).unwrap_err();
+556: no_panic(crate::OP_STEP, &token_step(id, 2, &[3], &[9])).unwrap_err();
+557: no_panic(crate::OP_GENERATE, &argmax_payload(id, &[])).unwrap_err();
+558: no_panic(crate::OP_GENERATE, &greedy_payload(id, &[])).unwrap_err();
+559: no_panic(crate::OP_GENERATE, &argmax_payload(id, &[f32::INFINITY, 0.0])).unwrap_err();
+560: no_panic(crate::OP_STEP, &logits_step(id, 2, &[f32::NAN, 0.0], &[0])).unwrap_err();
+562: let got = no_panic(OP_LOAD, path);
+590: let _ = no_panic(opcode, &payload);
+--- ojas-gusset-engine/src/lib.rs ---
+7: /// `ptr` is readable for `len` bytes for the duration of this call, or
+8: /// `ptr` is null when `len` is 0. The bytes are copied before return.
+10: pub unsafe extern "C" fn ojas_set_model_root(ptr: *const u8, len: usize) -> i32 {
+11: let bytes = if ptr.is_null() {
+19: // SAFETY: the caller keeps `ptr` valid for `len` bytes until return.
+20: unsafe { std::slice::from_raw_parts(ptr, len) }
+40: pub extern "C" fn ojas_engine_init() -> i32 {
+52: pub extern "C" fn ojas_engine_reset() {
+57: pub extern "C" fn ojas_last_error_len() -> usize {
+65: pub unsafe extern "C" fn ojas_copy_last_error(dst: *mut u8, cap: usize) -> usize {
+72: unsafe {
+73: std::ptr::copy_nonoverlapping(msg.as_ptr(), dst, n);
+--- ojas-metal/src/lib.rs ---
+13: #![forbid(unsafe_code)]
+--- ojas-metal/src/gpu.rs ---
+108: /// Logical bytes `tiny_train_step` allocates. Not the Metal pool bucket.
+328: rt.alloc_tensor_f32(shape).map_err(metal)
+523: let tkv = rt.alloc_buffer(4).map_err(metal)?;
+524: let qpos = rt.alloc_buffer(4).map_err(metal)?;
+525: let kvpos = rt.alloc_buffer(4).map_err(metal)?;
+823: /// Logical bytes `per_head_gate_forward` allocates.
+837: /// Logical bytes `per_head_gate_backward` allocates: the shared uploads plus
+1161: other => panic!("expected UnsupportedHeadDim, got {other}"),
+1281: other => panic!("expected CapacityExceeded, got {other}"),
+1736: other => panic!("expected CapacityExceeded, got {other}"),
+--- ojas-metal/build.rs ---
+24: unsafe { env::set_var("DEVELOPER_DIR", xcode) };
+51: .unwrap_or_else(|e| panic!("metal: failed to spawn: {e}"));
+53: panic!("per_head_gate.metal failed to compile ({std_flag})");
+60: .unwrap_or_else(|e| panic!("metallib: failed to spawn: {e}"));
+62: panic!("per_head_gate.metallib link failed");
+71: .unwrap_or_else(|e| panic!("xcrun {args:?}: {e}"));
+73: panic!(
+--- ojas-wgpu/src/lib.rs ---
+8: #![forbid(unsafe_code)]
+62: pub struct AffineF32 {
+210: /// [`DeviceError::NoDevice`] and does not allocate. A wgpu validation,
+211: /// internal, or out-of-memory error is returned, not raised as a panic.
+212: pub fn affine_f32(
+217: ) -> Result<AffineF32, DeviceError> {
+223: return Ok(AffineF32 {
+231: let values = dispatch_affine(&session, input, scale, bias, bytes_u32)?;
+232: Ok(AffineF32 {
+241: fn dispatch_affine(
+270: label: Some("ojas-affine-f32"),
+276: label: Some("ojas-affine-f32"),
+399: let err = affine_f32(Device::Metal, &[1.0], 2.0, 0.0).unwrap_err();
+411: let err = affine_f32(Device::Cpu, &[1.0, 2.0], 3.0, 0.0).unwrap_err();
+417: let err = affine_f32(Device::Cuda, &[1.0], 2.0, 1.0).unwrap_err();
+437: fn affine_matches_cpu_formula_on_the_adapter() {
+441: let ran = affine_f32(Device::Vulkan, &input, scale, bias)
+463: let ran = affine_f32(Device::Vulkan, &[], 2.0, 1.0)
+482: fn assert_affine(input: &[f32], scale: f32, bias: f32) {
+483: let ran = affine_f32(Device::Vulkan, input, scale, bias)
+484: .unwrap_or_else(|err| panic!("len {}: {err}", input.len()));
+498: fn affine_matches_cpu_at_odd_lengths() {
+503: assert_affine(&ramp(n, seed as u32), 1.5, -0.25);
+508: fn affine_past_one_row_of_workgroups_matches_cpu() {
+511: assert_affine(&ramp(n, 7), -3.0, 0.5);
+515: fn affine_at_the_binding_limit_matches_cpu() {
+517: assert_affine(&ramp(n, 9), 0.5, 2.0);
+521: fn affine_past_the_binding_limit_is_an_error() {
+524: let err = affine_f32(Device::Vulkan, &input, 1.0, 0.0).unwrap_err();
+551: let ran = affine_f32(Device::Vulkan, &input, 2.0, 0.0).unwrap();
+563: let first = affine_f32(Device::Vulkan, &input, 1.25, -0.75).unwrap().values;
+566: let got = affine_f32(Device::Vulkan, &input, 1.25, -0.75).unwrap().values;
+581: assert_affine(&ramp(n, t * 31 + round), t as f32 - 3.5, round as f32);
+587: h.join().expect("worker thread panicked");
+593: let ran = affine_f32(Device::Vulkan, &[1.0, -4.0, 0.0], f32::NAN, 0.25)
+--- ojas-cuda/src/lib.rs ---
+6: //! affine kernel (`y = x * scale + bias`) through cudarc. A missing driver
+9: #![cfg_attr(not(feature = "cuda"), forbid(unsafe_code))]
+29: /// When `cuda` is on, a small affine kernel is launched before `Ok`.
+47: let back = device.affine_f32(Device::Cuda, &sample, 2.0, 0.5)?;
+60: pub fn affine_f32(
+77: launch_affine(&self.ctx, input, scale, bias)
+84: extern "C" __global__ void affine_f32(
+98: /// cudarc panics when it cannot load `libcuda` or `libnvrtc`. Probe both
+104: let driver = unsafe { cudarc::driver::sys::is_culib_present() };
+105: let nvrtc = unsafe { cudarc::nvrtc::sys::is_culib_present() };
+116: fn launch_affine(
+139: .load_function("affine_f32")
+152: .alloc_zeros::<f32>(input.len())
+155: detail: format!("alloc_zeros: {err}"),
+158: unsafe {
+210: Err(other) => panic!("open returned {other}"),
+211: Ok(_) => panic!("open succeeded without the cuda feature"),
+219: .affine_f32(Device::Cuda, &[1.0, 2.0], 2.0, 0.5)
+230: .affine_f32(Device::Cpu, &[1.0], 1.0, 0.0)
+237: fn open_returns_instead_of_panicking() {
+238: match std::panic::catch_unwind(CudaDevice::open) {
+243: Ok(Err(other)) => panic!("open returned {other}"),
+244: Err(_) => panic!("CudaDevice::open panicked instead of returning NoDevice"),
+250: fn affine_matches_cpu_at_odd_lengths() {
+253: device.affine_f32(Device::Cuda, &[], 2.0, 1.0).unwrap(),
+258: let got = device.affine_f32(Device::Cuda, &input, 1.5, -0.25).unwrap();
+--- ojas-hip/src/lib.rs ---
+6: //! `hip-runtime-sys` 0.1.2: `hipInit`, `hipGetDeviceCount`, `hipMalloc`,
+9: #![cfg_attr(not(feature = "hip"), forbid(unsafe_code))]
+13: /// Proof that HIP opened. The allocation from the startup copy is freed
+74: hip_error("hipInit", unsafe { hip_runtime_sys::hipInit(0) })?;
+76: hip_error("hipGetDeviceCount", unsafe {
+104: let mut dev = std::ptr::null_mut();
+105: hip_error("hipMalloc", unsafe {
+106: hip_runtime_sys::hipMalloc(&mut dev, nbytes)
+111: detail: format!("hipMalloc({nbytes}) returned success and a null pointer"),
+115: let copied = hip_error("hipMemcpy host to device", unsafe {
+118: input.as_ptr().cast(),
+124: hip_error("hipMemcpy device to host", unsafe {
+126: back.as_mut_ptr().cast(),
+133: let freed = hip_error("hipFree", unsafe { hip_runtime_sys::hipFree(dev) });
+135: freed?;
+163: Err(other) => panic!("open returned {other}"),
+164: Ok(_) => panic!("open succeeded without the hip feature"),
+--- ojas-infer/src/lib.rs ---
+8: #![forbid(unsafe_code)]
+--- ojas-infer/src/gpt.rs ---
+436: fn kv_cache_refuses_an_unallocatable_length_instead_of_panicking() {
+442: let got = std::panic::catch_unwind(|| KvCache::new(n_layer, n_embd, max_len));
+444: .unwrap_or_else(|_| panic!("KvCache::new({n_layer}, {n_embd}, {max_len}) panicked"))
+446: .unwrap_or_else(|| panic!("KvCache::new({n_layer}, {n_embd}, {max_len}) allocated"));
+--- ojas-infer/src/kernels.rs ---
+--- go/api.go ---
+106: // Free drops a session. An unknown id, including a second free, is an error.
+--- go/ffi.go ---
+17: int ojas_set_model_root(const unsigned char *ptr, size_t len);
+29: "unsafe"
+73: written := C.ojas_copy_last_error((*C.uchar)(unsafe.Pointer(&buf[0])), C.size_t(n))
+80: var ptr *C.uchar
+82: ptr = (*C.uchar)(unsafe.Pointer(&b[0]))
+84: rc := C.ojas_set_model_root(ptr, C.size_t(len(b)))
+--- go/api_test.go ---
+68: t.Fatalf("double free: %v", err)
+249: fail("free: %v", err)
+266: fail("seed free: %v", err)
+378: fail("free: %v", err)
+382: fail("double free: %v", err)
+386: fail("generate after free: %v", err)
+397: // Every session was freed, so the whole cap is available again.
+457: t.Errorf("unknown id free: %v", err)
+511: t.Fatalf("panic: %v", err)
+517: t.Fatalf("after panic: %v", err)
+526: t.Fatalf("freed session survived poison: %v", err)
+--- go/go.mod ---
+--- go/README.md ---
+14: participant FFI as CGO Bridge (go/ffi.go)
+--- ojas-engine/src/lib.rs ---

@@ -1,0 +1,17 @@
+[package]
+name = "ojas-gusset-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Umbrella staticlib. cgo links this archive as libgusset."
+
+[lib]
+# The Go module links `-lgusset` (R14). The package name stays distinct
+# so this crate is not cargo's `gusset` package.
+name = "gusset"
+crate-type = ["staticlib"]
+
+[dependencies]
+ojas-capi = { path = "../ojas-capi" }

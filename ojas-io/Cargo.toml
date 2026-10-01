@@ -1,0 +1,11 @@
+[package]
+name = "ojas-io"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Safetensors and checkpoint v1 IO. Lane C."
+
+[dependencies]
+ojas-core = { path = "../ojas-core" }

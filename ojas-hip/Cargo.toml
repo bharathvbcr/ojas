@@ -1,0 +1,20 @@
+[package]
+name = "ojas-hip"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "AMD HIP device. The hip feature is off unless requested."
+
+[features]
+default = []
+# Links hip-runtime-sys. Off by default so a host without ROCm still tests.
+hip = ["dep:hip-runtime-sys"]
+
+[dependencies]
+ojas-device = { path = "../ojas-device" }
+# crates.io hip-runtime-sys 0.1.2, published 2026-09-01.
+# docs.rs documents hipInit, hipGetDeviceCount, hipMalloc, hipMemcpy, hipFree.
+# hip-sys 0.1.2 is a re-export of this crate and is not linked separately.
+hip-runtime-sys = { version = "=0.1.2", optional = true }
