@@ -12,4 +12,4 @@ mod source;
 
 pub use geometry::{cover_1d, grid_1d, Grid, Limits};
 pub use harness::{linear_close, max_abs, splitmix_f32, ParityOp};
-pub use source::{affine_cuda, affine_wgsl, gemm_cuda, reduce_sum_wgsl, KernelId};
+pub use source::{affine_cuda, affine_wgsl, gemm_cuda, math_wgsl, reduce_sum_wgsl, KernelId};

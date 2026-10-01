@@ -7,8 +7,16 @@
 
 #![forbid(unsafe_code)]
 
-use ojas_device::{require_kind, Device, DeviceError, DeviceInfo};
+mod backend;
+mod context;
 
+pub use backend::WgpuBackend;
+pub use context::{
+    gemm, gemm_then_silu, mul, residual, rms_norm, row_sum, silu, softmax_rows, CacheStats,
+    DeviceTensor, WgpuContext,
+};
+
+use ojas_device::{require_kind, Device, DeviceError, DeviceInfo};
 use ojas_kernels::affine_wgsl;
 
 const AFFINE_SHADER: &str = affine_wgsl();
@@ -331,7 +339,7 @@ fn dispatch_affine(
         pass.dispatch_workgroups(groups_x, groups_y, 1);
     }
     encoder.copy_buffer_to_buffer(&output_buf, 0, &staging, 0, byte_len);
-    session.queue.submit(std::iter::once(encoder.finish()));
+    let index = session.queue.submit(std::iter::once(encoder.finish()));
     for (kind, scope) in [
         ("validation", validation_scope),
         ("internal", internal_scope),
@@ -350,7 +358,7 @@ fn dispatch_affine(
     session
         .device
         .poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(index),
             timeout: Some(std::time::Duration::from_secs(30)),
         })
         .map_err(|err| gpu_error(format!("poll: {err}")))?;

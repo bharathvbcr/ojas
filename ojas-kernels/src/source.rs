@@ -123,3 +123,9 @@ fn main(
 }
 "#
 }
+
+/// Math kernels for the portable GPU path. `gemm_tiled` walks k ascending.
+/// Row reductions use a 64-thread tree. The source names no GPU API type.
+pub const fn math_wgsl() -> &'static str {
+    include_str!("math.wgsl")
+}

@@ -10,6 +10,10 @@ description = "Portable GPU path. One WGSL compute shader, launched through wgpu
 [dependencies]
 ojas-device = { path = "../ojas-device" }
 ojas-kernels = { path = "../ojas-kernels" }
+ojas-core = { path = "../ojas-core" }
+
+[dev-dependencies]
+ojas-cpu = { path = "../ojas-cpu" }
 # crates.io wgpu 30.0.1, published 2026-08-22. Default features include metal,
 # vulkan, dx12, gles, and wgsl. This crate selects the HAL at runtime.
 wgpu = "=30.0.1"
