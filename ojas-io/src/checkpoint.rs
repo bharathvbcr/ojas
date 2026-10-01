@@ -17,6 +17,9 @@ pub fn write_checkpoint(path: &Path, ckpt: &CheckpointV1) -> Result<(), IoError>
     replace_file(path, &encode_checkpoint(ckpt)?)
 }
 
+/// Refused before `read_checkpoint` reserves a buffer.
+pub const MAX_CHECKPOINT_BYTES: u64 = 1 << 30;
+
 pub fn read_checkpoint(path: &Path) -> Result<CheckpointV1, IoError> {
     let mut file =
         File::open(path).map_err(|e| IoError::new(format!("{}: {e}", path.display())))?;
@@ -24,6 +27,12 @@ pub fn read_checkpoint(path: &Path) -> Result<CheckpointV1, IoError> {
         .metadata()
         .map_err(|e| IoError::new(format!("{}: {e}", path.display())))?
         .len();
+    if file_len > MAX_CHECKPOINT_BYTES {
+        return Err(IoError::new(format!(
+            "{}: {file_len} bytes exceeds checkpoint cap {MAX_CHECKPOINT_BYTES}",
+            path.display()
+        )));
+    }
     let mut buf = Vec::new();
     let n =
         usize::try_from(file_len).map_err(|_| IoError::new("checkpoint length exceeds usize"))?;
@@ -476,6 +485,16 @@ mod tests {
                 token_index: rng.next(),
             },
         }
+    }
+
+    #[test]
+    fn oversized_checkpoint_is_refused_from_metadata() {
+        let path = tmp("ckpt-cap");
+        let file = std::fs::File::create(&path.0).unwrap();
+        file.set_len(MAX_CHECKPOINT_BYTES + 1).unwrap();
+        let err = read_checkpoint(&path.0).unwrap_err();
+        drop(file);
+        assert!(err.to_string().contains("cap"), "{err}");
     }
 
     #[test]

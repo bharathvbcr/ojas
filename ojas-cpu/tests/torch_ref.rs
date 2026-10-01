@@ -20,6 +20,12 @@ use data::{
     WK0, WO0, WQ0, WQ_AFTER, WV0, X,
 };
 
+/// Same thread count the torch CPU timing used (`torch.get_num_threads() == 6`).
+/// Ops under the linear grain stay on the caller.
+fn bench_cpu(bytes: usize) -> CpuBackend {
+    CpuBackend::with_threads(Budget::new(bytes as u64), 6).expect("threads")
+}
+
 fn cpu() -> CpuBackend {
     CpuBackend::new(Budget::new(16 << 20))
 }
@@ -297,7 +303,7 @@ impl SplitMix64 {
 
 #[test]
 fn one_step_wall_time() {
-    let cpu = CpuBackend::new(Budget::new(64 << 20));
+    let cpu = bench_cpu(64 << 20);
     let check = tiny_step(&cpu);
     let err_loss = (f64::from(check.loss) - f64::from(*LOSS)).abs();
     assert!(

@@ -423,31 +423,37 @@ pub(crate) fn cross_entropy(
         }
         let class = target as usize;
         let mut max_logit = f32::NEG_INFINITY;
-        for col in 0..vocab {
-            let value = get(op, logits, flat(op, n, col, vocab)?)?;
+        let row = logits
+            .get(n * vocab..(n + 1) * vocab)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op,
+                detail: "cross-entropy row exceeds logits".to_string(),
+            })?;
+        for &value in row {
             if value > max_logit {
                 max_logit = value;
             }
         }
+        let mut exps = vec![0.0f32; vocab];
         let mut sum = 0.0f32;
-        for col in 0..vocab {
-            let e = (get(op, logits, flat(op, n, col, vocab)?)? - max_logit).exp();
+        for (col, &value) in row.iter().enumerate() {
+            let e = (value - max_logit).exp();
             if !e.is_finite() {
                 return Err(nonfinite(op));
             }
+            exps[col] = e;
             sum += e;
         }
         if !(sum.is_finite() && sum > 0.0) {
             return Err(nonfinite(op));
         }
-        let logit_t = get(op, logits, flat(op, n, class, vocab)?)?;
-        total += max_logit + sum.ln() - logit_t;
+        total += max_logit + sum.ln() - row[class];
+        let base = n * vocab;
         for col in 0..vocab {
-            let p = (get(op, logits, flat(op, n, col, vocab)?)? - max_logit).exp() / sum;
-            grad[flat(op, n, col, vocab)?] = p / denom;
+            let p = exps[col] / sum;
+            grad[base + col] = p / denom;
         }
-        let class_index = flat(op, n, class, vocab)?;
-        grad[class_index] -= 1.0 / denom;
+        grad[base + class] -= 1.0 / denom;
     }
     let loss = total / denom;
     if !loss.is_finite() || grad.iter().any(|g| !g.is_finite()) {

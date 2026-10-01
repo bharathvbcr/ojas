@@ -74,34 +74,36 @@ pub struct TensorOut<'a> {
 }
 
 #[derive(Debug)]
-enum Source {
+enum Source<'a> {
     File {
         file: File,
         data_start: u64,
     },
     /// Data buffer only (the bytes after the header). Used by [`SafeTensors::parse`].
     Memory {
-        data: Vec<u8>,
+        data: &'a [u8],
     },
 }
 
 /// A validated safetensors header, plus a handle for positioned data reads.
+///
+/// [`SafeTensors::parse`] borrows the caller's buffer. [`SafeTensors::open`]
+/// does not, so its lifetime is `'static`.
 #[derive(Debug)]
-pub struct SafeTensors {
-    source: Source,
+pub struct SafeTensors<'a> {
+    source: Source<'a>,
     tensors: BTreeMap<String, TensorInfo>,
     metadata: BTreeMap<String, String>,
 }
 
-impl SafeTensors {
+impl<'a> SafeTensors<'a> {
     /// Validate `bytes` as a whole file. Does not touch the filesystem.
-    pub fn parse(bytes: &[u8]) -> Result<Self, IoError> {
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, IoError> {
         let (header, data_start, data_len) = split_header(bytes, bytes.len() as u64)?;
         let (tensors, metadata) = parse_header(&header, data_len)?;
         let data = bytes
             .get(data_start as usize..)
-            .ok_or_else(|| IoError::new("truncated file"))?
-            .to_vec();
+            .ok_or_else(|| IoError::new("truncated file"))?;
         Ok(Self {
             source: Source::Memory { data },
             tensors,
@@ -110,7 +112,7 @@ impl SafeTensors {
     }
 
     /// Open `path` and validate its header. Tensor bytes stay on disk.
-    pub fn open(path: &Path) -> Result<Self, IoError> {
+    pub fn open(path: &Path) -> Result<SafeTensors<'static>, IoError> {
         let what = path.display().to_string();
         let mut file = File::open(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
         let file_len = file
@@ -134,7 +136,7 @@ impl SafeTensors {
         let data_len = file_len - data_start;
         let (tensors, metadata) = parse_header(&header, data_len)
             .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?;
-        Ok(Self {
+        Ok(SafeTensors {
             source: Source::File { file, data_start },
             tensors,
             metadata,

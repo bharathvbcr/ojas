@@ -298,7 +298,13 @@ fn newton_schulz(update: &[f32], rows: usize, cols: usize) -> Result<Vec<f32>, O
         let xt = transpose(OP, &x, r, c)?;
         let a_mat = matmul(OP, &x, &xt, r, c, r)?;
         let a2 = matmul(OP, &a_mat, &a_mat, r, r, r)?;
-        let mut b_mat = vec![0.0f32; r * r];
+        let mut b_mat = vec![
+            0.0f32;
+            r.checked_mul(r).ok_or_else(|| OjasError::OutOfRange {
+                op: OP,
+                detail: "newton-schulz gram length overflows".to_string(),
+            })?
+        ];
         for i in 0..b_mat.len() {
             b_mat[i] = b_coef * a_mat[i] + c_coef * a2[i];
         }

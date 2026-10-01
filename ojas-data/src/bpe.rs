@@ -13,13 +13,9 @@
 
 use crate::error::DataError;
 use crate::gpt2_class::{is_letter, is_number, is_space};
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-
-/// `(rank, left position, right position, left id, right id)`. The ids let a
-/// popped entry be checked against the current list; stale entries are skipped.
-type HeapPair = Reverse<(u32, usize, usize, u32, u32)>;
+use std::sync::OnceLock;
 
 /// Byte-identity of [`Bpe::encode_ordinary`] with tiktoken `gpt2` `encode_ordinary`.
 ///
@@ -149,33 +145,45 @@ impl Bpe {
         }
         let n = ids.len();
         // A doubly linked list over character positions. A merge keeps the
-        // left node, so list order and position order agree, and the heap key
-        // (rank, left position) is the leftmost lowest-rank pair.
+        // left node. The live set holds one current pair per left node, so
+        // invalidating a node removes that pair instead of leaving it behind.
         let mut next: Vec<usize> = (1..=n).collect();
         let mut prev: Vec<usize> = (0..n).map(|i| i.wrapping_sub(1)).collect();
         let mut alive = vec![true; n];
-        let mut heap = BinaryHeap::new();
+        let mut live: BTreeSet<(u32, usize)> = BTreeSet::new();
+        let mut at = vec![None; n];
         for i in 1..n {
-            self.push_pair(&mut heap, &ids, i - 1, i);
+            self.link_pair(&mut live, &mut at, &ids, &next, i - 1);
         }
-        while let Some(Reverse((_, l, r, left_id, right_id))) = heap.pop() {
-            if !alive[l] || next[l] != r || ids[l] != left_id || ids[r] != right_id {
+        while let Some(&(rank, l)) = live.iter().next() {
+            live.remove(&(rank, l));
+            at[l] = None;
+            let r = next[l];
+            if !alive[l] || r >= n || !alive[r] {
                 continue;
             }
-            let Some(&(_, merged)) = self.merges.get(&(left_id, right_id)) else {
-                return Err(DataError::new("merge pair vanished"));
+            let left_id = ids[l];
+            let right_id = ids[r];
+            let Some(&(stored, merged)) = self.merges.get(&(left_id, right_id)) else {
+                continue;
             };
+            if stored != rank {
+                continue;
+            }
             ids[l] = merged;
             alive[r] = false;
+            if let Some(key) = at[r].take() {
+                live.remove(&key);
+            }
             next[l] = next[r];
             if next[l] < n {
                 prev[next[l]] = l;
             }
             if prev[l] < n {
-                self.push_pair(&mut heap, &ids, prev[l], l);
+                self.link_pair(&mut live, &mut at, &ids, &next, prev[l]);
             }
             if next[l] < n {
-                self.push_pair(&mut heap, &ids, l, next[l]);
+                self.link_pair(&mut live, &mut at, &ids, &next, l);
             }
         }
         Ok(ids
@@ -185,9 +193,24 @@ impl Bpe {
             .collect())
     }
 
-    fn push_pair(&self, heap: &mut BinaryHeap<HeapPair>, ids: &[u32], l: usize, r: usize) {
+    fn link_pair(
+        &self,
+        live: &mut BTreeSet<(u32, usize)>,
+        at: &mut [Option<(u32, usize)>],
+        ids: &[u32],
+        next: &[usize],
+        l: usize,
+    ) {
+        if let Some(old) = at[l].take() {
+            live.remove(&old);
+        }
+        let r = next.get(l).copied().unwrap_or(ids.len());
+        if r >= ids.len() {
+            return;
+        }
         if let Some(&(rank, _)) = self.merges.get(&(ids[l], ids[r])) {
-            heap.push(Reverse((rank, l, r, ids[l], ids[r])));
+            live.insert((rank, l));
+            at[l] = Some((rank, l));
         }
     }
 
@@ -388,14 +411,43 @@ fn whitespace_token_end(text: &str, i: usize) -> Option<usize> {
 /// The first line is skipped when it starts with `#version`. Later lines that
 /// start with `#` are merges of the `#` piece. Rank is the remaining line order,
 /// starting at 0.
+/// Files above this size are refused before the bytes are read into a `String`.
+pub const HF_TEXT_CAP: u64 = 32 * 1024 * 1024;
+
 pub fn load_hf_gpt2(vocab_json: &Path, merges_txt: &Path) -> Result<Bpe, DataError> {
-    let vocab = std::fs::read_to_string(vocab_json)
-        .map_err(|e| DataError::new(format!("{}: {e}", vocab_json.display())))?;
-    let merges = std::fs::read_to_string(merges_txt)
-        .map_err(|e| DataError::new(format!("{}: {e}", merges_txt.display())))?;
+    let vocab = read_capped(vocab_json)?;
+    let merges = read_capped(merges_txt)?;
     let pieces = parse_vocab_json(&vocab)?;
     let pairs = parse_merges(&merges)?;
     Bpe::from_ranked_pieces(pieces, pairs)
+}
+
+fn read_capped(path: &Path) -> Result<String, DataError> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)
+        .map_err(|e| DataError::new(format!("{}: {e}", path.display())))?;
+    let len = file
+        .metadata()
+        .map_err(|e| DataError::new(format!("{}: {e}", path.display())))?
+        .len();
+    if len > HF_TEXT_CAP {
+        return Err(DataError::new(format!(
+            "{}: {len} bytes exceeds {HF_TEXT_CAP} byte cap",
+            path.display()
+        )));
+    }
+    let mut limited = file.take(HF_TEXT_CAP.saturating_add(1));
+    let mut text = String::new();
+    limited
+        .read_to_string(&mut text)
+        .map_err(|e| DataError::new(format!("{}: {e}", path.display())))?;
+    if text.len() as u64 > HF_TEXT_CAP {
+        return Err(DataError::new(format!(
+            "{}: exceeds {HF_TEXT_CAP} byte cap",
+            path.display()
+        )));
+    }
+    Ok(text)
 }
 
 fn parse_vocab_json(text: &str) -> Result<Vec<String>, DataError> {
@@ -606,6 +658,11 @@ pub fn fixture_bpe() -> Bpe {
 ///
 /// This table is the published byte alphabet. It does not assign token ranks.
 pub fn bytes_to_unicode() -> [char; 256] {
+    static TABLE: OnceLock<[char; 256]> = OnceLock::new();
+    *TABLE.get_or_init(build_bytes_to_unicode)
+}
+
+fn build_bytes_to_unicode() -> [char; 256] {
     let mut bs: Vec<u32> = Vec::new();
     bs.extend(u32::from(b'!')..=u32::from(b'~'));
     bs.extend(0xA1u32..=0xACu32);
@@ -630,6 +687,21 @@ pub fn bytes_to_unicode() -> [char; 256] {
 mod tests {
     use super::*;
     use crate::rng::CounterRng;
+
+    #[test]
+    fn oversized_vocab_file_is_refused() {
+        let vocab = std::env::temp_dir().join(format!("ojas-vocab-cap-{}", std::process::id()));
+        let merges = std::env::temp_dir().join(format!("ojas-merges-cap-{}", std::process::id()));
+        let file = std::fs::File::create(&vocab).unwrap();
+        file.set_len(HF_TEXT_CAP + 1).unwrap();
+        drop(file);
+        std::fs::write(&merges, "#version: 0.2\n").unwrap();
+        let err = load_hf_gpt2(&vocab, &merges).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("exceeds"), "{text}");
+        let _ = std::fs::remove_file(vocab);
+        let _ = std::fs::remove_file(merges);
+    }
 
     #[test]
     fn fixture_round_trips_and_is_not_a_tiktoken_claim() {

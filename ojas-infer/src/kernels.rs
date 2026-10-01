@@ -134,8 +134,10 @@ pub fn linear(
         });
     }
     if in_dim == 0 {
-        y.fill(0.0);
-        return Ok(());
+        return Err(OjasError::Shape {
+            op: "linear",
+            detail: "in_dim is 0".into(),
+        });
     }
     for (yo, row) in y.iter_mut().zip(weight.chunks_exact(in_dim)) {
         let val = dot(x, row);
@@ -314,8 +316,7 @@ mod tests {
         linear(&[1.0, 2.0], &[1.0, 0.0, 3.0, -1.0], 2, 2, &mut y).unwrap();
         assert_eq!(y, [1.0, 1.0]);
         let mut y = [9.0f32; 3];
-        linear(&[], &[], 0, 3, &mut y).unwrap();
-        assert_eq!(y, [0.0; 3]);
+        assert!(linear(&[], &[], 0, 3, &mut y).is_err());
         assert!(linear(&[1.0], &[1.0], 1, 2, &mut [0.0; 2]).is_err());
     }
 

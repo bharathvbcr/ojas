@@ -1,11 +1,14 @@
-//! Single-threaded CPU reference for the nanolab-default ops.
+//! CPU reference for the nanolab-default ops.
 //!
 //! Reductions walk the reduction axis in increasing index order and accumulate
 //! in `f32`. The exceptions are the AdamW moments (the frozen contract forms
 //! those scalars in `f64`) and the clip total norm, whose sum of squares is
-//! `f64` so a finite norm is not refused. There is no thread pool, so a second call with the same
-//! inputs is bit-identical. Head dimension above 64 is not truncated here;
-//! [`metal_head_dim_policy`] is the check the Metal path calls.
+//! `f64` so a finite norm is not refused. [`CpuBackend::new`] is one thread.
+//! [`CpuBackend::with_threads`] partitions independent output rows with
+//! `std::thread::scope` and does not split a reduction, so the bits do not
+//! depend on the thread count. There is no `mul_add`. Head dimension above 64
+//! is not truncated here; [`metal_head_dim_policy`] is the check the Metal
+//! path calls.
 
 #![forbid(unsafe_code)]
 

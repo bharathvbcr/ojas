@@ -14,25 +14,48 @@ use crate::pointwise::{
 };
 use crate::validate::{alloc_f32, f32_in, headroom, payload_bytes, same_shape, shape, u32_in};
 
-/// Deterministic CPU reference. One thread, one budget.
+/// Deterministic CPU reference. [`CpuBackend::new`] uses one thread.
+/// [`CpuBackend::with_threads`] runs large linears on a Rayon pool, in fixed
+/// row tiles. Reductions stay in increasing index order.
 #[derive(Clone, Debug)]
 pub struct CpuBackend {
     budget: Budget,
+    threads: usize,
 }
 
 impl CpuBackend {
     pub fn new(budget: Budget) -> Self {
-        Self { budget }
+        Self { budget, threads: 1 }
+    }
+
+    /// `threads == 0` is refused. Small ops stay on the caller even when
+    /// `threads` is larger.
+    pub fn with_threads(budget: Budget, threads: usize) -> Result<Self, OjasError> {
+        if threads == 0 {
+            return Err(OjasError::OutOfRange {
+                op: "CpuBackend::with_threads",
+                detail: "thread count is 0".to_string(),
+            });
+        }
+        Ok(Self { budget, threads })
     }
 
     pub fn budget(&self) -> &Budget {
         &self.budget
+    }
+
+    pub fn threads(&self) -> usize {
+        self.threads
     }
 }
 
 impl Backend for CpuBackend {
     fn id(&self) -> BackendId {
         BackendId::Cpu
+    }
+
+    fn budget(&self) -> &Budget {
+        &self.budget
     }
 
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
@@ -75,7 +98,15 @@ impl Backend for CpuBackend {
         const OP: &str = "linear_forward";
         let x = f32_in(OP, input)?;
         let w = f32_in(OP, weight)?;
-        let (y, y_shape) = linear_forward(OP, &self.budget, &x.data, &x.shape, &w.data, &w.shape)?;
+        let (y, y_shape) = linear_forward(
+            OP,
+            &self.budget,
+            self.threads,
+            &x.data,
+            &x.shape,
+            &w.data,
+            &w.shape,
+        )?;
         alloc_f32(OP, &self.budget, &y, &y_shape)
     }
 
@@ -90,7 +121,15 @@ impl Backend for CpuBackend {
         let w = f32_in(OP, weight)?;
         let gy = f32_in(OP, grad_output)?;
         let (gx, gw) = linear_backward(
-            OP, &x.data, &x.shape, &w.data, &w.shape, &gy.data, &gy.shape,
+            OP,
+            &self.budget,
+            self.threads,
+            &x.data,
+            &x.shape,
+            &w.data,
+            &w.shape,
+            &gy.data,
+            &gy.shape,
         )?;
         let grad_x = alloc_f32(OP, &self.budget, &gx, &x.shape)?;
         let grad_w = alloc_f32(OP, &self.budget, &gw, &w.shape)?;

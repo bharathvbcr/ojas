@@ -4,6 +4,7 @@
 //! Later crates own the CPU reference and the Metal kernels. There is no
 //! silent fallback from [`BackendId::Metal`] to [`BackendId::Cpu`].
 
+use crate::budget::Budget;
 use crate::tensor::Tensor;
 use crate::OjasError;
 
@@ -205,6 +206,9 @@ pub struct ValueResidualGrad {
 ///   Clipping and Adam must not apply them.
 pub trait Backend {
     fn id(&self) -> BackendId;
+
+    /// Budget this backend charges for outputs and scratch probes.
+    fn budget(&self) -> &Budget;
 
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError>;
 
