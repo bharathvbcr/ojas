@@ -330,38 +330,60 @@ func TestConcurrentSessionStress(t *testing.T) {
 			fail := func(format string, args ...any) {
 				errs <- fmt.Errorf("goroutine %d: "+format, append([]any{g}, args...)...)
 			}
+			gone := func(err error) bool {
+				if err == nil {
+					return false
+				}
+				msg := err.Error()
+				return strings.Contains(msg, "handle is closed") || strings.Contains(msg, "unknown model")
+			}
 			for r := 0; r < rounds; r++ {
 				id, err := Load(context.Background(), "model.safetensors")
 				if err != nil {
-					if !strings.Contains(err.Error(), "capacity exceeded") {
-						fail("load: %v", err)
-						return
+					if strings.Contains(err.Error(), "capacity exceeded") || gone(err) {
+						continue
 					}
-					continue
+					fail("load: %v", err)
+					return
 				}
 				if _, dup := issued.LoadOrStore(id, g); dup {
 					fail("id %d reused", id)
 					return
 				}
 				if _, err := Step(context.Background(), id, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 1}, Targets: []uint32{1}}); err != nil {
+					if gone(err) {
+						continue
+					}
 					fail("step: %v", err)
 					return
 				}
 				if _, err := Step(context.Background(), id, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Tokens: []uint16{3}, TokenTargets: []uint16{0}}); err != nil {
+					if gone(err) {
+						continue
+					}
 					fail("token step: %v", err)
 					return
 				}
 				if r%5 == 0 {
 					if _, err := Step(context.Background(), id, big); err != nil {
+						if gone(err) {
+							continue
+						}
 						fail("buffer step: %v", err)
 						return
 					}
 				}
 				if tok, err := Generate(context.Background(), id, []float32{0, 2, 1}); err != nil || tok != 1 {
+					if gone(err) {
+						continue
+					}
 					fail("generate: %d %v", tok, err)
 					return
 				}
 				if _, err := GenerateGreedy(context.Background(), id, []uint32{0, 1}); err != nil {
+					if gone(err) {
+						continue
+					}
 					fail("greedy: %v", err)
 					return
 				}
@@ -376,14 +398,22 @@ func TestConcurrentSessionStress(t *testing.T) {
 					}
 				}
 				if err := Free(context.Background(), id); err != nil {
+					// Close already dropped every session. A second owner must
+					// not still count toward the cap.
+					if gone(err) {
+						continue
+					}
 					fail("free: %v", err)
 					return
 				}
-				if err := Free(context.Background(), id); err == nil || !strings.Contains(err.Error(), "unknown model") {
+				if err := Free(context.Background(), id); err == nil || !gone(err) {
 					fail("double free: %v", err)
 					return
 				}
 				if _, err := Generate(context.Background(), id, []float32{1}); err == nil || !strings.Contains(err.Error(), "unknown model") {
+					if gone(err) {
+						continue
+					}
 					fail("generate after free: %v", err)
 					return
 				}
@@ -411,6 +441,14 @@ func TestConcurrentSessionStress(t *testing.T) {
 		if err := Free(context.Background(), id); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Close during Generate must not leave a session counted after it returns.
+	freed, err := Load(context.Background(), "model.safetensors")
+	if err != nil {
+		t.Fatalf("cap stayed occupied after Close: %v", err)
+	}
+	if err := Free(context.Background(), freed); err != nil {
+		t.Fatal(err)
 	}
 }
 

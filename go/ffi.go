@@ -55,10 +55,60 @@ var (
 	handle   *gusset.Handle
 	poisoned atomic.Bool
 	poolSize atomic.Uint32
+	closeMu  sync.Mutex
+	calls    callGate
+
+	errHandleClosed = errors.New("ojas: handle is closed")
 )
+
+// callGate counts calls that have entered and not yet returned.
+// Close sets closed, waits until the count is zero, then drops the handle.
+// The mutex covers that count only. It is not held across the gusset call,
+// so two sessions still overlap.
+type callGate struct {
+	mu     sync.Mutex
+	closed bool
+	n      int
+	idle   sync.Cond
+}
+
+func (g *callGate) enter() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return errHandleClosed
+	}
+	g.n++
+	return nil
+}
+
+func (g *callGate) leave() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.n--
+	if g.n == 0 {
+		g.idle.Broadcast()
+	}
+}
+
+func (g *callGate) drain() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.closed = true
+	for g.n > 0 {
+		g.idle.Wait()
+	}
+}
+
+func (g *callGate) reopen() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.closed = false
+}
 
 func init() {
 	poolSize.Store(1)
+	calls.idle.L = &calls.mu
 }
 
 // SetPoolSize chooses the gusset worker count used by the next Open.
@@ -135,6 +185,10 @@ func callEngine(ctx context.Context, opcode uint32, payload []byte) ([]byte, err
 	if ctx == nil {
 		return nil, errors.New("ojas: nil context")
 	}
+	if err := calls.enter(); err != nil {
+		return nil, err
+	}
+	defer calls.leave()
 	if poisoned.Load() {
 		return nil, gusset.ErrPoisoned
 	}
@@ -198,13 +252,23 @@ func ensureHandle() (*gusset.Handle, error) {
 }
 
 func closeHandle() error {
+	closeMu.Lock()
+	defer closeMu.Unlock()
+	// Wait out calls that already entered. A call that arrives now gets
+	// errHandleClosed instead of sharing the handle Close is about to drop.
+	calls.drain()
+	// Drop every Rust session while no call is inside, so a raced Free is
+	// not required to release the 64-session cap.
+	engineReset()
 	handleMu.Lock()
-	defer handleMu.Unlock()
 	poisoned.Store(false)
 	h := handle
 	handle = nil
-	if h == nil {
-		return nil
+	handleMu.Unlock()
+	var err error
+	if h != nil {
+		err = h.Close()
 	}
-	return h.Close()
+	calls.reopen()
+	return err
 }
