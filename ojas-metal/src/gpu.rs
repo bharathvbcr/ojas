@@ -731,6 +731,7 @@ fn attn_bwd_limits(dims: &AttnBwdDims) -> Result<(), OjasError> {
 /// overwritten. A key `j > t` contributes nothing to query `t`, and query `t`
 /// contributes nothing to that key. The products are `GemmOperands::ExactF32`;
 /// `ojas_causal_softmax_bwd` applies the causal mask and the softmax gradient.
+#[allow(clippy::too_many_arguments)]
 fn causal_attn_backward(
     rt: &Arc<GpuRuntime>,
     dims: &AttnBwdDims,
@@ -1357,6 +1358,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn tw<'a>(
         rms_w: &'a [f32],
         w_gate: &'a [f32],
@@ -1946,13 +1948,13 @@ mod tests {
                 for t_q in 0..seq {
                     let q_base = ((b * seq + t_q) * heads + h) * head_dim;
                     let mut scores = vec![f64::NEG_INFINITY; seq];
-                    for t_k in 0..=t_q {
+                    for (t_k, score) in scores.iter_mut().enumerate().take(t_q + 1) {
                         let k_base = ((b * seq + t_k) * heads + h) * head_dim;
                         let mut dot = 0.0f64;
                         for c in 0..head_dim {
                             dot += f64::from(q[q_base + c]) * f64::from(k[k_base + c]);
                         }
-                        scores[t_k] = dot * scale;
+                        *score = dot * scale;
                     }
                     let m = scores[..=t_q]
                         .iter()
@@ -1960,8 +1962,8 @@ mod tests {
                         .fold(f64::NEG_INFINITY, f64::max);
                     let mut l = 0.0f64;
                     let mut acc = vec![0.0f64; head_dim];
-                    for t_k in 0..=t_q {
-                        let p = (scores[t_k] - m).exp();
+                    for (t_k, score) in scores.iter().enumerate().take(t_q + 1) {
+                        let p = (*score - m).exp();
                         l += p;
                         let v_base = ((b * seq + t_k) * heads + h) * head_dim;
                         for c in 0..head_dim {
@@ -1980,6 +1982,7 @@ mod tests {
 
     /// f32 causal backward, same left-to-right order as `ojas_causal_softmax_bwd`.
     /// Keys `j > t` stay out of query `t`'s softmax and out of that query's `dK`.
+    #[allow(clippy::too_many_arguments)]
     fn causal_bwd_f32(
         q: &[f32],
         k: &[f32],
@@ -2058,6 +2061,7 @@ mod tests {
         (dq, dk, dv)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gpu_attn_bwd(
         session: &Session,
         q: &[f32],
@@ -2164,8 +2168,8 @@ mod tests {
             k_quiet[future + c] = 0.0;
         }
         let mut d_o = vec![0.0f32; n];
-        for c in 0..head_dim {
-            d_o[c] = 0.25;
+        for slot in d_o.iter_mut().take(head_dim) {
+            *slot = 0.25;
         }
         let shape = TinyShape {
             batch: 1,

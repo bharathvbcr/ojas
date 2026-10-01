@@ -13,9 +13,7 @@ mod load;
 mod session;
 mod step;
 
-pub use engine::{
-    dispatch, install_engine, OP_FREE, OP_GENERATE, OP_LOAD, OP_PANIC, OP_STEP,
-};
+pub use engine::{dispatch, install_engine, OP_FREE, OP_GENERATE, OP_LOAD, OP_PANIC, OP_STEP};
 pub use generate::{generate, GEN_GREEDY, GEN_LOGITS};
 pub use load::{resolve_under_root, INLINE_PATH_MAX};
 pub use session::{

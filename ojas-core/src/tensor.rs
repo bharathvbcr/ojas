@@ -51,11 +51,7 @@ impl Tensor {
     }
 
     /// Copy `data` into a new contiguous `F32` allocation.
-    pub fn from_f32(
-        data: &[f32],
-        shape: &[usize],
-        budget: &Budget,
-    ) -> Result<Self, OjasError> {
+    pub fn from_f32(data: &[f32], shape: &[usize], budget: &Budget) -> Result<Self, OjasError> {
         let n = num_elements(shape)?;
         if data.len() != n {
             return Err(OjasError::Shape {
@@ -202,7 +198,11 @@ impl Tensor {
         if index.len() != self.shape.len() {
             return Err(OjasError::Shape {
                 op: "Tensor::element_byte_offset",
-                detail: format!("index rank {} != shape rank {}", index.len(), self.shape.len()),
+                detail: format!(
+                    "index rank {} != shape rank {}",
+                    index.len(),
+                    self.shape.len()
+                ),
             });
         }
         let mut elem = 0usize;
@@ -217,14 +217,18 @@ impl Tensor {
                 op: "Tensor::element_byte_offset",
                 detail: format!("missing stride for axis {axis}"),
             })?;
-            let term = idx.checked_mul(stride).ok_or_else(|| OjasError::OutOfRange {
-                op: "Tensor::element_byte_offset",
-                detail: format!("index[{axis}] * stride overflows"),
-            })?;
-            elem = elem.checked_add(term).ok_or_else(|| OjasError::OutOfRange {
-                op: "Tensor::element_byte_offset",
-                detail: "element index overflows".to_string(),
-            })?;
+            let term = idx
+                .checked_mul(stride)
+                .ok_or_else(|| OjasError::OutOfRange {
+                    op: "Tensor::element_byte_offset",
+                    detail: format!("index[{axis}] * stride overflows"),
+                })?;
+            elem = elem
+                .checked_add(term)
+                .ok_or_else(|| OjasError::OutOfRange {
+                    op: "Tensor::element_byte_offset",
+                    detail: "element index overflows".to_string(),
+                })?;
         }
         let bytes = elem
             .checked_mul(self.dtype.size())
@@ -256,15 +260,13 @@ impl Tensor {
                 op: "Tensor::contiguous_bytes",
                 detail: "window end overflows".to_string(),
             })?;
-        self.storage.bytes.get(self.byte_offset..end).ok_or_else(|| {
-            OjasError::OutOfRange {
+        self.storage
+            .bytes
+            .get(self.byte_offset..end)
+            .ok_or_else(|| OjasError::OutOfRange {
                 op: "Tensor::contiguous_bytes",
-                detail: format!(
-                    "window {end} exceeds storage {}",
-                    self.storage.bytes.len()
-                ),
-            }
-        })
+                detail: format!("window {end} exceeds storage {}", self.storage.bytes.len()),
+            })
     }
 
     fn contiguous_bytes_mut(&mut self) -> Result<&mut [u8], OjasError> {
@@ -276,19 +278,24 @@ impl Tensor {
         }
         let nbytes = contiguous_nbytes(&self.shape, self.dtype)?;
         let start = self.byte_offset;
-        let end = start.checked_add(nbytes).ok_or_else(|| OjasError::OutOfRange {
-            op: "Tensor::contiguous_bytes_mut",
-            detail: "window end overflows".to_string(),
-        })?;
+        let end = start
+            .checked_add(nbytes)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "Tensor::contiguous_bytes_mut",
+                detail: "window end overflows".to_string(),
+            })?;
         let len = self.storage.bytes.len();
         let storage = Arc::get_mut(&mut self.storage).ok_or_else(|| OjasError::Shape {
             op: "Tensor::contiguous_bytes_mut",
             detail: "contiguous write requires a uniquely owned allocation".to_string(),
         })?;
-        storage.bytes.get_mut(start..end).ok_or_else(|| OjasError::OutOfRange {
-            op: "Tensor::contiguous_bytes_mut",
-            detail: format!("window {end} exceeds storage {len}"),
-        })
+        storage
+            .bytes
+            .get_mut(start..end)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "Tensor::contiguous_bytes_mut",
+                detail: format!("window {end} exceeds storage {len}"),
+            })
     }
 
     /// New metadata over the same allocation.
@@ -325,12 +332,13 @@ impl Tensor {
         shape: &[usize],
         strides: &[usize],
     ) -> Result<Self, OjasError> {
-        let byte_offset = self.byte_offset.checked_add(extra_byte_offset).ok_or_else(|| {
-            OjasError::OutOfRange {
+        let byte_offset = self
+            .byte_offset
+            .checked_add(extra_byte_offset)
+            .ok_or_else(|| OjasError::OutOfRange {
                 op: "Tensor::narrow",
                 detail: "byte offset overflow".to_string(),
-            }
-        })?;
+            })?;
         self.view(shape, strides, byte_offset)
     }
 
@@ -399,14 +407,18 @@ fn window_fits(
     let mut max_elem = 0usize;
     for (axis, (&dim, &stride)) in shape.iter().zip(strides.iter()).enumerate() {
         let last = dim - 1;
-        let term = last.checked_mul(stride).ok_or_else(|| OjasError::OutOfRange {
-            op: "Tensor::window",
-            detail: format!("axis {axis} extent overflows"),
-        })?;
-        max_elem = max_elem.checked_add(term).ok_or_else(|| OjasError::OutOfRange {
-            op: "Tensor::window",
-            detail: "view extent overflows".to_string(),
-        })?;
+        let term = last
+            .checked_mul(stride)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "Tensor::window",
+                detail: format!("axis {axis} extent overflows"),
+            })?;
+        max_elem = max_elem
+            .checked_add(term)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "Tensor::window",
+                detail: "view extent overflows".to_string(),
+            })?;
     }
     let elem = dtype.size();
     let span = max_elem
@@ -416,10 +428,12 @@ fn window_fits(
             op: "Tensor::window",
             detail: "view byte span overflows".to_string(),
         })?;
-    let end = byte_offset.checked_add(span).ok_or_else(|| OjasError::OutOfRange {
-        op: "Tensor::window",
-        detail: "view end overflows".to_string(),
-    })?;
+    let end = byte_offset
+        .checked_add(span)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op: "Tensor::window",
+            detail: "view end overflows".to_string(),
+        })?;
     if end > storage_len {
         return Err(OjasError::OutOfRange {
             op: "Tensor::window",
@@ -438,10 +452,12 @@ pub(crate) fn contiguous_strides(shape: &[usize]) -> Result<Vec<usize>, OjasErro
         if i == 0 {
             break;
         }
-        acc = acc.checked_mul(shape[i]).ok_or_else(|| OjasError::OutOfRange {
-            op: "contiguous_strides",
-            detail: "shape product overflows".to_string(),
-        })?;
+        acc = acc
+            .checked_mul(shape[i])
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "contiguous_strides",
+                detail: "shape product overflows".to_string(),
+            })?;
     }
     Ok(strides)
 }
@@ -537,9 +553,15 @@ mod tests {
         let t = f32_tensor(4, &budget);
         for offset in [1usize, 2, 3, 5, 7] {
             let err = t.view(&[1], &[1], offset).unwrap_err();
-            assert!(matches!(err, OjasError::OutOfRange { .. }), "{offset}: {err}");
+            assert!(
+                matches!(err, OjasError::OutOfRange { .. }),
+                "{offset}: {err}"
+            );
             let err = t.narrow(offset, &[1], &[1]).unwrap_err();
-            assert!(matches!(err, OjasError::OutOfRange { .. }), "{offset}: {err}");
+            assert!(
+                matches!(err, OjasError::OutOfRange { .. }),
+                "{offset}: {err}"
+            );
         }
         let aligned = t.narrow(4, &[3], &[1]).unwrap();
         assert_eq!(aligned.to_f32_vec().unwrap(), vec![1.0, 2.0, 3.0]);
@@ -556,7 +578,10 @@ mod tests {
         assert!(!broadcast.is_contiguous().unwrap());
         let err = broadcast.contiguous_bytes().unwrap_err();
         assert!(matches!(err, OjasError::Shape { .. }), "{err}");
-        assert_eq!(broadcast.element_byte_offset(&[usize::MAX - 1, 1]).unwrap(), 4);
+        assert_eq!(
+            broadcast.element_byte_offset(&[usize::MAX - 1, 1]).unwrap(),
+            4
+        );
     }
 
     #[test]
@@ -626,7 +651,11 @@ mod tests {
         assert!(t.view(&[usize::MAX], &[1], 0).is_err());
         assert!(t.view(&[1], &[1], usize::MAX).is_err());
         assert!(t.narrow(usize::MAX, &[1], &[1]).is_err());
-        assert!(t.narrow(4, &[1], &[1]).unwrap().narrow(usize::MAX - 3, &[1], &[1]).is_err());
+        assert!(t
+            .narrow(4, &[1], &[1])
+            .unwrap()
+            .narrow(usize::MAX - 3, &[1], &[1])
+            .is_err());
         assert!(t.view(&[2, 2], &[1], 0).is_err());
         assert!(t.element_byte_offset(&[4]).is_err());
         assert!(t.element_byte_offset(&[0, 0]).is_err());
@@ -643,7 +672,12 @@ mod tests {
         assert_eq!(empty.to_u32_vec().unwrap(), Vec::<u32>::new());
         assert!(Tensor::from_f32(&[1.0], &[0], &budget).is_err());
         assert!(Tensor::from_u32(&[1, 2], &[3], &budget).is_err());
-        let specials = [f32::INFINITY, f32::NEG_INFINITY, -0.0, f32::MIN_POSITIVE / 2.0];
+        let specials = [
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -0.0,
+            f32::MIN_POSITIVE / 2.0,
+        ];
         let t = Tensor::from_f32(&specials, &[4], &budget).unwrap();
         let back = t.to_f32_vec().unwrap();
         for (a, b) in specials.iter().zip(back.iter()) {
@@ -680,7 +714,13 @@ mod tests {
         assert_eq!(budget.live_bytes().unwrap(), 0);
     }
 
-    fn reference_fits(storage_len: usize, size: usize, shape: &[usize], strides: &[usize], off: usize) -> bool {
+    fn reference_fits(
+        storage_len: usize,
+        size: usize,
+        shape: &[usize],
+        strides: &[usize],
+        off: usize,
+    ) -> bool {
         if off % size != 0 || off > storage_len {
             return false;
         }
@@ -689,7 +729,10 @@ mod tests {
         }
         let mut max_elem: u128 = 0;
         for (&d, &s) in shape.iter().zip(strides) {
-            match (d as u128 - 1).checked_mul(s as u128).and_then(|t| max_elem.checked_add(t)) {
+            match (d as u128 - 1)
+                .checked_mul(s as u128)
+                .and_then(|t| max_elem.checked_add(t))
+            {
                 Some(m) => max_elem = m,
                 None => return false,
             }
@@ -705,7 +748,18 @@ mod tests {
         let budget = Budget::new(1 << 20);
         let base = f32_tensor(64, &budget);
         let mut rng = SplitMix64(0x0BAD_5EED);
-        let edge = [0usize, 1, 2, 3, 63, 64, 65, usize::MAX / 4, usize::MAX - 1, usize::MAX];
+        let edge = [
+            0usize,
+            1,
+            2,
+            3,
+            63,
+            64,
+            65,
+            usize::MAX / 4,
+            usize::MAX - 1,
+            usize::MAX,
+        ];
         for _ in 0..20_000 {
             let rank = rng.below(4) as usize;
             let pick = |rng: &mut SplitMix64| {
@@ -717,7 +771,11 @@ mod tests {
             };
             let shape: Vec<usize> = (0..rank).map(|_| pick(&mut rng)).collect();
             let strides: Vec<usize> = (0..rank).map(|_| pick(&mut rng)).collect();
-            let off = if rng.below(2) == 0 { pick(&mut rng).wrapping_mul(4) } else { pick(&mut rng) };
+            let off = if rng.below(2) == 0 {
+                pick(&mut rng).wrapping_mul(4)
+            } else {
+                pick(&mut rng)
+            };
             let expect = reference_fits(256, 4, &shape, &strides, off);
             let got = base.view(&shape, &strides, off);
             assert_eq!(got.is_ok(), expect, "{shape:?} {strides:?} {off}");

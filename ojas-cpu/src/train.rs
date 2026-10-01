@@ -182,7 +182,7 @@ pub fn clip_grads(grads: &mut [Vec<f32>], max_norm: f32) -> Result<f32, OjasErro
             }
             scaled.push(next);
         }
-        for (grad, next) in grads.iter_mut().zip(scaled.into_iter()) {
+        for (grad, next) in grads.iter_mut().zip(scaled) {
             *grad = next;
         }
     }
@@ -329,7 +329,7 @@ impl HybridOptimizer {
             };
             staged.push((new_p, new_m, new_v));
         }
-        for (param, (new_p, new_m, new_v)) in self.params.iter_mut().zip(staged.into_iter()) {
+        for (param, (new_p, new_m, new_v)) in self.params.iter_mut().zip(staged) {
             param.param = new_p;
             param.moment1 = new_m;
             param.moment2 = new_v;
@@ -365,7 +365,7 @@ fn check_finite_len(
 }
 
 fn shape_product(op: &'static str, shape: &[usize]) -> Result<usize, OjasError> {
-    if shape.is_empty() || shape.iter().any(|dim| *dim == 0) {
+    if shape.is_empty() || shape.contains(&0) {
         return Err(OjasError::Shape {
             op,
             detail: "empty tensor".to_string(),

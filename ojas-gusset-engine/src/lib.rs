@@ -47,15 +47,16 @@ pub unsafe extern "C" fn ojas_set_model_root(ptr: *const u8, len: usize) -> i32 
 /// Registers opcode handlers. A second call clears the previous ones first.
 #[no_mangle]
 pub extern "C" fn ojas_engine_init() -> i32 {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        match ojas_capi::install_engine() {
-            Ok(()) => 0,
-            Err(err) => {
-                ojas_capi::set_last_error(err);
-                -1
-            }
-        }
-    }));
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || match ojas_capi::install_engine() {
+                Ok(()) => 0,
+                Err(err) => {
+                    ojas_capi::set_last_error(err);
+                    -1
+                }
+            },
+        ));
     match result {
         Ok(code) => code,
         Err(_) => {
@@ -77,7 +78,8 @@ pub extern "C" fn ojas_engine_reset() {
 pub extern "C" fn ojas_last_error_len() -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ojas_capi::last_error().len()
-    })).unwrap_or(0)
+    }))
+    .unwrap_or(0)
 }
 
 /// # Safety
@@ -96,5 +98,6 @@ pub unsafe extern "C" fn ojas_copy_last_error(dst: *mut u8, cap: usize) -> usize
             std::ptr::copy_nonoverlapping(msg.as_ptr(), dst, n);
         }
         n
-    })).unwrap_or(0)
+    }))
+    .unwrap_or(0)
 }

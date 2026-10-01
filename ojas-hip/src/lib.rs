@@ -8,7 +8,7 @@
 
 #![cfg_attr(not(feature = "hip"), forbid(unsafe_code))]
 
-use ojas_device::{require_kind, DeviceError, Device};
+use ojas_device::{require_kind, Device, DeviceError};
 
 /// Proof that HIP opened. The allocation from the startup copy is freed
 /// before this value is returned.
@@ -24,9 +24,7 @@ impl HipDevice {
     pub fn open() -> Result<Self, DeviceError> {
         #[cfg(not(feature = "hip"))]
         {
-            Err(DeviceError::NotCompiled {
-                kind: Device::Hip,
-            })
+            Err(DeviceError::NotCompiled { kind: Device::Hip })
         }
         #[cfg(feature = "hip")]
         {
@@ -45,9 +43,7 @@ impl HipDevice {
         #[cfg(not(feature = "hip"))]
         {
             let _ = (self, input);
-            Err(DeviceError::NotCompiled {
-                kind: Device::Hip,
-            })
+            Err(DeviceError::NotCompiled { kind: Device::Hip })
         }
         #[cfg(feature = "hip")]
         {
@@ -157,9 +153,7 @@ mod tests {
     #[test]
     fn default_build_reports_not_compiled() {
         match HipDevice::open() {
-            Err(DeviceError::NotCompiled {
-                kind: Device::Hip,
-            }) => {}
+            Err(DeviceError::NotCompiled { kind: Device::Hip }) => {}
             Err(other) => panic!("open returned {other}"),
             Ok(_) => panic!("open succeeded without the hip feature"),
         }
@@ -200,7 +194,9 @@ mod tests {
             ),
             "{err}"
         );
-        let same = device().copy_roundtrip(Device::Hip, &[4.0, 5.0]).unwrap_err();
+        let same = device()
+            .copy_roundtrip(Device::Hip, &[4.0, 5.0])
+            .unwrap_err();
         assert!(
             matches!(same, DeviceError::NotCompiled { kind: Device::Hip }),
             "{same}"
@@ -209,9 +205,7 @@ mod tests {
 
     #[test]
     fn hip_is_not_accepted_as_cpu() {
-        let err = device()
-            .copy_roundtrip(Device::Cpu, &[1.0])
-            .unwrap_err();
+        let err = device().copy_roundtrip(Device::Cpu, &[1.0]).unwrap_err();
         assert!(matches!(err, DeviceError::DeviceMismatch { .. }));
     }
 

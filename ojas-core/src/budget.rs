@@ -50,10 +50,12 @@ impl Budget {
                 budget: self.clone(),
             });
         }
-        let next = live.checked_add(bytes).ok_or_else(|| OjasError::OutOfRange {
-            op: "Budget::try_reserve",
-            detail: format!("live {} + {bytes} overflows u64", *live),
-        })?;
+        let next = live
+            .checked_add(bytes)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "Budget::try_reserve",
+                detail: format!("live {} + {bytes} overflows u64", *live),
+            })?;
         if next > self.cap_bytes {
             return Err(OjasError::CapacityExceeded {
                 requested: bytes,
@@ -125,15 +127,24 @@ mod tests {
     fn zero_cap_and_u64_edges() {
         let zero = Budget::new(0);
         assert!(zero.try_reserve(0).is_ok());
-        assert!(matches!(zero.try_reserve(1), Err(OjasError::CapacityExceeded { .. })));
+        assert!(matches!(
+            zero.try_reserve(1),
+            Err(OjasError::CapacityExceeded { .. })
+        ));
         let max = Budget::new(u64::MAX);
         let all = max.try_reserve(u64::MAX).unwrap();
-        assert!(matches!(max.try_reserve(1), Err(OjasError::OutOfRange { .. })));
+        assert!(matches!(
+            max.try_reserve(1),
+            Err(OjasError::OutOfRange { .. })
+        ));
         assert_eq!(max.live_bytes().unwrap(), u64::MAX);
         drop(all);
         assert_eq!(max.live_bytes().unwrap(), 0);
         let one = max.try_reserve(1).unwrap();
-        assert!(matches!(max.try_reserve(u64::MAX), Err(OjasError::OutOfRange { .. })));
+        assert!(matches!(
+            max.try_reserve(u64::MAX),
+            Err(OjasError::OutOfRange { .. })
+        ));
         drop(one);
         assert_eq!(max.live_bytes().unwrap(), 0);
         assert!(matches!(
@@ -183,7 +194,11 @@ mod tests {
                         } else {
                             match budget.try_reserve((z >> 16) % 130) {
                                 Ok(r) => held.push(r),
-                                Err(OjasError::CapacityExceeded { live, cap, requested }) => {
+                                Err(OjasError::CapacityExceeded {
+                                    live,
+                                    cap,
+                                    requested,
+                                }) => {
                                     assert_eq!(cap, CAP);
                                     assert!(live + requested > CAP);
                                     refused.fetch_add(1, Ordering::Relaxed);

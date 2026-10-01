@@ -8,7 +8,7 @@
 
 #![cfg_attr(not(feature = "cuda"), forbid(unsafe_code))]
 
-use ojas_device::{require_kind, DeviceError, Device};
+use ojas_device::{require_kind, Device, DeviceError};
 
 /// An open CUDA context. Constructed only by [`CudaDevice::open`].
 pub struct CudaDevice {
@@ -31,9 +31,7 @@ impl CudaDevice {
     pub fn open() -> Result<Self, DeviceError> {
         #[cfg(not(feature = "cuda"))]
         {
-            Err(DeviceError::NotCompiled {
-                kind: Device::Cuda,
-            })
+            Err(DeviceError::NotCompiled { kind: Device::Cuda })
         }
         #[cfg(feature = "cuda")]
         {
@@ -68,9 +66,7 @@ impl CudaDevice {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = (self, input, scale, bias);
-            Err(DeviceError::NotCompiled {
-                kind: Device::Cuda,
-            })
+            Err(DeviceError::NotCompiled { kind: Device::Cuda })
         }
         #[cfg(feature = "cuda")]
         {
@@ -204,9 +200,7 @@ mod tests {
     #[test]
     fn default_build_reports_not_compiled() {
         match CudaDevice::open() {
-            Err(DeviceError::NotCompiled {
-                kind: Device::Cuda,
-            }) => {}
+            Err(DeviceError::NotCompiled { kind: Device::Cuda }) => {}
             Err(other) => panic!("open returned {other}"),
             Ok(_) => panic!("open succeeded without the cuda feature"),
         }
@@ -254,7 +248,6 @@ mod tests {
             matches!(same, DeviceError::NotCompiled { kind: Device::Cuda }),
             "{same}"
         );
-        assert_ne!(same.to_string(), "computed");
     }
 
     #[test]

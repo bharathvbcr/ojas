@@ -445,7 +445,9 @@ mod tests {
             let err = got
                 .unwrap_or_else(|_| panic!("KvCache::new({n_layer}, {n_embd}, {max_len}) panicked"))
                 .err()
-                .unwrap_or_else(|| panic!("KvCache::new({n_layer}, {n_embd}, {max_len}) allocated"));
+                .unwrap_or_else(|| {
+                    panic!("KvCache::new({n_layer}, {n_embd}, {max_len}) allocated")
+                });
             assert!(
                 matches!(
                     err,

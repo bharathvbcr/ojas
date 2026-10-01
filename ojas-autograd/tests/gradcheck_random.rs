@@ -126,7 +126,12 @@ fn sdpa(q: &[f64], k: &[f64], val: &[f64], shape: [usize; 4]) -> Vec<f64> {
         let base = bh * tt * d;
         for t in 0..tt {
             let s: Vec<f64> = (0..=t)
-                .map(|j| scale * (0..d).map(|e| q[base + t * d + e] * k[base + j * d + e]).sum::<f64>())
+                .map(|j| {
+                    scale
+                        * (0..d)
+                            .map(|e| q[base + t * d + e] * k[base + j * d + e])
+                            .sum::<f64>()
+                })
                 .collect();
             let m = s.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             let p: Vec<f64> = s.iter().map(|x| (x - m).exp()).collect();
@@ -144,7 +149,10 @@ fn gate(x: &[f64], w: &[f64], bias: &[f64], attn: &[f64], din: usize, dh: usize)
     let mut y = vec![0.0; attn.len()];
     for row in 0..x.len() / din {
         for hd in 0..heads {
-            let z = bias[hd] + (0..din).map(|i| x[row * din + i] * w[hd * din + i]).sum::<f64>();
+            let z = bias[hd]
+                + (0..din)
+                    .map(|i| x[row * din + i] * w[hd * din + i])
+                    .sum::<f64>();
             let g = sigmoid(z);
             for e in 0..dh {
                 let at = (row * heads + hd) * dh + e;
@@ -193,8 +201,16 @@ fn gradcheck_linear_random_shapes() {
                 &t(&cpu, &r, &[prefix[0], prefix[1], nout]),
             )
             .unwrap();
-        check("linear x", &gx, &fd(&x0, |p| dot(&r, &lin(p, &w0, kin, nout))));
-        check("linear w", &gw, &fd(&w0, |p| dot(&r, &lin(&x0, p, kin, nout))));
+        check(
+            "linear x",
+            &gx,
+            &fd(&x0, |p| dot(&r, &lin(p, &w0, kin, nout))),
+        );
+        check(
+            "linear w",
+            &gw,
+            &fd(&w0, |p| dot(&r, &lin(&x0, p, kin, nout))),
+        );
     }
 }
 
@@ -210,7 +226,12 @@ fn gradcheck_rms_norm_and_qk_norm_random_shapes() {
         let r = rng.vec(rows * dim, 1.0);
         let shape = [rows, dim];
         let (gx, gw) = cpu
-            .rms_norm_backward(&t(&cpu, &x0, &shape), &t(&cpu, &w0, &[dim]), &t(&cpu, &r, &shape), RMS_NORM_EPS)
+            .rms_norm_backward(
+                &t(&cpu, &x0, &shape),
+                &t(&cpu, &w0, &[dim]),
+                &t(&cpu, &r, &shape),
+                RMS_NORM_EPS,
+            )
             .unwrap();
         check("rms x", &gx, &fd(&x0, |p| dot(&r, &rms(p, &w0))));
         check("rms w", &gw, &fd(&w0, |p| dot(&r, &rms(&x0, p))));
@@ -263,10 +284,18 @@ fn gradcheck_rope_both_layouts_random_shapes() {
         let r = rng.vec(n, 1.0);
         let ct = t(&cpu, &cos, &cs_shape);
         let st = t(&cpu, &sin, &cs_shape);
-        let y = cpu.rope_half_split_forward(&t(&cpu, &x0, &shape), &ct, &st).unwrap();
+        let y = cpu
+            .rope_half_split_forward(&t(&cpu, &x0, &shape), &ct, &st)
+            .unwrap();
         gradients_match(&v(&y), &rope(&x0, &shape, &cos, &sin), 1e-6, 1e-5).unwrap();
-        let gx = cpu.rope_half_split_backward(&t(&cpu, &r, &shape), &ct, &st).unwrap();
-        check("rope x", &gx, &fd(&x0, |p| dot(&r, &rope(p, &shape, &cos, &sin))));
+        let gx = cpu
+            .rope_half_split_backward(&t(&cpu, &r, &shape), &ct, &st)
+            .unwrap();
+        check(
+            "rope x",
+            &gx,
+            &fd(&x0, |p| dot(&r, &rope(p, &shape, &cos, &sin))),
+        );
     }
 }
 
@@ -285,7 +314,11 @@ fn gradcheck_causal_sdpa_random_shapes() {
         let v0 = rng.vec(n, 1.5);
         let r = rng.vec(n, 1.0);
         let y = cpu
-            .causal_sdpa_forward(&t(&cpu, &q0, &shape), &t(&cpu, &k0, &shape), &t(&cpu, &v0, &shape))
+            .causal_sdpa_forward(
+                &t(&cpu, &q0, &shape),
+                &t(&cpu, &k0, &shape),
+                &t(&cpu, &v0, &shape),
+            )
             .unwrap();
         gradients_match(&v(&y), &sdpa(&q0, &k0, &v0, shape), 1e-5, 1e-4).unwrap();
         let (gq, gk, gv) = cpu
@@ -296,9 +329,21 @@ fn gradcheck_causal_sdpa_random_shapes() {
                 &t(&cpu, &r, &shape),
             )
             .unwrap();
-        check("sdpa q", &gq, &fd(&q0, |p| dot(&r, &sdpa(p, &k0, &v0, shape))));
-        check("sdpa k", &gk, &fd(&k0, |p| dot(&r, &sdpa(&q0, p, &v0, shape))));
-        check("sdpa v", &gv, &fd(&v0, |p| dot(&r, &sdpa(&q0, &k0, p, shape))));
+        check(
+            "sdpa q",
+            &gq,
+            &fd(&q0, |p| dot(&r, &sdpa(p, &k0, &v0, shape))),
+        );
+        check(
+            "sdpa k",
+            &gk,
+            &fd(&k0, |p| dot(&r, &sdpa(&q0, p, &v0, shape))),
+        );
+        check(
+            "sdpa v",
+            &gv,
+            &fd(&v0, |p| dot(&r, &sdpa(&q0, &k0, p, shape))),
+        );
     }
 }
 
@@ -327,10 +372,26 @@ fn gradcheck_gate_value_residual_pointwise_random_shapes() {
                 &t(&cpu, &r, &a_shape),
             )
             .unwrap();
-        check("gate x", &g.input, &fd(&x0, |p| dot(&r, &gate(p, &w0, &b0, &a0, din, dh))));
-        check("gate w", &g.weight, &fd(&w0, |p| dot(&r, &gate(&x0, p, &b0, &a0, din, dh))));
-        check("gate b", &g.bias, &fd(&b0, |p| dot(&r, &gate(&x0, &w0, p, &a0, din, dh))));
-        check("gate attn", &g.attn_out, &fd(&a0, |p| dot(&r, &gate(&x0, &w0, &b0, p, din, dh))));
+        check(
+            "gate x",
+            &g.input,
+            &fd(&x0, |p| dot(&r, &gate(p, &w0, &b0, &a0, din, dh))),
+        );
+        check(
+            "gate w",
+            &g.weight,
+            &fd(&w0, |p| dot(&r, &gate(&x0, p, &b0, &a0, din, dh))),
+        );
+        check(
+            "gate b",
+            &g.bias,
+            &fd(&b0, |p| dot(&r, &gate(&x0, &w0, p, &a0, din, dh))),
+        );
+        check(
+            "gate attn",
+            &g.attn_out,
+            &fd(&a0, |p| dot(&r, &gate(&x0, &w0, &b0, p, din, dh))),
+        );
     }
 
     for _ in 0..15 {
@@ -341,20 +402,43 @@ fn gradcheck_gate_value_residual_pointwise_random_shapes() {
         let r = rng.vec(n, 1.0);
         let blend = |a: &[f64], b: &[f64], l: f64| -> Vec<f64> {
             let s = sigmoid(l);
-            a.iter().zip(b).map(|(x, y)| (1.0 - s) * x + s * y).collect()
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (1.0 - s) * x + s * y)
+                .collect()
         };
         let g = cpu
-            .value_residual_blend_backward(&t(&cpu, &va, &[n]), &t(&cpu, &vb, &[n]), &t(&cpu, &lam, &[]), &t(&cpu, &r, &[n]))
+            .value_residual_blend_backward(
+                &t(&cpu, &va, &[n]),
+                &t(&cpu, &vb, &[n]),
+                &t(&cpu, &lam, &[]),
+                &t(&cpu, &r, &[n]),
+            )
             .unwrap();
-        check("vres v", &g.value, &fd(&va, |p| dot(&r, &blend(p, &vb, lam[0]))));
-        check("vres v0", &g.value0, &fd(&vb, |p| dot(&r, &blend(&va, p, lam[0]))));
-        check("vres lambda", &g.lambda, &fd(&lam, |p| dot(&r, &blend(&va, &vb, p[0]))));
+        check(
+            "vres v",
+            &g.value,
+            &fd(&va, |p| dot(&r, &blend(p, &vb, lam[0]))),
+        );
+        check(
+            "vres v0",
+            &g.value0,
+            &fd(&vb, |p| dot(&r, &blend(&va, p, lam[0]))),
+        );
+        check(
+            "vres lambda",
+            &g.lambda,
+            &fd(&lam, |p| dot(&r, &blend(&va, &vb, p[0]))),
+        );
 
         let x0 = rng.vec(n, 6.0);
-        let gx = cpu.silu_backward(&t(&cpu, &x0, &[n]), &t(&cpu, &r, &[n])).unwrap();
+        let gx = cpu
+            .silu_backward(&t(&cpu, &x0, &[n]), &t(&cpu, &r, &[n]))
+            .unwrap();
         check("silu", &gx, &fd(&x0, |p| dot(&r, &silu(p))));
 
-        let prod = |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x * y).collect() };
+        let prod =
+            |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x * y).collect() };
         let (ga, gb) = cpu
             .mul_backward(&t(&cpu, &va, &[n]), &t(&cpu, &vb, &[n]), &t(&cpu, &r, &[n]))
             .unwrap();
@@ -380,7 +464,11 @@ fn gradcheck_embedding_and_cross_entropy_random_shapes() {
         let r = rng.vec(n * dim, 1.0);
         let idt = Tensor::from_u32(&ids, &[n], cpu.budget()).unwrap();
         let gt = cpu
-            .embedding_backward(&t(&cpu, &table0, &[vocab, dim]), &idt, &t(&cpu, &r, &[n, dim]))
+            .embedding_backward(
+                &t(&cpu, &table0, &[vocab, dim]),
+                &idt,
+                &t(&cpu, &r, &[n, dim]),
+            )
             .unwrap();
         let gather = |p: &[f64]| -> Vec<f64> {
             ids.iter()
@@ -389,7 +477,11 @@ fn gradcheck_embedding_and_cross_entropy_random_shapes() {
         };
         check("embedding", &gt, &fd(&table0, |p| dot(&r, &gather(p))));
 
-        let ignore = if rng.below(2) == 0 { None } else { Some(vocab as u32 + 3) };
+        let ignore = if rng.below(2) == 0 {
+            None
+        } else {
+            Some(vocab as u32 + 3)
+        };
         let mut targets: Vec<u32> = (0..n).map(|_| rng.below(vocab) as u32).collect();
         if let (Some(sentinel), true) = (ignore, n > 1) {
             targets[rng.below(n)] = sentinel;
@@ -401,7 +493,11 @@ fn gradcheck_embedding_and_cross_entropy_random_shapes() {
         let want = ce(&logits0, &targets, vocab, ignore);
         assert!((f64::from(v(&loss)[0]) - want).abs() < 1e-5 * (1.0 + want.abs()));
         let gl = cpu.cross_entropy_mean_backward(&lt, &tt, ignore).unwrap();
-        check("cross_entropy", &gl, &fd(&logits0, |p| ce(p, &targets, vocab, ignore)));
+        check(
+            "cross_entropy",
+            &gl,
+            &fd(&logits0, |p| ce(p, &targets, vocab, ignore)),
+        );
     }
 }
 
@@ -431,12 +527,23 @@ fn tape_backward_twice_starts_from_fresh_gradients() {
     tape.backward(z).unwrap();
     let first = v(tape.grad(x).unwrap());
     tape.backward(z).unwrap();
-    assert_eq!(v(tape.grad(x).unwrap()), first, "repeat backward must not double-count");
+    assert_eq!(
+        v(tape.grad(x).unwrap()),
+        first,
+        "repeat backward must not double-count"
+    );
 
     tape.backward(y).unwrap();
     let want = fd(&x0, |p| silu(p).iter().sum());
-    check("backward(y) after backward(z)", tape.grad(x).unwrap(), &want);
-    assert!(tape.grad(z).is_none(), "a node above the seed has no gradient");
+    check(
+        "backward(y) after backward(z)",
+        tape.grad(x).unwrap(),
+        &want,
+    );
+    assert!(
+        tape.grad(z).is_none(),
+        "a node above the seed has no gradient"
+    );
 }
 
 #[test]
@@ -470,7 +577,9 @@ struct Block {
     vocab: usize,
 }
 
-const LEAVES: [&str; 11] = ["table", "norm", "wq", "wk", "wv", "qn", "kn", "wv0", "lam", "wu", "wg"];
+const LEAVES: [&str; 11] = [
+    "table", "norm", "wq", "wk", "wv", "qn", "kn", "wv0", "lam", "wu", "wg",
+];
 
 impl Block {
     fn leaf_shapes(&self) -> Vec<Vec<usize>> {
@@ -527,8 +636,18 @@ impl Block {
             .flat_map(|&id| p[0][id as usize * c..(id as usize + 1) * c].to_vec())
             .collect();
         let h = rms(&x, &p[1]);
-        let q = rope(&rms(&lin(&h, &p[2], c, c), &p[5]), &shape, &self.cos, &self.sin);
-        let k = rope(&rms(&lin(&h, &p[3], c, c), &p[6]), &shape, &self.cos, &self.sin);
+        let q = rope(
+            &rms(&lin(&h, &p[2], c, c), &p[5]),
+            &shape,
+            &self.cos,
+            &self.sin,
+        );
+        let k = rope(
+            &rms(&lin(&h, &p[3], c, c), &p[6]),
+            &shape,
+            &self.cos,
+            &self.sin,
+        );
         let s = sigmoid(p[8][0]);
         let val: Vec<f64> = lin(&h, &p[4], c, c)
             .iter()
@@ -538,8 +657,17 @@ impl Block {
         let a = sdpa(&q, &k, &val, shape);
         let up = lin(&a, &p[9], c, c);
         let act = silu(&lin(&a, &p[10], c, c));
-        let o: Vec<f64> = x.iter().zip(act.iter().zip(&up)).map(|(xi, (g, u))| xi + g * u).collect();
-        ce(&lin(&o, &p[0], c, self.vocab), &self.targets, self.vocab, self.ignore)
+        let o: Vec<f64> = x
+            .iter()
+            .zip(act.iter().zip(&up))
+            .map(|(xi, (g, u))| xi + g * u)
+            .collect();
+        ce(
+            &lin(&o, &p[0], c, self.vocab),
+            &self.targets,
+            self.vocab,
+            self.ignore,
+        )
     }
 }
 
@@ -578,7 +706,10 @@ fn tape_gradcheck_tied_embedding_block() {
         let loss = block.tape_loss(&mut tape, &vars).unwrap();
         let got = f64::from(v(tape.value(loss).unwrap())[0]);
         let want = block.f64_loss(&params);
-        assert!((got - want).abs() < 1e-5 * (1.0 + want.abs()), "loss {got} vs {want}");
+        assert!(
+            (got - want).abs() < 1e-5 * (1.0 + want.abs()),
+            "loss {got} vs {want}"
+        );
         tape.backward(loss).unwrap();
         for (i, name) in LEAVES.iter().enumerate() {
             let numeric = fd(&params[i], |pi| {
@@ -586,7 +717,9 @@ fn tape_gradcheck_tied_embedding_block() {
                 all[i] = pi.to_vec();
                 block.f64_loss(&all)
             });
-            let grad = tape.grad(vars[i]).unwrap_or_else(|| panic!("{name} has no gradient"));
+            let grad = tape
+                .grad(vars[i])
+                .unwrap_or_else(|| panic!("{name} has no gradient"));
             check(&format!("block T{t_len} C{c} {name}"), grad, &numeric);
         }
     }

@@ -374,9 +374,7 @@ fn whitespace_token_end(text: &str, i: usize) -> Option<usize> {
     if !followed_by_non_ws {
         return Some(run_end);
     }
-    let Some((off, _)) = text[i..run_end].char_indices().next_back() else {
-        return None;
-    };
+    let (off, _) = text[i..run_end].char_indices().next_back()?;
     let last = i + off;
     if last > i {
         Some(last)

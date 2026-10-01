@@ -38,10 +38,7 @@ pub enum DeviceError {
     /// The runtime is compiled, and no usable device answered.
     NoDevice { kind: Device, detail: String },
     /// The caller asked for one kind and the call is bound to another.
-    DeviceMismatch {
-        expected: Device,
-        actual: Device,
-    },
+    DeviceMismatch { expected: Device, actual: Device },
 }
 
 impl fmt::Display for DeviceError {
@@ -54,7 +51,10 @@ impl fmt::Display for DeviceError {
                 write!(f, "no {kind:?} device: {detail}")
             }
             DeviceError::DeviceMismatch { expected, actual } => {
-                write!(f, "device mismatch: expected {expected:?}, actual {actual:?}")
+                write!(
+                    f,
+                    "device mismatch: expected {expected:?}, actual {actual:?}"
+                )
             }
         }
     }
@@ -113,9 +113,7 @@ mod tests {
 
     #[test]
     fn not_compiled_displays() {
-        let err = DeviceError::NotCompiled {
-            kind: Device::Cuda,
-        };
+        let err = DeviceError::NotCompiled { kind: Device::Cuda };
         let text = err.to_string();
         assert!(text.contains("Cuda"));
         assert!(text.contains("not compiled"));
@@ -152,8 +150,13 @@ mod tests {
                 detail: "probe returned 0 adapters".to_string(),
             };
             let text = no_device.to_string();
-            assert!(text.contains(&name) && text.contains("0 adapters"), "{text}");
-            assert!(DeviceError::NotCompiled { kind }.to_string().contains(&name));
+            assert!(
+                text.contains(&name) && text.contains("0 adapters"),
+                "{text}"
+            );
+            assert!(DeviceError::NotCompiled { kind }
+                .to_string()
+                .contains(&name));
         }
     }
 

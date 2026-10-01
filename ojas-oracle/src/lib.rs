@@ -40,17 +40,25 @@ pub fn parse_rms_norm(text: &str) -> Result<RmsNormFixture, OjasError> {
     if field(obj, "op").and_then(Json::as_str) != Some("rms_norm") {
         return Err(bad("fixture op is not rms_norm"));
     }
-    let eps = field(obj, "eps").ok_or_else(|| bad("missing eps"))?.number()?;
+    let eps = field(obj, "eps")
+        .ok_or_else(|| bad("missing eps"))?
+        .number()?;
     if !eps.is_finite() {
-        return Err(OjasError::NonFinite { op: "oracle_fixture" });
+        return Err(OjasError::NonFinite {
+            op: "oracle_fixture",
+        });
     }
     let fixture = RmsNormFixture {
         eps,
-        input: field(obj, "input").ok_or_else(|| bad("missing input"))?.numbers()?,
+        input: field(obj, "input")
+            .ok_or_else(|| bad("missing input"))?
+            .numbers()?,
         input_shape: field(obj, "input_shape")
             .ok_or_else(|| bad("missing input_shape"))?
             .shape()?,
-        weight: field(obj, "weight").ok_or_else(|| bad("missing weight"))?.numbers()?,
+        weight: field(obj, "weight")
+            .ok_or_else(|| bad("missing weight"))?
+            .numbers()?,
         weight_shape: field(obj, "weight_shape")
             .ok_or_else(|| bad("missing weight_shape"))?
             .shape()?,
@@ -73,7 +81,9 @@ pub fn parse_rms_norm(text: &str) -> Result<RmsNormFixture, OjasError> {
 fn product(shape: &[usize]) -> Result<usize, OjasError> {
     let mut n = 1usize;
     for &dim in shape {
-        n = n.checked_mul(dim).ok_or_else(|| bad("shape product overflows"))?;
+        n = n
+            .checked_mul(dim)
+            .ok_or_else(|| bad("shape product overflows"))?;
     }
     Ok(n)
 }
@@ -137,7 +147,9 @@ impl Json {
 }
 
 fn field<'a>(obj: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
-    obj.iter().find(|(name, _)| name == key).map(|(_, value)| value)
+    obj.iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value)
 }
 
 /// The fixture format nests two levels; deeper input is refused before the
@@ -167,14 +179,20 @@ fn parse_json(text: &str) -> Result<Json, OjasError> {
 impl<'a> Parser<'a> {
     fn value(&mut self) -> Result<Json, OjasError> {
         self.skip();
-        let byte = self.peek().ok_or_else(|| bad("unexpected end of fixture"))?;
+        let byte = self
+            .peek()
+            .ok_or_else(|| bad("unexpected end of fixture"))?;
         match byte {
             b'{' | b'[' => {
                 if self.depth == MAX_DEPTH {
                     return Err(bad("fixture nesting is too deep"));
                 }
                 self.depth += 1;
-                let nested = if byte == b'{' { self.object() } else { self.array() };
+                let nested = if byte == b'{' {
+                    self.object()
+                } else {
+                    self.array()
+                };
                 self.depth -= 1;
                 nested
             }

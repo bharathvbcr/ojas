@@ -418,7 +418,7 @@ fn ones_like(cpu: &CpuBackend, tensor: &Tensor) -> Result<Tensor, OjasError> {
 }
 
 fn shape_product(op: &'static str, shape: &[usize]) -> Result<usize, OjasError> {
-    if shape.iter().any(|dim| *dim == 0) {
+    if shape.contains(&0) {
         return Err(OjasError::Shape {
             op,
             detail: "empty tensor".to_string(),

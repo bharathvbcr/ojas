@@ -29,20 +29,24 @@ pub fn prefix_bytes() -> [u8; 12] {
 /// Read [`prefix_bytes`]. A short buffer, a wrong magic, or a version other
 /// than 1 is [`OjasError::OutOfRange`].
 pub fn read_prefix(bytes: &[u8]) -> Result<CheckpointPrefix, OjasError> {
-    let (magic, rest) = bytes.split_at_checked(8).ok_or_else(|| OjasError::OutOfRange {
-        op: "read_prefix",
-        detail: format!("need 12 bytes, got {}", bytes.len()),
-    })?;
+    let (magic, rest) = bytes
+        .split_at_checked(8)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op: "read_prefix",
+            detail: format!("need 12 bytes, got {}", bytes.len()),
+        })?;
     if magic != CHECKPOINT_MAGIC {
         return Err(OjasError::OutOfRange {
             op: "read_prefix",
             detail: "checkpoint magic mismatch".to_string(),
         });
     }
-    let (ver, _) = rest.split_at_checked(4).ok_or_else(|| OjasError::OutOfRange {
-        op: "read_prefix",
-        detail: format!("need 12 bytes, got {}", bytes.len()),
-    })?;
+    let (ver, _) = rest
+        .split_at_checked(4)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op: "read_prefix",
+            detail: format!("need 12 bytes, got {}", bytes.len()),
+        })?;
     let buf: [u8; 4] = ver.try_into().map_err(|_| OjasError::OutOfRange {
         op: "read_prefix",
         detail: "version bytes are not 4 long".to_string(),
@@ -115,7 +119,10 @@ mod tests {
     fn prefix_round_trips_and_ignores_trailing_bytes() {
         let prefix = prefix_bytes();
         assert_eq!(&prefix[..8], b"OJAS0001");
-        assert_eq!(read_prefix(&prefix).unwrap(), CheckpointPrefix { version: 1 });
+        assert_eq!(
+            read_prefix(&prefix).unwrap(),
+            CheckpointPrefix { version: 1 }
+        );
         let mut longer = prefix.to_vec();
         longer.extend_from_slice(&[0xFF; 64]);
         assert_eq!(read_prefix(&longer).unwrap().version, 1);

@@ -101,7 +101,9 @@ pub fn step(input: StepInput<'_>) -> Result<StepStats, String> {
     let mut grad = cpu
         .cross_entropy_mean_backward(&logits, &targets, None)
         .map_err(show)?;
-    let grad_norm = cpu.clip_grad_norm(std::slice::from_mut(&mut grad), 1.0).map_err(show)?;
+    let grad_norm = cpu
+        .clip_grad_norm(std::slice::from_mut(&mut grad), 1.0)
+        .map_err(show)?;
     let loss = scalar(&loss_t)?;
     // The learning rate is applied to a one-element parameter whose gradient
     // is the scalar loss, so a non-finite lr fails inside ojas-cpu.
@@ -142,7 +144,10 @@ pub(crate) fn rows(batch: u32, seq: u32) -> Result<usize, String> {
 fn scalar(tensor: &Tensor) -> Result<f32, String> {
     let values = tensor.to_f32_vec().map_err(show)?;
     if values.len() != 1 {
-        return Err(format!("step: shape: loss rank has {} values", values.len()));
+        return Err(format!(
+            "step: shape: loss rank has {} values",
+            values.len()
+        ));
     }
     Ok(values[0])
 }

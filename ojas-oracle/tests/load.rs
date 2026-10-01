@@ -16,10 +16,7 @@ fn rms_norm_fixture_matches_cpu_reference() {
     let w = Tensor::from_f32(&weight, &fixture.weight_shape, cpu.budget()).unwrap();
     let y = cpu.rms_norm_forward(&x, &w, RMS_NORM_EPS).unwrap();
     for (got, expect) in y.to_f32_vec().unwrap().iter().zip(&fixture.expected) {
-        assert!(
-            (f64::from(*got) - expect).abs() < 1e-5,
-            "{got} vs {expect}"
-        );
+        assert!((f64::from(*got) - expect).abs() < 1e-5, "{got} vs {expect}");
     }
 }
 

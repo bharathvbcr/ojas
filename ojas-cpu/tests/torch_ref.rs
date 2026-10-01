@@ -65,6 +65,7 @@ struct StepRecord {
 /// backward, then AdamW on `wq` (weight decay 0.1) and the norm weight
 /// (weight decay 0). Learning rate is `6e-4` times the cosine multiplier
 /// at step 8. `wk`, `wv`, and `wo` get weight gradients and are not stepped.
+#[allow(clippy::too_many_arguments)]
 fn regression_graph(
     cpu: &CpuBackend,
     b: usize,
@@ -198,7 +199,7 @@ fn regression_graph(
 
 fn tiny_step(cpu: &CpuBackend) -> StepRecord {
     regression_graph(
-        cpu, 1, 4, 16, 32, &X, &NORM_W0, &WQ0, &WK0, &WV0, &WO0, &COS, &SIN, &TARGETS,
+        cpu, 1, 4, 16, 32, &*X, &*NORM_W0, &*WQ0, &*WK0, &*WV0, &*WO0, &*COS, &*SIN, &TARGETS,
     )
 }
 
@@ -207,15 +208,15 @@ fn one_step_matches_torch_2_13_float32() {
     // Reference tensors: torch 2.13.0 float32, this machine, 2026-10-01.
     let cpu = cpu();
     let got = tiny_step(&cpu);
-    let mult_err = (got.mult - COSINE_MULT_STEP8).abs();
-    let err_h = max_abs(&got.h, &H);
-    let err_attn = max_abs(&got.attn, &ATTN);
-    let err_logits = max_abs(&got.logits, &LOGITS);
-    let err_loss = (f64::from(got.loss) - f64::from(LOSS)).abs();
-    let err_gwq = max_abs(&got.gwq, &GWQ);
-    let err_gnorm = max_abs(&got.gnorm, &GWN);
-    let err_wq = max_abs(&got.wq, &WQ_AFTER);
-    let err_norm = max_abs(&got.norm, &NORM_AFTER);
+    let mult_err = (got.mult - *COSINE_MULT_STEP8).abs();
+    let err_h = max_abs(&got.h, &*H);
+    let err_attn = max_abs(&got.attn, &*ATTN);
+    let err_logits = max_abs(&got.logits, &*LOGITS);
+    let err_loss = (f64::from(got.loss) - f64::from(*LOSS)).abs();
+    let err_gwq = max_abs(&got.gwq, &*GWQ);
+    let err_gnorm = max_abs(&got.gnorm, &*GWN);
+    let err_wq = max_abs(&got.wq, &*WQ_AFTER);
+    let err_norm = max_abs(&got.norm, &*NORM_AFTER);
     let worst = [
         mult_err, err_h, err_attn, err_logits, err_loss, err_gwq, err_gnorm, err_wq, err_norm,
     ]
@@ -298,7 +299,7 @@ impl SplitMix64 {
 fn one_step_wall_time() {
     let cpu = CpuBackend::new(Budget::new(64 << 20));
     let check = tiny_step(&cpu);
-    let err_loss = (f64::from(check.loss) - f64::from(LOSS)).abs();
+    let err_loss = (f64::from(check.loss) - f64::from(*LOSS)).abs();
     assert!(
         err_loss <= 1e-4,
         "tiny loss {} err {err_loss:.3e} exceeds 1e-4 of frozen torch ref",

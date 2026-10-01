@@ -47,9 +47,7 @@ pub fn resolve_under_root(root: &Path, raw: &str) -> Result<PathBuf, String> {
                 saw_name = true;
                 acc.push(name);
                 if acc.symlink_metadata().is_ok() {
-                    let canon = acc
-                        .canonicalize()
-                        .map_err(|err| format!("path: {err}"))?;
+                    let canon = acc.canonicalize().map_err(|err| format!("path: {err}"))?;
                     if !canon.starts_with(&root) {
                         return Err("path escapes model root".to_string());
                     }
@@ -99,7 +97,8 @@ pub fn inspect_safetensors(path: &Path) -> Result<u32, String> {
     if file_len < 8u64.saturating_add(n) {
         return Err("not a safetensors file: truncated header".to_string());
     }
-    let n_us = usize::try_from(n).map_err(|_| "not a safetensors file: header length".to_string())?;
+    let n_us =
+        usize::try_from(n).map_err(|_| "not a safetensors file: header length".to_string())?;
     let mut header = vec![0u8; n_us];
     file.read_exact(&mut header)
         .map_err(|_| "not a safetensors file: truncated header".to_string())?;

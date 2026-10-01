@@ -397,7 +397,10 @@ mod tests {
         assert!(err.detail().contains("magic"), "{err}");
 
         let negative = tmp("neg");
-        write(&negative.0, &fineweb(FINEWEB_MAGIC, FINEWEB_VERSION, -1, &[]));
+        write(
+            &negative.0,
+            &fineweb(FINEWEB_MAGIC, FINEWEB_VERSION, -1, &[]),
+        );
         let err = TokenBin::open_fineweb(&negative.0).unwrap_err();
         assert!(err.detail().contains("negative"), "{err}");
 
@@ -420,7 +423,10 @@ mod tests {
         let ok = tmp("count-ok");
         // Header's first words are the magic, not the token. A reader that
         // starts at byte 0 returns the magic instead of 0xBEEF.
-        write(&ok.0, &fineweb(FINEWEB_MAGIC, FINEWEB_VERSION, 2, &[token, 0x1111]));
+        write(
+            &ok.0,
+            &fineweb(FINEWEB_MAGIC, FINEWEB_VERSION, 2, &[token, 0x1111]),
+        );
         let bin = TokenBin::open_fineweb(&ok.0).unwrap();
         let mut got = [0u16; 2];
         bin.read_into(0, &mut got).unwrap();

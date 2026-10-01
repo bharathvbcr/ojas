@@ -35,10 +35,12 @@ impl TokenBatch {
         batch: usize,
         time: usize,
     ) -> Result<Self, OjasError> {
-        let n = batch.checked_mul(time).ok_or_else(|| OjasError::OutOfRange {
-            op: "tiny_train",
-            detail: "batch length overflows".to_string(),
-        })?;
+        let n = batch
+            .checked_mul(time)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "tiny_train",
+                detail: "batch length overflows".to_string(),
+            })?;
         if batch == 0 || time == 0 || ids.len() != n || targets.len() != n {
             return Err(OjasError::Shape {
                 op: "tiny_train",
@@ -156,10 +158,21 @@ impl TinyTrain {
             leaves.push(tape.leaf(tensor));
         }
         let ids = Tensor::from_u32(&batch.ids, &[batch.batch, batch.time], self.cpu.budget())?;
-        let targets =
-            Tensor::from_u32(&batch.targets, &[batch.batch, batch.time], self.cpu.budget())?;
-        let cos = Tensor::from_f32(&self.rope_cos, &[self.time, self.d_model], self.cpu.budget())?;
-        let sin = Tensor::from_f32(&self.rope_sin, &[self.time, self.d_model], self.cpu.budget())?;
+        let targets = Tensor::from_u32(
+            &batch.targets,
+            &[batch.batch, batch.time],
+            self.cpu.budget(),
+        )?;
+        let cos = Tensor::from_f32(
+            &self.rope_cos,
+            &[self.time, self.d_model],
+            self.cpu.budget(),
+        )?;
+        let sin = Tensor::from_f32(
+            &self.rope_sin,
+            &[self.time, self.d_model],
+            self.cpu.budget(),
+        )?;
         let loss = forward_block(
             &mut tape,
             &leaves,
@@ -230,7 +243,7 @@ impl TinyTrain {
             reduced.push(acc.mean()?);
         }
         clip_grads(&mut reduced, self.grad_clip)?;
-        for (param, grad) in self.opt.params.iter_mut().zip(reduced.into_iter()) {
+        for (param, grad) in self.opt.params.iter_mut().zip(reduced) {
             param.grad = grad;
         }
         self.opt.step(multiplier)?;
@@ -270,6 +283,7 @@ pub fn reduce_micrograds(parts: &[&[f32]]) -> Result<Vec<f32>, OjasError> {
     mean_micrograds(parts)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn forward_block(
     tape: &mut Tape,
     leaves: &[Var],

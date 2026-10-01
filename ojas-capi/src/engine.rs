@@ -44,8 +44,7 @@ pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn op_load(input: &[u8]) -> Result<Vec<u8>, String> {
-    let text = std::str::from_utf8(input)
-        .map_err(|_| "load: path is not utf-8".to_string())?;
+    let text = std::str::from_utf8(input).map_err(|_| "load: path is not utf-8".to_string())?;
     let session = load::load_path(text)?;
     let mut out = Vec::with_capacity(12);
     out.extend_from_slice(&session.id.to_le_bytes());

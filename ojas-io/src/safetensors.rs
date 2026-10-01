@@ -1137,9 +1137,8 @@ mod tests {
     }
 
     fn assert_parse_err(bytes: &[u8], needle: &str) -> IoError {
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SafeTensors::parse(bytes)
-        }));
+        let caught =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| SafeTensors::parse(bytes)));
         let err = caught
             .unwrap_or_else(|_| panic!("parse panicked on {bytes:?}"))
             .expect_err("expected Err");
@@ -1187,7 +1186,8 @@ mod tests {
 
         // 2^62 elements times 8-byte I64 overflows the byte length. A wrapping
         // multiply would be 0 and would match data_offsets [0, 0].
-        let wrapped = br#"{"a":{"dtype":"I64","shape":[4611686018427387904],"data_offsets":[0,0]}}"#;
+        let wrapped =
+            br#"{"a":{"dtype":"I64","shape":[4611686018427387904],"data_offsets":[0,0]}}"#;
         assert_parse_err(&frame(wrapped, &[]), "overflow");
     }
 

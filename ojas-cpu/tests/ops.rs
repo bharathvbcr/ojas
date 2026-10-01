@@ -34,7 +34,10 @@ fn noncontig(cpu: &CpuBackend) -> Tensor {
 fn metal_policy_refuses_above_64_and_cpu_does_not_truncate() {
     assert!(metal_head_dim_policy(64).is_ok());
     match metal_head_dim_policy(65) {
-        Err(OjasError::UnsupportedHeadDim { head_dim: 65, limit: 64 }) => {}
+        Err(OjasError::UnsupportedHeadDim {
+            head_dim: 65,
+            limit: 64,
+        }) => {}
         other => panic!("expected UnsupportedHeadDim, got {other:?}"),
     }
     assert_range(metal_head_dim_policy(0).map(|_| ()));
@@ -143,9 +146,17 @@ fn rms_norm_matches_torch_formula_and_adversarial() {
     assert!(gx.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
 
     assert_shape(cpu.rms_norm_forward(&empty_f32(&cpu), &w, RMS_NORM_EPS));
-    assert_nonfinite(cpu.rms_norm_forward(&nan_f32(&cpu), &f32t(&cpu, &[1.0, 1.0], &[2]), RMS_NORM_EPS));
+    assert_nonfinite(cpu.rms_norm_forward(
+        &nan_f32(&cpu),
+        &f32t(&cpu, &[1.0, 1.0], &[2]),
+        RMS_NORM_EPS,
+    ));
     assert_shape(cpu.rms_norm_forward(&x, &f32t(&cpu, &[1.0, 1.0], &[2]), RMS_NORM_EPS));
-    assert_shape(cpu.rms_norm_forward(&noncontig(&cpu), &f32t(&cpu, &[1.0, 1.0], &[2]), RMS_NORM_EPS));
+    assert_shape(cpu.rms_norm_forward(
+        &noncontig(&cpu),
+        &f32t(&cpu, &[1.0, 1.0], &[2]),
+        RMS_NORM_EPS,
+    ));
 
     let budget = Budget::new(16 + 16);
     let tight = CpuBackend::new(budget.clone());
@@ -166,7 +177,11 @@ fn rope_half_split_matches_nanolab_sign() {
     let gx = cpu.rope_half_split_backward(&gy, &cos, &sin).unwrap();
     assert_eq!(gx.to_f32_vec().unwrap(), vec![1.0, 1.0, 1.0, -1.0]);
 
-    let x4 = f32t(&cpu, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 1, 2]);
+    let x4 = f32t(
+        &cpu,
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        &[2, 2, 1, 2],
+    );
     let cos_td = f32t(&cpu, &[1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let sin_td = f32t(&cpu, &[0.0, 1.0, 1.0, 0.0], &[2, 2]);
     let y4 = cpu.rope_half_split_forward(&x4, &cos_td, &sin_td).unwrap();
@@ -174,8 +189,16 @@ fn rope_half_split_matches_nanolab_sign() {
     assert!(y4.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
 
     assert_shape(cpu.rope_half_split_forward(&empty_f32(&cpu), &cos, &sin));
-    assert_nonfinite(cpu.rope_half_split_forward(&nan_f32(&cpu), &f32t(&cpu, &[1.0, 0.0], &[2]), &f32t(&cpu, &[0.0, 1.0], &[2])));
-    assert_shape(cpu.rope_half_split_forward(&f32t(&cpu, &[1.0, 2.0, 3.0], &[3]), &f32t(&cpu, &[1.0, 0.0, 0.0], &[3]), &f32t(&cpu, &[0.0, 1.0, 0.0], &[3])));
+    assert_nonfinite(cpu.rope_half_split_forward(
+        &nan_f32(&cpu),
+        &f32t(&cpu, &[1.0, 0.0], &[2]),
+        &f32t(&cpu, &[0.0, 1.0], &[2]),
+    ));
+    assert_shape(cpu.rope_half_split_forward(
+        &f32t(&cpu, &[1.0, 2.0, 3.0], &[3]),
+        &f32t(&cpu, &[1.0, 0.0, 0.0], &[3]),
+        &f32t(&cpu, &[0.0, 1.0, 0.0], &[3]),
+    ));
     assert_shape(cpu.rope_half_split_forward(&noncontig(&cpu), &cos, &sin));
 
     let budget = Budget::new(16);
@@ -193,16 +216,30 @@ fn qk_norm_is_two_rms_norms() {
     let k = f32t(&cpu, &[0.25, 0.5, -0.5, 1.0], &[1, 1, 2, 2]);
     let qw = f32t(&cpu, &[1.0, 0.5], &[2]);
     let kw = f32t(&cpu, &[1.0, -1.0], &[2]);
-    let (qn, kn) = cpu.rms_qk_norm_forward(&q, &k, &qw, &kw, RMS_NORM_EPS).unwrap();
+    let (qn, kn) = cpu
+        .rms_qk_norm_forward(&q, &k, &qw, &kw, RMS_NORM_EPS)
+        .unwrap();
     let q_ref = cpu.rms_norm_forward(&q, &qw, RMS_NORM_EPS).unwrap();
     let k_ref = cpu.rms_norm_forward(&k, &kw, RMS_NORM_EPS).unwrap();
     assert_eq!(qn.to_f32_vec().unwrap(), q_ref.to_f32_vec().unwrap());
     assert_eq!(kn.to_f32_vec().unwrap(), k_ref.to_f32_vec().unwrap());
 
     assert_shape(cpu.rms_qk_norm_forward(&empty_f32(&cpu), &k, &qw, &kw, RMS_NORM_EPS));
-    assert_nonfinite(cpu.rms_qk_norm_forward(&nan_f32(&cpu), &f32t(&cpu, &[1.0, 1.0], &[2]), &f32t(&cpu, &[1.0, 1.0], &[2]), &kw, RMS_NORM_EPS));
+    assert_nonfinite(cpu.rms_qk_norm_forward(
+        &nan_f32(&cpu),
+        &f32t(&cpu, &[1.0, 1.0], &[2]),
+        &f32t(&cpu, &[1.0, 1.0], &[2]),
+        &kw,
+        RMS_NORM_EPS,
+    ));
     assert_shape(cpu.rms_qk_norm_forward(&q, &k, &f32t(&cpu, &[1.0], &[1]), &kw, RMS_NORM_EPS));
-    assert_shape(cpu.rms_qk_norm_forward(&noncontig(&cpu), &k, &f32t(&cpu, &[1.0, 1.0], &[2]), &kw, RMS_NORM_EPS));
+    assert_shape(cpu.rms_qk_norm_forward(
+        &noncontig(&cpu),
+        &k,
+        &f32t(&cpu, &[1.0, 1.0], &[2]),
+        &kw,
+        RMS_NORM_EPS,
+    ));
 
     let budget = Budget::new(16);
     let tight = CpuBackend::new(budget.clone());
@@ -227,7 +264,13 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     let p1 = e2 / (1.0 + e2);
     let expect1 = 3.0 * p0 + 4.0 * p1;
     assert!((f64::from(got[1]) - expect1).abs() < 1e-5, "{}", got[1]);
-    assert_eq!(got, cpu.causal_sdpa_forward(&q, &k, &v).unwrap().to_f32_vec().unwrap());
+    assert_eq!(
+        got,
+        cpu.causal_sdpa_forward(&q, &k, &v)
+            .unwrap()
+            .to_f32_vec()
+            .unwrap()
+    );
 
     let gy = f32t(&cpu, &[1.0, -1.0], &[1, 1, 2, 1]);
     let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
@@ -236,7 +279,15 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     assert!(gv.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
 
     assert_shape(cpu.causal_sdpa_forward(&empty_f32(&cpu), &k, &v));
-    assert_nonfinite(cpu.causal_sdpa_forward(&nan_f32(&cpu).view(&[1, 1, 2, 1], &[2, 2, 1, 1], 0).unwrap_or(nan_f32(&cpu)), &k, &v));
+    assert_nonfinite(
+        cpu.causal_sdpa_forward(
+            &nan_f32(&cpu)
+                .view(&[1, 1, 2, 1], &[2, 2, 1, 1], 0)
+                .unwrap_or(nan_f32(&cpu)),
+            &k,
+            &v,
+        ),
+    );
     let qnan = f32t(&cpu, &[f32::NAN, 1.0], &[1, 1, 2, 1]);
     assert_nonfinite(cpu.causal_sdpa_forward(&qnan, &k, &v));
     assert_shape(cpu.causal_sdpa_forward(&q, &f32t(&cpu, &[0.0, 1.0, 0.0], &[1, 1, 3, 1]), &v));
@@ -257,7 +308,9 @@ fn per_head_gate_and_value_residual() {
     let w = f32t(&cpu, &[1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let b = f32t(&cpu, &[0.0, 0.0], &[2]);
     let attn = f32t(&cpu, &[1.0, 1.0], &[1, 2, 1]);
-    let y = cpu.per_head_sigmoid_gate_forward(&x, &w, &b, &attn).unwrap();
+    let y = cpu
+        .per_head_sigmoid_gate_forward(&x, &w, &b, &attn)
+        .unwrap();
     let g0 = 1.0 / (1.0 + (-1.0_f32).exp());
     let g1 = 1.0 / (1.0 + (-2.0_f32).exp());
     let got = y.to_f32_vec().unwrap();
@@ -274,11 +327,20 @@ fn per_head_gate_and_value_residual() {
 
     assert_shape(cpu.per_head_sigmoid_gate_forward(&empty_f32(&cpu), &w, &b, &attn));
     assert_nonfinite(cpu.per_head_sigmoid_gate_forward(&nan_f32(&cpu), &w, &b, &attn));
-    assert_shape(cpu.per_head_sigmoid_gate_forward(&x, &f32t(&cpu, &[1.0, 2.0, 3.0], &[3]), &b, &attn));
+    assert_shape(cpu.per_head_sigmoid_gate_forward(
+        &x,
+        &f32t(&cpu, &[1.0, 2.0, 3.0], &[3]),
+        &b,
+        &attn,
+    ));
     assert_shape(cpu.per_head_sigmoid_gate_forward(&noncontig(&cpu), &w, &b, &attn));
 
     assert_shape(cpu.value_residual_blend_forward(&empty_f32(&cpu), &v0, &lam));
-    assert_nonfinite(cpu.value_residual_blend_forward(&nan_f32(&cpu), &f32t(&cpu, &[1.0, 1.0], &[2]), &lam));
+    assert_nonfinite(cpu.value_residual_blend_forward(
+        &nan_f32(&cpu),
+        &f32t(&cpu, &[1.0, 1.0], &[2]),
+        &lam,
+    ));
     assert_shape(cpu.value_residual_blend_forward(&v, &f32t(&cpu, &[1.0], &[1]), &lam));
     assert_shape(cpu.value_residual_blend_forward(&noncontig(&cpu), &v0, &lam));
 
@@ -311,9 +373,15 @@ fn silu_mul_residual_and_adversarial() {
 
     let a = f32t(&cpu, &[2.0, -3.0], &[2]);
     let b = f32t(&cpu, &[4.0, 0.5], &[2]);
-    assert_eq!(cpu.mul_forward(&a, &b).unwrap().to_f32_vec().unwrap(), vec![8.0, -1.5]);
     assert_eq!(
-        cpu.residual_add_forward(&a, &b).unwrap().to_f32_vec().unwrap(),
+        cpu.mul_forward(&a, &b).unwrap().to_f32_vec().unwrap(),
+        vec![8.0, -1.5]
+    );
+    assert_eq!(
+        cpu.residual_add_forward(&a, &b)
+            .unwrap()
+            .to_f32_vec()
+            .unwrap(),
         vec![6.0, -2.5]
     );
     let gy = f32t(&cpu, &[1.0, 1.0], &[2]);
@@ -378,11 +446,16 @@ fn cross_entropy_ignore_is_option_not_a_dummy() {
 
     let none_vs_some = u32t(&cpu, &[0], &[1]);
     let logits1 = f32t(&cpu, &[0.0, 0.0], &[1, 2]);
-    let with_none = cpu.cross_entropy_mean_forward(&logits1, &none_vs_some, None).unwrap();
+    let with_none = cpu
+        .cross_entropy_mean_forward(&logits1, &none_vs_some, None)
+        .unwrap();
     let with_other = cpu
         .cross_entropy_mean_forward(&logits1, &none_vs_some, Some(7))
         .unwrap();
-    assert_eq!(with_none.to_f32_vec().unwrap(), with_other.to_f32_vec().unwrap());
+    assert_eq!(
+        with_none.to_f32_vec().unwrap(),
+        with_other.to_f32_vec().unwrap()
+    );
     // Every row matches a valid class used as ignore_index. Torch's mean is
     // NaN; this reference refuses that empty reduction instead of returning 0.
     assert_nonfinite(cpu.cross_entropy_mean_forward(&logits1, &none_vs_some, Some(0)));
@@ -405,7 +478,9 @@ fn cross_entropy_ignore_is_option_not_a_dummy() {
 fn clip_and_adam_write_rules() {
     let cpu = wide();
     let mut g = f32t(&cpu, &[3.0, 4.0], &[2]);
-    let norm = cpu.clip_grad_norm(std::slice::from_mut(&mut g), 1.0).unwrap();
+    let norm = cpu
+        .clip_grad_norm(std::slice::from_mut(&mut g), 1.0)
+        .unwrap();
     assert!((norm - 5.0).abs() < 1e-6);
     let scale = 1.0f32 / (5.0 + 1e-6);
     let got = g.to_f32_vec().unwrap();
@@ -414,14 +489,19 @@ fn clip_and_adam_write_rules() {
 
     let mut tiny = f32t(&cpu, &[0.25], &[1]);
     let bits = tiny.to_f32_vec().unwrap();
-    let norm = cpu.clip_grad_norm(std::slice::from_mut(&mut tiny), 1.0).unwrap();
+    let norm = cpu
+        .clip_grad_norm(std::slice::from_mut(&mut tiny), 1.0)
+        .unwrap();
     assert!(norm < 1.0);
     assert_eq!(tiny.to_f32_vec().unwrap(), bits);
 
     let mut bad = f32t(&cpu, &[1.0, f32::NAN], &[2]);
     let snapshot = bad.to_f32_vec().unwrap();
     assert_nonfinite(cpu.clip_grad_norm(std::slice::from_mut(&mut bad), 1.0));
-    assert_eq!(bad.to_f32_vec().unwrap()[0].to_bits(), snapshot[0].to_bits());
+    assert_eq!(
+        bad.to_f32_vec().unwrap()[0].to_bits(),
+        snapshot[0].to_bits()
+    );
 
     assert_shape(cpu.clip_grad_norm(&mut [], 1.0));
     let mut empty = empty_f32(&cpu);
@@ -442,14 +522,16 @@ fn clip_and_adam_write_rules() {
     let mut m1 = f32t(&cpu, &[0.0], &[1]);
     let mut m2 = f32t(&cpu, &[0.0], &[1]);
     let cfg = AdamWConfig::nanolab(0.1, 0.0);
-    cpu.adamw_step(&mut p, &grad, &mut m1, &mut m2, 0, cfg).unwrap();
+    cpu.adamw_step(&mut p, &grad, &mut m1, &mut m2, 0, cfg)
+        .unwrap();
     assert_eq!(p.to_f32_vec().unwrap()[0].to_bits(), pbits);
 
     let mut p = f32t(&cpu, &[1.0], &[1]);
     let grad = f32t(&cpu, &[1.0], &[1]);
     let mut m1 = f32t(&cpu, &[0.0], &[1]);
     let mut m2 = f32t(&cpu, &[0.0], &[1]);
-    cpu.adamw_step(&mut p, &grad, &mut m1, &mut m2, 0, cfg).unwrap();
+    cpu.adamw_step(&mut p, &grad, &mut m1, &mut m2, 0, cfg)
+        .unwrap();
     let v = 0.05_f64;
     let denom = v.sqrt() / 0.05_f64.sqrt() + 1e-8;
     let expect = 1.0 - 0.1 / denom;

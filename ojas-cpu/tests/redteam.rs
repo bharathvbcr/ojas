@@ -2,8 +2,8 @@
 //! behavior the op must have; a failure here is a logic bug.
 
 use ojas_core::{
-    next_step, AdamWConfig, Backend, Budget, DType, MuonNs5Config, OjasError, Tensor, CLIP_GRAD_NORM_EPS,
-    MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    next_step, AdamWConfig, Backend, Budget, DType, MuonNs5Config, OjasError, Tensor,
+    CLIP_GRAD_NORM_EPS, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_cpu::CpuBackend;
 
@@ -26,7 +26,9 @@ fn hand_ce(logits: &[f32], targets: &[u32], vocab: usize, ignore: Option<u32>) -
         n_valid += 1;
         let start = row * vocab;
         let slice = &logits[start..start + vocab];
-        let max = slice.iter().fold(f64::NEG_INFINITY, |m, v| m.max(f64::from(*v)));
+        let max = slice
+            .iter()
+            .fold(f64::NEG_INFINITY, |m, v| m.max(f64::from(*v)));
         let sum: f64 = slice.iter().map(|v| (f64::from(*v) - max).exp()).sum();
         total += max + sum.ln() - f64::from(slice[target as usize]);
     }
@@ -64,7 +66,10 @@ fn all_ignored_cross_entropy_is_nonfinite_not_a_zero_loss() {
         .unwrap();
     let expect = hand_ce(&logits.to_f32_vec().unwrap(), &[1, 0, 1], 2, Some(1));
     assert!(expect.is_finite());
-    assert!((f64::from(loss[0]) - expect).abs() < 1e-5, "{loss:?} vs {expect}");
+    assert!(
+        (f64::from(loss[0]) - expect).abs() < 1e-5,
+        "{loss:?} vs {expect}"
+    );
     let grad = cpu
         .cross_entropy_mean_backward(&logits, &mixed_targets, Some(1))
         .unwrap()
@@ -167,7 +172,10 @@ fn muon_1x1_and_tall_matrix_match_hand_newton_schulz() {
     let got_p = param.to_f32_vec().unwrap();
     let got_m = mom.to_f32_vec().unwrap();
     for (a, b) in got_p.iter().zip(&expect_p) {
-        assert!((a - b).abs() <= 1e-6, "tall muon param {got_p:?} vs {expect_p:?}");
+        assert!(
+            (a - b).abs() <= 1e-6,
+            "tall muon param {got_p:?} vs {expect_p:?}"
+        );
     }
     assert_eq!(got_m, expect_m);
     assert!(got_p.iter().all(|v| v.is_finite()));
@@ -322,22 +330,37 @@ fn causal_sdpa_t1_t2_and_head_dim_65_match_hand_softmax() {
     let q = f32t(&cpu, &[0.4, -0.2], &[1, 1, 1, 2]);
     let k = f32t(&cpu, &[0.1, 0.7], &[1, 1, 1, 2]);
     let v = f32t(&cpu, &[3.0, -4.0], &[1, 1, 1, 2]);
-    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap().to_f32_vec().unwrap();
+    let y = cpu
+        .causal_sdpa_forward(&q, &k, &v)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
     assert_eq!(y, vec![3.0, -4.0]);
 
     // T = 2, D = 1. Position 0 attends only to key 0, so its output is v[0].
     let q = f32t(&cpu, &[1.0, 1.0], &[1, 1, 2, 1]);
     let k = f32t(&cpu, &[1.0, 0.0], &[1, 1, 2, 1]);
     let v = f32t(&cpu, &[2.0, 100.0], &[1, 1, 2, 1]);
-    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap().to_f32_vec().unwrap();
-    assert!((y[0] - 2.0).abs() < 1e-6, "position 0 saw the future: {y:?}");
+    let y = cpu
+        .causal_sdpa_forward(&q, &k, &v)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
+    assert!(
+        (y[0] - 2.0).abs() < 1e-6,
+        "position 0 saw the future: {y:?}"
+    );
     let scale = 1.0f64;
     let scores = [scale * 1.0, scale * 0.0];
     let max_s = scores[0].max(scores[1]);
     let e0 = (scores[0] - max_s).exp();
     let e1 = (scores[1] - max_s).exp();
     let expect = (e0 * 2.0 + e1 * 100.0) / (e0 + e1);
-    assert!((f64::from(y[1]) - expect).abs() < 1e-5, "t1 {} vs {expect}", y[1]);
+    assert!(
+        (f64::from(y[1]) - expect).abs() < 1e-5,
+        "t1 {} vs {expect}",
+        y[1]
+    );
 
     // Head dim 65 is legal on CPU and follows 1/sqrt(65), not a clamp to 64.
     let dim = 65usize;
@@ -374,7 +397,11 @@ fn causal_sdpa_t1_t2_and_head_dim_65_match_hand_softmax() {
         let value = f64::from(got[dim + d]);
         assert!((value - expect).abs() < 1e-5, "t1 d{d} {value} vs {expect}");
     }
-    let y2 = cpu.causal_sdpa_forward(&q, &k, &v).unwrap().to_f32_vec().unwrap();
+    let y2 = cpu
+        .causal_sdpa_forward(&q, &k, &v)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
     assert_eq!(got, y2);
 }
 
@@ -382,7 +409,12 @@ fn causal_sdpa_t1_t2_and_head_dim_65_match_hand_softmax() {
 fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
     let cpu = wide();
     let w = f32t(&cpu, &[1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    for shape in [[0usize, 2].as_slice(), [2, 0].as_slice(), [0, 0].as_slice(), [1, 0, 4].as_slice()] {
+    for shape in [
+        [0usize, 2].as_slice(),
+        [2, 0].as_slice(),
+        [0, 0].as_slice(),
+        [1, 0, 4].as_slice(),
+    ] {
         let empty = Tensor::zeros(shape, DType::F32, cpu.budget()).unwrap();
         assert_shape(cpu.linear_forward(&empty, &w));
         assert_shape(cpu.silu_forward(&empty));
@@ -406,12 +438,19 @@ fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
         .to_f32_vec()
         .unwrap();
     assert_eq!(y, direct);
-    assert_eq!(parent.to_f32_vec().unwrap(), vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
+    assert_eq!(
+        parent.to_f32_vec().unwrap(),
+        vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+    );
 
     let table_parent = f32t(&cpu, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]);
     let table = table_parent.narrow(8, &[2, 2], &[2, 1]).unwrap();
     let ids = u32t(&cpu, &[0, 1], &[2]);
-    let looked = cpu.embedding_forward(&table, &ids).unwrap().to_f32_vec().unwrap();
+    let looked = cpu
+        .embedding_forward(&table, &ids)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
     assert_eq!(looked, vec![3.0, 4.0, 5.0, 6.0]);
 
     // In-place step on a uniquely owned offset view must not write the prefix.
@@ -435,7 +474,8 @@ fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
         parent.narrow(8, &[2], &[1]).unwrap()
     };
     let before_prefix_budget = cpu.budget().live_bytes().unwrap();
-    cpu.clip_grad_norm(std::slice::from_mut(&mut grads), 1.0).unwrap();
+    cpu.clip_grad_norm(std::slice::from_mut(&mut grads), 1.0)
+        .unwrap();
     let whole = grads.view(&[4], &[1], 0).unwrap();
     let got = whole.to_f32_vec().unwrap();
     assert_eq!(got[0].to_bits(), 7.0f32.to_bits());
@@ -455,7 +495,14 @@ fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
     let snap_p = param.to_f32_vec().unwrap();
     let snap_m = m1.to_f32_vec().unwrap();
     let snap_v = m2.to_f32_vec().unwrap();
-    assert_nonfinite(tight.adamw_step(&mut param, &grad, &mut m1, &mut m2, 3, AdamWConfig::nanolab(0.01, 0.0)));
+    assert_nonfinite(tight.adamw_step(
+        &mut param,
+        &grad,
+        &mut m1,
+        &mut m2,
+        3,
+        AdamWConfig::nanolab(0.01, 0.0),
+    ));
     assert_eq!(param.to_f32_vec().unwrap(), snap_p);
     assert_eq!(m1.to_f32_vec().unwrap(), snap_m);
     assert_eq!(m2.to_f32_vec().unwrap(), snap_v);

@@ -28,12 +28,20 @@ fn clip_norm_of_large_finite_gradients_is_finite() {
     let cpu = wide();
     // 3e19^2 overflows f32, but the norm 5e19 is finite.
     let mut g = f32t(&cpu, &[3e19, 4e19], &[2]);
-    let norm = cpu.clip_grad_norm(std::slice::from_mut(&mut g), 1.0).unwrap();
+    let norm = cpu
+        .clip_grad_norm(std::slice::from_mut(&mut g), 1.0)
+        .unwrap();
     assert!((f64::from(norm) / 5e19 - 1.0).abs() < 1e-6, "norm {norm}");
     let got = vals(&g);
-    assert!((got[0] - 0.6).abs() < 1e-6 && (got[1] - 0.8).abs() < 1e-6, "{got:?}");
+    assert!(
+        (got[0] - 0.6).abs() < 1e-6 && (got[1] - 0.8).abs() < 1e-6,
+        "{got:?}"
+    );
 
-    let mut parts = vec![f32t(&cpu, &[1e20; 3], &[3]), f32t(&cpu, &[-1e20; 6], &[2, 3])];
+    let mut parts = vec![
+        f32t(&cpu, &[1e20; 3], &[3]),
+        f32t(&cpu, &[-1e20; 6], &[2, 3]),
+    ];
     let norm = cpu.clip_grad_norm(&mut parts, 1.0).unwrap();
     assert!((f64::from(norm) / 3e20 - 1.0).abs() < 1e-6, "norm {norm}");
     assert!(parts.iter().all(finite));
@@ -48,7 +56,9 @@ fn clip_norm_of_large_finite_gradients_is_finite() {
     let tiny = f32::from_bits(1);
     let mut g = f32t(&cpu, &[tiny, -tiny, 1e-30], &[3]);
     let before = bits(&vals(&g));
-    let norm = cpu.clip_grad_norm(std::slice::from_mut(&mut g), 1.0).unwrap();
+    let norm = cpu
+        .clip_grad_norm(std::slice::from_mut(&mut g), 1.0)
+        .unwrap();
     assert!(norm.is_finite() && norm < 1e-29);
     assert_eq!(bits(&vals(&g)), before);
 }
@@ -90,7 +100,10 @@ fn optimizer_configs_outside_torch_ranges_are_refused_without_writes() {
     let base = AdamWConfig::nanolab(1e-3, 0.0);
     for cfg in [
         AdamWConfig { lr: -1e-3, ..base },
-        AdamWConfig { weight_decay: -0.1, ..base },
+        AdamWConfig {
+            weight_decay: -0.1,
+            ..base
+        },
     ] {
         let mut p = f32t(&cpu, &[1.0, -2.0], &[2]);
         let g = f32t(&cpu, &[0.5, 0.25], &[2]);
@@ -104,8 +117,14 @@ fn optimizer_configs_outside_torch_ranges_are_refused_without_writes() {
     let base = MuonNs5Config::nanolab_default();
     for cfg in [
         MuonNs5Config { lr: -0.025, ..base },
-        MuonNs5Config { weight_decay: -0.1, ..base },
-        MuonNs5Config { momentum: -0.5, ..base },
+        MuonNs5Config {
+            weight_decay: -0.1,
+            ..base
+        },
+        MuonNs5Config {
+            momentum: -0.5,
+            ..base
+        },
     ] {
         let mut p = f32t(&cpu, &[1.0, -2.0], &[1, 2]);
         let g = f32t(&cpu, &[0.5, 0.25], &[1, 2]);
@@ -129,7 +148,8 @@ fn adamw_many_steps_converge_and_step_counter_edges() {
     for step in 0..3000u64 {
         let grad: Vec<f32> = vals(&p).iter().zip(&target).map(|(a, b)| a - b).collect();
         let g = f32t(&cpu, &grad, &[n]);
-        cpu.adamw_step(&mut p, &g, &mut m1, &mut m2, step, cfg).unwrap();
+        cpu.adamw_step(&mut p, &g, &mut m1, &mut m2, step, cfg)
+            .unwrap();
         assert!(finite(&p) && finite(&m1) && finite(&m2), "step {step}");
     }
     for (got, want) in vals(&p).iter().zip(&target) {
@@ -141,7 +161,8 @@ fn adamw_many_steps_converge_and_step_counter_edges() {
     let g = f32t(&cpu, &[0.5], &[1]);
     let mut m1 = f32t(&cpu, &[0.0], &[1]);
     let mut m2 = f32t(&cpu, &[0.0], &[1]);
-    cpu.adamw_step(&mut p, &g, &mut m1, &mut m2, u64::MAX - 1, cfg).unwrap();
+    cpu.adamw_step(&mut p, &g, &mut m1, &mut m2, u64::MAX - 1, cfg)
+        .unwrap();
     // Both bias corrections are 1: m = 0.05, v = 0.0125, p -= lr * m / (sqrt(v) + eps).
     let expect = 1.0 - 2e-2 * 0.05 / (0.0125f64.sqrt() + 1e-8);
     assert!((f64::from(vals(&p)[0]) - expect).abs() < 1e-7);
@@ -155,11 +176,15 @@ fn adamw_many_steps_converge_and_step_counter_edges() {
     let mut m1 = f32t(&cpu, &[0.0], &[1]);
     let mut m2 = f32t(&cpu, &[0.0], &[1]);
     assert_nonfinite(cpu.adamw_step(&mut p, &huge, &mut m1, &mut m2, 0, cfg));
-    assert_eq!((vals(&p), vals(&m1), vals(&m2)), (vec![1.0], vec![0.0], vec![0.0]));
+    assert_eq!(
+        (vals(&p), vals(&m1), vals(&m2)),
+        (vec![1.0], vec![0.0], vec![0.0])
+    );
 
     // Subnormal gradient: finite, tiny update.
     let sub = f32t(&cpu, &[f32::from_bits(3)], &[1]);
-    cpu.adamw_step(&mut p, &sub, &mut m1, &mut m2, 0, cfg).unwrap();
+    cpu.adamw_step(&mut p, &sub, &mut m1, &mut m2, 0, cfg)
+        .unwrap();
     assert!(finite(&p) && finite(&m1) && finite(&m2));
     assert!((vals(&p)[0] - 1.0).abs() < 1e-6);
 }
@@ -197,10 +222,17 @@ fn muon_newton_schulz_pushes_singular_values_toward_one() {
             *v += 0.3 * rng.unit();
         }
         let o = ortho(&cpu, &g, 2, 3);
-        let row = |r: usize, s: usize| (0..3).map(|c| f64::from(o[r * 3 + c] * o[s * 3 + c])).sum::<f64>();
+        let row = |r: usize, s: usize| {
+            (0..3)
+                .map(|c| f64::from(o[r * 3 + c] * o[s * 3 + c]))
+                .sum::<f64>()
+        };
         let (lo, hi) = sym2_eigs(row(0, 0), row(0, 1), row(1, 1));
         // NS5 with (3.4445, -4.7750, 2.0315) lands singular values in about [0.68, 1.13].
-        assert!(lo.sqrt() > 0.6 && hi.sqrt() < 1.2, "trial {trial}: {lo} {hi}");
+        assert!(
+            lo.sqrt() > 0.6 && hi.sqrt() < 1.2,
+            "trial {trial}: {lo} {hi}"
+        );
 
         // The tall transpose path gives the transposed answer.
         let mut gt = vec![0.0f32; 6];
@@ -244,7 +276,11 @@ fn extreme_magnitudes_are_finite_or_nonfinite_errors() {
     let cpu = wide();
     let sub = f32::from_bits(5);
 
-    let x = f32t(&cpu, &[1e30, -1e30, 1e-30, -1e-30, sub, -sub, 0.0, 88.0, -88.0], &[9]);
+    let x = f32t(
+        &cpu,
+        &[1e30, -1e30, 1e-30, -1e-30, sub, -sub, 0.0, 88.0, -88.0],
+        &[9],
+    );
     let y = cpu.silu_forward(&x).unwrap();
     let yv = vals(&y);
     assert_eq!(yv[0], 1e30);
@@ -259,11 +295,19 @@ fn extreme_magnitudes_are_finite_or_nonfinite_errors() {
     let big = f32t(&cpu, &[1e30, 1e30], &[1, 2]);
     assert_nonfinite(cpu.linear_forward(&big, &big));
     let small = f32t(&cpu, &[1e-30, sub], &[1, 2]);
-    assert_eq!(vals(&cpu.linear_forward(&small, &small).unwrap()), vec![0.0]);
+    assert_eq!(
+        vals(&cpu.linear_forward(&small, &small).unwrap()),
+        vec![0.0]
+    );
 
     let w = f32t(&cpu, &[1.0, 1.0], &[2]);
     assert_nonfinite(cpu.rms_norm_forward(&big, &w, RMS_NORM_EPS));
-    assert_nonfinite(cpu.rms_norm_backward(&big, &w, &f32t(&cpu, &[1.0, 1.0], &[1, 2]), RMS_NORM_EPS));
+    assert_nonfinite(cpu.rms_norm_backward(
+        &big,
+        &w,
+        &f32t(&cpu, &[1.0, 1.0], &[1, 2]),
+        RMS_NORM_EPS,
+    ));
     // Subnormal row: mean square underflows to 0, rstd is 1/sqrt(eps).
     let y = cpu.rms_norm_forward(&small, &w, RMS_NORM_EPS).unwrap();
     assert!(finite(&y));
@@ -275,8 +319,14 @@ fn extreme_magnitudes_are_finite_or_nonfinite_errors() {
     // Cross-entropy of a 2e30 margin is finite; the softmax saturates exactly.
     let logits = f32t(&cpu, &[1e30, -1e30], &[1, 2]);
     let t = u32t(&cpu, &[1], &[1]);
-    assert_eq!(vals(&cpu.cross_entropy_mean_forward(&logits, &t, None).unwrap()), vec![2e30]);
-    assert_eq!(vals(&cpu.cross_entropy_mean_backward(&logits, &t, None).unwrap()), vec![1.0, -1.0]);
+    assert_eq!(
+        vals(&cpu.cross_entropy_mean_forward(&logits, &t, None).unwrap()),
+        vec![2e30]
+    );
+    assert_eq!(
+        vals(&cpu.cross_entropy_mean_backward(&logits, &t, None).unwrap()),
+        vec![1.0, -1.0]
+    );
     let logits = f32t(&cpu, &[3e38, -3e38], &[1, 2]);
     assert_nonfinite(cpu.cross_entropy_mean_forward(&logits, &t, None));
     assert_nonfinite(cpu.cross_entropy_mean_backward(&logits, &t, None));
@@ -285,7 +335,10 @@ fn extreme_magnitudes_are_finite_or_nonfinite_errors() {
     let q = f32t(&cpu, &[100.0, 100.0], &[1, 1, 2, 1]);
     let k = f32t(&cpu, &[100.0, -100.0], &[1, 1, 2, 1]);
     let v = f32t(&cpu, &[3.0, -7.0], &[1, 1, 2, 1]);
-    assert_eq!(vals(&cpu.causal_sdpa_forward(&q, &k, &v).unwrap()), vec![3.0, 3.0]);
+    assert_eq!(
+        vals(&cpu.causal_sdpa_forward(&q, &k, &v).unwrap()),
+        vec![3.0, 3.0]
+    );
     let (gq, gk, gv) = cpu
         .causal_sdpa_backward(&q, &k, &v, &f32t(&cpu, &[1.0, 1.0], &[1, 1, 2, 1]))
         .unwrap();
@@ -298,7 +351,13 @@ fn extreme_magnitudes_are_finite_or_nonfinite_errors() {
     let gw = f32t(&cpu, &[1e30, -1e30], &[2, 1]);
     let gb = f32t(&cpu, &[0.0, 0.0], &[2]);
     let attn = f32t(&cpu, &[2.0, 5.0], &[1, 2, 1]);
-    assert_eq!(vals(&cpu.per_head_sigmoid_gate_forward(&x, &gw, &gb, &attn).unwrap()), vec![2.0, 0.0]);
+    assert_eq!(
+        vals(
+            &cpu.per_head_sigmoid_gate_forward(&x, &gw, &gb, &attn)
+                .unwrap()
+        ),
+        vec![2.0, 0.0]
+    );
     let g = cpu
         .per_head_sigmoid_gate_backward(&x, &gw, &gb, &attn, &f32t(&cpu, &[1.0, 1.0], &[1, 2, 1]))
         .unwrap();
@@ -307,13 +366,26 @@ fn extreme_magnitudes_are_finite_or_nonfinite_errors() {
     let x = f32t(&cpu, &[1e30], &[1, 1]);
     let gw = f32t(&cpu, &[1e30, 1.0], &[2, 1]);
     assert_nonfinite(cpu.per_head_sigmoid_gate_forward(&x, &gw, &gb, &attn));
-    assert_nonfinite(cpu.per_head_sigmoid_gate_backward(&x, &gw, &gb, &attn, &f32t(&cpu, &[1.0, 1.0], &[1, 2, 1])));
+    assert_nonfinite(cpu.per_head_sigmoid_gate_backward(
+        &x,
+        &gw,
+        &gb,
+        &attn,
+        &f32t(&cpu, &[1.0, 1.0], &[1, 2, 1]),
+    ));
     for lam in [1e30f32, -1e30] {
         let l = f32t(&cpu, &[lam], &[1]);
         let a = f32t(&cpu, &[1.0, 2.0], &[2]);
         let b = f32t(&cpu, &[3.0, 4.0], &[2]);
         let y = cpu.value_residual_blend_forward(&a, &b, &l).unwrap();
-        assert_eq!(vals(&y), if lam > 0.0 { vec![3.0, 4.0] } else { vec![1.0, 2.0] });
+        assert_eq!(
+            vals(&y),
+            if lam > 0.0 {
+                vec![3.0, 4.0]
+            } else {
+                vec![1.0, 2.0]
+            }
+        );
         let g = cpu
             .value_residual_blend_backward(&a, &b, &l, &f32t(&cpu, &[1.0, 1.0], &[2]))
             .unwrap();
@@ -327,36 +399,94 @@ fn nan_and_inf_in_any_operand_are_nonfinite() {
     type Op = fn(&CpuBackend, &[Tensor]) -> Result<(), OjasError>;
     // Each case: the operand shapes and an op over them.
     let cases: Vec<(Vec<Vec<usize>>, Op)> = vec![
-        (vec![vec![2, 2], vec![3, 2]], |c, t| c.linear_forward(&t[0], &t[1]).map(|_| ())),
-        (vec![vec![2, 2], vec![3, 2], vec![2, 3]], |c, t| c.linear_backward(&t[0], &t[1], &t[2]).map(|_| ())),
-        (vec![vec![2, 4], vec![4]], |c, t| c.rms_norm_forward(&t[0], &t[1], RMS_NORM_EPS).map(|_| ())),
-        (vec![vec![2, 4], vec![4], vec![2, 4]], |c, t| c.rms_norm_backward(&t[0], &t[1], &t[2], RMS_NORM_EPS).map(|_| ())),
-        (vec![vec![2, 4], vec![2, 4], vec![2, 4]], |c, t| c.rope_half_split_forward(&t[0], &t[1], &t[2]).map(|_| ())),
-        (vec![vec![2, 4], vec![2, 4], vec![2, 4]], |c, t| c.rope_half_split_backward(&t[0], &t[1], &t[2]).map(|_| ())),
-        (vec![vec![1, 1, 3, 2]; 3], |c, t| c.causal_sdpa_forward(&t[0], &t[1], &t[2]).map(|_| ())),
-        (vec![vec![1, 1, 3, 2]; 4], |c, t| c.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3]).map(|_| ())),
-        (vec![vec![2, 3], vec![2, 3], vec![2], vec![2, 2, 2]], |c, t| {
-            c.per_head_sigmoid_gate_forward(&t[0], &t[1], &t[2], &t[3]).map(|_| ())
+        (vec![vec![2, 2], vec![3, 2]], |c, t| {
+            c.linear_forward(&t[0], &t[1]).map(|_| ())
         }),
-        (vec![vec![2, 3], vec![2, 3], vec![2], vec![2, 2, 2], vec![2, 2, 2]], |c, t| {
-            c.per_head_sigmoid_gate_backward(&t[0], &t[1], &t[2], &t[3], &t[4]).map(|_| ())
+        (vec![vec![2, 2], vec![3, 2], vec![2, 3]], |c, t| {
+            c.linear_backward(&t[0], &t[1], &t[2]).map(|_| ())
         }),
-        (vec![vec![3], vec![3], vec![1]], |c, t| c.value_residual_blend_forward(&t[0], &t[1], &t[2]).map(|_| ())),
+        (vec![vec![2, 4], vec![4]], |c, t| {
+            c.rms_norm_forward(&t[0], &t[1], RMS_NORM_EPS).map(|_| ())
+        }),
+        (vec![vec![2, 4], vec![4], vec![2, 4]], |c, t| {
+            c.rms_norm_backward(&t[0], &t[1], &t[2], RMS_NORM_EPS)
+                .map(|_| ())
+        }),
+        (vec![vec![2, 4], vec![2, 4], vec![2, 4]], |c, t| {
+            c.rope_half_split_forward(&t[0], &t[1], &t[2]).map(|_| ())
+        }),
+        (vec![vec![2, 4], vec![2, 4], vec![2, 4]], |c, t| {
+            c.rope_half_split_backward(&t[0], &t[1], &t[2]).map(|_| ())
+        }),
+        (vec![vec![1, 1, 3, 2]; 3], |c, t| {
+            c.causal_sdpa_forward(&t[0], &t[1], &t[2]).map(|_| ())
+        }),
+        (vec![vec![1, 1, 3, 2]; 4], |c, t| {
+            c.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3])
+                .map(|_| ())
+        }),
+        (
+            vec![vec![2, 3], vec![2, 3], vec![2], vec![2, 2, 2]],
+            |c, t| {
+                c.per_head_sigmoid_gate_forward(&t[0], &t[1], &t[2], &t[3])
+                    .map(|_| ())
+            },
+        ),
+        (
+            vec![
+                vec![2, 3],
+                vec![2, 3],
+                vec![2],
+                vec![2, 2, 2],
+                vec![2, 2, 2],
+            ],
+            |c, t| {
+                c.per_head_sigmoid_gate_backward(&t[0], &t[1], &t[2], &t[3], &t[4])
+                    .map(|_| ())
+            },
+        ),
+        (vec![vec![3], vec![3], vec![1]], |c, t| {
+            c.value_residual_blend_forward(&t[0], &t[1], &t[2])
+                .map(|_| ())
+        }),
         (vec![vec![3], vec![3], vec![1], vec![3]], |c, t| {
-            c.value_residual_blend_backward(&t[0], &t[1], &t[2], &t[3]).map(|_| ())
+            c.value_residual_blend_backward(&t[0], &t[1], &t[2], &t[3])
+                .map(|_| ())
         }),
         (vec![vec![3]], |c, t| c.silu_forward(&t[0]).map(|_| ())),
-        (vec![vec![3], vec![3]], |c, t| c.silu_backward(&t[0], &t[1]).map(|_| ())),
-        (vec![vec![3], vec![3]], |c, t| c.mul_forward(&t[0], &t[1]).map(|_| ())),
-        (vec![vec![3], vec![3], vec![3]], |c, t| c.mul_backward(&t[0], &t[1], &t[2]).map(|_| ())),
-        (vec![vec![3], vec![3]], |c, t| c.residual_add_forward(&t[0], &t[1]).map(|_| ())),
-        (vec![vec![3], vec![3], vec![3]], |c, t| c.residual_add_backward(&t[0], &t[1], &t[2]).map(|_| ())),
+        (vec![vec![3], vec![3]], |c, t| {
+            c.silu_backward(&t[0], &t[1]).map(|_| ())
+        }),
+        (vec![vec![3], vec![3]], |c, t| {
+            c.mul_forward(&t[0], &t[1]).map(|_| ())
+        }),
+        (vec![vec![3], vec![3], vec![3]], |c, t| {
+            c.mul_backward(&t[0], &t[1], &t[2]).map(|_| ())
+        }),
+        (vec![vec![3], vec![3]], |c, t| {
+            c.residual_add_forward(&t[0], &t[1]).map(|_| ())
+        }),
+        (vec![vec![3], vec![3], vec![3]], |c, t| {
+            c.residual_add_backward(&t[0], &t[1], &t[2]).map(|_| ())
+        }),
         (vec![vec![2, 4], vec![2, 4], vec![4], vec![4]], |c, t| {
-            c.rms_qk_norm_forward(&t[0], &t[1], &t[2], &t[3], RMS_NORM_EPS).map(|_| ())
+            c.rms_qk_norm_forward(&t[0], &t[1], &t[2], &t[3], RMS_NORM_EPS)
+                .map(|_| ())
         }),
-        (vec![vec![2, 4], vec![2, 4], vec![4], vec![4], vec![2, 4], vec![2, 4]], |c, t| {
-            c.rms_qk_norm_backward(&t[0], &t[1], &t[2], &t[3], &t[4], &t[5], RMS_NORM_EPS).map(|_| ())
-        }),
+        (
+            vec![
+                vec![2, 4],
+                vec![2, 4],
+                vec![4],
+                vec![4],
+                vec![2, 4],
+                vec![2, 4],
+            ],
+            |c, t| {
+                c.rms_qk_norm_backward(&t[0], &t[1], &t[2], &t[3], &t[4], &t[5], RMS_NORM_EPS)
+                    .map(|_| ())
+            },
+        ),
     ];
     let mut rng = SplitMix64(17);
     for (index, (shapes, op)) in cases.iter().enumerate() {
@@ -427,7 +557,10 @@ fn randomized_ops_are_bit_deterministic_and_finite() {
         assert_eq!(bits(&y1), bits(&vals(&cpu.linear_forward(&x, &w).unwrap())));
         let rw = f32t(&cpu, &rng.vec(kin, 2.0), &[kin]);
         let r1 = vals(&cpu.rms_norm_forward(&x, &rw, RMS_NORM_EPS).unwrap());
-        assert_eq!(bits(&r1), bits(&vals(&cpu.rms_norm_forward(&x, &rw, RMS_NORM_EPS).unwrap())));
+        assert_eq!(
+            bits(&r1),
+            bits(&vals(&cpu.rms_norm_forward(&x, &rw, RMS_NORM_EPS).unwrap()))
+        );
     }
 }
 
@@ -438,7 +571,9 @@ fn newton_schulz_f64_accumulation_prevents_false_rejection() {
     let cpu = wide();
     let n = 128;
     // Each element ~1e19: sum_sq ~128 * 1e38 overflows f32 but not f64.
-    let data: Vec<f32> = (0..n).map(|i| if i % 2 == 0 { 1e19 } else { -1e19 }).collect();
+    let data: Vec<f32> = (0..n)
+        .map(|i| if i % 2 == 0 { 1e19 } else { -1e19 })
+        .collect();
     let cfg = MuonNs5Config {
         lr: 0.025,
         momentum: 0.0,

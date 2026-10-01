@@ -18,11 +18,7 @@ fn guard() -> MutexGuard<'static, ()> {
 }
 
 fn scratch() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "ojas-capi-{}-{}",
-        std::process::id(),
-        unique()
-    ));
+    let dir = std::env::temp_dir().join(format!("ojas-capi-{}-{}", std::process::id(), unique()));
     std::fs::create_dir_all(&dir).unwrap();
     session::set_model_root(dir.to_str().unwrap()).unwrap();
     dir
@@ -36,7 +32,8 @@ fn unique() -> u64 {
 fn write_tensor(path: &Path) {
     let header = br#"{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#;
     let mut file = File::create(path).unwrap();
-    file.write_all(&(header.len() as u64).to_le_bytes()).unwrap();
+    file.write_all(&(header.len() as u64).to_le_bytes())
+        .unwrap();
     file.write_all(header).unwrap();
     file.write_all(&[0, 0, 0, 0]).unwrap();
 }
@@ -53,7 +50,11 @@ fn missing_file_and_path_escapes_are_rejected() {
     let (_g, dir) = fresh();
     let err = load::load_path("no-such.safetensors").unwrap_err();
     assert!(err.contains("missing file"), "{err}");
-    for raw in ["../outside.safetensors", "sub/../../etc/passwd", "/etc/passwd"] {
+    for raw in [
+        "../outside.safetensors",
+        "sub/../../etc/passwd",
+        "/etc/passwd",
+    ] {
         let err = load::load_path(raw).unwrap_err();
         assert!(
             err.contains("..") || err.contains("relative") || err.contains("escapes"),
@@ -310,7 +311,10 @@ fn generate_argmax_refuses_nan_and_greedy_reads_the_prompt() {
     payload.extend_from_slice(&1u32.to_le_bytes());
     payload.extend_from_slice(&7u32.to_le_bytes());
     let err = engine::dispatch(&ctx, &payload).unwrap_err();
-    assert!(err.contains("out of range") || err.contains("OutOfRange") || err.contains("range"), "{err}");
+    assert!(
+        err.contains("out of range") || err.contains("OutOfRange") || err.contains("range"),
+        "{err}"
+    );
     session::try_free(id).unwrap();
 }
 
@@ -429,18 +433,25 @@ fn concurrent_open_step_generate_close_keeps_the_cap_and_never_reuses_an_id() {
                         }
                         Err(err) => assert!(err.contains("capacity exceeded"), "{err}"),
                     }
-                    peak.fetch_max(session::session_count(), std::sync::atomic::Ordering::Relaxed);
+                    peak.fetch_max(
+                        session::session_count(),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
                     let Some(&id) = held.last() else { continue };
                     call(crate::OP_STEP, &logits_step(id, 2, &[0.0, 1.0], &[1])).unwrap();
                     call(crate::OP_STEP, &token_step(id, 2, &[3], &[0])).unwrap();
-                    assert_eq!(call(crate::OP_GENERATE, &argmax_payload(id, &[0.0, 2.0])).unwrap(), 1u32.to_le_bytes());
+                    assert_eq!(
+                        call(crate::OP_GENERATE, &argmax_payload(id, &[0.0, 2.0])).unwrap(),
+                        1u32.to_le_bytes()
+                    );
                     call(crate::OP_GENERATE, &greedy_payload(id, &[0, 1])).unwrap();
                     if (round + t) % 3 != 0 {
                         let id = held.pop().unwrap();
                         call(crate::OP_FREE, &free_payload(id)).unwrap();
                         let err = call(crate::OP_FREE, &free_payload(id)).unwrap_err();
                         assert!(err.contains("unknown model"), "{err}");
-                        let err = call(crate::OP_STEP, &logits_step(id, 2, &[0.0, 1.0], &[1])).unwrap_err();
+                        let err = call(crate::OP_STEP, &logits_step(id, 2, &[0.0, 1.0], &[1]))
+                            .unwrap_err();
                         assert!(err.contains("unknown model"), "{err}");
                     }
                 }
@@ -476,8 +487,10 @@ fn racing_loads_fill_exactly_the_cap() {
         .into_iter()
         .map(|h| h.join().unwrap())
         .collect();
-    let ids: std::collections::HashSet<u64> =
-        results.iter().filter_map(|r| r.as_ref().ok().map(|s| s.id)).collect();
+    let ids: std::collections::HashSet<u64> = results
+        .iter()
+        .filter_map(|r| r.as_ref().ok().map(|s| s.id))
+        .collect();
     assert_eq!(ids.len(), SESSION_CAP);
     for err in results.iter().filter_map(|r| r.as_ref().err()) {
         assert!(err.contains("capacity exceeded"), "{err}");
@@ -500,7 +513,10 @@ fn malformed_payloads_are_errors_and_never_panic() {
     };
 
     let valid = [
-        (crate::OP_STEP, logits_step(id, 2, &[0.0, 1.0, 2.0, 0.5], &[1, 0])),
+        (
+            crate::OP_STEP,
+            logits_step(id, 2, &[0.0, 1.0, 2.0, 0.5], &[1, 0]),
+        ),
         (crate::OP_STEP, token_step(id, 3, &[3, 1], &[0, 2])),
         (crate::OP_GENERATE, argmax_payload(id, &[0.0, 2.0, 1.0])),
         (crate::OP_GENERATE, greedy_payload(id, &[0, 1, 1])),
@@ -556,11 +572,27 @@ fn malformed_payloads_are_errors_and_never_panic() {
     no_panic(crate::OP_STEP, &token_step(id, 2, &[3], &[9])).unwrap_err();
     no_panic(crate::OP_GENERATE, &argmax_payload(id, &[])).unwrap_err();
     no_panic(crate::OP_GENERATE, &greedy_payload(id, &[])).unwrap_err();
-    no_panic(crate::OP_GENERATE, &argmax_payload(id, &[f32::INFINITY, 0.0])).unwrap_err();
+    no_panic(
+        crate::OP_GENERATE,
+        &argmax_payload(id, &[f32::INFINITY, 0.0]),
+    )
+    .unwrap_err();
     no_panic(crate::OP_STEP, &logits_step(id, 2, &[f32::NAN, 0.0], &[0])).unwrap_err();
-    for path in [&b"\xff\xfe"[..], b"a\0b", b"", b".", b"./", b"//", b"model.safetensors/"] {
+    for path in [
+        &b"\xff\xfe"[..],
+        b"a\0b",
+        b"",
+        b".",
+        b"./",
+        b"//",
+        b"model.safetensors/",
+    ] {
         let got = no_panic(OP_LOAD, path);
-        assert!(got.is_err(), "{:?} loaded: {got:?}", String::from_utf8_lossy(path));
+        assert!(
+            got.is_err(),
+            "{:?} loaded: {got:?}",
+            String::from_utf8_lossy(path)
+        );
     }
 
     // Deterministic xorshift so a failure reproduces.
@@ -607,8 +639,8 @@ fn opcode_zero_and_a_duplicate_opcode_are_refused() {
     let err = gusset::register_engine(0, |_ctx, _input| Ok(Vec::<u8>::new())).unwrap_err();
     assert!(err.contains("opcode 0"), "{err}");
     gusset::register_engine(crate::OP_LOAD, |_ctx, _input| Ok(Vec::<u8>::new())).unwrap();
-    let err = gusset::register_engine(crate::OP_LOAD, |_ctx, _input| Ok(Vec::<u8>::new()))
-        .unwrap_err();
+    let err =
+        gusset::register_engine(crate::OP_LOAD, |_ctx, _input| Ok(Vec::<u8>::new())).unwrap_err();
     assert!(err.contains("already registered"), "{err}");
     engine::install_engine().unwrap();
 }

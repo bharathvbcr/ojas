@@ -105,7 +105,9 @@ fn gradcheck_linear_rms_silu_mul_add() {
         &gb.to_f32_vec().unwrap(),
         &central_diff(&b0, H, |p| Ok(a0.iter().zip(p).map(|(a, b)| a * b).sum())).unwrap(),
     );
-    let (gx, gy) = cpu.residual_add_backward(&at, &bt, &ones(&cpu, &[2])).unwrap();
+    let (gx, gy) = cpu
+        .residual_add_backward(&at, &bt, &ones(&cpu, &[2]))
+        .unwrap();
     check(&gx.to_f32_vec().unwrap(), &[1.0, 1.0]);
     check(&gy.to_f32_vec().unwrap(), &[1.0, 1.0]);
 }
@@ -223,7 +225,9 @@ fn gradcheck_attention_gate_and_value_residual() {
     let w = tensor(&cpu, &w0, &[2, 2]);
     let b = tensor(&cpu, &b0, &[2]);
     let attn = tensor(&cpu, &a0, &[1, 2, 2]);
-    let y = cpu.per_head_sigmoid_gate_forward(&x, &w, &b, &attn).unwrap();
+    let y = cpu
+        .per_head_sigmoid_gate_forward(&x, &w, &b, &attn)
+        .unwrap();
     let g = cpu
         .per_head_sigmoid_gate_backward(&x, &w, &b, &attn, &ones(&cpu, y.shape()))
         .unwrap();
@@ -256,7 +260,10 @@ fn gradcheck_attention_gate_and_value_residual() {
         .unwrap();
     let blend = |v: &[f64], v0: &[f64], lambda: f64| {
         let s = sigmoid(lambda);
-        v.iter().zip(v0).map(|(a, b)| (1.0 - s) * a + s * b).sum::<f64>()
+        v.iter()
+            .zip(v0)
+            .map(|(a, b)| (1.0 - s) * a + s * b)
+            .sum::<f64>()
     };
     check(
         &g.value.to_f32_vec().unwrap(),
@@ -354,11 +361,23 @@ fn tape_backward_matches_direct_cpu() {
     let other = tape.leaf(tensor(tape.backend(), &[0.5, 0.5], &[2]));
     let mixed = tape.mul(activated, other).unwrap();
     tape.backward(mixed).unwrap();
-    assert!(tape.grad(hidden).unwrap().to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
     assert!(tape
-        .grad(mixed)
-        .is_none()
-        || tape.grad(mixed).unwrap().to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
+        .grad(hidden)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap()
+        .iter()
+        .all(|v| v.is_finite()));
+    assert!(
+        tape.grad(mixed).is_none()
+            || tape
+                .grad(mixed)
+                .unwrap()
+                .to_f32_vec()
+                .unwrap()
+                .iter()
+                .all(|v| v.is_finite())
+    );
 
     match tape.value(ojas_autograd::Var(50)) {
         Err(ojas_core::OjasError::OutOfRange { .. }) => {}
@@ -399,16 +418,20 @@ fn rms_qk_norm_matches_central_diff() {
 
     let nq = central_diff(&q0, H, |p| {
         Ok(rms_sum(&p[0..4], &qw0) + rms_sum(&p[4..8], &qw0))
-    }).unwrap();
+    })
+    .unwrap();
     let nqw = central_diff(&qw0, H, |p| {
         Ok(rms_sum(&q0[0..4], p) + rms_sum(&q0[4..8], p))
-    }).unwrap();
+    })
+    .unwrap();
     let nk = central_diff(&k0, H, |p| {
         Ok(rms_sum(&p[0..4], &kw0) + rms_sum(&p[4..8], &kw0))
-    }).unwrap();
+    })
+    .unwrap();
     let nkw = central_diff(&kw0, H, |p| {
         Ok(rms_sum(&k0[0..4], p) + rms_sum(&k0[4..8], p))
-    }).unwrap();
+    })
+    .unwrap();
 
     check(&tape.grad(q).unwrap().to_f32_vec().unwrap(), &nq);
     check(&tape.grad(k).unwrap().to_f32_vec().unwrap(), &nk);

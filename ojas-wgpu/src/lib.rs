@@ -7,7 +7,7 @@
 
 #![forbid(unsafe_code)]
 
-use ojas_device::{require_kind, DeviceError, DeviceInfo, Device};
+use ojas_device::{require_kind, Device, DeviceError, DeviceInfo};
 
 const AFFINE_SHADER: &str = r#"
 struct Params {
@@ -152,7 +152,11 @@ fn open_session() -> Result<Session, DeviceError> {
         trace: wgpu::Trace::Off,
     }))
     .map_err(|err| gpu_error(format!("request_device: {err}")))?;
-    Ok(Session { device, queue, info })
+    Ok(Session {
+        device,
+        queue,
+        info,
+    })
 }
 
 fn info_of(info: &wgpu::AdapterInfo) -> (String, String, String) {
@@ -245,7 +249,8 @@ fn dispatch_affine(
     bias: f32,
     bytes_u32: u32,
 ) -> Result<Vec<f32>, DeviceError> {
-    let n = u32::try_from(input.len()).map_err(|_| gpu_error("input length does not fit in u32"))?;
+    let n =
+        u32::try_from(input.len()).map_err(|_| gpu_error("input length does not fit in u32"))?;
     let byte_len = u64::from(bytes_u32);
     let limits = session.device.limits();
     let cap = limits
@@ -307,9 +312,7 @@ fn dispatch_affine(
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    session
-        .queue
-        .write_buffer(&input_buf, 0, &f32_bytes(input));
+    session.queue.write_buffer(&input_buf, 0, &f32_bytes(input));
     session.queue.write_buffer(&params_buf, 0, &params);
 
     let bind_group = session
@@ -426,13 +429,11 @@ mod tests {
 
     #[test]
     fn byte_len_past_u32_is_an_error() {
-        let lens = [
-            (u32::MAX as usize / 4) + 1,
-            1usize << 32,
-            (1usize << 32) + 3,
-            usize::MAX / 2,
-            usize::MAX,
-        ];
+        let mut lens = vec![(u32::MAX as usize / 4) + 1, usize::MAX / 2, usize::MAX];
+        if let Ok(n) = usize::try_from(1u64 << 32) {
+            lens.push(n);
+            lens.push(n.saturating_add(3));
+        }
         for len in lens {
             let err = f32_byte_len(len).expect_err("length that cannot fit in u32 returned Ok");
             let text = err.to_string();
@@ -464,15 +465,16 @@ mod tests {
             assert!(
                 delta <= 1e-6,
                 "index {index}: gpu {got} vs cpu {expect} (adapter {}, hal {})",
-                ran.adapter_name, ran.hal
+                ran.adapter_name,
+                ran.hal
             );
         }
     }
 
     #[test]
     fn empty_buffer_is_ok_and_does_not_dispatch() {
-        let ran = affine_f32(Device::Vulkan, &[], 2.0, 1.0)
-            .expect("missing adapter must fail, not skip");
+        let ran =
+            affine_f32(Device::Vulkan, &[], 2.0, 1.0).expect("missing adapter must fail, not skip");
         eprintln!(
             "ojas-wgpu empty adapter: {} hal={}",
             ran.adapter_name, ran.hal
@@ -558,7 +560,14 @@ mod tests {
 
     #[test]
     fn non_finite_inputs_propagate() {
-        let input = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX, -0.0, 1.0];
+        let input = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MAX,
+            -0.0,
+            1.0,
+        ];
         let ran = affine_f32(Device::Vulkan, &input, 2.0, 0.0).unwrap();
         assert!(ran.values[0].is_nan());
         assert_eq!(ran.values[1], f32::INFINITY);
@@ -571,12 +580,18 @@ mod tests {
     #[test]
     fn repeated_dispatches_are_deterministic() {
         let input = ramp(1025, 3);
-        let first = affine_f32(Device::Vulkan, &input, 1.25, -0.75).unwrap().values;
+        let first = affine_f32(Device::Vulkan, &input, 1.25, -0.75)
+            .unwrap()
+            .values;
         assert!(first.iter().all(|v| v.is_finite()));
         for i in 0..1000 {
-            let got = affine_f32(Device::Vulkan, &input, 1.25, -0.75).unwrap().values;
+            let got = affine_f32(Device::Vulkan, &input, 1.25, -0.75)
+                .unwrap()
+                .values;
             assert!(
-                got.iter().zip(&first).all(|(a, b)| a.to_bits() == b.to_bits()),
+                got.iter()
+                    .zip(&first)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
                 "dispatch {i} differs"
             );
         }

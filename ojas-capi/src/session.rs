@@ -61,7 +61,10 @@ pub fn set_model_root(path: &str) -> Result<(), String> {
         .canonicalize()
         .map_err(|err| format!("model root: {err}"))?;
     if !canon.is_dir() {
-        return Err(format!("model root is not a directory: {}", canon.display()));
+        return Err(format!(
+            "model root is not a directory: {}",
+            canon.display()
+        ));
     }
     lock().root = Some(canon);
     Ok(())

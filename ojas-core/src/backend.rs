@@ -206,11 +206,7 @@ pub struct ValueResidualGrad {
 pub trait Backend {
     fn id(&self) -> BackendId;
 
-    fn embedding_forward(
-        &self,
-        table: &Tensor,
-        token_ids: &Tensor,
-    ) -> Result<Tensor, OjasError>;
+    fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError>;
 
     fn embedding_backward(
         &self,
@@ -281,12 +277,7 @@ pub trait Backend {
         eps: f32,
     ) -> Result<(Tensor, Tensor, Tensor, Tensor), OjasError>;
 
-    fn causal_sdpa_forward(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-    ) -> Result<Tensor, OjasError>;
+    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError>;
 
     /// `(grad_q, grad_k, grad_v)`.
     fn causal_sdpa_backward(
@@ -331,11 +322,7 @@ pub trait Backend {
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError>;
 
-    fn silu_backward(
-        &self,
-        input: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError>;
+    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError>;
 
     fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError>;
 
@@ -412,7 +399,10 @@ mod tests {
     fn step_counter_refuses_wrap() {
         assert_eq!(next_step(0).unwrap(), 1);
         assert_eq!(next_step(u64::MAX - 1).unwrap(), u64::MAX);
-        assert!(matches!(next_step(u64::MAX), Err(OjasError::OutOfRange { .. })));
+        assert!(matches!(
+            next_step(u64::MAX),
+            Err(OjasError::OutOfRange { .. })
+        ));
     }
 
     #[test]
