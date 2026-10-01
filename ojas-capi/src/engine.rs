@@ -1,6 +1,6 @@
 //! Opcode handlers. Opcode 0 is not registered.
 
-use gusset::JobContext;
+use gusset::{JobContext, JobOutput};
 
 #[cfg(test)]
 use std::sync::{atomic::AtomicBool, Arc};
@@ -40,7 +40,11 @@ pub fn install_engine() -> Result<(), String> {
     Ok(())
 }
 
-pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<JobOutput, String> {
+    Ok(stage(dispatch_bytes(ctx, input)?))
+}
+
+fn dispatch_bytes(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
     ctx.check()
         .map_err(|reason| format!("cancelled: {reason:?}"))?;
     match ctx.opcode() {
@@ -50,6 +54,34 @@ pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
         OP_FREE => op_free(input),
         OP_PANIC => panic!("ojas: induced panic"),
         other => Err(format!("unknown opcode {other}")),
+    }
+}
+
+/// Results under 4 KiB stay `JobOutput::Bytes`, which is the path that
+/// exists before Rust 1.100. At or above that size, and only when gusset's
+/// own probe set `DEP_GUSSET_ALLOCATOR_API=1`, the bytes are copied into
+/// `BufferAlloc` and returned as `JobOutput::Allocated`.
+pub fn stage(bytes: Vec<u8>) -> JobOutput {
+    #[cfg(gusset_allocator_api)]
+    {
+        if bytes.len() >= 4096 {
+            let mut out: Vec<u8, gusset::BufferAlloc> = Vec::new_in(gusset::BufferAlloc);
+            if out.try_reserve_exact(bytes.len()).is_ok() {
+                out.extend_from_slice(&bytes);
+                return JobOutput::from(out);
+            }
+        }
+    }
+    JobOutput::from(bytes)
+}
+
+#[cfg(test)]
+pub fn bytes_of(out: JobOutput) -> Vec<u8> {
+    match out {
+        JobOutput::Bytes(bytes) => bytes,
+        #[cfg(gusset_allocator_api)]
+        JobOutput::Allocated(bytes) => bytes.to_vec(),
+        _ => Vec::new(),
     }
 }
 

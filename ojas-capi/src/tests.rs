@@ -306,7 +306,7 @@ fn generate_argmax_refuses_nan_and_greedy_reads_the_prompt() {
     payload.extend_from_slice(&1u32.to_le_bytes());
     payload.extend_from_slice(&0u32.to_le_bytes());
     let ctx = engine::context_for(crate::OP_GENERATE, false);
-    let out = engine::dispatch(&ctx, &payload).unwrap();
+    let out = engine::bytes_of(engine::dispatch(&ctx, &payload).unwrap());
     assert_eq!(out.len(), 4);
     let token = u32::from_le_bytes(out.try_into().unwrap());
     assert!(token < 2, "{token}");
@@ -384,7 +384,7 @@ fn free_payload(id: u64) -> Vec<u8> {
 }
 
 fn call(opcode: u32, payload: &[u8]) -> Result<Vec<u8>, String> {
-    engine::dispatch(&engine::context_for(opcode, false), payload)
+    engine::dispatch(&engine::context_for(opcode, false), payload).map(engine::bytes_of)
 }
 
 #[test]
@@ -649,6 +649,15 @@ fn opcode_zero_and_a_duplicate_opcode_are_refused() {
         gusset::register_engine(crate::OP_LOAD, |_ctx, _input| Ok(Vec::<u8>::new())).unwrap_err();
     assert!(err.contains("already registered"), "{err}");
     engine::install_engine().unwrap();
+}
+
+#[test]
+fn small_results_stay_byte_vectors_before_the_allocator_api() {
+    let out = engine::stage(vec![9, 8, 7]);
+    match out {
+        gusset::JobOutput::Bytes(bytes) => assert_eq!(bytes, vec![9, 8, 7]),
+        other => panic!("small result left the pre-1.100 path: {other:?}"),
+    }
 }
 
 #[test]

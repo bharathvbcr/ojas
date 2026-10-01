@@ -17,6 +17,12 @@ echo "==> cuda check"
 # without a CUDA toolkit. It does not execute a kernel.
 cargo check -p ojas-cuda --features cuda
 
+echo "==> nightly simd (not a Cargo target)"
+./scripts/simd_bench.sh
+
+echo "==> gotip"
+./scripts/gotip.sh
+
 echo "==> test (release, serialized)"
 cargo test --workspace --release -- --test-threads=1
 
