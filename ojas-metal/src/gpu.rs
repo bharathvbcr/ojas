@@ -258,11 +258,12 @@ impl Session {
             },
         )?;
         let rt = GpuRuntime::new().map_err(metal)?;
-        let path = env!("OJAS_GATE_METALLIB");
-        if path.is_empty() {
-            return Err(metal("gate metallib path is empty"));
+        rt.set_async_encode(true).map_err(metal)?;
+        let gate = include_bytes!(concat!(env!("OUT_DIR"), "/ojas_per_head_gate.metallib"));
+        if gate.is_empty() {
+            return Err(metal("embedded gate metallib is empty"));
         }
-        rt.add_metallib(std::path::Path::new(path)).map_err(metal)?;
+        rt.add_metallib_bytes(gate).map_err(metal)?;
         for name in [
             "ojas_per_head_gate_fwd",
             "ojas_per_head_gate_bwd",
@@ -557,6 +558,8 @@ pub fn tiny_train_step(
     GemmOperands::ExactF32.tn(&dq, &q, &dw_q).map_err(metal)?;
     let dw_host = ce.dw.read_f32().map_err(metal)?;
     let dw_q_host = dw_q.read_f32().map_err(metal)?;
+    // `ce.dw` stays a host read: tessl has `Qwen35Model::adamw_step` and no
+    // generic `adamw_step(rt, param, grad, ...)` yet. This is the call site.
     finite_f32("tiny_train_step", &dw_host)?;
     finite_f32("tiny_train_step", &dw_q_host)?;
     let next = next_step(state.step)?;
@@ -1098,7 +1101,7 @@ fn adamw_apply(
         set_u32(bnd, 0, 8);
     })
     .map_err(metal)?;
-    rt.synchronize().map_err(metal)?;
+    rt.commit(false).map_err(metal)?;
     Ok(())
 }
 
@@ -1163,6 +1166,11 @@ pub fn per_head_gate_backward(
         set_u32(bnd, g.rows as u32, 6);
         set_u32(bnd, g.n_head as u32, 7);
         set_u32(bnd, g.head_dim as u32, 8);
+        let plane = (g.rows * g.n_head * g.head_dim) as u32;
+        let pre_n = (g.rows * g.n_head) as u32;
+        set_u32(bnd, plane, 9);
+        set_u32(bnd, pre_n, 10);
+        set_u32(bnd, g.n_head as u32, 11);
     })
     .map_err(metal)?;
     let pb = g.rt.pipeline("ojas_per_head_gate_dbias").map_err(metal)?;
@@ -1171,6 +1179,8 @@ pub fn per_head_gate_backward(
         set_gpu_buf(bnd, &d_bias.buffer, 1);
         set_u32(bnd, g.rows as u32, 2);
         set_u32(bnd, g.n_head as u32, 3);
+        set_u32(bnd, (g.rows * g.n_head) as u32, 4);
+        set_u32(bnd, g.n_head as u32, 5);
     })
     .map_err(metal)?;
     let d_weight = zeros(&g.rt, &[g.n_head, g.d_model])?;
@@ -1182,7 +1192,6 @@ pub fn per_head_gate_backward(
     GemmOperands::ExactF32
         .nn(&d_pre, &g.weight, &d_input)
         .map_err(metal)?;
-    g.rt.synchronize().map_err(metal)?;
     Ok(GateGrad {
         d_input: d_input.read_f32().map_err(metal)?,
         d_weight: d_weight.read_f32().map_err(metal)?,
@@ -1339,9 +1348,14 @@ fn gate_fwd_kernel(g: &GateBufs, out: &Tensor) -> Result<(), OjasError> {
         set_u32(bnd, g.rows as u32, 4);
         set_u32(bnd, g.n_head as u32, 5);
         set_u32(bnd, g.head_dim as u32, 6);
+        let plane = (g.rows * g.n_head * g.head_dim) as u32;
+        set_u32(bnd, plane, 7);
+        set_u32(bnd, (g.rows * g.n_head) as u32, 8);
+        set_u32(bnd, g.n_head as u32, 9);
+        set_u32(bnd, plane, 10);
     })
     .map_err(metal)?;
-    g.rt.synchronize().map_err(metal)?;
+    g.rt.commit(false).map_err(metal)?;
     Ok(())
 }
 

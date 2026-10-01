@@ -42,6 +42,8 @@ fn main() {
             .args([
                 std_flag,
                 "-O2",
+                "-ffp-contract=off",
+                "-fmetal-math-mode=safe",
                 "-isysroot",
                 &sdk,
                 "-mmacosx-version-min=26.0",
