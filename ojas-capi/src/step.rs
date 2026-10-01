@@ -31,6 +31,8 @@ pub struct StepInput<'a> {
     pub n_classes: u32,
     pub step: u32,
     pub lr: f32,
+    /// `1` keeps the step on the caller. Larger values use [`CpuBackend::with_threads`].
+    pub threads: usize,
     pub logits: &'a [f32],
     pub tokens: &'a [u16],
     pub targets_u32: &'a [u32],
@@ -38,10 +40,19 @@ pub struct StepInput<'a> {
 }
 
 pub fn step(input: StepInput<'_>) -> Result<StepStats, String> {
+    step_checked(input, || Ok(()))
+}
+
+pub fn step_checked(
+    input: StepInput<'_>,
+    mut check: impl FnMut() -> Result<(), String>,
+) -> Result<StepStats, String> {
+    check()?;
     if input.mode == MODE_HEADER {
         return Err("step: shape: step payload is missing logits".to_string());
     }
     let rows = rows(input.batch, input.seq)?;
+    check()?;
     if !input.lr.is_finite() || input.lr < 0.0 {
         return Err("step: out of range: lr must be finite and >= 0".to_string());
     }
@@ -50,7 +61,11 @@ pub fn step(input: StepInput<'_>) -> Result<StepStats, String> {
     }
     let n_classes = input.n_classes as usize;
     let budget = Budget::new(1 << 30);
-    let cpu = CpuBackend::new(budget.clone());
+    let cpu = if input.threads <= 1 {
+        CpuBackend::new(budget.clone())
+    } else {
+        CpuBackend::with_threads(budget.clone(), input.threads).map_err(show)?
+    };
     let logits = match input.mode {
         MODE_LOGITS => {
             if input.logits.len() != rows * n_classes {
@@ -94,6 +109,7 @@ pub fn step(input: StepInput<'_>) -> Result<StepStats, String> {
     } else {
         input.targets_u16.iter().map(|&t| u32::from(t)).collect()
     };
+    check()?;
     let targets = Tensor::from_u32(&targets, &[rows], &budget).map_err(show)?;
     let loss_t = cpu
         .cross_entropy_mean_forward(&logits, &targets, None)
@@ -112,6 +128,7 @@ pub fn step(input: StepInput<'_>) -> Result<StepStats, String> {
     let mut moment1 = Tensor::zeros(&[1], DType::F32, &budget).map_err(show)?;
     let mut moment2 = Tensor::zeros(&[1], DType::F32, &budget).map_err(show)?;
     let config = AdamWConfig::nanolab(f64::from(input.lr), 0.0);
+    check()?;
     cpu.adamw_step(
         &mut param,
         &grad_scalar,

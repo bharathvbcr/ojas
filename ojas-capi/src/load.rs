@@ -140,12 +140,52 @@ fn inspect_file(file: &mut File) -> Result<u32, String> {
 }
 
 pub fn load_path(raw: &str) -> Result<session::Session, String> {
+    load_on(raw, 1, false, false)
+}
+
+/// `OJDV` + kind u32 + threads u32 + relative path.
+/// kind 0 CPU, 1 CPU parallel, 2 Metal, 3 wgpu.
+pub fn load_request(bytes: &[u8]) -> Result<session::Session, String> {
+    if bytes.starts_with(b"OJDV") {
+        if bytes.len() < 12 {
+            return Err("load: device header is short".to_string());
+        }
+        let kind = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        let threads = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let path = std::str::from_utf8(&bytes[12..]).map_err(|_| "load: path is not utf-8")?;
+        return match kind {
+            0 => load_on(path, 1, false, false),
+            1 => load_on(path, threads as usize, false, false),
+            2 => load_on(path, 1, true, false),
+            3 => load_on(path, 1, false, true),
+            _ => Err(format!("load: unknown device {kind}")),
+        };
+    }
+    let path = std::str::from_utf8(bytes).map_err(|_| "load: path is not utf-8")?;
+    load_path(path)
+}
+
+fn load_on(
+    raw: &str,
+    threads: usize,
+    metal: bool,
+    wgpu_device: bool,
+) -> Result<session::Session, String> {
     let root = session::root()?;
     let path = resolve_under_root(&root, raw)?;
     let mut file = File::open(&path).map_err(|err| format!("missing file: {err}"))?;
     confirm_open_identity(&file, &path, &root)?;
     let tensors = inspect_file(&mut file)?;
-    session::load_model(path, tensors)
+    if metal {
+        let owner = crate::owner::MetalOwner::spawn()?;
+        let session = session::load_model_with_threads(path, tensors, 1)?;
+        crate::owner::retain(session.id, owner)?;
+        return Ok(session);
+    }
+    if wgpu_device {
+        ojas_wgpu::WgpuContext::open().map_err(|err| format!("wgpu: {err}"))?;
+    }
+    session::load_model_with_threads(path, tensors, threads)
 }
 
 #[cfg(test)]

@@ -69,9 +69,12 @@ pub extern "C" fn ojas_engine_init() -> i32 {
 /// Drops every session. Engine hooks stay registered.
 #[no_mangle]
 pub extern "C" fn ojas_engine_reset() {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ojas_capi::reset_sessions();
     }));
+    if result.is_err() {
+        ojas_capi::set_last_error("Rust panic in ojas_engine_reset");
+    }
 }
 
 #[no_mangle]
@@ -98,6 +101,30 @@ pub unsafe extern "C" fn ojas_copy_last_error(dst: *mut u8, cap: usize) -> usize
             std::ptr::copy_nonoverlapping(msg.as_ptr(), dst, n);
         }
         n
+    }))
+    .unwrap_or(0)
+}
+
+/// Copies the current error in one call and returns its full length.
+///
+/// # Safety
+/// `dst` is writable for `cap` bytes when it is non-null. The bytes are
+/// copied and the pointer is not stored. When `cap` is shorter than the
+/// message, the prefix is copied and the return value is the full length.
+#[no_mangle]
+pub unsafe extern "C" fn ojas_take_last_error(dst: *mut u8, cap: usize) -> usize {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let msg = ojas_capi::last_error();
+        let full = msg.len();
+        if dst.is_null() || cap == 0 || full == 0 {
+            return full;
+        }
+        let n = full.min(cap);
+        // SAFETY: `dst` is writable for `cap` bytes, and `n` is at most `cap`.
+        unsafe {
+            std::ptr::copy_nonoverlapping(msg.as_ptr(), dst, n);
+        }
+        full
     }))
     .unwrap_or(0)
 }

@@ -129,6 +129,7 @@ fn step_logits_match_cpu_cross_entropy_and_a_bad_shape_does_not_free() {
     let logits = [0.0f32, 0.0];
     let targets = [0u32];
     let got = step::step(StepInput {
+        threads: 1,
         mode: MODE_LOGITS,
         batch: 1,
         seq: 1,
@@ -155,6 +156,7 @@ fn step_logits_match_cpu_cross_entropy_and_a_bad_shape_does_not_free() {
     assert_eq!(got.lr, 1.0e-3);
 
     let other = step::step(StepInput {
+        threads: 1,
         mode: MODE_LOGITS,
         batch: 1,
         seq: 1,
@@ -170,6 +172,7 @@ fn step_logits_match_cpu_cross_entropy_and_a_bad_shape_does_not_free() {
     assert_ne!(got.loss.to_bits(), other.loss.to_bits());
 
     let err = step::step(StepInput {
+        threads: 1,
         mode: MODE_LOGITS,
         batch: 1,
         seq: 1,
@@ -186,6 +189,7 @@ fn step_logits_match_cpu_cross_entropy_and_a_bad_shape_does_not_free() {
     session::require(id).unwrap();
 
     let nan = step::step(StepInput {
+        threads: 1,
         mode: MODE_LOGITS,
         batch: 1,
         seq: 1,
@@ -208,6 +212,7 @@ fn step_tokens_run_linear_then_cross_entropy() {
     let tokens = [3u16];
     let targets = [0u16];
     let got = step::step(StepInput {
+        threads: 1,
         mode: MODE_TOKENS,
         batch: 1,
         seq: 1,
@@ -235,6 +240,7 @@ fn step_tokens_run_linear_then_cross_entropy() {
     assert_eq!(got.lr, 2.0e-3);
 
     let moved = step::step(StepInput {
+        threads: 1,
         mode: MODE_TOKENS,
         batch: 1,
         seq: 1,
@@ -643,4 +649,34 @@ fn opcode_zero_and_a_duplicate_opcode_are_refused() {
         gusset::register_engine(crate::OP_LOAD, |_ctx, _input| Ok(Vec::<u8>::new())).unwrap_err();
     assert!(err.contains("already registered"), "{err}");
     engine::install_engine().unwrap();
+}
+
+#[test]
+fn device_header_selects_cpu_parallel_metal_and_wgpu() {
+    let (_g, dir) = fresh();
+    write_tensor(&dir.join("model.safetensors"));
+    let mut payload = b"OJDV".to_vec();
+    payload.extend_from_slice(&1u32.to_le_bytes());
+    payload.extend_from_slice(&4u32.to_le_bytes());
+    payload.extend_from_slice(b"model.safetensors");
+    let session = load::load_request(&payload).unwrap();
+    assert_eq!(session.threads, 4);
+    session::try_free(session.id).unwrap();
+
+    payload[4..8].copy_from_slice(&9u32.to_le_bytes());
+    let err = load::load_request(&payload).unwrap_err();
+    assert!(err.contains("unknown device"), "{err}");
+    payload[4..8].copy_from_slice(&1u32.to_le_bytes());
+    payload[8..12].copy_from_slice(&0u32.to_le_bytes());
+    let err = load::load_request(&payload).unwrap_err();
+    assert!(err.contains("thread count"), "{err}");
+
+    payload[4..8].copy_from_slice(&2u32.to_le_bytes());
+    payload[8..12].copy_from_slice(&1u32.to_le_bytes());
+    let metal = load::load_request(&payload).expect("Metal session on the owner thread");
+    session::try_free(metal.id).unwrap();
+
+    payload[4..8].copy_from_slice(&3u32.to_le_bytes());
+    let wgpu_session = load::load_request(&payload).expect("wgpu context opens at load");
+    session::try_free(wgpu_session.id).unwrap();
 }

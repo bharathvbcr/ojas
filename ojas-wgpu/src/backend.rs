@@ -19,10 +19,12 @@ use ojas_device::DeviceError;
 use crate::context::{gemm, mul, residual, rms_norm, silu, WgpuContext};
 
 /// Absolute tolerance for a length-`k` product sum against the CPU reference.
+#[allow(dead_code)] // compared from the cfg(test) module; the library path is the round trip
 pub fn gemm_abs_tol(k: usize) -> f64 {
     (k as f64) * 2.0e-5 + 1.0e-4
 }
 
+#[allow(dead_code)]
 pub const ELEMENT_ABS_TOL: f64 = 1.0e-4;
 
 fn unsupported(op: &'static str) -> OjasError {

@@ -11,6 +11,7 @@ pub struct Session {
     pub id: u64,
     pub path: PathBuf,
     pub tensors: u32,
+    pub threads: usize,
 }
 
 struct Table {
@@ -78,6 +79,17 @@ pub fn root() -> Result<PathBuf, String> {
 }
 
 pub fn load_model(path: PathBuf, tensors: u32) -> Result<Session, String> {
+    load_model_with_threads(path, tensors, 1)
+}
+
+pub fn load_model_with_threads(
+    path: PathBuf,
+    tensors: u32,
+    threads: usize,
+) -> Result<Session, String> {
+    if threads == 0 {
+        return Err("thread count is 0".to_string());
+    }
     let mut table = lock();
     if table.sessions.len() >= SESSION_CAP {
         return Err(format!(
@@ -89,7 +101,12 @@ pub fn load_model(path: PathBuf, tensors: u32) -> Result<Session, String> {
     }
     let id = table.next_id;
     table.next_id = table.next_id.checked_add(1).unwrap_or(0);
-    let session = Session { id, path, tensors };
+    let session = Session {
+        id,
+        path,
+        tensors,
+        threads,
+    };
     table.sessions.insert(id, session.clone());
     Ok(session)
 }
@@ -107,6 +124,8 @@ pub fn try_free(id: u64) -> Result<(), String> {
     if table.sessions.remove(&id).is_none() {
         return Err(format!("unknown model id {id}"));
     }
+    drop(table);
+    crate::owner::release(id);
     Ok(())
 }
 
@@ -116,6 +135,7 @@ pub fn session_count() -> usize {
 
 pub fn clear_sessions() {
     lock().sessions.clear();
+    crate::owner::release_all();
 }
 
 pub fn reset_sessions() {

@@ -1,6 +1,7 @@
 // Package ojas is the in-process training and inference API.
 //
-// One gusset handle, pool size 1, runs every step. Load sends a relative
+// One gusset handle runs every step. The worker count defaults to 1 and
+// changes with SetPoolSize before the first call. Load sends a relative
 // path (at most 4 KiB). Larger step and generate payloads go through a
 // gusset Buffer. Weights are not sent.
 //
@@ -13,26 +14,49 @@
 package ojas
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"math"
 )
 
 // SetModelRoot is the directory relative load paths are resolved under.
-func SetModelRoot(dir string) error {
-	mu.Lock()
-	defer mu.Unlock()
+func SetModelRoot(ctx context.Context, dir string) error {
+	if ctx == nil {
+		return errors.New("ojas: nil context")
+	}
 	return setRoot(dir)
 }
 
-// Load opens a relative safetensors path and returns a model id.
-func Load(path string) (uint64, error) {
-	mu.Lock()
-	defer mu.Unlock()
-	if len(path) > inlineLimit {
+// Device selectors for LoadOn. CpuParallel uses the threads argument.
+// Metal runs on a dedicated owner thread. Wgpu opens a context at load.
+const (
+	DeviceCPU         uint32 = deviceCPU
+	DeviceCPUParallel uint32 = deviceCPUParallel
+	DeviceMetal       uint32 = deviceMetal
+	DeviceWgpu        uint32 = deviceWgpu
+)
+
+// Load opens a relative safetensors path on the CPU and returns a model id.
+func Load(ctx context.Context, path string) (uint64, error) {
+	return LoadOn(ctx, DeviceCPU, 1, path)
+}
+
+// LoadOn opens a model on the selected device. threads is used only by
+// DeviceCPUParallel.
+func LoadOn(ctx context.Context, device, threads uint32, path string) (uint64, error) {
+	if ctx == nil {
+		return 0, errors.New("ojas: nil context")
+	}
+	if len(path) > inlineLimit || 12+len(path) > inlineLimit {
 		return 0, errors.New("path exceeds 4096 bytes")
 	}
-	out, err := callLocked(opLoad, []byte(path))
+	payload := make([]byte, 12+len(path))
+	copy(payload[:4], []byte("OJDV"))
+	binary.LittleEndian.PutUint32(payload[4:8], device)
+	binary.LittleEndian.PutUint32(payload[8:12], threads)
+	copy(payload[12:], path)
+	out, err := callEngine(ctx, opLoad, payload)
 	if err != nil {
 		return 0, err
 	}
@@ -68,14 +92,12 @@ type StepStats struct {
 }
 
 // Step runs one step on a loaded session. Rust errors are returned as text.
-func Step(id uint64, req StepRequest) (StepStats, error) {
-	mu.Lock()
-	defer mu.Unlock()
+func Step(ctx context.Context, id uint64, req StepRequest) (StepStats, error) {
 	payload, err := encodeStep(id, req)
 	if err != nil {
 		return StepStats{}, err
 	}
-	out, err := callLocked(opStep, payload)
+	out, err := callEngine(ctx, opStep, payload)
 	if err != nil {
 		return StepStats{}, err
 	}
@@ -90,37 +112,35 @@ func Step(id uint64, req StepRequest) (StepStats, error) {
 }
 
 // Generate returns argmax of logits. A non-finite logit is an error.
-func Generate(id uint64, logits []float32) (uint32, error) {
-	mu.Lock()
-	defer mu.Unlock()
-	return generate(id, genLogits, logits, nil)
+func Generate(ctx context.Context, id uint64, logits []float32) (uint32, error) {
+	return generate(ctx, id, genLogits, logits, nil)
 }
 
 // GenerateGreedy asks the tiny ojas-infer model for one token.
-func GenerateGreedy(id uint64, prompt []uint32) (uint32, error) {
-	mu.Lock()
-	defer mu.Unlock()
-	return generate(id, genGreedy, nil, prompt)
+func GenerateGreedy(ctx context.Context, id uint64, prompt []uint32) (uint32, error) {
+	return generate(ctx, id, genGreedy, nil, prompt)
 }
 
 // Free drops a session. An unknown id, including a second free, is an error.
-func Free(id uint64) error {
-	mu.Lock()
-	defer mu.Unlock()
+func Free(ctx context.Context, id uint64) error {
 	var payload [8]byte
 	binary.LittleEndian.PutUint64(payload[:], id)
-	_, err := callLocked(opFree, payload[:])
+	_, err := callEngine(ctx, opFree, payload[:])
 	return err
 }
 
 // Close joins the worker pool. With no call still running it returns nil.
-func Close() error {
-	mu.Lock()
-	defer mu.Unlock()
+func Close(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("ojas: nil context")
+	}
 	return closeHandle()
 }
 
 func encodeStep(id uint64, req StepRequest) ([]byte, error) {
+	if _, err := mulRows(req.Batch, req.Seq); err != nil {
+		return nil, err
+	}
 	logitFields := len(req.Logits) > 0 || len(req.Targets) > 0
 	tokenFields := len(req.Tokens) > 0 || len(req.TokenTargets) > 0
 	if logitFields && tokenFields {
@@ -131,7 +151,16 @@ func encodeStep(id uint64, req StepRequest) ([]byte, error) {
 	switch {
 	case logitFields:
 		mode = stepLogits
-		rows := int(req.Batch) * int(req.Seq)
+		rows, err := mulRows(req.Batch, req.Seq)
+		if err != nil {
+			return nil, err
+		}
+		if err := fitUint32(len(req.Logits)); err != nil {
+			return nil, err
+		}
+		if err := fitUint32(len(req.Targets)); err != nil {
+			return nil, err
+		}
 		if rows <= 0 || len(req.Targets) == 0 || len(req.Logits)%len(req.Targets) != 0 {
 			classes = 0
 		} else {
@@ -195,7 +224,13 @@ func encodeStep(id uint64, req StepRequest) ([]byte, error) {
 	return buf, nil
 }
 
-func generate(id uint64, mode uint32, logits []float32, prompt []uint32) (uint32, error) {
+func generate(ctx context.Context, id uint64, mode uint32, logits []float32, prompt []uint32) (uint32, error) {
+	if err := fitUint32(len(logits)); err != nil {
+		return 0, err
+	}
+	if err := fitUint32(len(prompt)); err != nil {
+		return 0, err
+	}
 	var word [8]byte
 	buf := make([]byte, 0, 16+len(logits)*4+len(prompt)*4)
 	binary.LittleEndian.PutUint64(word[:], id)
@@ -217,7 +252,7 @@ func generate(id uint64, mode uint32, logits []float32, prompt []uint32) (uint32
 			buf = append(buf, word[:4]...)
 		}
 	}
-	out, err := callLocked(opGenerate, buf)
+	out, err := callEngine(ctx, opGenerate, buf)
 	if err != nil {
 		return 0, err
 	}
@@ -227,9 +262,25 @@ func generate(id uint64, mode uint32, logits []float32, prompt []uint32) (uint32
 	return binary.LittleEndian.Uint32(out), nil
 }
 
-func poisonHandle() error {
-	mu.Lock()
-	defer mu.Unlock()
-	_, err := callLocked(opPanic, nil)
+func poisonHandle(ctx context.Context) error {
+	_, err := callEngine(ctx, opPanic, nil)
 	return err
+}
+
+func mulRows(batch, seq uint32) (int, error) {
+	if batch != 0 && uint64(seq) > math.MaxUint64/uint64(batch) {
+		return 0, errors.New("ojas: batch*seq overflows")
+	}
+	n := uint64(batch) * uint64(seq)
+	if n > uint64(math.MaxInt) {
+		return 0, errors.New("ojas: batch*seq overflows")
+	}
+	return int(n), nil
+}
+
+func fitUint32(n int) error {
+	if n < 0 || uint64(n) > math.MaxUint32 {
+		return errors.New("ojas: length exceeds uint32")
+	}
+	return nil
 }

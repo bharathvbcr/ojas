@@ -12,3 +12,7 @@ gusset = { package = "gusset", path = "../../../devtools/gusset/crates/gusset" }
 ojas-core = { path = "../ojas-core" }
 ojas-cpu = { path = "../ojas-cpu" }
 ojas-infer = { path = "../ojas-infer" }
+ojas-wgpu = { path = "../ojas-wgpu" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ojas-metal = { path = "../ojas-metal" }

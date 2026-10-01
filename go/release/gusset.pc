@@ -1,9 +1,9 @@
-prefix=${pcfiledir}/..
-libdir=${prefix}/target/debug
-includedir=${pcfiledir}/../../../devtools/gusset/internal/ffi
+prefix=${pcfiledir}/../..
+libdir=${prefix}/target/release
+includedir=${pcfiledir}/../../../../devtools/gusset/internal/ffi
 
 Name: gusset
-Description: ojas umbrella staticlib (libgusset.a)
+Description: ojas umbrella staticlib (libgusset.a), release profile
 Version: 0.0.2
 Libs: -L${libdir} -lgusset -lpthread -lm -ldl -lobjc -framework Metal -framework Foundation -framework QuartzCore -framework CoreFoundation -framework CoreGraphics
 Cflags: -I${includedir}

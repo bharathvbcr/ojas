@@ -11,12 +11,12 @@ description = "Portable GPU path. One WGSL compute shader, launched through wgpu
 ojas-device = { path = "../ojas-device" }
 ojas-kernels = { path = "../ojas-kernels" }
 ojas-core = { path = "../ojas-core" }
-
-[dev-dependencies]
-ojas-cpu = { path = "../ojas-cpu" }
 # crates.io wgpu 30.0.1, published 2026-08-22. Default features include metal,
 # vulkan, dx12, gles, and wgsl. This crate selects the HAL at runtime.
 wgpu = "=30.0.1"
 # crates.io pollster 1.0.1, published 2026-07-10. wgpu::Instance::request_adapter
 # returns a Future. This blocks that future on a native thread.
 pollster = "=1.0.1"
+
+[dev-dependencies]
+ojas-cpu = { path = "../ojas-cpu" }

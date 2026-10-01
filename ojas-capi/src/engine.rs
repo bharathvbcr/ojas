@@ -45,7 +45,7 @@ pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|reason| format!("cancelled: {reason:?}"))?;
     match ctx.opcode() {
         OP_LOAD => op_load(input),
-        OP_STEP => op_step(input),
+        OP_STEP => op_step(ctx, input),
         OP_GENERATE => op_generate(input),
         OP_FREE => op_free(input),
         OP_PANIC => panic!("ojas: induced panic"),
@@ -54,8 +54,7 @@ pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn op_load(input: &[u8]) -> Result<Vec<u8>, String> {
-    let text = std::str::from_utf8(input).map_err(|_| "load: path is not utf-8".to_string())?;
-    let session = load::load_path(text)?;
+    let session = load::load_request(input)?;
     let mut out = Vec::with_capacity(12);
     out.extend_from_slice(&session.id.to_le_bytes());
     out.extend_from_slice(&session.tensors.to_le_bytes());
@@ -72,7 +71,7 @@ fn op_free(input: &[u8]) -> Result<Vec<u8>, String> {
     Ok(Vec::new())
 }
 
-fn op_step(input: &[u8]) -> Result<Vec<u8>, String> {
+fn op_step(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
     let mut cur = input;
     let id = take_u64(&mut cur)?;
     let _session = session::require(id)?;
@@ -102,18 +101,26 @@ fn op_step(input: &[u8]) -> Result<Vec<u8>, String> {
             if !cur.is_empty() {
                 return Err("shape: trailing bytes".to_string());
             }
-            step::step(StepInput {
-                mode,
-                batch,
-                seq,
-                n_classes,
-                step: step_index,
-                lr,
-                logits: &logits,
-                tokens: &[],
-                targets_u32: &targets,
-                targets_u16: &[],
-            })?
+            let threads = _session.threads;
+            step::step_checked(
+                StepInput {
+                    threads,
+                    mode,
+                    batch,
+                    seq,
+                    n_classes,
+                    step: step_index,
+                    lr,
+                    logits: &logits,
+                    tokens: &[],
+                    targets_u32: &targets,
+                    targets_u16: &[],
+                },
+                || {
+                    ctx.check()
+                        .map_err(|reason| format!("cancelled: {reason:?}"))
+                },
+            )?
         }
         MODE_TOKENS => {
             let rows = step::rows(batch, seq)?;
@@ -122,18 +129,26 @@ fn op_step(input: &[u8]) -> Result<Vec<u8>, String> {
             if !cur.is_empty() {
                 return Err("shape: trailing bytes".to_string());
             }
-            step::step(StepInput {
-                mode,
-                batch,
-                seq,
-                n_classes,
-                step: step_index,
-                lr,
-                logits: &[],
-                tokens: &tokens,
-                targets_u32: &[],
-                targets_u16: &targets,
-            })?
+            let threads = _session.threads;
+            step::step_checked(
+                StepInput {
+                    threads,
+                    mode,
+                    batch,
+                    seq,
+                    n_classes,
+                    step: step_index,
+                    lr,
+                    logits: &[],
+                    tokens: &tokens,
+                    targets_u32: &[],
+                    targets_u16: &targets,
+                },
+                || {
+                    ctx.check()
+                        .map_err(|reason| format!("cancelled: {reason:?}"))
+                },
+            )?
         }
         other => return Err(format!("step: shape: unknown mode {other}")),
     };

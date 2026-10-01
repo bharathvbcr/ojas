@@ -15,27 +15,27 @@ sequenceDiagram
     participant Gusset as libgusset.a
     participant Rust as ojas-capi Engine
 
-    App->>SDK: ojas.SetModelRoot("/models")
-    App->>SDK: id, err := ojas.Load("nanolab.safetensors")
-    SDK->>FFI: callLocked(opLoad, "nanolab.safetensors")
+    App->>SDK: ojas.SetModelRoot(ctx, "/models")
+    App->>SDK: id, err := ojas.Load(ctx, "nanolab.safetensors")
+    SDK->>FFI: callEngine(ctx, opLoad, "nanolab.safetensors")
     FFI->>Gusset: Worker Dispatch
     Gusset->>Rust: ojas_capi::dispatch(OP_LOAD)
     Rust-->>App: Session ID (uint64)
 
-    App->>SDK: stats, err := ojas.Step(id, req)
-    SDK->>FFI: callLocked(opStep, payload)
+    App->>SDK: stats, err := ojas.Step(ctx, id, req)
+    SDK->>FFI: callEngine(ctx, opStep, payload)
     FFI->>Gusset: Worker Dispatch
     Gusset->>Rust: ojas_capi::dispatch(OP_STEP)
     Rust-->>App: ojas.StepStats{Loss, GradNorm, Lr}
 
-    App->>SDK: token, err := ojas.GenerateGreedy(id, prompt)
-    SDK->>FFI: callLocked(opGenerate, prompt)
+    App->>SDK: token, err := ojas.GenerateGreedy(ctx, id, prompt)
+    SDK->>FFI: callEngine(ctx, opGenerate, prompt)
     FFI->>Gusset: Worker Dispatch
     Gusset->>Rust: ojas_capi::dispatch(OP_GENERATE)
     Rust-->>App: Next token ID (uint32)
 
-    App->>SDK: ojas.Free(id)
-    App->>SDK: ojas.Close()
+    App->>SDK: ojas.Free(ctx, id)
+    App->>SDK: ojas.Close(ctx)
 ```
 
 ---
@@ -54,16 +54,16 @@ import (
 
 func main() {
 	// Set model directory
-	if err := ojas.SetModelRoot("./models"); err != nil {
+	if err := ojas.SetModelRoot(ctx, "./models"); err != nil {
 		log.Fatalf("SetModelRoot failed: %v", err)
 	}
 
 	// Load model weights
-	sessionID, err := ojas.Load("gpt_weights.safetensors")
+	sessionID, err := ojas.Load(ctx, "gpt_weights.safetensors")
 	if err != nil {
 		log.Fatalf("Load failed: %v", err)
 	}
-	defer ojas.Free(sessionID)
+	defer ojas.Free(ctx, sessionID)
 
 	// Execute one training step
 	req := ojas.StepRequest{
@@ -75,7 +75,7 @@ func main() {
 		Targets: []uint32{1, 0},
 	}
 
-	stats, err := ojas.Step(sessionID, req)
+	stats, err := ojas.Step(ctx, sessionID, req)
 	if err != nil {
 		log.Fatalf("Step failed: %v", err)
 	}
@@ -83,14 +83,14 @@ func main() {
 
 	// Greedily decode next token
 	prompt := []uint32{12, 45, 89}
-	nextTok, err := ojas.GenerateGreedy(sessionID, prompt)
+	nextTok, err := ojas.GenerateGreedy(ctx, sessionID, prompt)
 	if err != nil {
 		log.Fatalf("GenerateGreedy failed: %v", err)
 	}
 	fmt.Printf("Generated Token: %d\n", nextTok)
 
 	// Close engine
-	_ = ojas.Close()
+	_ = ojas.Close(ctx)
 }
 ```
 

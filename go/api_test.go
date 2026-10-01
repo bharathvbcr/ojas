@@ -1,6 +1,7 @@
 package ojas
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -16,15 +17,15 @@ import (
 
 func harness(t *testing.T) string {
 	t.Helper()
-	if err := Close(); err != nil {
+	if err := Close(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	engineReset()
 	dir := t.TempDir()
-	if err := SetModelRoot(dir); err != nil {
+	if err := SetModelRoot(context.Background(), dir); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = Close() })
+	t.Cleanup(func() { _ = Close(context.Background()) })
 	return dir
 }
 
@@ -45,11 +46,11 @@ func TestPathEscapeAndMissingFile(t *testing.T) {
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
 	for _, path := range []string{"../secret.safetensors", "a/../../etc/passwd", "/etc/passwd"} {
-		if _, err := Load(path); err == nil || !(strings.Contains(err.Error(), "..") || strings.Contains(err.Error(), "relative") || strings.Contains(err.Error(), "escapes")) {
-			t.Fatalf("Load(%q) = %v", path, err)
+		if _, err := Load(context.Background(), path); err == nil || !(strings.Contains(err.Error(), "..") || strings.Contains(err.Error(), "relative") || strings.Contains(err.Error(), "escapes")) {
+			t.Fatalf("Load(context.Background(), %q) = %v", path, err)
 		}
 	}
-	if _, err := Load("missing.safetensors"); err == nil || !strings.Contains(err.Error(), "missing file") {
+	if _, err := Load(context.Background(), "missing.safetensors"); err == nil || !strings.Contains(err.Error(), "missing file") {
 		t.Fatalf("missing file: %v", err)
 	}
 }
@@ -57,17 +58,17 @@ func TestPathEscapeAndMissingFile(t *testing.T) {
 func TestDoubleFree(t *testing.T) {
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Free(id); err != nil {
+	if err := Free(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if err := Free(id); err == nil || !strings.Contains(err.Error(), "unknown model") {
+	if err := Free(context.Background(), id); err == nil || !strings.Contains(err.Error(), "unknown model") {
 		t.Fatalf("double free: %v", err)
 	}
-	if err := Free(0); err == nil || !strings.Contains(err.Error(), "unknown model") {
+	if err := Free(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "unknown model") {
 		t.Fatalf("unknown id: %v", err)
 	}
 }
@@ -77,36 +78,36 @@ func TestSessionCap(t *testing.T) {
 	writeTensor(t, dir, "model.safetensors")
 	ids := make([]uint64, 0, 64)
 	for i := 0; i < 64; i++ {
-		id, err := Load("model.safetensors")
+		id, err := Load(context.Background(), "model.safetensors")
 		if err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, id)
 	}
-	if _, err := Load("model.safetensors"); err == nil || !strings.Contains(err.Error(), "capacity exceeded") {
+	if _, err := Load(context.Background(), "model.safetensors"); err == nil || !strings.Contains(err.Error(), "capacity exceeded") {
 		t.Fatalf("cap: %v", err)
 	}
 	for _, id := range ids {
-		if err := Free(id); err != nil {
+		if err := Free(context.Background(), id); err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 
 func TestCloseEmpty(t *testing.T) {
-	if err := Close(); err != nil {
+	if err := Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Free(id); err != nil {
+	if err := Free(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if err := Close(); err != nil {
+	if err := Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -114,11 +115,11 @@ func TestCloseEmpty(t *testing.T) {
 func TestStepLossAndShape(t *testing.T) {
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := Step(id, StepRequest{
+	got, err := Step(context.Background(), id, StepRequest{
 		Batch: 1, Seq: 1, Step: 0, Lr: 1e-3,
 		Logits:  []float32{0, 0},
 		Targets: []uint32{0},
@@ -132,7 +133,7 @@ func TestStepLossAndShape(t *testing.T) {
 	if got.Lr != 1e-3 {
 		t.Fatalf("lr = %v", got.Lr)
 	}
-	other, err := Step(id, StepRequest{
+	other, err := Step(context.Background(), id, StepRequest{
 		Batch: 1, Seq: 1, Step: 0, Lr: 1e-3,
 		Logits:  []float32{4, -3},
 		Targets: []uint32{1},
@@ -143,10 +144,10 @@ func TestStepLossAndShape(t *testing.T) {
 	if got.Loss == other.Loss {
 		t.Fatalf("loss did not depend on the payload: %v", got.Loss)
 	}
-	if _, err := Step(id, StepRequest{Batch: 1, Seq: 1, Step: 0}); err == nil || !strings.Contains(err.Error(), "missing logits") {
+	if _, err := Step(context.Background(), id, StepRequest{Batch: 1, Seq: 1, Step: 0}); err == nil || !strings.Contains(err.Error(), "missing logits") {
 		t.Fatalf("header-only: %v", err)
 	}
-	tok, err := Step(id, StepRequest{
+	tok, err := Step(context.Background(), id, StepRequest{
 		Batch: 1, Seq: 1, Step: 1, Lr: 1e-3,
 		Tokens:       []uint16{3},
 		TokenTargets: []uint16{0},
@@ -157,7 +158,7 @@ func TestStepLossAndShape(t *testing.T) {
 	if tok.Loss == 0 || math.IsNaN(float64(tok.Loss)) {
 		t.Fatalf("token loss = %v", tok.Loss)
 	}
-	if err := Free(id); err != nil {
+	if err := Free(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -165,7 +166,7 @@ func TestStepLossAndShape(t *testing.T) {
 func TestStepRejectsMixedLogitAndTokenFields(t *testing.T) {
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +175,11 @@ func TestStepRejectsMixedLogitAndTokenFields(t *testing.T) {
 		"tokens+targets":       {Batch: 1, Seq: 1, Lr: 1e-3, Tokens: []uint16{3}, TokenTargets: []uint16{0}, Targets: []uint32{0}},
 		"targets+tokens only":  {Batch: 1, Seq: 1, Lr: 1e-3, Targets: []uint32{0}, Tokens: []uint16{3}},
 	} {
-		if _, err := Step(id, req); err == nil || !strings.Contains(err.Error(), "both logits and tokens") {
+		if _, err := Step(context.Background(), id, req); err == nil || !strings.Contains(err.Error(), "both logits and tokens") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if err := Free(id); err != nil {
+	if err := Free(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -193,12 +194,12 @@ func TestConcurrentLoadStepGenerateFreeOneHandle(t *testing.T) {
 	)
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	seed, err := Load("model.safetensors")
+	seed, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
 	stepStarted := time.Now()
-	if _, err := Step(seed, StepRequest{
+	if _, err := Step(context.Background(), seed, StepRequest{
 		Batch: 1, Seq: 1, Lr: 1e-3,
 		Logits: []float32{0, 1}, Targets: []uint32{1},
 	}); err != nil {
@@ -223,7 +224,7 @@ func TestConcurrentLoadStepGenerateFreeOneHandle(t *testing.T) {
 				return err != nil && (strings.Contains(err.Error(), "unknown model") || strings.Contains(err.Error(), "capacity exceeded"))
 			}
 			for r := 0; r < rounds; r++ {
-				id, err := Load("model.safetensors")
+				id, err := Load(context.Background(), "model.safetensors")
 				if err != nil {
 					if !tolerated(err) {
 						fail("load: %v", err)
@@ -234,35 +235,35 @@ func TestConcurrentLoadStepGenerateFreeOneHandle(t *testing.T) {
 						fail("id %d reused", id)
 						return
 					}
-					if _, err := Step(id, StepRequest{
+					if _, err := Step(context.Background(), id, StepRequest{
 						Batch: 1, Seq: 1, Lr: 1e-3,
 						Logits: []float32{0, 1}, Targets: []uint32{1},
 					}); err != nil {
 						fail("step: %v", err)
 						return
 					}
-					if tok, err := Generate(id, []float32{0, 2, 1}); err != nil || tok != 1 {
+					if tok, err := Generate(context.Background(), id, []float32{0, 2, 1}); err != nil || tok != 1 {
 						fail("generate: tok=%d err=%v", tok, err)
 						return
 					}
-					if err := Free(id); err != nil {
+					if err := Free(context.Background(), id); err != nil {
 						fail("free: %v", err)
 						return
 					}
 				}
-				if _, err := Step(seed, StepRequest{
+				if _, err := Step(context.Background(), seed, StepRequest{
 					Batch: 1, Seq: 1, Lr: 1e-3,
 					Logits: []float32{1, 0}, Targets: []uint32{0},
 				}); err != nil && !tolerated(err) {
 					fail("seed step: %v", err)
 					return
 				}
-				if _, err := Generate(seed, []float32{3, 1}); err != nil && !tolerated(err) {
+				if _, err := Generate(context.Background(), seed, []float32{3, 1}); err != nil && !tolerated(err) {
 					fail("seed generate: %v", err)
 					return
 				}
 				if g%4 == 0 {
-					if err := Free(seed); err != nil && !tolerated(err) {
+					if err := Free(context.Background(), seed); err != nil && !tolerated(err) {
 						fail("seed free: %v", err)
 						return
 					}
@@ -285,23 +286,23 @@ func TestConcurrentLoadStepGenerateFreeOneHandle(t *testing.T) {
 		t.Error(err)
 	}
 
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Step(id, StepRequest{
+	if _, err := Step(context.Background(), id, StepRequest{
 		Batch: 1, Seq: 1, Lr: 1e-3,
 		Logits: []float32{0, 1}, Targets: []uint32{1},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if tok, err := Generate(id, []float32{0, 2, 1}); err != nil || tok != 1 {
+	if tok, err := Generate(context.Background(), id, []float32{0, 2, 1}); err != nil || tok != 1 {
 		t.Fatalf("generate after hammer: tok=%d err=%v", tok, err)
 	}
-	if err := Free(id); err != nil {
+	if err := Free(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if err := Free(seed); err != nil && !strings.Contains(err.Error(), "unknown model") {
+	if err := Free(context.Background(), seed); err != nil && !strings.Contains(err.Error(), "unknown model") {
 		t.Fatal(err)
 	}
 }
@@ -330,7 +331,7 @@ func TestConcurrentSessionStress(t *testing.T) {
 				errs <- fmt.Errorf("goroutine %d: "+format, append([]any{g}, args...)...)
 			}
 			for r := 0; r < rounds; r++ {
-				id, err := Load("model.safetensors")
+				id, err := Load(context.Background(), "model.safetensors")
 				if err != nil {
 					if !strings.Contains(err.Error(), "capacity exceeded") {
 						fail("load: %v", err)
@@ -342,47 +343,47 @@ func TestConcurrentSessionStress(t *testing.T) {
 					fail("id %d reused", id)
 					return
 				}
-				if _, err := Step(id, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 1}, Targets: []uint32{1}}); err != nil {
+				if _, err := Step(context.Background(), id, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 1}, Targets: []uint32{1}}); err != nil {
 					fail("step: %v", err)
 					return
 				}
-				if _, err := Step(id, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Tokens: []uint16{3}, TokenTargets: []uint16{0}}); err != nil {
+				if _, err := Step(context.Background(), id, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Tokens: []uint16{3}, TokenTargets: []uint16{0}}); err != nil {
 					fail("token step: %v", err)
 					return
 				}
 				if r%5 == 0 {
-					if _, err := Step(id, big); err != nil {
+					if _, err := Step(context.Background(), id, big); err != nil {
 						fail("buffer step: %v", err)
 						return
 					}
 				}
-				if tok, err := Generate(id, []float32{0, 2, 1}); err != nil || tok != 1 {
+				if tok, err := Generate(context.Background(), id, []float32{0, 2, 1}); err != nil || tok != 1 {
 					fail("generate: %d %v", tok, err)
 					return
 				}
-				if _, err := GenerateGreedy(id, []uint32{0, 1}); err != nil {
+				if _, err := GenerateGreedy(context.Background(), id, []uint32{0, 1}); err != nil {
 					fail("greedy: %v", err)
 					return
 				}
 				if (g+r)%7 == 0 {
-					if err := Close(); err != nil {
+					if err := Close(context.Background()); err != nil {
 						fail("close: %v", err)
 						return
 					}
-					if err := Close(); err != nil {
+					if err := Close(context.Background()); err != nil {
 						fail("double close: %v", err)
 						return
 					}
 				}
-				if err := Free(id); err != nil {
+				if err := Free(context.Background(), id); err != nil {
 					fail("free: %v", err)
 					return
 				}
-				if err := Free(id); err == nil || !strings.Contains(err.Error(), "unknown model") {
+				if err := Free(context.Background(), id); err == nil || !strings.Contains(err.Error(), "unknown model") {
 					fail("double free: %v", err)
 					return
 				}
-				if _, err := Generate(id, []float32{1}); err == nil || !strings.Contains(err.Error(), "unknown model") {
+				if _, err := Generate(context.Background(), id, []float32{1}); err == nil || !strings.Contains(err.Error(), "unknown model") {
 					fail("generate after free: %v", err)
 					return
 				}
@@ -397,17 +398,17 @@ func TestConcurrentSessionStress(t *testing.T) {
 	// Every session was freed, so the whole cap is available again.
 	ids := make([]uint64, 0, 64)
 	for i := 0; i < 64; i++ {
-		id, err := Load("model.safetensors")
+		id, err := Load(context.Background(), "model.safetensors")
 		if err != nil {
 			t.Fatalf("load %d after stress: %v", i, err)
 		}
 		ids = append(ids, id)
 	}
-	if _, err := Load("model.safetensors"); err == nil || !strings.Contains(err.Error(), "capacity exceeded") {
+	if _, err := Load(context.Background(), "model.safetensors"); err == nil || !strings.Contains(err.Error(), "capacity exceeded") {
 		t.Fatalf("cap after stress: %v", err)
 	}
 	for _, id := range ids {
-		if err := Free(id); err != nil {
+		if err := Free(context.Background(), id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -416,13 +417,13 @@ func TestConcurrentSessionStress(t *testing.T) {
 func TestMalformedInputsAreErrors(t *testing.T) {
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"", "a\x00b", "\xff\xfe", "model.safetensors/", strings.Repeat("a", 4096), strings.Repeat("a", 4097)} {
-		if _, err := Load(path); err == nil {
-			t.Errorf("Load(%q) succeeded", path)
+		if _, err := Load(context.Background(), path); err == nil {
+			t.Errorf("Load(context.Background(), %q) succeeded", path)
 		}
 	}
 	steps := map[string]StepRequest{
@@ -437,35 +438,35 @@ func TestMalformedInputsAreErrors(t *testing.T) {
 		"short tokens":       {Batch: 2, Seq: 1, Lr: 1e-3, Tokens: []uint16{3}, TokenTargets: []uint16{0}},
 	}
 	for name, req := range steps {
-		if _, err := Step(id, req); err == nil {
+		if _, err := Step(context.Background(), id, req); err == nil {
 			t.Errorf("%s: step succeeded", name)
 		}
 	}
-	if _, err := Generate(id, nil); err == nil {
+	if _, err := Generate(context.Background(), id, nil); err == nil {
 		t.Error("empty logits returned a token")
 	}
-	if _, err := Generate(id, []float32{float32(math.Inf(-1)), 0}); err == nil || !strings.Contains(err.Error(), "non-finite") {
+	if _, err := Generate(context.Background(), id, []float32{float32(math.Inf(-1)), 0}); err == nil || !strings.Contains(err.Error(), "non-finite") {
 		t.Errorf("inf logit: %v", err)
 	}
-	if _, err := GenerateGreedy(id, nil); err == nil {
+	if _, err := GenerateGreedy(context.Background(), id, nil); err == nil {
 		t.Error("empty prompt returned a token")
 	}
-	if _, err := Step(math.MaxUint64, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 0}, Targets: []uint32{0}}); err == nil || !strings.Contains(err.Error(), "unknown model") {
+	if _, err := Step(context.Background(), math.MaxUint64, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 0}, Targets: []uint32{0}}); err == nil || !strings.Contains(err.Error(), "unknown model") {
 		t.Errorf("unknown id step: %v", err)
 	}
-	if err := Free(math.MaxUint64); err == nil || !strings.Contains(err.Error(), "unknown model") {
+	if err := Free(context.Background(), math.MaxUint64); err == nil || !strings.Contains(err.Error(), "unknown model") {
 		t.Errorf("unknown id free: %v", err)
 	}
-	if err := SetModelRoot(""); err == nil {
+	if err := SetModelRoot(context.Background(), ""); err == nil {
 		t.Error("empty model root accepted")
 	}
-	if err := SetModelRoot(dir + "\x00x"); err == nil {
+	if err := SetModelRoot(context.Background(), dir+"\x00x"); err == nil {
 		t.Error("NUL model root accepted")
 	}
-	if err := SetModelRoot(dir); err != nil {
+	if err := SetModelRoot(context.Background(), dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := Free(id); err != nil {
+	if err := Free(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -473,28 +474,28 @@ func TestMalformedInputsAreErrors(t *testing.T) {
 func TestGenerateNaN(t *testing.T) {
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := Generate(id, []float32{0.1, 2.5, 0.2})
+	token, err := Generate(context.Background(), id, []float32{0.1, 2.5, 0.2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if token != 1 {
 		t.Fatalf("argmax = %d", token)
 	}
-	if _, err := Generate(id, []float32{float32(math.NaN()), float32(math.NaN())}); err == nil || !strings.Contains(err.Error(), "non-finite") {
+	if _, err := Generate(context.Background(), id, []float32{float32(math.NaN()), float32(math.NaN())}); err == nil || !strings.Contains(err.Error(), "non-finite") {
 		t.Fatalf("nan logits: %v", err)
 	}
-	next, err := GenerateGreedy(id, []uint32{0})
+	next, err := GenerateGreedy(context.Background(), id, []uint32{0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if next > 1 {
 		t.Fatalf("greedy token %d", next)
 	}
-	if _, err := GenerateGreedy(id, []uint32{7}); err == nil {
+	if _, err := GenerateGreedy(context.Background(), id, []uint32{7}); err == nil {
 		t.Fatal("out of range prompt returned a token")
 	}
 }
@@ -502,27 +503,74 @@ func TestGenerateNaN(t *testing.T) {
 func TestPoisonDropsSession(t *testing.T) {
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
-	id, err := Load("model.safetensors")
+	id, err := Load(context.Background(), "model.safetensors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = poisonHandle()
+	err = poisonHandle(context.Background())
 	if !errors.Is(err, gusset.ErrPanic) {
 		t.Fatalf("panic: %v", err)
 	}
-	if _, err := Step(id, StepRequest{
+	if _, err := Step(context.Background(), id, StepRequest{
 		Batch: 1, Seq: 1, Step: 0, Lr: 1e-3,
 		Logits: []float32{0, 0}, Targets: []uint32{0},
 	}); !errors.Is(err, gusset.ErrPoisoned) {
 		t.Fatalf("after panic: %v", err)
 	}
-	if err := Close(); err != nil {
+	if err := Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetModelRoot(dir); err != nil {
+	if err := SetModelRoot(context.Background(), dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := Free(id); err == nil || !strings.Contains(err.Error(), "unknown model") {
+	if err := Free(context.Background(), id); err == nil || !strings.Contains(err.Error(), "unknown model") {
 		t.Fatalf("freed session survived poison: %v", err)
+	}
+}
+
+func TestOverflowAndPoolSizeAreRefused(t *testing.T) {
+	if _, err := mulRows(math.MaxUint32, math.MaxUint32); err == nil || !strings.Contains(err.Error(), "overflows") {
+		t.Fatalf("rows: %v", err)
+	}
+	if err := fitUint32(int(math.MaxUint32) + 1); err == nil || !strings.Contains(err.Error(), "uint32") {
+		t.Fatalf("len: %v", err)
+	}
+	if _, err := encodeStep(0, StepRequest{Batch: math.MaxUint32, Seq: math.MaxUint32}); err == nil {
+		t.Fatal("encode accepted an overflowing batch*seq")
+	}
+	if err := SetPoolSize(0); err == nil {
+		t.Fatal("zero pool size")
+	}
+	if err := SetPoolSize(1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(nil, "model.safetensors"); err == nil || !strings.Contains(err.Error(), "nil context") {
+		t.Fatalf("nil context: %v", err)
+	}
+}
+
+func TestPkgconfigNamesAppleFrameworks(t *testing.T) {
+	for _, path := range []string{"gusset.pc", "release/gusset.pc"} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		for _, fragment := range []string{"-framework Metal", "-framework Foundation", "-framework QuartzCore", "-framework CoreFoundation", "-framework CoreGraphics", "-lobjc"} {
+			if !strings.Contains(text, fragment) {
+				t.Fatalf("%s missing %s", path, fragment)
+			}
+		}
+	}
+	debug, err := os.ReadFile("gusset.pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := os.ReadFile("release/gusset.pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(debug), "target/debug") || !strings.Contains(string(release), "target/release") {
+		t.Fatal("pc files do not name distinct profiles")
 	}
 }
