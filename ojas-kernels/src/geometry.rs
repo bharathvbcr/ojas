@@ -42,10 +42,12 @@ pub fn grid_1d(n: u64, threads: u32, limits: Limits) -> Result<Grid, OjasError> 
         op: "grid_1d",
         detail: "block count does not fit in u32".to_string(),
     })?;
-    let stride = blocks.checked_mul(threads).ok_or_else(|| OjasError::OutOfRange {
-        op: "grid_1d",
-        detail: "grid stride overflows u32".to_string(),
-    })?;
+    let stride = blocks
+        .checked_mul(threads)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op: "grid_1d",
+            detail: "grid stride overflows u32".to_string(),
+        })?;
     if u64::from(stride) == 0 {
         return Err(OjasError::OutOfRange {
             op: "grid_1d",
@@ -71,10 +73,12 @@ pub fn cover_1d(n: u64, grid: Grid) -> Result<Vec<u64>, OjasError> {
         let mut index = start;
         while index < n {
             seen.push(index);
-            index = index.checked_add(stride).ok_or_else(|| OjasError::OutOfRange {
-                op: "cover_1d",
-                detail: "index overflows u64".to_string(),
-            })?;
+            index = index
+                .checked_add(stride)
+                .ok_or_else(|| OjasError::OutOfRange {
+                    op: "cover_1d",
+                    detail: "index overflows u64".to_string(),
+                })?;
         }
         start += 1;
     }
