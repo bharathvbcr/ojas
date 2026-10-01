@@ -10,10 +10,12 @@
 
 use ojas_device::{require_kind, Device, DeviceError};
 
-/// An open CUDA context. Constructed only by [`CudaDevice::open`].
+/// An open CUDA context. The affine module is compiled once, with `fmad` off.
 pub struct CudaDevice {
     #[cfg(feature = "cuda")]
     ctx: std::sync::Arc<cudarc::driver::CudaContext>,
+    #[cfg(feature = "cuda")]
+    affine: std::sync::Mutex<Option<AffineGpu>>,
 }
 
 impl std::fmt::Debug for CudaDevice {
@@ -40,7 +42,10 @@ impl CudaDevice {
                 kind: Device::Cuda,
                 detail: format!("CudaContext::new(0): {err}"),
             })?;
-            let device = CudaDevice { ctx };
+            let device = CudaDevice {
+                ctx,
+                affine: std::sync::Mutex::new(None),
+            };
             let sample = [1.0f32, -2.0, 0.5, 4.0];
             let back = device.affine_f32(Device::Cuda, &sample, 2.0, 0.5)?;
             let expect = [2.5f32, -3.5, 1.5, 8.5];
@@ -70,7 +75,7 @@ impl CudaDevice {
         }
         #[cfg(feature = "cuda")]
         {
-            launch_affine(&self.ctx, input, scale, bias)
+            self.launch_affine(input, scale, bias)
         }
     }
 }
@@ -96,73 +101,134 @@ fn require_libraries() -> Result<(), DeviceError> {
 }
 
 #[cfg(feature = "cuda")]
-fn launch_affine(
-    ctx: &std::sync::Arc<cudarc::driver::CudaContext>,
-    input: &[f32],
-    scale: f32,
-    bias: f32,
-) -> Result<Vec<f32>, DeviceError> {
-    use cudarc::driver::PushKernelArg;
-    let n = u32::try_from(input.len()).map_err(|_| DeviceError::NoDevice {
+struct AffineGpu {
+    func: cudarc::driver::CudaFunction,
+    max_grid_x: u32,
+    len: usize,
+    inp: cudarc::driver::CudaSlice<f32>,
+    out: cudarc::driver::CudaSlice<f32>,
+}
+
+#[cfg(feature = "cuda")]
+fn compile_err(detail: impl std::fmt::Display) -> DeviceError {
+    DeviceError::Compile {
         kind: Device::Cuda,
-        detail: format!("input length {} does not fit in u32", input.len()),
-    })?;
-    if n == 0 {
-        return Ok(Vec::new());
+        detail: detail.to_string(),
     }
-    let ptx = cudarc::nvrtc::compile_ptx(AFFINE_CUDA).map_err(|err| DeviceError::NoDevice {
+}
+
+#[cfg(feature = "cuda")]
+fn launch_err(detail: impl std::fmt::Display) -> DeviceError {
+    DeviceError::Launch {
         kind: Device::Cuda,
-        detail: format!("compile_ptx: {err}"),
-    })?;
-    let module = ctx.load_module(ptx).map_err(|err| DeviceError::NoDevice {
-        kind: Device::Cuda,
-        detail: format!("load_module: {err}"),
-    })?;
-    let func = module
-        .load_function("affine_f32")
-        .map_err(|err| DeviceError::NoDevice {
+        detail: detail.to_string(),
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl CudaDevice {
+    fn launch_affine(&self, input: &[f32], scale: f32, bias: f32) -> Result<Vec<f32>, DeviceError> {
+        use cudarc::driver::PushKernelArg;
+        let n = u32::try_from(input.len()).map_err(|_| DeviceError::Capacity {
             kind: Device::Cuda,
-            detail: format!("load_function: {err}"),
+            detail: format!("input length {} does not fit in u32", input.len()),
         })?;
-    let stream = ctx.default_stream();
-    let inp = stream
-        .clone_htod(input)
-        .map_err(|err| DeviceError::NoDevice {
-            kind: Device::Cuda,
-            detail: format!("clone_htod: {err}"),
-        })?;
-    let mut out = stream
-        .alloc_zeros::<f32>(input.len())
-        .map_err(|err| DeviceError::NoDevice {
-            kind: Device::Cuda,
-            detail: format!("alloc_zeros: {err}"),
-        })?;
-    let cfg = cudarc::driver::LaunchConfig::for_num_elems(n);
-    unsafe {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let mut slot = self.affine.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            let opts = cudarc::nvrtc::CompileOptions {
+                fmad: Some(false),
+                ..cudarc::nvrtc::CompileOptions::default()
+            };
+            let ptx = cudarc::nvrtc::compile_ptx_with_opts(AFFINE_CUDA, opts)
+                .map_err(|err| compile_err(format!("compile_ptx_with_opts: {err}")))?;
+            let module = self
+                .ctx
+                .load_module(ptx)
+                .map_err(|err| compile_err(format!("load_module: {err}")))?;
+            let func = module
+                .load_function("affine_f32")
+                .map_err(|err| compile_err(format!("load_function: {err}")))?;
+            let max_grid = self
+                .ctx
+                .attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X)
+                .map_err(|err| launch_err(format!("attribute MAX_GRID_DIM_X: {err}")))?;
+            if max_grid <= 0 {
+                return Err(DeviceError::Capacity {
+                    kind: Device::Cuda,
+                    detail: format!("MAX_GRID_DIM_X is {max_grid}"),
+                });
+            }
+            let stream = self.ctx.default_stream();
+            let inp = stream
+                .clone_htod(input)
+                .map_err(|err| launch_err(format!("clone_htod: {err}")))?;
+            let out = stream
+                .alloc_zeros::<f32>(input.len())
+                .map_err(|err| launch_err(format!("alloc_zeros: {err}")))?;
+            *slot = Some(AffineGpu {
+                func,
+                max_grid_x: max_grid as u32,
+                len: input.len(),
+                inp,
+                out,
+            });
+        }
+        let gpu = slot.as_mut().unwrap();
+        let cfg = cudarc::driver::LaunchConfig::for_num_elems(n);
+        if cfg.grid_dim.0 > gpu.max_grid_x {
+            return Err(DeviceError::Capacity {
+                kind: Device::Cuda,
+                detail: format!(
+                    "grid {} exceeds CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X {}",
+                    cfg.grid_dim.0, gpu.max_grid_x
+                ),
+            });
+        }
+        let stream = self.ctx.default_stream();
+        if gpu.len != input.len() {
+            gpu.inp = stream
+                .clone_htod(input)
+                .map_err(|err| launch_err(format!("clone_htod: {err}")))?;
+            gpu.out = stream
+                .alloc_zeros::<f32>(input.len())
+                .map_err(|err| launch_err(format!("alloc_zeros: {err}")))?;
+            gpu.len = input.len();
+        } else {
+            stream
+                .memcpy_htod(input, &mut gpu.inp)
+                .map_err(|err| launch_err(format!("memcpy_htod: {err}")))?;
+            stream
+                .memset_zeros(&mut gpu.out)
+                .map_err(|err| launch_err(format!("memset: {err}")))?;
+        }
+        unsafe {
+            stream
+                .launch_builder(&gpu.func)
+                .arg(&mut gpu.out)
+                .arg(&gpu.inp)
+                .arg(&scale)
+                .arg(&bias)
+                .arg(&n)
+                .launch(cfg)
+        }
+        .map_err(|err| launch_err(format!("launch: {err}")))?;
+        // SAFETY: flags 0 is the portable pinned allocation, not write-combined.
+        let mut pinned = unsafe { self.ctx.alloc_pinned_with_flags::<f32>(input.len(), 0) }
+            .map_err(|err| launch_err(format!("alloc_pinned_with_flags: {err}")))?;
         stream
-            .launch_builder(&func)
-            .arg(&mut out)
-            .arg(&inp)
-            .arg(&scale)
-            .arg(&bias)
-            .arg(&n)
-            .launch(cfg)
+            .memcpy_dtoh(&gpu.out, &mut pinned)
+            .map_err(|err| launch_err(format!("memcpy_dtoh: {err}")))?;
+        stream
+            .synchronize()
+            .map_err(|err| launch_err(format!("synchronize: {err}")))?;
+        Ok(pinned
+            .as_slice()
+            .map_err(|err| launch_err(format!("pinned read: {err}")))?
+            .to_vec())
     }
-    .map_err(|err| DeviceError::NoDevice {
-        kind: Device::Cuda,
-        detail: format!("launch: {err}"),
-    })?;
-    let back = stream
-        .clone_dtoh(&out)
-        .map_err(|err| DeviceError::NoDevice {
-            kind: Device::Cuda,
-            detail: format!("clone_dtoh: {err}"),
-        })?;
-    stream.synchronize().map_err(|err| DeviceError::NoDevice {
-        kind: Device::Cuda,
-        detail: format!("synchronize: {err}"),
-    })?;
-    Ok(back)
 }
 
 #[cfg(test)]
