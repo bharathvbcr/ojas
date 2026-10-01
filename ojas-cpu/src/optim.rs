@@ -12,8 +12,8 @@
 //! 3. `denom = sqrt(v) / sqrt(1 - beta2^step) + eps`, with `eps` outside the square root.
 //! 4. `p += -lr / (1 - beta1^step) * m / denom`.
 //!
-//! `beta^step` is computed in f64 by binary exponentiation, not `f32` pow.
-//! The stored step is incremented with [`ojas_core::next_step`].
+//! `beta^step` is computed in f64 by [`ojas_core::pow_u64`] (binary exponentiation),
+//! not `f32` pow, inside [`ojas_core::check_adamw`], which also advances the step.
 //!
 //! Newton-Schulz on CPU stores the iterate in f32. Coefficients are the f64
 //! literals 3.4445, -4.7750, 2.0315. Frobenius epsilon is 1e-7, added to the
@@ -25,32 +25,16 @@
 //! Muon `momentum`) are [`OjasError::OutOfRange`], matching the Metal path.
 
 use ojas_core::{
-    next_step, require_ns5, AdamWConfig, MuonNs5Config, OjasError, CLIP_GRAD_NORM_EPS, MUON_NS5_A,
-    MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    check_adamw, require_ns5, AdamWConfig, MuonNs5Config, OjasError, MUON_NS5_A, MUON_NS5_B,
+    MUON_NS5_C, MUON_NS_EPS,
 };
 
-use crate::linalg::{matmul, transpose};
-use crate::validate::{get, nonfinite, shape};
+use std::sync::Arc;
 
-pub(crate) fn clip_scale(max_norm: f32, total_norm: f32) -> Result<f32, OjasError> {
-    if !max_norm.is_finite() {
-        return Err(nonfinite("clip_grad_norm"));
-    }
-    if max_norm < 0.0 {
-        return Err(OjasError::OutOfRange {
-            op: "clip_grad_norm",
-            detail: format!("max_norm {max_norm} is negative"),
-        });
-    }
-    if !total_norm.is_finite() {
-        return Err(nonfinite("clip_grad_norm"));
-    }
-    let coef = max_norm / (total_norm + CLIP_GRAD_NORM_EPS);
-    if !coef.is_finite() {
-        return Err(nonfinite("clip_grad_norm"));
-    }
-    Ok(coef.min(1.0))
-}
+use crate::gemm::{gemm, Mat};
+use crate::linalg::transpose;
+use crate::pool::Exec;
+use crate::validate::{all_finite, nonfinite, shape};
 
 /// Sum of squares in f64: an f32 sum overflows near 1.8e19 per element while
 /// the norm itself is still a finite f32.
@@ -71,108 +55,139 @@ pub(crate) fn total_norm(op: &'static str, parts: &[Vec<f32>]) -> Result<f32, Oj
 /// `(param, moment1, moment2)` after one step.
 type AdamState = (Vec<f32>, Vec<f32>, Vec<f32>);
 
+/// Elements are independent, so they run in chunks on the pool; each
+/// element's arithmetic is unchanged.
 pub(crate) fn adamw(
-    param: &[f32],
-    grad: &[f32],
-    moment1: &[f32],
-    moment2: &[f32],
+    exec: Exec<'_>,
+    param: Vec<f32>,
+    grad: Vec<f32>,
+    moment1: Vec<f32>,
+    moment2: Vec<f32>,
     step_before: u64,
     config: AdamWConfig,
 ) -> Result<AdamState, OjasError> {
     const OP: &str = "adamw_step";
-    let step = next_step(step_before)?;
-    check_adam(config)?;
+    // Config, step counter and both bias corrections, checked by the one
+    // owner every backend shares, so the f64 bits of `1 - beta^step` match.
+    let (_, bc1, bc2) = check_adamw(config, step_before)?;
     if param.len() != grad.len() || param.len() != moment1.len() || param.len() != moment2.len() {
         return Err(shape(OP, "adamw tensors differ in length"));
-    }
-    let bc1 = 1.0 - pow_u64(config.beta1, step);
-    let bc2 = 1.0 - pow_u64(config.beta2, step);
-    if !(bc1.is_finite() && bc2.is_finite() && bc1 > 0.0 && bc2 >= 0.0) {
-        return Err(OjasError::OutOfRange {
-            op: OP,
-            detail: "adamw bias correction is not a positive finite value".to_string(),
-        });
     }
     let step_size = config.lr / bc1;
     let one_minus_b1 = 1.0 - config.beta1;
     let one_minus_b2 = 1.0 - config.beta2;
     let decay = 1.0 - config.lr * config.weight_decay;
-    let mut new_p = Vec::with_capacity(param.len());
-    let mut new_m = Vec::with_capacity(param.len());
-    let mut new_v = Vec::with_capacity(param.len());
-    for i in 0..param.len() {
-        let g = f64::from(get(OP, grad, i)?);
-        let mut p = f64::from(get(OP, param, i)?);
-        let mut m = f64::from(get(OP, moment1, i)?);
-        let mut v = f64::from(get(OP, moment2, i)?);
-        if config.weight_decay != 0.0 {
-            p *= decay;
-        }
-        // Torch lerp(self, other, weight) switches formula at weight 0.5.
-        // Here weight is (1 - beta1) and other is the gradient.
-        if one_minus_b1 < 0.5 {
-            m += one_minus_b1 * (g - m);
-        } else {
-            m = g - (g - m) * config.beta1;
-        }
-        v = config.beta2 * v + one_minus_b2 * g * g;
-        let denom = v.sqrt() / bc2.sqrt() + config.eps;
-        let delta = (-step_size) * m / denom;
-        if !(m.is_finite() && v.is_finite() && denom.is_finite() && delta.is_finite()) {
-            return Err(nonfinite(OP));
-        }
-        if config.weight_decay == 0.0 && delta == 0.0 {
-            new_p.push(param[i]);
-        } else {
-            p += delta;
-            if !p.is_finite() {
+    let len = param.len();
+    let inputs = Arc::new((param, grad, moment1, moment2));
+    let parts = exec.chunks(len, ADAM_MIN_CHUNK, move |range| {
+        let (param, grad, moment1, moment2) = &*inputs;
+        let mut new_p = Vec::with_capacity(range.len());
+        let mut new_m = Vec::with_capacity(range.len());
+        let mut new_v = Vec::with_capacity(range.len());
+        for i in range {
+            let g = f64::from(grad[i]);
+            let mut p = f64::from(param[i]);
+            let mut m = f64::from(moment1[i]);
+            let mut v = f64::from(moment2[i]);
+            if config.weight_decay != 0.0 {
+                p *= decay;
+            }
+            // Torch lerp(self, other, weight) switches formula at weight 0.5.
+            // Here weight is (1 - beta1) and other is the gradient.
+            if one_minus_b1 < 0.5 {
+                m += one_minus_b1 * (g - m);
+            } else {
+                m = g - (g - m) * config.beta1;
+            }
+            v = config.beta2 * v + one_minus_b2 * g * g;
+            let denom = v.sqrt() / bc2.sqrt() + config.eps;
+            let delta = (-step_size) * m / denom;
+            if !(m.is_finite() && v.is_finite() && denom.is_finite() && delta.is_finite()) {
                 return Err(nonfinite(OP));
             }
-            let stored = p as f32;
-            if !stored.is_finite() {
+            if config.weight_decay == 0.0 && delta == 0.0 {
+                new_p.push(param[i]);
+            } else {
+                p += delta;
+                if !p.is_finite() {
+                    return Err(nonfinite(OP));
+                }
+                let stored = p as f32;
+                if !stored.is_finite() {
+                    return Err(nonfinite(OP));
+                }
+                new_p.push(stored);
+            }
+            let stored_m = m as f32;
+            let stored_v = v as f32;
+            if !(stored_m.is_finite() && stored_v.is_finite()) {
                 return Err(nonfinite(OP));
             }
-            new_p.push(stored);
+            new_m.push(stored_m);
+            new_v.push(stored_v);
         }
-        let stored_m = m as f32;
-        let stored_v = v as f32;
-        if !(stored_m.is_finite() && stored_v.is_finite()) {
-            return Err(nonfinite(OP));
-        }
-        new_m.push(stored_m);
-        new_v.push(stored_v);
+        Ok((new_p, new_m, new_v))
+    })?;
+    let mut chunks = Vec::with_capacity(parts.len());
+    for part in parts {
+        chunks.push(part?);
     }
-    Ok((new_p, new_m, new_v))
+    if chunks.len() == 1 {
+        if let Some(only) = chunks.pop() {
+            return Ok(only);
+        }
+    }
+    let (mut ps, mut ms, mut vs) = (
+        Vec::with_capacity(chunks.len()),
+        Vec::with_capacity(chunks.len()),
+        Vec::with_capacity(chunks.len()),
+    );
+    for (p, m, v) in chunks {
+        ps.push(p);
+        ms.push(m);
+        vs.push(v);
+    }
+    Ok((join(ps, len), join(ms, len), join(vs, len)))
 }
 
-fn check_adam(config: AdamWConfig) -> Result<(), OjasError> {
-    const OP: &str = "adamw_step";
-    let scalars = [
-        config.lr,
-        config.beta1,
-        config.beta2,
-        config.eps,
-        config.weight_decay,
-    ];
-    if scalars.iter().any(|value| !value.is_finite()) {
-        return Err(nonfinite(OP));
+/// `chunks` in order as one vector of `len` values, each chunk freed as soon
+/// as it is copied.
+fn join(chunks: Vec<Vec<f32>>, len: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(len);
+    for chunk in chunks {
+        out.extend_from_slice(&chunk);
     }
-    if !(config.beta1 >= 0.0 && config.beta1 < 1.0 && config.beta2 >= 0.0 && config.beta2 < 1.0) {
-        return Err(OjasError::OutOfRange {
-            op: OP,
-            detail: "adamw beta must be in [0, 1)".to_string(),
-        });
-    }
-    if config.eps <= 0.0 {
-        return Err(OjasError::OutOfRange {
-            op: OP,
-            detail: "adamw eps must be > 0".to_string(),
-        });
-    }
-    non_negative(
-        OP,
-        &[("lr", config.lr), ("weight_decay", config.weight_decay)],
-    )
+    out
+}
+
+/// AdamW elements per pool task; each costs a few f64 divides and a sqrt.
+const ADAM_MIN_CHUNK: usize = 1 << 14;
+
+/// Most f32 values [`adamw`] holds at once besides its four inputs.
+///
+/// The tasks' results are three vectors of `len` values in all. One chunk
+/// comes back as they are. Several are joined one result at a time
+/// ([`join`]): the first joined vector is allocated while every chunk is
+/// still live, `3 len + len`; each later one replaces the chunks it
+/// consumed. So `4 len`.
+pub(crate) fn adamw_scratch(op: &'static str, len: usize) -> Result<usize, OjasError> {
+    len.checked_mul(4).ok_or_else(|| scratch_overflow(op))
+}
+
+/// `f(a[i], b[i])` for every `i`, in element chunks on the pool.
+fn zip_map<F>(
+    exec: Exec<'_>,
+    a: Arc<Vec<f32>>,
+    b: Arc<Vec<f32>>,
+    f: F,
+) -> Result<Vec<f32>, OjasError>
+where
+    F: Fn(f32, f32) -> f32 + Send + Sync + 'static,
+{
+    let len = a.len().min(b.len());
+    exec.rows(len, 1, move |range| {
+        Ok(range.map(|i| f(a[i], b[i])).collect())
+    })
 }
 
 fn non_negative(op: &'static str, scalars: &[(&str, f64)]) -> Result<(), OjasError> {
@@ -185,26 +200,11 @@ fn non_negative(op: &'static str, scalars: &[(&str, f64)]) -> Result<(), OjasErr
     }
 }
 
-/// f64 binary exponentiation. A huge step underflows to 0 instead of overflowing an f32 pow.
-pub(crate) fn pow_u64(base: f64, mut exp: u64) -> f64 {
-    let mut result = 1.0f64;
-    let mut b = base;
-    while exp > 0 {
-        if exp & 1 == 1 {
-            result *= b;
-        }
-        exp >>= 1;
-        if exp > 0 {
-            b *= b;
-        }
-    }
-    result
-}
-
 pub(crate) fn muon_ns5(
-    param: &[f32],
-    grad: &[f32],
-    momentum: &[f32],
+    exec: Exec<'_>,
+    param: Vec<f32>,
+    grad: Vec<f32>,
+    momentum: Vec<f32>,
     rows: usize,
     cols: usize,
     config: MuonNs5Config,
@@ -232,52 +232,62 @@ pub(crate) fn muon_ns5(
         return Err(shape(OP, "muon tensors differ in length"));
     }
     let mom = config.momentum as f32;
-    let buf: Vec<f32> = momentum
-        .iter()
-        .zip(grad)
-        .map(|(m, g)| mom * m + g)
-        .collect();
-    if buf.iter().any(|v| !v.is_finite()) {
+    let grad = Arc::new(grad);
+    let buf = Arc::new(zip_map(
+        exec,
+        Arc::new(momentum),
+        Arc::clone(&grad),
+        move |m, g| mom * m + g,
+    )?);
+    if !all_finite(&buf) {
         return Err(nonfinite(OP));
     }
     let update: Vec<f32> = if config.nesterov {
-        grad.iter().zip(&buf).map(|(g, b)| g + mom * b).collect()
+        zip_map(exec, grad, Arc::clone(&buf), move |g, b| g + mom * b)?
     } else {
-        buf.clone()
+        buf.to_vec()
     };
-    let ortho = newton_schulz(&update, rows, cols)?;
+    let ortho = newton_schulz(exec, update, rows, cols)?;
     if cols == 0 {
         return Err(shape(OP, "empty tensor"));
     }
     let scale = (rows as f64 / cols as f64).max(1.0).sqrt();
     let alpha = (-config.lr * scale) as f32;
     let all_zero = ortho.iter().all(|v| *v == 0.0);
-    let mut new_p = param.to_vec();
-    if !(config.weight_decay == 0.0 && all_zero) {
-        if config.weight_decay != 0.0 {
-            let decay = (1.0 - config.lr * config.weight_decay) as f32;
-            for p in &mut new_p {
-                *p *= decay;
-            }
-        }
-        for (p, o) in new_p.iter_mut().zip(&ortho) {
-            *p += alpha * o;
-        }
-    }
-    if new_p.iter().any(|v| !v.is_finite()) {
+    let new_p = if config.weight_decay == 0.0 && all_zero {
+        param
+    } else if config.weight_decay != 0.0 {
+        let decay = (1.0 - config.lr * config.weight_decay) as f32;
+        zip_map(exec, Arc::new(param), Arc::new(ortho), move |p, o| {
+            p * decay + alpha * o
+        })?
+    } else {
+        zip_map(exec, Arc::new(param), Arc::new(ortho), move |p, o| {
+            p + alpha * o
+        })?
+    };
+    if !all_finite(&new_p) {
         return Err(nonfinite(OP));
     }
+    let buf = Arc::try_unwrap(buf).unwrap_or_else(|shared| shared.to_vec());
     Ok((new_p, buf))
 }
 
-fn newton_schulz(update: &[f32], rows: usize, cols: usize) -> Result<Vec<f32>, OjasError> {
+fn newton_schulz(
+    exec: Exec<'_>,
+    update: Vec<f32>,
+    rows: usize,
+    cols: usize,
+) -> Result<Vec<f32>, OjasError> {
     const OP: &str = "muon_ns5_step";
     let mut transposed = false;
     let (mut x, r, c) = if rows > cols {
         transposed = true;
-        (transpose(OP, update, rows, cols)?, cols, rows)
+        let x = transpose(OP, &update, rows, cols)?;
+        drop(update);
+        (x, cols, rows)
     } else {
-        (update.to_vec(), rows, cols)
+        (update, rows, cols)
     };
     let mut sum_sq = 0.0f64;
     for value in &x {
@@ -295,26 +305,23 @@ fn newton_schulz(update: &[f32], rows: usize, cols: usize) -> Result<Vec<f32>, O
     let b_coef = MUON_NS5_B as f32;
     let c_coef = MUON_NS5_C as f32;
     for _ in 0..5 {
-        let xt = transpose(OP, &x, r, c)?;
-        let a_mat = matmul(OP, &x, &xt, r, c, r)?;
-        let a2 = matmul(OP, &a_mat, &a_mat, r, r, r)?;
-        let mut b_mat = vec![
-            0.0f32;
-            r.checked_mul(r).ok_or_else(|| OjasError::OutOfRange {
-                op: OP,
-                detail: "newton-schulz gram length overflows".to_string(),
-            })?
-        ];
-        for i in 0..b_mat.len() {
-            b_mat[i] = b_coef * a_mat[i] + c_coef * a2[i];
+        let xm = Mat::row_major(Arc::new(x), r, c);
+        let a_mat = Mat::row_major(Arc::new(gemm(OP, exec, &xm, &xm.t())?), r, r);
+        let a2 = gemm(OP, exec, &a_mat, &a_mat)?;
+        let b_mat = zip_map(
+            exec,
+            Arc::clone(&a_mat.data),
+            Arc::new(a2),
+            move |am, a2v| b_coef * am + c_coef * a2v,
+        )?;
+        let bx = gemm(OP, exec, &Mat::row_major(Arc::new(b_mat), r, r), &xm)?;
+        let next = zip_map(exec, Arc::clone(&xm.data), Arc::new(bx), move |xv, bxv| {
+            a * xv + bxv
+        })?;
+        if !all_finite(&next) {
+            return Err(nonfinite(OP));
         }
-        let bx = matmul(OP, &b_mat, &x, r, r, c)?;
-        for i in 0..x.len() {
-            x[i] = a * x[i] + bx[i];
-            if !x[i].is_finite() {
-                return Err(nonfinite(OP));
-            }
-        }
+        x = next;
     }
     if transposed {
         x = transpose(OP, &x, r, c)?;

@@ -10,6 +10,10 @@ mod geometry;
 mod harness;
 mod source;
 
-pub use geometry::{cover_1d, grid_1d, Grid, Limits};
-pub use harness::{linear_close, max_abs, splitmix_f32, ParityOp};
-pub use source::{affine_cuda, affine_wgsl, gemm_cuda, math_wgsl, reduce_sum_wgsl, KernelId};
+pub use geometry::{
+    attention_tiles, cover_1d, fold_grid, gemm_grid, gemm_tile, grid_1d, AttentionTiles, Grid, Limits,
+    ATTENTION_PARTS,
+    ATTENTION_MAX_HEAD_DIM, GEMM_BIG_TILE, GEMM_TILE,
+};
+pub use harness::{linear_close, max_abs, splitmix_f32};
+pub use source::{affine_cuda, affine_wgsl, wgsl_module, WgslModule};

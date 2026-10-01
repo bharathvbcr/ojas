@@ -20,6 +20,12 @@ pub const OP_STEP: u32 = 2;
 pub const OP_GENERATE: u32 = 3;
 pub const OP_FREE: u32 = 4;
 /// Panics so the Go tests can observe a poisoned handle. Not a model op.
+///
+/// This opcode stays in the default engine. `TestPoisonDropsSession` reaches
+/// it through the staticlib (`cargo build -p ojas-gusset-engine`), which is
+/// not built with `cfg(test)`. A `panic-hook` feature that is off by default
+/// would leave opcode 5 unregistered there, and `poisonHandle` could not
+/// poison the handle. Gating it would break that test, so it stays.
 pub const OP_PANIC: u32 = 5;
 
 pub fn install_engine() -> Result<(), String> {
@@ -40,17 +46,19 @@ pub fn install_engine() -> Result<(), String> {
     Ok(())
 }
 
+/// Errors cross unchanged. A kind prefix, when there is one, was added where
+/// the typed error was produced ([`crate::ojas_error`], [`crate::kinded`]).
 pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<JobOutput, String> {
-    Ok(stage(dispatch_bytes(ctx, input)?))
+    dispatch_bytes(ctx, input).map(stage)
 }
 
 fn dispatch_bytes(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
     ctx.check()
         .map_err(|reason| format!("cancelled: {reason:?}"))?;
     match ctx.opcode() {
-        OP_LOAD => op_load(input),
+        OP_LOAD => op_load(ctx, input),
         OP_STEP => op_step(ctx, input),
-        OP_GENERATE => op_generate(input),
+        OP_GENERATE => op_generate(ctx, input),
         OP_FREE => op_free(input),
         OP_PANIC => panic!("ojas: induced panic"),
         other => Err(format!("unknown opcode {other}")),
@@ -85,8 +93,11 @@ pub fn bytes_of(out: JobOutput) -> Vec<u8> {
     }
 }
 
-fn op_load(input: &[u8]) -> Result<Vec<u8>, String> {
-    let session = load::load_request(input)?;
+fn op_load(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
+    let session = load::load_request(input, || {
+        ctx.check()
+            .map_err(|reason| format!("cancelled: {reason:?}"))
+    })?;
     let mut out = Vec::with_capacity(12);
     out.extend_from_slice(&session.id.to_le_bytes());
     out.extend_from_slice(&session.tensors.to_le_bytes());
@@ -106,7 +117,7 @@ fn op_free(input: &[u8]) -> Result<Vec<u8>, String> {
 fn op_step(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
     let mut cur = input;
     let id = take_u64(&mut cur)?;
-    let _session = session::require(id)?;
+    let session = session::require(id)?;
     let mode = take_u32(&mut cur)?;
     let batch = take_u32(&mut cur)?;
     let seq = take_u32(&mut cur)?;
@@ -133,10 +144,9 @@ fn op_step(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
             if !cur.is_empty() {
                 return Err("shape: trailing bytes".to_string());
             }
-            let threads = _session.threads;
             step::step_checked(
+                &session.compute,
                 StepInput {
-                    threads,
                     mode,
                     batch,
                     seq,
@@ -161,10 +171,9 @@ fn op_step(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
             if !cur.is_empty() {
                 return Err("shape: trailing bytes".to_string());
             }
-            let threads = _session.threads;
             step::step_checked(
+                &session.compute,
                 StepInput {
-                    threads,
                     mode,
                     batch,
                     seq,
@@ -191,10 +200,14 @@ fn op_step(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn op_generate(input: &[u8]) -> Result<Vec<u8>, String> {
+fn op_generate(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
+    let mut check = || {
+        ctx.check()
+            .map_err(|reason| format!("cancelled: {reason:?}"))
+    };
     let mut cur = input;
     let id = take_u64(&mut cur)?;
-    let _session = session::require(id)?;
+    let session = session::require(id)?;
     let mode = take_u32(&mut cur)?;
     let token = match mode {
         GEN_LOGITS => {
@@ -203,12 +216,14 @@ fn op_generate(input: &[u8]) -> Result<Vec<u8>, String> {
             if !cur.is_empty() {
                 return Err("shape: trailing bytes".to_string());
             }
-            generate::generate(
+            generate::generate_checked(
+                &session.compute,
                 mode,
                 GenerateBody {
                     logits: &logits,
                     prompt: &[],
                 },
+                &mut check,
             )?
         }
         GEN_GREEDY => {
@@ -217,12 +232,14 @@ fn op_generate(input: &[u8]) -> Result<Vec<u8>, String> {
             if !cur.is_empty() {
                 return Err("shape: trailing bytes".to_string());
             }
-            generate::generate(
+            generate::generate_checked(
+                &session.compute,
                 mode,
                 GenerateBody {
                     logits: &[],
                     prompt: &prompt,
                 },
+                &mut check,
             )?
         }
         other => return Err(format!("generate: shape: unknown mode {other}")),
@@ -264,14 +281,11 @@ fn take_vec<T, const N: usize>(
     }
     let (head, tail) = input.split_at(bytes);
     *input = tail;
-    Ok(head
-        .chunks_exact(N)
-        .map(|chunk| {
-            let mut b = [0u8; N];
-            b.copy_from_slice(chunk);
-            decode(b)
-        })
-        .collect())
+    let (chunks, rest) = head.as_chunks::<N>();
+    if !rest.is_empty() {
+        return Err("shape: payload is not a whole number of values".to_string());
+    }
+    Ok(chunks.iter().copied().map(decode).collect())
 }
 
 /// Used by the cancel test to build a context without a live pool.

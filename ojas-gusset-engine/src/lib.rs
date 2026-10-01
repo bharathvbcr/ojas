@@ -3,6 +3,14 @@
 //! `ojas-capi` is an rlib. This crate is the only `staticlib`, and its
 //! archive is `libgusset.a` because cgo passes `-lgusset`.
 
+// Counting is installed so `gusset.Stats` and `AdviseMemoryLimit` can see Rust
+// heap bytes. It forwards each allocation to `System` and returns a null
+// pointer when that allocation fails. Infallible Rust allocations (`vec!`,
+// `format!`, channels) still abort the process. This static does not install
+// an allocation-error hook and does not make those allocations fallible.
+#[global_allocator]
+static GLOBAL: gusset::Counting<std::alloc::System> = gusset::Counting::new(std::alloc::System);
+
 /// # Safety
 /// `ptr` is readable for `len` bytes for the duration of this call, or
 /// `ptr` is null when `len` is 0. The bytes are copied before return.
@@ -28,7 +36,10 @@ pub unsafe extern "C" fn ojas_set_model_root(ptr: *const u8, len: usize) -> i32 
             }
         };
         match ojas_capi::set_model_root(text) {
-            Ok(()) => 0,
+            Ok(()) => {
+                ojas_capi::clear_last_error();
+                0
+            }
             Err(err) => {
                 ojas_capi::set_last_error(err);
                 -1
@@ -44,13 +55,21 @@ pub unsafe extern "C" fn ojas_set_model_root(ptr: *const u8, len: usize) -> i32 
     }
 }
 
-/// Registers opcode handlers. A second call clears the previous ones first.
+/// Registers opcode handlers on the first successful call.
+///
+/// A later call is a no-op: it does not clear or reinstall handlers.
+/// The first call runs gusset's `clear_engine_handlers` before installing
+/// ojas opcodes, which removes handlers already registered in the process.
+/// That clear is left as gusset defines it. Later calls do not clear again.
 #[no_mangle]
 pub extern "C" fn ojas_engine_init() -> i32 {
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             || match ojas_capi::install_engine() {
-                Ok(()) => 0,
+                Ok(()) => {
+                    ojas_capi::clear_last_error();
+                    0
+                }
                 Err(err) => {
                     ojas_capi::set_last_error(err);
                     -1
@@ -74,6 +93,8 @@ pub extern "C" fn ojas_engine_reset() {
     }));
     if result.is_err() {
         ojas_capi::set_last_error("Rust panic in ojas_engine_reset");
+    } else {
+        ojas_capi::clear_last_error();
     }
 }
 
@@ -114,15 +135,15 @@ pub unsafe extern "C" fn ojas_copy_last_error(dst: *mut u8, cap: usize) -> usize
 #[no_mangle]
 pub unsafe extern "C" fn ojas_take_last_error(dst: *mut u8, cap: usize) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let msg = ojas_capi::last_error();
-        let full = msg.len();
-        if dst.is_null() || cap == 0 || full == 0 {
-            return full;
+        if dst.is_null() || cap == 0 {
+            return ojas_capi::last_error().len();
         }
+        let mut buf = vec![0u8; cap];
+        let full = ojas_capi::take_last_error(&mut buf);
         let n = full.min(cap);
         // SAFETY: `dst` is writable for `cap` bytes, and `n` is at most `cap`.
         unsafe {
-            std::ptr::copy_nonoverlapping(msg.as_ptr(), dst, n);
+            std::ptr::copy_nonoverlapping(buf.as_ptr(), dst, n);
         }
         full
     }))

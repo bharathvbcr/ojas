@@ -5,10 +5,22 @@
 //! The grammar follows the safetensors subset (no floats, `true`, `false`, or
 //! `null`). The depth cap here is 64, which is the ojas limit for absurd
 //! nesting. It is wider than the three levels the header format itself uses.
+//!
+//! Node count is at most the input length (every value is at least one byte).
+//! Accounted tree bytes — one [`Json`] header per value, a [`String`] header
+//! per object key, and the string heaps — stay within
+//! [`BYTE_BUDGET_FACTOR`] times the input plus [`BYTE_BUDGET_FLOOR`]. A 100 MiB
+//! header of single-digit numbers is refused before it becomes a gigabyte of
+//! nodes. Ordinary headers are long strings and stay under the same cap.
 
 use std::collections::BTreeSet;
 
 pub(crate) const MAX_DEPTH: usize = 64;
+
+/// Multiplier on the input length for the tree byte budget.
+const BYTE_BUDGET_FACTOR: usize = 8;
+/// Extra bytes so a small header still parses when a node is larger than one input byte.
+const BYTE_BUDGET_FLOOR: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Json {
@@ -23,6 +35,13 @@ pub(crate) fn parse(text: &str) -> Result<Json, String> {
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
+        nodes: 0,
+        bytes: 0,
+        node_cap: text.len().saturating_add(1),
+        byte_cap: text
+            .len()
+            .saturating_mul(BYTE_BUDGET_FACTOR)
+            .saturating_add(BYTE_BUDGET_FLOOR),
     };
     p.ws();
     let root = p.value(0)?;
@@ -36,9 +55,32 @@ pub(crate) fn parse(text: &str) -> Result<Json, String> {
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
+    nodes: usize,
+    bytes: usize,
+    node_cap: usize,
+    byte_cap: usize,
 }
 
 impl Parser<'_> {
+    fn note(&mut self, n: usize) -> Result<(), String> {
+        self.bytes = self.bytes.saturating_add(n);
+        if self.bytes > self.byte_cap {
+            return self.err("byte budget exceeded");
+        }
+        Ok(())
+    }
+
+    fn note_node(&mut self) -> Result<(), String> {
+        self.nodes = self.nodes.saturating_add(1);
+        if self.nodes > self.node_cap {
+            return self.err("node budget exceeded");
+        }
+        self.note(std::mem::size_of::<Json>())
+    }
+
+    fn note_str(&mut self, text: &str) -> Result<(), String> {
+        self.note(text.len())
+    }
     fn ws(&mut self) {
         while let Some(b' ' | b'\t' | b'\n' | b'\r') = self.s.get(self.i) {
             self.i += 1;
@@ -63,7 +105,11 @@ impl Parser<'_> {
             Some(b'{' | b'[') if depth >= MAX_DEPTH => self.err("nesting deeper than 64"),
             Some(b'{') => self.object(depth),
             Some(b'[') => self.array(depth),
-            Some(b'"') => Ok(Json::Str(self.string()?)),
+            Some(b'"') => {
+                let text = self.string()?;
+                self.note_node()?;
+                Ok(Json::Str(text))
+            }
             Some(b'0'..=b'9') => self.number(),
             Some(_) => self.err(
                 "unsupported JSON value (only objects, arrays, strings and non-negative integers)",
@@ -73,6 +119,7 @@ impl Parser<'_> {
     }
 
     fn object(&mut self, depth: usize) -> Result<Json, String> {
+        self.note_node()?;
         self.eat(b'{')?;
         let mut out = Vec::new();
         let mut seen = BTreeSet::new();
@@ -87,6 +134,8 @@ impl Parser<'_> {
                 return self.err("expected a string key");
             }
             let k = self.string()?;
+            // The key is a `String` beside the value node, not a `Json` node.
+            self.note(std::mem::size_of::<String>())?;
             if !seen.insert(k.clone()) {
                 return self.err(&format!("duplicate key {k:?}"));
             }
@@ -108,6 +157,7 @@ impl Parser<'_> {
     }
 
     fn array(&mut self, depth: usize) -> Result<Json, String> {
+        self.note_node()?;
         self.eat(b'[')?;
         let mut out = Vec::new();
         self.ws();
@@ -151,7 +201,10 @@ impl Parser<'_> {
             return self.err("non-integer number");
         }
         match uint {
-            Some(n) => Ok(Json::Uint(n)),
+            Some(n) => {
+                self.note_node()?;
+                Ok(Json::Uint(n))
+            }
             None => Err(format!(
                 "header JSON: integer overflows u64 at byte {start}"
             )),
@@ -174,14 +227,38 @@ impl Parser<'_> {
                     };
                     self.i += 1;
                     match e {
-                        b'"' => out.push('"'),
-                        b'\\' => out.push('\\'),
-                        b'/' => out.push('/'),
-                        b'b' => out.push('\u{8}'),
-                        b'f' => out.push('\u{c}'),
-                        b'n' => out.push('\n'),
-                        b'r' => out.push('\r'),
-                        b't' => out.push('\t'),
+                        b'"' => {
+                            self.note_str("\"")?;
+                            out.push('"');
+                        }
+                        b'\\' => {
+                            self.note_str("\\")?;
+                            out.push('\\');
+                        }
+                        b'/' => {
+                            self.note_str("/")?;
+                            out.push('/');
+                        }
+                        b'b' => {
+                            self.note_str("\u{8}")?;
+                            out.push('\u{8}');
+                        }
+                        b'f' => {
+                            self.note_str("\u{c}")?;
+                            out.push('\u{c}');
+                        }
+                        b'n' => {
+                            self.note_str("\n")?;
+                            out.push('\n');
+                        }
+                        b'r' => {
+                            self.note_str("\r")?;
+                            out.push('\r');
+                        }
+                        b't' => {
+                            self.note_str("\t")?;
+                            out.push('\t');
+                        }
                         b'u' => {
                             let hi = self.hex4()?;
                             let cp = if (0xD800..0xDC00).contains(&hi) {
@@ -200,7 +277,10 @@ impl Parser<'_> {
                                 hi
                             };
                             match char::from_u32(cp) {
-                                Some(ch) => out.push(ch),
+                                Some(ch) => {
+                                    self.note(ch.len_utf8())?;
+                                    out.push(ch);
+                                }
                                 None => return self.err("invalid code point"),
                             }
                         }
@@ -225,6 +305,7 @@ impl Parser<'_> {
                         .ok_or_else(|| format!("header JSON: bad UTF-8 at byte {start}"))?;
                     let chunk = std::str::from_utf8(chunk)
                         .map_err(|_| format!("header JSON: bad UTF-8 at byte {start}"))?;
+                    self.note_str(chunk)?;
                     out.push_str(chunk);
                     self.i = end;
                 }
@@ -270,6 +351,62 @@ mod tests {
         assert!(parse(&nested(64)).is_ok());
         let err = parse(&nested(65)).unwrap_err();
         assert!(err.contains("64"), "{err}");
+    }
+
+    fn parse_with_node_cap(text: &str, node_cap: usize) -> Result<Json, String> {
+        let mut p = Parser {
+            s: text.as_bytes(),
+            i: 0,
+            nodes: 0,
+            bytes: 0,
+            node_cap,
+            byte_cap: usize::MAX,
+        };
+        p.ws();
+        let root = p.value(0)?;
+        p.ws();
+        if p.i != p.s.len() {
+            return Err(format!("trailing bytes after the root value at {}", p.i));
+        }
+        Ok(root)
+    }
+
+    /// `[1]` is an array node plus a number node. The exact count parses.
+    /// One node under that count is the refusal. The public parser sets the
+    /// cap from the input length; this injects a smaller one.
+    #[test]
+    fn node_cap_allows_the_exact_count_and_refuses_one_more() {
+        assert_eq!(parse_with_node_cap("1", 1).unwrap(), Json::Uint(1));
+        assert_eq!(
+            parse_with_node_cap("[1]", 2).unwrap(),
+            Json::Array(vec![Json::Uint(1)])
+        );
+        let err = parse_with_node_cap("[1]", 1).unwrap_err();
+        assert!(err.contains("node budget"), "{err}");
+    }
+
+    #[test]
+    fn dense_array_is_refused_before_gigabyte_amplification() {
+        // One digit plus a comma is two input bytes. The tree stores each
+        // number as a Json node, which is much larger, so an uncapped parser
+        // turns a short header into gigabytes. Twenty thousand numbers stay
+        // tiny as input and still blow the proportional byte budget.
+        let mut text = String::from("[");
+        for i in 0..20_000 {
+            if i > 0 {
+                text.push(',');
+            }
+            text.push('1');
+        }
+        text.push(']');
+        match parse(&text) {
+            Err(err) => assert!(
+                err.contains("byte budget"),
+                "input {} bytes: {err}",
+                text.len()
+            ),
+            Ok(_) => panic!("parsed {} input bytes without a budget", text.len()),
+        }
     }
 
     #[test]

@@ -1,43 +1,19 @@
-//! Dense GEMM for `y = x @ W^T`.
+//! `y = x @ W^T` and its gradients, as strided views over one GEMM core.
 //!
-//! `W` is `[out, in]`, the `nn.Linear(..., bias=False)` layout. The reduction
-//! over `in` runs from index 0 upward in `f32`. Threads partition output
-//! rows with `std::thread::scope` and never split that reduction, so the bits
-//! do not depend on the thread count. The inner loop does not call `mul_add`.
+//! `W` is `[out, in]`, the `nn.Linear(..., bias=False)` layout. The forward
+//! is `x · Wᵀ`, `grad_x` is `g · W`, and `grad_w` is `gᵀ · x`; the transposes
+//! are strides that [`crate::gemm`] packs through, not copies. Under
+//! [`ojas_core::Numerics::Exact`] each output sums its reduction axis from
+//! index 0 upward in `f32` without `mul_add`, and the bits do not depend on
+//! the thread count.
 
-use ojas_core::{Budget, OjasError};
+use std::sync::Arc;
 
-use crate::validate::{product, room_for, shape};
+use ojas_core::{BackendId, Budget, OjasError};
 
-/// Multiplies below this stay on the calling thread.
-/// The tiny step's largest linear is `4*16*32` = 2048.
-const GRAIN: usize = 4_096;
-
-pub(crate) fn matmul(
-    op: &'static str,
-    a: &[f32],
-    b: &[f32],
-    m: usize,
-    k: usize,
-    n: usize,
-) -> Result<Vec<f32>, OjasError> {
-    let a_len = product(op, &[m, k])?;
-    let b_len = product(op, &[k, n])?;
-    let len = product(op, &[m, n])?;
-    if a.len() != a_len || b.len() != b_len {
-        return Err(shape(
-            op,
-            format!(
-                "matmul lengths a {} b {} != {m}*{k} and {k}*{n}",
-                a.len(),
-                b.len()
-            ),
-        ));
-    }
-    let mut out = vec![0.0f32; len];
-    gemm(1, a, b, &mut out, m, k, n);
-    Ok(out)
-}
+use crate::gemm::{gemm, scratch, single_task, whole_call, Mat, TASK_MACS};
+use crate::pool::Exec;
+use crate::validate::{product, room_for, shape, F32Out};
 
 pub(crate) fn transpose(
     op: &'static str,
@@ -65,43 +41,40 @@ pub(crate) fn transpose(
 pub(crate) fn linear_forward(
     op: &'static str,
     budget: &Budget,
-    threads: usize,
-    x: &[f32],
+    exec: Exec<'_>,
+    x: Vec<f32>,
     x_shape: &[usize],
-    weight: &[f32],
+    weight: Vec<f32>,
     weight_shape: &[usize],
-) -> Result<(Vec<f32>, Vec<usize>), OjasError> {
+) -> Result<(F32Out, Vec<usize>), OjasError> {
     let (rows, kin, nout, y_shape) = linear_dims(op, x_shape, weight_shape)?;
     if x.len() != product(op, &[rows, kin])? || weight.len() != product(op, &[nout, kin])? {
         return Err(shape(op, "linear data length does not match shape"));
     }
     let y_len = product(op, &[rows, nout])?;
-    let packed_len = product(op, &[kin, nout])?;
-    let peak = y_len
-        .checked_add(packed_len)
-        .ok_or_else(|| OjasError::OutOfRange {
-            op,
-            detail: "linear scratch length overflows".to_string(),
-        })?;
-    room_for(op, budget, peak)?;
-    let packed = pack_weight(weight, nout, kin);
-    let mut y = vec![0.0f32; y_len];
-    gemm(threads, x, &packed, &mut y, rows, kin, nout);
-    Ok((y, y_shape))
+    let work = scratch(op, exec, rows, kin, nout)?;
+    // The output's charge leaves with it and is held until its tensor copy
+    // exists; the scratch charge ends here.
+    let charge = room_for(op, budget, y_len)?;
+    let _scratch = room_for(op, budget, work)?;
+    let x = Mat::row_major(Arc::new(x), rows, kin);
+    let w = Mat::row_major(Arc::new(weight), nout, kin);
+    let data = gemm(op, exec, &x, &w.t())?;
+    Ok((F32Out { data, charge }, y_shape))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn linear_backward(
     op: &'static str,
     budget: &Budget,
-    threads: usize,
-    x: &[f32],
+    exec: Exec<'_>,
+    x: Vec<f32>,
     x_shape: &[usize],
-    weight: &[f32],
+    weight: Vec<f32>,
     weight_shape: &[usize],
-    grad_y: &[f32],
+    grad_y: Vec<f32>,
     grad_shape: &[usize],
-) -> Result<(Vec<f32>, Vec<f32>), OjasError> {
+) -> Result<(F32Out, F32Out), OjasError> {
     let (rows, kin, nout, y_shape) = linear_dims(op, x_shape, weight_shape)?;
     if grad_shape != y_shape.as_slice() {
         return Err(shape(
@@ -120,135 +93,71 @@ pub(crate) fn linear_backward(
     }
     let gx_len = product(op, &[rows, kin])?;
     let gw_len = product(op, &[nout, kin])?;
-    let peak = gx_len
-        .checked_add(gw_len)
-        .ok_or_else(|| OjasError::OutOfRange {
-            op,
-            detail: "linear backward scratch length overflows".to_string(),
-        })?;
-    room_for(op, budget, peak)?;
-    let mut grad_x = vec![0.0f32; gx_len];
-    let mut grad_w = vec![0.0f32; gw_len];
-    // grad_x[row, inner] = sum_col grad_y[row, col] * W[col, inner], col from 0.
-    // The saxpy walks `inner` contiguously so this stays the same sum.
-    map_rows(threads, rows, kin * nout, &mut grad_x, kin, |row, dest| {
-        let g_row = &grad_y[row * nout..(row + 1) * nout];
-        for col in 0..nout {
-            saxpy(dest, &weight[col * kin..(col + 1) * kin], g_row[col]);
-        }
-    });
-    // grad_w[col, inner] = sum_row grad_y[row, col] * x[row, inner], row from 0.
-    map_rows(threads, nout, rows * kin, &mut grad_w, kin, |col, dest| {
-        for row in 0..rows {
-            saxpy(
-                dest,
-                &x[row * kin..(row + 1) * kin],
-                grad_y[row * nout + col],
-            );
-        }
-    });
-    Ok((grad_x, grad_w))
-}
-
-fn saxpy(dst: &mut [f32], src: &[f32], scale: f32) {
-    for (slot, value) in dst.iter_mut().zip(src) {
-        *slot += scale * *value;
-    }
-}
-
-/// `W` is `[out, in]`. The packed matrix is `[in, out]`, so one input index
-/// walks output columns contiguously.
-fn pack_weight(weight: &[f32], nout: usize, kin: usize) -> Vec<f32> {
-    let mut packed = vec![0.0f32; kin * nout];
-    for col in 0..nout {
-        let row = &weight[col * kin..(col + 1) * kin];
-        for (inner, &value) in row.iter().enumerate() {
-            packed[inner * nout + col] = value;
-        }
-    }
-    packed
-}
-
-/// `b` is row-major `[k, n]`. Each output lane sums `k` in ascending order.
-fn gemm(threads: usize, a: &[f32], b: &[f32], y: &mut [f32], m: usize, k: usize, n: usize) {
-    map_rows(threads, m, k.saturating_mul(n), y, n, |row, dest| {
-        gemm_row(&a[row * k..(row + 1) * k], b, dest, k, n);
-    });
-}
-
-fn gemm_row(arow: &[f32], b: &[f32], yrow: &mut [f32], k: usize, n: usize) {
-    debug_assert_eq!(arow.len(), k);
-    debug_assert_eq!(yrow.len(), n);
-    let mut col = 0;
-    while col + 8 <= n {
-        let mut acc = [0.0f32; 8];
-        for (inner, &av) in arow.iter().enumerate() {
-            let base = inner * n + col;
-            acc[0] += av * b[base];
-            acc[1] += av * b[base + 1];
-            acc[2] += av * b[base + 2];
-            acc[3] += av * b[base + 3];
-            acc[4] += av * b[base + 4];
-            acc[5] += av * b[base + 5];
-            acc[6] += av * b[base + 6];
-            acc[7] += av * b[base + 7];
-        }
-        yrow[col..col + 8].copy_from_slice(&acc);
-        col += 8;
-    }
-    while col < n {
-        let mut acc = 0.0f32;
-        for (inner, &av) in arow.iter().enumerate() {
-            acc += av * b[inner * n + col];
-        }
-        yrow[col] = acc;
-        col += 1;
-    }
-}
-
-fn map_rows(
-    threads: usize,
-    rows: usize,
-    work_per_row: usize,
-    dest: &mut [f32],
-    width: usize,
-    body: impl Fn(usize, &mut [f32]) + Send + Sync,
-) {
-    let work = rows.saturating_mul(work_per_row);
-    let workers = if threads <= 1 || rows <= 1 || work < GRAIN || width == 0 {
-        1
+    // Two products that each fit in one task run side by side, so their
+    // scratch is live at once; larger ones split themselves in turn. A whole
+    // `ojas-simd` call must not run inside a pool task.
+    let pair = exec.pool.threads() > 1
+        && single_task(exec, rows, kin, nout)
+        && single_task(exec, nout, kin, rows)
+        && !whole_call(exec.numerics, rows, nout, kin)
+        && rows.saturating_mul(nout).saturating_mul(kin) >= TASK_MACS / 2;
+    let (sx, sw) = (
+        scratch(op, exec, rows, nout, kin)?,
+        scratch(op, exec, nout, rows, kin)?,
+    );
+    let work = if pair {
+        sx.checked_add(sw).ok_or_else(|| overflow(op))?
     } else {
-        threads.min(rows)
+        sx.max(sw)
     };
-    if workers == 1 {
-        for row in 0..rows {
-            body(row, &mut dest[row * width..(row + 1) * width]);
-        }
-        return;
-    }
-    let chunk = rows.div_ceil(workers);
-    let body = &body;
-    std::thread::scope(|scope| {
-        let mut rest = dest;
-        let mut left = rows;
-        let mut row0 = 0usize;
-        for _ in 0..workers {
-            if left == 0 {
-                break;
+    // Each gradient's charge leaves with it (see `linear_forward`).
+    let gx_charge = room_for(op, budget, gx_len)?;
+    let gw_charge = room_for(op, budget, gw_len)?;
+    let _work = room_for(op, budget, work)?;
+    let x = Mat::row_major(Arc::new(x), rows, kin);
+    let w = Mat::row_major(Arc::new(weight), nout, kin);
+    let g = Mat::row_major(Arc::new(grad_y), rows, nout);
+    // grad_x[row, inner] = sum_col g[row, col] * W[col, inner], col from 0.
+    // grad_w[col, inner] = sum_row g[row, col] * x[row, inner], row from 0.
+    let (grad_x, grad_w) = if pair {
+        let pool = Arc::clone(exec.pool);
+        let numerics = exec.numerics;
+        let both = exec.pool.run(2, move |i| {
+            let exec = Exec {
+                pool: &pool,
+                numerics,
+            };
+            if i == 0 {
+                gemm(op, exec, &g, &w)
+            } else {
+                gemm(op, exec, &g.t(), &x)
             }
-            let take = chunk.min(left);
-            let (mine, tail) = rest.split_at_mut(take * width);
-            rest = tail;
-            left -= take;
-            let start = row0;
-            row0 += take;
-            scope.spawn(move || {
-                for local in 0..take {
-                    body(start + local, &mut mine[local * width..(local + 1) * width]);
-                }
-            });
-        }
-    });
+        })?;
+        let [gx, gw] = <[_; 2]>::try_from(both).map_err(|_| OjasError::Backend {
+            id: BackendId::Cpu,
+            detail: format!("{op}: pool returned the wrong number of results"),
+        })?;
+        (gx?, gw?)
+    } else {
+        (gemm(op, exec, &g, &w)?, gemm(op, exec, &g.t(), &x)?)
+    };
+    Ok((
+        F32Out {
+            data: grad_x,
+            charge: gx_charge,
+        },
+        F32Out {
+            data: grad_w,
+            charge: gw_charge,
+        },
+    ))
+}
+
+fn overflow(op: &'static str) -> OjasError {
+    OjasError::OutOfRange {
+        op,
+        detail: "linear scratch length overflows".to_string(),
+    }
 }
 
 fn linear_dims(
@@ -281,7 +190,8 @@ fn linear_dims(
     if rows == 0 || nout == 0 {
         return Err(shape(op, "empty tensor"));
     }
-    let mut y_shape = x_shape[..x_shape.len() - 1].to_vec();
+    let mut y_shape = Vec::with_capacity(x_shape.len());
+    y_shape.extend_from_slice(&x_shape[..x_shape.len() - 1]);
     y_shape.push(nout);
     Ok((rows, kin, nout, y_shape))
 }

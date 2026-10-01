@@ -1,4 +1,5 @@
-//! Token bins, a counter RNG, and a BPE tokenizer.
+//! Token bins, a seeded epoch batch sampler, a counter RNG, and a BPE
+//! tokenizer.
 //!
 //! Twenty strings match tiktoken 0.12.0 `gpt2` `encode_ordinary`
 //! ([`bpe::TIKTOKEN_GPT2_BYTE_IDENTITY`] is `verified-20-strings`). That check used
@@ -18,6 +19,7 @@ mod bpe;
 mod error;
 mod gpt2_class;
 mod rng;
+mod sampler;
 mod tokens;
 
 pub use bpe::{
@@ -26,6 +28,7 @@ pub use bpe::{
 };
 pub use error::DataError;
 pub use rng::CounterRng;
+pub use sampler::{Batch, BatchSampler, SamplerConfig};
 pub use tokens::{TokenBin, FINEWEB_HEADER_BYTES, FINEWEB_MAGIC, FINEWEB_VERSION};
 
 #[doc(hidden)]

@@ -1,0 +1,38 @@
+[package]
+name = "ojas-qwen35"
+version = "0.1.0"
+# Explicit rather than `*.workspace = true`: until this crate is a member of
+# the ojas workspace it builds standalone (see the `[workspace]` table below),
+# and these are the values the ojas workspace sets.
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.97"
+publish = false
+description = "Qwen3.5 whole-step training provider over canonical tessl (Metal only). Not an ojas Backend."
+
+# Standalone until the ojas coordinator adds "ojas-qwen35" to the workspace
+# members. Drop this table (and the standalone ojas-qwen35/Cargo.lock) once it
+# is a member.
+[workspace]
+
+[dependencies]
+ojas-core = { path = "../ojas-core" }
+ojas-io = { path = "../ojas-io" }
+
+# Path dependencies only. tessl resolves to the canonical crate
+# (~/Code/research/tessl), the same package ojas-metal and Lappi's qd-metal /
+# qd-export depend on; tessl declares `links = "tessl"`, so every crate in one
+# build must point at this one path. tessl builds only on macOS (Apple silicon,
+# Metal 4), so off macOS this crate is empty (`#![cfg(target_os = "macos")]` in
+# lib.rs and every test file) and the ojas workspace's Linux CI still builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+tessl = { path = "../../tessl" }
+
+# Mirrors the ojas workspace profiles, so behaviour does not change when this
+# crate becomes a member.
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+overflow-checks = true

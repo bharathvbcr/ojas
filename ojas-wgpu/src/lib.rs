@@ -2,8 +2,14 @@
 //!
 //! The shader is ours. wgpu only compiles WGSL and submits the dispatch.
 //! On Apple the HAL is Metal. The device kind stays [`Device::Vulkan`]
-//! so this path does not stand in for tessl. A CPU adapter is refused.
-//! A failed adapter request is [`DeviceError::NoDevice`], never a CPU result.
+//! so this path does not stand in for tessl. A CPU adapter (lavapipe,
+//! SwiftShader, WARP) is refused unless the process sets
+//! [`ALLOW_CPU_ADAPTER_ENV`] to `1`; that opt-in exists for GPU-less CI and
+//! is never the default. A failed adapter request is
+//! [`DeviceError::NoDevice`], never a CPU result.
+//!
+//! Every path here opens its device through [`WgpuContext`], so the adapter
+//! policy and the error capture are one implementation.
 
 #![forbid(unsafe_code)]
 
@@ -12,8 +18,8 @@ mod context;
 
 pub use backend::WgpuBackend;
 pub use context::{
-    gemm, gemm_then_silu, mul, residual, rms_norm, row_sum, silu, softmax_rows, CacheStats,
-    DeviceTensor, WgpuContext,
+    CacheStats, WgpuBuffer, WgpuContext, ALLOW_CPU_ADAPTER_ENV, FLUSH_AT, MAX_ELEMENTS,
+    POOL_CAP_BYTES,
 };
 
 use ojas_device::{require_kind, Device, DeviceError, DeviceInfo};
@@ -108,44 +114,10 @@ fn gpu_error(detail: impl std::fmt::Display) -> DeviceError {
     }
 }
 
-struct Session {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    info: wgpu::AdapterInfo,
-}
-
-fn open_session() -> Result<Session, DeviceError> {
-    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_desc.backends = hal_backends();
-    let instance = wgpu::Instance::new(instance_desc);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    }))
-    .map_err(|err| gpu_error(format!("request_adapter: {err}")))?;
-    let info = adapter.get_info();
-    if info.device_type == wgpu::DeviceType::Cpu {
-        return Err(gpu_error(format!(
-            "refusing CPU adapter {} ({:?})",
-            info.name, info.backend
-        )));
-    }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ojas-wgpu"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::Performance,
-        trace: wgpu::Trace::Off,
-    }))
-    .map_err(|err| gpu_error(format!("request_device: {err}")))?;
-    Ok(Session {
-        device,
-        queue,
-        info,
-    })
+/// A context at wgpu's default limits: the one-shot entry points keep the
+/// portable binding cap rather than whatever this adapter allows.
+fn open_session() -> Result<WgpuContext, DeviceError> {
+    WgpuContext::open_capped(&wgpu::Limits::default())
 }
 
 fn info_of(info: &wgpu::AdapterInfo) -> (String, String, String) {
@@ -161,7 +133,10 @@ fn info_of(info: &wgpu::AdapterInfo) -> (String, String, String) {
 /// Failure is an error. An empty success would look like "no GPU, carry on".
 pub fn probe() -> Result<Vec<DeviceInfo>, DeviceError> {
     let session = open_session()?;
-    let (name, _hal, vendor) = info_of(&session.info);
+    let (name, vendor) = (
+        session.adapter_name().to_string(),
+        session.vendor().to_string(),
+    );
     Ok(vec![DeviceInfo {
         name,
         vendor,
@@ -178,17 +153,16 @@ fn f32_bytes(values: &[f32]) -> Vec<u8> {
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> Result<Vec<f32>, DeviceError> {
-    if bytes.len() % 4 != 0 {
+    let (chunks, rest) = bytes.as_chunks::<4>();
+    if !rest.is_empty() {
         return Err(gpu_error(format!(
             "mapped buffer length {} is not a multiple of 4",
             bytes.len()
         )));
     }
-    let mut values = Vec::with_capacity(bytes.len() / 4);
-    for chunk in bytes.chunks_exact(4) {
-        let mut le = [0u8; 4];
-        le.copy_from_slice(chunk);
-        values.push(f32::from_le_bytes(le));
+    let mut values = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        values.push(f32::from_le_bytes(*chunk));
     }
     Ok(values)
 }
@@ -211,7 +185,11 @@ pub fn affine_f32(
     require_kind(Device::Vulkan, kind)?;
     let bytes_u32 = f32_byte_len(input.len())?;
     let session = open_session()?;
-    let (adapter_name, hal, vendor) = info_of(&session.info);
+    let (adapter_name, hal, vendor) = (
+        session.adapter_name().to_string(),
+        session.hal().to_string(),
+        session.vendor().to_string(),
+    );
     if bytes_u32 == 0 {
         return Ok(AffineF32 {
             values: Vec::new(),
@@ -232,7 +210,7 @@ pub fn affine_f32(
 }
 
 fn dispatch_affine(
-    session: &Session,
+    session: &WgpuContext,
     input: &[f32],
     scale: f32,
     bias: f32,
@@ -241,7 +219,7 @@ fn dispatch_affine(
     let n =
         u32::try_from(input.len()).map_err(|_| gpu_error("input length does not fit in u32"))?;
     let byte_len = u64::from(bytes_u32);
-    let limits = session.device.limits();
+    let limits = session.device().limits();
     let cap = limits
         .max_storage_buffer_binding_size
         .min(limits.max_buffer_size);
@@ -252,20 +230,22 @@ fn dispatch_affine(
     }
     let (groups_x, groups_y) = workgroup_grid(n, limits.max_compute_workgroups_per_dimension)?;
     let oom_scope = session
-        .device
+        .device()
         .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal_scope = session.device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let internal_scope = session
+        .device()
+        .push_error_scope(wgpu::ErrorFilter::Internal);
     let validation_scope = session
-        .device
+        .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = session
-        .device
+        .device()
         .create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ojas-affine-f32"),
             source: wgpu::ShaderSource::Wgsl(AFFINE_SHADER.into()),
         });
     let pipeline = session
-        .device
+        .device()
         .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("ojas-affine-f32"),
             layout: None,
@@ -274,13 +254,13 @@ fn dispatch_affine(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
-    let input_buf = session.device.create_buffer(&wgpu::BufferDescriptor {
+    let input_buf = session.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("input"),
         size: byte_len,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let output_buf = session.device.create_buffer(&wgpu::BufferDescriptor {
+    let output_buf = session.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("output"),
         size: byte_len,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
@@ -289,23 +269,25 @@ fn dispatch_affine(
     let mut params = [0u8; 16];
     params[..4].copy_from_slice(&scale.to_le_bytes());
     params[4..8].copy_from_slice(&bias.to_le_bytes());
-    let params_buf = session.device.create_buffer(&wgpu::BufferDescriptor {
+    let params_buf = session.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("params"),
         size: params.len() as u64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let staging = session.device.create_buffer(&wgpu::BufferDescriptor {
+    let staging = session.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("staging"),
         size: byte_len,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    session.queue.write_buffer(&input_buf, 0, &f32_bytes(input));
-    session.queue.write_buffer(&params_buf, 0, &params);
+    session
+        .queue()
+        .write_buffer(&input_buf, 0, &f32_bytes(input));
+    session.queue().write_buffer(&params_buf, 0, &params);
 
     let bind_group = session
-        .device
+        .device()
         .create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scale"),
             layout: &pipeline.get_bind_group_layout(0),
@@ -325,7 +307,7 @@ fn dispatch_affine(
             ],
         });
     let mut encoder = session
-        .device
+        .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scale"),
         });
@@ -339,7 +321,7 @@ fn dispatch_affine(
         pass.dispatch_workgroups(groups_x, groups_y, 1);
     }
     encoder.copy_buffer_to_buffer(&output_buf, 0, &staging, 0, byte_len);
-    let index = session.queue.submit(std::iter::once(encoder.finish()));
+    let index = session.queue().submit(std::iter::once(encoder.finish()));
     for (kind, scope) in [
         ("validation", validation_scope),
         ("internal", internal_scope),
@@ -356,7 +338,7 @@ fn dispatch_affine(
         let _ = sender.send(result);
     });
     session
-        .device
+        .device()
         .poll(wgpu::PollType::Wait {
             submission_index: Some(index),
             timeout: Some(std::time::Duration::from_secs(30)),
@@ -385,6 +367,26 @@ fn dispatch_affine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncaptured_error_does_not_panic() {
+        // Pre-fix: wgpu's default uncaptured-error handler panics.
+        // Empty buffer usage is CreateBufferError::InvalidUsage and is not in a scope.
+        let session = open_session().expect("wgpu adapter");
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = session.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some("empty-usage"),
+                size: 4,
+                usage: wgpu::BufferUsages::empty(),
+                mapped_at_creation: false,
+            });
+        }));
+        assert!(
+            caught.is_ok(),
+            "uncaptured wgpu error panicked: {:?}",
+            caught.err()
+        );
+    }
 
     #[test]
     fn metal_kind_is_not_this_backend() {
@@ -608,13 +610,17 @@ mod tests {
             !ran.adapter_name.is_empty(),
             "adapter name was empty; a missing adapter must fail the test"
         );
-        assert!(
-            ran.adapter_name.contains("Apple"),
-            "expected the Apple GPU, got {:?} vendor={} hal={}",
-            ran.adapter_name,
-            ran.vendor,
-            ran.hal
-        );
+        // Only an Apple host has a known adapter; Linux CI runs lavapipe
+        // under OJAS_WGPU_ALLOW_CPU_ADAPTER=1.
+        if cfg!(target_os = "macos") {
+            assert!(
+                ran.adapter_name.contains("Apple"),
+                "expected the Apple GPU, got {:?} vendor={} hal={}",
+                ran.adapter_name,
+                ran.vendor,
+                ran.hal
+            );
+        }
         eprintln!(
             "ojas-wgpu adapter: {} vendor={} hal={}",
             ran.adapter_name, ran.vendor, ran.hal

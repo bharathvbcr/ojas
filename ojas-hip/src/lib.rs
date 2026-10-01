@@ -4,7 +4,9 @@
 //! [`DeviceError::NotCompiled`]. It does not copy the buffer on the CPU.
 //! With the feature on, open calls the HIP runtime functions documented for
 //! `hip-runtime-sys` 0.1.2: `hipInit`, `hipGetDeviceCount`, `hipMalloc`,
-//! `hipMemcpy`, and `hipFree`. A missing device is [`DeviceError::NoDevice`].
+//! `hipMemcpyAsync`, and `hipFree`. A missing device is [`DeviceError::NoDevice`].
+//! The feature stays off by default: that crate's build script panics when
+//! the HIP headers are missing.
 
 #![cfg_attr(not(feature = "hip"), forbid(unsafe_code))]
 
@@ -73,16 +75,59 @@ impl HipDevice {
     }
 }
 
-#[cfg(feature = "hip")]
-fn hip_error(op: &str, status: hip_runtime_sys::hipError_t) -> Result<(), DeviceError> {
-    if status == hip_runtime_sys::hipError_t::hipSuccess {
+/// `hipErrorOutOfMemory` is 2. Pre-fix, every non-success status, including
+/// that one, became [`DeviceError::NoDevice`].
+#[cfg_attr(not(feature = "hip"), allow(dead_code))]
+fn hip_status(op: &str, code: u32) -> Result<(), DeviceError> {
+    if code == 0 {
         Ok(())
+    } else if code == 2 {
+        Err(DeviceError::Capacity {
+            kind: Device::Hip,
+            detail: format!("{op} ran out of memory"),
+        })
     } else {
         Err(DeviceError::NoDevice {
             kind: Device::Hip,
-            detail: format!("{op} returned {status:?}"),
+            detail: format!("{op} returned status {code}"),
         })
     }
+}
+
+#[cfg_attr(not(feature = "hip"), allow(dead_code))]
+fn hip_free_covers(free: usize, need: usize) -> Result<(), DeviceError> {
+    if need > free {
+        Err(DeviceError::Capacity {
+            kind: Device::Hip,
+            detail: format!("hipMemGetInfo free {free} bytes, copy needs {need}"),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg_attr(not(feature = "hip"), allow(dead_code))]
+fn poll_until(
+    deadline: std::time::Instant,
+    mut ready: impl FnMut() -> Result<bool, DeviceError>,
+) -> Result<(), DeviceError> {
+    loop {
+        if ready()? {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(DeviceError::Launch {
+                kind: Device::Hip,
+                detail: "HIP copy did not finish within 30s".to_string(),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[cfg(feature = "hip")]
+fn hip_error(op: &str, status: hip_runtime_sys::hipError_t) -> Result<(), DeviceError> {
+    hip_status(op, status as u32)
 }
 
 #[cfg(feature = "hip")]
@@ -96,6 +141,17 @@ fn open_runtime() -> Result<HipDevice, DeviceError> {
         return Err(DeviceError::NoDevice {
             kind: Device::Hip,
             detail: format!("hipGetDeviceCount returned {count}"),
+        });
+    }
+    let mut free = 0usize;
+    let mut total = 0usize;
+    hip_error("hipMemGetInfo", unsafe {
+        hip_runtime_sys::hipMemGetInfo(&mut free, &mut total)
+    })?;
+    if total == 0 {
+        return Err(DeviceError::NoDevice {
+            kind: Device::Hip,
+            detail: format!("hipMemGetInfo returned total 0, free {free}"),
         });
     }
     let sample = [1.0f32, -2.0, 0.5, 4.0];
@@ -115,15 +171,53 @@ fn copy_through_hip(input: &[f32]) -> Result<Vec<f32>, DeviceError> {
         return Ok(Vec::new());
     }
     let nbytes = copy_bytes(input.len())?;
-    // The allocation is freed on every return, including a panic in `vec!`.
-    struct HipAlloc(*mut std::ffi::c_void);
-    impl Drop for HipAlloc {
+    let mut free = 0usize;
+    let mut total = 0usize;
+    hip_error("hipMemGetInfo", unsafe {
+        hip_runtime_sys::hipMemGetInfo(&mut free, &mut total)
+    })?;
+    let _ = total;
+    hip_free_covers(free, nbytes)?;
+    // Freed on every return, including a panic in `vec!`.
+    struct Dev(*mut std::ffi::c_void);
+    impl Drop for Dev {
         fn drop(&mut self) {
             if !self.0.is_null() {
-                // SAFETY: the pointer came from a successful hipMalloc in this function,
-                // and drop runs once.
                 unsafe {
                     let _ = hip_runtime_sys::hipFree(self.0);
+                }
+                self.0 = std::ptr::null_mut();
+            }
+        }
+    }
+    struct Host(*mut std::ffi::c_void);
+    impl Drop for Host {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    let _ = hip_runtime_sys::hipHostFree(self.0);
+                }
+                self.0 = std::ptr::null_mut();
+            }
+        }
+    }
+    struct Stream(hip_runtime_sys::hipStream_t);
+    impl Drop for Stream {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    let _ = hip_runtime_sys::hipStreamDestroy(self.0);
+                }
+                self.0 = std::ptr::null_mut();
+            }
+        }
+    }
+    struct Event(hip_runtime_sys::hipEvent_t);
+    impl Drop for Event {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    let _ = hip_runtime_sys::hipEventDestroy(self.0);
                 }
                 self.0 = std::ptr::null_mut();
             }
@@ -139,28 +233,70 @@ fn copy_through_hip(input: &[f32]) -> Result<Vec<f32>, DeviceError> {
             detail: format!("hipMalloc({nbytes}) returned success and a null pointer"),
         });
     }
-    let alloc = HipAlloc(dev);
-    let ptr = alloc.0;
-    let mut back = vec![0.0f32; input.len()];
-    let copied = hip_error("hipMemcpy host to device", unsafe {
-        hip_runtime_sys::hipMemcpy(
-            ptr,
-            input.as_ptr().cast(),
+    let dev = Dev(dev);
+    let mut host = std::ptr::null_mut();
+    hip_error("hipHostMalloc", unsafe {
+        hip_runtime_sys::hipHostMalloc(&mut host, nbytes, hip_runtime_sys::hipHostMallocDefault)
+    })?;
+    if host.is_null() {
+        return Err(DeviceError::Capacity {
+            kind: Device::Hip,
+            detail: format!("hipHostMalloc({nbytes}) returned success and a null pointer"),
+        });
+    }
+    let host = Host(host);
+    unsafe {
+        std::ptr::copy_nonoverlapping(input.as_ptr(), host.0.cast::<f32>(), input.len());
+    }
+    let mut stream = std::ptr::null_mut();
+    hip_error("hipStreamCreateWithFlags", unsafe {
+        hip_runtime_sys::hipStreamCreateWithFlags(
+            &mut stream,
+            hip_runtime_sys::hipStreamNonBlocking,
+        )
+    })?;
+    let stream = Stream(stream);
+    let mut event = std::ptr::null_mut();
+    hip_error("hipEventCreateWithFlags", unsafe {
+        hip_runtime_sys::hipEventCreateWithFlags(&mut event, hip_runtime_sys::hipEventDisableTiming)
+    })?;
+    let event = Event(event);
+    hip_error("hipMemcpyAsync host to device", unsafe {
+        hip_runtime_sys::hipMemcpyAsync(
+            dev.0,
+            host.0,
             nbytes,
             hip_runtime_sys::hipMemcpyKind::hipMemcpyHostToDevice,
+            stream.0,
         )
-    })
-    .and_then(|()| {
-        hip_error("hipMemcpy device to host", unsafe {
-            hip_runtime_sys::hipMemcpy(
-                back.as_mut_ptr().cast(),
-                ptr,
-                nbytes,
-                hip_runtime_sys::hipMemcpyKind::hipMemcpyDeviceToHost,
-            )
-        })
-    });
-    copied?;
+    })?;
+    hip_error("hipMemcpyAsync device to host", unsafe {
+        hip_runtime_sys::hipMemcpyAsync(
+            host.0,
+            dev.0,
+            nbytes,
+            hip_runtime_sys::hipMemcpyKind::hipMemcpyDeviceToHost,
+            stream.0,
+        )
+    })?;
+    hip_error("hipEventRecord", unsafe {
+        hip_runtime_sys::hipEventRecord(event.0, stream.0)
+    })?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    poll_until(deadline, || {
+        let status = unsafe { hip_runtime_sys::hipEventQuery(event.0) };
+        if status == hip_runtime_sys::hipError_t::hipSuccess {
+            Ok(true)
+        } else if status == hip_runtime_sys::hipError_t::hipErrorNotReady {
+            Ok(false)
+        } else {
+            hip_error("hipEventQuery", status).map(|_| false)
+        }
+    })?;
+    let mut back = vec![0.0f32; input.len()];
+    unsafe {
+        std::ptr::copy_nonoverlapping(host.0.cast::<f32>(), back.as_mut_ptr(), input.len());
+    }
     Ok(back)
 }
 
@@ -179,6 +315,56 @@ mod tests {
         {
             HipDevice::open().expect("hip feature on: a missing HIP device fails the test")
         }
+    }
+
+    #[test]
+    fn out_of_memory_is_capacity_not_no_device() {
+        let oom = hip_status("hipMalloc", 2).unwrap_err();
+        assert!(
+            matches!(
+                oom,
+                DeviceError::Capacity {
+                    kind: Device::Hip,
+                    ..
+                }
+            ),
+            "{oom}"
+        );
+        let other = hip_status("hipInit", 3).unwrap_err();
+        assert!(matches!(other, DeviceError::NoDevice { .. }), "{other}");
+        assert!(hip_status("hipInit", 0).is_ok());
+    }
+
+    #[test]
+    fn memory_probe_refuses_a_copy_past_free_bytes() {
+        let err = hip_free_covers(8, 16).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DeviceError::Capacity {
+                    kind: Device::Hip,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(hip_free_covers(16, 16).is_ok());
+    }
+
+    #[test]
+    fn copy_wait_returns_when_the_deadline_has_passed() {
+        let err = poll_until(std::time::Instant::now(), || Ok(false)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DeviceError::Launch {
+                    kind: Device::Hip,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(poll_until(std::time::Instant::now(), || Ok(true)).is_ok());
     }
 
     #[test]

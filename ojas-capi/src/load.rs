@@ -75,10 +75,11 @@ pub fn resolve_under_root(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(canon)
 }
 
-/// The opened file must still be the canonical file under `root`.
+/// The opened file must still be the directory entry named by `path`.
 ///
-/// A path component swapped between resolving and opening changes `(dev, ino)`
-/// or lands outside the root, and both are refused.
+/// Compares `fstat` of `file` with `lstat` of `path`. The path is not
+/// canonicalized and not opened again, so a symlink swapped into that entry
+/// is a different inode rather than a second open that follows it.
 pub fn confirm_open_identity(file: &File, path: &Path, root: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let opened = file
@@ -87,18 +88,40 @@ pub fn confirm_open_identity(file: &File, path: &Path, root: &Path) -> Result<()
     let root = root
         .canonicalize()
         .map_err(|err| format!("model root: {err}"))?;
-    let fresh = path.canonicalize().map_err(|err| format!("path: {err}"))?;
-    if !fresh.starts_with(&root) {
-        return Err("path escapes model root".to_string());
-    }
-    let again = File::open(&fresh)
-        .map_err(|err| format!("path: {err}"))?
-        .metadata()
+    let listed = path
+        .symlink_metadata()
         .map_err(|err| format!("path: {err}"))?;
-    if again.dev() != opened.dev() || again.ino() != opened.ino() {
+    if listed.file_type().is_symlink()
+        || listed.dev() != opened.dev()
+        || listed.ino() != opened.ino()
+    {
         return Err("model file changed while opening".to_string());
     }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let parent = parent
+        .canonicalize()
+        .map_err(|err| format!("path: {err}"))?;
+    if !parent.starts_with(&root) {
+        return Err("path escapes model root".to_string());
+    }
     Ok(())
+}
+
+/// One read-only open. `O_NOFOLLOW` refuses a final-component symlink that
+/// appeared after the path was resolved, instead of following it.
+fn open_model(path: &Path) -> Result<File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    opts.custom_flags(0x0000_0100);
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    opts.custom_flags(0x0002_0000);
+    opts.open(path)
+        .map_err(|err| format!("missing file: {err}"))
 }
 
 /// Header length plus a count of `"dtype"` keys. Not a full safetensors parser.
@@ -139,53 +162,118 @@ fn inspect_file(file: &mut File) -> Result<u32, String> {
     u32::try_from(tensors).map_err(|_| "not a safetensors file: tensor count overflows".to_string())
 }
 
+/// Largest `threads` a [`DEVICE_CPU_PARALLEL`] load accepts. Larger values
+/// are refused, not clamped. Each step builds a
+/// [`ojas_cpu::CpuBackend::with_threads`] backend whose persistent worker
+/// pool (spawned on the first op large enough to use it, shared by the
+/// backend's clones) splits independent output rows across up to this many
+/// workers.
+pub const MAX_CPU_THREADS: u32 = 256;
+
+pub const DEVICE_CPU: u32 = 0;
+pub const DEVICE_CPU_PARALLEL: u32 = 1;
+pub const DEVICE_METAL: u32 = 2;
+pub const DEVICE_WGPU: u32 = 3;
+
 pub fn load_path(raw: &str) -> Result<session::Session, String> {
-    load_on(raw, 1, false, false)
+    load_on(raw, session::Compute::Cpu { threads: 1 })
 }
 
-/// `OJDV` + kind u32 + threads u32 + relative path.
-/// kind 0 CPU, 1 CPU parallel, 2 Metal, 3 wgpu.
-pub fn load_request(bytes: &[u8]) -> Result<session::Session, String> {
-    if bytes.starts_with(b"OJDV") {
-        if bytes.len() < 12 {
-            return Err("load: device header is short".to_string());
-        }
-        let kind = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        let threads = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        let path = std::str::from_utf8(&bytes[12..]).map_err(|_| "load: path is not utf-8")?;
-        return match kind {
-            0 => load_on(path, 1, false, false),
-            1 => load_on(path, threads as usize, false, false),
-            2 => load_on(path, 1, true, false),
-            3 => load_on(path, 1, false, true),
-            _ => Err(format!("load: unknown device {kind}")),
-        };
-    }
-    let path = std::str::from_utf8(bytes).map_err(|_| "load: path is not utf-8")?;
-    load_path(path)
-}
-
-fn load_on(
-    raw: &str,
-    threads: usize,
-    metal: bool,
-    wgpu_device: bool,
+/// `OJDV` + kind u32 + threads u32 + relative path, or a bare relative path
+/// for the CPU. Kind 0 CPU, 1 CPU parallel, 2 Metal, 3 wgpu.
+///
+/// CPU kinds run step and generate on [`ojas_cpu::CpuBackend`]. Metal checks
+/// the file, then opens an [`ojas_metal::MetalBackend`] that the session
+/// keeps, so its step and generate run on that device; an open failure is
+/// the load's error, never a CPU session. wgpu does the same with an
+/// [`ojas_wgpu::WgpuBackend`]: no adapter is the load's error and no session
+/// is created. `check` is polled while a device open is pending; `threads`
+/// is ignored for Metal and wgpu.
+pub fn load_request(
+    bytes: &[u8],
+    check: impl FnMut() -> Result<(), String>,
 ) -> Result<session::Session, String> {
+    let Some(rest) = bytes.strip_prefix(b"OJDV") else {
+        let path = std::str::from_utf8(bytes).map_err(|_| "load: path is not utf-8")?;
+        return load_path(path);
+    };
+    let (kind, rest) = split_u32(rest).ok_or("load: device header is short")?;
+    let (threads, rest) = split_u32(rest).ok_or("load: device header is short")?;
+    let path = std::str::from_utf8(rest).map_err(|_| "load: path is not utf-8")?;
+    match kind {
+        DEVICE_CPU => load_on(path, session::Compute::Cpu { threads: 1 }),
+        DEVICE_CPU_PARALLEL => {
+            if threads == 0 {
+                return Err("load: thread count is 0".to_string());
+            }
+            if threads > MAX_CPU_THREADS {
+                return Err(format!(
+                    "load: thread count {threads} exceeds {MAX_CPU_THREADS}"
+                ));
+            }
+            let threads = usize::try_from(threads).map_err(|_| "load: thread count")?;
+            load_on(path, session::Compute::Cpu { threads })
+        }
+        DEVICE_METAL => load_metal(path, check),
+        DEVICE_WGPU => load_wgpu(path, check),
+        _ => Err(format!("load: unknown device {kind}")),
+    }
+}
+
+fn split_u32(bytes: &[u8]) -> Option<(u32, &[u8])> {
+    let (head, tail) = bytes.split_first_chunk::<4>()?;
+    Some((u32::from_le_bytes(*head), tail))
+}
+
+fn checked_file(raw: &str) -> Result<(PathBuf, u32), String> {
     let root = session::root()?;
     let path = resolve_under_root(&root, raw)?;
-    let mut file = File::open(&path).map_err(|err| format!("missing file: {err}"))?;
+    let mut file = open_model(&path)?;
     confirm_open_identity(&file, &path, &root)?;
     let tensors = inspect_file(&mut file)?;
-    if metal {
-        let owner = crate::owner::MetalOwner::spawn()?;
-        let session = session::load_model_with_threads(path, tensors, 1)?;
-        crate::owner::retain(session.id, owner)?;
-        return Ok(session);
-    }
-    if wgpu_device {
-        ojas_wgpu::WgpuContext::open().map_err(|err| format!("wgpu: {err}"))?;
-    }
-    session::load_model_with_threads(path, tensors, threads)
+    Ok((path, tensors))
+}
+
+fn load_on(raw: &str, compute: session::Compute) -> Result<session::Session, String> {
+    let (path, tensors) = checked_file(raw)?;
+    session::load_model_on(path, tensors, compute)
+}
+
+/// The file is checked before the device opens, so a bad path does not cost
+/// a device thread. The backend charges the shared step process budget.
+#[cfg(target_os = "macos")]
+fn load_metal(
+    raw: &str,
+    check: impl FnMut() -> Result<(), String>,
+) -> Result<session::Session, String> {
+    let (path, tensors) = checked_file(raw)?;
+    let backend = crate::owner::open_metal(crate::step::step_budget(), check)?;
+    session::load_model_on(path, tensors, session::Compute::Metal(backend))
+}
+
+/// As [`load_metal`]: the file is checked first, and the backend charges the
+/// shared step process budget.
+fn load_wgpu(
+    raw: &str,
+    check: impl FnMut() -> Result<(), String>,
+) -> Result<session::Session, String> {
+    let (path, tensors) = checked_file(raw)?;
+    let backend = crate::owner::open_wgpu(crate::step::step_budget(), check)?;
+    session::load_model_on(
+        path,
+        tensors,
+        session::Compute::Wgpu(std::sync::Arc::new(backend)),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_metal(
+    raw: &str,
+    check: impl FnMut() -> Result<(), String>,
+) -> Result<session::Session, String> {
+    checked_file(raw)?;
+    crate::owner::open_metal(check)?;
+    Err("metal: Metal requires macOS".to_string())
 }
 
 #[cfg(test)]
@@ -208,6 +296,25 @@ mod tests {
         let err = confirm_open_identity(&file, &path, &dir).unwrap_err();
         assert!(err.contains("changed"), "{err}");
         drop(file);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_symlink_swapped_in_is_not_followed() {
+        let dir = std::env::temp_dir().join(format!("ojas-root-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.safetensors");
+        std::fs::write(&path, b"first").unwrap();
+        let file = File::open(&path).unwrap();
+        let outside = std::env::temp_dir().join(format!("ojas-outside-{}", std::process::id()));
+        std::fs::write(&outside, b"secret").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        let err = confirm_open_identity(&file, &path, &dir).unwrap_err();
+        assert!(err.contains("changed"), "{err}");
+        drop(file);
+        let _ = std::fs::remove_file(&outside);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

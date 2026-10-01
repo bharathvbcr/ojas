@@ -36,8 +36,12 @@ fn grad(
     nout: usize,
 ) -> (Vec<f32>, Vec<f32>) {
     let mut tape = Tape::new(cpu.clone());
-    let xv = tape.leaf(Tensor::from_f32(x, &[rows, kin], cpu.budget()).unwrap());
-    let wv = tape.leaf(Tensor::from_f32(w, &[nout, kin], cpu.budget()).unwrap());
+    let xv = tape
+        .leaf(Tensor::from_f32(x, &[rows, kin], cpu.budget()).unwrap())
+        .unwrap();
+    let wv = tape
+        .leaf(Tensor::from_f32(w, &[nout, kin], cpu.budget()).unwrap())
+        .unwrap();
     let y = tape.linear(xv, wv).unwrap();
     tape.backward(y).unwrap();
     (

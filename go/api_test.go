@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -310,6 +311,15 @@ func TestConcurrentLoadStepGenerateFreeOneHandle(t *testing.T) {
 func TestConcurrentSessionStress(t *testing.T) {
 	const goroutines = 64
 	const rounds = 25
+	if err := Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPoolSize(1); err != nil {
+		t.Fatal(err)
+	}
+	if poolSize.Load() != 1 {
+		t.Fatalf("stress pool size %d, want 1", poolSize.Load())
+	}
 	dir := harness(t)
 	writeTensor(t, dir, "model.safetensors")
 	rows := 1100
@@ -420,7 +430,16 @@ func TestConcurrentSessionStress(t *testing.T) {
 			}
 		}(g)
 	}
-	wg.Wait()
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(4 * time.Minute):
+		t.Fatal("watchdog: 64 goroutines on a pool of size 1 did not finish within 4m")
+	}
 	close(errs)
 	for err := range errs {
 		t.Error(err)
@@ -545,6 +564,16 @@ func TestPoisonDropsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Close calls engineReset before it returns, so a Free after Close
+	// passes even when this reset left the session in the table.
+	engineReset()
+	if err := Free(context.Background(), id); err == nil || !strings.Contains(err.Error(), "unknown model") {
+		t.Fatalf("reset dropped nothing: %v", err)
+	}
+	id, err = Load(context.Background(), "model.safetensors")
+	if err != nil {
+		t.Fatal(err)
+	}
 	err = poisonHandle(context.Background())
 	if !errors.Is(err, gusset.ErrPanic) {
 		t.Fatalf("panic: %v", err)
@@ -587,6 +616,205 @@ func TestOverflowAndPoolSizeAreRefused(t *testing.T) {
 	}
 }
 
+// DeviceWgpu returns a model whose Step and GenerateGreedy match a CPU model
+// of the same request (loss and grad norm within 1e-4 relative). That the
+// wgpu path does not fall back to the CPU is asserted in Rust, where device
+// readbacks are visible. With no wgpu adapter the load is a "wgpu:" error
+// and leaves no session behind.
+func TestWgpuSessionMatchesCPU(t *testing.T) {
+	dir := harness(t)
+	writeTensor(t, dir, "model.safetensors")
+	ctx := context.Background()
+	wgpu, err := LoadOn(ctx, DeviceWgpu, 1, "model.safetensors")
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "wgpu:") {
+			t.Fatalf("wgpu load: %v", err)
+		}
+		t.Logf("no wgpu adapter; checking the load failed closed: %v", err)
+		ids := make([]uint64, 0, 64)
+		for i := 0; i < 64; i++ {
+			id, err := Load(ctx, "model.safetensors")
+			if err != nil {
+				t.Fatalf("load %d after a wgpu refusal: %v", i, err)
+			}
+			ids = append(ids, id)
+		}
+		for _, id := range ids {
+			if err := Free(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
+	}
+	cpu, err := Load(ctx, "model.safetensors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logits := make([]float32, 30)
+	for i := range logits {
+		logits[i] = (float32(i*7%11) - 5) * 0.37
+	}
+	near := func(a, b float32) bool {
+		return math.Abs(float64(a-b)) <= 1e-4*math.Max(math.Abs(float64(b)), math.SmallestNonzeroFloat32)
+	}
+	for name, req := range map[string]StepRequest{
+		"logits": {Batch: 1, Seq: 6, Step: 1, Lr: 1e-3, Logits: logits, Targets: []uint32{0, 4, 2, 1, 3, 4}},
+		"tokens": {Batch: 1, Seq: 5, Step: 1, Lr: 1e-3, Tokens: []uint16{3, 1, 4, 1, 5}, TokenTargets: []uint16{5, 0, 2, 4, 1}},
+	} {
+		want, err := Step(ctx, cpu, req)
+		if err != nil {
+			t.Fatalf("%s cpu step: %v", name, err)
+		}
+		got, err := Step(ctx, wgpu, req)
+		if err != nil {
+			t.Fatalf("%s wgpu step: %v", name, err)
+		}
+		if !near(got.Loss, want.Loss) || !near(got.GradNorm, want.GradNorm) || got.Lr != want.Lr {
+			t.Fatalf("%s: wgpu %+v, cpu %+v", name, got, want)
+		}
+	}
+	if _, err := Step(ctx, wgpu, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{float32(math.NaN()), 0}, Targets: []uint32{0}}); !errors.Is(err, ErrNonFinite) {
+		t.Fatalf("NaN step on wgpu: %v", err)
+	}
+	for _, prompt := range [][]uint32{{0}, {1}, {0, 1, 1}} {
+		want, err := GenerateGreedy(ctx, cpu, prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := GenerateGreedy(ctx, wgpu, prompt)
+		if err != nil || got != want {
+			t.Fatalf("greedy %v: wgpu %d (%v), cpu %d", prompt, got, err, want)
+		}
+	}
+	if tok, err := Generate(ctx, wgpu, []float32{0, 2, 1}); err != nil || tok != 1 {
+		t.Fatalf("Generate on wgpu = %d, %v", tok, err)
+	}
+	for _, id := range []uint64{wgpu, cpu} {
+		if err := Free(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Step(ctx, wgpu, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 1}, Targets: []uint32{1}}); err == nil || !strings.Contains(err.Error(), "unknown model") {
+		t.Fatalf("step after free: %v", err)
+	}
+}
+
+// On macOS DeviceMetal returns a model whose Step and GenerateGreedy match a
+// CPU model of the same request (loss and grad norm within 1e-4 relative).
+// That the Metal path does not fall back to the CPU is asserted in Rust,
+// where device readbacks are visible. Off macOS the load is a "metal:" error.
+func TestMetalSessionMatchesCPU(t *testing.T) {
+	dir := harness(t)
+	writeTensor(t, dir, "model.safetensors")
+	ctx := context.Background()
+	metal, err := LoadOn(ctx, DeviceMetal, 1, "model.safetensors")
+	if runtime.GOOS != "darwin" {
+		if err == nil || !strings.HasPrefix(err.Error(), "metal:") {
+			t.Fatalf("Metal off macOS: id=%d err=%v", metal, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("Metal load: %v", err)
+	}
+	cpu, err := Load(ctx, "model.safetensors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logits := make([]float32, 30)
+	for i := range logits {
+		logits[i] = (float32(i*7%11) - 5) * 0.37
+	}
+	near := func(a, b float32) bool {
+		return math.Abs(float64(a-b)) <= 1e-4*math.Max(math.Abs(float64(b)), math.SmallestNonzeroFloat32)
+	}
+	for name, req := range map[string]StepRequest{
+		"logits": {Batch: 1, Seq: 6, Step: 1, Lr: 1e-3, Logits: logits, Targets: []uint32{0, 4, 2, 1, 3, 4}},
+		"tokens": {Batch: 1, Seq: 5, Step: 1, Lr: 1e-3, Tokens: []uint16{3, 1, 4, 1, 5}, TokenTargets: []uint16{5, 0, 2, 4, 1}},
+	} {
+		want, err := Step(ctx, cpu, req)
+		if err != nil {
+			t.Fatalf("%s cpu step: %v", name, err)
+		}
+		got, err := Step(ctx, metal, req)
+		if err != nil {
+			t.Fatalf("%s metal step: %v", name, err)
+		}
+		if !near(got.Loss, want.Loss) || !near(got.GradNorm, want.GradNorm) || got.Lr != want.Lr {
+			t.Fatalf("%s: metal %+v, cpu %+v", name, got, want)
+		}
+	}
+	for _, prompt := range [][]uint32{{0}, {1}, {0, 1, 1}} {
+		want, err := GenerateGreedy(ctx, cpu, prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := GenerateGreedy(ctx, metal, prompt)
+		if err != nil || got != want {
+			t.Fatalf("greedy %v: metal %d (%v), cpu %d", prompt, got, err, want)
+		}
+	}
+	if tok, err := Generate(ctx, metal, []float32{0, 2, 1}); err != nil || tok != 1 {
+		t.Fatalf("Generate on Metal = %d, %v", tok, err)
+	}
+	for _, id := range []uint64{metal, cpu} {
+		if err := Free(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Step(ctx, metal, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 1}, Targets: []uint32{1}}); err == nil || !strings.Contains(err.Error(), "unknown model") {
+		t.Fatalf("step after free: %v", err)
+	}
+}
+
+func TestCPUParallelThreadCountIsBounded(t *testing.T) {
+	dir := harness(t)
+	writeTensor(t, dir, "model.safetensors")
+	for _, threads := range []uint32{1, 4, MaxCPUThreads} {
+		id, err := LoadOn(context.Background(), DeviceCPUParallel, threads, "model.safetensors")
+		if err != nil {
+			t.Fatalf("threads %d: %v", threads, err)
+		}
+		if _, err := Step(context.Background(), id, StepRequest{Batch: 1, Seq: 1, Lr: 1e-3, Logits: []float32{0, 1}, Targets: []uint32{1}}); err != nil {
+			t.Fatalf("threads %d step: %v", threads, err)
+		}
+		if err := Free(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, threads := range []uint32{MaxCPUThreads + 1, 1 << 20, math.MaxUint32} {
+		if id, err := LoadOn(context.Background(), DeviceCPUParallel, threads, "model.safetensors"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("threads %d: id=%d err=%v", threads, id, err)
+		}
+	}
+	if _, err := LoadOn(context.Background(), DeviceCPUParallel, 0, "model.safetensors"); err == nil || !strings.Contains(err.Error(), "thread count is 0") {
+		t.Fatalf("zero threads: %v", err)
+	}
+}
+
+func TestCancelledContextIsAContextError(t *testing.T) {
+	dir := harness(t)
+	writeTensor(t, dir, "model.safetensors")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if id, err := Load(ctx, "model.safetensors"); err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Load on a cancelled context: id=%d err=%v", id, err)
+	}
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	if _, err := Generate(expired, 1, []float32{0, 1}); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Generate past its deadline: %v", err)
+	}
+	// A refused call did not leave a session behind.
+	id, err := Load(context.Background(), "model.safetensors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Free(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPkgconfigNamesAppleFrameworks(t *testing.T) {
 	for _, path := range []string{"gusset.pc", "release/gusset.pc"} {
 		body, err := os.ReadFile(path)
@@ -594,7 +822,7 @@ func TestPkgconfigNamesAppleFrameworks(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(body)
-		for _, fragment := range []string{"-framework Metal", "-framework Foundation", "-framework QuartzCore", "-framework CoreFoundation", "-framework CoreGraphics", "-lobjc"} {
+		for _, fragment := range []string{"-framework Metal", "-framework Foundation", "-framework QuartzCore", "-framework CoreFoundation", "-framework CoreGraphics", "-framework Accelerate", "-lobjc"} {
 			if !strings.Contains(text, fragment) {
 				t.Fatalf("%s missing %s", path, fragment)
 			}
@@ -610,5 +838,12 @@ func TestPkgconfigNamesAppleFrameworks(t *testing.T) {
 	}
 	if !strings.Contains(string(debug), "target/debug") || !strings.Contains(string(release), "target/release") {
 		t.Fatal("pc files do not name distinct profiles")
+	}
+	linux, err := os.ReadFile("linux/gusset.pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(linux), "-framework") || !strings.Contains(string(linux), "target/debug") || !strings.Contains(string(linux), "-lgusset") {
+		t.Fatalf("linux/gusset.pc must link target/debug libgusset without Apple frameworks:\n%s", linux)
 	}
 }

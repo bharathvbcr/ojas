@@ -1,0 +1,3 @@
+# Raw run output (torch reference samples reach ~200 MB). Quoted runs are
+# copied to bench/results/ without the ref/ directory.
+out/

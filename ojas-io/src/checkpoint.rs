@@ -5,86 +5,189 @@
 //! A short file or a length that runs past the end is an error.
 
 use crate::error::IoError;
-use crate::replace::replace_file;
+use crate::replace::replace_with;
 use ojas_core::{read_prefix, CheckpointV1, DType, DataCursor, NamedBlob, OptimizerCheckpoint};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, Write};
 use std::path::Path;
 
 /// The target is replaced by rename, so a failed write leaves the previous
-/// checkpoint intact.
+/// checkpoint intact. A checkpoint the reader would refuse is not written.
 pub fn write_checkpoint(path: &Path, ckpt: &CheckpointV1) -> Result<(), IoError> {
-    replace_file(path, &encode_checkpoint(ckpt)?)
+    let n = prepare(ckpt)?;
+    replace_with(path, |file| {
+        write_to(file, ckpt)?;
+        let pos = file
+            .stream_position()
+            .map_err(|e| IoError::new(format!("checkpoint write: {e}")))?;
+        if pos != n {
+            return Err(IoError::new(format!(
+                "checkpoint length mismatch: wrote {pos}, expected {n}"
+            )));
+        }
+        Ok(())
+    })
 }
 
 /// Refused before `read_checkpoint` reserves a buffer.
 pub const MAX_CHECKPOINT_BYTES: u64 = 1 << 30;
 
+/// `n == cap` is allowed. One byte past `cap` is not.
+///
+/// Production callers pass [`MAX_CHECKPOINT_BYTES`]. A test can pass a
+/// smaller cap and check the same compare without allocating a gibibyte.
+fn exceeds_checkpoint_cap(n: u64, cap: u64) -> bool {
+    n > cap
+}
+
 pub fn read_checkpoint(path: &Path) -> Result<CheckpointV1, IoError> {
-    let mut file =
-        File::open(path).map_err(|e| IoError::new(format!("{}: {e}", path.display())))?;
+    let file = File::open(path).map_err(|e| IoError::new(format!("{}: {e}", path.display())))?;
     let file_len = file
         .metadata()
         .map_err(|e| IoError::new(format!("{}: {e}", path.display())))?
         .len();
-    if file_len > MAX_CHECKPOINT_BYTES {
+    if exceeds_checkpoint_cap(file_len, MAX_CHECKPOINT_BYTES) {
         return Err(IoError::new(format!(
             "{}: {file_len} bytes exceeds checkpoint cap {MAX_CHECKPOINT_BYTES}",
             path.display()
         )));
     }
-    let mut buf = Vec::new();
-    let n =
-        usize::try_from(file_len).map_err(|_| IoError::new("checkpoint length exceeds usize"))?;
-    buf.try_reserve_exact(n)
-        .map_err(|_| IoError::new(format!("checkpoint allocation of {n} bytes refused")))?;
-    buf.resize(n, 0);
-    file.read_exact(&mut buf)
-        .map_err(|e| IoError::new(format!("{}: truncated checkpoint: {e}", path.display())))?;
-    decode_checkpoint(&buf)
+    // Stream records into the decoded checkpoint. The file bytes are not held
+    // beside a second copy of every payload.
+    let mut limited = file.take(file_len);
+    decode_reader(&mut limited, file_len)
+        .map_err(|e| IoError::new(format!("{}: {}", path.display(), e.detail())))
 }
 
 pub fn encode_checkpoint(ckpt: &CheckpointV1) -> Result<Vec<u8>, IoError> {
-    validate_list("weights", &ckpt.weights)?;
-    validate_list("muon_momentum", &ckpt.optimizer.muon_momentum)?;
-    validate_list("adamw_first_moment", &ckpt.optimizer.adamw_first_moment)?;
-    validate_list("adamw_second_moment", &ckpt.optimizer.adamw_second_moment)?;
+    let n = prepare(ckpt)?;
+    let n_us = usize::try_from(n).map_err(|_| IoError::new("checkpoint length exceeds usize"))?;
     let mut out = Vec::new();
-    out.extend_from_slice(&ojas_core::prefix_bytes());
-    write_bytes(&mut out, &ckpt.config)?;
-    out.extend_from_slice(&ckpt.tokenizer_hash);
-    out.extend_from_slice(&ckpt.git_sha);
-    out.extend_from_slice(&ckpt.step.to_le_bytes());
-    out.extend_from_slice(&ckpt.data_cursor.shard.to_le_bytes());
-    out.extend_from_slice(&ckpt.data_cursor.token_index.to_le_bytes());
-    write_bytes(&mut out, &ckpt.rng_state)?;
-    write_blob_section(&mut out, &ckpt.weights)?;
-    write_blob_section(&mut out, &ckpt.optimizer.muon_momentum)?;
-    write_blob_section(&mut out, &ckpt.optimizer.adamw_first_moment)?;
-    write_blob_section(&mut out, &ckpt.optimizer.adamw_second_moment)?;
+    out.try_reserve_exact(n_us)
+        .map_err(|_| IoError::new(format!("checkpoint allocation of {n_us} bytes refused")))?;
+    write_to(&mut out, ckpt)?;
+    if out.len() as u64 != n {
+        return Err(IoError::new(format!(
+            "checkpoint length mismatch: encoded {}, expected {n}",
+            out.len()
+        )));
+    }
     Ok(out)
 }
 
 pub fn decode_checkpoint(bytes: &[u8]) -> Result<CheckpointV1, IoError> {
-    let mut c = Cursor::new(bytes);
-    let prefix = c.take(12)?;
-    read_prefix(prefix).map_err(|e| IoError::new(e.to_string()))?;
-    let config = c.take_lp()?.to_vec();
+    let len =
+        u64::try_from(bytes.len()).map_err(|_| IoError::new("checkpoint length exceeds u64"))?;
+    decode_reader(&mut std::io::Cursor::new(bytes), len)
+}
+
+fn prepare(ckpt: &CheckpointV1) -> Result<u64, IoError> {
+    validate_list("weights", &ckpt.weights)?;
+    validate_list("muon_momentum", &ckpt.optimizer.muon_momentum)?;
+    validate_list("adamw_first_moment", &ckpt.optimizer.adamw_first_moment)?;
+    validate_list("adamw_second_moment", &ckpt.optimizer.adamw_second_moment)?;
+    let n = encoded_len(ckpt)?;
+    if exceeds_checkpoint_cap(n, MAX_CHECKPOINT_BYTES) {
+        return Err(IoError::new(format!(
+            "checkpoint of {n} bytes exceeds cap {MAX_CHECKPOINT_BYTES}"
+        )));
+    }
+    Ok(n)
+}
+
+fn encoded_len(ckpt: &CheckpointV1) -> Result<u64, IoError> {
+    let mut n = 12u64;
+    n = add(n, lp_len(&ckpt.config)?)?;
+    n = add(n, 32 + 20 + 8 + 8 + 8)?;
+    n = add(n, lp_len(&ckpt.rng_state)?)?;
+    n = add(n, section_len(&ckpt.weights)?)?;
+    n = add(n, section_len(&ckpt.optimizer.muon_momentum)?)?;
+    n = add(n, section_len(&ckpt.optimizer.adamw_first_moment)?)?;
+    n = add(n, section_len(&ckpt.optimizer.adamw_second_moment)?)?;
+    Ok(n)
+}
+
+fn add(n: u64, m: u64) -> Result<u64, IoError> {
+    n.checked_add(m)
+        .ok_or_else(|| IoError::new("checkpoint length overflows"))
+}
+
+fn u64_len(bytes: &[u8]) -> Result<u64, IoError> {
+    u64::try_from(bytes.len()).map_err(|_| IoError::new("section length exceeds u64"))
+}
+
+fn lp_len(bytes: &[u8]) -> Result<u64, IoError> {
+    add(8, u64_len(bytes)?)
+}
+
+fn section_len(blobs: &[NamedBlob]) -> Result<u64, IoError> {
+    let mut body = 8u64;
+    for blob in blobs {
+        body = add(body, record_len(blob)?)?;
+    }
+    add(8, body)
+}
+
+fn record_len(b: &NamedBlob) -> Result<u64, IoError> {
+    let name = u64::try_from(b.name.len()).map_err(|_| IoError::new("name length exceeds u64"))?;
+    let rank = u64::try_from(b.shape.len())
+        .map_err(|_| IoError::new(format!("{:?}: rank exceeds u64", b.name)))?;
+    let shape = rank
+        .checked_mul(8)
+        .ok_or_else(|| IoError::new(format!("{:?}: shape byte length overflows", b.name)))?;
+    let payload =
+        u64::try_from(b.bytes.len()).map_err(|_| IoError::new("payload length exceeds u64"))?;
+    let mut n = add(8, name)?;
+    n = add(n, 4 + 4)?;
+    n = add(n, shape)?;
+    n = add(n, 8 + 8)?;
+    add(n, payload)
+}
+
+fn write_to(out: &mut impl Write, ckpt: &CheckpointV1) -> Result<(), IoError> {
+    put(out, &ojas_core::prefix_bytes())?;
+    write_lp(out, &ckpt.config)?;
+    put(out, &ckpt.tokenizer_hash)?;
+    put(out, &ckpt.git_sha)?;
+    put(out, &ckpt.step.to_le_bytes())?;
+    put(out, &ckpt.data_cursor.shard.to_le_bytes())?;
+    put(out, &ckpt.data_cursor.token_index.to_le_bytes())?;
+    write_lp(out, &ckpt.rng_state)?;
+    write_blob_section(out, &ckpt.weights)?;
+    write_blob_section(out, &ckpt.optimizer.muon_momentum)?;
+    write_blob_section(out, &ckpt.optimizer.adamw_first_moment)?;
+    write_blob_section(out, &ckpt.optimizer.adamw_second_moment)?;
+    Ok(())
+}
+
+fn decode_reader(reader: &mut impl Read, len: u64) -> Result<CheckpointV1, IoError> {
+    if exceeds_checkpoint_cap(len, MAX_CHECKPOINT_BYTES) {
+        return Err(IoError::new(format!(
+            "{len} bytes exceeds checkpoint cap {MAX_CHECKPOINT_BYTES}"
+        )));
+    }
+    let mut c = In {
+        r: reader,
+        left: len,
+    };
+    let prefix = c.take_vec(12)?;
+    read_prefix(&prefix).map_err(|e| IoError::new(e.to_string()))?;
+    let config = c.take_lp()?;
     let mut tokenizer_hash = [0u8; 32];
-    tokenizer_hash.copy_from_slice(c.take(32)?);
+    tokenizer_hash.copy_from_slice(&c.take_vec(32)?);
     let mut git_sha = [0u8; 20];
-    git_sha.copy_from_slice(c.take(20)?);
+    git_sha.copy_from_slice(&c.take_vec(20)?);
     let step = c.u64()?;
     let data_cursor = DataCursor {
         shard: c.u64()?,
         token_index: c.u64()?,
     };
-    let rng_state = c.take_lp()?.to_vec();
+    let rng_state = c.take_lp()?;
     let weights = c.blob_section("weights")?;
     let muon_momentum = c.blob_section("muon_momentum")?;
     let adamw_first_moment = c.blob_section("adamw_first_moment")?;
     let adamw_second_moment = c.blob_section("adamw_second_moment")?;
-    if c.i != c.b.len() {
+    if c.left != 0 {
         return Err(IoError::new("trailing bytes after checkpoint"));
     }
     Ok(CheckpointV1 {
@@ -145,113 +248,124 @@ fn window_ok(b: &NamedBlob) -> Result<(), IoError> {
     Ok(())
 }
 
-fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), IoError> {
-    let n = u64::try_from(bytes.len()).map_err(|_| IoError::new("section length exceeds u64"))?;
-    out.extend_from_slice(&n.to_le_bytes());
-    out.extend_from_slice(bytes);
+fn put(out: &mut impl Write, bytes: &[u8]) -> Result<(), IoError> {
+    out.write_all(bytes)
+        .map_err(|e| IoError::new(format!("checkpoint write: {e}")))
+}
+
+fn write_lp(out: &mut impl Write, bytes: &[u8]) -> Result<(), IoError> {
+    let n = u64_len(bytes)?;
+    put(out, &n.to_le_bytes())?;
+    put(out, bytes)
+}
+
+fn write_blob_section(out: &mut impl Write, blobs: &[NamedBlob]) -> Result<(), IoError> {
+    let body = section_len(blobs)? - 8;
+    put(out, &body.to_le_bytes())?;
+    let count = u64::try_from(blobs.len()).map_err(|_| IoError::new("record count exceeds u64"))?;
+    put(out, &count.to_le_bytes())?;
+    for b in blobs {
+        write_record(out, b)?;
+    }
     Ok(())
 }
 
-fn write_blob_section(out: &mut Vec<u8>, blobs: &[NamedBlob]) -> Result<(), IoError> {
-    let mut payload = Vec::new();
-    let count = u64::try_from(blobs.len()).map_err(|_| IoError::new("record count exceeds u64"))?;
-    payload.extend_from_slice(&count.to_le_bytes());
-    for b in blobs {
-        write_record(&mut payload, b)?;
-    }
-    write_bytes(out, &payload)
-}
-
-fn write_record(out: &mut Vec<u8>, b: &NamedBlob) -> Result<(), IoError> {
+fn write_record(out: &mut impl Write, b: &NamedBlob) -> Result<(), IoError> {
     let name = b.name.as_bytes();
     let name_len =
         u64::try_from(name.len()).map_err(|_| IoError::new("name length exceeds u64"))?;
-    out.extend_from_slice(&name_len.to_le_bytes());
-    out.extend_from_slice(name);
-    out.extend_from_slice(&b.dtype.tag().to_le_bytes());
+    put(out, &name_len.to_le_bytes())?;
+    put(out, name)?;
+    put(out, &b.dtype.tag().to_le_bytes())?;
     let rank = u32::try_from(b.shape.len())
         .map_err(|_| IoError::new(format!("{:?}: rank exceeds u32", b.name)))?;
-    out.extend_from_slice(&rank.to_le_bytes());
+    put(out, &rank.to_le_bytes())?;
     for &d in &b.shape {
-        out.extend_from_slice(&d.to_le_bytes());
+        put(out, &d.to_le_bytes())?;
     }
-    out.extend_from_slice(&b.byte_offset.to_le_bytes());
-    let payload_len = u64::try_from(b.bytes.len())
-        .map_err(|_| IoError::new(format!("{:?}: payload length exceeds u64", b.name)))?;
-    out.extend_from_slice(&payload_len.to_le_bytes());
-    out.extend_from_slice(&b.bytes);
-    Ok(())
+    put(out, &b.byte_offset.to_le_bytes())?;
+    let payload_len =
+        u64::try_from(b.bytes.len()).map_err(|_| IoError::new("payload length exceeds u64"))?;
+    put(out, &payload_len.to_le_bytes())?;
+    put(out, &b.bytes)
 }
 
 /// Name length, dtype tag, rank, byte_offset, payload length: a rank-0 record
 /// with an empty name and payload.
-const MIN_RECORD_BYTES: usize = 8 + 4 + 4 + 8 + 8;
+const MIN_RECORD_BYTES: u64 = 8 + 4 + 4 + 8 + 8;
 
-struct Cursor<'a> {
-    b: &'a [u8],
-    i: usize,
+struct In<'a, R: Read> {
+    r: &'a mut R,
+    left: u64,
 }
 
-impl<'a> Cursor<'a> {
-    fn new(b: &'a [u8]) -> Self {
-        Self { b, i: 0 }
-    }
-
-    fn remaining(&self) -> usize {
-        self.b.len().saturating_sub(self.i)
-    }
-
-    fn take(&mut self, n: usize) -> Result<&'a [u8], IoError> {
-        let end = self
-            .i
-            .checked_add(n)
-            .ok_or_else(|| IoError::new("truncated checkpoint"))?;
-        let s = self
-            .b
-            .get(self.i..end)
-            .ok_or_else(|| IoError::new("truncated checkpoint"))?;
-        self.i = end;
-        Ok(s)
+impl<R: Read> In<'_, R> {
+    fn take_vec(&mut self, n: u64) -> Result<Vec<u8>, IoError> {
+        if n > self.left {
+            return Err(IoError::new("truncated checkpoint"));
+        }
+        let n_us = usize::try_from(n).map_err(|_| IoError::new("section length exceeds usize"))?;
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(n_us)
+            .map_err(|_| IoError::new(format!("checkpoint allocation of {n_us} bytes refused")))?;
+        buf.resize(n_us, 0);
+        self.r
+            .read_exact(&mut buf)
+            .map_err(|e| IoError::new(format!("truncated checkpoint: {e}")))?;
+        self.left -= n;
+        Ok(buf)
     }
 
     fn u32(&mut self) -> Result<u32, IoError> {
-        let s = self.take(4)?;
+        let s = self.take_vec(4)?;
         let mut a = [0u8; 4];
-        a.copy_from_slice(s);
+        a.copy_from_slice(&s);
         Ok(u32::from_le_bytes(a))
     }
 
     fn u64(&mut self) -> Result<u64, IoError> {
-        let s = self.take(8)?;
+        let s = self.take_vec(8)?;
         let mut a = [0u8; 8];
-        a.copy_from_slice(s);
+        a.copy_from_slice(&s);
         Ok(u64::from_le_bytes(a))
     }
 
-    fn take_lp(&mut self) -> Result<&'a [u8], IoError> {
+    fn take_lp(&mut self) -> Result<Vec<u8>, IoError> {
         let n = self.u64()?;
-        let n_us = usize::try_from(n).map_err(|_| IoError::new("section length exceeds usize"))?;
-        self.take(n_us)
+        self.take_vec(n)
     }
 
     fn blob_section(&mut self, what: &str) -> Result<Vec<NamedBlob>, IoError> {
-        let raw = self.take_lp()?;
-        let mut inner = Cursor::new(raw);
-        let count = inner.u64()?;
-        let count_us = usize::try_from(count)
-            .map_err(|_| IoError::new(format!("{what}: count exceeds usize")))?;
-        let room = inner.remaining();
-        if count_us > room / MIN_RECORD_BYTES {
+        let body_len = self.u64()?;
+        if body_len > self.left {
+            return Err(IoError::new("truncated checkpoint"));
+        }
+        let resume = self.left - body_len;
+        self.left = body_len;
+        let out = self.blob_body(what)?;
+        if self.left != 0 {
+            return Err(IoError::new(format!("{what}: trailing bytes in section")));
+        }
+        self.left = resume;
+        Ok(out)
+    }
+
+    fn blob_body(&mut self, what: &str) -> Result<Vec<NamedBlob>, IoError> {
+        let count = self.u64()?;
+        let room = self.left;
+        if MIN_RECORD_BYTES == 0 || count > room / MIN_RECORD_BYTES {
             return Err(IoError::new(format!(
                 "{what}: record count {count} exceeds what {room} section bytes can hold"
             )));
         }
+        let count_us = usize::try_from(count)
+            .map_err(|_| IoError::new(format!("{what}: count exceeds usize")))?;
+        // Grow one validated record at a time. A count that fits the minimum
+        // record size is not a reservation for that many empty slots.
         let mut out = Vec::new();
-        out.try_reserve_exact(count_us)
-            .map_err(|_| IoError::new(format!("{what}: record allocation refused")))?;
         let mut seen = std::collections::BTreeSet::new();
         for _ in 0..count_us {
-            let blob = inner.record()?;
+            let blob = self.record()?;
             if !seen.insert(blob.name.clone()) {
                 return Err(IoError::new(format!(
                     "{what}: duplicate key {:?}",
@@ -259,32 +373,32 @@ impl<'a> Cursor<'a> {
                 )));
             }
             window_ok(&blob)?;
+            out.try_reserve(1)
+                .map_err(|_| IoError::new(format!("{what}: record allocation refused")))?;
             out.push(blob);
-        }
-        if inner.i != inner.b.len() {
-            return Err(IoError::new(format!("{what}: trailing bytes in section")));
         }
         Ok(out)
     }
 
     fn record(&mut self) -> Result<NamedBlob, IoError> {
         let name_len = self.u64()?;
-        let name_us =
-            usize::try_from(name_len).map_err(|_| IoError::new("name length exceeds usize"))?;
-        let name_bytes = self.take(name_us)?;
-        let name = std::str::from_utf8(name_bytes)
+        if name_len > self.left {
+            return Err(IoError::new("truncated checkpoint"));
+        }
+        let name_bytes = self.take_vec(name_len)?;
+        let name = std::str::from_utf8(&name_bytes)
             .map_err(|e| IoError::new(format!("tensor name is not UTF-8: {e}")))?
             .to_string();
         let dtype = DType::from_tag(self.u32()?).map_err(|e| IoError::new(e.to_string()))?;
         let rank = self.u32()?;
         let rank_us = usize::try_from(rank).map_err(|_| IoError::new("rank exceeds usize"))?;
-        let shape_bytes = rank_us
+        let shape_bytes = u64::from(rank)
             .checked_mul(8)
             .ok_or_else(|| IoError::new("shape byte length overflows"))?;
-        if shape_bytes > self.remaining() {
+        if shape_bytes > self.left {
             return Err(IoError::new(format!(
                 "{name:?}: rank {rank} needs {shape_bytes} shape bytes, {} remain",
-                self.remaining()
+                self.left
             )));
         }
         let mut shape = Vec::new();
@@ -295,7 +409,7 @@ impl<'a> Cursor<'a> {
             shape.push(self.u64()?);
         }
         let byte_offset = self.u64()?;
-        let payload = self.take_lp()?.to_vec();
+        let payload = self.take_lp()?;
         Ok(NamedBlob {
             name,
             dtype,
@@ -309,7 +423,7 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{tmp, Mix};
+    use crate::test_util::{tmp, tmp_dir, Mix};
 
     fn sample() -> CheckpointV1 {
         let mut bytes = vec![0xAB, 0xCD];
@@ -485,6 +599,82 @@ mod tests {
                 token_index: rng.next(),
             },
         }
+    }
+
+    #[test]
+    fn replace_sweeps_orphan_temps_for_this_name_only() {
+        let dir = tmp_dir("sweep");
+        let path = dir.0.join("model.bin");
+        let orphan = dir
+            .0
+            .join(format!(".model.bin.{}.7.tmp", std::process::id()));
+        std::fs::write(&orphan, b"stale").unwrap();
+        let unrelated = dir.0.join(format!(".other.{}.1.tmp", std::process::id()));
+        std::fs::write(&unrelated, b"keep").unwrap();
+        std::fs::write(dir.0.join(".model.bin.tmp"), b"keep").unwrap();
+        std::fs::write(dir.0.join(".model.bin.pid.seq.tmp"), b"keep").unwrap();
+        std::fs::write(dir.0.join(".model.bin.1.2.3.tmp"), b"keep").unwrap();
+        std::fs::write(dir.0.join("model.bin.1.2.tmp"), b"keep").unwrap();
+        write_checkpoint(&path, &sample()).unwrap();
+        assert!(
+            !orphan.exists(),
+            "orphan temp survived a successful replace"
+        );
+        assert!(unrelated.exists());
+        assert!(dir.0.join(".model.bin.tmp").exists());
+        assert!(dir.0.join(".model.bin.pid.seq.tmp").exists());
+        assert!(dir.0.join(".model.bin.1.2.3.tmp").exists());
+        assert!(dir.0.join("model.bin.1.2.tmp").exists());
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn encoded_length_matches_the_bytes_and_the_writer_shares_the_read_cap() {
+        let ckpt = sample();
+        let bytes = encode_checkpoint(&ckpt).unwrap();
+        assert_eq!(encoded_len(&ckpt).unwrap() as usize, bytes.len());
+        assert!(bytes.len() as u64 <= MAX_CHECKPOINT_BYTES);
+
+        let mut over = ckpt;
+        let base = encoded_len(&over).unwrap();
+        let old = over.weights[0].bytes.len() as u64;
+        let mut new_len = (MAX_CHECKPOINT_BYTES + 1) - (base - old);
+        let rem = new_len % 4;
+        if rem != 0 {
+            new_len += 4 - rem;
+        }
+        over.weights[0].dtype = DType::F32;
+        over.weights[0].shape = vec![new_len / 4];
+        over.weights[0].byte_offset = 0;
+        over.weights[0].bytes = vec![0u8; usize::try_from(new_len).unwrap()];
+        let err = encode_checkpoint(&over).unwrap_err();
+        assert!(err.detail().contains("cap"), "{err}");
+        let path = tmp("ckpt-over-cap");
+        let err = write_checkpoint(&path.0, &over).unwrap_err();
+        assert!(err.detail().contains("cap"), "{err}");
+        assert!(!path.0.exists());
+    }
+
+    /// The 1 GiB boundary is the compare. Building a payload of that size is
+    /// skipped; a smaller injected cap uses the same function the writer calls.
+    #[test]
+    fn checkpoint_cap_allows_the_exact_byte_and_refuses_one_past() {
+        assert!(!exceeds_checkpoint_cap(
+            MAX_CHECKPOINT_BYTES,
+            MAX_CHECKPOINT_BYTES
+        ));
+        assert!(exceeds_checkpoint_cap(
+            MAX_CHECKPOINT_BYTES + 1,
+            MAX_CHECKPOINT_BYTES
+        ));
+        let small = 64u64;
+        assert!(!exceeds_checkpoint_cap(small, small));
+        assert!(exceeds_checkpoint_cap(small + 1, small));
+        let ckpt = sample();
+        let n = encoded_len(&ckpt).unwrap();
+        assert!(n < MAX_CHECKPOINT_BYTES);
+        assert!(!exceeds_checkpoint_cap(n, MAX_CHECKPOINT_BYTES));
+        encode_checkpoint(&ckpt).unwrap();
     }
 
     #[test]

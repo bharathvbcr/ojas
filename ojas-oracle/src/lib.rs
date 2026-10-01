@@ -156,17 +156,41 @@ fn field<'a>(obj: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
 /// recursive descent can exhaust the stack.
 const MAX_DEPTH: usize = 16;
 
+/// Public `parse_rms_norm` takes any string. Four mebibytes is enough for a
+/// fixture and smaller than the two-mebibyte depth probe in the tests.
+const MAX_FIXTURE_BYTES: usize = 4 * 1024 * 1024;
+const FIXTURE_BYTE_FACTOR: usize = 8;
+const FIXTURE_BYTE_FLOOR: usize = 64 * 1024;
+
+/// Not the `ojas-io` parser. That grammar is non-negative integers and
+/// surrogate pairs, for safetensors headers. Fixtures need f64, signs, and
+/// exponents, and they refuse every escape. A path dependency would also
+/// rewrite `Cargo.lock`, which this session does not edit.
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
     depth: usize,
+    nodes: usize,
+    bytes: usize,
+    node_cap: usize,
+    byte_cap: usize,
 }
 
 fn parse_json(text: &str) -> Result<Json, OjasError> {
+    if text.len() > MAX_FIXTURE_BYTES {
+        return Err(bad("fixture exceeds 4 MiB"));
+    }
     let mut parser = Parser {
         s: text.as_bytes(),
         i: 0,
         depth: 0,
+        nodes: 0,
+        bytes: 0,
+        node_cap: text.len().saturating_add(1),
+        byte_cap: text
+            .len()
+            .saturating_mul(FIXTURE_BYTE_FACTOR)
+            .saturating_add(FIXTURE_BYTE_FLOOR),
     };
     let value = parser.value()?;
     parser.skip();
@@ -177,6 +201,22 @@ fn parse_json(text: &str) -> Result<Json, OjasError> {
 }
 
 impl<'a> Parser<'a> {
+    fn note(&mut self, n: usize) -> Result<(), OjasError> {
+        self.bytes = self.bytes.saturating_add(n);
+        if self.bytes > self.byte_cap {
+            return Err(bad("fixture byte budget exceeded"));
+        }
+        Ok(())
+    }
+
+    fn note_node(&mut self) -> Result<(), OjasError> {
+        self.nodes = self.nodes.saturating_add(1);
+        if self.nodes > self.node_cap {
+            return Err(bad("fixture node budget exceeded"));
+        }
+        self.note(std::mem::size_of::<Json>())
+    }
+
     fn value(&mut self) -> Result<Json, OjasError> {
         self.skip();
         let byte = self
@@ -196,13 +236,23 @@ impl<'a> Parser<'a> {
                 self.depth -= 1;
                 nested
             }
-            b'"' => Ok(Json::String(self.string()?)),
-            b'-' | b'0'..=b'9' => Ok(Json::Number(self.number()?)),
+            b'"' => {
+                let text = self.string()?;
+                self.note(text.len())?;
+                self.note_node()?;
+                Ok(Json::String(text))
+            }
+            b'-' | b'0'..=b'9' => {
+                let value = self.number()?;
+                self.note_node()?;
+                Ok(Json::Number(value))
+            }
             _ => Err(bad("unexpected fixture character")),
         }
     }
 
     fn object(&mut self) -> Result<Json, OjasError> {
+        self.note_node()?;
         self.bump(b'{')?;
         let mut pairs = Vec::new();
         loop {
@@ -215,6 +265,8 @@ impl<'a> Parser<'a> {
                 self.skip();
             }
             let key = self.string()?;
+            self.note(key.len())?;
+            self.note(std::mem::size_of::<String>())?;
             if pairs.iter().any(|(name, _)| *name == key) {
                 return Err(bad("duplicate fixture key"));
             }
@@ -227,6 +279,7 @@ impl<'a> Parser<'a> {
     }
 
     fn array(&mut self) -> Result<Json, OjasError> {
+        self.note_node()?;
         self.bump(b'[')?;
         let mut items = Vec::new();
         loop {

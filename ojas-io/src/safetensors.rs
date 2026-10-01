@@ -8,6 +8,7 @@
 //! [`SafeTensors::read_into`] copies one range with a positioned read.
 
 use crate::error::IoError;
+use crate::half::{bf16_to_f32, f16_to_f32, f32_to_bf16, f32_to_f16};
 use crate::json::{self, Json};
 use crate::replace::replace_file;
 use std::collections::BTreeMap;
@@ -19,11 +20,14 @@ use std::path::Path;
 /// 100_000_000, not 100 MiB (104_857_600).
 pub const MAX_HEADER_BYTES: u64 = 100_000_000;
 
-/// Dtypes this crate reads and writes. Enough for f32 weights and integer
-/// token ids. Other safetensors dtypes are rejected.
+/// Dtypes this crate reads and writes: f32, bf16 and f16 weights, and
+/// integer token ids. The header strings are exactly `"F32"`, `"BF16"`,
+/// `"F16"`, `"I64"` and `"U16"`. Other safetensors dtypes are rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StDtype {
     F32,
+    BF16,
+    F16,
     I64,
     U16,
 }
@@ -31,7 +35,7 @@ pub enum StDtype {
 impl StDtype {
     pub fn size(self) -> u64 {
         match self {
-            StDtype::U16 => 2,
+            StDtype::U16 | StDtype::BF16 | StDtype::F16 => 2,
             StDtype::F32 => 4,
             StDtype::I64 => 8,
         }
@@ -40,6 +44,8 @@ impl StDtype {
     fn tag(self) -> &'static str {
         match self {
             StDtype::F32 => "F32",
+            StDtype::BF16 => "BF16",
+            StDtype::F16 => "F16",
             StDtype::I64 => "I64",
             StDtype::U16 => "U16",
         }
@@ -48,11 +54,45 @@ impl StDtype {
     fn parse(s: &str) -> Result<Self, String> {
         match s {
             "F32" => Ok(StDtype::F32),
+            "BF16" => Ok(StDtype::BF16),
+            "F16" => Ok(StDtype::F16),
             "I64" => Ok(StDtype::I64),
             "U16" => Ok(StDtype::U16),
             other => Err(format!("unsupported dtype {other:?}")),
         }
     }
+}
+
+/// Little-endian bytes of `values` stored as `dtype`, for [`TensorOut::data`].
+///
+/// F32 is a copy. BF16 and F16 round each value to nearest even
+/// ([`f32_to_bf16`], [`f32_to_f16`]); a value past the format's range becomes
+/// infinity, as torch's `.to(torch.float16)` does. Integer dtypes are refused.
+pub fn encode_f32_as(dtype: StDtype, values: &[f32]) -> Result<Vec<u8>, IoError> {
+    let width = match dtype {
+        StDtype::F32 => 4,
+        StDtype::BF16 | StDtype::F16 => 2,
+        StDtype::I64 | StDtype::U16 => {
+            return Err(IoError::new(format!(
+                "{dtype:?} is not a floating-point encoding"
+            )))
+        }
+    };
+    let len = values
+        .len()
+        .checked_mul(width)
+        .ok_or_else(|| IoError::new("encoded length overflows"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|_| IoError::new(format!("allocation of {len} bytes refused")))?;
+    for &v in values {
+        match dtype {
+            StDtype::BF16 => out.extend_from_slice(&f32_to_bf16(v).to_le_bytes()),
+            StDtype::F16 => out.extend_from_slice(&f32_to_f16(v).to_le_bytes()),
+            _ => out.extend_from_slice(&v.to_le_bytes()),
+        }
+    }
+    Ok(out)
 }
 
 /// One tensor's header entry. Offsets are byte offsets into the data buffer.
@@ -217,6 +257,25 @@ impl<'a> SafeTensors<'a> {
         self.read_typed(name, StDtype::F32, 4, |c| {
             f32::from_le_bytes([c[0], c[1], c[2], c[3]])
         })
+    }
+
+    /// An F32, BF16 or F16 tensor as f32. Half-width values decode exactly
+    /// ([`bf16_to_f32`], [`f16_to_f32`]). Integer tensors are refused. Use
+    /// [`Self::read_f32`] to require F32 storage.
+    pub fn read_f32_widened(&self, name: &str) -> Result<(Vec<u64>, Vec<f32>), IoError> {
+        let dtype = self.info(name)?.dtype;
+        match dtype {
+            StDtype::F32 => self.read_f32(name),
+            StDtype::BF16 => self.read_typed(name, dtype, 2, |c| {
+                bf16_to_f32(u16::from_le_bytes([c[0], c[1]]))
+            }),
+            StDtype::F16 => self.read_typed(name, dtype, 2, |c| {
+                f16_to_f32(u16::from_le_bytes([c[0], c[1]]))
+            }),
+            StDtype::I64 | StDtype::U16 => Err(IoError::new(format!(
+                "{name}: {dtype:?} is not a floating-point tensor"
+            ))),
+        }
     }
 
     pub fn read_i64(&self, name: &str) -> Result<(Vec<u64>, Vec<i64>), IoError> {
@@ -854,7 +913,13 @@ mod tests {
             if !seen.insert(name.clone()) {
                 continue;
             }
-            let dtype = [StDtype::F32, StDtype::I64, StDtype::U16][rng.below(3)];
+            let dtype = [
+                StDtype::F32,
+                StDtype::I64,
+                StDtype::U16,
+                StDtype::BF16,
+                StDtype::F16,
+            ][rng.below(5)];
             let shape: Vec<u64> = (0..rng.below(5))
                 .map(|_| match rng.below(5) {
                     0 => 0,
@@ -909,6 +974,10 @@ mod tests {
                 StDtype::F32 => st.read_f32(&o.name).map(|(_, v)| v.len()),
                 StDtype::I64 => st.read_i64(&o.name).map(|(_, v)| v.len()),
                 StDtype::U16 => st.read_u16(&o.name).map(|(_, v)| v.len()),
+                StDtype::BF16 | StDtype::F16 => {
+                    assert!(st.read_f32(&o.name).is_err(), "{:?}", o.name);
+                    st.read_f32_widened(&o.name).map(|(_, v)| v.len())
+                }
             };
             assert_eq!(typed.unwrap(), numel);
             let wrong = match o.dtype {

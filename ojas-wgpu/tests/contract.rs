@@ -1,0 +1,93 @@
+//! Contract checks that only use the `Backend` trait, so they compile against
+//! any revision of `WgpuBackend`. Each one failed on the round-trip backend:
+//! it panicked on rank-0 input, returned host tensors, and refused backward ops.
+
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use ojas_core::{Backend, BackendId, Budget, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_wgpu::WgpuBackend;
+
+fn gpu() -> WgpuBackend {
+    WgpuBackend::open(Budget::new(1 << 30)).expect("wgpu adapter; a missing GPU fails the test")
+}
+
+fn up(gpu: &WgpuBackend, data: &[f32], shape: &[usize]) -> Tensor {
+    let host = Tensor::from_f32(data, shape, gpu.budget()).unwrap();
+    gpu.upload(&host).unwrap()
+}
+
+type ShapeCall<'a> = (&'a str, Box<dyn Fn() -> Result<(), OjasError> + 'a>);
+
+#[test]
+fn malformed_shapes_are_errors_not_panics() {
+    let g = gpu();
+    let scalar = up(&g, &[1.0], &[]);
+    let w = up(&g, &[1.0; 6], &[2, 3]);
+    let x = up(&g, &[1.0; 8], &[2, 4]);
+    let gy = up(&g, &[1.0; 4], &[2, 2]);
+    let calls: Vec<ShapeCall> = vec![
+        (
+            "linear_backward rank 0",
+            Box::new(|| g.linear_backward(&scalar, &w, &scalar).map(|_| ())),
+        ),
+        (
+            "linear_backward mismatched weight",
+            Box::new(|| g.linear_backward(&x, &w, &gy).map(|_| ())),
+        ),
+        (
+            "linear_forward mismatched weight",
+            Box::new(|| g.linear_forward(&x, &w).map(|_| ())),
+        ),
+        (
+            "rms_norm_forward rank 0",
+            Box::new(|| {
+                g.rms_norm_forward(&scalar, &scalar, RMS_NORM_EPS)
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "rms_norm_forward mismatched weight",
+            Box::new(|| g.rms_norm_forward(&x, &w, RMS_NORM_EPS).map(|_| ())),
+        ),
+    ];
+    for (name, call) in calls {
+        let got = catch_unwind(AssertUnwindSafe(call));
+        match got {
+            Ok(Err(OjasError::Shape { .. })) => {}
+            Ok(other) => panic!("{name}: expected a Shape error, got {other:?}"),
+            Err(_) => panic!("{name}: panicked"),
+        }
+    }
+}
+
+#[test]
+fn outputs_stay_on_the_device_until_download() {
+    let g = gpu();
+    let x = up(&g, &[0.5, -0.25, 1.0, 0.0, 0.2, -0.7], &[2, 3]);
+    let w = up(&g, &[0.1, 0.2, -0.3, 0.4, 0.0, 0.5], &[2, 3]);
+    let before = g.budget().device_readbacks();
+    let y = g.linear_forward(&x, &w).unwrap();
+    let s = g.silu_forward(&y).unwrap();
+    assert_eq!(
+        g.budget().device_readbacks(),
+        before,
+        "an op read back to the host"
+    );
+    assert_eq!(y.device(), Some(BackendId::Wgpu));
+    assert_eq!(s.device(), Some(BackendId::Wgpu));
+    let host = g.download(&s).unwrap();
+    assert_eq!(g.budget().device_readbacks().0, before.0 + 1);
+    assert_eq!(host.to_f32_vec().unwrap().len(), 4);
+}
+
+#[test]
+fn backward_ops_are_implemented() {
+    let g = gpu();
+    let x = up(&g, &[0.5, -0.25, 1.0, 0.75], &[2, 2]);
+    let w = up(&g, &[1.0, 0.5], &[2]);
+    let gy = up(&g, &[0.1, 0.2, 0.3, 0.4], &[2, 2]);
+    g.rms_norm_backward(&x, &w, &gy, RMS_NORM_EPS).unwrap();
+    g.silu_backward(&x, &gy).unwrap();
+    g.mul_backward(&x, &gy, &gy).unwrap();
+    g.residual_add_backward(&x, &gy, &gy).unwrap();
+}

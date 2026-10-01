@@ -1,16 +1,21 @@
 // Package ojas is the in-process training and inference API.
 //
 // One gusset handle runs every step. The worker count defaults to 1 and
-// changes with SetPoolSize before the first call. Load sends a relative
+// changes with SetPoolSize before the first call. WithDerivedPoolSize uses
+// runtime.GOMAXPROCS(0), capped at gusset.MaxPoolSize; the default stays 1
+// because the tests in this package open that pool. Load sends a relative
 // path (at most 4 KiB). Larger step and generate payloads go through a
-// gusset Buffer. Weights are not sent.
+// gusset Buffer. Those buffers share a 64 MiB live budget
+// (SetBufferBudget) so queued callers cannot each hold a 1 GiB buffer.
+// Weights are not sent. WithMemoryGovernor is off until called.
 //
 // Link the umbrella archive before `go test`. The gusset module's default
 // linker path is its own checkout, which does not contain ojas_engine_init,
-// so the test uses pkg-config:
+// so the test uses pkg-config. -a is required because Go's build cache does
+// not track libgusset.a. On Linux use PKG_CONFIG_PATH="$PWD/linux".
 //
 //	cargo build -p ojas-gusset-engine
-//	cd go && PKG_CONFIG_PATH="$PWD" go test -tags gusset_pkgconfig -count=1 -timeout 10m
+//	cd go && PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -timeout 10m
 package ojas
 
 import (
@@ -28,8 +33,18 @@ func SetModelRoot(ctx context.Context, dir string) error {
 	return setRoot(dir)
 }
 
-// Device selectors for LoadOn. CpuParallel uses the threads argument.
-// Metal runs on a dedicated owner thread. Wgpu opens a context at load.
+// Device selectors for LoadOn.
+//
+// DeviceCPU and DeviceCPUParallel compute on the CPU. DeviceCPUParallel
+// splits large linears across the threads argument (1..=MaxCPUThreads).
+// DeviceMetal opens the Metal device at load and returns a model id whose
+// Step and GenerateGreedy run on that device, reading back only the values
+// they return; Generate with caller logits takes the argmax on the host.
+// With no Metal device the load fails with the device error, never a CPU
+// session. DeviceWgpu does the same with a wgpu device: Step and
+// GenerateGreedy run on it and read back only what they return, and with no
+// wgpu adapter the load fails with a "wgpu:" error, never a CPU session.
+// threads is ignored for DeviceMetal and DeviceWgpu.
 const (
 	DeviceCPU         uint32 = deviceCPU
 	DeviceCPUParallel uint32 = deviceCPUParallel
@@ -37,13 +52,38 @@ const (
 	DeviceWgpu        uint32 = deviceWgpu
 )
 
-// Load opens a relative safetensors path on the CPU and returns a model id.
+// MaxCPUThreads is the largest threads value DeviceCPUParallel accepts.
+// Larger values are refused, not clamped.
+const MaxCPUThreads uint32 = 256
+
+// In-band error kinds. When a gusset error message contains one of these
+// prefixes, errors.Is matches the corresponding sentinel. ojas-capi emits
+// E_CAPACITY, E_NONFINITE and E_DEVICE_LOST, choosing the kind from the typed
+// Rust error (ojas-capi/src/lib.rs kind_of), never from message text. Nothing
+// in Rust emits E_BUSY today.
+//
+//	ojas:E_CAPACITY:
+//	ojas:E_DEVICE_LOST:
+//	ojas:E_BUSY:
+//	ojas:E_NONFINITE:
+var (
+	ErrCapacity   = errors.New("ojas: capacity")
+	ErrDeviceLost = errors.New("ojas: device lost")
+	ErrBusy       = errors.New("ojas: busy")
+	ErrNonFinite  = errors.New("ojas: non-finite")
+)
+
+// Load checks a relative safetensors path and returns a CPU model id.
+//
+// Load reads the file header and counts its tensors. It does not read the
+// weights, and later calls do not use them.
 func Load(ctx context.Context, path string) (uint64, error) {
 	return LoadOn(ctx, DeviceCPU, 1, path)
 }
 
-// LoadOn opens a model on the selected device. threads is used only by
-// DeviceCPUParallel.
+// LoadOn is Load with a device selector. threads is used only by
+// DeviceCPUParallel. A device that cannot be opened is the load's error;
+// see the device constants.
 func LoadOn(ctx context.Context, device, threads uint32, path string) (uint64, error) {
 	if ctx == nil {
 		return 0, errors.New("ojas: nil context")
@@ -91,7 +131,10 @@ type StepStats struct {
 	Lr       float32
 }
 
-// Step runs one step on a loaded session. Rust errors are returned as text.
+// Step computes the loss, gradient norm, and learning rate for the payload on
+// the model's device. It needs a live model id but does not read or update
+// weights.
+// Rust errors are returned as text.
 func Step(ctx context.Context, id uint64, req StepRequest) (StepStats, error) {
 	payload, err := encodeStep(id, req)
 	if err != nil {
@@ -116,7 +159,9 @@ func Generate(ctx context.Context, id uint64, logits []float32) (uint32, error) 
 	return generate(ctx, id, genLogits, logits, nil)
 }
 
-// GenerateGreedy asks the tiny ojas-infer model for one token.
+// GenerateGreedy returns one token from a fixed two-token demonstration model
+// (vocabulary 0 and 1). It does not use the loaded file. A prompt id of 2 or
+// more is an out-of-range error.
 func GenerateGreedy(ctx context.Context, id uint64, prompt []uint32) (uint32, error) {
 	return generate(ctx, id, genGreedy, nil, prompt)
 }
@@ -129,12 +174,17 @@ func Free(ctx context.Context, id uint64) error {
 	return err
 }
 
-// Close joins the worker pool. With no call still running it returns nil.
+// Close joins the worker pool. It returns when that join finishes or ctx
+// ends, whichever comes first. A cancelled or expired context does not
+// open a second pool: if the join is still running, later calls wait for
+// it or refuse. If gusset reports that workers are still running after
+// its join budget (30s), Close returns that error and this process will
+// not open another pool on top of those workers.
 func Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("ojas: nil context")
 	}
-	return closeHandle()
+	return closeHandle(ctx)
 }
 
 func encodeStep(id uint64, req StepRequest) ([]byte, error) {

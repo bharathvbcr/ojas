@@ -1,11 +1,12 @@
 //! macOS training step. Every GPU call goes through tessl, except the
 //! per-head gate overlay compiled by this crate.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use ojas_core::{
-    next_step, refuse_unsupported_metal_head_dim, sdpa_scale, AdamWConfig, BackendId, OjasError,
-    RMS_NORM_EPS,
+    check_adamw, next_step, refuse_unsupported_metal_head_dim, sdpa_scale, AdamWConfig, BackendId,
+    OjasError, RMS_NORM_EPS,
 };
 use tessl::cross_entropy::{self, CeGrads, CeHidden, CeWorkspace, Reduction};
 use tessl::dispatch::{self, set_gpu_buf, set_gpu_buf_offset, set_u32};
@@ -23,6 +24,10 @@ pub const MAX_VOCAB: u32 = 128;
 pub const D_MODEL: u32 = 128;
 pub const N_HEAD: u32 = 2;
 pub const HEAD_DIM: u32 = 64;
+/// Widest head the tiny step can run. Its attention is tessl
+/// `nn::flash_attn_rows`, which clamps with `min(D, 64)`, so this stays 64 even
+/// though `MetalBackend` attention accepts up to [`ojas_core::METAL_MAX_HEAD_DIM`].
+pub const TINY_MAX_HEAD_DIM: u32 = 64;
 /// Nanolab `rope_base`.
 pub const ROPE_THETA: f32 = 10_000.0;
 /// Default micro-batch whose unchunked logit tape is refused, not allocated.
@@ -59,8 +64,21 @@ impl TinyShape {
     }
 }
 
+/// The core Metal refusal, then the tiny step's narrower cap: a head wider than
+/// [`TINY_MAX_HEAD_DIM`] is [`OjasError::UnsupportedHeadDim`], never clamped.
+fn refuse_tiny_head_dim(head_dim: u32) -> Result<(), OjasError> {
+    refuse_unsupported_metal_head_dim(BackendId::Metal, head_dim)?;
+    if head_dim > TINY_MAX_HEAD_DIM {
+        return Err(OjasError::UnsupportedHeadDim {
+            head_dim,
+            limit: TINY_MAX_HEAD_DIM,
+        });
+    }
+    Ok(())
+}
+
 pub fn validate_tiny_shape(shape: &TinyShape) -> Result<(), OjasError> {
-    refuse_unsupported_metal_head_dim(BackendId::Metal, shape.head_dim)?;
+    refuse_tiny_head_dim(shape.head_dim)?;
     if shape.head_dim != HEAD_DIM {
         return Err(OjasError::Shape {
             op: "validate_tiny_shape",
@@ -105,80 +123,117 @@ fn ce_chunk(vocab: u32) -> u32 {
     CE_CHUNK.min(vocab).max(1)
 }
 
-/// Logical bytes `tiny_train_step` allocates. Not the Metal pool bucket.
+/// Freelist cap installed by [`Session::open`]. tessl's own default is 2 GiB.
+const SESSION_POOL_CACHE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Logical bytes `tiny_train_step` allocates, rounded the way tessl's pool
+/// rounds: each buffer is `next_power_of_two`, and no smaller than 256.
 pub fn scratch_bytes(shape: &TinyShape) -> Result<u64, OjasError> {
     validate_tiny_shape(shape)?;
     let rows = u64::from(shape.rows()?);
     let d = u64::from(shape.d_model);
     let vocab = u64::from(shape.vocab);
-    // x, rms, gate, up, swiglu, down, residual, rotated Q, K, V, Q projection,
-    // attention output, and the packed dQ, dK, dV.
-    let acts = 15u64
-        .checked_mul(rows)
-        .and_then(|n| n.checked_mul(d))
-        .ok_or_else(|| overflow("scratch_bytes"))?;
-    let dh = (DH_PAD as u64)
-        .checked_add(
-            rows.checked_mul(d)
-                .ok_or_else(|| overflow("scratch_bytes"))?,
-        )
-        .ok_or_else(|| overflow("scratch_bytes"))?;
-    let dw = vocab
+    let row = rows
         .checked_mul(d)
         .ok_or_else(|| overflow("scratch_bytes"))?;
-    let dw_q = d.checked_mul(d).ok_or_else(|| overflow("scratch_bytes"))?;
+    // x, rms, gate, up, swiglu, down, residual, rotated Q, K, V, Q projection,
+    // attention output, and the packed dQ, dK, dV. Fifteen separate buffers.
+    let acts = repeat_buckets("scratch_bytes", 15, row)?;
+    let dh_elems = (DH_PAD as u64)
+        .checked_add(row)
+        .ok_or_else(|| overflow("scratch_bytes"))?;
+    let dh = sum_f32_buckets("scratch_bytes", &[dh_elems])?;
+    let dw = sum_f32_buckets(
+        "scratch_bytes",
+        &[vocab
+            .checked_mul(d)
+            .ok_or_else(|| overflow("scratch_bytes"))?],
+    )?;
+    let dw_q = sum_f32_buckets(
+        "scratch_bytes",
+        &[d.checked_mul(d).ok_or_else(|| overflow("scratch_bytes"))?],
+    )?;
     let seq = u64::from(shape.seq);
     let head = u64::from(shape.head_dim);
-    // One head plane at a time: Q, K, V, dO, dQ, dK, dV, plus S, dP, P, dS.
-    // `seq * seq` is allocated only after the tiny-step check (seq <= 16).
-    let head_planes = 7u64
-        .checked_mul(seq)
-        .and_then(|n| n.checked_mul(head))
+    let head_elems = seq
+        .checked_mul(head)
         .ok_or_else(|| overflow("scratch_bytes"))?;
-    let score_planes = 4u64
+    let score_elems = seq
         .checked_mul(seq)
-        .and_then(|n| n.checked_mul(seq))
         .ok_or_else(|| overflow("scratch_bytes"))?;
-    let elems = acts
-        .checked_add(dh)
+    let head_planes = repeat_buckets("scratch_bytes", 7, head_elems)?;
+    let score_planes = repeat_buckets("scratch_bytes", 4, score_elems)?;
+    // Three `alloc_buffer(4)` calls in causal attention.
+    let scalars = 3u64
+        .checked_mul(device_bucket(4)?)
+        .ok_or_else(|| overflow("scratch_bytes"))?;
+    let ce = ce_device_bytes(shape.rows()?, shape.d_model, ce_chunk(shape.vocab))?;
+    acts.checked_add(dh)
         .and_then(|n| n.checked_add(dw))
         .and_then(|n| n.checked_add(dw_q))
         .and_then(|n| n.checked_add(head_planes))
         .and_then(|n| n.checked_add(score_planes))
-        .ok_or_else(|| overflow("scratch_bytes"))?;
-    let f32s = elems
-        .checked_mul(4)
-        .ok_or_else(|| overflow("scratch_bytes"))?;
-    let scalars = 3u64 * 4;
-    let ce = CeWorkspace::bytes_for(
-        shape.rows()?,
-        shape.d_model,
-        ce_chunk(shape.vocab),
-        DType::F32,
-    ) as u64;
-    f32s.checked_add(scalars)
+        .and_then(|n| n.checked_add(scalars))
         .and_then(|n| n.checked_add(ce))
         .ok_or_else(|| overflow("scratch_bytes"))
 }
 
+/// Device bytes of an f32 [`tessl::cross_entropy::CeWorkspace`]: eight buffers,
+/// each rounded up on its own.
+fn ce_device_bytes(rows: u32, hidden: u32, chunk: u32) -> Result<u64, OjasError> {
+    let n = u64::from(rows);
+    let h = u64::from(hidden);
+    let c = u64::from(chunk);
+    let nh = n.checked_mul(h).ok_or_else(|| overflow("scratch_bytes"))?;
+    let nc = n.checked_mul(c).ok_or_else(|| overflow("scratch_bytes"))?;
+    // rows, targets, h, logits, dh_part, m, s, tlogit. f32 weights allocate no w32.
+    sum_f32_buckets("scratch_bytes", &[n, n, nh, nc, nh, n, n, n])
+}
+
 /// Parameter and Adam moments, in bytes. The Q projection and the LM head
-/// each carry two moments.
+/// each carry two moments. Each matrix is one tessl power-of-two bucket.
 pub fn param_bytes(shape: &TinyShape) -> Result<u64, OjasError> {
     validate_tiny_shape(shape)?;
     let d = u64::from(shape.d_model);
     let vocab = u64::from(shape.vocab);
-    // rms weight, Q and K norm weights, three square MLP matrices,
-    // Q projection plus two moments, LM head plus two moments.
-    let qk = u64::from(shape.head_dim).checked_mul(2);
+    let hd = u64::from(shape.head_dim);
     let square = d.checked_mul(d).ok_or_else(|| overflow("param_bytes"))?;
-    let elems = square
-        .checked_mul(3)
-        .and_then(|mlp| mlp.checked_add(d))
-        .and_then(|n| n.checked_add(qk?))
-        .and_then(|n| n.checked_add(square.checked_mul(3)?))
-        .and_then(|n| n.checked_add(vocab.checked_mul(d)?.checked_mul(3)?))
+    let lm = vocab
+        .checked_mul(d)
         .ok_or_else(|| overflow("param_bytes"))?;
-    elems.checked_mul(4).ok_or_else(|| overflow("param_bytes"))
+    sum_f32_buckets(
+        "param_bytes",
+        &[
+            d, square, square, square, lm, hd, hd, square, lm, lm, square, square,
+        ],
+    )
+}
+
+/// tessl `BufferPool` rounds every allocation to the next power of two, and
+/// never below 256 bytes.
+pub fn device_bucket(nbytes: u64) -> Result<u64, OjasError> {
+    if nbytes == 0 {
+        return Ok(256);
+    }
+    if nbytes > (1u64 << 63) {
+        return Err(overflow("device_bucket"));
+    }
+    Ok(nbytes.next_power_of_two().max(256))
+}
+
+fn sum_f32_buckets(op: &'static str, elems: &[u64]) -> Result<u64, OjasError> {
+    let mut total = 0u64;
+    for &n in elems {
+        let bytes = n.checked_mul(4).ok_or_else(|| overflow(op))?;
+        let bucket = device_bucket(bytes)?;
+        total = total.checked_add(bucket).ok_or_else(|| overflow(op))?;
+    }
+    Ok(total)
+}
+
+fn repeat_buckets(op: &'static str, count: u64, elems: u64) -> Result<u64, OjasError> {
+    let one = sum_f32_buckets(op, &[elems])?;
+    count.checked_mul(one).ok_or_else(|| overflow(op))
 }
 
 /// Bytes of three unchunked `[batch * seq, vocab]` f32 logit tensors.
@@ -208,7 +263,7 @@ pub fn refuse_unchunked_logit_tape(
 ) -> Result<(), OjasError> {
     let requested = unchunked_logit_tape_bytes(batch, seq, vocab)?;
     if requested > byte_cap {
-        return Err(over_cap(requested, byte_cap));
+        return Err(over_cap(requested, byte_cap, 0));
     }
     Ok(())
 }
@@ -220,11 +275,11 @@ fn overflow(op: &'static str) -> OjasError {
     }
 }
 
-fn over_cap(requested: u64, cap: u64) -> OjasError {
+fn over_cap(requested: u64, cap: u64, live: u64) -> OjasError {
     OjasError::CapacityExceeded {
         requested,
         cap,
-        live: 0,
+        live,
     }
 }
 
@@ -243,10 +298,17 @@ fn finite_f32(op: &'static str, data: &[f32]) -> Result<(), OjasError> {
     }
 }
 
+fn require_finite_tensor(op: &'static str, t: &Tensor) -> Result<(), OjasError> {
+    let data = t.read_f32().map_err(metal)?;
+    finite_f32(op, &data)
+}
+
 /// Open the default Metal device and load the gate overlay.
 /// A missing device is an error.
 pub struct Session {
     rt: Arc<GpuRuntime>,
+    /// Sum of tessl buckets for parameters still held by [`TinyState`]s.
+    resident: Arc<AtomicU64>,
 }
 
 impl Session {
@@ -258,6 +320,7 @@ impl Session {
             },
         )?;
         let rt = GpuRuntime::new().map_err(metal)?;
+        rt.set_pool_cache_cap_bytes(SESSION_POOL_CACHE_BYTES);
         rt.set_async_encode(true).map_err(metal)?;
         let gate = include_bytes!(concat!(env!("OUT_DIR"), "/ojas_per_head_gate.metallib"));
         if gate.is_empty() {
@@ -274,17 +337,27 @@ impl Session {
         ] {
             rt.pipeline(name).map_err(metal)?;
         }
-        Ok(Self { rt })
+        Ok(Self {
+            rt,
+            resident: Arc::new(AtomicU64::new(0)),
+        })
     }
 
     pub fn device_name(&self) -> String {
         self.rt.device_name()
     }
+
+    fn resident_bytes(&self) -> u64 {
+        self.resident.load(Ordering::Acquire)
+    }
 }
 
 pub struct TinyState {
     rt: Arc<GpuRuntime>,
+    resident: Arc<AtomicU64>,
+    charged: u64,
     shape: TinyShape,
+    host: HostShadow,
     rms_w: Tensor,
     w_gate: Tensor,
     w_up: Tensor,
@@ -335,7 +408,7 @@ impl TinyState {
         } = weights;
         let need = param_bytes(&shape)?;
         if need > byte_cap {
-            return Err(over_cap(need, byte_cap));
+            return Err(over_cap(need, byte_cap, session.resident_bytes()));
         }
         let d = shape.d_model as usize;
         let mlp = d;
@@ -374,9 +447,22 @@ impl TinyState {
         let v_lm = zeros(&rt, &[vocab, d])?;
         let m_q = zeros(&rt, &[d, d])?;
         let v_q = zeros(&rt, &[d, d])?;
+        session.resident.fetch_add(need, Ordering::Release);
         Ok(Self {
             rt,
+            resident: Arc::clone(&session.resident),
+            charged: need,
             shape,
+            host: HostShadow {
+                rms_w: rms_w.to_vec(),
+                w_gate: w_gate.to_vec(),
+                w_up: w_up.to_vec(),
+                w_down: w_down.to_vec(),
+                w_lm: w_lm.to_vec(),
+                q_norm: q_norm.to_vec(),
+                k_norm: k_norm.to_vec(),
+                w_q: w_q.to_vec(),
+            },
             rms_w: rms_w_t,
             w_gate: w_gate_t,
             w_up: w_up_t,
@@ -397,6 +483,24 @@ impl TinyState {
         self.shape
     }
 
+    /// Last finite host copy of the parameters. Moments are not included.
+    ///
+    /// A poisoned runtime cannot be read. These values are what
+    /// [`TinyState::new`] accepted, updated only after an AdamW step whose
+    /// weights were finite, so a caller can open a new session and rebuild.
+    pub fn host_weights(&self) -> TinyWeights<'_> {
+        TinyWeights {
+            rms_w: &self.host.rms_w,
+            w_gate: &self.host.w_gate,
+            w_up: &self.host.w_up,
+            w_down: &self.host.w_down,
+            w_lm: &self.host.w_lm,
+            q_norm: &self.host.q_norm,
+            k_norm: &self.host.k_norm,
+            w_q: &self.host.w_q,
+        }
+    }
+
     pub fn step_count(&self) -> u64 {
         self.step
     }
@@ -407,6 +511,23 @@ impl TinyState {
 
     pub fn q_projection(&self) -> Result<Vec<f32>, OjasError> {
         self.w_q.read_f32().map_err(metal)
+    }
+}
+
+struct HostShadow {
+    rms_w: Vec<f32>,
+    w_gate: Vec<f32>,
+    w_up: Vec<f32>,
+    w_down: Vec<f32>,
+    w_lm: Vec<f32>,
+    q_norm: Vec<f32>,
+    k_norm: Vec<f32>,
+    w_q: Vec<f32>,
+}
+
+impl Drop for TinyState {
+    fn drop(&mut self) {
+        self.resident.fetch_sub(self.charged, Ordering::Release);
     }
 }
 
@@ -480,7 +601,11 @@ pub fn tiny_train_step(
     check_targets(state.shape.vocab, targets)?;
     let need = scratch_bytes(&state.shape)?;
     if need > byte_cap {
-        return Err(over_cap(need, byte_cap));
+        return Err(over_cap(
+            need,
+            byte_cap,
+            state.resident.load(Ordering::Acquire),
+        ));
     }
 
     let rt = Arc::clone(&state.rt);
@@ -578,12 +703,38 @@ pub fn tiny_train_step(
         next,
         &adam,
     )?;
+    confirm_adamw(state)?;
     state.step = next;
     Ok(TinyStep {
         loss: ce.loss,
         adamw_step: state.step,
         attention_ran: true,
     })
+}
+
+fn confirm_adamw(state: &mut TinyState) -> Result<(), OjasError> {
+    if state.rt.is_poisoned() {
+        return Err(metal("runtime poisoned after adamw"));
+    }
+    let lm = state.w_lm.read_f32().map_err(|err| {
+        if state.rt.is_poisoned() {
+            metal(format!("runtime poisoned after adamw: {err}"))
+        } else {
+            metal(err)
+        }
+    })?;
+    let wq = state.w_q.read_f32().map_err(|err| {
+        if state.rt.is_poisoned() {
+            metal(format!("runtime poisoned after adamw: {err}"))
+        } else {
+            metal(err)
+        }
+    })?;
+    finite_f32("adamw", &lm)?;
+    finite_f32("adamw", &wq)?;
+    state.host.w_lm = lm;
+    state.host.w_q = wq;
+    Ok(())
 }
 
 fn check_targets(vocab: u32, targets: &[i32]) -> Result<(), OjasError> {
@@ -661,9 +812,9 @@ fn causal_attention(
     let tkv = rt.alloc_buffer(4).map_err(metal)?;
     let qpos = rt.alloc_buffer(4).map_err(metal)?;
     let kvpos = rt.alloc_buffer(4).map_err(metal)?;
-    tkv.write_u32(&[shape.seq]);
-    qpos.write_u32(&[0]);
-    kvpos.write_u32(&[0]);
+    tkv.try_write_u32(&[shape.seq]).map_err(metal)?;
+    qpos.try_write_u32(&[0]).map_err(metal)?;
+    kvpos.try_write_u32(&[0]).map_err(metal)?;
     let dims = AttnDims {
         batch: shape.batch,
         tq: shape.seq,
@@ -699,11 +850,11 @@ struct AttnBwdDims {
 }
 
 /// Refuse a backward that is outside the tiny step before any `[seq, seq]`
-/// allocation. Head dim above 64 is [`OjasError::UnsupportedHeadDim`]. Any
-/// other miss (`seq > 16`, head dim other than 64, more than two heads) is
-/// [`OjasError::Shape`].
+/// allocation. Head dim above [`TINY_MAX_HEAD_DIM`] is
+/// [`OjasError::UnsupportedHeadDim`]. Any other miss (`seq > 16`, head dim
+/// other than 64, more than two heads) is [`OjasError::Shape`].
 fn attn_bwd_limits(dims: &AttnBwdDims) -> Result<(), OjasError> {
-    refuse_unsupported_metal_head_dim(BackendId::Metal, dims.head_dim)?;
+    refuse_tiny_head_dim(dims.head_dim)?;
     if dims.head_dim != HEAD_DIM {
         return Err(OjasError::Shape {
             op: "causal_attn_backward",
@@ -734,8 +885,12 @@ fn attn_bwd_limits(dims: &AttnBwdDims) -> Result<(), OjasError> {
 /// Causal attention backward for one packed `[batch, seq, heads, 64]` plane.
 ///
 /// `d_o` is the gradient of the attention output. `dq`, `dk`, and `dv` are
-/// overwritten. A key `j > t` contributes nothing to query `t`, and query `t`
-/// contributes nothing to that key. The products are `GemmOperands::ExactF32`;
+/// overwritten only after the shape check and a finite check of `q` and
+/// `d_o`. A non-finite value in either is [`OjasError::NonFinite`] and leaves
+/// `dq` (the gradient that updates the Q projection) untouched. The
+/// `[seq, seq]` score matrix is allocated only after those checks. A key
+/// `j > t` contributes nothing to query `t`, and query `t` contributes
+/// nothing to that key. The products are `GemmOperands::ExactF32`;
 /// `ojas_causal_softmax_bwd` applies the causal mask and the softmax gradient.
 #[allow(clippy::too_many_arguments)]
 fn causal_attn_backward(
@@ -769,6 +924,9 @@ fn causal_attn_backward(
             });
         }
     }
+    // Before any `[seq, seq]` score buffer and before any write of `dq`.
+    require_finite_tensor("causal_attn_backward", q)?;
+    require_finite_tensor("causal_attn_backward", d_o)?;
     let seq = dims.seq as usize;
     let head_dim = dims.head_dim as usize;
     let scale = sdpa_scale(dims.head_dim)?;
@@ -815,7 +973,7 @@ fn causal_attn_backward(
 
 fn elem_off(t: &Tensor) -> Result<u32, OjasError> {
     let bytes = t.byte_offset();
-    if bytes % 4 != 0 {
+    if !bytes.is_multiple_of(4) {
         return Err(OjasError::Shape {
             op: "causal_attn_backward",
             detail: format!("byte offset {bytes} is not a multiple of 4"),
@@ -1047,15 +1205,8 @@ fn adamw_apply(
             detail: "step 0 is refused".into(),
         });
     }
-    let t = step_after as f64;
-    let bc1 = 1.0 - cfg.beta1.powf(t);
-    let bc2 = 1.0 - cfg.beta2.powf(t);
-    if bc1 == 0.0 || bc2 < 0.0 {
-        return Err(OjasError::OutOfRange {
-            op: "adamw",
-            detail: format!("bias correction bc1 {bc1} bc2 {bc2}"),
-        });
-    }
+    // The shared range checks and bias correction every backend forms.
+    let (_, bc1, bc2) = check_adamw(*cfg, step_after - 1)?;
     let scalars = [
         (1.0 - cfg.lr * cfg.weight_decay) as f32,
         (1.0 - cfg.beta1) as f32,
@@ -1259,11 +1410,11 @@ fn gate_elems(
 }
 
 fn f32_bytes_of(op: &'static str, parts: &[usize]) -> Result<u64, OjasError> {
-    parts
-        .iter()
-        .try_fold(0u64, |acc, &n| acc.checked_add(u64::try_from(n).ok()?))
-        .and_then(|n| n.checked_mul(4))
-        .ok_or_else(|| overflow(op))
+    let mut elems = Vec::with_capacity(parts.len());
+    for &n in parts {
+        elems.push(u64::try_from(n).map_err(|_| overflow(op))?);
+    }
+    sum_f32_buckets(op, &elems)
 }
 
 /// Logical bytes `per_head_gate_forward` allocates.
@@ -1316,14 +1467,14 @@ fn gate_prep(
             detail: format!("rows {rows_u} outside 1..={}", MAX_BATCH * MAX_SEQ),
         });
     }
-    refuse_unsupported_metal_head_dim(BackendId::Metal, HEAD_DIM)?;
+    refuse_tiny_head_dim(HEAD_DIM)?;
     let rows = rows_u as usize;
     let n_head = N_HEAD as usize;
     let d_model = D_MODEL as usize;
     let head_dim = HEAD_DIM as usize;
     let need = bytes_for(rows, n_head, d_model, head_dim)?;
     if need > byte_cap {
-        return Err(over_cap(need, byte_cap));
+        return Err(over_cap(need, byte_cap, session.resident_bytes()));
     }
     expect_len("per_head_gate x", x, rows * d_model)?;
     expect_len("per_head_gate weight", weight, n_head * d_model)?;
@@ -1442,12 +1593,36 @@ mod tests {
             .collect()
     }
 
+    /// Largest `|a - b|`, or infinity if any difference is not finite.
+    /// `f32::max` drops a NaN operand, so folding with it would score an
+    /// all-NaN output as a perfect match.
     fn max_abs(a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len());
-        a.iter()
-            .zip(b)
-            .map(|(x, y)| (x - y).abs())
-            .fold(0.0f32, f32::max)
+        a.iter().zip(b).fold(0.0f32, |acc, (x, y)| {
+            let d = (x - y).abs();
+            if d.is_finite() {
+                acc.max(d)
+            } else {
+                f32::INFINITY
+            }
+        })
+    }
+
+    /// Every parity check here is `max_abs(got, want) < tol`, so a kernel
+    /// that writes NaN or infinity must make that comparison fail.
+    #[test]
+    fn max_abs_does_not_hide_non_finite_outputs() {
+        let zeros = [0.0f32; 4];
+        let all_nan = [f32::NAN; 4];
+        let one_nan = [0.0, f32::NAN, 0.0, 0.0];
+        let inf = [0.0, 0.0, f32::INFINITY, 0.0];
+        for (what, got) in [("all NaN", all_nan), ("one NaN", one_nan), ("inf", inf)] {
+            let err = max_abs(&got, &zeros);
+            assert!(err >= 1.0, "{what}: max_abs {err} passes a parity check");
+            let err = max_abs(&zeros, &got);
+            assert!(err >= 1.0, "{what} as reference: max_abs {err}");
+        }
+        assert_eq!(max_abs(&[1.0, -2.0], &[1.5, -2.0]), 0.5);
     }
 
     fn sigmoid(x: f32) -> f32 {
@@ -1600,6 +1775,135 @@ mod tests {
     }
 
     #[test]
+    fn session_bounds_the_pool_cache_below_the_tessl_default() {
+        let session = session();
+        assert_eq!(
+            session.rt.memory_info().pool_cache_cap,
+            SESSION_POOL_CACHE_BYTES
+        );
+        assert!(session.rt.memory_info().pool_cache_cap < 2 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn host_shadow_rebuilds_weights_on_a_new_session() {
+        let first = session();
+        let shape = shape();
+        let d = D_MODEL as usize;
+        let state = TinyState::new(
+            &first,
+            shape,
+            param_bytes(&shape).unwrap(),
+            tw(
+                &vec![1.0; d],
+                &pattern(d * d, 2),
+                &pattern(d * d, 3),
+                &pattern(d * d, 4),
+                &pattern(shape.vocab as usize * d, 5),
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; d * d],
+            ),
+        )
+        .unwrap();
+        let mut trained = state;
+        tiny_train_step(
+            &mut trained,
+            &pattern((shape.batch * shape.seq) as usize * d, 9),
+            &vec![0i32; (shape.batch * shape.seq) as usize],
+            scratch_bytes(&shape).unwrap(),
+            AdamWConfig::nanolab(1e-2, 0.0),
+        )
+        .unwrap();
+        let lm = trained.lm_head().unwrap();
+        let q = trained.q_projection().unwrap();
+        assert_eq!(trained.host_weights().w_lm, lm.as_slice());
+        assert_eq!(trained.host_weights().w_q, q.as_slice());
+        let again = session();
+        let rebuilt = TinyState::new(
+            &again,
+            shape,
+            param_bytes(&shape).unwrap(),
+            trained.host_weights(),
+        )
+        .unwrap();
+        assert_eq!(rebuilt.lm_head().unwrap(), lm);
+        assert_eq!(rebuilt.q_projection().unwrap(), q);
+    }
+
+    /// The tessl poison setter is the SharedEvent-timeout bit. A GPU hang is
+    /// not produced here. Moments stay off the host snapshot.
+    #[test]
+    fn poisoned_runtime_host_weights_rebuild_on_a_new_session() {
+        let first = session();
+        assert!(!first.rt.is_poisoned());
+        let shape = shape();
+        let d = D_MODEL as usize;
+        let state = TinyState::new(
+            &first,
+            shape,
+            param_bytes(&shape).unwrap(),
+            tw(
+                &vec![1.0; d],
+                &pattern(d * d, 2),
+                &pattern(d * d, 3),
+                &pattern(d * d, 4),
+                &pattern(shape.vocab as usize * d, 5),
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; d * d],
+            ),
+        )
+        .unwrap();
+        let snap = {
+            let w = state.host_weights();
+            (
+                w.rms_w.to_vec(),
+                w.w_gate.to_vec(),
+                w.w_up.to_vec(),
+                w.w_down.to_vec(),
+                w.w_lm.to_vec(),
+                w.q_norm.to_vec(),
+                w.k_norm.to_vec(),
+                w.w_q.to_vec(),
+            )
+        };
+        state.rt.poison_as_shared_event_timeout_for_test();
+        assert!(state.rt.is_poisoned());
+        let alloc_err = state.rt.alloc_tensor_f32(&[4]).unwrap_err();
+        assert!(alloc_err.contains("poison"), "{alloc_err}");
+        let w = state.host_weights();
+        assert_eq!(w.rms_w, snap.0.as_slice());
+        assert_eq!(w.w_gate, snap.1.as_slice());
+        assert_eq!(w.w_up, snap.2.as_slice());
+        assert_eq!(w.w_down, snap.3.as_slice());
+        assert_eq!(w.w_lm, snap.4.as_slice());
+        assert_eq!(w.q_norm, snap.5.as_slice());
+        assert_eq!(w.k_norm, snap.6.as_slice());
+        assert_eq!(w.w_q, snap.7.as_slice());
+
+        let again = session();
+        assert!(!again.rt.is_poisoned());
+        let rebuilt = TinyState::new(
+            &again,
+            shape,
+            param_bytes(&shape).unwrap(),
+            tw(
+                &snap.0, &snap.1, &snap.2, &snap.3, &snap.4, &snap.5, &snap.6, &snap.7,
+            ),
+        )
+        .unwrap();
+        assert!(!rebuilt.rt.is_poisoned());
+        assert_eq!(rebuilt.rms_w.read_f32().unwrap(), snap.0);
+        assert_eq!(rebuilt.w_gate.read_f32().unwrap(), snap.1);
+        assert_eq!(rebuilt.w_up.read_f32().unwrap(), snap.2);
+        assert_eq!(rebuilt.w_down.read_f32().unwrap(), snap.3);
+        assert_eq!(rebuilt.w_lm.read_f32().unwrap(), snap.4);
+        assert_eq!(rebuilt.q_norm.read_f32().unwrap(), snap.5);
+        assert_eq!(rebuilt.k_norm.read_f32().unwrap(), snap.6);
+        assert_eq!(rebuilt.w_q.read_f32().unwrap(), snap.7);
+    }
+
+    #[test]
     fn metal_device_is_required() {
         let s = session();
         assert!(!s.device_name().is_empty(), "device name was empty");
@@ -1626,6 +1930,22 @@ mod tests {
                 limit: 64
             })
         ));
+    }
+
+    #[test]
+    fn param_bytes_rounds_each_buffer_up_to_a_power_of_two_bucket() {
+        let mut shape = shape();
+        shape.vocab = 17;
+        let got = param_bytes(&shape).unwrap();
+        let d = u64::from(D_MODEL);
+        let square = d * d;
+        let qk = u64::from(HEAD_DIM) * 2;
+        let logical_elems = square * 3 + d + qk + square * 3 + 17 * d * 3;
+        let logical = logical_elems * 4;
+        assert!(
+            got > logical,
+            "device budget {got} did not account for power-of-two buckets above logical {logical}"
+        );
     }
 
     #[test]
@@ -1759,6 +2079,11 @@ mod tests {
         )
         .unwrap();
         let need = scratch_bytes(&shape).unwrap();
+        let allocated = state.rt.current_allocated_bytes();
+        assert!(
+            allocated > 0,
+            "device reported no live bytes before the refusal"
+        );
         let err = tiny_train_step(
             &mut state,
             &pattern((shape.batch * shape.seq) as usize * d, 1),
@@ -1775,11 +2100,16 @@ mod tests {
             } => {
                 assert_eq!(requested, need);
                 assert_eq!(cap, need - 1);
-                assert_eq!(live, 0);
+                assert_eq!(live, param_bytes(&shape).unwrap());
             }
             other => panic!("expected CapacityExceeded, got {other}"),
         }
         assert_eq!(state.step_count(), 0);
+        assert_eq!(
+            state.rt.current_allocated_bytes(),
+            allocated,
+            "a step whose bucketed bytes exceed byte_cap still allocated"
+        );
     }
 
     #[test]
@@ -1918,6 +2248,32 @@ mod tests {
         adamw_cpu(&mut cpu, &dw, &mut cpu_m, &mut cpu_v, 0, &cfg);
         let err = max_abs(&w.read_f32().unwrap(), &cpu);
         assert!(err < ADAMW_ABS_TOL, "device adamw err {err}");
+    }
+
+    /// The tiny step's AdamW refuses what the trait's `adamw_step` refuses
+    /// (`ojas_core::check_adamw`), before it writes anything.
+    #[test]
+    fn tiny_adamw_refuses_the_configs_the_trait_refuses() {
+        let session = session();
+        let n = 64usize;
+        let p0 = pattern(n, 31);
+        let grad = f32_tensor(&session.rt, &[1, n], &pattern(n, 32)).unwrap();
+        let base = AdamWConfig::nanolab(1e-2, 0.01);
+        let bad = [
+            ("negative lr", AdamWConfig { lr: -1e-2, ..base }),
+            ("negative weight decay", AdamWConfig { weight_decay: -0.1, ..base }),
+            ("beta1 above 1", AdamWConfig { beta1: 1.5, ..base }),
+            ("zero eps", AdamWConfig { eps: 0.0, ..base }),
+        ];
+        for (what, cfg) in bad {
+            let mut p = f32_tensor(&session.rt, &[1, n], &p0).unwrap();
+            let mut m = zeros(&session.rt, &[1, n]).unwrap();
+            let mut v = zeros(&session.rt, &[1, n]).unwrap();
+            let err = adamw_apply(&session.rt, &mut p, &grad, &mut m, &mut v, 1, &cfg)
+                .expect_err(what);
+            assert!(matches!(err, OjasError::OutOfRange { .. }), "{what}: {err}");
+            assert_eq!(p.read_f32().unwrap(), p0, "{what}: parameter written");
+        }
     }
 
     #[test]
@@ -2352,6 +2708,212 @@ mod tests {
         )
         .expect_err("seq 17");
         assert!(matches!(err, OjasError::Shape { .. }), "{err}");
+    }
+
+    /// seq 17 and a third head are shape errors. The check runs before any
+    /// `[seq, seq]` score allocation, so this test stops at the error.
+    #[test]
+    fn seq17_and_heads3_are_shape_errors_before_a_score_matrix() {
+        let session = session();
+        for (seq, heads) in [(17u32, 2u32), (4, 3), (17, 3)] {
+            let err = attn_bwd_limits(&AttnBwdDims {
+                batch: 1,
+                seq,
+                heads,
+                head_dim: 64,
+            })
+            .expect_err("limits");
+            assert!(
+                matches!(
+                    err,
+                    OjasError::Shape {
+                        op: "causal_attn_backward",
+                        ..
+                    }
+                ),
+                "seq {seq} heads {heads}: {err}"
+            );
+            let bad = TinyShape {
+                seq,
+                n_head: heads,
+                ..shape()
+            };
+            assert!(
+                matches!(validate_tiny_shape(&bad), Err(OjasError::Shape { .. })),
+                "seq {seq} heads {heads} was accepted"
+            );
+            assert!(
+                scratch_bytes(&bad).is_err(),
+                "seq {seq} heads {heads} produced a scratch size"
+            );
+        }
+        for (seq, heads) in [(17u32, 1u32), (4, 3), (17, 3)] {
+            let rows = seq as usize;
+            let width = heads as usize * 64;
+            let z = vec![0.0f32; rows * width];
+            let t = f32_tensor(&session.rt, &[rows, width], &z).unwrap();
+            let err = causal_attn_backward(
+                &session.rt,
+                &AttnBwdDims {
+                    batch: 1,
+                    seq,
+                    heads,
+                    head_dim: 64,
+                },
+                &t,
+                &t,
+                &t,
+                &t,
+                &t,
+                &t,
+                &t,
+            )
+            .expect_err("backward");
+            assert!(
+                matches!(err, OjasError::Shape { .. }),
+                "seq {seq} heads {heads}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn causal_backward_seq16_two_heads_matches_cpu() {
+        let session = session();
+        let (batch, seq, heads, head_dim) = (1u32, 16u32, 2u32, 64u32);
+        let n = (batch * seq * heads * head_dim) as usize;
+        let draw = |seed: u32| {
+            pattern(n, seed)
+                .into_iter()
+                .map(|x| x * 0.05)
+                .collect::<Vec<_>>()
+        };
+        let q = draw(3);
+        let k = draw(5);
+        let v = draw(7);
+        let d_o = draw(9);
+        let rows = (batch * seq) as usize;
+        let width = (heads * head_dim) as usize;
+        let q_t = f32_tensor(&session.rt, &[rows, width], &q).unwrap();
+        let k_t = f32_tensor(&session.rt, &[rows, width], &k).unwrap();
+        let v_t = f32_tensor(&session.rt, &[rows, width], &v).unwrap();
+        let do_t = f32_tensor(&session.rt, &[rows, width], &d_o).unwrap();
+        let dq = zeros(&session.rt, &[rows, width]).unwrap();
+        let dk = zeros(&session.rt, &[rows, width]).unwrap();
+        let dv = zeros(&session.rt, &[rows, width]).unwrap();
+        match causal_attn_backward(
+            &session.rt,
+            &AttnBwdDims {
+                batch,
+                seq,
+                heads,
+                head_dim,
+            },
+            &q_t,
+            &k_t,
+            &v_t,
+            &do_t,
+            &dq,
+            &dk,
+            &dv,
+        ) {
+            Ok(()) => {
+                let (want_q, want_k, want_v) = causal_bwd_f32(
+                    &q,
+                    &k,
+                    &v,
+                    &d_o,
+                    batch as usize,
+                    seq as usize,
+                    heads as usize,
+                    head_dim as usize,
+                );
+                let q_err = max_abs(&dq.read_f32().unwrap(), &want_q);
+                let k_err = max_abs(&dk.read_f32().unwrap(), &want_k);
+                let v_err = max_abs(&dv.read_f32().unwrap(), &want_v);
+                assert!(q_err < STEP_ABS_TOL, "dQ err {q_err}");
+                assert!(k_err < STEP_ABS_TOL, "dK err {k_err}");
+                assert!(v_err < STEP_ABS_TOL, "dV err {v_err}");
+            }
+            Err(OjasError::CapacityExceeded { .. }) => {
+                // scratch_bytes is the budget. Do not raise it to force the step.
+            }
+            Err(other) => panic!("seq 16 heads 2: {other}"),
+        }
+    }
+
+    #[test]
+    fn nan_in_do_or_q_does_not_write_the_q_projection() {
+        let session = session();
+        let shape = shape();
+        let d = D_MODEL as usize;
+        let state = TinyState::new(
+            &session,
+            shape,
+            param_bytes(&shape).unwrap(),
+            tw(
+                &vec![1.0; d],
+                &pattern(d * d, 2),
+                &pattern(d * d, 3),
+                &pattern(d * d, 4),
+                &pattern(shape.vocab as usize * d, 5),
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; d * d],
+            ),
+        )
+        .unwrap();
+        let before_q = state.q_projection().unwrap();
+        let rows = shape.rows().unwrap() as usize;
+        let width = (shape.n_head * shape.head_dim) as usize;
+        let n = rows * width;
+        let draw = |seed: u32| {
+            pattern(n, seed)
+                .into_iter()
+                .map(|x| x * 0.05)
+                .collect::<Vec<_>>()
+        };
+        let q = draw(3);
+        let k = draw(5);
+        let v = draw(7);
+        let d_o = draw(9);
+        let sentinel = vec![1.25f32; n];
+        let dims = AttnBwdDims {
+            batch: shape.batch,
+            seq: shape.seq,
+            heads: shape.n_head,
+            head_dim: shape.head_dim,
+        };
+        for label in ["q", "dO"] {
+            let mut qv = q.clone();
+            let mut dov = d_o.clone();
+            if label == "q" {
+                qv[0] = f32::NAN;
+            } else {
+                dov[3] = f32::NAN;
+            }
+            let q_t = f32_tensor(&session.rt, &[rows, width], &qv).unwrap();
+            let k_t = f32_tensor(&session.rt, &[rows, width], &k).unwrap();
+            let v_t = f32_tensor(&session.rt, &[rows, width], &v).unwrap();
+            let do_t = f32_tensor(&session.rt, &[rows, width], &dov).unwrap();
+            let dq = f32_tensor(&session.rt, &[rows, width], &sentinel).unwrap();
+            let dk = f32_tensor(&session.rt, &[rows, width], &sentinel).unwrap();
+            let dv = f32_tensor(&session.rt, &[rows, width], &sentinel).unwrap();
+            let err =
+                causal_attn_backward(&session.rt, &dims, &q_t, &k_t, &v_t, &do_t, &dq, &dk, &dv)
+                    .expect_err(label);
+            assert!(matches!(err, OjasError::NonFinite { .. }), "{label}: {err}");
+            assert_eq!(
+                dq.read_f32().unwrap(),
+                sentinel,
+                "{label} wrote the Q gradient that updates the projection"
+            );
+            assert_eq!(
+                state.q_projection().unwrap(),
+                before_q,
+                "{label} wrote the Q projection"
+            );
+            assert_eq!(state.step_count(), 0);
+        }
     }
 
     #[test]

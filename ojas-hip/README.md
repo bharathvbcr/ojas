@@ -1,28 +1,36 @@
 # ojas-hip
 
-`ojas-hip` provides AMD ROCm/HIP GPU execution via `hip-runtime-sys`.
+`ojas-hip` provides an optional AMD ROCm/HIP GPU memory and execution probe for **ojas** via `hip-runtime-sys`.
 
-It is feature-gated under `--features hip` and is disabled in the default build.
+It is feature-gated under `--features hip` and is disabled in the default workspace build.
 
 ---
 
-## Execution Model
+## Execution Model & Compilation Gate
 
 ```mermaid
 flowchart TD
-    Open["HipDevice::open()"] --> CheckFeature{"Is 'hip' feature enabled?"}
+    Init["HipDevice::open()"] --> CheckFeature{"Is 'hip' feature flag enabled?"}
     
-    CheckFeature -->|No (Default Build)| NotCompiled["Return DeviceError::NotCompiled\n(Strict refusal; never CPU fallback)"]
+    CheckFeature -->|"No (Default Build)"| NotCompiled["Return Err(DeviceError::NotCompiled)\n(Strict refusal; never CPU fallback)"]
     CheckFeature -->|Yes| HipContext["Initialize hipInit() & hipGetDeviceCount()"]
     
-    HipContext --> Kernel["hipMalloc / hipMemcpy / hipFree"]
-    Kernel --> Stream["Launch HIP affine_f32 kernel"]
-    Stream --> Result["Result Vector (f32)"]
+    HipContext --> Buffer["Allocate HIP device memory (hipMalloc)"]
+    Buffer --> Copy["Memory Transfer Probe (hipMemcpy HtoD / DtoH)"]
+    Copy --> Free["Deallocate HIP memory (hipFree)"]
 ```
 
 ---
 
-## Safety & Invariants
+## Architectural Role & Boundaries
 
-1. **No Silent Fallback:** Attempting to use HIP in a build without the `hip` feature flag returns `DeviceError::NotCompiled`. It will never silently run operations on the host CPU.
-2. **Device Mismatch Check:** Passing `Device::Cpu` to `HipDevice::affine_f32` immediately raises `DeviceError::DeviceMismatch`.
+> [!NOTE]
+> `ojas-hip` does **not** implement the `ojas_core::Backend` trait and carries no compute kernels. It operates strictly as an isolated device and memory transfer probe for AMD ROCm hardware.
+
+---
+
+## Defensive Countermeasures & Safety Guarantees
+
+> [!IMPORTANT]
+> 1. **Zero Silent Fallback:** Invocations in builds without `--features hip` return `Err(DeviceError::NotCompiled)` immediately. **Missing ROCm drivers never silently trigger CPU execution.**
+> 2. **Device Mismatch Defense:** Passing an incompatible device handle to `HipDevice::affine_f32` immediately raises `Err(DeviceError::DeviceMismatch)`.

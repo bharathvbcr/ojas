@@ -1,8 +1,11 @@
 //! Embedding, pointwise ops, per-head gate, value residual, and cross-entropy.
 
+use std::sync::Arc;
+
 use ojas_core::{Budget, OjasError};
 
-use crate::validate::{flat, get, nonfinite, product, room_for, same_shape, shape};
+use crate::pool::{Exec, ROW_MIN_ELEMS};
+use crate::validate::{all_finite, flat, get, nonfinite, product, room_for, same_shape, shape};
 
 pub(crate) fn sigmoid(x: f32) -> f32 {
     if x >= 0.0 {
@@ -27,7 +30,7 @@ pub(crate) fn embedding_forward(
     let mut out_shape = id_shape.to_vec();
     out_shape.push(dim);
     let out_len = product(op, &[ids.len(), dim])?;
-    room_for(op, budget, out_len)?;
+    let _hold = room_for(op, budget, out_len)?;
     let mut out = vec![0.0f32; out_len];
     for (n, &id) in ids.iter().enumerate() {
         let row = id as usize;
@@ -40,6 +43,7 @@ pub(crate) fn embedding_forward(
 
 pub(crate) fn embedding_backward(
     op: &'static str,
+    budget: &Budget,
     table_shape: &[usize],
     ids: &[u32],
     id_shape: &[usize],
@@ -56,7 +60,9 @@ pub(crate) fn embedding_backward(
             format!("embedding grad shape {grad_shape:?} != {expect:?}"),
         ));
     }
-    let mut grad_table = vec![0.0f32; vocab * dim];
+    let table_len = product(op, &[vocab, dim])?;
+    let _hold = room_for(op, budget, table_len)?;
+    let mut grad_table = vec![0.0f32; table_len];
     for (n, &id) in ids.iter().enumerate() {
         let row = id as usize;
         for col in 0..dim {
@@ -148,6 +154,7 @@ pub(crate) fn add_forward(op: &'static str, a: &[f32], b: &[f32]) -> Result<Vec<
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gate_forward(
     op: &'static str,
+    budget: &Budget,
     input: &[f32],
     input_shape: &[usize],
     weight: &[f32],
@@ -158,6 +165,7 @@ pub(crate) fn gate_forward(
     attn_shape: &[usize],
 ) -> Result<Vec<f32>, OjasError> {
     let layout = gate_layout(op, input_shape, weight_shape, bias_shape, attn_shape)?;
+    let _hold = room_for(op, budget, attn.len())?;
     let mut y = vec![0.0f32; attn.len()];
     for row in 0..layout.rows {
         for head in 0..layout.heads {
@@ -198,6 +206,7 @@ type GateGrads = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>);
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gate_backward(
     op: &'static str,
+    budget: &Budget,
     input: &[f32],
     input_shape: &[usize],
     weight: &[f32],
@@ -211,6 +220,16 @@ pub(crate) fn gate_backward(
 ) -> Result<GateGrads, OjasError> {
     same_shape(op, attn_shape, grad_shape)?;
     let layout = gate_layout(op, input_shape, weight_shape, bias_shape, attn_shape)?;
+    let scratch = input
+        .len()
+        .checked_add(weight.len())
+        .and_then(|n| n.checked_add(layout.heads))
+        .and_then(|n| n.checked_add(attn.len()))
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: "gate scratch length overflows".to_string(),
+        })?;
+    let _hold = room_for(op, budget, scratch)?;
     let mut grad_x = vec![0.0f32; input.len()];
     let mut grad_w = vec![0.0f32; weight.len()];
     let mut grad_b = vec![0.0f32; layout.heads];
@@ -366,11 +385,17 @@ pub(crate) fn value_residual_backward(
 /// Mean cross-entropy. `ignore` positions are dropped. The denominator is the
 /// valid-row count. An empty valid set matches torch and is
 /// [`OjasError::NonFinite`] (the mean is NaN). It is not a finite loss of 0.
+/// Rows run in chunks on the pool. Each valid row's loss term comes back
+/// separately and the terms are added in increasing row order on the
+/// caller, so the loss bits do not depend on the chunking.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cross_entropy(
     op: &'static str,
-    logits: &[f32],
+    budget: &Budget,
+    exec: Exec<'_>,
+    logits: Vec<f32>,
     logit_shape: &[usize],
-    targets: &[u32],
+    targets: Vec<u32>,
     target_shape: &[usize],
     ignore: Option<u32>,
 ) -> Result<(f32, Vec<f32>), OjasError> {
@@ -415,48 +440,74 @@ pub(crate) fn cross_entropy(
         return Err(nonfinite(op));
     }
     let denom = n_valid as f32;
-    let mut grad = vec![0.0f32; logits.len()];
-    let mut total = 0.0f32;
-    for (n, &target) in targets.iter().enumerate() {
-        if ignore == Some(target) {
-            continue;
-        }
-        let class = target as usize;
-        let mut max_logit = f32::NEG_INFINITY;
-        let row = logits
-            .get(n * vocab..(n + 1) * vocab)
-            .ok_or_else(|| OjasError::OutOfRange {
-                op,
-                detail: "cross-entropy row exceeds logits".to_string(),
-            })?;
-        for &value in row {
-            if value > max_logit {
-                max_logit = value;
-            }
-        }
+    let grad_len = product(op, &[rows, vocab])?;
+    // One exp buffer stays live with the row gradient. The stored result of
+    // the forward pass is only the scalar loss.
+    let scratch = grad_len
+        .checked_add(vocab)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: "cross-entropy scratch length overflows".to_string(),
+        })?;
+    let _hold = room_for(op, budget, scratch)?;
+    let (logits, targets) = (Arc::new(logits), Arc::new(targets));
+    let min_rows = (ROW_MIN_ELEMS / vocab.max(1)).max(1);
+    let parts = exec.chunks(rows, min_rows, move |range| {
+        let mut grad = vec![0.0f32; range.len() * vocab];
+        let mut terms = Vec::with_capacity(range.len());
         let mut exps = vec![0.0f32; vocab];
-        let mut sum = 0.0f32;
-        for (col, &value) in row.iter().enumerate() {
-            let e = (value - max_logit).exp();
-            if !e.is_finite() {
+        for n in range.clone() {
+            let target = targets[n];
+            if ignore == Some(target) {
+                continue;
+            }
+            let class = target as usize;
+            let mut max_logit = f32::NEG_INFINITY;
+            let row =
+                logits
+                    .get(n * vocab..(n + 1) * vocab)
+                    .ok_or_else(|| OjasError::OutOfRange {
+                        op,
+                        detail: "cross-entropy row exceeds logits".to_string(),
+                    })?;
+            for &value in row {
+                if value > max_logit {
+                    max_logit = value;
+                }
+            }
+            let mut sum = 0.0f32;
+            for (col, &value) in row.iter().enumerate() {
+                let e = (value - max_logit).exp();
+                if !e.is_finite() {
+                    return Err(nonfinite(op));
+                }
+                exps[col] = e;
+                sum += e;
+            }
+            if !(sum.is_finite() && sum > 0.0) {
                 return Err(nonfinite(op));
             }
-            exps[col] = e;
-            sum += e;
+            terms.push(max_logit + sum.ln() - row[class]);
+            let base = (n - range.start) * vocab;
+            for col in 0..vocab {
+                let p = exps[col] / sum;
+                grad[base + col] = p / denom;
+            }
+            grad[base + class] -= 1.0 / denom;
         }
-        if !(sum.is_finite() && sum > 0.0) {
-            return Err(nonfinite(op));
+        Ok((grad, terms))
+    })?;
+    let mut grad = Vec::with_capacity(rows.saturating_mul(vocab));
+    let mut total = 0.0f32;
+    for part in parts {
+        let (rows_grad, terms) = part?;
+        grad.extend_from_slice(&rows_grad);
+        for term in terms {
+            total += term;
         }
-        total += max_logit + sum.ln() - row[class];
-        let base = n * vocab;
-        for col in 0..vocab {
-            let p = exps[col] / sum;
-            grad[base + col] = p / denom;
-        }
-        grad[base + class] -= 1.0 / denom;
     }
     let loss = total / denom;
-    if !loss.is_finite() || grad.iter().any(|g| !g.is_finite()) {
+    if !loss.is_finite() || !all_finite(&grad) {
         return Err(nonfinite(op));
     }
     Ok((loss, grad))

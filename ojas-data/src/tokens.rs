@@ -307,11 +307,13 @@ mod tests {
             let bytes: Vec<u8> = (0..len).map(|_| rng.next_u64() as u8).collect();
             write(&path.0, &bytes);
             let opened = TokenBin::open_headerless(&path.0);
-            assert_eq!(opened.is_ok(), len % 2 == 0, "{len}");
+            assert_eq!(opened.is_ok(), len.is_multiple_of(2), "{len}");
             if let Ok(bin) = opened {
                 let tokens: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c))
                     .collect();
                 check_windows(&bin, &tokens, &mut rng);
             }
@@ -335,7 +337,7 @@ mod tests {
             let version = pick(&mut rng, FINEWEB_VERSION);
             let count = pick(&mut rng, n as i32);
             let mut bytes = fineweb(magic, version, count, &tokens);
-            if rng.next_u64() % 4 == 0 {
+            if rng.next_u64().is_multiple_of(4) {
                 let cut = (rng.next_u64() % (bytes.len() as u64 + 1)) as usize;
                 bytes.truncate(cut);
             }

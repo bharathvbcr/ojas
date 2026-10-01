@@ -2,9 +2,10 @@
 //! Empty, NaN, mismatched shape, and a full budget each return a typed error.
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, DType, MuonNs5Config, OjasError, Tensor, RMS_NORM_EPS,
+    refuse_unsupported_metal_head_dim, AdamWConfig, Backend, BackendId, Budget, DType,
+    MuonNs5Config, OjasError, Tensor, METAL_MAX_HEAD_DIM, RMS_NORM_EPS,
 };
-use ojas_cpu::{metal_head_dim_policy, CpuBackend};
+use ojas_cpu::CpuBackend;
 
 mod common;
 use common::{assert_capacity, assert_nonfinite, assert_range, assert_shape, f32t, u32t};
@@ -31,19 +32,20 @@ fn noncontig(cpu: &CpuBackend) -> Tensor {
 }
 
 #[test]
-fn metal_policy_refuses_above_64_and_cpu_does_not_truncate() {
-    assert!(metal_head_dim_policy(64).is_ok());
-    match metal_head_dim_policy(65) {
-        Err(OjasError::UnsupportedHeadDim {
-            head_dim: 65,
-            limit: 64,
-        }) => {}
+fn metal_policy_refuses_above_its_limit_and_cpu_does_not_truncate() {
+    let metal = |d| refuse_unsupported_metal_head_dim(BackendId::Metal, d);
+    let over = METAL_MAX_HEAD_DIM + 1;
+    assert!(metal(METAL_MAX_HEAD_DIM).is_ok());
+    match metal(over) {
+        Err(OjasError::UnsupportedHeadDim { head_dim, limit })
+            if head_dim == over && limit == METAL_MAX_HEAD_DIM => {}
         other => panic!("expected UnsupportedHeadDim, got {other:?}"),
     }
-    assert_range(metal_head_dim_policy(0).map(|_| ()));
+    assert_range(metal(0).map(|_| ()));
 
+    // The CPU computes a head dimension Metal refuses, without truncating it.
     let cpu = wide();
-    let dim = 65usize;
+    let dim = over as usize;
     let data = vec![0.01; dim];
     let q = f32t(&cpu, &data, &[1, 1, 1, dim]);
     let k = f32t(&cpu, &data, &[1, 1, 1, dim]);
@@ -52,8 +54,9 @@ fn metal_policy_refuses_above_64_and_cpu_does_not_truncate() {
     let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
     assert_eq!(y.shape(), &[1, 1, 1, dim]);
     let got = y.to_f32_vec().unwrap();
-    for (a, b) in got.iter().zip([0.25; 65].iter()) {
-        assert!((a - b).abs() < 1e-5, "{a} != {b}");
+    assert_eq!(got.len(), dim);
+    for a in &got {
+        assert!((a - 0.25).abs() < 1e-5, "{a} != 0.25");
     }
 }
 
@@ -293,12 +296,269 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     assert_shape(cpu.causal_sdpa_forward(&q, &f32t(&cpu, &[0.0, 1.0, 0.0], &[1, 1, 3, 1]), &v));
     assert_shape(cpu.causal_sdpa_forward(&noncontig(&cpu), &k, &v));
 
+    // 1x1 and an odd time/head-dim, including a second head. The reduction
+    // order is head dimension upward, then causal key index upward.
+    let q = f32t(&cpu, &[1.0], &[1, 1, 1, 1]);
+    let k = f32t(&cpu, &[2.0], &[1, 1, 1, 1]);
+    let v = f32t(&cpu, &[3.0], &[1, 1, 1, 1]);
+    assert_bits(
+        &cpu.causal_sdpa_forward(&q, &k, &v)
+            .unwrap()
+            .to_f32_vec()
+            .unwrap(),
+        &causal_forward_reference(&[1.0], &[2.0], &[3.0], 1, 1, 1, 1),
+    );
+    let gy = f32t(&cpu, &[4.0], &[1, 1, 1, 1]);
+    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let (eq, ek, ev) = causal_backward_reference(&[1.0], &[2.0], &[3.0], &[4.0], 1, 1, 1, 1);
+    assert_eq!(gq.to_f32_vec().unwrap(), eq);
+    assert_eq!(gk.to_f32_vec().unwrap(), ek);
+    assert_eq!(gv.to_f32_vec().unwrap(), ev);
+
+    let (batch, heads, time, dim) = (2usize, 2usize, 3usize, 5usize);
+    let mut data = Vec::new();
+    for i in 0..batch * heads * time * dim {
+        data.push(((i % 7) as f32 - 3.0) * 0.1);
+    }
+    let q = f32t(&cpu, &data, &[batch, heads, time, dim]);
+    let k = f32t(
+        &cpu,
+        &data.iter().rev().copied().collect::<Vec<_>>(),
+        &[batch, heads, time, dim],
+    );
+    let v = f32t(
+        &cpu,
+        &data.iter().map(|x| x * 0.5).collect::<Vec<_>>(),
+        &[batch, heads, time, dim],
+    );
+    assert_bits(
+        &cpu.causal_sdpa_forward(&q, &k, &v)
+            .unwrap()
+            .to_f32_vec()
+            .unwrap(),
+        &causal_forward_reference(
+            q.to_f32_vec().unwrap().as_slice(),
+            k.to_f32_vec().unwrap().as_slice(),
+            v.to_f32_vec().unwrap().as_slice(),
+            batch,
+            heads,
+            time,
+            dim,
+        ),
+    );
+    let gy = f32t(
+        &cpu,
+        &data.iter().map(|x| -x).collect::<Vec<_>>(),
+        &[batch, heads, time, dim],
+    );
+    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let (eq, ek, ev) = causal_backward_reference(
+        q.to_f32_vec().unwrap().as_slice(),
+        k.to_f32_vec().unwrap().as_slice(),
+        v.to_f32_vec().unwrap().as_slice(),
+        gy.to_f32_vec().unwrap().as_slice(),
+        batch,
+        heads,
+        time,
+        dim,
+    );
+    assert_eq!(gq.to_f32_vec().unwrap(), eq);
+    assert_eq!(gk.to_f32_vec().unwrap(), ek);
+    assert_eq!(gv.to_f32_vec().unwrap(), ev);
+
+    // T=9 uses an 8-wide key tile plus a remainder, and T=4, D=16 is the tiny step.
+    for (time, dim) in [(9usize, 8usize), (4, 16), (32, 64)] {
+        let n = time * dim;
+        let qv: Vec<f32> = (0..n).map(|i| ((i % 11) as f32 - 5.0) * 0.05).collect();
+        let kv: Vec<f32> = (0..n).map(|i| ((i % 5) as f32 - 2.0) * 0.07).collect();
+        let vv: Vec<f32> = (0..n).map(|i| ((i % 3) as f32 - 1.0) * 0.11).collect();
+        let q = f32t(&cpu, &qv, &[1, 1, time, dim]);
+        let k = f32t(&cpu, &kv, &[1, 1, time, dim]);
+        let v = f32t(&cpu, &vv, &[1, 1, time, dim]);
+        assert_bits(
+            &cpu.causal_sdpa_forward(&q, &k, &v)
+                .unwrap()
+                .to_f32_vec()
+                .unwrap(),
+            &causal_forward_reference(&qv, &kv, &vv, 1, 1, time, dim),
+        );
+    }
+
+    // A large future key must not change position 0, including the T=32 kernel.
+    let (time, dim) = (32usize, 64usize);
+    let n = time * dim;
+    let qv: Vec<f32> = (0..n).map(|i| ((i % 9) as f32 - 4.0) * 0.03).collect();
+    let kv: Vec<f32> = (0..n).map(|i| ((i % 4) as f32 - 1.5) * 0.04).collect();
+    let vv: Vec<f32> = (0..n).map(|i| 0.2 + (i % dim) as f32 * 0.01).collect();
+    let q = f32t(&cpu, &qv, &[1, 1, time, dim]);
+    let k = f32t(&cpu, &kv, &[1, 1, time, dim]);
+    let v = f32t(&cpu, &vv, &[1, 1, time, dim]);
+    let y0 = cpu
+        .causal_sdpa_forward(&q, &k, &v)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
+    let mut kv_future = kv.clone();
+    let future = 8 * dim;
+    kv_future[future] = 40.0;
+    let y1 = cpu
+        .causal_sdpa_forward(&q, &f32t(&cpu, &kv_future, &[1, 1, time, dim]), &v)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
+    assert_eq!(
+        y0[..dim]
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        y1[..dim]
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(&y0[future..future + dim], &y1[future..future + dim]);
+
     let budget = Budget::new(4 * 3);
     let tight = CpuBackend::new(budget.clone());
     let q = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
     let k = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
     let v = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
     assert_capacity(tight.causal_sdpa_forward(&q, &k, &v));
+}
+
+fn assert_bits(got: &[f32], expect: &[f32]) {
+    assert_eq!(got.len(), expect.len());
+    for (i, (a, b)) in got.iter().zip(expect).enumerate() {
+        assert_eq!(a.to_bits(), b.to_bits(), "index {i}: {a} vs {b}");
+    }
+}
+
+/// Independent causal forward: scale `1/sqrt(dim)`, keys `0..=t`, sums in
+/// increasing index order.
+fn causal_forward_reference(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    batch: usize,
+    heads: usize,
+    time: usize,
+    dim: usize,
+) -> Vec<f32> {
+    let scale = 1.0 / (dim as f32).sqrt();
+    let width = time * dim;
+    let mut out = vec![0.0f32; batch * heads * width];
+    for b in 0..batch {
+        for h in 0..heads {
+            let base = (b * heads + h) * width;
+            for t in 0..time {
+                let mut scores = vec![0.0f32; t + 1];
+                let mut max_score = f32::NEG_INFINITY;
+                for j in 0..=t {
+                    let mut dot = 0.0f32;
+                    for d in 0..dim {
+                        dot += q[base + t * dim + d] * k[base + j * dim + d];
+                    }
+                    let score = dot * scale;
+                    scores[j] = score;
+                    if score > max_score {
+                        max_score = score;
+                    }
+                }
+                let mut sum = 0.0f32;
+                let mut probs = vec![0.0f32; t + 1];
+                for j in 0..=t {
+                    let e = (scores[j] - max_score).exp();
+                    probs[j] = e;
+                    sum += e;
+                }
+                for p in &mut probs {
+                    *p /= sum;
+                }
+                for d in 0..dim {
+                    let mut acc = 0.0f32;
+                    for j in 0..=t {
+                        acc += probs[j] * v[base + j * dim + d];
+                    }
+                    out[base + t * dim + d] = acc;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Independent causal backward: scale `1/sqrt(dim)`, keys `0..=t`, sums in
+/// increasing index order. Used to lock the optimized kernel's association.
+#[allow(clippy::too_many_arguments)]
+fn causal_backward_reference(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    grad_y: &[f32],
+    batch: usize,
+    heads: usize,
+    time: usize,
+    dim: usize,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let scale = 1.0 / (dim as f32).sqrt();
+    let width = time * dim;
+    let mut grad_q = vec![0.0f32; batch * heads * width];
+    let mut grad_k = vec![0.0f32; batch * heads * width];
+    let mut grad_v = vec![0.0f32; batch * heads * width];
+    for b in 0..batch {
+        for h in 0..heads {
+            let base = (b * heads + h) * width;
+            for t in 0..time {
+                let mut scores = vec![0.0f32; t + 1];
+                let mut max_score = f32::NEG_INFINITY;
+                for j in 0..=t {
+                    let mut dot = 0.0f32;
+                    for d in 0..dim {
+                        dot += q[base + t * dim + d] * k[base + j * dim + d];
+                    }
+                    let score = dot * scale;
+                    scores[j] = score;
+                    if score > max_score {
+                        max_score = score;
+                    }
+                }
+                let mut sum = 0.0f32;
+                let mut probs = vec![0.0f32; t + 1];
+                for j in 0..=t {
+                    let e = (scores[j] - max_score).exp();
+                    probs[j] = e;
+                    sum += e;
+                }
+                for p in &mut probs {
+                    *p /= sum;
+                }
+                let mut dprobs = vec![0.0f32; t + 1];
+                for j in 0..=t {
+                    let mut dot = 0.0f32;
+                    for d in 0..dim {
+                        dot += grad_y[base + t * dim + d] * v[base + j * dim + d];
+                    }
+                    dprobs[j] = dot;
+                }
+                let mut expected = 0.0f32;
+                for j in 0..=t {
+                    expected += probs[j] * dprobs[j];
+                }
+                for j in 0..=t {
+                    let ds = probs[j] * (dprobs[j] - expected);
+                    let coef = scale * ds;
+                    for d in 0..dim {
+                        let qd = base + t * dim + d;
+                        let kd = base + j * dim + d;
+                        grad_q[qd] += coef * k[kd];
+                        grad_k[kd] += coef * q[qd];
+                        grad_v[kd] += probs[j] * grad_y[qd];
+                    }
+                }
+            }
+        }
+    }
+    (grad_q, grad_k, grad_v)
 }
 
 #[test]

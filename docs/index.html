@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas — Deterministic Rust deep learning engine</title>
+  <meta name="description" content="ojas is a Rust deep learning engine with bit-identical CPU math, memory budgets that refuse, and no silent device fallback. Live labs for each guarantee.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/">
+  <meta property="og:title" content="ojas — Deterministic Rust deep learning engine">
+  <meta property="og:description" content="ojas is a Rust deep learning engine with bit-identical CPU math, memory budgets that refuse, and no silent device fallback. Live labs for each guarantee.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="site.webmanifest">
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+        tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#fff1f2',
+              100: '#ffe4e6',
+              200: '#fecdd3',
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e',
+              600: '#e11d48',
+              700: '#be123c',
+              800: '#9f1239',
+              900: '#881337',
+              950: '#4c0519',
+              crimson: '#ff2d55',
+              ruby: '#d90429',
+              flame: '#ff4b2b',
+              glow: '#ff3366',
+            },
+          },
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['"Fira Code"', 'ui-monospace', 'monospace'],
+          },
+          boxShadow: {
+            'glow-red': '0 0 35px -5px rgba(255, 45, 85, 0.35)',
+            'glow-subtle': '0 0 20px -5px rgba(255, 45, 85, 0.15)',
+          },
+        }
+      }
+    }
+
+  </script>
+  <link rel="stylesheet" href="assets/ojas.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid" data-root="">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav" id="navbar">
+    <div id="announcement" class="w-full bg-gradient-to-r from-brand-950 via-brand-900 to-black border-b border-brand-800/40 text-xs py-2 px-4 font-medium tracking-wide">
+      <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified 2026-10-01</span>
+        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 449 Rust tests passed (4 ignored) and 27 Go tests passed. See the guide for what that covers.</span>
+        <button type="button" id="dismissAnnounce" class="ml-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10" aria-label="Dismiss announcement">&times;</button>
+      </div>
+    </div>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="index.html" class="flex items-center gap-3 shrink-0">
+        <img src="assets/ojas-logo.webp" alt="" class="w-10 h-10" width="40" height="40">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+        <span class="hidden sm:inline text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 border border-brand-500/30">v0.1.0</span>
+      </a>
+      <nav class="hidden xl:flex items-center gap-0.5" aria-label="Site">
+        <a href="index.html" aria-current="page" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Home</a><a href="why.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Why ojas</a><a href="benchmarks.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a><a href="roadmap.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Roadmap</a><a href="guide/index.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+      </nav>
+      <div class="flex items-center gap-2 shrink-0">
+        <button id="cmdBtn" type="button" class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white transition" aria-label="Search the site">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+          <span class="hidden lg:inline">Search</span>
+          <kbd class="hidden lg:inline px-1.5 py-0.5 rounded bg-black/40 border border-white/10 text-[10px]">⌘K</kbd>
+        </button>
+        <a href="guide/quickstart.html" class="hidden xl:flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/30 transition">Start here</a>
+        <a href="https://github.com/bharathvbcr/ojas" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition" aria-label="ojas on GitHub">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"></path></svg>
+        </a>
+        <button type="button" id="menuBtn" class="xl:hidden p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition" aria-expanded="false" aria-controls="mobileNav" aria-label="Open menu">
+          <svg id="menuIconOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          <svg id="menuIconClose" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+    <nav id="mobileNav" class="xl:hidden hidden border-t border-white/10" aria-label="Site">
+      <div class="max-w-7xl mx-auto px-4 py-3 grid grid-cols-2 gap-1">
+        <a href="index.html" aria-current="page" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Home</a><a href="why.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Why ojas</a><a href="benchmarks.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Benchmarks</a><a href="roadmap.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Roadmap</a><a href="guide/index.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Guide</a>
+      </div>
+    </nav>
+    <div id="readProgress" class="h-0.5 bg-white/5" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Page progress">
+      <div id="readProgressBar" class="h-full bg-brand-500" style="width:0"></div>
+    </div>
+  </header>
+
+  <main id="main">
+
+  <nav id="toc" class="fixed right-4 top-36 z-40 w-36" aria-label="On this page">
+    <p class="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">On this page</p>
+    <ol class="space-y-0.5 text-xs border-l border-white/10">
+      <li><a href="#determinism" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Determinism</a></li>
+      <li><a href="#labs" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Guarantees</a></li>
+      <li><a href="#next" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Keep going</a></li>
+    </ol>
+  </nav>
+  <section id="determinism" class="relative pt-12 pb-20 lg:pt-16 lg:pb-24 overflow-hidden">
+    <div class="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[500px] bg-brand-600/10 rounded-full blur-[140px] pointer-events-none -z-10"></div>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-10 items-center">
+
+        <div class="lg:col-span-6 flex flex-col items-start text-left">
+          <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-brand-500/30 mb-6">
+            <span class="text-xs font-mono uppercase tracking-wider text-brand-300 whitespace-nowrap">Deterministic Rust AI Engine</span>
+            <span class="hidden sm:inline text-slate-500" aria-hidden="true">•</span>
+            <span class="hidden sm:inline text-xs text-slate-300">In-process from Go</span>
+          </div>
+
+          <h1 class="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.08] mb-6">
+            Same inputs.<br>
+            <span class="text-gradient-red">Same bits. Every run.</span>
+          </h1>
+
+          <p class="text-lg text-slate-300 leading-relaxed mb-8 max-w-xl">
+            <strong>ojas</strong> is a deep learning engine in safe Rust whose failure modes are part of the contract: results that do not depend on thread count, memory that is refused before it is allocated, devices that never silently become the CPU, and engine panics that come back to Go as errors.
+          </p>
+
+          <div class="flex flex-wrap items-center gap-3 w-full sm:w-auto mb-10">
+            <a href="#labs" class="w-full sm:w-auto px-6 py-3.5 rounded-xl font-semibold text-sm bg-gradient-to-r from-brand-600 via-brand-500 to-brand-flame text-white shadow-glow-red hover:brightness-110 transition flex items-center justify-center gap-2">
+              Try each guarantee
+            </a>
+            <a href="roadmap.html" class="w-full sm:w-auto px-6 py-3.5 rounded-xl font-semibold text-sm bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white transition flex items-center justify-center gap-2">
+              What&#39;s next
+            </a>
+            <a href="https://github.com/bharathvbcr/ojas" target="_blank" rel="noopener noreferrer" class="w-full sm:w-auto px-5 py-3.5 rounded-xl font-medium text-sm text-slate-400 hover:text-white flex items-center justify-center gap-1.5 transition">
+              View on GitHub
+            </a>
+          </div>
+
+          <dl class="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full pt-6 border-t border-white/10">
+            <div>
+              <dt class="text-xs text-slate-400">Tiny step, ojas CPU</dt>
+              <dd class="text-2xl font-bold font-mono text-white">22.5 µs</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-slate-400">Same step, PyTorch CPU</dt>
+              <dd class="text-2xl font-bold font-mono text-slate-300 whitespace-nowrap">354–487<span class="text-base"> µs</span></dd>
+            </div>
+            <div>
+              <dt class="text-xs text-slate-400">Thread counts, same bits</dt>
+              <dd class="text-2xl font-bold font-mono text-brand-400">6 of 6</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-slate-400">Rust + Go tests passed</dt>
+              <dd class="text-2xl font-bold font-mono text-white">449 + 27</dd>
+            </div>
+          </dl>
+        </div>
+
+        <!-- Determinism lab -->
+        <div class="lg:col-span-6">
+          <div class="glass-card rounded-3xl p-6 sm:p-7 border border-brand-500/20 shadow-glow-subtle">
+            <div class="flex items-start justify-between gap-4 mb-1">
+              <h2 class="text-lg font-bold text-white">Run the same reduction twice</h2>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400 shrink-0">live in your browser</span>
+            </div>
+            <p class="text-xs text-slate-400 leading-relaxed mb-5">
+              Your browser sums 4,096 fixed float32 values, rounding after every add like an f32 kernel does. Floating-point addition is not associative, so the order of the adds decides the last bits.
+            </p>
+
+            <div class="mb-5">
+              <div class="flex justify-between text-xs font-mono mb-2">
+                <label for="detThreads" class="text-slate-300">Worker threads</label>
+                <span id="detThreadsVal" class="text-brand-400 font-bold" aria-live="polite">7</span>
+              </div>
+              <input type="range" id="detThreads" min="1" max="18" value="7" class="w-full accent-brand-500 cursor-pointer">
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+              <div class="rounded-2xl bg-black/50 border border-white/10 p-4">
+                <p class="text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-1">Split-k reduction</p>
+                <p class="text-[11px] text-slate-500 leading-snug mb-3">Each thread sums a slice; partials are added in the order threads finish.</p>
+                <p id="detSplitBits" class="font-mono text-base text-slate-200">—</p>
+                <p id="detSplitVal" class="font-mono text-[11px] text-slate-500 mb-3">&nbsp;</p>
+                <p class="text-xs font-mono"><span id="detSplitDistinct" class="text-white font-bold">0</span> <span class="text-slate-400">distinct bit patterns</span></p>
+              </div>
+              <div class="rounded-2xl bg-black/50 border border-brand-500/30 p-4">
+                <p class="text-[11px] font-mono uppercase tracking-wider text-brand-300 mb-1">ojas Numerics::Exact</p>
+                <p class="text-[11px] text-slate-500 leading-snug mb-3">Threads split the outputs, never one sum; each sum runs in ascending k.</p>
+                <p id="detExactBits" class="font-mono text-base text-brand-200">—</p>
+                <p id="detExactVal" class="font-mono text-[11px] text-slate-500 mb-3">&nbsp;</p>
+                <p class="text-xs font-mono"><span id="detExactDistinct" class="text-white font-bold">0</span> <span class="text-slate-400">distinct bit patterns</span></p>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2 mb-4">
+              <button type="button" id="detRun1" class="px-4 py-2 rounded-xl text-xs font-mono bg-brand-500 text-white hover:bg-brand-400 transition">Run once</button>
+              <button type="button" id="detRun20" class="px-4 py-2 rounded-xl text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 transition">Run 20 times</button>
+              <button type="button" id="detClear" class="px-3 py-2 rounded-xl text-xs font-mono text-slate-400 hover:text-white transition">Clear</button>
+              <span id="detRuns" class="ml-auto text-[11px] font-mono text-slate-500">0 runs</span>
+            </div>
+
+            <p id="detVerdict" class="text-xs text-slate-300 leading-relaxed min-h-[2.5rem]" aria-live="polite">Run it a few times, then move the thread slider and run again.</p>
+
+            <p class="mt-4 pt-3 border-t border-white/10 text-[11px] text-slate-500 leading-relaxed">
+              This demo shows the mechanism and does not measure any framework. In ojas the property is a test: <span class="font-mono text-slate-400">ojas-cpu/tests/exact_golden.rs</span> pins FNV-1a digests of output bits and requires them at 1, 2, 3, 7, 16, and 18 threads.
+            </p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+  <section id="labs" class="py-20 border-t border-white/10 bg-black/40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+      <div class="max-w-3xl mb-10">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Guarantees you can poke</span>
+        <h2 class="text-3xl sm:text-5xl font-extrabold tracking-tight mt-2 text-white">What ojas does when things go wrong</h2>
+        <p class="text-slate-400 text-base sm:text-lg mt-4 leading-relaxed">
+          Most of an engine's value shows up on the bad day. Each lab below reproduces one failure, and the result it prints uses the error text from the ojas source.
+        </p>
+      </div>
+
+      <div class="flex flex-wrap gap-2 mb-6" role="tablist" aria-label="Guarantee labs" id="labTabs">
+        <button type="button" role="tab" id="tab-budget" aria-controls="panel-budget" aria-selected="true" class="lab-tab px-4 py-2 rounded-xl text-sm font-medium border border-white/10 text-slate-300 hover:text-white transition">Memory budget</button>
+        <button type="button" role="tab" id="tab-device" aria-controls="panel-device" aria-selected="false" tabindex="-1" class="lab-tab px-4 py-2 rounded-xl text-sm font-medium border border-white/10 text-slate-300 hover:text-white transition">No silent fallback</button>
+        <button type="button" role="tab" id="tab-panic" aria-controls="panel-panic" aria-selected="false" tabindex="-1" class="lab-tab px-4 py-2 rounded-xl text-sm font-medium border border-white/10 text-slate-300 hover:text-white transition">Panic firewall</button>
+        <button type="button" role="tab" id="tab-checked" aria-controls="panel-checked" aria-selected="false" tabindex="-1" class="lab-tab px-4 py-2 rounded-xl text-sm font-medium border border-white/10 text-slate-300 hover:text-white transition">Checked shapes &amp; views</button>
+      </div>
+
+      <!-- Budget lab -->
+      <div id="panel-budget" role="tabpanel" aria-labelledby="tab-budget" class="lab-panel glass-card rounded-3xl p-6 sm:p-8">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <div class="lg:col-span-5">
+            <h3 class="text-xl font-bold text-white mb-2">Refused before it is allocated</h3>
+            <p class="text-sm text-slate-300 leading-relaxed mb-6">
+              Every tensor charges a <span class="font-mono text-brand-300">Budget</span>. <span class="font-mono">try_reserve</span> either fits under the cap or returns <span class="font-mono text-brand-300">CapacityExceeded</span> with the numbers you need to act on. A refused request leaves the live count unchanged and never reaches the allocator.
+            </p>
+
+            <div class="space-y-5">
+              <div>
+                <div class="flex justify-between text-xs font-mono mb-2">
+                  <label for="bCap" class="text-slate-300">Process budget cap</label>
+                  <span id="bCapVal" class="text-brand-400 font-bold">128 MiB</span>
+                </div>
+                <input type="range" id="bCap" min="32" max="256" step="16" value="128" class="w-full accent-brand-500">
+              </div>
+              <div>
+                <div class="flex justify-between text-xs font-mono mb-2">
+                  <label for="bW" class="text-slate-300">1 · weights</label>
+                  <span id="bWVal" class="text-slate-200 font-bold">48 MiB</span>
+                </div>
+                <input type="range" id="bW" min="8" max="160" step="8" value="48" class="w-full accent-slate-400">
+              </div>
+              <div>
+                <div class="flex justify-between text-xs font-mono mb-2">
+                  <label for="bK" class="text-slate-300">2 · KV cache</label>
+                  <span id="bKVal" class="text-slate-200 font-bold">40 MiB</span>
+                </div>
+                <input type="range" id="bK" min="8" max="160" step="8" value="40" class="w-full accent-slate-400">
+              </div>
+              <div>
+                <div class="flex justify-between text-xs font-mono mb-2">
+                  <label for="bS" class="text-slate-300">3 · scratch / tape</label>
+                  <span id="bSVal" class="text-slate-200 font-bold">32 MiB</span>
+                </div>
+                <input type="range" id="bS" min="8" max="160" step="8" value="32" class="w-full accent-slate-400">
+              </div>
+              <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                <label class="flex items-center gap-2 text-xs font-mono text-slate-200 cursor-pointer">
+                  <input type="checkbox" id="bChild" class="accent-brand-500">
+                  Give the KV cache a child budget
+                </label>
+                <div id="bChildRow" class="mt-3 hidden">
+                  <div class="flex justify-between text-xs font-mono mb-2">
+                    <label for="bKCap" class="text-slate-300">child cap</label>
+                    <span id="bKCapVal" class="text-slate-200 font-bold">32 MiB</span>
+                  </div>
+                  <input type="range" id="bKCap" min="8" max="160" step="8" value="32" class="w-full accent-slate-400">
+                  <p class="mt-2 text-[11px] text-slate-500 leading-snug">A child charges its parent first, then itself. If the child refuses, the parent charge is released.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-6 flex flex-wrap gap-2">
+              <button type="button" id="bOversize" class="px-4 py-2 rounded-xl text-xs font-mono bg-brand-500/20 text-brand-300 border border-brand-500/40 hover:bg-brand-500/30 transition">Request too much</button>
+              <button type="button" id="bReset" class="px-4 py-2 rounded-xl text-xs font-mono text-slate-400 hover:text-white transition">Reset</button>
+            </div>
+          </div>
+
+          <div class="lg:col-span-7 flex flex-col gap-5">
+            <div class="rounded-2xl bg-black/40 border border-white/10 p-5">
+              <div class="flex items-center justify-between text-xs font-mono mb-3">
+                <span class="text-slate-400 uppercase tracking-wider">live / cap</span>
+                <span id="bLiveTxt" class="text-white">0 / 128 MiB</span>
+              </div>
+              <div id="bBar" class="w-full h-5 rounded-full bg-white/10 overflow-hidden flex" aria-hidden="true"></div>
+              <div class="mt-3 flex flex-wrap gap-4 text-[11px] font-mono text-slate-400">
+                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-slate-400"></span>weights</span>
+                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-brand-400"></span>KV cache</span>
+                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-amber-400"></span>scratch</span>
+              </div>
+            </div>
+
+            <div class="rounded-2xl bg-black/70 border border-white/10 p-5">
+              <div class="flex items-center justify-between pb-3 mb-3 border-b border-white/10 text-[11px] font-mono text-slate-500">
+                <span>ojas-core/src/budget.rs · Budget::try_reserve</span>
+                <span>in order</span>
+              </div>
+              <pre id="bTerm" class="term text-slate-300" aria-live="polite"></pre>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                <p class="font-mono text-slate-400 mb-1">Without a budget</p>
+                <p class="text-slate-300 leading-relaxed">The allocator is asked for the memory. The failure, if any, surfaces from the allocator or the device driver, after other allocations have already been made.</p>
+              </div>
+              <div class="rounded-xl bg-brand-500/10 border border-brand-500/30 p-4">
+                <p class="font-mono text-brand-300 mb-1">With ojas</p>
+                <p class="text-slate-300 leading-relaxed">The caller gets an error value with requested, cap, and live, and decides what to do: shrink the batch, evict KV pages, or report it.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Device lab -->
+      <div id="panel-device" role="tabpanel" aria-labelledby="tab-device" class="lab-panel glass-card rounded-3xl p-6 sm:p-8 hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <div class="lg:col-span-5">
+            <h3 class="text-xl font-bold text-white mb-2">The device you asked for, or an error</h3>
+            <p class="text-sm text-slate-300 leading-relaxed mb-6">
+              A session that quietly runs on the CPU looks healthy and is many times slower. ojas binds a session to the device it opened. If that device is not there, <span class="font-mono text-brand-300">LoadOn</span> fails and no model id exists to misuse.
+            </p>
+
+            <p class="text-xs font-mono text-slate-400 mb-2">Requested device</p>
+            <div class="flex flex-wrap gap-2 mb-5" id="dDevice">
+              <button type="button" data-v="metal" aria-pressed="true" class="seg-btn px-3 py-1.5 rounded-lg text-xs font-mono border border-white/10 text-slate-300">DeviceMetal</button>
+              <button type="button" data-v="wgpu" aria-pressed="false" class="seg-btn px-3 py-1.5 rounded-lg text-xs font-mono border border-white/10 text-slate-300">DeviceWgpu</button>
+            </div>
+
+            <p class="text-xs font-mono text-slate-400 mb-2">This host</p>
+            <div class="flex flex-wrap gap-2" id="dHost"></div>
+          </div>
+
+          <div class="lg:col-span-7 flex flex-col gap-4">
+            <div class="rounded-2xl bg-black/70 border border-white/10 p-5">
+              <div class="pb-3 mb-3 border-b border-white/10 text-[11px] font-mono text-slate-500">go · github.com/bharathvbcr/ojas/go</div>
+              <pre id="dTerm" class="term text-slate-300" aria-live="polite"></pre>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                <p class="font-mono text-slate-400 mb-1">With a CPU fallback enabled</p>
+                <p id="dOther" class="text-slate-300 leading-relaxed"></p>
+              </div>
+              <div class="rounded-xl bg-brand-500/10 border border-brand-500/30 p-4">
+                <p class="font-mono text-brand-300 mb-1">With ojas</p>
+                <p id="dOjas" class="text-slate-300 leading-relaxed"></p>
+              </div>
+            </div>
+            <p class="text-[11px] text-slate-500 leading-relaxed">
+              In Rust the same rule is <span class="font-mono text-slate-400">ojas_device::DeviceError</span>: <span class="font-mono">NotCompiled</span> when a runtime is not in the build, <span class="font-mono">NoDevice</span> when it is and nothing answered. Even a policy that lists the CPU second refuses with "refusing CPU fallback" (<span class="font-mono">ojas-capi/src/tests.rs</span>).
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panic lab -->
+      <div id="panel-panic" role="tabpanel" aria-labelledby="tab-panic" class="lab-panel glass-card rounded-3xl p-6 sm:p-8 hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <div class="lg:col-span-5">
+            <h3 class="text-xl font-bold text-white mb-2">An engine panic is an error, not an exit</h3>
+            <p class="text-sm text-slate-300 leading-relaxed mb-6">
+              The Go package calls Rust in-process through <span class="font-mono text-brand-300">gusset</span>. A panic in the engine is caught on the worker and comes back as <span class="font-mono">gusset.ErrPanic</span>. The handle is poisoned, so torn state is never reused, and <span class="font-mono">Close</span> gets you a clean engine. Your Go service keeps serving the whole time.
+            </p>
+
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" data-act="load" class="p-act px-3 py-2.5 rounded-xl text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 transition disabled:opacity-40 disabled:cursor-not-allowed">ojas.Load</button>
+              <button type="button" data-act="step" class="p-act px-3 py-2.5 rounded-xl text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 transition disabled:opacity-40 disabled:cursor-not-allowed">ojas.Step</button>
+              <button type="button" data-act="panic" class="p-act px-3 py-2.5 rounded-xl text-xs font-mono bg-brand-500/20 hover:bg-brand-500/30 border border-brand-500/40 text-brand-200 transition disabled:opacity-40 disabled:cursor-not-allowed">Make the engine panic</button>
+              <button type="button" data-act="close" class="p-act px-3 py-2.5 rounded-xl text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 transition disabled:opacity-40 disabled:cursor-not-allowed">ojas.Close</button>
+            </div>
+            <button type="button" id="pReset" class="mt-3 text-xs font-mono text-slate-400 hover:text-white underline underline-offset-2">Start over</button>
+
+            <div class="mt-6 grid grid-cols-3 gap-2 text-center">
+              <div class="rounded-xl bg-white/5 border border-white/10 p-3">
+                <p class="text-[10px] font-mono uppercase text-slate-500">Go process</p>
+                <p class="text-sm font-mono font-bold text-emerald-400">running</p>
+              </div>
+              <div class="rounded-xl bg-white/5 border border-white/10 p-3">
+                <p class="text-[10px] font-mono uppercase text-slate-500">Engine</p>
+                <p id="pState" class="text-sm font-mono font-bold text-slate-300">idle</p>
+              </div>
+              <div class="rounded-xl bg-white/5 border border-white/10 p-3">
+                <p class="text-[10px] font-mono uppercase text-slate-500">Calls answered</p>
+                <p id="pCalls" class="text-sm font-mono font-bold text-white">0</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="lg:col-span-7 flex flex-col gap-4">
+            <div class="rounded-2xl bg-black/70 border border-white/10 p-5 min-h-[18rem]">
+              <div class="pb-3 mb-3 border-b border-white/10 text-[11px] font-mono text-slate-500 flex justify-between">
+                <span>go · calls and what they return</span>
+                <span>follows go/api_test.go TestPoisonDropsSession</span>
+              </div>
+              <pre id="pTerm" class="term text-slate-300" aria-live="polite"></pre>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                <p class="font-mono text-slate-400 mb-1">An unguarded Rust panic</p>
+                <p class="text-slate-300 leading-relaxed">Since Rust 1.81, a panic that unwinds out of an <span class="font-mono">extern "C"</span> function aborts. In a cgo binary that is the whole Go process, with every in-flight request.</p>
+              </div>
+              <div class="rounded-xl bg-brand-500/10 border border-brand-500/30 p-4">
+                <p class="font-mono text-brand-300 mb-1">With ojas</p>
+                <p class="text-slate-300 leading-relaxed">One call fails with an error you can match with <span class="font-mono">errors.Is</span>. Sessions loaded before the panic are dropped, so no torn state is reused.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Checked lab -->
+      <div id="panel-checked" role="tabpanel" aria-labelledby="tab-checked" class="lab-panel glass-card rounded-3xl p-6 sm:p-8 hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div>
+            <h3 class="text-xl font-bold text-white mb-2">Shape math that cannot wrap</h3>
+            <p class="text-sm text-slate-300 leading-relaxed mb-5">
+              A shape from a checkpoint header or an API request is untrusted input. An unchecked multiply can wrap a huge shape to a tiny buffer, and the first write lands outside it. ojas computes element and byte counts with <span class="font-mono">checked_mul</span>, and release builds keep <span class="font-mono text-brand-300">overflow-checks = true</span>.
+            </p>
+            <label for="cShape" class="block text-xs font-mono text-slate-400 mb-2">f32 tensor shape (comma separated)</label>
+            <input id="cShape" type="text" value="65536, 65536, 65536, 65536" spellcheck="false" class="w-full px-3 py-2.5 rounded-xl bg-black/60 border border-white/10 font-mono text-sm text-white focus:outline-none focus:border-brand-500/60">
+            <div class="flex flex-wrap gap-2 mt-3" id="cPresets">
+              <button type="button" data-shape="2, 32, 64" class="px-2.5 py-1 rounded-lg text-[11px] font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300">2, 32, 64</button>
+              <button type="button" data-shape="65536, 65536, 65536, 65536" class="px-2.5 py-1 rounded-lg text-[11px] font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300">2¹⁶ × 4</button>
+              <button type="button" data-shape="4294967296, 4294967297" class="px-2.5 py-1 rounded-lg text-[11px] font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300">2³² × (2³²+1)</button>
+              <button type="button" data-shape="4611686018427387904, 2" class="px-2.5 py-1 rounded-lg text-[11px] font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300">2⁶² × 2</button>
+            </div>
+            <div class="mt-5 grid grid-cols-1 gap-3">
+              <div class="rounded-xl bg-white/5 border border-white/10 p-4">
+                <p class="text-[11px] font-mono text-slate-400 mb-1">Unchecked 64-bit multiply</p>
+                <pre id="cWrap" class="term text-slate-300"></pre>
+              </div>
+              <div class="rounded-xl bg-black/70 border border-brand-500/30 p-4">
+                <p class="text-[11px] font-mono text-brand-300 mb-1">ojas-core · Tensor::zeros</p>
+                <pre id="cOjas" class="term text-slate-300" aria-live="polite"></pre>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-bold text-white mb-2">Zero-copy views, bounds-checked</h3>
+            <p class="text-sm text-slate-300 leading-relaxed mb-5">
+              <span class="font-mono text-brand-300">narrow</span> makes a new view by moving <span class="font-mono">byte_offset</span> inside the same storage. No bytes are copied. The view is checked against the storage before you get it, so an out-of-range window is an error, not a read past the end.
+            </p>
+            <div class="space-y-4 mb-5">
+              <div>
+                <div class="flex justify-between text-xs font-mono mb-2">
+                  <label for="vOff" class="text-slate-300">offset (elements)</label>
+                  <span id="vOffVal" class="text-brand-400 font-bold">4</span>
+                </div>
+                <input type="range" id="vOff" min="0" max="16" value="4" class="w-full accent-brand-500">
+              </div>
+              <div>
+                <div class="flex justify-between text-xs font-mono mb-2">
+                  <label for="vLen" class="text-slate-300">length (elements)</label>
+                  <span id="vLenVal" class="text-brand-400 font-bold">8</span>
+                </div>
+                <input type="range" id="vLen" min="1" max="16" value="8" class="w-full accent-brand-500">
+              </div>
+            </div>
+            <p class="text-[11px] font-mono text-slate-500 mb-2">storage: 16 × f32 = 64 bytes</p>
+            <div id="vGrid" class="grid grid-cols-8 sm:grid-cols-16 gap-1 mb-4" style="grid-template-columns: repeat(16, minmax(0, 1fr));" aria-hidden="true"></div>
+            <div class="rounded-xl bg-black/70 border border-white/10 p-4">
+              <pre id="vTerm" class="term text-slate-300" aria-live="polite"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section id="next" class="py-16 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-8">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Four pages, one engine</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">The rest of the site has a place of its own</h2>
+        <p class="text-slate-400 mt-3 leading-relaxed">The labs stay here. The reason, the timings, the plan, and the reference each have a page, so none of them has to scroll past the others.</p>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <a href="why.html" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Why</p>
+          <h3 class="text-white font-semibold mb-2">Why ojas exists</h3>
+          <p class="text-xs text-slate-300 leading-relaxed">The guarantees, the defects in the earlier engines that motivated them, and where ojas is a good fit today.</p>
+        </a>
+        <a href="benchmarks.html" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Evidence</p>
+          <h3 class="text-white font-semibold mb-2">Timings</h3>
+          <p class="text-xs text-slate-300 leading-relaxed">Two recorded CPU steps against PyTorch 2.13, including the run where they land within 1% of each other.</p>
+        </a>
+        <a href="roadmap.html" class="glass-card rounded-2xl p-5 block border border-brand-500/30 hover:border-brand-400/60 transition">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Next</p>
+          <h3 class="text-white font-semibold mb-2">Roadmap</h3>
+          <p class="text-xs text-slate-300 leading-relaxed">The next phase is a real model through the public API. After that, the measured Metal attention gap.</p>
+        </a>
+        <a href="guide/index.html" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Reference</p>
+          <h3 class="text-white font-semibold mb-2">Developer guide</h3>
+          <p class="text-xs text-slate-300 leading-relaxed">Quickstart, concepts, the Go API, crate layout, current limits, and the rules for a change.</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  </main>
+  <footer class="border-t border-white/10 bg-black py-12 text-slate-400 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-6">
+      <div class="flex items-center gap-3">
+        <img src="assets/ojas-logo.webp" alt="" class="w-9 h-9" width="36" height="36">
+        <div><span class="font-mono font-bold text-white text-sm">ojas</span><span class="text-slate-500 ml-2">Dual licensed MIT OR Apache-2.0</span></div>
+      </div>
+      <div class="flex flex-wrap items-center gap-6">
+        <a href="https://github.com/bharathvbcr/ojas" class="hover:text-white transition">GitHub</a>
+        <a href="roadmap.html" class="hover:text-white transition">Roadmap</a>
+        <a href="guide/index.html" class="hover:text-white transition">Guide</a>
+      </div>
+      <div class="text-slate-500 font-mono text-[11px]">Designed by Bharath Chandra Vaddaram</div>
+    </div>
+  </footer>
+  <div id="cmdModal" class="fixed inset-0 z-[80] hidden" role="dialog" aria-modal="true" aria-labelledby="cmdLabel">
+    <div class="flex h-full items-start justify-center bg-black/80 backdrop-blur-md pt-24 p-4">
+      <div class="relative max-w-xl w-full glass-card rounded-2xl border border-white/20 shadow-2xl p-4">
+        <div class="flex items-center gap-3 pb-3 border-b border-white/10">
+          <label for="cmdInput" id="cmdLabel" class="sr-only">Search ojas</label>
+          <input type="text" id="cmdInput" placeholder="Search labs, the guide, or the roadmap" class="w-full bg-transparent text-white placeholder-slate-500 text-sm focus:outline-none">
+          <button type="button" onclick="closeCmdModal()" class="text-[10px] font-mono px-2 py-1 rounded bg-white/10 text-slate-400 hover:text-white" aria-label="Close search">ESC</button>
+        </div>
+        <div class="mt-3 max-h-64 overflow-y-auto space-y-1 font-mono text-xs" id="cmdResults"></div>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="fixed bottom-6 right-6 z-[90] px-4 py-2.5 rounded-xl bg-brand-600 text-white font-mono text-xs shadow-glow-red flex items-center gap-2 transition-all duration-300 translate-y-20 opacity-0 pointer-events-none" role="status">
+    <span id="toastMsg">Copied to clipboard</span>
+  </div>
+  <script src="assets/ojas.js"></script>
+<script>
+const MIB = 1048576;
+    // --- 1. Determinism lab ---
+    const DET_N = 4096;
+    const f32 = Math.fround;
+    const detData = (() => {
+      // mulberry32 with a fixed seed: every visitor sums the same values.
+      let s = 0x0a5f17e5;
+      const rnd = () => {
+        s = (s + 0x6d2b79f5) >>> 0;
+        let t = s;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      const out = new Float32Array(DET_N);
+      for (let i = 0; i < DET_N; i++) {
+        out[i] = f32((rnd() - 0.5) * Math.pow(10, rnd() * 8 - 4));
+      }
+      return out;
+    })();
+
+    function sumRange(lo, hi) {
+      let acc = 0;
+      for (let i = lo; i < hi; i++) acc = f32(acc + detData[i]);
+      return acc;
+    }
+    function splitKSum(threads) {
+      const chunk = Math.ceil(DET_N / threads);
+      const partials = [];
+      for (let t = 0; t * chunk < DET_N; t++) partials.push(sumRange(t * chunk, Math.min(DET_N, (t + 1) * chunk)));
+      const order = partials.map((_, i) => i);
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+      let acc = 0;
+      for (const i of order) acc = f32(acc + partials[i]);
+      return acc;
+    }
+    const EXACT_SUM = sumRange(0, DET_N);
+
+    const bitView = new DataView(new ArrayBuffer(4));
+    function f32Hex(x) {
+      bitView.setFloat32(0, x);
+      return '0x' + bitView.getUint32(0).toString(16).padStart(8, '0');
+    }
+
+    const det = { split: new Set(), exact: new Set(), runs: 0, threads: new Set() };
+    function detRun(times) {
+      const threads = Number($('detThreads').value);
+      let s = 0;
+      for (let k = 0; k < times; k++) {
+        s = splitKSum(threads);
+        det.split.add(f32Hex(s));
+        det.exact.add(f32Hex(EXACT_SUM));
+        det.runs++;
+      }
+      det.threads.add(threads);
+      $('detSplitBits').textContent = f32Hex(s);
+      $('detSplitVal').textContent = s.toPrecision(9);
+      $('detExactBits').textContent = f32Hex(EXACT_SUM);
+      $('detExactVal').textContent = EXACT_SUM.toPrecision(9);
+      detRender();
+    }
+    function detRender() {
+      $('detSplitDistinct').textContent = det.split.size;
+      $('detExactDistinct').textContent = det.exact.size;
+      $('detRuns').textContent = `${det.runs} run${det.runs === 1 ? '' : 's'} · ${det.threads.size} thread count${det.threads.size === 1 ? '' : 's'}`;
+      let msg;
+      if (det.runs === 0) msg = 'Run it a few times, then move the thread slider and run again.';
+      else if (det.split.size > 1) msg = `The split-k sum produced ${det.split.size} different bit patterns from identical inputs. A loss or weight that drifts like this cannot be bisected or replayed. ojas produced one.`;
+      else if (Number($('detThreads').value) === 1) msg = 'With one thread there is only one order, so both agree. Raise the thread count.';
+      else msg = 'Same bits so far. Run 20 times, or change the thread count.';
+      $('detVerdict').textContent = msg;
+    }
+    $('detThreads').addEventListener('input', (e) => { $('detThreadsVal').textContent = e.target.value; });
+    $('detRun1').addEventListener('click', () => detRun(1));
+    $('detRun20').addEventListener('click', () => detRun(20));
+    $('detClear').addEventListener('click', () => {
+      det.split.clear(); det.exact.clear(); det.threads.clear(); det.runs = 0;
+      ['detSplitBits', 'detExactBits'].forEach((id) => { $(id).textContent = '—'; });
+      ['detSplitVal', 'detExactVal'].forEach((id) => { $(id).innerHTML = '&nbsp;'; });
+      detRender();
+    });
+
+    // --- 2. Guarantee lab tabs ---
+    wireTabs($('labTabs'), (tab) => {
+      document.querySelectorAll('.lab-panel').forEach((p) => p.classList.toggle('hidden', p.id !== tab.getAttribute('aria-controls')));
+    });
+
+    // --- 2a. Budget lab: models Budget::try_reserve and Budget::child ---
+    const BUDGET_DEFAULTS = { bCap: 128, bW: 48, bK: 40, bS: 32, bKCap: 32 };
+    function capacityError(requested, cap, live) {
+      return `Err(capacity exceeded: requested ${requested} bytes, cap ${cap}, live ${live})`;
+    }
+    function updateBudget() {
+      const v = (id) => Number($(id).value);
+      const cap = v('bCap') * MIB;
+      const useChild = $('bChild').checked;
+      const childCap = v('bKCap') * MIB;
+      $('bChildRow').classList.toggle('hidden', !useChild);
+      [['bCap', 'bCapVal'], ['bW', 'bWVal'], ['bK', 'bKVal'], ['bS', 'bSVal'], ['bKCap', 'bKCapVal']].forEach(([s, t]) => { $(t).textContent = `${v(s)} MiB`; });
+
+      const reqs = [
+        { name: 'weights', bytes: v('bW') * MIB, color: 'bg-slate-400', child: false },
+        { name: 'kv_cache', bytes: v('bK') * MIB, color: 'bg-brand-400', child: useChild },
+        { name: 'scratch', bytes: v('bS') * MIB, color: 'bg-amber-400', child: false },
+      ];
+      let live = 0;
+      let childLive = 0;
+      const lines = [];
+      const held = [];
+      if (useChild) lines.push(`<span class="dim">let kv = budget.child(${childCap});</span>`);
+      for (const r of reqs) {
+        const who = r.child ? 'kv' : 'budget';
+        lines.push(`<span class="dim">${who}.try_reserve(${r.bytes})  // ${r.name}</span>`);
+        if (live + r.bytes > cap) {
+          lines.push(`  <span class="err">${capacityError(r.bytes, cap, live)}</span>`);
+          continue;
+        }
+        if (r.child && childLive + r.bytes > childCap) {
+          lines.push(`  <span class="err">${capacityError(r.bytes, childCap, childLive)}</span>`);
+          lines.push(`  <span class="dim">parent charge released; parent live stays ${live}</span>`);
+          continue;
+        }
+        live += r.bytes;
+        if (r.child) childLive += r.bytes;
+        held.push(r);
+        lines.push(`  <span class="ok">Ok(Reservation { bytes: ${r.bytes} })</span>  <span class="dim">live ${live}</span>`);
+      }
+      $('bTerm').innerHTML = lines.join('\n');
+      $('bLiveTxt').textContent = `${live / MIB} / ${cap / MIB} MiB`;
+      $('bBar').innerHTML = held.map((r) => `<div class="${r.color} h-full" style="width:${(r.bytes / cap) * 100}%"></div>`).join('');
+    }
+    ['bCap', 'bW', 'bK', 'bS', 'bKCap'].forEach((id) => $(id).addEventListener('input', updateBudget));
+    $('bChild').addEventListener('change', updateBudget);
+    $('bReset').addEventListener('click', () => {
+      Object.entries(BUDGET_DEFAULTS).forEach(([id, val]) => { $(id).value = val; });
+      $('bChild').checked = false;
+      updateBudget();
+    });
+    $('bOversize').addEventListener('click', () => {
+      $('bCap').value = 64; $('bW').value = 40; $('bK').value = 48; $('bS').value = 16;
+      updateBudget();
+    });
+    updateBudget();
+
+    // --- 2b. Device lab: models LoadOn in go/api.go and ojas-capi/src/load.rs ---
+    const DEVICE_HOSTS = {
+      metal: [
+        { v: 'ok', label: 'macOS, Metal GPU present' },
+        { v: 'absent', label: 'macOS, no usable Metal device' },
+        { v: 'linux', label: 'Linux server' },
+      ],
+      wgpu: [
+        { v: 'ok', label: 'GPU adapter present' },
+        { v: 'absent', label: 'No wgpu adapter (headless CI)' },
+      ],
+    };
+    const devState = { device: 'metal', host: 'absent' };
+    function renderHosts() {
+      const box = $('dHost');
+      box.innerHTML = DEVICE_HOSTS[devState.device].map((h) =>
+        `<button type="button" data-v="${h.v}" aria-pressed="${h.v === devState.host}" class="seg-btn px-3 py-1.5 rounded-lg text-xs font-mono border border-white/10 text-slate-300">${esc(h.label)}</button>`).join('');
+      wireSegmented(box, (v) => { devState.host = v; updateDevice(); });
+    }
+    function updateDevice() {
+      const name = devState.device === 'metal' ? 'DeviceMetal' : 'DeviceWgpu';
+      const call = `<span class="dim">id, err := ojas.LoadOn(ctx, ojas.${name}, 0, "model.safetensors")</span>`;
+      let out;
+      let ojasTxt;
+      if (devState.host === 'ok') {
+        out = `<span class="ok">id = 1, err = nil</span>\n<span class="dim">// Step and GenerateGreedy run on the ${devState.device === 'metal' ? 'Metal' : 'wgpu'} device and read back only the values they return.</span>`;
+        ojasTxt = 'The session is bound to the device it opened. Every later call runs there.';
+      } else if (devState.device === 'metal' && devState.host === 'linux') {
+        out = `<span class="err">id = 0, err = "metal: Metal requires macOS"</span>\n<span class="dim">// no model id, no CPU session</span>`;
+        ojasTxt = 'The load fails with the reason. There is no id, so nothing can step on the wrong device.';
+      } else {
+        const prefix = devState.device === 'metal' ? 'the Metal device error' : 'an error starting with "wgpu:"';
+        out = `<span class="err">id = 0, err = ${esc(prefix)}</span>\n<span class="dim">// no model id, no CPU session</span>`;
+        ojasTxt = 'The load fails with the device error. A deploy on the wrong host fails at startup, where you see it.';
+      }
+      $('dTerm').innerHTML = `${call}\n${out}`;
+      $('dOther').textContent = devState.host === 'ok'
+        ? 'Also runs on the GPU. The two only differ when the GPU is missing.'
+        : 'The model loads, steps run on the CPU many times slower, and nothing in the result says which device did the work.';
+      $('dOjas').textContent = ojasTxt;
+    }
+    wireSegmented($('dDevice'), (v) => {
+      devState.device = v;
+      devState.host = 'absent';
+      renderHosts();
+      updateDevice();
+    });
+    renderHosts();
+    updateDevice();
+
+    // --- 2c. Panic lab: follows TestPoisonDropsSession in go/api_test.go ---
+    const pan = { engine: 'idle', ids: [], nextId: 1, calls: 0, lines: [] };
+    function pLog(code, result, cls) {
+      pan.calls++;
+      pan.lines.push(`<span class="dim">${esc(code)}</span>\n  <span class="${cls}">${esc(result)}</span>`);
+      if (pan.lines.length > 9) pan.lines.shift();
+    }
+    function pRender() {
+      $('pTerm').innerHTML = pan.lines.length ? pan.lines.join('\n') : '<span class="dim">// Load a model, step it, then make the engine panic.</span>';
+      $('pCalls').textContent = pan.calls;
+      const label = { idle: 'idle', ready: 'healthy', poisoned: 'poisoned' }[pan.engine];
+      $('pState').textContent = label;
+      $('pState').className = `text-sm font-mono font-bold ${pan.engine === 'poisoned' ? 'text-brand-400' : pan.engine === 'ready' ? 'text-emerald-400' : 'text-slate-300'}`;
+      document.querySelectorAll('.p-act').forEach((b) => {
+        const a = b.dataset.act;
+        b.disabled = (a === 'step' && pan.ids.length === 0 && pan.engine !== 'poisoned') || (a === 'panic' && pan.engine === 'poisoned');
+      });
+    }
+    function pAct(act) {
+      const id = pan.ids[pan.ids.length - 1];
+      if (act === 'load') {
+        if (pan.engine === 'poisoned') {
+          pLog('id, err := ojas.Load(ctx, "model.safetensors")', 'err: gusset.ErrPoisoned', 'err');
+        } else {
+          const n = pan.nextId++;
+          pan.ids.push(n);
+          pan.engine = 'ready';
+          pLog('id, err := ojas.Load(ctx, "model.safetensors")', `id = ${n}, err = nil`, 'ok');
+        }
+      } else if (act === 'step') {
+        const code = `stats, err := ojas.Step(ctx, ${id ?? 1}, req)`;
+        if (pan.engine === 'poisoned') pLog(code, 'errors.Is(err, gusset.ErrPoisoned) == true', 'err');
+        else pLog(code, 'StepStats{Loss, GradNorm, Lr}, err = nil', 'ok');
+      } else if (act === 'panic') {
+        pan.engine = 'poisoned';
+        pLog('// a bug in the engine panics on a gusset worker', 'errors.Is(err, gusset.ErrPanic) == true   // the Go process is still running', 'err');
+      } else if (act === 'close') {
+        const dropped = pan.ids.slice();
+        pan.ids = [];
+        pan.engine = 'idle';
+        pLog('err := ojas.Close(ctx)', 'err = nil   // engine reset; the next call opens a fresh one', 'ok');
+        if (dropped.length) {
+          pLog(`err := ojas.Free(ctx, ${dropped[dropped.length - 1]})`, 'err contains "unknown model"   // pre-panic sessions are gone', 'dim');
+        }
+      }
+      pRender();
+    }
+    document.querySelectorAll('.p-act').forEach((b) => b.addEventListener('click', () => pAct(b.dataset.act)));
+    $('pReset').addEventListener('click', () => {
+      Object.assign(pan, { engine: 'idle', ids: [], nextId: 1, calls: 0, lines: [] });
+      pRender();
+    });
+    pRender();
+
+    // --- 2d. Checked lab: shape_product, contiguous_nbytes, Tensor::window ---
+    const U64 = 1n << 64n;
+    const USIZE_MAX = U64 - 1n;
+    function updateShape() {
+      const raw = $('cShape').value.split(',').map((s) => s.trim()).filter((s) => s.length);
+      if (!raw.length || raw.some((s) => !/^\d+$/.test(s))) {
+        $('cWrap').innerHTML = '<span class="dim">enter non-negative integers separated by commas</span>';
+        $('cOjas').innerHTML = '';
+        return;
+      }
+      const dims = raw.map((s) => BigInt(s));
+      if (dims.some((d) => d > USIZE_MAX)) {
+        $('cWrap').innerHTML = '<span class="dim">a dimension above 2⁶⁴−1 does not fit in usize</span>';
+        $('cOjas').innerHTML = '<span class="err">refused when the header is parsed</span>';
+        return;
+      }
+      const exact = dims.reduce((a, d) => a * d, 1n);
+      const wrappedElems = exact % U64;
+      const wrappedBytes = (wrappedElems * 4n) % U64;
+      const shape = `[${dims.join(', ')}]`;
+      // Tensor::zeros order: contiguous_strides (every axis but the first),
+      // then shape_product (zero if any axis is 0), then the f32 byte length.
+      let suffix = 1n;
+      let stridesOverflow = false;
+      for (let i = dims.length - 1; i > 0; i--) {
+        suffix *= dims[i];
+        if (suffix > USIZE_MAX) { stridesOverflow = true; break; }
+      }
+      const elemsOverflow = !stridesOverflow && exact > USIZE_MAX && !dims.includes(0n);
+      const bytesOverflow = !stridesOverflow && !elemsOverflow && exact * 4n > USIZE_MAX;
+
+      if (stridesOverflow || elemsOverflow || bytesOverflow) {
+        $('cWrap').innerHTML = `elements = <span class="text-amber-300">${wrappedElems}</span>\nbytes    = <span class="text-amber-300">${wrappedBytes}</span>\n<span class="dim">true size: ${exact} elements. The buffer would be sized from the wrapped value.</span>`;
+      } else {
+        $('cWrap').innerHTML = `elements = ${exact}\nbytes    = ${exact * 4n}\n<span class="dim">fits, so checked and unchecked agree.</span>`;
+      }
+      let out = `<span class="dim">Tensor::zeros(&${esc(shape)}, DType::F32, &budget)</span>\n`;
+      if (stridesOverflow) out += '<span class="err">Err(contiguous_strides: out of range: shape product overflows)</span>';
+      else if (elemsOverflow) out += '<span class="err">Err(shape_product: out of range: shape product overflows)</span>';
+      else if (bytesOverflow) out += '<span class="err">Err(contiguous_nbytes: out of range: byte length overflows)</span>';
+      else out += `<span class="ok">${exact * 4n} bytes</span> <span class="dim">→ next: Budget::try_reserve(${exact * 4n})</span>`;
+      $('cOjas').innerHTML = out;
+    }
+    $('cShape').addEventListener('input', updateShape);
+    document.querySelectorAll('#cPresets button').forEach((b) => b.addEventListener('click', () => { $('cShape').value = b.dataset.shape; updateShape(); }));
+    updateShape();
+
+    const STORAGE_ELEMS = 16;
+    const STORAGE_BYTES = STORAGE_ELEMS * 4;
+    function updateView() {
+      const off = Number($('vOff').value);
+      const len = Number($('vLen').value);
+      $('vOffVal').textContent = off;
+      $('vLenVal').textContent = len;
+      const byteOffset = off * 4;
+      const end = byteOffset + len * 4;
+      const ok = end <= STORAGE_BYTES;
+      const cells = [];
+      for (let i = 0; i < STORAGE_ELEMS; i++) {
+        const inView = i >= off && i < off + len;
+        const cls = inView ? (ok ? 'bg-brand-500/70 border-brand-400' : 'bg-brand-900/60 border-brand-500/60') : 'bg-white/5 border-white/10';
+        cells.push(`<div class="view-cell h-7 rounded border ${cls} flex items-center justify-center text-[9px] font-mono text-slate-300">${i}</div>`);
+      }
+      $('vGrid').innerHTML = cells.join('');
+      const call = `<span class="dim">let v = t.narrow(${byteOffset}, &[${len}], &[1])?;</span>\n`;
+      $('vTerm').innerHTML = call + (ok
+        ? `<span class="ok">Ok(view)</span>  byte_offset = ${byteOffset}, shape = [${len}]\nbytes copied: <span class="ok">0</span>  <span class="dim">same storage, new offset</span>`
+        : `<span class="err">Err(Tensor::window: out of range: view end ${end} > storage ${STORAGE_BYTES})</span>\n<span class="dim">checked before the view exists, so nothing reads past the end</span>`);
+    }
+    ['vOff', 'vLen'].forEach((id) => $(id).addEventListener('input', updateView));
+    updateView();
+
+
+    const preset = new URLSearchParams(location.search).get('tab');
+    if (preset) {
+      const tab = document.getElementById('tab-' + preset);
+      if (tab) tab.click();
+    }
+</script>
+</body>
+</html>

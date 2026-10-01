@@ -1,7 +1,11 @@
 //! Reverse-mode tape. Each node stores the forward inputs and calls the
 //! matching backward on `B`. The default backend is [`CpuBackend`].
+//!
+//! On a backend whose id is not [`BackendId::Cpu`], every tensor handed to
+//! the tape is uploaded once and every value, seed and gradient stays where
+//! that backend computes. Backward reads nothing back to the host.
 
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{inverse_permutation, permute_output_shape, Backend, BackendId, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 /// Index of a value on a [`Tape`].
@@ -61,11 +65,15 @@ enum Rec {
         targets: Tensor,
         ignore: Option<u32>,
     },
-    /// Copies values into `src_shape` on the way back. Forward already copied
-    /// into the destination shape, so the bytes are not a view of the source.
+    /// Views the gradient as `src_shape` on the way back.
     Reshape {
         src: usize,
         src_shape: Vec<usize>,
+    },
+    /// Permutes the gradient by `inverse` on the way back.
+    Permute {
+        src: usize,
+        inverse: Vec<usize>,
     },
 }
 
@@ -94,8 +102,38 @@ impl<B: Backend> Tape<B> {
         &self.backend
     }
 
-    pub fn leaf(&mut self, value: Tensor) -> Var {
-        self.push(value, Rec::Leaf)
+    /// Drop recorded values, gradients, and ops so the tape can be reused.
+    /// The backend stays.
+    pub fn clear(&mut self) {
+        self.values.clear();
+        self.grads.clear();
+        self.ops.clear();
+        self.values.shrink_to_fit();
+        self.grads.shrink_to_fit();
+        self.ops.shrink_to_fit();
+    }
+
+    /// Record a leaf. A host tensor on a device backend is uploaded first.
+    pub fn leaf(&mut self, value: Tensor) -> Result<Var, OjasError> {
+        let value = self.place(value)?;
+        Ok(self.push(value, Rec::Leaf))
+    }
+
+    /// Make `tensor` resident on the backend. The CPU path keeps the tensor
+    /// exactly as given.
+    fn place(&self, tensor: Tensor) -> Result<Tensor, OjasError> {
+        if self.backend.id() == BackendId::Cpu {
+            Ok(tensor)
+        } else {
+            self.backend.upload(&tensor)
+        }
+    }
+
+    /// Ones in `shape`, contiguous, on the backend.
+    fn ones(&self, shape: &[usize]) -> Result<Tensor, OjasError> {
+        let n = shape_product("Tape::ones", shape)?;
+        let host = Tensor::from_f32(&vec![1.0f32; n], shape, self.backend.budget())?;
+        self.place(host)
     }
 
     pub fn value(&self, var: Var) -> Result<&Tensor, OjasError> {
@@ -122,6 +160,7 @@ impl<B: Backend> Tape<B> {
 
     pub fn embedding(&mut self, table: Var, ids: Tensor) -> Result<Var, OjasError> {
         let table = self.index(table, "Tape::embedding")?;
+        let ids = self.place(ids)?;
         let y = self.backend.embedding_forward(&self.values[table], &ids)?;
         Ok(self.push(y, Rec::Embed { table, ids }))
     }
@@ -159,6 +198,8 @@ impl<B: Backend> Tape<B> {
 
     pub fn rope(&mut self, x: Var, cos: Tensor, sin: Tensor) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::rope")?;
+        let cos = self.place(cos)?;
+        let sin = self.place(sin)?;
         let y = self
             .backend
             .rope_half_split_forward(&self.values[x], &cos, &sin)?;
@@ -223,21 +264,28 @@ impl<B: Backend> Tape<B> {
         Ok(self.push(z, Rec::Add { x, y }))
     }
 
-    /// Copy `x` into `shape`. The element count must match. Rank may change.
+    /// View `x` as `shape`. The element count must match. Rank may change.
+    /// `x` must be contiguous; no bytes are copied or read.
     pub fn reshape(&mut self, x: Var, shape: &[usize]) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::reshape")?;
         let src_shape = self.values[x].shape().to_vec();
-        let n = self.values[x].num_elements()?;
-        let m = shape_product("Tape::reshape", shape)?;
-        if n != m {
-            return Err(OjasError::Shape {
-                op: "Tape::reshape",
-                detail: format!("reshape {n} elements into {shape:?}"),
-            });
-        }
-        let data = self.values[x].to_f32_vec()?;
-        let y = Tensor::from_f32(&data, shape, self.backend.budget())?;
+        let y = reshape_view(&self.values[x], shape)?;
         Ok(self.push(y, Rec::Reshape { src: x, src_shape }))
+    }
+
+    /// Reorder the axes of `x`: output axis `i` is input axis `dims[i]`, as
+    /// in `torch.permute`. The result is a contiguous copy made by the
+    /// backend, which is how `[B, T, H, D]` reaches `[B, H, T, D]` and back.
+    /// Backward permutes the gradient by [`inverse_permutation`]`(dims)`.
+    /// Invalid `dims` are refused by the backend and nothing is recorded.
+    pub fn permute(&mut self, x: Var, dims: &[usize]) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::permute")?;
+        // Checked here too, so `inverse_permutation` cannot index out of
+        // range whatever the backend validates.
+        permute_output_shape("Tape::permute", self.values[x].shape(), dims)?;
+        let y = self.backend.permute(&self.values[x], dims)?;
+        let inverse = inverse_permutation(dims);
+        Ok(self.push(y, Rec::Permute { src: x, inverse }))
     }
 
     pub fn cross_entropy(
@@ -247,6 +295,7 @@ impl<B: Backend> Tape<B> {
         ignore: Option<u32>,
     ) -> Result<Var, OjasError> {
         let logits = self.index(logits, "Tape::cross_entropy")?;
+        let targets = self.place(targets)?;
         let y = self
             .backend
             .cross_entropy_mean_forward(&self.values[logits], &targets, ignore)?;
@@ -272,23 +321,33 @@ impl<B: Backend> Tape<B> {
                 detail: "variable is not on this tape".to_string(),
             });
         }
-        let ones = ones_like(&self.backend, &self.values[var.0])?;
+        let shape = self.values[var.0].shape().to_vec();
+        let ones = self.ones(&shape)?;
         self.grads.iter_mut().for_each(|slot| *slot = None);
         self.grads[var.0] = Some(ones);
         for index in (0..=var.0).rev() {
-            let Some(grad) = self.grads[index].clone() else {
+            let Some(grad) = self.grads[index].take() else {
                 continue;
             };
             let op = self.ops[index].clone();
-            if let Err(err) = self.backward_one(op, &grad) {
+            // Leaves keep the gradient a caller reads. Every other node's
+            // gradient has been pushed into its inputs, so it is dropped.
+            let retain = matches!(op, Rec::Leaf);
+            // Nothing recorded after the root feeds it, so its gradient is
+            // still the ones seed.
+            let seeded = index == var.0;
+            if let Err(err) = self.backward_one(op, &grad, seeded) {
                 self.grads.iter_mut().for_each(|slot| *slot = None);
                 return Err(err);
+            }
+            if retain {
+                self.grads[index] = Some(grad);
             }
         }
         Ok(())
     }
 
-    fn backward_one(&mut self, op: Rec, grad: &Tensor) -> Result<(), OjasError> {
+    fn backward_one(&mut self, op: Rec, grad: &Tensor, seeded: bool) -> Result<(), OjasError> {
         match op {
             Rec::Leaf => Ok(()),
             Rec::Embed { table, ids } => {
@@ -368,14 +427,11 @@ impl<B: Backend> Tape<B> {
                 self.acc(y, gy)
             }
             Rec::Reshape { src, src_shape } => {
-                let data = grad.to_f32_vec()?;
-                if data.len() != shape_product("Tape::reshape", &src_shape)? {
-                    return Err(OjasError::Shape {
-                        op: "Tape::reshape",
-                        detail: "reshape grad length does not match the source".to_string(),
-                    });
-                }
-                let gx = Tensor::from_f32(&data, &src_shape, self.backend.budget())?;
+                let gx = reshape_view(grad, &src_shape)?;
+                self.acc(src, gx)
+            }
+            Rec::Permute { src, inverse } => {
+                let gx = self.backend.permute(grad, &inverse)?;
                 self.acc(src, gx)
             }
             Rec::Ce {
@@ -383,20 +439,52 @@ impl<B: Backend> Tape<B> {
                 targets,
                 ignore,
             } => {
-                let seed = scalar_seed(grad)?;
+                if grad.num_elements()? != 1 {
+                    return Err(OjasError::Shape {
+                        op: "Tape::backward",
+                        detail: "cross-entropy seed must be a scalar".to_string(),
+                    });
+                }
                 let raw = self.backend.cross_entropy_mean_backward(
                     &self.values[logits],
                     &targets,
                     ignore,
                 )?;
-                let mut data = raw.to_f32_vec()?;
-                for value in &mut data {
-                    *value *= seed;
-                }
-                let scaled = Tensor::from_f32(&data, raw.shape(), self.backend.budget())?;
+                let scaled = if self.backend.id() == BackendId::Cpu {
+                    let seed = scalar_seed(grad)?;
+                    let mut data = raw.to_f32_vec()?;
+                    for value in &mut data {
+                        *value *= seed;
+                    }
+                    Tensor::from_f32(&data, raw.shape(), self.backend.budget())?
+                } else if seeded {
+                    raw
+                } else {
+                    let seed = self.broadcast_scalar(grad, raw.shape())?;
+                    self.backend.mul_forward(&raw, &seed)?
+                };
                 self.acc(logits, scaled)
             }
         }
+    }
+
+    /// `scalar` repeated over `shape`, built on the backend without reading
+    /// `scalar` back: `ones[cols, 1] @ s[1, 1]^T` is a `[cols, 1]` column of
+    /// `s`, and `ones[rows, 1] @ column^T` is `[rows, cols]`. Each output is
+    /// one product with 1, so it is `s` exactly.
+    fn broadcast_scalar(&self, scalar: &Tensor, shape: &[usize]) -> Result<Tensor, OjasError> {
+        let n = shape_product("Tape::backward", shape)?;
+        let cols = *shape.last().ok_or_else(|| OjasError::Shape {
+            op: "Tape::backward",
+            detail: "cannot broadcast a scalar over rank 0".to_string(),
+        })?;
+        let rows = n / cols;
+        let s = reshape_view(scalar, &[1, 1])?;
+        let column = self.backend.linear_forward(&self.ones(&[cols, 1])?, &s)?;
+        let full = self
+            .backend
+            .linear_forward(&self.ones(&[rows, 1])?, &column)?;
+        reshape_view(&full, shape)
     }
 
     fn push(&mut self, value: Tensor, op: Rec) -> Var {
@@ -418,10 +506,28 @@ impl<B: Backend> Tape<B> {
     }
 }
 
-fn ones_like(backend: &impl Backend, tensor: &Tensor) -> Result<Tensor, OjasError> {
+/// `tensor` as `shape` over the same storage. Reads no bytes, so a device
+/// tensor stays on its device.
+fn reshape_view(tensor: &Tensor, shape: &[usize]) -> Result<Tensor, OjasError> {
     let n = tensor.num_elements()?;
-    let data = vec![1.0f32; n];
-    Tensor::from_f32(&data, tensor.shape(), backend.budget())
+    let m = shape_product("Tape::reshape", shape)?;
+    if n != m {
+        return Err(OjasError::Shape {
+            op: "Tape::reshape",
+            detail: format!("reshape {n} elements into {shape:?}"),
+        });
+    }
+    if !tensor.is_contiguous()? {
+        return Err(OjasError::Shape {
+            op: "Tape::reshape",
+            detail: "view is not contiguous".to_string(),
+        });
+    }
+    let mut strides = vec![1usize; shape.len()];
+    for axis in (0..shape.len().saturating_sub(1)).rev() {
+        strides[axis] = strides[axis + 1] * shape[axis + 1];
+    }
+    tensor.view(shape, &strides, tensor.byte_offset())
 }
 
 fn shape_product(op: &'static str, shape: &[usize]) -> Result<usize, OjasError> {
