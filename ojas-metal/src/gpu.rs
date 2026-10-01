@@ -556,12 +556,9 @@ pub fn tiny_train_step(
     causal_attn_backward(&rt, &attn, &q_proj, &k, &v, &dh, &dq, &dk, &dv)?;
     let dw_q = zeros(&rt, &[d, d])?;
     GemmOperands::ExactF32.tn(&dq, &q, &dw_q).map_err(metal)?;
-    let dw_host = ce.dw.read_f32().map_err(metal)?;
-    let dw_q_host = dw_q.read_f32().map_err(metal)?;
-    // `ce.dw` stays a host read: tessl has `Qwen35Model::adamw_step` and no
-    // generic `adamw_step(rt, param, grad, ...)` yet. This is the call site.
-    finite_f32("tiny_train_step", &dw_host)?;
-    finite_f32("tiny_train_step", &dw_q_host)?;
+    // Both gradients stay on the device. `tessl::qwen35_adamw::adamw_step`
+    // encodes the existing kernel and does not wait; a later host read
+    // synchronizes.
     let next = next_step(state.step)?;
     adamw_apply(
         &rt,
@@ -1044,6 +1041,12 @@ fn adamw_apply(
     step_after: u64,
     cfg: &AdamWConfig,
 ) -> Result<(), OjasError> {
+    if step_after == 0 {
+        return Err(OjasError::OutOfRange {
+            op: "adamw",
+            detail: "step 0 is refused".into(),
+        });
+    }
     let t = step_after as f64;
     let bc1 = 1.0 - cfg.beta1.powf(t);
     let bc2 = 1.0 - cfg.beta2.powf(t);
@@ -1066,18 +1069,12 @@ fn adamw_apply(
     if scalars.iter().any(|s| !s.is_finite()) {
         return Err(OjasError::NonFinite { op: "adamw" });
     }
-    let &[rows, width] = param.shape() else {
+    if param.shape().len() != 2 {
         return Err(OjasError::Shape {
             op: "adamw",
             detail: format!("parameter shape {:?} is not rank 2", param.shape()),
         });
-    };
-    let (Ok(rows_u), Ok(width_u)) = (u32::try_from(rows), u32::try_from(width)) else {
-        return Err(OjasError::OutOfRange {
-            op: "adamw",
-            detail: format!("[{rows}, {width}] does not fit u32 indexing"),
-        });
-    };
+    }
     if grad.shape() != param.shape()
         || moment1.shape() != param.shape()
         || moment2.shape() != param.shape()
@@ -1087,20 +1084,39 @@ fn adamw_apply(
             detail: "moment or gradient shape does not match the parameter".into(),
         });
     }
-    let bytes: Vec<u8> = scalars.iter().flat_map(|x| x.to_le_bytes()).collect();
-    let p = rt.pipeline("qwen35_adamw_f32").map_err(metal)?;
-    dispatch::dispatch_2d(rt, &p, width, rows, |bnd| {
-        set_gpu_buf_offset(bnd, &param.buffer, param.byte_offset(), 0);
-        set_gpu_buf_offset(bnd, &grad.buffer, grad.byte_offset(), 1);
-        set_gpu_buf_offset(bnd, &moment1.buffer, moment1.byte_offset(), 2);
-        set_gpu_buf_offset(bnd, &moment2.buffer, moment2.byte_offset(), 3);
-        bnd.bind_bytes(&bytes, 4);
-        set_u32(bnd, rows_u, 5);
-        set_u32(bnd, width_u, 6);
-        set_u32(bnd, width_u, 7);
-        set_u32(bnd, 0, 8);
-    })
-    .map_err(metal)?;
+    let hyper = tessl::qwen35_adamw::AdamWHyper {
+        lr: cfg.lr,
+        beta1: cfg.beta1,
+        beta2: cfg.beta2,
+        eps: cfg.eps,
+        grad_scale: 1.0,
+    };
+    tessl::qwen35_adamw::adamw_step(
+        rt,
+        param,
+        grad,
+        moment1,
+        moment2,
+        &hyper,
+        step_after,
+        cfg.weight_decay as f32,
+    )
+    .map_err(|err| {
+        if err.contains("step 0") {
+            OjasError::OutOfRange {
+                op: "adamw",
+                detail: err,
+            }
+        } else if err.contains("shape") || err.contains("not rank") {
+            OjasError::Shape {
+                op: "adamw",
+                detail: err,
+            }
+        } else {
+            metal(err)
+        }
+    })?;
+    // Encode only. `read_f32` waits through `host_access`.
     rt.commit(false).map_err(metal)?;
     Ok(())
 }
@@ -1874,6 +1890,34 @@ mod tests {
         adamw_cpu(&mut cpu_p, &g, &mut cpu_m, &mut cpu_v, 0, &cfg);
         let err = max_abs(&p.read_f32().unwrap(), &cpu_p);
         assert!(err < ADAMW_ABS_TOL, "adamw err {err}");
+    }
+
+    /// The gradient is the device buffer from cross-entropy. It is not copied
+    /// to the host before the update. The host read happens after, only so the
+    /// CPU formula can see the same bytes.
+    #[test]
+    fn device_grad_matches_cpu_adamw_without_a_pre_update_readback() {
+        let session = session();
+        let rows = 4usize;
+        let d = D_MODEL as usize;
+        let vocab = 8usize;
+        let hidden = pattern(rows * d, 11);
+        let weight = pattern(vocab * d, 12);
+        let targets: Vec<i32> = (0..rows).map(|i| (i % vocab) as i32).collect();
+        let h = f32_tensor(&session.rt, &[rows, d], &hidden).unwrap();
+        let mut w = f32_tensor(&session.rt, &[vocab, d], &weight).unwrap();
+        let ce = ce_at_offset(&session.rt, &h, &w, &targets).unwrap();
+        let mut m = zeros(&session.rt, &[vocab, d]).unwrap();
+        let mut v = zeros(&session.rt, &[vocab, d]).unwrap();
+        let cfg = AdamWConfig::nanolab(1e-2, 0.01);
+        adamw_apply(&session.rt, &mut w, &ce.dw, &mut m, &mut v, 1, &cfg).unwrap();
+        let dw = ce.dw.read_f32().unwrap();
+        let mut cpu = weight.clone();
+        let mut cpu_m = vec![0.0f32; cpu.len()];
+        let mut cpu_v = vec![0.0f32; cpu.len()];
+        adamw_cpu(&mut cpu, &dw, &mut cpu_m, &mut cpu_v, 0, &cfg);
+        let err = max_abs(&w.read_f32().unwrap(), &cpu);
+        assert!(err < ADAMW_ABS_TOL, "device adamw err {err}");
     }
 
     #[test]
