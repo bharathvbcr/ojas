@@ -8,6 +8,8 @@ use std::sync::{atomic::AtomicBool, Arc};
 #[cfg(test)]
 use gusset::CallHeader;
 
+use std::sync::Mutex;
+
 use crate::generate::{self, GenerateBody, GEN_GREEDY, GEN_LOGITS};
 use crate::load;
 use crate::session;
@@ -21,12 +23,20 @@ pub const OP_FREE: u32 = 4;
 pub const OP_PANIC: u32 = 5;
 
 pub fn install_engine() -> Result<(), String> {
+    static INSTALLED: Mutex<bool> = Mutex::new(false);
+    let mut installed = INSTALLED
+        .lock()
+        .map_err(|_| "engine install lock poisoned".to_string())?;
+    if *installed {
+        return Ok(());
+    }
     gusset::clear_engine_handlers();
     gusset::register_engine(OP_LOAD, dispatch)?;
     gusset::register_engine(OP_STEP, dispatch)?;
     gusset::register_engine(OP_GENERATE, dispatch)?;
     gusset::register_engine(OP_FREE, dispatch)?;
     gusset::register_engine(OP_PANIC, dispatch)?;
+    *installed = true;
     Ok(())
 }
 

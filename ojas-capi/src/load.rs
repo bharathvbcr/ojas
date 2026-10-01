@@ -75,9 +75,34 @@ pub fn resolve_under_root(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(canon)
 }
 
+/// The opened file must still be the canonical file under `root`.
+///
+/// A path component swapped between resolving and opening changes `(dev, ino)`
+/// or lands outside the root, and both are refused.
+pub fn confirm_open_identity(file: &File, path: &Path, root: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let opened = file
+        .metadata()
+        .map_err(|err| format!("model file: {err}"))?;
+    let root = root
+        .canonicalize()
+        .map_err(|err| format!("model root: {err}"))?;
+    let fresh = path.canonicalize().map_err(|err| format!("path: {err}"))?;
+    if !fresh.starts_with(&root) {
+        return Err("path escapes model root".to_string());
+    }
+    let again = File::open(&fresh)
+        .map_err(|err| format!("path: {err}"))?
+        .metadata()
+        .map_err(|err| format!("path: {err}"))?;
+    if again.dev() != opened.dev() || again.ino() != opened.ino() {
+        return Err("model file changed while opening".to_string());
+    }
+    Ok(())
+}
+
 /// Header length plus a count of `"dtype"` keys. Not a full safetensors parser.
-pub fn inspect_safetensors(path: &Path) -> Result<u32, String> {
-    let mut file = File::open(path).map_err(|err| format!("missing file: {err}"))?;
+fn inspect_file(file: &mut File) -> Result<u32, String> {
     let file_len = file
         .metadata()
         .map_err(|err| format!("missing file: {err}"))?
@@ -117,6 +142,32 @@ pub fn inspect_safetensors(path: &Path) -> Result<u32, String> {
 pub fn load_path(raw: &str) -> Result<session::Session, String> {
     let root = session::root()?;
     let path = resolve_under_root(&root, raw)?;
-    let tensors = inspect_safetensors(&path)?;
+    let mut file = File::open(&path).map_err(|err| format!("missing file: {err}"))?;
+    confirm_open_identity(&file, &path, &root)?;
+    let tensors = inspect_file(&mut file)?;
     session::load_model(path, tensors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn replaced_file_fails_the_identity_check() {
+        let dir = std::env::temp_dir().join(format!("ojas-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.safetensors");
+        std::fs::write(&path, b"first").unwrap();
+        let file = File::open(&path).unwrap();
+        confirm_open_identity(&file, &path, &dir).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let mut replaced = File::create(&path).unwrap();
+        replaced.write_all(b"second").unwrap();
+        let err = confirm_open_identity(&file, &path, &dir).unwrap_err();
+        assert!(err.contains("changed"), "{err}");
+        drop(file);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
