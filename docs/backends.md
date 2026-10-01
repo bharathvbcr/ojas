@@ -29,7 +29,7 @@ flowchart TD
     CudaCheck -->|No| CudaFail["Return DeviceError::NotCompiled\n(Never CPU fallback!)"]
 
     Match -->|Device::Hip| HipCheck{"Built with --features hip?"}
-    HipCheck -->|Yes| HipPath["ojas-hip\nKernel Launch via hip-runtime-sys"]
+    HipCheck -->|Yes| HipPath["ojas-hip\nMemcpy probe; no kernel"]
     HipCheck -->|No| HipFail["Return DeviceError::NotCompiled\n(Never CPU fallback!)"]
 ```
 

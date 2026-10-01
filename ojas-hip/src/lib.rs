@@ -17,6 +17,26 @@ pub struct HipDevice {
     devices: i32,
 }
 
+/// Copy larger than this is refused before `hipMalloc`. 1 GiB.
+pub const MAX_COPY_BYTES: usize = 1 << 30;
+
+/// Byte length of an f32 copy, or [`DeviceError::Capacity`] when it does not fit.
+pub fn copy_bytes(elems: usize) -> Result<usize, DeviceError> {
+    let bytes = elems
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| DeviceError::Capacity {
+            kind: Device::Hip,
+            detail: format!("{elems} f32 values overflow the byte length"),
+        })?;
+    if bytes > MAX_COPY_BYTES {
+        return Err(DeviceError::Capacity {
+            kind: Device::Hip,
+            detail: format!("{bytes} bytes exceeds the {MAX_COPY_BYTES} byte ceiling"),
+        });
+    }
+    Ok(bytes)
+}
+
 impl HipDevice {
     /// Open the HIP runtime.
     ///
@@ -94,23 +114,37 @@ fn copy_through_hip(input: &[f32]) -> Result<Vec<f32>, DeviceError> {
     if input.is_empty() {
         return Ok(Vec::new());
     }
-    let nbytes = std::mem::size_of_val(input);
-    // Pointer type is `*mut libc::c_void` in the published bindings. Inference
-    // keeps that type without naming `libc` here.
+    let nbytes = copy_bytes(input.len())?;
+    // The allocation is freed on every return, including a panic in `vec!`.
+    struct HipAlloc(*mut std::ffi::c_void);
+    impl Drop for HipAlloc {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: the pointer came from a successful hipMalloc in this function,
+                // and drop runs once.
+                unsafe {
+                    let _ = hip_runtime_sys::hipFree(self.0);
+                }
+                self.0 = std::ptr::null_mut();
+            }
+        }
+    }
     let mut dev = std::ptr::null_mut();
     hip_error("hipMalloc", unsafe {
         hip_runtime_sys::hipMalloc(&mut dev, nbytes)
     })?;
     if dev.is_null() {
-        return Err(DeviceError::NoDevice {
+        return Err(DeviceError::Launch {
             kind: Device::Hip,
             detail: format!("hipMalloc({nbytes}) returned success and a null pointer"),
         });
     }
+    let alloc = HipAlloc(dev);
+    let ptr = alloc.0;
     let mut back = vec![0.0f32; input.len()];
     let copied = hip_error("hipMemcpy host to device", unsafe {
         hip_runtime_sys::hipMemcpy(
-            dev,
+            ptr,
             input.as_ptr().cast(),
             nbytes,
             hip_runtime_sys::hipMemcpyKind::hipMemcpyHostToDevice,
@@ -120,15 +154,13 @@ fn copy_through_hip(input: &[f32]) -> Result<Vec<f32>, DeviceError> {
         hip_error("hipMemcpy device to host", unsafe {
             hip_runtime_sys::hipMemcpy(
                 back.as_mut_ptr().cast(),
-                dev,
+                ptr,
                 nbytes,
                 hip_runtime_sys::hipMemcpyKind::hipMemcpyDeviceToHost,
             )
         })
     });
-    let freed = hip_error("hipFree", unsafe { hip_runtime_sys::hipFree(dev) });
     copied?;
-    freed?;
     Ok(back)
 }
 
@@ -147,6 +179,30 @@ mod tests {
         {
             HipDevice::open().expect("hip feature on: a missing HIP device fails the test")
         }
+    }
+
+    #[test]
+    fn copy_ceiling_refuses_without_calling_hip() {
+        assert_eq!(copy_bytes(0).unwrap(), 0);
+        assert!(matches!(
+            copy_bytes(usize::MAX),
+            Err(DeviceError::Capacity {
+                kind: Device::Hip,
+                ..
+            })
+        ));
+        let too_big = (MAX_COPY_BYTES / 4) + 1;
+        let err = copy_bytes(too_big).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DeviceError::Capacity {
+                    kind: Device::Hip,
+                    ..
+                }
+            ),
+            "{err}"
+        );
     }
 
     #[cfg(not(feature = "hip"))]
