@@ -21,7 +21,7 @@ flowchart TD
     end
 
     subgraph U32Domain["u32 Integer Domain"]
-        TokenIDs["Input Token IDs & Vocabulary Targets\n- Sentinel Option<u32> for ignore index"]
+        TokenIDs["Input Token IDs & Vocabulary Targets\n- ignore_index is Option<u32>\n- Some(id) drops that class; None drops nothing"]
         Dimensions["Tensor Shape & Stride Metadata"]
     end
 
@@ -51,7 +51,7 @@ flowchart TD
 | **Muon Momentum** | `f32` | `f32` | Standard first-moment buffer for matrix parameters. |
 | **Muon Newton-Schulz** | — | `bf16` | As implemented in nanolab (`X = G.bfloat16()`). Reduces compute latency while maintaining spectral properties. |
 | **AdamW Moments** | `f32` | `f64` (internal) | First and second moments stored as `f32`; step updates computed with `f64` scalars before casting. |
-| **Tokens & Labels** | `u32` | `u32` | Accommodates vocabularies up to 50,304. Negative PyTorch ignore index (`-1`) maps to `Option<u32>::None`. |
+| **Tokens & Labels** | `u32` | `u32` | Accommodates vocabularies up to 50,304. `ignore_index: Option<u32>` drops rows whose target equals `Some(id)`. `None` drops nothing. Torch's `-1` is mapped to a sentinel `u32` by the loader before the call; it is not `None`. |
 | **Oracle Fixtures** | `f64` | `f64` | Golden reference files stored on disk; verified against CPU kernels. |
 
 The `DType` enumeration in [`ojas-core`](file:///Users/bharath/Code/research/ojas/ojas-core/src/dtype.rs) defines `F32`, `Bf16`, `F16`, and `U32`. `F16` exists for checkpoint format compatibility; v1 training does not compute in `F16`.

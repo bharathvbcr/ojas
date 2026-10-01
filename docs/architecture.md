@@ -40,13 +40,11 @@ flowchart TD
 
     subgraph Layer3["3. Models, Autograd & High-Level Primitives"]
         Infer["ojas-infer (KV Cache, Greedy & Sampling Decode, Logit Guard)"]
-        NN["ojas-nn (Modular Layers: Linear, Conv, Norm, Attention, MLP)"]
         Autograd["ojas-autograd (Dynamic Reverse-Mode Tape, Var, f64 Gradcheck)"]
-        Optim["ojas-optim (AdamW, Muon NS5, Parameter Groups)"]
     end
 
     subgraph Layer2["2. Hardware Compute Acceleration Backends"]
-        CPU["ojas-cpu (Single-Threaded Reference Math, SIMD-aligned)"]
+        CPU["ojas-cpu (f32 reference, 8-wide scalar lanes)"]
         Metal["ojas-metal (Apple Silicon Metal 4 via tessl & Native MSL)"]
         WGPU["ojas-wgpu (Cross-Platform Portable WGSL via WebGPU)"]
         CUDA["ojas-cuda (NVIDIA PTX Launch via cudarc)"]

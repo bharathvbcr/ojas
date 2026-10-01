@@ -103,4 +103,4 @@ flowchart LR
 | **CUDA Execution** | Kernel launch | **Skipped:** No NVIDIA GPU present |
 | **HIP Default** | `cargo test -p ojas-hip` | **Passed:** `tests::default_build_reports_not_compiled` |
 | **HIP Bindings** | `cargo check -p ojas-hip --features hip` | **Skipped:** Build stopped in `hip-runtime-sys` (no `/opt/rocm`) |
-| **HIP Execution** | Kernel launch | **Skipped:** No AMD GPU present |
+| **HIP Execution** | Memcpy probe (there is no HIP kernel) | **Skipped:** `--features hip` was not built; no `/opt/rocm` and no AMD GPU |

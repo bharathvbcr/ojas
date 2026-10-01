@@ -4,23 +4,25 @@ Recorded: 2026-10-01. A claim is labeled **verified** when this session ran the 
 
 ```mermaid
 flowchart TD
-    subgraph TestSuite["Test Suite Execution: 80 Passed, 0 Failed, 0 Ignored"]
-        CPU["ojas-cpu: 18 tests passed"]
-        IO["ojas-io: 12 tests passed"]
-        Metal["ojas-metal: 10 tests passed"]
-        CAPI["ojas-capi: 10 tests passed"]
-        WGPU["ojas-wgpu: 7 tests passed"]
-        Data["ojas-data: 5 tests passed"]
-        Autograd["ojas-autograd: 5 tests passed"]
-        Infer["ojas-infer: 4 tests passed"]
-        Device["ojas-device: 3 tests passed"]
-        CUDA["ojas-cuda: 2 tests passed"]
-        HIP["ojas-hip: 2 tests passed"]
-        Oracle["ojas-oracle: 2 tests passed"]
+    subgraph TestSuite["Release workspace: 227 passed, 0 failed, 0 ignored"]
+        CPU["ojas-cpu: 42"]
+        IO["ojas-io: 31"]
+        Metal["ojas-metal: 25"]
+        CAPI["ojas-capi: 19"]
+        WGPU["ojas-wgpu: 19"]
+        Core["ojas-core: 19"]
+        Data["ojas-data: 18"]
+        Autograd["ojas-autograd: 21"]
+        Infer["ojas-infer: 10"]
+        Device["ojas-device: 8"]
+        HIP["ojas-hip: 5"]
+        CUDA["ojas-cuda: 4"]
+        Oracle["ojas-oracle: 4"]
+        Kernels["ojas-kernels: 2"]
     end
 
-    subgraph GoSuite["Go Integration Tests: 7 Passed, 0 Failed"]
-        Go["github.com/bharathvbcr/ojas/go: 7 tests passed (0.24s)"]
+    subgraph GoSuite["Go package: 12 passed, 1 failed"]
+        Go["TestConcurrentSessionStress: handle is closed"]
     end
 
     TestSuite --> GoSuite
@@ -53,15 +55,7 @@ flowchart LR
         d3["ojas-device (CPU probe, strict routing)"]
     end
 
-    subgraph Scaffolds["Scaffold Crates (0 Tests)"]
-        direction TB
-        s1["ojas-nn (Full model assembly)"]
-        s2["ojas-optim (Standalone optimizer library)"]
-        s3["ojas-engine (Standalone daemon)"]
-    end
-
     Ready -.-> DeviceStubs
-    DeviceStubs -.-> Scaffolds
 ```
 
 ---
@@ -71,41 +65,39 @@ flowchart LR
 From `/Users/bharath/Code/research/ojas`:
 
 * **CPU reference.** `ojas-cpu` implements the nanolab-shaped op suite: embedding lookup, linear, RMSNorm, half-split RoPE, QK-norm, causal scaled-dot-product attention, the per-head sigmoid gate, value residual, SiLU, pointwise multiply, residual addition, mean cross-entropy, gradient clipping, AdamW, and Muon NS5. **Reported:** one float32 step (B=1, T=4, d=16, vocab=32, seed 0) matches PyTorch 2.13.0. Max absolute error is 2.38e-7 on the loss and 5.70e-8 on the query weight after one AdamW step. The tensors are frozen in `ojas-cpu/tests/torch_ref.rs`, so later `cargo test -p ojas-cpu` does not need PyTorch. The package passed, including that test. This is one step, not a 50-step or 124M comparison.
-* **CPU versus PyTorch wall time.** **Reported** in `docs/bench-cpu-vs-torch.md`. Two release runs, Rust single-threaded, torch 2.13.0 on CPU with 6 threads and math SDPA. Tiny-step medians were 46 µs and 60 µs for Rust, 1.76 ms and 0.98 ms for torch. Larger-step medians (`B=2, T=32, d=64, vocab=128`) were 7.83 ms and 8.67 ms for Rust, 1.92 ms and 1.71 ms for torch. The tiny torch time moved across processes, so there is no single speedup number. The tiny loss error on that bench was 2.38e-7.
-* **Metal tiny step.** `ojas-metal::gpu::tiny_train_step` runs one pre-norm SwiGLU block, nanolab QK-norm and half-split RoPE at head dim 64, causal attention, chunked cross-entropy, and AdamW on a Q projection and the LM head. Head-dim-64 backward is exact-f32 GEMM plus `ojas_causal_softmax_bwd`, only for sequence ≤ 16 and at most 2 heads. The tiled head-dim-256 flash backward was not copied. **Reported:** `cargo test -p ojas-metal --release -- --test-threads=1` passed 24. dQ, dK, and dV at T=4 match a local backward within 1e-3. A future key of 1e6 does not move position 0, and that key's dK stays near 0 when the upstream gradient is only at position 0. A longer sequence or a third head returns `Shape`. Head dim above 64 is `UnsupportedHeadDim`.
-* **Portable shader.** `ojas-wgpu` executes `y = x * scale + bias` through wgpu over Metal HAL. **Verified:** Adapter `Apple M5 Pro`, vendor `Apple (wgpu vendor field 0)`, HAL `Metal`. 7 tests passed.
-* **In-process Go API.** Package `github.com/bharathvbcr/ojas/go` loads relative safetensors paths, runs training steps, evaluates greedy decoding, and manages sessions via `libgusset.a`. **Verified:** 7 tests passed in 0.239s.
-* **IO & Autograd.** `ojas-io` reads and writes Checkpoint v1 and strict safetensors (F32, I64, U16). `ojas-autograd` executes reverse-mode autograd tape graphs and compares analytical gradients against f64 central differences. **Verified:** 12 tests in `ojas-io` and 5 tests in `ojas-autograd` passed.
+* **CPU versus PyTorch wall time.** **Reported** in `docs/bench-cpu-vs-torch.md`. After the linear-backward rewrite, two release runs: tiny about 25 µs in Rust versus about 0.37 ms in torch; larger (`B=2, T=32, d=64, vocab=128`) **0.969 ms and 0.952 ms** in Rust versus **0.472 ms** on both torch runs. Linear backward is about 144 µs. Causal attention forward is the largest section, about 445 µs. Torch used 6 CPU threads. The frozen loss error is still 2.38e-7.
+* **Metal tiny step.** `ojas-metal::gpu::tiny_train_step` runs one pre-norm SwiGLU block, nanolab QK-norm and half-split RoPE at head dim 64, causal attention, chunked cross-entropy, and AdamW on a Q projection and the LM head. The AdamW call is `tessl::qwen35_adamw::adamw_step` on the device gradient. Head-dim-64 backward is exact-f32 GEMM plus `ojas_causal_softmax_bwd`, only for sequence ≤ 16 and at most 2 heads. The tiled head-dim-256 flash backward was not copied. **Verified:** the release workspace run included 25 `ojas-metal` tests, 0 failed. dQ, dK, and dV at T=4 match a local backward within 1e-3. A future key of 1e6 does not move position 0, and that key's dK stays near 0 when the upstream gradient is only at position 0. A longer sequence or a third head returns `Shape`. Head dim above 64 is `UnsupportedHeadDim`.
+* **Portable shader.** `ojas-wgpu` executes `y = x * scale + bias` through wgpu over Metal HAL. **Verified:** the release workspace run included 19 `ojas-wgpu` tests, 0 failed. This session did not reprint the adapter name.
+* **In-process Go API.** Package `github.com/bharathvbcr/ojas/go` loads relative safetensors paths, runs training steps, evaluates greedy decoding, and manages sessions via `libgusset.a`. **Verified:** 12 of 13 package tests passed. `TestConcurrentSessionStress` failed (see below).
+* **IO and adversarial loaders.** `ojas-io` reads and writes Checkpoint v1 and strict safetensors (F32, I64, U16). **Reported:** the stress pass on `ojas-io`, `ojas-data`, `ojas-device`, `ojas-wgpu`, `ojas-cuda`, and `ojas-hip` passed 77 tests (30, 17, 6, 16, 4, 4). Truncated files, overlapping tensors, a header over 100,000,000 bytes, and an odd-length token bin are refused. wgpu ran on Apple M5 Pro. CUDA and HIP kernels were not launched. No loader logic needed a change.
 * **GPT-2 BPE.** `ojas-data` reads the local Hugging Face GPT-2 `vocab.json` and `merges.txt` under `Step-Audio-EditX`. **Reported:** 20 strings match tiktoken 0.12.0 `encode_ordinary` from `Step-Audio-EditX/.venv/bin/python3`. `TIKTOKEN_GPT2_BYTE_IDENTITY` is `verified-20-strings`. This is not a 1M-line check. `cargo test -p ojas-data` passed after that change.
 
 ---
 
 ## Workspace Test Results
 
-**Verified** with `cargo test --workspace --release -- --test-threads=1`:
+**Verified** with `cargo test --offline --workspace --release -- --test-threads=1` (exit 0, 29.6s including the compile). Counts are binary tests, summed per crate. Wall time of the whole command is not a per-crate budget.
 
-| Crate | Passed | Failed | Ignored | Wall Time |
-| :--- | ---: | ---: | ---: | ---: |
-| `ojas-autograd` | 5 | 0 | 0 | < 0.01s |
-| `ojas-capi` | 10 | 0 | 0 | 0.01s |
-| `ojas-core` | 0 | 0 | 0 | 0.00s |
-| `ojas-cpu` | 18 | 0 | 0 | 0.01s |
-| `ojas-cuda` | 2 | 0 | 0 | 0.00s |
-| `ojas-data` | 5 | 0 | 0 | 0.00s |
-| `ojas-device` | 3 | 0 | 0 | 0.00s |
-| `ojas-engine` | 0 | 0 | 0 | 0.00s |
-| `ojas-gusset-engine` | 0 | 0 | 0 | 0.00s |
-| `ojas-hip` | 2 | 0 | 0 | 0.00s |
-| `ojas-infer` | 4 | 0 | 0 | 0.00s |
-| `ojas-io` | 12 | 0 | 0 | 0.00s |
-| `ojas-metal` | 10 | 0 | 0 | 0.12s |
-| `ojas-nn` | 0 | 0 | 0 | 0.00s |
-| `ojas-optim` | 0 | 0 | 0 | 0.00s |
-| `ojas-oracle` | 2 | 0 | 0 | 0.00s |
-| `ojas-wgpu` | 7 | 0 | 0 | 0.09s |
-| **Total** | **80** | **0** | **0** | **~0.25s** |
+| Crate | Passed | Failed | Ignored |
+| :--- | ---: | ---: | ---: |
+| `ojas-autograd` | 21 | 0 | 0 |
+| `ojas-capi` | 19 | 0 | 0 |
+| `ojas-core` | 19 | 0 | 0 |
+| `ojas-cpu` | 42 | 0 | 0 |
+| `ojas-cuda` | 4 | 0 | 0 |
+| `ojas-data` | 18 | 0 | 0 |
+| `ojas-device` | 8 | 0 | 0 |
+| `ojas-gusset-engine` | 0 | 0 | 0 |
+| `ojas-hip` | 5 | 0 | 0 |
+| `ojas-infer` | 10 | 0 | 0 |
+| `ojas-io` | 31 | 0 | 0 |
+| `ojas-kernels` | 2 | 0 | 0 |
+| `ojas-metal` | 25 | 0 | 0 |
+| `ojas-oracle` | 4 | 0 | 0 |
+| `ojas-wgpu` | 19 | 0 | 0 |
+| **Total** | **227** | **0** | **0** |
 
-Doc-test harnesses: each `0 passed; 0 failed; 0 ignored`.
+17 doc-test harnesses ran. Each reported `0 passed; 0 failed; 0 ignored`. `ojas-nn`, `ojas-optim`, and `ojas-engine` were in that run at 0 tests and were removed afterward; they are not in the total.
 
 ---
 
@@ -136,7 +128,15 @@ PASS
 ok      github.com/bharathvbcr/ojas/go  0.239s
 ```
 
-All 7 Go tests passed. Rust panics are cleanly caught by `std::panic::catch_unwind` and drop the poisoned session without tearing the Go host process.
+The listing above is an older 7-test run and is not this session's result. This session listed 13 tests. The full package failed in `TestConcurrentSessionStress` (0.617s): a goroutine's `Close` makes other goroutines observe `gusset: handle is closed`, and the reload then hit `capacity exceeded` on the first new load.
+
+With `-skip TestConcurrentSessionStress`:
+
+* `go test -tags gusset_pkgconfig -count=1` passed in 0.480s.
+* `go test -tags gusset_pkgconfig -race -count=1 -a` passed in 1.560s. A first `-race` link reused stale cgo flags without the Apple frameworks and did not link.
+* `GOGC=1 go test -tags gusset_pkgconfig -count=5` passed in 0.723s.
+
+`TestPoisonDropsSession` still induces a Rust panic on a worker. The process stayed up.
 
 ---
 
@@ -144,11 +144,11 @@ All 7 Go tests passed. Rust panics are cleanly caught by `std::panic::catch_unwi
 
 | Device | Implementation | Host Platform | Verified Execution |
 | :--- | :--- | :--- | :--- |
-| **CPU** | `ojas-cpu` single-threaded reference ops | macOS / Linux / any | **Verified**: 18 unit tests passed |
-| **Metal** | `ojas-metal` Apple Silicon Metal 4 fused step, including QK-norm and half-split RoPE | Apple M5 Pro / macOS | **Reported**: 21 tests passed (2 heads, d_model 128, head dim 64). No attention backward at head dim 64. |
-| **wgpu** | `ojas-wgpu` WGSL compute shader | Metal HAL (M5 Pro) | **Verified**: 7 tests passed |
+| **CPU** | `ojas-cpu` f32 reference, 8-wide scalar lanes | macOS / Linux / any | **Verified**: 42 tests passed in the release workspace run |
+| **Metal** | `ojas-metal` tiny step, including head-dim-64 causal backward | Apple M5 Pro / macOS | **Verified**: 25 tests passed in that same run |
+| **wgpu** | `ojas-wgpu` WGSL compute shader | Metal HAL | **Verified**: 19 tests passed in that same run |
 | **CUDA** | `ojas-cuda` (PTX launch via cudarc) | NVIDIA Linux | **Verified**: Disabled by default; reports `NotCompiled` |
-| **HIP** | `ojas-hip` (ROCm launch via hip-runtime-sys) | AMD ROCm | **Verified**: Disabled by default; reports `NotCompiled` |
+| **HIP** | `ojas-hip` memcpy probe, no kernel | AMD ROCm | **Verified**: default tests passed (5). `--features hip` was not built |
 
 ---
 

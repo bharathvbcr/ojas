@@ -68,9 +68,7 @@ flowchart TD
 
     subgraph HighLevel["Model, Autograd & Inference Layer"]
         Infer["ojas-infer\n(Autoregressive Decoding, KV Cache, Logit Validation)"]
-        NN["ojas-nn\n(Neural Network Modules & Parameter Containers)"]
         Autograd["ojas-autograd\n(Dynamic Reverse-Mode Tape & f64 Gradcheck)"]
-        Optim["ojas-optim\n(Dual Optimizers: AdamW & Muon NS5)"]
     end
 
     subgraph CoreEngine["Tensor Substrate & System Types"]
@@ -86,7 +84,7 @@ flowchart TD
         Metal["ojas-metal\n(Apple Silicon Metal 4 Acceleration via tessl)"]
         WGPU["ojas-wgpu\n(Cross-Platform WGSL via WebGPU)"]
         CUDA["ojas-cuda\n(NVIDIA PTX Kernel Launcher via cudarc)"]
-        HIP["ojas-hip\n(AMD ROCm/HIP Kernel Launcher)"]
+        HIP["ojas-hip\n(Memcpy probe; no HIP kernel)"]
     end
 
     GoApp --> Gusset
@@ -151,7 +149,7 @@ flowchart TD
     BackendCheck -->|Device::Hip| HIP["ojas-hip (ROCm via hip-runtime-sys)"]
 ```
 
-### 4. Advanced Optimizer Suite (`ojas-optim`, `ojas-cpu`)
+### 4. Optimizers (`ojas-cpu`)
 * **Dual Optimizer Architecture:**
   * **Muon NS5:** Orthogonalized matrix optimization using quintic 5th-order Newton-Schulz iterations with bf16 compute for 2D hidden weight matrices.
   * **AdamW:** PyTorch single-tensor order (decay first, bias correction, $\varepsilon = 10^{-8}$ outside the square root) for 1D parameters, embeddings, and normalization scales.
@@ -190,23 +188,20 @@ sequenceDiagram
 | Crate | Purpose | Key Symbols | Status |
 | :--- | :--- | :--- | :---: |
 | [`ojas-core`](file:///Users/bharath/Code/research/ojas/ojas-core) | Core tensor engine & invariants | `Tensor`, `Backend`, `Budget`, `DType`, `OjasError`, `CheckpointV1` | **Verified** |
-| [`ojas-cpu`](file:///Users/bharath/Code/research/ojas/ojas-cpu) | Deterministic reference compute | `CpuBackend`, exact mathematical kernels, single-thread loop | **Verified** (18 tests) |
-| [`ojas-metal`](file:///Users/bharath/Code/research/ojas/ojas-metal) | Apple Silicon Metal 4 backend | `tiny_train_step`, `per_head_gate.metal`, causal attention | **Verified** (10 tests) |
-| [`ojas-autograd`](file:///Users/bharath/Code/research/ojas/ojas-autograd) | Reverse-mode tape & gradcheck | `Tape`, `Var`, `central_diff`, f64 finite difference validation | **Verified** (5 tests) |
-| [`ojas-io`](file:///Users/bharath/Code/research/ojas/ojas-io) | Formats & serialization | Safetensors parser (F32/I64/U16), Checkpoint v1 binary codec | **Verified** (12 tests) |
-| [`ojas-data`](file:///Users/bharath/Code/research/ojas/ojas-data) | Dataset ingestion & tokenization | Binary token streams, Fineweb format, deterministic RNG | **Verified** (5 tests) |
-| [`ojas-infer`](file:///Users/bharath/Code/research/ojas/ojas-infer) | Autoregressive inference engine | `CpuGpt`, KV cache, greedy decoding, logit validation | **Verified** (4 tests) |
-| [`ojas-capi`](file:///Users/bharath/Code/research/ojas/ojas-capi) | C-ABI dispatch & foreign host API | `dispatch`, `install_engine`, session store, panic boundary | **Verified** (10 tests) |
+| [`ojas-cpu`](file:///Users/bharath/Code/research/ojas/ojas-cpu) | Deterministic reference compute | `CpuBackend`, exact mathematical kernels, single-thread loop | **Verified** (42 tests) |
+| [`ojas-metal`](file:///Users/bharath/Code/research/ojas/ojas-metal) | Apple Silicon Metal 4 backend | `tiny_train_step`, `per_head_gate.metal`, causal attention | **Verified** (25 tests) |
+| [`ojas-autograd`](file:///Users/bharath/Code/research/ojas/ojas-autograd) | Reverse-mode tape & gradcheck | `Tape`, `Var`, `central_diff`, f64 finite difference validation | **Verified** (21 tests) |
+| [`ojas-io`](file:///Users/bharath/Code/research/ojas/ojas-io) | Formats & serialization | Safetensors parser (F32/I64/U16), Checkpoint v1 binary codec | **Verified** (31 tests) |
+| [`ojas-data`](file:///Users/bharath/Code/research/ojas/ojas-data) | Dataset ingestion & tokenization | Binary token streams, Fineweb format, deterministic RNG | **Verified** (18 tests) |
+| [`ojas-infer`](file:///Users/bharath/Code/research/ojas/ojas-infer) | Autoregressive inference engine | `CpuGpt`, KV cache, greedy decoding, logit validation | **Verified** (10 tests) |
+| [`ojas-capi`](file:///Users/bharath/Code/research/ojas/ojas-capi) | C-ABI dispatch & foreign host API | `dispatch`, `install_engine`, session store, panic boundary | **Verified** (19 tests) |
 | [`ojas-gusset-engine`](file:///Users/bharath/Code/research/ojas/ojas-gusset-engine) | Go link archive | Umbrella staticlib `libgusset.a` for Go CGO integration | **Verified** |
-| [`go/`](file:///Users/bharath/Code/research/ojas/go) | Go client SDK | Package `ojas`: `Load`, `Step`, `GenerateGreedy`, `Close` | **Verified** (7 tests) |
-| [`ojas-device`](file:///Users/bharath/Code/research/ojas/ojas-device) | Hardware discovery | `Device` probe, explicit backend routing without fallbacks | **Verified** (3 tests) |
-| [`ojas-wgpu`](file:///Users/bharath/Code/research/ojas/ojas-wgpu) | Portable WGSL shaders | WGSL compute pipeline, Metal/Vulkan HAL execution | **Verified** (7 tests) |
-| [`ojas-oracle`](file:///Users/bharath/Code/research/ojas/ojas-oracle) | Mathematical fixtures | IEEE-754 f64 oracle data for exact op verification | **Verified** (2 tests) |
-| [`ojas-cuda`](file:///Users/bharath/Code/research/ojas/ojas-cuda) | NVIDIA CUDA backend | Optional feature `cuda`; explicit device validation | **Verified** (2 tests) |
-| [`ojas-hip`](file:///Users/bharath/Code/research/ojas/ojas-hip) | AMD ROCm/HIP backend | Optional feature `hip`; explicit device validation | **Verified** (2 tests) |
-| [`ojas-nn`](file:///Users/bharath/Code/research/ojas/ojas-nn) | High-level neural modules | Module abstractions for neural network layers | Scaffold |
-| [`ojas-optim`](file:///Users/bharath/Code/research/ojas/ojas-optim) | Standalone optimizers | Optimizer interfaces (reference math lives in `ojas-cpu`) | Scaffold |
-| [`ojas-engine`](file:///Users/bharath/Code/research/ojas/ojas-engine) | Standalone daemon | Engine daemon scaffolding | Scaffold |
+| [`go/`](file:///Users/bharath/Code/research/ojas/go) | Go client SDK | Package `ojas`: `Load`, `Step`, `GenerateGreedy`, `Close` | 12 passed; `TestConcurrentSessionStress` failed |
+| [`ojas-device`](file:///Users/bharath/Code/research/ojas/ojas-device) | Hardware discovery | `Device` probe, explicit backend routing without fallbacks | **Verified** (8 tests) |
+| [`ojas-wgpu`](file:///Users/bharath/Code/research/ojas/ojas-wgpu) | Portable WGSL shaders | WGSL compute pipeline, Metal/Vulkan HAL execution | **Verified** (19 tests) |
+| [`ojas-oracle`](file:///Users/bharath/Code/research/ojas/ojas-oracle) | Mathematical fixtures | IEEE-754 f64 oracle data for exact op verification | **Verified** (4 tests) |
+| [`ojas-cuda`](file:///Users/bharath/Code/research/ojas/ojas-cuda) | NVIDIA CUDA backend | Optional feature `cuda`; explicit device validation | **Verified** (4 tests; no kernel execution) |
+| [`ojas-hip`](file:///Users/bharath/Code/research/ojas/ojas-hip) | AMD ROCm memcpy probe | Optional feature `hip`; no HIP kernel | **Verified** (5 tests; feature build skipped) |
 
 ---
 

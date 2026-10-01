@@ -614,13 +614,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ojas-engine"
-version = "0.1.0"
-dependencies = [
- "ojas-core",
-]
-
-[[package]]
 name = "ojas-gusset-engine"
 version = "0.1.0"
 dependencies = [
@@ -663,20 +656,6 @@ dependencies = [
  "ojas-core",
  "ojas-device",
  "tessl",
-]
-
-[[package]]
-name = "ojas-nn"
-version = "0.1.0"
-dependencies = [
- "ojas-core",
-]
-
-[[package]]
-name = "ojas-optim"
-version = "0.1.0"
-dependencies = [
- "ojas-core",
 ]
 
 [[package]]
