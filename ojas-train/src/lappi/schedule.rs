@@ -16,7 +16,9 @@
 //! warmup half still matches bit for bit; the cosine half is glibc's and is compared there only
 //! if the fixture is regenerated on that host.
 
-use crate::pyjson::{Json, PyJsonError};
+use serde_json::Value;
+
+use crate::pyjson::{float, obj, PyJsonError};
 
 /// `run_control.MAX_LOSS_POINTS`: one loss point per optimizer step bounds the schedule too.
 pub const MAX_LOSS_POINTS: u64 = 5_000_000;
@@ -125,18 +127,14 @@ impl LrSchedule {
     }
 
     /// `LRSchedule.to_json`, as the checkpoint and the manifest record it.
-    pub fn to_json(&self) -> Result<Json, PyJsonError> {
-        Json::obj([
-            ("peak_lr", Json::Float(self.peak_lr)),
-            ("total_steps", Json::Int(to_i64(self.total_steps)?)),
-            ("warmup_steps", Json::Int(to_i64(self.warmup_steps)?)),
-            ("min_lr", Json::Float(self.min_lr)),
+    pub fn to_json(&self) -> Result<Value, PyJsonError> {
+        obj([
+            ("peak_lr", float(self.peak_lr)?),
+            ("total_steps", Value::from(self.total_steps)),
+            ("warmup_steps", Value::from(self.warmup_steps)),
+            ("min_lr", float(self.min_lr)?),
         ])
     }
-}
-
-fn to_i64(x: u64) -> Result<i64, PyJsonError> {
-    i64::try_from(x).map_err(|e| PyJsonError(format!("{x}: {e}")))
 }
 
 #[cfg(test)]

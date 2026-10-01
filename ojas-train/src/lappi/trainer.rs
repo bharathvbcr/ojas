@@ -36,7 +36,9 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::adamw::{adamw_update, Moments};
-use crate::pyjson::{float_fromhex, float_hex, Json, PyJsonError};
+use serde_json::Value;
+
+use crate::pyjson::{dumps, float_fromhex, float_hex, obj, PyJsonError, CANONICAL};
 use crate::recipe::{self, OptimizerRecipe};
 use crate::run_control::{hex, Clock, ConsumedPrefix, LossLog, LossPoint, RunClock, RunControlError, WallClockCap};
 use crate::schedule::{LrSchedule, ScheduleError};
@@ -752,12 +754,8 @@ fn checkpoint_name(step: u64) -> String {
     format!("ckpt-{step:08}")
 }
 
-fn int(x: u64) -> Result<Json, PyJsonError> {
-    Ok(Json::Int(i64::try_from(x).map_err(|e| PyJsonError(format!("{x}: {e}")))?))
-}
-
-fn hex_list(xs: &[f64]) -> Result<Json, PyJsonError> {
-    Ok(Json::Arr(xs.iter().map(|x| float_hex(*x).map(Json::Str)).collect::<Result<_, _>>()?))
+fn hex_list(xs: &[f64]) -> Result<Value, PyJsonError> {
+    Ok(Value::Array(xs.iter().map(|x| float_hex(*x).map(Value::from)).collect::<Result<_, _>>()?))
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), TrainError> {
@@ -799,7 +797,7 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
             .map_err(|_| TrainError::Refused(format!("{} was written outside the provider directory", path.display())))?
             .to_string_lossy()
             .into_owned();
-        provider_files.push((rel, Json::Str(hex(&Sha256::digest(&bytes)))));
+        provider_files.push((rel, Value::from(hex(&Sha256::digest(&bytes)))));
     }
 
     // Host values and moments: raw little-endian f32, value then m then v per entry.
@@ -815,27 +813,27 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     let host_path = staging.join("host.f32");
     write_synced(&host_path, &host_bytes)?;
 
-    let body_json = Json::obj([
-        ("format", Json::str(CHECKPOINT_FORMAT)),
-        ("epoch", int(body.epoch)?),
-        ("next_index", int(body.next_index)?),
-        ("optimizer_step", int(body.optimizer_step)?),
-        ("seed", int(body.seed)?),
+    let body_json = obj([
+        ("format", Value::from(CHECKPOINT_FORMAT)),
+        ("epoch", Value::from(body.epoch)),
+        ("next_index", Value::from(body.next_index)),
+        ("optimizer_step", Value::from(body.optimizer_step)),
+        ("seed", Value::from(body.seed)),
         ("schedule", body.schedule.to_json()?),
-        ("grad_accum", int(u64::from(body.grad_accum))?),
+        ("grad_accum", Value::from(body.grad_accum)),
         ("loss_log", body.loss_log.to_json()?),
         (
             "steps",
-            Json::Arr(
+            Value::Array(
                 body.steps
                     .iter()
                     .map(|s| {
-                        Json::obj([
-                            ("step", int(s.optimizer_step)?),
-                            ("lr_hex", Json::Str(float_hex(s.lr)?)),
-                            ("loss_hex", Json::Str(float_hex(s.loss)?)),
-                            ("grad_norm_hex", Json::Str(float_hex(s.grad_norm)?)),
-                            ("clip_hex", Json::Str(float_hex(s.clip_coefficient)?)),
+                        obj([
+                            ("step", Value::from(s.optimizer_step)),
+                            ("lr_hex", Value::from(float_hex(s.lr)?)),
+                            ("loss_hex", Value::from(float_hex(s.loss)?)),
+                            ("grad_norm_hex", Value::from(float_hex(s.grad_norm)?)),
+                            ("clip_hex", Value::from(float_hex(s.clip_coefficient)?)),
                         ])
                     })
                     .collect::<Result<_, _>>()?,
@@ -843,33 +841,31 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         ),
         (
             "channel_log",
-            Json::Obj(
-                body.channel_log
-                    .iter()
-                    .map(|(n, vs)| Ok((n.clone(), hex_list(vs)?)))
-                    .collect::<Result<_, PyJsonError>>()?,
-            ),
+            obj(body.channel_log
+                .iter()
+                .map(|(n, vs)| Ok((n.clone(), hex_list(vs)?)))
+                .collect::<Result<Vec<_>, PyJsonError>>()?)?,
         ),
-        ("consumed_digest", Json::Str(body.consumed.hexdigest())),
-        ("consumed_n", int(body.consumed.n_folded())?),
-        ("provider_files", Json::obj(provider_files)?),
+        ("consumed_digest", Value::from(body.consumed.hexdigest())),
+        ("consumed_n", Value::from(body.consumed.n_folded())),
+        ("provider_files", obj(provider_files)?),
         (
             "host_entries",
-            Json::Arr(
+            Value::Array(
                 host_entries
                     .iter()
                     .map(|e| {
-                        Json::obj([
-                            ("name", Json::str(e.name.clone())),
-                            ("shape", Json::Arr(e.shape.iter().map(|d| int(*d as u64)).collect::<Result<_, _>>()?)),
+                        obj([
+                            ("name", Value::from(e.name.clone())),
+                            ("shape", Value::from(e.shape.clone())),
                         ])
                     })
                     .collect::<Result<_, PyJsonError>>()?,
             ),
         ),
-        ("host_sha256", Json::Str(hex(&Sha256::digest(&host_bytes)))),
+        ("host_sha256", Value::from(hex(&Sha256::digest(&host_bytes)))),
     ])?;
-    write_synced(&staging.join("trainer.json"), body_json.dumps(false)?.as_bytes())?;
+    write_synced(&staging.join("trainer.json"), dumps(&body_json, CANONICAL)?.as_bytes())?;
     sync_dir(&staging)?;
     fs::rename(&staging, &final_dir).map_err(|e| io(&final_dir, e))?;
     sync_dir(dir)?;

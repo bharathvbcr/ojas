@@ -7,7 +7,7 @@ use qd_train::schedule::LrSchedule;
 
 #[test]
 fn every_dumped_rate_is_pythons_to_the_bit() {
-    let o = common::oracle();
+    let o = common::trainer_oracle();
     let mut compared = 0usize;
     for case in o["schedule"].as_array().unwrap() {
         let peak = common::fhex(&case["peak_lr"]);
@@ -36,7 +36,7 @@ fn every_dumped_rate_is_pythons_to_the_bit() {
 fn real_ft_matches_the_schedules_python_built_for_real_ft_run() {
     // The oracle built these through real_ft_run._control's rule; LrSchedule::real_ft must
     // reproduce the same four fields from (lr, steps) alone.
-    let o = common::oracle();
+    let o = common::trainer_oracle();
     let mut matched = 0;
     for case in o["schedule"].as_array().unwrap() {
         let peak = common::fhex(&case["peak_lr"]);

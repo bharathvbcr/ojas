@@ -16,7 +16,9 @@ use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
-use crate::pyjson::{float_hex, Json, PyJsonError};
+use serde_json::Value;
+
+use crate::pyjson::{dumps, float_hex, obj, PyJsonError, CANONICAL_ASCII};
 
 /// `run_control.MAX_CAP_S`: 40 h. A cap above the program's cap is not a cap.
 pub const MAX_CAP_S: f64 = 40.0 * 3600.0;
@@ -170,18 +172,14 @@ impl LossPoint {
     }
 
     /// `LossPoint.to_json`: `{"epoch", "index", "loss_hex", "step"}`.
-    pub fn to_json(&self) -> Result<Json, PyJsonError> {
-        Json::obj([
-            ("step", Json::Int(to_i64(self.optimizer_step)?)),
-            ("epoch", Json::Int(to_i64(self.epoch)?)),
-            ("index", Json::Int(to_i64(self.batch_index)?)),
-            ("loss_hex", Json::Str(float_hex(self.loss)?)),
+    pub fn to_json(&self) -> Result<Value, PyJsonError> {
+        obj([
+            ("step", Value::from(self.optimizer_step)),
+            ("epoch", Value::from(self.epoch)),
+            ("index", Value::from(self.batch_index)),
+            ("loss_hex", Value::from(float_hex(self.loss)?)),
         ])
     }
-}
-
-fn to_i64(x: u64) -> Result<i64, PyJsonError> {
-    i64::try_from(x).map_err(|e| PyJsonError(format!("{x}: {e}")))
 }
 
 /// The loss trajectory, append-only and strictly increasing in optimizer step.
@@ -232,13 +230,13 @@ impl LossLog {
         self.points.last()
     }
 
-    pub fn to_json(&self) -> Result<Json, PyJsonError> {
-        Ok(Json::Arr(self.points.iter().map(LossPoint::to_json).collect::<Result<_, _>>()?))
+    pub fn to_json(&self) -> Result<Value, PyJsonError> {
+        Ok(Value::Array(self.points.iter().map(LossPoint::to_json).collect::<Result<_, _>>()?))
     }
 
     /// `LossLog.digest`: sha256 over `json.dumps([...], sort_keys=True, separators=(",", ":"))`.
     pub fn digest(&self) -> Result<String, PyJsonError> {
-        let body = self.to_json()?.dumps(true)?;
+        let body = dumps(&self.to_json()?, CANONICAL_ASCII)?;
         Ok(hex(&Sha256::digest(body.as_bytes())))
     }
 }
@@ -341,7 +339,7 @@ mod tests {
         assert!(log.append(p(1, -0.5)).is_err());
         log.append(p(1, 0.75)).unwrap();
         assert_eq!(
-            log.to_json().unwrap().dumps(true).unwrap(),
+            dumps(&log.to_json().unwrap(), CANONICAL_ASCII).unwrap(),
             "[{\"epoch\":0,\"index\":0,\"loss_hex\":\"0x1.8000000000000p+0\",\"step\":0},\
              {\"epoch\":0,\"index\":1,\"loss_hex\":\"0x1.8000000000000p-1\",\"step\":1}]"
         );

@@ -10,7 +10,7 @@ use qd_train::run_control::{ConsumedPrefix, RunControlError};
 use qd_train::step::ParamSpec;
 use qd_train::trainer::{ConsumedBatch, HostParams};
 
-pub fn oracle() -> serde_json::Value {
+pub fn trainer_oracle() -> serde_json::Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/trainer-oracle.json");
     serde_json::from_str(&std::fs::read_to_string(path).expect("read the oracle fixture")).expect("parse it")
 }

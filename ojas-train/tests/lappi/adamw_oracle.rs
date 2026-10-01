@@ -29,7 +29,7 @@ fn close(name: &str, got: &[f32], want: &[f32]) -> usize {
 
 #[test]
 fn host_adamw_tracks_torch_adamw_step_by_step() {
-    let o = common::oracle();
+    let o = common::trainer_oracle();
     let a = &o["adamw"];
     assert_eq!(common::fhex(&a["weight_decay"]), recipe::WEIGHT_DECAY);
     assert_eq!(common::fhex(&a["eps"]), recipe::EPS);
@@ -64,7 +64,7 @@ fn host_adamw_tracks_torch_adamw_step_by_step() {
 
 #[test]
 fn the_clip_coefficient_matches_torchs_norm() {
-    let o = common::oracle();
+    let o = common::trainer_oracle();
     for (k, step) in o["adamw"]["steps"].as_array().unwrap().iter().enumerate() {
         let grads: Vec<Vec<f32>> = step["grads"].as_array().unwrap().iter().map(as_f32).collect();
         let sq: f64 = grads.iter().flatten().map(|&x| f64::from(x) * f64::from(x)).sum();
