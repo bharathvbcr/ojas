@@ -13,6 +13,7 @@ members = [
     "ojas-metal",
     "ojas-engine",
     "ojas-device",
+    "ojas-kernels",
     "ojas-wgpu",
     "ojas-cuda",
     "ojas-hip",

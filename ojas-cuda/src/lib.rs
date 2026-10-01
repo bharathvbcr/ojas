@@ -76,20 +76,7 @@ impl CudaDevice {
 }
 
 #[cfg(feature = "cuda")]
-const AFFINE_CUDA: &str = r#"
-extern "C" __global__ void affine_f32(
-    float* out,
-    const float* inp,
-    float scale,
-    float bias,
-    unsigned int n
-) {
-    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
-        out[i] = inp[i] * scale + bias;
-    }
-}
-"#;
+const AFFINE_CUDA: &str = ojas_kernels::affine_cuda();
 
 /// cudarc panics when it cannot load `libcuda` or `libnvrtc`. Probe both
 /// first so a host without the driver gets [`DeviceError::NoDevice`].

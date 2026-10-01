@@ -9,28 +9,9 @@
 
 use ojas_device::{require_kind, Device, DeviceError, DeviceInfo};
 
-const AFFINE_SHADER: &str = r#"
-struct Params {
-    scale: f32,
-    bias: f32,
-}
+use ojas_kernels::affine_wgsl;
 
-@group(0) @binding(0) var<storage, read> input_values: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output_values: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
-
-@compute @workgroup_size(64)
-fn main(
-    @builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(num_workgroups) groups: vec3<u32>,
-) {
-    let index = gid.y * groups.x * 64u + gid.x;
-    if (index >= arrayLength(&input_values)) {
-        return;
-    }
-    output_values[index] = input_values[index] * params.scale + params.bias;
-}
-"#;
+const AFFINE_SHADER: &str = affine_wgsl();
 
 /// Lanes per workgroup in `AFFINE_SHADER`.
 const WORKGROUP: u32 = 64;

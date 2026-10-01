@@ -9,6 +9,7 @@ description = "Tiny Metal training step on tessl. Lane B. GPU code is macOS-only
 
 [dependencies]
 ojas-core = { path = "../ojas-core" }
+ojas-device = { path = "../ojas-device" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tessl = { path = "/Users/bharath/Code/research/tessl" }

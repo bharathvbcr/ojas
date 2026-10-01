@@ -1,0 +1,15 @@
+//! Shared kernels for every GPU backend.
+//!
+//! This crate depends only on `ojas-core`. It does not name wgpu, Metal, CUDA,
+//! or HIP types. A future out-of-process backend can use the same geometry,
+//! source text, and parity harness.
+
+#![forbid(unsafe_code)]
+
+mod geometry;
+mod harness;
+mod source;
+
+pub use geometry::{cover_1d, grid_1d, Grid, Limits};
+pub use harness::{linear_close, max_abs, splitmix_f32, ParityOp};
+pub use source::{affine_cuda, affine_wgsl, gemm_cuda, reduce_sum_wgsl, KernelId};

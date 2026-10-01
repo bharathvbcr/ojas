@@ -13,6 +13,9 @@ use crate::OjasError;
 pub enum BackendId {
     Cpu,
     Metal,
+    Wgpu,
+    Cuda,
+    Hip,
 }
 
 /// RMSNorm epsilon for the nanolab default (`mixers.py` `RMSNorm`, `eps=1e-6`).

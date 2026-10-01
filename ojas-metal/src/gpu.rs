@@ -251,6 +251,12 @@ pub struct Session {
 
 impl Session {
     pub fn open() -> Result<Self, OjasError> {
+        ojas_device::require_kind(ojas_device::Device::Metal, ojas_device::Device::Metal).map_err(
+            |err| OjasError::Backend {
+                id: BackendId::Metal,
+                detail: err.to_string(),
+            },
+        )?;
         let rt = GpuRuntime::new().map_err(metal)?;
         let path = env!("OJAS_GATE_METALLIB");
         if path.is_empty() {

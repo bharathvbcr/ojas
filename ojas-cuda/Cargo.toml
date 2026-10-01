@@ -14,6 +14,7 @@ cuda = ["dep:cudarc"]
 
 [dependencies]
 ojas-device = { path = "../ojas-device" }
+ojas-kernels = { path = "../ojas-kernels" }
 # crates.io cudarc 0.19.10, published 2026-09-24.
 # driver + fallback-dynamic-loading: the safe driver API, loaded at runtime.
 # cublas and the other default libraries stay off.

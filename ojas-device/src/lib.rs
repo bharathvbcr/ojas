@@ -39,6 +39,12 @@ pub enum DeviceError {
     NoDevice { kind: Device, detail: String },
     /// The caller asked for one kind and the call is bound to another.
     DeviceMismatch { expected: Device, actual: Device },
+    /// A size or a grid did not fit. The device itself was present.
+    Capacity { kind: Device, detail: String },
+    /// A kernel failed to compile. The device itself was present.
+    Compile { kind: Device, detail: String },
+    /// A kernel failed to launch or finish. The device itself was present.
+    Launch { kind: Device, detail: String },
 }
 
 impl fmt::Display for DeviceError {
@@ -56,11 +62,27 @@ impl fmt::Display for DeviceError {
                     "device mismatch: expected {expected:?}, actual {actual:?}"
                 )
             }
+            DeviceError::Capacity { kind, detail } => write!(f, "{kind:?} capacity: {detail}"),
+            DeviceError::Compile { kind, detail } => write!(f, "{kind:?} compile: {detail}"),
+            DeviceError::Launch { kind, detail } => write!(f, "{kind:?} launch: {detail}"),
         }
     }
 }
 
 impl std::error::Error for DeviceError {}
+
+impl Device {
+    /// The [`ojas_core::BackendId`] this device selects. `Vulkan` is the wgpu path.
+    pub fn backend_id(self) -> ojas_core::BackendId {
+        match self {
+            Device::Cpu => ojas_core::BackendId::Cpu,
+            Device::Metal => ojas_core::BackendId::Metal,
+            Device::Cuda => ojas_core::BackendId::Cuda,
+            Device::Hip => ojas_core::BackendId::Hip,
+            Device::Vulkan => ojas_core::BackendId::Wgpu,
+        }
+    }
+}
 
 /// Refuse a call whose kind is not the kind of the runtime that will execute it.
 pub fn require_kind(expected: Device, actual: Device) -> Result<(), DeviceError> {
@@ -176,5 +198,44 @@ mod tests {
             assert!(not_compiled.to_string().contains("not compiled"));
         }
         assert!(probe().iter().all(|d| d.backend == Device::Cpu));
+    }
+
+    #[test]
+    fn capacity_compile_and_launch_are_not_no_device() {
+        for kind in ALL {
+            let capacity = DeviceError::Capacity {
+                kind,
+                detail: "n exceeds u32".to_string(),
+            };
+            let compile = DeviceError::Compile {
+                kind,
+                detail: "nvrtc".to_string(),
+            };
+            let launch = DeviceError::Launch {
+                kind,
+                detail: "grid".to_string(),
+            };
+            let absent = DeviceError::NoDevice {
+                kind,
+                detail: "none".to_string(),
+            };
+            assert_ne!(capacity, absent);
+            assert_ne!(compile, absent);
+            assert_ne!(launch, absent);
+            assert!(capacity.to_string().contains("capacity"));
+            assert!(compile.to_string().contains("compile"));
+            assert!(launch.to_string().contains("launch"));
+            assert!(!capacity.to_string().contains("no "));
+        }
+    }
+
+    #[test]
+    fn device_maps_to_one_backend_id() {
+        use ojas_core::BackendId;
+        assert_eq!(Device::Cpu.backend_id(), BackendId::Cpu);
+        assert_eq!(Device::Metal.backend_id(), BackendId::Metal);
+        assert_eq!(Device::Cuda.backend_id(), BackendId::Cuda);
+        assert_eq!(Device::Hip.backend_id(), BackendId::Hip);
+        assert_eq!(Device::Vulkan.backend_id(), BackendId::Wgpu);
     }
 }

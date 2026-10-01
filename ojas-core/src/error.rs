@@ -42,6 +42,11 @@ pub enum OjasError {
         id: BackendId,
         detail: String,
     },
+    /// The named backend cannot run this op. There is no CPU fallback.
+    Unsupported {
+        op: &'static str,
+        detail: String,
+    },
 }
 
 impl fmt::Display for OjasError {
@@ -66,6 +71,7 @@ impl fmt::Display for OjasError {
             ),
             OjasError::Poisoned => write!(f, "poisoned"),
             OjasError::Backend { id, detail } => write!(f, "backend {id:?}: {detail}"),
+            OjasError::Unsupported { op, detail } => write!(f, "{op}: unsupported: {detail}"),
         }
     }
 }
