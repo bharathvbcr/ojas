@@ -32,6 +32,7 @@
 //! values `tools/qd_train_oracle_trainer.py` dumped from torch itself, and reports how many
 //! elements are bit-identical.
 
+use crate::recipe::EntryHyper;
 use crate::step::{AdamWHyper, StepError};
 
 /// The two moments of one tensor.
@@ -48,6 +49,61 @@ impl Moments {
             v: vec![0.0; n],
         }
     }
+}
+
+/// One entry's optimizer state: its moments and its own AdamW step count. torch keeps
+/// `state["step"]` per parameter and advances it only on a step where that parameter has a
+/// gradient, so an entry's count can lag the model's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryState {
+    pub moments: Moments,
+    pub steps: u64,
+}
+
+impl EntryState {
+    pub fn zeros(n: usize) -> Self {
+        Self {
+            moments: Moments::zeros(n),
+            steps: 0,
+        }
+    }
+}
+
+/// One entry's AdamW step, as `torch.optim.AdamW` takes it over one parameter.
+///
+/// - `grad` `None` is torch's `p.grad is None` (after `zero_grad(set_to_none=True)`, a parameter
+///   no loss reached this step). The entry is skipped: no decay, no moment update, and no step
+///   count. Returns `false`.
+/// - Otherwise the entry's own count advances and is the bias-correction step. The entry's rate
+///   is `lr * row.lr_scale`, and its decoupled decay is `1 - (lr * row.lr_scale) *
+///   row.weight_decay`: torch's group `lr` is already scaled, and `param.mul_(1 - lr *
+///   weight_decay)` reads it. Eps and betas are the row's own. `grad_scale` is the clip
+///   coefficient. Returns `true`.
+pub fn adamw_entry_step(
+    param: &mut [f32],
+    grad: Option<&[f32]>,
+    state: &mut EntryState,
+    row: &EntryHyper,
+    lr: f64,
+    grad_scale: f64,
+) -> Result<bool, StepError> {
+    let Some(grad) = grad else {
+        return Ok(false);
+    };
+    let t = state
+        .steps
+        .checked_add(1)
+        .ok_or_else(|| StepError::Contract(format!("{}: the step count overflows", row.name)))?;
+    let hyper = AdamWHyper {
+        lr,
+        beta1: row.beta1,
+        beta2: row.beta2,
+        eps: row.eps,
+        grad_scale,
+    };
+    adamw_update(param, grad, &mut state.moments, &hyper, lr * row.lr_scale, row.weight_decay, t)?;
+    state.steps = t;
+    Ok(true)
 }
 
 /// One AdamW update of `param` in place. `lr` is this tensor's learning rate (the schedule's

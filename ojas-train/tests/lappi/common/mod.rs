@@ -304,12 +304,14 @@ impl FtBatch for ToyBatch {
 }
 
 /// A pointer head: score(c) = u . h[c] for each candidate, abstain score b; start and end are
-/// two cross-entropies over the same scores (the toy shares one scorer for both).
+/// two cross-entropies over the same scores (the toy shares one scorer for both). `reached` is
+/// torch's `grad is not None`: set by a span row's loss, cleared by `zero_grads`.
 pub struct ToySpanHead {
     pub u: Vec<f32>,
     pub b: Vec<f32>,
     pub gu: Vec<f32>,
     pub gb: Vec<f32>,
+    pub reached: bool,
 }
 
 impl ToySpanHead {
@@ -319,6 +321,7 @@ impl ToySpanHead {
             b: vec![0.2],
             gu: vec![0.0; hidden],
             gb: vec![0.0],
+            reached: false,
         }
     }
 
@@ -348,18 +351,21 @@ impl HostParams for ToySpanHead {
     fn zero_grads(&mut self) {
         self.gu.iter_mut().for_each(|x| *x = 0.0);
         self.gb[0] = 0.0;
+        self.reached = false;
     }
 
-    fn grads(&self) -> Vec<&[f32]> {
-        vec![&self.gu, &self.gb]
+    fn grads(&self) -> Vec<Option<&[f32]>> {
+        let r = self.reached;
+        vec![r.then_some(self.gu.as_slice()), r.then_some(self.gb.as_slice())]
     }
 
     fn values(&self) -> Vec<&[f32]> {
         vec![&self.u, &self.b]
     }
 
-    fn values_and_grads(&mut self) -> Vec<(&mut [f32], &[f32])> {
-        vec![(&mut self.u, &self.gu), (&mut self.b, &self.gb)]
+    fn values_and_grads(&mut self) -> Vec<(&mut [f32], Option<&[f32]>)> {
+        let r = self.reached;
+        vec![(&mut self.u, r.then_some(self.gu.as_slice())), (&mut self.b, r.then_some(self.gb.as_slice()))]
     }
 }
 
@@ -405,6 +411,7 @@ impl SpanHead for ToySpanHead {
             }
         }
         self.gb[0] += (ds[s.len() - 1] * sc) as f32;
+        self.reached = true;
         Ok((loss, dh))
     }
 }

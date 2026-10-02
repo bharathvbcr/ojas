@@ -215,6 +215,12 @@ pub trait StepProvider {
     fn supports_lr_scale(&self) -> bool;
 
     /// One AdamW update of every parameter from the bank; `step` is the 1-based count it makes.
+    ///
+    /// Every provider entry is stepped, with this one model-wide count. That is torch's
+    /// per-parameter AdamW only while every entry has a gradient on every step. A transformer
+    /// tower does: each entry is on the forward path of every sequence. The span head does not,
+    /// so it is a host entry ([`crate::adamw::adamw_entry_step`]). A provider whose model can
+    /// leave an entry without a gradient breaks this contract.
     fn adamw_step(&mut self, hyper: &AdamWHyper, step: u64, lr_scale: &[f64], weight_decay: &[f64]) -> Result<(), StepError>;
 
     /// Optimizer steps taken so far (torch's `state["step"]`).

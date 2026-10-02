@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::adamw::{adamw_update, Moments};
+use crate::adamw::{adamw_entry_step, EntryState, Moments};
 use serde_json::Value;
 
 use crate::pyjson::{dumps, float_fromhex, float_hex, obj, PyJsonError, CANONICAL};
@@ -48,8 +48,10 @@ use crate::step::{AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, Step
 /// `run_control.MAX_GRAD_ACCUM`.
 pub const MAX_GRAD_ACCUM: u32 = 4096;
 
-/// The checkpoint directory format this module writes and reads.
-pub const CHECKPOINT_FORMAT: &str = "qd-train-checkpoint-v1";
+/// The checkpoint directory format this module writes and reads. v2 adds each host entry's own
+/// AdamW step count (`host_steps`). A v1 checkpoint has no counts and is refused: resuming it
+/// would have to guess them.
+pub const CHECKPOINT_FORMAT: &str = "qd-train-checkpoint-v2";
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum TrainError {
@@ -91,17 +93,23 @@ pub trait ConsumedBatch {
 }
 
 /// Parameters trained on the host beside the provider's (Lappi's span head).
+///
+/// A gradient is `None` until a loss reaches the tensor, as torch's `p.grad` is after
+/// `zero_grad(set_to_none=True)`. The loop skips a `None` entry's AdamW step entirely
+/// ([`crate::adamw::adamw_entry_step`]). This matters for the span head: a letter-only batch
+/// never reaches it.
 pub trait HostParams {
     /// One entry per tensor, in a fixed order.
     fn entries(&self) -> Vec<ParamSpec>;
-    /// Zero every gradient. Called at the start of each optimizer step.
+    /// Reset every gradient to `None`. Called at the start of each optimizer step.
     fn zero_grads(&mut self);
-    /// Every gradient, in [`HostParams::entries`] order.
-    fn grads(&self) -> Vec<&[f32]>;
+    /// Every gradient, in [`HostParams::entries`] order: `None` where no loss reached the tensor
+    /// since [`HostParams::zero_grads`].
+    fn grads(&self) -> Vec<Option<&[f32]>>;
     /// Every value, in [`HostParams::entries`] order.
     fn values(&self) -> Vec<&[f32]>;
     /// `(value, gradient)` of every tensor, in [`HostParams::entries`] order.
-    fn values_and_grads(&mut self) -> Vec<(&mut [f32], &[f32])>;
+    fn values_and_grads(&mut self) -> Vec<(&mut [f32], Option<&[f32]>)>;
 }
 
 /// One sequence of a micro-batch, as the objective plans it.
@@ -336,7 +344,8 @@ pub struct ResumeState {
     pub consumed_digest: String,
     pub host_entries: Vec<ParamSpec>,
     pub host_values: Vec<Vec<f32>>,
-    pub host_moments: Vec<Moments>,
+    /// Each host entry's moments and its own AdamW step count.
+    pub host_state: Vec<EntryState>,
 }
 
 /// Optional callbacks.
@@ -421,9 +430,9 @@ where
             provider.describe()
         )));
     }
-    let mut host_moments: Vec<Moments> = host_entries
+    let mut host_state: Vec<EntryState> = host_entries
         .iter()
-        .map(|e| e.numel().map(Moments::zeros))
+        .map(|e| e.numel().map(EntryState::zeros))
         .collect::<Result<_, _>>()?;
 
     let mut optimizer_step = 0u64;
@@ -472,7 +481,13 @@ where
                 value.copy_from_slice(saved);
             }
         }
-        host_moments = r.host_moments;
+        if let Some(s) = r.host_state.iter().find(|s| s.steps > r.optimizer_step) {
+            return Err(TrainError::Refused(format!(
+                "a host entry has taken {} AdamW steps in a checkpoint at optimizer step {}",
+                s.steps, r.optimizer_step
+            )));
+        }
+        host_state = r.host_state;
         optimizer_step = r.optimizer_step;
         log = r.loss_log;
         steps = r.steps;
@@ -671,11 +686,13 @@ where
 
         let lr = cfg.schedule.lr_at(optimizer_step)?;
         let tower_sq = provider.grad_sq_norm()?;
+        // `clip_grad_norm_` reads only parameters whose grad is not None.
         let host_sq: f64 = objective
             .host_ref()
             .map(|h| {
                 h.grads()
-                    .iter()
+                    .into_iter()
+                    .flatten()
                     .map(|g| g.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>())
                     .sum()
             })
@@ -693,19 +710,20 @@ where
         let t = optimizer_step + 1;
         // Host shapes are checked before the provider moves, so the two halves move together.
         if let Some(h) = objective.host_ref() {
-            if h.values().len() != host_rows.len() || host_moments.len() != host_rows.len() {
+            if h.values().len() != host_rows.len() || host_state.len() != host_rows.len() {
                 return Err(TrainError::Refused("the host parameters no longer match the optimizer table".into()));
             }
-            for ((g, v), m) in h.grads().iter().zip(h.values()).zip(&host_moments) {
-                if g.len() != v.len() || m.m.len() != v.len() {
+            for ((g, v), s) in h.grads().into_iter().zip(h.values()).zip(&host_state) {
+                if g.is_some_and(|g| g.len() != v.len()) || s.moments.m.len() != v.len() {
                     return Err(TrainError::Refused("a host tensor's gradient or moments do not fit it".into()));
                 }
             }
         }
         provider.adamw_step(&hyper, t, &lr_scale, &weight_decay)?;
         if let Some(h) = objective.host() {
-            for (((value, grad), m), row) in h.values_and_grads().into_iter().zip(host_moments.iter_mut()).zip(&host_rows) {
-                adamw_update(value, grad, m, &hyper, lr * row.lr_scale, row.weight_decay, t)?;
+            // Each host entry steps on its own count, and not at all without a gradient.
+            for (((value, grad), s), row) in h.values_and_grads().into_iter().zip(host_state.iter_mut()).zip(&host_rows) {
+                adamw_entry_step(value, grad, s, row, lr, coef)?;
             }
         }
         log.append(LossPoint {
@@ -746,7 +764,7 @@ where
                     channel_log: &channel_log,
                     consumed: &consumed,
                 };
-                last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_moments, last_checkpoint.as_deref())?);
+                last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_state, last_checkpoint.as_deref())?);
             }
         }
         if let Some(eta) = &cfg.eta
@@ -779,7 +797,7 @@ where
                 channel_log: &channel_log,
                 consumed: &consumed,
             };
-            last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_moments, last_checkpoint.as_deref())?);
+            last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_state, last_checkpoint.as_deref())?);
         }
     }
     Ok(TrainResult {
@@ -870,7 +888,7 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     body: &CheckpointBody<'_>,
     provider: &mut P,
     objective: &O,
-    host_moments: &[Moments],
+    host_state: &[EntryState],
     previous: Option<&Path>,
 ) -> Result<PathBuf, TrainError> {
     fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
@@ -895,12 +913,20 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         provider_files.push((rel, Value::from(hex(&Sha256::digest(&bytes)))));
     }
 
-    // Host values and moments: raw little-endian f32, value then m then v per entry.
+    // Host values and moments: raw little-endian f32, value then m then v per entry. Each
+    // entry's own AdamW step count goes in trainer.json beside its name.
     let mut host_bytes = Vec::new();
     let host_entries = objective.host_ref().map(|h| h.entries()).unwrap_or_default();
+    if host_entries.len() != host_state.len() {
+        return Err(TrainError::Refused(format!(
+            "{} host entries and {} optimizer states",
+            host_entries.len(),
+            host_state.len()
+        )));
+    }
     if let Some(h) = objective.host_ref() {
-        for (v, m) in h.values().iter().zip(host_moments) {
-            for x in v.iter().chain(&m.m).chain(&m.v) {
+        for (v, s) in h.values().iter().zip(host_state) {
+            for x in v.iter().chain(&s.moments.m).chain(&s.moments.v) {
                 host_bytes.extend_from_slice(&x.to_le_bytes());
             }
         }
@@ -949,10 +975,12 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
             Value::Array(
                 host_entries
                     .iter()
-                    .map(|e| {
+                    .zip(host_state)
+                    .map(|(e, s)| {
                         obj([
                             ("name", Value::from(e.name.clone())),
                             ("shape", Value::from(e.shape.clone())),
+                            ("adamw_steps", Value::from(s.steps)),
                         ])
                     })
                     .collect::<Result<_, PyJsonError>>()?,
@@ -1045,6 +1073,7 @@ impl ResumeState {
             }
         }
         let mut host_entries = Vec::new();
+        let mut host_steps = Vec::new();
         for e in field(&v, "host_entries", p)?.as_array().ok_or_else(|| TrainError::Refused("host_entries".into()))? {
             let name = field(e, "name", p)?.as_str().ok_or_else(|| TrainError::Refused("host entry name".into()))?;
             let shape = field(e, "shape", p)?
@@ -1053,6 +1082,7 @@ impl ResumeState {
                 .iter()
                 .map(|d| d.as_u64().and_then(|d| usize::try_from(d).ok()).ok_or_else(|| TrainError::Refused("host dim".into())))
                 .collect::<Result<Vec<_>, _>>()?;
+            host_steps.push(as_u64(e, "adamw_steps", p)?);
             host_entries.push(ParamSpec::new(name, &shape));
         }
         let host_path = ckpt_dir.join("host.f32");
@@ -1068,8 +1098,8 @@ impl ResumeState {
             .collect();
         let mut at = 0usize;
         let mut host_values = Vec::new();
-        let mut host_moments = Vec::new();
-        for e in &host_entries {
+        let mut host_state = Vec::new();
+        for (e, &steps) in host_entries.iter().zip(&host_steps) {
             let n = e.numel()?;
             let take = |at: &mut usize| -> Result<Vec<f32>, TrainError> {
                 let end = *at + n;
@@ -1080,9 +1110,12 @@ impl ResumeState {
                 Ok(s.to_vec())
             };
             host_values.push(take(&mut at)?);
-            host_moments.push(Moments {
-                m: take(&mut at)?,
-                v: take(&mut at)?,
+            host_state.push(EntryState {
+                moments: Moments {
+                    m: take(&mut at)?,
+                    v: take(&mut at)?,
+                },
+                steps,
             });
         }
         if at != floats.len() {
@@ -1106,7 +1139,7 @@ impl ResumeState {
                 .to_string(),
             host_entries,
             host_values,
-            host_moments,
+            host_state,
         };
         if state.loss_log.len() as u64 != state.optimizer_step || state.steps.len() as u64 != state.optimizer_step {
             return Err(TrainError::Refused(format!(
