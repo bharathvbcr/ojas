@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 240" role="img">
+<title>Nanolab block forward + backward</title>
+<desc>d=768, T=1024, 6 threads each. Block forward was 14.4 ms on both sides. docs/bench-cpu-vs-torch.md</desc>
+<rect width="100%" height="100%" fill="#08080a"/>
+<text x="16" y="28" fill="#fda4af" font-size="12" font-family="ui-monospace,monospace" letter-spacing="1.5">QUIET CPU  ·  2026-10-02  ·  APPLE M5 PRO</text>
+<text x="16" y="52" fill="#f8fafc" font-size="18" font-family="ui-sans-serif,system-ui,sans-serif" font-weight="700">Nanolab block forward + backward</text>
+<text x="16" y="94" fill="#e2e8f0" font-size="13" font-family="ui-sans-serif,system-ui,sans-serif">ojas</text><rect x="250" y="78" width="314.8" height="20" rx="4" fill="#e11d48"/><text x="572.8" y="93" fill="#f8fafc" font-size="13" font-family="ui-monospace,monospace">41.5 ms</text><text x="16" y="130" fill="#e2e8f0" font-size="13" font-family="ui-sans-serif,system-ui,sans-serif">PyTorch 2.13, default SDPA</text><rect x="250" y="114" width="327.0" height="20" rx="4" fill="#64748b"/><text x="585.0" y="129" fill="#f8fafc" font-size="13" font-family="ui-monospace,monospace">43.1 ms</text><text x="16" y="166" fill="#e2e8f0" font-size="13" font-family="ui-sans-serif,system-ui,sans-serif">PyTorch 2.13, MATH SDPA</text><rect x="250" y="150" width="418.0" height="20" rx="4" fill="#fb7185"/><text x="676.0" y="165" fill="#f8fafc" font-size="13" font-family="ui-monospace,monospace">55.1 ms</text>
+<text x="16" y="224" fill="#94a3b8" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">d=768, T=1024, 6 threads each. Block forward was 14.4 ms on both sides. docs/bench-cpu-vs-torch.md</text>
+</svg>

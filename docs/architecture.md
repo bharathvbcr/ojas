@@ -266,12 +266,13 @@ flowchart TD
 ## 7. Web Documentation, Identity & Domain Ecosystem
 
 ### 7.1 Web Application Architecture
-The site ([`site/`](file:///Users/bharath/Code/research/ojas/site), mirrored to [`docs/`](file:///Users/bharath/Code/research/ojas/docs)) is several pages. Home holds the labs. `why.html` is the motivation, `benchmarks.html` the timings, `roadmap.html` what comes next, and `guide/` the reference:
+The site ([`site/index.html`](file:///Users/bharath/Code/research/ojas/site/index.html), mirrored to [`docs/index.html`](file:///Users/bharath/Code/research/ojas/docs/index.html)) is one page. The labs, why, benchmarks, roadmap, and guide are sections of it:
 * **Guarantee labs:** a determinism lab that sums the same float32 values with split-k and with the Exact order, plus memory budget, device refusal, panic firewall, and checked shape and view labs. Each prints the error text from the source.
 * **Why ojas:** the reasons, the author's account of the defects in `docs/audit.md` that led to ojas, and what it is and is not ready for.
-* **Roadmap:** `roadmap.html`. The next phase is a real model through the public API, then the measured Metal attention gap.
+* **Benchmarks:** the 2026-10-02 CPU plots (block forward + backward, both recorded training-step runs, and the ops where ojas is slower) beside the scorecard tables.
+* **Roadmap:** the model and trainer have landed. What is left is proof at full size, speed against PyTorch, and breadth.
 * **Developer docs:** quickstart (with Rust and Go snippets compiled against this tree), core concepts, feature reference, Go API reference, architecture and crates, status and limits, and contributing rules.
-* **Command palette:** `⌘K` or `/` searches the labs and every docs article.
+* **Command palette:** `⌘K` or `/` searches the labs and every section.
 
 ### 7.2 Visual Identity (ojas)
 One logo: a regular icosahedron of dark red liquid glass with a glowing core, in the same material as the LiquiTask logo. [`docs/brand/ojas-logo-source.png`](brand/ojas-logo-source.png) is the only source; [`docs/brand/render.sh`](brand/render.sh) derives the transparent logo, the tile, the favicon, touch and manifest icons, and the 1200×630 social card from it. Asset list and regeneration: [`web-and-domain.md`](web-and-domain.md#2-visual-identity-one-logo).

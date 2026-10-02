@@ -68,18 +68,18 @@
     <div id="announcement" class="w-full bg-gradient-to-r from-brand-950 via-brand-900 to-black border-b border-brand-800/40 text-xs py-2 px-4 font-medium tracking-wide">
       <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
         <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified 2026-10-01</span>
-        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1071 Rust tests and 38 Go tests passed in the last full run (2026-10-01). CPU timings re-run 2026-10-02. See the guide for what that covers.</span>
+        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1071 Rust tests and 38 Go tests passed in the last full run (2026-10-01). CPU timings re-run 2026-10-02. See <a href="#doc-status" class="underline underline-offset-2 hover:text-white">status</a> for what that covers.</span>
         <button type="button" id="dismissAnnounce" class="ml-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10" aria-label="Dismiss announcement">&times;</button>
       </div>
     </div>
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
-      <a href="index.html" class="flex items-center gap-3 shrink-0">
-        <img src="assets/ojas-logo.webp" alt="" class="w-10 h-10" width="40" height="40">
+      <a href="#determinism" class="flex items-center gap-3 shrink-0">
+        <img src="assets/ojas-tile-512.png" alt="The ojas logo: a dark red liquid-glass icosahedron with a glowing core" class="w-10 h-10" width="40" height="40">
         <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
         <span class="hidden sm:inline text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 border border-brand-500/30">v0.1.0</span>
       </a>
       <nav class="hidden xl:flex items-center gap-0.5" aria-label="Site">
-        <a href="index.html" aria-current="page" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Home</a><a href="why.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Why ojas</a><a href="benchmarks.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a><a href="roadmap.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Roadmap</a><a href="guide/index.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="#determinism" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Home</a><a href="#why" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Why ojas</a><a href="#benchmarks" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a><a href="#roadmap" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Roadmap</a><a href="#guide" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
       </nav>
       <div class="flex items-center gap-2 shrink-0">
         <button id="cmdBtn" type="button" class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white transition" aria-label="Search the site">
@@ -87,7 +87,7 @@
           <span class="hidden lg:inline">Search</span>
           <kbd class="hidden lg:inline px-1.5 py-0.5 rounded bg-black/40 border border-white/10 text-[10px]">⌘K</kbd>
         </button>
-        <a href="guide/quickstart.html" class="hidden xl:flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/30 transition">Start here</a>
+        <a href="#doc-quickstart" class="hidden xl:flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/30 transition">Start here</a>
         <a href="https://github.com/bharathvbcr/ojas" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition" aria-label="ojas on GitHub">
           <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"></path></svg>
         </a>
@@ -99,7 +99,7 @@
     </div>
     <nav id="mobileNav" class="xl:hidden hidden border-t border-white/10" aria-label="Site">
       <div class="max-w-7xl mx-auto px-4 py-3 grid grid-cols-2 gap-1">
-        <a href="index.html" aria-current="page" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Home</a><a href="why.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Why ojas</a><a href="benchmarks.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Benchmarks</a><a href="roadmap.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Roadmap</a><a href="guide/index.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Guide</a>
+        <a href="#determinism" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Home</a><a href="#why" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Why ojas</a><a href="#benchmarks" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Benchmarks</a><a href="#roadmap" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Roadmap</a><a href="#guide" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Guide</a>
       </div>
     </nav>
     <div id="readProgress" class="h-0.5 bg-white/5" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Page progress">
@@ -115,7 +115,10 @@
       <li><a href="#determinism" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Determinism</a></li>
       <li><a href="#labs" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Guarantees</a></li>
       <li><a href="#host" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Your machine</a></li>
-      <li><a href="#next" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Keep going</a></li>
+      <li><a href="#why" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Why</a></li>
+      <li><a href="#benchmarks" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Benchmarks</a></li>
+      <li><a href="#roadmap" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Roadmap</a></li>
+      <li><a href="#guide" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Guide</a></li>
     </ol>
   </nav>
   <section id="determinism" class="relative pt-12 pb-20 lg:pt-16 lg:pb-24 overflow-hidden">
@@ -144,7 +147,7 @@
             <a href="#labs" class="w-full sm:w-auto px-6 py-3.5 rounded-xl font-semibold text-sm bg-gradient-to-r from-brand-600 via-brand-500 to-brand-flame text-white shadow-glow-red hover:brightness-110 transition flex items-center justify-center gap-2">
               Try each guarantee
             </a>
-            <a href="roadmap.html" class="w-full sm:w-auto px-6 py-3.5 rounded-xl font-semibold text-sm bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white transition flex items-center justify-center gap-2">
+            <a href="#roadmap" class="w-full sm:w-auto px-6 py-3.5 rounded-xl font-semibold text-sm bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white transition flex items-center justify-center gap-2">
               What&#39;s next
             </a>
             <a href="https://github.com/bharathvbcr/ojas" target="_blank" rel="noopener noreferrer" class="w-full sm:w-auto px-5 py-3.5 rounded-xl font-medium text-sm text-slate-400 hover:text-white flex items-center justify-center gap-1.5 transition">
@@ -518,7 +521,7 @@
         <div class="glass-card rounded-2xl p-5">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">3 &middot; Go API</p>
           <h3 class="text-white font-semibold mb-2">Paths and ids in, losses out</h3>
-          <p class="text-xs text-slate-300 leading-relaxed"><span class="font-mono">LoadModel</span>, <span class="font-mono">OpenTrainer</span>, <span class="font-mono">TrainStep</span>, <span class="font-mono">SaveCheckpoint</span>, <span class="font-mono">Resume</span>, a GPT-2 tokenizer and <span class="font-mono">GenerateIDs</span>. Weights never cross the boundary, and a step reads back only its loss. See the <a href="guide/go.html" class="text-brand-300 hover:text-white underline underline-offset-2">Go API</a>.</p>
+          <p class="text-xs text-slate-300 leading-relaxed"><span class="font-mono">LoadModel</span>, <span class="font-mono">OpenTrainer</span>, <span class="font-mono">TrainStep</span>, <span class="font-mono">SaveCheckpoint</span>, <span class="font-mono">Resume</span>, a GPT-2 tokenizer and <span class="font-mono">GenerateIDs</span>. Weights never cross the boundary, and a step reads back only its loss. See the <a href="#doc-go" class="text-brand-300 hover:text-white underline underline-offset-2">Go API</a>.</p>
         </div>
         <div class="glass-card rounded-2xl p-5">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">4 &middot; Devices</p>
@@ -555,7 +558,7 @@
         <div class="glass-card rounded-2xl p-5">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">4 &middot; From Go</p>
           <h3 class="text-white font-semibold mb-2">You choose the numbers</h3>
-          <p class="text-xs text-slate-300 leading-relaxed"><span class="font-mono">SystemProfile(ctx, budget, measureBandwidth)</span> returns a versioned record. A Go host then calls <span class="font-mono">SetMemoryCeiling</span> and sets <span class="font-mono">LoadOptions.Threads</span> itself. Defaults are unchanged on purpose: ojas prefers explicit to inferred, so adapting is opt-in. See <a href="guide/features.html" class="text-brand-300 hover:text-white underline underline-offset-2">features</a>.</p>
+          <p class="text-xs text-slate-300 leading-relaxed"><span class="font-mono">SystemProfile(ctx, budget, measureBandwidth)</span> returns a versioned record. A Go host then calls <span class="font-mono">SetMemoryCeiling</span> and sets <span class="font-mono">LoadOptions.Threads</span> itself. Defaults are unchanged on purpose: ojas prefers explicit to inferred, so adapting is opt-in. See <a href="#doc-features" class="text-brand-300 hover:text-white underline underline-offset-2">features</a>.</p>
         </div>
       </div>
       <div class="mt-6 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 max-w-4xl">
@@ -568,27 +571,27 @@
   <section id="next" class="py-16 border-t border-white/10">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="max-w-3xl mb-8">
-        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Four pages, one engine</span>
-        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">The rest of the site has a place of its own</h2>
-        <p class="text-slate-400 mt-3 leading-relaxed">The labs stay here. The reason, the timings, the plan, and the reference each have a page, so none of them has to scroll past the others.</p>
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">One page</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">The rest of ojas is on this page</h2>
+        <p class="text-slate-400 mt-3 leading-relaxed">The labs stay above. The reason, the timings, the plan, and the reference follow, each at its own anchor.</p>
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <a href="why.html" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
+        <a href="#why" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Why</p>
           <h3 class="text-white font-semibold mb-2">Why ojas exists</h3>
           <p class="text-xs text-slate-300 leading-relaxed">The guarantees, the defects in the earlier engines that motivated them, and where ojas is a good fit today.</p>
         </a>
-        <a href="benchmarks.html" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
+        <a href="#benchmarks" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Evidence</p>
           <h3 class="text-white font-semibold mb-2">Timings</h3>
-          <p class="text-xs text-slate-300 leading-relaxed">Two recorded CPU steps and a 27-case op scorecard against PyTorch 2.13, with the cases ojas loses listed beside the ones it wins.</p>
+          <p class="text-xs text-slate-300 leading-relaxed">Two recorded CPU steps and a 27-case op scorecard against PyTorch 2.13, with the cases ojas loses plotted beside the ones it wins.</p>
         </a>
-        <a href="roadmap.html" class="glass-card rounded-2xl p-5 block border border-brand-500/30 hover:border-brand-400/60 transition">
+        <a href="#roadmap" class="glass-card rounded-2xl p-5 block border border-brand-500/30 hover:border-brand-400/60 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Next</p>
           <h3 class="text-white font-semibold mb-2">Roadmap</h3>
           <p class="text-xs text-slate-300 leading-relaxed">The model and trainer have landed. Next: a recorded full-size run, the measured GPU gaps, then bf16 and CUDA.</p>
         </a>
-        <a href="guide/index.html" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
+        <a href="#guide" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Reference</p>
           <h3 class="text-white font-semibold mb-2">Developer guide</h3>
           <p class="text-xs text-slate-300 leading-relaxed">Quickstart, concepts, the Go API, crate layout, current limits, and the rules for a change.</p>
@@ -597,17 +600,778 @@
     </div>
   </section>
 
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+    </div>
+  <section id="why" class="py-20 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-12">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Why ojas</span>
+        <h2 class="text-3xl sm:text-5xl font-extrabold tracking-tight mt-2 text-white">A wrong answer is worse than an error</h2>
+        <p class="text-slate-400 text-base sm:text-lg mt-4 leading-relaxed">
+          Most ML bugs that cost days do not crash. A kernel clamps a dimension, a counter wraps, a NaN slips past a check, a test skips when the GPU is missing, and training carries on producing numbers. ojas makes each of those a typed error at the point it happens.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div class="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4 content-start">
+          <div class="glass-card rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-2">Reproducible by default</h3>
+            <p class="text-sm text-slate-300 leading-relaxed">The default <span class="font-mono text-brand-300">Numerics::Exact</span> tier gives the same bits at 1 to 18 threads. A loss curve that moves after a change moved because of the change, not the scheduler.</p>
+          </div>
+          <div class="glass-card rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-2">Failure is typed and early</h3>
+            <p class="text-sm text-slate-300 leading-relaxed"><span class="font-mono text-brand-300">CapacityExceeded</span>, <span class="font-mono text-brand-300">UnsupportedHeadDim</span>, <span class="font-mono text-brand-300">NonFinite</span> and <span class="font-mono text-brand-300">OutOfRange</span> are values, not log lines. On the CPU an AdamW step with a bad input is refused before it writes anything. wgpu reports a NaN at the next sync and names the op that produced it.</p>
+          </div>
+          <div class="glass-card rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-2">The device you asked for</h3>
+            <p class="text-sm text-slate-300 leading-relaxed">A Metal or wgpu session either opens that device or fails to load. A backend that has not implemented an upload returns <span class="font-mono text-brand-300">Unsupported</span> instead of computing on the host.</p>
+          </div>
+          <div class="glass-card rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-2">It reads the machine first</h3>
+            <p class="text-sm text-slate-300 leading-relaxed"><span class="font-mono text-brand-300">probe_system</span> reports memory, cores, caches and whether memory is unified, and a plan cuts your budget to fit. A field it cannot read stays <span class="font-mono text-brand-300">Unknown</span>. The point is a refusal at the start of a run, not a crash at hour three.</p>
+          </div>
+          <div class="glass-card rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-2">Embeds in a Go service</h3>
+            <p class="text-sm text-slate-300 leading-relaxed">No Python runtime and no model server. The engine links into the Go binary through gusset, and an engine panic is an error value, not a dead process.</p>
+          </div>
+          <div class="glass-card rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-2">Every claim is a test</h3>
+            <p class="text-sm text-slate-300 leading-relaxed">Each guarantee is backed by a test in the repo, and the home labs name the file. Most library crates use <span class="font-mono text-brand-300">#![forbid(unsafe_code)]</span>; <span class="font-mono">ojas-simd</span>, <span class="font-mono">ojas-device</span>, <span class="font-mono">ojas-qwen35</span> and the gusset engine crate are exceptions, and the CUDA and HIP crates forbid it only while their feature is off. Release builds keep overflow checks on.</p>
+          </div>
+          <div class="glass-card rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-2">Numbers you can recheck</h3>
+            <p class="text-sm text-slate-300 leading-relaxed">Timings come from recorded runs, including the ones where PyTorch wins. There is no headline speedup, because the measurements do not support one.</p>
+          </div>
+        </div>
+
+        <aside class="lg:col-span-5 glass-card rounded-3xl p-6 sm:p-7 border border-brand-500/20" aria-labelledby="storyTitle">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">From the author</p>
+          <h3 id="storyTitle" class="text-2xl font-bold text-white mb-4">Why I built ojas</h3>
+          <div class="space-y-4 text-sm text-slate-300 leading-relaxed">
+            <p>I write training and inference engines for my own research: tessl and metal-native on Metal, gemma-metal, BINN, Lappi, and gusset for calling Rust from Go. When I audited them side by side, the worst bugs had the same shape in every repo. The code kept running and returned a wrong answer.</p>
+            <ul class="space-y-2 text-[13px]">
+              <li class="flex gap-2"><span class="text-brand-400 shrink-0" aria-hidden="true">›</span><span>An attention backward kernel clamped head dim to 64, dropping the rest of every head without a word.</span></li>
+              <li class="flex gap-2"><span class="text-brand-400 shrink-0" aria-hidden="true">›</span><span>An AdamW step counter could wrap from <span class="font-mono">u64::MAX</span> to 0 and turn the bias correction non-finite.</span></li>
+              <li class="flex gap-2"><span class="text-brand-400 shrink-0" aria-hidden="true">›</span><span>NaN gradients passed clipping and stayed in the Adam moments.</span></li>
+              <li class="flex gap-2"><span class="text-brand-400 shrink-0" aria-hidden="true">›</span><span>A parity harness took the max error with <span class="font-mono">fold(0, max)</span>, which drops NaN, so a kernel that returned NaN passed.</span></li>
+              <li class="flex gap-2"><span class="text-brand-400 shrink-0" aria-hidden="true">›</span><span>39 GPU tests returned early when no device opened, so CI went green with no kernel run.</span></li>
+              <li class="flex gap-2"><span class="text-brand-400 shrink-0" aria-hidden="true">›</span><span>Panics crossed a C ABI with no <span class="font-mono">catch_unwind</span> and took the host process down.</span></li>
+            </ul>
+            <p>PyTorch was not the way out for this work. In my own runs MPS was 3.8&times; slower than the CPU on a 172K-parameter model, its allocator cache reached 30 GiB with 16 GiB live, and there is no peak-memory API to catch that early.</p>
+            <p>ojas is where each of those fixes lives once, as a refusal with a test behind it, instead of a patch repeated in six repositories.</p>
+          </div>
+          <p class="mt-5 pt-4 border-t border-white/10 text-[11px] text-slate-500 leading-relaxed">Sources: <span class="font-mono text-slate-400">docs/audit.md</span> for the defects and their ojas defenses, <span class="font-mono text-slate-400">docs/pytorch-parity-plan.md</span> section 3 for the PyTorch measurements.</p>
+        </aside>
+      </div>
+
+      <div class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+          <h3 class="text-white font-semibold mb-3">A good fit today</h3>
+          <ul class="space-y-2 text-sm text-slate-300">
+            <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Kernel and numerics work that needs a bit-exact CPU reference to diff against.</li>
+            <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Small models and experiments where reproducibility matters more than peak throughput.</li>
+            <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Go services that want to call a Rust engine in-process and survive its panics.</li>
+            <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Training and sampling a nanolab-architecture GPT from Go or Rust, on the CPU, Metal or wgpu, with a checkpoint you can resume or load in torch.</li>
+          </ul>
+        </div>
+        <div class="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+          <h3 class="text-white font-semibold mb-3">Not yet</h3>
+          <ul class="space-y-2 text-sm text-slate-300">
+            <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>A recorded full-size (124M) training run, or GPU throughput that matches PyTorch. <a href="#doc-status" class="text-brand-300 hover:text-white underline underline-offset-2">See status</a>.</li>
+            <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Large models and mixed precision: compute is f32 on every backend, and there is no bf16 path or activation checkpointing yet.</li>
+            <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>NVIDIA or AMD GPUs: CUDA and HIP are probes that are not backends.</li>
+            <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Automatic adaptation. The probe and plan are advice a caller applies; there is no router that picks a device or batch size for you yet.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section id="faq" class="py-20 border-t border-white/10">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="text-center mb-10">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Questions</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">What ojas guarantees</h2>
+      </div>
+      <div class="space-y-3">
+        <details class="glass-card rounded-2xl px-5 py-4 group">
+          <summary class="cursor-pointer text-white font-semibold text-sm sm:text-base flex items-center justify-between gap-4">
+            What does bit-identical determinism mean?
+            <span class="text-slate-500 group-open:rotate-45 transition text-lg leading-none" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-slate-300 leading-relaxed">
+            In the default <span class="font-mono text-brand-300">Numerics::Exact</span> tier, the same inputs produce the same IEEE-754 bits at every CPU thread count. Threads split outputs, and each reduction runs in ascending order without FMA. <span class="font-mono">ojas-cpu/tests/exact_golden.rs</span> pins output digests at 1, 2, 3, 7, 16, and 18 threads. The CPU reference is checked against PyTorch 2.13, with a measured loss error of 2.38e-7 on the published step. The <span class="font-mono">Fast</span> tier trades this for speed and says so in its name.
+          </p>
+        </details>
+        <details class="glass-card rounded-2xl px-5 py-4 group">
+          <summary class="cursor-pointer text-white font-semibold text-sm sm:text-base flex items-center justify-between gap-4">
+            What happens when an allocation exceeds the memory budget?
+            <span class="text-slate-500 group-open:rotate-45 transition text-lg leading-none" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-slate-300 leading-relaxed">
+            <span class="font-mono text-brand-300">Budget::try_reserve()</span> returns <span class="font-mono text-brand-300">Err(OjasError::CapacityExceeded)</span> with the requested bytes, the cap, and the live bytes. It does not clamp the request, grow the ceiling, touch the allocator, or abort the process.
+          </p>
+        </details>
+        <details class="glass-card rounded-2xl px-5 py-4 group">
+          <summary class="cursor-pointer text-white font-semibold text-sm sm:text-base flex items-center justify-between gap-4">
+            How does a Go service call the engine?
+            <span class="text-slate-500 group-open:rotate-45 transition text-lg leading-none" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-slate-300 leading-relaxed">
+            The Go package talks to the Rust engine in-process through gusset. There is no separate model server and no JSON hop for the step. A panic in the engine comes back as <span class="font-mono">gusset.ErrPanic</span>, later calls return <span class="font-mono">gusset.ErrPoisoned</span>, and <span class="font-mono">Close</span> resets the engine.
+          </p>
+        </details>
+        <details class="glass-card rounded-2xl px-5 py-4 group">
+          <summary class="cursor-pointer text-white font-semibold text-sm sm:text-base flex items-center justify-between gap-4">
+            Which devices does ojas actually run on?
+            <span class="text-slate-500 group-open:rotate-45 transition text-lg leading-none" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-slate-300 leading-relaxed">
+            The CPU backend is the bit-identical reference. Apple Silicon uses Metal 4 through tessl. Portable GPU shaders are WGSL on WebGPU. NVIDIA CUDA and AMD HIP are behind feature flags. If the requested device is missing, the load returns an error instead of a session that silently runs on the CPU.
+          </p>
+        </details>
+        <details class="glass-card rounded-2xl px-5 py-4 group">
+          <summary class="cursor-pointer text-white font-semibold text-sm sm:text-base flex items-center justify-between gap-4">
+            Is ojas published on crates.io?
+            <span class="text-slate-500 group-open:rotate-45 transition text-lg leading-none" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-slate-300 leading-relaxed">
+            No. The Rust workspace sets <span class="font-mono text-brand-300">publish = false</span>, and there is no crate named ojas. Clone the repository and build a member such as <span class="font-mono">ojas-core</span>. The Go module path is <span class="font-mono text-brand-300">github.com/bharathvbcr/ojas/go</span>.
+          </p>
+        </details>
+        <details class="glass-card rounded-2xl px-5 py-4 group">
+          <summary class="cursor-pointer text-white font-semibold text-sm sm:text-base flex items-center justify-between gap-4">
+            Are overflow checks on in release builds?
+            <span class="text-slate-500 group-open:rotate-45 transition text-lg leading-none" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-slate-300 leading-relaxed">
+            Yes. The workspace release profile sets <span class="font-mono text-brand-300">overflow-checks = true</span> and <span class="font-mono">panic = "unwind"</span>. Shape, stride, and byte-offset math uses <span class="font-mono">checked_mul</span> and <span class="font-mono">checked_add</span> and returns <span class="font-mono">OjasError::OutOfRange</span> instead of wrapping.
+          </p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+    </div>
+  <section id="compare" class="py-16 border-t border-white/10 bg-black/40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-8">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Same job, different defaults</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">ojas next to the mainstream frameworks</h2>
+        <p class="text-slate-400 text-sm sm:text-base mt-3 leading-relaxed">The mainstream frameworks can be configured toward most of these. In ojas they are the default and cannot be turned off. Nothing here is a benchmark of model quality.</p>
+      </div>
+      <div class="overflow-x-auto glass-card rounded-2xl">
+        <table class="w-full text-left text-sm min-w-[640px]">
+          <caption class="sr-only">How ojas differs from PyTorch and TensorFlow on determinism, device fallback, memory, language boundary, and overflow checks</caption>
+          <thead class="text-xs font-mono uppercase tracking-wider text-slate-400">
+            <tr class="border-b border-white/10">
+              <th scope="col" class="px-4 py-3 font-medium">Contract</th>
+              <th scope="col" class="px-4 py-3 font-medium">PyTorch / TensorFlow</th>
+              <th scope="col" class="px-4 py-3 font-medium text-brand-300">ojas</th>
+            </tr>
+          </thead>
+          <tbody class="text-slate-300">
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Determinism</th>
+              <td class="px-4 py-3">Opt-in (<span class="font-mono">torch.use_deterministic_algorithms</span>); ops without a deterministic kernel raise</td>
+              <td class="px-4 py-3">Default <span class="font-mono text-brand-300">Numerics::Exact</span>: same bits at 1 to 18 CPU threads</td>
+            </tr>
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Missing device</th>
+              <td class="px-4 py-3">Optional CPU fallback for unsupported ops (for example <span class="font-mono">PYTORCH_ENABLE_MPS_FALLBACK=1</span>)</td>
+              <td class="px-4 py-3">The load fails with the device error; there is no fallback switch</td>
+            </tr>
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Memory ceiling</th>
+              <td class="px-4 py-3">Out-of-memory error from the allocator when the device runs out</td>
+              <td class="px-4 py-3"><span class="font-mono text-brand-300">try_reserve</span> refuses against a cap you set, before allocating; nested budgets</td>
+            </tr>
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Service boundary</th>
+              <td class="px-4 py-3">A Python runtime, usually behind a model server</td>
+              <td class="px-4 py-3">In-process Go through gusset; a panic poisons the handle, not the process</td>
+            </tr>
+            <tr>
+              <th scope="row" class="px-4 py-3 text-white font-medium">Arithmetic</th>
+              <td class="px-4 py-3">Index and size math is up to each native kernel</td>
+              <td class="px-4 py-3">Checked shape, stride, and offset math; <span class="font-mono text-brand-300">overflow-checks = true</span> in release</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  <section id="benchmarks" class="py-20 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-10">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Measured, both runs shown</span>
+        <h2 class="text-3xl sm:text-5xl font-extrabold tracking-tight mt-2 text-white">The guarantees do not cost the step</h2>
+        <p class="text-slate-400 text-base sm:text-lg mt-4 leading-relaxed">
+          One forward, backward, and AdamW step of the <span class="font-mono text-slate-300">torch_ref</span> graph on an Apple M5 Pro, ojas CPU against PyTorch 2.13 CPU with 6 threads. Two separate processes were recorded. The tiny torch step moved between them, so both are shown and no single speedup is claimed. Below it, a block-sized scorecard shows the cases ojas loses.
+        </p>
+      </div>
+
+      
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <figure>
+          <img src="assets/plots/cpu-step.svg" alt="Bar chart of the tiny training step, both recorded runs: ojas about 22.5 microseconds, PyTorch 354 microseconds in run 1 and 487 microseconds in run 2." width="760" height="280" class="w-full h-auto rounded-2xl border border-white/10">
+          <figcaption class="mt-2 text-xs text-slate-500">Tiny step, both runs. Torch moved; ojas did not.</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/plots/cpu-step-large.svg" alt="Bar chart of the larger training step, both recorded runs: ojas 0.462 and 0.455 milliseconds, PyTorch 0.456 and 0.463 milliseconds." width="760" height="280" class="w-full h-auto rounded-2xl border border-white/10">
+          <figcaption class="mt-2 text-xs text-slate-500">Larger step, both runs. A tie inside the noise of the two recordings.</figcaption>
+        </figure>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 mb-6" id="benchRun" role="group" aria-label="Benchmark run">
+        <button type="button" data-run="0" aria-pressed="true" class="seg-btn px-3 py-1.5 rounded-lg text-xs font-mono border border-white/10 text-slate-300">Run 1</button>
+        <button type="button" data-run="1" aria-pressed="false" class="seg-btn px-3 py-1.5 rounded-lg text-xs font-mono border border-white/10 text-slate-300">Run 2</button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="glass-card rounded-3xl p-6 sm:p-8" id="benchTiny"></div>
+        <div class="glass-card rounded-3xl p-6 sm:p-8" id="benchLarge"></div>
+      </div>
+
+      <div class="glass-card rounded-2xl p-6 sm:p-8">
+        <h3 class="text-lg font-bold text-white mb-1">Where the larger step's time goes</h3>
+        <p class="text-xs text-slate-400 mb-5">ojas CPU, B=2, T=32, d=64. Section clocks after the register-tiling, RMSNorm/RoPE, and view-reshape work.</p>
+        <div id="benchBreakdown" class="space-y-2.5"></div>
+        <p class="mt-5 text-xs text-slate-500 leading-relaxed">
+          Not every kernel wins: a single 512×768×768 linear forward takes 4.35 ms in ojas at 6 threads and 1.23 ms in torch. The full-step results come from fewer allocations and fused passes, not faster GEMM. Commands and both raw tables are in <span class="font-mono text-slate-400">docs/bench-cpu-vs-torch.md</span>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="scorecard" class="py-16 border-t border-white/10 bg-black/40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-8">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Recorded 2026-10-02, CPU</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">The whole scorecard, losses first</h2>
+        <p class="text-slate-400 text-sm sm:text-base mt-3 leading-relaxed">One nanolab block (d=768, 12 heads, T=1024) and 27 per-op cases, ojas Fast with 6 threads against PyTorch 2.13 CPU with 6 threads, eager and without <span class="font-mono text-slate-300">torch.compile</span>. Each cell is the minimum over 3 interleaved rounds at load 5&ndash;6. Both sides call Accelerate for the large GEMMs, so those rows are level by construction. 124 of 127 outputs match torch; in the other three, the clip norm and two outputs scaled by it, torch&rsquo;s f32 norm is the one that is 1.6e-3 low against an f64 evaluation.</p>
+
+      <figure class="mb-8">
+        <img src="assets/plots/block-fwd-bwd.svg" alt="Bar chart of a nanolab block forward plus backward on a quiet Apple M5 Pro CPU, 2026-10-02: ojas 41.5 ms, PyTorch 2.13 default SDPA 43.1 ms, PyTorch MATH SDPA 55.1 ms. Block forward was 14.4 ms on both." width="760" height="240" class="w-full h-auto rounded-2xl border border-white/10">
+        <figcaption class="mt-2 text-xs text-slate-500">Quiet CPU run, 2026-10-02. The bars are the four numbers in the row below, not a new measurement.</figcaption>
+      </figure>
+
+      </div>
+      <dl class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 max-w-4xl">
+        <div class="glass-card rounded-2xl p-4"><dt class="text-[11px] font-mono uppercase tracking-wider text-slate-500">Block fwd + bwd, ojas</dt><dd class="text-2xl font-bold font-mono text-white">41.5 ms</dd></div>
+        <div class="glass-card rounded-2xl p-4"><dt class="text-[11px] font-mono uppercase tracking-wider text-slate-500">torch, default SDPA</dt><dd class="text-2xl font-bold font-mono text-white">43.1 ms</dd></div>
+        <div class="glass-card rounded-2xl p-4"><dt class="text-[11px] font-mono uppercase tracking-wider text-slate-500">torch, MATH SDPA</dt><dd class="text-2xl font-bold font-mono text-white">55.1 ms</dd></div>
+        <div class="glass-card rounded-2xl p-4"><dt class="text-[11px] font-mono uppercase tracking-wider text-slate-500">Block forward, both</dt><dd class="text-2xl font-bold font-mono text-white">14.4 ms</dd></div>
+      </dl>
+      <h3 class="text-white font-semibold mb-3">Where ojas is behind</h3>
+
+      <figure class="mb-6">
+        <img src="assets/plots/cpu-losses.svg" alt="Bar chart of ojas divided by PyTorch CPU time on 2026-10-02. Add backward is 13.2 times, mul forward 4.9 times, and the rest of the slower ops sit between 1.25 and 2.8 times." width="760" height="680" class="w-full h-auto rounded-2xl border border-white/10">
+        <figcaption class="mt-2 text-xs text-slate-500">Each bar is ojas time divided by PyTorch time. Above 1 means ojas is slower. The table under the chart is the same set of cases.</figcaption>
+      </figure>
+
+      <div class="overflow-x-auto glass-card rounded-2xl">
+        <table class="w-full text-left text-sm min-w-[640px]">
+          <caption class="sr-only">Ops where ojas is slower than PyTorch CPU on 2026-10-02</caption>
+          <thead class="text-xs font-mono uppercase tracking-wider text-slate-400"><tr class="border-b border-white/10"><th scope="col" class="px-4 py-3 font-medium">Case</th><th scope="col" class="px-4 py-3 font-medium">ojas ms</th><th scope="col" class="px-4 py-3 font-medium">torch ms</th><th scope="col" class="px-4 py-3 font-medium">ojas / torch</th></tr></thead>
+          <tbody class="text-slate-300">
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">add backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.099</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.0075</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">13.2</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">mul forward / backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.318 / 0.636</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.065 / 0.148</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">4.9 / 4.3</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">add forward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.117</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.041</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">2.8</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">AdamW vs torch&rsquo;s fused AdamW (768&sup2; / 3072&times;768 / 50304&times;768)</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.23 / 0.65 / 10.3</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.083 / 0.30 / 4.25</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">2.8 / 2.2 / 2.4</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">permute (0,2,1,3)</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.083</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.038</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">2.2</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">embedding forward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.064</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.034</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">1.9</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">gate forward / backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.214 / 0.332</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.129 / 0.234</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">1.7 / 1.4</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">decode linear backward (qkvo / up / down)</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.084 / 0.209 / 0.205</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.060 / 0.136 / 0.134</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">1.4 / 1.5 / 1.5</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">Muon 2048&times;768 / 3072&times;768</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">29.2 / 41.8</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">20.5 / 28.3</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">1.4 / 1.5</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">SiLU forward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.365</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.293</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">1.25</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-3 mb-8 text-xs text-slate-500 leading-relaxed max-w-4xl">A later partial re-run after splitting mul and add across threads and scanning outputs on the thread that wrote them (load 6.5&ndash;7.0, 3 rounds) read mul forward / backward 2.5 / 1.7&times;, add forward 2.5&times; and add backward 12.1&times;. Add backward stays far behind on purpose: it copies the gradient where torch passes it through. Torch&rsquo;s own timings moved as much as ojas&rsquo;s between runs, so ratios within about 15% of each other are not changes.</p>
+      <h3 class="text-white font-semibold mb-3">Where ojas is ahead or level</h3>
+      <div class="overflow-x-auto glass-card rounded-2xl">
+        <table class="w-full text-left text-sm min-w-[560px]">
+          <caption class="sr-only">Ops where ojas is faster than or level with PyTorch CPU on 2026-10-02</caption>
+          <thead class="text-xs font-mono uppercase tracking-wider text-slate-400"><tr class="border-b border-white/10"><th scope="col" class="px-4 py-3 font-medium">Case</th><th scope="col" class="px-4 py-3 font-medium">ojas / torch</th><th scope="col" class="px-4 py-3 font-medium">Note</th></tr></thead>
+          <tbody class="text-slate-300">
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">SDPA forward / backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.83 / 0.82</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">against torch&rsquo;s default (flash) SDPA</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">RMSNorm backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.55</td><td class="px-4 py-3 font-mono text-xs sm:text-sm"></td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">RoPE forward / backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.63 / 0.58</td><td class="px-4 py-3 font-mono text-xs sm:text-sm"></td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">clip_grad_norm</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.43</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">scope: the 123.7M-value clip case</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">cross-entropy forward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.69</td><td class="px-4 py-3 font-mono text-xs sm:text-sm"></td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">AdamW vs torch&rsquo;s default (non-fused) AdamW</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.80&ndash;0.91</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">torch&rsquo;s fused AdamW is still 2.2&ndash;2.8&times; faster</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">prefill linears, LM-head linear</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">1.00&ndash;1.08</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">level: both sides call Apple Accelerate</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-3 mb-8 text-xs text-slate-500 leading-relaxed max-w-4xl">The block result is a tie with one SDPA setting and a win against the other, on one machine. It is not a general claim about PyTorch, and no headline speedup is made.</p>
+      <h3 class="text-white font-semibold mb-3">What the fixes were worth</h3>
+      <div class="overflow-x-auto glass-card rounded-2xl">
+        <table class="w-full text-left text-sm min-w-[640px]">
+          <caption class="sr-only">What moved on 2026-10-01 and 2026-10-02</caption>
+          <thead class="text-xs font-mono uppercase tracking-wider text-slate-400"><tr class="border-b border-white/10"><th scope="col" class="px-4 py-3 font-medium">Change</th><th scope="col" class="px-4 py-3 font-medium">Before</th><th scope="col" class="px-4 py-3 font-medium">After</th><th scope="col" class="px-4 py-3 font-medium">Evidence</th></tr></thead>
+          <tbody class="text-slate-300">
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">CPU AdamW, [50304, 768]</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">64.1 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">11.2 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">the 64.1 ms binary cannot be re-run; in place vs buffered, interleaved: 20.8 to 11.2 ms</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">CPU block forward + backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">224&ndash;230 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">121&ndash;125 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">taken at load 18&ndash;24, where torch read 109&ndash;131 ms; not comparable with the quiet-run 41.5 ms; before-binary cannot be re-run</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">Metal AdamW</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">200.8 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">21.4 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">unpaired across rounds; cause inferred</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">Metal per-op sync (sleep poll to condvar)</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">1.43 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">0.165 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">median of silu + sync</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">Metal LM-head GEMM</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">134 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">68 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">tile-walk fix in tessl</td></tr>
+<tr class="border-b border-white/5"><th scope="row" class="px-4 py-3 text-white font-medium">Metal LM-head backward</th><td class="px-4 py-3 font-mono text-xs sm:text-sm">157 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">109 ms</td><td class="px-4 py-3 font-mono text-xs sm:text-sm">same fix</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="gpu" class="py-16 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">GPU, direction only</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">Metal is close, wgpu is not, and the GPU was busy</h2>
+        <p class="text-slate-400 text-sm sm:text-base mt-3 leading-relaxed">Against PyTorch 2.13 MPS, ojas&rsquo;s Metal backend ran a nanolab block forward + backward at 0.92&ndash;1.07&times; torch&rsquo;s speed across rounds, and the block forward alone at 0.66&times; in round 5, so torch is faster there. The wgpu backend read 0.47&times; on the block forward + backward in round 3. In round 3 the GPU read 100% busy from another process and the 10% spread gate failed on every one of the 94 rows, and round 5 flagged every row noisy, so these are directions and not results. A paired run on an idle GPU is the next item on the <a href="#roadmap" class="text-brand-300 hover:text-white underline underline-offset-2">roadmap</a>. CUDA and HIP have not run a kernel.</p>
+        <p class="text-slate-500 text-xs mt-4 leading-relaxed">Raw tables and commands: <span class="font-mono text-slate-400">docs/bench-cpu-vs-torch.md</span> and <span class="font-mono text-slate-400">docs/bench-gpu-vs-torch.md</span>.</p>
+      </div>
+    </div>
+  </section>
+
+  
+<section id="roadmap" class="py-16 border-t border-white/10">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+      <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Roadmap</span>
+      <h2 class="text-4xl sm:text-5xl font-extrabold tracking-tight mt-2 text-white">From a working framework to a measured one</h2>
+      <p class="text-slate-300 text-lg mt-4 leading-relaxed">The phase this page used to list has landed: a multi-layer nanolab GPT, a device trainer with Muon and AdamW, checkpoint save and resume, and a Go API that loads real weights, trains, and samples. What is left is proof at full size, speed against PyTorch, and breadth.</p>
+      <p class="text-xs text-slate-500 mt-4 leading-relaxed">Order from <span class="font-mono">docs/pytorch-parity-plan.md</span>: correctness and the framework gap first, then the measured speed gaps, then breadth. That document's lane table still lists work that has since landed; the landed list below is what the source contains, and <span class="font-mono">docs/status.md</span> has the counts.</p>
+
+      <ol class="mt-12 space-y-10 border-l border-white/10">
+        <li class="pl-6">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-emerald-400">Landed</p>
+          <h2 class="text-2xl font-bold text-white mt-1 mb-3">The framework layer and what it stands on</h2>
+          <ul class="space-y-2 text-sm text-slate-300">
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>The guarantees on the <a href="#labs" class="text-brand-300 hover:text-white underline underline-offset-2">home labs</a>: exact CPU bits, budgets that refuse, an explicit device, a panic that returns to Go, and checked shape math.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span><span class="font-mono">permute</span> on the tape and a multi-head attention gradcheck (<span class="font-mono">ojas-autograd/tests/multihead.rs</span>). The tape can seed a backward pass and hand back a gradient (<span class="font-mono">backward_seeded</span>, <span class="font-mono">take_grad</span>).</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>Muon NS5 on CPU, Metal, and wgpu, checked against the CPU on wgpu (<span class="font-mono">ojas-wgpu/tests/muon.rs</span>).</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>A refused CPU optimizer step writes nothing (<span class="font-mono">ojas-cpu/tests/optim_atomic.rs</span>). Input copies are charged to the budget.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>Tiled causal attention: a Metal forward with a FlashAttention-2 style backward up to head dim 128, and tiled FlashAttention-2 on wgpu.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>A fused linear plus cross-entropy on the trait, in vocabulary chunks, native on CPU, Metal and wgpu.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>One shape contract for every backend (<span class="font-mono">ojas_core::shapes</span>): the same error whatever the budget holds.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>Typed host storage, so kernels borrow <span class="font-mono">f32</span> and <span class="font-mono">u32</span> slices instead of decoding bytes, with bounded 1 MiB readbacks and 64 KiB checkpoint reads.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>Metal reports a device fault at the next <span class="font-mono">sync</span>, as wgpu does, and wgpu names the first op that faulted.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span><span class="font-mono">ojas-model</span>: the nanolab GPT written once, with a <span class="font-mono">Graph</span> trait that the tape and an eager <span class="font-mono">Eval</span> both implement, a <span class="font-mono">Trainer</span>, and a checkpoint directory (<span class="font-mono">model.safetensors</span>, <span class="font-mono">optim.safetensors</span>, <span class="font-mono">state.ojck</span>).</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>The Go API on real weights: <span class="font-mono">LoadModel</span>, <span class="font-mono">NewModel</span>, <span class="font-mono">OpenTrainer</span>, <span class="font-mono">TrainStep</span>, <span class="font-mono">SaveCheckpoint</span>, <span class="font-mono">Resume</span>, a GPT-2 tokenizer, and sampled <span class="font-mono">GenerateIDs</span>, under one process-wide memory ceiling.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>Seeded temperature, top-k, and top-p sampling, a seeded resumable batch sampler over <span class="font-mono">TokenBin</span>, and BF16 and F16 safetensors.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span><span class="font-mono">ojas-qwen35</span>: a Qwen3.5 whole training step through tessl on Metal, as a provider outside the <span class="font-mono">Backend</span> trait.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span><span class="font-mono">ojas-device</span>: <span class="font-mono">probe_system</span> reads memory, core clusters, caches, unified memory and pressure, <span class="font-mono">ResourcePlan::derive</span> turns that into a budget and thread advice, and Go reads it through <span class="font-mono">SystemProfile</span>. It is advice the caller applies: nothing adapts on its own, and a field it cannot read stays <span class="font-mono">Unknown</span>.</span></li>
+          </ul>
+        </li>
+        <li class="pl-6">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300">Next</p>
+          <h2 class="text-2xl font-bold text-white mt-1 mb-3">Proof at full size, and honest timings</h2>
+          <p class="text-sm text-slate-300 leading-relaxed mb-3">The code path exists end to end. What it lacks is a recorded run at the size it was built for, and timings taken when the machine is quiet.</p>
+          <ul class="space-y-2 text-sm text-slate-300">
+            <li class="flex gap-2"><span class="text-brand-400 shrink-0">1</span><span>A full 124M nanolab training run through the Go API, with its command, machine and loss curve recorded. The training target is 12 layers, width 768, 12 heads of 64, vocabulary 50304. CI today runs a tiny spec and a 40 KB fixture.</span></li>
+            <li class="flex gap-2"><span class="text-brand-400 shrink-0">2</span><span>The paired GPU benchmark against torch MPS on an otherwise idle GPU. Round 3 ran on a GPU that read 100% busy, so every row failed the spread gate and only direction is verified (<span class="font-mono">docs/bench-gpu-vs-torch.md</span>).</span></li>
+            <li class="flex gap-2"><span class="text-brand-400 shrink-0">3</span><span>The rows where ojas is slower than torch, ranked in that document. Metal's per-op fixed cost fell once a sleep poll in tessl's synchronize became a condition-variable wait; bandwidth-bound elementwise ops are the remaining gap.</span></li>
+            <li class="flex gap-2"><span class="text-brand-400 shrink-0">4</span><span>A decode path with few dispatches per token, and batched Muon GEMMs.</span></li>
+          </ul>
+        </li>
+        <li class="pl-6">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-slate-300">Then</p>
+          <h2 class="text-2xl font-bold text-white mt-1 mb-3">Decisions that touch every backend</h2>
+          <p class="text-sm text-slate-300 leading-relaxed mb-3">These change the <span class="font-mono">Backend</span> trait, so each has to cover CPU, Metal and wgpu before it lands.</p>
+          <ul class="space-y-2 text-sm text-slate-300">
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Whether the Qwen3.5 step's ops (gated delta net, head-dim-256 grouped attention, partial RoPE) move into the trait, or stay a Metal-only provider.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>A CUDA backend. A design exists (<span class="font-mono">docs/cuda-backend-scoping.md</span>); no kernel has been written.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>A planner on top of the host probe: choosing a device and batch size from the plan, and stopping before a run that cannot fit. Today there is no router, and the CPU kernels do not yet adopt the recommended GEMM block sizes.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Training Lappi, a typed decision model, without PyTorch. A Rust trainer over tessl&rsquo;s Qwen3.5 Metal step is climbing a parity ladder on the Mac and a CUDA provider is started; the GH200 campaign stays on PyTorch and no Lappi model has shipped.</span></li>
+          </ul>
+        </li>
+        <li class="pl-6">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-slate-400">Later</p>
+          <h2 class="text-2xl font-bold text-white mt-1 mb-3">Breadth</h2>
+          <ul class="space-y-2 text-sm text-slate-300">
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>bf16 compute. Weights can be stored as BF16 and F16. Every backend computes in f32.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Activation checkpointing, GELU, and ReLU². The activation that runs today is SiLU. Training v1 refuses grouped-query attention; nanolab's default is multi-head.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>CUDA and HIP as backends. Each is a probe behind a feature and returns <span class="font-mono">NotCompiled</span> when the feature is off.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>A tokenizer check past the twenty reference strings against tiktoken.</span></li>
+          </ul>
+        </li>
+      </ol>
+      <p class="mt-12 text-xs text-slate-500 leading-relaxed">Distributed training is outside this plan. It has one user in the code this plan was ranked against, and a single device covers that user's other work. <a href="#doc-status" class="text-brand-300 hover:text-white underline underline-offset-2">Status and limits</a> is the snapshot of today. <a href="#doc-contributing" class="text-brand-300 hover:text-white underline underline-offset-2">Contributing</a> lists the six behaviours a change is not allowed to weaken.</p>
+    </div>
+  </section>
+
+  
+<section id="guide" class="border-t border-white/10">
+
+<nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 flex flex-wrap gap-2" aria-label="Guide">
+  <a href="#guide" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Overview</a>
+  <a href="#doc-quickstart" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Quickstart</a>
+  <a href="#doc-concepts" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Core concepts</a>
+  <a href="#doc-features" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Features</a>
+  <a href="#doc-go" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Go API</a>
+  <a href="#doc-architecture" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Architecture</a>
+  <a href="#doc-status" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Status</a>
+  <a href="#doc-contributing" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Contributing</a>
+</nav>
+
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-16">
+<div class="max-w-3xl">
+<span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Developer guide</span>
+      <h2 class="text-4xl sm:text-5xl font-extrabold tracking-tight mt-2 text-white mb-4">Build, call, and extend ojas</h2>
+      <p class="text-slate-400 text-lg leading-relaxed mb-8">Read it in order the first time. After that, each section stands on its own, and search jumps to it.</p>
+      <ol class="space-y-3">
+        <li><a href="#doc-quickstart" class="glass-card rounded-2xl p-5 flex gap-4 items-start hover:border-brand-500/40 transition"><span class="font-mono text-brand-400 text-sm w-6 shrink-0">1.</span><span><span class="text-white font-semibold">Quickstart</span><span class="block text-sm text-slate-400 mt-1">Build the workspace, run the tests, and the Rust and Go samples.</span></span></a></li>
+        <li><a href="#doc-concepts" class="glass-card rounded-2xl p-5 flex gap-4 items-start hover:border-brand-500/40 transition"><span class="font-mono text-brand-400 text-sm w-6 shrink-0">2.</span><span><span class="text-white font-semibold">Core concepts</span><span class="block text-sm text-slate-400 mt-1">Tensors, budgets, numerics, the Backend trait, and OjasError.</span></span></a></li>
+        <li><a href="#doc-features" class="glass-card rounded-2xl p-5 flex gap-4 items-start hover:border-brand-500/40 transition"><span class="font-mono text-brand-400 text-sm w-6 shrink-0">3.</span><span><span class="text-white font-semibold">Features</span><span class="block text-sm text-slate-400 mt-1">What each part does today, and the limit it refuses past.</span></span></a></li>
+        <li><a href="#doc-go" class="glass-card rounded-2xl p-5 flex gap-4 items-start hover:border-brand-500/40 transition"><span class="font-mono text-brand-400 text-sm w-6 shrink-0">4.</span><span><span class="text-white font-semibold">Go API</span><span class="block text-sm text-slate-400 mt-1">Every function in the Go package and the errors it returns.</span></span></a></li>
+        <li><a href="#doc-architecture" class="glass-card rounded-2xl p-5 flex gap-4 items-start hover:border-brand-500/40 transition"><span class="font-mono text-brand-400 text-sm w-6 shrink-0">5.</span><span><span class="text-white font-semibold">Architecture</span><span class="block text-sm text-slate-400 mt-1">The crate layers, including ojas-model, and the per-crate test counts.</span></span></a></li>
+        <li><a href="#doc-status" class="glass-card rounded-2xl p-5 flex gap-4 items-start hover:border-brand-500/40 transition"><span class="font-mono text-brand-400 text-sm w-6 shrink-0">6.</span><span><span class="text-white font-semibold">Status</span><span class="block text-sm text-slate-400 mt-1">What is tested, what a Go program can do today, and what is not built or measured.</span></span></a></li>
+        <li><a href="#doc-contributing" class="glass-card rounded-2xl p-5 flex gap-4 items-start hover:border-brand-500/40 transition"><span class="font-mono text-brand-400 text-sm w-6 shrink-0">7.</span><span><span class="text-white font-semibold">Contributing</span><span class="block text-sm text-slate-400 mt-1">The six frozen behaviours and the local CI script.</span></span></a></li>
+      </ol>
+      <p class="text-xs text-slate-500 mt-8 leading-relaxed">Claims on these pages were checked against the source as of 2026-10-01. Where a document and the code disagreed, the page follows the code. The plan for what comes after is the <a href="#roadmap" class="text-brand-300 hover:text-white underline underline-offset-2">roadmap</a>.</p>
+
+</div>
+<article id="doc-quickstart" class="doc-article">
+            <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2">Quickstart</h2>
+            <p class="text-sm text-slate-400 mb-6">Requirements: Rust 1.97 or newer (the workspace <span class="font-mono">rust-version</span>, set by gusset) and Go 1.26 or newer. Metal needs macOS on Apple Silicon.</p>
+
+            <ol class="space-y-5 mb-8">
+              <li class="glass-card rounded-2xl p-5">
+                <p class="text-white font-semibold text-sm mb-1">1. Get a checkout of ojas and gusset</p>
+                <p class="text-xs text-slate-400 mb-3">The Rust workspace sets <span class="font-mono">publish = false</span>; there is no crates.io crate named ojas. <span class="font-mono">go/go.mod</span> points gusset at a sibling checkout (<span class="font-mono">replace … =&gt; ../../../devtools/gusset</span>), so keep that layout or edit the replace.</p>
+                <pre class="term rounded-xl bg-black/70 border border-white/10 p-3 text-slate-200">code/research/ojas      # this repository
+code/devtools/gusset    # github.com/bharathvbcr/gusset</pre>
+              </li>
+              <li class="glass-card rounded-2xl p-5">
+                <p class="text-white font-semibold text-sm mb-1">2. Run the Rust suite</p>
+                <p class="text-xs text-slate-400 mb-3">Serialized, in release: the profile keeps overflow checks on, and GPU suites share one device.</p>
+                <pre class="term rounded-xl bg-black/70 border border-white/10 p-3 text-slate-200">cargo test --workspace --release -- --test-threads=1</pre>
+              </li>
+              <li class="glass-card rounded-2xl p-5">
+                <p class="text-white font-semibold text-sm mb-1">3. Build the engine archive and run the Go suite</p>
+                <p class="text-xs text-slate-400 mb-3"><span class="font-mono">-a</span> is required: Go's build cache does not notice a rebuilt <span class="font-mono">libgusset.a</span>. On Linux use <span class="font-mono">PKG_CONFIG_PATH="$PWD/linux"</span>.</p>
+                <pre class="term rounded-xl bg-black/70 border border-white/10 p-3 text-slate-200">cargo build -p ojas-gusset-engine
+cd go &amp;&amp; PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -timeout 15m ./...</pre>
+              </li>
+            </ol>
+
+            <div class="glass-card rounded-3xl p-5 sm:p-6">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4 mb-5">
+                <div class="flex flex-wrap items-center gap-2" role="tablist" aria-label="Language examples" id="langTabs">
+                  <button type="button" role="tab" data-lang="rust" aria-selected="true" class="lab-tab px-4 py-2 rounded-xl text-xs font-mono border border-white/10 text-slate-300">Rust (ojas-autograd)</button>
+                  <button type="button" role="tab" data-lang="go" aria-selected="false" tabindex="-1" class="lab-tab px-4 py-2 rounded-xl text-xs font-mono border border-white/10 text-slate-300">Go (go/api.go)</button>
+                  <button type="button" role="tab" data-lang="capi" aria-selected="false" tabindex="-1" class="lab-tab px-4 py-2 rounded-xl text-xs font-mono border border-white/10 text-slate-300">C exports</button>
+                </div>
+                <button type="button" id="copyCode" class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono text-slate-300 hover:text-white transition">Copy code</button>
+              </div>
+              <div class="rounded-2xl bg-black/80 border border-white/10 p-5 overflow-x-auto">
+                <pre id="codeDisplay" class="font-mono text-xs text-slate-200 leading-relaxed whitespace-pre"></pre>
+              </div>
+              <div id="codeOutputWrap" class="mt-3 rounded-xl bg-black/60 border border-white/10 p-3">
+                <p class="text-[10px] font-mono uppercase tracking-wider text-slate-500 mb-1">Output, run on 2026-10-01</p>
+                <pre id="codeOutput" class="term text-emerald-300"></pre>
+              </div>
+            </div>
+          </article>
+<article id="doc-concepts" class="doc-article">
+            <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-6">Core concepts</h2>
+            <div class="space-y-5">
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Tensors are views</h4>
+                <p class="text-sm text-slate-300 leading-relaxed mb-3">A <span class="font-mono text-brand-300">Tensor</span> is a shape, strides, a dtype, and an explicit <span class="font-mono text-brand-300">byte_offset</span> into shared storage: an <span class="font-mono">Arc&lt;Vec&lt;u8&gt;&gt;</span> on the host or a backend's buffer on a device. <span class="font-mono">narrow</span> and <span class="font-mono">view</span> change the offset and shape without copying. Writing in place needs sole ownership of the storage, so a tensor shared with a view cannot be modified behind its back.</p>
+                <pre class="term rounded-xl bg-black/70 border border-white/10 p-3 text-slate-200">byte address of index i = byte_offset + Σₖ iₖ · strides[k] · dtype.size_bytes()</pre>
+                <p class="text-xs text-slate-400 mt-3">Host accessors such as <span class="font-mono">to_f32_vec</span> refuse a device tensor. <span class="font-mono">to_host</span> copies back explicitly and is counted by <span class="font-mono">device_readbacks()</span>.</p>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Budgets refuse, they never clamp</h4>
+                <p class="text-sm text-slate-300 leading-relaxed"><span class="font-mono text-brand-300">Budget::new(cap)</span> is an atomic byte counter. <span class="font-mono">try_reserve</span> returns a reservation or <span class="font-mono text-brand-300">CapacityExceeded { requested, cap, live }</span>. <span class="font-mono">Budget::child(cap)</span> charges its parent first and releases that charge if the child refuses. Backends charge outputs and scratch to the budget they were built with. Allocations outside it, such as <span class="font-mono">vec!</span>, <span class="font-mono">format!</span> and <span class="font-mono">thread::spawn</span>, can still abort on real memory exhaustion.</p>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Two numerics tiers</h4>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div class="rounded-xl bg-black/50 border border-brand-500/30 p-4">
+                    <p class="font-mono text-brand-300 mb-1">Numerics::Exact <span class="text-slate-500">(opt-in)</span></p>
+                    <p class="text-slate-300 text-xs leading-relaxed">Packed GEMM on a persistent thread pool. Threads split outputs, and every sum runs in ascending order without FMA, so results are bit-identical at any thread count. Select it with <span class="font-mono">.with_numerics(Numerics::Exact)</span>. The Go API has no selector except the CPU-only <span class="font-mono">LoadOptions.Numerics</span>.</p>
+                  </div>
+                  <div class="rounded-xl bg-black/50 border border-white/10 p-4">
+                    <p class="font-mono text-slate-200 mb-1">Numerics::Fast <span class="text-slate-500">(default)</span></p>
+                    <p class="text-slate-300 text-xs leading-relaxed">FMA is allowed and reductions may be reordered. On macOS, products of at least 2<sup>13</sup> multiply-adds go to Accelerate <span class="font-mono">cblas_sgemm</span>; smaller ones use the SIMD tile. Metal and wgpu are Fast.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">One Backend trait</h4>
+                <p class="text-sm text-slate-300 leading-relaxed mb-3"><span class="font-mono text-brand-300">ojas_core::Backend</span> is implemented by <span class="font-mono">CpuBackend</span>, <span class="font-mono">MetalBackend</span> and <span class="font-mono">WgpuBackend</span>. Each op has a forward and, where it trains, a backward:</p>
+                <div class="flex flex-wrap gap-1.5 text-[11px] font-mono">
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">embedding</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">linear</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">rms_norm</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">rope_half_split</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">rms_qk_norm</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">causal_sdpa</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">per_head_sigmoid_gate</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">value_residual_blend</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">silu</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">mul</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">residual_add</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">cross_entropy_mean</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">permute</span>
+                  <span class="px-2 py-1 rounded bg-brand-500/10 border border-brand-500/30 text-brand-300">clip_grad_norm</span>
+                  <span class="px-2 py-1 rounded bg-brand-500/10 border border-brand-500/30 text-brand-300">adamw_step</span>
+                  <span class="px-2 py-1 rounded bg-brand-500/10 border border-brand-500/30 text-brand-300">muon_ns5_step</span>
+                  <span class="px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-400">upload / download</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-3">The trait's default <span class="font-mono">upload</span> and <span class="font-mono">permute</span> return <span class="font-mono">Unsupported</span>, so a backend that has not implemented them refuses the call instead of computing on the host.</p>
+              </div>
+              <div class="glass-card rounded-2xl p-5 overflow-x-auto">
+                <h4 class="text-white font-semibold mb-3">Errors: <span class="font-mono text-brand-300">OjasError</span></h4>
+                <table class="w-full text-left text-xs min-w-[520px]">
+                  <thead class="text-slate-500 font-mono uppercase text-[10px]">
+                    <tr><th class="py-2 pr-4">Variant</th><th class="py-2">Returned when</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-white/5 text-slate-300">
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">Shape</td><td class="py-2">Shapes or ranks do not fit the op.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">Dtype</td><td class="py-2">The tensor's dtype is not the one the op expects.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">OutOfRange</td><td class="py-2">Checked arithmetic overflowed, an index or view ran past its storage, or a step counter reached <span class="font-mono">u64::MAX</span>.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">NonFinite</td><td class="py-2">A NaN or infinity reached a value that would be applied or returned: logits, gradient norm, optimizer update.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">UnsupportedHeadDim</td><td class="py-2">The backend's attention kernel cannot run that head dim (Metal and wgpu above 128).</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">CapacityExceeded</td><td class="py-2">A reservation would pass the budget cap, or the allocator refused.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">Unsupported</td><td class="py-2">This backend cannot run this op. There is no CPU fallback.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">Placement</td><td class="py-2">The tensor is on a different device than the call needs. Nothing is copied implicitly.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">Backend</td><td class="py-2">A device or driver call failed; the detail names it.</td></tr>
+                    <tr><td class="py-2 pr-4 font-mono text-brand-300">Poisoned</td><td class="py-2">The Metal device thread caught a panic earlier and refuses later commands.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+<article id="doc-features" class="doc-article">
+            <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2">Feature reference</h2>
+            <p class="text-sm text-slate-400 mb-6">What each part does today, with its limits. A limit is a refusal, never a clamp.</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Tensors &amp; dtypes</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li>DTypes <span class="font-mono">F32</span>, <span class="font-mono">Bf16</span>, <span class="font-mono">F16</span>, <span class="font-mono">U32</span>. Compute is f32 on every backend.</li>
+                  <li>Zero-copy <span class="font-mono">narrow</span> and <span class="font-mono">view</span>; <span class="font-mono">permute</span> up to rank 8.</li>
+                  <li>Shape, stride and byte math is <span class="font-mono">checked_mul</span>/<span class="font-mono">checked_add</span>.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Autograd</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">Tape</span> records embedding, linear, RMSNorm, QK-norm, RoPE, causal attention, the per-head gate, value residual, SiLU, mul, add, reshape, permute and cross-entropy, and walks backward from any node or from a seed you supply. A fused linear plus cross-entropy keeps the full logits off the tape.</li>
+                  <li>Gradients are checked against f64 central differences (<span class="font-mono">central_diff</span>, <span class="font-mono">gradients_match</span>).</li>
+                  <li>On Metal and wgpu, leaves are uploaded once and intermediates stay on the device.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Model &amp; trainer</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono text-brand-300">ojas-model</span> holds the nanolab GPT once: <span class="font-mono">ModelSpec</span> (the 124M default and a tiny CI spec), nanolab <span class="font-mono">state_dict</span> names, and an init where each parameter has its own counter RNG, so order never matters.</li>
+                  <li>One block over a <span class="font-mono">Graph</span> trait, run by the tape to train and by <span class="font-mono">Eval</span> to decode.</li>
+                  <li><span class="font-mono">Trainer</span> splits parameters by rule: hidden matrices to Muon, the embedding and vectors to AdamW. Its checkpoint directory is written beside the old one and swapped in whole.</li>
+                  <li>Training v1 refuses grouped-query attention; nanolab's default is multi-head.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Go API</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li>Load or create a model, open a trainer over a token bin, step it, save, resume, tokenize and sample, all in process. See the <a href="#doc-go" class="text-brand-300 hover:text-white underline underline-offset-2">Go API reference</a>.</li>
+                  <li>Weights never cross the boundary, and a step reads back only its loss.</li>
+                  <li>Every model's byte budget is a child of one process-wide ceiling, 1 GiB by default.</li>
+                  <li>Failures are typed: <span class="font-mono">ErrCapacity</span>, <span class="font-mono">ErrNonFinite</span>, <span class="font-mono">ErrDeviceLost</span>, <span class="font-mono">ErrBusy</span>, <span class="font-mono">ErrPoisoned</span>.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Qwen3.5 provider</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono text-brand-300">ojas-qwen35</span> runs a Qwen3.5 whole training step through tessl's Metal kernels. It is a provider, not a <span class="font-mono">Backend</span>, and is empty off macOS.</li>
+                  <li>Its config reader refuses every field the step does not implement, by name, before tessl reads a byte.</li>
+                  <li>Per-parameter learning-rate scales and weight decays come from the caller's rules, with no built-in exclusions.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Backends</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono text-brand-300">CPU</span>: 1 to 256 threads, Exact or Fast. NEON and AVX2+FMA kernels in <span class="font-mono">ojas-simd</span>.</li>
+                  <li><span class="font-mono text-brand-300">Metal</span>: every Backend op, device-resident, through tessl, with tiled causal attention. Head dim at most 128.</li>
+                  <li><span class="font-mono text-brand-300">wgpu</span>: WGSL compute, device-resident, within 1e-4 relative of CPU. Head dim at most 128.</li>
+                  <li><span class="font-mono text-slate-400">CUDA / HIP</span>: one affine kernel and a copy probe behind features; not backends.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Optimizers</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">adamw_step</span>: PyTorch single-tensor order, decay first, eps 1e-8 outside the square root.</li>
+                  <li><span class="font-mono">muon_ns5_step</span>: five Newton–Schulz iterations in f32 on CPU, Metal and wgpu.</li>
+                  <li><span class="font-mono">clip_grad_norm</span> with eps 1e-6; cosine and WSD schedules; step counter refuses to wrap.</li>
+                  <li>On the CPU a step is all-or-nothing: a refused step leaves every tensor bit-identical.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Inference</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">argmax_token</span> refuses a non-finite row instead of returning token 0.</li>
+                  <li><span class="font-mono">sample_token</span>: temperature, top-k, top-p, seeded; temperature 0 is greedy.</li>
+                  <li><span class="font-mono">CpuGpt</span> with a <span class="font-mono">KvCache</span> and greedy decode, on the CPU.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Data &amp; IO</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">TokenBin</span> reader and a seeded epoch batch sampler that visits every window once.</li>
+                  <li>GPT-2 BPE, checked against tiktoken on 20 reference strings.</li>
+                  <li>Strict safetensors (F32, BF16, F16, I64, U16), written in a stream so the whole model need not sit on the host, and the Checkpoint v1 codec.</li>
+                </ul>
+              </div>
+            </div>
+          </article>
+<article id="doc-go" class="doc-article">
+            <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2">Go API reference</h2>
+            <p class="text-sm text-slate-400 mb-4">Package <span class="font-mono text-brand-300">github.com/bharathvbcr/ojas/go</span>. Every call takes a <span class="font-mono">context.Context</span>, and a nil context is an error. Calls run in-process on gusset's worker pool.</p>
+            <p class="text-sm text-slate-300 leading-relaxed mb-6">A model id names a nanolab GPT held on one device by the Rust engine. Go sends paths, token ids and options; weights never cross the boundary. The usual order is <span class="font-mono text-brand-300">SetModelRoot</span>, <span class="font-mono text-brand-300">LoadModel</span> (or <span class="font-mono text-brand-300">NewModel</span>), <span class="font-mono text-brand-300">OpenTrainer</span>, a loop of <span class="font-mono text-brand-300">TrainStep</span>, <span class="font-mono text-brand-300">SaveCheckpoint</span>, and <span class="font-mono text-brand-300">GenerateIDs</span>. Every path is relative to the model root. The worker pool defaults to 1; <span class="font-mono">SetPoolSize</span> changes it before the first call.</p>
+            <div class="glass-card rounded-2xl p-5 overflow-x-auto mb-5">
+              <table class="w-full text-left text-xs min-w-[640px]">
+                <thead class="text-slate-500 font-mono uppercase text-[10px]">
+                  <tr><th class="py-2 pr-4">Function</th><th class="py-2">Behavior</th></tr>
+                </thead>
+                <tbody class="divide-y divide-white/5 text-slate-300 align-top">
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">SetModelRoot(ctx, dir)</td><td class="py-2.5">Directory that relative paths resolve under. Absolute paths and paths that leave the root are refused.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">SetMemoryCeiling(ctx, bytes)</td><td class="py-2.5">Replaces the process-wide byte ceiling that every model's budget draws from (1 GiB by default). Refused for 0, and while any model is open: <span class="font-mono">Free</span> every id or <span class="font-mono">Close</span> first. A 124M training session needs several GiB, so raise it before loading.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">SystemProfile(ctx, budget, measureBandwidth)</td><td class="py-2.5">Read-only. Returns the host profile and a plan for your budget: memory, core clusters, caches, whether memory is unified, pressure, and thread advice (a bandwidth measurement runs only when asked, takes about half a second and is not cancellable). A field the engine could not read is flagged unknown. It changes nothing: you pass what you choose to <span class="font-mono">SetMemoryCeiling</span> and <span class="font-mono">LoadOptions.Threads</span>. <span class="font-mono">BudgetBytes</span> counts logical bytes, so leave headroom on a Metal model.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">LoadModel(ctx, path, LoadOptions)</td><td class="py-2.5">Reads a nanolab safetensors file (state_dict names, spec in <span class="font-mono">__metadata__["ojas.spec"]</span>), checks every tensor against the spec before keeping any, and uploads the weights to <span class="font-mono">opts.Device</span>. <span class="font-mono">DeviceCPU</span>, <span class="font-mono">DeviceCPUParallel</span> (<span class="font-mono">Threads</span> 1 to <span class="font-mono">MaxCPUThreads</span> = 256), <span class="font-mono">DeviceMetal</span>, <span class="font-mono">DeviceWgpu</span>. A device that cannot open is the load's error. <span class="font-mono">BudgetBytes</span> caps the model, its trainer and every call on it (0 means 1 GiB). <span class="font-mono">Numerics</span> is CPU only.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">NewModel(ctx, ModelSpec, seed, opts)</td><td class="py-2.5">A fresh nanolab init: each parameter draws from its own counter RNG keyed by the seed and its name.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">Inspect(ctx, path)</td><td class="py-2.5">Counts the tensors in a safetensors file from its header alone. No model id is created.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">OpenTrainer(ctx, id, TrainConfig)</td><td class="py-2.5">Attaches a trainer at step 0 over a token bin (<span class="font-mono">BinHeaderless</span> or <span class="font-mono">BinFineWeb</span>). <span class="font-mono">NanolabTrainConfig</span> fills nanolab's defaults: Muon 0.025, AdamW 6e-4, clip 1.0, abort on a non-finite value. A model that already trains is refused.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">TrainStep(ctx, id)</td><td class="py-2.5">One optimizer step over the next <span class="font-mono">Accum</span> sampled micro-batches. Returns <span class="font-mono">StepResult{Loss, GradNorm, MatrixLR, AdamLR, Step, Tokens}</span>; only the loss is read back. A step that fails before its optimizer commits nothing; one that fails inside it leaves the model <span class="font-mono">ErrPoisoned</span>.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">TrainStepTokens(ctx, id, seq, x, y)</td><td class="py-2.5">The same step on caller micro-batches. The sampler's cursor does not move.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">SaveCheckpoint(ctx, id, dir)</td><td class="py-2.5">Writes <span class="font-mono">model.safetensors</span> (loadable by <span class="font-mono">LoadModel</span> and torch), <span class="font-mono">optim.safetensors</span> and <span class="font-mono">state.ojck</span>. The directory is written beside <span class="font-mono">dir</span> and swapped in whole, so an error leaves an earlier checkpoint as it was.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">Resume(ctx, dir, opts, cfg)</td><td class="py-2.5">A new model id with the saved trainer, continuing the run on <span class="font-mono">opts.Device</span>. <span class="font-mono">cfg</span> must equal the saved config field for field, tokenizer hash included; a mismatch creates nothing.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">LoadTokenizer / Tokenize / Detokenize</td><td class="py-2.5">A GPT-2 byte-level BPE from a Hugging Face <span class="font-mono">vocab.json</span> and <span class="font-mono">merges.txt</span> under the model root. Special tokens encode as plain text. Ids that do not form UTF-8 are an error.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">GenerateIDs(ctx, id, prompt, SampleOptions)</td><td class="py-2.5">Continues the prompt with the model's current weights on its device. Temperature 0 is greedy; <span class="font-mono">TopK</span>, <span class="font-mono">TopP</span>, <span class="font-mono">Seed</span>, <span class="font-mono">MaxNewTokens</span> and <span class="font-mono">Stop</span> ids are options. The prompt and new ids must fit <span class="font-mono">MaxSeq</span>, else <span class="font-mono">ErrCapacity</span> before anything runs. Each forward reads back one logit row.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">GenerateGreedy(ctx, id, prompt)</td><td class="py-2.5"><span class="font-mono">GenerateIDs</span> with temperature 0 and one new token.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">Generate(ctx, id, logits)</td><td class="py-2.5">Argmax of caller logits on the host. It needs a live id but reads no model. A non-finite logit is an error.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">Free(ctx, id)</td><td class="py-2.5">Drops a model id. An unknown id, including a second free, is an error. A call already running on the id finishes first.</td></tr>
+                  <tr><td class="py-2.5 pr-4 font-mono text-brand-300 whitespace-nowrap">Close(ctx)</td><td class="py-2.5">Joins the worker pool, drops every model and resets the engine, returning when the join ends or <span class="font-mono">ctx</span> does. If workers are still running after gusset's 30 s join budget, Close returns that error and no second pool is opened.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="glass-card rounded-2xl p-5">
+              <h4 class="text-white font-semibold mb-3">Matching errors with <span class="font-mono">errors.Is</span></h4>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                <p><span class="font-mono text-brand-300">ojas.ErrCapacity</span> <span class="text-slate-400">a byte budget, the process memory ceiling, the 64-model table, or the model's context length</span></p>
+                <p><span class="font-mono text-brand-300">ojas.ErrNonFinite</span> <span class="text-slate-400">a NaN or infinity; the step committed nothing</span></p>
+                <p><span class="font-mono text-brand-300">ojas.ErrDeviceLost</span> <span class="text-slate-400">the device failed mid-session</span></p>
+                <p><span class="font-mono text-brand-300">ojas.ErrBusy</span> <span class="text-slate-400">another call holds this id (pool size above 1)</span></p>
+                <p><span class="font-mono text-brand-300">ojas.ErrPoisoned</span> <span class="text-slate-400">a trainer left partly updated; <span class="font-mono">Resume</span> from a checkpoint</span></p>
+                <p><span class="font-mono text-brand-300">gusset.ErrPanic</span> <span class="text-slate-400">the engine panicked during this call</span></p>
+                <p><span class="font-mono text-brand-300">gusset.ErrPoisoned</span> <span class="text-slate-400">a call after a panic, until Close</span></p>
+                <p><span class="font-mono text-brand-300">context.Canceled</span> <span class="text-slate-400">the call's context ended; a cancelled step commits nothing</span></p>
+              </div>
+              <p class="text-xs text-slate-400 mt-3">The kind comes from the typed Rust error, not from matching message text, and counts only at the start of the engine's message, so a path that spells one never selects it. A cancel that lands after a step's last cancellable op does not stop it; the next result's <span class="font-mono">Step</span> says which happened.</p>
+            </div>
+          </article>
+<article id="doc-architecture" class="doc-article">
+            <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2">Architecture &amp; crates</h2>
+            <p class="text-sm text-slate-400 mb-6">Dependencies point down. Rust programs use the model and backend layers directly; Go and C hosts enter through the C-ABI engine. <span class="font-mono">ojas-model</span> sits on the tape, io and data; <span class="font-mono">ojas-infer</span> sits on <span class="font-mono">ojas-model</span>; <span class="font-mono">ojas-capi</span> depends on the model, inference, io, data, cpu, wgpu, metal and device crates. <span class="font-mono">ojas-qwen35</span> depends only on core, io and tessl.</p>
+            <div class="space-y-2 mb-8 text-xs font-mono">
+              <div class="rounded-xl border border-white/10 bg-black/50 p-3 flex flex-wrap items-center gap-2"><span class="w-28 shrink-0 text-slate-500">hosts</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">Go services</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">Rust programs</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">C hosts</span></div>
+              <div class="rounded-xl border border-white/10 bg-black/50 p-3 flex flex-wrap items-center gap-2"><span class="w-28 shrink-0 text-slate-500">bridge</span><span class="px-2 py-1 rounded bg-brand-500/10 text-brand-300">go/</span><span class="px-2 py-1 rounded bg-brand-500/10 text-brand-300">ojas-gusset-engine</span><span class="px-2 py-1 rounded bg-brand-500/10 text-brand-300">ojas-capi</span></div>
+              <div class="rounded-xl border border-white/10 bg-black/50 p-3 flex flex-wrap items-center gap-2"><span class="w-28 shrink-0 text-slate-500">models</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-autograd</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-model</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-infer</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-qwen35</span></div>
+              <div class="rounded-xl border border-white/10 bg-black/50 p-3 flex flex-wrap items-center gap-2"><span class="w-28 shrink-0 text-slate-500">backends</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-cpu</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-simd</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-metal</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-wgpu</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-kernels</span><span class="px-2 py-1 rounded bg-white/5 text-slate-500">ojas-cuda</span><span class="px-2 py-1 rounded bg-white/5 text-slate-500">ojas-hip</span></div>
+              <div class="rounded-xl border border-white/10 bg-black/50 p-3 flex flex-wrap items-center gap-2"><span class="w-28 shrink-0 text-slate-500">substrate</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-core</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-device</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-io</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-data</span><span class="px-2 py-1 rounded bg-white/5 text-slate-200">ojas-oracle</span></div>
+            </div>
+            <p id="crates" class="text-xs text-slate-400 mb-4">Test counts are from integration run 4 (<span class="font-mono text-slate-300">cargo test -p &lt;crate&gt; --release</span> per crate) and the Go suite, 2026-10-01: 1071 Rust and 38 Go passed. Source changed after that run.</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-core</span><span class="text-xs font-mono text-emerald-400">102 passed</span></div><p class="text-xs text-slate-300">Tensor views with strides and byte offsets, typed host storage, the memory budget, the dtype system, checked shape limits, and one shape validator per Backend op.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-cpu</span><span class="text-xs font-mono text-emerald-400">211 passed</span></div><p class="text-xs text-slate-300">Reference CPU backend: Exact packed GEMM on a persistent pool (1 to 256 threads), Fast tier via Accelerate, Muon NS5 and AdamW.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-simd</span><span class="text-xs font-mono text-emerald-400">20 passed</span></div><p class="text-xs text-slate-300">Fast-tier GEMM kernels for ARM NEON and x86_64 AVX2+FMA, and the Apple Accelerate wrapper.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-metal</span><span class="text-xs font-mono text-emerald-400">154 passed</span></div><p class="text-xs text-slate-300">Every Backend op on Apple Silicon through tessl GEMM and MSL kernels, with tiled attention up to head dim 128 and faults reported at the next sync.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-wgpu</span><span class="text-xs font-mono text-emerald-400">124 passed</span></div><p class="text-xs text-slate-300">Portable WGSL compute on WebGPU with device-resident tensors, including Muon NS5.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-kernels</span><span class="text-xs font-mono text-emerald-400">11 passed</span></div><p class="text-xs text-slate-300">Hardware-agnostic WGSL/CUDA sources, launch-grid geometry, and the parity harness.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-autograd</span><span class="text-xs font-mono text-emerald-400">67 passed</span></div><p class="text-xs text-slate-300">Reverse-mode tape with device residency, checked against f64 central-difference gradcheck.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-model</span><span class="text-xs font-mono text-emerald-400">74 passed</span></div><p class="text-xs text-slate-300">The nanolab GPT written once: spec, state_dict names, order-independent init, the block over a Graph trait run by the tape or eagerly, the Trainer, and the checkpoint directory.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-qwen35</span><span class="text-xs font-mono text-emerald-400">26 passed, 8 ignored</span></div><p class="text-xs text-slate-300">A Qwen3.5 whole-step training provider over tessl on Metal. Not a Backend; empty off macOS.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-io</span><span class="text-xs font-mono text-emerald-400">76 passed</span></div><p class="text-xs text-slate-300">Strict safetensors (F32, BF16, F16, I64, U16) and the Checkpoint v1 codec; refuses mutated headers and overlapping ranges.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-data</span><span class="text-xs font-mono text-emerald-400">26 passed</span></div><p class="text-xs text-slate-300">TokenBin reader, seeded epoch batch sampler, counter-based RNG, and GPT-2 BPE.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-infer</span><span class="text-xs font-mono text-emerald-400">40 passed</span></div><p class="text-xs text-slate-300">The fast CPU decoder: KV cache, grouped-query attention, seeded temperature/top-k/top-p sampling, and logit validation. It shares its block with ojas-model.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-capi</span><span class="text-xs font-mono text-emerald-400">66 passed</span></div><p class="text-xs text-slate-300">The engine behind the Go package: opcodes for load, train, save, resume, tokenize and sample, the session store, the process memory ceiling, the panic boundary, and device routing.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">go/ (ojas SDK)</span><span class="text-xs font-mono text-emerald-400">38 passed</span></div><p class="text-xs text-slate-300">In-process Go client: LoadModel, NewModel, OpenTrainer, TrainStep, SaveCheckpoint, Resume, tokenizer, GenerateIDs, Free, and Close via libgusset.a.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-device</span><span class="text-xs font-mono text-emerald-400">18 passed</span></div><p class="text-xs text-slate-300">Device enumeration, host probing (memory, core clusters, caches, unified memory, pressure) and ResourcePlan planning, with refusal instead of fallback. The count is run 4; the 2026-10-02 adaptive lane ran 62.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-oracle</span><span class="text-xs font-mono text-emerald-400">40 passed</span></div><p class="text-xs text-slate-300">Golden numerical fixtures computed in f64 for offline verification.</p></div>
+              <div class="glass-card rounded-xl p-4"><div class="flex items-center justify-between mb-2"><span class="font-mono font-bold text-white">ojas-cuda &amp; ojas-hip</span><span class="text-xs font-mono text-emerald-400">8 + 8 passed</span></div><p class="text-xs text-slate-300">NVIDIA CUDA and AMD HIP probes behind the <span class="font-mono">cuda</span> and <span class="font-mono">hip</span> features; the default build runs no device kernel.</p></div>
+            </div>
+          </article>
+<article id="doc-status" class="doc-article">
+            <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2">Status &amp; limits</h2>
+            <p class="text-sm text-slate-400 mb-3">ojas today is a hardened kernel set with a framework layer on top: a nanolab GPT, a device trainer, and a Go API that loads, trains, checkpoints and samples it. What it lacks is a recorded run at full size and timings taken on a quiet machine.</p>
+            <p class="text-xs text-slate-500 mb-6 leading-relaxed">Counts are from integration run 4 on an Apple M5 Pro, 2026-10-01: 1071 Rust tests passed and 0 failed across 17 crates, the Go suite passed 38 of 38, and <span class="font-mono">clippy -D warnings</span> was clean. <span class="font-mono">rustfmt --check</span> was not clean in that run (19 diffs in <span class="font-mono">ojas-metal/src/backend.rs</span>). Source changed after that run; <span class="font-mono">docs/status.md</span> has the full matrix.</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+              <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+                <h4 class="text-white font-semibold mb-3">Works and is tested</h4>
+                <ul class="space-y-2 text-xs text-slate-300 leading-relaxed">
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Every Backend op on CPU, Metal and wgpu, with parity tests against the CPU and one shared shape contract.</li>
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Multi-head attention on <span class="font-mono">Tape</span> through <span class="font-mono">permute</span>, gradchecked against an f64 forward.</li>
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>The nanolab GPT in <span class="font-mono">ojas-model</span>: spec, init, the block on the tape and eagerly, a <span class="font-mono">Trainer</span> with Muon and AdamW, and checkpoint save and resume.</li>
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>The Go API on real weights: <span class="font-mono">LoadModel</span>, <span class="font-mono">OpenTrainer</span>, <span class="font-mono">TrainStep</span>, <span class="font-mono">SaveCheckpoint</span>, <span class="font-mono">Resume</span>, tokenizer and <span class="font-mono">GenerateIDs</span>, tested against a checked-in 40 KB fixture.</li>
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>The Go boundary: device selection, panic poisoning, typed errors, a process-wide memory ceiling, close and reset.</li>
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Metal and wgpu report a device fault at the next sync, naming the first op that faulted.</li>
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>A tiny training step on the CPU, compared with PyTorch 2.13, and a device-resident one on Metal.</li>
+                </ul>
+              </div>
+              <div class="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+                <h4 class="text-white font-semibold mb-3">Not built, or not yet measured</h4>
+                <ul class="space-y-2 text-xs text-slate-300 leading-relaxed">
+                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>A recorded full 124M nanolab training run. CI trains the tiny spec; <span class="font-mono">docs/status.md</span> records no larger run.</li>
+                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>bf16 compute, activation checkpointing, and GELU or ReLU² activations. Every backend computes in f32; SiLU is the activation that runs.</li>
+                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Running on NVIDIA or AMD hardware. CUDA is one affine kernel and HIP a copy probe, neither a backend. Builds off macOS are inferred, not run, and gusset refuses Windows.</li>
+                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>The Qwen3.5 step as a backend. <span class="font-mono">ojas-qwen35</span> is a Metal-only provider over tessl, empty off macOS. Its GPU parity tests are ignored by default; when a session ran seven of them, six passed and the real-model test (<span class="font-mono">gpu_real_2b</span>) faulted at its gradient read-back.</li>
+                </ul>
+              </div>
+            </div>
+            <div class="glass-card rounded-2xl p-5">
+              <h4 class="text-white font-semibold mb-2">Where ojas trails PyTorch</h4>
+              <p class="text-xs text-slate-300 leading-relaxed">On the GPU, ojas is slower than torch MPS on most rows of the paired benchmark. The last round ran on a GPU that read 100% busy throughout, so every row failed its spread gate and only the direction is verified; ojas leads on a few rows, among them <span class="font-mono">clip_grad_norm</span> and attention backward. On the CPU, a single 512&times;768&times;768 linear is 4.35 ms against 1.23 ms. The ranked rows are in <span class="font-mono">docs/bench-gpu-vs-torch.md</span> and <span class="font-mono">docs/pytorch-parity-plan.md</span>.</p>
+            </div>
+          </article>
+<article id="doc-contributing" class="doc-article">
+            <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2">Contributing</h2>
+            <p class="text-sm text-slate-400 mb-6">Six behaviors are frozen. A change that weakens any of them is rejected as an invariant violation, whatever it speeds up.</p>
+            <ol class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6 text-xs">
+              <li class="glass-card rounded-xl p-4 text-slate-300"><span class="font-mono text-brand-400 mr-1">1</span><span class="font-mono">byte_offset</span> is explicit and <span class="font-mono">narrow</span> preserves it.</li>
+              <li class="glass-card rounded-xl p-4 text-slate-300"><span class="font-mono text-brand-400 mr-1">2</span>An unsupported head dim returns <span class="font-mono">UnsupportedHeadDim</span>; it is never clamped.</li>
+              <li class="glass-card rounded-xl p-4 text-slate-300"><span class="font-mono text-brand-400 mr-1">3</span><span class="font-mono">try_reserve</span> returns <span class="font-mono">CapacityExceeded</span>; a budget never shrinks a request.</li>
+              <li class="glass-card rounded-xl p-4 text-slate-300"><span class="font-mono text-brand-400 mr-1">4</span><span class="font-mono">next_step</span> refuses <span class="font-mono">u64::MAX</span>; counters never wrap.</li>
+              <li class="glass-card rounded-xl p-4 text-slate-300"><span class="font-mono text-brand-400 mr-1">5</span>Non-finite values return <span class="font-mono">NonFinite</span> and are never applied to weights.</li>
+              <li class="glass-card rounded-xl p-4 text-slate-300"><span class="font-mono text-brand-400 mr-1">6</span>The device is explicit; there is never a silent CPU fallback.</li>
+            </ol>
+            <div class="glass-card rounded-2xl p-5">
+              <h4 class="text-white font-semibold mb-2">Before you send a change</h4>
+              <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed mb-4">
+                <li>A fix ships with a test that fails on the code before the fix.</li>
+                <li>A new failure mode is a typed error with a test, not a log line or a skip. A GPU test fails when its device is missing.</li>
+                <li>Numbers in docs come from a recorded run, with the command and machine.</li>
+              </ul>
+              <p class="text-xs text-slate-400 mb-2"><span class="font-mono">scripts/ci_local.sh</span> runs the full gate: fmt, clippy with <span class="font-mono">-D warnings</span>, the CUDA feature check, the Go suite, and the release test suite.</p>
+              <pre class="term rounded-xl bg-black/70 border border-white/10 p-3 text-slate-200">./scripts/ci_local.sh</pre>
+            </div>
+          </article>
+</div>
+</section>
   </main>
   <footer class="border-t border-white/10 bg-black py-12 text-slate-400 text-xs">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-6">
       <div class="flex items-center gap-3">
-        <img src="assets/ojas-logo.webp" alt="" class="w-9 h-9" width="36" height="36">
+        <img src="assets/ojas-tile-512.png" alt="The ojas logo: a dark red liquid-glass icosahedron with a glowing core" class="w-9 h-9" width="36" height="36">
         <div><span class="font-mono font-bold text-white text-sm">ojas</span><span class="text-slate-500 ml-2">Dual licensed MIT OR Apache-2.0</span></div>
       </div>
       <div class="flex flex-wrap items-center gap-6">
         <a href="https://github.com/bharathvbcr/ojas" class="hover:text-white transition">GitHub</a>
-        <a href="roadmap.html" class="hover:text-white transition">Roadmap</a>
-        <a href="guide/index.html" class="hover:text-white transition">Guide</a>
+        <a href="#roadmap" class="hover:text-white transition">Roadmap</a>
+        <a href="#guide" class="hover:text-white transition">Guide</a>
       </div>
       <div class="text-slate-500 font-mono text-[11px]">Designed by Bharath Chandra Vaddaram</div>
     </div>
@@ -958,6 +1722,184 @@ const MIB = 1048576;
       const tab = document.getElementById('tab-' + preset);
       if (tab) tab.click();
     }
+</script>
+<script>
+    // --- 3. Benchmarks: docs/bench-cpu-vs-torch.md, final optimized table ---
+    const BENCH = {
+      tiny: { title: 'Tiny step', shape: 'B=1, T=4, d=16, vocab=32', unit: 'µs', runs: [{ ojas: 22.458, torch: 354.042 }, { ojas: 22.459, torch: 486.896 }] },
+      large: { title: 'Larger step', shape: 'B=2, T=32, d=64, vocab=128', unit: 'ms', runs: [{ ojas: 0.462042, torch: 0.455937 }, { ojas: 0.454604, torch: 0.462917 }] },
+    };
+    const BREAKDOWN = [
+      ['Linear backward', 129.2], ['Linear forward', 79.1], ['RMSNorm, RoPE, view', 55.6], ['Cross-entropy', 48.8],
+      ['Causal attention backward', 47.6], ['AdamW', 45.4], ['Causal attention forward', 27.6],
+    ];
+    function benchCard(b, run) {
+      const r = b.runs[run];
+      const max = Math.max(r.ojas, r.torch);
+      const fmt = (x) => (b.unit === 'ms' ? x.toFixed(3) : x.toFixed(1)) + ' ' + b.unit;
+      const ratio = r.torch / r.ojas;
+      const verdict = ratio >= 1.05 ? `${ratio.toFixed(1)}× less wall time than torch in this run`
+        : ratio <= 0.95 ? `${(1 / ratio).toFixed(2)}× torch's wall time in this run`
+        : `within ${Math.abs((ratio - 1) * 100).toFixed(1)}% of torch in this run`;
+      const bar = (label, val, cls, labelCls) => `
+        <div>
+          <div class="flex justify-between mb-1.5 font-mono text-xs"><span class="${labelCls}">${label}</span><span class="text-white font-bold">${fmt(val)}</span></div>
+          <div class="w-full h-3 rounded-full bg-white/10 overflow-hidden"><div class="h-full rounded-full ${cls}" style="width:${(val / max) * 100}%"></div></div>
+        </div>`;
+      return `
+        <div class="flex items-center justify-between mb-4">
+          <span class="text-xs font-mono px-3 py-1 rounded-full bg-white/10 text-slate-300 border border-white/10 uppercase tracking-wider">${b.title}</span>
+          <span class="text-xs font-mono text-slate-400">${b.shape}</span>
+        </div>
+        <p class="text-lg font-bold text-white mb-5">${verdict}</p>
+        <div class="space-y-4">
+          ${bar('ojas CPU', r.ojas, 'bg-gradient-to-r from-brand-600 to-brand-400', 'text-brand-300')}
+          ${bar('PyTorch 2.13 CPU, 6 threads', r.torch, 'bg-slate-500', 'text-slate-400')}
+        </div>
+        <p class="mt-5 pt-3 border-t border-white/10 text-[11px] font-mono text-slate-500">${b === BENCH.tiny ? 'Loss within 2.38e-7 of the frozen torch value.' : 'No frozen torch tensors at this shape; loss checked finite.'}</p>`;
+    }
+    function renderBench(run) {
+      $('benchTiny').innerHTML = benchCard(BENCH.tiny, run);
+      $('benchLarge').innerHTML = benchCard(BENCH.large, run);
+    }
+    wireSegmented($('benchRun'), (v) => renderBench(Number(v)));
+    renderBench(0);
+    (() => {
+      const max = BREAKDOWN[0][1];
+      $('benchBreakdown').innerHTML = BREAKDOWN.map(([name, us]) => `
+        <div class="grid grid-cols-12 items-center gap-3 text-xs font-mono">
+          <span class="col-span-5 sm:col-span-4 text-slate-300">${name}</span>
+          <div class="col-span-5 sm:col-span-6 h-2.5 rounded-full bg-white/10 overflow-hidden"><div class="h-full bg-brand-500/70 rounded-full" style="width:${(us / max) * 100}%"></div></div>
+          <span class="col-span-2 text-right text-white">${us.toFixed(1)} µs</span>
+        </div>`).join('');
+    })();
+</script>
+<script>
+    const codeSnippets = {
+      go: `package main
+
+import (
+    "context"
+    "errors"
+    "fmt"
+    "log"
+
+    "github.com/bharathvbcr/ojas/go"
+)
+
+func main() {
+    ctx := context.Background()
+    defer ojas.Close(ctx)
+
+    if err := ojas.SetModelRoot(ctx, "models"); err != nil {
+        log.Fatal(err)
+    }
+    // A 124M training session needs several GiB; raise the ceiling
+    // before any model is open.
+    if err := ojas.SetMemoryCeiling(ctx, 16<<30); err != nil {
+        log.Fatal(err)
+    }
+
+    // A missing Metal device is the load's error, never a CPU model.
+    id, err := ojas.LoadModel(ctx, "init.safetensors", ojas.LoadOptions{
+        Device:      ojas.DeviceMetal,
+        BudgetBytes: 16 << 30,
+    })
+    if err != nil {
+        log.Fatalf("load: %v", err)
+    }
+    defer ojas.Free(ctx, id)
+
+    cfg := ojas.NanolabTrainConfig("fineweb_train_000.bin", 4, 1024, 16, 1337,
+        ojas.Schedule{Kind: ojas.ScheduleCosine, Warmup: 30, Total: 300})
+    cfg.BinFormat = ojas.BinFineWeb
+    if err := ojas.OpenTrainer(ctx, id, cfg); err != nil {
+        log.Fatal(err)
+    }
+    for i := 0; i < 300; i++ {
+        res, err := ojas.TrainStep(ctx, id)
+        if errors.Is(err, ojas.ErrNonFinite) {
+            continue // the step committed nothing; the next one retries
+        }
+        if err != nil {
+            log.Fatal(err)
+        }
+        fmt.Printf("step %d loss %.4f\n", res.Step, res.Loss)
+    }
+    if err := ojas.SaveCheckpoint(ctx, id, "runs/ckpt"); err != nil {
+        log.Fatal(err)
+    }
+
+    if err := ojas.LoadTokenizer(ctx, id, "gpt2/vocab.json", "gpt2/merges.txt"); err != nil {
+        log.Fatal(err)
+    }
+    prompt, _ := ojas.Tokenize(ctx, id, "Once upon a time")
+    out, err := ojas.GenerateIDs(ctx, id, prompt, ojas.SampleOptions{
+        Temperature: 0.8, TopK: 50, Seed: 1, MaxNewTokens: 64,
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    text, _ := ojas.Detokenize(ctx, id, out)
+    fmt.Println(text)
+}`,
+      rust: `use ojas_autograd::Tape;
+use ojas_core::{Budget, OjasError, Tensor};
+use ojas_cpu::CpuBackend;
+
+fn main() -> Result<(), OjasError> {
+    // Every tensor below is charged to this 64 MiB budget.
+    let budget = Budget::new(64 * 1024 * 1024);
+    let cpu = CpuBackend::new(budget.clone());
+
+    let input = vec![0.5f32; 2 * 32 * 64];
+    let weight = vec![0.01f32; 64 * 64];
+    let x = Tensor::from_f32(&input, &[2, 32, 64], &budget)?;
+    let w = Tensor::from_f32(&weight, &[64, 64], &budget)?;
+
+    let mut tape = Tape::new(cpu);
+    let x = tape.leaf(x)?;
+    let w = tape.leaf(w)?;
+    let y = tape.linear(x, w)?;
+    let y = tape.silu(y)?;
+    tape.backward(y)?; // seeds y with ones
+
+    let dw = tape.grad(w).expect("w has a gradient");
+    println!("dW shape {:?}", dw.shape());
+
+    // 16 KiB of input against a 1 KiB budget is refused, not clamped.
+    let small = Budget::new(1024);
+    let err = Tensor::from_f32(&input, &[2, 32, 64], &small).unwrap_err();
+    println!("{err}");
+    Ok(())
+}`,
+      capi: `/* Hosts use the Go package (LoadModel, NewModel, OpenTrainer, TrainStep,
+   SaveCheckpoint, Resume, GenerateIDs, Free, Close).
+   There is no ojas.h. libgusset.a, built from ojas-gusset-engine,
+   exports ojas_engine_init, ojas_engine_reset, ojas_set_model_root,
+   and the last-error getters. A second ojas_engine_init is a no-op.
+   catch_unwind on a gusset worker catches panics, not aborts. */`,
+    };
+    const codeOutputs = {
+      rust: 'dW shape [64, 64]\ncapacity exceeded: requested 16384 bytes, cap 1024, live 0',
+    };
+    let activeLang = 'rust';
+    function showSnippet(lang) {
+      activeLang = lang;
+      $('codeDisplay').textContent = codeSnippets[lang];
+      const out = codeOutputs[lang];
+      $('codeOutputWrap').classList.toggle('hidden', !out);
+      $('codeOutput').textContent = out || '';
+    }
+    wireTabs($('langTabs'), (tab) => showSnippet(tab.dataset.lang));
+    showSnippet('rust');
+
+
+    $('copyCode').addEventListener('click', () => {
+      copyText(codeSnippets[activeLang])
+        .then(() => showToast('Code copied to clipboard'))
+        .catch(() => showToast('Copy failed. Select the code and copy it manually.'));
+    });
 </script>
 </body>
 </html>

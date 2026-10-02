@@ -32,8 +32,12 @@ magick "$out/ojas-tile-512.png" -filter Lanczos -resize 32x32 "$out/favicon-32.p
 magick "$out/icon-512.png" -filter Lanczos -resize 192x192 "$out/icon-192.png"
 magick "$out/icon-512.png" -filter Lanczos -resize 180x180 -alpha off "$out/apple-touch-icon.png"
 
-# 4. docs/ is a full copy of site/ for local previewing.
+# 4. docs/ mirrors the one-page site for local previewing.
 cp "$out"/* docs/assets/
-mkdir -p docs/guide
-cp site/*.html site/sitemap.xml site/robots.txt site/site.webmanifest docs/
-cp site/guide/*.html docs/guide/
+cp site/index.html site/sitemap.xml site/robots.txt site/site.webmanifest docs/
+rm -f docs/why.html docs/benchmarks.html docs/roadmap.html docs/guide/*.html
+if [ -d site/assets/plots ]; then
+  mkdir -p docs/assets/plots
+  cp site/assets/plots/* docs/assets/plots/
+fi
+cp site/assets/ojas.js site/assets/ojas.css docs/assets/

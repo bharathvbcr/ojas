@@ -62,8 +62,8 @@ The model's "transparent" option only adds words to the prompt; its output is op
 
 | Asset | Path | Use |
 | :--- | :--- | :--- |
-| Logo, transparent | `site/assets/ojas-logo.png`, `ojas-logo.webp` (704×704) | Site header and footer; dark backgrounds only |
-| Tile 512 | `site/assets/ojas-tile-512.png` | README, JSON-LD `image`, any light background |
+| Logo, transparent | `site/assets/ojas-logo.png`, `ojas-logo.webp` (704×704) | Cut-out used to rasterize the tile, plate, and card |
+| Tile 512 | `site/assets/ojas-tile-512.png` | README, site header and footer, JSON-LD `image`, any light background |
 | Favicon 32 | `site/assets/favicon-32.png` | Browser tab (tile) |
 | Apple touch icon 180 | `site/assets/apple-touch-icon.png` | iOS home screen (opaque plate) |
 | Manifest icons 192 / 512 | `site/assets/icon-192.png`, `site/assets/icon-512.png` | `site.webmanifest`, maskable (logo inside the safe zone) |
@@ -105,7 +105,7 @@ sh docs/brand/render.sh
 
 ## 4. Interactive Features
 
-The site is a set of pages: `index.html` holds the labs, `why.html` the motivation, `benchmarks.html` the timings, `roadmap.html` what comes next, and `guide/` the reference. Each interactive piece demonstrates one ojas guarantee. Results it prints use the error text from the source, and benchmark numbers come from `docs/bench-cpu-vs-torch.md`.
+The site is one page, `site/index.html`. The labs, why, benchmarks, roadmap, and guide are sections of that page. Each interactive piece demonstrates one ojas guarantee. Results it prints use the error text from the source, and benchmark numbers come from `docs/bench-cpu-vs-torch.md`.
 
 ### 4.1 Determinism Lab (hero)
 Sums 4,096 fixed float32 values in the browser with `Math.fround` after every add. The split-k column partitions the sum across the chosen thread count and combines partials in a random finish order; the `Numerics::Exact` column sums in ascending order. It counts distinct bit patterns per column. The page states that this shows the mechanism and does not measure any framework; the ojas property itself is `ojas-cpu/tests/exact_golden.rs` (thread counts 1, 2, 3, 7, 16, 18).
