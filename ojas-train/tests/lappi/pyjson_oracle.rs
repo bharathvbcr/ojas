@@ -8,7 +8,8 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use qd_train::ledger::isoformat_utc;
 use qd_train::pyjson::{dumps, float, float_hex, float_repr, obj, CANONICAL, CANONICAL_ASCII};
-use qd_train::run_control::{ConsumedPrefix, LossLog, LossPoint};
+use qd_train::run_control::{LossLog, LossPoint};
+use qd_train::shards::ConsumedPrefix;
 use serde_json::Value;
 
 #[test]
@@ -67,7 +68,7 @@ fn consumed_prefix_digests_are_pythons() {
         for fold in c["folds"].as_array().unwrap() {
             let parts: Vec<Vec<u8>> = fold.as_array().unwrap().iter().map(|h| unhex(h.as_str().unwrap())).collect();
             let refs: Vec<&[u8]> = parts.iter().map(|v| v.as_slice()).collect();
-            p.fold(&refs).unwrap();
+            p.fold(&refs);
         }
         assert_eq!(p.hexdigest(), c["digest"].as_str().unwrap());
     }

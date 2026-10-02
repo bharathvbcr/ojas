@@ -9,8 +9,9 @@
 //! * [`LossLog`] is strictly increasing in optimizer step, and its digest is sha256 over the
 //!   exact numbers (`float.hex`), so two runs agree iff their digests agree -- and the digest
 //!   is the one Python computes over the same points (`tests/pyjson_oracle.rs`).
-//! * [`ConsumedPrefix`] hashes what the run actually ate, length-prefixed part by part, under
-//!   the same domain string, so a resume onto a different corpus order is refused.
+//!
+//! The consumed-batch digest (`ConsumedPrefix`) has one owner, beside the `Batch` it folds:
+//! [`crate::shards::ConsumedPrefix`].
 
 use std::time::Instant;
 
@@ -241,54 +242,6 @@ impl LossLog {
     }
 }
 
-/// The running sha256 over consumed batches (`ConsumedPrefix`, domain `qd-consumed-prefix-v1`).
-/// Every part is length-prefixed, so `fold(["ab"])`, `fold(["a", "b"])` and two folds cannot
-/// collide.
-#[derive(Clone)]
-pub struct ConsumedPrefix {
-    h: Sha256,
-    n: u64,
-}
-
-impl ConsumedPrefix {
-    pub const DOMAIN: &'static [u8] = b"qd-consumed-prefix-v1";
-
-    pub fn new() -> Self {
-        let mut h = Sha256::new();
-        h.update(Self::DOMAIN);
-        Self { h, n: 0 }
-    }
-
-    /// Add one consumed batch. Called exactly once per batch, in consumption order.
-    pub fn fold(&mut self, parts: &[&[u8]]) -> Result<(), RunControlError> {
-        let count = u32::try_from(parts.len())
-            .map_err(|_| RunControlError::Invalid(format!("{} parts do not fit the 4-byte count", parts.len())))?;
-        self.h.update([0u8]);
-        self.h.update(count.to_be_bytes());
-        for part in parts {
-            let len = u64::try_from(part.len()).map_err(|e| RunControlError::Invalid(e.to_string()))?;
-            self.h.update(len.to_be_bytes());
-            self.h.update(part);
-        }
-        self.n += 1;
-        Ok(())
-    }
-
-    pub fn n_folded(&self) -> u64 {
-        self.n
-    }
-
-    pub fn hexdigest(&self) -> String {
-        hex(&self.h.clone().finalize())
-    }
-}
-
-impl Default for ConsumedPrefix {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub(crate) fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -343,20 +296,5 @@ mod tests {
             "[{\"epoch\":0,\"index\":0,\"loss_hex\":\"0x1.8000000000000p+0\",\"step\":0},\
              {\"epoch\":0,\"index\":1,\"loss_hex\":\"0x1.8000000000000p-1\",\"step\":1}]"
         );
-    }
-
-    #[test]
-    fn consumed_prefix_parts_are_length_prefixed() {
-        let mut a = ConsumedPrefix::new();
-        a.fold(&[b"ab"]).unwrap();
-        let mut b = ConsumedPrefix::new();
-        b.fold(&[b"a", b"b"]).unwrap();
-        let mut c = ConsumedPrefix::new();
-        c.fold(&[b"a"]).unwrap();
-        c.fold(&[b"b"]).unwrap();
-        assert_ne!(a.hexdigest(), b.hexdigest());
-        assert_ne!(b.hexdigest(), c.hexdigest());
-        assert_ne!(a.hexdigest(), c.hexdigest());
-        assert_eq!(c.n_folded(), 2);
     }
 }

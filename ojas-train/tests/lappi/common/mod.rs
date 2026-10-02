@@ -199,11 +199,11 @@ pub fn open_and_drain(
 // toy FT batch and a toy pointer head, both real implementations of the crate's small
 // interfaces (`FtBatch`, `SpanHead`).
 
-use qd_train::objective::{fold_batch_parts, FtBatch, LetterTarget, SpanHead};
+use qd_train::objective::{FtBatch, LetterTarget, SpanHead};
 use qd_train::pyjson::float_fromhex;
-use qd_train::run_control::{ConsumedPrefix, RunControlError};
+use qd_train::shards::ConsumedPrefix;
 use qd_train::step::ParamSpec;
-use qd_train::trainer::{ConsumedBatch, HostParams};
+use qd_train::trainer::{ConsumedBatch, HostParams, TrainError};
 
 /// `tools/qd_train_oracle_trainer.py --out` this file.
 pub fn trainer_oracle() -> serde_json::Value {
@@ -249,7 +249,7 @@ impl ConsumedBatch for ToyBatch {
         self.index
     }
 
-    fn fold_into(&self, prefix: &mut ConsumedPrefix) -> Result<(), RunControlError> {
+    fn fold_into(&self, prefix: &mut ConsumedPrefix) -> Result<(), TrainError> {
         let mut tokens = Vec::new();
         let mut lengths = Vec::new();
         for r in &self.rows {
@@ -263,7 +263,19 @@ impl ConsumedBatch for ToyBatch {
             .iter()
             .flat_map(|r| i64::from(r.letter.map_or(-1, |l| l.position as i32)).to_le_bytes())
             .collect();
-        fold_batch_parts(prefix, self.index, self.bucket, &tokens, &lengths, [None, Some(&target), None, None])
+        // `trainer._fold`'s parts: index and bucket (8 bytes BE), tokens, lengths, then
+        // slot_kind, target_index, span_target, line_starts (absent arrays as no bytes).
+        prefix.fold(&[
+            &self.index.to_be_bytes(),
+            &self.bucket.to_be_bytes(),
+            &tokens,
+            &lengths,
+            &[],
+            &target,
+            &[],
+            &[],
+        ]);
+        Ok(())
     }
 }
 

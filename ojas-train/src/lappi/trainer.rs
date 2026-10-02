@@ -40,8 +40,9 @@ use serde_json::Value;
 
 use crate::pyjson::{dumps, float_fromhex, float_hex, obj, PyJsonError, CANONICAL};
 use crate::recipe::{self, OptimizerRecipe};
-use crate::run_control::{hex, Clock, ConsumedPrefix, LossLog, LossPoint, RunClock, RunControlError, WallClockCap};
+use crate::run_control::{hex, Clock, LossLog, LossPoint, RunClock, RunControlError, WallClockCap};
 use crate::schedule::{LrSchedule, ScheduleError};
+use crate::shards::ConsumedPrefix;
 use crate::step::{AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider};
 
 /// `run_control.MAX_GRAD_ACCUM`.
@@ -81,11 +82,12 @@ pub trait ConsumedBatch {
     fn index(&self) -> u64;
 
     /// Fold this batch into `prefix` exactly as `trainer._fold` does, so the digest is the one
-    /// Python computes over the same batch: one call to [`ConsumedPrefix::fold`] with the parts
-    /// `[index (8 bytes BE), bucket (8 bytes BE), tokens, lengths, slot_kind, target_index,
-    /// span_target, line_starts]`, each array as its numpy buffer's bytes (C order, its own
-    /// dtype) and an absent optional array as no bytes.
-    fn fold_into(&self, prefix: &mut ConsumedPrefix) -> Result<(), RunControlError>;
+    /// Python computes over the same batch: for a real [`crate::shards::Batch`],
+    /// [`ConsumedPrefix::fold_batch`]; for anything else, one call to [`ConsumedPrefix::fold`]
+    /// with the parts `[index (8 bytes BE), bucket (8 bytes BE), tokens, lengths, slot_kind,
+    /// target_index, span_target, line_starts]`, each array as its numpy buffer's bytes (C
+    /// order, its own dtype) and an absent optional array as no bytes.
+    fn fold_into(&self, prefix: &mut ConsumedPrefix) -> Result<(), TrainError>;
 }
 
 /// Parameters trained on the host beside the provider's (Lappi's span head).
