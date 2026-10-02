@@ -194,3 +194,217 @@ pub fn open_and_drain(
     }
     Ok(reader)
 }
+
+// --- The trainer half (L-trainer): the trainer oracle's loader and the loop's test doubles, a
+// toy FT batch and a toy pointer head, both real implementations of the crate's small
+// interfaces (`FtBatch`, `SpanHead`).
+
+use qd_train::objective::{FtBatch, LetterTarget, SpanHead};
+use qd_train::pyjson::float_fromhex;
+use qd_train::shards::ConsumedPrefix;
+use qd_train::step::ParamSpec;
+use qd_train::trainer::{ConsumedBatch, HostParams, TrainError};
+
+/// `tools/qd_train_oracle_trainer.py --out` this file.
+pub fn trainer_oracle() -> serde_json::Value {
+    let path = crate_dir().join("tests").join("fixtures").join("trainer-oracle.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+pub fn fhex(v: &serde_json::Value) -> f64 {
+    float_fromhex(v.as_str().expect("a float.hex string")).expect("parse float.hex")
+}
+
+pub fn fhex_list(v: &serde_json::Value) -> Vec<f64> {
+    v.as_array().expect("a list").iter().map(fhex).collect()
+}
+
+/// A span row for [`ToySpanHead`]: the candidate positions and the gold start/end as indices
+/// into the candidates, `candidates.len()` meaning "abstain".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToySpan {
+    pub candidates: Vec<u32>,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToyRow {
+    pub tokens: Vec<u32>,
+    pub letter: Option<LetterTarget>,
+    pub span: Option<ToySpan>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToyBatch {
+    pub index: u64,
+    pub bucket: u64,
+    pub width: usize,
+    pub rows: Vec<ToyRow>,
+}
+
+impl ConsumedBatch for ToyBatch {
+    fn index(&self) -> u64 {
+        self.index
+    }
+
+    fn fold_into(&self, prefix: &mut ConsumedPrefix) -> Result<(), TrainError> {
+        let mut tokens = Vec::new();
+        let mut lengths = Vec::new();
+        for r in &self.rows {
+            for c in 0..self.width {
+                tokens.extend_from_slice(&r.tokens.get(c).copied().unwrap_or(0).to_le_bytes());
+            }
+            lengths.extend_from_slice(&(r.tokens.len() as i32).to_le_bytes());
+        }
+        let target: Vec<u8> = self
+            .rows
+            .iter()
+            .flat_map(|r| i64::from(r.letter.map_or(-1, |l| l.position as i32)).to_le_bytes())
+            .collect();
+        // `trainer._fold`'s parts: index and bucket (8 bytes BE), tokens, lengths, then
+        // slot_kind, target_index, span_target, line_starts (absent arrays as no bytes).
+        prefix.fold(&[
+            &self.index.to_be_bytes(),
+            &self.bucket.to_be_bytes(),
+            &tokens,
+            &lengths,
+            &[],
+            &target,
+            &[],
+            &[],
+        ]);
+        Ok(())
+    }
+}
+
+impl FtBatch for ToyBatch {
+    type Span = ToySpan;
+
+    fn n_rows(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn padded_width(&self) -> usize {
+        self.width
+    }
+
+    fn row_tokens(&self, row: usize) -> &[u32] {
+        &self.rows[row].tokens
+    }
+
+    fn letter(&self, row: usize) -> Option<LetterTarget> {
+        self.rows[row].letter
+    }
+
+    fn span(&self, row: usize) -> Option<&ToySpan> {
+        self.rows[row].span.as_ref()
+    }
+}
+
+/// A pointer head: score(c) = u . h[c] for each candidate, abstain score b; start and end are
+/// two cross-entropies over the same scores (the toy shares one scorer for both).
+pub struct ToySpanHead {
+    pub u: Vec<f32>,
+    pub b: Vec<f32>,
+    pub gu: Vec<f32>,
+    pub gb: Vec<f32>,
+}
+
+impl ToySpanHead {
+    pub fn new(hidden: usize) -> Self {
+        Self {
+            u: (0..hidden).map(|i| 0.3 - 0.07 * i as f32).collect(),
+            b: vec![0.2],
+            gu: vec![0.0; hidden],
+            gb: vec![0.0],
+        }
+    }
+
+    fn scores(&self, hidden: &[f32], width: usize) -> Vec<f64> {
+        let mut s: Vec<f64> = hidden
+            .chunks(width)
+            .map(|h| h.iter().zip(&self.u).map(|(a, b)| f64::from(a * b)).sum())
+            .collect();
+        s.push(f64::from(self.b[0]));
+        s
+    }
+
+    /// The row's unscaled loss with the head as it is (for central differences).
+    pub fn row_loss(&self, span: &ToySpan, hidden: &[f32], width: usize) -> f64 {
+        let s = self.scores(hidden, width);
+        let max = s.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let lse = max + s.iter().map(|x| (x - max).exp()).sum::<f64>().ln();
+        (lse - s[span.start]) + (lse - s[span.end])
+    }
+}
+
+impl HostParams for ToySpanHead {
+    fn entries(&self) -> Vec<ParamSpec> {
+        vec![ParamSpec::new("pointer.weight", &[self.u.len()]), ParamSpec::new("abstain", &[1])]
+    }
+
+    fn zero_grads(&mut self) {
+        self.gu.iter_mut().for_each(|x| *x = 0.0);
+        self.gb[0] = 0.0;
+    }
+
+    fn grads(&self) -> Vec<&[f32]> {
+        vec![&self.gu, &self.gb]
+    }
+
+    fn values(&self) -> Vec<&[f32]> {
+        vec![&self.u, &self.b]
+    }
+
+    fn values_and_grads(&mut self) -> Vec<(&mut [f32], &[f32])> {
+        vec![(&mut self.u, &self.gu), (&mut self.b, &self.gb)]
+    }
+}
+
+impl SpanHead for ToySpanHead {
+    type Span = ToySpan;
+
+    fn positions(&self, span: &ToySpan) -> Result<Vec<u32>, String> {
+        let mut p = span.candidates.clone();
+        p.sort_unstable();
+        p.dedup();
+        if p.len() != span.candidates.len() || p != span.candidates {
+            return Err("candidates must be distinct and ascending".into());
+        }
+        Ok(p)
+    }
+
+    fn loss_and_grad(
+        &mut self,
+        span: &ToySpan,
+        positions: &[u32],
+        hidden: &[f32],
+        width: usize,
+        scale: f32,
+    ) -> Result<(f64, Vec<f32>), String> {
+        if positions.len() * width != hidden.len() {
+            return Err("hidden does not fit the positions".into());
+        }
+        let s = self.scores(hidden, width);
+        let max = s.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let lse = max + s.iter().map(|x| (x - max).exp()).sum::<f64>().ln();
+        let loss = (lse - s[span.start]) + (lse - s[span.end]);
+        // d loss / d s_j = 2 softmax_j - [j == start] - [j == end]
+        let ds: Vec<f64> = (0..s.len())
+            .map(|j| 2.0 * (s[j] - lse).exp() - f64::from(u8::from(j == span.start)) - f64::from(u8::from(j == span.end)))
+            .collect();
+        let sc = f64::from(scale);
+        let mut dh = vec![0.0f32; hidden.len()];
+        for (k, h) in hidden.chunks(width).enumerate() {
+            let d = (ds[k] * sc) as f32;
+            for i in 0..width {
+                dh[k * width + i] = d * self.u[i];
+                self.gu[i] += d * h[i];
+            }
+        }
+        self.gb[0] += (ds[s.len() - 1] * sc) as f32;
+        Ok((loss, dh))
+    }
+}
