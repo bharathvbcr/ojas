@@ -178,6 +178,9 @@ pub enum Termination {
     DataExhausted,
     StepsExhausted,
     WallClockCap,
+    /// [`EtaRule`]: the projected run would not finish inside the cap, so it stopped early
+    /// rather than be cut off by it.
+    EtaRule,
 }
 
 impl Termination {
@@ -186,7 +189,61 @@ impl Termination {
             Termination::DataExhausted => "data_exhausted",
             Termination::StepsExhausted => "steps_exhausted",
             Termination::WallClockCap => "wall_clock_cap",
+            Termination::EtaRule => "eta_rule",
         }
+    }
+
+    /// Whether the run ended because it ran out of work, not because it ran out of time.
+    pub fn finished(&self) -> bool {
+        matches!(self, Termination::DataExhausted | Termination::StepsExhausted)
+    }
+}
+
+/// Rung (d)'s early stop (`AUDIT/ojas-training-2026-10-01/fable-rung-d-resize.md`): once
+/// optimizer step `at_step` has completed, project this process's elapsed time to the end of
+/// the schedule and stop with [`Termination::EtaRule`] when the projection exceeds the cap
+/// less `margin_s`. For a fresh run that is `elapsed / at_step * total_steps > cap - margin_s`
+/// (rung (d): `elapsed / 10 * 200 > 21600 - 900`). A resumed run's clock and cap are its own
+/// process's, so the projection is over the steps this process took and has left
+/// (`at_step - first_step` of `total_steps - first_step`); a run resumed at or past `at_step`
+/// was projected by the process that took that step, and is not projected again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EtaRule {
+    pub at_step: u64,
+    pub margin_s: f64,
+}
+
+impl EtaRule {
+    fn validate(&self, total_steps: u64, cap_s: f64) -> Result<(), TrainError> {
+        if self.at_step == 0 || self.at_step >= total_steps {
+            return Err(TrainError::Refused(format!(
+                "the ETA rule's step {} must be in [1, {total_steps}): at step 0 nothing has been timed, \
+                 and at the last step there is nothing left to stop",
+                self.at_step
+            )));
+        }
+        if !(self.margin_s.is_finite() && self.margin_s >= 0.0 && self.margin_s < cap_s) {
+            return Err(TrainError::Refused(format!(
+                "the ETA rule's margin {} s must be finite, non-negative and under the {cap_s} s cap",
+                self.margin_s
+            )));
+        }
+        Ok(())
+    }
+
+    /// The projected seconds for this process's whole schedule, when the rule is evaluated
+    /// after `optimizer_step` steps (only at `at_step`, and only by the process that took it).
+    fn projection(&self, optimizer_step: u64, first_step: u64, total_steps: u64, elapsed_s: f64) -> Option<f64> {
+        if optimizer_step != self.at_step || first_step >= self.at_step {
+            return None;
+        }
+        let taken = (self.at_step - first_step) as f64;
+        Some(elapsed_s / taken * (total_steps - first_step) as f64)
+    }
+
+    /// Whether a projection stops the run: it exceeds the cap less the margin.
+    pub fn stops(&self, projected_s: f64, cap_s: f64) -> bool {
+        projected_s > cap_s - self.margin_s
     }
 }
 
@@ -208,6 +265,7 @@ pub struct TrainConfig {
     pub epoch: u64,
     pub seed: u64,
     pub checkpoint: Option<CheckpointPolicy>,
+    pub eta: Option<EtaRule>,
 }
 
 /// One optimizer step, as it was taken.
@@ -248,6 +306,8 @@ pub struct TrainResult {
     pub wall_clock_s: f64,
     /// The checkpoint written at the end, if a policy was given.
     pub final_checkpoint: Option<PathBuf>,
+    /// The [`EtaRule`]'s projection of this process's schedule, when this process evaluated it.
+    pub eta_projected_s: Option<f64>,
 }
 
 impl TrainResult {
@@ -319,6 +379,9 @@ where
         return Err(TrainError::Refused(format!("max_grad_norm must be positive, got {}", cfg.max_grad_norm)));
     }
     cfg.optimizer.validate()?;
+    if let Some(eta) = &cfg.eta {
+        eta.validate(cfg.schedule.total_steps(), cfg.cap.cap_s())?;
+    }
     if cfg.schedule.peak_lr() != cfg.optimizer.lr {
         return Err(TrainError::Refused(format!(
             "the schedule peaks at {} but the recipe's lr is {}: two learning rates for one run",
@@ -465,6 +528,7 @@ where
     let mut last_index: Option<u64> = start_index.checked_sub(1);
     let mut first_in_group = true;
     let mut last_checkpoint: Option<PathBuf> = None;
+    let mut eta_projected_s: Option<f64> = None;
     let termination;
 
     loop {
@@ -664,6 +728,15 @@ where
                 last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_moments, last_checkpoint.as_deref())?);
             }
         }
+        if let Some(eta) = &cfg.eta
+            && let Some(projected) = eta.projection(optimizer_step, first_step, total_steps, clock.elapsed_s()?)
+        {
+            eta_projected_s = Some(projected);
+            if eta.stops(projected, cfg.cap.cap_s()) {
+                termination = Termination::EtaRule;
+                break;
+            }
+        }
     }
 
     let next_index = last_index.map_or(start_index, |i| i + 1);
@@ -701,6 +774,7 @@ where
         next_index,
         wall_clock_s: wall,
         final_checkpoint: last_checkpoint,
+        eta_projected_s,
     })
 }
 
