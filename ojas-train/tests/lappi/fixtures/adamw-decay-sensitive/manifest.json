@@ -8,7 +8,7 @@
   "script": "tools/qd_train_oracle_adamw.py",
   "script_sha256": "c4335a9a6f62c3cce79ef988eb8c99eac73474c8c6fadddc94fd695625fede3e",
   "command": "PYTHONPATH=python /Users/bharath/.venvs/ml/bin/python tools/qd_train_oracle_adamw.py --out crates/qd-train/tests/fixtures/adamw-decay-sensitive",
-  "git_head": "d98bd30c6a77311f84049a50eacda22e3e985d8a",
+  "git_head": "fd5fe80f6fbe6d3e635b87a25f3e93982db9c3d8",
   "python": "3.14.7",
   "torch": "2.12.1",
   "safetensors": "0.8.0",
