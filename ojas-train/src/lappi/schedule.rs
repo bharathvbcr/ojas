@@ -91,8 +91,19 @@ impl LrSchedule {
     /// `tools/real_ft_run._control`'s schedule: peak `lr`, warmup `max(1, steps // 20)`, floor
     /// `lr / 10`. The `max(1, ...)` matters below 20 steps: rung (b)'s 20-step run warms up for
     /// one step, not zero.
+    ///
+    /// Exactly [`LrSchedule::real_ft_with_floor`] at `min_lr = lr / 10`, the floor every run
+    /// without `--min-lr` trains on (`crates/qd-train-metal/src/run.rs` calls this).
     pub fn real_ft(lr: f64, steps: u64) -> Result<Self, ScheduleError> {
-        Self::new(lr, steps, (steps / 20).max(1), lr / 10.0)
+        Self::real_ft_with_floor(lr, steps, lr / 10.0)
+    }
+
+    /// `tools/real_ft_run._control` under `--min-lr min_lr` (v5's `recipe.added`, `--min-lr 0`):
+    /// the same peak and warmup as [`LrSchedule::real_ft`], the cosine floor given rather than
+    /// `lr / 10`. With a layer-wise split the lower layers run at their scale times this rate,
+    /// so a zero floor is a zero floor for them too.
+    pub fn real_ft_with_floor(lr: f64, steps: u64, min_lr: f64) -> Result<Self, ScheduleError> {
+        Self::new(lr, steps, (steps / 20).max(1), min_lr)
     }
 
     pub fn peak_lr(&self) -> f64 {
@@ -177,5 +188,23 @@ mod tests {
         let s = LrSchedule::real_ft(1e-5, 100).unwrap();
         assert_eq!(s.min_lr(), 1e-5 / 10.0);
         assert_eq!(s.lr_at(4).unwrap(), 1e-5, "the last warmup step is the peak exactly");
+    }
+
+    #[test]
+    fn real_ft_with_floor_is_real_ft_but_for_the_floor() {
+        for steps in [2u64, 20, 200, 9683] {
+            let default = LrSchedule::real_ft(1e-5, steps).unwrap();
+            let same = LrSchedule::real_ft_with_floor(1e-5, steps, 1e-5 / 10.0).unwrap();
+            assert_eq!(default, same, "real_ft is real_ft_with_floor at lr / 10");
+            let zero = LrSchedule::real_ft_with_floor(1e-5, steps, 0.0).unwrap();
+            assert_eq!(zero.warmup_steps(), default.warmup_steps());
+            assert_eq!(zero.min_lr(), 0.0);
+            let last = zero.lr_at(steps - 1).unwrap();
+            assert!(last > 0.0, "the last step of a zero floor is still a positive rate");
+            assert!(last <= default.lr_at(steps - 1).unwrap());
+        }
+        assert!(LrSchedule::real_ft_with_floor(1e-5, 200, -1e-9).is_err());
+        assert!(LrSchedule::real_ft_with_floor(1e-5, 200, f64::NAN).is_err());
+        assert!(LrSchedule::real_ft_with_floor(1e-5, 200, 2e-5).is_err(), "above the peak");
     }
 }

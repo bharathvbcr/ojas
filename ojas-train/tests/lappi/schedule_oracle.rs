@@ -51,6 +51,43 @@ fn real_ft_matches_the_schedules_python_built_for_real_ft_run() {
     assert_eq!(matched, 8, "the eight real_ft_run schedules in the fixture");
 }
 
+/// `--min-lr 0` (v5 `recipe.added[1]`): `LrSchedule::real_ft_with_floor(lr, steps, 0.0)` is
+/// `LRSchedule(lr, steps, max(1, steps // 20), 0.0)` bit for bit at every dumped step. Four
+/// fixture schedules follow that rule: the three the oracle dumps for it, (1e-5, 20),
+/// (1e-5, 200) and F's epoch length (1e-5, 9683), and the older direct (3e-4, 7, 1, 0.0),
+/// whose warmup is also `max(1, 7 // 20)`.
+#[test]
+fn real_ft_with_floor_reproduces_every_floor_zero_schedule_bit_for_bit() {
+    let o = common::trainer_oracle();
+    let mut matched = Vec::new();
+    for case in o["schedule"].as_array().unwrap() {
+        let floor = common::fhex(&case["min_lr"]);
+        if floor.to_bits() != 0.0f64.to_bits() {
+            continue;
+        }
+        let peak = common::fhex(&case["peak_lr"]);
+        let total = case["total_steps"].as_u64().unwrap();
+        let built = LrSchedule::real_ft_with_floor(peak, total, 0.0).unwrap();
+        if built.warmup_steps() != case["warmup_steps"].as_u64().unwrap() {
+            continue;
+        }
+        let steps = case["steps"].as_array().unwrap();
+        let want = common::fhex_list(&case["lr"]);
+        for (step, w) in steps.iter().zip(want) {
+            let step = step.as_u64().unwrap();
+            let got = built.lr_at(step).unwrap();
+            assert_eq!(
+                got.to_bits(),
+                w.to_bits(),
+                "real_ft_with_floor({peak:e}, {total}, 0) step {step}: {got:e} vs Python {w:e}"
+            );
+        }
+        matched.push((peak, total));
+    }
+    assert_eq!(matched.len(), 4, "floor-0 schedules on the real_ft rule: {matched:?}");
+    assert!(matched.contains(&(1e-5, 9683)), "F's epoch length at floor 0: {matched:?}");
+}
+
 /// The oracle's case for `(peak, total, warmup, min_lr)`, its steps and Python's rates.
 fn case(o: &serde_json::Value, peak: f64, total: u64, min_lr: f64) -> (Vec<u64>, Vec<f64>) {
     let c = o["schedule"]
