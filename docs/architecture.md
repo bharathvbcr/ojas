@@ -13,17 +13,22 @@ flowchart TD
     subgraph CorePillars["The Five Pillars of ojas"]
         P1["1. Deterministic Bit-Identicality\n(Reproducible scientific results without hidden seed drift)"]
         P2["2. Zero Silent Fallbacks\n(Hardware unavailability fails loud and early; no secret CPU throttling)"]
-        P3["3. Strict Memory Budgets\n(Explicit try_reserve() bounds memory consumption without OOM panics)"]
+        P3["3. Strict Memory Budgets\n(try_reserve refuses. vec!, format!, and thread::spawn can still abort)"]
         P4["4. In-Process Multi-Language Runtime\n(Native Rust core exposed seamlessly to Go and C without IPC overhead)"]
         P5["5. Zero-Copy Tensor Views\n(Slices preserve explicit byte offsets across multi-backend kernels)"]
     end
 ```
 
+> [!IMPORTANT]
+> **Radical Determinism:** Deep learning research requires exact reproducibility. ojas enforces bit-identical outputs across single-threaded CPU runs and across SIMD backends in the Exact tier, avoiding nondeterministic thread reduction tree races.
+> 
+> **Zero Silent Fallback Guarantee:** When an accelerator backend is selected (Metal, wgpu, CUDA, HIP), driver initialization failures produce immediate, explicit errors—**never silently falling back to host CPU execution**.
+
 ---
 
 ## 2. Framework Decomposition
 
-ojas separates concerns into decoupled layers with unidirected dependencies:
+ojas separates concerns into decoupled layers with unidirectional dependencies:
 
 ```mermaid
 flowchart TD
@@ -39,21 +44,25 @@ flowchart TD
     end
 
     subgraph Layer3["3. Models, Autograd & High-Level Primitives"]
-        Infer["ojas-infer (KV Cache, Greedy & Sampling Decode, Logit Guard)"]
-        Autograd["ojas-autograd (Dynamic Reverse-Mode Tape, Var, f64 Gradcheck)"]
+        Infer["ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CPU)"]
+        Model["ojas-model (nanolab GPT written once: spec, init, Graph block, Eval, Trainer, checkpoint dir)"]
+        Qwen35["ojas-qwen35 (Qwen3.5 whole-step provider over tessl; macOS Metal only; not a Backend)"]
+        Autograd["ojas-autograd (Reverse-Mode Tape; uploads on GPU)"]
     end
 
     subgraph Layer2["2. Hardware Compute Acceleration Backends"]
-        CPU["ojas-cpu (f32 reference, 8-wide scalar lanes)"]
-        Metal["ojas-metal (Apple Silicon Metal 4 via tessl & Native MSL)"]
-        WGPU["ojas-wgpu (Cross-Platform Portable WGSL via WebGPU)"]
-        CUDA["ojas-cuda (NVIDIA PTX Launch via cudarc)"]
-        HIP["ojas-hip (AMD ROCm/HIP Launch via hip-runtime-sys)"]
+        CPU["ojas-cpu (CpuBackend: Exact packed GEMM, or Fast with Accelerate)"]
+        SIMD["ojas-simd (NEON GEMM, AVX2, Accelerate cblas_sgemm)"]
+        Metal["ojas-metal (MetalBackend via tessl & MSL, device-resident)"]
+        WGPU["ojas-wgpu (WgpuBackend, device-resident WGSL)"]
+        Kernels["ojas-kernels (Shared WGSL/CUDA sources, workgroup geometry)"]
+        CUDA["ojas-cuda (one affine kernel, feature cuda; not a Backend)"]
+        HIP["ojas-hip (copy probe, feature hip; not a Backend)"]
     end
 
     subgraph Layer1["1. Core Substrates & Data Ingestion"]
-        Core["ojas-core (Tensor, Layout, Budget, DType, OjasError)"]
-        Device["ojas-device (Device Enumeration, Hardware Probing)"]
+        Core["ojas-core (Tensor host & device, Layout, Budget, DType, Numerics, OjasError)"]
+        Device["ojas-device (Device kinds, host probe, ResourcePolicy; no router)"]
         IO["ojas-io (Safetensors Reader/Writer, Checkpoint v1 Binary Codec)"]
         Data["ojas-data (Dataset Binary Streaming, Deterministic Counter RNG)"]
         Oracle["ojas-oracle (IEEE-754 f64 Analytical Reference Data)"]
@@ -66,12 +75,14 @@ flowchart TD
     Layer3 --> Layer1
 ```
 
+Inside layer 3, `ojas-model` sits on `ojas-autograd`, `ojas-io` and `ojas-data`, and `ojas-infer` sits on `ojas-model`. `ojas-capi` depends on the model, inference, io, data, cpu, wgpu, metal and device crates. `ojas-qwen35` depends only on `ojas-core`, `ojas-io` and tessl, and is empty off macOS. The design is in [`framework-design.md`](framework-design.md).
+
 ---
 
 ## 3. General-Purpose Tensor Engine & Memory Model
 
 ### 3.1 Tensor View Model
-A `Tensor` in `ojas-core` is an immutable or mutably borrowable view into a contiguous byte storage backing (`Arc<Vec<u8>>` or hardware buffer):
+A `Tensor` in `ojas-core` is an immutable or mutably borrowable view into a contiguous byte storage backing (`Arc<Vec<u8>>` or a backend's device buffer). `Tensor::from_device` wraps a device buffer; `to_host` copies it back and is counted by `device_readbacks()`; `device_buffer_mut` requires sole ownership. Host accessors such as `to_f32_vec` refuse a device tensor rather than reading it back implicitly.
 
 $$\text{Element Index}(\mathbf{i}) = \text{byte\_offset} + \sum_{k=0}^{\text{rank}-1} i_k \cdot \text{strides}[k] \cdot \text{dtype.size\_bytes}()$$
 
@@ -97,6 +108,11 @@ flowchart LR
     ViewB --> Active
 ```
 
+> [!NOTE]
+> `Tensor::narrow(dim, start, len)` creates a new zero-copy view by calculating the new `byte_offset` and updating dimensions. It never copies underlying buffer elements or causes memory fragmentation.
+
+---
+
 ### 3.2 Memory Budgeting State Machine
 All tensor allocations in `ojas` must request permits from a `Budget`. Memory cannot be silently resized, overcommitted, or swapped:
 
@@ -114,11 +130,14 @@ stateDiagram-v2
     Rejected --> [*]: Returns Err(OjasError::CapacityExceeded)
 ```
 
+> [!IMPORTANT]
+> If an allocation exceeds remaining budget limits, `try_reserve()` returns `Err(OjasError::CapacityExceeded)` immediately. The engine **refuses to silently swap to disk or resize limits**. Infallible system allocators (`vec!`, `format!`, `thread::spawn`) operate outside this software budget and can still abort if physical host memory is exhausted.
+
 ---
 
 ## 4. Dynamic Reverse-Mode Autograd Tape
 
-`ojas-autograd` implements a dynamic tape-based automatic differentiation engine capable of constructing and executing reverse sweeps for arbitrary neural architectures:
+`ojas-autograd` implements a dynamic tape-based automatic differentiation engine. On a CPU backend the tensors stay as given and the cross-entropy seed is scaled on the host. On any other backend, `leaf` and the saved inputs are uploaded, reshape is a zero-copy `Tensor::view`, and the backward seed is uploaded. A non-root cross-entropy gradient is scaled with two rank-1 linears and a multiply, all on that backend.
 
 ```mermaid
 flowchart TD
@@ -164,32 +183,36 @@ sequenceDiagram
     participant CGO as CGO Wrapper (go/ffi.go)
     participant Gusset as Worker Pool (libgusset.a)
     participant CAPI as Dispatcher (ojas-capi)
-    participant Engine as Model Engine (ojas-cpu / ojas-metal)
+    participant Engine as Session Backend (CpuBackend / MetalBackend / WgpuBackend)
 
-    App->>CGO: ojas.Step(sessionID, req)
+    App->>CGO: ojas.TrainStep(ctx, id)
     CGO->>Gusset: Submit job to worker thread
-    Gusset->>CAPI: dispatch(OP_STEP, payload)
+    Gusset->>CAPI: dispatch(OP_TRAIN_STEP)
     
-    Note over CAPI: std::panic::catch_unwind boundary
+    Note over CAPI: catch_unwind catches a panic, not an abort
     alt Successful Execution
-        CAPI->>Engine: Run Forward + Backward + Optimizer
-        Engine-->>CAPI: StepStats{Loss, GradNorm, Lr}
+        CAPI->>Engine: Trainer step: forward, fused CE, backward, Muon + AdamW
+        Engine-->>CAPI: StepResult{Loss, GradNorm, MatrixLR, AdamLR, Step, Tokens}
         CAPI-->>Gusset: Serialized f32 Result Buffer
         Gusset-->>CGO: Return Buffer
-        CGO-->>App: StepStats, nil
+        CGO-->>App: StepResult, nil
     else Rust Panic Triggered
-        CAPI->>CAPI: Intercept panic, drop poisoned session
-        CAPI-->>Gusset: Return Error String
-        Gusset-->>CGO: Return Error
-        CGO-->>App: nil, error ("session poisoned and dropped")
+        Gusset->>Gusset: catch_unwind on the worker, poison the handle
+        Gusset-->>CGO: gusset.ErrPanic
+        CGO-->>App: error (later calls: gusset.ErrPoisoned until Close)
     end
 ```
+
+The Go surface is `LoadModel` or `NewModel`, `OpenTrainer`, `TrainStep`, `SaveCheckpoint` and `Resume`, `LoadTokenizer`, `Tokenize`, `Detokenize`, `GenerateIDs`, `SetMemoryCeiling`, `Free` and `Close`. The opcodes are in `ojas-capi/src/engine.rs`; the old stub step opcode (2) is retired. Every model's byte budget is a child of one process-wide ceiling, 1 GiB by default, which `SetMemoryCeiling` raises and which cannot change while a model is open. Failures cross the boundary as typed kinds (`ErrCapacity`, `ErrNonFinite`, `ErrDeviceLost`, `ErrBusy`, `ErrPoisoned`), listed in [`go/README.md`](../go/README.md).
+
+> [!CAUTION]
+> A panic on a gusset worker is caught by `catch_unwind` and poisons the entire gusset handle: subsequent calls return `gusset.ErrPoisoned` until the handle is closed. If the panic occurred while holding the session table lock, the next lock acquisition **drops every session in the table** (`ojas-capi/src/session.rs`) to prevent corruption. Note that `catch_unwind` cannot intercept OS process aborts or stack overflows.
 
 ---
 
 ## 6. Flagship Reference Architecture: nanolab Default GPT
 
-To validate full-stack training performance, `ojas` implements the 124M nanolab default GPT as its v1 vertical slice:
+To validate full-stack training, `ojas` targets the 124M nanolab default GPT (12 layers, width 768, 12 heads of 64, SwiGLU 2048, vocabulary 50304, tied embedding) as its v1 vertical slice. `ojas-model` writes the model once. The `Graph` trait has one method per op, and two executors implement it: `ojas_autograd::Tape` records for training and `Eval` runs eagerly for decoding, so training and decoding share one block. Parameter names are nanolab `state_dict` keys, init is order-independent (one counter RNG per name), and `Trainer` saves and resumes a checkpoint directory. CI exercises `ModelSpec::tiny` and a 40 KB fixture; no full 124M run is recorded in [`status.md`](status.md). The block:
 
 ```mermaid
 flowchart TD
@@ -218,5 +241,41 @@ flowchart TD
 ```
 
 ### Dual Optimizer Topology
+
+```mermaid
+flowchart TD
+    subgraph ModelWeights["Model Parameters"]
+        HiddenMat["Hidden 2D Weight Matrices (Rank >= 2)\n- Q, K, V Projections\n- Attention Out Projection\n- SwiGLU Gate, Up, Down Projections\n- Attention Gate Weight"]
+        OneD["1D Parameters & Embeddings\n- Token / LM Head Embedding\n- RMSNorm Scale Weights\n- Attention Gate Biases\n- Value Residual Lambdas (vr_lambda)"]
+    end
+
+    subgraph Optimizers["Dual Optimizers"]
+        Muon["Muon NS5 Optimizer\n- LR = 0.025, Momentum = 0.99, Nesterov = True\n- 5th-order Newton-Schulz iterate in bf16\n- Zeropower orthogonalization"]
+        AdamW["AdamW Optimizer\n- PyTorch single-tensor order (decay first)\n- eps = 1e-8 outside sqrt\n- Weight decay = 0.0 on Muon hybrid"]
+    end
+
+    HiddenMat --> Muon
+    OneD --> AdamW
+```
+
 * **Matrices ($\text{rank} \ge 2$):** Optimized via **Muon NS5** (Nesterov momentum, quintic Newton-Schulz iterate in `bf16`).
 * **Vectors & Embeddings ($\text{rank} < 2$):** Optimized via **AdamW** (PyTorch single-tensor order, decay first, $\varepsilon=10^{-8}$ outside square root).
+
+---
+
+## 7. Web Documentation, Identity & Domain Ecosystem
+
+### 7.1 Web Application Architecture
+The site ([`site/`](file:///Users/bharath/Code/research/ojas/site), mirrored to [`docs/`](file:///Users/bharath/Code/research/ojas/docs)) is several pages. Home holds the labs. `why.html` is the motivation, `benchmarks.html` the timings, `roadmap.html` what comes next, and `guide/` the reference:
+* **Guarantee labs:** a determinism lab that sums the same float32 values with split-k and with the Exact order, plus memory budget, device refusal, panic firewall, and checked shape and view labs. Each prints the error text from the source.
+* **Why ojas:** the reasons, the author's account of the defects in `docs/audit.md` that led to ojas, and what it is and is not ready for.
+* **Roadmap:** `roadmap.html`. The next phase is a real model through the public API, then the measured Metal attention gap.
+* **Developer docs:** quickstart (with Rust and Go snippets compiled against this tree), core concepts, feature reference, Go API reference, architecture and crates, status and limits, and contributing rules.
+* **Command palette:** `⌘K` or `/` searches the labs and every docs article.
+
+### 7.2 Visual Identity (ojas)
+One logo: a regular icosahedron of dark red liquid glass with a glowing core, in the same material as the LiquiTask logo. [`docs/brand/ojas-logo-source.png`](brand/ojas-logo-source.png) is the only source; [`docs/brand/render.sh`](brand/render.sh) derives the transparent logo, the tile, the favicon, touch and manifest icons, and the 1200×630 social card from it. Asset list and regeneration: [`web-and-domain.md`](web-and-domain.md#2-visual-identity-one-logo).
+
+### 7.3 Domain Wiring & Deployment Topology
+* **Canonical Domain:** [`https://ojas.vbcr.dev/`](https://ojas.vbcr.dev/) via [`site/CNAME`](file:///Users/bharath/Code/research/ojas/site/CNAME) and [`.github/workflows/deploy-pages.yml`](file:///Users/bharath/Code/research/ojas/.github/workflows/deploy-pages.yml).
+* **Integrated Portfolio Route:** [`https://bharath.vbcr.dev/ojas`](https://bharath.vbcr.dev/ojas) resolved via `APP_ROUTES['ojas']` and `PROJECT_SITES['ojas']` (`p41`) in the portfolio engine.

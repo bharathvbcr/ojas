@@ -1,0 +1,34 @@
+{
+  "name": "L63",
+  "rule": "published",
+  "B": 2,
+  "H": 3,
+  "L": 63,
+  "D": 8,
+  "chunk": 32,
+  "seed": 1002,
+  "h_kv": null,
+  "kv_expansion": null,
+  "alpha_mode": "sigmoid",
+  "k_l2_normalized": true,
+  "alpha_clamp": [
+    0.0001,
+    1.0
+  ],
+  "beta_clamp": [
+    0.0,
+    1.0
+  ],
+  "max_abs_chunked_vs_f64seq": 1.7444822835166462e-06,
+  "max_abs_output": 6.835531627341991,
+  "max_abs_published_vs_repo": 1.87864351272583,
+  "files": [
+    "gdn_published_L63_q.npy",
+    "gdn_published_L63_k.npy",
+    "gdn_published_L63_v.npy",
+    "gdn_published_L63_alpha.npy",
+    "gdn_published_L63_beta.npy",
+    "gdn_published_L63_y_chunked.npy",
+    "gdn_published_L63_y_seq_f64.npy"
+  ]
+}

@@ -1,0 +1,22 @@
+[package]
+name = "ojas-model"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "The nanolab GPT written once: spec, names, init, the block over Tape and Eval, and the device trainer."
+
+[dependencies]
+ojas-core = { path = "../ojas-core" }
+ojas-cpu = { path = "../ojas-cpu" }
+ojas-autograd = { path = "../ojas-autograd" }
+ojas-io = { path = "../ojas-io" }
+ojas-data = { path = "../ojas-data" }
+
+[dev-dependencies]
+ojas-oracle = { path = "../ojas-oracle" }
+ojas-wgpu = { path = "../ojas-wgpu" }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+ojas-metal = { path = "../ojas-metal" }

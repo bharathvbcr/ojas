@@ -1,0 +1,16 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"floor_silu_1","when":"before","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"floor_silu_1","status":"ok","min_ms":0.148000,"median_ms":1.361521,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"floor_silu_1","when":"after","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rope_bwd","when":"before","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"rope_bwd","status":"ok","min_ms":0.367750,"median_ms":1.534271,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rope_bwd","when":"after","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_fwd","when":"before","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"residual_add_fwd","status":"ok","min_ms":0.585500,"median_ms":0.748229,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_fwd","when":"after","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_bwd","when":"before","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"residual_add_bwd","status":"ok","min_ms":0.565958,"median_ms":0.677646,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_bwd","when":"after","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"permute_bthd_bhtd","when":"before","load":"25.68 43.66 43.76","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"permute_bthd_bhtd","status":"ok","min_ms":0.347625,"median_ms":0.524583,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":0e0}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"permute_bthd_bhtd","when":"after","load":"25.68 43.66 43.76","gpu_util_pct":100}

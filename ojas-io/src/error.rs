@@ -7,7 +7,9 @@ pub struct IoError {
 }
 
 impl IoError {
-    pub(crate) fn new(detail: impl Into<String>) -> Self {
+    /// Public so a [`crate::replace_dir_with`] fill closure can report its own
+    /// failures.
+    pub fn new(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
         }

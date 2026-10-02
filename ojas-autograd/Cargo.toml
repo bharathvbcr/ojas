@@ -5,8 +5,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "CPU tape autograd. Lane A."
+description = "Tape autograd. CPU gradcheck; GPU backends upload."
 
 [dependencies]
 ojas-core = { path = "../ojas-core" }
 ojas-cpu = { path = "../ojas-cpu" }
+
+[dev-dependencies]
+ojas-wgpu = { path = "../ojas-wgpu" }

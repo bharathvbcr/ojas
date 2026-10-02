@@ -1,0 +1,58 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"floor_silu_1","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"floor_silu_1","status":"ok","min_ms":0.097000,"median_ms":0.154063,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"floor_silu_1","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rms_norm_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"rms_norm_fwd","status":"ok","min_ms":0.319250,"median_ms":0.407125,"iters":50,"warmup":10,"parity_max_abs":3.5762786865234375e-7,"parity_rel":1.9746072094883825e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rms_norm_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rms_qk_norm_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"rms_qk_norm_fwd","status":"ok","min_ms":0.558917,"median_ms":0.618271,"iters":50,"warmup":10,"parity_max_abs":3.5762786865234375e-7,"parity_rel":1.734851135315497e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rms_qk_norm_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rope_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"rope_fwd","status":"ok","min_ms":0.314792,"median_ms":0.402229,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rope_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rope_bwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"rope_bwd","status":"ok","min_ms":0.336959,"median_ms":0.412458,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"rope_bwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"silu_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"silu_fwd","status":"ok","min_ms":0.801458,"median_ms":0.976584,"iters":50,"warmup":10,"parity_max_abs":2.384185791015625e-7,"parity_rel":6.069635839451576e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"silu_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"silu_bwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"silu_bwd","status":"ok","min_ms":1.135792,"median_ms":1.232563,"iters":50,"warmup":10,"parity_max_abs":1.1920928955078125e-7,"parity_rel":1.0838847687418038e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"silu_bwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"mul_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"mul_fwd","status":"ok","min_ms":1.154708,"median_ms":1.271479,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"mul_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"mul_bwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"mul_bwd","status":"ok","min_ms":1.864833,"median_ms":2.162333,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"mul_bwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"residual_add_fwd","status":"ok","min_ms":0.563333,"median_ms":0.698167,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_bwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"residual_add_bwd","status":"ok","min_ms":0.658750,"median_ms":1.145062,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"residual_add_bwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"gate_fwd","status":"ok","min_ms":0.573875,"median_ms":0.673896,"iters":50,"warmup":10,"parity_max_abs":8.940696716308594e-8,"parity_rel":1.0354144173726524e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_bwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"gate_bwd","status":"ok","min_ms":2.013625,"median_ms":2.211167,"iters":50,"warmup":10,"parity_max_abs":2.25067138671875e-4,"parity_rel":2.308042094932353e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_bwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"vres_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"vres_fwd","status":"ok","min_ms":0.478167,"median_ms":0.556500,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"vres_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"vres_bwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"vres_bwd","status":"ok","min_ms":0.849167,"median_ms":0.958875,"iters":50,"warmup":10,"parity_max_abs":3.0517578125e-5,"parity_rel":2.268359134784312e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"vres_bwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"permute_bthd_bhtd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"permute_bthd_bhtd","status":"ok","min_ms":0.312708,"median_ms":0.389188,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":0e0}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"permute_bthd_bhtd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"cross_entropy_fwd","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"cross_entropy_fwd","status":"no_ref","detail":"no reference /Users/bharath/Code/research/ojas/bench/results/2026-10-01-r4-smallops/ref/cross_entropy_fwd.spec: No such file or directory (os error 2)"}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"cross_entropy_fwd","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"adamw_full","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"adamw_full","status":"no_ref","detail":"no reference /Users/bharath/Code/research/ojas/bench/results/2026-10-01-r4-smallops/ref/adamw_full.spec: No such file or directory (os error 2)"}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"adamw_full","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"accumulate_grad_50304x768","when":"before","load":"28.28 58.73 58.82","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"accumulate_grad_50304x768","status":"ok","min_ms":3.139833,"median_ms":3.550896,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"accumulate_grad_50304x768","when":"after","load":"28.28 58.73 58.82","gpu_util_pct":100}

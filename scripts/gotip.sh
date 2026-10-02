@@ -7,7 +7,7 @@
 set -euo pipefail
 
 if ! command -v gotip >/dev/null 2>&1; then
-  echo "gotip is not installed; tip gate skipped (unverified)" >&2
+  echo "gotip is not installed; optional tip gate skipped (unverified). Install gotip to run this leg." >&2
   exit 0
 fi
 

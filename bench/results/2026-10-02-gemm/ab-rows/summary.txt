@@ -1,0 +1,9 @@
+floor_silu_1 old rounds=6 min=0.119 med_of_mins=0.2 med_of_medians=0.451 parity_max_abs=0
+floor_silu_1 new rounds=6 min=0.116 med_of_mins=0.127 med_of_medians=0.282 parity_max_abs=0
+linear_lmhead_fwd old rounds=6 min=134.333 med_of_mins=146.679 med_of_medians=152.05 parity_max_abs=0
+linear_lmhead_fwd new rounds=6 min=68.157 med_of_mins=70.49 med_of_medians=73.168 parity_max_abs=0
+linear_lmhead_bwd old rounds=6 min=164.276 med_of_mins=177.801 med_of_medians=196.236 parity_max_abs=0.00015735626220703125
+linear_lmhead_bwd new rounds=6 min=156.774 med_of_mins=165.303 med_of_medians=201.146 parity_max_abs=0.00015735626220703125
+not timed:
+linear_ce_c1024x8192: no_ref
+linear_ce_c4096x50304: no_ref

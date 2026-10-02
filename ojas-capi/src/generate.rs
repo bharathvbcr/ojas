@@ -1,58 +1,95 @@
-//! Next-token selection.
+//! Next tokens.
 //!
-//! [`GEN_LOGITS`] calls [`ojas_infer::argmax_token`]. A non-finite logit is
-//! an error from that function, never token 0.
+//! GENERATE mode [`GEN_LOGITS`] is [`ojas_infer::argmax_token`] of the
+//! caller's host logits; it reads no model. A non-finite logit is an error
+//! from that function, never token 0.
 //!
-//! [`GEN_GREEDY`] cannot call [`ojas_infer::CpuGpt::greedy_decode`]: that
-//! function is public, and [`ojas_infer::GptWeights`] is public, but the
-//! block weight type is not exported, so a model cannot be built from this
-//! crate. The public pieces that can be called are [`ojas_infer::embed`] and
-//! [`ojas_infer::argmax_token`]. The logits in between are a
-//! [`ojas_cpu::CpuBackend`] linear of the embedded prompt.
+//! SAMPLE runs the session's model: an [`ojas_infer::DeviceDecoder`] over
+//! the session's current parameters (the trainer's, once one is open) on the
+//! session's device, with a KV cache sized to the request, then
+//! [`ojas_infer::DeviceDecoder::generate`] with temperature, top-k, top-p, a
+//! seed, a token budget and stop tokens. Each forward reads back one
+//! `[vocab]` logit row.
 
-use ojas_core::{Backend, Budget, Tensor};
-use ojas_cpu::CpuBackend;
-use ojas_infer::{argmax_token, embed};
+use ojas_core::{Backend, OjasError};
+use ojas_infer::{argmax_token, DeviceDecoder, GenerateConfig, SamplingConfig};
+use ojas_model::ModelParams;
+
+use crate::gate::Check;
+use crate::model::{on_model, Model};
+use crate::session;
+use crate::wire::{field, required, tag, Fields, Kind, Reader};
 
 pub const GEN_LOGITS: u32 = 1;
-pub const GEN_GREEDY: u32 = 2;
 
-pub fn generate(mode: u32, body: GenerateBody<'_>) -> Result<u32, String> {
-    match mode {
-        GEN_LOGITS => argmax_token(body.logits).map_err(|err| format!("generate: {err}")),
-        GEN_GREEDY => greedy(body.prompt),
-        other => Err(format!("generate: shape: unknown mode {other}")),
-    }
+/// Argmax of `logits`.
+pub fn argmax(logits: &[f32]) -> Result<u32, String> {
+    argmax_token(logits).map_err(|e| crate::ojas_error("generate", &e))
 }
 
-pub struct GenerateBody<'a> {
-    pub logits: &'a [f32],
-    pub prompt: &'a [u32],
+/// SAMPLE: `id: u64`, then `{temperature, top_k?, top_p?, seed,
+/// max_new_tokens, stop?, prompt}`. Returns the new ids (a stop token, when
+/// emitted, is the last).
+pub fn sample_request(bytes: &[u8], mut check: Check) -> Result<Vec<u32>, String> {
+    check()?;
+    let mut r = Reader::new(bytes);
+    let id = r.u64()?;
+    let f = Fields::read(
+        &mut r,
+        &[
+            field(tag::TEMPERATURE, Kind::F32),
+            field(tag::TOP_K, Kind::U32),
+            field(tag::TOP_P, Kind::F32),
+            field(tag::SEED, Kind::U64),
+            field(tag::MAX_NEW, Kind::U32),
+            field(tag::STOP, Kind::U32s),
+            field(tag::PROMPT, Kind::U32s),
+        ],
+    )?;
+    r.finish()?;
+    let to_usize =
+        |v: u32| usize::try_from(v).map_err(|_| "sample: count exceeds usize".to_string());
+    let cfg = GenerateConfig {
+        sampling: SamplingConfig {
+            temperature: required(f.f32(tag::TEMPERATURE), tag::TEMPERATURE)?,
+            top_k: f.u32(tag::TOP_K).map(to_usize).transpose()?,
+            top_p: f.f32(tag::TOP_P),
+        },
+        seed: required(f.u64(tag::SEED), tag::SEED)?,
+        max_new_tokens: to_usize(required(f.u32(tag::MAX_NEW), tag::MAX_NEW)?)?,
+        stop_tokens: f.u32s(tag::STOP).unwrap_or_default(),
+    };
+    let prompt = required(f.u32s(tag::PROMPT), tag::PROMPT)?;
+    let session = session::require(id)?;
+    let mut guard = session.lock_state()?;
+    let state = &mut *guard;
+    let armed = state.slot.arm(check);
+    on_model!(&state.engine, m => {
+        let ids = sample_on(m, &prompt, &cfg).map_err(|e| armed.report("sample", &e));
+        crate::settled("sample", &m.backend, ids)
+    })
 }
 
-fn greedy(prompt: &[u32]) -> Result<u32, String> {
+fn sample_on<B: Backend + Clone>(
+    m: &Model<B>,
+    prompt: &[u32],
+    cfg: &GenerateConfig,
+) -> Result<Vec<u32>, OjasError> {
+    cfg.sampling.validate()?;
     if prompt.is_empty() {
-        return Err("generate: shape: prompt is empty".to_string());
+        return Err(OjasError::Shape {
+            op: "sample",
+            detail: "prompt is empty".into(),
+        });
     }
-    // Vocab 2, width 1. Token 0 embeds to 1, token 1 embeds to 0.25.
-    let table = [1.0f32, 0.25];
-    let mut hidden = vec![0.0f32; prompt.len()];
-    embed(&table, 1, prompt, &mut hidden).map_err(|err| format!("generate: {err}"))?;
-    let budget = Budget::new(1 << 20);
-    let cpu = CpuBackend::new(budget.clone());
-    let x = Tensor::from_f32(&hidden, &[prompt.len(), 1], &budget)
-        .map_err(|err| format!("generate: {err}"))?;
-    let weight = Tensor::from_f32(&[1.0, 0.25], &[2, 1], &budget)
-        .map_err(|err| format!("generate: {err}"))?;
-    let logits = cpu
-        .linear_forward(&x, &weight)
-        .map_err(|err| format!("generate: {err}"))?;
-    let values = logits
-        .to_f32_vec()
-        .map_err(|err| format!("generate: {err}"))?;
-    let start = values
+    // The decoder forwards the prompt and every emitted token but the last.
+    // A request past `max_seq` gets a cache of `max_seq`, and the decoder
+    // refuses it as `CapacityExceeded` before any forward.
+    let needed = prompt
         .len()
-        .checked_sub(2)
-        .ok_or_else(|| "generate: shape: linear returned fewer than 2 logits".to_string())?;
-    argmax_token(&values[start..]).map_err(|err| format!("generate: {err}"))
+        .saturating_add(cfg.max_new_tokens.saturating_sub(1));
+    let capacity = needed.clamp(1, m.spec.max_seq);
+    let params = ModelParams::from_flat(&m.spec, m.params()?)?;
+    let mut decoder = DeviceDecoder::new(m.backend.clone(), &m.spec, &params, capacity)?;
+    decoder.generate(prompt, cfg)
 }

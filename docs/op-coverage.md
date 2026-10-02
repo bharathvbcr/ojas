@@ -6,44 +6,45 @@ The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d
 
 ---
 
-## Transformer Block Flow
+## Transformer Block Execution Flow
 
 ```mermaid
 flowchart TD
     subgraph TransformerBlock["nanolab GPT Layer Execution"]
-        X["Input Activations x [B, T, D]"] --> Norm1["Pre-RMSNorm (eps=1e-6)"]
+        X["Input Activations x [B, T, D]"] --> Norm1["Pre-RMSNorm (eps = 1e-6)"]
         
         subgraph AttentionMixer["Attention Mixer"]
             Norm1 --> QProj["Linear Q: [B, T, D] -> [B, T, H, d]"]
             Norm1 --> KProj["Linear K: [B, T, D] -> [B, T, H, d]"]
             Norm1 --> VProj["Linear V: [B, T, D] -> [B, T, H, d]"]
             
-            QProj --> RoPEQ["Half-Split RoPE (Q)"]
-            KProj --> RoPEK["Half-Split RoPE (K)"]
+            QProj --> NormQ["RMS Q-Norm"]
+            KProj --> NormK["RMS K-Norm"]
             
-            RoPEQ --> NormQ["RMS Q-Norm"]
-            RoPEK --> NormK["RMS K-Norm"]
+            NormQ --> RoPEQ["Half-Split RoPE (Q)"]
+            NormK --> RoPEK["Half-Split RoPE (K)"]
             
-            NormQ --> SDPA["Causal Scaled Dot-Product Attn\nscale = 1/sqrt(d_head) = 1/8"]
-            NormK --> SDPA
-            VProj --> SDPA
+            VProj --> VR["Value Residual Blend\nv = (1 - s) v + s v0, s = sigmoid(vr_lambda)\n(layer 0 publishes v0)"]
+            
+            RoPEQ --> SDPA["Causal Scaled Dot-Product Attn\nscale = 1/sqrt(d_head) = 1/8"]
+            RoPEK --> SDPA
+            VR --> SDPA
             
             Norm1 --> Gate["Linear Gate: [B, T, D] -> [B, T, H] + Bias\nGate = sigmoid(x W_g + b_g)"]
             
             SDPA --> GatedAttn["Per-Head Gated Attention\nAttn = SDPA * Gate"]
             Gate --> GatedAttn
             
-            GatedAttn --> VR["Value Residual Blend\nAttn_vr = lerp(Attn, V0, sigmoid(vr_lambda))"]
-            VR --> OutProj["Linear Output Projection: [B, T, D]"]
+            GatedAttn --> OutProj["Linear Output Projection: [B, T, D]"]
         end
         
         OutProj --> Res1["Residual Add (+)"]
         X --> Res1
         
         subgraph MLPMixer["SwiGLU MLP Mixer"]
-            Res1 --> Norm2["RMSNorm (eps=1e-6)"]
+            Res1 --> Norm2["RMSNorm (eps = 1e-6)"]
             Norm2 --> GateUp["Linear Gate & Up Projections"]
-            GateUp --> Swish["SwiGLU: (x W_gate) * silu(x W_up)"]
+            GateUp --> Swish["SwiGLU: silu(x W_gate) * (x W_up)"]
             Swish --> Down["Linear Down Projection"]
         end
         
@@ -62,11 +63,11 @@ flowchart TD
 flowchart TD
     subgraph ModelWeights["Model Parameters"]
         HiddenMat["Hidden 2D Weight Matrices (Rank >= 2)\n- Q, K, V Projections\n- Attention Out Projection\n- SwiGLU Gate, Up, Down Projections\n- Attention Gate Weight"]
-        OneD["1D Parameters & Embeddings\n- Token / LM Head Embedding\n- RMSNorm Scale Weights\n- Attention Gate Biases\n- Value Residual Lambdas (vr_lambda)"]
+        OneD["1D Parameters & Embeddings (Rank < 2)\n- Token / LM Head Embedding\n- RMSNorm Scale Weights\n- Attention Gate Biases\n- Value Residual Lambdas (vr_lambda)"]
     end
 
     subgraph Optimizers["Dual Optimizers"]
-        Muon["Muon NS5 Optimizer\n- LR = 0.025, Momentum = 0.99, Nesterov = True\n- 5th-order Newton-Schulz iterate in bf16\n- Zeropower orthogonalization"]
+        Muon["Muon NS5 Optimizer\n- LR = 0.025, Momentum = 0.99, Nesterov = True\n- 5th-order Newton-Schulz iterate (nanolab: bf16; ojas: f32)\n- Zeropower orthogonalization"]
         AdamW["AdamW Optimizer\n- PyTorch single-tensor order (decay first)\n- eps = 1e-8 outside sqrt: sqrt(v)/sqrt(bc2) + eps\n- Weight decay = 0.0 on Muon hybrid"]
     end
 
@@ -74,28 +75,39 @@ flowchart TD
     OneD --> AdamW
 ```
 
+> [!NOTE]
+> * **Muon NS5:** nanolab runs the quintic Newton-Schulz iteration in `bf16` (`X = G.bfloat16()`). ojas runs it in `f32` on CPU, Metal and wgpu, so ojas and nanolab Muon updates differ by bf16 rounding. There is no bf16 Newton-Schulz kernel in ojas.
+> * **Value residual:** nanolab blends `v` with layer 0's `v0` *before* attention: `v = (1 - s) * v + s * v0`, `s = sigmoid(vr_lambda)` (`nanolab/mixers.py`). It is not applied to the attention output.
+> * **AdamW:** Follows PyTorch single-tensor order (weight decay applied before gradient update; bias correction computed; $\varepsilon = 10^{-8}$ added **outside** the square root).
+
 ---
 
 ## Op Implementation Matrix
 
-Dtypes follow [`docs/dtype-policy.md`](file:///Users/bharath/Code/research/ojas/docs/dtype-policy.md). Head dimensions above 64 on Metal produce `OjasError::UnsupportedHeadDim`, never a silent clamp.
+Dtypes follow [`docs/dtype-policy.md`](file:///Users/bharath/Code/research/ojas/docs/dtype-policy.md). 
 
-| Operation | CPU Reference (`ojas-cpu`) | Metal Step (`ojas-metal`) | DType | Mathematical Specification | Status |
-| :--- | :--- | :--- | :--- | :--- | :---: |
-| **Embedding** | Table lookup | `tessl` gather / scatter | `f32` | $y_t = W_{\text{embed}}[x_t]$ | **Verified** |
-| **Linear** | Single-threaded GEMM | `tessl` GEMM | `f32` | $y = x W^T$ (bias-free in linear blocks) | **Verified** |
-| **RMSNorm** | Exact reduction | `tessl` weighted RMSNorm | `f32` | $y = \frac{x}{\sqrt{\frac{1}{D}\sum x_i^2 + 10^{-6}}} \odot w$ | **Verified** |
-| **Half-split RoPE** | Split last axis | `tessl` RoPE | `f32` | Rotate halves: $(-x_2, x_1)$ with $\theta_i = 10000^{-2i/D}$ | **Verified** |
-| **RMS QK-Norm** | Head-wise RMSNorm | `tessl` QK-norm | `f32` | Applied separately to Q and K prior to attention | **Verified** |
-| **Causal SDPA** | Causal mask, exact softmax | `flash_attn_rows` ($d=64$) | `f32` | $\text{Softmax}\left(\frac{Q K^T}{\sqrt{d_{\text{head}}}} + M\right) V$ | **Verified** |
-| **Per-Head Gate** | Sigmoid broadcast | Custom `per_head_gate.metal` | `f32` | $\text{Gate} = \sigma(x W_{\text{gate}} + b_{\text{gate}})$; $\text{Attn} \odot \text{Gate}$ | **Verified** |
-| **Value Residual** | Linear blend | In-place lerp | `f32` | $\text{blend}(V, V_0) = (1 - \lambda) V + \lambda V_0, \; \lambda = \sigma(\text{vr\_lambda})$ | **Verified** |
-| **SwiGLU** | SiLU & pointwise mul | `tessl` SwiGLU | `f32` | $(x W_{\text{gate}}) \odot \text{SiLU}(x W_{\text{up}}) W_{\text{down}}$ | **Verified** |
-| **Residual Add** | Pointwise vector add | Pointwise add | `f32` | $x_{l+1} = x_l + f(x_l)$ | **Verified** |
-| **Cross-Entropy** | Mean loss over valid tokens | Chunked CE with canary offset | `f32` | $\mathcal{L} = -\frac{1}{N_{\text{valid}}} \sum \log \frac{e^{z_{y}}}{\sum e^{z_j}}$ | **Verified** |
-| **Grad Clip** | Global norm clipping | Global norm clipping | `f32` | Scale by $\min\left(1, \frac{\text{max\_norm}}{\|\mathbf{g}\|_2 + 10^{-6}}\right)$ | **Verified** |
-| **AdamW** | Single-tensor torch order | `tessl` fused AdamW | `f32` | Decay first; bias correction; $\varepsilon=10^{-8}$ outside sqrt | **Verified** |
-| **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz iterate | `bf16` | Quintic polynomial iterate: $a X + b (X X^T) X + c (X X^T)^2 X$ | **Verified** |
+Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal column names what `MetalBackend` (`ojas-metal/src/device.rs`) runs, and `ojas_*` kernels live in `ojas-metal/kernels/ojas_backend.metal`. wgpu kernels live in `ojas-kernels/src/wgsl/`. Read from source 2026-10-01; each backend's parity suite against the CPU passed in the run recorded in `docs/status.md`.
+
+| Operation | CPU (`ojas-cpu`) | Metal (`ojas-metal`) | wgpu (`ojas-wgpu`) | DType | Specification |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Embedding** | Table lookup / scatter-add | `ojas_embed_*` | WGSL | `f32`, ids `u32` | $y_t = W[x_t]$ |
+| **Linear** | Packed GEMM (Exact) or SIMD/Accelerate (Fast) | tessl GEMM, `ExactF32` operands | WGSL GEMM | `f32` | $y = x W^T$, no bias |
+| **RMSNorm** | Exact reduction | `ojas_rms_*` | WGSL | `f32` | $y = x / \sqrt{\overline{x^2} + 10^{-6}} \odot w$ |
+| **Half-split RoPE** | Split last axis | `ojas_rope` | WGSL | `f32` | Rotate halves $(-x_2, x_1)$; layout `[B, T, H, D]` |
+| **RMS QK-Norm** | Head-wise RMSNorm | `ojas_rms_*` per head | WGSL | `f32` | Applied to Q and K before RoPE (nanolab order) |
+| **Permute** | Byte moves | `ojas_permute` | WGSL `layout` | `f32` | `torch.permute(x, dims).contiguous()`; rank ≤ 8 |
+| **Causal SDPA** | Exact softmax; blocked above 256 positions in Fast | Tiled TensorOps forward and FlashAttention-2 backward, D ≤ 128 | WGSL, D ≤ 128 | `f32` | $\mathrm{softmax}(QK^T/\sqrt{d} + M)V$; layout `[B, H, T, D]`; MHA, $T_q = T_k$ |
+| **Per-Head Gate** | Sigmoid broadcast | `ojas_per_head_gate_*` | WGSL | `f32` | $\sigma(x W_g^T + b_g) \odot \text{attn}$ |
+| **Value Residual** | Linear blend | `ojas_vres_*` | WGSL | `f32` | $(1 - s) v + s v_0$, $s = \sigma(\lambda)$, on `v` before attention |
+| **SiLU, Mul** (SwiGLU) | Pointwise | `ojas_silu_*`, `ojas_mul_*` | WGSL | `f32` | $\mathrm{silu}(x W_{gate}) \odot (x W_{up})$ |
+| **Residual Add** | Pointwise | tessl `residual_add` | WGSL | `f32` | $x + f(x)$ |
+| **Cross-Entropy** | Mean over valid targets | `ojas_ce_rows`, `ojas_ce_mean` | WGSL | `f32` | Mean NLL; `ignore_index`; all-ignored is `NonFinite`. Full `rows × vocab` logits and gradient are materialized |
+| **Grad Clip** | Global norm, f64 sum of squares | `ojas_reduce_*`, `ojas_scale` | WGSL | `f32` | Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$ |
+| **AdamW** | Single-tensor torch order | tessl `qwen35_adamw` | WGSL | `f32` | Decay first; f64 bias correction; $\varepsilon$ outside sqrt |
+| **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32` (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
+
+> [!WARNING]
+> `MetalBackend` and `WgpuBackend` attention refuse $d_{\text{head}} > 128$ with `OjasError::UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, and `ojas-kernels/src/geometry.rs` for wgpu). The tiny Metal training step in `ojas-metal/src/gpu.rs` runs tessl `flash_attn_rows` and refuses above 64. Nothing is truncated.
 
 ---
 
@@ -110,4 +122,4 @@ flowchart LR
 
 * **Micro-batch Shape:** Batch size 16, sequence length 1024 = 16,384 tokens.
 * **Unchunked Logits:** Three $16384 \times 50304$ `f32` tensors require $3 \times 16384 \times 50304 \times 4 \approx 9.89\text{ GB}$.
-* **Mitigation:** Chunked cross-entropy tiles the logit projection, maintaining activations within hardware budget without OOM crashes.
+* **Status (2026-10-01):** chunked cross-entropy exists only in the tiny Metal step (`ojas-metal/src/gpu.rs`, vocab ≤ 128). The `Backend` trait's `cross_entropy_mean_forward/backward` take materialized logits and return a full `rows × vocab` gradient on every backend. At this micro-batch, that is several 3.3 GB tensors per call. A fused or chunked linear + cross-entropy op in the trait is an open gap (docs/pytorch-parity-plan.md, finding F9). The `Budget` refuses an allocation that does not fit (`CapacityExceeded`); it does not clamp.

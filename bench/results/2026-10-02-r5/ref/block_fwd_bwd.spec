@@ -1,0 +1,2 @@
+norm1.weight:768:501:0;mixer.vr_lambda:1:502:0;mixer.q_proj.weight:768x768:503:-5;mixer.k_proj.weight:768x768:504:-5;mixer.v_proj.weight:768x768:505:-5;mixer.o_proj.weight:768x768:506:-5;mixer.q_norm.weight:64:507:0;mixer.k_norm.weight:64:508:0;mixer.gate.weight:12x768:509:-5;mixer.gate.bias:12:510:0;norm2.weight:768:511:0;ffn.gate.weight:2048x768:512:-5;ffn.up.weight:2048x768:513:-5;ffn.down.weight:768x2048:514:-5;x:4x1024x768:520:0;cos:1024x64:521:0;sin:1024x64:522:0;v0:4x1024x12x64:523:0;gy:4x1024x768:524:0
+counts=3145728,3145728,589824,1572864,9216,1,768,3145728

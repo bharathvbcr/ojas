@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Features — ojas guide</title>
+  <meta name="description" content="ojas features and the limit each one refuses past: dtypes, autograd, the nanolab model and trainer, backends, optimizers, inference, IO, and the Go API.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/guide/features.html">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/guide/features.html">
+  <meta property="og:title" content="Features — ojas guide">
+  <meta property="og:description" content="ojas features and the limit each one refuses past: dtypes, autograd, the nanolab model and trainer, backends, optimizers, inference, IO, and the Go API.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+        tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#fff1f2',
+              100: '#ffe4e6',
+              200: '#fecdd3',
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e',
+              600: '#e11d48',
+              700: '#be123c',
+              800: '#9f1239',
+              900: '#881337',
+              950: '#4c0519',
+              crimson: '#ff2d55',
+              ruby: '#d90429',
+              flame: '#ff4b2b',
+              glow: '#ff3366',
+            },
+          },
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['"Fira Code"', 'ui-monospace', 'monospace'],
+          },
+          boxShadow: {
+            'glow-red': '0 0 35px -5px rgba(255, 45, 85, 0.35)',
+            'glow-subtle': '0 0 20px -5px rgba(255, 45, 85, 0.15)',
+          },
+        }
+      }
+    }
+
+  </script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid" data-root="../">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav" id="navbar">
+    <div id="announcement" class="w-full bg-gradient-to-r from-brand-950 via-brand-900 to-black border-b border-brand-800/40 text-xs py-2 px-4 font-medium tracking-wide">
+      <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified 2026-10-01</span>
+        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1071 Rust tests and 38 Go tests passed in the last full run (2026-10-01). See the guide for what that covers.</span>
+        <button type="button" id="dismissAnnounce" class="ml-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10" aria-label="Dismiss announcement">&times;</button>
+      </div>
+    </div>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../index.html" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-logo.webp" alt="" class="w-10 h-10" width="40" height="40">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+        <span class="hidden sm:inline text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 border border-brand-500/30">v0.1.0</span>
+      </a>
+      <nav class="hidden xl:flex items-center gap-0.5" aria-label="Site">
+        <a href="../index.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Home</a><a href="../why.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Why ojas</a><a href="../benchmarks.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a><a href="../roadmap.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Roadmap</a><a href="index.html" aria-current="page" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+      </nav>
+      <div class="flex items-center gap-2 shrink-0">
+        <button id="cmdBtn" type="button" class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white transition" aria-label="Search the site">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+          <span class="hidden lg:inline">Search</span>
+          <kbd class="hidden lg:inline px-1.5 py-0.5 rounded bg-black/40 border border-white/10 text-[10px]">⌘K</kbd>
+        </button>
+        <a href="quickstart.html" class="hidden xl:flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/30 transition">Start here</a>
+        <a href="https://github.com/bharathvbcr/ojas" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition" aria-label="ojas on GitHub">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"></path></svg>
+        </a>
+        <button type="button" id="menuBtn" class="xl:hidden p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition" aria-expanded="false" aria-controls="mobileNav" aria-label="Open menu">
+          <svg id="menuIconOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          <svg id="menuIconClose" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+    <nav id="mobileNav" class="xl:hidden hidden border-t border-white/10" aria-label="Site">
+      <div class="max-w-7xl mx-auto px-4 py-3 grid grid-cols-2 gap-1">
+        <a href="../index.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Home</a><a href="../why.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Why ojas</a><a href="../benchmarks.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Benchmarks</a><a href="../roadmap.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Roadmap</a><a href="index.html" aria-current="page" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Guide</a>
+      </div>
+    </nav>
+    <div id="readProgress" class="h-0.5 bg-white/5" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Page progress">
+      <div id="readProgressBar" class="h-full bg-brand-500" style="width:0"></div>
+    </div>
+  </header>
+
+  <main id="main">
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+    <nav aria-label="Breadcrumb" class="text-xs font-mono text-slate-500 mb-6"><a href="../index.html" class="hover:text-white">Home</a> <span class="mx-1">/</span> <a href="index.html" class="hover:text-white">Guide</a> <span class="mx-1">/</span> <span class="text-slate-300">Features</span></nav>
+    <nav class="lg:hidden -mx-4 px-4 mb-8 overflow-x-auto" aria-label="Guide"><div class="flex gap-2 w-max"><a href="index.html" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Overview</a><a href="quickstart.html" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Quickstart</a><a href="concepts.html" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Core concepts</a><a href="features.html" aria-current="page" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Features</a><a href="go.html" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Go API</a><a href="architecture.html" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Architecture</a><a href="status.html" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Status</a><a href="contributing.html" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-white/5 border border-white/10 text-slate-300 hover:text-white">Contributing</a></div></nav>
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-10">
+      <aside class="hidden lg:block lg:col-span-3"><nav class="sticky top-36 border-l border-white/10" aria-label="Guide"><a class="guide-link" href="index.html">Overview</a><a class="guide-link" href="quickstart.html">Quickstart</a><a class="guide-link" href="concepts.html">Core concepts</a><a class="guide-link" href="features.html" aria-current="page">Features</a><a class="guide-link" href="go.html">Go API</a><a class="guide-link" href="architecture.html">Architecture</a><a class="guide-link" href="status.html">Status</a><a class="guide-link" href="contributing.html">Contributing</a></nav></aside>
+      <div class="lg:col-span-9 min-w-0">          <article id="doc-features" class="doc-article">
+            <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-2">Feature reference</h1>
+            <p class="text-sm text-slate-400 mb-6">What each part does today, with its limits. A limit is a refusal, never a clamp.</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Tensors &amp; dtypes</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li>DTypes <span class="font-mono">F32</span>, <span class="font-mono">Bf16</span>, <span class="font-mono">F16</span>, <span class="font-mono">U32</span>. Compute is f32 on every backend.</li>
+                  <li>Zero-copy <span class="font-mono">narrow</span> and <span class="font-mono">view</span>; <span class="font-mono">permute</span> up to rank 8.</li>
+                  <li>Shape, stride and byte math is <span class="font-mono">checked_mul</span>/<span class="font-mono">checked_add</span>.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Autograd</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">Tape</span> records embedding, linear, RMSNorm, QK-norm, RoPE, causal attention, the per-head gate, value residual, SiLU, mul, add, reshape, permute and cross-entropy, and walks backward from any node or from a seed you supply. A fused linear plus cross-entropy keeps the full logits off the tape.</li>
+                  <li>Gradients are checked against f64 central differences (<span class="font-mono">central_diff</span>, <span class="font-mono">gradients_match</span>).</li>
+                  <li>On Metal and wgpu, leaves are uploaded once and intermediates stay on the device.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Model &amp; trainer</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono text-brand-300">ojas-model</span> holds the nanolab GPT once: <span class="font-mono">ModelSpec</span> (the 124M default and a tiny CI spec), nanolab <span class="font-mono">state_dict</span> names, and an init where each parameter has its own counter RNG, so order never matters.</li>
+                  <li>One block over a <span class="font-mono">Graph</span> trait, run by the tape to train and by <span class="font-mono">Eval</span> to decode.</li>
+                  <li><span class="font-mono">Trainer</span> splits parameters by rule: hidden matrices to Muon, the embedding and vectors to AdamW. Its checkpoint directory is written beside the old one and swapped in whole.</li>
+                  <li>Training v1 refuses grouped-query attention; nanolab's default is multi-head.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Go API</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li>Load or create a model, open a trainer over a token bin, step it, save, resume, tokenize and sample, all in process. See the <a href="go.html" class="text-brand-300 hover:text-white underline underline-offset-2">Go API reference</a>.</li>
+                  <li>Weights never cross the boundary, and a step reads back only its loss.</li>
+                  <li>Every model's byte budget is a child of one process-wide ceiling, 1 GiB by default.</li>
+                  <li>Failures are typed: <span class="font-mono">ErrCapacity</span>, <span class="font-mono">ErrNonFinite</span>, <span class="font-mono">ErrDeviceLost</span>, <span class="font-mono">ErrBusy</span>, <span class="font-mono">ErrPoisoned</span>.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Qwen3.5 provider</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono text-brand-300">ojas-qwen35</span> runs a Qwen3.5 whole training step through tessl's Metal kernels. It is a provider, not a <span class="font-mono">Backend</span>, and is empty off macOS.</li>
+                  <li>Its config reader refuses every field the step does not implement, by name, before tessl reads a byte.</li>
+                  <li>Per-parameter learning-rate scales and weight decays come from the caller's rules, with no built-in exclusions.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Backends</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono text-brand-300">CPU</span>: 1 to 256 threads, Exact or Fast. NEON and AVX2+FMA kernels in <span class="font-mono">ojas-simd</span>.</li>
+                  <li><span class="font-mono text-brand-300">Metal</span>: every Backend op, device-resident, through tessl, with tiled causal attention. Head dim at most 128.</li>
+                  <li><span class="font-mono text-brand-300">wgpu</span>: WGSL compute, device-resident, within 1e-4 relative of CPU. Head dim at most 128.</li>
+                  <li><span class="font-mono text-slate-400">CUDA / HIP</span>: one affine kernel and a copy probe behind features; not backends.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Optimizers</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">adamw_step</span>: PyTorch single-tensor order, decay first, eps 1e-8 outside the square root.</li>
+                  <li><span class="font-mono">muon_ns5_step</span>: five Newton–Schulz iterations in f32 on CPU, Metal and wgpu.</li>
+                  <li><span class="font-mono">clip_grad_norm</span> with eps 1e-6; cosine and WSD schedules; step counter refuses to wrap.</li>
+                  <li>On the CPU a step is all-or-nothing: a refused step leaves every tensor bit-identical.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Inference</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">argmax_token</span> refuses a non-finite row instead of returning token 0.</li>
+                  <li><span class="font-mono">sample_token</span>: temperature, top-k, top-p, seeded; temperature 0 is greedy.</li>
+                  <li><span class="font-mono">CpuGpt</span> with a <span class="font-mono">KvCache</span> and greedy decode, on the CPU.</li>
+                </ul>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h4 class="text-white font-semibold mb-2">Data &amp; IO</h4>
+                <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li><span class="font-mono">TokenBin</span> reader and a seeded epoch batch sampler that visits every window once.</li>
+                  <li>GPT-2 BPE, checked against tiktoken on 20 reference strings.</li>
+                  <li>Strict safetensors (F32, BF16, F16, I64, U16), written in a stream so the whole model need not sit on the host, and the Checkpoint v1 codec.</li>
+                </ul>
+              </div>
+            </div>
+          </article>
+</div>
+    </div>
+  </div>
+
+  </main>
+  <footer class="border-t border-white/10 bg-black py-12 text-slate-400 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-6">
+      <div class="flex items-center gap-3">
+        <img src="../assets/ojas-logo.webp" alt="" class="w-9 h-9" width="36" height="36">
+        <div><span class="font-mono font-bold text-white text-sm">ojas</span><span class="text-slate-500 ml-2">Dual licensed MIT OR Apache-2.0</span></div>
+      </div>
+      <div class="flex flex-wrap items-center gap-6">
+        <a href="https://github.com/bharathvbcr/ojas" class="hover:text-white transition">GitHub</a>
+        <a href="../roadmap.html" class="hover:text-white transition">Roadmap</a>
+        <a href="index.html" class="hover:text-white transition">Guide</a>
+      </div>
+      <div class="text-slate-500 font-mono text-[11px]">Designed by Bharath Chandra Vaddaram</div>
+    </div>
+  </footer>
+  <div id="cmdModal" class="fixed inset-0 z-[80] hidden" role="dialog" aria-modal="true" aria-labelledby="cmdLabel">
+    <div class="flex h-full items-start justify-center bg-black/80 backdrop-blur-md pt-24 p-4">
+      <div class="relative max-w-xl w-full glass-card rounded-2xl border border-white/20 shadow-2xl p-4">
+        <div class="flex items-center gap-3 pb-3 border-b border-white/10">
+          <label for="cmdInput" id="cmdLabel" class="sr-only">Search ojas</label>
+          <input type="text" id="cmdInput" placeholder="Search labs, the guide, or the roadmap" class="w-full bg-transparent text-white placeholder-slate-500 text-sm focus:outline-none">
+          <button type="button" onclick="closeCmdModal()" class="text-[10px] font-mono px-2 py-1 rounded bg-white/10 text-slate-400 hover:text-white" aria-label="Close search">ESC</button>
+        </div>
+        <div class="mt-3 max-h-64 overflow-y-auto space-y-1 font-mono text-xs" id="cmdResults"></div>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="fixed bottom-6 right-6 z-[90] px-4 py-2.5 rounded-xl bg-brand-600 text-white font-mono text-xs shadow-glow-red flex items-center gap-2 transition-all duration-300 translate-y-20 opacity-0 pointer-events-none" role="status">
+    <span id="toastMsg">Copied to clipboard</span>
+  </div>
+  <script src="../assets/ojas.js"></script>
+
+</body>
+</html>

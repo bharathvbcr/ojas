@@ -1,0 +1,58 @@
+{"runtime": "torch-mps", "row": "_device", "status": "info", "device": {"torch": "2.13.0", "mps": true}}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "floor_silu_1", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "floor_silu_1", "status": "ok", "min_ms": 0.0940000027185306, "median_ms": 0.1356249995296821, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "floor_silu_1", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rms_norm_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "rms_norm_fwd", "status": "ok", "min_ms": 0.17870799638330936, "median_ms": 0.2004790076171048, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rms_norm_fwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rms_norm_bwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "rms_norm_bwd", "status": "ok", "min_ms": 1.7519169923616573, "median_ms": 1.9411665052757598, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rms_norm_bwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rms_qk_norm_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "rms_qk_norm_fwd", "status": "ok", "min_ms": 0.3092499973718077, "median_ms": 0.3564375001587905, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rms_qk_norm_fwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rope_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "rope_fwd", "status": "ok", "min_ms": 1.1997920082649216, "median_ms": 1.2966875001438893, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rope_fwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rope_bwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "rope_bwd", "status": "ok", "min_ms": 1.463625012547709, "median_ms": 1.5934375041979365, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "rope_bwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "silu_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "silu_fwd", "status": "ok", "min_ms": 0.3642499941634014, "median_ms": 0.4397704979055561, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "silu_fwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "silu_bwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "silu_bwd", "status": "ok", "min_ms": 0.4972910101059824, "median_ms": 0.5886460057809018, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "silu_bwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "mul_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "mul_fwd", "status": "ok", "min_ms": 0.4867079987889156, "median_ms": 0.5645835044560954, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "mul_fwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "mul_bwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "mul_bwd", "status": "ok", "min_ms": 0.8904170099413022, "median_ms": 0.9649589992477559, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "mul_bwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "residual_add_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "residual_add_fwd", "status": "ok", "min_ms": 0.2354580065002665, "median_ms": 0.3198334961780347, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "residual_add_fwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "residual_add_bwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "residual_add_bwd", "status": "ok", "min_ms": 0.012874996173195541, "median_ms": 0.014895500498823822, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "residual_add_bwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "gate_fwd", "status": "ok", "min_ms": 0.4057080077473074, "median_ms": 0.5251245020190254, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_fwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_bwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "gate_bwd", "status": "ok", "min_ms": 0.8275419968413189, "median_ms": 0.9923955003614537, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_bwd", "when": "after", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "vres_fwd", "when": "before", "load": "18.83 25.51 35.00", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "vres_fwd", "status": "ok", "min_ms": 0.46454199764411896, "median_ms": 0.525354000274092, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "vres_fwd", "when": "after", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "vres_bwd", "when": "before", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "vres_bwd", "status": "ok", "min_ms": 0.7529590075137094, "median_ms": 0.8820835064398125, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "vres_bwd", "when": "after", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "permute_bthd_bhtd", "when": "before", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "permute_bthd_bhtd", "status": "ok", "min_ms": 0.38787499943282455, "median_ms": 0.43493799603311345, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "permute_bthd_bhtd", "when": "after", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "decode_attn_kv1024", "when": "before", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "decode_attn_kv1024", "status": "ok", "min_ms": 0.12929200602229685, "median_ms": 0.1838750031311065, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "decode_attn_kv1024", "when": "after", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "accumulate_grad_50304x768", "when": "before", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}
+{"runtime": "torch-mps", "row": "accumulate_grad_50304x768", "status": "ok", "min_ms": 1.938415996846743, "median_ms": 2.132187997631263, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "accumulate_grad_50304x768", "when": "after", "load": "18.76 25.39 34.90", "gpu_util_pct": 100}

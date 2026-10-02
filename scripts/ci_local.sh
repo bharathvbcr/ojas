@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Local gates for this tree. There is no .github workflow and no remote.
+# Local gates for this tree. .github/workflows/test.yml exists but has never
+# run, because the repository has no remote.
 # Invoke: ./scripts/ci_local.sh
 set -euo pipefail
 
@@ -20,7 +21,19 @@ cargo check -p ojas-cuda --features cuda
 echo "==> nightly simd (not a Cargo target)"
 ./scripts/simd_bench.sh
 
-echo "==> gotip"
+echo "==> go (stable)"
+if ! command -v go >/dev/null 2>&1; then
+  echo "ERROR: go is not installed; the stable Go gate cannot be skipped" >&2
+  exit 1
+fi
+go version
+cargo build -p ojas-gusset-engine
+(
+  cd "$ROOT/go"
+  PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -timeout 10m ./...
+)
+
+echo "==> gotip (optional)"
 ./scripts/gotip.sh
 
 echo "==> test (release, serialized)"

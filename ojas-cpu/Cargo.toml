@@ -9,3 +9,11 @@ description = "CPU reference backend. Lane A."
 
 [dependencies]
 ojas-core = { path = "../ojas-core" }
+
+# Fast-tier GEMM. Accelerate is macOS-only; ojas-simd refuses the feature
+# elsewhere with a compile error.
+[target.'cfg(target_os = "macos")'.dependencies]
+ojas-simd = { path = "../ojas-simd", features = ["accelerate"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ojas-simd = { path = "../ojas-simd" }

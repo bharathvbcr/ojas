@@ -1,0 +1,6 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"floor_silu_1","status":"ok","min_ms":0.108958,"median_ms":0.310646,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"rope_bwd","status":"ok","min_ms":0.344833,"median_ms":1.620375,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"residual_add_fwd","status":"ok","min_ms":0.567750,"median_ms":1.853417,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"residual_add_bwd","status":"ok","min_ms":0.519250,"median_ms":1.836333,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"permute_bthd_bhtd","status":"ok","min_ms":0.336083,"median_ms":1.597375,"iters":50,"warmup":10,"parity_max_abs":0e0,"parity_rel":0e0,"tol":0e0}

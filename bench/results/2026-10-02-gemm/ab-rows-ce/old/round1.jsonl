@@ -1,0 +1,10 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"floor_silu_1","when":"before","load":"26.15 24.94 27.55","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"floor_silu_1","status":"ok","min_ms":0.109125,"median_ms":0.173708,"iters":20,"warmup":5,"parity_max_abs":0e0,"parity_rel":0e0,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"floor_silu_1","when":"after","load":"26.15 24.94 27.55","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"linear_ce_c1024x8192","when":"before","load":"26.15 24.94 27.55","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"linear_ce_c1024x8192","status":"ok","min_ms":338.049291,"median_ms":344.164688,"iters":20,"warmup":5,"parity_max_abs":9.5367431640625e-7,"parity_rel":6.690999209170848e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"linear_ce_c1024x8192","when":"after","load":"25.10 24.76 27.46","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"linear_ce_c4096x50304","when":"before","load":"25.10 24.76 27.46","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"linear_ce_c4096x50304","status":"ok","min_ms":310.592917,"median_ms":350.292042,"iters":20,"warmup":5,"parity_max_abs":9.5367431640625e-7,"parity_rel":2.347719020761701e-5,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"linear_ce_c4096x50304","when":"after","load":"25.67 24.89 27.48","gpu_util_pct":100}

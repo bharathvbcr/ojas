@@ -4,9 +4,15 @@
 //! not substitute [`Device::Cpu`] when a GPU kind was requested.
 //! GPU probes live in the crates that link those runtimes.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+
+mod host;
+mod plan;
 
 use std::fmt;
+
+pub use host::{probe_host, HostMemory, MemoryReport};
+pub use plan::{MemoryProbe, ResourcePlan, ResourcePolicy};
 
 /// Where a call is allowed to run.
 ///

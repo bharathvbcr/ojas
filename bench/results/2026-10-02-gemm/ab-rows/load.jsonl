@@ -1,0 +1,12 @@
+{"side":"old","round":1,"when":"before","load":"24.57 24.76 28.10","gpu_util_pct":100}
+{"side":"new","round":1,"when":"before","load":"24.35 24.70 28.02","gpu_util_pct":100}
+{"side":"new","round":2,"when":"before","load":"23.84 24.59 27.96","gpu_util_pct":100}
+{"side":"old","round":2,"when":"before","load":"22.71 24.32 27.83","gpu_util_pct":100}
+{"side":"old","round":3,"when":"before","load":"21.45 24.00 27.67","gpu_util_pct":100}
+{"side":"new","round":3,"when":"before","load":"21.65 23.92 27.58","gpu_util_pct":100}
+{"side":"new","round":4,"when":"before","load":"23.34 24.20 27.63","gpu_util_pct":100}
+{"side":"old","round":4,"when":"before","load":"24.59 24.44 27.68","gpu_util_pct":100}
+{"side":"old","round":5,"when":"before","load":"25.39 24.61 27.70","gpu_util_pct":100}
+{"side":"new","round":5,"when":"before","load":"26.50 24.87 27.75","gpu_util_pct":100}
+{"side":"new","round":6,"when":"before","load":"24.73 24.54 27.60","gpu_util_pct":100}
+{"side":"old","round":6,"when":"before","load":"23.87 24.36 27.50","gpu_util_pct":100}

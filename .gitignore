@@ -1,3 +1,53 @@
+# Build targets (Cargo)
 /target
+# Per-lane build directories used when several agents share this checkout.
+/target-*/
+/target-*
+target/
+target-*/
+
+# Generated benchmark reference tensors (multi-GB; regenerate with the bench harness).
+/bench/results/*/ref/*.f32
+
+# Go artifacts
+*.test
+*.out
+coverage.out
+go/coverage.out
+
+# Python artifacts & environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# Native binaries & debug symbols
+*.dSYM/
+*.profraw
+*.profdata
+perf.data
+perf.data.old
+
+# OS metadata
 .DS_Store
+**/.DS_Store
+Thumbs.db
+
+# Editor & IDE configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local development, agents & tooling caches
+.claude/
 .devcouncil/
+scan.txt
+*.tmp
+*.log

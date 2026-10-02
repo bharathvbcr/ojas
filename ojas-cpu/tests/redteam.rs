@@ -8,10 +8,10 @@ use ojas_core::{
 use ojas_cpu::CpuBackend;
 
 mod common;
-use common::{assert_capacity, assert_nonfinite, assert_shape, bits, f32t, u32t};
+use common::{assert_nonfinite, assert_shape, bits, f32t, u32t};
 
 fn wide() -> CpuBackend {
-    CpuBackend::new(Budget::new(1 << 22))
+    CpuBackend::new(Budget::new(1 << 22)).with_numerics(ojas_core::Numerics::Exact)
 }
 
 /// Mean log-softmax loss over rows whose target is not `ignore`.
@@ -507,26 +507,32 @@ fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
     assert_eq!(m1.to_f32_vec().unwrap(), snap_m);
     assert_eq!(m2.to_f32_vec().unwrap(), snap_v);
 
+    // A full budget no longer refuses: the step is in place and charges
+    // nothing. The values match a roomy backend's bit for bit.
     let budget = Budget::new(16);
     let tight = CpuBackend::new(budget.clone());
-    let mut param = Tensor::from_f32(&[1.5], &[1], &budget).unwrap();
-    let grad = Tensor::from_f32(&[0.2], &[1], &budget).unwrap();
-    let mut m1 = Tensor::from_f32(&[0.0], &[1], &budget).unwrap();
-    let mut m2 = Tensor::from_f32(&[0.0], &[1], &budget).unwrap();
-    let snap_p = param.to_f32_vec().unwrap();
-    let snap_m = m1.to_f32_vec().unwrap();
-    let snap_v = m2.to_f32_vec().unwrap();
-    assert_capacity(tight.adamw_step(
-        &mut param,
-        &grad,
-        &mut m1,
-        &mut m2,
-        0,
-        AdamWConfig::nanolab(0.01, 0.1),
-    ));
-    assert_eq!(param.to_f32_vec().unwrap(), snap_p);
-    assert_eq!(m1.to_f32_vec().unwrap(), snap_m);
-    assert_eq!(m2.to_f32_vec().unwrap(), snap_v);
+    let roomy = CpuBackend::new(Budget::new(1 << 20));
+    let run = |be: &CpuBackend, b: &Budget| {
+        let mut param = Tensor::from_f32(&[1.5], &[1], b).unwrap();
+        let grad = Tensor::from_f32(&[0.2], &[1], b).unwrap();
+        let mut m1 = Tensor::from_f32(&[0.0], &[1], b).unwrap();
+        let mut m2 = Tensor::from_f32(&[0.0], &[1], b).unwrap();
+        be.adamw_step(
+            &mut param,
+            &grad,
+            &mut m1,
+            &mut m2,
+            0,
+            AdamWConfig::nanolab(0.01, 0.1),
+        )
+        .unwrap();
+        // Only the four 4-byte tensors are charged; the step adds nothing.
+        assert_eq!(b.live_bytes().unwrap(), 16);
+        [param, m1, m2].map(|t| t.to_f32_vec().unwrap()[0].to_bits())
+    };
+    let got = run(&tight, &budget);
+    assert_eq!(got, run(&roomy, roomy.budget()));
+    assert_ne!(f32::from_bits(got[0]), 1.5);
 }
 
 #[test]
@@ -541,4 +547,95 @@ fn mismatched_shapes_and_noncontiguous_are_errors() {
     let skipped = base.view(&[2], &[2], 0).unwrap();
     assert_shape(cpu.silu_forward(&skipped));
     assert_shape(cpu.rms_norm_forward(&skipped, &f32t(&cpu, &[1.0, 1.0], &[2]), 1e-6));
+}
+
+/// Ops that run on the pool share their operands with its tasks by cloning
+/// the tensor (one more owner of its storage). Every clone is gone when the
+/// op returns, on success, after a task is refused (the cancel hook) and
+/// after a NaN refusal, so the caller's next in-place write to the same
+/// tensor is not refused as shared and an optimizer step on it runs.
+#[test]
+fn operands_shared_with_pool_tasks_are_released_when_the_op_returns() {
+    let be = CpuBackend::with_threads(Budget::new(1 << 30), 4).unwrap();
+    let shape = [1usize, 8, 128, 64];
+    let n: usize = shape.iter().product();
+    let data: Vec<f32> = (0..n).map(|i| ((i % 13) as f32 - 6.0) * 0.01).collect();
+    let inputs = Budget::new(1 << 30);
+    let mut q = Tensor::from_f32(&data, &shape, &inputs).unwrap();
+    let k = Tensor::from_f32(&data, &shape, &inputs).unwrap();
+
+    be.causal_sdpa_forward(&q, &k, &k).unwrap();
+    be.silu_forward(&q).unwrap();
+    q.f32_slice_mut().unwrap()[0] = 0.5;
+
+    be.set_cancel(|| {
+        Err(OjasError::Unsupported {
+            op: "test-cancel",
+            detail: "stop".to_string(),
+        })
+    });
+    assert!(matches!(
+        be.causal_sdpa_forward(&q, &k, &k),
+        Err(OjasError::Unsupported {
+            op: "test-cancel",
+            ..
+        })
+    ));
+    be.set_cancel(|| Ok(()));
+    q.f32_slice_mut().unwrap()[0] = 0.25;
+
+    let mut nan = data.clone();
+    nan[n - 1] = f32::NAN;
+    let bad = Tensor::from_f32(&nan, &shape, &inputs).unwrap();
+    assert_nonfinite(be.causal_sdpa_forward(&q, &k, &bad));
+    let flat = [n];
+    let mut p = q.reshape(&flat).unwrap();
+    drop(q);
+    let (g, mut m1, mut m2) = (
+        Tensor::from_f32(&data, &flat, &inputs).unwrap(),
+        Tensor::from_f32(&vec![0.0; n], &flat, &inputs).unwrap(),
+        Tensor::from_f32(&vec![0.0; n], &flat, &inputs).unwrap(),
+    );
+    be.silu_forward(&p).unwrap();
+    be.adamw_step(
+        &mut p,
+        &g,
+        &mut m1,
+        &mut m2,
+        0,
+        AdamWConfig::nanolab(1e-3, 0.0),
+    )
+    .unwrap();
+}
+
+/// An operand found finite once is not scanned again until it is written,
+/// so a NaN written in place after a successful op is refused by the next
+/// one, through every entry check: one operand (`check_f32`), several
+/// (`check_f32s`), permute's own scan, and an op output, which `fill_out`
+/// records as finite when it is made.
+#[test]
+fn a_nan_written_in_place_after_a_successful_op_is_refused_by_the_next() {
+    let cpu = wide();
+    let poison = |t: &mut Tensor| t.f32_slice_mut().unwrap()[1] = f32::NAN;
+
+    let mut x = f32t(&cpu, &[0.5, -1.0, 2.0, 0.25], &[2, 2]);
+    let w = f32t(&cpu, &[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    cpu.silu_forward(&x).unwrap();
+    cpu.residual_add_forward(&x, &w).unwrap();
+    cpu.linear_forward(&x, &w).unwrap();
+    cpu.permute(&x, &[1, 0]).unwrap();
+    let mut acc = f32t(&cpu, &[0.0; 4], &[2, 2]);
+    cpu.accumulate_grad(&mut acc, &x).unwrap();
+    poison(&mut x);
+    assert_nonfinite(cpu.silu_forward(&x));
+    assert_nonfinite(cpu.residual_add_forward(&w, &x));
+    assert_nonfinite(cpu.linear_forward(&x, &w));
+    assert_nonfinite(cpu.permute(&x, &[1, 0]));
+    assert_nonfinite(cpu.accumulate_grad(&mut acc, &x));
+
+    let mut y = cpu.silu_forward(&w).unwrap();
+    cpu.residual_add_forward(&y, &w).unwrap();
+    poison(&mut y);
+    assert_nonfinite(cpu.residual_add_forward(&y, &w));
+    assert_nonfinite(cpu.silu_forward(&y));
 }

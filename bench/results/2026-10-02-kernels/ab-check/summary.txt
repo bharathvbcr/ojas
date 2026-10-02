@@ -1,0 +1,37 @@
+floor_silu_1 old rounds=8 min=0.097 med_of_mins=0.142 med_of_medians=0.222 parity_max_abs=0
+floor_silu_1 new rounds=8 min=0.098 med_of_mins=0.103 med_of_medians=0.207 parity_max_abs=0
+rms_norm_fwd old rounds=8 min=0.319 med_of_mins=0.364 med_of_medians=0.427 parity_max_abs=3.5762786865234375E-7
+rms_norm_fwd new rounds=8 min=0.232 med_of_mins=0.282 med_of_medians=0.342 parity_max_abs=3.5762786865234375E-7
+rms_qk_norm_fwd old rounds=8 min=0.532 med_of_mins=0.559 med_of_medians=0.66 parity_max_abs=3.5762786865234375E-7
+rms_qk_norm_fwd new rounds=8 min=0.411 med_of_mins=0.438 med_of_medians=0.524 parity_max_abs=3.5762786865234375E-7
+rope_fwd old rounds=8 min=0.315 med_of_mins=0.335 med_of_medians=0.418 parity_max_abs=0
+rope_fwd new rounds=8 min=0.227 med_of_mins=0.274 med_of_medians=0.356 parity_max_abs=0
+rope_bwd old rounds=8 min=0.316 med_of_mins=0.357 med_of_medians=0.442 parity_max_abs=0
+rope_bwd new rounds=8 min=0.246 med_of_mins=0.275 med_of_medians=0.353 parity_max_abs=0
+silu_fwd old rounds=8 min=0.786 med_of_mins=0.849 med_of_medians=0.977 parity_max_abs=2.384185791015625E-7
+silu_fwd new rounds=8 min=0.63 med_of_mins=0.662 med_of_medians=0.825 parity_max_abs=2.384185791015625E-7
+silu_bwd old rounds=8 min=1.106 med_of_mins=1.149 med_of_medians=1.257 parity_max_abs=1.1920928955078125E-7
+silu_bwd new rounds=8 min=0.849 med_of_mins=0.885 med_of_medians=1.03 parity_max_abs=1.1920928955078125E-7
+mul_fwd old rounds=8 min=1.11 med_of_mins=1.155 med_of_medians=1.271 parity_max_abs=0
+mul_fwd new rounds=8 min=0.853 med_of_mins=0.92 med_of_medians=1.061 parity_max_abs=0
+mul_bwd old rounds=8 min=1.779 med_of_mins=1.865 med_of_medians=2.14 parity_max_abs=0
+mul_bwd new rounds=8 min=1.381 med_of_mins=1.438 med_of_medians=1.658 parity_max_abs=0
+residual_add_fwd old rounds=8 min=0.556 med_of_mins=0.586 med_of_medians=0.698 parity_max_abs=0
+residual_add_fwd new rounds=8 min=0.445 med_of_mins=0.488 med_of_medians=0.616 parity_max_abs=0
+residual_add_bwd old rounds=8 min=0.533 med_of_mins=0.568 med_of_medians=0.792 parity_max_abs=0
+residual_add_bwd new rounds=8 min=0.441 med_of_mins=0.481 med_of_medians=0.578 parity_max_abs=0
+gate_fwd old rounds=8 min=0.519 med_of_mins=0.566 med_of_medians=0.674 parity_max_abs=8.940696716308594E-8
+gate_fwd new rounds=8 min=0.407 med_of_mins=0.439 med_of_medians=0.552 parity_max_abs=8.940696716308594E-8
+gate_bwd old rounds=8 min=1.942 med_of_mins=2.055 med_of_medians=2.233 parity_max_abs=0.000225067138671875
+gate_bwd new rounds=8 min=1.859 med_of_mins=1.902 med_of_medians=2.119 parity_max_abs=0.000225067138671875
+vres_fwd old rounds=8 min=0.458 med_of_mins=0.483 med_of_medians=0.581 parity_max_abs=0
+vres_fwd new rounds=8 min=0.353 med_of_mins=0.369 med_of_medians=0.462 parity_max_abs=0
+vres_bwd old rounds=8 min=0.831 med_of_mins=0.914 med_of_medians=1.083 parity_max_abs=0.000030517578125
+vres_bwd new rounds=8 min=0.679 med_of_mins=0.722 med_of_medians=0.84 parity_max_abs=0.000030517578125
+permute_bthd_bhtd old rounds=8 min=0.304 med_of_mins=0.321 med_of_medians=0.427 parity_max_abs=0
+permute_bthd_bhtd new rounds=8 min=0.264 med_of_mins=0.278 med_of_medians=0.34 parity_max_abs=0
+accumulate_grad_50304x768 old rounds=8 min=3.11 med_of_mins=3.153 med_of_medians=3.867 parity_max_abs=0
+accumulate_grad_50304x768 new rounds=8 min=3.02 med_of_mins=3.165 med_of_medians=3.624 parity_max_abs=0
+not timed:
+adamw_full: no_ref
+cross_entropy_fwd: no_ref

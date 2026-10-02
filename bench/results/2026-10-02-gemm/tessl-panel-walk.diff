@@ -1,0 +1,92 @@
+--- /Users/bharath/Code/research/ojas/bench/results/2026-10-02-gemm/matmul_tensorops-before.metal.txt	2026-10-02 01:18:35
++++ /Users/bharath/Code/research/tessl/kernels/matmul_tensorops.metal	2026-10-02 01:23:48
+@@ -37,6 +37,31 @@
+     return uint2(linear % tiles_n, linear / tiles_n);
+ }
+ 
++/// Decode linear TG id → (x, y) tile by column panels: bands of `ph` tile
++/// rows, each walked down a column before moving right. Threadgroups that run
++/// together then share B tiles, so B is read once per band instead of once
++/// per tile row. An id past the grid decodes to (tiles_n, tiles_m), which
++/// every caller's bounds check rejects.
++inline uint2 tile_from_linear_panel(uint linear, uint tiles_n, uint tiles_m, uint ph) {
++    if (linear >= tiles_n * tiles_m) return uint2(tiles_n, tiles_m);
++    uint band = linear / (ph * tiles_n);
++    uint rem = linear - band * ph * tiles_n;
++    uint local_h = min(ph, tiles_m - band * ph);
++    return uint2(rem / local_h, band * ph + rem % local_h);
++}
++
++/// Tile walk of the exact-f32 kernels. Row-major order re-reads every B tile
++/// once per 32-row tile row, which is DRAM-bound once B outgrows the cache
++/// (the LM head's 50304×768 weight ran at ~2.3 TFLOP/s against ~6.5 at
++/// N ≤ 2304, M5 Pro). Large grids take column panels.
++constexpr constant uint F32_PANEL_ROWS = 16u;
++inline uint2 tile_walk_f32(uint linear, uint tiles_n, uint tiles_m) {
++    if (tiles_n * tiles_m >= 2048u) {
++        return tile_from_linear_panel(linear, tiles_n, tiles_m, F32_PANEL_ROWS);
++    }
++    return tile_from_linear(linear, tiles_n, tiles_m);
++}
++
+ // =============================================================================
+ // f32 exact — execution_simdgroup, SM=SN=32 (golden-safe)
+ // =============================================================================
+@@ -60,7 +85,7 @@
+                             matmul2d_descriptor::mode::multiply);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -109,7 +134,7 @@
+                             matmul2d_descriptor::mode::multiply);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -156,7 +181,7 @@
+                             matmul2d_descriptor::mode::multiply);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -202,7 +227,7 @@
+                             matmul2d_descriptor::mode::multiply_accumulate);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -247,7 +272,7 @@
+                             matmul2d_descriptor::mode::multiply_accumulate);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -420,11 +445,7 @@
+     // tall_k1024/mlp_up, gated off where it measured -3% (square_2048).
+     uint2 tile;
+     if (tiles_n * tiles_m >= 2048u) {
+-        constexpr uint PH = 8;
+-        uint band = tgpig / (PH * tiles_n);
+-        uint rem = tgpig - band * PH * tiles_n;
+-        uint local_h = min(PH, tiles_m - band * PH);
+-        tile = uint2(rem / local_h, band * PH + rem % local_h);
++        tile = tile_from_linear_panel(tgpig, tiles_n, tiles_m, 8u);
+     } else {
+         tile = tile_from_linear(tgpig, tiles_n, tiles_m);
+     }

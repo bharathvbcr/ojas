@@ -70,6 +70,9 @@ flowchart LR
 | **Lappi** | `cargo test --workspace` | 46.5 s | **400 passed**, 0 failed, 6 ignored (snapshot models) |
 | **gusset** | `cargo test -p gusset --lib` & `go test .` | 16.0 s | **45 Rust passed**; **35 Go top-level / 239 subtests passed** |
 
+> [!WARNING]
+> Peer codebase `metal-native` failed to compile due to private field encapsulation errors (E0616), illustrating the risk of tightly-coupled tensor field access across library boundaries.
+
 ---
 
 ## CPU Matmul Performance (Apple Accelerate BLAS)

@@ -1,0 +1,181 @@
+--- /Users/bharath/Code/research/ojas/target-baseline/tessl-runtime-before-condvar.rs	2026-10-01 23:26:14
++++ /Users/bharath/Code/research/tessl/src/runtime.rs	2026-10-01 23:28:37
+@@ -32,7 +32,7 @@
+ use std::collections::HashMap;
+ use std::path::Path;
+ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+-use std::sync::{Arc, Mutex, Weak};
++use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+ 
+ /// Const arena for Metal 4 scalar binds (distinct offsets; reset after sync).
+ // 31B dense decode packs hundreds of binder consts across mid-commits within a
+@@ -265,9 +265,22 @@
+ }
+ 
+ /// Outcome of one `MTL4CommitFeedback` callback.
++/// Longest a waited commit waits for its commit-feedback callback after the
++/// shared event. A callback that has not run by then stays pending (see
++/// `observe_finished_feedback`).
++const FEEDBACK_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
++
++/// What one commit's feedback callback reported.
++///
++/// `done` is set under `gate` and the waiters are notified after, so a waiter
++/// that checks `done` under `gate` cannot miss the wake. The callback runs on a
++/// Metal thread, where a panic cannot be recovered, so every lock here takes a
++/// poisoned guard as it is instead of unwrapping.
+ struct FeedbackState {
+     done: AtomicBool,
+     error: Mutex<Option<String>>,
++    gate: Mutex<()>,
++    wake: Condvar,
+ }
+ 
+ impl FeedbackState {
+@@ -275,22 +288,52 @@
+         Self {
+             done: AtomicBool::new(false),
+             error: Mutex::new(None),
++            gate: Mutex::new(()),
++            wake: Condvar::new(),
+         }
+     }
+ 
+     fn fail(&self, message: String) {
+-        if let Ok(mut slot) = self.error.lock() {
+-            *slot = Some(message);
+-        }
+-        self.done.store(true, Ordering::Release);
++        *self.error.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
++        self.finish();
+     }
+ 
+     fn succeed(&self) {
+-        self.done.store(true, Ordering::Release);
++        self.finish();
+     }
+ 
++    fn finish(&self) {
++        {
++            let _gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
++            self.done.store(true, Ordering::Release);
++        }
++        self.wake.notify_all();
++    }
++
++    /// Wait up to `limit` for the callback; true when it has run. The wait
++    /// blocks on the callback's notify, so it returns as soon as the callback
++    /// runs rather than at a poll tick.
++    fn wait_done(&self, limit: std::time::Duration) -> bool {
++        if self.done.load(Ordering::Acquire) {
++            return true;
++        }
++        let deadline = std::time::Instant::now() + limit;
++        let mut gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
++        while !self.done.load(Ordering::Acquire) {
++            let now = std::time::Instant::now();
++            if now >= deadline {
++                break;
++            }
++            gate = match self.wake.wait_timeout(gate, deadline - now) {
++                Ok((g, _)) => g,
++                Err(poisoned) => poisoned.into_inner().0,
++            };
++        }
++        self.done.load(Ordering::Acquire)
++    }
++
+     fn message(&self) -> Option<String> {
+-        self.error.lock().ok().and_then(|slot| slot.clone())
++        self.error.lock().unwrap_or_else(PoisonError::into_inner).clone()
+     }
+ }
+ 
+@@ -1719,12 +1762,7 @@
+         let mut pending = Vec::new();
+         let mut fault = None;
+         for watch in watches {
+-            let start = std::time::Instant::now();
+-            while !watch.state.done.load(Ordering::Acquire) && start.elapsed() <= std::time::Duration::from_millis(500)
+-            {
+-                std::thread::sleep(std::time::Duration::from_millis(1));
+-            }
+-            if !watch.state.done.load(Ordering::Acquire) {
++            if !watch.state.wait_done(FEEDBACK_WAIT) {
+                 pending.push(watch);
+                 continue;
+             }
+@@ -2088,6 +2126,73 @@
+     use super::*;
+ 
+     #[test]
++    fn feedback_wait_returns_at_once_when_the_callback_already_ran() {
++        let state = FeedbackState::new();
++        state.succeed();
++        let t0 = std::time::Instant::now();
++        assert!(state.wait_done(std::time::Duration::from_secs(10)));
++        assert!(t0.elapsed() < std::time::Duration::from_secs(1));
++    }
++
++    #[test]
++    fn feedback_wait_without_a_callback_gives_up_at_the_limit() {
++        let state = FeedbackState::new();
++        let limit = std::time::Duration::from_millis(30);
++        let t0 = std::time::Instant::now();
++        assert!(!state.wait_done(limit));
++        assert!(t0.elapsed() >= limit, "returned before the limit: {:?}", t0.elapsed());
++    }
++
++    #[test]
++    fn feedback_wait_sees_a_failure_reported_from_another_thread() {
++        let state = Arc::new(FeedbackState::new());
++        let cb = Arc::clone(&state);
++        let t = std::thread::spawn(move || {
++            std::thread::sleep(std::time::Duration::from_millis(5));
++            cb.fail("page fault".to_string());
++        });
++        assert!(state.wait_done(std::time::Duration::from_secs(10)));
++        assert_eq!(state.message().as_deref(), Some("page fault"));
++        t.join().unwrap();
++    }
++
++    /// The waiter must wake on the callback itself, not on a poll tick. A
++    /// 1 ms sleep poll wakes 0–1.4 ms after the callback (median about
++    /// 0.6 ms); it put every small op's `synchronize` in a +1.25 ms mode on
++    /// about half of all runs. 60 trials with the callback 0–3 ms after the
++    /// wait starts, so it cannot line up with a poll boundary. This is a
++    /// timing assertion: the median wake must be under 300 µs. Against the
++    /// poll it failed with a 762 µs median; with the condvar it passed 6 of 6
++    /// runs, at host load averages of 22–45 on an M5 Pro.
++    #[test]
++    fn feedback_wait_wakes_on_the_callback_not_on_a_poll_tick() {
++        let mut lat = Vec::with_capacity(60);
++        for i in 0..60u64 {
++            let state = Arc::new(FeedbackState::new());
++            let cb = Arc::clone(&state);
++            let delay = std::time::Duration::from_micros(i * 50);
++            let (tx, rx) = std::sync::mpsc::channel();
++            let t = std::thread::spawn(move || {
++                std::thread::sleep(delay);
++                let signalled = std::time::Instant::now();
++                cb.succeed();
++                tx.send(signalled).unwrap();
++            });
++            assert!(state.wait_done(std::time::Duration::from_secs(10)));
++            let woke = std::time::Instant::now();
++            let signalled = rx.recv().unwrap();
++            lat.push(woke.saturating_duration_since(signalled));
++            t.join().unwrap();
++        }
++        lat.sort();
++        let median = lat[lat.len() / 2];
++        assert!(
++            median < std::time::Duration::from_micros(300),
++            "median wake {median:?} after the callback; sorted {lat:?}"
++        );
++    }
++
++    #[test]
+     fn metal4_encode_smoke_copy() {
+         let rt = GpuRuntime::new().expect("runtime");
+         let n = 64usize;

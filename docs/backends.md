@@ -6,48 +6,73 @@ This machine is an **Apple M5 Pro** (`system_profiler`: Metal 4, 20 GPU cores, v
 
 ---
 
-## Device Routing Pipeline
+## Who Selects the Device
 
-ojas strictly forbids silent fallbacks. If a GPU execution is requested and the hardware or compile-time feature is absent, execution fails immediately with an explicit error:
+There is no device router in Rust. `ojas-device` defines the `Device` kinds (`Cpu`, `Metal`, `Cuda`, `Hip`, `Vulkan`), `require_kind` (returns `DeviceMismatch` when two kinds differ), `probe()` (host CPU only; GPU probes live in the crates that link those runtimes), and memory planning (`ResourcePlan`, `ResourcePolicy`). It does not open a GPU and does not choose a backend.
+
+A caller chooses a backend by constructing it in Rust (`CpuBackend`, `MetalBackend`, `WgpuBackend`), or through the Go `LoadModel(ctx, path, LoadOptions{Device: ...})` or `NewModel` call, which `ojas-capi` turns into a session on one backend at load time:
 
 ```mermaid
 flowchart TD
-    Request["Caller Requests Device::X"] --> Match{"Device Variant"}
+    LoadOn["Go LoadModel(ctx, path, LoadOptions)"] --> Kind{"opts.Device"}
 
-    Match -->|Device::Cpu| CPU["ojas-cpu\nSingle-Threaded Reference"]
-    
-    Match -->|Device::Metal| MetalCheck{"macOS & Metal 4 Available?"}
-    MetalCheck -->|Yes| MetalPath["ojas-metal\ntessl + per_head_gate.metal"]
-    MetalCheck -->|No| MetalFail["Return DeviceError::NoDevice\n(Never CPU fallback!)"]
+    Kind -->|DeviceCPU| CPU["CpuBackend (1 thread)"]
+    Kind -->|"DeviceCPUParallel (threads 1..=256; 0 or >256 refused)"| CPUP["CpuBackend, threads"]
+    Kind -->|DeviceMetal| Metal{"Metal device opens?"}
+    Kind -->|DeviceWgpu| Wgpu{"wgpu adapter opens?"}
 
-    Match -->|Device::Vulkan| WgpuCheck{"wgpu Adapter Available?"}
-    WgpuCheck -->|Yes| WgpuPath["ojas-wgpu\nPortable WGSL Compute Pipeline"]
-    WgpuCheck -->|No| WgpuFail["Return DeviceError::NoDevice\n(Never CPU fallback!)"]
-
-    Match -->|Device::Cuda| CudaCheck{"Built with --features cuda?"}
-    CudaCheck -->|Yes| CudaPath["ojas-cuda\nPTX Launch via cudarc"]
-    CudaCheck -->|No| CudaFail["Return DeviceError::NotCompiled\n(Never CPU fallback!)"]
-
-    Match -->|Device::Hip| HipCheck{"Built with --features hip?"}
-    HipCheck -->|Yes| HipPath["ojas-hip\nMemcpy probe; no kernel"]
-    HipCheck -->|No| HipFail["Return DeviceError::NotCompiled\n(Never CPU fallback!)"]
+    Metal -->|Yes| MetalB["MetalBackend session\nTrainStep / GenerateIDs on device"]
+    Metal -->|No| MetalErr["Load returns explicit device error\n(NO silent CPU session)"]
+    Wgpu -->|Yes| WgpuB["WgpuBackend session\nTrainStep / GenerateIDs on device"]
+    Wgpu -->|No| WgpuErr["Load returns explicit wgpu error\n(NO silent CPU session)"]
 ```
+
+> [!IMPORTANT]
+> **Zero Silent Fallback Policy:** CUDA and HIP have no Go device selector and do not implement `Backend`. If Metal or wgpu cannot open their respective hardware contexts, `LoadModel` or `NewModel` returns an immediate error—**it will never silently substitute a CPU session**.
+
+On a GPU session, `TrainStep` reads back only the loss; the device tape keeps activations resident. `to_host` reads in 1 MiB pieces and checkpoint load in 64 KiB pieces, so the peak is the window plus one piece ([`typed-storage-plan.md`](typed-storage-plan.md)). Every backend validates shapes through one shared contract before reserving budget ([`shape-contract.md`](shape-contract.md)), and Metal reports device faults at the next `sync` like wgpu ([`metal-deferred-faults.md`](metal-deferred-faults.md)).
+
+Device tensors: `Tensor::from_device` wraps a backend buffer, `to_host` copies it back and is counted by `device_readbacks()`, and `device_buffer_mut` requires sole ownership. The default `Backend::upload` returns `Unsupported` for a host tensor on a non-CPU backend, so a backend that has not implemented upload does not silently compute on the host.
 
 ---
 
-## What Ran on This Machine
+## Memory Residency & Zero-Copy Lifecycle
 
-`cargo test -p ojas-device -p ojas-wgpu -p ojas-cuda -p ojas-hip` passed 14 unit tests (3 + 7 + 2 + 2):
+```mermaid
+flowchart LR
+    subgraph HostRAM["Host RAM"]
+        HostTen["Host Tensor (Arc<Vec<u8>>)"]
+        Audit["device_readbacks() Audit Counter"]
+    end
 
+    subgraph GPUMem["GPU Unified / VRAM"]
+        DeviceTen["Device Tensor (DeviceBuffer)"]
+    end
+
+    HostTen -->|Backend::upload() [Explicit]| DeviceTen
+    DeviceTen -->|Tensor::to_host() [Counted Transfer]| HostTen
+    DeviceTen -.->|Triggered on download| Audit
 ```
-ojas-wgpu adapter: Apple M5 Pro vendor=Apple (wgpu vendor field 0) hal=Metal
-```
 
-* **wgpu Adapter:** Verified name `Apple M5 Pro`, HAL `Metal`.
-* **Zero Dispatch on Empty:** Empty inputs return `Ok` with `dispatched == false` without executing command encoders.
-* **NaN Propagation:** Passing `f32::NAN` through affine scale properly propagates NaNs.
-* **Overflow Protection:** Buffers exceeding `u32::MAX` byte length return `DeviceError::NoDevice`.
-* **Strict Rejection:** Passing `Device::Cuda` to the wgpu pipeline returns `DeviceError::DeviceMismatch`, not a fallback.
+> [!CAUTION]
+> Host tensor accessors (`to_f32_vec`, `as_slice`) refuse device-resident tensors immediately rather than reading them back implicitly across the bus. This prevents unmetered PCIe/memory bus bottlenecks from corrupting latency profiles.
+
+---
+
+## Backend Status (2026-10-01, Apple M5 Pro)
+
+| Backend | Implements `Backend` | Numerics | Tests | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| `CpuBackend` (`ojas-cpu`) | Yes | `Fast` default; `Exact` opt-in | 211 passed, 11 ignored (run 4) | Exact: packed GEMM, persistent thread pool, bit-identical to golden digests at threads 1, 2, 3, 7, 16, 18. Fast on macOS: $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) dispatch to Accelerate `cblas_sgemm`; smaller stay on `tile_fast`. Off macOS the cutoff is $2^{21}$. Cosine and WSD schedules |
+| `ojas-simd` | No (kernels for `ojas-cpu`) | — | 20 passed alone, 24 under `--workspace` (run 4) | NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on $256^3$, $512 \times 768 \times 768$, $2048^3$ |
+| `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | 154 passed (run 4; `cargo test -p ojas-metal --release -- --test-threads=1`) | Tiled causal attention, head dim above 128 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Per-op fixed cost fell after tessl's `synchronize` stopped polling ([`bench-gpu-vs-torch.md`](bench-gpu-vs-torch.md)) |
+| `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | 124 passed, 3 ignored (run 4) | Muon NS5 in f32, checked against the CPU. Tiled FlashAttention-2, head dim above 128 refused. The first faulting op is named at the next `sync`. GEMM race resolved with whole-`vec4` stores |
+| `ojas-kernels` | No (shared geometry and sources) | — | 11 passed (run 4) | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |
+| `ojas-cuda` | No | — | 8 passed (feature off) | One affine kernel behind `--features cuda` |
+| `ojas-hip` | No | — | 8 passed (feature off) | Copy probe behind `--features hip`; no kernel |
+
+> [!WARNING]
+> Both `MetalBackend` and `WgpuBackend` enforce $d_{\text{head}} \le 128$ for attention operations (`METAL_MAX_HEAD_DIM`; `ATTENTION_MAX_HEAD_DIM` for wgpu). A larger head dimension raises `OjasError::UnsupportedHeadDim` loud and early. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64.
 
 ---
 
@@ -90,17 +115,19 @@ flowchart LR
 | `candle-core` | `0.11.0` | Avoid broad general runtime dependency on performance-critical paths. |
 | `cubecl` | `0.10.0` | JIT kernel compiler layer; ojas relies on static native Metal & WGSL shaders. |
 | `cust` | `0.3.2` | Unmaintained legacy rust-cuda bindings; superseded by `cudarc`. |
-| Go GPU modules | — | Go GPU engines (`gorgonia`, `gocu`) add GC interference. Gusset IPC cleanly isolates compute. |
+| Go GPU modules | — | Go GPU engines (`gorgonia`, `gocu`) add GC interference. The in-process gusset C-ABI boundary keeps compute in Rust. |
 
 ---
 
 ## CUDA and HIP Verification Status
 
-| Check | Command | Verified Result |
+**Reported** from an earlier session; not re-run on 2026-10-01.
+
+| Check | Command | Reported Result |
 | :--- | :--- | :--- |
 | **CUDA Default** | `cargo test -p ojas-cuda` | **Passed:** `tests::default_build_reports_not_compiled` |
 | **CUDA Bindings** | `cargo check -p ojas-cuda --features cuda` | **Passed:** Typecheck only (dynamic loading; `nvcc` absent) |
 | **CUDA Execution** | Kernel launch | **Skipped:** No NVIDIA GPU present |
 | **HIP Default** | `cargo test -p ojas-hip` | **Passed:** `tests::default_build_reports_not_compiled` |
 | **HIP Bindings** | `cargo check -p ojas-hip --features hip` | **Skipped:** Build stopped in `hip-runtime-sys` (no `/opt/rocm`) |
-| **HIP Execution** | Memcpy probe (there is no HIP kernel) | **Skipped:** `--features hip` was not built; no `/opt/rocm` and no AMD GPU |
+| **HIP Execution** | Copy probe (there is no HIP kernel) | **Skipped:** `--features hip` was not built; no `/opt/rocm` and no AMD GPU |

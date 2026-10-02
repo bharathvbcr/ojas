@@ -1,0 +1,63 @@
+<!doctype html>
+<!--
+  Raster template for the ojas logo. Every icon and card PNG under
+  site/assets/ is a headless-Chrome screenshot of this page placing
+  site/assets/ojas-logo.png (the transparent cut-out of
+  docs/brand/ojas-logo-source.png). The regeneration commands are in
+  docs/web-and-domain.md.
+
+  ?kind=tile   rounded dark tile, transparent corners (README, favicon)
+  ?kind=plate  opaque square; the logo sits inside the maskable safe zone
+               (apple-touch-icon and manifest icons, whose corners the OS crops)
+  ?kind=og     1200x630 social card: logo, wordmark, tagline
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ojas raster template</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@500&family=Plus+Jakarta+Sans:wght@800&display=block" rel="stylesheet">
+<style>
+  html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: transparent; }
+  .logo { display: block; }
+  /* Oxblood glow behind the glass, matching the render's own lighting */
+  .glow { background: radial-gradient(circle at 50% 50%, #3a0710 0%, #14040a 46%, #050506 78%); }
+  .tile { position: absolute; inset: 0; border-radius: 22.5%; display: grid; place-items: center;
+          box-shadow: inset 0 0 0 1px rgba(255, 70, 90, 0.22); }
+  .tile .logo { width: 86%; height: 86%; }
+  .plate { position: absolute; inset: 0; display: grid; place-items: center; }
+  .plate .logo { width: 74%; height: 74%; }
+  .og { width: 1200px; height: 630px; box-sizing: border-box; padding: 0 88px;
+        display: flex; align-items: center; gap: 64px; color: #f8fafc;
+        background:
+          radial-gradient(circle at 25% 50%, rgba(160, 12, 34, 0.42) 0%, rgba(8, 8, 10, 0) 44%),
+          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px) 0 0 / 48px 48px,
+          linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px) 0 0 / 48px 48px,
+          #050506;
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+  .og .logo { width: 420px; height: 420px; flex: none; }
+  .og h1 { margin: 0; font-size: 148px; font-weight: 800; letter-spacing: -4px; line-height: 1;
+           background: linear-gradient(120deg, #ffffff 0%, #ff9aa8 50%, #e0182f 100%);
+           -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .og p { margin: 20px 0 0; font-size: 34px; font-weight: 800; line-height: 1.2; color: #e2e8f0; }
+  .og code { display: block; white-space: nowrap; margin-top: 28px; font: 500 21px 'Fira Code', monospace; color: #ff8a99; }
+</style>
+</head>
+<body>
+<script>
+  const kind = new URLSearchParams(location.search).get('kind') || 'tile';
+  const src = new URL('../../site/assets/ojas-logo.png', location.href).href;
+  const logo = `<img class="logo" src="${src}" alt="">`;
+  const views = {
+    tile: `<div class="tile glow">${logo}</div>`,
+    plate: `<div class="plate glow">${logo}</div>`,
+    og: `<div class="og">${logo}<div><h1>ojas</h1>
+          <p>Deterministic deep learning<br>engine in safe Rust</p>
+          <code>CPU · Metal 4 · WebGPU · CUDA · Go API</code></div></div>`,
+  };
+  if (!(kind in views)) throw new Error(`unknown kind: ${kind}`);
+  document.body.innerHTML = views[kind];
+</script>
+</body>
+</html>

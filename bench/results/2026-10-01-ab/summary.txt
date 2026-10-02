@@ -1,0 +1,10 @@
+floor_silu_1 old rounds=10 min=0.106 med_of_mins=0.118 med_of_medians=0.369 parity_max_abs=0
+floor_silu_1 new rounds=10 min=0.102 med_of_mins=0.135 med_of_medians=1.389 parity_max_abs=0
+rope_bwd old rounds=10 min=0.323 med_of_mins=0.348 med_of_medians=1.497 parity_max_abs=0
+rope_bwd new rounds=10 min=0.33 med_of_mins=0.359 med_of_medians=1.598 parity_max_abs=0
+permute_bthd_bhtd old rounds=10 min=0.31 med_of_mins=0.346 med_of_medians=1.62 parity_max_abs=0
+permute_bthd_bhtd new rounds=10 min=0.331 med_of_mins=0.358 med_of_medians=1.622 parity_max_abs=0
+residual_add_fwd old rounds=10 min=0.54 med_of_mins=0.577 med_of_medians=1.394 parity_max_abs=0
+residual_add_fwd new rounds=10 min=0.566 med_of_mins=0.608 med_of_medians=1.027 parity_max_abs=0
+residual_add_bwd old rounds=10 min=0.519 med_of_mins=0.566 med_of_medians=1.836 parity_max_abs=0
+residual_add_bwd new rounds=10 min=0.542 med_of_mins=0.567 med_of_medians=0.943 parity_max_abs=0

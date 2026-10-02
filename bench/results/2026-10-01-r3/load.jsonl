@@ -1,0 +1,10 @@
+{"round":1,"lane":"ojas-metal","when":"before","time":"22:41:18","load":"19.68 21.89 22.14","gpu_util_pct":99}
+{"round":1,"lane":"ojas-metal","when":"after","time":"22:41:55","load":"19.46 21.57 22.01","gpu_util_pct":100}
+{"round":1,"lane":"ojas-wgpu","when":"before","time":"22:41:55","load":"19.46 21.57 22.01","gpu_util_pct":100}
+{"round":1,"lane":"ojas-wgpu","when":"after","time":"22:42:52","load":"16.90 20.49 21.58","gpu_util_pct":100}
+{"round":1,"lane":"torch-mps","when":"before","time":"22:42:52","load":"16.90 20.49 21.58","gpu_util_pct":100}
+{"round":1,"lane":"torch-mps","when":"after","time":"22:43:31","load":"18.21 20.31 21.46","gpu_util_pct":100}
+{"round":2,"lane":"torch-mps","when":"before","time":"22:43:31","load":"18.21 20.31 21.46","gpu_util_pct":100}
+{"round":2,"lane":"torch-mps","when":"after","time":"22:44:00","load":"21.13 20.78 21.58","gpu_util_pct":100}
+{"round":2,"lane":"ojas-wgpu","when":"before","time":"22:44:00","load":"21.13 20.78 21.58","gpu_util_pct":100}
+{"round":2,"lane":"ojas-wgpu","when":"after","time":"22:44:00","load":"21.13 20.78 21.58","gpu_util_pct":100}

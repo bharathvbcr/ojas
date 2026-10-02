@@ -5,11 +5,25 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Tiny Metal training step on tessl. Lane B. GPU code is macOS-only."
+description = "Device-resident Metal backend on tessl, plus the tiny Metal training step. GPU code is macOS-only."
+
+[features]
+default = ["metal"]
+# GPU code. Without it, or on a target other than macOS, the crate builds a
+# stub whose `MetalBackend::new` returns `OjasError::Unsupported`.
+metal = ["dep:tessl"]
 
 [dependencies]
 ojas-core = { path = "../ojas-core" }
 ojas-device = { path = "../ojas-device" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-tessl = { path = "/Users/bharath/Code/research/tessl" }
+# Sibling checkout: ojas and tessl sit side by side.
+tessl = { path = "../../tessl", optional = true }
+
+[dev-dependencies]
+ojas-cpu = { path = "../ojas-cpu" }
+
+[[example]]
+name = "metal_bench"
+required-features = ["metal"]

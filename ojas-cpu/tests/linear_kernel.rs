@@ -1,14 +1,14 @@
 //! The tiled linear kernel: remainder widths, a 1x1 product, empty axes,
 //! NaN, and a shape that is large enough to take the parallel tiles.
 
-use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{Backend, Budget, DType, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;
 use common::{assert_nonfinite, assert_shape, bits, f32t, SplitMix64};
 
 fn wide() -> CpuBackend {
-    CpuBackend::new(Budget::new(8 << 20))
+    CpuBackend::new(Budget::new(8 << 20)).with_numerics(Numerics::Exact)
 }
 
 fn empty(cpu: &CpuBackend, shape: &[usize]) -> Tensor {
@@ -92,7 +92,9 @@ fn check_against_reference(rows: usize, kin: usize, nout: usize, seed: u64) {
         bits(&gw2.to_f32_vec().unwrap())
     );
     for threads in [1usize, 2, 3, 7, 16] {
-        let parallel = CpuBackend::with_threads(Budget::new(8 << 20), threads).unwrap();
+        let parallel = CpuBackend::with_threads(Budget::new(8 << 20), threads)
+            .unwrap()
+            .with_numerics(Numerics::Exact);
         let y2 = parallel
             .linear_forward(
                 &f32t(&parallel, &x, &[rows, kin]),
@@ -148,6 +150,15 @@ fn tiled_linear_matches_scalar_reference_on_odd_and_parallel_shapes() {
     // Above the parallel grain, and not divisible by the 8-column tile.
     // 73*11*13 = 10439 multiply-adds. The helper also checks several thread counts.
     check_against_reference(73, 11, 13, 14);
+    // Full 4-row and 8-column tiles, no remainder. A bug that only fires on
+    // the aligned kernel would pass the odd shapes above.
+    check_against_reference(8, 32, 24, 21);
+    check_against_reference(16, 64, 64, 22);
+    // Above PARALLEL_AT (524_289). 64*128*96 = 786_432, every tile full.
+    // 70*80*100 = 560_000, row and column remainders. Both must match the
+    // scalar product at thread counts 1, 2, 3, 7, and 16.
+    check_against_reference(64, 128, 96, 23);
+    check_against_reference(70, 80, 100, 24);
 }
 
 #[test]
@@ -182,6 +193,64 @@ fn linear_empty_axes_and_mismatched_shapes_error() {
         &f32t(&cpu, &[1.0, 2.0], &[2]),
         &f32t(&cpu, &[1.0, 1.0], &[2, 1]),
     ));
+}
+
+#[test]
+fn linear_scale_wall_time() {
+    // One projection at a training-like width. The profiled step (T=32, d=64)
+    // is already level with torch; this is the shape where a BLAS GEMM pulls ahead.
+    let shapes: &[(usize, usize, usize)] = &[(64, 64, 128), (256, 256, 256), (512, 768, 768)];
+    for &(rows, kin, nout) in shapes {
+        let cpu = CpuBackend::with_threads(Budget::new(256 << 20), 6).unwrap();
+        let mut rng = SplitMix64(0x5eed);
+        let x = rng.vec(rows * kin, 0.1);
+        let w = rng.vec(nout * kin, 0.1);
+        let gy = rng.vec(rows * nout, 0.1);
+        let xt = f32t(&cpu, &x, &[rows, kin]);
+        let wt = f32t(&cpu, &w, &[nout, kin]);
+        let gt = f32t(&cpu, &gy, &[rows, nout]);
+        let once = cpu.linear_forward(&xt, &wt).unwrap();
+        assert!(once.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
+        let (gx, gw) = cpu.linear_backward(&xt, &wt, &gt).unwrap();
+        assert!(gx.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
+        assert!(gw.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
+        let y_bits = bits(&once.to_f32_vec().unwrap());
+        let calls = if rows >= 512 { 4 } else { 8 };
+        let drop_n = 1;
+        let mut fwd = Vec::with_capacity(calls);
+        let mut bwd = Vec::with_capacity(calls);
+        for i in 0..calls {
+            let t0 = std::time::Instant::now();
+            let y = cpu.linear_forward(&xt, &wt).unwrap();
+            let fwd_ns = t0.elapsed().as_nanos();
+            assert_eq!(bits(&y.to_f32_vec().unwrap()), y_bits);
+            let t1 = std::time::Instant::now();
+            let (gx2, gw2) = cpu.linear_backward(&xt, &wt, &gt).unwrap();
+            let bwd_ns = t1.elapsed().as_nanos();
+            assert_eq!(
+                bits(&gx2.to_f32_vec().unwrap()),
+                bits(&gx.to_f32_vec().unwrap())
+            );
+            assert_eq!(
+                bits(&gw2.to_f32_vec().unwrap()),
+                bits(&gw.to_f32_vec().unwrap())
+            );
+            if i >= drop_n {
+                fwd.push(fwd_ns);
+                bwd.push(bwd_ns);
+            }
+        }
+        fwd.sort_unstable();
+        bwd.sort_unstable();
+        let macs = rows as f64 * kin as f64 * nout as f64;
+        println!(
+            "linear_scale rows={rows} kin={kin} nout={nout} fwd_median_s={:.9} bwd_median_s={:.9} fwd_gflops={:.3} bwd_gflops={:.3}",
+            fwd[fwd.len() / 2] as f64 / 1e9,
+            bwd[bwd.len() / 2] as f64 / 1e9,
+            2.0 * macs / (fwd[fwd.len() / 2] as f64),
+            4.0 * macs / (bwd[bwd.len() / 2] as f64),
+        );
+    }
 }
 
 #[test]
