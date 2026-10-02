@@ -146,6 +146,42 @@ pub fn weight_decays(entries: &[ParamSpec]) -> Vec<f64> {
     vec![WEIGHT_DECAY; entries.len()]
 }
 
+/// One parameter's AdamW settings, as torch's param group holds them for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryHyper {
+    pub name: String,
+    pub lr_scale: f64,
+    pub weight_decay: f64,
+    pub eps: f64,
+    pub beta1: f64,
+    pub beta2: f64,
+}
+
+/// The whole per-parameter optimizer table the loop runs: the provider's entries in their
+/// order, then the host entries (the span head, which `layerwise_param_groups` puts in the
+/// base group). Amendment 2 (ii) holds it equal, name by name and with no tolerance, to what
+/// `layerwise_param_groups` + `build_optimizer` produce on the 2B
+/// (`tests/optimizer_table.rs`), and the loop derives every vector it hands
+/// [`crate::step::StepProvider::adamw_step`] from it, so the table tested is the table run.
+pub fn optimizer_table(entries: &[ParamSpec], host: &[ParamSpec], recipe: &OptimizerRecipe) -> Result<Vec<EntryHyper>, StepError> {
+    recipe.validate()?;
+    let scales = lr_scales(entries, recipe.lower_layers, host.len())?;
+    let row = |name: &str, lr_scale: f64| EntryHyper {
+        name: name.to_owned(),
+        lr_scale,
+        weight_decay: WEIGHT_DECAY,
+        eps: EPS,
+        beta1: BETA1,
+        beta2: recipe.beta2,
+    };
+    Ok(entries
+        .iter()
+        .zip(&scales)
+        .map(|(e, &s)| row(&e.name, s))
+        .chain(host.iter().map(|e| row(&e.name, 1.0)))
+        .collect())
+}
+
 /// `clip_grad_norm_`'s coefficient from the squared norm of every clipped gradient (the
 /// provider's bank and the host parameters together): `max_norm / (norm + 1e-6)`, at most 1.
 /// Refused when the norm is not finite: torch would go on and write NaN parameters; this loop

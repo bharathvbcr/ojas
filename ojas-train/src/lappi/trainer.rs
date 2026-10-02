@@ -395,7 +395,23 @@ where
     }
     let entries = provider.parameters().to_vec();
     let host_entries = objective.host_ref().map(|h| h.entries()).unwrap_or_default();
-    let lr_scale = recipe::lr_scales(&entries, cfg.optimizer.lower_layers, host_entries.len())?;
+    // Every per-entry number the optimizer uses comes out of this one table (Amendment 2 (ii)).
+    let table = recipe::optimizer_table(&entries, &host_entries, &cfg.optimizer)?;
+    let (provider_rows, host_rows) = table.split_at(entries.len());
+    let lr_scale: Vec<f64> = provider_rows.iter().map(|e| e.lr_scale).collect();
+    let weight_decay: Vec<f64> = provider_rows.iter().map(|e| e.weight_decay).collect();
+    let host_rows = host_rows.to_vec();
+    // One AdamWHyper serves every entry, so eps and the betas must be one value across the table.
+    let Some(first) = table.first() else {
+        return Err(TrainError::Refused("the model has no parameters to train".into()));
+    };
+    let (beta1, beta2, eps) = (first.beta1, first.beta2, first.eps);
+    if let Some(e) = table.iter().find(|e| e.beta1 != beta1 || e.beta2 != beta2 || e.eps != eps) {
+        return Err(TrainError::Refused(format!(
+            "{} has betas ({}, {}) and eps {} but the step applies ({beta1}, {beta2}) and {eps} to every entry",
+            e.name, e.beta1, e.beta2, e.eps
+        )));
+    }
     if lr_scale.iter().any(|s| *s != 1.0) && !provider.supports_lr_scale() {
         return Err(TrainError::Refused(format!(
             "the recipe asks for a layer-wise learning rate ({:?}) and this provider ({}) has no \
@@ -405,8 +421,6 @@ where
             provider.describe()
         )));
     }
-    let weight_decay = recipe::weight_decays(&entries);
-    let host_wd = recipe::WEIGHT_DECAY;
     let mut host_moments: Vec<Moments> = host_entries
         .iter()
         .map(|e| e.numel().map(Moments::zeros))
@@ -671,14 +685,17 @@ where
             .map_err(|e| TrainError::NonFinite(format!("at {where_}: {e}; this step was not applied")))?;
         let hyper = AdamWHyper {
             lr,
-            beta1: recipe::BETA1,
-            beta2: cfg.optimizer.beta2,
-            eps: recipe::EPS,
+            beta1,
+            beta2,
+            eps,
             grad_scale: coef,
         };
         let t = optimizer_step + 1;
         // Host shapes are checked before the provider moves, so the two halves move together.
         if let Some(h) = objective.host_ref() {
+            if h.values().len() != host_rows.len() || host_moments.len() != host_rows.len() {
+                return Err(TrainError::Refused("the host parameters no longer match the optimizer table".into()));
+            }
             for ((g, v), m) in h.grads().iter().zip(h.values()).zip(&host_moments) {
                 if g.len() != v.len() || m.m.len() != v.len() {
                     return Err(TrainError::Refused("a host tensor's gradient or moments do not fit it".into()));
@@ -687,8 +704,8 @@ where
         }
         provider.adamw_step(&hyper, t, &lr_scale, &weight_decay)?;
         if let Some(h) = objective.host() {
-            for ((value, grad), m) in h.values_and_grads().into_iter().zip(host_moments.iter_mut()) {
-                adamw_update(value, grad, m, &hyper, lr, host_wd, t)?;
+            for (((value, grad), m), row) in h.values_and_grads().into_iter().zip(host_moments.iter_mut()).zip(&host_rows) {
+                adamw_update(value, grad, m, &hyper, lr * row.lr_scale, row.weight_decay, t)?;
             }
         }
         log.append(LossPoint {
