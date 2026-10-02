@@ -31,7 +31,6 @@ use qd_train::adamw::{adamw_entry_step, EntryState};
 use qd_train::recipe::{self, optimizer_table, EntryHyper, LowerLayers, OptimizerRecipe};
 use qd_train::step::ParamSpec;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 const HEAD_PREFIX: &str = "span_head.";
 
@@ -44,25 +43,15 @@ fn json(path: &Path) -> Value {
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn sha256_hex(path: &Path) -> String {
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The manifest, after every file it pins has been checked against its pin: nothing below is
-/// read from a file whose bytes are not the generator's.
+/// The manifest, after every file it pins has been checked against its pin (sha256 and byte
+/// count, through the shared `common::pins` check, which also refuses a file it does not list):
+/// nothing below is read from a file whose bytes are not the generator's.
 fn pinned_manifest() -> Value {
-    let m = json(&dir().join("manifest.json"));
+    let dir = common::pins::verified(&dir(), common::pins::Form::JsonFiles);
+    let m = json(&dir.join(common::pins::MANIFEST_JSON));
     let files = m["files"].as_object().expect("manifest.files");
     let want = ["golden.safetensors", "inputs.safetensors", "preregistration.json", "table.json"];
     assert_eq!(files.keys().map(String::as_str).collect::<Vec<_>>(), want, "the manifest pins exactly these files");
-    for name in want {
-        let path = dir().join(name);
-        let pin = files[name]["sha256"].as_str().unwrap();
-        assert_eq!(sha256_hex(&path), pin, "{name} is not the file the manifest pins");
-        let len = std::fs::metadata(&path).unwrap().len();
-        assert_eq!(Some(len), files[name]["bytes"].as_u64(), "{name}: byte count");
-    }
     assert_eq!(
         m["preregistration"]["sha256"], files["preregistration.json"]["sha256"],
         "the golden was generated from the pre-registration that is committed"

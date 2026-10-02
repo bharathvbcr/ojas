@@ -1,7 +1,12 @@
 //! Shared support for `qd-train`'s integration tests: fixture paths, a byte-counting
 //! [`ShardFiles`], and scratch directories built without a `tempfile` dependency.
+//!
+//! [`pins`] checks a fixture set against its sha256 manifest. [`fixture`] hands out `shards-tiny`
+//! only after that check has passed in this process.
 
 #![allow(dead_code)]
+
+pub mod pins;
 
 use std::collections::HashMap;
 use std::io;
@@ -28,12 +33,13 @@ pub fn qd_data_dir() -> PathBuf {
     repo_root().join("python").join("qd_data")
 }
 
-/// The oracle's fixture: `tools/qd_train_oracle_shards.py --out` this directory.
+/// The oracle's fixture: `tools/qd_train_oracle_shards.py --out` this directory. Returned only
+/// once every file in it matches `shards-tiny/SHA256SUMS` (checked once per test binary).
 pub fn fixture() -> PathBuf {
-    crate_dir()
-        .join("tests")
-        .join("fixtures")
-        .join("shards-tiny")
+    pins::verified(
+        &crate_dir().join("tests").join("fixtures").join("shards-tiny"),
+        pins::Form::Sha256Sums,
+    )
 }
 
 /// A JSON file from the oracle's dump.
