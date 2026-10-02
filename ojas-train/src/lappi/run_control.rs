@@ -10,6 +10,10 @@
 //!   exact numbers (`float.hex`), so two runs agree iff their digests agree -- and the digest
 //!   is the one Python computes over the same points (`tests/pyjson_oracle.rs`).
 //!
+//! * [`tensor_ref_digest`] and [`sidecar_digest`] are `TensorRef.digest` and `_sidecar_digest`,
+//!   the repo's canonical digest of a tensor set, which pins the span-head init file
+//!   (Amendment 2 (iv); `tests/head_init.rs` checks them against Python's own functions).
+//!
 //! The consumed-batch digest (`ConsumedPrefix`) has one owner, beside the `Batch` it folds:
 //! [`crate::shards::ConsumedPrefix`].
 
@@ -248,6 +252,82 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
+}
+
+/// `run_control._TENSOR_REF_DOMAIN`.
+pub const TENSOR_REF_DOMAIN: &[u8] = b"qd-tensor-ref-v1";
+/// `run_control._SIDECAR_DOMAIN`.
+pub const SIDECAR_DOMAIN: &[u8] = b"qd-checkpoint-sidecar-v1";
+
+/// `TensorRef.digest` (`run_control.py:1140-1158`): sha256 over the domain, then the dtype name,
+/// the shape and the bytes, each length-prefixed big-endian (u32 for the name and the rank, u64
+/// for every axis and the byte count). `data` is the tensor's little-endian bytes. A byte count
+/// that disagrees with the shape is refused, as `TensorRef` refuses it.
+pub fn tensor_ref_digest(dtype: &str, shape: &[usize], element_bytes: usize, data: &[u8]) -> Result<String, RunControlError> {
+    let elems = shape
+        .iter()
+        .try_fold(1usize, |a, &d| a.checked_mul(d))
+        .and_then(|n| n.checked_mul(element_bytes))
+        .ok_or_else(|| RunControlError::Invalid(format!("shape {shape:?} overflows")))?;
+    if elems != data.len() {
+        return Err(RunControlError::Invalid(format!(
+            "a {dtype} tensor of shape {shape:?} is {elems} bytes and this one carries {}",
+            data.len()
+        )));
+    }
+    let name_len = u32::try_from(dtype.len()).map_err(|e| RunControlError::Invalid(e.to_string()))?;
+    let rank = u32::try_from(shape.len()).map_err(|e| RunControlError::Invalid(e.to_string()))?;
+    let mut h = Sha256::new();
+    h.update(TENSOR_REF_DOMAIN);
+    h.update(name_len.to_be_bytes());
+    h.update(dtype.as_bytes());
+    h.update(rank.to_be_bytes());
+    for &axis in shape {
+        h.update((axis as u64).to_be_bytes());
+    }
+    h.update((data.len() as u64).to_be_bytes());
+    h.update(data);
+    Ok(hex(&h.finalize()))
+}
+
+/// `run_control._sidecar_digest` (`run_control.py:1308-1322`): sha256 over the domain, the
+/// count (u64 big-endian), then for each name in sorted order its UTF-8 length (u64), the name
+/// and the 32 raw bytes of its tensor digest. Python sorts `str` by code point and UTF-8 byte
+/// order is code-point order, so sorting the Rust strings gives the same sequence. A repeated
+/// name, or a digest that is not 64 lowercase hex characters, is refused.
+pub fn sidecar_digest(tensors: &[(String, String)]) -> Result<String, RunControlError> {
+    let mut sorted: Vec<&(String, String)> = tensors.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    if let Some(w) = sorted.windows(2).find(|w| w[0].0 == w[1].0) {
+        return Err(RunControlError::Invalid(format!("{} is named twice in one tensor set", w[0].0)));
+    }
+    let mut h = Sha256::new();
+    h.update(SIDECAR_DOMAIN);
+    h.update((sorted.len() as u64).to_be_bytes());
+    for (name, digest) in sorted {
+        let raw = unhex32(digest).ok_or_else(|| RunControlError::Invalid(format!("{name}: digest {digest:?} is not a sha256")))?;
+        h.update((name.len() as u64).to_be_bytes());
+        h.update(name.as_bytes());
+        h.update(raw);
+    }
+    Ok(hex(&h.finalize()))
+}
+
+fn unhex32(s: &str) -> Option<[u8; 32]> {
+    let b = s.as_bytes();
+    if b.len() != 64 {
+        return None;
+    }
+    let nibble = |c: u8| match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        _ => None,
+    };
+    let mut out = [0u8; 32];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = (nibble(b[2 * i])? << 4) | nibble(b[2 * i + 1])?;
+    }
+    Some(out)
 }
 
 #[cfg(test)]
