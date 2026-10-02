@@ -1,36 +1,60 @@
 # ojas-device
 
-`ojas-device` provides hardware device identification, hardware probing facilities, and strict error propagation for non-available backends.
+`ojas-device` provides hardware device enumeration, host resource probing, memory planning (`ResourcePolicy`), and strict error propagation for hardware accelerators across **ojas**.
 
 ---
 
-## Hardware Hierarchy
+## Device Enumeration & Fallback Policy
 
 ```mermaid
 flowchart TD
-    subgraph DeviceEnum["Device Enumeration"]
+    subgraph Enumeration["Hardware Device Kinds"]
         CPU["Device::Cpu"]
         Metal["Device::Metal"]
         Vulkan["Device::Vulkan"]
-        Cuda["Device::Cuda"]
-        Hip["Device::Hip"]
+        CUDA["Device::Cuda"]
+        HIP["Device::Hip"]
     end
 
-    subgraph ErrorDomain["DeviceError (No Fallbacks!)"]
-        NotCompiled["DeviceError::NotCompiled\n(Optional feature not enabled at build time)"]
-        NoDevice["DeviceError::NoDevice\n(Target hardware absent on host)"]
-        DeviceMismatch["DeviceError::DeviceMismatch\n(Operation dispatched to incompatible device)"]
+    subgraph ErrorTaxonomy["DeviceError (Zero Silent Fallbacks!)"]
+        NotCompiled["DeviceError::NotCompiled\n(Requested accelerator feature disabled at compile time)"]
+        NoDevice["DeviceError::NoDevice\n(Target hardware absent on host machine)"]
+        Mismatch["DeviceError::DeviceMismatch\n(Operation dispatched across incompatible device buffers)"]
     end
 
-    Metal -.->|Absent on Linux| NoDevice
-    Cuda -.->|Feature cuda off| NotCompiled
-    Hip -.->|Feature hip off| NotCompiled
+    CUDA -.->|Feature cuda disabled| NotCompiled
+    HIP -.->|Feature hip disabled| NotCompiled
+    Metal -.->|Non-Apple hardware| NoDevice
 ```
 
 ---
 
-## Core Philosophy: Never Fall Back
+## Host Probing & Resource Planning
 
-Most deep learning frameworks silently route missing accelerator workloads onto the host CPU. This masks deployment errors and produces unpredictable performance cliffs.
+`ojas-device` probes host CPU core topology and physical memory capacity to plan training and inference resource allocations:
 
-In `ojas`, selecting `Device::Cuda` when the `cuda` feature is disabled returns `Err(DeviceError::NotCompiled)` immediately. Calling an unsupported operation on a device returns `Err(DeviceError::DeviceMismatch)`.
+```mermaid
+flowchart LR
+    subgraph Probe["host::probe()"]
+        Cores["Logical / Physical CPU Cores"]
+        RAM["Physical RAM Extents"]
+    end
+
+    subgraph Policy["ResourcePolicy & ResourcePlan"]
+        Plan["Compute Maximum Micro-Batch Shape\nand Buffer Budgets based on Available RAM"]
+    end
+
+    Probe --> Policy
+```
+
+---
+
+## The "Never Fall Back" Guarantee
+
+> [!IMPORTANT]
+> **No Silent CPU Fallbacks:** Most legacy machine learning frameworks silently route missing accelerator workloads onto the host CPU when a GPU is misconfigured or missing. This masks operational deployment errors and produces catastrophic latency spikes.
+> 
+> In `ojas`, selecting `Device::Cuda` or `Device::Hip` when that runtime is disabled returns `Err(DeviceError::NotCompiled)` immediately. Calling an unsupported operation on a device returns `Err(DeviceError::DeviceMismatch)`.
+
+> [!NOTE]
+> `ojas-device` defines device kinds and memory policies; it does **not** open GPU contexts or implement compute backends. Driver initialization and backend kernels reside in `ojas-metal`, `ojas-wgpu`, `ojas-cuda`, and `ojas-hip`.

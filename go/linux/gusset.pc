@@ -1,0 +1,9 @@
+prefix=${pcfiledir}/../..
+libdir=${prefix}/target/debug
+includedir=${pcfiledir}/../../../../devtools/gusset/internal/ffi
+
+Name: gusset
+Description: ojas umbrella staticlib (libgusset.a), Linux, debug profile
+Version: 0.0.2
+Libs: -L${libdir} -lgusset -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc
+Cflags: -I${includedir}

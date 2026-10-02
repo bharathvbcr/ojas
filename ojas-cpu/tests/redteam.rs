@@ -11,7 +11,7 @@ mod common;
 use common::{assert_capacity, assert_nonfinite, assert_shape, bits, f32t, u32t};
 
 fn wide() -> CpuBackend {
-    CpuBackend::new(Budget::new(1 << 22))
+    CpuBackend::new(Budget::new(1 << 22)).with_numerics(ojas_core::Numerics::Exact)
 }
 
 /// Mean log-softmax loss over rows whose target is not `ignore`.

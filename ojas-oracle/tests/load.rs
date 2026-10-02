@@ -52,6 +52,30 @@ fn overflowing_fixture_numbers_are_errors_not_infinities() {
 }
 
 #[test]
+fn wide_numeric_array_exceeds_the_fixture_tree_budget() {
+    let n = 10_000usize;
+    let nums = vec!["1"; n].join(",");
+    let text = format!(
+        r#"{{"format":"ojas-oracle-fixture-v1","op":"rms_norm","eps":1e-6,"input_shape":[{n}],"input":[{nums}],"weight_shape":[1],"weight":[1.0],"expected_shape":[{n}],"expected":[{nums}]}}"#
+    );
+    match parse_rms_norm(&text) {
+        Err(OjasError::OutOfRange { detail, .. }) if detail.contains("budget") => {}
+        Err(other) => panic!("expected a tree budget error, got {other}"),
+        Ok(_) => panic!("parsed a {}-byte fixture without a budget", text.len()),
+    }
+}
+
+#[test]
+fn fixture_longer_than_four_mib_is_refused() {
+    let mut text = fixture_with("0.5, 2.0");
+    text.push_str(&" ".repeat(4 * 1024 * 1024));
+    match parse_rms_norm(&text) {
+        Err(OjasError::OutOfRange { detail, .. }) if detail.contains("4 MiB") => {}
+        other => panic!("padded fixture should hit the input cap, got {other:?}"),
+    }
+}
+
+#[test]
 fn duplicate_keys_and_deep_nesting_are_errors() {
     let dup = fixture_with("0.5, 2.0").replacen(r#""eps": 1e-6"#, r#""eps": 1e-6, "eps": 1e-5"#, 1);
     match parse_rms_norm(&dup) {
@@ -63,4 +87,38 @@ fn duplicate_keys_and_deep_nesting_are_errors() {
         Err(OjasError::OutOfRange { .. }) => {}
         other => panic!("deep nesting: expected OutOfRange, got {other:?}"),
     }
+}
+
+/// The fixture reader is `ojas-io`'s strict JSON reader plus the fixture
+/// policy. The policy still refuses `null` and string escapes; the shared
+/// grammar now also refuses what the old fixture reader let through
+/// (leading zeros, integers that do not fit exactly in f64).
+#[test]
+fn fixture_policy_and_strict_numbers() {
+    assert!(parse_rms_norm(&fixture_with("0.5, 2.0")).is_ok());
+    let refused = [
+        (
+            "null",
+            fixture_with("0.5, 2.0").replacen("\"op\"", "\"note\": null, \"op\"", 1),
+        ),
+        (
+            "escape",
+            fixture_with("0.5, 2.0").replacen("rms_norm", "rms\\u005fnorm", 1),
+        ),
+        ("leading zero", fixture_with("0.5, 02.0")),
+        ("plus sign", fixture_with("0.5, +2.0")),
+        ("bare point", fixture_with("0.5, 2.")),
+        ("inexact integer", fixture_with("0.5, 9007199254740993")),
+        ("overflow", fixture_with("0.5, 1e400")),
+        ("NaN", fixture_with("0.5, NaN")),
+    ];
+    for (what, text) in refused {
+        match parse_rms_norm(&text) {
+            Err(OjasError::OutOfRange { .. }) => {}
+            other => panic!("{what}: expected OutOfRange, got {other:?}"),
+        }
+    }
+    // Integers that are exact in f64 read as numbers, as before.
+    let ints = parse_rms_norm(&fixture_with("1, -2")).unwrap();
+    assert_eq!(ints.input, vec![1.0, -2.0]);
 }

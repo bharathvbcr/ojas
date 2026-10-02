@@ -16,11 +16,14 @@
 //! advances every group. A non-finite gradient, or a step counter of
 //! `u64::MAX`, returns before any parameter or moment is written.
 
-use ojas_core::{next_step, AdamWConfig, MuonNs5Config, OjasError};
+use std::sync::Arc;
 
-use crate::optim::{adamw, clip_scale, muon_ns5, total_norm};
+use ojas_core::{clip_scale, next_step, AdamWConfig, MuonNs5Config, Numerics, OjasError};
+
+use crate::optim::{adamw, muon_ns5, total_norm};
+use crate::pool::{Exec, Pool};
 use crate::schedule::scaled_lr;
-use crate::validate::nonfinite;
+use crate::validate::{all_finite, nonfinite};
 
 /// Muon decoupled weight decay. Nanolab `weight_decay` default, 2-D only.
 pub const MUON_WEIGHT_DECAY: f64 = 0.1;
@@ -72,7 +75,7 @@ impl GradAccumulator {
             });
         }
         Ok(Self {
-            sum: vec![0.0; width],
+            sum: zero_f32("grad_accum", width)?,
             count: 0,
         })
     }
@@ -90,7 +93,7 @@ impl GradAccumulator {
                 detail: format!("grad len {} != {}", grad.len(), self.sum.len()),
             });
         }
-        if grad.iter().any(|value| !value.is_finite()) {
+        if !all_finite(grad) {
             return Err(nonfinite(OP));
         }
         let next_count = self
@@ -106,7 +109,9 @@ impl GradAccumulator {
                 detail: format!("accumulation count {next_count} is not an exact f32"),
             });
         }
-        let mut next = self.sum.clone();
+        let mut next = Vec::new();
+        try_reserve_f32(OP, &mut next, self.sum.len())?;
+        next.extend_from_slice(&self.sum);
         for (slot, value) in next.iter_mut().zip(grad.iter()) {
             *slot += *value;
             if !slot.is_finite() {
@@ -128,7 +133,8 @@ impl GradAccumulator {
             });
         }
         let k = self.count as f32;
-        let mut out = Vec::with_capacity(self.sum.len());
+        let mut out = Vec::new();
+        try_reserve_f32(OP, &mut out, self.sum.len())?;
         for value in &self.sum {
             let scaled = *value / k;
             if !scaled.is_finite() {
@@ -242,9 +248,9 @@ impl HybridParam {
             cols,
             shape: shape.to_vec(),
             param,
-            grad: vec![0.0; width],
-            moment1: vec![0.0; width],
-            moment2: vec![0.0; width],
+            grad: zero_f32(OP, width)?,
+            moment1: zero_f32(OP, width)?,
+            moment2: zero_f32(OP, width)?,
         })
     }
 }
@@ -294,6 +300,11 @@ impl HybridOptimizer {
                 &param.moment2,
             )?;
         }
+        let pool = Arc::new(Pool::serial());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Exact,
+        };
         let mut staged: Vec<(Vec<f32>, Vec<f32>, Vec<f32>)> = Vec::with_capacity(self.params.len());
         for param in &self.params {
             let lr = scaled_lr(param.initial_lr, multiplier)?;
@@ -306,9 +317,10 @@ impl HybridOptimizer {
                         nesterov: self.nesterov,
                     };
                     let (new_p, new_m) = muon_ns5(
-                        &param.param,
-                        &param.grad,
-                        &param.moment1,
+                        exec,
+                        param.param.clone(),
+                        param.grad.clone(),
+                        param.moment1.clone(),
                         param.rows,
                         param.cols,
                         config,
@@ -352,14 +364,33 @@ fn check_finite_len(
             detail: "hybrid tensors differ in length".to_string(),
         });
     }
-    if param
-        .iter()
-        .chain(grad)
-        .chain(moment1)
-        .chain(moment2)
-        .any(|value| !value.is_finite())
-    {
+    if ![param, grad, moment1, moment2].into_iter().all(all_finite) {
         return Err(nonfinite(op));
+    }
+    Ok(())
+}
+
+fn zero_f32(op: &'static str, width: usize) -> Result<Vec<f32>, OjasError> {
+    let mut data = Vec::new();
+    try_reserve_f32(op, &mut data, width)?;
+    data.resize(width, 0.0);
+    Ok(data)
+}
+
+fn try_reserve_f32(op: &'static str, data: &mut Vec<f32>, len: usize) -> Result<(), OjasError> {
+    let bytes = u64::try_from(len)
+        .ok()
+        .and_then(|n| n.checked_mul(std::mem::size_of::<f32>() as u64))
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: "allocation byte length overflows".to_string(),
+        })?;
+    if data.try_reserve_exact(len).is_err() {
+        return Err(OjasError::CapacityExceeded {
+            requested: bytes,
+            cap: bytes,
+            live: 0,
+        });
     }
     Ok(())
 }

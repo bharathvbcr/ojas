@@ -330,15 +330,63 @@ fn gate_sum(x: &[f64], w: &[f64], bias: &[f64], attn: &[f64]) -> f64 {
 }
 
 #[test]
+fn tape_clear_drops_recorded_values_and_gradients() {
+    let cpu = cpu();
+    let mut tape = Tape::new(cpu);
+    let x = tape
+        .leaf(tensor(tape.backend(), &[0.5, -1.0], &[2]))
+        .unwrap();
+    let _ = tape.silu(x).unwrap();
+    tape.clear();
+    assert!(tape.value(x).is_err());
+    assert!(tape.grad(x).is_none());
+    assert!(tape.backward(x).is_err());
+}
+
+#[test]
+fn tape_frees_a_gradient_after_backward_consumes_it() {
+    let cpu = cpu();
+    let mut tape = Tape::new(cpu);
+    let x = tape
+        .leaf(tensor(tape.backend(), &[0.5, -1.25, 0.75], &[1, 3]))
+        .unwrap();
+    let w = tape
+        .leaf(tensor(
+            tape.backend(),
+            &[1.5, -0.5, 0.25, 0.5, 1.0, -1.5],
+            &[2, 3],
+        ))
+        .unwrap();
+    let y = tape.linear(x, w).unwrap();
+    tape.backward(y).unwrap();
+    assert!(tape
+        .grad(x)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap()
+        .iter()
+        .all(|v| v.is_finite()));
+    assert!(tape.grad(w).is_some());
+    assert!(
+        tape.grad(y).is_none(),
+        "the seed gradient is still stored after it was consumed"
+    );
+}
+
+#[test]
 fn tape_backward_matches_direct_cpu() {
     let cpu = cpu();
     let mut tape = Tape::new(cpu.clone());
-    let x = tape.leaf(tensor(tape.backend(), &[0.5, -1.25, 0.75], &[1, 3]));
-    let w = tape.leaf(tensor(
-        tape.backend(),
-        &[1.5, -0.5, 0.25, 0.5, 1.0, -1.5],
-        &[2, 3],
-    ));
+    let x = tape
+        .leaf(tensor(tape.backend(), &[0.5, -1.25, 0.75], &[1, 3]))
+        .unwrap();
+    let w = tape
+        .leaf(tensor(
+            tape.backend(),
+            &[1.5, -0.5, 0.25, 0.5, 1.0, -1.5],
+            &[2, 3],
+        ))
+        .unwrap();
     let y = tape.linear(x, w).unwrap();
     let direct = tape.backend().clone();
     let gy = ones(&direct, tape.value(y).unwrap().shape());
@@ -356,9 +404,13 @@ fn tape_backward_matches_direct_cpu() {
     );
 
     let mut tape = Tape::new(cpu.clone());
-    let hidden = tape.leaf(tensor(tape.backend(), &[0.2, -0.4], &[2]));
+    let hidden = tape
+        .leaf(tensor(tape.backend(), &[0.2, -0.4], &[2]))
+        .unwrap();
     let activated = tape.silu(hidden).unwrap();
-    let other = tape.leaf(tensor(tape.backend(), &[0.5, 0.5], &[2]));
+    let other = tape
+        .leaf(tensor(tape.backend(), &[0.5, 0.5], &[2]))
+        .unwrap();
     let mixed = tape.mul(activated, other).unwrap();
     tape.backward(mixed).unwrap();
     assert!(tape
@@ -389,7 +441,9 @@ fn tape_backward_matches_direct_cpu() {
 fn all_ignored_cross_entropy_on_the_tape_is_nonfinite() {
     let cpu = cpu();
     let mut tape = Tape::new(cpu.clone());
-    let logits = tape.leaf(tensor(tape.backend(), &[0.2, -0.4, 1.0, 0.0], &[2, 2]));
+    let logits = tape
+        .leaf(tensor(tape.backend(), &[0.2, -0.4, 1.0, 0.0], &[2, 2]))
+        .unwrap();
     let targets = Tensor::from_u32(&[0, 0], &[2], cpu.budget()).unwrap();
     match tape.cross_entropy(logits, targets, Some(0)) {
         Err(OjasError::NonFinite { .. }) => {}
@@ -407,10 +461,10 @@ fn rms_qk_norm_matches_central_diff() {
     let qw0 = vec![1.1, 1.2, 1.3, 1.4];
     let kw0 = vec![0.9, 0.8, 0.7, 0.6];
 
-    let q = tape.leaf(tensor(tape.backend(), &q0, &[2, 4]));
-    let k = tape.leaf(tensor(tape.backend(), &k0, &[2, 4]));
-    let qw = tape.leaf(tensor(tape.backend(), &qw0, &[4]));
-    let kw = tape.leaf(tensor(tape.backend(), &kw0, &[4]));
+    let q = tape.leaf(tensor(tape.backend(), &q0, &[2, 4])).unwrap();
+    let k = tape.leaf(tensor(tape.backend(), &k0, &[2, 4])).unwrap();
+    let qw = tape.leaf(tensor(tape.backend(), &qw0, &[4])).unwrap();
+    let kw = tape.leaf(tensor(tape.backend(), &kw0, &[4])).unwrap();
 
     let (qn, kn) = tape.rms_qk_norm(q, k, qw, kw, 1e-6).unwrap();
     let sum = tape.add(qn, kn).unwrap();
@@ -444,15 +498,19 @@ fn rms_qk_norm_refuses_invalid_inputs() {
     let cpu = cpu();
     let mut tape = Tape::new(cpu.clone());
 
-    let q = tape.leaf(tensor(tape.backend(), &[0.1; 8], &[2, 4]));
-    let k = tape.leaf(tensor(tape.backend(), &[0.1; 8], &[2, 4]));
-    let qw_bad = tape.leaf(tensor(tape.backend(), &[1.0; 3], &[3])); // bad dim: 3 != 4
-    let kw = tape.leaf(tensor(tape.backend(), &[1.0; 4], &[4]));
+    let q = tape
+        .leaf(tensor(tape.backend(), &[0.1; 8], &[2, 4]))
+        .unwrap();
+    let k = tape
+        .leaf(tensor(tape.backend(), &[0.1; 8], &[2, 4]))
+        .unwrap();
+    let qw_bad = tape.leaf(tensor(tape.backend(), &[1.0; 3], &[3])).unwrap(); // bad dim: 3 != 4
+    let kw = tape.leaf(tensor(tape.backend(), &[1.0; 4], &[4])).unwrap();
 
     // Mismatched q weight
     assert!(tape.rms_qk_norm(q, k, qw_bad, kw, 1e-6).is_err());
 
     // Non-finite eps
-    let qw_good = tape.leaf(tensor(tape.backend(), &[1.0; 4], &[4]));
+    let qw_good = tape.leaf(tensor(tape.backend(), &[1.0; 4], &[4])).unwrap();
     assert!(tape.rms_qk_norm(q, k, qw_good, kw, f32::NAN).is_err());
 }

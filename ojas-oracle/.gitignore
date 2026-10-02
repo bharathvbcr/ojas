@@ -1,0 +1,4 @@
+# Generated on demand by python/export_init.py (the 124M init is ~0.5 GB).
+/generated/
+# Atomic-write temporaries from the generators.
+*.tmp

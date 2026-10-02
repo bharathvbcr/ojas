@@ -131,8 +131,11 @@ impl Bpe {
     /// merges from lowest rank, leftmost first among equal ranks. A character
     /// that is not a vocabulary piece is an error. This split is one Unicode
     /// scalar per piece. GPT-2 regex splitting is [`Self::encode_ordinary`].
-    /// Cost is O(n log n) in the character count.
+    /// Cost is O(n log n) in the character count. `text` longer than
+    /// [`HF_TEXT_CAP`] is refused: each character keeps a few words of
+    /// bookkeeping, and the file loaders already stop at that size.
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, DataError> {
+        refuse_encode_len(text)?;
         let mut ids = Vec::new();
         let mut buf = [0u8; 4];
         for ch in text.chars() {
@@ -230,6 +233,7 @@ impl Bpe {
     ///
     /// Byte-identity with tiktoken is [`TIKTOKEN_GPT2_BYTE_IDENTITY`].
     pub fn encode_ordinary(&self, text: &str) -> Result<Vec<u32>, DataError> {
+        refuse_encode_len(text)?;
         let map = bytes_to_unicode();
         let mut ids = Vec::new();
         let mut mapped = String::new();
@@ -450,6 +454,39 @@ fn read_capped(path: &Path) -> Result<String, DataError> {
     Ok(text)
 }
 
+/// `len == cap` is allowed. One byte over is not. [`refuse_encode_len`] passes
+/// [`HF_TEXT_CAP`]; tests also pass a smaller cap.
+fn exceeds_encode_cap(len: usize, cap: u64) -> bool {
+    match u64::try_from(len) {
+        Ok(n) => n > cap,
+        Err(_) => true,
+    }
+}
+
+fn refuse_encode_len(text: &str) -> Result<(), DataError> {
+    if exceeds_encode_cap(text.len(), HF_TEXT_CAP) {
+        return Err(DataError::new(format!(
+            "encode input of {} bytes exceeds {HF_TEXT_CAP} byte cap",
+            text.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Bytes charged per vocab entry besides the key heap: the pair slot, the
+/// output string header, and a map node. Tuned so a real GPT-2 `vocab.json`
+/// (~50k pieces, ~800 KiB) fits, and a file of the same size made of the
+/// shortest keys does not grow without a bound.
+const VOCAB_ENTRY_OVERHEAD: usize = 104;
+const VOCAB_BYTE_FACTOR: usize = 7;
+const VOCAB_BYTE_FLOOR: usize = 256 * 1024;
+
+/// `ojas-io`'s JSON parser is not used here. It accepts surrogate pairs and
+/// only non-negative integers, while a vocab key rejects every surrogate
+/// (`parse_json_string`). `ojas-oracle` needs f64, signs, and exponents, and
+/// refuses escapes. Pointing either crate at `ojas-io` would also add a path
+/// dependency whose lockfile this session cannot edit. Each parser therefore
+/// keeps its grammar and caps its own input and tree.
 fn parse_vocab_json(text: &str) -> Result<Vec<String>, DataError> {
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -461,6 +498,12 @@ fn parse_vocab_json(text: &str) -> Result<Vec<String>, DataError> {
         return Err(DataError::new("vocab json must be an object"));
     }
     i += 1;
+    let max_entries = text.len().saturating_add(1);
+    let byte_cap = text
+        .len()
+        .saturating_mul(VOCAB_BYTE_FACTOR)
+        .saturating_add(VOCAB_BYTE_FLOOR);
+    let mut accounted = 0usize;
     let mut pairs = Vec::new();
     let mut after_comma = false;
     loop {
@@ -473,6 +516,15 @@ fn parse_vocab_json(text: &str) -> Result<Vec<String>, DataError> {
             break;
         }
         let key = parse_json_string(text, &mut i)?;
+        if pairs.len() >= max_entries {
+            return Err(DataError::new("vocab json exceeds its node budget"));
+        }
+        accounted = accounted
+            .saturating_add(VOCAB_ENTRY_OVERHEAD)
+            .saturating_add(key.len());
+        if accounted > byte_cap {
+            return Err(DataError::new("vocab json exceeds its byte budget"));
+        }
         skip_ws(bytes, &mut i);
         if bytes.get(i) != Some(&b':') {
             return Err(DataError::new("expected ':' after a vocab key"));
@@ -687,6 +739,60 @@ fn build_bytes_to_unicode() -> [char; 256] {
 mod tests {
     use super::*;
     use crate::rng::CounterRng;
+
+    /// Equality is allowed. One byte over is not. A full 32 MiB merge keeps
+    /// several words per character, so the exact file-sized input is not
+    /// encoded here; a smaller cap uses the same compare, and a short string
+    /// still encodes.
+    #[test]
+    fn encode_cap_allows_the_exact_length_and_refuses_one_byte_over() {
+        assert!(!exceeds_encode_cap(HF_TEXT_CAP as usize, HF_TEXT_CAP));
+        assert!(exceeds_encode_cap(HF_TEXT_CAP as usize + 1, HF_TEXT_CAP));
+        let small = 8u64;
+        assert!(!exceeds_encode_cap(small as usize, small));
+        assert!(exceeds_encode_cap(small as usize + 1, small));
+        let err = fixture_bpe().encode("z").unwrap_err();
+        assert!(err.to_string().contains("vocabulary"), "{err}");
+        assert_eq!(fixture_bpe().encode("a").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn encode_refuses_input_past_the_file_cap() {
+        let bpe = fixture_bpe();
+        let text = "a".repeat(HF_TEXT_CAP as usize + 1);
+        let err = bpe.encode(&text).unwrap_err();
+        assert!(
+            err.to_string().contains("cap"),
+            "encode of {} bytes was not capped: {err}",
+            text.len()
+        );
+    }
+
+    #[test]
+    fn dense_vocab_keys_exceed_the_tree_budget() {
+        let mut text = String::from("{");
+        for i in 0..50_000 {
+            if i > 0 {
+                text.push(',');
+            }
+            text.push_str(&format!("\"k{i}\":{i}"));
+        }
+        text.push('}');
+        let dir = std::env::temp_dir().join(format!("ojas-vocab-budget-{}", std::process::id()));
+        let _ = std::fs::create_dir(&dir);
+        let vocab = dir.join("vocab.json");
+        let merges = dir.join("merges.txt");
+        std::fs::write(&vocab, &text).unwrap();
+        std::fs::write(&merges, "#version: 0.2\n").unwrap();
+        let err = load_hf_gpt2(&vocab, &merges).map(|_| ()).unwrap_err();
+        let msg = err.to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            msg.contains("budget"),
+            "vocab of {} bytes was not budgeted: {msg}",
+            text.len()
+        );
+    }
 
     #[test]
     fn oversized_vocab_file_is_refused() {

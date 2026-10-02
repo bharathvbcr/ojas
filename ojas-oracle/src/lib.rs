@@ -1,14 +1,33 @@
-//! fp64 oracle fixtures.
+//! Oracle fixtures: golden values ojas is checked against. CI does not run
+//! PyTorch; the torch side lives in `python/` and only generates files.
 //!
-//! The file format is a small JSON subset (`ojas-oracle-fixture-v1`): one
-//! object of strings, numbers, and arrays of numbers. See
-//! `fixtures/rms_norm_f64.json`. CI does not run PyTorch. Further torch fp64
-//! fixtures are generated offline later; this crate ships one hand-written
-//! RMSNorm vector so the loader can be tested.
+//! - [`rms_norm_fixture`]: one hand-written fp64 RMSNorm row
+//!   (`fixtures/rms_norm_f64.json`).
+//! - [`golden`]: the tiny nanolab GPT exported from torch (init, forward,
+//!   gradients, 5/40-step training traces, LR schedules) and the ojas
+//!   `BatchSampler` start dump the torch side replays
+//!   (framework-design.md §9 item 13).
+//! - [`parity`]: the tolerances later lanes are held to, and runners that
+//!   apply them to any model implementing [`parity::ParityModel`].
+//! - [`spec`]: the `ojas.spec` JSON schema and the §2 parameter table.
+//! - [`safetensors`]: the fixture policy over `ojas_io::SafeTensors`.
+//!
+//! JSON is read with `ojas-io`'s strict RFC 8259 reader ([`ojas_io::json`]),
+//! held to the fixture limits (4 MiB, depth 16, a tree budget per input
+//! byte). On top of it the fixture policy refuses `null` anywhere and string
+//! escapes in fixture files (safetensors headers, whose spec is an escaped
+//! string, are read by `ojas_io::SafeTensors`). Numbers read as `f64` only
+//! when exact; a count or shape entry must be an exact integer literal.
 
 #![forbid(unsafe_code)]
 
+pub mod golden;
+pub mod parity;
+pub mod safetensors;
+pub mod spec;
+
 use ojas_core::OjasError;
+use ojas_io::{IoError, JsonLimits, JsonValue};
 
 const FIXTURE: &str = include_str!("../fixtures/rms_norm_f64.json");
 
@@ -33,11 +52,11 @@ pub fn rms_norm_fixture() -> Result<RmsNormFixture, OjasError> {
 pub fn parse_rms_norm(text: &str) -> Result<RmsNormFixture, OjasError> {
     let value = parse_json(text)?;
     let obj = value.object()?;
-    let format = field(obj, "format").and_then(Json::as_str).unwrap_or("");
+    let format = field(obj, "format").and_then(Json::text).unwrap_or("");
     if format != "ojas-oracle-fixture-v1" {
         return Err(bad("fixture format is not ojas-oracle-fixture-v1"));
     }
-    if field(obj, "op").and_then(Json::as_str) != Some("rms_norm") {
+    if field(obj, "op").and_then(Json::text) != Some("rms_norm") {
         return Err(bad("fixture op is not rms_norm"));
     }
     let eps = field(obj, "eps")
@@ -78,7 +97,7 @@ pub fn parse_rms_norm(text: &str) -> Result<RmsNormFixture, OjasError> {
     Ok(fixture)
 }
 
-fn product(shape: &[usize]) -> Result<usize, OjasError> {
+pub(crate) fn product(shape: &[usize]) -> Result<usize, OjasError> {
     let mut n = 1usize;
     for &dim in shape {
         n = n
@@ -88,65 +107,70 @@ fn product(shape: &[usize]) -> Result<usize, OjasError> {
     Ok(n)
 }
 
-fn bad(detail: &str) -> OjasError {
+pub(crate) fn bad(detail: &str) -> OjasError {
     OjasError::OutOfRange {
         op: "oracle_fixture",
         detail: detail.to_string(),
     }
 }
 
-#[derive(Clone, Debug)]
-enum Json {
-    Number(f64),
-    String(String),
-    Array(Vec<Json>),
-    Object(Vec<(String, Json)>),
+/// A parsed fixture document: `ojas-io`'s strict reader's tree.
+pub(crate) type Json = JsonValue;
+
+/// The oracle's reading of a [`Json`] value: any number reads as `f64`
+/// (exactly, or it is refused), and a shape entry is an exact non-negative
+/// integer literal, so `256.0` is refused as the model's reader refuses it.
+pub(crate) trait JsonExt {
+    fn object(&self) -> Result<&[(String, Json)], OjasError>;
+    fn items(&self) -> Result<&[Json], OjasError>;
+    fn number(&self) -> Result<f64, OjasError>;
+    fn numbers(&self) -> Result<Vec<f64>, OjasError>;
+    fn shape(&self) -> Result<Vec<usize>, OjasError>;
+    fn text(&self) -> Option<&str>;
+    fn flag(&self) -> Option<bool>;
 }
 
-impl Json {
+pub(crate) fn io(e: IoError) -> OjasError {
+    bad(e.detail())
+}
+
+impl JsonExt for Json {
     fn object(&self) -> Result<&[(String, Json)], OjasError> {
-        match self {
-            Json::Object(pairs) => Ok(pairs),
-            _ => Err(bad("expected an object")),
-        }
+        self.as_object().map_err(io)
+    }
+
+    fn items(&self) -> Result<&[Json], OjasError> {
+        self.as_array().map_err(io)
     }
 
     fn number(&self) -> Result<f64, OjasError> {
-        match self {
-            Json::Number(value) => Ok(*value),
-            _ => Err(bad("expected a number")),
-        }
-    }
-
-    fn as_str(&self) -> Option<&str> {
-        match self {
-            Json::String(text) => Some(text),
-            _ => None,
-        }
+        self.as_f64().map_err(io)
     }
 
     fn numbers(&self) -> Result<Vec<f64>, OjasError> {
-        match self {
-            Json::Array(items) => items.iter().map(Json::number).collect(),
-            _ => Err(bad("expected an array of numbers")),
-        }
+        self.items()?.iter().map(Json::number).collect()
     }
 
     fn shape(&self) -> Result<Vec<usize>, OjasError> {
-        let nums = self.numbers()?;
-        nums.into_iter()
-            .map(|value| {
-                if value.fract() != 0.0 || value < 0.0 || value > usize::MAX as f64 {
-                    Err(bad("shape entry is not a non-negative integer"))
-                } else {
-                    Ok(value as usize)
-                }
+        self.items()?
+            .iter()
+            .map(|v| {
+                let n = v.as_u64().map_err(io)?;
+                usize::try_from(n).map_err(|_| bad(&format!("shape entry {n} exceeds usize")))
             })
             .collect()
     }
+
+    fn text(&self) -> Option<&str> {
+        self.as_str().ok()
+    }
+
+    fn flag(&self) -> Option<bool> {
+        self.as_bool().ok()
+    }
 }
 
-fn field<'a>(obj: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
+pub(crate) fn field<'a>(obj: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
     obj.iter()
         .find(|(name, _)| name == key)
         .map(|(_, value)| value)
@@ -156,178 +180,60 @@ fn field<'a>(obj: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
 /// recursive descent can exhaust the stack.
 const MAX_DEPTH: usize = 16;
 
-struct Parser<'a> {
-    s: &'a [u8],
-    i: usize,
-    depth: usize,
+/// Public `parse_rms_norm` takes any string. Four mebibytes is enough for a
+/// fixture and smaller than the two-mebibyte depth probe in the tests.
+const MAX_FIXTURE_BYTES: usize = 4 * 1024 * 1024;
+const FIXTURE_BYTE_FACTOR: usize = 8;
+const FIXTURE_BYTE_FLOOR: usize = 64 * 1024;
+
+/// How a fixture document is parsed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct JsonOptions {
+    /// Tree-size budget per input byte. Dense arrays of one- or two-digit
+    /// numbers (token rows) cost about 32 tree bytes per 3 input bytes.
+    pub byte_factor: usize,
 }
 
+/// The RMSNorm fixture (and anything else hand-written).
+pub(crate) const FIXTURE_JSON: JsonOptions = JsonOptions {
+    byte_factor: FIXTURE_BYTE_FACTOR,
+};
+/// Generated golden JSON: token rows need a larger tree budget.
+pub(crate) const GOLDEN_JSON: JsonOptions = JsonOptions { byte_factor: 16 };
+
 fn parse_json(text: &str) -> Result<Json, OjasError> {
-    let mut parser = Parser {
-        s: text.as_bytes(),
-        i: 0,
-        depth: 0,
-    };
-    let value = parser.value()?;
-    parser.skip();
-    if parser.i != parser.s.len() {
-        return Err(bad("trailing data after fixture JSON"));
+    parse_json_with(text, FIXTURE_JSON)
+}
+
+/// Parse with `ojas-io`'s strict reader, then apply the fixture policy: no
+/// `null` anywhere, and no string escapes. A backslash can only appear inside
+/// a string in valid JSON, so the escape check is a scan of the input.
+/// (safetensors headers, whose metadata values are escaped JSON strings, are
+/// read by `ojas_io::SafeTensors` instead.)
+pub(crate) fn parse_json_with(text: &str, opts: JsonOptions) -> Result<Json, OjasError> {
+    if text.len() > MAX_FIXTURE_BYTES {
+        return Err(bad("fixture exceeds 4 MiB"));
     }
+    let limits = JsonLimits {
+        max_input_bytes: MAX_FIXTURE_BYTES,
+        max_depth: MAX_DEPTH,
+        tree_bytes_per_input_byte: opts.byte_factor,
+        tree_bytes_floor: FIXTURE_BYTE_FLOOR,
+        ..JsonLimits::DEFAULT
+    };
+    let value = ojas_io::parse_json_with(text, &limits).map_err(io)?;
+    if text.contains('\\') {
+        return Err(bad("fixture strings do not use escapes"));
+    }
+    refuse_null(&value)?;
     Ok(value)
 }
 
-impl<'a> Parser<'a> {
-    fn value(&mut self) -> Result<Json, OjasError> {
-        self.skip();
-        let byte = self
-            .peek()
-            .ok_or_else(|| bad("unexpected end of fixture"))?;
-        match byte {
-            b'{' | b'[' => {
-                if self.depth == MAX_DEPTH {
-                    return Err(bad("fixture nesting is too deep"));
-                }
-                self.depth += 1;
-                let nested = if byte == b'{' {
-                    self.object()
-                } else {
-                    self.array()
-                };
-                self.depth -= 1;
-                nested
-            }
-            b'"' => Ok(Json::String(self.string()?)),
-            b'-' | b'0'..=b'9' => Ok(Json::Number(self.number()?)),
-            _ => Err(bad("unexpected fixture character")),
-        }
-    }
-
-    fn object(&mut self) -> Result<Json, OjasError> {
-        self.bump(b'{')?;
-        let mut pairs = Vec::new();
-        loop {
-            self.skip();
-            if self.eat(b'}') {
-                break;
-            }
-            if !pairs.is_empty() {
-                self.bump(b',')?;
-                self.skip();
-            }
-            let key = self.string()?;
-            if pairs.iter().any(|(name, _)| *name == key) {
-                return Err(bad("duplicate fixture key"));
-            }
-            self.skip();
-            self.bump(b':')?;
-            let value = self.value()?;
-            pairs.push((key, value));
-        }
-        Ok(Json::Object(pairs))
-    }
-
-    fn array(&mut self) -> Result<Json, OjasError> {
-        self.bump(b'[')?;
-        let mut items = Vec::new();
-        loop {
-            self.skip();
-            if self.eat(b']') {
-                break;
-            }
-            if !items.is_empty() {
-                self.bump(b',')?;
-            }
-            items.push(self.value()?);
-        }
-        Ok(Json::Array(items))
-    }
-
-    fn string(&mut self) -> Result<String, OjasError> {
-        self.skip();
-        self.bump(b'"')?;
-        let start = self.i;
-        while let Some(byte) = self.peek() {
-            if byte == b'"' {
-                let text = std::str::from_utf8(&self.s[start..self.i])
-                    .map_err(|_| bad("fixture string is not utf-8"))?
-                    .to_string();
-                self.i += 1;
-                return Ok(text);
-            }
-            if byte == b'\\' {
-                return Err(bad("fixture strings do not use escapes"));
-            }
-            self.i += 1;
-        }
-        Err(bad("unterminated fixture string"))
-    }
-
-    fn number(&mut self) -> Result<f64, OjasError> {
-        let start = self.i;
-        self.eat(b'-');
-        let digits = self.i;
-        while matches!(self.peek(), Some(b'0'..=b'9')) {
-            self.i += 1;
-        }
-        if self.i == digits {
-            return Err(bad("expected a number"));
-        }
-        if self.eat(b'.') {
-            let frac = self.i;
-            while matches!(self.peek(), Some(b'0'..=b'9')) {
-                self.i += 1;
-            }
-            if self.i == frac {
-                return Err(bad("expected digits after decimal point"));
-            }
-        }
-        if matches!(self.peek(), Some(b'e' | b'E')) {
-            self.i += 1;
-            if matches!(self.peek(), Some(b'+' | b'-')) {
-                self.i += 1;
-            }
-            let exp = self.i;
-            while matches!(self.peek(), Some(b'0'..=b'9')) {
-                self.i += 1;
-            }
-            if self.i == exp {
-                return Err(bad("expected an exponent"));
-            }
-        }
-        let text = std::str::from_utf8(&self.s[start..self.i]).map_err(|_| bad("bad number"))?;
-        let value = text.parse::<f64>().map_err(|_| bad("bad number"))?;
-        // `parse` rounds an out-of-range literal to infinity instead of failing.
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(bad("number does not fit in f64"))
-        }
-    }
-
-    fn skip(&mut self) {
-        while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
-            self.i += 1;
-        }
-    }
-
-    fn peek(&self) -> Option<u8> {
-        self.s.get(self.i).copied()
-    }
-
-    fn eat(&mut self, byte: u8) -> bool {
-        if self.peek() == Some(byte) {
-            self.i += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn bump(&mut self, byte: u8) -> Result<(), OjasError> {
-        if self.eat(byte) {
-            Ok(())
-        } else {
-            Err(bad("unexpected fixture character"))
-        }
+fn refuse_null(v: &Json) -> Result<(), OjasError> {
+    match v {
+        Json::Null => Err(bad("fixture JSON has no null")),
+        Json::Array(items) => items.iter().try_for_each(refuse_null),
+        Json::Object(pairs) => pairs.iter().try_for_each(|(_, v)| refuse_null(v)),
+        _ => Ok(()),
     }
 }

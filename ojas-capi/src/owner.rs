@@ -1,164 +1,131 @@
-//! A Metal session lives on one thread because tessl's `GpuRuntime` is not `Send`.
+//! Device opens on a short-lived thread, so a cancelled load does not wait
+//! for the device. The Metal thread calls [`ojas_metal::MetalBackend::new`],
+//! whose own device thread is the only owner of tessl's `GpuRuntime` (which is
+//! not `Send`); this crate never opens a second one. The wgpu thread calls
+//! [`ojas_wgpu::WgpuBackend::open`].
 
-use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{LazyLock, Mutex};
-use std::thread::JoinHandle;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-#[allow(dead_code)] // the name query is the owner-thread probe; training still runs on the CPU
-enum Msg {
-    Name(Sender<Result<String, String>>),
-    Stop,
-}
+use ojas_core::Budget;
 
-pub struct MetalOwner {
-    tx: Sender<Msg>,
-    join: Option<JoinHandle<()>>,
-}
-
-#[allow(dead_code)]
-impl MetalOwner {
-    pub fn spawn() -> Result<Self, String> {
-        let (tx, rx) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let join = std::thread::Builder::new()
-            .name("ojas-metal-owner".into())
-            .spawn(move || owner_main(rx, ready_tx))
-            .map_err(|err| format!("metal owner thread: {err}"))?;
-        match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self {
-                tx,
-                join: Some(join),
-            }),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err("metal owner thread exited before it was ready".to_string()),
-        }
-    }
-
-    pub fn device_name(&self) -> Result<String, String> {
-        let (tx, rx) = mpsc::channel();
-        self.tx
-            .send(Msg::Name(tx))
-            .map_err(|_| "metal owner is gone".to_string())?;
-        loop {
-            match rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(name) => return name,
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("metal owner dropped the reply".to_string())
-                }
-            }
-        }
-    }
-
-    /// Wait for a reply while `check` can observe cancellation.
-    pub fn device_name_checked(
-        &self,
-        mut check: impl FnMut() -> Result<(), String>,
-    ) -> Result<String, String> {
-        let (tx, rx) = mpsc::channel();
-        self.tx
-            .send(Msg::Name(tx))
-            .map_err(|_| "metal owner is gone".to_string())?;
-        loop {
-            check()?;
-            match rx.recv_timeout(Duration::from_millis(20)) {
-                Ok(name) => return name,
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("metal owner dropped the reply".to_string())
-                }
-            }
-        }
-    }
-}
-
-static METAL_OWNERS: LazyLock<Mutex<HashMap<u64, MetalOwner>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub fn retain(id: u64, owner: MetalOwner) -> Result<(), String> {
-    let mut map = METAL_OWNERS
-        .lock()
-        .map_err(|_| "metal owner table is poisoned".to_string())?;
-    map.insert(id, owner);
-    Ok(())
-}
-
-pub fn release(id: u64) {
-    if let Ok(mut map) = METAL_OWNERS.lock() {
-        map.remove(&id);
-    }
-}
-
-pub fn release_all() {
-    if let Ok(mut map) = METAL_OWNERS.lock() {
-        map.clear();
-    }
-}
-
-impl Drop for MetalOwner {
-    fn drop(&mut self) {
-        let _ = self.tx.send(Msg::Stop);
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-    }
-}
-
+/// Open a [`ojas_metal::MetalBackend`] charging `budget`.
+///
+/// `check` is polled while the device opens, so a cancelled job returns
+/// without waiting for it. A backend that finishes opening after that is
+/// dropped by the abandoned thread, because its reply receiver is gone, and
+/// its device thread exits with it.
 #[cfg(target_os = "macos")]
-fn owner_main(rx: Receiver<Msg>, ready: Sender<Result<(), String>>) {
-    let opened = catch_unwind(AssertUnwindSafe(ojas_metal::gpu::Session::open));
-    let session = match opened {
-        Ok(Ok(session)) => session,
-        Ok(Err(err)) => {
-            let _ = ready.send(Err(format!("metal: {err}")));
-            return;
-        }
-        Err(_) => {
-            let _ = ready.send(Err("metal owner panicked while opening".to_string()));
-            return;
-        }
-    };
-    let _ = ready.send(Ok(()));
-    while let Ok(msg) = rx.recv() {
-        match msg {
-            Msg::Stop => break,
-            Msg::Name(reply) => {
-                let result = catch_unwind(AssertUnwindSafe(|| session.device_name()));
-                let _ = reply.send(match result {
-                    Ok(name) => Ok(name),
-                    Err(_) => Err("metal owner panicked".to_string()),
-                });
+pub fn open_metal(
+    budget: Budget,
+    check: impl FnMut() -> Result<(), String>,
+) -> Result<ojas_metal::MetalBackend, String> {
+    open_on_thread(
+        "metal",
+        move || {
+            ojas_metal::MetalBackend::new(budget).map_err(|err| crate::ojas_error("metal", &err))
+        },
+        check,
+    )
+}
+
+/// Without macOS there is no Metal backend to open.
+#[cfg(not(target_os = "macos"))]
+pub fn open_metal(mut check: impl FnMut() -> Result<(), String>) -> Result<(), String> {
+    check()?;
+    Err("metal: Metal requires macOS".to_string())
+}
+
+/// Open a [`ojas_wgpu::WgpuBackend`] charging `budget`, polling `check` as
+/// [`open_metal`] does. No adapter is the error `wgpu: ...`.
+pub fn open_wgpu(
+    budget: Budget,
+    check: impl FnMut() -> Result<(), String>,
+) -> Result<ojas_wgpu::WgpuBackend, String> {
+    open_on_thread(
+        "wgpu",
+        move || {
+            ojas_wgpu::WgpuBackend::open(budget).map_err(|err| crate::device_error("wgpu", &err))
+        },
+        check,
+    )
+}
+
+fn open_on_thread<T: Send + 'static>(
+    device: &'static str,
+    open: impl FnOnce() -> Result<T, String> + Send + 'static,
+    mut check: impl FnMut() -> Result<(), String>,
+) -> Result<T, String> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name(format!("ojas-{device}-open"))
+        .spawn(move || {
+            let answer = catch_unwind(AssertUnwindSafe(open))
+                .unwrap_or_else(|_| Err(format!("{device} open panicked")));
+            let _ = tx.send(answer);
+        })
+        .map_err(|err| format!("{device} open thread: {err}"))?;
+    wait_for(device, &rx, &mut check)
+}
+
+fn wait_for<T>(
+    device: &str,
+    rx: &Receiver<Result<T, String>>,
+    check: &mut impl FnMut() -> Result<(), String>,
+) -> Result<T, String> {
+    loop {
+        check()?;
+        match rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(answer) => return answer,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(format!("{device} open thread exited without an answer"))
             }
         }
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn owner_main(rx: Receiver<Msg>, ready: Sender<Result<(), String>>) {
-    let _ = rx;
-    let _ = ready.send(Err("Metal sessions require macOS".to_string()));
-}
-
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn owner_thread_reports_the_device_and_a_cancel_is_checked() {
-        let owner = MetalOwner::spawn().expect("Metal device");
-        let name = owner.device_name().unwrap();
-        assert!(!name.is_empty(), "{name}");
-        let mut checks = 0u32;
-        let again = owner
-            .device_name_checked(|| {
-                checks += 1;
+    fn a_cancel_returns_while_the_open_is_pending() {
+        let (_tx, rx) = mpsc::channel::<Result<String, String>>();
+        let mut calls = 0u32;
+        let err = wait_for("metal", &rx, &mut || {
+            calls += 1;
+            if calls > 2 {
+                Err("cancelled: Explicit".to_string())
+            } else {
                 Ok(())
-            })
-            .unwrap();
-        assert_eq!(name, again);
-        assert!(checks >= 1);
+            }
+        })
+        .unwrap_err();
+        assert_eq!(err, "cancelled: Explicit");
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn an_open_thread_that_drops_its_reply_is_an_error() {
+        let (tx, rx) = mpsc::channel::<Result<String, String>>();
+        drop(tx);
+        let err = wait_for("metal", &rx, &mut || Ok(())).unwrap_err();
+        assert!(err.contains("without an answer"), "{err}");
+    }
+
+    #[test]
+    fn a_panicking_open_is_an_error() {
+        let err =
+            open_on_thread::<()>("wgpu", || panic!("ojas test: open"), || Ok(())).unwrap_err();
+        assert_eq!(err, "wgpu open panicked");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn open_reports_the_metal_device_name() {
+        let backend = open_metal(Budget::new(1 << 20), || Ok(())).expect("Metal device");
+        assert!(!backend.device_name().is_empty());
     }
 }

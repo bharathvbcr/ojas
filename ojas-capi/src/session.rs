@@ -1,17 +1,68 @@
 //! Session table. The lock is process-global, matching the engine hooks.
+//!
+//! The table lock covers the id map only. Each session's model sits behind
+//! its own `Arc<Mutex<ModelState>>`, taken per call with `try_lock`
+//! ([`Session::lock_state`]); a call never waits on another call's model.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, TryLockError};
+
+use crate::model::ModelState;
 
 pub const SESSION_CAP: usize = 64;
 
-#[derive(Clone, Debug)]
+/// Where a session computes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceKind {
+    /// [`ojas_cpu::CpuBackend`]; `threads > 1` uses `CpuBackend::with_threads`.
+    Cpu { threads: usize },
+    /// The session's own `MetalBackend`, opened at load.
+    Metal,
+    /// The session's own `WgpuBackend`, opened at load. Its non-finite fault
+    /// word is per backend, so one session never reports another's fault.
+    Wgpu,
+}
+
+#[derive(Clone)]
 pub struct Session {
     pub id: u64,
-    pub path: PathBuf,
+    /// The file or checkpoint directory the model came from; `None` for a
+    /// fresh init.
+    pub path: Option<PathBuf>,
+    /// Parameter tensors in the model.
     pub tensors: u32,
-    pub threads: usize,
+    pub device: DeviceKind,
+    state: Arc<Mutex<ModelState>>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("id", &self.id)
+            .field("path", &self.path)
+            .field("tensors", &self.tensors)
+            .field("device", &self.device)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Session {
+    /// The model, for one call. Another call holding it is `ojas:E_BUSY:`;
+    /// a model a panicking call left behind is `ojas:E_POISONED:`.
+    pub fn lock_state(&self) -> Result<MutexGuard<'_, ModelState>, String> {
+        match self.state.try_lock() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::WouldBlock) => Err(crate::kinded(
+                crate::ErrorKind::Busy,
+                format!("model {} is busy: another call holds it", self.id),
+            )),
+            Err(TryLockError::Poisoned(_)) => Err(crate::kinded(
+                crate::ErrorKind::Poisoned,
+                format!("model {}: a call panicked while holding it", self.id),
+            )),
+        }
+    }
 }
 
 struct Table {
@@ -54,6 +105,30 @@ pub fn last_error() -> String {
     LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+pub fn clear_last_error() {
+    let mut slot = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    slot.clear();
+}
+
+/// Copy the stored error into `dst` and return its full length.
+///
+/// The stored message is cleared only when `dst` holds all of it. A short
+/// buffer leaves the text in place so the caller can take it again. An empty
+/// message is not cleared into a newer one; there is nothing to remove.
+pub fn take_last_error(dst: &mut [u8]) -> usize {
+    let mut slot = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    let full = slot.len();
+    if dst.is_empty() || full == 0 {
+        return full;
+    }
+    let n = full.min(dst.len());
+    dst[..n].copy_from_slice(&slot.as_bytes()[..n]);
+    if dst.len() >= full {
+        slot.clear();
+    }
+    full
+}
+
 pub fn set_model_root(path: &str) -> Result<(), String> {
     if path.is_empty() || path.contains('\0') {
         return Err("model root is empty or contains NUL".to_string());
@@ -68,6 +143,7 @@ pub fn set_model_root(path: &str) -> Result<(), String> {
         ));
     }
     lock().root = Some(canon);
+    clear_last_error();
     Ok(())
 }
 
@@ -78,34 +154,45 @@ pub fn root() -> Result<PathBuf, String> {
         .ok_or_else(|| "model root is not configured".to_string())
 }
 
-pub fn load_model(path: PathBuf, tensors: u32) -> Result<Session, String> {
-    load_model_with_threads(path, tensors, 1)
-}
-
-pub fn load_model_with_threads(
-    path: PathBuf,
-    tensors: u32,
-    threads: usize,
-) -> Result<Session, String> {
-    if threads == 0 {
-        return Err("thread count is 0".to_string());
-    }
-    let mut table = lock();
+fn full(table: &Table) -> Result<(), String> {
     if table.sessions.len() >= SESSION_CAP {
-        return Err(format!(
-            "capacity exceeded: session table holds {SESSION_CAP} models"
+        return Err(crate::kinded(
+            crate::ErrorKind::Capacity,
+            format!("capacity exceeded: session table holds {SESSION_CAP} models"),
         ));
     }
     if table.next_id == 0 {
-        return Err("capacity exceeded: model ids are exhausted".to_string());
+        return Err(crate::kinded(
+            crate::ErrorKind::Capacity,
+            "capacity exceeded: model ids are exhausted",
+        ));
     }
+    Ok(())
+}
+
+/// Refuse early when the table is full, before a model is read. The insert
+/// checks again; this check only saves the work.
+pub fn check_room() -> Result<(), String> {
+    full(&lock())
+}
+
+/// Add a built model. The table cap is checked here, under the lock.
+pub fn insert(
+    path: Option<PathBuf>,
+    tensors: u32,
+    device: DeviceKind,
+    state: ModelState,
+) -> Result<Session, String> {
+    let mut table = lock();
+    full(&table)?;
     let id = table.next_id;
     table.next_id = table.next_id.checked_add(1).unwrap_or(0);
     let session = Session {
         id,
         path,
         tensors,
-        threads,
+        device,
+        state: Arc::new(Mutex::new(state)),
     };
     table.sessions.insert(id, session.clone());
     Ok(session)
@@ -119,13 +206,13 @@ pub fn require(id: u64) -> Result<Session, String> {
         .ok_or_else(|| format!("unknown model id {id}"))
 }
 
+/// Drop `id` from the table. A call already inside it keeps its model until
+/// it returns.
 pub fn try_free(id: u64) -> Result<(), String> {
     let mut table = lock();
     if table.sessions.remove(&id).is_none() {
         return Err(format!("unknown model id {id}"));
     }
-    drop(table);
-    crate::owner::release(id);
     Ok(())
 }
 
@@ -135,7 +222,6 @@ pub fn session_count() -> usize {
 
 pub fn clear_sessions() {
     lock().sessions.clear();
-    crate::owner::release_all();
 }
 
 pub fn reset_sessions() {
@@ -151,4 +237,38 @@ pub(crate) fn poison_table() {
     .join();
     assert!(joined.is_err());
     assert!(TABLE.is_poisoned());
+}
+
+#[cfg(test)]
+impl Session {
+    /// Hold this session's model from another thread until `release` fires.
+    pub(crate) fn hold(&self) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let state = Arc::clone(&self.state);
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            held_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        held_rx.recv().unwrap();
+        (release_tx, handle)
+    }
+
+    /// The next `op` on this session's backend fails with `make()`, once.
+    pub(crate) fn inject(&self, op: &'static str, make: fn() -> ojas_core::OjasError) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.slot.inject(op, make);
+    }
+
+    /// Poison this session's model lock with a panic while it is held.
+    pub(crate) fn poison_state(&self) {
+        let state = Arc::clone(&self.state);
+        let joined = std::thread::spawn(move || {
+            let _guard = state.lock();
+            panic!("ojas test: poison a model");
+        })
+        .join();
+        assert!(joined.is_err());
+    }
 }

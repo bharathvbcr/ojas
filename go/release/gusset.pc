@@ -5,5 +5,5 @@ includedir=${pcfiledir}/../../../../devtools/gusset/internal/ffi
 Name: gusset
 Description: ojas umbrella staticlib (libgusset.a), release profile
 Version: 0.0.2
-Libs: -L${libdir} -lgusset -lpthread -lm -ldl -lobjc -framework Metal -framework Foundation -framework QuartzCore -framework CoreFoundation -framework CoreGraphics
+Libs: -L${libdir} -lgusset -lpthread -lm -ldl -lobjc -framework Metal -framework Foundation -framework QuartzCore -framework CoreFoundation -framework CoreGraphics -framework Accelerate
 Cflags: -I${includedir}

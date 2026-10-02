@@ -107,6 +107,12 @@ struct AffineGpu {
     len: usize,
     inp: cudarc::driver::CudaSlice<f32>,
     out: cudarc::driver::CudaSlice<f32>,
+    host: cudarc::driver::PinnedHostSlice<f32>,
+}
+
+#[cfg(feature = "cuda")]
+fn from_driver(err: cudarc::driver::DriverError, op: &str) -> DeviceError {
+    cuda_status(err.0 as u32, format!("{op}: {err}"))
 }
 
 #[cfg(feature = "cuda")]
@@ -117,11 +123,76 @@ fn compile_err(detail: impl std::fmt::Display) -> DeviceError {
     }
 }
 
-#[cfg(feature = "cuda")]
-fn launch_err(detail: impl std::fmt::Display) -> DeviceError {
-    DeviceError::Launch {
-        kind: Device::Cuda,
-        detail: detail.to_string(),
+/// `CUDA_ERROR_OUT_OF_MEMORY` is 2. Pre-fix, `launch_err` mapped that code to
+/// [`DeviceError::Launch`].
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+fn cuda_status(code: u32, detail: String) -> DeviceError {
+    if code == 2 {
+        DeviceError::Capacity {
+            kind: Device::Cuda,
+            detail,
+        }
+    } else {
+        DeviceError::Launch {
+            kind: Device::Cuda,
+            detail,
+        }
+    }
+}
+
+/// Keep the previous buffers when any part of a resize fails.
+/// Pre-fix, `inp` was assigned before `out`, so a failed `out` allocation
+/// left `inp` at the new length and `len` at the old one.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
+fn commit_resize<T>(
+    len: &mut usize,
+    inp: &mut T,
+    out: &mut T,
+    host_gens: &mut u32,
+    new_len: usize,
+    new_inp: Result<T, &'static str>,
+    new_out: Result<T, &'static str>,
+    new_host: Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    let new_inp = new_inp?;
+    let new_out = new_out?;
+    new_host?;
+    *inp = new_inp;
+    *out = new_out;
+    *len = new_len;
+    *host_gens = host_gens.saturating_add(1);
+    Ok(())
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+fn device_bytes_fit(free: usize, need: usize) -> Result<(), DeviceError> {
+    if need > free {
+        Err(DeviceError::Capacity {
+            kind: Device::Cuda,
+            detail: format!("{need} device bytes exceed {free} bytes free"),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+fn poll_until(
+    deadline: std::time::Instant,
+    mut ready: impl FnMut() -> Result<bool, DeviceError>,
+) -> Result<(), DeviceError> {
+    loop {
+        if ready()? {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(DeviceError::Launch {
+                kind: Device::Cuda,
+                detail: "CUDA stream did not complete within 30s".to_string(),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 
@@ -136,7 +207,26 @@ impl CudaDevice {
         if n == 0 {
             return Ok(Vec::new());
         }
+        let (free, _total) = self
+            .ctx
+            .mem_get_info()
+            .map_err(|err| from_driver(err, "mem_get_info"))?;
+        let device_bytes = input
+            .len()
+            .checked_mul(std::mem::size_of::<f32>())
+            .and_then(|bytes| bytes.checked_mul(2))
+            .ok_or_else(|| DeviceError::Capacity {
+                kind: Device::Cuda,
+                detail: format!("device bytes for {} f32 values overflow", input.len()),
+            })?;
         let mut slot = self.affine.lock().unwrap_or_else(|e| e.into_inner());
+        let resizing = slot
+            .as_ref()
+            .map(|gpu| gpu.len != input.len())
+            .unwrap_or(true);
+        if resizing {
+            device_bytes_fit(free, device_bytes)?;
+        }
         if slot.is_none() {
             let opts = cudarc::nvrtc::CompileOptions {
                 fmad: Some(false),
@@ -153,8 +243,10 @@ impl CudaDevice {
                 .map_err(|err| compile_err(format!("load_function: {err}")))?;
             let max_grid = self
                 .ctx
-                .attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X)
-                .map_err(|err| launch_err(format!("attribute MAX_GRID_DIM_X: {err}")))?;
+                .attribute(
+                    cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
+                )
+                .map_err(|err| from_driver(err, "attribute MAX_GRID_DIM_X"))?;
             if max_grid <= 0 {
                 return Err(DeviceError::Capacity {
                     kind: Device::Cuda,
@@ -164,16 +256,20 @@ impl CudaDevice {
             let stream = self.ctx.default_stream();
             let inp = stream
                 .clone_htod(input)
-                .map_err(|err| launch_err(format!("clone_htod: {err}")))?;
+                .map_err(|err| from_driver(err, "clone_htod"))?;
             let out = stream
                 .alloc_zeros::<f32>(input.len())
-                .map_err(|err| launch_err(format!("alloc_zeros: {err}")))?;
+                .map_err(|err| from_driver(err, "alloc_zeros"))?;
+            // SAFETY: flags 0 is the portable pinned allocation, not write-combined.
+            let host = unsafe { self.ctx.alloc_pinned_with_flags::<f32>(input.len(), 0) }
+                .map_err(|err| from_driver(err, "alloc_pinned_with_flags"))?;
             *slot = Some(AffineGpu {
                 func,
                 max_grid_x: max_grid as u32,
                 len: input.len(),
                 inp,
                 out,
+                host,
             });
         }
         let gpu = slot.as_mut().unwrap();
@@ -189,20 +285,26 @@ impl CudaDevice {
         }
         let stream = self.ctx.default_stream();
         if gpu.len != input.len() {
-            gpu.inp = stream
+            let new_inp = stream
                 .clone_htod(input)
-                .map_err(|err| launch_err(format!("clone_htod: {err}")))?;
-            gpu.out = stream
+                .map_err(|err| from_driver(err, "clone_htod"))?;
+            let new_out = stream
                 .alloc_zeros::<f32>(input.len())
-                .map_err(|err| launch_err(format!("alloc_zeros: {err}")))?;
+                .map_err(|err| from_driver(err, "alloc_zeros"))?;
+            // SAFETY: flags 0 is the portable pinned allocation, not write-combined.
+            let new_host = unsafe { self.ctx.alloc_pinned_with_flags::<f32>(input.len(), 0) }
+                .map_err(|err| from_driver(err, "alloc_pinned_with_flags"))?;
+            gpu.inp = new_inp;
+            gpu.out = new_out;
+            gpu.host = new_host;
             gpu.len = input.len();
         } else {
             stream
                 .memcpy_htod(input, &mut gpu.inp)
-                .map_err(|err| launch_err(format!("memcpy_htod: {err}")))?;
+                .map_err(|err| from_driver(err, "memcpy_htod"))?;
             stream
                 .memset_zeros(&mut gpu.out)
-                .map_err(|err| launch_err(format!("memset: {err}")))?;
+                .map_err(|err| from_driver(err, "memset"))?;
         }
         unsafe {
             stream
@@ -214,19 +316,29 @@ impl CudaDevice {
                 .arg(&n)
                 .launch(cfg)
         }
-        .map_err(|err| launch_err(format!("launch: {err}")))?;
-        // SAFETY: flags 0 is the portable pinned allocation, not write-combined.
-        let mut pinned = unsafe { self.ctx.alloc_pinned_with_flags::<f32>(input.len(), 0) }
-            .map_err(|err| launch_err(format!("alloc_pinned_with_flags: {err}")))?;
+        .map_err(|err| from_driver(err, "launch"))?;
         stream
-            .memcpy_dtoh(&gpu.out, &mut pinned)
-            .map_err(|err| launch_err(format!("memcpy_dtoh: {err}")))?;
-        stream
-            .synchronize()
-            .map_err(|err| launch_err(format!("synchronize: {err}")))?;
-        Ok(pinned
+            .memcpy_dtoh(&gpu.out, &mut gpu.host)
+            .map_err(|err| from_driver(err, "memcpy_dtoh"))?;
+        let event = self
+            .ctx
+            .new_event(Some(
+                cudarc::driver::sys::CUevent_flags::CU_EVENT_DISABLE_TIMING,
+            ))
+            .map_err(|err| from_driver(err, "new_event"))?;
+        event
+            .record(&stream)
+            .map_err(|err| from_driver(err, "event.record"))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        poll_until(deadline, || {
+            event
+                .try_is_complete()
+                .map_err(|err| from_driver(err, "try_is_complete"))
+        })?;
+        Ok(gpu
+            .host
             .as_slice()
-            .map_err(|err| launch_err(format!("pinned read: {err}")))?
+            .map_err(|err| from_driver(err, "pinned read"))?
             .to_vec())
     }
 }
@@ -234,6 +346,88 @@ impl CudaDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn out_of_memory_is_capacity_not_launch() {
+        let oom = cuda_status(2, "cuMemAlloc".to_string());
+        assert!(
+            matches!(
+                oom,
+                DeviceError::Capacity {
+                    kind: Device::Cuda,
+                    ..
+                }
+            ),
+            "{oom}"
+        );
+        let other = cuda_status(1, "invalid".to_string());
+        assert!(matches!(other, DeviceError::Launch { .. }), "{other}");
+    }
+
+    #[test]
+    fn failed_resize_keeps_the_previous_buffers() {
+        let mut len = 4usize;
+        let mut inp = 1u64;
+        let mut out = 2u64;
+        let mut host_gens = 0u32;
+        let err = commit_resize(
+            &mut len,
+            &mut inp,
+            &mut out,
+            &mut host_gens,
+            8,
+            Ok(9),
+            Err("oom"),
+            Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(err, "oom");
+        assert_eq!((len, inp, out, host_gens), (4, 1, 2, 0));
+        commit_resize(
+            &mut len,
+            &mut inp,
+            &mut out,
+            &mut host_gens,
+            8,
+            Ok(9),
+            Ok(10),
+            Ok(()),
+        )
+        .unwrap();
+        assert_eq!((len, inp, out, host_gens), (8, 9, 10, 1));
+    }
+
+    #[test]
+    fn device_probe_refuses_a_copy_larger_than_free_memory() {
+        let err = device_bytes_fit(32, 64).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DeviceError::Capacity {
+                    kind: Device::Cuda,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(device_bytes_fit(64, 64).is_ok());
+    }
+
+    #[test]
+    fn stream_wait_returns_when_the_deadline_has_passed() {
+        let err = poll_until(std::time::Instant::now(), || Ok(false)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DeviceError::Launch {
+                    kind: Device::Cuda,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(poll_until(std::time::Instant::now(), || Ok(true)).is_ok());
+    }
 
     /// Without the feature the struct has no fields, so the kind check and the
     /// `NotCompiled` arm are reachable without a driver. With the feature a

@@ -1,0 +1,21 @@
+[package]
+name = "ojas-qwen35"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Qwen3.5 whole-step training provider over canonical tessl (Metal only). Not an ojas Backend."
+
+[dependencies]
+ojas-core = { path = "../ojas-core" }
+ojas-io = { path = "../ojas-io" }
+
+# Path dependencies only. tessl resolves to the canonical crate
+# (~/Code/research/tessl), the same package ojas-metal and Lappi's qd-metal /
+# qd-export depend on; tessl declares `links = "tessl"`, so every crate in one
+# build must point at this one path. tessl builds only on macOS (Apple silicon,
+# Metal 4), so off macOS this crate is empty (`#![cfg(target_os = "macos")]` in
+# lib.rs and every test file) and the ojas workspace's Linux CI still builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+tessl = { path = "../../tessl" }

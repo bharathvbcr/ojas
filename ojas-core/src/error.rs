@@ -4,8 +4,10 @@ use std::fmt;
 
 /// Recoverable failure on a library path.
 ///
-/// Library code returns this instead of panicking. A poisoned budget lock is
-/// [`OjasError::Poisoned`].
+/// Library code returns this instead of panicking. [`OjasError::Poisoned`]
+/// stays in the enum so existing matches keep compiling. [`crate::Budget`]
+/// charges an atomic counter, so reservation does not take a lock and does
+/// not return `Poisoned`.
 #[derive(Debug)]
 pub enum OjasError {
     Shape {
@@ -47,6 +49,14 @@ pub enum OjasError {
         op: &'static str,
         detail: String,
     },
+    /// The tensor lives on a different device than the call needs.
+    /// `found` is `None` for host memory. Nothing is copied implicitly;
+    /// call [`crate::Tensor::to_host`] or [`crate::Backend::upload`].
+    Placement {
+        op: &'static str,
+        expected: Option<BackendId>,
+        found: Option<BackendId>,
+    },
 }
 
 impl fmt::Display for OjasError {
@@ -72,6 +82,22 @@ impl fmt::Display for OjasError {
             OjasError::Poisoned => write!(f, "poisoned"),
             OjasError::Backend { id, detail } => write!(f, "backend {id:?}: {detail}"),
             OjasError::Unsupported { op, detail } => write!(f, "{op}: unsupported: {detail}"),
+            OjasError::Placement {
+                op,
+                expected,
+                found,
+            } => {
+                let place = |id: &Option<BackendId>| match id {
+                    Some(id) => format!("{id:?} device"),
+                    None => "host".to_string(),
+                };
+                write!(
+                    f,
+                    "{op}: tensor is on {}, expected {}",
+                    place(found),
+                    place(expected)
+                )
+            }
         }
     }
 }

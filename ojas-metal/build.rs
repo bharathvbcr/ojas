@@ -1,20 +1,27 @@
-//! Compile `kernels/per_head_gate.metal` into an overlay metallib.
+//! Compile the crate's Metal kernels into one overlay metallib.
 //!
-//! Tessl owns GEMM. This script builds the per-head gate and the tiny-step
-//! causal softmax backward. The Metal
-//! invocation matches tessl: `xcrun metal` with an explicit `-isysroot`, not
-//! `xcrun -sdk macosx metal`.
+//! Tessl owns GEMM, RMSNorm, AdamW and residual add. This script builds the
+//! per-head gate, the tiny-step causal softmax backward, and the kernels in
+//! `ojas_backend.metal`. The Metal invocation matches tessl: `xcrun metal`
+//! with an explicit `-isysroot`, not `xcrun -sdk macosx metal`.
 
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+const SOURCES: [&str; 3] = [
+    "per_head_gate.metal",
+    "causal_attn_bwd.metal",
+    "ojas_backend.metal",
+];
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=kernels/per_head_gate.metal");
-    println!("cargo:rerun-if-changed=kernels/causal_attn_bwd.metal");
+    for name in SOURCES {
+        println!("cargo:rerun-if-changed=kernels/{name}");
+    }
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if os != "macos" {
+    if os != "macos" || env::var_os("CARGO_FEATURE_METAL").is_none() {
         println!("cargo:rustc-env=OJAS_GATE_METALLIB=");
         return;
     }
@@ -35,7 +42,7 @@ fn main() {
     let lib = out_dir.join("ojas_per_head_gate.metallib");
     let std_flag = "-std=metal4.0";
     let mut airs = Vec::new();
-    for name in ["per_head_gate.metal", "causal_attn_bwd.metal"] {
+    for name in SOURCES {
         let src = manifest.join("kernels").join(name);
         let air = out_dir.join(name.replace(".metal", ".air"));
         let status = Command::new(&metal)

@@ -506,7 +506,7 @@ fn tape_accumulates_reused_nodes() {
     let cpu = cpu();
     let x0 = [0.3, -1.2, 2.5];
     let mut tape = Tape::new(cpu.clone());
-    let x = tape.leaf(t(&cpu, &x0, &[3]));
+    let x = tape.leaf(t(&cpu, &x0, &[3])).unwrap();
     let sq = tape.mul(x, x).unwrap();
     let twice = tape.add(sq, x).unwrap();
     let out = tape.add(twice, twice).unwrap();
@@ -521,7 +521,7 @@ fn tape_backward_twice_starts_from_fresh_gradients() {
     let cpu = cpu();
     let x0 = [0.4, -0.9];
     let mut tape = Tape::new(cpu.clone());
-    let x = tape.leaf(t(&cpu, &x0, &[2]));
+    let x = tape.leaf(t(&cpu, &x0, &[2])).unwrap();
     let y = tape.silu(x).unwrap();
     let z = tape.silu(y).unwrap();
     tape.backward(z).unwrap();
@@ -550,9 +550,9 @@ fn tape_backward_twice_starts_from_fresh_gradients() {
 fn tape_backward_failure_leaves_no_partial_gradients() {
     let cpu = cpu();
     let mut tape = Tape::new(cpu.clone());
-    let x = tape.leaf(t(&cpu, &[1e-20], &[1]));
-    let big = tape.leaf(t(&cpu, &[1e30], &[1]));
-    let c = tape.leaf(t(&cpu, &[1e10], &[1]));
+    let x = tape.leaf(t(&cpu, &[1e-20], &[1])).unwrap();
+    let big = tape.leaf(t(&cpu, &[1e30], &[1])).unwrap();
+    let c = tape.leaf(t(&cpu, &[1e10], &[1])).unwrap();
     let a = tape.mul(x, big).unwrap();
     let b = tape.mul(a, c).unwrap();
     // d b / d a = 1e10 is finite; d b / d x = 1e10 * 1e30 overflows.
@@ -701,7 +701,7 @@ fn tape_gradcheck_tied_embedding_block() {
         let vars: Vec<Var> = params
             .iter()
             .zip(block.leaf_shapes())
-            .map(|(p, s)| tape.leaf(t(&cpu, p, &s)))
+            .map(|(p, s)| tape.leaf(t(&cpu, p, &s)).unwrap())
             .collect();
         let loss = block.tape_loss(&mut tape, &vars).unwrap();
         let got = f64::from(v(tape.value(loss).unwrap())[0]);
