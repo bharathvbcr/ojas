@@ -136,7 +136,9 @@ pub fn deferred<T: std::fmt::Debug>(
         Err(e) => panic!("{what}: the op must record, not refuse: {e:?}"),
     };
     match m.sync() {
-        Err(OjasError::NonFinite { op: got }) => assert_eq!(got, op, "{what}: sync named another op"),
+        Err(OjasError::NonFinite { op: got }) => {
+            assert_eq!(got, op, "{what}: sync named another op")
+        }
         other => panic!("{what}: sync must report NonFinite {{ {op} }}: {other:?}"),
     }
     let again = m.sync();

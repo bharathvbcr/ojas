@@ -322,7 +322,10 @@ impl<'a, Bk: Backend> Runner<'a, Bk> {
         let up = run("uptime", &[]);
         let up = up.split("load average").nth(1).unwrap_or(up.trim());
         let up = up.trim_start_matches(['s', ':', ' ']).trim();
-        let io = run("ioreg", &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]);
+        let io = run(
+            "ioreg",
+            &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"],
+        );
         let tag = "\"Device Utilization %\"=";
         let gpu = io
             .find(tag)
@@ -766,7 +769,8 @@ fn linear_ce<Bk: Backend>(r: &mut Runner<'_, Bk>, rows: usize, cols: usize) {
         ]);
         let chunk = CeChunk { rows, cols };
         r.op(&name, &s, TOL, |r| {
-            let out = r.be.linear_cross_entropy_mean(&x, &w, &t, None, chunk, true)?;
+            let out =
+                r.be.linear_cross_entropy_mean(&x, &w, &t, None, chunk, true)?;
             let missing = || OjasError::Unsupported {
                 op: "linear_cross_entropy_mean",
                 detail: "want_grad was set but a gradient is missing".to_string(),
@@ -788,7 +792,11 @@ fn decode_attention<Bk: Backend>(r: &mut Runner<'_, Bk>) {
         let q = r.dev(&qs, 141, 0)?;
         let k = r.dev(&cs, 142, 0)?;
         let v = r.dev(&cs, 143, 0)?;
-        let s = spec(&[("q", &qs, 141, 0), ("k_cache", &cs, 142, 0), ("v_cache", &cs, 143, 0)]);
+        let s = spec(&[
+            ("q", &qs, 141, 0),
+            ("k_cache", &cs, 142, 0),
+            ("v_cache", &cs, 143, 0),
+        ]);
         r.op(name, &format!("{s};kv_len:{T}"), TOL, |r| {
             Ok(vec![r.be.cached_attention_forward(&q, &k, &v, T)?])
         });
@@ -1217,11 +1225,7 @@ pub fn check_generator(refdir: &std::path::Path) -> Result<(), String> {
 }
 
 /// Shared `main` body: read the environment, check the generator, run rows.
-pub fn main_with<Bk: Backend>(
-    be: &Bk,
-    runtime: &str,
-    device_json: &str,
-) -> Result<(), String> {
+pub fn main_with<Bk: Backend>(be: &Bk, runtime: &str, device_json: &str) -> Result<(), String> {
     let env = |k: &str| std::env::var(k).ok();
     let refdir = PathBuf::from(env("OJAS_BENCH_REF").ok_or("OJAS_BENCH_REF is not set")?);
     let out_path = env("OJAS_BENCH_OUT").ok_or("OJAS_BENCH_OUT is not set")?;

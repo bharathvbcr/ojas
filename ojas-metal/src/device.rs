@@ -27,6 +27,7 @@ use tessl::runtime::GpuRuntime;
 use tessl::tensor::{gpu_copy, GpuBuffer, Tensor as TT};
 use tessl::DType;
 
+use crate::gpu::gate_dbias_threads;
 use crate::link::{
     metal_err, reduce_groups, rms_w_chunks, Arg, Cmd, LceGeom, Msg, NewBuf, Reply, Res, RmsSide,
     RopeMode,
@@ -347,6 +348,24 @@ impl Worker {
                 self.bufs.remove(&id);
                 continue;
             }
+            if let Cmd::Memory = msg.cmd {
+                // A read of two device properties: not a command, so it
+                // neither counts toward nor fires the commit triggers, and a
+                // poisoned backend still reports what it holds.
+                let out = match catch_unwind(AssertUnwindSafe(|| self.memory())) {
+                    Ok(m) => Ok(Reply::Memory(m)),
+                    Err(_) => {
+                        self.poisoned = true;
+                        Err(metal_err(
+                            "the Metal memory query panicked; this backend is poisoned",
+                        ))
+                    }
+                };
+                if let Some(reply) = msg.reply {
+                    let _ = reply.send(out);
+                }
+                continue;
+            }
             let out = if self.poisoned {
                 Err(OjasError::Poisoned)
             } else {
@@ -363,6 +382,13 @@ impl Worker {
             if let Some(reply) = msg.reply {
                 let _ = reply.send(out);
             }
+        }
+    }
+
+    fn memory(&self) -> crate::MetalMemory {
+        crate::MetalMemory {
+            recommended_working_set: self.rt.memory_info().recommended_working_set,
+            allocated: self.rt.current_allocated_bytes(),
         }
     }
 
@@ -750,6 +776,8 @@ impl Worker {
                 self.bufs.remove(&id);
                 Ok(Reply::Done)
             }
+            // `serve` answers it first; kept here so the match stays total.
+            Cmd::Memory => Ok(Reply::Memory(self.memory())),
             Cmd::Upload { bytes } => self.upload(&bytes),
             #[cfg(test)]
             Cmd::InjectPanic => {
@@ -1411,19 +1439,23 @@ impl Worker {
         let plane = u32_of(av.n)?;
         let pre = self.fresh(r * h)?;
         let st = self.status(op)?;
-        for v in [&xv, &wv, &bv, &av] {
-            self.check(&st, v, ST_IN)?;
-        }
-        if let Some(g) = &gv {
-            self.check(&st, g, ST_IN)?;
+        // `x` and `w` are read only by tessl GEMMs, so they keep standalone
+        // checks in both directions. The backward kernels check `bias`,
+        // `attn`, `gy`, `pre`, `d_attn` and `d_bias` themselves (every row
+        // reads every head's bias, and an empty operand was refused).
+        self.check(&st, &xv, ST_IN)?;
+        self.check(&st, &wv, ST_IN)?;
+        if gv.is_none() {
+            self.check(&st, &bv, ST_IN)?;
+            self.check(&st, &av, ST_IN)?;
         }
         let x_t = self.mat(&xv, r, di)?;
         let w_t = self.mat(&wv, h, di)?;
         GemmOperands::ExactF32
             .nt(&x_t, &w_t, &self.tt(&pre, &[r, h])?)
             .map_err(metal_err)?;
-        self.check(&st, &pre, ST_OUT)?;
         let Some(g) = gv else {
+            self.check(&st, &pre, ST_OUT)?;
             let out = self.fresh(av.n)?;
             self.k2("ojas_per_head_gate_fwd", dh as usize, r * h, |b| {
                 bind(b, &av, 0);
@@ -1459,14 +1491,16 @@ impl Worker {
             set_u32(b, plane, 9);
             set_u32(b, units, 10);
             set_u32(b, heads, 11);
+            bind_st(b, &st, 12);
         })?;
-        self.k1("ojas_per_head_gate_dbias", h, |b| {
+        self.k1("ojas_per_head_gate_dbias", gate_dbias_threads(h)?, |b| {
             bind(b, &d_pre, 0);
             bind(b, &d_bias, 1);
             set_u32(b, rows, 2);
             set_u32(b, heads, 3);
             set_u32(b, units, 4);
             set_u32(b, heads, 5);
+            bind_st(b, &st, 6);
         })?;
         let dp_t = self.tt(&d_pre, &[r, h])?;
         GemmOperands::ExactF32
@@ -1475,9 +1509,8 @@ impl Worker {
         GemmOperands::ExactF32
             .tn(&dp_t, &x_t, &self.tt(&gw, &[h, di])?)
             .map_err(metal_err)?;
-        for v in [&gx, &gw, &d_bias, &d_attn] {
-            self.check(&st, v, ST_OUT)?;
-        }
+        self.check(&st, &gx, ST_OUT)?;
+        self.check(&st, &gw, ST_OUT)?;
         Ok(self.keep(vec![gx, gw, d_bias, d_attn]))
     }
 
@@ -1789,7 +1822,9 @@ impl Worker {
         let (xv, wv, tv) = (self.view(x)?, self.view(w)?, self.view(t)?);
         let (n, d, v) = (g.n, g.d, g.v);
         if xv.n != n * d || wv.n != v * d || tv.n != n {
-            return Err(metal_err(format!("{OP}: windows do not match the dimensions")));
+            return Err(metal_err(format!(
+                "{OP}: windows do not match the dimensions"
+            )));
         }
         let vocab = u32_of(v)?;
         let (has_ignore, ignore_id) = (u32::from(ignore.is_some()), ignore.unwrap_or(0));
@@ -1808,8 +1843,16 @@ impl Worker {
         } else {
             None
         };
-        let stage_x = if g.stage_x { Some(self.fresh(g.rt * d)?) } else { None };
-        let stage_w = if g.stage_w { Some(self.fresh(g.ct * d)?) } else { None };
+        let stage_x = if g.stage_x {
+            Some(self.fresh(g.rt * d)?)
+        } else {
+            None
+        };
+        let stage_w = if g.stage_w {
+            Some(self.fresh(g.ct * d)?)
+        } else {
+            None
+        };
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
         self.check(&st, &wv, ST_IN)?;
@@ -1920,20 +1963,26 @@ impl Worker {
         let out = self.fresh(qv.n)?;
         let st = self.status(OP)?;
         let groups = tq as usize * heads as usize;
-        self.ktg("ojas_cached_attn", groups, batch as usize, CA_THREADS, |b| {
-            bind(b, &qv, 0);
-            bind(b, &kv, 1);
-            bind(b, &vv, 2);
-            bind(b, &out, 3);
-            bind_st(b, &st, 4);
-            set_u32(b, tq, 5);
-            set_u32(b, heads, 6);
-            set_u32(b, kv_heads, 7);
-            set_u32(b, d, 8);
-            set_u32(b, cap, 9);
-            set_u32(b, kv_len, 10);
-            set_f32(b, scale, 11);
-        })?;
+        self.ktg(
+            "ojas_cached_attn",
+            groups,
+            batch as usize,
+            CA_THREADS,
+            |b| {
+                bind(b, &qv, 0);
+                bind(b, &kv, 1);
+                bind(b, &vv, 2);
+                bind(b, &out, 3);
+                bind_st(b, &st, 4);
+                set_u32(b, tq, 5);
+                set_u32(b, heads, 6);
+                set_u32(b, kv_heads, 7);
+                set_u32(b, d, 8);
+                set_u32(b, cap, 9);
+                set_u32(b, kv_len, 10);
+                set_f32(b, scale, 11);
+            },
+        )?;
         Ok(self.keep(vec![out]))
     }
 
@@ -1955,7 +2004,9 @@ impl Worker {
         let cap_span = u32_of(cap as usize * row as usize)?;
         let at_off = u32_of(at as usize * row as usize)?;
         if sv.n != batch as usize * span as usize || cv.n != batch as usize * cap_span as usize {
-            return Err(metal_err(format!("{OP}: windows do not match the dimensions")));
+            return Err(metal_err(format!(
+                "{OP}: windows do not match the dimensions"
+            )));
         }
         let n = u32_of(sv.n)?;
         let st = self.status(OP)?;
@@ -2183,7 +2234,12 @@ mod tests {
         assert!(attn_plane_fits(OP, 1 << 23, 128).is_ok());
         assert!(attn_plane_fits(OP, (1 << 24) - 1, 128).is_ok());
         assert!(attn_plane_fits(OP, i32::MAX as u32, 1).is_ok());
-        for (t, d) in [(1u32 << 24, 128u32), (u32::MAX, 1), (1 << 31, 1), (u32::MAX, 128)] {
+        for (t, d) in [
+            (1u32 << 24, 128u32),
+            (u32::MAX, 1),
+            (1 << 31, 1),
+            (u32::MAX, 128),
+        ] {
             assert!(
                 matches!(
                     attn_plane_fits(OP, t, d),
@@ -2228,7 +2284,11 @@ mod tests {
                 other => panic!("sdpa bwd d{d}: {other:?}"),
             };
             let atol = 2e-5 * (t as f32).sqrt();
-            for (buf, want, what) in [(&bufs[0], &wq, "dq"), (&bufs[1], &wk, "dk"), (&bufs[2], &wv, "dv")] {
+            for (buf, want, what) in [
+                (&bufs[0], &wq, "dq"),
+                (&bufs[1], &wk, "dk"),
+                (&bufs[2], &wv, "dv"),
+            ] {
                 let got = read(&mut w, buf.id, n);
                 let want = want.to_f32_vec().expect("cpu values");
                 for (i, (g, e)) in got.iter().zip(&want).enumerate() {

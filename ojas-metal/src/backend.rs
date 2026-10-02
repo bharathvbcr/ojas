@@ -144,6 +144,17 @@ impl MetalBackend {
         self.link.device_name()
     }
 
+    /// The device's recommended working set and what this process holds on
+    /// it now. The result is an [`ojas_device::MemoryProbe`] for
+    /// [`ojas_device::ResourcePlan::derive`]. Answered on a poisoned backend
+    /// too; it records and commits nothing.
+    pub fn memory(&self) -> Result<crate::MetalMemory, OjasError> {
+        match self.link.call(Cmd::Memory)? {
+            Reply::Memory(m) => Ok(m),
+            other => Err(metal_err(format!("memory: device returned {other:?}"))),
+        }
+    }
+
     /// Waited GPU commits this backend's device thread has made since it
     /// opened, shared by every clone. Telemetry for tests and benches, not a
     /// stable API.
@@ -385,7 +396,13 @@ impl MetalBackend {
                 vec![side[0].shape().to_vec()]
             }
         };
-        let scratch_of = |s: &RmsSide| if grads.is_some() { rms_bwd_scratch(s) } else { 0 };
+        let scratch_of = |s: &RmsSide| {
+            if grads.is_some() {
+                rms_bwd_scratch(s)
+            } else {
+                0
+            }
+        };
         let (q_shapes, k_shapes) = (shapes_of(q), shapes_of(k));
         let mut reservations = Vec::with_capacity(q_shapes.len() + k_shapes.len());
         for s in &q_shapes {
@@ -401,7 +418,11 @@ impl MetalBackend {
         let Ok(_k_scratch) = self.reserve(op, scratch_of(&k_side)) else {
             return Ok(None);
         };
-        let shapes: Vec<&[usize]> = q_shapes.iter().chain(&k_shapes).map(Vec::as_slice).collect();
+        let shapes: Vec<&[usize]> = q_shapes
+            .iter()
+            .chain(&k_shapes)
+            .map(Vec::as_slice)
+            .collect();
         let cmd = Cmd::Rms {
             sides: vec![q_side, k_side],
             eps,
@@ -946,8 +967,7 @@ impl Backend for MetalBackend {
         grad_output: &Tensor,
     ) -> Result<PerHeadGateGrad, OjasError> {
         const OP: &str = "per_head_sigmoid_gate_backward";
-        let dims =
-            per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
+        let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
         let (x, w, b, a) = (
             self.f32(OP, input)?,
             self.f32(OP, weight)?,
@@ -1226,7 +1246,11 @@ impl Backend for MetalBackend {
         let dims = cached_attention_dims(q, k_cache, v_cache, kv_len)?;
         let d = u32_dim(OP, dims.head_dim)?;
         refuse_unsupported_metal_head_dim(BackendId::Metal, d)?;
-        let (qa, ka, va) = (self.f32(OP, q)?, self.f32(OP, k_cache)?, self.f32(OP, v_cache)?);
+        let (qa, ka, va) = (
+            self.f32(OP, q)?,
+            self.f32(OP, k_cache)?,
+            self.f32(OP, v_cache)?,
+        );
         u32_dim(OP, product(OP, &[dims.new, dims.heads])?)?;
         self.one(
             OP,
@@ -1494,6 +1518,70 @@ mod tests {
         }
     }
 
+    /// The memory query sees an upload, survives a poisoned backend, and
+    /// gives `ResourcePlan` a Metal room that, on Apple silicon, is never
+    /// past the shared budget.
+    #[test]
+    fn memory_probe_tracks_residency_and_plans_one_shared_budget() {
+        use ojas_device::{
+            probe_system, Device, MemoryArchitecture, MemoryProbe, MemoryReport, ResourcePlan,
+            ResourcePolicy,
+        };
+        watchdog(120, || {
+            let host = Budget::new(1 << 30);
+            let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            let before = m.memory().expect("memory");
+            assert!(before.recommended_working_set >= 1 << 30, "{before:?}");
+            let vals = vec![1.0f32; 4 << 20];
+            let x = m
+                .upload(&Tensor::from_f32(&vals, &[4 << 20], &host).expect("host"))
+                .expect("upload");
+            let after = m.memory().expect("memory");
+            assert_eq!(
+                after.recommended_working_set,
+                before.recommended_working_set
+            );
+            // `allocated` is the device's process-wide figure, and other
+            // tests in this binary allocate and free beside this one, so a
+            // before/after delta is not this test's to assert. A lower bound
+            // is: while `x` lives, its 16 MiB are part of the figure.
+            assert!(
+                after.allocated >= 16 << 20,
+                "a live 16 MiB upload is not counted: {after:?}"
+            );
+            // Concurrent queries from several threads all answer.
+            thread::scope(|s| {
+                for _ in 0..8 {
+                    s.spawn(|| assert!(m.memory().is_ok()));
+                }
+            });
+
+            let profile = probe_system();
+            let mut policy = ResourcePolicy::new(8 << 30);
+            policy.devices = vec![Device::Metal, Device::Cpu];
+            let plan = ResourcePlan::derive(&policy, &profile, &[after]);
+            assert_eq!(plan.device_memory[0], after.memory_bytes());
+            if profile.architecture == MemoryArchitecture::Unified {
+                assert!(plan.shared_budget);
+                match plan.device_room[0] {
+                    MemoryReport::Known(room) => assert!(room <= plan.budget_bytes),
+                    MemoryReport::Unknown => panic!("a shared device has a room"),
+                }
+            }
+
+            let injected = m.link.call(Cmd::InjectPanic);
+            assert!(injected.is_err());
+            assert!(matches!(m.silu_forward(&x), Err(OjasError::Poisoned)));
+            let poisoned = m.memory().expect("memory after poison");
+            assert_eq!(
+                poisoned.recommended_working_set,
+                before.recommended_working_set
+            );
+            drop(x);
+            drop(m);
+        });
+    }
+
     /// A panic on the device thread in the middle of a stream of ops from
     /// several threads poisons the backend: the panicking call and every
     /// later call fail promptly with an error (none hangs, none returns a
@@ -1566,31 +1654,62 @@ mod tests {
                 .expect("upload")
         };
         let m = MetalBackend::new(Budget::new(1 << 24)).expect("Metal device");
-        let (q, k, w) = (t(&m, 64 * 16, &[64, 16]), t(&m, 64 * 16, &[64, 16]), t(&m, 16, &[16]));
+        let (q, k, w) = (
+            t(&m, 64 * 16, &[64, 16]),
+            t(&m, 64 * 16, &[64, 16]),
+            t(&m, 16, &[16]),
+        );
         let fused = m.rms_pair("rms_norm_forward", [&q, &w], [&k, &w], None, 1e-6);
         assert_eq!(fused.expect("fwd").map(|v| v.len()), Some(2));
-        let fused = m.rms_pair("rms_norm_backward", [&q, &w], [&k, &w], Some([&q, &k]), 1e-6);
+        let fused = m.rms_pair(
+            "rms_norm_backward",
+            [&q, &w],
+            [&k, &w],
+            Some([&q, &k]),
+            1e-6,
+        );
         assert_eq!(fused.expect("bwd").map(|v| v.len()), Some(4));
         let bad_w = t(&m, 17, &[17]);
         let refused = m.rms_pair("rms_norm_forward", [&q, &w], [&k, &bad_w], None, 1e-6);
         assert!(
-            matches!(&refused, Err(OjasError::Shape { op: "rms_norm_forward", .. })),
+            matches!(
+                &refused,
+                Err(OjasError::Shape {
+                    op: "rms_norm_forward",
+                    ..
+                })
+            ),
             "{refused:?}"
         );
         let host_k = Tensor::from_f32(&vec![0.25; 64 * 16], &[64, 16], &host).expect("host");
         let refused = m.rms_pair("rms_norm_forward", [&q, &w], [&host_k, &w], None, 1e-6);
-        assert!(matches!(&refused, Err(OjasError::Placement { .. })), "{refused:?}");
+        assert!(
+            matches!(&refused, Err(OjasError::Placement { .. })),
+            "{refused:?}"
+        );
         assert_eq!(pending(&m), None);
         // Inputs, then room for q's output and k's but not both sides' scratch.
         let inputs = 4 * (3 * 64 * 16 + 16) as u64;
         let outs = 2 * 4 * (64 * 16 + 16) as u64;
         let scratch = 4 * (64 + 16) as u64;
         let tight = MetalBackend::new(Budget::new(inputs + outs + scratch)).expect("Metal");
-        let (q, k, w) = (t(&tight, 64 * 16, &[64, 16]), t(&tight, 64 * 16, &[64, 16]), t(&tight, 16, &[16]));
+        let (q, k, w) = (
+            t(&tight, 64 * 16, &[64, 16]),
+            t(&tight, 64 * 16, &[64, 16]),
+            t(&tight, 16, &[16]),
+        );
         let g = t(&tight, 64 * 16, &[64, 16]);
-        let declined = tight.rms_pair("rms_norm_backward", [&q, &w], [&k, &w], Some([&g, &g]), 1e-6);
+        let declined = tight.rms_pair(
+            "rms_norm_backward",
+            [&q, &w],
+            [&k, &w],
+            Some([&g, &g]),
+            1e-6,
+        );
         assert!(matches!(declined, Ok(None)), "{declined:?}");
-        assert!(tight.rms_qk_norm_backward(&q, &k, &w, &w, &g, &g, 1e-6).is_ok());
+        assert!(tight
+            .rms_qk_norm_backward(&q, &k, &w, &w, &g, &g, 1e-6)
+            .is_ok());
     }
 
     fn put(m: &MetalBackend, vals: &[f32], shape: &[usize]) -> Tensor {
@@ -1630,8 +1749,15 @@ mod tests {
         let mut p = put(m, &[0.5; 24], &[4, 6]);
         let mut m1 = put(m, &[0.0; 24], &[4, 6]);
         let mut m2 = put(m, &[0.0; 24], &[4, 6]);
-        m.adamw_step(&mut p, &g, &mut m1, &mut m2, 1, AdamWConfig::nanolab(1e-3, 0.1))
-            .expect("adamw records");
+        m.adamw_step(
+            &mut p,
+            &g,
+            &mut m1,
+            &mut m2,
+            1,
+            AdamWConfig::nanolab(1e-3, 0.1),
+        )
+        .expect("adamw records");
         (p, m1, m2)
     }
 
@@ -1649,7 +1775,13 @@ mod tests {
         );
         assert_eq!(pending(&m), Some("adamw_step"));
         assert_eq!(pending(&m), None);
-        assert!(p.to_host(&Budget::new(1 << 20)).expect("read").to_f32_vec().expect("f32").iter().all(|&v| v == 0.5));
+        assert!(p
+            .to_host(&Budget::new(1 << 20))
+            .expect("read")
+            .to_f32_vec()
+            .expect("f32")
+            .iter()
+            .all(|&v| v == 0.5));
     }
 
     /// §7.5: memory-cap commits wait and scan but hold the fault; no call
@@ -1665,7 +1797,11 @@ mod tests {
         for _ in 0..10 {
             m.silu_forward(&one).expect("clean op past a cap commit");
         }
-        assert!(m.waits() - w0 >= 11, "every op should have hit the 1-byte cap: {}", m.waits() - w0);
+        assert!(
+            m.waits() - w0 >= 11,
+            "every op should have hit the 1-byte cap: {}",
+            m.waits() - w0
+        );
         assert_eq!(pending(&m), Some("silu_forward"));
         assert_eq!(pending(&m), None);
     }
@@ -1686,7 +1822,9 @@ mod tests {
         assert_eq!(tiny, 0, "tiny ops above the threshold waited {tiny} times");
         let big = put(&m, &vec![0.5; 8 << 20], &[8 << 20]);
         let w1 = m.waits();
-        let kept: Vec<Tensor> = (0..6).map(|_| m.silu_forward(&big).expect("big op")).collect();
+        let kept: Vec<Tensor> = (0..6)
+            .map(|_| m.silu_forward(&big).expect("big op"))
+            .collect();
         let grew = m.waits() - w1;
         assert!(
             (1..=3).contains(&grew),
@@ -1712,7 +1850,10 @@ mod tests {
         let w0 = m.waits();
         let y = m.rms_norm_forward(&x, &w, 1e-6);
         assert!(y.is_ok(), "the retried allocation should succeed: {y:?}");
-        assert!(m.waits() - w0 >= 1, "the retry should follow a waited commit");
+        assert!(
+            m.waits() - w0 >= 1,
+            "the retry should follow a waited commit"
+        );
         assert_eq!(pending(&m), Some("rms_norm_forward"));
         assert_eq!(pending(&m), None);
     }
@@ -1732,7 +1873,10 @@ mod tests {
         // its retry, after the checks have run.
         tune(&m, None, None, None, (0, 2));
         let r = m.muon_ns5_step(&mut p, &g, &mut mo, MuonNs5Config::nanolab_default());
-        assert!(matches!(r, Err(OjasError::CapacityExceeded { .. })), "{r:?}");
+        assert!(
+            matches!(r, Err(OjasError::CapacityExceeded { .. })),
+            "{r:?}"
+        );
         assert_eq!(pending(&m), None);
     }
 
@@ -1750,7 +1894,10 @@ mod tests {
         // q's side allocates one output; fail k's output and its retry.
         tune(&m, None, None, None, (1, 2));
         let r = m.rms_qk_norm_forward(&q, &k, &w, &w, 1e-6);
-        assert!(matches!(r, Err(OjasError::CapacityExceeded { .. })), "{r:?}");
+        assert!(
+            matches!(r, Err(OjasError::CapacityExceeded { .. })),
+            "{r:?}"
+        );
         assert_eq!(pending(&m), Some("rms_norm_forward"));
         assert_eq!(pending(&m), None);
     }
@@ -1777,7 +1924,9 @@ mod tests {
     /// One thread's chain of tiny ops; returns every 50th output's bits and
     /// the last.
     fn chain(m: &MetalBackend, seed: u32, len: usize, start: &std::sync::Barrier) -> Vec<Vec<u32>> {
-        let vals: Vec<f32> = (0..64).map(|i| ((i * 7 + seed as usize * 13) % 29) as f32 / 29.0 - 0.5).collect();
+        let vals: Vec<f32> = (0..64)
+            .map(|i| ((i * 7 + seed as usize * 13) % 29) as f32 / 29.0 - 0.5)
+            .collect();
         let x = put(m, &vals, &[64]);
         let c = put(m, &vec![0.75 + seed as f32 / 64.0; 64], &[64]);
         start.wait();
@@ -1798,7 +1947,11 @@ mod tests {
         keep.iter()
             .map(|t| {
                 let h = t.to_host(&Budget::new(1 << 20)).expect("read");
-                h.to_f32_vec().expect("f32").iter().map(|v| v.to_bits()).collect()
+                h.to_f32_vec()
+                    .expect("f32")
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect()
             })
             .collect()
     }
@@ -1826,7 +1979,10 @@ mod tests {
                 .collect();
             for (i, h) in handles.into_iter().enumerate() {
                 let got = h.join().expect("chain thread");
-                assert!(got == want[i], "thread {i}: bits differ from the serial run");
+                assert!(
+                    got == want[i],
+                    "thread {i}: bits differ from the serial run"
+                );
             }
             assert_eq!(pending(&m), None);
         });
@@ -1851,7 +2007,10 @@ mod tests {
             assert!(injected.is_err(), "{injected:?}");
             for at in [3usize, 4, usize::MAX] {
                 let r = m.kv_cache_write(&mut cache, &src, at);
-                assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "at {at}: {r:?}");
+                assert!(
+                    matches!(r, Err(OjasError::OutOfRange { .. })),
+                    "at {at}: {r:?}"
+                );
             }
             let r = m.kv_cache_write(&mut cache, &src, 2);
             assert!(matches!(r, Err(OjasError::Poisoned)), "{r:?}");

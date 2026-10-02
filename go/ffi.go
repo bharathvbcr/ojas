@@ -34,28 +34,30 @@ import (
 )
 
 // Opcodes of ojas-capi (ojas-capi/src/engine.rs). Opcode 15 sets the
-// process memory ceiling (SetMemoryCeiling). Opcode 2 was the
+// process memory ceiling (SetMemoryCeiling); 16 reads the host profile
+// (SystemProfile). Opcode 2 was the
 // payload-only Step; it is retired and not reused.
 const (
-	opLoad       uint32 = 1
-	opGenerate   uint32 = 3
-	opFree       uint32 = 4
-	opPanic      uint32 = 5
-	opNew        uint32 = 6
-	opTrainOpen  uint32 = 7
-	opTrainStep  uint32 = 8
-	opSave       uint32 = 9
-	opResume     uint32 = 10
-	opTokenizer  uint32 = 11
-	opTokenize   uint32 = 12
-	opSample     uint32 = 13
-	opInspect    uint32 = 14
-	opSetCeiling uint32 = 15
-	genLogits    uint32 = 1
-	stepSampled  uint32 = 0
-	stepTokens   uint32 = 1
-	tokenizeText uint32 = 1
-	tokenizeIDs  uint32 = 2
+	opLoad          uint32 = 1
+	opGenerate      uint32 = 3
+	opFree          uint32 = 4
+	opPanic         uint32 = 5
+	opNew           uint32 = 6
+	opTrainOpen     uint32 = 7
+	opTrainStep     uint32 = 8
+	opSave          uint32 = 9
+	opResume        uint32 = 10
+	opTokenizer     uint32 = 11
+	opTokenize      uint32 = 12
+	opSample        uint32 = 13
+	opInspect       uint32 = 14
+	opSetCeiling    uint32 = 15
+	opSystemProfile uint32 = 16
+	genLogits       uint32 = 1
+	stepSampled     uint32 = 0
+	stepTokens      uint32 = 1
+	tokenizeText    uint32 = 1
+	tokenizeIDs     uint32 = 2
 
 	deviceCPU         uint32 = 0
 	deviceCPUParallel uint32 = 1

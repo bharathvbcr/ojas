@@ -1,0 +1,14 @@
+device: Apple M5 Pro, 40 timed runs
+start: GPU 0%, load 19.11 13.32 11.55
+GPU timestamp: 41.9444 ns per tick (upper bound, see docs)
+| dispatch or sequence | f32 MB moved | min µs | median µs | GB/s at min |
+|---|---:|---:|---:|---:|
+| tessl scale_f32_inplace over attn (reference read + write) | 25.2 | 79.1 | 84.4 | 318 |
+| nt pre = x · w^T (4096, 12, 768) | 12.8 | 52.3 | 54.9 | 245 |
+| ojas_per_head_gate_bwd | 38.1 | 161.8 | 172.3 | 236 |
+| ojas_per_head_gate_dbias | 0.2 | 123.7 | 125.3 | 2 |
+| nn gx = d_pre · w (4096, 768, 12) | 12.8 | 114.5 | 115.5 | 112 |
+| tn gw = d_pre^T · x (12, 768, 4096) | 12.8 | 45.5 | 47.1 | 282 |
+| four standalone ojas_check_finite passes | 25.2 | 93.1 | 102.8 | 271 |
+| whole backward, one command buffer | 88.1 | 629.5 | 638.5 | 140 |
+end: GPU 97%, load 19.11 13.32 11.55

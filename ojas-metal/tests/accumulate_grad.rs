@@ -78,7 +78,10 @@ fn a_shared_accumulator_gets_a_new_buffer_and_the_other_handle_is_untouched() {
         .map(|(x, y)| x + y)
         .collect();
     assert_eq!(down(&acc), want);
-    assert!(acc.device_buffer_mut().is_ok(), "acc must end uniquely owned");
+    assert!(
+        acc.device_buffer_mut().is_ok(),
+        "acc must end uniquely owned"
+    );
 }
 
 #[test]
@@ -113,7 +116,11 @@ fn a_non_finite_sum_is_refused_and_leaves_acc_bit_identical() {
                 // on a fault it holds the old values, and the other handle
                 // is untouched.
                 assert_ne!(buffer_ptr(&acc), ptr, "a shared acc gets a new buffer");
-                assert_eq!(bits(other), before, "acc {av}, grad {gv}: other handle changed");
+                assert_eq!(
+                    bits(other),
+                    before,
+                    "acc {av}, grad {gv}: other handle changed"
+                );
             } else {
                 assert_eq!(buffer_ptr(&acc), ptr, "a unique acc keeps its buffer");
             }
@@ -122,7 +129,10 @@ fn a_non_finite_sum_is_refused_and_leaves_acc_bit_identical() {
     }
     // A clean call still works afterwards.
     let mut acc = up(&m, &rand(&shape, 7, 1.0));
-    ok("clean", m.accumulate_grad(&mut acc, &up(&m, &rand(&shape, 8, 1.0))));
+    ok(
+        "clean",
+        m.accumulate_grad(&mut acc, &up(&m, &rand(&shape, 8, 1.0))),
+    );
     ok("nothing pending", m.sync());
 }
 

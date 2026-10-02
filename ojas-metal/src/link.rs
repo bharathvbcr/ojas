@@ -73,6 +73,9 @@ pub(crate) enum Cmd {
     Free {
         id: u64,
     },
+    /// Read the device's working set and current allocation. Answered even
+    /// on a poisoned backend: it records nothing and commits nothing.
+    Memory,
     /// Test hook: encode a dispatch, then panic on the device thread, as a
     /// bug mid-op would.
     #[cfg(test)]
@@ -309,6 +312,7 @@ pub(crate) enum Reply {
     Bufs(Vec<NewBuf>),
     Bytes(Vec<u8>),
     Norm(f32),
+    Memory(crate::MetalMemory),
     Done,
 }
 

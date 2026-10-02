@@ -61,8 +61,14 @@ fn qk_norm_backward_matches_cpu_at_the_bench_shape() {
     let (q, k) = (rand(&s, 41, 1.0), rand(&s, 42, 1.0));
     let (qw, kw) = (rand(&[64], 43, 1.0), rand(&[64], 44, 1.0));
     let (gq, gk) = (rand(&s, 45, 1.0), rand(&s, 46, 1.0));
-    let d: Vec<Tensor> = [&q, &k, &qw, &kw, &gq, &gk].iter().map(|t| up(&m, t)).collect();
-    let want = ok("cpu", c.rms_qk_norm_backward(&q, &k, &qw, &kw, &gq, &gk, EPS));
+    let d: Vec<Tensor> = [&q, &k, &qw, &kw, &gq, &gk]
+        .iter()
+        .map(|t| up(&m, t))
+        .collect();
+    let want = ok(
+        "cpu",
+        c.rms_qk_norm_backward(&q, &k, &qw, &kw, &gq, &gk, EPS),
+    );
     let got = ok(
         "metal",
         m.rms_qk_norm_backward(&d[0], &d[1], &d[2], &d[3], &d[4], &d[5], EPS),
@@ -152,17 +158,30 @@ fn qk_norm_is_the_composition_and_refuses_in_its_order() {
         up(m, &host(&v, &s))
     };
     let m = metal();
-    let (q, k, gq, gk) = (make(&m, 1, false), make(&m, 2, false), make(&m, 3, false), make(&m, 4, false));
+    let (q, k, gq, gk) = (
+        make(&m, 1, false),
+        make(&m, 2, false),
+        make(&m, 3, false),
+        make(&m, 4, false),
+    );
     let (qw, kw) = (up(&m, &rand(&[dim], 5, 1.0)), up(&m, &rand(&[dim], 6, 1.0)));
 
     // Results: exactly the two single calls.
     let (fq, fk) = ok("qk fwd", m.rms_qk_norm_forward(&q, &k, &qw, &kw, EPS));
     assert_eq!(bits(&fq), bits(&ok("q", m.rms_norm_forward(&q, &qw, EPS))));
     assert_eq!(bits(&fk), bits(&ok("k", m.rms_norm_forward(&k, &kw, EPS))));
-    let (bq, bk, bqw, bkw) = ok("qk bwd", m.rms_qk_norm_backward(&q, &k, &qw, &kw, &gq, &gk, EPS));
+    let (bq, bk, bqw, bkw) = ok(
+        "qk bwd",
+        m.rms_qk_norm_backward(&q, &k, &qw, &kw, &gq, &gk, EPS),
+    );
     let (sq, sqw) = ok("q bwd", m.rms_norm_backward(&q, &qw, &gq, EPS));
     let (sk, skw) = ok("k bwd", m.rms_norm_backward(&k, &kw, &gk, EPS));
-    for (what, a, b) in [("gq", &bq, &sq), ("gk", &bk, &sk), ("gqw", &bqw, &sqw), ("gkw", &bkw, &skw)] {
+    for (what, a, b) in [
+        ("gq", &bq, &sq),
+        ("gk", &bk, &sk),
+        ("gqw", &bqw, &sqw),
+        ("gkw", &bkw, &skw),
+    ] {
         assert_eq!(bits(a), bits(b), "{what}");
     }
 
@@ -171,9 +190,11 @@ fn qk_norm_is_the_composition_and_refuses_in_its_order() {
     let nan_k = make(&m, 2, true);
     let bad_kw = up(&m, &rand(&[dim + 1], 7, 1.0));
     let host_k = rand(&s, 8, 1.0);
-    let fwd = |q: &Tensor, k: &Tensor, kw: &Tensor| m.rms_qk_norm_forward(q, k, &qw, kw, EPS).map(drop);
+    let fwd =
+        |q: &Tensor, k: &Tensor, kw: &Tensor| m.rms_qk_norm_forward(q, k, &qw, kw, EPS).map(drop);
     let bwd = |q: &Tensor, k: &Tensor, kw: &Tensor| {
-        m.rms_qk_norm_backward(q, k, &qw, kw, &gq, &gk, EPS).map(drop)
+        m.rms_qk_norm_backward(q, k, &qw, kw, &gq, &gk, EPS)
+            .map(drop)
     };
     // A refused call records nothing (docs/shape-contract.md): both pairs
     // are validated, then both placed, before q is recorded, so neither k's
@@ -190,14 +211,44 @@ fn qk_norm_is_the_composition_and_refuses_in_its_order() {
     let cases: Vec<(&str, Call<'_>, &str, Option<&str>)> = vec![
         ("fwd: q NaN", Box::new(|| fwd(&nan_q, &k, &kw)), "ok", FWD),
         ("fwd: k NaN", Box::new(|| fwd(&q, &nan_k, &kw)), "ok", FWD),
-        ("fwd: q NaN, k shape", Box::new(|| fwd(&nan_q, &k, &bad_kw)), "shape", None),
-        ("fwd: q NaN, k on host", Box::new(|| fwd(&nan_q, &host_k, &kw)), "placement", None),
-        ("fwd: q fine, k shape", Box::new(|| fwd(&q, &k, &bad_kw)), "shape", None),
+        (
+            "fwd: q NaN, k shape",
+            Box::new(|| fwd(&nan_q, &k, &bad_kw)),
+            "shape",
+            None,
+        ),
+        (
+            "fwd: q NaN, k on host",
+            Box::new(|| fwd(&nan_q, &host_k, &kw)),
+            "placement",
+            None,
+        ),
+        (
+            "fwd: q fine, k shape",
+            Box::new(|| fwd(&q, &k, &bad_kw)),
+            "shape",
+            None,
+        ),
         ("bwd: q NaN", Box::new(|| bwd(&nan_q, &k, &kw)), "ok", BWD),
         ("bwd: k NaN", Box::new(|| bwd(&q, &nan_k, &kw)), "ok", BWD),
-        ("bwd: q NaN, k shape", Box::new(|| bwd(&nan_q, &k, &bad_kw)), "shape", None),
-        ("bwd: q NaN, k on host", Box::new(|| bwd(&nan_q, &host_k, &kw)), "placement", None),
-        ("bwd: q fine, k on host", Box::new(|| bwd(&q, &host_k, &kw)), "placement", None),
+        (
+            "bwd: q NaN, k shape",
+            Box::new(|| bwd(&nan_q, &k, &bad_kw)),
+            "shape",
+            None,
+        ),
+        (
+            "bwd: q NaN, k on host",
+            Box::new(|| bwd(&nan_q, &host_k, &kw)),
+            "placement",
+            None,
+        ),
+        (
+            "bwd: q fine, k on host",
+            Box::new(|| bwd(&q, &host_k, &kw)),
+            "placement",
+            None,
+        ),
     ];
     for (what, call, want, want_pending) in cases {
         let r = call();
@@ -225,17 +276,25 @@ fn qk_norm_is_the_composition_and_refuses_in_its_order() {
         let (qw, kw) = (up(&b, &rand(&[dim], 5, 1.0)), up(&b, &rand(&[dim], 6, 1.0)));
         let f = b.rms_qk_norm_forward(&q, &k, &qw, &kw, EPS).map(drop);
         let f_pending = pending(&b);
-        let g = b.rms_qk_norm_backward(&q, &k, &qw, &kw, &gq, &gk, EPS).map(drop);
+        let g = b
+            .rms_qk_norm_backward(&q, &k, &qw, &kw, &gq, &gk, EPS)
+            .map(drop);
         let g_pending = pending(&b);
         (f, f_pending, g, g_pending)
     };
     // Room for q's output only: k is refused for budget at the call; q's
     // NaN, recorded first, is what the next sync names.
     let (f, fp, _, _) = with_cap(inputs + out_fwd, false);
-    assert!(matches!(f, Err(OjasError::CapacityExceeded { .. })), "{f:?}");
+    assert!(
+        matches!(f, Err(OjasError::CapacityExceeded { .. })),
+        "{f:?}"
+    );
     assert_eq!(fp, None);
     let (f, fp, _, _) = with_cap(inputs + out_fwd, true);
-    assert!(matches!(f, Err(OjasError::CapacityExceeded { .. })), "{f:?}");
+    assert!(
+        matches!(f, Err(OjasError::CapacityExceeded { .. })),
+        "{f:?}"
+    );
     assert_eq!(fp, FWD);
     // The composition's peak is both outputs and one side's scratch; a call
     // that held both sides' scratch at once would not fit.

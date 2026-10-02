@@ -70,7 +70,14 @@ fn sequence(m: &MetalBackend, seed: u64, iters: usize) -> Vec<Vec<u32>> {
         let ce = ok("ce bwd", m.cross_entropy_mean_backward(&n, &tgt, None));
         ok(
             "adamw",
-            m.adamw_step(&mut p, &gw, &mut m1, &mut m2, step, AdamWConfig::nanolab(1e-3, 0.1)),
+            m.adamw_step(
+                &mut p,
+                &gw,
+                &mut m1,
+                &mut m2,
+                step,
+                AdamWConfig::nanolab(1e-3, 0.1),
+            ),
         );
         for o in [&y, &gx, &gw, &n, &nx, &nw, &a, &aq, &ak, &av, &t, &ce] {
             out.push(bits(o));

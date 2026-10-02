@@ -17,6 +17,7 @@
 //! | 13 SAMPLE | `id: u64, {temperature, top_k?, top_p?, seed, max_new_tokens, stop?, prompt}` | `[u32]` |
 //! | 14 INSPECT | relative path | `tensors: u32` |
 //! | 15 SET_MEMORY_CEILING | `bytes: u64` | empty |
+//! | 16 SYSTEM_PROFILE | empty, `budget: u64`, or `budget: u64, flags: u32` | [`crate::profile`] record |
 //!
 //! `{...}` is a [`crate::wire::Fields`] option record. Each handler polls the
 //! job's cancel flag before it starts, and a model op polls it before every
@@ -63,8 +64,11 @@ pub const OP_INSPECT: u32 = 14;
 /// ([`session::set_memory_ceiling`]). Refused for 0 and while any model is
 /// open.
 pub const OP_SET_MEMORY_CEILING: u32 = 15;
+/// Read the host profile and the plan for a caller budget
+/// ([`crate::profile::profile_request`]). Reads only.
+pub const OP_SYSTEM_PROFILE: u32 = 16;
 
-const OPCODES: [u32; 14] = [
+const OPCODES: [u32; 15] = [
     OP_LOAD,
     OP_GENERATE,
     OP_FREE,
@@ -79,6 +83,7 @@ const OPCODES: [u32; 14] = [
     OP_SAMPLE,
     OP_INSPECT,
     OP_SET_MEMORY_CEILING,
+    OP_SYSTEM_PROFILE,
 ];
 
 pub fn install_engine() -> Result<(), String> {
@@ -144,6 +149,7 @@ fn dispatch_bytes(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
             load::inspect(path).map(|n| n.to_le_bytes().to_vec())
         }
         OP_SET_MEMORY_CEILING => op_set_memory_ceiling(input),
+        OP_SYSTEM_PROFILE => crate::profile::profile_request(input),
         other => Err(format!("unknown opcode {other}")),
     }
 }

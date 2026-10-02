@@ -84,7 +84,16 @@ fn adam_state(m: &MetalBackend, seed: u64) -> AdamState {
     AdamState {
         p: up(m, &rand(&shape, seed, 1.0)),
         m1: up(m, &rand(&shape, seed + 1, 0.1)),
-        m2: up(m, &host(&values(35, seed + 2, 0.01).iter().map(|v| v.abs()).collect::<Vec<_>>(), &shape)),
+        m2: up(
+            m,
+            &host(
+                &values(35, seed + 2, 0.01)
+                    .iter()
+                    .map(|v| v.abs())
+                    .collect::<Vec<_>>(),
+                &shape,
+            ),
+        ),
         g: up(m, &nan_at_last(35, seed + 3, &shape)),
     }
 }
@@ -93,7 +102,14 @@ fn adam_fault(m: &MetalBackend, s: &mut AdamState) -> [Vec<u32>; 3] {
     let before = [bits(&s.p), bits(&s.m1), bits(&s.m2)];
     ok(
         "adamw records",
-        m.adamw_step(&mut s.p, &s.g, &mut s.m1, &mut s.m2, 2, AdamWConfig::nanolab(1e-3, 0.1)),
+        m.adamw_step(
+            &mut s.p,
+            &s.g,
+            &mut s.m1,
+            &mut s.m2,
+            2,
+            AdamWConfig::nanolab(1e-3, 0.1),
+        ),
     );
     before
 }
@@ -115,7 +131,10 @@ fn every_sync_point_reports_a_pending_adamw_fault() {
     let mut s = adam_state(&m, 20);
     adam_fault(&m, &mut s);
     let r = m.download(&unrelated);
-    assert!(matches!(r, Err(OjasError::NonFinite { op: "adamw_step" })), "{r:?}");
+    assert!(
+        matches!(r, Err(OjasError::NonFinite { op: "adamw_step" })),
+        "{r:?}"
+    );
     assert_eq!(pending(&m), None);
     let clean = ok("clean download", m.download(&unrelated));
     assert_eq!(ok("vals", clean.to_f32_vec()), unrelated_vals);
@@ -123,11 +142,21 @@ fn every_sync_point_reports_a_pending_adamw_fault() {
     // clip_grad_norm: reports before it scales anything.
     let mut s = adam_state(&m, 30);
     adam_fault(&m, &mut s);
-    let mut grads = vec![up(&m, &host(&[3.0, 4.0], &[2])), up(&m, &host(&[12.0], &[1]))];
+    let mut grads = vec![
+        up(&m, &host(&[3.0, 4.0], &[2])),
+        up(&m, &host(&[12.0], &[1])),
+    ];
     let gbits: Vec<_> = grads.iter().map(bits).collect();
     let r = m.clip_grad_norm(&mut grads, 0.1);
-    assert!(matches!(r, Err(OjasError::NonFinite { op: "adamw_step" })), "{r:?}");
-    assert_eq!(grads.iter().map(bits).collect::<Vec<_>>(), gbits, "clip scaled");
+    assert!(
+        matches!(r, Err(OjasError::NonFinite { op: "adamw_step" })),
+        "{r:?}"
+    );
+    assert_eq!(
+        grads.iter().map(bits).collect::<Vec<_>>(),
+        gbits,
+        "clip scaled"
+    );
     assert_eq!(pending(&m), None);
     let norm = ok("clean clip", m.clip_grad_norm(&mut grads, 0.1));
     assert_eq!(norm, 13.0);
@@ -151,7 +180,10 @@ fn clip_reports_an_earlier_ops_nan_and_scales_nothing() {
     let mut grads = vec![up(&m, &host(&[30.0, 40.0], &[2]))];
     let before = bits(&grads[0]);
     let r = m.clip_grad_norm(&mut grads, 1.0);
-    assert!(matches!(r, Err(OjasError::NonFinite { op: "silu_forward" })), "{r:?}");
+    assert!(
+        matches!(r, Err(OjasError::NonFinite { op: "silu_forward" })),
+        "{r:?}"
+    );
     assert_eq!(bits(&grads[0]), before);
     assert_eq!(pending(&m), None);
     drop(produced);
@@ -191,7 +223,17 @@ fn in_place_ops_stay_all_or_nothing_under_batching() {
     assert_eq!([bits(&s.p), bits(&s.m1), bits(&s.m2)], before);
     // A later clean call on the same tensors applies.
     let g = up(&m, &rand(&[5, 7], 55, 1.0));
-    ok("clean adamw", m.adamw_step(&mut s.p, &g, &mut s.m1, &mut s.m2, 2, AdamWConfig::nanolab(1e-3, 0.1)));
+    ok(
+        "clean adamw",
+        m.adamw_step(
+            &mut s.p,
+            &g,
+            &mut s.m1,
+            &mut s.m2,
+            2,
+            AdamWConfig::nanolab(1e-3, 0.1),
+        ),
+    );
     assert_eq!(pending(&m), None);
     assert_ne!(bits(&s.p), before[0], "the clean step must apply");
 
@@ -205,7 +247,10 @@ fn in_place_ops_stay_all_or_nothing_under_batching() {
     ok("muon records", m.muon_ns5_step(&mut p, &bad, &mut mo, cfg));
     assert_eq!(pending(&m), Some("muon_ns5_step"));
     assert_eq!((bits(&p), bits(&mo)), before);
-    ok("clean muon", m.muon_ns5_step(&mut p, &up(&m, &rand(&shape, 63, 1.0)), &mut mo, cfg));
+    ok(
+        "clean muon",
+        m.muon_ns5_step(&mut p, &up(&m, &rand(&shape, 63, 1.0)), &mut mo, cfg),
+    );
     assert_eq!(pending(&m), None);
     assert_ne!(bits(&p), before.0);
 
@@ -219,7 +264,10 @@ fn in_place_ops_stay_all_or_nothing_under_batching() {
         let other = shared.then(|| acc.clone());
         let before = bits(&acc);
         let p0 = ptr(&acc);
-        ok("accumulate records", m.accumulate_grad(&mut acc, &up(&m, &nan_at_last(33, 71, &[3, 11]))));
+        ok(
+            "accumulate records",
+            m.accumulate_grad(&mut acc, &up(&m, &nan_at_last(33, 71, &[3, 11]))),
+        );
         assert_eq!(pending(&m), Some("accumulate_grad"), "shared {shared}");
         assert_eq!(bits(&acc), before, "shared {shared}: acc values changed");
         if shared {
@@ -247,7 +295,10 @@ fn in_place_ops_stay_all_or_nothing_under_batching() {
     ok("kv write records", m.kv_cache_write(&mut cache, &src, 1));
     assert_eq!(pending(&m), Some("kv_cache_write"));
     assert_eq!(bits(&cache), before);
-    ok("clean kv write", m.kv_cache_write(&mut cache, &up(&m, &rand(&[b, 2, hkv, d], 82, 1.0)), 1));
+    ok(
+        "clean kv write",
+        m.kv_cache_write(&mut cache, &up(&m, &rand(&[b, 2, hkv, d], 82, 1.0)), 1),
+    );
     assert_eq!(pending(&m), None);
     assert_ne!(bits(&cache), before);
 }
@@ -262,9 +313,23 @@ fn a_pending_fault_does_not_block_a_later_in_place_op() {
     let mut s = adam_state(&m, 90);
     let g = up(&m, &rand(&[5, 7], 95, 1.0));
     let before = bits(&s.p);
-    ok("clean adamw", m.adamw_step(&mut s.p, &g, &mut s.m1, &mut s.m2, 1, AdamWConfig::nanolab(1e-3, 0.0)));
+    ok(
+        "clean adamw",
+        m.adamw_step(
+            &mut s.p,
+            &g,
+            &mut s.m1,
+            &mut s.m2,
+            1,
+            AdamWConfig::nanolab(1e-3, 0.0),
+        ),
+    );
     assert_eq!(pending(&m), Some("silu_forward"));
-    assert_ne!(bits(&s.p), before, "the clean step must apply despite the earlier fault");
+    assert_ne!(
+        bits(&s.p),
+        before,
+        "the clean step must apply despite the earlier fault"
+    );
 }
 
 /// Host-decided refusals return at the call and record nothing. The
@@ -288,12 +353,18 @@ fn host_refusals_stay_immediate_and_leave_nothing_pending() {
     let small = ok("small", MetalBackend::new(Budget::new(64)));
     let x = up(&small, &host(&[1.0; 16], &[16]));
     let r = small.silu_forward(&x);
-    assert!(matches!(r, Err(OjasError::CapacityExceeded { .. })), "{r:?}");
+    assert!(
+        matches!(r, Err(OjasError::CapacityExceeded { .. })),
+        "{r:?}"
+    );
     assert_eq!(pending(&small), None, "capacity left a fault pending");
     let over = ojas_core::METAL_MAX_HEAD_DIM as usize + 16;
     let q = up(&m, &rand(&[1, 1, 2, over], 4, 1.0));
     let r = m.causal_sdpa_forward(&q, &q, &q);
-    assert!(matches!(r, Err(OjasError::UnsupportedHeadDim { .. })), "{r:?}");
+    assert!(
+        matches!(r, Err(OjasError::UnsupportedHeadDim { .. })),
+        "{r:?}"
+    );
     nothing("head dim");
     let (cap, hkv, d) = (4usize, 1usize, 8usize);
     let qd = up(&m, &rand(&[1, 1, 2, d], 5, 1.0));
@@ -311,10 +382,28 @@ fn host_refusals_stay_immediate_and_leave_nothing_pending() {
     let nan_table = up(&m, &nan_at_last(12, 10, &[4, 3]));
     for t in [&table, &nan_table] {
         let r = m.embedding_forward(t, &ids);
-        assert!(matches!(r, Err(OjasError::OutOfRange { op: "embedding_forward", .. })), "{r:?}");
+        assert!(
+            matches!(
+                r,
+                Err(OjasError::OutOfRange {
+                    op: "embedding_forward",
+                    ..
+                })
+            ),
+            "{r:?}"
+        );
         nothing("embedding id");
         let r = m.embedding_backward(t, &ids, &up(&m, &rand(&[2, 3], 11, 1.0)));
-        assert!(matches!(r, Err(OjasError::OutOfRange { op: "embedding_backward", .. })), "{r:?}");
+        assert!(
+            matches!(
+                r,
+                Err(OjasError::OutOfRange {
+                    op: "embedding_backward",
+                    ..
+                })
+            ),
+            "{r:?}"
+        );
         nothing("embedding_backward id");
     }
     let logits = up(&m, &rand(&[2, 4], 12, 1.0));
@@ -331,7 +420,10 @@ fn host_refusals_stay_immediate_and_leave_nothing_pending() {
         assert!(matches!(r, Err(OjasError::NonFinite { .. })), "{r:?}");
         nothing("ce all ignored");
     }
-    let (x, w) = (up(&m, &rand(&[2, 3], 14, 1.0)), up(&m, &rand(&[4, 3], 15, 1.0)));
+    let (x, w) = (
+        up(&m, &rand(&[2, 3], 14, 1.0)),
+        up(&m, &rand(&[4, 3], 15, 1.0)),
+    );
     let nan_w = up(&m, &nan_at_last(12, 16, &[4, 3]));
     let c = CeChunk { rows: 1, cols: 2 };
     for ww in [&w, &nan_w] {
@@ -368,7 +460,17 @@ fn clean_sequence(m: &MetalBackend, seed: u64, iters: usize) -> Vec<Vec<u32>> {
         let n = ok("rms", m.rms_norm_forward(&y, &rw, 1e-6));
         let ce = ok("ce", m.cross_entropy_mean_backward(&n, &tgt, None));
         let (_, gw) = ok("linear bwd", m.linear_backward(&x, &w, &y));
-        ok("adamw", m.adamw_step(&mut p, &gw, &mut m1, &mut m2, step, AdamWConfig::nanolab(1e-3, 0.1)));
+        ok(
+            "adamw",
+            m.adamw_step(
+                &mut p,
+                &gw,
+                &mut m1,
+                &mut m2,
+                step,
+                AdamWConfig::nanolab(1e-3, 0.1),
+            ),
+        );
         outs.push(y);
         outs.push(n);
         outs.push(ce);
@@ -383,7 +485,9 @@ fn concurrent_threads_share_one_pending_fault_reported_exactly_once() {
     const THREADS: u64 = 6;
     const ITERS: usize = 5;
     let shared = Arc::new(metal());
-    let want: Vec<_> = (0..THREADS).map(|i| clean_sequence(&shared, 100 * (i + 1), ITERS)).collect();
+    let want: Vec<_> = (0..THREADS)
+        .map(|i| clean_sequence(&shared, 100 * (i + 1), ITERS))
+        .collect();
     assert_eq!(pending(&shared), None);
     let other = metal();
     let start = Arc::new(Barrier::new(THREADS as usize + 1));
@@ -410,7 +514,10 @@ fn concurrent_threads_share_one_pending_fault_reported_exactly_once() {
     for (i, h) in handles.into_iter().enumerate() {
         let (got, reported) = h.join().unwrap_or_else(|_| panic!("thread {i} panicked"));
         reports += reported;
-        assert!(got == want[i], "thread {i}: bits differ from the serial run");
+        assert!(
+            got == want[i],
+            "thread {i}: bits differ from the serial run"
+        );
     }
     if pending(&shared) == Some("silu_forward") {
         reports += 1;
@@ -433,13 +540,27 @@ fn recorded_ops_wait_only_at_sync_points() {
     ok("sync", m.sync());
     assert_eq!(m.waits() - w0, 1, "sync waits once");
     ok("sync", m.sync());
-    assert_eq!(m.waits() - w0, 1, "a sync with nothing recorded does not wait");
+    assert_eq!(
+        m.waits() - w0,
+        1,
+        "a sync with nothing recorded does not wait"
+    );
     // 170 optimizer steps, as adamw_full: no wait until the sync.
     let mut states: Vec<AdamState> = (0..170).map(|i| adam_state(&m, 1000 + i)).collect();
     let g = up(&m, &rand(&[5, 7], 7, 1.0));
     let w1 = m.waits();
     for s in &mut states {
-        ok("adamw", m.adamw_step(&mut s.p, &g, &mut s.m1, &mut s.m2, 1, AdamWConfig::nanolab(1e-3, 0.1)));
+        ok(
+            "adamw",
+            m.adamw_step(
+                &mut s.p,
+                &g,
+                &mut s.m1,
+                &mut s.m2,
+                1,
+                AdamWConfig::nanolab(1e-3, 0.1),
+            ),
+        );
     }
     assert_eq!(m.waits() - w1, 0, "170 optimizer steps must not wait");
     ok("sync", m.sync());

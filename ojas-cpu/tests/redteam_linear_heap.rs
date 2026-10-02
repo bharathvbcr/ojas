@@ -10,9 +10,9 @@
 //! Fixed gap, asserted by the strict test: `linear_forward` used to drop its
 //! `room_for` hold when it returned, then `alloc_f32` (backend.rs) copied the
 //! still-live output `Vec` into a new tensor, so for a moment the output was
-//! on the heap twice while the budget held it once. The output's charge now
-//! travels with it (validate.rs `F32Out`) and is released by `alloc_out`
-//! only after the tensor exists and the buffer is freed. The looser gate
+//! on the heap twice while the budget held it once. Since 2026-10-02 the
+//! output is charged once and written straight into its tensor
+//! (validate.rs `fill_out`), so there is no second copy. The looser gate
 //! below still allows one forward output of slack and is kept as a floor.
 
 mod common;
@@ -204,7 +204,11 @@ fn heap_peak_stays_within_the_charged_peak_plus_the_known_output_double_hold() {
             ));
         }
     }
-    assert!(failures.is_empty(), "uncharged heap growth:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "uncharged heap growth:\n{}",
+        failures.join("\n")
+    );
 }
 
 /// Heap peak <= charged peak + slack. Failed on forward shapes whose output
@@ -225,5 +229,9 @@ fn heap_peak_stays_within_the_charged_peak() {
             ));
         }
     }
-    assert!(failures.is_empty(), "uncharged heap growth:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "uncharged heap growth:\n{}",
+        failures.join("\n")
+    );
 }

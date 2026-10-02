@@ -1,0 +1,30 @@
+12:34  up  3:42, 1 user, load averages: 5.59 5.39 4.81
+suite exit=0
+passed 166, failed 0, ignored 0
+mutant kernel-in killed (exit 101)
+test the_gate_backward_reports_non_finite_operands_and_results ... FAILED
+mutant kernel-out killed (exit 101)
+test the_gate_backward_reports_non_finite_operands_and_results ... FAILED
+mutant dbias-out killed (exit 101)
+test gpu::tests::gate_dbias_flags_a_sum_that_is_not_finite ... FAILED
+test gpu::tests::gate_backward_refuses_a_gradient_that_overflows ... FAILED
+mutant gpu-status-ignored killed (exit 101)
+test gpu::tests::gate_backward_refuses_a_gradient_that_overflows ... FAILED
+mutant gpu-d-input-unchecked killed (exit 101)
+test gpu::tests::gate_backward_refuses_a_gradient_that_overflows ... FAILED
+files restored
+clippy exit=0
+build exit=0
+12:35  up  3:43, 1 user, load averages: 5.42 5.32 4.82
+== old (min µs per round: checks | whole backward | GPU at start)
+round 1: checks 232.8  | gate_bwd 143.8  | whole 963.4  | 49%,
+round 2: checks 230.5  | gate_bwd 140.2  | whole 957.0  | 0%,
+round 3: checks 231.8  | gate_bwd 131.3  | whole 957.8  | 0%,
+round 4: checks 241.6  | gate_bwd 142.1  | whole 965.1  | 0%,
+== new (min µs per round: checks | whole backward | GPU at start)
+round 1: checks 77.3  | gate_bwd 139.1  | whole 772.6  | 0%,
+round 2: checks 75.8  | gate_bwd 147.6  | whole 764.4  | 0%,
+round 3: checks 67.5  | gate_bwd 150.6  | whole 769.5  | 0%,
+round 4: checks 73.5  | gate_bwd 138.3  | whole 774.8  | 0%,
+
+[exited with code 0]

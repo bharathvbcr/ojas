@@ -29,8 +29,10 @@ pub struct HostMemory {
     /// kernel's unlimited sentinel (`>= 1 << 62`), are [`MemoryReport::Unknown`]
     /// because they are not a finite cap.
     pub cgroup_limit_bytes: MemoryReport,
-    /// `memory.current` or `memory.usage_in_bytes` for the hierarchy whose
-    /// limit was used, or `Unknown` when that file was missing.
+    /// The working set of the cgroup whose limit was used: `memory.current`
+    /// (v1 `memory.usage_in_bytes`) less `inactive_file` (v1
+    /// `total_inactive_file`) from `memory.stat`, or the raw figure when
+    /// `memory.stat` is unreadable. `Unknown` when the usage file was missing.
     pub cgroup_current_bytes: MemoryReport,
     /// [`std::thread::available_parallelism`], or `Unknown` if that call fails.
     pub cpu_count: MemoryReport,
@@ -50,21 +52,27 @@ impl HostMemory {
 
 /// Read RAM, cgroup limits, and the CPU count. Each field fails on its own.
 pub fn probe_host() -> HostMemory {
+    probe_host_at(Path::new("/"))
+}
+
+/// [`probe_host`] with `/proc` and `/sys` read under `root`, so the Linux
+/// paths can be driven from a fixture tree. macOS sysctls ignore `root`.
+pub(crate) fn probe_host_at(root: &Path) -> HostMemory {
     let mut host = HostMemory::all_unknown();
     #[cfg(target_os = "macos")]
     {
         host.total_bytes = macos::total_bytes();
         host.available_bytes = macos::available_bytes();
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     {
-        if let Some(text) = read_text("/proc/meminfo") {
+        if let Some(text) = read_text(root.join("proc/meminfo")) {
             let (total, available) = parse_meminfo(&text);
             host.total_bytes = total;
             host.available_bytes = available;
         }
     }
-    let (limit, current) = probe_cgroup();
+    let (limit, current) = probe_cgroup(root);
     host.cgroup_limit_bytes = limit;
     host.cgroup_current_bytes = current;
     host.cpu_count = match std::thread::available_parallelism() {
@@ -74,32 +82,115 @@ pub fn probe_host() -> HostMemory {
     host
 }
 
-fn probe_cgroup() -> (MemoryReport, MemoryReport) {
-    let Some(text) = read_text("/proc/self/cgroup") else {
+fn probe_cgroup(root: &Path) -> (MemoryReport, MemoryReport) {
+    let Some(text) = read_text(root.join("proc/self/cgroup")) else {
         return (MemoryReport::Unknown, MemoryReport::Unknown);
     };
     let found = parse_cgroup_self(&text);
+    let v2_mount = root.join("sys/fs/cgroup");
+    let v1_mount = root.join("sys/fs/cgroup/memory");
     let mut best: Option<(u64, MemoryReport)> = None;
+    // A cgroup is bounded by every ancestor's limit too, so a tighter
+    // parent (a pod around a container) is read, not only the leaf.
     if let Some(path) = found.v2.as_deref() {
-        let limit = read_cgroup_counter("/sys/fs/cgroup", path, "memory.max", true);
-        let current = read_cgroup_counter("/sys/fs/cgroup", path, "memory.current", false);
-        consider(&mut best, limit, current);
+        for dir in cgroup_ancestors(path) {
+            let limit = read_cgroup_counter(&v2_mount, dir, "memory.max", true);
+            let current = read_cgroup_counter(&v2_mount, dir, "memory.current", false);
+            let current = working_set(&v2_mount, dir, current, "inactive_file");
+            consider(&mut best, limit, current);
+        }
     }
     if let Some(path) = found.v1_memory.as_deref() {
-        let limit =
-            read_cgroup_counter("/sys/fs/cgroup/memory", path, "memory.limit_in_bytes", true);
-        let current = read_cgroup_counter(
-            "/sys/fs/cgroup/memory",
-            path,
-            "memory.usage_in_bytes",
-            false,
-        );
-        consider(&mut best, limit, current);
+        for dir in cgroup_ancestors(path) {
+            let limit = read_cgroup_counter(&v1_mount, dir, "memory.limit_in_bytes", true);
+            let current = read_cgroup_counter(&v1_mount, dir, "memory.usage_in_bytes", false);
+            let current = working_set(&v1_mount, dir, current, "total_inactive_file");
+            consider(&mut best, limit, current);
+        }
     }
     match best {
         Some((limit, current)) => (MemoryReport::Known(limit), current),
         None => (MemoryReport::Unknown, MemoryReport::Unknown),
     }
+}
+
+/// `current` less the cgroup's inactive file pages (`memory.stat` `key`):
+/// the working set, as the kubelet computes it. `memory.current` counts page
+/// cache, so a process that has just read a large model sits near its limit
+/// though the kernel reclaims those pages before it OOM-kills anything.
+///
+/// A missing or unreadable `memory.stat`, or a missing key, leaves `current`
+/// as it was: the raw figure is never smaller than the working set, so the
+/// fallback only ever under-states the room. So does a `memory.stat` that
+/// claims more inactive pages than the usage file holds: the two disagree,
+/// and a working set of 0 (the whole limit as room) is the one answer that
+/// could over-state it, so the raw figure is kept.
+fn working_set(mount: &Path, dir: &str, current: MemoryReport, key: &str) -> MemoryReport {
+    let MemoryReport::Known(current) = current else {
+        return MemoryReport::Unknown;
+    };
+    let inactive = cgroup_file(mount, dir, "memory.stat")
+        .and_then(read_text)
+        .and_then(|text| parse_stat_key(&text, key));
+    MemoryReport::Known(match inactive {
+        Some(inactive) if inactive <= current => current - inactive,
+        Some(_) | None => current,
+    })
+}
+
+/// The value of `key` in a `memory.stat` file (`key value` per line).
+/// A duplicate key or a non-numeric value is `None`.
+pub(crate) fn parse_stat_key(text: &str, key: &str) -> Option<u64> {
+    let mut found = None;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some(key) {
+            continue;
+        }
+        let value = parts.next()?.parse::<u64>().ok()?;
+        if parts.next().is_some() || found.is_some() {
+            return None;
+        }
+        found = Some(value);
+    }
+    found
+}
+
+/// Deepest cgroup nesting walked. Deeper paths keep their first levels
+/// (the mount root and its nearest children) and the leaf.
+pub(crate) const CGROUP_DEPTH_MAX: usize = 64;
+
+/// `path` and each ancestor up to the mount root (`""`), leaf first.
+///
+/// `/a/b` gives `/a/b`, `/a`, `""`. Empty components (`//`) are skipped.
+/// Beyond [`CGROUP_DEPTH_MAX`] levels the middle is not walked; the leaf and
+/// the levels nearest the root still are.
+pub(crate) fn cgroup_ancestors(path: &str) -> Vec<&str> {
+    let mut ends: Vec<usize> = Vec::new();
+    let mut seen_component = false;
+    for (i, ch) in path.char_indices() {
+        if ch == '/' {
+            if seen_component {
+                ends.push(i);
+            }
+            seen_component = false;
+        } else {
+            seen_component = true;
+        }
+    }
+    if seen_component {
+        ends.push(path.len());
+    }
+    let mut out: Vec<&str> = Vec::with_capacity(ends.len().min(CGROUP_DEPTH_MAX) + 1);
+    if let Some(&leaf) = ends.last() {
+        out.push(&path[..leaf]);
+    }
+    let keep = ends.len().saturating_sub(1).min(CGROUP_DEPTH_MAX - 1);
+    for &end in ends[..keep].iter().rev() {
+        out.push(&path[..end]);
+    }
+    out.push("");
+    out
 }
 
 /// Keep the hierarchy whose usable bytes are fewer.
@@ -131,7 +222,7 @@ fn cgroup_room(limit: u64, current: MemoryReport) -> u64 {
     }
 }
 
-fn read_cgroup_counter(mount: &str, cgroup: &str, file: &str, is_limit: bool) -> MemoryReport {
+fn read_cgroup_counter(mount: &Path, cgroup: &str, file: &str, is_limit: bool) -> MemoryReport {
     let Some(path) = cgroup_file(mount, cgroup, file) else {
         return MemoryReport::Unknown;
     };
@@ -141,14 +232,30 @@ fn read_cgroup_counter(mount: &str, cgroup: &str, file: &str, is_limit: bool) ->
     parse_cgroup_counter(text.trim(), is_limit)
 }
 
-fn read_text(path: impl AsRef<Path>) -> Option<String> {
-    fs::read_to_string(path).ok()
+/// Most bytes read from one `/proc` or `/sys` file. Every file the probes
+/// read is a few KiB at most; a larger one is not a kernel file and is
+/// unknown rather than read whole.
+pub(crate) const PROBE_FILE_MAX: u64 = 64 * 1024;
+
+/// A small UTF-8 file, or `None` when it is missing, unreadable, not UTF-8,
+/// or longer than [`PROBE_FILE_MAX`].
+pub(crate) fn read_text(path: impl AsRef<Path>) -> Option<String> {
+    use std::io::Read;
+    let file = fs::File::open(path).ok()?;
+    let mut text = String::new();
+    file.take(PROBE_FILE_MAX + 1)
+        .read_to_string(&mut text)
+        .ok()?;
+    if text.len() as u64 > PROBE_FILE_MAX {
+        return None;
+    }
+    Some(text)
 }
 
 /// `MemTotal` and `MemAvailable`, in bytes. Missing keys stay unknown.
 ///
-/// Compiled for the Linux probe and for tests. macOS reads RAM through sysctl.
-#[cfg(any(test, target_os = "linux"))]
+/// Compiled off macOS and for tests. macOS reads RAM through sysctl.
+#[cfg(any(test, not(target_os = "macos")))]
 pub(crate) fn parse_meminfo(text: &str) -> (MemoryReport, MemoryReport) {
     let mut total = MemoryReport::Unknown;
     let mut available = MemoryReport::Unknown;
@@ -166,7 +273,7 @@ pub(crate) fn parse_meminfo(text: &str) -> (MemoryReport, MemoryReport) {
     (total, available)
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(any(test, not(target_os = "macos")))]
 fn parse_meminfo_value(rest: &str) -> MemoryReport {
     let mut parts = rest.split_whitespace();
     let Some(number) = parts.next() else {
@@ -234,7 +341,7 @@ pub(crate) fn parse_cgroup_counter(token: &str, is_limit: bool) -> MemoryReport 
     MemoryReport::Known(n)
 }
 
-fn cgroup_file(mount: &str, cgroup: &str, file: &str) -> Option<std::path::PathBuf> {
+fn cgroup_file(mount: &Path, cgroup: &str, file: &str) -> Option<std::path::PathBuf> {
     if cgroup.contains("..") || cgroup.contains('\0') {
         return None;
     }
@@ -245,6 +352,8 @@ fn cgroup_file(mount: &str, cgroup: &str, file: &str) -> Option<std::path::PathB
 #[cfg(target_os = "macos")]
 mod macos {
     use super::MemoryReport;
+
+    use crate::sysctl::u64_by_name as sysctl_u64;
 
     pub(super) fn total_bytes() -> MemoryReport {
         match sysctl_u64(b"hw.memsize\0") {
@@ -270,26 +379,6 @@ mod macos {
             Some(bytes) => MemoryReport::Known(bytes),
             None => MemoryReport::Unknown,
         }
-    }
-
-    fn sysctl_u64(name: &[u8]) -> Option<u64> {
-        let mut buf = [0u8; 8];
-        let mut len = buf.len();
-        let rc = unsafe {
-            libc::sysctlbyname(
-                name.as_ptr() as *const libc::c_char,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                &mut len,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        if rc != 0 || len == 0 || len > buf.len() {
-            return None;
-        }
-        let mut tmp = [0u8; 8];
-        tmp[..len].copy_from_slice(&buf[..len]);
-        Some(u64::from_le_bytes(tmp))
     }
 
     fn vm_free_and_inactive() -> Option<(u32, u32)> {
@@ -372,6 +461,169 @@ mod tests {
             MemoryReport::Unknown
         );
         assert_eq!(parse_cgroup_counter("12", false), MemoryReport::Known(12));
+    }
+
+    #[test]
+    fn cgroup_ancestors_walk_leaf_to_root_and_stay_bounded() {
+        assert_eq!(cgroup_ancestors("/"), vec![""]);
+        assert_eq!(cgroup_ancestors(""), vec![""]);
+        assert_eq!(cgroup_ancestors("/a/b"), vec!["/a/b", "/a", ""]);
+        assert_eq!(cgroup_ancestors("a//b/"), vec!["a//b", "a", ""]);
+        let deep = "/x".repeat(10 * CGROUP_DEPTH_MAX);
+        let walk = cgroup_ancestors(&deep);
+        assert!(walk.len() <= CGROUP_DEPTH_MAX + 1, "{}", walk.len());
+        assert_eq!(walk[0], deep.as_str(), "the leaf is always read");
+        assert_eq!(walk.last(), Some(&""), "the mount root is always read");
+        assert_eq!(
+            walk[walk.len() - 2],
+            "/x",
+            "levels nearest the root are kept"
+        );
+    }
+
+    #[test]
+    fn a_tighter_parent_cgroup_limit_is_not_missed() {
+        use crate::testutil::Fixture;
+        let f = Fixture::new("cg-parent");
+        f.put("proc/self/cgroup", "0::/pod/ctr\n");
+        f.put("sys/fs/cgroup/pod/ctr/memory.max", "max\n");
+        f.put("sys/fs/cgroup/pod/ctr/memory.current", "100\n");
+        f.put("sys/fs/cgroup/pod/memory.max", "4096\n");
+        f.put("sys/fs/cgroup/pod/memory.current", "1000\n");
+        assert_eq!(
+            probe_cgroup(&f.0),
+            (MemoryReport::Known(4096), MemoryReport::Known(1000)),
+            "the leaf's `max` used to hide the pod limit"
+        );
+        // A tighter leaf wins over a looser parent.
+        f.put("sys/fs/cgroup/pod/ctr/memory.max", "2048\n");
+        assert_eq!(
+            probe_cgroup(&f.0),
+            (MemoryReport::Known(2048), MemoryReport::Known(100))
+        );
+        // The room, not the raw limit, decides: the parent has 96 bytes left.
+        f.put("sys/fs/cgroup/pod/memory.current", "4000\n");
+        assert_eq!(
+            probe_cgroup(&f.0),
+            (MemoryReport::Known(4096), MemoryReport::Known(4000))
+        );
+    }
+
+    /// A container that has just read a 3 GiB model sits at 3.9 of its
+    /// 4 GiB. Before the working-set fix its room was 0.1 GiB; the page cache
+    /// is reclaimable, so the room is 3.1 GiB.
+    #[test]
+    fn page_cache_does_not_count_against_the_cgroup_room() {
+        use crate::testutil::Fixture;
+        const GIB: u64 = 1 << 30;
+        let f = Fixture::new("cg-pagecache");
+        f.put("proc/self/cgroup", "0::/ctr\n");
+        f.put("sys/fs/cgroup/ctr/memory.max", &format!("{}\n", 4 * GIB));
+        f.put(
+            "sys/fs/cgroup/ctr/memory.current",
+            &format!("{}\n", 4 * GIB - GIB / 10),
+        );
+        f.put(
+            "sys/fs/cgroup/ctr/memory.stat",
+            &format!(
+                "anon 100\nfile {}\ninactive_file {}\nactive_file 5\n",
+                3 * GIB,
+                3 * GIB
+            ),
+        );
+        let working = 4 * GIB - GIB / 10 - 3 * GIB;
+        assert_eq!(
+            probe_cgroup(&f.0),
+            (MemoryReport::Known(4 * GIB), MemoryReport::Known(working))
+        );
+        // v1 subtracts the hierarchical `total_inactive_file`, not the
+        // cgroup-local `inactive_file`.
+        let f = Fixture::new("cg-pagecache-v1");
+        f.put("proc/self/cgroup", "4:memory:/job\n");
+        f.put("sys/fs/cgroup/memory/job/memory.limit_in_bytes", "1000\n");
+        f.put("sys/fs/cgroup/memory/job/memory.usage_in_bytes", "900\n");
+        f.put(
+            "sys/fs/cgroup/memory/job/memory.stat",
+            "inactive_file 100\ntotal_inactive_file 700\n",
+        );
+        assert_eq!(probe_cgroup(&f.0).1, MemoryReport::Known(200));
+    }
+
+    #[test]
+    fn an_unreadable_memory_stat_keeps_the_raw_usage() {
+        use crate::testutil::Fixture;
+        let f = Fixture::new("cg-stat-holes");
+        f.put("proc/self/cgroup", "0::/c\n");
+        f.put("sys/fs/cgroup/c/memory.max", "1000\n");
+        f.put("sys/fs/cgroup/c/memory.current", "900\n");
+        assert_eq!(probe_cgroup(&f.0).1, MemoryReport::Known(900), "no stat");
+        for (stat, want) in [
+            ("anon 5\n", 900),                             // no key
+            ("inactive_file x\n", 900),                    // not a number
+            ("inactive_file 10\ninactive_file 20\n", 900), // duplicate
+            ("inactive_file 10 11\n", 900),                // trailing token
+            ("total_inactive_file 300\n", 900),            // v1 key on v2
+            ("inactive_file 5000\n", 900),                 // more than usage: contradictory
+            ("inactive_file 900\n", 0),                    // exactly the usage
+            ("inactive_file 300\n", 600),
+        ] {
+            f.put("sys/fs/cgroup/c/memory.stat", stat);
+            assert_eq!(probe_cgroup(&f.0).1, MemoryReport::Known(want), "{stat:?}");
+        }
+        assert_eq!(parse_stat_key("", "inactive_file"), None);
+    }
+
+    #[test]
+    fn v1_hierarchy_ancestors_and_sentinels() {
+        use crate::testutil::Fixture;
+        let f = Fixture::new("cg-v1");
+        f.put("proc/self/cgroup", "7:memory:/docker/abc\n");
+        f.put(
+            "sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes",
+            "9223372036854771712\n",
+        );
+        f.put(
+            "sys/fs/cgroup/memory/docker/memory.limit_in_bytes",
+            "8192\n",
+        );
+        assert_eq!(probe_cgroup(&f.0).0, MemoryReport::Known(8192));
+    }
+
+    #[test]
+    fn hostile_cgroup_inputs_stay_unknown() {
+        use crate::testutil::Fixture;
+        let f = Fixture::new("cg-hostile");
+        assert_eq!(
+            probe_cgroup(&f.0),
+            (MemoryReport::Unknown, MemoryReport::Unknown),
+            "no /proc/self/cgroup"
+        );
+        f.put("proc/self/cgroup", "0::/../../etc\n");
+        f.put("sys/fs/cgroup/memory.max", "1\n");
+        assert_eq!(probe_cgroup(&f.0).0, MemoryReport::Unknown);
+        // An oversized cgroup file is not read.
+        f.put("proc/self/cgroup", &"0::/a\n".repeat(20_000));
+        assert_eq!(probe_cgroup(&f.0).0, MemoryReport::Unknown);
+        f.put("proc/self/cgroup", "0::/a\n");
+        for bad in ["", "-5", "1e9", "4096 4096", "\u{0}"] {
+            f.put("sys/fs/cgroup/a/memory.max", bad);
+            f.put("sys/fs/cgroup/memory.max", "max");
+            assert_eq!(probe_cgroup(&f.0).0, MemoryReport::Unknown, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn read_text_refuses_past_the_cap_and_accepts_at_it() {
+        use crate::testutil::Fixture;
+        let f = Fixture::new("readcap");
+        let at = "a".repeat(PROBE_FILE_MAX as usize);
+        f.put("at", &at);
+        f.put("past", &format!("{at}a"));
+        assert_eq!(read_text(f.0.join("at")).map(|t| t.len()), Some(at.len()));
+        assert_eq!(read_text(f.0.join("past")), None);
+        assert_eq!(read_text(f.0.join("missing")), None);
+        std::fs::write(f.0.join("binary"), [0xff, 0xfe, 0x00]).unwrap();
+        assert_eq!(read_text(f.0.join("binary")), None);
     }
 
     #[test]

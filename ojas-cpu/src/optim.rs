@@ -34,13 +34,13 @@ use ojas_core::{
     MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use crate::gemm::{gemm, scratch as gemm_scratch, Mat};
 use crate::linalg::transpose;
 use crate::pool::scoped;
 use crate::pool::Exec;
-use crate::validate::{all_finite, f32_values, nonfinite, nonfinite_first, product, shape, Shared};
+use crate::validate::{all_finite, f32_values, nonfinite, nonfinite_first, product, shape};
 
 /// Values per task of the in-place element passes ([`scale_in_place`],
 /// [`adamw_in_place`]). Each value is computed alone, so the cut changes no
@@ -568,34 +568,21 @@ fn adam_passes<C: AdamMath>(
     Ok(())
 }
 
-/// `f(a[i], b[i])` for every `i`, in element chunks on the pool.
-/// Values a pool task reads: an intermediate the step owns, or an operand
-/// tensor read in place ([`Shared`]).
-pub(crate) trait Values: Send + Sync + 'static {
-    fn values(&self) -> Result<&[f32], OjasError>;
-}
-
-impl Values for Arc<Vec<f32>> {
-    fn values(&self) -> Result<&[f32], OjasError> {
-        Ok(self)
-    }
-}
-
-impl Values for Shared {
-    fn values(&self) -> Result<&[f32], OjasError> {
-        Shared::values(self)
-    }
-}
-
-fn zip_map<A: Values, B: Values, F>(exec: Exec<'_>, a: A, b: B, f: F) -> Result<Vec<f32>, OjasError>
+/// `f(a[i], b[i])` for every `i`, in row chunks on scoped threads, into one
+/// new vector.
+fn zip_map<F>(exec: Exec<'_>, a: &[f32], b: &[f32], f: F) -> Result<Vec<f32>, OjasError>
 where
-    F: Fn(f32, f32) -> f32 + Send + Sync + 'static,
+    F: Fn(f32, f32) -> f32 + Sync,
 {
-    let len = a.values()?.len().min(b.values()?.len());
-    exec.rows(len, 1, move |range| {
-        let (a, b) = (a.values()?, b.values()?);
-        Ok(range.map(|i| f(a[i], b[i])).collect())
-    })
+    let len = a.len().min(b.len());
+    let mut out = vec![0.0f32; len];
+    scoped::rows_into(exec, &mut out, len, 1, |range, dst| {
+        for ((slot, &x), &y) in dst.iter_mut().zip(&a[range.clone()]).zip(&b[range]) {
+            *slot = f(x, y);
+        }
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 fn non_negative(op: &'static str, scalars: &[(&str, f64)]) -> Result<(), OjasError> {
@@ -627,11 +614,11 @@ pub(crate) fn check_muon(config: MuonNs5Config) -> Result<(), OjasError> {
     )
 }
 
-pub(crate) fn muon_ns5<P: Values, G: Values + Clone, M: Values>(
+pub(crate) fn muon_ns5(
     exec: Exec<'_>,
-    param: P,
-    grad: G,
-    momentum: M,
+    param: &[f32],
+    grad: &[f32],
+    momentum: &[f32],
     rows: usize,
     cols: usize,
     config: MuonNs5Config,
@@ -644,23 +631,17 @@ pub(crate) fn muon_ns5<P: Values, G: Values + Clone, M: Values>(
             op: OP,
             detail: "muon matrix length overflows".to_string(),
         })?;
-    let lens = [
-        param.values()?.len(),
-        grad.values()?.len(),
-        momentum.values()?.len(),
-    ];
+    let lens = [param.len(), grad.len(), momentum.len()];
     if lens != [len; 3] {
         return Err(shape(OP, "muon tensors differ in length"));
     }
     let mom = config.momentum as f32;
-    let buf = Arc::new(zip_map(exec, momentum, grad.clone(), move |m, g| {
-        mom * m + g
-    })?);
+    let buf = zip_map(exec, momentum, grad, |m, g| mom * m + g)?;
     if !all_finite(&buf) {
         return Err(nonfinite(OP));
     }
     let update: Vec<f32> = if config.nesterov {
-        zip_map(exec, grad, Arc::clone(&buf), move |g, b| g + mom * b)?
+        zip_map(exec, grad, &buf, |g, b| g + mom * b)?
     } else {
         buf.to_vec()
     };
@@ -676,18 +657,14 @@ pub(crate) fn muon_ns5<P: Values, G: Values + Clone, M: Values>(
         None
     } else if config.weight_decay != 0.0 {
         let decay = (1.0 - config.lr * config.weight_decay) as f32;
-        Some(zip_map(exec, param, Arc::new(ortho), move |p, o| {
-            p * decay + alpha * o
-        })?)
+        Some(zip_map(exec, param, &ortho, |p, o| p * decay + alpha * o)?)
     } else {
-        Some(zip_map(exec, param, Arc::new(ortho), move |p, o| {
-            p + alpha * o
-        })?)
+        Some(zip_map(exec, param, &ortho, |p, o| p + alpha * o)?)
     };
+    drop(ortho);
     if new_p.as_deref().is_some_and(|p| !all_finite(p)) {
         return Err(nonfinite(OP));
     }
-    let buf = Arc::try_unwrap(buf).unwrap_or_else(|shared| shared.to_vec());
     Ok((new_p, buf))
 }
 
@@ -723,18 +700,18 @@ fn newton_schulz(
     let b_coef = MUON_NS5_B as f32;
     let c_coef = MUON_NS5_C as f32;
     for _ in 0..5 {
-        let xs = Arc::new(x);
-        let xm = Mat::row_major(&xs, r, c);
-        let am = Arc::new(gemm(OP, exec, &xm, &xm.t())?);
+        let xm = Mat::row_major(&x, r, c);
+        let am = gemm(OP, exec, &xm, &xm.t())?;
         let a_mat = Mat::row_major(&am, r, r);
         let a2 = gemm(OP, exec, &a_mat, &a_mat)?;
-        let b_mat = zip_map(exec, Arc::clone(&am), Arc::new(a2), move |am, a2v| {
-            b_coef * am + c_coef * a2v
-        })?;
+        let b_mat = zip_map(exec, &am, &a2, |am, a2v| b_coef * am + c_coef * a2v)?;
+        // Each intermediate is freed as soon as its last reader is done:
+        // `muon_scratch` counts them that way.
+        drop(a2);
         let bx = gemm(OP, exec, &Mat::row_major(&b_mat, r, r), &xm)?;
-        let next = zip_map(exec, Arc::clone(&xs), Arc::new(bx), move |xv, bxv| {
-            a * xv + bxv
-        })?;
+        drop(b_mat);
+        let next = zip_map(exec, &x, &bx, |xv, bxv| a * xv + bxv)?;
+        drop(bx);
         if !all_finite(&next) {
             return Err(nonfinite(OP));
         }

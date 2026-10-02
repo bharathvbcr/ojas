@@ -18,6 +18,7 @@ mod generate;
 mod load;
 mod model;
 mod owner;
+mod profile;
 mod session;
 mod tokenize;
 mod train;
@@ -25,8 +26,8 @@ mod wire;
 
 pub use engine::{
     dispatch, install_engine, OP_FREE, OP_GENERATE, OP_INSPECT, OP_LOAD, OP_NEW, OP_PANIC,
-    OP_RESUME, OP_SAMPLE, OP_SAVE, OP_SET_MEMORY_CEILING, OP_STEP_RETIRED, OP_TOKENIZE,
-    OP_TOKENIZER, OP_TRAIN_OPEN, OP_TRAIN_STEP,
+    OP_RESUME, OP_SAMPLE, OP_SAVE, OP_SET_MEMORY_CEILING, OP_STEP_RETIRED, OP_SYSTEM_PROFILE,
+    OP_TOKENIZE, OP_TOKENIZER, OP_TRAIN_OPEN, OP_TRAIN_STEP,
 };
 pub use generate::{argmax, GEN_LOGITS};
 pub use load::{inspect, resolve_dir_under_root, resolve_under_root, INLINE_PATH_MAX};

@@ -1,0 +1,46 @@
+13:28  up  4:36, 1 user, load averages: 6.91 7.28 9.75
+tessl suite exit=0
+passed 531, failed 0, ignored 8
+tessl clippy exit=101
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> src/runtime.rs:345:12
+error: could not compile `tessl` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `tessl` (lib test) due to 1 previous error
+tessl clippy (type_complexity allowed) exit=0
+mutant a-offset killed (exit 101)
+test parallel_tn_partitions_cover_all_of_k ... FAILED
+mutant last-partition killed (exit 101)
+test parallel_tn_partitions_cover_all_of_k ... FAILED
+mutant unpadded-slice SURVIVED
+files restored
+ojas-metal suite exit=0
+passed 166, failed 0, ignored 0
+build exit=0
+13:34  up  4:41, 1 user, load averages: 19.11 13.32 11.55
+== old (min µs per round: tn gw | whole backward | GPU at start)
+round 1: gw 231.5  | whole 796.6  | 55%,
+round 2: gw 227.4  | whole 790.4  | 0%,
+round 3: gw 230.2  | whole 805.5  | 0%,
+round 4: gw 234.1  | whole 806.4  | 0%,
+== new (min µs per round: tn gw | whole backward | GPU at start)
+round 1: gw 43.1  | whole 631.7  | 0%,
+round 2: gw 45.5  | whole 629.5  | 0%,
+round 3: gw 46.0  | whole 601.7  | 0%,
+round 4: gw 45.0  | whole 638.2  | 0%,
+13:34  up  4:41, 1 user, load averages: 19.11 13.32 11.55
+paired exit=0
+output: /Users/bharath/Code/research/ojas/bench/results/2026-10-02-gate/paired-gate
+   Compiling ojas-wgpu v0.1.0 (/Users/bharath/Code/research/ojas/ojas-wgpu)
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/research/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 11.63s
+{"python": "3.14.8", "python_exe": "/opt/homebrew/opt/python@3.14/bin/python3.14", "torch": "2.13.0", "mps_available": true, "nanolab_params": 123699612, "nanolab_param_tensors": 170, "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O"}
+round 1/5 done (ojas-metal ojas-wgpu torch-mps)
+round 2/5 done (torch-mps ojas-wgpu ojas-metal)
+round 3/5 done (ojas-metal ojas-wgpu torch-mps)
+round 4/5 done (torch-mps ojas-wgpu ojas-metal)
+round 5/5 done (ojas-metal ojas-wgpu torch-mps)
+summary: /Users/bharath/Code/research/ojas/bench/results/2026-10-02-gate/paired-gate/summary.md
+13:34  up  4:42, 1 user, load averages: 29.32 16.48 12.76
+
+[exited with code 0]

@@ -1824,3 +1824,23 @@ fn a_job_context_cancel_reaches_the_model_ops() {
     assert!(polls.load(Ordering::Relaxed) > 40);
     assert_eq!(step(s.id).unwrap().step, 1);
 }
+
+#[test]
+fn system_profile_routes_through_dispatch_and_reads_only() {
+    let _g = guard();
+    let before = crate::memory_ceiling().unwrap();
+    let out = call(crate::OP_SYSTEM_PROFILE, &[]).unwrap();
+    assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 1);
+    let count = u32::from_le_bytes(out[4..8].try_into().unwrap()) as usize;
+    assert_eq!(out.len(), 8 + 9 * count);
+    let budgeted = call(crate::OP_SYSTEM_PROFILE, &(1u64 << 20).to_le_bytes()).unwrap();
+    assert_eq!(budgeted[8], 1, "the budget entry is always known");
+    let budget = u64::from_le_bytes(budgeted[9..17].try_into().unwrap());
+    assert!(budget <= 1 << 20);
+    assert!(call(crate::OP_SYSTEM_PROFILE, &[0u8; 3]).is_err());
+    assert_eq!(
+        crate::memory_ceiling().unwrap(),
+        before,
+        "a profile changes nothing"
+    );
+}

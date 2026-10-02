@@ -538,6 +538,11 @@ const DefaultMemoryCeiling uint64 = 1 << 30
 // splitting their accounting: Free every id (or Close) first. A refusal
 // changes nothing. The ceiling outlives Close; it changes only through this
 // call.
+//
+// The ceiling counts tensors' logical bytes. On unified memory (Apple
+// silicon) a Metal model's resident memory can exceed its charge, up to
+// twice it plus tessl's pool cache, and comes out of the same RAM, so size
+// the ceiling from SystemProfile with headroom, not equal to free memory.
 func SetMemoryCeiling(ctx context.Context, bytes uint64) error {
 	_, err := callEngine(ctx, opSetCeiling, binary.LittleEndian.AppendUint64(nil, bytes))
 	return err

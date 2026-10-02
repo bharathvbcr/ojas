@@ -1,0 +1,7 @@
+{"runtime": "torch-mps", "row": "_device", "status": "info", "device": {"torch": "2.13.0", "mps": true}}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_fwd", "when": "before", "load": "8.28 15.66 15.03", "gpu_util_pct": 62}
+{"runtime": "torch-mps", "row": "gate_fwd", "status": "ok", "min_ms": 0.459541999589419, "median_ms": 0.5278125008771894, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_fwd", "when": "after", "load": "8.28 15.66 15.03", "gpu_util_pct": 70}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_bwd", "when": "before", "load": "8.28 15.66 15.03", "gpu_util_pct": 53}
+{"runtime": "torch-mps", "row": "gate_bwd", "status": "ok", "min_ms": 0.7417499982693698, "median_ms": 0.7976244996825699, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gate_bwd", "when": "after", "load": "8.28 15.66 15.03", "gpu_util_pct": 58}

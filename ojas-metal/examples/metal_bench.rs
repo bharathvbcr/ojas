@@ -38,6 +38,16 @@
 //! minimum. tessl's `scale_f32_inplace` (one read, one write) is the
 //! reference for what a plain pass reaches.
 //!
+//! `gate` (macOS only) times, the same way, each dispatch of
+//! `per_head_sigmoid_gate_backward` at the paired benchmark's shape (4096
+//! rows, 12 heads of 64, d_model 768): the `pre` GEMM, the gate and bias-sum
+//! kernels, the two gradient GEMMs, the standalone finite checks, and all of
+//! them in one command buffer.
+//!
+//! `tn` (macOS only) times tessl's exact-f32 TN for a C of few tiles over a
+//! long K: the single dispatch, the routed path, and the parallel split-K
+//! (`gemm_tn_splitk_par_f32`) at several partition widths.
+//!
 //! Ops are recorded and return before the device runs them
 //! (`docs/metal-deferred-faults.md`), so every timed run ends with
 //! `Backend::sync` and is device-complete time. Each row reports:
@@ -150,7 +160,9 @@ fn linear(m: &MetalBackend, iters: usize, rows: usize, kin: usize, nout: usize) 
     })?;
     row(&name, res, tr, flops);
     let name = format!("linear bwd {rows}x{kin}x{nout}");
-    let res = time(m, iters, || m.linear_backward(&d[0], &d[1], &d[2]).map(drop))?;
+    let res = time(m, iters, || {
+        m.linear_backward(&d[0], &d[1], &d[2]).map(drop)
+    })?;
     let tr = time(m, iters, || {
         let u = ups(m, &[&x, &w, &g])?;
         let (a, b) = m.linear_backward(&u[0], &u[1], &u[2])?;
@@ -345,6 +357,12 @@ fn main() -> R<()> {
     if only == "gemm" {
         return probe::gemm(iters);
     }
+    if only == "gate" {
+        return probe::gate(iters);
+    }
+    if only == "tn" {
+        return probe::tn(iters);
+    }
     println!(
         "| op | resident min ms | resident median ms | transfer min ms | transfer median ms | TFLOP/s (resident median) |"
     );
@@ -354,7 +372,9 @@ fn main() -> R<()> {
         let one = rand(&[1], 1, 1.0)?;
         let d1 = be.upload(&one)?;
         let res = time(&be, iters * 5, || be.silu_forward(&d1).map(drop))?;
-        let tr = time(&be, iters * 5, || downs(&[&be.silu_forward(&be.upload(&one)?)?]))?;
+        let tr = time(&be, iters * 5, || {
+            downs(&[&be.silu_forward(&be.upload(&one)?)?])
+        })?;
         row("silu 1 element (per-op overhead)", res, tr, 0.0);
     }
     if run("linear") {
@@ -388,7 +408,7 @@ mod probe {
     use ojas_core::{Backend, BackendId, OjasError, Tensor};
     use ojas_metal::MetalBackend;
     use tessl::dispatch::{dispatch_1d, set_gpu_buf, set_u32, Binder};
-    use tessl::gemm::GemmOperands;
+    use tessl::gemm::{gemm_tn_splitk_par_f32, GemmOperands};
     use tessl::infer_trace::{self, Snapshot};
     use tessl::nn::scale_f32_inplace;
     use tessl::runtime::GpuRuntime;
@@ -874,6 +894,270 @@ mod probe {
         Ok(())
     }
 
+    /// The `gate` group: GPU time of each dispatch `MetalBackend` records for
+    /// `per_head_sigmoid_gate_backward` (`fn gate` in `device.rs`), at the
+    /// paired benchmark's shape (4096 rows, 12 heads of 64, d_model 768):
+    /// the `pre` GEMM, the gate kernel, the bias sum, the two gradient GEMMs
+    /// and the standalone finite checks, each alone and then all in one
+    /// command buffer, in the backend's order.
+    pub fn gate(iters: usize) -> R<()> {
+        const R_: usize = 4096;
+        const H: usize = 12;
+        const D: usize = 64;
+        const DM: usize = 768;
+        const PLANE: usize = R_ * H * D;
+        println!("start: GPU {}, load {}", gpu_util(), load());
+        let rt = GpuRuntime::new().map_err(tessl_err)?;
+        rt.set_async_encode(true).map_err(tessl_err)?;
+        rt.add_metallib_bytes(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/ojas_per_head_gate.metallib"
+        )))
+        .map_err(tessl_err)?;
+        let ns_per_tick = calibrate(&rt).map_err(tessl_err)?;
+        println!("GPU timestamp: {ns_per_tick:.4} ns per tick (upper bound, see docs)");
+        let reps = iters.max(10);
+        let run = || -> Result<(), String> {
+            let buf = |n: usize| rt.alloc_buffer(4 * n);
+            let mat = |b: &GpuBuffer, rows: usize, cols: usize| {
+                TT::from_buffer(&rt, b.clone(), &[rows, cols], DType::F32, 0)
+            };
+            let (x, w, bias) = (buf(R_ * DM)?, buf(H * DM)?, buf(H)?);
+            let (attn, dy, pre) = (buf(PLANE)?, buf(PLANE)?, buf(R_ * H)?);
+            let (d_attn, d_pre, d_bias) = (buf(PLANE)?, buf(R_ * H)?, buf(H)?);
+            let (gx, gw) = (buf(R_ * DM)?, buf(H * DM)?);
+            let st = rt.alloc_buffer(4 * 8)?;
+            let (x_t, w_t) = (mat(&x, R_, DM)?, mat(&w, H, DM)?);
+            let (pre_t, dp_t) = (mat(&pre, R_, H)?, mat(&d_pre, R_, H)?);
+            let (gx_t, gw_t) = (mat(&gx, R_, DM)?, mat(&gw, H, DM)?);
+            let (rows, heads, dh) = (R_ as u32, H as u32, D as u32);
+            let (units, plane) = ((R_ * H) as u32, PLANE as u32);
+            let check = |v: &GpuBuffer, n: usize| {
+                k(
+                    &rt,
+                    "ojas_check_finite",
+                    n.div_ceil(CHECK_PER_THREAD),
+                    |bd| {
+                        set_gpu_buf(bd, v, 0);
+                        set_gpu_buf(bd, &st, 1);
+                        set_u32(bd, n as u32, 2);
+                        set_u32(bd, 0, 3);
+                    },
+                )
+            };
+            let pre_gemm = || GemmOperands::ExactF32.nt(&x_t, &w_t, &pre_t);
+            let gate_bwd = || {
+                k(&rt, "ojas_per_head_gate_bwd", R_ * H, |bd| {
+                    set_gpu_buf(bd, &attn, 0);
+                    set_gpu_buf(bd, &pre, 1);
+                    set_gpu_buf(bd, &bias, 2);
+                    set_gpu_buf(bd, &dy, 3);
+                    set_gpu_buf(bd, &d_attn, 4);
+                    set_gpu_buf(bd, &d_pre, 5);
+                    set_u32(bd, rows, 6);
+                    set_u32(bd, heads, 7);
+                    set_u32(bd, dh, 8);
+                    set_u32(bd, plane, 9);
+                    set_u32(bd, units, 10);
+                    set_u32(bd, heads, 11);
+                    set_gpu_buf(bd, &st, 12);
+                })
+            };
+            // One SIMD-group per head, as `gate_dbias_threads` dispatches it.
+            let dbias = || {
+                k(&rt, "ojas_per_head_gate_dbias", H * 32, |bd| {
+                    set_gpu_buf(bd, &d_pre, 0);
+                    set_gpu_buf(bd, &d_bias, 1);
+                    set_u32(bd, rows, 2);
+                    set_u32(bd, heads, 3);
+                    set_u32(bd, units, 4);
+                    set_u32(bd, heads, 5);
+                    set_gpu_buf(bd, &st, 6);
+                })
+            };
+            let gx_gemm = || GemmOperands::ExactF32.nn(&dp_t, &w_t, &gx_t);
+            let gw_gemm = || GemmOperands::ExactF32.tn(&dp_t, &x_t, &gw_t);
+            // The backend's standalone checks: `x` and `w` in, `gx` and `gw`
+            // out (only tessl GEMMs touch them). The gate kernels check the
+            // rest themselves.
+            let checks = || {
+                check(&x, R_ * DM)?;
+                check(&w, H * DM)?;
+                check(&gx, R_ * DM)?;
+                check(&gw, H * DM)
+            };
+            println!("| dispatch or sequence | f32 MB moved | min µs | median µs | GB/s at min |");
+            println!("|---|---:|---:|---:|---:|");
+            let mb = |elems: usize| elems as f64 * 4.0 / 1e6;
+            let row = |name: &str, moved: f64, t: (f64, f64)| {
+                println!(
+                    "| {name} | {moved:.1} | {:.1} | {:.1} | {:.0} |",
+                    t.0,
+                    t.1,
+                    moved * 1e6 / (t.0 * 1e3)
+                );
+            };
+            let span = |f: &dyn Fn() -> Result<(), String>| gpu_span(&rt, reps, ns_per_tick, f);
+            row(
+                "tessl scale_f32_inplace over attn (reference read + write)",
+                mb(2 * PLANE),
+                span(&|| scale_f32_inplace(&rt, &attn, 1.0, plane))?,
+            );
+            row(
+                "nt pre = x · w^T (4096, 12, 768)",
+                mb(R_ * DM + H * DM + R_ * H),
+                span(&pre_gemm)?,
+            );
+            row(
+                "ojas_per_head_gate_bwd",
+                mb(3 * PLANE + 2 * R_ * H),
+                span(&gate_bwd)?,
+            );
+            row("ojas_per_head_gate_dbias", mb(R_ * H + H), span(&dbias)?);
+            row(
+                "nn gx = d_pre · w (4096, 768, 12)",
+                mb(R_ * H + H * DM + R_ * DM),
+                span(&gx_gemm)?,
+            );
+            row(
+                "tn gw = d_pre^T · x (12, 768, 4096)",
+                mb(R_ * H + R_ * DM + H * DM),
+                span(&gw_gemm)?,
+            );
+            row(
+                "four standalone ojas_check_finite passes",
+                mb(2 * R_ * DM + 2 * H * DM),
+                span(&checks)?,
+            );
+            let all = || {
+                pre_gemm()?;
+                gate_bwd()?;
+                dbias()?;
+                gx_gemm()?;
+                gw_gemm()?;
+                checks()
+            };
+            row(
+                "whole backward, one command buffer",
+                mb(3 * R_ * DM + 4 * PLANE),
+                span(&all)?,
+            );
+            Ok(())
+        };
+        run().map_err(tessl_err)?;
+        println!("end: GPU {}, load {}", gpu_util(), load());
+        Ok(())
+    }
+
+    /// The `tn` group: tessl's exact-f32 TN (`C [M, N] = A [K, M]^T · B [K,
+    /// N]`) for a C of few tiles over a long K, the weight-gradient shape
+    /// whose single dispatch has a few threadgroups each walking all of K.
+    /// Per shape: that single dispatch (`matmul2d_tensorops_tn_f32`, encoded
+    /// here as `gemm_tn_f32` does), what `GemmOperands::ExactF32.tn` routes
+    /// to, and `gemm_tn_splitk_par_f32` at several partition widths. One GEMM
+    /// per command buffer.
+    pub fn tn(iters: usize) -> R<()> {
+        println!("start: GPU {}, load {}", gpu_util(), load());
+        let rt = GpuRuntime::new().map_err(tessl_err)?;
+        rt.set_async_encode(true).map_err(tessl_err)?;
+        let ns_per_tick = calibrate(&rt).map_err(tessl_err)?;
+        println!("GPU timestamp: {ns_per_tick:.4} ns per tick (upper bound, see docs)");
+        let reps = iters.max(10);
+        println!("| shape (M, N, K) | tiles | path | min µs | median µs | TFLOP/s at min |");
+        println!("|---|---:|---|---:|---:|---:|");
+        let run = || -> Result<(), String> {
+            let mat = |rows: usize, cols: usize| -> Result<TT, String> {
+                TT::from_buffer(
+                    &rt,
+                    rt.alloc_buffer(4 * rows * cols)?,
+                    &[rows, cols],
+                    DType::F32,
+                    0,
+                )
+            };
+            // The last five are shapes the sequential TN split-K lane took
+            // (`prefer_tn_splitk`) before the parallel lane replaced it for
+            // f32; three are its own tests' shapes.
+            let shapes: [(usize, usize, usize); 12] = [
+                (12, 768, 4096),
+                (12, 768, 1024),
+                (12, 768, 16384),
+                (40, 520, 9000),
+                (64, 1024, 4096),
+                (128, 768, 4096),
+                (96, 2048, 4096),
+                (64, 64, 4096),
+                (256, 256, 4096),
+                (128, 128, 4096),
+                (128, 384, 4096),
+                (128, 128, 2048),
+            ];
+            let single = rt.pipeline("matmul2d_tensorops_tn_f32")?;
+            for (m, n, k) in shapes {
+                let (a, b, c) = (mat(k, m)?, mat(k, n)?, mat(m, n)?);
+                let (tiles_n, tiles_m) = (n.div_ceil(32), m.div_ceil(32));
+                let tiles = tiles_n * tiles_m;
+                let flops = 2.0 * (m * n * k) as f64;
+                let report = |path: &str, t: (f64, f64)| {
+                    println!(
+                        "| ({m}, {n}, {k}) | {tiles} | {path} | {:.1} | {:.1} | {:.2} |",
+                        t.0,
+                        t.1,
+                        flops / (t.0 * 1e-6) / 1e12
+                    );
+                };
+                // One simdgroup per threadgroup: `dispatch_1d` gives each
+                // threadgroup `threadExecutionWidth` threads.
+                report(
+                    "single dispatch",
+                    gpu_span(&rt, reps, ns_per_tick, || {
+                        dispatch_1d(&rt, &single, tiles * 32, |bd| {
+                            set_gpu_buf(bd, &a.buffer, 0);
+                            set_gpu_buf(bd, &b.buffer, 1);
+                            set_gpu_buf(bd, &c.buffer, 2);
+                            set_u32(bd, m as u32, 3);
+                            set_u32(bd, n as u32, 4);
+                            set_u32(bd, k as u32, 5);
+                            set_u32(bd, tiles_n as u32, 6);
+                            set_u32(bd, tiles_m as u32, 7);
+                            set_u32(bd, 0, 8);
+                        })
+                    })?,
+                );
+                report(
+                    "routed",
+                    gpu_span(&rt, reps, ns_per_tick, || {
+                        GemmOperands::ExactF32.tn(&a, &b, &c)
+                    })?,
+                );
+                for k_tile in [128usize, 256, 512, 1024, 2048] {
+                    if k_tile >= k {
+                        continue;
+                    }
+                    // tessl refuses a width whose partial sums exceed its
+                    // scratch cap (`TN_PAR_MAX_SCRATCH`, 1 << 22 floats).
+                    let parts = k.div_ceil(k_tile);
+                    if parts * (m * n).div_ceil(4) * 4 > 1 << 22 {
+                        println!(
+                            "| ({m}, {n}, {k}) | {tiles} | parallel, k_tile {k_tile} ({parts} parts) | refused: scratch over the cap | | |"
+                        );
+                        continue;
+                    }
+                    report(
+                        &format!("parallel, k_tile {k_tile} ({} parts)", k.div_ceil(k_tile)),
+                        gpu_span(&rt, reps, ns_per_tick, || {
+                            gemm_tn_splitk_par_f32(&a, &b, &c, k_tile)
+                        })?,
+                    );
+                }
+            }
+            Ok(())
+        };
+        run().map_err(tessl_err)?;
+        println!("end: GPU {}, load {}", gpu_util(), load());
+        Ok(())
+    }
+
     /// The `gemm` group: tessl's exact-f32 GEMM, as `MetalBackend` calls it,
     /// at the paired benchmark's linear and LM-head shapes, one GEMM per
     /// command buffer. `nt` is a linear forward (`x [M, K] · w [N, K]^T`),
@@ -1009,7 +1293,7 @@ mod probe {
     fn unsupported() -> OjasError {
         OjasError::Unsupported {
             op: "metal_bench probe",
-            detail: "the floor, kernels and gemm groups read tessl, which is macOS only"
+            detail: "the floor, kernels, gemm, gate and tn groups read tessl, which is macOS only"
                 .to_string(),
         }
     }
@@ -1023,6 +1307,14 @@ mod probe {
     }
 
     pub fn gemm(_iters: usize) -> super::R<()> {
+        Err(unsupported())
+    }
+
+    pub fn gate(_iters: usize) -> super::R<()> {
+        Err(unsupported())
+    }
+
+    pub fn tn(_iters: usize) -> super::R<()> {
         Err(unsupported())
     }
 }

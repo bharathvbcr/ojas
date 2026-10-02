@@ -145,7 +145,13 @@ fn full_cache_without_grouping_equals_causal_sdpa_after_the_permute() {
 fn grouped_query_attention_matches_a_naive_f64_reference() {
     let mut cases = Vec::new();
     for (hkv, h) in [(1usize, 6usize), (2, 6), (3, 6), (6, 6), (1, 1)] {
-        for (tq, kv_len, cap) in [(1usize, 1usize, 9usize), (1, 9, 9), (3, 7, 12), (5, 5, 5), (4, 64, 80)] {
+        for (tq, kv_len, cap) in [
+            (1usize, 1usize, 9usize),
+            (1, 9, 9),
+            (3, 7, 12),
+            (5, 5, 5),
+            (4, 64, 80),
+        ] {
             for d in [8usize, 64, 128] {
                 cases.push(Dims {
                     b: 2,
@@ -255,7 +261,10 @@ fn cached_attention_refusals() {
     let v = up(&m, &rand(&[b, cap, hkv, d], 3, 1.0));
     for kv_len in [1usize, cap + 1] {
         let r = m.cached_attention_forward(&q, &k, &v, kv_len);
-        assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "kv_len {kv_len}: {r:?}");
+        assert!(
+            matches!(r, Err(OjasError::OutOfRange { .. })),
+            "kv_len {kv_len}: {r:?}"
+        );
     }
     let q3 = up(&m, &rand(&[b, tq, 3, d], 4, 1.0));
     let r = m.cached_attention_forward(&q3, &k, &v, 4);
@@ -287,9 +296,24 @@ fn cached_attention_refusals() {
     let last_in_window = ((kv_len - 1) * hkv + hkv - 1) * d + d - 1;
     for val in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let cases = [
-            ("q", poison_at(&qs, b * tq * h * d - 1, 8, val), k.clone(), v.clone()),
-            ("k", q.clone(), poison_at(&cs, last_in_window, 9, val), v.clone()),
-            ("v", q.clone(), k.clone(), poison_at(&cs, last_in_window, 10, val)),
+            (
+                "q",
+                poison_at(&qs, b * tq * h * d - 1, 8, val),
+                k.clone(),
+                v.clone(),
+            ),
+            (
+                "k",
+                q.clone(),
+                poison_at(&cs, last_in_window, 9, val),
+                v.clone(),
+            ),
+            (
+                "v",
+                q.clone(),
+                k.clone(),
+                poison_at(&cs, last_in_window, 10, val),
+            ),
             ("k first", q.clone(), poison_at(&cs, 0, 11, val), v.clone()),
         ];
         for (what, qq, kk, vv) in cases {
@@ -312,9 +336,12 @@ fn cached_attention_refusals() {
 fn cached_attention_matches_the_cpu_reference() {
     let m = metal();
     let c = cpu();
-    for (i, (tq, kv_len, h, hkv, d)) in [(1usize, 1024usize, 12usize, 12usize, 64usize), (4, 37, 6, 2, 128)]
-        .into_iter()
-        .enumerate()
+    for (i, (tq, kv_len, h, hkv, d)) in [
+        (1usize, 1024usize, 12usize, 12usize, 64usize),
+        (4, 37, 6, 2, 128),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let cap = kv_len + 3;
         let q = rand(&[1, tq, h, d], 50 + i as u64, 1.0);
@@ -367,7 +394,10 @@ fn kv_cache_write_refusals_leave_the_cache_unchanged() {
     let src = |tn: usize, seed| up(&m, &rand(&[b, tn, hkv, d], seed, 1.0));
     for (tn, at) in [(2usize, 5usize), (7, 0), (1, 6), (1, usize::MAX)] {
         let r = m.kv_cache_write(&mut cache, &src(tn, 2), at);
-        assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "tn {tn} at {at}: {r:?}");
+        assert!(
+            matches!(r, Err(OjasError::OutOfRange { .. })),
+            "tn {tn} at {at}: {r:?}"
+        );
     }
     let r = m.kv_cache_write(&mut cache, &up(&m, &rand(&[b, 1, hkv, d + 1], 3, 1.0)), 0);
     assert!(matches!(r, Err(OjasError::Shape { .. })), "{r:?}");
@@ -380,7 +410,11 @@ fn kv_cache_write_refusals_leave_the_cache_unchanged() {
             x[idx] = val;
             let r = m.kv_cache_write(&mut cache, &up(&m, &host(&x, &[b, 3, hkv, d])), 1);
             deferred(&m, &format!("{val} at {idx}"), r, "kv_cache_write");
-            assert_eq!(bits(&cache), before, "{val} at {idx}: a faulted write changed the cache");
+            assert_eq!(
+                bits(&cache),
+                before,
+                "{val} at {idx}: a faulted write changed the cache"
+            );
         }
     }
     // A cache another handle shares is not written through.

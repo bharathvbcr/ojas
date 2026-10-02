@@ -449,43 +449,6 @@ impl Exec<'_> {
             Ok((0..count).map(task).collect())
         }
     }
-
-    /// `[0, len)` cut into contiguous chunks of at least `min_chunk` items,
-    /// one task per chunk, results in chunk order. Up to two chunks per
-    /// thread let fast cores take over work from slow ones.
-    pub(crate) fn chunks<T, F>(
-        &self,
-        len: usize,
-        min_chunk: usize,
-        task: F,
-    ) -> Result<Vec<T>, OjasError>
-    where
-        T: Send + 'static,
-        F: Fn(Range<usize>) -> T + Send + Sync + 'static,
-    {
-        let pieces = (len / min_chunk.max(1)).clamp(1, self.pool.threads().saturating_mul(2));
-        let parts = ranges(len, pieces);
-        self.map(parts.len(), len, min_chunk, move |i| task(parts[i].clone()))
-    }
-
-    /// Rows `0..rows` of a `[rows, width]` output, computed in row chunks of
-    /// about [`ROW_MIN_ELEMS`] values and concatenated in row order. The
-    /// first error in row order wins.
-    pub(crate) fn rows<F>(&self, rows: usize, width: usize, task: F) -> Result<Vec<f32>, OjasError>
-    where
-        F: Fn(Range<usize>) -> Result<Vec<f32>, OjasError> + Send + Sync + 'static,
-    {
-        let min_rows = (ROW_MIN_ELEMS / width.max(1)).max(1);
-        let parts = self.chunks(rows, min_rows, task)?;
-        if parts.len() == 1 {
-            return parts.into_iter().next().unwrap_or_else(|| Ok(Vec::new()));
-        }
-        let mut out = Vec::with_capacity(rows.saturating_mul(width));
-        for part in parts {
-            out.extend_from_slice(&part?);
-        }
-        Ok(out)
-    }
 }
 
 /// Elementwise and row-wise work below this many values per chunk is not

@@ -318,9 +318,9 @@ impl HybridOptimizer {
                     };
                     let (new_p, new_m) = muon_ns5(
                         exec,
-                        Arc::new(param.param.clone()),
-                        Arc::new(param.grad.clone()),
-                        Arc::new(param.moment1.clone()),
+                        &param.param,
+                        &param.grad,
+                        &param.moment1,
                         param.rows,
                         param.cols,
                         config,

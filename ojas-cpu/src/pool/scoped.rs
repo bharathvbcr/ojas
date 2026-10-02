@@ -1,5 +1,5 @@
-//! Scoped parallel loops for ops that read tensors in place or fill one
-//! output buffer.
+//! Scoped parallel loops for ops that read tensors in place or fill their
+//! output buffers in place.
 //!
 //! [`crate::pool::Pool`] runs `'static` tasks on persistent workers, so a task
 //! cannot borrow a tensor's bytes or write into a slice of one output buffer
@@ -22,13 +22,14 @@
 //! optimizer and clip steps run passes after their first tensor write, and a
 //! refusal there would leave the step half applied.
 
+use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use ojas_core::{BackendId, OjasError};
 
-use super::{Exec, WORKER_STACK_BYTES};
+use super::{ranges, Exec, ROW_MIN_ELEMS, WORKER_STACK_BYTES};
 
 fn backend(detail: String) -> OjasError {
     OjasError::Backend {
@@ -146,6 +147,106 @@ where
     })
 }
 
+/// Items `0..len` cut into contiguous pieces of at least `min_chunk` items,
+/// at most two a thread so fast cores take over work from slow ones,
+/// item `i` owning values `i * width..(i + 1) * width` of `out`, and
+/// `task(range, part)` filling each piece's values. One piece, or one
+/// thread, runs on the calling thread. Results come back in piece order;
+/// the first error in piece order wins.
+pub(crate) fn chunks_into<R, F>(
+    exec: Exec<'_>,
+    out: &mut [f32],
+    len: usize,
+    width: usize,
+    min_chunk: usize,
+    task: F,
+) -> Result<Vec<R>, OjasError>
+where
+    R: Send,
+    F: Fn(Range<usize>, &mut [f32]) -> Result<R, OjasError> + Sync,
+{
+    chunks_into_n(exec, [out], len, [width], min_chunk, |range, [part]| {
+        task(range, part)
+    })
+}
+
+/// [`chunks_into`] over `N` outputs at once: item `i` owns values
+/// `i * widths[j]..(i + 1) * widths[j]` of `outs[j]`, and each piece's task
+/// gets its values of every output. The last item of an output may be
+/// short (fixed-size blocks over a length that is not a multiple of them),
+/// so `outs[j]` holds `len * widths[j]` values or fewer, but more than
+/// `(len - 1) * widths[j]`.
+pub(crate) fn chunks_into_n<const N: usize, R, F>(
+    exec: Exec<'_>,
+    outs: [&mut [f32]; N],
+    len: usize,
+    widths: [usize; N],
+    min_chunk: usize,
+    task: F,
+) -> Result<Vec<R>, OjasError>
+where
+    R: Send,
+    F: Fn(Range<usize>, [&mut [f32]; N]) -> Result<R, OjasError> + Sync,
+{
+    for (out, &width) in outs.iter().zip(&widths) {
+        let full = len.checked_mul(width);
+        let fits = full.is_some_and(|full| {
+            out.len() == full || (out.len() < full && out.len() > full - width)
+        });
+        if !fits {
+            return Err(backend(format!(
+                "chunks_into: {len} items of {width} != output {}",
+                out.len()
+            )));
+        }
+    }
+    let pieces = (len / min_chunk.max(1)).clamp(1, exec.pool.threads().saturating_mul(2));
+    let parts = ranges(len, pieces);
+    let mut cuts = Vec::with_capacity(N);
+    for (out, width) in outs.into_iter().zip(widths) {
+        let end = out.len();
+        let lens: Vec<usize> = parts
+            .iter()
+            .map(|r| (r.end * width).min(end) - (r.start * width).min(end))
+            .collect();
+        cuts.push(cut(out, &lens)?.into_iter());
+    }
+    let mut slices = Vec::with_capacity(parts.len());
+    for _ in &parts {
+        let piece: Vec<&mut [f32]> = cuts.iter_mut().filter_map(Iterator::next).collect();
+        let piece: [&mut [f32]; N] = piece
+            .try_into()
+            .map_err(|_| backend("chunks_into: a piece lacks an output".to_string()))?;
+        slices.push(piece);
+    }
+    if parts.len() == 1 || exec.pool.threads() <= 1 {
+        return parts
+            .into_iter()
+            .zip(slices)
+            .map(|(range, part)| task(range, part))
+            .collect();
+    }
+    fill_parts(exec, slices, |i, part| task(parts[i].clone(), part))
+}
+
+/// Rows `0..rows` of `out` (`[rows, width]`), each task filling a chunk of
+/// whole rows in place: chunks of about [`ROW_MIN_ELEMS`] values
+/// ([`chunks_into`]).
+pub(crate) fn rows_into<R, F>(
+    exec: Exec<'_>,
+    out: &mut [f32],
+    rows: usize,
+    width: usize,
+    task: F,
+) -> Result<Vec<R>, OjasError>
+where
+    R: Send,
+    F: Fn(Range<usize>, &mut [f32]) -> Result<R, OjasError> + Sync,
+{
+    let min_rows = (ROW_MIN_ELEMS / width.max(1)).max(1);
+    chunks_into(exec, out, rows, width, min_rows, task)
+}
+
 /// `out` cut into consecutive parts of `lens` items, in order. The lengths
 /// must add up to `out.len()`, or this is [`OjasError::Backend`].
 pub(crate) fn cut<'a, T>(out: &'a mut [T], lens: &[usize]) -> Result<Vec<&'a mut [T]>, OjasError> {
@@ -221,6 +322,61 @@ mod tests {
             })
             .unwrap();
             assert_eq!(out, (0..1003).collect::<Vec<_>>());
+        }
+    }
+
+    /// Two outputs of different widths, the second's last item short: every
+    /// value is written once by the piece that owns its item, and the pieces
+    /// cut as `ranges` cuts them.
+    #[test]
+    fn chunks_into_n_fills_each_output_by_item_with_a_short_last_item() {
+        for threads in [1usize, 3, 18] {
+            let (len, min_chunk) = (37usize, 4usize);
+            let mut a = vec![0.0f32; len * 3];
+            let mut b = vec![0.0f32; (len - 1) * 5 + 2];
+            let pieces = with(threads, |e| {
+                chunks_into_n(
+                    e,
+                    [&mut a, &mut b],
+                    len,
+                    [3, 5],
+                    min_chunk,
+                    |range, [pa, pb]| {
+                        assert_eq!(pa.len(), range.len() * 3);
+                        for (k, v) in pa.iter_mut().enumerate() {
+                            *v = (range.start * 3 + k) as f32;
+                        }
+                        for (k, v) in pb.iter_mut().enumerate() {
+                            *v = (range.start * 5 + k) as f32;
+                        }
+                        Ok(range)
+                    },
+                )
+            })
+            .unwrap();
+            assert_eq!(a, (0..a.len()).map(|i| i as f32).collect::<Vec<_>>());
+            assert_eq!(b, (0..b.len()).map(|i| i as f32).collect::<Vec<_>>());
+            let pieces_wanted = (len / min_chunk).clamp(1, threads * 2);
+            assert_eq!(pieces, ranges(len, pieces_wanted), "threads {threads}");
+        }
+    }
+
+    #[test]
+    fn chunks_into_n_refuses_an_output_of_the_wrong_length() {
+        // 4 items of 3: 12 values, or a short last item of 1 or 2.
+        for (len_b, ok) in [
+            (12usize, true),
+            (11, true),
+            (10, true),
+            (9, false),
+            (13, false),
+        ] {
+            let mut a = vec![0.0f32; 4];
+            let mut b = vec![0.0f32; len_b];
+            let got = with(2, |e| {
+                chunks_into_n(e, [&mut a, &mut b], 4, [1, 3], 1, |_, _| Ok(()))
+            });
+            assert_eq!(got.is_ok(), ok, "second output of {len_b} for 4 items of 3");
         }
     }
 

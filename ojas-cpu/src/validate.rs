@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 use ojas_core::{Budget, DType, OjasError, Reservation, Scratch, Tensor};
@@ -38,7 +39,7 @@ pub(crate) fn check_f32(op: &'static str, t: &Tensor) -> Result<usize, OjasError
     Ok(values.len())
 }
 
-/// Values per task of [`check_f32s`]' parallel scan (4 MiB).
+/// Values per task of the parallel finite scan, `window_finite` (4 MiB).
 const PAR_SCAN_VALUES: usize = 1 << 20;
 
 /// [`check_f32`] on every tensor of `ts`, returning each one's values, read
@@ -131,8 +132,7 @@ pub(crate) fn f32_operands<'t, const N: usize>(
 /// return plain values.
 ///
 /// Sharing checks only the layout; the op's NaN scan is its entry check
-/// ([`shared_operands`], or [`f32_operands`] over every operand when only
-/// some are shared).
+/// ([`f32_operands`] over every operand).
 ///
 /// [`crate::gemm::Mat`] borrows instead, through [`scoped`] threads, because
 /// its operands include buffers that are not tensors.
@@ -158,23 +158,6 @@ impl Shared {
     pub(crate) fn values(&self) -> Result<&[f32], OjasError> {
         f32_values(self.op, &self.t)
     }
-}
-
-/// [`f32_operands`] as [`Shared`] operands, for kernels whose tasks run on
-/// the pool: the same checks and NaN scan, in argument order.
-pub(crate) fn shared_operands<const N: usize>(
-    op: &'static str,
-    exec: Exec<'_>,
-    ts: [&Tensor; N],
-) -> Result<[Shared; N], OjasError> {
-    check_f32s(op, exec, &ts)?;
-    let shared: Vec<Shared> = ts
-        .iter()
-        .map(|t| Shared::new(op, t))
-        .collect::<Result<_, _>>()?;
-    shared
-        .try_into()
-        .map_err(|_| shape(op, "input count changed while sharing"))
 }
 
 /// [`check_f32s`] for one tensor.
@@ -203,8 +186,9 @@ pub(crate) fn u32_values<'t>(op: &'static str, t: &'t Tensor) -> Result<&'t [u32
     t.u32_slice()
 }
 
-/// [`all_finite`] over `window`, in [`PAR_SCAN_VALUES`] blocks on the
-/// pool's threads.
+/// [`all_finite`] over `window`, in [`PAR_SCAN_VALUES`] blocks on scoped
+/// threads; one block runs on the calling thread with no spawn. Operands
+/// ([`check_f32s`]) and new outputs ([`fill_outs`]) are scanned with it.
 fn window_finite(exec: Exec<'_>, window: &[f32]) -> Result<bool, OjasError> {
     let blocks: Vec<&[f32]> = window.chunks(PAR_SCAN_VALUES).collect();
     let finite = scoped::map(exec, blocks.len(), |i| Ok(all_finite(blocks[i])))?;
@@ -278,8 +262,7 @@ pub(crate) fn headroom(
 ///
 /// Hold the guard across the scratch `Vec`. Dropping it in this function,
 /// before that `Vec` exists, lets a second caller reserve the same bytes.
-/// An output's guard travels with it in [`F32Out`] until [`alloc_out`] has
-/// copied it into a tensor.
+/// Outputs are charged by [`fill_out`] / [`fill_outs`] instead.
 pub(crate) fn room_for(
     op: &'static str,
     budget: &Budget,
@@ -301,42 +284,21 @@ pub(crate) fn alloc_f32(
     Tensor::from_f32(data, shape, budget)
 }
 
-/// A computed f32 result and the charge for its buffer. The charge is taken before the buffer is
-/// allocated and travels with it.
-pub(crate) struct F32Out {
-    pub data: Vec<f32>,
-    pub charge: Reservation,
-}
-
-/// [`alloc_f32`] for a charged result. The tensor is a copy, so for a moment
-/// the result is on the heap twice; `out.charge` stays held until the tensor
-/// exists and the buffer is freed, and both copies are charged.
-pub(crate) fn alloc_out(
-    op: &'static str,
-    budget: &Budget,
-    out: F32Out,
-    shape: &[usize],
-) -> Result<Tensor, OjasError> {
-    let F32Out { data, charge } = out;
-    let tensor = alloc_f32(op, budget, &data, shape);
-    drop(data);
-    drop(charge);
-    tensor
-}
-
 /// A new `F32` tensor of `shape` whose values `fill` writes in place into
 /// zeroed memory: charged before it is allocated, moved into the tensor
 /// with no copy, and scanned for a NaN or infinity (an overflow is
 /// refused). A refusal from `fill` is returned and the memory released. The
-/// scan is the tensor's [`Tensor::all_finite_cached`], so the next op that
-/// takes it as an operand does not scan it again.
+/// scan is the operand scan, `window_finite`, recorded as the tensor's
+/// [`Tensor::all_finite_cached`], so the next op that takes it as an
+/// operand does not scan it again.
 pub(crate) fn fill_out(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     shape: &[usize],
     fill: impl FnOnce(&mut [f32]) -> Result<(), OjasError>,
 ) -> Result<Tensor, OjasError> {
-    let [out] = fill_outs(op, budget, [shape], |[out]| fill(out))?;
+    let [out] = fill_outs(op, budget, exec, [shape], |[out]| fill(out))?;
     Ok(out)
 }
 
@@ -346,21 +308,85 @@ pub(crate) fn fill_out(
 pub(crate) fn fill_outs<const N: usize>(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     shapes: [&[usize]; N],
     fill: impl FnOnce([&mut [f32]; N]) -> Result<(), OjasError>,
 ) -> Result<[Tensor; N], OjasError> {
+    let mut outs = charge_outs(op, budget, shapes)?;
+    fill(outs.each_mut().map(Scratch::as_mut_slice))?;
+    into_tensors(op, outs, shapes, |w| window_finite(exec, w))
+}
+
+/// [`fill_outs`] for a pass split into contiguous pieces: items `0..len`
+/// are cut as [`scoped::chunks_into_n`] cuts them (`widths`, `min_chunk`),
+/// and `fill` writes each piece's values of every output. Each piece is then
+/// scanned for a NaN or infinity on the thread that wrote it, while its
+/// values are still in that core's cache, and no second pass over the
+/// outputs follows: the pieces cover every output, so their verdicts
+/// together are each output's [`Tensor::all_finite_cached`]. Returns the
+/// outputs and `fill`'s results in piece order.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fill_outs_chunked<const N: usize, R, F>(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    shapes: [&[usize]; N],
+    len: usize,
+    widths: [usize; N],
+    min_chunk: usize,
+    fill: F,
+) -> Result<([Tensor; N], Vec<R>), OjasError>
+where
+    R: Send,
+    F: Fn(Range<usize>, [&mut [f32]; N]) -> Result<R, OjasError> + Sync,
+{
+    let mut outs = charge_outs(op, budget, shapes)?;
+    let pieces = scoped::chunks_into_n(
+        exec,
+        outs.each_mut().map(Scratch::as_mut_slice),
+        len,
+        widths,
+        min_chunk,
+        |range, mut parts| {
+            let result = fill(range, parts.each_mut().map(|part| &mut **part))?;
+            Ok((result, parts.iter().all(|part| all_finite(part))))
+        },
+    )?;
+    let finite = pieces.iter().all(|(_, finite)| *finite);
+    if !finite {
+        return Err(nonfinite(op));
+    }
+    let tensors = into_tensors(op, outs, shapes, |_| Ok(true))?;
+    Ok((tensors, pieces.into_iter().map(|(r, _)| r).collect()))
+}
+
+/// One zeroed output per shape, each charged before it is allocated, in
+/// order.
+fn charge_outs<const N: usize>(
+    op: &'static str,
+    budget: &Budget,
+    shapes: [&[usize]; N],
+) -> Result<[Scratch<f32>; N], OjasError> {
     let mut outs = Vec::with_capacity(N);
     for shape in shapes {
         outs.push(Scratch::<f32>::try_alloc(product(op, shape)?, budget)?);
     }
-    let mut outs: [Scratch<f32>; N] = outs
-        .try_into()
-        .map_err(|_| shape(op, "output count changed while charging"))?;
-    fill(outs.each_mut().map(Scratch::as_mut_slice))?;
+    outs.try_into()
+        .map_err(|_| shape(op, "output count changed while charging"))
+}
+
+/// The filled outputs as tensors, each refused if `scan` finds a NaN or an
+/// infinity in it and otherwise recorded finite.
+fn into_tensors<const N: usize>(
+    op: &'static str,
+    outs: [Scratch<f32>; N],
+    shapes: [&[usize]; N],
+    scan: impl Fn(&[f32]) -> Result<bool, OjasError>,
+) -> Result<[Tensor; N], OjasError> {
     let mut tensors = Vec::with_capacity(N);
     for (out, shape) in outs.into_iter().zip(shapes) {
         let out = Tensor::from_scratch(out, shape)?;
-        if !out.all_finite_cached(|w| Ok(all_finite(w)))? {
+        if !out.all_finite_cached(&scan)? {
             return Err(nonfinite(op));
         }
         tensors.push(out);
@@ -386,5 +412,70 @@ mod tests {
         drop(guard);
         assert_eq!(budget.live_bytes().unwrap(), 0);
         assert!(budget.try_reserve(100).is_ok());
+    }
+
+    /// Every piece's scan counts: a NaN written into any one piece, of
+    /// either output, is refused with every charge released, whatever the
+    /// thread count; with none, both outputs are recorded finite, so the next
+    /// op's scan never runs.
+    #[test]
+    fn fill_outs_chunked_refuses_a_nan_in_any_piece_and_records_finite_otherwise() {
+        use crate::pool::Pool;
+        use ojas_core::Numerics;
+        let n = 1000;
+        for threads in [1usize, 3, 6] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            let exec = Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            };
+            let budget = Budget::new(1 << 20);
+            let run = |poison: Option<(usize, usize)>| {
+                fill_outs_chunked(
+                    "t",
+                    &budget,
+                    exec,
+                    [&[n][..], &[n, 2]],
+                    n,
+                    [1, 2],
+                    10,
+                    |range, [x, y]| {
+                        for (k, i) in range.clone().enumerate() {
+                            x[k] = i as f32;
+                            y[2 * k] = 1.0;
+                            y[2 * k + 1] = 2.0;
+                        }
+                        if let Some((out, i)) = poison {
+                            if range.contains(&i) {
+                                let k = i - range.start;
+                                if out == 0 {
+                                    x[k] = f32::NAN;
+                                } else {
+                                    y[2 * k + 1] = f32::INFINITY;
+                                }
+                            }
+                        }
+                        Ok(range.len())
+                    },
+                )
+            };
+            for poison in [(0, 0), (0, n - 1), (1, n / 2), (1, n - 1)] {
+                let got = run(Some(poison));
+                assert!(
+                    matches!(got, Err(OjasError::NonFinite { .. })),
+                    "{threads} threads, {poison:?}: {got:?}"
+                );
+                assert_eq!(budget.live_bytes().unwrap(), 0);
+            }
+            let ([x, y], lens) = run(None).unwrap();
+            assert_eq!(lens.iter().sum::<usize>(), n);
+            assert_eq!(x.f32_slice().unwrap()[n - 1], (n - 1) as f32);
+            assert_eq!(y.f32_slice().unwrap()[2 * n - 1], 2.0);
+            for t in [&x, &y] {
+                assert!(t
+                    .all_finite_cached(|_| panic!("recorded finite, so not scanned again"))
+                    .unwrap());
+            }
+        }
     }
 }

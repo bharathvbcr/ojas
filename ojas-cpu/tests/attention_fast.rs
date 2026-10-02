@@ -218,7 +218,10 @@ fn reference(f: &Fixture) -> ([Vec<f64>; 4], f64) {
 /// `max |got - want| / max |want|`.
 fn rel_err(got: &[f32], want: &[f64]) -> f64 {
     assert_eq!(got.len(), want.len());
-    let scale = want.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(f64::MIN_POSITIVE);
+    let scale = want
+        .iter()
+        .fold(0.0f64, |m, v| m.max(v.abs()))
+        .max(f64::MIN_POSITIVE);
     let err = got
         .iter()
         .zip(want)
@@ -298,9 +301,15 @@ fn fast_matches_exact_and_f64_across_the_kernel_cutoff() {
                  fast-exact {fast_exact:.2e} max|s| {spread:.1}"
             );
             let tol = TOL_F64 + rounding;
-            assert!(fast_f64 <= tol, "{what}: Fast vs f64 {fast_f64:e} > {tol:e}");
+            assert!(
+                fast_f64 <= tol,
+                "{what}: Fast vs f64 {fast_f64:e} > {tol:e}"
+            );
             let tol = TOL_EXACT_F64 + rounding;
-            assert!(exact_f64 <= tol, "{what}: Exact vs f64 {exact_f64:e} > {tol:e}");
+            assert!(
+                exact_f64 <= tol,
+                "{what}: Exact vs f64 {exact_f64:e} > {tol:e}"
+            );
             if spread <= NO_WORSE_MAX_SCORE {
                 assert!(
                     fast_f64 <= exact_f64 + NO_WORSE,
@@ -316,7 +325,10 @@ fn fast_matches_exact_and_f64_across_the_kernel_cutoff() {
             }
         }
     }
-    println!("worst fast-f64 {:.2e} fast-exact {:.2e}", worst[0], worst[1]);
+    println!(
+        "worst fast-f64 {:.2e} fast-exact {:.2e}",
+        worst[0], worst[1]
+    );
 }
 
 /// At or below 256 positions Fast keeps the per-row kernel; above it the
@@ -360,12 +372,18 @@ fn fast_bits_do_not_depend_on_the_thread_count() {
         }
         // And the same backend twice.
         let be = backend(18, Numerics::Fast);
-        assert!(run(&be, &t).iter().zip(&want).all(|(a, b)| bits(a) == bits(b)));
+        assert!(run(&be, &t)
+            .iter()
+            .zip(&want)
+            .all(|(a, b)| bits(a) == bits(b)));
     }
 }
 
 fn assert_nonfinite<T: std::fmt::Debug>(what: &str, r: Result<T, OjasError>) {
-    assert!(matches!(r, Err(OjasError::NonFinite { .. })), "{what}: {r:?}");
+    assert!(
+        matches!(r, Err(OjasError::NonFinite { .. })),
+        "{what}: {r:?}"
+    );
 }
 
 /// A NaN or infinity in any operand is refused as `NonFinite` on a budget
@@ -388,10 +406,7 @@ fn nan_and_inf_are_refused_before_any_charge() {
                 if which < 3 {
                     assert_nonfinite(&what, be.causal_sdpa_forward(&t[0], &t[1], &t[2]));
                 }
-                assert_nonfinite(
-                    &what,
-                    be.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3]),
-                );
+                assert_nonfinite(&what, be.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3]));
                 assert_eq!(be.budget().live_bytes().unwrap(), 0, "{what}");
             }
         }
@@ -410,10 +425,7 @@ fn overflowing_scores_are_refused_and_release_their_charge() {
     for threads in [1usize, 7] {
         let be = backend(threads, Numerics::Fast);
         assert_nonfinite("fwd", be.causal_sdpa_forward(&huge, &huge, &small));
-        assert_nonfinite(
-            "bwd",
-            be.causal_sdpa_backward(&huge, &huge, &small, &small),
-        );
+        assert_nonfinite("bwd", be.causal_sdpa_backward(&huge, &huge, &small, &small));
         assert_eq!(be.budget().live_bytes().unwrap(), 0);
     }
 }
@@ -438,12 +450,22 @@ fn with_room(be: &CpuBackend, room: u64, op: Op<'_>) -> Option<Vec<Vec<u32>>> {
             Some(
                 outputs
                     .iter()
-                    .map(|t| t.to_f32_vec().unwrap().iter().map(|v| v.to_bits()).collect())
+                    .map(|t| {
+                        t.to_f32_vec()
+                            .unwrap()
+                            .iter()
+                            .map(|v| v.to_bits())
+                            .collect()
+                    })
                     .collect(),
             )
         }
         Err(OjasError::CapacityExceeded { .. }) => {
-            assert_eq!(budget.live_bytes().unwrap(), held, "room {room}: refusal leaked");
+            assert_eq!(
+                budget.live_bytes().unwrap(),
+                held,
+                "room {room}: refusal leaked"
+            );
             None
         }
         Err(err) => panic!("room {room}: unexpected {err:?}"),
@@ -492,10 +514,7 @@ fn sdpa_budget_is_sharp_balanced_and_covers_the_heap() {
     for shape in [[1usize, 4, 300, 64], [1, 12, 1024, 64]] {
         let f = Fixture::new(shape, 0x4ea9 + shape[2] as u64, 1.0);
         let t = f.tensors();
-        let fwd = |be: &CpuBackend| {
-            be.causal_sdpa_forward(&t[0], &t[1], &t[2])
-                .map(|y| vec![y])
-        };
+        let fwd = |be: &CpuBackend| be.causal_sdpa_forward(&t[0], &t[1], &t[2]).map(|y| vec![y]);
         let bwd = |be: &CpuBackend| {
             be.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3])
                 .map(|(a, b, c)| vec![a, b, c])
@@ -508,7 +527,10 @@ fn sdpa_budget_is_sharp_balanced_and_covers_the_heap() {
                     // Warm the pool so worker spawns are not counted.
                     let full = with_room(&be, HUGE, op).expect("refused with the whole budget");
                     let peak = charged_peak(&be, op);
-                    assert!(with_room(&be, peak - 1, op).is_none(), "{what}: peak - 1 accepted");
+                    assert!(
+                        with_room(&be, peak - 1, op).is_none(),
+                        "{what}: peak - 1 accepted"
+                    );
                     for room in [peak, peak + 1, peak + 4096] {
                         let got = with_room(&be, room, op)
                             .unwrap_or_else(|| panic!("{what}: refused at {room} >= {peak}"));
@@ -523,5 +545,9 @@ fn sdpa_budget_is_sharp_balanced_and_covers_the_heap() {
             }
         }
     }
-    assert!(failures.is_empty(), "uncharged heap growth:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "uncharged heap growth:\n{}",
+        failures.join("\n")
+    );
 }

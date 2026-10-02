@@ -106,7 +106,7 @@ flowchart TD
 
     subgraph CoreEngine["Tensor Substrate & System Types"]
         Core["ojas-core\n(Tensor, Strides, Offset Slicing, Budget, DType, Errors)"]
-        Device["ojas-device\n(Device Kinds, Host Probe, ResourcePolicy; no router)"]
+        Device["ojas-device\n(Device Kinds, System Profile, ResourcePlan; no router)"]
         IO["ojas-io\n(Strict Safetensors Parser, Binary Checkpoint v1)"]
         Data["ojas-data\n(Dataset Streaming, Token Binary Formats, Deterministic RNG)"]
         Oracle["ojas-oracle\n(IEEE-754 f64 Numerical Reference Fixtures)"]
@@ -343,7 +343,7 @@ Test counts are from integration run 4 (`target-baseline/run_integration4.sh`, 2
 | [`ojas-capi`](file:///Users/bharath/Code/research/ojas/ojas-capi) | C-ABI dispatch & session store | `dispatch` opcodes (load, new, train, save, resume, tokenize, sample, memory ceiling), typed error kinds, panic firewall | 66 passed |
 | [`ojas-gusset-engine`](file:///Users/bharath/Code/research/ojas/ojas-gusset-engine) | Go link archive | Umbrella staticlib `libgusset.a` for Go CGO integration | 0 tests (the Go suite covers it) |
 | [`go/`](file:///Users/bharath/Code/research/ojas/go) | Go client SDK | `LoadModel`, `NewModel`, `OpenTrainer`, `TrainStep`, `SaveCheckpoint`, `Resume`, `GenerateIDs`, `SetMemoryCeiling`, `Free`, `Close` | 38 passed |
-| [`ojas-device`](file:///Users/bharath/Code/research/ojas/ojas-device) | Device kinds & memory planning | `Device`, `probe` (host CPU), `ResourcePolicy`, `ResourcePlan` | 18 passed |
+| [`ojas-device`](file:///Users/bharath/Code/research/ojas/ojas-device) | Device kinds, system profile & resource planning | `Device`, `probe_system` (memory, CPU clusters, caches, unified memory, pressure), `measure_bandwidth`, `ResourcePolicy`, `ResourcePlan`, `GemmBlocks` | 62 passed (adaptive lane gate 6, 2026-10-02, not run 4) |
 | [`ojas-oracle`](file:///Users/bharath/Code/research/ojas/ojas-oracle) | Mathematical fixtures | IEEE-754 f64 oracle data fixtures | 40 passed, 1 ignored |
 | [`ojas-cuda`](file:///Users/bharath/Code/research/ojas/ojas-cuda) | CUDA probe | One affine kernel behind feature `cuda`; not a `Backend` | 8 passed (feature off) |
 | [`ojas-hip`](file:///Users/bharath/Code/research/ojas/ojas-hip) | HIP probe | Copy probe behind feature `hip`; no kernel; not a `Backend` | 8 passed (feature off) |
@@ -354,7 +354,7 @@ The dropped scaffold crates `ojas-nn`, `ojas-optim` and `ojas-engine` are gone; 
 
 ## Verification & Test Commands
 
-The per-crate command below is how the counts above were produced (run 4: 1071 passed, 0 failed). `cargo clippy --workspace --all-targets -- -D warnings` is clean in that run; `rustfmt --check` was not (19 diffs in `ojas-metal/src/backend.rs`, code that run did not touch). `ojas-qwen35` needs macOS with Apple silicon and the sibling `tessl` checkout.
+The per-crate command below is how the counts above were produced (run 4: 1071 passed, 0 failed). `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check` are clean across the workspace. `ojas-qwen35` needs macOS with Apple silicon and the sibling `tessl` checkout.
 
 ```bash
 # Run one crate's suite in release mode (how docs/status.md counts are taken)
@@ -385,6 +385,7 @@ cd go && PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -time
 * [`docs/web-and-domain.md`](file:///Users/bharath/Code/research/ojas/docs/web-and-domain.md) — Domain architecture, CNAME routing (`ojas.vbcr.dev`), and deployment topology.
 * [`docs/architecture.md`](file:///Users/bharath/Code/research/ojas/docs/architecture.md) — Comprehensive architectural specification and memory layout.
 * [`docs/status.md`](file:///Users/bharath/Code/research/ojas/docs/status.md) — Verification run logs, test matrices, and machine profile.
+* [`docs/adaptive-resources.md`](file:///Users/bharath/Code/research/ojas/docs/adaptive-resources.md) — System profiling, adaptive resource planning, CPU topology, cache sizing, copy bandwidth, and unified memory governance.
 * [`docs/bench-cpu-vs-torch.md`](file:///Users/bharath/Code/research/ojas/docs/bench-cpu-vs-torch.md) — Benchmarks against PyTorch 2.13 CPU (tiny and larger step, single linear), plus Fast/Accelerate, Metal, and wgpu numbers taken under machine load.
 * [`docs/op-coverage.md`](file:///Users/bharath/Code/research/ojas/docs/op-coverage.md) — Mathematical specification of core operators and reference models.
 * [`docs/checkpoint-v1.md`](file:///Users/bharath/Code/research/ojas/docs/checkpoint-v1.md) — Binary checkpoint specification and framing.

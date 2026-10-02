@@ -35,7 +35,10 @@ fn recording_commits_nothing_until_sync_and_overlap_commits_do_not_wait() {
         y = ok("silu", m.silu_forward(&y));
     }
     let overlapped = infer_trace::snapshot().commits;
-    assert!(overlapped >= 2, "expected overlap commits, saw {overlapped}");
+    assert!(
+        overlapped >= 2,
+        "expected overlap commits, saw {overlapped}"
+    );
     assert_eq!(m.waits(), w1, "overlap commits must not wait");
     ok("sync", m.sync());
     assert_eq!(m.waits() - w1, 1);

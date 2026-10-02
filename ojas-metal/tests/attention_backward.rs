@@ -70,7 +70,11 @@ fn backward_is_deterministic() {
     let first = ok("first", m.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3]));
     for _ in 0..3 {
         let again = ok("again", m.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3]));
-        for (a, b) in [(&first.0, &again.0), (&first.1, &again.1), (&first.2, &again.2)] {
+        for (a, b) in [
+            (&first.0, &again.0),
+            (&first.1, &again.1),
+            (&first.2, &again.2),
+        ] {
             let (a, b) = (down(a), down(b));
             assert!(
                 a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()),
@@ -99,7 +103,12 @@ fn backward_reads_views_at_unaligned_offsets() {
     }
     let (wq, wk, wv) = ok(
         "cpu",
-        c.causal_sdpa_backward(&host_inputs[0], &host_inputs[1], &host_inputs[2], &host_inputs[3]),
+        c.causal_sdpa_backward(
+            &host_inputs[0],
+            &host_inputs[1],
+            &host_inputs[2],
+            &host_inputs[3],
+        ),
     );
     let (gq, gk, gv) = ok(
         "metal",
@@ -123,7 +132,12 @@ fn non_finite_inputs_and_overflowing_scores_are_refused() {
             ins[which] = host(&vals, &shape);
             let d: Vec<Tensor> = ins.iter().map(|t| up(&m, t)).collect();
             let r = m.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3]);
-            deferred(&m, &format!("input {which} = {bad}"), r, "causal_sdpa_backward");
+            deferred(
+                &m,
+                &format!("input {which} = {bad}"),
+                r,
+                "causal_sdpa_backward",
+            );
         }
     }
     // Finite inputs whose scores overflow f32.

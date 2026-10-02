@@ -67,8 +67,14 @@ fn scalar(t: &Tensor) -> f32 {
 fn composed<B: Backend>(be: &B, p: &Problem, place: impl Fn(&Tensor) -> Tensor) -> Grads {
     let (x, w, t) = (place(&p.x), place(&p.w), place(&p.t));
     let logits = ok("linear", be.linear_forward(&x, &w));
-    let loss = ok("ce fwd", be.cross_entropy_mean_forward(&logits, &t, p.ignore));
-    let g = ok("ce bwd", be.cross_entropy_mean_backward(&logits, &t, p.ignore));
+    let loss = ok(
+        "ce fwd",
+        be.cross_entropy_mean_forward(&logits, &t, p.ignore),
+    );
+    let g = ok(
+        "ce bwd",
+        be.cross_entropy_mean_backward(&logits, &t, p.ignore),
+    );
     drop(logits);
     let (gx, gw) = ok("linear bwd", be.linear_backward(&x, &w, &g));
     let host = |t: &Tensor| ok("to host", t.to_host(&Budget::new(8 * GIB)));
@@ -86,7 +92,10 @@ fn exact(p: &Problem) -> (f64, Vec<f64>, Vec<f64>) {
     let t = ok("t", p.t.to_u32_vec());
     let (n, d) = (p.x.shape()[0], p.x.shape()[1]);
     let v = p.w.shape()[0];
-    let valid: Vec<bool> = t.iter().map(|&id| Some(id) != p.ignore && (id as usize) < v).collect();
+    let valid: Vec<bool> = t
+        .iter()
+        .map(|&id| Some(id) != p.ignore && (id as usize) < v)
+        .collect();
     let count = valid.iter().filter(|&&b| b).count() as f64;
     let (mut loss, mut gx, mut gw) = (0.0f64, vec![0.0f64; n * d], vec![0.0f64; v * d]);
     for r in 0..n {
@@ -94,7 +103,11 @@ fn exact(p: &Problem) -> (f64, Vec<f64>, Vec<f64>) {
             continue;
         }
         let logits: Vec<f64> = (0..v)
-            .map(|c| (0..d).map(|k| f64::from(x[r * d + k]) * f64::from(w[c * d + k])).sum())
+            .map(|c| {
+                (0..d)
+                    .map(|k| f64::from(x[r * d + k]) * f64::from(w[c * d + k]))
+                    .sum()
+            })
             .collect();
         let mx = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let total: f64 = logits.iter().map(|l| (l - mx).exp()).sum();
@@ -126,7 +139,14 @@ fn err64(got: &[f32], want: &[f64]) -> f64 {
 fn fused(m: &MetalBackend, p: &Problem, chunk: CeChunk) -> Grads {
     let out = ok(
         "fused",
-        m.linear_cross_entropy_mean(&up(m, &p.x), &up(m, &p.w), &up(m, &p.t), p.ignore, chunk, true),
+        m.linear_cross_entropy_mean(
+            &up(m, &p.x),
+            &up(m, &p.w),
+            &up(m, &p.t),
+            p.ignore,
+            chunk,
+            true,
+        ),
     );
     let LinearCe {
         loss,
@@ -181,7 +201,10 @@ fn agrees_with_composition(what: &str, p: &Problem, c: CeChunk, got: &Grads, com
         return;
     }
     let (_, gx64, gw64) = exact(p);
-    for (name, g, cm, e) in [("grad_input", &got.gx, &comp.gx, &gx64), ("grad_weight", &got.gw, &comp.gw, &gw64)] {
+    for (name, g, cm, e) in [
+        ("grad_input", &got.gx, &comp.gx, &gx64),
+        ("grad_weight", &got.gw, &comp.gw, &gw64),
+    ] {
         let (eg, ec) = (err64(g, e), err64(cm, e));
         assert!(
             eg <= 1.25 * ec + 1e-7,
@@ -211,9 +234,28 @@ fn equals_the_unfused_composition_on_metal() {
     let m = metal();
     let cases = [
         // (n, d, v, chunks)
-        (64usize, 32usize, 300usize, vec![chunk(16, 128), chunk(64, 300), chunk(7, 100)]),
-        (100, 33, 257, vec![chunk(7, 100), chunk(1, 257), chunk(100, 1), chunk(3, 64)]),
-        (37, 64, 1000, vec![chunk(37, 999), chunk(36, 1000), chunk(usize::MAX, usize::MAX)]),
+        (
+            64usize,
+            32usize,
+            300usize,
+            vec![chunk(16, 128), chunk(64, 300), chunk(7, 100)],
+        ),
+        (
+            100,
+            33,
+            257,
+            vec![chunk(7, 100), chunk(1, 257), chunk(100, 1), chunk(3, 64)],
+        ),
+        (
+            37,
+            64,
+            1000,
+            vec![
+                chunk(37, 999),
+                chunk(36, 1000),
+                chunk(usize::MAX, usize::MAX),
+            ],
+        ),
         (5, 8, 11, vec![chunk(1, 1), chunk(2, 3), chunk(1000, 1000)]),
     ];
     for (i, (n, d, v, chunks)) in cases.into_iter().enumerate() {
@@ -247,7 +289,11 @@ fn without_gradients_returns_only_the_loss() {
     );
     assert!(out.grad_input.is_none() && out.grad_weight.is_none());
     let loss = scalar(&out.loss);
-    assert!((loss - want.loss).abs() <= 1e-6 * want.loss.abs(), "{loss} vs {}", want.loss);
+    assert!(
+        (loss - want.loss).abs() <= 1e-6 * want.loss.abs(),
+        "{loss} vs {}",
+        want.loss
+    );
 }
 
 #[test]
@@ -260,10 +306,16 @@ fn runs_under_a_budget_smaller_than_the_logits() {
     let (x, w, t) = (up(&small, &p.x), up(&small, &p.w), up(&small, &p.t));
     // The composition materializes [N, V] logits and is refused.
     let r = small.linear_forward(&x, &w);
-    assert!(matches!(r, Err(OjasError::CapacityExceeded { .. })), "{r:?}");
+    assert!(
+        matches!(r, Err(OjasError::CapacityExceeded { .. })),
+        "{r:?}"
+    );
     // A chunk as large as the problem is charged as such and refused too.
     let r = small.linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk(n, v), true);
-    assert!(matches!(r, Err(OjasError::CapacityExceeded { .. })), "{r:?}");
+    assert!(
+        matches!(r, Err(OjasError::CapacityExceeded { .. })),
+        "{r:?}"
+    );
     let live = ok("live", small.budget().live_bytes());
     let out = ok(
         "fused",
@@ -275,7 +327,11 @@ fn runs_under_a_budget_smaller_than_the_logits() {
         gw: down(out.grad_weight.as_ref().expect("grad_weight")),
     };
     drop(out);
-    assert_eq!(ok("live", small.budget().live_bytes()), live, "scratch leaked");
+    assert_eq!(
+        ok("live", small.budget().live_bytes()),
+        live,
+        "scratch leaked"
+    );
     let big = metal();
     let want = composed(&big, &p, |t| up(&big, t));
     agrees_with_composition("small budget", &p, chunk(64, 512), &got, &want);
@@ -319,11 +375,17 @@ fn refusals() {
         m.linear_cross_entropy_mean(x, w, t, ig, c, true)
     };
     let nonfinite = |r: Result<LinearCe, OjasError>, what: &str| {
-        assert!(matches!(r, Err(OjasError::NonFinite { op: OP })), "{what}: {r:?}");
+        assert!(
+            matches!(r, Err(OjasError::NonFinite { op: OP })),
+            "{what}: {r:?}"
+        );
         assert!(m.sync().is_ok(), "{what}: a host refusal records nothing");
     };
     let out_of_range = |r: Result<LinearCe, OjasError>, what: &str| {
-        assert!(matches!(r, Err(OjasError::OutOfRange { op: OP, .. })), "{what}: {r:?}");
+        assert!(
+            matches!(r, Err(OjasError::OutOfRange { op: OP, .. })),
+            "{what}: {r:?}"
+        );
         assert!(m.sync().is_ok(), "{what}: a host refusal records nothing");
     };
     // Every target ignored: decided on the host, at the call.
@@ -346,13 +408,24 @@ fn refusals() {
     for val in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         deferred(&m, "x", call(&poison(&p.x, val), &w, &t, None, c), OP);
         deferred(&m, "w", call(&x, &poison(&p.w, val), &t, None, c), OP);
-        out_of_range(call(&x, &poison(&p.w, val), &bad_t, None, c), "w with a bad target");
+        out_of_range(
+            call(&x, &poison(&p.w, val), &bad_t, None, c),
+            "w with a bad target",
+        );
     }
     // Logits that overflow f32: a device fault with valid targets, and a
     // bad target refused at the call.
     let huge = |shape: &[usize]| up(&m, &host(&vec![1e20; shape.iter().product()], shape));
-    deferred(&m, "overflow", call(&huge(&[n, d]), &huge(&[v, d]), &t, None, c), OP);
-    out_of_range(call(&huge(&[n, d]), &huge(&[v, d]), &bad_t, None, c), "overflow with a bad target");
+    deferred(
+        &m,
+        "overflow",
+        call(&huge(&[n, d]), &huge(&[v, d]), &t, None, c),
+        OP,
+    );
+    out_of_range(
+        call(&huge(&[n, d]), &huge(&[v, d]), &bad_t, None, c),
+        "overflow with a bad target",
+    );
     // Shapes and placement.
     for bad in [chunk(0, 4), chunk(4, 0)] {
         let r = call(&x, &w, &t, None, bad);

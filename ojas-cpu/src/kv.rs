@@ -24,7 +24,9 @@ use ojas_core::{
 
 use crate::attn::{mix_values, score_prefix, softmax_prefix, TASK_WORK};
 use crate::pool::Exec;
-use crate::validate::{all_finite, check_f32, nonfinite, product, room_for, F32Out, Shared};
+use crate::validate::{
+    all_finite, check_f32, fill_out, nonfinite, product, room_for, shape, Shared,
+};
 
 /// The `kv_len` prefix of every batch of `cache`, checked finite in place.
 /// Returns the cache's contiguous values. A device or strided cache is
@@ -54,8 +56,9 @@ fn cache_prefix<'t>(
     Ok(values)
 }
 
-/// [`ojas_core::Backend::cached_attention_forward`] on the CPU. Returns the
-/// `[B, Tq, H, D]` output and its charge, held until its tensor exists.
+/// [`ojas_core::Backend::cached_attention_forward`] on the CPU: the
+/// `[B, Tq, H, D]` output as a new tensor. Each head's rows are computed on
+/// the pool, then copied once into the output tensor ([`fill_out`]).
 pub(crate) fn cached_attention_forward(
     op: &'static str,
     budget: &Budget,
@@ -64,7 +67,7 @@ pub(crate) fn cached_attention_forward(
     k_cache: &Tensor,
     v_cache: &Tensor,
     kv_len: usize,
-) -> Result<F32Out, OjasError> {
+) -> Result<Tensor, OjasError> {
     let dims = cached_attention_dims(q, k_cache, v_cache, kv_len)?;
     check_f32(op, q)?;
     let kb = cache_prefix(op, k_cache, &dims, kv_len)?;
@@ -72,10 +75,10 @@ pub(crate) fn cached_attention_forward(
     let KvDims {
         batch,
         new: tq,
-        capacity,
         heads,
         kv_heads,
         head_dim: d,
+        ..
     } = dims;
     let scale = sdpa_scale(u32::try_from(d).map_err(|_| OjasError::OutOfRange {
         op,
@@ -102,8 +105,41 @@ pub(crate) fn cached_attention_forward(
         })?;
     // `q` was scanned above; its tasks read it in place.
     let qv = Shared::new(op, q)?;
-    let charge = room_for(op, budget, out_len)?;
-    let _scratch = room_for(op, budget, work)?;
+    fill_out(op, budget, exec, q.shape(), |out| {
+        if out.len() != out_len {
+            return Err(shape(
+                op,
+                format!("cached attention output {} != {out_len}", out.len()),
+            ));
+        }
+        let _scratch = room_for(op, budget, work)?;
+        attend(op, exec, qv, [kb, vb], dims, kv_len, scale, out)
+    })
+}
+
+/// The heads of [`cached_attention_forward`], on the pool, each copied
+/// into its rows of `out` (`[B, Tq, H, D]`).
+#[allow(clippy::too_many_arguments)]
+fn attend(
+    op: &'static str,
+    exec: Exec<'_>,
+    qv: Shared,
+    [kb, vb]: [&[f32]; 2],
+    dims: KvDims,
+    kv_len: usize,
+    scale: f32,
+    out: &mut [f32],
+) -> Result<(), OjasError> {
+    let KvDims {
+        batch,
+        new: tq,
+        capacity,
+        heads,
+        kv_heads,
+        head_dim: d,
+    } = dims;
+    let per_kv_head = kv_len * d;
+    let tasks = batch * heads;
 
     // K packed `[D, kv_len]` and V `[kv_len, D]` per (batch, kv head): the
     // layouts `score_prefix` and `mix_values` read.
@@ -152,7 +188,6 @@ pub(crate) fn cached_attention_forward(
             Ok::<_, OjasError>(out)
         }
     })?;
-    let mut out = vec![0.0f32; out_len];
     for (task, part) in parts.into_iter().enumerate() {
         let part = part?;
         let (b, h) = (task / heads, task % heads);
@@ -161,7 +196,7 @@ pub(crate) fn cached_attention_forward(
             out[dst..dst + d].copy_from_slice(&part[i * d..(i + 1) * d]);
         }
     }
-    Ok(F32Out { data: out, charge })
+    Ok(())
 }
 
 /// [`ojas_core::Backend::kv_cache_write`] on the CPU: all-or-nothing.

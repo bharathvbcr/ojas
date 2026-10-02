@@ -1,10 +1,11 @@
 //! Embedding, pointwise ops, per-head gate, value residual, and cross-entropy.
 //!
-//! SiLU, the value-residual backward pass and the gate's broadcast run in
-//! contiguous chunks on the pool and join the chunks in order; mul, add and
-//! the value-residual forward pass run in place on the calling thread (see
-//! [`mul_forward`]). No output value depends on which chunk computed it, so
-//! the bits do not depend on the thread count. Under [`Numerics::Exact`]
+//! SiLU, mul, add, the value-residual blend and the gate's broadcast and
+//! backward run in contiguous chunks on scoped threads, each chunk written
+//! in place into the output ([`scoped::chunks_into_n`]); mul, add and the
+//! blend's forward pass also scan each chunk for a NaN or infinity on the
+//! thread that wrote it ([`fill_outs_chunked`]). No output value depends on
+//! which chunk computed it, so the bits do not depend on the thread count. Under [`Numerics::Exact`]
 //! every value is the scalar formula below, evaluated as written (libm
 //! `exp`, no `mul_add`). Under [`Numerics::Fast`] SiLU and cross-entropy use
 //! the branch-free [`crate::exp`] so their loops vectorize, the value-residual `lambda`
@@ -15,17 +16,16 @@
 //! gradients are products on the GEMM core ([`crate::gemm`]).
 
 use std::ops::Range;
-use std::sync::Arc;
 
 use ojas_core::{Budget, CeDims, EmbeddingDims, GateDims, Numerics, OjasError, Scratch, Tensor};
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
-use crate::gemm::{fma, gemm, scratch as gemm_scratch, Mat};
+use crate::gemm::{fma, gemm, gemm_out, scratch as gemm_scratch, Mat};
 use crate::pool::scoped;
 use crate::pool::{Exec, ROW_MIN_ELEMS};
 use crate::validate::{
-    all_finite, check_f32, f32_values, fill_out, nonfinite, nonfinite_first, product, room_for,
-    shape, u32_values, Shared,
+    all_finite, check_f32, f32_values, fill_outs_chunked, nonfinite, nonfinite_first, product,
+    room_for, shape, u32_values,
 };
 
 pub(crate) fn sigmoid(x: f32) -> f32 {
@@ -136,32 +136,6 @@ fn sigmoid_pair_fast(x: f32) -> (f32, f32) {
     }
 }
 
-/// `f(range)` over `0..len` in contiguous chunks of at least
-/// [`ROW_MIN_ELEMS`] values, joined in order.
-fn elementwise<F>(exec: Exec<'_>, len: usize, f: F) -> Result<Vec<f32>, OjasError>
-where
-    F: Fn(Range<usize>) -> Result<Vec<f32>, OjasError> + Send + Sync + 'static,
-{
-    exec.rows(len, 1, f)
-}
-
-/// Concatenate task parts in order. One part is moved, not copied.
-fn join2(parts: Vec<(Vec<f32>, Vec<f32>)>, len_a: usize, len_b: usize) -> (Vec<f32>, Vec<f32>) {
-    if parts.len() == 1 {
-        if let Some(only) = parts.into_iter().next() {
-            return only;
-        }
-        return (Vec::new(), Vec::new());
-    }
-    let mut a = Vec::with_capacity(len_a);
-    let mut b = Vec::with_capacity(len_b);
-    for (pa, pb) in parts {
-        a.extend_from_slice(&pa);
-        b.extend_from_slice(&pb);
-    }
-    (a, b)
-}
-
 fn same_len(op: &'static str, lens: &[usize], what: &str) -> Result<(), OjasError> {
     if lens.windows(2).all(|w| w[0] == w[1]) {
         Ok(())
@@ -170,112 +144,135 @@ fn same_len(op: &'static str, lens: &[usize], what: &str) -> Result<(), OjasErro
     }
 }
 
-/// `x * sigmoid(x)`. The output's task parts are charged here; the caller
-/// charges the joined output.
-pub(crate) fn silu_forward(
-    op: &'static str,
-    budget: &Budget,
-    exec: Exec<'_>,
-    x: Shared,
-) -> Result<Vec<f32>, OjasError> {
-    let n = x.values()?.len();
-    let _parts = room_for(op, budget, n)?;
+/// `x * sigmoid(x)`, written into `y` (charged by the caller) in place.
+pub(crate) fn silu_forward(exec: Exec<'_>, x: &[f32], y: &mut [f32]) -> Result<(), OjasError> {
     let numerics = exec.numerics;
-    elementwise(exec, n, move |range| {
-        let src = &x.values()?[range];
-        Ok(match numerics {
-            Numerics::Exact => src.iter().map(|&v| v * sigmoid(v)).collect(),
-            Numerics::Fast => src.iter().map(|&v| v * sigmoid_pair_fast(v).0).collect(),
-        })
-    })
+    scoped::rows_into(exec, y, x.len(), 1, |range, dst| {
+        let src = &x[range];
+        match numerics {
+            Numerics::Exact => {
+                for (out, &v) in dst.iter_mut().zip(src) {
+                    *out = v * sigmoid(v);
+                }
+            }
+            Numerics::Fast => {
+                for (out, &v) in dst.iter_mut().zip(src) {
+                    *out = v * sigmoid_pair_fast(v).0;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
-/// `grad_y * s * (1 + x (1 - s))` with `s = sigmoid(x)`.
+/// `grad_y * s * (1 + x (1 - s))` with `s = sigmoid(x)`, written into
+/// `grad_x` (charged by the caller) in place.
 pub(crate) fn silu_backward(
     op: &'static str,
-    budget: &Budget,
     exec: Exec<'_>,
-    x: Shared,
-    grad_y: Shared,
-) -> Result<Vec<f32>, OjasError> {
-    let n = x.values()?.len();
-    same_len(op, &[n, grad_y.values()?.len()], "silu input and grad")?;
-    let _parts = room_for(op, budget, n)?;
+    x: &[f32],
+    grad_y: &[f32],
+    grad_x: &mut [f32],
+) -> Result<(), OjasError> {
+    same_len(op, &[x.len(), grad_y.len()], "silu input and grad")?;
     let numerics = exec.numerics;
-    elementwise(exec, n, move |range| {
-        let pairs = x.values()?[range.clone()]
-            .iter()
-            .zip(&grad_y.values()?[range]);
-        Ok(match numerics {
-            Numerics::Exact => pairs
-                .map(|(&v, &g)| {
+    scoped::rows_into(exec, grad_x, x.len(), 1, |range, dst| {
+        let pairs = x[range.clone()].iter().zip(&grad_y[range]);
+        match numerics {
+            Numerics::Exact => {
+                for (out, (&v, &g)) in dst.iter_mut().zip(pairs) {
                     let s = sigmoid(v);
-                    g * s * (1.0 + v * (1.0 - s))
-                })
-                .collect(),
-            Numerics::Fast => pairs
-                .map(|(&v, &g)| {
+                    *out = g * s * (1.0 + v * (1.0 - s));
+                }
+            }
+            Numerics::Fast => {
+                for (out, (&v, &g)) in dst.iter_mut().zip(pairs) {
                     let (s, rest) = sigmoid_pair_fast(v);
-                    g * s * fma(v, rest, 1.0)
-                })
-                .collect(),
-        })
-    })
+                    *out = g * s * fma(v, rest, 1.0);
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// `a * b` as a tensor of `shape`, one rounding per value under either
 /// contract.
 ///
-/// Mul, add and the value-residual blend are one memory pass: the operands
-/// are read where they are and each value is written once, on the calling
-/// thread, straight into the output tensor's buffer ([`fill_out`]), so
-/// nothing is copied or joined. A pool split cannot write into one buffer
-/// (tasks are `'static` and the crate forbids `unsafe`), so it would cost a
-/// joined copy of the output; at `[1024, 2048]` on 6 threads the split
-/// measured 1.04 ms for mul forward against 0.92 ms on one thread (min of 3
-/// interleaved runs, M5 Pro, when the operands were still copied first).
-/// Written straight into the output with no operand copy, it measured
-/// 0.45 ms (min of 5 interleaved runs, 2026-10-02).
+/// Mul and add are one memory pass: the operands are read where they are
+/// and each value is written once, straight into the output tensor's
+/// buffer, so nothing is copied or joined. Since 2026-10-02 the pass is
+/// split into chunks of [`ROW_MIN_ELEMS`] values written in place on scoped
+/// threads, each chunk scanned for a NaN or infinity by the thread that
+/// wrote it ([`fill_outs_chunked`]); one chunk, or one thread, stays on the
+/// calling thread. Each value is the same single
+/// rounding wherever it is computed, so the bits do not depend on the
+/// split. (A split on the persistent pool could not write into one buffer
+/// and cost a joined copy: at `[1024, 2048]` on 6 threads it measured 1.04
+/// ms for mul forward against 0.92 ms on one thread, when the operands
+/// were still copied first.)
 pub(crate) fn mul_forward(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     a: &[f32],
     b: &[f32],
     shape: &[usize],
 ) -> Result<Tensor, OjasError> {
-    same_len(op, &[a.len(), b.len()], "mul operand")?;
-    fill_out(op, budget, shape, |out| {
-        for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
+    same_len(op, &[a.len(), b.len(), product(op, shape)?], "mul operand")?;
+    elementwise(op, budget, exec, shape, |range, out| {
+        for ((o, &x), &y) in out.iter_mut().zip(&a[range.clone()]).zip(&b[range]) {
             *o = x * y;
         }
-        Ok(())
     })
 }
 
 /// `(grad_y * b, grad_y * a)` as tensors of `a_shape` and `b_shape` (see
-/// [`mul_forward`]).
+/// [`mul_forward`]), both filled in one split.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mul_backward(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     a: &[f32],
     b: &[f32],
     grad_y: &[f32],
     a_shape: &[usize],
     b_shape: &[usize],
 ) -> Result<(Tensor, Tensor), OjasError> {
-    same_len(op, &[a.len(), b.len(), grad_y.len()], "mul grad")?;
-    let grad_a = fill_out(op, budget, a_shape, |out| {
-        for ((o, &bv), &g) in out.iter_mut().zip(b).zip(grad_y) {
-            *o = g * bv;
-        }
-        Ok(())
-    })?;
-    let grad_b = fill_out(op, budget, b_shape, |out| {
-        for ((o, &av), &g) in out.iter_mut().zip(a).zip(grad_y) {
-            *o = g * av;
-        }
-        Ok(())
-    })?;
+    let n = grad_y.len();
+    same_len(
+        op,
+        &[
+            a.len(),
+            b.len(),
+            n,
+            product(op, a_shape)?,
+            product(op, b_shape)?,
+        ],
+        "mul grad",
+    )?;
+    let ([grad_a, grad_b], _) = fill_outs_chunked(
+        op,
+        budget,
+        exec,
+        [a_shape, b_shape],
+        n,
+        [1, 1],
+        ROW_MIN_ELEMS,
+        |range, [ga, gb]| {
+            let (a, b, g) = (&a[range.clone()], &b[range.clone()], &grad_y[range]);
+            for ((o, &bv), &g) in ga.iter_mut().zip(b).zip(g) {
+                *o = g * bv;
+            }
+            for ((o, &av), &g) in gb.iter_mut().zip(a).zip(g) {
+                *o = g * av;
+            }
+            Ok(())
+        },
+    )?;
     Ok((grad_a, grad_b))
 }
 
@@ -283,17 +280,50 @@ pub(crate) fn mul_backward(
 pub(crate) fn add_forward(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     a: &[f32],
     b: &[f32],
     shape: &[usize],
 ) -> Result<Tensor, OjasError> {
-    same_len(op, &[a.len(), b.len()], "residual add operand")?;
-    fill_out(op, budget, shape, |out| {
-        for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
+    same_len(
+        op,
+        &[a.len(), b.len(), product(op, shape)?],
+        "residual add operand",
+    )?;
+    elementwise(op, budget, exec, shape, |range, out| {
+        for ((o, &x), &y) in out.iter_mut().zip(&a[range.clone()]).zip(&b[range]) {
             *o = x + y;
         }
-        Ok(())
     })
+}
+
+/// A new tensor of `shape` whose values `fill` writes in chunks of
+/// [`ROW_MIN_ELEMS`] on scoped threads, values `range` into `part`, each
+/// chunk scanned for a NaN or infinity by the thread that wrote it
+/// ([`fill_outs_chunked`]). The caller has checked that its operands hold
+/// `shape`'s element count.
+fn elementwise(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    shape: &[usize],
+    fill: impl Fn(Range<usize>, &mut [f32]) + Sync,
+) -> Result<Tensor, OjasError> {
+    let n = product(op, shape)?;
+    let ([out], _) = fill_outs_chunked(
+        op,
+        budget,
+        exec,
+        [shape],
+        n,
+        [1],
+        ROW_MIN_ELEMS,
+        |range, [part]| {
+            fill(range, part);
+            Ok(())
+        },
+    )?;
+    Ok(out)
 }
 
 /// Both gradients of `x + y` are `grad_y` itself. The caller has run
@@ -345,33 +375,35 @@ pub(crate) fn gate_forward(
     input: &[f32],
     weight: &[f32],
     bias: &[f32],
-    attn: Shared,
+    attn: &[f32],
     dims: GateDims,
-) -> Result<Vec<f32>, OjasError> {
-    let attn_len = attn.values()?.len();
-    gate_lengths(op, &dims, input, weight, bias, attn.values()?)?;
-    // The logits phase, then the output's task parts; the caller charges
-    // the joined output.
-    let work = add(op, logit_work(op, exec, &dims)?, attn_len)?;
-    let _hold = room_for(op, budget, work)?;
+    y: &mut [f32],
+) -> Result<(), OjasError> {
+    gate_lengths(op, &dims, input, weight, bias, attn)?;
+    if y.len() != attn.len() {
+        return Err(shape(op, "gate output length does not match attn"));
+    }
+    // The logits phase; the output is the caller's, written in place.
+    let _hold = room_for(op, budget, logit_work(op, exec, &dims)?)?;
     let gates = gate_values(op, exec, &dims, input, weight, bias)?;
     let (heads, dh) = (dims.heads, dims.head_dim);
     let width = heads * dh;
-    exec.rows(dims.rows, width, move |range| {
-        let mut y = vec![0.0f32; range.len() * width];
-        let src = &attn.values()?[range.start * width..range.end * width];
+    scoped::rows_into(exec, y, dims.rows, width, |range, y| {
+        let src = &attn[range.start * width..range.end * width];
         let g = &gates[range.start * heads..range.end * heads];
         for ((dst, src), &g) in y.chunks_exact_mut(dh).zip(src.chunks_exact(dh)).zip(g) {
             for (out, &a) in dst.iter_mut().zip(src) {
                 *out = a * g;
             }
         }
-        Ok(y)
-    })
+        Ok(())
+    })?;
+    Ok(())
 }
 
-/// `(grad_input, grad_weight, grad_bias, grad_attn)`.
-type GateGrads = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>);
+/// `[grad_input, grad_weight, grad_bias, grad_attn]`: the caller's zeroed
+/// outputs, written in place.
+pub(crate) type GateGrads<'a> = [&'a mut [f32]; 4];
 
 /// `gz = (sum_d grad_y · attn) · g · (1 - g)` per row and head, then
 /// `grad_input = gz · W` and `grad_weight = gzᵀ · input` on the GEMM core,
@@ -379,24 +411,28 @@ type GateGrads = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>);
 /// `grad_attn = grad_y · g`. Under [`Numerics::Exact`] every sum ascends
 /// from `+0.0` without `mul_add`, which is the order of the scalar loop this
 /// replaced; under [`Numerics::Fast`] the per-head dot uses
-/// [`dot_lanes`]. `dims` comes from
-/// [`ojas_core::per_head_sigmoid_gate_backward_dims`].
-#[allow(clippy::too_many_arguments)]
+/// [`dot_lanes`]. `grad_attn` and `gz` are filled in row chunks on scoped
+/// threads, and the two products write straight into their outputs
+/// ([`gemm_out`]); `grad_bias` sums into its zeroed output. `dims` comes
+/// from [`ojas_core::per_head_sigmoid_gate_backward_dims`].
 pub(crate) fn gate_backward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    input: &[f32],
-    weight: &[f32],
-    bias: &[f32],
-    attn: Shared,
-    grad_y: Shared,
+    [input, weight, bias, attn, grad_y]: [&[f32]; 5],
     dims: GateDims,
-) -> Result<GateGrads, OjasError> {
-    let attn_len = attn.values()?.len();
-    gate_lengths(op, &dims, input, weight, bias, attn.values()?)?;
-    if grad_y.values()?.len() != attn_len {
+    [grad_x, grad_w, grad_b, grad_attn]: GateGrads<'_>,
+) -> Result<(), OjasError> {
+    gate_lengths(op, &dims, input, weight, bias, attn)?;
+    if grad_y.len() != attn.len() {
         return Err(shape(op, "gate grad length does not match attn"));
+    }
+    if grad_x.len() != input.len()
+        || grad_w.len() != weight.len()
+        || grad_b.len() != bias.len()
+        || grad_attn.len() != attn.len()
+    {
+        return Err(shape(op, "gate gradient length does not match its operand"));
     }
     let GateDims {
         rows,
@@ -405,54 +441,47 @@ pub(crate) fn gate_backward(
         head_dim: dh,
     } = dims;
     let gz_len = product(op, &[rows, heads])?;
-    // Charged at once: the logits phase; grad_attn's task parts (the caller
-    // charges the joined grad_attn); gz's parts and joined copy; the larger
-    // gradient product's scratch; and the three other gradients.
+    // Charged at once: the logits phase, `gz`, and the larger gradient
+    // product's scratch. The four gradients are the caller's.
     let grads =
         gemm_scratch(op, exec, rows, heads, din)?.max(gemm_scratch(op, exec, heads, rows, din)?);
-    let work = [
-        logit_work(op, exec, &dims)?,
-        attn_len,
-        gz_len,
-        gz_len,
-        grads,
-        input.len(),
-        weight.len(),
-        heads,
-    ]
-    .into_iter()
-    .try_fold(0usize, |total, n| add(op, total, n))?;
+    let work = [logit_work(op, exec, &dims)?, gz_len, grads]
+        .into_iter()
+        .try_fold(0usize, |total, n| add(op, total, n))?;
     let _hold = room_for(op, budget, work)?;
     let gates = gate_values(op, exec, &dims, input, weight, bias)?;
     let numerics = exec.numerics;
     let width = heads * dh;
     let min_rows = (ROW_MIN_ELEMS / width.max(1)).max(1);
-    let parts = exec.chunks(rows, min_rows, move |range| {
-        let mut grad_attn = vec![0.0f32; range.len() * width];
-        let mut gz = vec![0.0f32; range.len() * heads];
-        let attn = &attn.values()?[range.start * width..range.end * width];
-        let gy = &grad_y.values()?[range.start * width..range.end * width];
-        let g = &gates[range.start * heads..range.end * heads];
-        let heads_in_range = grad_attn
-            .chunks_exact_mut(dh)
-            .zip(attn.chunks_exact(dh))
-            .zip(gy.chunks_exact(dh))
-            .zip(g.iter().zip(gz.iter_mut()));
-        for (((dst, a), gy), (&g, gz)) in heads_in_range {
-            for (out, &v) in dst.iter_mut().zip(gy) {
-                *out = v * g;
+    let mut gz = vec![0.0f32; gz_len];
+    scoped::chunks_into_n(
+        exec,
+        [grad_attn, &mut gz],
+        rows,
+        [width, heads],
+        min_rows,
+        |range, [grad_attn, gz]| {
+            let attn = &attn[range.start * width..range.end * width];
+            let gy = &grad_y[range.start * width..range.end * width];
+            let g = &gates[range.start * heads..range.end * heads];
+            let heads_in_range = grad_attn
+                .chunks_exact_mut(dh)
+                .zip(attn.chunks_exact(dh))
+                .zip(gy.chunks_exact(dh))
+                .zip(g.iter().zip(gz.iter_mut()));
+            for (((dst, a), gy), (&g, gz)) in heads_in_range {
+                for (out, &v) in dst.iter_mut().zip(gy) {
+                    *out = v * g;
+                }
+                let grad_g = match numerics {
+                    Numerics::Exact => dot_ascending(gy, a),
+                    Numerics::Fast => dot_lanes(gy, a),
+                };
+                *gz = grad_g * g * (1.0 - g);
             }
-            let grad_g = match numerics {
-                Numerics::Exact => dot_ascending(gy, a),
-                Numerics::Fast => dot_lanes(gy, a),
-            };
-            *gz = grad_g * g * (1.0 - g);
-        }
-        Ok::<_, OjasError>((grad_attn, gz))
-    })?;
-    let parts = parts.into_iter().collect::<Result<Vec<_>, _>>()?;
-    let (grad_attn, gz) = join2(parts, attn_len, gz_len);
-    let mut grad_b = vec![0.0f32; heads];
+            Ok(())
+        },
+    )?;
     for row in gz.chunks_exact(heads) {
         for (slot, &v) in grad_b.iter_mut().zip(row) {
             *slot += v;
@@ -460,10 +489,9 @@ pub(crate) fn gate_backward(
     }
     let gz = Mat::row_major(&gz, rows, heads);
     // grad_x[row, i] = sum_head gz[row, head] * W[head, i], head from 0.
-    let grad_x = gemm(op, exec, &gz, &Mat::row_major(weight, heads, din))?;
+    gemm_out(op, exec, &gz, &Mat::row_major(weight, heads, din), grad_x)?;
     // grad_w[head, i] = sum_row gz[row, head] * x[row, i], row from 0.
-    let grad_w = gemm(op, exec, &gz.t(), &Mat::row_major(input, rows, din))?;
-    Ok((grad_x, grad_w, grad_b, grad_attn))
+    gemm_out(op, exec, &gz.t(), &Mat::row_major(input, rows, din), grad_w)
 }
 
 fn add(op: &'static str, a: usize, b: usize) -> Result<usize, OjasError> {
@@ -482,7 +510,7 @@ fn gate_values(
     input: &[f32],
     weight: &[f32],
     bias: &[f32],
-) -> Result<Arc<Vec<f32>>, OjasError> {
+) -> Result<Vec<f32>, OjasError> {
     let (rows, din, heads) = (dims.rows, dims.d_model, dims.heads);
     let mut z = match exec.numerics {
         Numerics::Exact => {
@@ -520,7 +548,7 @@ fn gate_values(
         }
         *v = sigmoid(*v);
     }
-    Ok(Arc::new(z))
+    Ok(z)
 }
 
 /// `sum a[i] * b[i]` from `+0.0` in ascending `i`, separate multiply and add.
@@ -595,25 +623,33 @@ fn logit_work(op: &'static str, exec: Exec<'_>, dims: &GateDims) -> Result<usize
 }
 
 /// `y = (1 - sigmoid(lambda)) * value + sigmoid(lambda) * value0` as a
-/// tensor of `shape` (see [`mul_forward`]).
+/// tensor of `shape`, split and written in place like [`mul_forward`].
 pub(crate) fn value_residual_forward(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     value: &[f32],
     value0: &[f32],
     lambda: f32,
     shape: &[usize],
 ) -> Result<Tensor, OjasError> {
-    same_len(op, &[value.len(), value0.len()], "value residual operand")?;
+    same_len(
+        op,
+        &[value.len(), value0.len(), product(op, shape)?],
+        "value residual operand",
+    )?;
     let s = sigmoid(lambda);
     if !s.is_finite() {
         return Err(nonfinite(op));
     }
-    fill_out(op, budget, shape, |out| {
-        for ((o, &v), &v0) in out.iter_mut().zip(value).zip(value0) {
+    elementwise(op, budget, exec, shape, |range, out| {
+        for ((o, &v), &v0) in out
+            .iter_mut()
+            .zip(&value[range.clone()])
+            .zip(&value0[range])
+        {
             *o = (1.0 - s) * v + s * v0;
         }
-        Ok(())
     })
 }
 
@@ -621,11 +657,12 @@ pub(crate) fn value_residual_forward(
 /// boundaries are fixed by the length alone, never by the task split.
 const LAMBDA_BLOCK: usize = 1 << 12;
 
-/// `(grad_value, grad_value0, grad_lambda)`.
+/// Writes `grad_value` and `grad_value0` into the caller's outputs and
+/// returns `grad_lambda`.
 ///
-/// Unlike [`mul_forward`] this runs in block chunks on the pool: the `f64`
-/// sum below makes it compute-bound enough that the split pays for the
-/// joined copy of both gradients.
+/// It runs in [`LAMBDA_BLOCK`] chunks on scoped threads, each task filling
+/// its blocks of both gradients in place and, under [`Numerics::Fast`],
+/// returning its blocks' `grad_lambda` sums.
 ///
 /// `grad_lambda = s (1 - s) sum_i (value0[i] - value[i]) grad_y[i]` with
 /// `s = sigmoid(lambda)`, a sum over every element.
@@ -644,58 +681,49 @@ pub(crate) fn value_residual_backward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    value: Shared,
-    value0: Shared,
+    [value, value0, grad_y]: [&[f32]; 3],
     lambda: f32,
-    grad_y: Shared,
-) -> Result<(Vec<f32>, Vec<f32>, f32), OjasError> {
-    let n = value.values()?.len();
+    [grad_v, grad_v0]: [&mut [f32]; 2],
+) -> Result<f32, OjasError> {
+    let n = value.len();
     same_len(
         op,
-        &[n, value0.values()?.len(), grad_y.values()?.len()],
+        &[n, value0.len(), grad_y.len(), grad_v.len(), grad_v0.len()],
         "value residual grad",
     )?;
     let s = sigmoid(lambda);
     let blocks = n.div_ceil(LAMBDA_BLOCK);
-    // Two gradients' task parts and one f64 (two f32) per block; the caller
-    // charges the joined gradients.
-    let work = add(op, product(op, &[n, 2])?, product(op, &[blocks, 2])?)?;
-    let _parts = room_for(op, budget, work)?;
+    // One f64 (two f32) per block; the gradients are the caller's.
+    let _sums = room_for(op, budget, product(op, &[blocks, 2])?)?;
     let numerics = exec.numerics;
-    let parts = {
-        let (value, value0, grad_y) = (value.clone(), value0.clone(), grad_y.clone());
-        let min_blocks = ROW_MIN_ELEMS.div_ceil(LAMBDA_BLOCK);
-        exec.chunks(blocks, min_blocks, move |block_range| {
-            let (value, value0, grad_y) = (value.values()?, value0.values()?, grad_y.values()?);
+    let min_blocks = ROW_MIN_ELEMS.div_ceil(LAMBDA_BLOCK);
+    let sums = scoped::chunks_into_n(
+        exec,
+        [grad_v, grad_v0],
+        blocks,
+        [LAMBDA_BLOCK; 2],
+        min_blocks,
+        |block_range, [grad_v, grad_v0]| {
             let range = block_range.start * LAMBDA_BLOCK..(block_range.end * LAMBDA_BLOCK).min(n);
             let gy = &grad_y[range.clone()];
-            let grad_v = gy.iter().map(|g| (1.0 - s) * g).collect();
-            let grad_v0 = gy.iter().map(|g| s * g).collect();
-            let sums = match numerics {
+            for ((gv, gv0), &g) in grad_v.iter_mut().zip(grad_v0.iter_mut()).zip(gy) {
+                *gv = (1.0 - s) * g;
+                *gv0 = s * g;
+            }
+            Ok(match numerics {
                 Numerics::Exact => Vec::new(),
                 Numerics::Fast => range
-                    .clone()
                     .step_by(LAMBDA_BLOCK)
                     .map(|start| {
                         let end = (start + LAMBDA_BLOCK).min(n);
                         diff_dot_f64(&value[start..end], &value0[start..end], &grad_y[start..end])
                     })
-                    .collect(),
-            };
-            Ok::<_, OjasError>((grad_v, grad_v0, sums))
-        })?
-    };
-    let mut block_sums = Vec::with_capacity(blocks);
-    let mut pairs = Vec::with_capacity(parts.len());
-    for part in parts {
-        let (gv, gv0, sums) = part?;
-        block_sums.extend_from_slice(&sums);
-        pairs.push((gv, gv0));
-    }
-    let (grad_v, grad_v0) = join2(pairs, n, n);
+                    .collect::<Vec<f64>>(),
+            })
+        },
+    )?;
     let grad_lambda = match numerics {
         Numerics::Exact => {
-            let (value, value0, grad_y) = (value.values()?, value0.values()?, grad_y.values()?);
             let mut grad_s = 0.0f32;
             for ((&v, &v0), &g) in value.iter().zip(value0).zip(grad_y) {
                 grad_s += (v0 - v) * g;
@@ -703,12 +731,13 @@ pub(crate) fn value_residual_backward(
             grad_s * s * (1.0 - s)
         }
         Numerics::Fast => {
-            let grad_s = block_sums.iter().fold(0.0f64, |total, &b| total + b);
+            // The block sums in block order: task order, then each task's.
+            let grad_s = sums.iter().flatten().fold(0.0f64, |total, &b| total + b);
             let s = 1.0 / (1.0 + (-f64::from(lambda)).exp());
             (grad_s * s * (1.0 - s)) as f32
         }
     };
-    Ok((grad_v, grad_v0, grad_lambda))
+    Ok(grad_lambda)
 }
 
 /// `sum_i (value0[i] - value[i]) * grad_y[i]` with every term formed in
@@ -1000,4 +1029,70 @@ pub(crate) fn cross_entropy_grad(
 ) -> Result<Tensor, OjasError> {
     input.mean(op, exec, Some(out.as_mut_slice()))?;
     Tensor::from_scratch(out, shape)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::pool::Pool;
+
+    /// A `shape` that disagrees with the operands is refused before
+    /// anything is charged, for every elementwise forward pass: none of
+    /// them may write a prefix of the operands into a smaller output or
+    /// leave a larger one partly zero.
+    #[test]
+    fn elementwise_forwards_refuse_a_shape_that_disagrees_with_their_operands() {
+        let pool = Arc::new(Pool::new(2).unwrap());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        let budget = Budget::new(1 << 20);
+        let x = [1.0f32; 6];
+        for bad in [&[2usize, 2][..], &[2, 4], &[7]] {
+            let results = [
+                ("mul", mul_forward("t", &budget, exec, &x, &x, bad)),
+                ("add", add_forward("t", &budget, exec, &x, &x, bad)),
+                (
+                    "value_residual",
+                    value_residual_forward("t", &budget, exec, &x, &x, 0.5, bad),
+                ),
+            ];
+            for (name, got) in results {
+                assert!(
+                    matches!(got, Err(OjasError::Shape { .. })),
+                    "{name} {bad:?}: {got:?}"
+                );
+            }
+            assert_eq!(budget.live_bytes().unwrap(), 0);
+        }
+        let good = value_residual_forward("t", &budget, exec, &x, &x, 0.5, &[2, 3]).unwrap();
+        assert_eq!(good.f32_slice().unwrap(), &x[..]);
+    }
+
+    /// An output large enough for the output scan to split into blocks
+    /// across threads still refuses an overflow in its last value only, and
+    /// releases its charge; with no overflow it is recorded finite.
+    #[test]
+    fn a_multi_block_output_refuses_an_overflow_in_its_last_value() {
+        let pool = Arc::new(Pool::new(4).unwrap());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        let budget = Budget::new(1 << 26);
+        let n = (1 << 21) + 3;
+        let mut a = vec![1.0f32; n];
+        let mut b = vec![2.0f32; n];
+        let ok = mul_forward("t", &budget, exec, &a, &b, &[n]).unwrap();
+        assert!(ok.f32_slice().unwrap().iter().all(|&v| v == 2.0));
+        drop(ok);
+        a[n - 1] = f32::MAX;
+        b[n - 1] = f32::MAX;
+        let got = mul_forward("t", &budget, exec, &a, &b, &[n]);
+        assert!(matches!(got, Err(OjasError::NonFinite { .. })), "{got:?}");
+        assert_eq!(budget.live_bytes().unwrap(), 0);
+    }
 }

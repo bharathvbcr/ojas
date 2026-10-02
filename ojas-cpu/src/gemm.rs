@@ -247,10 +247,29 @@ pub(crate) fn gemm(
     a: &Mat,
     b: &Mat,
 ) -> Result<Vec<f32>, OjasError> {
-    let len = operands(op, a, b)?;
-    let mut c = vec![0.0f32; len];
-    gemm_into(op, exec, a, b, &mut c, false)?;
+    let mut c = vec![0.0f32; operands(op, a, b)?];
+    gemm_out(op, exec, a, b, &mut c)?;
     Ok(c)
+}
+
+/// [`gemm`] written into `c` (row-major `[a.rows, b.cols]`, zeroed), for an
+/// output that already lives in its tensor's buffer. The bits are
+/// [`gemm`]'s.
+pub(crate) fn gemm_out(
+    op: &'static str,
+    exec: Exec<'_>,
+    a: &Mat,
+    b: &Mat,
+    c: &mut [f32],
+) -> Result<(), OjasError> {
+    let len = operands(op, a, b)?;
+    if c.len() != len {
+        return Err(shape(
+            op,
+            format!("gemm output length {} != {len}", c.len()),
+        ));
+    }
+    gemm_into(op, exec, a, b, c, false)
 }
 
 /// `c += A · B`, `c` row-major `[a.rows, b.cols]`.
@@ -1120,8 +1139,19 @@ mod tests {
                     let before = whole_calls();
                     let op = "test";
                     let dims = linear_dims(rows, kin, nout);
-                    crate::linalg::linear_forward(op, &budget, exec, &x, &w, &dims).unwrap();
-                    crate::linalg::linear_backward(op, &budget, exec, &x, &w, &g, &dims).unwrap();
+                    let mut y = vec![0.0f32; rows * nout];
+                    crate::linalg::linear_forward(op, &budget, exec, &x, &w, &dims, &mut y)
+                        .unwrap();
+                    let (mut gx, mut gw) = (vec![0.0f32; rows * kin], vec![0.0f32; nout * kin]);
+                    crate::linalg::linear_backward(
+                        op,
+                        &budget,
+                        exec,
+                        [&x, &w, &g],
+                        &dims,
+                        [&mut gx, &mut gw],
+                    )
+                    .unwrap();
                     let xm = Mat::row_major(&x, rows, kin);
                     gemm(op, exec, &xm, &xm.t()).unwrap();
                     let after = whole_calls();
@@ -1179,14 +1209,18 @@ mod tests {
             numerics: Numerics::Fast,
         };
         let budget = ojas_core::Budget::new(1 << 30);
+        let (mut gx, mut gw) = (vec![0.0f32; rows * kin], vec![0.0f32; nout * kin]);
         let err = crate::linalg::linear_backward(
             "test",
             &budget,
             exec,
-            &random(rows * kin, 1),
-            &random(nout * kin, 2),
-            &random(rows * nout, 3),
+            [
+                &random(rows * kin, 1),
+                &random(nout * kin, 2),
+                &random(rows * nout, 3),
+            ],
             &linear_dims(rows, kin, nout),
+            [&mut gx, &mut gw],
         )
         .err();
         assert!(

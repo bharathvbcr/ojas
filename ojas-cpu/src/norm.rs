@@ -10,42 +10,36 @@
 //! adds; [`GROUP`] rows are summed side by side so that many independent
 //! chains run at once, which leaves every row's order unchanged.
 
-use std::sync::Arc;
-
 use ojas_core::{Budget, OjasError, RmsDims, RopeDims, RopeLayout};
 
-use crate::pool::{Exec, ROW_MIN_ELEMS};
-use crate::validate::{nonfinite, product, room_for, shape, Shared};
+use crate::pool::{scoped, Exec, ROW_MIN_ELEMS};
+use crate::validate::{nonfinite, product, room_for, shape};
 
 /// Rows whose sums run side by side.
 const GROUP: usize = 8;
 
 /// `dims` comes from [`ojas_core::rms_norm_forward_dims`], which also
 /// refused a non-finite `eps`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rms_forward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    x: Shared,
-    weight: Shared,
+    x: &[f32],
+    weight: &[f32],
     dims: RmsDims,
     eps: f32,
-) -> Result<Vec<f32>, OjasError> {
+    y: &mut [f32],
+) -> Result<(), OjasError> {
     let RmsDims { rows, dim } = dims;
     let n = product(op, &[rows, dim])?;
-    if x.values()?.len() != n || weight.values()?.len() != dim {
+    if x.len() != n || weight.len() != dim || y.len() != n {
         return Err(shape(op, "rms data length does not match shape"));
     }
-    // The output's task parts and one rstd per row; the caller charges the
-    // joined output.
-    let scratch = n.checked_add(rows).ok_or_else(|| OjasError::OutOfRange {
-        op,
-        detail: "rms scratch length overflows".to_string(),
-    })?;
-    let _hold = room_for(op, budget, scratch)?;
-    exec.rows(rows, dim, move |range| {
-        let (x, weight) = (x.values()?, weight.values()?);
-        let mut y = vec![0.0f32; range.len() * dim];
+    // One rstd per row, across the tasks; the output is the caller's,
+    // written in place.
+    let _hold = room_for(op, budget, rows)?;
+    scoped::rows_into(exec, y, rows, dim, |range, y| {
         let src = &x[range.start * dim..range.end * dim];
         let rstd = rstds(op, src, dim, eps)?;
         let rows = y
@@ -57,8 +51,9 @@ pub(crate) fn rms_forward(
                 *out = value * rstd * w;
             }
         }
-        Ok(y)
-    })
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// `grad_x` runs in row chunks. `grad_w` is a sum over rows, so it runs in
@@ -69,35 +64,32 @@ pub(crate) fn rms_backward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    x: Shared,
-    weight: Shared,
-    grad_y: Shared,
+    [x, weight, grad_y]: [&[f32]; 3],
     dims: RmsDims,
     eps: f32,
-) -> Result<(Vec<f32>, Vec<f32>), OjasError> {
+    [grad_x, grad_w]: [&mut [f32]; 2],
+) -> Result<(), OjasError> {
     let RmsDims { rows, dim } = dims;
     let n = product(op, &[rows, dim])?;
-    if x.values()?.len() != n || grad_y.values()?.len() != n || weight.values()?.len() != dim {
+    if x.len() != n
+        || grad_y.len() != n
+        || weight.len() != dim
+        || grad_x.len() != n
+        || grad_w.len() != dim
+    {
         return Err(shape(op, "rms backward data length does not match shape"));
     }
-    // grad_x, the weight gradient, and one rstd and one dot per row are
-    // live together.
-    let scratch = n
-        .checked_add(dim)
-        .and_then(|v| v.checked_add(rows))
-        .and_then(|v| v.checked_add(rows))
-        .ok_or_else(|| OjasError::OutOfRange {
-            op,
-            detail: "rms scratch length overflows".to_string(),
-        })?;
+    // One rstd and one dot per row in the tasks, then the rstds joined for
+    // the column pass; both gradients are the caller's, written in place.
+    let scratch = rows.checked_mul(3).ok_or_else(|| OjasError::OutOfRange {
+        op,
+        detail: "rms scratch length overflows".to_string(),
+    })?;
     let _hold = room_for(op, budget, scratch)?;
     let inv_dim = 1.0f32 / dim as f32;
     let parts = {
-        let (x, grad_y) = (x.clone(), grad_y.clone());
         let min_rows = (ROW_MIN_ELEMS / dim).max(1);
-        exec.chunks(rows, min_rows, move |range| {
-            let (x, grad_y, weight) = (x.values()?, grad_y.values()?, weight.values()?);
-            let mut grad_x = vec![0.0f32; range.len() * dim];
+        scoped::chunks_into(exec, grad_x, rows, dim, min_rows, |range, grad_x| {
             let src = &x[range.start * dim..range.end * dim];
             let gy = &grad_y[range.start * dim..range.end * dim];
             let rstd = rstds(op, src, dim, eps)?;
@@ -116,21 +108,12 @@ pub(crate) fn rms_backward(
                     *out = (dxhat - xhat * mean) * rstd;
                 }
             }
-            Ok::<_, OjasError>((grad_x, rstd))
+            Ok::<_, OjasError>(rstd)
         })?
     };
-    let mut grad_x = Vec::with_capacity(n);
-    let mut rstd = Vec::with_capacity(rows);
-    for part in parts {
-        let (gx, rs) = part?;
-        grad_x.extend_from_slice(&gx);
-        rstd.extend_from_slice(&rs);
-    }
-    let rstd = Arc::new(rstd);
+    let rstd = parts.concat();
     let min_cols = (ROW_MIN_ELEMS / rows).max(1);
-    let cols = exec.chunks(dim, min_cols, move |cols| {
-        let (x, grad_y) = (x.values()?, grad_y.values()?);
-        let mut acc = vec![0.0f32; cols.len()];
+    scoped::chunks_into(exec, grad_w, dim, 1, min_cols, |cols, acc| {
         for (row, &r) in rstd.iter().enumerate() {
             let src = &x[row * dim + cols.start..row * dim + cols.end];
             let gy = &grad_y[row * dim + cols.start..row * dim + cols.end];
@@ -139,10 +122,9 @@ pub(crate) fn rms_backward(
                 *slot += g * xhat;
             }
         }
-        Ok::<_, OjasError>(acc)
+        Ok(())
     })?;
-    let cols = cols.into_iter().collect::<Result<Vec<_>, _>>()?;
-    Ok((grad_x, cols.concat()))
+    Ok(())
 }
 
 /// `1 / sqrt(mean(row²) + eps)` for each `dim`-wide row of `rows`. Each
@@ -225,21 +207,20 @@ fn rstd_of_sum(op: &'static str, sum_sq: f32, dim: usize, eps: f32) -> Result<f3
 /// `dims` comes from [`ojas_core::rope_half_split_forward_dims`].
 pub(crate) fn rope_forward(
     op: &'static str,
-    budget: &Budget,
     exec: Exec<'_>,
-    x: Shared,
-    cos: Shared,
-    sin: Shared,
+    x: &[f32],
+    cos: &[f32],
+    sin: &[f32],
     dims: RopeDims,
-) -> Result<Vec<f32>, OjasError> {
+    out: &mut [f32],
+) -> Result<(), OjasError> {
     let RopeDims { rows, dim, layout } = dims;
     let n = product(op, &[rows, dim])?;
-    if x.values()?.len() != n {
+    if x.len() != n || out.len() != n {
         return Err(shape(op, "rope data length does not match shape"));
     }
     rope_rows(
         op,
-        budget,
         exec,
         layout,
         rows,
@@ -248,27 +229,27 @@ pub(crate) fn rope_forward(
         cos,
         sin,
         Direction::Forward,
+        out,
     )
 }
 
 /// `dims` comes from [`ojas_core::rope_half_split_backward_dims`].
 pub(crate) fn rope_backward(
     op: &'static str,
-    budget: &Budget,
     exec: Exec<'_>,
-    grad_y: Shared,
-    cos: Shared,
-    sin: Shared,
+    grad_y: &[f32],
+    cos: &[f32],
+    sin: &[f32],
     dims: RopeDims,
-) -> Result<Vec<f32>, OjasError> {
+    out: &mut [f32],
+) -> Result<(), OjasError> {
     let RopeDims { rows, dim, layout } = dims;
     let n = product(op, &[rows, dim])?;
-    if grad_y.values()?.len() != n {
+    if grad_y.len() != n || out.len() != n {
         return Err(shape(op, "rope grad length does not match shape"));
     }
     rope_rows(
         op,
-        budget,
         exec,
         layout,
         rows,
@@ -277,6 +258,7 @@ pub(crate) fn rope_backward(
         cos,
         sin,
         Direction::Backward,
+        out,
     )
 }
 
@@ -289,23 +271,19 @@ enum Direction {
 #[allow(clippy::too_many_arguments)]
 fn rope_rows(
     op: &'static str,
-    budget: &Budget,
     exec: Exec<'_>,
     layout: RopeLayout,
     rows: usize,
     dim: usize,
-    x: Shared,
-    cos: Shared,
-    sin: Shared,
+    x: &[f32],
+    cos: &[f32],
+    sin: &[f32],
     direction: Direction,
-) -> Result<Vec<f32>, OjasError> {
-    check_rope_tables(op, layout, rows, dim, cos.values()?, sin.values()?)?;
-    let n = product(op, &[rows, dim])?;
-    let _hold = room_for(op, budget, n)?;
+    out: &mut [f32],
+) -> Result<(), OjasError> {
+    check_rope_tables(op, layout, rows, dim, cos, sin)?;
     let half = dim / 2;
-    exec.rows(rows, dim, move |range| {
-        let (x, cos, sin) = (x.values()?, cos.values()?, sin.values()?);
-        let mut y = vec![0.0f32; range.len() * dim];
+    scoped::rows_into(exec, out, rows, dim, |range, y| {
         for (local, row) in range.enumerate() {
             let (cos_row, sin_row) = coeff_row(layout, cos, sin, row, dim);
             let src = &x[row * dim..(row + 1) * dim];
@@ -331,8 +309,9 @@ fn rope_rows(
                 }
             }
         }
-        Ok(y)
-    })
+        Ok(())
+    })?;
+    Ok(())
 }
 
 fn check_rope_tables(

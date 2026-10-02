@@ -1321,6 +1321,11 @@ pub fn per_head_gate_backward(
     let d_attn = zeros(&g.rt, &[g.rows, g.n_head, g.head_dim])?;
     let d_pre = zeros(&g.rt, &[g.rows, g.n_head])?;
     let d_bias = zeros(&g.rt, &[g.n_head])?;
+    // The kernels' status words (`ST_IN`, `ST_OUT` in `device.rs`): the
+    // inputs were checked on the host, so a set word is `pre`, `d_attn` or
+    // `d_bias` not finite.
+    let st = g.rt.alloc_buffer(4 * GATE_STATUS_WORDS).map_err(metal)?;
+    st.try_write_u32(&[0; GATE_STATUS_WORDS]).map_err(metal)?;
     let p = g.rt.pipeline("ojas_per_head_gate_bwd").map_err(metal)?;
     let units = g.rows * g.n_head;
     dispatch::dispatch_1d(&g.rt, &p, units, |bnd| {
@@ -1338,16 +1343,18 @@ pub fn per_head_gate_backward(
         set_u32(bnd, plane, 9);
         set_u32(bnd, pre_n, 10);
         set_u32(bnd, g.n_head as u32, 11);
+        set_gpu_buf(bnd, &st, 12);
     })
     .map_err(metal)?;
     let pb = g.rt.pipeline("ojas_per_head_gate_dbias").map_err(metal)?;
-    dispatch::dispatch_1d(&g.rt, &pb, g.n_head, |bnd| {
+    dispatch::dispatch_1d(&g.rt, &pb, gate_dbias_threads(g.n_head)?, |bnd| {
         set_gpu_buf(bnd, &d_pre.buffer, 0);
         set_gpu_buf(bnd, &d_bias.buffer, 1);
         set_u32(bnd, g.rows as u32, 2);
         set_u32(bnd, g.n_head as u32, 3);
         set_u32(bnd, (g.rows * g.n_head) as u32, 4);
         set_u32(bnd, g.n_head as u32, 5);
+        set_gpu_buf(bnd, &st, 6);
     })
     .map_err(metal)?;
     let d_weight = zeros(&g.rt, &[g.n_head, g.d_model])?;
@@ -1359,13 +1366,31 @@ pub fn per_head_gate_backward(
     GemmOperands::ExactF32
         .nn(&d_pre, &g.weight, &d_input)
         .map_err(metal)?;
-    Ok(GateGrad {
+    let grad = GateGrad {
         d_input: d_input.read_f32().map_err(metal)?,
         d_weight: d_weight.read_f32().map_err(metal)?,
         d_bias: d_bias.read_f32().map_err(metal)?,
         d_attn: d_attn.read_f32().map_err(metal)?,
-    })
+    };
+    // Read after the outputs: their reads waited for the device.
+    if st
+        .try_contents_u32()
+        .map_err(metal)?
+        .iter()
+        .any(|&w| w != 0)
+    {
+        return Err(OjasError::NonFinite {
+            op: "per_head_gate",
+        });
+    }
+    finite_f32("per_head_gate", &grad.d_input)?;
+    finite_f32("per_head_gate", &grad.d_weight)?;
+    Ok(grad)
 }
+
+/// Status words `ojas_per_head_gate_bwd` and `ojas_per_head_gate_dbias`
+/// may set; `ST_WORDS` in `device.rs`.
+const GATE_STATUS_WORDS: usize = 8;
 
 struct GateBufs {
     rt: Arc<GpuRuntime>,
@@ -1429,6 +1454,18 @@ pub fn gate_fwd_bytes(
         "gate_fwd_bytes",
         &[e.x, e.weight, e.bias, e.attn, e.pre, e.attn],
     )
+}
+
+/// Threads per head of `ojas_per_head_gate_dbias`: one SIMD-group, the
+/// width `dispatch_1d` gives each threadgroup on Apple GPUs.
+const GATE_DBIAS_LANES: usize = 32;
+
+/// The `ojas_per_head_gate_dbias` grid for `n_head` heads, as `MetalBackend`
+/// and the tiny step both dispatch it.
+pub(crate) fn gate_dbias_threads(n_head: usize) -> Result<usize, OjasError> {
+    n_head
+        .checked_mul(GATE_DBIAS_LANES)
+        .ok_or_else(|| overflow("gate_dbias_threads"))
 }
 
 /// Logical bytes `per_head_gate_backward` allocates: the shared uploads plus
@@ -2261,7 +2298,13 @@ mod tests {
         let base = AdamWConfig::nanolab(1e-2, 0.01);
         let bad = [
             ("negative lr", AdamWConfig { lr: -1e-2, ..base }),
-            ("negative weight decay", AdamWConfig { weight_decay: -0.1, ..base }),
+            (
+                "negative weight decay",
+                AdamWConfig {
+                    weight_decay: -0.1,
+                    ..base
+                },
+            ),
             ("beta1 above 1", AdamWConfig { beta1: 1.5, ..base }),
             ("zero eps", AdamWConfig { eps: 0.0, ..base }),
         ];
@@ -2269,8 +2312,8 @@ mod tests {
             let mut p = f32_tensor(&session.rt, &[1, n], &p0).unwrap();
             let mut m = zeros(&session.rt, &[1, n]).unwrap();
             let mut v = zeros(&session.rt, &[1, n]).unwrap();
-            let err = adamw_apply(&session.rt, &mut p, &grad, &mut m, &mut v, 1, &cfg)
-                .expect_err(what);
+            let err =
+                adamw_apply(&session.rt, &mut p, &grad, &mut m, &mut v, 1, &cfg).expect_err(what);
             assert!(matches!(err, OjasError::OutOfRange { .. }), "{what}: {err}");
             assert_eq!(p.read_f32().unwrap(), p0, "{what}: parameter written");
         }
@@ -3233,6 +3276,139 @@ mod tests {
                 assert_eq!(g.all_bits(), first_bwd.all_bits(), "backward dispatch {i}");
             }
         }
+    }
+
+    /// Dispatch `ojas_per_head_gate_dbias` over `d_pre` as the backend does,
+    /// with `pre_len` as given, into a `d_bias` that starts at `sentinel`.
+    /// Returns `d_bias` and the status words the kernel left.
+    fn dbias(
+        session: &Session,
+        d_pre: &[f32],
+        rows: usize,
+        n_head: usize,
+        pre_len: usize,
+        sentinel: f32,
+    ) -> (Vec<f32>, Vec<u32>) {
+        let rt = &session.rt;
+        let d_pre_t = f32_tensor(rt, &[d_pre.len()], d_pre).unwrap();
+        let d_bias = f32_tensor(rt, &[n_head], &vec![sentinel; n_head]).unwrap();
+        let st = rt.alloc_buffer(4 * GATE_STATUS_WORDS).unwrap();
+        st.try_write_u32(&[0; GATE_STATUS_WORDS]).unwrap();
+        let p = rt.pipeline("ojas_per_head_gate_dbias").unwrap();
+        dispatch::dispatch_1d(rt, &p, gate_dbias_threads(n_head).unwrap(), |bnd| {
+            set_gpu_buf(bnd, &d_pre_t.buffer, 0);
+            set_gpu_buf(bnd, &d_bias.buffer, 1);
+            set_u32(bnd, rows as u32, 2);
+            set_u32(bnd, n_head as u32, 3);
+            set_u32(bnd, pre_len as u32, 4);
+            set_u32(bnd, n_head as u32, 5);
+            set_gpu_buf(bnd, &st, 6);
+        })
+        .unwrap();
+        let out = d_bias.read_f32().unwrap();
+        (out, st.try_contents_u32().unwrap().to_vec())
+    }
+
+    /// The bias gradient adds each head's `d_pre` over rows in ascending
+    /// order from 0, as the CPU reference does, bit for bit. Values of ±3e7
+    /// sit among small ones, so a sum taken in any other order (pairwise,
+    /// reversed, a chunk dropped or repeated, the wrong stride) lands on
+    /// other bits. Row counts straddle the 32-lane strides, the 8-row
+    /// unrolled adds and the 2048-row threadgroup blocks.
+    #[test]
+    fn gate_dbias_sums_rows_in_ascending_order_bit_for_bit() {
+        let session = session();
+        let value = |r: usize, h: usize| -> f32 {
+            match (r * 7 + h * 3) % 5 {
+                0 => 3.0e7,
+                2 => -3.0e7,
+                k => 0.37 + (r % 11) as f32 * 0.13 + k as f32 + h as f32 * 0.01,
+            }
+        };
+        for n_head in [1usize, 3, 12] {
+            for rows in [
+                1usize, 31, 32, 33, 64, 65, 127, 128, 129, 1024, 2047, 2048, 2049, 4096, 4097,
+            ] {
+                let d_pre: Vec<f32> = (0..rows * n_head)
+                    .map(|i| value(i / n_head, i % n_head))
+                    .collect();
+                let want: Vec<f32> = (0..n_head)
+                    .map(|h| (0..rows).fold(0.0f32, |s, r| s + d_pre[r * n_head + h]))
+                    .collect();
+                let (got, st) = dbias(&session, &d_pre, rows, n_head, d_pre.len(), f32::NAN);
+                let (gb, wb): (Vec<u32>, Vec<u32>) = (
+                    got.iter().map(|v| v.to_bits()).collect(),
+                    want.iter().map(|v| v.to_bits()).collect(),
+                );
+                assert_eq!(gb, wb, "rows {rows}, heads {n_head}: {got:?} vs {want:?}");
+                assert!(st.iter().all(|&w| w == 0), "finite sums flagged: {st:?}");
+            }
+        }
+    }
+
+    /// `per_head_gate_backward` refuses a gradient that is not finite from
+    /// finite inputs. With `x` and `bias` zero every gate is exactly 0.5, so
+    /// `d_pre = 16 · dy · attn` per element pair. First `d_bias` alone
+    /// overflows (32 rows of `d_pre` ≈ 3.1e37, from the kernel's status
+    /// word), then `d_input` alone (`d_pre · W` with W = 3e38, from the host
+    /// check). Both came back `Ok` with infinities before the checks.
+    #[test]
+    fn gate_backward_refuses_a_gradient_that_overflows() {
+        let session = session();
+        let (d, h, hd) = (D_MODEL as usize, N_HEAD as usize, HEAD_DIM as usize);
+        let rows = (MAX_BATCH * MAX_SEQ) as usize;
+        let (x, bias) = (vec![0.0f32; rows * d], vec![0.0f32; h]);
+        let cases: [(&str, f32, f32); 2] = [("d_bias", 1.4e18, 0.0), ("d_input", 1.0, 3.0e38)];
+        for (what, v, w_val) in cases {
+            let w = vec![w_val; h * d];
+            let plane = vec![v; rows * h * hd];
+            let got =
+                per_head_gate_backward(&session, gi(&x, &w, &bias, &plane, rows), &plane, u64::MAX);
+            assert!(
+                matches!(
+                    got,
+                    Err(OjasError::NonFinite {
+                        op: "per_head_gate"
+                    })
+                ),
+                "{what}: {:?}",
+                got.map(|g| (g.d_bias, g.d_input.iter().any(|x| !x.is_finite())))
+            );
+        }
+    }
+
+    const ST_IN_WORD: usize = 0;
+    const ST_OUT_WORD: usize = 1;
+
+    /// A sum that overflows sets `ST_OUT` and nothing else; the heads whose
+    /// sums are finite are still written.
+    #[test]
+    fn gate_dbias_flags_a_sum_that_is_not_finite() {
+        let session = session();
+        let (rows, n_head) = (70usize, 2usize);
+        // Head 1 sums 70 values of 1e37 past f32::MAX; head 0 sums ones.
+        let d_pre: Vec<f32> = (0..rows * n_head)
+            .map(|i| if i % n_head == 1 { 1.0e37 } else { 1.0 })
+            .collect();
+        let (got, st) = dbias(&session, &d_pre, rows, n_head, d_pre.len(), 7.0);
+        assert_eq!(got[0], rows as f32);
+        assert_eq!(got[1], f32::INFINITY);
+        assert_eq!(st[ST_OUT_WORD], 1, "{st:?}");
+        assert_eq!(st[ST_IN_WORD], 0, "{st:?}");
+    }
+
+    /// The edges the serial kernel had: no rows writes zeros, and a length
+    /// too short for a head's last row leaves that head unwritten while the
+    /// heads that fit are summed.
+    #[test]
+    fn gate_dbias_keeps_the_empty_and_short_length_edges() {
+        let session = session();
+        assert_eq!(dbias(&session, &[5.0], 0, 3, 1, 7.0).0, vec![0.0; 3]);
+        let (rows, n_head) = (40usize, 3usize);
+        let d_pre: Vec<f32> = (0..rows * n_head).map(|i| i as f32 * 0.5).collect();
+        let (got, _) = dbias(&session, &d_pre, rows, n_head, rows * n_head - 1, 7.0);
+        let sum = |h: usize| (0..rows).fold(0.0f32, |s, r| s + d_pre[r * n_head + h]);
+        assert_eq!(got, vec![sum(0), sum(1), 7.0]);
     }
 
     impl GateGrad {

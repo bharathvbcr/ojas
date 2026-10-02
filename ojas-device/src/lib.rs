@@ -6,13 +6,29 @@
 
 #![deny(unsafe_code)]
 
+mod bandwidth;
 mod host;
 mod plan;
+#[cfg(target_os = "macos")]
+mod sysctl;
+mod system;
+#[cfg(test)]
+mod testutil;
+mod topology;
+mod tuning;
 
 use std::fmt;
 
+pub use bandwidth::{
+    cached_bandwidth, measure_bandwidth, Bandwidth, BandwidthConfig, BandwidthError,
+    BANDWIDTH_DEFAULT_BYTES, BANDWIDTH_MAX_BYTES, BANDWIDTH_MAX_REPS, BANDWIDTH_MAX_TIME,
+    BANDWIDTH_MIN_BYTES,
+};
 pub use host::{probe_host, HostMemory, MemoryReport};
 pub use plan::{MemoryProbe, ResourcePlan, ResourcePolicy};
+pub use system::{probe_system, MemoryArchitecture, MemoryPressure, SystemProfile};
+pub use topology::{probe_topology, CoreCluster, CpuTopology};
+pub use tuning::{CacheBudget, GemmBlocks, GEMM_KC_MAX, GEMM_KC_STEP, GEMM_MC_MAX, GEMM_NC_MAX};
 
 /// Where a call is allowed to run.
 ///

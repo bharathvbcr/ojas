@@ -1,0 +1,26 @@
+11:03  up  2:10, 1 user, load averages: 3.29 8.21 9.19
+mutant reversed killed (exit 101)
+test gpu::tests::gate_dbias_keeps_the_empty_and_short_length_edges ... ok
+test gpu::tests::gate_dbias_sums_rows_in_ascending_order_bit_for_bit ... FAILED
+mutant partial killed (exit 101)
+test gpu::tests::gate_dbias_sums_rows_in_ascending_order_bit_for_bit ... FAILED
+test gpu::tests::gate_dbias_keeps_the_empty_and_short_length_edges ... FAILED
+mutant tree killed (exit 101)
+test gpu::tests::gate_dbias_keeps_the_empty_and_short_length_edges ... ok
+test gpu::tests::gate_dbias_sums_rows_in_ascending_order_bit_for_bit ... FAILED
+kernel restored
+clippy exit=0
+build exit=0
+11:03  up  2:10, 1 user, load averages: 3.49 8.02 9.10
+== old (min µs per round: dbias | whole backward)
+round 1: 807.1  | 1611.0 
+round 2: 806.5  | 1632.4 
+round 3: 804.5  | 1631.5 
+round 4: 807.4  | 1585.8 
+== new (min µs per round: dbias | whole backward)
+round 1: 120.0  | 940.1 
+round 2: 120.4  | 941.6 
+round 3: 120.4  | 941.7 
+round 4: 120.3  | 938.1 
+
+[exited with code 0]

@@ -187,6 +187,43 @@ OJAS_BENCH_OPS=linear_dec_qkvo,linear_dec_up,linear_dec_down OJAS_BENCH_THREADS=
 
 ---
 
+## Every `bench_ops` Case against Torch, after Typed Storage Step 3 (2026-10-02)
+
+Same cases and shapes as the next section, now all 27, with every output written in place and each storage scanned for NaN once until written. Both sides run the same dumped inputs: `bench_ops` dump mode writes them, and `ojas-cpu/benches/torch_ops.py` reads them for parity and timing. ojas is Fast with 6 threads, torch 2.13 CPU 6 threads. Each cell is the minimum over 3 interleaved rounds (ojas, then torch), each itself a minimum over the case's calls. Load average 5–6, with no other build or benchmark running. Ratio is ojas / torch: below 1, ojas is faster. Reproduce with `bash target-matmul/cpu_vs_torch.sh 3`; the full log is `target-matmul/cpu_vs_torch.txt`.
+
+**Parity:** 124 of 127 outputs are within tolerance of torch. The other three are the clip norm and two outputs scaled by it, where torch is the one that is off: against an f64 evaluation of the same 123.7M gradients, ojas's norm is within 5.5e-9 and torch's f32 norm is 1.6e-3 low (`PARITY_F64`).
+
+**Training block:** step (forward and backward) 41.5 ms against torch's 43.1 ms with its default SDPA (0.96) and 55.1 ms with MATH SDPA (0.75); forward 14.4 against 14.4 (0.99).
+
+Where ojas is behind, ms (ratio):
+
+| Case | ojas | torch | ojas / torch |
+| :--- | ---: | ---: | ---: |
+| add backward | 0.099 | 0.0075 | 13.2 |
+| mul forward / backward | 0.318 / 0.636 | 0.065 / 0.148 | 4.9 / 4.3 |
+| add forward | 0.117 | 0.041 | 2.8 |
+| AdamW against torch's fused AdamW, `[768,768]` / `[3072,768]` / `[50304,768]` | 0.23 / 0.65 / 10.3 | 0.083 / 0.30 / 4.25 | 2.8 / 2.2 / 2.4 |
+| permute (0,2,1,3) | 0.083 | 0.038 | 2.2 |
+| embedding forward | 0.064 | 0.034 | 1.9 |
+| gate forward / backward | 0.214 / 0.332 | 0.129 / 0.234 | 1.7 / 1.4 |
+| decode linear backward (qkvo / up / down) | 0.084 / 0.209 / 0.205 | 0.060 / 0.136 / 0.134 | 1.4 / 1.5 / 1.5 |
+| Muon `[2048,768]` / `[3072,768]` | 29.2 / 41.8 | 20.5 / 28.3 | 1.4 / 1.5 |
+| SiLU forward | 0.365 | 0.293 | 1.25 |
+
+Within 10% of torch: every prefill linear (1.00–1.08; both call Accelerate), the LM-head linear (1.03 / 1.08), decode linear forward (0.90–0.92), RMSNorm and QK-norm forward, SiLU backward, cross-entropy backward, embedding backward, Muon `[768,768]` and value-residual forward.
+
+Ahead of torch: SDPA forward / backward 0.83 / 0.82 against torch's default (flash) SDPA, RMSNorm backward 0.55, RoPE 0.63 / 0.58, value-residual backward 0.59, QK-norm backward 0.69, cross-entropy forward 0.69, clip 0.43, and AdamW 0.80–0.91 against torch's default (non-fused) AdamW.
+
+When these numbers were taken, mul, add and permute ran on the calling thread (`pointwise.rs` `mul_forward`, `add_forward`; `layout.rs` `permute`) where torch spreads them across its pool. Later the same day, mul forward and backward, add forward and the value-residual forward were split across scoped threads, written in place (`elementwise_into`, `scoped::chunks_into_n`); the table above predates that change. Permute still runs on the calling thread.
+
+Re-timed after the split, at load 5.2–5.7 (`bash target-matmul/s8_time.sh`, log `target-matmul/s8_time.txt`). Against the build before it (interleaved, 9 rounds, after/before by min / median): mul forward 0.72 / 0.76, mul backward 0.72 / 0.74, add forward 0.91 / 0.93, value-residual forward 0.94 / 0.97, block step 0.98 / 1.00, add backward 1.00 / 1.02. Against torch (3 rounds, min), ms (ratio): mul forward 0.226 / 0.066 (3.44), mul backward 0.477 / 0.250 (1.91; torch's own minimum was 0.148 in the step-3 run above, so this ratio is the less certain one), add forward 0.108 / 0.034 (3.19), value-residual forward 0.110 / 0.108 (1.02), block step 43.1 / 42.1 (1.02, within this run's spread of the earlier 0.96). Parity 47 of 47.
+
+Where mul forward's 0.24 ms goes at `[1024, 2048]` (a throwaway timing test, min of 50, since deleted): the charged, zeroed output alone 0.03 ms (the same as a lazily zeroed `vec!`), the output plus the six-thread write 0.13, and the finite scan of the output, on the calling thread after the write (`validate.rs` `fill_outs`), another 0.10, 41% of the op. Scanning each part on the thread that wrote it instead cost 0.06. The scoped threads' spawn (about 37 µs a call, `pool/scoped.rs`) is in the 0.13.
+
+Since then, `fill_outs` scans each new output with the operand scan, `validate.rs` `window_finite`: blocks of 4 MiB on scoped threads, one block on the calling thread. That gained less than the single-thread rate above predicted. Interleaved A/B against the same tree with only the serial scan restored (`target-matmul/s9-stage`, `bash target-matmul/s9_gate.sh`, 7 rounds, load 5–7.7, after/before by min / median): LM-head linear forward 0.97 / 0.97 (−1.4 ms of 47.8), backward 0.99 / 0.95, mul backward 0.94 / 0.95, value-residual backward 0.92 / 0.95, mul forward 0.99 / 0.91, add forward 0.97 / 1.00, cross-entropy forward 1.01 / 1.05 and backward 1.03 / 0.98, block forward 0.98 / 1.01, and block step 1.01 / 1.06. Block step was the one median to rise, in a run whose load climbed from 5 to 7.7; its outputs under 4 MiB scan exactly as before. Bits match (66 files). A second pass over an output the other cores have just written is not sped up much by more threads; scanning on the writer, while the values are still in its cache, is what the measurement above favours. Add backward copies the incoming gradient into two new tensors (`pointwise.rs` `add_backward`) where torch passes it on without a copy. That copy stays: an in-place step on a gradient (clip, accumulate) needs sole ownership of its storage, and a shared gradient would be refused or replaced. SiLU already splits across the pool, so its 1.25 is per-element cost, not threading. The gate, decode linear backward and Muon gaps are not yet profiled.
+
+---
+
 ## Nanolab Block and Per-Op Benchmark (2026-10-01)
 
 One nanolab block: d=768, 12 heads × 64, T=1024, B=1, SwiGLU hidden 2048, QK-norm, RoPE, per-head gate, value residual. `CpuBackend` is Fast with 6 threads; torch 2.13 CPU also uses 6 threads. Every cell is the minimum over 3 interleaved rounds (frozen ojas, current ojas, torch), each itself a min of 10 calls. Load average was 18–24 from other applications.
@@ -231,7 +268,7 @@ Correctness found along the way:
 Known remaining gaps:
 - **Embedding forward was bound by the NaN scan of the whole table.** Since 2026-10-02 the table is scanned once and then not again until it is written (`Tensor::all_finite_cached`): `bench_ops` embedding forward fell to 0.08 of before by min of 9 interleaved rounds (0.09 by median), under a load of about 30. The ops-table row above has not been re-timed with torch. Metal and wgpu keep their own fault checks.
 - **AdamW is two in-place passes, against torch's fused one.** The first pass only checks that every element's step is finite, so a NaN is refused before anything is written; torch's fused kernel writes in one pass and does not refuse a non-finite step. Fast does the element arithmetic in f32, as torch and the Metal kernel do; Exact keeps f64.
-- **Most ops still pay one copy out**: a kernel builds its result in a `Vec` and the tensor is a copy of it (typed-storage step 3). Operands are no longer copied (step 2, 2026-10-02), and mul, add, the value-residual blend and causal SDPA (forward and backward, 2026-10-02) already write straight into their output tensors.
+- **Most ops still paid one copy out**: a kernel built its result in a `Vec` and the tensor was a copy of it. Fixed by typed-storage step 3 (2026-10-02): every op now writes straight into its output tensor (see the section above).
 
 Reproduce:
 

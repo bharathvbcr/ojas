@@ -1,0 +1,7 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_fwd","when":"before","load":"8.48 15.82 15.08","gpu_util_pct":45}
+{"runtime":"ojas-metal","row":"gate_fwd","status":"ok","min_ms":0.451958,"median_ms":0.491042,"iters":20,"warmup":5,"parity_max_abs":8.940696716308594e-8,"parity_rel":1.0354144173726524e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_fwd","when":"after","load":"8.48 15.82 15.08","gpu_util_pct":59}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_bwd","when":"before","load":"8.48 15.82 15.08","gpu_util_pct":44}
+{"runtime":"ojas-metal","row":"gate_bwd","status":"ok","min_ms":0.788875,"median_ms":0.828395,"iters":20,"warmup":5,"parity_max_abs":9.1552734375e-5,"parity_rel":8.932181518601864e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gate_bwd","when":"after","load":"8.48 15.82 15.08","gpu_util_pct":71}

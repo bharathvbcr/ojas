@@ -16,6 +16,7 @@ in `bench/results/2026-10-01-ab/`.
 The document has four dated sections:
 - **Round 5 and the LM-head GEMM** (first): round 5's remaining Metal gaps,
   and the fix to tessl's exact-f32 GEMM tile walk that halves the LM head.
+  It ends with the gate_bwd profile and its bias-sum fix.
 - **Round 3**, after typed host storage, Metal deferred faults and
   device-resident AdamW. It also settles the round 2 Metal "regressions".
 - **Round 2**, after the Metal and wgpu optimization rounds landed.
@@ -37,7 +38,7 @@ throughout, so every row is flagged noisy. Ratios give the direction only.
   | Row | Ratio |
   |---|---:|
   | `linear_lmhead_fwd` | 0.48× |
-  | `gate_bwd` | 0.48× |
+  | `gate_bwd` (bias sum fixed below; wall time not re-measured) | 0.48× |
   | `accumulate_grad` | 0.57× |
   | `cross_entropy_bwd` | 0.61× |
   | `sdpa` fwd, d64 | 0.65–0.72× |
@@ -131,8 +132,266 @@ tessl directly, shows the same halving. So the gain is the tile walk
 - Removing the partial-band clamp makes all three fail, as does tessl's
   existing bf16 swizzle test, which now goes through the shared helper.
 
-**Still open:** the LM-head input gradient (NN, K = 50304; split-K is the
-likely lever), and the other round 5 rows listed above.
+### Fix: the LM head's input gradient runs as K partitions (verified)
+
+The input gradient is an NN GEMM, M 4096 × N 768 × K 50304, and it ran at
+~3 TFLOP/s. Like the forward NT, it re-read all of B (here the 154 MB weight)
+for every 32-row tile row. The panel walk can't fix it: each tile's A slab is
+K long as well, so a band of 16 tile rows needs 103 MB of A.
+
+tessl now runs this shape as K partitions (`nn_splitk_k_tile`,
+`matmul2d_tensorops_nn_splitk_f32`):
+- C is zeroed, then each partition of `2^21 / N` rows of B (2560 at N = 768)
+  accumulates into it, in order. Each partition's 8 MiB slice of B stays in
+  cache.
+- The route is taken only when K·N ≥ 2²³, there is more than one tile row,
+  and K is at least four partitions long.
+- The TN split-K lanes now share the same partition dispatcher.
+- Results are deterministic but not bit-identical to the single dispatch
+  (C is rounded once per partition). They stay within the f32 bound.
+
+**GEMM probe**, interleaved, alternating order, min of 4 runs per side
+(`bench/results/2026-10-02-gemm/ab-nn-splitk/`):
+
+| Shape | Before ms (per-run range) | After ms (per-run range) | Time ratio |
+|---|---|---|---:|
+| NN 4096 × 768 × 50304 | 99.8 (100–113) | 45.4 (45–50) | 0.46× |
+| NN 4096 × 768 × 16384 | 21.0 (21–23) | 14.6 (15–16) | 0.69× |
+| Shapes that don't route | | | within noise |
+
+At 45 ms the input gradient runs at ~7 TFLOP/s, the rate of the best
+transformer-width shapes, so the partition width was not swept further.
+
+**End to end**, unpaired (`splitk-rows/`): the panel-only `metal_vs_torch`
+was overwritten before a paired run, and the machine's load average was
+~350 during this one. So these compare minimums against the panel-walk A/B's
+new side:
+
+| Row | Panel walk only, min ms | + NN split-K, min ms | Time ratio |
+|---|---:|---:|---:|
+| `linear_lmhead_bwd` | 156.8 | 109.1 | ~0.70× |
+| `linear_ce_c4096x50304` | 239.4 | 166.4 | ~0.70× |
+
+Parity against torch on `linear_lmhead_bwd` improved from 1.6e-4 to
+2.5e-5. `linear_ce` is unchanged at 9.5e-7.
+
+Against round 5's torch minimums (unpaired, direction only):
+- `linear_lmhead_bwd` moves from 0.72× to about parity (torch 106.7 ms).
+- `linear_ce_c4096x50304` moves to about 1.2× torch (torch 206.2 ms).
+
+**Tests:**
+- `long_k_nn_with_a_large_b_takes_k_partitions` pins the routing (LM head at
+  nanolab's and Lappi's vocabularies).
+- `long_k_nn_partitions_cover_all_of_k` checks two ragged shapes with a
+  short last partition on the GPU. B is rank-one, with powers of two in `v`,
+  so every k contributes and the reference stays O(M·K).
+- It fails with A's partition offset dropped (31.8× its error budget) or a
+  partition skipped (14.8×).
+
+**Still open:** the other round 5 rows listed above.
+
+### gate_bwd: where its time went, and the bias sum (2026-10-02)
+
+`metal_bench <iters> gate` times each dispatch `MetalBackend` records for
+`per_head_sigmoid_gate_backward` (`fn gate` in `ojas-metal/src/device.rs`)
+at the row's shape: 4096 rows, 12 heads of 64, d_model 768. Each row is
+the GPU span of a command buffer holding that dispatch alone; the last
+holds all of them. Two runs before the fix, min µs, M5 Pro
+(`bench/results/2026-10-02-gate/gate-probe-{1,2}.md`):
+
+| Dispatch | min µs | Share of the whole |
+|---|---:|---:|
+| `ojas_per_head_gate_dbias` (bias gradient) | 803–807 | 50% |
+| ten `ojas_check_finite` passes | 230–231 | 14% |
+| TN `gw = d_pre^T · x` (12 × 768 × 4096) | 219–224 | 14% |
+| `ojas_per_head_gate_bwd` (gate kernel, ~250 GB/s) | 151–154 | 9% |
+| NN `gx = d_pre · w` (4096 × 768 × 12) | 110–114 | 7% |
+| NT `pre = x · w^T` (4096 × 12 × 768) | 50–53 | 3% |
+| whole backward, one command buffer | 1618–1636 | |
+
+So the earlier note that `gate_bwd` "is dominated by its two GEMMs" was
+wrong (it was never measured); the GEMMs are ~330 µs of ~1620.
+
+**Fix: the bias sum runs one SIMD-group per head.** The kernel gave each of
+the 12 heads one thread, which made 4096 dependent strided loads. Now each
+head's 32 lanes load a chunk of rows each (four chunks in flight), and the
+chunk is added lane by lane through `simd_shuffle`. The additions are the
+CPU reference's ascending-row order, so the result is bit-identical. Both
+dispatch sites (`device.rs` and the tiny step in `gpu.rs`) take the grid
+from `gate_dbias_threads`.
+
+**A/B**, old and new `metal_bench` binaries interleaved with alternating
+order, 4 rounds per side, min µs per round
+(`bench/results/2026-10-02-gate/ab-dbias/`):
+
+| | Old | New | Time ratio |
+|---|---|---|---:|
+| `ojas_per_head_gate_dbias` | 804.5–807.4 | 120.0–120.4 | 0.15× |
+| whole backward, GPU span | 1585.8–1632.4 | 938.1–941.7 | 0.59× |
+
+Every round of the new side beat every round of the old. Seven of the eight
+runs started with the GPU reading 0% busy (old round 1: 58%), unlike the
+earlier rounds.
+
+**Tests:**
+- `gate_dbias_sums_rows_in_ascending_order_bit_for_bit` (`gpu.rs`) compares
+  the kernel bit for bit with a host loop in ascending row order. It uses
+  rows 1 to 4097 around the 32-row chunks and 128-row load groups, heads 1,
+  3 and 12, and values of ±3e7 among small ones, so any other order lands on
+  other bits.
+- `gate_dbias_keeps_the_empty_and_short_length_edges` keeps the serial
+  kernel's behaviour: no rows writes zeros, and a length too short for a
+  head's last row leaves that head unwritten.
+- Both pass on the old kernel too. They pin behaviour across the change and
+  do not fail before it; the A/B is the evidence for the speed. Mutants they
+  kill: each chunk added in reverse, the final partial chunk dropped, and
+  each chunk reduced with `simd_sum`.
+- ojas-metal suite: 162 passed. The one failure is
+  `backend::tests::memory_probe_tracks_residency_and_plans_one_shared_budget`,
+  another lane's new test (reported to that lane). clippy `--all-targets
+  --features metal` is clean.
+
+**Fix: the gate backward kernels check their own operands.**
+`ojas_per_head_gate_bwd` sets ST_IN for a non-finite `bias`, `attn` or
+`grad_output` and ST_OUT for a non-finite `pre` or `d_attn`.
+`ojas_per_head_gate_dbias` sets ST_OUT for a non-finite `d_bias`. Four
+standalone passes remain: `x` and `w` in, `gx` and `gw` out, which only
+tessl GEMMs touch. The forward is unchanged. The tiny step in `gpu.rs`,
+which dispatches the same kernels, now binds a status buffer and refuses a
+non-finite `pre`, `d_attn`, `d_bias`, `d_input` or `d_weight`. Before, it
+returned them.
+
+A/B, the bias-sum binary against this one, interleaved with alternating
+order, 4 rounds per side, min µs per round
+(`bench/results/2026-10-02-gate/ab-fold/`; one old round started with the
+GPU 49% busy, the rest at 0%):
+
+| | Old | New | Time ratio |
+|---|---|---|---:|
+| standalone finite checks | 230.5–241.6 (ten) | 67.5–77.3 (four) | 0.31× |
+| `ojas_per_head_gate_bwd` with the checks inside | 131.3–143.8 | 138.3–150.6 | within noise |
+| whole backward, GPU span | 957.0–965.1 | 764.4–774.8 | 0.80× |
+
+**Tests:**
+- `tests/fused_checks.rs`,
+  `the_gate_backward_reports_non_finite_operands_and_results`:
+  - a NaN or ±Inf at the end of an offset view in each of the five
+    operands is reported, and a clean call reports nothing;
+  - `pre = x · w^T` overflowing is reported. Its gate is then 1, so nothing
+    downstream overflows.
+  - a `d_bias` row sum overflowing is reported. Every gate is then 0.5 and
+    `x` and `w` are zero, so it is the only non-finite value.
+- `gpu.rs`:
+  - `gate_dbias_flags_a_sum_that_is_not_finite`;
+  - `gate_backward_refuses_a_gradient_that_overflows`, for `d_bias` from the
+    status word and `d_input` from the host check. Before this change the
+    tiny step returned both as `Ok`, so this test fails on the old code.
+- Mutants, each killed (`ab-fold/summary.txt`):
+  - the kernel's ST_IN store removed. Only a ±Inf bias catches it: its gate
+    is exactly 0 or 1, so no output turns non-finite.
+  - the kernel's ST_OUT store removed;
+  - the bias sum's ST_OUT store removed;
+  - `gpu.rs` ignoring the status words;
+  - `gpu.rs` skipping the `d_input` check.
+- ojas-metal suite: 166 passed, 0 failed. clippy `--all-targets --features
+  metal` is clean.
+
+**Fix (in tessl): a small-C TN runs all its K partitions in one dispatch.**
+TN `gw` ran at 59 GB/s: 24 output tiles, each walking K = 4096. It missed
+the TN split-K lane (N = 768 > 384), and that lane runs its partitions in
+sequence, so it would not have added workgroups anyway. tessl's exact-f32
+TN now routes any C under 128 tiles, over a K at least two partitions long,
+to `matmul2d_tensorops_tn_splitk_par_f32`. That kernel computes every
+partition at once into a scratch, and `reduce_partitions_f32` then adds the
+partitions in order. The width (`tn_par_k_tile`) aims at ~768 threadgroups in
+multiples of 256. The result is deterministic and within the f32 bound, but
+not bit-identical to one dispatch.
+
+`metal_bench 20 tn`, one quiet run (load 6.4, nothing else compiling; the
+GPU read 52% busy at start, from UI processes), min µs
+of 20 GPU spans (`bench/results/2026-10-02-gate/tn-sweep/tn-sweep-2.md`):
+
+| TN shape (M, N, K) | Tiles | One dispatch | Before (route) | Now (parallel, routed width) |
+|---|---:|---:|---:|---:|
+| 12, 768, 4096 (gate `gw`) | 24 | 223.0 | 223.0 (one dispatch) | 44.6 (256) |
+| 12, 768, 1024 | 24 | 59.8 | 59.8 (one dispatch) | 24.1 (256) |
+| 128, 128, 4096 (attention dW) | 16 | 129.4 | 185.7 (sequential split-K) | 31.3 (256) |
+| 128, 384, 4096 (MLP dW) | 48 | 131.6 | 192.3 (sequential split-K) | 74.3 (256) |
+| 64, 64, 4096 | 4 | 127.3 | 185.5 (sequential split-K) | 19.3 (256) |
+| 128, 128, 2048 | 16 | 69.3 | 96.2 (sequential split-K) | 23.8 (256) |
+| 96, 2048, 4096 | 192 | 269.6 | 269.6 (one dispatch) | not routed (192 tiles) |
+
+- The sequential split-K, which `prefer_tn_splitk` picked for tall-K small
+  C, was slower than the single dispatch on every one of its shapes swept.
+  The parallel lane replaces it for overwriting f32 TN. bf16 and `C +=`
+  (`gemm_tn_accum_train`) keep the sequential kernel, since `C +=` must add
+  into C. No ojas code calls `gemm_tn_accum_train`.
+- The "Before" column for the first rows is the single dispatch, measured
+  in the same run.
+- Where the routed width is not the best one: at 12 × 768 × 1024, a width of
+  128 was ~15% faster at the median (21.4 vs 25.3 µs); at 128 × 384 × 4096,
+  512 was ~6% faster at the min and ~2% at the median. Elsewhere the routed
+  width is within ~2% of the best min.
+- 96 × 2048 × 4096 (192 tiles) is not routed. A width of 512 ran 11% faster
+  than one dispatch there (239.6 vs 269.6 µs) in this one run; widening the
+  tile threshold has not been measured beyond it.
+- tessl tests: `few_tile_long_k_tn_takes_parallel_partitions` (routing, and
+  the scratch cap held over the whole old sequential domain; inferred, not
+  run: the four old sequential shapes fail it before the change, where
+  `tn_par_k_tile` returned `None` for them),
+  `parallel_tn_partitions_cover_all_of_k` (rank-one B so every k counts;
+  routed, ragged, padded-slice and one-partition cases),
+  `parallel_tn_refuses_bad_widths_and_an_oversized_scratch`,
+  `parallel_tn_is_bit_identical_across_100_calls_in_flight`.
+- Mutants (`mutate-tn.sh`):
+  - two are killed by `parallel_tn_partitions_cover_all_of_k`: A's partition
+    offset dropped, and the last partition left out of the sum.
+  - one survives: scratch slices packed at M·N without padding to 16 bytes.
+    The M5 Pro computes correctly from a 4-byte-aligned slice, so the padding
+    stays for tessl's 16-byte rule on GEMM operands, and no test observes it.
+- tessl suite: 531 passed, 0 failed, 8 ignored. ojas-metal suite: 166
+  passed, 0 failed. tessl clippy `--all-targets -D warnings` fails on one
+  `type_complexity` error at `src/runtime.rs:345` (`FeedbackWatch`). That
+  line is in tessl's uncommitted Metal 4 commit-feedback hunk, not HEAD and
+  not this change. clippy is clean with that lint allowed
+  (`bench/results/2026-10-02-gate/ab-tn/summary.txt`).
+
+A/B of the whole gate backward, the fold binary against this one,
+interleaved with alternating order, 4 rounds per side, min µs per round
+(`bench/results/2026-10-02-gate/ab-tn/`). A non-Claude agent outside the
+lock raised the 1-min load from ~7 to ~19 during these runs, and one old
+round started with the GPU 55% busy:
+
+| | Old | New | Time ratio |
+|---|---|---|---:|
+| TN `gw` | 227.4–234.1 | 43.1–46.0 | 0.19× |
+| whole backward, GPU span | 790.4–806.4 | 601.7–638.2 | 0.78× |
+
+Every round of the new side beat every round of the old. The old side's
+whole backward ran ~25 µs slower than in the fold A/B (764–775), which is
+the load.
+
+**Wall time against torch** (`bench/run_paired.sh 5`, gate rows only,
+`bench/results/2026-10-02-gate/paired-gate/`): `gate_bwd` medians were ojas
+0.862 ms and torch 0.834 ms (0.96×, per-round 0.85–0.99×). Round 5 had
+2.0 ms against ~1.0 ms. This run is flagged noisy: ojas's per-round spread
+was 17%, and the 1-min load was ~30 throughout from the same outside agent.
+
+Re-run with the outside agents idle and the 1-min load at 8.3–9.1
+(`bench/results/2026-10-02-gate/paired-gate-quiet/`). `gate_bwd` medians
+were ojas 0.829 ms and torch 0.833 ms (1.02×, per-round 0.96–1.11×). Spread
+was 8% for ojas and 15% for torch. The row is still flagged noisy, from
+torch's side, and so still not quoted. The GPU read 43–53% busy even at the
+quietest sample of every lane, from something outside the benchmark;
+XProtect (~89% CPU) and the GitPulse app (~80%) were active. Both runs put
+`gate_bwd` at about parity with torch, against 0.5× in round 5. A quotable
+number needs a run with the GPU idle between rows.
+
+**Next, by the same probe (not yet done):**
+- a paired `gate` run with the GPU idle between rows (both runs above were
+  flagged noisy);
+- the bias sum itself at 120 µs, still a chain of 4096 shuffle-adds;
+- the routed width at short K (12 × 768 × 1024 above).
 
 ## Round 3: 2026-10-01, 22:50–23:06 CDT
 
@@ -512,7 +771,9 @@ the one-float kernel and dispatch; `bench/results/2026-10-02-kernels/ab-check/`)
 **Not folded: `gate`.**
 - Its kernels are shared with the tiny training step in `gpu.rs`, which has
   no status slot.
-- `gate_bwd` is dominated by its two GEMMs.
+- `gate_bwd` is dominated by its two GEMMs. (Unmeasured when written, and
+  wrong: the bias sum was half its GPU time. See "gate_bwd: where its time
+  went" under Round 5.)
 - `gate_fwd` is about 0.84x torch; whether to pursue it is a follow-up
   decision.
 

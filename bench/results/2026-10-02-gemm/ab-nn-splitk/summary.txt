@@ -1,0 +1,54 @@
+round 1 old done
+round 1 new done
+round 2 new done
+round 2 old done
+round 3 old done
+round 3 new done
+round 4 new done
+round 4 old done
+| row | old min ms | new min ms | new/old | runs old/new |
+|---|---:|---:|---:|---|
+| nt qkv / up width | 2.175 | 2.141 | 0.98 | 4/4 |
+| nn qkv / up width | 2.002 | 2.073 | 1.04 | 4/4 |
+| tn qkv / up width | 2.207 | 2.180 | 0.99 | 4/4 |
+| nt mlp up | 1.931 | 1.970 | 1.02 | 4/4 |
+| nn mlp up | 1.825 | 1.790 | 0.98 | 4/4 |
+| tn mlp up | 1.955 | 1.771 | 0.91 | 4/4 |
+| nt mlp down | 1.783 | 1.834 | 1.03 | 4/4 |
+| nn mlp down | 1.935 | 1.898 | 0.98 | 4/4 |
+| tn mlp down | 1.862 | 1.835 | 0.99 | 4/4 |
+| nt vocab chunk 8192 | 8.513 | 8.834 | 1.04 | 4/4 |
+| nn vocab chunk 8192 | 7.993 | 8.037 | 1.01 | 4/4 |
+| tn vocab chunk 8192 | 7.721 | 7.747 | 1.00 | 4/4 |
+| nt vocab chunk 16384 | 15.899 | 16.100 | 1.01 | 4/4 |
+| nn vocab chunk 16384 | 21.014 | 14.581 | 0.69 | 4/4 |
+| tn vocab chunk 16384 | 15.834 | 15.615 | 0.99 | 4/4 |
+| nt lm head | 49.561 | 49.758 | 1.00 | 4/4 |
+| nn lm head | 99.806 | 45.416 | 0.46 | 4/4 |
+| tn lm head | 53.886 | 52.760 | 0.98 | 4/4 |
+| nt lm head in 1024-column chunks (50 GEMMs) | 51.254 | 50.838 | 0.99 | 4/4 |
+| nt lm head in 2048-column chunks (25 GEMMs) | 51.161 | 50.952 | 1.00 | 4/4 |
+| nt lm head in 4096-column chunks (13 GEMMs) | 50.447 | 48.675 | 0.96 | 4/4 |
+| nt lm head, 32 rows | 0.966 | 0.945 | 0.98 | 4/4 |
+| nt lm head, 128 rows | 1.519 | 1.496 | 0.98 | 4/4 |
+| nt lm head, 512 rows | 5.917 | 5.905 | 1.00 | 4/4 |
+| nt lm head, 1024 rows | 12.316 | 12.187 | 0.99 | 4/4 |
+| nt lm head, 2048 rows | 24.814 | 24.340 | 0.98 | 4/4 |
+   1 end: GPU 100%, load 316.71 350.42 334.46
+   1 end: GPU 100%, load 321.58 355.31 335.58
+   1 end: GPU 100%, load 330.70 350.27 335.81
+   1 end: GPU 100%, load 344.70 350.86 336.47
+   1 end: GPU 100%, load 350.72 362.41 335.92
+   1 end: GPU 100%, load 357.49 356.58 337.21
+   1 end: GPU 100%, load 378.40 367.55 338.83
+   1 end: GPU 100%, load 445.22 375.44 338.50
+   1 start: GPU 100%, load 316.71 350.42 334.46
+   1 start: GPU 100%, load 327.94 356.07 335.96
+   1 start: GPU 100%, load 338.97 351.66 336.39
+   1 start: GPU 100%, load 350.47 362.17 336.15
+   1 start: GPU 100%, load 357.49 356.58 337.21
+   1 start: GPU 100%, load 369.48 366.13 338.67
+   1 start: GPU 100%, load 435.30 363.36 332.50
+   1 start: GPU 100%, load 448.42 378.76 340.13
+
+[exited with code 0]

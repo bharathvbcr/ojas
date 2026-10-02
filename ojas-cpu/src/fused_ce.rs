@@ -37,8 +37,8 @@ use ojas_core::{linear_ce_dims, Budget, CeChunk, LinearCe, LinearCeDims, OjasErr
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
 use crate::pool::Exec;
 use crate::validate::{
-    all_finite, alloc_f32, alloc_out, check_u32, f32_operands, nonfinite, product, room_for, shape,
-    u32_values, F32Out,
+    all_finite, alloc_f32, check_u32, f32_operands, fill_outs, nonfinite, product, room_for, shape,
+    u32_values,
 };
 
 const OP: &str = "linear_cross_entropy_mean";
@@ -47,8 +47,8 @@ const OP: &str = "linear_cross_entropy_mean";
 ///
 /// Every operand is validated before the first charge, then read in place:
 /// the input rows and weight blocks of each tile are views, not copies. The
-/// gradient buffers and the tile scratch are each charged before they are
-/// allocated; each gradient's charge is held until its tensor copy exists.
+/// gradients are written straight into their output tensors (charged before
+/// they are allocated, never copied), and the tile scratch is charged too.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn linear_cross_entropy_mean(
     budget: &Budget,
@@ -64,15 +64,25 @@ pub(crate) fn linear_cross_entropy_mean(
     check_u32(OP, targets)?;
     let [x, w] = f32_operands(OP, exec, [input, weight])?;
     let t = u32_values(OP, targets)?;
-    let (loss, grads) = fused(budget, exec, x, w, t, dims, ignore, chunk, want_grad)?;
-    let loss = alloc_f32(OP, budget, &[loss], &[])?;
-    let (grad_input, grad_weight) = match grads {
-        Some((gx, gw)) => (
-            Some(alloc_out(OP, budget, gx, input.shape())?),
-            Some(alloc_out(OP, budget, gw, weight.shape())?),
-        ),
-        None => (None, None),
+    // The targets are values too: checked before the gradients are charged.
+    let targets = Targets {
+        ids: t,
+        ignore,
+        valid: valid_rows(t, dims.vocab, ignore)?,
     };
+    let (loss, grad_input, grad_weight) = if want_grad {
+        let mut loss = 0.0f32;
+        let shapes = [input.shape(), weight.shape()];
+        let [gx, gw] = fill_outs(OP, budget, exec, shapes, |grads| {
+            loss = fused(budget, exec, x, w, &targets, dims, chunk, Some(grads))?;
+            Ok(())
+        })?;
+        (loss, Some(gx), Some(gw))
+    } else {
+        let loss = fused(budget, exec, x, w, &targets, dims, chunk, None)?;
+        (loss, None, None)
+    };
+    let loss = alloc_f32(OP, budget, &[loss], &[])?;
     Ok(LinearCe {
         loss,
         grad_input,
@@ -159,20 +169,33 @@ fn logit_tile<'w>(
     Ok((logits, w_block))
 }
 
-/// The scalar loss, and `(grad_x, grad_w)` with their charges when
-/// `want_grad` is set.
+/// The target ids, the ignored id, and the count of the others
+/// ([`valid_rows`]).
+#[derive(Clone, Copy)]
+struct Targets<'a> {
+    ids: &'a [u32],
+    ignore: Option<u32>,
+    valid: u32,
+}
+
+/// The scalar loss. With `grads`, also `[grad_x, grad_w]`, accumulated
+/// into the caller's zeroed outputs.
 #[allow(clippy::too_many_arguments)]
 fn fused(
     budget: &Budget,
     exec: Exec<'_>,
     x: &[f32],
     w: &[f32],
-    targets: &[u32],
+    targets: &Targets<'_>,
     dims: LinearCeDims,
-    ignore: Option<u32>,
     chunk: CeChunk,
-    want_grad: bool,
-) -> Result<(f32, Option<(F32Out, F32Out)>), OjasError> {
+    mut grads: Option<[&mut [f32]; 2]>,
+) -> Result<f32, OjasError> {
+    let Targets {
+        ids: targets,
+        ignore,
+        valid,
+    } = *targets;
     let LinearCeDims {
         rows: n,
         model_dim: d,
@@ -184,21 +207,20 @@ fn fused(
             "fused cross-entropy data length does not match shape",
         ));
     }
-    let denom = valid_rows(targets, v, ignore)? as f32;
+    if let Some([gx, gw]) = &grads {
+        if gx.len() != x.len() || gw.len() != w.len() {
+            return Err(shape(
+                OP,
+                "fused cross-entropy gradient length does not match its operand",
+            ));
+        }
+    }
+    let want_grad = grads.is_some();
+    let denom = valid as f32;
     let (rows, cols) = (chunk.rows.min(n), chunk.cols.min(v));
-    // Each gradient's charge is taken before its buffer exists and leaves
-    // with it; the tile charge ends when this function returns.
-    let grad_charges = if want_grad {
-        Some((room_for(OP, budget, n * d)?, room_for(OP, budget, v * d)?))
-    } else {
-        None
-    };
+    // The tile charge ends when this function returns; the gradients are
+    // the caller's.
     let _tiles = room_for(OP, budget, tile_scratch(exec, rows, cols, d, want_grad)?)?;
-    let (mut gx, mut gw) = if want_grad {
-        (vec![0.0f32; n * d], vec![0.0f32; v * d])
-    } else {
-        (Vec::new(), Vec::new())
-    };
     let vocab_blocks = || (0..v).step_by(cols).map(move |c0| c0..(c0 + cols).min(v));
     let mut total = 0.0f32;
     for r0 in (0..n).step_by(rows) {
@@ -252,9 +274,9 @@ fn fused(
             total += maxes[i] + sum.ln() - picked[i];
         }
 
-        if !want_grad {
+        let Some([gx, gw]) = grads.as_mut() else {
             continue;
-        }
+        };
         for range in vocab_blocks() {
             let width = range.len();
             let (mut g, w_block) = logit_tile(exec, &x_block, w, range.clone(), d)?;
@@ -288,17 +310,5 @@ fn fused(
     if !loss.is_finite() {
         return Err(nonfinite(OP));
     }
-    let grads = grad_charges.map(|(cx, cw)| {
-        (
-            F32Out {
-                data: gx,
-                charge: cx,
-            },
-            F32Out {
-                data: gw,
-                charge: cw,
-            },
-        )
-    });
-    Ok((loss, grads))
+    Ok(loss)
 }

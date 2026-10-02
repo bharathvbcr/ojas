@@ -2,7 +2,8 @@
 
 use ojas_core::{residual_add_forward_dims, Budget, OjasError, Tensor};
 
-use crate::validate::{all_finite, alloc_out, check_f32, nonfinite, room_for, F32Out};
+use crate::pool::Exec;
+use crate::validate::{check_f32, fill_out, nonfinite};
 
 /// `ojas_core::shapes` has no validator for `accumulate_grad`. Its rules are
 /// `residual_add_forward_dims`'s (two `F32` tensors of one shape), and every
@@ -20,39 +21,52 @@ fn accumulate_grad_dims(op: &'static str, acc: &Tensor, grad: &Tensor) -> Result
 
 /// [`ojas_core::Backend::accumulate_grad`] on the CPU.
 ///
-/// The sum is built in one charged buffer from `acc`'s values and `grad`'s
-/// bytes, read in place, and checked finite before `acc` changes: a NaN in
-/// `grad`, or a sum that overflows, is `NonFinite` with `acc` untouched. A
-/// uniquely owned `acc` is then overwritten in place. An `acc` whose
-/// allocation is shared (a clone or a view of it exists) cannot be written,
-/// so it is replaced by a new tensor holding the sum, as the trait default
+/// Both operands are read in place. Every sum is checked finite before
+/// anything is written or charged: a NaN in `grad`, or a sum that
+/// overflows, is `NonFinite` with `acc` untouched. A uniquely owned `acc`
+/// is then added to in place, with no buffer and no charge (since
+/// 2026-10-02; before, the sum was built in a charged buffer and copied in).
+/// An `acc` whose allocation is shared (a clone or a view of it exists)
+/// cannot be written, so it is replaced by a new tensor holding the sum,
+/// written straight into the tensor ([`fill_out`]), as the trait default
 /// does; the other handles keep the old values.
 pub(crate) fn accumulate_grad(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     acc: &mut Tensor,
     grad: &Tensor,
 ) -> Result<(), OjasError> {
     accumulate_grad_dims(op, acc, grad)?;
     let len = check_f32(op, acc)?;
     check_f32(op, grad)?;
-    let charge = room_for(op, budget, len)?;
-    let sum: Vec<f32> = acc
+    let g = grad.f32_slice()?;
+    if !acc
         .f32_slice()?
         .iter()
-        .zip(grad.f32_slice()?)
-        .map(|(a, g)| a + g)
-        .collect();
-    if !all_finite(&sum) {
+        .zip(g)
+        .all(|(a, g)| (a + g).is_finite())
+    {
         return Err(nonfinite(op));
     }
     match acc.ensure_writable_f32(len) {
-        Ok(()) => acc.write_f32(&sum),
+        Ok(()) => {
+            for (a, g) in acc.f32_slice_mut()?.iter_mut().zip(g) {
+                *a += g;
+            }
+            Ok(())
+        }
         // `check_f32` already proved `acc` is a contiguous host F32 tensor of
         // `len` elements, so the one `Shape` refusal left is shared storage.
         Err(OjasError::Shape { .. }) => {
-            let shape = acc.shape().to_vec();
-            *acc = alloc_out(op, budget, F32Out { data: sum, charge }, &shape)?;
+            let a = acc.f32_slice()?;
+            let sum = fill_out(op, budget, exec, acc.shape(), |out| {
+                for ((o, &a), &g) in out.iter_mut().zip(a).zip(g) {
+                    *o = a + g;
+                }
+                Ok(())
+            })?;
+            *acc = sum;
             Ok(())
         }
         Err(err) => Err(err),

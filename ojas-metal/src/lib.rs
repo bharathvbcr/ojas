@@ -22,8 +22,10 @@ pub use ojas_core::BackendId;
 
 mod backend;
 mod link;
+mod memory;
 
 pub use backend::{MetalBackend, MetalBuffer};
+pub use memory::MetalMemory;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 mod device;

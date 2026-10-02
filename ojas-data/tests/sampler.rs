@@ -82,7 +82,13 @@ fn every_window_start_is_visited_once_per_epoch_and_y_is_x_shifted() {
             }
         }
     }
-    assert_eq!(s.cursor(), DataCursor { shard: 5, token_index: 0 });
+    assert_eq!(
+        s.cursor(),
+        DataCursor {
+            shard: 5,
+            token_index: 0
+        }
+    );
     let all: Vec<u64> = (0..12).map(|k| k * t as u64).collect();
     let mut orders = Vec::new();
     for epoch in 0..5 {
@@ -136,7 +142,11 @@ fn resume_from_any_cursor_reproduces_the_uninterrupted_stream() {
     for k in 0..reference.len() {
         let mut resumed = BatchSampler::resume(&tokens, c.clone(), reference[k].0).unwrap();
         for (j, (at, x, y)) in reference.iter().enumerate().skip(k) {
-            assert_eq!(resumed.cursor(), *at, "cursor before batch {j} (resumed at {k})");
+            assert_eq!(
+                resumed.cursor(),
+                *at,
+                "cursor before batch {j} (resumed at {k})"
+            );
             let b = resumed.next_batch().unwrap();
             assert_eq!(&b.x, x, "x of batch {j} (resumed at {k})");
             assert_eq!(&b.y, y, "y of batch {j} (resumed at {k})");
@@ -163,8 +173,14 @@ fn resume_from_any_cursor_reproduces_the_uninterrupted_stream() {
 #[test]
 fn shapes_that_cannot_produce_a_window_are_refused() {
     let (_tmp, tokens) = bin(9);
-    assert!(BatchSampler::new(&tokens, cfg(8, 1, 0)).is_ok(), "T + 1 == len fits");
-    assert!(BatchSampler::new(&tokens, cfg(9, 1, 0)).is_err(), "T + 1 > len");
+    assert!(
+        BatchSampler::new(&tokens, cfg(8, 1, 0)).is_ok(),
+        "T + 1 == len fits"
+    );
+    assert!(
+        BatchSampler::new(&tokens, cfg(9, 1, 0)).is_err(),
+        "T + 1 > len"
+    );
     assert!(BatchSampler::new(&tokens, cfg(0, 1, 0)).is_err(), "T == 0");
     assert!(BatchSampler::new(&tokens, cfg(4, 0, 0)).is_err(), "B == 0");
     assert!(BatchSampler::new(&tokens, cfg(usize::MAX, 1, 0)).is_err());
@@ -172,7 +188,9 @@ fn shapes_that_cannot_produce_a_window_are_refused() {
     assert!(BatchSampler::new(&empty, cfg(1, 1, 0)).is_err());
     let (_tmp, tokens) = bin(100);
     let c = cfg(9, 2, 0);
-    let w = BatchSampler::new(&tokens, c.clone()).unwrap().windows_per_epoch();
+    let w = BatchSampler::new(&tokens, c.clone())
+        .unwrap()
+        .windows_per_epoch();
     assert_eq!(w, 11);
     let past = DataCursor {
         shard: 0,
@@ -184,7 +202,10 @@ fn shapes_that_cannot_produce_a_window_are_refused() {
         token_index: w - 1,
     };
     let mut s = BatchSampler::resume(&tokens, c, last).unwrap();
-    assert!(s.next_batch().is_err(), "epoch counter overflow must not wrap");
+    assert!(
+        s.next_batch().is_err(),
+        "epoch counter overflow must not wrap"
+    );
 }
 
 /// One window per epoch: every batch row is that window.
@@ -196,5 +217,11 @@ fn a_single_window_repeats_every_epoch() {
     let b = s.next_batch().unwrap();
     assert_eq!(b.x, vec![0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]);
     assert_eq!(b.y, vec![1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4]);
-    assert_eq!(s.cursor(), DataCursor { shard: 3, token_index: 0 });
+    assert_eq!(
+        s.cursor(),
+        DataCursor {
+            shard: 3,
+            token_index: 0
+        }
+    );
 }

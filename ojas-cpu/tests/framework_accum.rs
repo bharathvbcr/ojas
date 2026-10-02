@@ -1,9 +1,10 @@
 //! `accumulate_grad` (T2): `acc += grad` in place, all-or-nothing.
 //!
 //! The trait default composes `residual_add_forward` and replaces `acc` with
-//! a new tensor. The CPU override writes the sum into `acc`'s own allocation
-//! when it is uniquely owned, so it needs one `acc`-sized scratch where the
-//! default needs two input copies, an output buffer and a new tensor.
+//! a new tensor. The CPU override adds into `acc`'s own allocation when it
+//! is uniquely owned, so it needs no scratch and no charge (since
+//! 2026-10-02; before, one `acc`-sized scratch) where the default needs a
+//! new `acc`-sized tensor.
 
 mod common;
 
@@ -55,13 +56,15 @@ fn a_unique_acc_is_written_in_place() {
     assert_eq!((acc.byte_offset(), acc.storage_len()), (offset, storage));
 }
 
-/// One `acc`-sized charge is the whole cost of either path: the override
-/// writes `acc`'s own storage, and the composed default (`residual_add`,
-/// which reads its operands in place since 2026-10-01) builds a new tensor
-/// of exactly that size. One f32 less refuses both, and both give the same
-/// bits.
+/// The override on a uniquely owned `acc` charges nothing (since
+/// 2026-10-02): it runs while the default's result holds the whole budget.
+/// The composed default (`residual_add`, which reads its operands in place
+/// since 2026-10-01) builds a new tensor of exactly `acc`'s size, and so
+/// does the override for a shared `acc`, which it cannot write: one
+/// `acc`-sized charge, and one f32 less refuses both with every handle
+/// unchanged. All paths give the same bits.
 #[test]
-fn in_place_and_the_default_each_need_one_acc_sized_charge() {
+fn in_place_charges_nothing_and_a_replacement_needs_one_acc_sized_charge() {
     let n = 4096usize;
     let room = 4 * n as u64;
     let be = CpuBackend::new(Budget::new(room));
@@ -70,19 +73,28 @@ fn in_place_and_the_default_each_need_one_acc_sized_charge() {
     let sum = be.residual_add_forward(&acc, &grad).unwrap();
     assert_eq!(be.budget().live_bytes().unwrap(), room);
     let (offset, storage) = (acc.byte_offset(), acc.storage_len());
-    // The default's result holds the whole budget, so the override's one
-    // scratch does not fit.
-    assert_capacity(be.accumulate_grad(&mut acc, &grad));
-    drop(sum);
+    // The default's result holds the whole budget; adding in place needs
+    // none of it.
     be.accumulate_grad(&mut acc, &grad).unwrap();
-    assert!(f(&acc).iter().all(|&x| x == 1.5));
+    assert_eq!(bits(&f(&acc)), bits(&f(&sum)));
     assert_eq!((acc.byte_offset(), acc.storage_len()), (offset, storage));
+    assert_eq!(be.budget().live_bytes().unwrap(), room);
+    drop(sum);
     assert_eq!(be.budget().live_bytes().unwrap(), 0);
+
     let tight = CpuBackend::new(Budget::new(room - 4));
     assert_capacity(tight.residual_add_forward(&acc, &grad));
     let before = bits(&f(&acc));
-    assert_capacity(tight.accumulate_grad(&mut acc, &grad));
+    let mut shared = acc.clone();
+    assert_capacity(tight.accumulate_grad(&mut shared, &grad));
+    assert_eq!(bits(&f(&shared)), before);
     assert_eq!(bits(&f(&acc)), before);
+    assert_eq!(tight.budget().live_bytes().unwrap(), 0);
+    let exact = CpuBackend::new(Budget::new(room));
+    exact.accumulate_grad(&mut shared, &grad).unwrap();
+    assert!(f(&shared).iter().all(|&x| x == 2.0));
+    assert_eq!(bits(&f(&acc)), before);
+    assert_eq!(exact.budget().live_bytes().unwrap(), room);
 }
 
 /// A shared `acc` cannot be written; it is replaced by a new tensor holding
@@ -135,9 +147,13 @@ fn every_refusal_leaves_acc_unchanged() {
             ..
         })
     ));
+    // Only a shared `acc` is charged (its replacement); short of room it
+    // is refused with both handles unchanged.
     let tight = CpuBackend::new(Budget::new(8));
-    let r = tight.accumulate_grad(&mut acc, &t(&[0.0; 4], &[4]));
-    assert_capacity(check(&acc, r, "budget"));
+    let mut shared = acc.clone();
+    let r = tight.accumulate_grad(&mut shared, &t(&[0.0; 4], &[4]));
+    assert_capacity(check(&shared, r, "budget"));
+    assert_eq!(bits(&f(&acc)), bits(&init));
     assert_eq!(tight.budget().live_bytes().unwrap(), 0);
     // NaN already in `acc` is refused before any charge.
     let mut nan_acc = t(&[f32::NAN, 0.0], &[2]);

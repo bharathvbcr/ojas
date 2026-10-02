@@ -12,7 +12,7 @@
 //! sees only what the op itself charges. The backend is single-threaded
 //! (`CpuBackend::new`), so the per-task terms are one task's.
 
-use ojas_core::{Backend, Budget, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{Backend, Budget, CeChunk, OjasError, Tensor, RMS_NORM_EPS};
 use ojas_cpu::CpuBackend;
 
 const F32: u64 = 4;
@@ -45,14 +45,15 @@ fn cases(inputs: &Budget) -> Vec<Case> {
     let lin_x = f32t(inputs, 32, &[4, 8]);
     let lin_w = f32t(inputs, 24, &[3, 8]);
     vec![
-        // The output, and a second output-sized buffer: the task parts
-        // while they are joined, then the joined vector while the tensor is
-        // made from it (backend.rs `out_charge`).
+        // Written in place, row chunk by row chunk, into the output tensor
+        // (`scoped::rows_into`). Until 2026-10-02 the peak was the output
+        // twice: the task parts joined into a vector, then the tensor
+        // copied from it.
         Case {
             name: "silu_forward",
             input_bytes: 64 * F32,
             output_bytes: 64 * F32,
-            peak_bytes: 2 * 64 * F32,
+            peak_bytes: 64 * F32,
             run: {
                 let x = x.clone();
                 Box::new(move |cpu| cpu.silu_forward(&x))
@@ -85,7 +86,7 @@ fn cases(inputs: &Budget) -> Vec<Case> {
             name: "rms_norm_forward",
             input_bytes: 80 * F32,
             output_bytes: 64 * F32,
-            peak_bytes: (2 * 64 + 4) * F32,
+            peak_bytes: (64 + 4) * F32,
             run: {
                 let (x, w) = (x.clone(), w16.clone());
                 Box::new(move |cpu| cpu.rms_norm_forward(&x, &w, RMS_NORM_EPS))
@@ -253,18 +254,140 @@ fn sdpa_backward_charges_its_three_gradients_and_its_row_scratch_only() {
     let qkv = f32t(&inputs, 32, &[1, 2, 4, 4]);
     let gy = f32t(&inputs, 32, &[1, 2, 4, 4]);
     let outputs = 3 * 32 * F32;
-    let peak = outputs + 12 * F32;
+    exact_peak("causal_sdpa_backward", outputs + 12 * F32, outputs, |cpu| {
+        cpu.causal_sdpa_backward(&qkv, &qkv, &qkv, &gy)
+    });
+}
+
+/// The gate backward writes its four gradients into their output tensors
+/// (`[4, 8]` input, `[2, 8]` weight, `[2]` bias, `[4, 2, 2]` attn: 66
+/// floats) and holds 280 floats beside them on one thread under
+/// `Numerics::Fast`: the gate logits (8) and their product's packed
+/// operands (6 × 8 + 16 × 8), `gz` (8), and the larger gradient product's
+/// packed operands (`gzᵀ · input`: 6 × 4 + 16 × 4). Until 2026-10-02 the
+/// gradient-attn and `gz` task parts, a joined copy of `gz` and the input
+/// and weight gradients' product results were held as well, 74 floats more,
+/// so this bound fails against that build.
+#[test]
+fn gate_backward_charges_its_four_gradients_and_its_scratch_only() {
+    let inputs = Budget::new(1 << 20);
+    let x = f32t(&inputs, 32, &[4, 8]);
+    let w = f32t(&inputs, 16, &[2, 8]);
+    let b = f32t(&inputs, 2, &[2]);
+    let attn = f32t(&inputs, 16, &[4, 2, 2]);
+    let gy = f32t(&inputs, 16, &[4, 2, 2]);
+    let outputs = 66 * F32;
+    exact_peak(
+        "per_head_sigmoid_gate_backward",
+        outputs + 280 * F32,
+        outputs,
+        |cpu| cpu.per_head_sigmoid_gate_backward(&x, &w, &b, &attn, &gy),
+    );
+}
+
+/// The value-residual backward writes both gradients and `lambda`'s into
+/// their output tensors (64 + 64 + 1 floats) and holds one `f64` sum per
+/// 4096-value block beside them (two floats). Until 2026-10-02 both
+/// gradients' task parts were held too, then joined and copied, so this
+/// bound fails against that build.
+#[test]
+fn value_residual_backward_charges_its_gradients_and_its_block_sums_only() {
+    let inputs = Budget::new(1 << 20);
+    let v = f32t(&inputs, 64, &[4, 16]);
+    let v0 = f32t(&inputs, 64, &[4, 16]);
+    let lam = f32t(&inputs, 1, &[1]);
+    let gy = f32t(&inputs, 64, &[4, 16]);
+    let outputs = 129 * F32;
+    exact_peak(
+        "value_residual_blend_backward",
+        outputs + 2 * F32,
+        outputs,
+        |cpu| cpu.value_residual_blend_backward(&v, &v0, &lam, &gy),
+    );
+}
+
+/// A uniquely owned accumulator is added to in place: no buffer, no
+/// charge, so it runs on a backend with no room at all. Until 2026-10-02
+/// the sum was built in a charged buffer first, and this refused.
+#[test]
+fn accumulate_into_a_unique_acc_charges_nothing() {
+    let inputs = Budget::new(1 << 20);
+    let mut acc = f32t(&inputs, 64, &[4, 16]);
+    let grad = f32t(&inputs, 64, &[4, 16]);
+    let want: Vec<f32> = acc
+        .f32_slice()
+        .unwrap()
+        .iter()
+        .zip(grad.f32_slice().unwrap())
+        .map(|(a, g)| a + g)
+        .collect();
+    let empty = CpuBackend::new(Budget::new(0));
+    empty.accumulate_grad(&mut acc, &grad).unwrap();
+    assert_eq!(acc.f32_slice().unwrap(), &want[..]);
+    assert_eq!(empty.budget().live_bytes().unwrap(), 0);
+}
+
+/// An accumulator whose storage is shared is replaced by a new tensor,
+/// written straight into it: the peak is that tensor (64 floats). Until
+/// 2026-10-02 the sum was built in a charged buffer and then copied into
+/// the tensor, twice that.
+#[test]
+fn accumulate_into_a_shared_acc_charges_the_new_tensor_only() {
+    let inputs = Budget::new(1 << 20);
+    let acc = f32t(&inputs, 64, &[4, 16]);
+    let grad = f32t(&inputs, 64, &[4, 16]);
+    exact_peak("accumulate_grad", 64 * F32, 64 * F32, |cpu| {
+        // A clone shares `acc`'s storage, so `acc` cannot be written.
+        let mut shared = acc.clone();
+        cpu.accumulate_grad(&mut shared, &grad)?;
+        Ok(shared)
+    });
+}
+
+/// The fused cross-entropy writes both gradients straight into their output
+/// tensors. `[4, 8]` input, `[64, 8]` weight, chunk `4 × 8`, one thread: the
+/// gradients (32 + 512 floats) and the tile scratch (284 floats: the
+/// `4 × 8` logit tile 32, row statistics 12, the largest product's packed
+/// operands 6 × 8 + 16 × 8, and the larger gradient product 8 × 8) are the
+/// peak; the loss (1 float) comes after the scratch is freed. Until
+/// 2026-10-02 each gradient was built in a charged buffer and copied into
+/// its tensor, so the weight gradient was held twice: 1057 floats.
+#[test]
+fn fused_cross_entropy_charges_its_gradients_and_tile_scratch_only() {
+    let inputs = Budget::new(1 << 20);
+    let x = f32t(&inputs, 32, &[4, 8]);
+    let w = f32t(&inputs, 512, &[64, 8]);
+    let t = Tensor::from_u32(&[1, 63, 0, 17], &[4], &inputs).unwrap();
+    let chunk = CeChunk { rows: 4, cols: 8 };
+    exact_peak(
+        "linear_cross_entropy_mean",
+        (544 + 284) * F32,
+        545 * F32,
+        |cpu| cpu.linear_cross_entropy_mean(&x, &w, &t, None, chunk, true),
+    );
+}
+
+/// `run` succeeds with exactly `peak` bytes of room and leaves `outputs`
+/// charged while its result lives, then nothing; one f32 less refuses with
+/// `CapacityExceeded` and leaves nothing charged.
+fn exact_peak<T>(
+    name: &str,
+    peak: u64,
+    outputs: u64,
+    run: impl Fn(&CpuBackend) -> Result<T, OjasError>,
+) {
     let fits = CpuBackend::new(Budget::new(peak));
-    let grads = fits
-        .causal_sdpa_backward(&qkv, &qkv, &qkv, &gy)
-        .unwrap_or_else(|e| panic!("refused with {peak} bytes: {e:?}"));
-    assert_eq!(fits.budget().live_bytes().unwrap(), outputs);
-    drop(grads);
-    assert_eq!(fits.budget().live_bytes().unwrap(), 0);
+    let got = run(&fits).unwrap_or_else(|e| panic!("{name}: refused with {peak} bytes: {e:?}"));
+    assert_eq!(fits.budget().live_bytes().unwrap(), outputs, "{name}");
+    drop(got);
+    assert_eq!(fits.budget().live_bytes().unwrap(), 0, "{name}");
     let tight = CpuBackend::new(Budget::new(peak - F32));
-    match tight.causal_sdpa_backward(&qkv, &qkv, &qkv, &gy) {
+    match run(&tight) {
         Err(OjasError::CapacityExceeded { .. }) => {}
-        other => panic!("expected CapacityExceeded one f32 under {peak}, got {other:?}"),
+        other => panic!(
+            "{name}: expected CapacityExceeded one f32 under {peak}, got {:?}",
+            other.map(|_| ())
+        ),
     }
-    assert_eq!(tight.budget().live_bytes().unwrap(), 0);
+    assert_eq!(tight.budget().live_bytes().unwrap(), 0, "{name}");
 }

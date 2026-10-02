@@ -58,8 +58,14 @@ fn is_deterministic() {
     let l0 = bits(&ok("fwd", m.cross_entropy_mean_forward(&dl, &dt, None)));
     let g0 = bits(&ok("bwd", m.cross_entropy_mean_backward(&dl, &dt, None)));
     for _ in 0..3 {
-        assert_eq!(bits(&ok("fwd", m.cross_entropy_mean_forward(&dl, &dt, None))), l0);
-        assert_eq!(bits(&ok("bwd", m.cross_entropy_mean_backward(&dl, &dt, None))), g0);
+        assert_eq!(
+            bits(&ok("fwd", m.cross_entropy_mean_forward(&dl, &dt, None))),
+            l0
+        );
+        assert_eq!(
+            bits(&ok("bwd", m.cross_entropy_mean_backward(&dl, &dt, None))),
+            g0
+        );
     }
 }
 
@@ -79,9 +85,19 @@ fn a_non_finite_logit_anywhere_is_refused_even_in_an_ignored_row() {
             l[row * V + col] = bad;
             let dl = up(&m, &host(&l, &[rows, V]));
             let f = m.cross_entropy_mean_forward(&dl, &dt, Some(ignore));
-            deferred(&m, &format!("fwd ({row}, {col}) = {bad}"), f, "cross_entropy_mean_forward");
+            deferred(
+                &m,
+                &format!("fwd ({row}, {col}) = {bad}"),
+                f,
+                "cross_entropy_mean_forward",
+            );
             let g = m.cross_entropy_mean_backward(&dl, &dt, Some(ignore));
-            deferred(&m, &format!("bwd ({row}, {col}) = {bad}"), g, "cross_entropy_mean_backward");
+            deferred(
+                &m,
+                &format!("bwd ({row}, {col}) = {bad}"),
+                g,
+                "cross_entropy_mean_backward",
+            );
         }
     }
 }

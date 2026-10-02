@@ -201,3 +201,78 @@ fn add_and_mul_match_the_cpu_reference_bit_for_bit() {
     assert_eq!(bits(&gb), bits(&wb), "mul_backward grad_b");
     assert_eq!(pending(&m), None);
 }
+
+/// `data` as a contiguous row-major view `OFF` floats into a larger device
+/// buffer, so the view's last element is not the buffer's.
+fn at_offset(m: &MetalBackend, data: &[f32], shape: &[usize]) -> Tensor {
+    const OFF: usize = 1027;
+    let mut v = vec![0.5f32; OFF + data.len() + 5];
+    v[OFF..OFF + data.len()].copy_from_slice(data);
+    let base = up(m, &host(&v, &[v.len()]));
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+    ok("view", base.view(shape, &strides, OFF * 4))
+}
+
+/// The gate backward's checks. `x` and `w` keep standalone passes; the
+/// kernels check `bias`, `attn` and `grad_output` (inputs), and `pre`,
+/// `d_attn` and `d_bias` (results). A NaN or ±Inf at the end of an offset
+/// view in any operand is reported, a clean call reports nothing, and two
+/// finite-input overflows are reported that only an in-kernel check sees:
+/// `pre = x · w^T` (its gate is then exactly 1, so `d_pre` and both GEMMs
+/// stay finite) and `d_bias` (every gate 0.5, `w` and `x` zero, so only the
+/// row sum overflows). `d_attn = dy · g` with `g ≤ 1` cannot overflow.
+#[test]
+fn the_gate_backward_reports_non_finite_operands_and_results() {
+    const OP: &str = "per_head_sigmoid_gate_backward";
+    let m = metal();
+    let (rows, din, h, dh) = (33usize, 40usize, 3usize, 16usize);
+    let shapes = [
+        vec![1, rows, din],
+        vec![h, din],
+        vec![h],
+        vec![1, rows, h, dh],
+        vec![1, rows, h, dh],
+    ];
+    let clean = |i: usize| -> Vec<f32> {
+        let n: usize = shapes[i].iter().product();
+        vec![[0.5f32, 0.01, 0.1, 0.5, 0.5][i]; n]
+    };
+    let run = |data: [Vec<f32>; 5]| {
+        let t: Vec<Tensor> = (0..5)
+            .map(|i| at_offset(&m, &data[i], &shapes[i]))
+            .collect();
+        let g = ok(
+            OP,
+            m.per_head_sigmoid_gate_backward(&t[0], &t[1], &t[2], &t[3], &t[4]),
+        );
+        let fault = pending(&m);
+        drop(g);
+        fault
+    };
+    assert_eq!(run(std::array::from_fn(clean)), None, "clean call flagged");
+    let names = ["x", "w", "bias", "attn", "grad_output"];
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        for (i, name) in names.iter().enumerate() {
+            let mut data: [Vec<f32>; 5] = std::array::from_fn(clean);
+            let last = data[i].len() - 1;
+            data[i][last] = bad;
+            assert_eq!(run(data), Some(OP), "{bad} at the end of {name}");
+        }
+    }
+    // pre = 40 · 1e37 · 10 overflows; its gate is 1, so d_pre is 0.
+    let mut data: [Vec<f32>; 5] = std::array::from_fn(clean);
+    data[0] = vec![1.0e37; rows * din];
+    data[1] = vec![10.0; h * din];
+    assert_eq!(run(data), Some(OP), "pre overflowed unreported");
+    // d_pre = 0.25 · 16 · (2.7e18)² ≈ 2.9e37 per row; 33 rows overflow.
+    let mut data: [Vec<f32>; 5] = std::array::from_fn(clean);
+    data[0] = vec![0.0; rows * din];
+    data[1] = vec![0.0; h * din];
+    data[2] = vec![0.0; h];
+    data[3] = vec![2.7e18; rows * h * dh];
+    data[4] = vec![2.7e18; rows * h * dh];
+    assert_eq!(run(data), Some(OP), "d_bias overflowed unreported");
+}

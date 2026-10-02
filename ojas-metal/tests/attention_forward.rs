@@ -130,7 +130,10 @@ fn forward_is_deterministic() {
     for _ in 0..3 {
         let again = down(&ok("again", m.causal_sdpa_forward(&d[0], &d[1], &d[2])));
         assert!(
-            first.iter().zip(&again).all(|(x, y)| x.to_bits() == y.to_bits()),
+            first
+                .iter()
+                .zip(&again)
+                .all(|(x, y)| x.to_bits() == y.to_bits()),
             "two runs differ"
         );
     }
@@ -177,7 +180,12 @@ fn non_finite_inputs_and_overflowing_scores_are_refused() {
             ins[which] = host(&vals, &shape);
             let d: Vec<Tensor> = ins.iter().map(|t| up(&m, t)).collect();
             let r = m.causal_sdpa_forward(&d[0], &d[1], &d[2]);
-            deferred(&m, &format!("input {which} = {bad}"), r, "causal_sdpa_forward");
+            deferred(
+                &m,
+                &format!("input {which} = {bad}"),
+                r,
+                "causal_sdpa_forward",
+            );
         }
     }
     // Finite inputs whose scores overflow f32.

@@ -69,7 +69,10 @@ fn every_rank4_permutation_matches_the_host_reference_bit_for_bit() {
     // Odd, distinct extents so a swapped pair of axes cannot pass.
     let shape = [2usize, 3, 5, 7];
     let x = rand(&shape, 11, 1.0);
-    let xb: Vec<u32> = ok("x", x.to_f32_vec()).iter().map(|v| v.to_bits()).collect();
+    let xb: Vec<u32> = ok("x", x.to_f32_vec())
+        .iter()
+        .map(|v| v.to_bits())
+        .collect();
     let dx = up(&m, &x);
     let perms = permutations(4);
     assert_eq!(perms.len(), 24);
@@ -94,7 +97,10 @@ fn bthd_to_bhtd_round_trips_at_attention_shapes() {
         .enumerate()
     {
         let x = rand(shape, 20 + i as u64, 1.0);
-        let xb: Vec<u32> = ok("x", x.to_f32_vec()).iter().map(|v| v.to_bits()).collect();
+        let xb: Vec<u32> = ok("x", x.to_f32_vec())
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
         let dx = up(&m, &x);
         let bhtd = ok("to bhtd", m.permute(&dx, &[0, 2, 1, 3]));
         assert_eq!(bhtd.shape(), &[shape[0], shape[2], shape[1], shape[3]]);
@@ -134,7 +140,12 @@ fn values_move_without_arithmetic() {
 #[test]
 fn non_finite_inputs_are_refused_like_the_cpu_reference() {
     let (m, c) = (metal(), cpu());
-    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7FC0_1234)] {
+    for bad in [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::from_bits(0x7FC0_1234),
+    ] {
         let mut data = values(24, 4, 1.0);
         data[17] = bad;
         let x = host(&data, &[2, 3, 4]);
@@ -177,7 +188,10 @@ fn identity_rank0_rank1_and_max_rank_are_fresh_copies() {
         dx.device_buffer().expect("device"),
         id.device_buffer().expect("device"),
     );
-    assert!(!std::sync::Arc::ptr_eq(a, b), "identity must be a new buffer");
+    assert!(
+        !std::sync::Arc::ptr_eq(a, b),
+        "identity must be a new buffer"
+    );
 
     let s = host(&[2.5], &[]);
     let ds = ok("rank0", m.permute(&up(&m, &s), &[]));
@@ -192,7 +206,10 @@ fn identity_rank0_rank1_and_max_rank_are_fresh_copies() {
     assert_eq!(shape.len(), MAX_PERMUTE_RANK);
     let dims = [7usize, 0, 6, 2, 5, 1, 4, 3];
     let x8 = rand(&shape, 3, 1.0);
-    let xb: Vec<u32> = ok("x8", x8.to_f32_vec()).iter().map(|v| v.to_bits()).collect();
+    let xb: Vec<u32> = ok("x8", x8.to_f32_vec())
+        .iter()
+        .map(|v| v.to_bits())
+        .collect();
     let y8 = ok("rank8", m.permute(&up(&m, &x8), &dims));
     assert_eq!(bits(&y8), reference(&xb, &shape, &dims));
 }
@@ -204,7 +221,10 @@ fn a_contiguous_view_at_a_byte_offset_reads_its_own_window() {
     let dx = up(&m, &x);
     // Rows 1..3, as a [2, 3, 2] view starting 6 elements in.
     let view = ok("view", dx.view(&[2, 3, 2], &[6, 2, 1], 6 * 4));
-    let xb: Vec<u32> = ok("x", x.to_f32_vec()).iter().map(|v| v.to_bits()).collect();
+    let xb: Vec<u32> = ok("x", x.to_f32_vec())
+        .iter()
+        .map(|v| v.to_bits())
+        .collect();
     let window = &xb[6..18];
     let y = ok("permute", m.permute(&view, &[2, 0, 1]));
     assert_eq!(bits(&y), reference(window, &[2, 3, 2], &[2, 0, 1]));

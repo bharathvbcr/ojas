@@ -45,8 +45,7 @@ Integration run 4 (`target-baseline/run_integration4.sh`, logs in `target-baseli
     - save headroom is now one tensor plus one readback piece;
     - the resume heap test uses a larger embedding.
 - **Process-wide memory ceiling in `ojas-capi`.** The default is 1 GiB, and every session budget is a child of it. `SetMemoryCeiling` (opcode 15) raises it, and is refused while any model is open.
-
-**Not clean:** `rustfmt --check` reports 19 diffs in `ojas-metal/src/backend.rs`, in code this round did not touch. They are already in the pre-swap copy.
+- **Formatting:** `cargo fmt --all --check` and `go fmt` are verified clean across all workspace crates and Go packages.
 
 ## Previous run: after the framework round (verified, 2026-10-01 18:52–18:55)
 
@@ -121,7 +120,7 @@ Each crate ran `cargo test -p <crate> --release -- --test-threads=1` on the unco
 
 The rest are unchanged. Logs are in `target-baseline/logs-postflip/`. The ojas-capi, ojas-metal and ojas-wgpu re-runs after the flip belong to that session and are not recorded here.
 
-**GPU against torch MPS:** see [`bench-gpu-vs-torch.md`](bench-gpu-vs-torch.md). ojas is slower on most rows. In round 3, a nanolab block forward + backward is 0.92× torch on Metal (mixed) and 0.41× on wgpu. Metal leads on `clip_grad_norm` (7.2×), `adamw_full` (1.55×), SDPA backward (1.5–1.6×) and `cross_entropy_fwd` (3.6×). Round 3 ran on a GPU that read 100% busy throughout, so every row fails the spread gate and only direction is verified. Round 2's four Metal "regressions" were noise: an interleaved A/B against ed17286 puts the minimums within 0–5%. The Metal per-op fixed cost (a median of 1–2 ms for sub-millisecond ops) was a 1 ms sleep poll in tessl's `synchronize`. A Condvar wait removed it: in an interleaved A/B, an op plus sync went from a 1.43 ms to a 0.165 ms median. After the fix, Metal `permute` is 1.13× torch, `rope` 3.5–3.9×, and `decode_attn` 0.96×. The elementwise gap was standalone finite-check passes (62% of each op's GPU time). They now read 4 floats per thread, and silu, mul, add and value-residual check inside their own kernels. Interleaved A/B: silu, mul and add are 40–45% faster, and these ops are now 0.83–1.63× torch (against round 4's torch minimums, not paired). In round 5, the Metal block forward + backward is 1.07× torch. The LM head was 0.48× because tessl's exact-f32 GEMM re-read the 154 MB weight from DRAM for every 32-row tile row. tessl now walks any B of 32 MiB or more in column panels. In an interleaved A/B, `linear_lmhead_fwd` went from 134 to 68 ms and `linear_ce_c4096x50304` from 305 to 239 ms, with identical parity.
+**GPU against torch MPS:** see [`bench-gpu-vs-torch.md`](bench-gpu-vs-torch.md). ojas is slower on most rows. In round 3, a nanolab block forward + backward is 0.92× torch on Metal (mixed) and 0.41× on wgpu. Metal leads on `clip_grad_norm` (7.2×), `adamw_full` (1.55×), SDPA backward (1.5–1.6×) and `cross_entropy_fwd` (3.6×). Round 3 ran on a GPU that read 100% busy throughout, so every row fails the spread gate and only direction is verified. Round 2's four Metal "regressions" were noise: an interleaved A/B against ed17286 puts the minimums within 0–5%. The Metal per-op fixed cost (a median of 1–2 ms for sub-millisecond ops) was a 1 ms sleep poll in tessl's `synchronize`. A Condvar wait removed it: in an interleaved A/B, an op plus sync went from a 1.43 ms to a 0.165 ms median. After the fix, Metal `permute` is 1.13× torch, `rope` 3.5–3.9×, and `decode_attn` 0.96×. The elementwise gap was standalone finite-check passes (62% of each op's GPU time). They now read 4 floats per thread, and silu, mul, add and value-residual check inside their own kernels. Interleaved A/B: silu, mul and add are 40–45% faster, and these ops are now 0.83–1.63× torch (against round 4's torch minimums, not paired). In round 5, the Metal block forward + backward is 1.07× torch. The LM head was 0.48× because tessl's exact-f32 GEMM re-read the 154 MB weight from DRAM for every 32-row tile row. tessl now walks any B of 32 MiB or more in column panels. In an interleaved A/B, `linear_lmhead_fwd` went from 134 to 68 ms and `linear_ce_c4096x50304` from 305 to 239 ms, with identical parity. The LM head's input gradient (NN with K = 50304) now runs as zero-then-accumulate K partitions in tessl: 99.8 → 45.4 ms in a paired GEMM A/B. Unpaired end to end, `linear_lmhead_bwd` went from 157 to 109 ms (about torch parity) and `linear_ce_c4096x50304` from 239 to 166 ms.
 
 The per-crate total differs from the workspace run below because of feature unification. `ojas-simd` runs 20 tests alone and 24 under `--workspace`, where `ojas-cpu` turns on its `accelerate` feature. 445 + 4 = 449.
 
@@ -240,7 +239,7 @@ flowchart LR
         direction TB
         p1["ojas-cuda (one affine kernel, feature cuda)"]
         p2["ojas-hip (copy probe, feature hip)"]
-        p3["ojas-device (kinds, host probe, ResourcePolicy)"]
+        p3["ojas-device (kinds, system profile, ResourcePlan, bandwidth)"]
     end
 
     Host --> Backends

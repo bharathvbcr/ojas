@@ -7,11 +7,11 @@
 //! index 0 upward in `f32` without `mul_add`, and the bits do not depend on
 //! the thread count.
 
-use ojas_core::{BackendId, Budget, LinearDims, OjasError};
+use ojas_core::{Budget, LinearDims, OjasError};
 
-use crate::gemm::{gemm, scratch, single_task, whole_call, Mat, TASK_MACS};
+use crate::gemm::{gemm_out, scratch, single_task, whole_call, Mat, TASK_MACS};
 use crate::pool::{scoped, Exec};
-use crate::validate::{product, room_for, shape, F32Out};
+use crate::validate::{product, room_for, shape};
 
 pub(crate) fn transpose(
     op: &'static str,
@@ -35,10 +35,11 @@ pub(crate) fn transpose(
     Ok(out)
 }
 
-/// `x` is `[rows, in]`, `weight` is `[out, in]`, output is `[rows, out]`;
+/// `x` is `[rows, in]`, `weight` is `[out, in]`, and the output `y`
+/// (`[rows, out]`, zeroed, charged by the caller) is written in place;
 /// `dims` comes from [`ojas_core::linear_forward_dims`]. The operands are
-/// read where they are (a tensor's own storage), so only the output and the
-/// GEMM scratch are charged.
+/// read where they are (a tensor's own storage), so beside the output only
+/// the GEMM scratch is charged.
 pub(crate) fn linear_forward(
     op: &'static str,
     budget: &Budget,
@@ -46,47 +47,45 @@ pub(crate) fn linear_forward(
     x: &[f32],
     weight: &[f32],
     dims: &LinearDims,
-) -> Result<F32Out, OjasError> {
+    y: &mut [f32],
+) -> Result<(), OjasError> {
     let (rows, kin, nout) = (dims.rows, dims.in_features, dims.out_features);
-    if x.len() != product(op, &[rows, kin])? || weight.len() != product(op, &[nout, kin])? {
+    if x.len() != product(op, &[rows, kin])?
+        || weight.len() != product(op, &[nout, kin])?
+        || y.len() != product(op, &[rows, nout])?
+    {
         return Err(shape(op, "linear data length does not match shape"));
     }
-    let y_len = product(op, &[rows, nout])?;
-    let work = scratch(op, exec, rows, kin, nout)?;
-    // The output's charge leaves with it and is held until its tensor copy
-    // exists; the scratch charge ends here.
-    let charge = room_for(op, budget, y_len)?;
-    let _scratch = room_for(op, budget, work)?;
+    let _scratch = room_for(op, budget, scratch(op, exec, rows, kin, nout)?)?;
     let x = Mat::row_major(x, rows, kin);
     let w = Mat::row_major(weight, nout, kin);
-    let data = gemm(op, exec, &x, &w.t())?;
-    Ok(F32Out { data, charge })
+    gemm_out(op, exec, &x, &w.t(), y)
 }
 
-/// `(grad_x, grad_w)` for `grad_y` `[rows, out]`; `dims` comes from
-/// [`ojas_core::linear_backward_dims`]. The operands are read where they
-/// are, as in [`linear_forward`].
+/// `grad_x` (`[rows, in]`) and `grad_w` (`[out, in]`) for `grad_y`
+/// `[rows, out]`, written into `grads` (zeroed, charged by the caller);
+/// `dims` comes from [`ojas_core::linear_backward_dims`]. The operands are
+/// read where they are, as in [`linear_forward`].
 pub(crate) fn linear_backward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    x: &[f32],
-    weight: &[f32],
-    grad_y: &[f32],
+    [x, weight, grad_y]: [&[f32]; 3],
     dims: &LinearDims,
-) -> Result<(F32Out, F32Out), OjasError> {
+    [grad_x, grad_w]: [&mut [f32]; 2],
+) -> Result<(), OjasError> {
     let (rows, kin, nout) = (dims.rows, dims.in_features, dims.out_features);
     if x.len() != product(op, &[rows, kin])?
         || weight.len() != product(op, &[nout, kin])?
         || grad_y.len() != product(op, &[rows, nout])?
+        || grad_x.len() != product(op, &[rows, kin])?
+        || grad_w.len() != product(op, &[nout, kin])?
     {
         return Err(shape(
             op,
             "linear backward data length does not match shape",
         ));
     }
-    let gx_len = product(op, &[rows, kin])?;
-    let gw_len = product(op, &[nout, kin])?;
     // Two products that each fit in one task run side by side, so their
     // scratch is live at once; larger ones split themselves in turn. A whole
     // `ojas-simd` call must not run inside a pool task. On macOS a Fast
@@ -106,9 +105,6 @@ pub(crate) fn linear_backward(
     } else {
         sx.max(sw)
     };
-    // Each gradient's charge leaves with it (see `linear_forward`).
-    let gx_charge = room_for(op, budget, gx_len)?;
-    let gw_charge = room_for(op, budget, gw_len)?;
     let _work = room_for(op, budget, work)?;
     let x = Mat::row_major(x, rows, kin);
     let w = Mat::row_major(weight, nout, kin);
@@ -116,33 +112,20 @@ pub(crate) fn linear_backward(
     // grad_x[row, inner] = sum_col g[row, col] * W[col, inner], col from 0.
     // grad_w[col, inner] = sum_row g[row, col] * x[row, inner], row from 0.
     // A paired product fits in one task, so it runs whole on its scoped
-    // thread, which reads the borrowed operands.
-    let (grad_x, grad_w) = if pair {
-        let both = scoped::map(exec, 2, |i| {
+    // thread, which reads the borrowed operands and writes its own output.
+    if pair {
+        scoped::fill_parts(exec, vec![grad_x, grad_w], |i, out| {
             if i == 0 {
-                gemm(op, exec, &g, &w)
+                gemm_out(op, exec, &g, &w, out)
             } else {
-                gemm(op, exec, &g.t(), &x)
+                gemm_out(op, exec, &g.t(), &x, out)
             }
         })?;
-        let [gx, gw] = <[_; 2]>::try_from(both).map_err(|_| OjasError::Backend {
-            id: BackendId::Cpu,
-            detail: format!("{op}: scoped map returned the wrong number of results"),
-        })?;
-        (gx, gw)
     } else {
-        (gemm(op, exec, &g, &w)?, gemm(op, exec, &g.t(), &x)?)
-    };
-    Ok((
-        F32Out {
-            data: grad_x,
-            charge: gx_charge,
-        },
-        F32Out {
-            data: grad_w,
-            charge: gw_charge,
-        },
-    ))
+        gemm_out(op, exec, &g, &w, grad_x)?;
+        gemm_out(op, exec, &g.t(), &x, grad_w)?;
+    }
+    Ok(())
 }
 
 fn overflow(op: &'static str) -> OjasError {

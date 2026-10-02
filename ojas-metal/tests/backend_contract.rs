@@ -90,15 +90,40 @@ fn non_finite_inputs_are_refused_by_every_op_family() {
     let nf = |r: Result<Tensor, OjasError>| matches!(r, Err(OjasError::NonFinite { .. }));
     deferred(&m, "silu", m.silu_forward(&bad), "silu_forward");
     deferred(&m, "mul", m.mul_forward(&good, &inf), "mul_forward");
-    deferred(&m, "add", m.residual_add_forward(&inf, &good), "residual_add_forward");
-    deferred(&m, "linear x", m.linear_forward(&bad, &good), "linear_forward");
-    deferred(&m, "linear w", m.linear_forward(&good, &inf), "linear_forward");
-    deferred(&m, "rms", m.rms_norm_forward(&bad, &w1, 1e-6), "rms_norm_forward");
+    deferred(
+        &m,
+        "add",
+        m.residual_add_forward(&inf, &good),
+        "residual_add_forward",
+    );
+    deferred(
+        &m,
+        "linear x",
+        m.linear_forward(&bad, &good),
+        "linear_forward",
+    );
+    deferred(
+        &m,
+        "linear w",
+        m.linear_forward(&good, &inf),
+        "linear_forward",
+    );
+    deferred(
+        &m,
+        "rms",
+        m.rms_norm_forward(&bad, &w1, 1e-6),
+        "rms_norm_forward",
+    );
     assert!(nf(m.rms_norm_forward(&good, &w1, f32::NAN)));
     assert!(m.sync().is_ok(), "a host refusal records nothing");
     let q = up(&m, &host(&[f32::NAN; 16], &[1, 1, 1, 16]));
     let k = up(&m, &rand(&[1, 1, 1, 16], 3, 1.0));
-    deferred(&m, "sdpa", m.causal_sdpa_forward(&q, &k, &k), "causal_sdpa_forward");
+    deferred(
+        &m,
+        "sdpa",
+        m.causal_sdpa_forward(&q, &k, &k),
+        "causal_sdpa_forward",
+    );
     let t = up(&m, &host_u32(&[0, 1], &[2]));
     deferred(
         &m,
@@ -159,8 +184,16 @@ fn adamw_refusal_at_the_last_element_leaves_every_tensor_bit_identical() {
             let r = m.adamw_step(&mut p, &g, &mut m1, &mut m2, 3, cfg);
             deferred(&m, &format!("input {which} = {bad}"), r, "adamw_step");
             assert_eq!(bits(&p), before.0, "input {which} = {bad}: param written");
-            assert_eq!(bits(&m1), before.1, "input {which} = {bad}: moment1 written");
-            assert_eq!(bits(&m2), before.2, "input {which} = {bad}: moment2 written");
+            assert_eq!(
+                bits(&m1),
+                before.1,
+                "input {which} = {bad}: moment1 written"
+            );
+            assert_eq!(
+                bits(&m2),
+                before.2,
+                "input {which} = {bad}: moment2 written"
+            );
         }
     }
     // Finite inputs whose update overflows only at the last element.
@@ -181,7 +214,17 @@ fn adamw_refusal_at_the_last_element_leaves_every_tensor_bit_identical() {
     assert_eq!(bits(&m2), before.2, "overflow: moment2 written");
     // The same tensors still step cleanly afterwards, and the earlier fault
     // was reported, not carried.
-    ok("clean step", m.adamw_step(&mut p, &up(&m, &host(&g0, &shape)), &mut m1, &mut m2, 0, cfg));
+    ok(
+        "clean step",
+        m.adamw_step(
+            &mut p,
+            &up(&m, &host(&g0, &shape)),
+            &mut m1,
+            &mut m2,
+            0,
+            cfg,
+        ),
+    );
     ok("sync after the clean step", m.sync());
 }
 
@@ -226,7 +269,11 @@ fn muon_refusal_at_the_last_element_leaves_both_tensors_bit_identical() {
             let r = m.muon_ns5_step(&mut p, &g, &mut mo, cfg);
             deferred(&m, &format!("input {which} = {bad}"), r, "muon_ns5_step");
             assert_eq!(bits(&p), before.0, "input {which} = {bad}: param written");
-            assert_eq!(bits(&mo), before.1, "input {which} = {bad}: momentum written");
+            assert_eq!(
+                bits(&mo),
+                before.1,
+                "input {which} = {bad}: momentum written"
+            );
         }
     }
 }
@@ -498,7 +545,14 @@ fn over_budget_outputs_are_capacity_exceeded_before_device_allocation() {
     let live = ok("live", small.budget().live_bytes());
     ok(
         "adamw in budget",
-        small.adamw_step(&mut p, &g, &mut mo, &mut m2, 0, AdamWConfig::nanolab(1e-3, 0.0)),
+        small.adamw_step(
+            &mut p,
+            &g,
+            &mut mo,
+            &mut m2,
+            0,
+            AdamWConfig::nanolab(1e-3, 0.0),
+        ),
     );
     assert_eq!(ok("live", small.budget().live_bytes()), live);
     assert_ne!(down(&p), before);

@@ -58,6 +58,9 @@ LM-head GEMM".
 | `ab-rows/` | `bench/ab_metal_rows.sh` with `OLD_BIN` (the round 5 binary), 6 rounds: `linear_lmhead_fwd` 134.3 → 68.2 ms, `linear_lmhead_bwd` 164.3 → 156.8 ms. |
 | `ab-rows-ce/` | The same for the linear_ce rows (r2 torch reference): `c4096x50304` 304.8 → 239.4 ms; `c1024x8192` unchanged. |
 
+| `ab-nn-splitk/` | NN split-K, interleaved with alternating order, 4 rounds per side. Old side: the panel-walk binary. NN LM head 99.8 → 45.4 ms, NN K = 16384 21.0 → 14.6 ms, the rest within noise. |
+| `splitk-rows/` | The split-K `metal_vs_torch`, 3 rounds, unpaired (load ~350): `linear_lmhead_bwd` 109.1 ms min, `linear_ce_c4096x50304` 166.4 ms. |
+
 `run.sh` and `sum.sh` are the probe A/B scripts. The binaries they ran are in
 the ignored `target-baseline/gemm-ab/`.
 

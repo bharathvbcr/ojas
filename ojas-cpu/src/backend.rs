@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ojas_core::{
     clip_scale, AdamWConfig, Backend, BackendId, Budget, MuonNs5Config, Numerics, OjasError,
-    PerHeadGateGrad, Reservation, Tensor, ValueResidualGrad,
+    PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 // Every op below runs its `ojas_core::shapes` validator before it checks
 // values, copies an input or charges the budget (docs/shape-contract.md).
@@ -30,9 +30,8 @@ use crate::pointwise::{
 };
 use crate::pool::{Exec, Pool};
 use crate::validate::{
-    alloc_f32, alloc_out, check_f32s, f32_checked, f32_layouts, f32_operands, f32_values, fill_out,
-    fill_outs, headroom, nonfinite_first, payload_bytes, product, room_for, shared_operands,
-    u32_values, F32Out, Shared,
+    alloc_f32, check_f32s, f32_checked, f32_layouts, f32_operands, f32_values, fill_out, fill_outs,
+    headroom, nonfinite_first, payload_bytes, product, u32_values,
 };
 use ojas_core::{
     adamw_step_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
@@ -119,19 +118,6 @@ impl CpuBackend {
         }
     }
 
-    /// The charge for an output of `elements` f32 values, taken before the
-    /// kernel that computes it runs and handed to [`alloc_out`] with the
-    /// result.
-    ///
-    /// A kernel's own hold covers the buffer it fills and ends when it
-    /// returns. While the kernel assembles per-task parts into that buffer,
-    /// and afterwards while [`alloc_out`] copies it into the returned tensor,
-    /// a second output-sized buffer is live; this charge covers it until
-    /// the copy exists and the buffer is freed.
-    fn out_charge(&self, op: &'static str, elements: usize) -> Result<Reservation, OjasError> {
-        room_for(op, &self.budget, elements)
-    }
-
     /// RMSNorm forward after its validator: the op itself, and each half of
     /// `rms_qk_norm_forward` once both halves are validated.
     fn rms_norm_fwd(
@@ -143,10 +129,10 @@ impl CpuBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "rms_norm_forward";
         let exec = self.exec();
-        let [x, w] = shared_operands(OP, exec, [input, weight])?;
-        let charge = self.out_charge(OP, input.num_elements()?)?;
-        let y = rms_forward(OP, &self.budget, exec, x, w, dims, eps)?;
-        finish(OP, &self.budget, y, charge, input.shape())
+        let [x, w] = f32_operands(OP, exec, [input, weight])?;
+        fill_out(OP, &self.budget, self.exec(), input.shape(), |y| {
+            rms_forward(OP, &self.budget, exec, x, w, dims, eps, y)
+        })
     }
 
     /// RMSNorm backward after its validator (see [`Self::rms_norm_fwd`]).
@@ -160,31 +146,13 @@ impl CpuBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "rms_norm_backward";
         let exec = self.exec();
-        let [x, w, gy] = shared_operands(OP, exec, [input, weight, grad_output])?;
-        let gx_charge = self.out_charge(OP, input.num_elements()?)?;
-        let gw_charge = self.out_charge(OP, weight.num_elements()?)?;
-        // norm.rs `rms_backward` keeps one rstd per row in its task parts and
-        // again in the joined vector, and its hold counts them once. With
-        // many short rows that second copy outgrows the two weight-gradient
-        // charges, so it is charged here until the kernel returns.
-        let rstd = room_for(OP, &self.budget, dims.rows)?;
-        let (gx, gw) = rms_backward(OP, &self.budget, exec, x, w, gy, dims, eps)?;
-        drop(rstd);
-        let grad_x = finish(OP, &self.budget, gx, gx_charge, input.shape())?;
-        let grad_w = finish(OP, &self.budget, gw, gw_charge, weight.shape())?;
+        let ins = f32_operands(OP, exec, [input, weight, grad_output])?;
+        let shapes = [input.shape(), weight.shape()];
+        let [grad_x, grad_w] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
+            rms_backward(OP, &self.budget, exec, ins, dims, eps, grads)
+        })?;
         Ok((grad_x, grad_w))
     }
-}
-
-/// `out` plus the charge [`CpuBackend::out_charge`] took for it, as a tensor.
-fn finish(
-    op: &'static str,
-    budget: &Budget,
-    data: Vec<f32>,
-    charge: Reservation,
-    shape: &[usize],
-) -> Result<Tensor, OjasError> {
-    alloc_out(op, budget, F32Out { data, charge }, shape)
 }
 
 impl Backend for CpuBackend {
@@ -238,8 +206,9 @@ impl Backend for CpuBackend {
         let dims = linear_forward_dims(input, weight)?;
         let exec = self.exec();
         let [x, w] = f32_operands(OP, exec, [input, weight])?;
-        let y = linear_forward(OP, &self.budget, exec, x, w, &dims)?;
-        alloc_out(OP, &self.budget, y, &dims.out_shape)
+        fill_out(OP, &self.budget, self.exec(), &dims.out_shape, |y| {
+            linear_forward(OP, &self.budget, exec, x, w, &dims, y)
+        })
     }
 
     fn linear_backward(
@@ -251,10 +220,11 @@ impl Backend for CpuBackend {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
         let exec = self.exec();
-        let [x, w, gy] = f32_operands(OP, exec, [input, weight, grad_output])?;
-        let (gx, gw) = linear_backward(OP, &self.budget, exec, x, w, gy, &dims)?;
-        let grad_x = alloc_out(OP, &self.budget, gx, input.shape())?;
-        let grad_w = alloc_out(OP, &self.budget, gw, weight.shape())?;
+        let ins = f32_operands(OP, exec, [input, weight, grad_output])?;
+        let shapes = [input.shape(), weight.shape()];
+        let [grad_x, grad_w] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
+            linear_backward(OP, &self.budget, exec, ins, &dims, grads)
+        })?;
         Ok((grad_x, grad_w))
     }
 
@@ -288,10 +258,10 @@ impl Backend for CpuBackend {
         const OP: &str = "rope_half_split_forward";
         let dims = rope_half_split_forward_dims(x, cos, sin)?;
         let exec = self.exec();
-        let [xv, cv, sv] = shared_operands(OP, exec, [x, cos, sin])?;
-        let charge = self.out_charge(OP, x.num_elements()?)?;
-        let y = rope_forward(OP, &self.budget, exec, xv, cv, sv, dims)?;
-        finish(OP, &self.budget, y, charge, x.shape())
+        let [xv, cv, sv] = f32_operands(OP, exec, [x, cos, sin])?;
+        fill_out(OP, &self.budget, self.exec(), x.shape(), |y| {
+            rope_forward(OP, exec, xv, cv, sv, dims, y)
+        })
     }
 
     fn rope_half_split_backward(
@@ -303,10 +273,10 @@ impl Backend for CpuBackend {
         const OP: &str = "rope_half_split_backward";
         let dims = rope_half_split_backward_dims(grad_output, cos, sin)?;
         let exec = self.exec();
-        let [gy, cv, sv] = shared_operands(OP, exec, [grad_output, cos, sin])?;
-        let charge = self.out_charge(OP, grad_output.num_elements()?)?;
-        let gx = rope_backward(OP, &self.budget, exec, gy, cv, sv, dims)?;
-        finish(OP, &self.budget, gx, charge, grad_output.shape())
+        let [gy, cv, sv] = f32_operands(OP, exec, [grad_output, cos, sin])?;
+        fill_out(OP, &self.budget, self.exec(), grad_output.shape(), |gx| {
+            rope_backward(OP, exec, gy, cv, sv, dims, gx)
+        })
     }
 
     fn rms_qk_norm_forward(
@@ -345,7 +315,7 @@ impl Backend for CpuBackend {
         let dims = SdpaKernelDims::new(OP, causal_sdpa_forward_dims(q, k, v)?)?;
         let exec = self.exec();
         let qkv = f32_operands(OP, exec, [q, k, v])?;
-        fill_out(OP, &self.budget, q.shape(), |out| {
+        fill_out(OP, &self.budget, self.exec(), q.shape(), |out| {
             causal_sdpa_forward(OP, &self.budget, exec, qkv, dims, out)
         })
     }
@@ -362,7 +332,7 @@ impl Backend for CpuBackend {
         let exec = self.exec();
         let ins = f32_operands(OP, exec, [q, k, v, grad_output])?;
         let shapes = [q.shape(), k.shape(), v.shape()];
-        let [grad_q, grad_k, grad_v] = fill_outs(OP, &self.budget, shapes, |grads| {
+        let [grad_q, grad_k, grad_v] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
             causal_sdpa_backward(OP, &self.budget, exec, ins, dims, grads)
         })?;
         Ok((grad_q, grad_k, grad_v))
@@ -378,11 +348,10 @@ impl Backend for CpuBackend {
         const OP: &str = "per_head_sigmoid_gate_forward";
         let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
         let exec = self.exec();
-        let [x, w, b, _] = f32_operands(OP, exec, [input, weight, bias, attn_out])?;
-        let attn = Shared::new(OP, attn_out)?;
-        let charge = self.out_charge(OP, attn_out.num_elements()?)?;
-        let y = gate_forward(OP, &self.budget, exec, x, w, b, attn, dims)?;
-        finish(OP, &self.budget, y, charge, attn_out.shape())
+        let [x, w, b, attn] = f32_operands(OP, exec, [input, weight, bias, attn_out])?;
+        fill_out(OP, &self.budget, self.exec(), attn_out.shape(), |y| {
+            gate_forward(OP, &self.budget, exec, x, w, b, attn, dims, y)
+        })
     }
 
     fn per_head_sigmoid_gate_backward(
@@ -396,18 +365,21 @@ impl Backend for CpuBackend {
         const OP: &str = "per_head_sigmoid_gate_backward";
         let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
         let exec = self.exec();
-        let [x, w, b, _, _] = f32_operands(OP, exec, [input, weight, bias, attn_out, grad_output])?;
-        let (attn, gy) = (Shared::new(OP, attn_out)?, Shared::new(OP, grad_output)?);
-        let gx_charge = self.out_charge(OP, x.len())?;
-        let gw_charge = self.out_charge(OP, w.len())?;
-        let gb_charge = self.out_charge(OP, b.len())?;
-        let ga_charge = self.out_charge(OP, attn_out.num_elements()?)?;
-        let (gx, gw, gb, ga) = gate_backward(OP, &self.budget, exec, x, w, b, attn, gy, dims)?;
+        let ins = f32_operands(OP, exec, [input, weight, bias, attn_out, grad_output])?;
+        let shapes = [
+            input.shape(),
+            weight.shape(),
+            bias.shape(),
+            attn_out.shape(),
+        ];
+        let [gx, gw, gb, ga] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
+            gate_backward(OP, &self.budget, exec, ins, dims, grads)
+        })?;
         Ok(PerHeadGateGrad {
-            input: finish(OP, &self.budget, gx, gx_charge, input.shape())?,
-            weight: finish(OP, &self.budget, gw, gw_charge, weight.shape())?,
-            bias: finish(OP, &self.budget, gb, gb_charge, bias.shape())?,
-            attn_out: finish(OP, &self.budget, ga, ga_charge, attn_out.shape())?,
+            input: gx,
+            weight: gw,
+            bias: gb,
+            attn_out: ga,
         })
     }
 
@@ -420,7 +392,7 @@ impl Backend for CpuBackend {
         const OP: &str = "value_residual_blend_forward";
         value_residual_blend_forward_dims(value, value0, lambda)?;
         let [v, v0, lam] = f32_operands(OP, self.exec(), [value, value0, lambda])?;
-        value_residual_forward(OP, &self.budget, v, v0, lam[0], value.shape())
+        value_residual_forward(OP, &self.budget, self.exec(), v, v0, lam[0], value.shape())
     }
 
     fn value_residual_blend_backward(
@@ -433,16 +405,23 @@ impl Backend for CpuBackend {
         const OP: &str = "value_residual_blend_backward";
         value_residual_blend_backward_dims(value, value0, lambda, grad_output)?;
         let exec = self.exec();
-        let [v, v0, lam_t, gy] = shared_operands(OP, exec, [value, value0, lambda, grad_output])?;
-        let gv_charge = self.out_charge(OP, value.num_elements()?)?;
-        let gv0_charge = self.out_charge(OP, value0.num_elements()?)?;
-        let gl_charge = self.out_charge(OP, 1)?;
-        let lam = lam_t.values()?[0];
-        let (gv, gv0, gl) = value_residual_backward(OP, &self.budget, exec, v, v0, lam, gy)?;
+        let [v, v0, lam, gy] = f32_operands(OP, exec, [value, value0, lambda, grad_output])?;
+        let shapes = [value.shape(), value0.shape(), lambda.shape()];
+        let [gv, gv0, gl] = fill_outs(OP, &self.budget, self.exec(), shapes, |[gv, gv0, gl]| {
+            gl.fill(value_residual_backward(
+                OP,
+                &self.budget,
+                exec,
+                [v, v0, gy],
+                lam[0],
+                [gv, gv0],
+            )?);
+            Ok(())
+        })?;
         Ok(ValueResidualGrad {
-            value: finish(OP, &self.budget, gv, gv_charge, value.shape())?,
-            value0: finish(OP, &self.budget, gv0, gv0_charge, value0.shape())?,
-            lambda: finish(OP, &self.budget, vec![gl], gl_charge, lambda.shape())?,
+            value: gv,
+            value0: gv0,
+            lambda: gl,
         })
     }
 
@@ -450,27 +429,27 @@ impl Backend for CpuBackend {
         const OP: &str = "silu_forward";
         silu_forward_dims(input)?;
         let exec = self.exec();
-        let [x] = shared_operands(OP, exec, [input])?;
-        let charge = self.out_charge(OP, input.num_elements()?)?;
-        let y = silu_forward(OP, &self.budget, exec, x)?;
-        finish(OP, &self.budget, y, charge, input.shape())
+        let [x] = f32_operands(OP, exec, [input])?;
+        fill_out(OP, &self.budget, self.exec(), input.shape(), |y| {
+            silu_forward(exec, x, y)
+        })
     }
 
     fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "silu_backward";
         silu_backward_dims(input, grad_output)?;
         let exec = self.exec();
-        let [x, gy] = shared_operands(OP, exec, [input, grad_output])?;
-        let charge = self.out_charge(OP, input.num_elements()?)?;
-        let gx = silu_backward(OP, &self.budget, exec, x, gy)?;
-        finish(OP, &self.budget, gx, charge, input.shape())
+        let [x, gy] = f32_operands(OP, exec, [input, grad_output])?;
+        fill_out(OP, &self.budget, self.exec(), input.shape(), |gx| {
+            silu_backward(OP, exec, x, gy, gx)
+        })
     }
 
     fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "mul_forward";
         mul_forward_dims(a, b)?;
         let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
-        mul_forward(OP, &self.budget, av, bv, a.shape())
+        mul_forward(OP, &self.budget, self.exec(), av, bv, a.shape())
     }
 
     fn mul_backward(
@@ -482,14 +461,23 @@ impl Backend for CpuBackend {
         const OP: &str = "mul_backward";
         mul_backward_dims(a, b, grad_output)?;
         let [av, bv, gy] = f32_operands(OP, self.exec(), [a, b, grad_output])?;
-        mul_backward(OP, &self.budget, av, bv, gy, a.shape(), b.shape())
+        mul_backward(
+            OP,
+            &self.budget,
+            self.exec(),
+            av,
+            bv,
+            gy,
+            a.shape(),
+            b.shape(),
+        )
     }
 
     fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "residual_add_forward";
         residual_add_forward_dims(x, y)?;
         let [xv, yv] = f32_operands(OP, self.exec(), [x, y])?;
-        add_forward(OP, &self.budget, xv, yv, x.shape())
+        add_forward(OP, &self.budget, self.exec(), xv, yv, x.shape())
     }
 
     fn residual_add_backward(
@@ -608,19 +596,20 @@ impl Backend for CpuBackend {
         // `muon_scratch`).
         let work = muon_scratch(OP, self.exec(), rows, cols)?;
         let _guard = headroom(OP, &self.budget, payload_bytes(OP, work)?)?;
-        // Both targets are proven writable while they are uniquely owned,
-        // before the pool's tasks share them; `muon_ns5` consumes every
-        // share and the pool frees them before it returns, so the writes
-        // below find the targets unique again.
+        // Both targets are proven writable before anything is computed, so
+        // a refusal leaves them unchanged; `muon_ns5` borrows all three
+        // and its new values are written once it returns.
         param.ensure_writable_f32(len)?;
         momentum.ensure_writable_f32(len)?;
-        let shares = (
-            Shared::new(OP, param)?,
-            Shared::new(OP, grad)?,
-            Shared::new(OP, momentum)?,
-        );
-        let (p, g, m) = shares;
-        let (new_p, new_m) = muon_ns5(self.exec(), p, g, m, rows, cols, config)?;
+        let (new_p, new_m) = muon_ns5(
+            self.exec(),
+            f32_values(OP, param)?,
+            f32_values(OP, grad)?,
+            f32_values(OP, momentum)?,
+            rows,
+            cols,
+            config,
+        )?;
         if let Some(new_p) = new_p {
             param.write_f32(&new_p)?;
         }
@@ -629,7 +618,7 @@ impl Backend for CpuBackend {
     }
 
     fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-        crate::accum::accumulate_grad("accumulate_grad", &self.budget, acc, grad)
+        crate::accum::accumulate_grad("accumulate_grad", &self.budget, self.exec(), acc, grad)
     }
 
     fn linear_cross_entropy_mean(
@@ -661,7 +650,7 @@ impl Backend for CpuBackend {
         kv_len: usize,
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "cached_attention_forward";
-        let y = crate::kv::cached_attention_forward(
+        crate::kv::cached_attention_forward(
             OP,
             &self.budget,
             self.exec(),
@@ -669,8 +658,7 @@ impl Backend for CpuBackend {
             k_cache,
             v_cache,
             kv_len,
-        )?;
-        alloc_out(OP, &self.budget, y, q.shape())
+        )
     }
 
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {

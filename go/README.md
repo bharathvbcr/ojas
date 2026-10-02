@@ -56,8 +56,20 @@ func main() {
 
 	// Every model's BudgetBytes draws from the process-wide memory ceiling
 	// (1 GiB by default). Raise it before any model is open; it is refused
-	// while one is.
-	if err := ojas.SetMemoryCeiling(ctx, 16<<30); err != nil {
+	// while one is. Here it comes from the machine: SystemProfile cuts the
+	// 16 GiB asked for by RAM, available memory and any cgroup limit. The
+	// ceiling counts logical tensor bytes and a Metal buffer can take up to
+	// twice that, so this caller keeps half as headroom. The fraction is the
+	// caller's choice; nothing picks it for you.
+	prof, err := ojas.SystemProfile(ctx, 16<<30, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ceiling := prof.BudgetBytes / 2
+	if ceiling == 0 { // SetMemoryCeiling refuses 0
+		log.Fatal("no memory to spare on this machine")
+	}
+	if err := ojas.SetMemoryCeiling(ctx, ceiling); err != nil {
 		log.Fatal(err)
 	}
 
@@ -65,7 +77,7 @@ func main() {
 	// Metal or wgpu fail closed: no device means an error, never a CPU model.
 	id, err := ojas.LoadModel(ctx, "init.safetensors", ojas.LoadOptions{
 		Device:      ojas.DeviceMetal,
-		BudgetBytes: 16 << 30,
+		BudgetBytes: ceiling, // above the ceiling is ErrCapacity
 	})
 	if err != nil {
 		log.Fatal(err)

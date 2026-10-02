@@ -203,7 +203,11 @@ fn metal_training_steps_track_cpu_loss_and_read_back_only_the_loss() {
         let before = counted();
         let waits = m.waits();
         let (ml, mn) = ok("metal step", step(&m, &mut dp, &mut dopt, &dtok, &dtgt, n));
-        assert_eq!(counted(), before, "step {n}: a readback before the loss download");
+        assert_eq!(
+            counted(),
+            before,
+            "step {n}: a readback before the loss download"
+        );
         // `download` charges the backend's budget, the one counted here.
         let loss = ok("download", m.download(&ml));
         // Forward, backward and the optimizer steps are recorded; only the
