@@ -216,7 +216,9 @@ pub struct EtaRule {
 }
 
 impl EtaRule {
-    fn validate(&self, total_steps: u64, cap_s: f64) -> Result<(), TrainError> {
+    /// Refuse a rule that could not fire or could not stop anything; `train` calls this before
+    /// the clock starts, and a command line can call it before anything is read.
+    pub fn validate(&self, total_steps: u64, cap_s: f64) -> Result<(), TrainError> {
         if self.at_step == 0 || self.at_step >= total_steps {
             return Err(TrainError::Refused(format!(
                 "the ETA rule's step {} must be in [1, {total_steps}): at step 0 nothing has been timed, \
