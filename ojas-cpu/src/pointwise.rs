@@ -15,8 +15,6 @@
 //! The gate logits `input · Wᵀ + b` and the gate's input and weight
 //! gradients are products on the GEMM core ([`crate::gemm`]).
 
-use std::ops::Range;
-
 use ojas_core::{Budget, CeDims, EmbeddingDims, GateDims, Numerics, OjasError, Scratch, Tensor};
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
@@ -24,8 +22,8 @@ use crate::gemm::{fma, gemm, gemm_out, scratch as gemm_scratch, Mat};
 use crate::pool::scoped;
 use crate::pool::{Exec, ROW_MIN_ELEMS};
 use crate::validate::{
-    all_finite, check_f32, f32_values, fill_outs_chunked, nonfinite, nonfinite_first, product,
-    room_for, shape, u32_values,
+    all_finite, check_f32, f32_values, fill_outs_chunked, fill_rows, nonfinite, nonfinite_first,
+    product, room_for, shape, u32_values,
 };
 
 pub(crate) fn sigmoid(x: f32) -> f32 {
@@ -144,10 +142,16 @@ fn same_len(op: &'static str, lens: &[usize], what: &str) -> Result<(), OjasErro
     }
 }
 
-/// `x * sigmoid(x)`, written into `y` (charged by the caller) in place.
-pub(crate) fn silu_forward(exec: Exec<'_>, x: &[f32], y: &mut [f32]) -> Result<(), OjasError> {
+/// `x * sigmoid(x)` as a tensor of `shape` ([`fill_rows`]).
+pub(crate) fn silu_forward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    x: &[f32],
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
     let numerics = exec.numerics;
-    scoped::rows_into(exec, y, x.len(), 1, |range, dst| {
+    fill_rows(op, budget, exec, shape, x.len(), 1, |range, dst| {
         let src = &x[range];
         match numerics {
             Numerics::Exact => {
@@ -162,22 +166,22 @@ pub(crate) fn silu_forward(exec: Exec<'_>, x: &[f32], y: &mut [f32]) -> Result<(
             }
         }
         Ok(())
-    })?;
-    Ok(())
+    })
 }
 
-/// `grad_y * s * (1 + x (1 - s))` with `s = sigmoid(x)`, written into
-/// `grad_x` (charged by the caller) in place.
+/// `grad_y * s * (1 + x (1 - s))` with `s = sigmoid(x)` as a tensor of
+/// `shape` ([`fill_rows`]).
 pub(crate) fn silu_backward(
     op: &'static str,
+    budget: &Budget,
     exec: Exec<'_>,
     x: &[f32],
     grad_y: &[f32],
-    grad_x: &mut [f32],
-) -> Result<(), OjasError> {
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
     same_len(op, &[x.len(), grad_y.len()], "silu input and grad")?;
     let numerics = exec.numerics;
-    scoped::rows_into(exec, grad_x, x.len(), 1, |range, dst| {
+    fill_rows(op, budget, exec, shape, x.len(), 1, |range, dst| {
         let pairs = x[range.clone()].iter().zip(&grad_y[range]);
         match numerics {
             Numerics::Exact => {
@@ -194,8 +198,7 @@ pub(crate) fn silu_backward(
             }
         }
         Ok(())
-    })?;
-    Ok(())
+    })
 }
 
 /// `a * b` as a tensor of `shape`, one rounding per value under either
@@ -222,10 +225,11 @@ pub(crate) fn mul_forward(
     shape: &[usize],
 ) -> Result<Tensor, OjasError> {
     same_len(op, &[a.len(), b.len(), product(op, shape)?], "mul operand")?;
-    elementwise(op, budget, exec, shape, |range, out| {
+    fill_rows(op, budget, exec, shape, a.len(), 1, |range, out| {
         for ((o, &x), &y) in out.iter_mut().zip(&a[range.clone()]).zip(&b[range]) {
             *o = x * y;
         }
+        Ok(())
     })
 }
 
@@ -290,40 +294,12 @@ pub(crate) fn add_forward(
         &[a.len(), b.len(), product(op, shape)?],
         "residual add operand",
     )?;
-    elementwise(op, budget, exec, shape, |range, out| {
+    fill_rows(op, budget, exec, shape, a.len(), 1, |range, out| {
         for ((o, &x), &y) in out.iter_mut().zip(&a[range.clone()]).zip(&b[range]) {
             *o = x + y;
         }
+        Ok(())
     })
-}
-
-/// A new tensor of `shape` whose values `fill` writes in chunks of
-/// [`ROW_MIN_ELEMS`] on scoped threads, values `range` into `part`, each
-/// chunk scanned for a NaN or infinity by the thread that wrote it
-/// ([`fill_outs_chunked`]). The caller has checked that its operands hold
-/// `shape`'s element count.
-fn elementwise(
-    op: &'static str,
-    budget: &Budget,
-    exec: Exec<'_>,
-    shape: &[usize],
-    fill: impl Fn(Range<usize>, &mut [f32]) + Sync,
-) -> Result<Tensor, OjasError> {
-    let n = product(op, shape)?;
-    let ([out], _) = fill_outs_chunked(
-        op,
-        budget,
-        exec,
-        [shape],
-        n,
-        [1],
-        ROW_MIN_ELEMS,
-        |range, [part]| {
-            fill(range, part);
-            Ok(())
-        },
-    )?;
-    Ok(out)
 }
 
 /// Both gradients of `x + y` are `grad_y` itself. The caller has run
@@ -377,18 +353,15 @@ pub(crate) fn gate_forward(
     bias: &[f32],
     attn: &[f32],
     dims: GateDims,
-    y: &mut [f32],
-) -> Result<(), OjasError> {
+    out_shape: &[usize],
+) -> Result<Tensor, OjasError> {
     gate_lengths(op, &dims, input, weight, bias, attn)?;
-    if y.len() != attn.len() {
-        return Err(shape(op, "gate output length does not match attn"));
-    }
-    // The logits phase; the output is the caller's, written in place.
+    // The logits phase, held while the output is charged and written.
     let _hold = room_for(op, budget, logit_work(op, exec, &dims)?)?;
     let gates = gate_values(op, exec, &dims, input, weight, bias)?;
     let (heads, dh) = (dims.heads, dims.head_dim);
     let width = heads * dh;
-    scoped::rows_into(exec, y, dims.rows, width, |range, y| {
+    fill_rows(op, budget, exec, out_shape, dims.rows, width, |range, y| {
         let src = &attn[range.start * width..range.end * width];
         let g = &gates[range.start * heads..range.end * heads];
         for ((dst, src), &g) in y.chunks_exact_mut(dh).zip(src.chunks_exact(dh)).zip(g) {
@@ -397,8 +370,7 @@ pub(crate) fn gate_forward(
             }
         }
         Ok(())
-    })?;
-    Ok(())
+    })
 }
 
 /// `[grad_input, grad_weight, grad_bias, grad_attn]`: the caller's zeroed
@@ -452,7 +424,7 @@ pub(crate) fn gate_backward(
     let gates = gate_values(op, exec, &dims, input, weight, bias)?;
     let numerics = exec.numerics;
     let width = heads * dh;
-    let min_rows = (ROW_MIN_ELEMS / width.max(1)).max(1);
+    let min_rows = scoped::min_rows(width);
     let mut gz = vec![0.0f32; gz_len];
     scoped::chunks_into_n(
         exec,
@@ -642,7 +614,7 @@ pub(crate) fn value_residual_forward(
     if !s.is_finite() {
         return Err(nonfinite(op));
     }
-    elementwise(op, budget, exec, shape, |range, out| {
+    fill_rows(op, budget, exec, shape, value.len(), 1, |range, out| {
         for ((o, &v), &v0) in out
             .iter_mut()
             .zip(&value[range.clone()])
@@ -650,6 +622,7 @@ pub(crate) fn value_residual_forward(
         {
             *o = (1.0 - s) * v + s * v0;
         }
+        Ok(())
     })
 }
 

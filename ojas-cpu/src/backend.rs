@@ -130,9 +130,7 @@ impl CpuBackend {
         const OP: &str = "rms_norm_forward";
         let exec = self.exec();
         let [x, w] = f32_operands(OP, exec, [input, weight])?;
-        fill_out(OP, &self.budget, self.exec(), input.shape(), |y| {
-            rms_forward(OP, &self.budget, exec, x, w, dims, eps, y)
-        })
+        rms_forward(OP, &self.budget, exec, x, w, dims, eps, input.shape())
     }
 
     /// RMSNorm backward after its validator (see [`Self::rms_norm_fwd`]).
@@ -259,9 +257,7 @@ impl Backend for CpuBackend {
         let dims = rope_half_split_forward_dims(x, cos, sin)?;
         let exec = self.exec();
         let [xv, cv, sv] = f32_operands(OP, exec, [x, cos, sin])?;
-        fill_out(OP, &self.budget, self.exec(), x.shape(), |y| {
-            rope_forward(OP, exec, xv, cv, sv, dims, y)
-        })
+        rope_forward(OP, &self.budget, exec, xv, cv, sv, dims, x.shape())
     }
 
     fn rope_half_split_backward(
@@ -274,9 +270,16 @@ impl Backend for CpuBackend {
         let dims = rope_half_split_backward_dims(grad_output, cos, sin)?;
         let exec = self.exec();
         let [gy, cv, sv] = f32_operands(OP, exec, [grad_output, cos, sin])?;
-        fill_out(OP, &self.budget, self.exec(), grad_output.shape(), |gx| {
-            rope_backward(OP, exec, gy, cv, sv, dims, gx)
-        })
+        rope_backward(
+            OP,
+            &self.budget,
+            exec,
+            gy,
+            cv,
+            sv,
+            dims,
+            grad_output.shape(),
+        )
     }
 
     fn rms_qk_norm_forward(
@@ -349,9 +352,17 @@ impl Backend for CpuBackend {
         let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
         let exec = self.exec();
         let [x, w, b, attn] = f32_operands(OP, exec, [input, weight, bias, attn_out])?;
-        fill_out(OP, &self.budget, self.exec(), attn_out.shape(), |y| {
-            gate_forward(OP, &self.budget, exec, x, w, b, attn, dims, y)
-        })
+        gate_forward(
+            OP,
+            &self.budget,
+            exec,
+            x,
+            w,
+            b,
+            attn,
+            dims,
+            attn_out.shape(),
+        )
     }
 
     fn per_head_sigmoid_gate_backward(
@@ -430,9 +441,7 @@ impl Backend for CpuBackend {
         silu_forward_dims(input)?;
         let exec = self.exec();
         let [x] = f32_operands(OP, exec, [input])?;
-        fill_out(OP, &self.budget, self.exec(), input.shape(), |y| {
-            silu_forward(exec, x, y)
-        })
+        silu_forward(OP, &self.budget, exec, x, input.shape())
     }
 
     fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
@@ -440,9 +449,7 @@ impl Backend for CpuBackend {
         silu_backward_dims(input, grad_output)?;
         let exec = self.exec();
         let [x, gy] = f32_operands(OP, exec, [input, grad_output])?;
-        fill_out(OP, &self.budget, self.exec(), input.shape(), |gx| {
-            silu_backward(OP, exec, x, gy, gx)
-        })
+        silu_backward(OP, &self.budget, exec, x, gy, input.shape())
     }
 
     fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {

@@ -360,6 +360,44 @@ where
     Ok((tensors, pieces.into_iter().map(|(r, _)| r).collect()))
 }
 
+/// A new tensor of `shape`, `[rows, width]` values, filled in chunks of
+/// whole rows of about [`crate::pool::ROW_MIN_ELEMS`] values as
+/// [`scoped::rows_into`] cuts them, `fill` writing rows `range` into
+/// `part`, and each chunk scanned on the thread that wrote it
+/// ([`fill_outs_chunked`]). A `shape` that does not hold exactly `rows`
+/// rows of `width` is refused before anything is charged.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fill_rows<F>(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    shape: &[usize],
+    rows: usize,
+    width: usize,
+    fill: F,
+) -> Result<Tensor, OjasError>
+where
+    F: Fn(Range<usize>, &mut [f32]) -> Result<(), OjasError> + Sync,
+{
+    if product(op, shape)? != product(op, &[rows, width])? {
+        return Err(self::shape(
+            op,
+            format!("output {shape:?} does not hold {rows} rows of {width}"),
+        ));
+    }
+    let ([out], _) = fill_outs_chunked(
+        op,
+        budget,
+        exec,
+        [shape],
+        rows,
+        [width],
+        scoped::min_rows(width),
+        |range, [part]| fill(range, part),
+    )?;
+    Ok(out)
+}
+
 /// One zeroed output per shape, each charged before it is allocated, in
 /// order.
 fn charge_outs<const N: usize>(
@@ -477,5 +515,36 @@ mod tests {
                     .unwrap());
             }
         }
+    }
+
+    /// A shape that does not hold exactly `rows` rows of `width` is refused
+    /// before anything is charged or written, including one row short, the
+    /// case [`scoped::chunks_into_n`] itself accepts for block-shaped items.
+    #[test]
+    fn fill_rows_refuses_a_shape_that_is_not_rows_of_width() {
+        use crate::pool::Pool;
+        use ojas_core::Numerics;
+        let pool = Arc::new(Pool::new(2).unwrap());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        let budget = Budget::new(1 << 20);
+        for bad in [&[3usize, 4][..], &[4, 3], &[2, 4], &[11]] {
+            let got = fill_rows("t", &budget, exec, bad, 3, 4, |_, _| {
+                panic!("nothing is written for {bad:?}")
+            });
+            assert!(
+                matches!(got, Err(OjasError::Shape { .. })),
+                "{bad:?}: {got:?}"
+            );
+            assert_eq!(budget.live_bytes().unwrap(), 0);
+        }
+        let ok = fill_rows("t", &budget, exec, &[3, 4], 3, 4, |range, part| {
+            part.fill(range.start as f32);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(ok.f32_slice().unwrap().len(), 12);
     }
 }

@@ -387,10 +387,58 @@ XProtect (~89% CPU) and the GitPulse app (~80%) were active. Both runs put
 `gate_bwd` at about parity with torch, against 0.5× in round 5. A quotable
 number needs a run with the GPU idle between rows.
 
+**Fix: the bias sum stages rows in threadgroup memory.** The SIMD-group
+version made each link of its 4096-add chain a `simd_shuffle` and an add,
+about 29 ns per row. Now the SIMD-group's lanes load a 2048-row block of a
+head into threadgroup memory together, and lane 0 adds it in row order,
+reading eight values ahead. The additions are in the same order, so the
+sum is still bit-identical to the CPU reference. ojas compiles its kernels
+with `-fmetal-math-mode=safe -ffp-contract=off`, so the compiler may not
+reassociate them.
+
+A/B, the parallel-TN binary against this one, interleaved with alternating
+order, 4 rounds per side, min µs per round
+(`bench/results/2026-10-02-gate/ab-stage/`). The 1-min load was 4.2–6.3.
+The GPU read 33–55% busy at the start of every run, from the GitPulse app
+spawning git processes outside the lock:
+
+| | Old | New | Time ratio |
+|---|---|---|---:|
+| `ojas_per_head_gate_dbias` | 120.4–123.4 | 53.4–56.4 | 0.45× |
+| whole backward, GPU span | 619.9–621.4 | 548.6–561.2 | 0.90× |
+
+Every round of the new side beat every round of the old. The new binary
+also carries another session's edit to `metal_bench.rs`. The probe's other
+rows match the old side within noise (`pre` 49–53, `gate_bwd` 154–165, `gx`
+111–112, `gw` 43–44, checks 81–82 µs), so the timing method is unchanged.
+
+**Tests:**
+- `gate_dbias_sums_rows_in_ascending_order_bit_for_bit` now also covers 2047,
+  2048, 2049 and 4096 rows, around the new 2048-row blocks. It passes on
+  both kernels: it pins the order across the change, and the A/B is the
+  evidence for the speed.
+- ojas-metal suite: 166 passed, 0 failed.
+- Not run:
+  - the three mutants in `mutate-stage.sh` (an add pair swapped, the tail
+    loop dropped, every block read from row 0). After the 14:24 kernel
+    panic, the rules for this Mac bar fork-heavy steps. That the test
+    catches these mutants is unverified for this kernel; it caught the
+    equivalent mutants of the shuffle kernel.
+  - ojas-metal clippy. It stopped in `ojas-cpu`, at a dead function the CPU
+    lane was adding at the time, before it reached ojas-metal. The only Rust
+    change here is the test's row list.
+
+At ~13 ns per row, 53 µs is still well above what an add chain alone should
+cost. A likely factor, unmeasured, is that 12 SIMD-groups on the whole GPU
+may not raise its clock.
+
 **Next, by the same probe (not yet done):**
 - a paired `gate` run with the GPU idle between rows (both runs above were
   flagged noisy);
-- the bias sum itself at 120 µs, still a chain of 4096 shuffle-adds;
+- letting the bias sum overlap the `gx` and `gw` GEMMs. It only reads
+  `d_pre`, as they do. The whole backward (549–561 µs) is more than its
+  parts measured one by one (~493 µs), so no overlap is visible; the ~60 µs
+  gap also holds the gaps between dispatches. Unmeasured hypothesis;
 - the routed width at short K (12 × 768 × 1024 above).
 
 ## Round 3: 2026-10-01, 22:50–23:06 CDT

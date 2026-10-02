@@ -243,8 +243,13 @@ where
     R: Send,
     F: Fn(Range<usize>, &mut [f32]) -> Result<R, OjasError> + Sync,
 {
-    let min_rows = (ROW_MIN_ELEMS / width.max(1)).max(1);
-    chunks_into(exec, out, rows, width, min_rows, task)
+    chunks_into(exec, out, rows, width, min_rows(width), task)
+}
+
+/// Whole rows of `width` values per chunk of about [`ROW_MIN_ELEMS`]
+/// values, at least one.
+pub(crate) fn min_rows(width: usize) -> usize {
+    (ROW_MIN_ELEMS / width.max(1)).max(1)
 }
 
 /// `out` cut into consecutive parts of `lens` items, in order. The lengths

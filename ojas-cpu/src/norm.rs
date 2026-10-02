@@ -10,10 +10,10 @@
 //! adds; [`GROUP`] rows are summed side by side so that many independent
 //! chains run at once, which leaves every row's order unchanged.
 
-use ojas_core::{Budget, OjasError, RmsDims, RopeDims, RopeLayout};
+use ojas_core::{Budget, OjasError, RmsDims, RopeDims, RopeLayout, Tensor};
 
 use crate::pool::{scoped, Exec, ROW_MIN_ELEMS};
-use crate::validate::{nonfinite, product, room_for, shape};
+use crate::validate::{fill_rows, nonfinite, product, room_for, shape};
 
 /// Rows whose sums run side by side.
 const GROUP: usize = 8;
@@ -29,17 +29,17 @@ pub(crate) fn rms_forward(
     weight: &[f32],
     dims: RmsDims,
     eps: f32,
-    y: &mut [f32],
-) -> Result<(), OjasError> {
+    out_shape: &[usize],
+) -> Result<Tensor, OjasError> {
     let RmsDims { rows, dim } = dims;
     let n = product(op, &[rows, dim])?;
-    if x.len() != n || weight.len() != dim || y.len() != n {
+    if x.len() != n || weight.len() != dim {
         return Err(shape(op, "rms data length does not match shape"));
     }
-    // One rstd per row, across the tasks; the output is the caller's,
-    // written in place.
+    // One rstd per row, across the tasks, held while the output is charged
+    // and written.
     let _hold = room_for(op, budget, rows)?;
-    scoped::rows_into(exec, y, rows, dim, |range, y| {
+    fill_rows(op, budget, exec, out_shape, rows, dim, |range, y| {
         let src = &x[range.start * dim..range.end * dim];
         let rstd = rstds(op, src, dim, eps)?;
         let rows = y
@@ -52,8 +52,7 @@ pub(crate) fn rms_forward(
             }
         }
         Ok(())
-    })?;
-    Ok(())
+    })
 }
 
 /// `grad_x` runs in row chunks. `grad_w` is a sum over rows, so it runs in
@@ -88,7 +87,7 @@ pub(crate) fn rms_backward(
     let _hold = room_for(op, budget, scratch)?;
     let inv_dim = 1.0f32 / dim as f32;
     let parts = {
-        let min_rows = (ROW_MIN_ELEMS / dim).max(1);
+        let min_rows = scoped::min_rows(dim);
         scoped::chunks_into(exec, grad_x, rows, dim, min_rows, |range, grad_x| {
             let src = &x[range.start * dim..range.end * dim];
             let gy = &grad_y[range.start * dim..range.end * dim];
@@ -205,60 +204,60 @@ fn rstd_of_sum(op: &'static str, sum_sq: f32, dim: usize, eps: f32) -> Result<f3
 }
 
 /// `dims` comes from [`ojas_core::rope_half_split_forward_dims`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rope_forward(
     op: &'static str,
+    budget: &Budget,
     exec: Exec<'_>,
     x: &[f32],
     cos: &[f32],
     sin: &[f32],
     dims: RopeDims,
-    out: &mut [f32],
-) -> Result<(), OjasError> {
-    let RopeDims { rows, dim, layout } = dims;
+    out_shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let RopeDims { rows, dim, .. } = dims;
     let n = product(op, &[rows, dim])?;
-    if x.len() != n || out.len() != n {
+    if x.len() != n {
         return Err(shape(op, "rope data length does not match shape"));
     }
     rope_rows(
         op,
+        budget,
         exec,
-        layout,
-        rows,
-        dim,
+        dims,
         x,
-        cos,
-        sin,
+        [cos, sin],
         Direction::Forward,
-        out,
+        out_shape,
     )
 }
 
 /// `dims` comes from [`ojas_core::rope_half_split_backward_dims`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rope_backward(
     op: &'static str,
+    budget: &Budget,
     exec: Exec<'_>,
     grad_y: &[f32],
     cos: &[f32],
     sin: &[f32],
     dims: RopeDims,
-    out: &mut [f32],
-) -> Result<(), OjasError> {
-    let RopeDims { rows, dim, layout } = dims;
+    out_shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let RopeDims { rows, dim, .. } = dims;
     let n = product(op, &[rows, dim])?;
-    if grad_y.len() != n || out.len() != n {
+    if grad_y.len() != n {
         return Err(shape(op, "rope grad length does not match shape"));
     }
     rope_rows(
         op,
+        budget,
         exec,
-        layout,
-        rows,
-        dim,
+        dims,
         grad_y,
-        cos,
-        sin,
+        [cos, sin],
         Direction::Backward,
-        out,
+        out_shape,
     )
 }
 
@@ -271,19 +270,18 @@ enum Direction {
 #[allow(clippy::too_many_arguments)]
 fn rope_rows(
     op: &'static str,
+    budget: &Budget,
     exec: Exec<'_>,
-    layout: RopeLayout,
-    rows: usize,
-    dim: usize,
+    dims: RopeDims,
     x: &[f32],
-    cos: &[f32],
-    sin: &[f32],
+    [cos, sin]: [&[f32]; 2],
     direction: Direction,
-    out: &mut [f32],
-) -> Result<(), OjasError> {
+    out_shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let RopeDims { rows, dim, layout } = dims;
     check_rope_tables(op, layout, rows, dim, cos, sin)?;
     let half = dim / 2;
-    scoped::rows_into(exec, out, rows, dim, |range, y| {
+    fill_rows(op, budget, exec, out_shape, rows, dim, |range, y| {
         for (local, row) in range.enumerate() {
             let (cos_row, sin_row) = coeff_row(layout, cos, sin, row, dim);
             let src = &x[row * dim..(row + 1) * dim];
@@ -310,8 +308,7 @@ fn rope_rows(
             }
         }
         Ok(())
-    })?;
-    Ok(())
+    })
 }
 
 fn check_rope_tables(

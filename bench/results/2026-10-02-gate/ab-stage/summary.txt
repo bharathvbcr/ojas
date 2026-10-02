@@ -1,0 +1,24 @@
+14:49  up 25 mins, 1 user, load averages: 5.27 6.26 9.69
+ojas-metal suite exit=0
+passed 166, failed 0, ignored 0
+mutants skipped: no fork-heavy steps on this Mac (resume, gentler)
+clippy exit=101
+error: function `fill_rows` is never used
+   --> ojas-cpu/src/validate.rs:370:15
+error: could not compile `ojas-cpu` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+build exit=0
+14:50  up 26 mins, 1 user, load averages: 4.20 5.75 9.25
+== old (min µs per round: dbias | whole backward | GPU at start)
+round 1: dbias 121.0  | whole 620.4  | 55%,
+round 2: dbias 123.4  | whole 621.4  | 33%,
+round 3: dbias 122.9  | whole 620.6  | 45%,
+round 4: dbias 120.4  | whole 619.9  | 45%,
+== new (min µs per round: dbias | whole backward | GPU at start)
+round 1: dbias 53.4  | whole 554.3  | 36%,
+round 2: dbias 54.3  | whole 561.2  | 33%,
+round 3: dbias 56.4  | whole 558.0  | 40%,
+round 4: dbias 56.1  | whole 548.6  | 49%,
+14:50  up 26 mins, 1 user, load averages: 4.20 5.75 9.25
+
+[exited with code 0]
