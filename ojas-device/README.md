@@ -46,7 +46,7 @@ flowchart TD
 
 Windows and other targets build and report `Unknown` for everything except the usable CPU count.
 
-Copy bandwidth is **not** measured at startup. `measure_bandwidth(&BandwidthConfig)` copies one buffer into another on 1 and on N threads and keeps the fastest of several repetitions. Allocation is fallible and capped (1 MiB to 1 GiB per buffer; `for_profile` gives each of the two buffers at most 1/16 of available memory, so 1/8 in all), wall time is capped, and the 1-minute load average is recorded so a figure taken on a busy machine reads as a lower bound. `cached_bandwidth` keeps the first successful measurement for the process; a refusal is not kept.
+Copy bandwidth is **not** measured at startup. `measure_bandwidth(&BandwidthConfig)` copies one buffer into another on 1 and on N threads and keeps the fastest of several repetitions. Allocation is fallible and capped at 64 MiB per buffer for every caller (two buffers, shared by the threads; `for_profile` may use less, down to 1/16 of available memory), wall time is capped, and the 1-minute load average is recorded so a figure taken on a busy machine reads as a lower bound. `cached_bandwidth` keeps the first successful measurement for the process; a refusal is not kept.
 
 ```mermaid
 flowchart LR

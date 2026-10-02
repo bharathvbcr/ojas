@@ -424,9 +424,9 @@ rows match the old side within noise (`pre` 49–53, `gate_bwd` 154–165, `gx`
     panic, the rules for this Mac bar fork-heavy steps. That the test
     catches these mutants is unverified for this kernel; it caught the
     equivalent mutants of the shuffle kernel.
-  - ojas-metal clippy. It stopped in `ojas-cpu`, at a dead function the CPU
-    lane was adding at the time, before it reached ojas-metal. The only Rust
-    change here is the test's row list.
+- ojas-metal clippy `--all-targets --features metal -D warnings`: clean on a
+  re-run at 15:04. The first run stopped in `ojas-cpu`, at a dead function
+  the CPU lane was adding at the time.
 
 At ~13 ns per row, 53 µs is still well above what an add chain alone should
 cost. A likely factor, unmeasured, is that 12 SIMD-groups on the whole GPU

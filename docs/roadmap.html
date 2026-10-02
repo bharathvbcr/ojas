@@ -68,7 +68,7 @@
     <div id="announcement" class="w-full bg-gradient-to-r from-brand-950 via-brand-900 to-black border-b border-brand-800/40 text-xs py-2 px-4 font-medium tracking-wide">
       <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
         <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified 2026-10-01</span>
-        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1071 Rust tests and 38 Go tests passed in the last full run (2026-10-01). See the guide for what that covers.</span>
+        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1071 Rust tests and 38 Go tests passed in the last full run (2026-10-01). CPU timings re-run 2026-10-02. See the guide for what that covers.</span>
         <button type="button" id="dismissAnnounce" class="ml-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10" aria-label="Dismiss announcement">&times;</button>
       </div>
     </div>
@@ -135,6 +135,7 @@
             <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>The Go API on real weights: <span class="font-mono">LoadModel</span>, <span class="font-mono">NewModel</span>, <span class="font-mono">OpenTrainer</span>, <span class="font-mono">TrainStep</span>, <span class="font-mono">SaveCheckpoint</span>, <span class="font-mono">Resume</span>, a GPT-2 tokenizer, and sampled <span class="font-mono">GenerateIDs</span>, under one process-wide memory ceiling.</span></li>
             <li class="flex gap-2"><span class="ok shrink-0">✓</span><span>Seeded temperature, top-k, and top-p sampling, a seeded resumable batch sampler over <span class="font-mono">TokenBin</span>, and BF16 and F16 safetensors.</span></li>
             <li class="flex gap-2"><span class="ok shrink-0">✓</span><span><span class="font-mono">ojas-qwen35</span>: a Qwen3.5 whole training step through tessl on Metal, as a provider outside the <span class="font-mono">Backend</span> trait.</span></li>
+            <li class="flex gap-2"><span class="ok shrink-0">✓</span><span><span class="font-mono">ojas-device</span>: <span class="font-mono">probe_system</span> reads memory, core clusters, caches, unified memory and pressure, <span class="font-mono">ResourcePlan::derive</span> turns that into a budget and thread advice, and Go reads it through <span class="font-mono">SystemProfile</span>. It is advice the caller applies: nothing adapts on its own, and a field it cannot read stays <span class="font-mono">Unknown</span>.</span></li>
           </ul>
         </li>
         <li class="pl-6">
@@ -155,6 +156,8 @@
           <ul class="space-y-2 text-sm text-slate-300">
             <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Whether the Qwen3.5 step's ops (gated delta net, head-dim-256 grouped attention, partial RoPE) move into the trait, or stay a Metal-only provider.</span></li>
             <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>A CUDA backend. A design exists (<span class="font-mono">docs/cuda-backend-scoping.md</span>); no kernel has been written.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>A planner on top of the host probe: choosing a device and batch size from the plan, and stopping before a run that cannot fit. Today there is no router, and the CPU kernels do not yet adopt the recommended GEMM block sizes.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Training Lappi, a typed decision model, without PyTorch. A Rust trainer over tessl&rsquo;s Qwen3.5 Metal step is climbing a parity ladder on the Mac and a CUDA provider is started; the GH200 campaign stays on PyTorch and no Lappi model has shipped.</span></li>
           </ul>
         </li>
         <li class="pl-6">

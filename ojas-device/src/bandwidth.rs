@@ -19,10 +19,15 @@ use ojas_core::CPU_THREAD_CEILING;
 /// Smallest buffer measured. Below this the copy fits in a cache and says
 /// nothing about memory.
 pub const BANDWIDTH_MIN_BYTES: usize = 1 << 20;
-/// Largest buffer measured (two buffers of this size are allocated).
-pub const BANDWIDTH_MAX_BYTES: usize = 1 << 30;
-/// Default buffer: past any L2 or system cache shipped so far.
+/// Buffer used when the host does not force a smaller one, and the most
+/// one buffer may be. Two of these, shared by every measuring thread, are
+/// the whole reservation. A larger buffer is what filled the machine when
+/// the size was taken from installed RAM.
 pub const BANDWIDTH_DEFAULT_BYTES: usize = 64 << 20;
+/// Largest buffer [`measure_bandwidth`] will allocate. Same value as
+/// [`BANDWIDTH_DEFAULT_BYTES`]: every caller, not only [`BandwidthConfig::for_profile`],
+/// stops here.
+pub const BANDWIDTH_MAX_BYTES: usize = BANDWIDTH_DEFAULT_BYTES;
 /// Most repetitions per thread count.
 pub const BANDWIDTH_MAX_REPS: u32 = 100;
 /// Longest wall time a caller may allow per thread count.
@@ -236,6 +241,14 @@ pub fn cached_bandwidth(profile: &SystemProfile) -> Result<Bandwidth, BandwidthE
 }
 
 fn try_buffer(bytes: usize) -> Result<Vec<u8>, BandwidthError> {
+    // Second gate, after [`BandwidthConfig::validate`]. A caller that
+    // reaches here still cannot reserve a buffer the absolute cap forbids,
+    // and nothing in the timed copy allocates another one per thread.
+    if !(BANDWIDTH_MIN_BYTES..=BANDWIDTH_MAX_BYTES).contains(&bytes) {
+        return Err(BandwidthError::Config(format!(
+            "bytes {bytes} outside {BANDWIDTH_MIN_BYTES}..={BANDWIDTH_MAX_BYTES}"
+        )));
+    }
     let mut v: Vec<u8> = Vec::new();
     v.try_reserve_exact(bytes)
         .map_err(|_| BandwidthError::Alloc { bytes })?;
@@ -371,11 +384,70 @@ fn load_average_unix() -> Option<f64> {
 }
 
 #[cfg(test)]
+mod heap_limit {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub static HEAP_LIVE: AtomicUsize = AtomicUsize::new(0);
+    pub static HEAP_PEAK: AtomicUsize = AtomicUsize::new(0);
+    /// Largest single `alloc` or growth from `realloc` since the test reset it.
+    pub static HEAP_REQUEST: AtomicUsize = AtomicUsize::new(0);
+
+    struct Counting;
+
+    fn note(bytes: usize) {
+        HEAP_REQUEST.fetch_max(bytes, Ordering::SeqCst);
+        let now = HEAP_LIVE.fetch_add(bytes, Ordering::SeqCst) + bytes;
+        HEAP_PEAK.fetch_max(now, Ordering::SeqCst);
+    }
+
+    #[allow(unsafe_code)]
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let ptr = unsafe { System.alloc(layout) };
+            if !ptr.is_null() {
+                note(layout.size());
+            }
+            ptr
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let ptr = unsafe { System.alloc_zeroed(layout) };
+            if !ptr.is_null() {
+                note(layout.size());
+            }
+            ptr
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) };
+            HEAP_LIVE.fetch_sub(layout.size(), Ordering::SeqCst);
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let grown = unsafe { System.realloc(ptr, layout, new_size) };
+            if !grown.is_null() {
+                if new_size >= layout.size() {
+                    note(new_size - layout.size());
+                } else {
+                    HEAP_LIVE.fetch_sub(layout.size() - new_size, Ordering::SeqCst);
+                }
+            }
+            grown
+        }
+    }
+
+    #[global_allocator]
+    static ALLOC: Counting = Counting;
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::system::SystemProfile;
     use crate::topology::CpuTopology;
     use crate::HostMemory;
+    use std::sync::atomic::Ordering;
 
     fn small(threads: usize) -> BandwidthConfig {
         BandwidthConfig {
@@ -388,11 +460,26 @@ mod tests {
 
     #[test]
     fn out_of_bounds_configs_are_refused_before_allocating() {
+        assert_eq!(
+            BANDWIDTH_MAX_BYTES, BANDWIDTH_DEFAULT_BYTES,
+            "the allocation cap and the profile default are one ceiling"
+        );
         let ok = small(1);
         let cases = [
             BandwidthConfig { bytes: 0, ..ok },
             BandwidthConfig {
                 bytes: BANDWIDTH_MIN_BYTES - 1,
+                ..ok
+            },
+            // One past the absolute cap, and the old 1 GiB ceiling. Both must
+            // be refused before `try_buffer`; a 1 GiB pair is 2 GiB, and a
+            // pair sized from installed RAM is what jetsam recorded.
+            BandwidthConfig {
+                bytes: BANDWIDTH_DEFAULT_BYTES + 1,
+                ..ok
+            },
+            BandwidthConfig {
+                bytes: 1 << 30,
                 ..ok
             },
             BandwidthConfig {
@@ -529,6 +616,27 @@ mod tests {
         assert_eq!(c.bytes % 16384, 0);
         assert!(c.bytes <= ((40 << 20) + 12_345) / 16);
         assert_eq!(c.threads, 5);
+        // A 64 GiB host must not size a buffer from that RAM. Two buffers of
+        // available memory are ~120 GiB, which is the footprint that jetsam
+        // recorded for go.test on 2026-10-02. Threads share the two buffers,
+        // so the thread count does not multiply them either.
+        memory.available_bytes = MemoryReport::Known(64 << 30);
+        memory.cgroup_limit_bytes = MemoryReport::Unknown;
+        memory.cgroup_current_bytes = MemoryReport::Unknown;
+        p = SystemProfile::from_memory(memory);
+        p.cpu.usable = MemoryReport::Known(18);
+        let roomy = BandwidthConfig::for_profile(&p).unwrap();
+        assert!(
+            roomy.bytes <= BANDWIDTH_DEFAULT_BYTES,
+            "buffer {} exceeds the {} byte cap on a 64 GiB host",
+            roomy.bytes,
+            BANDWIDTH_DEFAULT_BYTES
+        );
+        assert_eq!(roomy.threads, 18);
+        assert!(
+            roomy.bytes.saturating_mul(2) <= 2 * BANDWIDTH_DEFAULT_BYTES,
+            "two buffers are the whole allocation"
+        );
         // A hostile page size is not trusted.
         p.cpu.page_bytes = MemoryReport::Known(3);
         assert_eq!(BandwidthConfig::for_profile(&p).unwrap().bytes % 4096, 0);
@@ -537,6 +645,141 @@ mod tests {
             BandwidthConfig::for_profile(&p).unwrap().threads,
             CPU_THREAD_CEILING as usize
         );
+    }
+
+    /// Heap high-water while `measure_bandwidth` runs. Thread stacks are not
+    /// counted: pthread maps those itself. One pair of buffers is the budget;
+    /// a pair per thread is not.
+    fn heap_growth(config: &BandwidthConfig) -> usize {
+        let base = heap_limit::HEAP_LIVE.load(Ordering::SeqCst);
+        heap_limit::HEAP_PEAK.store(base, Ordering::SeqCst);
+        heap_limit::HEAP_REQUEST.store(0, Ordering::SeqCst);
+        measure_bandwidth(config).unwrap();
+        heap_limit::HEAP_PEAK
+            .load(Ordering::SeqCst)
+            .saturating_sub(base)
+    }
+
+    #[test]
+    fn this_host_measures_two_capped_buffers() {
+        let profile = crate::probe_system();
+        let config = BandwidthConfig::for_profile(&profile).expect("host");
+        assert!(
+            config.bytes <= BANDWIDTH_DEFAULT_BYTES,
+            "this host sized a {} byte buffer",
+            config.bytes
+        );
+        let growth = heap_growth(&BandwidthConfig {
+            reps: 1,
+            max_time: Duration::from_millis(50),
+            ..config
+        });
+        let two = config.bytes.saturating_mul(2);
+        assert!(
+            growth <= two + (1 << 20),
+            "heap grew by {growth} for {} threads; two buffers are {two}",
+            config.threads
+        );
+    }
+
+    #[test]
+    fn many_threads_share_two_buffers() {
+        let threads = 8;
+        let config = BandwidthConfig {
+            bytes: BANDWIDTH_MIN_BYTES,
+            threads,
+            reps: 1,
+            max_time: Duration::from_millis(50),
+        };
+        let growth = heap_growth(&config);
+        let two = config.bytes.saturating_mul(2);
+        let slack = 1 << 20;
+        assert!(
+            growth <= two + slack,
+            "heap grew by {growth} bytes for {threads} threads; two buffers are {two}"
+        );
+        assert!(
+            heap_limit::HEAP_REQUEST.load(Ordering::SeqCst) <= config.bytes,
+            "a single reservation exceeded one buffer"
+        );
+    }
+
+    /// Every accepted probe stays inside the absolute cap, including inputs
+    /// that are zero, maximal, or not a page size. Nothing here allocates
+    /// the buffer; [`measure_bandwidth`] is what reserves.
+    #[test]
+    fn hostile_profiles_never_exceed_the_absolute_cap() {
+        let pages = [0u64, 1, 3, 4096, 16384, 1 << 21, 1 << 22, u64::MAX];
+        let avails = [
+            0u64,
+            1,
+            (BANDWIDTH_MIN_BYTES as u64) * 16,
+            BANDWIDTH_DEFAULT_BYTES as u64,
+            1 << 40,
+            u64::MAX,
+        ];
+        let usable = [0u64, 1, 18, 1024, u64::MAX];
+        let rooms = [
+            (MemoryReport::Unknown, MemoryReport::Unknown),
+            (MemoryReport::Known(0), MemoryReport::Unknown),
+            (MemoryReport::Known(1 << 20), MemoryReport::Known(0)),
+            (MemoryReport::Known(u64::MAX), MemoryReport::Known(u64::MAX)),
+            (MemoryReport::Known(u64::MAX), MemoryReport::Known(0)),
+        ];
+        let mut accepted = 0u32;
+        for page in pages {
+            for avail in avails {
+                for threads in usable {
+                    for (limit, current) in rooms {
+                        let mut memory = HostMemory::all_unknown();
+                        memory.available_bytes = MemoryReport::Known(avail);
+                        memory.cgroup_limit_bytes = limit;
+                        memory.cgroup_current_bytes = current;
+                        let mut profile = SystemProfile::from_memory(memory);
+                        profile.cpu.page_bytes = MemoryReport::Known(page);
+                        profile.cpu.usable = MemoryReport::Known(threads);
+                        match BandwidthConfig::for_profile(&profile) {
+                            Err(BandwidthError::Config(_)) => {}
+                            Ok(config) => {
+                                accepted += 1;
+                                assert!(
+                                    (BANDWIDTH_MIN_BYTES..=BANDWIDTH_MAX_BYTES)
+                                        .contains(&config.bytes),
+                                    "bytes {} page {page} avail {avail}",
+                                    config.bytes
+                                );
+                                assert!(
+                                    (1..=CPU_THREAD_CEILING as usize).contains(&config.threads),
+                                    "threads {}",
+                                    config.threads
+                                );
+                                let resident = config.bytes.saturating_mul(2);
+                                assert!(resident <= 2 * BANDWIDTH_MAX_BYTES);
+                            }
+                            Err(other) => panic!("unexpected {other}"),
+                        }
+                    }
+                }
+            }
+        }
+        assert!(accepted > 0, "every hostile profile was refused");
+    }
+
+    #[test]
+    fn the_largest_accepted_measurement_reserves_two_buffers() {
+        let config = BandwidthConfig {
+            bytes: BANDWIDTH_MAX_BYTES,
+            threads: 8,
+            reps: 1,
+            max_time: Duration::from_millis(50),
+        };
+        let growth = heap_growth(&config);
+        let two = config.bytes.saturating_mul(2);
+        assert!(
+            growth <= two + (1 << 20),
+            "heap grew by {growth}; two buffers are {two}"
+        );
+        assert!(heap_limit::HEAP_REQUEST.load(Ordering::SeqCst) <= config.bytes);
     }
 
     #[test]

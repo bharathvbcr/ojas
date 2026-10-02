@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas — Deterministic Rust deep learning engine</title>
-  <meta name="description" content="ojas is a Rust deep learning engine that trains and serves a nanolab GPT from Go: bit-identical CPU math, memory budgets that refuse, no silent device fallback. Live labs for each guarantee.">
+  <meta name="description" content="ojas is a Rust deep learning engine that trains and serves a nanolab GPT from Go: bit-identical CPU math, memory budgets that refuse, no silent device fallback, and a host probe that plans around the machine or refuses. Live labs for each guarantee.">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -13,7 +13,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/">
   <meta property="og:title" content="ojas — Deterministic Rust deep learning engine">
-  <meta property="og:description" content="ojas is a Rust deep learning engine that trains and serves a nanolab GPT from Go: bit-identical CPU math, memory budgets that refuse, no silent device fallback. Live labs for each guarantee.">
+  <meta property="og:description" content="ojas is a Rust deep learning engine that trains and serves a nanolab GPT from Go: bit-identical CPU math, memory budgets that refuse, no silent device fallback, and a host probe that plans around the machine or refuses. Live labs for each guarantee.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" sizes="180x180">
@@ -68,7 +68,7 @@
     <div id="announcement" class="w-full bg-gradient-to-r from-brand-950 via-brand-900 to-black border-b border-brand-800/40 text-xs py-2 px-4 font-medium tracking-wide">
       <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
         <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified 2026-10-01</span>
-        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1071 Rust tests and 38 Go tests passed in the last full run (2026-10-01). See the guide for what that covers.</span>
+        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1071 Rust tests and 38 Go tests passed in the last full run (2026-10-01). CPU timings re-run 2026-10-02. See the guide for what that covers.</span>
         <button type="button" id="dismissAnnounce" class="ml-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10" aria-label="Dismiss announcement">&times;</button>
       </div>
     </div>
@@ -114,6 +114,7 @@
     <ol class="space-y-0.5 text-xs border-l border-white/10">
       <li><a href="#determinism" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Determinism</a></li>
       <li><a href="#labs" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Guarantees</a></li>
+      <li><a href="#host" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Your machine</a></li>
       <li><a href="#next" data-spy class="block pl-3 py-1 text-slate-400 hover:text-white">Keep going</a></li>
     </ol>
   </nav>
@@ -528,6 +529,42 @@
     </div>
   </section>
 
+  <section id="host" class="py-16 border-t border-white/10 bg-black/40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-8">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Your machine</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">Reads the machine, then plans or refuses</h2>
+        <p class="text-slate-400 mt-3 leading-relaxed">A long run that dies at hour three because the memory was never there is a design failure, not bad luck. <span class="font-mono text-slate-300">ojas-device</span> probes the host and turns it into a plan. A field it cannot read stays <span class="font-mono text-slate-300">Unknown</span> and is never guessed. The plan is advice the caller applies: nothing in ojas changes your settings on its own yet, and a request that does not fit is an error before the work starts.</p>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="glass-card rounded-2xl p-5">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">1 &middot; Probe</p>
+          <h3 class="text-white font-semibold mb-2">What this host actually is</h3>
+          <p class="text-xs text-slate-300 leading-relaxed"><span class="font-mono">probe_system()</span> reads memory (the tightest cgroup limit up the tree, and the working set rather than page cache), CPU core clusters, L1, L2 and L3 sizes, page size, whether memory is unified, and memory pressure. Each field fails alone to <span class="font-mono">Unknown</span>. On an M5 Pro it sees 6 &ldquo;Super&rdquo; plus 12 &ldquo;Performance&rdquo; cores and no reported L3.</p>
+        </div>
+        <div class="glass-card rounded-2xl p-5">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">2 &middot; Plan</p>
+          <h3 class="text-white font-semibold mb-2">A budget and thread advice</h3>
+          <p class="text-xs text-slate-300 leading-relaxed"><span class="font-mono">ResourcePlan::derive</span> cuts your budget to what is available and advises threads. An opt-in copy-bandwidth probe measured 120.8 GB/s on one thread and 409.9 GB/s on 18 here, so it advised 4 memory-bound threads. On unified memory it sets <span class="font-mono">shared_budget</span>, so CPU and GPU charge one budget instead of each assuming the whole RAM.</p>
+        </div>
+        <div class="glass-card rounded-2xl p-5">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">3 &middot; Refuse</p>
+          <h3 class="text-white font-semibold mb-2">Stop at the start, not mid-run</h3>
+          <p class="text-xs text-slate-300 leading-relaxed">Budgets refuse with the requested, cap and live bytes. Every open model sits under one process ceiling, 1 GiB by default. In the Qwen3.5 provider, a 2B staging step once reached 52.44 GB against a 51.54 GB working-set limit and faulted in 4 of 4 runs. It now recycles first, then refuses on the measured allocation before any GPU work.</p>
+        </div>
+        <div class="glass-card rounded-2xl p-5">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">4 &middot; From Go</p>
+          <h3 class="text-white font-semibold mb-2">You choose the numbers</h3>
+          <p class="text-xs text-slate-300 leading-relaxed"><span class="font-mono">SystemProfile(ctx, budget, measureBandwidth)</span> returns a versioned record. A Go host then calls <span class="font-mono">SetMemoryCeiling</span> and sets <span class="font-mono">LoadOptions.Threads</span> itself. Defaults are unchanged on purpose: ojas prefers explicit to inferred, so adapting is opt-in. See <a href="guide/features.html" class="text-brand-300 hover:text-white underline underline-offset-2">features</a>.</p>
+        </div>
+      </div>
+      <div class="mt-6 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 max-w-4xl">
+        <h3 class="text-white font-semibold mb-2">Not yet</h3>
+        <p class="text-xs text-slate-300 leading-relaxed">There is no automatic router: nothing picks a device or shrinks a batch for you. The GEMM block sizes the probe recommends are not adopted by the CPU kernels. The probe was run on one Apple M5 Pro; it is compile-checked for Linux and Windows but has not run there. On unified memory the budget counts logical bytes, and Metal can hold up to twice that, so leave headroom. The record is in <span class="font-mono text-slate-400">docs/adaptive-resources.md</span>.</p>
+      </div>
+    </div>
+  </section>
+
   <section id="next" class="py-16 border-t border-white/10">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="max-w-3xl mb-8">
@@ -544,7 +581,7 @@
         <a href="benchmarks.html" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Evidence</p>
           <h3 class="text-white font-semibold mb-2">Timings</h3>
-          <p class="text-xs text-slate-300 leading-relaxed">Two recorded CPU steps against PyTorch 2.13, including the run where they land within 1% of each other.</p>
+          <p class="text-xs text-slate-300 leading-relaxed">Two recorded CPU steps and a 27-case op scorecard against PyTorch 2.13, with the cases ojas loses listed beside the ones it wins.</p>
         </a>
         <a href="roadmap.html" class="glass-card rounded-2xl p-5 block border border-brand-500/30 hover:border-brand-400/60 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Next</p>

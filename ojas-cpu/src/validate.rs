@@ -364,8 +364,9 @@ where
 /// whole rows of about [`crate::pool::ROW_MIN_ELEMS`] values as
 /// [`scoped::rows_into`] cuts them, `fill` writing rows `range` into
 /// `part`, and each chunk scanned on the thread that wrote it
-/// ([`fill_outs_chunked`]). A `shape` that does not hold exactly `rows`
-/// rows of `width` is refused before anything is charged.
+/// ([`fill_outs_chunked`]). A `shape` whose element count is not
+/// `rows * width` is refused before anything is charged; its layout is the
+/// caller's (`[batch, time, dim]` with `rows = batch * time`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fill_rows<F>(
     op: &'static str,
@@ -517,9 +518,10 @@ mod tests {
         }
     }
 
-    /// A shape that does not hold exactly `rows` rows of `width` is refused
-    /// before anything is charged or written, including one row short, the
-    /// case [`scoped::chunks_into_n`] itself accepts for block-shaped items.
+    /// A shape whose element count is not `rows * width` is refused before
+    /// anything is charged or written, including one row short, the case
+    /// [`scoped::chunks_into_n`] itself accepts for block-shaped items. The
+    /// layout of `shape` is the caller's: `[4, 3]` holds 3 rows of 4.
     #[test]
     fn fill_rows_refuses_a_shape_that_is_not_rows_of_width() {
         use crate::pool::Pool;
@@ -530,7 +532,7 @@ mod tests {
             numerics: Numerics::Fast,
         };
         let budget = Budget::new(1 << 20);
-        for bad in [&[3usize, 4][..], &[4, 3], &[2, 4], &[11]] {
+        for bad in [&[3usize, 5][..], &[2, 4], &[11], &[13]] {
             let got = fill_rows("t", &budget, exec, bad, 3, 4, |_, _| {
                 panic!("nothing is written for {bad:?}")
             });

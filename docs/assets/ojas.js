@@ -128,6 +128,9 @@ function showToast(msg) {
       { title: 'Questions about the guarantees', category: 'Why', href: 'why.html#faq', tab: null, tags: 'faq determinism budget gusset metal crates.io overflow' },
       { title: 'ojas vs PyTorch and TensorFlow', category: 'Benchmarks', href: 'benchmarks.html#compare', tab: null, tags: 'pytorch tensorflow determinism fallback budget gusset overflow compare' },
       { title: 'CPU vs PyTorch step timings', category: 'Benchmarks', href: 'benchmarks.html#benchmarks', tab: null, tags: 'benchmarks torch wall time apple m5 22.5us 0.455ms breakdown' },
+      { title: 'Full CPU scorecard against PyTorch, losses included', category: 'Benchmarks', href: 'benchmarks.html#scorecard', tab: null, tags: 'scorecard block adamw muon mul add sdpa rmsnorm rope clip losses wins torch 2.13 parity' },
+      { title: 'GPU rounds against torch MPS', category: 'Benchmarks', href: 'benchmarks.html#gpu', tab: null, tags: 'metal wgpu mps gpu busy spread gate direction' },
+      { title: 'Reads the machine: probe, plan, refuse', category: 'Home', href: 'index.html#host', tab: null, tags: 'probe_system resourceplan unified memory adaptive hardware cores cache bandwidth systemprofile budget ceiling refuse' },
       { title: "What's next", category: 'Roadmap', href: 'roadmap.html', tab: null, tags: 'roadmap next phase framework weights metal attention bf16 cuda what is next' },
       { title: 'Guide overview', category: 'Guide', href: 'guide/index.html', tab: null, tags: 'guide docs developer documentation hierarchy' },
       { title: 'Quickstart: build, test, code samples', category: 'Guide', href: 'guide/quickstart.html', tab: null, tags: 'install quickstart cargo test go test gusset rust tape example loadon step capi' },
@@ -217,7 +220,8 @@ function showToast(msg) {
     }
     menuBtn.addEventListener('click', () => setMenuOpen(menuBtn.getAttribute('aria-expanded') !== 'true'));
     mobileNav.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => setMenuOpen(false)));
-    $('mobileCargo').addEventListener('click', () => {
+    const mobileCargo = $('mobileCargo');
+    if (mobileCargo) mobileCargo.addEventListener('click', () => {
       copyCommand('go get github.com/bharathvbcr/ojas/go');
       setMenuOpen(false);
     });
