@@ -38,6 +38,28 @@ fn flat(tensor: &Tensor) -> Vec<f32> {
     tensor.to_f32_vec().expect("f32")
 }
 
+/// Contiguous reshape. `[B, T, 1, D]` and `[B, 1, T, D]` are the same order.
+fn reshape(tensor: &Tensor, shape: &[usize]) -> Tensor {
+    let mut n = 1usize;
+    for &dim in shape {
+        n = n.checked_mul(dim).expect("reshape product");
+    }
+    assert_eq!(tensor.num_elements().expect("elements"), n);
+    assert!(tensor.is_contiguous().expect("contiguous"));
+    let mut strides = vec![0usize; shape.len()];
+    let mut acc = 1usize;
+    for i in (0..shape.len()).rev() {
+        strides[i] = acc;
+        if i == 0 {
+            break;
+        }
+        acc = acc.checked_mul(shape[i]).expect("reshape stride");
+    }
+    tensor
+        .view(shape, &strides, tensor.byte_offset())
+        .expect("reshape view")
+}
+
 fn max_abs(got: &[f32], expect: &[f32]) -> f64 {
     assert_eq!(got.len(), expect.len());
     got.iter()
@@ -107,8 +129,8 @@ fn regression_graph(
     let q = cpu.linear_forward(&h, &wq).expect("q");
     let k = cpu.linear_forward(&h, &wk).expect("k");
     let v = cpu.linear_forward(&h, &wv).expect("v");
-    let q_bt = f32t(cpu, &flat(&q), &[b, t, 1, d]);
-    let k_bt = f32t(cpu, &flat(&k), &[b, t, 1, d]);
+    let q_bt = reshape(&q, &[b, t, 1, d]);
+    let k_bt = reshape(&k, &[b, t, 1, d]);
     let q_r = cpu
         .rope_half_split_forward(&q_bt, &cos, &sin)
         .expect("rope q");
@@ -116,11 +138,11 @@ fn regression_graph(
         .rope_half_split_forward(&k_bt, &cos, &sin)
         .expect("rope k");
     // One head: [B, T, 1, D] and [B, 1, T, D] are the same contiguous order.
-    let q_a = f32t(cpu, &flat(&q_r), &[b, 1, t, d]);
-    let k_a = f32t(cpu, &flat(&k_r), &[b, 1, t, d]);
-    let v_a = f32t(cpu, &flat(&v), &[b, 1, t, d]);
+    let q_a = reshape(&q_r, &[b, 1, t, d]);
+    let k_a = reshape(&k_r, &[b, 1, t, d]);
+    let v_a = reshape(&v, &[b, 1, t, d]);
     let attn = cpu.causal_sdpa_forward(&q_a, &k_a, &v_a).expect("sdpa");
-    let y = f32t(cpu, &flat(&attn), &[b, t, d]);
+    let y = reshape(&attn, &[b, t, d]);
     let logits = cpu.linear_forward(&y, &wo).expect("logits");
     let loss = flat(
         &cpu.cross_entropy_mean_forward(&logits, &targets, None)
@@ -131,29 +153,23 @@ fn regression_graph(
         .cross_entropy_mean_backward(&logits, &targets, None)
         .expect("dlogits");
     let (g_y, _) = cpu.linear_backward(&y, &wo, &g_logits).expect("dwo");
-    let g_attn = f32t(cpu, &flat(&g_y), &[b, 1, t, d]);
+    let g_attn = reshape(&g_y, &[b, 1, t, d]);
     let (g_q, g_k, g_v) = cpu
         .causal_sdpa_backward(&q_a, &k_a, &v_a, &g_attn)
         .expect("dsdpa");
-    let g_q_bt = f32t(cpu, &flat(&g_q), &[b, t, 1, d]);
-    let g_k_bt = f32t(cpu, &flat(&g_k), &[b, t, 1, d]);
-    let g_q_lin = f32t(
-        cpu,
-        &flat(
-            &cpu.rope_half_split_backward(&g_q_bt, &cos, &sin)
-                .expect("drope q"),
-        ),
+    let g_q_bt = reshape(&g_q, &[b, t, 1, d]);
+    let g_k_bt = reshape(&g_k, &[b, t, 1, d]);
+    let g_q_lin = reshape(
+        &cpu.rope_half_split_backward(&g_q_bt, &cos, &sin)
+            .expect("drope q"),
         &[b, t, d],
     );
-    let g_k_lin = f32t(
-        cpu,
-        &flat(
-            &cpu.rope_half_split_backward(&g_k_bt, &cos, &sin)
-                .expect("drope k"),
-        ),
+    let g_k_lin = reshape(
+        &cpu.rope_half_split_backward(&g_k_bt, &cos, &sin)
+            .expect("drope k"),
         &[b, t, d],
     );
-    let g_v_lin = f32t(cpu, &flat(&g_v), &[b, t, d]);
+    let g_v_lin = reshape(&g_v, &[b, t, d]);
     let (gq_h, g_wq) = cpu.linear_backward(&h, &wq, &g_q_lin).expect("dwq");
     let (gk_h, _) = cpu.linear_backward(&h, &wk, &g_k_lin).expect("dwk");
     let (gv_h, _) = cpu.linear_backward(&h, &wv, &g_v_lin).expect("dwv");

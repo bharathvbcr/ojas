@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas timings against PyTorch</title>
+  <meta name="description" content="Recorded CPU step timings for ojas against PyTorch 2.13 on an Apple M5 Pro, and how the defaults compare.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/benchmarks.html">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/benchmarks.html">
+  <meta property="og:title" content="ojas timings against PyTorch">
+  <meta property="og:description" content="Recorded CPU step timings for ojas against PyTorch 2.13 on an Apple M5 Pro, and how the defaults compare.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="site.webmanifest">
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+        tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#fff1f2',
+              100: '#ffe4e6',
+              200: '#fecdd3',
+              300: '#fda4af',
+              400: '#fb7185',
+              500: '#f43f5e',
+              600: '#e11d48',
+              700: '#be123c',
+              800: '#9f1239',
+              900: '#881337',
+              950: '#4c0519',
+              crimson: '#ff2d55',
+              ruby: '#d90429',
+              flame: '#ff4b2b',
+              glow: '#ff3366',
+            },
+          },
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['"Fira Code"', 'ui-monospace', 'monospace'],
+          },
+          boxShadow: {
+            'glow-red': '0 0 35px -5px rgba(255, 45, 85, 0.35)',
+            'glow-subtle': '0 0 20px -5px rgba(255, 45, 85, 0.15)',
+          },
+        }
+      }
+    }
+
+  </script>
+  <link rel="stylesheet" href="assets/ojas.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid" data-root="">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav" id="navbar">
+    <div id="announcement" class="w-full bg-gradient-to-r from-brand-950 via-brand-900 to-black border-b border-brand-800/40 text-xs py-2 px-4 font-medium tracking-wide">
+      <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified 2026-10-01</span>
+        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 449 Rust tests passed (4 ignored) and 27 Go tests passed. See the guide for what that covers.</span>
+        <button type="button" id="dismissAnnounce" class="ml-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10" aria-label="Dismiss announcement">&times;</button>
+      </div>
+    </div>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="index.html" class="flex items-center gap-3 shrink-0">
+        <img src="assets/ojas-logo.webp" alt="" class="w-10 h-10" width="40" height="40">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+        <span class="hidden sm:inline text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 border border-brand-500/30">v0.1.0</span>
+      </a>
+      <nav class="hidden xl:flex items-center gap-0.5" aria-label="Site">
+        <a href="index.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Home</a><a href="why.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Why ojas</a><a href="benchmarks.html" aria-current="page" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a><a href="roadmap.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Roadmap</a><a href="guide/index.html" class="px-2.5 py-1.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+      </nav>
+      <div class="flex items-center gap-2 shrink-0">
+        <button id="cmdBtn" type="button" class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white transition" aria-label="Search the site">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+          <span class="hidden lg:inline">Search</span>
+          <kbd class="hidden lg:inline px-1.5 py-0.5 rounded bg-black/40 border border-white/10 text-[10px]">⌘K</kbd>
+        </button>
+        <a href="guide/quickstart.html" class="hidden xl:flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 border border-brand-500/30 transition">Start here</a>
+        <a href="https://github.com/bharathvbcr/ojas" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition" aria-label="ojas on GitHub">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"></path></svg>
+        </a>
+        <button type="button" id="menuBtn" class="xl:hidden p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition" aria-expanded="false" aria-controls="mobileNav" aria-label="Open menu">
+          <svg id="menuIconOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          <svg id="menuIconClose" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+    <nav id="mobileNav" class="xl:hidden hidden border-t border-white/10" aria-label="Site">
+      <div class="max-w-7xl mx-auto px-4 py-3 grid grid-cols-2 gap-1">
+        <a href="index.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Home</a><a href="why.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Why ojas</a><a href="benchmarks.html" aria-current="page" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Benchmarks</a><a href="roadmap.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Roadmap</a><a href="guide/index.html" class="px-3 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5">Guide</a>
+      </div>
+    </nav>
+    <div id="readProgress" class="h-0.5 bg-white/5" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Page progress">
+      <div id="readProgressBar" class="h-full bg-brand-500" style="width:0"></div>
+    </div>
+  </header>
+
+  <main id="main">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+    <nav aria-label="Breadcrumb" class="text-xs font-mono text-slate-500"><a href="index.html" class="hover:text-white">Home</a> <span class="mx-1">/</span> <span class="text-slate-300">Benchmarks</span></nav>
+  </div>
+  <section id="compare" class="py-16 border-t border-white/10 bg-black/40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-8">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Same job, different defaults</span>
+        <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight mt-2 text-white">ojas next to the mainstream frameworks</h2>
+        <p class="text-slate-400 text-sm sm:text-base mt-3 leading-relaxed">The mainstream frameworks can be configured toward most of these. In ojas they are the default and cannot be turned off. Nothing here is a benchmark of model quality.</p>
+      </div>
+      <div class="overflow-x-auto glass-card rounded-2xl">
+        <table class="w-full text-left text-sm min-w-[640px]">
+          <caption class="sr-only">How ojas differs from PyTorch and TensorFlow on determinism, device fallback, memory, language boundary, and overflow checks</caption>
+          <thead class="text-xs font-mono uppercase tracking-wider text-slate-400">
+            <tr class="border-b border-white/10">
+              <th scope="col" class="px-4 py-3 font-medium">Contract</th>
+              <th scope="col" class="px-4 py-3 font-medium">PyTorch / TensorFlow</th>
+              <th scope="col" class="px-4 py-3 font-medium text-brand-300">ojas</th>
+            </tr>
+          </thead>
+          <tbody class="text-slate-300">
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Determinism</th>
+              <td class="px-4 py-3">Opt-in (<span class="font-mono">torch.use_deterministic_algorithms</span>); ops without a deterministic kernel raise</td>
+              <td class="px-4 py-3">Default <span class="font-mono text-brand-300">Numerics::Exact</span>: same bits at 1 to 18 CPU threads</td>
+            </tr>
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Missing device</th>
+              <td class="px-4 py-3">Optional CPU fallback for unsupported ops (for example <span class="font-mono">PYTORCH_ENABLE_MPS_FALLBACK=1</span>)</td>
+              <td class="px-4 py-3">The load fails with the device error; there is no fallback switch</td>
+            </tr>
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Memory ceiling</th>
+              <td class="px-4 py-3">Out-of-memory error from the allocator when the device runs out</td>
+              <td class="px-4 py-3"><span class="font-mono text-brand-300">try_reserve</span> refuses against a cap you set, before allocating; nested budgets</td>
+            </tr>
+            <tr class="border-b border-white/5">
+              <th scope="row" class="px-4 py-3 text-white font-medium">Service boundary</th>
+              <td class="px-4 py-3">A Python runtime, usually behind a model server</td>
+              <td class="px-4 py-3">In-process Go through gusset; a panic poisons the handle, not the process</td>
+            </tr>
+            <tr>
+              <th scope="row" class="px-4 py-3 text-white font-medium">Arithmetic</th>
+              <td class="px-4 py-3">Index and size math is up to each native kernel</td>
+              <td class="px-4 py-3">Checked shape, stride, and offset math; <span class="font-mono text-brand-300">overflow-checks = true</span> in release</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  <section id="benchmarks" class="py-20 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-10">
+        <span class="text-brand-400 font-mono text-xs uppercase tracking-widest font-semibold">Measured, both runs shown</span>
+        <h2 class="text-3xl sm:text-5xl font-extrabold tracking-tight mt-2 text-white">The guarantees do not cost the step</h2>
+        <p class="text-slate-400 text-base sm:text-lg mt-4 leading-relaxed">
+          One forward, backward, and AdamW step of the <span class="font-mono text-slate-300">torch_ref</span> graph on an Apple M5 Pro, ojas CPU against PyTorch 2.13 CPU with 6 threads. Two separate processes were recorded. The tiny torch step moved between them, so both are shown and no single speedup is claimed.
+        </p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 mb-6" id="benchRun" role="group" aria-label="Benchmark run">
+        <button type="button" data-run="0" aria-pressed="true" class="seg-btn px-3 py-1.5 rounded-lg text-xs font-mono border border-white/10 text-slate-300">Run 1</button>
+        <button type="button" data-run="1" aria-pressed="false" class="seg-btn px-3 py-1.5 rounded-lg text-xs font-mono border border-white/10 text-slate-300">Run 2</button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="glass-card rounded-3xl p-6 sm:p-8" id="benchTiny"></div>
+        <div class="glass-card rounded-3xl p-6 sm:p-8" id="benchLarge"></div>
+      </div>
+
+      <div class="glass-card rounded-2xl p-6 sm:p-8">
+        <h3 class="text-lg font-bold text-white mb-1">Where the larger step's time goes</h3>
+        <p class="text-xs text-slate-400 mb-5">ojas CPU, B=2, T=32, d=64. Section clocks after the register-tiling, RMSNorm/RoPE, and view-reshape work.</p>
+        <div id="benchBreakdown" class="space-y-2.5"></div>
+        <p class="mt-5 text-xs text-slate-500 leading-relaxed">
+          Not every kernel wins: a single 512×768×768 linear forward takes 4.35 ms in ojas at 6 threads and 1.23 ms in torch. The full-step results come from fewer allocations and fused passes, not faster GEMM. Commands and both raw tables are in <span class="font-mono text-slate-400">docs/bench-cpu-vs-torch.md</span>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  </main>
+  <footer class="border-t border-white/10 bg-black py-12 text-slate-400 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-6">
+      <div class="flex items-center gap-3">
+        <img src="assets/ojas-logo.webp" alt="" class="w-9 h-9" width="36" height="36">
+        <div><span class="font-mono font-bold text-white text-sm">ojas</span><span class="text-slate-500 ml-2">Dual licensed MIT OR Apache-2.0</span></div>
+      </div>
+      <div class="flex flex-wrap items-center gap-6">
+        <a href="https://github.com/bharathvbcr/ojas" class="hover:text-white transition">GitHub</a>
+        <a href="roadmap.html" class="hover:text-white transition">Roadmap</a>
+        <a href="guide/index.html" class="hover:text-white transition">Guide</a>
+      </div>
+      <div class="text-slate-500 font-mono text-[11px]">Designed by Bharath Chandra Vaddaram</div>
+    </div>
+  </footer>
+  <div id="cmdModal" class="fixed inset-0 z-[80] hidden" role="dialog" aria-modal="true" aria-labelledby="cmdLabel">
+    <div class="flex h-full items-start justify-center bg-black/80 backdrop-blur-md pt-24 p-4">
+      <div class="relative max-w-xl w-full glass-card rounded-2xl border border-white/20 shadow-2xl p-4">
+        <div class="flex items-center gap-3 pb-3 border-b border-white/10">
+          <label for="cmdInput" id="cmdLabel" class="sr-only">Search ojas</label>
+          <input type="text" id="cmdInput" placeholder="Search labs, the guide, or the roadmap" class="w-full bg-transparent text-white placeholder-slate-500 text-sm focus:outline-none">
+          <button type="button" onclick="closeCmdModal()" class="text-[10px] font-mono px-2 py-1 rounded bg-white/10 text-slate-400 hover:text-white" aria-label="Close search">ESC</button>
+        </div>
+        <div class="mt-3 max-h-64 overflow-y-auto space-y-1 font-mono text-xs" id="cmdResults"></div>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="fixed bottom-6 right-6 z-[90] px-4 py-2.5 rounded-xl bg-brand-600 text-white font-mono text-xs shadow-glow-red flex items-center gap-2 transition-all duration-300 translate-y-20 opacity-0 pointer-events-none" role="status">
+    <span id="toastMsg">Copied to clipboard</span>
+  </div>
+  <script src="assets/ojas.js"></script>
+<script>
+    // --- 3. Benchmarks: docs/bench-cpu-vs-torch.md, final optimized table ---
+    const BENCH = {
+      tiny: { title: 'Tiny step', shape: 'B=1, T=4, d=16, vocab=32', unit: 'µs', runs: [{ ojas: 22.458, torch: 354.042 }, { ojas: 22.459, torch: 486.896 }] },
+      large: { title: 'Larger step', shape: 'B=2, T=32, d=64, vocab=128', unit: 'ms', runs: [{ ojas: 0.462042, torch: 0.455937 }, { ojas: 0.454604, torch: 0.462917 }] },
+    };
+    const BREAKDOWN = [
+      ['Linear backward', 129.2], ['Linear forward', 79.1], ['RMSNorm, RoPE, view', 55.6], ['Cross-entropy', 48.8],
+      ['Causal attention backward', 47.6], ['AdamW', 45.4], ['Causal attention forward', 27.6],
+    ];
+    function benchCard(b, run) {
+      const r = b.runs[run];
+      const max = Math.max(r.ojas, r.torch);
+      const fmt = (x) => (b.unit === 'ms' ? x.toFixed(3) : x.toFixed(1)) + ' ' + b.unit;
+      const ratio = r.torch / r.ojas;
+      const verdict = ratio >= 1.05 ? `${ratio.toFixed(1)}× less wall time than torch in this run`
+        : ratio <= 0.95 ? `${(1 / ratio).toFixed(2)}× torch's wall time in this run`
+        : `within ${Math.abs((ratio - 1) * 100).toFixed(1)}% of torch in this run`;
+      const bar = (label, val, cls, labelCls) => `
+        <div>
+          <div class="flex justify-between mb-1.5 font-mono text-xs"><span class="${labelCls}">${label}</span><span class="text-white font-bold">${fmt(val)}</span></div>
+          <div class="w-full h-3 rounded-full bg-white/10 overflow-hidden"><div class="h-full rounded-full ${cls}" style="width:${(val / max) * 100}%"></div></div>
+        </div>`;
+      return `
+        <div class="flex items-center justify-between mb-4">
+          <span class="text-xs font-mono px-3 py-1 rounded-full bg-white/10 text-slate-300 border border-white/10 uppercase tracking-wider">${b.title}</span>
+          <span class="text-xs font-mono text-slate-400">${b.shape}</span>
+        </div>
+        <p class="text-lg font-bold text-white mb-5">${verdict}</p>
+        <div class="space-y-4">
+          ${bar('ojas CPU', r.ojas, 'bg-gradient-to-r from-brand-600 to-brand-400', 'text-brand-300')}
+          ${bar('PyTorch 2.13 CPU, 6 threads', r.torch, 'bg-slate-500', 'text-slate-400')}
+        </div>
+        <p class="mt-5 pt-3 border-t border-white/10 text-[11px] font-mono text-slate-500">${b === BENCH.tiny ? 'Loss within 2.38e-7 of the frozen torch value.' : 'No frozen torch tensors at this shape; loss checked finite.'}</p>`;
+    }
+    function renderBench(run) {
+      $('benchTiny').innerHTML = benchCard(BENCH.tiny, run);
+      $('benchLarge').innerHTML = benchCard(BENCH.large, run);
+    }
+    wireSegmented($('benchRun'), (v) => renderBench(Number(v)));
+    renderBench(0);
+    (() => {
+      const max = BREAKDOWN[0][1];
+      $('benchBreakdown').innerHTML = BREAKDOWN.map(([name, us]) => `
+        <div class="grid grid-cols-12 items-center gap-3 text-xs font-mono">
+          <span class="col-span-5 sm:col-span-4 text-slate-300">${name}</span>
+          <div class="col-span-5 sm:col-span-6 h-2.5 rounded-full bg-white/10 overflow-hidden"><div class="h-full bg-brand-500/70 rounded-full" style="width:${(us / max) * 100}%"></div></div>
+          <span class="col-span-2 text-right text-white">${us.toFixed(1)} µs</span>
+        </div>`).join('');
+    })();
+
+</script>
+</body>
+</html>

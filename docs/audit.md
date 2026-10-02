@@ -48,7 +48,7 @@ flowchart TD
 
 ### 2. `metal-native`
 * **Silent Head Dimension Truncation:** Attention backward kernels clamp head dimension with `d_lim = min(D, 64u)` (in upstream metal-native's `flash_attn_bwd.metal:28`). Models with head dimensions greater than 64 silently drop high-index features.
-  * *ojas Defense:* `ojas_cpu::metal_head_dim_policy` and `ojas_metal` return `OjasError::UnsupportedHeadDim` for any $d > 64$.
+  * *ojas Defense:* `ojas_core::refuse_unsupported_metal_head_dim`, which `ojas_metal` calls, returns `OjasError::UnsupportedHeadDim` for any $d > 64$. The CPU backend computes any positive head dimension.
 * **Missing `catch_unwind` on C-ABI:** The 8 exported functions allow Rust panics to cross the FFI boundary, crashing the host program.
   * *ojas Defense:* `ojas-capi::engine::dispatch` wraps invocations in `catch_unwind`, clears the poisoned session, and returns an error payload.
 * **Unbounded Token Indexing:** Missing token bounds checks allow negative indices or values exceeding vocabulary size to read arbitrary host memory.
@@ -66,7 +66,7 @@ flowchart TD
 
 ### 5. `Lappi`
 * **Parity NaN Fold Skips:** The numerical parity harness uses `.fold(0.0, f64::max)`, which ignores `NaN` values and yields false-positive parity passes.
-  * *ojas Defense:* `ojas-autograd::gradients_match` evaluates difference bounds on every index; any `NaN` difference fails immediately.
+  * *ojas Defense:* `ojas-autograd::gradients_match` refuses a non-finite value on either side and a non-finite or negative tolerance before comparing (`a_non_finite_gradient_never_matches` in `ojas-autograd/src/lib.rs`). Until 2026-10-01 it compared with `diff > tol`, which is false for NaN, so a NaN gradient matched. The same fold bug in `ojas-infer/tests/parity.rs` `rel_err` measured an all-NaN output as 0.0; it now measures it as infinite (`rel_err_measures_a_non_finite_value_as_infinite`).
 
 ### 6. `gusset`
 * **Unbounded `Close` Join:** `HandleClose` joins workers without a deadline, indefinitely hanging callers if a thread blocks.
@@ -85,3 +85,6 @@ flowchart LR
     F5["5. Non-finite values return NonFinite (Never Applied to Weights)"]
     F6["6. Device is explicit (Never Silent CPU Fallback)"]
 ```
+
+> [!IMPORTANT]
+> These six behavioral guarantees are **permanently frozen** across the `ojas` codebase. Any proposed modification that weakens error reporting, introduces silent clamping, allows integer wrap, or permits silent CPU fallbacks is rejected as an invariant violation.

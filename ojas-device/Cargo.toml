@@ -9,3 +9,7 @@ description = "Explicit device selection. No silent CPU fallback."
 
 [dependencies]
 ojas-core = { path = "../ojas-core" }
+
+# libc 0.2.189 is already in Cargo.lock. Used only for the macOS host probe.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.189"

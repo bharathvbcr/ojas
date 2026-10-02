@@ -1,0 +1,236 @@
+name: test
+
+# ojas builds against two sibling repositories through path dependencies:
+#   ojas-capi -> ../../devtools/gusset (relative to this checkout's parent)
+#   ojas-metal -> tessl (macOS-only dependency; cargo still reads its manifest
+#                 on every platform to build the lock graph)
+# Both are public: github.com/bharathvbcr/gusset and github.com/bharathvbcr/tessl.
+# The checkout layout below reproduces the relative paths:
+#   $GITHUB_WORKSPACE/code/research/ojas
+#   $GITHUB_WORKSPACE/code/research/tessl
+#   $GITHUB_WORKSPACE/code/devtools/gusset
+# If ojas-metal/Cargo.toml still names the absolute developer path
+# /Users/bharath/Code/research/tessl, a symlink to the checkout is created there.
+#
+# GUSSET_REF and TESSL_REF pick the sibling commits. They default to main; a
+# run only reproduces a local tree whose sibling changes have been pushed.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      gusset_ref:
+        description: gusset ref
+        default: main
+      tessl_ref:
+        description: tessl ref
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  GUSSET_REF: ${{ inputs.gusset_ref || 'main' }}
+  TESSL_REF: ${{ inputs.tessl_ref || 'main' }}
+  OJAS: code/research/ojas
+  GO_VERSION: "1.27.x"
+
+jobs:
+  linux:
+    name: linux (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code/research/ojas
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/gusset
+          ref: ${{ env.GUSSET_REF }}
+          path: code/devtools/gusset
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/tessl
+          ref: ${{ env.TESSL_REF }}
+          path: code/research/tessl
+      - name: Point the absolute tessl path at the checkout
+        run: |
+          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
+          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
+            sudo mkdir -p "$(dirname "$abs")"
+            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
+          fi
+          echo "tessl path: ${abs:-relative}"
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+      - name: Software Vulkan for the wgpu tests
+        # ojas-wgpu tests fail rather than skip without an adapter. lavapipe is
+        # a CPU Vulkan driver; it is the only adapter on a GPU-less runner.
+        # WgpuContext refuses a CPU adapter unless OJAS_WGPU_ALLOW_CPU_ADAPTER=1,
+        # which only the test step below sets.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
+      - name: fmt
+        working-directory: ${{ env.OJAS }}
+        run: cargo fmt --all --check
+      - name: clippy
+        working-directory: ${{ env.OJAS }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test (release, serialized)
+        working-directory: ${{ env.OJAS }}
+        # ojas-metal builds as a stub off macOS (tessl is a macOS-only
+        # dependency), so the whole workspace is tested here. The opt-in lets
+        # the wgpu tests run on lavapipe; without it they fail closed.
+        env:
+          OJAS_WGPU_ALLOW_CPU_ADAPTER: "1"
+        run: cargo test --workspace --release -- --test-threads=1
+
+  macos:
+    name: macos (full workspace incl. Metal and wgpu)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code/research/ojas
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/gusset
+          ref: ${{ env.GUSSET_REF }}
+          path: code/devtools/gusset
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/tessl
+          ref: ${{ env.TESSL_REF }}
+          path: code/research/tessl
+      - name: Point the absolute tessl path at the checkout
+        run: |
+          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
+          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
+            sudo mkdir -p "$(dirname "$abs")"
+            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
+          fi
+          echo "tessl path: ${abs:-relative}"
+      - name: Select the newest Xcode
+        # ojas-metal compiles its kernels with -std=metal4.0 and tessl uses
+        # Metal 4 command queues; both need a Metal 4 toolchain.
+        run: |
+          xcode=$(find /Applications -maxdepth 1 -name "Xcode*.app" | sort -V | tail -1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcrun --sdk macosx --show-sdk-version
+          xcrun -f metal
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+      - name: clippy
+        working-directory: ${{ env.OJAS }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test (release, serialized)
+        working-directory: ${{ env.OJAS }}
+        run: cargo test --workspace --release -- --test-threads=1
+
+  go:
+    name: go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            pc: linux
+          - os: macos-latest
+            pc: .
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code/research/ojas
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/gusset
+          ref: ${{ env.GUSSET_REF }}
+          path: code/devtools/gusset
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/tessl
+          ref: ${{ env.TESSL_REF }}
+          path: code/research/tessl
+      - name: Point the absolute tessl path at the checkout
+        run: |
+          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
+          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
+            sudo mkdir -p "$(dirname "$abs")"
+            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
+          fi
+          echo "tessl path: ${abs:-relative}"
+      - name: Select the newest Xcode
+        if: runner.os == 'macOS'
+        run: |
+          xcode=$(find /Applications -maxdepth 1 -name "Xcode*.app" | sort -V | tail -1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Build libgusset.a (debug, the profile go/*.pc link)
+        working-directory: ${{ env.OJAS }}
+        run: cargo build -p ojas-gusset-engine
+      - name: go test
+        working-directory: ${{ env.OJAS }}/go
+        # -a: Go's build cache does not track libgusset.a, so without it a
+        # rebuilt archive can be skipped in favour of a stale link.
+        run: PKG_CONFIG_PATH="$PWD/${{ matrix.pc }}" go test -a -tags gusset_pkgconfig -count=1 -timeout 20m ./...
+
+  gpu-compile:
+    name: CUDA / HIP compile-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code/research/ojas
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/gusset
+          ref: ${{ env.GUSSET_REF }}
+          path: code/devtools/gusset
+      - uses: actions/checkout@v4
+        with:
+          repository: bharathvbcr/tessl
+          ref: ${{ env.TESSL_REF }}
+          path: code/research/tessl
+      - name: Point the absolute tessl path at the checkout
+        run: |
+          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
+          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
+            sudo mkdir -p "$(dirname "$abs")"
+            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
+          fi
+          echo "tessl path: ${abs:-relative}"
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: ojas-cuda with the cuda feature
+        # cudarc loads the driver at runtime (fallback-dynamic-loading), so the
+        # feature compiles without a CUDA toolkit. Nothing is executed.
+        working-directory: ${{ env.OJAS }}
+        run: cargo check -p ojas-cuda --features cuda --all-targets
+      - name: ojas-hip, default features
+        # hip-runtime-sys 0.1.2 panics in its build script when
+        # hip/hip_runtime_api.h is absent, so the hip feature is not built.
+        working-directory: ${{ env.OJAS }}
+        run: cargo check -p ojas-hip --all-targets

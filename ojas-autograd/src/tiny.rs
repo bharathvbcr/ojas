@@ -155,7 +155,7 @@ impl TinyTrain {
         let mut leaves = Vec::with_capacity(self.opt.params.len());
         for param in &self.opt.params {
             let tensor = Tensor::from_f32(&param.param, &param.shape, self.cpu.budget())?;
-            leaves.push(tape.leaf(tensor));
+            leaves.push(tape.leaf(tensor)?);
         }
         let ids = Tensor::from_u32(&batch.ids, &[batch.batch, batch.time], self.cpu.budget())?;
         let targets = Tensor::from_u32(

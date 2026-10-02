@@ -113,7 +113,7 @@ fn groups_send_matrices_to_muon_and_vectors_to_adam() {
 
 #[test]
 fn one_hybrid_step_matches_adamw_and_muon_and_nan_updates_neither() {
-    let cpu = CpuBackend::new(Budget::new(1 << 20));
+    let cpu = CpuBackend::new(Budget::new(1 << 20)).with_numerics(ojas_core::Numerics::Exact);
     let mut opt = HybridOptimizer::new(vec![
         HybridParam::new(
             OptimGroup::AdamEmbedding,

@@ -8,22 +8,27 @@
 //! [`SafeTensors::read_into`] copies one range with a positioned read.
 
 use crate::error::IoError;
-use crate::json::{self, Json};
-use crate::replace::replace_file;
+use crate::half::{bf16_to_f32, f16_to_f32, f32_to_bf16, f32_to_f16};
+use crate::json::{parse_json_with, JsonLimits, JsonNumber, JsonValue};
+use crate::posread::read_exact_at;
+use crate::replace::replace_with;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 /// Largest header accepted. The format's reference implementation uses
 /// 100_000_000, not 100 MiB (104_857_600).
 pub const MAX_HEADER_BYTES: u64 = 100_000_000;
 
-/// Dtypes this crate reads and writes. Enough for f32 weights and integer
-/// token ids. Other safetensors dtypes are rejected.
+/// Dtypes this crate reads and writes: f32, bf16 and f16 weights, and
+/// integer token ids. The header strings are exactly `"F32"`, `"BF16"`,
+/// `"F16"`, `"I64"` and `"U16"`. Other safetensors dtypes are rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StDtype {
     F32,
+    BF16,
+    F16,
     I64,
     U16,
 }
@@ -31,7 +36,7 @@ pub enum StDtype {
 impl StDtype {
     pub fn size(self) -> u64 {
         match self {
-            StDtype::U16 => 2,
+            StDtype::U16 | StDtype::BF16 | StDtype::F16 => 2,
             StDtype::F32 => 4,
             StDtype::I64 => 8,
         }
@@ -40,6 +45,8 @@ impl StDtype {
     fn tag(self) -> &'static str {
         match self {
             StDtype::F32 => "F32",
+            StDtype::BF16 => "BF16",
+            StDtype::F16 => "F16",
             StDtype::I64 => "I64",
             StDtype::U16 => "U16",
         }
@@ -48,11 +55,45 @@ impl StDtype {
     fn parse(s: &str) -> Result<Self, String> {
         match s {
             "F32" => Ok(StDtype::F32),
+            "BF16" => Ok(StDtype::BF16),
+            "F16" => Ok(StDtype::F16),
             "I64" => Ok(StDtype::I64),
             "U16" => Ok(StDtype::U16),
             other => Err(format!("unsupported dtype {other:?}")),
         }
     }
+}
+
+/// Little-endian bytes of `values` stored as `dtype`, for [`TensorOut::data`].
+///
+/// F32 is a copy. BF16 and F16 round each value to nearest even
+/// ([`f32_to_bf16`], [`f32_to_f16`]); a value past the format's range becomes
+/// infinity, as torch's `.to(torch.float16)` does. Integer dtypes are refused.
+pub fn encode_f32_as(dtype: StDtype, values: &[f32]) -> Result<Vec<u8>, IoError> {
+    let width = match dtype {
+        StDtype::F32 => 4,
+        StDtype::BF16 | StDtype::F16 => 2,
+        StDtype::I64 | StDtype::U16 => {
+            return Err(IoError::new(format!(
+                "{dtype:?} is not a floating-point encoding"
+            )))
+        }
+    };
+    let len = values
+        .len()
+        .checked_mul(width)
+        .ok_or_else(|| IoError::new("encoded length overflows"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|_| IoError::new(format!("allocation of {len} bytes refused")))?;
+    for &v in values {
+        match dtype {
+            StDtype::BF16 => out.extend_from_slice(&f32_to_bf16(v).to_le_bytes()),
+            StDtype::F16 => out.extend_from_slice(&f32_to_f16(v).to_le_bytes()),
+            _ => out.extend_from_slice(&v.to_le_bytes()),
+        }
+    }
+    Ok(out)
 }
 
 /// One tensor's header entry. Offsets are byte offsets into the data buffer.
@@ -71,6 +112,25 @@ pub struct TensorOut<'a> {
     pub dtype: StDtype,
     pub shape: &'a [u64],
     pub data: &'a [u8],
+}
+
+impl<'a> TensorOut<'a> {
+    fn spec(&self) -> TensorSpec<'a> {
+        TensorSpec {
+            name: self.name,
+            dtype: self.dtype,
+            shape: self.shape,
+        }
+    }
+}
+
+/// One tensor declared to [`SafeTensorsWriter::new`]: a [`TensorOut`] without
+/// its bytes, which are streamed later.
+#[derive(Clone, Copy, Debug)]
+pub struct TensorSpec<'a> {
+    pub name: &'a str,
+    pub dtype: StDtype,
+    pub shape: &'a [u64],
 }
 
 #[derive(Debug)]
@@ -113,15 +173,30 @@ impl<'a> SafeTensors<'a> {
 
     /// Open `path` and validate its header. Tensor bytes stay on disk.
     pub fn open(path: &Path) -> Result<SafeTensors<'static>, IoError> {
-        let what = path.display().to_string();
-        let mut file = File::open(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
-        let file_len = file
-            .metadata()
-            .map_err(|e| IoError::new(format!("{what}: {e}")))?
-            .len();
+        let what = path.display();
+        let file = File::open(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        Self::from_file(file).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
+    }
+
+    /// Validate the header of a file the caller already opened, for example
+    /// with `O_NOFOLLOW`. Same checks and caps as [`Self::open`], which calls
+    /// this. Anything but a regular file is refused before a byte is read, so
+    /// a FIFO cannot block the read. Reads are positioned: the file's cursor
+    /// is neither used nor moved.
+    pub fn from_file(file: File) -> Result<SafeTensors<'static>, IoError> {
+        let meta = file.metadata().map_err(|e| IoError::new(e.to_string()))?;
+        if !meta.is_file() {
+            return Err(IoError::new("not a regular file"));
+        }
+        let file_len = meta.len();
+        if file_len < 8 {
+            return Err(IoError::new(format!(
+                "truncated file: header length needs 8 bytes, the file has {file_len}"
+            )));
+        }
         let mut prefix = [0u8; 8];
-        file.read_exact(&mut prefix)
-            .map_err(|e| IoError::new(format!("{what}: header length: {e}")))?;
+        read_exact_at(&file, &mut prefix, 0)
+            .map_err(|e| IoError::new(format!("header length: {e}")))?;
         let n = u64::from_le_bytes(prefix);
         check_header_len(n, file_len)?;
         let n_us = usize::try_from(n).map_err(|_| IoError::new("header length exceeds usize"))?;
@@ -130,12 +205,9 @@ impl<'a> SafeTensors<'a> {
             .try_reserve_exact(n_us)
             .map_err(|_| IoError::new(format!("header allocation of {n_us} bytes refused")))?;
         header.resize(n_us, 0);
-        file.read_exact(&mut header)
-            .map_err(|e| IoError::new(format!("{what}: header: {e}")))?;
+        read_exact_at(&file, &mut header, 8).map_err(|e| IoError::new(format!("header: {e}")))?;
         let data_start = 8 + n;
-        let data_len = file_len - data_start;
-        let (tensors, metadata) = parse_header(&header, data_len)
-            .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?;
+        let (tensors, metadata) = parse_header(&header, file_len - data_start)?;
         Ok(SafeTensors {
             source: Source::File { file, data_start },
             tensors,
@@ -219,6 +291,25 @@ impl<'a> SafeTensors<'a> {
         })
     }
 
+    /// An F32, BF16 or F16 tensor as f32. Half-width values decode exactly
+    /// ([`bf16_to_f32`], [`f16_to_f32`]). Integer tensors are refused. Use
+    /// [`Self::read_f32`] to require F32 storage.
+    pub fn read_f32_widened(&self, name: &str) -> Result<(Vec<u64>, Vec<f32>), IoError> {
+        let dtype = self.info(name)?.dtype;
+        match dtype {
+            StDtype::F32 => self.read_f32(name),
+            StDtype::BF16 => self.read_typed(name, dtype, 2, |c| {
+                bf16_to_f32(u16::from_le_bytes([c[0], c[1]]))
+            }),
+            StDtype::F16 => self.read_typed(name, dtype, 2, |c| {
+                f16_to_f32(u16::from_le_bytes([c[0], c[1]]))
+            }),
+            StDtype::I64 | StDtype::U16 => Err(IoError::new(format!(
+                "{name}: {dtype:?} is not a floating-point tensor"
+            ))),
+        }
+    }
+
     pub fn read_i64(&self, name: &str) -> Result<(Vec<u64>, Vec<i64>), IoError> {
         self.read_typed(name, StDtype::I64, 8, |c| {
             i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
@@ -260,49 +351,103 @@ impl<'a> SafeTensors<'a> {
 /// Write tensors in `items` order. The header is padded with spaces so its
 /// length is a multiple of 8. The reader accepts that padding. The target is
 /// replaced by rename, so a failed write leaves the previous file intact.
+/// The bytes stream from `items` to the file through [`SafeTensorsWriter`];
+/// no second copy of the file is built in memory.
 pub fn write_safetensors(
     path: &Path,
     items: &[TensorOut<'_>],
     metadata: &[(&str, &str)],
 ) -> Result<(), IoError> {
-    replace_file(path, &encode_safetensors(items, metadata)?)
+    let layout = layout_items(items, metadata)?;
+    replace_with(path, |file| {
+        let mut w = SafeTensorsWriter::with_layout(BufWriter::new(file), layout)?;
+        for item in items {
+            w.write(item.name, item.data)?;
+        }
+        w.finish().map(drop)
+    })
 }
 
+/// The whole file in memory, byte for byte what [`write_safetensors`] and
+/// [`SafeTensorsWriter`] produce for the same tensors and metadata.
 pub fn encode_safetensors(
     items: &[TensorOut<'_>],
     metadata: &[(&str, &str)],
 ) -> Result<Vec<u8>, IoError> {
-    let mut seen = BTreeMap::<&str, ()>::new();
-    let mut cursor = 0u64;
-    let mut placed: Vec<(&TensorOut<'_>, u64, u64)> = Vec::with_capacity(items.len());
+    let layout = layout_items(items, metadata)?;
+    let total = usize::try_from(layout.file_len)
+        .map_err(|_| IoError::new("encoded file length overflows"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(total)
+        .map_err(|_| IoError::new("refused allocation for safetensors encode"))?;
+    let mut w = SafeTensorsWriter::with_layout(out, layout)?;
     for item in items {
-        if item.name.is_empty() {
-            return Err(IoError::new("tensor name is empty"));
-        }
-        if item.name == "__metadata__" {
-            return Err(IoError::new("tensor name __metadata__ is reserved"));
-        }
-        if seen.insert(item.name, ()).is_some() {
-            return Err(IoError::new(format!("duplicate key {:?}", item.name)));
-        }
-        let nbytes = byte_len(item.name, item.shape, item.dtype)?;
+        w.write(item.name, item.data)?;
+    }
+    w.finish()
+}
+
+/// [`layout`] for `items`, plus the check that each item's data is exactly
+/// its declared size. Runs before anything is written.
+fn layout_items(items: &[TensorOut<'_>], metadata: &[(&str, &str)]) -> Result<Layout, IoError> {
+    let specs: Vec<TensorSpec<'_>> = items.iter().map(TensorOut::spec).collect();
+    let layout = layout(&specs, metadata)?;
+    for (item, (_, nbytes)) in items.iter().zip(&layout.tensors) {
         let data_len = u64::try_from(item.data.len())
             .map_err(|_| IoError::new(format!("{:?}: data length exceeds u64", item.name)))?;
-        if nbytes != data_len {
+        if *nbytes != data_len {
             return Err(IoError::new(format!(
                 "{:?}: data is {data_len} bytes, shape times {:?} is {nbytes}",
                 item.name, item.dtype
             )));
         }
+    }
+    Ok(layout)
+}
+
+/// Header and data layout of one file. Every writer path builds it here, so
+/// there is one header encoder.
+struct Layout {
+    /// The JSON header, space-padded to a multiple of 8, without the 8-byte
+    /// length prefix.
+    header: Vec<u8>,
+    /// Name and byte length of each tensor, in declared order, which is also
+    /// data order.
+    tensors: Vec<(String, u64)>,
+    /// Prefix, header and data.
+    file_len: u64,
+}
+
+/// Lay out `specs` in order. Names must be non-empty, unique and not
+/// `__metadata__`; metadata keys must be unique; sizes and offsets use checked
+/// arithmetic. The finished header is then run through the reader's own
+/// [`parse_header`], so a header the reader would refuse (for example one
+/// past the JSON parser's node or byte budget) is refused here, before any
+/// byte is written.
+fn layout(specs: &[TensorSpec<'_>], metadata: &[(&str, &str)]) -> Result<Layout, IoError> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cursor = 0u64;
+    let mut placed: Vec<(&TensorSpec<'_>, u64, u64)> = Vec::with_capacity(specs.len());
+    for spec in specs {
+        if spec.name.is_empty() {
+            return Err(IoError::new("tensor name is empty"));
+        }
+        if spec.name == "__metadata__" {
+            return Err(IoError::new("tensor name __metadata__ is reserved"));
+        }
+        if !seen.insert(spec.name) {
+            return Err(IoError::new(format!("duplicate key {:?}", spec.name)));
+        }
+        let nbytes = byte_len(spec.name, spec.shape, spec.dtype)?;
         let end = cursor
             .checked_add(nbytes)
-            .ok_or_else(|| IoError::new(format!("{:?}: data offsets overflow", item.name)))?;
-        placed.push((item, cursor, end));
+            .ok_or_else(|| IoError::new(format!("{:?}: data offsets overflow", spec.name)))?;
+        placed.push((spec, cursor, end));
         cursor = end;
     }
-    let mut seen_meta = BTreeMap::<&str, ()>::new();
+    let mut seen_meta = std::collections::BTreeSet::new();
     for (k, _) in metadata {
-        if seen_meta.insert(*k, ()).is_some() {
+        if !seen_meta.insert(*k) {
             return Err(IoError::new(format!("duplicate metadata key {k:?}")));
         }
     }
@@ -323,16 +468,16 @@ pub fn encode_safetensors(
         header.push('}');
         first = false;
     }
-    for (item, begin, end) in &placed {
+    for (spec, begin, end) in &placed {
         if !first {
             header.push(',');
         }
         first = false;
-        push_json_str(&mut header, item.name);
+        push_json_str(&mut header, spec.name);
         header.push_str(":{\"dtype\":");
-        push_json_str(&mut header, item.dtype.tag());
+        push_json_str(&mut header, spec.dtype.tag());
         header.push_str(",\"shape\":[");
-        for (i, d) in item.shape.iter().enumerate() {
+        for (i, d) in spec.shape.iter().enumerate() {
             if i > 0 {
                 header.push(',');
             }
@@ -355,19 +500,195 @@ pub fn encode_safetensors(
             "header length {n} outside 1..={MAX_HEADER_BYTES}"
         )));
     }
-    let mut out = Vec::new();
-    let total = 8usize
-        .checked_add(header_bytes.len())
-        .and_then(|v| v.checked_add(usize::try_from(cursor).unwrap_or(usize::MAX)))
+    parse_header(&header_bytes, cursor).map_err(|e| {
+        IoError::new(format!(
+            "the reader would refuse this header: {}",
+            e.detail()
+        ))
+    })?;
+    let file_len = (8 + n)
+        .checked_add(cursor)
         .ok_or_else(|| IoError::new("encoded file length overflows"))?;
-    out.try_reserve_exact(total)
-        .map_err(|_| IoError::new("refused allocation for safetensors encode"))?;
-    out.extend_from_slice(&n.to_le_bytes());
-    out.extend_from_slice(&header_bytes);
-    for (item, _, _) in &placed {
-        out.extend_from_slice(item.data);
+    Ok(Layout {
+        header: header_bytes,
+        tensors: placed
+            .iter()
+            .map(|(spec, begin, end)| (spec.name.to_string(), end - begin))
+            .collect(),
+        file_len,
+    })
+}
+
+/// Streams a safetensors file one tensor at a time, so the whole model never
+/// has to be on the host at once.
+///
+/// [`Self::new`] takes every tensor's name, dtype and shape, plus the
+/// metadata, and writes the header straight away: the offsets are fixed
+/// before any data. [`Self::write`] then appends bytes to the named tensor, in
+/// declared order, in as many pieces as the caller likes. A zero-byte tensor
+/// needs no write. [`Self::finish`] checks that every declared byte arrived,
+/// then flushes. The writer holds the header and one name and length per
+/// tensor; tensor bytes go straight to `W`, and any buffering is `W`'s.
+///
+/// Refused, each with an [`IoError`]: anything the header layout refuses
+/// (empty, reserved or duplicate names, duplicate metadata keys, size
+/// overflow, a header the reader would refuse); a write to an undeclared
+/// tensor, to an earlier one, or that skips a tensor still owed bytes; a
+/// piece that runs past its tensor's end or past the end of the data; and
+/// `finish` while bytes are still owed. Any error poisons the writer: later
+/// calls refuse, and whatever reached `W` is a partial file for the caller to
+/// discard.
+#[must_use = "an unfinished writer leaves a short file"]
+pub struct SafeTensorsWriter<W: Write> {
+    out: W,
+    tensors: Vec<(String, u64)>,
+    /// Tensor being filled.
+    at: usize,
+    /// Bytes already written into `tensors[at]`.
+    filled: u64,
+    /// Data bytes still owed across all tensors.
+    left: u64,
+    data_len: u64,
+    file_len: u64,
+    poisoned: bool,
+}
+
+impl<W: Write> SafeTensorsWriter<W> {
+    /// Validate the layout and write the header to `out`.
+    pub fn new(
+        out: W,
+        tensors: &[TensorSpec<'_>],
+        metadata: &[(&str, &str)],
+    ) -> Result<Self, IoError> {
+        Self::with_layout(out, layout(tensors, metadata)?)
     }
-    Ok(out)
+
+    fn with_layout(mut out: W, layout: Layout) -> Result<Self, IoError> {
+        let n = u64::try_from(layout.header.len())
+            .map_err(|_| IoError::new("header length exceeds u64"))?;
+        out.write_all(&n.to_le_bytes())
+            .and_then(|()| out.write_all(&layout.header))
+            .map_err(|e| IoError::new(format!("safetensors header write: {e}")))?;
+        let data_len = layout.file_len - 8 - n;
+        Ok(Self {
+            out,
+            tensors: layout.tensors,
+            at: 0,
+            filled: 0,
+            left: data_len,
+            data_len,
+            file_len: layout.file_len,
+            poisoned: false,
+        })
+    }
+
+    /// Length of the finished file: prefix, header and data.
+    pub fn file_len(&self) -> u64 {
+        self.file_len
+    }
+
+    /// Data bytes not yet written.
+    pub fn remaining(&self) -> u64 {
+        self.left
+    }
+
+    /// Append `bytes` to tensor `name`. The tensor must be the one being
+    /// filled, or a later one once every tensor before it is complete.
+    pub fn write(&mut self, name: &str, bytes: &[u8]) -> Result<(), IoError> {
+        if self.poisoned {
+            return Err(IoError::new(format!(
+                "{name:?}: the writer refused an earlier call and is poisoned"
+            )));
+        }
+        let r = self.write_unpoisoned(name, bytes);
+        if r.is_err() {
+            self.poisoned = true;
+        }
+        r
+    }
+
+    fn write_unpoisoned(&mut self, name: &str, bytes: &[u8]) -> Result<(), IoError> {
+        let (at, filled) = self.target(name)?;
+        let len = self.tensors[at].1;
+        let n = u64::try_from(bytes.len())
+            .map_err(|_| IoError::new(format!("{name:?}: piece length exceeds u64")))?;
+        let room = len - filled;
+        if n > room {
+            if self.left == 0 {
+                return Err(IoError::new(format!(
+                    "{name:?}: {n} bytes past the end of the data; every declared byte is written"
+                )));
+            }
+            return Err(IoError::new(format!(
+                "{name:?}: {n} bytes runs past the tensor's end; {room} of {len} remain"
+            )));
+        }
+        self.out
+            .write_all(bytes)
+            .map_err(|e| IoError::new(format!("{name:?}: write: {e}")))?;
+        self.at = at;
+        self.filled = filled + n;
+        self.left -= n;
+        Ok(())
+    }
+
+    /// Index of tensor `name` and the bytes it already holds, if a write to
+    /// it now keeps declared order.
+    fn target(&self, name: &str) -> Result<(usize, u64), IoError> {
+        if self.tensors.get(self.at).is_some_and(|(n, _)| n == name) {
+            return Ok((self.at, self.filled));
+        }
+        let Some(j) = self.tensors.iter().position(|(n, _)| n == name) else {
+            return Err(IoError::new(format!("{name:?}: not a declared tensor")));
+        };
+        if j < self.at {
+            return Err(IoError::new(format!(
+                "{name:?}: already written; tensors go in declared order"
+            )));
+        }
+        let (cur, cur_len) = &self.tensors[self.at];
+        if self.filled != *cur_len {
+            return Err(IoError::new(format!(
+                "{name:?}: written while {cur:?} has {} of {cur_len} bytes",
+                self.filled
+            )));
+        }
+        if let Some((owed, len)) = self.tensors[self.at + 1..j].iter().find(|(_, l)| *l != 0) {
+            return Err(IoError::new(format!(
+                "{name:?}: out of order; {owed:?} ({len} bytes) comes first"
+            )));
+        }
+        Ok((j, 0))
+    }
+
+    /// Check that every declared byte was written, flush, and return `W`.
+    pub fn finish(mut self) -> Result<W, IoError> {
+        if self.poisoned {
+            return Err(IoError::new(
+                "finish: the writer refused an earlier call and is poisoned",
+            ));
+        }
+        if self.left != 0 {
+            let short = self
+                .tensors
+                .iter()
+                .enumerate()
+                .skip(self.at)
+                .find(|(i, (_, len))| {
+                    let have = if *i == self.at { self.filled } else { 0 };
+                    have < *len
+                })
+                .map_or("", |(_, (n, _))| n.as_str());
+            return Err(IoError::new(format!(
+                "finish with {} of {} data bytes unwritten; {short:?} is short",
+                self.left, self.data_len
+            )));
+        }
+        self.out
+            .flush()
+            .map_err(|e| IoError::new(format!("safetensors flush: {e}")))?;
+        Ok(self.out)
+    }
 }
 
 fn byte_len(name: &str, shape: &[u64], dtype: StDtype) -> Result<u64, IoError> {
@@ -435,22 +756,31 @@ fn check_header_len(n: u64, file_len: u64) -> Result<(), IoError> {
 
 type Header = (BTreeMap<String, TensorInfo>, BTreeMap<String, String>);
 
+/// The header grammar is the shared strict reader at its defaults (depth 64,
+/// 8 tree bytes per input byte plus 64 KiB). The header's own strictness is
+/// the schema walk below: the root is an object, `__metadata__` holds only
+/// strings, and a tensor entry holds exactly a string `dtype`, a `shape` of
+/// unsigned integers and two unsigned `data_offsets`. Every value in a header
+/// sits at one of those positions, so a float, boolean, `null` or negative
+/// number anywhere is refused here, as the integers-only grammar refused it.
+const HEADER_JSON: JsonLimits = JsonLimits::DEFAULT;
+
 fn parse_header(bytes: &[u8], data_len: u64) -> Result<Header, IoError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|e| IoError::new(format!("header is not UTF-8: {e}")))?;
-    let root = json::parse(text).map_err(IoError::new)?;
-    let Json::Object(entries) = root else {
+    let root = parse_json_with(text, &HEADER_JSON)?;
+    let JsonValue::Object(entries) = root else {
         return Err(IoError::new("header is not a JSON object"));
     };
     let mut tensors = BTreeMap::new();
     let mut metadata = BTreeMap::new();
     for (name, v) in entries {
         if name == "__metadata__" {
-            let Json::Object(m) = v else {
+            let JsonValue::Object(m) = v else {
                 return Err(IoError::new("__metadata__ is not an object"));
             };
             for (k, v) in m {
-                let Json::Str(s) = v else {
+                let JsonValue::String(s) = v else {
                     return Err(IoError::new(format!(
                         "__metadata__ value for {k:?} is not a string"
                     )));
@@ -469,21 +799,21 @@ fn parse_header(bytes: &[u8], data_len: u64) -> Result<Header, IoError> {
     Ok((tensors, metadata))
 }
 
-fn tensor_info(name: &str, v: Json) -> Result<TensorInfo, IoError> {
-    let Json::Object(fields) = v else {
+fn tensor_info(name: &str, v: JsonValue) -> Result<TensorInfo, IoError> {
+    let JsonValue::Object(fields) = v else {
         return Err(IoError::new(format!("{name}: entry is not an object")));
     };
     let (mut dtype, mut shape, mut offsets) = (None, None, None);
     for (k, v) in fields {
         match (k.as_str(), v) {
-            ("dtype", Json::Str(s)) => {
+            ("dtype", JsonValue::String(s)) => {
                 dtype = Some(StDtype::parse(&s).map_err(|e| IoError::new(format!("{name}: {e}")))?);
             }
-            ("shape", Json::Array(a)) => {
+            ("shape", JsonValue::Array(a)) => {
                 let mut dims = Vec::with_capacity(a.len());
                 for d in a {
                     match d {
-                        Json::Uint(n) => dims.push(n),
+                        JsonValue::Number(JsonNumber::U64(n)) => dims.push(n),
                         _ => {
                             return Err(IoError::new(format!("{name}: shape holds a non-integer")))
                         }
@@ -491,8 +821,10 @@ fn tensor_info(name: &str, v: Json) -> Result<TensorInfo, IoError> {
                 }
                 shape = Some(dims);
             }
-            ("data_offsets", Json::Array(a)) => match a.as_slice() {
-                [Json::Uint(b), Json::Uint(e)] => offsets = Some((*b, *e)),
+            ("data_offsets", JsonValue::Array(a)) => match a.as_slice() {
+                [JsonValue::Number(JsonNumber::U64(b)), JsonValue::Number(JsonNumber::U64(e))] => {
+                    offsets = Some((*b, *e))
+                }
                 _ => {
                     return Err(IoError::new(format!(
                         "{name}: data_offsets is not [begin, end]"
@@ -528,14 +860,7 @@ fn check_tiling(tensors: &BTreeMap<String, TensorInfo>, data_len: u64) -> Result
                 t.begin, t.end
             )));
         }
-        let numel = t
-            .shape
-            .iter()
-            .try_fold(1u64, |acc, &d| acc.checked_mul(d))
-            .ok_or_else(|| IoError::new(format!("{name}: shape product overflows")))?;
-        let want = numel
-            .checked_mul(t.dtype.size())
-            .ok_or_else(|| IoError::new(format!("{name}: byte size overflows")))?;
+        let want = byte_len(name, &t.shape, t.dtype)?;
         let got = t.end - t.begin;
         if got != want {
             return Err(IoError::new(format!(
@@ -561,45 +886,6 @@ fn check_tiling(tensors: &BTreeMap<String, TensorInfo>, data_len: u64) -> Result
         )));
     }
     Ok(())
-}
-
-fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::FileExt;
-        file.read_exact_at(buf, offset)
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::FileExt;
-        let mut rest = buf;
-        let mut at = offset;
-        while !rest.is_empty() {
-            let n = file.seek_read(rest, at)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "short read",
-                ));
-            }
-            let n_u64 = u64::try_from(n).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "read length exceeds u64")
-            })?;
-            at = at.checked_add(n_u64).ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "file offset overflows")
-            })?;
-            rest = &mut rest[n..];
-        }
-        Ok(())
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (file, buf, offset);
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "positioned read needs unix or windows",
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -854,7 +1140,13 @@ mod tests {
             if !seen.insert(name.clone()) {
                 continue;
             }
-            let dtype = [StDtype::F32, StDtype::I64, StDtype::U16][rng.below(3)];
+            let dtype = [
+                StDtype::F32,
+                StDtype::I64,
+                StDtype::U16,
+                StDtype::BF16,
+                StDtype::F16,
+            ][rng.below(5)];
             let shape: Vec<u64> = (0..rng.below(5))
                 .map(|_| match rng.below(5) {
                     0 => 0,
@@ -909,6 +1201,10 @@ mod tests {
                 StDtype::F32 => st.read_f32(&o.name).map(|(_, v)| v.len()),
                 StDtype::I64 => st.read_i64(&o.name).map(|(_, v)| v.len()),
                 StDtype::U16 => st.read_u16(&o.name).map(|(_, v)| v.len()),
+                StDtype::BF16 | StDtype::F16 => {
+                    assert!(st.read_f32(&o.name).is_err(), "{:?}", o.name);
+                    st.read_f32_widened(&o.name).map(|(_, v)| v.len())
+                }
             };
             assert_eq!(typed.unwrap(), numel);
             let wrong = match o.dtype {
@@ -1278,5 +1574,45 @@ mod tests {
         .unwrap();
         let st = SafeTensors::parse(&scalar_empty).unwrap();
         assert_eq!(st.read_i64("z").unwrap(), (vec![0], Vec::<i64>::new()));
+    }
+
+    /// The shared reader accepts floats, booleans, `null` and negatives; the
+    /// header schema still refuses each of them at every position a header
+    /// has, as the integers-only grammar did.
+    #[test]
+    fn header_refuses_floats_bools_nulls_and_negatives_everywhere() {
+        let good =
+            br#"{"__metadata__":{"k":"v"},"w":{"dtype":"U16","shape":[1],"data_offsets":[0,2]}}"#;
+        assert!(SafeTensors::parse(&frame(good, &[0, 0])).is_ok());
+        let edits: [(&str, &str); 16] = [
+            (r#""shape":[1]"#, r#""shape":[1.0]"#),
+            (r#""shape":[1]"#, r#""shape":[1e0]"#),
+            (r#""shape":[1]"#, r#""shape":[true]"#),
+            (r#""shape":[1]"#, r#""shape":[null]"#),
+            (r#""shape":[1]"#, r#""shape":[-1]"#),
+            (r#""shape":[1]"#, r#""shape":[-0]"#),
+            (r#""shape":[1]"#, r#""shape":null"#),
+            (r#""data_offsets":[0,2]"#, r#""data_offsets":[0,2.0]"#),
+            (r#""data_offsets":[0,2]"#, r#""data_offsets":[-0,2]"#),
+            (r#""data_offsets":[0,2]"#, r#""data_offsets":[false,2]"#),
+            (r#""dtype":"U16""#, r#""dtype":true"#),
+            (r#""dtype":"U16""#, r#""dtype":null"#),
+            (r#""k":"v""#, r#""k":null"#),
+            (r#""k":"v""#, r#""k":1.5"#),
+            (r#""k":"v""#, r#""k":false"#),
+            (r#""__metadata__":{"k":"v"}"#, r#""__metadata__":null"#),
+        ];
+        for (from, to) in edits {
+            let text = std::str::from_utf8(good).unwrap().replacen(from, to, 1);
+            assert_ne!(text.as_bytes(), good.as_slice(), "{to}: edit did not apply");
+            assert!(
+                SafeTensors::parse(&frame(text.as_bytes(), &[0, 0])).is_err(),
+                "{to} accepted"
+            );
+        }
+        for root in ["[]", "null", "true", "1.5", "-1", "\"s\""] {
+            let err = SafeTensors::parse(&frame(root.as_bytes(), &[])).unwrap_err();
+            assert!(err.detail().contains("not a JSON object"), "{root}: {err}");
+        }
     }
 }

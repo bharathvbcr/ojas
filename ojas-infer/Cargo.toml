@@ -9,3 +9,11 @@ description = "Nanolab GPT inference. Lane C."
 
 [dependencies]
 ojas-core = { path = "../ojas-core" }
+ojas-cpu = { path = "../ojas-cpu" }
+ojas-model = { path = "../ojas-model" }
+
+[dev-dependencies]
+ojas-wgpu = { path = "../ojas-wgpu" }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+ojas-metal = { path = "../ojas-metal" }

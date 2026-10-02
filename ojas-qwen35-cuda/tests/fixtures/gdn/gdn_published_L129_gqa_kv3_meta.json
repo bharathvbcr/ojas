@@ -1,0 +1,35 @@
+{
+  "name": "L129_gqa_kv3",
+  "rule": "published",
+  "B": 2,
+  "H": 6,
+  "L": 129,
+  "D": 8,
+  "chunk": 32,
+  "seed": 1011,
+  "h_kv": 3,
+  "kv_expansion": "repeat_interleave",
+  "alpha_mode": "sigmoid",
+  "k_l2_normalized": true,
+  "alpha_clamp": [
+    0.0001,
+    1.0
+  ],
+  "beta_clamp": [
+    0.0,
+    1.0
+  ],
+  "max_abs_chunked_vs_f64seq": 3.1796400556949322e-06,
+  "max_abs_output": 5.684283998561255,
+  "max_abs_published_vs_repo": 0.8809149265289307,
+  "files": [
+    "gdn_published_L129_gqa_kv3_q.npy",
+    "gdn_published_L129_gqa_kv3_k.npy",
+    "gdn_published_L129_gqa_kv3_v.npy",
+    "gdn_published_L129_gqa_kv3_alpha.npy",
+    "gdn_published_L129_gqa_kv3_beta.npy",
+    "gdn_published_L129_gqa_kv3_y_chunked.npy",
+    "gdn_published_L129_gqa_kv3_y_seq_f64.npy",
+    "gdn_published_L129_gqa_kv3_k_narrow.npy"
+  ]
+}
