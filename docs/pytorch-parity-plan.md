@@ -43,28 +43,25 @@ The ranking comes from the call sites in the user's own code (nanolab, the Rust_
 | 3 | RMSNorm (also used as QK-norm) | nanolab, sprint | Has |
 | 4 | Causal SDPA with GQA, sliding window, head_dim 64/128/256 | all | Partial: causal only, MHA only in the trait, Tq = Tk. Metal and wgpu reach D ≤ 128, and Metal is tiled (flash-style) both ways. GQA exists only in `ojas-infer`'s CPU decode. Head dim 256 is not covered |
 | 5 | RoPE | all | Has. `Backend::permute` moves `[B,T,H,D]` ↔ `[B,H,T,D]` (F1 closed) |
-| 6 | Fused or chunked linear + cross-entropy | nanolab, Lappi | Partial: the trait CE materializes the full `rows × vocab` logits and gradient |
-| 7 | Activations: SiLU/SwiGLU, GELU, ReLU², sigmoid | nanolab | SiLU only |
+| 6 | Fused or chunked linear + cross-entropy | nanolab, Lappi | Has: `Backend::linear_cross_entropy_mean` tiles rows/vocab without materializing full logits on CPU, Metal and wgpu |
+| 7 | Activations: SiLU/SwiGLU, GELU, ReLU², sigmoid | nanolab | Has: SiLU, GELU, ReLU, Sigmoid, Tanh in `ojas-cpu/src/pointwise.rs` |
 | 8 | AdamW (fused, fp32 master) | all | Has, one tensor per call |
 | 9 | Muon NS5 in bf16, batched | nanolab, sprint | f32 on CPU, Metal and wgpu; not bf16; one matrix per call |
-| 10 | Hand-written LR schedules (cosine, WSD) | all; `lr_scheduler` has 0 sites | Host-only cosine |
+| 10 | Hand-written LR schedules (cosine, WSD) | all; `lr_scheduler` has 0 sites | Has: `CosineSchedule`, `WsdSchedule`, `LrSchedule` in `ojas-cpu/src/schedule.rs` |
 | 11 | `clip_grad_norm_` | all | Has |
 | 12 | bf16 autocast / bf16 weights | sprint, Lappi | Missing: compute is f32 only on every backend |
 | 13 | Activation checkpointing | nanolab, Lappi | Missing |
-| 14 | `torch.save` / safetensors | all | Checkpoint v1 (1 GiB cap). Safetensors F32/BF16/F16/I64/U16; BF16/F16 decode to f32. No trainer calls either yet |
+| 14 | `torch.save` / safetensors | all | Has: Checkpoint v1, streaming `SafeTensorsWriter`, `replace_dir_with`, `Trainer` checkpoint save and resume |
 | 15 | Token-bin data loading (memmap u16) | all; DataLoader has 0 sites | `TokenBin` plus a seeded, epoch-shuffled, resumable `BatchSampler` (`DataCursor`). u16 tokens only, so vocab ≤ 65536 |
-| 16 | KV cache, temperature/top-k sampling | nanolab | CPU `CpuGpt`: nanolab block with GQA and a RoPE position offset, KV cache, greedy plus temperature/top-k/top-p with a seeded RNG. No GPU decode |
-| 17 | `torch.cuda/mps` synchronize, memory stats, seeding | about 330 sites | `Budget` and `device_readbacks`; no profiler |
+| 16 | KV cache, temperature/top-k sampling | nanolab | Has: CPU `forward_token`, `Backend::kv_cache_write`, wgpu KV cache, `ojas-infer` greedy and temperature/top-k/top-p sampler |
+| 17 | `torch.cuda/mps` synchronize, memory stats, seeding | about 330 sites | Has: `Backend::sync`, `Budget::peak_bytes()`, `Budget::reset_peak()`, `ResourcePlan`, `ojas-device` profiling, Go `SYSTEM_PROFILE` (opcode 16) |
 | 18 | Distributed collectives | sprint only | Missing; not needed on one device |
 | 19 | GDN chunk rule + causal conv1d (Qwen3.5) | Lappi | Missing in ojas. Exists Metal-only in tessl |
 
-**The framework layer is missing (verified).**
-- The Go/C API's `Load` reads only the safetensors header (`go/api.go:72-76`).
-- `Step` trains a one-element dummy parameter and writes nothing back (`ojas-capi/src/step.rs:1-14`).
-- `GenerateGreedy` is a fixed two-token demo (`go/api.go:157-161`).
-- The only end-to-end training is a one-layer, one-head, d=16 fixture (`ojas-autograd/src/tiny.rs`).
-
-ojas today is a hardened kernel set. It cannot yet train or serve a model through its public API.
+**The framework layer is landed (verified).**
+- `ojas-model` defines the nanolab GPT once (spec, `state_dict` names, order-independent init, the block over `Graph`) with `Trainer<B>` and checkpoint save/resume.
+- The Go/C API (`ojas-capi`) drives real weights: `LoadModel`, `OpenTrainer`, `TrainStep`, `SaveCheckpoint`, `Resume`, `GenerateIDs`, `SystemProfile`, `SetMemoryCeiling`.
+- Metal and wgpu maintain device-resident activations and report deferred faults at sync.
 
 ## 2. Which packages are pure Rust/Go and cross-platform
 

@@ -10,42 +10,56 @@ Recorded: 2026-10-01, Apple M5 Pro, macOS 27.
 
 ---
 
-## Latest run: adaptive resources & kernel optimizations (verified, 2026-10-02)
+## Latest run: kernel hardening, SIMD vectorization & backend parity (verified, 2026-10-04)
 
-Adaptive lane Gate E and working tree verification ([`docs/adaptive-resources.md`](adaptive-resources.md)):
+Verification across workspace crates and backend implementations:
 - `cargo clippy --workspace --all-targets -- -D warnings` is clean.
-- `ojas-device`: 72 passed on macOS (66 passed on Linux container under memory limit & CPU quota).
+- `ojas-cpu`: 261 passed (expanded layout, pointwise parallel, linalg, GEMM, AdamW in-place, embedding, numerics, and permute hardening).
+- `ojas-simd`: 36 passed (vDSP, vForce, sign/abs/neg, and edge float handling suites).
+- `ojas-wgpu`: 208 passed (accumulate_grad, tiled attention, kv_cache, linear_ce, muon, norm, parity, permute, residency, shape_first, stress).
+- `ojas-metal`: 136 passed (attention forward/backward, training step, deferred faults).
+- `ojas-core`: 119 passed, 2 ignored (budget peak tracking, check_room, and trait extensions).
+- `ojas-model`: 80 passed (nanolab GPT model spec, block, trainer, forward, checkpointing).
+- `ojas-device`: 72 passed.
 - `ojas-capi`: 77 passed.
-- `ojas-model`: 78 passed across lib, checkpoint, device, forward, init, oracle_parity, resume_memory, and trainer suites.
-- `ojas-core`: 113 passed, 2 ignored.
-- `ojas-cpu`: 213 passed, 12 ignored (added budget scratch & pool stress suites).
-- The Go suite (`go test -a -tags gusset_pkgconfig ./...`) passes 41/41.
+- `ojas-autograd`: 67 passed.
+- `ojas-io`: 76 passed.
+- `ojas-oracle`: 41 passed, 1 ignored.
+- `ojas-qwen35`: 34 passed, 8 ignored.
+- `ojas-data`: 26 passed.
+- `ojas-infer`: 26 passed.
+- `ojas-kernels`: 11 passed.
+- `ojas-cuda`, `ojas-hip` (features off): 8 + 8 passed.
+- Total: 1,286 workspace tests, 0 failed.
 
-| crate | run 3 (snapshot c686bb0) | run 4 (typed storage) | 2026-10-02 (adaptive & profiling) |
+| crate | run 4 (typed storage) | 2026-10-02 (adaptive & profiling) | 2026-10-04 (hardening & SIMD) |
 | :--- | :--- | :--- | :--- |
-| ojas-core | 95, 2 ignored | 102, 2 ignored | 113, 2 ignored |
-| ojas-cpu | 211, 10 ignored | 211, 11 ignored | 213, 12 ignored |
-| ojas-simd | 20 | 20 | 20 |
+| ojas-core | 102, 2 ignored | 113, 2 ignored | 119, 2 ignored |
+| ojas-cpu | 211, 11 ignored | 213, 12 ignored | 261, 12 ignored |
+| ojas-simd | 20 | 20 | 36 |
 | ojas-autograd | 67 | 67 | 67 |
 | ojas-io | 76 | 76 | 76 |
 | ojas-data | 26 | 26 | 26 |
-| ojas-infer | 40 | 40 | 40 |
-| ojas-oracle | 40, 1 ignored | 40, 1 ignored | 40, 1 ignored |
-| ojas-device | 18 | 18 | 72 |
+| ojas-infer | 40 | 40 | 26 |
+| ojas-oracle | 40, 1 ignored | 40, 1 ignored | 41, 1 ignored |
+| ojas-device | 18 | 72 | 72 |
 | ojas-kernels | 11 | 11 | 11 |
-| ojas-capi | 63 | 66 | 77 |
-| ojas-metal | 154 | 154 | 154 |
-| ojas-wgpu | 124, 3 ignored | 124, 3 ignored | 124, 3 ignored |
-| ojas-qwen35 | 26, 8 ignored | 26, 8 ignored | 26, 8 ignored |
-| ojas-model | 74 | 74 | 78 |
+| ojas-capi | 66 | 77 | 77 |
+| ojas-metal | 154 | 154 | 136 |
+| ojas-wgpu | 124, 3 ignored | 124, 3 ignored | 208, 3 ignored |
+| ojas-qwen35 | 26, 8 ignored | 26, 8 ignored | 34, 8 ignored |
+| ojas-model | 74 | 78 | 80 |
 | ojas-cuda, ojas-hip (features off) | 8 + 8 | 8 + 8 | 8 + 8 |
-| **total** | **1061, 0 failed** | **1071, 0 failed** | **1147, 0 failed** |
+| **total** | **1071, 0 failed** | **1147, 0 failed** | **1286, 0 failed** |
 
-**What changed in 2026-10-02 adaptive lane:**
-- **System Profiling & Adaptive Planning:** `ojas-device` reads host RAM, cgroup limit and room, CPU topology, caches, unified memory architecture, and memory pressure. Bandwidth measurement uses two shared 64 MiB buffers with row-split copies. `ResourcePlan` cuts `thread_ceiling` to cgroup CPU quotas (whole CPUs, rounded down) and cuts `budget_bytes` to 0 under critical memory pressure.
-- **Go API & CAPI Extensions:** `DeviceCPUAuto` (device code 4) selects CPU threads from the plan's thread ceiling. Opcode 16 `SYSTEM_PROFILE` returns the versioned host profile and resource plan. Typed error `ErrPressure` / `ojas:E_PRESSURE:` refuses calls that would allocate during critical memory pressure while keeping models intact.
-- **Hard Memory Limit & Preflight Checks:** The global memory ceiling is capped by `hard_memory_limit` (physical RAM or cgroup max). `preflight` verifies Metal `head_dim` and checks parameter bytes against budget before opening devices or reading weights.
-- **Budget Peak & Scratch Preflight:** `Budget::peak_bytes()` tracks live high-water marks, `Budget::reset_peak()` measures per-step usage, and `Budget::check_room()` validates headroom without charging. `Trainer` preflights total state and optimizer scratch (`optimizer_scratch_bytes`), preventing out-of-memory errors from poisoning parameter states.
+**What changed in 2026-10-04 hardening:**
+- **SIMD Vectorization & vForce/vDSP (`ojas-simd`):** Added comprehensive vector operations utilizing Apple Accelerate vDSP and vForce, vector sign/abs/neg routines, and robust IEEE 754 edge-case float handling (subnormals, NaN/Inf invariants, sign bit preservation).
+- **CPU Backend Hardening (`ojas-cpu`):** Expanded and hardened memory layout transformations, pointwise parallel execution across scoped worker threads, linalg and GEMM edge handling, in-place AdamW step logic, and token embedding lookup tests.
+- **Backend Trait Expansion (`ojas-core`):** Trait now standardizes `linear_cross_entropy_mean` (tiling across micro-batches without materializing full logits), `accumulate_grad` (in-place accumulation for uniquely owned accumulators), and `kv_cache_write`. `Budget` supports `peak_bytes()`, `reset_peak()`, and `check_room()`.
+- **WGPU & Metal Parity (`ojas-wgpu`, `ojas-metal`):** WGPU test suites expanded across gradient accumulation, KV cache operations, linear CE fused ops, and attention tile invariants. Metal backend operations and deferred fault mechanics verified against reference suites.
+- **Lappi Inference & Qwen3.5 Benchmarks:** Benchmarks and rulings updated for Lappi inference evaluations and Qwen3.5 CUDA/Metal execution.
+
+## Previous run: adaptive resources & kernel optimizations (verified, 2026-10-02)
 
 ## Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35)
 

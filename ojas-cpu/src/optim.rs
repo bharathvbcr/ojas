@@ -399,11 +399,6 @@ fn adam_check<C: AdamMath, const DECAYS: bool, const LOW: bool>(
 
 /// Pass 2 of [`adamw_in_place`] over one block: every element's step,
 /// stored in place. Element `i` reads only element `i` of each input.
-///
-/// Eight values per iteration, then a scalar tail: the shape the check
-/// already vectorizes to, two `fsqrt.4s` and one scalar `fsqrt`. Each
-/// lane is the same [`AdamMath::elem`] as the four-wide store, in index
-/// order, so a zero step still keeps a stored `-0`.
 fn adam_store<C: AdamMath, const DECAYS: bool, const LOW: bool>(
     c: &C,
     p: &mut [f32],
@@ -412,52 +407,12 @@ fn adam_store<C: AdamMath, const DECAYS: bool, const LOW: bool>(
     v: &mut [f32],
 ) {
     let n = block_len(p, g, m, v);
-    let head = n & !7;
-    let (p_head, p_tail) = p.split_at_mut(head);
-    let (g_head, g_tail) = g.split_at(head);
-    let (m_head, m_tail) = m.split_at_mut(head);
-    let (v_head, v_tail) = v.split_at_mut(head);
-    let (p_chunks, _) = p_head.as_chunks_mut::<8>();
-    let (g_chunks, _) = g_head.as_chunks::<8>();
-    let (m_chunks, _) = m_head.as_chunks_mut::<8>();
-    let (v_chunks, _) = v_head.as_chunks_mut::<8>();
-    for (((pc, gc), mc), vc) in p_chunks.iter_mut().zip(g_chunks).zip(m_chunks).zip(v_chunks) {
-        adam_store8::<C, DECAYS, LOW>(c, pc, gc, mc, vc);
+    for i in 0..n {
+        let (np, nm, nv, _) = c.elem::<DECAYS, LOW>(p[i], g[i], m[i], v[i]);
+        p[i] = np;
+        m[i] = nm;
+        v[i] = nv;
     }
-    for i in 0..p_tail.len() {
-        let (np, nm, nv, _) = c.elem::<DECAYS, LOW>(p_tail[i], g_tail[i], m_tail[i], v_tail[i]);
-        p_tail[i] = np;
-        m_tail[i] = nm;
-        v_tail[i] = nv;
-    }
-}
-
-/// One eight-wide group of [`adam_store`]. Lanes run in order; each is
-/// [`AdamMath::elem`] then the three stores.
-#[inline(always)]
-fn adam_store8<C: AdamMath, const DECAYS: bool, const LOW: bool>(
-    c: &C,
-    p: &mut [f32; 8],
-    g: &[f32; 8],
-    m: &mut [f32; 8],
-    v: &mut [f32; 8],
-) {
-    macro_rules! lane {
-        ($i:expr) => {{
-            let (np, nm, nv, _) = c.elem::<DECAYS, LOW>(p[$i], g[$i], m[$i], v[$i]);
-            p[$i] = np;
-            m[$i] = nm;
-            v[$i] = nv;
-        }};
-    }
-    lane!(0);
-    lane!(1);
-    lane!(2);
-    lane!(3);
-    lane!(4);
-    lane!(5);
-    lane!(6);
-    lane!(7);
 }
 
 /// Length of one AdamW block. The four slices are cut to the same `n` by

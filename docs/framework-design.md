@@ -1,4 +1,4 @@
-# Framework layer design (approved; item 1 landed)
+# Framework layer design (approved; items 1–13 landed)
 
 Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from [`pytorch-parity-plan.md`](pytorch-parity-plan.md) §7.
 
@@ -8,7 +8,7 @@ Written 2026-10-01 by a read-only design pass over the tree at that date. It is 
 
 **Goal:** a Go or Rust caller can train and serve the nanolab GPT without Python. The model is 12 layers, d=768, 12×64 heads, SwiGLU 2048, V=50304, with a tied embedding, QK-norm, RoPE, a per-head gate and a value residual. It trains with Muon NS5 on 2D hidden weights plus AdamW, clip 1.0, and a warmup with cosine or WSD schedule.
 
-**Status:** approved by the user on 2026-10-01. Item 1 of §9 (T1–T6 in `ojas-core/src/backend.rs`) has landed; the other items are in progress or queued. The `CpuBackend` default is now `Numerics::Fast`.
+**Status:** approved and implemented across items 1–13 of §9. The nanolab GPT is defined once in `ojas-model`, trained across CPU, Metal and wgpu, checkpointed to safetensors directories, and driven through the in-process Go API (`go/`). The `CpuBackend` default is `Numerics::Fast`.
 
 The design depends on neither default: every bitwise test sets `Numerics::Exact` explicitly.
 
@@ -252,11 +252,9 @@ The coordinator serializes edits to the trait file, `Cargo.toml` and `Cargo.lock
 
 After item 1, items 2–7 and 13 can run in parallel. After items 2 and 8, items 9 and 11 can run in parallel.
 
-**Hardest open question: should Metal adopt wgpu's deferred-fault contract so ops can be batched into one command buffer?**
-- **Cost today:** every Metal op is one blocking round trip. The Metal lane measured that wait at a floor of **0.19–0.23 ms**, with a second mode near 1.4 ms that it attributed to GPU contention.
-- **Calls per step:** one micro-step is about 1,000 trait calls (about 60 per layer ×12 for forward, backward and accumulate, plus the head and 124 accumulates).
-- **Resulting overhead:** about 0.2 s of synchronous overhead per micro-batch at the floor, or about 1.4 s under contention. At B=4 the GEMM work is about 0.3 s (I), and K=16 multiplies the overhead per step.
-- **Trade-off:** batching would move Metal faults to `sync` (wgpu's contract), which changes Metal's error contract and the error kinds capi reports.
+**Metal deferred-fault contract (Resolved & Landed):**
+- Metal adopted wgpu's deferred-fault contract in round 5 (documented in [`metal-deferred-faults.md`](metal-deferred-faults.md)), moving per-op waits to sync points (`Backend::sync`, `download`, `clip_grad_norm`).
+- Reduced training step blocking waits from ~3,358 to 71–72 per step at K=4, dropping `adamw_full` from 183 ms to 22.6 ms.
 
 ## 10. Acceptance
 

@@ -97,6 +97,31 @@ sequenceDiagram
 
 ---
 
+## Accelerate Vector Operations & vForce (macOS)
+
+When compiled with the `accelerate` feature on macOS, `ojas-simd` exposes vectorized primitives beyond matrix multiplication:
+
+- **vDSP Elementwise Kernels:** [`vdsp_vmul`], [`vdsp_vadd`], and their append forms call stride-1 Apple vDSP kernels for high-throughput single-precision vector math.
+- **Row Movement:** [`vdsp_mmov`] and [`vdsp_mmov_append`] copy 2D matrix rows with bitwise preservation of sign bits, subnormals, and `-0.0`.
+- **vForce Vector Math:** [`vvexpf`] and [`vvexpf_inplace`] dispatch to Apple Accelerate's vectorized exponential function (`y[i] = exp(x[i])`).
+- **Sign & Negative Absolute:** [`store_neg_abs_signs`] processes data in chunked vector passes: it validates lane finiteness, records element signs (`z < 0`), and stores `-|z|` in a single pass.
+- **Edge Float Handling:** Preserves IEEE 754 invariants across vector operations, including subnormals, signed zeros, and non-finite value detection.
+
+---
+
+## Test Suites (36 tests)
+
+- `tests/gemm.rs`: Multi-architecture GEMM determinism and cross-validation against references.
+- `tests/vdsp.rs`: Apple vDSP vector addition, multiplication, and matrix row copy operations.
+- `tests/vforce.rs`: Vectorized exponential accuracy and in-place transformations via vForce.
+- `tests/neg_abs_signs.rs`: Vectorized negative-absolute transforms and boolean sign bit packing.
+- `tests/reserved_f32.rs`: IEEE 754 edge-case compliance (subnormals, NaNs, infinities, signed zeros).
+- `tests/accelerate.rs`: Integration with `cblas_sgemm` on Apple Silicon.
+- `tests/errors.rs`: Checked shape validation and `SimdError` emission.
+- `tests/fuzz.rs`: Random matrix dimension fuzzing.
+
+---
+
 ## Performance Profile (Apple M5 Pro)
 
 * **NEON SIMD:** ~110 GFLOP/s single-threaded throughput.

@@ -891,7 +891,7 @@ fn builders() -> Vec<(&'static str, Builder)> {
             adamw_case(b, "adamw_3072x768", 3072, D, 10)
         }),
         ("adamw_50304x768", |b| {
-            adamw_case(b, "adamw_50304x768", V, D, 12)
+            adamw_case(b, "adamw_50304x768", V, D, 5)
         }),
         ("muon_768x768", |b| muon_case(b, "muon_768x768", D, D, 10)),
         ("muon_2048x768", |b| muon_case(b, "muon_2048x768", FF, D, 5)),

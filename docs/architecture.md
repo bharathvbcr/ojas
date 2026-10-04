@@ -52,7 +52,7 @@ flowchart TD
 
     subgraph Layer2["2. Hardware Compute Acceleration Backends"]
         CPU["ojas-cpu (CpuBackend: Exact packed GEMM, or Fast with Accelerate)"]
-        SIMD["ojas-simd (NEON GEMM, AVX2, Accelerate cblas_sgemm)"]
+        SIMD["ojas-simd (NEON GEMM, AVX2, Accelerate cblas_sgemm, vDSP / vForce)"]
         Metal["ojas-metal (MetalBackend via tessl & MSL, device-resident)"]
         WGPU["ojas-wgpu (WgpuBackend, device-resident WGSL)"]
         Kernels["ojas-kernels (Shared WGSL/CUDA sources, workgroup geometry)"]

@@ -91,3 +91,23 @@ flowchart LR
 > 2. **Explicit Device Failures:** If a compatible graphics adapter is missing or fails to initialize, `WgpuBackend::open` returns an explicit error (`OjasError::DeviceMismatch`) immediately—**never silently falling back to CPU execution**.
 > 3. **Memory Overflow Protections:** Buffer allocations exceeding hardware device limits (`max_buffer_size`) return `OjasError::CapacityExceeded` before attempting GPU queue allocation.
 > 4. **Zero-Readback Autograd:** The `wgpu_tape` autograd integration keeps all forward activations and backward adjoints on the device, downloading only the final scalar loss.
+
+---
+
+## Test Suites (208 tests)
+
+- `tests/accumulate_grad.rs`: In-place vs buffered gradient accumulation and bit-matching against CPU.
+- `tests/attention.rs`: Tiled causal attention forward/backward, long sequences, and head dimensions up to 128.
+- `tests/contract.rs`: Backend trait implementation contracts and deferred fault reporting.
+- `tests/drop.rs`: Bounded timeout on queue and buffer cleanup.
+- `tests/faults.rs`: Non-finite deferred fault recording order and naming.
+- `tests/gemm.rs`: Tiled WGSL GEMM determinism and nanolab projection shapes.
+- `tests/kv_cache.rs`: Grouped-query cached attention and boundary slice writes.
+- `tests/linear_ce.rs`: Tiled linear cross-entropy online softmax and memory bounds.
+- `tests/muon.rs`: 5-step Newton-Schulz optimizer execution on device tensors.
+- `tests/norm.rs`: RMSNorm, QK-norm reductions, and workgroup segment packing.
+- `tests/parity.rs`: Full-breadth numerical parity against CPU reference operations.
+- `tests/permute.rs`: Rank-4 layout transformations and dimension reordering.
+- `tests/residency.rs`: End-to-end device activation residency during training loops.
+- `tests/shape_first.rs`: Shape validator enforcement across zero-capacity budgets and NaN inputs.
+- `tests/stress.rs`: Multi-threaded concurrency, device loss handling, and Send+Sync safety.

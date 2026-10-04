@@ -62,15 +62,15 @@ flowchart LR
 
 ---
 
-## Backend Status (2026-10-01, Apple M5 Pro)
+## Backend Status (2026-10-04, Apple M5 Pro)
 
 | Backend | Implements `Backend` | Numerics | Tests | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `CpuBackend` (`ojas-cpu`) | Yes | `Fast` default; `Exact` opt-in | 211 passed, 11 ignored (run 4) | Exact: packed GEMM, persistent thread pool, bit-identical to golden digests at threads 1, 2, 3, 7, 16, 18. Fast on macOS: $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) dispatch to Accelerate `cblas_sgemm`; smaller stay on `tile_fast`. Off macOS the cutoff is $2^{21}$. Cosine and WSD schedules |
-| `ojas-simd` | No (kernels for `ojas-cpu`) | — | 20 passed alone, 24 under `--workspace` (run 4) | NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on $256^3$, $512 \times 768 \times 768$, $2048^3$ |
-| `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | 154 passed (run 4; `cargo test -p ojas-metal --release -- --test-threads=1`) | Tiled causal attention, head dim above 128 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Per-op fixed cost fell after tessl's `synchronize` stopped polling ([`bench-gpu-vs-torch.md`](bench-gpu-vs-torch.md)) |
-| `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | 124 passed, 3 ignored (run 4) | Muon NS5 in f32, checked against the CPU. Tiled FlashAttention-2, head dim above 128 refused. The first faulting op is named at the next `sync`. GEMM race resolved with whole-`vec4` stores |
-| `ojas-kernels` | No (shared geometry and sources) | — | 11 passed (run 4) | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |
+| `CpuBackend` (`ojas-cpu`) | Yes | `Fast` default; `Exact` opt-in | 261 passed, 12 ignored | Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) dispatch to Accelerate `cblas_sgemm`; smaller stay on `tile_fast`. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup |
+| `ojas-simd` | No (kernels for `ojas-cpu`) | — | 36 passed | NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling |
+| `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | 136 passed | Tiled causal attention, head dim above 128 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Attention forward/backward, device-resident training step |
+| `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | 208 passed, 3 ignored | Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 128 refused. Gradient accumulation (`accumulate_grad`), KV cache writes, tiled linear cross-entropy (`linear_ce`), and deferred fault reporting at next `sync` |
+| `ojas-kernels` | No (shared geometry and sources) | — | 11 passed | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |
 | `ojas-cuda` | No | — | 8 passed (feature off) | One affine kernel behind `--features cuda` |
 | `ojas-hip` | No | — | 8 passed (feature off) | Copy probe behind `--features hip`; no kernel |
 

@@ -102,7 +102,10 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | **SiLU, Mul** (SwiGLU) | Pointwise | `ojas_silu_*`, `ojas_mul_*` | WGSL | `f32` | $\mathrm{silu}(x W_{gate}) \odot (x W_{up})$ |
 | **Residual Add** | Pointwise | tessl `residual_add` | WGSL | `f32` | $x + f(x)$ |
 | **Cross-Entropy** | Mean over valid targets | `ojas_ce_rows`, `ojas_ce_mean` | WGSL | `f32` | Mean NLL; `ignore_index`; all-ignored is `NonFinite`. Full `rows × vocab` logits and gradient are materialized |
+| **Linear Cross-Entropy** | Tiled online softmax, stream loss/grad | Tiled stream | WGSL `loss.wgsl` | `f32` | Fused linear projection + CE loss; tiles rows/vocab without materializing full logits (`LinearCeChunk`) |
 | **Grad Clip** | Global norm, f64 sum of squares | `ojas_reduce_*`, `ojas_scale` | WGSL | `f32` | Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$ |
+| **Accumulate Grad** | In-place add (finite check) | In-place / buffer | WGSL `accumulate` | `f32` | Accumulate step gradients into parameter gradient buffers |
+| **KV Cache Write** | Slice copy at timestep | Slice copy | WGSL `kv_cache` | `f32` | Write key/value token slices into time-major decode KV cache |
 | **AdamW** | Single-tensor torch order | tessl `qwen35_adamw` | WGSL | `f32` | Decay first; f64 bias correction; $\varepsilon$ outside sqrt |
 | **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32` (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
 
@@ -122,4 +125,4 @@ flowchart LR
 
 * **Micro-batch Shape:** Batch size 16, sequence length 1024 = 16,384 tokens.
 * **Unchunked Logits:** Three $16384 \times 50304$ `f32` tensors require $3 \times 16384 \times 50304 \times 4 \approx 9.89\text{ GB}$.
-* **Status (2026-10-01):** chunked cross-entropy exists only in the tiny Metal step (`ojas-metal/src/gpu.rs`, vocab ≤ 128). The `Backend` trait's `cross_entropy_mean_forward/backward` take materialized logits and return a full `rows × vocab` gradient on every backend. At this micro-batch, that is several 3.3 GB tensors per call. A fused or chunked linear + cross-entropy op in the trait is an open gap (docs/pytorch-parity-plan.md, finding F9). The `Budget` refuses an allocation that does not fit (`CapacityExceeded`); it does not clamp.
+* **Status (Updated 2026-10-04):** Chunked / fused linear cross-entropy is implemented via `Backend::linear_cross_entropy_mean` (closing finding F9 in [`pytorch-parity-plan.md`](pytorch-parity-plan.md)). By chunking over rows and vocabulary tiles (default `LinearCeChunk { rows: 16, cols: 4096 }`) and calculating an online streaming softmax, peak memory drops from ~9.89 GB to under 50 MB for the logit chunk while accumulating parameter gradients directly. The unchunked fallback `cross_entropy_mean_forward/backward` remains available for small vocabulary / testing scenarios. The `Budget` refuses an allocation that does not fit (`CapacityExceeded`); it does not clamp.

@@ -29,7 +29,7 @@ The ranked list of gaps, and what has closed since it was written, is in [`docs/
 
 ```
 Status:          Kernel set, backends, nanolab model, trainer, adaptive resource planning and Go API built; remaining gaps in docs/pytorch-parity-plan.md
-Verification:    adaptive lane gate E (docs/adaptive-resources.md), 2026-10-02: 1100+ passed across workspace crates; ojas-capi 77/77; ojas-device 72/72; ojas-model 78/78; Go 41/41; clippy -D warnings clean
+Verification:    kernel hardening, SIMD vectorization & backend parity, 2026-10-04: 1286 passed across workspace crates (ojas-cpu 261, ojas-wgpu 208, ojas-metal 136, ojas-core 119, ojas-model 80, ojas-capi 77, ojas-device 72); Go 41/41; clippy -D warnings clean
 Host Target:     Apple M5 Pro (Metal 4), macOS 27 (Darwin 27.0.0 arm64)
 Interactive App: https://ojas.vbcr.dev (Alternate: https://bharath.vbcr.dev/ojas)
 License:         MIT OR Apache-2.0
