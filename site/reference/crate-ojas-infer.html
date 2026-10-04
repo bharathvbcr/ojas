@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-infer · ojas reference</title>
+  <meta name="description" content="ojas-infer serves nanolab&#39;s default decoder: KV-cached incremental decoding on the CPU (CpuGpt) and on any Backend (DeviceDecoder), greedy decoding, and seeded temperature / top-k / top-p sampling.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-infer.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-infer.html">
+  <meta property="og:title" content="ojas-infer · ojas reference">
+  <meta property="og:description" content="ojas-infer serves nanolab&#39;s default decoder: KV-cached incremental decoding on the CPU (CpuGpt) and on any Backend (DeviceDecoder), greedy decoding, and seeded temperature / top-k / top-p sampling.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html" class="current" aria-current="page">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-infer">ojas-infer <a class="anchor" href="#ojas-infer" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-infer</code> serves nanolab&#39;s default decoder: KV-cached incremental decoding on the CPU (<code>CpuGpt</code>) and on any <code>Backend</code> (<code>DeviceDecoder</code>), greedy decoding, and seeded temperature / top-k / top-p sampling.</p>
+<p>The model is defined once, in <code>ojas-model</code>. <code>GptConfig</code> is <code>ojas_model::ModelSpec</code>, <code>GptWeights</code> is <code>ojas_model::ModelParams&lt;Tensor&gt;</code> and <code>BlockWeights</code> is <code>ojas_model::BlockParams&lt;Tensor&gt;</code>, all under nanolab&#39;s <code>state_dict</code> names. Both decoders check the weights against <code>ojas_model::param_table</code>.</p>
+<hr>
+<h2 id="the-block">The block <a class="anchor" href="#the-block" aria-label="Link to this section">#</a></h2>
+<p><code>CpuGpt</code> runs nanolab&#39;s default attention block (<code>nanolab/mixers.py</code> <code>Attention.forward</code>, <code>nanolab/model.py</code> <code>Block</code> and <code>SwiGLU</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>step</th><th>what</th><th>weights</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>h = RMSNorm(x)</code>, eps <code>rms_eps</code> (<code>1e-6</code>)</td><td><code>norm1 [d]</code></td></tr>
+<tr><td>2</td><td><code>q, k, v</code> linears, no bias</td><td><code>q_proj [H*Dh, d]</code>, <code>k_proj</code>/<code>v_proj [Hkv*Dh, d]</code></td></tr>
+<tr><td>3</td><td>RMS QK-norm over <code>Dh</code>, <strong>then</strong> half-split RoPE at the absolute position (base <code>rope_base</code>)</td><td><code>q_norm</code>, <code>k_norm [Dh]</code></td></tr>
+<tr><td>4</td><td>value residual: layer 0 publishes its <code>v</code> as <code>v0</code>; later layers use <code>(1-s) v + s v0</code>, <code>s = sigmoid(lambda)</code>. The cache holds blended values</td><td><code>vr_lambda [1]</code> (layer 0&#39;s is unused)</td></tr>
+<tr><td>5</td><td>causal attention, scale <code>1/sqrt(Dh)</code>, GQA (query head <code>i</code> reads KV head <code>i / (H/Hkv)</code>)</td><td></td></tr>
+<tr><td>6</td><td>per-head gate <code>sigmoid(h W_g^T + b_g)</code> on each head&#39;s output (reads the normed <code>h</code>)</td><td><code>gate_w [H, d]</code>, <code>gate_b [H]</code></td></tr>
+<tr><td>7</td><td><code>x += y Wo^T</code>; <code>x += down(silu(h2 W_gate^T) * (h2 W_up^T))</code>, <code>h2 = RMSNorm(x)</code></td><td><code>o_proj [d, H*Dh]</code>, <code>norm2</code>, <code>ffn_gate</code>/<code>ffn_up [hidden, d]</code>, <code>ffn_down [d, hidden]</code></td></tr>
+</tbody></table></div>
+<p>The head is the tied embedding (<code>tok_emb</code>) after a final RMSNorm (<code>norm_f</code>). <code>head_dim</code> is its own config field, so <code>H * Dh</code> need not equal <code>d</code>. RoPE rows come from <code>ojas_model::Rope</code>: angles computed in f64 and rounded once, as <code>ojas-autograd</code>&#39;s <code>rope_cache</code> does; nanolab builds its table in f32, so the last bits differ and the gap grows with position.</p>
+<h2 id="three-forwards-one-model">Three forwards, one model <a class="anchor" href="#three-forwards-one-model" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>CpuGpt::forward_token(token, cache)</code>: the fast host path. One token at position <code>cache.len()</code>; the linears and single-query attention are local (the trait linear repacks the whole weight per call). RMSNorm, QK-norm (fused <code>rms_qk_norm_forward</code>), RoPE, the gate, the value residual, SiLU and the product run on <code>ojas_cpu::CpuBackend</code>.
+</li>
+<li>The full forward is <code>ojas_model::forward_logits</code> on <code>ojas_model::Eval</code>: the model&#39;s one block, using causal SDPA for MHA and <code>cached_attention_forward</code> at <code>kv_len == T</code> for GQA. Only the training tape refuses GQA.
+</li>
+<li><code>DeviceDecoder&lt;B&gt;::forward(tokens)</code>: decode on any <code>Backend</code> with the KV cache resident there, one <code>[1, Tcap, Hkv, D]</code> key and value tensor per layer. Each layer is <code>ojas_model::block_with</code> on <code>Eval</code>, the same block the trainer uses (QK-norm as two <code>rms_norm</code> calls). Only the attention step belongs to this crate: it writes the new positions&#39; post-RoPE keys and blended values with <code>kv_cache_write</code>, then attends with <code>cached_attention_forward</code> at <code>kv_len = len + Tn</code>. One path serves prefill (several tokens, onto an empty or warm cache) and decode (one token), and it runs GQA. The last position&#39;s hidden row is gathered on the device, normed and projected; the <code>[1, vocab]</code> logit row is the call&#39;s one readback. A call past the capacity is <code>CapacityExceeded</code> before anything runs, and a failed call leaves <code>len</code> unchanged.
+</li>
+</ul>
+<p><code>tests/parity.rs</code> holds cached decode, the full forward and an f64 transcription of nanolab to each other at every position: MHA; GQA with <code>H*Dh != d</code>; and a second prompt appended to a warm cache. The decoder&#39;s prefill of every prefix is held to the full forward too. G7 holds <code>forward_token</code>, <code>Eval</code> and <code>DeviceDecoder&lt;CpuBackend&gt;</code> to each other over a 4-token prefill and 12 decode steps, on MHA and GQA, under both numerics.</p>
+<p>Measured on 2026-10-01 (Apple silicon, release):</p>
+<ul>
+<li><strong><code>Numerics::Exact</code>:</strong> all three are bit-identical, on MHA and GQA. On the CPU, the fused QK-norm runs the same row kernel as two <code>rms_norm</code> calls, and <code>cached_attention_forward</code> runs causal SDPA&#39;s per-row kernel.
+</li>
+<li><strong><code>Numerics::Fast</code>:</strong> cached decode vs the full forward is within 5.7e-7 relative (asserted at 2e-5; G7 at 1e-5). Cached decode is within 3.5e-7 of the f64 reference, and the full forward within 4.1e-7 (both asserted at 2e-4).
+</li>
+</ul>
+<p><code>tests/device.rs</code> runs <code>DeviceDecoder</code> on wgpu and on Metal against <code>CpuGpt</code> Exact. The run is an 8-token prefill, 36 decode steps, then a 3-token prefill onto the warm cache, on MHA and GQA. Measured worst relative error was 9.9e-7 to 1.25e-6 (asserted at 1e-4), with exactly one readback per call of <code>4 * vocab</code> bytes, counted with <code>Budget::device_readbacks</code>. A missing device fails unless <code>OJAS_ALLOW_NO_GPU=1</code>.</p>
+<h2 id="decoding">Decoding <a class="anchor" href="#decoding" aria-label="Link to this section">#</a></h2>
+<p><code>greedy_decode</code> and <code>generate</code> share one loop (<code>src/decode.rs</code>) on both decoders. <code>DeviceDecoder</code> forwards the prompt as one prefill; <code>CpuGpt</code> forwards it token by token. The prompt is forwarded from the cache&#39;s current length; every emitted token except the last is forwarded, so <code>N</code> new tokens need <code>prompt + N - 1</code> free positions. That is checked before any forward: a request that does not fit is <code>CapacityExceeded</code> and the cache is untouched. To continue, pass the last returned token as the first token of the next prompt.</p>
+<p><code>generate</code> samples with a <code>SplitMix64</code> seeded from <code>GenerateConfig::seed</code> (the same stream as <code>ojas_data::CounterRng</code>), stops after <code>max_new_tokens</code> or right after a stop token (included in the output).</p>
+<p><code>sample_token</code> order: divide by temperature, keep the top <code>k</code>, softmax (f64), keep the smallest most-probable prefix whose mass reaches <code>top_p</code>, draw. Differences from nanolab&#39;s <code>GPT.generate</code>, on purpose:</p>
+<ul>
+<li>temperature <code>0</code> is greedy (nanolab divides by <code>max(T, 1e-6)</code> and always draws);
+</li>
+<li>top-k is strict, ranked by (logit desc, index asc), so <code>top_k = 1</code> is greedy (nanolab keeps every logit tied with the k-th);
+</li>
+<li>top-p exists (nanolab has none).
+</li>
+</ul>
+<p>Refused: temperature that is negative or not finite, <code>top_k == 0</code>, <code>top_p</code> outside <code>(0, 1]</code>, NaN or <code>+inf</code> logits, and a row with no finite logit. <code>-inf</code> is a mask. <code>argmax_token</code> stays strict and refuses <code>-inf</code> as well.</p>
+<h2 id="safety-properties">Safety properties <a class="anchor" href="#safety-properties" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>An all-NaN logit row is <code>NonFinite</code>, never token 0.
+</li>
+<li>Linear outputs and residual sums are checked finite, so returned logits are finite.
+</li>
+<li>The KV cache is one budget-charged allocation; appending past <code>max_len</code> is <code>CapacityExceeded</code>, never a clamp or overwrite. A cache shaped for another model, or longer than <code>max_seq</code>, is refused before any position is written.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-infer/README.md" rel="noopener"><code>ojas-infer/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-hip.html" rel="prev"><span>Previous</span>ojas-hip</a>
+        <a href="crate-ojas-io.html" rel="next" class="next"><span>Next</span>ojas-io</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#the-block">The block</a></li>
+<li><a href="#three-forwards-one-model">Three forwards, one model</a></li>
+<li><a href="#decoding">Decoding</a></li>
+<li><a href="#safety-properties">Safety properties</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

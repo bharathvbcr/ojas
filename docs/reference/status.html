@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas Status &amp; Verification Matrix · ojas reference</title>
+  <meta name="description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/status.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/status.html">
+  <meta property="og:title" content="ojas Status &amp; Verification Matrix · ojas reference">
+  <meta property="og:description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html" class="current" aria-current="page">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
+      <article class="prose-ojas">
+<h1 id="ojas-status--verification-matrix">ojas Status &amp; Verification Matrix <a class="anchor" href="#ojas-status--verification-matrix" aria-label="Link to this section">#</a></h1>
+<p>Recorded: 2026-10-01, Apple M5 Pro, macOS 27.</p>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Verification Protocol Standards:</strong></p>
+<ul>
+<li><strong>Verified:</strong> A claim is verified when this session executed the command directly and recorded its exact output.
+</li>
+<li><strong>Reported:</strong> An earlier lane or audit session recorded the outcome and this session did not re-execute it.
+</li>
+<li><strong>Inferred:</strong> Logically deduced from code structure or invariant dependencies.
+</li>
+</ul>
+</aside>
+<hr>
+<h2 id="latest-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04">Latest run: kernel hardening, SIMD vectorization &amp; backend parity (verified, 2026-10-04) <a class="anchor" href="#latest-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04" aria-label="Link to this section">#</a></h2>
+<p>Verification across workspace crates and backend implementations:</p>
+<ul>
+<li><code>cargo clippy --workspace --all-targets -- -D warnings</code> is clean.
+</li>
+<li><code>ojas-cpu</code>: 261 passed (expanded layout, pointwise parallel, linalg, GEMM, AdamW in-place, embedding, numerics, and permute hardening).
+</li>
+<li><code>ojas-simd</code>: 36 passed (vDSP, vForce, sign/abs/neg, and edge float handling suites).
+</li>
+<li><code>ojas-wgpu</code>: 208 passed (accumulate_grad, tiled attention, kv_cache, linear_ce, muon, norm, parity, permute, residency, shape_first, stress).
+</li>
+<li><code>ojas-metal</code>: 136 passed (attention forward/backward, training step, deferred faults).
+</li>
+<li><code>ojas-core</code>: 119 passed, 2 ignored (budget peak tracking, check_room, and trait extensions).
+</li>
+<li><code>ojas-model</code>: 80 passed (nanolab GPT model spec, block, trainer, forward, checkpointing).
+</li>
+<li><code>ojas-device</code>: 72 passed.
+</li>
+<li><code>ojas-capi</code>: 77 passed.
+</li>
+<li><code>ojas-autograd</code>: 67 passed.
+</li>
+<li><code>ojas-io</code>: 76 passed.
+</li>
+<li><code>ojas-oracle</code>: 41 passed, 1 ignored.
+</li>
+<li><code>ojas-qwen35</code>: 34 passed, 8 ignored.
+</li>
+<li><code>ojas-data</code>: 26 passed.
+</li>
+<li><code>ojas-infer</code>: 26 passed.
+</li>
+<li><code>ojas-kernels</code>: 11 passed.
+</li>
+<li><code>ojas-cuda</code>, <code>ojas-hip</code> (features off): 8 + 8 passed.
+</li>
+<li>Total: 1,286 workspace tests, 0 failed.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>crate</th><th>run 4 (typed storage)</th><th>2026-10-02 (adaptive &amp; profiling)</th><th>2026-10-04 (hardening &amp; SIMD)</th></tr></thead>
+<tbody>
+<tr><td>ojas-core</td><td>102, 2 ignored</td><td>113, 2 ignored</td><td>119, 2 ignored</td></tr>
+<tr><td>ojas-cpu</td><td>211, 11 ignored</td><td>213, 12 ignored</td><td>261, 12 ignored</td></tr>
+<tr><td>ojas-simd</td><td>20</td><td>20</td><td>36</td></tr>
+<tr><td>ojas-autograd</td><td>67</td><td>67</td><td>67</td></tr>
+<tr><td>ojas-io</td><td>76</td><td>76</td><td>76</td></tr>
+<tr><td>ojas-data</td><td>26</td><td>26</td><td>26</td></tr>
+<tr><td>ojas-infer</td><td>40</td><td>40</td><td>26</td></tr>
+<tr><td>ojas-oracle</td><td>40, 1 ignored</td><td>40, 1 ignored</td><td>41, 1 ignored</td></tr>
+<tr><td>ojas-device</td><td>18</td><td>72</td><td>72</td></tr>
+<tr><td>ojas-kernels</td><td>11</td><td>11</td><td>11</td></tr>
+<tr><td>ojas-capi</td><td>66</td><td>77</td><td>77</td></tr>
+<tr><td>ojas-metal</td><td>154</td><td>154</td><td>136</td></tr>
+<tr><td>ojas-wgpu</td><td>124, 3 ignored</td><td>124, 3 ignored</td><td>208, 3 ignored</td></tr>
+<tr><td>ojas-qwen35</td><td>26, 8 ignored</td><td>26, 8 ignored</td><td>34, 8 ignored</td></tr>
+<tr><td>ojas-model</td><td>74</td><td>78</td><td>80</td></tr>
+<tr><td>ojas-cuda, ojas-hip (features off)</td><td>8 + 8</td><td>8 + 8</td><td>8 + 8</td></tr>
+<tr><td><strong>total</strong></td><td><strong>1071, 0 failed</strong></td><td><strong>1147, 0 failed</strong></td><td><strong>1286, 0 failed</strong></td></tr>
+</tbody></table></div>
+<p><strong>What changed in 2026-10-04 hardening:</strong></p>
+<ul>
+<li><strong>SIMD Vectorization &amp; vForce/vDSP (<code>ojas-simd</code>):</strong> Added comprehensive vector operations utilizing Apple Accelerate vDSP and vForce, vector sign/abs/neg routines, and robust IEEE 754 edge-case float handling (subnormals, NaN/Inf invariants, sign bit preservation).
+</li>
+<li><strong>CPU Backend Hardening (<code>ojas-cpu</code>):</strong> Expanded and hardened memory layout transformations, pointwise parallel execution across scoped worker threads, linalg and GEMM edge handling, in-place AdamW step logic, and token embedding lookup tests.
+</li>
+<li><strong>Backend Trait Expansion (<code>ojas-core</code>):</strong> Trait now standardizes <code>linear_cross_entropy_mean</code> (tiling across micro-batches without materializing full logits), <code>accumulate_grad</code> (in-place accumulation for uniquely owned accumulators), and <code>kv_cache_write</code>. <code>Budget</code> supports <code>peak_bytes()</code>, <code>reset_peak()</code>, and <code>check_room()</code>.
+</li>
+<li><strong>WGPU &amp; Metal Parity (<code>ojas-wgpu</code>, <code>ojas-metal</code>):</strong> WGPU test suites expanded across gradient accumulation, KV cache operations, linear CE fused ops, and attention tile invariants. Metal backend operations and deferred fault mechanics verified against reference suites.
+</li>
+<li><strong>Lappi Inference &amp; Qwen3.5 Benchmarks:</strong> Benchmarks and rulings updated for Lappi inference evaluations and Qwen3.5 CUDA/Metal execution.
+</li>
+</ul>
+<h2 id="previous-run-adaptive-resources--kernel-optimizations-verified-2026-10-02">Previous run: adaptive resources &amp; kernel optimizations (verified, 2026-10-02) <a class="anchor" href="#previous-run-adaptive-resources--kernel-optimizations-verified-2026-10-02" aria-label="Link to this section">#</a></h2>
+<h2 id="previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35) <a class="anchor" href="#previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235" aria-label="Link to this section">#</a></h2>
+<p>Integration run 4 (<code>target-baseline/run_integration4.sh</code>, logs in <code>target-baseline/logs-integration-4/</code>):</p>
+<ul>
+<li>Each crate ran <code>cargo test -p &lt;crate&gt; --release --no-fail-fast -- --test-threads=1</code> on the uncommitted tree, after <code>cargo build --workspace --release --all-targets</code> exited 0.
+</li>
+<li><code>cargo clippy --workspace --all-targets -- -D warnings</code> is clean.
+</li>
+<li>The Go suite (<code>go test -a -tags gusset_pkgconfig</code>) passes 38/38.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>crate</th><th>after the framework round</th><th>run 3 (snapshot c686bb0)</th><th>run 4 (typed storage, memory ceiling)</th></tr></thead>
+<tbody>
+<tr><td>ojas-core</td><td>93, 2 ignored</td><td>95, 2 ignored</td><td>102, 2 ignored</td></tr>
+<tr><td>ojas-cpu</td><td>189, 10 ignored</td><td>211, 10 ignored</td><td>211, 11 ignored</td></tr>
+<tr><td>ojas-simd</td><td>20</td><td>20</td><td>20</td></tr>
+<tr><td>ojas-autograd</td><td>67</td><td>67</td><td>67</td></tr>
+<tr><td>ojas-io</td><td>66</td><td>76</td><td>76</td></tr>
+<tr><td>ojas-data</td><td>26</td><td>26</td><td>26</td></tr>
+<tr><td>ojas-infer</td><td>35</td><td>40</td><td>40</td></tr>
+<tr><td>ojas-oracle</td><td>6</td><td>40, 1 ignored</td><td>40, 1 ignored</td></tr>
+<tr><td>ojas-device</td><td>18</td><td>18</td><td>18</td></tr>
+<tr><td>ojas-kernels</td><td>11</td><td>11</td><td>11</td></tr>
+<tr><td>ojas-capi</td><td>44</td><td>63</td><td>66</td></tr>
+<tr><td>ojas-metal</td><td>129, 1 ignored</td><td>154</td><td>154</td></tr>
+<tr><td>ojas-wgpu</td><td>115, 3 ignored</td><td>124, 3 ignored</td><td>124, 3 ignored</td></tr>
+<tr><td>ojas-qwen35</td><td>23, 8 ignored</td><td>26, 8 ignored</td><td>26, 8 ignored</td></tr>
+<tr><td>ojas-model</td><td>—</td><td>74</td><td>74</td></tr>
+<tr><td>ojas-cuda, ojas-hip (features off)</td><td>8 + 8</td><td>8 + 8</td><td>8 + 8</td></tr>
+<tr><td><strong>total</strong></td><td><strong>858</strong></td><td><strong>1061, 0 failed</strong></td><td><strong>1071, 0 failed</strong></td></tr>
+</tbody></table></div>
+<p><strong>What changed in run 4:</strong></p>
+<ul>
+<li><strong>Typed host storage, step 1</strong> (<a href="typed-storage-plan.html"><code>typed-storage-plan.md</code></a>). Host tensors hold <code>Vec&lt;f32&gt;</code>, <code>Vec&lt;u32&gt;</code>, or <code>Vec&lt;u16&gt;</code> for half types. Kernels borrow <code>f32_slice</code> and <code>u32_slice</code> instead of decoding bytes.
+<ul>
+<li><code>to_host</code> reads in 1 MiB pieces. The peak is the window plus one piece.
+</li>
+<li>Checkpoint load reads 64 KiB pieces through <code>from_le_reader</code>.
+</li>
+<li>Two <code>ojas-model</code> memory tests changed, recorded in the plan as contract changes:
+<ul>
+<li>save headroom is now one tensor plus one readback piece;
+</li>
+<li>the resume heap test uses a larger embedding.
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Process-wide memory ceiling in <code>ojas-capi</code>.</strong> The default is 1 GiB, and every session budget is a child of it. <code>SetMemoryCeiling</code> (opcode 15) raises it, and is refused while any model is open.
+</li>
+<li><strong>Formatting:</strong> <code>cargo fmt --all --check</code> and <code>go fmt</code> are verified clean across all workspace crates and Go packages.
+</li>
+</ul>
+<h2 id="previous-run-after-the-framework-round-verified-2026-10-01-18521855">Previous run: after the framework round (verified, 2026-10-01 18:52–18:55) <a class="anchor" href="#previous-run-after-the-framework-round-verified-2026-10-01-18521855" aria-label="Link to this section">#</a></h2>
+<p>Each crate ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree (<code>target-baseline/run_integration2.sh</code>, logs in <code>target-baseline/logs-integration-2/</code>). The script first ran <code>cargo build --workspace --release --all-targets</code>, which exited 0. Load average was 12–17. Afterwards, the Metal cached-attention CPU-parity test (G4) was un-ignored and passes (<code>ojas-metal --test kv_cache</code>: 8 passed).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>crate</th><th>previous run (below)</th><th>this run</th></tr></thead>
+<tbody>
+<tr><td>ojas-core</td><td>55, 1 ignored</td><td>93, 2 ignored</td></tr>
+<tr><td>ojas-cpu</td><td>106, 5 ignored</td><td>189, 10 ignored</td></tr>
+<tr><td>ojas-simd</td><td>20</td><td>20</td></tr>
+<tr><td>ojas-autograd</td><td>33</td><td>67</td></tr>
+<tr><td>ojas-io</td><td>42</td><td>66</td></tr>
+<tr><td>ojas-data</td><td>26</td><td>26</td></tr>
+<tr><td>ojas-infer</td><td>31</td><td>35</td></tr>
+<tr><td>ojas-oracle</td><td>6</td><td>6</td></tr>
+<tr><td>ojas-device</td><td>18</td><td>18</td></tr>
+<tr><td>ojas-kernels</td><td>9</td><td>11</td></tr>
+<tr><td>ojas-capi</td><td>43</td><td>44</td></tr>
+<tr><td>ojas-gusset-engine</td><td>0</td><td>0 (its tests are the Go suite)</td></tr>
+<tr><td>ojas-metal</td><td>95</td><td>129, 1 ignored (now 130, 0 ignored, after G4 was un-ignored)</td></tr>
+<tr><td>ojas-wgpu</td><td>66, 1 ignored</td><td>115, 3 ignored</td></tr>
+<tr><td>ojas-qwen35 (new member)</td><td>—</td><td>23, 8 ignored (GPU parity; the Lappi session ran 7 of them: 6 pass, <code>gpu_real_2b</code> faults at its gradient read-back)</td></tr>
+<tr><td>ojas-cuda, ojas-hip (features off)</td><td>8 + 8</td><td>8 + 8</td></tr>
+<tr><td><strong>total</strong></td><td><strong>566 passed, 7 ignored</strong></td><td><strong>858 passed, 0 failed, 26 ignored</strong></td></tr>
+</tbody></table></div>
+<p><strong>What changed:</strong></p>
+<ul>
+<li><strong>Framework trait methods T1–T6:</strong> <code>sync</code>, <code>accumulate_grad</code>, the fused <code>linear_cross_entropy_mean</code> with a two-dimensional <code>CeChunk</code>, <code>cached_attention_forward</code>, <code>kv_cache_write</code>, and <code>Backend</code> for <code>&amp;B</code> and <code>Arc&lt;B&gt;</code>. Each is native on CPU, Metal and wgpu.
+</li>
+<li><strong>Tape (A1–A3):</strong> <code>backward_seeded</code>, <code>take_grad</code> and a fused head.
+</li>
+<li><strong>Shape contract:</strong> <code>ojas_core::shapes</code> (<a href="shape-contract.html"><code>shape-contract.md</code></a>).
+</li>
+<li><strong>ojas-io:</strong> streaming safetensors writing and <code>replace_dir_with</code>.
+</li>
+<li><strong>Metal:</strong> faster AdamW, RMSNorm and CE kernels.
+</li>
+<li><strong>wgpu:</strong> tiled FlashAttention-2 and a 128-tile GEMM.
+</li>
+<li><strong>Bugs fixed, each with a test the lane reports failed before the fix.</strong> The tests pass in this run; I did not re-run the pre-fix code:
+<ul>
+<li>wgpu <code>Backend::sync</code> was not overridden, so deferred faults were dropped;
+</li>
+<li>wgpu device loss was not named;
+</li>
+<li>wgpu <code>clip_grad_norm</code> could return another caller&#39;s norm under concurrency;
+</li>
+<li>the Tape dropped its seed on device backends;
+</li>
+<li>the safetensors writer could produce headers its own reader refused;
+</li>
+<li>a CPU pool worker held a finished batch&#39;s buffers past <code>Pool::run</code>.
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="previous-run-after-the-parity-and-hardening-lanes-verified-2026-10-01">Previous run: after the parity and hardening lanes (verified, 2026-10-01) <a class="anchor" href="#previous-run-after-the-parity-and-hardening-lanes-verified-2026-10-01" aria-label="Link to this section">#</a></h2>
+<p>Each crate ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree (<code>target-baseline/run_integration.sh</code>, logs in <code>target-baseline/logs-integration/</code>). ojas-metal was re-run with <code>--no-fail-fast</code> after the tiny-step head-dim fix. Load average was 16–36. The plan and findings are in <a href="pytorch-parity-plan.html"><code>pytorch-parity-plan.md</code></a>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>crate</th><th>before (per crate, same method)</th><th>after</th></tr></thead>
+<tbody>
+<tr><td>ojas-core</td><td>37</td><td>55 passed, 1 ignored</td></tr>
+<tr><td>ojas-cpu</td><td>89, 3 ignored</td><td>106, 5 ignored</td></tr>
+<tr><td>ojas-simd</td><td>20</td><td>20</td></tr>
+<tr><td>ojas-autograd</td><td>28</td><td>33</td></tr>
+<tr><td>ojas-io</td><td>36</td><td>42</td></tr>
+<tr><td>ojas-data</td><td>21</td><td>26</td></tr>
+<tr><td>ojas-infer</td><td>14</td><td>31</td></tr>
+<tr><td>ojas-oracle</td><td>6</td><td>6</td></tr>
+<tr><td>ojas-device</td><td>18</td><td>18</td></tr>
+<tr><td>ojas-kernels</td><td>8</td><td>9</td></tr>
+<tr><td>ojas-capi</td><td>41</td><td>43</td></tr>
+<tr><td>ojas-gusset-engine</td><td>0</td><td>0</td></tr>
+<tr><td>ojas-metal</td><td>66</td><td>95</td></tr>
+<tr><td>ojas-wgpu</td><td>45, 1 ignored</td><td>66, 1 ignored</td></tr>
+<tr><td>ojas-cuda, ojas-hip (features off)</td><td>8 + 8</td><td>8 + 8</td></tr>
+<tr><td><strong>total</strong></td><td><strong>445</strong></td><td><strong>566 passed, 0 failed, 7 ignored</strong></td></tr>
+</tbody></table></div>
+<p><strong>Re-run after the <code>CpuBackend</code> default became <code>Numerics::Fast</code></strong> (verified, 17:30; another session made the change with the user&#39;s approval). The non-GPU crates passed: 401, 0 failed, 10 ignored. The changed counts include that session&#39;s new tests:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>crate</th><th>count</th></tr></thead>
+<tbody>
+<tr><td>ojas-core</td><td>63, 2 ignored</td></tr>
+<tr><td>ojas-cpu</td><td>133, 8 ignored</td></tr>
+<tr><td>ojas-autograd</td><td>36</td></tr>
+<tr><td>ojas-infer</td><td>32</td></tr>
+</tbody></table></div>
+<p>The rest are unchanged. Logs are in <code>target-baseline/logs-postflip/</code>. The ojas-capi, ojas-metal and ojas-wgpu re-runs after the flip belong to that session and are not recorded here.</p>
+<p><strong>GPU against torch MPS:</strong> see <a href="bench-gpu-vs-torch.html"><code>bench-gpu-vs-torch.md</code></a>. ojas is slower on most rows. In round 3, a nanolab block forward + backward is 0.92× torch on Metal (mixed) and 0.41× on wgpu. Metal leads on <code>clip_grad_norm</code> (7.2×), <code>adamw_full</code> (1.55×), SDPA backward (1.5–1.6×) and <code>cross_entropy_fwd</code> (3.6×). Round 3 ran on a GPU that read 100% busy throughout, so every row fails the spread gate and only direction is verified. Round 2&#39;s four Metal &#34;regressions&#34; were noise: an interleaved A/B against ed17286 puts the minimums within 0–5%. The Metal per-op fixed cost (a median of 1–2 ms for sub-millisecond ops) was a 1 ms sleep poll in tessl&#39;s <code>synchronize</code>. A Condvar wait removed it: in an interleaved A/B, an op plus sync went from a 1.43 ms to a 0.165 ms median. After the fix, Metal <code>permute</code> is 1.13× torch, <code>rope</code> 3.5–3.9×, and <code>decode_attn</code> 0.96×. The elementwise gap was standalone finite-check passes (62% of each op&#39;s GPU time). They now read 4 floats per thread, and silu, mul, add and value-residual check inside their own kernels. Interleaved A/B: silu, mul and add are 40–45% faster, and these ops are now 0.83–1.63× torch (against round 4&#39;s torch minimums, not paired). In round 5, the Metal block forward + backward is 1.07× torch. The LM head was 0.48× because tessl&#39;s exact-f32 GEMM re-read the 154 MB weight from DRAM for every 32-row tile row. tessl now walks any B of 32 MiB or more in column panels. In an interleaved A/B, <code>linear_lmhead_fwd</code> went from 134 to 68 ms and <code>linear_ce_c4096x50304</code> from 305 to 239 ms, with identical parity. The LM head&#39;s input gradient (NN with K = 50304) now runs as zero-then-accumulate K partitions in tessl: 99.8 → 45.4 ms in a paired GEMM A/B. Unpaired end to end, <code>linear_lmhead_bwd</code> went from 157 to 109 ms (about torch parity) and <code>linear_ce_c4096x50304</code> from 239 to 166 ms.</p>
+<p>The per-crate total differs from the workspace run below because of feature unification. <code>ojas-simd</code> runs 20 tests alone and 24 under <code>--workspace</code>, where <code>ojas-cpu</code> turns on its <code>accelerate</code> feature. 445 + 4 = 449.</p>
+<p>Go: 27 passed. The infer lane ran it against a <code>libgusset</code> built into <code>target-lane-infer</code>. Some ojas-core tests come from a concurrent session&#39;s decode-path work (<code>ojas-core/tests/tensor_decode_contract.rs</code>, <code>bench_decode.rs</code>).</p>
+<p><strong>What changed:</strong></p>
+<ul>
+<li><code>Backend::permute</code> on CPU, Metal, wgpu and the <code>Tape</code>, so multi-head attention trains through autograd (gradchecked H=3 block).
+</li>
+<li>Metal causal attention is a tiled TensorOps forward plus a FlashAttention-2 backward at D ≤ 128 (<code>METAL_MAX_HEAD_DIM</code> = 128).
+</li>
+<li>Muon NS5 on wgpu.
+</li>
+<li>CPU optimizer steps are all-or-nothing.
+</li>
+<li>CPU input copies are charged to <code>Budget</code>. (Superseded 2026-10-02: operands are read in place and never copied or charged; <code>ojas-cpu/README.md</code> point 6.)
+</li>
+<li>wgpu names the first faulting op, and a fault survives a failed read.
+</li>
+<li>NaN-safe parity comparators.
+</li>
+<li><code>ojas-infer</code> runs the nanolab block (QK-norm, RoPE, value residual, gate, GQA) with sampling.
+</li>
+<li>BF16/F16 safetensors.
+</li>
+<li>A seeded, resumable batch sampler.
+</li>
+<li>Typed C-ABI error kinds.
+</li>
+</ul>
+<p>The sections below are the earlier record from the same day. Where they disagree with this table (counts, Metal head dim 64, wgpu Muon unsupported, no sampling), this table is current.</p>
+<h2 id="workspace-test-suite-results-earlier-the-same-day">Workspace Test Suite Results (earlier the same day) <a class="anchor" href="#workspace-test-suite-results-earlier-the-same-day" aria-label="Link to this section">#</a></h2>
+<p>On 2026-10-01, <code>cargo test --workspace --release -- --test-threads=1</code> finished in 57s: <strong>449 passed, 0 failed, 4 ignored</strong>. Doc-tests ran and contained no tests. The 4 ignored are <code>ojas-cpu</code> benches (2), one exact-golden case (1), and the wgpu bench (1). CUDA and HIP suites are the default build: features <code>cuda</code> and <code>hip</code> were not enabled, and no device kernel ran.</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph SuiteSummary[&#34;Workspace Test Execution (2026-10-01)&#34;]
+        Total[&#34;449 Passed | 0 Failed | 4 Ignored&#34;]
+    end
+
+    subgraph Backends[&#34;Hardware Compute Backends&#34;]
+        CPU[&#34;ojas-cpu: 89 passed, 3 ignored&#34;]
+        SIMD[&#34;ojas-simd: 24 passed&#34;]
+        Metal[&#34;ojas-metal: 66 passed&#34;]
+        WGPU[&#34;ojas-wgpu: 45 passed, 1 ignored&#34;]
+        Kernels[&#34;ojas-kernels: 8 passed&#34;]
+    end
+
+    subgraph CoreAndIO[&#34;Core &amp; Subsystems&#34;]
+        Core[&#34;ojas-core: 37 passed&#34;]
+        IO[&#34;ojas-io: 36 passed&#34;]
+        Autograd[&#34;ojas-autograd: 28 passed&#34;]
+        Data[&#34;ojas-data: 21 passed&#34;]
+        Infer[&#34;ojas-infer: 14 passed&#34;]
+        Device[&#34;ojas-device: 18 passed&#34;]
+        Oracle[&#34;ojas-oracle: 6 passed&#34;]
+    end
+
+    subgraph FFIAndProbes[&#34;FFI &amp; Probes&#34;]
+        CAPI[&#34;ojas-capi: 41 passed&#34;]
+        CUDA[&#34;ojas-cuda: 8 passed (feature off)&#34;]
+        HIP[&#34;ojas-hip: 8 passed (feature off)&#34;]
+    end
+
+    SuiteSummary --&gt; Backends
+    SuiteSummary --&gt; CoreAndIO
+    SuiteSummary --&gt; FFIAndProbes</pre></figure>
+<div class="table-wrap"><table>
+<thead><tr><th>Crate</th><th style="text-align:right">Passed</th><th style="text-align:right">Failed</th><th style="text-align:right">Ignored</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><a href="crate-ojas-core.html"><code>ojas-core</code></a></td><td style="text-align:right">37</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Invariants, byte-offsets, memory budget</td></tr>
+<tr><td><a href="crate-ojas-cpu.html"><code>ojas-cpu</code></a></td><td style="text-align:right">89</td><td style="text-align:right">0</td><td style="text-align:right">3</td><td>Exact &amp; Fast packed GEMM, persistent thread pool</td></tr>
+<tr><td><a href="crate-ojas-simd.html"><code>ojas-simd</code></a></td><td style="text-align:right">24</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>NEON, AVX2, Accelerate BLAS</td></tr>
+<tr><td><a href="crate-ojas-metal.html"><code>ojas-metal</code></a></td><td style="text-align:right">66</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Device-resident Metal 4 training step</td></tr>
+<tr><td><a href="crate-ojas-wgpu.html"><code>ojas-wgpu</code></a></td><td style="text-align:right">45</td><td style="text-align:right">0</td><td style="text-align:right">1</td><td>Portable WGSL compute, whole-vec4 stores</td></tr>
+<tr><td><a href="crate-ojas-kernels.html"><code>ojas-kernels</code></a></td><td style="text-align:right">8</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Grid geometry, math shaders, parity harness</td></tr>
+<tr><td><a href="crate-ojas-autograd.html"><code>ojas-autograd</code></a></td><td style="text-align:right">28</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Dynamic tape, device tape, f64 gradcheck</td></tr>
+<tr><td><a href="crate-ojas-io.html"><code>ojas-io</code></a></td><td style="text-align:right">36</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Safetensors, Checkpoint v1</td></tr>
+<tr><td><a href="crate-ojas-data.html"><code>ojas-data</code></a></td><td style="text-align:right">21</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Token streaming, counter-based RNG</td></tr>
+<tr><td><a href="crate-ojas-infer.html"><code>ojas-infer</code></a></td><td style="text-align:right">14</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>KV cache, greedy decode, logit validator</td></tr>
+<tr><td><a href="crate-ojas-capi.html"><code>ojas-capi</code></a></td><td style="text-align:right">41</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>C-ABI engine, session store, panic boundary</td></tr>
+<tr><td><a href="crate-ojas-gusset-engine.html"><code>ojas-gusset-engine</code></a></td><td style="text-align:right">0</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Umbrella staticlib (libgusset.a)</td></tr>
+<tr><td><a href="crate-ojas-device.html"><code>ojas-device</code></a></td><td style="text-align:right">18</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Host CPU probe, ResourcePolicy</td></tr>
+<tr><td><a href="crate-ojas-oracle.html"><code>ojas-oracle</code></a></td><td style="text-align:right">6</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>IEEE-754 f64 analytical fixtures</td></tr>
+<tr><td><a href="crate-ojas-cuda.html"><code>ojas-cuda</code></a></td><td style="text-align:right">8</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>One affine kernel behind feature cuda</td></tr>
+<tr><td><a href="crate-ojas-hip.html"><code>ojas-hip</code></a></td><td style="text-align:right">8</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Copy probe behind feature hip</td></tr>
+<tr><td><strong>Total Workspace</strong></td><td style="text-align:right"><strong>449</strong></td><td style="text-align:right"><strong>0</strong></td><td style="text-align:right"><strong>4</strong></td><td><strong>All passing</strong></td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="in-process-go-client-test-suite">In-Process Go Client Test Suite <a class="anchor" href="#in-process-go-client-test-suite" aria-label="Link to this section">#</a></h2>
+<p><strong>Verified.</strong> <code>cargo build -p ojas-gusset-engine</code> then:</p>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfig -count=1 -timeout 15m ./...</code></pre></div>
+<p>Exited 0 with <strong>27 tests passed</strong> (total runtime 3.417s with <code>-a</code>).</p>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>The <code>-a</code> flag is required because Go&#39;s build cache does not track changes to external archives like <code>libgusset.a</code>. <code>go/gusset.pc</code> links Apple frameworks (<code>-framework Accelerate</code>, <code>-framework Metal</code>); on Linux machines point <code>PKG_CONFIG_PATH</code> to <code>go/linux</code>.</p>
+</aside>
+<hr>
+<h2 id="component-implementation-status">Component Implementation Status <a class="anchor" href="#component-implementation-status" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph Backends[&#34;Hardware Compute Backends&#34;]
+        direction TB
+        b1[&#34;ojas-cpu CpuBackend (Exact, or Fast with Accelerate)&#34;]
+        b2[&#34;ojas-metal MetalBackend (every op, device-resident, Fast)&#34;]
+        b3[&#34;ojas-wgpu WgpuBackend (device-resident WGSL, Fast)&#34;]
+    end
+
+    subgraph Host[&#34;Host-Side Subsystems&#34;]
+        direction TB
+        h1[&#34;ojas-core (Tensor host &amp; device, Budget, Numerics)&#34;]
+        h2[&#34;ojas-autograd Tape (Reverse-mode AD, device tape)&#34;]
+        h3[&#34;ojas-infer (KV cache, greedy decode, CPU)&#34;]
+        h4[&#34;ojas-capi + go/ (In-process Go &amp; C-ABI bridge)&#34;]
+        h5[&#34;ojas-io, ojas-data, ojas-oracle&#34;]
+    end
+
+    subgraph Probes[&#34;Hardware Probes (Not Backends)&#34;]
+        direction TB
+        p1[&#34;ojas-cuda (one affine kernel, feature cuda)&#34;]
+        p2[&#34;ojas-hip (copy probe, feature hip)&#34;]
+        p3[&#34;ojas-device (kinds, system profile, ResourcePlan, bandwidth)&#34;]
+    end
+
+    Host --&gt; Backends</pre></figure>
+<hr>
+<h2 id="defect-countermeasures--hardening-invariants">Defect Countermeasures &amp; Hardening Invariants <a class="anchor" href="#defect-countermeasures--hardening-invariants" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph InvariantChecks[&#34;Defensive Hardening Guarantees&#34;]
+        C1[&#34;CE dh offset preservation: 16 canary padding elements (DH_PAD)&#34;]
+        C2[&#34;AdamW step counter overflow: next_step checked_add refuses u64::MAX&#34;]
+        C3[&#34;All-ignored cross-entropy: Zero valid targets returns Err(NonFinite)&#34;]
+        C4[&#34;AdamW non-finite store: Aborts before touching moment buffers&#34;]
+        C5[&#34;Metal head dim limit: Dimensions &gt; 64 produce UnsupportedHeadDim&#34;]
+        C6[&#34;Safetensors parser: Capped 100MB header, max depth 64, no overlaps&#34;]
+    end</pre></figure>
+<ul>
+<li><strong>CE <code>dh</code> offset preservation (verified):</strong> <code>ojas-metal</code> reserves 16 canary padding elements (<code>DH_PAD</code>) before the <code>dh</code> slice; verified by <code>ce_nonzero_dh_offset_keeps_prefix</code> (<code>ojas-metal/src/gpu.rs</code>).
+</li>
+<li><strong>AdamW step counter overflow (verified):</strong> <code>next_step</code> uses <code>checked_add</code> and refuses <code>u64::MAX</code>; verified by <code>step_count_at_u64_max_is_refused</code> (<code>ojas-metal/src/gpu.rs</code>).
+</li>
+<li><strong>All-ignored cross entropy (verified):</strong> Mean loss over zero valid targets returns <code>OjasError::NonFinite</code>; verified by <code>all_ignored_cross_entropy_is_nonfinite_not_a_zero_loss</code> (<code>ojas-cpu/tests/redteam.rs</code>).
+</li>
+<li><strong>AdamW non-finite store protection (verified):</strong> Non-finite updates are rejected before moments change; verified by <code>adamw_refuses_a_nonfinite_f32_store_without_touching_moments</code> (<code>ojas-cpu/tests/redteam.rs</code>).
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/status.md" rel="noopener"><code>docs/status.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="pytorch-parity-plan.html" rel="prev"><span>Previous</span>PyTorch parity plan</a>
+        <a href="typed-storage-plan.html" rel="next" class="next"><span>Next</span>Typed Host Storage: Plan</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#latest-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04">Latest run: kernel hardening, SIMD vectorization &amp; backend parity (verified, 2026-10-04)</a></li>
+<li><a href="#previous-run-adaptive-resources--kernel-optimizations-verified-2026-10-02">Previous run: adaptive resources &amp; kernel optimizations (verified, 2026-10-02)</a></li>
+<li><a href="#previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35)</a></li>
+<li><a href="#previous-run-after-the-framework-round-verified-2026-10-01-18521855">Previous run: after the framework round (verified, 2026-10-01 18:52–18:55)</a></li>
+<li><a href="#previous-run-after-the-parity-and-hardening-lanes-verified-2026-10-01">Previous run: after the parity and hardening lanes (verified, 2026-10-01)</a></li>
+<li><a href="#workspace-test-suite-results-earlier-the-same-day">Workspace Test Suite Results (earlier the same day)</a></li>
+<li><a href="#in-process-go-client-test-suite">In-Process Go Client Test Suite</a></li>
+<li><a href="#component-implementation-status">Component Implementation Status</a></li>
+<li><a href="#defect-countermeasures--hardening-invariants">Defect Countermeasures &amp; Hardening Invariants</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hardware Backends &amp; Device Architecture · ojas reference</title>
+  <meta name="description" content="This machine is an Apple M5 Pro (system_profiler: Metal 4, 20 GPU cores, vendor Apple 0x106b). Neither nvcc nor /opt/rocm is present.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/backends.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/backends.html">
+  <meta property="og:title" content="Hardware Backends &amp; Device Architecture · ojas reference">
+  <meta property="og:description" content="This machine is an Apple M5 Pro (system_profiler: Metal 4, 20 GPU cores, vendor Apple 0x106b). Neither nvcc nor /opt/rocm is present.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html" class="current" aria-current="page">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="hardware-backends--device-architecture">Hardware Backends &amp; Device Architecture <a class="anchor" href="#hardware-backends--device-architecture" aria-label="Link to this section">#</a></h1>
+<p>Survey date: 2026-10-01.</p>
+<p>This machine is an <strong>Apple M5 Pro</strong> (<code>system_profiler</code>: Metal 4, 20 GPU cores, vendor Apple <code>0x106b</code>). Neither <code>nvcc</code> nor <code>/opt/rocm</code> is present.</p>
+<hr>
+<h2 id="who-selects-the-device">Who Selects the Device <a class="anchor" href="#who-selects-the-device" aria-label="Link to this section">#</a></h2>
+<p>There is no device router in Rust. <code>ojas-device</code> defines the <code>Device</code> kinds (<code>Cpu</code>, <code>Metal</code>, <code>Cuda</code>, <code>Hip</code>, <code>Vulkan</code>), <code>require_kind</code> (returns <code>DeviceMismatch</code> when two kinds differ), <code>probe()</code> (host CPU only; GPU probes live in the crates that link those runtimes), and memory planning (<code>ResourcePlan</code>, <code>ResourcePolicy</code>). It does not open a GPU and does not choose a backend.</p>
+<p>A caller chooses a backend by constructing it in Rust (<code>CpuBackend</code>, <code>MetalBackend</code>, <code>WgpuBackend</code>), or through the Go <code>LoadModel(ctx, path, LoadOptions{Device: ...})</code> or <code>NewModel</code> call, which <code>ojas-capi</code> turns into a session on one backend at load time:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    LoadOn[&#34;Go LoadModel(ctx, path, LoadOptions)&#34;] --&gt; Kind{&#34;opts.Device&#34;}
+
+    Kind --&gt;|DeviceCPU| CPU[&#34;CpuBackend (1 thread)&#34;]
+    Kind --&gt;|&#34;DeviceCPUParallel (threads 1..=256; 0 or &gt;256 refused)&#34;| CPUP[&#34;CpuBackend, threads&#34;]
+    Kind --&gt;|DeviceCPUAuto| CPUA[&#34;CpuBackend (threads from ResourcePlan thread_ceiling)&#34;]
+    Kind --&gt;|DeviceMetal| Metal{&#34;Metal device opens?&#34;}
+    Kind --&gt;|DeviceWgpu| Wgpu{&#34;wgpu adapter opens?&#34;}
+
+    Metal --&gt;|Yes| MetalB[&#34;MetalBackend session\nTrainStep / GenerateIDs on device&#34;]
+    Metal --&gt;|No| MetalErr[&#34;Load returns explicit device error\n(NO silent CPU session)&#34;]
+    Wgpu --&gt;|Yes| WgpuB[&#34;WgpuBackend session\nTrainStep / GenerateIDs on device&#34;]
+    Wgpu --&gt;|No| WgpuErr[&#34;Load returns explicit wgpu error\n(NO silent CPU session)&#34;]</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Zero Silent Fallback Policy:</strong> CUDA and HIP have no Go device selector and do not implement <code>Backend</code>. If Metal or wgpu cannot open their respective hardware contexts, <code>LoadModel</code> or <code>NewModel</code> returns an immediate error—<strong>it will never silently substitute a CPU session</strong>.</p>
+<p><strong>CPU Auto Thread Selection:</strong> <code>DeviceCPUAuto</code> automatically queries <code>ResourcePlan::thread_ceiling</code> (usable host CPUs capped by cgroup CPU quota) to configure the CPU thread pool. If the host CPU count is unreadable, load is refused rather than guessed.</p>
+</aside>
+<p>On a GPU session, <code>TrainStep</code> reads back only the loss; the device tape keeps activations resident. <code>to_host</code> reads in 1 MiB pieces and checkpoint load in 64 KiB pieces, so the peak is the window plus one piece (<a href="typed-storage-plan.html"><code>typed-storage-plan.md</code></a>). Every backend validates shapes through one shared contract before reserving budget (<a href="shape-contract.html"><code>shape-contract.md</code></a>), and Metal reports device faults at the next <code>sync</code> like wgpu (<a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>). Every backend implements <code>optimizer_scratch_bytes</code> so training preflights memory requirements before optimizer updates take place.</p>
+<p>Device tensors: <code>Tensor::from_device</code> wraps a backend buffer, <code>to_host</code> copies it back and is counted by <code>device_readbacks()</code>, and <code>device_buffer_mut</code> requires sole ownership. The default <code>Backend::upload</code> returns <code>Unsupported</code> for a host tensor on a non-CPU backend, so a backend that has not implemented upload does not silently compute on the host.</p>
+<hr>
+<h2 id="memory-residency--zero-copy-lifecycle">Memory Residency &amp; Zero-Copy Lifecycle <a class="anchor" href="#memory-residency--zero-copy-lifecycle" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph HostRAM[&#34;Host RAM&#34;]
+        HostTen[&#34;Host Tensor (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;]
+        Audit[&#34;device_readbacks() Audit Counter&#34;]
+    end
+
+    subgraph GPUMem[&#34;GPU Unified / VRAM&#34;]
+        DeviceTen[&#34;Device Tensor (DeviceBuffer)&#34;]
+    end
+
+    HostTen --&gt;|&#34;Backend::upload() [Explicit]&#34;| DeviceTen
+    DeviceTen --&gt;|&#34;Tensor::to_host() [Counted Transfer]&#34;| HostTen
+    DeviceTen -.-&gt;|Triggered on download| Audit</pre></figure>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>Host tensor accessors (<code>to_f32_vec</code>, <code>as_slice</code>) refuse device-resident tensors immediately rather than reading them back implicitly across the bus. This prevents unmetered PCIe/memory bus bottlenecks from corrupting latency profiles.</p>
+</aside>
+<hr>
+<h2 id="backend-status-2026-10-04-apple-m5-pro">Backend Status (2026-10-04, Apple M5 Pro) <a class="anchor" href="#backend-status-2026-10-04-apple-m5-pro" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Backend</th><th>Implements <code>Backend</code></th><th>Numerics</th><th>Tests</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>CpuBackend</code> (<code>ojas-cpu</code>)</td><td>Yes</td><td><code>Fast</code> default; <code>Exact</code> opt-in</td><td>261 passed, 12 ignored</td><td>Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (<code>FAST_WHOLE_CALL_MACS</code>) dispatch to Accelerate <code>cblas_sgemm</code>; smaller stay on <code>tile_fast</code>. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup</td></tr>
+<tr><td><code>ojas-simd</code></td><td>No (kernels for <code>ojas-cpu</code>)</td><td>—</td><td>36 passed</td><td>NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling</td></tr>
+<tr><td><code>MetalBackend</code> (<code>ojas-metal</code>)</td><td>Yes, every op, device-resident</td><td><code>Fast</code></td><td>136 passed</td><td>Tiled causal attention, head dim above 128 refused. Faults surface at the next <code>sync</code> (<a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>). Attention forward/backward, device-resident training step</td></tr>
+<tr><td><code>WgpuBackend</code> (<code>ojas-wgpu</code>)</td><td>Yes, device-resident</td><td><code>Fast</code>, 1e-4 relative tolerance</td><td>208 passed, 3 ignored</td><td>Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 128 refused. Gradient accumulation (<code>accumulate_grad</code>), KV cache writes, tiled linear cross-entropy (<code>linear_ce</code>), and deferred fault reporting at next <code>sync</code></td></tr>
+<tr><td><code>ojas-kernels</code></td><td>No (shared geometry and sources)</td><td>—</td><td>11 passed</td><td>Launch geometry (<code>gemm_grid</code>, <code>attention_tiles</code>, <code>ATTENTION_MAX_HEAD_DIM</code>), WGSL modules in <code>src/wgsl/</code>, NaN-safe parity harness</td></tr>
+<tr><td><code>ojas-cuda</code></td><td>No</td><td>—</td><td>8 passed (feature off)</td><td>One affine kernel behind <code>--features cuda</code></td></tr>
+<tr><td><code>ojas-hip</code></td><td>No</td><td>—</td><td>8 passed (feature off)</td><td>Copy probe behind <code>--features hip</code>; no kernel</td></tr>
+</tbody></table></div>
+<aside class="alert alert-warning"><p class="alert-title">Warning</p><p>Both <code>MetalBackend</code> and <code>WgpuBackend</code> enforce $d_{\text{head}} \le 128$ for attention operations (<code>METAL_MAX_HEAD_DIM</code>; <code>ATTENTION_MAX_HEAD_DIM</code> for wgpu). A larger head dimension raises <code>OjasError::UnsupportedHeadDim</code> loud and early. The tiny Metal training step in <code>ojas-metal/src/gpu.rs</code> keeps its own limit of 64.</p>
+</aside>
+<hr>
+<h2 id="package-adoption-decisions">Package Adoption Decisions <a class="anchor" href="#package-adoption-decisions" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph Adopted[&#34;Adopted Frameworks&#34;]
+        WGPU[&#34;wgpu (30.0.1)\nPortable compute launcher&#34;]
+        Pollster[&#34;pollster (1.0.1)\nBlocks async adapter acquisition&#34;]
+        Cudarc[&#34;cudarc (0.19.10)\nOptional feature &#39;cuda&#39;&#34;]
+        HipSys[&#34;hip-runtime-sys (0.1.2)\nOptional feature &#39;hip&#39;&#34;]
+        Tessl[&#34;tessl (0.2.0)\nApple Metal 4 training kernels&#34;]
+    end
+
+    subgraph Rejected[&#34;Rejected Frameworks&#34;]
+        Burn[&#34;Burn (~2,900 ms/step vs 56.6 ms/step)&#34;]
+        Candle[&#34;Candle (Avoid heavy generic dependency)&#34;]
+        Cubecl[&#34;CubeCL (Indirect compiler dependency)&#34;]
+        Cust[&#34;Cust (Superseded by cudarc)&#34;]
+        Gorgonia[&#34;Go GPU modules (Keep Gusset C-ABI boundary)&#34;]
+    end</pre></figure>
+<h3 id="adopted">Adopted <a class="anchor" href="#adopted" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Package</th><th>Version</th><th>License</th><th>Role</th><th style="text-align:center">Decision</th><th>Rationale</th></tr></thead>
+<tbody>
+<tr><td><code>wgpu</code></td><td><code>30.0.1</code></td><td>MIT OR Apache-2.0</td><td>Portable compute launcher</td><td style="text-align:center"><strong>Adopt</strong></td><td>Executes portable WGSL across Vulkan, Metal, and DX12.</td></tr>
+<tr><td><code>pollster</code></td><td><code>1.0.1</code></td><td>MIT OR Apache-2.0</td><td>Future blocker</td><td style="text-align:center"><strong>Adopt</strong></td><td>Minimal future executor for <code>request_adapter()</code>.</td></tr>
+<tr><td><code>cudarc</code></td><td><code>0.19.10</code></td><td>MIT OR Apache-2.0</td><td>CUDA driver &amp; NVRTC bindings</td><td style="text-align:center"><strong>Adopt (Feature)</strong></td><td>Modern safe CUDA bindings. Feature <code>cuda</code> off by default.</td></tr>
+<tr><td><code>hip-runtime-sys</code></td><td><code>0.1.2</code></td><td>MIT OR Apache-2.0</td><td>AMD HIP runtime bindings</td><td style="text-align:center"><strong>Adopt (Feature)</strong></td><td>Direct C-ABI bindings for ROCm/HIP. Feature <code>hip</code> off by default.</td></tr>
+<tr><td><code>tessl</code></td><td><code>0.2.0</code></td><td>MIT OR Apache-2.0</td><td>Apple Metal 4 kernels</td><td style="text-align:center"><strong>Keep</strong></td><td>Native Apple Silicon GEMM and normalization.</td></tr>
+</tbody></table></div>
+<h3 id="rejected">Rejected <a class="anchor" href="#rejected" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Package</th><th>Version</th><th>Reason for Rejection</th></tr></thead>
+<tbody>
+<tr><td><code>burn</code></td><td><code>0.21.0</code></td><td>Heavy runtime; measured ~2,900–3,400 ms/step vs 56.6 ms/step native.</td></tr>
+<tr><td><code>candle-core</code></td><td><code>0.11.0</code></td><td>Avoid broad general runtime dependency on performance-critical paths.</td></tr>
+<tr><td><code>cubecl</code></td><td><code>0.10.0</code></td><td>JIT kernel compiler layer; ojas relies on static native Metal &amp; WGSL shaders.</td></tr>
+<tr><td><code>cust</code></td><td><code>0.3.2</code></td><td>Unmaintained legacy rust-cuda bindings; superseded by <code>cudarc</code>.</td></tr>
+<tr><td>Go GPU modules</td><td>—</td><td>Go GPU engines (<code>gorgonia</code>, <code>gocu</code>) add GC interference. The in-process gusset C-ABI boundary keeps compute in Rust.</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="cuda-and-hip-verification-status">CUDA and HIP Verification Status <a class="anchor" href="#cuda-and-hip-verification-status" aria-label="Link to this section">#</a></h2>
+<p><strong>Reported</strong> from an earlier session; not re-run on 2026-10-01.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Check</th><th>Command</th><th>Reported Result</th></tr></thead>
+<tbody>
+<tr><td><strong>CUDA Default</strong></td><td><code>cargo test -p ojas-cuda</code></td><td><strong>Passed:</strong> <code>tests::default_build_reports_not_compiled</code></td></tr>
+<tr><td><strong>CUDA Bindings</strong></td><td><code>cargo check -p ojas-cuda --features cuda</code></td><td><strong>Passed:</strong> Typecheck only (dynamic loading; <code>nvcc</code> absent)</td></tr>
+<tr><td><strong>CUDA Execution</strong></td><td>Kernel launch</td><td><strong>Skipped:</strong> No NVIDIA GPU present</td></tr>
+<tr><td><strong>HIP Default</strong></td><td><code>cargo test -p ojas-hip</code></td><td><strong>Passed:</strong> <code>tests::default_build_reports_not_compiled</code></td></tr>
+<tr><td><strong>HIP Bindings</strong></td><td><code>cargo check -p ojas-hip --features hip</code></td><td><strong>Skipped:</strong> Build stopped in <code>hip-runtime-sys</code> (no <code>/opt/rocm</code>)</td></tr>
+<tr><td><strong>HIP Execution</strong></td><td>Copy probe (there is no HIP kernel)</td><td><strong>Skipped:</strong> <code>--features hip</code> was not built; no <code>/opt/rocm</code> and no AMD GPU</td></tr>
+</tbody></table></div>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/backends.md" rel="noopener"><code>docs/backends.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="architecture.html" rel="prev"><span>Previous</span>ojas Architecture &amp; System Design</a>
+        <a href="checkpoint-v1.html" rel="next" class="next"><span>Next</span>Checkpoint v1 Specification</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#who-selects-the-device">Who Selects the Device</a></li>
+<li><a href="#memory-residency--zero-copy-lifecycle">Memory Residency &amp; Zero-Copy Lifecycle</a></li>
+<li><a href="#backend-status-2026-10-04-apple-m5-pro">Backend Status (2026-10-04, Apple M5 Pro)</a></li>
+<li><a href="#package-adoption-decisions">Package Adoption Decisions</a></li>
+<li class="sub"><a href="#adopted">Adopted</a></li>
+<li class="sub"><a href="#rejected">Rejected</a></li>
+<li><a href="#cuda-and-hip-verification-status">CUDA and HIP Verification Status</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

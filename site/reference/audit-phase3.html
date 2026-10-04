@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phase 3 audit · ojas reference</title>
+  <meta name="description" content="Recorded 2026-10-01. Read-only. No devmap build, no cargo test, no commit. Labels are from this session. devmap dead reports whole-tree freshness as unchecked; freshness below is from devmap status.…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/audit-phase3.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/audit-phase3.html">
+  <meta property="og:title" content="Phase 3 audit · ojas reference">
+  <meta property="og:description" content="Recorded 2026-10-01. Read-only. No devmap build, no cargo test, no commit. Labels are from this session. devmap dead reports whole-tree freshness as unchecked; freshness below is from devmap status.…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html" class="current" aria-current="page">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Audits</p>
+      <article class="prose-ojas">
+<h1 id="phase-3-audit">Phase 3 audit <a class="anchor" href="#phase-3-audit" aria-label="Link to this section">#</a></h1>
+<p>Recorded 2026-10-01. Read-only. No <code>devmap build</code>, no <code>cargo test</code>, no commit. Labels are from this session. <code>devmap dead</code> reports whole-tree freshness as unchecked; freshness below is from <code>devmap status</code>. Rust call resolution is about a quarter of sites on every tree, and every dead-code walk sets <code>walk_incomplete</code>, so a list with no high-confidence row is a lower bound.</p>
+<h2 id="1-index-freshness">1. Index freshness <a class="anchor" href="#1-index-freshness" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Root</th><th>Store</th><th>This session</th><th>Generation</th><th>Rust gross resolution</th><th><code>devmap dead</code></th></tr></thead>
+<tbody>
+<tr><td>ojas</td><td><code>.devcouncil/codeintel/devmap.sqlite</code></td><td>stale on <code>gpu.rs</code> at the first sample and at generation 492; generation 496 then reported fresh</td><td>479, then 492, then 496</td><td>237/1000 at gen 479 (3805 resolved, 12244 unresolved, 2750 explained); 236/1000 at gen 490</td><td>10 rows, all confidence 0.40; <code>truncated</code> false. First walk: 9664 of 13022. Later walk, same ten names: 9769 of 13140</td></tr>
+<tr><td>tessl</td><td><code>.devmap/codeintel/devmap.sqlite</code></td><td>status says fresh</td><td>801</td><td>236/1000 (7709 resolved, 24841 unresolved, 8366 explained)</td><td>7 rows; <code>truncated</code> false; walk 19371 of 36434</td></tr>
+<tr><td>gusset</td><td><code>.devcouncil/codeintel/devmap.sqlite</code></td><td>status says fresh</td><td>804</td><td>219/1000 (1471 resolved, 5243 unresolved, 2265 explained)</td><td>4 rows, all confidence 0.40; <code>truncated</code> false; walk 6131 of 16157</td></tr>
+</tbody></table></div>
+<p><strong>ojas is behind the source.</strong> The first <code>devmap status</code> was not fresh: <code>degraded_reason</code> “source tree differs from the indexed generation”, delta <code>ojas-metal/src/gpu.rs</code>, generation 479. A watcher then advanced the store (485 fresh, 489 stale on <code>README.md</code>, 490 fresh, 492). During that churn an MCP <code>devmap_search</code> returned <code>fts5: corruption found reading blob 10 from table &#34;nodes_fts&#34;</code>. A later CLI search and <code>PRAGMA integrity_check</code> returned <code>ok</code>. A status sample after the source lines below were read is generation 492, not fresh, delta <code>ojas-metal/src/gpu.rs</code> (mtime 2026-10-01 09:39:10). A later sample, still without a rebuild from this audit, is generation 496, <code>is_fresh</code> true, <code>delta</code> null. The citations are the source read, not the span the index stored while the file was moving.</p>
+<p><strong>tessl status says fresh, which is a change from the stale generation 779 recorded in phase 2.</strong> Two status samples this session are generation 801, <code>is_fresh</code> and <code>source_freshness</code> true, <code>delta</code> null. The dirty working tree (including <code>src/nn.rs</code> and <code>tests/flash_attn_rows_h64.rs</code>) has no file newer than the sqlite at 2026-10-01 09:11:11. This audit did not rebuild. A save after that timestamp would put the store behind; it had not done so at these samples.</p>
+<p><strong>gusset is fresh at generation 804</strong>, the same generation as phase 2. Dirty files are not newer than the sqlite at 2026-10-01 00:13:18.</p>
+<h2 id="2-dead-symbols-that-survived-a-second-look">2. Dead symbols that survived a second look <a class="anchor" href="#2-dead-symbols-that-survived-a-second-look" aria-label="Link to this section">#</a></h2>
+<p>None. No confidence-0.90 symbol is dead after a second search plus a source read.</p>
+<p>Ojas and gusset have no row above 0.40. Those rows carry <code>exemption_reason</code> that an unresolved call site names the symbol, so “nothing calls this” is a statement about the resolver. <code>walk_incomplete</code> means further callers may be missing. The one ojas cluster (<code>Parser.array</code>, <code>Parser.object</code>, <code>Parser.value</code> in <code>ojas-io/src/json.rs</code>) is the same 0.40 tier.</p>
+<p>Tessl’s single 0.90 row is live. See section 4.</p>
+<h2 id="3-open-product-gaps">3. Open product gaps <a class="anchor" href="#3-open-product-gaps" aria-label="Link to this section">#</a></h2>
+<h3 id="attention-backward--verified-by-reading-source">Attention backward — verified-by-reading-source <a class="anchor" href="#attention-backward--verified-by-reading-source" aria-label="Link to this section">#</a></h3>
+<p>Two different facts. <code>docs/status.md</code> still says the tiny step has no attention backward at head dim 64. The source of <code>ojas-metal/src/gpu.rs</code> disagrees, and the index is behind that file.</p>
+<p><strong>Tessl still has no head-dim-64 training backward.</strong> <code>kernels/qwen35_attn_bwd.metal:31</code> sets <code>ATTN_BWD_D = 256</code>. The only backward entries are <code>qwen35_attn_bwd_dq_h256_q32_k32_sg4</code>, <code>qwen35_attn_bwd_dk_h256_q32_k32_sg4</code>, and <code>qwen35_attn_bwd_dv_h256_q32_k32_sg4</code> (<code>:267-269</code>), launched from <code>src/attn_train.rs:298-300</code>. <code>ATTN_TRAIN_HEAD_DIM</code> is <code>PREFIX_ATTN_HEAD_DIM</code> (<code>src/attn_train.rs:33</code>), which is <code>256</code> (<code>src/qwen35.rs:2271</code>). A search of <code>kernels/</code> and <code>src/</code> for an h64 backward name returned no match. Forward <code>flash_attn_rows</code> does have a head-dim-64 entry: <code>kernels/flash_attn_rows.metal:235</code> (<code>flash_attn_rows_h64_r8_g8</code>) and <code>src/nn.rs:1684-1685</code>.</p>
+<p><strong>The ojas tiny step now backpropagates head dim 64, on a different kernel.</strong> <code>tiny_train_step</code> calls <code>causal_attn_backward</code> (<code>ojas-metal/src/gpu.rs:549</code>) with <code>head_dim</code> from the tiny shape (<code>:543-548</code>). That function (<code>:734</code>) is exact-f32 GEMM plus <code>ojas_causal_softmax_bwd</code> (<code>:899</code>; kernel <code>ojas-metal/kernels/causal_attn_bwd.metal:52</code>). Limits are head dim 64, seq at most 16, at most two heads (<code>:699-724</code>, <code>HEAD_DIM</code> at <code>:25</code>, <code>MAX_SEQ</code> at <code>:20</code>). The comment at <code>:448-452</code> says <code>qwen35_attn_bwd_*_h256</code> is a <code>32 x 256</code> tile and is not instantiated at 64. <code>METAL_MAX_HEAD_DIM</code> is 64 (<code>ojas-core/src/backend.rs:30</code>). A <code>devmap search</code> for <code>causal_attn_backward</code> in ojas returned <code>total</code> 1, <code>truncated</code> false, span <code>[0, 0]</code>, while status still had <code>gpu.rs</code> dirty. The source lines above are the ones to use.</p>
+<p>Whether that backward matches a reference was not re-run (no <code>cargo test</code>).</p>
+<h3 id="12-layer--768--verified-by-reading-source">12-layer / 768 — verified-by-reading-source <a class="anchor" href="#12-layer--768--verified-by-reading-source" aria-label="Link to this section">#</a></h3>
+<p><code>ojas-nn/src/lib.rs:1-4</code> says the crate is the nanolab-default GPT module and “does not implement a model yet.” The executing tiny step accepts only <code>d_model</code> 128 and <code>n_head</code> 2 (<code>ojas-metal/src/gpu.rs:23-24</code>, <code>:73-80</code>), one pre-norm block, vocab at most 128, seq at most 16 (<code>:20-21</code>, <code>:82-98</code>). The CPU torch fixture is batch 1, seq 4, width 16 (<code>ojas-cpu/tests/torch_ref.rs:59</code>). The 12-layer, width-768 diagram in <code>ojas-nn/README.md</code> is not an implementation. <code>docs/op-coverage.md</code> points at <code>nanolab/config.py</code> for that shape; this session did not open that file (<strong>unverified</strong>).</p>
+<h3 id="cuda-and-hip-not-executed--verified-by-reading-source-for-the-refusal-execution-unverified">CUDA and HIP not executed — verified-by-reading-source for the refusal; execution unverified <a class="anchor" href="#cuda-and-hip-not-executed--verified-by-reading-source-for-the-refusal-execution-unverified" aria-label="Link to this section">#</a></h3>
+<p>Both crates set <code>default = []</code> (<code>ojas-cuda/Cargo.toml:11-13</code>, <code>ojas-hip/Cargo.toml:11-13</code>). With the feature off, <code>CudaDevice::open</code> returns <code>DeviceError::NotCompiled { kind: Device::Cuda }</code> (<code>ojas-cuda/src/lib.rs:32-36</code>) and <code>affine_f32</code> returns the same (<code>:68-73</code>). <code>HipDevice::open</code> returns <code>DeviceError::NotCompiled { kind: Device::Hip }</code> (<code>ojas-hip/src/lib.rs:25-29</code>) and <code>copy_roundtrip</code> returns the same (<code>:45-49</code>). This session did not enable either feature and did not run a device. Kernel execution on NVIDIA or AMD is <strong>unverified</strong>.</p>
+<h3 id="tokenizer-is-twenty-strings--verified-by-reading-source">Tokenizer is twenty strings — verified-by-reading-source <a class="anchor" href="#tokenizer-is-twenty-strings--verified-by-reading-source" aria-label="Link to this section">#</a></h3>
+<p><code>TIKTOKEN_GPT2_BYTE_IDENTITY</code> is <code>&#34;verified-20-strings&#34;</code> (<code>ojas-data/src/bpe.rs:32</code>). The module comment says that is twenty strings against tiktoken 0.12.0 <code>encode_ordinary</code>, not a million-line check (<code>:8-9</code>, <code>:26-31</code>). <code>twenty_gpt2_ids</code> is a 20-element array (<code>:870-892</code>), and the test asserts <code>rows.len() == 20</code> (<code>:941-945</code>). If neither rank-table directory exists, <code>verified_20_strings_match_tiktoken_encode_ordinary</code> returns without an assertion (<code>:910-912</code>).</p>
+<h3 id="one-torch-step-not-fifty--verified-by-reading-source">One torch step, not fifty — verified-by-reading-source <a class="anchor" href="#one-torch-step-not-fifty--verified-by-reading-source" aria-label="Link to this section">#</a></h3>
+<p><code>ojas-cpu/tests/torch_ref.rs:1</code> and <code>:52</code> (<code>one_step_matches_torch_2_13_float32</code>) run one forward, one backward, and one AdamW update (<code>:137-156</code>). The cosine schedule’s horizon is 20 steps; the test reads the multiplier at step 8 (<code>:55-57</code>). There is no 50-step comparison in that file.</p>
+<h2 id="4-what-the-dead-code-list-got-wrong">4. What the dead-code list got wrong <a class="anchor" href="#4-what-the-dead-code-list-got-wrong" aria-label="Link to this section">#</a></h2>
+<p><strong><code>qwen35_residual_add_f32</code> at confidence 0.90 is live.</strong> <code>devmap search</code> on tessl returned that definition only (<code>total</code> 1, <code>truncated</code> false, <code>kernels/qwen35_mlp.metal</code>). The host launches it by name:</p>
+<ul>
+<li><code>src/qwen35.rs:2018</code> — <code>rt.pipeline(&#34;qwen35_residual_add_f32&#34;)</code>
+</li>
+<li><code>tests/qwen35_kernels.rs:1840</code> — the same entry name
+</li>
+</ul>
+<p>The kernel is the residual add. A Metal entry launched by string is invisible to the Rust call graph, which is why the row is high confidence and wrong. The other six tessl rows stay at 0.40 (<code>Acts.new</code>, <code>GdnWrapped.inputs</code>, <code>TesslQwen35.no_pending</code>, <code>Window.check</code>, <code>LayerGrads.parts</code>, and the self-call cluster on <code>TesslQwen35.bank</code>).</p>
+<p><strong><code>GateGrad.all_bits</code> is not a dead function.</strong> It is a 0.40 row on <code>ojas-metal/src/gpu.rs</code>. The method is defined at <code>:2609</code> and called at <code>:2603</code> (<code>g.all_bits()</code>). Same class of resolver miss as the other 0.40 names.</p>
+<h2 id="top-issues">Top issues <a class="anchor" href="#top-issues" aria-label="Link to this section">#</a></h2>
+<ol>
+<li>The ojas index was stale on <code>ojas-metal/src/gpu.rs</code> at generation 479 and again at 492. A search hit for <code>causal_attn_backward</code> has span <code>[0, 0]</code>. A later sample reached generation 496 and reported fresh. Trust the source lines, not that span.
+</li>
+<li>Tessl’s index reports fresh at generation 801. Phase 2’s stale generation 779 is not the current status. Rust resolution is still 236/1000, and the dead walk is incomplete (19371 of 36434).
+</li>
+<li>No high-confidence symbol survived a second look as dead code. <code>qwen35_residual_add_f32</code> is launched from <code>src/qwen35.rs:2018</code>.
+</li>
+<li>Tessl’s training attention backward is head dim 256 only (<code>kernels/qwen35_attn_bwd.metal:31</code>). There is no D=64 backward kernel.
+</li>
+<li>The ojas tiny step does backpropagate head dim 64, with exact GEMM and <code>ojas_causal_softmax_bwd</code>, seq at most 16 (<code>ojas-metal/src/gpu.rs:448-452</code>, <code>:549</code>, <code>:734</code>). That is not the h256 flash backward. <code>docs/status.md</code> still says the step has no head-dim-64 attention backward.
+</li>
+<li>Twelve layers at width 768 are not implemented (<code>ojas-nn/src/lib.rs:4</code>). The tiny step is <code>d_model</code> 128, two heads (<code>ojas-metal/src/gpu.rs:23-24</code>).
+</li>
+<li>CUDA and HIP default to off and return <code>NotCompiled</code>. This session did not execute either device.
+</li>
+<li>The tokenizer check is twenty strings (<code>ojas-data/src/bpe.rs:32</code>, <code>:870</code>), and the CPU torch match is one step (<code>ojas-cpu/tests/torch_ref.rs:52</code>).
+</li>
+</ol>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/audit-phase3.md" rel="noopener"><code>docs/audit-phase3.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="audit-phase2.html" rel="prev"><span>Previous</span>Phase 2 audit</a>
+        <a href="audit-resources.html" rel="next" class="next"><span>Next</span>Resource governor audit</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#1-index-freshness">1. Index freshness</a></li>
+<li><a href="#2-dead-symbols-that-survived-a-second-look">2. Dead symbols that survived a second look</a></li>
+<li><a href="#3-open-product-gaps">3. Open product gaps</a></li>
+<li class="sub"><a href="#attention-backward--verified-by-reading-source">Attention backward — verified-by-reading-source</a></li>
+<li class="sub"><a href="#12-layer--768--verified-by-reading-source">12-layer / 768 — verified-by-reading-source</a></li>
+<li class="sub"><a href="#cuda-and-hip-not-executed--verified-by-reading-source-for-the-refusal-execution-unverified">CUDA and HIP not executed — verified-by-reading-source for the refusal; execution unverified</a></li>
+<li class="sub"><a href="#tokenizer-is-twenty-strings--verified-by-reading-source">Tokenizer is twenty strings — verified-by-reading-source</a></li>
+<li class="sub"><a href="#one-torch-step-not-fifty--verified-by-reading-source">One torch step, not fifty — verified-by-reading-source</a></li>
+<li><a href="#4-what-the-dead-code-list-got-wrong">4. What the dead-code list got wrong</a></li>
+<li><a href="#top-issues">Top issues</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

@@ -34,10 +34,11 @@ magick "$out/icon-512.png" -filter Lanczos -resize 180x180 -alpha off "$out/appl
 
 # 4. docs/ mirrors the one-page site for local previewing.
 cp "$out"/* docs/assets/
-cp site/index.html site/sitemap.xml site/robots.txt site/site.webmanifest docs/
 rm -f docs/why.html docs/benchmarks.html docs/roadmap.html docs/guide/*.html
 if [ -d site/assets/plots ]; then
   mkdir -p docs/assets/plots
   cp site/assets/plots/* docs/assets/plots/
 fi
-cp site/assets/ojas.js site/assets/ojas.css docs/assets/
+# The page, scripts, styles, reference pages, sitemap and search index are
+# mirrored (and verified) by the generator.
+go run scripts/sitegen/main.go

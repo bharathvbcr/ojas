@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-core · ojas reference</title>
+  <meta name="description" content="ojas-core is the foundational crate of the ojas stack. It defines core tensor abstractions, error invariants, memory budgeting, data types, and checkpoint schema structures.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-core.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-core.html">
+  <meta property="og:title" content="ojas-core · ojas reference">
+  <meta property="og:description" content="ojas-core is the foundational crate of the ojas stack. It defines core tensor abstractions, error invariants, memory budgeting, data types, and checkpoint schema structures.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html" class="current" aria-current="page">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-core">ojas-core <a class="anchor" href="#ojas-core" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-core</code> is the foundational crate of the <strong>ojas</strong> stack. It defines core tensor abstractions, error invariants, memory budgeting, data types, and checkpoint schema structures.</p>
+<p>It depends exclusively on the Rust standard library (<code>#![forbid(unsafe_code)]</code>).</p>
+<hr>
+<h2 id="core-abstractions">Core Abstractions <a class="anchor" href="#core-abstractions" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">classDiagram
+    class Tensor {
+        +Arc~Vec~u8~~ bytes
+        +usize byte_offset
+        +Vec~usize~ shape
+        +Vec~usize~ strides
+        +DType dtype
+        +narrow(dim, start, len) Result~Tensor~
+        +as_slice~T~() Result~&amp;[T]~
+        +numel() usize
+        +from_device(buf, shape, dtype) Tensor
+        +to_host(backend) Result~Tensor~
+        +is_device() bool
+    }
+
+    class Budget {
+        +u64 cap_bytes
+        +AtomicU64 live_bytes
+        +AtomicU64 peak_bytes
+        +try_reserve(bytes) Result~Reservation~
+        +check_room(bytes) Result~()~
+        +peak_bytes() u64
+        +reset_peak()
+        +child(cap_bytes) Budget
+        +live_bytes() Result~u64~
+    }
+
+    class Reservation {
+        -usize bytes
+        -Arc~Budget~ budget
+        +drop()
+    }
+
+    class DType {
+        &lt;&lt;enumeration&gt;&gt;
+        F32
+        Bf16
+        F16
+        U32
+        +size_bytes() usize
+    }
+
+    class OjasError {
+        &lt;&lt;enumeration&gt;&gt;
+        CapacityExceeded
+        UnsupportedHeadDim
+        NonFinite
+        OutOfRange
+        ShapeMismatch
+        DeviceMismatch
+        TruncatedCheckpoint
+    }
+
+    Tensor --&gt; DType
+    Budget ..&gt; Reservation : creates
+    Tensor ..&gt; OjasError : returns on invalid view</pre></figure>
+<hr>
+<h2 id="zero-copy-tensor-view-model">Zero-Copy Tensor View Model <a class="anchor" href="#zero-copy-tensor-view-model" aria-label="Link to this section">#</a></h2>
+<p>Tensors track memory via an explicit <code>byte_offset</code> into an underlying <code>Arc&lt;Vec&lt;u8&gt;&gt;</code> or a backend&#39;s device buffer handle. Slicing with <code>narrow()</code> creates a new view without copying bytes:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Storage[&#34;Physical Allocation Buffer (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;]
+        Padding[&#34;Leading Offset [0 .. byte_offset)&#34;]
+        Active[&#34;Active Tensor Elements [byte_offset .. byte_offset + active_bytes)&#34;]
+        Remaining[&#34;Unused Capacity&#34;]
+    end
+
+    subgraph ViewA[&#34;Tensor View A [Batch=2, Seq=16, Dim=64]&#34;]
+        OffsetA[&#34;byte_offset = 0&#34;]
+        ShapeA[&#34;shape = [2, 16, 64]&#34;]
+    end
+
+    subgraph ViewB[&#34;Tensor View B: narrow(1, 4, 8)&#34;]
+        OffsetB[&#34;byte_offset = 4 * 64 * 4 = 1024 bytes&#34;]
+        ShapeB[&#34;shape = [2, 8, 64]&#34;]
+    end
+
+    ViewA --&gt; Active
+    ViewB --&gt; Active</pre></figure>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p>Every offset calculation accounts strictly for <code>dtype.size_bytes()</code>. View bounds are checked before pointer arithmetic to guarantee safe memory access.</p>
+</aside>
+<hr>
+<h2 id="memory-budgeting--capacity-control">Memory Budgeting &amp; Capacity Control <a class="anchor" href="#memory-budgeting--capacity-control" aria-label="Link to this section">#</a></h2>
+<p>All tensor allocations in <code>ojas</code> must secure permits from an explicit <code>Budget</code>. Memory is never silently overcommitted or clamped:</p>
+<figure class="diagram"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; Initialized: Budget#58;#58;new(max_bytes)
+    
+    Initialized --&gt; Active: try_reserve(req) [req &lt;= remaining]
+    Active --&gt; Active: try_reserve(req) [req &lt;= remaining]
+    Active --&gt; Initialized: drop(Reservation) [releases bytes]
+    
+    Initialized --&gt; Rejected: try_reserve(req) [req &gt; remaining]
+    Active --&gt; Rejected: try_reserve(req) [req &gt; remaining]
+    
+    Rejected --&gt; [*]: Returns Err(OjasError#58;#58;CapacityExceeded)</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p>When an allocation request exceeds remaining budget capacity, <code>try_reserve()</code> returns <code>Err(OjasError::CapacityExceeded)</code> immediately. The engine <strong>refuses to silently swap, clamp shapes, or resize limits</strong>.</p>
+<ul>
+<li><strong>Preflight Room Check:</strong> <code>check_room(bytes)</code> verifies whether <code>bytes</code> more would fit without reserving or charging anything. High-level callers use this to fail fast before initiating multi-step operations.
+</li>
+<li><strong>Peak High-Water Mark:</strong> <code>peak_bytes()</code> tracks the highest live allocation recorded since budget creation or the last reset. <code>reset_peak()</code> restarts tracking at the current live bytes, allowing callers (like <code>Trainer::step</code>) to measure exact memory usage per phase.
+</li>
+<li><strong>Hierarchical Child Budgets:</strong> <code>child(cap_bytes)</code> creates scoped sub-budgets that charge parent budgets hierarchically, guaranteeing multi-session bounds within a single global ceiling.
+</li>
+</ul>
+<p><em>Note on infallible allocations:</em> Standard Rust allocations like <code>vec!</code>, <code>format!</code>, and OS thread spawning (<code>thread::spawn</code>) operate outside the software budget and can still abort if the host operating system exhausts physical memory.</p>
+</aside>
+<hr>
+<h2 id="compute-backend-contract-backend">Compute Backend Contract (<code>Backend</code>) <a class="anchor" href="#compute-backend-contract-backend" aria-label="Link to this section">#</a></h2>
+<p>The <code>Backend</code> trait defines the uniform operator interface implemented by compute engines (<code>CpuBackend</code>, <code>MetalBackend</code>, <code>WgpuBackend</code>):</p>
+<ul>
+<li>Forward and backward linear transformations, activations (GELU, SiLU, ReLU), and causal multi-head attention.
+</li>
+<li>Fused head cross-entropy computation (<code>linear_cross_entropy_mean</code>) and key-value cache operations.
+</li>
+<li>In-place optimizer steps: <code>adamw_step</code> and <code>muon_ns5_step</code>.
+</li>
+<li><strong>Optimizer Scratch Sizing:</strong> <code>optimizer_scratch_bytes(kind, rows, cols)</code> reports the exact or bounding scratch memory needed for an optimizer step. This permits training routines to preflight memory before taking steps, preventing out-of-memory errors from poisoning parameter states.
+</li>
+</ul>
+<hr>
+<h2 id="device-tensors--readback-tracking">Device Tensors &amp; Readback Tracking <a class="anchor" href="#device-tensors--readback-tracking" aria-label="Link to this section">#</a></h2>
+<p><code>Tensor::from_device</code> encapsulates device-resident memory handles managed by GPU backends (<code>MetalBackend</code>, <code>WgpuBackend</code>).</p>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    HostMem[&#34;Host Tensor (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;] --&gt;|&#34;Backend::upload()&#34;| DeviceMem[&#34;Device Tensor (DeviceBuffer)&#34;]
+    DeviceMem --&gt;|&#34;Tensor::to_host()&#34;| HostCopy[&#34;Host Tensor Copy&#34;]
+    DeviceMem -.-&gt;|&#34;device_readbacks() counter increments&#34;| Counter[&#34;Readback Audit Counter&#34;]
+    HostCopy --&gt; Counter</pre></figure>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>Host accessors such as <code>.to_f32_vec()</code> or <code>.as_slice::&lt;f32&gt;()</code> <strong>refuse device tensors</strong> rather than triggering an implicit, unmetered readback across PCIe / unified memory buses. Callers must explicitly call <code>.to_host(backend)</code>, which increments the counted readback metric.</p>
+</aside>
+<hr>
+<h2 id="immutable-numerical-invariants">Immutable Numerical Invariants <a class="anchor" href="#immutable-numerical-invariants" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Epsilon Regularization Constants:</strong>
+<ul>
+<li><code>RMS_NORM_EPS = 1e-6</code>: Denominator variance offset in normalization.
+</li>
+<li><code>ADAMW_EPS = 1e-8</code>: Second moment offset added <strong>outside</strong> the square root.
+</li>
+<li><code>CLIP_GRAD_NORM_EPS = 1e-6</code>: Denominator safety offset for global gradient norm clipping. <em>(These constants represent distinct physical dimensions and are never interchanged).</em>
+</li>
+</ul>
+</li>
+</ol>
+<ol>
+<li><strong>Step Counter Arithmetic:</strong> <code>next_step(current)</code> increments training step counters using <code>checked_add</code>, returning <code>OjasError::OutOfRange</code> at <code>u64::MAX</code> rather than silently wrapping to zero.
+</li>
+</ol>
+<ol>
+<li><strong>No Silent Clamping:</strong> Dimensions exceeding kernel capabilities (e.g. $d_{\text{head}} &gt;$ <code>METAL_MAX_HEAD_DIM</code> = 128 on Metal) yield <code>OjasError::UnsupportedHeadDim</code> loud and early.
+</li>
+</ol>
+<ol>
+<li><strong>Cached Finiteness:</strong> <code>Tensor::all_finite_cached(scan)</code> runs a backend&#39;s NaN/infinity scan at most once per storage. A finite result for the whole allocation answers for every view of it until the storage is next written, and every mutable host access resets it. A smaller window is scanned and records nothing. The scan is trusted, so it must check every element with <code>f32_all_finite</code>; debug builds re-check a <code>true</code> for the whole allocation and panic if it was wrong.
+</li>
+</ol>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-core/README.md" rel="noopener"><code>ojas-core/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-capi.html" rel="prev"><span>Previous</span>ojas-capi</a>
+        <a href="crate-ojas-cpu.html" rel="next" class="next"><span>Next</span>ojas-cpu</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#core-abstractions">Core Abstractions</a></li>
+<li><a href="#zero-copy-tensor-view-model">Zero-Copy Tensor View Model</a></li>
+<li><a href="#memory-budgeting--capacity-control">Memory Budgeting &amp; Capacity Control</a></li>
+<li><a href="#compute-backend-contract-backend">Compute Backend Contract (Backend)</a></li>
+<li><a href="#device-tensors--readback-tracking">Device Tensors &amp; Readback Tracking</a></li>
+<li><a href="#immutable-numerical-invariants">Immutable Numerical Invariants</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

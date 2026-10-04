@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audit Close &amp; Liveness Verification · ojas reference</title>
+  <meta name="description" content="Recorded 2026-10-01. Read-only apart from this file. No devmap build, no cargo test, no commit. devmap dead leaves whole-tree freshness unchecked; freshness below is from devmap status --json. Rust c…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/audit-close.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/audit-close.html">
+  <meta property="og:title" content="Audit Close &amp; Liveness Verification · ojas reference">
+  <meta property="og:description" content="Recorded 2026-10-01. Read-only apart from this file. No devmap build, no cargo test, no commit. devmap dead leaves whole-tree freshness unchecked; freshness below is from devmap status --json. Rust c…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html" class="current" aria-current="page">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Audits</p>
+      <article class="prose-ojas">
+<h1 id="audit-close--liveness-verification">Audit Close &amp; Liveness Verification <a class="anchor" href="#audit-close--liveness-verification" aria-label="Link to this section">#</a></h1>
+<p>Recorded 2026-10-01. Read-only apart from this file. No <code>devmap build</code>, no <code>cargo test</code>, no commit. <code>devmap dead</code> leaves whole-tree freshness unchecked; freshness below is from <code>devmap status --json</code>. Rust call resolution is about a quarter of sites on every tree, and every dead-code walk sets <code>walk_incomplete</code>, so a list with no high-confidence row is a lower bound.</p>
+<hr>
+<h2 id="1-index-freshness">1. Index Freshness <a class="anchor" href="#1-index-freshness" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph CodeIntel[&#34;Code Intelligence Stores&#34;]
+        Ojas[&#34;ojas: Gen 885 (Fresh)\nGross: 235/1000 | Net: 286/1000&#34;]
+        Tessl[&#34;tessl: Gen 846 (Fresh)\nGross: 236/1000 | Net: 318/1000&#34;]
+        Gusset[&#34;gusset: Gen 804 (Fresh)\nGross: 219/1000 | Net: 330/1000&#34;]
+    end</pre></figure>
+<div class="table-wrap"><table>
+<thead><tr><th>Root</th><th>Store</th><th>CLI status</th><th>Generation</th><th>Rust resolution (resolved / unresolved / explained, gross per 1000)</th><th><code>devmap dead</code></th></tr></thead>
+<tbody>
+<tr><td><strong>ojas</strong></td><td><code>.devcouncil/codeintel/devmap.sqlite</code></td><td>fresh (<code>is_fresh</code>, <code>source_freshness</code>, <code>rebuild_required</code> false, <code>degraded_reason</code> null)</td><td>885</td><td>4426 / 14385 / 3379, gross 235, net 286</td><td>10 rows, all confidence 0.40; <code>truncated</code> false; walk 11217 of 15484</td></tr>
+<tr><td><strong>tessl</strong></td><td><code>.devmap/codeintel/devmap.sqlite</code></td><td>fresh (same flags)</td><td>846</td><td>7793 / 25160 / 8507, gross 236, net 318</td><td>6 rows; <code>truncated</code> false; walk 19549 of 36753</td></tr>
+<tr><td><strong>gusset</strong></td><td><code>.devcouncil/codeintel/devmap.sqlite</code></td><td>fresh (same flags)</td><td>804</td><td>1471 / 5243 / 2265, gross 219, net 330</td><td>4 rows, all confidence 0.40; <code>truncated</code> false; walk 6131 of 16157</td></tr>
+</tbody></table></div>
+<p>The sqlite for ojas has max generation id 885 (file mtime 2026-10-01 12:03:46), which matches the CLI. A plugin <code>devmap_status</code> call returned generation 4, 132 nodes, and <code>is_fresh</code> false. That envelope does not match the file, so this note follows the CLI. <code>rebuild_required</code> was false, and this session did not rebuild.</p>
+<p>Tessl and gusset status samples are fresh. Phase 2’s stale tessl generation 779 is not the current CLI status.</p>
+<hr>
+<h2 id="2-dead-symbols">2. Dead Symbols <a class="anchor" href="#2-dead-symbols" aria-label="Link to this section">#</a></h2>
+<p>None confirmed. No confidence-0.90 symbol is dead after a second search plus a source read.</p>
+<p>Ojas and gusset have no row above 0.40. Those rows carry <code>exemption_reason</code> that an unresolved call site names the symbol, so “nothing calls this” is a statement about the resolver. <code>walk_incomplete</code> means further callers may be missing. The ojas cluster (<code>Parser.array</code>, <code>Parser.object</code>, <code>Parser.value</code> in <code>ojas-io/src/json.rs</code>) is the same 0.40 tier.</p>
+<p>Tessl’s single 0.90 row, <code>qwen35_residual_add_f32</code> in <code>kernels/qwen35_mlp.metal</code>, is live. <code>devmap search</code> returned that definition only (<code>total</code> 1, <code>truncated</code> false, span 56–71). The host launches it by string, which the Rust call graph does not see:</p>
+<ul>
+<li><code>src/qwen35.rs:2018</code> — <code>rt.pipeline(&#34;qwen35_residual_add_f32&#34;)</code>
+</li>
+<li><code>tests/qwen35_kernels.rs:1840</code> — the same entry name
+</li>
+</ul>
+<hr>
+<h2 id="3-open-architectural--implementation-items">3. Open Architectural &amp; Implementation Items <a class="anchor" href="#3-open-architectural--implementation-items" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Items[&#34;Open Audit Items&#34;]
+        I1[&#34;CPU Larger Step: ~0.46 ms vs Torch ~0.46 ms\n(Loss is finite, within noise)&#34;]
+        I2[&#34;Metal Attention Backward: Exact GEMM (Seq &lt;= 16, H &lt;= 2, d = 64)&#34;]
+        I3[&#34;Full 12-Layer nanolab GPT is an architectural spec\n(Vertical slice models run in tests)&#34;]
+        I4[&#34;CUDA &amp; HIP: Disabled by default; return DeviceError::NotCompiled&#34;]
+        I5[&#34;Tokenizer check: 20 reference strings verified against tiktoken&#34;]
+    end</pre></figure>
+<h3 id="cpu-larger-step-about-046-ms">CPU larger step, about 0.46 ms <a class="anchor" href="#cpu-larger-step-about-046-ms" aria-label="Link to this section">#</a></h3>
+<p>Not a defect. <code>docs/bench-cpu-vs-torch.md</code> records two later release runs of the larger shape (<code>B=2</code>, <code>T=32</code>, <code>d=64</code>, vocab 128): Rust medians <code>4.620420000e-4</code> s and <code>4.546040000e-4</code> s, torch CPU medians <code>4.559369918e-4</code> s and <code>4.629169998e-4</code> s (<code>docs/bench-cpu-vs-torch.md:177-184</code>). Run 1 is about 6 µs slower than torch. Run 2 is about 8 µs faster. That spread is inside one run’s noise. This session did not retime it.</p>
+<p>The same file still says the larger loss is finite and is not a torch match (<code>docs/bench-cpu-vs-torch.md:42</code>). The wall-time test only asserts <code>larger.loss.is_finite()</code> (<code>ojas-cpu/tests/torch_ref.rs:358-364</code>). The frozen torch comparison remains the tiny step.</p>
+<h3 id="metal-attention-backward-is-exact-gemm-limited-shape">Metal attention backward is exact GEMM, limited shape <a class="anchor" href="#metal-attention-backward-is-exact-gemm-limited-shape" aria-label="Link to this section">#</a></h3>
+<p>Verified by reading source. <code>tiny_train_step</code> calls <code>causal_attn_backward</code> (<code>ojas-metal/src/gpu.rs:556</code>). That function multiplies with <code>GemmOperands::ExactF32</code> and <code>ojas_causal_softmax_bwd</code> (<code>ojas-metal/src/gpu.rs:792-807</code>, <code>:906</code>; kernel <code>ojas-metal/kernels/causal_attn_bwd.metal:52</code>). Limits are sequence at most 16, at most two heads, head dim 64 (<code>MAX_SEQ</code>, <code>N_HEAD</code>, <code>HEAD_DIM</code> at <code>ojas-metal/src/gpu.rs:20-25</code>; checks at <code>:705-722</code>). The comment at <code>:455-458</code> says <code>qwen35_attn_bwd_*_h256</code> is a <code>32 x 256</code> tile and is not instantiated here.</p>
+<p>Tessl’s training backward is still head dim 256. <code>kernels/qwen35_attn_bwd.metal:31</code> sets <code>ATTN_BWD_D = 256</code>. The only backward entries are <code>qwen35_attn_bwd_dq_h256_q32_k32_sg4</code>, <code>qwen35_attn_bwd_dk_h256_q32_k32_sg4</code>, and <code>qwen35_attn_bwd_dv_h256_q32_k32_sg4</code> (<code>:267-269</code>). The ojas tiny step does not launch those kernels. Whether the exact-GEMM backward matches a reference was not re-run.</p>
+<h3 id="twelve-layers-at-width-768-are-not-implemented">Twelve layers at width 768 are not implemented <a class="anchor" href="#twelve-layers-at-width-768-are-not-implemented" aria-label="Link to this section">#</a></h3>
+<p>Verified by reading source. A search of <code>*.rs</code> under ojas found no <code>d_model: 768</code> and no <code>n_layer: 12</code>. The executing Metal step accepts only <code>d_model</code> 128 and <code>n_head</code> 2 (<code>ojas-metal/src/gpu.rs:23-24</code>, <code>:73-80</code>), one pre-norm block, vocab at most 128, sequence at most 16 (<code>:20-21</code>, <code>:82-98</code>). <code>CpuGpt</code> is a small pre-norm decoder (<code>ojas-infer/src/gpt.rs:4</code>) whose <code>forward_token</code> has no RoPE, QK-norm, per-head gate, or value residual (<code>:241-257</code>). Nothing in the repo constructs twelve of those blocks at width 768.</p>
+<p>The shape is specified in nanolab, not built here: <code>n_layer</code> 12, <code>d_model</code> 768, <code>n_head</code> 12, <code>head_dim</code> 64, <code>vocab_size</code> 50304, <code>gated_attention</code> and <code>value_residual</code> true, <code>optimizer</code> <code>muon_ns5_adamw</code> (<code>MLSystemsLab/nanolab/config.py:55</code>, <code>:61-66</code>, <code>:125-126</code>, <code>:155</code>). <code>README.md:189</code> and <code>docs/op-coverage.md:3</code> still describe that model. The crate <code>ojas-nn</code> cited in phase 3 is gone.</p>
+<h3 id="cuda-and-hip-were-not-executed">CUDA and HIP were not executed <a class="anchor" href="#cuda-and-hip-were-not-executed" aria-label="Link to this section">#</a></h3>
+<p>Verified by reading the refusal. Both crates set <code>default = []</code> (<code>ojas-cuda/Cargo.toml:11-13</code>, <code>ojas-hip/Cargo.toml:11-13</code>). With the feature off, <code>CudaDevice::open</code> and <code>affine_f32</code> return <code>DeviceError::NotCompiled { kind: Device::Cuda }</code> (<code>ojas-cuda/src/lib.rs:33-36</code>, <code>:71-74</code>). <code>HipDevice::open</code> and <code>copy_roundtrip</code> return <code>DeviceError::NotCompiled { kind: Device::Hip }</code> (<code>ojas-hip/src/lib.rs:44-48</code>, <code>:63-66</code>). This session did not enable either feature and did not open a device. Kernel execution on NVIDIA or AMD is unverified.</p>
+<h3 id="tokenizer-check-is-twenty-strings">Tokenizer check is twenty strings <a class="anchor" href="#tokenizer-check-is-twenty-strings" aria-label="Link to this section">#</a></h3>
+<p>Verified by reading source. <code>TIKTOKEN_GPT2_BYTE_IDENTITY</code> is <code>&#34;verified-20-strings&#34;</code> (<code>ojas-data/src/bpe.rs:28</code>). The module comment says that is twenty strings against tiktoken 0.12.0 <code>encode_ordinary</code>, not a million-line check (<code>:8-9</code>, <code>:22-27</code>). <code>twenty_gpt2_ids</code> is a 20-element array (<code>:940</code>). If neither rank-table directory exists, <code>verified_20_strings_match_tiktoken_encode_ordinary</code> returns after asserting the constant and does not compare ids (<code>:980-982</code>).</p>
+<hr>
+<h2 id="4-top-issues--verification-summary">4. Top Issues &amp; Verification Summary <a class="anchor" href="#4-top-issues--verification-summary" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-note"><p class="alert-title">Note</p><ol>
+<li><strong>Index Freshness:</strong> CLI indexes are fresh across <code>ojas</code> (generation 885), <code>tessl</code> (846), and <code>gusset</code> (804).
+</li>
+<li><strong>Dead Code Elimination:</strong> No high-confidence symbols survived as confirmed dead code. All candidate rows are resolver misses or dynamic string pipeline dispatches (e.g. <code>qwen35_residual_add_f32</code>).
+</li>
+<li><strong>CPU Parity:</strong> The larger CPU step (~0.46 ms) matches PyTorch CPU within normal run-to-run noise margins.
+</li>
+<li><strong>Hardware Refusal:</strong> CUDA and HIP strictly refuse execution with <code>DeviceError::NotCompiled</code>, upholding the zero-silent-fallback guarantee.
+</li>
+</ol>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/audit-close.md" rel="noopener"><code>docs/audit-close.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="audit.html" rel="prev"><span>Previous</span>Audit Notes &amp; Structural Defect Countermeasures</a>
+        <a href="audit-cpu-hot.html" rel="next" class="next"><span>Next</span>CPU hot path for one step</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#1-index-freshness">1. Index Freshness</a></li>
+<li><a href="#2-dead-symbols">2. Dead Symbols</a></li>
+<li><a href="#3-open-architectural--implementation-items">3. Open Architectural &amp; Implementation Items</a></li>
+<li class="sub"><a href="#cpu-larger-step-about-046-ms">CPU larger step, about 0.46 ms</a></li>
+<li class="sub"><a href="#metal-attention-backward-is-exact-gemm-limited-shape">Metal attention backward is exact GEMM, limited shape</a></li>
+<li class="sub"><a href="#twelve-layers-at-width-768-are-not-implemented">Twelve layers at width 768 are not implemented</a></li>
+<li class="sub"><a href="#cuda-and-hip-were-not-executed">CUDA and HIP were not executed</a></li>
+<li class="sub"><a href="#tokenizer-check-is-twenty-strings">Tokenizer check is twenty strings</a></li>
+<li><a href="#4-top-issues--verification-summary">4. Top Issues &amp; Verification Summary</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

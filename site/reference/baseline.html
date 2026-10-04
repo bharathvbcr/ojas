@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>p0-env Baseline · ojas reference</title>
+  <meta name="description" content="Recorded 2026-09-30 evening, CDT. All metrics originate from commands executed directly on the host machine. Suites ran sequentially wrapped in process-group timeouts.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/baseline.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/baseline.html">
+  <meta property="og:title" content="p0-env Baseline · ojas reference">
+  <meta property="og:description" content="Recorded 2026-09-30 evening, CDT. All metrics originate from commands executed directly on the host machine. Suites ran sequentially wrapped in process-group timeouts.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html" class="current" aria-current="page">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
+      <article class="prose-ojas">
+<h1 id="p0-env-baseline">p0-env Baseline <a class="anchor" href="#p0-env-baseline" aria-label="Link to this section">#</a></h1>
+<p>Recorded 2026-09-30 evening, CDT. All metrics originate from commands executed directly on the host machine. Suites ran sequentially wrapped in process-group timeouts.</p>
+<hr>
+<h2 id="machine--toolchain-profile">Machine &amp; Toolchain Profile <a class="anchor" href="#machine--toolchain-profile" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Host[&#34;Host Machine: Apple M5 Pro&#34;]
+        OS[&#34;macOS 27.0.1 (Darwin 27.0.0 arm64)&#34;]
+        CPU[&#34;18 Cores, 64 GB Unified RAM&#34;]
+        GPU[&#34;20 GPU Cores, Metal 4 Support&#34;]
+    end
+
+    subgraph Toolchain[&#34;Compiler &amp; Runtimes&#34;]
+        Rust[&#34;rustc 1.98.0 / cargo 1.98.0&#34;]
+        MetalCompiler[&#34;xcrun metal 32023.921 (air64)&#34;]
+        GoLang[&#34;go 1.27.1 darwin/arm64&#34;]
+        Python[&#34;Python 3.14.7 (numpy 2.4.6, torch 2.13.0)&#34;]
+    end
+
+    Host --&gt; Toolchain</pre></figure>
+<div class="table-wrap"><table>
+<thead><tr><th>Metric</th><th>Command</th><th>Verified Value</th></tr></thead>
+<tbody>
+<tr><td><strong>Date</strong></td><td><code>date</code></td><td>Wed Sep 30 23:22:45 CDT 2026</td></tr>
+<tr><td><strong>rustc</strong></td><td><code>rustc --version</code></td><td>rustc 1.98.0 (88d9e12ae 2026-08-18)</td></tr>
+<tr><td><strong>cargo</strong></td><td><code>cargo --version</code></td><td>cargo 1.98.0 (797e8a9bc 2026-08-05)</td></tr>
+<tr><td><strong>Go</strong></td><td><code>go version</code></td><td>go version go1.27.1 darwin/arm64</td></tr>
+<tr><td><strong>OS</strong></td><td><code>sw_vers</code></td><td>macOS 27.0.1, build 26A434</td></tr>
+<tr><td><strong>Kernel</strong></td><td><code>uname -a</code></td><td>Darwin 27.0.0, arm64, <code>xnu-13432.1.9~1/RELEASE_ARM64_T6050</code></td></tr>
+<tr><td><strong>Hardware</strong></td><td><code>sysctl</code></td><td>68,719,476,736 bytes (64 GB), 18 cores, Apple M5 Pro</td></tr>
+<tr><td><strong>GPU</strong></td><td><code>system_profiler</code></td><td>Apple M5 Pro, 20 cores, Metal 4</td></tr>
+<tr><td><strong>Metal</strong></td><td><code>xcrun metal --version</code></td><td>version 32023.921, target air64-apple-darwin27.0.0</td></tr>
+<tr><td><strong>Python</strong></td><td><code>python3 --version</code></td><td>Python 3.14.7</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="suite-execution-summary">Suite Execution Summary <a class="anchor" href="#suite-execution-summary" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    tessl[&#34;tessl: 503 Passed\nWall: 171.6s&#34;]
+    gemma[&#34;gemma-metal: 196 Passed\nWall: 99.9s&#34;]
+    binn[&#34;BINN: 795 Passed\nWall: 185.8s&#34;]
+    sparsl[&#34;sparsl: 151 Passed\nWall: 9.7s&#34;]
+    lappi[&#34;Lappi: 400 Passed, 6 Ignored\nWall: 46.5s&#34;]
+    gusset[&#34;gusset: 45 Rust + 35 Go Passed\nWall: ~16.0s&#34;]
+    metalnative[&#34;metal-native: Compile Failure\n(private field access E0616)&#34;]
+
+    style tessl fill:#d4edda,stroke:#28a745
+    style gemma fill:#d4edda,stroke:#28a745
+    style binn fill:#d4edda,stroke:#28a745
+    style sparsl fill:#d4edda,stroke:#28a745
+    style lappi fill:#d4edda,stroke:#28a745
+    style gusset fill:#d4edda,stroke:#28a745
+    style metalnative fill:#f8d7da,stroke:#dc3545</pre></figure>
+<div class="table-wrap"><table>
+<thead><tr><th>Suite</th><th>Command</th><th style="text-align:right">Wall Time</th><th>Results</th></tr></thead>
+<tbody>
+<tr><td><strong>tessl</strong></td><td><code>cargo test --release -- --test-threads=1</code></td><td style="text-align:right">171.6 s</td><td><strong>503 passed</strong>, 0 failed, 8 ignored</td></tr>
+<tr><td><strong>metal-native</strong></td><td><code>cargo test --release</code></td><td style="text-align:right">31.0 s</td><td><strong>Compile failed</strong> (E0616: private field access on <code>Tensor</code>)</td></tr>
+<tr><td><strong>gemma-metal</strong></td><td><code>cargo test --release</code></td><td style="text-align:right">99.9 s</td><td><strong>196 passed</strong>, 0 failed, 0 ignored</td></tr>
+<tr><td><strong>BINN</strong></td><td><code>cargo test --workspace</code></td><td style="text-align:right">185.8 s</td><td><strong>795 passed</strong>, 0 failed, 0 ignored</td></tr>
+<tr><td><strong>sparsl</strong></td><td><code>cargo test</code></td><td style="text-align:right">9.7 s</td><td><strong>151 passed</strong>, 0 failed, 0 ignored</td></tr>
+<tr><td><strong>Lappi</strong></td><td><code>cargo test --workspace</code></td><td style="text-align:right">46.5 s</td><td><strong>400 passed</strong>, 0 failed, 6 ignored (snapshot models)</td></tr>
+<tr><td><strong>gusset</strong></td><td><code>cargo test -p gusset --lib</code> &amp; <code>go test .</code></td><td style="text-align:right">16.0 s</td><td><strong>45 Rust passed</strong>; <strong>35 Go top-level / 239 subtests passed</strong></td></tr>
+</tbody></table></div>
+<aside class="alert alert-warning"><p class="alert-title">Warning</p><p>Peer codebase <code>metal-native</code> failed to compile due to private field encapsulation errors (E0616), illustrating the risk of tightly-coupled tensor field access across library boundaries.</p>
+</aside>
+<hr>
+<h2 id="cpu-matmul-performance-apple-accelerate-blas">CPU Matmul Performance (Apple Accelerate BLAS) <a class="anchor" href="#cpu-matmul-performance-apple-accelerate-blas" aria-label="Link to this section">#</a></h2>
+<p>Measured using Python 3.14.7, NumPy 2.4.6 (<code>Accelerate</code> BLAS/LAPACK):</p>
+<p>$$\text{GFLOP/s} = \frac{2 \cdot n^3}{\text{best\_seconds} \cdot 10^9}$$</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph AccelerateBLAS[&#34;Apple Accelerate BLAS GFLOP/s&#34;]
+        F32_512[&#34;f32 N=512: 1112.5 GFLOP/s (0.24 ms)&#34;]
+        F32_1024[&#34;f32 N=1024: 772.0 GFLOP/s (2.78 ms)&#34;]
+        F32_2048[&#34;f32 N=2048: 1010.7 GFLOP/s (17.0 ms)&#34;]
+        F32_4096[&#34;f32 N=4096: 860.0 GFLOP/s (159.8 ms)&#34;]
+        
+        F64_1024[&#34;f64 N=1024: 347.2 GFLOP/s (6.19 ms)&#34;]
+        F64_2048[&#34;f64 N=2048: 256.7 GFLOP/s (66.9 ms)&#34;]
+        F64_4096[&#34;f64 N=4096: 267.8 GFLOP/s (513.2 ms)&#34;]
+    end</pre></figure>
+<div class="table-wrap"><table>
+<thead><tr><th>DType</th><th style="text-align:right">Matrix Size $N$</th><th style="text-align:right">Best Time (s)</th><th style="text-align:right">GFLOP/s (Best)</th><th style="text-align:right">GFLOP/s (Median)</th></tr></thead>
+<tbody>
+<tr><td><strong>float32</strong></td><td style="text-align:right">512</td><td style="text-align:right">0.000241 s</td><td style="text-align:right"><strong>1112.5</strong></td><td style="text-align:right">568.2</td></tr>
+<tr><td><strong>float32</strong></td><td style="text-align:right">1024</td><td style="text-align:right">0.002782 s</td><td style="text-align:right"><strong>772.0</strong></td><td style="text-align:right">585.9</td></tr>
+<tr><td><strong>float32</strong></td><td style="text-align:right">2048</td><td style="text-align:right">0.016998 s</td><td style="text-align:right"><strong>1010.7</strong></td><td style="text-align:right">763.7</td></tr>
+<tr><td><strong>float32</strong></td><td style="text-align:right">4096</td><td style="text-align:right">0.159807 s</td><td style="text-align:right"><strong>860.0</strong></td><td style="text-align:right">—</td></tr>
+<tr><td><strong>float64</strong></td><td style="text-align:right">512</td><td style="text-align:right">0.001781 s</td><td style="text-align:right"><strong>150.8</strong></td><td style="text-align:right">98.6</td></tr>
+<tr><td><strong>float64</strong></td><td style="text-align:right">1024</td><td style="text-align:right">0.006186 s</td><td style="text-align:right"><strong>347.2</strong></td><td style="text-align:right">266.4</td></tr>
+<tr><td><strong>float64</strong></td><td style="text-align:right">2048</td><td style="text-align:right">0.066928 s</td><td style="text-align:right"><strong>256.7</strong></td><td style="text-align:right">224.9</td></tr>
+<tr><td><strong>float64</strong></td><td style="text-align:right">4096</td><td style="text-align:right">0.513245 s</td><td style="text-align:right"><strong>267.8</strong></td><td style="text-align:right">—</td></tr>
+</tbody></table></div>
+<p><em>Baseline CPython loop (no BLAS, $N=64$):</em> <strong>0.0147 s (0.0357 GFLOP/s)</strong>.</p>
+<hr>
+<h2 id="pytorch-reference-baseline-nanolab">PyTorch Reference Baseline (<code>nanolab</code>) <a class="anchor" href="#pytorch-reference-baseline-nanolab" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Command:
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>WANDB=0 python3 -m nanolab.train --preset cpu_smoke --out_dir /tmp/nanolab-baseline-out --device cpu</code></pre></div>
+</li>
+<li>Wall clock: <strong>4.8 s</strong>, Exit 0.
+</li>
+<li>Output: <code>DONE best_val_loss=2.6143 final_val_loss=2.6143 tokens=41.0K time=0m01s</code>.
+</li>
+<li>Total Parameters: <code>436.1K</code>.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/baseline.md" rel="noopener"><code>docs/baseline.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="shape-contract.html" rel="prev"><span>Previous</span>Shape contract: ojas_core::shapes</a>
+        <a href="cuda-backend-scoping.html" rel="next" class="next"><span>Next</span>L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#machine--toolchain-profile">Machine &amp; Toolchain Profile</a></li>
+<li><a href="#suite-execution-summary">Suite Execution Summary</a></li>
+<li><a href="#cpu-matmul-performance-apple-accelerate-blas">CPU Matmul Performance (Apple Accelerate BLAS)</a></li>
+<li><a href="#pytorch-reference-baseline-nanolab">PyTorch Reference Baseline (nanolab)</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkpoint v1 Specification · ojas reference</title>
+  <meta name="description" content="Little-endian binary format for persisting training state, model parameters, and optimizer moments in ojas.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/checkpoint-v1.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/checkpoint-v1.html">
+  <meta property="og:title" content="Checkpoint v1 Specification · ojas reference">
+  <meta property="og:description" content="Little-endian binary format for persisting training state, model parameters, and optimizer moments in ojas.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html" class="current" aria-current="page">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="checkpoint-v1-specification">Checkpoint v1 Specification <a class="anchor" href="#checkpoint-v1-specification" aria-label="Link to this section">#</a></h1>
+<p>Little-endian binary format for persisting training state, model parameters, and optimizer moments in <strong>ojas</strong>.</p>
+<p>The in-memory types are <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-core/src/checkpoint.rs" rel="noopener"><code>CheckpointV1</code></a> and its member fields in <code>ojas-core</code>. Serialization and deserialization are implemented in <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-io/src/checkpoint.rs" rel="noopener"><code>ojas-io</code></a> (<code>write_checkpoint</code> and <code>read_checkpoint</code>).</p>
+<hr>
+<h2 id="binary-layout-overview">Binary Layout Overview <a class="anchor" href="#binary-layout-overview" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph FileFrame[&#34;Checkpoint v1 Binary File Layout (Little-Endian)&#34;]
+        direction TB
+        Prefix[&#34;1. Prefix (12 Bytes)\n- Magic: &#39;OJAS0001&#39; (8 bytes ASCII)\n- Version: 1 (u32, 4 bytes)&#34;]
+        
+        subgraph FixedBody[&#34;2. Fixed Header &amp; Hyperparameters&#34;]
+            Config[&#34;Config Blob\n- len: u64\n- bytes: [len]u8 (JSON hyperparameters)&#34;]
+            TokHash[&#34;Tokenizer Hash\n- exactly 32 bytes (raw BLAKE3 / SHA-256)&#34;]
+            GitSHA[&#34;Git Commit SHA\n- exactly 20 bytes (raw SHA-1)&#34;]
+            Step[&#34;Training Step\n- u64 (checked math)&#34;]
+            Cursor[&#34;Data Cursor\n- shard: u64\n- token_index: u64&#34;]
+            RNG[&#34;RNG State Blob\n- len: u64\n- bytes: [len]u8&#34;]
+        end
+
+        subgraph ArrayBody[&#34;3. Named Tensor Record Sections&#34;]
+            Weights[&#34;Weights Section (length-prefixed array of NamedBlob)&#34;]
+            Muon[&#34;Muon Momentum Section (same format)&#34;]
+            AdamW1[&#34;AdamW First Moment Section (same format)&#34;]
+            AdamW2[&#34;AdamW Second Moment Section (same format)&#34;]
+        end
+
+        Prefix --&gt; Config
+        Config --&gt; TokHash
+        TokHash --&gt; GitSHA
+        GitSHA --&gt; Step
+        Step --&gt; Cursor
+        Cursor --&gt; RNG
+        RNG --&gt; Weights
+        Weights --&gt; Muon
+        Muon --&gt; AdamW1
+        AdamW1 --&gt; AdamW2
+    end</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Magic String &amp; Version Verification:</strong> Checkpoint v1 files begin strictly with the 8-byte ASCII string <code>OJAS0001</code> followed by little-endian <code>u32</code> value <code>1</code>. Any file with mismatched magic bytes returns <code>OjasError::InvalidCheckpoint</code> immediately—<strong>never attempting guessing or silent migration</strong>.</p>
+</aside>
+<hr>
+<h2 id="namedblob-record-structure">NamedBlob Record Structure <a class="anchor" href="#namedblob-record-structure" aria-label="Link to this section">#</a></h2>
+<p>Each parameter or optimizer tensor is serialized as a self-contained, offset-aware record:</p>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph Record[&#34;NamedBlob Record Layout&#34;]
+        direction TB
+        NL[&#34;name_length: u64&#34;] --&gt; Name[&#34;name: UTF-8 bytes&#34;]
+        Name --&gt; DT[&#34;dtype_tag: u32\n(0=F32, 1=Bf16, 2=F16, 3=U32)&#34;]
+        DT --&gt; RK[&#34;rank: u32&#34;]
+        RK --&gt; Shape[&#34;shape: rank x u64&#34;]
+        Shape --&gt; BO[&#34;byte_offset: u64&#34;]
+        BO --&gt; PL[&#34;payload_length: u64&#34;]
+        PL --&gt; Payload[&#34;payload: [payload_length]u8&#34;]
+    end</pre></figure>
+<h3 id="record-fields">Record Fields <a class="anchor" href="#record-fields" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>name_length</code></td><td><code>u64</code></td><td>Byte length of the UTF-8 encoded parameter name.</td></tr>
+<tr><td><code>name</code></td><td><code>[name_length]u8</code></td><td>Parameter identifier (e.g., <code>&#34;layers.0.attn.q_proj.weight&#34;</code>).</td></tr>
+<tr><td><code>dtype_tag</code></td><td><code>u32</code></td><td>Data type tag: <code>0</code> = F32, <code>1</code> = Bf16, <code>2</code> = F16, <code>3</code> = U32.</td></tr>
+<tr><td><code>rank</code></td><td><code>u32</code></td><td>Number of dimensions.</td></tr>
+<tr><td><code>shape</code></td><td><code>[rank]u64</code></td><td>Array of dimension extents.</td></tr>
+<tr><td><code>byte_offset</code></td><td><code>u64</code></td><td>Byte offset of element 0 inside <code>payload</code>.</td></tr>
+<tr><td><code>payload_length</code></td><td><code>u64</code></td><td>Total byte length of the stored payload buffer.</td></tr>
+<tr><td><code>payload</code></td><td><code>[payload_length]u8</code></td><td>Raw little-endian tensor data.</td></tr>
+</tbody></table></div>
+<aside class="alert alert-warning"><p class="alert-title">Warning</p><p><strong>Offset Preservation:</strong> Readers that ignore <code>byte_offset</code> will corrupt tensor alignment. <code>ojas-io</code> strictly verifies that <code>byte_offset + payload_size &lt;= payload_length</code>.</p>
+</aside>
+<hr>
+<h2 id="prefix-specification">Prefix Specification <a class="anchor" href="#prefix-specification" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Byte Offset</th><th>Width</th><th>Type</th><th>Canonical Value</th></tr></thead>
+<tbody>
+<tr><td><code>0..8</code></td><td>8 bytes</td><td>ASCII</td><td><code>OJAS0001</code> (<code>CHECKPOINT_MAGIC</code>)</td></tr>
+<tr><td><code>8..12</code></td><td>4 bytes</td><td><code>u32</code></td><td><code>1</code> (<code>CHECKPOINT_VERSION</code>)</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="body-ordering">Body Ordering <a class="anchor" href="#body-ordering" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong><code>config</code></strong>: Length-prefixed arbitrary bytes storing training hyperparameters and model specification.
+</li>
+<li><strong><code>tokenizer_hash</code></strong>: Fixed 32 raw bytes (BLAKE3 or SHA-256 hash of the tokenizer vocabulary).
+</li>
+<li><strong><code>git_sha</code></strong>: Fixed 20 raw bytes storing the repository commit SHA at checkpoint creation.
+</li>
+<li><strong><code>step</code></strong>: <code>u64</code> little-endian integer. Refuses values that could cause overflow (<code>u64::MAX</code>).
+</li>
+<li><strong><code>data_cursor.shard</code></strong>: <code>u64</code> epoch of the batch sampler (<code>ojas_data::BatchSampler</code>).
+</li>
+<li><strong><code>data_cursor.token_index</code></strong>: <code>u64</code> ordinal of the next window within that epoch (not a token offset). <code>ojas_model::Trainer::cursor</code> documents the same meaning.
+</li>
+<li><strong><code>rng_state</code></strong>: Length-prefixed state buffer for deterministic resumption.
+</li>
+<li><strong><code>weights</code></strong>: <code>u64</code> section byte length, <code>u64</code> record count, followed by serialized <code>NamedBlob</code> records.
+</li>
+<li><strong><code>optimizer.muon_momentum</code></strong>: Same framing; stores momentum buffers for 2D matrix parameters.
+</li>
+<li><strong><code>optimizer.adamw_first_moment</code></strong>: Same framing; stores first moments for 1D parameters.
+</li>
+<li><strong><code>optimizer.adamw_second_moment</code></strong>: Same framing; stores second moments for 1D parameters.
+</li>
+</ol>
+<hr>
+<h2 id="verification--safety-guarantees">Verification &amp; Safety Guarantees <a class="anchor" href="#verification--safety-guarantees" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><ol>
+<li><strong>Truncation Defense:</strong> Checkpoint files truncated before an expected field boundary return <code>Err(OjasError::TruncatedCheckpoint)</code> rather than filling missing bytes with zeros.
+</li>
+<li><strong>Integer Overflow Protection:</strong> Dimension shapes whose product overflows <code>u64</code> or <code>usize</code> are caught during header decoding and rejected before memory allocation.
+</li>
+</ol>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/checkpoint-v1.md" rel="noopener"><code>docs/checkpoint-v1.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="backends.html" rel="prev"><span>Previous</span>Hardware Backends &amp; Device Architecture</a>
+        <a href="dtype-policy.html" rel="next" class="next"><span>Next</span>Dtype Policy (v1)</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#binary-layout-overview">Binary Layout Overview</a></li>
+<li><a href="#namedblob-record-structure">NamedBlob Record Structure</a></li>
+<li class="sub"><a href="#record-fields">Record Fields</a></li>
+<li><a href="#prefix-specification">Prefix Specification</a></li>
+<li><a href="#body-ordering">Body Ordering</a></li>
+<li><a href="#verification--safety-guarantees">Verification &amp; Safety Guarantees</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

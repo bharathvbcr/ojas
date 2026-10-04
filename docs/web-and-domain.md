@@ -120,6 +120,18 @@ Sums 4,096 fixed float32 values in the browser with `Math.fround` after every ad
 * **Why ojas:** six reasons, the author's account of the defects in `docs/audit.md` and the PyTorch measurements in `docs/pytorch-parity-plan.md` section 3, and what ojas is and is not ready for.
 * **Developer docs (`#docs`):** quickstart, core concepts, feature reference, Go API reference, architecture and crates, status and limits, and contributing. The Rust and Go snippets were compiled against this tree on 2026-10-01, and the Rust output shown is from that run. The Go reference states what `Load`, `Step` and `GenerateGreedy` do today, from the doc comments in `go/api.go`.
 
+### 4.3a Reference library (`/reference/`)
+Forty-five pages rendered from the repository's own markdown, so they cannot drift from it: the `docs/*.md` files (design contracts, status and plans, the two benchmark documents, the seven audits) and one page per crate README, the Go package, the bench harness and the project README. `web-and-domain.md` itself is excluded.
+
+[`scripts/sitegen/main.go`](../scripts/sitegen/main.go) (Go, standard library only) writes `site/reference/`, `site/assets/reference-index.json` (which the ⌘K palette loads) and `site/sitemap.xml`, and mirrors the result and the hand-written site files into `docs/`.
+
+```bash
+go run scripts/sitegen/main.go          # regenerate
+go run scripts/sitegen/main.go -check   # fail if anything is stale
+```
+
+`-check` runs in `scripts/ci_local.sh` and in the `test` workflow, and generation fails if a markdown link points at nothing. A new `docs/*.md` must be given a category in `docCategory`, or the generator stops. Mermaid diagrams are drawn in the browser by Mermaid 11.15.0 from cdnjs, loaded by `site/assets/reference.js` only on pages that have a diagram and pinned with its SRI hash. If the script cannot load, the diagram source stays visible. To upgrade, take the new version and its `sri` value from `https://api.cdnjs.com/libraries/mermaid/<version>?fields=sri` and edit both in `reference.js`.
+
 ### 4.4 Benchmarks
 Both recorded runs from the final optimized table, selectable, with no single speedup stated:
 * **Tiny step:** ojas CPU 22.5 µs in both runs; PyTorch 2.13 CPU 354 µs and 487 µs.

@@ -27,6 +27,8 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 go version
+echo "==> site (reference pages and docs mirror must match the markdown)"
+go run scripts/sitegen/main.go -check
 cargo build -p ojas-gusset-engine
 (
   cd "$ROOT/go"

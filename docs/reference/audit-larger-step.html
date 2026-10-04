@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Larger-step section times · ojas reference</title>
+  <meta name="description" content="Shape B=2, T=32, d=64, 1 head, vocab=128. Release, CpuBackend::with_threads with 6 threads, the same count as the wall-time test. The graph is regression_graph in ojas-cpu/tests/torch_ref.rs.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/audit-larger-step.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/audit-larger-step.html">
+  <meta property="og:title" content="Larger-step section times · ojas reference">
+  <meta property="og:description" content="Shape B=2, T=32, d=64, 1 head, vocab=128. Release, CpuBackend::with_threads with 6 threads, the same count as the wall-time test. The graph is regression_graph in ojas-cpu/tests/torch_ref.rs.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html" class="current" aria-current="page">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Audits</p>
+      <article class="prose-ojas">
+<h1 id="larger-step-section-times">Larger-step section times <a class="anchor" href="#larger-step-section-times" aria-label="Link to this section">#</a></h1>
+<p>Shape <code>B=2</code>, <code>T=32</code>, <code>d=64</code>, 1 head, <code>vocab=128</code>. Release, <code>CpuBackend::with_threads</code> with 6 threads, the same count as the wall-time test. The graph is <code>regression_graph</code> in <code>ojas-cpu/tests/torch_ref.rs</code>.</p>
+<p>DevMap for <code>/Users/bharath/Code/research/ojas</code> was stale at the time of this audit (<code>generation_id</code> 4, <code>is_fresh</code> false, <code>source_freshness</code> false, delta 97 added and 23 changed). <code>devmap build</code> was not run. The line numbers below were read from source.</p>
+<h2 id="clock">Clock <a class="anchor" href="#clock" aria-label="Link to this section">#</a></h2>
+<p>A temporary test summed <code>std::time::Instant</code> around each public backend call, then took the median of 32 samples (40 calls, drop the first 8). That test is not in the tree. The clocks include the backend&#39;s <code>f32</code> copy in and the output allocation, plus the kernel. &#34;Rest&#34; is the step wall minus those clocks: tensor builds, RMSNorm, RoPE, and the host reshapes between kernels.</p>
+<p>Each linear figure is the four calls in one step (Q, K, V, and the output projection, or their backwards). Cross-entropy is the mean forward plus the mean backward. AdamW is the <code>wq</code> step and the norm-weight step.</p>
+<h2 id="before-the-backward-rewrite">Before the backward rewrite <a class="anchor" href="#before-the-backward-rewrite" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Section</th><th style="text-align:right">Median µs</th><th>Kernel</th><th>Backend call</th></tr></thead>
+<tbody>
+<tr><td>linear forward</td><td style="text-align:right">393.0</td><td><code>linear_forward</code> <code>ojas-cpu/src/linalg.rs:65</code></td><td><code>ojas-cpu/src/backend.rs:97</code></td></tr>
+<tr><td>linear backward</td><td style="text-align:right">717.4</td><td><code>linear_backward</code> <code>ojas-cpu/src/linalg.rs:94</code></td><td><code>ojas-cpu/src/backend.rs:113</code></td></tr>
+<tr><td>causal attention forward</td><td style="text-align:right">409.8</td><td><code>causal_sdpa_forward</code> <code>ojas-cpu/src/attn.rs:12</code></td><td><code>ojas-cpu/src/backend.rs:232</code></td></tr>
+<tr><td>causal attention backward</td><td style="text-align:right">1148.9</td><td><code>causal_sdpa_backward</code> <code>ojas-cpu/src/attn.rs:44</code></td><td><code>ojas-cpu/src/backend.rs:243</code></td></tr>
+<tr><td>cross-entropy</td><td style="text-align:right">52.3</td><td><code>cross_entropy</code> <code>ojas-cpu/src/pointwise.rs:369</code></td><td><code>ojas-cpu/src/backend.rs:437</code> and <code>:457</code></td></tr>
+<tr><td>AdamW</td><td style="text-align:right">45.9</td><td><code>adamw</code> <code>ojas-cpu/src/optim.rs:74</code></td><td><code>ojas-cpu/src/backend.rs:517</code></td></tr>
+<tr><td>rest</td><td style="text-align:right">162.6</td><td></td><td></td></tr>
+</tbody></table></div>
+<p>The named clocks plus rest sum to about 2.93 ms, which matches the larger wall median recorded before this rewrite.</p>
+<p>Causal attention backward was the largest section. A static count that said <code>linear_backward</code> dominated was not used.</p>
+<h2 id="what-changed">What changed <a class="anchor" href="#what-changed" aria-label="Link to this section">#</a></h2>
+<p><code>causal_sdpa_backward</code> (<code>ojas-cpu/src/attn.rs:44</code>) now calls <code>backward_head</code> (<code>ojas-cpu/src/attn.rs:126</code>) once per head. Each head is a contiguous <code>[time, dim]</code> slice. Dots (<code>dot_up</code>, <code>ojas-cpu/src/attn.rs:213</code>) and row updates (<code>saxpy_up</code>, <code>ojas-cpu/src/attn.rs:222</code>) walk the contracted index from 0. The per-element <code>index</code> / <code>get</code> path is gone from the backward. Scratch is three length-<code>time</code> vectors per head (scores, probabilities, dprobs), reused across queries. There is no <code>B×H×T×T</code> score matrix. <code>rayon</code> was not added. The forward kernel was left as it was.</p>
+<p>The reduction order matches the previous per-element loop: head dimension upward, then causal key index <code>0..=t</code>, and query <code>t</code> upward so <code>grad_k</code> and <code>grad_v</code> accumulate in increasing <code>t</code>. <code>causal_sdpa_scale_mask_and_adversarial</code> checks a 1×1 head and <code>B=2</code>, <code>H=2</code>, <code>T=3</code>, <code>D=5</code> bit-for-bit against that order. Empty tensors are still refused at the <code>f32</code> input check before the kernel. The tiny frozen loss error stayed <code>2.384e-7</code>. The larger loss stayed finite (<code>4.852497</code>).</p>
+<h2 id="after-the-rewrite-same-section-clock">After the rewrite, same section clock <a class="anchor" href="#after-the-rewrite-same-section-clock" aria-label="Link to this section">#</a></h2>
+<p>Two medians, same harness, before it was removed.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Section</th><th style="text-align:right">Median µs, pass 1</th><th style="text-align:right">Median µs, pass 2</th></tr></thead>
+<tbody>
+<tr><td>linear forward</td><td style="text-align:right">395.4</td><td style="text-align:right">428.2</td></tr>
+<tr><td>linear backward</td><td style="text-align:right">713.9</td><td style="text-align:right">762.1</td></tr>
+<tr><td>causal attention forward</td><td style="text-align:right">417.5</td><td style="text-align:right">468.6</td></tr>
+<tr><td>causal attention backward</td><td style="text-align:right">52.9</td><td style="text-align:right">54.3</td></tr>
+<tr><td>cross-entropy</td><td style="text-align:right">51.6</td><td style="text-align:right">65.0</td></tr>
+<tr><td>AdamW</td><td style="text-align:right">46.6</td><td style="text-align:right">48.6</td></tr>
+<tr><td>rest</td><td style="text-align:right">156.5</td><td style="text-align:right">175.0</td></tr>
+</tbody></table></div>
+<p>Linear backward is the largest section on both passes. Causal attention backward is about 53 µs.</p>
+<h2 id="before-the-linear-rework-same-section-clock">Before the linear rework, same section clock <a class="anchor" href="#before-the-linear-rework-same-section-clock" aria-label="Link to this section">#</a></h2>
+<p>Release, 6 threads, 40 calls, drop the first 8, median of 32. Measured with <code>backward_head</code> in place, before <code>linear_backward</code> was edited. Loss <code>4.852497</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Section</th><th style="text-align:right">Median µs</th></tr></thead>
+<tbody>
+<tr><td>linear forward</td><td style="text-align:right">350.0</td></tr>
+<tr><td>linear backward</td><td style="text-align:right">674.1</td></tr>
+<tr><td>causal attention forward</td><td style="text-align:right">467.8</td></tr>
+<tr><td>causal attention backward</td><td style="text-align:right">59.0</td></tr>
+<tr><td>cross-entropy</td><td style="text-align:right">86.1</td></tr>
+<tr><td>AdamW</td><td style="text-align:right">49.4</td></tr>
+<tr><td>rest</td><td style="text-align:right">155.4</td></tr>
+</tbody></table></div>
+<p>The four linear-backward calls alone were 299.9 µs on one thread and 642.2 µs with six <code>std::thread::scope</code> workers. The four linear-forward calls were 354.2 µs on one thread and 288.7 µs with six workers.</p>
+<h2 id="what-changed-in-the-linear-kernels">What changed in the linear kernels <a class="anchor" href="#what-changed-in-the-linear-kernels" aria-label="Link to this section">#</a></h2>
+<p>Products of at least 4096 multiply-adds no longer split across <code>std::thread::scope</code>. On this shape that split was slower than the product. <code>linear_backward</code> (<code>ojas-cpu/src/linalg.rs:104</code>) calls <code>grad_x_blocked</code> (<code>:259</code>) and <code>grad_w_blocked</code> (<code>:361</code>). <code>grad_x</code> sums output features from index 0, two rows at a time, eight contiguous weight lanes in registers. <code>grad_w</code> sums rows from index 0, four output columns at a time. <code>linear_forward</code> (<code>:68</code>) still packs <code>W</code> to <code>[in, out]</code>, then <code>gemm_blocked</code> (<code>:226</code>) sums the inner index from 0 across eight output columns. Below 4096 multiply-adds, including the tiny step, the saxpy and eight-column loop are unchanged. <code>backward_head</code> (<code>ojas-cpu/src/attn.rs:126</code>) was not rewritten. A 1×1 product and the odd shape <code>73×11×13</code> stay bit-identical to the scalar reference, including at thread counts 1, 2, 3, 7, and 16. Empty axes still error. The tiny frozen loss error stayed <code>2.384e-7</code>. The larger loss stayed <code>4.852497</code>.</p>
+<h2 id="after-the-linear-rework-same-section-clock">After the linear rework, same section clock <a class="anchor" href="#after-the-linear-rework-same-section-clock" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Section</th><th style="text-align:right">Median µs</th></tr></thead>
+<tbody>
+<tr><td>linear forward</td><td style="text-align:right">150.3</td></tr>
+<tr><td>linear backward</td><td style="text-align:right">144.1</td></tr>
+<tr><td>causal attention forward</td><td style="text-align:right">445.1</td></tr>
+<tr><td>causal attention backward</td><td style="text-align:right">52.9</td></tr>
+<tr><td>cross-entropy</td><td style="text-align:right">51.1</td></tr>
+<tr><td>AdamW</td><td style="text-align:right">48.5</td></tr>
+<tr><td>rest</td><td style="text-align:right">145.1</td></tr>
+</tbody></table></div>
+<p>Linear backward is no longer the largest section. Causal attention forward is, at 445.1 µs. Wall-clock medians are in <code>docs/bench-cpu-vs-torch.md</code>.</p>
+<h2 id="before-the-attention-forward-rewrite-same-section-clock">Before the attention-forward rewrite, same section clock <a class="anchor" href="#before-the-attention-forward-rewrite-same-section-clock" aria-label="Link to this section">#</a></h2>
+<p>Release, 6 threads, 40 calls, drop the first 8, median of 32. Measured with <code>backward_head</code> in place, before <code>causal_sdpa_forward</code> was edited. Loss <code>4.852497</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Section</th><th style="text-align:right">Median µs</th></tr></thead>
+<tbody>
+<tr><td>linear forward</td><td style="text-align:right">164.1</td></tr>
+<tr><td>linear backward</td><td style="text-align:right">155.8</td></tr>
+<tr><td>causal attention forward</td><td style="text-align:right">447.3</td></tr>
+<tr><td>causal attention backward</td><td style="text-align:right">50.4</td></tr>
+<tr><td>cross-entropy</td><td style="text-align:right">56.8</td></tr>
+<tr><td>AdamW</td><td style="text-align:right">50.6</td></tr>
+<tr><td>rest</td><td style="text-align:right">209.5</td></tr>
+</tbody></table></div>
+<p>Causal attention forward is the largest section, at 447.3 µs. Causal attention backward stayed near 50 µs.</p>
+<h2 id="what-changed-in-the-forward-kernel">What changed in the forward kernel <a class="anchor" href="#what-changed-in-the-forward-kernel" aria-label="Link to this section">#</a></h2>
+<p><code>causal_sdpa_forward</code> (<code>ojas-cpu/src/attn.rs:12</code>) calls <code>forward_head</code> (<code>:91</code>) once per head. Each head is a contiguous <code>[time, dim]</code> slice. <code>pack_keys</code> (<code>:129</code>) lays keys out as <code>[dim, time]</code> once per head. <code>score_prefix</code> (<code>:138</code>) sums the head dimension from index 0 across eight key columns when the causal prefix is at least eight long, then the same product for the tail. <code>softmax_prefix</code> (<code>:185</code>) keeps keys <code>0..=t</code>. <code>mix_values</code> (<code>:216</code>) adds those keys from index 0, four at a time, into each output lane. Scratch is two length-<code>time</code> vectors and the packed head. There is no <code>B×H×T×T</code> matrix. <code>rayon</code> was not added. <code>backward_head</code> (<code>:329</code>) was not rewritten.</p>
+<p>The score and the value mix match the scalar order: head dimension upward, then causal key index <code>0..=t</code>. <code>causal_sdpa_scale_mask_and_adversarial</code> checks a 1×1 head and <code>B=2</code>, <code>H=2</code>, <code>T=3</code>, <code>D=5</code> bit-for-bit against that order, and the same bits for <code>T=9</code>, <code>D=8</code> (one 8-wide tile plus a remainder) and <code>T=32</code>, <code>D=64</code>. On that larger shape, writing <code>40</code> into key index 8 leaves position 0 unchanged and changes the row that can see that key. Empty tensors are still refused at the <code>f32</code> input check before the kernel. The tiny frozen loss error stayed <code>2.384e-7</code>. The larger loss stayed <code>4.852497</code>.</p>
+<h2 id="after-the-forward-rewrite-same-section-clock">After the forward rewrite, same section clock <a class="anchor" href="#after-the-forward-rewrite-same-section-clock" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Section</th><th style="text-align:right">Median µs</th></tr></thead>
+<tbody>
+<tr><td>linear forward</td><td style="text-align:right">134.0</td></tr>
+<tr><td>linear backward</td><td style="text-align:right">134.4</td></tr>
+<tr><td>causal attention forward</td><td style="text-align:right">27.8</td></tr>
+<tr><td>causal attention backward</td><td style="text-align:right">47.7</td></tr>
+<tr><td>cross-entropy</td><td style="text-align:right">48.6</td></tr>
+<tr><td>AdamW</td><td style="text-align:right">45.2</td></tr>
+<tr><td>rest</td><td style="text-align:right">125.4</td></tr>
+</tbody></table></div>
+<p>Causal attention forward is no longer the largest section. Linear backward is, at 134.4 µs. Linear forward is 134.0 µs. Wall-clock medians are in <code>docs/bench-cpu-vs-torch.md</code>.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/audit-larger-step.md" rel="noopener"><code>docs/audit-larger-step.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="audit-cpu-hot.html" rel="prev"><span>Previous</span>CPU hot path for one step</a>
+        <a href="audit-phase2.html" rel="next" class="next"><span>Next</span>Phase 2 audit</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#clock">Clock</a></li>
+<li><a href="#before-the-backward-rewrite">Before the backward rewrite</a></li>
+<li><a href="#what-changed">What changed</a></li>
+<li><a href="#after-the-rewrite-same-section-clock">After the rewrite, same section clock</a></li>
+<li><a href="#before-the-linear-rework-same-section-clock">Before the linear rework, same section clock</a></li>
+<li><a href="#what-changed-in-the-linear-kernels">What changed in the linear kernels</a></li>
+<li><a href="#after-the-linear-rework-same-section-clock">After the linear rework, same section clock</a></li>
+<li><a href="#before-the-attention-forward-rewrite-same-section-clock">Before the attention-forward rewrite, same section clock</a></li>
+<li><a href="#what-changed-in-the-forward-kernel">What changed in the forward kernel</a></li>
+<li><a href="#after-the-forward-rewrite-same-section-clock">After the forward rewrite, same section clock</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

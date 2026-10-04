@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audit Notes &amp; Structural Defect Countermeasures · ojas reference</title>
+  <meta name="description" content="This document catalogs structural defects, undefined behaviors, and numerical hazards identified across peer codebases during Phase 0 analysis, along with the precise architectural defenses codified…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/audit.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/audit.html">
+  <meta property="og:title" content="Audit Notes &amp; Structural Defect Countermeasures · ojas reference">
+  <meta property="og:description" content="This document catalogs structural defects, undefined behaviors, and numerical hazards identified across peer codebases during Phase 0 analysis, along with the precise architectural defenses codified…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html" class="current" aria-current="page">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Audits</p>
+      <article class="prose-ojas">
+<h1 id="audit-notes--structural-defect-countermeasures">Audit Notes &amp; Structural Defect Countermeasures <a class="anchor" href="#audit-notes--structural-defect-countermeasures" aria-label="Link to this section">#</a></h1>
+<p>This document catalogs structural defects, undefined behaviors, and numerical hazards identified across peer codebases during Phase 0 analysis, along with the precise architectural defenses codified in <strong>ojas</strong>.</p>
+<hr>
+<h2 id="defect-taxonomy--ojas-defense-mapping">Defect Taxonomy &amp; ojas Defense Mapping <a class="anchor" href="#defect-taxonomy--ojas-defense-mapping" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Defects[&#34;Upstream &amp; Peer Defects&#34;]
+        D1[&#34;tessl: CE writes dh via Cols::dense (Forces offset 0)\nCorrupts leading memory when dh is offset&#34;]
+        D2[&#34;metal-native: flash_attn_bwd clamps d_lim = min(D, 64u)\nSilently truncates dimensions above 64&#34;]
+        D3[&#34;tessl: AdamW step + 1 wraps at u64::MAX without overflow checks\nProduces 0 step count and non-finite updates&#34;]
+        D4[&#34;metal-native &amp; gusset: C-ABI exports lack catch_unwind\nPanics abort process or leak worker permits&#34;]
+        D5[&#34;gemma-metal: NaN logit row returns token 0\nSilent model collapse&#34;]
+        D6[&#34;BINN &amp; Lappi: All-ignored CE loss returns 0.0\nFalsely trains on masked tokens&#34;]
+    end
+
+    subgraph Defenses[&#34;ojas Structural Defenses&#34;]
+        R1[&#34;Tensor::byte_offset is first-class.\nojas-metal reserves 16-element canary prefix and validates it.&#34;]
+        R2[&#34;refuse_unsupported_metal_head_dim returns UnsupportedHeadDim loud and early.&#34;]
+        R3[&#34;next_step uses checked_add; refuses u64::MAX.\nCargo.toml enforces overflow-checks=true in release.&#34;]
+        R4[&#34;ojas-capi wraps all entries in catch_unwind.\nDrops poisoned session; returns error to Go.&#34;]
+        R5[&#34;ojas-infer validates logits before decoding.\nNon-finite values return Err(OjasError::NonFinite).&#34;]
+        R6[&#34;ojas-cpu checks valid token count.\nZero valid rows returns Err(OjasError::NonFinite).&#34;]
+    end
+
+    D1 ==&gt; R1
+    D2 ==&gt; R2
+    D3 ==&gt; R3
+    D4 ==&gt; R4
+    D5 ==&gt; R5
+    D6 ==&gt; R6</pre></figure>
+<hr>
+<h2 id="detailed-findings-by-codebase">Detailed Findings by Codebase <a class="anchor" href="#detailed-findings-by-codebase" aria-label="Link to this section">#</a></h2>
+<h3 id="1-tessl">1. <code>tessl</code> <a class="anchor" href="#1-tessl" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Cross-Entropy <code>dh</code> Offset Corruption:</strong> Chunked cross-entropy adds gradients into <code>dh</code> using <code>Cols::dense</code> (in upstream tessl&#39;s <code>cross_entropy.rs:361</code>), which forcibly resets the offset to 0 (in upstream tessl&#39;s <code>qwen35.rs:107-108</code>). When callers slice a buffer, this overwrites memory preceding the slice.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas-metal</code> inserts <code>DH_PAD = 16</code> padding elements before <code>dh</code> and asserts in test <code>ce_nonzero_dh_offset_keeps_prefix</code> that the prefix remains bit-identical.
+</li>
+</ul>
+</li>
+<li><strong>Process-Global Binder-Nop:</strong> <code>binder_nop</code> is stored as a process-wide <code>AtomicI8</code> (in upstream tessl&#39;s <code>decode_icb.rs:1571</code>), creating data races across concurrent sessions.
+<ul>
+<li><em>ojas Defense:</em> All session state in <code>ojas-capi</code> is strictly localized to isolated instances.
+</li>
+</ul>
+</li>
+<li><strong>AdamW Step Wrap:</strong> <code>state.step</code> is incremented without checked arithmetic. At <code>u64::MAX</code>, it wraps to 0, causing <code>1 - beta1^t</code> to evaluate to zero and generating non-finite parameter updates.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas_core::next_step</code> performs <code>checked_add</code> and returns <code>OjasError::OutOfRange</code>.
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="2-metal-native">2. <code>metal-native</code> <a class="anchor" href="#2-metal-native" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Silent Head Dimension Truncation:</strong> Attention backward kernels clamp head dimension with <code>d_lim = min(D, 64u)</code> (in upstream metal-native&#39;s <code>flash_attn_bwd.metal:28</code>). Models with head dimensions greater than 64 silently drop high-index features.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas_core::refuse_unsupported_metal_head_dim</code>, which <code>ojas_metal</code> calls, returns <code>OjasError::UnsupportedHeadDim</code> for any $d &gt; 64$. The CPU backend computes any positive head dimension.
+</li>
+</ul>
+</li>
+<li><strong>Missing <code>catch_unwind</code> on C-ABI:</strong> The 8 exported functions allow Rust panics to cross the FFI boundary, crashing the host program.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas-capi::engine::dispatch</code> wraps invocations in <code>catch_unwind</code>, clears the poisoned session, and returns an error payload.
+</li>
+</ul>
+</li>
+<li><strong>Unbounded Token Indexing:</strong> Missing token bounds checks allow negative indices or values exceeding vocabulary size to read arbitrary host memory.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas-infer</code> and <code>ojas-cpu</code> enforce strict vocabulary bounds checking before table lookups.
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="3-gemma-metal">3. <code>gemma-metal</code> <a class="anchor" href="#3-gemma-metal" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Silent GPU Skips:</strong> 39 test sites call <code>gpu_or_skip()</code> and return <code>None</code> silently when GPU initialization fails, allowing defective kernels to pass CI.
+<ul>
+<li><em>ojas Defense:</em> Tests in <code>ojas-metal</code> and <code>ojas-wgpu</code> fail loudly if the target adapter or device is unavailable.
+</li>
+</ul>
+</li>
+<li><strong>All-NaN Argmax Sticks on Token 0:</strong> Passing an all-NaN row to argmax selects token 0 without error.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas-infer</code> validates every logit row; non-finite logits return <code>OjasError::NonFinite</code>.
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-binn">4. <code>BINN</code> <a class="anchor" href="#4-binn" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>NaN Gradients Pass Clipping:</strong> Gradient clipping functions fail to check for NaNs, corrupting Adam momentum vectors with persistent poison.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas-cpu</code> validates gradient norms; non-finite norms abort the step before optimizer state modification.
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="5-lappi">5. <code>Lappi</code> <a class="anchor" href="#5-lappi" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Parity NaN Fold Skips:</strong> The numerical parity harness uses <code>.fold(0.0, f64::max)</code>, which ignores <code>NaN</code> values and yields false-positive parity passes.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas-autograd::gradients_match</code> refuses a non-finite value on either side and a non-finite or negative tolerance before comparing (<code>a_non_finite_gradient_never_matches</code> in <code>ojas-autograd/src/lib.rs</code>). Until 2026-10-01 it compared with <code>diff &gt; tol</code>, which is false for NaN, so a NaN gradient matched. The same fold bug in <code>ojas-infer/tests/parity.rs</code> <code>rel_err</code> measured an all-NaN output as 0.0; it now measures it as infinite (<code>rel_err_measures_a_non_finite_value_as_infinite</code>).
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-gusset">6. <code>gusset</code> <a class="anchor" href="#6-gusset" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Unbounded <code>Close</code> Join:</strong> <code>HandleClose</code> joins workers without a deadline, indefinitely hanging callers if a thread blocks.
+<ul>
+<li><em>ojas Defense:</em> <code>ojas-capi</code> tracks worker execution bounds and allows clean session termination.
+</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="the-6-immutable-api-freezes-in-ojas">The 6 Immutable API Freezes in ojas <a class="anchor" href="#the-6-immutable-api-freezes-in-ojas" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    F1[&#34;1. Tensor byte_offset is explicit and preserved by narrow()&#34;]
+    F2[&#34;2. Head dim &gt; 64 returns UnsupportedHeadDim (Never Clamped)&#34;]
+    F3[&#34;3. Budget::try_reserve returns CapacityExceeded (Never Shrinks)&#34;]
+    F4[&#34;4. next_step refuses u64::MAX (Never Wraps)&#34;]
+    F5[&#34;5. Non-finite values return NonFinite (Never Applied to Weights)&#34;]
+    F6[&#34;6. Device is explicit (Never Silent CPU Fallback)&#34;]</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p>These six behavioral guarantees are <strong>permanently frozen</strong> across the <code>ojas</code> codebase. Any proposed modification that weakens error reporting, introduces silent clamping, allows integer wrap, or permits silent CPU fallbacks is rejected as an invariant violation.</p>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/audit.md" rel="noopener"><code>docs/audit.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="bench-gpu-vs-torch.html" rel="prev"><span>Previous</span>GPU Backends versus PyTorch MPS</a>
+        <a href="audit-close.html" rel="next" class="next"><span>Next</span>Audit Close &amp; Liveness Verification</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#defect-taxonomy--ojas-defense-mapping">Defect Taxonomy &amp; ojas Defense Mapping</a></li>
+<li><a href="#detailed-findings-by-codebase">Detailed Findings by Codebase</a></li>
+<li class="sub"><a href="#1-tessl">1. tessl</a></li>
+<li class="sub"><a href="#2-metal-native">2. metal-native</a></li>
+<li class="sub"><a href="#3-gemma-metal">3. gemma-metal</a></li>
+<li class="sub"><a href="#4-binn">4. BINN</a></li>
+<li class="sub"><a href="#5-lappi">5. Lappi</a></li>
+<li class="sub"><a href="#6-gusset">6. gusset</a></li>
+<li><a href="#the-6-immutable-api-freezes-in-ojas">The 6 Immutable API Freezes in ojas</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-cpu · ojas reference</title>
+  <meta name="description" content="ojas-cpu provides the high-performance CPU backend and reference implementation for ojas, executing the full nanolab default GPT training step, autoregressive inference, and autograd gradient evaluat…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-cpu.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-cpu.html">
+  <meta property="og:title" content="ojas-cpu · ojas reference">
+  <meta property="og:description" content="ojas-cpu provides the high-performance CPU backend and reference implementation for ojas, executing the full nanolab default GPT training step, autoregressive inference, and autograd gradient evaluat…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html" class="current" aria-current="page">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-cpu">ojas-cpu <a class="anchor" href="#ojas-cpu" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-cpu</code> provides the high-performance CPU backend and reference implementation for <strong>ojas</strong>, executing the full <strong>nanolab default GPT</strong> training step, autoregressive inference, and autograd gradient evaluation.</p>
+<p>It supports both the bit-identical <strong>Exact tier</strong> and the hardware-accelerated <strong>Fast tier</strong> (via <code>ojas-simd</code> and Apple Accelerate).</p>
+<hr>
+<h2 id="architectural-topology--execution-modes">Architectural Topology &amp; Execution Modes <a class="anchor" href="#architectural-topology--execution-modes" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Client[&#34;Execution Request&#34;]
+        Op[&#34;Matrix Multiplication / Transformer Step&#34;]
+    end
+
+    subgraph BackendConfig[&#34;CpuBackend Configuration&#34;]
+        Config{&#34;Numerics Mode&#34;}
+        ExactMode[&#34;Numerics::Exact (opt-in reference)\n- Packed GEMM\n- Persistent thread pool (1..=256 threads)\n- No FMA, ascending-k reductions\n- Bit-identical across all thread counts&#34;]
+        FastMode[&#34;Numerics::Fast (Default)\n- FMA enabled\n- On macOS, products &gt;= 2^13 multiply-adds route to Accelerate BLAS (2^21 elsewhere, to sgemm_tile)\n- Smaller products run on tile_fast SIMD&#34;]
+    end
+
+    subgraph ThreadPool[&#34;Persistent Worker Pool (pool.rs)&#34;]
+        Pool[&#34;Scoped Thread Pool\n- Avoids repeated thread spawn latency\n- Chunked work splitting across CPU cores&#34;]
+    end
+
+    subgraph Kernels[&#34;Compute Operators&#34;]
+        GEMM[&#34;Packed GEMM / BLAS&#34;]
+        RMS[&#34;RMSNorm (eps = 1e-6)&#34;]
+        RoPE[&#34;Half-Split RoPE&#34;]
+        SDPA[&#34;Causal SDPA (Arbitrary head dimension d)&#34;]
+        SwiGLU[&#34;SwiGLU MLP&#34;]
+        DualOpt[&#34;Dual Optimizers (Muon NS5 + AdamW)&#34;]
+    end
+
+    Op --&gt; Config
+    Config --&gt;|Exact| ExactMode
+    Config --&gt;|Fast| FastMode
+    ExactMode --&gt; Pool
+    FastMode --&gt; Pool
+    Pool --&gt; Kernels</pre></figure>
+<hr>
+<h2 id="transformer-layer--optimizer-flow">Transformer Layer &amp; Optimizer Flow <a class="anchor" href="#transformer-layer--optimizer-flow" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph LayerFlow[&#34;Transformer Forward Pass&#34;]
+        X[&#34;Input Tensors [B, T, D]&#34;] --&gt; Norm1[&#34;RMSNorm (eps = 1e-6)&#34;]
+        Norm1 --&gt; Proj[&#34;Q, K, V Projections (Packed GEMM)&#34;]
+        Proj --&gt; RoPE[&#34;Half-Split RoPE (rotates -x2, x1)&#34;]
+        RoPE --&gt; QKN[&#34;RMS QK-Norm&#34;]
+        QKN --&gt; SDPA[&#34;Causal SDPA (Causal mask, scale = 1/sqrt(d))&#34;]
+        Norm1 --&gt; Gate[&#34;Linear Gate: sigmoid(x W_g + b_g)&#34;]
+        SDPA --&gt; GatedAttn[&#34;Per-Head Gated Attention = SDPA * Gate&#34;]
+        Gate --&gt; GatedAttn
+        GatedAttn --&gt; VR[&#34;Value Residual Blend: lerp(Attn, V0, sigmoid(vr_lambda))&#34;]
+        VR --&gt; OutProj[&#34;Output Projection&#34;]
+        OutProj --&gt; Res1[&#34;Residual Add (+)&#34;]
+        X --&gt; Res1
+        Res1 --&gt; Norm2[&#34;Post-RMSNorm&#34;]
+        Norm2 --&gt; SwiGLU[&#34;SwiGLU MLP: (x W_g) * silu(x W_up) W_down&#34;]
+        SwiGLU --&gt; Res2[&#34;Residual Add (+)&#34;]
+        Res1 --&gt; Res2
+    end
+
+    subgraph BackwardOptim[&#34;Loss, Backward &amp; Dual Optimizers&#34;]
+        Res2 --&gt; CE[&#34;Chunked Cross-Entropy (Mean over valid tokens)&#34;]
+        CE --&gt; Clip[&#34;Gradient Clipping (CLIP_GRAD_NORM_EPS = 1e-6)&#34;]
+        Clip --&gt; OptSplit{&#34;Parameter Rank&#34;}
+        OptSplit --&gt;|&#34;Rank &gt;= 2 (2D Weights)&#34;| Muon[&#34;Muon NS5 Optimizer (bf16 Newton-Schulz)&#34;]
+        OptSplit --&gt;|&#34;Rank &lt; 2 (1D / Embeds)&#34;| AdamW[&#34;AdamW (decay first, eps = 1e-8 outside sqrt)&#34;]
+    end
+
+    LayerFlow --&gt; BackwardOptim</pre></figure>
+<hr>
+<h2 id="exact-vs-fast-numerics-contract">Exact vs. Fast Numerics Contract <a class="anchor" href="#exact-vs-fast-numerics-contract" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-note"><p class="alert-title">Note</p><ul>
+<li><strong>Exact Tier (<code>Numerics::Exact</code>, opt-in via <code>.with_numerics(Numerics::Exact)</code>):</strong> The reference contract. Uses an ascending-$k$ packed GEMM without hardware FMA. Successive executions with identical inputs produce <strong>bit-identical floating point digests</strong> across 1, 2, 3, 7, 16, and 18 thread configurations.
+</li>
+<li><strong>Fast Tier (<code>Numerics::Fast</code>, the default since 2026-10-01):</strong> Leverages SIMD FMA instructions via <code>ojas-simd</code>. On macOS, products with at least $2^{13}$ multiply-adds (<code>FAST_WHOLE_CALL_MACS</code>) dispatch to Apple Accelerate <code>cblas_sgemm</code> as one call; elsewhere the cutoff is $2^{21}$ and the call goes to <code>ojas-simd</code>.
+</li>
+</ul>
+</aside>
+<hr>
+<h2 id="defensive-countermeasures--safety-guarantees">Defensive Countermeasures &amp; Safety Guarantees <a class="anchor" href="#defensive-countermeasures--safety-guarantees" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-important"><p class="alert-title">Important</p><ol>
+<li><strong>Zero-Loss Defect Defense:</strong> Cross-entropy evaluated over sequences containing zero valid tokens (e.g. all targets match <code>ignore_index</code>) immediately returns <code>Err(OjasError::NonFinite)</code> rather than falsely returning $0.0$ loss.
+</li>
+<li><strong>AdamW Moment Protection:</strong> If parameter updates evaluate to non-finite values (NaN / Inf), the optimizer aborts before touching internal moment buffers, preventing persistent corruption.
+</li>
+<li><strong>Arbitrary Head Dimension:</strong> Unlike Metal kernels that enforce $d_{\text{head}} \le 64$, <code>ojas-cpu</code> supports arbitrary head dimensions (e.g., $d=65$ verified in test suites).
+</li>
+<li><strong>No Allocation Leaks:</strong> The persistent worker pool reuses memory across training steps, preventing thread spawn overhead and memory fragmentation.
+</li>
+<li><strong>AdamW and Gradient Clip Charge Nothing (since 2026-10-01):</strong> <code>adamw_step</code> updates the parameter and both moments in place in two passes (check every element finite, then store), and <code>clip_grad_norm</code> scales each gradient where it is after the norm pass. Neither uses a buffer or charges the <code>Budget</code>, so both succeed on an exhausted budget; before, each charged one buffer (the parameter&#39;s length, or the largest gradient&#39;s) and refused with <code>CapacityExceeded</code> when it did not fit. Both are still all or nothing: a non-finite value, a shared or device target, or a bad layout is refused before anything is written, and the results are bit-identical to the buffered versions. Gated by <code>adamw_charges_nothing</code> and <code>clip_charges_nothing</code> (<code>tests/heavy_ops.rs</code>) and the heap gate in <code>tests/redteam_ops_heap.rs</code>. Since 2026-10-02 <code>accumulate_grad</code> into a uniquely owned accumulator works the same way: one pass checks every sum finite, a second adds in place, and nothing is charged (<code>tests/budget_inputs.rs</code> <code>accumulate_into_a_unique_acc_charges_nothing</code>, <code>tests/framework_accum.rs</code>); before, the sum was built in a charged buffer and copied in. A shared accumulator still needs one new tensor, written straight into it.
+</li>
+<li><strong>Operands Are Read in Place, Never Copied (since 2026-10-01):</strong> every op reads its tensor inputs where they are: a borrowed slice on the calling thread (the GEMM core&#39;s <code>Mat</code>, and <code>scoped</code> threads where a pass splits), or a clone of the tensor that the pool&#39;s tasks share (<code>validate.rs</code> <code>Shared</code>, one more owner of the storage, freed before the op returns). Inputs are therefore never charged: an op&#39;s budget peak is its output plus the scratch its kernel documents, so ops succeed in less room than before, when each operand was copied and the copy charged (<code>tests/budget_inputs.rs</code> pins each op&#39;s exact peak; <code>tests/redteam_linear_budget.rs</code> bounds linear at outputs plus GEMM scratch). Mul, add, the value-residual blend and (since 2026-10-02) causal SDPA forward and backward, linear forward and backward, SiLU forward and backward, RMSNorm forward and backward, RoPE forward and backward and the attention gate forward write straight into their output tensors: tasks fill disjoint slices of the outputs on scoped threads (<code>pool/scoped.rs</code> <code>fill_parts</code>, <code>chunks_into</code>, <code>rows_into</code>, with the pool&#39;s partitions and inline thresholds) instead of returning per-task results that were joined and then copied, so outputs are no longer held twice and the uncharged per-task parts are gone. GEMM writes into a caller&#39;s slice (<code>gemm_out</code>), so linear&#39;s outputs are the GEMM&#39;s output, and the Muon step borrows its parameter, gradient and momentum and frees each Newton–Schulz intermediate after its last reader. <code>tests/budget_inputs.rs</code> pins the new peaks: SDPA forward at its output plus one task&#39;s 24 floats, SiLU forward at its output alone, RMSNorm forward at its output plus one <code>rstd</code> per row. Bits match the earlier build: <code>bench_ops</code> dump mode at 6 threads for the SiLU, RMSNorm, QK-norm, RoPE and gate cases, and for the block case, whose forward output and every weight gradient cover linear forward and backward at the nanolab shapes; a dump of the Muon step output; the SDPA per-row path at 1 and 6 threads. Timing of these conversions on their own is not measured. The rest followed the same day: gate and value-residual backward fill all their outputs from one partition (<code>scoped::chunks_into_n</code>), the fused cross-entropy gradients are accumulated by <code>gemm_acc</code> straight into their tensors (at nanolab&#39;s 50304×768 vocabulary the weight gradient, 155 MB, was held twice during its copy), KV-cache attention copies each head&#39;s rows once into the output (its heads stay on the persistent pool, since decode calls it per layer and token), and a shared accumulator&#39;s replacement is written in place. No op copies a joined result into its tensor any more; <code>alloc_out</code> and <code>F32Out</code> are deleted, with <code>Exec::chunks</code> and the helpers only they used. <code>tests/budget_inputs.rs</code> pins gate backward at 346 floats, value-residual backward at 131, the fused cross-entropy at 828 at its test shape and a shared accumulator at 64, and each pin is refused by the earlier tree. Bits match the earlier tree: the <code>bench_ops</code> gate and value-residual dumps at 6 threads, and a dump of all five ops at 1 and 6 threads under both numerics (52 files). Interleaved A/B against the earlier tree (6 threads, 7 rounds, load about 4, after/before by min / median): gate backward 0.73 / 0.75, value-residual backward 0.56 / 0.58, block step 0.99 / 0.99, block forward 1.00 / 1.00, value-residual forward 1.00 / 1.00, gate forward 1.07 / 1.04 (a 0.2 ms case whose code changed only in holding its gates in a <code>Vec</code> instead of an <code>Arc&lt;Vec&gt;</code>). Later the same day, mul forward and backward, add forward and the value-residual forward, which had run on the calling thread, were split across scoped threads, written in place (<code>pointwise.rs</code> <code>elementwise_into</code>). New outputs are now scanned for NaN with the operand scan, in 4 MiB blocks on scoped threads (<code>validate.rs</code> <code>window_finite</code>). Bits match. Interleaved A/B at load 5–6, after/before by min / median: mul forward 0.72 / 0.76, mul backward 0.72 / 0.74, add forward 0.91 / 0.93, value-residual forward 0.94 / 0.97. Measured on its own, the parallel output scan landed between 0.92 (value-residual backward) and 1.03 (cross-entropy backward) by min across cases, mostly within run-to-run noise. The one gain consistent by both min and median is the LM-head linear forward, 0.97 / 0.97, about −1.4 ms (<code>docs/bench-cpu-vs-torch.md</code>). It is kept because operands and outputs now share one scan, not for speed. The elementwise passes then moved their scan onto the writing threads (<code>validate.rs</code> <code>fill_outs_chunked</code>, which splits the pass and scans each piece where it was written, with no second pass): against the s9 tree, mul forward 0.80 / 0.79, mul backward 0.81 / 0.80, add forward 0.80 / 0.79, value-residual forward 0.75 / 0.74, with bits matching (<code>target-matmul/s10_gate.sh</code>, load about 5). The row-split ops followed through one row-shaped owner (<code>validate.rs</code> <code>fill_rows</code>): SiLU forward 0.75 / 0.88, SiLU backward 0.84 / 0.90, RMSNorm forward 0.82 / 0.81 (QK-norm forward with it), RoPE forward 0.80 / 0.78 and backward 0.82 / 0.83, gate forward 0.77 / 0.82; the block step does not move (1.02 / 1.00). Bits match (<code>target-matmul/s11_gate.sh</code>). The NaN refusal is unchanged: every operand is checked at entry, before anything is charged.
+</li>
+<li><strong>Each Storage Is Scanned for NaN Once Until It Is Written (since 2026-10-02):</strong> the entry scan goes through <code>Tensor::all_finite_cached</code> (ojas-core), which records on the storage that a scan of the whole allocation found every value finite. Later ops on that tensor, its clones and its views skip the scan; a smaller view over a storage not known finite still scans its own window. Every host write (<code>f32_slice_mut</code>, <code>write_f32</code>) needs sole ownership and resets the record, so a NaN written in place after a successful op is refused by the next one (<code>tests/redteam.rs</code> <code>a_nan_written_in_place_after_a_successful_op_is_refused_by_the_next</code>; the core test <code>a_nan_written_after_a_finite_result_is_caught_on_the_next_call</code> fails if the reset is removed). Computed outputs are built by <code>fill_out</code> / <code>fill_outs</code> (see point 6) and recorded finite as they are made; outputs finite by construction (embedding, permute, the CE gradient, the add backward copies) start unknown and are scanned once by their first consumer, as every operand was before. The finiteness test itself has one owner, <code>ojas_core::f32_all_finite</code>. Interleaved A/B on <code>bench_ops</code> (6 threads, 9 rounds, min / median, under a load of about 30): embedding forward 0.08 / 0.09 of before (its 50304×768 table was rescanned every call), embedding backward 0.39 / 0.47, mul forward 0.69 / 0.64, mul backward 0.79 / 0.72; linear was within the noise of that load. <code>bench_ops</code> reuses its inputs, so these numbers are for operands already recorded finite. An op&#39;s first touch of an unknown operand now scans each operand in turn (each split into 1M-value pieces on the pool) where it used to scan all of them in one parallel pass, so an op with several fresh operands under 1M values each scans them serially. The <code>block</code> case, whose intermediate activations are fresh every step, measures the net: block step 0.95 of before by min and 0.98 by median, block forward 0.98 / 0.88 (7 interleaved rounds against the pre-flag tree, load 20–28): no regression, within noise of a small gain.
+</li>
+<li><strong>Kernel Hardening &amp; Pointwise Parallel Execution (since 2026-10-04):</strong> expanded activation kernels in <code>pointwise.rs</code> (ReLU, SiLU, GELU, Sigmoid, Tanh) and pointwise parallel execution over scoped worker threads (<code>tests/pointwise_parallel.rs</code>). Validated and hardened memory layout transformations (<code>tests/permute_harden.rs</code>), token embedding lookup bounds (<code>tests/embedding_harden.rs</code>), AdamW finite checking and zero-step updates (<code>tests/adamw_harden.rs</code>), elementwise edge handling (<code>tests/elementwise_harden.rs</code>), and IEEE 754 numeric compliance (<code>tests/numerics.rs</code>). Test suite verified at 261 passed tests.
+</li>
+</ol>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cpu/README.md" rel="noopener"><code>ojas-cpu/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-core.html" rel="prev"><span>Previous</span>ojas-core</a>
+        <a href="crate-ojas-cuda.html" rel="next" class="next"><span>Next</span>ojas-cuda</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#architectural-topology--execution-modes">Architectural Topology &amp; Execution Modes</a></li>
+<li><a href="#transformer-layer--optimizer-flow">Transformer Layer &amp; Optimizer Flow</a></li>
+<li><a href="#exact-vs-fast-numerics-contract">Exact vs. Fast Numerics Contract</a></li>
+<li><a href="#defensive-countermeasures--safety-guarantees">Defensive Countermeasures &amp; Safety Guarantees</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

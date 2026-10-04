@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-capi · ojas reference</title>
+  <meta name="description" content="ojas-capi is the opcode layer the Go API (go/) reaches through gusset. A model id names a nanolab GPT held on one device: its weights, its trainer once one is open, and its tokenizer (docs/framework-…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-capi.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-capi.html">
+  <meta property="og:title" content="ojas-capi · ojas reference">
+  <meta property="og:description" content="ojas-capi is the opcode layer the Go API (go/) reaches through gusset. A model id names a nanolab GPT held on one device: its weights, its trainer once one is open, and its tokenizer (docs/framework-…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html" class="current" aria-current="page">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-capi">ojas-capi <a class="anchor" href="#ojas-capi" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-capi</code> is the opcode layer the Go API (<code>go/</code>) reaches through gusset. A model id names a nanolab GPT held on one device: its weights, its trainer once one is open, and its tokenizer (<code>docs/framework-design.md</code> §7).</p>
+<hr>
+<h2 id="opcodes">Opcodes <a class="anchor" href="#opcodes" aria-label="Link to this section">#</a></h2>
+<p><code>{...}</code> is an option record (<code>src/wire.rs</code>): <code>count: u32</code>, then <code>tag: u32, len: u32, value</code> per field. An unknown tag, a repeated tag or a malformed value is refused, and every length is checked against the payload before anything is allocated.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Op</th><th>Payload</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>1 LOAD</td><td><code>{path, device?, threads?, budget?, numerics?}</code></td><td><code>id: u64, tensors: u32</code></td></tr>
+<tr><td>2</td><td>retired (the payload-only Step); not registered</td><td></td></tr>
+<tr><td>3 GENERATE</td><td><code>id: u64, mode: u32 = 1, n: u32, logits: [f32; n]</code></td><td><code>token: u32</code></td></tr>
+<tr><td>4 FREE</td><td><code>id: u64</code></td><td>empty</td></tr>
+<tr><td>5 PANIC</td><td>anything</td><td>(panics; test hook)</td></tr>
+<tr><td>6 NEW</td><td>spec fields, <code>seed</code>, placement fields</td><td><code>id: u64, tensors: u32</code></td></tr>
+<tr><td>7 TRAIN_OPEN</td><td><code>id: u64</code>, train fields</td><td>empty</td></tr>
+<tr><td>8 TRAIN_STEP</td><td><code>id: u64, mode: u32</code>; mode 1 adds <code>k, seq</code>, then per micro-batch <code>rows, x, y</code></td><td>loss f32, grad norm f32, Muon LR f64, AdamW LR f64, step u64, tokens u64</td></tr>
+<tr><td>9 SAVE</td><td><code>id: u64</code>, directory</td><td>empty</td></tr>
+<tr><td>10 RESUME</td><td><code>{path}</code>, placement fields, train fields</td><td><code>id: u64, tensors: u32</code></td></tr>
+<tr><td>11 TOKENIZER</td><td><code>id: u64, {vocab_json, merges_txt}</code></td><td>empty</td></tr>
+<tr><td>12 TOKENIZE</td><td><code>id: u64, mode: u32</code> (1 encode text, 2 decode ids), body</td><td>ids or UTF-8</td></tr>
+<tr><td>13 SAMPLE</td><td><code>id: u64, {temperature, top_k?, top_p?, seed, max_new_tokens, stop?, prompt}</code></td><td>ids</td></tr>
+<tr><td>14 INSPECT</td><td>relative path</td><td><code>tensors: u32</code></td></tr>
+<tr><td>15 SET_MEMORY_CEILING</td><td><code>bytes: u64</code></td><td>empty</td></tr>
+<tr><td>16 SYSTEM_PROFILE</td><td>empty, <code>budget: u64</code>, or <code>budget: u64, flags: u32</code></td><td>versioned host profile and resource plan record</td></tr>
+</tbody></table></div>
+<p>Placement: device 0 CPU, 1 CPU parallel (<code>threads</code> 1..=256), 2 Metal, 3 wgpu, 4 CPU auto (<code>auto_threads</code> from the plan&#39;s thread ceiling); <code>budget</code> bytes (default 1 GiB, per session); <code>numerics</code> 1 Exact or 2 Fast (CPU only).</p>
+<p>Memory ceiling: every session&#39;s budget is a child of one process-wide root <code>Budget</code> (<code>src/session.rs</code>), initialized to 1 GiB (<code>DEFAULT_MEMORY_CEILING_BYTES</code>) or the machine&#39;s <code>hard_memory_limit</code> (physical RAM or tighter cgroup limit) if smaller. All sessions together never account more than the ceiling; a charge past it is <code>ojas:E_CAPACITY:</code>. A session <code>budget</code> above the ceiling can never be met and is refused at load with <code>ojas:E_CAPACITY:</code>. SET_MEMORY_CEILING (<code>set_memory_ceiling</code>) is the only way to change it. It refuses 0, refuses <code>bytes</code> exceeding <code>hard_memory_limit</code> (<code>ojas:E_CAPACITY:</code>), and refuses while any model holds the ceiling (in the table, being built, or freed while a call is still inside it): a <code>Budget</code>&#39;s cap is fixed, so a new root under live sessions would split the accounting.</p>
+<p>Preflight validation: <code>preflight</code> verifies that the model spec&#39;s <code>head_dim</code> is supported by Metal (if Metal is requested) and that total parameter bytes fit the session budget before any device opens or weights are read from disk.</p>
+<hr>
+<h2 id="calls-and-the-model-lock">Calls and the model lock <a class="anchor" href="#calls-and-the-model-lock" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant Go as go/api.go
+    participant Dispatch as engine.rs dispatch
+    participant Table as session.rs table
+    participant Model as ModelState (per id)
+    participant Gate as gate.rs Gated backend
+
+    Go-&gt;&gt;Dispatch: TRAIN_STEP(id)
+    Dispatch-&gt;&gt;Table: require(id)
+    Dispatch-&gt;&gt;Model: try_lock
+    alt another call holds it
+        Model--&gt;&gt;Go: ojas:E_BUSY:
+    else
+        Dispatch-&gt;&gt;Gate: arm the job&#39;s cancel check
+        Gate-&gt;&gt;Gate: Trainer::step#59; each op before the optimizer polls the check
+        Dispatch-&gt;&gt;Gate: settled(): backend.sync()
+        Gate--&gt;&gt;Go: StepResult, or a kinded error
+    end</pre></figure>
+<ul>
+<li><strong>Cancellation.</strong> <code>Trainer::step</code> has no cancel hook, so the backend is wrapped (<code>gate.rs</code>): every op polls the job&#39;s cancel check except <code>muon_ns5_step</code>, <code>adamw_step</code>, <code>sync</code> and <code>download</code>, the trainer&#39;s optimizer and finish. A cancel therefore always lands before the optimizer and a cancelled step commits nothing. The call returns gusset&#39;s own <code>cancelled: Explicit</code>, which Go maps to <code>context.Canceled</code>.
+</li>
+<li><strong>Deferred faults.</strong> Every model call ends with <code>settled()</code>, so a NaN or lost device that Metal or wgpu reports at its next sync is this call&#39;s error, never the next call&#39;s.
+</li>
+<li><strong>Poison.</strong> An error in the optimizer or finish leaves the trainer partly updated: that call and every later Step, Save and Sample on the id return <code>ojas:E_POISONED:</code> until a Resume.
+</li>
+</ul>
+<hr>
+<h2 id="error-kinds">Error kinds <a class="anchor" href="#error-kinds" aria-label="Link to this section">#</a></h2>
+<p><code>ojas:E_CAPACITY:</code>, <code>ojas:E_NONFINITE:</code>, <code>ojas:E_DEVICE_LOST:</code> and <code>ojas:E_POISONED:</code> are chosen from the typed error where it is produced (<code>kind_of</code> in <code>src/lib.rs</code>), and <code>ojas:E_BUSY:</code> / <code>ojas:E_POISONED:</code> from the session lock (<code>Session::lock_state</code>). <code>ojas:E_PRESSURE:</code> comes from admission (<code>engine::admit</code>): a call that would allocate is refused before it starts while the kernel reports critical memory pressure. It is transient and changes nothing, Save and Free still run, and it is distinct from <code>E_CAPACITY</code> (the work will not fit). Never from message text, which carries user paths: a missing <code>ojas:E_BUSY: x.safetensors</code> is a plain load error. The kind is always the first thing in the message, and Go matches it only there.</p>
+<hr>
+<h2 id="security-invariants">Security invariants <a class="anchor" href="#security-invariants" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-important"><p class="alert-title">Important</p><ol>
+<li><strong>Every path is under the model root.</strong> LOAD, INSPECT, RESUME, SAVE, TRAIN_OPEN&#39;s token bin and TOKENIZER&#39;s two files are relative to <code>set_model_root</code>&#39;s directory: no <code>..</code>, no absolute path, and every existing component&#39;s canonical form must stay under the root (<code>resolve_under_root</code>, <code>resolve_dir_under_root</code>). A symlink inside the root that points inside it is followed; one that points out is refused.
+</li>
+<li><strong>Files are opened once, without following a final symlink.</strong> Model files, token bins and tokenizer files are opened with <code>O_NOFOLLOW</code> (<code>ojas_io::open_nofollow</code>) and checked to still be the entry the path names (<code>confirm_open_identity</code>). Loaders that take a path (<code>TokenBin</code>, <code>load_hf_gpt2</code>) are handed <code>/dev/fd/N</code> of that open file, so their own open cannot follow a symlink swapped in afterwards.
+</li>
+<li><strong>Checkpoint directories.</strong> SAVE writes a sibling staging directory and swaps it in whole (<code>ojas_io::replace_dir_with</code>, which refuses a symlinked target or parent); RESUME reads <code>state.ojck</code> and both safetensors files with <code>O_NOFOLLOW</code>, checks every name, shape, step and run id, and builds the trainer only after every check passes.
+</li>
+<li><strong>Bounded.</strong> 64 sessions; a per-session byte budget charged by every tensor, drawn from a process-wide ceiling (1 GiB unless SET_MEMORY_CEILING raises it with no model open); 4 KiB paths; 64 option fields; tokenizer files and text at 32 MiB (<code>ojas_data::HF_TEXT_CAP</code>); thread counts 1..=256.
+</li>
+<li><strong>No silent fallback.</strong> A Metal or wgpu device that cannot open is the load&#39;s error (<code>metal: ...</code>, <code>wgpu: ...</code>); no CPU session stands in.
+</li>
+<li><strong>Panic isolation.</strong> Panics are caught on the worker thread and poison the gusset handle (<code>gusset.ErrPoisoned</code>) until <code>Close()</code>.
+</li>
+</ol>
+</aside>
+<aside class="alert alert-warning"><p class="alert-title">Warning</p><p><code>catch_unwind</code> cannot catch process aborts, out-of-memory aborts from infallible allocations (<code>vec!</code>, <code>format!</code>), or stack overflows.</p>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-capi/README.md" rel="noopener"><code>ojas-capi/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-autograd.html" rel="prev"><span>Previous</span>ojas-autograd</a>
+        <a href="crate-ojas-core.html" rel="next" class="next"><span>Next</span>ojas-core</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#opcodes">Opcodes</a></li>
+<li><a href="#calls-and-the-model-lock">Calls and the model lock</a></li>
+<li><a href="#error-kinds">Error kinds</a></li>
+<li><a href="#security-invariants">Security invariants</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

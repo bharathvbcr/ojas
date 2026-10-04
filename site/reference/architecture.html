@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas Architecture &amp; System Design · ojas reference</title>
+  <meta name="description" content="This document specifies the technical architecture, memory model, execution graphs, and invariants of ojas as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/architecture.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/architecture.html">
+  <meta property="og:title" content="ojas Architecture &amp; System Design · ojas reference">
+  <meta property="og:description" content="This document specifies the technical architecture, memory model, execution graphs, and invariants of ojas as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html" class="current" aria-current="page">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="ojas-architecture--system-design">ojas Architecture &amp; System Design <a class="anchor" href="#ojas-architecture--system-design" aria-label="Link to this section">#</a></h1>
+<p>This document specifies the technical architecture, memory model, execution graphs, and invariants of <strong>ojas</strong> as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.</p>
+<hr>
+<h2 id="1-system-philosophy-a-modern-dl-engine">1. System Philosophy: A Modern DL Engine <a class="anchor" href="#1-system-philosophy-a-modern-dl-engine" aria-label="Link to this section">#</a></h2>
+<p>ojas is architected from first principles to overcome fundamental design flaws common in legacy machine learning frameworks:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph CorePillars[&#34;The Five Pillars of ojas&#34;]
+        P1[&#34;1. Deterministic Bit-Identicality\n(Reproducible scientific results without hidden seed drift)&#34;]
+        P2[&#34;2. Zero Silent Fallbacks\n(Hardware unavailability fails loud and early; no secret CPU throttling)&#34;]
+        P3[&#34;3. Strict Memory Budgets\n(try_reserve refuses. vec!, format!, and thread::spawn can still abort)&#34;]
+        P4[&#34;4. In-Process Multi-Language Runtime\n(Native Rust core exposed seamlessly to Go and C without IPC overhead)&#34;]
+        P5[&#34;5. Zero-Copy Tensor Views\n(Slices preserve explicit byte offsets across multi-backend kernels)&#34;]
+    end</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Radical Determinism:</strong> Deep learning research requires exact reproducibility. ojas enforces bit-identical outputs across single-threaded CPU runs and across SIMD backends in the Exact tier, avoiding nondeterministic thread reduction tree races.</p>
+<p><strong>Zero Silent Fallback Guarantee:</strong> When an accelerator backend is selected (Metal, wgpu, CUDA, HIP), driver initialization failures produce immediate, explicit errors—<strong>never silently falling back to host CPU execution</strong>.</p>
+</aside>
+<hr>
+<h2 id="2-framework-decomposition">2. Framework Decomposition <a class="anchor" href="#2-framework-decomposition" aria-label="Link to this section">#</a></h2>
+<p>ojas separates concerns into decoupled layers with unidirectional dependencies:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Layer5[&#34;5. Language Bindings &amp; Client Applications&#34;]
+        GoPkg[&#34;Go API (github.com/bharathvbcr/ojas/go)&#34;]
+        RustApps[&#34;Rust Client Applications&#34;]
+        ForeignHost[&#34;C / C++ Embeddings&#34;]
+    end
+
+    subgraph Layer4[&#34;4. In-Process Runtime &amp; FFI Bridge&#34;]
+        Gusset[&#34;ojas-gusset-engine (Worker Pool &amp; Ticket Management)&#34;]
+        CAPI[&#34;ojas-capi (C-ABI Engine, Session Store, Panic Boundaries)&#34;]
+    end
+
+    subgraph Layer3[&#34;3. Models, Autograd &amp; High-Level Primitives&#34;]
+        Infer[&#34;ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CPU)&#34;]
+        Model[&#34;ojas-model (nanolab GPT written once: spec, init, Graph block, Eval, Trainer, checkpoint dir)&#34;]
+        Qwen35[&#34;ojas-qwen35 (Qwen3.5 whole-step provider over tessl; macOS Metal only; not a Backend)&#34;]
+        Autograd[&#34;ojas-autograd (Reverse-Mode Tape; uploads on GPU)&#34;]
+    end
+
+    subgraph Layer2[&#34;2. Hardware Compute Acceleration Backends&#34;]
+        CPU[&#34;ojas-cpu (CpuBackend: Exact packed GEMM, or Fast with Accelerate)&#34;]
+        SIMD[&#34;ojas-simd (NEON GEMM, AVX2, Accelerate cblas_sgemm, vDSP / vForce)&#34;]
+        Metal[&#34;ojas-metal (MetalBackend via tessl &amp; MSL, device-resident)&#34;]
+        WGPU[&#34;ojas-wgpu (WgpuBackend, device-resident WGSL)&#34;]
+        Kernels[&#34;ojas-kernels (Shared WGSL/CUDA sources, workgroup geometry)&#34;]
+        CUDA[&#34;ojas-cuda (one affine kernel, feature cuda; not a Backend)&#34;]
+        HIP[&#34;ojas-hip (copy probe, feature hip; not a Backend)&#34;]
+    end
+
+    subgraph Layer1[&#34;1. Core Substrates &amp; Data Ingestion&#34;]
+        Core[&#34;ojas-core (Tensor host &amp; device, Layout, Budget, DType, Numerics, OjasError)&#34;]
+        Device[&#34;ojas-device (Device kinds, host probe, ResourcePolicy; no router)&#34;]
+        IO[&#34;ojas-io (Safetensors Reader/Writer, Checkpoint v1 Binary Codec)&#34;]
+        Data[&#34;ojas-data (Dataset Binary Streaming, Deterministic Counter RNG)&#34;]
+        Oracle[&#34;ojas-oracle (IEEE-754 f64 Analytical Reference Data)&#34;]
+    end
+
+    Layer5 --&gt; Layer4
+    Layer4 --&gt; Layer3
+    Layer3 --&gt; Layer2
+    Layer2 --&gt; Layer1
+    Layer3 --&gt; Layer1</pre></figure>
+<p>Inside layer 3, <code>ojas-model</code> sits on <code>ojas-autograd</code>, <code>ojas-io</code> and <code>ojas-data</code>, and <code>ojas-infer</code> sits on <code>ojas-model</code>. <code>ojas-capi</code> depends on the model, inference, io, data, cpu, wgpu, metal and device crates. <code>ojas-qwen35</code> depends only on <code>ojas-core</code>, <code>ojas-io</code> and tessl, and is empty off macOS. The design is in <a href="framework-design.html"><code>framework-design.md</code></a>.</p>
+<hr>
+<h2 id="3-general-purpose-tensor-engine--memory-model">3. General-Purpose Tensor Engine &amp; Memory Model <a class="anchor" href="#3-general-purpose-tensor-engine--memory-model" aria-label="Link to this section">#</a></h2>
+<h3 id="31-tensor-view-model">3.1 Tensor View Model <a class="anchor" href="#31-tensor-view-model" aria-label="Link to this section">#</a></h3>
+<p>A <code>Tensor</code> in <code>ojas-core</code> is an immutable or mutably borrowable view into a contiguous byte storage backing (<code>Arc&lt;Vec&lt;u8&gt;&gt;</code> or a backend&#39;s device buffer). <code>Tensor::from_device</code> wraps a device buffer; <code>to_host</code> copies it back and is counted by <code>device_readbacks()</code>; <code>device_buffer_mut</code> requires sole ownership. Host accessors such as <code>to_f32_vec</code> refuse a device tensor rather than reading it back implicitly.</p>
+<p>$$\text{Element Index}(\mathbf{i}) = \text{byte\_offset} + \sum_{k=0}^{\text{rank}-1} i_k \cdot \text{strides}[k] \cdot \text{dtype.size\_bytes}()$$</p>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph PhysicalBuffer[&#34;Underlying Physical Memory (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;]
+        Prefix[&#34;Leading Offset Padding\n[0 .. byte_offset)&#34;]
+        Active[&#34;Active Tensor Slice\n[byte_offset .. byte_offset + active_bytes)&#34;]
+        Suffix[&#34;Trailing Capacity\n[byte_offset + active_bytes .. capacity)&#34;]
+    end
+
+    subgraph View1[&#34;Tensor View A [B, T, D]&#34;]
+        OffA[&#34;byte_offset = 0&#34;]
+        ShapeA[&#34;shape = [1, 16, 64]&#34;]
+    end
+
+    subgraph ViewB[&#34;Tensor View B (Slices View A)&#34;]
+        OffB[&#34;byte_offset = 2048&#34;]
+        ShapeB[&#34;shape = [1, 8, 64]&#34;]
+    end
+
+    View1 --&gt; Active
+    ViewB --&gt; Active</pre></figure>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p><code>Tensor::narrow(dim, start, len)</code> creates a new zero-copy view by calculating the new <code>byte_offset</code> and updating dimensions. It never copies underlying buffer elements or causes memory fragmentation.</p>
+</aside>
+<hr>
+<h3 id="32-memory-budgeting-state-machine">3.2 Memory Budgeting State Machine <a class="anchor" href="#32-memory-budgeting-state-machine" aria-label="Link to this section">#</a></h3>
+<p>All tensor allocations in <code>ojas</code> must request permits from a <code>Budget</code>. Memory cannot be silently resized, overcommitted, or swapped:</p>
+<figure class="diagram"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; Initialized: Budget#58;#58;new(max_bytes)
+    
+    Initialized --&gt; Active: try_reserve(req) [req &lt;= remaining]
+    Active --&gt; Active: try_reserve(req) [req &lt;= remaining]
+    Active --&gt; Initialized: drop(Reservation) [frees bytes]
+    
+    Initialized --&gt; Rejected: try_reserve(req) [req &gt; remaining]
+    Active --&gt; Rejected: try_reserve(req) [req &gt; remaining]
+    
+    Rejected --&gt; [*]: Returns Err(OjasError#58;#58;CapacityExceeded)</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p>If an allocation exceeds remaining budget limits, <code>try_reserve()</code> returns <code>Err(OjasError::CapacityExceeded)</code> immediately. The engine <strong>refuses to silently swap to disk or resize limits</strong>. <code>check_room(bytes)</code> allows checking capacity ahead of multi-step execution without reserving, and <code>peak_bytes()</code> / <code>reset_peak()</code> enable exact phase-by-phase peak memory measurement. Infallible system allocators (<code>vec!</code>, <code>format!</code>, <code>thread::spawn</code>) operate outside this software budget and can still abort if physical host memory is exhausted.</p>
+</aside>
+<hr>
+<h2 id="4-dynamic-reverse-mode-autograd-tape">4. Dynamic Reverse-Mode Autograd Tape <a class="anchor" href="#4-dynamic-reverse-mode-autograd-tape" aria-label="Link to this section">#</a></h2>
+<p><code>ojas-autograd</code> implements a dynamic tape-based automatic differentiation engine. On a CPU backend the tensors stay as given and the cross-entropy seed is scaled on the host. On any other backend, <code>leaf</code> and the saved inputs are uploaded, reshape is a zero-copy <code>Tensor::view</code>, and the backward seed is uploaded. A non-root cross-entropy gradient is scaled with two rank-1 linears and a multiply, all on that backend.</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph GraphBuilding[&#34;Dynamic Graph Construction (Forward Pass)&#34;]
+        X[&#34;Input Var x&#34;] --&gt; L1[&#34;Linear Node&#34;]
+        W1[&#34;Weight Var W1&#34;] --&gt; L1
+        L1 --&gt; A1[&#34;Activation Node (SiLU / GELU / ReLU)&#34;]
+        A1 --&gt; L2[&#34;Linear Node&#34;]
+        W2[&#34;Weight Var W2&#34;] --&gt; L2
+        L2 --&gt; LossNode[&#34;Loss Node (Cross-Entropy / MSE)&#34;]
+    end
+
+    subgraph BackwardSweep[&#34;Reverse Adjoint Sweep (Backward Pass)&#34;]
+        Seed[&#34;Seed: dLoss = 1.0&#34;] --&gt; AdjLoss[&#34;Adjoint: Cross-Entropy Backward&#34;]
+        AdjLoss --&gt; AdjL2[&#34;Adjoint: Linear Backward&#34;]
+        AdjL2 --&gt; GradW2[&#34;Accumulate dW2&#34;]
+        AdjL2 --&gt; AdjA1[&#34;Adjoint: Activation Backward&#34;]
+        AdjA1 --&gt; AdjL1[&#34;Adjoint: Linear Backward&#34;]
+        AdjL1 --&gt; GradW1[&#34;Accumulate dW1&#34;]
+        AdjL1 --&gt; GradX[&#34;Accumulate dx&#34;]
+    end
+
+    GraphBuilding ==&gt; BackwardSweep</pre></figure>
+<h3 id="41-numerical-verification-oracle-central-diff">4.1 Numerical Verification Oracle (<code>central_diff</code>) <a class="anchor" href="#41-numerical-verification-oracle-central-diff" aria-label="Link to this section">#</a></h3>
+<p>Every gradient calculation is mathematically tested against an offline <code>f64</code> numerical oracle using central finite differences:</p>
+<p>$$\frac{\partial f}{\partial x_i} \approx \frac{f(\mathbf{x} + h \mathbf{e}_i) - f(\mathbf{x} - h \mathbf{e}_i)}{2h}$$</p>
+<p>Where $h = 10^{-5}$ in double precision (<code>f64</code>). Analytical gradients must match within specified absolute and relative tolerances (<code>atol</code>, <code>rtol</code>), otherwise tests fail fast with detailed coordinate diagnostics.</p>
+<hr>
+<h2 id="5-in-process-multi-language-bridge-gusset--ojas-capi">5. In-Process Multi-Language Bridge (<code>gusset</code> + <code>ojas-capi</code>) <a class="anchor" href="#5-in-process-multi-language-bridge-gusset--ojas-capi" aria-label="Link to this section">#</a></h2>
+<p>Rather than relying on Python runtimes with global interpreter locks (GIL), <code>ojas</code> supports seamless in-process foreign language integration (e.g. Go, C):</p>
+<figure class="diagram"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant App as Host Application (Go / C)
+    participant CGO as CGO Wrapper (go/ffi.go)
+    participant Gusset as Worker Pool (libgusset.a)
+    participant CAPI as Dispatcher (ojas-capi)
+    participant Engine as Session Backend (CpuBackend / MetalBackend / WgpuBackend)
+
+    App-&gt;&gt;CGO: ojas.TrainStep(ctx, id)
+    CGO-&gt;&gt;Gusset: Submit job to worker thread
+    Gusset-&gt;&gt;CAPI: dispatch(OP_TRAIN_STEP)
+    
+    Note over CAPI: catch_unwind catches a panic, not an abort
+    alt Successful Execution
+        CAPI-&gt;&gt;Engine: Trainer step: forward, fused CE, backward, Muon + AdamW
+        Engine--&gt;&gt;CAPI: StepResult{Loss, GradNorm, MatrixLR, AdamLR, Step, Tokens}
+        CAPI--&gt;&gt;Gusset: Serialized f32 Result Buffer
+        Gusset--&gt;&gt;CGO: Return Buffer
+        CGO--&gt;&gt;App: StepResult, nil
+    else Rust Panic Triggered
+        Gusset-&gt;&gt;Gusset: catch_unwind on the worker, poison the handle
+        Gusset--&gt;&gt;CGO: gusset.ErrPanic
+        CGO--&gt;&gt;App: error (later calls: gusset.ErrPoisoned until Close)
+    end</pre></figure>
+<p>The Go surface is <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, <code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code> and <code>Close</code>. The opcodes are in <code>ojas-capi/src/engine.rs</code>; the old stub step opcode (2) is retired. Every model&#39;s byte budget is a child of one process-wide ceiling (default 1 GiB, or machine hard limit <code>hard_memory_limit</code> if smaller), which <code>SetMemoryCeiling</code> raises up to physical/cgroup limits and which cannot change while a model is open. Failures cross the boundary as typed kinds (<code>ErrCapacity</code>, <code>ErrNonFinite</code>, <code>ErrDeviceLost</code>, <code>ErrBusy</code>, <code>ErrPoisoned</code>, <code>ErrPressure</code>), listed in <a href="crate-go.html"><code>go/README.md</code></a>.</p>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>A panic on a gusset worker is caught by <code>catch_unwind</code> and poisons the entire gusset handle: subsequent calls return <code>gusset.ErrPoisoned</code> until the handle is closed. If the panic occurred while holding the session table lock, the next lock acquisition <strong>drops every session in the table</strong> (<code>ojas-capi/src/session.rs</code>) to prevent corruption. Note that <code>catch_unwind</code> cannot intercept OS process aborts or stack overflows.</p>
+</aside>
+<hr>
+<h2 id="6-flagship-reference-architecture-nanolab-default-gpt">6. Flagship Reference Architecture: nanolab Default GPT <a class="anchor" href="#6-flagship-reference-architecture-nanolab-default-gpt" aria-label="Link to this section">#</a></h2>
+<p>To validate full-stack training, <code>ojas</code> targets the 124M nanolab default GPT (12 layers, width 768, 12 heads of 64, SwiGLU 2048, vocabulary 50304, tied embedding) as its v1 vertical slice. <code>ojas-model</code> writes the model once. The <code>Graph</code> trait has one method per op, and two executors implement it: <code>ojas_autograd::Tape</code> records for training and <code>Eval</code> runs eagerly for decoding, so training and decoding share one block. Parameter names are nanolab <code>state_dict</code> keys, init is order-independent (one counter RNG per name), and <code>Trainer</code> saves and resumes a checkpoint directory. CI exercises <code>ModelSpec::tiny</code> and a 40 KB fixture; no full 124M run is recorded in <a href="status.html"><code>status.md</code></a>. The block:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph TransformerBlock[&#34;Transformer Block with Gated Attention &amp; Value Residual&#34;]
+        In[&#34;Input x [B, T, D]&#34;] --&gt; PreNorm[&#34;RMSNorm (eps=1e-6)&#34;]
+        
+        PreNorm --&gt; QKV[&#34;Q, K, V Projections&#34;]
+        QKV --&gt; RoPE[&#34;Half-Split RoPE&#34;]
+        RoPE --&gt; QKN[&#34;RMS QK-Norm&#34;]
+        QKN --&gt; SDPA[&#34;Causal Scaled Dot-Product Attention (scale=1/8)&#34;]
+        
+        PreNorm --&gt; Gate[&#34;Linear Gate + Bias: sigmoid(x W_g + b_g)&#34;]
+        SDPA --&gt; GatedAttn[&#34;Per-Head Gated Attn = SDPA * Gate&#34;]
+        Gate --&gt; GatedAttn
+        
+        GatedAttn --&gt; VR[&#34;Value Residual Blend: lerp(Attn, V0, sigmoid(vr_lambda))&#34;]
+        VR --&gt; OutProj[&#34;Linear Output Projection&#34;]
+        OutProj --&gt; ResAdd1[&#34;Residual Add (+)&#34;]
+        In --&gt; ResAdd1
+        
+        ResAdd1 --&gt; PostNorm[&#34;RMSNorm (eps=1e-6)&#34;]
+        PostNorm --&gt; SwiGLU[&#34;SwiGLU MLP: (x W_g) * silu(x W_up) W_down&#34;]
+        SwiGLU --&gt; ResAdd2[&#34;Residual Add (+)&#34;]
+        ResAdd1 --&gt; ResAdd2
+    end</pre></figure>
+<h3 id="dual-optimizer-topology">Dual Optimizer Topology <a class="anchor" href="#dual-optimizer-topology" aria-label="Link to this section">#</a></h3>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph ModelWeights[&#34;Model Parameters&#34;]
+        HiddenMat[&#34;Hidden 2D Weight Matrices (Rank &gt;= 2)\n- Q, K, V Projections\n- Attention Out Projection\n- SwiGLU Gate, Up, Down Projections\n- Attention Gate Weight&#34;]
+        OneD[&#34;1D Parameters &amp; Embeddings\n- Token / LM Head Embedding\n- RMSNorm Scale Weights\n- Attention Gate Biases\n- Value Residual Lambdas (vr_lambda)&#34;]
+    end
+
+    subgraph Optimizers[&#34;Dual Optimizers&#34;]
+        Muon[&#34;Muon NS5 Optimizer\n- LR = 0.025, Momentum = 0.99, Nesterov = True\n- 5th-order Newton-Schulz iterate in bf16\n- Zeropower orthogonalization&#34;]
+        AdamW[&#34;AdamW Optimizer\n- PyTorch single-tensor order (decay first)\n- eps = 1e-8 outside sqrt\n- Weight decay = 0.0 on Muon hybrid&#34;]
+    end
+
+    HiddenMat --&gt; Muon
+    OneD --&gt; AdamW</pre></figure>
+<ul>
+<li><strong>Matrices ($\text{rank} \ge 2$):</strong> Optimized via <strong>Muon NS5</strong> (Nesterov momentum, quintic Newton-Schulz iterate in <code>bf16</code>).
+</li>
+<li><strong>Vectors &amp; Embeddings ($\text{rank} &lt; 2$):</strong> Optimized via <strong>AdamW</strong> (PyTorch single-tensor order, decay first, $\varepsilon=10^{-8}$ outside square root).
+</li>
+</ul>
+<hr>
+<h2 id="7-web-documentation-identity--domain-ecosystem">7. Web Documentation, Identity &amp; Domain Ecosystem <a class="anchor" href="#7-web-documentation-identity--domain-ecosystem" aria-label="Link to this section">#</a></h2>
+<h3 id="71-web-application-architecture">7.1 Web Application Architecture <a class="anchor" href="#71-web-application-architecture" aria-label="Link to this section">#</a></h3>
+<p>The site (<a href="../"><code>site/index.html</code></a>, mirrored to <a href="../"><code>docs/index.html</code></a>) is one page. The labs, why, benchmarks, roadmap, and guide are sections of it:</p>
+<ul>
+<li><strong>Guarantee labs:</strong> a determinism lab that sums the same float32 values with split-k and with the Exact order, plus memory budget, device refusal, panic firewall, and checked shape and view labs. Each prints the error text from the source.
+</li>
+<li><strong>Why ojas:</strong> the reasons, the author&#39;s account of the defects in <code>docs/audit.md</code> that led to ojas, and what it is and is not ready for.
+</li>
+<li><strong>Benchmarks:</strong> the 2026-10-02 CPU plots (block forward + backward, both recorded training-step runs, and the ops where ojas is slower) beside the scorecard tables.
+</li>
+<li><strong>Roadmap:</strong> the model and trainer have landed. What is left is proof at full size, speed against PyTorch, and breadth.
+</li>
+<li><strong>Developer docs:</strong> quickstart (with Rust and Go snippets compiled against this tree), core concepts, feature reference, Go API reference, architecture and crates, status and limits, and contributing rules.
+</li>
+<li><strong>Command palette:</strong> <code>⌘K</code> or <code>/</code> searches the labs and every section.
+</li>
+</ul>
+<h3 id="72-visual-identity-ojas">7.2 Visual Identity (ojas) <a class="anchor" href="#72-visual-identity-ojas" aria-label="Link to this section">#</a></h3>
+<p>One logo: a regular icosahedron of dark red liquid glass with a glowing core, in the same material as the LiquiTask logo. <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/brand/ojas-logo-source.png" rel="noopener"><code>docs/brand/ojas-logo-source.png</code></a> is the only source; <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/brand/render.sh" rel="noopener"><code>docs/brand/render.sh</code></a> derives the transparent logo, the tile, the favicon, touch and manifest icons, and the 1200×630 social card from it. Asset list and regeneration: <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/web-and-domain.md#2-visual-identity-one-logo" rel="noopener"><code>web-and-domain.md</code></a>.</p>
+<h3 id="73-domain-wiring--deployment-topology">7.3 Domain Wiring &amp; Deployment Topology <a class="anchor" href="#73-domain-wiring--deployment-topology" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Canonical Domain:</strong> <a href="https://ojas.vbcr.dev/" rel="noopener"><code>https://ojas.vbcr.dev/</code></a> via <a href="https://github.com/bharathvbcr/ojas/blob/main/site/CNAME" rel="noopener"><code>site/CNAME</code></a> and <a href="https://github.com/bharathvbcr/ojas/blob/main/.github/workflows/deploy-pages.yml" rel="noopener"><code>.github/workflows/deploy-pages.yml</code></a>.
+</li>
+<li><strong>Integrated Portfolio Route:</strong> <a href="https://bharath.vbcr.dev/ojas" rel="noopener"><code>https://bharath.vbcr.dev/ojas</code></a> resolved via <code>APP_ROUTES[&#39;ojas&#39;]</code> and <code>PROJECT_SITES[&#39;ojas&#39;]</code> (<code>p41</code>) in the portfolio engine.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/architecture.md" rel="noopener"><code>docs/architecture.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="adaptive-resources.html" rel="prev"><span>Previous</span>Adaptive resources audit</a>
+        <a href="backends.html" rel="next" class="next"><span>Next</span>Hardware Backends &amp; Device Architecture</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#1-system-philosophy-a-modern-dl-engine">1. System Philosophy: A Modern DL Engine</a></li>
+<li><a href="#2-framework-decomposition">2. Framework Decomposition</a></li>
+<li><a href="#3-general-purpose-tensor-engine--memory-model">3. General-Purpose Tensor Engine &amp; Memory Model</a></li>
+<li class="sub"><a href="#31-tensor-view-model">3.1 Tensor View Model</a></li>
+<li class="sub"><a href="#32-memory-budgeting-state-machine">3.2 Memory Budgeting State Machine</a></li>
+<li><a href="#4-dynamic-reverse-mode-autograd-tape">4. Dynamic Reverse-Mode Autograd Tape</a></li>
+<li class="sub"><a href="#41-numerical-verification-oracle-central-diff">4.1 Numerical Verification Oracle (central_diff)</a></li>
+<li><a href="#5-in-process-multi-language-bridge-gusset--ojas-capi">5. In-Process Multi-Language Bridge (gusset + ojas-capi)</a></li>
+<li><a href="#6-flagship-reference-architecture-nanolab-default-gpt">6. Flagship Reference Architecture: nanolab Default GPT</a></li>
+<li class="sub"><a href="#dual-optimizer-topology">Dual Optimizer Topology</a></li>
+<li><a href="#7-web-documentation-identity--domain-ecosystem">7. Web Documentation, Identity &amp; Domain Ecosystem</a></li>
+<li class="sub"><a href="#71-web-application-architecture">7.1 Web Application Architecture</a></li>
+<li class="sub"><a href="#72-visual-identity-ojas">7.2 Visual Identity (ojas)</a></li>
+<li class="sub"><a href="#73-domain-wiring--deployment-topology">7.3 Domain Wiring &amp; Deployment Topology</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

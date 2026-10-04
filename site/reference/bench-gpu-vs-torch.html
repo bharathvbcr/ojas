@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPU Backends versus PyTorch MPS · ojas reference</title>
+  <meta name="description" content="Paired A/B of ojas&#39;s two GPU backends, MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu), against PyTorch 2.13 MPS, at nanolab&#39;s default shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabul…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/bench-gpu-vs-torch.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/bench-gpu-vs-torch.html">
+  <meta property="og:title" content="GPU Backends versus PyTorch MPS · ojas reference">
+  <meta property="og:description" content="Paired A/B of ojas&#39;s two GPU backends, MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu), against PyTorch 2.13 MPS, at nanolab&#39;s default shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabul…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html" class="current" aria-current="page">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Benchmarks</p>
+      <article class="prose-ojas">
+<h1 id="gpu-backends-versus-pytorch-mps">GPU Backends versus PyTorch MPS <a class="anchor" href="#gpu-backends-versus-pytorch-mps" aria-label="Link to this section">#</a></h1>
+<p>Paired A/B of ojas&#39;s two GPU backends, <code>MetalBackend</code> (<code>ojas-metal</code>) and <code>WgpuBackend</code> (<code>ojas-wgpu</code>), against PyTorch 2.13 MPS, at nanolab&#39;s default shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabulary 50304, B 4, T 1024 (4096 rows). Each kernel is timed forward and backward where it has a backward. One composed nanolab block is timed forward, and forward plus backward. Everything is f32 on both sides.</p>
+<p>The harness, the commands and the row definitions are in <a href="crate-bench.html"><code>bench/README.md</code></a>. Raw data: round 1 in <code>bench/results/2026-10-01/</code>, round 2 in <code>bench/results/2026-10-01-r2/</code>, round 3 in <code>bench/results/2026-10-01-r3b/</code>, and the round 3 regression A/B in <code>bench/results/2026-10-01-ab/</code>.</p>
+<p>The document has four dated sections:</p>
+<ul>
+<li><strong>Round 5 and the LM-head GEMM</strong> (first): round 5&#39;s remaining Metal gaps, and the fix to tessl&#39;s exact-f32 GEMM tile walk that halves the LM head. It ends with the gate_bwd profile and its bias-sum fix.
+</li>
+<li><strong>Round 3</strong>, after typed host storage, Metal deferred faults and device-resident AdamW. It also settles the round 2 Metal &#34;regressions&#34;.
+</li>
+<li><strong>Round 2</strong>, after the Metal and wgpu optimization rounds landed.
+</li>
+<li><strong>Round 1</strong>, kept below unchanged for comparison.
+</li>
+</ul>
+<h2 id="round-5-and-the-lm-head-gemm-2026-10-02">Round 5 and the LM-head GEMM: 2026-10-02 <a class="anchor" href="#round-5-and-the-lm-head-gemm-2026-10-02" aria-label="Link to this section">#</a></h2>
+<h3 id="round-5-benchresults2026-10-02-r5summarymd">Round 5 (<code>bench/results/2026-10-02-r5/summary.md</code>) <a class="anchor" href="#round-5-benchresults2026-10-02-r5summarymd" aria-label="Link to this section">#</a></h3>
+<p>Round 5 was run after the condvar feedback wait and the fused elementwise checks. It used 5 rounds, the full row set, and the binaries in its <code>env.txt</code>. As in round 3, the GPU read 100% busy from another process throughout, so every row is flagged noisy. Ratios give the direction only.</p>
+<ul>
+<li><strong>At or near parity:</strong> Metal&#39;s nanolab block forward + backward is 1.07× torch. The elementwise rows are 1.00–1.14×.
+</li>
+<li><strong>Slowest Metal rows (torch median / ojas median):</strong>
+<div class="table-wrap"><table>
+<thead><tr><th>Row</th><th style="text-align:right">Ratio</th></tr></thead>
+<tbody>
+<tr><td><code>linear_lmhead_fwd</code></td><td style="text-align:right">0.48×</td></tr>
+<tr><td><code>gate_bwd</code> (bias sum fixed below; wall time not re-measured)</td><td style="text-align:right">0.48×</td></tr>
+<tr><td><code>accumulate_grad</code></td><td style="text-align:right">0.57×</td></tr>
+<tr><td><code>cross_entropy_bwd</code></td><td style="text-align:right">0.61×</td></tr>
+<tr><td><code>sdpa</code> fwd, d64</td><td style="text-align:right">0.65–0.72×</td></tr>
+<tr><td><code>block_fwd</code></td><td style="text-align:right">0.66×</td></tr>
+<tr><td><code>linear_lmhead_bwd</code></td><td style="text-align:right">0.72×</td></tr>
+<tr><td><code>linear_ce_c4096x50304</code></td><td style="text-align:right">0.78×</td></tr>
+</tbody></table></div>
+</li>
+</ul>
+<p>The LM-head rows were the largest by time, so they came first.</p>
+<h3 id="what-makes-the-lm-head-slow-one-pass-over-the-weight-per-tile-row-verified">What makes the LM head slow: one pass over the weight per tile row (verified) <a class="anchor" href="#what-makes-the-lm-head-slow-one-pass-over-the-weight-per-tile-row-verified" aria-label="Link to this section">#</a></h3>
+<p>The <code>gemm</code> group of <code>metal_bench</code> times tessl&#39;s exact-f32 GEMM directly, outside the backend (<code>bench/results/2026-10-02-gemm/</code>):</p>
+<ul>
+<li><strong>N sets the rate, M doesn&#39;t.</strong> NT runs at 6.5–7 TFLOP/s for N ≤ 2304. It drops to 2.4 at N = 16384 and to 2.3 at the LM head (4096 × 50304 × 768).
+</li>
+<li><strong>Every tile row is DRAM-bound.</strong> At N = 50304, 32 rows (one row of 32×32 tiles) run at the same ~2.4 TFLOP/s as 2048 rows: 1.0 ms each. That is one read of the 154 MB weight at ~150 GB/s. A 32-row tile does 16 flop per byte of weight, so a DRAM-bound pass caps near 2.5 TFLOP/s.
+</li>
+<li><strong>Cause (inferred from the kernel and confirmed by the fix):</strong> the five exact-f32 kernels walked tiles row-major. Threadgroups running at the same time share an A tile and each read a different B tile, so B is re-read for every tile row. Splitting the vocabulary into ≤ 4096-column GEMMs halves the time, which matches.
+</li>
+<li><strong>The other two LM-head GEMMs:</strong>
+<ul>
+<li>The weight gradient (TN, N = 768) is not affected.
+</li>
+<li>The input gradient (NN with K = 50304) is a long-K shape, which the walk does not address.
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="fix-tessl-walks-a-large-b-in-column-panels-verified">Fix: tessl walks a large B in column panels (verified) <a class="anchor" href="#fix-tessl-walks-a-large-b-in-column-panels-verified" aria-label="Link to this section">#</a></h3>
+<p>With the user&#39;s approval, the change was made in tessl, the owner of the kernels, rather than by chunking inside ojas. tessl&#39;s bf16 coop NN kernel already had an 8-row column-panel swizzle. Its index math became a shared helper, <code>tile_from_linear_panel</code>, and the exact-f32 kernels use it in 16-row bands. Each tile&#39;s arithmetic is unchanged, so outputs are bit-identical; only the order threadgroups run in changes.</p>
+<p>The first gate copied the coop kernel&#39;s grid size (≥ 2048 tiles). It measured ~8% slower on the LM head&#39;s weight gradient, where B is only 12.6 MB. The gate was moved to B&#39;s size: panels when N·K ≥ 2²³ elements (32 MiB).</p>
+<p>Interleaved A/B of the GEMM probe, min of 4 runs per side (<code>ab-grid-gate/</code>, <code>ab-footprint-gate/</code>), time relative to row-major:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Shape</th><th style="text-align:right">B</th><th style="text-align:right">Row-major ms</th><th style="text-align:right">Panels ms</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td>NT LM head 4096 × 50304 × 768</td><td style="text-align:right">154 MB</td><td style="text-align:right">137.9</td><td style="text-align:right">63.6</td><td style="text-align:right">0.46×</td></tr>
+<tr><td>NT 128–2048 rows × 50304</td><td style="text-align:right">154 MB</td><td style="text-align:right"></td><td style="text-align:right"></td><td style="text-align:right">0.39–0.47×</td></tr>
+<tr><td>NT 4096 × 16384 × 768</td><td style="text-align:right">50 MB</td><td style="text-align:right">43.5</td><td style="text-align:right">19.2</td><td style="text-align:right">0.44×</td></tr>
+<tr><td>TN 768 × 2048 × 4096</td><td style="text-align:right">32 MB</td><td style="text-align:right">2.62</td><td style="text-align:right">2.02</td><td style="text-align:right">0.77×</td></tr>
+<tr><td>TN 50304 × 768 × 4096, grid gate</td><td style="text-align:right">12.6 MB</td><td style="text-align:right">55.0</td><td style="text-align:right">59.3</td><td style="text-align:right">1.08× (why the gate moved)</td></tr>
+<tr><td>Transformer-width shapes</td><td style="text-align:right">&lt; 32 MB</td><td style="text-align:right"></td><td style="text-align:right"></td><td style="text-align:right">0.99–1.02× (not engaged)</td></tr>
+</tbody></table></div>
+<p>Some rows swing up to ±20% between runs under the outside GPU load. For example, NT 4096 × 8192, whose code path did not change, read 1.21× in one round. Only effects that held in every run are claimed above.</p>
+<p><strong>End to end</strong> (<code>bench/ab_metal_rows.sh</code> with <code>OLD_BIN</code>; 6 interleaved rounds of 20 iterations; results in <code>ab-rows/</code> and <code>ab-rows-ce/</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Row</th><th style="text-align:right">Before, min ms</th><th style="text-align:right">After, min ms</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td><code>linear_lmhead_fwd</code></td><td style="text-align:right">134.3</td><td style="text-align:right">68.2</td><td style="text-align:right">0.51×</td></tr>
+<tr><td><code>linear_lmhead_bwd</code></td><td style="text-align:right">164.3</td><td style="text-align:right">156.8</td><td style="text-align:right">0.95× (within noise)</td></tr>
+<tr><td><code>linear_ce_c4096x50304</code></td><td style="text-align:right">304.8</td><td style="text-align:right">239.4</td><td style="text-align:right">0.79×</td></tr>
+<tr><td><code>linear_ce_c1024x8192</code></td><td style="text-align:right">336.7</td><td style="text-align:right">336.3</td><td style="text-align:right">1.00× (25 MB chunks, not engaged)</td></tr>
+<tr><td><code>floor_silu_1</code> (control)</td><td style="text-align:right"></td><td style="text-align:right"></td><td style="text-align:right">flat</td></tr>
+</tbody></table></div>
+<p>Parity is identical before and after: 0 on the LM-head forward and 9.5e-7 on linear_ce.</p>
+<p>Against round 5&#39;s torch numbers (unpaired, direction only), the LM-head forward moves from ~0.48× to ~0.8× torch and <code>linear_ce_c4096x50304</code> from 0.78× to ~0.86×.</p>
+<p>The new side also contained the cached-finite-flag change in ojas-core, made by another session. The control row is flat, and the GEMM probe, which calls tessl directly, shows the same halving. So the gain is the tile walk (inferred from both).</p>
+<p><strong>Tests:</strong></p>
+<ul>
+<li><code>exact_f32_column_panels_cover_every_tile</code> in tessl&#39;s <code>tests/gemm_ragged_shapes.rs</code>.
+</li>
+<li>Panel shapes added to the accumulate and interior-branch tests in <code>tests/gemm_flag_paths.rs</code>.
+</li>
+<li>All of them use rank-one operands, so the reference stays O(M·N) at N·K ≥ 2²³.
+</li>
+<li>Removing the partial-band clamp makes all three fail, as does tessl&#39;s existing bf16 swizzle test, which now goes through the shared helper.
+</li>
+</ul>
+<h3 id="fix-the-lm-heads-input-gradient-runs-as-k-partitions-verified">Fix: the LM head&#39;s input gradient runs as K partitions (verified) <a class="anchor" href="#fix-the-lm-heads-input-gradient-runs-as-k-partitions-verified" aria-label="Link to this section">#</a></h3>
+<p>The input gradient is an NN GEMM, M 4096 × N 768 × K 50304, and it ran at ~3 TFLOP/s. Like the forward NT, it re-read all of B (here the 154 MB weight) for every 32-row tile row. The panel walk can&#39;t fix it: each tile&#39;s A slab is K long as well, so a band of 16 tile rows needs 103 MB of A.</p>
+<p>tessl now runs this shape as K partitions (<code>nn_splitk_k_tile</code>, <code>matmul2d_tensorops_nn_splitk_f32</code>):</p>
+<ul>
+<li>C is zeroed, then each partition of <code>2^21 / N</code> rows of B (2560 at N = 768) accumulates into it, in order. Each partition&#39;s 8 MiB slice of B stays in cache.
+</li>
+<li>The route is taken only when K·N ≥ 2²³, there is more than one tile row, and K is at least four partitions long.
+</li>
+<li>The TN split-K lanes now share the same partition dispatcher.
+</li>
+<li>Results are deterministic but not bit-identical to the single dispatch (C is rounded once per partition). They stay within the f32 bound.
+</li>
+</ul>
+<p><strong>GEMM probe</strong>, interleaved, alternating order, min of 4 runs per side (<code>bench/results/2026-10-02-gemm/ab-nn-splitk/</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Shape</th><th>Before ms (per-run range)</th><th>After ms (per-run range)</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td>NN 4096 × 768 × 50304</td><td>99.8 (100–113)</td><td>45.4 (45–50)</td><td style="text-align:right">0.46×</td></tr>
+<tr><td>NN 4096 × 768 × 16384</td><td>21.0 (21–23)</td><td>14.6 (15–16)</td><td style="text-align:right">0.69×</td></tr>
+<tr><td>Shapes that don&#39;t route</td><td></td><td></td><td style="text-align:right">within noise</td></tr>
+</tbody></table></div>
+<p>At 45 ms the input gradient runs at ~7 TFLOP/s, the rate of the best transformer-width shapes, so the partition width was not swept further.</p>
+<p><strong>End to end</strong>, unpaired (<code>splitk-rows/</code>): the panel-only <code>metal_vs_torch</code> was overwritten before a paired run, and the machine&#39;s load average was ~350 during this one. So these compare minimums against the panel-walk A/B&#39;s new side:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Row</th><th style="text-align:right">Panel walk only, min ms</th><th style="text-align:right">+ NN split-K, min ms</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td><code>linear_lmhead_bwd</code></td><td style="text-align:right">156.8</td><td style="text-align:right">109.1</td><td style="text-align:right">~0.70×</td></tr>
+<tr><td><code>linear_ce_c4096x50304</code></td><td style="text-align:right">239.4</td><td style="text-align:right">166.4</td><td style="text-align:right">~0.70×</td></tr>
+</tbody></table></div>
+<p>Parity against torch on <code>linear_lmhead_bwd</code> improved from 1.6e-4 to 2.5e-5. <code>linear_ce</code> is unchanged at 9.5e-7.</p>
+<p>Against round 5&#39;s torch minimums (unpaired, direction only):</p>
+<ul>
+<li><code>linear_lmhead_bwd</code> moves from 0.72× to about parity (torch 106.7 ms).
+</li>
+<li><code>linear_ce_c4096x50304</code> moves to about 1.2× torch (torch 206.2 ms).
+</li>
+</ul>
+<p><strong>Tests:</strong></p>
+<ul>
+<li><code>long_k_nn_with_a_large_b_takes_k_partitions</code> pins the routing (LM head at nanolab&#39;s and Lappi&#39;s vocabularies).
+</li>
+<li><code>long_k_nn_partitions_cover_all_of_k</code> checks two ragged shapes with a short last partition on the GPU. B is rank-one, with powers of two in <code>v</code>, so every k contributes and the reference stays O(M·K).
+</li>
+<li>It fails with A&#39;s partition offset dropped (31.8× its error budget) or a partition skipped (14.8×).
+</li>
+</ul>
+<p><strong>Still open:</strong> the other round 5 rows listed above.</p>
+<h3 id="gate-bwd-where-its-time-went-and-the-bias-sum-2026-10-02">gate_bwd: where its time went, and the bias sum (2026-10-02) <a class="anchor" href="#gate-bwd-where-its-time-went-and-the-bias-sum-2026-10-02" aria-label="Link to this section">#</a></h3>
+<p><code>metal_bench &lt;iters&gt; gate</code> times each dispatch <code>MetalBackend</code> records for <code>per_head_sigmoid_gate_backward</code> (<code>fn gate</code> in <code>ojas-metal/src/device.rs</code>) at the row&#39;s shape: 4096 rows, 12 heads of 64, d_model 768. Each row is the GPU span of a command buffer holding that dispatch alone; the last holds all of them. Two runs before the fix, min µs, M5 Pro (<code>bench/results/2026-10-02-gate/gate-probe-{1,2}.md</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Dispatch</th><th style="text-align:right">min µs</th><th style="text-align:right">Share of the whole</th></tr></thead>
+<tbody>
+<tr><td><code>ojas_per_head_gate_dbias</code> (bias gradient)</td><td style="text-align:right">803–807</td><td style="text-align:right">50%</td></tr>
+<tr><td>ten <code>ojas_check_finite</code> passes</td><td style="text-align:right">230–231</td><td style="text-align:right">14%</td></tr>
+<tr><td>TN <code>gw = d_pre^T · x</code> (12 × 768 × 4096)</td><td style="text-align:right">219–224</td><td style="text-align:right">14%</td></tr>
+<tr><td><code>ojas_per_head_gate_bwd</code> (gate kernel, ~250 GB/s)</td><td style="text-align:right">151–154</td><td style="text-align:right">9%</td></tr>
+<tr><td>NN <code>gx = d_pre · w</code> (4096 × 768 × 12)</td><td style="text-align:right">110–114</td><td style="text-align:right">7%</td></tr>
+<tr><td>NT <code>pre = x · w^T</code> (4096 × 12 × 768)</td><td style="text-align:right">50–53</td><td style="text-align:right">3%</td></tr>
+<tr><td>whole backward, one command buffer</td><td style="text-align:right">1618–1636</td><td style="text-align:right"></td></tr>
+</tbody></table></div>
+<p>So the earlier note that <code>gate_bwd</code> &#34;is dominated by its two GEMMs&#34; was wrong (it was never measured); the GEMMs are ~330 µs of ~1620.</p>
+<p><strong>Fix: the bias sum runs one SIMD-group per head.</strong> The kernel gave each of the 12 heads one thread, which made 4096 dependent strided loads. Now each head&#39;s 32 lanes load a chunk of rows each (four chunks in flight), and the chunk is added lane by lane through <code>simd_shuffle</code>. The additions are the CPU reference&#39;s ascending-row order, so the result is bit-identical. Both dispatch sites (<code>device.rs</code> and the tiny step in <code>gpu.rs</code>) take the grid from <code>gate_dbias_threads</code>.</p>
+<p><strong>A/B</strong>, old and new <code>metal_bench</code> binaries interleaved with alternating order, 4 rounds per side, min µs per round (<code>bench/results/2026-10-02-gate/ab-dbias/</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Old</th><th>New</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td><code>ojas_per_head_gate_dbias</code></td><td>804.5–807.4</td><td>120.0–120.4</td><td style="text-align:right">0.15×</td></tr>
+<tr><td>whole backward, GPU span</td><td>1585.8–1632.4</td><td>938.1–941.7</td><td style="text-align:right">0.59×</td></tr>
+</tbody></table></div>
+<p>Every round of the new side beat every round of the old. Seven of the eight runs started with the GPU reading 0% busy (old round 1: 58%), unlike the earlier rounds.</p>
+<p><strong>Tests:</strong></p>
+<ul>
+<li><code>gate_dbias_sums_rows_in_ascending_order_bit_for_bit</code> (<code>gpu.rs</code>) compares the kernel bit for bit with a host loop in ascending row order. It uses rows 1 to 4097 around the 32-row chunks and 128-row load groups, heads 1, 3 and 12, and values of ±3e7 among small ones, so any other order lands on other bits.
+</li>
+<li><code>gate_dbias_keeps_the_empty_and_short_length_edges</code> keeps the serial kernel&#39;s behaviour: no rows writes zeros, and a length too short for a head&#39;s last row leaves that head unwritten.
+</li>
+<li>Both pass on the old kernel too. They pin behaviour across the change and do not fail before it; the A/B is the evidence for the speed. Mutants they kill: each chunk added in reverse, the final partial chunk dropped, and each chunk reduced with <code>simd_sum</code>.
+</li>
+<li>ojas-metal suite: 162 passed. The one failure is <code>backend::tests::memory_probe_tracks_residency_and_plans_one_shared_budget</code>, another lane&#39;s new test (reported to that lane). clippy <code>--all-targets --features metal</code> is clean.
+</li>
+</ul>
+<p><strong>Fix: the gate backward kernels check their own operands.</strong> <code>ojas_per_head_gate_bwd</code> sets ST_IN for a non-finite <code>bias</code>, <code>attn</code> or <code>grad_output</code> and ST_OUT for a non-finite <code>pre</code> or <code>d_attn</code>. <code>ojas_per_head_gate_dbias</code> sets ST_OUT for a non-finite <code>d_bias</code>. Four standalone passes remain: <code>x</code> and <code>w</code> in, <code>gx</code> and <code>gw</code> out, which only tessl GEMMs touch. The forward is unchanged. The tiny step in <code>gpu.rs</code>, which dispatches the same kernels, now binds a status buffer and refuses a non-finite <code>pre</code>, <code>d_attn</code>, <code>d_bias</code>, <code>d_input</code> or <code>d_weight</code>. Before, it returned them.</p>
+<p>A/B, the bias-sum binary against this one, interleaved with alternating order, 4 rounds per side, min µs per round (<code>bench/results/2026-10-02-gate/ab-fold/</code>; one old round started with the GPU 49% busy, the rest at 0%):</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Old</th><th>New</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td>standalone finite checks</td><td>230.5–241.6 (ten)</td><td>67.5–77.3 (four)</td><td style="text-align:right">0.31×</td></tr>
+<tr><td><code>ojas_per_head_gate_bwd</code> with the checks inside</td><td>131.3–143.8</td><td>138.3–150.6</td><td style="text-align:right">within noise</td></tr>
+<tr><td>whole backward, GPU span</td><td>957.0–965.1</td><td>764.4–774.8</td><td style="text-align:right">0.80×</td></tr>
+</tbody></table></div>
+<p><strong>Tests:</strong></p>
+<ul>
+<li><code>tests/fused_checks.rs</code>, <code>the_gate_backward_reports_non_finite_operands_and_results</code>:
+<ul>
+<li>a NaN or ±Inf at the end of an offset view in each of the five operands is reported, and a clean call reports nothing;
+</li>
+<li><code>pre = x · w^T</code> overflowing is reported. Its gate is then 1, so nothing downstream overflows.
+</li>
+<li>a <code>d_bias</code> row sum overflowing is reported. Every gate is then 0.5 and <code>x</code> and <code>w</code> are zero, so it is the only non-finite value.
+</li>
+</ul>
+</li>
+<li><code>gpu.rs</code>:
+<ul>
+<li><code>gate_dbias_flags_a_sum_that_is_not_finite</code>;
+</li>
+<li><code>gate_backward_refuses_a_gradient_that_overflows</code>, for <code>d_bias</code> from the status word and <code>d_input</code> from the host check. Before this change the tiny step returned both as <code>Ok</code>, so this test fails on the old code.
+</li>
+</ul>
+</li>
+<li>Mutants, each killed (<code>ab-fold/summary.txt</code>):
+<ul>
+<li>the kernel&#39;s ST_IN store removed. Only a ±Inf bias catches it: its gate is exactly 0 or 1, so no output turns non-finite.
+</li>
+<li>the kernel&#39;s ST_OUT store removed;
+</li>
+<li>the bias sum&#39;s ST_OUT store removed;
+</li>
+<li><code>gpu.rs</code> ignoring the status words;
+</li>
+<li><code>gpu.rs</code> skipping the <code>d_input</code> check.
+</li>
+</ul>
+</li>
+<li>ojas-metal suite: 166 passed, 0 failed. clippy <code>--all-targets --features metal</code> is clean.
+</li>
+</ul>
+<p><strong>Fix (in tessl): a small-C TN runs all its K partitions in one dispatch.</strong> TN <code>gw</code> ran at 59 GB/s: 24 output tiles, each walking K = 4096. It missed the TN split-K lane (N = 768 &gt; 384), and that lane runs its partitions in sequence, so it would not have added workgroups anyway. tessl&#39;s exact-f32 TN now routes any C under 128 tiles, over a K at least two partitions long, to <code>matmul2d_tensorops_tn_splitk_par_f32</code>. That kernel computes every partition at once into a scratch, and <code>reduce_partitions_f32</code> then adds the partitions in order. The width (<code>tn_par_k_tile</code>) aims at ~768 threadgroups in multiples of 256. The result is deterministic and within the f32 bound, but not bit-identical to one dispatch.</p>
+<p><code>metal_bench 20 tn</code>, one quiet run (load 6.4, nothing else compiling; the GPU read 52% busy at start, from UI processes), min µs of 20 GPU spans (<code>bench/results/2026-10-02-gate/tn-sweep/tn-sweep-2.md</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>TN shape (M, N, K)</th><th style="text-align:right">Tiles</th><th style="text-align:right">One dispatch</th><th style="text-align:right">Before (route)</th><th style="text-align:right">Now (parallel, routed width)</th></tr></thead>
+<tbody>
+<tr><td>12, 768, 4096 (gate <code>gw</code>)</td><td style="text-align:right">24</td><td style="text-align:right">223.0</td><td style="text-align:right">223.0 (one dispatch)</td><td style="text-align:right">44.6 (256)</td></tr>
+<tr><td>12, 768, 1024</td><td style="text-align:right">24</td><td style="text-align:right">59.8</td><td style="text-align:right">59.8 (one dispatch)</td><td style="text-align:right">24.1 (256)</td></tr>
+<tr><td>128, 128, 4096 (attention dW)</td><td style="text-align:right">16</td><td style="text-align:right">129.4</td><td style="text-align:right">185.7 (sequential split-K)</td><td style="text-align:right">31.3 (256)</td></tr>
+<tr><td>128, 384, 4096 (MLP dW)</td><td style="text-align:right">48</td><td style="text-align:right">131.6</td><td style="text-align:right">192.3 (sequential split-K)</td><td style="text-align:right">74.3 (256)</td></tr>
+<tr><td>64, 64, 4096</td><td style="text-align:right">4</td><td style="text-align:right">127.3</td><td style="text-align:right">185.5 (sequential split-K)</td><td style="text-align:right">19.3 (256)</td></tr>
+<tr><td>128, 128, 2048</td><td style="text-align:right">16</td><td style="text-align:right">69.3</td><td style="text-align:right">96.2 (sequential split-K)</td><td style="text-align:right">23.8 (256)</td></tr>
+<tr><td>96, 2048, 4096</td><td style="text-align:right">192</td><td style="text-align:right">269.6</td><td style="text-align:right">269.6 (one dispatch)</td><td style="text-align:right">not routed (192 tiles)</td></tr>
+</tbody></table></div>
+<ul>
+<li>The sequential split-K, which <code>prefer_tn_splitk</code> picked for tall-K small C, was slower than the single dispatch on every one of its shapes swept. The parallel lane replaces it for overwriting f32 TN. bf16 and <code>C +=</code> (<code>gemm_tn_accum_train</code>) keep the sequential kernel, since <code>C +=</code> must add into C. No ojas code calls <code>gemm_tn_accum_train</code>.
+</li>
+<li>The &#34;Before&#34; column for the first rows is the single dispatch, measured in the same run.
+</li>
+<li>Where the routed width is not the best one: at 12 × 768 × 1024, a width of 128 was ~15% faster at the median (21.4 vs 25.3 µs); at 128 × 384 × 4096, 512 was ~6% faster at the min and ~2% at the median. Elsewhere the routed width is within ~2% of the best min.
+</li>
+<li>96 × 2048 × 4096 (192 tiles) is not routed. A width of 512 ran 11% faster than one dispatch there (239.6 vs 269.6 µs) in this one run; widening the tile threshold has not been measured beyond it.
+</li>
+<li>tessl tests: <code>few_tile_long_k_tn_takes_parallel_partitions</code> (routing, and the scratch cap held over the whole old sequential domain; inferred, not run: the four old sequential shapes fail it before the change, where <code>tn_par_k_tile</code> returned <code>None</code> for them), <code>parallel_tn_partitions_cover_all_of_k</code> (rank-one B so every k counts; routed, ragged, padded-slice and one-partition cases), <code>parallel_tn_refuses_bad_widths_and_an_oversized_scratch</code>, <code>parallel_tn_is_bit_identical_across_100_calls_in_flight</code>.
+</li>
+<li>Mutants (<code>mutate-tn.sh</code>):
+<ul>
+<li>two are killed by <code>parallel_tn_partitions_cover_all_of_k</code>: A&#39;s partition offset dropped, and the last partition left out of the sum.
+</li>
+<li>one survives: scratch slices packed at M·N without padding to 16 bytes. The M5 Pro computes correctly from a 4-byte-aligned slice, so the padding stays for tessl&#39;s 16-byte rule on GEMM operands, and no test observes it.
+</li>
+</ul>
+</li>
+<li>tessl suite: 531 passed, 0 failed, 8 ignored. ojas-metal suite: 166 passed, 0 failed. tessl clippy <code>--all-targets -D warnings</code> fails on one <code>type_complexity</code> error at <code>src/runtime.rs:345</code> (<code>FeedbackWatch</code>). That line is in tessl&#39;s uncommitted Metal 4 commit-feedback hunk, not HEAD and not this change. clippy is clean with that lint allowed (<code>bench/results/2026-10-02-gate/ab-tn/summary.txt</code>).
+</li>
+</ul>
+<p>A/B of the whole gate backward, the fold binary against this one, interleaved with alternating order, 4 rounds per side, min µs per round (<code>bench/results/2026-10-02-gate/ab-tn/</code>). A non-Claude agent outside the lock raised the 1-min load from ~7 to ~19 during these runs, and one old round started with the GPU 55% busy:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Old</th><th>New</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td>TN <code>gw</code></td><td>227.4–234.1</td><td>43.1–46.0</td><td style="text-align:right">0.19×</td></tr>
+<tr><td>whole backward, GPU span</td><td>790.4–806.4</td><td>601.7–638.2</td><td style="text-align:right">0.78×</td></tr>
+</tbody></table></div>
+<p>Every round of the new side beat every round of the old. The old side&#39;s whole backward ran ~25 µs slower than in the fold A/B (764–775), which is the load.</p>
+<p><strong>Wall time against torch</strong> (<code>bench/run_paired.sh 5</code>, gate rows only, <code>bench/results/2026-10-02-gate/paired-gate/</code>): <code>gate_bwd</code> medians were ojas 0.862 ms and torch 0.834 ms (0.96×, per-round 0.85–0.99×). Round 5 had 2.0 ms against ~1.0 ms. This run is flagged noisy: ojas&#39;s per-round spread was 17%, and the 1-min load was ~30 throughout from the same outside agent.</p>
+<p>Re-run with the outside agents idle and the 1-min load at 8.3–9.1 (<code>bench/results/2026-10-02-gate/paired-gate-quiet/</code>). <code>gate_bwd</code> medians were ojas 0.829 ms and torch 0.833 ms (1.02×, per-round 0.96–1.11×). Spread was 8% for ojas and 15% for torch. The row is still flagged noisy, from torch&#39;s side, and so still not quoted. The GPU read 43–53% busy even at the quietest sample of every lane, from something outside the benchmark; XProtect (~89% CPU) and the GitPulse app (~80%) were active. Both runs put <code>gate_bwd</code> at about parity with torch, against 0.5× in round 5. A quotable number needs a run with the GPU idle between rows.</p>
+<p><strong>Fix: the bias sum stages rows in threadgroup memory.</strong> The SIMD-group version made each link of its 4096-add chain a <code>simd_shuffle</code> and an add, about 29 ns per row. Now the SIMD-group&#39;s lanes load a 2048-row block of a head into threadgroup memory together, and lane 0 adds it in row order, reading eight values ahead. The additions are in the same order, so the sum is still bit-identical to the CPU reference. ojas compiles its kernels with <code>-fmetal-math-mode=safe -ffp-contract=off</code>, so the compiler may not reassociate them.</p>
+<p>A/B, the parallel-TN binary against this one, interleaved with alternating order, 4 rounds per side, min µs per round (<code>bench/results/2026-10-02-gate/ab-stage/</code>). The 1-min load was 4.2–6.3. The GPU read 33–55% busy at the start of every run, from the GitPulse app spawning git processes outside the lock:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Old</th><th>New</th><th style="text-align:right">Time ratio</th></tr></thead>
+<tbody>
+<tr><td><code>ojas_per_head_gate_dbias</code></td><td>120.4–123.4</td><td>53.4–56.4</td><td style="text-align:right">0.45×</td></tr>
+<tr><td>whole backward, GPU span</td><td>619.9–621.4</td><td>548.6–561.2</td><td style="text-align:right">0.90×</td></tr>
+</tbody></table></div>
+<p>Every round of the new side beat every round of the old. The new binary also carries another session&#39;s edit to <code>metal_bench.rs</code>. The probe&#39;s other rows match the old side within noise (<code>pre</code> 49–53, <code>gate_bwd</code> 154–165, <code>gx</code> 111–112, <code>gw</code> 43–44, checks 81–82 µs), so the timing method is unchanged.</p>
+<p><strong>Tests:</strong></p>
+<ul>
+<li><code>gate_dbias_sums_rows_in_ascending_order_bit_for_bit</code> now also covers 2047, 2048, 2049 and 4096 rows, around the new 2048-row blocks. It passes on both kernels: it pins the order across the change, and the A/B is the evidence for the speed.
+</li>
+<li>ojas-metal suite: 166 passed, 0 failed.
+</li>
+<li>Not run:
+<ul>
+<li>the three mutants in <code>mutate-stage.sh</code> (an add pair swapped, the tail loop dropped, every block read from row 0). After the 14:24 kernel panic, the rules for this Mac bar fork-heavy steps. That the test catches these mutants is unverified for this kernel; it caught the equivalent mutants of the shuffle kernel.
+</li>
+</ul>
+</li>
+<li>ojas-metal clippy <code>--all-targets --features metal -D warnings</code>: clean on a re-run at 15:04. The first run stopped in <code>ojas-cpu</code>, at a dead function the CPU lane was adding at the time.
+</li>
+</ul>
+<p>At ~13 ns per row, 53 µs is still well above what an add chain alone should cost. A likely factor, unmeasured, is that 12 SIMD-groups on the whole GPU may not raise its clock.</p>
+<p><strong>Next, by the same probe (not yet done):</strong></p>
+<ul>
+<li>a paired <code>gate</code> run with the GPU idle between rows (both runs above were flagged noisy);
+</li>
+<li>letting the bias sum overlap the <code>gx</code> and <code>gw</code> GEMMs. It only reads <code>d_pre</code>, as they do. The whole backward (549–561 µs) is more than its parts measured one by one (~493 µs), so no overlap is visible; the ~60 µs gap also holds the gaps between dispatches. Unmeasured hypothesis;
+</li>
+<li>the routed width at short K (12 × 768 × 1024 above).
+</li>
+</ul>
+<h2 id="round-3-2026-10-01-22502306-cdt">Round 3: 2026-10-01, 22:50–23:06 CDT <a class="anchor" href="#round-3-2026-10-01-22502306-cdt" aria-label="Link to this section">#</a></h2>
+<h3 id="what-was-run-verified-benchresults2026-10-01-r3benvtxt">What was run (verified, <code>bench/results/2026-10-01-r3b/env.txt</code>) <a class="anchor" href="#what-was-run-verified-benchresults2026-10-01-r3benvtxt" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><code>bench/run_paired.sh 5</code>: 5 rounds, 20 iterations, 5 warm-up, every row, lane order alternating per round.
+</li>
+<li>HEAD dab2a12 plus the uncommitted tree; benchmarked-crates diff sha1 <code>de67949a36ff</code>. This is the tree of snapshot <code>wip/typed-storage-2026-10-01</code> (8b0e365), before the CPU session&#39;s fused AdamW landed in <code>ojas-cpu</code>. <code>ojas-cpu</code> is not on either GPU lane&#39;s timed path.
+</li>
+<li>PyTorch 2.13.0 MPS, Python 3.14.7, Apple M5 Pro, macOS 27.0.1.
+</li>
+<li>Parity passed on every row of both lanes.
+</li>
+<li>The first attempt (<code>bench/results/2026-10-01-r3/</code>) died of a full disk after round 1 and is not used.
+</li>
+</ul>
+<h3 id="conditions-nothing-in-this-round-is-quotable">Conditions: nothing in this round is quotable <a class="anchor" href="#conditions-nothing-in-this-round-is-quotable" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Every row of both lanes fails the 10% spread gate</strong> (94 of 94).
+</li>
+<li><strong>The GPU read 100% &#34;Device Utilization&#34; on all 180 samples</strong>, including before the first lane started. In round 2 the same probe read 0–99%. It still read 100% after the run, with no ojas or torch process alive. Something outside the benchmark held the GPU. About eight Chrome renderer processes sat near 95% CPU each for about 35 hours. Per-process GPU use needs root (<code>powermetrics</code>), so which process held it is <strong>unverified</strong>.
+</li>
+<li><strong>Host load rose from about 15 to 130 during rounds 3–5</strong> (1-minute average). Rounds 1–2 ran at 14–19.
+</li>
+<li>So ratios below give direction only, and only where the change is far larger than the spread.
+</li>
+</ul>
+<h3 id="round-2s-metal-regressions-are-not-code-verified">Round 2&#39;s Metal &#34;regressions&#34; are not code (verified) <a class="anchor" href="#round-2s-metal-regressions-are-not-code-verified" aria-label="Link to this section">#</a></h3>
+<p>Round 2 reported four Metal rows slower than round 1:</p>
+<ul>
+<li><code>rope_bwd</code> 0.56x;
+</li>
+<li><code>permute_bthd_bhtd</code> 0.48x;
+</li>
+<li><code>residual_add_fwd</code> 0.71x;
+</li>
+<li><code>residual_add_bwd</code> 0.82x.
+</li>
+</ul>
+<p>Those were medians compared across separate runs.</p>
+<p><strong>Interleaved A/B, <a href="https://github.com/bharathvbcr/ojas/blob/main/bench/ab_metal_rows.sh" rel="noopener"><code>bench/ab_metal_rows.sh</code></a>:</strong></p>
+<ul>
+<li><strong>Old:</strong> ed17286, the snapshot taken between rounds 1 and 2, built with its own harness. In it, Metal ops are synchronous and <code>sync</code> is a no-op.
+</li>
+<li><strong>New:</strong> the round 3 binary, ops deferred until <code>Backend::sync</code>.
+</li>
+<li><strong>Protocol:</strong> 10 rounds, order alternating, 50 iterations, 10 warm-up. <code>floor_silu_1</code> is the control, a one-element op that measures only the per-op fixed cost.
+</li>
+<li><strong>Build caveat:</strong> ed17286&#39;s <code>ojas-cpu</code> does not compile; it was captured mid-edit. In the A/B copy only, one unused import and one uncalled function (<code>adamw_scratch</code>) were removed. <code>ojas-cpu</code> is a dev-dependency of <code>ojas-metal</code> and the Metal bench never calls it.
+</li>
+<li><strong>What is durable:</strong> the old tree was a <code>git archive</code> of ed17286 in the git-ignored <code>target-baseline/ab/ojas</code>, so it is not kept. The raw per-round results in <code>bench/results/2026-10-01-ab/</code> are the record.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th>old min / median of mins / median of medians ms</th><th>new, same</th><th style="text-align:right">new min slower in</th></tr></thead>
+<tbody>
+<tr><td>floor_silu_1</td><td>0.106 / 0.118 / 0.369</td><td>0.102 / 0.135 / 1.389</td><td style="text-align:right">6/10</td></tr>
+<tr><td>rope_bwd</td><td>0.323 / 0.348 / 1.497</td><td>0.330 / 0.359 / 1.598</td><td style="text-align:right">6/10</td></tr>
+<tr><td>permute_bthd_bhtd</td><td>0.310 / 0.346 / 1.620</td><td>0.331 / 0.358 / 1.622</td><td style="text-align:right">6/10</td></tr>
+<tr><td>residual_add_fwd</td><td>0.540 / 0.577 / 1.394</td><td>0.566 / 0.608 / 1.027</td><td style="text-align:right">5/10</td></tr>
+<tr><td>residual_add_bwd</td><td>0.519 / 0.566 / 1.836</td><td>0.542 / 0.567 / 0.943</td><td style="text-align:right">8/10</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>The minimums agree within 0–5%.</strong> New is 0–5% higher on the median of round minimums for every row (<code>residual_add_bwd</code> 0.566 vs 0.567), and slower on the paired round minimum in 5–8 of 10 rounds. Round 2 claimed 22–108% slower medians.
+</li>
+<li><p><strong>The medians are bimodal on both binaries.</strong> A per-round median is either low (0.2–0.9 ms) or high, about 1.1–1.3 ms above that (1.1–2.3 ms). Rounds with a high median, out of 10 (old / new):</p>
+<ul>
+<li><code>rope_bwd</code> 6 / 6;
+</li>
+<li><code>permute_bthd_bhtd</code> 7 / 6;
+</li>
+<li><code>residual_add_fwd</code> 5 / 5;
+</li>
+<li><code>residual_add_bwd</code> 6 / 4;
+</li>
+<li>the <code>floor_silu_1</code> control 3 / 7.
+</li>
+</ul>
+<p>The control&#39;s 3 / 7 split is why its median of medians differs (0.369 vs 1.389 ms). With 10 rounds the split is not distinguishable from chance, so whether deferred submission lands in the high mode more often is <strong>unverified</strong>. Rounds 1, 2 and 3 of the paired runs show the same two modes. Medians from separate runs therefore cannot detect a regression of this size.</p>
+</li>
+<li><strong>Verdict:</strong> no code regression. No bisect is needed. The real problem is the bimodal per-op fixed cost (next section).
+</li>
+</ul>
+<h3 id="what-moved-since-round-2-direction-verified-magnitude-approximate">What moved since round 2 (direction verified, magnitude approximate) <a class="anchor" href="#what-moved-since-round-2-direction-verified-magnitude-approximate" aria-label="Link to this section">#</a></h3>
+<p>Unpaired across runs, and round 3 ran under a saturated GPU. These are quoted only because the change is several times the spread.</p>
+<ul>
+<li><strong>Metal <code>adamw_full</code>: minimum 200.8 -&gt; 21.4 ms, about 9x.</strong> It now leads torch (1.55x, faster on the per-round median in 5/5 rounds). Round 2&#39;s read was one command per tensor, each followed by a device wait and a status read. Both rounds ran on HEAD dab2a12, which already contains 3e8db12 (device-resident gradient), so that commit is not the cause. The uncommitted Metal change between the rounds is deferred faults, which drops the per-op wait. That it explains the 9x is <strong>inferred</strong>; it was not A/B&#39;d.
+</li>
+<li><strong>Metal <code>block_fwd</code> minimum 35.2 -&gt; 22.5 ms; <code>block_fwd_bwd</code> 99.0 -&gt; 71.1 ms.</strong> <code>block_fwd_bwd</code> is now 0.92x torch (mixed). This is consistent with removing the per-op device wait from 24 synchronous ops (<strong>inferred</strong>).
+</li>
+<li><strong>Metal <code>accumulate_grad_50304x768</code> minimum 9.18 -&gt; 3.02 ms.</strong>
+</li>
+<li><strong>Metal <code>linear_ce_c4096x50304</code> minimum 377.8 -&gt; 298.6 ms</strong> (0.55x -&gt; 0.81x).
+</li>
+<li><strong>No meaningful change:</strong>
+<ul>
+<li>wgpu rows;
+</li>
+<li>Metal GEMMs;
+</li>
+<li>Metal SDPA;
+</li>
+<li>cross-entropy backward on both backends.
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="the-remaining-metal-bottleneck-the-per-op-fixed-cost">The remaining Metal bottleneck: the per-op fixed cost <a class="anchor" href="#the-remaining-metal-bottleneck-the-per-op-fixed-cost" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>The one-element <code>floor_silu_1</code> row:</strong>
+<ul>
+<li>Metal minimum 0.10–0.13 ms, median 0.24–1.74 ms;
+</li>
+<li>torch minimum 0.07 ms, median 0.12 ms.
+</li>
+</ul>
+</li>
+<li><strong>Every small Metal op sits on the same floor,</strong> with a median of 1–2 ms against a minimum of 0.3–0.6 ms:
+<ul>
+<li>elementwise ops, norms and permute;
+</li>
+<li><code>decode_attn_kv1024</code>, 0.15 / 1.38 ms against torch&#39;s 0.09 / 0.13.
+</li>
+</ul>
+</li>
+<li><strong>This is what ranks them 0.2–0.4x torch.</strong> Kernel time is not the cause.
+</li>
+<li><strong>wgpu shows a high round too, less often.</strong> Its <code>floor_silu_1</code> per-round median was high in 1 of 5 rounds in both round 2 (3.02 ms) and round 3 (2.25 ms). Metal&#39;s was high in 4 of 5 rounds in round 2 and 2 of 5 in round 3. wgpu does not use tessl, so the cause below does not explain wgpu&#39;s high rounds (<strong>unexplained</strong>).
+</li>
+</ul>
+<h3 id="what-sets-the-metal-floor-a-1-ms-sleep-poll-in-tessls-synchronize-verified">What sets the Metal floor: a 1 ms sleep poll in tessl&#39;s synchronize (verified) <a class="anchor" href="#what-sets-the-metal-floor-a-1-ms-sleep-poll-in-tessls-synchronize-verified" aria-label="Link to this section">#</a></h3>
+<p><strong>Profile:</strong> <code>cargo run -p ojas-metal --release --example metal_bench 20 floor</code>, 500 runs per scenario. Output is in <code>bench/results/2026-10-01-floor/floor.md</code>. The GPU read 100% busy and load was 42–45, as in round 3.</p>
+<p><strong>One-element op plus sync, means over the fast and the slow (&gt; 1 ms) runs:</strong></p>
+<div class="table-wrap"><table>
+<thead><tr><th>scenario</th><th style="text-align:right">slow runs</th><th>fast: op / sync / event wait / GPU span ms</th><th>slow: op / sync / event wait / GPU span ms</th></tr></thead>
+<tbody>
+<tr><td>tessl directly: <code>scale_f32_inplace</code> + <code>synchronize</code></td><td style="text-align:right">265/500</td><td>0.029 / 0.198 / 0.170 / 0.022</td><td>0.026 / 1.449 / 0.150 / 0.017</td></tr>
+<tr><td>tessl directly, 5 ms idle before</td><td style="text-align:right">268/500</td><td>0.055 / 0.257 / 0.215 / 0.022</td><td>0.059 / 1.694 / 0.375 / 0.020</td></tr>
+<tr><td><code>MetalBackend</code>: <code>silu_forward</code> + <code>sync</code></td><td style="text-align:right">200/500</td><td>0.056 / 0.223 / 0.163 / -</td><td>0.098 / 1.548 / 0.184 / -</td></tr>
+</tbody></table></div>
+<p><strong>Reading:</strong></p>
+<ul>
+<li><strong>The two modes exist in tessl alone,</strong> on one thread with no ojas device thread or channel. <code>MetalBackend::sync</code> with nothing recorded takes 0.003 ms, so the ojas channel round trip is not the cost.
+</li>
+<li><strong>In slow runs, <code>synchronize</code> grows by about 1.25 ms.</strong> The event wait inside it (tessl&#39;s <code>infer_trace</code> sync-wait counter) and the GPU span (Metal 4 counter-heap timestamps, about 0.02 ms) do not grow. The extra time is host code in <code>synchronize</code> outside the wait.
+</li>
+<li><strong>An idle gap before the op does not create the slow mode:</strong> 53% slow with no gap (265/500), 54% with 5 ms (268/500). So it is not a GPU clock ramp after idle.
+</li>
+</ul>
+<p><strong>Stack sample</strong> (<code>/usr/bin/sample</code>, 4 s at 1 ms, during the tessl-direct scenario; <code>bench/results/2026-10-01-floor/sample-tessl-sync.txt</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>where</th><th style="text-align:right">samples</th><th style="text-align:right">share of the main thread (2339)</th></tr></thead>
+<tbody>
+<tr><td><code>GpuRuntime::commit_m4</code></td><td style="text-align:right">about 2320</td><td style="text-align:right">99%</td></tr>
+<tr><td>of it, <code>observe_finished_feedback</code></td><td style="text-align:right">2072</td><td style="text-align:right">89%</td></tr>
+<tr><td>of it, <code>nanosleep</code></td><td style="text-align:right">2069</td><td style="text-align:right">88%</td></tr>
+<tr><td>of it, <code>waitUntilSignaledValue</code> (the GPU wait)</td><td style="text-align:right">221</td><td style="text-align:right">9%</td></tr>
+<tr><td>encoding the op (<code>scale_f32_inplace</code>)</td><td style="text-align:right">19</td><td style="text-align:right">1%</td></tr>
+</tbody></table></div>
+<p><strong>Cause (before the fix below):</strong></p>
+<ul>
+<li><code>observe_finished_feedback</code> (<code>tessl/src/runtime.rs</code>, uncommitted in the tessl checkout) ran after every waited commit.
+</li>
+<li>It looped on <code>std::thread::sleep(1 ms)</code> until Metal&#39;s commit-feedback callback had set the watch&#39;s <code>done</code> flag, for up to 500 ms.
+</li>
+<li>When the callback landed after the shared event, the thread slept once. A 1 ms sleep returns after 1.2–1.4 ms here. That happened on 53–85% of runs: 53% in the profile, 65–85% in the A/B&#39;s old rounds.
+</li>
+<li><strong>Verified</strong> by the sample and the phase split. That the callback arriving after the event is what picks the mode is <strong>inferred</strong>: the sleep only ran when <code>done</code> was still false.
+</li>
+<li>The tessl runtime was already in this state for rounds 1 and 2 (it is dated before them), so every round&#39;s Metal medians include it.
+</li>
+</ul>
+<h3 id="fix-the-feedback-wait-blocks-on-a-condvar-verified">Fix: the feedback wait blocks on a Condvar (verified) <a class="anchor" href="#fix-the-feedback-wait-blocks-on-a-condvar-verified" aria-label="Link to this section">#</a></h3>
+<p><strong>The change</strong> (<code>tessl/src/runtime.rs</code>, with the user&#39;s approval):</p>
+<ul>
+<li><code>FeedbackState</code> gets a <code>Condvar</code>. The feedback callback sets <code>done</code> under the gate mutex and notifies.
+</li>
+<li><code>wait_done(limit)</code> blocks on that notify instead of sleeping 1 ms per check.
+</li>
+<li>The 500 ms cap (<code>FEEDBACK_WAIT</code>) and the pending-watch handling are unchanged, so a callback that has not run still stays pending as before.
+</li>
+<li>The fault message is now read through a poisoned lock instead of <code>.ok()</code>. Previously a poisoned lock dropped the fault, and a lost fault reads as success.
+</li>
+<li>The diff of only these lines is in <code>bench/results/2026-10-01-floor/tessl-condvar.diff</code>. The rest of <code>runtime.rs</code>&#39;s uncommitted work is another author&#39;s.
+</li>
+</ul>
+<p><strong>Tests:</strong></p>
+<ul>
+<li>Four new tests in tessl&#39;s <code>runtime::tests</code>: <code>feedback_wait_*</code>.
+</li>
+<li>The wake-latency test failed against the poll with a 762 µs median wake, and passed 6 of 6 runs with the Condvar.
+</li>
+<li>tessl&#39;s full suite: 524 passed, 0 failed, 8 ignored (59 test binaries).
+</li>
+<li>ojas-metal: 154 passed, 0 failed.
+</li>
+</ul>
+<p><strong>Interleaved A/B</strong> (<code>bench/results/2026-10-01-floor/ab/summary.md</code>):</p>
+<ul>
+<li>Protocol: <code>metal_bench 4 floor</code>, 6 rounds alternating old and new, 100 runs per scenario per round, load 18–20 on every run.
+</li>
+<li>Old is the same ojas tree built against tessl with the pre-change <code>runtime.rs</code>, saved as <code>bench/results/2026-10-01-floor/tessl-runtime-before-condvar.rs.txt</code>. The driver is <code>target-baseline/floor_ab.sh</code>, which is git-ignored; the raw per-round tables beside the summary are the record.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>scenario</th><th>slow runs, old → new (of 600)</th><th>p50 ms, median of rounds [range] old → new</th><th>p90 ms old → new</th></tr></thead>
+<tbody>
+<tr><td>tessl <code>scale</code> + <code>synchronize</code></td><td>388 → 0</td><td>1.413 [1.361–1.429] → 0.144 [0.135–0.153]</td><td>1.523 → 0.211</td></tr>
+<tr><td>tessl, 5 ms idle before</td><td>507 → 6</td><td>1.468 → 0.232</td><td>1.558 → 0.335</td></tr>
+<tr><td><code>MetalBackend</code> <code>silu_forward</code> + <code>sync</code></td><td>404 → 0</td><td>1.427 [0.199–1.456] → 0.165 [0.122–0.196]</td><td>1.538 → 0.248</td></tr>
+<tr><td><code>MetalBackend</code>, 20 ms idle before</td><td>390 → 2</td><td>1.510 → 0.305</td><td>1.629 → 0.477</td></tr>
+<tr><td><code>MetalBackend</code> 8 ops + one <code>sync</code></td><td>480 → 4</td><td>1.500 → 0.247</td><td>1.625 → 0.379</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Minimums do not move</strong> (0.097 vs 0.101 ms). The fix removes the slow mode; it does not make the fast path faster.
+</li>
+<li><strong>The p90 ranges of the two sides do not overlap</strong> in any scenario.
+</li>
+<li><strong>The 0–6 slow runs left per 600 grow in every phase:</strong> the op call, the event wait, and the rest of <code>sync</code>. That is consistent with the thread being descheduled under load (<strong>inferred</strong>). None shows the fixed +1.25 ms host step.
+</li>
+</ul>
+<p><strong>Against torch after the fix</strong> (<code>bench/results/2026-10-01-r4-smallops/</code>):</p>
+<ul>
+<li>Protocol: <code>bench/run_paired.sh 5</code>, limited by <code>BENCH_ROWS</code> to the small rows. Load was 18–20 on every row; the GPU still read 100% busy.
+</li>
+<li>Not interleaved with round 3, whose load reached 130. So the round 3 column is context, and the A/B above is the paired evidence.
+</li>
+<li>Only <code>rms_norm_bwd</code> (2.77x) and <code>accumulate_grad</code> (0.62x) pass the 10% spread gate. The rest give direction only, but the spreads tightened from 100–600% in round 3 to mostly 4–30%.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>Metal row</th><th>round 3 min / median ms</th><th>now min / median ms</th><th>now vs torch (median ratio [range])</th></tr></thead>
+<tbody>
+<tr><td>floor_silu_1</td><td>0.114 / 0.384</td><td>0.095 / 0.189</td><td>0.76x [0.65–1.00]</td></tr>
+<tr><td>rope_fwd</td><td>0.380 / 1.625</td><td>0.316 / 0.384</td><td><strong>3.45x</strong> [3.30–3.73]</td></tr>
+<tr><td>rope_bwd</td><td>0.373 / 1.637</td><td>0.335 / 0.441</td><td><strong>3.88x</strong> [3.60–4.62]</td></tr>
+<tr><td>permute_bthd_bhtd</td><td>0.326 / 1.602</td><td>0.318 / 0.360</td><td><strong>1.13x</strong> [1.08–1.26]</td></tr>
+<tr><td>decode_attn_kv1024</td><td>0.150 / 1.383</td><td>0.138 / 0.169</td><td>0.96x [0.67–1.11]</td></tr>
+<tr><td>vres_fwd / vres_bwd</td><td>0.515 / 1.805; 0.867 / 2.248</td><td>0.463 / 0.550; 0.837 / 0.939</td><td>0.94x; 0.99x</td></tr>
+<tr><td>gate_fwd</td><td>0.554 / 2.085</td><td>0.512 / 0.597</td><td>0.84x [0.55–0.96]</td></tr>
+<tr><td>residual_add_fwd</td><td>0.557 / 1.858</td><td>0.551 / 0.618</td><td>0.49x [0.40–0.55]</td></tr>
+<tr><td>rms_norm_fwd</td><td>0.361 / 1.289</td><td>0.334 / 0.436</td><td>0.49x [0.45–0.52]</td></tr>
+<tr><td>silu_fwd / silu_bwd</td><td>0.813 / 1.149; 1.119 / 2.672</td><td>0.790 / 0.873; 1.115 / 1.246</td><td>0.49x; 0.50x</td></tr>
+<tr><td>mul_fwd / mul_bwd</td><td>1.134 / 2.026; 1.796 / 3.036</td><td>1.108 / 1.246; 1.835 / 1.945</td><td>0.47x; 0.54x</td></tr>
+<tr><td>gate_bwd</td><td>1.951 / 2.697</td><td>2.015 / 2.120</td><td>0.47x [0.46–0.52]</td></tr>
+<tr><td>accumulate_grad_50304x768</td><td>3.018 / 4.594</td><td>2.995 / 3.413</td><td>0.62x [0.58–0.64] (gate passed)</td></tr>
+</tbody></table></div>
+<p><strong>The next Metal bottleneck is in the kernels, not the fixed cost.</strong></p>
+<ul>
+<li>The rows still near 0.5x are bandwidth-bound elementwise and norm ops at [4096, 768] to [4096, 2048]: <code>silu</code>, <code>mul</code>, <code>residual_add</code>, <code>gate_bwd</code>, <code>rms_norm_fwd</code>.
+</li>
+<li>Their <strong>minimums</strong> are 2.0–2.4x torch&#39;s: <code>silu_fwd</code> 0.790 vs 0.354 ms, <code>mul_fwd</code> 1.108 vs 0.481. No fixed cost explains a gap in the minimum.
+</li>
+</ul>
+<h3 id="what-the-elementwise-gap-is-standalone-finite-check-passes-verified">What the elementwise gap is: standalone finite-check passes (verified) <a class="anchor" href="#what-the-elementwise-gap-is-standalone-finite-check-passes-verified" aria-label="Link to this section">#</a></h3>
+<p><strong>Profile:</strong> <code>cargo run -p ojas-metal --release --example metal_bench 40 kernels</code>. Output is in <code>bench/results/2026-10-02-kernels/kernels.md</code>.</p>
+<ul>
+<li>Each row is the GPU span of command buffers holding only that kernel or sequence. 40 buffers per row; min and median are within 3–10%.
+</li>
+<li>Shapes are <code>[4096, 2048]</code>. The GPU read 100% busy, load 58.
+</li>
+<li>Op-level minimums (Metal op, torch op) are from <code>bench/results/2026-10-01-r4-smallops/</code>.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>op</th><th>kernel alone, min µs (GB/s)</th><th style="text-align:right">sequence as <code>MetalBackend</code> runs it, min µs</th><th style="text-align:right">checks&#39; share of the sequence</th><th style="text-align:right"><code>MetalBackend</code> op min ms</th><th style="text-align:right">torch op min ms</th></tr></thead>
+<tbody>
+<tr><td>silu_fwd</td><td>262 (256)</td><td style="text-align:right">686 (check x, kernel, check y)</td><td style="text-align:right">62%</td><td style="text-align:right">0.790</td><td style="text-align:right">0.354</td></tr>
+<tr><td>silu_bwd</td><td>389 (259)</td><td style="text-align:right">1013 (3 checks)</td><td style="text-align:right">62%</td><td style="text-align:right">1.115</td><td style="text-align:right">0.497</td></tr>
+<tr><td>mul_fwd</td><td>387 (260)</td><td style="text-align:right">1013 (3 checks)</td><td style="text-align:right">62%</td><td style="text-align:right">1.108</td><td style="text-align:right">0.481</td></tr>
+<tr><td>mul_bwd</td><td>639 (262)</td><td style="text-align:right">1674 (5 checks)</td><td style="text-align:right">62%</td><td style="text-align:right">1.835</td><td style="text-align:right">0.890</td></tr>
+</tbody></table></div>
+<p><strong>Reading:</strong></p>
+<ul>
+<li><strong>The compute kernels are not slow.</strong> They run at 256–262 GB/s, the same as tessl&#39;s plain read-and-write reference pass (283 GB/s). Each one alone is faster than torch&#39;s whole op: 262 µs vs 354 for <code>silu_fwd</code>, 387 vs 481 for <code>mul_fwd</code>.
+</li>
+<li><strong>The finite checks are 62% of every sequence.</strong>
+<ul>
+<li><code>MetalBackend</code> runs <code>ojas_check_finite</code> as a separate pass over every input and every output (<code>ojas-metal/src/device.rs</code>, <code>fn check</code>).
+</li>
+<li>That is 60 call sites across 23 ops.
+</li>
+<li>Each check is a full read of the tensor, and the op waits for each one.
+</li>
+</ul>
+</li>
+<li><strong>Each check is also inefficient.</strong> A read-only pass should take about half of a read-and-write pass. <code>ojas_check_finite</code> takes 222 µs against the reference&#39;s 237 µs (151 GB/s): one float per thread, an <code>isfinite</code> test and an atomic store on failure (<code>ojas-metal/kernels/ojas_backend.metal:30</code>). That one float per thread is the cause is <strong>inferred</strong>; not profiled per instruction.
+</li>
+<li><strong>What is left between the sequence and the op minimum</strong> is 0.10–0.16 ms: the output allocation, the residency flushes and the encode.
+</li>
+</ul>
+<p><strong>Two fixes, by size:</strong></p>
+<ol>
+<li><strong>Make <code>ojas_check_finite</code> read efficiently:</strong> several floats per thread, which brings a check toward 120 µs. One kernel; all 60 call sites gain. Estimated <code>silu_fwd</code> op: about 0.6 ms, 0.6x torch.
+</li>
+<li><strong>Fold the checks into the elementwise kernels.</strong> Each kernel already reads its inputs and writes its output, so it can set the same status words with no extra memory traffic. Estimated <code>silu_fwd</code> op: about 0.36 ms, roughly torch&#39;s. This touches each op&#39;s kernel and device code.
+</li>
+</ol>
+<p>Both estimates are <strong>inferred</strong> from the table, not measured.</p>
+<h3 id="fix-1-the-check-reads-several-floats-per-thread-verified">Fix 1: the check reads several floats per thread (verified) <a class="anchor" href="#fix-1-the-check-reads-several-floats-per-thread-verified" aria-label="Link to this section">#</a></h3>
+<p><strong>The change:</strong></p>
+<ul>
+<li><code>ojas_check_finite</code> walks its window with the grid&#39;s stride, so neighbouring lanes read neighbouring floats on every step. It stores at most once per thread, at the end.
+</li>
+<li><code>fn check</code> in <code>device.rs</code> dispatches <code>ceil(n / CHECK_PER_THREAD)</code> threads, with <code>CHECK_PER_THREAD = 4</code>.
+</li>
+<li><strong>The sweep</strong> (<code>metal_bench 30 kernels</code>, <code>[4096, 2048]</code>, min µs): 1 per thread 225; 2 per thread 147; 4 per thread 136; 8–32 per thread 144–145; 64 per thread 152.
+</li>
+</ul>
+<p><strong>Tests:</strong></p>
+<ul>
+<li><code>ojas-metal/tests/check_finite.rs</code> places one NaN, +Inf or -Inf at:
+<ul>
+<li>every index of lengths up to 33;
+</li>
+<li>the start, middle, end and stride boundaries of lengths around 2^k, up to 2^20 + 3;
+</li>
+<li>inside and just outside row views whose byte offsets are not multiples of 16.
+</li>
+</ul>
+</li>
+<li><strong>Mutation check:</strong> a kernel that drops the last stride failed both tests.
+</li>
+<li><strong>Gates:</strong> ojas-metal 156 passed, 0 failed. clippy --all-targets is clean.
+</li>
+</ul>
+<p><strong>Interleaved A/B</strong> (<code>bench/ab_metal_rows.sh 8</code>; old is the same tree with the one-float kernel and dispatch; <code>bench/results/2026-10-02-kernels/ab-check/</code>). 8 rounds, load 25–34, median of round minimums:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th style="text-align:right">old ms</th><th style="text-align:right">new ms</th><th style="text-align:right">change</th></tr></thead>
+<tbody>
+<tr><td>silu_fwd</td><td style="text-align:right">0.849</td><td style="text-align:right">0.662</td><td style="text-align:right">−22%</td></tr>
+<tr><td>silu_bwd</td><td style="text-align:right">1.149</td><td style="text-align:right">0.885</td><td style="text-align:right">−23%</td></tr>
+<tr><td>mul_fwd</td><td style="text-align:right">1.155</td><td style="text-align:right">0.920</td><td style="text-align:right">−20%</td></tr>
+<tr><td>mul_bwd</td><td style="text-align:right">1.865</td><td style="text-align:right">1.438</td><td style="text-align:right">−23%</td></tr>
+<tr><td>residual_add_fwd</td><td style="text-align:right">0.586</td><td style="text-align:right">0.488</td><td style="text-align:right">−17%</td></tr>
+<tr><td>gate_fwd</td><td style="text-align:right">0.566</td><td style="text-align:right">0.439</td><td style="text-align:right">−22%</td></tr>
+<tr><td>gate_bwd</td><td style="text-align:right">2.055</td><td style="text-align:right">1.902</td><td style="text-align:right">−7%</td></tr>
+<tr><td>vres_fwd</td><td style="text-align:right">0.483</td><td style="text-align:right">0.369</td><td style="text-align:right">−24%</td></tr>
+<tr><td>vres_bwd</td><td style="text-align:right">0.914</td><td style="text-align:right">0.722</td><td style="text-align:right">−21%</td></tr>
+<tr><td>rms_norm_fwd</td><td style="text-align:right">0.364</td><td style="text-align:right">0.282</td><td style="text-align:right">−23%</td></tr>
+<tr><td>rms_qk_norm_fwd</td><td style="text-align:right">0.559</td><td style="text-align:right">0.438</td><td style="text-align:right">−22%</td></tr>
+<tr><td>rope_fwd / rope_bwd</td><td style="text-align:right">0.335 / 0.357</td><td style="text-align:right">0.274 / 0.275</td><td style="text-align:right">−18% / −23%</td></tr>
+<tr><td>permute_bthd_bhtd</td><td style="text-align:right">0.321</td><td style="text-align:right">0.278</td><td style="text-align:right">−13%</td></tr>
+<tr><td>accumulate_grad_50304x768</td><td style="text-align:right">3.153</td><td style="text-align:right">3.165</td><td style="text-align:right">0% (has its own check kernel)</td></tr>
+</tbody></table></div>
+<ul>
+<li>Parity is identical on both sides.
+</li>
+<li><code>cross_entropy_fwd</code> and <code>adamw_full</code> were requested but not timed: the reused torch reference directory has no reference for them. The summary lists them as <code>no_ref</code>.
+</li>
+</ul>
+<h3 id="fix-2-the-elementwise-kernels-check-their-own-operands-verified">Fix 2: the elementwise kernels check their own operands (verified) <a class="anchor" href="#fix-2-the-elementwise-kernels-check-their-own-operands-verified" aria-label="Link to this section">#</a></h3>
+<p><strong>The change:</strong></p>
+<ul>
+<li><code>ojas_silu_fwd</code>, <code>ojas_silu_bwd</code>, <code>ojas_mul_fwd</code>, <code>ojas_mul_bwd</code>, <code>ojas_vres_fwd</code> and <code>ojas_vres_bwd</code> take the op&#39;s status slot. Each thread sets <code>ST_IN</code> for a non-finite element it read and <code>ST_OUT</code> for one it wrote, which are the same words the standalone passes set.
+</li>
+<li><code>residual_add_forward</code> is one kernel, <code>ojas_add_fwd</code> (<code>out = x + y</code>). It replaces a copy, tessl&#39;s in-place <code>residual_add</code> and three checks.
+</li>
+<li><code>residual_add_backward</code> is one kernel, <code>ojas_add_bwd</code>. It replaces two copies and three checks.
+</li>
+<li>tessl&#39;s <code>residual_add</code> bounds-checked its <code>y</code> window; the new kernels do not need to. <code>Worker::view</code> refuses any window that does not fit its buffer (<code>device.rs</code>, <code>fn view</code>), and the backend refuses unequal shapes before the command reaches the device (<code>residual_add_forward_dims</code>, <code>residual_add_backward_dims</code> in <code>backend.rs</code>). Both verified from source.
+</li>
+<li>The value-residual <code>lambda</code> and its gradient are one value each and keep their standalone checks.
+</li>
+<li>The step-1 versions of <code>device.rs</code> and the kernel file are kept in <code>bench/results/2026-10-02-kernels/*-step1.*.txt</code>.
+</li>
+</ul>
+<p><strong>Not folded: <code>gate</code>.</strong></p>
+<ul>
+<li>Its kernels are shared with the tiny training step in <code>gpu.rs</code>, which has no status slot.
+</li>
+<li><code>gate_bwd</code> is dominated by its two GEMMs. (Unmeasured when written, and wrong: the bias sum was half its GPU time. See &#34;gate_bwd: where its time went&#34; under Round 5.)
+</li>
+<li><code>gate_fwd</code> is about 0.84x torch; whether to pursue it is a follow-up decision.
+</li>
+</ul>
+<p><strong>Tests (ojas-metal 159 passed, 0 failed; clippy --all-targets clean):</strong></p>
+<ul>
+<li><code>tests/fused_checks.rs</code>:
+<ul>
+<li>finite inputs whose result overflows (<code>MAX * 4</code>, <code>MAX + MAX</code>, <code>MAX * silu&#39;(3)</code>, each <code>mul_backward</code> gradient) are reported. That is the output path on its own; every NaN-in test also trips the output check.
+</li>
+<li>a NaN or ±Inf at the end of an offset view is reported by all eight ops.
+</li>
+<li><code>add</code> and <code>mul</code>, forward and backward, match the CPU reference bit for bit.
+</li>
+</ul>
+</li>
+<li>All three tests passed on the step-1 code too: behaviour is unchanged by design, so no test fails before the change.
+</li>
+<li><strong>Mutation checks:</strong> removing every in-kernel <code>ST_IN</code> store failed the offset-view test (<code>residual_add_backward</code> reads <code>x</code> and <code>y</code> only to check them). Removing every <code>ST_OUT</code> store failed the overflow test.
+</li>
+<li><strong>Dependents</strong> (ojas-qwen35, ojas-model, ojas-capi, ojas-infer): 206 passed, 0 failed.
+</li>
+</ul>
+<p><strong>Kernel GPU time</strong> (<code>kernels-after-fold.md</code>, min µs, <code>[4096, 2048]</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>kernel</th><th style="text-align:right">before (no checks inside)</th><th style="text-align:right">after (checks inside)</th></tr></thead>
+<tbody>
+<tr><td>silu_fwd</td><td style="text-align:right">262</td><td style="text-align:right">251</td></tr>
+<tr><td>silu_bwd</td><td style="text-align:right">389</td><td style="text-align:right">410</td></tr>
+<tr><td>mul_fwd</td><td style="text-align:right">387</td><td style="text-align:right">420</td></tr>
+<tr><td>mul_bwd</td><td style="text-align:right">639</td><td style="text-align:right">673</td></tr>
+<tr><td>add_fwd</td><td style="text-align:right">—</td><td style="text-align:right">403</td></tr>
+<tr><td>add_bwd</td><td style="text-align:right">—</td><td style="text-align:right">652</td></tr>
+</tbody></table></div>
+<p>The two columns come from separate runs (load 58, then 19), not paired. Within that, the checks inside change kernel time by −4% to +8%.</p>
+<p><strong>Interleaved A/B</strong> (<code>bench/ab_metal_rows.sh 8</code>; old is the step-1 tree; <code>bench/results/2026-10-02-kernels/ab-fold/</code>). The old side is the live tree mirrored, with the two step-1 snapshot files copied back over <code>ojas-metal/src/device.rs</code> and <code>ojas-metal/kernels/ojas_backend.metal</code>, passed as <code>OLD_SRC</code>. Fix 1&#39;s old side was the same, with <code>ojas_check_finite</code> put back to one float per thread and <code>fn check</code> dispatching <code>n</code> threads. The driver scripts are in the git-ignored <code>target-baseline/</code>; the raw rounds beside each summary are the record. 8 rounds, load 19–20, median of round minimums. The torch column is round 4&#39;s torch minimum, unpaired:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th style="text-align:right">step 1 ms</th><th style="text-align:right">folded ms</th><th style="text-align:right">change</th><th>vs torch now</th></tr></thead>
+<tbody>
+<tr><td>silu_fwd</td><td style="text-align:right">0.680</td><td style="text-align:right">0.399</td><td style="text-align:right">−41%</td><td>0.89x (torch 0.354)</td></tr>
+<tr><td>silu_bwd</td><td style="text-align:right">0.921</td><td style="text-align:right">0.529</td><td style="text-align:right">−43%</td><td>0.94x (0.497)</td></tr>
+<tr><td>mul_fwd</td><td style="text-align:right">0.922</td><td style="text-align:right">0.523</td><td style="text-align:right">−43%</td><td>0.92x (0.481)</td></tr>
+<tr><td>mul_bwd</td><td style="text-align:right">1.426</td><td style="text-align:right">0.789</td><td style="text-align:right">−45%</td><td><strong>1.13x</strong> (0.890)</td></tr>
+<tr><td>residual_add_fwd</td><td style="text-align:right">0.471</td><td style="text-align:right">0.282</td><td style="text-align:right">−40%</td><td>0.83x (0.235)</td></tr>
+<tr><td>residual_add_bwd</td><td style="text-align:right">0.488</td><td style="text-align:right">0.366</td><td style="text-align:right">−25%</td><td>API artifact (torch returns <code>gy</code>)</td></tr>
+<tr><td>vres_fwd</td><td style="text-align:right">0.397</td><td style="text-align:right">0.272</td><td style="text-align:right">−31%</td><td><strong>1.63x</strong> (0.443)</td></tr>
+<tr><td>vres_bwd</td><td style="text-align:right">0.743</td><td style="text-align:right">0.496</td><td style="text-align:right">−33%</td><td><strong>1.44x</strong> (0.714)</td></tr>
+<tr><td>rms_norm_fwd, gate_fwd, gate_bwd, permute, floor (unchanged ops)</td><td style="text-align:right">—</td><td style="text-align:right">—</td><td style="text-align:right">within ±5%</td><td>control</td></tr>
+</tbody></table></div>
+<p>Against round 4&#39;s numbers before both fixes, Metal <code>silu_fwd</code> went from 0.790 to 0.399 ms and <code>mul_bwd</code> from 1.835 to 0.789.</p>
+<p><strong>Second-order costs, from the same table:</strong></p>
+<ul>
+<li><strong>Residency flushes and cold allocations.</strong> Every <code>MetalBackend</code> op makes two residency-set flushes and one cold allocation (attributed to its output buffer, <strong>inferred</strong>). The fast-mode op call is 0.06–0.21 ms against tessl&#39;s 0.03 ms.
+</li>
+<li><strong>The fast-mode event wait.</strong> It is 0.15–0.2 ms against a 0.02 ms GPU span. Under a GPU that read 100% busy this is likely queueing behind another process (<strong>unverified</strong>; not re-measured on an idle GPU).
+</li>
+<li><strong>torch&#39;s whole floor is 0.12 ms median</strong> (<code>floor_silu_1</code>, round 3).
+</li>
+</ul>
+<p><code>residual_add_bwd</code> is still an API artifact, not a kernel (round 2, rank 1).</p>
+<h2 id="round-2-2026-10-01-19011913-cdt">Round 2: 2026-10-01, 19:01–19:13 CDT <a class="anchor" href="#round-2-2026-10-01-19011913-cdt" aria-label="Link to this section">#</a></h2>
+<h3 id="what-was-run-verified-benchresults2026-10-01-r2envtxt">What was run (verified, <code>bench/results/2026-10-01-r2/env.txt</code>) <a class="anchor" href="#what-was-run-verified-benchresults2026-10-01-r2envtxt" aria-label="Link to this section">#</a></h3>
+<p>The protocol is the same as round 1&#39;s run A:</p>
+<ul>
+<li><code>bench/run_paired.sh 5</code>;
+</li>
+<li>5 rounds, alternating lane order;
+</li>
+<li>5 warm-ups, then 20 timed iterations of op + sync per row;
+</li>
+<li>the same 10% spread gate;
+</li>
+<li>serial, with no other GPU lane active (per the coordinator).
+</li>
+</ul>
+<p>The binaries were rebuilt by the runner from HEAD <code>dab2a12</code> plus an uncommitted working tree. The diff of the benchmarked crates hashes to <code>a73d2f0ef611</code>; it was <code>c226ffba076d</code> in round 1. tessl is unchanged (<code>cf65d9d</code> with 20 dirty files). Toolchain and machine are as in round 1.</p>
+<p><strong>New in round 2:</strong></p>
+<ul>
+<li><strong>Per-row load.</strong> <code>uptime</code> and an <code>ioreg</code> GPU sample are recorded before and after every row (<code>_load</code> records in each round&#39;s JSONL; ranges at the end of <code>summary.md</code>).
+</li>
+<li><strong>Four new rows on all three runtimes.</strong> All pass parity on both backends:
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th>ojas</th><th>torch twin</th></tr></thead>
+<tbody>
+<tr><td><code>linear_ce_c1024x8192</code>, <code>linear_ce_c4096x50304</code></td><td><code>linear_cross_entropy_mean</code>: N 4096, d 768, V 50304, loss plus both gradients, logit chunks of 1024x8192 and 4096x50304</td><td>nanolab&#39;s own <code>FusedLinearCrossEntropy</code>, imported via <code>fused_linear_cross_entropy</code>, forward + <code>backward()</code>. It chunks rows only (n_chunks = 4096 / rows) and always spans the whole vocabulary. So <strong>the torch twin of the 1024x8192 row uses 1024x50304 chunks</strong>, and of the 4096x50304 row one 4096x50304 chunk</td></tr>
+<tr><td><code>decode_attn_kv1024</code></td><td><code>cached_attention_forward</code>, q [1,1,12,64], caches [1,1024,12,64] (time-major), kv_len 1024</td><td><code>F.scaled_dot_product_attention</code> without a mask on the cached K/V. torch keeps them in its own [B,H,T,D] layout, made contiguous once outside the timer</td></tr>
+<tr><td><code>accumulate_grad_50304x768</code></td><td><code>accumulate_grad</code> in place</td><td><code>acc.add_(g)</code></td></tr>
+</tbody></table></div>
+<p><strong>Machine state:</strong></p>
+<ul>
+<li><strong>CPU busy.</strong> The 1-min load average was 12–23 throughout. Seven Chrome renderers were each pinned at about 100% CPU, as observed at 19:00.
+</li>
+<li><strong>GPU much quieter than round 1.</strong> The per-block GPU samples were 0–64% (round 1: 84–100%).
+</li>
+<li><strong>Per-row GPU samples ranged 0–99%</strong> with a median of 0–36% per lane-round. An <code>ioreg</code> read taken while that lane&#39;s own kernel runs shows its own work.
+</li>
+</ul>
+<p><strong>Gate result: 8 of 96 rows pass</strong> (spread at most 10% on both sides):</p>
+<ul>
+<li>Metal: <code>linear_up_bwd</code>, <code>linear_lmhead_fwd</code>, <code>muon_2048x768</code> (both twins), <code>block_fwd_bwd</code>;
+</li>
+<li>wgpu: <code>linear_up_bwd</code>, <code>linear_lmhead_fwd</code>, <code>block_fwd_bwd</code>.
+</li>
+</ul>
+<p>A gate-failed ratio below is <strong>not</strong> a measured speedup. It is the run&#39;s median of 5 paired ratios, with the min-max beside it. Where the min-max range lies wholly on one side of 1 in all 5 rounds, the direction is verified. A change of 2x or more between rounds is informative even when gated out, but the before/after comparison pairs runs taken hours apart. So the &#34;ojas change&#34; column compares unpaired medians: verified as a direction when it is 2x or more, unverified in magnitude.</p>
+<p><strong>Rows that got slower on Metal:</strong></p>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th style="text-align:right">round 1 median (ms)</th><th style="text-align:right">round 2 median (ms)</th><th style="text-align:right">round 2 speed vs round 1</th></tr></thead>
+<tbody>
+<tr><td><code>rope_bwd</code></td><td style="text-align:right">1.18</td><td style="text-align:right">2.09</td><td style="text-align:right">0.56×</td></tr>
+<tr><td><code>permute_bthd_bhtd</code></td><td style="text-align:right">0.77</td><td style="text-align:right">1.59</td><td style="text-align:right">0.48×</td></tr>
+<tr><td><code>residual_add_fwd</code></td><td style="text-align:right">1.56</td><td style="text-align:right">2.18</td><td style="text-align:right">0.71×</td></tr>
+<tr><td><code>residual_add_bwd</code></td><td style="text-align:right">1.88</td><td style="text-align:right">2.29</td><td style="text-align:right">0.82×</td></tr>
+</tbody></table></div>
+<p>All are under 2x, which is below this comparison&#39;s resolution. None of these kernels changed in round 2. Their minimum times barely moved, so the cause is <strong>inferred</strong> to be the per-op sync floor under CPU load. It was not profiled, and no row here should be read as a regression in the kernel.</p>
+<p><strong>Parity:</strong> all 45 rows passed on both backends in all 5 rounds, with the same gates as round 1. Metal <code>rms_qk_norm_bwd</code> went from 4.0e-6 to 1.0e-6 normalized error under its new kernel.</p>
+<h3 id="beforeafter-ojas-metalbackend">Before/after: ojas MetalBackend <a class="anchor" href="#beforeafter-ojas-metalbackend" aria-label="Link to this section">#</a></h3>
+<p>&#34;before&#34; is round 1 run A (<code>bench/results/2026-10-01/runA</code>) and &#34;after&#34; is round 2. Ratio = torch / ojas per round; below 1 means ojas is slower.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th>ojas median ms, before -&gt; after</th><th>ojas change</th><th>ratio before (gate)</th><th>ratio after [min-max] (gate)</th><th>direction after (5 rounds)</th><th>parity after (rel)</th></tr></thead>
+<tbody>
+<tr><td>floor_silu_1</td><td>1.756 -&gt; 1.136</td><td>1.55x faster</td><td>0.06x (fail)</td><td>0.18x [0.11-0.23] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_qkv_fwd</td><td>1.999 -&gt; 1.834</td><td>1.09x faster</td><td>0.46x (fail)</td><td>0.53x [0.35-0.80] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_qkv_bwd</td><td>3.785 -&gt; 2.418</td><td>1.57x faster</td><td>0.53x (fail)</td><td>0.86x [0.75-0.94] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_up_fwd</td><td>4.127 -&gt; 2.906</td><td>1.42x faster</td><td>0.51x (fail)</td><td>0.84x [0.58-0.85] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_up_bwd</td><td>5.630 -&gt; 4.821</td><td>1.17x faster</td><td>0.78x (fail)</td><td>0.88x [0.87-1.00] (<strong>pass</strong>)</td><td>mixed (4/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>linear_down_fwd</td><td>3.609 -&gt; 2.734</td><td>1.32x faster</td><td>0.61x (fail)</td><td>0.84x [0.73-2.08] (fail)</td><td>mixed (4/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>linear_down_bwd</td><td>6.541 -&gt; 5.229</td><td>1.25x faster</td><td>0.66x (fail)</td><td>0.85x [0.72-2.00] (fail)</td><td>mixed (4/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>linear_lmhead_fwd</td><td>131.9 -&gt; 118.3</td><td>1.12x faster</td><td>0.52x (fail)</td><td>0.46x [0.44-0.49] (<strong>pass</strong>)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_lmhead_bwd</td><td>174.3 -&gt; 156.2</td><td>1.12x faster</td><td>0.70x (fail)</td><td>0.70x [0.61-0.84] (fail)</td><td>slower 5/5</td><td>1.3e-05</td></tr>
+<tr><td>sdpa_b4h12t1024d64_fwd</td><td>3.081 -&gt; 2.418</td><td>1.27x faster</td><td>0.55x (fail)</td><td>0.57x [0.36-0.84] (fail)</td><td>slower 5/5</td><td>2.2e-07</td></tr>
+<tr><td>sdpa_b4h12t1024d64_bwd</td><td>8.111 -&gt; 6.473</td><td>1.25x faster</td><td>1.24x (fail)</td><td>1.53x [1.40-1.82] (fail)</td><td>faster 5/5</td><td>2.1e-06</td></tr>
+<tr><td>sdpa_b4h8t2048d64_fwd</td><td>6.909 -&gt; 5.146</td><td>1.34x faster</td><td>0.50x (fail)</td><td>0.65x [0.57-0.72] (fail)</td><td>slower 5/5</td><td>1.8e-07</td></tr>
+<tr><td>sdpa_b4h8t2048d64_bwd</td><td>19.41 -&gt; 14.75</td><td>1.32x faster</td><td>1.38x (fail)</td><td>1.73x [1.44-2.06] (fail)</td><td>faster 5/5</td><td>2.5e-06</td></tr>
+<tr><td>sdpa_b2h8t1024d128_fwd</td><td>2.029 -&gt; 1.641</td><td>1.24x faster</td><td>0.61x (fail)</td><td>0.74x [0.45-1.23] (fail)</td><td>mixed (4/5 slower)</td><td>2.1e-07</td></tr>
+<tr><td>sdpa_b2h8t1024d128_bwd</td><td>6.417 -&gt; 4.902</td><td>1.31x faster</td><td>0.81x (fail)</td><td>1.09x [0.93-1.41] (fail)</td><td>mixed (2/5 slower)</td><td>2.6e-06</td></tr>
+<tr><td>rms_norm_fwd</td><td>1.654 -&gt; 1.135</td><td>1.46x faster</td><td>0.18x (fail)</td><td>0.22x [0.19-0.32] (fail)</td><td>slower 5/5</td><td>2.0e-07</td></tr>
+<tr><td>rms_norm_bwd</td><td>3.389 -&gt; 1.706</td><td>1.99x faster</td><td>0.74x (fail)</td><td>1.75x [1.18-2.37] (fail)</td><td>faster 5/5</td><td>2.8e-07</td></tr>
+<tr><td>rms_qk_norm_fwd</td><td>4.736 -&gt; 2.135</td><td>2.22x faster</td><td>0.11x (fail)</td><td>0.21x [0.17-0.37] (fail)</td><td>slower 5/5</td><td>1.7e-07</td></tr>
+<tr><td>rms_qk_norm_bwd</td><td>53.15 -&gt; 2.579</td><td><strong>20.6x faster</strong></td><td>0.10x (pass)</td><td>1.81x [1.48-3.50] (fail)</td><td>faster 5/5</td><td>1.0e-06</td></tr>
+<tr><td>rope_fwd</td><td>1.816 -&gt; 0.897</td><td>2.03x faster</td><td>0.85x (fail)</td><td>1.63x [0.90-2.89] (fail)</td><td>mixed (1/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>rope_bwd</td><td>1.182 -&gt; 2.093</td><td>0.56x (slower)</td><td>1.81x (fail)</td><td>0.88x [0.85-1.69] (fail)</td><td>mixed (3/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>silu_fwd</td><td>2.267 -&gt; 2.001</td><td>1.13x faster</td><td>0.20x (fail)</td><td>0.26x [0.19-0.35] (fail)</td><td>slower 5/5</td><td>6.1e-08</td></tr>
+<tr><td>silu_bwd</td><td>3.191 -&gt; 2.292</td><td>1.39x faster</td><td>0.23x (fail)</td><td>0.37x [0.24-0.48] (fail)</td><td>slower 5/5</td><td>1.1e-07</td></tr>
+<tr><td>mul_fwd</td><td>2.899 -&gt; 1.825</td><td>1.59x faster</td><td>0.21x (fail)</td><td>0.37x [0.20-0.50] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>mul_bwd</td><td>4.131 -&gt; 2.552</td><td>1.62x faster</td><td>0.35x (fail)</td><td>0.44x [0.40-0.49] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>residual_add_fwd</td><td>1.559 -&gt; 2.180</td><td>0.71x (slower)</td><td>0.18x (fail)</td><td>0.20x [0.14-0.29] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>residual_add_bwd</td><td>1.878 -&gt; 2.286</td><td>0.82x (slower)</td><td>0.01x (fail)</td><td>0.01x [0.00-0.02] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>gate_fwd</td><td>1.773 -&gt; 1.675</td><td>1.06x faster</td><td>0.36x (fail)</td><td>0.48x [0.20-0.86] (fail)</td><td>slower 5/5</td><td>1.0e-07</td></tr>
+<tr><td>gate_bwd</td><td>4.069 -&gt; 3.208</td><td>1.27x faster</td><td>0.33x (fail)</td><td>0.46x [0.36-0.50] (fail)</td><td>slower 5/5</td><td>2.3e-06</td></tr>
+<tr><td>vres_fwd</td><td>1.645 -&gt; 1.475</td><td>1.12x faster</td><td>0.41x (fail)</td><td>0.41x [0.26-0.90] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>vres_bwd</td><td>1.943 -&gt; 1.739</td><td>1.12x faster</td><td>0.64x (fail)</td><td>0.55x [0.35-0.82] (fail)</td><td>slower 5/5</td><td>2.3e-07</td></tr>
+<tr><td>permute_bthd_bhtd</td><td>0.771 -&gt; 1.591</td><td>0.48x (slower)</td><td>0.72x (fail)</td><td>0.31x [0.24-0.78] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>cross_entropy_fwd</td><td>20.94 -&gt; 3.851</td><td><strong>5.44x faster</strong></td><td>0.97x (fail)</td><td>3.93x [3.57-4.63] (fail)</td><td>faster 5/5</td><td>0.0e+00</td></tr>
+<tr><td>cross_entropy_bwd</td><td>96.68 -&gt; 38.40</td><td><strong>2.52x faster</strong></td><td>0.35x (fail)</td><td>0.72x [0.61-0.77] (fail)</td><td>slower 5/5</td><td>2.6e-10</td></tr>
+<tr><td>linear_ce_c1024x8192</td><td>new -&gt; 266.3</td><td>new row</td><td>-</td><td>0.88x [0.71-0.91] (fail)</td><td>slower 5/5</td><td>6.7e-06</td></tr>
+<tr><td>linear_ce_c4096x50304</td><td>new -&gt; 423.3</td><td>new row</td><td>-</td><td>0.55x [0.50-0.57] (fail)</td><td>slower 5/5</td><td>2.3e-05</td></tr>
+<tr><td>clip_grad_norm_full</td><td>33.67 -&gt; 17.59</td><td>1.91x faster</td><td>4.58x (pass)</td><td>7.67x [7.02-7.96] (fail)</td><td>faster 5/5</td><td>3.0e-07</td></tr>
+<tr><td>adamw_full</td><td>598.1 -&gt; 244.5</td><td><strong>2.45x faster</strong></td><td>0.09x (fail)</td><td>0.16x [0.14-0.17] (fail)</td><td>slower 5/5</td><td>1.2e-07</td></tr>
+<tr><td>muon_768x768</td><td>6.507 -&gt; 3.364</td><td>1.93x faster</td><td>0.71x (fail)</td><td>1.23x [1.15-1.30] (fail)</td><td>faster 5/5</td><td>0.0e+00</td></tr>
+<tr><td>muon_768x768 vs torch bf16 NS5</td><td>6.507 -&gt; 3.364</td><td>1.93x faster</td><td>0.44x (fail)</td><td>0.64x [0.58-0.71] (fail)</td><td>slower 5/5</td><td>timing only</td></tr>
+<tr><td>muon_2048x768</td><td>12.01 -&gt; 6.899</td><td>1.74x faster</td><td>0.75x (fail)</td><td>1.20x [1.18-1.22] (<strong>pass</strong>)</td><td>faster 5/5</td><td>5.0e-07</td></tr>
+<tr><td>muon_2048x768 vs torch bf16 NS5</td><td>12.01 -&gt; 6.899</td><td>1.74x faster</td><td>0.45x (fail)</td><td>0.68x [0.66-0.73] (<strong>pass</strong>)</td><td>slower 5/5</td><td>timing only</td></tr>
+<tr><td>muon_768x2048</td><td>11.73 -&gt; 6.914</td><td>1.70x faster</td><td>0.77x (fail)</td><td>1.21x [1.16-1.54] (fail)</td><td>faster 5/5</td><td>2.9e-07</td></tr>
+<tr><td>muon_768x2048 vs torch bf16 NS5</td><td>11.73 -&gt; 6.914</td><td>1.70x faster</td><td>0.45x (fail)</td><td>0.60x [0.58-0.71] (fail)</td><td>slower 5/5</td><td>timing only</td></tr>
+<tr><td>block_fwd</td><td>67.25 -&gt; 49.22</td><td>1.37x faster</td><td>0.24x (fail)</td><td>0.32x [0.27-0.33] (fail)</td><td>slower 5/5</td><td>1.9e-07</td></tr>
+<tr><td>block_fwd_bwd</td><td>230.5 -&gt; 122.3</td><td>1.88x faster</td><td>0.37x (fail)</td><td>0.59x [0.56-0.64] (<strong>pass</strong>)</td><td>slower 5/5</td><td>2.5e-06</td></tr>
+<tr><td>decode_attn_kv1024</td><td>new -&gt; 0.832</td><td>new row</td><td>-</td><td>0.37x [0.22-1.16] (fail)</td><td>mixed (4/5 slower)</td><td>3.2e-07</td></tr>
+<tr><td>accumulate_grad_50304x768</td><td>new -&gt; 9.624</td><td>new row</td><td>-</td><td>0.25x [0.21-0.53] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+</tbody></table></div>
+<h3 id="beforeafter-ojas-wgpubackend-metal-hal">Before/after: ojas WgpuBackend (Metal HAL) <a class="anchor" href="#beforeafter-ojas-wgpubackend-metal-hal" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th>ojas median ms, before -&gt; after</th><th>ojas change</th><th>ratio before (gate)</th><th>ratio after [min-max] (gate)</th><th>direction after (5 rounds)</th><th>parity after (rel)</th></tr></thead>
+<tbody>
+<tr><td>floor_silu_1</td><td>0.244 -&gt; 0.359</td><td>0.68x (slower)</td><td>0.48x (fail)</td><td>0.52x [0.06-0.77] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_qkv_fwd</td><td>2.787 -&gt; 2.167</td><td>1.29x faster</td><td>0.31x (fail)</td><td>0.47x [0.33-0.48] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_qkv_bwd</td><td>5.620 -&gt; 3.453</td><td>1.63x faster</td><td>0.38x (fail)</td><td>0.55x [0.53-0.67] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_up_fwd</td><td>6.697 -&gt; 4.652</td><td>1.44x faster</td><td>0.32x (fail)</td><td>0.47x [0.46-0.58] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_up_bwd</td><td>14.04 -&gt; 8.729</td><td>1.61x faster</td><td>0.31x (fail)</td><td>0.49x [0.48-0.56] (<strong>pass</strong>)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_down_fwd</td><td>7.456 -&gt; 4.601</td><td>1.62x faster</td><td>0.29x (fail)</td><td>0.49x [0.46-1.30] (fail)</td><td>mixed (4/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>linear_down_bwd</td><td>13.84 -&gt; 8.661</td><td>1.60x faster</td><td>0.32x (fail)</td><td>0.51x [0.48-1.21] (fail)</td><td>mixed (4/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>linear_lmhead_fwd</td><td>194.7 -&gt; 136.4</td><td>1.43x faster</td><td>0.31x (fail)</td><td>0.40x [0.39-0.41] (<strong>pass</strong>)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>linear_lmhead_bwd</td><td>323.7 -&gt; 199.9</td><td>1.62x faster</td><td>0.37x (fail)</td><td>0.54x [0.50-0.63] (fail)</td><td>slower 5/5</td><td>1.3e-05</td></tr>
+<tr><td>sdpa_b4h12t1024d64_fwd</td><td>77.05 -&gt; 11.83</td><td><strong>6.51x faster</strong></td><td>0.02x (fail)</td><td>0.12x [0.12-0.14] (fail)</td><td>slower 5/5</td><td>2.4e-07</td></tr>
+<tr><td>sdpa_b4h12t1024d64_bwd</td><td>277.8 -&gt; 53.34</td><td><strong>5.21x faster</strong></td><td>0.04x (fail)</td><td>0.19x [0.16-0.22] (fail)</td><td>slower 5/5</td><td>2.1e-06</td></tr>
+<tr><td>sdpa_b4h8t2048d64_fwd</td><td>191.6 -&gt; 30.40</td><td><strong>6.30x faster</strong></td><td>0.02x (fail)</td><td>0.11x [0.09-0.11] (fail)</td><td>slower 5/5</td><td>1.8e-07</td></tr>
+<tr><td>sdpa_b4h8t2048d64_bwd</td><td>705.7 -&gt; 144.3</td><td><strong>4.89x faster</strong></td><td>0.04x (fail)</td><td>0.18x [0.17-0.22] (fail)</td><td>slower 5/5</td><td>2.6e-06</td></tr>
+<tr><td>sdpa_b2h8t1024d128_fwd</td><td>91.63 -&gt; 11.85</td><td><strong>7.73x faster</strong></td><td>0.01x (fail)</td><td>0.10x [0.09-0.17] (fail)</td><td>slower 5/5</td><td>1.8e-07</td></tr>
+<tr><td>sdpa_b2h8t1024d128_bwd</td><td>280.7 -&gt; 53.07</td><td><strong>5.29x faster</strong></td><td>0.02x (fail)</td><td>0.10x [0.09-0.13] (fail)</td><td>slower 5/5</td><td>2.3e-06</td></tr>
+<tr><td>rms_norm_fwd</td><td>0.424 -&gt; 0.430</td><td>0.99x</td><td>0.61x (fail)</td><td>0.67x [0.43-0.82] (fail)</td><td>slower 5/5</td><td>1.3e-07</td></tr>
+<tr><td>rms_norm_bwd</td><td>0.896 -&gt; 0.704</td><td>1.27x faster</td><td>3.42x (fail)</td><td>3.10x [2.19-6.04] (fail)</td><td>faster 5/5</td><td>2.6e-07</td></tr>
+<tr><td>rms_qk_norm_fwd</td><td>2.624 -&gt; 2.102</td><td>1.25x faster</td><td>0.17x (fail)</td><td>0.20x [0.19-0.24] (fail)</td><td>slower 5/5</td><td>1.2e-07</td></tr>
+<tr><td>rms_qk_norm_bwd</td><td>5.421 -&gt; 4.303</td><td>1.26x faster</td><td>0.95x (pass)</td><td>1.11x [1.06-1.27] (fail)</td><td>faster 5/5</td><td>1.3e-06</td></tr>
+<tr><td>rope_fwd</td><td>0.470 -&gt; 0.367</td><td>1.28x faster</td><td>3.67x (fail)</td><td>3.70x [2.22-5.14] (fail)</td><td>faster 5/5</td><td>6.2e-08</td></tr>
+<tr><td>rope_bwd</td><td>0.423 -&gt; 0.393</td><td>1.08x faster</td><td>4.73x (fail)</td><td>4.86x [2.66-6.15] (fail)</td><td>faster 5/5</td><td>6.1e-08</td></tr>
+<tr><td>silu_fwd</td><td>0.728 -&gt; 0.769</td><td>0.95x</td><td>0.75x (fail)</td><td>0.73x [0.50-1.18] (fail)</td><td>mixed (4/5 slower)</td><td>1.8e-07</td></tr>
+<tr><td>silu_bwd</td><td>1.004 -&gt; 0.892</td><td>1.12x faster</td><td>0.86x (fail)</td><td>0.85x [0.55-1.12] (fail)</td><td>mixed (4/5 slower)</td><td>4.3e-07</td></tr>
+<tr><td>mul_fwd</td><td>0.862 -&gt; 0.804</td><td>1.07x faster</td><td>0.74x (fail)</td><td>0.85x [0.77-1.01] (fail)</td><td>mixed (4/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>mul_bwd</td><td>1.263 -&gt; 1.162</td><td>1.09x faster</td><td>1.06x (fail)</td><td>1.01x [0.97-1.14] (fail)</td><td>mixed (1/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>residual_add_fwd</td><td>0.513 -&gt; 0.552</td><td>0.93x</td><td>0.72x (fail)</td><td>0.62x [0.58-0.81] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>residual_add_bwd</td><td>0.898 -&gt; 1.062</td><td>0.85x</td><td>0.02x (fail)</td><td>0.01x [0.01-0.07] (fail)</td><td>slower 5/5</td><td>0.0e+00</td></tr>
+<tr><td>gate_fwd</td><td>0.943 -&gt; 1.186</td><td>0.79x (slower)</td><td>0.74x (fail)</td><td>0.65x [0.58-0.98] (fail)</td><td>slower 5/5</td><td>1.4e-07</td></tr>
+<tr><td>gate_bwd</td><td>2.111 -&gt; 2.267</td><td>0.93x</td><td>0.63x (fail)</td><td>0.64x [0.52-0.69] (fail)</td><td>slower 5/5</td><td>2.3e-06</td></tr>
+<tr><td>vres_fwd</td><td>0.458 -&gt; 0.534</td><td>0.86x</td><td>1.32x (fail)</td><td>1.11x [0.93-1.82] (fail)</td><td>mixed (1/5 slower)</td><td>6.0e-08</td></tr>
+<tr><td>vres_bwd</td><td>0.720 -&gt; 0.722</td><td>1.00x</td><td>1.67x (fail)</td><td>1.36x [1.12-1.69] (fail)</td><td>faster 5/5</td><td>2.3e-07</td></tr>
+<tr><td>permute_bthd_bhtd</td><td>0.628 -&gt; 0.772</td><td>0.81x (slower)</td><td>0.89x (fail)</td><td>0.65x [0.56-1.37] (fail)</td><td>mixed (4/5 slower)</td><td>0.0e+00</td></tr>
+<tr><td>cross_entropy_fwd</td><td>7.139 -&gt; 7.374</td><td>0.97x</td><td>2.79x (fail)</td><td>2.21x [1.87-2.49] (fail)</td><td>faster 5/5</td><td>0.0e+00</td></tr>
+<tr><td>cross_entropy_bwd</td><td>63.71 -&gt; 47.74</td><td>1.33x faster</td><td>0.53x (fail)</td><td>0.60x [0.55-0.71] (fail)</td><td>slower 5/5</td><td>2.6e-10</td></tr>
+<tr><td>linear_ce_c1024x8192</td><td>new -&gt; 474.2</td><td>new row</td><td>-</td><td>0.45x [0.42-0.52] (fail)</td><td>slower 5/5</td><td>2.3e-05</td></tr>
+<tr><td>linear_ce_c4096x50304</td><td>new -&gt; 385.1</td><td>new row</td><td>-</td><td>0.58x [0.56-0.64] (fail)</td><td>slower 5/5</td><td>2.3e-05</td></tr>
+<tr><td>clip_grad_norm_full</td><td>24.18 -&gt; 17.18</td><td>1.41x faster</td><td>6.36x (pass)</td><td>7.81x [6.99-7.86] (fail)</td><td>faster 5/5</td><td>3.8e-07</td></tr>
+<tr><td>adamw_full</td><td>75.15 -&gt; 62.46</td><td>1.20x faster</td><td>0.70x (fail)</td><td>0.63x [0.61-0.64] (fail)</td><td>slower 5/5</td><td>1.2e-07</td></tr>
+<tr><td>muon_768x768</td><td>10.58 -&gt; 6.207</td><td>1.70x faster</td><td>0.44x (fail)</td><td>0.65x [0.62-0.70] (fail)</td><td>slower 5/5</td><td>4.5e-07</td></tr>
+<tr><td>muon_768x768 vs torch bf16 NS5</td><td>10.58 -&gt; 6.207</td><td>1.70x faster</td><td>0.27x (fail)</td><td>0.35x [0.32-0.40] (fail)</td><td>slower 5/5</td><td>timing only</td></tr>
+<tr><td>muon_2048x768</td><td>22.32 -&gt; 13.83</td><td>1.61x faster</td><td>0.41x (fail)</td><td>0.60x [0.55-0.63] (fail)</td><td>slower 5/5</td><td>5.0e-07</td></tr>
+<tr><td>muon_2048x768 vs torch bf16 NS5</td><td>22.32 -&gt; 13.83</td><td>1.61x faster</td><td>0.25x (fail)</td><td>0.33x [0.32-0.37] (fail)</td><td>slower 5/5</td><td>timing only</td></tr>
+<tr><td>muon_768x2048</td><td>21.64 -&gt; 12.77</td><td>1.70x faster</td><td>0.42x (fail)</td><td>0.64x [0.64-0.77] (fail)</td><td>slower 5/5</td><td>2.9e-07</td></tr>
+<tr><td>muon_768x2048 vs torch bf16 NS5</td><td>21.64 -&gt; 12.77</td><td>1.70x faster</td><td>0.25x (fail)</td><td>0.33x [0.30-0.40] (fail)</td><td>slower 5/5</td><td>timing only</td></tr>
+<tr><td>block_fwd</td><td>120.0 -&gt; 43.00</td><td><strong>2.79x faster</strong></td><td>0.14x (fail)</td><td>0.35x [0.32-0.36] (fail)</td><td>slower 5/5</td><td>1.9e-07</td></tr>
+<tr><td>block_fwd_bwd</td><td>475.3 -&gt; 158.1</td><td><strong>3.01x faster</strong></td><td>0.18x (pass)</td><td>0.47x [0.43-0.48] (<strong>pass</strong>)</td><td>slower 5/5</td><td>2.3e-06</td></tr>
+<tr><td>decode_attn_kv1024</td><td>new -&gt; 0.414</td><td>new row</td><td>-</td><td>0.68x [0.48-3.31] (fail)</td><td>mixed (4/5 slower)</td><td>2.5e-07</td></tr>
+<tr><td>accumulate_grad_50304x768</td><td>new -&gt; 2.412</td><td>new row</td><td>-</td><td>0.91x [0.86-1.77] (fail)</td><td>mixed (3/5 slower)</td><td>0.0e+00</td></tr>
+</tbody></table></div>
+<h3 id="what-the-optimization-rounds-moved-changes-of-2x-or-more">What the optimization rounds moved (changes of 2x or more) <a class="anchor" href="#what-the-optimization-rounds-moved-changes-of-2x-or-more" aria-label="Link to this section">#</a></h3>
+<p>All of these are unpaired across runs, so the direction is verified and the magnitude is approximate. The ratio column is paired within round 2.</p>
+<ul>
+<li><strong>Metal <code>rms_qk_norm_bwd</code>: 53.2 -&gt; 2.6 ms, about 20x.</strong> This is the two-stage weight-gradient reduction (<code>ojas_rms_bwd_w_part</code> / <code>ojas_rms_bwd_w_sum</code>, <code>ojas-metal/kernels/ojas_backend.metal:284,308</code>) replacing the 64-thread column loop. It is now faster than torch in 5/5 rounds.
+</li>
+<li><strong>Metal <code>cross_entropy_fwd</code> 5.4x and <code>cross_entropy_bwd</code> 2.5x faster</strong> (fused two-pass kernel). CE forward is now 3.9x ahead of torch (5/5 rounds). CE backward still trails (0.72x).
+</li>
+<li><strong>Metal <code>adamw_full</code> 2.45x faster</strong>, from 598 to 245 ms. It still trails torch, which takes 40 ms (0.16x, 5/5 rounds slower).
+</li>
+<li><strong>Metal <code>rms_norm_bwd</code> 2.0x and <code>rms_qk_norm_fwd</code> 2.2x faster.</strong> <code>rms_norm_bwd</code> flipped to faster than torch (1.75x, 5/5).
+</li>
+<li><strong>Metal composed block, forward + backward: 230 -&gt; 122 ms.</strong> The ratio went from 0.37x to 0.59x (gate passed).
+</li>
+<li><strong>wgpu SDPA 4.9–7.7x faster at every shape</strong> (tiled FlashAttention-2). It still trails torch at 0.10–0.19x.
+</li>
+<li><strong>wgpu composed block 2.8x (forward) and 3.0x (forward + backward) faster.</strong> Forward + backward is 0.47x torch (gate passed).
+</li>
+<li><strong>wgpu GEMM 1.3–1.6x faster</strong> (128x128 register-blocked tile, used when both output sides are at least 128). This is not a 2x change; the direction holds across all eight linear rows.
+</li>
+<li><strong>Moved the wrong way, under 2x:</strong>
+<ul>
+<li>Metal <code>rope_bwd</code> (0.56x), <code>permute</code> (0.48x) and <code>residual_add_fwd</code> (0.71x). Their minimums barely moved (rope_bwd 0.44 -&gt; 0.68 ms, permute 0.39 -&gt; 0.42 ms), so the median shift is mostly fixed-cost jitter under CPU load (inferred).
+</li>
+<li>wgpu <code>floor</code> (0.68x) and <code>gate_fwd</code> (0.79x). These are small-op rows where 0.1–0.3 ms medians move with host load (inferred).
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="worst-remaining-ojas-vs-torch-rows-slower-in-55-rounds-ranked">Worst remaining ojas-vs-torch rows (slower in 5/5 rounds), ranked <a class="anchor" href="#worst-remaining-ojas-vs-torch-rows-slower-in-55-rounds-ranked" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th style="text-align:right">rank</th><th>backend</th><th>row</th><th>ratio, r2 median [min-max]</th><th>gate</th><th>ojas / torch median ms</th><th>bottleneck read</th></tr></thead>
+<tbody>
+<tr><td style="text-align:right">1</td><td>Metal, wgpu</td><td>residual_add_bwd</td><td>0.01x</td><td>fail</td><td>2.29 / 0.016; 1.06 / 0.016</td><td>API artifact, not a kernel: two fresh copies of <code>gy</code>, while torch returns <code>gy</code> with no kernel. A composed backward does not call it (<code>bench/ojas_rows.rs::block_backward</code>). <strong>Verified</strong> from the row semantics</td></tr>
+<tr><td style="text-align:right">2</td><td>wgpu</td><td>sdpa, all 6 rows</td><td>0.10–0.19x</td><td>fail</td><td>e.g. 11.83 / 1.47 fwd, 53.3 / 10.0 bwd at the nanolab shape</td><td>The new kernel is FlashAttention-2 &#34;in plain WGSL (no matrix units, no subgroups)&#34; (<code>ojas-kernels/src/wgsl/attention.wgsl:1-2</code>): scalar FMAs over shared tiles, row max and sum through shared memory. Metal&#39;s matrix-unit version of the same op is 4.9x faster forward and 8.2x faster backward at the nanolab shape (2.42 vs 11.83 ms; 6.47 vs 53.3 ms). Structure <strong>verified</strong>; that matrix units are the gap is <strong>inferred</strong>. wgpu 30 exposes no cooperative-matrix path this kernel uses (<strong>unverified</strong>)</td></tr>
+<tr><td style="text-align:right">3</td><td>Metal</td><td>adamw_full</td><td>0.16x [0.14-0.17]</td><td>fail</td><td>244.5 / 39.6</td><td>One command per tensor now (<code>ojas_adamw_check</code> then <code>ojas_adamw_apply</code>, <code>ojas-metal/src/device.rs:1749-1762</code>): two full passes over p, g, m and v, then a device wait and a status read. That is 170 times, about 1.4 ms per call, including 73 tensors of at most 768 values (counted from <code>param_shapes</code>) that pay the same per-call floor. torch does one <code>step()</code>. The traffic is about 5.4 GB for ojas against about 3.5 GB for torch (counted from passes × 495 MB). The rest is the per-call wait and host round trip. Pass structure <strong>verified</strong>; the split is <strong>inferred</strong></td></tr>
+<tr><td style="text-align:right">4</td><td>Metal, wgpu</td><td>rms_qk_norm_fwd</td><td>0.21x / 0.20x</td><td>fail</td><td>2.14 / 0.42; 2.10 / 0.42</td><td>Metal is now one command (<code>rms_pair</code>, <code>ojas-metal/src/backend.rs:814-828</code>) with one simdgroup per row. Its min is 0.58 ms against a 2.1 ms median, so the per-op floor under CPU load dominates (<strong>inferred</strong>). wgpu still issues two <code>rms_norm_forward</code> calls (<code>ojas-wgpu/src/backend.rs:1380-1391</code>), each with one 256-lane workgroup per 64-wide row (<code>norm.wgsl:1</code>), so 3 of 4 lanes idle. <strong>Verified</strong> from source</td></tr>
+<tr><td style="text-align:right">5</td><td>Metal</td><td>small elementwise and norm rows: rms_norm_fwd 0.22x, residual_add_fwd 0.20x, silu 0.26x / 0.37x, mul 0.37x / 0.44x, permute 0.31x, vres_fwd 0.41x, gate 0.46–0.48x</td><td>0.20–0.48x</td><td>fail</td><td>1–3 ms against 0.3–1.4</td><td>The per-op fixed cost: status buffer, separate finite-check passes, a device wait and a host status read per op (round 1, cause 4; <code>device.rs:328-393</code>). The floor row is 0.16 ms at best and 1.14 ms median, against 0.11 / 0.20 for torch. Unchanged by this round. <strong>Inferred</strong> from minimum vs median, with the structure <strong>verified</strong> in round 1</td></tr>
+<tr><td style="text-align:right">6</td><td>Metal</td><td>accumulate_grad_50304x768 (new)</td><td>0.25x [0.21-0.53]</td><td>fail</td><td>9.62 / 2.38</td><td><code>ojas_acc_check</code> then <code>ojas_acc_apply</code> (<code>device.rs:1718-1747</code>): acc and g are read twice and acc written once, against torch&#39;s one read of each and one write. Then a device wait. 9.6 ms for about 0.8 GB of traffic is well below the bandwidth wgpu reaches on the same op (2.41 ms), so more than the extra pass is involved (<strong>unverified</strong>; not profiled). wgpu is 0.91x, mixed</td></tr>
+<tr><td style="text-align:right">7</td><td>Metal, wgpu</td><td>block_fwd</td><td>0.32x / 0.35x</td><td>fail</td><td>49.2 / 15.3; 43.0 / 15.3</td><td>Sum of parts. Metal: 24 synchronous ops, each paying the floor. wgpu: SDPA forward (11.8 ms) plus GEMMs at about 0.47x. <strong>Inferred</strong> from row sums</td></tr>
+<tr><td style="text-align:right">8</td><td>wgpu</td><td>linear, all eight rows; muon</td><td>linear 0.40–0.55x (lm_head fwd 0.40x and up_bwd 0.49x pass the gate); muon 0.60–0.65x against fp32 NS5</td><td>mixed</td><td>lm_head fwd 136.4 / 54.8</td><td>The 128x128 tile is still scalar vec4 FMAs from workgroup memory (<code>gemm.wgsl:140-146</code>); there are no matrix units. lm_head forward is 316 GFLOP / 136.4 ms = 2.3 TFLOP/s against torch&#39;s 5.8. <strong>Verified</strong> structure; cause <strong>inferred</strong></td></tr>
+<tr><td style="text-align:right">9</td><td>Metal, wgpu</td><td>linear_ce (new)</td><td>Metal 0.88x (1024x8192) / 0.55x (4096x50304); wgpu 0.45x / 0.58x</td><td>fail</td><td>Metal 266 / 221 and 423 / 222</td><td>Metal recomputes each logit chunk&#39;s GEMM in a second pass. Pass 0 is the stats, pass 1 the gradient (<code>device.rs:1563-1615</code>). So it does two forward GEMMs plus two backward GEMMs; nanolab&#39;s torch version does one forward plus two backward, and its GEMMs are faster (Metal lm_head fwd is 0.46x). <strong>Verified</strong> from source; that it explains the gap is <strong>inferred</strong>. Why Metal is slower with the single 4096x50304 chunk than with 1024x8192 is <strong>unverified</strong> (not profiled)</td></tr>
+<tr><td style="text-align:right">10</td><td>Metal, wgpu</td><td>cross_entropy_bwd</td><td>0.72x / 0.60x</td><td>fail</td><td>38.4 / 28.9; 47.7 / 28.9</td><td>The backward recomputes softmax from the logits and writes the 824 MB gradient; torch reuses its saved <code>log_softmax</code>. <strong>Inferred</strong></td></tr>
+<tr><td style="text-align:right">11</td><td>Metal</td><td>decode_attn_kv1024 (new)</td><td>0.37x [0.22-1.16]</td><td>fail, mixed 4/5</td><td>0.83 / 0.21</td><td>A 0.2 ms minimum against a 0.83 ms median: a single small op dominated by the per-op floor. torch is near its own floor (0.11 / 0.21). <strong>Inferred</strong></td></tr>
+<tr><td style="text-align:right">12</td><td>Metal, wgpu</td><td>muon vs torch bf16 NS5</td><td>0.60–0.68x / 0.33–0.35x</td><td>Metal 2048x768 passes</td><td>-</td><td>A dtype difference, not like-for-like: ojas NS5 is f32. Against torch&#39;s fp32 NS5, Metal is now 1.20–1.23x <strong>faster</strong> (5/5 rounds; <code>muon_2048x768</code> passes the gate)</td></tr>
+</tbody></table></div>
+<p><strong>Where ojas leads torch in round 2 (5/5 rounds):</strong></p>
+<ul>
+<li>Metal:
+<ul>
+<li><code>clip_grad_norm</code> 7.7x;
+</li>
+<li><code>cross_entropy_fwd</code> 3.9x;
+</li>
+<li>SDPA backward 1.5x and 1.7x;
+</li>
+<li><code>rms_norm_bwd</code> 1.75x;
+</li>
+<li><code>rms_qk_norm_bwd</code> 1.8x;
+</li>
+<li>Muon against fp32 NS5 1.2x.
+</li>
+</ul>
+</li>
+<li>wgpu:
+<ul>
+<li><code>clip_grad_norm</code> 7.8x;
+</li>
+<li>rope 3.7x and 4.9x;
+</li>
+<li><code>rms_norm_bwd</code> 3.1x;
+</li>
+<li><code>cross_entropy_fwd</code> 2.2x;
+</li>
+<li><code>vres_bwd</code> 1.4x;
+</li>
+<li><code>rms_qk_norm_bwd</code> 1.1x.
+</li>
+</ul>
+</li>
+</ul>
+<p>All of these rows are gate-failed: direction verified, magnitude as ranged.</p>
+<h2 id="round-1-2026-10-01-16341723-cdt-kept-for-comparison">Round 1: 2026-10-01, 16:34–17:23 CDT (kept for comparison) <a class="anchor" href="#round-1-2026-10-01-16341723-cdt-kept-for-comparison" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>The GPU was shared with other work for most of these runs.</strong> <code>ioreg</code> &#34;Device Utilization %&#34; was 84–100% before nearly every runtime block of runs A and C. At 16:48 <code>ps</code> showed an ollama <code>llama-server</code> at 143% CPU and several Chrome renderer processes at about 100% CPU each. That observation is from one moment, not the whole run. The protocol&#39;s 10% spread rule therefore flags almost every row as &#34;noisy - not quoted&#34;: 5 of 88 rows pass in run A, 0 in run C. This document does not quote a speedup for a flagged row as a precise number.</p>
+<p>Read the evidence in two tiers:</p>
+<ul>
+<li><strong>Direction, verified.</strong> The verdict holds where every per-round ratio in all three runs (15 rounds, each pairing the two runtimes minutes apart) lies on one side of 1. Pairing cancels contention that hits both sides alike, so many flagged rows still have tight ratio ranges. One example is wgpu linear at 0.27–0.37x across 15 rounds.
+</li>
+<li><strong>Magnitude, unverified beyond the stated range.</strong> The median ratio quoted is run A&#39;s. The 15-round min-max beside it is the honest uncertainty.
+</li>
+</ul>
+<p>Metal is likely hurt more by contention than torch or wgpu, because every Metal op waits on the device. The evidence:</p>
+<ul>
+<li>Its per-op floor has a 0.13–0.19 ms minimum but a 1.5–1.8 ms median.
+</li>
+<li>One unpaired smoke run after the three runs measured Metal <code>block_fwd_bwd</code> at 131 ms median, against run A&#39;s 230 ms. That run is not quoted, and the GPU load at the time was not sampled.
+</li>
+</ul>
+<p>Treat Metal&#39;s contended ratios as pessimistic (inferred).</p>
+</aside>
+<h2 id="toolchain-and-source-state-verified-benchresults2026-10-01runenvtxt">Toolchain and source state (verified, <code>bench/results/2026-10-01/run*/env.txt</code>) <a class="anchor" href="#toolchain-and-source-state-verified-benchresults2026-10-01runenvtxt" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>item</th><th>value</th></tr></thead>
+<tbody>
+<tr><td>machine</td><td>Apple M5 Pro, 64 GiB, macOS 27.0.1 (26A434)</td></tr>
+<tr><td>rustc / cargo</td><td>1.98.0 (88d9e12ae 2026-08-18) / 1.98.0 (797e8a9bc 2026-08-05)</td></tr>
+<tr><td>Python / torch</td><td>3.14.7 (<code>/opt/homebrew/opt/python@3.14/bin/python3.14</code>) / 2.13.0, MPS</td></tr>
+<tr><td>ojas</td><td><code>dab2a12</code> <strong>plus an uncommitted working tree</strong>. The diff of ojas-core, ojas-metal, ojas-wgpu, ojas-kernels and ojas-device hashes to <code>c226ffba076d</code> in all three runs; other sessions were editing this checkout</td></tr>
+<tr><td>tessl (ojas-metal&#39;s GEMMs)</td><td><code>cf65d9d</code> plus 20 dirty files</td></tr>
+<tr><td>wgpu</td><td>30.0.1. The adapter is &#34;Apple M5 Pro&#34; with HAL <strong>Metal</strong>, recorded by the binary&#39;s <code>_device</code> line. So on this machine the portable backend runs through wgpu&#39;s Metal HAL. The binding cap is 4,294,967,292 bytes, so the 824 MB logits fit</td></tr>
+<tr><td>build</td><td>release, <code>CARGO_TARGET_DIR=target-lane-bench</code>. The runner builds before every run; the binary mtimes are in env.txt</td></tr>
+<tr><td>nanolab</td><td><code>/Users/bharath/Code/research/MLSystemsLab/nanolab</code>, real <code>Block</code>, <code>GPT(Config())</code> 123,699,612 parameters in 170 tensors. torch_rows.py asserts the optimizer rows&#39; shape list against it</td></tr>
+</tbody></table></div>
+<h2 id="runs">Runs <a class="anchor" href="#runs" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>run</th><th>rounds x iters (warmup 5)</th><th>GPU before blocks</th><th style="text-align:right">flagged rows (of 88)</th></tr></thead>
+<tbody>
+<tr><td>A, <code>run5</code> (primary: fewest flagged)</td><td>5 x 20</td><td>93–100%, except 70% before round-1 wgpu</td><td style="text-align:right">83</td></tr>
+<tr><td>B, <code>run5b</code></td><td>5 x 30</td><td>84–95% in rounds 1–2, 0–50% in rounds 3–5</td><td style="text-align:right">88</td></tr>
+<tr><td>C, <code>run5c</code></td><td>5 x 30</td><td>0–57% in round 1, 85–94% after</td><td style="text-align:right">88</td></tr>
+</tbody></table></div>
+<p>The primary-run rule was fixed before run C finished: take the run with the fewest flagged rows. The full before/after load tables are at the end of each <code>summary.md</code>. <code>ioreg</code> is an instantaneous sample. In run B round 1 it went from 0 to 94 within 36 s, so it bounds the contention but does not average it.</p>
+<h2 id="parity-verified">Parity (verified) <a class="anchor" href="#parity-verified" aria-label="Link to this section">#</a></h2>
+<p>Every row on both backends passed its gate, max |ojas - torch| / max |torch| per output (1e-3; 1e-2 for Muon; 0 for permute), in every round of all three runs. No row was refused. Both binaries&#39; generator checks passed. The worst normalized error was 1.3e-5, on <code>linear_lmhead_bwd</code>. The largest absolute error was 1.3e-3, on Metal <code>rms_qk_norm_bwd</code>&#39;s weight gradient (a sum over 49,152 rows; 4.0e-6 normalized).</p>
+<p>Every linear <strong>forward</strong> matched torch MPS <strong>bit for bit</strong> (error 0), at all four shapes, on both backends. The comparison is not vacuous. The same harness reports 1.57e-4 on <code>linear_lmhead_bwd</code> (the TN <code>grad_w</code> product) and nonzero errors on 30 other rows. That the GEMMs accumulate in the same k-ascending FMA order is inferred, not checked.</p>
+<p>The block rows compare the output and seven gradients (x, q_proj, ffn.down, gate.weight, vr_lambda, norm1, v0) against nanolab&#39;s real <code>Block</code> plus torch autograd. They pass at 2.5e-6 (Metal) and 2.3e-6 (wgpu) normalized. That is the check on the hand-composed backward.</p>
+<h2 id="results-ojas-metalbackend-vs-torch-mps">Results: ojas MetalBackend vs torch MPS <a class="anchor" href="#results-ojas-metalbackend-vs-torch-mps" aria-label="Link to this section">#</a></h2>
+<p>ratio = torch median / ojas median, paired per round; &gt; 1 means ojas is faster. Times are run A, min over rounds / median of per-round medians, in ms.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th style="text-align:right">ojas min / median ms</th><th style="text-align:right">torch min / median ms</th><th>ratio, run A median [min-max]</th><th>spread ojas / torch</th><th>run A flag</th><th>parity max abs (rel)</th><th>direction over 3 runs</th></tr></thead>
+<tbody>
+<tr><td>floor_silu_1</td><td style="text-align:right">0.191 / 1.756</td><td style="text-align:right">0.082 / 0.107</td><td>0.06x [0.05-0.07]</td><td>4% / 26%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_qkv_fwd</td><td style="text-align:right">1.153 / 1.999</td><td style="text-align:right">0.802 / 0.918</td><td>0.46x [0.28-0.48]</td><td>88% / 17%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_qkv_bwd</td><td style="text-align:right">2.499 / 3.785</td><td style="text-align:right">1.720 / 2.112</td><td>0.53x [0.47-0.73]</td><td>54% / 12%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_up_fwd</td><td style="text-align:right">2.709 / 4.127</td><td style="text-align:right">1.943 / 2.152</td><td>0.51x [0.42-0.59]</td><td>42% / 5%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_up_bwd</td><td style="text-align:right">4.899 / 5.630</td><td style="text-align:right">4.176 / 4.497</td><td>0.78x [0.55-0.83]</td><td>59% / 7%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>linear_down_fwd</td><td style="text-align:right">2.600 / 3.609</td><td style="text-align:right">2.013 / 2.201</td><td>0.61x [0.48-0.65]</td><td>44% / 6%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_down_bwd</td><td style="text-align:right">4.592 / 6.541</td><td style="text-align:right">4.008 / 4.458</td><td>0.66x [0.42-0.73]</td><td>76% / 8%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_lmhead_fwd</td><td style="text-align:right">109.4 / 131.9</td><td style="text-align:right">54.41 / 60.84</td><td>0.52x [0.42-0.54]</td><td>20% / 26%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_lmhead_bwd</td><td style="text-align:right">131.0 / 174.3</td><td style="text-align:right">105.5 / 120.4</td><td>0.70x [0.57-0.82]</td><td>31% / 39%</td><td>noisy</td><td>1.57e-04 (1.3e-05)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b4h12t1024d64_fwd</td><td style="text-align:right">2.045 / 3.081</td><td style="text-align:right">1.367 / 1.600</td><td>0.55x [0.39-0.61]</td><td>68% / 19%</td><td>noisy</td><td>2.24e-07 (2.2e-07)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>sdpa_b4h12t1024d64_bwd</td><td style="text-align:right">5.830 / 8.111</td><td style="text-align:right">9.474 / 10.30</td><td>1.24x [1.14-1.37]</td><td>29% / 13%</td><td>noisy</td><td>1.10e-06 (2.1e-06)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>sdpa_b4h8t2048d64_fwd</td><td style="text-align:right">4.775 / 6.909</td><td style="text-align:right">3.225 / 3.542</td><td>0.50x [0.47-0.65]</td><td>23% / 16%</td><td>noisy</td><td>1.79e-07 (1.8e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b4h8t2048d64_bwd</td><td style="text-align:right">17.30 / 19.41</td><td style="text-align:right">24.21 / 25.39</td><td>1.38x [1.01-1.59]</td><td>35% / 25%</td><td>noisy</td><td>1.31e-06 (2.5e-06)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>sdpa_b2h8t1024d128_fwd</td><td style="text-align:right">1.333 / 2.029</td><td style="text-align:right">1.074 / 1.202</td><td>0.61x [0.37-0.68]</td><td>96% / 17%</td><td>noisy</td><td>2.09e-07 (2.1e-07)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>sdpa_b2h8t1024d128_bwd</td><td style="text-align:right">5.210 / 6.417</td><td style="text-align:right">4.395 / 5.318</td><td>0.81x [0.77-0.92]</td><td>22% / 40%</td><td>noisy</td><td>1.10e-06 (2.6e-06)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>rms_norm_fwd</td><td style="text-align:right">0.478 / 1.654</td><td style="text-align:right">0.183 / 0.258</td><td>0.18x [0.09-0.70]</td><td>142% / 226%</td><td>noisy</td><td>3.58e-07 (2.0e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>rms_norm_bwd</td><td style="text-align:right">1.939 / 3.389</td><td style="text-align:right">2.037 / 2.515</td><td>0.74x [0.53-0.84]</td><td>48% / 49%</td><td>noisy</td><td>2.14e-04 (1.5e-06)</td><td>mixed (13/15 slower)</td></tr>
+<tr><td>rms_qk_norm_fwd</td><td style="text-align:right">2.001 / 4.736</td><td style="text-align:right">0.304 / 0.534</td><td>0.11x [0.08-0.19]</td><td>49% / 63%</td><td>noisy</td><td>3.58e-07 (1.7e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>rms_qk_norm_bwd</td><td style="text-align:right">50.48 / 53.15</td><td style="text-align:right">4.369 / 5.276</td><td>0.10x [0.09-0.10]</td><td>2% / 8%</td><td><strong>quotable</strong></td><td>1.30e-03 (4.0e-06)</td><td>slower, 15/15</td></tr>
+<tr><td>rope_fwd</td><td style="text-align:right">0.586 / 1.816</td><td style="text-align:right">1.220 / 1.513</td><td>0.85x [0.68-1.51]</td><td>124% / 19%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (9/15 slower)</td></tr>
+<tr><td>rope_bwd</td><td style="text-align:right">0.440 / 1.182</td><td style="text-align:right">1.722 / 2.081</td><td>1.81x [0.87-2.38]</td><td>154% / 26%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (4/15 slower)</td></tr>
+<tr><td>silu_fwd</td><td style="text-align:right">0.927 / 2.267</td><td style="text-align:right">0.361 / 0.466</td><td>0.20x [0.13-0.28]</td><td>96% / 51%</td><td>noisy</td><td>2.38e-07 (6.1e-08)</td><td>slower, 15/15</td></tr>
+<tr><td>silu_bwd</td><td style="text-align:right">1.533 / 3.191</td><td style="text-align:right">0.506 / 0.691</td><td>0.23x [0.18-0.30]</td><td>38% / 62%</td><td>noisy</td><td>1.19e-07 (1.1e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>mul_fwd</td><td style="text-align:right">1.291 / 2.899</td><td style="text-align:right">0.496 / 0.615</td><td>0.21x [0.21-0.24]</td><td>26% / 31%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>mul_bwd</td><td style="text-align:right">2.328 / 4.131</td><td style="text-align:right">0.866 / 1.387</td><td>0.35x [0.26-0.38]</td><td>26% / 49%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>residual_add_fwd</td><td style="text-align:right">0.641 / 1.559</td><td style="text-align:right">0.223 / 0.345</td><td>0.18x [0.13-0.25]</td><td>78% / 93%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>residual_add_bwd</td><td style="text-align:right">0.593 / 1.878</td><td style="text-align:right">0.012 / 0.016</td><td>0.01x [0.01-0.01]</td><td>75% / 135%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>gate_fwd</td><td style="text-align:right">0.646 / 1.773</td><td style="text-align:right">0.476 / 0.681</td><td>0.36x [0.26-0.98]</td><td>75% / 124%</td><td>noisy</td><td>8.94e-08 (1.0e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>gate_bwd</td><td style="text-align:right">2.928 / 4.069</td><td style="text-align:right">0.957 / 1.350</td><td>0.33x [0.26-0.64]</td><td>32% / 104%</td><td>noisy</td><td>2.25e-04 (2.3e-06)</td><td>slower, 15/15</td></tr>
+<tr><td>vres_fwd</td><td style="text-align:right">0.590 / 1.645</td><td style="text-align:right">0.481 / 0.650</td><td>0.41x [0.23-0.57]</td><td>121% / 23%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>vres_bwd</td><td style="text-align:right">0.946 / 1.943</td><td style="text-align:right">0.840 / 1.192</td><td>0.64x [0.32-0.79]</td><td>89% / 38%</td><td>noisy</td><td>3.05e-05 (2.3e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>permute_bthd_bhtd</td><td style="text-align:right">0.391 / 0.771</td><td style="text-align:right">0.407 / 0.547</td><td>0.72x [0.23-1.27]</td><td>214% / 79%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>cross_entropy_fwd</td><td style="text-align:right">13.31 / 20.94</td><td style="text-align:right">14.75 / 19.60</td><td>0.97x [0.76-1.06]</td><td>13% / 35%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (7/15 slower)</td></tr>
+<tr><td>cross_entropy_bwd</td><td style="text-align:right">78.49 / 96.68</td><td style="text-align:right">28.31 / 34.30</td><td>0.35x [0.33-0.38]</td><td>7% / 14%</td><td>noisy</td><td>6.39e-14 (2.6e-10)</td><td>slower, 15/15</td></tr>
+<tr><td>clip_grad_norm_full</td><td style="text-align:right">16.71 / 33.67</td><td style="text-align:right">137.4 / 154.2</td><td>4.58x [4.46-4.75]</td><td>7% / 1%</td><td><strong>quotable</strong></td><td>3.05e-05 (3.0e-07)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>adamw_full</td><td style="text-align:right">515.8 / 598.1</td><td style="text-align:right">44.33 / 53.52</td><td>0.09x [0.08-0.10]</td><td>7% / 11%</td><td>noisy</td><td>3.73e-09 (1.2e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_768x768 (torch fp32 NS5)</td><td style="text-align:right">4.565 / 6.507</td><td style="text-align:right">4.005 / 4.759</td><td>0.71x [0.62-0.76]</td><td>34% / 19%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>muon_768x768 vs torch bf16 NS5</td><td style="text-align:right">4.565 / 6.507</td><td style="text-align:right">2.236 / 2.943</td><td>0.44x [0.41-0.47]</td><td>34% / 27%</td><td>noisy</td><td>(timing only)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_2048x768 (torch fp32 NS5)</td><td style="text-align:right">9.782 / 12.01</td><td style="text-align:right">8.145 / 9.158</td><td>0.75x [0.67-0.81]</td><td>24% / 12%</td><td>noisy</td><td>1.68e-08 (5.0e-07)</td><td>mixed (13/15 slower)</td></tr>
+<tr><td>muon_2048x768 vs torch bf16 NS5</td><td style="text-align:right">9.782 / 12.01</td><td style="text-align:right">4.831 / 5.721</td><td>0.45x [0.43-0.48]</td><td>24% / 19%</td><td>noisy</td><td>(timing only)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_768x2048 (torch fp32 NS5)</td><td style="text-align:right">9.908 / 11.73</td><td style="text-align:right">8.615 / 9.080</td><td>0.77x [0.40-0.80]</td><td>114% / 11%</td><td>noisy</td><td>9.31e-09 (2.9e-07)</td><td>mixed (13/15 slower)</td></tr>
+<tr><td>muon_768x2048 vs torch bf16 NS5</td><td style="text-align:right">9.908 / 11.73</td><td style="text-align:right">4.598 / 5.343</td><td>0.45x [0.23-0.49]</td><td>114% / 10%</td><td>noisy</td><td>(timing only)</td><td>slower, 15/15</td></tr>
+<tr><td>block_fwd</td><td style="text-align:right">48.08 / 67.25</td><td style="text-align:right">15.74 / 16.92</td><td>0.24x [0.24-0.27]</td><td>24% / 9%</td><td>noisy</td><td>2.38e-07 (1.9e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>block_fwd_bwd</td><td style="text-align:right">179.1 / 230.5</td><td style="text-align:right">77.08 / 83.64</td><td>0.37x [0.34-0.38]</td><td>11% / 7%</td><td>noisy</td><td>9.06e-06 (2.5e-06)</td><td>slower, 15/15</td></tr>
+</tbody></table></div>
+<h2 id="results-ojas-wgpubackend-metal-hal-vs-torch-mps">Results: ojas WgpuBackend (Metal HAL) vs torch MPS <a class="anchor" href="#results-ojas-wgpubackend-metal-hal-vs-torch-mps" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>row</th><th style="text-align:right">ojas min / median ms</th><th style="text-align:right">torch min / median ms</th><th>ratio, run A median [min-max]</th><th>spread ojas / torch</th><th>run A flag</th><th>parity max abs (rel)</th><th>direction over 3 runs</th></tr></thead>
+<tbody>
+<tr><td>floor_silu_1</td><td style="text-align:right">0.170 / 0.244</td><td style="text-align:right">0.082 / 0.107</td><td>0.48x [0.21-0.50]</td><td>147% / 26%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_qkv_fwd</td><td style="text-align:right">2.370 / 2.787</td><td style="text-align:right">0.802 / 0.918</td><td>0.31x [0.30-0.33]</td><td>14% / 17%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_qkv_bwd</td><td style="text-align:right">5.072 / 5.620</td><td style="text-align:right">1.720 / 2.112</td><td>0.38x [0.32-0.40]</td><td>14% / 12%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_up_fwd</td><td style="text-align:right">6.080 / 6.697</td><td style="text-align:right">1.943 / 2.152</td><td>0.32x [0.27-0.35]</td><td>21% / 5%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_up_bwd</td><td style="text-align:right">12.97 / 14.04</td><td style="text-align:right">4.176 / 4.497</td><td>0.31x [0.29-0.34]</td><td>15% / 7%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_down_fwd</td><td style="text-align:right">6.693 / 7.456</td><td style="text-align:right">2.013 / 2.201</td><td>0.29x [0.24-0.31]</td><td>31% / 6%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_down_bwd</td><td style="text-align:right">13.07 / 13.84</td><td style="text-align:right">4.008 / 4.458</td><td>0.32x [0.28-0.34]</td><td>13% / 8%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_lmhead_fwd</td><td style="text-align:right">186.1 / 194.7</td><td style="text-align:right">54.41 / 60.84</td><td>0.31x [0.28-0.36]</td><td>5% / 26%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>linear_lmhead_bwd</td><td style="text-align:right">307.1 / 323.7</td><td style="text-align:right">105.5 / 120.4</td><td>0.37x [0.34-0.43]</td><td>10% / 39%</td><td>noisy</td><td>1.57e-04 (1.3e-05)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b4h12t1024d64_fwd</td><td style="text-align:right">72.67 / 77.05</td><td style="text-align:right">1.367 / 1.600</td><td>0.02x [0.02-0.02]</td><td>12% / 19%</td><td>noisy</td><td>2.24e-07 (2.2e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b4h12t1024d64_bwd</td><td style="text-align:right">270.8 / 277.8</td><td style="text-align:right">9.474 / 10.30</td><td>0.04x [0.04-0.04]</td><td>3% / 13%</td><td>noisy</td><td>1.25e-06 (2.4e-06)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b4h8t2048d64_fwd</td><td style="text-align:right">183.2 / 191.6</td><td style="text-align:right">3.225 / 3.542</td><td>0.02x [0.02-0.02]</td><td>6% / 16%</td><td>noisy</td><td>1.79e-07 (1.8e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b4h8t2048d64_bwd</td><td style="text-align:right">694.0 / 705.7</td><td style="text-align:right">24.21 / 25.39</td><td>0.04x [0.04-0.04]</td><td>7% / 25%</td><td>noisy</td><td>1.37e-06 (2.6e-06)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b2h8t1024d128_fwd</td><td style="text-align:right">68.78 / 91.63</td><td style="text-align:right">1.074 / 1.202</td><td>0.01x [0.01-0.01]</td><td>6% / 17%</td><td>noisy</td><td>2.09e-07 (2.1e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>sdpa_b2h8t1024d128_bwd</td><td style="text-align:right">267.7 / 280.7</td><td style="text-align:right">4.395 / 5.318</td><td>0.02x [0.02-0.02]</td><td>7% / 40%</td><td>noisy</td><td>1.07e-06 (2.3e-06)</td><td>slower, 15/15</td></tr>
+<tr><td>rms_norm_fwd</td><td style="text-align:right">0.304 / 0.424</td><td style="text-align:right">0.183 / 0.258</td><td>0.61x [0.46-1.07]</td><td>321% / 226%</td><td>noisy</td><td>2.38e-07 (1.3e-07)</td><td>mixed (13/15 slower)</td></tr>
+<tr><td>rms_norm_bwd</td><td style="text-align:right">0.584 / 0.896</td><td style="text-align:right">2.037 / 2.515</td><td>3.42x [1.67-3.91]</td><td>132% / 49%</td><td>noisy</td><td>3.34e-05 (2.6e-07)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>rms_qk_norm_fwd</td><td style="text-align:right">1.948 / 2.624</td><td style="text-align:right">0.304 / 0.534</td><td>0.17x [0.14-0.22]</td><td>58% / 63%</td><td>noisy</td><td>2.38e-07 (1.2e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>rms_qk_norm_bwd</td><td style="text-align:right">4.744 / 5.421</td><td style="text-align:right">4.369 / 5.276</td><td>0.95x [0.88-1.00]</td><td>7% / 8%</td><td>quotable</td><td>4.58e-04 (1.3e-06)</td><td>mixed (8/15 slower)</td></tr>
+<tr><td>rope_fwd</td><td style="text-align:right">0.243 / 0.470</td><td style="text-align:right">1.220 / 1.513</td><td>3.67x [3.15-4.45]</td><td>47% / 19%</td><td>noisy</td><td>1.19e-07 (6.2e-08)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>rope_bwd</td><td style="text-align:right">0.250 / 0.423</td><td style="text-align:right">1.722 / 2.081</td><td>4.73x [3.88-6.78]</td><td>66% / 26%</td><td>noisy</td><td>1.19e-07 (6.1e-08)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>silu_fwd</td><td style="text-align:right">0.488 / 0.728</td><td style="text-align:right">0.361 / 0.466</td><td>0.75x [0.55-0.79]</td><td>45% / 51%</td><td>noisy</td><td>7.15e-07 (1.8e-07)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>silu_bwd</td><td style="text-align:right">0.691 / 1.004</td><td style="text-align:right">0.506 / 0.691</td><td>0.86x [0.47-1.00]</td><td>60% / 62%</td><td>noisy</td><td>4.77e-07 (4.3e-07)</td><td>mixed (13/15 slower)</td></tr>
+<tr><td>mul_fwd</td><td style="text-align:right">0.598 / 0.862</td><td style="text-align:right">0.496 / 0.615</td><td>0.74x [0.56-0.78]</td><td>43% / 31%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>mul_bwd</td><td style="text-align:right">0.906 / 1.263</td><td style="text-align:right">0.866 / 1.387</td><td>1.06x [0.65-1.16]</td><td>34% / 49%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (8/15 slower)</td></tr>
+<tr><td>residual_add_fwd</td><td style="text-align:right">0.328 / 0.513</td><td style="text-align:right">0.223 / 0.345</td><td>0.72x [0.43-0.83]</td><td>76% / 93%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (13/15 slower)</td></tr>
+<tr><td>residual_add_bwd</td><td style="text-align:right">0.628 / 0.898</td><td style="text-align:right">0.012 / 0.016</td><td>0.02x [0.01-0.03]</td><td>26% / 135%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>slower, 15/15</td></tr>
+<tr><td>gate_fwd</td><td style="text-align:right">0.635 / 0.943</td><td style="text-align:right">0.476 / 0.681</td><td>0.74x [0.67-1.62]</td><td>35% / 124%</td><td>noisy</td><td>1.19e-07 (1.4e-07)</td><td>mixed (13/15 slower)</td></tr>
+<tr><td>gate_bwd</td><td style="text-align:right">1.813 / 2.111</td><td style="text-align:right">0.957 / 1.350</td><td>0.63x [0.61-1.21]</td><td>6% / 104%</td><td>noisy</td><td>2.21e-04 (2.3e-06)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>vres_fwd</td><td style="text-align:right">0.358 / 0.458</td><td style="text-align:right">0.481 / 0.650</td><td>1.32x [1.14-1.48]</td><td>17% / 23%</td><td>noisy</td><td>5.96e-08 (6.0e-08)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>vres_bwd</td><td style="text-align:right">0.573 / 0.720</td><td style="text-align:right">0.840 / 1.192</td><td>1.67x [1.56-2.17]</td><td>20% / 38%</td><td>noisy</td><td>3.05e-05 (2.3e-07)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>permute_bthd_bhtd</td><td style="text-align:right">0.411 / 0.628</td><td style="text-align:right">0.407 / 0.547</td><td>0.89x [0.60-1.53]</td><td>61% / 79%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td>mixed (11/15 slower)</td></tr>
+<tr><td>cross_entropy_fwd</td><td style="text-align:right">6.317 / 7.139</td><td style="text-align:right">14.75 / 19.60</td><td>2.79x [2.14-2.99]</td><td>18% / 35%</td><td>noisy</td><td>0.00e+00 (0.0e+00)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>cross_entropy_bwd</td><td style="text-align:right">57.75 / 63.71</td><td style="text-align:right">28.31 / 34.30</td><td>0.53x [0.50-0.54]</td><td>12% / 14%</td><td>noisy</td><td>6.39e-14 (2.6e-10)</td><td>slower, 15/15</td></tr>
+<tr><td>clip_grad_norm_full</td><td style="text-align:right">21.34 / 24.18</td><td style="text-align:right">137.4 / 154.2</td><td>6.36x [6.14-6.38]</td><td>5% / 1%</td><td><strong>quotable</strong></td><td>3.81e-05 (3.8e-07)</td><td><strong>faster, 15/15</strong></td></tr>
+<tr><td>adamw_full</td><td style="text-align:right">66.35 / 75.15</td><td style="text-align:right">44.33 / 53.52</td><td>0.70x [0.69-0.75]</td><td>13% / 11%</td><td>noisy</td><td>3.73e-09 (1.2e-07)</td><td>mixed (14/15 slower)</td></tr>
+<tr><td>muon_768x768 (torch fp32 NS5)</td><td style="text-align:right">9.453 / 10.58</td><td style="text-align:right">4.005 / 4.759</td><td>0.44x [0.42-0.47]</td><td>22% / 19%</td><td>noisy</td><td>1.49e-08 (4.5e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_768x768 vs torch bf16 NS5</td><td style="text-align:right">9.453 / 10.58</td><td style="text-align:right">2.236 / 2.943</td><td>0.27x [0.27-0.28]</td><td>22% / 27%</td><td>noisy</td><td>(timing only)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_2048x768 (torch fp32 NS5)</td><td style="text-align:right">20.14 / 22.32</td><td style="text-align:right">8.145 / 9.158</td><td>0.41x [0.41-0.44]</td><td>8% / 12%</td><td>noisy</td><td>1.68e-08 (5.0e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_2048x768 vs torch bf16 NS5</td><td style="text-align:right">20.14 / 22.32</td><td style="text-align:right">4.831 / 5.721</td><td>0.25x [0.24-0.28]</td><td>8% / 19%</td><td>noisy</td><td>(timing only)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_768x2048 (torch fp32 NS5)</td><td style="text-align:right">19.77 / 21.64</td><td style="text-align:right">8.615 / 9.080</td><td>0.42x [0.41-0.46]</td><td>14% / 11%</td><td>noisy</td><td>9.31e-09 (2.9e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>muon_768x2048 vs torch bf16 NS5</td><td style="text-align:right">19.77 / 21.64</td><td style="text-align:right">4.598 / 5.343</td><td>0.25x [0.24-0.26]</td><td>14% / 10%</td><td>noisy</td><td>(timing only)</td><td>slower, 15/15</td></tr>
+<tr><td>block_fwd</td><td style="text-align:right">115.3 / 120.0</td><td style="text-align:right">15.74 / 16.92</td><td>0.14x [0.13-0.14]</td><td>16% / 9%</td><td>noisy</td><td>2.38e-07 (1.9e-07)</td><td>slower, 15/15</td></tr>
+<tr><td>block_fwd_bwd</td><td style="text-align:right">465.8 / 475.3</td><td style="text-align:right">77.08 / 83.64</td><td>0.18x [0.17-0.18]</td><td>3% / 7%</td><td><strong>quotable</strong></td><td>8.58e-06 (2.3e-06)</td><td>slower, 15/15</td></tr>
+</tbody></table></div>
+<p>Quotable rows (both spreads at most 10% in run A), verified:</p>
+<ul>
+<li>Metal <code>clip_grad_norm_full</code>: 4.58x faster than torch.
+</li>
+<li>wgpu <code>clip_grad_norm_full</code>: 6.36x faster.
+</li>
+<li>Metal <code>rms_qk_norm_bwd</code>: 0.10x, about 10 times slower.
+</li>
+<li>wgpu <code>block_fwd_bwd</code>: 0.18x, about 5.6 times slower.
+</li>
+<li>wgpu <code>rms_qk_norm_bwd</code>: 0.95x. Within noise of parity; its direction is mixed across runs.
+</li>
+</ul>
+<h2 id="where-ojas-is-slower-than-torch-plainly">Where ojas is slower than torch (plainly) <a class="anchor" href="#where-ojas-is-slower-than-torch-plainly" aria-label="Link to this section">#</a></h2>
+<p>Rows where ojas was slower in <strong>all 15 rounds</strong> (verified direction), ranked by run A&#39;s median ratio. The <code>floor</code> row is excluded, since it measures the per-op fixed cost and is not work. Ranking by each row&#39;s best round out of 15 instead (the round most favorable to ojas) gives the same top 10, so the order is not an artifact of contention.</p>
+<div class="table-wrap"><table>
+<thead><tr><th style="text-align:right">rank</th><th>backend</th><th>row</th><th>run A median ratio [min-max]</th><th style="text-align:right">best of 15 rounds</th><th>ojas / torch median ms</th></tr></thead>
+<tbody>
+<tr><td style="text-align:right">1</td><td>Metal</td><td>residual_add_bwd</td><td>0.01x [0.01-0.01]</td><td style="text-align:right">0.04x</td><td>1.878 / 0.016</td></tr>
+<tr><td style="text-align:right">2</td><td>wgpu</td><td>sdpa_b2h8t1024d128_fwd</td><td>0.01x [0.01-0.01]</td><td style="text-align:right">0.03x</td><td>91.63 / 1.202</td></tr>
+<tr><td style="text-align:right">3</td><td>wgpu</td><td>residual_add_bwd</td><td>0.02x [0.01-0.03]</td><td style="text-align:right">0.09x</td><td>0.898 / 0.016</td></tr>
+<tr><td style="text-align:right">4</td><td>wgpu</td><td>sdpa_b4h8t2048d64_fwd</td><td>0.02x [0.02-0.02]</td><td style="text-align:right">0.02x</td><td>191.6 / 3.542</td></tr>
+<tr><td style="text-align:right">5</td><td>wgpu</td><td>sdpa_b2h8t1024d128_bwd</td><td>0.02x [0.02-0.02]</td><td style="text-align:right">0.02x</td><td>280.7 / 5.318</td></tr>
+<tr><td style="text-align:right">6</td><td>wgpu</td><td>sdpa_b4h12t1024d64_fwd</td><td>0.02x [0.02-0.02]</td><td style="text-align:right">0.06x</td><td>77.05 / 1.600</td></tr>
+<tr><td style="text-align:right">7</td><td>wgpu</td><td>sdpa_b4h8t2048d64_bwd</td><td>0.04x [0.04-0.04]</td><td style="text-align:right">0.04x</td><td>705.7 / 25.39</td></tr>
+<tr><td style="text-align:right">8</td><td>wgpu</td><td>sdpa_b4h12t1024d64_bwd</td><td>0.04x [0.04-0.04]</td><td style="text-align:right">0.04x</td><td>277.8 / 10.30</td></tr>
+<tr><td style="text-align:right">9</td><td>Metal</td><td>adamw_full</td><td>0.09x [0.08-0.10]</td><td style="text-align:right">0.11x</td><td>598.1 / 53.52</td></tr>
+<tr><td style="text-align:right">10</td><td>Metal</td><td>rms_qk_norm_bwd</td><td>0.10x [0.09-0.10]</td><td style="text-align:right">0.15x</td><td>53.15 / 5.276</td></tr>
+<tr><td style="text-align:right">11</td><td>Metal</td><td>rms_qk_norm_fwd</td><td>0.11x [0.08-0.19]</td><td style="text-align:right">0.33x</td><td>4.736 / 0.534</td></tr>
+<tr><td style="text-align:right">12</td><td>wgpu</td><td>block_fwd</td><td>0.14x [0.13-0.14]</td><td style="text-align:right">0.18x</td><td>120.0 / 16.92</td></tr>
+<tr><td style="text-align:right">13</td><td>wgpu</td><td>rms_qk_norm_fwd</td><td>0.17x [0.14-0.22]</td><td style="text-align:right">0.58x</td><td>2.624 / 0.534</td></tr>
+<tr><td style="text-align:right">14</td><td>wgpu</td><td>block_fwd_bwd</td><td>0.18x [0.17-0.18]</td><td style="text-align:right">0.21x</td><td>475.3 / 83.64</td></tr>
+<tr><td style="text-align:right">15</td><td>Metal</td><td>rms_norm_fwd</td><td>0.18x [0.09-0.70]</td><td style="text-align:right">0.70x</td><td>1.654 / 0.258</td></tr>
+<tr><td style="text-align:right">16</td><td>Metal</td><td>silu_fwd</td><td>0.20x [0.13-0.28]</td><td style="text-align:right">0.50x</td><td>2.267 / 0.466</td></tr>
+<tr><td style="text-align:right">17</td><td>Metal</td><td>mul_fwd</td><td>0.21x [0.21-0.24]</td><td style="text-align:right">0.76x</td><td>2.899 / 0.615</td></tr>
+<tr><td style="text-align:right">18</td><td>Metal</td><td>silu_bwd</td><td>0.23x [0.18-0.30]</td><td style="text-align:right">0.56x</td><td>3.191 / 0.691</td></tr>
+<tr><td style="text-align:right">19</td><td>Metal</td><td>block_fwd</td><td>0.24x [0.24-0.27]</td><td style="text-align:right">0.37x</td><td>67.25 / 16.92</td></tr>
+<tr><td style="text-align:right">20</td><td>wgpu</td><td>muon vs torch bf16 NS5 (all three shapes)</td><td>0.25x-0.27x</td><td style="text-align:right">0.31x-0.36x</td><td>see tables</td></tr>
+<tr><td style="text-align:right">21</td><td>wgpu</td><td>linear, all eight rows</td><td>0.29x-0.38x</td><td style="text-align:right">0.34x-0.43x</td><td>see tables</td></tr>
+<tr><td style="text-align:right">22</td><td>Metal</td><td>gate_bwd / gate_fwd</td><td>0.33x / 0.36x</td><td style="text-align:right">0.64x / 0.98x</td><td>4.069 / 1.350, 1.773 / 0.681</td></tr>
+<tr><td style="text-align:right">23</td><td>Metal</td><td>cross_entropy_bwd</td><td>0.35x [0.33-0.38]</td><td style="text-align:right">0.56x</td><td>96.68 / 34.30</td></tr>
+<tr><td style="text-align:right">24</td><td>Metal</td><td>block_fwd_bwd</td><td>0.37x [0.34-0.38]</td><td style="text-align:right">0.60x</td><td>230.5 / 83.64</td></tr>
+<tr><td style="text-align:right">25</td><td>wgpu</td><td>muon vs torch fp32 NS5 (all three shapes)</td><td>0.41x-0.44x</td><td style="text-align:right">0.54x-0.68x</td><td>see tables</td></tr>
+<tr><td style="text-align:right">26</td><td>Metal</td><td>muon vs torch bf16 NS5 (all three shapes)</td><td>0.44x-0.45x</td><td style="text-align:right">0.58x-0.76x</td><td>see tables</td></tr>
+<tr><td style="text-align:right">27</td><td>Metal</td><td>linear fwd (all four), qkv/down/lm_head bwd</td><td>0.46x-0.70x</td><td style="text-align:right">0.55x-0.98x</td><td>see tables</td></tr>
+<tr><td style="text-align:right">28</td><td>Metal</td><td>sdpa_b4h8t2048d64_fwd</td><td>0.50x [0.47-0.65]</td><td style="text-align:right">0.76x</td><td>6.909 / 3.542</td></tr>
+<tr><td style="text-align:right">29</td><td>wgpu</td><td>cross_entropy_bwd</td><td>0.53x [0.50-0.54]</td><td style="text-align:right">0.87x</td><td>63.71 / 34.30</td></tr>
+<tr><td style="text-align:right">30</td><td>Metal</td><td>vres_bwd</td><td>0.64x [0.32-0.79]</td><td style="text-align:right">0.94x</td><td>1.943 / 1.192</td></tr>
+</tbody></table></div>
+<p><strong>The composed block, the training-relevant number:</strong></p>
+<ul>
+<li>Metal: 0.37x forward + backward and 0.24x forward. That is about 2.7 and 4.2 times slower.
+</li>
+<li>wgpu: 0.18x forward + backward and 0.14x forward. That is about 5.6 and 7 times slower.
+</li>
+<li>Direction verified in 15/15 rounds for all four; magnitudes as ranged above.
+</li>
+</ul>
+<h3 id="the-worst-five-with-likely-causes">The worst five, with likely causes <a class="anchor" href="#the-worst-five-with-likely-causes" aria-label="Link to this section">#</a></h3>
+<p><code>residual_add_bwd</code> (ranks 1 and 3) is an <strong>API-shape artifact, not a kernel problem</strong>. ojas&#39;s <code>residual_add_backward</code> returns two fresh copies of the incoming gradient. torch autograd returns the same tensor with no kernel; its 0.016 ms is the timer floor. A composed backward passes the gradient through: <code>bench/ojas_rows.rs::block_backward</code> never calls it. It costs training nothing unless a caller (or <code>Tape</code>) calls it. This is verified from the row semantics; whether <code>Tape</code> calls it was not checked.</p>
+<ol>
+<li><strong>wgpu causal SDPA, 0.01–0.04x (verified direction; cause inferred from source).</strong> <code>ojas-kernels/src/wgsl/attention.wgsl:50-100</code> gives each lane one query row of a 64-lane workgroup. Each lane holds private <code>q[D]</code> and <code>acc[D]</code> arrays (64 or 128 floats each, likely spilled), computes a scalar dot product per key, and does a branchy online-softmax rescale of <code>acc</code> per key. No matrix units are used. Metal&#39;s kernels for the same op are FlashAttention-2 on the TensorOps matrix units (<code>ojas-metal/kernels/ojas_backend.metal:701-719</code>). They run the same shapes 25–45 times faster than wgpu (run A: 3.08 vs 77.05 ms forward, 8.11 vs 277.8 ms backward at the nanolab shape). This one op is about 75% of wgpu&#39;s block forward + backward. Run A medians: SDPA forward + backward is 355 ms of the block&#39;s 475 ms, inferred from row sums.
+</li>
+</ol>
+<ol>
+<li><p><strong>Metal <code>adamw_full</code>, 0.09x (direction verified, cause verified from source).</strong> <code>ojas-metal/src/device.rs:1404-1448</code>. Per tensor:</p>
+<ul>
+<li>allocates three fresh buffers;
+</li>
+<li>runs four <code>ojas_check_finite</code> passes over the inputs;
+</li>
+<li>makes three copies out, runs tessl&#39;s AdamW step, and three more checks;
+</li>
+<li><code>finish</code> waits on the device and reads the status words back;
+</li>
+<li>makes three copies back, then a second <code>synchronize</code>.
+</li>
+</ul>
+<p>That is two full device waits and about 13 full-tensor passes, times 170 calls, about 3.5 ms per call. wgpu&#39;s AdamW (0.70x) decides finite-or-not on the device with no host wait per call (<code>ojas-wgpu/src/backend.rs</code> module docs). torch&#39;s is one <code>optimizer.step()</code>.</p>
+</li>
+</ol>
+<ol>
+<li><strong>Metal <code>rms_qk_norm</code> backward 0.10x and forward 0.11x (direction verified; cause verified from source).</strong> <code>rms_qk_norm_backward</code> is two <code>rms_norm_backward</code> calls (<code>ojas-metal/src/backend.rs:716-729</code>). Each runs <code>ojas_rms_bwd_w</code> (<code>ojas_backend.metal:287-303</code>). That kernel uses one thread per column, so dim = <strong>64 threads for the whole GPU</strong>, and each loops over 49,152 rows serially. The forward runs <code>ojas_rms_rstd</code> with one 256-lane threadgroup per 64-element row (<code>ojas_backend.metal:199-232</code>), so 3 of 4 lanes are idle, plus a separate <code>ojas_rms_apply</code> pass. wgpu&#39;s QK-norm forward (0.17x) has the same one-256-lane-workgroup-per-row shape (<code>ojas-kernels/src/wgsl/norm.wgsl</code>). Its backward (0.95x) leaves the weight gradient out of the per-row kernel and reduces it with a two-stage column sum (<code>col_sum</code>, <code>ojas-wgpu/src/backend.rs:488</code>, called at 1269), not one thread per column. That is verified from source; that it explains wgpu&#39;s 9x lead over Metal on this row is inferred.
+</li>
+</ol>
+<ol>
+<li><p><strong>Metal per-op fixed cost on small and elementwise ops, 0.18–0.36x (direction verified; cause verified from source, split inferred).</strong> Rows affected: <code>rms_norm_fwd</code>, <code>silu</code>, <code>mul</code>, <code>residual_add_fwd</code>, <code>gate</code>, <code>vres_fwd</code>, <code>permute</code>. Every Metal op:</p>
+<ul>
+<li>allocates and initialises a status buffer (<code>device.rs:328-334</code>);
+</li>
+<li>runs a separate <code>ojas_check_finite</code> dispatch over <strong>every input and every output</strong> (<code>device.rs:337-345</code>, e.g. <code>linear</code> at 728-746);
+</li>
+<li>ends with <code>finish</code>: a device wait plus a host read of the status words (<code>device.rs:370-393</code>);
+</li>
+<li>crosses the channel to the device thread and back.
+</li>
+</ul>
+<p>The 1-element <code>floor_silu_1</code> row is 0.13–0.19 ms at best, but 1.5–1.8 ms median under this contention. wgpu&#39;s is 0.24–0.35 ms median, and torch&#39;s 0.08–0.15. wgpu records into a shared encoder and checks finiteness inline (<code>report()</code> in the WGSL) at one sync per iteration. The Metal block runs 24 ops forward and 53 forward + backward (counted from <code>bench/ojas_rows.rs</code>), each paying this. Run A&#39;s Metal block forward, 67 ms, is close to the 49 ms sum of its kernel rows (inferred).</p>
+</li>
+</ol>
+<ol>
+<li><strong>wgpu GEMM, 0.29–0.38x on every linear row (direction verified; cause inferred).</strong> <code>ojas-kernels/src/wgsl/gemm.wgsl:1-20</code> uses a 16x16 workgroup per 64x64 tile with scalar vec4 FMAs from workgroup memory and no simdgroup matrix. lm_head forward reaches 316 GFLOP / 194.7 ms = 1.6 TFLOP/s, against torch&#39;s 5.2 TFLOP/s and Metal&#39;s 2.4 (tessl <code>ExactF32</code>). The same kernel family drives wgpu Muon (0.41–0.44x against torch&#39;s fp32 NS5).
+</li>
+</ol>
+<p>Next in line: Metal <code>cross_entropy_bwd</code> at 0.35x. <code>ojas_ce_rows</code> (<code>ojas_backend.metal:605-659</code>) uses one 256-lane threadgroup per 50,304-wide row, three passes over the row with <code>precise::exp</code> twice and <code>precise::divide</code> twice per element. That comes on top of the finite checks over the 824 MB input and the 824 MB output. Metal linear trails at 0.46–0.70x; part of that is the extra checks over the 824 MB lm_head output and the inputs (inferred).</p>
+<h2 id="where-ojas-is-faster-verified-direction-1515-rounds">Where ojas is faster (verified direction, 15/15 rounds) <a class="anchor" href="#where-ojas-is-faster-verified-direction-1515-rounds" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>backend</th><th>row</th><th>run A median ratio [15-round range]</th><th>why (inferred)</th></tr></thead>
+<tbody>
+<tr><td>Metal</td><td>clip_grad_norm_full</td><td>4.58x [4.29-9.36]</td><td>one device reduction plus one scale. torch&#39;s <code>clip_grad_norm_</code> on MPS goes through <code>linalg.vector_norm</code> per tensor (pytorch-parity-plan.md section 3)</td></tr>
+<tr><td>wgpu</td><td>clip_grad_norm_full</td><td>6.36x [5.81-9.10]</td><td>same</td></tr>
+<tr><td>Metal</td><td>sdpa backward, nanolab and T=2048 shapes</td><td>1.24x and 1.38x [1.01-1.77]</td><td>FlashAttention-2 tiled backward; torch with grad runs <code>_scaled_dot_product_attention_math</code></td></tr>
+<tr><td>wgpu</td><td>rope fwd / bwd</td><td>3.67x / 4.73x [2.78-6.78]</td><td>one kernel; torch&#39;s <code>apply_rope</code> is several kernels (negate, <code>cat</code>, two multiplies, an add)</td></tr>
+<tr><td>wgpu</td><td>cross_entropy_fwd</td><td>2.79x [1.93-3.21]</td><td>one fused pass; torch materializes <code>log_softmax</code></td></tr>
+<tr><td>wgpu</td><td>rms_norm_bwd</td><td>3.42x [1.67-5.76]</td><td>one fused per-row kernel; torch&#39;s autograd backward of <code>F.rms_norm</code> is several kernels</td></tr>
+<tr><td>wgpu</td><td>vres fwd / bwd</td><td>1.32x / 1.67x [1.01-2.17]</td><td>fused; torch does sigmoid, two multiplies and an add</td></tr>
+</tbody></table></div>
+<p>Metal rope is mixed (its per-op fixed cost eats the fused-kernel advantage). Metal SDPA backward at head dim 128 is mixed (14/15 rounds slower).</p>
+<h2 id="findings-for-the-owners-no-library-code-was-changed-here">Findings for the owners (no library code was changed here) <a class="anchor" href="#findings-for-the-owners-no-library-code-was-changed-here" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong><code>Tape</code> cannot drive the GPU block from these examples.</strong> Neither <code>ojas-metal</code> nor <code>ojas-wgpu</code> depends on <code>ojas-autograd</code>, even as a dev-dependency, and this lane may not edit <code>Cargo.toml</code>. The block forward and backward are composed by hand from Backend ops. Parity against nanolab&#39;s real <code>Block</code> checks the composition, not <code>Tape</code>. A <code>Tape</code>-driven GPU row needs an <code>ojas-autograd</code> dev-dependency on one GPU crate, or an example in <code>ojas-autograd</code> with GPU dev-dependencies.
+</li>
+<li><strong><code>docs/bench-cpu-vs-torch.md:153</code> is stale.</strong> It records Metal attention backward at T=2048 as 306 ms against torch&#39;s 60 ms. This harness measures <code>sdpa_b4h8t2048d64_bwd</code> at 16.5–19.4 ms (median across runs) against 25–26 ms for torch, so ojas is faster in all 15 rounds. Its 3.86 ms vs 2.81 ms linear 2048³ line was not re-measured here. That doc is outside this lane&#39;s ownership.
+</li>
+<li><strong><code>docs/pytorch-parity-plan.md</code> section 3, target 2 (&#34;a one-pass gradient norm, about 3 ms where torch takes 150&#34;) is partly met.</strong> torch takes 137–154 ms here. ojas takes 16–35 ms (Metal) and 16–25 ms (wgpu), which includes the scale pass, not 3 ms.
+</li>
+<li><p>Fix candidates by measured cost:</p>
+<ul>
+<li>wgpu attention on matrix units, or a tiled multi-row-per-lane design;
+</li>
+<li>Metal AdamW without the copy-in/copy-out and double wait (or a batched multi-tensor step);
+</li>
+<li><code>ojas_rms_bwd_w</code> as a two-stage column reduction;
+</li>
+<li>one finite check per op output instead of separate passes over every input and output on Metal;
+</li>
+<li>a shared-encoder mode for Metal like wgpu&#39;s.
+</li>
+</ul>
+<p>None was attempted.</p>
+</li>
+</ol>
+<h2 id="reproduce">Reproduce <a class="anchor" href="#reproduce" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5                    # run A protocol
+BENCH_ITERS=30 bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5     # runs B and C
+/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/bharath/Code/research/ojas/bench/aggregate.py \
+    bench/results/2026-10-01/runA bench/results/2026-10-01/runB bench/results/2026-10-01/runC   # direction table</code></pre></div>
+<p>Each run takes about 15 minutes for 5 rounds at 20 iterations and 18 minutes at 30. Run it on an idle GPU: check <code>ioreg -r -d 1 -w 0 -c IOAccelerator</code> for &#34;Device Utilization %&#34; near 0 first. Under contention the spread flags will say so, as they did here.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/bench-gpu-vs-torch.md" rel="noopener"><code>docs/bench-gpu-vs-torch.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="bench-cpu-vs-torch.html" rel="prev"><span>Previous</span>CPU Reference versus PyTorch CPU Benchmarks</a>
+        <a href="audit.html" rel="next" class="next"><span>Next</span>Audit Notes &amp; Structural Defect Countermeasures</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#round-5-and-the-lm-head-gemm-2026-10-02">Round 5 and the LM-head GEMM: 2026-10-02</a></li>
+<li class="sub"><a href="#round-5-benchresults2026-10-02-r5summarymd">Round 5 (bench/results/2026-10-02-r5/summary.md)</a></li>
+<li class="sub"><a href="#what-makes-the-lm-head-slow-one-pass-over-the-weight-per-tile-row-verified">What makes the LM head slow: one pass over the weight per tile row (verified)</a></li>
+<li class="sub"><a href="#fix-tessl-walks-a-large-b-in-column-panels-verified">Fix: tessl walks a large B in column panels (verified)</a></li>
+<li class="sub"><a href="#fix-the-lm-heads-input-gradient-runs-as-k-partitions-verified">Fix: the LM head&#39;s input gradient runs as K partitions (verified)</a></li>
+<li class="sub"><a href="#gate-bwd-where-its-time-went-and-the-bias-sum-2026-10-02">gate_bwd: where its time went, and the bias sum (2026-10-02)</a></li>
+<li><a href="#round-3-2026-10-01-22502306-cdt">Round 3: 2026-10-01, 22:50–23:06 CDT</a></li>
+<li class="sub"><a href="#what-was-run-verified-benchresults2026-10-01-r3benvtxt">What was run (verified, bench/results/2026-10-01-r3b/env.txt)</a></li>
+<li class="sub"><a href="#conditions-nothing-in-this-round-is-quotable">Conditions: nothing in this round is quotable</a></li>
+<li class="sub"><a href="#round-2s-metal-regressions-are-not-code-verified">Round 2&#39;s Metal &#34;regressions&#34; are not code (verified)</a></li>
+<li class="sub"><a href="#what-moved-since-round-2-direction-verified-magnitude-approximate">What moved since round 2 (direction verified, magnitude approximate)</a></li>
+<li class="sub"><a href="#the-remaining-metal-bottleneck-the-per-op-fixed-cost">The remaining Metal bottleneck: the per-op fixed cost</a></li>
+<li class="sub"><a href="#what-sets-the-metal-floor-a-1-ms-sleep-poll-in-tessls-synchronize-verified">What sets the Metal floor: a 1 ms sleep poll in tessl&#39;s synchronize (verified)</a></li>
+<li class="sub"><a href="#fix-the-feedback-wait-blocks-on-a-condvar-verified">Fix: the feedback wait blocks on a Condvar (verified)</a></li>
+<li class="sub"><a href="#what-the-elementwise-gap-is-standalone-finite-check-passes-verified">What the elementwise gap is: standalone finite-check passes (verified)</a></li>
+<li class="sub"><a href="#fix-1-the-check-reads-several-floats-per-thread-verified">Fix 1: the check reads several floats per thread (verified)</a></li>
+<li class="sub"><a href="#fix-2-the-elementwise-kernels-check-their-own-operands-verified">Fix 2: the elementwise kernels check their own operands (verified)</a></li>
+<li><a href="#round-2-2026-10-01-19011913-cdt">Round 2: 2026-10-01, 19:01–19:13 CDT</a></li>
+<li class="sub"><a href="#what-was-run-verified-benchresults2026-10-01-r2envtxt">What was run (verified, bench/results/2026-10-01-r2/env.txt)</a></li>
+<li class="sub"><a href="#beforeafter-ojas-metalbackend">Before/after: ojas MetalBackend</a></li>
+<li class="sub"><a href="#beforeafter-ojas-wgpubackend-metal-hal">Before/after: ojas WgpuBackend (Metal HAL)</a></li>
+<li class="sub"><a href="#what-the-optimization-rounds-moved-changes-of-2x-or-more">What the optimization rounds moved (changes of 2x or more)</a></li>
+<li class="sub"><a href="#worst-remaining-ojas-vs-torch-rows-slower-in-55-rounds-ranked">Worst remaining ojas-vs-torch rows (slower in 5/5 rounds), ranked</a></li>
+<li><a href="#round-1-2026-10-01-16341723-cdt-kept-for-comparison">Round 1: 2026-10-01, 16:34–17:23 CDT (kept for comparison)</a></li>
+<li><a href="#toolchain-and-source-state-verified-benchresults2026-10-01runenvtxt">Toolchain and source state (verified, bench/results/2026-10-01/run/env.txt)</a></li>
+<li><a href="#runs">Runs</a></li>
+<li><a href="#parity-verified">Parity (verified)</a></li>
+<li><a href="#results-ojas-metalbackend-vs-torch-mps">Results: ojas MetalBackend vs torch MPS</a></li>
+<li><a href="#results-ojas-wgpubackend-metal-hal-vs-torch-mps">Results: ojas WgpuBackend (Metal HAL) vs torch MPS</a></li>
+<li><a href="#where-ojas-is-slower-than-torch-plainly">Where ojas is slower than torch (plainly)</a></li>
+<li class="sub"><a href="#the-worst-five-with-likely-causes">The worst five, with likely causes</a></li>
+<li><a href="#where-ojas-is-faster-verified-direction-1515-rounds">Where ojas is faster (verified direction, 15/15 rounds)</a></li>
+<li><a href="#findings-for-the-owners-no-library-code-was-changed-here">Findings for the owners (no library code was changed here)</a></li>
+<li><a href="#reproduce">Reproduce</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

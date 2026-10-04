@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-wgpu · ojas reference</title>
+  <meta name="description" content="ojas-wgpu provides a portable GPU compute backend for ojas, executing deep learning workloads across diverse operating systems and graphics hardware using WebGPU (WGSL) via the wgpu runtime.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-wgpu.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-wgpu.html">
+  <meta property="og:title" content="ojas-wgpu · ojas reference">
+  <meta property="og:description" content="ojas-wgpu provides a portable GPU compute backend for ojas, executing deep learning workloads across diverse operating systems and graphics hardware using WebGPU (WGSL) via the wgpu runtime.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html" class="current" aria-current="page">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-wgpu">ojas-wgpu <a class="anchor" href="#ojas-wgpu" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-wgpu</code> provides a <strong>portable GPU compute backend</strong> for <code>ojas</code>, executing deep learning workloads across diverse operating systems and graphics hardware using <strong>WebGPU (WGSL)</strong> via the <code>wgpu</code> runtime.</p>
+<p>It implements full device-resident tensor operations (<code>WgpuBackend</code>), running natively on Vulkan (Linux/Windows), Metal (macOS), and DirectX 12.</p>
+<hr>
+<h2 id="compute-pipeline--device-residency">Compute Pipeline &amp; Device Residency <a class="anchor" href="#compute-pipeline--device-residency" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Host[&#34;Host Application&#34;]
+        Upload[&#34;Tensor Upload&#34;]
+        Readback[&#34;Loss / Greedy Logit Readback&#34;]
+    end
+
+    subgraph WgpuDevice[&#34;Portable GPU Device (WgpuBackend)&#34;]
+        subgraph Pipeline[&#34;WGSL Compute Pass Pipeline&#34;]
+            RMS[&#34;RMSNorm (norm.wgsl)&#34;]
+            GEMM[&#34;Tiled GEMM (gemm.wgsl with whole-vec4 stores)&#34;]
+            RoPE[&#34;Rotary Embeddings (pointwise.wgsl)&#34;]
+            SDPA[&#34;Causal SDPA, tiled flash attention (attention.wgsl)&#34;]
+            SwiGLU[&#34;SiLU / mul (pointwise.wgsl)&#34;]
+            CE[&#34;Cross-Entropy Loss (loss.wgsl)&#34;]
+            AdamW[&#34;AdamW and Muon NS5 (optim.wgsl)&#34;]
+        end
+        
+        BufferStore[&#34;Device Buffer Store (WgpuBuffer)\n[Zero intermediate host transfers]&#34;]
+    end
+
+    Upload --&gt; RMS
+    RMS --&gt; GEMM --&gt; RoPE --&gt; SDPA --&gt; SwiGLU --&gt; CE --&gt; AdamW
+    Pipeline &lt;--&gt; BufferStore
+    CE -.-&gt;|4 Bytes| Readback</pre></figure>
+<hr>
+<h2 id="wgsl-kernel-distribution--hardware-portability">WGSL Kernel Distribution &amp; Hardware Portability <a class="anchor" href="#wgsl-kernel-distribution--hardware-portability" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph WgpuInstance[&#34;wgpu Runtime Instance&#34;]
+        Adapter[&#34;request_adapter()&#34;]
+    end
+
+    subgraph HAL[&#34;Native Hardware Abstraction Layers&#34;]
+        MetalHAL[&#34;Apple Metal HAL (macOS)&#34;]
+        VulkanHAL[&#34;Vulkan HAL (Linux / Windows)&#34;]
+        DX12HAL[&#34;DirectX 12 HAL (Windows)&#34;]
+    end
+
+    subgraph Shaders[&#34;Compiled WGSL Shaders (ojas-kernels)&#34;]
+        Common[&#34;common.wgsl (fault word), fault.wgsl, layout.wgsl (permute)&#34;]
+        Ops[&#34;attention, gemm, norm, pointwise, reduce, loss, optim&#34;]
+    end
+
+    Adapter --&gt; MetalHAL
+    Adapter --&gt; VulkanHAL
+    Adapter --&gt; DX12HAL
+    MetalHAL --&gt; Shaders
+    VulkanHAL --&gt; Shaders
+    DX12HAL --&gt; Shaders</pre></figure>
+<hr>
+<h2 id="numerical-tolerance--backend-contract">Numerical Tolerance &amp; Backend Contract <a class="anchor" href="#numerical-tolerance--backend-contract" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-note"><p class="alert-title">Note</p><ul>
+<li><strong>Tolerance:</strong> <code>WgpuBackend</code> operates in <code>Numerics::Fast</code> tier with a strict relative tolerance of <strong>$10^{-4}$</strong> against <code>ojas-cpu</code>.
+</li>
+<li><strong>Muon NS5:</strong> f32 Newton-Schulz on the device with the CPU reference&#39;s semantics (Nesterov momentum, Frobenius normalization, five steps on the wide orientation, <code>max(1, rows/cols)^0.5</code> scale, decoupled decay), reusing the WGSL GEMM. Parity against <code>ojas-cpu</code> is checked at 1e-4 of the largest reference value on square, wide and tall shapes including 768x768, 768x2304 and 2304x768 (<code>tests/muon.rs</code>).
+</li>
+<li><strong>Permute:</strong> <code>Backend::permute</code> moves <code>u32</code> words on the device, so the output bits equal the input bits. F32 only.
+</li>
+<li><strong>Non-finite values are deferred:</strong> an op that produces a non-finite value returns <code>Ok</code>; the next <code>sync</code>, <code>download</code> or <code>clip_grad_norm</code> returns <code>NonFinite</code> naming the first op, in recording order, that faulted. <code>sync</code> is the <code>Backend::sync</code> override, so a caller holding <code>&amp;dyn Backend</code>, <code>impl Backend</code> or <code>Arc&lt;WgpuBackend&gt;</code> sees the fault too; a lost device makes it return <code>Backend</code> naming the loss. <code>adamw_step</code> and <code>muon_ns5_step</code> write nothing when their own values are non-finite. See the <code>backend</code> module docs.
+</li>
+<li><strong>Causal SDPA:</strong> tiled flash attention for head widths up to 128 (padded to 16/32/64/128). The forward keeps an online softmax per row; the backward recomputes the probabilities in tiles, in a dQ pass and a dK/dV pass, with no <code>T x T</code> matrix and no atomics, so repeated runs give the same bits (<code>tests/attention.rs</code>).
+</li>
+<li><strong>RMSNorm:</strong> a row is reduced by <code>next_pow2(min(D, 256))</code> lanes, so a 256-lane workgroup holds <code>256 / width</code> rows (four rows of D = 64). The segmented tree sum pairs lanes as the full 256-lane tree does, so the bits do not depend on the packing. <code>rms_qk_norm_forward</code> / <code>_backward</code> record q and k in one submission and give the bits, refusals and fault names of two <code>rms_norm</code> calls; a refused k still records q first, as the composition would (<code>tests/norm.rs</code>).
+</li>
+<li><strong>No subgroups:</strong> the kernels use shared memory and barriers only. A subgroup-shuffle row exchange for SDPA was measured at 0.98-1.02x and removed, and dropping the tree reductions&#39; sub-32 barriers outright moved RMSNorm and cross-entropy by no more than the noise.
+</li>
+<li><strong>Shape first:</strong> every op calls its <code>ojas_core::shapes</code> validator before placement, id and target ranges, optimizer scalars, device limits or any budget charge, so a malformed call returns the validator&#39;s exact error whatever the budget, values or placement (docs/shape-contract.md). <code>clip_grad_norm</code> checks <code>max_norm</code> after the norm, as the CPU does. <code>tests/shape_first.rs</code> sweeps every op under <code>Budget::new(0)</code>, an inputs-only cap, a NaN operand and host operands.
+</li>
+<li><strong>Bounded drop:</strong> wgpu&#39;s <code>Queue</code> drop waits for the queue to go idle with no timeout. Dropping the last handle on a context (the backend and every tensor) waits at most <code>DROP_WAIT</code> (2 s) for that; past it, a background thread finishes the drop, and until the GPU is done the queue, the device and their memory stay alive (<code>tests/drop.rs</code>).
+</li>
+<li><strong>Threads:</strong> <code>WgpuBackend</code> is <code>Send + Sync</code>; threads sharing one backend get the bits a serial run gives, and a device lost mid-flight fails every thread with an error (<code>tests/stress.rs</code>).
+</li>
+<li><strong>Training and decode ops (T2-T5):</strong> <code>accumulate_grad</code> adds in the accumulator&#39;s own buffer when it is the sole owner (a shared one gets a new buffer); <code>linear_cross_entropy_mean</code> keeps at most <code>chunk.rows x chunk.cols</code> logits alive, folds vocabulary tiles into an online softmax, and accumulates both gradients through the GEMM (<code>tests/linear_ce.rs</code>); <code>cached_attention_forward</code> splits the keys of a time-major cache so one decode query still fills the GPU, with grouped-query heads and rows that never read past their own position; <code>kv_cache_write</code> refuses before recording anything and copies only if the source is finite, so the cache is unchanged on every error (<code>tests/kv_cache.rs</code>). Non-finite values in these ops are reported at the next sync point, as for every op.
+</li>
+<li><strong>CPU adapters</strong> (lavapipe, SwiftShader, WARP) are refused unless <code>OJAS_WGPU_ALLOW_CPU_ADAPTER=1</code>; Linux CI sets it to run the tests on lavapipe.
+</li>
+</ul>
+</aside>
+<hr>
+<h2 id="defensive-countermeasures--safety-guarantees">Defensive Countermeasures &amp; Safety Guarantees <a class="anchor" href="#defensive-countermeasures--safety-guarantees" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-important"><p class="alert-title">Important</p><ol>
+<li><strong>Whole-<code>vec4</code> Stores for Race Prevention:</strong> A race condition in tiled WGSL matrix multiplication that occasionally zeroed output elements on specific GPU architectures was resolved by enforcing whole-<code>vec4</code> aligned store instructions.
+</li>
+<li><strong>Explicit Device Failures:</strong> If a compatible graphics adapter is missing or fails to initialize, <code>WgpuBackend::open</code> returns an explicit error (<code>OjasError::DeviceMismatch</code>) immediately—<strong>never silently falling back to CPU execution</strong>.
+</li>
+<li><strong>Memory Overflow Protections:</strong> Buffer allocations exceeding hardware device limits (<code>max_buffer_size</code>) return <code>OjasError::CapacityExceeded</code> before attempting GPU queue allocation.
+</li>
+<li><strong>Zero-Readback Autograd:</strong> The <code>wgpu_tape</code> autograd integration keeps all forward activations and backward adjoints on the device, downloading only the final scalar loss.
+</li>
+</ol>
+</aside>
+<hr>
+<h2 id="test-suites-208-tests">Test Suites (208 tests) <a class="anchor" href="#test-suites-208-tests" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>tests/accumulate_grad.rs</code>: In-place vs buffered gradient accumulation and bit-matching against CPU.
+</li>
+<li><code>tests/attention.rs</code>: Tiled causal attention forward/backward, long sequences, and head dimensions up to 128.
+</li>
+<li><code>tests/contract.rs</code>: Backend trait implementation contracts and deferred fault reporting.
+</li>
+<li><code>tests/drop.rs</code>: Bounded timeout on queue and buffer cleanup.
+</li>
+<li><code>tests/faults.rs</code>: Non-finite deferred fault recording order and naming.
+</li>
+<li><code>tests/gemm.rs</code>: Tiled WGSL GEMM determinism and nanolab projection shapes.
+</li>
+<li><code>tests/kv_cache.rs</code>: Grouped-query cached attention and boundary slice writes.
+</li>
+<li><code>tests/linear_ce.rs</code>: Tiled linear cross-entropy online softmax and memory bounds.
+</li>
+<li><code>tests/muon.rs</code>: 5-step Newton-Schulz optimizer execution on device tensors.
+</li>
+<li><code>tests/norm.rs</code>: RMSNorm, QK-norm reductions, and workgroup segment packing.
+</li>
+<li><code>tests/parity.rs</code>: Full-breadth numerical parity against CPU reference operations.
+</li>
+<li><code>tests/permute.rs</code>: Rank-4 layout transformations and dimension reordering.
+</li>
+<li><code>tests/residency.rs</code>: End-to-end device activation residency during training loops.
+</li>
+<li><code>tests/shape_first.rs</code>: Shape validator enforcement across zero-capacity budgets and NaN inputs.
+</li>
+<li><code>tests/stress.rs</code>: Multi-threaded concurrency, device loss handling, and Send+Sync safety.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-wgpu/README.md" rel="noopener"><code>ojas-wgpu/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-simd.html" rel="prev"><span>Previous</span>ojas-simd</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#compute-pipeline--device-residency">Compute Pipeline &amp; Device Residency</a></li>
+<li><a href="#wgsl-kernel-distribution--hardware-portability">WGSL Kernel Distribution &amp; Hardware Portability</a></li>
+<li><a href="#numerical-tolerance--backend-contract">Numerical Tolerance &amp; Backend Contract</a></li>
+<li><a href="#defensive-countermeasures--safety-guarantees">Defensive Countermeasures &amp; Safety Guarantees</a></li>
+<li><a href="#test-suites-208-tests">Test Suites (208 tests)</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

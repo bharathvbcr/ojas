@@ -118,7 +118,7 @@ All tensor allocations in `ojas` must request permits from a `Budget`. Memory ca
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Initialized: Budget::new(max_bytes)
+    [*] --> Initialized: Budget#58;#58;new(max_bytes)
     
     Initialized --> Active: try_reserve(req) [req <= remaining]
     Active --> Active: try_reserve(req) [req <= remaining]
@@ -127,7 +127,7 @@ stateDiagram-v2
     Initialized --> Rejected: try_reserve(req) [req > remaining]
     Active --> Rejected: try_reserve(req) [req > remaining]
     
-    Rejected --> [*]: Returns Err(OjasError::CapacityExceeded)
+    Rejected --> [*]: Returns Err(OjasError#58;#58;CapacityExceeded)
 ```
 
 > [!IMPORTANT]

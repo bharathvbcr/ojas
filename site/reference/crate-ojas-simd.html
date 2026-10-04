@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-simd · ojas reference</title>
+  <meta name="description" content="ojas-simd provides the Fast-tier f32 GEMM (General Matrix Multiply) engine for ojas. It accelerates matrix operations using hardware SIMD vector extensions (ARM NEON, x86_64 AVX2+FMA) and optional ha…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-simd.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-simd.html">
+  <meta property="og:title" content="ojas-simd · ojas reference">
+  <meta property="og:description" content="ojas-simd provides the Fast-tier f32 GEMM (General Matrix Multiply) engine for ojas. It accelerates matrix operations using hardware SIMD vector extensions (ARM NEON, x86_64 AVX2+FMA) and optional ha…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html" class="current" aria-current="page">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-simd">ojas-simd <a class="anchor" href="#ojas-simd" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-simd</code> provides the <strong>Fast-tier <code>f32</code> GEMM</strong> (General Matrix Multiply) engine for <code>ojas</code>. It accelerates matrix operations using hardware SIMD vector extensions (ARM NEON, x86_64 AVX2+FMA) and optional hardware BLAS via Apple&#39;s Accelerate framework.</p>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p><code>ojas-cpu</code> represents the <strong>Exact tier</strong> (no FMA, strict ascending-$k$ additions for bit-identical reproducibility across diverse CPU microarchitectures). <code>ojas-simd</code> is the <strong>Fast tier</strong>, employing hardware FMA and SIMD vector lanes to maximize throughput.</p>
+</aside>
+<hr>
+<h2 id="architecture--simd-dispatch">Architecture &amp; SIMD Dispatch <a class="anchor" href="#architecture--simd-dispatch" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Caller[&#34;ojas-cpu / High-Level Kernels&#34;]
+        Req[&#34;Matrix Multiplication Request\nC[m, n] = A[m, k] @ B[k, n]&#34;]
+    end
+
+    subgraph Dispatcher[&#34;ojas-simd::sgemm_tile_with&#34;]
+        Check{&#34;Dispatch Strategy&#34;}
+        Accelerate{&#34;Accelerate Feature\n(macOS; ojas-cpu sends Fast GEMMs &gt;= 2^13 MAdds)&#34;}
+    end
+
+    subgraph ComputeEngines[&#34;SIMD Compute Kernels&#34;]
+        NEON[&#34;ARM64 NEON Kernel\n(arch::neon, ~110 GFLOP/s single thread)&#34;]
+        AVX2[&#34;x86_64 AVX2 + FMA Kernel\n(arch::avx2)&#34;]
+        Portable[&#34;Portable Fallback\n(f32::mul_add chains)&#34;]
+        AppleBLAS[&#34;Apple Accelerate BLAS\n(cblas_sgemm, ~1.4–1.9 TFLOP/s)&#34;]
+    end
+
+    subgraph Output[&#34;Output Tensor&#34;]
+        C[&#34;Destination Matrix C[m, n]&#34;]
+    end
+
+    Req --&gt; Check
+    Check --&gt;|macOS + accelerate feature| Accelerate
+    Accelerate --&gt;|Large GEMM| AppleBLAS
+    Accelerate --&gt;|Small GEMM| NEON
+    Check --&gt;|ARM64 target| NEON
+    Check --&gt;|x86_64 target| AVX2
+    Check --&gt;|Generic target| Portable
+
+    AppleBLAS --&gt; C
+    NEON --&gt; C
+    AVX2 --&gt; C
+    Portable --&gt; C</pre></figure>
+<hr>
+<h2 id="determinism-contract-sgemm-tile-sgemm-tile-with">Determinism Contract (<code>sgemm_tile</code>, <code>sgemm_tile_with</code>) <a class="anchor" href="#determinism-contract-sgemm-tile-sgemm-tile-with" aria-label="Link to this section">#</a></h2>
+<p>Each output element in <code>sgemm_tile</code> evaluates an uninterrupted fused multiply-add (FMA) chain in strictly ascending inner-product index $p$:</p>
+<p>$$\text{acc} = \begin{cases} C[i, j] &amp; \text{if accumulate} \\ +0.0 &amp; \text{otherwise} \end{cases}$$ $$\text{for } p = 0 \dots k-1: \quad \text{acc} = \text{fma}(A[i, p], B[p, j], \text{acc})$$ $$C[i, j] = \text{acc}$$</p>
+<figure class="diagram"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant A as Row A[i, :]
+    participant B as Col B[:, j]
+    participant FMA as SIMD FMA Lane
+    participant C as Out C[i, j]
+
+    Note over FMA: acc = accumulate ? C[i,j] : 0.0
+    loop For p = 0 to k - 1
+        A-&gt;&gt;FMA: Load A[i, p]
+        B-&gt;&gt;FMA: Load B[p, j]
+        FMA-&gt;&gt;FMA: acc = fma(A[i, p], B[p, j], acc) [single rounding]
+    end
+    FMA-&gt;&gt;C: Store final acc</pre></figure>
+<h3 id="determinism-guarantees">Determinism Guarantees <a class="anchor" href="#determinism-guarantees" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Independent SIMD Chains:</strong> Every SIMD lane executes an independent FMA chain without cross-lane reductions, guaranteeing that the bitwise result depends only on the corresponding row of $A$ and column of $B$.
+</li>
+<li><strong>Identical Results Across Tiling:</strong> Splitting $C$ into arbitrary $M \times N$ tiles across worker threads yields bit-identical values to single-threaded sequential execution, provided the complete inner dimension $k$ is computed.
+</li>
+<li><strong>Cross-Architecture Equivalence:</strong> The NEON, AVX2, and portable fallback implementations produce identical floating-point bit representations under test.
+</li>
+</ul>
+<aside class="alert alert-warning"><p class="alert-title">Warning</p><p>[<code>sgemm_accelerate</code>] delegates directly to Apple&#39;s proprietary Accelerate framework (<code>cblas_sgemm</code>). Because Accelerate utilizes dynamic multithreading heuristics and internal tree reductions, its results are <strong>not bit-identical</strong> across varying core counts or OS versions. Use <code>sgemm_tile</code> when bit-level determinism is required.</p>
+</aside>
+<hr>
+<h2 id="safety--boundaries">Safety &amp; Boundaries <a class="anchor" href="#safety--boundaries" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p>All dimension extents, leading dimensions, and buffer strides are validated using checked arithmetic before any low-level pointer access occurs. If any dimension is invalid or buffer memory is insufficient, execution halts immediately with [<code>SimdError</code>].</p>
+<p>Unsafe operations are strictly isolated to the private <code>arch</code> submodule (<code>#![deny(unsafe_code)]</code> on the crate level).</p>
+</aside>
+<h3 id="simderror-taxonomy">SimdError Taxonomy <a class="anchor" href="#simderror-taxonomy" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><code>DimensionZero</code>: Any matrix extent ($M$, $N$, or $K$) is 0.
+</li>
+<li><code>BufferTooSmall</code>: Input or output slice length is insufficient for the requested matrix layout.
+</li>
+<li><code>StrideTooSmall</code>: Leading dimension ($ld$) is smaller than the required extent.
+</li>
+<li><code>IntegerOverflow</code>: Memory offset calculations overflow <code>usize</code>.
+</li>
+</ul>
+<hr>
+<h2 id="accelerate-vector-operations--vforce-macos">Accelerate Vector Operations &amp; vForce (macOS) <a class="anchor" href="#accelerate-vector-operations--vforce-macos" aria-label="Link to this section">#</a></h2>
+<p>When compiled with the <code>accelerate</code> feature on macOS, <code>ojas-simd</code> exposes vectorized primitives beyond matrix multiplication:</p>
+<ul>
+<li><strong>vDSP Elementwise Kernels:</strong> [<code>vdsp_vmul</code>], [<code>vdsp_vadd</code>], and their append forms call stride-1 Apple vDSP kernels for high-throughput single-precision vector math.
+</li>
+<li><strong>Row Movement:</strong> [<code>vdsp_mmov</code>] and [<code>vdsp_mmov_append</code>] copy 2D matrix rows with bitwise preservation of sign bits, subnormals, and <code>-0.0</code>.
+</li>
+<li><strong>vForce Vector Math:</strong> [<code>vvexpf</code>] and [<code>vvexpf_inplace</code>] dispatch to Apple Accelerate&#39;s vectorized exponential function (<code>y[i] = exp(x[i])</code>).
+</li>
+<li><strong>Sign &amp; Negative Absolute:</strong> [<code>store_neg_abs_signs</code>] processes data in chunked vector passes: it validates lane finiteness, records element signs (<code>z &lt; 0</code>), and stores <code>-|z|</code> in a single pass.
+</li>
+<li><strong>Edge Float Handling:</strong> Preserves IEEE 754 invariants across vector operations, including subnormals, signed zeros, and non-finite value detection.
+</li>
+</ul>
+<hr>
+<h2 id="test-suites-36-tests">Test Suites (36 tests) <a class="anchor" href="#test-suites-36-tests" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>tests/gemm.rs</code>: Multi-architecture GEMM determinism and cross-validation against references.
+</li>
+<li><code>tests/vdsp.rs</code>: Apple vDSP vector addition, multiplication, and matrix row copy operations.
+</li>
+<li><code>tests/vforce.rs</code>: Vectorized exponential accuracy and in-place transformations via vForce.
+</li>
+<li><code>tests/neg_abs_signs.rs</code>: Vectorized negative-absolute transforms and boolean sign bit packing.
+</li>
+<li><code>tests/reserved_f32.rs</code>: IEEE 754 edge-case compliance (subnormals, NaNs, infinities, signed zeros).
+</li>
+<li><code>tests/accelerate.rs</code>: Integration with <code>cblas_sgemm</code> on Apple Silicon.
+</li>
+<li><code>tests/errors.rs</code>: Checked shape validation and <code>SimdError</code> emission.
+</li>
+<li><code>tests/fuzz.rs</code>: Random matrix dimension fuzzing.
+</li>
+</ul>
+<hr>
+<h2 id="performance-profile-apple-m5-pro">Performance Profile (Apple M5 Pro) <a class="anchor" href="#performance-profile-apple-m5-pro" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>NEON SIMD:</strong> ~110 GFLOP/s single-threaded throughput.
+</li>
+<li><strong>Apple Accelerate:</strong> ~1.4–1.9 TFLOP/s on medium-to-large matrices ($256^3$, $512 \times 768 \times 768$, $2048^3$).
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-simd/README.md" rel="noopener"><code>ojas-simd/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-qwen35-cuda.html" rel="prev"><span>Previous</span>ojas-qwen35-cuda</a>
+        <a href="crate-ojas-wgpu.html" rel="next" class="next"><span>Next</span>ojas-wgpu</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#architecture--simd-dispatch">Architecture &amp; SIMD Dispatch</a></li>
+<li><a href="#determinism-contract-sgemm-tile-sgemm-tile-with">Determinism Contract (sgemm_tile, sgemm_tile_with)</a></li>
+<li class="sub"><a href="#determinism-guarantees">Determinism Guarantees</a></li>
+<li><a href="#safety--boundaries">Safety &amp; Boundaries</a></li>
+<li class="sub"><a href="#simderror-taxonomy">SimdError Taxonomy</a></li>
+<li><a href="#accelerate-vector-operations--vforce-macos">Accelerate Vector Operations &amp; vForce (macOS)</a></li>
+<li><a href="#test-suites-36-tests">Test Suites (36 tests)</a></li>
+<li><a href="#performance-profile-apple-m5-pro">Performance Profile (Apple M5 Pro)</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

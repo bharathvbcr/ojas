@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resource governor audit · ojas reference</title>
+  <meta name="description" content="Recorded 2026-10-01 after the resource-governor lanes. A row is verified when this session ran the suite that contains the named test, or read the assertion and that suite exited 0. It is reported wh…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/audit-resources.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/audit-resources.html">
+  <meta property="og:title" content="Resource governor audit · ojas reference">
+  <meta property="og:description" content="Recorded 2026-10-01 after the resource-governor lanes. A row is verified when this session ran the suite that contains the named test, or read the assertion and that suite exited 0. It is reported wh…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html" class="current" aria-current="page">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Audits</p>
+      <article class="prose-ojas">
+<h1 id="resource-governor-audit">Resource governor audit <a class="anchor" href="#resource-governor-audit" aria-label="Link to this section">#</a></h1>
+<p>Recorded 2026-10-01 after the resource-governor lanes. A row is <strong>verified</strong> when this session ran the suite that contains the named test, or read the assertion and that suite exited 0. It is <strong>reported</strong> when a prior lane ran it and this session did not. It is <strong>unverified</strong> when no run on this machine covers the claim. Reading source is labeled as source, not as a passing test.</p>
+<p>This file does not add behavior. It records what the current tree locks, and what it does not.</p>
+<h2 id="what-this-session-ran">What this session ran <a class="anchor" href="#what-this-session-ran" aria-label="Link to this section">#</a></h2>
+<p><strong>Verified.</strong> From <code>/Users/bharath/Code/research/ojas</code>:</p>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test --workspace --release -- --test-threads=1</code></pre></div>
+<p>Exit 0 in 57s. 449 passed, 0 failed, 4 ignored. Doc-tests ran and contained no tests. The ignored tests are two <code>ojas-cpu</code> benches, one exact-golden case, and the wgpu bench. Features <code>cuda</code> and <code>hip</code> were not enabled. Per-crate counts are in <code>docs/status.md</code>.</p>
+<p><strong>Verified.</strong> <code>cargo build -p ojas-gusset-engine</code>, then:</p>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -tags gusset_pkgconfig -count=1 -timeout 15m ./...</code></pre></div>
+<p>Exit 0, test time 1.443s. The output did not show a Go compile after the archive rebuild, so that run may have reused a cached test binary. A second run with <code>-a</code> (required by the comment in <code>go/api.go</code>, because the cache does not track <code>libgusset.a</code>) also exited 0, test time 3.417s. <code>go test -tags gusset_pkgconfig -list &#39;^Test&#39; ./...</code> lists 27 tests, including <code>TestCloseRacingAnInFlightStepLeavesOnePool</code>, <code>TestConcurrentSessionStress</code>, and <code>TestPoisonDropsSession</code>.</p>
+<p><strong>Reported.</strong> A prior lane on 2026-10-01 ran tessl <code>shared_event_timeout_poison_rejects_further_encode</code> in release: 1 passed, 110 filtered. This session did not run tessl&#39;s suite.</p>
+<h2 id="crash">Crash <a class="anchor" href="#crash" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Status</th><th>Lock</th><th>What changed</th></tr></thead>
+<tbody>
+<tr><td>C1</td><td>Verified that the refusal path passes. The abort path is <strong>not fixed</strong>.</td><td><code>ojas-core</code> <code>scratch_holds_one_charge_until_drop</code>, <code>scratch_reservation_failure_does_not_leave_a_charge</code>. <code>ojas-capi</code> <code>step_returns_capacity_when_the_cross_entropy_scratch_does_not_fit</code> (its comment says the test does not catch <code>abort</code>).</td><td>Fallible allocation is <code>Budget::try_reserve</code> and <code>Scratch</code>, which drop the <code>Vec</code> before releasing the charge. <code>ojas-gusset-engine</code> installs gusset&#39;s <code>Counting</code> allocator and its own comment says <code>vec!</code>, <code>format!</code>, and channels still abort. There is no allocation-error hook.</td></tr>
+<tr><td>C2</td><td>Verified for the ceilings. A forced OS spawn failure is unverified.</td><td><code>with_threads_refuses_zero_and_above_the_ceiling_without_clamping</code>, <code>with_threads_refuses_u32_max_without_spawning</code> (<code>ojas-cpu/tests/governor.rs</code>). <code>zero_and_oversized_thread_counts_are_refused</code> (<code>pool.rs</code>). <code>device_header_selects_cpu_parallel_and_bounds_its_thread_count</code> (<code>ojas-capi</code>). <code>CPU_THREAD_CEILING</code> is 1024. <code>MAX_CPU_THREADS</code> is 256.</td><td><code>CpuBackend::with_threads</code> refuses 0 and anything above 1024. Load refuses a parallel thread count above 256. Workers are <code>thread::Builder::spawn</code>, and a spawn <code>Err</code> is stored and returned. <code>spawn_scoped</code> is used by the pool&#39;s caller test <code>many_callers_share_one_pool</code>, not as the worker factory. No test injects a failed spawn.</td></tr>
+<tr><td>C3</td><td>Verified</td><td><code>TestCloseRacingAnInFlightStepLeavesOnePool</code>, <code>TestCloseKeepsTheGateShutWhenWorkersRemain</code>. <code>TestConcurrentSessionStress</code> sets pool size 1, starts 64 goroutines, and fails if they are still running after 4 minutes.</td><td><code>Close</code> returns the gusset error when workers are still running after the join budget, and <code>ensureHandle</code> then refuses. It does not open a second pool on top of those workers.</td></tr>
+<tr><td>C4</td><td>Partially verified. Adam moments are not in the snapshot. A real GPU hang is unverified.</td><td><code>poisoned_runtime_host_weights_rebuild_on_a_new_session</code> (<code>ojas-metal</code>, in the 33 library tests that passed). Tessl <code>is_poisoned</code> and <code>poison_as_shared_event_timeout_for_test</code>. Reported: tessl <code>shared_event_timeout_poison_rejects_further_encode</code>.</td><td>The Metal test poisons with the shared-event timeout bit, checks that a further alloc mentions poison, and rebuilds weights from <code>host_weights</code> on a new session. The snapshot tuple is the eight weight slices. Moments are not copied. The test comment says a GPU hang is not produced.</td></tr>
+<tr><td>C5</td><td>Verified</td><td><code>uncaptured_error_does_not_panic</code> (<code>ojas-wgpu</code>, in the 20 library tests that passed).</td><td>Creating a buffer with empty usage is inside <code>catch_unwind</code> and must not panic. That is one uncaptured error, not a device-lost recovery of a running model.</td></tr>
+<tr><td>C6</td><td>Host poll helpers verified. Device features unverified.</td><td><code>stream_wait_returns_when_the_deadline_has_passed</code> (<code>ojas-cuda</code>). <code>copy_wait_returns_when_the_deadline_has_passed</code> (<code>ojas-hip</code>). Both are in the 8 default tests each crate passed.</td><td>A deadline that has already passed returns. Those tests call <code>poll_until</code> with a stub predicate. <code>--features cuda</code> and <code>--features hip</code> were not built, and this Mac has no NVIDIA GPU and no <code>/opt/rocm</code>.</td></tr>
+</tbody></table></div>
+<h2 id="memory">Memory <a class="anchor" href="#memory" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Status</th><th>Lock</th><th>What changed</th></tr></thead>
+<tbody>
+<tr><td>M1</td><td>Verified</td><td><code>STEP_PROCESS_BUDGET_BYTES</code> is <code>1 &lt;&lt; 30</code> (<code>ojas-capi/src/step.rs</code>). <code>token_output_is_charged_once</code>.</td><td>Steps share one process child of 1 GiB, capped by the caller budget. The token-mode test binary-searches the smallest budget that succeeds and requires it to be below the old double charge (<code>formula + 88</code>).</td></tr>
+<tr><td>M2</td><td>Verified</td><td><code>causal_sdpa_refuses_scratch_when_the_output_tensor_would_fit</code>.</td><td>The budget holds Q, K, V, and the output. The score scratch misses, the call is <code>CapacityExceeded</code>, and live bytes stay at the inputs.</td></tr>
+<tr><td>M3</td><td>Verified for the tests below. One discarded check remains.</td><td><code>scratch_holds_one_charge_until_drop</code>. <code>room_for_keeps_the_charge_until_the_guard_drops</code>. <code>linear_forward_refuses_budget_that_fits_output_but_not_packed_weight</code>. <code>cross_entropy_refuses_row_scratch_when_the_scalar_loss_would_fit</code>. <code>clip_and_adam_write_rules</code> refuses <code>adamw_step</code> on a tight budget and checks the parameter and moments are unchanged. <code>headroom</code> is called at the start of <code>adamw_step</code> and <code>clip_grad_norm</code>.</td><td>Scratch and optimizer working memory are charged before the compute, and a miss leaves the stored values alone. <code>zero_extent_inf_offset_and_budget_do_not_corrupt_inputs</code> still does <code>let _ = before_prefix_budget</code>, so that particular live-byte comparison is still discarded.</td></tr>
+<tr><td>M4</td><td>Verified for the refusal tests. A full successful 1 GiB checkpoint and a full successful 32 MiB BPE encode were not run.</td><td><code>node_cap_allows_the_exact_count_and_refuses_one_more</code>. <code>dense_array_is_refused_before_gigabyte_amplification</code>. <code>encoded_length_matches_the_bytes_and_the_writer_shares_the_read_cap</code>. <code>checkpoint_cap_allows_the_exact_byte_and_refuses_one_past</code>. <code>encode_refuses_input_past_the_file_cap</code> (<code>HF_TEXT_CAP</code> is 32 MiB). <code>tape_clear_drops_recorded_values_and_gradients</code>.</td><td>JSON refuses one node past the injected cap. Checkpoint encode and write share <code>MAX_CHECKPOINT_BYTES</code> (1 GiB). The io suite passed in 1.23s, and <code>encoded_length_matches_the_bytes_and_the_writer_shares_the_read_cap</code> allocates a payload one past that cap and expects both encode and write to refuse without creating the file. The exact-byte test skips building a 1 GiB success. BPE encode of <code>HF_TEXT_CAP + 1</code> bytes is refused. <code>Tape::clear</code> drops the recorded value and gradient.</td></tr>
+<tr><td>M5</td><td>Verified</td><td><code>TestDefaultBufferBudgetIsSharedAndBelowOneMaxBuffer</code> expects <code>64 &lt;&lt; 20</code>. <code>TestMemoryGovernorIsOptIn</code> rejects <code>WithMemoryGovernor(0)</code> and a negative total.</td><td><code>bufferBudget</code> starts at 64 MiB and is passed as <code>WithBufferBudget</code> on open. <code>WithMemoryGovernor</code> is not called until the user calls it.</td></tr>
+<tr><td>M6</td><td>Verified</td><td><code>param_bytes_rounds_each_buffer_up_to_a_power_of_two_bucket</code>. <code>session_bounds_the_pool_cache_below_the_tessl_default</code> (<code>SESSION_POOL_CACHE_BYTES</code> is 64 MiB). <code>free_list_refuses_a_new_size_once_the_key_cap_is_full</code> (<code>POOL_MAX_KEYS</code> is 64).</td><td>Metal charges tessl&#39;s power-of-two bucket, not the logical byte length, and the session pool-cache cap is 64 MiB. The wgpu free-list test refuses a new size once 64 keys are stored. Its byte cap (<code>POOL_CAP_BYTES</code>) is 512 MiB, separate from the 64 MiB Metal pool cache.</td></tr>
+</tbody></table></div>
+<h2 id="silent-behavior">Silent behavior <a class="anchor" href="#silent-behavior" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Status</th><th>Lock</th><th>What changed</th></tr></thead>
+<tbody>
+<tr><td>S1</td><td>Partially verified. Command-buffer status is absent on Metal 4. Argmax nonfinite refusal was not run in this session.</td><td>Tessl <code>GpuRuntime</code> counts <code>MTL4CommitFeedback</code>. The comment states the command-buffer protocol has no status. Reported: <code>shared_event_timeout_poison_rejects_further_encode</code>. Source: tessl <code>argmax_f32_pass_refuses_a_nonfinite_row</code> in <code>tests/nn_wiring.rs</code>.</td><td>Commit feedback is the poison signal. This session did not run the argmax test. A real GPU fault was not induced.</td></tr>
+<tr><td>S2</td><td>Verified as the cap, not as a 1 GiB successful save.</td><td>Same checkpoint tests as M4. Read and write both call <code>exceeds_checkpoint_cap</code> with <code>MAX_CHECKPOINT_BYTES</code>.</td><td>A write past the shared cap is an error and does not leave the destination file.</td></tr>
+<tr><td>S3</td><td>Verified</td><td><code>TestInBandErrorPrefixes</code>. <code>nonfinite_and_capacity_prefixes_survive_the_gusset_boundary</code>. <code>host_error</code> formats <code>ojas:E_CAPACITY:</code>, <code>ojas:E_DEVICE_LOST:</code>, <code>ojas:E_BUSY:</code>, and <code>ojas:E_NONFINITE:</code>.</td><td>Go <code>errors.Is</code> matches those prefixes, including when a gusset wrapper is in front. <code>go/api.go</code> still says “Rust is not emitting these prefixes yet”; that sentence is stale. This docs pass did not edit the Go package.</td></tr>
+<tr><td>S4</td><td>Source plus an identity test. The <code>O_NOFOLLOW</code> flag itself has no direct test.</td><td><code>open_model</code> opens the file once. On macOS it sets custom flag <code>0x0000_0100</code>. <code>a_symlink_swapped_in_is_not_followed</code> uses <code>File::open</code> and <code>confirm_open_identity</code>, not <code>open_model</code>.</td><td>The loader does not reopen by path after the first open. A swapped final-component symlink fails the identity check. The test does not assert that <code>open_model</code> returns an error on a symlink.</td></tr>
+<tr><td>S5</td><td>Documented in source. No second-call test was found.</td><td><code>ojas_engine_init</code> and <code>install_engine</code>: if <code>INSTALLED</code> is already true, the function returns success and does not call <code>clear_engine_handlers</code>.</td><td>A second init is a no-op. The first call still clears handlers that were already registered in the process.</td></tr>
+<tr><td>S6</td><td>Verified for the tests named here. Greedy still ignores the loaded weights.</td><td><code>tape_clear_drops_recorded_values_and_gradients</code>. <code>a_successful_root_clears_last_error_and_a_full_take_does_not_leave_it</code>. <code>greedy_honors_cancel_after_the_budget_charge</code>. <code>step_cancel_runs_between_cross_entropy_forward_backward_and_clip</code>. <code>TestPoisonDropsSession</code> frees the id and expects <code>unknown model</code> before <code>Close</code>.</td><td><code>LAST_ERROR</code> is cleared on success and after a full take. Generate cancel is checked during the greedy path. <code>OP_PANIC</code> stays registered because that Go test calls it through the staticlib, which is not built with <code>cfg(test)</code>. <code>generate.rs</code> and <code>GenerateGreedy</code> say the greedy path is a fixed two-token demonstration and does not use the loaded file.</td></tr>
+<tr><td>S7</td><td>Not fixed. Verified by reading the three parsers.</td><td><code>ojas-io/src/json.rs</code> accepts surrogate pairs. <code>ojas-data/src/bpe.rs</code> rejects a surrogate in a vocab key and says it does not use the io parser. <code>ojas-oracle/src/lib.rs</code> refuses every escape and parses f64.</td><td>The grammars differ on purpose. They were not unified.</td></tr>
+<tr><td>S8</td><td>Unverified on a machine without Xcode. The paths are still absolute or sibling.</td><td><code>ojas-metal</code> depends on <code>tessl</code> at path <code>../../tessl</code>. <code>ojas-capi</code> and <code>ojas-gusset-engine</code> depend on gusset at <code>../../../devtools/gusset/crates/gusset</code>. <code>ojas-metal/build.rs</code> runs <code>xcrun</code> and contains <code>unsafe { env::set_var(...) }</code>.</td><td>This Mac built Metal, so the toolchain is present. A checkout that cannot resolve those paths, or a Mac without the Metal toolchain, was not tried.</td></tr>
+</tbody></table></div>
+<h2 id="tests">Tests <a class="anchor" href="#tests" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Status</th><th>Lock</th><th>What changed</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td>Verified</td><td><code>linear_above_two_task_macs_matches_one_thread_and_several</code> (32×256×256). <code>linear_one_row_above_two_task_macs_matches_one_thread_and_several</code> (1×2048×1024). <code>row_split_above_the_row_grain_matches_one_thread_and_several</code> (1024 rows, dim 64). All three are in <code>governor.rs</code> (11 passed).</td><td>Those shapes are at or above the parallel threshold, including a one-row linear and a row split. The comment says <code>map_rows</code> is gone.</td></tr>
+<tr><td>T2</td><td>Verified</td><td><code>TestPoisonDropsSession</code> calls <code>engineReset</code>, then <code>Free</code> on the id, and requires <code>unknown model</code>, before <code>Close</code>.</td><td>A Free that only ran after Close would no longer hide a session that reset left behind.</td></tr>
+<tr><td>T3</td><td>Partially verified</td><td><code>linear_forward_refuses_budget_that_fits_output_but_not_packed_weight</code> asserts <code>CapacityExceeded</code>. Since 2026-10-01 AdamW and the clip are in place and charge nothing, so <code>clip_and_adam_write_rules</code> and the full-budget case in <code>zero_extent_inf_offset_and_budget_do_not_corrupt_inputs</code> assert that a tight budget succeeds with the roomy backend&#39;s bits (they asserted <code>CapacityExceeded</code> and unchanged moments before).</td><td><code>budget_scratch.rs</code> now refuses when the packed weight does not fit. The infinity-gradient case is still <code>NonFinite</code>, which is the right error for that input. The discarded <code>let _ = before_prefix_budget</code> in the same redteam test was not removed.</td></tr>
+<tr><td>T6</td><td>Verified</td><td><code>TestConcurrentSessionStress</code>: pool size 1, 64 goroutines, <code>time.After(4 * time.Minute)</code>.</td><td>The passing Go run finished inside that watchdog. The watchdog path itself (the test failing at 4 minutes) was not the path this run took.</td></tr>
+</tbody></table></div>
+<p>T4 and T5 from the original plan are not restated here. This pass did not re-audit every <code>is_err()</code> site.</p>
+<h2 id="docs">Docs <a class="anchor" href="#docs" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Status</th><th>Where</th><th>What changed</th></tr></thead>
+<tbody>
+<tr><td>D1</td><td>Corrected in <code>README.md</code></td><td><code>#![forbid(unsafe_code)]</code> is on the library crates, including <code>ojas-metal/src/lib.rs</code>. It is not true for <code>ojas-cuda</code> and <code>ojas-hip</code> when their features are on (<code>cfg_attr(not(feature = ...), forbid(unsafe_code))</code>), for <code>ojas-gusset-engine</code> (<code>unsafe extern &#34;C&#34;</code>), or for <code>ojas-metal/build.rs</code> (<code>unsafe { env::set_var }</code>).</td><td>The mermaid node no longer says the attribute holds by default for every crate.</td></tr>
+<tr><td>D2</td><td>Corrected in <code>README.md</code> and <code>docs/architecture.md</code></td><td><code>catch_unwind</code> catches a panic on a worker and poisons the handle. It does not catch an abort, a failed infallible allocation, or a stack overflow.</td><td>The sequence notes say that.</td></tr>
+<tr><td>D3</td><td>Corrected in <code>README.md</code></td><td><code>Cargo.toml</code> sets <code>overflow-checks = true</code> on release, and that remains true. <code>next_id</code> in <code>ojas-core/src/tensor.rs</code> uses <code>wrapping_add</code>. Budget release uses <code>saturating_sub</code>.</td><td>The mermaid no longer says checked arithmetic is the only arithmetic.</td></tr>
+<tr><td>D4</td><td>Already true in <code>Cargo.toml</code>. A code comment is still wrong, and this pass did not edit it.</td><td>Workspace <code>rust-version</code> is <code>&#34;1.97&#34;</code> because gusset declares that. <code>README.md</code>, <code>docs/status.md</code>, and <code>docs/architecture.md</code> do not say 1.82. <code>ojas-simd/src/arch.rs</code> still says the workspace MSRV is 1.82.</td><td>No rewrite of that comment in this docs pass.</td></tr>
+<tr><td>D5</td><td>Corrected</td><td>The old “227” figure is gone from <code>docs/status.md</code>, <code>README.md</code>, <code>site/index.html</code>, and <code>docs/index.html</code>.</td><td>Counts are the 449 / 4 ignored run above, and 27 Go tests.</td></tr>
+<tr><td>D6</td><td>Corrected in <code>site/index.html</code> and <code>docs/index.html</code></td><td><code>Budget::new</code> returns <code>Budget</code>. <code>CpuBackend::new</code> takes that value. <code>Tensor::from_f32</code> is the constructor. <code>Tape::new</code> takes the backend.</td><td>The C example no longer includes <code>ojas.h</code>. There is no such header in the tree. The host API is the Go package. The C exports are <code>ojas_engine_init</code>, <code>ojas_engine_reset</code>, <code>ojas_set_model_root</code>, and the last-error getters.</td></tr>
+</tbody></table></div>
+<h2 id="dispatcher">Dispatcher <a class="anchor" href="#dispatcher" aria-label="Link to this section">#</a></h2>
+<p><strong>Verified</strong> in the <code>ojas-capi</code> suite (41 passed).</p>
+<p><code>ResourcePolicy::allow_split</code> defaults to false (<code>allow_split_defaults_false_and_is_not_inferred</code>). <code>step_with_policy</code> with that default returns <code>ojas:E_CAPACITY:</code> when the caller budget cannot hold the request. With <code>allow_split</code> set, <code>split_1000_rows_into_three_unequal_parts</code> asserts parts <code>[334, 333, 333]</code> and the same bits on a second run. A policy whose device list names Metal, Vulkan, or CUDA is refused with a message that contains <code>refusing CPU fallback</code>. The plan does not infer <code>k</code> from the host probe.</p>
+<h2 id="unverified">Unverified <a class="anchor" href="#unverified" aria-label="Link to this section">#</a></h2>
+<p>These were not established by a run on this machine:</p>
+<ul>
+<li>CUDA with <code>--features cuda</code>, and any NVIDIA kernel.
+</li>
+<li>HIP with <code>--features hip</code>, and any ROCm device. There is no <code>/opt/rocm</code>.
+</li>
+<li>A Linux cgroup limit. No container was used.
+</li>
+<li>A real GPU hang or a device fault. The Metal poison test sets the shared-event timeout bit.
+</li>
+<li>64 live Metal sessions.
+</li>
+<li>A successful BPE encode of a full 32 MiB input. The data suite refuses <code>HF_TEXT_CAP + 1</code> bytes.
+</li>
+<li>A successful checkpoint of a full 1 GiB. The io suite&#39;s over-cap test allocates near 1 GiB and expects refusal. The exact-byte test does not build a 1 GiB success.
+</li>
+<li>A machine that does not have Xcode, and a tree that cannot see <code>../../tessl</code> or the sibling gusset checkout.
+</li>
+<li>A forced failure of <code>thread::Builder::spawn</code>.
+</li>
+<li>Tessl <code>argmax_f32_pass_refuses_a_nonfinite_row</code> (present in source; not run here).
+</li>
+</ul>
+<h2 id="devmap">DevMap <a class="anchor" href="#devmap" aria-label="Link to this section">#</a></h2>
+<p>Both <code>devmap build</code> commands exited 0. Neither reported FTS corruption, so nothing was added to <code>.devcouncil/codeintel/sessions/gaps.jsonl</code>.</p>
+<p>The first, before these doc edits, finished in 129ms and said generation <code>#1616</code> was still current (179 files). The second, after the doc edits, finished in 103ms and said “No source changes; generation <code>#1646</code> still current (340 files).” That is the index’s own report. It does not list <code>docs/audit-resources.md</code> as a new source. This session does not claim the new doc was indexed.</p>
+<h2 id="line-delta">Line delta <a class="anchor" href="#line-delta" aria-label="Link to this section">#</a></h2>
+<p>Taken after the doc edits in this pass. <code>git diff --stat</code> is the unstaged tracked diff. It includes other sessions’ uncommitted work. It does not include untracked files.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Repo</th><th>Tracked diff</th></tr></thead>
+<tbody>
+<tr><td>ojas</td><td>80 files changed, 11021 insertions, 2623 deletions</td></tr>
+<tr><td>tessl</td><td>17 files changed, 702 insertions, 142 deletions</td></tr>
+<tr><td>gusset</td><td>53 files changed, 822 insertions, 139 deletions</td></tr>
+</tbody></table></div>
+<p>Untracked, so absent from those counts: <code>docs/audit-resources.md</code> (this file), <code>docs/index.html</code>, and <code>site/index.html</code> in ojas; <code>tests/flash_attn_rows_h64.rs</code> and <code>tests/qk_norm_half_rope.rs</code> in tessl (plus a <code>target-redteam/</code> build directory); <code>submit_permit_internal_test.go</code> and the <code>language-policy</code> skill copies in gusset.</p>
+<h2 id="commit-order">Commit order <a class="anchor" href="#commit-order" aria-label="Link to this section">#</a></h2>
+<p>Do not commit from this pass.</p>
+<p>Commit <strong>tessl</strong> first, then <strong>gusset</strong>, then <strong>ojas</strong>. ojas <code>HEAD</code> already depends on uncommitted tessl APIs (<code>is_poisoned</code>, commit feedback, the argmax refusal path) and uncommitted gusset APIs (<code>register_engine</code> returning <code>Result</code>, <code>Close</code> bounded so workers that remain are reported). Committing ojas alone will not build against the published tips of those two trees.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/audit-resources.md" rel="noopener"><code>docs/audit-resources.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="audit-phase3.html" rel="prev"><span>Previous</span>Phase 3 audit</a>
+        <a href="readme.html" rel="next" class="next"><span>Next</span>Project README</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#what-this-session-ran">What this session ran</a></li>
+<li><a href="#crash">Crash</a></li>
+<li><a href="#memory">Memory</a></li>
+<li><a href="#silent-behavior">Silent behavior</a></li>
+<li><a href="#tests">Tests</a></li>
+<li><a href="#docs">Docs</a></li>
+<li><a href="#dispatcher">Dispatcher</a></li>
+<li><a href="#unverified">Unverified</a></li>
+<li><a href="#devmap">DevMap</a></li>
+<li><a href="#line-delta">Line delta</a></li>
+<li><a href="#commit-order">Commit order</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

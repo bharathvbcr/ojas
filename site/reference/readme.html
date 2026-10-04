@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas · ojas reference</title>
+  <meta name="description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/readme.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/readme.html">
+  <meta property="og:title" content="ojas · ojas reference">
+  <meta property="og:description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html" class="current" aria-current="page">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas">ojas <a class="anchor" href="#ojas" aria-label="Link to this section">#</a></h1>
+<p><strong>ojas</strong> (vital energy, the essence training spends) is a deterministic, high-performance <strong>Rust deep learning engine and framework</strong> designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and, as the gaps below close, training and edge inference.</p>
+<p>ojas pairs a compile-time safe Rust engine with an in-process Go API via <code>gusset</code>, zero-copy tensor views, reverse-mode automatic differentiation, and strict memory budgeting.</p>
+<p><strong>What runs today:</strong></p>
+<ul>
+<li>Every <code>Backend</code> op runs on the CPU, on Apple Silicon Metal, and on wgpu: forward, backward, permute, clip, AdamW and Muon.
+</li>
+<li>The autograd <code>Tape</code> gradchecks a multi-head attention block.
+</li>
+<li><code>ojas-model</code> defines the nanolab GPT once (spec, <code>state_dict</code> names, order-independent init, the block) and runs it two ways: recorded on the <code>Tape</code> for training, eagerly through <code>Eval</code> for decoding. Its <code>Trainer</code> takes Muon + AdamW steps on any <code>Backend</code> and saves and resumes a checkpoint directory.
+</li>
+<li>The Go API drives that model in process: <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, a GPT-2 tokenizer, and sampled <code>GenerateIDs</code>. Metal and wgpu fail closed when no device opens.
+</li>
+<li><code>ojas-infer</code> decodes a nanolab-architecture model on the CPU, greedy or sampled, with a KV cache.
+</li>
+<li><code>ojas-qwen35</code> (macOS only) runs a Qwen3.5 whole training step through tessl&#39;s Metal kernels. It is a provider, not a <code>Backend</code>.
+</li>
+</ul>
+<p><strong>What does not run yet:</strong></p>
+<ul>
+<li>bf16 compute: every backend computes in <code>f32</code>.
+</li>
+<li>A CUDA or HIP <code>Backend</code>: <code>ojas-cuda</code> and <code>ojas-hip</code> are probes.
+</li>
+<li>Everything else on the ranked gap list below.
+</li>
+</ul>
+<p>The ranked list of gaps, and what has closed since it was written, is in <a href="pytorch-parity-plan.html"><code>docs/pytorch-parity-plan.md</code></a>.</p>
+<p><strong>Against PyTorch MPS on the GPU</strong> (<a href="bench-gpu-vs-torch.html"><code>docs/bench-gpu-vs-torch.md</code></a>, measured under heavy external GPU load, so only direction is verified):</p>
+<ul>
+<li>ojas is slower on most rows. In round 3 (the latest), a nanolab block forward + backward ran at 0.92× torch&#39;s speed on Metal (mixed) and 0.41× on wgpu; the earlier optimization rounds measured 0.37× and 0.18×. Round 3&#39;s GPU read 100% busy, so only the direction is verified.
+</li>
+<li>It is faster on Metal attention backward, <code>clip_grad_norm</code> and AdamW. CUDA is one affine kernel behind a feature, and HIP is a copy probe; neither implements <code>Backend</code>.
+</li>
+</ul>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>Status:          Kernel set, backends, nanolab model, trainer, adaptive resource planning and Go API built; remaining gaps in docs/pytorch-parity-plan.md
+Verification:    kernel hardening, SIMD vectorization &amp; backend parity, 2026-10-04: 1286 passed across workspace crates (ojas-cpu 261, ojas-wgpu 208, ojas-metal 136, ojas-core 119, ojas-model 80, ojas-capi 77, ojas-device 72); Go 41/41; clippy -D warnings clean
+Host Target:     Apple M5 Pro (Metal 4), macOS 27 (Darwin 27.0.0 arm64)
+Interactive App: https://ojas.vbcr.dev (Alternate: https://bharath.vbcr.dev/ojas)
+License:         MIT OR Apache-2.0</code></pre></div>
+<blockquote><p><strong>Explore the Interactive Web Experience:</strong> The <a href="https://ojas.vbcr.dev" rel="noopener"><strong>ojas interactive documentation</strong></a> has live labs for each guarantee: bit-identical reductions across thread counts, memory budget refusal, no silent device fallback, the Go panic firewall, and checked shape arithmetic, plus the CPU versus PyTorch timings.</p>
+</blockquote>
+<hr>
+<h2 id="why-ojas-a-pytorch--tensorflow-alternative">Why ojas? (A PyTorch &amp; TensorFlow Alternative) <a class="anchor" href="#why-ojas-a-pytorch--tensorflow-alternative" aria-label="Link to this section">#</a></h2>
+<p>Mainstream frameworks like PyTorch and TensorFlow carry decades of legacy baggage: hidden global state, silent CPU fallbacks that mask hardware misconfigurations, nondeterministic multithreaded reductions, memory fragmentation, and cumbersome multi-language bindings that rely on heavyweight Python runtimes.</p>
+<p>ojas is engineered from first principles with radical architectural guarantees:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph PyTorchTF[&#34;Legacy Frameworks (PyTorch / TensorFlow)&#34;]
+        L1[&#34;Implicit Global State &amp; Seed Drift&#34;]
+        L2[&#34;Silent CPU Fallback on Missing GPU\n(Hides deployment bottlenecks)&#34;]
+        L3[&#34;Dynamic Memory Clamping &amp; OOM Panics&#34;]
+        L4[&#34;Heavyweight Python-Centric Runtime Stack&#34;]
+        L5[&#34;Integer Overflow Hazards in Long Training Steps&#34;]
+        L6[&#34;Complex C++ Codebase with Opaque Abstractions&#34;]
+    end
+
+    subgraph ojasPrinciples[&#34;ojas Architectural Guarantees&#34;]
+        O1[&#34;Bit-Identical Determinism under Numerics::Exact (opt-in)&#34;]
+        O2[&#34;Zero Silent Fallbacks: Explicit Hardware Refusal\n(Fail fast, fail loud)&#34;]
+        O3[&#34;Explicit Budget Governance: try_reserve() Never Clamps&#34;]
+        O4[&#34;Pure Rust Core with Direct In-Process Go &amp; C-ABI Bindings&#34;]
+        O5[&#34;overflow-checks = true in Release\n(step counters use checked_add; some ids wrap or saturate)&#34;]
+        O6[&#34;#![forbid(unsafe_code)] on the library crates\n(not cuda/hip features, ojas-gusset-engine, or metal/build.rs)&#34;]
+    end
+
+    L1 -.-&gt;|Solved By| O1
+    L2 -.-&gt;|Solved By| O2
+    L3 -.-&gt;|Solved By| O3
+    L4 -.-&gt;|Solved By| O4
+    L5 -.-&gt;|Solved By| O5
+    L6 -.-&gt;|Solved By| O6</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Deterministic Bit-Identicality:</strong> <code>CpuBackend</code> defaults to <code>Numerics::Fast</code>: FMA, and on macOS Accelerate for GEMMs of at least 2^13 multiply-adds (<code>ojas_cpu::FAST_WHOLE_CALL_MACS</code>), as PyTorch&#39;s CPU <code>linear</code> does. Opt into <code>Numerics::Exact</code> with <code>.with_numerics(Numerics::Exact)</code> for single-threaded-order, index-increasing accumulation. Under Exact, identical seeds give identical bits across thread counts and machines. The C/Go API has no numerics selector, so C and Go callers get Fast.</p>
+<p><strong>Zero Silent Fallback:</strong> Selecting a GPU backend (Metal, wgpu, CUDA, HIP) that cannot be initialized returns an explicit error immediately. It will <strong>never silently downgrade to CPU execution</strong>.</p>
+</aside>
+<hr>
+<h2 id="framework-architecture">Framework Architecture <a class="anchor" href="#framework-architecture" aria-label="Link to this section">#</a></h2>
+<p>ojas is structured as a modular stack of focused, single-responsibility crates:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Applications[&#34;User Applications &amp; Service APIs&#34;]
+        GoApp[&#34;Go Services &amp; Applications\n(github.com/bharathvbcr/ojas/go)&#34;]
+        RustApp[&#34;Rust Binaries, Services &amp; CLIs&#34;]
+        ForeignApp[&#34;C / C++ / Embedded Host Applications&#34;]
+    end
+
+    subgraph Interop[&#34;In-Process Interop &amp; Foreign Function Interface&#34;]
+        Gusset[&#34;ojas-gusset-engine\n(libgusset.a Worker Pool &amp; Ticket Queue)&#34;]
+        CAPI[&#34;ojas-capi\n(C-ABI Engine, Session Store, Panic Isolation Boundary)&#34;]
+    end
+
+    subgraph HighLevel[&#34;Model, Autograd &amp; Inference Layer&#34;]
+        Infer[&#34;ojas-infer\n(Autoregressive Decoding, KV Cache, Logit Validation)&#34;]
+        Autograd[&#34;ojas-autograd\n(Dynamic Reverse-Mode Tape &amp; f64 Gradcheck)&#34;]
+        Model[&#34;ojas-model\n(nanolab GPT written once: spec, init, Graph block, Trainer, checkpoint dir)&#34;]
+        Qwen35[&#34;ojas-qwen35\n(Qwen3.5 whole-step provider over tessl; macOS Metal only; not a Backend)&#34;]
+    end
+
+    subgraph CoreEngine[&#34;Tensor Substrate &amp; System Types&#34;]
+        Core[&#34;ojas-core\n(Tensor, Strides, Offset Slicing, Budget, DType, Errors)&#34;]
+        Device[&#34;ojas-device\n(Device Kinds, System Profile, ResourcePlan; no router)&#34;]
+        IO[&#34;ojas-io\n(Strict Safetensors Parser, Binary Checkpoint v1)&#34;]
+        Data[&#34;ojas-data\n(Dataset Streaming, Token Binary Formats, Deterministic RNG)&#34;]
+        Oracle[&#34;ojas-oracle\n(IEEE-754 f64 Numerical Reference Fixtures)&#34;]
+    end
+
+    subgraph HardwareBackends[&#34;Pluggable Hardware Compute Backends&#34;]
+        CPU[&#34;ojas-cpu\n(CpuBackend: Fast default, Accelerate on macOS; Exact packed GEMM opt-in)&#34;]
+        SIMD[&#34;ojas-simd\n(NEON GEMM, AVX2, and Accelerate cblas_sgemm wrapper)&#34;]
+        Metal[&#34;ojas-metal\n(MetalBackend, device-resident, via tessl)&#34;]
+        WGPU[&#34;ojas-wgpu\n(WgpuBackend, device-resident WGSL)&#34;]
+        Kernels[&#34;ojas-kernels\n(Shared WGSL/CUDA sources, workgroup geometry, parity harness)&#34;]
+        CUDA[&#34;ojas-cuda\n(One affine kernel behind feature cuda; not a Backend)&#34;]
+        HIP[&#34;ojas-hip\n(Copy probe; no HIP kernel; not a Backend)&#34;]
+    end
+
+    GoApp --&gt; Gusset
+    Gusset --&gt; CAPI
+    ForeignApp --&gt; CAPI
+    RustApp --&gt; HighLevel
+    CAPI --&gt; HighLevel
+    Infer --&gt; Model
+    Model --&gt; Autograd
+
+    HighLevel --&gt; CoreEngine
+    HighLevel --&gt; HardwareBackends
+    HardwareBackends --&gt; CoreEngine
+    CoreEngine --&gt; HardwareBackends</pre></figure>
+<hr>
+<h2 id="core-capabilities--subsystems">Core Capabilities &amp; Subsystems <a class="anchor" href="#core-capabilities--subsystems" aria-label="Link to this section">#</a></h2>
+<h3 id="1-general-purpose-tensor-engine-ojas-core">1. General-Purpose Tensor Engine (<code>ojas-core</code>) <a class="anchor" href="#1-general-purpose-tensor-engine-ojas-core" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Zero-Copy Views:</strong> Tensor representations track an explicit <code>byte_offset</code>. Sub-views created via <code>.narrow()</code> adjust byte offsets without memory re-allocation or buffer copying.
+</li>
+<li><strong>Strict Memory Budgets:</strong> Memory consumption is governed by an explicit <code>Budget</code>. When an allocation exceeds limits, <code>try_reserve()</code> returns <code>OjasError::CapacityExceeded</code> immediately rather than swapping or resizing.
+</li>
+<li><strong>Type System:</strong> <code>DType</code> tags <code>F32</code>, <code>Bf16</code>, <code>F16</code> and <code>U32</code>. Every backend computes in <code>F32</code> (token ids in <code>U32</code>) and refuses other dtypes. <code>ojas-io</code> decodes BF16/F16 safetensors to <code>f32</code> and encodes back with round-to-nearest-even. There is no bf16 compute path yet.
+</li>
+<li><strong>Device Tensors:</strong> <code>Tensor::from_device</code> wraps a backend&#39;s buffer. <code>to_host</code> copies it back and is counted by <code>device_readbacks()</code>. <code>device_buffer_mut</code> requires sole ownership of the storage. The default <code>Backend::upload</code> returns <code>Unsupported</code> for a host tensor on a non-CPU backend; there is no CPU fallback.
+</li>
+</ul>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph Storage[&#34;Physical Allocation Buffer (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;]
+        Pad[&#34;Leading Offset [0 .. byte_offset)&#34;]
+        Active[&#34;Active Tensor Slices [byte_offset .. byte_offset + active_bytes)&#34;]
+        Unused[&#34;Unused Capacity&#34;]
+    end
+
+    subgraph View1[&#34;Parent Tensor [2, 16, 64]&#34;]
+        V1[&#34;byte_offset = 0&#34;]
+    end
+
+    subgraph View2[&#34;Sliced View: narrow(1, 4, 8)&#34;]
+        V2[&#34;byte_offset = 1024 bytes (zero-copy)&#34;]
+    end
+
+    View1 --&gt; Active
+    View2 --&gt; Active</pre></figure>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p>All tensor allocations must request permits from a <code>Budget</code>. If an allocation exceeds available capacity, <code>try_reserve()</code> returns <code>Err(OjasError::CapacityExceeded)</code>. Infallible runtime calls (<code>vec!</code>, <code>format!</code>, <code>thread::spawn</code>) operate outside this budget and can still abort if physical host RAM is exhausted.</p>
+</aside>
+<hr>
+<h3 id="2-reverse-mode-automatic-differentiation-ojas-autograd">2. Reverse-Mode Automatic Differentiation (<code>ojas-autograd</code>) <a class="anchor" href="#2-reverse-mode-automatic-differentiation-ojas-autograd" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Tape-Based Computation Graph:</strong> Dynamic tape recording variable nodes (<code>Var</code>) and operational adjoints for forward and reverse sweeps.
+</li>
+<li><strong>Numerical Gradcheck Oracle:</strong> Analytical f32 gradients are verified against double-precision (<code>f64</code>) central finite differences, ensuring mathematical soundness down to machine tolerances.
+</li>
+<li><strong>Device Tape Residency:</strong> On non-CPU backends (<code>MetalBackend</code>, <code>WgpuBackend</code>), <code>leaf</code> and input tensors are uploaded once. Reshape is a zero-copy view. The backward seed is uploaded, and non-root cross-entropy gradients are scaled on the device using rank-1 linears. Intermediate activations stay resident on GPU; the loss download is the only audited readback.
+</li>
+</ul>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph ForwardTape[&#34;Forward Execution&#34;]
+        x[&#34;Var x&#34;] --&gt; op1[&#34;Op: Linear(x, W)&#34;]
+        W[&#34;Var W&#34;] --&gt; op1
+        op1 --&gt; h[&#34;Var h&#34;]
+        h --&gt; op2[&#34;Op: Activation(h)&#34;]
+        op2 --&gt; loss[&#34;Var Loss&#34;]
+    end
+
+    subgraph BackwardTape[&#34;Reverse-Mode Adjoint Execution&#34;]
+        dLoss[&#34;Seed dLoss = 1.0&#34;] --&gt; adj2[&#34;Adjoint: dActivation&#34;]
+        adj2 --&gt; adj1[&#34;Adjoint: dLinear&#34;]
+        adj1 --&gt; dW[&#34;Accumulate dW&#34;]
+        adj1 --&gt; dx[&#34;Accumulate dx&#34;]
+    end
+
+    ForwardTape ==&gt; BackwardTape</pre></figure>
+<hr>
+<h3 id="3-native--portable-hardware-backends">3. Native &amp; Portable Hardware Backends <a class="anchor" href="#3-native--portable-hardware-backends" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>CPU (<code>ojas-cpu</code>):</strong> <code>CpuBackend</code> defaults to <code>Numerics::Fast</code>; <code>Numerics::Exact</code> (opt-in) uses a packed GEMM on a persistent thread pool; bit-identical to pre-change golden digests at thread counts 1, 2, 3, 7, 16, and 18. <code>Numerics::Fast</code> on macOS sends products of $\ge 2^{13}$ multiply-adds (<code>FAST_WHOLE_CALL_MACS</code>) to Apple Accelerate <code>cblas_sgemm</code>; smaller Fast products stay on <code>tile_fast</code>. Off macOS the cutoff is $2^{21}$.
+</li>
+<li><strong>SIMD (<code>ojas-simd</code>):</strong> Fast-tier GEMM kernels including ARM64 NEON (~110 GFLOP/s single thread), x86_64 AVX2+FMA, portable FMA fallback, and Apple Accelerate wrapper.
+</li>
+<li><strong>Metal (<code>ojas-metal</code>):</strong> <code>MetalBackend</code> implements every <code>Backend</code> op on device tensors through <code>tessl</code> GEMM and its own <code>.metal</code> kernels. Causal attention is a tiled TensorOps forward plus a FlashAttention-2-style backward, with no <code>T×T</code> scores stored, at head dims up to 128. Numerics <code>Fast</code>.
+</li>
+<li><strong>wgpu (<code>ojas-wgpu</code>):</strong> <code>WgpuBackend</code> keeps tensors device-resident and executes portable WGSL compute shaders. Numerics <code>Fast</code>, tolerance 1e-4 relative against CPU. Muon NS5 runs in f32 and is checked against <code>CpuBackend</code> (<code>ojas-wgpu/tests/muon.rs</code>). A non-finite result is reported at the next <code>sync</code>, <code>download</code> or <code>clip_grad_norm</code>, naming the first op that produced it (<code>ojas-wgpu/tests/faults.rs</code>).
+</li>
+<li><strong>Kernels (<code>ojas-kernels</code>):</strong> WGSL shader modules for <code>WgpuBackend</code> (<code>ojas-kernels/src/wgsl/</code>), workgroup grid calculations, and a parity harness whose comparison fails on any non-finite value.
+</li>
+<li><strong>CUDA &amp; HIP (<code>ojas-cuda</code>, <code>ojas-hip</code>):</strong> Isolated probes behind optional compile flags (<code>--features cuda</code>, <code>--features hip</code>). Neither implements <code>Backend</code> and neither is reachable from Go.
+</li>
+</ul>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    LoadOn[&#34;Go LoadModel(ctx, path, LoadOptions)&#34;] --&gt; Kind{&#34;opts.Device&#34;}
+
+    Kind --&gt;|DeviceCPU| CPU[&#34;CpuBackend (1 thread)&#34;]
+    Kind --&gt;|&#34;DeviceCPUParallel (threads 1..=256)&#34;| CPUP[&#34;CpuBackend, threads&#34;]
+    Kind --&gt;|DeviceCPUAuto| CPUA[&#34;CpuBackend, auto_threads from plan thread ceiling&#34;]
+    Kind --&gt;|DeviceMetal| Metal{&#34;Metal device opens?&#34;}
+    Kind --&gt;|DeviceWgpu| Wgpu{&#34;wgpu adapter opens?&#34;}
+
+    Metal --&gt;|Yes| MetalB[&#34;MetalBackend session (Device-Resident)&#34;]
+    Metal --&gt;|No| MetalErr[&#34;Load returns explicit device error\n(NO silent CPU session)&#34;]
+    Wgpu --&gt;|Yes| WgpuB[&#34;WgpuBackend session (Device-Resident)&#34;]
+    Wgpu --&gt;|No| WgpuErr[&#34;Load returns explicit wgpu error\n(NO silent CPU session)&#34;]</pre></figure>
+<aside class="alert alert-warning"><p class="alert-title">Warning</p><p>Metal and wgpu attention enforce a strict head dimension limit ($d_{\text{head}} \le 128$, <code>METAL_MAX_HEAD_DIM</code>). A larger head dimension returns <code>Err(OjasError::UnsupportedHeadDim)</code>; nothing is clamped or truncated. The tiny Metal training step in <code>ojas-metal/src/gpu.rs</code> keeps its own limit of 64.</p>
+</aside>
+<hr>
+<h3 id="4-dual-optimizer-architecture-ojas-cpu">4. Dual Optimizer Architecture (<code>ojas-cpu</code>) <a class="anchor" href="#4-dual-optimizer-architecture-ojas-cpu" aria-label="Link to this section">#</a></h3>
+<p>Model parameters are automatically partitioned across two distinct optimizers based on tensor rank:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph ModelParams[&#34;Model Parameter Topology&#34;]
+        Matrices[&#34;2D Weight Matrices (Rank &gt;= 2)\n- Attention Q, K, V, Out Projections\n- SwiGLU Gate, Up, Down Projections\n- Attention Gate Matrix&#34;]
+        Vectors[&#34;1D Vectors &amp; Embeddings (Rank &lt; 2)\n- Token / LM Head Embeddings\n- RMSNorm Scale Weights\n- Attention Gate Biases\n- Value Residual Lambdas&#34;]
+    end
+
+    subgraph DualOptimizers[&#34;Dual Optimizers&#34;]
+        Muon[&#34;Muon NS5 Optimizer\n- 5th-order Newton-Schulz polynomial in f32\n(nanolab runs it in bf16)\n- Nesterov momentum (0.99)\n- Zeropower orthogonalization&#34;]
+        AdamW[&#34;AdamW Optimizer\n- PyTorch single-tensor order (decay first)\n- eps = 1e-8 outside square root\n- Cosine learning rate scheduling&#34;]
+    end
+
+    Matrices --&gt; Muon
+    Vectors --&gt; AdamW</pre></figure>
+<ul>
+<li><strong>Step Counter Safety:</strong> <code>next_step</code> performs checked integer addition, returning <code>OjasError::OutOfRange</code> at <code>u64::MAX</code>.
+</li>
+<li><strong>Safe Gradient Clipping:</strong> Global gradient norm clipping includes a regularizer (<code>CLIP_GRAD_NORM_EPS = 1e-6</code>) to prevent division by zero.
+</li>
+<li><strong>Moment Protection:</strong> If an update evaluates to non-finite numbers, the step aborts before optimizer moments are modified.
+</li>
+</ul>
+<hr>
+<h3 id="5-in-process-multi-language-integration-go-ojas-capi">5. In-Process Multi-Language Integration (<code>go/</code>, <code>ojas-capi</code>) <a class="anchor" href="#5-in-process-multi-language-integration-go-ojas-capi" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Zero-IPC Overhead:</strong> Go calls the Rust engine in-process through CGO and <code>gusset</code>. Go sends paths, token ids and options; the engine holds each model on its device. The calls are <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>/<code>Resume</code>, <code>LoadTokenizer</code>/<code>Tokenize</code>/<code>Detokenize</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, and <code>Close</code> (see <a href="crate-go.html"><code>go/README.md</code></a>). The old stub <code>Step</code> opcode is retired.
+</li>
+<li><strong>Device Selection:</strong> <code>LoadOptions.Device</code> selects <code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code> or <code>DeviceWgpu</code>. <code>DeviceCPUAuto</code> automatically sizes CPU pool threads to the system thread ceiling (usable CPUs capped by cgroup quota). A GPU backend that cannot open is an error, never a CPU model. A step reads back only its loss.
+</li>
+<li><strong>One Memory Ceiling &amp; Pressure Admission:</strong> Every model&#39;s <code>BudgetBytes</code> is a child of a process-wide ceiling (default 1 GiB, or machine hard limit <code>hard_memory_limit</code> if smaller). <code>SetMemoryCeiling</code> raises it and is refused for 0, while any model is open, or if <code>bytes</code> exceeds physical RAM/cgroup limits (<code>ErrCapacity</code>). Under critical kernel memory pressure (<code>ErrPressure</code>), calls that allocate are refused before starting while <code>SaveCheckpoint</code> and <code>Free</code> continue to run.
+</li>
+<li><strong>Preflight &amp; Step Budget Tracking:</strong> Model load/new preflights parameter size against session budget before device allocation; <code>Trainer</code> preflights total state and optimizer scratch (<code>optimizer_scratch_bytes</code>), measuring high-water peak usage (<code>Budget::peak_bytes</code>) per step without memory leaks.
+</li>
+<li><strong>Panic Boundary Isolation:</strong> Rust panics on worker threads are caught by <code>catch_unwind</code>, preventing host Go process crashes. The handle is then poisoned (<code>gusset.ErrPoisoned</code>) until closed.
+</li>
+</ul>
+<figure class="diagram"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant Go as Go Application (go/api.go)
+    participant Gusset as Worker Pool (libgusset.a)
+    participant CAPI as FFI Engine (ojas-capi)
+    participant Model as ojas-model Trainer
+    participant Backend as Backend (CPU / Metal / wgpu)
+
+    Go-&gt;&gt;Gusset: ojas.TrainStep(ctx, id)
+    Gusset-&gt;&gt;CAPI: dispatch(OP_TRAIN_STEP)
+    Note over CAPI: catch_unwind catches panics (not aborts)
+    CAPI-&gt;&gt;Model: Trainer step on the session&#39;s backend
+    Model-&gt;&gt;Backend: Forward + fused CE + Backward + Muon/AdamW
+    Backend--&gt;&gt;Model: loss (the only readback)
+    Model--&gt;&gt;CAPI: StepResult{Loss, GradNorm, MatrixLR, AdamLR, Step, Tokens}
+    CAPI--&gt;&gt;Gusset: Serialized stats
+    Gusset--&gt;&gt;Go: ojas.StepResult, nil</pre></figure>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>If a worker thread panics while holding the <code>ojas-capi</code> session table lock, the next lock acquisition <strong>clears every session in the table</strong> to prevent stale state corruption. <code>catch_unwind</code> cannot catch OS process aborts, stack overflows, or infallible memory allocation panics.</p>
+</aside>
+<hr>
+<h3 id="6-target-model-nanolab-default-gpt">6. Target Model: nanolab Default GPT <a class="anchor" href="#6-target-model-nanolab-default-gpt" aria-label="Link to this section">#</a></h3>
+<p>The v1 target is the <strong>124M parameter nanolab default GPT</strong> (12 layers, width 768, 12 heads of 64, SwiGLU 2048, vocabulary 50304, tied embedding). <a href="crate-ojas-model.html"><code>ojas-model</code></a> implements it once: <code>ModelSpec::nanolab_124m</code> and a small CI <code>ModelSpec::tiny</code>, nanolab <code>state_dict</code> names (so torch exports load unchanged), the block over a <code>Graph</code> trait, and a <code>Trainer</code>. CI runs the tiny spec and a checked-in 40 KB fixture (2 layers, d 16, vocabulary 64); docs/status.md records no full 124M training run. <a href="framework-design.html"><code>docs/framework-design.md</code></a> has the design and <a href="shape-contract.html"><code>docs/shape-contract.md</code></a> the shape rules every backend shares. <code>CpuGpt</code> in <code>ojas-infer</code> is the fast CPU decoder. The Metal training step in <code>ojas-metal/src/gpu.rs</code> is a separate tiny pre-norm block at width 128 with two heads, vocabulary at most 128 and sequence at most 16. The block below is the nanolab layer:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph TransformerBlock[&#34;nanolab GPT Transformer Layer&#34;]
+        In[&#34;Input x [B, T, D]&#34;] --&gt; Norm1[&#34;RMSNorm (eps = 1e-6)&#34;]
+        
+        subgraph AttnBlock[&#34;Gated Causal Attention Mixer&#34;]
+            Norm1 --&gt; QKV[&#34;Q, K, V Projections [B, T, H, d]&#34;]
+            QKV --&gt; RoPE[&#34;Half-Split RoPE&#34;]
+            RoPE --&gt; QKN[&#34;RMS QK-Norm&#34;]
+            QKN --&gt; SDPA[&#34;Causal Scaled Dot-Product Attention&#34;]
+            
+            Norm1 --&gt; Gate[&#34;Linear Gate + Bias: sigmoid(x W_g + b_g)&#34;]
+            SDPA --&gt; GatedAttn[&#34;Per-Head Gated Attn = SDPA * Gate&#34;]
+            Gate --&gt; GatedAttn
+            
+            GatedAttn --&gt; VR[&#34;Value Residual: lerp(Attn, V0, sigmoid(vr_lambda))&#34;]
+            VR --&gt; OutProj[&#34;Output Projection&#34;]
+        end
+        
+        OutProj --&gt; ResAdd1[&#34;Residual Add (+)&#34;]
+        In --&gt; ResAdd1
+        
+        subgraph MLPBlock[&#34;SwiGLU MLP Mixer&#34;]
+            ResAdd1 --&gt; Norm2[&#34;Post-RMSNorm&#34;]
+            Norm2 --&gt; SwiGLU[&#34;SwiGLU: (x W_gate) * silu(x W_up) W_down&#34;]
+        end
+        
+        SwiGLU --&gt; ResAdd2[&#34;Residual Add (+)&#34;]
+        ResAdd1 --&gt; ResAdd2
+        ResAdd2 --&gt; Next[&#34;Next Layer Activations&#34;]
+    end</pre></figure>
+<hr>
+<h2 id="workspace-crate-catalog">Workspace Crate Catalog <a class="anchor" href="#workspace-crate-catalog" aria-label="Link to this section">#</a></h2>
+<p>Test counts are verified on this tree (adaptive lane Gate E / test suites, 2026-10-02): <code>cargo test -p &lt;crate&gt; -- --test-threads=2</code> and <code>cargo test -p &lt;crate&gt; --release --no-fail-fast -- --test-threads=1</code> with clippy <code>-D warnings</code> clean across the workspace. The Go count is <code>go test -a -tags gusset_pkgconfig ./...</code>. Details are in <a href="adaptive-resources.html"><code>docs/adaptive-resources.md</code></a> and <a href="status.html"><code>docs/status.md</code></a>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Crate</th><th>Purpose</th><th>Key Symbols</th><th>Tests Run</th></tr></thead>
+<tbody>
+<tr><td><a href="crate-ojas-core.html"><code>ojas-core</code></a></td><td>Core tensor engine &amp; invariants</td><td><code>Tensor</code> (host &amp; device, typed host storage), <code>Backend</code> (<code>optimizer_scratch_bytes</code>), <code>Numerics</code>, <code>Budget</code> (<code>peak_bytes</code>, <code>reset_peak</code>, <code>check_room</code>), <code>DType</code>, <code>OjasError</code>, <code>shapes</code> validators</td><td>113 passed, 2 ignored</td></tr>
+<tr><td><a href="crate-ojas-cpu.html"><code>ojas-cpu</code></a></td><td>High-performance CPU backend</td><td><code>CpuBackend</code>, <code>with_threads</code>, <code>with_numerics</code>, packed GEMM, Accelerate BLAS, cosine and WSD schedules, budget scratch &amp; pool stress</td><td>213 passed, 12 ignored</td></tr>
+<tr><td><a href="crate-ojas-simd.html"><code>ojas-simd</code></a></td><td>SIMD GEMM kernels</td><td>NEON GEMM, AVX2, <code>sgemm_accelerate</code></td><td>20 passed</td></tr>
+<tr><td><a href="crate-ojas-metal.html"><code>ojas-metal</code></a></td><td>Apple Silicon Metal backend</td><td><code>MetalBackend</code> (every <code>Backend</code> op; tiled attention, D ≤ 128; deferred faults)</td><td>154 passed</td></tr>
+<tr><td><a href="crate-ojas-wgpu.html"><code>ojas-wgpu</code></a></td><td>Portable WGSL backend</td><td><code>WgpuBackend</code> (device-resident WGSL compute; Muon NS5; named first fault)</td><td>124 passed, 3 ignored</td></tr>
+<tr><td><a href="crate-ojas-kernels.html"><code>ojas-kernels</code></a></td><td>Shared kernel geometry &amp; sources</td><td>Launch geometry, kernel source, NaN-safe parity harness</td><td>11 passed</td></tr>
+<tr><td><a href="crate-ojas-autograd.html"><code>ojas-autograd</code></a></td><td>Reverse-mode tape &amp; gradcheck</td><td><code>Tape</code>, <code>Var</code>, <code>backward_seeded</code>, <code>take_grad</code>, fused head, <code>central_diff</code> (f64 oracle)</td><td>67 passed</td></tr>
+<tr><td><a href="crate-ojas-model.html"><code>ojas-model</code></a></td><td>The nanolab GPT, written once</td><td><code>ModelSpec</code>, <code>param_table</code>, <code>init_params</code>, <code>Graph</code>, <code>Eval</code>, <code>block</code>, <code>Trainer</code> (<code>save</code>, <code>resume_from</code>, preflight room checks, step peak tracking)</td><td>78 passed</td></tr>
+<tr><td><a href="crate-ojas-io.html"><code>ojas-io</code></a></td><td>Formats &amp; serialization</td><td>Streaming safetensors (F32/BF16/F16/I64/U16), Checkpoint v1, <code>replace_dir_with</code></td><td>76 passed</td></tr>
+<tr><td><a href="crate-ojas-data.html"><code>ojas-data</code></a></td><td>Dataset ingestion &amp; tokenization</td><td>Token bins, seeded resumable batch sampler, GPT-2 BPE, counter-based RNG</td><td>26 passed</td></tr>
+<tr><td><a href="crate-ojas-infer.html"><code>ojas-infer</code></a></td><td>Autoregressive inference</td><td><code>CpuGpt</code> (nanolab block, GQA), KV cache, greedy and temperature/top-k/top-p sampling</td><td>40 passed</td></tr>
+<tr><td><a href="crate-ojas-qwen35.html"><code>ojas-qwen35</code></a></td><td>Qwen3.5 whole-step training provider</td><td>Config reader that refuses unsupported fields, tensor-name pre-flight, parameter groups, state on disk; tessl Metal only, not a <code>Backend</code>, empty off macOS</td><td>26 passed, 8 ignored</td></tr>
+<tr><td><a href="crate-ojas-capi.html"><code>ojas-capi</code></a></td><td>C-ABI dispatch &amp; session store</td><td><code>dispatch</code> opcodes (load, new, train, save, resume, tokenize, sample, system profile, memory ceiling), <code>DeviceCPUAuto</code>, preflight validation, typed error kinds (<code>ErrPressure</code>), panic firewall</td><td>77 passed</td></tr>
+<tr><td><a href="crate-ojas-gusset-engine.html"><code>ojas-gusset-engine</code></a></td><td>Go link archive</td><td>Umbrella staticlib <code>libgusset.a</code> for Go CGO integration</td><td>0 tests (the Go suite covers it)</td></tr>
+<tr><td><a href="crate-go.html"><code>go/</code></a></td><td>Go client SDK</td><td><code>LoadModel</code>, <code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>, <code>Resume</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, <code>Close</code>; <code>DeviceCPUAuto</code>, <code>ErrPressure</code></td><td>41 passed</td></tr>
+<tr><td><a href="crate-ojas-device.html"><code>ojas-device</code></a></td><td>Device kinds, system profile &amp; resource planning</td><td><code>Device</code>, <code>probe_system</code> (memory, CPU clusters, caches, unified memory, pressure), <code>measure_bandwidth</code> (bounded 2 shared buffers, row-split copy), <code>ResourcePolicy</code>, <code>ResourcePlan</code>, <code>GemmBlocks</code></td><td>72 passed (macOS; 66 on Linux)</td></tr>
+<tr><td><a href="crate-ojas-oracle.html"><code>ojas-oracle</code></a></td><td>Mathematical fixtures</td><td>IEEE-754 f64 oracle data fixtures</td><td>40 passed, 1 ignored</td></tr>
+<tr><td><a href="crate-ojas-cuda.html"><code>ojas-cuda</code></a></td><td>CUDA probe</td><td>One affine kernel behind feature <code>cuda</code>; not a <code>Backend</code></td><td>8 passed (feature off)</td></tr>
+<tr><td><a href="crate-ojas-hip.html"><code>ojas-hip</code></a></td><td>HIP probe</td><td>Copy probe behind feature <code>hip</code>; no kernel; not a <code>Backend</code></td><td>8 passed (feature off)</td></tr>
+</tbody></table></div>
+<p>The dropped scaffold crates <code>ojas-nn</code>, <code>ojas-optim</code> and <code>ojas-engine</code> are gone; the model layer lives in <code>ojas-model</code>.</p>
+<hr>
+<h2 id="verification--test-commands">Verification &amp; Test Commands <a class="anchor" href="#verification--test-commands" aria-label="Link to this section">#</a></h2>
+<p>The per-crate command below is how the counts above were produced (run 4: 1071 passed, 0 failed). <code>cargo clippy --workspace --all-targets -- -D warnings</code> and <code>cargo fmt --all --check</code> are clean across the workspace. <code>ojas-qwen35</code> needs macOS with Apple silicon and the sibling <code>tessl</code> checkout.</p>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code># Run one crate&#39;s suite in release mode (how docs/status.md counts are taken)
+cargo test -p ojas-model --release --no-fail-fast -- --test-threads=1
+
+# Run the complete workspace test suite in release mode
+cargo test --workspace --release -- --test-threads=1</code></pre></div>
+<h3 id="in-process-go-client-tests">In-Process Go Client Tests <a class="anchor" href="#in-process-go-client-tests" aria-label="Link to this section">#</a></h3>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code># 1. Build the umbrella Rust static library archive
+cargo build -p ojas-gusset-engine
+
+# 2. Run the Go tests with pkg-config linking against target/debug/libgusset.a
+cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfig -count=1 -timeout 15m ./...</code></pre></div>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>The <code>-a</code> flag is <strong>mandatory</strong> when testing Go bindings because Go&#39;s build cache does not monitor changes to <code>libgusset.a</code>. <code>go/gusset.pc</code> links Apple frameworks; on Linux systems use <code>PKG_CONFIG_PATH=&#34;$PWD/linux&#34;</code>.</p>
+</aside>
+<hr>
+<h2 id="documentation--web-directory">Documentation &amp; Web Directory <a class="anchor" href="#documentation--web-directory" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="https://ojas.vbcr.dev" rel="noopener"><strong>Interactive Documentation</strong></a> (<a href="../"><code>site/index.html</code></a>) — Live labs for determinism, memory budgets, device refusal, the panic firewall, and checked shapes, plus the benchmark comparison.
+</li>
+<li><a href="https://github.com/bharathvbcr/ojas/blob/main/docs/web-and-domain.md" rel="noopener"><code>docs/web-and-domain.md</code></a> — Domain architecture, CNAME routing (<code>ojas.vbcr.dev</code>), and deployment topology.
+</li>
+<li><a href="architecture.html"><code>docs/architecture.md</code></a> — Comprehensive architectural specification and memory layout.
+</li>
+<li><a href="status.html"><code>docs/status.md</code></a> — Verification run logs, test matrices, and machine profile.
+</li>
+<li><a href="adaptive-resources.html"><code>docs/adaptive-resources.md</code></a> — System profiling, adaptive resource planning, CPU topology, cache sizing, copy bandwidth, and unified memory governance.
+</li>
+<li><a href="bench-cpu-vs-torch.html"><code>docs/bench-cpu-vs-torch.md</code></a> — Benchmarks against PyTorch 2.13 CPU (tiny and larger step, single linear), plus Fast/Accelerate, Metal, and wgpu numbers taken under machine load.
+</li>
+<li><a href="op-coverage.html"><code>docs/op-coverage.md</code></a> — Mathematical specification of core operators and reference models.
+</li>
+<li><a href="checkpoint-v1.html"><code>docs/checkpoint-v1.md</code></a> — Binary checkpoint specification and framing.
+</li>
+<li><a href="dtype-policy.html"><code>docs/dtype-policy.md</code></a> — Data types, precision policies, and epsilon invariants.
+</li>
+<li><a href="backends.html"><code>docs/backends.md</code></a> — Hardware support matrix, adopted libraries, and backend dispatch.
+</li>
+<li><a href="framework-design.html"><code>docs/framework-design.md</code></a> — The approved framework layer: <code>ojas-model</code>, the <code>Graph</code> block, the trainer, names, init and the checkpoint directory.
+</li>
+<li><a href="pytorch-parity-plan.html"><code>docs/pytorch-parity-plan.md</code></a> — Ranked gaps against what training and inference need, with verified, inferred and unverified labels.
+</li>
+<li><a href="shape-contract.html"><code>docs/shape-contract.md</code></a> — One shape validator per <code>Backend</code> op, run before any budget or dispatch.
+</li>
+<li><a href="typed-storage-plan.html"><code>docs/typed-storage-plan.md</code></a> — Typed host storage (<code>f32</code>, <code>u32</code>, <code>u16</code>) and the bounded readback and load pieces.
+</li>
+<li><a href="metal-deferred-faults.html"><code>docs/metal-deferred-faults.md</code></a> — Metal&#39;s deferred-fault contract, matching wgpu.
+</li>
+<li><a href="bench-gpu-vs-torch.html"><code>docs/bench-gpu-vs-torch.md</code></a> — Metal and wgpu against PyTorch MPS at nanolab shapes.
+</li>
+<li><a href="cuda-backend-scoping.html"><code>docs/cuda-backend-scoping.md</code></a> — Design-only scoping of a CUDA backend (no kernel written).
+</li>
+<li><a href="audit-resources.html"><code>docs/audit-resources.md</code></a> — What the resource governor locks, with verified and reported rows. Earlier audits: <a href="audit-phase2.html"><code>audit-phase2</code></a>, <a href="audit-phase3.html"><code>audit-phase3</code></a>, <a href="audit-close.html"><code>audit-close</code></a>, <a href="audit-cpu-hot.html"><code>audit-cpu-hot</code></a>, <a href="audit-larger-step.html"><code>audit-larger-step</code></a>.
+</li>
+<li><a href="audit.html"><code>docs/audit.md</code></a> — Defect analysis of upstream engines and ojas defensive countermeasures.
+</li>
+<li><a href="baseline.html"><code>docs/baseline.md</code></a> — Benchmarks, toolchain baselines, and Apple Accelerate BLAS measurements.
+</li>
+</ul>
+<hr>
+<h2 id="license">License <a class="anchor" href="#license" aria-label="Link to this section">#</a></h2>
+<p>Dual-licensed under either <strong>MIT</strong> (<a href="https://github.com/bharathvbcr/ojas/blob/main/LICENSE-MIT" rel="noopener"><code>LICENSE-MIT</code></a>) or <strong>Apache-2.0</strong> (<a href="https://github.com/bharathvbcr/ojas/blob/main/LICENSE-APACHE" rel="noopener"><code>LICENSE-APACHE</code></a>) at your option.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/README.md" rel="noopener"><code>README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="audit-resources.html" rel="prev"><span>Previous</span>Resource governor audit</a>
+        <a href="crate-bench.html" rel="next" class="next"><span>Next</span>bench</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#why-ojas-a-pytorch--tensorflow-alternative">Why ojas? (A PyTorch &amp; TensorFlow Alternative)</a></li>
+<li><a href="#framework-architecture">Framework Architecture</a></li>
+<li><a href="#core-capabilities--subsystems">Core Capabilities &amp; Subsystems</a></li>
+<li class="sub"><a href="#1-general-purpose-tensor-engine-ojas-core">1. General-Purpose Tensor Engine (ojas-core)</a></li>
+<li class="sub"><a href="#2-reverse-mode-automatic-differentiation-ojas-autograd">2. Reverse-Mode Automatic Differentiation (ojas-autograd)</a></li>
+<li class="sub"><a href="#3-native--portable-hardware-backends">3. Native &amp; Portable Hardware Backends</a></li>
+<li class="sub"><a href="#4-dual-optimizer-architecture-ojas-cpu">4. Dual Optimizer Architecture (ojas-cpu)</a></li>
+<li class="sub"><a href="#5-in-process-multi-language-integration-go-ojas-capi">5. In-Process Multi-Language Integration (go/, ojas-capi)</a></li>
+<li class="sub"><a href="#6-target-model-nanolab-default-gpt">6. Target Model: nanolab Default GPT</a></li>
+<li><a href="#workspace-crate-catalog">Workspace Crate Catalog</a></li>
+<li><a href="#verification--test-commands">Verification &amp; Test Commands</a></li>
+<li class="sub"><a href="#in-process-go-client-tests">In-Process Go Client Tests</a></li>
+<li><a href="#documentation--web-directory">Documentation &amp; Web Directory</a></li>
+<li><a href="#license">License</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

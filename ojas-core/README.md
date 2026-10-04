@@ -106,7 +106,7 @@ All tensor allocations in `ojas` must secure permits from an explicit `Budget`. 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Initialized: Budget::new(max_bytes)
+    [*] --> Initialized: Budget#58;#58;new(max_bytes)
     
     Initialized --> Active: try_reserve(req) [req <= remaining]
     Active --> Active: try_reserve(req) [req <= remaining]
@@ -115,7 +115,7 @@ stateDiagram-v2
     Initialized --> Rejected: try_reserve(req) [req > remaining]
     Active --> Rejected: try_reserve(req) [req > remaining]
     
-    Rejected --> [*]: Returns Err(OjasError::CapacityExceeded)
+    Rejected --> [*]: Returns Err(OjasError#58;#58;CapacityExceeded)
 ```
 
 > [!IMPORTANT]
@@ -145,9 +145,9 @@ The `Backend` trait defines the uniform operator interface implemented by comput
 
 ```mermaid
 flowchart LR
-    HostMem["Host Tensor (Arc<Vec<u8>>)"] -->|Backend::upload()| DeviceMem["Device Tensor (DeviceBuffer)"]
-    DeviceMem -->|Tensor::to_host()| HostCopy["Host Tensor Copy"]
-    DeviceMem -.->|device_readbacks() counter increments| Counter["Readback Audit Counter"]
+    HostMem["Host Tensor (Arc<Vec<u8>>)"] -->|"Backend::upload()"| DeviceMem["Device Tensor (DeviceBuffer)"]
+    DeviceMem -->|"Tensor::to_host()"| HostCopy["Host Tensor Copy"]
+    DeviceMem -.->|"device_readbacks() counter increments"| Counter["Readback Audit Counter"]
     HostCopy --> Counter
 ```
 

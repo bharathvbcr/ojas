@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CPU hot path for one step · ojas reference</title>
+  <meta name="description" content="Read 2026-10-01. Counts are trip counts of the loops, not a profile. No cargo test was run.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/audit-cpu-hot.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/audit-cpu-hot.html">
+  <meta property="og:title" content="CPU hot path for one step · ojas reference">
+  <meta property="og:description" content="Read 2026-10-01. Counts are trip counts of the loops, not a profile. No cargo test was run.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html" class="current" aria-current="page">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Audits</p>
+      <article class="prose-ojas">
+<h1 id="cpu-hot-path-for-one-step">CPU hot path for one step <a class="anchor" href="#cpu-hot-path-for-one-step" aria-label="Link to this section">#</a></h1>
+<p>Read 2026-10-01. Counts are trip counts of the loops, not a profile. No <code>cargo test</code> was run.</p>
+<blockquote><p><strong>Superseded in part (later on 2026-10-01).</strong> File and line references below are from the tree as read then. Three things have changed since:</p>
+<ul>
+<li><strong>Host tensors hold typed values</strong> (<code>HostData</code>), not bytes. <code>contiguous_bytes</code> and <code>from_le_fill</code> are gone, kernels borrow <code>Tensor::f32_slice</code> / <code>u32_slice</code>, and in-place writes go through <code>write_f32</code> (<code>ojas-core/src/tensor.rs</code>, <a href="typed-storage-plan.html">typed-storage-plan.md</a>).
+</li>
+<li><strong>AdamW under the default Fast tier does its element arithmetic in f32.</strong> Only Exact keeps f64 moments.
+</li>
+<li><strong>On macOS a Fast GEMM of at least 2¹³ multiply-adds is one Accelerate call</strong> (<code>ojas_cpu::FAST_WHOLE_CALL_MACS</code>).
+</li>
+</ul>
+</blockquote>
+<h2 id="index">Index <a class="anchor" href="#index" aria-label="Link to this section">#</a></h2>
+<p><code>devmap status --json</code> reported <code>is_fresh: true</code>, <code>source_freshness: true</code>, <code>rebuild_required: false</code>. After the reads below, generation was 528 and no file under <code>ojas-cpu/src</code> was newer than <code>.devcouncil/codeintel/devmap.sqlite</code>. Search and explore envelopes do not re-check freshness; they say to use <code>status</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>query</th><th>truncated</th><th>shown / total</th><th>walk_incomplete</th></tr></thead>
+<tbody>
+<tr><td><code>devmap search matmul</code></td><td>false</td><td>2 / 2</td><td>not set (search)</td></tr>
+<tr><td><code>devmap search linear</code></td><td>true</td><td>10 / 17 (hidden 7)</td><td>not set</td></tr>
+<tr><td><code>devmap search attention</code></td><td>false</td><td>5 / 5</td><td>not set. No hit in <code>ojas-cpu</code>. CPU attention is named <code>causal_sdpa_*</code>.</td></tr>
+<tr><td><code>devmap search causal</code></td><td>true</td><td>8 / 24 (hidden 16)</td><td>not set. Shown page includes <code>ojas-cpu/src/attn.rs</code> <code>causal_sdpa_forward</code> [12, 38], <code>causal_sdpa_backward</code> [44, 96], <code>causal_probs</code> [139, 181].</td></tr>
+<tr><td><code>devmap search cross_entropy</code></td><td>true</td><td>8 / 13 (hidden 5)</td><td>not set. Shown page includes <code>ojas-cpu/src/pointwise.rs</code> <code>cross_entropy</code> [369, 457].</td></tr>
+<tr><td><code>devmap explore matmul</code></td><td>callers truncated false (1 / 1, <code>newton_schulz</code>); blast layers truncated false (3 / 3)</td><td></td><td>yes: walk stopped at depth 1 on edges and depth 3 on blast radius; lower bound. Repo-wide unresolved sites are not specific to this symbol.</td></tr>
+</tbody></table></div>
+<p>The body below is from the sources, not from the truncated search pages.</p>
+<h2 id="which-step">Which step <a class="anchor" href="#which-step" aria-label="Link to this section">#</a></h2>
+<p>The shape B=2, T=32, d=64, vocab=128, heads=1 is <code>regression_graph</code> in <code>ojas-cpu/tests/torch_ref.rs:319</code> (<code>one_step_wall_time</code>). It is not <code>TinyTrain</code> (<code>ojas-autograd/src/tiny.rs:76-79</code> is d=16, T=4, vocab=32).</p>
+<p>One call does, in order (<code>ojas-cpu/tests/torch_ref.rs:97-183</code>):</p>
+<ul>
+<li>RMSNorm, then <code>linear_forward</code> for Q, K, V (<code>[d, d]</code>) and for logits (<code>wo</code> is <code>[vocab, d]</code>)
+</li>
+<li>RoPE, one <code>causal_sdpa_forward</code> with shape <code>[B, 1, T, d]</code>
+</li>
+<li><code>cross_entropy_mean_forward</code> and <code>cross_entropy_mean_backward</code> (both call <code>cross_entropy</code>)
+</li>
+<li>one <code>causal_sdpa_backward</code>
+</li>
+<li><code>linear_backward</code> for <code>wo</code>, <code>wq</code>, <code>wk</code>, <code>wv</code>
+</li>
+<li>two AdamW steps (<code>wq</code> is d×d, the norm weight is length d)
+</li>
+</ul>
+<p><code>linear_forward</code> / <code>linear_backward</code> do not call <code>matmul</code>. <code>matmul</code> (<code>ojas-cpu/src/linalg.rs:11</code>) is called only from <code>newton_schulz</code> (<code>ojas-cpu/src/optim.rs:299</code>, <code>:300</code>, <code>:305</code>), three products per Newton-Schulz iteration, five iterations (<code>:297</code>). This step uses AdamW, so <code>matmul</code> does not run.</p>
+<h2 id="likely-cost-linear-backward">Likely cost: <code>linear_backward</code> <a class="anchor" href="#likely-cost-linear-backward" aria-label="Link to this section">#</a></h2>
+<p><code>ojas-cpu/src/linalg.rs:124-142</code>. Two f32 loops, reduction index increasing (<code>linalg.rs:1-5</code>):</p>
+<ul>
+<li><code>grad_x[row, inner]</code>: <code>rows * kin * nout</code>
+</li>
+<li><code>grad_w[col, inner]</code>: <code>nout * kin * rows</code>
+</li>
+</ul>
+<p>For a rank-3 input the row count is the product of every axis except the last (<code>linalg.rs:170</code>). Here that is B·T = 64, <code>kin</code> = 64.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>call</th><th>site</th><th>f32 multiply-adds</th></tr></thead>
+<tbody>
+<tr><td><code>linear_backward</code> logits <code>wo</code> <code>[128, 64]</code></td><td><code>torch_ref.rs:126</code></td><td>2 · 64 · 128 · 64 = 1,048,576</td></tr>
+<tr><td><code>linear_backward</code> Q, K, V <code>[64, 64]</code></td><td><code>torch_ref.rs:150-152</code></td><td>3 · 2 · 64³ = 1,572,864</td></tr>
+<tr><td><code>linear_forward</code> Q, K, V</td><td><code>torch_ref.rs:100-102</code>, loop <code>linalg.rs:93-101</code></td><td>3 · 64³ = 786,432</td></tr>
+<tr><td><code>linear_forward</code> logits</td><td><code>torch_ref.rs:117</code></td><td>64 · 128 · 64 = 524,288</td></tr>
+<tr><td><code>causal_sdpa_backward</code></td><td><code>attn.rs:65-91</code>, called at <code>torch_ref.rs:128</code></td><td>337,920 of the D-loop products</td></tr>
+<tr><td><code>causal_sdpa_forward</code></td><td><code>attn.rs:23-34</code>, called at <code>torch_ref.rs:115</code></td><td>135,168 of the D-loop products</td></tr>
+<tr><td><code>cross_entropy</code>, twice</td><td><code>pointwise.rs:420-451</code>, via <code>backend.rs:408</code> and <code>:429</code></td><td>2 · 3 · 64 · 128 = 49,152 exp passes</td></tr>
+</tbody></table></div>
+<p>Linear forward + backward is 3,932,160 multiply-adds. Attention forward + backward is 473,088. The logits backward alone is larger than all of attention.</p>
+<p>Each linear product also calls <code>flat</code> (<code>validate.rs:90-102</code>) and <code>get</code> (<code>validate.rs:156-163</code>) twice, so the inner loop is checked indexing, not a bare multiply-add. That does not change which function owns the trips.</p>
+<h2 id="ot-attention">O(T²) attention <a class="anchor" href="#ot-attention" aria-label="Link to this section">#</a></h2>
+<p><code>causal_sdpa_forward</code> (<code>attn.rs:23-34</code>) and <code>causal_sdpa_backward</code> (<code>attn.rs:65-91</code>) nest batch, head, query time <code>t</code>, then key <code>j</code> in <code>0..=t</code>, then head dim. With one head that is B · T · (T+1) / 2 · D per pass: 2 · 528 · 64 = 67,584. Forward does scores (<code>causal_probs</code>, <code>attn.rs:150-154</code>) and the value mix (<code>attn.rs:27-31</code>). Backward does <code>causal_probs</code> again, the <code>dprobs</code> dots (<code>attn.rs:70-76</code>), and three accumulations per <code>(j, d)</code> (<code>attn.rs:84-89</code>). Scale is <code>1/sqrt(head_dim)</code> (<code>ojas-core/src/backend.rs:55</code>, applied at <code>attn.rs:155</code>). Query <code>t</code> does not read keys past <code>t</code>.</p>
+<h2 id="cross-entropy-is-not-ovocab--hidden">Cross-entropy is not O(vocab · hidden) <a class="anchor" href="#cross-entropy-is-not-ovocab--hidden" aria-label="Link to this section">#</a></h2>
+<p><code>cross_entropy</code> (<code>pointwise.rs:369-456</code>) walks the last axis only. For logits <code>[B, T, vocab]</code> that is B·T·vocab, three times per call (max, exp-sum, probability write) and the step calls it twice. The vocab·hidden work is the logits linear: <code>wo</code> is <code>[vocab, d]</code> so <code>linear_forward</code> / <code>linear_backward</code> are O(B·T·vocab·d).</p>
+<h2 id="hazards-verified-in-the-sources">Hazards verified in the sources <a class="anchor" href="#hazards-verified-in-the-sources" aria-label="Link to this section">#</a></h2>
+<p><strong>All-ignored cross-entropy is <code>NonFinite</code>.</strong> If every target matches <code>ignore</code>, <code>n_valid == 0</code> returns <code>nonfinite</code> before the grad buffer is allocated (<code>pointwise.rs:414-416</code>). The comment at <code>pointwise.rs:366-368</code> says this is not a finite loss of 0. Both <code>cross_entropy_mean_forward</code> and <code>cross_entropy_mean_backward</code> call that function, and the backward contract says an all-ignored batch returns <code>NonFinite</code> and does not write (<code>ojas-core/src/backend.rs:368-369</code>). A non-finite exp or a non-finite loss or grad also returns <code>NonFinite</code> (<code>pointwise.rs:435-436</code>, <code>:453-454</code>).</p>
+<p><strong>AdamW refuses a non-finite f32 store.</strong> The moment update is in f64 (Exact only since the later change; Fast checks the same intermediates in f32). After <code>p += delta</code>, a finite <code>p</code> whose <code>as f32</code> is not finite returns <code>nonfinite</code> (<code>ojas-cpu/src/optim.rs:127-134</code>). The same check applies to the f32 moment stores (<code>optim.rs:137-140</code>). <code>adamw_step</code> writes param and moments only after <code>adamw</code> returns (<code>backend.rs:495-499</code>). Weight decay exactly 0 and a zero delta keep the original param bits (<code>optim.rs:124-125</code>). This step’s norm AdamW uses weight decay 0 (<code>torch_ref.rs:182</code>).</p>
+<p><strong>Byte offsets.</strong> (Superseded 2026-10-02: <code>f32_in</code> is deleted and no op copies an operand; every op reads the same window through <code>validate::f32_values</code>, <code>f32_operands</code> or <code>Shared</code>.) <code>f32_in</code> copied through <code>Tensor::to_f32_vec</code> (<code>validate.rs:36</code>). Since typed storage, that is a copy of the <code>f32_slice</code> window starting at element <code>byte_offset / 4</code> (<code>ojas-core/src/tensor.rs:333</code>, <code>:354</code>). Kernels that read in place borrow the same window through <code>validate::f32_values</code>. A non-contiguous view is refused before the kernel (<code>validate.rs:246</code>). In-place writes use <code>write_f32</code>, which goes through the private <code>writable_f32</code>, on the same window (<code>tensor.rs:425</code>, <code>:445</code>). <code>zero_extent_inf_offset_and_budget_do_not_corrupt_inputs</code> checks a <code>narrow(8)</code> window (<code>byte_offset == 8</code>) for silu and embedding, and an AdamW step on that view must leave the prefix bytes unchanged (<code>ojas-cpu/tests/redteam.rs:397-431</code>). Kernels that receive a copied <code>&amp;[f32]</code> do not see the offset; skipping the copy and reading the allocation at byte 0 would.</p>
+<p><strong><code>torch_ref</code> 1e-4 bound.</strong> <code>one_step_matches_torch_2_13_float32</code> requires the tiny graph (B=1, T=4, d=16, vocab=32) to stay within 1e-4 absolute of the frozen torch 2.13.0 f32 dump on the loss, the updated <code>wq</code>, the updated norm, and the worst of cosine multiplier, RMSNorm output, attention, logits, loss, both grads, and both updated weights (<code>torch_ref.rs:224-227</code>). <code>one_step_wall_time</code> checks the same loss bound before it times anything (<code>torch_ref.rs:300-305</code>). The larger shape is only required to be finite (<code>torch_ref.rs:338-341</code>). Reductions accumulate in f32 from index 0 (<code>linalg.rs:1-5</code>, <code>lib.rs:3-8</code>). The linear loops, causal softmax (subtract max, then exp, <code>attn.rs:149-179</code>), and the cross-entropy three-pass exp (<code>pointwise.rs:425-448</code>) are the arithmetic that bound covers.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/audit-cpu-hot.md" rel="noopener"><code>docs/audit-cpu-hot.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="audit-close.html" rel="prev"><span>Previous</span>Audit Close &amp; Liveness Verification</a>
+        <a href="audit-larger-step.html" rel="next" class="next"><span>Next</span>Larger-step section times</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#index">Index</a></li>
+<li><a href="#which-step">Which step</a></li>
+<li><a href="#likely-cost-linear-backward">Likely cost: linear_backward</a></li>
+<li><a href="#ot-attention">O(T²) attention</a></li>
+<li><a href="#cross-entropy-is-not-ovocab--hidden">Cross-entropy is not O(vocab · hidden)</a></li>
+<li><a href="#hazards-verified-in-the-sources">Hazards verified in the sources</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

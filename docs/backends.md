@@ -52,8 +52,8 @@ flowchart LR
         DeviceTen["Device Tensor (DeviceBuffer)"]
     end
 
-    HostTen -->|Backend::upload() [Explicit]| DeviceTen
-    DeviceTen -->|Tensor::to_host() [Counted Transfer]| HostTen
+    HostTen -->|"Backend::upload() [Explicit]"| DeviceTen
+    DeviceTen -->|"Tensor::to_host() [Counted Transfer]"| HostTen
     DeviceTen -.->|Triggered on download| Audit
 ```
 

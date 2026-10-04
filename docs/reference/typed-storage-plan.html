@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Typed Host Storage: Plan · ojas reference</title>
+  <meta name="description" content="Step 1 has landed and is verified. It was approved by the user and gated in a staging copy before being copied into the live tree.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/typed-storage-plan.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/typed-storage-plan.html">
+  <meta property="og:title" content="Typed Host Storage: Plan · ojas reference">
+  <meta property="og:description" content="Step 1 has landed and is verified. It was approved by the user and gated in a staging copy before being copied into the live tree.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html" class="current" aria-current="page">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
+      <article class="prose-ojas">
+<h1 id="typed-host-storage-plan">Typed Host Storage: Plan <a class="anchor" href="#typed-host-storage-plan" aria-label="Link to this section">#</a></h1>
+<p>Status (2026-10-01):</p>
+<ul>
+<li><strong>Step 1 has landed and is verified.</strong> It was approved by the user and gated in a staging copy before being copied into the live tree.
+</li>
+<li><strong>Integration run 4:</strong> Rust 1071 passed and 0 failed (<code>--no-fail-fast</code>), Go 38/38, and clippy <code>-D warnings</code> is clean (<a href="status.html"><code>status.md</code></a>).
+</li>
+<li><strong>Steps 2–4 are not started.</strong>
+</li>
+<li><strong>Rollback point:</strong> the snapshot <code>wip/framework-layer-2026-10-01</code> (c686bb0), taken before step 1.
+</li>
+<li><strong>Not yet run for step 1:</strong> <code>target-matmul/parity.sh</code> and the <code>block_ab.sh</code> / <code>sample</code> profile that the success criterion below calls for.
+</li>
+</ul>
+<h2 id="why">Why <a class="anchor" href="#why" aria-label="Link to this section">#</a></h2>
+<p>A host <code>Tensor</code> keeps its elements in a <code>Vec&lt;u8&gt;</code> (<code>ojas-core/src/tensor.rs</code>, <code>Payload::Host</code>). A CPU kernel that needs <code>&amp;[f32]</code> (Accelerate, the packed GEMM, attention) first decodes a copy with <code>to_f32_vec</code>. Every result is built in a <code>Scratch&lt;u8&gt;</code> and encoded. The macOS <code>sample</code> profile of one nanolab block, forward and backward at 6 threads, shows:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Bucket</th><th style="text-align:right">Samples</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>BLAS (Accelerate)</td><td style="text-align:right">about 3100</td><td>the GEMMs themselves</td></tr>
+<tr><td>Storage tax</td><td style="text-align:right">975</td><td><code>to_f32_vec</code> 263, <code>memmove</code> 195, <code>f32_input_list</code> 184, <code>alloc_out</code> 179, <code>madvise</code> 154</td></tr>
+<tr><td><code>softmax_rows</code></td><td style="text-align:right">365</td><td>attention</td></tr>
+</tbody></table></div>
+<p>Counts are top of stack from <code>target-matmul/block.sample.txt</code> (2026-10-01; <code>target-matmul/</code> is uncommitted scratch, so reproduce with <code>OJAS_BENCH_MODE=loop OJAS_BENCH_OPS=block OJAS_BENCH_DIRSEL=step OJAS_BENCH_SAMPLE_OUT=&lt;file&gt;</code> in <code>bench_ops.rs</code>, which runs <code>/usr/bin/sample</code>). The BLAS row sums the three hottest Accelerate frames. The storage tax is about 20–25% of active block time. That share is measured. What removing it would save is an estimate until it is measured, because some of those copies also warm the cache for the kernel that follows.</p>
+<p>Two CPU paths already avoid the copy: <code>validate::f32_words</code> reads <code>&amp;[[u8; 4]]</code> in place, and <code>pool::scoped::fill</code> writes output blocks in place. They do not help an operand that has to be a <code>&amp;[f32]</code>, and they cost every kernel a decode at each load.</p>
+<h2 id="what-does-not-change">What does not change <a class="anchor" href="#what-does-not-change" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>byte_offset</code>, <code>view</code>, <code>narrow</code>, <code>reshape</code>, <code>strides</code> and <code>storage_len</code> keep their meaning in bytes. The GPU crates bind buffers at byte offsets (<code>ojas-metal/src/gpu.rs</code>, <code>ojas-wgpu/src/backend.rs</code>).
+</li>
+<li>A view never changes dtype (<code>Tensor::view</code> copies <code>self.dtype</code>). So a storage&#39;s element type is fixed when it is created.
+</li>
+<li><code>byte_offset</code> must already be a multiple of the dtype size (<code>misaligned_byte_offset_is_refused</code>). On host storage it maps to element <code>byte_offset / dtype.size()</code> with no remainder.
+</li>
+<li><code>to_f32_vec</code>, <code>to_u32_vec</code>, <code>from_f32</code>, <code>from_u32</code> and <code>write_f32</code> keep their signatures. That covers 966 call sites across 12 crates, mostly tests, which do not change.
+</li>
+<li><code>Payload::Device</code> and <code>DeviceBuffer</code> stay as they are.
+</li>
+<li><code>#![forbid(unsafe_code)]</code> stays in the 15 crates whose <code>lib.rs</code> has it today. No new dependency is added: <code>bytemuck</code> appears in <code>Cargo.lock</code> only through wgpu.
+</li>
+</ul>
+<h2 id="api-shape-ojas-core">API shape (ojas-core) <a class="anchor" href="#api-shape-ojas-core" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>enum Payload {
+    Host(HostData),
+    Device(Arc&lt;dyn DeviceBuffer&gt;),
+}
+
+enum HostData {
+    F32(Vec&lt;f32&gt;),
+    U32(Vec&lt;u32&gt;),
+    /// Bf16 and F16; the tensor&#39;s dtype says which.
+    Half(Vec&lt;u16&gt;),
+}</code></pre></div>
+<p>New on <code>Tensor</code>:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Method</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>f32_slice(&amp;self) -&gt; Result&lt;&amp;[f32]&gt;</code></td><td>The contiguous window, borrowed. Error order matches <code>to_f32_vec</code> today: dtype, then placement, then layout, then window.</td></tr>
+<tr><td><code>u32_slice(&amp;self) -&gt; Result&lt;&amp;[u32]&gt;</code></td><td>The same for <code>U32</code>.</td></tr>
+<tr><td><code>f32_slice_mut(&amp;mut self) -&gt; Result&lt;&amp;mut [f32]&gt;</code></td><td>Requires a uniquely owned allocation, as <code>write_f32</code> does now. <code>write_f32</code> becomes <code>f32_slice_mut()?.copy_from_slice</code>.</td></tr>
+<tr><td><code>from_scratch&lt;T: HostElement&gt;(Scratch&lt;T&gt;, shape) -&gt; Result&lt;Tensor&gt;</code></td><td>Moves the vector and its reservation into the tensor without a copy. The dtype comes from <code>T</code>. This replaces <code>from_scratch(Scratch&lt;u8&gt;, shape, dtype)</code>.</td></tr>
+<tr><td><code>to_ne_bytes(&amp;self) -&gt; Result&lt;Vec&lt;u8&gt;&gt;</code></td><td>An encoded copy, for the paths that really need bytes: host-to-device uploads and dumps.</td></tr>
+</tbody></table></div>
+<p><code>HostElement</code> is a sealed trait implemented for <code>f32</code> and <code>u32</code>, so <code>Scratch&lt;T&gt;</code> (already generic, <code>ojas-core/src/budget.rs</code>) stays the only path that allocates and charges.</p>
+<p><strong><code>contiguous_bytes</code> is retired.</strong> Without <code>unsafe</code> or a new dependency, a <code>Vec&lt;f32&gt;</code> cannot be lent as <code>&amp;[u8]</code>. Its production callers move as follows:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Caller</th><th>Move to</th></tr></thead>
+<tbody>
+<tr><td><code>ojas-cpu/src/validate.rs:277</code>, <code>pointwise.rs:302</code>, <code>accum.rs:40-41</code>, <code>layout.rs:38</code>, <code>kv.rs:38,192</code></td><td><code>f32_slice</code> / <code>u32_slice</code>; drops the <code>as_chunks::&lt;4&gt;</code> decode</td></tr>
+<tr><td><code>ojas-infer/src/kernels.rs:23</code> (<code>copy_f32</code>)</td><td><code>f32_slice</code></td></tr>
+<tr><td><code>ojas-metal/src/backend.rs:605</code>, <code>ojas-wgpu/src/backend.rs:1089</code> (upload)</td><td><code>to_ne_bytes</code>; both already copy into an owned buffer</td></tr>
+<tr><td>Test helpers in <code>ojas-model</code>, <code>ojas-autograd</code>, <code>ojas-core/tests/bench_decode.rs</code></td><td><code>to_ne_bytes</code> or the typed slices</td></tr>
+</tbody></table></div>
+<p><strong><code>from_le_fill</code> is retired for the same reason.</strong> It lends <code>FnOnce(&amp;mut [u8])</code> over the new tensor&#39;s storage (<code>ojas-core/src/tensor.rs:134</code>). Its one production caller is checkpoint load, <code>ojas-model/src/checkpoint.rs:476</code>, which fills it with <code>SafeTensors::read_into(name, offset, dst)</code>. Three replacements:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Option</th><th>Extra memory</th><th>Extra pass</th><th>Where little-endian is handled</th></tr></thead>
+<tbody>
+<tr><td>Whole-tensor staging <code>Vec&lt;u8&gt;</code>, then decode</td><td>the tensor&#39;s size, charged</td><td>one</td><td><code>ojas-core</code></td></tr>
+<tr><td>Typed fill <code>FnOnce(&amp;mut [f32])</code></td><td>none</td><td>none in core; the reader decodes</td><td>every reader</td></tr>
+<tr><td><strong>Chunked reader</strong> <code>from_le_reader(shape, dtype, budget, read: FnMut(offset, &amp;mut [u8]))</code></td><td>one bounded chunk (64 KiB, <code>LE_READ_CHUNK_BYTES</code>), charged</td><td>one, chunk by chunk</td><td><code>ojas-core</code></td></tr>
+</tbody></table></div>
+<p>The recommendation is the chunked reader. <code>read_into</code> already takes an offset (<code>ojas-io/src/safetensors.rs:235</code>). The transient stays bounded however large the tensor is. Endianness stays in one place, as it is now (<code>from_le_fill</code> swaps on big-endian targets). The cost is one decode pass at checkpoint load, which is not in the profiled hot path.</p>
+<p><strong>The private encode and decode helpers</strong> all live in <code>ojas-core/src/tensor.rs</code>, and their callers move with them:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Helper</th><th>Callers</th><th>After</th></tr></thead>
+<tbody>
+<tr><td><code>write_ne_f32</code> (:809)</td><td><code>from_f32</code> (:162), <code>write_f32</code> (:208)</td><td><code>copy_from_slice</code> into <code>HostData::F32</code></td></tr>
+<tr><td><code>write_ne_u32</code> (:815)</td><td><code>from_u32</code> (:177)</td><td><code>copy_from_slice</code> into <code>HostData::U32</code></td></tr>
+<tr><td><code>decode_f32</code> (:846), <code>decode_u32</code> (:855)</td><td><code>to_f32_vec</code>, <code>to_u32_vec</code>; <code>ojas-core/tests/bench_decode.rs</code> measures them</td><td><code>to_vec</code> of the typed slice. <code>bench_decode.rs</code> is retired or retargeted at the readback decode. The unit test <code>decoders_refuse_a_ragged_window_with_their_exact_message</code> retires too: typed storage cannot hold a ragged window.</td></tr>
+</tbody></table></div>
+<p>Device readback (<code>to_host</code>) decodes the <code>Vec&lt;u8&gt;</code> from <code>DeviceBuffer::read_bytes</code> into <code>HostData</code>. For a moment both buffers are alive, twice the tensor size, and only the result is charged; today the bytes move into storage with no second buffer. <strong>Decision (peer, 2026-10-01): charge the transient and leave <code>DeviceBuffer</code> unchanged in step 1.</strong> A <code>read_f32_into</code> on the trait would widen it for Metal, wgpu, CUDA and HIP inside a change that already cannot be split. Readback is not in the profiled hot path. That trait change comes later, as its own change, and only if a readback benchmark shows the extra pass matters.</p>
+<h2 id="invariants-to-keep">Invariants to keep <a class="anchor" href="#invariants-to-keep" aria-label="Link to this section">#</a></h2>
+<p>Each of these has a test today and must still pass unchanged:</p>
+<ul>
+<li><strong>Charge before allocating.</strong> The reservation is the last field, so the vector is freed before the charge is released (<code>Scratch</code>, <code>Storage</code>).
+</li>
+<li><strong>The budget is released when the last view drops</strong> (<code>budget_is_released_when_last_view_drops</code>).
+</li>
+<li><strong>Writes need sole ownership</strong> (<code>write_requires_unique_owner_and_matching_len</code>, <code>ensure_writable_agrees_with_write_and_never_writes</code>).
+</li>
+<li><strong>Placement is reported before layout or ownership</strong> (<code>device_tensor_refuses_every_host_accessor</code>, <code>strided_device_view_reports_placement_not_layout</code>).
+</li>
+<li><strong>Window bounds and overflow</strong> (<code>randomized_views_match_reference_bounds</code>, <code>overflowing_shapes_are_errors_not_panics</code>).
+</li>
+<li><strong>Host-to-host <code>to_host</code> is a shared clone, not a readback</strong> (<code>host_to_host_is_a_shared_clone_and_not_a_readback</code>).
+</li>
+<li><strong>The Exact goldens keep their bits</strong> (<code>ojas-cpu/tests/exact_golden.rs</code>). Typed storage changes where the bytes live, not the arithmetic.
+</li>
+</ul>
+<h2 id="tests-this-plan-retires-or-rewrites">Tests this plan retires or rewrites <a class="anchor" href="#tests-this-plan-retires-or-rewrites" aria-label="Link to this section">#</a></h2>
+<p>Deleting a test needs the user&#39;s approval, so every affected test is listed here.</p>
+<p><strong>Retired (the user decides):</strong></p>
+<div class="table-wrap"><table>
+<thead><tr><th>Test</th><th>Why it goes</th><th>What still guarantees the property</th></tr></thead>
+<tbody>
+<tr><td><code>decoders_refuse_a_ragged_window_with_their_exact_message</code> (<code>ojas-core/src/tensor.rs:1060</code>)</td><td>It calls the private <code>decode_f32</code> and <code>decode_u32</code> with byte slices of length 1–13 that are not whole elements. Step 1 deletes both decoders, and typed storage cannot hold a ragged window: a <code>Vec&lt;f32&gt;</code> has whole elements only.</td><td>The type system. <code>from_le_reader</code> replaces the byte entry point and sizes every chunk from the shape. A source that runs short fails inside <code>read</code>, which drops the tensor; the test gate covers that.</td></tr>
+<tr><td><code>bench_to_f32_vec_against_push_loop</code> (<code>ojas-core/tests/bench_decode.rs:140</code>, <code>#[ignore]</code> timing benchmark)</td><td>It times the byte decode inside <code>to_f32_vec</code>, and that decode no longer exists: <code>to_f32_vec</code> becomes a slice copy.</td><td>Nothing is lost on correctness, since it is a benchmark. The alternative to retiring it is to retarget it at the <code>from_le_reader</code> decode, which is the one decode left on the host.</td></tr>
+</tbody></table></div>
+<p><strong>User decision (2026-10-01):</strong></p>
+<ul>
+<li>Step 1 is approved, and the coordinator session drives it.
+</li>
+<li><code>decoders_refuse_a_ragged_window_with_their_exact_message</code> is retired.
+</li>
+<li><code>bench_to_f32_vec_against_push_loop</code> is retargeted at the <code>from_le_reader</code> decode, not deleted.
+</li>
+</ul>
+<p><strong>Rewritten, with the op name changed:</strong> <code>tensor_decode_contract.rs:221, 238, 304, 313</code> pin <code>op: &#34;Tensor::contiguous_bytes&#34;</code>. That method is deleted, so the layout and placement errors reached through <code>to_f32_vec</code> and <code>to_u32_vec</code> now name the method that was called (see &#34;Step 1 API&#34; below). The variant, the detail text and the check order are unchanged; only the <code>op</code> string changes.</p>
+<p><strong>Rewritten, with their assertions kept:</strong></p>
+<ul>
+<li>The four <code>from_le_fill</code> tests in <code>tensor.rs</code> move to <code>from_le_reader</code>, as listed in the test gate.
+</li>
+<li><code>ojas-core/tests/tensor_decode_contract.rs</code> (9 tests) and <code>bench_decode.rs::reference_and_to_f32_vec_agree_bit_for_bit</code> build tensors from raw bytes through <code>raw_tensor</code>, which calls <code>from_scratch(Scratch&lt;u8&gt;)</code>. <code>raw_tensor</code> moves to <code>from_le_reader</code>. The bit-exact assertions, including the special f32 patterns and random bytes at many lengths, stay as they are.
+</li>
+</ul>
+<h2 id="step-1-api-exact-patch-call-sites-against-this">Step 1 API (exact; patch call sites against this) <a class="anchor" href="#step-1-api-exact-patch-call-sites-against-this" aria-label="Link to this section">#</a></h2>
+<p>Every length is a count of <strong>elements</strong>. Byte offsets (<code>byte_offset</code>, <code>view</code>, <code>narrow</code>, <code>storage_len</code>) stay in bytes. <code>storage_len</code> is the element count times <code>dtype.size()</code>.</p>
+<div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>/// Sealed. Implemented for f32 (DType::F32) and u32 (DType::U32).
+pub trait HostElement: Copy + Default + private::Sealed { const DTYPE: DType; }
+
+impl Tensor {
+    pub fn f32_slice(&amp;self) -&gt; Result&lt;&amp;[f32], OjasError&gt;;
+    pub fn u32_slice(&amp;self) -&gt; Result&lt;&amp;[u32], OjasError&gt;;
+    pub fn f32_slice_mut(&amp;mut self) -&gt; Result&lt;&amp;mut [f32], OjasError&gt;;
+    /// `scratch.len()` must equal the shape&#39;s element count; dtype is T::DTYPE.
+    pub fn from_scratch&lt;T: HostElement&gt;(scratch: Scratch&lt;T&gt;, shape: &amp;[usize]) -&gt; Result&lt;Tensor, OjasError&gt;;
+    /// Encode the contiguous window, native-endian, into `dst`, of any dtype.
+    /// `dst.len()` must equal the element count times dtype.size(). The caller
+    /// allocates `dst`, so the caller decides whether the transient is charged.
+    pub fn write_ne_bytes(&amp;self, dst: &amp;mut [u8]) -&gt; Result&lt;(), OjasError&gt;;
+    /// The same encoding into a new vector, after the window checks and
+    /// before anything is allocated (a broadcast view is refused, not sized).
+    /// Not charged; for device uploads that already reserved the device copy.
+    pub fn to_ne_bytes(&amp;self) -&gt; Result&lt;Vec&lt;u8&gt;, OjasError&gt;;
+    /// Replaces from_le_fill. `read(byte_offset, chunk)` fills `chunk`, at most
+    /// LE_READ_CHUNK_BYTES (64 KiB), with the little-endian bytes of the tensor starting at `byte_offset`.
+    /// The chunk is charged to `budget` beside the tensor and released on every path.
+    pub fn from_le_reader&lt;E: From&lt;OjasError&gt;&gt;(
+        shape: &amp;[usize], dtype: DType, budget: &amp;Budget,
+        read: impl FnMut(u64, &amp;mut [u8]) -&gt; Result&lt;(), E&gt;,
+    ) -&gt; Result&lt;Tensor, E&gt;;
+}</code></pre></div>
+<p><strong>Deleted:</strong> <code>contiguous_bytes</code>, <code>from_le_fill</code>, the byte <code>from_scratch(Scratch&lt;u8&gt;, shape, dtype)</code>, and the private <code>write_ne_*</code> and <code>decode_*</code> helpers.</p>
+<p><strong>Unchanged signatures:</strong> <code>to_f32_vec</code>, <code>to_u32_vec</code>, <code>from_f32</code>, <code>from_u32</code>, <code>write_f32</code>, <code>ensure_writable_f32</code>, <code>zeros</code> and <code>to_host</code>.</p>
+<p><strong>Error order.</strong> Each error names the method that was called (<code>&#34;Tensor::f32_slice&#34;</code>, <code>&#34;Tensor::to_f32_vec&#34;</code>, and so on), and its detail text is the same as today.</p>
+<ul>
+<li><strong>Readers:</strong> <code>f32_slice</code>, <code>u32_slice</code>, <code>to_f32_vec</code>, <code>to_u32_vec</code> and <code>write_ne_bytes</code>.
+<ol>
+<li>Dtype. <code>write_ne_bytes</code> takes any dtype, so it skips this check.
+</li>
+<li>Placement.
+</li>
+<li>Layout: <code>Shape &#34;view is not contiguous&#34;</code>.
+</li>
+<li>Window: <code>OutOfRange</code>.
+</li>
+<li>For <code>write_ne_bytes</code> only, <code>dst</code> length: <code>Shape</code>.
+</li>
+</ol>
+</li>
+<li><strong><code>f32_slice_mut</code>:</strong>
+<ol>
+<li>Dtype.
+</li>
+<li>Placement.
+</li>
+<li>Layout.
+</li>
+<li>Window overflow.
+</li>
+<li>Ownership: <code>Shape &#34;contiguous write requires a uniquely owned allocation&#34;</code>.
+</li>
+<li>Bounds.
+</li>
+</ol>
+</li>
+<li><strong><code>write_f32</code> and <code>ensure_writable_f32</code>:</strong> unchanged. The length check, <code>Shape &#34;data len {n} != shape product {m}&#34;</code>, still comes <strong>before</strong> placement. They go through a private <code>writable_f32(len)</code>, not through <code>f32_slice_mut()?.copy_from_slice</code>, which would panic on a length mismatch and reorder the errors.
+</li>
+</ul>
+<p><strong><code>to_host</code> on a device tensor:</strong></p>
+<ul>
+<li>It reserves the typed result and one read piece, <code>min(window, READBACK_CHUNK_BYTES)</code> (1 MiB), before reading.
+</li>
+<li>It reads the window with <code>read_bytes(offset + done, n)</code> one piece at a time, using the trait&#39;s existing offset and length, and decodes each piece straight into the result.
+</li>
+<li>It drops the piece&#39;s charge before returning.
+</li>
+<li>The peak charge is the window plus one piece, not twice the window. The first combined gate, which reserved a whole-window transient, failed <code>ojas-model</code>&#39;s save-headroom test. That is why the readback is chunked.
+</li>
+<li>A short read on any piece is <code>Backend</code>. The result and the piece are both released, and nothing is counted.
+</li>
+<li><code>device_readbacks</code> and <code>Budget::record_readback</code> still count one call per <code>to_host</code>.
+</li>
+</ul>
+<p><strong>Loader piece (<code>LE_READ_CHUNK_BYTES</code>): 64 KiB, not 1 MiB.</strong> It is the only transient a load adds. With 1 MiB, every tensor under 1 MiB got a full second copy, and <code>ojas-model/tests/resume_memory.rs</code> (heap-counted) failed. 64 KiB matches the save path&#39;s <code>LE_CHUNK</code>. A 1.5 GB checkpoint takes about 24k positioned reads.</p>
+<p><strong>Contract changes from this, for the user:</strong></p>
+<ul>
+<li><strong>Save headroom.</strong> It was exactly one tensor. It is now one tensor plus one readback piece (at most 1 MiB) on a device backend; the CPU backend does no readback. The test was rewritten as <code>save_fits_in_one_tensor_plus_one_readback_piece_of_host_headroom</code>, keeping its slack 0 (fits) and slack 4 (refused) pattern. For the tiny spec, whose embedding is 64 KiB, the piece is the whole embedding.
+</li>
+<li><strong>Resume heap test.</strong> The assertion is unchanged: the transient must be under half the embedding. The spec now uses vocab 1024, so the embedding is 256 KiB, four pieces. At 64 KiB the tiny embedding equals one piece, so the test could not tell one piece from a whole second copy. Measured after the change: a 64,892-byte transient against a 262,144-byte embedding.
+</li>
+<li><strong>Follow-up that tightens save to one piece of headroom.</strong> A streaming save that reads device bytes piece by piece without building a host tensor. It moves the deferred-fault sync point (<code>download</code>), so it is a separate change.
+</li>
+</ul>
+<p><strong>Call-site rules:</strong></p>
+<ul>
+<li><code>Scratch::&lt;u8&gt;::try_alloc(n_bytes)</code> followed by <code>from_scratch(.., DType::F32)</code> becomes <code>Scratch::&lt;f32&gt;::try_alloc(n_elements)</code> followed by <code>from_scratch(.., shape)</code>.
+</li>
+<li>Drop the explicit <code>* 4</code> byte factor (for example <code>pointwise.rs:84</code>, <code>backend.rs:619</code>).
+</li>
+<li>A reader that decoded <code>contiguous_bytes()?.as_chunks::&lt;4&gt;()</code> reads <code>f32_slice()?</code> or <code>u32_slice()?</code> directly.
+</li>
+</ul>
+<p><strong>Save path (<code>checkpoint.rs:312</code>):</strong> it encodes <code>f32_slice()?</code> in <code>LE_CHUNK</code> pieces into the existing bounded <code>le</code> buffer. It needs no new core API and allocates no whole-tensor transient.</p>
+<p><strong><code>compute_run_id</code> (<code>trainer.rs:296</code>):</strong> it hashes <code>to_ne_bytes()</code> of each element of <code>f32_slice()?</code>. The run id hash is byte-identical to today&#39;s.</p>
+<h2 id="migration-order">Migration order <a class="anchor" href="#migration-order" aria-label="Link to this section">#</a></h2>
+<p>Every step leaves the whole workspace compiling and the integrated gate green.</p>
+<ol>
+<li><strong>ojas-core</strong> (the peer&#39;s crate), one change:
+<ul>
+<li><code>HostData</code>, the typed accessors, generic <code>from_scratch</code> and <code>to_ne_bytes</code>;
+</li>
+<li><code>contiguous_bytes</code>, <code>from_le_fill</code> and the private encode helpers deleted, and <code>from_le_reader</code> added;
+</li>
+<li>checkpoint load (<code>ojas-model/src/checkpoint.rs</code>) moved to <code>from_le_reader</code>;
+</li>
+<li>the call sites in the table above moved in the same change, so no step leaves two storage paths.
+</li>
+<li>Already in step 1, as staged on 2026-10-01: in ojas-cpu, <code>validate::f32_words</code>/<code>u32_words</code> became <code>f32_values</code>/<code>u32_values</code> (borrowed <code>&amp;[f32]</code>/<code>&amp;[u32]</code>), <code>bytes_all_finite</code> was deleted, and every kernel that read words in place (optim, cross-entropy, embedding, exp, kv, accum, permute) reads typed values. Outputs built in a <code>Scratch</code> use <code>Scratch&lt;f32&gt;</code>. 9 files, +185 −258.
+</li>
+<li>Measured after landing (byte-storage binary against step 1, minimum of 3–5 interleaved rounds, 6 threads, load 23–27). Step 1 alone moves no time: block forward+backward 123.1 against 125.0 ms, cross-entropy, AdamW, clip and decode within noise. The in-place kernels already read the bytes without a copy, so the decode they lose was nearly free. Embedding forward (1.01 to 1.11 ms) and permute (0.130 to 0.143 ms) are about 9% slower. In the <code>sample</code> profile the output row copy in <code>pointwise::embedding_forward</code> doubled (439 to 809 samples), along with thread start-up and <code>vm_deallocate</code>. That looks like fresh output pages being faulted in on each call; it is not yet explained, and step 3 reworks output allocation. Profiles: <code>target-matmul/emb-pre-ts.sample.txt</code>, <code>emb-cur.sample.txt</code>.
+</li>
+</ul>
+</li>
+<li><strong>ojas-cpu owned copies (landed 2026-10-02):</strong>
+<ul>
+<li><code>validate::f32_in</code>, <code>f32_inputs</code>, <code>f32_input_list</code>, <code>copy_checked</code>, <code>u32_in</code> and their <code>F32V</code>/<code>U32V</code> are deleted; no op copies or charges an operand.
+</li>
+<li>The GEMM core&#39;s <code>Mat</code> borrows <code>&amp;[f32]</code>; its two passes that split across threads (parallel packing, <code>sgemm_tile</code> tiles) and the paired linear backward run on <code>pool::scoped</code>. Flash attention reads each K/V head as a slice of the tensor instead of copying it per head, and fused cross-entropy reads its row and weight blocks as views.
+</li>
+<li>Kernels that run on the persistent pool share their operands as <code>validate::Shared</code>, a clone of the tensor (one more owner of the storage) that the <code>&#39;static</code> tasks capture; the pool frees captures before <code>run</code> returns, on errors and panics too (<code>captured_buffers_are_freed_after_errors_and_panics_too</code>, <code>operands_shared_with_pool_tasks_are_released_when_the_op_returns</code>). Mul, add and the value-residual blend write straight into their output tensor (<code>validate::fill_out</code>).
+</li>
+<li>Budget contract: an op&#39;s peak is its output plus its own scratch (<code>tests/budget_inputs.rs</code> pins each one exactly; <code>ojas-cpu/README.md</code> point 6). Dropping the input charges exposed one real gap they had masked: per-row SDPA backward never charged its per-head gradient parts (<code>3 * len</code>); <code>attn.rs::backward_scratch</code> now does.
+</li>
+<li>Measured against the step-1 build (5 interleaved rounds, 6 threads, load 21–34; <code>target-matmul/ab_stage.sh</code>): mul fwd 0.88→0.45 ms and bwd 1.55→0.86, add fwd 0.33→0.19, value residual 1.3–1.5×, SiLU bwd 1.19→0.92, gate 1.1–1.2×, decode linear fwd 56→35 µs. Norms, RoPE, SDPA, Muon and the training block are flat within noise (block step median 140.7→135.7 ms).
+</li>
+<li>Landed ahead of the rest of step 2, on 2026-10-01: AdamW and <code>clip_grad_norm</code> write through <code>f32_slice_mut</code>. AdamW is a check pass then an in-place store pass; the clip scales each gradient where it is. Neither has a buffer, a copy back or a budget charge (contract change recorded in <code>ojas-cpu/README.md</code>, point 5). Same bits. Against the buffered build, 5 interleaved rounds, 6 threads: AdamW <code>[50304,768]</code> 20.8 to 11.2 ms (torch 15.5, fused 5.4), clip 25.7 to 16.0 ms (torch 27.9); details in <a href="bench-cpu-vs-torch.html"><code>bench-cpu-vs-torch.md</code></a>.
+</li>
+</ul>
+</li>
+<li><strong>ojas-cpu outputs:</strong>
+<ul>
+<li><code>alloc_out</code>, <code>F32Out</code> and <code>scoped::fill</code> targets become <code>Scratch&lt;f32&gt;</code> (done 2026-10-02: every output is a <code>Scratch</code> filled by <code>fill_out</code> / <code>fill_outs</code>, and <code>alloc_out</code> and <code>F32Out</code> are deleted);
+</li>
+<li>kernels write <code>f32</code> and hand the vector to <code>from_scratch</code> with no encode;
+</li>
+<li>this removes the <code>alloc_out</code> and <code>memmove</code> share.
+</li>
+<li>Started 2026-10-02: <code>fill_out</code> / <code>fill_outs::&lt;N&gt;</code> (validate.rs) charge each output as a zeroed <code>Scratch</code>, let a fallible pass write it, move it into the tensor and record it finite. Mul, add and the value-residual blend use it, and causal SDPA forward and backward now do: their tasks write disjoint output slices through <code>scoped::fill_parts</code> (any part type, <code>scoped::cut</code> for uneven lengths) instead of returning parts to join. Flash backward still returns its dK and dV partials, since chunks of one head add into the same rows in a fixed order. SDPA bits are unchanged (bench_ops dump at T=1024 and the per-row path at T=200 and 300, 1 and 6 threads); timing is flat within noise at load ~25 (block step 1.00 by median). Then linear, SiLU, RMSNorm and RoPE (forward and backward) and the gate forward moved to <code>fill_out</code> / <code>fill_outs</code>: <code>gemm_out</code> writes the GEMM into a caller&#39;s slice, <code>scoped::chunks_into</code> and <code>scoped::rows_into</code> fill an output with the same partitions and inline thresholds as the pool&#39;s <code>Exec::chunks</code> and <code>Exec::rows</code> (both since removed), the Muon step borrows its operands (the <code>Values</code> trait is gone) and frees each Newton–Schulz intermediate after its last reader, and the callerless <code>pointwise::elementwise</code> is deleted. Bits are unchanged (<code>bench_ops</code> dump at 6 threads for the SiLU, RMSNorm, QK-norm, RoPE and gate cases, and the block case for linear; a Muon step dump); timing is not yet measured; the SiLU and RMSNorm forward pins in <code>tests/budget_inputs.rs</code> dropped to the output alone and the output plus one <code>rstd</code> per row.
+</li>
+<li>Done 2026-10-02: the last five moved off the copy path. Gate and value-residual backward fill all their outputs from one partition (<code>scoped::chunks_into_n</code>, which also takes a short last item); the fused cross-entropy gradients are accumulated straight into their tensors (<code>fill_outs</code>; the target check moved ahead of the first charge); KV attention copies each head&#39;s rows once into its output (its heads stay on the persistent pool for decode latency); <code>accumulate_grad</code> adds into a uniquely owned accumulator with no buffer and no charge, and writes a shared one&#39;s replacement in place. <code>alloc_out</code>, <code>F32Out</code>, <code>Exec::chunks</code>, <code>join2</code>, <code>shared_operands</code>, <code>out_charge</code> and <code>finish</code> are deleted (no caller under <code>rg -uu</code>; clippy <code>-D warnings</code> clean). New exact pins in <code>tests/budget_inputs.rs</code> for all five, each refused by the earlier tree; bits identical to it (52 dump files at 1 and 6 threads under Exact and Fast, plus the <code>bench_ops</code> gate and value-residual dumps). Timing against the earlier tree (6 threads, 7 interleaved rounds, load about 4, after/before by min / median): gate backward 0.73 / 0.75, value-residual backward 0.56 / 0.58, block step 0.99 / 0.99. The earlier batches&#39; timing on their own is not measured.
+</li>
+</ul>
+</li>
+<li><strong>Cleanup:</strong>
+<ul>
+<li>delete the byte decode helpers that no longer have callers;
+</li>
+<li>before deleting each one, check it with <code>devmap_dead_symbols</code> plus <code>rg -uu</code>.
+</li>
+</ul>
+</li>
+</ol>
+<p>The GPU crates change only at their two upload sites, in step 1. Device readback keeps <code>DeviceBuffer::read_bytes</code>.</p>
+<h2 id="test-gate">Test gate <a class="anchor" href="#test-gate" aria-label="Link to this section">#</a></h2>
+<p>Before step 1 lands:</p>
+<ul>
+<li><strong>New <code>ojas-core</code> unit tests:</strong>
+<ul>
+<li>typed slices of narrowed and offset views;
+</li>
+<li>wrong-dtype accessors return <code>Dtype</code> errors;
+</li>
+<li>device tensors return <code>Placement</code>;
+</li>
+<li><code>from_scratch</code> refuses a length or reservation mismatch, and its charge is released;
+</li>
+<li><code>f32_slice_mut</code> refuses a shared allocation.
+</li>
+<li><code>from_le_reader</code>, carrying over the four <code>from_le_fill</code> tests:
+<ul>
+<li>the buffer the reader sees is zeroed;
+</li>
+<li>the tensor is dropped, and its charge released, when <code>read</code> fails;
+</li>
+<li>an over-budget shape is refused before <code>read</code> runs;
+</li>
+<li><code>U32</code> works.
+</li>
+</ul>
+</li>
+<li>New <code>from_le_reader</code> tests:
+<ul>
+<li>shapes that are not a multiple of the chunk size;
+</li>
+<li>a <code>read</code> that fails on a later chunk (a short source) drops the tensor and releases both charges;
+</li>
+<li>the chunk&#39;s charge is released on success and on error;
+</li>
+<li>a checkpoint save and load round trip keeps every bit (the existing <code>ojas-model</code> checkpoint tests).
+</li>
+</ul>
+</li>
+<li><code>to_host</code> charges the decode transient: a readback that fits the budget only without the transient is refused.
+</li>
+</ul>
+</li>
+<li><strong>The existing tensor unit tests</strong>, unchanged.
+</li>
+</ul>
+<p>After each step:</p>
+<ul>
+<li><code>target-matmul/gate.sh</code>: the integrated CPU gate, 78 test binaries plus clippy with <code>-D warnings</code>.
+</li>
+<li><code>redteam_ops_heap.rs</code> (64 KiB slack). Peak heap must not rise, and should fall in steps 2 and 3.
+</li>
+<li><code>target-matmul/parity.sh</code>: every op and the composed block against torch.
+</li>
+<li><code>ojas-infer</code> three-way parity under both numerics tiers.
+</li>
+</ul>
+<p>After steps 2 and 3, <code>target-matmul/block_ab.sh</code>: the block, forward and backward, interleaved against the frozen binary and torch. The plan only counts as successful if the storage bucket shrinks in a new <code>sample</code> profile and the block time falls.</p>
+<h2 id="open-questions">Open questions <a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Step 1 cannot be split.</strong> Typed storage cannot lend <code>&amp;[u8]</code> without <code>unsafe</code>, so <code>contiguous_bytes</code> cannot survive alongside it, and there is no green state in between. One change touches <code>ojas-core</code>, <code>ojas-cpu</code>, <code>ojas-infer</code>, <code>ojas-model</code>, <code>ojas-metal</code>, <code>ojas-wgpu</code> and about 15 test sites, in a crate this session does not own. It needs a snapshot first, and either the peer making the change or a quiet window agreed with the peer.
+</li>
+<li><strong>Half precision.</strong> Should Bf16 and F16 get host kernels later? Nothing builds a half-precision host tensor today except <code>Tensor::zeros</code>, so <code>HostData::Half</code> only holds data. If host half kernels come, they use <code>Vec&lt;u16&gt;</code> with explicit conversion, the same as now.
+</li>
+</ol>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/typed-storage-plan.md" rel="noopener"><code>docs/typed-storage-plan.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="status.html" rel="prev"><span>Previous</span>ojas Status &amp; Verification Matrix</a>
+        <a href="bench-cpu-vs-torch.html" rel="next" class="next"><span>Next</span>CPU Reference versus PyTorch CPU Benchmarks</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#why">Why</a></li>
+<li><a href="#what-does-not-change">What does not change</a></li>
+<li><a href="#api-shape-ojas-core">API shape (ojas-core)</a></li>
+<li><a href="#invariants-to-keep">Invariants to keep</a></li>
+<li><a href="#tests-this-plan-retires-or-rewrites">Tests this plan retires or rewrites</a></li>
+<li><a href="#step-1-api-exact-patch-call-sites-against-this">Step 1 API (exact; patch call sites against this)</a></li>
+<li><a href="#migration-order">Migration order</a></li>
+<li><a href="#test-gate">Test gate</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

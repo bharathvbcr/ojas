@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-oracle · ojas reference</title>
+  <meta name="description" content="Golden numbers that ojas is checked against, with no Python or PyTorch at test time. Two kinds:">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-oracle.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-oracle.html">
+  <meta property="og:title" content="ojas-oracle · ojas reference">
+  <meta property="og:description" content="Golden numbers that ojas is checked against, with no Python or PyTorch at test time. Two kinds:">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html" class="current" aria-current="page">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-oracle">ojas-oracle <a class="anchor" href="#ojas-oracle" aria-label="Link to this section">#</a></h1>
+<p>Golden numbers that ojas is checked against, with no Python or PyTorch at test time. Two kinds:</p>
+<ul>
+<li><strong><code>fixtures/rms_norm_f64.json</code></strong>: one hand-written fp64 RMSNorm row (<code>rms_norm_fixture</code>, <code>tests/load.rs</code>).
+</li>
+<li><strong><code>fixtures/tiny/</code></strong>: nanolab&#39;s GPT at a tiny size, exported from torch on CPU in fp32, plus the ojas <code>BatchSampler</code> window starts the torch side replays. This is framework-design.md §9 item 13. The model parity gates in <code>src/parity.rs</code> run against these once ojas-model implements <code>ParityModel</code> (see &#34;Enabling the model parity tests&#34;).
+</li>
+</ul>
+<p>Python is used only to <em>generate</em> files (<code>python/</code>, a reference oracle); nothing in the crate runs it.</p>
+<h2 id="the-tiny-fixtures">The tiny fixtures <a class="anchor" href="#the-tiny-fixtures" aria-label="Link to this section">#</a></h2>
+<p>Model: 2 layers, d=64, 4 heads × 16, SwiGLU hidden <strong>192</strong>, V=256, T=32, tied embedding, QK-norm, RoPE base 10000, per-head gate, value residual. Batches: B=2, K=2, seed 1337, from <code>tokens.bin</code>.</p>
+<p>The hidden width is 192, not 128: nanolab derives it as <code>_swiglu_hidden(d_model)</code> (config.py:364-368), which is 192 at d=64, and it is not a <code>Config</code> field. 192 also matches framework-design.md §10.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th style="text-align:right">Bytes</th><th>Content</th></tr></thead>
+<tbody>
+<tr><td><code>tokens.bin</code></td><td style="text-align:right">16,384</td><td>8,192 synthetic ids, headerless LE u16 (<code>golden.py token-bin</code>)</td></tr>
+<tr><td><code>batch_starts.json</code></td><td style="text-align:right">20,047</td><td>40 steps × K=2 × B=2 window starts and their tokens, from <code>ojas_data::BatchSampler</code></td></tr>
+<tr><td><code>init.safetensors</code></td><td style="text-align:right">500,800</td><td>nanolab init, seed 1337 (<code>export_init.py --tiny</code>)</td></tr>
+<tr><td><code>forward.safetensors</code></td><td style="text-align:right">69,632</td><td>x, y (step 0, micro 0), logits <code>[2,32,256]</code>; loss and checksums in metadata</td></tr>
+<tr><td><code>grads_init.safetensors</code></td><td style="text-align:right">501,244</td><td>d(loss/K)/dθ at the init, same batch</td></tr>
+<tr><td><code>grads_step5.safetensors</code></td><td style="text-align:right">500,572</td><td>the same at the f32 trace&#39;s step-5 parameters</td></tr>
+<tr><td><code>trace_ns5_f32.safetensors</code></td><td style="text-align:right">505,280</td><td>40 steps with NS5 in f32: per-step losses, grad norms, LR multipliers; parameters after step 5</td></tr>
+<tr><td><code>trace_ns5_bf16.safetensors</code></td><td style="text-align:right">505,000</td><td>the same with stock bf16 NS5</td></tr>
+<tr><td><code>lr_schedules.json</code></td><td style="text-align:right">2,502</td><td>cosine and WSD multipliers, 20 steps, tiny and §10 acceptance settings</td></tr>
+</tbody></table></div>
+<p>Total about 3.1 MB. Every safetensors file carries <code>__metadata__[&#34;ojas.oracle&#34;]</code>: generator, torch and Python versions, the nanolab commit, CPU / 1 thread / deterministic, the full nanolab <code>Config</code>, and the fixture&#39;s own numbers.</p>
+<p><strong>Why two gradient sets.</strong> At the init <code>o_proj</code> and <code>ffn.down</code> are zero, so every attention and FFN gradient upstream of them is exactly zero: only <code>tok_emb</code>, both <code>o_proj</code>, both <code>down</code> and <code>norm_f</code> have gradients (<code>tests/golden.rs</code> pins this). <code>grads_step5</code> is taken where every parameter has moved, so the gradient gate exercises the whole block. Layer 0&#39;s <code>vr_lambda</code> has no gradient in torch (no earlier values to blend) and is absent from both files.</p>
+<p><strong>Trace semantics.</strong> Each step is nanolab&#39;s train.py:305-344 (schedule multiplier from the pre-increment step, K micro-batches scaled by 1/K before backward, clip 1.0, Muon + AdamW with nanolab&#39;s defaults, warmup 4, cosine over 40). Three losses are recorded per step: <code>mean_loss</code> (the mean micro-batch loss, which is what ojas reports and what the gates use), <code>micro_loss</code>, and <code>nanolab_loss</code>, which is what train.py:348 logs: the <strong>last</strong> micro-batch&#39;s loss, not the mean.</p>
+<p><strong>The NS5 patch (pytorch-parity-plan F8).</strong> ojas&#39;s Muon iterates Newton-Schulz in f32; nanolab&#39;s casts to bf16 (optim.py:46). For <code>trace_ns5_f32</code>, <code>nanolab.optim.zeropower_via_newtonschulz5</code> is replaced, for the duration of the run, by a copy whose only change is <code>X = G.float()</code> in place of <code>X = G.bfloat16()</code>. <code>Muon._orthogonalize</code> looks the function up as a module global at call time (optim.py:84), so the copy is what runs; a call counter (<code>ns5_calls</code> in the metadata) proves it. <code>trace_ns5_bf16</code> is stock nanolab. Over the first 5 steps the two differ by up to 1.8e-4 nats, more than the 1e-4 trace gate; over 40 steps by up to 1.1e-3.</p>
+<p><strong>Cross-check against nanolab itself.</strong> <code>golden.py</code> runs nanolab&#39;s real <code>train()</code> for 5 steps through its <code>batchers=</code> seam (with the replayed batches) for both NS5 variants, and refuses to write unless the weights are bit-identical to its own step-5 snapshot and the logged losses and grad norms are equal.</p>
+<h2 id="the-batch-start-handoff">The batch-start handoff <a class="anchor" href="#the-batch-start-handoff" aria-label="Link to this section">#</a></h2>
+<p>nanolab samples windows with replacement from torch&#39;s RNG; ojas samples without replacement through a Feistel permutation (<code>ojas-data/src/sampler.rs</code>). Neither reproduces the other, so ojas is the source and torch replays it:</p>
+<ol>
+<li><code>examples/dump_batch_starts.rs</code> opens the bin with ojas-data&#39;s <code>TokenBin</code>, draws (step, micro, row) starts with <code>BatchSampler</code>, and checks every micro-batch: the walked starts read through <code>TokenBin::read_into</code> must equal what <code>next_batch</code> returned. It writes <code>ojas-batch-starts-v1</code> JSON: <code>starts</code> (flat, <code>(step*K + micro)*B + row</code>), optionally <code>rows</code> (each window&#39;s T+1 tokens), the bin&#39;s length, header size and FNV-1a 64.
+</li>
+<li><code>python/batches.py</code> reads the bin exactly as nanolab&#39;s <code>Batcher</code> does (<code>np.memmap</code> LE u16, <code>data[s:s+T+1]</code>, int64, <code>x = seq[:, :-1]</code>, <code>y = seq[:, 1:]</code>) at those starts, after checking the bin&#39;s length and hash. <code>batches.py verify</code> compares every replayed window byte for byte with the dump&#39;s <code>rows</code>. <code>StartReplay</code> also implements nanolab&#39;s <code>Batcher</code> contract, so it plugs into <code>train(cfg, batchers=...)</code>.
+</li>
+</ol>
+<p>For the §10 acceptance run (124M, FineWeb), pass <code>--format fineweb</code> to the example; the dump records <code>bin_header_bytes: 1024</code> and the replay skips it.</p>
+<p>The example uses ojas-data through ojas-oracle&#39;s dev-dependency. Its unit tests run under <code>cargo test -p ojas-oracle</code> (<code>[[example]] test = true</code>).</p>
+<h2 id="the-ojasspec-json-ojas-spec-v1">The <code>ojas.spec</code> JSON (<code>ojas-spec-v1</code>) <a class="anchor" href="#the-ojasspec-json-ojas-spec-v1" aria-label="Link to this section">#</a></h2>
+<p>Stored in <code>__metadata__[&#34;ojas.spec&#34;]</code> of every exported <code>model.safetensors</code>. Field names follow ojas-infer&#39;s <code>GptConfig</code>. One flat object; unknown keys are an error.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Key</th><th>Type</th><th>Meaning (nanolab source)</th></tr></thead>
+<tbody>
+<tr><td><code>format</code></td><td>string</td><td><code>&#34;ojas-spec-v1&#34;</code></td></tr>
+<tr><td><code>arch</code></td><td>string</td><td><code>&#34;nanolab-gpt&#34;</code></td></tr>
+<tr><td><code>vocab</code></td><td>int</td><td><code>vocab_size</code></td></tr>
+<tr><td><code>n_embd</code></td><td>int</td><td><code>d_model</code></td></tr>
+<tr><td><code>n_layer</code></td><td>int</td><td><code>n_layer</code></td></tr>
+<tr><td><code>n_head</code></td><td>int</td><td><code>n_head</code></td></tr>
+<tr><td><code>n_kv_head</code></td><td>int</td><td><code>n_kv_head</code> (= <code>n_head</code> for MHA)</td></tr>
+<tr><td><code>head_dim</code></td><td>int</td><td><code>head_dim</code>, even</td></tr>
+<tr><td><code>hidden</code></td><td>int</td><td>SwiGLU width, <code>_swiglu_hidden(d_model)</code></td></tr>
+<tr><td><code>max_seq</code></td><td>int</td><td><code>block_size</code></td></tr>
+<tr><td><code>rope_base</code></td><td>float</td><td><code>rope_base</code> (10000.0)</td></tr>
+<tr><td><code>rms_eps</code></td><td>float</td><td>RMSNorm eps, 1e-6 (mixers.py:50; not a Config field)</td></tr>
+<tr><td><code>tie_embeddings</code></td><td>bool</td><td><code>lm_head</code> is <code>tok_emb</code></td></tr>
+<tr><td><code>qk_norm</code></td><td>bool</td><td>per-head RMSNorm on q and k</td></tr>
+<tr><td><code>gated_attention</code></td><td>bool</td><td>per-head sigmoid gate on the attention output</td></tr>
+<tr><td><code>value_residual</code></td><td>bool</td><td>blend layer 0&#39;s values with <code>sigmoid(vr_lambda)</code></td></tr>
+</tbody></table></div>
+<p>The exporter refuses any nanolab config ojas does not implement (another mixer, FFN, norm or position scheme, μP, loops, dropout, an attention-scale ablation), so the booleans are always true today; they are explicit so a reader can refuse rather than assume. Floats are JSON numbers (<code>1e-06</code>), so a reader needs an f64-capable JSON parser: <code>ojas_io::json</code> keeps integers exact and floats as f64. <code>ojas_oracle::spec::parse_spec</code> is a reference reader.</p>
+<p>Tensor names are nanolab <code>state_dict</code> keys (§2): <code>_orig_mod.</code> stripped, <code>lm_head.weight</code> not stored (the exporter first checks it is bit-equal to <code>tok_emb.weight</code>), all F32.</p>
+<h2 id="regenerating">Regenerating <a class="anchor" href="#regenerating" aria-label="Link to this section">#</a></h2>
+<p>Interpreter: <code>/opt/homebrew/opt/python@3.14/bin/python3.14</code> (Python 3.14.7, torch 2.13.0, numpy 2.4.6, safetensors 0.8.0), the one <code>bench/</code> uses. nanolab is read from <code>/Users/bharath/Code/research/MLSystemsLab</code> (<code>OJAS_NANOLAB_ROOT</code> overrides) with bytecode writing off. CPU only.</p>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code># every tiny fixture, in order (about 7 s)
+bash ojas-oracle/python/regen_tiny.sh
+# the same twice, failing unless every file is byte-identical
+bash ojas-oracle/python/check_determinism.sh 2
+
+# one step at a time
+PY=/opt/homebrew/opt/python@3.14/bin/python3.14
+F=ojas-oracle/fixtures/tiny
+$PY ojas-oracle/python/golden.py token-bin --out $F/tokens.bin
+CARGO_TARGET_DIR=target-oracle cargo run --release -p ojas-oracle \
+    --example dump_batch_starts -- \
+    --bin $F/tokens.bin --seed 1337 --steps 40 --batch 2 --accum 2 --seq 32 \
+    --out $F/batch_starts.json --rows
+$PY ojas-oracle/python/batches.py verify --starts $F/batch_starts.json --bin $F/tokens.bin
+$PY ojas-oracle/python/export_init.py --tiny --seed 1337 --out $F/init.safetensors
+$PY ojas-oracle/python/golden.py fixtures --dir $F
+
+# the 124M init (0.5 GB): a generated artifact, gitignored, never a fixture
+$PY ojas-oracle/python/export_init.py --out ojas-oracle/generated/124m/model.safetensors --report
+cargo test -p ojas-oracle --release --test golden -- --ignored   # checks it against §2</code></pre></div>
+<p><code>export_init.py</code> checks every row of §2&#39;s init table before writing: exact zeros and ones, N(0, 0.02) to 6 standard errors, and each parameter&#39;s optimizer group against nanolab&#39;s own <code>_split_params</code>.</p>
+<h2 id="parity-gates">Parity gates <a class="anchor" href="#parity-gates" aria-label="Link to this section">#</a></h2>
+<p>Pinned in <code>src/parity.rs</code> and by <code>tests/parity_gates.rs</code>:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Gate</th><th>Tolerance</th><th>Runner</th></tr></thead>
+<tbody>
+<tr><td>Forward loss</td><td>1e-5 relative</td><td><code>forward_parity</code></td></tr>
+<tr><td>Forward logits</td><td>1e-5 normwise relative</td><td><code>forward_parity</code></td></tr>
+<tr><td>Gradients, per parameter</td><td>1e-4 normwise relative; exact 0 where torch&#39;s is 0</td><td><code>grads_parity(GradsAt::Init / Step5)</code></td></tr>
+<tr><td>5-step trace, mean loss per step</td><td>|Δ| ≤ 1e-4 nats</td><td><code>trace_parity</code></td></tr>
+<tr><td>5-step trace, parameters</td><td>1e-4 normwise relative per tensor</td><td><code>trace_parity</code></td></tr>
+<tr><td>§10 CI curve, 40 steps</td><td>|Δ| ≤ 2e-4 (steps 1–10), ≤ 2e-3 after; ends ≥ 1 nat below ln V</td><td><code>curve_parity</code></td></tr>
+<tr><td>LR multipliers</td><td>1e-12 relative</td><td><code>tests/ojas_cpu_parity.rs</code> (runs today against ojas-cpu)</td></tr>
+</tbody></table></div>
+<h2 id="enabling-the-model-parity-tests">Enabling the model parity tests <a class="anchor" href="#enabling-the-model-parity-tests" aria-label="Link to this section">#</a></h2>
+<p>ojas-oracle depends on no model crate. ojas-model (items 8–9) takes <code>ojas-oracle</code> as a dev-dependency (no cycle: ojas-oracle depends on ojas-core only) and implements <code>ojas_oracle::parity::ParityModel</code> in its tests:</p>
+<div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>// ojas-model/tests/oracle_parity.rs
+use ojas_oracle::golden::{GradsAt, TensorSet, TokenBatch, TrainSetup};
+use ojas_oracle::parity::{self, ParityModel};
+
+struct Cpu; // wraps Eval&lt;CpuBackend&gt; / Trainer&lt;CpuBackend&gt;, Numerics::Exact
+
+impl ParityModel for Cpu {
+    fn forward(&amp;mut self, params: &amp;TensorSet, batch: &amp;TokenBatch)
+        -&gt; Result&lt;(f32, Vec&lt;f32&gt;), ojas_core::OjasError&gt; { /* load params, Eval forward */ }
+    fn grads(&amp;mut self, params: &amp;TensorSet, batch: &amp;TokenBatch, seed: f32)
+        -&gt; Result&lt;TensorSet, ojas_core::OjasError&gt; { /* Tape, backward_seeded(loss, seed) */ }
+    fn train(&amp;mut self, params: &amp;TensorSet, setup: &amp;TrainSetup, steps: usize)
+        -&gt; Result&lt;(Vec&lt;f64&gt;, TensorSet), ojas_core::OjasError&gt; {
+        /* Trainer with setup&#39;s optimizer/schedule; BatchSampler over setup.token_bin */
+    }
+}
+
+#[test] fn forward() { parity::forward_parity(&amp;mut Cpu).unwrap(); }
+#[test] fn grads_init() { parity::grads_parity(&amp;mut Cpu, GradsAt::Init).unwrap(); }
+#[test] fn grads_step5() { parity::grads_parity(&amp;mut Cpu, GradsAt::Step5).unwrap(); }
+#[test] fn trace() { parity::trace_parity(&amp;mut Cpu).unwrap(); }
+#[test] fn curve() { parity::curve_parity(&amp;mut Cpu).unwrap(); }</code></pre></div>
+<p>The runners choose the fixture, the batch and the tolerance; the adapter only runs the model. <code>TrainSetup</code> carries the seed, B, K, T, schedule and every optimizer constant from the trace&#39;s nanolab <code>Config</code>, and the path of <code>tokens.bin</code>; the trainer draws its own batches with ojas-data&#39;s <code>BatchSampler</code>, which is what <code>batch_starts.json</code> recorded.</p>
+<h2 id="rmsnorm-fixture">RMSNorm fixture <a class="anchor" href="#rmsnorm-fixture" aria-label="Link to this section">#</a></h2>
+<p><code>fixtures/rms_norm_f64.json</code> computes, in f64, <code>y_i = x_i / sqrt(mean(x²) + 1e-6) · w_i</code>. The JSON reader (<code>ojas_io::json</code> with the fixture limits) refuses anything outside RFC 8259 (leading zeros, <code>+</code>, <code>NaN</code>), numbers that overflow f64, duplicate keys, nesting deeper than 16, input over 4 MiB, and trees over a byte budget proportional to the input; the fixture policy also refuses <code>null</code> and string escapes.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-oracle/README.md" rel="noopener"><code>ojas-oracle/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-model.html" rel="prev"><span>Previous</span>ojas-model</a>
+        <a href="crate-ojas-qwen35.html" rel="next" class="next"><span>Next</span>ojas-qwen35</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#the-tiny-fixtures">The tiny fixtures</a></li>
+<li><a href="#the-batch-start-handoff">The batch-start handoff</a></li>
+<li><a href="#the-ojasspec-json-ojas-spec-v1">The ojas.spec JSON (ojas-spec-v1)</a></li>
+<li><a href="#regenerating">Regenerating</a></li>
+<li><a href="#parity-gates">Parity gates</a></li>
+<li><a href="#enabling-the-model-parity-tests">Enabling the model parity tests</a></li>
+<li><a href="#rmsnorm-fixture">RMSNorm fixture</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

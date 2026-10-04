@@ -141,6 +141,17 @@ function showToast(msg) {
       { title: 'Status and limits', category: 'Guide', href: '#doc-status', tab: null, tags: 'status limits nanolab gpt bf16 cuda today' },
       { title: 'Contributing and frozen invariants', category: 'Guide', href: '#doc-contributing', tab: null, tags: 'contributing invariants ci_local clippy fmt tests' },
     ];
+    // Reference pages come from the index scripts/sitegen writes, so search cannot drift from them.
+    fetch((document.body.getAttribute('data-root') || '') + 'assets/reference-index.json')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => list.forEach((e) => searchCatalog.push({
+        title: e.title,
+        category: 'Reference · ' + e.cat,
+        href: 'reference/' + e.slug + '.html',
+        tab: null,
+        tags: (e.desc + ' ' + e.heads.join(' ')).toLowerCase(),
+      })))
+      .catch(() => {});
     function samePath(a, b) {
       const norm = (p) => (p.endsWith('/') ? p + 'index.html' : p);
       return norm(a) === norm(b);

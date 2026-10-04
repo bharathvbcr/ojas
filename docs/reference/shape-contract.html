@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shape contract: ojas_core::shapes · ojas reference</title>
+  <meta name="description" content="Owner: ojas-core/src/shapes.rs. One pure validator per Backend op, _dims(...). Each reads only dtype and shape metadata and returns a dims struct for the kernels.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/shape-contract.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/shape-contract.html">
+  <meta property="og:title" content="Shape contract: ojas_core::shapes · ojas reference">
+  <meta property="og:description" content="Owner: ojas-core/src/shapes.rs. One pure validator per Backend op, _dims(...). Each reads only dtype and shape metadata and returns a dims struct for the kernels.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html" class="current" aria-current="page">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="shape-contract-ojas-coreshapes">Shape contract: <code>ojas_core::shapes</code> <a class="anchor" href="#shape-contract-ojas-coreshapes" aria-label="Link to this section">#</a></h1>
+<p><strong>Owner:</strong> <code>ojas-core/src/shapes.rs</code>. One pure validator per <code>Backend</code> op, <code>*_dims(...)</code>. Each reads only dtype and shape metadata and returns a dims struct for the kernels.</p>
+<p><strong>Rule:</strong> CPU, Metal and wgpu call the validator <strong>before</strong> they reserve budget, copy inputs, check placement or dispatch. A malformed call then returns the same variant, op name and detail on every backend, whatever the budget holds.</p>
+<p><strong>Status (2026-10-01):</strong></p>
+<ul>
+<li><strong>Written and tested in core.</strong> <code>cargo test -p ojas-core</code> passes (75 unit tests), and clippy <code>-D warnings</code> is clean.
+</li>
+<li><strong>Backend adoption:</strong>
+<ul>
+<li><strong>CPU (reported by the ojas-cpu session):</strong> adopted for every op except seven that its heavy-ops lane is still rewriting: embedding forward and backward, CE forward and backward, clip, AdamW and Muon.
+<ul>
+<li>Gate: <code>ojas-cpu/tests/shape_first.rs</code>, 103 malformed cases across three conditions (Budget 0, a cap that fits the inputs only, NaN present), 244 runs in all. Each must match the validator&#39;s Debug text with 0 bytes charged. It failed 165 of 244 before adoption and passes after.
+</li>
+<li>The local checks were deleted.
+</li>
+</ul>
+</li>
+<li><strong>wgpu (wgpu round 5, lane-reported; the tests were re-run by the lane after its final edit):</strong> every op adopted.
+<ul>
+<li>Gate: <code>ojas-wgpu/tests/shape_first.rs</code> covers every op in four modes: Budget 0, a cap that fits the inputs only, a NaN operand, and host operands. It failed 130 of 453 runs before adoption and passes after.
+</li>
+<li>The local checks were deleted (<code>backend.rs</code> +251/−440).
+</li>
+<li>One test was re-pointed: <code>norm.rs</code> <code>qk_norm_refuses_in_the_composition_order</code>. A refused k now records nothing.
+</li>
+<li>Residue: in <code>permute</code>, contiguity is now checked before dtype.
+</li>
+</ul>
+</li>
+<li><strong>Metal (Metal round 6; verified: ojas-metal 154/154 serial):</strong> every op adopted.
+<ul>
+<li>Gate: <code>ojas-metal/tests/shape_first.rs</code>, in the same four modes. It failed 160 of 477 runs before adoption and passes 477 of 477 after.
+</li>
+<li>The local shape helpers were deleted (<code>backend.rs</code> net −104 lines).
+</li>
+<li>D9 (grad shape before the head-dim cap) and D16 (CPU&#39;s rank-0 text) now hold on Metal.
+</li>
+<li><code>rms_pair</code>&#39;s k-validation fallback is removed: a refused k records nothing, as on wgpu. Four rows of <code>norms.rs</code> were re-pointed.
+</li>
+<li>Unpinned order change: qk-norm with k on another <code>MetalBackend</code> returns that error with nothing recorded.
+</li>
+</ul>
+</li>
+<li><strong>All three backends now call the validators first.</strong> <code>shape_errors_match_the_cpu_classification</code> holds by construction.
+</li>
+<li><strong>CPU (complete, reported by the ojas-cpu session):</strong> the seven heavy ops followed, with <code>ojas-cpu/tests/shape_first_heavy.rs</code> as their gate.
+</li>
+</ul>
+</li>
+<li><strong>Evidence:</strong> the per-backend line references below come from the shape-contract lane&#39;s snapshot. The backends were being edited at the time, so treat the line numbers as approximate.
+</li>
+</ul>
+<h2 id="check-order-inside-every-validator">Check order inside every validator <a class="anchor" href="#check-order-inside-every-validator" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Each operand, in argument order:</strong>
+<ul>
+<li>dtype, else <code>Dtype</code>;
+</li>
+<li>no zero axis, else <code>Shape &#34;empty tensor&#34;</code>;
+</li>
+<li>element and byte counts fit <code>usize</code>, else <code>OutOfRange</code>.
+</li>
+</ul>
+</li>
+<li><strong>Scalars the layout depends on:</strong> only RMSNorm <code>eps</code>, else <code>NonFinite</code>.
+</li>
+<li><strong>Ranks and cross-operand equalities</strong>, in the op&#39;s documented order, else <code>Shape</code>.
+</li>
+<li><strong>Derived output sizes</strong> fit <code>usize</code>, else <code>OutOfRange</code>.
+</li>
+</ol>
+<h2 id="not-in-the-validators-stay-in-each-backend-after-the-validator">Not in the validators (stay in each backend, after the validator) <a class="anchor" href="#not-in-the-validators-stay-in-each-backend-after-the-validator" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>placement and contiguity;
+</li>
+<li>NaN and infinity scans;
+</li>
+<li>token-id and target ranges, and the all-ignored check;
+</li>
+<li>optimizer and clip scalars (<code>check_adamw</code>, the Muon config check, <code>clip_scale</code>);
+</li>
+<li>device limits: <code>METAL_MAX_HEAD_DIM</code>, 32-bit index caps, workgroup and shared-memory limits.
+</li>
+</ul>
+<h2 id="decisions">Decisions <a class="anchor" href="#decisions" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Question</th><th>Decision</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Variant for count overflow</td><td><strong><code>OutOfRange</code></strong></td><td>All three backends and <code>shape_product</code> already return it. The lane first wrote <code>Shape</code>, as briefed; that was changed before adoption so no observable variant moves.</td></tr>
+<tr><td>2</td><td>Validator before or after the placement check</td><td><strong>Before</strong></td><td>A call that is both malformed and on the wrong device then reports Shape or Dtype on every backend.</td></tr>
+<tr><td>3</td><td>Op names for <code>rms_qk_norm_*</code></td><td><strong>Keep <code>rms_norm_*</code></strong></td><td>All three backends report it today, and <code>ojas-metal/tests/norms.rs</code> pins it.</td></tr>
+<tr><td>4</td><td>Contiguity</td><td><strong>Stays in the backends</strong>, before any budget charge</td><td><code>ojas-cpu/tests/redteam_linear.rs</code> pins that order. When operand 0 is non-contiguous and operand 1 has the wrong dtype, the result changes from Shape to Dtype.</td></tr>
+<tr><td>5</td><td>Optimizer config vs budget</td><td><strong>Config before budget</strong> (applies to CPU, D14)</td><td>Metal and wgpu already do this. It is not a shape rule, so it is not in <code>shapes.rs</code>.</td></tr>
+<tr><td>6</td><td>wgpu <code>clip_grad_norm</code> <code>max_norm</code> timing</td><td><strong>After the norm</strong> (D13; wgpu moves it)</td><td>CPU and Metal agree.</td></tr>
+</tbody></table></div>
+<h2 id="where-the-backends-disagree-today-resolved-by-adopting-the-validators">Where the backends disagree today (resolved by adopting the validators) <a class="anchor" href="#where-the-backends-disagree-today-resolved-by-adopting-the-validators" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Rule</th><th>CPU</th><th>Metal</th><th>wgpu</th><th>Canonical</th></tr></thead>
+<tbody>
+<tr><td>D2</td><td>Budget charged before cross-operand shape checks</td><td>yes (input copies)</td><td>no</td><td>no</td><td>No charge before validation</td></tr>
+<tr><td>D3</td><td>NaN scan before cross-operand shape checks</td><td>yes</td><td>no</td><td>no</td><td>Shape first</td></tr>
+<tr><td>D5</td><td>Embedding operand order</td><td>ids first</td><td>table first</td><td>table first</td><td>Argument order (table first)</td></tr>
+<tr><td>D6</td><td>Cross-entropy operand order</td><td>targets first</td><td>logits first</td><td>logits first</td><td>Argument order (logits first)</td></tr>
+<tr><td>D7</td><td>AdamW and Muon operand order</td><td>param first</td><td>param first</td><td>grad first</td><td>Param first</td></tr>
+<tr><td>D8</td><td>rms_norm bwd: grad check vs eps and layout</td><td>grad first</td><td>grad first</td><td>layout first</td><td>Grad first</td></tr>
+<tr><td>D9</td><td>sdpa bwd: grad check vs head-dim cap</td><td>grad first</td><td>cap first</td><td>grad first</td><td>Grad first (Metal changes from UnsupportedHeadDim to Shape)</td></tr>
+<tr><td>D10</td><td>gate bwd: grad check vs layout</td><td>grad first</td><td>grad first</td><td>layout first</td><td>Grad first</td></tr>
+<tr><td>D11</td><td>embedding bwd: id range vs grad shape</td><td>id range first</td><td>shape first</td><td>id range first</td><td>Shape first (validator), then id range</td></tr>
+<tr><td>D12</td><td>wgpu id lookup before the table rank check</td><td>—</td><td>—</td><td>lookup first</td><td>Validator first</td></tr>
+<tr><td>D15</td><td>head_dim &gt; u32::MAX</td><td>OutOfRange</td><td>Unsupported</td><td>OutOfRange</td><td>Device limit; stays in the backends</td></tr>
+<tr><td>D16</td><td>Rank-0 detail text</td><td>specific</td><td><code>&#34;rank 0 input&#34;</code></td><td>specific</td><td>CPU&#39;s text</td></tr>
+<tr><td>D17</td><td><code>permute</code> with rank 0 or a zero axis</td><td>accepted</td><td>refused</td><td>refused</td><td>Out of scope (<code>permute_output_shape</code>); listed in pytorch-parity-plan.md residue</td></tr>
+</tbody></table></div>
+<h2 id="adoption-gate-every-backend">Adoption gate (every backend) <a class="anchor" href="#adoption-gate-every-backend" aria-label="Link to this section">#</a></h2>
+<p>No existing test asserts that a malformed call returns Shape under <code>Budget::new(0)</code>, but that is the invariant this contract exists for. Each adoption lane adds a per-op sweep for two cases:</p>
+<ul>
+<li>a malformed call under <code>Budget::new(0)</code>;
+</li>
+<li>a malformed call under a cap that fits the inputs but not the output.
+</li>
+</ul>
+<p>Both must return the validator&#39;s variant. The sweep must fail before adoption wherever D2 or D3 applies.</p>
+<h2 id="not-yet-covered">Not yet covered <a class="anchor" href="#not-yet-covered" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>accumulate_grad</code> has no validator. Use <code>residual_add_forward_dims</code> semantics, but name the op <code>accumulate_grad</code>.
+</li>
+<li><code>permute</code> keeps its own <code>permute_output_shape</code>.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/shape-contract.md" rel="noopener"><code>docs/shape-contract.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="op-coverage.html" rel="prev"><span>Previous</span>Op Coverage — nanolab Default GPT</a>
+        <a href="baseline.html" rel="next" class="next"><span>Next</span>p0-env Baseline</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#check-order-inside-every-validator">Check order inside every validator</a></li>
+<li><a href="#not-in-the-validators-stay-in-each-backend-after-the-validator">Not in the validators (stay in each backend, after the validator)</a></li>
+<li><a href="#decisions">Decisions</a></li>
+<li><a href="#where-the-backends-disagree-today-resolved-by-adopting-the-validators">Where the backends disagree today (resolved by adopting the validators)</a></li>
+<li><a href="#adoption-gate-every-backend">Adoption gate (every backend)</a></li>
+<li><a href="#not-yet-covered">Not yet covered</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

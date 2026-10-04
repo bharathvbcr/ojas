@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-device · ojas reference</title>
+  <meta name="description" content="ojas-device provides hardware device enumeration, host resource probing, memory planning (ResourcePolicy), and strict error propagation for hardware accelerators across ojas.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-device.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-device.html">
+  <meta property="og:title" content="ojas-device · ojas reference">
+  <meta property="og:description" content="ojas-device provides hardware device enumeration, host resource probing, memory planning (ResourcePolicy), and strict error propagation for hardware accelerators across ojas.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html" class="current" aria-current="page">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-device">ojas-device <a class="anchor" href="#ojas-device" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-device</code> provides hardware device enumeration, host resource probing, memory planning (<code>ResourcePolicy</code>), and strict error propagation for hardware accelerators across <strong>ojas</strong>.</p>
+<hr>
+<h2 id="device-enumeration--fallback-policy">Device Enumeration &amp; Fallback Policy <a class="anchor" href="#device-enumeration--fallback-policy" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Enumeration[&#34;Hardware Device Kinds&#34;]
+        CPU[&#34;Device::Cpu&#34;]
+        Metal[&#34;Device::Metal&#34;]
+        Vulkan[&#34;Device::Vulkan&#34;]
+        CUDA[&#34;Device::Cuda&#34;]
+        HIP[&#34;Device::Hip&#34;]
+    end
+
+    subgraph ErrorTaxonomy[&#34;DeviceError (Zero Silent Fallbacks!)&#34;]
+        NotCompiled[&#34;DeviceError::NotCompiled\n(Requested accelerator feature disabled at compile time)&#34;]
+        NoDevice[&#34;DeviceError::NoDevice\n(Target hardware absent on host machine)&#34;]
+        Mismatch[&#34;DeviceError::DeviceMismatch\n(Operation dispatched across incompatible device buffers)&#34;]
+    end
+
+    CUDA -.-&gt;|Feature cuda disabled| NotCompiled
+    HIP -.-&gt;|Feature hip disabled| NotCompiled
+    Metal -.-&gt;|Non-Apple hardware| NoDevice</pre></figure>
+<hr>
+<h2 id="host-probing--resource-planning">Host Probing &amp; Resource Planning <a class="anchor" href="#host-probing--resource-planning" aria-label="Link to this section">#</a></h2>
+<p><code>probe_system()</code> reads the machine once: memory, CPU topology, caches, memory architecture and pressure. Every field is a <code>MemoryReport</code>: <code>Known(n)</code> when a probe read it, <code>Unknown</code> when it could not. Nothing is filled in from a table.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Field</th><th>macOS</th><th>Linux</th></tr></thead>
+<tbody>
+<tr><td>RAM total / available</td><td><code>hw.memsize</code>; free + inactive pages</td><td><code>/proc/meminfo</code> <code>MemTotal</code>, <code>MemAvailable</code></td></tr>
+<tr><td>cgroup memory limit and room</td><td>none</td><td>tightest <code>memory.max</code> (v2) or <code>memory.limit_in_bytes</code> (v1) over the cgroup <strong>and its ancestors</strong>; room is the limit less the working set (usage less <code>inactive_file</code> page cache)</td></tr>
+<tr><td>CPUs: logical, physical, usable</td><td><code>hw.logicalcpu</code>, <code>hw.physicalcpu</code>, <code>available_parallelism</code></td><td><code>/sys/devices/system/cpu/online</code>, <code>topology/core_id</code>, <code>available_parallelism</code></td></tr>
+<tr><td>Core clusters (fastest first)</td><td><code>hw.perflevelN.*</code> (name, cores, L1d, L2, CPUs per L2)</td><td>Intel <code>cpu_core</code>/<code>cpu_atom</code>, else arm64 <code>cpu_capacity</code>, else one cluster</td></tr>
+<tr><td>L3, cache line, page</td><td><code>hw.l3cachesize</code> (Apple silicon reports none), <code>hw.cachelinesize</code>, <code>hw.pagesize</code></td><td><code>cache/index*</code>, <code>sysconf(_SC_PAGESIZE)</code></td></tr>
+<tr><td>cgroup CPU quota</td><td>none</td><td>tightest <code>cpu.max</code> / <code>cpu.cfs_quota_us</code> over the cgroup and its ancestors</td></tr>
+<tr><td>Memory architecture</td><td><code>Unified</code> on Apple silicon (<code>hw.optional.arm64</code>)</td><td><code>Unknown</code> (a GPU probe can say more)</td></tr>
+<tr><td>Memory pressure</td><td><code>kern.memorystatus_vm_pressure_level</code></td><td><code>Unknown</code></td></tr>
+</tbody></table></div>
+<p>Windows and other targets build and report <code>Unknown</code> for everything except the usable CPU count.</p>
+<p>Copy bandwidth is <strong>not</strong> measured at startup. <code>measure_bandwidth(&amp;BandwidthConfig)</code> copies one buffer into another on 1 and on N threads and keeps the fastest of several repetitions. Allocation is fallible and capped at 64 MiB per buffer for every caller (two buffers, shared by the threads; <code>for_profile</code> may use less, down to 1/16 of available memory), wall time is capped, and the 1-minute load average is recorded so a figure taken on a busy machine reads as a lower bound. <code>cached_bandwidth</code> keeps the first successful measurement for the process; a refusal is not kept.</p>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph Probe[&#34;probe_system()&#34;]
+        Mem[&#34;HostMemory\n(RAM, cgroup limit and room)&#34;]
+        Cpu[&#34;CpuTopology\n(clusters, caches, quota)&#34;]
+        Arch[&#34;MemoryArchitecture\nMemoryPressure&#34;]
+    end
+    BW[&#34;measure_bandwidth()\n(opt-in, bounded)&#34;]
+    GPU[&#34;MemoryProbe\n(e.g. ojas_metal::MetalMemory)&#34;]
+    subgraph Plan[&#34;ResourcePlan::derive(policy, profile, probes)&#34;]
+        Budget[&#34;budget_bytes = caller budget\ncut by every known limit&#34;]
+        Threads[&#34;thread_ceiling, fast_threads,\nmemory_bound_threads (with_bandwidth)&#34;]
+        Room[&#34;device_room; shared_budget\non unified memory&#34;]
+        Cache[&#34;cache: CacheBudget\n→ GemmBlocks::derive&#34;]
+    end
+    Probe --&gt; Plan
+    BW --&gt; Plan
+    GPU --&gt; Plan</pre></figure>
+<p>The plan never widens the caller&#39;s request:</p>
+<ul>
+<li><code>budget_bytes</code> is the caller&#39;s budget cut by total RAM, available RAM, the cgroup limit, and the cgroup room. Under <code>MemoryPressure::Critical</code>, <code>budget_bytes</code> is cut to <code>0</code> (critical pressure admits no new allocations).
+</li>
+<li>On unified memory a GPU&#39;s allocations come out of the same RAM as the CPU&#39;s. Such a device&#39;s <code>device_room</code> is at most <code>budget_bytes</code>, and <code>shared_budget</code> is set: charge the CPU backend and that GPU backend to <strong>one</strong> <code>Budget</code>, not one each.
+</li>
+<li>Thread counts are advice. <code>thread_ceiling</code> is the usable CPU count capped at <code>CPU_THREAD_CEILING</code> and cut to the cgroup CPU quota (rounded down to whole CPUs, at least 1). <code>fast_threads</code> is the fastest cluster&#39;s count, and <code>memory_bound_threads</code> is unknown until a bandwidth measurement is supplied.
+</li>
+<li><code>GemmBlocks::derive(&amp;plan.cache, mr, nr, elem_bytes)</code> sizes <code>kc</code> from the smallest L1, <code>mc</code> from the smallest L2 share, and <code>nc</code> from the L3 (simplified from Low et al., 2016). <code>nc</code> is <code>None</code> when no L3 is reported, as on Apple silicon: the L2 already holds the A blocks, so it is not used for the B panel. <code>nc</code> assumes one B panel shared by the cores on the L3; a kernel whose threads each pack their own must divide it by those threads. It is a recommendation; no kernel switches to it without an explicit constructor and a benchmark.
+</li>
+</ul>
+<hr>
+<h2 id="the-never-fall-back-guarantee">The &#34;Never Fall Back&#34; Guarantee <a class="anchor" href="#the-never-fall-back-guarantee" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>No Silent CPU Fallbacks:</strong> Most legacy machine learning frameworks silently route missing accelerator workloads onto the host CPU when a GPU is misconfigured or missing. This masks operational deployment errors and produces catastrophic latency spikes.</p>
+<p>In <code>ojas</code>, selecting <code>Device::Cuda</code> or <code>Device::Hip</code> when that runtime is disabled returns <code>Err(DeviceError::NotCompiled)</code> immediately. Calling an unsupported operation on a device returns <code>Err(DeviceError::DeviceMismatch)</code>.</p>
+</aside>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p><code>ojas-device</code> defines device kinds and memory policies; it does <strong>not</strong> open GPU contexts or implement compute backends. Driver initialization and backend kernels reside in <code>ojas-metal</code>, <code>ojas-wgpu</code>, <code>ojas-cuda</code>, and <code>ojas-hip</code>.</p>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-device/README.md" rel="noopener"><code>ojas-device/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-data.html" rel="prev"><span>Previous</span>ojas-data</a>
+        <a href="crate-ojas-gusset-engine.html" rel="next" class="next"><span>Next</span>ojas-gusset-engine</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#device-enumeration--fallback-policy">Device Enumeration &amp; Fallback Policy</a></li>
+<li><a href="#host-probing--resource-planning">Host Probing &amp; Resource Planning</a></li>
+<li><a href="#the-never-fall-back-guarantee">The &#34;Never Fall Back&#34; Guarantee</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

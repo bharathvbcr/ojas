@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Framework layer design (approved; items 1–13 landed) · ojas reference</title>
+  <meta name="description" content="Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from pytorch-parity-plan.md §7.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/framework-design.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/framework-design.html">
+  <meta property="og:title" content="Framework layer design (approved; items 1–13 landed) · ojas reference">
+  <meta property="og:description" content="Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from pytorch-parity-plan.md §7.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html" class="current" aria-current="page">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="framework-layer-design-approved-items-113-landed">Framework layer design (approved; items 1–13 landed) <a class="anchor" href="#framework-layer-design-approved-items-113-landed" aria-label="Link to this section">#</a></h1>
+<p>Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from <a href="pytorch-parity-plan.html"><code>pytorch-parity-plan.md</code></a> §7.</p>
+<p><strong>Labels:</strong> <strong>V</strong> means the cited line was read in that pass. <strong>I</strong> means inferred.</p>
+<p><strong>Paths:</strong> relative to the ojas root. <code>nanolab/</code> means <code>/Users/bharath/Code/research/MLSystemsLab/nanolab/</code>.</p>
+<p><strong>Goal:</strong> a Go or Rust caller can train and serve the nanolab GPT without Python. The model is 12 layers, d=768, 12×64 heads, SwiGLU 2048, V=50304, with a tied embedding, QK-norm, RoPE, a per-head gate and a value residual. It trains with Muon NS5 on 2D hidden weights plus AdamW, clip 1.0, and a warmup with cosine or WSD schedule.</p>
+<p><strong>Status:</strong> approved and implemented across items 1–13 of §9. The nanolab GPT is defined once in <code>ojas-model</code>, trained across CPU, Metal and wgpu, checkpointed to safetensors directories, and driven through the in-process Go API (<code>go/</code>). The <code>CpuBackend</code> default is <code>Numerics::Fast</code>.</p>
+<p>The design depends on neither default: every bitwise test sets <code>Numerics::Exact</code> explicitly.</p>
+<h2 id="1-crate-boundary">1. Crate boundary <a class="anchor" href="#1-crate-boundary" aria-label="Link to this section">#</a></h2>
+<p><strong>New crate: <code>ojas-model</code>.</strong> It owns:</p>
+<ul>
+<li>the nanolab model definition, written once: spec, parameter names, init and the block;
+</li>
+<li>the device trainer;
+</li>
+<li>the training-checkpoint glue;
+</li>
+<li>the model half of the device decoder.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>Crate</th><th>Change</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>ojas-core</td><td>Trait additions (§8); blanket <code>Backend</code> impls for <code>&amp;B</code> and <code>Arc&lt;B&gt;</code></td><td>Trait owner</td></tr>
+<tr><td>ojas-autograd</td><td><code>Tape::backward_seeded</code>, <code>take_grad</code>, <code>linear_cross_entropy</code></td><td>Tape owner. It stays op-level, with no model code</td></tr>
+<tr><td>ojas-cpu</td><td><code>WsdSchedule</code> and <code>enum LrSchedule</code> beside <code>CosineSchedule</code> (<code>schedule.rs</code> V). Native kernels for the new trait ops</td><td>Already owns the schedules and <code>optim_group</code> (<code>train.rs:28-60</code> V). That policy is reused, so there is no second registry</td></tr>
+<tr><td>ojas-io</td><td>Streaming <code>SafeTensorsWriter</code>, <code>SafeTensors::from_file(File)</code>, <code>replace_dir_with</code></td><td>Today&#39;s writer takes borrowed slices of every tensor (<code>safetensors.rs</code> V), so the whole model must be on the host at once</td></tr>
+<tr><td>ojas-model (new)</td><td>spec, names, init; the <code>Graph</code> trait; the block; <code>Eval&lt;B&gt;</code>; <code>Trainer&lt;B&gt;</code>; the checkpoint directory</td><td>Composition layer above autograd, io and data</td></tr>
+<tr><td>ojas-infer</td><td>Depends on ojas-model. Keeps sampling and the fast CPU <code>forward_token</code>. <code>GptConfig</code> and <code>GptWeights</code> re-export ojas-model types. Adds <code>DeviceDecoder&lt;B&gt;</code></td><td>One owner of the block. <code>forward_sequence</code> is replaced by <code>ojas_model::Eval</code></td></tr>
+<tr><td>ojas-capi</td><td>Adds ojas-model, ojas-io and ojas-data as dependencies. Drops its duplicate <code>MAX_HEADER_BYTES</code> (<code>load.rs:13</code> V; the original is in ojas-io)</td><td>Real Load, Train, Save and Generate</td></tr>
+</tbody></table></div>
+<p>The dependency graph is <code>core ← cpu ← autograd ← model → {io, data}</code>, then <code>model ← infer</code>, and <code>capi → {model, infer, io, data, cpu, wgpu, metal, device}</code>. There are no cycles, and the trainer&#39;s math stays on <code>Backend</code>.</p>
+<h2 id="2-one-block-two-executors-names-and-init">2. One block, two executors; names and init <a class="anchor" href="#2-one-block-two-executors-names-and-init" aria-label="Link to this section">#</a></h2>
+<p><code>ojas_model::Graph</code> is a trait with <code>type V: Clone</code>. It has one method per op: embedding, linear, rms_norm, rope, permute, sdpa, cached_attn, gate, vres, silu, mul, add, reshape and lin_ce. Two types implement it:</p>
+<ul>
+<li><code>impl&lt;B: Backend&gt; Graph for Tape&lt;B&gt;</code> (<code>V = Var</code>) records for training.
+</li>
+<li><code>Eval&lt;B&gt;</code> (<code>V = Tensor</code>) runs eagerly with no record.
+</li>
+</ul>
+<p><code>fn block&lt;G: Graph&gt;(…)</code> follows nanolab <code>Attention.forward</code> (<code>mixers.py:280-345</code> V):</p>
+<ol>
+<li>norm1, then the q/k/v projections.
+</li>
+<li>Per-head QK RMSNorm, then RoPE in <code>[B,T,H,D]</code>.
+</li>
+<li>Value-residual blend in <code>[B,T,H,D]</code>.
+</li>
+<li>Permute to <code>[B,H,T,D]</code>, causal SDPA, permute back.
+</li>
+<li>Gate (it reads <code>h</code>), then o_proj and the residual.
+</li>
+<li>norm2, SwiGLU, residual.
+</li>
+</ol>
+<p>That is the same order as <code>CpuGpt</code> and <code>ojas-autograd/tests/multihead.rs</code>. <code>CpuGpt::forward_token</code> keeps its host KV cache, and a parity test binds it to <code>Eval&lt;CpuBackend&gt;</code>. Training v1 refuses GQA, because nanolab&#39;s default is MHA.</p>
+<p>Safetensors names are nanolab <code>state_dict</code> keys, so torch exports load unchanged.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Name (layer i)</th><th>Shape</th><th>Init (nanolab)</th><th>Group</th></tr></thead>
+<tbody>
+<tr><td><code>tok_emb.weight</code> (tied <code>lm_head</code>)</td><td>[50304,768]</td><td>N(0, 0.02)</td><td>AdamW, wd 0, lr 6e-4</td></tr>
+<tr><td><code>blocks.i.norm1.weight</code>, <code>.norm2.weight</code>, <code>norm_f.weight</code></td><td>[768]</td><td>ones</td><td>AdamW wd 0</td></tr>
+<tr><td><code>blocks.i.mixer.{q,k,v}_proj.weight</code></td><td>[768,768]</td><td>N(0, 0.02)</td><td>Muon</td></tr>
+<tr><td><code>blocks.i.mixer.o_proj.weight</code></td><td>[768,768]</td><td><strong>zeros</strong> (<code>model.py:239-240,263-271</code> V)</td><td>Muon</td></tr>
+<tr><td><code>blocks.i.mixer.{q,k}_norm.weight</code></td><td>[64]</td><td>ones</td><td>AdamW</td></tr>
+<tr><td><code>blocks.i.mixer.gate.weight</code></td><td>[12,768]</td><td><strong>N(0, 0.02)</strong>: <code>self.apply(_init_weights)</code> runs after <code>mixers.py:245</code> zeroed it (<code>model.py:212,236</code> V)</td><td>Muon</td></tr>
+<tr><td><code>blocks.i.mixer.gate.bias</code></td><td>[12]</td><td>zeros</td><td>AdamW</td></tr>
+<tr><td><code>blocks.i.mixer.vr_lambda</code></td><td>[1]</td><td>zeros (sigmoid 0.5). Layer 0&#39;s has no grad and is skipped</td><td>AdamW</td></tr>
+<tr><td><code>blocks.i.ffn.{gate,up}.weight</code></td><td>[2048,768]</td><td>N(0, 0.02)</td><td>Muon</td></tr>
+<tr><td><code>blocks.i.ffn.down.weight</code></td><td>[768,2048]</td><td><strong>zeros</strong> (<code>model.py:290-293</code> V)</td><td>Muon</td></tr>
+</tbody></table></div>
+<p><strong>Init notes:</strong></p>
+<ul>
+<li>nanolab has no scaled-residual init. It zero-inits <code>o_proj</code> and <code>down</code> instead.
+</li>
+<li>Writing stores only <code>tok_emb</code>. Loading accepts a <code>lm_head.weight</code> only when it is bit-equal to <code>tok_emb</code>.
+</li>
+<li>The <code>_orig_mod.</code> prefix is stripped.
+</li>
+<li>The spec goes in <code>__metadata__[&#34;ojas.spec&#34;]</code>.
+</li>
+<li>Each parameter is drawn from <code>CounterRng</code> seeded with <code>seed ^ fnv1a(name)</code>, through Box-Muller, so the init does not depend on parameter order.
+</li>
+<li>torch&#39;s RNG stream is not reproduced. Parity runs load torch&#39;s init from safetensors instead.
+</li>
+</ul>
+<h2 id="3-training-step-on-any-backend-device-resident">3. Training step on any <code>Backend</code>, device-resident <a class="anchor" href="#3-training-step-on-any-backend-device-resident" aria-label="Link to this section">#</a></h2>
+<p><code>Trainer&lt;B&gt;</code> holds:</p>
+<ul>
+<li>uniquely owned params;
+</li>
+<li>Muon momentum or AdamW m and v, per parameter;
+</li>
+<li><code>grad_acc</code>;
+</li>
+<li><code>step</code>;
+</li>
+<li><code>LrSchedule</code>;
+</li>
+<li>the sampler and its <code>DataCursor</code>;
+</li>
+<li><code>state: Ready | Poisoned</code>.
+</li>
+</ul>
+<p>One <code>step()</code>:</p>
+<ol>
+<li><code>mult = schedule.multiplier(step)</code>. This is the pre-increment step, as in <code>HybridOptimizer</code> and nanolab <code>train.py:305-344</code> (clip at 336, <code>opt.step</code> at 343).
+</li>
+<li>Memory preflight: <code>budget.check_room(self.preflight_bytes(rows, k))</code> ensures room for optimizer scratch and previously measured step peak before any forward execution. <code>budget.reset_peak()</code> restarts the high-water mark for this step.
+</li>
+<li><p>Per micro-batch (K of them):</p>
+<ul>
+<li><code>tape.clear()</code>, then a leaf per param. A resident tensor uploads as a shared clone.
+</li>
+<li>Forward through 12 blocks, then the fused head CE (§5).
+</li>
+<li><code>backward_seeded(loss, 1/K)</code>, then <code>take_grad</code> → <code>accumulate_grad</code> into trainer-owned buffers.
+</li>
+<li>Sum the loss on the device.
+</li>
+</ul>
+<p>This scales before summing, like nanolab. The CPU <code>GradAccumulator</code> divides after summing instead. The two give identical bits for power-of-two K (I).</p>
+</li>
+<li><code>tape.clear()</code> before any optimizer call, because in-place updates need unique ownership.
+</li>
+<li><code>clip_grad_norm(&amp;mut accs, 1.0)</code>. On wgpu this is a sync point that reports any pending fault before it scales. Any error up to here leaves params, moments, step and cursor untouched. Policy <code>Abort</code> keeps the cursor; <code>SkipBatch</code> advances it and returns <code>E_NONFINITE</code>.
+</li>
+<li>Pre-apply check: <code>budget.check_room(self.optimizer_scratch)</code> checks room for optimizer allocations with gradients alive, preventing out-of-memory errors from poisoning parameter states during the update.
+</li>
+<li>Each parameter steps with <code>muon_ns5_step</code> or <code>adamw_step</code>, using the <code>ojas_cpu::optim_group</code> constants.
+</li>
+<li><code>backend.sync()?</code> (T1). wgpu reports optimizer faults only at the next sync. An error from step 7 or 8 marks the trainer <code>Poisoned</code>: later Step and Save calls refuse until a resume from checkpoint.
+</li>
+<li>Commit: <code>step = next_step(step)?</code>, advance the cursor, download the loss once, record the measured step peak (<code>record_peak</code>), and return the mean micro-loss.
+</li>
+</ol>
+<p><strong>Other properties:</strong></p>
+<ul>
+<li><strong>Readbacks:</strong> one tensor readback per step, the loss.
+</li>
+<li><strong>Preflight Allocation Bounds:</strong> <code>Trainer</code> creation computes <code>state_bytes(&amp;table, &amp;spec, cfg.seq_len)</code> and verifies room via <code>check_room</code> before allocating slots.
+</li>
+<li><strong>Data:</strong> comes from the Feistel <code>BatchSampler</code>, with no stored RNG.
+</li>
+<li><strong>Optimizer reference:</strong> <code>HybridOptimizer::step</code> (Exact, serial) is the bitwise reference for the optimizer phase on CPU.
+</li>
+</ul>
+<h2 id="4-checkpoint">4. Checkpoint <a class="anchor" href="#4-checkpoint" aria-label="Link to this section">#</a></h2>
+<p>The full state is about 1.144 GB (1.066 GiB):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Part</th><th style="text-align:right">Size</th></tr></thead>
+<tbody>
+<tr><td>Weights</td><td style="text-align:right">494.6 MB</td></tr>
+<tr><td>Muon momentum</td><td style="text-align:right">340.2 MB</td></tr>
+<tr><td>AdamW m+v for the embedding</td><td style="text-align:right">309.1 MB</td></tr>
+<tr><td>AdamW m+v for vectors</td><td style="text-align:right">0.2 MB</td></tr>
+</tbody></table></div>
+<p>That exceeds <code>MAX_CHECKPOINT_BYTES = 1 GiB</code>. <code>CheckpointV1</code> also holds every payload as a <code>Vec&lt;u8&gt;</code>.</p>
+<p><strong>Decision:</strong> a checkpoint directory. The 1 GiB cap stays as a sanity cap on the small state file.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Content</th></tr></thead>
+<tbody>
+<tr><td><code>model.safetensors</code></td><td>F32 weights with nanolab names. Metadata: <code>ojas.spec</code>, <code>ojas.step</code>, <code>ojas.run</code>. Torch and <code>Load</code> can read it directly</td></tr>
+<tr><td><code>optim.safetensors</code></td><td><code>muon.&lt;name&gt;</code>, <code>adam_m.&lt;name&gt;</code>, <code>adam_v.&lt;name&gt;</code></td></tr>
+<tr><td><code>state.ojck</code></td><td>Checkpoint v1 with empty tensor sections: config JSON, <code>tokenizer_hash</code>, <code>git_sha</code>, <code>step</code>, <code>data_cursor</code>, <code>rng_state</code></td></tr>
+</tbody></table></div>
+<p><strong>Writing</strong> streams one tensor at a time, writes into a sibling temp directory, fsyncs, then renames.</p>
+<p><strong>Reading:</strong></p>
+<ol>
+<li>Read <code>state.ojck</code>.
+</li>
+<li>Open both safetensors files.
+</li>
+<li>Check that the step and run agree across all three files.
+</li>
+<li>Check that names, shapes and dtypes match exactly.
+</li>
+<li>Stream each tensor and upload it.
+</li>
+<li>Swap the trainer only after every check passes.
+</li>
+</ol>
+<p><strong><code>DataCursor</code>:</strong> <code>shard</code> is the epoch and <code>token_index</code> the window ordinal. <code>docs/checkpoint-v1.md</code> item 6 needs that one-line fix.</p>
+<p><strong>Resume-equivalence test (G9):</strong></p>
+<ul>
+<li><strong>Tiny spec, CPU Exact, K=2.</strong> Run 40 steps straight, and separately 20, save, drop the trainer, resume, then 20 more. Loss bits, final params, moments and cursor must all be bitwise equal.
+</li>
+<li><strong>Metal and wgpu.</strong> Same test on one device.
+</li>
+<li><strong>Negative cases:</strong> a step mismatch, a seed mismatch, a truncated optim file, and a missing or extra tensor must each refuse with nothing applied.
+</li>
+</ul>
+<h2 id="5-memory">5. Memory <a class="anchor" href="#5-memory" aria-label="Link to this section">#</a></h2>
+<p><strong>Full-vocab CE.</strong> The trait&#39;s CE needs <code>[N,V]</code> logits plus an <code>[N,V]</code> gradient, about 3.30 GB each at N=16384. T3 <code>linear_cross_entropy_mean</code> fixes this:</p>
+<ul>
+<li><strong>Chunking:</strong> it works on a <code>CeChunk {rows, cols}</code> tile at a time and computes the loss and both gradients in one pass, like nanolab <code>FusedLinearCrossEntropy</code> (<code>model.py:124-170</code> V), which chunks rows only. Scratch is at most <code>rows·cols·4</code>; rows only, at 1024 rows and V=50304, would be about 206 MB.
+</li>
+<li><strong>Backward:</strong> the gradients are for seed 1. <code>Tape</code> records <code>Rec::LinearCe</code> and scales them by the seed.
+</li>
+<li><strong>Valid count:</strong> <code>n_valid</code> is global. If every target is ignored the result is <code>NonFinite</code>; nanolab clamps the count to ≥1 instead.
+</li>
+</ul>
+<p><strong>Activations.</strong> About 1.13 MB per token for 12 layers (I).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Micro-batch, T=1024</th><th style="text-align:right">Activations</th><th style="text-align:right">Total incl. state and CE</th><th style="text-align:right">Metal worst case (pool rounds up to 2×)</th></tr></thead>
+<tbody>
+<tr><td>B=4</td><td style="text-align:right">4.6 GB</td><td style="text-align:right">about 6.4 GB</td><td style="text-align:right">about 13 GB</td></tr>
+<tr><td>B=16</td><td style="text-align:right">18.5 GB</td><td style="text-align:right">about 20.3 GB</td><td style="text-align:right">about 40 GB</td></tr>
+</tbody></table></div>
+<p>v1 runs B=4 × K=16, the same 65,536 tokens per step as nanolab&#39;s 16×4, and needs no activation checkpointing. A single B=16 micro-batch needs per-block recompute, which is phase 2. The capi 1 GiB process step budget cannot hold the model state, so training sessions get a per-session <code>Budget</code> from the Load options.</p>
+<h2 id="6-inference-on-gpu">6. Inference on GPU <a class="anchor" href="#6-inference-on-gpu" aria-label="Link to this section">#</a></h2>
+<p><code>DeviceDecoder&lt;B&gt;</code> keeps a device K and V cache per layer, time-major <code>[B, Tcap, Hkv, D]</code>. That is the same order as the host <code>KvCache</code>, so a write needs no permute.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Phase</th><th>Path</th></tr></thead>
+<tbody>
+<tr><td>Prefill on an empty cache</td><td><code>Eval</code> block with causal SDPA; the cache is written with T5 <code>kv_cache_write</code></td></tr>
+<tr><td>Decode, and prefill onto a non-empty cache</td><td>T4 <code>cached_attention_forward</code>: q <code>[B,Tq,H,D]</code>, GQA folded in, no permute</td></tr>
+<tr><td>Logits</td><td>Last row only. The <code>[V]</code> row is read back and passed to <code>sample_token</code></td></tr>
+<tr><td>RoPE</td><td><code>cos</code>/<code>sin</code> rows for <code>pos..pos+Tq</code> uploaded per call</td></tr>
+</tbody></table></div>
+<h2 id="7-goc-api">7. Go/C API <a class="anchor" href="#7-goc-api" aria-label="Link to this section">#</a></h2>
+<p><code>Session</code> gains <code>state: Arc&lt;Mutex&lt;ModelState&gt;&gt;</code>, where <code>ModelState</code> is <code>{engine, trainer, tokenizer}</code>. <code>Engine</code> is <code>enum { Cpu, Metal, Wgpu(Arc&lt;WgpuBackend&gt;) }</code>; the wgpu arm needs T6. A <code>try_lock</code> failure gives <code>ojas:E_BUSY:</code>, the first producer of that error kind.</p>
+<p>Opcodes 1–5 keep their numbers.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Op</th><th>Go</th><th>Payload → result</th></tr></thead>
+<tbody>
+<tr><td>1 LOAD (real)</td><td><code>LoadModel(ctx, path, LoadOptions{Device, Threads, BudgetBytes})</code></td><td>O_NOFOLLOW open, then <code>SafeTensors::from_file</code>, validate the spec, upload → id</td></tr>
+<tr><td>6 NEW</td><td><code>NewModel(ctx, spec, seed, opts)</code></td><td>Fresh nanolab init</td></tr>
+<tr><td>7 TRAIN_OPEN</td><td><code>OpenTrainer(ctx, id, TrainConfig{TokenBin, Batch, Seq, Accum, Seed, Schedule, MatrixLR, AdamLR, GradClip, OnNonFinite})</code></td><td><code>TokenBin</code> plus a <code>BatchSampler</code></td></tr>
+<tr><td>8 TRAIN_STEP</td><td><code>TrainStep(ctx, id)</code>, <code>TrainStepTokens(ctx, id, x, y)</code></td><td><code>{Loss, GradNorm, LR; Step, Tokens}</code></td></tr>
+<tr><td>9 SAVE, 10 RESUME</td><td><code>SaveCheckpoint(ctx, id, dir)</code>, <code>Resume(ctx, dir, opts)</code></td><td>Checkpoint directory (§4)</td></tr>
+<tr><td>11 TOKENIZER, 12 TOKENIZE</td><td><code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code></td><td>ojas-data GPT-2 BPE</td></tr>
+<tr><td>13 SAMPLE</td><td><code>GenerateIDs(ctx, id, prompt, SampleOptions{Temperature, TopK, TopP, Seed, MaxNewTokens, Stop})</code></td><td>ids</td></tr>
+</tbody></table></div>
+<p><strong>Existing tests:</strong></p>
+<ul>
+<li><strong>Header-only <code>Load</code> tests:</strong> today&#39;s header-only behaviour moves to a new <code>Inspect</code>, and its tests move with the same assertions.
+</li>
+<li><strong>Two-token <code>GenerateGreedy</code> demo tests:</strong> replaced by real-model tests on a checked-in tiny nanolab safetensors, about 50 KB. No test is deleted or weakened.
+</li>
+</ul>
+<h2 id="8-trait-and-tape-additions">8. Trait and Tape additions <a class="anchor" href="#8-trait-and-tape-additions" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>// ojas-core Backend
+fn sync(&amp;self) -&gt; Result&lt;(), OjasError&gt; { Ok(()) }                                          // T1
+fn accumulate_grad(&amp;self, acc: &amp;mut Tensor, grad: &amp;Tensor) -&gt; Result&lt;(), OjasError&gt;;         // T2: acc += grad
+fn linear_cross_entropy_mean(&amp;self, input: &amp;Tensor /*[N,d]*/, weight: &amp;Tensor /*[V,d]*/,       // T3
+    targets: &amp;Tensor /*U32 [N]*/, ignore_index: Option&lt;u32&gt;, chunk: CeChunk /*{rows, cols}*/, want_grad: bool)
+    -&gt; Result&lt;LinearCe, OjasError&gt;; // LinearCe { loss, grad_input: Option&lt;Tensor&gt;, grad_weight: Option&lt;Tensor&gt; }
+fn cached_attention_forward(&amp;self, q: &amp;Tensor /*[B,Tq,H,D]*/, k_cache: &amp;Tensor /*[B,Tcap,Hkv,D]*/, // T4
+    v_cache: &amp;Tensor, kv_len: usize) -&gt; Result&lt;Tensor, OjasError&gt;;
+    // query i sits at position kv_len-Tq+i; head h reads kv head h/(H/Hkv); scale sdpa_scale(D)
+fn kv_cache_write(&amp;self, cache: &amp;mut Tensor, src: &amp;Tensor /*[B,Tn,Hkv,D]*/, at: usize) -&gt; Result&lt;(), OjasError&gt;; // T5
+impl&lt;B: Backend + ?Sized&gt; Backend for &amp;B / Arc&lt;B&gt;  // T6: forward every method, including the defaulted ones
+// ojas-autograd Tape
+pub fn backward_seeded(&amp;mut self, var: Var, seed: f32) -&gt; Result&lt;(), OjasError&gt;;               // A1
+pub fn take_grad(&amp;mut self, var: Var) -&gt; Option&lt;Tensor&gt;;                                        // A2
+pub fn linear_cross_entropy(&amp;mut self, x: Var, w: Var, targets: Tensor,
+    ignore: Option&lt;u32&gt;, chunk: CeChunk) -&gt; Result&lt;Var, OjasError&gt;;                          // A3</code></pre></div>
+<p>T3–T5 default to <code>Unsupported</code>, as <code>permute</code> does. T3 chunks both rows and vocabulary columns: at a vocabulary of 248,320, 1,024 rows alone is 1 GB of f32 logits. Validators <code>linear_ce_dims</code>, <code>cached_attention_dims</code> and <code>kv_cache_write_dims</code> live beside the trait. The landed T6 test (<code>references_and_arcs_forward_every_method</code>) overrides all 38 methods of a marker double and calls each through <code>&amp;B</code>, <code>&amp;&amp;B</code>, <code>Arc&lt;B&gt;</code> and <code>Arc&lt;dyn Backend&gt;</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Add</th><th>CPU</th><th>Metal</th><th>wgpu</th><th>Gate</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td>default</td><td>default (synchronous per op today)</td><td>override (inherent <code>sync</code>)</td><td>G1: a deferred NaN surfaces at <code>sync</code></td></tr>
+<tr><td>T2</td><td>native in place</td><td>native</td><td>native</td><td>G2: parity vs CPU; NaN leaves <code>acc</code> unchanged</td></tr>
+<tr><td>T3</td><td>native</td><td>native</td><td>native</td><td>G3: (a) equals the linear→CE→linear_backward composition at 1e-6 rel; (b) f64 gradcheck; (c) a <code>Budget</code> below <code>N·V·4</code> still runs; (d) device vs CPU at N=4096, V=50304, 1e-4</td></tr>
+<tr><td>T4, T5</td><td>native (moves <code>attend_one</code>)</td><td>native</td><td>native</td><td>G4: <code>kv_len == Tq</code> equals causal SDPA; GQA vs <code>attend_one</code>; device vs CPU at 1e-5</td></tr>
+<tr><td>T6</td><td>—</td><td>—</td><td>—</td><td>G5: <code>Arc&lt;WgpuBackend&gt;</code> keeps <code>Numerics::Fast</code> and <code>permute</code></td></tr>
+<tr><td>A1</td><td>—</td><td>—</td><td>—</td><td>G6: seed 0.5 gives the same result on every device. The root-CE shortcut in <code>tape.rs</code> must not drop the seed</td></tr>
+</tbody></table></div>
+<p><strong>Model-level gates:</strong></p>
+<ul>
+<li><strong>G7:</strong> <code>CpuGpt::forward_token</code> equals <code>Eval&lt;CpuBackend&gt;</code> and <code>DeviceDecoder</code> at ≤ 1e-5.
+</li>
+<li><strong>G8:</strong> the <code>Trainer&lt;CpuBackend Exact&gt;</code> optimizer phase equals <code>HybridOptimizer::step</code> bitwise over 5 steps.
+</li>
+<li><strong>G9:</strong> resume equivalence (§4).
+</li>
+<li><strong>G10:</strong> exactly one readback per step.
+</li>
+<li><strong>G11:</strong> init statistics are right, and the zero-inits are exactly zero.
+</li>
+</ul>
+<h2 id="9-work-breakdown">9. Work breakdown <a class="anchor" href="#9-work-breakdown" aria-label="Link to this section">#</a></h2>
+<p>The coordinator serializes edits to the trait file, <code>Cargo.toml</code> and <code>Cargo.lock</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Item</th><th style="text-align:center">Size</th><th>Lane</th><th>Depends on</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>T1, T2 default, T6, plus T3–T5 stubs</td><td style="text-align:center">S</td><td>core</td><td>—</td></tr>
+<tr><td>2</td><td>A1–A3, G6, gradcheck</td><td style="text-align:center">M</td><td>autograd</td><td>1</td></tr>
+<tr><td>3</td><td><code>SafeTensorsWriter</code>, <code>from_file</code>, <code>replace_dir_with</code></td><td style="text-align:center">M</td><td>io</td><td>—</td></tr>
+<tr><td>4</td><td><code>WsdSchedule</code> and <code>LrSchedule</code> (coordinate with the ojas-cpu session)</td><td style="text-align:center">S</td><td>cpu</td><td>—</td></tr>
+<tr><td>5</td><td>T2–T5 native on CPU</td><td style="text-align:center">M</td><td>cpu</td><td>1</td></tr>
+<tr><td>6</td><td>T1–T5 on wgpu</td><td style="text-align:center">L</td><td>wgpu</td><td>1</td></tr>
+<tr><td>7</td><td>T2–T5 on Metal</td><td style="text-align:center">L</td><td>metal</td><td>1</td></tr>
+<tr><td>8</td><td>ojas-model spec, names, init, <code>Graph</code>, block, <code>Eval</code>, G11</td><td style="text-align:center">M</td><td>model</td><td>1, 2</td></tr>
+<tr><td>9</td><td><code>Trainer&lt;B&gt;</code>, G8, G10</td><td style="text-align:center">L</td><td>model</td><td>2, 4, 8</td></tr>
+<tr><td>10</td><td>Checkpoint directory, G9</td><td style="text-align:center">M</td><td>model</td><td>3, 9</td></tr>
+<tr><td>11</td><td>ojas-infer migration, <code>DeviceDecoder</code>, G7</td><td style="text-align:center">M</td><td>infer</td><td>5, 8</td></tr>
+<tr><td>12</td><td>capi ops, Go API, test migration</td><td style="text-align:center">L</td><td>capi, go</td><td>9, 10, 11</td></tr>
+<tr><td>13</td><td>Torch oracle export, batch-start handoff, golden fixtures in ojas-oracle. <strong>Landed:</strong> see <a href="crate-ojas-oracle.html"><code>ojas-oracle/README.md</code></a> for the spec JSON, the fixtures and the <code>ParityModel</code> gates</td><td style="text-align:center">M</td><td>oracle</td><td>8</td></tr>
+<tr><td>14</td><td>Acceptance runs (§10)</td><td style="text-align:center">M</td><td>bench</td><td>6, 7, 12, 13</td></tr>
+</tbody></table></div>
+<p>After item 1, items 2–7 and 13 can run in parallel. After items 2 and 8, items 9 and 11 can run in parallel.</p>
+<p><strong>Metal deferred-fault contract (Resolved &amp; Landed):</strong></p>
+<ul>
+<li>Metal adopted wgpu&#39;s deferred-fault contract in round 5 (documented in <a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>), moving per-op waits to sync points (<code>Backend::sync</code>, <code>download</code>, <code>clip_grad_norm</code>).
+</li>
+<li>Reduced training step blocking waits from ~3,358 to 71–72 per step at K=4, dropping <code>adamw_full</code> from 183 ms to 22.6 ms.
+</li>
+</ul>
+<h2 id="10-acceptance">10. Acceptance <a class="anchor" href="#10-acceptance" aria-label="Link to this section">#</a></h2>
+<p><strong>Metal, 124M against PyTorch nanolab.</strong></p>
+<p>Setup:</p>
+<ul>
+<li>nanolab defaults at fp32 with compile off.
+</li>
+<li>B=4, K=4, T=1024; warmup 30, cosine over 300 steps.
+</li>
+<li>A FineWeb token bin.
+</li>
+<li>Both sides load the same <code>init.safetensors</code> exported from torch.
+</li>
+<li>Both sides use the same batch starts, which ojas&#39;s <code>BatchSampler</code> (seed 1337) dumps. nanolab samples with replacement, so without this the batches would differ.
+</li>
+<li>The torch oracle patches NS5 to fp32 (ojas&#39;s Muon is f32; finding F8) and reports the mean micro-loss. nanolab itself logs the last micro-loss × K (<code>train.py:348</code>). The oracle records both, and the gates use the mean.
+</li>
+</ul>
+<p>Pass criteria:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Check</th><th>Tolerance</th></tr></thead>
+<tbody>
+<tr><td>Step 0 loss</td><td>|Δ| ≤ 1e-4</td></tr>
+<tr><td>Steps 1–100</td><td>|Δ| ≤ 0.02 nats</td></tr>
+<tr><td>Steps 101–300</td><td>EMA(0.9) |Δ| ≤ 0.03</td></tr>
+<tr><td>Last-20 mean</td><td>within 1%</td></tr>
+<tr><td>Grad norm, steps ≤ 50</td><td>within 10%</td></tr>
+<tr><td>Stock bf16-NS5 torch run</td><td>separate, looser row: ≤ 0.05</td></tr>
+</tbody></table></div>
+<p><strong>CI on CPU only.</strong></p>
+<p>Setup:</p>
+<ul>
+<li>A tiny spec: 2 layers, d=64, 4×16 heads, hidden 192, V=256, T=32, B=2, K=2.
+</li>
+<li>40 steps on a synthetic bin, with <code>CpuBackend</code> Exact set explicitly.
+</li>
+</ul>
+<p>Pass criteria:</p>
+<ul>
+<li>It matches an ojas-oracle torch golden curve at ≤ 2e-4 per step for steps 1–10 and ≤ 2e-3 after that.
+</li>
+<li>Loss drops by at least 1 nat from ln 256.
+</li>
+<li>G9 holds bitwise.
+</li>
+<li>It finishes in under 30 s in release.
+</li>
+</ul>
+<p><strong>Critical files:</strong></p>
+<ul>
+<li><code>ojas-core/src/backend.rs</code>
+</li>
+<li><code>ojas-autograd/src/tape.rs</code>
+</li>
+<li><code>ojas-infer/src/gpt.rs</code>
+</li>
+<li><code>ojas-capi/src/session.rs</code>
+</li>
+<li><code>ojas-io/src/safetensors.rs</code>
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/framework-design.md" rel="noopener"><code>docs/framework-design.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="dtype-policy.html" rel="prev"><span>Previous</span>Dtype Policy (v1)</a>
+        <a href="op-coverage.html" rel="next" class="next"><span>Next</span>Op Coverage — nanolab Default GPT</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#1-crate-boundary">1. Crate boundary</a></li>
+<li><a href="#2-one-block-two-executors-names-and-init">2. One block, two executors; names and init</a></li>
+<li><a href="#3-training-step-on-any-backend-device-resident">3. Training step on any Backend, device-resident</a></li>
+<li><a href="#4-checkpoint">4. Checkpoint</a></li>
+<li><a href="#5-memory">5. Memory</a></li>
+<li><a href="#6-inference-on-gpu">6. Inference on GPU</a></li>
+<li><a href="#7-goc-api">7. Go/C API</a></li>
+<li><a href="#8-trait-and-tape-additions">8. Trait and Tape additions</a></li>
+<li><a href="#9-work-breakdown">9. Work breakdown</a></li>
+<li><a href="#10-acceptance">10. Acceptance</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

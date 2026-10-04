@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-qwen35 · ojas reference</title>
+  <meta name="description" content="A Qwen3.5 text-tower training-step provider for ojas, run on canonical tessl&#39;s Metal kernels.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-qwen35.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-qwen35.html">
+  <meta property="og:title" content="ojas-qwen35 · ojas reference">
+  <meta property="og:description" content="A Qwen3.5 text-tower training-step provider for ojas, run on canonical tessl&#39;s Metal kernels.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html" class="current" aria-current="page">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-qwen35">ojas-qwen35 <a class="anchor" href="#ojas-qwen35" aria-label="Link to this section">#</a></h1>
+<p>A Qwen3.5 text-tower <strong>training-step provider</strong> for ojas, run on canonical <code>tessl</code>&#39;s Metal kernels.</p>
+<ul>
+<li><strong>Metal only.</strong> tessl builds only on macOS on Apple silicon. On any other target this crate compiles to an empty library, and its tests compile to nothing.
+</li>
+<li><p><strong>Not an ojas <code>Backend</code>.</strong> The whole step is one provider-level unit:</p>
+<ul>
+<li>the forward and backward over GDN, head-dim-256 grouped-query attention, Qwen&#39;s <code>(1 + w)</code> RMSNorm and gated RMSNorm, and partial RoPE;
+</li>
+<li>cross-entropy over the tied 248,320-row head, computed in vocabulary chunks;
+</li>
+<li>hidden rows exposed for a loss outside the crate;
+</li>
+<li>the gradient bank, its global norm, and AdamW.
+</li>
+</ul>
+<p>None of these ops is added to <code>ojas_core::Backend</code>. Promoting GDN or head-dim-256 attention into the trait is a later decision, and it has to cover CPU, Metal and wgpu.</p>
+</li>
+</ul>
+<p>The crate exists so that &#34;trained with ojas&#34; can rest on ojas code. Lappi&#39;s trainer (<code>crates/qd-train-metal</code>) depends on it by path and adapts this concrete API to its own step-provider trait. This crate does not depend on Lappi.</p>
+<h2 id="the-loop-it-serves">The loop it serves <a class="anchor" href="#the-loop-it-serves" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">text</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>let snap = Snapshot::from_dir(dir)?;                       // CPU: config + header pre-flight
+let mut step = Qwen35Step::open(&amp;snap, Numerics::Bf16Operands, budget)?;   // GPU
+let plan = OptimizerPlan::build(step.parameter_table(), &amp;group_spec)?;
+
+for batch in batches {
+    for seq in batch {                                      // one sequence at a time
+        let pending = step.forward(&amp;Sequence { ids, letter_rows, letter_targets,
+                                               letter_scale: 1.0 / n_letter_rows_in_batch,
+                                               span_positions })?;
+        // pending.letter_ce_sum(), pending.hidden(): [n_span, hidden] f32 host tensor
+        let dh = span_head_backward(pending.hidden());     // caller&#39;s, on the host
+        step.backward(pending, Some(ExternalGrad { positions: &amp;distinct, dh: &amp;dh }))?;
+    }
+    let clip = clip_coefficient(1.0, step.grad_sq_norm()?, span_head_sq_norm)?;
+    step.adamw_step(&amp;AdamWHyper { lr, beta1, beta2, eps, grad_scale: clip }, &amp;plan)?;
+}
+step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</code></pre></div>
+<p>The step works on one sequence at a time. tessl&#39;s pending step holds every layer&#39;s <code>T x hidden</code> input between its forward and its backward, so the API does not offer a batch-level step.</p>
+<p>The first backward after an AdamW step overwrites the bank. Later backwards add to it. <code>bank_state()</code> reports which case applies.</p>
+<h2 id="numerics">Numerics <a class="anchor" href="#numerics" aria-label="Link to this section">#</a></h2>
+<p><code>Numerics::ExactF32</code> gives exact f32 GEMMs. <code>Numerics::Bf16Operands</code> rounds GEMM operands to bf16 and accumulates in f32. In both modes the weights, activations, gradients, GDN state, attention and optimizer stay f32. There is no default, and the choice is made at <code>open</code>.</p>
+<h2 id="refused-never-defaulted">Refused, never defaulted <a class="anchor" href="#refused-never-defaulted" aria-label="Link to this section">#</a></h2>
+<p>Every refusal names the field and fires before any GPU work runs.</p>
+<h3 id="config-refusals">Config refusals <a class="anchor" href="#config-refusals" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Any <code>config.json</code> key the crate does not know, in the root, in <code>text_config</code> or in <code>rope_parameters</code>. The tables in <code>src/config.rs</code> list every key and say whether it is read, checked, or has no effect on the text tower&#39;s step (with the reason).
+</li>
+<li><code>head_dim</code> other than 256, the value tessl&#39;s attention training kernels are compiled for.
+</li>
+<li>A GDN key head dim other than 128.
+</li>
+<li>A GDN value dim that is not a multiple of 16.
+</li>
+<li>Query heads that are not a multiple of KV heads.
+</li>
+<li>GDN value heads that differ from key heads, because <code>gdn_train</code> has no head grouping.
+</li>
+<li>A conv width outside 2..=8.
+</li>
+<li><code>rope_type</code> other than <code>default</code>, and any non-null <code>rope_scaling</code>.
+</li>
+<li><code>mrope_section</code> unless its entries are positive and sum to <code>rotary_dim / 2</code>. Only in that case does text-only MRoPE equal the plain partial RoPE that tessl computes.
+</li>
+<li><code>attention_dropout != 0</code>.
+</li>
+<li><code>mamba_ssm_dtype</code> other than <code>float32</code>.
+</li>
+<li>An untied LM head, MoE, attention bias, or an ungated attention output.
+</li>
+<li>Any field on which tessl&#39;s own <code>Qwen35Config::from_config_json</code> reading disagrees with this crate&#39;s.
+</li>
+</ul>
+<h3 id="input-refusals">Input refusals <a class="anchor" href="#input-refusals" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Token ids at or above the vocabulary size.
+</li>
+<li>The config&#39;s vision special tokens (<code>image_token_id</code> and the others). They switch transformers to multimodal positions.
+</li>
+<li>Letter rows that repeat or that fall outside the sequence.
+</li>
+<li>A scale that is not finite.
+</li>
+<li>External-gradient positions that repeat. Sum duplicate rows before passing them.
+</li>
+<li>A non-finite <code>dh</code>.
+</li>
+<li>A backward on a non-finite letter loss.
+</li>
+<li>A pending step whose weights have changed since its forward.
+</li>
+</ul>
+<h3 id="weights-file-refusals">Weights-file refusals <a class="anchor" href="#weights-file-refusals" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>A tower tensor missing from the file, or present with the wrong shape.
+</li>
+<li>A tensor under the tower prefix that is not a tower parameter.
+</li>
+<li>An <code>lm_head.weight</code>.
+</li>
+</ul>
+<h2 id="optimizer-groups-are-data">Optimizer groups are data <a class="anchor" href="#optimizer-groups-are-data" aria-label="Link to this section">#</a></h2>
+<p><code>GroupSpec</code> holds two rule lists:</p>
+<ul>
+<li>learning-rate scale per parameter;
+</li>
+<li>weight decay per parameter.
+</li>
+</ul>
+<p>Each list must partition the parameters. Every parameter matches exactly one rule in each list, and every rule matches at least one parameter. Anything else is refused.</p>
+<p>No exclusion is built in. tessl&#39;s <code>default_weight_decay</code> is never called. The tests express transformers&#39; norm and <code>dt_bias</code> exclusions as data, and also decay everything, to show this.</p>
+<p><strong>Per-parameter learning rates are refused today.</strong> tessl&#39;s AdamW takes a single learning rate. <code>OptimizerPlan::check_tessl_lr</code> refuses any scale other than exactly 1.0, naming the missing capability: a per-entry <code>lr_scale</code> in tessl&#39;s <code>adamw_step</code>, in progress on tessl branch <code>lappi-train-lrscale-mrope</code>. A uniform scale is also refused. Folding it into the learning rate is the caller&#39;s decision.</p>
+<h2 id="loading-and-why-tessls-loader">Loading, and why tessl&#39;s loader <a class="anchor" href="#loading-and-why-tessls-loader" aria-label="Link to this section">#</a></h2>
+<p><code>Snapshot::from_dir</code> runs on the CPU:</p>
+<ol>
+<li>It parses <code>config.json</code>.
+</li>
+<li>It resolves the weights file. With <code>model.safetensors.index.json</code>, every tower tensor must be in one file, because tessl&#39;s loader reads one file.
+</li>
+<li>It checks that file&#39;s header against the tower map through ojas-io. Only the header is read.
+</li>
+</ol>
+<p>On the 2B, the check finds 320 tower tensors. It reports the vision tower and the MTP block as not loaded.</p>
+<p><code>Qwen35Step::open</code> then calls tessl&#39;s <code>Qwen35Model::load</code>. ojas-io cannot do this bulk read, because <code>load</code> is the model&#39;s only constructor and its fields are <code>pub(crate)</code>.</p>
+<p><code>open</code> compares tessl&#39;s live parameter table with the crate&#39;s map: names, shapes and order. It refuses any difference. Per-entry vectors are always built against the live table.</p>
+<h2 id="state-on-disk">State on disk <a class="anchor" href="#state-on-disk" aria-label="Link to this section">#</a></h2>
+<p><code>save_state</code> and <code>load_state</code> store three kinds of f32 safetensors shards, written and read with ojas-io:</p>
+<ul>
+<li>the masters;
+</li>
+<li>AdamW&#39;s <code>exp_avg</code>;
+</li>
+<li>AdamW&#39;s <code>exp_avg_sq</code>.
+</li>
+</ul>
+<p>Tensors use transformers&#39; names and layout, so a torch oracle can read them directly. Each file&#39;s metadata records:</p>
+<ul>
+<li>the format;
+</li>
+<li>the kind and the shard;
+</li>
+<li>the step count;
+</li>
+<li>the config&#39;s canonical summary.
+</li>
+</ul>
+<p><code>load_state</code> checks every header before it writes anything. A failure after the first device write poisons the provider.</p>
+<p>A save goes through ojas-io&#39;s <code>replace_dir_with</code>. The files are written into a staging directory, the tree is synced, and only then is it renamed into place. On failure the stage is removed. Refused before anything is written:</p>
+<ul>
+<li>a target that exists in any form (a state directory is never overwritten);
+</li>
+<li>a target that is a symbolic link, dangling or not;
+</li>
+<li>a parent directory that is a symbolic link (refused by ojas-io).
+</li>
+</ul>
+<p>Two limits come from ojas-io. Saves into one parent directory are serialized by an <code>flock</code> with no timeout. A directory someone else creates at the target between the check and the swap would be replaced.</p>
+<p>A resume opens the base snapshot and then loads the state over it.</p>
+<p>Memory on the 2B, from the shape of tessl&#39;s API:</p>
+<ul>
+<li><code>open</code> holds four f32 copies of the 1.88 B parameters: weights, bank and two moments, about 30 GB.
+</li>
+<li>A table read (<code>read_entries</code>, <code>read_table</code>), and each kind of a save or load, also stages a whole table (7.53 GB requested) in device tensors, because tessl copies a whole table per call.
+</li>
+<li>On the host, a save holds one entry at a time: each streams into its shard through ojas-io&#39;s <code>SafeTensorsWriter</code> in 1 MiB pieces. The peak is the 2 GB embedding, which also gets a shard of its own.
+</li>
+</ul>
+<h3 id="device-working-set">Device working set <a class="anchor" href="#device-working-set" aria-label="Link to this section">#</a></h3>
+<p>Every staging goes through one helper, <code>staging_tensors</code>.</p>
+<ol>
+<li>It synchronizes first, so tessl recycles what the last step freed.
+</li>
+<li>It allocates the table.
+</li>
+<li>It refuses if the device is then over <code>recommendedMaxWorkingSetSize</code>, before any GPU work. The figure checked is the measured allocation, not a projection.
+</li>
+</ol>
+<p>Past that size, Metal pages the resident set. On the 2B the next command buffer timed out (<code>MTL4CommandQueueErrorTimeout</code>) and poisoned the runtime.</p>
+<p>Measured on a 64 GB M5 Pro, where the working set is 51.54 GB:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Point</th><th>Allocated</th></tr></thead>
+<tbody>
+<tr><td>After a 2B step</td><td>43.59 GB</td></tr>
+<tr><td>Recycle done</td><td>41.44 GB</td></tr>
+<tr><td>With staging</td><td>50.20 GB</td></tr>
+</tbody></table></div>
+<p>That leaves <strong>1.34 GB of headroom</strong>.</p>
+<p>Without the recycle, the same staging reached 52.44 GB and faulted, 4 of 4 runs. These numbers are from the gradient read after one step at 128 tokens with <code>Numerics::ExactF32</code>.</p>
+<p>Not measured:</p>
+<ul>
+<li>a 2B <code>save_state</code> (one staging per kind, each recycled before the next);
+</li>
+<li><code>load_state</code>;
+</li>
+<li><code>Bf16Operands</code>;
+</li>
+<li>longer sequences.
+</li>
+</ul>
+<p>Any of these that ends over the working set gets the refusal, not a timeout. Tessl reads that take one entry at a time would remove the staging, and the headroom question with it.</p>
+<h2 id="threading">Threading <a class="anchor" href="#threading" aria-label="Link to this section">#</a></h2>
+<p><code>Qwen35Step</code> is not <code>Send</code>, because tessl&#39;s <code>GpuRuntime</code> is not. Keep a provider on one thread.</p>
+<h2 id="tests">Tests <a class="anchor" href="#tests" aria-label="Link to this section">#</a></h2>
+<p><code>cargo test -p ojas-qwen35</code> (from the ojas workspace root) runs only CPU tests and never opens a GPU runtime. It covers:</p>
+<ul>
+<li>config parsing and every refusal;
+</li>
+<li>the tower map against the real 2B config;
+</li>
+<li>tessl&#39;s tiny fixture header;
+</li>
+<li>optimizer-plan construction and the learning-rate refusal;
+</li>
+<li>sequence, gradient and clip checks;
+</li>
+<li>state-format round trips and refusals through ojas-io;
+</li>
+<li>save-target refusals: anything present, and symbolic links.
+</li>
+</ul>
+<p>These tests are <code>#[ignore]</code>d:</p>
+<ul>
+<li><code>snapshot_header_matches_the_name_map</code> (CPU only) reads the real 2B snapshot&#39;s header from the Hugging Face cache.
+</li>
+<li>All tests in <code>tests/gpu_parity.rs</code> are named <code>gpu_*</code>. They open a Metal runtime and run serialized in an agreed GPU window:
+</li>
+</ul>
+<div class="code"><span class="code-lang">text</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_tiny
+cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_real_2b</code></pre></div>
+<h2 id="json">JSON <a class="anchor" href="#json" aria-label="Link to this section">#</a></h2>
+<p><code>config.json</code> and <code>model.safetensors.index.json</code> are read with ojas-io&#39;s strict reader (<code>parse_json_with</code>). The limits are depth 32 and 16 MiB of input. Duplicate keys are refused.</p>
+<p>A dimension must be an integer literal; <code>2048.0</code> is refused. A float field written as an integer must be exact in <code>f64</code>, so <code>9007199254740993</code> is refused, not rounded. An integer literal beyond the <code>u64</code>/<code>i64</code> range is refused anywhere in the file.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-qwen35/README.md" rel="noopener"><code>ojas-qwen35/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-oracle.html" rel="prev"><span>Previous</span>ojas-oracle</a>
+        <a href="crate-ojas-qwen35-cuda.html" rel="next" class="next"><span>Next</span>ojas-qwen35-cuda</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#the-loop-it-serves">The loop it serves</a></li>
+<li><a href="#numerics">Numerics</a></li>
+<li><a href="#refused-never-defaulted">Refused, never defaulted</a></li>
+<li class="sub"><a href="#config-refusals">Config refusals</a></li>
+<li class="sub"><a href="#input-refusals">Input refusals</a></li>
+<li class="sub"><a href="#weights-file-refusals">Weights-file refusals</a></li>
+<li><a href="#optimizer-groups-are-data">Optimizer groups are data</a></li>
+<li><a href="#loading-and-why-tessls-loader">Loading, and why tessl&#39;s loader</a></li>
+<li><a href="#state-on-disk">State on disk</a></li>
+<li class="sub"><a href="#device-working-set">Device working set</a></li>
+<li><a href="#threading">Threading</a></li>
+<li><a href="#tests">Tests</a></li>
+<li><a href="#json">JSON</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

@@ -185,6 +185,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
+      - name: site is generated from the markdown
+        if: runner.os == 'Linux'
+        working-directory: ${{ env.OJAS }}
+        run: go run scripts/sitegen/main.go -check
       - name: Build libgusset.a (debug, the profile go/*.pc link)
         working-directory: ${{ env.OJAS }}
         run: cargo build -p ojas-gusset-engine

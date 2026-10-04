@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-qwen35-cuda · ojas reference</title>
+  <meta name="description" content="The Qwen3.5 whole-step training provider on NVIDIA CUDA: design (B) in Lappi&#39;s AUDIT/ojas-training-2026-10-01/cuda-backend-scoping.md. It is not an ojas Backend. It is a standalone sibling crate with…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-qwen35-cuda.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-qwen35-cuda.html">
+  <meta property="og:title" content="ojas-qwen35-cuda · ojas reference">
+  <meta property="og:description" content="The Qwen3.5 whole-step training provider on NVIDIA CUDA: design (B) in Lappi&#39;s AUDIT/ojas-training-2026-10-01/cuda-backend-scoping.md. It is not an ojas Backend. It is a standalone sibling crate with…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html" class="current" aria-current="page">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-qwen35-cuda">ojas-qwen35-cuda <a class="anchor" href="#ojas-qwen35-cuda" aria-label="Link to this section">#</a></h1>
+<p>The Qwen3.5 whole-step training provider on NVIDIA CUDA: design (B) in Lappi&#39;s <code>AUDIT/ojas-training-2026-10-01/cuda-backend-scoping.md</code>. It is not an ojas <code>Backend</code>. It is a standalone sibling crate with its own <code>[workspace]</code>; the ojas coordinator merges it into <code>ojas-cuda</code> and <code>ojas-kernels</code> later.</p>
+<p><strong>Status (2026-10-01): milestone M0 (K0, K1) and M1 (K8, K11, the tiny-fixture loader), plus K2(i) (L-cuda-gdn).</strong></p>
+<ul>
+<li>Built and host-tested on the Mac.
+</li>
+<li>Cross-built for the GH200.
+</li>
+<li><strong>No device code has run on a GPU.</strong> Every device test is <code>#[ignore]</code> and is NOT RUN until <code>rung0</code> and <code>runga</code> run on the box.
+</li>
+</ul>
+<h2 id="what-is-here">What is here <a class="anchor" href="#what-is-here" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Piece</th><th>Where</th><th>Tested on the Mac</th></tr></thead>
+<tbody>
+<tr><td><code>CudaRuntime</code>: library probe before any cudarc call, sm_90 check, one stream, cuBLAS handle (32 MiB workspace, default math, atomics never set)</td><td><code>src/runtime.rs</code></td><td>refusal path only (<code>tests/runtime_refusal.rs</code>)</td></tr>
+<tr><td><code>CudaBuffer&lt;T&gt;</code>: typed, length-checked, held against a bounded <code>AllocBudget</code></td><td><code>src/buffer.rs</code>, <code>src/budget.rs</code></td><td>budget logic</td></tr>
+<tr><td>NVRTC compile cache: key = module, FNV-1a of the source, length, options (architecture and <code>--fmad</code> included), NVRTC version; bounded in entries and bytes, LRU</td><td><code>src/nvrtc_cache.rs</code></td><td>yes</td></tr>
+<tr><td>K0: f32↔bf16 (RNE), <code>copy_cols</code>, <code>deliver</code> (copy / <code>+=</code>), <code>zero</code>, <code>scatter_add_rows</code> (distinct rows), <code>ce_gather_rows</code> (f32 / bf16)</td><td><code>src/kernels.rs</code>, <code>src/k0.rs</code>, <code>src/k0_plan.rs</code></td><td>plans and host references</td></tr>
+<tr><td>K1: GEMM <code>nn</code>/<code>tn</code>/<code>nt</code>: ExactF32 (fixed-k FFMA kernel) and Bf16 (cuBLAS <code>GemmEx</code> bf16→f32, or the FFMA kernel rounding on load)</td><td><code>src/gemm.rs</code>, <code>src/gemm_plan.rs</code></td><td>cuBLAS row-major mapping, host references</td></tr>
+<tr><td>Rung-0 smoke binary</td><td><code>src/bin/rung0.rs</code></td><td>arguments, report file, watchdog, refusal</td></tr>
+<tr><td>The crate&#39;s one <code>exp</code>, <code>log</code>, softplus, sigmoid, SiLU and SiLU&#39; (device prelude plus bit-identical host emulation)</td><td><code>src/k8_act.rs</code></td><td>ulp bounds, special values</td></tr>
+<tr><td>K8: SwiGLU forward (f32 or bf16 out) and backward (one or two output buffers), exact-f32 residual add, over <code>ColWindow</code>s</td><td><code>src/k8_plan.rs</code>, <code>src/k8_kernels.rs</code>, <code>src/k8.rs</code></td><td>plans, bitwise host references</td></tr>
+<tr><td>K11: AdamW in place (torch single-tensor order, per-entry lr scale, decay and step count, inactive entries untouched) and the squared gradient norm (per-chunk f32 partials, f64 sum)</td><td><code>src/k11_host.rs</code>, <code>src/k11_kernels.rs</code>, <code>src/k11.rs</code></td><td>the f32 emulation against L-oracle&#39;s decay-sensitive torch golden (≤ 1e-6, all 7 mutations ≥ 100x) and the adamw_f float64 golden</td></tr>
+<tr><td>K11&#39;s goldens, embedded with their pins</td><td><code>src/k11_golden.rs</code></td><td>parse, F&#39;s-builder check</td></tr>
+<tr><td>Tiny-fixture loader: tessl&#39;s <code>qwen35_train</code> (config through <code>ojas_io</code>&#39;s JSON reader, BF16 safetensors, <code>.npy</code> gradients), into device buffers</td><td><code>src/tiny_fixture_published.rs</code></td><td>parse, tamper and symlink refusal</td></tr>
+<tr><td>Report and watchdog shared by the rung binaries; <code>runga</code>&#39;s arguments</td><td><code>src/report_cli.rs</code></td><td>watchdog (4 tests ported from <code>rung0</code>), arguments</td></tr>
+<tr><td>Rung (a) binary: every M0 and M1 check plus K2(i)&#39;s, one report</td><td><code>src/bin/runga.rs</code></td><td>refusal path on the Mac</td></tr>
+</tbody></table></div>
+<p>Host references (<code>src/host_ref.rs</code>) are bitwise for K0 and for the FFMA GEMM, and float64 for GEMM tolerances. L-cuda-oracle&#39;s float64 references live in <code>tests/reference/</code>, which that lane owns.</p>
+<h2 id="numerics">Numerics <a class="anchor" href="#numerics" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>ExactF32 GEMM.</strong>
+<ul>
+<li>One CUDA-core FFMA kernel: <code>acc = fmaf(a, b, acc)</code> over ascending k, from +0.0, for every output. No tensor cores (TF32) and no split-K.
+</li>
+<li>Its bits depend only on the inputs. They equal <code>host_ref::gemm_ffma_f32</code>, which uses Rust&#39;s fused <code>f32::mul_add</code>.
+</li>
+</ul>
+</li>
+<li><strong>Bf16 GEMM.</strong>
+<ul>
+<li>Operands are rounded to bf16 by the K0 cast, then <code>cublasGemmEx</code> runs with <code>CUDA_R_16BF</code> A/B, a <code>CUDA_R_32F</code> C and <code>CUBLAS_COMPUTE_32F</code>.
+</li>
+<li>cudarc&#39;s safe <code>Gemm&lt;bf16&gt;</code> writes a bf16 C, so it is not used.
+</li>
+<li>Whether cuBLAS 12.8 accepts this combination is <strong>unverified</strong> (<code>GAP-L-CUDA-CUBLAS-BF16-F32-UNVERIFIED-2026-10-01</code>). Rung 0 is the falsifier.
+</li>
+<li>The fallback is the FFMA kernel rounding its operands on load: the same tier, bit-identical to the host emulation.
+</li>
+</ul>
+</li>
+<li><strong>cuBLAS determinism scope.</strong>
+<ul>
+<li>NVIDIA promises bitwise-identical results within one toolkit version only &#34;on GPUs with the same architecture and the same number of SMs&#34;. The promise does not hold across streams or with atomics allowed (cuBLAS docs, &#34;Results reproducibility&#34;).
+</li>
+<li>This crate uses one stream, one handle, a fixed workspace and atomics never allowed.
+</li>
+<li>So the Bf16 cuBLAS tier repeats run to run on one GH200, but a different SM count or cuBLAS version may change its bits. Each rung-0 report records the SM count and the driver, NVRTC and cuBLAS versions.
+</li>
+<li>The FFMA tier has no such scope.
+</li>
+</ul>
+</li>
+<li><strong>NVRTC options.</strong>
+<ul>
+<li><code>--gpu-architecture=compute_90</code>: PTX, which the driver JITs for sm_90. cudarc 0.19.10 exposes no CUBIN getter.
+</li>
+<li><code>--fmad=false</code>: plain <code>*</code>/<code>+</code> become <code>.rn</code> instructions, which nothing may contract.
+</li>
+<li><code>--ftz=false --prec-div=true --prec-sqrt=true</code>.
+</li>
+</ul>
+</li>
+<li><strong>Grids.</strong> Every grid is a function of the shape, never of the SM count. Every output element has one writer, and there are no atomics.
+</li>
+</ul>
+<h2 id="building-on-the-mac">Building on the Mac <a class="anchor" href="#building-on-the-mac" aria-label="Link to this section">#</a></h2>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code># Host tests (no CUDA anywhere):
+cargo test --offline --manifest-path /Users/bharath/Code/research/ojas/ojas-qwen35-cuda/Cargo.toml
+# With cudarc linked. The library-refusal test runs here; device tests compile and are ignored:
+cargo test --offline --features cuda --manifest-path /Users/bharath/Code/research/ojas/ojas-qwen35-cuda/Cargo.toml</code></pre></div>
+<p>Cross-build for the GH200 (aarch64, glibc 2.39 sysroot). This is the recipe in <code>cuda-backend-scoping.md</code> §1.5. No CUDA SDK is needed: cudarc <code>dlopen</code>s the libraries at run time.</p>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=&#34;-C linker-flavor=gcc&#34;
+T=/Users/bharath/qd-campaign/target-aarch64-linux-ojas-qwen35-cuda
+cargo build --offline --release --target aarch64-unknown-linux-gnu --features cuda --bin rung0 \
+  --manifest-path /Users/bharath/Code/research/ojas/ojas-qwen35-cuda/Cargo.toml --target-dir $T
+cargo test --offline --release --no-run --target aarch64-unknown-linux-gnu --features cuda \
+  --manifest-path /Users/bharath/Code/research/ojas/ojas-qwen35-cuda/Cargo.toml --target-dir $T</code></pre></div>
+<p>The binary is <code>$T/aarch64-unknown-linux-gnu/release/rung0</code>. Its sha256 depends on the checkout path, which the binary embeds. Pin the sha256 of the file you copy, not one rebuilt elsewhere.</p>
+<h2 id="libraries-on-the-box">Libraries on the box <a class="anchor" href="#libraries-on-the-box" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>cudarc opens bare sonames (<code>libcublas.so.12</code>, <code>libnvrtc.so.12</code>, <code>libcuda.so.1</code>, …) with <code>dlopen</code> and <strong>panics</strong> if none loads.
+</li>
+<li>glibc reads <code>LD_LIBRARY_PATH</code> once, when the process starts. So:
+<ul>
+<li>the venv&#39;s library directories must be on it in the launching command;
+</li>
+<li>the binary cannot add them itself.
+</li>
+</ul>
+</li>
+<li><code>CudaRuntime::open</code> probes <code>libcuda</code>, <code>libnvrtc</code> and <code>libcublas</code> first. It refuses by name, exits 2, and lists the names searched and any candidate file that exists but did not load.
+</li>
+<li>Both directories are needed:
+<ul>
+<li><code>libcublas.so.12</code> loads <code>libcublasLt.so.12</code> from <code>nvidia/cublas/lib</code>;
+</li>
+<li>NVRTC loads <code>libnvrtc-builtins.so.12.8</code> from <code>nvidia/cuda_nvrtc/lib</code>.
+</li>
+</ul>
+</li>
+<li><code>/usr/local/cuda/lib64</code> on the box holds neither (lead&#39;s read-only check, 2026-10-01).
+</li>
+</ul>
+<h2 id="rung-0-on-the-box">Rung 0 on the box <a class="anchor" href="#rung-0-on-the-box" aria-label="Link to this section">#</a></h2>
+<p>Rung 0 runs after post-F item 10, run by the lead. It is a single-GPU job of about 5 minutes, under rule 4&#39;s $20, so it needs no yes. Fable&#39;s Q4 still holds it until the queue ends.</p>
+<p><strong>1. On the Mac: copy the binary.</strong></p>
+<p>KEY=~/.ssh/bharath_m5_macbook_pro.pem; BOX=ubuntu@192.222.51.246 shasum -a 256 /Users/bharath/qd-campaign/target-aarch64-linux-ojas-qwen35-cuda/aarch64-unknown-linux-gnu/release/rung0 ssh -i $KEY $BOX &#39;mkdir -p /home/ubuntu/bin /home/ubuntu/ojas-cuda&#39; scp -i $KEY /Users/bharath/qd-campaign/target-aarch64-linux-ojas-qwen35-cuda/aarch64-unknown-linux-gnu/release/rung0 $BOX:/home/ubuntu/bin/ojas-qwen35-cuda-rung0</p>
+<p><strong>2. On the box: one command.</strong> Check the sha256 against the HANDOFF&#39;s value first, with <code>sha256sum /home/ubuntu/bin/ojas-qwen35-cuda-rung0</code>. Then:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 300 env LD_LIBRARY_PATH=/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cublas/lib:/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib NVIDIA_TF32_OVERRIDE=0 /home/ubuntu/bin/ojas-qwen35-cuda-rung0 --out /home/ubuntu/ojas-cuda/rung0-$(date -u +%Y%m%dT%H%M%SZ); echo &#34;rung0 exit $?&#34;</p>
+<ul>
+<li><code>flock</code> waits for the GPU lock. <code>timeout 300</code> is the outer cap.
+</li>
+<li>The binary enforces its own cap: 280 s by default, <code>--cap-secs</code> at most 300. When the cap fires, it writes what finished and exits 3.
+</li>
+<li><code>NVIDIA_TF32_OVERRIDE=0</code> turns TF32 off library-wide. It is recorded in the report. The Bf16 tier&#39;s bf16 operands are unaffected.
+</li>
+</ul>
+<p><strong>Exit codes:</strong></p>
+<div class="table-wrap"><table>
+<thead><tr><th style="text-align:right">Exit</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td style="text-align:right">0</td><td>Every check ran and passed</td></tr>
+<tr><td style="text-align:right">1</td><td>A check failed or panicked</td></tr>
+<tr><td style="text-align:right">2</td><td>Refused before any check: arguments, a missing library, a non-sm_90 device, or an existing report</td></tr>
+<tr><td style="text-align:right">3</td><td>The wall-clock cap expired</td></tr>
+<tr><td style="text-align:right">124</td><td>The outer <code>timeout</code> fired</td></tr>
+</tbody></table></div>
+<p><strong>The report</strong> is <code>&lt;out&gt;/rung0-report.json</code>. It is one JSON object with <code>quick: true</code>, holding:</p>
+<ul>
+<li>the device: name, compute capability, SM count, driver, NVRTC and cuBLAS versions, and the cuBLAS math and atomics modes read back;
+</li>
+<li>the environment;
+</li>
+<li>the libraries actually mapped (from <code>/proc/self/maps</code>);
+</li>
+<li>the NVRTC cache counts;
+</li>
+<li>every check with its status (<code>pass</code>, <code>fail</code>, <code>panicked</code>, <code>not_run</code>), its detail and its numbers.
+</li>
+</ul>
+<p>A panic inside cudarc, such as a missing symbol, is caught per check and recorded as <code>panicked</code>. It is never recorded as <code>pass</code>.</p>
+<p><strong>What rung 0 checks:</strong></p>
+<ul>
+<li>all kernel modules compile through NVRTC, plus one module at <code>compute_90a</code>;
+</li>
+<li>every K0 kernel equals its host reference bitwise, and a second run equals the first;
+</li>
+<li>the cuBLAS <code>GemmEx</code> bf16→f32 probe at 64³, within <code>2^-8·max|ref|</code> of float64. This is the gap&#39;s falsifier: its <code>cublas_status</code> is recorded either way;
+</li>
+<li>K1 on tessl&#39;s ragged shapes, in every layout, for FFMA ExactF32, FFMA bf16 and cuBLAS bf16:
+<ul>
+<li>against float64 within tessl&#39;s bounds, <code>1e-4 + 1e-7·k</code> and <code>2e-3</code> (<code>tessl/src/gemm.rs:2286</code>);
+</li>
+<li>the FFMA engines also bitwise against the host emulation;
+</li>
+</ul>
+</li>
+<li>5-run bit-equality per engine.
+</li>
+</ul>
+<h2 id="runga-on-the-box-rung-a-m0--m1--k2i">Runga on the box (rung (a): M0 + M1 + K2(i)) <a class="anchor" href="#runga-on-the-box-rung-a-m0--m1--k2i" aria-label="Link to this section">#</a></h2>
+<p><code>runga</code> runs every device check of M0 and M1 and K2(i)&#39;s in one process, with rung 0&#39;s watchdog, cap and exit codes (0 / 1 / 2 / 3 as in the table above). It writes one report, <code>&lt;out&gt;/runga-report.json</code>. It is a single-GPU job of a few minutes, under rule 4&#39;s $20. Build it with the cross-build recipe above, adding <code>--bin runga</code>, and pin the sha256 of the file you copy against the HANDOFF (<code>HANDOFF/ojas-l-cuda-m1-2026-10-01.md</code>).</p>
+<p>KEY=~/.ssh/bharath_m5_macbook_pro.pem; BOX=ubuntu@192.222.51.246 scp -i $KEY &lt;target-dir&gt;/aarch64-unknown-linux-gnu/release/runga $BOX:/home/ubuntu/bin/ojas-qwen35-cuda-runga</p>
+<p>On the box, check <code>sha256sum /home/ubuntu/bin/ojas-qwen35-cuda-runga</code>, then:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 300 env LD_LIBRARY_PATH=/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cublas/lib:/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib NVIDIA_TF32_OVERRIDE=0 /home/ubuntu/bin/ojas-qwen35-cuda-runga --out /home/ubuntu/ojas-cuda/runga-$(date -u +%Y%m%dT%H%M%SZ); echo &#34;runga exit $?&#34;</p>
+<p><strong>What it checks</strong>, in order:</p>
+<ol>
+<li>the device, as rung 0 opens it, under a 4 GiB budget;
+</li>
+<li>M0: NVRTC, K0, the cuBLAS probe, K1 and K1 determinism, as rung 0 runs them (<code>smoke::m0_phases</code>);
+</li>
+<li>K8: SwiGLU forward (f32, bf16) and backward (shared and separate outputs) and the residual add, bit for bit against the host from sentinel-filled buffers, plus the activation sweep: the crate&#39;s <code>exp</code>, <code>exp_nonpos</code>, <code>log</code>, softplus, sigmoid, SiLU and SiLU&#39; over ~1M inputs, bit for bit;
+</li>
+<li>K11 in three tiers:
+<ul>
+<li>the device trajectory against the f32 emulation, bit for bit, and a repeat. This covers every step&#39;s parameters, the final moments, every step&#39;s squared-norm partials and the per-entry step counts;
+</li>
+<li>on L-oracle&#39;s decay-sensitive golden, the device within the pre-registered 1e-6 of torch&#39;s fp32 masters, and torch&#39;s per-entry step counts;
+</li>
+<li>on the adamw_f float64 golden, the sanity bounds. At F&#39;s lr 1e-5 a decay slip is under any f32 bound, so this tier cannot judge decay;
+</li>
+</ul>
+</li>
+<li>the tiny-fixture loader: upload, read back, bit for bit;
+</li>
+<li>L-cuda-small&#39;s K3, K4, K6, K7, K9 and K10 (<code>small_smoke</code>&#39;s hooks), one phase each. These are smoke-scale: K10&#39;s V = 248,320 case runs at hidden 16, so W is 15.9 MB. Do not compare it with the full-scale (hidden 2048) memory figure of about 10–14 GB per call;
+</li>
+<li>K2(i) at the published rule (<code>gdn_smoke::gdn_published_checks</code>);
+</li>
+<li><code>runtime.no_leaked_buffers</code>: only the cuBLAS workspace is still reserved at the end.
+</li>
+</ol>
+<p>Then, <strong>report-only and never a check</strong>: <code>extra.gdn_published_timing</code>.</p>
+<ul>
+<li>It times GDN at 4×8192, H=16, Dv=128, on its own runtime, opened after the first is dropped, with <code>--gdn-timing-budget-gib</code> (default 24, at least 16).
+</li>
+<li>It says <code>not_run</code> and why when:
+<ul>
+<li><code>--no-gdn-timing</code> is passed;
+</li>
+<li>fewer than 60 s of the cap are left;
+</li>
+<li>the device has less memory than the budget;
+</li>
+<li>an allocation is refused.
+</li>
+</ul>
+</li>
+<li>The header&#39;s <code>golden_pins</code> names the sha256 of every golden compiled into the binary.
+</li>
+</ul>
+<h2 id="device-tests-on-the-box">Device tests on the box <a class="anchor" href="#device-tests-on-the-box" aria-label="Link to this section">#</a></h2>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test --offline --release --no-run --target aarch64-unknown-linux-gnu --features cuda ...   # on the Mac
+# copy target/.../deps/device_k0-&lt;hash&gt; and device_k1-&lt;hash&gt;, then on the box:
+flock /home/ubuntu/queue/gpu.lock timeout 600 env LD_LIBRARY_PATH=&lt;cublas lib&gt;:&lt;nvrtc lib&gt; ./device_k0-&lt;hash&gt; --ignored --test-threads=1
+flock /home/ubuntu/queue/gpu.lock timeout 600 env LD_LIBRARY_PATH=&lt;cublas lib&gt;:&lt;nvrtc lib&gt; ./device_k1-&lt;hash&gt; --ignored --test-threads=1</code></pre></div>
+<p><code>device_k1</code> includes tessl&#39;s 25-run determinism soak for every engine and layout.</p>
+<p><code>device_k8</code> and <code>device_k11</code> (L-cuda-M1) run the same way, from the same <code>--no-run</code> build:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 600 env LD_LIBRARY_PATH=&lt;cublas lib&gt;:&lt;nvrtc lib&gt; ./device_k8-&lt;hash&gt; --ignored --test-threads=1 --nocapture flock /home/ubuntu/queue/gpu.lock timeout 600 env LD_LIBRARY_PATH=&lt;cublas lib&gt;:&lt;nvrtc lib&gt; ./device_k11-&lt;hash&gt; --ignored --test-threads=1 --nocapture</p>
+<ul>
+<li><code>device_k8</code> covers <code>runga</code>&#39;s K8 checks, plus five repeats of every case.
+</li>
+<li><code>device_k11</code> covers <code>runga</code>&#39;s K11 checks, plus:
+<ul>
+<li>the decay-sensitive run&#39;s <code>K11_DEVICE_DECAY</code> line;
+</li>
+<li>five device runs of the synthetic banks, each against the emulation;
+</li>
+<li>the device against the f64 reference of <code>tests/reference/adamw.rs</code> on adamw_f&#39;s inputs.
+</li>
+</ul>
+</li>
+</ul>
+<p>L-cuda-small&#39;s device tests run the same way, from the same build:</p>
+<ul>
+<li><code>device_k3_gates_published</code>
+</li>
+<li><code>device_k4_conv1d</code>
+</li>
+<li><code>device_k6_qk_norm_rope</code>
+</li>
+<li><code>device_k7_rmsnorm</code>
+</li>
+<li><code>device_k9_embed</code>
+</li>
+<li><code>device_k10_ce_rows</code>
+</li>
+</ul>
+<p>Each embeds its goldens with <code>include_bytes!</code> and checks them against the oracle manifest&#39;s sha256, so the box needs no checkout. Their bounds and the pinned artifacts are in that lane&#39;s HANDOFF:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 600 env LD_LIBRARY_PATH=&lt;cublas lib&gt;:&lt;nvrtc lib&gt; ./device_k3_gates_published-&lt;hash&gt; --ignored --test-threads=1</p>
+<h3 id="device-gdn-published-k2i-l-cuda-gdn"><code>device_gdn_published</code> (K2(i), L-cuda-gdn) <a class="anchor" href="#device-gdn-published-k2i-l-cuda-gdn" aria-label="Link to this section">#</a></h3>
+<p>The GDN training scan at the published rule: 10 <code>#[ignore]</code> tests. Their bounds and evidence are in Lappi&#39;s <code>HANDOFF/ojas-l-cuda-gdn-2026-10-01.md</code>. That HANDOFF pins the artifact: <code>device_gdn_published-81ac041bb9f4a1f2</code>, sha256 <code>f0e88668a89f5665043c1f71b0faf480c7b69edd207e6a55952c4a5735cbefb0</code> (Lappi commit 7817895 on L-cuda-gdn&#39;s branch), cross-built in its own target dir, <code>/Users/bharath/qd-campaign/target-aarch64-linux-ojas-qwen35-cuda-gdn</code>. A later rebuild changes the sha256: pin the file you copy, against the newest HANDOFF.</p>
+<p>On the Mac:</p>
+<p>KEY=~/.ssh/bharath_m5_macbook_pro.pem; BOX=ubuntu@192.222.51.246 scp -i $KEY /Users/bharath/qd-campaign/target-aarch64-linux-ojas-qwen35-cuda-gdn/aarch64-unknown-linux-gnu/release/deps/device_gdn_published-81ac041bb9f4a1f2 $BOX:/home/ubuntu/bin/ojas-gdn-published-device</p>
+<p>On the box, check <code>sha256sum /home/ubuntu/bin/ojas-gdn-published-device</code> against the pin, then:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 900 env LD_LIBRARY_PATH=/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cublas/lib:/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib /home/ubuntu/bin/ojas-gdn-published-device --ignored --test-threads=1 --nocapture 2&gt;&amp;1 | tee /home/ubuntu/ojas-cuda/gdn-published-$(date -u +%Y%m%dT%H%M%SZ).log</p>
+<ul>
+<li>The timing test is report-only. It prints one <code>GDN_PUBLISHED_TIMING {json}</code> line per shape (4×2048 and 4×8192, H=16, Dv=128) and needs about 15 GiB free on the device.
+</li>
+<li>Its rows go to the ledger as <code>quick</code> (rule 8).
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-qwen35-cuda/README.md" rel="noopener"><code>ojas-qwen35-cuda/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-qwen35.html" rel="prev"><span>Previous</span>ojas-qwen35</a>
+        <a href="crate-ojas-simd.html" rel="next" class="next"><span>Next</span>ojas-simd</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#what-is-here">What is here</a></li>
+<li><a href="#numerics">Numerics</a></li>
+<li><a href="#building-on-the-mac">Building on the Mac</a></li>
+<li><a href="#libraries-on-the-box">Libraries on the box</a></li>
+<li><a href="#rung-0-on-the-box">Rung 0 on the box</a></li>
+<li><a href="#runga-on-the-box-rung-a-m0--m1--k2i">Runga on the box (rung (a): M0 + M1 + K2(i))</a></li>
+<li><a href="#device-tests-on-the-box">Device tests on the box</a></li>
+<li class="sub"><a href="#device-gdn-published-k2i-l-cuda-gdn">device_gdn_published (K2(i), L-cuda-gdn)</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

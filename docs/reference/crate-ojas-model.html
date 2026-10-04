@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-model · ojas reference</title>
+  <meta name="description" content="ojas-model defines the nanolab default GPT model architecture, order-independent parameter initialization, execution graph abstractions, dual-optimizer device trainer, and checkpoint persistence.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-model.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-model.html">
+  <meta property="og:title" content="ojas-model · ojas reference">
+  <meta property="og:description" content="ojas-model defines the nanolab default GPT model architecture, order-independent parameter initialization, execution graph abstractions, dual-optimizer device trainer, and checkpoint persistence.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html" class="current" aria-current="page">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-model">ojas-model <a class="anchor" href="#ojas-model" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-model</code> defines the <strong>nanolab default GPT</strong> model architecture, order-independent parameter initialization, execution graph abstractions, dual-optimizer device trainer, and checkpoint persistence.</p>
+<p>It depends on <code>ojas-core</code>, <code>ojas-autograd</code>, <code>ojas-io</code>, and <code>ojas-data</code> (<code>#![forbid(unsafe_code)]</code>).</p>
+<hr>
+<h2 id="architecture--subsystems">Architecture &amp; Subsystems <a class="anchor" href="#architecture--subsystems" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph ModelDefinition[&#34;Model Specification &amp; Names&#34;]
+        Spec[&#34;ModelSpec\n(nanolab_124m: 12 layers, d=768, 12x64 heads, V=50304)\n(tiny: 2 layers, d=64, 4x16 heads, V=256)&#34;]
+        Names[&#34;param_table / ModelParams\n(Nanolab state_dict keys, shapes, init rules, optim groups)&#34;]
+        Init[&#34;init_params\n(Order-independent initialization via CounterRng seeded per parameter)&#34;]
+    end
+
+    subgraph GraphExecution[&#34;Graph Trait &amp; Dual Execution Modes&#34;]
+        Graph[&#34;Graph Trait (op vocabulary)&#34;]
+        TapeExec[&#34;ojas_autograd::Tape&lt;B&gt;\n(Reverse-mode training autograd)&#34;]
+        EvalExec[&#34;Eval&lt;B&gt;\n(Eager forward evaluation for decoding)&#34;]
+        Block[&#34;block / forward_loss\n(RMSNorm, Q/K/V projections, QK-norm, RoPE, Causal SDPA, Gate, SwiGLU, Head CE)&#34;]
+    end
+
+    subgraph TrainingAndPersistence[&#34;Trainer &amp; Checkpoints&#34;]
+        Trainer[&#34;Trainer&lt;B&gt;\n- Dual Optimizers: Muon NS5 (2D weights) + AdamW (1D / Embeddings)\n- LR Schedules: Cosine, WSD\n- Preflight memory check_room &amp; peak tracking\n- Poisoning state machine on non-finite updates&#34;]
+        Checkpoint[&#34;Checkpoint Persistence\n- Atomic staging and directory swap (replace_dir_with)\n- model.safetensors, optim.safetensors, state.ojck&#34;]
+    end
+
+    ModelDefinition --&gt; GraphExecution
+    GraphExecution --&gt; TrainingAndPersistence
+    Graph --&gt; TapeExec
+    Graph --&gt; EvalExec
+    Block --&gt; Graph</pre></figure>
+<hr>
+<h2 id="model-specification--parameters">Model Specification &amp; Parameters <a class="anchor" href="#model-specification--parameters" aria-label="Link to this section">#</a></h2>
+<p>The default model follows the nanolab GPT-2 architecture:</p>
+<ul>
+<li><strong>Layers:</strong> 12 transformer blocks.
+</li>
+<li><strong>Hidden Dimension:</strong> $d_{\text{model}} = 768$.
+</li>
+<li><strong>Attention Heads:</strong> 12 heads, each with $d_{\text{head}} = 64$.
+</li>
+<li><strong>MLP:</strong> SwiGLU with intermediate width 2,048.
+</li>
+<li><strong>Vocabulary:</strong> 50,304 tokens, tied embedding and language modeling head.
+</li>
+<li><strong>Attention Features:</strong> Per-head output gating and value-residual blending.
+</li>
+<li><strong>Norms:</strong> RMSNorm ($\varepsilon = 10^{-6}$) with per-head QK-norm before RoPE.
+</li>
+</ul>
+<h3 id="parameter-initialization--groups">Parameter Initialization &amp; Groups <a class="anchor" href="#parameter-initialization--groups" aria-label="Link to this section">#</a></h3>
+<p>Parameters are drawn deterministically from a <code>CounterRng</code> seeded with <code>seed ^ fnv1a(name)</code> using Box-Muller, ensuring initialization is independent of iteration or parameter collection order.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Parameter Name</th><th>Shape</th><th>Init Distribution</th><th>Optimizer Group</th></tr></thead>
+<tbody>
+<tr><td><code>tok_emb.weight</code> (tied <code>lm_head</code>)</td><td><code>[50304, 768]</code></td><td>$\mathcal{N}(0, 0.02)$</td><td>AdamW ($\text{wd}=0.0$, $\text{lr}=6\times 10^{-4}$)</td></tr>
+<tr><td><code>blocks.i.norm1.weight</code>, <code>.norm2.weight</code>, <code>norm_f.weight</code></td><td><code>[768]</code></td><td>Ones</td><td>AdamW ($\text{wd}=0.0$)</td></tr>
+<tr><td><code>blocks.i.mixer.{q,k,v}_proj.weight</code></td><td><code>[768, 768]</code></td><td>$\mathcal{N}(0, 0.02)$</td><td>Muon NS5</td></tr>
+<tr><td><code>blocks.i.mixer.o_proj.weight</code></td><td><code>[768, 768]</code></td><td>Zeros</td><td>Muon NS5</td></tr>
+<tr><td><code>blocks.i.mixer.{q,k}_norm.weight</code></td><td><code>[64]</code></td><td>Ones</td><td>AdamW</td></tr>
+<tr><td><code>blocks.i.mixer.gate.weight</code></td><td><code>[12, 768]</code></td><td>$\mathcal{N}(0, 0.02)$</td><td>Muon NS5</td></tr>
+<tr><td><code>blocks.i.mixer.gate.bias</code></td><td><code>[12]</code></td><td>Zeros</td><td>AdamW</td></tr>
+<tr><td><code>blocks.i.mixer.vr_lambda</code></td><td><code>[1]</code></td><td>Zeros ($\sigma(0) = 0.5$)</td><td>AdamW</td></tr>
+<tr><td><code>blocks.i.ffn.{gate,up}.weight</code></td><td><code>[2048, 768]</code></td><td>$\mathcal{N}(0, 0.02)$</td><td>Muon NS5</td></tr>
+<tr><td><code>blocks.i.ffn.down.weight</code></td><td><code>[768, 2048]</code></td><td>Zeros</td><td>Muon NS5</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="trainer-guarantees--lifecycle">Trainer Guarantees &amp; Lifecycle <a class="anchor" href="#trainer-guarantees--lifecycle" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Preflight Memory Bounds:</strong> Before computing forward passes, <code>Trainer</code> evaluates <code>budget.check_room(self.preflight_bytes(rows, k))</code> to confirm headroom for activation tapes and optimizer scratch.
+</li>
+<li><strong>Step Peak Tracking:</strong> <code>Budget::reset_peak()</code> and <code>Budget::peak_bytes()</code> measure empirical high-water marks per step.
+</li>
+<li><strong>Pre-Apply Validation:</strong> Before updating parameters, <code>budget.check_room(self.optimizer_scratch)</code> verifies allocation capacity for moment updates while gradients remain alive, preventing OOM aborts mid-update.
+</li>
+<li><strong>Poisoning State Machine:</strong> If non-finite values or allocation failures occur during optimizer steps or synchronization, the trainer enters <code>TrainState::Poisoned</code>, refusing subsequent steps or saves until an explicit resume.
+</li>
+<li><strong>Atomic Checkpointing:</strong> <code>Trainer::save</code> writes weights and optimizer moments into a staging directory before performing an atomic rename (<code>replace_dir_with</code>), ensuring partially written checkpoints are never readable.
+</li>
+</ol>
+<hr>
+<h2 id="test-suites-80-tests">Test Suites (80 tests) <a class="anchor" href="#test-suites-80-tests" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>tests/forward.rs</code>: Forward pass execution and parity checks.
+</li>
+<li><code>tests/trainer.rs</code>: Training step execution, gradient clipping, and dual-optimizer steps.
+</li>
+<li><code>tests/checkpoint.rs</code>: Atomic directory swap, resume from safetensors, and schema verification.
+</li>
+<li><code>tests/cpu_api.rs</code>, <code>tests/cpu_config.rs</code>, <code>tests/cpu_groups.rs</code>, <code>tests/cpu_names.rs</code>: CPU model integration and parameter partition tests.
+</li>
+<li><code>tests/gpu_parity.rs</code>: GPU parity against reference numerical fixtures.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-model/README.md" rel="noopener"><code>ojas-model/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-metal.html" rel="prev"><span>Previous</span>ojas-metal</a>
+        <a href="crate-ojas-oracle.html" rel="next" class="next"><span>Next</span>ojas-oracle</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#architecture--subsystems">Architecture &amp; Subsystems</a></li>
+<li><a href="#model-specification--parameters">Model Specification &amp; Parameters</a></li>
+<li class="sub"><a href="#parameter-initialization--groups">Parameter Initialization &amp; Groups</a></li>
+<li><a href="#trainer-guarantees--lifecycle">Trainer Guarantees &amp; Lifecycle</a></li>
+<li><a href="#test-suites-80-tests">Test Suites (80 tests)</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

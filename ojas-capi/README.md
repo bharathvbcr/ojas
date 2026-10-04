@@ -53,7 +53,7 @@ sequenceDiagram
         Model-->>Go: ojas:E_BUSY:
     else
         Dispatch->>Gate: arm the job's cancel check
-        Gate->>Gate: Trainer::step; each op before the optimizer polls the check
+        Gate->>Gate: Trainer::step#59; each op before the optimizer polls the check
         Dispatch->>Gate: settled(): backend.sync()
         Gate-->>Go: StepResult, or a kinded error
     end

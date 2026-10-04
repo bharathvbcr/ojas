@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas Go Client · ojas reference</title>
+  <meta name="description" content="The Go package github.com/bharathvbcr/ojas/go trains and serves the nanolab GPT in process: the Rust engine (ojas-capi, through gusset) holds each model on its device, and Go sends paths, token ids a…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-go.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-go.html">
+  <meta property="og:title" content="ojas Go Client · ojas reference">
+  <meta property="og:description" content="The Go package github.com/bharathvbcr/ojas/go trains and serves the nanolab GPT in process: the Rust engine (ojas-capi, through gusset) holds each model on its device, and Go sends paths, token ids a…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html" class="current" aria-current="page">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-go-client">ojas Go Client <a class="anchor" href="#ojas-go-client" aria-label="Link to this section">#</a></h1>
+<p>The Go package <code>github.com/bharathvbcr/ojas/go</code> trains and serves the nanolab GPT in process: the Rust engine (<code>ojas-capi</code>, through <code>gusset</code>) holds each model on its device, and Go sends paths, token ids and options.</p>
+<hr>
+<h2 id="integration-architecture--ffi-bridge">Integration Architecture &amp; FFI Bridge <a class="anchor" href="#integration-architecture--ffi-bridge" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant App as Go Application
+    participant SDK as ojas Go Package (go/api.go)
+    participant FFI as CGO Bridge (go/ffi.go)
+    participant Gusset as Worker Pool (libgusset.a)
+    participant Rust as ojas-capi Engine
+
+    App-&gt;&gt;SDK: ojas.SetModelRoot(ctx, &#34;./models&#34;)
+    App-&gt;&gt;SDK: id, err := ojas.LoadModel(ctx, &#34;init.safetensors&#34;, LoadOptions{Device: DeviceMetal})
+    SDK-&gt;&gt;FFI: callEngine(ctx, opLoad, record)
+    FFI-&gt;&gt;Gusset: Submit to Worker Queue
+    Gusset-&gt;&gt;Rust: dispatch(OP_LOAD): read, check, upload the weights
+    Rust--&gt;&gt;App: model id (uint64)
+
+    App-&gt;&gt;SDK: ojas.OpenTrainer(ctx, id, cfg)
+    App-&gt;&gt;SDK: res, err := ojas.TrainStep(ctx, id)
+    Gusset-&gt;&gt;Rust: dispatch(OP_TRAIN_STEP)
+    Note over Rust: Forward, backward, Muon + AdamW on the device#59; reads back the loss
+    Rust--&gt;&gt;App: StepResult{Loss, GradNorm, MatrixLR, AdamLR, Step, Tokens}
+
+    App-&gt;&gt;SDK: ojas.SaveCheckpoint(ctx, id, &#34;runs/ckpt&#34;)
+    App-&gt;&gt;SDK: ids, err := ojas.GenerateIDs(ctx, id, prompt, opts)
+    App-&gt;&gt;SDK: ojas.Free(ctx, id)#59; ojas.Close(ctx)</pre></figure>
+<hr>
+<h2 id="usage-example">Usage Example <a class="anchor" href="#usage-example" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">go</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>package main
+
+import (
+	&#34;context&#34;
+	&#34;fmt&#34;
+	&#34;log&#34;
+
+	ojas &#34;github.com/bharathvbcr/ojas/go&#34;
+)
+
+func main() {
+	ctx := context.Background()
+	if err := ojas.SetModelRoot(ctx, &#34;./models&#34;); err != nil {
+		log.Fatal(err)
+	}
+
+	// Every model&#39;s BudgetBytes draws from the process-wide memory ceiling
+	// (1 GiB by default). Raise it before any model is open; it is refused
+	// while one is. Here it comes from the machine: SystemProfile cuts the
+	// 16 GiB asked for by RAM, available memory and any cgroup limit. The
+	// ceiling counts logical tensor bytes and a Metal buffer can take up to
+	// twice that, so this caller keeps half as headroom. The fraction is the
+	// caller&#39;s choice; nothing picks it for you.
+	prof, err := ojas.SystemProfile(ctx, 16&lt;&lt;30, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ceiling := prof.BudgetBytes / 2
+	if ceiling == 0 { // SetMemoryCeiling refuses 0
+		log.Fatal(&#34;no memory to spare on this machine&#34;)
+	}
+	if err := ojas.SetMemoryCeiling(ctx, ceiling); err != nil {
+		log.Fatal(err)
+	}
+
+	// A nanolab safetensors file (nanolab state_dict names, spec in metadata).
+	// Metal or wgpu fail closed: no device means an error, never a CPU model.
+	id, err := ojas.LoadModel(ctx, &#34;init.safetensors&#34;, ojas.LoadOptions{
+		Device:      ojas.DeviceMetal,
+		BudgetBytes: ceiling, // above the ceiling is ErrCapacity
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ojas.Free(ctx, id)
+
+	cfg := ojas.NanolabTrainConfig(&#34;fineweb_train_000.bin&#34;, 4, 1024, 16, 1337,
+		ojas.Schedule{Kind: ojas.ScheduleCosine, Warmup: 30, Total: 300})
+	cfg.BinFormat = ojas.BinFineWeb
+	if err := ojas.OpenTrainer(ctx, id, cfg); err != nil {
+		log.Fatal(err)
+	}
+	for i := 0; i &lt; 300; i++ {
+		res, err := ojas.TrainStep(ctx, id)
+		if err != nil {
+			log.Fatal(err) // errors.Is(err, ojas.ErrNonFinite), ErrCapacity, ...
+		}
+		fmt.Printf(&#34;step %d loss %.4f\n&#34;, res.Step, res.Loss)
+	}
+	if err := ojas.SaveCheckpoint(ctx, id, &#34;runs/ckpt&#34;); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := ojas.LoadTokenizer(ctx, id, &#34;gpt2/vocab.json&#34;, &#34;gpt2/merges.txt&#34;); err != nil {
+		log.Fatal(err)
+	}
+	prompt, _ := ojas.Tokenize(ctx, id, &#34;Once upon a time&#34;)
+	out, err := ojas.GenerateIDs(ctx, id, prompt, ojas.SampleOptions{
+		Temperature: 0.8, TopK: 50, Seed: 1, MaxNewTokens: 64,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	text, _ := ojas.Detokenize(ctx, id, out)
+	fmt.Println(text)
+
+	_ = ojas.Close(ctx)
+}</code></pre></div>
+<p><code>Resume(ctx, &#34;runs/ckpt&#34;, opts, cfg)</code> continues the run in a new id; <code>cfg</code> must equal the saved config. <code>NewModel(ctx, spec, seed, opts)</code> starts from a fresh nanolab init. <code>Inspect(ctx, path)</code> counts a file&#39;s tensors without loading it.</p>
+<hr>
+<h2 id="errors">Errors <a class="anchor" href="#errors" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Sentinel</th><th>In-band kind</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>ErrCapacity</code></td><td><code>ojas:E_CAPACITY:</code></td><td>a byte budget, the process memory ceiling (<code>SetMemoryCeiling</code>), the 64-model table, or the model&#39;s context length</td></tr>
+<tr><td><code>ErrNonFinite</code></td><td><code>ojas:E_NONFINITE:</code></td><td>a NaN or infinity; the step committed nothing</td></tr>
+<tr><td><code>ErrDeviceLost</code></td><td><code>ojas:E_DEVICE_LOST:</code></td><td>the device was lost</td></tr>
+<tr><td><code>ErrBusy</code></td><td><code>ojas:E_BUSY:</code></td><td>another call holds this id (pool size &gt; 1)</td></tr>
+<tr><td><code>ErrPoisoned</code></td><td><code>ojas:E_POISONED:</code></td><td>the trainer was left partly updated; Resume</td></tr>
+<tr><td><code>ErrPressure</code></td><td><code>ojas:E_PRESSURE:</code></td><td>critical memory pressure refused a call that would allocate, before it started; nothing changed, Save and Free still run; back off and retry</td></tr>
+<tr><td><code>context.Canceled</code></td><td>(gusset)</td><td>the call&#39;s context ended; a cancelled step commits nothing</td></tr>
+</tbody></table></div>
+<p>A kind counts only at the start of the engine&#39;s message, so a path that spells one never selects it.</p>
+<hr>
+<h2 id="hardware-device-selection">Hardware Device Selection <a class="anchor" href="#hardware-device-selection" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    DeviceEnum[&#34;LoadOptions.Device&#34;]
+
+    DeviceEnum --&gt;|DeviceCPU| D0[&#34;DeviceCPU\nSingle-threaded CPU execution (1 thread)&#34;]
+    DeviceEnum --&gt;|DeviceCPUParallel| D1[&#34;DeviceCPUParallel\nMultithreaded CPU pool (1..=256 threads)&#34;]
+    DeviceEnum --&gt;|DeviceCPUAuto| D4[&#34;DeviceCPUAuto\nAutomatic thread count from system thread ceiling&#34;]
+    DeviceEnum --&gt;|DeviceMetal| D2[&#34;DeviceMetal\nApple Silicon Metal 4 (tessl + MSL)&#34;]
+    DeviceEnum --&gt;|DeviceWgpu| D3[&#34;DeviceWgpu\nPortable WebGPU / WGSL (Vulkan/Metal/DX12)&#34;]</pre></figure>
+<aside class="alert alert-important"><p class="alert-title">Important</p><ul>
+<li><strong>Zero Silent Fallback:</strong> Selecting <code>DeviceMetal</code> or <code>DeviceWgpu</code> on a system where that hardware or driver is absent <strong>returns an error immediately</strong>. The client never silently degrades to CPU execution.
+</li>
+<li><strong>Thread Constraints:</strong> <code>DeviceCPUParallel</code> needs $1 \le \text{Threads} \le 256$ (<code>MaxCPUThreads</code>). 0 or more than 256 is an error.
+</li>
+<li><strong>Auto Thread Sizing:</strong> <code>DeviceCPUAuto</code> sizes the CPU pool from this machine&#39;s thread ceiling (<code>SystemProfile</code>&#39;s <code>ThreadCeiling</code>, clamped to <code>MaxCPUThreads</code>), factoring in usable CPUs and cgroup CPU quotas. An unreadable CPU count is refused, not guessed.
+</li>
+<li><strong>Numerics:</strong> <code>NumericsExact</code> makes a CPU model bitwise reproducible; Metal and wgpu refuse a Numerics setting.
+</li>
+<li><strong>Memory Ceiling Validation:</strong> <code>SetMemoryCeiling</code> replaces the process ceiling (default 1 GiB, or machine hard limit if tighter). It refuses 0, while any model is open, or if the requested bytes exceed the machine&#39;s physical RAM or cgroup limit (<code>ErrCapacity</code>).
+</li>
+</ul>
+</aside>
+<hr>
+<h2 id="compiling--testing">Compiling &amp; Testing <a class="anchor" href="#compiling--testing" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code># 1. Build the umbrella Rust static library archive
+cargo build -p ojas-gusset-engine
+
+# 2. Run the Go tests with pkg-config linking against target/debug/libgusset.a.
+#    -a is required: Go&#39;s build cache does not track libgusset.a!
+cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfig -v -count=1 ./...</code></pre></div>
+<p>The tests load <code>../ojas-capi/tests/fixtures/nano.safetensors</code>, a checked-in 40 KB nanolab model (2 layers, d 16, vocab 64).</p>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>The <code>-a</code> flag is <strong>strictly required</strong> for <code>go test</code>. Go&#39;s build cache does not monitor changes to external static archives (<code>libgusset.a</code>), so omitting <code>-a</code> may cause tests to link against stale object code.</p>
+<p>On Linux, run with <code>PKG_CONFIG_PATH=&#34;$PWD/linux&#34;</code> to link standard glibc libraries (<code>-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc</code>) instead of Apple macOS frameworks.</p>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/go/README.md" rel="noopener"><code>go/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-bench.html" rel="prev"><span>Previous</span>bench</a>
+        <a href="crate-ojas-autograd.html" rel="next" class="next"><span>Next</span>ojas-autograd</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#integration-architecture--ffi-bridge">Integration Architecture &amp; FFI Bridge</a></li>
+<li><a href="#usage-example">Usage Example</a></li>
+<li><a href="#errors">Errors</a></li>
+<li><a href="#hardware-device-selection">Hardware Device Selection</a></li>
+<li><a href="#compiling--testing">Compiling &amp; Testing</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

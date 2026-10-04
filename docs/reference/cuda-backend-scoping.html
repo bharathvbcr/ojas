@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01) · ojas reference</title>
+  <meta name="description" content="Provenance: this is a copy of Lappi-decision/AUDIT/ojas-training-2026-10-01/cuda-backend-scoping.md (Lappi main 226f74f), written by the Lappi session&#39;s L-cuda lane and placed here beside framework-d…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/cuda-backend-scoping.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/cuda-backend-scoping.html">
+  <meta property="og:title" content="L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01) · ojas reference">
+  <meta property="og:description" content="Provenance: this is a copy of Lappi-decision/AUDIT/ojas-training-2026-10-01/cuda-backend-scoping.md (Lappi main 226f74f), written by the Lappi session&#39;s L-cuda lane and placed here beside framework-d…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html" class="current" aria-current="page">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
+      <article class="prose-ojas">
+<h1 id="l-cuda-scoping-an-ojas-cuda-backend-for-lappi-on-the-gh200-design-only-2026-10-01">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01) <a class="anchor" href="#l-cuda-scoping-an-ojas-cuda-backend-for-lappi-on-the-gh200-design-only-2026-10-01" aria-label="Link to this section">#</a></h1>
+<blockquote><p><strong>Provenance:</strong> this is a copy of <code>Lappi-decision/AUDIT/ojas-training-2026-10-01/cuda-backend-scoping.md</code> (Lappi main <code>226f74f</code>), written by the Lappi session&#39;s L-cuda lane and placed here beside <a href="framework-design.html"><code>framework-design.md</code></a> at its request. The ojas coordinator read it in full. Nothing in it has been implemented, and its asks (§6.3) await the user. Relative paths below are relative to the Lappi repo unless prefixed <code>ojas/</code>.</p>
+</blockquote>
+<p>Lane L-cuda. Design and scoping only: no kernel was written, no GPU was used, nothing was run on the box, ojas and tessl were not edited. The user decided on 2026-10-01 to start scoping the ojas CUDA backend now, as CPU-only work. Fable had advised deferring it (<code>fable-advice.md</code> Q2, human ask 6). This document is that scoping. The lead relays it to the ojas coordinator, which wants it beside <code>ojas/docs/framework-design.md</code>.</p>
+<p><strong>Labels.</strong> <strong>[V]</strong> means I read the line or ran the command (file:line or the command is given). <strong>[R]</strong> means reported by a document or a test I did not run. <strong>[I]</strong> means inferred, with the reasoning shown. <strong>[U]</strong> means unverified.</p>
+<p><strong>Paths.</strong> <code>ojas/</code> is <code>/Users/bharath/Code/research/ojas</code>, <code>tessl/</code> is <code>/Users/bharath/Code/research/tessl</code>, <code>cudarc/</code> is <code>~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cudarc-0.19.10</code>. Other paths are relative to the Lappi repo.</p>
+<p><strong>Navigation record.</strong></p>
+<ul>
+<li>DevMap: ojas index gen 2114 and tessl gen 873, both fresh [V <code>devmap_status</code>]. I used <code>devmap_skeleton</code> for <code>ojas-core/src/backend.rs</code> and <code>tessl/src/qwen35_train.rs</code>. Rust call resolution is low: net 338‰ on ojas and 318‰ on tessl, and skeleton signatures were &#34;not extracted&#34;. So the inventory below comes from file reads and <code>rg</code>, not graph edges (<code>GAP-L-CUDA-INVENTORY-FROM-READS-2026-10-01</code>).
+</li>
+<li>GitPulse on ojas: 1 worktree, 103 unstaged and 97 untracked files, 0 overlapping (one worktree, so same-worktree collisions are invisible) [V <code>gitpulse_insights</code>].
+</li>
+<li>GitPulse on this Lappi worktree: <code>REPOSITORY_TRUST_REQUIRED</code> on every facet (<code>GAP-L-CUDA-GITPULSE-UNTRUSTED-2026-10-01</code>).
+</li>
+<li>No <code>ListAgents</code> tool was exposed to this lane (<code>GAP-L-CUDA-NO-LISTAGENTS-2026-10-01</code>). The live ojas coordinator is known only from the lead&#39;s message.
+</li>
+</ul>
+<hr>
+<h2 id="0-summary">0. Summary <a class="anchor" href="#0-summary" aria-label="Link to this section">#</a></h2>
+<p><strong>Recommendation.</strong> Build <strong>(B) first</strong>: a whole-step Qwen3.5 training provider on CUDA, the CUDA counterpart of the Metal <code>ojas-qwen35</code> provider (Metal via tessl) that lane L-ojas-qwen35 is writing. It mirrors tessl&#39;s step seam: <code>train_forward</code> → <code>PendingStep::hidden</code> → <code>train_backward_into</code> into a bank, then <code>grad_sq_norm</code> and in-place AdamW.</p>
+<p>Make <strong>(A)</strong>, a general ojas CUDA <code>Backend</code> over the existing 25 trait ops plus T1–T6, the <strong>destination</strong>. The two converge in three places:</p>
+<ul>
+<li>one CUDA runtime crate;
+</li>
+<li>one CUDA-C kernel source module, which (A)&#39;s trait methods later call;
+</li>
+<li>one step-provider trait, which the trainer is generic over.
+</li>
+</ul>
+<p>(A) alone cannot run a single Qwen3.5 step, even with T1–T6. About ten Qwen ops are missing from the trait (§2.A.3), and each needs a trait edit, which the coordinator owns.</p>
+<p><strong>Fastest to &#34;Lappi trained on the GH200&#34; (quick rows, rungs a–d):</strong> (B), on the correctness path:</p>
+<ul>
+<li>tessl&#39;s sequential GDN ported as is;
+</li>
+<li>cuBLAS for GEMM if the human allows its cudarc feature, otherwise a hand-written <code>mma.sync</code> GEMM;
+</li>
+<li>a deterministic FA2-style attention at D=256 with GQA.
+</li>
+</ul>
+<p>That is <strong>~35–45 specialist engineer-days, ~2.5–3 weeks wall across 4–5 lanes</strong> [I, §3 table]. It lands at a step speed that is <strong>~5–10× slower than the PyTorch campaign</strong> [I, §3.2 arithmetic], because tessl&#39;s GDN is a token-sequential scan.</p>
+<p><strong>Campaign speed</strong> (parity with PyTorch&#39;s 15–26k positions/s) additionally needs:</p>
+<ul>
+<li>fla&#39;s chunked GDN as hand-written CUDA (the largest single item);
+</li>
+<li>the GEMM and attention performance tiers.
+</li>
+</ul>
+<p>That adds <strong>~25–35 days</strong>, so <strong>60–80 days</strong> to a CUDA path that could replace PyTorch for 3-seed campaigns [I]. Fable&#39;s 30–50 days (<code>fable-advice.md:36</code>) roughly covers the correctness path only.</p>
+<p><strong>Top risks</strong> (§7):</p>
+<ol>
+<li>GDN speed, and the chunked GDN backward on Hopper, where fla has already shipped a wrong-gradient bug (#640).
+</li>
+<li>The toolchain and ABI: cudarc&#39;s binding pin, a missing-symbol panic, and the fact that no ojas CUDA kernel has ever run on a real GPU.
+</li>
+<li>There are no gaps in the GH200 queue. Every debug cycle is an inserted item on a box with no Rust toolchain.
+</li>
+<li>Placement and ownership: the ojas tree is live, and rule 6 places &#34;kernel work&#34; in tessl.
+</li>
+<li>cuBLAS bf16-in/f32-out is unverified.
+</li>
+</ol>
+<p><strong>Human asks</strong> (§6.3): placement and rule-6 scope; enabling cudarc&#39;s <code>cuda</code> feature with the binding pin moved to <code>cuda-12080</code>; the cuBLAS feature (yes or no); GH200 minutes (insert into the post-F queue, or wait until after item 10); ojas file ownership with the coordinator; the speed target (correctness path or campaign speed).</p>
+<hr>
+<h2 id="1-what-exists">1. What exists <a class="anchor" href="#1-what-exists" aria-label="Link to this section">#</a></h2>
+<h3 id="11-ojas-cuda-a-probe-not-a-backend">1.1 <code>ojas-cuda</code>: a probe, not a backend <a class="anchor" href="#11-ojas-cuda-a-probe-not-a-backend" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Feature gate.</strong> <code>cuda = [&#34;dep:cudarc&#34;]</code>, off by default [V <code>ojas/ojas-cuda/Cargo.toml:10-13</code>].
+</li>
+<li><strong>cudarc pin.</strong> <code>cudarc = &#34;=0.19.10&#34;</code> with <code>default-features = false</code> and features <code>std, driver, nvrtc, fallback-dynamic-loading, cuda-13040</code> [V <code>Cargo.toml:21-29</code>]. cuBLAS is deliberately off (the comment on line 20). cudarc is already in ojas&#39;s <code>Cargo.lock</code> [V: the <code>--locked --offline</code> cross-check in §1.5 compiled <code>cudarc v0.19.10</code> from it; also <code>fable-advice.md:36</code>].
+</li>
+<li><strong>What it does.</strong>
+<ul>
+<li><code>CudaDevice::open()</code> returns <code>NotCompiled</code> without the feature [V <code>ojas-cuda/src/lib.rs:33-37</code>].
+</li>
+<li>With the feature it probes <code>libcuda</code>/<code>libnvrtc</code> by dlopen, because cudarc panics otherwise (<code>:86-101</code>). It opens <code>CudaContext::new(0)</code> and launches one affine kernel <code>y = x*scale + bias</code> as a self-test (<code>:45-58</code>).
+</li>
+<li>The kernel is compiled by <strong>NVRTC at run time with <code>fmad: Some(false)</code></strong> (<code>:231-236</code>), so ojas already chose NVRTC and FMA-off for its only CUDA kernel.
+</li>
+<li>It waits on an event with a bounded 30 s poll (<code>:332-337</code>, <code>:181-197</code>) and maps <code>CUDA_ERROR_OUT_OF_MEMORY</code> (2) to <code>Capacity</code> (<code>:129-141</code>).
+</li>
+</ul>
+</li>
+<li><strong>Not a <code>Backend</code>.</strong> It &#34;does <strong>not</strong> implement the <code>ojas_core::Backend</code> trait and is not reachable from the Go C-ABI runtime&#34; [V <code>ojas-cuda/README.md:28</code>, <code>ojas/README.md:24,199</code>].
+</li>
+<li><strong>Never run on a GPU.</strong> ojas&#39;s own verification table records &#34;CUDA Execution — Skipped: No NVIDIA GPU present&#34;. The bindings were type-checked only [R <code>ojas/docs/backends.md:122-131</code>; &#34;not re-run on 2026-10-01&#34;].
+</li>
+<li><strong>Side finding for the coordinator (no edit made).</strong> <code>commit_resize</code> (<code>lib.rs:148</code>) is dead in the <code>cuda</code> build: <code>cargo check --features cuda</code> warns &#34;function <code>commit_resize</code> is never used&#34; [V, command in §1.5]. The production resize at <code>lib.rs:287-300</code> does not call it, so <code>failed_resize_keeps_the_previous_buffers</code> (<code>:368-398</code>) tests a helper the code never runs.
+<ul>
+<li>The production path still computes all three new buffers with <code>?</code> before assigning any of them, so it appears safe [I].
+</li>
+<li>The test is tautological as a guard on the real path.
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="12-ojas-hip-a-copy-probe">1.2 <code>ojas-hip</code>: a copy probe <a class="anchor" href="#12-ojas-hip-a-copy-probe" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><code>hip = [&#34;dep:hip-runtime-sys&#34;]</code> (<code>=0.1.2</code>), off by default [V <code>ojas/ojas-hip/Cargo.toml:13,20</code>]. It does &#34;not implement the <code>ojas_core::Backend</code> trait and carries no compute kernels&#34; [V <code>ojas-hip/README.md:28</code>]. Its <code>--features hip</code> build stopped in <code>hip-runtime-sys</code> with no <code>/opt/rocm</code> [R <code>backends.md:132</code>].
+</li>
+<li><strong>Relevance here:</strong> <code>ojas-kernels/src/source.rs:1-2</code> says the CUDA-C source &#34;is written so a future hiprtc path can reuse it unchanged&#34; [V]. Any inline PTX (<code>mma.sync</code>, <code>wgmma</code>, <code>cp.async.bulk</code>/TMA) in the kernels below breaks that intent. See the GEMM tiers in §3.1.
+</li>
+</ul>
+<h3 id="13-the-backend-trait-and-t1t6">1.3 The <code>Backend</code> trait, and T1–T6 <a class="anchor" href="#13-the-backend-trait-and-t1t6" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>The trait</strong> is <code>ojas-core/src/backend.rs:380-636</code> [V]. It has 25 ops beyond <code>id</code>/<code>budget</code>/<code>numerics</code>/<code>upload</code>/<code>download</code>:
+<ul>
+<li><code>permute</code>;
+</li>
+<li>embedding fwd/bwd, linear fwd/bwd, <code>rms_norm</code> fwd/bwd;
+</li>
+<li><code>rope_half_split</code> fwd/bwd, <code>rms_qk_norm</code> fwd/bwd, <code>causal_sdpa</code> fwd/bwd;
+</li>
+<li><code>per_head_sigmoid_gate</code> fwd/bwd, <code>value_residual_blend</code> fwd/bwd;
+</li>
+<li>silu, mul and residual_add, each fwd/bwd;
+</li>
+<li><code>cross_entropy_mean</code> fwd/bwd;
+</li>
+<li><code>clip_grad_norm</code>, <code>adamw_step</code>, <code>muon_ns5_step</code>.
+</li>
+</ul>
+</li>
+<li><strong>The trait is nanolab-shaped:</strong>
+<ul>
+<li>linear weights are <code>[out,in]</code> with no bias;
+</li>
+<li>RoPE is the half-split over the full head;
+</li>
+<li>the per-head gate is <code>[n_head, d_model]</code>;
+</li>
+<li>CE is <code>[rows × vocab]</code>;
+</li>
+<li><code>METAL_MAX_HEAD_DIM = 128</code> (<code>:47-54</code>, <code>:353-379</code>).
+</li>
+</ul>
+</li>
+<li><strong><code>BackendId::Cuda</code> already exists</strong> (<code>:13-19</code>) [V].
+</li>
+<li><strong>Numerics contract</strong> (<code>:21-34</code>, <code>:386-393</code>) [V]. <code>Exact</code> means ascending-index f32 reductions, no FMA, bits independent of thread count. <code>Fast</code> may fuse or reorder, but &#34;the bits still must not depend on the thread count&#34;. A GPU backend that is not ascending-index-without-FMA &#34;must override this to return <code>Numerics::Fast</code>&#34;.
+<ul>
+<li>A CUDA backend is <code>Fast</code> by this definition [I].
+</li>
+<li>Its geometry must not depend on the device&#39;s SM count. cuBLAS&#39;s own reproducibility guarantee is only &#34;on GPUs with the same architecture and the same number of SMs&#34; [R cuBLAS 13.4 docs, &#34;Results reproducibility&#34;]. Ported to ojas&#39;s contract, that is a cross-device caveat a hand-written fixed-geometry GEMM does not have.
+</li>
+</ul>
+</li>
+<li><strong>Residency needs no core edit.</strong> <code>DeviceBuffer</code> (<code>ojas-core/src/tensor.rs:19-33</code>: <code>backend</code>, <code>byte_len</code>, <code>read_bytes</code>, <code>as_any</code>) and <code>Tensor::from_device</code> (<code>tensor.rs:245</code>) are how Metal (<code>ojas-metal/src/backend.rs:58</code>) and wgpu (<code>ojas-wgpu/src/context.rs:1124</code>) hold device memory [V]. A <code>CudaBuffer: DeviceBuffer</code> in <code>ojas-cuda</code> fits as is. <code>DType</code> already has <code>Bf16</code> (<code>ojas-core/src/dtype.rs:5-10</code>) [V].
+</li>
+<li><strong>T1–T6</strong> are proposals, not code. <code>rg</code> finds no <code>fn sync</code>, <code>accumulate_grad</code>, <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code>, <code>kv_cache_write</code> or blanket <code>impl&lt;B: Backend</code> in <code>ojas-core/src</code> (exit 1) [V]. As written at <code>ojas/docs/framework-design.md:192-221</code> [V]:
+<ul>
+<li><strong>T1</strong> <code>sync()</code>, default <code>Ok(())</code>;
+</li>
+<li><strong>T2</strong> <code>accumulate_grad(acc, grad)</code>;
+</li>
+<li><strong>T3</strong> <code>linear_cross_entropy_mean(input [N,d], weight [V,d], targets, ignore_index, chunk_rows, want_grad)</code>;
+</li>
+<li><strong>T4</strong> <code>cached_attention_forward</code> (GQA folded in);
+</li>
+<li><strong>T5</strong> <code>kv_cache_write</code>;
+</li>
+<li><strong>T6</strong> blanket impls for <code>&amp;B</code> and <code>Arc&lt;B&gt;</code>.
+</li>
+<li>T3–T5 default to <code>Unsupported</code>.
+</li>
+<li>Gates G1–G5 (<code>:217-221</code>).
+</li>
+<li>The framework layer itself is &#34;proposal, not implemented … awaiting a go/no-go&#34; (<code>:1-15</code>).
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="14-ojas-kernels-cuda-sources">1.4 <code>ojas-kernels</code>: CUDA sources <a class="anchor" href="#14-ojas-kernels-cuda-sources" aria-label="Link to this section">#</a></h3>
+<p>The <strong>only</strong> CUDA-C text in ojas is <code>affine_cuda()</code> [V <code>ojas/ojas-kernels/src/source.rs:33-48</code>]. Everything else is WGSL:</p>
+<ul>
+<li>11 modules, 1,263 lines [V <code>wc -l ojas-kernels/src/wgsl/*.wgsl</code>];
+</li>
+<li>attention is capped at <code>ATTENTION_MAX_HEAD_DIM = 128</code> (<code>geometry.rs:146</code>);
+</li>
+<li><code>GEMM_TILE = 64</code> (<code>geometry.rs:127</code>).
+</li>
+</ul>
+<p>The crate is device-agnostic: geometry, source text and a parity harness (<code>max_abs</code>, <code>splitmix_f32</code>, <code>linear_close</code>) [V <code>lib.rs:1-18</code>, <code>harness.rs</code>]. That makes it the natural home for a <code>cuda/</code> source module both designs share (§2.C).</p>
+<h3 id="15-can-ojas-build-for-aarch64-linux-today-builds-and-links-never-run-on-linux">1.5 Can ojas build for aarch64 Linux today? Builds and links; never run on Linux <a class="anchor" href="#15-can-ojas-build-for-aarch64-linux-today-builds-and-links-never-run-on-linux" aria-label="Link to this section">#</a></h3>
+<p>ojas&#39;s own docs say &#34;<strong>Linux and Windows have never been built</strong>&#34; [V <code>ojas/docs/pytorch-parity-plan.md:187</code>; also <code>:73</code> &#34;inferred; never built off this Mac&#34;]. The cfgs are clean:</p>
+<ul>
+<li>macOS-only code sits behind <code>cfg(target_os = &#34;macos&#34;)</code>: Accelerate in <code>ojas-cpu</code>, <code>ojas-metal</code> (<code>lib.rs:28,48</code>), <code>ojas-device/src/host.rs:54</code>, and parts of <code>ojas-capi</code>;
+</li>
+<li>each has a Linux or <code>not(macos)</code> arm where needed (<code>ojas-device/src/host.rs:59</code>, <code>ojas-capi/src/load.rs:121,269</code>, <code>owner.rs:32</code>);
+</li>
+<li><code>ojas-cpu/Cargo.toml:18</code> has a <code>cfg(not(target_os = &#34;macos&#34;))</code> dependency table [V <code>rg</code>].
+</li>
+</ul>
+<p>I measured it today, 2026-10-01T22:35:08Z, against the <strong>live working tree</strong> (103 unstaged and 97 untracked files; not a commit). I used <code>--locked --offline</code> so nothing in ojas was written, and the target dir was in this session&#39;s scratchpad:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Command (run on the Mac, target dir in scratchpad)</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>cargo check --locked --offline --manifest-path ojas/Cargo.toml --target aarch64-unknown-linux-gnu -p ojas-core -p ojas-kernels -p ojas-device -p ojas-cuda --features ojas-cuda/cuda</code></td><td><strong>Finished</strong>; one warning: <code>commit_resize</code> never used [V]</td></tr>
+<tr><td><code>cargo check … --target aarch64-unknown-linux-gnu --workspace --all-targets</code> (default features)</td><td><strong>Finished, no warnings or errors</strong> [V]</td></tr>
+<tr><td><code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=&#34;-C linker-flavor=gcc&#34; cargo test --locked --offline --no-run … --workspace</code></td><td><strong>67 test executables linked</strong> for aarch64 Linux against the box&#39;s glibc 2.39 sysroot [V]</td></tr>
+<tr><td>same, <code>--release -p ojas-cuda --features ojas-cuda/cuda</code></td><td>ELF 64-bit aarch64 PIE, <code>NEEDED libgcc_s.so.1, libc.so.6</code> only (<code>llvm-objdump -p</code>), sha256 <code>040df619…5c5</code> [V]. libcuda and libnvrtc are dlopened at run time, so the binary links with <strong>no CUDA on the Mac</strong></td></tr>
+</tbody></table></div>
+<p><strong>Answer:</strong> ojas <strong>builds and cross-links</strong> for <code>aarch64-unknown-linux-gnu</code> today, including <code>ojas-cuda --features cuda</code>. It has <strong>never been run on Linux</strong>. One attempt to run the CPU test binaries in a local arm64 container was skipped: the podman machine was stopped [V <code>podman machine inspect</code> → <code>stopped</code>], and starting a shared VM was out of scope (<code>GAP-L-CUDA-OJAS-LINUX-LINKED-NOT-RUN-2026-10-01</code>). &#34;Linked&#34; is not &#34;works&#34;.</p>
+<h3 id="16-the-target-box">1.6 The target box <a class="anchor" href="#16-the-target-box" aria-label="Link to this section">#</a></h3>
+<p>The lead&#39;s facts (read 2026-10-01; not re-read here) [R]:</p>
+<ul>
+<li>GH200 480GB, sm_90, driver 580.105.08, 97,871 MiB HBM visible;
+</li>
+<li>aarch64, Ubuntu 24.04.4;
+</li>
+<li>CUDA toolkit 12.8 (<code>nvcc</code> V12.8.93 at <code>/usr/local/cuda</code>);
+</li>
+<li>no Rust toolchain;
+</li>
+<li>the PyTorch campaign holds it for about 40 h.
+</li>
+</ul>
+<p>From the repo:</p>
+<ul>
+<li><strong>Python environment.</strong> The campaign runs in a uv venv installed from <code>stack/train.lock</code>, not an image [V <code>HANDOFF/gh200-2026-09-20.md:17-27</code>: &#34;<code>uv pip install -r stack/train.lock</code> into a 3.12.14 venv&#34;]. That lock pins <code>torch==2.10.0+cu128</code>, <code>flash-linear-attention==0.5.2</code>, <code>fla-core==0.5.2</code>, <code>causal-conv1d==1.7.0</code>, <code>triton==3.7.1</code> [V <code>stack/train.lock:12,42,44,174,188</code>].
+</li>
+<li><strong>cuBLAS and NVRTC in the venv.</strong> The lock also pins <code>nvidia-cublas-cu12==12.8.4.1</code> and <code>nvidia-cuda-nvrtc-cu12==12.8.93</code> [V <code>stack/train.lock:91,98</code>]. So <code>libcublas.so.12</code> and <code>libnvrtc.so.12</code> are <strong>probably present inside the venv&#39;s <code>site-packages/nvidia/*/lib</code></strong> [I from the lock plus the &#34;no failures&#34; install]. Their presence under the host&#39;s <code>/usr/local/cuda/lib64</code> is <strong>[U]</strong>, and the box was not read (<code>GAP-L-CUDA-BOX-LIBS-UNVERIFIED-2026-10-01</code>).
+</li>
+<li><strong>Driver API level.</strong> The 580 driver series exposes the CUDA 13.0 driver API [I]. <code>nvidia-smi</code>&#39;s &#34;CUDA Version&#34; line was not read [U].
+</li>
+<li><strong>The ojas binding pin is a mismatch.</strong> cudarc&#39;s <code>cuda-13040</code> binding set (<code>ojas-cuda/Cargo.toml:28</code>) does not match the box&#39;s 12.8 libraries [V].
+<ul>
+<li>cudarc still finds them: its Linux name list includes <code>lib{name}.so.{major}</code>, <code>.so.12</code>, <code>.so.11</code> and <code>.so.1</code> regardless of the binding set [V <code>cudarc/src/lib.rs:204-243</code>, lines 234-240].
+</li>
+<li>Symbols load lazily on first call, and a missing one <strong>panics</strong>: <code>panic!(&#34;Missing symbol {name}: {e}&#34;)</code> [V <code>cudarc/src/nvrtc/sys/mod.rs:11-13</code>; the per-call <code>OnceLock</code> pattern at <code>:139</code> onward].
+</li>
+<li>So calling any 13.x-only entry point against 12.8 libraries aborts the process instead of returning an error [I].
+</li>
+<li><strong>Fix:</strong> <code>cuda-12080</code> [V the feature exists, <code>cudarc/Cargo.toml</code> <code>[features]</code>]. It is a one-line change in a coordinator-owned file (ask 2).
+</li>
+</ul>
+</li>
+<li><strong>Price.</strong> $2.29/h [V <code>HANDOFF/post-f-queue-2026-10-01.md:235</code>: &#34;capped 32,400 s = $20.61&#34;].
+</li>
+</ul>
+<h3 id="17-tessls-training-step-what-b-mirrors">1.7 tessl&#39;s training step: what (B) mirrors <a class="anchor" href="#17-tessls-training-step-what-b-mirrors" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Scope and numerics.</strong> One unpadded sequence at a time. f32 weights, activations and gradients, with GEMMs either exact f32 or <strong>bf16 operands with f32 accumulation</strong> (<code>GemmOperands</code>). Every reduction in a fixed order, so &#34;a step&#39;s gradients are the same bits on every run&#34;. Each layer is rebuilt from its saved residual input before its backward [V <code>tessl/src/qwen35_train.rs:1-34</code>; <code>gemm.rs:996-1042</code>].
+</li>
+<li><strong>The seam.</strong>
+<ul>
+<li><code>train_forward(ids, operands, Supervise) → PendingStep</code> (<code>:534-695</code>);
+</li>
+<li><code>PendingStep::hidden(positions, out)</code>, for a loss outside tessl such as the span head (<code>:302-340</code>);
+</li>
+<li><code>train_backward_into(p, dh: Option&lt;(&amp;[u32], &amp;Tensor)&gt;, bank, accumulate)</code> (<code>:697-717</code>);
+</li>
+<li><code>train_step_into</code> (<code>:473-483</code>);
+</li>
+<li><code>Supervise::{Causal, Rows{positions, targets, scale}}</code> (<code>:245-263</code>);
+</li>
+<li><code>AdamW::grad_sq_norm</code> (fixed-order f32 on GPU, rows summed in f64) [V <code>qwen35_adamw.rs:438-441</code>];
+</li>
+<li>in-place torch-semantics AdamW with per-entry weight decay [V <code>qwen35_adamw.rs:1-45</code>].
+</li>
+</ul>
+</li>
+<li><strong>No step-provider trait exists yet.</strong> Lappi&#39;s <code>crates/qd-train</code> is a doc-only skeleton [V <code>crates/qd-train/src/lib.rs:1-7</code>], and <code>ojas/ojas-qwen35</code> is not on disk yet [V <code>ls</code> → no such directory]. The trait is Fable&#39;s proposal (<code>fable-advice.md:11</code>).
+</li>
+<li><strong>Every kernel the step launches</strong> [V <code>qwen35_train.rs:600-695</code>, <code>:740-832</code>, <code>:946-1455</code>]:
+<ul>
+<li><strong>Forward:</strong> <code>embed_rows</code>; <code>rms_norm</code> (Qwen <code>1+w</code>); GEMM <code>nn</code>; <code>conv1d_silu</code>; <code>copy_cols</code>; <code>gdn_gates</code>; <code>gdn_train_forward</code>; <code>gated_rms_norm</code>; <code>attn_qk_norm_rope</code>; <code>attn_train_forward</code> (+LSE); <code>attn_output_gate</code>; <code>swiglu</code>; residual (GEMM + add); <code>cross_entropy_rows</code>; <code>scatter_add_rows</code>; <code>ce_gather_rows_f32</code>.
+</li>
+<li><strong>Backward:</strong> GEMM <code>tn</code>/<code>nt</code>; <code>swiglu_bwd</code>; <code>residual_add</code>; <code>rms_norm_bwd</code>; <code>gated_rms_norm_bwd</code>; <code>gdn_train_backward</code>; <code>gdn_gates_bwd</code>; <code>conv1d_silu_bwd</code>; <code>attn_gate_bwd</code>; <code>attn_train_backward</code>; <code>attn_qk_norm_rope_bwd</code>; <code>embed_rows_bwd</code>; <code>deliver</code> (copy/add); <code>zero_f32</code>.
+</li>
+<li><strong>Optimizer:</strong> <code>qwen35_adamw</code>; <code>grad_sq_norm</code>.
+</li>
+</ul>
+</li>
+<li><p><strong>The bench&#39;s 12 timed ops</strong> at T=2048, bf16 operands, M5 Pro on battery [V <code>tessl/bench/results/qwen35_train_step_bf16_m5pro.txt:19-36</code>]:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Op</th><th style="text-align:right">ms</th></tr></thead>
+<tbody>
+<tr><td>gdn_train fwd</td><td style="text-align:right">9.0</td></tr>
+<tr><td>gdn_train bwd</td><td style="text-align:right">37.1</td></tr>
+<tr><td>attn_train fwd</td><td style="text-align:right">7.3</td></tr>
+<tr><td>attn_train bwd</td><td style="text-align:right">25.2</td></tr>
+<tr><td>CE + grads</td><td style="text-align:right">1,114</td></tr>
+<tr><td>rms_norm_bwd</td><td style="text-align:right">0.93</td></tr>
+<tr><td>gated_rms_norm_bwd</td><td style="text-align:right">1.18</td></tr>
+<tr><td>swiglu_bwd</td><td style="text-align:right">1.07</td></tr>
+<tr><td>conv1d_silu_bwd</td><td style="text-align:right">6.7</td></tr>
+<tr><td>attn_qk_norm_rope_bwd</td><td style="text-align:right">1.4</td></tr>
+<tr><td>gdn_gates_bwd</td><td style="text-align:right">0.75</td></tr>
+<tr><td>embed_rows_bwd</td><td style="text-align:right">0.43</td></tr>
+</tbody></table></div>
+<p>The whole step is 5.94 s (345 tok/s). That full-vocab CE is the causal-LM bench. Lappi&#39;s <code>Supervise::Rows</code> scores a handful of rows per sequence, so CE is negligible for Lappi [I].</p>
+</li>
+<li><strong>Shapes</strong> [V <code>crates/qd-export/tests/fixtures/qwen35_2b_base_config.json</code>]:
+<ul>
+<li>24 layers, 18 <code>linear_attention</code> + 6 <code>full_attention</code> (every 4th);
+</li>
+<li>hidden 2048, MLP 6144;
+</li>
+<li>attention 8 query heads : 2 KV heads at head_dim <strong>256</strong>, with an output gate;
+</li>
+<li>GDN 16×128 key and 16×128 value heads, conv 4;
+</li>
+<li>partial rotary 0.25, <code>mrope_section [11,11,10]</code> interleaved;
+</li>
+<li>vocab 248,320, tied.
+</li>
+</ul>
+</li>
+<li><strong>Parameters</strong> [I, computed from the config]:
+<ul>
+<li>GEMM weights per GDN layer: 2048×8224 + 2048² = 21.0 M;
+</li>
+<li>per attention layer: 2048×5120 + 2048² = 14.7 M;
+</li>
+<li>MLP: 3×2048×6144 = 37.7 M per layer;
+</li>
+<li>tower: <strong>1.373 B</strong>; embedding: <strong>0.509 B</strong>; total <strong>≈1.88 B</strong>;
+</li>
+<li>f32 copy: 7.5 GB;
+</li>
+<li>f32 weights + grads + two AdamW moments: <strong>≈30 GB</strong> of the GH200&#39;s ~95 GiB.
+</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="2-two-designs">2. Two designs <a class="anchor" href="#2-two-designs" aria-label="Link to this section">#</a></h2>
+<h3 id="2a-a-general-ojas-cuda-backend-against-the-existing-trait-plus-t1t6">2.A A general ojas CUDA <code>Backend</code>, against the existing trait plus T1–T6 <a class="anchor" href="#2a-a-general-ojas-cuda-backend-against-the-existing-trait-plus-t1t6" aria-label="Link to this section">#</a></h3>
+<h4 id="2a1-what-it-is">2.A.1 What it is <a class="anchor" href="#2a1-what-it-is" aria-label="Link to this section">#</a></h4>
+<p><code>CudaBackend</code> in <code>ojas-cuda</code>, behind <code>--features cuda</code>:</p>
+<ul>
+<li><code>impl Backend</code> for the 25 ops in §1.3 plus T1–T5 (T6 is the blanket impl in core and needs only gate G5);
+</li>
+<li><code>CudaBuffer: DeviceBuffer</code> for residency (§1.3, no core edit);
+</li>
+<li><code>upload</code>/<code>download</code> overridden as Metal and wgpu do;
+</li>
+<li><code>numerics()</code> returns <code>Fast</code> (§1.3);
+</li>
+<li>one stream, stream-ordered execution, errors surfacing at T1 <code>sync</code>.
+</li>
+</ul>
+<p>This answers <code>framework-design.md</code>&#39;s &#34;hardest open question&#34; (<code>:254-258</code>) for CUDA: CUDA adopts wgpu&#39;s deferred-fault contract natively, so the ~1,000 trait calls per micro-step do not each pay a blocking round trip [I].</p>
+<h4 id="2a2-t1t6-on-cuda">2.A.2 T1–T6 on CUDA <a class="anchor" href="#2a2-t1t6-on-cuda" aria-label="Link to this section">#</a></h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Add</th><th>CUDA implementation</th><th>Gate (from <code>framework-design.md:217-221</code>)</th></tr></thead>
+<tbody>
+<tr><td>T1 <code>sync</code></td><td><code>stream.synchronize()</code> plus a device fault word, as wgpu&#39;s <code>fault.wgsl</code> does. A non-finite flag written by kernels is read here</td><td>G1: a deferred NaN surfaces at <code>sync</code></td></tr>
+<tr><td>T2 <code>accumulate_grad</code></td><td>Elementwise <code>acc += grad</code>, one thread per element (exact: one rounding), NaN leaves <code>acc</code> unchanged via a pre-check reduction</td><td>G2</td></tr>
+<tr><td>T3 <code>linear_cross_entropy_mean</code></td><td>Chunked logits with an online log-sum-exp: the same algorithm as tessl&#39;s <code>cross_entropy_rows</code> (§3 K10). <strong>Design input:</strong> T3 chunks over <strong>rows</strong> (<code>chunk_rows·V·4</code>, <code>:147-148</code>); at Qwen&#39;s V=248,320 a 1,024-row chunk is 1.02 GB of scratch. tessl chunks over <strong>vocab</strong> (8,192 columns), bounding scratch at <code>rows×8192</code> [V <code>qwen35_train.rs:56</code>, <code>cross_entropy.rs:20-24</code>]. Suggest T3 take a vocab chunk too</td><td>G3 (d) device vs CPU at N=4096, V=50304, 1e-4</td></tr>
+<tr><td>T4 <code>cached_attention_forward</code>, T5 <code>kv_cache_write</code></td><td>The decode path. Reuses the attention kernel&#39;s forward with <code>kv_len ≥ Tq</code> and GQA</td><td>G4</td></tr>
+<tr><td>T6</td><td>none (core)</td><td>G5</td></tr>
+</tbody></table></div>
+<h4 id="2a3-what-is-still-missing-for-qwen35-after-t1t6">2.A.3 What is still missing for Qwen3.5 after T1–T6 <a class="anchor" href="#2a3-what-is-still-missing-for-qwen35-after-t1t6" aria-label="Link to this section">#</a></h4>
+<p>Each of these is a <strong>new trait method</strong>, so a coordinator edit [V by comparison of §1.3 against §1.7]:</p>
+<ul>
+<li><strong>Q1</strong> GDN chunked fwd/bwd at transformers&#39; seam (<code>g</code>, <code>beta</code> given; l2norm in kernel), <strong><code>published</code></strong> rule.
+</li>
+<li><strong>Q2</strong> <code>causal_conv1d_silu</code> fwd/bwd (depthwise, K=4).
+</li>
+<li><strong>Q3</strong> causal attention with <strong>GQA</strong> and <strong>D up to 256</strong> returning <strong>LSE</strong>. The trait&#39;s <code>causal_sdpa</code> is MHA; T4 has GQA only for cached decode.
+</li>
+<li><strong>Q4</strong> Qwen RMSNorm <code>x·rsqrt(ms+eps)·(1+w)</code>. The trait&#39;s is <code>·w</code>.
+</li>
+<li><strong>Q5</strong> gated RMSNorm: a per-head norm times <code>silu(z)</code>.
+</li>
+<li><strong>Q6</strong> an elementwise attention output gate <code>o·sigmoid(gate)</code> (<code>[T, Hq·D]</code>). The trait has a per-head <code>[T,H]</code> gate.
+</li>
+<li><strong>Q7</strong> partial RoPE (<code>rotary_dim = 0.25·256 = 64</code>), with MRoPE collapsing for text-only input. The interleaved-MRoPE collapse is still inferred (<code>GAP-OJAS-ADVICE-MROPE-COLLAPSE-INFERRED-2026-10-01</code>).
+</li>
+<li><strong>Q8</strong> GDN gates <code>g = −exp(A_log)·softplus(a + dt_bias)</code>, <code>beta = sigmoid(b)</code>, fwd/bwd [I from <code>qwen35_train.rs:1049-1060,1311-1326</code>; the formula is transformers&#39;, not re-read].
+</li>
+<li><strong>Q9</strong> a <strong>bf16-operand / f32-accumulate</strong> numerics tier on <code>linear_*</code>. The trait is f32 only [R <code>fable-advice.md:9,27</code>].
+</li>
+<li><strong>Q10</strong> rows-only CE at a large vocab. T3 with <code>ignore_index</code> can express rows-only, but see its chunking note above.
+</li>
+</ul>
+<h4 id="2a4-size">2.A.4 Size <a class="anchor" href="#2a4-size" aria-label="Link to this section">#</a></h4>
+<p>The existing GPU backends are the reference:</p>
+<ul>
+<li><code>ojas-metal</code> is about 6.4k Rust lines (<code>backend.rs</code> 1,198, <code>device.rs</code> 1,800, <code>gpu.rs</code> 3,407) plus 1,370 Metal shader lines;
+</li>
+<li><code>ojas-wgpu</code> is about 4.0k Rust lines (<code>backend.rs</code> 2,115, <code>context.rs</code> 1,215, <code>lib.rs</code> 654) plus 1,263 WGSL lines [V <code>wc -l</code>].
+</li>
+</ul>
+<p>A CUDA <code>Backend</code> at the same scope is <strong>15–25 specialist days</strong> for the nanolab op set [I]. Q1–Q10 add <strong>~25–30</strong> more, because they are the same kernels as (B)&#39;s K2–K8. And they are gated on trait governance. So <strong>(A) for Lappi is 40–55 days and blocked on coordinator trait edits before the first Qwen op runs</strong> [I].</p>
+<h3 id="2b-a-whole-step-qwen35-provider-on-cuda-the-cuda-counterpart-of-ojas-qwen35">2.B A whole-step Qwen3.5 provider on CUDA: the CUDA counterpart of <code>ojas-qwen35</code> <a class="anchor" href="#2b-a-whole-step-qwen35-provider-on-cuda-the-cuda-counterpart-of-ojas-qwen35" aria-label="Link to this section">#</a></h3>
+<h4 id="2b1-what-it-is">2.B.1 What it is <a class="anchor" href="#2b1-what-it-is" aria-label="Link to this section">#</a></h4>
+<ul>
+<li><strong>The provider.</strong> A <code>Qwen35Cuda</code> model, the CUDA twin of the Metal <code>ojas-qwen35</code> provider, which holds a tessl <code>Qwen35Model</code>. It loads the 2B safetensors to f32 device masters and exposes the <strong>same step-provider trait</strong> as the Metal arm.
+</li>
+<li><p><strong>The trait.</strong> Proposed shape, mirroring tessl&#39;s verified API (§1.7). The trait&#39;s owner is L-ojas-qwen35 and the coordinator, not this lane:</p>
+<div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>trait StepProvider {
+    type Pending; type Bank;
+    fn train_forward(&amp;self, ids: &amp;[u32], ops: GemmOperands, sup: Supervise&lt;&#39;_&gt;) -&gt; Result&lt;Self::Pending, Error&gt;;
+    fn hidden(&amp;self, p: &amp;Self::Pending, positions: &amp;[u32], out: &amp;mut [f32]) -&gt; Result&lt;(), Error&gt;;  // span head input
+    fn train_backward_into(&amp;self, p: Self::Pending, dh: Option&lt;(&amp;[u32], &amp;[f32])&gt;,
+                           bank: &amp;Self::Bank, accumulate: bool) -&gt; Result&lt;(), Error&gt;;
+    fn grad_sq_norm(&amp;self, bank: &amp;Self::Bank) -&gt; Result&lt;f64, Error&gt;;
+    fn adamw_step(&amp;mut self, bank: &amp;Self::Bank, hyper: AdamWHyper, wd: &amp;[f32], lr_scale: &amp;[f32]) -&gt; Result&lt;(), Error&gt;;
+}</code></pre></div>
+<p>The <code>lr_scale</code> vector is Fable&#39;s row-10 addition (<code>fable-advice.md:28</code>). The trainer (Lappi <code>qd-train</code> now, <code>ojas-train</code> later; Fable ask 2) is generic over it. The Metal arm and the CUDA arm are interchangeable to the trainer, and parity between them becomes one test.</p>
+</li>
+<li><strong>Internals.</strong> A port of <code>qwen35_train.rs</code>&#39;s host orchestration (1,747 lines of Metal-bound host code [V <code>wc -l</code>]) onto a CUDA runtime, plus the kernel list in §3. The semantics are kept exactly:
+<ul>
+<li>one sequence at a time into a bank;
+</li>
+<li>per-layer checkpoint and rebuild;
+</li>
+<li><code>Supervise::Rows</code> with distinct positions;
+</li>
+<li><code>dh</code> added at the final norm&#39;s output;
+</li>
+<li>unpadded sequences, which are Lappi&#39;s <code>train_attention_mask=&#34;none&#34;</code> numerics, as on Metal (<code>fable-advice.md:21</code>).
+</li>
+</ul>
+</li>
+</ul>
+<h4 id="2b2-why-it-is-faster-to-a-trained-lappi">2.B.2 Why it is faster to a trained Lappi <a class="anchor" href="#2b2-why-it-is-faster-to-a-trained-lappi" aria-label="Link to this section">#</a></h4>
+<p>It needs <strong>zero trait edits</strong>, <strong>zero autograd</strong> (hand-written backward, as tessl&#39;s), and it is the seam <code>qd-train</code> calls anyway. It also has a hardware-independent golden ready (§5.2).</p>
+<h3 id="2c-recommendation-and-convergence">2.C Recommendation and convergence <a class="anchor" href="#2c-recommendation-and-convergence" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Soonest to Lappi trained on the GH200:</strong> (B). It is the only design whose first runnable artifact is a Qwen3.5 step.
+</li>
+<li><strong>Long-term for ojas:</strong> (A). ojas&#39;s identity is &#34;any model on any <code>Backend</code> through the Tape&#34; (<code>framework-design.md</code> §3); a Qwen-only provider does not serve nanolab, decode or the Go API.
+</li>
+<li><strong>How they converge.</strong> Build (B) so that nothing in it has to be thrown away:
+<ol>
+<li><strong>One runtime.</strong> <code>ojas-cuda</code> grows a <code>CudaRuntime</code>: context, one stream, a budgeted allocator, an NVRTC module cache keyed by (source hash, options, NVRTC version), and <code>CudaBuffer: DeviceBuffer</code>. (B) uses it now; (A)&#39;s <code>CudaBackend</code> wraps the same runtime.
+</li>
+<li><strong>One kernel source module.</strong> <code>ojas-kernels/src/cuda/*.cu</code>, included as strings (as <code>affine_cuda()</code> and the WGSL modules are). Each kernel is a function over device pointers and dims, named after its seam (<code>gdn_chunk_fwd_published</code>, <code>attn_gqa_lse_fwd</code>, …). (B)&#39;s orchestration calls them now. (A)&#39;s Q1–Q10 trait methods, once the coordinator adds them, are thin wrappers over the <strong>same</strong> functions, so there is no second implementation.
+</li>
+<li><strong>One trainer.</strong> It is generic over the step-provider trait. Later, an (A)-based <code>Tape</code> model of Qwen3.5 implements that trait too, and the (B) provider becomes the fused fast path behind it. tessl&#39;s hand-written step relates to ojas&#39;s proposed <code>Trainer&lt;B&gt;</code> the same way (<code>fable-advice.md:11</code>).
+</li>
+<li><strong>One parity suite.</strong> The same fixtures check Metal-(B), CUDA-(B) and, later, CUDA-(A).
+</li>
+</ol>
+</li>
+</ul>
+<hr>
+<h2 id="3-the-kernel-port-list">3. The kernel port list <a class="anchor" href="#3-the-kernel-port-list" aria-label="Link to this section">#</a></h2>
+<p>Conventions for every row:</p>
+<ul>
+<li><strong>Masters</strong> are f32. <strong>Two numerics tiers</strong> mirror <code>GemmOperands</code>:
+<ul>
+<li><code>ExactF32</code>: f32 operands and accumulate. On sm_90 that means CUDA-core FFMA, <strong>not</strong> tensor cores, because TF32 rounds operands to 10 mantissa bits.
+</li>
+<li><code>Bf16</code>: operands rounded to bf16 (RNE) at the GEMM/MMA boundary, f32 accumulate, f32 out.
+</li>
+<li>Everything that is not a GEMM or MMA stays f32, as on Metal [V <code>cross_entropy.rs:31-36</code>].
+</li>
+</ul>
+</li>
+<li><strong>Determinism rule:</strong> every output element written by exactly one thread block; float reductions in a fixed-shape tree; no float atomics; <strong>no launch geometry derived from SM count</strong> (§1.3). Repeat-run bit equality is a test in every row.
+</li>
+<li><strong>Rule 9:</strong> every GDN fixture name says <code>published</code>.
+</li>
+<li><strong>The box oracle</strong> is the campaign venv (§1.6): torch 2.10.0+cu128, fla 0.5.2 on triton 3.7.1, causal-conv1d 1.7.0.
+</li>
+</ul>
+<p><strong>Days</strong> are specialist engineer-days for a hand-written, tested kernel, including its parity test. They are estimates [I], calibrated on tessl&#39;s Metal versions (§1.7) and ojas&#39;s backends (§2.A.4).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Kernel</th><th>Algorithm</th><th>Numerics, determinism</th><th>Parity test (on the box unless noted)</th><th style="text-align:right">Days</th></tr></thead>
+<tbody>
+<tr><td>K0</td><td>Runtime and plumbing: <code>CudaRuntime</code>, <code>CudaBuffer</code>, NVRTC cache, f32↔bf16 cast, <code>copy_cols</code>, <code>deliver</code> (copy / <code>+=</code>), <code>zero</code>, <code>scatter_add_rows</code> (distinct rows), <code>ce_gather_rows</code></td><td>elementwise, one thread per element; scatter is ownership-by-row (positions are distinct, <code>qwen35_train.rs:585-593</code>)</td><td>exact; one rounding per add</td><td>host reference, bitwise; repeat-run equality; <code>require_libraries</code> probe before any cudarc call (<code>ojas-cuda/src/lib.rs:86-101</code>)</td><td style="text-align:right">4</td></tr>
+<tr><td>K1</td><td>GEMM <code>nn</code>/<code>tn</code>/<code>nt</code> (§3.1)</td><td>tiled MMA</td><td><code>ExactF32</code> (FFMA, fixed k-order) and <code>Bf16</code> (bf16 MMA, f32 accumulate, f32 C); no split-K, or split-K with a fixed-order second pass</td><td>vs f64 host on odd shapes (<code>130×70×260</code>, as tessl&#39;s <code>gemm.rs</code> tests); vs <code>torch.matmul</code> (fp32, <code>allow_tf32=False</code>) at 2B shapes; Bf16 vs torch on bf16-rounded inputs ≤2^-8 rel (<code>qwen35_train.rs:247</code>)</td><td style="text-align:right">2 / 5 / 12 (tier)</td></tr>
+<tr><td>K2</td><td>GDN train fwd/bwd, <strong>published</strong>, transformers&#39; seam (§3.2)</td><td>(i) tessl&#39;s token-sequential scan with a state checkpoint every 64 tokens; or (ii) fla&#39;s chunked WY/UT form, chunk 64</td><td>(i) fixed order by construction (per-slice partials + <code>gdn_train_bwd_finish</code>, <code>gdn_train.metal:21-27</code>); (ii) mma per chunk, sequential inter-chunk state, fixed-order dq/dk/dg reductions</td><td>f64 host reference (port of <code>tessl/tests/common/gdn_train.rs</code>) at T=1/63/64/65/130 (<code>tests/gdn_train.rs:1-15</code>), ≤1e-4 of max (<code>:241</code>); vs <code>fla.ops.gated_delta_rule.chunk_gated_delta_rule(…, use_qk_l2norm_in_kernel=True)</code> at 2B heads, T=2048/8192</td><td style="text-align:right">(i) 5; (ii) 14–18</td></tr>
+<tr><td>K3</td><td><code>gdn_gates</code> fwd/bwd</td><td><code>g = −exp(A_log)·softplus(a+dt_bias)</code>, <code>beta = sigmoid(b)</code> per (t, head); bwd reduces over t for <code>A_log</code>, <code>dt_bias</code></td><td>f32; fixed-order per-head reduction (tessl&#39;s <code>gates_part</code>, <code>qwen35_train.rs:1323</code>)</td><td>host f64; vs transformers&#39; <code>Qwen3_5GatedDeltaNet</code> gate code under torch autograd</td><td style="text-align:right">1</td></tr>
+<tr><td>K4</td><td><code>conv1d_silu</code> fwd/bwd</td><td>causal depthwise conv, K=4, zero initial state, then SiLU; bwd: dx by a reversed stencil, dW by a per-channel reduction over t</td><td>f32; fixed-order dW (<code>conv_part</code>)</td><td>host f64; vs <code>causal_conv1d_fn</code> (causal-conv1d 1.7.0) and the torch reference</td><td style="text-align:right">1.5</td></tr>
+<tr><td>K5</td><td><code>attn_train</code> fwd (+LSE) / bwd at <strong>D=256, GQA 4:1</strong></td><td>fwd: FA2 tiled online softmax, writes <code>lse [B,Hq,T]</code>. bwd: FA2 split into a <strong>dK/dV kernel per key block</strong> (looping over the 4 query heads of its KV group in fixed order) and a <strong>dQ kernel per query block</strong>, recomputing P from LSE, so each gradient is written once with no atomics, as tessl&#39;s (<code>attn_train.rs:11-17</code>)</td><td><code>ExactF32</code> via FFMA; <code>Bf16</code> via bf16 <code>mma.sync</code> m16n8k16; f32 softmax and LSE. D=256 bf16 tiles: 64×256×2 B = 32 KiB per Q/K/V/dO tile, against 227 KiB of shared memory per block on sm_90 [I], so the bwd needs Br=Bc=64 or 32</td><td>vs f64 host at T=1/31/32/33/130; vs <code>F.scaled_dot_product_attention(is_causal=True, enable_gqa=True)</code> fwd + autograd at 2B shapes, ≤1e-4 rel (<code>attn_train.rs:124</code>); LSE vs <code>torch.logsumexp</code></td><td style="text-align:right">8</td></tr>
+<tr><td>K6</td><td><code>attn_qk_norm_rope</code> fwd/bwd + <code>attn_output_gate</code> fwd/bwd</td><td>per-head RMSNorm (<code>1+w</code>) on q and k, partial half-split RoPE over the first 64 of 256 dims (θ = 1e7), with q/gate de-interleaving from <code>q_proj</code>; the gate is <code>o·sigmoid(g)</code></td><td>f32; fixed-order reduction for the norm weights&#39; gradient (<code>part</code>)</td><td>host f64; vs transformers&#39; <code>Qwen3_5Attention</code> pieces under autograd, with the snapshot&#39;s <code>config.json</code> loaded (the MRoPE collapse falsifier)</td><td style="text-align:right">2</td></tr>
+<tr><td>K7</td><td><code>rms_norm</code> fwd/bwd (<code>1+w</code>), <code>gated_rms_norm</code> fwd/bwd</td><td>row reduction over hidden (2048) or v_dim (128); bwd: dx per row, dW reduced over rows in fixed order</td><td>f32; <code>eps = 1e-6</code></td><td>host f64; vs transformers&#39; <code>Qwen3_5RMSNorm</code> and <code>Qwen3_5RMSNormGated</code></td><td style="text-align:right">2</td></tr>
+<tr><td>K8</td><td><code>swiglu</code> fwd/bwd, <code>residual_add</code></td><td>elementwise</td><td>exact f32</td><td>host bitwise</td><td style="text-align:right">0.5</td></tr>
+<tr><td>K9</td><td><code>embed_rows</code> fwd/bwd</td><td>gather; bwd adds <code>dresid</code> rows into <code>[V,H]</code> by token id. <strong>Deterministic:</strong> sort the ids once on the host, then one block per distinct id sums its rows in position order</td><td>f32</td><td>host f64; repeated-id case; vs <code>nn.Embedding</code> autograd</td><td style="text-align:right">1</td></tr>
+<tr><td>K10</td><td><code>cross_entropy_rows</code></td><td>gather supervised rows; walk vocab in 8,192-column chunks with an online LSE; the second walk forms <code>dlogits = (softmax − onehot)·scale</code>, then <code>dh += dlogits·W_c</code>, <code>dW_c = dlogitsᵀ·h</code> via K1</td><td>GEMMs on <code>GemmOperands</code>; softmax exp/log in precise f32 (<code>cross_entropy.rs:31-36</code>); no <code>[rows,V]</code> matrix</td><td>host f64 (<code>tests/cross_entropy.rs:185</code>: 1e-5 abs + 1e-5 rel); Bf16 ≤2^-7 (<code>:258</code>); vs <code>F.cross_entropy</code> at V=248,320 on chosen rows</td><td style="text-align:right">2.5</td></tr>
+<tr><td>K11</td><td>AdamW in place + <code>grad_sq_norm</code></td><td>torch single-tensor AdamW order (decoupled decay, <code>lerp</code> m, v, bias correction outside the sqrt; f64 host scalars) with per-entry wd <strong>and</strong> <code>lr_scale</code>; grad norm = per-block f32 partials in fixed order, summed in f64 on the host</td><td>matches <code>ojas-core/src/backend.rs:273-286</code>, which is tessl&#39;s order</td><td>vs <code>torch.optim.AdamW</code> two-group oracle over 3 steps ≤1e-6 (<code>fable-advice.md:28</code>); grad norm ≤1e-5 rel (<code>tessl/tests/qwen35_adamw.rs:88</code>)</td><td style="text-align:right">1.5</td></tr>
+<tr><td>S</td><td>Step orchestration (B)</td><td>port <code>train_forward</code>/<code>backward</code>/bank/<code>hidden</code>/<code>train_backward_into</code>; safetensors bf16 → f32 masters; workspace sizing; non-finite kill</td><td>—</td><td>tessl&#39;s tiny fixture (§5.2): loss ≤1e-5 rel, grads ≤1e-4 of each parameter&#39;s max (<code>tests/qwen35_train.rs:199-216</code>, <code>:343</code>)</td><td style="text-align:right">6</td></tr>
+<tr><td>H</td><td>Harness and shipping</td><td>cross-build script, sha256 manifest, box run script (<code>flock gpu.lock</code>, <code>timeout</code>, cost line), <code>.npy</code> mismatch dumps instead of printf, fixture shipping</td><td>—</td><td>runs green on the Mac with the feature off</td><td style="text-align:right">3</td></tr>
+</tbody></table></div>
+<p><strong>Totals</strong> [I]:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Path</th><th>Kernel choices</th><th>Days</th></tr></thead>
+<tbody>
+<tr><td>Correctness</td><td>K0 4 + K1 cuBLAS 2 + K2(i) 5 + K3 1 + K4 1.5 + K5 8 + K6 2 + K7 2 + K8 0.5 + K9 1 + K10 2.5 + K11 1.5 + S 6 + H 3</td><td><strong>40</strong></td></tr>
+<tr><td>Correctness, no cuBLAS</td><td>K1 <code>mma.sync</code> instead</td><td><strong>43</strong></td></tr>
+<tr><td>Campaign speed</td><td>+ K2(ii) 14–18, + K1 WGMMA tier 12 (only if the profile says GEMM dominates), + K5 tuning 3–5</td><td><strong>+29–35 → 69–78</strong></td></tr>
+</tbody></table></div>
+<h3 id="31-gemm-cublas-through-cudarc-or-hand-written">3.1 GEMM: cuBLAS through cudarc, or hand-written <a class="anchor" href="#31-gemm-cublas-through-cudarc-or-hand-written" aria-label="Link to this section">#</a></h3>
+<p><strong>What cuBLAS costs in dependencies.</strong></p>
+<ul>
+<li>cuBLAS is <strong>not a new crate</strong>. It is cudarc&#39;s <code>cublas</code> feature (<code>cublas = [&#34;driver&#34;]</code> [V <code>cudarc/Cargo.toml</code> features]) on a dependency ojas already has.
+</li>
+<li>It dlopens <code>libcublas.so.12</code> at run time, which the box venv very likely has (§1.6).
+</li>
+<li>The bf16-in / <strong>f32-out</strong> call tessl&#39;s semantics need is <strong>not</strong> in cudarc&#39;s safe API: <code>Gemm&lt;half::bf16&gt;</code> writes <strong>bf16 C</strong> [V <code>cudarc/src/cublas/safe/gemm.rs:150-180</code>, <code>CUDA_R_16BF</code> for C at <code>:176</code>], and uses <code>half</code> (<code>f16 = [&#34;dep:half&#34;]</code>), which would be a new crate.
+</li>
+<li>The public <code>cudarc::cublas::result::gemm_ex</code> [V <code>cudarc/src/cublas/result.rs:375</code>] takes raw <code>cudaDataType_t</code>s. So <code>A,B = CUDA_R_16BF, C = CUDA_R_32F, CUBLAS_COMPUTE_32F</code> is reachable with <strong>no <code>half</code></strong>, using u16 storage.
+</li>
+<li>That cuBLAS supports this combination is <strong>[U]</strong>: the docs fetch did not return the GemmEx type table (<code>GAP-L-CUDA-CUBLAS-BF16-F32-UNVERIFIED-2026-10-01</code>). The falsifier is the M0 smoke probe (§6.1).
+</li>
+</ul>
+<p><strong>Determinism.</strong></p>
+<ul>
+<li>cuBLAS is bitwise reproducible run to run &#34;on GPUs with the same architecture and the same number of SMs&#34;. That guarantee does not hold with multiple active streams unless each stream has its own workspace (<code>cublasSetWorkspace</code>) or handle. <code>cublasSetAtomicsMode</code> voids it for the routines that use atomics [R cuBLAS 13.4 docs, &#34;Results reproducibility&#34;; applicability to 12.8.4.1 is [I]].
+</li>
+<li>The design rule: one handle, one stream, explicit workspace, atomics mode never set, plus a repeat-run bit-equality test. The cuBLAS library version, SM count and driver go in every ledger row.
+</li>
+</ul>
+<p><strong>Three tiers, not two:</strong></p>
+<div class="table-wrap"><table>
+<thead><tr><th>Tier</th><th>Path</th><th style="text-align:right">Days</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>cuBLAS <code>gemm_ex</code></td><td style="text-align:right">2</td><td>Expected near the best achievable at these shapes (M = 8,192 rows, N/K ∈ {2048, 5120, 6144, 8224}) [I]. Also serves as the <strong>oracle</strong> for tiers 2–3 on the box. <strong>The user prefers focused kernels over heavy dependencies:</strong> cuBLAS here is a feature flag on an existing crate and a library already on the box, not a new crate, but it is a closed-source dependency in the numerics, and its algorithm choice can change with the library version. Ask 3</td></tr>
+<tr><td>2</td><td>hand-written <code>mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32</code> with <code>ldmatrix</code> and <code>cp.async</code> (sm_80-class instructions, which run on sm_90)</td><td style="text-align:right">5</td><td>Fixed tile geometry, no split-K, so bits are independent of SM count, which fits ojas&#39;s <code>Fast</code> contract better than cuBLAS. A well-tuned version reaches roughly half of Hopper&#39;s dense bf16 peak [I]. Inline PTX breaks the hiprtc reuse in <code>source.rs:1-2</code></td></tr>
+<tr><td>3</td><td>WGMMA + TMA, warp-specialized producer/consumer, <code>sm_90a</code></td><td style="text-align:right">12</td><td>Needs NVRTC <code>-arch=sm_90a</code>. NVRTC lists <code>sm_90a</code>/<code>compute_90a</code> [R NVRTC 13.4 docs; 12.8 support is [I]], and cudarc&#39;s <code>CompileOptions</code> has <code>arch: Option&lt;&amp;&#39;static str&gt;</code> [V <code>cudarc/src/nvrtc/safe.rs:231-242</code>]. Build this only if a profile shows GEMM dominating <strong>after</strong> GDN is chunked. With tessl&#39;s GDN, GDN dominates (§3.2)</td></tr>
+</tbody></table></div>
+<p><strong>GEMM&#39;s share of the step</strong> [I]. Per 8K sequence, GEMM FLOPs are (6 + 2 for the recompute) × 1.373 B × 8,192 ≈ <strong>9.0e13</strong>. That is ~0.15 s at 600 TFLOPS (tier 1), ~0.3 s at 300 (tier 2), and ~2 s in <code>ExactF32</code> FFMA at ~45 TFLOPS. So GEMM is not the first bottleneck on any tier.</p>
+<p><strong>Recommendation:</strong> tier 1 for the correctness path <em>if</em> ask 3 says yes, else tier 2. Tier 2 replaces tier 1 when it is within 10–15% on the step benchmark (or at once, if the human values dropping cuBLAS). Tier 3 is last and profile-gated.</p>
+<h3 id="32-gdn-port-flas-chunked-algorithm-or-port-tessls-metal-kernel">3.2 GDN: port fla&#39;s chunked algorithm, or port tessl&#39;s Metal kernel <a class="anchor" href="#32-gdn-port-flas-chunked-algorithm-or-port-tessls-metal-kernel" aria-label="Link to this section">#</a></h3>
+<p><strong>Same operator, two algorithms.</strong></p>
+<ul>
+<li>Both are the <strong>published</strong> rule (decayed read <code>u = v_t − (exp(g_t)S_{t−1})ᵀk̂</code>) at transformers&#39; seam [V <code>tessl/src/gdn_train.rs:1-27</code>; <code>gdn_train.metal:1-11</code>; the published-rule definition in <code>AUDIT/gdn-reference-and-contracts.md</code> §2.2].
+</li>
+<li>tessl&#39;s kernel is a <strong>token-sequential scan</strong>: one 128-thread group per (16-column value slice, batch×head), thread <em>i</em> owns state row <em>i</em>, a checkpoint every 64 tokens, and the backward recomputes each chunk from its checkpoint [V <code>gdn_train.metal:13-31</code>, <code>gdn_train.rs:39-44</code>].
+</li>
+<li>fla&#39;s is the <strong>chunked WY/UT</strong> form (chunk 64): intra-chunk work as dense matmuls, inter-chunk state passed sequentially over T/64 chunks [R <code>AUDIT/gdn-reference-and-contracts.md</code> §3; fla source not re-read].
+</li>
+</ul>
+<p><strong>The arithmetic that decides it</strong> [I, each factor cited]:</p>
+<ul>
+<li><strong>Measured on the M5 Pro:</strong> gdn_train fwd 9.04 ms and bwd 37.11 ms per layer at T=2048, bf16, on battery [V bench <code>:23-24</code>]. The bench header says plugged-in is about 2× faster [V bench <code>:5-9</code>].
+</li>
+<li><strong>Per training step:</strong> forward + rebuild + backward = 2 × 9.04 + 37.11 = <strong>55.2 ms per layer per 2,048 tokens</strong>.
+</li>
+<li><strong>At T=8,192:</strong> the scan is linear in T, so <strong>~221 ms per layer</strong>, <strong>× 18 GDN layers ≈ 4.0 s per 8K sequence</strong> (≈2.0 s plugged in).
+</li>
+<li><strong>On H100:</strong> the scan is latency-bound (one barrier-separated update per token, 128 blocks for 16 heads × 8 slices), so per-token latency on H100 is of the same order as on the M5 [I]. Batching the 4 sequences of a step into one launch (B=4, 512 blocks, all resident) could hide up to ~4× of that [I].
+</li>
+<li><strong>The PyTorch baseline on the same box:</strong> shape B (4 × ≤8,441 tokens) runs a <strong>whole step</strong> in 1.93 s on default kernels and 1.20–1.33 s with no mask and flash [V <code>AUDIT/det-attention-backward-scoping-2026-10-01.md:14,44-46</code>]. That is ≈0.3–0.5 s per 8K sequence for <strong>everything</strong>. J1 ran at 18.5k pos/s [V <code>HANDOFF/gh200-phase4-2026-10-01.md:26</code>].
+</li>
+<li><strong>So:</strong> a CUDA port of tessl&#39;s scan makes GDN alone <strong>~1–3×</strong> PyTorch&#39;s entire step even with B=4 batching (≈0.5–1 s per sequence), and <strong>~4–13×</strong> without it. The whole CUDA step lands ~5–10× slower than PyTorch [I].
+</li>
+<li><strong>Rung d is still affordable at that speed</strong> (§5.3). A 3-seed campaign is not.
+</li>
+</ul>
+<p><strong>Trade-off.</strong></p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>(i) Port tessl&#39;s scan</th><th>(ii) Port fla&#39;s chunked form</th></tr></thead>
+<tbody>
+<tr><td>Correctness risk</td><td>Low: a 348-line kernel [V <code>wc -l gdn_train.metal</code>] with an f64 reference and T-edge tests already written in tessl</td><td>High: the WY backward (<code>chunk_bwd_dqkwg</code>, dh recurrence, WY inverse backward) is exactly where fla shipped <strong>wrong gradients on Hopper</strong> under triton &lt; 3.7.1 (#640), caught only by fla&#39;s version guard [V <code>HANDOFF/gh200-2026-09-20.md:44-60</code>]</td></tr>
+<tr><td>Determinism</td><td>By construction</td><td>Must be designed in: fla&#39;s own kernels make no bitwise claim [U]</td></tr>
+<tr><td>Speed</td><td>~5–10× slower than PyTorch per step [I above]</td><td>Competitive with fla [I]</td></tr>
+<tr><td>Numerics</td><td>Bitwise-equivalent algorithm to Metal, so Metal-vs-CUDA parity is tight</td><td>Differs from Metal and torch-fallback rounding, so parity is bounded, not tight</td></tr>
+<tr><td>Days</td><td>5</td><td>14–18</td></tr>
+</tbody></table></div>
+<p><strong>Recommendation:</strong></p>
+<ul>
+<li><strong>(i) first.</strong> It carries rungs a–c and a reduced rung d. It stays forever as the on-device reference oracle for (ii).
+</li>
+<li><strong>(ii) second,</strong> only on the human&#39;s &#34;campaign speed&#34; answer (ask 6). It is checked against (i) on device and against fla on the box at T ∈ {64, 65, 2048, 8192}.
+</li>
+<li>Every fixture name carries <code>published</code> (rule 9). nanolab&#39;s default <code>rule=&#34;repo&#34;</code> is the wrong golden.
+</li>
+</ul>
+<hr>
+<h2 id="4-toolchain">4. Toolchain <a class="anchor" href="#4-toolchain" aria-label="Link to this section">#</a></h2>
+<h3 id="41-nvrtc-at-run-time-or-nvcc-built-ptxcubin">4.1 NVRTC at run time, or nvcc-built PTX/cubin <a class="anchor" href="#41-nvrtc-at-run-time-or-nvcc-built-ptxcubin" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>NVRTC at run time</strong> is what <code>ojas-cuda</code> does today (§1.1).
+<ul>
+<li>Kernel sources are strings in the crate, compiled on first use and cached by (source hash, options, NVRTC version).
+</li>
+<li>It needs <strong>nothing on the Mac</strong>, and the binary links with only <code>libc</code>/<code>libgcc_s</code> [V §1.5].
+</li>
+<li>On the box it needs <code>libnvrtc.so.12</code>, very likely in the venv (§1.6, [I]).
+</li>
+<li>Options: <code>--fmad=false</code> for <code>ExactF32</code> kernels (NVRTC&#39;s default is <code>true</code> [R NVRTC 13.4 docs]); <code>-arch=sm_90</code> (CUBIN directly; NVRTC gives no CUBIN for a virtual arch [R]); <code>sm_90a</code> for tier-3 WGMMA.
+</li>
+<li><strong>Cost:</strong> the NVRTC version on the box becomes part of the numerics. Record <code>nvrtcVersion</code> with the driver and cuBLAS versions in every row.
+</li>
+</ul>
+</li>
+<li><strong>nvcc-built cubin.</strong>
+<ul>
+<li>CUDA has no macOS toolkit, so nvcc cannot run on the Mac host [I; NVIDIA&#39;s last macOS toolkit was 10.2, not re-checked].
+</li>
+<li>Two options:
+<ul>
+<li>(a) nvcc 12.8 <strong>on the box</strong> [R lead], which needs box time and shell access;
+</li>
+<li>(b) nvcc inside a <strong>linux/arm64 CUDA devel container on the Mac&#39;s podman</strong>. This is compile-only, no GPU: <code>stack/Containerfile:18</code> already uses <code>nvidia/cuda:12.8.1-devel-ubuntu24.04</code> (an arm64 variant of that tag is [U]).
+</li>
+</ul>
+</li>
+<li>The cubin is then embedded with <code>include_bytes!</code> and loaded via the driver&#39;s <code>load_module</code>. That pins the compiler into the artifact and removes NVRTC from the box&#39;s runtime.
+</li>
+</ul>
+</li>
+<li><strong>Recommendation:</strong> NVRTC at run time for development (zero toolchain, the existing ojas pattern). Then a build-time embed path (b) for the promoted kernels, with a test that the embedded cubin&#39;s sha matches a rebuild from source.
+</li>
+</ul>
+<h3 id="42-cross-building-for-the-box-from-the-mac">4.2 Cross-building for the box from the Mac <a class="anchor" href="#42-cross-building-for-the-box-from-the-mac" aria-label="Link to this section">#</a></h3>
+<p>What is needed, all verified to work today for ojas (§1.5):</p>
+<ul>
+<li>rustup&#39;s <code>aarch64-unknown-linux-gnu</code> target, which is installed [V <code>rustup target list --installed</code>];
+</li>
+<li>the box-glibc sysroot and linker driver at <code>/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh</code> (Apple clang driving rustup&#39;s <code>ld.lld</code> against the box&#39;s glibc 2.39) [V the file];
+</li>
+<li>the two environment variables from <code>HANDOFF/post-f-queue-2026-10-01.md:147-151</code> [V].
+</li>
+</ul>
+<p><strong>No CUDA SDK is needed on the Mac</strong>: cudarc dlopens at run time. Change the binding pin to <code>cuda-12080</code> first (ask 2).</p>
+<h3 id="43-running-tests-on-the-box-without-a-rust-toolchain">4.3 Running tests on the box without a Rust toolchain <a class="anchor" href="#43-running-tests-on-the-box-without-a-rust-toolchain" aria-label="Link to this section">#</a></h3>
+<p>Ship test binaries as <code>qd-post-f-rules</code> was shipped [V <code>post-f-queue:139-161</code>]:</p>
+<ol>
+<li>Build with <code>cargo test --release --no-run --target aarch64-unknown-linux-gnu -p &lt;crate&gt; --features cuda</code>.
+</li>
+<li>Copy the <code>deps/&lt;crate&gt;-&lt;hash&gt;</code> executables and the fixture directory.
+</li>
+<li>Pin each by sha256 in a run script, which refuses another binary.
+</li>
+<li>On the box: <code>flock /home/ubuntu/queue/gpu.lock timeout &lt;cap&gt; ./&lt;test-bin&gt; --ignored --test-threads=1</code>.
+<ul>
+<li>GPU tests are <code>#[ignore]</code> so the Mac run (feature off) stays green.
+</li>
+<li>Add <code>LD_LIBRARY_PATH</code> with the venv&#39;s <code>site-packages/nvidia/{cublas,cuda_nvrtc}/lib</code> [I paths] or <code>/usr/local/cuda/lib64</code> [U].
+</li>
+<li>Output is <code>--format json</code>-style lines into a ledger row with the binary&#39;s sha256.
+</li>
+</ul>
+</li>
+<li>A failing comparison writes the mismatching tensors as <code>.npy</code> for offline diagnosis on the Mac. That saves box round trips, since no CUDA bug can be reproduced off the box.
+</li>
+</ol>
+<hr>
+<h2 id="5-determinism-and-the-parity-ladder-on-cuda">5. Determinism and the parity ladder on CUDA <a class="anchor" href="#5-determinism-and-the-parity-ladder-on-cuda" aria-label="Link to this section">#</a></h2>
+<h3 id="51-the-determinism-contract">5.1 The determinism contract <a class="anchor" href="#51-the-determinism-contract" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>The kernel rules in §3: one writer per element, fixed-shape reduction trees, no float atomics, no SM-count geometry, one stream.
+</li>
+<li>For cuBLAS: one handle, explicit workspace, no atomics mode.
+</li>
+<li>Proof in every rung: <strong>two runs in two processes give bit-identical loss digests and gradient sha256s</strong>.
+</li>
+<li>The row records (GPU name, SM count, driver, NVRTC, cuBLAS, binary sha256), because bits are only promised within that tuple.
+</li>
+<li>Bitwise equality with Metal is <strong>not</strong> a goal; Metal-vs-CUDA is a bounded comparison like the torch ones (<code>fable-advice.md:27</code>).
+</li>
+</ul>
+<h3 id="52-a-hardware-independent-golden-is-already-committed">5.2 A hardware-independent golden is already committed <a class="anchor" href="#52-a-hardware-independent-golden-is-already-committed" aria-label="Link to this section">#</a></h3>
+<p><code>tessl/tests/fixtures/qwen35_train/</code> holds:</p>
+<ul>
+<li>a transformers-autograd step on a tiny Qwen3.5: hidden 64, MLP 128, 2 layers (GDN + attention), 2:1 heads at <strong>D=256</strong>, GDN 1×128 / 1×128, vocab 64;
+</li>
+<li><code>config.json</code>, <code>model.safetensors</code>, <code>ids.npy</code>, <code>loss.npy</code> and one <code>grad.*.npy</code> per parameter [V <code>ls</code>, config read];
+</li>
+<li>generated by <code>tessl/tools/qwen35_ref/make_train_fixture.py</code> [V <code>rg -l</code>].
+</li>
+</ul>
+<p>Its shapes are the ones the D=256 / DK=128 kernels compile for. A CUDA provider checks against it <strong>on the box with no torch call</strong>, at tessl&#39;s written bounds: loss ≤1e-5 rel, every gradient ≤1e-4 of its parameter&#39;s max [V <code>tessl/tests/qwen35_train.rs:199-216,343</code>]; Bf16 ≤2^-8 / 2^-5 (<code>:247</code>). This fixture is outside tessl&#39;s crate, so it can be copied into the CUDA crate&#39;s test fixtures without touching tessl.</p>
+<h3 id="53-the-cuda-ladder-mirroring-fables-rungs-ad">5.3 The CUDA ladder, mirroring Fable&#39;s rungs a–d <a class="anchor" href="#53-the-cuda-ladder-mirroring-fables-rungs-ad" aria-label="Link to this section">#</a></h3>
+<p>All rows are <code>quick=True</code> with a <code>quick_reason</code> (rule 8). Tolerances are written in the test before the first run. Costs are at $2.29/h; minutes are estimates [I] including the binary copy and NVRTC compiles.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Rung</th><th>What runs on the box</th><th>Pass criterion (same bounds as Fable&#39;s)</th><th style="text-align:right">GPU min</th><th style="text-align:right">$</th></tr></thead>
+<tbody>
+<tr><td><strong>0</strong> toolchain smoke</td><td><code>ojas-cuda</code> affine probe (<code>open()</code>); NVRTC <code>sm_90</code> + <code>sm_90a</code> compiles; <code>cublasGemmEx</code> bf16×bf16→f32 status and a 64³ result vs host; device attributes (SM count, smem/block); library versions</td><td>every call returns <code>Ok</code>; the GEMM ≤2^-8 rel; versions recorded</td><td style="text-align:right">2</td><td style="text-align:right">0.08</td></tr>
+<tr><td><strong>a</strong> op level</td><td>§3 K0–K11 tests vs f64 host references and tessl&#39;s fixture (no torch), then vs torch/fla at 2B shapes in the campaign venv (fla <code>chunk_gated_delta_rule</code> with <code>use_qk_l2norm_in_kernel=True</code>, SDPA with <code>enable_gqa</code>, <code>F.cross_entropy</code>, causal-conv1d), with GDN fixtures named <code>published</code>; repeat-run bit equality</td><td>tessl&#39;s bounds per op (§3); Bf16 tiers ≤2^-8 / 2^-5</td><td style="text-align:right">15–25</td><td style="text-align:right">0.6–1.0</td></tr>
+<tr><td><strong>b</strong> tiny tower</td><td>the Rust trainer over the CUDA provider, 20 steps, on L-oracle&#39;s rung-b fixture (<code>tools/qd_train_oracle_tiny.py</code>, <code>fable-advice.md:80</code>). The torch CPU oracle numbers are made on the Mac; no torch run on the box. Also Metal-(B) vs CUDA-(B) on identical inputs</td><td>ExactF32 vs torch fp32: loss ≤1e-5 rel for steps 0–5, ≤1e-4 to step 20; final weights ≤1e-5 of max; two CUDA runs bit-identical</td><td style="text-align:right">3–5</td><td style="text-align:right">0.1–0.2</td></tr>
+<tr><td><strong>c</strong> real 2B</td><td>one train step on one real v4 batch vs torch fp32 in the venv (the torch run itself uses the GPU); ≥24 val prompts&#39; letter log-softmax and span scores vs the PyTorch scorer</td><td>loss ≤2^-7, grads ≤2^-4 (<code>qwen35_train.rs:862-868</code>); ≤0.10 nats on the 17 letters, ≥95% argmax</td><td style="text-align:right">20–40</td><td style="text-align:right">0.8–1.5</td></tr>
+<tr><td><strong>d</strong> real fine-tune</td><td>F&#39;s recipe on v4 shards, seed 0, <strong>reduced schedule</strong> (10% of steps) through <code>qd-train</code> on CUDA; export, then the campaign scorer. PyTorch&#39;s reduced arm is ≈$0.30 (<code>fable-advice.md:57</code>; J1 4,615 steps in 4,040 s, $2.57 [V <code>gh200-phase4:26</code>]). The CUDA arm at 5–10× slower is ≈40–80 min, plus scoring [U]</td><td>Fable&#39;s rung-d criteria unchanged (<code>fable-advice.md:57</code>)</td><td style="text-align:right">60–120</td><td style="text-align:right">2.3–4.6</td></tr>
+</tbody></table></div>
+<p><strong>Which rung fits a queue gap: none.</strong> There are no gaps.</p>
+<ul>
+<li>Every post-F item waits on <code>.done</code> markers and then takes <code>gpu.lock</code>. No waiter holds the lock while waiting, and the chain moves on from one item&#39;s exit trap to the next [V <code>post-f-queue-2026-10-01.md:182-185,203-206,230-234</code>]. A gap is the seconds between one item releasing the lock and the next taking it. Fable reached the same reading (<code>fable-advice.md:63-65</code>).
+</li>
+<li>So any CUDA test is an <strong>inserted item</strong>: a waiter that takes <code>gpu.lock</code> between two items and delays the rest of the chain by its own duration. Its price is that duration × $2.29/h if the box is released when the queue ends [I].
+</li>
+<li><strong>Rung 0 + rung a</strong> together are one ~20–30 min item, <strong>≈$0.8–1.1</strong>. They are the only rungs short enough to insert without materially moving the campaign.
+</li>
+<li><strong>b–d</strong> belong after item 10.
+</li>
+<li>Every rung is a single-GPU job well under $20, so rule 4 does not require a yes. But Fable&#39;s Q4 decision was <strong>zero GH200 time for ojas until the queue ends</strong>. This lane does not override it; inserting rung 0+a is ask 4.
+</li>
+</ul>
+<hr>
+<h2 id="6-milestones-lanes-first-commands-human-asks">6. Milestones, lanes, first commands, human asks <a class="anchor" href="#6-milestones-lanes-first-commands-human-asks" aria-label="Link to this section">#</a></h2>
+<h3 id="61-milestones">6.1 Milestones <a class="anchor" href="#61-milestones" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>M</th><th>Content</th><th>Exit</th><th>Depends on</th></tr></thead>
+<tbody>
+<tr><td>M0</td><td><code>CudaRuntime</code> + <code>CudaBuffer</code> + NVRTC cache + the rung-0 smoke binary; binding pin at <code>cuda-12080</code></td><td>rung 0 green on the box</td><td>asks 1, 2, 4, 5</td></tr>
+<tr><td>M1</td><td>K0, K1 (tier 1 or 2), K8, K11 + the tiny-fixture loader</td><td>rung a for these ops</td><td>M0</td></tr>
+<tr><td>M2</td><td>K2(i), K3, K4, K6, K7, K9, K10</td><td>rung a for every op</td><td>M0</td></tr>
+<tr><td>M3</td><td>K5 attention</td><td>rung a for attention</td><td>M0</td></tr>
+<tr><td>M4</td><td>S orchestration + the step-provider trait impl; the Metal-(B) vs CUDA-(B) test</td><td>rung b</td><td>M1–M3, the trait from L-ojas-qwen35</td></tr>
+<tr><td>M5</td><td>real 2B load, rung c; then <code>qd-train</code> on CUDA, rung d</td><td>rungs c, d</td><td>M4, the queue ended (or ask 4)</td></tr>
+<tr><td>M6 (optional)</td><td>K2(ii) fla-chunked GDN; GEMM tier 2→3; attention tuning</td><td>step within 1.5× of PyTorch on shape B</td><td>ask 6</td></tr>
+</tbody></table></div>
+<h3 id="62-lanes-and-first-commands">6.2 Lanes and first commands <a class="anchor" href="#62-lanes-and-first-commands" aria-label="Link to this section">#</a></h3>
+<p>All lanes run from a worktree of whichever repository ask 1 picks; the default below is ojas. <strong>No lane writes to ojas until the coordinator has named its files (ask 5).</strong> Every lane&#39;s first command is <code>git status --short</code> in its own worktree, refusing any dirty file it would touch, followed by DevMap (<code>devmap_explore</code> on the symbol it extends, absolute <code>repo_path</code>) and <code>gitpulse_insights</code>. In the commands below, <code>&lt;WT&gt;</code> is the lane&#39;s own ojas worktree root, and <code>$SYSROOT_ENV</code> is the two <code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_*</code> variables from §1.5.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Lane</th><th>Owns (proposed)</th><th>First command after the status check</th></tr></thead>
+<tbody>
+<tr><td>LC-runtime</td><td><code>ojas-cuda/src/{runtime,buffer,nvrtc_cache}.rs</code>; rung-0 smoke binary</td><td><code>cargo test --locked -p ojas-cuda</code>. Mac baseline with the feature off: ojas reports 8 passed [R <code>backends.md:71</code>]. Then <code>$SYSROOT_ENV cargo test --locked --release --no-run --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda</code></td></tr>
+<tr><td>LC-gemm</td><td><code>ojas-kernels/src/cuda/gemm*.cu</code>, <code>ojas-cuda/tests/gemm.rs</code></td><td>write the failing <code>#[ignore]</code> test <code>gemm_bf16_operands_f32_out_matches_f64_host</code> (odd shapes 130×70×260 plus 2B shapes), then the same <code>--no-run</code> cross-build</td></tr>
+<tr><td>LC-gdn</td><td><code>ojas-kernels/src/cuda/gdn_train_published.cu</code>, <code>ojas-cuda/tests/gdn_published.rs</code></td><td>port <code>tessl/tests/common/gdn_train.rs</code>&#39;s f64 reference into <code>ojas-cuda/tests/common/gdn_published_ref.rs</code> (read-only copy, tessl untouched) and assert it on the host for T=1/63/64/65/130 before any kernel exists: <code>cargo test --locked -p ojas-cuda --test gdn_published</code></td></tr>
+<tr><td>LC-attn</td><td><code>ojas-kernels/src/cuda/attn_gqa_lse.cu</code>, <code>ojas-cuda/tests/attn.rs</code></td><td>host f64 causal-GQA reference with LSE and its finite-difference self-test first: <code>cargo test --locked -p ojas-cuda --test attn</code></td></tr>
+<tr><td>LC-small</td><td>K3, K4, K6, K7, K9, K10 sources + tests</td><td>host references first, one test file per kernel, each failing until its <code>.cu</code> lands</td></tr>
+<tr><td>LC-oracle</td><td>Lappi <code>tools/cuda_opseam_oracle.py</code> (oracle only, run on the box later, in the campaign venv)</td><td>write it to dump fla/SDPA/CE/causal-conv1d op-seam fixtures at 2B shapes with <code>published</code> in every GDN file name; dry-run it on the Mac CPU at tiny shapes: <code>PYTHONPATH=python /Users/bharath/.venvs/ml/bin/python tools/cuda_opseam_oracle.py --tiny --out /Users/bharath/qd-campaign/cuda-opseam-tiny</code> (fla&#39;s Triton path is CUDA-only, so the Mac dry run covers the torch-reference arms only)</td></tr>
+<tr><td>LC-step (after M1–M3)</td><td>the CUDA arm of <code>ojas-qwen35</code> (or its sibling crate; ask 1)</td><td><code>cargo test -p ojas-qwen35 --features cuda --no-run --target aarch64-unknown-linux-gnu</code> against the trait L-ojas-qwen35 publishes</td></tr>
+</tbody></table></div>
+<p><strong>First box command (the lead, after asks 2, 4 and 5).</strong> Copy the rung-0 binary and its sha256, then:</p>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>flock /home/ubuntu/queue/gpu.lock timeout 300 /home/ubuntu/bin/ojas-cuda-smoke --ignored --test-threads=1</code></pre></div>
+<p>The output goes to <code>ledger/gh200-ojas-cuda-rung0-&lt;date&gt;.jsonl</code> with <code>quick=True</code>.</p>
+<h3 id="63-the-exact-human-asks">6.3 The exact human asks <a class="anchor" href="#63-the-exact-human-asks" aria-label="Link to this section">#</a></h3>
+<ol>
+<li><strong>Placement and rule-6 scope.</strong> &#34;CUDA kernels and the CUDA Qwen3.5 provider live in <strong>ojas</strong>: <code>ojas-cuda</code> grows the runtime, <code>ojas-kernels/src/cuda/</code> holds the sources, and the provider is the <code>cuda</code> arm of <code>ojas-qwen35</code> (or a sibling <code>ojas-qwen35-cuda</code>). Rule 6 (&#39;all kernel work is on canonical tessl&#39;) is read as covering Metal kernels, not CUDA. tessl is <code>objc2_metal</code>-bound [V <code>gdn_train.rs:31</code>, <code>attn_train.rs:24</code>], and a CUDA runtime inside tessl would be a second device stack there. Yes, or put CUDA in tessl?&#34; <strong>Recommend: ojas</strong>, because the user&#39;s goal is &#34;trained with ojas&#34;.
+</li>
+<li><strong>Enable cudarc.</strong> &#34;Build <code>ojas-cuda</code> with <code>--features cuda</code> for the box, and change its binding pin from <code>cuda-13040</code> to <code>cuda-12080</code> to match the box&#39;s CUDA 12.8. One line in <code>ojas-cuda/Cargo.toml</code>, which the coordinator owns; cudarc 0.19.10 is already locked.&#34; Without the pin change, a 13.x-only symbol call panics at run time (§1.6).
+</li>
+<li><strong>cuBLAS.</strong> &#34;Turn on cudarc&#39;s <code>cublas</code> feature: no new crate, and <code>libcublas.so.12</code> is already in the box venv [I]. It is the correctness-path GEMM and the oracle for a hand-written <code>mma.sync</code> GEMM that replaces it when it is within 10–15%. Or no cuBLAS at all, which costs +3 days and slows rung a.&#34; The <code>half</code> crate is <strong>not</strong> requested (u16 storage + <code>result::gemm_ex</code>). Recommend: yes, for the correctness path and as an oracle.
+</li>
+<li><strong>GH200 time.</strong> &#34;Insert one ~20–30 min item (rung 0 + rung a, ≈$0.8–1.1) into the post-F queue between items, or hold everything until after item 10? Rungs b–d (≈$3–6 total [I]) after the queue.&#34; Rule 4 does not require a yes for these. Fable&#39;s Q4 said zero, so this is the human&#39;s call.
+</li>
+<li><strong>ojas file ownership.</strong> &#34;The coordinator grants L-cuda lanes <code>ojas-cuda/**</code>, a new <code>ojas-kernels/src/cuda/**</code>, and one <code>members</code> line if a new crate is chosen. L-cuda does not touch <code>ojas-core/src/backend.rs</code>; (A)&#39;s Q1–Q10 trait additions are a later coordinator proposal. Name the owner of the step-provider trait (L-ojas-qwen35?). The coordinator also asked for this document in <code>ojas/docs</code>; the lead relays it, and L-cuda did not edit ojas.&#34;
+</li>
+<li><strong>Speed target.</strong> &#34;Is the goal (a) the quick parity ladder a–d (~40 days, CUDA step ~5–10× slower than PyTorch) or (b) a CUDA path that can replace PyTorch for 3-seed campaigns (+29–35 days: fla-chunked GDN, the GEMM and attention tiers)?&#34; Recommend (a) now, and (b) after rung d&#39;s numbers exist.
+</li>
+</ol>
+<hr>
+<h2 id="7-top-risks">7. Top risks <a class="anchor" href="#7-top-risks" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>GDN.</strong>
+<ul>
+<li>The correct-first scan is too slow for campaigns (§3.2 arithmetic, [I]; <code>GAP-L-CUDA-GDN-SPEED-INFERRED-2026-10-01</code>).
+</li>
+<li>The fast chunked backward is where fla already returned wrong gradients on Hopper (#640) [V <code>gh200-2026-09-20.md:44-60</code>].
+</li>
+<li>Mitigation: (i) is kept as the on-device oracle for (ii); T-edge tests at 63/64/65; fixtures named <code>published</code>.
+</li>
+</ul>
+</li>
+<li><strong>Never run on a GPU.</strong>
+<ul>
+<li>No ojas CUDA kernel has executed on any NVIDIA device [R <code>backends.md:130</code>].
+</li>
+<li>The binding pin mismatches the box (<code>cuda-13040</code> vs 12.8), and a missing symbol panics [V cudarc].
+</li>
+<li>Library presence on the box is inferred from the lock [I/U].
+</li>
+<li>Mitigation: rung 0 before anything else.
+</li>
+</ul>
+</li>
+<li><strong>Iteration loop.</strong>
+<ul>
+<li>CUDA bugs reproduce only on the box. The box has no Rust toolchain, no queue gaps, and is shared with a 40-h campaign.
+</li>
+<li>Mitigation: host references for every kernel before its <code>.cu</code>; <code>.npy</code> mismatch dumps; one test binary per milestone; NVRTC so no rebuild is needed for option changes [I].
+</li>
+</ul>
+</li>
+<li><strong>Ownership.</strong>
+<ul>
+<li>The ojas tree is live (103 unstaged and 97 untracked files [V GitPulse]).
+</li>
+<li>The trait is coordinator-owned, rule 6&#39;s literal text points kernel work at tessl, and <code>ojas-qwen35</code> and its trait do not exist yet [V].
+</li>
+<li>Mitigation: asks 1 and 5 before any write.
+</li>
+</ul>
+</li>
+<li><strong>cuBLAS.</strong>
+<ul>
+<li>bf16→f32 <code>GemmEx</code> is unverified [U].
+</li>
+<li>cudarc&#39;s safe API is bf16-out only [V].
+</li>
+<li>Reproducibility is per (architecture, SM count, library version) [R].
+</li>
+<li>Mitigation: rung 0 probe; tier 2 as a drop-in.
+</li>
+</ul>
+</li>
+<li><strong>Attention at D=256.</strong>
+<ul>
+<li>FA2 backward tiles at D=256 sit near sm_90&#39;s shared-memory limit, so tiles are small [I].
+</li>
+<li>Deterministic dQ needs the two-kernel split, which recomputes P [V tessl&#39;s design].
+</li>
+<li>Correctness risk is moderate; speed is fine, since attention is ~0.04 s per 8K sequence at 200 TFLOPS [I: ≈7.4e12 FLOPs per sequence over 6 layers with recompute].
+</li>
+</ul>
+</li>
+<li><strong>Parity ceiling.</strong>
+<ul>
+<li>The CUDA provider follows tessl&#39;s numerics: f32 masters, bf16 GEMM operands, f32 everything else, unpadded.
+</li>
+<li>F&#39;s PyTorch keeps bf16 activations and pads with a mask.
+</li>
+<li>Bitwise parity with F is unreachable by design. Bounds are Fable&#39;s (<code>fable-advice.md:27,57</code>).
+</li>
+</ul>
+</li>
+<li><strong>Linux ojas is linked, not run</strong> [V §1.5]. A Linux-only runtime failure (dlopen paths, <code>/proc</code> probes in <code>ojas-device/src/host.rs:59</code>) is untested.
+</li>
+</ol>
+<hr>
+<h2 id="8-gap-records-appended-to-gapsjsonl-with-qd-traingapsappend-gap-listed-here-in-case-the-commit-conflicts">8. Gap records (appended to <code>gaps.jsonl</code> with <code>qd_train.gaps.append_gap</code>; listed here in case the commit conflicts) <a class="anchor" href="#8-gap-records-appended-to-gapsjsonl-with-qd-traingapsappend-gap-listed-here-in-case-the-commit-conflicts" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>GAP-L-CUDA-NO-LISTAGENTS-2026-10-01</code>: no <code>ListAgents</code> tool was exposed. The live ojas coordinator and the L-ojas-qwen35 lane are known only from the lead&#39;s message, and same-worktree peers in ojas are invisible to GitPulse&#39;s collisions facet.
+</li>
+<li><code>GAP-L-CUDA-GITPULSE-UNTRUSTED-2026-10-01</code>: <code>gitpulse_insights</code> on the L-cuda Lappi worktree returned <code>REPOSITORY_TRUST_REQUIRED</code> on every facet. Its worktrees, collisions and agents are unknown.
+</li>
+<li><code>GAP-L-CUDA-INVENTORY-FROM-READS-2026-10-01</code>: DevMap answered <code>status</code> and <code>skeleton</code> only. Rust net resolution was 338‰ (ojas) and 318‰ (tessl), with signatures not extracted. The kernel inventory and the trait comparison come from file reads and <code>rg</code>, not graph edges.
+</li>
+<li><code>GAP-L-CUDA-BOX-LIBS-UNVERIFIED-2026-10-01</code>: the presence of <code>libcublas.so.12</code> and <code>libnvrtc.so.12</code> on the GH200 (venv <code>nvidia-*</code> wheels, host <code>/usr/local/cuda/lib64</code>) is inferred from <code>stack/train.lock</code>, not read. The driver&#39;s CUDA API version (580 series → 13.0) is inferred. Rung 0 is the falsifier.
+</li>
+<li><code>GAP-L-CUDA-OJAS-LINUX-LINKED-NOT-RUN-2026-10-01</code>: ojas cross-checks and cross-links for <code>aarch64-unknown-linux-gnu</code> (67 test executables, live tree at 2026-10-01T22:35Z, not a commit), but no binary has run on Linux. The local arm64 podman machine was stopped.
+</li>
+<li><code>GAP-L-CUDA-CUBLAS-BF16-F32-UNVERIFIED-2026-10-01</code>: cuBLAS <code>cublasGemmEx</code> with A/B <code>CUDA_R_16BF</code>, C <code>CUDA_R_32F</code> and <code>CUBLAS_COMPUTE_32F</code> was not confirmed from docs (the fetch did not return the type table) and cudarc&#39;s safe API writes bf16 C. Rung 0&#39;s probe is the falsifier.
+</li>
+<li><code>GAP-L-CUDA-GDN-SPEED-INFERRED-2026-10-01</code>: the CUDA speed of tessl&#39;s sequential GDN scan is extrapolated from the M5 Pro bench (55.2 ms per layer per 2,048 tokens on battery), not measured on sm_90. The 5–10× step-slowdown estimate rests on it.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/cuda-backend-scoping.md" rel="noopener"><code>docs/cuda-backend-scoping.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="baseline.html" rel="prev"><span>Previous</span>p0-env Baseline</a>
+        <a href="metal-deferred-faults.html" rel="next" class="next"><span>Next</span>Metal deferred-fault contract</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#0-summary">0. Summary</a></li>
+<li><a href="#1-what-exists">1. What exists</a></li>
+<li class="sub"><a href="#11-ojas-cuda-a-probe-not-a-backend">1.1 ojas-cuda: a probe, not a backend</a></li>
+<li class="sub"><a href="#12-ojas-hip-a-copy-probe">1.2 ojas-hip: a copy probe</a></li>
+<li class="sub"><a href="#13-the-backend-trait-and-t1t6">1.3 The Backend trait, and T1–T6</a></li>
+<li class="sub"><a href="#14-ojas-kernels-cuda-sources">1.4 ojas-kernels: CUDA sources</a></li>
+<li class="sub"><a href="#15-can-ojas-build-for-aarch64-linux-today-builds-and-links-never-run-on-linux">1.5 Can ojas build for aarch64 Linux today? Builds and links; never run on Linux</a></li>
+<li class="sub"><a href="#16-the-target-box">1.6 The target box</a></li>
+<li class="sub"><a href="#17-tessls-training-step-what-b-mirrors">1.7 tessl&#39;s training step: what (B) mirrors</a></li>
+<li><a href="#2-two-designs">2. Two designs</a></li>
+<li class="sub"><a href="#2a-a-general-ojas-cuda-backend-against-the-existing-trait-plus-t1t6">2.A A general ojas CUDA Backend, against the existing trait plus T1–T6</a></li>
+<li class="sub"><a href="#2b-a-whole-step-qwen35-provider-on-cuda-the-cuda-counterpart-of-ojas-qwen35">2.B A whole-step Qwen3.5 provider on CUDA: the CUDA counterpart of ojas-qwen35</a></li>
+<li class="sub"><a href="#2c-recommendation-and-convergence">2.C Recommendation and convergence</a></li>
+<li><a href="#3-the-kernel-port-list">3. The kernel port list</a></li>
+<li class="sub"><a href="#31-gemm-cublas-through-cudarc-or-hand-written">3.1 GEMM: cuBLAS through cudarc, or hand-written</a></li>
+<li class="sub"><a href="#32-gdn-port-flas-chunked-algorithm-or-port-tessls-metal-kernel">3.2 GDN: port fla&#39;s chunked algorithm, or port tessl&#39;s Metal kernel</a></li>
+<li><a href="#4-toolchain">4. Toolchain</a></li>
+<li class="sub"><a href="#41-nvrtc-at-run-time-or-nvcc-built-ptxcubin">4.1 NVRTC at run time, or nvcc-built PTX/cubin</a></li>
+<li class="sub"><a href="#42-cross-building-for-the-box-from-the-mac">4.2 Cross-building for the box from the Mac</a></li>
+<li class="sub"><a href="#43-running-tests-on-the-box-without-a-rust-toolchain">4.3 Running tests on the box without a Rust toolchain</a></li>
+<li><a href="#5-determinism-and-the-parity-ladder-on-cuda">5. Determinism and the parity ladder on CUDA</a></li>
+<li class="sub"><a href="#51-the-determinism-contract">5.1 The determinism contract</a></li>
+<li class="sub"><a href="#52-a-hardware-independent-golden-is-already-committed">5.2 A hardware-independent golden is already committed</a></li>
+<li class="sub"><a href="#53-the-cuda-ladder-mirroring-fables-rungs-ad">5.3 The CUDA ladder, mirroring Fable&#39;s rungs a–d</a></li>
+<li><a href="#6-milestones-lanes-first-commands-human-asks">6. Milestones, lanes, first commands, human asks</a></li>
+<li class="sub"><a href="#61-milestones">6.1 Milestones</a></li>
+<li class="sub"><a href="#62-lanes-and-first-commands">6.2 Lanes and first commands</a></li>
+<li class="sub"><a href="#63-the-exact-human-asks">6.3 The exact human asks</a></li>
+<li><a href="#7-top-risks">7. Top risks</a></li>
+<li><a href="#8-gap-records-appended-to-gapsjsonl-with-qd-traingapsappend-gap-listed-here-in-case-the-commit-conflicts">8. Gap records (appended to gaps.jsonl with qd_train.gaps.append_gap; listed here in case the commit conflicts)</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

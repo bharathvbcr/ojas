@@ -25,12 +25,12 @@ sequenceDiagram
     App->>SDK: ojas.OpenTrainer(ctx, id, cfg)
     App->>SDK: res, err := ojas.TrainStep(ctx, id)
     Gusset->>Rust: dispatch(OP_TRAIN_STEP)
-    Note over Rust: Forward, backward, Muon + AdamW on the device; reads back the loss
+    Note over Rust: Forward, backward, Muon + AdamW on the device#59; reads back the loss
     Rust-->>App: StepResult{Loss, GradNorm, MatrixLR, AdamLR, Step, Tokens}
 
     App->>SDK: ojas.SaveCheckpoint(ctx, id, "runs/ckpt")
     App->>SDK: ids, err := ojas.GenerateIDs(ctx, id, prompt, opts)
-    App->>SDK: ojas.Free(ctx, id); ojas.Close(ctx)
+    App->>SDK: ojas.Free(ctx, id)#59; ojas.Close(ctx)
 ```
 
 ---

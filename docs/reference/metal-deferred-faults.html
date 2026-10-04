@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Metal deferred-fault contract · ojas reference</title>
+  <meta name="description" content="Status: implemented (round 5, phase B). The user approved Metal adopting wgpu&#39;s deferred-fault contract; phase A wrote this contract and phase B implemented it in ojas-metal. §9 records what was buil…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/metal-deferred-faults.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/metal-deferred-faults.html">
+  <meta property="og:title" content="Metal deferred-fault contract · ojas reference">
+  <meta property="og:description" content="Status: implemented (round 5, phase B). The user approved Metal adopting wgpu&#39;s deferred-fault contract; phase A wrote this contract and phase B implemented it in ojas-metal. §9 records what was buil…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html" class="current" aria-current="page">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
+      <article class="prose-ojas">
+<h1 id="metal-deferred-fault-contract">Metal deferred-fault contract <a class="anchor" href="#metal-deferred-fault-contract" aria-label="Link to this section">#</a></h1>
+<p>Status: <strong>implemented</strong> (round 5, phase B). The user approved Metal adopting wgpu&#39;s deferred-fault contract; phase A wrote this contract and phase B implemented it in <code>ojas-metal</code>. §9 records what was built, where it departs from or corrects §2–§8, the measurements, and the gaps. Sections 1–8 are kept as written in phase A, with phase B corrections marked <strong>(B)</strong>.</p>
+<p>Claims carry a label: <strong>(V)</strong> verified against source or a measurement, <strong>(I)</strong> inferred, <strong>(U)</strong> unverified.</p>
+<h2 id="1-why">1. Why <a class="anchor" href="#1-why" aria-label="Link to this section">#</a></h2>
+<p>Every Metal op today ends with one blocking wait and a read of its status words (<code>ojas-metal/src/device.rs</code>, <code>Worker::finish</code>).</p>
+<ul>
+<li><strong>The floor.</strong> The wait costs 0.13–0.30 ms even for a one-element op (round-4 control rows, <code>scratchpad/metal_r4_ab_final.txt</code>) (V).
+</li>
+<li><strong>adamw_full</strong> in the round-2 bench is 0.16× torch, with 170 waits per call, one per tensor (<code>docs/bench-gpu-vs-torch.md</code>, &#34;Round 2&#34;) (V).
+<ul>
+<li>Phase A&#39;s status-read fix moved its min from 103.4 to 69.9 ms in an interleaved A/B, but the median stayed about 222 ms, set by the 170 waits.
+</li>
+<li>That A/B used its own scalars, step 0 and zeroed moments, so it is not a reproduction of the bench row (V, <code>scratchpad/metal-r5-ab1.txt</code>).
+</li>
+</ul>
+</li>
+<li><strong>Training step.</strong> One micro-step is about 1,000 trait calls (<code>docs/framework-design.md</code> §9) (I), so at K=4 a training step pays about 4,170 waits.
+</li>
+</ul>
+<p>wgpu avoids this by recording ops into a shared encoder and reporting non-finite values at the next sync point (<code>ojas-wgpu/src/backend.rs:17-41</code>) (V). Metal adopts the same contract, so batching ops into fewer command buffers becomes legal.</p>
+<h2 id="2-the-contract-mirroring-wgpu">2. The contract, mirroring wgpu <a class="anchor" href="#2-the-contract-mirroring-wgpu" aria-label="Link to this section">#</a></h2>
+<p>Wording follows <code>ojas-wgpu/src/backend.rs:17-44</code> and <code>ojas-wgpu/README.md:75</code> wherever Metal can mean the same thing.</p>
+<ol>
+<li><strong>A fault does not fail its op.</strong> An op whose kernel produces a non-finite value, or reads one, returns <code>Ok</code>. The op&#39;s status words record it, and the op keeps going.
+</li>
+<li><strong>The next sync point reports it.</strong> The next <code>Backend::sync</code>, <code>Backend::download</code> (of any tensor) or <code>Backend::clip_grad_norm</code> on this backend returns <code>OjasError::NonFinite { op }</code>. <code>op</code> names the <strong>first op in recording order</strong> on this backend that faulted since the previous report (F11&#39;s rule) (V for wgpu, <code>ojas-wgpu/src/backend.rs:376-390</code>).
+</li>
+<li><strong>A fault is reported once and never lost.</strong> After it is reported, the next sync point returns <code>Ok</code> unless a new fault arrived.
+<ul>
+<li>Metal is stronger than wgpu here: wgpu may report a fault twice when two threads&#39; syncs overlap (<code>ojas-wgpu/src/context.rs:18-19</code>). On Metal, scanning and reporting both run on the single device thread, so each fault is reported to exactly one caller (I; phase B pins it in a test).
+</li>
+</ul>
+</li>
+<li><strong>The fault belongs to the backend, not the caller.</strong> Threads sharing one <code>MetalBackend</code> (or its clones) share one pending fault, reported to whichever thread reaches a sync point first. Callers that need their faults kept apart open one backend each. This is the same rule as wgpu (<code>ojas-wgpu/src/backend.rs:36-40</code>).
+</li>
+<li><strong>A caller that must not run past a fault calls <code>sync</code></strong> after the steps it cares about. The trainer already does (<code>docs/framework-design.md</code> §3, step 6).
+</li>
+<li><strong>Precedence inside one op is unchanged.</strong> Its status words are judged in the current order: non-finite input, index out of range, then no valid row, then non-finite output (<code>Worker::finish</code>). Across ops, the first op in recording order wins.
+</li>
+</ol>
+<h3 id="21-sync-points">2.1 Sync points <a class="anchor" href="#21-sync-points" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Call</th><th style="text-align:center">Waits</th><th style="text-align:center">Reports a pending fault</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>Backend::sync</code> (new override)</td><td style="text-align:center">yes</td><td style="text-align:center">yes</td><td>The only call whose sole job is to report. The override is required: <code>&amp;dyn Backend</code>, <code>Arc&lt;MetalBackend&gt;</code> and generic callers reach it through T6 forwarding (<code>ojas-core/src/backend.rs:938-940</code>) (V)</td></tr>
+<tr><td><code>Backend::download</code> (new override)</td><td style="text-align:center">yes</td><td style="text-align:center">yes, <strong>after</strong> the read succeeds</td><td>As wgpu (<code>ojas-wgpu/src/backend.rs:1131-1137</code>): read first, then report. On a fault the host copy is dropped and <code>NonFinite</code> is returned. It keeps reading through <code>tensor.to_host(self.budget())</code>, so the readback is still charged to the backend&#39;s own budget (round 3&#39;s <code>downloads_are_counted_on_the_backends_own_budget</code>). Today Metal uses the trait default (<code>ojas-core/src/backend.rs:426-428</code>) (V)</td></tr>
+<tr><td><code>Backend::clip_grad_norm</code></td><td style="text-align:center">yes (it must read the norm)</td><td style="text-align:center">yes, <strong>before</strong> it scales anything</td><td>As wgpu (<code>ojas-wgpu/src/backend.rs:1843-1889</code>). Its scale pass is then recorded without a wait</td></tr>
+<tr><td><code>Tensor::to_host</code> / <code>DeviceBuffer::read_bytes</code></td><td style="text-align:center">yes</td><td style="text-align:center"><strong>no</strong>: the fault stays pending</td><td>A raw read is not a backend call, so it cannot return a typed fault for the backend. It may observe the fault (§4.3) but does not clear it</td></tr>
+<tr><td>every other op, <code>adamw_step</code> and <code>muon_ns5_step</code> included</td><td style="text-align:center">no</td><td style="text-align:center">no</td><td>Recorded only</td></tr>
+</tbody></table></div>
+<p><strong>Optimizers defer, and stay all-or-nothing per call.</strong> <code>adamw_step</code> and <code>muon_ns5_step</code> return <code>Ok</code> and record their work.</p>
+<ul>
+<li><strong>Why defer:</strong> waiting per call is exactly the 170-wait cost being removed.
+</li>
+<li><strong>Why it is safe:</strong>
+<ul>
+<li>The trainer reaches the optimizers only after <code>clip_grad_norm</code>, a sync point that has already reported every fault from forward and backward (<code>docs/framework-design.md</code> §3, step 4).
+</li>
+<li>Each optimizer call still decides on the device whether <em>its own</em> values are finite, and writes nothing otherwise (§3).
+</li>
+<li>The trainer calls <code>sync</code> after the optimizer steps, and a fault there poisons it (§3, step 6).
+</li>
+</ul>
+</li>
+<li><strong>Unchanged behaviour:</strong> this is the same partial-update-across-parameters behaviour Metal has today. A synchronous <code>NonFinite</code> from parameter j already leaves parameters 0..j updated, and the trainer poisons (I).
+</li>
+</ul>
+<h3 id="22-what-stays-synchronous-immediate-err-nothing-recorded">2.2 What stays synchronous (immediate <code>Err</code>, nothing recorded) <a class="anchor" href="#22-what-stays-synchronous-immediate-err-nothing-recorded" aria-label="Link to this section">#</a></h3>
+<p>Everything the host can decide without the device:</p>
+<ul>
+<li><strong>Shape and dtype:</strong> dtype, rank, shape agreement, empty tensors, and the core validators (<code>linear_ce_dims</code>, <code>cached_attention_dims</code>, <code>kv_cache_write_dims</code>, <code>permute_output_shape</code>).
+</li>
+<li><strong>Placement:</strong> a host tensor, another device&#39;s tensor, or another <code>MetalBackend</code>&#39;s tensor.
+</li>
+<li><strong>Capacity:</strong> <code>CapacityExceeded</code> from the budget, and from a device allocation, which happens on the device thread while the op is recorded, before the call returns.
+</li>
+<li><strong>Limits:</strong> the head-dim limit (<code>refuse_unsupported_metal_head_dim</code>), <code>u32</code> indexing limits, <code>kv_cache_write</code>&#39;s <code>at + Tn &gt; Tcap</code>, and <code>cached_attention_forward</code>&#39;s <code>kv_len</code> range.
+</li>
+<li><strong>Arguments:</strong> <code>check_adamw</code> (step counter, config), Muon config, and <code>clip_grad_norm</code>&#39;s <code>max_norm</code> (non-finite or negative).
+</li>
+<li><strong>Uniqueness:</strong> an in-place op whose target is shared is <code>Shape</code>.
+</li>
+<li><strong>Token ids and the valid-row count (new, as wgpu).</strong> Today these are found on the device by <code>ojas_check_ids</code> (<code>device.rs</code>, the <code>ST_RANGE</code> and <code>ST_COUNT</code> words) (V).
+<ul>
+<li>Under the contract, a U32 upload keeps a host copy of its ids, as wgpu does (<code>ojas-wgpu/src/backend.rs:9-11</code>).
+</li>
+<li>Embedding ids and cross-entropy / linear-CE targets are then range-checked, and the valid count formed, on the host.
+</li>
+<li>So <code>OutOfRange</code> and the all-ignored <code>NonFinite</code> stay immediate.
+</li>
+<li>Every U32 Metal tensor is an upload (no Metal op produces U32), so the copy always exists (V by inspection of <code>backend.rs</code>).
+</li>
+</ul>
+</li>
+<li><strong>Poisoned</strong> (§4.4) and <strong><code>Unsupported</code></strong>.
+</li>
+</ul>
+<p><strong>Observable precedence change (as on wgpu).</strong> Today &#34;a non-finite logit outranks an out-of-range target&#34; (<code>tests/cross_entropy.rs:96-107</code>, <code>tests/linear_ce.rs</code> refusals). Under the contract:</p>
+<ul>
+<li>the out-of-range target is refused immediately, and the op is not recorded;
+</li>
+<li>so the NaN in the logits is never reported by that call. If an earlier op produced the NaN, that op&#39;s fault is still pending.
+</li>
+</ul>
+<h2 id="3-outputs-of-a-faulted-op-and-the-in-place-ops">3. Outputs of a faulted op, and the in-place ops <a class="anchor" href="#3-outputs-of-a-faulted-op-and-the-in-place-ops" aria-label="Link to this section">#</a></h2>
+<p><strong>General rule.</strong> This follows the trait (<code>ojas-core/src/backend.rs:650-657</code> on <code>accumulate_grad</code>, and <code>Backend::sync</code>&#39;s doc at <code>:638-648</code>) (V).</p>
+<ul>
+<li>Once a sync point reports <code>NonFinite</code>, the outputs of the faulted op, and of every op recorded after it that read them, are <strong>invalid</strong>: their contents are unspecified (in practice they hold the NaN or infinity). They are still valid tensors to drop.
+</li>
+<li>Outputs of ops recorded before the first faulting op are valid.
+</li>
+<li>Ops recorded after it that never read a faulted value are also valid, but the report does not say which those are.
+</li>
+</ul>
+<p><strong>In-place ops keep all-or-nothing under batching.</strong> Each decides on the device, in the same command buffer, from its own call&#39;s status words only. It never consults the backend-wide pending fault, so an earlier op&#39;s fault cannot block it, and its own fault cannot leak into a later call&#39;s decision.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Op</th><th>Today (sync)</th><th>Under the contract</th><th>How</th></tr></thead>
+<tbody>
+<tr><td><code>adamw_step</code></td><td><code>NonFinite</code>; p, m, v bit-identical</td><td><code>Ok</code>; p, m, v bit-identical; <code>NonFinite { &#34;adamw_step&#34; }</code> at the next sync point</td><td><code>ojas_adamw_check</code> sets this call&#39;s words; <code>ojas_adamw_apply</code> returns early if they are set (<code>kernels/ojas_backend.metal</code>, AdamW section). No wait. The kernels are as of round 5 phase A (V by inspection): the gated-apply kernels now read their status as plain <code>device const uint*</code> (§4.2), a prerequisite this contract builds on</td></tr>
+<tr><td><code>muon_ns5_step</code></td><td>as AdamW, for p and momentum</td><td>as AdamW</td><td>Every stage checks into this call&#39;s words; <code>ojas_copy_if_clean</code> commits p and momentum only if they are clear (V by inspection)</td></tr>
+<tr><td><code>accumulate_grad</code></td><td><code>NonFinite</code>; <code>acc</code> bit-identical</td><td><code>Ok</code>; <code>acc</code>&#39;s <strong>values</strong> bit-identical (stronger than the trait&#39;s &#34;invalid&#34;); <code>NonFinite { &#34;accumulate_grad&#34; }</code> at the next sync point</td><td><code>ojas_acc_check</code> then <code>ojas_acc_apply</code> on this call&#39;s words. A <strong>unique</strong> <code>acc</code> keeps its buffer. A <strong>shared</strong> <code>acc</code> is replaced by a new buffer when the call returns <code>Ok</code> (today it is replaced only on success); on a fault that new buffer holds the unmodified copy, so the values match but the buffer is new (I: the copy precedes the gated apply)</td></tr>
+<tr><td><code>kv_cache_write</code></td><td><code>NonFinite</code>; cache unchanged</td><td><code>Ok</code>; cache unchanged; <code>NonFinite { &#34;kv_cache_write&#34; }</code> at the next sync point</td><td><code>ojas_check_finite</code> on <code>src</code> into this call&#39;s words, then <code>ojas_kv_write</code> copies only if they are clear (V by inspection). Satisfies the trait&#39;s &#34;on any error the cache is unchanged&#34; (<code>ojas-core/src/backend.rs:726</code>)</td></tr>
+<tr><td><code>clip_grad_norm</code> scale</td><td>after the norm is read</td><td>after the norm is read (a sync point), then recorded</td><td>Scaling happens only when the read found no pending fault and a finite norm</td></tr>
+</tbody></table></div>
+<p>wgpu writes NaN into <code>acc</code> and relies on &#34;invalid&#34; (<code>ojas-wgpu/src/backend.rs:2133-2160</code>) (V). Metal keeps its stronger guarantee because it costs nothing extra.</p>
+<h2 id="4-batching-mechanics">4. Batching mechanics <a class="anchor" href="#4-batching-mechanics" aria-label="Link to this section">#</a></h2>
+<h3 id="41-recording-and-committing">4.1 Recording and committing <a class="anchor" href="#41-recording-and-committing" aria-label="Link to this section">#</a></h3>
+<p>Today each <code>Cmd</code> ends with <code>rt.synchronize()</code>, which is <code>commit(true)</code> in tessl (<code>tessl/src/runtime.rs:1788-1790</code>) (V). Under the contract a <code>Cmd</code> records its dispatches with tessl&#39;s async encode, already on (<code>device.rs</code>, <code>Worker::open</code>), and returns as soon as they are encoded. The device thread still runs one <code>Cmd</code> at a time, so recording order is channel order.</p>
+<p>A command buffer is committed at four triggers:</p>
+<ol>
+<li><strong>A sync point or a read.</strong> A waited commit (<code>commit(true)</code>), then the status scan (§4.2).
+</li>
+<li><strong>An overlap cap</strong>, every <code>OVERLAP_DISPATCHES</code> dispatches (initial value 256).
+<ul>
+<li>This is an unwaited <code>commit(false)</code>, so the GPU runs while the host keeps recording.
+</li>
+<li>tessl alternates two command allocators, and a commit with both in flight waits for one (<code>runtime.rs:1361-1380</code>) (I: read, not exercised). That bounds the work in flight.
+</li>
+</ul>
+</li>
+<li><strong>A memory cap</strong>, a waited commit with no report, when either of these exceeds its cap:
+<ul>
+<li><strong>Bytes allocated since the last waited commit.</strong> Initial cap: min(1 GiB, a quarter of the budget&#39;s cap).
+<ul>
+<li>tessl returns a dropped buffer to its pool, and removes it from residency, only at a waited commit (<code>drain_cold_recycles</code>, <code>runtime.rs:899-935</code>, called only from <code>commit(true)</code> paths at <code>:1545, :1573, :1638</code>) (V).
+</li>
+<li>Between waited commits, freed device memory is not reusable, so without this cap a whole step&#39;s temporaries would stay resident.
+</li>
+</ul>
+</li>
+<li><strong>The status slab</strong> (§4.2) filling.
+</li>
+</ul>
+</li>
+<li><strong>tessl&#39;s constant arena.</strong> It is reset only by a waited commit, and grows 16 bytes per dispatch to 16 MiB, about 1.05M dispatches (<code>runtime.rs:1551-1566</code>) (V, from tessl&#39;s own comment). The memory cap and the slab cap both trigger long before that.
+</li>
+</ol>
+<p>A waited commit at a cap scans the status words and <strong>holds</strong> any fault it finds for the next sync point. It does not report it, so a cap commit never changes what a call returns.</p>
+<p><strong>Buffer lifetime is safe without new code.</strong> MTL4 command buffers do not retain their resources (<code>runtime.rs:1820-1826</code>) (V). tessl already keeps every dropped <code>GpuBuffer</code> alive in pending queues until a waited commit (<code>tessl/src/tensor.rs:74-90</code>) (V). So op temporaries dropped at the end of a <code>Cmd</code>, and <code>Cmd::Free</code>, are safe while their commands are still recorded or in flight (I: follows from the two facts; phase B&#39;s stress test exercises it).</p>
+<h3 id="42-status-words-and-first-fault-naming">4.2 Status words and first-fault naming <a class="anchor" href="#42-status-words-and-first-fault-naming" aria-label="Link to this section">#</a></h3>
+<p>Today each op allocates a 32-byte status buffer and dispatches <code>ojas_status_init</code> (<code>device.rs</code>, <code>Worker::status</code>) (V). Under the contract:</p>
+<ul>
+<li><strong>The slab.</strong> The worker owns a <strong>status slab</strong>: shared memory, <code>SLAB_SLOTS</code> slots (initial value 4,096) of <code>ST_WORDS</code> words each.
+<ul>
+<li>An op takes the next slot and binds it exactly where it binds its status buffer today, so no kernel changes.
+</li>
+<li>The worker appends <code>(slot, op name, need_count)</code> to a pending list, in recording order.
+</li>
+</ul>
+</li>
+<li><strong>Reading status inside kernels.</strong> A kernel that reads another dispatch&#39;s status words binds them as plain <code>device const uint*</code>. A per-thread <code>atomic_load</code> of one address cost about 6 ms per 38.6M-element pass (phase A2, V), and the gated-apply kernels read a slot on every element.
+</li>
+<li><strong>Clearing.</strong> The host zeroes slots after a waited commit, when the GPU is idle. This removes today&#39;s per-op allocation and <code>ojas_status_init</code> dispatch (I: saves one dispatch per op).
+</li>
+<li><strong>Scan.</strong> After every waited commit the worker reads the slots of the pending list in order. The first one with a set word becomes the <strong>pending fault</strong>, if none is pending already, judged with today&#39;s per-op precedence. Then the list and the slab are reset.
+<ul>
+<li>The host reads shared memory directly after the wait, so there is no copy to fail between seeing a fault and clearing it. wgpu&#39;s hold/release pair (<code>ojas-wgpu/src/context.rs:10-19</code>) exists for that copy, and Metal does not need it.
+</li>
+</ul>
+</li>
+<li><strong>Report.</strong> A sync point reports the pending fault and clears it (<code>take_faults</code> in wgpu terms).
+</li>
+<li><strong>Error kinds.</strong> Device-detected faults are only non-finite values (<code>ST_IN</code>, <code>ST_OUT</code>) once ids are host-checked (§2.2), so every deferred error is <code>NonFinite { op }</code>.
+</li>
+</ul>
+<h3 id="43-a-failed-wait-or-read-f12">4.3 A failed wait or read (F12) <a class="anchor" href="#43-a-failed-wait-or-read-f12" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>A failed waited commit</strong> (a timeout, or a commit-feedback error):
+<ul>
+<li>tessl marks the runtime failed (<code>encode_failed</code>, <code>runtime.rs:1534-1538, :1615-1618</code>) (V).
+</li>
+<li>The scan does not run, the pending list is kept, and the call returns <code>Backend { &#34;... runtime poisoned ...&#34; }</code>. capi maps that text to <code>E_DEVICE_LOST</code> (<code>ojas-capi/src/lib.rs:56-79</code>) (V).
+</li>
+<li>A fault already pending is never cleared by a failed wait. Since the tessl runtime cannot recover, every later call reports the device error rather than the older <code>NonFinite</code> (I).
+</li>
+</ul>
+</li>
+<li><strong>A raw read</strong> (<code>Tensor::to_host</code>) that waits and scans keeps the fault pending for the next backend sync point. A read that fails after the scan has recorded the fault keeps it too. This is F12&#39;s rule; on wgpu it is pinned by <code>a_failed_read_keeps_the_fault_for_the_next_sync</code> (<code>ojas-wgpu/src/backend.rs:2455-2473</code>) (V for wgpu).
+</li>
+</ul>
+<h3 id="44-poisoned-and-device-loss">4.4 <code>Poisoned</code> and device loss <a class="anchor" href="#44-poisoned-and-device-loss" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>A device-thread panic</strong> poisons the backend, as today (<code>device.rs</code>, <code>Worker::serve</code>). Every later call returns <code>Poisoned</code>, sync points included. A pending fault is dropped with the poisoned state, because the backend can no longer report anything else (I; phase B pins that nothing hangs, as <code>a_device_thread_panic_mid_stream_fails_later_calls_cleanly</code> does today).
+</li>
+<li><strong>Device loss and command-buffer errors</strong> surface at the next waited commit (§4.3), not at the op that caused them. That is the same deferral as wgpu, which records a lost device apart from its error queue and reports it on every later check (<code>ojas-wgpu/src/context.rs:21-22, :853-863</code>) (V).
+</li>
+</ul>
+<h3 id="45-link-and-cmd-changes">4.5 Link and Cmd changes <a class="anchor" href="#45-link-and-cmd-changes" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong><code>Cmd</code>.</strong> Every op variant is unchanged.
+<ul>
+<li>New: <code>Cmd::Sync</code> (wait, scan, report).
+</li>
+<li><code>Cmd::Read</code> waits and scans but does not report. <code>MetalBackend::download</code> sends <code>Cmd::Read</code>, then <code>Cmd::Sync</code> semantics, i.e. a report with no second wait.
+</li>
+<li><code>Cmd::ClipNorm</code> reports before reading the norm.
+</li>
+</ul>
+</li>
+<li><strong><code>Link</code>.</strong> Unchanged. <code>Link::call</code> still waits for the device thread to <em>encode</em> the op, so encode-time errors (capacity, unknown buffer, dispatch geometry) stay immediate and outputs get ids. Moving to fire-and-forget <code>post</code> would need host-assigned ids and is not part of this contract (I).
+</li>
+<li><strong><code>Reply</code>.</strong> Unchanged.
+</li>
+<li><strong>Host shadows.</strong> <code>MetalBuffer</code> gains an <code>Option&lt;Arc&lt;[u32]&gt;&gt;</code> host copy for U32 uploads (§2.2).
+</li>
+</ul>
+<h2 id="5-observable-changes-for-ojas-capi-and-go">5. Observable changes for ojas-capi and Go <a class="anchor" href="#5-observable-changes-for-ojas-capi-and-go" aria-label="Link to this section">#</a></h2>
+<p>The coordinator makes these edits. Listed only; ojas-metal does not edit them.</p>
+<p><strong>Error kinds that can now arrive from a later call:</strong></p>
+<ul>
+<li><code>E_NONFINITE</code> from any recorded op now arrives at the next <code>clip_grad_norm</code>, <code>download</code> or <code>sync</code> in the same call, or, if the call returned early, in the <strong>next</strong> call on the same session.
+</li>
+<li><code>E_DEVICE_LOST</code> (&#34;runtime poisoned&#34;) likewise arrives at the next waited commit.
+</li>
+<li><code>E_CAPACITY</code> stays immediate.
+</li>
+<li>Out-of-range ids stay immediate (§2.2), so <code>GenerateGreedy</code>&#39;s &#34;a prompt id of 2 or more is an out-of-range error&#34; (<code>go/api.go:162-164</code>) is unchanged.
+</li>
+</ul>
+<p><strong>Functions and docs that change:</strong></p>
+<ol>
+<li><strong><code>ojas-capi/src/step.rs</code> <code>run</code> (<code>:207-275</code>).</strong>
+<ul>
+<li>CE forward/backward non-finite values now surface at <code>clip_grad_norm</code> (<code>:247-249</code>). AdamW&#39;s surfaces at <code>download(&amp;loss_t)</code> (<code>:268</code>).
+</li>
+<li>Both stay <code>E_NONFINITE</code> and the message still names the faulting op. No state changes, since <code>run</code> writes nothing into the session (V by reading <code>:1-14</code>).
+</li>
+<li><strong>Leak:</strong> <code>run</code> returns early at <code>check()?</code> (<code>:236, :241, :245, :257</code>) and at <code>?</code> after recorded ops. A fault recorded before such a return stays pending on the session&#39;s backend and is reported by that session&#39;s <strong>next</strong> Step or GenerateGreedy.
+</li>
+<li><strong>Required change:</strong> call <code>backend.sync()</code> on every exit path after the first recorded op (or at entry, attributing a leftover fault to the previous call), so a fault never crosses calls.
+</li>
+<li>Same for <code>run_part</code> (<code>:393-525</code>, <code>check()?</code> at <code>:444, :449, :453, :492</code>).
+</li>
+</ul>
+</li>
+<li><strong><code>ojas-capi/src/generate.rs</code> <code>greedy</code> (<code>:65-104</code>).</strong> Faults from <code>embedding_forward</code> and <code>linear_forward</code> surface at <code>download(&amp;last)</code> (<code>:98-101</code>). There are early returns at <code>check()?</code> (<code>:81, :87, :90, :93</code>). Same leak and the same <code>sync()</code> fix.
+</li>
+<li><strong><code>ojas-capi/src/step.rs</code> module doc (<code>:8-11</code>):</strong> &#34;<code>clip_grad_norm</code> reads its norm through the backend&#39;s own status read&#34; stays true; add that it is also where earlier non-finite values are reported on Metal and wgpu.
+</li>
+<li><strong><code>ojas-capi/src/lib.rs</code> <code>kind_of</code> doc (<code>:56-66</code>):</strong> unchanged mapping; note that on Metal and wgpu a kind may come from a later call than the one that caused it.
+</li>
+<li><strong><code>go/api.go</code>.</strong>
+<ul>
+<li>The <code>DeviceMetal</code> / <code>DeviceWgpu</code> paragraph (<code>:36-46</code>) and <code>Step</code> (<code>:134-138</code>): document that <code>ErrNonFinite</code> and <code>ErrDeviceLost</code> may report a fault from an earlier op in the same call. With the capi fix above it can never come from an earlier call.
+</li>
+<li>The sentinel block (<code>:59-74</code>) is unchanged.
+</li>
+</ul>
+</li>
+<li><strong><code>ojas-core/src/backend.rs</code> <code>Backend::sync</code> doc (<code>:638-645</code>)</strong> says &#34;CPU, and Metal today&#34; keep the default. It becomes &#34;CPU keeps this default; wgpu and Metal override it&#34;. That is the core lane&#39;s file.
+</li>
+<li><strong><code>docs/pytorch-parity-plan.md:184</code></strong> (&#34;CPU and Metal refuse synchronously&#34;) and <strong><code>docs/bench-gpu-vs-torch.md:235</code></strong> (&#34;24 synchronous ops&#34;) describe the old contract.
+</li>
+</ol>
+<h2 id="6-tests-that-pin-per-op-refusal-today-and-where-each-goes">6. Tests that pin per-op refusal today, and where each goes <a class="anchor" href="#6-tests-that-pin-per-op-refusal-today-and-where-each-goes" aria-label="Link to this section">#</a></h2>
+<p>&#34;Re-point&#34; means:</p>
+<ul>
+<li>the op now returns <code>Ok</code>;
+</li>
+<li>the next <code>sync()</code> returns <code>NonFinite { op }</code> naming the same op;
+</li>
+<li>a second <code>sync()</code> returns <code>Ok</code>;
+</li>
+<li>for in-place ops, the state is still bit-identical after the <code>sync</code>.
+</li>
+</ul>
+<p>Host-decided refusals stay as they are.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Test (file:line)</th><th>Pins today</th><th>Under the contract</th></tr></thead>
+<tbody>
+<tr><td><code>tests/backend_contract.rs:81-101</code> <code>non_finite_inputs_are_refused_by_every_op_family</code> (<code>nf</code> at <code>:87</code>)</td><td>every op family refuses a NaN input synchronously</td><td>re-point: <code>Ok</code>, then <code>sync</code> names the op; one backend per family, or a sync between families</td></tr>
+<tr><td><code>tests/backend_contract.rs:103-126</code> <code>non_finite_gradient_leaves_adamw_state_untouched</code> (<code>:120</code>)</td><td><code>NonFinite</code>; p, m, v untouched</td><td>re-point; state bit-identical after <code>sync</code></td></tr>
+<tr><td><code>tests/backend_contract.rs:130-180</code> <code>adamw_refusal_at_the_last_element...</code> (<code>:151</code>, <code>:172</code>)</td><td><code>NonFinite { &#34;adamw_step&#34; }</code>; bit-identical</td><td>re-point; then the clean step at the end must return <code>Ok</code> <strong>and</strong> the following <code>sync</code> must be <code>Ok</code> (the earlier fault was reported, not carried)</td></tr>
+<tr><td><code>tests/backend_contract.rs:183-197</code> <code>an_update_that_overflows_leaves_adamw_state_untouched</code> (<code>:191</code>)</td><td>overflow is <code>NonFinite</code></td><td>re-point. <strong>(B)</strong> Unchanged instead: this test&#39;s <code>lr = f32::MAX</code> overflows the f32 step scalar itself, which <code>adamw_scalars</code> refuses on the host before anything is recorded (V: the test passes unmodified). The device-side overflow case is in <code>adamw_refusal_at_the_last_element...</code>, which is re-pointed</td></tr>
+<tr><td><code>tests/backend_contract.rs:199-229</code> <code>muon_refusal_at_the_last_element...</code> (<code>:221</code>)</td><td><code>NonFinite { &#34;muon_ns5_step&#34; }</code></td><td>re-point</td></tr>
+<tr><td><code>tests/backend_contract.rs:231-249</code> <code>non_finite_gradient_leaves_muon_state_untouched</code> (<code>:245</code>)</td><td>as above</td><td>re-point</td></tr>
+<tr><td><code>tests/backend_contract.rs:251-264</code> <code>non_finite_gradient_is_not_clipped</code> (<code>:258</code>)</td><td>clip refuses a NaN gradient</td><td><strong>unchanged</strong>: clip is a sync point. Add: a NaN produced by an <em>earlier</em> op is reported by clip, which scales nothing</td></tr>
+<tr><td><code>tests/backend_contract.rs:284-294</code> <code>out_of_range_token_ids_are_refused</code> (<code>:289</code>, <code>:292</code>)</td><td>device <code>ST_RANGE</code></td><td><strong>unchanged</strong> result (immediate <code>OutOfRange</code>), now from the host copy</td></tr>
+<tr><td><code>tests/backend_contract.rs:296-305</code> <code>an_all_ignored_batch_is_non_finite</code> (<code>:301</code>, <code>:303</code>)</td><td>device <code>ST_COUNT</code></td><td><strong>unchanged</strong> (immediate), now from the host count</td></tr>
+<tr><td><code>tests/accumulate_grad.rs:85-121</code> <code>a_non_finite_sum_is_refused...</code> (<code>:110</code>)</td><td><code>NonFinite</code>; <code>acc</code> bit-identical and same buffer</td><td>re-point; <code>acc</code>&#39;s values bit-identical after <code>sync</code>. Unique case: buffer pointer unchanged. Shared case: the pointer <strong>changes</strong> (a new buffer holding the old values), and the other handle is untouched</td></tr>
+<tr><td><code>tests/attention_forward.rs:168-195</code> (<code>:181</code>, <code>:191</code>)</td><td><code>causal_sdpa_forward</code> refuses NaN and overflowing scores</td><td>re-point</td></tr>
+<tr><td><code>tests/attention_backward.rs:114-140</code> (<code>:127</code>, <code>:138</code>)</td><td>as above, backward</td><td>re-point</td></tr>
+<tr><td><code>tests/cross_entropy.rs:67-91</code> <code>a_non_finite_logit_anywhere_is_refused_even_in_an_ignored_row</code> (<code>:83</code>, <code>:88</code>)</td><td><code>NonFinite</code> from forward and backward</td><td>re-point (the check stays inside <code>ojas_ce_fused</code>)</td></tr>
+<tr><td><code>tests/cross_entropy.rs:96-107</code> <code>a_non_finite_logit_outranks_an_out_of_range_target</code> (<code>:103</code>, <code>:106</code>)</td><td>NaN outranks the bad target</td><td><strong>flips</strong>: the bad target is refused immediately (<code>OutOfRange</code>), and nothing is pending afterwards (<code>sync</code> is <code>Ok</code>)</td></tr>
+<tr><td><code>tests/kv_cache.rs:250-320</code> <code>cached_attention_refusals</code> (<code>:298</code>, <code>:310</code>; <code>:258</code> is a host <code>OutOfRange</code>)</td><td><code>NonFinite</code> for q, k, v and overflow</td><td>re-point <code>:298</code>, <code>:310</code>; <code>:258</code>, Shape, head-dim and Placement are unchanged</td></tr>
+<tr><td><code>tests/kv_cache.rs:367-400</code> <code>kv_cache_write_refusals_leave_the_cache_unchanged</code> (<code>:388</code>; <code>:375</code> host)</td><td>NaN src refused, cache unchanged</td><td>re-point <code>:388</code> with the cache bit-identical after <code>sync</code>; <code>:375</code> and the shared-cache <code>Shape</code> are unchanged</td></tr>
+<tr><td><code>tests/linear_ce.rs:312-363</code> <code>refusals</code> (<code>:322</code> nonfinite helper; <code>:332</code> <code>OutOfRange</code>)</td><td>NaN x or w, overflow, all-ignored, bad target</td><td>re-point NaN x and w and overflow. <strong>Flip</strong> &#34;w with a bad target&#34; and &#34;overflow&#34; with <code>bad_t</code>: immediate <code>OutOfRange</code>. All-ignored stays immediate</td></tr>
+<tr><td><code>tests/norms.rs:100-142</code> <code>non_finite_inputs_and_overflowing_squares_are_refused</code> (<code>:114, :120, :134, :139</code>)</td><td><code>NonFinite { &#34;rms_norm_*&#34; }</code></td><td>re-point</td></tr>
+<tr><td><code>tests/norms.rs:149-245</code> <code>qk_norm_is_the_composition_and_refuses_in_its_order</code> (<code>:203</code>, <code>:233</code>, <code>:240</code>)</td><td>q&#39;s fault outranks k&#39;s host refusals; budget fallbacks</td><td>host refusals of k (shape, placement, budget) become <strong>immediate</strong>, and q&#39;s NaN is pending (reported by the next <code>sync</code>). Re-point each case to &#34;returns k&#39;s host error now; <code>sync</code> then names <code>rms_norm_*</code>&#34;. In <code>rms_pair</code>, the k-<em>validation</em> fallback has no purpose left (k&#39;s host refusal is immediate and q&#39;s fault is pending either way, which is the composition&#39;s order). Only the <em>budget</em> fallback (both sides&#39; scratch at once) remains; phase B removes the other. <strong>(B) Corrected: phase B kept the k-validation fallback. (Round 6) Removed again: with <code>ojas_core::shapes</code> adopted, <code>rms_qk_norm_*_dims</code> validates both pairs before anything is recorded, so a refused k records nothing, matching wgpu and the shape contract&#39;s &#34;a refused call records nothing&#34;. The four norms rows now expect nothing pending.</strong> Earlier note: Without it, k&#39;s host error returns before q is recorded, so q&#39;s NaN is never pending and <code>sync</code> is <code>Ok</code>, which contradicts this row&#39;s own re-point and the &#34;unchanged&#34; row for <code>qk_norm_fuses_only_when...</code> (which asserts the fallback). With it, the composition records q and then refuses k, which is exactly this row&#39;s re-point (V: both tests pass)</td></tr>
+<tr><td><code>tests/permute.rs:134-150</code> <code>non_finite_inputs_are_refused_like_the_cpu_reference</code> (<code>:143</code>, <code>:147</code>)</td><td>Metal matches CPU&#39;s synchronous refusal</td><td>re-point: Metal <code>Ok</code> then <code>sync</code> names <code>permute</code>; CPU stays synchronous. This is the round-1 coordinator decision (&#34;same rule as every other op on your backend&#34;)</td></tr>
+<tr><td><code>tests/training_step.rs</code> <code>metal_training_steps_track_cpu_loss_and_read_back_only_the_loss</code></td><td>no readback before the loss; +1 readback for the loss</td><td><strong>unchanged</strong>: waits are not readbacks. Add a wait-count assertion (§7)</td></tr>
+<tr><td><code>tests/concurrency.rs</code></td><td>bits equal to a serial run, no faults</td><td>unchanged; extended in §7</td></tr>
+<tr><td><code>src/backend.rs:1428-1486</code> <code>a_device_thread_panic_mid_stream_fails_later_calls_cleanly</code></td><td>panic poisons; later calls <code>Poisoned</code>, no hang</td><td>unchanged; add a pending fault before the panic (§7)</td></tr>
+<tr><td><code>src/backend.rs:1575-1600</code> <code>qk_norm_fuses_only_when...</code>, <code>:1607-1625</code> <code>a_kv_write_past_capacity_is_refused_before_any_dispatch</code></td><td>host-side decisions</td><td>unchanged</td></tr>
+<tr><td><code>src/gpu.rs</code> NonFinite sites (<code>:295</code>, <code>:667</code>, ...)</td><td>the tiny tessl training step, not <code>MetalBackend</code></td><td>out of scope for this contract</td></tr>
+</tbody></table></div>
+<h2 id="7-test-plan-for-the-new-behaviour-phase-b-each-written-to-fail-first">7. Test plan for the new behaviour (phase B, each written to fail first) <a class="anchor" href="#7-test-plan-for-the-new-behaviour-phase-b-each-written-to-fail-first" aria-label="Link to this section">#</a></h2>
+<p>All of these fail today, because today the op itself returns <code>Err</code>.</p>
+<ol>
+<li><strong>The first faulting op is named.</strong> <code>silu_forward(NaN)</code> returns <code>Ok</code>, then <code>mul_forward(y, b)</code> returns <code>Ok</code>, then <code>sync</code> returns <code>NonFinite { &#34;silu_forward&#34; }</code>, then <code>sync</code> returns <code>Ok</code>. A later fault in a different op is named after itself (the wgpu shape: <code>ojas-wgpu/tests/faults.rs</code>, <code>the_first_faulting_op_is_named_not_the_lowest_bit</code>).
+</li>
+<li><strong>A later clean op does not clear it.</strong> Fault, then 50 clean ops, then <code>sync</code> still names the first.
+</li>
+<li><strong>Every sync point reports.</strong>
+<ul>
+<li><code>sync</code>, <code>download</code> of an unrelated tensor, and <code>clip_grad_norm</code> each report a pending AdamW fault.
+</li>
+<li>clip leaves its gradients bit-identical, and <code>to_host</code> does <strong>not</strong> clear it.
+</li>
+<li>This mirrors <code>adamw_fault_is_named_at_every_kind_of_sync_point</code>.
+</li>
+</ul>
+</li>
+<li><strong>A fault survives a failed read.</strong> A <code>cfg(test)</code> hook fails the next <code>Cmd::Read</code> after its scan; the read returns <code>Backend</code>, and the next <code>sync</code> still names the op (F12).
+</li>
+<li><strong>A fault survives a cap commit.</strong>
+<ul>
+<li>Record a fault, then enough ops to trigger the memory cap and the slab cap. Both waited commits return nothing, and <code>sync</code> names the first op.
+</li>
+<li>With more than <code>SLAB_SLOTS</code> ops before the fault, the name is still right.
+</li>
+</ul>
+</li>
+<li><strong>In-place all-or-nothing under batching.</strong>
+<ul>
+<li><code>adamw_step</code>, <code>muon_ns5_step</code>, <code>accumulate_grad</code> (unique and shared) and <code>kv_cache_write</code> with a NaN at the last element return <code>Ok</code> and leave their targets bit-identical after <code>sync</code>.
+</li>
+<li>A later clean call on the same tensors applies normally: its own words decide, not the pending fault.
+</li>
+</ul>
+</li>
+<li><strong>Host refusals stay immediate.</strong> Shape, dtype, placement, capacity, head dim, <code>kv_len</code>, <code>at + Tn</code>, out-of-range ids and all-ignored each return <code>Err</code> at the call, and nothing is pending (<code>sync</code> is <code>Ok</code>).
+</li>
+<li><strong>Concurrency.</strong>
+<ul>
+<li>Six threads on one backend run the round-3 mixed sequence; one thread injects a NaN op.
+</li>
+<li>Exactly one <code>sync</code> across all threads reports it, and every clean thread&#39;s bits equal the serial run.
+</li>
+<li>A second backend sees nothing.
+</li>
+</ul>
+</li>
+<li><strong>Poisoned.</strong> A pending fault, then an injected device panic: later calls, <code>sync</code> included, return <code>Poisoned</code> within a watchdog, and drop completes.
+</li>
+<li><strong>Waits per training step.</strong>
+<ul>
+<li>A <code>cfg(test)</code> (or doc-hidden) counter of waited commits on <code>MetalBackend</code>.
+</li>
+<li>A sequence of N recorded ops does 0 waits until <code>sync</code>, then exactly 1. This fails today: N waits.
+</li>
+<li><code>training_step.rs</code> asserts the bound below.
+</li>
+</ul>
+</li>
+</ol>
+<p><strong>Wait-count bench target.</strong> At K=4, B=4, T=1024 on the 124M model:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Waits per step, today</th><th>Target</th></tr></thead>
+<tbody>
+<tr><td>Forward and backward ops</td><td>about 4 × 1,000 (one per op) (I: <code>docs/framework-design.md</code> §9)</td><td>0 except cap commits</td></tr>
+<tr><td><code>clip_grad_norm</code></td><td>2 (norm read and scale)</td><td>1</td></tr>
+<tr><td>Optimizer steps</td><td>170</td><td>0</td></tr>
+<tr><td><code>sync</code></td><td>0</td><td>1</td></tr>
+<tr><td>Loss <code>download</code></td><td>1</td><td>1 (on an already-drained queue)</td></tr>
+<tr><td>Total</td><td>about 4,170</td><td><strong>3 + memory-cap commits</strong> (about step bytes / cap; with a 1 GiB cap, a few per step) (I)</td></tr>
+</tbody></table></div>
+<p><code>adamw_full</code> (170 tensors) should go from 170 waits to 1. Its time should then approach the bandwidth bound of reading p, g, m, v and writing p, m, v: about 3.5 GB, roughly 15 ms at the 240 GB/s CE reached in round 3. Today it is 70–103 ms min and about 222 ms median after phase A&#39;s fix (V), and 169–245 ms in earlier rounds (I; to be measured in phase B).</p>
+<h2 id="8-open-questions-for-the-coordinator">8. Open questions for the coordinator <a class="anchor" href="#8-open-questions-for-the-coordinator" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Overlap commits</strong> (<code>commit(false)</code> every 256 dispatches) are what let the GPU run while the host records. tessl&#39;s two-allocator backpressure is read but not exercised by ojas yet (U). Phase B could start with waited commits only at sync points and caps, then measure overlap separately. <strong>Proposal:</strong> do both, with an interleaved A/B.
+</li>
+<li><strong>Memory-cap value.</strong> A quarter of the budget cap bounds the extra resident memory, but a large budget gives few waits. Is a fixed 1 GiB ceiling acceptable?
+</li>
+<li><strong>capi leak fix</strong> (§5, items 1–2): <code>sync</code> at entry, or on every early exit? This is a coordinator decision.
+</li>
+</ol>
+<p><strong>(B) Answers, as implemented.</strong></p>
+<ol>
+<li>Overlap commits are on, every 256 dispatches, checked between commands; a stress test pins them (§9.3).
+</li>
+<li>The memory cap is min(1 GiB, budget cap / 4), plus a working-set trigger. tessl exposes <code>GpuRuntime::current_allocated_bytes</code> (<code>MTLDevice::currentAllocatedSize</code>, <code>tessl/src/runtime.rs:767-775</code>) and <code>memory_info().recommended_working_set</code> (V), so no objc2 call was needed.
+</li>
+<li>capi&#39;s <code>settled</code> (<code>ojas-capi/src/lib.rs</code>) syncs at the end of every device step and generate (the coordinator&#39;s change; its tests pass on this build, §9.3).
+</li>
+</ol>
+<h2 id="9-phase-b-what-was-built">9. Phase B: what was built <a class="anchor" href="#9-phase-b-what-was-built" aria-label="Link to this section">#</a></h2>
+<h3 id="91-mechanics">9.1 Mechanics <a class="anchor" href="#91-mechanics" aria-label="Link to this section">#</a></h3>
+<p>All in <code>ojas-metal/src/device.rs</code> unless named.</p>
+<ul>
+<li><strong>Status slab.</strong> One shared buffer of <code>SLAB_SLOTS = 4096</code> slots × 8 words, allocated and zeroed at open. <code>Worker::status(op)</code> takes the next slot at the start of the op and appends <code>(slot, op, command, sealed)</code> to the pending list, in recording order.
+<ul>
+<li>Removed: the per-op status allocation, <code>ojas_status_init</code>, <code>ojas_check_ids</code> (kernels and <code>KERNELS</code> entries), <code>finish</code> and <code>verdict</code>.
+</li>
+</ul>
+</li>
+<li><strong>Scan</strong> (<code>Worker::scan</code>, after every waited commit, <code>Worker::settle</code>).
+<ul>
+<li>The first pending slot with <code>ST_IN</code> or <code>ST_OUT</code> set becomes the held fault, if none is held.
+</li>
+<li>The host then zeroes every used slot not still pending.
+</li>
+<li>A failed wait or mapping returns before the scan, so the pending list is kept.
+</li>
+</ul>
+</li>
+<li><strong>A command that fails</strong> drops its own slots unless they are sealed. <code>rms_sides</code> seals q&#39;s slot once q is encoded, so a k-side failure still leaves q&#39;s fault pending, as in the composition.
+</li>
+<li><strong>Commit triggers.</strong>
+<ul>
+<li>Checked between commands (<code>Worker::after_command</code>), in this order:
+<ol>
+<li>Bytes allocated since the last waited commit exceed <code>mem_cap</code>.
+</li>
+<li><code>current_allocated_bytes()</code> is above 3/4 of <code>recommended_working_set</code> <strong>and</strong> this backend has allocated more than 64 MiB since its last waited commit. The device figure counts every allocation on the device, other backends&#39; included (U: from tessl&#39;s comment and Apple&#39;s <code>currentAllocatedSize</code> wording, not measured). Gating on the backend&#39;s own count keeps a steady state, or another backend&#39;s growth, from making every op wait: above the threshold a backend waits at most once per 64 MiB it allocates. A first version gated on device-wide growth since the last wait; it was replaced because other backends in the same process move that figure.
+</li>
+<li>256 dispatches since the last commit: an unwaited <code>commit(false)</code>.
+</li>
+</ol>
+</li>
+<li>At slot take: a full slab forces a waited commit.
+</li>
+<li>In an allocation: one that fails as an exhausted device does gets one waited commit (which recycles dropped buffers) and one retry. That commit does not scan the current command&#39;s slots, whose kernels may not be encoded yet (<code>Scan::BeforeCurrent</code>).
+</li>
+</ul>
+</li>
+<li><strong>Sync points.</strong>
+<ul>
+<li><code>Cmd::Sync</code> backs the new <code>Backend::sync</code> override (<code>backend.rs</code>).
+</li>
+<li><code>download</code> calls <code>tensor.to_host(self.budget())</code>, a <code>Cmd::Read</code> that waits, scans and holds, and then <code>sync</code>, which has nothing left to wait for.
+</li>
+<li><code>Cmd::ClipNorm</code> records its checks, settles, reports, and only then reads the norm. The scale is recorded.
+</li>
+</ul>
+</li>
+<li><strong>Host ids.</strong>
+<ul>
+<li><code>MetalBuffer::ids</code> holds the host&#39;s copy of every U32 upload.
+</li>
+<li><code>MetalBackend::ids</code> range-checks the tensor&#39;s window: the first bad position is reported with the same detail text as before.
+</li>
+<li>It also counts the valid rows. Cross-entropy and linear CE refuse a count of 0 at the call, and otherwise pass it to <code>ojas_ce_fused</code>, <code>ojas_lce_grad</code> and <code>ojas_ce_mean</code> as a <code>constant uint</code>.
+</li>
+</ul>
+</li>
+<li><strong>Uploads.</strong> tessl maps a buffer for the host only after <code>commit_m4(true)</code> (<code>tensor.rs:165-199</code>, <code>runtime.rs:572-579</code>) (V). So an upload made while work is recorded waits. The worker makes that wait itself (<code>settle</code> in <code>Worker::upload</code>), so it is counted and scanned.
+</li>
+<li><strong>Wait counter.</strong> <code>MetalBackend::waits()</code> (doc-hidden) counts every waited commit the worker makes. Tessl&#39;s own commit counter cross-checks it (<code>tests/wait_count.rs</code>).
+</li>
+</ul>
+<h3 id="92-departures-from-28">9.2 Departures from §2–§8 <a class="anchor" href="#92-departures-from-28" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>The k-validation fallback in <code>rms_pair</code>:</strong> kept in round 5, removed in round 6 when Metal adopted <code>ojas_core::shapes</code> (see §6, the norms row). Only the budget fallback remains.
+</li>
+<li><strong>Unchanged: <code>an_update_that_overflows...</code>.</strong> It stays an immediate host refusal (§6).
+</li>
+<li><strong>Overlap commits fall between commands, not inside one.</strong> One command, for example linear CE at 4096 × 50,304, can encode more than 256 dispatches before the next commit. tessl&#39;s own cap of 100,000 dispatches per command buffer (<code>runtime.rs:1497</code>) still bounds it (V by reading).
+</li>
+<li><strong>An encode error discards earlier work.</strong> It poisons tessl and discards the whole open command buffer (<code>abort_open_batch</code>, <code>runtime.rs:1474-1483</code>), including ops other calls recorded earlier. Their faults are lost, and every later call reports the runtime error (I; the device error wins, as §4.3 says).
+</li>
+<li><strong><code>download</code> is two commands.</strong> If another thread records between them, the <code>sync</code> waits again. That is still correct.
+</li>
+<li><strong>§7&#39;s &#34;a few memory-cap commits per step&#34; was low.</strong> It is about 40 at 124M (§9.3).
+</li>
+</ul>
+<h3 id="93-evidence">9.3 Evidence <a class="anchor" href="#93-evidence" aria-label="Link to this section">#</a></h3>
+<p><strong>Tests.</strong> 149 <code>ojas-metal</code> tests pass, run serially and with default threads; there were 130 at the end of phase A (V).</p>
+<ul>
+<li>New <code>tests/deferred_faults.rs</code> covers §7 items 1–3 and 5–8 and 10.
+</li>
+<li>New <code>tests/wait_count.rs</code> holds the tessl cross-check.
+</li>
+<li>New unit tests in <code>src/backend.rs</code> cover item 4 (a failed read), item 5 (memory cap), item 9 (<code>Poisoned</code>), the overlap stress test, the allocation retry, the working-set growth gate, a failed command&#39;s slots, and a fused QK-norm whose k side fails.
+</li>
+</ul>
+<p><strong>Failing before the change</strong> (<code>scratchpad/metal-r5b-tests-before.txt</code>) (V):</p>
+<ul>
+<li><code>deferred_faults</code>: 10 of 10 failed. Most failed at the op itself returning <code>Err</code>. The waits test failed on its first wait count. Host refusals failed on the flipped embedding precedence.
+</li>
+<li><code>wait_count</code> failed at <code>commits == 0</code> (left 20, right 0).
+</li>
+<li>Of the first 6 new unit tests, 5 failed then (failed read, memory cap, working set, allocation retry, <code>Poisoned</code>).
+</li>
+<li>The overlap stress test passed before and after. It is a characterization test: bits equal to a serial run.
+</li>
+<li>Two unit tests were written after the implementation: <code>a_call_that_fails_after_recording_leaves_no_fault</code> and <code>a_fused_qk_norm_keeps_qs_fault_when_ks_side_fails</code>. Their only fail-first evidence is that mutants M11 and M12, which remove exactly the code they pin, fail them.
+</li>
+<li>The working-set test was tightened when its gate changed (tiny ops: 0 waits; 192 MiB: 1 to 3 waits), and M5 was re-run against the new gate (killed).
+</li>
+</ul>
+<p><strong>Re-pointed</strong> exactly per §6, with the corrections in §9.2. A shared <code>deferred()</code> helper (<code>tests/common/mod.rs</code>) asserts three things: <code>Ok</code>, then <code>sync</code> names the op, then a second <code>sync</code> is <code>Ok</code>. Each in-place test checks its state bit-identical after the <code>sync</code>.</p>
+<ul>
+<li><code>tests/cross_entropy.rs</code>&#39;s <code>a_non_finite_logit_outranks_an_out_of_range_target</code> is <strong>renamed</strong> <code>an_out_of_range_target_is_refused_at_once_even_beside_a_non_finite_logit</code>, because §6 flips what it pins. Same inputs, plus a <code>sync</code> that must be <code>Ok</code>.
+</li>
+<li><code>tests/training_step.rs</code> gained the §7 item 10 assertion: exactly 2 waits per step, from <code>clip_grad_norm</code> and the loss download. Mutant M15, where every command waits, fails it.
+</li>
+</ul>
+<p><strong>Mutations: 19 of 19 killed</strong> (<code>scratchpad/metal-r5b-mutations.txt</code>) (V). The mutants were:</p>
+<ul>
+<li>last fault wins; report does not clear; slots not zeroed;
+</li>
+<li>the retry scans the current command; no working-set growth gate; overlap never fires;
+</li>
+<li>clip, or <code>download</code>, does not report;
+</li>
+<li>id range off by one; ignore index not skipped;
+</li>
+<li>a failed command keeps its slots; the rms side is not sealed;
+</li>
+<li>a cap commit reports; a raw read clears the fault; every command waits; a full slab is not settled;
+</li>
+<li>the adamw apply ignores its status; the CE valid count is off by one; <code>sync</code> does not wait.
+</li>
+</ul>
+<p><strong>Interleaved A/B, one process.</strong> A waits after every op, emulating the old per-op wait with <code>sync</code>; B is deferred and syncs once. Times are min / median ms. Run 1 was at load 19–20 and run 2 at load 15–16 (<code>scratchpad/metal-r5b-ab.txt</code>, <code>metal-r5b-ab2.txt</code>).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Row</th><th style="text-align:right">A, run 1</th><th style="text-align:right">B, run 1</th><th style="text-align:right">A, run 2</th><th style="text-align:right">B, run 2</th><th style="text-align:center">Waits A / B</th></tr></thead>
+<tbody>
+<tr><td>silu, 1 element (per op, 200 ops)</td><td style="text-align:right">0.367 / 1.053</td><td style="text-align:right">0.007 / 0.014</td><td style="text-align:right">1.106 / 1.294</td><td style="text-align:right">0.007 / 0.011</td><td style="text-align:center">200 / 1</td></tr>
+<tr><td>accumulate_grad 50304 × 768</td><td style="text-align:right">3.215 / 4.114</td><td style="text-align:right">3.269 / 3.820</td><td style="text-align:right">3.083 / 4.591</td><td style="text-align:right">2.987 / 4.560</td><td style="text-align:center">1 / 1</td></tr>
+<tr><td>adamw_full (170 tensors)</td><td style="text-align:right">183.1 / 246.6</td><td style="text-align:right">22.6 / 26.0</td><td style="text-align:right">250.0 / 273.1</td><td style="text-align:right">22.2 / 23.1</td><td style="text-align:center">170 / 1</td></tr>
+<tr><td>block_fwd_bwd</td><td style="text-align:right">125.9 / 138.7</td><td style="text-align:right">82.6 / 94.3</td><td style="text-align:right">118.4 / 134.1</td><td style="text-align:right">67.6 / 77.7</td><td style="text-align:center">50 / 1</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>adamw_full</strong> now sits near §7&#39;s bandwidth estimate of about 15 ms. Phase A measured the old code at a 69.9 ms min and about 222 ms median (I: a different process and load).
+</li>
+<li><strong>A is an emulation.</strong> The old code also allocated and initialized a status buffer per op, so A is not a bit-exact reproduction of the old path (I).
+</li>
+</ul>
+<p><strong>Overlap on vs off</strong> (run 2, both deferred):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Row</th><th style="text-align:right">On, min / median ms</th><th style="text-align:right">Off, min / median ms</th><th style="text-align:center">Speedup</th></tr></thead>
+<tbody>
+<tr><td>silu, 64 elements, chain of 2,000</td><td style="text-align:right">14.78 / 16.03</td><td style="text-align:right">18.95 / 19.92</td><td style="text-align:center">1.28×</td></tr>
+<tr><td>adamw_full</td><td style="text-align:right">21.91 / 22.59</td><td style="text-align:right">21.86 / 22.79</td><td style="text-align:center">1.00×</td></tr>
+<tr><td>block_fwd_bwd</td><td style="text-align:right">72.91 / 75.94</td><td style="text-align:right">73.38 / 76.70</td><td style="text-align:center">1.01×</td></tr>
+</tbody></table></div>
+<p>The overlap path was verified, not assumed:</p>
+<ul>
+<li>In <code>wait_count</code>, 600 one-element ops give at least 2 tessl commits and 0 waits (V).
+</li>
+<li>Six threads × 1,000 tiny ops on one backend give bits equal to a serial run with overlap off (V).
+</li>
+<li>About 80 unwaited commits happen with no wait between them, so both allocators are in flight. tessl&#39;s backpressure wait itself cannot be observed from ojas (I).
+</li>
+</ul>
+<p><strong>Waits per ojas-model training step</strong> (<code>Trainer::step</code> on Metal, K = 4; <code>scratchpad/metal-r5b-trainer-waits.txt</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Spec</th><th style="text-align:right">Backend ops per step</th><th style="text-align:right">Host uploads</th><th style="text-align:right">Waits before (I: one per op, + clip scale + loss read)</th><th style="text-align:right">Waits after (V)</th><th style="text-align:right">Step time</th></tr></thead>
+<tbody>
+<tr><td>tiny (B 2, T 32)</td><td style="text-align:right">596</td><td style="text-align:right">28</td><td style="text-align:right">about 598</td><td style="text-align:right">25</td><td style="text-align:right">40–49 ms</td></tr>
+<tr><td>124M (B 4, T 1024)</td><td style="text-align:right">3,356</td><td style="text-align:right">28</td><td style="text-align:right">about 3,358</td><td style="text-align:right">71–72</td><td style="text-align:right">4.83–5.04 s</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Tiny:</strong> the 25 waits are 2 sync points and 23 upload waits.
+</li>
+<li><strong>124M:</strong> 2 sync points, at most 28 upload waits, and the rest (about 41) are memory-cap commits (I: by subtraction; there are no per-trigger counters).
+</li>
+</ul>
+<p><strong>Other checks.</strong></p>
+<ul>
+<li><code>ojas-model</code>&#39;s <code>metal_tiny_five_steps_match_cpu</code> and <code>metal_g9_resume_matches_the_straight_run</code> pass.
+</li>
+<li><code>ojas-capi</code>: 45 tests pass.
+</li>
+<li><code>cargo build --workspace --release --all-targets</code> builds.
+</li>
+<li><code>cargo clippy -p ojas-metal --all-targets -D warnings</code> is clean.
+</li>
+<li><code>examples/metal_bench.rs</code> now syncs inside each timed run.
+</li>
+</ul>
+<h3 id="94-gaps">9.4 Gaps <a class="anchor" href="#94-gaps" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Upload waits are now the largest share</strong> after memory caps: 28 host uploads per trainer step, 7 per micro-step.
+<ul>
+<li>tessl has no host write that skips the wait for a fresh buffer no recorded work references.
+</li>
+<li>The fix belongs in tessl (an unwaited write for a new allocation) or in the trainer (upload all K micro-batches&#39; ids and the step&#39;s constants before recording).
+</li>
+</ul>
+</li>
+<li><strong>Memory-cap commits per 124M step (about 41) are inferred, not counted per trigger.</strong> A per-trigger counter would settle it. The cap trades waits for resident memory: at 1 GiB, the step&#39;s freed temporaries recycle every 1 GiB of allocation.
+</li>
+<li><strong>The capi early-return test runs on wgpu only</strong> (<code>an_early_return_never_leaks_a_deferred_fault_into_the_next_call</code>). A Metal twin would pin <code>settled</code> on Metal; that file belongs to the coordinator.
+</li>
+<li><strong>Stale text outside this lane:</strong>
+<ul>
+<li><code>bench/ojas_rows.rs:21-22</code> says Metal&#39;s <code>sync</code> is &#34;the trait default, a no-op&#34;. It is now an override that waits.
+</li>
+<li>The <code>Backend::sync</code> doc in <code>ojas-core</code>, and §5&#39;s list.
+</li>
+</ul>
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/metal-deferred-faults.md" rel="noopener"><code>docs/metal-deferred-faults.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="cuda-backend-scoping.html" rel="prev"><span>Previous</span>L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a>
+        <a href="pytorch-parity-plan.html" rel="next" class="next"><span>Next</span>PyTorch parity plan</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#1-why">1. Why</a></li>
+<li><a href="#2-the-contract-mirroring-wgpu">2. The contract, mirroring wgpu</a></li>
+<li class="sub"><a href="#21-sync-points">2.1 Sync points</a></li>
+<li class="sub"><a href="#22-what-stays-synchronous-immediate-err-nothing-recorded">2.2 What stays synchronous (immediate Err, nothing recorded)</a></li>
+<li><a href="#3-outputs-of-a-faulted-op-and-the-in-place-ops">3. Outputs of a faulted op, and the in-place ops</a></li>
+<li><a href="#4-batching-mechanics">4. Batching mechanics</a></li>
+<li class="sub"><a href="#41-recording-and-committing">4.1 Recording and committing</a></li>
+<li class="sub"><a href="#42-status-words-and-first-fault-naming">4.2 Status words and first-fault naming</a></li>
+<li class="sub"><a href="#43-a-failed-wait-or-read-f12">4.3 A failed wait or read (F12)</a></li>
+<li class="sub"><a href="#44-poisoned-and-device-loss">4.4 Poisoned and device loss</a></li>
+<li class="sub"><a href="#45-link-and-cmd-changes">4.5 Link and Cmd changes</a></li>
+<li><a href="#5-observable-changes-for-ojas-capi-and-go">5. Observable changes for ojas-capi and Go</a></li>
+<li><a href="#6-tests-that-pin-per-op-refusal-today-and-where-each-goes">6. Tests that pin per-op refusal today, and where each goes</a></li>
+<li><a href="#7-test-plan-for-the-new-behaviour-phase-b-each-written-to-fail-first">7. Test plan for the new behaviour (phase B, each written to fail first)</a></li>
+<li><a href="#8-open-questions-for-the-coordinator">8. Open questions for the coordinator</a></li>
+<li><a href="#9-phase-b-what-was-built">9. Phase B: what was built</a></li>
+<li class="sub"><a href="#91-mechanics">9.1 Mechanics</a></li>
+<li class="sub"><a href="#92-departures-from-28">9.2 Departures from §2–§8</a></li>
+<li class="sub"><a href="#93-evidence">9.3 Evidence</a></li>
+<li class="sub"><a href="#94-gaps">9.4 Gaps</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

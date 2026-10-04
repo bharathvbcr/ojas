@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-metal · ojas reference</title>
+  <meta name="description" content="ojas-metal provides the native Apple Silicon GPU backend for ojas, executing the full deep learning training pipeline and inference directly on Apple M-series chips via Metal 4.">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-metal.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-metal.html">
+  <meta property="og:title" content="ojas-metal · ojas reference">
+  <meta property="og:description" content="ojas-metal provides the native Apple Silicon GPU backend for ojas, executing the full deep learning training pipeline and inference directly on Apple M-series chips via Metal 4.">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html" class="current" aria-current="page">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-metal">ojas-metal <a class="anchor" href="#ojas-metal" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-metal</code> provides the native Apple Silicon GPU backend for <strong>ojas</strong>, executing the full deep learning training pipeline and inference directly on Apple M-series chips via <strong>Metal 4</strong>.</p>
+<p>It bridges high-throughput GEMM, normalization, and flash-attention kernels from <code>tessl</code> with custom MSL (Metal Shading Language) shaders for attention output gating.</p>
+<hr>
+<h2 id="metal-execution--memory-residency">Metal Execution &amp; Memory Residency <a class="anchor" href="#metal-execution--memory-residency" aria-label="Link to this section">#</a></h2>
+<p>Tensors remain device-resident across the entire forward, backward, and optimizer cycle, reading back only the final scalar loss (4 bytes) or greedy logits (8 bytes) to host memory:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph Host[&#34;Host CPU Runtime&#34;]
+        Req[&#34;StepRequest (Tokens, Targets, LR)&#34;]
+        Loss[&#34;Scalar Loss (4 Bytes)&#34;]
+    end
+
+    subgraph MetalDevice[&#34;Apple Silicon GPU (Metal 4 Device Residency)&#34;]
+        subgraph Fwd[&#34;Forward Pass (Device-Resident)&#34;]
+            Upload[&#34;Initial Embed &amp; Token Upload&#34;]
+            RMS1[&#34;tessl RMSNorm (eps = 1e-6)&#34;]
+            QKV[&#34;tessl GEMM (Q, K, V Projections)&#34;]
+            RoPE[&#34;tessl Half-Split RoPE&#34;]
+            QKN[&#34;tessl RMS QK-Norm&#34;]
+            Attn[&#34;tessl flash_attn_rows (d = 64)&#34;]
+            Gate[&#34;Custom MSL: per_head_gate.metal\n(Sigmoid gate broadcast + multiply)&#34;]
+            VR[&#34;Value Residual Lerp&#34;]
+            SwiGLU[&#34;tessl SwiGLU (SiLU + Mul GEMM)&#34;]
+            Head[&#34;LM Head Projection&#34;]
+        end
+
+        subgraph Bwd[&#34;Backward Pass &amp; Canary Guard&#34;]
+            CE[&#34;tessl Chunked Cross-Entropy\n(Canary DH_PAD = 16 Guard Offset)&#34;]
+            GateBwd[&#34;Custom MSL Gate Backward&#34;]
+            GEMMBwd[&#34;tessl GEMM Backward Gradients&#34;]
+        end
+
+        subgraph Opt[&#34;Fused In-Place Optimizer&#34;]
+            AdamW[&#34;tessl Fused AdamW on Parameters&#34;]
+        end
+    end
+
+    Req --&gt; Upload
+    Upload --&gt; RMS1
+    RMS1 --&gt; QKV --&gt; RoPE --&gt; QKN --&gt; Attn --&gt; Gate --&gt; VR --&gt; SwiGLU --&gt; Head
+    Head --&gt; CE --&gt; GateBwd --&gt; GEMMBwd --&gt; AdamW
+    CE -.-&gt;|Only 4 bytes transferred| Loss</pre></figure>
+<hr>
+<h2 id="hardware-shaders--custom-msl">Hardware Shaders &amp; Custom MSL <a class="anchor" href="#hardware-shaders--custom-msl" aria-label="Link to this section">#</a></h2>
+<h3 id="1-per-head-attention-gate-kernelsper-head-gatemetal">1. Per-Head Attention Gate (<code>kernels/per_head_gate.metal</code>) <a class="anchor" href="#1-per-head-attention-gate-kernelsper-head-gatemetal" aria-label="Link to this section">#</a></h3>
+<p>Nanolab default GPT applies a linear gate with bias followed by sigmoid modulation to scale attention heads. <code>ojas-metal</code> implements dedicated Metal shaders:</p>
+<ul>
+<li><strong>Forward Kernel:</strong> Computes $g = \sigma(x W_g + b_g)$ and evaluates $y = \text{attn} \odot g$.
+</li>
+<li><strong>Backward Kernel:</strong> Computes analytic adjoint gradients $\frac{\partial \mathcal{L}}{\partial \text{attn}}$ and $\frac{\partial \mathcal{L}}{\partial W_g}$ on the device.
+</li>
+</ul>
+<h3 id="2-backend-extension-shaders-kernelsojas-backendmetal">2. Backend Extension Shaders (<code>kernels/ojas_backend.metal</code>) <a class="anchor" href="#2-backend-extension-shaders-kernelsojas-backendmetal" aria-label="Link to this section">#</a></h3>
+<p>Implements elementwise operations, vector arithmetic, and reduction passes required by <code>ojas_core::Backend</code>, plus:</p>
+<ul>
+<li><strong><code>permute</code></strong> (<code>ojas_permute</code>): a device-resident, bit-exact axis reorder up to rank 8, such as <code>[B, T, H, D]</code> to <code>[B, H, T, D]</code>. A NaN or infinity in the input is refused, as on the CPU reference, at the next sync point (see &#34;Deferred faults&#34; below).
+</li>
+<li><strong>AdamW</strong> (<code>ojas_adamw_check</code>, <code>ojas_adamw_apply</code>): torch&#39;s single-tensor step in tessl&#39;s f32 arithmetic, with scalars from <code>ojas_core::check_adamw</code>. The step is in place and needs no scratch.
+<ul>
+<li>The check kernel decides the whole step: inputs and every new p, m and v must be finite.
+</li>
+<li>The apply kernel, in the same command buffer, writes only if this call&#39;s status words are clear. A refused step leaves all three tensors bit-identical and is reported at the next sync point.
+</li>
+<li>No wait, and no copies.
+</li>
+</ul>
+</li>
+<li><strong>RMSNorm</strong> (<code>ojas_rms_fwd</code>, <code>ojas_rms_bwd_rows</code>, <code>ojas_rms_bwd_w_{part,sum}</code>): one simdgroup per row.
+<ul>
+<li>The weight gradient is a two-stage, fixed-order reduction (64-row partials, then a sum per column), so it is deterministic.
+</li>
+</ul>
+</li>
+<li><strong>Cross-entropy</strong> (<code>ojas_ce_fused</code>): two passes per row (an online max/sum, then the gradient) instead of five.
+<ul>
+<li>The input and output finiteness checks are folded into those passes. Every element is still checked, including rows whose target is ignored.
+</li>
+</ul>
+</li>
+<li><strong>Gradient accumulation</strong> (<code>ojas_acc_check</code>, <code>ojas_acc_apply</code>): <code>accumulate_grad</code> adds in place, with no new memory, when <code>acc</code> solely owns its buffer, and is checked as AdamW is.
+<ul>
+<li>A non-finite input or sum is refused at the next sync point and leaves <code>acc</code>&#39;s values bit-identical.
+</li>
+<li>A shared <code>acc</code> gets a new buffer (holding the old values if the sum was refused); the other handles keep the old values.
+</li>
+</ul>
+</li>
+<li><strong>Linear cross-entropy</strong> (<code>ojas_lce_stats</code>, <code>ojas_lce_loss</code>, <code>ojas_lce_grad</code>, <code>ojas_add_into</code>): <code>linear_cross_entropy_mean</code> never holds more than one <code>[rows, cols]</code> logits tile.
+<ul>
+<li>tessl GEMMs make each tile, and a running (max, sum of exp) per row is merged across vocabulary tiles.
+</li>
+<li>With gradients, a second pass remakes each tile (or, when one vocabulary tile covers V, reuses the tile the first pass left), turns it into the gradient of the logits, and adds both gradient GEMMs into the outputs.
+</li>
+<li>The loss equals the unfused composition&#39;s. Gradients that the chunk does not split are bit-equal; split ones differ in summation order only.
+</li>
+</ul>
+</li>
+<li><strong>KV cache</strong> (<code>ojas_kv_write</code>, <code>ojas_cached_attn</code>):
+<ul>
+<li><code>kv_cache_write</code> copies <code>[B, Tn, Hkv, D]</code> into a time-major <code>[B, Tcap, Hkv, D]</code> cache in place, only if the source is finite. A range error is refused on the host, before any dispatch.
+</li>
+<li><code>cached_attention_forward</code> is grouped-query causal attention of <code>Tq</code> queries against the first <code>kv_len</code> positions, one 1,024-thread threadgroup per (query, head).
+</li>
+<li>Positions at or past <code>kv_len</code> are not read.
+</li>
+</ul>
+</li>
+<li><strong>QK-norm</strong> validates and places both pairs first, so a refused call records nothing. It then runs as one command when q&#39;s and k&#39;s outputs and scratch fit the budget together; otherwise it runs the two <code>rms_norm_*</code> calls, which hold one side&#39;s scratch at a time.
+</li>
+<li><strong>Causal attention</strong> (<code>ojas_attn_fwd_d*</code> and <code>ojas_attn_bwd_{stats,dq,dkv}_d*</code>, at head dims 16, 32, 64 and 128): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives <code>matmul2d</code>), after tessl&#39;s <code>qwen35_attn_tiled.metal</code> and <code>qwen35_attn_bwd.metal</code>.
+<ul>
+<li>The forward is one dispatch with an online softmax. The backward is three dispatches.
+</li>
+<li>Each threadgroup rebuilds 32 x 32 score blocks in about 8 KiB of threadgroup memory, so nothing T x T is stored.
+</li>
+<li>Every output row is written once with no atomics, so results repeat bit for bit.
+</li>
+<li>A <code>[T, D]</code> plane must fit i32 extents.
+</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="cross-entropy-canary-offset-defense">Cross-Entropy Canary Offset Defense <a class="anchor" href="#cross-entropy-canary-offset-defense" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    subgraph Buffer[&#34;dh Gradient Buffer Layout&#34;]
+        Canary[&#34;Canary Prefix: DH_PAD = 16 elements\n[Unmodified Verification Sentinels]&#34;]
+        ActiveSlice[&#34;Active Gradient Slice: dh[byte_offset ..]\n[Chunked Cross-Entropy Accumulation]&#34;]
+    end
+
+    Canary --&gt; ActiveSlice</pre></figure>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>Legacy Metal implementations frequently overwrite memory preceding a buffer slice because internal kernels forcibly assume an offset of zero (<code>Cols::dense</code>).</p>
+<p><code>ojas-metal</code> reserves <code>DH_PAD = 16</code> padding elements before the <code>dh</code> slice and rigorously verifies in test <code>ce_nonzero_dh_offset_keeps_prefix</code> that the leading prefix remains bit-identical after cross-entropy writes.</p>
+</aside>
+<hr>
+<h2 id="key-invariants--refusal-policies">Key Invariants &amp; Refusal Policies <a class="anchor" href="#key-invariants--refusal-policies" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-important"><p class="alert-title">Important</p><ol>
+<li><strong>Shape First</strong> (<code>docs/shape-contract.md</code>): every op calls its <code>ojas_core::shapes</code> validator before placement, contiguity, token-id ranges, device limits or the budget, so a malformed call returns the validator&#39;s exact error whatever the budget holds and wherever its operands live. <code>tests/shape_first.rs</code> sweeps every op in four modes (Budget 0, a cap that holds only the inputs, a NaN operand, host operands).
+</li>
+<li><strong>Strict Head Dimension Refusal:</strong> <code>MetalBackend</code> refuses $d_{\text{head}} &gt; 128$ (<code>ojas_core::METAL_MAX_HEAD_DIM</code>) with <code>Err(OjasError::UnsupportedHeadDim)</code>—never silently clamping or dropping high-index features. The attention kernels are compiled up to 128. The cap is a device limit, checked after the shape validator.
+</li>
+<li><strong>AdamW Step Counter Safety:</strong> Step increments use checked integer math. When <code>step</code> reaches <code>u64::MAX</code>, the kernel halts with an error instead of wrapping to zero.
+</li>
+<li><strong>Device Residency Invariant:</strong> No intermediate activations or gradients are downloaded to the host during <code>Step</code>. Only the 4-byte scalar loss is read back.
+</li>
+<li><strong>Deferred Faults</strong> (<code>docs/metal-deferred-faults.md</code>): an op whose kernels find a NaN or infinity returns <code>Ok</code>; the next <code>sync</code>, <code>download</code> or <code>clip_grad_norm</code> on the backend returns <code>OjasError::NonFinite</code> naming the first such op in recording order, once. Shape, dtype, placement, capacity, head-dim, range and token-id refusals stay immediate. Ops are recorded into one command buffer and wait only at those sync points, at reads and uploads made while work is recorded, and at memory and status-slab caps.
+</li>
+</ol>
+</aside>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-metal/README.md" rel="noopener"><code>ojas-metal/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-kernels.html" rel="prev"><span>Previous</span>ojas-kernels</a>
+        <a href="crate-ojas-model.html" rel="next" class="next"><span>Next</span>ojas-model</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#metal-execution--memory-residency">Metal Execution &amp; Memory Residency</a></li>
+<li><a href="#hardware-shaders--custom-msl">Hardware Shaders &amp; Custom MSL</a></li>
+<li class="sub"><a href="#1-per-head-attention-gate-kernelsper-head-gatemetal">1. Per-Head Attention Gate (kernels/per_head_gate.metal)</a></li>
+<li class="sub"><a href="#2-backend-extension-shaders-kernelsojas-backendmetal">2. Backend Extension Shaders (kernels/ojas_backend.metal)</a></li>
+<li><a href="#cross-entropy-canary-offset-defense">Cross-Entropy Canary Offset Defense</a></li>
+<li><a href="#key-invariants--refusal-policies">Key Invariants &amp; Refusal Policies</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

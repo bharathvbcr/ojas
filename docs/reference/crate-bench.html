@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bench: ojas GPU backends against PyTorch MPS · ojas reference</title>
+  <meta name="description" content="A paired A/B benchmark of MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu, which runs on wgpu&#39;s Metal HAL on macOS) against PyTorch MPS, at nanolab&#39;s default shapes. Results and their reading ar…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-bench.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-bench.html">
+  <meta property="og:title" content="bench: ojas GPU backends against PyTorch MPS · ojas reference">
+  <meta property="og:description" content="A paired A/B benchmark of MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu, which runs on wgpu&#39;s Metal HAL on macOS) against PyTorch MPS, at nanolab&#39;s default shapes. Results and their reading ar…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html" class="current" aria-current="page">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="bench-ojas-gpu-backends-against-pytorch-mps">bench: ojas GPU backends against PyTorch MPS <a class="anchor" href="#bench-ojas-gpu-backends-against-pytorch-mps" aria-label="Link to this section">#</a></h1>
+<p>A paired A/B benchmark of <code>MetalBackend</code> (<code>ojas-metal</code>) and <code>WgpuBackend</code> (<code>ojas-wgpu</code>, which runs on wgpu&#39;s Metal HAL on macOS) against PyTorch MPS, at nanolab&#39;s default shapes. Results and their reading are in <a href="bench-gpu-vs-torch.html"><code>docs/bench-gpu-vs-torch.md</code></a>.</p>
+<h2 id="reproduce">Reproduce <a class="anchor" href="#reproduce" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code># Every row, 5 alternating rounds, 5 warm-ups + 20 timed iterations per row.
+bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5
+
+# A subset (row-name prefixes), more iterations, a chosen output directory.
+BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
+    bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 7</code></pre></div>
+<p>The runner prints the output directory; <code>summary.md</code> in it holds the tables. Requirements: Apple silicon, the <code>tessl</code> checkout beside <code>ojas</code> (ojas-metal&#39;s path dependency), Python 3.14 with torch 2.13 (MPS), and the nanolab checkout at <code>/Users/bharath/Code/research/MLSystemsLab</code> (the torch side imports its real <code>Block</code>, <code>GPT</code>, <code>Config</code>, <code>apply_rope</code> and <code>zeropower_via_newtonschulz5</code>; bytecode writing is disabled so that checkout is not touched).</p>
+<h2 id="files">Files <a class="anchor" href="#files" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>file</th><th>what it does</th></tr></thead>
+<tbody>
+<tr><td><code>run_paired.sh</code></td><td>Builds the two release examples first (a stale binary looks like a valid run), records the toolchain (<code>env.txt</code>, <code>env_torch.json</code>), writes the torch references, then runs N rounds. Odd rounds run Metal, wgpu, torch; even rounds torch, wgpu, Metal. <code>uptime</code> load and <code>ioreg</code> &#34;Device Utilization %&#34; are recorded before and after every runtime block (<code>load.jsonl</code>). A crashed lane is recorded as such and the run continues. Ends with <code>aggregate.py</code>.</td></tr>
+<tr><td><code>ojas_rows.rs</code></td><td>The ojas side, generic over <code>ojas_core::Backend</code>: the shared input generator, the parity gate and the timing loop, and every row. Compiled into both examples by <code>#[path]</code>.</td></tr>
+<tr><td><code>../ojas-metal/examples/metal_vs_torch.rs</code></td><td>Opens <code>MetalBackend</code> and runs the rows. Metal ops synchronize before they return, so <code>Backend::sync</code> (the trait default, a no-op) adds nothing.</td></tr>
+<tr><td><code>../ojas-wgpu/examples/wgpu_vs_torch.rs</code></td><td>Opens <code>WgpuBackend</code> and runs the rows with <code>Backend::sync</code> (submit and wait) after every iteration. Its first output line records the adapter and the HAL.</td></tr>
+<tr><td><code>torch_rows.py</code></td><td>The torch twin of every row. <code>ref</code> writes the reference outputs, <code>time</code> times the rows, <code>env</code> records versions and checks the optimizer parameter list against <code>GPT(Config())</code>.</td></tr>
+<tr><td><code>aggregate.py</code></td><td>Per-round ratios, spread flags, the ranked list and the load table, as markdown.</td></tr>
+</tbody></table></div>
+<h2 id="protocol">Protocol <a class="anchor" href="#protocol" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Same inputs, bit for bit.</strong> Both sides generate every input from one 32-bit integer hash (<code>hash32</code> / <code>_hash</code>) with power-of-two scales, so the float conversion is exact on both. Each ojas binary first compares 192 values against <code>generator.f32</code>, which the torch <code>ref</code> pass wrote, and refuses to run on a mismatch.
+</li>
+<li><strong>Parity before timing.</strong> Each ojas row runs once, downloads its outputs and compares them with the torch reference for the same row. The reference file carries the row&#39;s input <code>spec</code> string; a different spec (a stale reference) is <code>no_ref</code>, not a pass. Outputs above 2^22 values are compared on every <code>n / 2^22</code>-th value (both sides take the same indices). The gate is <code>max |ojas - torch| / max |torch| &lt;= 1e-3</code> per output (1e-2 for Muon, 0 for permute). A row that fails, is refused, or has no reference is reported with that status and is not timed.
+</li>
+<li><strong>Load.</strong> Besides the before and after snapshot of each runtime block (<code>load.jsonl</code>), every lane writes a <code>_load</code> record (uptime load and an <code>ioreg</code> GPU sample) before and after every row. <code>summary.md</code> ends with their ranges.
+</li>
+<li><strong>Timing.</strong> Inputs are allocated once per row. 5 warm-ups (minimum), then 20 timed iterations (minimum); each iteration is the op plus the device synchronize (<code>torch.mps.synchronize()</code>; nothing extra for Metal; <code>Backend::sync</code>, submit and wait, for wgpu). Each run reports min and median.
+</li>
+<li><strong>Pairing.</strong> Per row, <code>ratio = torch median / ojas median</code> within a round (&gt; 1: ojas faster). The summary reports the median ratio over rounds with its min and max, and each side&#39;s spread (max / min of its per-round medians). A row with either spread above 10% is flagged &#34;noisy - not quoted&#34;.
+</li>
+</ul>
+<h2 id="row-semantics">Row semantics <a class="anchor" href="#row-semantics" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>*_fwd</code>: torch runs under <code>torch.no_grad()</code>.
+</li>
+<li><code>*_bwd</code>: torch builds the graph once outside the timer and times <code>torch.autograd.grad(..., retain_graph=True)</code>, so it reuses its saved tensors (SDPA&#39;s attention weights or logsumexp, RMSNorm&#39;s rstd, CE&#39;s log-softmax). ojas backward methods take the forward inputs and recompute what they need. Both are each framework&#39;s real backward cost; the <code>block_fwd_bwd</code> row is the combined training number.
+</li>
+<li><code>clip_grad_norm_full</code>: all 170 nanolab parameter shapes (123,699,612 values). The first call uses <code>max_norm = 1.0</code> (total norm is about 100); each later call uses 0.9 times the previous norm, computed outside the timer, so every timed call scales on both sides (ojas skips the multiply when it would not scale; torch always multiplies).
+</li>
+<li><code>adamw_full</code>: the same 170 tensors; ojas makes one <code>adamw_step</code> call per tensor, torch one <code>torch.optim.AdamW.step()</code> with its default implementation selection. Hyperparameters are ojas&#39;s (betas 0.9/0.95, eps 1e-8), lr 1e-3, weight decay 0.1, passed explicitly to torch.
+</li>
+<li><code>muon_RxC</code>: one matrix of nanolab&#39;s <code>Muon.step</code> (momentum 0.99, Nesterov, NS5, lr 0.025, decay 0.1). ojas runs NS5 with f32 GEMMs; its reference is nanolab&#39;s NS5 with the bf16 cast replaced by f32. <code>muon_RxC vs muon_RxC_bf16</code> rows compare the same ojas time with nanolab&#39;s unchanged bf16 NS5 (timing only).
+</li>
+<li><code>linear_ce_c{rows}x{cols}</code>: <code>linear_cross_entropy_mean</code>, N 4096, d 768, V 50304, loss plus both gradients, with logit chunks of <code>rows x cols</code> (1024x8192 and 4096x50304). The torch twin is nanolab&#39;s own <code>FusedLinearCrossEntropy</code> (forward + <code>backward()</code>). It chunks rows only (n_chunks = N / rows) over the full vocabulary, so its 1024x8192 twin uses 1024x50304 chunks.
+</li>
+<li><code>decode_attn_kv1024</code>: <code>cached_attention_forward</code>, one query per head (B 1, H = Hkv = 12, D 64) against a 1024-position time-major cache. torch runs <code>F.scaled_dot_product_attention</code> with no mask on the cached K/V, kept in its own [B, H, T, D] layout (made contiguous once, outside the timer).
+</li>
+<li><code>accumulate_grad_50304x768</code>: <code>accumulate_grad</code> in place; torch <code>acc.add_(g)</code>.
+</li>
+<li><code>block_fwd</code>, <code>block_fwd_bwd</code>: nanolab&#39;s real <code>Block</code> (attention mixer with QK-norm, RoPE, value residual, per-head gate; SwiGLU) at B=4, T=1024. Weights come from the generator (not nanolab&#39;s zero init, so every gradient is non-trivial). The ojas side composes Backend ops by hand, forward and backward (neither GPU crate depends on <code>ojas-autograd</code>, so <code>Tape</code> cannot drive it from these examples). Parity checks the output and seven gradients. The forward is 24 device ops and forward + backward 53 (a residual add&#39;s gradient passes through, so <code>residual_add_backward</code> is not called). On wgpu the block records all of them and synchronizes once per iteration, while each per-kernel row synchronizes after its one op, so the block is not the sum of the kernel rows. On Metal every op synchronizes before it returns, in both.
+</li>
+</ul>
+<h2 id="results-kept-in-the-tree">Results kept in the tree <a class="anchor" href="#results-kept-in-the-tree" aria-label="Link to this section">#</a></h2>
+<p><code>bench/results/&lt;run&gt;/</code> holds a quoted run&#39;s <code>summary.md</code>, <code>env.txt</code>, <code>env_torch.json</code>, <code>load.jsonl</code> and every round&#39;s JSONL (not the ~200 MB <code>ref/</code> directory, which <code>run_paired.sh</code> regenerates).</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/bench/README.md" rel="noopener"><code>bench/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="readme.html" rel="prev"><span>Previous</span>Project README</a>
+        <a href="crate-go.html" rel="next" class="next"><span>Next</span>go</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#reproduce">Reproduce</a></li>
+<li><a href="#files">Files</a></li>
+<li><a href="#protocol">Protocol</a></li>
+<li><a href="#row-semantics">Row semantics</a></li>
+<li><a href="#results-kept-in-the-tree">Results kept in the tree</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Adaptive resources audit · ojas reference</title>
+  <meta name="description" content="Recorded 2026-10-02 by the &#34;Ojas system adaptive resources and hardening&#34; session. Labels: verified (a run on this machine covers it, or a test asserts it and its suite exited 0), inferred (read from…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/adaptive-resources.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/adaptive-resources.html">
+  <meta property="og:title" content="Adaptive resources audit · ojas reference">
+  <meta property="og:description" content="Recorded 2026-10-02 by the &#34;Ojas system adaptive resources and hardening&#34; session. Labels: verified (a run on this machine covers it, or a test asserts it and its suite exited 0), inferred (read from…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html" class="current" aria-current="page">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="adaptive-resources-audit">Adaptive resources audit <a class="anchor" href="#adaptive-resources-audit" aria-label="Link to this section">#</a></h1>
+<p>Recorded 2026-10-02 by the &#34;Ojas system adaptive resources and hardening&#34; session. Labels: <strong>verified</strong> (a run on this machine covers it, or a test asserts it and its suite exited 0), <strong>inferred</strong> (read from source, not run), <strong>unverified</strong> (no run covers it).</p>
+<p>Machine: M5 Pro, 64 GiB, 18 CPUs in two performance levels (6 &#34;Super&#34; + 12 &#34;Performance&#34;), macOS (Darwin 27.0). Load average 10–25 during every run below, from peer sessions, so any timing here is a lower bound.</p>
+<h2 id="audit-findings">Audit findings <a class="anchor" href="#audit-findings" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Finding</th><th>Evidence</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>A1</td><td>The host probe and the plan were unwired. <code>probe_host</code> and <code>ResourcePlan::derive</code> had only test callers; no backend, capi op or Go call read them. Nothing in ojas adapted to the machine.</td><td>DevMap <code>devmap_neighbors</code> (callers: tests only), confirmed with <code>rg -uu</code> over the tree including <code>go/</code></td><td>verified, fixed (see C1–C4)</td></tr>
+<tr><td>A2</td><td>The probe knew RAM, cgroup memory and <code>available_parallelism</code> only: no physical cores, no P/E split, no caches, no page size, no memory architecture, no pressure, no bandwidth.</td><td><code>ojas-device/src/host.rs</code> before this change</td><td>verified, fixed</td></tr>
+<tr><td>A3</td><td>The cgroup memory reader looked at the leaf cgroup only. cgroup limits are hierarchical, so a container whose own <code>memory.max</code> is <code>max</code> inside a pod with a 4 GiB limit reported no limit.</td><td>Old <code>probe_cgroup</code> read <code>/sys/fs/cgroup/&lt;leaf&gt;/memory.max</code> only (source). <code>a_tighter_parent_cgroup_limit_is_not_missed</code> now passes; it was not run against the old reader, which had no fixture root to point at</td><td>gap inferred from source; fix verified</td></tr>
+<tr><td>A4</td><td>Probe files were read with <code>read_to_string</code> and no size bound.</td><td><code>read_text_refuses_past_the_cap_and_accepts_at_it</code></td><td>verified, fixed (64 KiB cap)</td></tr>
+<tr><td>A5</td><td><code>ResourcePlan</code> had no notion of unified memory: a GPU&#39;s memory figure was reported beside the host budget as if separate. On Apple silicon both come out of the same RAM, so a caller budgeting each would double-count it.</td><td><code>ojas-device/src/plan.rs</code> before this change</td><td>verified, fixed (C3)</td></tr>
+<tr><td>A6</td><td>macOS <code>available_bytes</code> is free + inactive pages. On this machine that read about 28 GB, while the kernel&#39;s <code>kern.memorystatus_level</code> reported 82% (about 52 GB) available. The figure is conservative, not wrong in the unsafe direction.</td><td><code>vm_stat</code>, <code>sysctl kern.memorystatus_level</code> at 10:20</td><td>verified; <strong>left as is</strong> (see Decisions)</td></tr>
+<tr><td>A7</td><td>tessl&#39;s <code>probe_system_memory_size</code> shells out to <code>sysctl -n hw.memsize</code> and returns 0 on any failure.</td><td><code>../tessl/src/runtime.rs:1970</code></td><td>inferred from source; out of this lane (tessl repo), not changed</td></tr>
+<tr><td>A8</td><td>Fixed sizes that do not scale with the machine: capi <code>DEFAULT_MEMORY_CEILING_BYTES</code> and <code>DEFAULT_BUDGET_BYTES</code> (1 GiB), Go <code>defaultBufferBudget</code> (64 MiB), wgpu <code>POOL_CAP_BYTES</code> (512 MiB), Metal <code>SESSION_POOL_CACHE_BYTES</code> (64 MiB), GEMM blocking (<code>FAST</code> 512/144/512, <code>EXACT</code> 256/72/256).</td><td>source</td><td>inferred; defaults not changed (see Decisions)</td></tr>
+<tr><td>A9</td><td>DevMap dead-symbol pass: nothing in <code>ojas-device</code> flagged (test callers count, which is why A1 never appeared as dead code). High-confidence rows are in other lanes: <code>wireSegmented</code>/<code>wireTabs</code> in <code>site/assets/ojas.js</code> and <code>docs/assets/ojas.js</code>, <code>GENERATED_DIR</code> in <code>ojas-oracle/python/common.py</code>, <code>CeCase</code> in <code>ojas-qwen35-cuda/src/small_smoke.rs</code>.</td><td><code>devmap_dead_symbols</code>; the answer carried <code>walk_incomplete</code> (50,682 unresolved sites repo-wide)</td><td>recorded, not acted on</td></tr>
+</tbody></table></div>
+<h2 id="changes">Changes <a class="anchor" href="#changes" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Change</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td>C1</td><td><code>probe_system()</code> → <code>SystemProfile { memory, cpu, architecture, pressure }</code>. <code>CpuTopology</code>: logical, physical, usable CPUs; core clusters fastest first with L1d, L2 and CPUs per L2; L3, cache line, page size; cgroup CPU quota. macOS reads <code>hw.perflevelN.*</code>; Linux reads <code>/sys/devices/system/cpu</code> (Intel <code>cpu_core</code>/<code>cpu_atom</code>, arm64 <code>cpu_capacity</code>). Every field fails on its own to <code>Unknown</code>.</td><td><code>ojas-device/src/{system,topology,sysctl}.rs</code></td></tr>
+<tr><td>C2</td><td><code>measure_bandwidth</code> / <code>cached_bandwidth</code>: opt-in copy bandwidth on 1 and N threads, min of repetitions, fallible bounded allocation (1–64 MiB per buffer for every caller; two buffers shared by the threads; <code>for_profile</code> may shrink each to 1/16 of available memory), bounded wall time, load average recorded. A spawn failure part-way releases the spawned workers through a latch rather than leaving them on a barrier.</td><td><code>ojas-device/src/bandwidth.rs</code></td></tr>
+<tr><td>C3</td><td><code>ResourcePlan::derive(policy, &amp;SystemProfile, probes)</code>: adds <code>fast_threads</code>, <code>memory_bound_threads</code> (from <code>with_bandwidth</code>), <code>device_room</code> (device memory less what the process already holds), <code>device_shares_host</code>, <code>shared_budget</code>, <code>architecture</code>, <code>pressure</code>, <code>cpu_quota_millis</code> and <code>cache</code>. A device that shares host memory has its room capped at <code>budget_bytes</code>, and <code>shared_budget</code> tells the caller to charge CPU and GPU to one <code>Budget</code>. <code>MemoryProbe</code> gains <code>resident_bytes</code> and <code>architecture</code> with <code>Unknown</code> defaults.</td><td><code>ojas-device/src/plan.rs</code></td></tr>
+<tr><td>C4</td><td><code>GemmBlocks::derive(&amp;CacheBudget, mr, nr, elem_bytes)</code>: kc from the smallest L1, mc from the smallest L2 share, nc from the L3 (simplified from Low et al. 2016); nc is <code>None</code> when no L3 is reported (G1). Recommendation only. On this machine: kc 368, mc 474, nc none.</td><td><code>ojas-device/src/tuning.rs</code></td></tr>
+<tr><td>C5</td><td>cgroup memory and CPU quota take the tightest of the cgroup and its ancestors (A3); probe files are read with a 64 KiB cap (A4).</td><td><code>ojas-device/src/host.rs</code>, <code>topology.rs</code></td></tr>
+<tr><td>C6</td><td><code>MetalBackend::memory()</code> → <code>MetalMemory { recommended_working_set, allocated }</code>, an <code>ojas_device::MemoryProbe</code>. Answered by the device thread outside the command path (no commit trigger), and still answered on a poisoned backend.</td><td><code>ojas-metal/src/{memory,backend,device,link}.rs</code></td></tr>
+<tr><td>C7</td><td>capi opcode 16 <code>SYSTEM_PROFILE</code> and Go <code>SystemProfile(ctx, budget)</code>: a versioned record of the profile and plan with a known flag per field. Reads only. The Go decoder refuses a wrong version, short count, length mismatch, bad flag, or an unknown field that carries a value; a fuzz target checks it never panics.</td><td><code>ojas-capi/src/profile.rs</code>, <code>go/profile.go</code></td></tr>
+</tbody></table></div>
+<h2 id="decisions">Decisions <a class="anchor" href="#decisions" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Defaults are unchanged.</strong> <code>CpuBackend::new</code> stays serial, capi&#39;s ceiling stays 1 GiB, thread count 0 is still refused. ojas is explicit-over-inferred (<code>allow_split</code> is not inferred; <code>TestCPUParallelThreadCountIsBounded</code> locks the zero-thread refusal), and raising a memory default from a probe would widen what the process may use without the caller asking. Adaptivity is opt-in: a Go host calls <code>SystemProfile</code>, then <code>SetMemoryCeiling</code> and <code>LoadOptions.Threads</code> with numbers it chose.
+</li>
+<li><strong>Unified memory: one logical budget, not a physical guarantee.</strong> capi already charges every session, CPU and Metal, to children of one root ceiling (<code>session_budget</code> → <code>ceiling.root.child</code>), which is the shared-budget rule. The plan states it (<code>shared_budget</code>, capped <code>device_room</code>) for callers outside capi. That accounting is in logical bytes for the general <code>MetalBackend</code> (<code>reserve</code> charges <code>elems * 4</code>, <code>ojas-metal/src/backend.rs:271-273</code>; only the tiny <code>gpu.rs</code> step charges power-of-two buckets). <code>ojas-metal/src/backend.rs:9-14</code> states that tessl rounds each buffer up to a power of two, so resident device memory can be up to twice the charged bytes, and tessl&#39;s pool cache (capped at 64 MiB per session) is outside the budget. On unified memory that is RAM the host also needs, so a host must leave headroom (documented on Go <code>SetMemoryCeiling</code> and <code>Profile.BudgetBytes</code>). Charging the physical bucket is a tessl/ojas-metal change, not made here.
+</li>
+<li><strong>A6 kept conservative; review round 3 concurs.</strong> <code>available_bytes</code> feeds the budget directly (<code>budget = tighten(budget, host.available_bytes)</code>, <code>ojas-device/src/plan.rs:111</code>), so switching to the kernel&#39;s figure would raise every derived budget by about 24 GB on this machine: a widening. What <code>kern.memorystatus_level</code> counts was not verified (no XNU source read), and on a shared Mac it plausibly includes pages peer processes are using. A second &#34;kernel available&#34; field was rejected too: no wire slot and no reader would use it. Widening stays the user&#39;s call; no code changed.
+</li>
+<li><strong>GEMM blocks are not adopted.</strong> On macOS, Fast products at or above 2^13 multiply-adds go to Accelerate, so the packed blocks matter only for small products and Exact. The CPU lane (session 2f9dc4) owns <code>ojas-cpu</code> and will adopt them only after an interleaved A/B benchmark. <code>ojas-cpu</code> gives each thread its own <code>(rows, cols)</code> tile and traversal, so if it adopts <code>nc</code> it must divide it by the threads sharing the L3.
+</li>
+<li><strong>No Go helper that sets the ceiling from the profile.</strong> &#34;Never raise a lower existing ceiling&#34; cannot be implemented in Go (no opcode reads the ceiling back), and the headroom fraction is a policy choice a helper would make silently. Without a default fraction the helper is one line. Instead, the <code>go/README.md</code> example now derives the ceiling from <code>SystemProfile</code> with an explicit fraction, checks for 0, and loads with that budget.
+</li>
+<li><strong>No <code>CpuBackend::from_plan</code>.</strong> It would add an <code>ojas-device</code> dependency to <code>ojas-cpu</code> to wrap <code>with_threads(Budget::new(plan.budget_bytes), n)</code>.
+</li>
+</ul>
+<h2 id="verification">Verification <a class="anchor" href="#verification" aria-label="Link to this section">#</a></h2>
+<h3 id="gate-1-1025-lock-held">Gate 1 (10:25, lock held) <a class="anchor" href="#gate-1-1025-lock-held" aria-label="Link to this section">#</a></h3>
+<p><code>CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=target-adaptive</code>:</p>
+<ul>
+<li><code>cargo test -p ojas-device --release</code>: <strong>58 passed</strong>, 0 failed (verified). Was 18.
+</li>
+<li><code>cargo clippy -p ojas-device --all-targets -- -D warnings</code> on aarch64-apple-darwin, x86_64-unknown-linux-gnu and x86_64-pc-windows-msvc: clean after two fixes (an unused helper, a no-op <code>min</code> in a test) (verified).
+</li>
+<li><code>cargo check -p ojas-device --all-targets</code> for x86_64 and aarch64 Linux and x86_64 Windows: exit 0 (verified compile only; <strong>not run</strong> on Linux or Windows).
+</li>
+<li><code>cargo test -p ojas-metal --release --lib memory</code>: 3 passed, including <code>memory_probe_tracks_residency_and_plans_one_shared_budget</code> (a 16 MiB upload shows in <code>allocated</code>; eight concurrent queries answer; on Apple silicon the plan sets <code>shared_budget</code> and caps the Metal room; the probe still answers after an injected device-thread panic) (verified).
+</li>
+</ul>
+<p>What the tests attack: hostile <code>/sys</code> and <code>/proc</code> text (reversed and 2^64 CPU ranges, empty tokens, oversize files, bad units, overflowing sizes, <code>..</code> and NUL paths, v1 <code>-1</code> quotas, <code>max</code>), each missing file blanking only its own field, a tighter parent cgroup, 1024 bandwidth threads over 1 MiB, every out-of-range bandwidth config refused before allocating, concurrent probing from 16 threads, an exhaustive sweep of host × GPU architecture × memory × residency × available × caller budget asserting a shared device&#39;s room never passes the budget, thread advice never passing the ceiling, and GEMM blocks satisfying the model&#39;s capacity constraints across L1/L2/LLC/tile/element sweeps.</p>
+<h3 id="gate-2-10411100-lock-held">Gate 2 (10:41–11:00, lock held) <a class="anchor" href="#gate-2-10411100-lock-held" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><code>cargo test -p ojas-capi --release</code>: <strong>70 passed</strong>, 0 failed, including <code>system_profile_routes_through_dispatch_and_reads_only</code> (opcode 16 through <code>engine::dispatch</code>; the memory ceiling is unchanged afterwards) and the profile unit tests (field order equals wire order; payloads of 1/7/9/16 bytes and a 0 budget are refused) (verified).
+</li>
+<li><code>cargo clippy -p ojas-capi -p ojas-device -p ojas-metal --all-targets -- -D warnings</code>: clean (verified). The first run failed on this lane&#39;s code (<code>Field</code> variants never constructed, <code>chunks_exact</code> with a constant); the record is now built by an exhaustive <code>match</code> over <code>Field::ALL</code>.
+</li>
+<li><code>cargo build -p ojas-gusset-engine</code> into <code>target-adaptive</code>, linked by a lane-local <code>gusset.pc</code> so the shared <code>target/debug/libgusset.a</code> was not overwritten (verified).
+</li>
+<li><code>go vet</code> and <code>go test -tags gusset_pkgconfig</code> (after one <code>-a</code> build against the new archive): <strong>ok in 17.8 s</strong>, including <code>TestSystemProfileFromTheEngine</code>, which loads a <code>DeviceCPUParallel</code> model with the profile&#39;s thread ceiling and runs a step (verified).
+</li>
+<li><code>go test -fuzz FuzzDecodeProfile -fuzztime 15s</code>: 3,336,694 executions, no failure (verified).
+</li>
+<li><code>cargo run -p ojas-device --example profile -- 8589934592 --bandwidth</code>: the profile below (verified).
+</li>
+</ul>
+<p><strong>Incident, this lane&#39;s fault.</strong> The first Go run was killed by the OS after 491 s, with load at about 34. A test case built its &#34;count overflows&#34; record by generating 4,294,967,295 entries (about 38 GB) and then slicing it. The case now overwrites the count field of a 16-entry record. The rerun finished in 17.8 s. A machine audit later found a JetsamEvent at 10:55 for a <code>go.test</code> process at 84–120 GiB resident; by timing this was very likely that run (inferred, not matched by PID). The &#34;Find the 120 GiB go.test memory blowup&#34; session later re-ran the old fixture under a 1 GiB cgroup, where it was OOM-killed (<code>memory.events</code> <code>oom_kill 1</code>). It also measured the current full <code>go test -a ./...</code> at a peak test-binary RSS of 212 MiB (its report, not re-run here). The current profile tests are bounded by construction: the decoder allocates a fixed 20 entries whatever count a record claims, and the one bandwidth measurement uses at most two 64 MiB buffers.</p>
+<p><strong>Flake found by a peer, this lane&#39;s fault.</strong> The full <code>cargo test -p ojas-metal --release</code> run by the &#34;Rust/Go ML packages&#34; session (about 11:05) failed <code>memory_probe_tracks_residency_and_plans_one_shared_budget</code>: a 16 MiB upload grew <code>allocated</code> by only 2.25 MiB. <code>MTLDevice.currentAllocatedSize</code> is process-wide, and the other lib tests free buffers in parallel between the two reads; my <code>--lib memory</code> run had filtered them out. The test now asserts a lower bound that other tests cannot break (<code>allocated &gt;= 16 MiB</code> while the tensor lives), and <code>MetalMemory::allocated</code> is documented as the whole process&#39;s figure. The rerun result is under &#34;Gate 3&#34;.</p>
+<h3 id="gate-3-1104-lock-held">Gate 3 (11:04, lock held) <a class="anchor" href="#gate-3-1104-lock-held" aria-label="Link to this section">#</a></h3>
+<p><code>cargo test -p ojas-metal --release --lib</code>, the full lib suite, three runs: <strong>53 passed</strong> each time, 0 failed, with the fixed test running in parallel with the rest (verified). <code>cargo clippy -p ojas-metal --all-targets -- -D warnings</code>: clean (verified).</p>
+<h3 id="devmap">DevMap <a class="anchor" href="#devmap" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><code>devmap_status</code> at the end: generation 3731, 8,321 nodes, 40,979 edges, <code>is_fresh: true</code>, no parse failures. HTML and CSS are pattern-recovered only (no grammar), and Rust net resolution is 38%, so edge answers are lower bounds.
+</li>
+<li><code>devmap_clones</code> (min 40 nodes): 287 groups, 41 shown, <code>truncated: true</code>. None involve this lane&#39;s files. The largest are the <code>docs/assets/ojas.js</code> and <code>site/assets/ojas.js</code> exact copies, the <code>swiglu_f32</code>/<code>swiglu_bf16</code> pair in <code>ojas-qwen35-cuda/src/k8.rs</code>, and the per-backend <code>shape_first.rs</code> test helpers. Recorded, not acted on: other lanes.
+</li>
+</ul>
+<h3 id="what-ojas-sees-on-this-machine">What ojas sees on this machine <a class="anchor" href="#what-ojas-sees-on-this-machine" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th></th></tr></thead>
+<tbody>
+<tr><td>RAM</td><td>64 GiB total, 43.3 GB available (free + inactive) at 10:55</td></tr>
+<tr><td>CPUs</td><td>18 logical = 18 physical = 18 usable</td></tr>
+<tr><td>Clusters</td><td>&#34;Super&#34;: 6 cores, L1d 128 KiB, L2 16 MiB per 6. &#34;Performance&#34;: 12 cores, L1d 64 KiB, L2 8 MiB per 6</td></tr>
+<tr><td>L3</td><td>not reported (Apple&#39;s system cache is not exposed)</td></tr>
+<tr><td>Line / page</td><td>128 B / 16 KiB</td></tr>
+<tr><td>Architecture / pressure</td><td>Unified / Normal</td></tr>
+<tr><td>Copy bandwidth (load 4.7)</td><td>120.8 GB/s on 1 thread; 409.9 GB/s on 18 (read + write bytes)</td></tr>
+<tr><td>Plan for an 8 GiB budget</td><td>budget 8 GiB; thread ceiling 18; fast threads 6; memory-bound threads 4 (ceil(409.9 / 120.8))</td></tr>
+<tr><td>Cache budget → GEMM blocks</td><td>L1d 64 KiB, L2 share 1.33 MiB, L3 not reported → kc 368, mc 474, nc none (until G1 the L2 stood in for L3 and gave nc 2848)</td></tr>
+</tbody></table></div>
+<h2 id="review-round-fable">Review round (Fable) <a class="anchor" href="#review-round-fable" aria-label="Link to this section">#</a></h2>
+<p>An independent review (claude-fable-5-1, read-only) found these; each was checked against the code before acting.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Finding</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td>R1</td><td>cgroup <code>memory.current</code> counts page cache, so a container that has just read a large model sits near its limit and the plan&#39;s budget collapses toward 0.</td><td>Fixed: the room now uses the working set, <code>current − inactive_file</code> (v1 <code>total_inactive_file</code>) from <code>memory.stat</code>, as the kubelet does; an unreadable <code>memory.stat</code> keeps the raw figure. Tests: <code>page_cache_does_not_count_against_the_cgroup_room</code> (by the old formula, limit − current, the room was 0.1 GiB; it is now 3.1 GiB. Not run against the old code), <code>an_unreadable_memory_stat_keeps_the_raw_usage</code>. This raises the room relative to the previous code, but only by pages the kernel reclaims before an OOM kill.</td></tr>
+<tr><td>R2</td><td><code>cached_bandwidth</code> cached an error forever.</td><td>Fixed: only a success is kept. Test <code>a_refused_measurement_is_not_cached_and_a_success_is</code> (its first call is a <code>Config</code> error, which the <code>OnceLock</code> version would have returned forever; inferred, not run against it).</td></tr>
+<tr><td>R3</td><td>The one-ceiling rule is logical bytes; Metal resident memory can be twice that plus the pool cache.</td><td>Verified (<code>MetalBackend::reserve</code> charges <code>elems * 4</code>). Documented in Decisions, Go <code>SetMemoryCeiling</code> and <code>Profile.BudgetBytes</code>. Not changed in code.</td></tr>
+<tr><td>R4</td><td><code>derive</code> substituted the budget for a shared device that reported no memory.</td><td>Fixed: that room stays <code>Unknown</code> and <code>shared_budget</code> carries the bound. The sweep test now fails if a room is invented for an unreported device.</td></tr>
+<tr><td>R5</td><td>Docs said bandwidth takes 1/16 of available memory; two buffers take 1/8.</td><td>Fixed in code docs, README and here.</td></tr>
+<tr><td>R6</td><td>Opcode 16 never returned bandwidth, so <code>memory_bound_threads</code> was Rust-only.</td><td>Fixed: payload <code>budget: u64, flags: u32</code> with <code>FLAG_BANDWIDTH</code>; four appended fields; Go <code>SystemProfile(ctx, budget, measureBandwidth)</code>. Unknown flag bits are refused.</td></tr>
+<tr><td>R7</td><td><code>MetalMemory::architecture()</code> is always <code>Unknown</code>; on an Intel Mac with an integrated GPU the plan would treat it as separate memory.</td><td>Not fixable in round 1: tessl did not expose <code>MTLDevice.hasUnifiedMemory</code>. Fixed in round 2 (C19), once tessl added the flag.</td></tr>
+<tr><td>R8</td><td><code>fast_threads</code> is &#34;Apple perflevel0&#34;, which on an M5 Pro is 6 of 18 performance-class cores, not &#34;the P-cores&#34;.</td><td>Go doc reworded.</td></tr>
+<tr><td>R9</td><td><code>GemmBlocks</code> sizes <code>nc</code> as if one B panel is shared by every core on an L2.</td><td>Superseded by G1: <code>nc</code> now comes from the L3 only. The shared-panel assumption is documented on <code>GemmBlocks::nc</code>; the per-thread division was sent to the CPU lane.</td></tr>
+</tbody></table></div>
+<h3 id="review-round-2-fable">Review round 2 (Fable) <a class="anchor" href="#review-round-2-fable" aria-label="Link to this section">#</a></h3>
+<p>The same reviewer re-read the fixes. Verdict: B1–B5 and R6 closed. It found that the R1, R2, R4 and R6 tests fail against the pre-fix code (read, not run). Three follow-ups:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Finding</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td>N1</td><td>A <code>memory.stat</code> claiming more <code>inactive_file</code> than the usage file held gave a working set of 0, so the whole limit was room: fail-open on contradictory input.</td><td>Fixed: the raw usage is kept when <code>inactive_file &gt; current</code>. The test row now expects 900 (it expected 0 before). An exact-usage row was added.</td></tr>
+<tr><td>N2</td><td>The opcode-16 bandwidth measurement is not cancellable once started and holds a process-wide lock.</td><td>Documented in <code>ojas-capi/src/profile.rs</code> and Go <code>SystemProfile</code>: bounded to about half a second; concurrent callers wait.</td></tr>
+<tr><td>N3</td><td>A new Go decoder against an old engine fails with &#34;16 fields, want at least 20&#34;.</td><td>Accepted: fail-closed, and the engine and Go package ship together.</td></tr>
+<tr><td>N4</td><td><code>TestSystemProfileFromTheEngine</code> hard-failed when the engine refused to measure on a host with under 16 MiB available.</td><td>The test now skips in that case only, and still fails on any roomier host that does not measure.</td></tr>
+</tbody></table></div>
+<h3 id="gate-5-1241-after-review-round-2-lock-held">Gate 5 (12:41, after review round 2, lock held) <a class="anchor" href="#gate-5-1241-after-review-round-2-lock-held" aria-label="Link to this section">#</a></h3>
+<p>All verified on this machine: <code>ojas-device</code> <strong>61 passed</strong> (including the flipped N1 row); clippy <code>-D warnings</code> clean on macOS and Linux x86_64; <code>ojas-capi</code> profile tests 5 passed; <code>ojas-gusset-engine</code> built; <code>go vet</code> clean; <code>go test -a -run Profile</code> passed <code>TestDecodeProfileRefusesWhatItCannotReadWhole</code>, <code>TestSystemProfileFromTheEngine</code> (it measured and did not skip) and the <code>FuzzDecodeProfile</code> seeds.</p>
+<h3 id="gate-4-1211-after-the-review-fixes-lock-held">Gate 4 (12:11, after the review fixes, lock held) <a class="anchor" href="#gate-4-1211-after-the-review-fixes-lock-held" aria-label="Link to this section">#</a></h3>
+<p>All verified on this machine: <code>ojas-device</code> <strong>61 passed</strong>; clippy <code>-D warnings</code> clean for macOS, Linux x86_64 and Windows; <code>ojas-capi</code> <strong>71 passed</strong> (including the bandwidth-flag and unknown-flag tests); clippy clean on capi, device and metal; <code>ojas-metal --lib</code> <strong>53 passed</strong>; <code>ojas-gusset-engine</code> built; <code>go vet</code> clean; <code>go test -a</code> <strong>ok in 18.6 s</strong> (including <code>SystemProfile(ctx, 0, true)</code> returning a memory-bound thread count within the ceiling); <code>FuzzDecodeProfile</code> 3,367,234 executions in 15 s, no failure.</p>
+<h3 id="review-round-3-fable-the-open-decisions">Review round 3 (Fable): the open decisions <a class="anchor" href="#review-round-3-fable-the-open-decisions" aria-label="Link to this section">#</a></h3>
+<p>The same reviewer (read-only; no Bash or DevMap in that run) was asked for a recommendation on each open decision. A6 and the Go helper are under Decisions. One finding was a bug:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Finding</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td>G1</td><td>With no L3 reported, <code>CacheBudget</code> put the L2 in as the last-level cache, so <code>mc</code> (half of a core&#39;s L2 share) and <code>nc</code> (half of the &#34;last level&#34;) were sized from the same cache. On this machine that is six 0.67 MiB A blocks plus a 4 MiB B panel in one 8 MiB L2, and 28 MiB if each thread packs its own panel, as <code>ojas-cpu</code> does. The published <code>nc 2848</code> was that figure. Neither test caught it: one asserted 2848, and the sweep checked <code>mc</code> and <code>nc</code> independently.</td><td>Fixed: <code>CacheBudget</code> carries <code>l3</code> (only when the OS reports one) in place of <code>l2</code> and <code>last_level</code>, and <code>GemmBlocks::nc</code> is <code>Option&lt;usize&gt;</code>, <code>None</code> without an L3; <code>kc</code> and <code>mc</code> are unchanged. The wire field <code>LastLevelBytes</code> became <code>L3Bytes</code> (Go <code>Profile.L3Bytes</code>), so Go and Rust report the same fact. Tests: <code>m5_pro_numbers_give_blocks_that_fit</code> now expects <code>nc: None</code>, and <code>a_reported_l3_sizes_the_b_panel_and_nothing_else_does</code> checks that a machine without its L3 keeps <code>kc</code> and loses <code>nc</code> however large its L2 is. Against the pre-fix code these fail by not compiling (<code>nc</code> was a <code>usize</code>); the old code returned 2848 for the same input, so there was also a behavioral failure.</td></tr>
+</tbody></table></div>
+<h3 id="gate-6-about-18211825-utc-after-review-round-3-lock-held">Gate 6 (about 18:21–18:25 UTC, after review round 3, lock held) <a class="anchor" href="#gate-6-about-18211825-utc-after-review-round-3-lock-held" aria-label="Link to this section">#</a></h3>
+<p>All verified on this machine:</p>
+<ul>
+<li><code>ojas-device</code>: <strong>62 passed</strong> (the new L3 test plus the reworked <code>nc</code> assertions). Clippy with <code>-D warnings</code> is clean on macOS, Linux x86_64 and Windows.
+</li>
+<li>The <code>profile</code> example prints <code>GemmBlocks { kc: 368, mc: 474, nc: None }</code>.
+</li>
+<li><code>go vet</code> is clean, and the <code>go/README.md</code> example, extracted to a scratch module, passes <code>go vet</code> against the live package.
+</li>
+<li><code>FuzzDecodeProfile</code> passed its 15 s run.
+</li>
+<li>The first <code>ojas-capi</code> and engine steps failed to compile inside <code>ojas-cpu</code>, which the CPU lane was editing at the time. Its first Go run linked the previous engine archive, so it does not count. After the CPU lane reported <code>ojas-cpu</code> compiling, the rerun gave: <code>ojas-capi</code> <strong>71 passed</strong>; clippy clean on capi, device and metal; engine built; <code>go test -a</code> <strong>ok in 20.6 s</strong> against the new archive.
+</li>
+</ul>
+<h3 id="linux-run-about-1822-utc-podman-vm-lock-held">Linux run (about 18:22 UTC, Podman VM, lock held) <a class="anchor" href="#linux-run-about-1822-utc-podman-vm-lock-held" aria-label="Link to this section">#</a></h3>
+<p>A real Linux kernel: the local <code>podman-machine-default</code> VM (applehv, 9 CPUs, 12 GiB, Fedora kernel 7.1.3, cgroup v2), using only the image already on the machine (<code>python:3.11-trixie</code>, <code>--pull=never</code>). The binaries are static x86_64 musl builds linked on the Mac with <code>rust-lld</code> and run through the VM&#39;s qemu-x86_64 binfmt handler. <code>/sys</code> and the cgroup files are the VM kernel&#39;s own. All verified:</p>
+<ul>
+<li><code>ojas-device</code> unit suite: <strong>57 passed</strong> with no limits, and 57 passed inside <code>--memory=1g --cpus=2</code>. The five macOS-only tests are the three <code>sysctl::tests</code> (the <code>sysctl</code> module is macOS-only), <code>macos_reports_perf_levels_and_caches</code> and <code>macos_total_ram_is_a_sysctl_value</code>; 62 − 5 = 57 matches the Linux count. The names come from the source cfgs and the macOS <code>--list</code>; the Linux list was counted, not diffed.
+</li>
+<li>In a 1 GiB / 2-CPU container, the probe read <code>cgroup_limit_bytes</code> 1,073,741,824 and <code>cpu_quota_millis</code> 2000; <code>usable</code> was 2 of 9, and the plan&#39;s thread ceiling was 2. For an 8 GiB request, <code>budget_bytes</code> was 1,066,573,824 (the limit less the 7 MB working set).
+</li>
+<li><strong>Page cache (R1) on a real kernel.</strong> After writing and reading 700 MiB in the same container, <code>memory.current</code> was 737,943,552, of which 734,117,888 was <code>inactive_file</code>. The plan&#39;s budget stayed at 1,061,515,264. The old formula (limit − current) would have given about 336 MB.
+</li>
+<li>With no limits: total 12.5 GB, available 11.8 GB, 9 CPUs, no cgroup limit, budget 8 GiB as asked.
+</li>
+<li>Bandwidth was measured inside the limited container on 2 threads (<code>memory_bound_threads</code> known). The figures, about 3.0 and 6.0 GB/s, are of qemu-emulated x86 code and say nothing about the hardware.
+</li>
+<li><strong>Caches were all <code>Unknown</code>, which is correct for this VM.</strong> Its kernel publishes <code>cache/index*/level</code>, <code>type</code> and <code>shared_cpu_list</code> but no <code>size</code> or <code>coherency_line_size</code> (checked with <code>ls</code> and <code>cat</code>), and <code>getconf</code> reports sizes of 0. The readers failed closed; <code>GemmBlocks::derive</code> returned <code>None</code>. A Linux box that publishes cache sizes has still not been run.
+</li>
+</ul>
+<h2 id="unverified">Unverified <a class="anchor" href="#unverified" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Windows at run time. Linux on bare metal, an x86 Linux host, and a kernel that publishes cache sizes (the VM above does not).
+</li>
+<li>An Intel Mac (<code>hw.nperflevels</code> absent; architecture <code>Unknown</code>).
+</li>
+<li>A discrete GPU through <code>MemoryProbe::architecture() == Discrete</code> (only stubbed in tests).
+</li>
+<li>Bandwidth figures as performance numbers: every measurement ran with load 4–25.
+</li>
+<li>Any speedup from <code>GemmBlocks</code>; none is claimed.
+</li>
+<li>The full <code>ojas-metal</code> integration suite (<code>tests/</code>) on this lane&#39;s own run. It compiled under <code>clippy --all-targets</code>; a peer ran it at about 11:05 and reported 162 passed beside the flake above.
+</li>
+<li><code>ojas-cuda</code> and <code>ojas-hip</code> were not built. Their only imports from <code>ojas-device</code> are <code>require_kind</code>, <code>Device</code> and <code>DeviceError</code> (<code>ojas-cuda/src/lib.rs:11</code>, <code>ojas-hip/src/lib.rs:13</code>), all unchanged. <code>ojas-wgpu</code> (which also imports <code>DeviceInfo</code>) compiled as a capi dependency.
+</li>
+</ul>
+<h2 id="limitations">Limitations <a class="anchor" href="#limitations" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Nothing adapts on its own.</strong> That is the design (see Decisions): the probe and plan measure and recommend, and the caller adopts.
+</li>
+<li><strong>The Go <code>Profile</code> has no GPU figures.</strong> Opcode 16 opens no device, so it carries the unified-memory flag but no Metal working set, residency or room. Those are reachable only in Rust, through <code>MetalBackend::memory()</code> and <code>ResourcePlan::derive</code>.
+</li>
+<li><code>docs/status.md</code> lists <code>ojas-device</code> at 18 tests only inside dated run records (2026-10-01), which are correct for those runs; the current count belongs in the next integration run&#39;s table. This lane changed only the component diagram line (line 243); the file&#39;s other uncommitted hunk (line 124) belongs to the &#34;Rust/Go ML packages&#34; session.
+</li>
+</ul>
+<h2 id="size">Size <a class="anchor" href="#size" aria-label="Link to this section">#</a></h2>
+<p>Tracked diff of this lane: about +760 / −80 lines across <code>ojas-device</code> (host, plan, lib, manifest, README), <code>ojas-metal/src</code> (backend, device, link, lib; the <code>gpu.rs</code> hunks there are another session&#39;s), <code>ojas-capi</code> and <code>go/ffi.go</code>. 22 of <code>go/ffi.go</code>&#39;s 42 changed lines are gofmt realigning one constant block. New files: about 1,340 non-test Rust lines (<code>bandwidth</code>, <code>topology</code>, <code>tuning</code>, <code>system</code>, <code>sysctl</code>, capi <code>profile</code>, metal <code>memory</code>) and about 890 test lines, 141 Go plus 162 Go test lines, and a 57-line example. Most of the growth is the Linux <code>/sys</code> readers and their fixture tests. Nothing was deleted: the unwired probe was wired, not replaced.</p>
+<h1 id="round-2-fail-before-the-work-not-part-way">Round 2: fail before the work, not part-way <a class="anchor" href="#round-2-fail-before-the-work-not-part-way" aria-label="Link to this section">#</a></h1>
+<p>Recorded 2026-10-02 (evening) by the &#34;Ojas system adaptive hardening&#34; session, which took over this lane. The goal: a run that cannot fit is refused before compute is spent, never killed or poisoned part-way, and the plan acts on what it measures. Same labels as above.</p>
+<h2 id="audit-findings-1">Audit findings <a class="anchor" href="#audit-findings-1" aria-label="Link to this section">#</a></h2>
+<p>Four read-only audits ran: training/inference preflight, budget coverage across backends, the probe and plan, and thread adaptivity. The audit subagents had no DevMap tools, so their caller lists come from Grep over tracked source. DevMap itself then failed mid-session (see Gaps). Each finding below was checked against the code before acting.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Finding</th><th>Evidence</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>P1</td><td>An optimizer refusal poisoned the trainer. Muon reserves its scratch inside <code>apply</code>, after AdamW has already updated earlier slots, so a <code>CapacityExceeded</code> there left parameters partly updated, and a poisoned trainer cannot Save. Forward, backward and clip were already transactional (they change nothing the trainer owns).</td><td><code>trainer.rs</code> <code>run</code>: only <code>apply</code>/<code>finish</code> set <code>Poisoned</code>; CPU <code>backend.rs</code> <code>headroom(muon_scratch)</code>, Metal <code>6n+3r²+2048</code>, wgpu <code>job.scratch</code></td><td>verified; fixed (C8)</td></tr>
+<tr><td>P2</td><td>Nothing compared a run&#39;s memory to the budget before the work: <code>Trainer::new</code>, resume and load charged as they allocated.</td><td>source</td><td>verified; fixed (C8, C9)</td></tr>
+<tr><td>P3</td><td><code>load_params</code> decoded every tensor into uncharged <code>Vec&lt;f32&gt;</code>, so the peak was about 2× the parameters while the budget saw 1×, and it charged only at the end. It also read every earlier tensor before discovering a missing one. Resume already used the charged chunked reader.</td><td><code>load.rs</code> before; <code>checkpoint.rs</code> resume path</td><td>verified; fixed (C9)</td></tr>
+<tr><td>P4</td><td><code>n_layer</code> had no upper bound. <code>param_table</code> builds about 14 named rows per layer before any budget is consulted, reachable from file metadata and from NEW over the wire: a process abort from input alone.</td><td><code>spec.rs</code> <code>validate</code>, <code>names.rs</code> <code>param_table</code></td><td>verified (path); fixed (C10)</td></tr>
+<tr><td>P5</td><td>The RoPE tables were built in uncharged <code>vec!</code>s and copied into charged tensors (2× the tables, uncharged).</td><td><code>block.rs</code> <code>Rope::rows</code></td><td>verified; fixed (C10)</td></tr>
+<tr><td>P6</td><td><code>set_memory_ceiling</code> accepted any non-zero <code>u64</code>. Above RAM, every charge passes and the process dies of the OS&#39;s OOM kill instead of a refusal.</td><td><code>session.rs</code></td><td>verified; fixed (C11)</td></tr>
+<tr><td>P7</td><td>A Metal <code>head_dim &gt; 128</code> was refused only at the first attention op, after the full upload.</td><td><code>refuse_unsupported_metal_head_dim</code> callers</td><td>verified; fixed (C11)</td></tr>
+<tr><td>P8</td><td>CPU pool workers spawn lazily, on the first op large enough to split. A spawn failure surfaced inside a step, possibly inside <code>apply</code>.</td><td><code>pool.rs</code> <code>ensure_workers</code></td><td>verified; fixed (C12)</td></tr>
+<tr><td>D1</td><td>Memory pressure was reported and read by nothing: Critical gave the same budget as Normal.</td><td><code>plan.rs</code> copied <code>profile.pressure</code></td><td>verified; fixed (C13)</td></tr>
+<tr><td>D2</td><td><code>thread_ceiling</code> ignored the known cgroup CPU quota and relied on std having applied it.</td><td><code>plan.rs</code></td><td>verified; fixed (C13)</td></tr>
+<tr><td>D3</td><td>An unreadable <code>memory.current</code> with a known limit counted as zero usage, contradicting its own doc comment.</td><td><code>host.rs</code> <code>cgroup_room</code></td><td>verified; fixed (C14)</td></tr>
+<tr><td>D4</td><td>cgroup v2 <code>memory.high</code> (systemd <code>MemoryHigh=</code>) was never read.</td><td><code>rg</code> over <code>ojas-device</code></td><td>verified; fixed (C14)</td></tr>
+<tr><td>D5</td><td>Opcode 16 with an empty payload on a host where nothing is readable sent <code>BudgetBytes</code> known at <code>u64::MAX</code>, and the Go doc said &#34;Always known&#34;.</td><td><code>profile.rs</code></td><td>verified (path); fixed (C15)</td></tr>
+<tr><td>D6</td><td>A 4-byte sysctl holding <code>-1</code> was zero-extended to 4294967295 and passed <code>n &gt; 0</code> checks.</td><td><code>sysctl.rs</code></td><td>verified; fixed (C14)</td></tr>
+<tr><td>D7</td><td>Found by Gate C on Linux. The bandwidth heap tests read process-wide allocator counters, while sibling tests ran <code>measure_bandwidth</code> in parallel, so a sibling&#39;s buffers counted against the pair under test. L1 failed <code>many_threads_share_two_buffers</code>. On macOS, <code>bandwidth::</code> at <code>--test-threads=2</code> failed 1 of 10 rounds (190 MiB against a 128 MiB pair), and 0 of 10 alone. The probe itself was never wrong.</td><td><code>bandwidth.rs</code> tests, since 557b85c</td><td>verified; fixed (C17)</td></tr>
+<tr><td>D8</td><td>Found by Gate C on Linux, and caused by this round&#39;s own C13: the ceiling rounded the quota up, but std&#39;s <code>available_parallelism</code> rounds it down. A 1.5-CPU container therefore gave ceiling 1 when std read the quota, and 2 when only the probe did. The doc and the unit test claimed 2.</td><td><code>plan.rs</code> <code>thread_ceiling</code></td><td>verified; fixed (C17)</td></tr>
+</tbody></table></div>
+<h2 id="changes-1">Changes <a class="anchor" href="#changes-1" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Change</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td>C7b</td><td><code>Budget::peak_bytes</code> / <code>reset_peak</code>: a high-water mark that records each charge&#39;s exact value, so concurrent releases cannot hide a peak. It can over-report by a parent charge that a child rolled back, never under-report. <code>Budget::check_room(bytes)</code>: a point-in-time &#34;would this fit the whole chain&#34; query that charges nothing.</td><td><code>ojas-core/src/budget.rs</code></td></tr>
+<tr><td>C7c</td><td><code>Backend::optimizer_scratch_bytes(kind, rows, cols) -&gt; Option&lt;u64&gt;</code>, an upper bound on what one AdamW or Muon call reserves beyond its operands. Default <code>None</code>; forwarded by <code>&amp;B</code>, <code>Arc&lt;B&gt;</code>, capi <code>Gated</code> and the test <code>Probe</code>. CPU and Metal compute the figure from the same helper their step uses. wgpu has a closed form whose pieces are listed on <code>optimizer_scratch</code>.</td><td><code>ojas-core/src/backend.rs</code>; <code>ojas-cpu</code>, <code>ojas-metal</code>, <code>ojas-wgpu</code> <code>backend.rs</code></td></tr>
+<tr><td>C8</td><td>Trainer preflight, in four places. (1) <code>Trainer::new</code> refuses before its first allocation when the state cannot fit: values, moments and RoPE (<code>state_bytes</code>). (2) Before any compute, each step checks room for the optimizer scratch, or for the measured peak of an earlier step no smaller in rows or micro-batches, whichever is larger. (3) After clip, a last <code>check_room(optimizer_scratch)</code> runs while every parameter is still unchanged. (4) Each completed step records its peak. Capacity therefore never poisons a trainer.</td><td><code>ojas-model/src/trainer.rs</code></td></tr>
+<tr><td>C9</td><td><code>load_params</code> checks the header first (every name, dtype and shape, the tie head&#39;s dtype and shape, and the total bytes against the budget) before reading any data. It then decodes each tensor in bounded chunks into storage charged before it is allocated, and compares the tied head against the embedding in 256 KiB pieces. Resume runs the same <code>state_bytes</code> check before its first read. Save checks room for its largest device download before creating the file.</td><td><code>ojas-model/src/load.rs</code>, <code>checkpoint.rs</code></td></tr>
+<tr><td>C10</td><td><code>MAX_LAYERS = 4096</code> in <code>ModelSpec::validate</code>. <code>Rope::rows</code> fills charged tensors in place.</td><td><code>ojas-model/src/spec.rs</code>, <code>block.rs</code></td></tr>
+<tr><td>C11</td><td>capi: a ceiling above <code>hard_memory_limit()</code> (physical RAM, or a tighter cgroup limit) is refused with <code>E_CAPACITY</code>, and the 1 GiB default starts at that limit on a smaller machine. That is a tightening, never a raise. <code>preflight</code> runs before the device opens: a Metal <code>head_dim</code> the kernels cannot run, and parameters larger than the session budget.</td><td><code>ojas-capi/src/session.rs</code>, <code>load.rs</code></td></tr>
+<tr><td>C12</td><td><code>CpuBackend::start_workers()</code>; capi calls it when a parallel CPU session opens, so a spawn failure refuses the load.</td><td><code>ojas-cpu/src/pool.rs</code>, <code>backend.rs</code>; <code>ojas-capi/src/model.rs</code></td></tr>
+<tr><td>C13</td><td><code>ResourcePlan::derive</code> sets the budget to 0 under Critical pressure; Warning is report-only. The thread ceiling is cut to <code>quota_millis / 1000</code> rounded down, at least 1 (see C17).</td><td><code>ojas-device/src/plan.rs</code></td></tr>
+<tr><td>C14</td><td>When cgroup usage is unreadable, this process&#39;s <code>VmRSS</code> serves as a floor (a strict lower bound on the cgroup&#39;s usage). The limit is the tighter of <code>memory.max</code> and <code>memory.high</code> on every level. 4- and 8-byte sysctls are decoded as signed, and a negative value is <code>None</code>.</td><td><code>ojas-device/src/host.rs</code>, <code>sysctl.rs</code></td></tr>
+<tr><td>C15</td><td>Opcode 16 sends an unbounded budget as unknown (decoded as 0 in Go). The Go doc now lists the three cases that give 0.</td><td><code>ojas-capi/src/profile.rs</code>, <code>go/profile.go</code></td></tr>
+<tr><td>C16</td><td>Adaptive, opt-in or fail-closed only. <strong>Admission under pressure:</strong> the engine refuses LOAD, NEW, TRAIN_OPEN, TRAIN_STEP, RESUME, SAMPLE and GENERATE with <code>E_PRESSURE</code> (C18; first drafted as <code>E_CAPACITY</code>) while the kernel reports Critical pressure (one sysctl per call); FREE, SAVE and the queries still run, so a host can always checkpoint and release. <strong><code>DEVICE_CPU_AUTO</code> (4)</strong> / Go <code>DeviceCPUAuto</code>: a parallel CPU session sized from the plan&#39;s thread ceiling, quota included, at most 256. It refuses rather than guesses when the CPU count is unreadable.</td><td><code>ojas-capi/src/engine.rs</code>, <code>load.rs</code>; <code>go/api.go</code>, <code>go/ffi.go</code></td></tr>
+<tr><td>C17</td><td>Each test that can allocate bandwidth buffers holds one test-only lock (<code>heap_limit::measuring()</code>, which tolerates poisoning). <code>heap_growth</code> takes the guard as an argument, so a heap check cannot compile without it. The quota cut rounds down, as std does, so both paths agree and a pool never outruns its quota.</td><td><code>ojas-device/src/bandwidth.rs</code> tests, <code>plan.rs</code></td></tr>
+<tr><td>C18</td><td><code>ErrorKind::Pressure</code> / <code>ojas:E_PRESSURE:</code> / Go <code>ErrPressure</code>, used only by <code>engine::admit</code>; its message now begins &#34;memory pressure:&#34;. Go decodes every kind from one table, <code>inBandKinds</code> in <code>ffi.go</code>, which replaces a five-way switch and three hand-copied sentinel lists in the tests. Two guards: a Rust test makes every <code>ErrorKind</code> list its prefix (an exhaustive match), checks the prefixes are distinct and checks each one appears in <code>go/ffi.go</code>; <code>TestInBandKindsTable</code> pins the Go table and checks its sentinels and prefixes are distinct. Docs: <code>go/api.go</code>, <code>go/README.md</code>, <code>ojas-capi/README.md</code>, and both copies of the site page.</td><td><code>ojas-capi/src/lib.rs</code>, <code>engine.rs</code>, <code>tests.rs</code>; <code>go/ffi.go</code>, <code>api.go</code>, <code>governor_test.go</code>, <code>model_test.go</code></td></tr>
+<tr><td>C19</td><td>R7 adopted at the user&#39;s request. <code>MetalMemory</code> carries <code>has_unified_memory</code> from tessl&#39;s <code>DeviceMemoryInfo</code> (one lock read, not two), and <code>architecture()</code> reports <code>Unified</code> or <code>Discrete</code> from the device itself instead of <code>Unknown</code>. The plan therefore puts Metal inside the shared host budget on the device&#39;s own word, even where the host profile is <code>Unknown</code>. A unit test covers both flags against all three host answers; the live Metal test asserts this machine reports unified memory and that the plan shares the budget.</td><td><code>ojas-metal/src/memory.rs</code>, <code>device.rs</code>, <code>backend.rs</code> tests</td></tr>
+</tbody></table></div>
+<h2 id="decisions-1">Decisions <a class="anchor" href="#decisions-1" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Nothing raises a budget, ceiling or thread count by default.</strong> The prior ruling stands: every change here refuses earlier or tightens, and the one adaptive sizing (<code>DEVICE_CPU_AUTO</code>) is a new value a caller must choose.
+</li>
+<li><strong>Admission under Critical pressure is on by default.</strong> It only refuses, and only work that would allocate, while the kernel is already killing to stay up. A refused call leaves the session and trainer exactly as they were. On Linux, pressure is <code>Unknown</code> (PSI is not read), so this is macOS-only today. Fable confirmed keeping it on: with <code>E_PRESSURE</code> distinct (C18), a refused caller can back off and retry the same call.
+</li>
+<li><strong>Resolved (C18, on Fable&#39;s advice, at the user&#39;s request): <code>E_PRESSURE</code> is its own kind.</strong> The pressure refusal first reused <code>E_CAPACITY</code>, which gave that kind two contracts: &#34;this will not fit; stop&#34; and &#34;the machine is short right now; wait&#34;. <code>errors.Is(err, ErrCapacity)</code> could not tell them apart, so a Go loop that treats <code>ErrCapacity</code> as fatal would have aborted a run that could have resumed. <code>E_BUSY</code> was not reused either: it is per-model and retries at once, while pressure is machine-wide and wants a back-off. This is a public API addition. An older Go package against a newer engine receives the pressure refusal as a plain error with no sentinel; it never misreads it as <code>ErrCapacity</code>.- <strong>Prepaid session mode: deferred to the user (Fable concurred).</strong> The narrow case it would close: two sessions sharing the ceiling, where the other session takes room between this session&#39;s last <code>check_room</code> after clip and <code>apply</code>. A refusal inside <code>apply</code> poisons that trainer. Earlier refusals (open, the pre-compute check, forward, backward, clip, the pre-apply check) never poison. Closing the window means reserving room up front, which changes which loads succeed.
+</li>
+<li><strong>Non-finite weights are not refused at load.</strong> An earlier draft scanned every loaded value. It was reverted because the engine&#39;s own tests load NaN weights on purpose to drive the Metal and wgpu deferred-fault paths through TRAIN_STEP, SAMPLE and SAVE. Without the scan, the first op that reads a NaN still refuses it (every backend checks its inputs), at a cost of at most one forward pass.
+</li>
+<li><strong>Batch rows are not bounded by <code>cfg.batch</code>.</strong> <code>step_tokens</code> documents that rows may differ. The measured-peak check covers a larger step instead: it is refused before compute when an earlier, smaller step&#39;s peak no longer fits.
+</li>
+<li><strong>Preflight is a check at one moment, not a reservation.</strong> Sessions draw from one process ceiling and may together oversubscribe it, so another session can take the room between <code>check_room</code> and the work. Within one session there is no such race. A prepaid session mode (each session reserving its cap from the ceiling at LOAD) would close it, but that changes which loads succeed. It is a decision for the user and is not made here.
+</li>
+</ul>
+<h2 id="verification-1">Verification <a class="anchor" href="#verification-1" aria-label="Link to this section">#</a></h2>
+<p>All runs were on this machine under the Lappi lead&#39;s lock, at <code>-j 2</code> and <code>--test-threads=2</code>, with load 4–7.</p>
+<ul>
+<li><strong>Gate A</strong> (about 21:19–21:27 local): clippy <code>-D warnings</code>, all targets, on core, cpu, model, capi, metal and wgpu: clean. <code>ojas-core</code> lib 94 passed. <code>ojas-cpu --test budget_scratch</code> 2 passed (<code>reported_optimizer_scratch_is_the_measured_peak_and_the_exact_room</code>: reported equals the measured peak; one byte short is refused with both targets unchanged; exact room runs; across 1/4 threads, Exact/Fast and 7 shapes). <code>ojas-model</code> lib 15, checkpoint 20, forward 15 and trainer 14 passed (counts read from the log&#39;s <code>Running</code> lines; they match each file&#39;s <code>#[test]</code> count). <code>ojas-capi</code> lib 73 passed. Metal <code>reported_optimizer_scratch_is_the_measured_peak</code> and wgpu <code>reported_optimizer_scratch_bounds_the_measured_peak</code> (offset-0 gradient = reported − b, offset view = reported, tall and wide): passed. Two first runs failed on this lane&#39;s own bugs; both were fixed before the passing run. The wgpu closed form had missed the new-parameter plane and the norm partials, and the wgpu AdamW fixture had used a negative second moment.
+</li>
+<li><strong>Mutation check of P1:</strong> with the pre-apply <code>check_room</code> removed, <code>optimizer_scratch_taken_after_the_gradients_refuses_before_any_update</code> fails (&#34;state changed after CapacityExceeded&#34;: AdamW had updated <code>tok_emb</code>). Restored, it passes. The capacity sweep (<code>a_capacity_sweep_refuses_up_front_and_never_poisons</code>, 41 caps) passes both with and without that line: for the tiny model the activations always exceed the optimizer scratch. It is a regression guard (refusals at open, refusals at a step, and full runs all occur; nothing poisons), not proof of P1.
+</li>
+<li><strong>Gate B</strong> (about 21:33–21:34): clippy <code>-D warnings</code> on device, cpu, capi and model, plus <code>ojas-device</code> for Linux x86_64 and Windows (check only): clean. <code>ojas-device</code> 72 passed (was 62). <code>ojas-cpu</code> <code>starting_workers_early_is_idempotent_and_changes_no_bits</code> passed. <code>ojas-capi</code> lib 76 passed: the ceiling-vs-machine test, <code>preflight</code>, admission at every pressure level, <code>DEVICE_CPU_AUTO</code> and <code>auto_threads</code>. <code>ojas-gusset-engine</code> built into <code>target-adaptive</code>. <code>go vet</code> clean. <code>go test -a -p 1</code>: ok in 19.6 s; the largest process in the <code>go</code> tree was 553 MiB (that is likely the linker, so not comparable with the 212 MiB test-binary baseline).
+</li>
+<li><strong>Formatting:</strong> every changed file was rustfmt-clean at HEAD (checked through stdin, which follows no <code>mod</code> children). This lane&#39;s hunks were then formatted file by file through stdin. <code>gofmt -l go/</code>: clean. The closing gate (Gate C, below) is the build after that pass.
+</li>
+<li><strong>Gate C</strong> (about 21:46–21:47 local, hold &#34;ojasadapt3&#34;):
+<ul>
+<li><strong>Build stage:</strong> clippy <code>-D warnings</code>, all targets, on the seven crates: clean. <code>ojas-model</code> forward 15 and trainer 14 passed, the same counts as Gate A. <code>ojas-capi</code> lib 76 passed. <code>ojas-gusset-engine</code> built. <code>go vet</code> clean. <code>go test -a -p 1</code>: ok in 18.8 s, peak RSS 553 MiB, including the <code>DeviceCPUAuto</code> train-step block.
+</li>
+<li><strong>Linux stage:</strong> a static musl build in the local Podman VM (<code>--pull=never</code>). L1, the <code>ojas-device</code> suite with no limits, <strong>failed 65/66</strong>: <code>many_threads_share_two_buffers</code> (D7). L2, in a 1 GiB / 2-CPU container, passed 66. L3 profile, in a 1 GiB / 1.5-CPU container: <code>cgroup_limit_bytes</code> 1,073,741,824 and <code>cpu_quota_millis</code> 1500. The thread ceiling was <strong>1</strong>, where the script expected 2 (D8).
+</li>
+</ul>
+</li>
+<li><strong>Gate D</strong> (about 21:50, the same hold, after C17): <code>bandwidth.rs</code> was formatted through stdin (only these hunks moved), and clippy on <code>ojas-device</code> was clean. macOS: <code>ojas-device</code> 72 passed. The race loop ran 30 rounds alone and 30 rounds of the whole <code>bandwidth::</code> module at <code>--test-threads=2</code>, with 0 failures in each; before the fix that loop failed 1 in 10. Linux: L1 passed 66/66 three times in a row, and L2 passed 66. L3, at a 1.5-CPU quota, gave ceiling 1 (matching std). L4, at a 2.5-CPU quota, gave ceiling 2. <code>podman machine stop</code> ran. After Gate D only a comment on <code>heap_growth</code> changed.
+</li>
+<li><strong>Gate E</strong> (about 22:10–22:11, hold &#34;ojasadapt4&#34;, after C18): <code>tests.rs</code> was formatted through stdin (it was clean at HEAD, so only these hunks moved), and <code>gofmt -l</code> was clean. clippy <code>-D warnings</code>, all targets, on all seven crates was clean on the final tree, which closes the Gate D caveat. <code>ojas-capi</code> lib passed 77, including <code>every_error_kind_has_a_distinct_prefix_that_go_decodes</code>, the flipped <code>critical_pressure_refuses_allocating_calls_and_keeps_save_and_free</code>, and <code>a_user_path_never_selects_an_error_kind</code> with the new <code>E_PRESSURE</code> path. <strong>Mutation check:</strong> with the <code>E_PRESSURE</code> row removed from <code>go/ffi.go</code>, the guard failed (&#34;go/ffi.go does not decode \&#34;ojas:E_PRESSURE: \&#34;&#34;); the file was then restored and compared. The engine built, and <code>go vet</code> was clean. <code>go test -a -p 1</code>: ok in 19.4 s, 555 MiB peak; <code>TestInBandKindsTable</code>, <code>TestInBandErrorPrefixes</code>, <code>TestAUserPathNeverSelectsAnErrorKind</code> and <code>TestInBandKindsMustLeadTheEngineMessage</code> passed.
+</li>
+<li><strong>Gate F</strong> (about 22:36, hold &#34;ojasadapt5&#34;, after C19), built against tessl HEAD <code>cf65d9d</code> plus 30 uncommitted files (working-tree diff sha256 <code>be52cad41bacfb0b…</code>; <code>has_unified_memory</code> at <code>src/runtime.rs</code> 87 and 713). <code>memory.rs</code> was formatted through stdin; it was clean at HEAD. clippy <code>-D warnings</code>, all targets, on ojas-metal, both with tessl and as the <code>--no-default-features</code> stub: clean. The <code>memory</code> filter passed 4: <code>the_device_flag_decides_whether_metal_shares_the_host_budget</code>, and the live <code>memory_probe_tracks_residency_and_plans_one_shared_budget</code>, which asserts this M-series GPU reports unified memory and that the plan shares the budget. The full ojas-metal lib suite passed 56, and <code>--test training_step</code> passed 2. Not separately mutation-checked: before C19 the new unit test could not compile, because the field did not exist. Under the old <code>Unknown</code> answer, with a host profile of <code>Unknown</code>, its <code>shares == unified</code> assertion would fail. That is inferred, not run.
+</li>
+</ul>
+<h2 id="gaps">Gaps <a class="anchor" href="#gaps" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>DevMap failed mid-session.</strong> At session start it was healthy (generation 3895, fresh). Later, <code>devmap_status</code> and <code>devmap_affected_tests</code> both returned &#34;database disk image is malformed&#34;. It was not repaired from this lane (the store is shared), and the remaining caller checks used <code>rg -uu</code>. The four audit subagents had no DevMap tools at all.
+</li>
+<li><strong>No fuzzing or fork-heavy stress.</strong> The machine lock forbids them after two kernel panics on 2026-10-02. Stress here means deterministic sweeps and fault injection (budget squeeze, one byte short, a capacity sweep over 41 caps); <code>FuzzDecodeProfile</code> was not run this round.
+</li>
+<li><strong>Linux coverage is partial.</strong> On a real kernel (Gates C and D), the <code>ojas-device</code> suite and the profile ran under a memory limit and fractional CPU quotas. The RSS floor (unreadable <code>memory.current</code>) and <code>memory.high</code> ran against <code>/proc</code> and <code>/sys</code> fixtures only, because Podman&#39;s <code>--memory</code> sets <code>memory.max</code> and leaves <code>memory.current</code> readable. The Rust suites other than <code>ojas-device</code>, and the Go tests, ran on macOS only.
+</li>
+<li><strong>The C17 lock covers only the bandwidth tests.</strong> Other tests in the <code>ojas-device</code> lib binary still allocate while a heap test runs. The largest fixtures (<code>host.rs</code> 724 and 738, <code>topology.rs</code> 739) are about 120 KiB and 64 KiB, and at <code>--test-threads=2</code> at most one runs beside a heap test. That fits inside the 1 MiB slack, so four clean full-suite runs on Linux and one on macOS stand as evidence. A future fixture over 1 MiB would bring the flake back.
+</li>
+<li><strong>L3 and L4 cannot separate the two quota paths.</strong> In the container std already rounds the quota down, so the plan&#39;s own cut is a no-op there. The probe-only path, where std cannot see cgroupfs, is covered by <code>a_known_cpu_quota_caps_the_thread_ceiling</code> alone.
+</li>
+<li><strong>Disk space at Save is not checked.</strong> std has no portable free-space call, and the atomic directory swap still keeps the previous checkpoint whole. Linux PSI is not read.
+</li>
+<li><strong>Metal physical bytes</strong> remain as stated in round 1: the budget charges logical bytes, and tessl rounds buffers up.
+</li>
+<li>Under <code>Resident</code> (the model tests&#39; device double) <code>optimizer_scratch_bytes</code> is <code>None</code>, so the pre-apply check does not cover that double.
+</li>
+<li><strong>ojas does not build against committed tessl, and that predates C19.</strong> ojas builds tessl from the sibling checkout (<code>path = &#34;../../tessl&#34;</code>). ojas HEAD already calls <code>Runtime::is_poisoned</code> (<code>ojas-metal/src/gpu.rs</code>, <code>ojas-qwen35/src/step.rs</code>) and <code>Runtime::current_allocated_bytes</code> (<code>ojas-metal/src/device.rs</code>, <code>ojas-qwen35/src/state.rs</code>), and neither exists at tessl HEAD <code>cf65d9d</code>. Both live only in tessl&#39;s uncommitted <code>src/runtime.rs</code>, about 340 lines from another session. C19 adds a third such symbol, <code>DeviceMemoryInfo::has_unified_memory</code>. Each was checked with <code>git show HEAD:src/runtime.rs</code> against the working tree. A reset or stash in tessl breaks the ojas Metal and qwen35 builds. The fix is to commit tessl&#39;s <code>runtime.rs</code> (the user&#39;s call), then pin a tessl revision in ojas.
+</li>
+<li><strong>Only the <code>Unified</code> branch runs on a real device here.</strong> tessl is Apple-silicon-only, so <code>Discrete</code> is covered only by the unit test&#39;s constructed readings.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/adaptive-resources.md" rel="noopener"><code>docs/adaptive-resources.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <span></span>
+        <a href="architecture.html" rel="next" class="next"><span>Next</span>ojas Architecture &amp; System Design</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#audit-findings">Audit findings</a></li>
+<li><a href="#changes">Changes</a></li>
+<li><a href="#decisions">Decisions</a></li>
+<li><a href="#verification">Verification</a></li>
+<li class="sub"><a href="#gate-1-1025-lock-held">Gate 1 (10:25, lock held)</a></li>
+<li class="sub"><a href="#gate-2-10411100-lock-held">Gate 2 (10:41–11:00, lock held)</a></li>
+<li class="sub"><a href="#gate-3-1104-lock-held">Gate 3 (11:04, lock held)</a></li>
+<li class="sub"><a href="#devmap">DevMap</a></li>
+<li class="sub"><a href="#what-ojas-sees-on-this-machine">What ojas sees on this machine</a></li>
+<li><a href="#review-round-fable">Review round (Fable)</a></li>
+<li class="sub"><a href="#review-round-2-fable">Review round 2 (Fable)</a></li>
+<li class="sub"><a href="#gate-5-1241-after-review-round-2-lock-held">Gate 5 (12:41, after review round 2, lock held)</a></li>
+<li class="sub"><a href="#gate-4-1211-after-the-review-fixes-lock-held">Gate 4 (12:11, after the review fixes, lock held)</a></li>
+<li class="sub"><a href="#review-round-3-fable-the-open-decisions">Review round 3 (Fable): the open decisions</a></li>
+<li class="sub"><a href="#gate-6-about-18211825-utc-after-review-round-3-lock-held">Gate 6 (about 18:21–18:25 UTC, after review round 3, lock held)</a></li>
+<li class="sub"><a href="#linux-run-about-1822-utc-podman-vm-lock-held">Linux run (about 18:22 UTC, Podman VM, lock held)</a></li>
+<li><a href="#unverified">Unverified</a></li>
+<li><a href="#limitations">Limitations</a></li>
+<li><a href="#size">Size</a></li>
+<li><a href="#audit-findings-1">Audit findings</a></li>
+<li><a href="#changes-1">Changes</a></li>
+<li><a href="#decisions-1">Decisions</a></li>
+<li><a href="#verification-1">Verification</a></li>
+<li><a href="#gaps">Gaps</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

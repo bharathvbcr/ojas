@@ -70,8 +70,8 @@ flowchart TD
         Res2 --> CE["Chunked Cross-Entropy (Mean over valid tokens)"]
         CE --> Clip["Gradient Clipping (CLIP_GRAD_NORM_EPS = 1e-6)"]
         Clip --> OptSplit{"Parameter Rank"}
-        OptSplit -->|Rank >= 2 (2D Weights)| Muon["Muon NS5 Optimizer (bf16 Newton-Schulz)"]
-        OptSplit -->|Rank < 2 (1D / Embeds)| AdamW["AdamW (decay first, eps = 1e-8 outside sqrt)"]
+        OptSplit -->|"Rank >= 2 (2D Weights)"| Muon["Muon NS5 Optimizer (bf16 Newton-Schulz)"]
+        OptSplit -->|"Rank < 2 (1D / Embeds)"| AdamW["AdamW (decay first, eps = 1e-8 outside sqrt)"]
     end
 
     LayerFlow --> BackwardOptim

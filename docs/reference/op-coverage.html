@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Op Coverage — nanolab Default GPT · ojas reference</title>
+  <meta name="description" content="The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d_{\text{model}} = 768$, 12 attention heads, head dimension $d_{\text{head}} = 64$, vocabulary size 50,304, causal atten…">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/op-coverage.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/op-coverage.html">
+  <meta property="og:title" content="Op Coverage — nanolab Default GPT · ojas reference">
+  <meta property="og:description" content="The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d_{\text{model}} = 768$, 12 attention heads, head dimension $d_{\text{head}} = 64$, vocabulary size 50,304, causal atten…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html" class="current" aria-current="page">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="op-coverage--nanolab-default-gpt">Op Coverage — nanolab Default GPT <a class="anchor" href="#op-coverage--nanolab-default-gpt" aria-label="Link to this section">#</a></h1>
+<p>The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d_{\text{model}} = 768$, 12 attention heads, head dimension $d_{\text{head}} = 64$, vocabulary size 50,304, causal attention with per-head output gating and value residual connection, SwiGLU MLP, tied embedding weights, and a dual <code>muon_ns5_adamw</code> optimizer.</p>
+<p><strong>Verified</strong> at <code>nanolab/config.py</code> (<code>n_layer=12</code>, <code>d_model=768</code>, <code>n_head=12</code>, <code>head_dim=64</code>, <code>vocab_size=50304</code>, <code>optimizer=&#34;muon_ns5_adamw&#34;</code>, <code>gated_attention=True</code>, <code>value_residual=True</code>).</p>
+<hr>
+<h2 id="transformer-block-execution-flow">Transformer Block Execution Flow <a class="anchor" href="#transformer-block-execution-flow" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph TransformerBlock[&#34;nanolab GPT Layer Execution&#34;]
+        X[&#34;Input Activations x [B, T, D]&#34;] --&gt; Norm1[&#34;Pre-RMSNorm (eps = 1e-6)&#34;]
+        
+        subgraph AttentionMixer[&#34;Attention Mixer&#34;]
+            Norm1 --&gt; QProj[&#34;Linear Q: [B, T, D] -&gt; [B, T, H, d]&#34;]
+            Norm1 --&gt; KProj[&#34;Linear K: [B, T, D] -&gt; [B, T, H, d]&#34;]
+            Norm1 --&gt; VProj[&#34;Linear V: [B, T, D] -&gt; [B, T, H, d]&#34;]
+            
+            QProj --&gt; NormQ[&#34;RMS Q-Norm&#34;]
+            KProj --&gt; NormK[&#34;RMS K-Norm&#34;]
+            
+            NormQ --&gt; RoPEQ[&#34;Half-Split RoPE (Q)&#34;]
+            NormK --&gt; RoPEK[&#34;Half-Split RoPE (K)&#34;]
+            
+            VProj --&gt; VR[&#34;Value Residual Blend\nv = (1 - s) v + s v0, s = sigmoid(vr_lambda)\n(layer 0 publishes v0)&#34;]
+            
+            RoPEQ --&gt; SDPA[&#34;Causal Scaled Dot-Product Attn\nscale = 1/sqrt(d_head) = 1/8&#34;]
+            RoPEK --&gt; SDPA
+            VR --&gt; SDPA
+            
+            Norm1 --&gt; Gate[&#34;Linear Gate: [B, T, D] -&gt; [B, T, H] + Bias\nGate = sigmoid(x W_g + b_g)&#34;]
+            
+            SDPA --&gt; GatedAttn[&#34;Per-Head Gated Attention\nAttn = SDPA * Gate&#34;]
+            Gate --&gt; GatedAttn
+            
+            GatedAttn --&gt; OutProj[&#34;Linear Output Projection: [B, T, D]&#34;]
+        end
+        
+        OutProj --&gt; Res1[&#34;Residual Add (+)&#34;]
+        X --&gt; Res1
+        
+        subgraph MLPMixer[&#34;SwiGLU MLP Mixer&#34;]
+            Res1 --&gt; Norm2[&#34;RMSNorm (eps = 1e-6)&#34;]
+            Norm2 --&gt; GateUp[&#34;Linear Gate &amp; Up Projections&#34;]
+            GateUp --&gt; Swish[&#34;SwiGLU: silu(x W_gate) * (x W_up)&#34;]
+            Swish --&gt; Down[&#34;Linear Down Projection&#34;]
+        end
+        
+        Down --&gt; Res2[&#34;Residual Add (+)&#34;]
+        Res1 --&gt; Res2
+        
+        Res2 --&gt; NextX[&#34;Next Layer Activations [B, T, D]&#34;]
+    end</pre></figure>
+<hr>
+<h2 id="dual-optimizer-partitioning">Dual Optimizer Partitioning <a class="anchor" href="#dual-optimizer-partitioning" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph ModelWeights[&#34;Model Parameters&#34;]
+        HiddenMat[&#34;Hidden 2D Weight Matrices (Rank &gt;= 2)\n- Q, K, V Projections\n- Attention Out Projection\n- SwiGLU Gate, Up, Down Projections\n- Attention Gate Weight&#34;]
+        OneD[&#34;1D Parameters &amp; Embeddings (Rank &lt; 2)\n- Token / LM Head Embedding\n- RMSNorm Scale Weights\n- Attention Gate Biases\n- Value Residual Lambdas (vr_lambda)&#34;]
+    end
+
+    subgraph Optimizers[&#34;Dual Optimizers&#34;]
+        Muon[&#34;Muon NS5 Optimizer\n- LR = 0.025, Momentum = 0.99, Nesterov = True\n- 5th-order Newton-Schulz iterate (nanolab: bf16; ojas: f32)\n- Zeropower orthogonalization&#34;]
+        AdamW[&#34;AdamW Optimizer\n- PyTorch single-tensor order (decay first)\n- eps = 1e-8 outside sqrt: sqrt(v)/sqrt(bc2) + eps\n- Weight decay = 0.0 on Muon hybrid&#34;]
+    end
+
+    HiddenMat --&gt; Muon
+    OneD --&gt; AdamW</pre></figure>
+<aside class="alert alert-note"><p class="alert-title">Note</p><ul>
+<li><strong>Muon NS5:</strong> nanolab runs the quintic Newton-Schulz iteration in <code>bf16</code> (<code>X = G.bfloat16()</code>). ojas runs it in <code>f32</code> on CPU, Metal and wgpu, so ojas and nanolab Muon updates differ by bf16 rounding. There is no bf16 Newton-Schulz kernel in ojas.
+</li>
+<li><strong>Value residual:</strong> nanolab blends <code>v</code> with layer 0&#39;s <code>v0</code> <em>before</em> attention: <code>v = (1 - s) * v + s * v0</code>, <code>s = sigmoid(vr_lambda)</code> (<code>nanolab/mixers.py</code>). It is not applied to the attention output.
+</li>
+<li><strong>AdamW:</strong> Follows PyTorch single-tensor order (weight decay applied before gradient update; bias correction computed; $\varepsilon = 10^{-8}$ added <strong>outside</strong> the square root).
+</li>
+</ul>
+</aside>
+<hr>
+<h2 id="op-implementation-matrix">Op Implementation Matrix <a class="anchor" href="#op-implementation-matrix" aria-label="Link to this section">#</a></h2>
+<p>Dtypes follow <a href="dtype-policy.html"><code>docs/dtype-policy.md</code></a>.</p>
+<p>Each row is an op of the <code>Backend</code> trait (<code>ojas-core/src/backend.rs</code>). The Metal column names what <code>MetalBackend</code> (<code>ojas-metal/src/device.rs</code>) runs, and <code>ojas_*</code> kernels live in <code>ojas-metal/kernels/ojas_backend.metal</code>. wgpu kernels live in <code>ojas-kernels/src/wgsl/</code>. Read from source 2026-10-01; each backend&#39;s parity suite against the CPU passed in the run recorded in <code>docs/status.md</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Operation</th><th>CPU (<code>ojas-cpu</code>)</th><th>Metal (<code>ojas-metal</code>)</th><th>wgpu (<code>ojas-wgpu</code>)</th><th>DType</th><th>Specification</th></tr></thead>
+<tbody>
+<tr><td><strong>Embedding</strong></td><td>Table lookup / scatter-add</td><td><code>ojas_embed_*</code></td><td>WGSL</td><td><code>f32</code>, ids <code>u32</code></td><td>$y_t = W[x_t]$</td></tr>
+<tr><td><strong>Linear</strong></td><td>Packed GEMM (Exact) or SIMD/Accelerate (Fast)</td><td>tessl GEMM, <code>ExactF32</code> operands</td><td>WGSL GEMM</td><td><code>f32</code></td><td>$y = x W^T$, no bias</td></tr>
+<tr><td><strong>RMSNorm</strong></td><td>Exact reduction</td><td><code>ojas_rms_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$y = x / \sqrt{\overline{x^2} + 10^{-6}} \odot w$</td></tr>
+<tr><td><strong>Half-split RoPE</strong></td><td>Split last axis</td><td><code>ojas_rope</code></td><td>WGSL</td><td><code>f32</code></td><td>Rotate halves $(-x_2, x_1)$; layout <code>[B, T, H, D]</code></td></tr>
+<tr><td><strong>RMS QK-Norm</strong></td><td>Head-wise RMSNorm</td><td><code>ojas_rms_*</code> per head</td><td>WGSL</td><td><code>f32</code></td><td>Applied to Q and K before RoPE (nanolab order)</td></tr>
+<tr><td><strong>Permute</strong></td><td>Byte moves</td><td><code>ojas_permute</code></td><td>WGSL <code>layout</code></td><td><code>f32</code></td><td><code>torch.permute(x, dims).contiguous()</code>; rank ≤ 8</td></tr>
+<tr><td><strong>Causal SDPA</strong></td><td>Exact softmax; blocked above 256 positions in Fast</td><td>Tiled TensorOps forward and FlashAttention-2 backward, D ≤ 128</td><td>WGSL, D ≤ 128</td><td><code>f32</code></td><td>$\mathrm{softmax}(QK^T/\sqrt{d} + M)V$; layout <code>[B, H, T, D]</code>; MHA, $T_q = T_k$</td></tr>
+<tr><td><strong>Per-Head Gate</strong></td><td>Sigmoid broadcast</td><td><code>ojas_per_head_gate_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$\sigma(x W_g^T + b_g) \odot \text{attn}$</td></tr>
+<tr><td><strong>Value Residual</strong></td><td>Linear blend</td><td><code>ojas_vres_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$(1 - s) v + s v_0$, $s = \sigma(\lambda)$, on <code>v</code> before attention</td></tr>
+<tr><td><strong>SiLU, Mul</strong> (SwiGLU)</td><td>Pointwise</td><td><code>ojas_silu_*</code>, <code>ojas_mul_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$\mathrm{silu}(x W_{gate}) \odot (x W_{up})$</td></tr>
+<tr><td><strong>Residual Add</strong></td><td>Pointwise</td><td>tessl <code>residual_add</code></td><td>WGSL</td><td><code>f32</code></td><td>$x + f(x)$</td></tr>
+<tr><td><strong>Cross-Entropy</strong></td><td>Mean over valid targets</td><td><code>ojas_ce_rows</code>, <code>ojas_ce_mean</code></td><td>WGSL</td><td><code>f32</code></td><td>Mean NLL; <code>ignore_index</code>; all-ignored is <code>NonFinite</code>. Full <code>rows × vocab</code> logits and gradient are materialized</td></tr>
+<tr><td><strong>Linear Cross-Entropy</strong></td><td>Tiled online softmax, stream loss/grad</td><td>Tiled stream</td><td>WGSL <code>loss.wgsl</code></td><td><code>f32</code></td><td>Fused linear projection + CE loss; tiles rows/vocab without materializing full logits (<code>LinearCeChunk</code>)</td></tr>
+<tr><td><strong>Grad Clip</strong></td><td>Global norm, f64 sum of squares</td><td><code>ojas_reduce_*</code>, <code>ojas_scale</code></td><td>WGSL</td><td><code>f32</code></td><td>Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$</td></tr>
+<tr><td><strong>Accumulate Grad</strong></td><td>In-place add (finite check)</td><td>In-place / buffer</td><td>WGSL <code>accumulate</code></td><td><code>f32</code></td><td>Accumulate step gradients into parameter gradient buffers</td></tr>
+<tr><td><strong>KV Cache Write</strong></td><td>Slice copy at timestep</td><td>Slice copy</td><td>WGSL <code>kv_cache</code></td><td><code>f32</code></td><td>Write key/value token slices into time-major decode KV cache</td></tr>
+<tr><td><strong>AdamW</strong></td><td>Single-tensor torch order</td><td>tessl <code>qwen35_adamw</code></td><td>WGSL</td><td><code>f32</code></td><td>Decay first; f64 bias correction; $\varepsilon$ outside sqrt</td></tr>
+<tr><td><strong>Muon NS5</strong></td><td>5-step Newton-Schulz</td><td>Newton-Schulz on tessl GEMM</td><td>WGSL GEMM</td><td><code>f32</code> (nanolab: bf16)</td><td>$aX + b(XX^T)X + c(XX^T)^2X$</td></tr>
+</tbody></table></div>
+<aside class="alert alert-warning"><p class="alert-title">Warning</p><p><code>MetalBackend</code> and <code>WgpuBackend</code> attention refuse $d_{\text{head}} &gt; 128$ with <code>OjasError::UnsupportedHeadDim</code> (<code>METAL_MAX_HEAD_DIM</code>, and <code>ojas-kernels/src/geometry.rs</code> for wgpu). The tiny Metal training step in <code>ojas-metal/src/gpu.rs</code> runs tessl <code>flash_attn_rows</code> and refuses above 64. Nothing is truncated.</p>
+</aside>
+<hr>
+<h2 id="memory-footprint-at-default-micro-batch">Memory Footprint at Default Micro-batch <a class="anchor" href="#memory-footprint-at-default-micro-batch" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart LR
+    Tokens[&#34;16,384 Tokens\nBatch=16, Seq=1024&#34;] --&gt; Logits[&#34;3x Logit Tensors [16384, 50304]\n~9.89 GB (f32)&#34;]
+    Logits --&gt; Chunking[&#34;Chunked Cross-Entropy\nTile Size = 16 Rows&#34;]
+    Chunking --&gt; BoundedMem[&#34;Memory Fits Within Budget\nZero Clamping&#34;]</pre></figure>
+<ul>
+<li><strong>Micro-batch Shape:</strong> Batch size 16, sequence length 1024 = 16,384 tokens.
+</li>
+<li><strong>Unchunked Logits:</strong> Three $16384 \times 50304$ <code>f32</code> tensors require $3 \times 16384 \times 50304 \times 4 \approx 9.89\text{ GB}$.
+</li>
+<li><strong>Status (Updated 2026-10-04):</strong> Chunked / fused linear cross-entropy is implemented via <code>Backend::linear_cross_entropy_mean</code> (closing finding F9 in <a href="pytorch-parity-plan.html"><code>pytorch-parity-plan.md</code></a>). By chunking over rows and vocabulary tiles (default <code>LinearCeChunk { rows: 16, cols: 4096 }</code>) and calculating an online streaming softmax, peak memory drops from ~9.89 GB to under 50 MB for the logit chunk while accumulating parameter gradients directly. The unchunked fallback <code>cross_entropy_mean_forward/backward</code> remains available for small vocabulary / testing scenarios. The <code>Budget</code> refuses an allocation that does not fit (<code>CapacityExceeded</code>); it does not clamp.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/op-coverage.md" rel="noopener"><code>docs/op-coverage.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="framework-design.html" rel="prev"><span>Previous</span>Framework layer design (approved; items 1–13 landed)</a>
+        <a href="shape-contract.html" rel="next" class="next"><span>Next</span>Shape contract: ojas_core::shapes</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#transformer-block-execution-flow">Transformer Block Execution Flow</a></li>
+<li><a href="#dual-optimizer-partitioning">Dual Optimizer Partitioning</a></li>
+<li><a href="#op-implementation-matrix">Op Implementation Matrix</a></li>
+<li><a href="#memory-footprint-at-default-micro-batch">Memory Footprint at Default Micro-batch</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>
