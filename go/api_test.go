@@ -901,6 +901,14 @@ func TestCPUParallelThreadCountIsBounded(t *testing.T) {
 	if _, err := LoadModel(context.Background(), "model.safetensors", LoadOptions{Device: DeviceCPUParallel}); err == nil || !strings.Contains(err.Error(), "thread count is 0") {
 		t.Fatalf("zero threads: %v", err)
 	}
+	// DeviceCPUAuto sizes its own pool; Threads is not read, so 0 loads.
+	auto := trainedModel(t, LoadOptions{Device: DeviceCPUAuto})
+	if _, err := TrainStep(context.Background(), auto); err != nil {
+		t.Fatalf("auto step: %v", err)
+	}
+	if err := Free(context.Background(), auto); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := LoadModel(context.Background(), "model.safetensors", LoadOptions{Device: DeviceMetal, Numerics: NumericsExact}); err == nil || !strings.Contains(err.Error(), "fixed by") {
 		t.Fatalf("numerics on Metal: %v", err)
 	}

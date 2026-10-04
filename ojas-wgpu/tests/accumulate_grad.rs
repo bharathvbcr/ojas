@@ -198,3 +198,65 @@ fn refusals_are_synchronous_and_leave_acc_unchanged() {
     g.sync().unwrap();
     assert_eq!(bits(&g, &acc), before);
 }
+
+// The optimizer's reported scratch (`optimizer_scratch_bytes`) against the
+// budget's measured peak; it lives here because it shares this file's
+// own-backend setup and adds no test binary.
+
+/// A gradient at byte offset 0 is bound in place, so a step charges the
+/// reported figure less the one gradient copy `bind` makes for an offset
+/// view; a gradient view at an offset charges the reported figure exactly.
+/// The figure is therefore never below what a step takes.
+#[test]
+fn reported_optimizer_scratch_bounds_the_measured_peak() {
+    use ojas_core::{AdamWConfig, MuonNs5Config, OptimizerKind};
+    for (rows, cols) in [(1, 1), (3, 5), (64, 17), (17, 64), (96, 96)] {
+        let g = fresh();
+        let copy = (rows * cols * 4) as u64;
+        let what = format!("[{rows}, {cols}]");
+        for (kind, offset) in [
+            (OptimizerKind::MuonNs5, false),
+            (OptimizerKind::MuonNs5, true),
+            (OptimizerKind::AdamW, false),
+            (OptimizerKind::AdamW, true),
+        ] {
+            let reported = g
+                .optimizer_scratch_bytes(kind, rows, cols)
+                .unwrap()
+                .unwrap();
+            let mut p = g.upload(&host(1, &[rows, cols])).unwrap();
+            let mut m1 = g.upload(&host(3, &[rows, cols])).unwrap();
+            // AdamW's second moment is a running mean of squares: >= 0.
+            let zeros = Tensor::zeros(&[rows, cols], ojas_core::DType::F32, host_budget()).unwrap();
+            let mut m2 = g.upload(&zeros).unwrap();
+            // An offset gradient is rows 1.. of a taller tensor.
+            let tall = g.upload(&host(2, &[rows + 1, cols])).unwrap();
+            let grad = if offset {
+                tall.narrow(cols * 4, &[rows, cols], &[cols, 1]).unwrap()
+            } else {
+                g.upload(&host(2, &[rows, cols])).unwrap()
+            };
+            let live = g.budget().live_bytes().unwrap();
+            g.budget().reset_peak();
+            match kind {
+                OptimizerKind::MuonNs5 => g
+                    .muon_ns5_step(&mut p, &grad, &mut m1, MuonNs5Config::nanolab_default())
+                    .unwrap(),
+                OptimizerKind::AdamW => g
+                    .adamw_step(
+                        &mut p,
+                        &grad,
+                        &mut m1,
+                        &mut m2,
+                        0,
+                        AdamWConfig::nanolab(1e-3, 0.0),
+                    )
+                    .unwrap(),
+            }
+            g.sync().unwrap();
+            let took = g.budget().peak_bytes() - live;
+            let expect = if offset { reported } else { reported - copy };
+            assert_eq!(took, expect, "{what} {kind:?} offset {offset}");
+        }
+    }
+}

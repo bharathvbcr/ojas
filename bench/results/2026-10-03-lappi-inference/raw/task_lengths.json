@@ -1,0 +1,65 @@
+{
+ "clinc:intent.classification/kind1": {
+  "max": 219,
+  "min": 187,
+  "n": 1500,
+  "p50": 200,
+  "p90": 207
+ },
+ "clinc:intent.domain/kind1": {
+  "max": 179,
+  "min": 160,
+  "n": 1500,
+  "p50": 167,
+  "p90": 171
+ },
+ "clinc:intent.in_scope/kind1": {
+  "max": 143,
+  "min": 124,
+  "n": 1500,
+  "p50": 131,
+  "p90": 135
+ },
+ "clinc:intent.within_domain/kind1": {
+  "max": 211,
+  "min": 187,
+  "n": 1499,
+  "p50": 196,
+  "p90": 203
+ },
+ "csqa:commonsense.multiple_choice/kind1": {
+  "max": 200,
+  "min": 138,
+  "n": 1197,
+  "p50": 151,
+  "p90": 161
+ },
+ "mmlu:knowledge.multiple_choice/kind1": {
+  "max": 857,
+  "min": 130,
+  "n": 1485,
+  "p50": 184,
+  "p90": 331
+ },
+ "qdm:code.defect_class/kind1": {
+  "max": 1021,
+  "min": 169,
+  "n": 2304,
+  "p50": 409,
+  "p90": 770
+ },
+ "qdm:code.defect_class/kind3": {
+  "max": 1005,
+  "min": 153,
+  "n": 2099,
+  "p50": 400,
+  "p90": 763
+ },
+ "squad:qa.answer_span/kind3": {
+  "max": 672,
+  "min": 150,
+  "n": 5139,
+  "p50": 276,
+  "p90": 376
+ }
+}

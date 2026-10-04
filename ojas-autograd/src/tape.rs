@@ -45,6 +45,9 @@ enum Rec {
         w: usize,
         b: usize,
         attn: usize,
+        /// Per-head sigmoid kept by a Fast forward. Exact stores nothing and
+        /// recomputes the logits.
+        scales: Option<Tensor>,
     },
     Vres {
         v: usize,
@@ -254,13 +257,22 @@ impl<B: Backend> Tape<B> {
         let w = self.index(w, "Tape::per_head_gate")?;
         let b = self.index(b, "Tape::per_head_gate")?;
         let attn = self.index(attn, "Tape::per_head_gate")?;
-        let y = self.backend.per_head_sigmoid_gate_forward(
+        let (y, scales) = self.backend.per_head_sigmoid_gate_forward_saving(
             &self.values[x],
             &self.values[w],
             &self.values[b],
             &self.values[attn],
         )?;
-        Ok(self.push(y, Rec::Gate { x, w, b, attn }))
+        Ok(self.push(
+            y,
+            Rec::Gate {
+                x,
+                w,
+                b,
+                attn,
+                scales,
+            },
+        ))
     }
 
     pub fn value_residual(&mut self, v: Var, v0: Var, lambda: Var) -> Result<Var, OjasError> {
@@ -525,14 +537,24 @@ impl<B: Backend> Tape<B> {
                 self.acc(k, gk)?;
                 self.acc(v, gv)
             }
-            Rec::Gate { x, w, b, attn } => {
+            Rec::Gate {
+                x,
+                w,
+                b,
+                attn,
+                scales,
+            } => {
                 let xv = self.values[x].clone();
                 let wv = self.values[w].clone();
                 let bv = self.values[b].clone();
                 let av = self.values[attn].clone();
-                let g = self
-                    .backend
-                    .per_head_sigmoid_gate_backward(&xv, &wv, &bv, &av, grad)?;
+                let g = if let Some(scales) = scales {
+                    self.backend
+                        .per_head_sigmoid_gate_backward_saved(&xv, &wv, &bv, &av, grad, &scales)?
+                } else {
+                    self.backend
+                        .per_head_sigmoid_gate_backward(&xv, &wv, &bv, &av, grad)?
+                };
                 self.acc(x, g.input)?;
                 self.acc(w, g.weight)?;
                 self.acc(b, g.bias)?;

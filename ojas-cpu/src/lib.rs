@@ -11,11 +11,16 @@
 //! Small ops stay on the calling thread. [`ojas_core::Numerics::Fast`] (the
 //! default) uses `mul_add`, larger GEMM blocks, blocked attention above 256
 //! positions, the vector exponential of `exp.rs` with fixed lane sums for
-//! SiLU and cross-entropy, and fixed-block `f64` partial sums for the clip
+//! SiLU backward and cross-entropy, Accelerate `vvexpf` for macOS Fast SiLU
+//! forward and the per-head gate sigmoid (`e^{-|x|}`, then the same sigmoid
+//! pair), and fixed-block `f64` partial sums for the clip
 //! norm; its bits do not depend on the thread count, except that on
 //! macOS a Fast GEMM of at least [`FAST_WHOLE_CALL_MACS`] multiply-adds
 //! (2¹³ there, 2²¹ elsewhere) is one Accelerate call whose order Apple does
-//! not specify. Under [`ojas_core::Numerics::Exact`]
+//! not specify. A one-row linear backward does not send the weight gradient
+//! through that call: the product is an outer product of two contiguous
+//! vectors, written as one `mul_add` from `+0.0` per element, because
+//! Accelerate's `sgemm` spent the call in `memset`. Under [`ojas_core::Numerics::Exact`]
 //! (opt in with [`CpuBackend::with_numerics`]) every output reduces from
 //! index 0 with no `mul_add`, and the bits do not depend on the thread count.
 //! Off macOS those GEMMs use `ojas_simd::sgemm_tile`, which keeps the

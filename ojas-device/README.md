@@ -70,9 +70,9 @@ flowchart LR
 
 The plan never widens the caller's request:
 
-- `budget_bytes` is the caller's budget cut by total RAM, available RAM, the cgroup limit, and the cgroup room.
+- `budget_bytes` is the caller's budget cut by total RAM, available RAM, the cgroup limit, and the cgroup room. Under `MemoryPressure::Critical`, `budget_bytes` is cut to `0` (critical pressure admits no new allocations).
 - On unified memory a GPU's allocations come out of the same RAM as the CPU's. Such a device's `device_room` is at most `budget_bytes`, and `shared_budget` is set: charge the CPU backend and that GPU backend to **one** `Budget`, not one each.
-- Thread counts are advice. `thread_ceiling` is the usable CPU count (capped at `CPU_THREAD_CEILING`), `fast_threads` the fastest cluster's count, and `memory_bound_threads` is unknown until a bandwidth measurement is supplied.
+- Thread counts are advice. `thread_ceiling` is the usable CPU count capped at `CPU_THREAD_CEILING` and cut to the cgroup CPU quota (rounded down to whole CPUs, at least 1). `fast_threads` is the fastest cluster's count, and `memory_bound_threads` is unknown until a bandwidth measurement is supplied.
 - `GemmBlocks::derive(&plan.cache, mr, nr, elem_bytes)` sizes `kc` from the smallest L1, `mc` from the smallest L2 share, and `nc` from the L3 (simplified from Low et al., 2016). `nc` is `None` when no L3 is reported, as on Apple silicon: the L2 already holds the A blocks, so it is not used for the B panel. `nc` assumes one B panel shared by the cores on the L3; a kernel whose threads each pack their own must divide it by those threads. It is a recommendation; no kernel switches to it without an explicit constructor and a benchmark.
 
 ---

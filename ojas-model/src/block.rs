@@ -15,7 +15,7 @@
 //! 5. Per-head gate (it reads `h`, not `x`), `o_proj`, residual.
 //! 6. `norm2`, SwiGLU `down(silu(gate(h2)) * up(h2))`, residual.
 
-use ojas_core::{Backend, Budget, CeChunk, OjasError, Tensor};
+use ojas_core::{Backend, Budget, CeChunk, DType, OjasError, Tensor};
 
 use crate::graph::Graph;
 use crate::names::{BlockParams, ModelParams};
@@ -65,23 +65,30 @@ impl Rope {
                 op: "Rope::rows",
                 detail: "last position overflows".to_string(),
             })?;
-        let mut cos = vec![0.0f32; n];
-        let mut sin = vec![0.0f32; n];
-        for row in 0..len {
-            let pos = (start + row) as f64;
-            for i in 0..half {
-                let inv = spec.rope_base.powf(-((2 * i) as f64) / dim as f64);
-                let (s, c) = (pos * inv).sin_cos();
-                let at = row * dim;
-                cos[at + i] = c as f32;
-                cos[at + half + i] = c as f32;
-                sin[at + i] = s as f32;
-                sin[at + half + i] = s as f32;
+        // Both tables are charged before they are allocated and filled in
+        // place: no uncharged staging copy.
+        let mut cos_t = Tensor::zeros(&[len, dim], DType::F32, budget)?;
+        let mut sin_t = Tensor::zeros(&[len, dim], DType::F32, budget)?;
+        {
+            let cos = cos_t.f32_slice_mut()?;
+            let sin = sin_t.f32_slice_mut()?;
+            debug_assert_eq!(cos.len(), n);
+            for row in 0..len {
+                let pos = (start + row) as f64;
+                for i in 0..half {
+                    let inv = spec.rope_base.powf(-((2 * i) as f64) / dim as f64);
+                    let (s, c) = (pos * inv).sin_cos();
+                    let at = row * dim;
+                    cos[at + i] = c as f32;
+                    cos[at + half + i] = c as f32;
+                    sin[at + i] = s as f32;
+                    sin[at + half + i] = s as f32;
+                }
             }
         }
         Ok(Self {
-            cos: Tensor::from_f32(&cos, &[len, dim], budget)?,
-            sin: Tensor::from_f32(&sin, &[len, dim], budget)?,
+            cos: cos_t,
+            sin: sin_t,
             start,
             len,
         })

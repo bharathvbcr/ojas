@@ -57,6 +57,12 @@ pub(crate) enum ErrorKind {
     /// step ([`ojas_core::OjasError::Poisoned`]), or a call panicked while
     /// holding the model. Resume from a checkpoint.
     Poisoned,
+    /// The kernel reports critical memory pressure, so a call that would
+    /// allocate was refused before it started (`engine::admit`). Transient
+    /// and machine-wide: nothing changed, Save and Free still run, and the
+    /// same call can succeed once pressure eases. Unlike `Capacity`, it says
+    /// nothing about whether the work fits.
+    Pressure,
 }
 
 impl ErrorKind {
@@ -67,6 +73,7 @@ impl ErrorKind {
             ErrorKind::NonFinite => "ojas:E_NONFINITE: ",
             ErrorKind::Busy => "ojas:E_BUSY: ",
             ErrorKind::Poisoned => "ojas:E_POISONED: ",
+            ErrorKind::Pressure => "ojas:E_PRESSURE: ",
         }
     }
 }

@@ -55,6 +55,9 @@ pub trait MemoryProbe {
 /// The numbers a caller can act on. Thread counts are advice, not spawn caps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourcePlan {
+    /// The caller budget cut by every known host and cgroup limit, and 0
+    /// under [`MemoryPressure::Critical`]. `u64::MAX` only when the caller
+    /// asked for that and no limit was known: it is then no bound at all.
     pub budget_bytes: u64,
     /// Usable CPUs, capped at [`CPU_THREAD_CEILING`]: the thread count for
     /// compute-bound work.
@@ -115,7 +118,14 @@ impl ResourcePlan {
         {
             budget = budget.min(limit.saturating_sub(current));
         }
-        let thread_ceiling = thread_ceiling(host.cpu_count);
+        // At critical pressure the kernel is already reclaiming and killing
+        // to stay up; a run admitted now would be among the next killed.
+        // Nothing is admitted. Warning is reported, not acted on: it is
+        // routine on a busy machine and has no figure to cut to.
+        if profile.pressure == MemoryPressure::Critical {
+            budget = 0;
+        }
+        let thread_ceiling = thread_ceiling(host.cpu_count, profile.cpu.cpu_quota_millis);
         let mut device_memory = Vec::with_capacity(policy.devices.len());
         let mut device_room = Vec::with_capacity(policy.devices.len());
         let mut device_shares_host = Vec::with_capacity(policy.devices.len());
@@ -197,11 +207,22 @@ fn tighten(budget: u64, report: MemoryReport) -> u64 {
     }
 }
 
-fn thread_ceiling(cpu_count: MemoryReport) -> MemoryReport {
-    match cpu_count {
-        MemoryReport::Unknown => MemoryReport::Unknown,
-        MemoryReport::Known(n) => MemoryReport::Known(n.min(u64::from(CPU_THREAD_CEILING))),
+/// The usable CPU count, cut to the cgroup CPU quota (whole CPUs, rounded
+/// down, at least one) and to [`CPU_THREAD_CEILING`]. std's
+/// `available_parallelism` already reads the quota where it can, and rounds
+/// down: a 1.5-CPU container reported 1 in the Linux run. This cut holds
+/// when std could not read the quota (a sandbox that hides cgroupfs from std
+/// but not from the probe), and rounds the same way so both paths agree;
+/// rounding up would also let a pool outrun its quota and be throttled.
+fn thread_ceiling(cpu_count: MemoryReport, quota_millis: MemoryReport) -> MemoryReport {
+    let MemoryReport::Known(n) = cpu_count else {
+        return MemoryReport::Unknown;
+    };
+    let mut n = n.min(u64::from(CPU_THREAD_CEILING));
+    if let MemoryReport::Known(quota) = quota_millis {
+        n = n.min((quota / 1000).max(1));
     }
+    MemoryReport::Known(n)
 }
 
 /// The fastest cluster's logical count when the machine has more than one
@@ -690,5 +711,96 @@ mod tests {
         assert_eq!(plan.budget_bytes, 80);
         assert_eq!(plan.thread_ceiling, MemoryReport::Known(4));
         assert_eq!(plan.cgroup_limit_bytes, MemoryReport::Known(100));
+    }
+
+    /// Critical pressure admits nothing: the budget is 0 and every shared
+    /// device room with it; Warning, Normal and Unknown leave the plan as
+    /// the limits make it. Before, pressure was copied into the plan and
+    /// read by nothing.
+    #[test]
+    fn critical_pressure_admits_nothing_and_milder_levels_change_nothing() {
+        let memory = host(
+            MemoryReport::Known(64 << 30),
+            MemoryReport::Known(40 << 30),
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+            MemoryReport::Known(18),
+        );
+        let gpu = [Gpu {
+            kind: Device::Metal,
+            memory: MemoryReport::Known(48 << 30),
+            resident: MemoryReport::Known(0),
+            arch: MemoryArchitecture::Unified,
+        }];
+        let mut policy = ResourcePolicy::new(8 << 30);
+        policy.devices = vec![Device::Cpu, Device::Metal];
+        for (pressure, budget) in [
+            (MemoryPressure::Normal, 8 << 30),
+            (MemoryPressure::Warning, 8 << 30),
+            (MemoryPressure::Unknown, 8 << 30),
+            (MemoryPressure::Critical, 0),
+        ] {
+            let mut profile = SystemProfile::from_memory(memory);
+            profile.pressure = pressure;
+            let plan = ResourcePlan::derive(&policy, &profile, &gpu);
+            assert_eq!(plan.budget_bytes, budget, "{pressure:?}");
+            assert_eq!(plan.pressure, pressure);
+            for room in &plan.device_room {
+                assert!(
+                    matches!(room, MemoryReport::Known(r) if *r <= budget),
+                    "{pressure:?}: {room:?}"
+                );
+            }
+        }
+    }
+
+    /// A known cgroup CPU quota caps the thread ceiling (rounded down to
+    /// whole CPUs, as std does, at least one) even when the CPU count did
+    /// not include it.
+    #[test]
+    fn a_known_cpu_quota_caps_the_thread_ceiling() {
+        let memory = host(
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+            MemoryReport::Known(64),
+        );
+        for (quota, ceiling) in [
+            (MemoryReport::Unknown, 64),
+            (MemoryReport::Known(1500), 1),
+            (MemoryReport::Known(1999), 1),
+            (MemoryReport::Known(2000), 2),
+            (MemoryReport::Known(2001), 2),
+            (MemoryReport::Known(2999), 2),
+            (MemoryReport::Known(1), 1),
+            (MemoryReport::Known(0), 1),
+            (MemoryReport::Known(1_000_000), 64),
+            (MemoryReport::Known(u64::MAX), 64),
+        ] {
+            let mut profile = SystemProfile::from_memory(memory);
+            profile.cpu.cpu_quota_millis = quota;
+            let plan = ResourcePlan::derive(&ResourcePolicy::new(1), &profile, &[] as &[Stub]);
+            assert_eq!(
+                plan.thread_ceiling,
+                MemoryReport::Known(ceiling),
+                "{quota:?}"
+            );
+            assert!(
+                matches!(plan.fast_threads, MemoryReport::Known(f) if f <= ceiling),
+                "{quota:?}"
+            );
+        }
+        let unknown_count = host(
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+            MemoryReport::Unknown,
+        );
+        let mut profile = SystemProfile::from_memory(unknown_count);
+        profile.cpu.cpu_quota_millis = MemoryReport::Known(2000);
+        let plan = ResourcePlan::derive(&ResourcePolicy::new(1), &profile, &[] as &[Stub]);
+        assert_eq!(plan.thread_ceiling, MemoryReport::Unknown);
     }
 }

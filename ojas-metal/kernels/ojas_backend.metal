@@ -1234,8 +1234,9 @@ kernel void ojas_permute(
 // FlashAttention-2, forward and backward, on the TensorOps matrix units,
 // after tessl's `qwen35_attn_tiled.metal` and `qwen35_attn_bwd.metal` (head
 // dim 256, [B, T, H, D]), here for ojas's [B, H, T, D] planes and head dims
-// up to DM. Nothing T x T is stored: each threadgroup rebuilds 32 x 32
-// blocks of the scores in threadgroup memory.
+// up to DM. Nothing T x T is stored. The backward rebuilds 32 by 32 score
+// blocks. The forward rebuilds 32 by 64: a wider key tile, so its softmax
+// and output rescale run half as often per query row.
 //
 //   S   = scale * Q Kᵀ               (query t sees keys 0..=t)
 //   O   = softmax(S) V, online over key blocks                  ojas_attn_fwd
@@ -1258,13 +1259,22 @@ using namespace mpp::tensor_ops;
 
 #define ATT_BQ 32
 #define ATT_BK 32
+// Forward only. A 64-wide key tile halves how often the softmax and the
+// output rescale run. The backward stays at 32: the wider tile was slower
+// there on the bench shape.
+#define ATT_FWD_BK 64
 #define ATT_NSG 4
 #define ATT_THREADS (ATT_NSG * 32)
+// Four consecutive threads share a query row and own ATT_CPR (backward)
+// or ATT_FWD_CPR (forward) scores each.
+#define ATT_TPR 4
+#define ATT_CPR (ATT_BK / ATT_TPR)
+#define ATT_FWD_CPR (ATT_FWD_BK / ATT_TPR)
 
 /// Per query row: lse and Dr by an online pass over the key blocks. Four
-/// threads share a row, eight columns each; the row's running max, sum and
-/// Dr numerator are reduced across them with shuffles (lanes 4r..4r+3 of one
-/// simdgroup). A live score that is not finite sets ST_OUT.
+/// threads share a row, `ATT_CPR` columns each; the row's running max, sum
+/// and Dr numerator are reduced across them with shuffles (lanes 4r..4r+3
+/// of one simdgroup). A live score that is not finite sets ST_OUT.
 template <int DM>
 inline void attn_bwd_stats_body(
     device float *Q, device float *K, device float *V, device float *dO,
@@ -1292,8 +1302,8 @@ inline void attn_bwd_stats_body(
     auto tS = tensor(S, dextents<int, 2>{ATT_BK, ATT_BQ}, array<int, 2>{1, ATT_BK});
     auto tdP = tensor(dP, dextents<int, 2>{ATT_BK, ATT_BQ}, array<int, 2>{1, ATT_BK});
 
-    const uint r = tid / 4u;
-    const uint c0 = (tid % 4u) * 8u;
+    const uint r = tid / (uint)ATT_TPR;
+    const uint c0 = (tid % (uint)ATT_TPR) * (uint)ATT_CPR;
     const bool row_live = r < nq;
     const uint qi = q0 + r;
     float m = -INFINITY;
@@ -1314,9 +1324,9 @@ inline void attn_bwd_stats_body(
         pT.store(tdP);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        float s[8];
+        float s[ATT_CPR];
         float bmax = -INFINITY;
-        for (uint c = 0; c < 8u; ++c) {
+        for (uint c = 0; c < (uint)ATT_CPR; ++c) {
             const uint j = kb + c0 + c;
             const bool live = row_live && j <= qi;
             const float v = S[r * ATT_BK + c0 + c] * scale;
@@ -1331,7 +1341,7 @@ inline void attn_bwd_stats_body(
         float pl = 0.0f;
         float pd = 0.0f;
         if (m_new != -INFINITY) {
-            for (uint c = 0; c < 8u; ++c) {
+            for (uint c = 0; c < (uint)ATT_CPR; ++c) {
                 if (s[c] != -INFINITY) {
                     const float p = precise::exp(s[c] - m_new);
                     pl += p;
@@ -1352,7 +1362,7 @@ inline void attn_bwd_stats_body(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     if (bad) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
-    if (row_live && (tid % 4u) == 0u) {
+    if (row_live && (tid % (uint)ATT_TPR) == 0u) {
         const ulong row = (ulong)bh * T + qi;
         lse[row] = m + precise::log(l);
         dvec[row] = precise::divide(dacc, l);
@@ -1516,7 +1526,7 @@ inline void attn_bwd_dkv_body(
 
 /// Forward for query rows [q0, q0 + BQ), after tessl's
 /// `qwen35_attn_tiled.metal`: S = Q Kᵀ per key block into threadgroup
-/// memory, a per-row online softmax there (four threads per row, eight
+/// memory, a per-row online softmax there (four threads per row, `ATT_CPR`
 /// columns each), P overwrites S, and O = O · diag(alpha) + P V accumulates
 /// in a cooperative tensor. Key blocks past the last query are not visited.
 /// A live score that is not finite sets ST_OUT and counts as masked.
@@ -1535,9 +1545,9 @@ inline void attn_fwd_tiled_body(
     const uint t_end = q0 + nq;
 
     constexpr auto qk_desc = matmul2d_descriptor(
-        ATT_BQ, ATT_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
+        ATT_BQ, ATT_FWD_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
     constexpr auto pv_desc = matmul2d_descriptor(
-        ATT_BQ, DM, ATT_BK, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
+        ATT_BQ, DM, ATT_FWD_BK, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
     matmul2d<qk_desc, execution_simdgroups<ATT_NSG>> qk_op;
     matmul2d<pv_desc, execution_simdgroups<ATT_NSG>> pv_op;
 
@@ -1545,7 +1555,7 @@ inline void attn_fwd_tiled_body(
     auto mK = tensor(K + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
     auto mV = tensor(V + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
     auto tQ = mQ.slice(0, (int)q0);
-    auto tP = tensor(S, dextents<int, 2>{ATT_BK, ATT_BQ}, array<int, 2>{1, ATT_BK});
+    auto tP = tensor(S, dextents<int, 2>{ATT_FWD_BK, ATT_BQ}, array<int, 2>{1, ATT_FWD_BK});
 
     auto oT = pv_op.template get_destination_cooperative_tensor<
         decltype(tP), decltype(mV.slice(0, 0)), float>();
@@ -1558,13 +1568,13 @@ inline void attn_fwd_tiled_body(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    const uint r = tid / 4u;
-    const uint c0 = (tid % 4u) * 8u;
+    const uint r = tid / (uint)ATT_TPR;
+    const uint c0 = (tid % (uint)ATT_TPR) * (uint)ATT_FWD_CPR;
     const bool row_live = r < nq;
     const uint qi = q0 + r;
     bool bad = false;
 
-    for (uint kb = 0; kb < t_end; kb += (uint)ATT_BK) {
+    for (uint kb = 0; kb < t_end; kb += (uint)ATT_FWD_BK) {
         auto tK = mK.slice(0, (int)kb);
         auto sT = qk_op.template get_destination_cooperative_tensor<
             decltype(tQ), decltype(tK), float>();
@@ -1572,11 +1582,11 @@ inline void attn_fwd_tiled_body(
         sT.store(tP);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        float s[8];
+        float s[ATT_FWD_CPR];
         float mx = -INFINITY;
-        for (uint c = 0; c < 8u; ++c) {
+        for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
             const bool live = row_live && kb + c0 + c <= qi;
-            const float v = S[r * ATT_BK + c0 + c] * scale;
+            const float v = S[r * ATT_FWD_BK + c0 + c] * scale;
             const bool ok = live && isfinite(v);
             bad = bad || (live && !ok);
             s[c] = ok ? v : -INFINITY;
@@ -1590,15 +1600,15 @@ inline void attn_fwd_tiled_body(
         // exactly 0, not exp(-inf - -inf).
         const float alpha = (m_old == -INFINITY) ? 0.0f : precise::exp(m_old - m_new);
         float sum = 0.0f;
-        for (uint c = 0; c < 8u; ++c) {
+        for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
             const float p = (s[c] == -INFINITY) ? 0.0f : precise::exp(s[c] - m_new);
-            S[r * ATT_BK + c0 + c] = p;
+            S[r * ATT_FWD_BK + c0 + c] = p;
             sum += p;
         }
         sum += simd_shuffle_xor(sum, 1);
         sum += simd_shuffle_xor(sum, 2);
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        if ((tid % 4u) == 0u) {
+        if ((tid % (uint)ATT_TPR) == 0u) {
             l_row[r] = l_row[r] * alpha + sum;
             m_row[r] = m_new;
             a_row[r] = alpha;
@@ -1643,7 +1653,7 @@ kernel void ojas_attn_fwd_d##DM(                                        \
     uint2 tgpig [[threadgroup_position_in_grid]],                             \
     uint tid [[thread_index_in_threadgroup]])                                 \
 {                                                                             \
-    threadgroup float S[ATT_BQ * ATT_BK];                                     \
+    threadgroup float S[ATT_BQ * ATT_FWD_BK];                                 \
     threadgroup float m_row[ATT_BQ];                                          \
     threadgroup float l_row[ATT_BQ];                                          \
     threadgroup float a_row[ATT_BQ];                                          \

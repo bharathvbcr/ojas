@@ -1,0 +1,54 @@
+| Task | Point | Tokens | tessl prefill base / Lappi | PyTorch MPS base / Lappi | PyTorch ÷ tessl | tessl decision base / Lappi (prefix tok) | same, this morning |
+|---|---|---|---|---|---|---|---|
+| CLINC intent (16-way) | p50 | 200 | 44.0 / 43.9 | 100.2 / 98.4 | 2.26× | 99 / 100 (193) | 217 / 216 |
+| CLINC intent (16-way) | p90 | 207 (tessl 200) | 44.0 / 43.9 | 98.1 / 100.1 | 2.26× | 99 / 100 (193) | 217 / 216 |
+| CLINC domain (10-way) | p50 | 167 | 41.3 / 41.6 | 94.5 / 87.4 | 2.19× | 96 / 98 (165) | 210 / 209 |
+| CLINC domain (10-way) | p90 | 171 (tessl 167) | 41.3 / 41.6 | 90.6 / 91.4 | 2.20× | 96 / 98 (165) | 210 / 209 |
+| CLINC in-scope (2-way) | p50 | 131 | 39.6 / 39.9 | 133.1 / 125.7 | 3.25× | 83 / 83 (115) | 190 / 189 |
+| CLINC in-scope (2-way) | p90 | 135 (tessl 131) | 39.6 / 39.9 | 148.5 / 151.5 | 3.77× | 83 / 83 (115) | 190 / 189 |
+| CLINC within-domain (15-way) | p50 | 196 (tessl 200) | 44.0 / 43.9 | 98.3 / 98.5 | 2.24× | 99 / 100 (193) | 217 / 216 |
+| CLINC within-domain (15-way) | p90 | 203 (tessl 200) | 44.0 / 43.9 | 97.2 / 97.9 | 2.22× | 99 / 100 (193) | 217 / 216 |
+| CSQA (5-way) | p50 | 151 | 40.1 / 40.0 | 137.3 / 134.6 | 3.39× | 97 / 94 (150) | 207 / 207 |
+| CSQA (5-way) | p90 | 161 (tessl 167) | 41.3 / 41.6 | 95.2 / 98.5 | 2.34× | 96 / 98 (165) | 210 / 209 |
+| MMLU (4-way) | p50 | 184 | 42.7 / 42.0 | 112.4 / 111.9 | 2.65× | 97 / 97 (165) | 211 / 210 |
+| MMLU (4-way) | p90 | 331 | 64.4 / 64.1 | 139.2 / 140.0 | 2.17× | 122 / 123 (310) | 249 / 250 |
+| Code defect class (4-way) | p50 | 409 | 83.7 / 83.0 | 177.1 / 179.1 | 2.14× | 146 / 153 (399) | 279 / 281 |
+| Code defect class (4-way) | p90 | 770 | 150.9 / 145.7 | 302.3 / 306.8 | 2.05× | 217 / 218 (762) | 377 / 377 |
+| Code defect span | p50 | 400 (tessl 409) | 83.7 / 83.0 | 151.2 / 150.9 | 1.81× | 146 / 153 (399) | 279 / 281 |
+| Code defect span | p90 | 763 (tessl 770) | 150.9 / 145.7 | 262.8 / 263.1 | 1.77× | 217 / 218 (762) | 377 / 377 |
+| SQuAD answer span | p50 | 276 | 60.3 / 60.0 | 111.4 / 111.5 | 1.85× | 117 / 118 (271) | 244 / 241 |
+| SQuAD answer span | p90 | 376 (tessl 409) | 83.7 / 83.0 | 140.5 / 140.9 | 1.69× | 146 / 153 (399) | 279 / 281 |
+| Long context (needle-size) | T=2048 | 2048 | 361.7 / 369.2 | 744.8 / 756.0 | 2.05× | 497 / 507 (2033) | 763 / 773 |
+| Long context (needle-size) | T=8192 | 8192 | 2180.3 / 2235.0 | 3589.3 / 3605.7 | 1.63× | 2602 / 2583 (8185) | 3276 / 3293 |
+
+tessl decision by T label (min ms; median prefill / decode / digest, Lappi run 2):
+  T=  131 prefix   115: base     82.8  lappi     82.5  ratio 0.996  | 28.2 / 49.9 / 6.1  | this morning base 190 lappi 189  -> 2.30x faster
+  T=  151 prefix   150: base     97.0  lappi     94.4  ratio 0.973  | 41.7 / 49.7 / 6.2  | this morning base 207 lappi 207  -> 2.19x faster
+  T=  167 prefix   165: base     95.6  lappi     97.7  ratio 1.022  | 42.2 / 49.5 / 6.2  | this morning base 210 lappi 209  -> 2.14x faster
+  T=  184 prefix   165: base     96.8  lappi     97.1  ratio 1.003  | 42.7 / 49.5 / 6.2  | this morning base 211 lappi 210  -> 2.16x faster
+  T=  200 prefix   193: base     99.3  lappi    100.2  ratio 1.009  | 44.9 / 50.0 / 6.2  | this morning base 217 lappi 216  -> 2.15x faster
+  T=  276 prefix   271: base    116.6  lappi    117.7  ratio 1.009  | 61.9 / 50.5 / 6.8  | this morning base 244 lappi 241  -> 2.04x faster
+  T=  331 prefix   310: base    122.2  lappi    122.6  ratio 1.003  | 65.0 / 52.0 / 7.1  | this morning base 249 lappi 250  -> 2.04x faster
+  T=  409 prefix   399: base    145.9  lappi    153.3  ratio 1.051  | 93.0 / 55.7 / 7.9  | this morning base 279 lappi 281  -> 1.83x faster
+  T=  770 prefix   762: base    216.9  lappi    218.2  ratio 1.006  | 152.6 / 61.7 / 9.4  | this morning base 377 lappi 377  -> 1.73x faster
+  T= 2048 prefix  2033: base    496.9  lappi    507.2  ratio 1.021  | 421.6 / 73.7 / 17.1  | this morning base 763 lappi 773  -> 1.52x faster
+  T= 8192 prefix  8185: base   2601.6  lappi   2583.0  ratio 0.993  | 2432.5 / 137.7 / 59.1  | this morning base 3276 lappi 3293  -> 1.27x faster
+
+ABBA spread (run 1 vs run 2, min ms), prefill base / lappi, decision base / lappi:
+  T=  131: prefill 41.0|39.6  39.9|40.2   decision 82.8|104.5  82.5|86.1
+  T=  151: prefill 42.0|40.1  40.6|40.0   decision 97.0|119.1  94.4|100.5
+  T=  167: prefill 42.1|41.3  41.8|41.6   decision 95.6|123.6  97.7|103.2
+  T=  184: prefill 42.9|42.7  42.9|42.0   decision 96.8|124.1  97.1|105.2
+  T=  200: prefill 45.0|44.0  44.4|43.9   decision 99.3|129.0  100.2|124.2
+  T=  276: prefill 60.7|60.3  60.7|60.0   decision 116.6|149.5  117.7|151.7
+  T=  331: prefill 65.0|64.4  65.1|64.1   decision 122.2|152.8  122.6|157.1
+  T=  409: prefill 83.7|85.5  84.1|83.0   decision 145.9|180.4  153.3|163.8
+  T=  770: prefill 150.9|155.3  149.7|145.7   decision 216.9|291.8  218.2|222.8
+  T= 2048: prefill 361.7|407.1  383.1|369.2   decision 496.9|522.5  507.2|532.8
+  T= 8192: prefill 2180.3|2364.1  2235.0|2338.3   decision 2601.6|2811.8  2583.0|2708.4
+
+Lappi ÷ base:
+  tessl prefill  {131: 1.008, 151: 0.999, 167: 1.006, 184: 0.983, 200: 0.997, 276: 0.995, 331: 0.995, 409: 0.991, 770: 0.965, 2048: 1.021, 8192: 1.025}
+  tessl decision {131: 0.996, 151: 0.973, 167: 1.022, 184: 1.003, 200: 1.009, 276: 1.009, 331: 1.003, 409: 1.051, 770: 1.006, 2048: 1.021, 8192: 0.993}
+  torch          [0.982, 1.02, 0.924, 1.009, 0.944, 1.02, 1.001, 1.008, 0.981, 1.035, 0.996, 1.006, 1.011, 1.015, 0.998, 1.001, 1.001, 1.003, 1.015, 1.005]
+argmax letter agreement base vs Lappi (not accuracy): 9/20

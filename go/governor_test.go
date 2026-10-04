@@ -12,6 +12,45 @@ import (
 	"github.com/bharathvbcr/gusset"
 )
 
+// kindSentinels is every in-band sentinel, from the one table the decoder
+// reads.
+func kindSentinels() []error {
+	out := make([]error, 0, len(inBandKinds))
+	for _, k := range inBandKinds {
+		out = append(out, k.sentinel)
+	}
+	return out
+}
+
+// The table matches ojas-capi's ErrorKind::prefix list (a Rust test checks
+// each Rust prefix appears in ffi.go), every sentinel is distinct, and no
+// prefix is a prefix of another, so the decoder's order cannot matter.
+func TestInBandKindsTable(t *testing.T) {
+	want := []string{
+		"ojas:E_CAPACITY:", "ojas:E_DEVICE_LOST:", "ojas:E_BUSY:",
+		"ojas:E_NONFINITE:", "ojas:E_POISONED:", "ojas:E_PRESSURE:",
+	}
+	if len(inBandKinds) != len(want) {
+		t.Fatalf("%d kinds, want %d", len(inBandKinds), len(want))
+	}
+	for i, k := range inBandKinds {
+		if k.prefix != want[i] {
+			t.Fatalf("kind %d is %q, want %q", i, k.prefix, want[i])
+		}
+		for j, o := range inBandKinds {
+			if i == j {
+				continue
+			}
+			if errors.Is(k.sentinel, o.sentinel) {
+				t.Fatalf("%q and %q share a sentinel", k.prefix, o.prefix)
+			}
+			if strings.HasPrefix(k.prefix, o.prefix) {
+				t.Fatalf("%q starts with %q", k.prefix, o.prefix)
+			}
+		}
+	}
+}
+
 func TestInBandErrorPrefixes(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -23,6 +62,8 @@ func TestInBandErrorPrefixes(t *testing.T) {
 		{&gusset.Error{Code: 1, Msg: "ojas:E_DEVICE_LOST: gpu reset"}, "gusset error [1]: ojas:E_DEVICE_LOST: gpu reset", ErrDeviceLost},
 		{errors.New("ojas:E_NONFINITE: logit"), "ojas:E_NONFINITE: logit", ErrNonFinite},
 		{errors.New("ojas:E_POISONED: train_step: poisoned"), "ojas:E_POISONED: train_step: poisoned", ErrPoisoned},
+		// Critical pressure is its own kind: transient, never ErrCapacity.
+		{&gusset.Error{Code: 1, Msg: "ojas:E_PRESSURE: memory pressure: opcode 8 refused"}, "ojas:E_PRESSURE: memory pressure: opcode 8 refused", ErrPressure},
 		// F10: a kind that does not lead the engine's message, such as one
 		// inside an echoed user path, selects nothing. This case expected
 		// ErrBusy while the match was a substring search.
@@ -30,7 +71,7 @@ func TestInBandErrorPrefixes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		err := annotateEngineError(tc.err)
-		for _, s := range []error{ErrCapacity, ErrDeviceLost, ErrBusy, ErrNonFinite, ErrPoisoned} {
+		for _, s := range kindSentinels() {
 			if errors.Is(err, s) != (s == tc.want) {
 				t.Errorf("%q: errors.Is(%v) = %v", tc.msg, s, errors.Is(err, s))
 			}

@@ -1182,6 +1182,105 @@ mod tests {
         }
     }
 
+    /// One forward row makes `grad_w` an outer product of two contiguous
+    /// vectors. A Fast product at or above the cutoff used to be a second
+    /// whole call (`cblas_sgemm` on macOS), which memsets the gradient.
+    /// It is the ascending `mul_add` from `+0.0` instead, so the backward
+    /// makes one whole call (`grad_x`) rather than two.
+    #[test]
+    fn one_row_fast_weight_gradient_is_the_fma_outer_product() {
+        let kin = 128usize;
+        let nout = FAST_WHOLE_CALL_MACS.div_ceil(kin);
+        let rows = 1usize;
+        assert!(whole_call(Numerics::Fast, nout, rows, kin));
+        assert!(whole_call(Numerics::Fast, rows, nout, kin));
+        let budget = ojas_core::Budget::new(1 << 30);
+        let dims = linear_dims(rows, kin, nout);
+        let x = random(rows * kin, 11);
+        let w = random(nout * kin, 12);
+        let g = random(rows * nout, 13);
+        let g_mat = Mat::row_major(&g, rows, nout);
+        let x_mat = Mat::row_major(&x, rows, kin);
+        let want_w = naive_fma(&g_mat.t(), &x_mat);
+        for threads in [1usize, 6] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            let exec = Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            };
+            let before = whole_calls();
+            let (mut gx, mut gw) = (vec![0.0f32; rows * kin], vec![0.0f32; nout * kin]);
+            let checked = crate::linalg::linear_backward(
+                "test",
+                &budget,
+                exec,
+                [&x, &w, &g],
+                &dims,
+                [&mut gx, &mut gw],
+            )
+            .unwrap();
+            assert!(
+                checked,
+                "threads {threads}: grad_w was not checked as it was stored"
+            );
+            let after = whole_calls();
+            let made = (after.0 - before.0, after.1 - before.1);
+            let want_calls = if cfg!(target_os = "macos") {
+                (1, 0)
+            } else {
+                (0, 1)
+            };
+            assert_eq!(
+                made, want_calls,
+                "threads {threads}: (accelerate, sgemm_tile)"
+            );
+            assert_eq!(bits(&gw), bits(&want_w), "grad_w threads {threads}");
+            assert!(gx.iter().all(|v| v.is_finite()), "grad_x threads {threads}");
+        }
+    }
+
+    /// The one-row Fast path records `grad_w` finite from the store, without
+    /// a second scan. An overflowing product is still [`OjasError::NonFinite`]
+    /// and the outputs are not kept. The same for an overflowing `grad_x`,
+    /// which is scanned after the store.
+    #[test]
+    fn one_row_nonfinite_products_are_refused_before_a_result_is_returned() {
+        use crate::backend::CpuBackend;
+        use ojas_core::{Backend, Tensor};
+        let kin = 8usize;
+        let nout = FAST_WHOLE_CALL_MACS.div_ceil(kin);
+        assert!(whole_call(Numerics::Fast, nout, 1, kin));
+        let budget = ojas_core::Budget::new(1 << 30);
+        let cpu = CpuBackend::with_threads(budget.clone(), 6).unwrap();
+        let refuse = |x: &[f32], w: &[f32], g: &[f32]| {
+            let before = budget.live_bytes().unwrap();
+            let xt = Tensor::from_f32(x, &[1, kin], &budget).unwrap();
+            let wt = Tensor::from_f32(w, &[nout, kin], &budget).unwrap();
+            let gt = Tensor::from_f32(g, &[1, nout], &budget).unwrap();
+            let err = cpu.linear_backward(&xt, &wt, &gt).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    OjasError::NonFinite {
+                        op: "linear_backward"
+                    }
+                ),
+                "{err:?}"
+            );
+            drop((xt, wt, gt));
+            assert_eq!(budget.live_bytes().unwrap(), before);
+        };
+        let mut x = vec![1.0f32; kin];
+        x[kin - 1] = 2.0;
+        let mut g = vec![0.25f32; nout];
+        g[nout - 1] = f32::MAX;
+        refuse(&x, &vec![0.5f32; nout * kin], &g);
+        let mut w = vec![1.0f32; nout * kin];
+        let last = w.len() - 1;
+        w[last] = f32::MAX;
+        refuse(&vec![1.0f32; kin], &w, &vec![2.0f32; nout]);
+    }
+
     /// A whole Fast call consults the cancel hook before it starts, so
     /// `linear_backward`'s two whole calls each see it: a hook that fails on
     /// its second call stops the backward after the first product.

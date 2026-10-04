@@ -24,6 +24,12 @@ pub const SPEC_ARCH: &str = "nanolab-gpt";
 /// Longest spec JSON accepted.
 const MAX_SPEC_BYTES: usize = 64 << 10;
 
+/// Most transformer blocks a spec may declare. `param_table` builds about
+/// 14 named rows per block before any budget is consulted, so a spec read
+/// from a file or the wire must not set the size of that table freely. 4096
+/// is far above any trained transformer (GPT-3 has 96 blocks).
+pub const MAX_LAYERS: usize = 4096;
+
 /// Shape of a nanolab GPT (nanolab `Config` names in the comments).
 ///
 /// `head_dim` is its own field, as in nanolab: `n_head * head_dim` need not
@@ -109,7 +115,8 @@ impl ModelSpec {
 
     /// Refuse a spec no executor here can run.
     ///
-    /// Every size must be non-zero, `head_dim` even (half-split RoPE),
+    /// Every size must be non-zero, `n_layer` at most [`MAX_LAYERS`],
+    /// `head_dim` even (half-split RoPE),
     /// `n_head` a multiple of `n_kv_head`, products must fit `usize`, vocab
     /// and `head_dim` must fit `u32`, `rope_base` and `rms_eps` must be
     /// positive and finite (`rms_eps` also as `f32`). An untied head is
@@ -133,6 +140,12 @@ impl ModelSpec {
                     detail: format!("{name} is 0"),
                 });
             }
+        }
+        if self.n_layer > MAX_LAYERS {
+            return Err(OjasError::OutOfRange {
+                op: OP,
+                detail: format!("n_layer {} exceeds {MAX_LAYERS}", self.n_layer),
+            });
         }
         if !self.head_dim.is_multiple_of(2) {
             return Err(OjasError::Shape {

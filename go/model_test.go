@@ -268,13 +268,14 @@ func TestACancelMidStepCommitsNothing(t *testing.T) {
 // and selects nothing.
 func TestAUserPathNeverSelectsAnErrorKind(t *testing.T) {
 	harness(t)
-	sentinels := []error{ErrCapacity, ErrDeviceLost, ErrBusy, ErrNonFinite, ErrPoisoned}
+	sentinels := kindSentinels()
 	for _, name := range []string{
 		"ojas:E_BUSY: x.safetensors",
 		"ojas:E_CAPACITY: x.safetensors",
 		"ojas:E_NONFINITE: x.safetensors",
 		"ojas:E_DEVICE_LOST: x.safetensors",
 		"ojas:E_POISONED: x.safetensors",
+		"ojas:E_PRESSURE: x.safetensors",
 	} {
 		_, err := load(name)
 		if err == nil || !strings.Contains(err.Error(), "missing file") || !strings.Contains(err.Error(), name) {
@@ -298,13 +299,15 @@ func TestInBandKindsMustLeadTheEngineMessage(t *testing.T) {
 		{"ojas:E_BUSY: model 3 is busy", ErrBusy},
 		{"ojas:E_NONFINITE: step: non-finite value", ErrNonFinite},
 		{"ojas:E_POISONED: train_step: poisoned", ErrPoisoned},
+		{"ojas:E_PRESSURE: memory pressure: opcode 1 refused", ErrPressure},
+		{"load: ojas:E_PRESSURE: inside", nil},
 		{"missing file: /root/ojas:E_BUSY: x", nil},
 		{"load: ojas:E_CAPACITY: inside", nil},
 		{" ojas:E_NONFINITE: leading space", nil},
 	}
 	for _, c := range cases {
 		err := annotateEngineError(&gusset.Error{Code: 1, Msg: c.msg})
-		for _, s := range []error{ErrCapacity, ErrDeviceLost, ErrBusy, ErrNonFinite, ErrPoisoned} {
+		for _, s := range kindSentinels() {
 			if errors.Is(err, s) != (s == c.want) {
 				t.Fatalf("%q: errors.Is(%v) = %v", c.msg, s, errors.Is(err, s))
 			}

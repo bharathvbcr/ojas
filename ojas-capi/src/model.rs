@@ -143,8 +143,13 @@ fn open_on(
             let cpu = if threads <= 1 {
                 CpuBackend::new(budget)
             } else {
-                CpuBackend::with_threads(budget, threads)
-                    .map_err(|e| crate::ojas_error("load", &e))?
+                let cpu = CpuBackend::with_threads(budget, threads)
+                    .map_err(|e| crate::ojas_error("load", &e))?;
+                // Every worker exists before the session does: a spawn
+                // failure refuses the load, not a later step.
+                cpu.start_workers()
+                    .map_err(|e| crate::ojas_error("load", &e))?;
+                cpu
             };
             Ok(Opened::Cpu(match placement.numerics {
                 Some(n) => cpu.with_numerics(n),

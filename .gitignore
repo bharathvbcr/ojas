@@ -59,6 +59,7 @@ Thumbs.db
 # Editor & IDE configurations
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 *~

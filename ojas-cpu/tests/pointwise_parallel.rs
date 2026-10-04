@@ -1097,8 +1097,143 @@ fn a_gate_logit_that_overflows_is_refused() {
     for threads in [1usize, 7] {
         for numerics in [Numerics::Exact, Numerics::Fast] {
             let cpu = backend(threads, numerics);
+            let before = cpu.budget().live_bytes().unwrap();
             assert_nonfinite(cpu.per_head_sigmoid_gate_forward(&x, &w, &b, &attn));
+            assert_eq!(cpu.budget().live_bytes().unwrap(), before);
             assert_nonfinite(cpu.per_head_sigmoid_gate_backward(&x, &w, &b, &attn, &attn));
+            assert_eq!(cpu.budget().live_bytes().unwrap(), before);
         }
     }
+}
+
+/// Fast `grad_attn` is a finite `grad_y` times a sigmoid clamped into
+/// `[0, 1]`, so it is recorded finite. An overflowing per-head dot still
+/// refuses: `grad_bias` and the GEMM gradients stay scanned, and the charge
+/// is released.
+#[test]
+fn fast_gate_backward_trusts_the_attn_product_and_still_scans_the_reduction() {
+    let cpu = backend(6, Numerics::Fast);
+    let x = t(&[0.0; 4], &[2, 2]);
+    let w = t(&[0.0; 4], &[2, 2]);
+    let b = t(&[0.0; 2], &[2]);
+    let attn = t(&[1.0; 4], &[2, 2, 1]);
+    let gy = t(&[f32::MAX, -f32::MAX, f32::MAX, -f32::MAX], &[2, 2, 1]);
+    let g = cpu
+        .per_head_sigmoid_gate_backward(&x, &w, &b, &attn, &gy)
+        .unwrap();
+    assert!(g
+        .attn_out
+        .all_finite_cached(|_| panic!("grad_attn scanned again"))
+        .unwrap());
+    let y = v(&g.attn_out);
+    assert!(
+        y.iter()
+            .zip([1.0f32, -1.0, 1.0, -1.0])
+            .all(|(got, sign)| got.is_finite() && got.signum() == sign),
+        "{y:?}"
+    );
+    drop(g);
+
+    let attn = t(&[1e20; 16], &[2, 2, 4]);
+    let gy = t(&[1e20; 16], &[2, 2, 4]);
+    let before = cpu.budget().live_bytes().unwrap();
+    assert_nonfinite(cpu.per_head_sigmoid_gate_backward(&x, &w, &b, &attn, &gy));
+    assert_eq!(cpu.budget().live_bytes().unwrap(), before);
+}
+
+/// Fast backward with the scale the forward kept matches the recompute,
+/// including a finite scale outside `[0, 1]` (clamped, not copied into the
+/// formula raw). A non-finite saved scale is refused and the charge released.
+/// Exact does not read the saved scale.
+#[test]
+fn saved_gate_scale_matches_the_recompute_and_a_non_finite_scale_releases() {
+    let fast = backend(6, Numerics::Fast);
+    let case = GateCase::new(21, 1, 32, 16, 4, 8);
+    let [x, w, b, attn, gy] = case.tensors();
+    let (y_kept, scales) = fast
+        .per_head_sigmoid_gate_forward_saving(&x, &w, &b, &attn)
+        .unwrap();
+    let y = fast
+        .per_head_sigmoid_gate_forward(&x, &w, &b, &attn)
+        .unwrap();
+    assert_eq!(
+        bits(&v(&y_kept)),
+        bits(&v(&y)),
+        "keeping the scale changed y"
+    );
+    let scales = scales.expect("fast forward keeps the per-head scale");
+    let with = fast
+        .per_head_sigmoid_gate_backward_saved(&x, &w, &b, &attn, &gy, &scales)
+        .unwrap();
+    let without = fast
+        .per_head_sigmoid_gate_backward(&x, &w, &b, &attn, &gy)
+        .unwrap();
+    for (name, a, b) in [
+        ("gx", &with.input, &without.input),
+        ("gw", &with.weight, &without.weight),
+        ("gb", &with.bias, &without.bias),
+        ("ga", &with.attn_out, &without.attn_out),
+    ] {
+        assert_eq!(bits(&v(a)), bits(&v(b)), "{name}");
+    }
+    assert!(with
+        .attn_out
+        .all_finite_cached(|_| panic!("saved-scale grad_attn was scanned"))
+        .unwrap());
+
+    let mut raw = v(&scales);
+    raw[0] = 2.0;
+    raw[1] = -0.5;
+    let mut clamped = raw.clone();
+    clamped[0] = 1.0;
+    clamped[1] = 0.0;
+    let shape = scales.shape().to_vec();
+    let outside = t(&raw, &shape);
+    let inside = t(&clamped, &shape);
+    let from_outside = fast
+        .per_head_sigmoid_gate_backward_saved(&x, &w, &b, &attn, &gy, &outside)
+        .unwrap();
+    let from_inside = fast
+        .per_head_sigmoid_gate_backward_saved(&x, &w, &b, &attn, &gy, &inside)
+        .unwrap();
+    assert_eq!(bits(&v(&from_outside.input)), bits(&v(&from_inside.input)));
+    assert_eq!(
+        bits(&v(&from_outside.attn_out)),
+        bits(&v(&from_inside.attn_out))
+    );
+
+    let n = scales.num_elements().unwrap();
+    let before = fast.budget().live_bytes().unwrap();
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let scale = t(&vec![bad; n], &shape);
+        assert_nonfinite(fast.per_head_sigmoid_gate_backward_saved(&x, &w, &b, &attn, &gy, &scale));
+        assert_eq!(fast.budget().live_bytes().unwrap(), before, "{bad}");
+    }
+    let short = t(&[0.5], &[1]);
+    let err = fast
+        .per_head_sigmoid_gate_backward_saved(&x, &w, &b, &attn, &gy, &short)
+        .unwrap_err();
+    assert!(matches!(err, OjasError::Shape { .. }), "{err:?}");
+    assert_eq!(fast.budget().live_bytes().unwrap(), before);
+
+    let exact = backend(2, Numerics::Exact);
+    let (ey, none) = exact
+        .per_head_sigmoid_gate_forward_saving(&x, &w, &b, &attn)
+        .unwrap();
+    assert!(none.is_none(), "exact forward kept a scale");
+    let ey0 = exact
+        .per_head_sigmoid_gate_forward(&x, &w, &b, &attn)
+        .unwrap();
+    assert_eq!(bits(&v(&ey)), bits(&v(&ey0)));
+    let junk = t(&vec![0.0; n], &shape);
+    let ignored = exact
+        .per_head_sigmoid_gate_backward_saved(&x, &w, &b, &attn, &gy, &junk)
+        .unwrap();
+    let recomputed = exact
+        .per_head_sigmoid_gate_backward(&x, &w, &b, &attn, &gy)
+        .unwrap();
+    assert_eq!(bits(&v(&ignored.input)), bits(&v(&recomputed.input)));
+    assert_eq!(bits(&v(&ignored.weight)), bits(&v(&recomputed.weight)));
+    assert_eq!(bits(&v(&ignored.bias)), bits(&v(&recomputed.bias)));
+    assert_eq!(bits(&v(&ignored.attn_out)), bits(&v(&recomputed.attn_out)));
 }

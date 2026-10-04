@@ -582,3 +582,122 @@ fn nonfinite_and_empty_inputs_are_refused_on_every_path() {
         }
     }
 }
+
+/// Fast Muon parameter against Exact at 1 and 6 threads, within the 1e-6
+/// relative tolerance of `fast_matches_exact_within_stated_tolerance`.
+/// Momentum is bit-equal. A NaN gradient is refused before either matrix
+/// is written. Tall shapes take the transpose inside Newton-Schulz.
+#[test]
+fn muon_fast_matches_exact_at_one_and_six_threads_and_refuses_nan() {
+    let shapes = [
+        (70usize, 40usize),
+        (40usize, 70usize),
+        (33usize, 17usize),
+        (1usize, 1usize),
+    ];
+    let cfg = MuonNs5Config::nanolab_default();
+    let exact = backend(1, Numerics::Exact);
+    for &(rows, cols) in &shapes {
+        let mut rng = SplitMix64(0x4d30 + (rows * 16 + cols) as u64);
+        let n = rows * cols;
+        let p0 = rng.vec(n, 0.1);
+        let g0 = rng.vec(n, 0.1);
+        let m0 = rng.vec(n, 0.01);
+        let run = |cpu: &CpuBackend| {
+            let mut p = f32t(cpu, &p0, &[rows, cols]);
+            let g = f32t(cpu, &g0, &[rows, cols]);
+            let mut m = f32t(cpu, &m0, &[rows, cols]);
+            cpu.muon_ns5_step(&mut p, &g, &mut m, cfg).unwrap();
+            (flat(&p), flat(&m))
+        };
+        let (want_p, want_m) = run(&exact);
+        let scale = want_p
+            .iter()
+            .fold(0.0f32, |m, v| m.max(v.abs()))
+            .max(f32::MIN_POSITIVE);
+        for threads in [1usize, 6] {
+            let (got_p, got_m) = run(&backend(threads, Numerics::Fast));
+            let err = want_p
+                .iter()
+                .zip(&got_p)
+                .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+            assert!(
+                got_p.iter().all(|v| v.is_finite()),
+                "{rows}x{cols} threads {threads}: non-finite"
+            );
+            assert!(
+                err <= 1e-6 * scale,
+                "{rows}x{cols} threads {threads}: max |fast-exact| {err:e} > 1e-6 * {scale:e}"
+            );
+            assert_eq!(
+                bits(&got_m),
+                bits(&want_m),
+                "{rows}x{cols} threads {threads}: momentum bits"
+            );
+        }
+    }
+    for threads in [1usize, 6] {
+        let cpu = backend(threads, Numerics::Fast);
+        let mut p = f32t(&cpu, &[0.2, -0.1, 0.0, 0.4, 0.1, -0.2, 0.3, 0.05], &[4, 2]);
+        let mut m = f32t(
+            &cpu,
+            &[0.01, 0.0, -0.02, 0.03, 0.0, 0.01, -0.01, 0.02],
+            &[4, 2],
+        );
+        let p_bits = bits(&flat(&p));
+        let m_bits = bits(&flat(&m));
+        let mut bad = vec![0.1f32; 8];
+        bad[3] = f32::NAN;
+        let bad = f32t(&cpu, &bad, &[4, 2]);
+        assert_nonfinite(cpu.muon_ns5_step(&mut p, &bad, &mut m, cfg));
+        assert_eq!(bits(&flat(&p)), p_bits, "threads {threads}: param written");
+        assert_eq!(
+            bits(&flat(&m)),
+            m_bits,
+            "threads {threads}: momentum written"
+        );
+    }
+}
+
+/// Nanolab Muon matrices from `bench_ops`. At 6 threads, `A @ A` and `B @ X`
+/// are six row bands. `X @ Xᵀ` is two bands when `k < 2m` (the square) and
+/// one band on the tall shapes. Every step must match the single-thread
+/// step with max abs 0.
+#[test]
+fn muon_nanolab_inputs_match_across_one_and_six_threads() {
+    fn case_seed(case: &str) -> u64 {
+        case.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+    let cfg = MuonNs5Config::nanolab_default();
+    let one = backend(1, Numerics::Fast);
+    let six = backend(6, Numerics::Fast);
+    for (case, rows, cols) in [
+        ("muon_768x768", 768usize, 768usize),
+        ("muon_2048x768", 2048, 768),
+        ("muon_3072x768", 3072, 768),
+    ] {
+        let mut rng = SplitMix64(case_seed(case));
+        let n = rows * cols;
+        let p0: Vec<f32> = (0..n).map(|_| 0.035 * rng.unit()).collect();
+        let g0: Vec<f32> = (0..n).map(|_| 0.01 * rng.unit()).collect();
+        let m0: Vec<f32> = (0..n).map(|_| 0.01 * rng.unit()).collect();
+        let run = |cpu: &CpuBackend| {
+            let mut p = f32t(cpu, &p0, &[rows, cols]);
+            let g = f32t(cpu, &g0, &[rows, cols]);
+            let mut m = f32t(cpu, &m0, &[rows, cols]);
+            cpu.muon_ns5_step(&mut p, &g, &mut m, cfg).unwrap();
+            (flat(&p), flat(&m))
+        };
+        let (p1, m1) = run(&one);
+        let (p6, m6) = run(&six);
+        let max = |a: &[f32], b: &[f32]| {
+            a.iter()
+                .zip(b)
+                .fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+        };
+        assert_eq!(max(&p1, &p6), 0.0, "{case} param");
+        assert_eq!(max(&m1, &m6), 0.0, "{case} momentum");
+    }
+}

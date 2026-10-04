@@ -131,6 +131,7 @@ func main() {
 | `ErrDeviceLost` | `ojas:E_DEVICE_LOST:` | the device was lost |
 | `ErrBusy` | `ojas:E_BUSY:` | another call holds this id (pool size > 1) |
 | `ErrPoisoned` | `ojas:E_POISONED:` | the trainer was left partly updated; Resume |
+| `ErrPressure` | `ojas:E_PRESSURE:` | critical memory pressure refused a call that would allocate, before it started; nothing changed, Save and Free still run; back off and retry |
 | `context.Canceled` | (gusset) | the call's context ended; a cancelled step commits nothing |
 
 A kind counts only at the start of the engine's message, so a path that spells one never selects it.
@@ -145,6 +146,7 @@ flowchart TD
 
     DeviceEnum -->|DeviceCPU| D0["DeviceCPU\nSingle-threaded CPU execution (1 thread)"]
     DeviceEnum -->|DeviceCPUParallel| D1["DeviceCPUParallel\nMultithreaded CPU pool (1..=256 threads)"]
+    DeviceEnum -->|DeviceCPUAuto| D4["DeviceCPUAuto\nAutomatic thread count from system thread ceiling"]
     DeviceEnum -->|DeviceMetal| D2["DeviceMetal\nApple Silicon Metal 4 (tessl + MSL)"]
     DeviceEnum -->|DeviceWgpu| D3["DeviceWgpu\nPortable WebGPU / WGSL (Vulkan/Metal/DX12)"]
 ```
@@ -152,7 +154,9 @@ flowchart TD
 > [!IMPORTANT]
 > * **Zero Silent Fallback:** Selecting `DeviceMetal` or `DeviceWgpu` on a system where that hardware or driver is absent **returns an error immediately**. The client never silently degrades to CPU execution.
 > * **Thread Constraints:** `DeviceCPUParallel` needs $1 \le \text{Threads} \le 256$ (`MaxCPUThreads`). 0 or more than 256 is an error.
+> * **Auto Thread Sizing:** `DeviceCPUAuto` sizes the CPU pool from this machine's thread ceiling (`SystemProfile`'s `ThreadCeiling`, clamped to `MaxCPUThreads`), factoring in usable CPUs and cgroup CPU quotas. An unreadable CPU count is refused, not guessed.
 > * **Numerics:** `NumericsExact` makes a CPU model bitwise reproducible; Metal and wgpu refuse a Numerics setting.
+> * **Memory Ceiling Validation:** `SetMemoryCeiling` replaces the process ceiling (default 1 GiB, or machine hard limit if tighter). It refuses 0, while any model is open, or if the requested bytes exceed the machine's physical RAM or cgroup limit (`ErrCapacity`).
 
 ---
 

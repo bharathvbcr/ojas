@@ -25,10 +25,13 @@
 | 13 SAMPLE | `id: u64, {temperature, top_k?, top_p?, seed, max_new_tokens, stop?, prompt}` | ids |
 | 14 INSPECT | relative path | `tensors: u32` |
 | 15 SET_MEMORY_CEILING | `bytes: u64` | empty |
+| 16 SYSTEM_PROFILE | empty, `budget: u64`, or `budget: u64, flags: u32` | versioned host profile and resource plan record |
 
-Placement: device 0 CPU, 1 CPU parallel (`threads` 1..=256), 2 Metal, 3 wgpu; `budget` bytes (default 1 GiB, per session); `numerics` 1 Exact or 2 Fast (CPU only).
+Placement: device 0 CPU, 1 CPU parallel (`threads` 1..=256), 2 Metal, 3 wgpu, 4 CPU auto (`auto_threads` from the plan's thread ceiling); `budget` bytes (default 1 GiB, per session); `numerics` 1 Exact or 2 Fast (CPU only).
 
-Memory ceiling: every session's budget is a child of one process-wide root `Budget` (`src/session.rs`), default 1 GiB (`DEFAULT_MEMORY_CEILING_BYTES`). All sessions together never account more than the ceiling; a charge past it is `ojas:E_CAPACITY:`. A session `budget` above the ceiling can never be met and is refused at load with `ojas:E_CAPACITY:`. SET_MEMORY_CEILING (`set_memory_ceiling`) is the only way to change it. It refuses 0, and refuses while any model holds the ceiling (in the table, being built, or freed while a call is still inside it): a `Budget`'s cap is fixed, so a new root under live sessions would split the accounting.
+Memory ceiling: every session's budget is a child of one process-wide root `Budget` (`src/session.rs`), initialized to 1 GiB (`DEFAULT_MEMORY_CEILING_BYTES`) or the machine's `hard_memory_limit` (physical RAM or tighter cgroup limit) if smaller. All sessions together never account more than the ceiling; a charge past it is `ojas:E_CAPACITY:`. A session `budget` above the ceiling can never be met and is refused at load with `ojas:E_CAPACITY:`. SET_MEMORY_CEILING (`set_memory_ceiling`) is the only way to change it. It refuses 0, refuses `bytes` exceeding `hard_memory_limit` (`ojas:E_CAPACITY:`), and refuses while any model holds the ceiling (in the table, being built, or freed while a call is still inside it): a `Budget`'s cap is fixed, so a new root under live sessions would split the accounting.
+
+Preflight validation: `preflight` verifies that the model spec's `head_dim` is supported by Metal (if Metal is requested) and that total parameter bytes fit the session budget before any device opens or weights are read from disk.
 
 ---
 
@@ -64,7 +67,7 @@ sequenceDiagram
 
 ## Error kinds
 
-`ojas:E_CAPACITY:`, `ojas:E_NONFINITE:`, `ojas:E_DEVICE_LOST:` and `ojas:E_POISONED:` are chosen from the typed error where it is produced (`kind_of` in `src/lib.rs`), and `ojas:E_BUSY:` / `ojas:E_POISONED:` from the session lock (`Session::lock_state`). Never from message text, which carries user paths: a missing `ojas:E_BUSY: x.safetensors` is a plain load error. The kind is always the first thing in the message, and Go matches it only there.
+`ojas:E_CAPACITY:`, `ojas:E_NONFINITE:`, `ojas:E_DEVICE_LOST:` and `ojas:E_POISONED:` are chosen from the typed error where it is produced (`kind_of` in `src/lib.rs`), and `ojas:E_BUSY:` / `ojas:E_POISONED:` from the session lock (`Session::lock_state`). `ojas:E_PRESSURE:` comes from admission (`engine::admit`): a call that would allocate is refused before it starts while the kernel reports critical memory pressure. It is transient and changes nothing, Save and Free still run, and it is distinct from `E_CAPACITY` (the work will not fit). Never from message text, which carries user paths: a missing `ojas:E_BUSY: x.safetensors` is a plain load error. The kind is always the first thing in the message, and Go matches it only there.
 
 ---
 

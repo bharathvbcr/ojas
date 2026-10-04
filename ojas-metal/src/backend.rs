@@ -52,8 +52,8 @@ use ojas_core::{
     rope_half_split_backward_dims, rope_half_split_forward_dims, silu_backward_dims,
     silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
     AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, DeviceBuffer, GateDims, LinearCe,
-    MuonNs5Config, Numerics, OjasError, PerHeadGateGrad, Reservation, RmsDims, RopeDims,
-    RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
+    MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Reservation, RmsDims,
+    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -459,6 +459,17 @@ fn overflow(op: &'static str) -> OjasError {
         op,
         detail: "size overflows".to_string(),
     }
+}
+
+/// f32 values of scratch `muon_ns5_step` reserves for a `[rows, cols]`
+/// matrix: `6 n + 3 r² + 2048` with `n = rows * cols`, `r = min(rows, cols)`.
+fn muon_scratch_elems(op: &'static str, rows: usize, cols: usize) -> Res<usize> {
+    let n = rows.checked_mul(cols).ok_or_else(|| overflow(op))?;
+    let r = rows.min(cols);
+    n.checked_mul(6)
+        .and_then(|a| r.checked_mul(r)?.checked_mul(3)?.checked_add(a))
+        .and_then(|s| s.checked_add(2048))
+        .ok_or_else(|| overflow(op))
 }
 
 fn product(op: &'static str, dims: &[usize]) -> Res<usize> {
@@ -1366,6 +1377,24 @@ impl Backend for MetalBackend {
         }
     }
 
+    /// AdamW runs in place with no scratch; Muon reserves
+    /// [`muon_scratch_elems`] f32 values, the figure its step charges.
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        const OP: &str = "optimizer_scratch_bytes";
+        match kind {
+            OptimizerKind::AdamW => Ok(Some(0)),
+            OptimizerKind::MuonNs5 => muon_scratch_elems(OP, rows, cols)?
+                .checked_mul(4)
+                .map(|b| Some(b as u64))
+                .ok_or_else(|| overflow(OP)),
+        }
+    }
+
     fn muon_ns5_step(
         &self,
         param: &mut Tensor,
@@ -1394,7 +1423,6 @@ impl Backend for MetalBackend {
             });
         }
         let (rows, cols) = (dims.rows, dims.cols);
-        let r = rows.min(cols);
         let scale = (rows as f64 / cols as f64).max(1.0).sqrt();
         let alpha = (-config.lr * scale) as f32;
         let decay = if config.weight_decay == 0.0 {
@@ -1404,8 +1432,7 @@ impl Backend for MetalBackend {
         };
         self.unique(OP, param)?;
         self.unique(OP, momentum)?;
-        let scratch = 6 * p.n + 3 * r * r + 2048;
-        let _scratch = self.reserve(OP, scratch)?;
+        let _scratch = self.reserve(OP, muon_scratch_elems(OP, rows, cols)?)?;
         match self.link.call(Cmd::Muon {
             p,
             g,
@@ -1561,12 +1588,17 @@ mod tests {
             policy.devices = vec![Device::Metal, Device::Cpu];
             let plan = ResourcePlan::derive(&policy, &profile, &[after]);
             assert_eq!(plan.device_memory[0], after.memory_bytes());
-            if profile.architecture == MemoryArchitecture::Unified {
-                assert!(plan.shared_budget);
-                match plan.device_room[0] {
-                    MemoryReport::Known(room) => assert!(room <= plan.budget_bytes),
-                    MemoryReport::Unknown => panic!("a shared device has a room"),
-                }
+            // tessl runs on Apple silicon only, where the device reports
+            // unified memory and the host profile never contradicts it. The
+            // device's answer alone puts Metal inside the shared budget.
+            assert!(after.has_unified_memory, "{after:?}");
+            assert_eq!(after.architecture(), MemoryArchitecture::Unified);
+            assert_ne!(profile.architecture, MemoryArchitecture::Discrete);
+            assert!(plan.shared_budget);
+            assert!(plan.device_shares_host[0]);
+            match plan.device_room[0] {
+                MemoryReport::Known(room) => assert!(room <= plan.budget_bytes),
+                MemoryReport::Unknown => panic!("a shared device has a room"),
             }
 
             let injected = m.link.call(Cmd::InjectPanic);

@@ -84,21 +84,24 @@ Safetensors names are nanolab `state_dict` keys, so torch exports load unchanged
 
 One `step()`:
 1. `mult = schedule.multiplier(step)`. This is the pre-increment step, as in `HybridOptimizer` and nanolab `train.py:305-344` (clip at 336, `opt.step` at 343).
-2. Per micro-batch (K of them):
+2. Memory preflight: `budget.check_room(self.preflight_bytes(rows, k))` ensures room for optimizer scratch and previously measured step peak before any forward execution. `budget.reset_peak()` restarts the high-water mark for this step.
+3. Per micro-batch (K of them):
    - `tape.clear()`, then a leaf per param. A resident tensor uploads as a shared clone.
    - Forward through 12 blocks, then the fused head CE (§5).
    - `backward_seeded(loss, 1/K)`, then `take_grad` → `accumulate_grad` into trainer-owned buffers.
    - Sum the loss on the device.
 
    This scales before summing, like nanolab. The CPU `GradAccumulator` divides after summing instead. The two give identical bits for power-of-two K (I).
-3. `tape.clear()` before any optimizer call, because in-place updates need unique ownership.
-4. `clip_grad_norm(&mut accs, 1.0)`. On wgpu this is a sync point that reports any pending fault before it scales. Any error up to here leaves params, moments, step and cursor untouched. Policy `Abort` keeps the cursor; `SkipBatch` advances it and returns `E_NONFINITE`.
-5. Each parameter steps with `muon_ns5_step` or `adamw_step`, using the `ojas_cpu::optim_group` constants.
-6. `backend.sync()?` (T1). wgpu reports optimizer faults only at the next sync. An error from step 5 or 6 marks the trainer `Poisoned`: later Step and Save calls refuse until a resume from checkpoint.
-7. Commit: `step = next_step(step)?`, advance the cursor, download the loss once, and return the mean micro-loss.
+4. `tape.clear()` before any optimizer call, because in-place updates need unique ownership.
+5. `clip_grad_norm(&mut accs, 1.0)`. On wgpu this is a sync point that reports any pending fault before it scales. Any error up to here leaves params, moments, step and cursor untouched. Policy `Abort` keeps the cursor; `SkipBatch` advances it and returns `E_NONFINITE`.
+6. Pre-apply check: `budget.check_room(self.optimizer_scratch)` checks room for optimizer allocations with gradients alive, preventing out-of-memory errors from poisoning parameter states during the update.
+7. Each parameter steps with `muon_ns5_step` or `adamw_step`, using the `ojas_cpu::optim_group` constants.
+8. `backend.sync()?` (T1). wgpu reports optimizer faults only at the next sync. An error from step 7 or 8 marks the trainer `Poisoned`: later Step and Save calls refuse until a resume from checkpoint.
+9. Commit: `step = next_step(step)?`, advance the cursor, download the loss once, record the measured step peak (`record_peak`), and return the mean micro-loss.
 
 **Other properties:**
 - **Readbacks:** one tensor readback per step, the loss.
+- **Preflight Allocation Bounds:** `Trainer` creation computes `state_bytes(&table, &spec, cfg.seq_len)` and verifies room via `check_room` before allocating slots.
 - **Data:** comes from the Feistel `BatchSampler`, with no stored RNG.
 - **Optimizer reference:** `HybridOptimizer::step` (Exact, serial) is the bitwise reference for the optimizer phase on CPU.
 

@@ -126,9 +126,42 @@ fn session_result(session: session::Session) -> Vec<u8> {
     out
 }
 
+/// Calls that allocate model-sized memory. Under critical memory pressure
+/// they are refused before any work; FREE, SAVE and the queries still run,
+/// so a host can always release memory and checkpoint.
+const ALLOCATING_OPS: [u32; 7] = [
+    OP_LOAD,
+    OP_NEW,
+    OP_TRAIN_OPEN,
+    OP_TRAIN_STEP,
+    OP_RESUME,
+    OP_SAMPLE,
+    OP_GENERATE,
+];
+
+/// Refuse `opcode` when it allocates and the kernel reports critical
+/// pressure: a run started then is among the next the OS kills, and a
+/// training step's partial work is lost with the process. The trainer and
+/// every session are left as they were.
+pub(crate) fn admit(opcode: u32, pressure: ojas_device::MemoryPressure) -> Result<(), String> {
+    if pressure == ojas_device::MemoryPressure::Critical && ALLOCATING_OPS.contains(&opcode) {
+        return Err(crate::kinded(
+            crate::ErrorKind::Pressure,
+            format!(
+                "memory pressure: opcode {opcode} refused: the system reports critical memory \
+                 pressure; retry once it eases (Save and Free still run)"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn dispatch_bytes(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
     ctx.check()
         .map_err(|reason| format!("cancelled: {reason:?}"))?;
+    if ALLOCATING_OPS.contains(&ctx.opcode()) {
+        admit(ctx.opcode(), ojas_device::probe_pressure())?;
+    }
     let check = cancel_check(ctx);
     match ctx.opcode() {
         OP_LOAD => load::load_request(input, check).map(session_result),

@@ -70,8 +70,8 @@ use ojas_core::{
     rope_half_split_backward_dims, rope_half_split_forward_dims, sdpa_scale, silu_backward_dims,
     silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
     AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Numerics,
-    OjasError, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad,
-    MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -1042,6 +1042,57 @@ fn check_ids(op: Op, ids: &[u32], vocab: usize) -> Result<(), OjasError> {
     Ok(())
 }
 
+/// The most budget bytes (`job.scratch` and `job.upload_u32`) one optimizer
+/// step on a `[rows, cols]` parameter charges, with `n = rows * cols`,
+/// `b = 4n` and `r = min(rows, cols)`. Both steps may first copy a gradient
+/// view that sits at a byte offset (`bind`, `b`). Then:
+/// - AdamW: old copies of the parameter and both moments, and a 16-byte
+///   status: `3b + 16`.
+/// - Muon: two 16-byte words; six `b`-byte planes (momentum buffer, update,
+///   X, X', BX, new parameter); three `r × r` f32 matrices; the global
+///   norm's partials, 4 bytes per [`CHUNK`] values; and for a tall matrix
+///   (`rows > cols`) two `b`-byte transposes, each with a 16-byte geometry
+///   upload: `32 + 6b + 12 r² + 4 ceil(n / CHUNK) [+ 2b + 32]`.
+///
+/// `adamw_step` and `muon_ns5_step` reserve exactly these pieces; the test
+/// `reported_optimizer_scratch_bounds_the_measured_peak` compares them.
+fn optimizer_scratch(kind: OptimizerKind, rows: usize, cols: usize) -> Result<u64, OjasError> {
+    let overflow = || OjasError::OutOfRange {
+        op: "optimizer_scratch_bytes",
+        detail: format!("[{rows}, {cols}] scratch overflows u64"),
+    };
+    let n = (rows as u64)
+        .checked_mul(cols as u64)
+        .ok_or_else(overflow)?;
+    let b = n.checked_mul(4).ok_or_else(overflow)?;
+    let sum = |terms: &[Option<u64>]| {
+        terms
+            .iter()
+            .try_fold(0u64, |acc, t| acc.checked_add((*t)?))
+            .ok_or_else(overflow)
+    };
+    match kind {
+        OptimizerKind::AdamW => sum(&[Some(b), b.checked_mul(3), Some(16)]),
+        OptimizerKind::MuonNs5 => {
+            let r = rows.min(cols) as u64;
+            let partials = n.div_ceil(CHUNK as u64).checked_mul(4);
+            let tall = if rows > cols {
+                b.checked_mul(2).and_then(|t| t.checked_add(32))
+            } else {
+                Some(0)
+            };
+            sum(&[
+                Some(b),
+                Some(32),
+                b.checked_mul(6),
+                r.checked_mul(r).and_then(|rr| rr.checked_mul(12)),
+                partials,
+                tall,
+            ])
+        }
+    }
+}
+
 impl Backend for WgpuBackend {
     fn id(&self) -> BackendId {
         BackendId::Wgpu
@@ -1874,6 +1925,15 @@ impl Backend for WgpuBackend {
     /// the call still returns `Ok(())` and the fault surfaces as
     /// [`OjasError::NonFinite`] at the next sync point, naming `adamw_step`
     /// unless an op recorded earlier faulted first (see the module docs).
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        optimizer_scratch(kind, rows, cols).map(Some)
+    }
+
     fn adamw_step(
         &self,
         param: &mut Tensor,

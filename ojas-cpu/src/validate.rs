@@ -340,10 +340,11 @@ where
     R: Send,
     F: Fn(Range<usize>, [&mut [f32]; N]) -> Result<R, OjasError> + Sync,
 {
-    let mut outs = charge_outs(op, budget, shapes)?;
-    let pieces = scoped::chunks_into_n(
+    fill_outs_chunked_trusted(
+        op,
+        budget,
         exec,
-        outs.each_mut().map(Scratch::as_mut_slice),
+        shapes,
         len,
         widths,
         min_chunk,
@@ -351,6 +352,37 @@ where
             let result = fill(range, parts.each_mut().map(|part| &mut **part))?;
             Ok((result, parts.iter().all(|part| all_finite(part))))
         },
+    )
+}
+
+/// [`fill_outs_chunked`] when `fill` already tested every value it stored.
+///
+/// The bool is that piece's verdict: true only if every stored element was
+/// finite. The written piece is not read again. A false verdict from any
+/// piece refuses the op and drops the charged outputs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fill_outs_chunked_trusted<const N: usize, R, F>(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    shapes: [&[usize]; N],
+    len: usize,
+    widths: [usize; N],
+    min_chunk: usize,
+    fill: F,
+) -> Result<([Tensor; N], Vec<R>), OjasError>
+where
+    R: Send,
+    F: Fn(Range<usize>, [&mut [f32]; N]) -> Result<(R, bool), OjasError> + Sync,
+{
+    let mut outs = charge_outs(op, budget, shapes)?;
+    let pieces = scoped::chunks_into_n(
+        exec,
+        outs.each_mut().map(Scratch::as_mut_slice),
+        len,
+        widths,
+        min_chunk,
+        |range, mut parts| fill(range, parts.each_mut().map(|part| &mut **part)),
     )?;
     let finite = pieces.iter().all(|(_, finite)| *finite);
     if !finite {
@@ -412,6 +444,29 @@ fn charge_outs<const N: usize>(
     }
     outs.try_into()
         .map_err(|_| shape(op, "output count changed while charging"))
+}
+
+/// One filled scratch, scanned with [`window_finite`] and recorded finite
+/// only when that scan passes.
+pub(crate) fn scanned_f32(
+    op: &'static str,
+    exec: Exec<'_>,
+    scratch: Scratch<f32>,
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let [tensor] = into_tensors(op, [scratch], [shape], |w| window_finite(exec, w))?;
+    Ok(tensor)
+}
+
+/// One filled scratch whose every element was already checked finite by the
+/// writer. Recorded finite with no second pass.
+pub(crate) fn trusted_finite_f32(
+    op: &'static str,
+    scratch: Scratch<f32>,
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let [tensor] = into_tensors(op, [scratch], [shape], |_| Ok(true))?;
+    Ok(tensor)
 }
 
 /// The filled outputs as tensors, each refused if `scan` finds a NaN or an

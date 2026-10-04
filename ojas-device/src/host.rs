@@ -23,16 +23,20 @@ pub struct HostMemory {
     /// Available-ish memory. macOS is `(free_count + inactive_count) * page size`.
     /// Linux is `MemAvailable`. It is not a substitute for a missing total.
     pub available_bytes: MemoryReport,
-    /// Tightest numeric cgroup memory limit, if one was present.
+    /// Tightest numeric cgroup memory limit, if one was present: cgroup v2
+    /// `memory.max` and `memory.high` (the throttling point), v1
+    /// `memory.limit_in_bytes`, over the cgroup and its ancestors.
     ///
-    /// cgroup v2 `memory.max` of `max`, and a cgroup v1 limit at the
-    /// kernel's unlimited sentinel (`>= 1 << 62`), are [`MemoryReport::Unknown`]
-    /// because they are not a finite cap.
+    /// A value of `max`, and a cgroup v1 limit at the kernel's unlimited
+    /// sentinel (`>= 1 << 62`), are [`MemoryReport::Unknown`] because they
+    /// are not a finite cap.
     pub cgroup_limit_bytes: MemoryReport,
     /// The working set of the cgroup whose limit was used: `memory.current`
     /// (v1 `memory.usage_in_bytes`) less `inactive_file` (v1
     /// `total_inactive_file`) from `memory.stat`, or the raw figure when
-    /// `memory.stat` is unreadable. `Unknown` when the usage file was missing.
+    /// `memory.stat` is unreadable. When the usage file cannot be read, this
+    /// process's resident set (`VmRSS`), a floor on the cgroup's usage;
+    /// `Unknown` only when neither can be read.
     pub cgroup_current_bytes: MemoryReport,
     /// [`std::thread::available_parallelism`], or `Unknown` if that call fails.
     pub cpu_count: MemoryReport,
@@ -90,14 +94,24 @@ fn probe_cgroup(root: &Path) -> (MemoryReport, MemoryReport) {
     let v2_mount = root.join("sys/fs/cgroup");
     let v1_mount = root.join("sys/fs/cgroup/memory");
     let mut best: Option<(u64, MemoryReport)> = None;
+    // An unreadable usage file is not zero usage: this process's own
+    // resident set is in the cgroup, so it is a floor on what the cgroup
+    // holds.
+    let floor = self_rss(root);
     // A cgroup is bounded by every ancestor's limit too, so a tighter
     // parent (a pod around a container) is read, not only the leaf.
     if let Some(path) = found.v2.as_deref() {
         for dir in cgroup_ancestors(path) {
-            let limit = read_cgroup_counter(&v2_mount, dir, "memory.max", true);
+            // `memory.high` is where the kernel starts throttling and
+            // reclaiming hard; past it a run stalls, so it bounds the plan
+            // as `memory.max` does.
+            let limit = tighter(
+                read_cgroup_counter(&v2_mount, dir, "memory.max", true),
+                read_cgroup_counter(&v2_mount, dir, "memory.high", true),
+            );
             let current = read_cgroup_counter(&v2_mount, dir, "memory.current", false);
             let current = working_set(&v2_mount, dir, current, "inactive_file");
-            consider(&mut best, limit, current);
+            consider(&mut best, limit, or_floor(current, floor));
         }
     }
     if let Some(path) = found.v1_memory.as_deref() {
@@ -105,13 +119,56 @@ fn probe_cgroup(root: &Path) -> (MemoryReport, MemoryReport) {
             let limit = read_cgroup_counter(&v1_mount, dir, "memory.limit_in_bytes", true);
             let current = read_cgroup_counter(&v1_mount, dir, "memory.usage_in_bytes", false);
             let current = working_set(&v1_mount, dir, current, "total_inactive_file");
-            consider(&mut best, limit, current);
+            consider(&mut best, limit, or_floor(current, floor));
         }
     }
     match best {
         Some((limit, current)) => (MemoryReport::Known(limit), current),
         None => (MemoryReport::Unknown, MemoryReport::Unknown),
     }
+}
+
+/// The smaller of two limits; a known one wins over an unknown one.
+fn tighter(a: MemoryReport, b: MemoryReport) -> MemoryReport {
+    match (a, b) {
+        (MemoryReport::Known(x), MemoryReport::Known(y)) => MemoryReport::Known(x.min(y)),
+        (MemoryReport::Known(x), MemoryReport::Unknown)
+        | (MemoryReport::Unknown, MemoryReport::Known(x)) => MemoryReport::Known(x),
+        (MemoryReport::Unknown, MemoryReport::Unknown) => MemoryReport::Unknown,
+    }
+}
+
+/// `current`, or `floor` when the usage could not be read.
+fn or_floor(current: MemoryReport, floor: MemoryReport) -> MemoryReport {
+    match current {
+        MemoryReport::Known(_) => current,
+        MemoryReport::Unknown => floor,
+    }
+}
+
+/// This process's resident set: `VmRSS` in `/proc/self/status` (kB).
+fn self_rss(root: &Path) -> MemoryReport {
+    read_text(root.join("proc/self/status"))
+        .and_then(|text| parse_vm_rss(&text))
+        .map_or(MemoryReport::Unknown, MemoryReport::Known)
+}
+
+/// Bytes of the one `VmRSS:` line (`VmRSS:  1234 kB`). A second such line,
+/// another unit, or a figure that overflows is `None`.
+pub(crate) fn parse_vm_rss(text: &str) -> Option<u64> {
+    let mut found = None;
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let kib = parts.next()?.parse::<u64>().ok()?;
+        if parts.next() != Some("kB") || parts.next().is_some() || found.is_some() {
+            return None;
+        }
+        found = Some(kib.checked_mul(1024)?);
+    }
+    found
 }
 
 /// `current` less the cgroup's inactive file pages (`memory.stat` `key`):
@@ -197,8 +254,9 @@ pub(crate) fn cgroup_ancestors(path: &str) -> Vec<&str> {
 ///
 /// Usable bytes are `limit - current` when both are known, otherwise the
 /// limit itself. That result is at most every known limit, so the plan
-/// never goes past a known cgroup cap. A missing current is not treated as
-/// zero.
+/// never goes past a known cgroup cap. A usage file that could not be read
+/// arrives here as this process's resident set (a floor), so it counts as
+/// zero only when that cannot be read either.
 fn consider(best: &mut Option<(u64, MemoryReport)>, limit: MemoryReport, current: MemoryReport) {
     let MemoryReport::Known(limit) = limit else {
         return;
@@ -547,6 +605,67 @@ mod tests {
             "inactive_file 100\ntotal_inactive_file 700\n",
         );
         assert_eq!(probe_cgroup(&f.0).1, MemoryReport::Known(200));
+    }
+
+    /// A limit with an unreadable usage file used to leave the whole limit
+    /// as room (usage read as zero) while the process itself held most of
+    /// it. The process's resident set now stands in as a floor; with no
+    /// RSS either, the old answer remains (documented).
+    #[test]
+    fn an_unreadable_usage_counts_this_process_resident_set() {
+        use crate::testutil::Fixture;
+        let f = Fixture::new("cg-no-current");
+        f.put("proc/self/cgroup", "0::/c\n");
+        f.put("sys/fs/cgroup/c/memory.max", "1073741824\n");
+        f.put(
+            "proc/self/status",
+            "Name:\tojas\nVmRSS:\t  966796 kB\nThreads:\t4\n",
+        );
+        assert_eq!(
+            probe_cgroup(&f.0),
+            (
+                MemoryReport::Known(1 << 30),
+                MemoryReport::Known(966_796 * 1024)
+            )
+        );
+        // A readable usage file wins over the floor.
+        f.put("sys/fs/cgroup/c/memory.current", "1000\n");
+        assert_eq!(probe_cgroup(&f.0).1, MemoryReport::Known(1000));
+    }
+
+    #[test]
+    fn vm_rss_parses_only_one_well_formed_line() {
+        assert_eq!(parse_vm_rss("VmRSS:\t 12 kB\n"), Some(12 * 1024));
+        assert_eq!(parse_vm_rss("VmHWM: 5 kB\nVmRSS: 0 kB"), Some(0));
+        for bad in [
+            "",
+            "VmRSS:\n",
+            "VmRSS: 12\n",
+            "VmRSS: 12 MB\n",
+            "VmRSS: -1 kB\n",
+            "VmRSS: 12 kB extra\n",
+            "VmRSS: 1 kB\nVmRSS: 2 kB\n",
+            "VmRSS: 18446744073709551615 kB\n",
+        ] {
+            assert_eq!(parse_vm_rss(bad), None, "{bad:?}");
+        }
+    }
+
+    /// cgroup v2 `memory.high` (systemd `MemoryHigh=`) bounds the plan like
+    /// `memory.max`: past it the kernel throttles the process.
+    #[test]
+    fn memory_high_bounds_the_limit_like_memory_max() {
+        use crate::testutil::Fixture;
+        let f = Fixture::new("cg-high");
+        f.put("proc/self/cgroup", "0::/svc\n");
+        f.put("sys/fs/cgroup/svc/memory.max", "max\n");
+        f.put("sys/fs/cgroup/svc/memory.high", "2147483648\n");
+        f.put("sys/fs/cgroup/svc/memory.current", "100\n");
+        assert_eq!(probe_cgroup(&f.0).0, MemoryReport::Known(2 << 30));
+        f.put("sys/fs/cgroup/svc/memory.max", "1073741824\n");
+        assert_eq!(probe_cgroup(&f.0).0, MemoryReport::Known(1 << 30));
+        f.put("sys/fs/cgroup/svc/memory.high", "max\n");
+        assert_eq!(probe_cgroup(&f.0).0, MemoryReport::Known(1 << 30));
     }
 
     #[test]

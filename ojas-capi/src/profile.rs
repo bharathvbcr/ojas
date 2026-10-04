@@ -93,6 +93,18 @@ pub const ENTRY_BYTES: usize = 9;
 /// Payload flag: measure (or reuse) copy bandwidth.
 pub const FLAG_BANDWIDTH: u32 = 1;
 
+/// The planned budget as sent. `u64::MAX` survives the plan only when no
+/// limit was known and the caller set none: that is no bound, and is sent
+/// as unknown (decoded as 0) rather than as a number a host could forward
+/// to its memory ceiling.
+fn budget_report(bytes: u64) -> MemoryReport {
+    if bytes == u64::MAX {
+        MemoryReport::Unknown
+    } else {
+        MemoryReport::Known(bytes)
+    }
+}
+
 /// Empty plans against `u64::MAX`, which reports the host limits alone.
 pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
     let mut r = crate::wire::Reader::new(input);
@@ -147,7 +159,7 @@ pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
     out.extend_from_slice(&FIELD_COUNT.to_le_bytes());
     for field in Field::ALL {
         let entry = match field {
-            Field::BudgetBytes => MemoryReport::Known(plan.budget_bytes),
+            Field::BudgetBytes => budget_report(plan.budget_bytes),
             Field::TotalBytes => plan.total_bytes,
             Field::AvailableBytes => plan.available_bytes,
             Field::CgroupLimitBytes => plan.cgroup_limit_bytes,
@@ -179,7 +191,7 @@ pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// The plan's probe list is empty here; this names its element type.
-struct NoProbe;
+pub(crate) struct NoProbe;
 
 impl MemoryProbe for NoProbe {
     fn kind(&self) -> Device {
@@ -267,6 +279,21 @@ mod tests {
         // A second call reuses the cached figure.
         let again = decode(&profile_request(&payload).unwrap());
         assert_eq!(again[Field::SingleBandwidth as usize], Some(single));
+    }
+
+    /// On a host where nothing could be read (no `/proc`, an unknown OS),
+    /// an empty request used to send `BudgetBytes` known at `u64::MAX`.
+    #[test]
+    fn an_unbounded_budget_is_sent_as_unknown() {
+        assert_eq!(budget_report(u64::MAX), MemoryReport::Unknown);
+        assert_eq!(
+            budget_report(u64::MAX - 1),
+            MemoryReport::Known(u64::MAX - 1)
+        );
+        assert_eq!(budget_report(0), MemoryReport::Known(0));
+        let blind = ojas_device::SystemProfile::from_memory(ojas_device::HostMemory::all_unknown());
+        let plan = ResourcePlan::derive(&ResourcePolicy::new(u64::MAX), &blind, &[] as &[NoProbe]);
+        assert_eq!(budget_report(plan.budget_bytes), MemoryReport::Unknown);
     }
 
     #[test]

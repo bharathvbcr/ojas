@@ -335,6 +335,128 @@ fn an_optimizer_or_sync_fault_poisons_and_later_steps_refuse() {
     }
 }
 
+/// Memory taken between the gradients and the optimizer (another holder of
+/// the budget) is refused before the first update: the trainer stays
+/// Ready with every parameter and moment unchanged, Save still works, and
+/// once the memory is back the next step runs. Before the check, AdamW on
+/// `tok_emb` (no scratch) updated and then the first Muon matrix refused
+/// its scratch, which poisoned the trainer.
+#[test]
+fn optimizer_scratch_taken_after_the_gradients_refuses_before_any_update() {
+    for room in [0u64, 1, 4096] {
+        let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), config(1));
+        t.step().unwrap();
+        let before = snapshot(&t);
+        t.backend().squeeze_after_clip(0, room);
+        let err = t.step().unwrap_err();
+        assert!(
+            matches!(err, OjasError::CapacityExceeded { .. }),
+            "room {room}: {err:?}"
+        );
+        assert_untouched(&t, &before, &err);
+        // No optimizer call of the refused step ran: only step 1's.
+        let adam = adam_calls_per_step(&t);
+        let muon = t.params().filter(|(info, _)| info.trains).count() - adam;
+        assert_eq!(t.backend().count("adamw_step"), adam, "room {room}");
+        assert_eq!(t.backend().count("muon_ns5_step"), muon, "room {room}");
+        let dir = std::env::temp_dir().join(format!("ojas-squeeze-{}-{room}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        t.save(&dir)
+            .expect("a refused step leaves the trainer saveable");
+        std::fs::remove_dir_all(&dir).unwrap();
+        t.backend().release();
+        t.step().unwrap();
+        assert_eq!(t.step_count(), 2);
+    }
+}
+
+/// AdamW calls of one completed step (the trainer's AdamW slots).
+fn adam_calls_per_step<B: Backend>(t: &Trainer<B>) -> usize {
+    t.params()
+        .filter(|(info, _)| info.trains && info.group != OptimGroup::MuonMatrix)
+        .count()
+}
+
+/// A capacity sweep from below the trainer's own state to above one
+/// step's measured peak. At every cap, either `Trainer::new` refuses with
+/// `CapacityExceeded` before allocating, or steps run; a step that cannot
+/// fit is refused with `CapacityExceeded` and leaves the trainer Ready and
+/// saveable. Capacity never poisons, a step never fails after an earlier
+/// one of the same shape succeeded at the same cap, and every cap at or
+/// above the measured peak runs every step.
+#[test]
+fn a_capacity_sweep_refuses_up_front_and_never_poisons() {
+    let measure = {
+        let (_tmp, mut t) = trainer(exact(1 << 30), config(2));
+        let budget = t.backend().budget().clone();
+        budget.reset_peak();
+        for _ in 0..3 {
+            t.step().unwrap();
+        }
+        budget.peak_bytes()
+    };
+    let state = {
+        let (_tmp, t) = trainer(exact(1 << 30), config(2));
+        t.backend().budget().live_bytes().unwrap()
+    };
+    let (lo, hi) = (state / 2, measure + measure / 8);
+    let points = 40u64;
+    let (mut refused_open, mut refused_step, mut ran) = (0, 0, 0);
+    for i in 0..=points {
+        let cap = lo + (hi - lo) * i / points;
+        let (_tmp, bin) = token_bin(20_000, 256);
+        let opened = Trainer::new(
+            exact(cap),
+            ModelSpec::tiny(),
+            &host_params(5),
+            bin,
+            config(2),
+        );
+        let mut t = match opened {
+            Ok(t) => t,
+            Err(err) => {
+                assert!(
+                    matches!(err, OjasError::CapacityExceeded { .. }),
+                    "cap {cap}: {err:?}"
+                );
+                assert!(cap < measure, "cap {cap} >= peak {measure} refused at open");
+                refused_open += 1;
+                continue;
+            }
+        };
+        let mut done = 0;
+        for _ in 0..3 {
+            let before = snapshot(&t);
+            match t.step() {
+                Ok(_) => done += 1,
+                Err(err) => {
+                    assert!(
+                        matches!(err, OjasError::CapacityExceeded { .. }),
+                        "cap {cap}: {err:?}"
+                    );
+                    assert_untouched(&t, &before, &err);
+                    assert_eq!(done, 0, "cap {cap}: failed after a step of this shape ran");
+                    break;
+                }
+            }
+        }
+        if done == 0 {
+            refused_step += 1;
+        } else {
+            assert_eq!(done, 3, "cap {cap}");
+            ran += 1;
+        }
+        if cap >= measure {
+            assert_eq!(done, 3, "cap {cap} >= measured peak {measure}");
+        }
+    }
+    // The sweep crossed every regime.
+    assert!(
+        refused_open > 0 && refused_step > 0 && ran > 0,
+        "{refused_open} {refused_step} {ran}"
+    );
+}
+
 // -------------------------------------------------------------- refusals
 
 #[test]

@@ -26,7 +26,7 @@ pub use bandwidth::{
 };
 pub use host::{probe_host, HostMemory, MemoryReport};
 pub use plan::{MemoryProbe, ResourcePlan, ResourcePolicy};
-pub use system::{probe_system, MemoryArchitecture, MemoryPressure, SystemProfile};
+pub use system::{probe_pressure, probe_system, MemoryArchitecture, MemoryPressure, SystemProfile};
 pub use topology::{probe_topology, CoreCluster, CpuTopology};
 pub use tuning::{CacheBudget, GemmBlocks, GEMM_KC_MAX, GEMM_KC_STEP, GEMM_MC_MAX, GEMM_NC_MAX};
 

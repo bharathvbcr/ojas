@@ -12,7 +12,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 
-use ojas_core::{Backend, Numerics, OjasError};
+use ojas_core::{Backend, BackendId, Numerics, OjasError};
 use ojas_io::SafeTensors;
 use ojas_model::ModelSpec;
 
@@ -34,6 +34,10 @@ pub const DEVICE_CPU: u32 = 0;
 pub const DEVICE_CPU_PARALLEL: u32 = 1;
 pub const DEVICE_METAL: u32 = 2;
 pub const DEVICE_WGPU: u32 = 3;
+/// The CPU with a worker pool sized from this machine ([`auto_threads`]):
+/// opt-in adaptivity. `threads` is not read. Memory budgets are unchanged:
+/// they stay the caller's, under the process ceiling.
+pub const DEVICE_CPU_AUTO: u32 = 4;
 
 /// A session's byte budget when the caller names none: 1 GiB. Every
 /// session budget is drawn from the process ceiling
@@ -247,8 +251,8 @@ pub(crate) const PLACEMENT_FIELDS: [(u32, &str, Kind); 4] = [
     (tag::NUMERICS, "numerics", Kind::U32),
 ];
 
-/// Device 0 CPU, 1 CPU parallel (`threads` 1..=256), 2 Metal, 3 wgpu;
-/// default CPU. `threads` is read only for CPU parallel. `budget` (bytes,
+/// Device 0 CPU, 1 CPU parallel (`threads` 1..=256), 2 Metal, 3 wgpu,
+/// 4 CPU auto ([`auto_threads`]); default CPU. `threads` is read only for CPU parallel. `budget` (bytes,
 /// non-zero) defaults to [`DEFAULT_BUDGET_BYTES`]; one above the process
 /// ceiling is refused when the device opens. `numerics` 1 Exact or
 /// 2 Fast is CPU only; absent keeps the backend's default.
@@ -270,6 +274,17 @@ pub(crate) fn placement(f: &Fields<'_>) -> Result<Placement, String> {
         }
         DEVICE_METAL => DeviceKind::Metal,
         DEVICE_WGPU => DeviceKind::Wgpu,
+        DEVICE_CPU_AUTO => {
+            let profile = ojas_device::probe_system();
+            let plan = ojas_device::ResourcePlan::derive(
+                &ojas_device::ResourcePolicy::new(u64::MAX),
+                &profile,
+                &[] as &[crate::profile::NoProbe],
+            );
+            DeviceKind::Cpu {
+                threads: auto_threads(plan.thread_ceiling)?,
+            }
+        }
         other => return Err(format!("load: unknown device {other}")),
     };
     let budget_bytes = f.u64(tag::BUDGET).unwrap_or(DEFAULT_BUDGET_BYTES);
@@ -290,6 +305,48 @@ pub(crate) fn placement(f: &Fields<'_>) -> Result<Placement, String> {
         budget_bytes,
         numerics,
     })
+}
+
+/// The thread count of [`DEVICE_CPU_AUTO`]: the plan's thread ceiling (the
+/// usable CPUs, cut to a cgroup CPU quota), at most [`MAX_CPU_THREADS`]. A
+/// machine whose CPU count cannot be read is refused rather than guessed.
+pub(crate) fn auto_threads(ceiling: ojas_device::MemoryReport) -> Result<usize, String> {
+    match ceiling {
+        ojas_device::MemoryReport::Known(n) if n >= 1 => {
+            let n = n.min(u64::from(MAX_CPU_THREADS));
+            usize::try_from(n).map_err(|_| "load: thread count".to_string())
+        }
+        _ => Err(
+            "load: the auto CPU device cannot read this machine's CPU count; load with the \
+             parallel CPU device and an explicit thread count"
+                .to_string(),
+        ),
+    }
+}
+
+/// Refusals that need only the spec and the placement, made before the
+/// device opens or a byte of weights is read: a `head_dim` the Metal
+/// kernels cannot run (every attention op would refuse it later), and
+/// parameters larger than the session budget.
+pub(crate) fn preflight(op: &str, placement: &Placement, spec: &ModelSpec) -> Result<(), String> {
+    if placement.device == DeviceKind::Metal {
+        // `validate` proved head_dim fits u32.
+        let head_dim = u32::try_from(spec.head_dim).unwrap_or(u32::MAX);
+        ojas_core::refuse_unsupported_metal_head_dim(BackendId::Metal, head_dim)
+            .map_err(|e| crate::ojas_error(op, &e))?;
+    }
+    let bytes = ojas_model::param_bytes(spec).map_err(|e| crate::ojas_error(op, &e))?;
+    if bytes > placement.budget_bytes {
+        return Err(crate::kinded(
+            crate::ErrorKind::Capacity,
+            format!(
+                "capacity exceeded: {op}: the model's parameters take {bytes} bytes, more than \
+                 the session budget of {} bytes",
+                placement.budget_bytes
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Parameters read from a checked safetensors file.
@@ -353,6 +410,7 @@ pub fn load_request(bytes: &[u8], mut check: Check) -> Result<session::Session, 
     let file = SafeTensors::from_file(verified.file)
         .map_err(|e| format!("not a safetensors file: {}", e.detail()))?;
     let spec = ojas_model::load_spec(&file).map_err(|e| crate::ojas_error("load", &e))?;
+    preflight("load", &placement, &spec)?;
     create(Some(path), &placement, check, FromFile { spec, file })
 }
 
@@ -405,6 +463,7 @@ pub fn new_request(bytes: &[u8], mut check: Check) -> Result<session::Session, S
     let placement = placement(&f)?;
     let spec = spec_from(&f)?;
     let seed = required(f.u64(tag::SEED), tag::SEED)?;
+    preflight("new", &placement, &spec)?;
     session::check_room()?;
     create(None, &placement, check, Fresh { spec, seed })
 }

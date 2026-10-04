@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use ojas_core::{
     AdamWConfig, Backend, BackendId, Budget, CeChunk, LinearCe, MuonNs5Config, Numerics, OjasError,
-    PerHeadGateGrad, Tensor, ValueResidualGrad,
+    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 
 /// The per-call cancel check: `Err` carries the cancel's own message
@@ -315,6 +315,36 @@ impl<B: Backend> Backend for Gated<B> {
         self.inner
             .per_head_sigmoid_gate_backward(input, weight, bias, attn_out, grad_output)
     }
+    fn per_head_sigmoid_gate_forward_saving(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+    ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+        self.enter("per_head_sigmoid_gate_forward", true)?;
+        self.inner
+            .per_head_sigmoid_gate_forward_saving(input, weight, bias, attn_out)
+    }
+    fn per_head_sigmoid_gate_backward_saved(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+        grad_output: &Tensor,
+        scales: &Tensor,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        self.enter("per_head_sigmoid_gate_backward", true)?;
+        self.inner.per_head_sigmoid_gate_backward_saved(
+            input,
+            weight,
+            bias,
+            attn_out,
+            grad_output,
+            scales,
+        )
+    }
     fn value_residual_blend_forward(
         &self,
         value: &Tensor,
@@ -418,6 +448,15 @@ impl<B: Backend> Backend for Gated<B> {
     ) -> Result<(), OjasError> {
         self.enter("muon_ns5_step", false)?;
         self.inner.muon_ns5_step(param, grad, momentum, config)
+    }
+    /// A size query, no op: not gated.
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        self.inner.optimizer_scratch_bytes(kind, rows, cols)
     }
     /// Never polls: the trainer's finish.
     fn sync(&self) -> Result<(), OjasError> {

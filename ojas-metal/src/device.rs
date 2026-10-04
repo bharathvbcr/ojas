@@ -59,6 +59,8 @@ const WS_DEN: u64 = 4;
 const WS_GROWTH: u64 = 64 << 20;
 /// Tiled attention geometry, as `ATT_THREADS` (four simdgroups) and
 /// `ATT_BQ` / `ATT_BK` (rows per threadgroup) in the Metal source.
+/// The forward kernel's key tile is wider (`ATT_FWD_BK`); its grid is
+/// still one threadgroup per query block.
 const ATTN_THREADS: usize = 128;
 const ATTN_ROWS: usize = 32;
 /// Largest head dim the tiled attention kernels are compiled for.
@@ -386,9 +388,11 @@ impl Worker {
     }
 
     fn memory(&self) -> crate::MetalMemory {
+        let info = self.rt.memory_info();
         crate::MetalMemory {
-            recommended_working_set: self.rt.memory_info().recommended_working_set,
+            recommended_working_set: info.recommended_working_set,
             allocated: self.rt.current_allocated_bytes(),
+            has_unified_memory: info.has_unified_memory,
         }
     }
 
@@ -1307,9 +1311,9 @@ impl Worker {
         let (qv, kv, vv) = (self.view(q)?, self.view(k)?, self.view(v)?);
         let o = self.fresh(qv.n)?;
         let st = self.status(OP)?;
-        for x in [&qv, &kv, &vv] {
-            self.check(&st, x, ST_IN)?;
-        }
+        // No separate pass over Q, K or V. A non-finite Q or K makes a live
+        // score non-finite, which the kernel reports; a non-finite V shows
+        // up in O, which the output check reports.
         let name = format!("ojas_attn_fwd_d{width}");
         let groups = (t as usize).div_ceil(ATTN_ROWS);
         self.ktg(&name, groups, bh as usize, ATTN_THREADS, |b| {

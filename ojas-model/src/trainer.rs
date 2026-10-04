@@ -34,7 +34,7 @@
 use ojas_autograd::Tape;
 use ojas_core::{
     next_step, AdamWConfig, Backend, BackendId, CeChunk, DType, DataCursor, MuonNs5Config,
-    OjasError, Tensor,
+    OjasError, OptimizerKind, Tensor,
 };
 use ojas_cpu::{
     scaled_lr, LrSchedule, OptimGroup, ADAM_HYBRID_WEIGHT_DECAY, MUON_MOMENTUM, MUON_WEIGHT_DECAY,
@@ -269,6 +269,88 @@ pub struct Trainer<B: Backend> {
     pub(crate) state: TrainState,
     /// 16 lowercase hex digits; see the module docs.
     pub(crate) run: String,
+    /// The most scratch any one optimizer call of this trainer charges
+    /// ([`Backend::optimizer_scratch_bytes`]); 0 where the backend does not
+    /// say.
+    pub(crate) optimizer_scratch: u64,
+    /// The budget a completed step took above its starting live bytes, and
+    /// the micro-batch shape that took it.
+    pub(crate) step_peak: Option<StepPeak>,
+}
+
+/// What one completed step charged at its peak, above the live bytes it
+/// started from, for micro-batches of at most `rows` rows, `k` of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StepPeak {
+    pub(crate) rows: usize,
+    pub(crate) k: usize,
+    pub(crate) bytes: u64,
+}
+
+/// Bytes a trainer allocates for its own state beyond the caller's
+/// tensors: a copy of every parameter, its moments (Muon one, AdamW two,
+/// frozen none) and the RoPE tables for `seq_len`. Checked arithmetic; no
+/// allocation.
+pub(crate) fn state_bytes(
+    table: &[ParamInfo],
+    spec: &ModelSpec,
+    seq_len: usize,
+) -> Result<u64, OjasError> {
+    let overflow = || OjasError::OutOfRange {
+        op: "Trainer::state_bytes",
+        detail: "trainer state size overflows u64".to_string(),
+    };
+    let mut total = 0u64;
+    for info in table {
+        let elems = ojas_core::shape_product(&info.shape)? as u64;
+        let copies = match (info.trains, info.group) {
+            (false, _) => 1,
+            (true, OptimGroup::MuonMatrix) => 2,
+            (true, OptimGroup::AdamEmbedding | OptimGroup::AdamVector) => 3,
+        };
+        total = elems
+            .checked_mul(4 * copies)
+            .and_then(|b| total.checked_add(b))
+            .ok_or_else(overflow)?;
+    }
+    // cos and sin, `[seq_len, head_dim]` f32 each.
+    let rope = (seq_len as u64)
+        .checked_mul(spec.head_dim as u64)
+        .and_then(|n| n.checked_mul(8))
+        .ok_or_else(overflow)?;
+    total.checked_add(rope).ok_or_else(overflow)
+}
+
+/// The largest scratch one optimizer call on any trainable parameter of
+/// `table` charges on `backend`. A Muon matrix is sized as `[rows, cols]`,
+/// an AdamW tensor of `n` values as `[1, n]`. A backend that does not
+/// report a figure counts 0 for that call: the check before the optimizer
+/// then cannot cover it.
+pub(crate) fn optimizer_scratch<'a, B: Backend + ?Sized>(
+    backend: &B,
+    table: impl IntoIterator<Item = &'a ParamInfo>,
+) -> Result<u64, OjasError> {
+    let mut most = 0u64;
+    for info in table.into_iter().filter(|info| info.trains) {
+        let (kind, rows, cols) = match (info.group, info.shape.as_slice()) {
+            (OptimGroup::MuonMatrix, &[rows, cols]) => (OptimizerKind::MuonNs5, rows, cols),
+            (OptimGroup::MuonMatrix, other) => {
+                return Err(OjasError::Shape {
+                    op: "Trainer::optimizer_scratch",
+                    detail: format!("{}: Muon needs a matrix, got {other:?}", info.name),
+                })
+            }
+            _ => (
+                OptimizerKind::AdamW,
+                1,
+                ojas_core::shape_product(&info.shape)?,
+            ),
+        };
+        if let Some(bytes) = backend.optimizer_scratch_bytes(kind, rows, cols)? {
+            most = most.max(bytes);
+        }
+    }
+    Ok(most)
 }
 
 fn data_error(err: DataError) -> OjasError {
@@ -353,6 +435,11 @@ impl<B: Backend> Trainer<B> {
             }
         }
         let run = compute_run_id(&spec, &cfg, params)?;
+        // Everything below charges the budget; refuse before the first
+        // allocation when the whole state cannot fit.
+        backend
+            .budget()
+            .check_room(state_bytes(&table, &spec, cfg.seq_len)?)?;
         let mut slots = Vec::with_capacity(table.len());
         for (info, host) in table.into_iter().zip(params) {
             let value = fresh(&backend, host)?;
@@ -416,6 +503,7 @@ impl<B: Backend> Trainer<B> {
         run: String,
     ) -> Result<Self, OjasError> {
         let rope = Rope::new(&spec, cfg.seq_len, backend.budget())?.upload(&backend)?;
+        let optimizer_scratch = optimizer_scratch(&backend, slots.iter().map(|s| &s.info))?;
         Ok(Self {
             spec,
             cfg,
@@ -428,6 +516,8 @@ impl<B: Backend> Trainer<B> {
             cursor,
             state: TrainState::Ready,
             run,
+            optimizer_scratch,
+            step_peak: None,
         })
     }
 
@@ -495,6 +585,12 @@ impl<B: Backend> Trainer<B> {
     /// [`OjasError::NonFinite`] and the policy is
     /// [`NonFinitePolicy::SkipBatch`], which advances it and still returns
     /// the error. Parameters, moments and the step counter do not change.
+    ///
+    /// Memory is checked before the work and again before the first update
+    /// (a `CapacityExceeded` from either leaves the trainer Ready), so
+    /// capacity never poisons. To measure each step, this resets
+    /// `backend().budget()`'s [`ojas_core::Budget::peak_bytes`] at its
+    /// start; a caller watching that peak reads it per step, not per run.
     pub fn step(&mut self) -> Result<StepReport, OjasError> {
         self.ready()?;
         let mut sampler = BatchSampler::resume(&self.bin, self.sampler.clone(), self.cursor)
@@ -523,9 +619,37 @@ impl<B: Backend> Trainer<B> {
 
     /// One step on caller-supplied micro-batches (K = `batches.len()`).
     /// The sampler cursor does not move. Each batch must have `seq_len`
-    /// columns; its row count may differ from the configured batch.
+    /// columns; its row count may differ from the configured batch. Memory
+    /// checks and the budget peak reset are as in [`Self::step`].
     pub fn step_tokens(&mut self, batches: &[Batch]) -> Result<StepReport, OjasError> {
         self.run(batches)
+    }
+
+    /// The room a step of `k` micro-batches of at most `rows` rows needs
+    /// before it starts: the optimizer's scratch, or the measured peak of an
+    /// earlier step no larger in either dimension, whichever is more. A
+    /// larger step allocates at least what the smaller one did, so a step
+    /// refused here would have been refused part-way.
+    pub(crate) fn preflight_bytes(&self, rows: usize, k: usize) -> u64 {
+        let measured = match self.step_peak {
+            Some(p) if rows >= p.rows && k >= p.k => p.bytes,
+            _ => 0,
+        };
+        measured.max(self.optimizer_scratch)
+    }
+
+    /// Keep the peak of the largest step shape seen: a step that is at
+    /// least as large in both dimensions replaces the record (the larger
+    /// bytes win at an equal shape); an incomparable one leaves it.
+    fn record_peak(&mut self, rows: usize, k: usize, bytes: u64) {
+        let replace = match self.step_peak {
+            None => true,
+            Some(p) if rows == p.rows && k == p.k => bytes > p.bytes,
+            Some(p) => rows >= p.rows && k >= p.k,
+        };
+        if replace {
+            self.step_peak = Some(StepPeak { rows, k, bytes });
+        }
     }
 
     pub(crate) fn ready(&self) -> Result<(), OjasError> {
@@ -571,7 +695,15 @@ impl<B: Backend> Trainer<B> {
             }
             tokens = tokens.saturating_add(b.x.len() as u64);
         }
+        let rows = batches.iter().map(|b| b.batch).max().unwrap_or(0);
         let configs = self.optimizer_configs(mult)?;
+        let budget = self.tape.backend().budget().clone();
+        // Before any work: room for the optimizer's scratch, and for the
+        // whole step once a step of at least this shape has been measured.
+        // The refusal leaves everything unchanged and wastes no compute.
+        budget.check_room(self.preflight_bytes(rows, k))?;
+        let live_before = budget.live_bytes()?;
+        budget.reset_peak();
         // Steps 2-4: nothing the trainer owns changes.
         let result = self.gradients(batches, 1.0 / k as f32);
         // Step 3: the tape holds a clone of every parameter until cleared.
@@ -581,6 +713,10 @@ impl<B: Backend> Trainer<B> {
             .tape
             .backend()
             .clip_grad_norm(&mut grads, self.cfg.grad_clip)?;
+        // The last refusal that leaves the parameters whole: the optimizer
+        // charges its scratch inside the update, after which a refusal
+        // poisons. Checked with the gradients alive, as they are then.
+        budget.check_room(self.optimizer_scratch)?;
         // Steps 5-6: an error here leaves parameters partly updated.
         let loss = match self.apply(&grads, &configs) {
             Ok(()) => self.finish(&loss_sum),
@@ -595,6 +731,8 @@ impl<B: Backend> Trainer<B> {
         };
         // Step 7.
         self.step = next;
+        drop(grads);
+        self.record_peak(rows, k, budget.peak_bytes().saturating_sub(live_before));
         Ok(StepReport {
             loss: loss / k as f32,
             grad_norm,

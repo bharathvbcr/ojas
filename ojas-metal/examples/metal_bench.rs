@@ -389,6 +389,10 @@ fn main() -> R<()> {
     if only == "attn2048" {
         attention(&be, iters, 4, 8, 2048, 64)?;
     }
+    // Published paired-bench shape (`sdpa_b4h12t1024d64`).
+    if only == "attnlab" {
+        attention(&be, iters, 4, 12, 1024, 64)?;
+    }
     if run("step") {
         for d in [512, 768] {
             full_step(&be, iters.min(10), 4, 128, d, 50_304)?;

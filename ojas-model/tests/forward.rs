@@ -696,6 +696,66 @@ fn loader_refuses_every_mismatch() {
     }
 }
 
+/// Refusals made from the header, before any tensor data is read or any
+/// byte is charged: a budget smaller than the parameters is
+/// `CapacityExceeded` with nothing left charged, and a missing tensor is
+/// found before an earlier one is read.
+#[test]
+fn loader_checks_room_and_names_before_reading() {
+    let spec = ModelSpec::tiny();
+    let budget = Budget::new(1 << 28);
+    let params = init_params(&spec, 3, &budget).unwrap();
+    let total: u64 = params
+        .iter()
+        .map(|p| p.num_elements().unwrap() as u64 * 4)
+        .sum();
+    let bytes = encode(&spec, &params, |_| {});
+    let file = SafeTensors::parse(&bytes).unwrap();
+    // One byte short: refused up front, nothing charged.
+    let short = Budget::new(total - 1);
+    let err = load_params(&spec, &file, &short).unwrap_err();
+    assert!(matches!(err, OjasError::CapacityExceeded { .. }), "{err:?}");
+    assert_eq!(short.peak_bytes(), 0, "a tensor was read before the check");
+    // The decode reads in chunks beside each tensor; the parameters alone
+    // and their chunk buffers fit here.
+    let room = Budget::new(total + (1 << 20));
+    assert_eq!(
+        load_params(&spec, &file, &room).unwrap().len(),
+        params.len()
+    );
+    // The last tensor of the table missing: refused with nothing charged,
+    // so no earlier tensor was decoded first.
+    let last = param_table(&spec).unwrap().last().unwrap().name.clone();
+    let missing = encode(&spec, &params, |items| items.retain(|i| i.0 != last));
+    let file = SafeTensors::parse(&missing).unwrap();
+    let fresh = Budget::new(1 << 28);
+    let err = load_params(&spec, &file, &fresh).unwrap_err();
+    assert!(err.to_string().contains("missing tensor"), "{err}");
+    assert_eq!(fresh.peak_bytes(), 0, "a tensor was read before the check");
+}
+
+/// A spec cannot size the name table freely: one block past
+/// `MAX_LAYERS` is refused by `validate`, so `param_table` never builds it.
+#[test]
+fn a_spec_past_max_layers_is_refused_before_any_table() {
+    let spec = ModelSpec {
+        n_layer: ojas_model::MAX_LAYERS + 1,
+        ..ModelSpec::tiny()
+    };
+    assert!(matches!(spec.validate(), Err(OjasError::OutOfRange { .. })));
+    assert!(param_table(&spec).is_err());
+    let huge = ModelSpec {
+        n_layer: usize::MAX,
+        ..ModelSpec::tiny()
+    };
+    assert!(param_table(&huge).is_err());
+    let at = ModelSpec {
+        n_layer: ojas_model::MAX_LAYERS,
+        ..ModelSpec::tiny()
+    };
+    at.validate().unwrap();
+}
+
 #[test]
 fn the_forward_refuses_mismatched_inputs() {
     let spec = ModelSpec::tiny();

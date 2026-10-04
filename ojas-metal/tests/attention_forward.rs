@@ -62,6 +62,16 @@ fn forward_matches_cpu_at_t2048() {
     check_case(&m, 2, 1, 2048, 16, 4096);
 }
 
+/// The paired-bench shape `sdpa_b4h12t1024d64`, including lengths that are
+/// not a multiple of the 64-wide key tile (the 1024 row count is).
+#[test]
+fn forward_matches_cpu_at_the_bench_shape() {
+    let m = metal();
+    check_case(&m, 4, 12, 1024, 64, 7100);
+    check_case(&m, 1, 1, 65, 64, 7101);
+    check_case(&m, 1, 1, 63, 64, 7102);
+}
+
 /// Large-magnitude scores: the online softmax must rescale, not overflow.
 #[test]
 fn forward_matches_cpu_with_sharp_softmax() {

@@ -13,6 +13,10 @@ pub struct MetalMemory {
     /// buffer this process holds on the device, through every backend and
     /// session, including tessl's pools. It is not this backend's share.
     pub allocated: u64,
+    /// `MTLDevice.hasUnifiedMemory`, read by tessl when the device opened:
+    /// true when the GPU has no memory of its own and draws on system RAM
+    /// (Apple silicon), false for a discrete GPU with its own VRAM.
+    pub has_unified_memory: bool,
 }
 
 impl MemoryProbe for MetalMemory {
@@ -31,11 +35,15 @@ impl MemoryProbe for MetalMemory {
         MemoryReport::Known(self.allocated)
     }
 
-    /// tessl does not expose `MTLDevice.hasUnifiedMemory`, so this defers
-    /// to the host profile, which reports unified memory on Apple silicon
-    /// and unknown on an Intel Mac.
+    /// From the device itself rather than the host profile, so a device
+    /// that shares system RAM is planned inside the shared budget even
+    /// where the host profile cannot tell (an Intel Mac reports `Unknown`).
     fn architecture(&self) -> MemoryArchitecture {
-        MemoryArchitecture::Unknown
+        if self.has_unified_memory {
+            MemoryArchitecture::Unified
+        } else {
+            MemoryArchitecture::Discrete
+        }
     }
 }
 
@@ -48,15 +56,54 @@ mod tests {
         let m = MetalMemory {
             recommended_working_set: 0,
             allocated: 7,
+            has_unified_memory: true,
         };
         assert_eq!(m.kind(), Device::Metal);
         assert_eq!(m.memory_bytes(), MemoryReport::Unknown);
         assert_eq!(m.resident_bytes(), MemoryReport::Known(7));
-        assert_eq!(m.architecture(), MemoryArchitecture::Unknown);
+        assert_eq!(m.architecture(), MemoryArchitecture::Unified);
         let m = MetalMemory {
             recommended_working_set: 48 << 30,
             allocated: 0,
+            has_unified_memory: false,
         };
         assert_eq!(m.memory_bytes(), MemoryReport::Known(48 << 30));
+        assert_eq!(m.architecture(), MemoryArchitecture::Discrete);
+    }
+
+    /// The device's own answer wins over the host profile's in the plan: a
+    /// unified device shares the host budget even when the host profile is
+    /// `Unknown` or says `Discrete`, and a discrete one never does.
+    #[test]
+    fn the_device_flag_decides_whether_metal_shares_the_host_budget() {
+        use ojas_device::{HostMemory, ResourcePlan, ResourcePolicy, SystemProfile};
+        for host_arch in [
+            MemoryArchitecture::Unknown,
+            MemoryArchitecture::Unified,
+            MemoryArchitecture::Discrete,
+        ] {
+            for unified in [true, false] {
+                let mut host = HostMemory::all_unknown();
+                host.available_bytes = MemoryReport::Known(32 << 30);
+                let mut profile = SystemProfile::from_memory(host);
+                profile.architecture = host_arch;
+                let mut policy = ResourcePolicy::new(8 << 30);
+                policy.devices = vec![Device::Metal, Device::Cpu];
+                let m = MetalMemory {
+                    recommended_working_set: 24 << 30,
+                    allocated: 1 << 30,
+                    has_unified_memory: unified,
+                };
+                let plan = ResourcePlan::derive(&policy, &profile, &[m]);
+                assert_eq!(plan.device_shares_host[0], unified, "{host_arch:?}");
+                assert_eq!(plan.shared_budget, unified, "{host_arch:?}");
+                if unified {
+                    match plan.device_room[0] {
+                        MemoryReport::Known(room) => assert!(room <= plan.budget_bytes),
+                        MemoryReport::Unknown => panic!("a shared device has a room"),
+                    }
+                }
+            }
+        }
     }
 }

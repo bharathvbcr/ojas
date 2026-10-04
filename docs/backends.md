@@ -18,6 +18,7 @@ flowchart TD
 
     Kind -->|DeviceCPU| CPU["CpuBackend (1 thread)"]
     Kind -->|"DeviceCPUParallel (threads 1..=256; 0 or >256 refused)"| CPUP["CpuBackend, threads"]
+    Kind -->|DeviceCPUAuto| CPUA["CpuBackend (threads from ResourcePlan thread_ceiling)"]
     Kind -->|DeviceMetal| Metal{"Metal device opens?"}
     Kind -->|DeviceWgpu| Wgpu{"wgpu adapter opens?"}
 
@@ -29,8 +30,10 @@ flowchart TD
 
 > [!IMPORTANT]
 > **Zero Silent Fallback Policy:** CUDA and HIP have no Go device selector and do not implement `Backend`. If Metal or wgpu cannot open their respective hardware contexts, `LoadModel` or `NewModel` returns an immediate error—**it will never silently substitute a CPU session**.
+>
+> **CPU Auto Thread Selection:** `DeviceCPUAuto` automatically queries `ResourcePlan::thread_ceiling` (usable host CPUs capped by cgroup CPU quota) to configure the CPU thread pool. If the host CPU count is unreadable, load is refused rather than guessed.
 
-On a GPU session, `TrainStep` reads back only the loss; the device tape keeps activations resident. `to_host` reads in 1 MiB pieces and checkpoint load in 64 KiB pieces, so the peak is the window plus one piece ([`typed-storage-plan.md`](typed-storage-plan.md)). Every backend validates shapes through one shared contract before reserving budget ([`shape-contract.md`](shape-contract.md)), and Metal reports device faults at the next `sync` like wgpu ([`metal-deferred-faults.md`](metal-deferred-faults.md)).
+On a GPU session, `TrainStep` reads back only the loss; the device tape keeps activations resident. `to_host` reads in 1 MiB pieces and checkpoint load in 64 KiB pieces, so the peak is the window plus one piece ([`typed-storage-plan.md`](typed-storage-plan.md)). Every backend validates shapes through one shared contract before reserving budget ([`shape-contract.md`](shape-contract.md)), and Metal reports device faults at the next `sync` like wgpu ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Every backend implements `optimizer_scratch_bytes` so training preflights memory requirements before optimizer updates take place.
 
 Device tensors: `Tensor::from_device` wraps a backend buffer, `to_host` copies it back and is counted by `device_readbacks()`, and `device_buffer_mut` requires sole ownership. The default `Backend::upload` returns `Unsupported` for a host tensor on a non-CPU backend, so a backend that has not implemented upload does not silently compute on the host.
 

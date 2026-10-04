@@ -293,6 +293,14 @@ fn write_tensors<B: Backend + ?Sized>(
             shape,
         })
         .collect();
+    // A device tensor is downloaded whole into charged host memory, one at
+    // a time; refuse before the file is created when the largest cannot be.
+    let mut largest = 0u64;
+    for (_, tensor) in tensors.iter().filter(|(_, t)| t.device().is_some()) {
+        let bytes = (tensor.num_elements()? as u64).saturating_mul(4);
+        largest = largest.max(bytes);
+    }
+    backend.budget().check_room(largest)?;
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -467,6 +475,9 @@ impl<B: Backend> Trainer<B> {
         check_layout(OPTIM_FILE, &optim, &moments)?;
 
         let budget = backend.budget().clone();
+        // Every tensor below is charged as it is read; refuse before the
+        // first read when the whole state cannot fit.
+        budget.check_room(crate::trainer::state_bytes(&table, &spec, cfg.seq_len)?)?;
         // One host tensor per parameter: the file is read in bounded chunks
         // and decoded straight into its typed storage (dtype and shape were
         // checked above, so the byte lengths agree), then it is uploaded and

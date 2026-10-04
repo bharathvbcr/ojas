@@ -796,10 +796,21 @@ fn sample_returns_capacity_past_the_context_or_the_budget() {
     sample(id, &prompt, 0.0, 3, 0).unwrap();
 
     // Weights fit; the cache and activations of a full-context sample do not.
-    // The file's size: the weights plus a short header.
+    // The weights, plus the one bounded chunk the loader decodes each tensor
+    // through (charged beside it): the largest tensor, at most
+    // `LE_READ_CHUNK_BYTES`.
+    let spec = nano_spec();
+    let largest = param_table(&spec)
+        .unwrap()
+        .iter()
+        .map(|i| i.shape.iter().product::<usize>() as u64 * 4)
+        .max()
+        .unwrap()
+        .min(ojas_core::LE_READ_CHUNK_BYTES as u64);
+    let weights = ojas_model::param_bytes(&spec).unwrap();
     let payload = Writer::default()
         .str(tag::PATH, "model.safetensors")
-        .u64(tag::BUDGET, model_bytes(None).len() as u64)
+        .u64(tag::BUDGET, weights + largest)
         .finish();
     let tight = load::load_request(&payload, never()).unwrap();
     let err = sample(tight.id, &prompt, 0.0, 3, 0).unwrap_err();
@@ -1164,6 +1175,23 @@ fn device_fields_select_cpu_parallel_and_bound_its_thread_count() {
     );
     session::try_free(session.id).unwrap();
 
+    // The auto device sizes its pool from this machine; `threads` is not
+    // read, so a 0 there is not refused.
+    let auto = load_device(load::DEVICE_CPU_AUTO, 0, "model.safetensors").unwrap();
+    let ceiling = ojas_device::ResourcePlan::derive(
+        &ojas_device::ResourcePolicy::new(u64::MAX),
+        &ojas_device::probe_system(),
+        &[] as &[crate::profile::NoProbe],
+    )
+    .thread_ceiling;
+    assert_eq!(
+        auto.device,
+        DeviceKind::Cpu {
+            threads: load::auto_threads(ceiling).unwrap()
+        }
+    );
+    session::try_free(auto.id).unwrap();
+
     let err = load_device(9, 1, "model.safetensors").unwrap_err();
     assert!(err.contains("unknown device"), "{err}");
     let err = load_device(load::DEVICE_CPU_PARALLEL, 0, "model.safetensors").unwrap_err();
@@ -1349,6 +1377,125 @@ fn the_ceiling_changes_only_with_no_model_open() {
     session::try_free(big.id).unwrap();
 }
 
+/// A ceiling above the machine's memory is `E_CAPACITY` and changes
+/// nothing; one at the limit is accepted. On this host the limit is read.
+#[test]
+fn a_ceiling_above_the_machine_is_refused() {
+    let (_g, _dir) = fresh();
+    let _restore = DefaultCeiling;
+    let limit = 8u64 << 30;
+    let err = session::set_memory_ceiling_within(limit + 1, Some(limit)).unwrap_err();
+    assert!(err.starts_with("ojas:E_CAPACITY:"), "{err}");
+    assert!(err.contains("exceeds this machine"), "{err}");
+    assert_eq!(
+        session::memory_ceiling().unwrap(),
+        (session::DEFAULT_MEMORY_CEILING_BYTES, 0)
+    );
+    session::set_memory_ceiling_within(limit, Some(limit)).unwrap();
+    assert_eq!(session::memory_ceiling().unwrap(), (limit, 0));
+    // An unreadable machine is not checked.
+    session::set_memory_ceiling_within(u64::MAX, None).unwrap();
+    let real = session::hard_memory_limit().expect("this host reports its memory");
+    let err = set_ceiling(real + 1).unwrap_err();
+    assert!(err.contains("exceeds this machine"), "{err}");
+}
+
+/// The auto device's thread count: the plan's ceiling, clamped to
+/// `MAX_CPU_THREADS`, and a refusal (not a guess) when it is unknown.
+#[test]
+fn auto_threads_clamp_the_ceiling_and_refuse_an_unknown_one() {
+    use ojas_device::MemoryReport;
+    assert_eq!(load::auto_threads(MemoryReport::Known(1)), Ok(1));
+    assert_eq!(load::auto_threads(MemoryReport::Known(18)), Ok(18));
+    let max = load::MAX_CPU_THREADS as usize;
+    assert_eq!(load::auto_threads(MemoryReport::Known(256)), Ok(max));
+    assert_eq!(load::auto_threads(MemoryReport::Known(1024)), Ok(max));
+    assert_eq!(load::auto_threads(MemoryReport::Known(u64::MAX)), Ok(max));
+    for bad in [MemoryReport::Unknown, MemoryReport::Known(0)] {
+        let err = load::auto_threads(bad).unwrap_err();
+        assert!(
+            err.contains("cannot read this machine's CPU count"),
+            "{err}"
+        );
+    }
+}
+
+/// Under critical memory pressure every call that allocates model-sized
+/// memory is refused with `E_PRESSURE` (never `E_CAPACITY`, which means the
+/// work will not fit) before it starts, and FREE, SAVE and the queries still
+/// run; milder or unknown pressure refuses nothing.
+#[test]
+fn critical_pressure_refuses_allocating_calls_and_keeps_save_and_free() {
+    use crate::engine::admit;
+    use ojas_device::MemoryPressure;
+    let allocating = [
+        crate::OP_LOAD,
+        crate::OP_NEW,
+        crate::OP_TRAIN_OPEN,
+        crate::OP_TRAIN_STEP,
+        crate::OP_RESUME,
+        crate::OP_SAMPLE,
+        crate::OP_GENERATE,
+    ];
+    let other = [
+        crate::OP_FREE,
+        crate::OP_SAVE,
+        crate::OP_INSPECT,
+        crate::OP_TOKENIZE,
+        crate::OP_SET_MEMORY_CEILING,
+        crate::OP_SYSTEM_PROFILE,
+    ];
+    for op in allocating {
+        let err = admit(op, MemoryPressure::Critical).unwrap_err();
+        assert!(err.starts_with("ojas:E_PRESSURE: "), "{op}: {err}");
+        assert!(!err.contains("E_CAPACITY"), "{op}: {err}");
+        assert!(err.contains("critical memory pressure"), "{err}");
+    }
+    for op in other {
+        admit(op, MemoryPressure::Critical).unwrap();
+    }
+    for pressure in [
+        MemoryPressure::Normal,
+        MemoryPressure::Warning,
+        MemoryPressure::Unknown,
+    ] {
+        for op in allocating.iter().chain(&other) {
+            admit(*op, pressure).unwrap();
+        }
+    }
+}
+
+/// A Metal session whose spec the Metal kernels cannot run, and a model
+/// larger than its session budget, are refused before the device opens.
+#[test]
+fn preflight_refuses_before_the_device_opens() {
+    use crate::model::Placement;
+    let spec = ojas_model::ModelSpec::tiny();
+    let metal = |budget_bytes| Placement {
+        device: session::DeviceKind::Metal,
+        budget_bytes,
+        numerics: None,
+    };
+    load::preflight("load", &metal(1 << 30), &spec).unwrap();
+    let wide = ojas_model::ModelSpec {
+        head_dim: 256,
+        ..spec
+    };
+    let err = load::preflight("load", &metal(1 << 30), &wide).unwrap_err();
+    assert!(err.contains("unsupported head dim 256"), "{err}");
+    // The CPU runs any head_dim.
+    let cpu = Placement {
+        device: session::DeviceKind::Cpu { threads: 1 },
+        budget_bytes: 1 << 30,
+        numerics: None,
+    };
+    load::preflight("load", &cpu, &wide).unwrap();
+    let bytes = ojas_model::param_bytes(&spec).unwrap();
+    load::preflight("new", &metal(bytes), &spec).unwrap();
+    let err = load::preflight("new", &metal(bytes - 1), &spec).unwrap_err();
+    assert!(err.starts_with("ojas:E_CAPACITY:"), "{err}");
+}
+
 /// A model the session's own budget cannot hold is `E_CAPACITY` at load,
 /// and no session is added.
 #[test]
@@ -1401,11 +1548,58 @@ fn a_user_path_never_selects_an_error_kind() {
         "ojas:E_BUSY: x.safetensors",
         "ojas:E_CAPACITY: x.safetensors",
         "ojas:E_POISONED: x.safetensors",
+        "ojas:E_PRESSURE: x.safetensors",
+        "memory pressure.safetensors",
     ] {
         let err = call(OP_LOAD, &load_payload(0, 1, name)).unwrap_err();
         assert!(!err.starts_with("ojas:E_"), "{name}: {err}");
         assert!(err.contains("missing file"), "{name}: {err}");
         assert!(err.contains(name), "{name}: {err}");
+    }
+}
+
+/// Every kind has its own prefix, and `go/ffi.go`'s `inBandKinds` lists
+/// each one, so a kind added here cannot reach Go as a plain error. The
+/// match is exhaustive: a new variant does not compile until it is listed.
+#[test]
+fn every_error_kind_has_a_distinct_prefix_that_go_decodes() {
+    use crate::ErrorKind;
+    const ALL: [ErrorKind; 6] = [
+        ErrorKind::Capacity,
+        ErrorKind::DeviceLost,
+        ErrorKind::NonFinite,
+        ErrorKind::Busy,
+        ErrorKind::Poisoned,
+        ErrorKind::Pressure,
+    ];
+    for (i, kind) in ALL.into_iter().enumerate() {
+        let at = match kind {
+            ErrorKind::Capacity => 0,
+            ErrorKind::DeviceLost => 1,
+            ErrorKind::NonFinite => 2,
+            ErrorKind::Busy => 3,
+            ErrorKind::Poisoned => 4,
+            ErrorKind::Pressure => 5,
+        };
+        assert_eq!(at, i, "{kind:?} is out of place");
+    }
+    let go = include_str!("../../go/ffi.go");
+    for kind in ALL {
+        let prefix = kind.prefix();
+        assert!(
+            prefix.starts_with("ojas:E_") && prefix.ends_with(": "),
+            "{prefix:?}"
+        );
+        let quoted = format!("{{\"{}\",", prefix.trim_end());
+        assert!(go.contains(&quoted), "go/ffi.go does not decode {prefix:?}");
+        for other in ALL {
+            if other != kind {
+                assert!(
+                    !prefix.starts_with(other.prefix().trim_end()),
+                    "{kind:?} {other:?}"
+                );
+            }
+        }
     }
 }
 

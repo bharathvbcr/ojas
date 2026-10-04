@@ -30,6 +30,16 @@
 //!
 //! [`sgemm_accelerate`] does not follow this contract. See its docs.
 //!
+//! With the `accelerate` feature on macOS, [`vdsp_vmul`], [`vdsp_vadd`],
+//! and their append forms call the stride-1 vDSP kernels. Each output is
+//! one rounding of `a * b` or `a + b`. [`vdsp_mmov`] and
+//! [`vdsp_mmov_append`] copy rows of a matrix; that copy is a move, so
+//! every bit is preserved, including −0. [`vvexpf`] and [`vvexpf_inplace`]
+//! call vForce `vvexpf` (`y[i] = exp(x[i])`). Those functions are not
+//! compiled on any other target. [`store_neg_abs_signs`] loads each chunk
+//! of `z` once, refuses a non-finite lane, records `z < 0`, and stores
+//! `-|z|` before the next chunk.
+//!
 //! # Safety
 //!
 //! Every length and stride is validated with checked arithmetic before any
@@ -73,7 +83,7 @@ impl fmt::Display for Operand {
     }
 }
 
-/// Why a GEMM call was refused. A refused call has not modified `C`.
+/// Why a call was refused. A refused call has not modified the output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SimdError {
@@ -116,6 +126,46 @@ pub enum SimdError {
         /// The value that does not fit.
         value: usize,
     },
+    /// Two-vector vDSP: the inputs differ in length.
+    MismatchedLengths {
+        /// Length of the first input.
+        a: usize,
+        /// Length of the second input.
+        b: usize,
+    },
+    /// vDSP or [`vvexpf`]: the output is not the input length. For the
+    /// append forms, `output` is spare capacity and `expected` is the input
+    /// length.
+    OutputLength {
+        /// Length of the output slice, or spare capacity of the append buffer.
+        output: usize,
+        /// Length the output must have.
+        expected: usize,
+    },
+    /// vDSP or [`vvexpf`]: the output overlaps an input.
+    OverlappingOutput,
+    /// [`vvexpf`]: the length does not fit in a C `int`.
+    LengthTooLarge {
+        /// The length that does not fit.
+        len: usize,
+    },
+    /// [`ReservedF32`] (and `NegAbsExp` on macOS): the allocation could not
+    /// be reserved. Nothing was stored.
+    ReserveFailed {
+        /// Element count that was requested.
+        len: usize,
+    },
+    /// [`ReservedF32::into_vec`] (and `NegAbsExp::into_vec` on macOS): not
+    /// every chunk has been stored.
+    Incomplete {
+        /// Chunks whose lanes were stored.
+        done: usize,
+        /// Chunks the buffer was split into.
+        expected: usize,
+    },
+    /// [`store_neg_abs_signs`]: a lane was NaN or an infinity.
+    /// `signs` was not published. Lanes before that chunk may hold `-|x|`.
+    NonFinite,
 }
 
 impl fmt::Display for SimdError {
@@ -146,6 +196,25 @@ impl fmt::Display for SimdError {
             SimdError::DimensionTooLarge { value } => {
                 write!(f, "dimension {value} exceeds the CBLAS int range")
             }
+            SimdError::MismatchedLengths { a, b } => {
+                write!(f, "vDSP inputs have lengths {a} and {b}")
+            }
+            SimdError::OutputLength { output, expected } => {
+                write!(f, "output has {output} elements, needs {expected}")
+            }
+            SimdError::OverlappingOutput => {
+                write!(f, "output overlaps an input")
+            }
+            SimdError::LengthTooLarge { len } => {
+                write!(f, "vector length {len} exceeds the C int range")
+            }
+            SimdError::ReserveFailed { len } => {
+                write!(f, "could not reserve {len} elements")
+            }
+            SimdError::Incomplete { done, expected } => {
+                write!(f, "stored {done} of {expected} chunks")
+            }
+            SimdError::NonFinite => write!(f, "a value is not finite"),
         }
     }
 }
@@ -361,5 +430,443 @@ pub fn sgemm_accelerate(
     }
     let call = layout::BlasCall::from_problem(&p)?;
     arch::accelerate_sgemm(&call, a, b, c);
+    Ok(())
+}
+
+/// True when the half-open element ranges `[a, a+a_len)` and `[c, c+c_len)` overlap.
+fn ranges_overlap(a: *const f32, a_len: usize, c: *const f32, c_len: usize) -> bool {
+    if a_len == 0 || c_len == 0 {
+        return false;
+    }
+    let bytes = core::mem::size_of::<f32>();
+    let Some(a_bytes) = a_len.checked_mul(bytes) else {
+        return true;
+    };
+    let Some(c_bytes) = c_len.checked_mul(bytes) else {
+        return true;
+    };
+    let a0 = a as usize;
+    let c0 = c as usize;
+    let Some(a1) = a0.checked_add(a_bytes) else {
+        return true;
+    };
+    let Some(c1) = c0.checked_add(c_bytes) else {
+        return true;
+    };
+    a0 < c1 && c0 < a1
+}
+
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+fn vdsp_slices(
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
+    call: fn(&[f32], &[f32], &mut [f32]),
+) -> Result<(), SimdError> {
+    if a.len() != b.len() {
+        return Err(SimdError::MismatchedLengths {
+            a: a.len(),
+            b: b.len(),
+        });
+    }
+    if c.len() != a.len() {
+        return Err(SimdError::OutputLength {
+            output: c.len(),
+            expected: a.len(),
+        });
+    }
+    if ranges_overlap(a.as_ptr(), a.len(), c.as_ptr(), c.len())
+        || ranges_overlap(b.as_ptr(), b.len(), c.as_ptr(), c.len())
+    {
+        return Err(SimdError::OverlappingOutput);
+    }
+    if a.is_empty() {
+        return Ok(());
+    }
+    call(a, b, c);
+    Ok(())
+}
+
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+fn vdsp_into_spare(
+    a: &[f32],
+    b: &[f32],
+    dst: &mut Vec<f32>,
+    call: fn(&[f32], &[f32], &mut Vec<f32>),
+) -> Result<(), SimdError> {
+    if a.len() != b.len() {
+        return Err(SimdError::MismatchedLengths {
+            a: a.len(),
+            b: b.len(),
+        });
+    }
+    let n = a.len();
+    let spare = dst.capacity() - dst.len();
+    if spare < n {
+        return Err(SimdError::OutputLength {
+            output: spare,
+            expected: n,
+        });
+    }
+    if n == 0 {
+        return Ok(());
+    }
+    let dest = dst.as_ptr().wrapping_add(dst.len());
+    if ranges_overlap(a.as_ptr(), n, dest, n) || ranges_overlap(b.as_ptr(), n, dest, n) {
+        return Err(SimdError::OverlappingOutput);
+    }
+    call(a, b, dst);
+    Ok(())
+}
+
+/// `c[i] = a[i] * b[i]` through Accelerate `vDSP_vmul`, stride 1.
+///
+/// `a`, `b`, and `c` must be the same length. `c` must not overlap `a` or
+/// `b`. An empty length does not call vDSP. Each finite product is one IEEE
+/// rounding, including a tail that is not a multiple of a vector width.
+/// NaN and infinity propagate; a finite overflow becomes infinity. This
+/// function does not scan for them.
+///
+/// Compiled only with the `accelerate` feature on macOS.
+///
+/// # Errors
+///
+/// [`SimdError::MismatchedLengths`], [`SimdError::OutputLength`], or
+/// [`SimdError::OverlappingOutput`]. A refusal does not write `c`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vdsp_vmul(a: &[f32], b: &[f32], c: &mut [f32]) -> Result<(), SimdError> {
+    vdsp_slices(a, b, c, arch::vdsp_vmul)
+}
+
+/// `c[i] = a[i] + b[i]` through Accelerate `vDSP_vadd`, stride 1.
+///
+/// The contract is [`vdsp_vmul`]'s, with addition in place of multiplication.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vdsp_vadd(a: &[f32], b: &[f32], c: &mut [f32]) -> Result<(), SimdError> {
+    vdsp_slices(a, b, c, arch::vdsp_vadd)
+}
+
+/// Appends `a[i] * b[i]` onto `dst`.
+///
+/// `dst` must already have room for `a.len()` more elements (`reserve` first).
+/// On success those elements are initialized and `dst.len()` grows by
+/// `a.len()`. On error `dst` is unchanged. The new elements must not overlap
+/// `a` or `b`. An empty input leaves `dst` as it was and does not call vDSP.
+///
+/// # Errors
+///
+/// As for [`vdsp_vmul`]. [`SimdError::OutputLength`] reports spare capacity
+/// in `output`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vdsp_vmul_append(a: &[f32], b: &[f32], dst: &mut Vec<f32>) -> Result<(), SimdError> {
+    vdsp_into_spare(a, b, dst, arch::vdsp_vmul_append)
+}
+
+/// Appends `a[i] + b[i]` onto `dst`. See [`vdsp_vmul_append`].
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vdsp_vadd_append(a: &[f32], b: &[f32], dst: &mut Vec<f32>) -> Result<(), SimdError> {
+    vdsp_into_spare(a, b, dst, arch::vdsp_vadd_append)
+}
+
+/// Element count from the start of row 0 to just past the last copied column.
+///
+/// A single row ignores `stride` (the pitch is never multiplied). More than
+/// one row requires `stride >= cols`, so the copied rows do not overlap.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+fn mmov_span(rows: usize, cols: usize, stride: usize) -> Result<usize, SimdError> {
+    if rows > 1 && stride < cols {
+        return Err(SimdError::OverlappingOutputRows {
+            n: cols,
+            c_rs: stride,
+        });
+    }
+    if rows == 0 || cols == 0 {
+        return Ok(0);
+    }
+    let pitch = if rows == 1 { 0 } else { stride };
+    (rows - 1)
+        .checked_mul(pitch)
+        .and_then(|span| span.checked_add(cols))
+        .ok_or(SimdError::LengthTooLarge { len: rows })
+}
+
+/// Copy `rows` rows of `cols` columns through Accelerate `vDSP_mmov`.
+///
+/// vecLib passes the column count as `__M` and the row count as `__N`:
+///
+/// ```text
+/// for n in 0..rows {
+///     for m in 0..cols {
+///         dst[n * dst_stride + m] = src[n * src_stride + m];
+///     }
+/// }
+/// ```
+///
+/// `src_stride` and `dst_stride` are those pitches, in elements, passed by
+/// value. Both are at least `cols` when `rows > 1`. `src` must cover
+/// `(rows - 1) * src_stride + cols` elements, and `dst` the same span for
+/// `dst_stride`. The two spans must not overlap. An empty `rows` or `cols`
+/// does not call vDSP and does not write `dst`.
+///
+/// The kernel moves bits. −0, NaN payloads, and subnormals are unchanged.
+///
+/// Compiled only with the `accelerate` feature on macOS.
+///
+/// # Errors
+///
+/// [`SimdError::OverlappingOutputRows`] when a pitch is shorter than `cols`.
+/// [`SimdError::BufferTooShort`] when a slice is shorter than the span.
+/// [`SimdError::OverlappingOutput`] when the spans overlap.
+/// [`SimdError::LengthTooLarge`] when the span overflows. A refusal does not
+/// write `dst`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vdsp_mmov(
+    src: &[f32],
+    dst: &mut [f32],
+    rows: usize,
+    cols: usize,
+    src_stride: usize,
+    dst_stride: usize,
+) -> Result<(), SimdError> {
+    let src_span = mmov_span(rows, cols, src_stride)?;
+    let dst_span = mmov_span(rows, cols, dst_stride)?;
+    if src_span == 0 {
+        return Ok(());
+    }
+    if src.len() < src_span {
+        return Err(SimdError::BufferTooShort {
+            operand: Operand::A,
+            required: src_span,
+            len: src.len(),
+        });
+    }
+    if dst.len() < dst_span {
+        return Err(SimdError::BufferTooShort {
+            operand: Operand::C,
+            required: dst_span,
+            len: dst.len(),
+        });
+    }
+    if ranges_overlap(src.as_ptr(), src_span, dst.as_ptr(), dst_span) {
+        return Err(SimdError::OverlappingOutput);
+    }
+    arch::vdsp_mmov(src, dst.as_mut_ptr(), rows, cols, src_stride, dst_stride);
+    Ok(())
+}
+
+/// Appends `rows` contiguous rows of `cols` columns onto `dst`.
+///
+/// The source pitch is `src_stride`. Each destination row is `cols` elements
+/// and the rows are packed, so `dst` grows by `rows * cols`. `dst` must
+/// already have room for those elements (`reserve` first). On success they
+/// are initialized. On error `dst` is unchanged. The new elements must not
+/// overlap `src`. An empty `rows` or `cols` leaves `dst` as it was and does
+/// not call vDSP.
+///
+/// This is the same move as [`vdsp_mmov`], with destination pitch `cols`.
+///
+/// # Errors
+///
+/// As for [`vdsp_mmov`]. [`SimdError::OutputLength`] reports spare capacity
+/// in `output`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vdsp_mmov_append(
+    src: &[f32],
+    dst: &mut Vec<f32>,
+    rows: usize,
+    cols: usize,
+    src_stride: usize,
+) -> Result<(), SimdError> {
+    let src_span = mmov_span(rows, cols, src_stride)?;
+    if src_span == 0 {
+        return Ok(());
+    }
+    let n = rows
+        .checked_mul(cols)
+        .ok_or(SimdError::LengthTooLarge { len: rows })?;
+    if src.len() < src_span {
+        return Err(SimdError::BufferTooShort {
+            operand: Operand::A,
+            required: src_span,
+            len: src.len(),
+        });
+    }
+    let spare = dst.capacity() - dst.len();
+    if spare < n {
+        return Err(SimdError::OutputLength {
+            output: spare,
+            expected: n,
+        });
+    }
+    let dest = dst.as_ptr().wrapping_add(dst.len());
+    if ranges_overlap(src.as_ptr(), src_span, dest, n) {
+        return Err(SimdError::OverlappingOutput);
+    }
+    arch::vdsp_mmov_append(src, dst, rows, cols, src_stride);
+    Ok(())
+}
+
+/// `y[i] = exp(x[i])` through Accelerate vForce `vvexpf`.
+///
+/// The macOS SDK declares
+/// `void vvexpf(float *y, const float *x, const int *n)`:
+/// `y[i]` is set to `exp(x[i])`, and `n` points at the element count.
+///
+/// `y` and `x` must be the same length, and that length must fit in a C
+/// `int`. `y` must not overlap `x`; the same buffer is [`vvexpf_inplace`].
+/// An empty length does not call vForce. vForce may flush denormal inputs
+/// and its exact finite results can differ across OS versions. NaN and
+/// infinity follow the usual `exp` closure: a NaN stays a NaN, `+inf` stays
+/// `+inf`, and `-inf` becomes `+0`. This function does not scan for them.
+///
+/// Compiled only with the `accelerate` feature on macOS.
+///
+/// # Errors
+///
+/// [`SimdError::OutputLength`], [`SimdError::OverlappingOutput`], or
+/// [`SimdError::LengthTooLarge`]. A refusal does not write `y`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vvexpf(y: &mut [f32], x: &[f32]) -> Result<(), SimdError> {
+    if y.len() != x.len() {
+        return Err(SimdError::OutputLength {
+            output: y.len(),
+            expected: x.len(),
+        });
+    }
+    vvexpf_count(y.len())?;
+    if ranges_overlap(x.as_ptr(), x.len(), y.as_ptr(), y.len()) {
+        return Err(SimdError::OverlappingOutput);
+    }
+    if y.is_empty() {
+        return Ok(());
+    }
+    arch::vvexpf(y, x);
+    Ok(())
+}
+
+/// In-place [`vvexpf`]: `y[i] = exp(y[i])`.
+///
+/// An empty length does not call vForce. A length that does not fit in a C
+/// `int` is [`SimdError::LengthTooLarge`] and does not write `y`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn vvexpf_inplace(y: &mut [f32]) -> Result<(), SimdError> {
+    vvexpf_count(y.len())?;
+    if y.is_empty() {
+        return Ok(());
+    }
+    arch::vvexpf_inplace(y);
+    Ok(())
+}
+
+/// One pass: load, test finite, record `z[i] < 0`, store `z[i] = -|z[i]|`.
+///
+/// Each 16-wide chunk (then each remaining group of 4, then each tail
+/// lane) is loaded once. A lane that is not finite stops the loop before
+/// that chunk is stored. Earlier chunks may already hold `-|x|`. Their
+/// sign bytes are not published: `signs` stays at length 0. A finite chunk
+/// stores a sign byte and `-|x|` before the next load. A sign byte is `1`
+/// when the loaded value is `< 0` and `0` otherwise: `-0` compares equal
+/// to `+0`, so it is not recorded as negative. `-|±0|` is stored as `-0`.
+///
+/// # Errors
+///
+/// [`SimdError::ReserveFailed`] when `signs` cannot grow to `z.len()`.
+/// Nothing is stored. [`SimdError::NonFinite`] when a lane is NaN or an
+/// infinity. `signs` has length 0.
+pub fn store_neg_abs_signs(z: &mut [f32], signs: &mut Vec<u8>) -> Result<(), SimdError> {
+    let n = z.len();
+    if signs.capacity() < n {
+        let mut fresh = Vec::new();
+        if fresh.try_reserve_exact(n).is_err() {
+            return Err(SimdError::ReserveFailed { len: n });
+        }
+        *signs = fresh;
+    } else {
+        signs.clear();
+    }
+    if !arch::store_neg_abs_signs(z, signs) {
+        debug_assert_eq!(signs.len(), 0);
+        return Err(SimdError::NonFinite);
+    }
+    Ok(())
+}
+
+pub use arch::ReservedF32;
+
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub use arch::NegAbsExp;
+
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+fn vvexpf_count(n: usize) -> Result<(), SimdError> {
+    if n > core::ffi::c_int::MAX as usize {
+        Err(SimdError::LengthTooLarge { len: n })
+    } else {
+        Ok(())
+    }
+}
+
+/// Appends `gates[h] * attn` of that head onto `dst`.
+///
+/// Head `h` is `attn[h * head_dim .. (h + 1) * head_dim]`, scaled by
+/// `gates[h]`. Each product is one rounding of `a * g`, written once into
+/// `dst`'s spare capacity. `dst` must already have room for `attn.len()`
+/// more elements. On success `dst.len()` grows by that count. On error
+/// `dst` is unchanged. An empty `attn` leaves `dst` as it was.
+///
+/// This is not `vDSP_vsmul`. One loop writes every head. Each product is
+/// one rounding of `a * g`, including `−0`. The release build stores it
+/// with `stp`/`str`.
+///
+/// # Errors
+///
+/// [`SimdError::MismatchedLengths`] when `attn.len()` is not
+/// `gates.len() * head_dim` (a `head_dim` of 0 requires an empty `attn`).
+/// [`SimdError::LengthTooLarge`] when that product overflows.
+/// [`SimdError::OutputLength`] when spare capacity is short (`output` is
+/// the spare count). [`SimdError::OverlappingOutput`] when the spare range
+/// overlaps `attn` or `gates`. A refusal does not write `dst`.
+pub fn scale_heads_append(
+    attn: &[f32],
+    gates: &[f32],
+    head_dim: usize,
+    dst: &mut Vec<f32>,
+) -> Result<(), SimdError> {
+    let n = if head_dim == 0 {
+        if attn.is_empty() {
+            return Ok(());
+        }
+        return Err(SimdError::MismatchedLengths {
+            a: attn.len(),
+            b: 0,
+        });
+    } else {
+        match gates.len().checked_mul(head_dim) {
+            Some(n) if n == attn.len() => n,
+            Some(n) => {
+                return Err(SimdError::MismatchedLengths {
+                    a: attn.len(),
+                    b: n,
+                });
+            }
+            None => return Err(SimdError::LengthTooLarge { len: head_dim }),
+        }
+    };
+    let spare = dst.capacity() - dst.len();
+    if spare < n {
+        return Err(SimdError::OutputLength {
+            output: spare,
+            expected: n,
+        });
+    }
+    if n == 0 {
+        return Ok(());
+    }
+    let dest = dst.as_ptr().wrapping_add(dst.len());
+    if ranges_overlap(attn.as_ptr(), n, dest, n)
+        || ranges_overlap(gates.as_ptr(), gates.len(), dest, n)
+    {
+        return Err(SimdError::OverlappingOutput);
+    }
+    arch::scale_heads_append(attn, gates, head_dim, dst);
     Ok(())
 }

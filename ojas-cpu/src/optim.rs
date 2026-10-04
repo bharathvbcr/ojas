@@ -36,10 +36,10 @@ use ojas_core::{
 
 use std::sync::Mutex;
 
-use crate::gemm::{gemm, scratch as gemm_scratch, Mat};
+use crate::gemm::{gemm, gemm_out, scratch as gemm_scratch, whole_call, Mat};
 use crate::linalg::transpose;
-use crate::pool::scoped;
 use crate::pool::Exec;
+use crate::pool::{self, scoped};
 use crate::validate::{all_finite, f32_values, nonfinite, nonfinite_first, product, shape};
 
 /// Values per task of the in-place element passes ([`scale_in_place`],
@@ -330,13 +330,20 @@ impl AdamMath for AdamCoeffs32 {
         q += delta;
         // As in the f64 step: without decay a zero step keeps the stored bits.
         let new_p = if !DECAYS && delta == 0.0 { p } else { q };
-        let finite = m.is_finite()
-            & v.is_finite()
-            & denom.is_finite()
-            & delta.is_finite()
-            & new_p.is_finite();
+        let finite = f32_finite(m)
+            & f32_finite(v)
+            & f32_finite(denom)
+            & f32_finite(delta)
+            & f32_finite(new_p);
         (new_p, m, v, finite)
     }
+}
+
+/// `x.is_finite()`: exponent not all ones. Same booleans as `is_finite`,
+/// including zeros and subnormals.
+#[inline(always)]
+fn f32_finite(x: f32) -> bool {
+    (x.to_bits() & 0x7fff_ffff) < 0x7f80_0000
 }
 
 impl AdamCoeffs32 {
@@ -371,7 +378,10 @@ fn elem_block<'w>(
 }
 
 /// Pass 1 of [`adamw_in_place`] over one block: whether every element's
-/// step is finite. Nothing is stored.
+/// step is finite. Nothing is stored. A counted index loop, not a zip:
+/// the vectorizer turns it into contiguous groups and a scalar remainder.
+/// `&=` evaluates every element. The four slices are the same block; a
+/// shorter one panics rather than leaving a tail unchecked.
 fn adam_check<C: AdamMath, const DECAYS: bool, const LOW: bool>(
     c: &C,
     p: &[f32],
@@ -379,15 +389,21 @@ fn adam_check<C: AdamMath, const DECAYS: bool, const LOW: bool>(
     m: &[f32],
     v: &[f32],
 ) -> bool {
+    let n = block_len(p, g, m, v);
     let mut ok = true;
-    for (((p, g), m), v) in p.iter().zip(g).zip(m).zip(v) {
-        ok &= c.elem::<DECAYS, LOW>(*p, *g, *m, *v).3;
+    for i in 0..n {
+        ok &= c.elem::<DECAYS, LOW>(p[i], g[i], m[i], v[i]).3;
     }
     ok
 }
 
 /// Pass 2 of [`adamw_in_place`] over one block: every element's step,
 /// stored in place. Element `i` reads only element `i` of each input.
+///
+/// Eight values per iteration, then a scalar tail: the shape the check
+/// already vectorizes to, two `fsqrt.4s` and one scalar `fsqrt`. Each
+/// lane is the same [`AdamMath::elem`] as the four-wide store, in index
+/// order, so a zero step still keeps a stored `-0`.
 fn adam_store<C: AdamMath, const DECAYS: bool, const LOW: bool>(
     c: &C,
     p: &mut [f32],
@@ -395,12 +411,63 @@ fn adam_store<C: AdamMath, const DECAYS: bool, const LOW: bool>(
     m: &mut [f32],
     v: &mut [f32],
 ) {
-    for (((p, g), m), v) in p.iter_mut().zip(g).zip(m.iter_mut()).zip(v.iter_mut()) {
-        let (np, nm, nv, _) = c.elem::<DECAYS, LOW>(*p, *g, *m, *v);
-        *p = np;
-        *m = nm;
-        *v = nv;
+    let n = block_len(p, g, m, v);
+    let head = n & !7;
+    let (p_head, p_tail) = p.split_at_mut(head);
+    let (g_head, g_tail) = g.split_at(head);
+    let (m_head, m_tail) = m.split_at_mut(head);
+    let (v_head, v_tail) = v.split_at_mut(head);
+    let (p_chunks, _) = p_head.as_chunks_mut::<8>();
+    let (g_chunks, _) = g_head.as_chunks::<8>();
+    let (m_chunks, _) = m_head.as_chunks_mut::<8>();
+    let (v_chunks, _) = v_head.as_chunks_mut::<8>();
+    for (((pc, gc), mc), vc) in p_chunks.iter_mut().zip(g_chunks).zip(m_chunks).zip(v_chunks) {
+        adam_store8::<C, DECAYS, LOW>(c, pc, gc, mc, vc);
     }
+    for i in 0..p_tail.len() {
+        let (np, nm, nv, _) = c.elem::<DECAYS, LOW>(p_tail[i], g_tail[i], m_tail[i], v_tail[i]);
+        p_tail[i] = np;
+        m_tail[i] = nm;
+        v_tail[i] = nv;
+    }
+}
+
+/// One eight-wide group of [`adam_store`]. Lanes run in order; each is
+/// [`AdamMath::elem`] then the three stores.
+#[inline(always)]
+fn adam_store8<C: AdamMath, const DECAYS: bool, const LOW: bool>(
+    c: &C,
+    p: &mut [f32; 8],
+    g: &[f32; 8],
+    m: &mut [f32; 8],
+    v: &mut [f32; 8],
+) {
+    macro_rules! lane {
+        ($i:expr) => {{
+            let (np, nm, nv, _) = c.elem::<DECAYS, LOW>(p[$i], g[$i], m[$i], v[$i]);
+            p[$i] = np;
+            m[$i] = nm;
+            v[$i] = nv;
+        }};
+    }
+    lane!(0);
+    lane!(1);
+    lane!(2);
+    lane!(3);
+    lane!(4);
+    lane!(5);
+    lane!(6);
+    lane!(7);
+}
+
+/// Length of one AdamW block. The four slices are cut to the same `n` by
+/// the caller. A shorter slice is a bug: stopping at the shortest would
+/// store a prefix and report success.
+fn block_len(p: &[f32], g: &[f32], m: &[f32], v: &[f32]) -> usize {
+    debug_assert_eq!(p.len(), g.len());
+    debug_assert_eq!(p.len(), m.len());
+    debug_assert_eq!(p.len(), v.len());
+    p.len()
 }
 
 /// `(param, moment1, moment2)` after one step.
@@ -668,6 +735,67 @@ pub(crate) fn muon_ns5(
     Ok((new_p, buf))
 }
 
+/// `A · B` for one Newton-Schulz product.
+///
+/// On macOS a Fast product is one `cblas_sgemm`. That call runs on the
+/// calling thread: `BLASGetThreading` is multi-threaded, and
+/// `VECLIB_MAXIMUM_THREADS` does not raise it, but a live thread sample
+/// still sees only the caller (measured on the Muon shapes, including a
+/// 4096 cube). Row bands of that call match its bits (max abs 0, including
+/// when `A` and `B` alias) and each band stays one whole Accelerate call,
+/// so the pool's threads do the bands. `A @ A` and `B @ X` take one band per
+/// pool thread. `X @ Xᵀ` (both views of one buffer) takes two bands when
+/// `k < 2m` and one band otherwise: at m = n = 768, two bands were faster
+/// for k = 512, 768, and 1024, and slower for k = 1536, 2048, and 3072. A
+/// band that would miss the whole-call cutoff is not split: the packed
+/// kernel is a different result. One thread, or a product Accelerate would
+/// not take for a single row, stays one call.
+fn ns_gemm(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>) -> Result<Vec<f32>, OjasError> {
+    const OP: &str = "muon_ns5_step";
+    let (m, k, n) = (a.rows, a.cols, b.cols);
+    let threads = exec.pool.threads();
+    let rhs_trans = b.rows > 1 && b.cols > 1 && b.rs == 1 && b.cs != 1;
+    let bands = if threads <= 1 || !whole_call(exec.numerics, 1, k, n) {
+        1
+    } else if rhs_trans {
+        match m.checked_mul(2) {
+            Some(twice) if m >= 2 && k < twice => 2,
+            _ => 1,
+        }
+    } else if m >= threads {
+        threads
+    } else {
+        1
+    };
+    if bands <= 1 {
+        return gemm(OP, exec, &a, &b);
+    }
+    let len = product(OP, &[m, n])?;
+    let mut c = vec![0.0f32; len];
+    let rows = pool::ranges(m, bands);
+    let lens: Vec<usize> = rows.iter().map(|band| band.len() * n).collect();
+    let parts = scoped::cut(&mut c, &lens)?;
+    let jobs: Vec<_> = rows.into_iter().zip(parts).collect();
+    scoped::fill_parts(exec, jobs, |_, (band, part)| {
+        let start = band
+            .start
+            .checked_mul(a.rs)
+            .ok_or_else(|| shape(OP, "muon gemm band start overflows"))?;
+        if start > a.data.len() {
+            return Err(shape(OP, "muon gemm band starts past its matrix"));
+        }
+        let a_band = Mat {
+            data: &a.data[start..],
+            rows: band.len(),
+            cols: k,
+            rs: a.rs,
+            cs: a.cs,
+        };
+        gemm_out(OP, exec, &a_band, &b, part)
+    })?;
+    Ok(c)
+}
+
 fn newton_schulz(
     exec: Exec<'_>,
     update: Vec<f32>,
@@ -701,14 +829,16 @@ fn newton_schulz(
     let c_coef = MUON_NS5_C as f32;
     for _ in 0..5 {
         let xm = Mat::row_major(&x, r, c);
-        let am = gemm(OP, exec, &xm, &xm.t())?;
+        let xmt = xm.t();
+        let am = ns_gemm(exec, xm, xmt)?;
         let a_mat = Mat::row_major(&am, r, r);
-        let a2 = gemm(OP, exec, &a_mat, &a_mat)?;
+        let a2 = ns_gemm(exec, a_mat, a_mat)?;
         let b_mat = zip_map(exec, &am, &a2, |am, a2v| b_coef * am + c_coef * a2v)?;
         // Each intermediate is freed as soon as its last reader is done:
         // `muon_scratch` counts them that way.
         drop(a2);
-        let bx = gemm(OP, exec, &Mat::row_major(&b_mat, r, r), &xm)?;
+        let bm = Mat::row_major(&b_mat, r, r);
+        let bx = ns_gemm(exec, bm, xm)?;
         drop(b_mat);
         let next = zip_map(exec, &x, &bx, |xv, bxv| a * xv + bxv)?;
         drop(bx);

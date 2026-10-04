@@ -63,6 +63,7 @@ const (
 	deviceCPUParallel uint32 = 1
 	deviceMetal       uint32 = 2
 	deviceWgpu        uint32 = 3
+	deviceCPUAuto     uint32 = 4
 
 	inlineLimit = 4096
 
@@ -76,13 +77,22 @@ const (
 	// memoryGovernorInterval bounds how often an opted-in governor calls
 	// AdviseMemoryLimit. It is not once per step.
 	memoryGovernorInterval = time.Second
-
-	prefixCapacity   = "ojas:E_CAPACITY:"
-	prefixDeviceLost = "ojas:E_DEVICE_LOST:"
-	prefixBusy       = "ojas:E_BUSY:"
-	prefixNonFinite  = "ojas:E_NONFINITE:"
-	prefixPoisoned   = "ojas:E_POISONED:"
 )
+
+// inBandKinds is the one list of in-band kinds (ojas-capi/src/lib.rs
+// ErrorKind::prefix) and their sentinels. No prefix is a prefix of another,
+// so order does not matter.
+var inBandKinds = []struct {
+	prefix   string
+	sentinel error
+}{
+	{"ojas:E_CAPACITY:", ErrCapacity},
+	{"ojas:E_DEVICE_LOST:", ErrDeviceLost},
+	{"ojas:E_BUSY:", ErrBusy},
+	{"ojas:E_NONFINITE:", ErrNonFinite},
+	{"ojas:E_POISONED:", ErrPoisoned},
+	{"ojas:E_PRESSURE:", ErrPressure},
+}
 
 // Option-record tags (ojas-capi/src/wire.rs, mod tag). One numbering for
 // every record.
@@ -647,20 +657,12 @@ func poolBlock() error {
 // it (ojas-capi/src/lib.rs kind_of), so a prefix anywhere else, such as
 // inside a user path echoed in the message, selects nothing (finding F10).
 func inBandSentinel(msg string) error {
-	switch {
-	case strings.HasPrefix(msg, prefixCapacity):
-		return ErrCapacity
-	case strings.HasPrefix(msg, prefixDeviceLost):
-		return ErrDeviceLost
-	case strings.HasPrefix(msg, prefixBusy):
-		return ErrBusy
-	case strings.HasPrefix(msg, prefixNonFinite):
-		return ErrNonFinite
-	case strings.HasPrefix(msg, prefixPoisoned):
-		return ErrPoisoned
-	default:
-		return nil
+	for _, k := range inBandKinds {
+		if strings.HasPrefix(msg, k.prefix) {
+			return k.sentinel
+		}
 	}
+	return nil
 }
 
 // engineMessage is the engine's own text: a gusset.Error's Msg, which is the

@@ -14,7 +14,8 @@ use crate::model::ModelState;
 
 pub const SESSION_CAP: usize = 64;
 
-/// The process-wide memory ceiling when nothing raised it: 1 GiB.
+/// The process-wide memory ceiling when nothing raised it: 1 GiB, or the
+/// machine's hard limit ([`hard_memory_limit`]) when that is smaller.
 ///
 /// Every session's budget is a child of one root [`Budget`] with this cap,
 /// so all sessions together account at most this many bytes, whatever each
@@ -31,11 +32,30 @@ struct Ceiling {
 }
 
 static CEILING: LazyLock<Mutex<Ceiling>> = LazyLock::new(|| {
+    // On a machine (or cgroup) smaller than the default, the default would
+    // let sessions charge memory that does not exist; start at the limit.
+    let cap = hard_memory_limit().map_or(DEFAULT_MEMORY_CEILING_BYTES, |limit| {
+        DEFAULT_MEMORY_CEILING_BYTES.min(limit)
+    });
     Mutex::new(Ceiling {
-        root: Budget::new(DEFAULT_MEMORY_CEILING_BYTES),
+        root: Budget::new(cap),
         leases: Arc::new(()),
     })
 });
+
+/// The most memory this process can ever hold: physical RAM, or a tighter
+/// cgroup limit. `None` when neither can be read (the ceiling is then not
+/// checked against the machine).
+pub fn hard_memory_limit() -> Option<u64> {
+    let host = ojas_device::probe_host();
+    [host.total_bytes, host.cgroup_limit_bytes]
+        .into_iter()
+        .filter_map(|report| match report {
+            ojas_device::MemoryReport::Known(n) => Some(n),
+            ojas_device::MemoryReport::Unknown => None,
+        })
+        .min()
+}
 
 fn ceiling() -> MutexGuard<'static, Ceiling> {
     // A panic under this lock leaves either the old ceiling or the new one,
@@ -81,14 +101,33 @@ pub fn session_budget(bytes: u64) -> Result<(Budget, Lease), String> {
 
 /// Replace the process-wide memory ceiling with `bytes`.
 ///
-/// Refused when `bytes` is 0, and while any model holds the ceiling: a
-/// session in the table, one still being built, or one freed while a call
-/// was inside it. Free every model first. Nothing is changed on a refusal.
-/// This is the only setter; raising the ceiling is always this explicit
-/// call, never a per-session budget.
+/// Refused when `bytes` is 0, above the machine's memory
+/// ([`hard_memory_limit`]: physical RAM or a tighter cgroup limit; kind
+/// `E_CAPACITY`), and while any model holds the ceiling: a session in the
+/// table, one still being built, or one freed while a call was inside it.
+/// Free every model first. Nothing is changed on a refusal. This is the
+/// only setter; raising the ceiling is always this explicit call, never a
+/// per-session budget.
 pub fn set_memory_ceiling(bytes: u64) -> Result<(), String> {
+    set_memory_ceiling_within(bytes, hard_memory_limit())
+}
+
+/// [`set_memory_ceiling`] against an explicit machine limit.
+pub(crate) fn set_memory_ceiling_within(bytes: u64, limit: Option<u64>) -> Result<(), String> {
     if bytes == 0 {
         return Err("memory ceiling: 0 bytes".to_string());
+    }
+    if let Some(limit) = limit.filter(|&limit| bytes > limit) {
+        // Every charge under such a ceiling could pass while the memory
+        // behind it does not exist: the run would die of the OS's OOM kill
+        // instead of a refusal.
+        return Err(crate::kinded(
+            crate::ErrorKind::Capacity,
+            format!(
+                "capacity exceeded: memory ceiling of {bytes} bytes exceeds this machine's \
+                 {limit} bytes"
+            ),
+        ));
     }
     let mut ceiling = ceiling();
     let held = Arc::strong_count(&ceiling.leases) - 1;

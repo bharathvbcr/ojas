@@ -36,9 +36,10 @@ pub use graph::{Eval, Graph};
 pub use init::{fnv1a, init_params, init_values};
 pub use load::{load_model, load_params, load_spec, COMPILED_PREFIX, LM_HEAD};
 pub use names::{
-    param_count, param_table, BlockParams, Init, ModelParams, ParamInfo, BLOCK_PARAMS, INIT_STD,
+    param_bytes, param_count, param_table, BlockParams, Init, ModelParams, ParamInfo, BLOCK_PARAMS,
+    INIT_STD,
 };
-pub use spec::{swiglu_hidden, ModelSpec, SPEC_ARCH, SPEC_FORMAT, SPEC_METADATA_KEY};
+pub use spec::{swiglu_hidden, ModelSpec, MAX_LAYERS, SPEC_ARCH, SPEC_FORMAT, SPEC_METADATA_KEY};
 pub use trainer::{
     MomentsRef, NonFinitePolicy, StepReport, TrainConfig, TrainState, Trainer, DEFAULT_CE_CHUNK,
     NANOLAB_ADAM_LR, NANOLAB_GRAD_CLIP, NANOLAB_MATRIX_LR,

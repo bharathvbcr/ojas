@@ -62,6 +62,16 @@ fn backward_matches_cpu_at_t2048() {
     check_case(&m, 2, 1, 2048, 16, 4096);
 }
 
+/// The paired-bench shape `sdpa_b4h12t1024d64`, plus lengths that straddle
+/// the 64-wide key tile.
+#[test]
+fn backward_matches_cpu_at_the_bench_shape() {
+    let m = metal();
+    check_case(&m, 4, 12, 1024, 64, 7200);
+    check_case(&m, 1, 1, 65, 64, 7201);
+    check_case(&m, 1, 1, 63, 64, 7202);
+}
+
 #[test]
 fn backward_is_deterministic() {
     let m = metal();

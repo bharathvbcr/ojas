@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ojas_core::{
     clip_scale, AdamWConfig, Backend, BackendId, Budget, MuonNs5Config, Numerics, OjasError,
-    PerHeadGateGrad, Tensor, ValueResidualGrad,
+    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 // Every op below runs its `ojas_core::shapes` validator before it checks
 // values, copies an input or charges the budget (docs/shape-contract.md).
@@ -17,6 +17,7 @@ use ojas_core::{
 };
 
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
+use crate::gemm::whole_call;
 use crate::layout::permute;
 use crate::linalg::{linear_backward, linear_forward};
 use crate::norm::{rms_backward, rms_forward, rope_backward, rope_forward};
@@ -31,7 +32,7 @@ use crate::pointwise::{
 use crate::pool::{Exec, Pool};
 use crate::validate::{
     alloc_f32, check_f32s, f32_checked, f32_layouts, f32_operands, f32_values, fill_out, fill_outs,
-    headroom, nonfinite_first, payload_bytes, product, u32_values,
+    headroom, nonfinite_first, payload_bytes, product, scanned_f32, trusted_finite_f32, u32_values,
 };
 use ojas_core::{
     adamw_step_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
@@ -95,6 +96,16 @@ impl CpuBackend {
         self.pool.threads()
     }
 
+    /// Spawn the pool's workers now rather than on the first op large
+    /// enough to split. A long run calls this before its first step, so a
+    /// failure to spawn (a thread or memory limit) refuses the setup instead
+    /// of a step part-way through; the failure is kept, and every later op
+    /// that would split returns it too. A serial backend has nothing to
+    /// spawn. Idempotent.
+    pub fn start_workers(&self) -> Result<(), OjasError> {
+        self.pool.start()
+    }
+
     /// Called between whole output rows or attention heads.
     ///
     /// On macOS a Fast product that runs as one Accelerate call (see the
@@ -116,6 +127,13 @@ impl CpuBackend {
             pool: &self.pool,
             numerics: self.numerics,
         }
+    }
+
+    /// Bytes `muon_ns5_step` reserves for a `[rows, cols]` matrix: the most
+    /// heap scratch its phases hold at once (optim.rs `muon_scratch`). The
+    /// step and [`Backend::optimizer_scratch_bytes`] both read this.
+    fn muon_headroom(&self, op: &'static str, rows: usize, cols: usize) -> Result<u64, OjasError> {
+        payload_bytes(op, muon_scratch(op, self.exec(), rows, cols)?)
     }
 
     /// RMSNorm forward after its validator: the op itself, and each half of
@@ -151,6 +169,131 @@ impl CpuBackend {
         })?;
         Ok((grad_x, grad_w))
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn gate_forward_parts(
+        &self,
+        exec: Exec<'_>,
+        input: &[f32],
+        weight: &[f32],
+        bias: &[f32],
+        attn: &[f32],
+        dims: ojas_core::GateDims,
+        out_shape: &[usize],
+        keep_scales: bool,
+    ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+        gate_forward(
+            "per_head_sigmoid_gate_forward",
+            &self.budget,
+            exec,
+            input,
+            weight,
+            bias,
+            attn,
+            dims,
+            out_shape,
+            keep_scales,
+        )
+    }
+
+    /// Gate backward. On macOS Fast, `grad_y` (`v`) is refused here when it
+    /// is not finite and the sigmoid (`g`) is clamped into `[0, 1]`, so
+    /// `grad_attn = v * g` is not scanned. `grad_bias` and the two GEMM
+    /// gradients are scanned either way. Exact scans every gradient.
+    fn finish_gate_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+        grad_output: &Tensor,
+        scales: Option<&[f32]>,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        const OP: &str = "per_head_sigmoid_gate_backward";
+        let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
+        let exec = self.exec();
+        // `grad_output` is `v` in `grad_attn = v * g`. A non-finite value is
+        // refused here, before any gradient is charged.
+        let ins = f32_operands(OP, exec, [input, weight, bias, attn_out, grad_output])?;
+        #[cfg(target_os = "macos")]
+        if exec.numerics == Numerics::Fast {
+            return self.publish_gate_grads(exec, ins, scales, dims, input, weight, bias, attn_out);
+        }
+        let shapes = [
+            input.shape(),
+            weight.shape(),
+            bias.shape(),
+            attn_out.shape(),
+        ];
+        let [gx, gw, gb, ga] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
+            let proven = gate_backward(OP, &self.budget, exec, ins, dims, scales, grads)?;
+            debug_assert!(!proven, "{OP}: exact path skipped the attn scan");
+            let _ = proven;
+            Ok(())
+        })?;
+        Ok(PerHeadGateGrad {
+            input: gx,
+            weight: gw,
+            bias: gb,
+            attn_out: ga,
+        })
+    }
+
+    /// Charge the four gradients, run the backward, scan the GEMM outputs
+    /// and `grad_bias`, and record `grad_attn` finite without a second pass
+    /// when its scales were clamped into `[0, 1]`. A refusal drops every
+    /// scratch.
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::too_many_arguments)]
+    fn publish_gate_grads(
+        &self,
+        exec: Exec<'_>,
+        ins: [&[f32]; 5],
+        scales: Option<&[f32]>,
+        dims: ojas_core::GateDims,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        const OP: &str = "per_head_sigmoid_gate_backward";
+        let mut gx = Scratch::<f32>::try_alloc(product(OP, input.shape())?, &self.budget)?;
+        let mut gw = Scratch::<f32>::try_alloc(product(OP, weight.shape())?, &self.budget)?;
+        let mut gb = Scratch::<f32>::try_alloc(product(OP, bias.shape())?, &self.budget)?;
+        let mut ga = Scratch::<f32>::try_alloc(product(OP, attn_out.shape())?, &self.budget)?;
+        let proven = gate_backward(
+            OP,
+            &self.budget,
+            exec,
+            ins,
+            dims,
+            scales,
+            [
+                gx.as_mut_slice(),
+                gw.as_mut_slice(),
+                gb.as_mut_slice(),
+                ga.as_mut_slice(),
+            ],
+        )?;
+        let input_g = scanned_f32(OP, exec, gx, input.shape())?;
+        let weight_g = scanned_f32(OP, exec, gw, weight.shape())?;
+        let bias_g = scanned_f32(OP, exec, gb, bias.shape())?;
+        debug_assert!(
+            proven,
+            "{OP}: skipped the attn scan without a clamped scale"
+        );
+        let attn_g = if proven {
+            trusted_finite_f32(OP, ga, attn_out.shape())?
+        } else {
+            scanned_f32(OP, exec, ga, attn_out.shape())?
+        };
+        Ok(PerHeadGateGrad {
+            input: input_g,
+            weight: weight_g,
+            bias: bias_g,
+            attn_out: attn_g,
+        })
+    }
 }
 
 impl Backend for CpuBackend {
@@ -167,7 +310,7 @@ impl Backend for CpuBackend {
     }
 
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
-        permute("permute", &self.budget, input, dims)
+        permute("permute", &self.budget, self.exec(), input, dims)
     }
 
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
@@ -219,9 +362,42 @@ impl Backend for CpuBackend {
         let dims = linear_backward_dims(input, weight, grad_output)?;
         let exec = self.exec();
         let ins = f32_operands(OP, exec, [input, weight, grad_output])?;
+        // One forward row, Fast whole call: `rank1_weight_grad` checks every
+        // weight-gradient element as it stores `fma(g, x, +0.0)`. That buffer
+        // is not scanned again. `grad_x` is still the Accelerate product and
+        // is scanned.
+        if dims.rows == 1
+            && whole_call(
+                self.numerics,
+                dims.out_features,
+                dims.rows,
+                dims.in_features,
+            )
+        {
+            let gx_len = product(OP, &[dims.rows, dims.in_features])?;
+            let gw_len = product(OP, &[dims.out_features, dims.in_features])?;
+            let mut grad_x = Scratch::<f32>::try_alloc(gx_len, &self.budget)?;
+            let mut grad_w = Scratch::<f32>::try_alloc(gw_len, &self.budget)?;
+            let checked = linear_backward(
+                OP,
+                &self.budget,
+                exec,
+                ins,
+                &dims,
+                [grad_x.as_mut_slice(), grad_w.as_mut_slice()],
+            )?;
+            let grad_x = scanned_f32(OP, exec, grad_x, input.shape())?;
+            let grad_w = if checked {
+                trusted_finite_f32(OP, grad_w, weight.shape())?
+            } else {
+                scanned_f32(OP, exec, grad_w, weight.shape())?
+            };
+            return Ok((grad_x, grad_w));
+        }
         let shapes = [input.shape(), weight.shape()];
         let [grad_x, grad_w] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
-            linear_backward(OP, &self.budget, exec, ins, &dims, grads)
+            let _ = linear_backward(OP, &self.budget, exec, ins, &dims, grads)?;
+            Ok(())
         })?;
         Ok((grad_x, grad_w))
     }
@@ -352,9 +528,23 @@ impl Backend for CpuBackend {
         let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
         let exec = self.exec();
         let [x, w, b, attn] = f32_operands(OP, exec, [input, weight, bias, attn_out])?;
-        gate_forward(
-            OP,
-            &self.budget,
+        self.gate_forward_parts(exec, x, w, b, attn, dims, attn_out.shape(), false)
+            .map(|(y, _)| y)
+    }
+
+    fn per_head_sigmoid_gate_forward_saving(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+    ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+        const OP: &str = "per_head_sigmoid_gate_forward";
+        let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
+        let exec = self.exec();
+        let [x, w, b, attn] = f32_operands(OP, exec, [input, weight, bias, attn_out])?;
+        // Exact does not keep the scale. Its backward recomputes the logits.
+        self.gate_forward_parts(
             exec,
             x,
             w,
@@ -362,6 +552,7 @@ impl Backend for CpuBackend {
             attn,
             dims,
             attn_out.shape(),
+            exec.numerics == Numerics::Fast,
         )
     }
 
@@ -373,25 +564,25 @@ impl Backend for CpuBackend {
         attn_out: &Tensor,
         grad_output: &Tensor,
     ) -> Result<PerHeadGateGrad, OjasError> {
+        self.finish_gate_backward(input, weight, bias, attn_out, grad_output, None)
+    }
+
+    fn per_head_sigmoid_gate_backward_saved(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+        grad_output: &Tensor,
+        scales: &Tensor,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        // Exact recomputes. The saved scale is not read.
+        if self.numerics() == Numerics::Exact {
+            return self.per_head_sigmoid_gate_backward(input, weight, bias, attn_out, grad_output);
+        }
         const OP: &str = "per_head_sigmoid_gate_backward";
-        let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
-        let exec = self.exec();
-        let ins = f32_operands(OP, exec, [input, weight, bias, attn_out, grad_output])?;
-        let shapes = [
-            input.shape(),
-            weight.shape(),
-            bias.shape(),
-            attn_out.shape(),
-        ];
-        let [gx, gw, gb, ga] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
-            gate_backward(OP, &self.budget, exec, ins, dims, grads)
-        })?;
-        Ok(PerHeadGateGrad {
-            input: gx,
-            weight: gw,
-            bias: gb,
-            attn_out: ga,
-        })
+        let saved = f32_checked(OP, self.exec(), scales)?;
+        self.finish_gate_backward(input, weight, bias, attn_out, grad_output, Some(saved))
     }
 
     fn value_residual_blend_forward(
@@ -585,6 +776,22 @@ impl Backend for CpuBackend {
         adamw_in_place(OP, exec, param, grad, moment1, moment2, coeffs)
     }
 
+    /// AdamW updates in place and charges nothing beyond its operands; Muon
+    /// charges [`CpuBackend::muon_headroom`], the figure its step reserves.
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        match kind {
+            OptimizerKind::AdamW => Ok(Some(0)),
+            OptimizerKind::MuonNs5 => self
+                .muon_headroom("optimizer_scratch_bytes", rows, cols)
+                .map(Some),
+        }
+    }
+
     fn muon_ns5_step(
         &self,
         param: &mut Tensor,
@@ -601,8 +808,7 @@ impl Backend for CpuBackend {
         // The operands are read in place; this covers what `muon_ns5`
         // builds, Newton-Schulz and its GEMMs included (optim.rs
         // `muon_scratch`).
-        let work = muon_scratch(OP, self.exec(), rows, cols)?;
-        let _guard = headroom(OP, &self.budget, payload_bytes(OP, work)?)?;
+        let _guard = headroom(OP, &self.budget, self.muon_headroom(OP, rows, cols)?)?;
         // Both targets are proven writable before anything is computed, so
         // a refusal leaves them unchanged; `muon_ns5` borrows all three
         // and its new values are written once it returns.

@@ -25,10 +25,15 @@ classDiagram
     }
 
     class Budget {
-        +usize cap
-        +AtomicUsize used
+        +u64 cap_bytes
+        +AtomicU64 live_bytes
+        +AtomicU64 peak_bytes
         +try_reserve(bytes) Result~Reservation~
-        +available() usize
+        +check_room(bytes) Result~()~
+        +peak_bytes() u64
+        +reset_peak()
+        +child(cap_bytes) Budget
+        +live_bytes() Result~u64~
     }
 
     class Reservation {
@@ -116,7 +121,21 @@ stateDiagram-v2
 > [!IMPORTANT]
 > When an allocation request exceeds remaining budget capacity, `try_reserve()` returns `Err(OjasError::CapacityExceeded)` immediately. The engine **refuses to silently swap, clamp shapes, or resize limits**.
 > 
+> * **Preflight Room Check:** `check_room(bytes)` verifies whether `bytes` more would fit without reserving or charging anything. High-level callers use this to fail fast before initiating multi-step operations.
+> * **Peak High-Water Mark:** `peak_bytes()` tracks the highest live allocation recorded since budget creation or the last reset. `reset_peak()` restarts tracking at the current live bytes, allowing callers (like `Trainer::step`) to measure exact memory usage per phase.
+> * **Hierarchical Child Budgets:** `child(cap_bytes)` creates scoped sub-budgets that charge parent budgets hierarchically, guaranteeing multi-session bounds within a single global ceiling.
+> 
 > *Note on infallible allocations:* Standard Rust allocations like `vec!`, `format!`, and OS thread spawning (`thread::spawn`) operate outside the software budget and can still abort if the host operating system exhausts physical memory.
+
+---
+
+## Compute Backend Contract (`Backend`)
+
+The `Backend` trait defines the uniform operator interface implemented by compute engines (`CpuBackend`, `MetalBackend`, `WgpuBackend`):
+* Forward and backward linear transformations, activations (GELU, SiLU, ReLU), and causal multi-head attention.
+* Fused head cross-entropy computation (`linear_cross_entropy_mean`) and key-value cache operations.
+* In-place optimizer steps: `adamw_step` and `muon_ns5_step`.
+* **Optimizer Scratch Sizing:** `optimizer_scratch_bytes(kind, rows, cols)` reports the exact or bounding scratch memory needed for an optimizer step. This permits training routines to preflight memory before taking steps, preventing out-of-memory errors from poisoning parameter states.
 
 ---
 

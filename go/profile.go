@@ -21,8 +21,10 @@ type Reading struct {
 type Profile struct {
 	// BudgetBytes is the caller budget cut by total RAM, available RAM,
 	// the cgroup limit and the cgroup room (its working set: page cache does
-	// not count). Always known, and 0 on a machine with nothing to spare;
-	// SetMemoryCeiling refuses 0, so check before forwarding it. The ceiling
+	// not count). 0 on a machine with nothing to spare, under critical
+	// memory pressure, and when the call passed no budget and the engine
+	// could read no limit (an unbounded budget is never reported as a
+	// number); SetMemoryCeiling refuses 0, so check before forwarding it. The ceiling
 	// counts the logical bytes of tensors: a Metal model's resident memory can
 	// be up to twice that (tessl rounds buffers up to a power of two) plus its
 	// pool cache, so leave headroom rather than setting the ceiling to all of

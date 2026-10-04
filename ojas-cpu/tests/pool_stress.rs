@@ -212,3 +212,32 @@ fn exact_bits_from_concurrent_callers_match_one_thread_at_every_width() {
 fn exact_bits_soak() {
     run(50, 6, 2, 7200);
 }
+
+/// `start_workers` spawns the pool up front, is idempotent, and leaves the
+/// pool computing the same bits as one started lazily; a serial backend has
+/// nothing to start.
+#[test]
+fn starting_workers_early_is_idempotent_and_changes_no_bits() {
+    CpuBackend::new(Budget::new(1 << 20))
+        .start_workers()
+        .unwrap();
+    let eager = CpuBackend::with_threads(Budget::new(1 << 30), 4)
+        .unwrap()
+        .with_numerics(Numerics::Exact);
+    eager.start_workers().unwrap();
+    eager.start_workers().unwrap();
+    let lazy = CpuBackend::with_threads(Budget::new(1 << 30), 4)
+        .unwrap()
+        .with_numerics(Numerics::Exact);
+    let mut rng = SplitMix64(7);
+    let (rows, dim) = (256, 512);
+    let x: Vec<f32> = (0..rows * dim).map(|_| rng.unit()).collect();
+    let w: Vec<f32> = (0..dim).map(|_| rng.unit()).collect();
+    let run = |cpu: &CpuBackend| {
+        let x = Tensor::from_f32(&x, &[rows, dim], cpu.budget()).unwrap();
+        let w = Tensor::from_f32(&w, &[dim], cpu.budget()).unwrap();
+        let y = cpu.rms_norm_forward(&x, &w, RMS_NORM_EPS).unwrap();
+        bits(&y.to_f32_vec().unwrap())
+    };
+    assert_eq!(run(&eager), run(&lazy));
+}

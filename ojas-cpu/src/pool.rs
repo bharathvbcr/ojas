@@ -200,6 +200,17 @@ impl Pool {
         self.threads
     }
 
+    /// Spawn the workers now instead of on the first batch that splits, so a
+    /// spawn failure is reported here and not part-way through a run. A
+    /// serial pool has none to spawn. Idempotent.
+    pub(crate) fn start(&self) -> Result<(), OjasError> {
+        if self.threads > 1 {
+            self.ensure_workers()
+        } else {
+            Ok(())
+        }
+    }
+
     /// Spawn the workers once. A spawn failure is kept and returned to every
     /// later batch rather than running with fewer threads than configured.
     fn ensure_workers(&self) -> Result<(), OjasError> {

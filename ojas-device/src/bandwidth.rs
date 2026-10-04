@@ -387,6 +387,17 @@ fn load_average_unix() -> Option<f64> {
 mod heap_limit {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
+    static MEASURING: Mutex<()> = Mutex::new(());
+
+    /// Held by every test that can allocate measurement buffers. The counters
+    /// are process-wide, so a heap-growth check is exact only while no other
+    /// test holds a buffer: two at once once read 190 MiB against a 128 MiB
+    /// pair. A panicking holder must not fail the tests after it.
+    pub fn measuring() -> MutexGuard<'static, ()> {
+        MEASURING.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 
     pub static HEAP_LIVE: AtomicUsize = AtomicUsize::new(0);
     pub static HEAP_PEAK: AtomicUsize = AtomicUsize::new(0);
@@ -460,6 +471,7 @@ mod tests {
 
     #[test]
     fn out_of_bounds_configs_are_refused_before_allocating() {
+        let _measuring = heap_limit::measuring();
         assert_eq!(
             BANDWIDTH_MAX_BYTES, BANDWIDTH_DEFAULT_BYTES,
             "the allocation cap and the profile default are one ceiling"
@@ -523,6 +535,7 @@ mod tests {
 
     #[test]
     fn a_small_measurement_is_positive_and_bounded() {
+        let _measuring = heap_limit::measuring();
         for threads in [1, 2, 3, 7] {
             let t0 = Instant::now();
             let bw = measure_bandwidth(&small(threads)).unwrap();
@@ -541,6 +554,7 @@ mod tests {
 
     #[test]
     fn more_threads_than_bytes_per_page_still_copies_everything() {
+        let _measuring = heap_limit::measuring();
         // 1 MiB over 1024 workers: 1 KiB each, every byte checked.
         let c = BandwidthConfig {
             threads: CPU_THREAD_CEILING as usize,
@@ -649,8 +663,11 @@ mod tests {
 
     /// Heap high-water while `measure_bandwidth` runs. Thread stacks are not
     /// counted: pthread maps those itself. One pair of buffers is the budget;
-    /// a pair per thread is not.
-    fn heap_growth(config: &BandwidthConfig) -> usize {
+    /// a pair per thread is not. The guard keeps every other measuring test out.
+    fn heap_growth(
+        _measuring: &std::sync::MutexGuard<'static, ()>,
+        config: &BandwidthConfig,
+    ) -> usize {
         let base = heap_limit::HEAP_LIVE.load(Ordering::SeqCst);
         heap_limit::HEAP_PEAK.store(base, Ordering::SeqCst);
         heap_limit::HEAP_REQUEST.store(0, Ordering::SeqCst);
@@ -662,6 +679,7 @@ mod tests {
 
     #[test]
     fn this_host_measures_two_capped_buffers() {
+        let measuring = heap_limit::measuring();
         let profile = crate::probe_system();
         let config = BandwidthConfig::for_profile(&profile).expect("host");
         assert!(
@@ -669,11 +687,14 @@ mod tests {
             "this host sized a {} byte buffer",
             config.bytes
         );
-        let growth = heap_growth(&BandwidthConfig {
-            reps: 1,
-            max_time: Duration::from_millis(50),
-            ..config
-        });
+        let growth = heap_growth(
+            &measuring,
+            &BandwidthConfig {
+                reps: 1,
+                max_time: Duration::from_millis(50),
+                ..config
+            },
+        );
         let two = config.bytes.saturating_mul(2);
         assert!(
             growth <= two + (1 << 20),
@@ -684,6 +705,7 @@ mod tests {
 
     #[test]
     fn many_threads_share_two_buffers() {
+        let measuring = heap_limit::measuring();
         let threads = 8;
         let config = BandwidthConfig {
             bytes: BANDWIDTH_MIN_BYTES,
@@ -691,7 +713,7 @@ mod tests {
             reps: 1,
             max_time: Duration::from_millis(50),
         };
-        let growth = heap_growth(&config);
+        let growth = heap_growth(&measuring, &config);
         let two = config.bytes.saturating_mul(2);
         let slack = 1 << 20;
         assert!(
@@ -767,13 +789,14 @@ mod tests {
 
     #[test]
     fn the_largest_accepted_measurement_reserves_two_buffers() {
+        let measuring = heap_limit::measuring();
         let config = BandwidthConfig {
             bytes: BANDWIDTH_MAX_BYTES,
             threads: 8,
             reps: 1,
             max_time: Duration::from_millis(50),
         };
-        let growth = heap_growth(&config);
+        let growth = heap_growth(&measuring, &config);
         let two = config.bytes.saturating_mul(2);
         assert!(
             growth <= two + (1 << 20),
@@ -784,6 +807,7 @@ mod tests {
 
     #[test]
     fn concurrent_measurements_do_not_deadlock_or_corrupt() {
+        let _measuring = heap_limit::measuring();
         std::thread::scope(|s| {
             let hs: Vec<_> = (0..4)
                 .map(|i| s.spawn(move || measure_bandwidth(&small(1 + i))))
@@ -798,6 +822,7 @@ mod tests {
     /// process-wide cache starts empty here.
     #[test]
     fn a_refused_measurement_is_not_cached_and_a_success_is() {
+        let _measuring = heap_limit::measuring();
         let mut tight = HostMemory::all_unknown();
         tight.available_bytes = MemoryReport::Known(0);
         let refused = cached_bandwidth(&SystemProfile::from_memory(tight));

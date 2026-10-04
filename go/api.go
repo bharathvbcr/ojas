@@ -66,6 +66,13 @@ func SetModelRoot(ctx context.Context, dir string) error {
 // device's error ("metal:" or "wgpu:"), never a CPU session. Generate with
 // caller logits takes the argmax on the host.
 //
+// DeviceCPUAuto is DeviceCPUParallel with Threads chosen by the engine from
+// this machine: the usable CPUs, cut to a cgroup CPU quota, at most
+// MaxCPUThreads (SystemProfile's ThreadCeiling, clamped). Threads is not
+// read. A machine whose CPU count cannot be read is refused, not guessed.
+// Budgets are unchanged: BudgetBytes and the memory ceiling stay the
+// caller's.
+//
 // On Metal and wgpu a non-finite value (ErrNonFinite) or a lost device
 // (ErrDeviceLost) is detected on the device and reported when the call
 // synchronizes, so it may come from an earlier op of the same call. Every
@@ -76,6 +83,7 @@ const (
 	DeviceCPUParallel uint32 = deviceCPUParallel
 	DeviceMetal       uint32 = deviceMetal
 	DeviceWgpu        uint32 = deviceWgpu
+	DeviceCPUAuto     uint32 = deviceCPUAuto
 )
 
 // MaxCPUThreads is the largest Threads DeviceCPUParallel accepts. Larger
@@ -89,12 +97,16 @@ const MaxCPUThreads uint32 = 256
 // anywhere else in a message (a user path, say) selects nothing.
 //
 //	ojas:E_CAPACITY:    a byte budget, the process memory ceiling, the
-//	                    64-session table or a context length
+//	                    64-session table or a context length: the work does
+//	                    not fit, and retrying the same call will not help
 //	ojas:E_DEVICE_LOST: the device was lost
 //	ojas:E_BUSY:        another call holds this model id
 //	ojas:E_NONFINITE:   a NaN or infinity in a loss, gradient or logit
 //	ojas:E_POISONED:    the trainer was left partly updated by a failed
 //	                    optimizer step, or a call panicked holding the model
+//	ojas:E_PRESSURE:    the machine reports critical memory pressure, so a
+//	                    call that would allocate was refused before it
+//	                    started; transient, see ErrPressure
 var (
 	ErrCapacity   = errors.New("ojas: capacity")
 	ErrDeviceLost = errors.New("ojas: device lost")
@@ -104,6 +116,13 @@ var (
 	// (gusset.ErrPoisoned). Every later TrainStep, SaveCheckpoint and
 	// GenerateIDs on the id refuses with it; Resume from a checkpoint.
 	ErrPoisoned = errors.New("ojas: model poisoned")
+	// ErrPressure refuses LoadModel, NewModel, OpenTrainer, TrainStep,
+	// TrainStepTokens, Resume, GenerateIDs, GenerateGreedy and Generate
+	// while the kernel reports critical memory pressure (macOS today;
+	// Linux reports none). Nothing changed: the
+	// model and trainer are as they were, and SaveCheckpoint and Free still
+	// run. Back off and retry the same call; it is not ErrCapacity.
+	ErrPressure = errors.New("ojas: memory pressure")
 )
 
 // Numerics selects a CPU session's arithmetic contract.

@@ -7,13 +7,20 @@
 //! - `lm_head.weight` is accepted only when it is bit-equal to
 //!   `tok_emb.weight` (the tie); any other extra tensor is refused.
 //!
-//! The whole load is checked before a tensor is returned, so a refusal
-//! hands back nothing.
+//!
+//! Every name, dtype and shape, and the total bytes against the budget, are
+//! checked from the header before any tensor data is read. Each tensor is
+//! then decoded into charged storage in bounded chunks. The whole load is
+//! checked before a tensor is returned, so a refusal hands back nothing.
+//!
+//! Values are not scanned: a non-finite weight is refused by the first op
+//! that reads it (every backend checks its inputs), and the engine's tests
+//! load such files on purpose to drive the deferred-fault paths.
 
 use std::collections::BTreeMap;
 
-use ojas_core::{Budget, OjasError, Tensor};
-use ojas_io::SafeTensors;
+use ojas_core::{Budget, DType, OjasError, Tensor};
+use ojas_io::{SafeTensors, StDtype};
 
 use crate::names::param_table;
 use crate::spec::{ModelSpec, SPEC_METADATA_KEY};
@@ -23,6 +30,9 @@ pub const COMPILED_PREFIX: &str = "_orig_mod.";
 
 /// The untied head name. Accepted only as a bit-equal copy of the embedding.
 pub const LM_HEAD: &str = "lm_head.weight";
+
+/// f32 values of `lm_head.weight` compared per read (256 KiB).
+const LM_HEAD_CHUNK_VALUES: usize = 64 << 10;
 
 fn refuse(detail: String) -> OjasError {
     OjasError::Shape {
@@ -69,51 +79,92 @@ pub fn load_params(
             )));
         }
     }
-    let read = |name: &str| -> Result<(Vec<u64>, Vec<f32>), OjasError> {
-        let raw = stored
+    // The header alone: every name, dtype and shape, and the total bytes
+    // against the budget, before one byte of tensor data is read.
+    let header = |name: &str, shape: &[usize]| -> Result<&str, OjasError> {
+        let raw = *stored
             .get(name)
             .ok_or_else(|| refuse(format!("missing tensor {name:?}")))?;
-        file.read_f32(raw)
-            .map_err(|e| refuse(format!("{name}: {}", e.detail())))
-    };
-    let mut values = Vec::with_capacity(table.len());
-    for info in &table {
-        let (shape, data) = read(&info.name)?;
-        let want: Vec<u64> = info.shape.iter().map(|&d| d as u64).collect();
-        if shape != want {
+        let info = file
+            .info(raw)
+            .map_err(|e| refuse(format!("{name}: {}", e.detail())))?;
+        if info.dtype != StDtype::F32 {
+            return Err(refuse(format!("{name}: {:?}, expected F32", info.dtype)));
+        }
+        if !info
+            .shape
+            .iter()
+            .map(|&d| d as usize)
+            .eq(shape.iter().copied())
+        {
             return Err(refuse(format!(
-                "{}: shape {shape:?} != {:?}",
-                info.name, info.shape
+                "{name}: shape {:?} != {shape:?}",
+                info.shape
             )));
         }
-        values.push(data);
+        Ok(raw)
+    };
+    let mut raws = Vec::with_capacity(table.len());
+    let mut total = 0u64;
+    for info in &table {
+        raws.push(header(&info.name, &info.shape)?);
+        let bytes = (ojas_core::shape_product(&info.shape)? as u64)
+            .checked_mul(4)
+            .ok_or_else(|| refuse(format!("{}: byte size overflows", info.name)))?;
+        total = total
+            .checked_add(bytes)
+            .ok_or_else(|| refuse("total parameter bytes overflow".to_string()))?;
     }
+    let mut head = None;
     for name in stored.keys() {
         if *name == LM_HEAD {
-            let (shape, head) = read(LM_HEAD)?;
-            let emb = &values[0];
-            let same_shape = shape
-                .iter()
-                .map(|&d| d as usize)
-                .eq(table[0].shape.iter().copied());
-            let same_bits = same_shape
-                && head.len() == emb.len()
-                && head
-                    .iter()
-                    .zip(emb)
-                    .all(|(a, b)| a.to_bits() == b.to_bits());
-            if !same_bits {
-                return Err(refuse(format!(
-                    "{LM_HEAD} is not bit-equal to tok_emb.weight; an untied head is not supported"
-                )));
-            }
+            // A head of another dtype or shape cannot be the tie.
+            head = Some(header(LM_HEAD, &table[0].shape).map_err(|_| untied())?);
         } else if !table.iter().any(|info| info.name == *name) {
             return Err(refuse(format!("unexpected tensor {name:?}")));
         }
     }
-    table
-        .iter()
-        .zip(values)
-        .map(|(info, data)| Tensor::from_f32(&data, &info.shape, budget))
-        .collect()
+    budget.check_room(total)?;
+    // Each tensor is decoded straight into charged storage in bounded
+    // chunks, then checked finite.
+    let mut values = Vec::with_capacity(table.len());
+    for (info, raw) in table.iter().zip(raws) {
+        let tensor = Tensor::from_le_reader(&info.shape, DType::F32, budget, |offset, chunk| {
+            file.read_into(raw, offset, chunk)
+                .map_err(|e| refuse(format!("{}: {}", info.name, e.detail())))
+        })?;
+        values.push(tensor);
+    }
+    if let Some(raw) = head {
+        same_bits_as(file, raw, &values[0])?;
+    }
+    Ok(values)
+}
+
+fn untied() -> OjasError {
+    refuse(format!(
+        "{LM_HEAD} is not bit-equal to tok_emb.weight; an untied head is not supported"
+    ))
+}
+
+/// `raw` in `file` holds exactly `emb`'s bits, compared in bounded chunks.
+fn same_bits_as(file: &SafeTensors<'_>, raw: &str, emb: &Tensor) -> Result<(), OjasError> {
+    let emb = emb.f32_slice()?;
+    let mut buf = vec![0u8; LM_HEAD_CHUNK_VALUES * 4];
+    for (index, piece) in emb.chunks(LM_HEAD_CHUNK_VALUES).enumerate() {
+        let bytes = &mut buf[..piece.len() * 4];
+        let offset = (index * LM_HEAD_CHUNK_VALUES * 4) as u64;
+        file.read_into(raw, offset, bytes)
+            .map_err(|e| refuse(format!("{LM_HEAD}: {}", e.detail())))?;
+        let equal = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(piece)
+            .all(|(b, v)| u32::from_le_bytes(*b) == v.to_bits());
+        if !equal {
+            return Err(untied());
+        }
+    }
+    Ok(())
 }

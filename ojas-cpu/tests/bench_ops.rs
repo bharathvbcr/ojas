@@ -24,6 +24,7 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ojas_core::{
@@ -362,19 +363,30 @@ fn gate_case(b: &Budget) -> Case {
     let bias = c.f32("b", &[NH], 0.1, 0.0);
     let attn = c.f32("attn", &[1, T, NH, HD], 1.0, 0.0);
     let gy = c.f32("gy", &[1, T, NH, HD], 0.01, 0.0);
+    // The scale is what a Fast forward keeps. Building it on the first call
+    // (a warmup) keeps it out of the timed backward, the same split as
+    // torch's untimed forward plus timed `autograd.grad`.
+    let scales = OnceLock::new();
     c.case(
         "gate",
         format!("x[1,{T},{D}] attn[1,{T},{NH},{HD}]"),
         vec![
             dir("fwd", 20, move |cpu, t| {
-                Ok(vec![out(
-                    "y",
-                    cpu.per_head_sigmoid_gate_forward(&t[x], &t[w], &t[bias], &t[attn])?,
-                )])
+                let (y, scale) =
+                    cpu.per_head_sigmoid_gate_forward_saving(&t[x], &t[w], &t[bias], &t[attn])?;
+                drop(scale);
+                Ok(vec![out("y", y)])
             }),
             dir("bwd", 20, move |cpu, t| {
-                let g =
-                    cpu.per_head_sigmoid_gate_backward(&t[x], &t[w], &t[bias], &t[attn], &t[gy])?;
+                let scale = scales.get_or_init(|| {
+                    cpu.per_head_sigmoid_gate_forward_saving(&t[x], &t[w], &t[bias], &t[attn])
+                        .expect("gate forward")
+                        .1
+                        .expect("Fast gate forward keeps the per-head scale")
+                });
+                let g = cpu.per_head_sigmoid_gate_backward_saved(
+                    &t[x], &t[w], &t[bias], &t[attn], &t[gy], scale,
+                )?;
                 Ok(vec![
                     out("gx", g.input),
                     out("gw", g.weight),
@@ -879,7 +891,7 @@ fn builders() -> Vec<(&'static str, Builder)> {
             adamw_case(b, "adamw_3072x768", 3072, D, 10)
         }),
         ("adamw_50304x768", |b| {
-            adamw_case(b, "adamw_50304x768", V, D, 5)
+            adamw_case(b, "adamw_50304x768", V, D, 12)
         }),
         ("muon_768x768", |b| muon_case(b, "muon_768x768", D, D, 10)),
         ("muon_2048x768", |b| muon_case(b, "muon_2048x768", FF, D, 5)),

@@ -236,3 +236,51 @@ fn metal_training_steps_track_cpu_loss_and_read_back_only_the_loss() {
     );
     eprintln!("cpu   losses {cpu_losses:?}\nmetal losses {metal_losses:?}");
 }
+
+/// The figure `optimizer_scratch_bytes` reports is what each optimizer call
+/// charges above its operands: the budget's measured peak, on a backend of
+/// its own so no other test's charges reach that peak.
+#[test]
+fn reported_optimizer_scratch_is_the_measured_peak() {
+    use ojas_core::{Budget, OptimizerKind};
+    for (rows, cols) in [(1, 1), (3, 5), (64, 17), (17, 64), (96, 96)] {
+        let m = ojas_metal::MetalBackend::new(Budget::new(1 << 30)).unwrap();
+        let muon = m
+            .optimizer_scratch_bytes(OptimizerKind::MuonNs5, rows, cols)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            m.optimizer_scratch_bytes(OptimizerKind::AdamW, rows, cols)
+                .unwrap(),
+            Some(0)
+        );
+        let mut p = up(&m, &rand(&[rows, cols], 1, 0.5));
+        let g = up(&m, &rand(&[rows, cols], 2, 0.5));
+        let mut mo = up(&m, &rand(&[rows, cols], 3, 0.5));
+        let live = m.budget().live_bytes().unwrap();
+        m.budget().reset_peak();
+        m.muon_ns5_step(&mut p, &g, &mut mo, MuonNs5Config::nanolab_default())
+            .unwrap();
+        m.sync().unwrap();
+        assert_eq!(
+            m.budget().peak_bytes() - live,
+            muon,
+            "[{rows}, {cols}] Muon"
+        );
+        let mut m1 = up(&m, &rand(&[rows, cols], 4, 0.0));
+        let mut m2 = up(&m, &rand(&[rows, cols], 5, 0.0));
+        let live = m.budget().live_bytes().unwrap();
+        m.budget().reset_peak();
+        m.adamw_step(
+            &mut p,
+            &g,
+            &mut m1,
+            &mut m2,
+            0,
+            AdamWConfig::nanolab(1e-3, 0.0),
+        )
+        .unwrap();
+        m.sync().unwrap();
+        assert_eq!(m.budget().peak_bytes(), live, "[{rows}, {cols}] AdamW");
+    }
+}

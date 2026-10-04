@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use ojas_core::DataCursor;
 use ojas_core::{
     AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, DeviceBuffer, LinearCe, MuonNs5Config,
-    Numerics, OjasError, PerHeadGateGrad, Tensor, ValueResidualGrad,
+    Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Reservation, Tensor, ValueResidualGrad,
 };
 use ojas_cpu::CpuBackend;
 use ojas_data::TokenBin;
@@ -584,6 +584,11 @@ pub struct Probe<B: Backend> {
     download_live: Mutex<Vec<u64>>,
     /// `(budget().live_bytes(), tensor bytes)` just before each `upload`.
     upload_live: Mutex<Vec<(u64, u64)>>,
+    /// `(clip_grad_norm call index, room)`: after that call, hold budget so
+    /// that exactly `room` bytes stay free (another holder taking memory
+    /// between the gradients and the optimizer).
+    squeeze: Mutex<Option<(usize, u64)>>,
+    held: Mutex<Vec<Reservation>>,
 }
 
 impl<B: Backend> Probe<B> {
@@ -596,7 +601,22 @@ impl<B: Backend> Probe<B> {
             calls: Mutex::new(Vec::new()),
             download_live: Mutex::new(Vec::new()),
             upload_live: Mutex::new(Vec::new()),
+            squeeze: Mutex::new(None),
+            held: Mutex::new(Vec::new()),
         }
+    }
+
+    /// After call `nth` (from 0, counted from now on) of `clip_grad_norm`,
+    /// leave only `room` bytes of the budget free until [`Self::release`].
+    pub fn squeeze_after_clip(&self, nth: usize, room: u64) {
+        let base = self.count("clip_grad_norm");
+        *self.squeeze.lock().unwrap() = Some((base + nth, room));
+    }
+
+    /// Drop every hold of [`Self::squeeze_after_clip`] and disarm it.
+    pub fn release(&self) {
+        *self.squeeze.lock().unwrap() = None;
+        self.held.lock().unwrap().clear();
     }
 
     /// Record every optimizer call's gradient (read on the host).
@@ -890,7 +910,20 @@ impl<B: Backend> Backend for Probe<B> {
     }
     fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
         self.gate("clip_grad_norm")?;
-        self.inner.clip_grad_norm(grads, max_norm)
+        let norm = self.inner.clip_grad_norm(grads, max_norm)?;
+        let index = self.count("clip_grad_norm") - 1;
+        let squeeze = *self.squeeze.lock().unwrap();
+        if let Some((at, room)) = squeeze {
+            if at == index {
+                let budget = self.inner.budget();
+                let free = budget.cap_bytes() - budget.live_bytes()?;
+                if free > room {
+                    let held = budget.try_reserve(free - room)?;
+                    self.held.lock().unwrap().push(held);
+                }
+            }
+        }
+        Ok(norm)
     }
     fn adamw_step(
         &self,
@@ -927,6 +960,14 @@ impl<B: Backend> Backend for Probe<B> {
                 .push(OptCall::Muon { grad, config });
         }
         self.inner.muon_ns5_step(p, g, m, config)
+    }
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        self.inner.optimizer_scratch_bytes(kind, rows, cols)
     }
     fn sync(&self) -> Result<(), OjasError> {
         self.gate("sync")?;

@@ -1,5 +1,6 @@
 //! Branch-free exponentials for [`ojas_core::Numerics::Fast`]: `2^x` for the
-//! attention softmax ([`exp2_affine`]), `e^x` for SiLU ([`exp`]) and
+//! attention softmax ([`exp2_affine`]), `e^x` for SiLU ([`exp`]; macOS Fast
+//! forward calls Accelerate `vvexpf` instead) and
 //! cross-entropy ([`exp_sub_sum`], [`exp_sub_store`]). One polynomial and one
 //! scaling step serve all of them; `f32::exp` is a libm call per element and
 //! does not vectorize.

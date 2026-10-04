@@ -170,6 +170,20 @@ pub fn param_count(spec: &ModelSpec) -> Result<usize, OjasError> {
         })
 }
 
+/// Bytes of every parameter of `spec` as `F32`, from the §2 table.
+pub fn param_bytes(spec: &ModelSpec) -> Result<u64, OjasError> {
+    param_table(spec)?.iter().try_fold(0u64, |total, info| {
+        let elems = ojas_core::shape_product(&info.shape)? as u64;
+        elems
+            .checked_mul(4)
+            .and_then(|b| total.checked_add(b))
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "param_bytes",
+                detail: "parameter bytes overflow u64".to_string(),
+            })
+    })
+}
+
 /// The §2 table for `spec`, in canonical order.
 pub fn param_table(spec: &ModelSpec) -> Result<Vec<ParamInfo>, OjasError> {
     spec.validate()?;

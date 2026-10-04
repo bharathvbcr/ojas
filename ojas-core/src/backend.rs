@@ -305,6 +305,13 @@ impl AdamWConfig {
     }
 }
 
+/// Which optimizer call [`Backend::optimizer_scratch_bytes`] sizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptimizerKind {
+    AdamW,
+    MuonNs5,
+}
+
 /// Muon NS5 as nanolab's `Muon.step` runs it.
 ///
 /// Nesterov momentum (`buf = mom * buf + g`, update = `g + mom * buf` when
@@ -549,6 +556,36 @@ pub trait Backend {
         grad_output: &Tensor,
     ) -> Result<PerHeadGateGrad, OjasError>;
 
+    /// Forward, and the per-head sigmoid `[rows, heads]` when this backend
+    /// keeps it for backward. The default runs the forward and saves nothing.
+    fn per_head_sigmoid_gate_forward_saving(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+    ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+        Ok((
+            self.per_head_sigmoid_gate_forward(input, weight, bias, attn_out)?,
+            None,
+        ))
+    }
+
+    /// Backward using a scale from [`Self::per_head_sigmoid_gate_forward_saving`].
+    /// The default ignores `scales` and recomputes.
+    fn per_head_sigmoid_gate_backward_saved(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+        grad_output: &Tensor,
+        scales: &Tensor,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        let _ = scales;
+        self.per_head_sigmoid_gate_backward(input, weight, bias, attn_out, grad_output)
+    }
+
     fn value_residual_blend_forward(
         &self,
         value: &Tensor,
@@ -634,6 +671,26 @@ pub trait Backend {
         momentum: &mut Tensor,
         config: MuonNs5Config,
     ) -> Result<(), OjasError>;
+
+    /// The most bytes one [`Backend::adamw_step`] or [`Backend::muon_ns5_step`]
+    /// on a `[rows, cols]` parameter charges to this backend's budget beyond
+    /// its operands (a vector is `[1, len]`). `None`: this backend does not
+    /// say.
+    ///
+    /// A training loop checks this room before its first optimizer call, so
+    /// a refusal arrives while every parameter is still unchanged. It is an
+    /// upper bound on what the step itself reserves, never below it; each
+    /// backend derives both from one sizing rule, and a test per backend
+    /// compares the figure with the budget's measured peak.
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        let _ = (kind, rows, cols);
+        Ok(None)
+    }
 
     /// Wait for every op this backend has submitted, then report any fault
     /// it deferred.
@@ -875,6 +932,33 @@ macro_rules! forward_backend {
         ) -> Result<PerHeadGateGrad, OjasError> {
             (**self).per_head_sigmoid_gate_backward(input, weight, bias, attn_out, grad_output)
         }
+        fn per_head_sigmoid_gate_forward_saving(
+            &self,
+            input: &Tensor,
+            weight: &Tensor,
+            bias: &Tensor,
+            attn_out: &Tensor,
+        ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+            (**self).per_head_sigmoid_gate_forward_saving(input, weight, bias, attn_out)
+        }
+        fn per_head_sigmoid_gate_backward_saved(
+            &self,
+            input: &Tensor,
+            weight: &Tensor,
+            bias: &Tensor,
+            attn_out: &Tensor,
+            grad_output: &Tensor,
+            scales: &Tensor,
+        ) -> Result<PerHeadGateGrad, OjasError> {
+            (**self).per_head_sigmoid_gate_backward_saved(
+                input,
+                weight,
+                bias,
+                attn_out,
+                grad_output,
+                scales,
+            )
+        }
         fn value_residual_blend_forward(
             &self,
             value: &Tensor,
@@ -958,6 +1042,14 @@ macro_rules! forward_backend {
             config: MuonNs5Config,
         ) -> Result<(), OjasError> {
             (**self).muon_ns5_step(param, grad, momentum, config)
+        }
+        fn optimizer_scratch_bytes(
+            &self,
+            kind: OptimizerKind,
+            rows: usize,
+            cols: usize,
+        ) -> Result<Option<u64>, OjasError> {
+            (**self).optimizer_scratch_bytes(kind, rows, cols)
         }
         fn sync(&self) -> Result<(), OjasError> {
             (**self).sync()
@@ -1657,6 +1749,26 @@ mod tests {
         ) -> Result<PerHeadGateGrad, OjasError> {
             Err(mark("per_head_sigmoid_gate_backward"))
         }
+        fn per_head_sigmoid_gate_forward_saving(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+            Err(mark("per_head_sigmoid_gate_forward_saving"))
+        }
+        fn per_head_sigmoid_gate_backward_saved(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<PerHeadGateGrad, OjasError> {
+            Err(mark("per_head_sigmoid_gate_backward_saved"))
+        }
         fn value_residual_blend_forward(
             &self,
             _: &Tensor,
@@ -1741,6 +1853,14 @@ mod tests {
         ) -> Result<(), OjasError> {
             Err(mark("muon_ns5_step"))
         }
+        fn optimizer_scratch_bytes(
+            &self,
+            _: OptimizerKind,
+            _: usize,
+            _: usize,
+        ) -> Result<Option<u64>, OjasError> {
+            Err(mark("optimizer_scratch_bytes"))
+        }
         fn sync(&self) -> Result<(), OjasError> {
             Err(mark("sync"))
         }
@@ -1814,6 +1934,10 @@ mod tests {
             op(backend.causal_sdpa_backward(&t, &t, &t, &t)),
             op(backend.per_head_sigmoid_gate_forward(&t, &t, &t, &t)),
             op(backend.per_head_sigmoid_gate_backward(&t, &t, &t, &t, &t)),
+            op(backend
+                .per_head_sigmoid_gate_forward_saving(&t, &t, &t, &t)
+                .map(drop)),
+            op(backend.per_head_sigmoid_gate_backward_saved(&t, &t, &t, &t, &t, &t)),
             op(backend.value_residual_blend_forward(&t, &t, &t)),
             op(backend.value_residual_blend_backward(&t, &t, &t, &t)),
             op(backend.silu_forward(&t)),
@@ -1827,6 +1951,7 @@ mod tests {
             op(backend.clip_grad_norm(std::slice::from_mut(&mut m), 1.0)),
             op(backend.adamw_step(&mut m, &t, &mut m2, &mut m3, 0, adamw)),
             op(backend.muon_ns5_step(&mut m, &t, &mut m2, muon)),
+            op(backend.optimizer_scratch_bytes(OptimizerKind::MuonNs5, 1, 1)),
             op(backend.sync()),
             op(backend.accumulate_grad(&mut m, &t)),
             op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, true)),
@@ -1851,6 +1976,8 @@ mod tests {
             "causal_sdpa_backward",
             "per_head_sigmoid_gate_forward",
             "per_head_sigmoid_gate_backward",
+            "per_head_sigmoid_gate_forward_saving",
+            "per_head_sigmoid_gate_backward_saved",
             "value_residual_blend_forward",
             "value_residual_blend_backward",
             "silu_forward",
@@ -1864,6 +1991,7 @@ mod tests {
             "clip_grad_norm",
             "adamw_step",
             "muon_ns5_step",
+            "optimizer_scratch_bytes",
             "sync",
             "accumulate_grad",
             "linear_cross_entropy_mean",
@@ -1891,7 +2019,7 @@ mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 38);
+        assert_eq!(checked, 41);
     }
 
     #[test]

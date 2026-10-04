@@ -83,8 +83,10 @@ fn probe_architecture() -> MemoryArchitecture {
 }
 
 /// macOS `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning,
-/// 4 critical (`DISPATCH_MEMORYPRESSURE_*`). Other values are unknown.
-fn probe_pressure() -> MemoryPressure {
+/// 4 critical (`DISPATCH_MEMORYPRESSURE_*`). Other values are unknown, as
+/// is every other OS. One sysctl: cheap enough to ask before each call that
+/// allocates.
+pub fn probe_pressure() -> MemoryPressure {
     #[cfg(target_os = "macos")]
     {
         pressure_from_level(crate::sysctl::u64_by_name(
