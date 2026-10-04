@@ -5,9 +5,12 @@ target/
 /target-*
 target-*/
 **/target/
+*.rlib
+*.rmeta
 
 # Generated benchmark reference tensors (multi-GB; regenerate with the bench harness)
 *.f32
+bench/results/**/ref/
 bench/results/**/ref/*.f32
 bench/out/
 
@@ -16,6 +19,8 @@ bench/out/
 *.out
 coverage.out
 go/coverage.out
+go.work
+go.work.sum
 bin/
 
 # Python artifacts & environments
@@ -25,6 +30,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.ipynb_checkpoints/
 .venv/
 venv/
 env/
@@ -43,32 +53,49 @@ perf.data.old
 *.so
 *.dylib
 *.dll
+*.exe
+*.obj
+*.lib
+*.pdb
 
 # Secrets & Environment configurations
 .env
 .env.*
+!.env.example
 *.pem
 *.key
+*.p12
+*.pfx
 credentials.json
 
 # OS metadata
 .DS_Store
 **/.DS_Store
+._*
+.Spotlight-V100
+.Trashes
 Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
 
 # Editor & IDE configurations
 .idea/
 .vscode/
 .cursor/
+.zed/
+.fleet/
 *.swp
 *.swo
 *~
+*.bak
+*.orig
+*.rej
 
 # Local development, agents & tooling caches
 .claude/
 .devcouncil/
 .gemini/
+.site-patch/
 scan.txt
 *.tmp
 *.log
-
