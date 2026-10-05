@@ -337,24 +337,21 @@ impl Runs {
         dst: &mut Vec<f32>,
         caller_rows: usize,
     ) -> Result<bool, OjasError> {
-        let ran =
-            ojas_simd::with_nanolab_token_bands(window, dst, caller_rows, |caller, worker| {
-                let Some(handoff) = exec.pool.try_handoff(move || worker.write()) else {
-                    drop(caller);
-                    return Ok(false);
-                };
-                let mut guard = HandoffJoin {
-                    handoff: Some(handoff),
-                };
-                caller.write();
-                let handoff = guard
-                    .handoff
-                    .take()
-                    .ok_or_else(|| mmov_refused("handoff dropped"))?;
-                handoff.join().map(|_| true)
-            })
-            .map_err(permute_simd)?;
-        ran
+        ojas_simd::with_nanolab_token_bands(window, dst, caller_rows, |caller, worker| {
+            let Some(handoff) = exec.pool.try_handoff(move || worker.write()) else {
+                return Ok(false);
+            };
+            let mut guard = HandoffJoin {
+                handoff: Some(handoff),
+            };
+            caller.write();
+            let handoff = guard
+                .handoff
+                .take()
+                .ok_or_else(|| mmov_refused("handoff dropped"))?;
+            handoff.join().map(|_| true)
+        })
+        .map_err(permute_simd)?
     }
 
     /// One `vDSP_mmov` per `(head, mid)` into spare capacity. `__M` is the

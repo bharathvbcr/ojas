@@ -36,6 +36,7 @@
 
 use std::borrow::Cow;
 use std::mem::MaybeUninit;
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
 use ojas_core::{
@@ -44,7 +45,9 @@ use ojas_core::{
 };
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
-use crate::gemm::{fma, gemm, gemm_out, scratch as gemm_scratch, whole_call, Mat};
+#[cfg(target_os = "macos")]
+use crate::gemm::whole_call;
+use crate::gemm::{fma, gemm, gemm_out, scratch as gemm_scratch, Mat};
 use crate::pool::scoped;
 use crate::pool::{Exec, ROW_MIN_ELEMS};
 use crate::validate::{
@@ -1154,6 +1157,7 @@ fn overlapped_fast_gate(
 /// Fast logits `input_rows · Wᵀ + b` for one row band. `input_rows` is
 /// `band_rows * din` values, row-major.
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 fn fast_row_logits(
     op: &'static str,
     exec: Exec<'_>,
@@ -3031,13 +3035,12 @@ mod tests {
         let mut checked = 0u64;
         while bits < END {
             let n = ((END - bits) as usize).min(CHUNK);
-            for i in 0..n {
-                buf[i] = -f32::from_bits(bits + i as u32).abs();
+            for (i, v) in buf[..n].iter_mut().enumerate() {
+                *v = -f32::from_bits(bits + i as u32).abs();
             }
             ojas_simd::vvexpf_inplace(&mut buf[..n]).unwrap();
-            for i in 0..n {
+            for (i, &e) in buf[..n].iter().enumerate() {
                 let mag = bits + i as u32;
-                let e = buf[i];
                 check_pair(e, false, &mut checked);
                 if mag == 0 {
                     check_pair(e, false, &mut checked);
@@ -3054,13 +3057,7 @@ mod tests {
     fn assert_scales_already_clamped(scales: &[f32]) {
         for &s in scales {
             assert!(s.is_finite(), "{s:?}");
-            let c = if s < 0.0 {
-                0.0
-            } else if s > 1.0 {
-                1.0
-            } else {
-                s
-            };
+            let c = s.clamp(0.0, 1.0);
             assert_eq!(s.to_bits(), c.to_bits(), "{s:?}");
             assert!((0.0..=1.0).contains(&s), "{s:?}");
         }
@@ -3071,13 +3068,7 @@ mod tests {
         let big = 1.0 / (1.0 + e);
         let scale = if neg { e * big } else { big };
         assert!(scale.is_finite(), "e={e:?} neg={neg}");
-        let c = if scale < 0.0 {
-            0.0
-        } else if scale > 1.0 {
-            1.0
-        } else {
-            scale
-        };
+        let c = scale.clamp(0.0, 1.0);
         assert_eq!(
             scale.to_bits(),
             c.to_bits(),

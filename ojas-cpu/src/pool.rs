@@ -202,6 +202,9 @@ impl Pool {
 
     /// `true` after [`Pool::start`] or a [`Pool::run`] that published work.
     /// Does not spawn. A serial pool has no workers and is never ready.
+    // The handoff callers (layout.rs, pointwise.rs) are macOS-only; the
+    // tests still run it everywhere.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn workers_ready(&self) -> bool {
         self.threads > 1 && self.spawned.load(Ordering::Acquire)
     }
@@ -333,6 +336,7 @@ impl Pool {
     /// worker is up, this thread is itself a pool worker, or the pool is
     /// shutting down. [`Handoff::join`] waits for that worker and drops the
     /// task's captures before it returns.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn try_handoff<T, F>(&self, task: F) -> Option<Handoff<T>>
     where
         T: Send + 'static,
@@ -376,11 +380,13 @@ impl Pool {
 }
 
 /// One task queued by [`Pool::try_handoff`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct Handoff<T> {
     batch: Arc<Batch<T>>,
     shared: Arc<Shared>,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl<T: Send> Handoff<T> {
     /// Wait until the worker has finished. The task closure is dropped here.
     pub(crate) fn join(self) -> Result<T, OjasError> {
@@ -413,6 +419,7 @@ impl<T: Send> Handoff<T> {
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn on_pool_worker() -> bool {
     std::thread::current()
         .name()
