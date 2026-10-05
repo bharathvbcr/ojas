@@ -1141,7 +1141,6 @@ fn fast_gate_broadcast(
 ///
 /// `NaN` and both infinities fail [`all_finite`] and leave `scales`
 /// unchanged. `-0` compares equal to `0` and is not rewritten.
-#[cfg(target_os = "macos")]
 fn bound_sigmoid_scales(op: &'static str, scales: &mut [f32]) -> Result<(), OjasError> {
     if !all_finite(scales) {
         return Err(nonfinite(op));
@@ -1168,18 +1167,21 @@ pub(crate) type GateGrads<'a> = [&'a mut [f32]; 4];
 /// from [`ojas_core::per_head_sigmoid_gate_backward_dims`].
 ///
 /// Returns whether `grad_attn` is finite by construction. That is true only
-/// on macOS [`Numerics::Fast`]: `g` is the `vvexpf` sigmoid, clamped into
-/// `[0, 1]` by [`bound_sigmoid_scales`] (a non-finite scale is refused and
-/// is not stored as 0 or 1). The caller has already refused a non-finite
+/// under [`Numerics::Fast`], on every platform: `g` is clamped into `[0, 1]`
+/// by [`bound_sigmoid_scales`] (a non-finite scale is refused and is not
+/// stored as 0 or 1). The caller has already refused a non-finite
 /// `grad_y`, and a finite value times a scale in `[0, 1]` cannot overflow,
 /// so that product is not scanned. `grad_bias` and the two GEMM gradients
 /// still can overflow and are still scanned. Exact never clamps and this
-/// returns false. Alternating the whole backward at the nanolab shape on 6
-/// threads, min of 24 after 2 warmups: 0.2974 ms against 0.3226 ms with the
-/// `grad_attn` scan. The clamp changed no bit of that backward.
+/// returns false. On macOS, alternating the whole backward at the nanolab
+/// shape on 6 threads, min of 24 after 2 warmups: 0.2974 ms against
+/// 0.3226 ms with the `grad_attn` scan. The clamp changed no bit of that
+/// backward. Off macOS the scalar [`sigmoid`] is already in `[0, 1]`, so
+/// the clamp changes no gate it recomputes.
 ///
-/// A Fast caller can pass the scale the forward kept (`[rows, heads]`,
-/// already clamped on macOS). That skips the logit product. The scale is
+/// A Fast caller can pass the scale the forward kept (`[rows, heads]`).
+/// That skips the logit product. The scale is a tensor the caller hands
+/// back, so it is held to the same rule on every platform. The scale is
 /// borrowed when every value is finite and in `[0, 1]`; a finite value
 /// outside that interval is copied and clamped, and a non-finite scale
 /// refuses and releases the scratch charge. `grad_bias` and the two GEMM
@@ -1294,15 +1296,15 @@ pub(crate) fn gate_backward(
     Ok(attn_proven)
 }
 
-/// macOS Fast only: refuse a non-finite sigmoid and clamp every finite one
-/// into `[0, 1]`, the same rule as the forward broadcast. `true` means every
-/// scale that reaches the `grad_attn` multiply is in that interval.
+/// Fast only, on every platform: refuse a non-finite sigmoid and clamp every
+/// finite one into `[0, 1]`, the same rule as the macOS forward broadcast.
+/// `true` means every scale that reaches the `grad_attn` multiply is in
+/// that interval.
 fn clamp_fast_scales(
     op: &'static str,
     numerics: Numerics,
     gates: &mut [f32],
 ) -> Result<bool, OjasError> {
-    #[cfg(target_os = "macos")]
     if numerics == Numerics::Fast {
         bound_sigmoid_scales(op, gates)?;
         debug_assert!(
@@ -1313,15 +1315,15 @@ fn clamp_fast_scales(
         );
         return Ok(true);
     }
-    let _ = (op, numerics, gates);
     Ok(false)
 }
 
-/// A Fast scale saved by the forward. Non-finite refuses. On macOS a finite
-/// value outside `[0, 1]` is copied and clamped, the same rule as
-/// [`bound_sigmoid_scales`]; a scale already in range is borrowed, and
-/// `true` means `grad_attn` is finite by construction. Off macOS nothing is
-/// clamped and the flag is false.
+/// A Fast scale saved by the forward. Non-finite refuses. A finite value
+/// outside `[0, 1]` is copied and clamped, the same rule as
+/// [`bound_sigmoid_scales`] on every platform; a scale already in range is
+/// borrowed, and `true` means `grad_attn` is finite by construction. The
+/// caller passes only a Fast scale, so the Exact arm is borrowed unchanged
+/// with the flag false.
 fn fast_saved_scales<'a>(
     op: &'static str,
     numerics: Numerics,
@@ -1330,7 +1332,6 @@ fn fast_saved_scales<'a>(
     if !all_finite(saved) {
         return Err(nonfinite(op));
     }
-    #[cfg(target_os = "macos")]
     if numerics == Numerics::Fast {
         if saved.iter().any(|g| *g < 0.0 || *g > 1.0) {
             let mut owned = saved.to_vec();
@@ -1345,7 +1346,6 @@ fn fast_saved_scales<'a>(
         );
         return Ok((Cow::Borrowed(saved), true));
     }
-    let _ = numerics;
     Ok((Cow::Borrowed(saved), false))
 }
 
@@ -2118,7 +2118,6 @@ mod tests {
     /// A non-finite scale is refused before any clamp writes a number over
     /// it, and before the broadcast reserves its output. Finite values
     /// outside `[0, 1]` become the nearer endpoint; `-0` stays `-0`.
-    #[cfg(target_os = "macos")]
     #[test]
     fn bound_sigmoid_scales_refuses_non_finite_and_clamps_finite_outliers() {
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
