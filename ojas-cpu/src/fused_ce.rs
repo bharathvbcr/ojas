@@ -32,7 +32,9 @@
 //! [`OjasError::NonFinite`], and a target outside the vocabulary that is not
 //! `ignore_index` is [`OjasError::OutOfRange`], as in the unfused path.
 
-use ojas_core::{linear_ce_dims, Budget, CeChunk, LinearCe, LinearCeDims, OjasError, Tensor};
+use ojas_core::{
+    exp_exact, linear_ce_dims, Budget, CeChunk, LinearCe, LinearCeDims, OjasError, Tensor,
+};
 
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
 use crate::pool::Exec;
@@ -251,7 +253,7 @@ fn fused(
                     continue;
                 }
                 for &value in row {
-                    let e = (value - maxes[i]).exp();
+                    let e = exp_exact(value - maxes[i]);
                     if !e.is_finite() {
                         return Err(nonfinite(OP));
                     }
@@ -287,7 +289,7 @@ fn fused(
                 }
                 let (max, sum) = (maxes[i], sums[i]);
                 for value in row.iter_mut() {
-                    let p = (*value - max).exp() / sum;
+                    let p = exp_exact(*value - max) / sum;
                     *value = p / denom;
                 }
                 let class = block_targets[i] as usize;

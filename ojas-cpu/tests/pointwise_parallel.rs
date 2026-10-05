@@ -12,7 +12,7 @@
 //! Tolerances are normalized the way `ojas-cpu/benches/torch_ops.py`
 //! normalizes them: `max |got - ref| / max |ref|` over the tensor.
 
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{exp_exact, Backend, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;
@@ -62,10 +62,10 @@ fn sigmoid64(x: f64) -> f64 {
 
 fn sigmoid_ref(x: f32) -> f32 {
     if x >= 0.0 {
-        let z = (-x).exp();
+        let z = exp_exact(-x);
         1.0 / (1.0 + z)
     } else {
-        let z = x.exp();
+        let z = exp_exact(x);
         z / (1.0 + z)
     }
 }

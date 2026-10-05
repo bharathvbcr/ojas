@@ -6,14 +6,17 @@
 //! packed GEMM and worker pool replaced them. Every thread count must
 //! reproduce them.
 //!
-//! The digests were recorded on Apple silicon, and the exact softmax and
-//! cross-entropy call `f32::exp` and `f32::ln`, which come from the
-//! platform's libm, so they hold only there. glibc's
-//! `expf` differs from Apple's: `expf(-2^-25)` is `0x3f800000` on glibc 2.41
-//! and `0x3f7fffff` on macOS 27. A macOS update that changes libm would move
-//! them too. Elsewhere only the thread-count check runs; what `Numerics::Exact`
-//! promises on every platform is that the bits do not depend on the thread
-//! count.
+//! The twelve `sdpa_*` digests and `ce_grad` were re-recorded on 2026-10-05
+//! when exact softmax and cross-entropy moved from libm `f32::exp` to the
+//! correctly rounded `exp_exact`; no other digest moved. Libm `expf` is not
+//! the same everywhere: `expf(-2^-25)` is `0x3f800000` on glibc 2.41 and
+//! `0x3f7fffff` on macOS 27.
+//!
+//! Every digest but `ce_loss` is now plain `f32` arithmetic, `sqrt` and
+//! `exp_exact`, so it holds on every platform. `ce_loss` still takes the
+//! log-sum from libm `f32::ln`; it is checked only on Apple silicon, where it
+//! was recorded, and a macOS update that changes `ln` would move it.
+//! Elsewhere its thread-count check still runs.
 
 use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
@@ -176,8 +179,13 @@ fn digests(cpu: &CpuBackend) -> Vec<(String, u64)> {
     out
 }
 
-/// Recorded from the pre-pool kernels at one thread, on Apple silicon.
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+/// Digests that still depend on the platform libm (`ln`), checked only
+/// where they were recorded.
+const LIBM_LN: &[&str] = &["ce_loss"];
+const RECORDED_HERE: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+
+/// Recorded at one thread on Apple silicon: from the pre-pool kernels, and
+/// the `sdpa_*` and `ce_grad` rows again with `exp_exact` (see the header).
 const GOLDEN: &[(&str, u64)] = &[
     ("linear_fwd 1x1x1", 0x13589361bf99bd02),
     ("linear_gx 1x1x1", 0x20c93d8a4baa555a),
@@ -223,25 +231,25 @@ const GOLDEN: &[(&str, u64)] = &[
     ("muon_m 130x70", 0xf6c65cf8d4c4b1de),
     ("muon_p 97x97", 0xdb6ad320000effe0),
     ("muon_m 97x97", 0x79f473d9606dbbc2),
-    ("sdpa_fwd [2, 3, 33, 24]", 0xdb83f81384f6e8b2),
-    ("sdpa_gq [2, 3, 33, 24]", 0x1ddd6c7e4fc058c1),
-    ("sdpa_gk [2, 3, 33, 24]", 0x80e890d3088c95d2),
-    ("sdpa_gv [2, 3, 33, 24]", 0xd4b2d06d55195bac),
-    ("sdpa_fwd [1, 2, 300, 64]", 0xdeb422a3c347759b),
-    ("sdpa_gq [1, 2, 300, 64]", 0x66a4b3eaf1359ab1),
-    ("sdpa_gk [1, 2, 300, 64]", 0xdd0c4c43f716001c),
-    ("sdpa_gv [1, 2, 300, 64]", 0x37e9f8a3b99bec13),
-    ("sdpa_fwd [2, 2, 64, 16]", 0xc5a279169a3be0af),
-    ("sdpa_gq [2, 2, 64, 16]", 0x13827e245834923c),
-    ("sdpa_gk [2, 2, 64, 16]", 0xa3c633bf7fd6c626),
-    ("sdpa_gv [2, 2, 64, 16]", 0x3092e87255b284a2),
+    ("sdpa_fwd [2, 3, 33, 24]", 0xe99bd019cac5e4ba),
+    ("sdpa_gq [2, 3, 33, 24]", 0x2ec8021bbfc4c690),
+    ("sdpa_gk [2, 3, 33, 24]", 0x2e7d56a3a5239844),
+    ("sdpa_gv [2, 3, 33, 24]", 0xdc4e2d81ca41df77),
+    ("sdpa_fwd [1, 2, 300, 64]", 0x4eea62887d667b58),
+    ("sdpa_gq [1, 2, 300, 64]", 0x61f643902ee5a8f8),
+    ("sdpa_gk [1, 2, 300, 64]", 0x6677948bb0f1d205),
+    ("sdpa_gv [1, 2, 300, 64]", 0x737f62859c95ca80),
+    ("sdpa_fwd [2, 2, 64, 16]", 0x0ee154d24d440900),
+    ("sdpa_gq [2, 2, 64, 16]", 0x163a731421ff0006),
+    ("sdpa_gk [2, 2, 64, 16]", 0x7ecb25193fa2bdd0),
+    ("sdpa_gv [2, 2, 64, 16]", 0x9f24340773f5220c),
     ("rms_fwd", 0xabd4e1316a27eb03),
     ("rms_gx", 0xc9443895dbb5a0be),
     ("rms_gw", 0x4f69a30da2e929e3),
     ("rope_fwd", 0x67aef6f4d3e7c4bd),
     ("rope_bwd", 0x19893dad351dc381),
     ("ce_loss", 0x594e1e25e50639b4),
-    ("ce_grad", 0x9a52c283e25050d6),
+    ("ce_grad", 0x27da765c8a034a70),
     ("adamw_p", 0x44272ffc704755ad),
     ("adamw_m1", 0x23408c00ef235be5),
     ("adamw_m2", 0x14473793444e7cb3),
@@ -272,7 +280,6 @@ fn exact_outputs_do_not_depend_on_thread_count() {
     }
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]
 fn exact_outputs_match_pre_pool_kernels_at_every_thread_count() {
     assert!(!GOLDEN.is_empty(), "golden digests missing");
@@ -281,6 +288,12 @@ fn exact_outputs_match_pre_pool_kernels_at_every_thread_count() {
         assert_eq!(got.len(), GOLDEN.len());
         for ((name, digest), (want_name, want)) in got.iter().zip(GOLDEN) {
             assert_eq!(name, want_name);
+            if !RECORDED_HERE && LIBM_LN.contains(&name.as_str()) {
+                if threads == THREADS[0] {
+                    eprintln!("SKIP {name}: libm ln, golden recorded on Apple silicon");
+                }
+                continue;
+            }
             assert_eq!(
                 *digest, *want,
                 "{name} threads {threads}: 0x{digest:016x} != golden 0x{want:016x}"

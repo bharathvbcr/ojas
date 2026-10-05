@@ -13,6 +13,7 @@ mod budget;
 mod checkpoint;
 mod dtype;
 mod error;
+mod exp_exact;
 mod limits;
 mod shapes;
 mod tensor;
@@ -31,6 +32,7 @@ pub use checkpoint::{
 };
 pub use dtype::DType;
 pub use error::OjasError;
+pub use exp_exact::exp_exact;
 pub use limits::{shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE};
 pub use shapes::{
     adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,

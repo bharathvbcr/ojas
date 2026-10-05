@@ -19,7 +19,7 @@
 
 use std::ops::Range;
 
-use ojas_core::{sdpa_scale, Budget, Numerics, OjasError, SdpaDims};
+use ojas_core::{exp_exact, sdpa_scale, Budget, Numerics, OjasError, SdpaDims};
 
 use crate::pool::{scoped, Exec};
 use crate::validate::{nonfinite, product, room_for, shape};
@@ -270,7 +270,7 @@ pub(crate) fn softmax_prefix(
     }
     let mut sum = 0.0f32;
     for j in 0..keys {
-        let e = (scores[j] - max_score).exp();
+        let e = exp_exact(scores[j] - max_score);
         if !e.is_finite() {
             return Err(nonfinite(op));
         }
@@ -425,7 +425,7 @@ fn backward_head(
         }
         let mut sum = 0.0f32;
         for j in 0..=t {
-            let e = (scores[j] - max_score).exp();
+            let e = exp_exact(scores[j] - max_score);
             if !e.is_finite() {
                 return Err(nonfinite(op));
             }

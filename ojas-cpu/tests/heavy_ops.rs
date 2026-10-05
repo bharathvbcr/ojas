@@ -13,7 +13,9 @@
 mod common;
 
 use common::{bits, SplitMix64};
-use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, OjasError, Tensor};
+use ojas_core::{
+    exp_exact, AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 const THREADS: [usize; 4] = [1, 2, 7, 18];
@@ -197,7 +199,7 @@ fn ce_exact_reference(c: &Ce) -> (f32, Vec<f32>) {
         let mut sum = 0.0f32;
         let mut e = vec![0.0f32; c.vocab];
         for (col, &x) in row.iter().enumerate() {
-            e[col] = (x - max).exp();
+            e[col] = exp_exact(x - max);
             sum += e[col];
         }
         let class = c.targets[n] as usize;

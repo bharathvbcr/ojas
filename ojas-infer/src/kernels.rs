@@ -1,7 +1,7 @@
 //! Decode-only f32 kernels: a one-row linear and one query against the KV
 //! cache. Embedding and RMSNorm go through `ojas_cpu::CpuBackend`.
 
-use ojas_core::{sdpa_scale, OjasError};
+use ojas_core::{exp_exact, sdpa_scale, OjasError};
 #[cfg(test)]
 use ojas_core::{DType, Tensor};
 
@@ -170,7 +170,7 @@ fn softmax(scores: &mut [f32]) -> Result<(), OjasError> {
     }
     let mut sum = 0.0f32;
     for s in scores.iter_mut() {
-        *s = (*s - max).exp();
+        *s = exp_exact(*s - max);
         sum += *s;
     }
     if sum <= 0.0 || !sum.is_finite() {

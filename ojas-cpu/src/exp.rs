@@ -3,7 +3,8 @@
 //! forward calls Accelerate `vvexpf` instead) and
 //! cross-entropy ([`exp_sub_sum`], [`exp_sub_store`]). One polynomial and one
 //! scaling step serve all of them; `f32::exp` is a libm call per element and
-//! does not vectorize.
+//! does not vectorize. [`ojas_core::Numerics::Exact`] uses
+//! [`ojas_core::exp_exact`], which is correctly rounded, instead.
 //!
 //! `2^x`: the range reduction is exact, `x = n + r` with `n` rounded to
 //! nearest and `|r| <= 1/2`. `2^r` is the degree-7 Taylor polynomial of

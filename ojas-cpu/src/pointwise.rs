@@ -16,8 +16,9 @@
 //! ([`scale_heads`]).
 //! No output value depends on which chunk computed it,
 //! so the bits do not depend on the thread count. Under [`Numerics::Exact`]
-//! every value is the scalar formula below, evaluated as written (libm
-//! `exp`, no `mul_add`). Under [`Numerics::Fast`] SiLU backward and
+//! every value is the scalar formula below, evaluated as written
+//! ([`ojas_core::exp_exact`], no `mul_add`), so the bits are the same on
+//! every platform. Under [`Numerics::Fast`] SiLU backward and
 //! cross-entropy use the branch-free [`crate::exp`] so their loops vectorize.
 //! Fast SiLU forward uses that same exponential off macOS; on macOS it uses
 //! Accelerate `vvexpf` for `e^{-|x|}` and then the same sigmoid pair. The
@@ -35,8 +36,8 @@ use std::borrow::Cow;
 use std::mem::MaybeUninit;
 
 use ojas_core::{
-    BackendId, Budget, CeDims, EmbeddingDims, GateDims, Numerics, OjasError, Reservation, Scratch,
-    Tensor,
+    exp_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims, Numerics, OjasError,
+    Reservation, Scratch, Tensor,
 };
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
@@ -50,10 +51,10 @@ use crate::validate::{
 
 pub(crate) fn sigmoid(x: f32) -> f32 {
     if x >= 0.0 {
-        let z = (-x).exp();
+        let z = exp_exact(-x);
         1.0 / (1.0 + z)
     } else {
-        let z = x.exp();
+        let z = exp_exact(x);
         z / (1.0 + z)
     }
 }
@@ -163,7 +164,7 @@ fn same_len(op: &'static str, lens: &[usize], what: &str) -> Result<(), OjasErro
 
 /// `x * sigmoid(x)` as a tensor of `shape`.
 ///
-/// Exact is libm [`sigmoid`] through [`fill_rows`], which zero-fills the
+/// Exact is [`sigmoid`] through [`fill_rows`], which zero-fills the
 /// output. Fast off macOS is the same fill with [`crate::exp`]. Fast on
 /// macOS does not zero-fill: the output is reserved in `ojas-simd`, every
 /// lane is stored with `-|x|` before it is read, `vvexpf` overwrites those
@@ -946,9 +947,10 @@ fn copy_tile_into_both(src: &[f32], a: &mut Vec<f32>, b: &mut Vec<f32>) {
 /// over `[1, x]` and `[b, w]`, whose first term `0 + 1·b` is `b`.
 /// Under [`Numerics::Fast`] on macOS each finite logit is [`sigmoid`] via
 /// Accelerate `vvexpf` (`e^{-|z|}`, then the same stable pair). Exact, and
-/// Fast off macOS, stay on libm [`sigmoid`]. Interleaved at the nanolab
+/// Fast off macOS, stay on the scalar [`sigmoid`]. Interleaved at the nanolab
 /// shape (`x` `[1, 1024, 768]`, 12 heads of 64) on 6 threads, min of 20
-/// after 2 warmups: libm sigmoid 0.023 ms and this path 0.015 ms; the whole
+/// after 2 warmups, when [`sigmoid`] still called libm `exp`: the scalar
+/// sigmoid 0.023 ms and this path 0.015 ms; the whole
 /// forward 0.180 ms against 0.173 ms. The Fast broadcast was then still the
 /// parallel fill (about 0.09 ms, of which spawn about 0.03, zero-fill about
 /// 0.012, and the multiply about 0.005). One serial write of each `a * g`
@@ -1403,8 +1405,8 @@ fn gate_values(
 /// Which sigmoid turns gate logits into gates.
 #[derive(Clone, Copy)]
 enum LogitSigmoid {
-    /// libm [`sigmoid`]. Exact, and Fast off macOS.
-    Libm,
+    /// The scalar [`sigmoid`]. Exact, and Fast off macOS.
+    Scalar,
     /// Accelerate `vvexpf` of `e^{-|z|}`, then the stable pair. macOS Fast.
     #[cfg(target_os = "macos")]
     Vvexpf,
@@ -1416,12 +1418,12 @@ fn logit_sigmoid(numerics: Numerics) -> LogitSigmoid {
         return LogitSigmoid::Vvexpf;
     }
     let _ = numerics;
-    LogitSigmoid::Libm
+    LogitSigmoid::Scalar
 }
 
 fn map_logits(op: &'static str, which: LogitSigmoid, z: &mut [f32]) -> Result<(), OjasError> {
     match which {
-        LogitSigmoid::Libm => {
+        LogitSigmoid::Scalar => {
             for v in z.iter_mut() {
                 if !v.is_finite() {
                     return Err(nonfinite(op));
@@ -1758,7 +1760,7 @@ fn row_max(row: &[f32], numerics: Numerics) -> (f32, bool) {
 }
 
 /// `sum_j e^(x_j - max)` of one row, each term also written to `store` when
-/// it is given. Exact: libm `exp` and an ascending f32 sum, the reference
+/// it is given. Exact: [`exp_exact`] and an ascending f32 sum, the reference
 /// order. Fast: [`crate::exp`] in its fixed lane order.
 fn row_exp_sum(
     op: &'static str,
@@ -1772,7 +1774,7 @@ fn row_exp_sum(
             let mut sum = 0.0f32;
             let mut store = store;
             for (col, word) in row.iter().enumerate() {
-                let e = (*word - max).exp();
+                let e = exp_exact(*word - max);
                 if !e.is_finite() {
                     return Err(nonfinite(op));
                 }

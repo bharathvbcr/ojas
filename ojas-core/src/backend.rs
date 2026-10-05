@@ -22,9 +22,11 @@ pub enum BackendId {
 ///
 /// `Exact` is the reference: reductions run in ascending index order in
 /// `f32`, there is no fused multiply-add, and the bits do not depend on the
-/// thread count. On the CPU, `Exact` takes `exp` and `ln` from the platform
-/// libm, which does not round alike everywhere (glibc and Apple differ), so
-/// its bits match across thread counts, not across platforms. `Fast` may
+/// thread count. On the CPU its `exp` is correctly rounded and the same on
+/// every platform, but `ln` (cross-entropy's loss) still comes from the
+/// platform libm, which does not round alike everywhere (glibc and Apple
+/// differ), so a loss's bits match across thread counts, not across
+/// platforms. `Fast` may
 /// fuse multiply-adds, use SIMD intrinsics or a
 /// vendor BLAS, and reorder within a reduction; the bits still must not
 /// depend on the thread count, and results are compared to `Exact` at a

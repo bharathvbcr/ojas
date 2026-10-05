@@ -2,7 +2,7 @@
 //! A failure is a real mismatch with the scalar reduction order, the causal
 //! mask, or the existing non-finite / empty-tensor policy.
 
-use ojas_core::{AdamWConfig, Backend, Budget, DType, Numerics, Tensor, RMS_NORM_EPS};
+use ojas_core::{exp_exact, AdamWConfig, Backend, Budget, DType, Numerics, Tensor, RMS_NORM_EPS};
 use ojas_cpu::{scaled_lr, CosineSchedule, CpuBackend, GradAccumulator};
 
 mod common;
@@ -392,7 +392,7 @@ fn causal_reference(q: &[f32], k: &[f32], v: &[f32], time: usize, dim: usize) ->
         let mut sum = 0.0f32;
         let mut probs = vec![0.0f32; t + 1];
         for j in 0..=t {
-            let e = (scores[j] - max_score).exp();
+            let e = exp_exact(scores[j] - max_score);
             probs[j] = e;
             sum += e;
         }

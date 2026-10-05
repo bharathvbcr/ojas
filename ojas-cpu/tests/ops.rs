@@ -2,7 +2,7 @@
 //! Empty, NaN, mismatched shape, and a full budget each return a typed error.
 
 use ojas_core::{
-    refuse_unsupported_metal_head_dim, AdamWConfig, Backend, BackendId, Budget, DType,
+    exp_exact, refuse_unsupported_metal_head_dim, AdamWConfig, Backend, BackendId, Budget, DType,
     MuonNs5Config, OjasError, Tensor, METAL_MAX_HEAD_DIM, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
@@ -470,7 +470,7 @@ fn causal_forward_reference(
                 let mut sum = 0.0f32;
                 let mut probs = vec![0.0f32; t + 1];
                 for j in 0..=t {
-                    let e = (scores[j] - max_score).exp();
+                    let e = exp_exact(scores[j] - max_score);
                     probs[j] = e;
                     sum += e;
                 }
@@ -528,7 +528,7 @@ fn causal_backward_reference(
                 let mut sum = 0.0f32;
                 let mut probs = vec![0.0f32; t + 1];
                 for j in 0..=t {
-                    let e = (scores[j] - max_score).exp();
+                    let e = exp_exact(scores[j] - max_score);
                     probs[j] = e;
                     sum += e;
                 }
