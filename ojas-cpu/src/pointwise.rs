@@ -1166,18 +1166,21 @@ pub(crate) type GateGrads<'a> = [&'a mut [f32]; 4];
 /// ([`gemm_out`]); `grad_bias` sums into its zeroed output. `dims` comes
 /// from [`ojas_core::per_head_sigmoid_gate_backward_dims`].
 ///
-/// Returns whether `grad_attn` is finite by construction. That is true only
-/// under [`Numerics::Fast`], on every platform: `g` is clamped into `[0, 1]`
+/// Under [`Numerics::Fast`], on every platform, `g` is clamped into `[0, 1]`
 /// by [`bound_sigmoid_scales`] (a non-finite scale is refused and is not
-/// stored as 0 or 1). The caller has already refused a non-finite
-/// `grad_y`, and a finite value times a scale in `[0, 1]` cannot overflow,
-/// so that product is not scanned. `grad_bias` and the two GEMM gradients
-/// still can overflow and are still scanned. Exact never clamps and this
-/// returns false. On macOS, alternating the whole backward at the nanolab
-/// shape on 6 threads, min of 24 after 2 warmups: 0.2974 ms against
-/// 0.3226 ms with the `grad_attn` scan. The clamp changed no bit of that
-/// backward. Off macOS the scalar [`sigmoid`] is already in `[0, 1]`, so
-/// the clamp changes no gate it recomputes.
+/// stored as 0 or 1). Off macOS the scalar [`sigmoid`] is already in
+/// `[0, 1]`, so the clamp changes no gate it recomputes; it does change a
+/// saved scale the caller hands back.
+///
+/// Returns whether `grad_attn` is finite by construction. That is true only
+/// on macOS Fast ([`FAST_SKIPS_ATTN_SCAN`]). The caller has already refused
+/// a non-finite `grad_y`, and a finite value times a scale in `[0, 1]`
+/// cannot overflow, so that product is not scanned. `grad_bias` and the two
+/// GEMM gradients still can overflow and are still scanned. Exact never
+/// clamps and this returns false. Alternating the whole backward at the
+/// nanolab shape on 6 threads on macOS, min of 24 after 2 warmups:
+/// 0.2974 ms against 0.3226 ms with the `grad_attn` scan. The clamp changed
+/// no bit of that backward.
 ///
 /// A Fast caller can pass the scale the forward kept (`[rows, heads]`).
 /// That skips the logit product. The scale is a tensor the caller hands
@@ -1296,10 +1299,18 @@ pub(crate) fn gate_backward(
     Ok(attn_proven)
 }
 
+/// Whether a Fast backward may record `grad_attn` finite without scanning
+/// it. Only the macOS backend has the publish path that does that
+/// (`publish_gate_grads` in `backend.rs`); every other platform runs the
+/// shared path, which asserts that no scan was skipped. The scales are
+/// clamped either way.
+const FAST_SKIPS_ATTN_SCAN: bool = cfg!(target_os = "macos");
+
 /// Fast only, on every platform: refuse a non-finite sigmoid and clamp every
 /// finite one into `[0, 1]`, the same rule as the macOS forward broadcast.
-/// `true` means every scale that reaches the `grad_attn` multiply is in
-/// that interval.
+/// Returns [`FAST_SKIPS_ATTN_SCAN`] under Fast: on macOS `true` means every
+/// scale that reaches the `grad_attn` multiply is in that interval and the
+/// product is not scanned.
 fn clamp_fast_scales(
     op: &'static str,
     numerics: Numerics,
@@ -1313,7 +1324,7 @@ fn clamp_fast_scales(
                 .all(|g| g.is_finite() && (0.0..=1.0).contains(g)),
             "{op}: grad_attn treated as finite with a scale outside [0, 1]"
         );
-        return Ok(true);
+        return Ok(FAST_SKIPS_ATTN_SCAN);
     }
     Ok(false)
 }
@@ -1321,9 +1332,8 @@ fn clamp_fast_scales(
 /// A Fast scale saved by the forward. Non-finite refuses. A finite value
 /// outside `[0, 1]` is copied and clamped, the same rule as
 /// [`bound_sigmoid_scales`] on every platform; a scale already in range is
-/// borrowed, and `true` means `grad_attn` is finite by construction. The
-/// caller passes only a Fast scale, so the Exact arm is borrowed unchanged
-/// with the flag false.
+/// borrowed. The flag is [`FAST_SKIPS_ATTN_SCAN`]. The caller passes only a
+/// Fast scale, so the Exact arm is borrowed unchanged with the flag false.
 fn fast_saved_scales<'a>(
     op: &'static str,
     numerics: Numerics,
@@ -1336,7 +1346,7 @@ fn fast_saved_scales<'a>(
         if saved.iter().any(|g| *g < 0.0 || *g > 1.0) {
             let mut owned = saved.to_vec();
             bound_sigmoid_scales(op, &mut owned)?;
-            return Ok((Cow::Owned(owned), true));
+            return Ok((Cow::Owned(owned), FAST_SKIPS_ATTN_SCAN));
         }
         debug_assert!(
             saved
@@ -1344,7 +1354,7 @@ fn fast_saved_scales<'a>(
                 .all(|g| g.is_finite() && (0.0..=1.0).contains(g)),
             "{op}: grad_attn treated as finite with a scale outside [0, 1]"
         );
-        return Ok((Cow::Borrowed(saved), true));
+        return Ok((Cow::Borrowed(saved), FAST_SKIPS_ATTN_SCAN));
     }
     Ok((Cow::Borrowed(saved), false))
 }
