@@ -125,7 +125,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn open_reports_the_metal_device_name() {
-        let backend = open_metal(Budget::new(1 << 20), || Ok(())).expect("Metal device");
-        assert!(!backend.device_name().is_empty());
+        match open_metal(Budget::new(1 << 20), || Ok(())) {
+            Ok(backend) => assert!(!backend.device_name().is_empty()),
+            Err(err) => crate::tests::skip_or_fail("open_metal", &err),
+        }
     }
 }

@@ -5,6 +5,15 @@
 //! `grad_w_panel8`, the serial attention/norm/optimizer loops) before the
 //! packed GEMM and worker pool replaced them. Every thread count must
 //! reproduce them.
+//!
+//! The digests were recorded on Apple silicon, and the exact softmax and
+//! cross-entropy call `f32::exp` and `f32::ln`, which come from the
+//! platform's libm, so they hold only there. glibc's
+//! `expf` differs from Apple's: `expf(-2^-25)` is `0x3f800000` on glibc 2.41
+//! and `0x3f7fffff` on macOS 27. A macOS update that changes libm would move
+//! them too. Elsewhere only the thread-count check runs; what `Numerics::Exact`
+//! promises on every platform is that the bits do not depend on the thread
+//! count.
 
 use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
@@ -167,7 +176,8 @@ fn digests(cpu: &CpuBackend) -> Vec<(String, u64)> {
     out
 }
 
-/// Recorded from the pre-pool kernels at one thread.
+/// Recorded from the pre-pool kernels at one thread, on Apple silicon.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const GOLDEN: &[(&str, u64)] = &[
     ("linear_fwd 1x1x1", 0x13589361bf99bd02),
     ("linear_gx 1x1x1", 0x20c93d8a4baa555a),
@@ -245,6 +255,24 @@ fn print_exact_digests() {
     }
 }
 
+#[test]
+fn exact_outputs_do_not_depend_on_thread_count() {
+    let want = digests(&backend(1));
+    assert!(!want.is_empty(), "no digests");
+    for threads in THREADS {
+        let got = digests(&backend(threads));
+        assert_eq!(got.len(), want.len());
+        for ((name, digest), (want_name, want)) in got.iter().zip(&want) {
+            assert_eq!(name, want_name);
+            assert_eq!(
+                digest, want,
+                "{name} threads {threads}: 0x{digest:016x} != one thread 0x{want:016x}"
+            );
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]
 fn exact_outputs_match_pre_pool_kernels_at_every_thread_count() {
     assert!(!GOLDEN.is_empty(), "golden digests missing");

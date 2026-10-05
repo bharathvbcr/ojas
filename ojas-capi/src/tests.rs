@@ -1953,25 +1953,58 @@ fn metal_without_macos_is_an_error_not_a_cpu_session() {
     assert_eq!(session::session_count(), 0);
 }
 
+/// Set to `1` to skip a test whose GPU does not open instead of failing it,
+/// as in `ojas-model` and `ojas-infer`. CI sets it on the hosted macOS
+/// runner, whose GPU has no Metal 4 command queue.
 #[cfg(target_os = "macos")]
-fn load_metal() -> session::Session {
-    let metal = load_device(load::DEVICE_METAL, 1, "model.safetensors").expect("Metal device");
-    assert_eq!(metal.device, DeviceKind::Metal, "{metal:?}");
-    metal
+const ALLOW_NO_GPU: &str = "OJAS_ALLOW_NO_GPU";
+
+/// A device that did not open: a `SKIP` line under `OJAS_ALLOW_NO_GPU=1`,
+/// a failure otherwise.
+#[cfg(target_os = "macos")]
+pub(crate) fn skip_or_fail(what: &str, err: &str) {
+    if std::env::var(ALLOW_NO_GPU).as_deref() == Ok("1") {
+        eprintln!("SKIP ({ALLOW_NO_GPU}=1): {what}: {err}");
+    } else {
+        panic!("{what} failed: {err}. Set {ALLOW_NO_GPU}=1 to skip explicitly");
+    }
+}
+
+/// Load a Metal session. When the device does not open, the load must be
+/// the open's "metal:" error and leave no session, so no CPU session stands
+/// in for Metal; then [`skip_or_fail`] decides.
+#[cfg(target_os = "macos")]
+fn load_metal_or_skip(path: &str) -> Option<session::Session> {
+    match load_device(load::DEVICE_METAL, 1, path) {
+        Ok(metal) => {
+            assert_eq!(metal.device, DeviceKind::Metal, "{metal:?}");
+            Some(metal)
+        }
+        Err(err) => {
+            assert!(err.starts_with("metal:"), "{err}");
+            assert_eq!(session::session_count(), 0);
+            skip_or_fail("Metal load", &err);
+            None
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn metal_session_trains_on_the_device_and_matches_a_cpu_session() {
     let (_g, dir) = fresh();
-    assert_device_steps_match_cpu(load_metal(), &dir);
+    if let Some(metal) = load_metal_or_skip("model.safetensors") {
+        assert_device_steps_match_cpu(metal, &dir);
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn metal_session_samples_on_the_device_and_matches_cpu() {
     let (_g, _dir) = fresh();
-    assert_device_samples_match_cpu(load_metal());
+    if let Some(metal) = load_metal_or_skip("model.safetensors") {
+        assert_device_samples_match_cpu(metal);
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1987,7 +2020,10 @@ fn metal_load_refuses_a_bad_file_and_honors_cancel() {
 #[test]
 fn an_early_return_never_leaks_a_deferred_metal_fault_into_the_next_call() {
     let (_g, dir) = fresh();
-    assert_an_early_return_does_not_leak(load::DEVICE_METAL, &dir);
+    if load_metal_or_skip("model.safetensors").is_some() {
+        session::clear_sessions();
+        assert_an_early_return_does_not_leak(load::DEVICE_METAL, &dir);
+    }
 }
 
 /// A flag the test keeps: cancelling through the job's own context reaches
