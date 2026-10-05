@@ -9,7 +9,7 @@ use std::sync::Arc;
 /// Adding past `u64::MAX` is [`OjasError::OutOfRange`] and does not wrap
 /// the counter.
 ///
-/// The live counter is an [`AtomicU64`] updated with `fetch_update`. A
+/// The live counter is an [`AtomicU64`] updated with `try_update`. A
 /// [`Budget::child`] charges its parent to completion, then itself. The two
 /// counters are never locked together. If the child refuses, the parent
 /// charge is released.
@@ -187,7 +187,7 @@ impl Budget {
         match self
             .inner
             .live_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 let next = live.checked_add(bytes)?;
                 if next > cap {
                     None
@@ -235,7 +235,7 @@ impl Budget {
         let _ = self
             .inner
             .live_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 Some(live.saturating_sub(bytes))
             });
     }

@@ -719,17 +719,15 @@ const ADD_FWD_TILE: usize = 4096;
 fn append_sums(a: &[f32], b: &[f32], dst: &mut Vec<f32>) -> bool {
     let mut tile = [0f32; ADD_FWD_TILE];
     let mut finite = true;
-    let mut ac = a.chunks_exact(ADD_FWD_TILE);
-    let mut bc = b.chunks_exact(ADD_FWD_TILE);
-    for (ca, cb) in ac.by_ref().zip(bc.by_ref()) {
+    let (ac, ra) = a.as_chunks::<ADD_FWD_TILE>();
+    let (bc, rb) = b.as_chunks::<ADD_FWD_TILE>();
+    for (ca, cb) in ac.iter().zip(bc) {
         for k in 0..ADD_FWD_TILE {
             tile[k] = ca[k] + cb[k];
         }
         finite &= all_finite(&tile);
         dst.extend_from_slice(&tile);
     }
-    let ra = ac.remainder();
-    let rb = bc.remainder();
     let n = ra.len();
     debug_assert_eq!(n, rb.len());
     if n > 0 {
@@ -919,13 +917,12 @@ const ADD_BWD_TILE: usize = 4096;
 
 fn copy_tile_into_both(src: &[f32], a: &mut Vec<f32>, b: &mut Vec<f32>) {
     let mut tile = [0f32; ADD_BWD_TILE];
-    let mut chunks = src.chunks_exact(ADD_BWD_TILE);
-    for chunk in chunks.by_ref() {
+    let (chunks, rest) = src.as_chunks::<ADD_BWD_TILE>();
+    for chunk in chunks {
         tile.copy_from_slice(chunk);
         a.extend_from_slice(&tile);
         b.extend_from_slice(&tile);
     }
-    let rest = chunks.remainder();
     if !rest.is_empty() {
         let k = rest.len();
         tile[..k].copy_from_slice(rest);
@@ -1148,11 +1145,7 @@ fn bound_sigmoid_scales(op: &'static str, scales: &mut [f32]) -> Result<(), Ojas
         return Err(nonfinite(op));
     }
     for v in scales.iter_mut() {
-        if *v < 0.0 {
-            *v = 0.0;
-        } else if *v > 1.0 {
-            *v = 1.0;
-        }
+        *v = v.clamp(0.0, 1.0);
     }
     Ok(())
 }
@@ -2088,7 +2081,12 @@ mod tests {
                 true,
             )
             .unwrap();
-            let bits: Vec<u32> = got.f32_slice().unwrap().iter().map(|v| v.to_bits()).collect();
+            let bits: Vec<u32> = got
+                .f32_slice()
+                .unwrap()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect();
             assert_eq!(bits, want, "head_dim {head_dim}");
             drop(got);
             assert_eq!(budget.live_bytes().unwrap(), 0);

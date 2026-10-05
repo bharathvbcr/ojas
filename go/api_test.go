@@ -843,7 +843,7 @@ func TestWgpuSessionMatchesCPU(t *testing.T) {
 	ctx := context.Background()
 	probe, err := LoadModel(ctx, "model.safetensors", LoadOptions{Device: DeviceWgpu})
 	if err != nil {
-		if !strings.HasPrefix(err.Error(), "wgpu:") {
+		if !strings.HasPrefix(engineMessage(err), "wgpu:") {
 			t.Fatalf("wgpu load: %v", err)
 		}
 		t.Logf("no wgpu adapter; checking the load failed closed: %v", err)
@@ -868,17 +868,37 @@ func TestWgpuSessionMatchesCPU(t *testing.T) {
 	deviceLeg(t, dir, DeviceWgpu)
 }
 
+// skipWithoutMetal4 loads and frees a Metal model. A Mac whose GPU has no
+// Metal 4 command queue, such as a GitHub-hosted runner's paravirtual GPU,
+// skips the test. Any other load error fails it.
+func skipWithoutMetal4(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	probe, err := LoadModel(ctx, "model.safetensors", LoadOptions{Device: DeviceMetal})
+	if err != nil {
+		msg := engineMessage(err)
+		if strings.HasPrefix(msg, "metal:") && strings.Contains(msg, "requires Metal 4") {
+			t.Skipf("no Metal 4 device: %v", err)
+		}
+		t.Fatalf("metal load: %v", err)
+	}
+	if err := Free(ctx, probe); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // On macOS DeviceMetal trains and samples like a CPU model. Off macOS the
 // load is a "metal:" error.
 func TestMetalSessionMatchesCPU(t *testing.T) {
 	dir := harness(t)
 	if runtime.GOOS != "darwin" {
 		id, err := LoadModel(context.Background(), "model.safetensors", LoadOptions{Device: DeviceMetal})
-		if err == nil || !strings.HasPrefix(err.Error(), "metal:") {
+		if err == nil || !strings.HasPrefix(engineMessage(err), "metal:") {
 			t.Fatalf("Metal off macOS: id=%d err=%v", id, err)
 		}
 		return
 	}
+	skipWithoutMetal4(t)
 	deviceLeg(t, dir, DeviceMetal)
 }
 

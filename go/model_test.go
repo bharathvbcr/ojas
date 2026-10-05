@@ -97,6 +97,7 @@ func TestTrainSaveResumeGenerateRoundTripMetal(t *testing.T) {
 		t.Skip("Metal needs macOS")
 	}
 	harness(t)
+	skipWithoutMetal4(t)
 	roundTrip(t, LoadOptions{Device: DeviceMetal})
 }
 
@@ -104,7 +105,7 @@ func TestTrainSaveResumeGenerateRoundTripWgpu(t *testing.T) {
 	harness(t)
 	probe, err := LoadModel(context.Background(), "model.safetensors", LoadOptions{Device: DeviceWgpu})
 	if err != nil {
-		if !strings.HasPrefix(err.Error(), "wgpu:") {
+		if !strings.HasPrefix(engineMessage(err), "wgpu:") {
 			t.Fatal(err)
 		}
 		t.Skipf("no wgpu adapter: %v", err)

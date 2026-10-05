@@ -547,12 +547,7 @@ pub(crate) fn vvexpf_inplace(y: &mut [f32]) {
 /// Each product is one rounding of `a * g`, including `−0`. The release
 /// build turns the loop-invariant scale into a splat `fmul` and stores it
 /// with `stp`/`str`.
-pub(crate) fn scale_heads_append(
-    attn: &[f32],
-    gates: &[f32],
-    head_dim: usize,
-    dst: &mut Vec<f32>,
-) {
+pub(crate) fn scale_heads_append(attn: &[f32], gates: &[f32], head_dim: usize, dst: &mut Vec<f32>) {
     let n = attn.len();
     debug_assert!(n > 0 && head_dim > 0);
     debug_assert_eq!(gates.len() * head_dim, n);
@@ -688,10 +683,8 @@ impl NegAbsExp {
             // runs only after that. The pointer is not kept.
             let finite = unsafe {
                 let p = self.ptr.add(start);
-                let mut i = 0usize;
-                for &v in src {
+                for (i, &v) in src.iter().enumerate() {
                     p.add(i).write(-v.abs());
-                    i += 1;
                 }
                 const MAX: usize = i32::MAX as usize;
                 let mut off = 0usize;

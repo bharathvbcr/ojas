@@ -268,6 +268,7 @@ fn linear_products(cpu: &CpuBackend, rows: usize, kin: usize, nout: usize) -> [V
 
 /// The same three products as one `mul_add` chain per output, reduction
 /// index ascending from `+0.0`: what `tile_fast` and `sgemm_tile` compute.
+#[cfg(any(target_arch = "aarch64", target_feature = "fma"))]
 fn fma_chain(rows: usize, kin: usize, nout: usize) -> [Vec<f32>; 3] {
     let mut rng = SplitMix64(0xd15 + (rows * 31 + kin * 7 + nout) as u64);
     let x = rng.vec(rows * kin, 0.5);
