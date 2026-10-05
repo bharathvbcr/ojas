@@ -690,22 +690,32 @@ pub(crate) fn muon_ns5(
     Ok((new_p, buf))
 }
 
+/// Row bands of a Muon `A @ A` or `B @ X` on macOS, at any thread count.
+/// Six is the pool size the band split was measured at
+/// (`docs/bench-cpu-vs-torch.md`).
+const MUON_ROW_BANDS: usize = 6;
+
 /// `A · B` for one Newton-Schulz product.
 ///
 /// On macOS a Fast product is one `cblas_sgemm`. That call runs on the
 /// calling thread: `BLASGetThreading` is multi-threaded, and
 /// `VECLIB_MAXIMUM_THREADS` does not raise it, but a live thread sample
 /// still sees only the caller (measured on the Muon shapes, including a
-/// 4096 cube). Row bands of that call match its bits (max abs 0, including
-/// when `A` and `B` alias) and each band stays one whole Accelerate call,
-/// so the pool's threads do the bands. `A @ A` and `B @ X` take one band per
-/// pool thread. The tall 2048×768 step does not call this function for those
-/// two products. `X @ Xᵀ` (both views of one buffer) takes two bands when
+/// 4096 cube), so the product is cut into row bands, each one whole
+/// Accelerate call, and the pool's threads do the bands.
+///
+/// The cut depends on the shape only, never on the thread count: one thread
+/// runs the same bands in turn. A band's bits are not always those rows of
+/// the uncut call. They matched on an M5 Pro, but on a GitHub M1 runner and
+/// under Rosetta x86_64 the 768×768 step moved by up to 1.7e-8 between one
+/// call and six bands. `A @ A` and `B @ X` take [`MUON_ROW_BANDS`] bands.
+/// The tall 2048×768 step does not call this function for those two
+/// products. `X @ Xᵀ` (both views of one buffer) takes two bands when
 /// `k < 2m` and one band otherwise: at m = n = 768, two bands were faster
 /// for k = 512, 768, and 1024, and slower for k = 1536, 2048, and 3072. A
 /// band that would miss the whole-call cutoff is not split: the packed
-/// kernel is a different result. One thread, or a product Accelerate would
-/// not take for a single row, stays one call.
+/// kernel is a different result. A product Accelerate would not take for a
+/// single row stays one call.
 ///
 /// Off macOS a whole call is `ojas_simd::sgemm_tile` over the plan's tiles,
 /// which already spreads one product over the pool's threads, and its bits
@@ -716,18 +726,16 @@ pub(crate) fn muon_ns5(
 fn ns_gemm(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>) -> Result<Vec<f32>, OjasError> {
     const OP: &str = "muon_ns5_step";
     let (m, k, n) = (a.rows, a.cols, b.cols);
-    let threads = exec.pool.threads();
     let rhs_trans = b.rows > 1 && b.cols > 1 && b.rs == 1 && b.cs != 1;
-    let bands = if !cfg!(target_os = "macos") || threads <= 1 || !whole_call(exec.numerics, 1, k, n)
-    {
+    let bands = if !cfg!(target_os = "macos") || !whole_call(exec.numerics, 1, k, n) {
         1
     } else if rhs_trans {
         match m.checked_mul(2) {
             Some(twice) if m >= 2 && k < twice => 2,
             _ => 1,
         }
-    } else if m >= threads {
-        threads
+    } else if m >= MUON_ROW_BANDS {
+        MUON_ROW_BANDS
     } else {
         1
     };
