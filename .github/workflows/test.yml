@@ -94,7 +94,7 @@ jobs:
         run: cargo test --workspace --release -- --test-threads=1
 
   macos:
-    name: macos (full workspace incl. Metal and wgpu)
+    name: macos (workspace incl. wgpu; ojas-metal tests build only)
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -134,9 +134,20 @@ jobs:
       - name: clippy
         working-directory: ${{ env.OJAS }}
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: test (release, serialized)
+      - name: test (release, serialized, without ojas-metal)
+        # The hosted runner's paravirtual GPU has no Metal 4 command queue
+        # (newMTL4CommandQueue returns nil), so every ojas-metal test fails
+        # there. They run on a Mac with a Metal 4 GPU; here they only build.
+        # The Metal tests in other crates (ojas-model, ojas-infer) open the
+        # same runtime. OJAS_ALLOW_NO_GPU=1 makes a backend that fails to open
+        # print "SKIP (OJAS_ALLOW_NO_GPU=1)" and return; without it they fail.
         working-directory: ${{ env.OJAS }}
-        run: cargo test --workspace --release -- --test-threads=1
+        env:
+          OJAS_ALLOW_NO_GPU: "1"
+        run: cargo test --workspace --release --exclude ojas-metal -- --test-threads=1
+      - name: ojas-metal tests (build only)
+        working-directory: ${{ env.OJAS }}
+        run: cargo test -p ojas-metal --release --no-run
 
   go:
     name: go (${{ matrix.os }})
