@@ -47,20 +47,41 @@ fn dropping_a_busy_backend_returns_within_its_bound() {
     for _ in 0..n {
         drop(g.linear_forward(&x, &w).unwrap());
     }
-    let (tx, rx) = mpsc::channel();
+    // Each stage reports when it is done, so a failure names the drop that
+    // blocked: an input tensor, or the backend and its context.
+    let (tx, rx) = mpsc::channel::<(&str, Duration)>();
     let started = Instant::now();
     std::thread::spawn(move || {
-        drop((x, w, g));
-        let _ = tx.send(());
+        drop(x);
+        let _ = tx.send(("x", started.elapsed()));
+        drop(w);
+        let _ = tx.send(("w", started.elapsed()));
+        drop(g);
+        let _ = tx.send(("g", started.elapsed()));
     });
     let limit = bound + Duration::from_millis(700);
-    let returned = rx.recv_timeout(limit).is_ok();
+    let mut stages = Vec::new();
+    while let Some(left) = limit.checked_sub(started.elapsed()) {
+        match rx.recv_timeout(left) {
+            Ok(stage) => stages.push(stage),
+            Err(_) => break,
+        }
+        if stages.len() == 3 {
+            break;
+        }
+    }
+    let returned = stages.len() == 3;
     let took = started.elapsed();
+    let done: Vec<String> = stages
+        .iter()
+        .map(|(name, at)| format!("{name} at {:.3} s", at.as_secs_f64()))
+        .collect();
     eprintln!(
-        "one GEMM {:.1} ms, {n} queued (~{:.2} s), drop returned {returned} after {:.3} s",
+        "one GEMM {:.1} ms, {n} queued (~{:.2} s), drop returned {returned} after {:.3} s; done: [{}]",
         one.as_secs_f64() * 1e3,
         one.as_secs_f64() * n as f64,
-        took.as_secs_f64()
+        took.as_secs_f64(),
+        done.join(", ")
     );
     assert!(
         one.as_secs_f64() * n as f64 > limit.as_secs_f64(),

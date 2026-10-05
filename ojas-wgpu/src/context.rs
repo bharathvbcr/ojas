@@ -196,25 +196,47 @@ impl Inner {
 /// whichever thread drops the last handle: for the C ABI, the caller of the
 /// session free.
 ///
-/// So the queue is dropped on a thread of its own, and this drop waits for
-/// that thread at most [`WgpuContext::set_drop_wait`] (default
-/// [`DROP_WAIT`]). If the GPU has not finished by then, this returns and
-/// the thread finishes the drop when the GPU does: until then the queue,
-/// the device it holds, their GPU memory and one parked thread stay alive,
-/// and if the GPU never finishes they are released only at process exit.
-/// If the thread cannot be spawned, the queue is dropped here, unbounded,
-/// as before.
+/// The queue is not the only drop that can wait. On Mesa's llvmpipe
+/// (lavapipe), with 64 GEMMs in flight, the queue wait timed out at 300 ms
+/// and then dropping the pipeline cache here did not finish within the
+/// test's 1 s limit (`tests/drop.rs`): the pipelines those GEMMs use are
+/// destroyed only once their work is done, and the driver waits for it.
+///
+/// So the queue and every other GPU object this context owns (pipelines,
+/// shader modules, pooled buffers, the open encoder and its scratch, the
+/// held bind group, and handles to the device and the fault buffers) move
+/// to a thread of their own. That thread drops the queue first, which waits
+/// for the GPU, then the rest. This drop waits for it at most
+/// [`WgpuContext::set_drop_wait`] (default [`DROP_WAIT`]) and then drops
+/// only the context's remaining handles to the device and the fault
+/// buffers, which the thread still holds, so nothing is destroyed here. If
+/// the GPU has not finished by then, the thread finishes the drop when the
+/// GPU does: until then those objects, their GPU memory and one parked
+/// thread stay alive, and if the GPU never finishes they are released only
+/// at process exit. If the thread cannot be spawned, everything is dropped
+/// here, unbounded, as before.
 impl Drop for Inner {
     fn drop(&mut self) {
         let Some(queue) = self.queue.take() else {
             return;
         };
+        let rest = (
+            self.device.clone(),
+            self.fault.clone(),
+            self.held.clone(),
+            std::mem::take(&mut *lock(&self.modules)),
+            std::mem::take(&mut *lock(&self.pipelines)),
+            std::mem::take(&mut *lock(&self.pool)),
+            std::mem::take(&mut *lock(&self.rec)),
+            lock(&self.hold).take(),
+        );
         let wait = std::time::Duration::from_millis(self.drop_wait_ms.load(Ordering::Relaxed));
         let (done, finished) = std::sync::mpsc::channel::<()>();
         let reaper = std::thread::Builder::new()
             .name("ojas-wgpu-queue-drop".to_string())
             .spawn(move || {
                 drop(queue);
+                drop(rest);
                 // The receiver may have given up waiting; nothing to report.
                 let _gone = done.send(());
             });
