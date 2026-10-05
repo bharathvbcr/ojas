@@ -224,7 +224,7 @@
 </li>
 <li><strong>QK-norm</strong> validates and places both pairs first, so a refused call records nothing. It then runs as one command when q&#39;s and k&#39;s outputs and scratch fit the budget together; otherwise it runs the two <code>rms_norm_*</code> calls, which hold one side&#39;s scratch at a time.
 </li>
-<li><strong>Causal attention</strong> (<code>ojas_attn_fwd_d*</code> and <code>ojas_attn_bwd_{stats,dq,dkv}_d*</code>, at head dims 16, 32, 64 and 128): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives <code>matmul2d</code>), after tessl&#39;s <code>qwen35_attn_tiled.metal</code> and <code>qwen35_attn_bwd.metal</code>.
+<li><strong>Causal attention</strong> (<code>ojas_attn_fwd_d*</code> and <code>ojas_attn_bwd_{stats,dq,dkv}_d*</code>, at head dims 16, 32, 64, 128 and 256): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives <code>matmul2d</code>), after tessl&#39;s <code>qwen35_attn_tiled.metal</code> and <code>qwen35_attn_bwd.metal</code>. Grouped-query training repeats KV heads into that kernel and sums the KV gradients.
 <ul>
 <li>The forward is one dispatch with an online softmax. The backward is three dispatches.
 </li>
@@ -254,7 +254,7 @@
 <aside class="alert alert-important"><p class="alert-title">Important</p><ol>
 <li><strong>Shape First</strong> (<code>docs/shape-contract.md</code>): every op calls its <code>ojas_core::shapes</code> validator before placement, contiguity, token-id ranges, device limits or the budget, so a malformed call returns the validator&#39;s exact error whatever the budget holds and wherever its operands live. <code>tests/shape_first.rs</code> sweeps every op in four modes (Budget 0, a cap that holds only the inputs, a NaN operand, host operands).
 </li>
-<li><strong>Strict Head Dimension Refusal:</strong> <code>MetalBackend</code> refuses $d_{\text{head}} &gt; 128$ (<code>ojas_core::METAL_MAX_HEAD_DIM</code>) with <code>Err(OjasError::UnsupportedHeadDim)</code>—never silently clamping or dropping high-index features. The attention kernels are compiled up to 128. The cap is a device limit, checked after the shape validator.
+<li><strong>Strict Head Dimension Refusal:</strong> <code>MetalBackend</code> refuses $d_{\text{head}} &gt; 256$ (<code>ojas_core::METAL_MAX_HEAD_DIM</code>) with <code>Err(OjasError::UnsupportedHeadDim)</code>—never silently clamping or dropping high-index features. The attention kernels are compiled up to 256. The cap is a device limit, checked after the shape validator. Grouped-query causal SDPA repeats KV heads into that kernel and sums the KV gradients.
 </li>
 <li><strong>AdamW Step Counter Safety:</strong> Step increments use checked integer math. When <code>step</code> reaches <code>u64::MAX</code>, the kernel halts with an error instead of wrapping to zero.
 </li>

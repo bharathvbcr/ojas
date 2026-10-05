@@ -249,6 +249,8 @@ pub mod tag {
     pub const GRAD_CLIP: u32 = 32;
     pub const ON_NONFINITE: u32 = 33;
     pub const TOKENIZER_HASH: u32 = 34;
+    /// Optional. Absent or 0 is off; 1 is bf16.
+    pub const AUTOCAST: u32 = 35;
 
     pub const VOCAB_JSON: u32 = 40;
     pub const MERGES_TXT: u32 = 41;
@@ -293,6 +295,7 @@ const TAG_NAMES: &[(u32, &str)] = &[
     (tag::GRAD_CLIP, "grad_clip"),
     (tag::ON_NONFINITE, "on_nonfinite"),
     (tag::TOKENIZER_HASH, "tokenizer_hash"),
+    (tag::AUTOCAST, "autocast"),
     (tag::VOCAB_JSON, "vocab_json"),
     (tag::MERGES_TXT, "merges_txt"),
     (tag::TEMPERATURE, "temperature"),

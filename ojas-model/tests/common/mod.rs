@@ -22,8 +22,9 @@ use std::sync::{Arc, Mutex};
 
 use ojas_core::DataCursor;
 use ojas_core::{
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, DeviceBuffer, LinearCe, MuonNs5Config,
-    Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Reservation, Tensor, ValueResidualGrad,
+    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, DType,
+    DeviceBuffer, LinearCe, MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
+    Reservation, Tensor, ValueResidualGrad,
 };
 use ojas_cpu::CpuBackend;
 use ojas_data::TokenBin;
@@ -528,6 +529,11 @@ impl Backend for Resident {
         *cache = self.d(h)?;
         Ok(())
     }
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        // Read this double's own shadow. The trait default refuses a device tensor.
+        self.d(self.cpu.cast_bf16(&self.h(OP, tensor)?)?)
+    }
 }
 
 // ------------------------------------------------------------------- Probe
@@ -1004,6 +1010,14 @@ impl<B: Backend> Backend for Probe<B> {
         self.gate("kv_cache_write")?;
         self.inner.kv_cache_write(cache, src, at)
     }
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        self.gate("cast_bf16")?;
+        self.inner.cast_bf16(tensor)
+    }
+    fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
+        self.gate("autocast_region")?;
+        self.inner.autocast_region(mode)
+    }
 }
 
 // ----------------------------------------------------------------- helpers
@@ -1025,20 +1039,39 @@ static BIN_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// (`x' = (5x + 3) mod vocab`, restarted from a varying seed every 97
 /// tokens), written to a temp file.
 pub fn token_bin(len: usize, vocab: u32) -> (TempBin, TokenBin) {
-    let mut bytes = Vec::with_capacity(len * 2);
-    let mut x = 1u32;
-    for i in 0..len {
-        if i % 97 == 0 {
-            x = (i as u32 / 97 * 31 + 7) % vocab;
-        } else {
-            x = (5 * x + 3) % vocab;
+    let (bytes, is_u32) = if vocab <= 65536 {
+        let mut bytes = Vec::with_capacity(len * 2);
+        let mut x = 1u32;
+        for i in 0..len {
+            if i % 97 == 0 {
+                x = (i as u32 / 97 * 31 + 7) % vocab;
+            } else {
+                x = (5 * x + 3) % vocab;
+            }
+            bytes.extend_from_slice(&(x as u16).to_le_bytes());
         }
-        bytes.extend_from_slice(&(x as u16).to_le_bytes());
-    }
+        (bytes, false)
+    } else {
+        let mut bytes = Vec::with_capacity(len * 4);
+        let mut x = 1u32;
+        for i in 0..len {
+            if i % 97 == 0 {
+                x = (i as u32 / 97 * 31 + 7) % vocab;
+            } else {
+                x = (5 * x + 3) % vocab;
+            }
+            bytes.extend_from_slice(&x.to_le_bytes());
+        }
+        (bytes, true)
+    };
     let n = BIN_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("ojas-model-test-{}-{n}.bin", std::process::id()));
     std::fs::write(&path, &bytes).unwrap();
-    let bin = TokenBin::open_headerless(&path).unwrap();
+    let bin = if is_u32 {
+        TokenBin::open_headerless_u32(&path).unwrap()
+    } else {
+        TokenBin::open_headerless(&path).unwrap()
+    };
     (TempBin { path }, bin)
 }
 

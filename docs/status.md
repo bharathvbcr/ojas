@@ -58,6 +58,7 @@ Verification across workspace crates and backend implementations:
 - **Backend Trait Expansion (`ojas-core`):** Trait now standardizes `linear_cross_entropy_mean` (tiling across micro-batches without materializing full logits), `accumulate_grad` (in-place accumulation for uniquely owned accumulators), and `kv_cache_write`. `Budget` supports `peak_bytes()`, `reset_peak()`, and `check_room()`.
 - **WGPU & Metal Parity (`ojas-wgpu`, `ojas-metal`):** WGPU test suites expanded across gradient accumulation, KV cache operations, linear CE fused ops, and attention tile invariants. Metal backend operations and deferred fault mechanics verified against reference suites.
 - **Lappi Inference & Qwen3.5 Benchmarks:** Benchmarks and rulings updated for Lappi inference evaluations and Qwen3.5 CUDA/Metal execution.
+- **Attention head dim and grouped-query training (2026-10-05):** Metal and wgpu causal SDPA and cached attention accept head dims 1..=256 (`METAL_MAX_HEAD_DIM`, `ATTENTION_MAX_HEAD_DIM`). 257 is `UnsupportedHeadDim`. Training grouped-query attention is causal SDPA: query head `h` reads KV head `h / (H / Hkv)`. The tiny Metal step stays at 64.
 
 ## Previous run: adaptive resources & kernel optimizations (verified, 2026-10-02)
 

@@ -172,11 +172,11 @@ impl<'a> BatchSampler<'a> {
         x.try_reserve_exact(n)
             .and_then(|_| y.try_reserve_exact(n))
             .map_err(|_| DataError::new(format!("sampler: allocation of 2 x {n} ids refused")))?;
-        let mut row = vec![0u16; t + 1];
+        let mut row = vec![0u32; t + 1];
         for start in starts {
-            self.bin.read_into(start, &mut row)?;
-            x.extend(row[..t].iter().map(|&v| u32::from(v)));
-            y.extend(row[1..].iter().map(|&v| u32::from(v)));
+            self.bin.read_into_u32(start, &mut row)?;
+            x.extend_from_slice(&row[..t]);
+            y.extend_from_slice(&row[1..]);
         }
         self.epoch = epoch;
         self.ordinal = ordinal;

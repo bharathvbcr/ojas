@@ -1,12 +1,92 @@
-//! NVIDIA CUDA through cudarc.
-//!
-//! With the `cuda` feature off, [`CudaDevice::open`] returns
-//! [`DeviceError::NotCompiled`]. It does not run the buffer on the CPU.
-//! With the feature on, open loads the driver and launches this crate's
-//! affine kernel (`y = x * scale + bias`) through cudarc. A missing driver
-//! is [`DeviceError::NoDevice`]. The default build does not compile that path.
+//! NVIDIA CUDA device, Backend implementation, and whole-step training provider.
 
 #![cfg_attr(not(feature = "cuda"), forbid(unsafe_code))]
+
+pub mod backend;
+pub mod bf16;
+pub mod budget;
+pub mod ce_rows;
+pub mod check;
+pub mod conv1d;
+pub mod embed;
+pub mod error;
+pub mod gates_published;
+pub mod gdn_host;
+pub mod gdn_kernels;
+pub mod gdn_plan;
+pub mod gemm_plan;
+pub mod geometry;
+pub mod host_ref;
+pub mod inputs;
+pub mod json;
+pub mod k0_plan;
+pub mod k11_golden;
+pub mod k11_host;
+pub mod k11_kernels;
+pub mod k8_act;
+pub mod k8_kernels;
+pub mod k8_plan;
+pub mod kernels;
+pub mod libprobe;
+pub mod npy;
+pub mod nvrtc_cache;
+pub mod qk_norm_rope;
+pub mod report_cli;
+pub mod rmsnorm;
+pub mod rung0_cli;
+pub mod small_common;
+pub mod step;
+pub mod tiny_fixture_published;
+
+#[cfg(feature = "cuda")]
+pub mod buffer;
+#[cfg(feature = "cuda")]
+pub mod ce_rows_cuda;
+#[cfg(feature = "cuda")]
+pub mod conv1d_cuda;
+#[cfg(feature = "cuda")]
+pub mod embed_cuda;
+#[cfg(feature = "cuda")]
+pub mod gates_published_cuda;
+#[cfg(feature = "cuda")]
+pub mod gdn;
+#[cfg(feature = "cuda")]
+pub mod gdn_smoke;
+#[cfg(feature = "cuda")]
+pub mod gemm;
+#[cfg(feature = "cuda")]
+pub mod k0;
+#[cfg(feature = "cuda")]
+pub mod k11;
+#[cfg(feature = "cuda")]
+pub mod k11_smoke;
+#[cfg(feature = "cuda")]
+pub mod k8;
+#[cfg(feature = "cuda")]
+pub mod k8_smoke;
+#[cfg(feature = "cuda")]
+pub mod qk_norm_rope_cuda;
+#[cfg(feature = "cuda")]
+pub mod rmsnorm_cuda;
+#[cfg(feature = "cuda")]
+pub mod runtime;
+#[cfg(feature = "cuda")]
+pub mod small_common_cuda;
+#[cfg(feature = "cuda")]
+pub mod small_smoke;
+#[cfg(feature = "cuda")]
+pub mod smoke;
+
+pub use backend::CudaBackend;
+#[cfg(feature = "cuda")]
+pub use buffer::{CudaBuffer, CudaDeviceBuffer};
+pub use error::CudaError;
+#[cfg(feature = "cuda")]
+pub use runtime::{CudaRuntime, DeviceInfo, RuntimeConfig};
+pub use step::{
+    clip_coefficient, validate_external_grad, AdamWHyper, BankState, ExternalGrad, GemmOperands,
+    Numerics, Pending, Qwen35Step, Sequence, StepProvider, Supervise,
+};
 
 use ojas_device::{require_kind, Device, DeviceError};
 
@@ -143,7 +223,7 @@ fn cuda_status(code: u32, detail: String) -> DeviceError {
 /// Keep the previous buffers when any part of a resize fails.
 /// Pre-fix, `inp` was assigned before `out`, so a failed `out` allocation
 /// left `inp` at the new length and `len` at the old one.
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn commit_resize<T>(
     len: &mut usize,

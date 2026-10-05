@@ -10,8 +10,8 @@
 //!    its `v` with layer 0's raw `v` (`v0`, not detached).
 //! 4. Attention, time-major `[B, T, H, D]` in and out: [`block_with`] takes
 //!    it from the caller; [`block`] passes [`causal_attention`] (permute to
-//!    `[B, H, T, D]`, causal SDPA, permute back; grouped-query through
-//!    cached attention on `Eval`).
+//!    `[B, H, T, D]`, causal SDPA, permute back). Grouped-query is that
+//!    same SDPA with fewer KV heads, on a tape and on eval.
 //! 5. Per-head gate (it reads `h`, not `x`), `o_proj`, residual.
 //! 6. `norm2`, SwiGLU `down(silu(gate(h2)) * up(h2))`, residual.
 
@@ -145,30 +145,20 @@ pub fn block<G: Graph>(
 /// `q` is `[B, T, H, D]`, `k` and `v` `[B, T, Hkv, D]`; returns
 /// `[B, T, H, D]`.
 ///
-/// Multi-head (`H == Hkv`): permute to `[B, H, T, D]`, [`Graph::sdpa`],
-/// permute back, which the tape can differentiate. Grouped-query: the
-/// time-major [`Graph::cached_attn`] with `k` and `v` as a cache of exactly
-/// `T` positions and `kv_len = T`, in which head `h` reads KV head
-/// `h / (H / Hkv)`; only [`crate::Eval`] runs it (a tape refuses grouped
-/// query in [`Graph::check_spec`] and cached attention in `cached_attn`).
+/// Permute to `[B, H, T, D]`, [`Graph::sdpa`], permute back. Query head `h`
+/// reads KV head `h / (H / Hkv)`. The tape differentiates that op. Decode
+/// with a cache still goes through [`block_with`] and [`Graph::cached_attn`].
 pub fn causal_attention<G: Graph>(
     g: &mut G,
     q: &G::V,
     k: &G::V,
     v: &G::V,
 ) -> Result<G::V, OjasError> {
-    let heads = |g: &G, t: &G::V| g.tensor(t).map(|t| t.shape().get(2).copied());
-    let (h, hkv) = (heads(g, q)?, heads(g, k)?);
-    if h == hkv {
-        let qh = g.permute(q, &SWAP_TIME_HEADS)?;
-        let kh = g.permute(k, &SWAP_TIME_HEADS)?;
-        let vh = g.permute(v, &SWAP_TIME_HEADS)?;
-        let y = g.sdpa(&qh, &kh, &vh)?;
-        g.permute(&y, &SWAP_TIME_HEADS)
-    } else {
-        let t = g.tensor(q)?.shape().get(1).copied().unwrap_or(0);
-        g.cached_attn(q, k, v, t)
-    }
+    let qh = g.permute(q, &SWAP_TIME_HEADS)?;
+    let kh = g.permute(k, &SWAP_TIME_HEADS)?;
+    let vh = g.permute(v, &SWAP_TIME_HEADS)?;
+    let y = g.sdpa(&qh, &kh, &vh)?;
+    g.permute(&y, &SWAP_TIME_HEADS)
 }
 
 /// [`block`] with its attention step supplied by the caller, so one

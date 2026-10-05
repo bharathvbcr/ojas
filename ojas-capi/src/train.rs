@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{Autocast, AutocastMode, Backend, OjasError, Tensor};
 use ojas_cpu::{scaled_lr, CosineSchedule, LrSchedule, WsdSchedule};
 use ojas_data::{Batch, TokenBin};
 use ojas_model::{NonFinitePolicy, TrainConfig, Trainer};
@@ -24,6 +24,8 @@ use crate::wire::{required, tag, Fields, Kind, Reader};
 
 pub const BIN_HEADERLESS: u32 = 0;
 pub const BIN_FINEWEB: u32 = 1;
+pub const BIN_HEADERLESS_U32: u32 = 2;
+pub const BIN_FINEWEB_U32: u32 = 3;
 
 pub const SCHEDULE_COSINE: u32 = 0;
 pub const SCHEDULE_WSD: u32 = 1;
@@ -35,7 +37,7 @@ pub const STEP_TOKENS: u32 = 1;
 /// AdamW LR f64, step u64, tokens u64.
 pub const STEP_RESULT_BYTES: usize = 40;
 
-const TRAIN_FIELDS: [(u32, &str, Kind); 15] = [
+const TRAIN_FIELDS: [(u32, &str, Kind); 16] = [
     (tag::TOKEN_BIN, "token_bin", Kind::Str),
     (tag::BIN_FORMAT, "bin_format", Kind::U32),
     (tag::BATCH, "batch", Kind::U32),
@@ -51,6 +53,7 @@ const TRAIN_FIELDS: [(u32, &str, Kind); 15] = [
     (tag::GRAD_CLIP, "grad_clip", Kind::F32),
     (tag::ON_NONFINITE, "on_nonfinite", Kind::U32),
     (tag::TOKENIZER_HASH, "tokenizer_hash", Kind::Bytes32),
+    (tag::AUTOCAST, "autocast", Kind::U32),
 ];
 
 /// A token bin and the config to train on it.
@@ -102,11 +105,21 @@ fn setup(f: &Fields<'_>) -> Result<Setup, String> {
     if let Some(hash) = f.bytes32(tag::TOKENIZER_HASH) {
         cfg.tokenizer_hash = hash;
     }
+    cfg.autocast = autocast_mode(f.u32(tag::AUTOCAST))?;
     cfg.validate().map_err(show)?;
     let raw = required(f.str(tag::TOKEN_BIN), tag::TOKEN_BIN)?;
     let format = required(f.u32(tag::BIN_FORMAT), tag::BIN_FORMAT)?;
     let bin = open_bin(raw, format)?;
     Ok(Setup { bin, cfg })
+}
+
+/// Absent or 0 is off. 1 is bf16. Anything else fails closed.
+fn autocast_mode(value: Option<u32>) -> Result<AutocastMode, String> {
+    match value {
+        None | Some(0) => Ok(AutocastMode::Off),
+        Some(1) => Ok(AutocastMode::Bf16),
+        Some(other) => Err(format!("train: unknown autocast {other}")),
+    }
 }
 
 /// The token bin `raw` under the root. `ojas_data::TokenBin` opens by path,
@@ -117,6 +130,8 @@ fn open_bin(raw: &str, format: u32) -> Result<TokenBin, String> {
     let opened = match format {
         BIN_HEADERLESS => TokenBin::open_headerless(&file.fd_path()),
         BIN_FINEWEB => TokenBin::open_fineweb(&file.fd_path()),
+        BIN_HEADERLESS_U32 => TokenBin::open_headerless_u32(&file.fd_path()),
+        BIN_FINEWEB_U32 => TokenBin::open_fineweb_u32(&file.fd_path()),
         other => return Err(format!("train: unknown bin_format {other}")),
     };
     opened.map_err(|e| format!("token bin: {}", file.explain(e.detail())))
@@ -158,7 +173,13 @@ fn open_on<B: Backend + Clone>(m: &mut Model<B>, setup: Setup) -> Result<(), Oja
             None => Ok(t.clone()),
         })
         .collect::<Result<Vec<Tensor>, OjasError>>()?;
-    let trainer = Trainer::new(m.backend.clone(), m.spec, &host, setup.bin, setup.cfg)?;
+    let trainer = Trainer::new(
+        Autocast::new(m.backend.clone()),
+        m.spec,
+        &host,
+        setup.bin,
+        setup.cfg,
+    )?;
     m.weights = Weights::Training(Box::new(trainer));
     Ok(())
 }
@@ -240,7 +261,7 @@ fn read_batches(r: &mut Reader<'_>) -> Result<Vec<Batch>, String> {
     Ok(batches)
 }
 
-fn trainer_mut<B: Backend>(m: &mut Model<B>) -> Result<&mut Trainer<B>, OjasError> {
+fn trainer_mut<B: Backend>(m: &mut Model<B>) -> Result<&mut Trainer<Autocast<B>>, OjasError> {
     match &mut m.weights {
         Weights::Training(t) => Ok(t),
         Weights::Resident(_) => Err(OjasError::Unsupported {
@@ -296,8 +317,12 @@ struct FromCheckpoint {
 
 impl Build for FromCheckpoint {
     fn build<B: Backend + Clone>(self, backend: B) -> Result<Model<B>, OjasError> {
-        let trainer =
-            Trainer::resume_from(backend.clone(), &self.dir, self.setup.bin, self.setup.cfg)?;
+        let trainer = Trainer::resume_from(
+            Autocast::new(backend.clone()),
+            &self.dir,
+            self.setup.bin,
+            self.setup.cfg,
+        )?;
         Ok(Model {
             backend,
             spec: *trainer.spec(),
@@ -329,4 +354,20 @@ pub fn resume_request(bytes: &[u8], mut check: Check) -> Result<session::Session
         check,
         FromCheckpoint { dir, setup },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::autocast_mode;
+    use ojas_core::AutocastMode;
+
+    #[test]
+    fn autocast_tag_is_optional_and_fails_closed() {
+        assert_eq!(autocast_mode(None).unwrap(), AutocastMode::Off);
+        assert_eq!(autocast_mode(Some(0)).unwrap(), AutocastMode::Off);
+        assert_eq!(autocast_mode(Some(1)).unwrap(), AutocastMode::Bf16);
+        let err = autocast_mode(Some(2)).unwrap_err();
+        assert!(err.contains("unknown autocast 2"), "{err}");
+        assert!(autocast_mode(Some(u32::MAX)).is_err());
+    }
 }

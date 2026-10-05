@@ -601,7 +601,9 @@ name = "ojas-cuda"
 version = "0.1.0"
 dependencies = [
  "cudarc",
+ "ojas-core",
  "ojas-device",
+ "ojas-io",
  "ojas-kernels",
 ]
 

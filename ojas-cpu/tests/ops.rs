@@ -3,7 +3,7 @@
 
 use ojas_core::{
     exp_exact, refuse_unsupported_metal_head_dim, AdamWConfig, Backend, BackendId, Budget, DType,
-    MuonNs5Config, OjasError, Tensor, METAL_MAX_HEAD_DIM, RMS_NORM_EPS,
+    MuonNs5Config, Numerics, OjasError, Tensor, METAL_MAX_HEAD_DIM, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 
@@ -745,6 +745,129 @@ fn cross_entropy_ignore_is_option_not_a_dummy() {
     let logits = Tensor::from_f32(&[0.0, 0.0], &[1, 2], &budget).unwrap();
     let targets = Tensor::from_u32(&[0], &[1], &budget).unwrap();
     assert_capacity(tight.cross_entropy_mean_forward(&logits, &targets, None));
+}
+
+/// Grouped-query causal SDPA against the same backend's multi-head path with
+/// each KV head repeated. Forward and `grad_q` match bit for bit. `grad_k`
+/// and `grad_v` sum query heads in increasing order inside the kernel, which
+/// is not the same association as adding finished per-head gradients, so
+/// those compare within a tight tolerance. `rep == 1` stays bit-exact.
+#[test]
+#[allow(clippy::identity_op)]
+fn grouped_query_sdpa_matches_repeated_kv_mha() {
+    fn pattern(n: usize, seed: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i * 17 + seed) % 100) as f32 * 0.01 - 0.4)
+            .collect()
+    }
+    fn expand(src: &[f32], b: usize, h: usize, hkv: usize, t: usize, d: usize) -> Vec<f32> {
+        let rep = h / hkv;
+        let plane = t * d;
+        let mut out = vec![0.0; b * h * plane];
+        for bi in 0..b {
+            for hq in 0..h {
+                let src_p = bi * hkv + hq / rep;
+                let dst_p = bi * h + hq;
+                out[dst_p * plane..(dst_p + 1) * plane]
+                    .copy_from_slice(&src[src_p * plane..(src_p + 1) * plane]);
+            }
+        }
+        out
+    }
+    fn sum_kv(src: &[f32], b: usize, h: usize, hkv: usize, t: usize, d: usize) -> Vec<f32> {
+        let rep = h / hkv;
+        let plane = t * d;
+        let mut out = vec![0.0; b * hkv * plane];
+        for bi in 0..b {
+            for hk in 0..hkv {
+                let dst = (bi * hkv + hk) * plane;
+                for r in 0..rep {
+                    let s = (bi * h + hk * rep + r) * plane;
+                    for i in 0..plane {
+                        out[dst + i] += src[s + i];
+                    }
+                }
+            }
+        }
+        out
+    }
+    fn near(what: &str, got: &[f32], want: &[f32]) {
+        assert_eq!(got.len(), want.len(), "{what}");
+        for (i, (x, y)) in got.iter().zip(want).enumerate() {
+            let tol = 1e-4 + 1e-4 * y.abs();
+            assert!((x - y).abs() <= tol, "{what}[{i}] {x} vs {y}");
+        }
+    }
+    let run = |cpu: &CpuBackend, b: usize, h: usize, hkv: usize, t: usize, d: usize| {
+        let qn = b * h * t * d;
+        let kn = b * hkv * t * d;
+        let q = f32t(cpu, &pattern(qn, 1), &[b, h, t, d]);
+        let k = f32t(cpu, &pattern(kn, 2), &[b, hkv, t, d]);
+        let v = f32t(cpu, &pattern(kn, 3), &[b, hkv, t, d]);
+        let g = f32t(cpu, &pattern(qn, 4), &[b, h, t, d]);
+        let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
+        let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &g).unwrap();
+        assert_eq!(y.shape(), &[b, h, t, d]);
+        assert_eq!(gq.shape(), &[b, h, t, d]);
+        assert_eq!(gk.shape(), &[b, hkv, t, d]);
+        assert_eq!(gv.shape(), &[b, hkv, t, d]);
+        let k_m = f32t(
+            cpu,
+            &expand(&k.to_f32_vec().unwrap(), b, h, hkv, t, d),
+            &[b, h, t, d],
+        );
+        let v_m = f32t(
+            cpu,
+            &expand(&v.to_f32_vec().unwrap(), b, h, hkv, t, d),
+            &[b, h, t, d],
+        );
+        let y_m = cpu.causal_sdpa_forward(&q, &k_m, &v_m).unwrap();
+        assert_eq!(y.to_f32_vec().unwrap(), y_m.to_f32_vec().unwrap());
+        let (gq_m, gk_m, gv_m) = cpu.causal_sdpa_backward(&q, &k_m, &v_m, &g).unwrap();
+        assert_eq!(gq.to_f32_vec().unwrap(), gq_m.to_f32_vec().unwrap());
+        let gk_sum = sum_kv(&gk_m.to_f32_vec().unwrap(), b, h, hkv, t, d);
+        let gv_sum = sum_kv(&gv_m.to_f32_vec().unwrap(), b, h, hkv, t, d);
+        let tag = format!("b{b} h{h} hkv{hkv} t{t} d{d}");
+        if h == hkv {
+            assert_eq!(gk.to_f32_vec().unwrap(), gk_sum, "{tag} dk");
+            assert_eq!(gv.to_f32_vec().unwrap(), gv_sum, "{tag} dv");
+        } else {
+            near(&format!("{tag} dk"), &gk.to_f32_vec().unwrap(), &gk_sum);
+            near(&format!("{tag} dv"), &gv.to_f32_vec().unwrap(), &gv_sum);
+        }
+        assert!(gq.to_f32_vec().unwrap().iter().any(|x| *x != 0.0), "{tag}");
+    };
+
+    let cpu = wide();
+    for (b, h, hkv, t, d) in [
+        (1, 6, 6, 5, 7),
+        (1, 6, 2, 5, 7),
+        (2, 6, 3, 4, 5),
+        (1, 6, 1, 3, 8),
+        (1, 3, 1, 5, 7),
+    ] {
+        run(&cpu, b, h, hkv, t, d);
+    }
+    let fast = CpuBackend::new(Budget::new(1 << 26)).with_numerics(Numerics::Fast);
+    run(&fast, 1, 2, 1, 257, 4);
+
+    let q = f32t(&cpu, &pattern(2 * 3 * 5 * 4, 1), &[2, 3, 5, 4]);
+    let zeros = |shape: &[usize]| Tensor::zeros(shape, DType::F32, cpu.budget()).unwrap();
+    assert_shape(cpu.causal_sdpa_forward(&q, &zeros(&[2, 0, 5, 4]), &zeros(&[2, 0, 5, 4])));
+    let bad_group = f32t(&cpu, &pattern(2 * 2 * 5 * 4, 2), &[2, 2, 5, 4]);
+    assert_shape(cpu.causal_sdpa_forward(&q, &bad_group, &bad_group));
+    let kv = f32t(&cpu, &pattern(2 * 1 * 5 * 4, 2), &[2, 1, 5, 4]);
+    let other = f32t(&cpu, &pattern(2 * 3 * 5 * 4, 3), &[2, 3, 5, 4]);
+    assert_shape(cpu.causal_sdpa_forward(&q, &other, &kv));
+    let shifted = f32t(&cpu, &pattern(2 * 1 * 6 * 4, 2), &[2, 1, 6, 4]);
+    assert_shape(cpu.causal_sdpa_forward(&q, &shifted, &shifted));
+    let bad_g = f32t(&cpu, &pattern(2 * 1 * 5 * 4, 4), &[2, 1, 5, 4]);
+    assert_shape(cpu.causal_sdpa_backward(&q, &kv, &kv, &bad_g));
+    // A zero time extent is an empty tensor, refused before grouping.
+    let qe = zeros(&[1, 2, 0, 4]);
+    let ke = zeros(&[1, 1, 0, 4]);
+    assert_shape(cpu.causal_sdpa_forward(&qe, &ke, &ke));
+    assert_shape(cpu.causal_sdpa_backward(&qe, &ke, &ke, &qe));
 }
 
 #[test]

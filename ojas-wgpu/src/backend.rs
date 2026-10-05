@@ -170,12 +170,14 @@ const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> K
 }
 
 use Slot::{R, W};
-use WgslModule::{CachedAttention, Gemm, Layout, Loss, Norm, Optim, Pointwise, Reduce};
+use WgslModule::{CachedAttention, Gemm, HeadRepeat, Layout, Loss, Norm, Optim, Pointwise, Reduce};
 
 const PERMUTE_K: Kernel = k(Layout, "permute", &[R(2), R(3), W(4)]);
 const KV_WRITE: Kernel = k(Layout, "kv_write", &[R(2), W(4), R(5)]);
 const CATTN_SPLIT: Kernel = k(CachedAttention, "cattn_split", &[R(2), R(3), R(4), W(5)]);
 const CATTN_MERGE: Kernel = k(CachedAttention, "cattn_merge", &[W(6), R(7)]);
+const HEAD_REPEAT: Kernel = k(HeadRepeat, "head_repeat", &[R(2), W(3)]);
+const HEAD_SUM: Kernel = k(HeadRepeat, "head_sum", &[R(2), W(3)]);
 
 const GEMM_NT: Kernel = k(Gemm, "gemm_nt", &[R(2), R(3), W(4)]);
 const GEMM_NN: Kernel = k(Gemm, "gemm_nn", &[R(2), R(3), W(4)]);
@@ -183,6 +185,7 @@ const GEMM_TN: Kernel = k(Gemm, "gemm_tn", &[R(2), R(3), W(4)]);
 const GEMM_NT_BIG: Kernel = k(Gemm, "gemm_nt_big", &[R(2), R(3), W(4)]);
 const GEMM_NN_BIG: Kernel = k(Gemm, "gemm_nn_big", &[R(2), R(3), W(4)]);
 const GEMM_TN_BIG: Kernel = k(Gemm, "gemm_tn_big", &[R(2), R(3), W(4)]);
+const ROUND_BF16: Kernel = k(Pointwise, "round_bf16", &[R(2), W(6)]);
 const SILU_FWD: Kernel = k(Pointwise, "silu_fwd", &[R(2), W(6)]);
 const SILU_BWD: Kernel = k(Pointwise, "silu_bwd", &[R(2), R(3), W(6)]);
 const MUL_FWD: Kernel = k(Pointwise, "mul_fwd", &[R(2), R(3), W(6)]);
@@ -241,6 +244,8 @@ struct SdpaPlan {
     bh: usize,
     time: usize,
     dim: usize,
+    /// Query heads per KV head. `1` runs the equal-head kernel unchanged.
+    rep: usize,
     scale: f32,
     module: WgslModule,
     fwd_rows: usize,
@@ -979,16 +984,81 @@ impl WgpuBackend {
         }
         let shared = self.ctx.limits().max_compute_workgroup_storage_size;
         let bh = product(op, &[d.batch, d.heads])?;
+        // `1` when the counts match, including both zero, so this never
+        // divides by zero. Any other grouping the validator missed is a
+        // shape error here, before a launch.
+        let rep = if d.kv_heads == d.heads {
+            1
+        } else if d.kv_heads == 0 || !d.heads.is_multiple_of(d.kv_heads) {
+            return Err(shape(
+                op,
+                format!("sdpa query heads {} over kv heads {}", d.heads, d.kv_heads),
+            ));
+        } else {
+            d.heads / d.kv_heads
+        };
         let tiles = attention_tiles(dim_u32, shared)?;
         Ok(SdpaPlan {
             bh,
             time: d.seq,
             dim,
+            rep,
             scale,
             module: WgslModule::Attention(tiles),
             fwd_rows: tiles.fwd_rows as usize,
             bwd_rows: tiles.bwd_block as usize,
         })
+    }
+
+    /// One lane per element of `dst`. `n == 0` records nothing: a grid axis
+    /// of 0 is refused. `rep == 1` is not called; the equal-head kernel
+    /// reads K and V directly.
+    #[allow(clippy::too_many_arguments)]
+    fn head_map(
+        &self,
+        op: Op,
+        job: &mut Job<'_>,
+        kernel: &Kernel,
+        src: &wgpu::Buffer,
+        dst: &wgpu::Buffer,
+        n: usize,
+        plane: usize,
+        rep: usize,
+    ) -> Result<(), OjasError> {
+        if n == 0 {
+            return Ok(());
+        }
+        job.dispatch(
+            kernel,
+            &[u(op, n)?, u(op, plane)?, u(op, rep)?],
+            &[src, dst],
+            self.lanes(n)?,
+        )
+    }
+
+    /// Repeat each KV head `plan.rep` times into query-sized scratch.
+    /// `rep <= 1` returns the buffers it was given.
+    fn expand_kv(
+        &self,
+        op: Op,
+        job: &mut Job<'_>,
+        plan: &SdpaPlan,
+        q_elems: usize,
+        kb: wgpu::Buffer,
+        vb: wgpu::Buffer,
+    ) -> Result<(wgpu::Buffer, wgpu::Buffer), OjasError> {
+        if plan.rep <= 1 || q_elems == 0 {
+            return Ok((kb, vb));
+        }
+        let plane = product(op, &[plan.time, plan.dim])?;
+        let bytes = (q_elems as u64)
+            .checked_mul(4)
+            .ok_or_else(|| overflow(op, "expanded head bytes overflow"))?;
+        let kexp = job.scratch(bytes)?;
+        let vexp = job.scratch(bytes)?;
+        self.head_map(op, job, &HEAD_REPEAT, &kb, &kexp, q_elems, plane, plan.rep)?;
+        self.head_map(op, job, &HEAD_REPEAT, &vb, &vexp, q_elems, plane, plan.rep)?;
+        Ok((kexp, vexp))
     }
 
     /// `(ceil(time / rows), batch * heads)` workgroups.
@@ -1441,6 +1511,7 @@ impl Backend for WgpuBackend {
         let qb = bind(op, &mut job, &qv)?;
         let kb = bind(op, &mut job, &kv)?;
         let vb = bind(op, &mut job, &vv)?;
+        let (kb, vb) = self.expand_kv(op, &mut job, &plan, qv.elems, kb, vb)?;
         job.dispatch(
             &attn_kernel(plan.module, "attn_fwd"),
             &[
@@ -1483,6 +1554,17 @@ impl Backend for WgpuBackend {
         let kb = bind(op, &mut job, &kv)?;
         let vb = bind(op, &mut job, &vv)?;
         let gb = bind(op, &mut job, &gv)?;
+        let (kb, vb) = self.expand_kv(op, &mut job, &plan, qv.elems, kb, vb)?;
+        // `rep == 1` writes dK and dV straight into the outputs. A repeat
+        // writes query-sized gradients and sums them back, `r` ascending.
+        let (dkb, dvb) = if plan.rep > 1 && qv.elems > 0 {
+            let bytes = (qv.elems as u64)
+                .checked_mul(4)
+                .ok_or_else(|| overflow(op, "expanded head bytes overflow"))?;
+            (job.scratch(bytes)?, job.scratch(bytes)?)
+        } else {
+            (gkb.clone(), gvb.clone())
+        };
         let stats = job.scratch((stats_len as u64) * 4)?;
         let words = [
             u(op, plan.time)?,
@@ -1505,9 +1587,18 @@ impl Backend for WgpuBackend {
         job.dispatch(
             &attn_kernel(plan.module, "attn_bwd_dkv"),
             &words,
-            &[&qb, &kb, &vb, &gb, &stats, &gkb, &gvb],
+            &[&qb, &kb, &vb, &gb, &stats, &dkb, &dvb],
             bwd_grid,
         )?;
+        if plan.rep > 1 && kv.elems > 0 {
+            let plane = product(op, &[plan.time, plan.dim])?;
+            self.head_map(
+                op, &mut job, &HEAD_SUM, &dkb, &gkb, kv.elems, plane, plan.rep,
+            )?;
+            self.head_map(
+                op, &mut job, &HEAD_SUM, &dvb, &gvb, kv.elems, plane, plan.rep,
+            )?;
+        }
         job.commit()?;
         Ok((gq, gk, gvv))
     }
@@ -1679,6 +1770,94 @@ impl Backend for WgpuBackend {
             value0: gv0,
             lambda: gl,
         })
+    }
+
+    /// Device round. Fault bit 0, and the kernel never raises, so a NaN
+    /// stays a value. A host tensor is [`OjasError::Placement`].
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        let placement = |found| OjasError::Placement {
+            op: OP,
+            expected: Some(BackendId::Wgpu),
+            found,
+        };
+        let dev = tensor.device_buffer().ok_or_else(|| placement(None))?;
+        let buf = dev
+            .as_any()
+            .downcast_ref::<WgpuBuffer>()
+            .ok_or_else(|| placement(Some(dev.backend())))?;
+        if !self.ctx.same(buf.context()) {
+            return Err(placement(Some(BackendId::Wgpu)));
+        }
+        if tensor.dtype() != DType::F32 {
+            return Err(OjasError::Dtype {
+                op: OP,
+                expected: DType::F32,
+                got: tensor.dtype(),
+            });
+        }
+        if !tensor.is_contiguous()? {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: "non-contiguous view is not supported".to_string(),
+            });
+        }
+        let elems = tensor.num_elements()?;
+        if elems == 0 || tensor.shape().contains(&0) {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: "empty tensor".to_string(),
+            });
+        }
+        let n = u32::try_from(elems).map_err(|_| OjasError::OutOfRange {
+            op: OP,
+            detail: format!("{elems} does not fit in u32"),
+        })?;
+        let bytes = (elems as u64)
+            .checked_mul(4)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: OP,
+                detail: "byte length overflows".to_string(),
+            })?;
+        self.ctx.check_bytes(bytes, &self.budget)?;
+        let charge = self.budget.try_reserve(bytes)?;
+        let wb = self.ctx.tensor_buffer(bytes)?;
+        let raw_out = wb.raw()?.clone();
+        let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::F32, charge)?;
+        let mut job = self.ctx.job(&self.budget, 0);
+        let src = {
+            let raw = buf.raw()?;
+            let off = tensor.byte_offset();
+            if off == 0 {
+                raw.clone()
+            } else {
+                if !off.is_multiple_of(4) {
+                    return Err(OjasError::Shape {
+                        op: OP,
+                        detail: format!("byte_offset {off} is not 4-byte aligned"),
+                    });
+                }
+                let dst = job.scratch(bytes)?;
+                job.copy(raw, off as u64, &dst, bytes);
+                dst
+            }
+        };
+        let groups = elems.div_ceil(256);
+        let (gx, gy) = fold_grid(
+            groups as u64,
+            self.ctx.limits().max_compute_workgroups_per_dimension,
+        )
+        .map_err(|err| match err {
+            OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
+            other => other,
+        })?;
+        job.dispatch(&ROUND_BF16, &[n], &[&src, &raw_out], (gx, gy, 1))
+            .map_err(|err| match err {
+                OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
+                other => other,
+            })?;
+        job.commit()?;
+        Ok(out)
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

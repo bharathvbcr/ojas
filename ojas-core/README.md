@@ -168,7 +168,7 @@ flowchart LR
    `next_step(current)` increments training step counters using `checked_add`, returning `OjasError::OutOfRange` at `u64::MAX` rather than silently wrapping to zero.
 
 3. **No Silent Clamping:**
-   Dimensions exceeding kernel capabilities (e.g. $d_{\text{head}} >$ `METAL_MAX_HEAD_DIM` = 128 on Metal) yield `OjasError::UnsupportedHeadDim` loud and early.
+   Dimensions exceeding kernel capabilities (e.g. $d_{\text{head}} >$ `METAL_MAX_HEAD_DIM` = 256 on Metal and wgpu) yield `OjasError::UnsupportedHeadDim` loud and early.
 
 4. **Cached Finiteness:**
    `Tensor::all_finite_cached(scan)` runs a backend's NaN/infinity scan at most once per storage. A finite result for the whole allocation answers for every view of it until the storage is next written, and every mutable host access resets it. A smaller window is scanned and records nothing. The scan is trusted, so it must check every element with `f32_all_finite`; debug builds re-check a `true` for the whole allocation and panic if it was wrong.

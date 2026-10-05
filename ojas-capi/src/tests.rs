@@ -149,6 +149,13 @@ pub(crate) fn write_bin(dir: &Path, name: &str) {
     std::fs::write(dir.join(name), bytes).unwrap();
 }
 
+pub(crate) fn write_bin_u32(dir: &Path, name: &str) {
+    let bytes: Vec<u8> = (0..BIN_TOKENS)
+        .flat_map(|i| (((i * 7 + i / 64) % 64) as u32).to_le_bytes())
+        .collect();
+    std::fs::write(dir.join(name), bytes).unwrap();
+}
+
 pub(crate) fn never() -> Check {
     Box::new(|| Ok(()))
 }
@@ -559,6 +566,52 @@ fn sampled_steps_run_the_model_on_the_bins_batches() {
     let moved = step(s.id).unwrap();
     assert_eq!(moved.step, 2);
     assert_ne!(got.loss.to_bits(), moved.loss.to_bits());
+}
+
+#[test]
+fn sampled_steps_run_the_model_on_u32_token_bins() {
+    let (_g, dir) = fresh();
+    write_bin_u32(&dir, "tokens_u32.bin");
+    let s = load_exact("model.safetensors").unwrap();
+    let mut w = Writer::default();
+    w = w
+        .str(tag::TOKEN_BIN, "tokens_u32.bin")
+        .u32(tag::BIN_FORMAT, train::BIN_HEADERLESS_U32)
+        .u32(tag::BATCH, 2)
+        .u32(tag::SEQ, SEQ)
+        .u32(tag::ACCUM, 2)
+        .u64(tag::DATA_SEED, 7)
+        .u32(tag::SCHEDULE, train::SCHEDULE_COSINE)
+        .u64(tag::WARMUP, 2)
+        .u64(tag::TOTAL, 40)
+        .f64(tag::MATRIX_LR, ojas_model::NANOLAB_MATRIX_LR)
+        .f64(tag::ADAM_LR, ojas_model::NANOLAB_ADAM_LR)
+        .f32(tag::GRAD_CLIP, ojas_model::NANOLAB_GRAD_CLIP)
+        .u32(tag::ON_NONFINITE, 0);
+    train::open_request(&open_payload(s.id, w), never()).unwrap();
+
+    let bin = ojas_data::TokenBin::open_headerless_u32(&dir.join("tokens_u32.bin")).unwrap();
+    let mut sampler = ojas_data::BatchSampler::new(
+        &bin,
+        ojas_data::SamplerConfig {
+            seq_len: SEQ as usize,
+            batch: 2,
+            seed: 7,
+        },
+    )
+    .unwrap();
+    let a = sampler.next_batch().unwrap();
+    let b = sampler.next_batch().unwrap();
+    let got = step(s.id).unwrap();
+    let want = (eval_loss(&a.x, &a.y, 2) * 0.5) + (eval_loss(&b.x, &b.y, 2) * 0.5);
+    assert!(
+        (got.loss - want).abs() <= 1e-6 * want.abs(),
+        "{} vs {want}",
+        got.loss
+    );
+    assert_eq!(got.tokens, 2 * 2 * u64::from(SEQ));
+    let moved = step(s.id).unwrap();
+    assert_eq!(moved.step, 2);
 }
 
 /// A step payload with no mode, an unknown mode, or a session with no
@@ -1465,8 +1518,9 @@ fn critical_pressure_refuses_allocating_calls_and_keeps_save_and_free() {
     }
 }
 
-/// A Metal session whose spec the Metal kernels cannot run, and a model
-/// larger than its session budget, are refused before the device opens.
+/// A Metal head dimension past the kernel limit, and a model larger than
+/// its session budget, are refused before the device opens. Head dim 256
+/// is inside that limit.
 #[test]
 fn preflight_refuses_before_the_device_opens() {
     use crate::model::Placement;
@@ -1477,13 +1531,23 @@ fn preflight_refuses_before_the_device_opens() {
         numerics: None,
     };
     load::preflight("load", &metal(1 << 30), &spec).unwrap();
+    let limit = ojas_core::METAL_MAX_HEAD_DIM as usize;
     let wide = ojas_model::ModelSpec {
-        head_dim: 256,
+        head_dim: limit,
         ..spec
     };
-    let err = load::preflight("load", &metal(1 << 30), &wide).unwrap_err();
-    assert!(err.contains("unsupported head dim 256"), "{err}");
-    // The CPU runs any head_dim.
+    load::preflight("load", &metal(1 << 30), &wide).unwrap();
+    let over = ojas_model::ModelSpec {
+        head_dim: limit + 1,
+        ..spec
+    };
+    let err = load::preflight("load", &metal(1 << 30), &over).unwrap_err();
+    assert!(
+        err.contains(&format!("unsupported head dim {}", limit + 1)),
+        "{err}"
+    );
+    assert!(err.contains(&format!("limit {limit}")), "{err}");
+    // The CPU runs any head_dim the spec itself accepts.
     let cpu = Placement {
         device: session::DeviceKind::Cpu { threads: 1 },
         budget_bytes: 1 << 30,

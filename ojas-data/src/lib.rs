@@ -29,7 +29,10 @@ pub use bpe::{
 pub use error::DataError;
 pub use rng::CounterRng;
 pub use sampler::{Batch, BatchSampler, SamplerConfig};
-pub use tokens::{TokenBin, FINEWEB_HEADER_BYTES, FINEWEB_MAGIC, FINEWEB_VERSION};
+pub use tokens::{
+    TokenBin, TokenWidth, FINEWEB_HEADER_BYTES, FINEWEB_MAGIC, FINEWEB_U32_MAGIC,
+    FINEWEB_U32_VERSION, FINEWEB_VERSION,
+};
 
 #[doc(hidden)]
 pub use ojas_core::DType;

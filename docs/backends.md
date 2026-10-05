@@ -68,14 +68,14 @@ flowchart LR
 | :--- | :--- | :--- | :--- | :--- |
 | `CpuBackend` (`ojas-cpu`) | Yes | `Fast` default; `Exact` opt-in | 261 passed, 12 ignored | Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) dispatch to Accelerate `cblas_sgemm`; smaller stay on `tile_fast`. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup |
 | `ojas-simd` | No (kernels for `ojas-cpu`) | — | 36 passed | NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling |
-| `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | 136 passed | Tiled causal attention, head dim above 128 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Attention forward/backward, device-resident training step |
-| `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | 208 passed, 3 ignored | Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 128 refused. Gradient accumulation (`accumulate_grad`), KV cache writes, tiled linear cross-entropy (`linear_ce`), and deferred fault reporting at next `sync` |
+| `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | 136 passed | Tiled causal attention, head dim above 256 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Attention forward/backward, device-resident training step |
+| `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | 208 passed, 3 ignored | Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (`accumulate_grad`), KV cache writes, tiled linear cross-entropy (`linear_ce`), and deferred fault reporting at next `sync` |
 | `ojas-kernels` | No (shared geometry and sources) | — | 11 passed | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |
 | `ojas-cuda` | No | — | 8 passed (feature off) | One affine kernel behind `--features cuda` |
 | `ojas-hip` | No | — | 8 passed (feature off) | Copy probe behind `--features hip`; no kernel |
 
 > [!WARNING]
-> Both `MetalBackend` and `WgpuBackend` enforce $d_{\text{head}} \le 128$ for attention operations (`METAL_MAX_HEAD_DIM`; `ATTENTION_MAX_HEAD_DIM` for wgpu). A larger head dimension raises `OjasError::UnsupportedHeadDim` loud and early. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64.
+> Both `MetalBackend` and `WgpuBackend` enforce $d_{\text{head}} \le 256$ for attention operations (`METAL_MAX_HEAD_DIM`; `ATTENTION_MAX_HEAD_DIM` for wgpu). A larger head dimension raises `OjasError::UnsupportedHeadDim` loud and early. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64. Causal SDPA accepts grouped-query head counts on CPU, Metal and wgpu.
 
 ---
 

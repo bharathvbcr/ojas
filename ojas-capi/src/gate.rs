@@ -22,8 +22,8 @@
 use std::sync::{Arc, Mutex};
 
 use ojas_core::{
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, LinearCe, MuonNs5Config, Numerics, OjasError,
-    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
+    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, LinearCe,
+    MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 
 /// The per-call cancel check: `Err` carries the cancel's own message
@@ -494,6 +494,14 @@ impl<B: Backend> Backend for Gated<B> {
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         self.enter("kv_cache_write", true)?;
         self.inner.kv_cache_write(cache, src, at)
+    }
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        self.enter("cast_bf16", true)?;
+        self.inner.cast_bf16(tensor)
+    }
+    fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
+        self.enter("autocast_region", true)?;
+        self.inner.autocast_region(mode)
     }
 }
 

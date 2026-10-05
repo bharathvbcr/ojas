@@ -57,6 +57,7 @@ const LOSS: &str = include_str!("wgsl/loss.wgsl");
 const OPTIM: &str = include_str!("wgsl/optim.wgsl");
 const ATTENTION: &str = include_str!("wgsl/attention.wgsl");
 const CACHED_ATTENTION: &str = include_str!("wgsl/cached_attention.wgsl");
+const HEAD_REPEAT: &str = include_str!("wgsl/head_repeat.wgsl");
 const LAYOUT: &str = include_str!("wgsl/layout.wgsl");
 const FAULT: &str = include_str!("wgsl/fault.wgsl");
 
@@ -82,10 +83,13 @@ pub enum WgslModule {
     /// Split-key causal attention of new queries against a time-major KV
     /// cache (decode, and prefill onto a non-empty cache).
     CachedAttention,
+    /// Repeat KV heads out to the query head count, and sum the expanded
+    /// gradients back. One module, not one per attention tile plan.
+    HeadRepeat,
 }
 
 /// The tiled attention template for `tiles`. A plan the template cannot
-/// realise (padded width not 16/32/64/128, a block not a multiple of
+/// realise (padded width not 16/32/64/128/256, a block not a multiple of
 /// [`ATTENTION_PARTS`]) is refused, never adjusted.
 fn attention_source(tiles: AttentionTiles) -> Result<String, OjasError> {
     let AttentionTiles {
@@ -96,7 +100,7 @@ fn attention_source(tiles: AttentionTiles) -> Result<String, OjasError> {
         ..
     } = tiles;
     let parts = ATTENTION_PARTS;
-    let ok_dim = matches!(dp, 16 | 32 | 64 | 128) && dp <= ATTENTION_MAX_HEAD_DIM;
+    let ok_dim = matches!(dp, 16 | 32 | 64 | 128 | 256) && dp <= ATTENTION_MAX_HEAD_DIM;
     let ok_block = |b: u32| (parts..=32).contains(&b) && b.is_multiple_of(parts);
     if !(ok_dim && ok_block(fq) && ok_block(fk) && ok_block(bb)) {
         return Err(OjasError::OutOfRange {
@@ -163,6 +167,7 @@ pub fn wgsl_module(module: WgslModule) -> Result<String, OjasError> {
         WgslModule::Fault => src.push_str(FAULT),
         WgslModule::Attention(tiles) => src.push_str(&attention_source(tiles)?),
         WgslModule::CachedAttention => src.push_str(CACHED_ATTENTION),
+        WgslModule::HeadRepeat => src.push_str(HEAD_REPEAT),
     }
     Ok(src)
 }
@@ -186,6 +191,7 @@ mod tests {
             WgslModule::Fault,
             WgslModule::Attention(tiles),
             WgslModule::CachedAttention,
+            WgslModule::HeadRepeat,
         ] {
             let src = wgsl_module(module).unwrap();
             assert!(
@@ -220,7 +226,7 @@ mod tests {
                 ..good
             },
             AttentionTiles {
-                padded_dim: 256,
+                padded_dim: 512,
                 ..good
             },
             AttentionTiles {
@@ -238,7 +244,7 @@ mod tests {
         ] {
             assert!(wgsl_module(WgslModule::Attention(bad)).is_err(), "{bad:?}");
         }
-        for d in [16u32, 32, 64, 128] {
+        for d in [16u32, 32, 64, 128, 129, 192, 256] {
             for cap in [16 * 1024, 32 * 1024] {
                 let t = attention_tiles(d, cap).unwrap();
                 let src = wgsl_module(WgslModule::Attention(t)).unwrap();

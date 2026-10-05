@@ -27,7 +27,7 @@
 
 const LANES: u32 = 64u;
 const MAX_SPLIT: u32 = 1024u;
-const MAX_D: u32 = 128u;
+const MAX_D: u32 = 256u;
 const NEG: f32 = -3.0e38;
 
 var<workgroup> q_s: array<f32, MAX_D>;
@@ -74,6 +74,16 @@ fn cattn_split(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     let h = wg.y % heads;
     let b = wg.z;
     let lane = lid.x;
+    // Before any barrier, and before `heads % kv_heads`. A dim past MAX_D
+    // would write off the end of `q_s`. The host refuses these first.
+    if (dim > MAX_D || kv_heads == 0u || heads == 0u) {
+        if (lane == 0u) { raise(); }
+        return;
+    }
+    if ((heads % kv_heads) != 0u) {
+        if (lane == 0u) { raise(); }
+        return;
+    }
     let pos = kv_len - tq + i;
     let start = s * split;
     let end = min(start + split, pos + 1u);
@@ -130,7 +140,7 @@ fn cattn_split(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     }
 }
 
-@compute @workgroup_size(128, 1, 1)
+@compute @workgroup_size(256, 1, 1)
 fn cattn_merge(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let tq = pw(1u);
     let heads = pw(2u);

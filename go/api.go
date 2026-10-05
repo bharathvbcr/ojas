@@ -246,8 +246,12 @@ type BinFormat uint32
 const (
 	// BinHeaderless is little-endian uint16 tokens and nothing else.
 	BinHeaderless BinFormat = 0
-	// BinFineWeb is the FineWeb 256 x int32 header, then uint16 tokens.
+	// BinFineWeb is the FineWeb 256 x int32 header, then uint16 tokens (or uint32 if magic is 20240801).
 	BinFineWeb BinFormat = 1
+	// BinHeaderlessU32 is little-endian uint32 tokens and nothing else.
+	BinHeaderlessU32 BinFormat = 2
+	// BinFineWebU32 is the FineWeb 256 x int32 header with magic 20240801, then uint32 tokens.
+	BinFineWebU32 BinFormat = 3
 )
 
 // NonFinitePolicy is what a non-finite loss or gradient does to the data
@@ -281,6 +285,10 @@ type TrainConfig struct {
 	// TokenizerHash names the tokenizer that made the bin. It is saved with
 	// every checkpoint and Resume refuses a different one.
 	TokenizerHash [32]byte
+	// Autocast selects the matmul-class region. 0 is off and is not sent,
+	// so an off payload stays the bytes it had before the field existed.
+	// 1 is bf16. Any other value is refused.
+	Autocast uint32
 }
 
 // NanolabTrainConfig is cfg with nanolab's optimizer defaults: Muon 0.025,
@@ -304,6 +312,9 @@ func (c TrainConfig) put(r *record) *record {
 	r.u32(tagOnNonFinite, uint32(c.OnNonFinite))
 	if c.TokenizerHash != ([32]byte{}) {
 		r.raw(tagTokenizerHash, c.TokenizerHash[:])
+	}
+	if c.Autocast != 0 {
+		r.u32(tagAutocast, c.Autocast)
 	}
 	return r
 }

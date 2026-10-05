@@ -119,12 +119,12 @@
 <h2 id="data-pipeline-architecture">Data Pipeline Architecture <a class="anchor" href="#data-pipeline-architecture" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart TD
     subgraph Storage[&#34;On-Disk Dataset Sources&#34;]
-        FineWeb[&#34;FineWeb Binary Files (.bin)\n- 256-byte header with magic\n- Stream of u16 token IDs&#34;]
-        RawWindows[&#34;Headerless Token Windows&#34;]
+        FineWeb[&#34;FineWeb Binary Files (.bin)\n- 256-byte header with magic\n- Stream of u16 or u32 token IDs&#34;]
+        RawWindows[&#34;Headerless Token Windows (u16 or u32)&#34;]
     end
 
     subgraph DataEngine[&#34;ojas-data Ingestion Engine&#34;]
-        Tokens[&#34;tokens.rs\n- Validates header magic and offsets\n- Rejects odd-length byte buffers\n- Positioned window reads&#34;]
+        Tokens[&#34;tokens.rs\n- Validates header magic and offsets\n- Rejects misaligned byte buffers (u16 / u32)\n- Positioned window reads&#34;]
         Sampler[&#34;sampler.rs (BatchSampler)\n- Non-overlapping T+1 windows\n- Each window once per epoch, seeded order\n- (x, y) batches [B, T] u32\n- Resume from DataCursor (epoch, window)&#34;]
         RNG[&#34;rng.rs\n- Counter-based deterministic RNG\n- Zero global state\n- Bit-identical across thread configurations&#34;]
         BPE[&#34;bpe.rs\n- Bijective GPT-2 byte-to-unicode mapping\n- Verified against tiktoken 0.12.0&#34;]
@@ -165,7 +165,7 @@
 <hr>
 <h2 id="defensive-countermeasures--hardening">Defensive Countermeasures &amp; Hardening <a class="anchor" href="#defensive-countermeasures--hardening" aria-label="Link to this section">#</a></h2>
 <aside class="alert alert-important"><p class="alert-title">Important</p><ol>
-<li><strong>Buffer Length Validation:</strong> Token buffer decoders reject odd-length byte sequences when reading 16-bit integer tokens (<code>u16</code>), preventing misaligned memory reads.
+<li><strong>Buffer Length Validation:</strong> Token buffer decoders reject misaligned byte sequences (odd lengths for <code>u16</code>, non-multiples of 4 for <code>u32</code>), preventing misaligned memory reads.
 </li>
 <li><strong>Header Magic Verification:</strong> Binary dataset files must present valid magic headers; corrupted or truncated headers fail immediately.
 </li>

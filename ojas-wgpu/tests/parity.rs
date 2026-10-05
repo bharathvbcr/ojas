@@ -259,10 +259,48 @@ fn causal_attention_matches_cpu() {
 
 #[test]
 fn attention_head_dim_past_the_kernel_limit_is_refused() {
-    let q = up(&host(1, &[1, 1, 4, 129]));
+    let q = up(&host(1, &[1, 1, 4, 257]));
     match gpu().causal_sdpa_forward(&q, &q, &q) {
-        Err(OjasError::UnsupportedHeadDim { head_dim: 129, .. }) => {}
+        Err(OjasError::UnsupportedHeadDim {
+            head_dim: 257,
+            limit: 256,
+        }) => {}
         other => panic!("expected UnsupportedHeadDim, got {other:?}"),
+    }
+}
+
+#[test]
+fn grouped_query_causal_attention_matches_cpu() {
+    let c = cpu();
+    let cases: &[(usize, usize, usize, usize, usize)] = &[
+        (1, 4, 2, 8, 32),
+        (2, 6, 3, 5, 13),
+        (1, 2, 1, 17, 192),
+        (1, 4, 1, 9, 256),
+        (1, 6, 2, 7, 129),
+    ];
+    for (i, &(b, h, hkv, t, d)) in cases.iter().enumerate() {
+        let s = 700 + i as u64 * 4;
+        let qs = [b, h, t, d];
+        let ks = [b, hkv, t, d];
+        let (q, k, v, gy) = (
+            host(s, &qs),
+            host(s + 1, &ks),
+            host(s + 2, &ks),
+            host(s + 3, &qs),
+        );
+        let tag = format!("gqa B{b} H{h}/{hkv} T{t} D{d}");
+        let (gq, gk, gv) = (up(&q), up(&k), up(&v));
+        close(
+            &format!("{tag} y"),
+            &gpu().causal_sdpa_forward(&gq, &gk, &gv).unwrap(),
+            &c.causal_sdpa_forward(&q, &k, &v).unwrap(),
+        );
+        let got = gpu().causal_sdpa_backward(&gq, &gk, &gv, &up(&gy)).unwrap();
+        let want = c.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+        close(&format!("{tag} dq"), &got.0, &want.0);
+        close(&format!("{tag} dk"), &got.1, &want.1);
+        close(&format!("{tag} dv"), &got.2, &want.2);
     }
 }
 

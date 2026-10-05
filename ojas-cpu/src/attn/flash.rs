@@ -29,6 +29,9 @@
 //! Every operand is read where it is: a head of `K` or `V` is a slice of
 //! the tensor (`Mat::row_major(head, e, dim)` is then the key prefix), and
 //! query and output-gradient blocks are views of the same slices.
+//! Grouped-query heads share one KV plane. A query head's `dK` and `dV`
+//! partials are added onto that plane after the pool returns, in increasing
+//! query-head order.
 
 use std::sync::Arc;
 
@@ -147,7 +150,8 @@ pub(super) fn forward(
         let (qb, nq) = block(b, time);
         let e = qb + nq;
         let sx = fast(&inner);
-        let span = head * stride..(head + 1) * stride;
+        let kv = d.kv_plane(head) * stride;
+        let span = kv..kv + stride;
         let qm = rows_of(q, head * stride, qb, nq, dim);
         let km = Mat::row_major(&k[span.clone()], e, dim);
         let mut s = gemm(op, sx, &qm, &km.t())?;
@@ -243,8 +247,9 @@ pub(super) fn backward(
             let row0 = first * BQ;
             let keys = (last * BQ).min(time);
             let base = head * stride;
+            let kv = d.kv_plane(head) * stride;
             let sx = fast(&inner);
-            let span = base..base + stride;
+            let span = kv..kv + stride;
             let mut dk = vec![0.0f32; keys * dim];
             let mut dv = vec![0.0f32; keys * dim];
             for b in first..last {
@@ -276,7 +281,7 @@ pub(super) fn backward(
     // Task order is head-major, chunks ascending: the partial sums run in
     // ascending chunk order for every head.
     for (task, (dk, dv)) in partials.into_iter().enumerate() {
-        let base = (task / chunks) * stride;
+        let base = d.kv_plane(task / chunks) * stride;
         add_into(&mut grad_k[base..base + dk.len()], &dk);
         add_into(&mut grad_v[base..base + dv.len()], &dv);
     }

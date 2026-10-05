@@ -169,6 +169,19 @@ fn grouped_query_attention_matches_a_naive_f64_reference() {
         let (got, want) = attend(s, 7 + i as u64);
         close(&format!("{s:?}"), &got, &want, 1e-5, 1e-5);
     }
+    for (i, d) in [129usize, 192, 200, 256].into_iter().enumerate() {
+        let s = Dims {
+            b: 1,
+            tq: 2,
+            h: 4,
+            hkv: 2,
+            d,
+            cap: 8,
+            kv_len: 6,
+        };
+        let (got, want) = attend(s, 900 + i as u64);
+        close(&format!("wide {s:?}"), &got, &want, 1e-5, 1e-5);
+    }
 }
 
 #[test]
@@ -271,13 +284,19 @@ fn cached_attention_refusals() {
     assert!(matches!(r, Err(OjasError::Shape { .. })), "{r:?}");
     let wide = |s: &[usize], seed| up(&m, &rand(s, seed, 1.0));
     let r = m.cached_attention_forward(
-        &wide(&[1, 1, 1, 192], 5),
-        &wide(&[1, 4, 1, 192], 6),
-        &wide(&[1, 4, 1, 192], 7),
+        &wide(&[1, 1, 1, 257], 5),
+        &wide(&[1, 4, 1, 257], 6),
+        &wide(&[1, 4, 1, 257], 7),
         2,
     );
     assert!(
-        matches!(r, Err(OjasError::UnsupportedHeadDim { head_dim: 192, .. })),
+        matches!(
+            r,
+            Err(OjasError::UnsupportedHeadDim {
+                head_dim: 257,
+                limit: 256
+            })
+        ),
         "{r:?}"
     );
     let r = m.cached_attention_forward(&rand(&[b, tq, h, d], 1, 1.0), &k, &v, 4);

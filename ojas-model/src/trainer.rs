@@ -20,6 +20,10 @@
 //! they were. An error in steps 5-6 marks the trainer
 //! [`TrainState::Poisoned`]; every later step is refused with
 //! [`OjasError::Poisoned`] (resume from a checkpoint instead).
+//! An [`OjasError::Poisoned`] from the autocast wrapper during the forward
+//! or backward is a step 2 error: [`TrainState`] stays `Ready` because the
+//! wrapper itself stays poisoned, and the next step fails the same way
+//! until a new trainer is built.
 //!
 //! The data cursor is the sampler's ([`ojas_data::BatchSampler::cursor`]):
 //! `shard` is the epoch and `token_index` the ordinal of the next window
@@ -33,8 +37,8 @@
 
 use ojas_autograd::Tape;
 use ojas_core::{
-    next_step, AdamWConfig, Backend, BackendId, CeChunk, DType, DataCursor, MuonNs5Config,
-    OjasError, OptimizerKind, Tensor,
+    next_step, AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, CeChunk, DType,
+    DataCursor, MuonNs5Config, OjasError, OptimizerKind, Tensor,
 };
 use ojas_cpu::{
     scaled_lr, LrSchedule, OptimGroup, ADAM_HYBRID_WEIGHT_DECAY, MUON_MOMENTUM, MUON_WEIGHT_DECAY,
@@ -108,6 +112,10 @@ pub struct TrainConfig {
     /// Raw SHA-1 of the source that runs the trainer. Saved with every
     /// checkpoint and not compared on resume.
     pub git_sha: [u8; 20],
+    /// Matmul-class bf16 region for the forward and backward. Off omits the
+    /// key from [`Self::to_json`], so a run id hashed from that text stays
+    /// the same as a config written before the field existed.
+    pub autocast: AutocastMode,
 }
 
 impl TrainConfig {
@@ -134,6 +142,7 @@ impl TrainConfig {
             chunk: DEFAULT_CE_CHUNK,
             tokenizer_hash: [0; 32],
             git_sha: [0; 20],
+            autocast: AutocastMode::Off,
         }
     }
 
@@ -151,8 +160,14 @@ impl TrainConfig {
             NonFinitePolicy::Abort => "abort",
             NonFinitePolicy::SkipBatch => "skip_batch",
         };
+        // Absent when Off, so the sorted-key text of an Off config is the
+        // text it had before this field existed.
+        let autocast = match self.autocast {
+            AutocastMode::Off => "",
+            AutocastMode::Bf16 => "\"autocast\":\"bf16\",",
+        };
         format!(
-            "{{\"accum\":{},\"adam_lr\":{:?},\"batch\":{},\"chunk_cols\":{},\
+            "{{\"accum\":{},\"adam_lr\":{:?},{autocast}\"batch\":{},\"chunk_cols\":{},\
              \"chunk_rows\":{},\"data_seed\":{},\"decay_frac\":{:?},\"grad_clip\":{:?},\
              \"ignore\":{},\"ignore_index\":{},\"matrix_lr\":{:?},\"on_nonfinite\":{},\
              \"schedule\":{},\"seq_len\":{},\"total_steps\":{},\"warmup_steps\":{}}}",
@@ -763,6 +778,14 @@ impl<B: Backend> Trainer<B> {
             .collect()
     }
 
+    /// Bf16 enters a region. Off does not call [`Backend::autocast_region`].
+    fn enter_autocast(backend: &B, mode: AutocastMode) -> Result<Option<AutocastGuard>, OjasError> {
+        match mode {
+            AutocastMode::Off => Ok(None),
+            AutocastMode::Bf16 => Ok(Some(backend.autocast_region(mode)?)),
+        }
+    }
+
     /// Steps 2: the summed gradient of every trainable slot, in slot order,
     /// and the device-side sum of the K losses.
     fn gradients(
@@ -791,32 +814,44 @@ impl<B: Backend> Trainer<B> {
             let budget = tape.backend().budget().clone();
             let ids = Tensor::from_u32(&batch.x, &[batch.batch, batch.seq_len], &budget)?;
             let targets = Tensor::from_u32(&batch.y, &[batch.x.len()], &budget)?;
-            let params = bind(tape, spec, &values)?;
-            let loss = forward_loss(
-                tape,
-                spec,
-                &params,
-                &ids,
-                &targets,
-                rope,
-                cfg.ignore_index,
-                cfg.chunk,
-            )?;
-            let loss_value = tape.value(loss)?.clone();
-            tape.backward_seeded(loss, seed)?;
-            let mut acc_slots = accs.iter_mut();
-            for (slot, var) in slots.iter().zip(params.into_flat()) {
-                if matches!(slot.moments, Moments::Frozen) {
-                    continue;
+            // The region covers the forward, the backward and take_grad.
+            // It is dropped before accumulate_grad and before the loss-sum
+            // residual add, both of which stay in f32. Off does not enter.
+            let (loss_value, taken) = {
+                let _region = Self::enter_autocast(tape.backend(), cfg.autocast)?;
+                let params = bind(tape, spec, &values)?;
+                let loss = forward_loss(
+                    tape,
+                    spec,
+                    &params,
+                    &ids,
+                    &targets,
+                    rope,
+                    cfg.ignore_index,
+                    cfg.chunk,
+                )?;
+                let loss_value = tape.value(loss)?.clone();
+                tape.backward_seeded(loss, seed)?;
+                let mut taken = Vec::with_capacity(accs.len());
+                for (slot, var) in slots.iter().zip(params.into_flat()) {
+                    if matches!(slot.moments, Moments::Frozen) {
+                        continue;
+                    }
+                    let grad = tape.take_grad(var).ok_or_else(|| OjasError::Shape {
+                        op: OP,
+                        detail: format!("{} received no gradient", slot.info.name),
+                    })?;
+                    taken.push(grad);
                 }
-                let grad = tape.take_grad(var).ok_or_else(|| OjasError::Shape {
-                    op: OP,
-                    detail: format!("{} received no gradient", slot.info.name),
-                })?;
-                let acc = acc_slots.next().ok_or_else(|| OjasError::Shape {
+                (loss_value, taken)
+            };
+            if taken.len() != accs.len() {
+                return Err(OjasError::Shape {
                     op: OP,
                     detail: "accumulator count disagrees with the trainable slots".to_string(),
-                })?;
+                });
+            }
+            for (acc, grad) in accs.iter_mut().zip(taken) {
                 match acc {
                     Some(sum) => tape.backend().accumulate_grad(sum, &grad)?,
                     None => *acc = Some(grad),

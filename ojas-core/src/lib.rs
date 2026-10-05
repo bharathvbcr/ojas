@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod autocast;
 mod backend;
 mod budget;
 mod checkpoint;
@@ -18,6 +19,9 @@ mod limits;
 mod shapes;
 mod tensor;
 
+pub use autocast::{
+    bf16_to_f32, f32_to_bf16, round_f32_to_bf16, Autocast, AutocastGuard, AutocastMode,
+};
 pub use backend::{
     check_adamw, clip_scale, inverse_permutation, next_step, permute_output_shape, pow_u64,
     refuse_unsupported_metal_head_dim, require_ns5, sdpa_scale, AdamWConfig, Backend, BackendId,

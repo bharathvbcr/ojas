@@ -123,12 +123,22 @@ struct Storage {
     /// [`Tensor::host_data_mut`], the one path to mutable host elements,
     /// resets it.
     finite: AtomicU8,
+    /// Compute tag for dynamic bf16 autocast. [`COMPUTE_F32`] is an ordinary
+    /// f32 value. [`COMPUTE_BF16`] means every element is a bf16 value widened
+    /// back to f32 (low 16 bits zero). Views share this atomic. An in-place
+    /// write clears it: the new bytes need not be bf16-exact.
+    compute: AtomicU8,
     _reservation: Reservation,
 }
 
 const FINITE_UNKNOWN: u8 = 0;
 const FINITE_YES: u8 = 1;
 const FINITE_NO: u8 = 2;
+
+/// Untagged f32. New storage starts here.
+pub(crate) const COMPUTE_F32: u8 = 0;
+/// Bits are bf16-rounded. Set only by the autocast wrapper after a cast.
+pub(crate) const COMPUTE_BF16: u8 = 1;
 
 /// Magnitude bits of an f32 (the sign cleared).
 const MAGNITUDE: u32 = 0x7fff_ffff;
@@ -244,6 +254,15 @@ fn try_zeroed_vec<T: Copy + Default>(n: usize) -> Option<Vec<T>> {
 }
 
 impl Storage {
+    fn new(payload: Payload, reservation: Reservation) -> Self {
+        Self {
+            payload,
+            finite: AtomicU8::new(FINITE_UNKNOWN),
+            compute: AtomicU8::new(COMPUTE_F32),
+            _reservation: reservation,
+        }
+    }
+
     /// Size in bytes.
     fn len(&self) -> usize {
         match &self.payload {
@@ -276,11 +295,7 @@ impl Tensor {
             });
         };
         let tensor = Self {
-            storage: Arc::new(Storage {
-                payload: Payload::Host(data),
-                finite: AtomicU8::new(FINITE_UNKNOWN),
-                _reservation: reservation,
-            }),
+            storage: Arc::new(Storage::new(Payload::Host(data), reservation)),
             shape: shape.to_vec().into_boxed_slice(),
             strides: strides.into_boxed_slice(),
             dtype,
@@ -643,6 +658,7 @@ impl Tensor {
             detail: "contiguous write requires a uniquely owned allocation".to_string(),
         })?;
         *storage.finite.get_mut() = FINITE_UNKNOWN;
+        *storage.compute.get_mut() = COMPUTE_F32;
         match &mut storage.payload {
             Payload::Host(data) => Ok(data),
             Payload::Device(buf) => Err(OjasError::Placement {
@@ -655,6 +671,16 @@ impl Tensor {
 
     pub fn dtype(&self) -> DType {
         self.dtype
+    }
+
+    /// [`COMPUTE_F32`] or [`COMPUTE_BF16`]. Views of one allocation agree.
+    pub(crate) fn compute_tag(&self) -> u8 {
+        self.storage.compute.load(Ordering::Acquire)
+    }
+
+    /// Record whether these bits are bf16-rounded. Shared by every view.
+    pub(crate) fn set_compute_tag(&self, tag: u8) {
+        self.storage.compute.store(tag, Ordering::Release);
     }
 
     pub fn shape(&self) -> &[usize] {
@@ -720,11 +746,7 @@ impl Tensor {
         }
         let strides = contiguous_strides(shape)?;
         let tensor = Self {
-            storage: Arc::new(Storage {
-                payload: Payload::Device(buffer),
-                finite: AtomicU8::new(FINITE_UNKNOWN),
-                _reservation: reservation,
-            }),
+            storage: Arc::new(Storage::new(Payload::Device(buffer), reservation)),
             shape: shape.to_vec().into_boxed_slice(),
             strides: strides.into_boxed_slice(),
             dtype,
@@ -783,11 +805,7 @@ impl Tensor {
         };
         let strides = contiguous_strides(shape)?;
         let tensor = Self {
-            storage: Arc::new(Storage {
-                payload: Payload::Host(host),
-                finite: AtomicU8::new(FINITE_UNKNOWN),
-                _reservation: reservation,
-            }),
+            storage: Arc::new(Storage::new(Payload::Host(host), reservation)),
             shape: shape.to_vec().into_boxed_slice(),
             strides: strides.into_boxed_slice(),
             dtype,
@@ -834,6 +852,11 @@ impl Tensor {
             op: OP,
             detail: "device storage is shared with another tensor view".to_string(),
         })?;
+        // An in-place device write can destroy bf16-exactness. Clear the tag
+        // before the caller receives the buffer, including when the buffer
+        // Arc is shared and the call then refuses: a cleared tag only causes
+        // a later cast, and that cast is idempotent.
+        *storage.compute.get_mut() = COMPUTE_F32;
         match &mut storage.payload {
             Payload::Host(_) => Err(OjasError::Placement {
                 op: OP,
@@ -932,11 +955,7 @@ impl Tensor {
         READBACK_BYTES.fetch_add(len_u64, Ordering::Relaxed);
         budget.record_readback(len_u64);
         let host = Self {
-            storage: Arc::new(Storage {
-                payload: Payload::Host(data),
-                finite: AtomicU8::new(FINITE_UNKNOWN),
-                _reservation: reservation,
-            }),
+            storage: Arc::new(Storage::new(Payload::Host(data), reservation)),
             shape: self.shape.clone(),
             strides: strides.into_boxed_slice(),
             dtype: self.dtype,

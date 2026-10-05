@@ -194,6 +194,7 @@ fn train_open_refuses_each_bad_setup_and_commits_nothing() {
         (tag::SCHEDULE, 9, "unknown schedule"),
         (tag::ON_NONFINITE, 4, "unknown on_nonfinite"),
         (tag::BIN_FORMAT, 7, "unknown bin_format"),
+        (tag::AUTOCAST, 2, "unknown autocast"),
     ] {
         let mut w = Writer::default();
         let fields = [
@@ -203,6 +204,7 @@ fn train_open_refuses_each_bad_setup_and_commits_nothing() {
             (tag::SCHEDULE, train::SCHEDULE_COSINE),
             (tag::ON_NONFINITE, 0),
             (tag::BIN_FORMAT, 0),
+            (tag::AUTOCAST, 0),
         ];
         for (ft, fv) in fields {
             w = w.u32(ft, if ft == t { v } else { fv });
@@ -224,7 +226,7 @@ fn train_open_refuses_each_bad_setup_and_commits_nothing() {
     train_open(id, "tokens.bin").unwrap();
     let err = train_open(id, "tokens.bin").unwrap_err();
     assert!(err.contains("already has a trainer"), "{err}");
-    // Grouped-query attention is a model Eval runs but the trainer refuses.
+    // Grouped-query attention trains through the same causal SDPA.
     let s = nano_spec();
     let mut w = Writer::default();
     for (t, v) in [
@@ -248,8 +250,7 @@ fn train_open_refuses_each_bad_setup_and_commits_nothing() {
     )
     .unwrap();
     sample(gqa.id, &[1, 2], 0.0, 2, 0).unwrap();
-    let err = train_open(gqa.id, "tokens.bin").unwrap_err();
-    assert!(err.contains("grouped-query"), "{err}");
+    train_open(gqa.id, "tokens.bin").unwrap();
 }
 
 #[test]

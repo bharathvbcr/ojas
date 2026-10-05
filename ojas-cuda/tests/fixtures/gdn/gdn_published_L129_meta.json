@@ -1,0 +1,34 @@
+{
+  "name": "L129",
+  "rule": "published",
+  "B": 2,
+  "H": 3,
+  "L": 129,
+  "D": 8,
+  "chunk": 32,
+  "seed": 1006,
+  "h_kv": null,
+  "kv_expansion": null,
+  "alpha_mode": "sigmoid",
+  "k_l2_normalized": true,
+  "alpha_clamp": [
+    0.0001,
+    1.0
+  ],
+  "beta_clamp": [
+    0.0,
+    1.0
+  ],
+  "max_abs_chunked_vs_f64seq": 2.449908983237492e-06,
+  "max_abs_output": 5.10969058169521,
+  "max_abs_published_vs_repo": 0.9585815668106079,
+  "files": [
+    "gdn_published_L129_q.npy",
+    "gdn_published_L129_k.npy",
+    "gdn_published_L129_v.npy",
+    "gdn_published_L129_alpha.npy",
+    "gdn_published_L129_beta.npy",
+    "gdn_published_L129_y_chunked.npy",
+    "gdn_published_L129_y_seq_f64.npy"
+  ]
+}

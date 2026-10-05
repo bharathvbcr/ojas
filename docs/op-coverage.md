@@ -96,7 +96,7 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | **Half-split RoPE** | Split last axis | `ojas_rope` | WGSL | `f32` | Rotate halves $(-x_2, x_1)$; layout `[B, T, H, D]` |
 | **RMS QK-Norm** | Head-wise RMSNorm | `ojas_rms_*` per head | WGSL | `f32` | Applied to Q and K before RoPE (nanolab order) |
 | **Permute** | Byte moves | `ojas_permute` | WGSL `layout` | `f32` | `torch.permute(x, dims).contiguous()`; rank ≤ 8 |
-| **Causal SDPA** | Exact softmax; blocked above 256 positions in Fast | Tiled TensorOps forward and FlashAttention-2 backward, D ≤ 128 | WGSL, D ≤ 128 | `f32` | $\mathrm{softmax}(QK^T/\sqrt{d} + M)V$; layout `[B, H, T, D]`; MHA, $T_q = T_k$ |
+| **Causal SDPA** | Exact softmax; blocked above 256 positions in Fast; grouped-query | Tiled TensorOps forward and FlashAttention-2 backward, D ≤ 256, grouped-query | WGSL, D ≤ 256, grouped-query | `f32` | $\mathrm{softmax}(QK^T/\sqrt{d} + M)V$; layout `[B, Hq, T, D]` query and `[B, Hkv, T, D]` KV; $T_q = T_k$ |
 | **Per-Head Gate** | Sigmoid broadcast | `ojas_per_head_gate_*` | WGSL | `f32` | $\sigma(x W_g^T + b_g) \odot \text{attn}$ |
 | **Value Residual** | Linear blend | `ojas_vres_*` | WGSL | `f32` | $(1 - s) v + s v_0$, $s = \sigma(\lambda)$, on `v` before attention |
 | **SiLU, Mul** (SwiGLU) | Pointwise | `ojas_silu_*`, `ojas_mul_*` | WGSL | `f32` | $\mathrm{silu}(x W_{gate}) \odot (x W_{up})$ |
@@ -110,7 +110,7 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32` (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
 
 > [!WARNING]
-> `MetalBackend` and `WgpuBackend` attention refuse $d_{\text{head}} > 128$ with `OjasError::UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, and `ojas-kernels/src/geometry.rs` for wgpu). The tiny Metal training step in `ojas-metal/src/gpu.rs` runs tessl `flash_attn_rows` and refuses above 64. Nothing is truncated.
+> `MetalBackend` and `WgpuBackend` attention refuse $d_{\text{head}} > 256$ with `OjasError::UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, and `ATTENTION_MAX_HEAD_DIM` in `ojas-kernels/src/geometry.rs` for wgpu). The tiny Metal training step in `ojas-metal/src/gpu.rs` runs tessl `flash_attn_rows` and refuses above 64. Nothing is truncated. Causal SDPA accepts grouped-query head counts.
 
 ---
 

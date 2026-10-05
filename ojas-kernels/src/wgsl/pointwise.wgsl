@@ -26,6 +26,24 @@ fn put1(i: u32, v: f32) {
     y1[i] = v;
 }
 
+// Round to bf16 and widen back. Writes y0 directly: a NaN is a defined
+// result, so this entry never calls report or raise.
+@compute @workgroup_size(256, 1, 1)
+fn round_bf16(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = lane_index(wg, nwg, lid);
+    if (i >= pw(0u)) { return; }
+    let bits = bitcast<u32>(x0[i]);
+    let mag = bits & 0x7fffffffu;
+    var outb: u32;
+    if (mag > 0x7f800000u) {
+        outb = ((bits >> 16u) | 0x0040u) << 16u;
+    } else {
+        let round = 0x7fffu + ((bits >> 16u) & 1u);
+        outb = ((bits + round) >> 16u) << 16u;
+    }
+    y0[i] = bitcast<f32>(outb);
+}
+
 @compute @workgroup_size(256, 1, 1)
 fn silu_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = lane_index(wg, nwg, lid);

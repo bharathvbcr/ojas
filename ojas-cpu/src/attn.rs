@@ -6,12 +6,14 @@
 //! does not apply the Metal head-dimension cap.
 //!
 //! Under `Numerics::Exact`, and under `Numerics::Fast` up to 256 positions,
-//! the per-row kernels below run: the forward pass splits heads and
-//! query-row blocks, the backward pass splits heads, since `grad_k` and
-//! `grad_v` sum over every query of a head. Under `Numerics::Fast` with more
-//! than 256 positions the blocked GEMM kernel in [`flash`] runs instead; it
-//! splits heads and query blocks in both passes and its bits do not depend
-//! on the thread count (see that module).
+//! the per-row kernels below run: the forward pass splits query heads and
+//! query-row blocks, the backward pass splits KV heads. Query head `h` reads
+//! KV head `h / (H / Hkv)`. The `rep` query heads that share one KV head are
+//! contiguous, and `grad_k` / `grad_v` accumulate them in increasing
+//! query-head order, so a KV group is never split across tasks. Under
+//! `Numerics::Fast` with more than 256 positions the blocked GEMM kernel in
+//! [`flash`] runs instead; it splits query heads and query blocks in both
+//! passes and its bits do not depend on the thread count (see that module).
 //!
 //! Both passes write into the output tensors the caller charged: each task
 //! fills its own slice on [`scoped`] threads (on the calling thread when the
@@ -43,18 +45,21 @@ pub(crate) fn causal_sdpa_forward(
     dims: Dims,
     out: &mut [f32],
 ) -> Result<(), OjasError> {
-    let len = dims.checked_len(op)?;
-    let lens = [q.len(), k.len(), v.len(), out.len()];
-    if lens != [len; 4] {
+    let q_len = dims.checked_len(op)?;
+    let kv_len = dims.checked_kv_len(op)?;
+    if q.len() != q_len || out.len() != q_len || k.len() != kv_len || v.len() != kv_len {
         return Err(shape(
             op,
             format!(
-                "sdpa data lengths q {} k {} v {} out {} != shape product {len}",
-                lens[0], lens[1], lens[2], lens[3]
+                "sdpa data lengths q {} k {} v {} out {} != query {q_len} kv {kv_len}",
+                q.len(),
+                k.len(),
+                v.len(),
+                out.len()
             ),
         ));
     }
-    if dims.time == 0 || dims.dim == 0 || len == 0 {
+    if dims.time == 0 || dims.dim == 0 || q_len == 0 {
         return Ok(());
     }
     if exec.numerics == Numerics::Fast && dims.time > FLASH_MIN_TIME {
@@ -89,8 +94,10 @@ pub(crate) fn causal_sdpa_forward(
         cancel()?;
         let (head, block) = (task / blocks, task % blocks);
         let span = head * d.stride_h()..(head + 1) * d.stride_h();
+        let kv = d.kv_plane(head) * d.stride_h();
+        let kv_span = kv..kv + d.stride_h();
         let rows = cuts[block]..cuts[block + 1];
-        let (qh, kh, vh) = (&q[span.clone()], &k[span.clone()], &v[span]);
+        let (qh, kh, vh) = (&q[span], &k[kv_span.clone()], &v[kv_span]);
         forward_rows(
             op,
             [qh, kh, vh],
@@ -327,52 +334,85 @@ pub(crate) fn causal_sdpa_backward(
     dims: Dims,
     grads: SdpaGrads<'_>,
 ) -> Result<(), OjasError> {
-    let len = dims.checked_len(op)?;
-    let lens = [q.len(), k.len(), v.len(), grad_y.len()];
-    if lens != [len; 4] || grads.iter().any(|g| g.len() != len) {
+    let q_len = dims.checked_len(op)?;
+    let kv_len = dims.checked_kv_len(op)?;
+    let [gq, gk, gv] = grads;
+    if q.len() != q_len
+        || grad_y.len() != q_len
+        || gq.len() != q_len
+        || k.len() != kv_len
+        || v.len() != kv_len
+        || gk.len() != kv_len
+        || gv.len() != kv_len
+    {
         return Err(shape(
             op,
             format!(
-                "sdpa data lengths q {} k {} v {} grad {} != shape product {len}",
-                lens[0], lens[1], lens[2], lens[3]
+                "sdpa data lengths q {} k {} v {} grad {} != query {q_len} kv {kv_len}",
+                q.len(),
+                k.len(),
+                v.len(),
+                grad_y.len()
             ),
         ));
     }
-    if dims.time == 0 || dims.dim == 0 || len == 0 {
+    if dims.time == 0 || dims.dim == 0 || q_len == 0 {
         return Ok(());
     }
     if exec.numerics == Numerics::Fast && dims.time > FLASH_MIN_TIME {
-        return flash::backward(op, budget, exec, [q, k, v, grad_y], dims, grads);
+        return flash::backward(op, budget, exec, [q, k, v, grad_y], dims, [gq, gk, gv]);
     }
-    // One head is an independent reduction; grad_k and grad_v accumulate in
-    // increasing query index inside it, so a head is never split.
-    let heads = dims.batch * dims.heads;
+    // One KV group is an independent reduction. The `rep` query heads that
+    // share it are contiguous and accumulate into the same grad_k / grad_v
+    // in increasing query-head order, so a group is never split. `rep == 1`
+    // is one head and one call, the multi-head cut.
+    let groups = dims.batch * dims.kv_heads;
     let inflight = if exec.pool.threads() <= 1 {
         1
     } else {
-        heads.min(exec.pool.threads()).max(1)
+        groups.min(exec.pool.threads()).max(1)
     };
     let _hold = room_for(op, budget, backward_scratch(op, &dims, inflight)?)?;
     let cancel = exec.pool.cancel_hook();
     let d = dims;
-    let [gq, gk, gv] = grads;
-    let head_lens = vec![d.stride_h(); heads];
-    let parts: Vec<SdpaGrads<'_>> = scoped::cut(gq, &head_lens)?
+    let rep = d.rep();
+    let stride = d.stride_h();
+    let q_lens = vec![stride * rep; groups];
+    let kv_lens = vec![stride; groups];
+    let parts: Vec<SdpaGrads<'_>> = scoped::cut(gq, &q_lens)?
         .into_iter()
-        .zip(scoped::cut(gk, &head_lens)?)
-        .zip(scoped::cut(gv, &head_lens)?)
+        .zip(scoped::cut(gk, &kv_lens)?)
+        .zip(scoped::cut(gv, &kv_lens)?)
         .map(|((q, k), v)| [q, k, v])
         .collect();
-    fill_parts(exec, dims.work(), parts, |head, part| {
+    fill_parts(exec, dims.work(), parts, |group, part| {
         cancel()?;
-        let span = head * d.stride_h()..(head + 1) * d.stride_h();
-        let heads_in = [
-            &q[span.clone()],
-            &k[span.clone()],
-            &v[span.clone()],
-            &grad_y[span],
-        ];
-        backward_head(op, heads_in, d.time, d.dim, d.scale, cancel.as_ref(), part)
+        let [mut gq_rest, gk, gv] = part;
+        let kv_span = group * stride..(group + 1) * stride;
+        let q0 = group * rep;
+        for r in 0..rep {
+            let (gq_r, rest) = gq_rest.split_at_mut(stride);
+            gq_rest = rest;
+            let span = (q0 + r) * stride..(q0 + r + 1) * stride;
+            let heads_in = [
+                &q[span.clone()],
+                &k[kv_span.clone()],
+                &v[kv_span.clone()],
+                &grad_y[span],
+            ];
+            // Reborrow the KV grads: every query head in the group
+            // accumulates into the same slices, in increasing `r`.
+            backward_head(
+                op,
+                heads_in,
+                d.time,
+                d.dim,
+                d.scale,
+                cancel.as_ref(),
+                [gq_r, &mut gk[..], &mut gv[..]],
+            )?;
+        }
+        Ok(())
     })?;
     Ok(())
 }
@@ -481,12 +521,32 @@ fn saxpy_up(dst: &mut [f32], src: &[f32], scale: f32) {
 pub(crate) struct Dims {
     batch: usize,
     heads: usize,
+    kv_heads: usize,
     time: usize,
     dim: usize,
     scale: f32,
 }
 
 impl Dims {
+    /// Query heads that share one KV head. `1` for multi-head, including
+    /// the empty `0 == 0` case, so this never divides by zero.
+    fn rep(&self) -> usize {
+        if self.kv_heads == 0 || self.kv_heads == self.heads {
+            1
+        } else {
+            self.heads / self.kv_heads
+        }
+    }
+
+    /// KV plane read by query plane `q_plane`. Equal to `q_plane` when
+    /// [`Self::rep`] is 1. `heads` is non-zero wherever this is called: a
+    /// zero head count makes the tensor length zero and both passes return
+    /// before indexing.
+    fn kv_plane(&self, q_plane: usize) -> usize {
+        let rep = self.rep();
+        (q_plane / self.heads) * self.kv_heads + (q_plane % self.heads) / rep
+    }
+
     /// Elements of one `[time, dim]` head. Only called after
     /// [`Dims::checked_len`] proved the whole product fits.
     fn stride_h(&self) -> usize {
@@ -495,6 +555,10 @@ impl Dims {
 
     fn checked_len(&self, op: &'static str) -> Result<usize, OjasError> {
         product(op, &[self.batch, self.heads, self.time, self.dim])
+    }
+
+    fn checked_kv_len(&self, op: &'static str) -> Result<usize, OjasError> {
+        product(op, &[self.batch, self.kv_heads, self.time, self.dim])
     }
 
     /// `B*H*T*T*D`: the causal score and value-mix multiply-adds of one
@@ -552,9 +616,25 @@ impl Dims {
             op,
             detail: format!("head dim {dim} does not fit in u32"),
         })?;
+        if dims.heads != dims.kv_heads {
+            let bad = dims.kv_heads == 0
+                || dims.heads == 0
+                || dims.kv_heads > dims.heads
+                || !dims.heads.is_multiple_of(dims.kv_heads);
+            if bad {
+                return Err(shape(
+                    op,
+                    format!(
+                        "sdpa heads {} kv heads {} differ",
+                        dims.heads, dims.kv_heads
+                    ),
+                ));
+            }
+        }
         Ok(Dims {
             batch: dims.batch,
             heads: dims.heads,
+            kv_heads: dims.kv_heads,
             time: dims.seq,
             dim,
             scale: sdpa_scale(dim_u32)?,

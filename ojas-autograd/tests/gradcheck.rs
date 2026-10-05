@@ -311,6 +311,88 @@ fn sdpa_sum(q: &[f64], k: &[f64], v: &[f64]) -> f64 {
     sum
 }
 
+/// Causal SDPA, `[1, 2, 2, 2]` query against one KV head. Query head `h`
+/// reads KV head `h / 2`, which is head 0 for both.
+fn gqa_sum(q: &[f64], k: &[f64], v: &[f64]) -> f64 {
+    let (heads, time, dim, rep) = (2usize, 2usize, 2usize, 2usize);
+    let scale = 1.0 / (dim as f64).sqrt();
+    let mut sum = 0.0;
+    for h in 0..heads {
+        let kv = h / rep;
+        for t in 0..time {
+            let mut scores = vec![0.0; t + 1];
+            let mut max_s = f64::NEG_INFINITY;
+            for j in 0..=t {
+                let mut dot = 0.0;
+                for d in 0..dim {
+                    dot += q[(h * time + t) * dim + d] * k[(kv * time + j) * dim + d];
+                }
+                scores[j] = dot * scale;
+                max_s = max_s.max(scores[j]);
+            }
+            let mut z = 0.0;
+            let mut p = vec![0.0; t + 1];
+            for j in 0..=t {
+                p[j] = (scores[j] - max_s).exp();
+                z += p[j];
+            }
+            for d in 0..dim {
+                let mut acc = 0.0;
+                for j in 0..=t {
+                    acc += (p[j] / z) * v[(kv * time + j) * dim + d];
+                }
+                sum += acc;
+            }
+        }
+    }
+    sum
+}
+
+#[test]
+fn gradcheck_grouped_query_attention() {
+    let cpu = cpu();
+    let q0 = vec![0.2, -0.1, 0.4, 0.3, -0.2, 0.5, 0.1, -0.4];
+    let k0 = vec![0.1, 0.2, -0.3, 0.05];
+    let v0 = vec![0.3, -0.2, 0.1, 0.4];
+    let q = tensor(&cpu, &q0, &[1, 2, 2, 2]);
+    let k = tensor(&cpu, &k0, &[1, 1, 2, 2]);
+    let v = tensor(&cpu, &v0, &[1, 1, 2, 2]);
+    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
+    let gy = ones(&cpu, y.shape());
+    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    check(
+        &gq.to_f32_vec().unwrap(),
+        &central_diff(&q0, H, |p| Ok(gqa_sum(p, &k0, &v0))).unwrap(),
+    );
+    check(
+        &gk.to_f32_vec().unwrap(),
+        &central_diff(&k0, H, |p| Ok(gqa_sum(&q0, p, &v0))).unwrap(),
+    );
+    check(
+        &gv.to_f32_vec().unwrap(),
+        &central_diff(&v0, H, |p| Ok(gqa_sum(&q0, &k0, p))).unwrap(),
+    );
+
+    let mut tape = Tape::new(cpu.clone());
+    let qv = tape.leaf(q.clone()).unwrap();
+    let kv = tape.leaf(k.clone()).unwrap();
+    let vv = tape.leaf(v.clone()).unwrap();
+    let yv = tape.causal_sdpa(qv, kv, vv).unwrap();
+    tape.backward(yv).unwrap();
+    assert_eq!(
+        tape.grad(qv).unwrap().to_f32_vec().unwrap(),
+        gq.to_f32_vec().unwrap()
+    );
+    assert_eq!(
+        tape.grad(kv).unwrap().to_f32_vec().unwrap(),
+        gk.to_f32_vec().unwrap()
+    );
+    assert_eq!(
+        tape.grad(vv).unwrap().to_f32_vec().unwrap(),
+        gv.to_f32_vec().unwrap()
+    );
+}
+
 fn gate_sum(x: &[f64], w: &[f64], bias: &[f64], attn: &[f64]) -> f64 {
     let din = 2usize;
     let heads = 2usize;

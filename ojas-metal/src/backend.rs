@@ -544,13 +544,25 @@ fn rope_mode(op: &'static str, dims: &RopeDims) -> Res<(u32, u32, RopeMode)> {
     Ok((u32_dim(op, dims.rows)?, u32_dim(op, dims.dim)?, mode))
 }
 
-/// The attention kernels' `(bh, t, d)` of validated `dims`, with Metal's
-/// head-dim cap: a device limit, so after the validator (D9).
-fn sdpa_bhtd(op: &'static str, dims: &SdpaDims) -> Res<(u32, u32, u32)> {
+/// The attention kernels' `(bh, t, d, rep)` of validated `dims`, with Metal's
+/// head-dim cap: a device limit, so after the validator (D9). `rep` is 1
+/// when the head counts match, including both zero, so this never divides
+/// by zero. `bh` counts query heads.
+fn sdpa_launch(op: &'static str, dims: &SdpaDims) -> Res<(u32, u32, u32, u32)> {
     let d = u32_dim(op, dims.head_dim)?;
     refuse_unsupported_metal_head_dim(BackendId::Metal, d)?;
     let bh = product(op, &[dims.batch, dims.heads])?;
-    Ok((u32_dim(op, bh)?, u32_dim(op, dims.seq)?, d))
+    let rep = if dims.kv_heads == dims.heads {
+        1
+    } else {
+        dims.heads / dims.kv_heads
+    };
+    Ok((
+        u32_dim(op, bh)?,
+        u32_dim(op, dims.seq)?,
+        d,
+        u32_dim(op, rep)?,
+    ))
 }
 
 /// The gate kernels' `(rows, din, heads, dh)` of validated `dims`.
@@ -885,11 +897,20 @@ impl Backend for MetalBackend {
         const OP: &str = "causal_sdpa_forward";
         let dims = causal_sdpa_forward_dims(q, k, v)?;
         let (qa, ka, va) = (self.f32(OP, q)?, self.f32(OP, k)?, self.f32(OP, v)?);
-        let (bh, t, d) = sdpa_bhtd(OP, &dims)?;
+        let (bh, t, d, rep) = sdpa_launch(OP, &dims)?;
+        // Multi-head charges nothing extra. Grouped-query holds the expanded
+        // K and V for the equal-head kernel.
+        let scratch = if rep == 1 {
+            0
+        } else {
+            product(OP, q.shape())?
+                .checked_mul(2)
+                .ok_or_else(|| overflow(OP))?
+        };
         self.one(
             OP,
             q.shape(),
-            0,
+            scratch,
             Cmd::Sdpa {
                 q: qa,
                 k: ka,
@@ -897,6 +918,7 @@ impl Backend for MetalBackend {
                 bh,
                 t,
                 d,
+                rep,
             },
         )
     }
@@ -912,13 +934,23 @@ impl Backend for MetalBackend {
         let dims = causal_sdpa_backward_dims(q, k, v, grad_output)?;
         let (qa, ka, va) = (self.f32(OP, q)?, self.f32(OP, k)?, self.f32(OP, v)?);
         let gy = self.f32(OP, grad_output)?;
-        let (bh, t, d) = sdpa_bhtd(OP, &dims)?;
-        let s = q.shape();
+        let (bh, t, d, rep) = sdpa_launch(OP, &dims)?;
+        // Multi-head scratch is the log-sum-exp and the row dot, `2 * bh * t`.
+        // Grouped-query also holds expanded K, V, dK and dV.
+        let scratch = if rep == 1 {
+            2 * bh as usize * t as usize
+        } else {
+            let stats = 2 * bh as usize * t as usize;
+            let extra = product(OP, q.shape())?
+                .checked_mul(4)
+                .ok_or_else(|| overflow(OP))?;
+            stats.checked_add(extra).ok_or_else(|| overflow(OP))?
+        };
         let mut out = self
             .outputs(
                 OP,
-                &[s, s, s],
-                2 * bh as usize * t as usize,
+                &[q.shape(), k.shape(), v.shape()],
+                scratch,
                 Cmd::SdpaBwd {
                     q: qa,
                     k: ka,
@@ -927,6 +959,7 @@ impl Backend for MetalBackend {
                     bh,
                     t,
                     d,
+                    rep,
                 },
             )?
             .into_iter();
@@ -1068,6 +1101,12 @@ impl Backend for MetalBackend {
             }),
             _ => Err(metal_err(format!("{OP}: missing outputs"))),
         }
+    }
+
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        let x = self.f32(OP, tensor)?;
+        self.one(OP, tensor.shape(), 0, Cmd::RoundBf16 { x })
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

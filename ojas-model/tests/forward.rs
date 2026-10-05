@@ -814,7 +814,7 @@ fn expand_kv(
 }
 
 #[test]
-fn eval_runs_grouped_query_attention_and_a_tape_refuses_it() {
+fn eval_and_tape_run_grouped_query_attention() {
     let mha = ModelSpec::tiny();
     let gqa = ModelSpec {
         n_kv_head: 2,
@@ -853,16 +853,18 @@ fn eval_runs_grouped_query_attention_and_a_tape_refuses_it() {
     );
     assert!(max_diff(&got, &other) > 1e-3, "the grouping is not checked");
 
-    // Training v1 refuses grouped-query attention on a tape.
+    // The tape records the same grouped-query forward and a k-projection
+    // gradient of the parameter's shape.
     let mut tape = Tape::new(exact());
     let p = bind(&mut tape, &gqa, &params).unwrap();
-    assert!(matches!(
-        forward_hidden(&mut tape, &gqa, &p, &x, &rope),
-        Err(OjasError::Unsupported {
-            op: "ModelSpec::validate_for_training",
-            ..
-        })
-    ));
+    let y = forward_logits(&mut tape, &gqa, &p, &x, &rope).unwrap();
+    let tape_logits = tape.value(y).unwrap().to_f32_vec().unwrap();
+    assert_eq!(tape_logits, got);
+    let k_proj = p.blocks[0].k_proj;
+    tape.backward(y).unwrap();
+    let gk = tape.grad(k_proj).unwrap();
+    assert_eq!(gk.shape(), tape.value(k_proj).unwrap().shape());
+    assert!(gk.to_f32_vec().unwrap().iter().any(|v| *v != 0.0));
 }
 
 #[test]

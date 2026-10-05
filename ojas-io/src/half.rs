@@ -8,20 +8,14 @@
 //! the dropped low bits stays NaN instead of turning into infinity. A quiet
 //! NaN therefore round-trips bit for bit; a signalling NaN comes back quiet.
 
-/// `bits << 16`.
+/// `bits << 16`. The rounding lives in `ojas_core` so training and checkpoints share one implementation.
 pub fn bf16_to_f32(bits: u16) -> f32 {
-    f32::from_bits(u32::from(bits) << 16)
+    ojas_core::bf16_to_f32(bits)
 }
 
 /// Round to nearest even on the dropped 16 bits.
 pub fn f32_to_bf16(value: f32) -> u16 {
-    let bits = value.to_bits();
-    if value.is_nan() {
-        return ((bits >> 16) as u16) | 0x0040;
-    }
-    // Largest non-NaN input is 0xFF80_0000, so this cannot wrap.
-    let round = 0x7FFF + ((bits >> 16) & 1);
-    ((bits + round) >> 16) as u16
+    ojas_core::f32_to_bf16(value)
 }
 
 /// Exact, including subnormals, signed zeros, infinities and NaN payloads.

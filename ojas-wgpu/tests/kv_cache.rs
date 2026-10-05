@@ -383,6 +383,33 @@ fn grouped_query_attention_matches_a_naive_f64_reference() {
             cap: 1024,
             kv_len: 1024,
         },
+        Dims {
+            b: 1,
+            tq: 2,
+            h: 4,
+            hkv: 2,
+            d: 256,
+            cap: 16,
+            kv_len: 9,
+        },
+        Dims {
+            b: 1,
+            tq: 1,
+            h: 2,
+            hkv: 1,
+            d: 200,
+            cap: 8,
+            kv_len: 5,
+        },
+        Dims {
+            b: 1,
+            tq: 3,
+            h: 6,
+            hkv: 3,
+            d: 129,
+            cap: 12,
+            kv_len: 7,
+        },
     ];
     for (i, s) in cases.into_iter().enumerate() {
         let (got, want) = attend(&g, s, 200 + 10 * i as u64);
@@ -518,13 +545,19 @@ fn cached_attention_refusals() {
     assert!(matches!(r, Err(OjasError::Shape { .. })), "{r:?}");
     let wide = |s: &[usize], seed| g.upload(&host(seed, s)).unwrap();
     let r = g.cached_attention_forward(
-        &wide(&[1, 1, 1, 192], 5),
-        &wide(&[1, 4, 1, 192], 6),
-        &wide(&[1, 4, 1, 192], 7),
+        &wide(&[1, 1, 1, 257], 5),
+        &wide(&[1, 4, 1, 257], 6),
+        &wide(&[1, 4, 1, 257], 7),
         2,
     );
     assert!(
-        matches!(r, Err(OjasError::UnsupportedHeadDim { head_dim: 192, .. })),
+        matches!(
+            r,
+            Err(OjasError::UnsupportedHeadDim {
+                head_dim: 257,
+                limit: 256
+            })
+        ),
         "{r:?}"
     );
     let r = g.cached_attention_forward(&host(1, &[b, tq, h, d]), &k, &v, 4);

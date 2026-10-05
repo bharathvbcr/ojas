@@ -22,9 +22,9 @@ pub trait Graph {
     /// The backend every op runs on.
     fn backend_id(&self) -> BackendId;
 
-    /// Refuse a spec this executor cannot run: a tape records training
-    /// graphs ([`ModelSpec::validate_for_training`], no grouped-query
-    /// attention); [`Eval`] runs any valid spec ([`ModelSpec::validate`]).
+    /// Refuse a spec this executor cannot run. A tape calls
+    /// [`ModelSpec::validate_for_training`] and [`Eval`] calls
+    /// [`ModelSpec::validate`]; both accept grouped-query attention.
     fn check_spec(&self, spec: &ModelSpec) -> Result<(), OjasError>;
 
     /// Bring a parameter into the graph. On a tape it is a leaf whose
@@ -39,12 +39,12 @@ pub trait Graph {
     fn rms_norm(&mut self, x: &Self::V, w: &Self::V, eps: f32) -> Result<Self::V, OjasError>;
     fn rope(&mut self, x: &Self::V, cos: &Tensor, sin: &Tensor) -> Result<Self::V, OjasError>;
     fn permute(&mut self, x: &Self::V, dims: &[usize]) -> Result<Self::V, OjasError>;
-    /// Causal SDPA over `[B, H, T, D]`.
+    /// Causal SDPA. Query is head-major `[B, H, T, D]`; key and value are
+    /// `[B, Hkv, T, D]`, with `H` a positive multiple of `Hkv`.
     fn sdpa(&mut self, q: &Self::V, k: &Self::V, v: &Self::V) -> Result<Self::V, OjasError>;
     /// [`Backend::cached_attention_forward`]: `q` `[B, Tq, H, D]` against
-    /// the first `kv_len` positions of a `[B, Tcap, Hkv, D]` cache. With
-    /// `kv_len == Tq` and a cache of exactly `Tq` positions it is causal
-    /// attention in time-major layout, grouped-query included.
+    /// the first `kv_len` positions of a `[B, Tcap, Hkv, D]` cache. Decode
+    /// uses this path. Full-sequence training uses [`Graph::sdpa`].
     fn cached_attn(
         &mut self,
         q: &Self::V,

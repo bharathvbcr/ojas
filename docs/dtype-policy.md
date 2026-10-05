@@ -16,8 +16,8 @@ flowchart TD
         MuonMom["Muon Momentum Buffers"]
     end
 
-    subgraph BF16Domain["bf16 Brain Floating Point"]
-        NSIterate["Muon Newton-Schulz Iterate Matrix (X)\n- Converted dynamically before orthogonalization\n- Polynomial steps evaluate in bf16"]
+    subgraph BF16Domain["optional bf16 autocast region"]
+        NSIterate["Matmul-class copies\n- Off by default; storage stays f32\n- Rounded operands and activation outputs only"]
     end
 
     subgraph U32Domain["u32 Integer Domain"]
@@ -33,8 +33,8 @@ flowchart TD
     Params --> Grads
     Grads --> AdamWStates
     Grads --> MuonMom
-    MuonMom -->|Dynamic Cast| NSIterate
-    NSIterate -->|Cast Back| Params
+    Params -->|region on| NSIterate
+    NSIterate -->|f32 master grads| MuonMom
     TokenIDs --> Acts
     Oracles -.->|Verification Reference| Acts
 ```
@@ -45,16 +45,16 @@ flowchart TD
 
 | Category | Storage DType | Compute DType | Rationale & Specification |
 | :--- | :--- | :--- | :--- |
-| **Model Parameters** | `f32` | `f32` | Full precision maintained for numerical stability during pre-training. |
-| **Activations** | `f32` | `f32` | Kept in `f32` across all attention and MLP layers. |
-| **Gradients** | `f32` | `f32` | Reverse-mode tape and fused backward accumulate in `f32`. |
+| **Model Parameters** | `f32` | `f32` | Stored f32. An autocast region rounds a copy for a matmul-class op and does not rewrite the parameter. |
+| **Activations** | `f32` | `f32`, or bf16-rounded inside a region | Outside a region every activation stays f32. Inside `AutocastMode::Bf16`, matmul-class outputs are rounded and tagged; norms, RoPE, embeddings and the residual stream stay f32 unless every counted input is already tagged. |
+| **Gradients** | `f32` | `f32` for master weights | Weight and bias gradients stay untagged f32. Activation gradients of matmul-class ops are rounded inside a region. |
 | **Muon Momentum** | `f32` | `f32` | Standard first-moment buffer for matrix parameters. |
-| **Muon Newton-Schulz** | — | `bf16` | Evaluated in `bf16` (`X = G.bfloat16()`) to reduce compute latency while maintaining spectral properties. |
+| **Muon Newton-Schulz** | — | `f32` | Five Newton-Schulz steps run in f32 on CPU, Metal and wgpu. nanolab's `X = G.bfloat16()` is not what ojas runs. |
 | **AdamW Moments** | `f32` | `f64` (internal) | First and second moments stored as `f32`; step updates computed with `f64` scalars before casting. |
 | **Tokens & Labels** | `u32` | `u32` | Accommodates vocabularies up to 50,304. `ignore_index: Option<u32>` drops rows whose target equals `Some(id)`. `None` drops nothing. |
 | **Oracle Fixtures** | `f64` | `f64` | Golden reference files stored on disk; verified against CPU kernels. |
 
-The `DType` enumeration in [`ojas-core`](file:///Users/bharath/Code/research/ojas/ojas-core/src/dtype.rs) defines `F32`, `Bf16`, `F16`, and `U32`. `F16` exists for checkpoint format compatibility; v1 training does not compute in `F16`.
+The `DType` enumeration in [`ojas-core`](file:///Users/bharath/Code/research/ojas/ojas-core/src/dtype.rs) defines `F32`, `Bf16`, `F16`, and `U32`. `F16` exists for checkpoint format compatibility; v1 training does not compute in `F16`. Training storage stays `F32`. `TrainConfig.autocast` defaults to off, and an off config omits the key from `to_json`, so existing run ids stay valid. `Bf16` enters an `Autocast` region around the forward, the backward and `take_grad` only. The optimizer, the loss sum and `accumulate_grad` stay outside that region. A device tensor is not downloaded to round it.
 
 ---
 

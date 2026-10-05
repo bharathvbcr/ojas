@@ -126,8 +126,8 @@
         MuonMom[&#34;Muon Momentum Buffers&#34;]
     end
 
-    subgraph BF16Domain[&#34;bf16 Brain Floating Point&#34;]
-        NSIterate[&#34;Muon Newton-Schulz Iterate Matrix (X)\n- Converted dynamically before orthogonalization\n- Polynomial steps evaluate in bf16&#34;]
+    subgraph BF16Domain[&#34;optional bf16 autocast region&#34;]
+        NSIterate[&#34;Matmul-class copies\n- Off by default; storage stays f32\n- Rounded operands and activation outputs only&#34;]
     end
 
     subgraph U32Domain[&#34;u32 Integer Domain&#34;]
@@ -143,8 +143,8 @@
     Params --&gt; Grads
     Grads --&gt; AdamWStates
     Grads --&gt; MuonMom
-    MuonMom --&gt;|Dynamic Cast| NSIterate
-    NSIterate --&gt;|Cast Back| Params
+    Params --&gt;|region on| NSIterate
+    NSIterate --&gt;|f32 master grads| MuonMom
     TokenIDs --&gt; Acts
     Oracles -.-&gt;|Verification Reference| Acts</pre></figure>
 <hr>
@@ -152,16 +152,16 @@
 <div class="table-wrap"><table>
 <thead><tr><th>Category</th><th>Storage DType</th><th>Compute DType</th><th>Rationale &amp; Specification</th></tr></thead>
 <tbody>
-<tr><td><strong>Model Parameters</strong></td><td><code>f32</code></td><td><code>f32</code></td><td>Full precision maintained for numerical stability during pre-training.</td></tr>
-<tr><td><strong>Activations</strong></td><td><code>f32</code></td><td><code>f32</code></td><td>Kept in <code>f32</code> across all attention and MLP layers.</td></tr>
-<tr><td><strong>Gradients</strong></td><td><code>f32</code></td><td><code>f32</code></td><td>Reverse-mode tape and fused backward accumulate in <code>f32</code>.</td></tr>
+<tr><td><strong>Model Parameters</strong></td><td><code>f32</code></td><td><code>f32</code></td><td>Stored f32. An autocast region rounds a copy for a matmul-class op and does not rewrite the parameter.</td></tr>
+<tr><td><strong>Activations</strong></td><td><code>f32</code></td><td><code>f32</code>, or bf16-rounded inside a region</td><td>Outside a region every activation stays f32. Inside <code>AutocastMode::Bf16</code>, matmul-class outputs are rounded and tagged; norms, RoPE, embeddings and the residual stream stay f32 unless every counted input is already tagged.</td></tr>
+<tr><td><strong>Gradients</strong></td><td><code>f32</code></td><td><code>f32</code> for master weights</td><td>Weight and bias gradients stay untagged f32. Activation gradients of matmul-class ops are rounded inside a region.</td></tr>
 <tr><td><strong>Muon Momentum</strong></td><td><code>f32</code></td><td><code>f32</code></td><td>Standard first-moment buffer for matrix parameters.</td></tr>
-<tr><td><strong>Muon Newton-Schulz</strong></td><td>—</td><td><code>bf16</code></td><td>Evaluated in <code>bf16</code> (<code>X = G.bfloat16()</code>) to reduce compute latency while maintaining spectral properties.</td></tr>
+<tr><td><strong>Muon Newton-Schulz</strong></td><td>—</td><td><code>f32</code></td><td>Five Newton-Schulz steps run in f32 on CPU, Metal and wgpu. nanolab&#39;s <code>X = G.bfloat16()</code> is not what ojas runs.</td></tr>
 <tr><td><strong>AdamW Moments</strong></td><td><code>f32</code></td><td><code>f64</code> (internal)</td><td>First and second moments stored as <code>f32</code>; step updates computed with <code>f64</code> scalars before casting.</td></tr>
 <tr><td><strong>Tokens &amp; Labels</strong></td><td><code>u32</code></td><td><code>u32</code></td><td>Accommodates vocabularies up to 50,304. <code>ignore_index: Option&lt;u32&gt;</code> drops rows whose target equals <code>Some(id)</code>. <code>None</code> drops nothing.</td></tr>
 <tr><td><strong>Oracle Fixtures</strong></td><td><code>f64</code></td><td><code>f64</code></td><td>Golden reference files stored on disk; verified against CPU kernels.</td></tr>
 </tbody></table></div>
-<p>The <code>DType</code> enumeration in <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-core/src/dtype.rs" rel="noopener"><code>ojas-core</code></a> defines <code>F32</code>, <code>Bf16</code>, <code>F16</code>, and <code>U32</code>. <code>F16</code> exists for checkpoint format compatibility; v1 training does not compute in <code>F16</code>.</p>
+<p>The <code>DType</code> enumeration in <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-core/src/dtype.rs" rel="noopener"><code>ojas-core</code></a> defines <code>F32</code>, <code>Bf16</code>, <code>F16</code>, and <code>U32</code>. <code>F16</code> exists for checkpoint format compatibility; v1 training does not compute in <code>F16</code>. Training storage stays <code>F32</code>. <code>TrainConfig.autocast</code> defaults to off, and an off config omits the key from <code>to_json</code>, so existing run ids stay valid. <code>Bf16</code> enters an <code>Autocast</code> region around the forward, the backward and <code>take_grad</code> only. The optimizer, the loss sum and <code>accumulate_grad</code> stay outside that region. A device tensor is not downloaded to round it.</p>
 <hr>
 <h2 id="epsilon-constants-never-interchangeable">Epsilon Constants: Never Interchangeable <a class="anchor" href="#epsilon-constants-never-interchangeable" aria-label="Link to this section">#</a></h2>
 <p>ojas defines three distinct epsilon constants for numerical stability. They represent different physical quantities and must <strong>never</strong> be substituted for one another:</p>

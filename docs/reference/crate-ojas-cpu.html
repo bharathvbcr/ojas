@@ -195,7 +195,7 @@
 </li>
 <li><strong>AdamW Moment Protection:</strong> If parameter updates evaluate to non-finite values (NaN / Inf), the optimizer aborts before touching internal moment buffers, preventing persistent corruption.
 </li>
-<li><strong>Arbitrary Head Dimension:</strong> Unlike Metal kernels that enforce $d_{\text{head}} \le 64$, <code>ojas-cpu</code> supports arbitrary head dimensions (e.g., $d=65$ verified in test suites).
+<li><strong>Arbitrary Head Dimension:</strong> CPU attention has no head-dimension cap (for example $d=65$ in the test suites). Metal and wgpu refuse above 256 (<code>METAL_MAX_HEAD_DIM</code>, <code>ATTENTION_MAX_HEAD_DIM</code>). The tiny Metal step refuses above 64.
 </li>
 <li><strong>No Allocation Leaks:</strong> The persistent worker pool reuses memory across training steps, preventing thread spawn overhead and memory fragmentation.
 </li>

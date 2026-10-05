@@ -64,7 +64,7 @@ const WS_GROWTH: u64 = 64 << 20;
 const ATTN_THREADS: usize = 128;
 const ATTN_ROWS: usize = 32;
 /// Largest head dim the tiled attention kernels are compiled for.
-const ATTN_MAX_HEAD_DIM: u32 = 128;
+const ATTN_MAX_HEAD_DIM: u32 = 256;
 /// Threads per `ojas_cached_attn` threadgroup (`CA_THREADS`: 32
 /// simdgroups, so a decode step's few threadgroups each walk 32 keys per
 /// simdgroup at 1024 positions). tessl's dispatch refuses a threadgroup
@@ -106,6 +106,7 @@ const KERNELS: &[&str] = &[
     "ojas_cached_attn",
     "ojas_cached_attn_merge",
     "ojas_permute",
+    "ojas_round_bf16",
     "ojas_silu_fwd",
     "ojas_silu_bwd",
     "ojas_mul_fwd",
@@ -149,6 +150,12 @@ const KERNELS: &[&str] = &[
     "ojas_attn_bwd_stats_d128",
     "ojas_attn_bwd_dq_d128",
     "ojas_attn_bwd_dkv_d128",
+    "ojas_attn_fwd_d256",
+    "ojas_attn_bwd_stats_d256",
+    "ojas_attn_bwd_dq_d256",
+    "ojas_attn_bwd_dkv_d256",
+    "ojas_head_repeat",
+    "ojas_head_sum",
     "ojas_per_head_gate_fwd",
     "ojas_per_head_gate_bwd",
     "ojas_per_head_gate_dbias",
@@ -876,7 +883,15 @@ impl Worker {
                 mode,
                 backward,
             } => self.rope(x, cos, sin, rows, dim, mode, backward),
-            Cmd::Sdpa { q, k, v, bh, t, d } => self.sdpa(q, k, v, bh, t, d),
+            Cmd::Sdpa {
+                q,
+                k,
+                v,
+                bh,
+                t,
+                d,
+                rep,
+            } => self.sdpa(q, k, v, bh, t, d, rep),
             Cmd::SdpaBwd {
                 q,
                 k,
@@ -885,7 +900,8 @@ impl Worker {
                 bh,
                 t,
                 d,
-            } => self.sdpa_bwd(q, k, v, gy, bh, t, d),
+                rep,
+            } => self.sdpa_bwd(q, k, v, gy, bh, t, d, rep),
             Cmd::Gate {
                 x,
                 w,
@@ -909,6 +925,7 @@ impl Worker {
             } => self.gate(x, w, b, attn, Some(gy), rows, din, heads, dh),
             Cmd::Vres { v, v0, lam } => self.vres(v, v0, lam, None),
             Cmd::VresBwd { v, v0, lam, gy } => self.vres(v, v0, lam, Some(gy)),
+            Cmd::RoundBf16 { x } => self.round_bf16(x),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
             Cmd::Mul { a, b } => self.mul(a, b, None),
@@ -1305,14 +1322,15 @@ impl Worker {
 
     /// Compiled width of the tiled attention kernels (`ojas_attn_*_d*`).
     /// Their threadgroup memory does not grow with the head dim, so they are
-    /// built up to 128; `ojas_core::METAL_MAX_HEAD_DIM` may refuse less
+    /// built up to 256; `ojas_core::METAL_MAX_HEAD_DIM` may refuse less
     /// before a call gets here.
     fn attn_width(d: u32) -> Res<u32> {
         match d {
             1..=16 => Ok(16),
             17..=32 => Ok(32),
             33..=64 => Ok(64),
-            65..=ATTN_MAX_HEAD_DIM => Ok(128),
+            65..=128 => Ok(128),
+            129..=ATTN_MAX_HEAD_DIM => Ok(256),
             _ => Err(OjasError::UnsupportedHeadDim {
                 head_dim: d,
                 limit: ATTN_MAX_HEAD_DIM,
@@ -1320,12 +1338,59 @@ impl Worker {
         }
     }
 
-    fn sdpa(&mut self, q: Arg, k: Arg, v: Arg, bh: u32, t: u32, d: u32) -> Res<Reply> {
+    /// Copy each source plane `rep` times into `dst`. `dst.n == 0` launches
+    /// nothing: a zero-wide grid is refused.
+    fn head_repeat(&self, src: &V, dst: &V, plane: u32, rep: u32) -> Res<()> {
+        if dst.n == 0 {
+            return Ok(());
+        }
+        let n = u32_of(dst.n)?;
+        self.k1("ojas_head_repeat", dst.n, |b| {
+            bind(b, src, 0);
+            bind(b, dst, 1);
+            set_u32(b, n, 2);
+            set_u32(b, plane, 3);
+            set_u32(b, rep, 4);
+        })
+    }
+
+    /// Sum `rep` source planes into each destination plane, `r` ascending.
+    fn head_sum(&self, src: &V, dst: &V, plane: u32, rep: u32) -> Res<()> {
+        if dst.n == 0 {
+            return Ok(());
+        }
+        let n = u32_of(dst.n)?;
+        self.k1("ojas_head_sum", dst.n, |b| {
+            bind(b, src, 0);
+            bind(b, dst, 1);
+            set_u32(b, n, 2);
+            set_u32(b, plane, 3);
+            set_u32(b, rep, 4);
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sdpa(&mut self, q: Arg, k: Arg, v: Arg, bh: u32, t: u32, d: u32, rep: u32) -> Res<Reply> {
         const OP: &str = "causal_sdpa_forward";
         let width = Self::attn_width(d)?;
         let scale = sdpa_scale(d)?;
         attn_plane_fits(OP, t, d)?;
-        let (qv, kv, vv) = (self.view(q)?, self.view(k)?, self.view(v)?);
+        let qv = self.view(q)?;
+        let mut kv = self.view(k)?;
+        let mut vv = self.view(v)?;
+        // `rep <= 1` is the equal-head kernel, bit for bit. A wider repeat
+        // expands K and V to the query head count first.
+        if rep > 1 && qv.n > 0 {
+            let plane = t
+                .checked_mul(d)
+                .ok_or_else(|| metal_err(format!("{OP}: plane overflows")))?;
+            let kexp = self.fresh(qv.n)?;
+            let vexp = self.fresh(qv.n)?;
+            self.head_repeat(&kv, &kexp, plane, rep)?;
+            self.head_repeat(&vv, &vexp, plane, rep)?;
+            kv = kexp;
+            vv = vexp;
+        }
         let o = self.fresh(qv.n)?;
         let st = self.status(OP)?;
         // No separate pass over Q, K or V. A non-finite Q or K makes a live
@@ -1352,18 +1417,44 @@ impl Worker {
     /// `dkv` walks query blocks per key block. Three dispatches, no T x T
     /// buffer, no wait.
     #[allow(clippy::too_many_arguments)]
-    fn sdpa_bwd(&mut self, q: Arg, k: Arg, v: Arg, gy: Arg, bh: u32, t: u32, d: u32) -> Res<Reply> {
+    fn sdpa_bwd(
+        &mut self,
+        q: Arg,
+        k: Arg,
+        v: Arg,
+        gy: Arg,
+        bh: u32,
+        t: u32,
+        d: u32,
+        rep: u32,
+    ) -> Res<Reply> {
         const OP: &str = "causal_sdpa_backward";
         let width = Self::attn_width(d)?;
         let scale = sdpa_scale(d)?;
         attn_plane_fits(OP, t, d)?;
-        let (qv, kv, vv, gv) = (self.view(q)?, self.view(k)?, self.view(v)?, self.view(gy)?);
+        let qv = self.view(q)?;
+        let kv0 = self.view(k)?;
+        let vv0 = self.view(v)?;
+        let gv = self.view(gy)?;
+        let (kv_n, vv_n) = (kv0.n, vv0.n);
+        let (kv, vv) = if rep > 1 && qv.n > 0 {
+            let plane = t
+                .checked_mul(d)
+                .ok_or_else(|| metal_err(format!("{OP}: plane overflows")))?;
+            let kexp = self.fresh(qv.n)?;
+            let vexp = self.fresh(qv.n)?;
+            self.head_repeat(&kv0, &kexp, plane, rep)?;
+            self.head_repeat(&vv0, &vexp, plane, rep)?;
+            (kexp, vexp)
+        } else {
+            (kv0, vv0)
+        };
         let rows = bh as usize * t as usize;
         let lse = self.fresh(rows)?;
         let dvec = self.fresh(rows)?;
         let dq = self.fresh(qv.n)?;
-        let dk = self.fresh(qv.n)?;
-        let dv = self.fresh(qv.n)?;
+        let dk_wide = self.fresh(qv.n)?;
+        let dv_wide = self.fresh(qv.n)?;
         let st = self.status(OP)?;
         for x in [&qv, &kv, &vv, &gv] {
             self.check(&st, x, ST_IN)?;
@@ -1415,13 +1506,28 @@ impl Worker {
                 inputs(b);
                 bind(b, &lse, 4);
                 bind(b, &dvec, 5);
-                bind(b, &dk, 6);
-                bind(b, &dv, 7);
+                bind(b, &dk_wide, 6);
+                bind(b, &dv_wide, 7);
                 set_u32(b, t, 8);
                 set_u32(b, d, 9);
                 set_f32(b, scale, 10);
             },
         )?;
+        // The equal-head kernel wrote query-sized gradients. Sum them back
+        // onto the KV heads, in increasing query-head order, then check the
+        // reduced buffers. `rep <= 1` returns the kernel's buffers directly.
+        let (dk, dv) = if rep > 1 && kv_n > 0 {
+            let plane = t
+                .checked_mul(d)
+                .ok_or_else(|| metal_err(format!("{OP}: plane overflows")))?;
+            let dk = self.fresh(kv_n)?;
+            let dv = self.fresh(vv_n)?;
+            self.head_sum(&dk_wide, &dk, plane, rep)?;
+            self.head_sum(&dv_wide, &dv, plane, rep)?;
+            (dk, dv)
+        } else {
+            (dk_wide, dv_wide)
+        };
         for x in [&dq, &dk, &dv] {
             self.check(&st, x, ST_OUT)?;
         }
@@ -1584,6 +1690,19 @@ impl Worker {
         })?;
         self.check(&st, &glam, ST_OUT)?;
         Ok(self.keep(vec![gvv, gv0, glam]))
+    }
+
+    /// No status slot and no finite scan: NaN rounds to a quiet NaN.
+    fn round_bf16(&mut self, x: Arg) -> Res<Reply> {
+        let xv = self.view(x)?;
+        let n = u32_of(xv.n)?;
+        let y = self.fresh(xv.n)?;
+        self.k1("ojas_round_bf16", xv.n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, n, 2);
+        })?;
+        Ok(self.keep(vec![y]))
     }
 
     fn silu(&mut self, x: Arg, gy: Option<Arg>) -> Res<Reply> {
@@ -2327,16 +2446,21 @@ mod tests {
         }
     }
 
-    /// The tiled backward at head dims 65..=128, below the trait: the core
-    /// limit (`METAL_MAX_HEAD_DIM`) refuses them in `MetalBackend` today, so
-    /// this drives the device thread's command directly and compares with the
-    /// CPU reference at the parity tests' tolerance.
+    /// The tiled backward at head dims through 256. This drives the device
+    /// thread's command directly and compares with the CPU reference at the
+    /// parity tests' tolerance. One past the compiled width is refused.
     #[test]
-    fn tiled_backward_matches_cpu_at_head_dims_up_to_128() {
+    fn tiled_backward_matches_cpu_at_head_dims_up_to_256() {
         let mut w = Worker::open(Arc::new(AtomicU64::new(0)), 8 << 30).expect("Metal device");
         let cpu = ojas_cpu::CpuBackend::new(Budget::new(8 << 30))
             .with_numerics(ojas_core::Numerics::Exact);
-        for (bh, t, d) in [(2usize, 67usize, 128usize), (1, 300, 128), (3, 33, 100)] {
+        for (bh, t, d) in [
+            (2usize, 67usize, 128usize),
+            (1, 300, 128),
+            (3, 33, 100),
+            (1, 17, 256),
+            (2, 9, 200),
+        ] {
             let n = bh * t * d;
             let shape = [1, bh, t, d];
             let host: Vec<Vec<f32>> = (0..4).map(|i| pattern(n, (t * d) as u64 + i)).collect();
@@ -2356,6 +2480,7 @@ mod tests {
                 bh: bh as u32,
                 t: t as u32,
                 d: d as u32,
+                rep: 1,
             }) {
                 Ok(Reply::Bufs(b)) if b.len() == 3 => b,
                 other => panic!("sdpa bwd d{d}: {other:?}"),
@@ -2376,15 +2501,17 @@ mod tests {
                 }
             }
         }
-        // Above 128 both directions refuse, naming their limit.
-        let x = upload(&mut w, &pattern(4 * 144, 1));
+        // One past the compiled width, both directions refuse and name it.
+        let over = ATTN_MAX_HEAD_DIM + 1;
+        let x = upload(&mut w, &pattern(4 * over as usize, 1));
         let fwd = w.run(Cmd::Sdpa {
             q: x,
             k: x,
             v: x,
             bh: 1,
             t: 4,
-            d: 144,
+            d: over,
+            rep: 1,
         });
         let bwd = w.run(Cmd::SdpaBwd {
             q: x,
@@ -2393,30 +2520,35 @@ mod tests {
             gy: x,
             bh: 1,
             t: 4,
-            d: 144,
+            d: over,
+            rep: 1,
         });
         for r in [fwd, bwd] {
             assert!(
                 matches!(
                     r,
-                    Err(OjasError::UnsupportedHeadDim {
-                        head_dim: 144,
-                        limit: 128
-                    })
+                    Err(OjasError::UnsupportedHeadDim { head_dim, limit })
+                        if head_dim == over && limit == ATTN_MAX_HEAD_DIM
                 ),
                 "{r:?}"
             );
         }
     }
 
-    /// The forward at head dims 65..=128, below the trait, against the CPU
-    /// reference at the parity tests' tolerance.
+    /// The forward at head dims through 256, against the CPU reference at
+    /// the parity tests' tolerance.
     #[test]
-    fn forward_matches_cpu_at_head_dims_up_to_128() {
+    fn forward_matches_cpu_at_head_dims_up_to_256() {
         let mut w = Worker::open(Arc::new(AtomicU64::new(0)), 8 << 30).expect("Metal device");
         let cpu = ojas_cpu::CpuBackend::new(Budget::new(8 << 30))
             .with_numerics(ojas_core::Numerics::Exact);
-        for (bh, t, d) in [(2usize, 67usize, 128usize), (1, 300, 128), (3, 33, 100)] {
+        for (bh, t, d) in [
+            (2usize, 67usize, 128usize),
+            (1, 300, 128),
+            (3, 33, 100),
+            (1, 17, 256),
+            (2, 9, 200),
+        ] {
             let n = bh * t * d;
             let shape = [1, bh, t, d];
             let host: Vec<Vec<f32>> = (0..3).map(|i| pattern(n, (t * d) as u64 + 7 + i)).collect();
@@ -2437,6 +2569,7 @@ mod tests {
                 bh: bh as u32,
                 t: t as u32,
                 d: d as u32,
+                rep: 1,
             }) {
                 Ok(Reply::Bufs(b)) if b.len() == 1 => b,
                 other => panic!("sdpa fwd d{d}: {other:?}"),

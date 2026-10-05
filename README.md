@@ -202,7 +202,7 @@ flowchart LR
 ### 3. Native & Portable Hardware Backends
 * **CPU (`ojas-cpu`):** `CpuBackend` defaults to `Numerics::Fast`; `Numerics::Exact` (opt-in) uses a packed GEMM on a persistent thread pool; bit-identical to pre-change golden digests at thread counts 1, 2, 3, 7, 16, and 18. `Numerics::Fast` on macOS sends products of $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) to Apple Accelerate `cblas_sgemm`; smaller Fast products stay on `tile_fast`. Off macOS the cutoff is $2^{21}$.
 * **SIMD (`ojas-simd`):** Fast-tier GEMM kernels including ARM64 NEON (~110 GFLOP/s single thread), x86_64 AVX2+FMA, portable FMA fallback, and Apple Accelerate wrapper.
-* **Metal (`ojas-metal`):** `MetalBackend` implements every `Backend` op on device tensors through `tessl` GEMM and its own `.metal` kernels. Causal attention is a tiled TensorOps forward plus a FlashAttention-2-style backward, with no `T×T` scores stored, at head dims up to 128. Numerics `Fast`.
+* **Metal (`ojas-metal`):** `MetalBackend` implements every `Backend` op on device tensors through `tessl` GEMM and its own `.metal` kernels. Causal attention is a tiled TensorOps forward plus a FlashAttention-2-style backward, with no `T×T` scores stored, at head dims up to 256. Grouped-query training repeats KV heads, runs that kernel, and sums the KV gradients. Numerics `Fast`.
 * **wgpu (`ojas-wgpu`):** `WgpuBackend` keeps tensors device-resident and executes portable WGSL compute shaders. Numerics `Fast`, tolerance 1e-4 relative against CPU. Muon NS5 runs in f32 and is checked against `CpuBackend` (`ojas-wgpu/tests/muon.rs`). A non-finite result is reported at the next `sync`, `download` or `clip_grad_norm`, naming the first op that produced it (`ojas-wgpu/tests/faults.rs`).
 * **Kernels (`ojas-kernels`):** WGSL shader modules for `WgpuBackend` (`ojas-kernels/src/wgsl/`), workgroup grid calculations, and a parity harness whose comparison fails on any non-finite value.
 * **CUDA & HIP (`ojas-cuda`, `ojas-hip`):** Isolated probes behind optional compile flags (`--features cuda`, `--features hip`). Neither implements `Backend` and neither is reachable from Go.
@@ -224,7 +224,7 @@ flowchart TD
 ```
 
 > [!WARNING]
-> Metal and wgpu attention enforce a strict head dimension limit ($d_{\text{head}} \le 128$, `METAL_MAX_HEAD_DIM`). A larger head dimension returns `Err(OjasError::UnsupportedHeadDim)`; nothing is clamped or truncated. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64.
+> Metal and wgpu attention enforce a strict head dimension limit ($d_{\text{head}} \le 256$, `METAL_MAX_HEAD_DIM` and `ATTENTION_MAX_HEAD_DIM`). A larger head dimension returns `Err(OjasError::UnsupportedHeadDim)`; nothing is clamped or truncated. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64. Causal SDPA accepts fewer KV heads than query heads.
 
 ---
 
@@ -334,7 +334,7 @@ Test counts are verified on this tree (adaptive lane Gate E / test suites, 2026-
 | [`ojas-core`](file:///Users/bharath/Code/research/ojas/ojas-core) | Core tensor engine & invariants | `Tensor` (host & device, typed host storage), `Backend` (`optimizer_scratch_bytes`), `Numerics`, `Budget` (`peak_bytes`, `reset_peak`, `check_room`), `DType`, `OjasError`, `shapes` validators | 113 passed, 2 ignored |
 | [`ojas-cpu`](file:///Users/bharath/Code/research/ojas/ojas-cpu) | High-performance CPU backend | `CpuBackend`, `with_threads`, `with_numerics`, packed GEMM, Accelerate BLAS, cosine and WSD schedules, budget scratch & pool stress | 213 passed, 12 ignored |
 | [`ojas-simd`](file:///Users/bharath/Code/research/ojas/ojas-simd) | SIMD GEMM kernels | NEON GEMM, AVX2, `sgemm_accelerate` | 20 passed |
-| [`ojas-metal`](file:///Users/bharath/Code/research/ojas/ojas-metal) | Apple Silicon Metal backend | `MetalBackend` (every `Backend` op; tiled attention, D ≤ 128; deferred faults) | 154 passed |
+| [`ojas-metal`](file:///Users/bharath/Code/research/ojas/ojas-metal) | Apple Silicon Metal backend | `MetalBackend` (every `Backend` op; tiled attention, D ≤ 256, grouped-query; deferred faults) | 154 passed |
 | [`ojas-wgpu`](file:///Users/bharath/Code/research/ojas/ojas-wgpu) | Portable WGSL backend | `WgpuBackend` (device-resident WGSL compute; Muon NS5; named first fault) | 124 passed, 3 ignored |
 | [`ojas-kernels`](file:///Users/bharath/Code/research/ojas/ojas-kernels) | Shared kernel geometry & sources | Launch geometry, kernel source, NaN-safe parity harness | 11 passed |
 | [`ojas-autograd`](file:///Users/bharath/Code/research/ojas/ojas-autograd) | Reverse-mode tape & gradcheck | `Tape`, `Var`, `backward_seeded`, `take_grad`, fused head, `central_diff` (f64 oracle) | 67 passed |

@@ -158,7 +158,12 @@ pub fn gemm_grid(m: usize, n: usize, max_per_dim: u32) -> Result<(u32, u32), Oja
 }
 
 /// Largest head dimension the WGSL attention template accepts.
-pub const ATTENTION_MAX_HEAD_DIM: u32 = 128;
+///
+/// 256 is the widest head that still fits a WebGPU workgroup: the merge
+/// kernel is one invocation per dimension, and the guaranteed maximum
+/// invocations per workgroup is 256. A padded width of 512 does not fit the
+/// smallest tiles in 16 KiB of shared memory either.
+pub const ATTENTION_MAX_HEAD_DIM: u32 = 256;
 
 /// Threads that share one row in the attention kernels.
 pub const ATTENTION_PARTS: u32 = 4;
@@ -198,7 +203,7 @@ pub fn cached_attention_splits(rows: usize, kv_len: usize) -> Result<(usize, usi
 
 /// Shared-memory plan for the tiled attention kernels.
 ///
-/// `padded_dim` is the head dimension rounded up to 16, 32, 64 or 128; one
+/// `padded_dim` is the head dimension rounded up to 16, 32, 64, 128 or 256; one
 /// compiled module serves every real D that pads to it. The forward (and
 /// the backward's stats pass) runs `fwd_rows` query rows per workgroup over
 /// key blocks of `fwd_keys`; the dQ and dK/dV passes use square blocks of
@@ -226,7 +231,7 @@ impl AttentionTiles {
     }
 }
 
-/// The padded width for `head_dim`: the smallest of 16, 32, 64, 128 that
+/// The padded width for `head_dim`: the smallest of 16, 32, 64, 128, 256 that
 /// holds it.
 fn attention_padded_dim(head_dim: u32) -> u32 {
     let mut dp = 16u32;
@@ -353,8 +358,9 @@ mod tests {
             (128, 32, 16, 16)
         );
         assert!(t.shared_bytes <= 32 * 1024);
-        // The WebGPU minimum of 16 KiB still fits every head dim.
-        for d in [1u32, 16, 17, 33, 64, 100, 128] {
+        // The WebGPU minimum of 16 KiB still fits every head dim, including
+        // the widths that pad to 256 (those take the smallest tiles).
+        for d in [1u32, 16, 17, 33, 64, 100, 128, 129, 192, 200, 256] {
             let t = attention_tiles(d, 16 * 1024).unwrap();
             assert!(t.shared_bytes <= 16 * 1024, "{d}: {t:?}");
             assert!(
@@ -363,17 +369,40 @@ mod tests {
             );
             assert!(t.fwd_keys >= ATTENTION_PARTS && t.bwd_block >= ATTENTION_PARTS);
         }
+        let wide32 = attention_tiles(256, 32 * 1024).unwrap();
+        assert_eq!(
+            (
+                wide32.padded_dim,
+                wide32.fwd_rows,
+                wide32.fwd_keys,
+                wide32.bwd_block
+            ),
+            (256, 16, 8, 8)
+        );
+        assert!(wide32.shared_bytes <= 32 * 1024);
+        let wide16 = attention_tiles(256, 16 * 1024).unwrap();
+        assert_eq!(
+            (
+                wide16.padded_dim,
+                wide16.fwd_rows,
+                wide16.fwd_keys,
+                wide16.bwd_block
+            ),
+            (256, 8, 4, 4)
+        );
+        assert!(wide16.shared_bytes <= 16 * 1024);
         assert_eq!(attention_tiles(1, 1 << 20).unwrap().padded_dim, 16);
         assert_eq!(attention_tiles(65, 1 << 20).unwrap().padded_dim, 128);
+        assert_eq!(attention_tiles(129, 1 << 20).unwrap().padded_dim, 256);
         assert!(matches!(
             attention_tiles(0, 1 << 20),
             Err(OjasError::OutOfRange { .. })
         ));
         assert!(matches!(
-            attention_tiles(129, 1 << 20),
+            attention_tiles(257, 1 << 20),
             Err(OjasError::UnsupportedHeadDim {
-                head_dim: 129,
-                limit: 128
+                head_dim: 257,
+                limit: 256
             })
         ));
         assert!(matches!(

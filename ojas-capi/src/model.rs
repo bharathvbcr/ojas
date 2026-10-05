@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{Autocast, Backend, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_data::Bpe;
 use ojas_model::{ModelSpec, TrainState, Trainer};
@@ -18,7 +18,9 @@ use crate::session::{self, DeviceKind, Lease};
 /// (`Trainer::new` copies them; the resident copy is dropped once it exists).
 pub enum Weights<B: Backend> {
     Resident(Vec<Tensor>),
-    Training(Box<Trainer<B>>),
+    /// The trainer's backend is an autocast wrapper. The session engine stays
+    /// the unwrapped backend, so inference does not enter a region.
+    Training(Box<Trainer<Autocast<B>>>),
 }
 
 pub struct Model<B: Backend> {
@@ -41,7 +43,7 @@ impl<B: Backend + Clone> Model<B> {
         })
     }
 
-    pub fn trainer(&self) -> Option<&Trainer<B>> {
+    pub fn trainer(&self) -> Option<&Trainer<Autocast<B>>> {
         match &self.weights {
             Weights::Training(t) => Some(t),
             Weights::Resident(_) => None,

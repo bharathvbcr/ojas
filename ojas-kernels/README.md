@@ -64,7 +64,7 @@ flowchart LR
 ```
 
 ### Key Geometric Invariants
-* **`ATTENTION_MAX_HEAD_DIM = 128`:** The tiled attention template is instantiated for padded head widths 16, 32, 64 and 128; a wider head is refused with `OjasError::UnsupportedHeadDim`. `attention_tiles` picks the forward row/key blocks and the backward block that fit the device's workgroup storage (every width fits 16 KiB), with `ATTENTION_PARTS = 4` lanes per row.
+* **`ATTENTION_MAX_HEAD_DIM = 256`:** The tiled attention template is instantiated for padded head widths 16, 32, 64, 128 and 256; a wider head is refused with `OjasError::UnsupportedHeadDim`. `attention_tiles` picks the forward row/key blocks and the backward block that fit the device's workgroup storage (every width fits 16 KiB), with `ATTENTION_PARTS = 4` lanes per row.
 * **`GEMM_TILE = 64`, `GEMM_BIG_TILE = 128`:** `gemm_tile` picks the 128x128 register-blocked tile (8x8 outputs per lane, double-buffered k steps) when both output sides reach 128, else the 64x64 tile. Both sum k in ascending order. Words 7-10 place A, B and C at element offsets and make C accumulate; an accumulating call starts its registers from C, so a product split along k rounds as one call would.
 * **Checked Arithmetic:** `cover_1d` and `grid_1d` compute ceiling block counts using safe checked division: `(len + block - 1) / block`, asserting that block sizes are non-zero.
 

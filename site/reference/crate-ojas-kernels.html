@@ -165,7 +165,7 @@
     Tiling --&gt; GPUGrid</pre></figure>
 <h3 id="key-geometric-invariants">Key Geometric Invariants <a class="anchor" href="#key-geometric-invariants" aria-label="Link to this section">#</a></h3>
 <ul>
-<li><strong><code>ATTENTION_MAX_HEAD_DIM = 128</code>:</strong> The tiled attention template is instantiated for padded head widths 16, 32, 64 and 128; a wider head is refused with <code>OjasError::UnsupportedHeadDim</code>. <code>attention_tiles</code> picks the forward row/key blocks and the backward block that fit the device&#39;s workgroup storage (every width fits 16 KiB), with <code>ATTENTION_PARTS = 4</code> lanes per row.
+<li><strong><code>ATTENTION_MAX_HEAD_DIM = 256</code>:</strong> The tiled attention template is instantiated for padded head widths 16, 32, 64, 128 and 256; a wider head is refused with <code>OjasError::UnsupportedHeadDim</code>. <code>attention_tiles</code> picks the forward row/key blocks and the backward block that fit the device&#39;s workgroup storage (every width fits 16 KiB), with <code>ATTENTION_PARTS = 4</code> lanes per row.
 </li>
 <li><strong><code>GEMM_TILE = 64</code>, <code>GEMM_BIG_TILE = 128</code>:</strong> <code>gemm_tile</code> picks the 128x128 register-blocked tile (8x8 outputs per lane, double-buffered k steps) when both output sides reach 128, else the 64x64 tile. Both sum k in ascending order. Words 7-10 place A, B and C at element offsets and make C accumulate; an accumulating call starts its registers from C, so a product split along k rounds as one call would.
 </li>

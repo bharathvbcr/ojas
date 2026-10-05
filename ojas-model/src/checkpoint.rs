@@ -624,7 +624,21 @@ mod tests {
                 schedule: LrSchedule::Wsd(WsdSchedule::new(3, 40, 0.2).unwrap()),
                 ..base
             },
+            TrainConfig {
+                autocast: ojas_core::AutocastMode::Bf16,
+                ..base
+            },
         ];
+        let bf16 = TrainConfig {
+            autocast: ojas_core::AutocastMode::Bf16,
+            ..base
+        };
+        assert!(
+            bf16.to_json()
+                .contains("\"adam_lr\":0.0006,\"autocast\":\"bf16\",\"batch\":4,"),
+            "{}",
+            bf16.to_json()
+        );
         let mut texts = vec![base.to_json()];
         for v in variants {
             let text = v.to_json();

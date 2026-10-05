@@ -130,6 +130,8 @@ const (
 	tagGradClip      uint32 = 32
 	tagOnNonFinite   uint32 = 33
 	tagTokenizerHash uint32 = 34
+	// tagAutocast is optional. 0 is off and is not sent; 1 is bf16.
+	tagAutocast uint32 = 35
 
 	tagVocabJSON uint32 = 40
 	tagMergesTXT uint32 = 41

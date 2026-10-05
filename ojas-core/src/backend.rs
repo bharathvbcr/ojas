@@ -4,7 +4,9 @@
 //! Later crates own the CPU reference and the Metal kernels. There is no
 //! silent fallback from [`BackendId::Metal`] to [`BackendId::Cpu`].
 
+use crate::autocast::{round_f32_to_bf16, AutocastGuard, AutocastMode};
 use crate::budget::Budget;
+use crate::dtype::DType;
 use crate::tensor::Tensor;
 use crate::OjasError;
 
@@ -49,14 +51,17 @@ pub const RMS_NORM_EPS: f32 = 1e-6;
 /// the denominator even when the coefficient is clamped to 1.
 pub const CLIP_GRAD_NORM_EPS: f32 = 1e-6;
 
-/// `MetalBackend` causal attention refuses a head dimension above this.
+/// `MetalBackend` and `WgpuBackend` causal attention refuse a head dimension
+/// above this.
 ///
 /// The tiled forward and backward kernels are instantiated for widths 16, 32,
-/// 64 and 128, and a head dimension pads up to the next width. Nothing is
-/// clamped: a larger head dimension is [`OjasError::UnsupportedHeadDim`].
-/// The separate tiny training step in `ojas-metal/src/gpu.rs` accepts only
-/// 64 and refuses anything else as a shape error.
-pub const METAL_MAX_HEAD_DIM: u32 = 128;
+/// 64, 128 and 256, and a head dimension pads up to the next width. Nothing
+/// is clamped: a larger head dimension is [`OjasError::UnsupportedHeadDim`].
+/// 256 is the ceiling that still fits a WebGPU workgroup (256 invocations,
+/// 16 KiB of shared memory at the smallest tiles). The separate tiny training
+/// step in `ojas-metal/src/gpu.rs` accepts only 64 and refuses anything else
+/// as a shape error.
+pub const METAL_MAX_HEAD_DIM: u32 = 256;
 
 /// Newton-Schulz coefficients from nanolab `zeropower_via_newtonschulz5`.
 pub const MUON_NS5_A: f64 = 3.4445;
@@ -317,13 +322,13 @@ pub enum OptimizerKind {
     MuonNs5,
 }
 
-/// Muon NS5 as nanolab's `Muon.step` runs it.
+/// Muon NS5 as [`Backend::muon_ns5_step`] runs it.
 ///
 /// Nesterov momentum (`buf = mom * buf + g`, update = `g + mom * buf` when
-/// Nesterov is on). Orthogonalize with five Newton-Schulz steps in bf16 on
-/// the fused path (`X = G.bfloat16()`), then scale by `max(1, rows/cols)^0.5`.
-/// Decoupled decay is `p *= 1 - lr * weight_decay` before the update is added.
-/// metal-native's f32 Newton-Schulz is not the v1 dtype.
+/// Nesterov is on). Orthogonalize with five Newton-Schulz steps in f32.
+/// nanolab casts that iterate to bf16; ojas does not, on any backend. Then
+/// scale by `max(1, rows/cols)^0.5`. Decoupled decay is
+/// `p *= 1 - lr * weight_decay` before the update is added.
 #[derive(Clone, Copy, Debug)]
 pub struct MuonNs5Config {
     pub lr: f64,
@@ -533,9 +538,15 @@ pub trait Backend {
         eps: f32,
     ) -> Result<(Tensor, Tensor, Tensor, Tensor), OjasError>;
 
+    /// Causal SDPA. `q` is `[B, H, T, D]`; `k` and `v` are `[B, Hkv, T, D]`.
+    /// `H` is a positive multiple of `Hkv`. Query head `h` reads KV head
+    /// `h / (H / Hkv)`. `T` is the same on every operand. The output matches
+    /// `q`. A device may refuse `D` above its own limit.
     fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError>;
 
-    /// `(grad_q, grad_k, grad_v)`.
+    /// `(grad_q, grad_k, grad_v)`, shaped like `q`, `k` and `v`.
+    /// `grad_k` and `grad_v` sum the query heads of each KV head in
+    /// increasing query-head order.
     fn causal_sdpa_backward(
         &self,
         q: &Tensor,
@@ -793,6 +804,59 @@ pub trait Backend {
             op: "kv_cache_write",
             detail: format!("{:?} backend does not implement kv_cache_write", self.id()),
         })
+    }
+
+    /// Round a host f32 tensor to bf16 and widen it back to f32.
+    ///
+    /// A non-f32 tensor is [`OjasError::Dtype`]. A device tensor is
+    /// [`OjasError::Unsupported`]: this default does not download. An empty
+    /// host tensor stays empty. A non-contiguous host tensor fails with the
+    /// [`Tensor::f32_slice`] shape error. [`crate::Autocast`] overrides this
+    /// to skip a tensor whose compute tag is already bf16.
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        if tensor.dtype() != DType::F32 {
+            return Err(OjasError::Dtype {
+                op: OP,
+                expected: DType::F32,
+                got: tensor.dtype(),
+            });
+        }
+        if let Some(found) = tensor.device() {
+            return Err(OjasError::Unsupported {
+                op: OP,
+                detail: format!(
+                    "{found:?} tensor is not downloaded to cast to bf16; there is no CPU fallback"
+                ),
+            });
+        }
+        let src = tensor.f32_slice()?;
+        let mut out = Tensor::zeros(tensor.shape(), DType::F32, self.budget())?;
+        {
+            let dst = out.f32_slice_mut()?;
+            for (dst, src) in dst.iter_mut().zip(src.iter()) {
+                *dst = round_f32_to_bf16(*src);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Enter an autocast region.
+    ///
+    /// [`AutocastMode::Off`] is a no-op guard. [`AutocastMode::Bf16`] is
+    /// [`OjasError::Unsupported`] unless the backend is [`crate::Autocast`],
+    /// which owns the region stack.
+    fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
+        match mode {
+            AutocastMode::Off => Ok(AutocastGuard::noop()),
+            AutocastMode::Bf16 => Err(OjasError::Unsupported {
+                op: "autocast_region",
+                detail: format!(
+                    "{:?} backend has no bf16 autocast region; wrap it in Autocast",
+                    self.id()
+                ),
+            }),
+        }
     }
 }
 
@@ -1097,6 +1161,12 @@ macro_rules! forward_backend {
         ) -> Result<(), OjasError> {
             (**self).kv_cache_write(cache, src, at)
         }
+        fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+            (**self).cast_bf16(tensor)
+        }
+        fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
+            (**self).autocast_region(mode)
+        }
     };
 }
 
@@ -1161,13 +1231,14 @@ mod tests {
             assert!(refuse_unsupported_metal_head_dim(backend, 0).is_err());
             assert!(refuse_unsupported_metal_head_dim(backend, 64).is_ok());
             assert!(refuse_unsupported_metal_head_dim(backend, 128).is_ok());
+            assert!(refuse_unsupported_metal_head_dim(backend, 256).is_ok());
         }
         assert!(refuse_unsupported_metal_head_dim(BackendId::Cpu, u32::MAX).is_ok());
         assert!(matches!(
-            refuse_unsupported_metal_head_dim(BackendId::Metal, 129),
+            refuse_unsupported_metal_head_dim(BackendId::Metal, 257),
             Err(OjasError::UnsupportedHeadDim {
-                head_dim: 129,
-                limit: 128
+                head_dim: 257,
+                limit: 256
             })
         ));
     }
@@ -1895,6 +1966,12 @@ mod tests {
         fn kv_cache_write(&self, _: &mut Tensor, _: &Tensor, _: usize) -> Result<(), OjasError> {
             Err(mark("kv_cache_write"))
         }
+        fn cast_bf16(&self, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(mark("cast_bf16"))
+        }
+        fn autocast_region(&self, _: AutocastMode) -> Result<AutocastGuard, OjasError> {
+            Err(mark("autocast_region"))
+        }
     }
 
     /// Call every method through `backend` (a wrapper, dispatched
@@ -1962,6 +2039,8 @@ mod tests {
             op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, true)),
             op(backend.cached_attention_forward(&t, &t, &t, 1)),
             op(backend.kv_cache_write(&mut m, &t, 0)),
+            op(backend.cast_bf16(&t)),
+            op(backend.autocast_region(AutocastMode::Off).map(drop)),
         ];
         let expected = [
             "upload",
@@ -2002,6 +2081,8 @@ mod tests {
             "linear_cross_entropy_mean",
             "cached_attention_forward",
             "kv_cache_write",
+            "cast_bf16",
+            "autocast_region",
         ];
         assert_eq!(reached, expected);
         assert_eq!(backend.id(), BackendId::Wgpu);
@@ -2024,7 +2105,7 @@ mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 41);
+        assert_eq!(checked, 43);
     }
 
     #[test]
@@ -2082,5 +2163,118 @@ mod tests {
         let wrong = Tensor::from_f32(&[1.0, 1.0], &[2], &budget).unwrap();
         assert!(backend.accumulate_grad(&mut acc, &wrong).is_err());
         assert_eq!(acc.to_f32_vec().unwrap(), [2.0, -2.0, 11.0]);
+    }
+
+    #[derive(Debug)]
+    struct CountingDev {
+        reads: std::sync::atomic::AtomicU64,
+    }
+
+    impl DeviceBuffer for CountingDev {
+        fn backend(&self) -> BackendId {
+            BackendId::Metal
+        }
+        fn byte_len(&self) -> usize {
+            4
+        }
+        fn read_bytes(&self, _offset: usize, len: usize) -> Result<Vec<u8>, OjasError> {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(vec![0; len])
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn default_cast_rounds_host_f32_and_refuses_the_rest() {
+        use std::sync::atomic::Ordering;
+
+        let budget = Budget::new(1 << 12);
+        let backend = NoUpload {
+            id: BackendId::Cpu,
+            budget: budget.clone(),
+        };
+        let x = Tensor::from_f32(&[f32::from_bits(0x3f81_8000)], &[1], &budget).unwrap();
+        let y = backend.cast_bf16(&x).unwrap();
+        assert_eq!(y.to_f32_vec().unwrap()[0].to_bits(), 0x3f82_0000);
+        assert_eq!(y.compute_tag(), 0);
+
+        let empty_budget = Budget::new(0);
+        let empty = Tensor::zeros(&[0], DType::F32, &empty_budget).unwrap();
+        let empty_backend = NoUpload {
+            id: BackendId::Cpu,
+            budget: empty_budget,
+        };
+        let rounded_empty = empty_backend.cast_bf16(&empty).unwrap();
+        assert_eq!(rounded_empty.shape(), &[0]);
+
+        let ids = Tensor::from_u32(&[1], &[1], &budget).unwrap();
+        assert!(matches!(
+            backend.cast_bf16(&ids),
+            Err(OjasError::Dtype {
+                expected: DType::F32,
+                got: DType::U32,
+                ..
+            })
+        ));
+        let half = Tensor::zeros(&[1], DType::F16, &budget).unwrap();
+        assert!(matches!(
+            backend.cast_bf16(&half),
+            Err(OjasError::Dtype {
+                expected: DType::F32,
+                got: DType::F16,
+                ..
+            })
+        ));
+
+        let wide = Tensor::from_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2], &budget).unwrap();
+        let transposed = wide.view(&[2, 2], &[1, 2], 0).unwrap();
+        assert!(!transposed.is_contiguous().unwrap());
+        assert!(matches!(
+            backend.cast_bf16(&transposed),
+            Err(OjasError::Shape { .. })
+        ));
+
+        let device = Arc::new(CountingDev {
+            reads: std::sync::atomic::AtomicU64::new(0),
+        });
+        let device_tensor = Tensor::from_device(device.clone(), &[1], DType::F32, &budget).unwrap();
+        assert!(matches!(
+            backend.cast_bf16(&device_tensor),
+            Err(OjasError::Unsupported {
+                op: "cast_bf16",
+                ..
+            })
+        ));
+        assert_eq!(device.reads.load(Ordering::Relaxed), 0);
+
+        let tight = Budget::new(8);
+        let tight_backend = NoUpload {
+            id: BackendId::Cpu,
+            budget: tight.clone(),
+        };
+        let held = Tensor::from_f32(&[1.0, 2.0], &[2], &tight).unwrap();
+        assert_eq!(tight.live_bytes().unwrap(), 8);
+        assert!(matches!(
+            tight_backend.cast_bf16(&held),
+            Err(OjasError::CapacityExceeded {
+                requested: 8,
+                cap: 8,
+                live: 8
+            })
+        ));
+        assert_eq!(tight.live_bytes().unwrap(), 8);
+
+        let guard = backend.autocast_region(AutocastMode::Off).unwrap();
+        drop(guard);
+        assert!(matches!(
+            backend.autocast_region(AutocastMode::Bf16),
+            Err(OjasError::Unsupported {
+                op: "autocast_region",
+                ..
+            })
+        ));
     }
 }

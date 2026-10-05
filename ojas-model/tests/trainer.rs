@@ -6,7 +6,7 @@
 mod common;
 
 use common::{bits, snapshot, token_bin, Fault, OptCall, Probe, Resident, Snapshot, TempBin};
-use ojas_core::{Backend, Budget, DataCursor, Numerics, OjasError, Tensor};
+use ojas_core::{Autocast, AutocastMode, Backend, Budget, DataCursor, Numerics, OjasError, Tensor};
 use ojas_cpu::{
     CosineSchedule, CpuBackend, HybridOptimizer, HybridParam, LrSchedule, OptimGroup, WsdSchedule,
 };
@@ -488,18 +488,14 @@ fn construction_and_step_tokens_refuse_bad_input() {
         Trainer::new(exact(1 << 30), spec, &host_params(5), bin, long),
         Err(OjasError::Shape { .. })
     ));
-    // Training v1 is multi-head only: a grouped-query spec is refused
-    // before its parameters are looked at.
+    // Grouped-query attention is a training spec: the trainer opens.
     let (_tmp, bin) = token_bin(20_000, 256);
     let gqa = ModelSpec {
         n_kv_head: 2,
         ..spec
     };
     let gqa_params = init_params(&gqa, 5, &Budget::new(1 << 30)).unwrap();
-    assert!(matches!(
-        Trainer::new(exact(1 << 30), gqa, &gqa_params, bin, config(1)),
-        Err(OjasError::Unsupported { .. })
-    ));
+    assert!(Trainer::new(exact(1 << 30), gqa, &gqa_params, bin, config(1)).is_ok());
 
     let (_tmp, mut t) = trainer(exact(1 << 30), config(1));
     let before = snapshot(&t);
@@ -557,4 +553,152 @@ fn forty_steps_cut_the_loss_by_more_than_one_nat() {
         "tiny CPU Exact: 40 steps in {:.2?}, loss {first:.4} -> {last:.4}",
         started.elapsed()
     );
+}
+
+// --------------------------------------------------------------- autocast
+
+fn one_batch() -> [Batch; 1] {
+    [batch(1)]
+}
+
+/// Off never enters a region, so a wrapped backend matches a raw one.
+#[test]
+fn autocast_off_matches_a_raw_backend_bit_for_bit() {
+    let params = host_params(5);
+    let cfg = config(1);
+    let batches = one_batch();
+    let (tmp_raw, bin_raw) = token_bin(20_000, 256);
+    let (tmp_wrap, bin_wrap) = token_bin(20_000, 256);
+    let mut raw = Trainer::new(exact(1 << 30), ModelSpec::tiny(), &params, bin_raw, cfg).unwrap();
+    let mut wrapped = Trainer::new(
+        Autocast::new(exact(1 << 30)),
+        ModelSpec::tiny(),
+        &params,
+        bin_wrap,
+        cfg,
+    )
+    .unwrap();
+    assert_eq!(raw.run_id(), wrapped.run_id());
+    assert!(!cfg.to_json().contains("autocast"));
+    for _ in 0..2 {
+        let a = raw.step_tokens(&batches).unwrap();
+        let b = wrapped.step_tokens(&batches).unwrap();
+        assert_eq!(a.loss.to_bits(), b.loss.to_bits());
+        assert_eq!(a.grad_norm.to_bits(), b.grad_norm.to_bits());
+    }
+    assert_eq!(snapshot(&raw), snapshot(&wrapped));
+    drop((tmp_raw, tmp_wrap));
+}
+
+/// A bf16 region changes at least one parameter and keeps a finite loss.
+#[test]
+fn autocast_bf16_is_finite_and_moves_a_parameter() {
+    let params = host_params(5);
+    let batches = one_batch();
+    let off = config(1);
+    let bf16 = TrainConfig {
+        autocast: AutocastMode::Bf16,
+        ..off
+    };
+    assert_ne!(off.to_json(), bf16.to_json());
+    let (tmp_off, bin_off) = token_bin(20_000, 256);
+    let (tmp_bf, bin_bf) = token_bin(20_000, 256);
+    let mut plain = Trainer::new(
+        Autocast::new(exact(1 << 30)),
+        ModelSpec::tiny(),
+        &params,
+        bin_off,
+        off,
+    )
+    .unwrap();
+    let mut lowered = Trainer::new(
+        Autocast::new(exact(1 << 30)),
+        ModelSpec::tiny(),
+        &params,
+        bin_bf,
+        bf16,
+    )
+    .unwrap();
+    assert_ne!(plain.run_id(), lowered.run_id());
+    let a = plain.step_tokens(&batches).unwrap();
+    let b = lowered.step_tokens(&batches).unwrap();
+    assert!(b.loss.is_finite() && b.grad_norm.is_finite(), "{b:?}");
+    if snapshot(&plain).params == snapshot(&lowered).params {
+        panic!(
+            "bf16 left every parameter identical to f32; losses {} and {}",
+            a.loss, b.loss
+        );
+    }
+    drop((tmp_off, tmp_bf));
+}
+
+/// A raw backend has no region. The step refuses and the trainer stays Ready.
+#[test]
+fn autocast_bf16_on_a_raw_backend_refuses_and_stays_ready() {
+    let cfg = TrainConfig {
+        autocast: AutocastMode::Bf16,
+        ..config(1)
+    };
+    let (_tmp, mut t) = trainer(exact(1 << 30), cfg);
+    let before = snapshot(&t);
+    let err = t.step_tokens(&one_batch()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            OjasError::Unsupported {
+                op: "autocast_region",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    assert_untouched(&t, &before, &err);
+}
+
+/// Parameter bits read from the host payload. A poisoned autocast refuses
+/// `download`, so the shared `snapshot` helper cannot observe this case.
+fn host_words(tensor: &Tensor) -> Vec<u32> {
+    tensor
+        .to_f32_vec()
+        .expect("cpu parameters stay on the host")
+        .iter()
+        .map(|v| v.to_bits())
+        .collect()
+}
+
+#[allow(clippy::type_complexity)]
+fn host_state<B: Backend>(t: &Trainer<B>) -> (Vec<Vec<u32>>, Vec<Vec<Vec<u32>>>, u64, DataCursor) {
+    let mut params = Vec::new();
+    let mut moments = Vec::new();
+    for (info, value) in t.params() {
+        params.push(host_words(value));
+        moments.push(match t.moments(&info.name).unwrap() {
+            MomentsRef::Muon { momentum } => vec![host_words(momentum)],
+            MomentsRef::AdamW { m, v } => vec![host_words(m), host_words(v)],
+            MomentsRef::Frozen => vec![],
+        });
+    }
+    (params, moments, t.step_count(), t.cursor())
+}
+
+/// A poisoned wrapper fails the step and the next one. The trainer stays Ready.
+#[test]
+fn a_poisoned_autocast_leaves_the_trainer_ready() {
+    let (_tmp, mut t) = trainer(Autocast::new(exact(1 << 30)), config(1));
+    let before = host_state(&t);
+    {
+        let backend = t.backend();
+        let outer = backend.autocast_region(AutocastMode::Bf16).unwrap();
+        let inner = backend.autocast_region(AutocastMode::Bf16).unwrap();
+        drop(outer);
+        drop(inner);
+    }
+    let err = t.step_tokens(&one_batch()).unwrap_err();
+    assert!(matches!(err, OjasError::Poisoned), "{err:?}");
+    assert_eq!(host_state(&t), before, "state changed after {err:?}");
+    assert_eq!(t.state(), TrainState::Ready, "poisoned by {err:?}");
+    let again = t.step_tokens(&one_batch()).unwrap_err();
+    assert!(matches!(again, OjasError::Poisoned), "{again:?}");
+    assert_eq!(t.state(), TrainState::Ready);
+    assert_eq!(host_state(&t), before);
 }

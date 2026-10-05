@@ -199,6 +199,8 @@
 </li>
 <li><strong>Lappi Inference &amp; Qwen3.5 Benchmarks:</strong> Benchmarks and rulings updated for Lappi inference evaluations and Qwen3.5 CUDA/Metal execution.
 </li>
+<li><strong>Attention head dim and grouped-query training (2026-10-05):</strong> Metal and wgpu causal SDPA and cached attention accept head dims 1..=256 (<code>METAL_MAX_HEAD_DIM</code>, <code>ATTENTION_MAX_HEAD_DIM</code>). 257 is <code>UnsupportedHeadDim</code>. Training grouped-query attention is causal SDPA: query head <code>h</code> reads KV head <code>h / (H / Hkv)</code>. The tiny Metal step stays at 64.
+</li>
 </ul>
 <h2 id="previous-run-adaptive-resources--kernel-optimizations-verified-2026-10-02">Previous run: adaptive resources &amp; kernel optimizations (verified, 2026-10-02) <a class="anchor" href="#previous-run-adaptive-resources--kernel-optimizations-verified-2026-10-02" aria-label="Link to this section">#</a></h2>
 <h2 id="previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35) <a class="anchor" href="#previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235" aria-label="Link to this section">#</a></h2>

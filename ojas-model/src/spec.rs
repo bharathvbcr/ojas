@@ -206,27 +206,12 @@ impl ModelSpec {
         Ok(())
     }
 
-    /// [`Self::validate`], then refuse what v1 training cannot run: the
-    /// check of the tape and the trainer. [`crate::Eval`] runs any spec
-    /// [`Self::validate`] accepts, grouped-query attention included.
-    ///
-    /// Grouped-query attention is refused with [`OjasError::Unsupported`]:
-    /// causal SDPA (the training attention, with a backward) takes `q`, `k`
-    /// and `v` of one shape and the trait has no head-repeat op, so v1
-    /// training runs multi-head attention only (nanolab's default).
+    /// [`Self::validate`]. Training and eval share one spec: grouped-query
+    /// attention is causal SDPA with fewer KV heads, and the tape
+    /// differentiates it. The name stays because the tape and the trainer
+    /// call it.
     pub fn validate_for_training(&self) -> Result<(), OjasError> {
-        self.validate()?;
-        if self.n_kv_head != self.n_head {
-            return Err(OjasError::Unsupported {
-                op: "ModelSpec::validate_for_training",
-                detail: format!(
-                    "grouped-query attention (n_kv_head {} != n_head {}) is not supported \
-                     by the training block",
-                    self.n_kv_head, self.n_head
-                ),
-            });
-        }
-        Ok(())
+        self.validate()
     }
 
     /// The `ojas-spec-v1` JSON of a valid spec.
@@ -422,16 +407,19 @@ mod tests {
     }
 
     #[test]
-    fn training_refuses_grouped_query_attention_and_eval_accepts_it() {
+    fn training_accepts_grouped_query_attention() {
         let gqa = ModelSpec {
             n_kv_head: 2,
             ..ModelSpec::tiny()
         };
         assert!(gqa.validate().is_ok());
-        assert!(matches!(
-            gqa.validate_for_training(),
-            Err(OjasError::Unsupported { .. })
-        ));
+        assert!(gqa.validate_for_training().is_ok());
+        let not_a_divisor = ModelSpec {
+            n_kv_head: 3,
+            ..ModelSpec::tiny()
+        };
+        assert!(not_a_divisor.validate().is_err());
+        assert!(not_a_divisor.validate_for_training().is_err());
     }
 
     /// What `ojas-oracle/python/export_init.py` writes (Python `json.dumps`).

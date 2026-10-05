@@ -153,6 +153,8 @@ pub(crate) enum Cmd {
         bh: u32,
         t: u32,
         d: u32,
+        /// Query heads per KV head. `1` runs the equal-head kernel unchanged.
+        rep: u32,
     },
     SdpaBwd {
         q: Arg,
@@ -162,6 +164,8 @@ pub(crate) enum Cmd {
         bh: u32,
         t: u32,
         d: u32,
+        /// Query heads per KV head. `1` runs the equal-head kernel unchanged.
+        rep: u32,
     },
     Gate {
         x: Arg,
@@ -194,6 +198,9 @@ pub(crate) enum Cmd {
         v0: Arg,
         lam: Arg,
         gy: Arg,
+    },
+    RoundBf16 {
+        x: Arg,
     },
     Silu {
         x: Arg,

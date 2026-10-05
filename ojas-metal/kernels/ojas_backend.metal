@@ -92,6 +92,29 @@ inline void ojas_flag(device atomic_uint *st, uint word)
     atomic_store_explicit(&st[word], 1u, memory_order_relaxed);
 }
 
+// Round each f32 to bf16 and widen it back. NaN keeps its sign and the top
+// payload bits and sets the quiet bit. This kernel takes no status word:
+// a NaN is a defined rounding result, not a fault.
+kernel void ojas_round_bf16(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const uint bits = as_type<uint>(x[i]);
+    const uint mag = bits & 0x7fffffffu;
+    uint outb;
+    if (mag > 0x7f800000u) {
+        outb = ((bits >> 16u) | 0x0040u) << 16u;
+    } else {
+        // Largest non-NaN magnitude, sign bit set, plus 0x8000 does not wrap.
+        const uint round = 0x7fffu + ((bits >> 16u) & 1u);
+        outb = ((bits + round) >> 16u) << 16u;
+    }
+    y[i] = as_type<float>(outb);
+}
+
 kernel void ojas_silu_fwd(
     device const float *x [[buffer(0)]],
     device float *y [[buffer(1)]],
@@ -1084,7 +1107,11 @@ kernel void ojas_kv_write(
 
 #define CA_SG 32u
 #define CA_THREADS (CA_SG * 32u)
-#define CA_MAX_D 128u
+#define CA_MAX_D 256u
+// A lane holds dims lane, lane+32, ... (eight slots cover 256). The
+// simdgroup output is staged 128 dims at a time so `so` stays 16 KiB.
+#define CA_PER_LANE 8u
+#define CA_CHUNK 128u
 
 /// Causal attention of Tq queries against the first kv_len cache positions,
 /// grouped-query: head h reads KV head h / (H / Hkv). One threadgroup per
@@ -1132,7 +1159,7 @@ kernel void ojas_cached_attn(
     threadgroup float qs[CA_MAX_D];
     threadgroup float sm[CA_SG];
     threadgroup float sl[CA_SG];
-    threadgroup float so[CA_SG][CA_MAX_D];
+    threadgroup float so[CA_SG][CA_CHUNK];
     const uint row = tg.x / splits;
     const uint split = tg.x - row * splits;
     const uint i = row / heads;
@@ -1157,13 +1184,13 @@ kernel void ojas_cached_attn(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float m = -INFINITY;
     float l = 0.0f;
-    float o[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float o[CA_PER_LANE] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     const uint j0 = split * chunk;
     const uint j1 = min(j0 + chunk, pos + 1u);
     for (uint j = j0 + sg; j < j1; j += CA_SG) {
         const ulong kb = (((ulong)b * cap + j) * kv_heads + kh) * d;
         float part = 0.0f;
-        for (uint t = 0u; t < 4u; ++t) {
+        for (uint t = 0u; t < CA_PER_LANE; ++t) {
             const uint c = lane + 32u * t;
             if (c < d) {
                 const float kx = k[kb + c];
@@ -1176,7 +1203,7 @@ kernel void ojas_cached_attn(
         const float corr = precise::exp(m - mn);
         const float p = precise::exp(s - mn);
         l = l * corr + p;
-        for (uint t = 0u; t < 4u; ++t) {
+        for (uint t = 0u; t < CA_PER_LANE; ++t) {
             const uint c = lane + 32u * t;
             if (c < d) {
                 const float vx = v[kb + c];
@@ -1191,35 +1218,42 @@ kernel void ojas_cached_attn(
         sm[sg] = m;
         sl[sg] = l;
     }
-    for (uint t = 0u; t < 4u; ++t) {
-        const uint c = lane + 32u * t;
-        if (c < d) so[sg][c] = o[t];
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid >= d) return;
-    float mx = -INFINITY;
-    for (uint s = 0u; s < CA_SG; ++s) mx = max(mx, sm[s]);
-    float total = 0.0f;
-    float acc = 0.0f;
-    for (uint s = 0u; s < CA_SG; ++s) {
-        // A simdgroup with no key (pos < s) has m = -inf and adds nothing.
-        if (sm[s] == -INFINITY) continue;
-        const float w = precise::exp(sm[s] - mx);
-        total += sl[s] * w;
-        acc += so[s][tid] * w;
-    }
-    if (splits > 1u) {
-        const ulong pb = ((((ulong)b * tq + i) * heads + hh) * splits + split) * (d + 2u);
-        if (tid == 0u) {
-            part[pb] = mx;
-            part[pb + 1u] = total;
+    // Every thread hits both barriers of every chunk. `d` is uniform, so
+    // the loop count is too. There is no return after the first barrier.
+    for (uint base = 0u; base < d; base += CA_CHUNK) {
+        const uint end = min(base + CA_CHUNK, d);
+        for (uint t = 0u; t < CA_PER_LANE; ++t) {
+            const uint c = lane + 32u * t;
+            if (base <= c && c < end) so[sg][c - base] = o[t];
         }
-        part[pb + 2u + tid] = acc;
-        return;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (base <= tid && tid < end) {
+            float mx = -INFINITY;
+            for (uint s = 0u; s < CA_SG; ++s) mx = max(mx, sm[s]);
+            float total = 0.0f;
+            float acc = 0.0f;
+            for (uint s = 0u; s < CA_SG; ++s) {
+                // A simdgroup with no key (pos < s) has m = -inf and adds nothing.
+                if (sm[s] == -INFINITY) continue;
+                const float w = precise::exp(sm[s] - mx);
+                total += sl[s] * w;
+                acc += so[s][tid - base] * w;
+            }
+            if (splits > 1u) {
+                const ulong pb = ((((ulong)b * tq + i) * heads + hh) * splits + split) * (d + 2u);
+                if (tid == 0u) {
+                    part[pb] = mx;
+                    part[pb + 1u] = total;
+                }
+                part[pb + 2u + tid] = acc;
+            } else {
+                const float y = precise::divide(acc, total);
+                if (!isfinite(y)) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
+                out[qbase + tid] = y;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    const float y = precise::divide(acc, total);
-    if (!isfinite(y)) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
-    out[qbase + tid] = y;
 }
 
 /// Combine `ojas_cached_attn`'s splits: one threadgroup per (query, head) and
@@ -1253,6 +1287,51 @@ kernel void ojas_cached_attn_merge(
     const float y = precise::divide(acc, total);
     if (!isfinite(y)) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
     out[row * d + tid] = y;
+}
+
+// ---------------------------------------------- head repeat / sum -------
+//
+// Grouped-query training expands each KV plane `rep` times, runs the
+// equal-head tiled kernels, then sums the expanded dK/dV back. Element `i`
+// of a plane of `plane` floats: repeat reads source plane `(i / plane) / rep`;
+// sum adds source planes `dst_p * rep + r` for `r` in `0 .. rep`. Indexing
+// is ulong because `plane * plane_index` can exceed u32. The host does not
+// launch these when `n`, `plane` or `rep` is 0.
+
+kernel void ojas_head_repeat(
+    device const float *src [[buffer(0)]],
+    device float *dst [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    constant uint &plane [[buffer(3)]],
+    constant uint &rep [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= n || plane == 0u || rep == 0u) return;
+    const ulong i = tid;
+    const ulong p = plane;
+    const ulong within = i % p;
+    const ulong src_p = (i / p) / (ulong)rep;
+    dst[i] = src[src_p * p + within];
+}
+
+kernel void ojas_head_sum(
+    device const float *src [[buffer(0)]],
+    device float *dst [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    constant uint &plane [[buffer(3)]],
+    constant uint &rep [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= n || plane == 0u || rep == 0u) return;
+    const ulong i = tid;
+    const ulong p = plane;
+    const ulong within = i % p;
+    const ulong dst_p = i / p;
+    float acc = 0.0f;
+    for (uint r = 0u; r < rep; ++r) {
+        acc += src[(dst_p * (ulong)rep + r) * p + within];
+    }
+    dst[i] = acc;
 }
 
 // ------------------------------------------------------------- permute ---
@@ -1770,3 +1849,4 @@ OJAS_ATTN_TILED(16)
 OJAS_ATTN_TILED(32)
 OJAS_ATTN_TILED(64)
 OJAS_ATTN_TILED(128)
+OJAS_ATTN_TILED(256)

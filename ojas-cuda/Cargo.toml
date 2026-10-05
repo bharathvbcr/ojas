@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "NVIDIA CUDA device. The cuda feature is off unless requested."
+description = "NVIDIA CUDA device, Backend implementation, and whole-step training provider. The cuda feature is off unless requested."
 
 [features]
 default = []
@@ -13,17 +13,29 @@ default = []
 cuda = ["dep:cudarc"]
 
 [dependencies]
+ojas-core = { path = "../ojas-core" }
 ojas-device = { path = "../ojas-device" }
 ojas-kernels = { path = "../ojas-kernels" }
+ojas-io = { path = "../ojas-io" }
 # crates.io cudarc 0.19.10, published 2026-09-24.
-# driver + fallback-dynamic-loading: the safe driver API, loaded at runtime.
-# cublas and the other default libraries stay off.
+# driver + cublas + fallback-dynamic-loading: the safe driver API, loaded at runtime.
 cudarc = { version = "=0.19.10", optional = true, default-features = false, features = [
     "std",
     "driver",
     "nvrtc",
+    "cublas",
     "fallback-dynamic-loading",
     # Binding set only. Dynamic loading does not need nvcc. This is not a
     # claim that a device was opened.
     "cuda-12080",
 ] }
+
+[[bin]]
+name = "rung0"
+path = "src/bin/rung0.rs"
+required-features = ["cuda"]
+
+[[bin]]
+name = "runga"
+path = "src/bin/runga.rs"
+required-features = ["cuda"]

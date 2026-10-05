@@ -1,0 +1,34 @@
+{
+  "name": "L1000",
+  "rule": "published",
+  "B": 1,
+  "H": 2,
+  "L": 1000,
+  "D": 8,
+  "chunk": 32,
+  "seed": 1007,
+  "h_kv": null,
+  "kv_expansion": null,
+  "alpha_mode": "sigmoid",
+  "k_l2_normalized": true,
+  "alpha_clamp": [
+    0.0001,
+    1.0
+  ],
+  "beta_clamp": [
+    0.0,
+    1.0
+  ],
+  "max_abs_chunked_vs_f64seq": 5.726231225633427e-06,
+  "max_abs_output": 6.292405380827888,
+  "max_abs_published_vs_repo": 1.2788429260253906,
+  "files": [
+    "gdn_published_L1000_q.npy",
+    "gdn_published_L1000_k.npy",
+    "gdn_published_L1000_v.npy",
+    "gdn_published_L1000_alpha.npy",
+    "gdn_published_L1000_beta.npy",
+    "gdn_published_L1000_y_chunked.npy",
+    "gdn_published_L1000_y_seq_f64.npy"
+  ]
+}

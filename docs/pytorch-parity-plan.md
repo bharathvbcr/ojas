@@ -49,10 +49,10 @@ The ranking comes from the call sites in the user's own code (nanolab, the Rust_
 | 9 | Muon NS5 in bf16, batched | nanolab, sprint | f32 on CPU, Metal and wgpu; not bf16; one matrix per call |
 | 10 | Hand-written LR schedules (cosine, WSD) | all; `lr_scheduler` has 0 sites | Has: `CosineSchedule`, `WsdSchedule`, `LrSchedule` in `ojas-cpu/src/schedule.rs` |
 | 11 | `clip_grad_norm_` | all | Has |
-| 12 | bf16 autocast / bf16 weights | sprint, Lappi | Missing: compute is f32 only on every backend |
+| 12 | bf16 autocast / bf16 weights | sprint, Lappi | Optional `Autocast` region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype |
 | 13 | Activation checkpointing | nanolab, Lappi | Missing |
 | 14 | `torch.save` / safetensors | all | Has: Checkpoint v1, streaming `SafeTensorsWriter`, `replace_dir_with`, `Trainer` checkpoint save and resume |
-| 15 | Token-bin data loading (memmap u16) | all; DataLoader has 0 sites | `TokenBin` plus a seeded, epoch-shuffled, resumable `BatchSampler` (`DataCursor`). u16 tokens only, so vocab ≤ 65536 |
+| 15 | Token-bin data loading (memmap u16/u32) | all; DataLoader has 0 sites | `TokenBin` plus a seeded, epoch-shuffled, resumable `BatchSampler` (`DataCursor`). Supports `u16` and `u32` streams (headerless and FineWeb), so vocabularies > 65536 (Qwen, LLaMA 3) are supported |
 | 16 | KV cache, temperature/top-k sampling | nanolab | Has: CPU `forward_token`, `Backend::kv_cache_write`, wgpu KV cache, `ojas-infer` greedy and temperature/top-k/top-p sampler |
 | 17 | `torch.cuda/mps` synchronize, memory stats, seeding | about 330 sites | Has: `Backend::sync`, `Budget::peak_bytes()`, `Budget::reset_peak()`, `ResourcePlan`, `ojas-device` profiling, Go `SYSTEM_PROFILE` (opcode 16) |
 | 18 | Distributed collectives | sprint only | Missing; not needed on one device |

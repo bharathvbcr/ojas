@@ -265,7 +265,7 @@
 </li>
 </ol>
 <ol>
-<li><strong>No Silent Clamping:</strong> Dimensions exceeding kernel capabilities (e.g. $d_{\text{head}} &gt;$ <code>METAL_MAX_HEAD_DIM</code> = 128 on Metal) yield <code>OjasError::UnsupportedHeadDim</code> loud and early.
+<li><strong>No Silent Clamping:</strong> Dimensions exceeding kernel capabilities (e.g. $d_{\text{head}} &gt;$ <code>METAL_MAX_HEAD_DIM</code> = 256 on Metal and wgpu) yield <code>OjasError::UnsupportedHeadDim</code> loud and early.
 </li>
 </ol>
 <ol>

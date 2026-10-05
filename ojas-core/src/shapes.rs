@@ -109,12 +109,17 @@ pub struct RopeDims {
     pub layout: RopeLayout,
 }
 
-/// Dimensions of causal attention over `[B, H, T, D]`. The product of the
-/// four, in `f32` bytes, fits `usize`.
+/// Dimensions of causal attention. Query is `[B, H, T, D]`; K and V are
+/// `[B, Hkv, T, D]`. `H` is a positive multiple of `Hkv` (multi-head when
+/// `Hkv == H`, including both zero). The product of each tensor, in `f32`
+/// bytes, fits `usize`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SdpaDims {
     pub batch: usize,
+    /// Query heads.
     pub heads: usize,
+    /// Key and value heads. Query head `h` reads KV head `h / (heads / kv_heads)`.
+    pub kv_heads: usize,
     pub seq: usize,
     pub head_dim: usize,
 }
@@ -508,7 +513,25 @@ fn sdpa_dims(op: &'static str, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Sdp
             format!("sdpa query rank {} != 4 [B, H, T, D]", qs.len()),
         ));
     };
-    if ks != qs || vs != qs {
+    // K and V are one shape. A mismatch is a shape error even when each
+    // would be a legal KV layout against Q on its own.
+    if ks != vs {
+        return Err(refuse(op, format!("sdpa k {ks:?} and v {vs:?} differ")));
+    }
+    let &[kb, kv_heads, kseq, kd] = ks else {
+        return Err(refuse(
+            op,
+            format!("sdpa shapes q {qs:?} k {ks:?} v {vs:?} differ"),
+        ));
+    };
+    // Equal shapes, including zero query heads and zero KV heads, stay
+    // multi-head. Grouping is checked only when the head counts differ, so
+    // `0 % 0` never runs.
+    let grouped = kv_heads != heads;
+    let bad_group =
+        grouped && (kv_heads == 0 || heads == 0 || kv_heads > heads || heads % kv_heads != 0);
+    let bad_axes = kb != batch || kseq != seq || kd != head_dim;
+    if bad_axes || bad_group {
         return Err(refuse(
             op,
             format!("sdpa shapes q {qs:?} k {ks:?} v {vs:?} differ"),
@@ -517,14 +540,16 @@ fn sdpa_dims(op: &'static str, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Sdp
     Ok(SdpaDims {
         batch,
         heads,
+        kv_heads,
         seq,
         head_dim,
     })
 }
 
-/// [`crate::Backend::causal_sdpa_forward`]: `q`, `k` and `v` `F32`, rank 4
-/// `[B, H, T, D]`, all one shape. The head-dimension limit of a device is
-/// the backend's.
+/// [`crate::Backend::causal_sdpa_forward`]: `q`, `k` and `v` `F32`. Query is
+/// rank 4 `[B, H, T, D]`; K and V are `[B, Hkv, T, D]` with the same batch,
+/// sequence and head dimension, and `H` a positive multiple of `Hkv`. The
+/// head-dimension limit of a device is the backend's.
 pub fn causal_sdpa_forward_dims(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<SdpaDims, OjasError> {
     const OP: &str = SDPA_FORWARD;
     f32_operands(OP, &[q, k, v])?;
@@ -1483,6 +1508,7 @@ mod tests {
             SdpaDims {
                 batch: 2,
                 heads: 3,
+                kv_heads: 3,
                 seq: 5,
                 head_dim: 4
             }
@@ -1496,6 +1522,17 @@ mod tests {
             let t = f(&bad);
             shape_err(causal_sdpa_forward_dims(&q, &t, &q), op, "differ");
             shape_err(causal_sdpa_forward_dims(&q, &q, &t), op, "differ");
+        }
+        // Legal grouped-query: both K and V carry the smaller head count.
+        let kv = f(&[2, 1, 5, 4]);
+        let gqa = causal_sdpa_forward_dims(&q, &kv, &kv).unwrap();
+        assert_eq!(gqa.heads, 3);
+        assert_eq!(gqa.kv_heads, 1);
+        // Not a divisor, and more KV heads than query heads. A zero KV-head
+        // count is an empty tensor, refused before the grouping check.
+        for bad in [[2, 2, 5, 4], [2, 6, 5, 4]] {
+            let t = f(&bad);
+            shape_err(causal_sdpa_forward_dims(&q, &t, &t), op, "differ");
         }
         dtype_err(
             causal_sdpa_forward_dims(&q, &q, &u(&[2, 3, 5, 4])),
@@ -1532,6 +1569,13 @@ mod tests {
         );
         shape_err(
             causal_sdpa_backward_dims(&q, &f(&[2, 3, 6, 4]), &q, &q),
+            op,
+            "differ",
+        );
+        let kv = f(&[2, 1, 5, 4]);
+        assert!(causal_sdpa_backward_dims(&q, &kv, &kv, &q).is_ok());
+        shape_err(
+            causal_sdpa_backward_dims(&q, &f(&[2, 2, 5, 4]), &f(&[2, 2, 5, 4]), &q),
             op,
             "differ",
         );

@@ -88,14 +88,14 @@ fn forward_matches_cpu_with_sharp_softmax() {
     same_tensor("sharp", &got, &want, tol(100), 1e-4);
 }
 
-/// Head dims above 64 run through `MetalBackend` once the core limit
-/// (`METAL_MAX_HEAD_DIM`) admits them; until then they are refused. The
-/// kernels are compiled to 128 either way (device tests cover them).
+/// Head dims above 64 run through `MetalBackend` up to
+/// `METAL_MAX_HEAD_DIM` (256). The kernels are compiled to that width.
+/// 257 is refused. Device tests cover the same ladder.
 #[test]
 fn head_dims_above_64_follow_the_core_limit() {
     let (m, c) = (metal(), cpu());
     let limit = ojas_core::METAL_MAX_HEAD_DIM as usize;
-    for &d in &[96usize, 128] {
+    for &d in &[96usize, 128, 192, 256, 257] {
         let shape = [2usize, 2, 45, d];
         let q = rand(&shape, d as u64, 1.0);
         let k = rand(&shape, d as u64 + 1, 1.0);
@@ -128,6 +128,43 @@ fn head_dims_above_64_follow_the_core_limit() {
         same_tensor(&format!("{tag} dq"), &gq, &wq, tol(45), 1e-3);
         same_tensor(&format!("{tag} dk"), &gk, &wk, tol(45), 1e-3);
         same_tensor(&format!("{tag} dv"), &gv, &wv, tol(45), 1e-3);
+    }
+}
+
+/// Grouped-query causal SDPA against the CPU reference, including a head
+/// dim the 256-wide kernel pads and one it runs natively.
+#[test]
+fn grouped_query_matches_cpu() {
+    let (m, c) = (metal(), cpu());
+    let cases = [
+        (1usize, 4, 2, 8, 32),
+        (1, 2, 1, 17, 192),
+        (2, 6, 3, 5, 13),
+        (1, 4, 1, 9, 256),
+        (1, 6, 2, 7, 129),
+    ];
+    for (i, (b, h, hkv, t, d)) in cases.into_iter().enumerate() {
+        let qs = [b, h, t, d];
+        let ks = [b, hkv, t, d];
+        let seed = 8000 + i as u64;
+        let q = rand(&qs, seed, 1.0);
+        let k = rand(&ks, seed + 1, 1.0);
+        let v = rand(&ks, seed + 2, 1.0);
+        let g = rand(&qs, seed + 3, 1.0);
+        let tag = format!("gqa h{h}/{hkv} t{t} d{d}");
+        let dd = [up(&m, &q), up(&m, &k), up(&m, &v), up(&m, &g)];
+        same_tensor(
+            &tag,
+            &ok(&tag, m.causal_sdpa_forward(&dd[0], &dd[1], &dd[2])),
+            &ok(&tag, c.causal_sdpa_forward(&q, &k, &v)),
+            tol(t),
+            1e-4,
+        );
+        let (gq, gk, gv) = ok(&tag, m.causal_sdpa_backward(&dd[0], &dd[1], &dd[2], &dd[3]));
+        let (wq, wk, wv) = ok(&tag, c.causal_sdpa_backward(&q, &k, &v, &g));
+        same_tensor(&format!("{tag} dq"), &gq, &wq, tol(t), 1e-3);
+        same_tensor(&format!("{tag} dk"), &gk, &wk, tol(t), 1e-3);
+        same_tensor(&format!("{tag} dv"), &gv, &wv, tol(t), 1e-3);
     }
 }
 

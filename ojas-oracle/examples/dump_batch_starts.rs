@@ -44,6 +44,8 @@ const MAX_WINDOWS: u64 = 1 << 24;
 enum BinFormat {
     Headerless,
     Fineweb,
+    HeaderlessU32,
+    FinewebU32,
 }
 
 impl BinFormat {
@@ -51,13 +53,15 @@ impl BinFormat {
         match self {
             BinFormat::Headerless => "headerless-u16le",
             BinFormat::Fineweb => "fineweb-u16le",
+            BinFormat::HeaderlessU32 => "headerless-u32le",
+            BinFormat::FinewebU32 => "fineweb-u32le",
         }
     }
 
     fn header_bytes(self) -> u64 {
         match self {
-            BinFormat::Headerless => 0,
-            BinFormat::Fineweb => FINEWEB_HEADER_BYTES,
+            BinFormat::Headerless | BinFormat::HeaderlessU32 => 0,
+            BinFormat::Fineweb | BinFormat::FinewebU32 => FINEWEB_HEADER_BYTES,
         }
     }
 }
@@ -107,6 +111,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 format = match value.as_str() {
                     "headerless" => BinFormat::Headerless,
                     "fineweb" => BinFormat::Fineweb,
+                    "headerless-u32" | "headerless_u32" => BinFormat::HeaderlessU32,
+                    "fineweb-u32" | "fineweb_u32" => BinFormat::FinewebU32,
                     other => return Err(format!("--format: unknown {other:?}")),
                 }
             }
@@ -164,7 +170,7 @@ struct Dump {
     windows_per_epoch: u64,
     cursor_after: (u64, u64),
     starts: Vec<u64>,
-    rows: Option<Vec<u16>>,
+    rows: Option<Vec<u32>>,
 }
 
 fn fnv1a64_file(path: &Path) -> Result<u64, String> {
@@ -189,6 +195,8 @@ fn dump(args: &Args) -> Result<Dump, String> {
     let bin = match args.format {
         BinFormat::Headerless => TokenBin::open_headerless(&args.bin),
         BinFormat::Fineweb => TokenBin::open_fineweb(&args.bin),
+        BinFormat::HeaderlessU32 => TokenBin::open_headerless_u32(&args.bin),
+        BinFormat::FinewebU32 => TokenBin::open_fineweb_u32(&args.bin),
     }
     .map_err(|e| e.to_string())?;
     let cfg = SamplerConfig {
@@ -201,7 +209,7 @@ fn dump(args: &Args) -> Result<Dump, String> {
     let t = args.seq_len;
     let mut starts = Vec::new();
     let mut rows = if args.rows { Some(Vec::new()) } else { None };
-    let mut row = vec![0u16; t + 1];
+    let mut row = vec![0u32; t + 1];
     for _step in 0..args.steps {
         for _micro in 0..args.accum {
             let cursor = sampler.cursor();
@@ -225,12 +233,13 @@ fn dump(args: &Args) -> Result<Dump, String> {
             }
             let batch = sampler.next_batch().map_err(|e| e.to_string())?;
             for (r, &start) in starts[first..].iter().enumerate() {
-                bin.read_into(start, &mut row).map_err(|e| e.to_string())?;
+                bin.read_into_u32(start, &mut row)
+                    .map_err(|e| e.to_string())?;
                 let x = &batch.x[r * t..(r + 1) * t];
                 let y = &batch.y[r * t..(r + 1) * t];
-                let row_x = row[..t].iter().map(|&v| u32::from(v));
-                let row_y = row[1..].iter().map(|&v| u32::from(v));
-                if !row_x.eq(x.iter().copied()) || !row_y.eq(y.iter().copied()) {
+                let row_x = &row[..t];
+                let row_y = &row[1..];
+                if !row_x.eq(x) || !row_y.eq(y) {
                     return Err(format!(
                         "window start {start} does not reproduce next_batch row {r}"
                     ));
@@ -417,7 +426,8 @@ mod tests {
         let rows = d.rows.unwrap();
         for (i, &s) in d.starts.iter().enumerate() {
             let s = s as usize;
-            assert_eq!(&rows[i * 5..(i + 1) * 5], &tokens[s..s + 5]);
+            let want: Vec<u32> = tokens[s..s + 5].iter().map(|&v| u32::from(v)).collect();
+            assert_eq!(&rows[i * 5..(i + 1) * 5], &want[..]);
         }
     }
 
