@@ -78,17 +78,19 @@ fn within<T: Send + 'static>(secs: u64, body: impl FnOnce() -> T + Send + 'stati
 const MR: usize = 6;
 const NR: usize = 16;
 const TASK_MACS: usize = 1 << 20;
+const TILES_PER_THREAD: usize = 6;
 
 fn round_up(value: usize, unit: usize) -> usize {
     value.div_ceil(unit).max(1) * unit
 }
 
-fn plan_count(threads: usize, fast: bool, m: usize, n: usize, k: usize) -> usize {
+/// gemm.rs `plan`: `(tile count, tile rows, tile columns)`.
+fn plan(threads: usize, fast: bool, m: usize, n: usize, k: usize) -> (usize, usize, usize) {
     let (mc, nc) = if fast { (144, 512) } else { (72, 256) };
     let macs = m.saturating_mul(n).saturating_mul(k);
-    let target = (macs / TASK_MACS).min(threads.saturating_mul(2));
+    let target = (macs / TASK_MACS).min(threads.saturating_mul(TILES_PER_THREAD));
     if threads <= 1 || target < 2 {
-        return 1;
+        return (1, m, n);
     }
     let (mut tm, mut tn) = (mc.min(round_up(m, MR)), nc.min(round_up(n, NR)));
     let count = |tm: usize, tn: usize| m.div_ceil(tm) * n.div_ceil(tn);
@@ -103,23 +105,35 @@ fn plan_count(threads: usize, fast: bool, m: usize, n: usize, k: usize) -> usize
             break;
         }
     }
-    count(tm, tn).max(1)
+    if count(tm, tn) <= 1 {
+        (1, m, n)
+    } else {
+        (count(tm, tn), tm, tn)
+    }
 }
 
-/// gemm.rs `scratch(m, k, n)` in floats.
+fn plan_count(threads: usize, fast: bool, m: usize, n: usize, k: usize) -> usize {
+    plan(threads, fast, m, n, k).0
+}
+
+/// gemm.rs `scratch(m, k, n)` in floats: both operands packed, or for a
+/// Fast whole call the larger of that and one `sgemm_tile` buffer per thread
+/// that runs tiles, plus the tile windows.
 fn scratch(threads: usize, fast: bool, m: usize, k: usize, n: usize) -> usize {
     let a = m.div_ceil(MR) * MR * k;
     let b = n.div_ceil(NR) * NR * k;
-    let tiles = if plan_count(threads, fast, m, n, k) > 1 {
-        m * n
-    } else {
-        0
-    };
-    a + b + tiles
+    let (count, tm, tn) = plan(threads, fast, m, n, k);
+    let mut packing = a + b;
+    if whole_call(fast, m, k, n) {
+        let per_thread = ojas_simd::sgemm_tile_scratch(tm, tn, k);
+        packing = packing.max(threads.clamp(1, count) * per_thread);
+    }
+    let tiles = if count > 1 { m * n } else { 0 };
+    packing + tiles
 }
 
 fn whole_call(fast: bool, m: usize, k: usize, n: usize) -> bool {
-    fast && m * n * k >= 2 * TASK_MACS
+    fast && m * n * k >= ojas_cpu::FAST_WHOLE_CALL_MACS
 }
 
 /// Peak bytes charged today, and bytes of the outputs.

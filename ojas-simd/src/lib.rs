@@ -239,6 +239,17 @@ impl Backend {
     /// Every backend, available or not.
     pub const ALL: [Backend; 3] = [Backend::Neon, Backend::Avx2Fma, Backend::Portable];
 
+    /// The `(MR, NR)` register tile of this backend's micro-kernel. The
+    /// kernels take their tile from here, so [`sgemm_tile_scratch`] cannot
+    /// drift from them.
+    pub(crate) const fn tile(self) -> (usize, usize) {
+        match self {
+            Backend::Neon => (8, 12),
+            Backend::Avx2Fma => (6, 16),
+            Backend::Portable => (8, 8),
+        }
+    }
+
     /// Stable name: `"neon"`, `"avx2-fma"` or `"portable-fma"`.
     pub fn name(self) -> &'static str {
         match self {
@@ -304,7 +315,8 @@ pub fn backend_name() -> &'static str {
 ///
 /// Scratch: each thread keeps one reusable packing buffer of at most
 /// `(MC + NC) * KC = (128 + 960) * 512` floats (2.125 MiB). It is sized to the
-/// largest call that thread has made.
+/// largest call that thread has made; [`sgemm_tile_scratch`] gives the floats
+/// one call needs.
 ///
 /// # Errors
 ///
@@ -342,6 +354,23 @@ pub fn sgemm_tile(
         c_rs,
         accumulate,
     )
+}
+
+/// Floats of the packing buffer one [`sgemm_tile`] call of `m × n × k` needs
+/// on the calling thread, on the [`Backend::detect`] backend. 0 when any
+/// dimension is 0, where no buffer is touched.
+///
+/// The buffer is thread-local and kept for the thread's lifetime, grown to
+/// the largest call. A caller that charges a budget for tiles run on fresh
+/// threads charges this once per thread; a thread that already holds a
+/// buffer this large allocates nothing. At most 557,056 floats (2.125 MiB).
+pub fn sgemm_tile_scratch(m: usize, n: usize, k: usize) -> usize {
+    if m == 0 || n == 0 || k == 0 {
+        return 0;
+    }
+    let (mr, nr) = Backend::detect().tile();
+    let blocks = gemm::Blocks::new(mr, nr, m, n, k);
+    blocks.a_len + blocks.b_len
 }
 
 /// [`sgemm_tile`] on an explicit backend. The semantics and output bits are

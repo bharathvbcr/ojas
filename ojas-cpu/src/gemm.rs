@@ -215,6 +215,21 @@ impl<const W: usize> Packed<W> {
 }
 
 /// Floats [`gemm`] allocates besides its `m * n` output.
+///
+/// The packed kernel packs both operands whole (`a + b`). A Fast whole call
+/// instead runs `ojas_simd::sgemm_tile` on each [`plan`] tile, and each
+/// thread that runs a tile packs into its own thread-local buffer
+/// ([`ojas_simd::sgemm_tile_scratch`] floats for the largest tile). The
+/// threads beyond the caller are spawned for the call
+/// ([`crate::pool::scoped::map`]), so their buffers are new every time.
+/// The charge for a whole call is the larger of `a + b` and one such buffer
+/// per thread that runs tiles: `a + b` stands in for Accelerate's own
+/// allocations on macOS, and the per-thread figure is what the
+/// `sgemm_tile` path allocates there (when Accelerate refuses a view) and
+/// on every other platform. The caller's buffer is counted too, although it
+/// may already be large enough and then allocates nothing, so the charge
+/// can exceed the heap growth but not fall below it. A tiled product adds
+/// its `m * n` of per-tile windows on either path.
 pub(crate) fn scratch(
     op: &'static str,
     exec: Exec<'_>,
@@ -225,19 +240,25 @@ pub(crate) fn scratch(
     if m == 0 || n == 0 || k == 0 {
         return Ok(0);
     }
+    let overflow = || OjasError::OutOfRange {
+        op,
+        detail: "gemm scratch length overflows".to_string(),
+    };
     let a = product(op, &[m.div_ceil(MR), MR, k])?;
     let b = product(op, &[n.div_ceil(NR), NR, k])?;
-    let tiles = if plan(exec, m, n, k).count() > 1 {
+    let mut packing = a.checked_add(b).ok_or_else(overflow)?;
+    let tiles = plan(exec, m, n, k);
+    if whole_call(exec.numerics, m, k, n) {
+        let threads = exec.pool.threads().clamp(1, tiles.count());
+        let per_thread = ojas_simd::sgemm_tile_scratch(tiles.tm, tiles.tn, k);
+        packing = packing.max(product(op, &[threads, per_thread])?);
+    }
+    let windows = if tiles.count() > 1 {
         product(op, &[m, n])?
     } else {
         0
     };
-    a.checked_add(b)
-        .and_then(|v| v.checked_add(tiles))
-        .ok_or_else(|| OjasError::OutOfRange {
-            op,
-            detail: "gemm scratch length overflows".to_string(),
-        })
+    packing.checked_add(windows).ok_or_else(overflow)
 }
 
 /// `A · B` as a row-major `[a.rows, b.cols]` vector.

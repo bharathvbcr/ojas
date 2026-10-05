@@ -37,8 +37,8 @@ pub(crate) trait MicroKernel: Copy {
 pub(crate) struct Portable;
 
 impl MicroKernel for Portable {
-    const MR: usize = 8;
-    const NR: usize = 8;
+    const MR: usize = crate::Backend::Portable.tile().0;
+    const NR: usize = crate::Backend::Portable.tile().1;
 
     fn run(self, kc: usize, a: &[f32], b: &[f32], acc: &mut [f32]) {
         let a = &a[..kc * 8];
@@ -84,6 +84,36 @@ fn with_scratch(mut f: impl FnMut(&mut Vec<f32>)) {
 
 fn round_up(x: usize, to: usize) -> usize {
     x.div_ceil(to) * to
+}
+
+/// Block sizes of one problem on an `mr × nr` kernel, and the two halves of
+/// the packing buffer they need. [`gemm`] and [`crate::sgemm_tile_scratch`]
+/// both take them from here.
+pub(crate) struct Blocks {
+    pub(crate) mc_max: usize,
+    pub(crate) nc_max: usize,
+    pub(crate) kc_max: usize,
+    /// Floats of the packed A block.
+    pub(crate) a_len: usize,
+    /// Floats of the packed B block.
+    pub(crate) b_len: usize,
+}
+
+impl Blocks {
+    /// `m`, `n` and `k` are at least 1. Each is capped at its block before
+    /// rounding up, so no length can overflow.
+    pub(crate) fn new(mr: usize, nr: usize, m: usize, n: usize, k: usize) -> Blocks {
+        let mc_max = (MC_TARGET / mr).max(1) * mr;
+        let nc_max = (NC_TARGET / nr).max(1) * nr;
+        let kc_max = KC.min(k);
+        Blocks {
+            mc_max,
+            nc_max,
+            kc_max,
+            a_len: round_up(m.min(mc_max), mr) * kc_max,
+            b_len: round_up(n.min(nc_max), nr) * kc_max,
+        }
+    }
 }
 
 /// `C = 0` over the valid region unless accumulating; used when `k == 0`.
@@ -202,11 +232,13 @@ pub(crate) fn gemm<K: MicroKernel>(kern: K, p: &Problem, a: &[f32], b: &[f32], c
     }
     let (mr, nr) = (K::MR, K::NR);
     debug_assert!(mr * nr <= MAX_TILE);
-    let mc_max = (MC_TARGET / mr).max(1) * mr;
-    let nc_max = (NC_TARGET / nr).max(1) * nr;
-    let kc_max = KC.min(k);
-    let a_len = mc_max.min(round_up(m, mr)) * kc_max;
-    let b_len = nc_max.min(round_up(n, nr)) * kc_max;
+    let Blocks {
+        mc_max,
+        nc_max,
+        kc_max,
+        a_len,
+        b_len,
+    } = Blocks::new(mr, nr, m, n, k);
     let c_rs = p.c_rs;
 
     with_scratch(|scratch| {
@@ -254,4 +286,39 @@ pub(crate) fn gemm<K: MicroKernel>(kern: K, p: &Problem, a: &[f32], b: &[f32], c
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SCRATCH;
+
+    /// On a thread that has made no call, one `sgemm_tile` grows the packing
+    /// buffer to exactly `sgemm_tile_scratch` floats, at shapes below, at
+    /// and past each block, and with one dimension 0.
+    #[test]
+    fn one_call_on_a_fresh_thread_allocates_the_reported_scratch() {
+        let shapes = [
+            (1, 1, 1),
+            (7, 13, 5),
+            (73, 80, 257),
+            (73, 17, 257),
+            (128, 960, 512),
+            (300, 1000, 600),
+            (0, 4, 4),
+            (4, 0, 4),
+            (4, 4, 0),
+        ];
+        for (m, n, k) in shapes {
+            let len = std::thread::spawn(move || {
+                let a = vec![1.0f32; (m * k).max(1)];
+                let b = vec![1.0f32; (k * n).max(1)];
+                let mut c = vec![0.0f32; (m * n).max(1)];
+                crate::sgemm_tile(m, n, k, &a, k, 1, &b, n, 1, &mut c, n, false).unwrap();
+                SCRATCH.with(|s| s.borrow().len())
+            })
+            .join()
+            .unwrap();
+            assert_eq!(len, crate::sgemm_tile_scratch(m, n, k), "{m}x{n}x{k}");
+        }
+    }
 }

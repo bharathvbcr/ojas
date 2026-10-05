@@ -44,8 +44,8 @@ mod neon {
     pub(crate) struct Neon;
 
     impl MicroKernel for Neon {
-        const MR: usize = 8;
-        const NR: usize = 12;
+        const MR: usize = crate::Backend::Neon.tile().0;
+        const NR: usize = crate::Backend::Neon.tile().1;
 
         fn run(self, kc: usize, a: &[f32], b: &[f32], acc: &mut [f32]) {
             assert_panels(kc, 8, 12, a, b, acc);
@@ -159,8 +159,8 @@ mod avx2 {
     }
 
     impl MicroKernel for Avx2Fma {
-        const MR: usize = 6;
-        const NR: usize = 16;
+        const MR: usize = crate::Backend::Avx2Fma.tile().0;
+        const NR: usize = crate::Backend::Avx2Fma.tile().1;
 
         fn run(self, kc: usize, a: &[f32], b: &[f32], acc: &mut [f32]) {
             assert_panels(kc, 6, 16, a, b, acc);

@@ -705,12 +705,20 @@ pub(crate) fn muon_ns5(
 /// band that would miss the whole-call cutoff is not split: the packed
 /// kernel is a different result. One thread, or a product Accelerate would
 /// not take for a single row, stays one call.
+///
+/// Off macOS a whole call is `ojas_simd::sgemm_tile` over the plan's tiles,
+/// which already spreads one product over the pool's threads, and its bits
+/// do not depend on the tiling. Bands there would nest a second set of
+/// spawned threads, each packing into its own buffer that
+/// [`crate::gemm::scratch`] (and so [`muon_scratch`]) does not count, so
+/// every product stays one [`gemm`] call.
 fn ns_gemm(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>) -> Result<Vec<f32>, OjasError> {
     const OP: &str = "muon_ns5_step";
     let (m, k, n) = (a.rows, a.cols, b.cols);
     let threads = exec.pool.threads();
     let rhs_trans = b.rows > 1 && b.cols > 1 && b.rs == 1 && b.cs != 1;
-    let bands = if threads <= 1 || !whole_call(exec.numerics, 1, k, n) {
+    let bands = if !cfg!(target_os = "macos") || threads <= 1 || !whole_call(exec.numerics, 1, k, n)
+    {
         1
     } else if rhs_trans {
         match m.checked_mul(2) {
