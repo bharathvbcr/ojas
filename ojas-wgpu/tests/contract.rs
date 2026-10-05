@@ -119,6 +119,34 @@ fn the_trait_sync_reports_the_deferred_fault() {
     }
 }
 
+/// Not only waits and maps: a call that fails creating or mapping a buffer
+/// on the destroyed device must also say the device is gone. On CI's
+/// llvmpipe a sync after the loss failed at "upload map" without naming it.
+#[test]
+fn every_call_after_a_loss_names_it() {
+    let g = gpu();
+    let x = up(&g, &[1.0; 4], &[2, 2]);
+    g.sync().unwrap();
+    g.context().device().destroy();
+    let host = Tensor::from_f32(&[2.0; 4], &[2, 2], g.budget()).unwrap();
+    let results = [
+        ("upload", g.upload(&host).map(drop)),
+        ("silu", g.silu_forward(&x).map(drop)),
+        ("sync", g.sync()),
+    ];
+    for (name, result) in results {
+        match result {
+            Err(OjasError::Backend { detail, .. }) => {
+                assert!(
+                    detail.contains("device lost"),
+                    "{name}: loss not named: {detail}"
+                )
+            }
+            other => panic!("{name} on a destroyed device: {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn the_trait_sync_reports_a_lost_device() {
     let g = std::sync::Arc::new(gpu());

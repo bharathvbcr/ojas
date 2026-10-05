@@ -19,7 +19,8 @@
 //! either release lands, so a fault may be reported twice; it is never lost.
 //!
 //! A lost device is recorded apart from the capped uncaptured-error queue,
-//! and every later error check reports it.
+//! every later error check reports it, and every error from a device call
+//! names it.
 //!
 //! Uploads write through a buffer mapped at creation, and parameters do the
 //! same, so no `Queue::write_buffer` is ever ordered against recorded work.
@@ -492,7 +493,7 @@ impl WgpuContext {
             mapped_at_creation: false,
         });
         if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(backend_err(format!("allocating {bytes} bytes: {err}")));
+            return Err(self.failure(format!("allocating {bytes} bytes: {err}")));
         }
         Ok(buf)
     }
@@ -560,13 +561,13 @@ impl WgpuContext {
             mapped_at_creation: true,
         });
         if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(backend_err(format!("allocating {bytes} bytes: {err}")));
+            return Err(self.failure(format!("allocating {bytes} bytes: {err}")));
         }
         {
             let mut view = buf
                 .slice(..)
                 .get_mapped_range_mut()
-                .map_err(|err| backend_err(format!("upload map: {err}")))?;
+                .map_err(|err| self.failure(format!("upload map: {err}")))?;
             let n = data.len();
             view.slice(..n).copy_from_slice(data);
             let mut rest = n;
@@ -607,7 +608,7 @@ impl WgpuContext {
                         source: wgpu::ShaderSource::Wgsl(src.into()),
                     });
                     if let Some(err) = pollster::block_on(scope.pop()) {
-                        return Err(backend_err(format!("compiling {:?}: {err}", kernel.module)));
+                        return Err(self.failure(format!("compiling {:?}: {err}", kernel.module)));
                     }
                     modules.insert(kernel.module, m.clone());
                     m
@@ -656,7 +657,7 @@ impl WgpuContext {
             cache: None,
         });
         if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(backend_err(format!("pipeline {}: {err}", kernel.entry)));
+            return Err(self.failure(format!("pipeline {}: {err}", kernel.entry)));
         }
         self.inner.counters.compiles.fetch_add(1, Ordering::Relaxed);
         let pipe = Arc::new(Pipe { pipeline, layout });
@@ -733,7 +734,7 @@ impl WgpuContext {
             entries: &entries,
         });
         if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(backend_err(format!("bind group {}: {err}", kernel.entry)));
+            return Err(self.failure(format!("bind group {}: {err}", kernel.entry)));
         }
         Ok((pipe, group))
     }
@@ -794,9 +795,7 @@ impl WgpuContext {
             mapped_at_creation: false,
         });
         if let Some(err) = pollster::block_on(stage_scope.pop()) {
-            return Err(backend_err(format!(
-                "staging buffer of {stage_bytes} bytes: {err}"
-            )));
+            return Err(self.failure(format!("staging buffer of {stage_bytes} bytes: {err}")));
         }
         let (hold_pipe, hold_group) = self.hold()?;
         let index = {
@@ -839,11 +838,15 @@ impl WgpuContext {
             match receiver.recv_timeout(std::time::Duration::from_millis(1)) {
                 Ok(result) => break result,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(backend_err("map callback was dropped without running"));
+                    return Err(
+                        self.failure("map callback was dropped without running".to_string())
+                    );
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     if std::time::Instant::now() >= deadline {
-                        return Err(backend_err("map callback did not run within 120 s"));
+                        return Err(
+                            self.failure("map callback did not run within 120 s".to_string())
+                        );
                     }
                     self.inner
                         .device
@@ -857,7 +860,7 @@ impl WgpuContext {
             let view = staging
                 .slice(..)
                 .get_mapped_range()
-                .map_err(|err| backend_err(format!("get_mapped_range: {err}")))?;
+                .map_err(|err| self.failure(format!("get_mapped_range: {err}")))?;
             let s = span as usize;
             let word = |i: usize| {
                 let mut w = [0u8; 4];
@@ -917,7 +920,8 @@ impl WgpuContext {
         (bits, first)
     }
 
-    /// A backend error for a failed wait or map, naming a lost device when
+    /// A backend error for a failed device call (a wait, a map, or a buffer,
+    /// shader, pipeline or bind group it creates), naming a lost device when
     /// the loss is why.
     fn failure(&self, detail: String) -> OjasError {
         if lock(&self.inner.lost).is_none() {
