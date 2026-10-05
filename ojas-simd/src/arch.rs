@@ -1030,20 +1030,34 @@ fn quad_nonfinite(
     vcgeq_u32(vandq_u32(vreinterpretq_u32_f32(x), mag), inf_bits)
 }
 
+/// The NEON path's chunks (16 lanes, then groups of 4, then single lanes),
+/// so a non-finite lane stops before any lane of its chunk is stored, as
+/// [`crate::store_neg_abs_signs`] documents.
 #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 unsafe fn write_neg_abs_signs(z: *mut f32, signs: *mut u8, n: usize) -> bool {
     let mut i = 0usize;
     while i < n {
-        // SAFETY: `i < n`, and both pointers cover `n` elements.
+        let width = if i + 16 <= n {
+            16
+        } else if i + 4 <= n {
+            4
+        } else {
+            1
+        };
+        // SAFETY: `i + width <= n`, and both pointers cover `n` elements.
         unsafe {
-            let v = z.add(i).read();
-            if !v.is_finite() {
-                return false;
+            for j in i..i + width {
+                if !z.add(j).read().is_finite() {
+                    return false;
+                }
             }
-            signs.add(i).write(u8::from(v < 0.0));
-            z.add(i).write(-v.abs());
+            for j in i..i + width {
+                let v = z.add(j).read();
+                signs.add(j).write(u8::from(v < 0.0));
+                z.add(j).write(-v.abs());
+            }
         }
-        i += 1;
+        i += width;
     }
     true
 }

@@ -790,7 +790,8 @@ pub fn vvexpf_inplace(y: &mut [f32]) -> Result<(), SimdError> {
 /// One pass: load, test finite, record `z[i] < 0`, store `z[i] = -|z[i]|`.
 ///
 /// Each 16-wide chunk (then each remaining group of 4, then each tail
-/// lane) is loaded once. A lane that is not finite stops the loop before
+/// lane) is checked before any lane of it is stored, on every backend; on
+/// NEON it is loaded once. A lane that is not finite stops the loop before
 /// that chunk is stored. Earlier chunks may already hold `-|x|`. Their
 /// sign bytes are not published: `signs` stays at length 0. A finite chunk
 /// stores a sign byte and `-|x|` before the next load. A sign byte is `1`
