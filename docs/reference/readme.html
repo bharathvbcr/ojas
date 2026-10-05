@@ -145,7 +145,9 @@
 <ul>
 <li>ojas is slower on most rows. In round 3 (the latest), a nanolab block forward + backward ran at 0.92× torch&#39;s speed on Metal (mixed) and 0.41× on wgpu; the earlier optimization rounds measured 0.37× and 0.18×. Round 3&#39;s GPU read 100% busy, so only the direction is verified.
 </li>
-<li>It is faster on Metal attention backward, <code>clip_grad_norm</code> and AdamW. CUDA is one affine kernel behind a feature, and HIP is a copy probe; neither implements <code>Backend</code>.
+<li>It is faster on Metal attention backward and AdamW. Its <code>clip_grad_norm</code> lead is against torch 2.13–2.14 only, whose MPS norm ran each full reduction on one threadgroup. PyTorch fixed that kernel for 2.15. On the 2.15 nightly, torch&#39;s row takes 8.5 ms against ojas&#39;s 19.0 ms (<a href="https://github.com/bharathvbcr/ojas/blob/main/bench/results/2026-10-05-torch215-clip/README.md" rel="noopener"><code>bench/results/2026-10-05-torch215-clip</code></a>, unpaired).
+</li>
+<li>CUDA is one affine kernel behind a feature, and HIP is a copy probe; neither implements <code>Backend</code>.
 </li>
 </ul>
 <div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>Status:          Kernel set, backends, nanolab model, trainer, adaptive resource planning and Go API built; remaining gaps in docs/pytorch-parity-plan.md

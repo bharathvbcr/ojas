@@ -112,7 +112,7 @@ The run imported the real `nanolab.model.GPT` and `build_optimizers` (123.7M par
 | 25.1% | Linear layers (768→768 ×48, 768→2048 ×24, 2048→768 ×12) | GEMM is near peak. Fusing QKV saves about 30% of the q/k/v share |
 | 13.8% | Tied lm_head + cross-entropy | The full `[B·T, 50304]` logits are materialized |
 | 11.2% | Muon NS5 | 1.69 TFLOP of bf16 at about 8 TFLOP/s, against 20–25 for large GEMM: batched 768-size GEMM efficiency |
-| 9.5% | `clip_grad_norm_` | `linalg.vector_norm` on MPS is 19× slower than `square().sum().sqrt()`, and `foreach` is refused on MPS |
+| 9.5% | `clip_grad_norm_` | Up to torch 2.14, `linalg.vector_norm` on MPS ran each full reduction on one threadgroup: 12× slower than `square().sum().sqrt()` in fp32 and 25× in bf16 (2.14.1, 2026-10-05). torch 2.15 fixes it (pytorch/pytorch#198611), which cuts this row from 137 ms to 8.5 ms. `foreach` is still refused on MPS |
 | ~20% | RMSNorm, QK-norm, RoPE, SwiGLU, gate, value residual | `rms_norm` is fused only for fp32 with no grad. Training splits it into 5 ops |
 | 1.0% | AdamW | A per-parameter Python loop, because MPS has no foreach path |
 
@@ -286,7 +286,7 @@ In this table, a ratio is torch time / ojas time, so below 1 means ojas is slowe
 | SDPA forward | 0.50–0.61× | 0.01–0.02× |
 | SDPA backward, T1024 and T2048 | **1.24× and 1.38×, faster 15/15** | 0.04× |
 | Cross-entropy forward / backward | 0.97× / 0.35× | **2.79×** / 0.53× |
-| `clip_grad_norm`, 123.7M params | **4.58× faster** | **6.36× faster** |
+| `clip_grad_norm`, 123.7M params | **4.58× faster** against torch 2.13; about 0.45× against the 2.15 nightly (unpaired) | **6.36× faster** against torch 2.13; about 0.44× against the 2.15 nightly |
 | AdamW, full parameter set | 0.09× | 0.70× |
 | Muon against torch fp32 / bf16 NS5 | 0.71–0.77× / 0.44–0.45× | 0.41–0.44× / 0.25–0.27× |
 | RoPE forward / backward | mixed | **3.67× / 4.73× faster** |

@@ -231,7 +231,7 @@
 <tr><td style="text-align:right">25.1%</td><td>Linear layers (768→768 ×48, 768→2048 ×24, 2048→768 ×12)</td><td>GEMM is near peak. Fusing QKV saves about 30% of the q/k/v share</td></tr>
 <tr><td style="text-align:right">13.8%</td><td>Tied lm_head + cross-entropy</td><td>The full <code>[B·T, 50304]</code> logits are materialized</td></tr>
 <tr><td style="text-align:right">11.2%</td><td>Muon NS5</td><td>1.69 TFLOP of bf16 at about 8 TFLOP/s, against 20–25 for large GEMM: batched 768-size GEMM efficiency</td></tr>
-<tr><td style="text-align:right">9.5%</td><td><code>clip_grad_norm_</code></td><td><code>linalg.vector_norm</code> on MPS is 19× slower than <code>square().sum().sqrt()</code>, and <code>foreach</code> is refused on MPS</td></tr>
+<tr><td style="text-align:right">9.5%</td><td><code>clip_grad_norm_</code></td><td>Up to torch 2.14, <code>linalg.vector_norm</code> on MPS ran each full reduction on one threadgroup: 12× slower than <code>square().sum().sqrt()</code> in fp32 and 25× in bf16 (2.14.1, 2026-10-05). torch 2.15 fixes it (pytorch/pytorch#198611), which cuts this row from 137 ms to 8.5 ms. <code>foreach</code> is still refused on MPS</td></tr>
 <tr><td style="text-align:right">~20%</td><td>RMSNorm, QK-norm, RoPE, SwiGLU, gate, value residual</td><td><code>rms_norm</code> is fused only for fp32 with no grad. Training splits it into 5 ops</td></tr>
 <tr><td style="text-align:right">1.0%</td><td>AdamW</td><td>A per-parameter Python loop, because MPS has no foreach path</td></tr>
 </tbody></table></div>
@@ -502,7 +502,7 @@
 <tr><td>SDPA forward</td><td>0.50–0.61×</td><td>0.01–0.02×</td></tr>
 <tr><td>SDPA backward, T1024 and T2048</td><td><strong>1.24× and 1.38×, faster 15/15</strong></td><td>0.04×</td></tr>
 <tr><td>Cross-entropy forward / backward</td><td>0.97× / 0.35×</td><td><strong>2.79×</strong> / 0.53×</td></tr>
-<tr><td><code>clip_grad_norm</code>, 123.7M params</td><td><strong>4.58× faster</strong></td><td><strong>6.36× faster</strong></td></tr>
+<tr><td><code>clip_grad_norm</code>, 123.7M params</td><td><strong>4.58× faster</strong> against torch 2.13; about 0.45× against the 2.15 nightly (unpaired)</td><td><strong>6.36× faster</strong> against torch 2.13; about 0.44× against the 2.15 nightly</td></tr>
 <tr><td>AdamW, full parameter set</td><td>0.09×</td><td>0.70×</td></tr>
 <tr><td>Muon against torch fp32 / bf16 NS5</td><td>0.71–0.77× / 0.44–0.45×</td><td>0.41–0.44× / 0.25–0.27×</td></tr>
 <tr><td>RoPE forward / backward</td><td>mixed</td><td><strong>3.67× / 4.73× faster</strong></td></tr>
