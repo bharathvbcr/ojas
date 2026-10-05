@@ -949,6 +949,8 @@ fn bench_dir() -> PathBuf {
 
 fn backend(budget: &Budget, threads: usize) -> CpuBackend {
     let cpu = CpuBackend::with_threads(budget.clone(), threads).unwrap();
+    // Before any timed call, so a Fast gate can use a worker that already exists.
+    cpu.start_workers().unwrap();
     assert_eq!(
         cpu.numerics(),
         Numerics::Fast,

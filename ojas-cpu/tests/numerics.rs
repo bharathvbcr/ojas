@@ -661,9 +661,9 @@ fn muon_fast_matches_exact_at_one_and_six_threads_and_refuses_nan() {
 }
 
 /// Nanolab Muon matrices from `bench_ops`. At 6 threads, `A @ A` and `B @ X`
-/// are six row bands. `X @ Xᵀ` is two bands when `k < 2m` (the square) and
-/// one band on the tall shapes. Every step must match the single-thread
-/// step with max abs 0.
+/// are six row bands, except tall 2048×768, where each is one `cblas_sgemm`.
+/// `X @ Xᵀ` is two bands when `k < 2m` (the square) and one band on the tall
+/// shapes. Every step must match the single-thread step with max abs 0.
 #[test]
 fn muon_nanolab_inputs_match_across_one_and_six_threads() {
     fn case_seed(case: &str) -> u64 {

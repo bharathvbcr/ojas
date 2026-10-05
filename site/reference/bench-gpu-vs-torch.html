@@ -116,15 +116,54 @@
 <h1 id="gpu-backends-versus-pytorch-mps">GPU Backends versus PyTorch MPS <a class="anchor" href="#gpu-backends-versus-pytorch-mps" aria-label="Link to this section">#</a></h1>
 <p>Paired A/B of ojas&#39;s two GPU backends, <code>MetalBackend</code> (<code>ojas-metal</code>) and <code>WgpuBackend</code> (<code>ojas-wgpu</code>), against PyTorch 2.13 MPS, at nanolab&#39;s default shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabulary 50304, B 4, T 1024 (4096 rows). Each kernel is timed forward and backward where it has a backward. One composed nanolab block is timed forward, and forward plus backward. Everything is f32 on both sides.</p>
 <p>The harness, the commands and the row definitions are in <a href="crate-bench.html"><code>bench/README.md</code></a>. Raw data: round 1 in <code>bench/results/2026-10-01/</code>, round 2 in <code>bench/results/2026-10-01-r2/</code>, round 3 in <code>bench/results/2026-10-01-r3b/</code>, and the round 3 regression A/B in <code>bench/results/2026-10-01-ab/</code>.</p>
-<p>The document has four dated sections:</p>
+<p>The document has five dated sections:</p>
 <ul>
-<li><strong>Round 5 and the LM-head GEMM</strong> (first): round 5&#39;s remaining Metal gaps, and the fix to tessl&#39;s exact-f32 GEMM tile walk that halves the LM head. It ends with the gate_bwd profile and its bias-sum fix.
+<li><strong>Fixed cost against op size and request batching</strong> (first): where the per-op fixed cost stops dominating, and what batching decode requests buys.
+</li>
+<li><strong>Round 5 and the LM-head GEMM</strong>: round 5&#39;s remaining Metal gaps, and the fix to tessl&#39;s exact-f32 GEMM tile walk that halves the LM head. It ends with the gate_bwd profile and its bias-sum fix.
 </li>
 <li><strong>Round 3</strong>, after typed host storage, Metal deferred faults and device-resident AdamW. It also settles the round 2 Metal &#34;regressions&#34;.
 </li>
 <li><strong>Round 2</strong>, after the Metal and wgpu optimization rounds landed.
 </li>
 <li><strong>Round 1</strong>, kept below unchanged for comparison.
+</li>
+</ul>
+<h2 id="fixed-cost-against-op-size-and-request-batching-2026-10-04">Fixed cost against op size and request batching: 2026-10-04 <a class="anchor" href="#fixed-cost-against-op-size-and-request-batching-2026-10-04" aria-label="Link to this section">#</a></h2>
+<p>Full reading and caveats: <a href="https://github.com/bharathvbcr/ojas/blob/main/bench/results/2026-10-04-sweep/README.md" rel="noopener"><code>bench/results/2026-10-04-sweep/README.md</code></a>. The rows are <code>sweep_*</code> (<code>bench/README.md</code>, &#34;Row semantics&#34;).</p>
+<p><strong>Every row is &#34;noisy - not quoted&#34;.</strong> Another process kept the GPU 54–79% busy for the whole run. Treat the numbers as direction only. Every row passed parity on both backends in all 5 rounds.</p>
+<ul>
+<li><strong>Fixed cost of a Metal op:</strong> 0.13 ms (min) to 0.18 ms (median); torch&#39;s is 0.10–0.16 ms.
+</li>
+<li><strong>Where size takes over:</strong> <code>silu_forward</code> time doubles from its one-value floor at about 4.1–4.5M values (about 16–18 MB) on Metal. On torch it is 3.3–5.2M. Below about 1M values, Metal&#39;s time barely moves with size.
+</li>
+<li><strong>Batched decode, one call:</strong> the cost per request falls about 4x from B=1 to B=16 (0.214 to 0.051 ms on Metal). At B=16 Metal is 0.93x torch (per round 0.83–1.09).
+</li>
+<li><strong>The same 16 requests as separate calls before one sync:</strong> 1.342 ms against 0.815 batched. Metal is 0.63–0.74x torch per round, which does not overlap the batched range. Each extra call costs Metal about 0.04 ms. At B ≥ 8 that is roughly 3–4x torch&#39;s.
+</li>
+<li><strong>What the per-call cost is</strong> (<a href="https://github.com/bharathvbcr/ojas/blob/main/bench/results/2026-10-04-percall/README.md" rel="noopener"><code>bench/results/2026-10-04-percall/</code></a>, <code>metal_bench 20 percall</code>):
+<ul>
+<li>About 78% is GPU time. One request is a 12-threadgroup dispatch at about 140–180 GB/s; the batched dispatch reaches about 256 GB/s.
+</li>
+<li>About 18% is host time, about 7 µs per call. Allocation and residency are about 0.6 µs of that.
+</li>
+<li>Batching at the caller is the fix the data supports.
+</li>
+</ul>
+</li>
+<li><strong>Split cache walk</strong> (<a href="https://github.com/bharathvbcr/ojas/blob/main/bench/results/2026-10-04-split/README.md" rel="noopener"><code>bench/results/2026-10-04-split/</code></a>):
+<ul>
+<li>Small decode calls now walk the cache in splits and merge them (8 splits for one 12-head request).
+</li>
+<li>One request&#39;s GPU median falls from 48 to 38 µs.
+</li>
+<li>In an interleaved A/B, 4–16 separate calls are 10–12% faster.
+</li>
+<li>A lone request is unchanged end to end, because the fixed cost dominates.
+</li>
+<li>16 separate calls are still 0.84 ms against 0.54 ms batched.
+</li>
+</ul>
 </li>
 </ul>
 <h2 id="round-5-and-the-lm-head-gemm-2026-10-02">Round 5 and the LM-head GEMM: 2026-10-02 <a class="anchor" href="#round-5-and-the-lm-head-gemm-2026-10-02" aria-label="Link to this section">#</a></h2>
@@ -1387,6 +1426,7 @@ BENCH_ITERS=30 bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5     
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#fixed-cost-against-op-size-and-request-batching-2026-10-04">Fixed cost against op size and request batching: 2026-10-04</a></li>
 <li><a href="#round-5-and-the-lm-head-gemm-2026-10-02">Round 5 and the LM-head GEMM: 2026-10-02</a></li>
 <li class="sub"><a href="#round-5-benchresults2026-10-02-r5summarymd">Round 5 (bench/results/2026-10-02-r5/summary.md)</a></li>
 <li class="sub"><a href="#what-makes-the-lm-head-slow-one-pass-over-the-weight-per-tile-row-verified">What makes the LM head slow: one pass over the weight per tile row (verified)</a></li>

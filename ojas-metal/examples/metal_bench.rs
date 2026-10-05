@@ -38,6 +38,22 @@
 //! minimum. tessl's `scale_f32_inplace` (one read, one write) is the
 //! reference for what a plain pass reaches.
 //!
+//! `percall` (never part of the default run; macOS only) splits what 16
+//! decode requests (H 12, D 64, 1024 cached positions) cost as 16
+//! `cached_attention_forward` calls against one batched call, `25 × iters`
+//! runs per scenario:
+//! - `MetalBackend`: host time of the calls, `Backend::sync`, tessl's event
+//!   wait, and the commits, residency flushes, cold allocations, dispatches
+//!   and barriers per run.
+//! - tessl directly with this crate's `ojas_cached_attn`: the GPU span of one
+//!   request, of the batched dispatch, of 16 dispatches with the barrier
+//!   tessl records after each (as `MetalBackend` gets them), and of 16 with
+//!   no barrier between them. Then the split cache walk (the kernel in
+//!   parts, then `ojas_cached_attn_merge`) at 1, 2, 4 and 16 requests and 1
+//!   to 32 splits.
+//! - tessl directly: host time to record the 16 dispatches into one reused
+//!   output, or each into a freshly allocated one as `MetalBackend` does.
+//!
 //! `gate` (macOS only) times, the same way, each dispatch of
 //! `per_head_sigmoid_gate_backward` at the paired benchmark's shape (4096
 //! rows, 12 heads of 64, d_model 768): the `pre` GEMM, the gate and bias-sum
@@ -354,6 +370,9 @@ fn main() -> R<()> {
     if only == "kernels" {
         return probe::kernels(iters);
     }
+    if only == "percall" {
+        return probe::percall(&be, iters);
+    }
     if only == "gemm" {
         return probe::gemm(iters);
     }
@@ -411,11 +430,11 @@ mod probe {
 
     use ojas_core::{Backend, BackendId, OjasError, Tensor};
     use ojas_metal::MetalBackend;
-    use tessl::dispatch::{dispatch_1d, set_gpu_buf, set_u32, Binder};
+    use tessl::dispatch::{dispatch_1d, set_f32, set_gpu_buf, set_gpu_buf_offset, set_u32, Binder};
     use tessl::gemm::{gemm_tn_splitk_par_f32, GemmOperands};
     use tessl::infer_trace::{self, Snapshot};
     use tessl::nn::scale_f32_inplace;
-    use tessl::runtime::GpuRuntime;
+    use tessl::runtime::{mtl_size, GpuRuntime};
     use tessl::tensor::{GpuBuffer, Tensor as TT};
     use tessl::DType;
 
@@ -691,6 +710,337 @@ mod probe {
         }
         infer_trace::set_enabled(false);
         println!("end: GPU {}, load {}", gpu_util(), load());
+        Ok(())
+    }
+
+    /// The `percall` decode shape: `sweep_decode_*16` in `bench/ojas_rows.rs`.
+    const PC_B: usize = 16;
+    const PC_H: usize = 12;
+    const PC_D: usize = 64;
+    const PC_T: usize = 1024;
+    /// `CA_THREADS` in `ojas-metal/src/device.rs`.
+    const PC_THREADS: usize = 1024;
+    /// Most splits the split-walk table tries.
+    const PC_MAX_SPLITS: usize = 32;
+
+    /// `f` then one sync, `n` times: the calls' host time, the sync, tessl's
+    /// event wait inside it, and the counters per run.
+    fn calls(
+        be: &MetalBackend,
+        n: usize,
+        mut f: impl FnMut() -> R<Vec<Tensor>>,
+    ) -> R<Vec<(Sample, Snapshot)>> {
+        let mut out = Vec::with_capacity(n);
+        for i in 0..WARMUP + n {
+            let a = infer_trace::snapshot();
+            let t0 = Instant::now();
+            let kept = f()?;
+            let t1 = Instant::now();
+            be.sync()?;
+            let t2 = Instant::now();
+            let b = infer_trace::snapshot();
+            drop(kept);
+            if i >= WARMUP {
+                let s = Sample {
+                    op: (t1 - t0).as_secs_f64() * 1e3,
+                    sync: (t2 - t1).as_secs_f64() * 1e3,
+                    ..Sample::default()
+                }
+                .counters(a, b);
+                let d = Snapshot {
+                    dispatches: b.dispatches.saturating_sub(a.dispatches),
+                    barriers: b.barriers.saturating_sub(a.barriers),
+                    ..Snapshot::default()
+                };
+                out.push((s, d));
+            }
+        }
+        Ok(out)
+    }
+
+    fn median(mut v: Vec<f64>) -> f64 {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    }
+
+    fn report_calls(name: &str, ncalls: usize, s: &[(Sample, Snapshot)]) {
+        let col = |f: &dyn Fn(&Sample) -> f64| median(s.iter().map(|(x, _)| f(x)).collect());
+        let per = |f: &dyn Fn(&(Sample, Snapshot)) -> u64| {
+            s.iter().map(|x| f(x) as f64).sum::<f64>() / s.len() as f64
+        };
+        let mut t: Vec<f64> = s.iter().map(|(x, _)| x.total()).collect();
+        t.sort_by(f64::total_cmp);
+        println!(
+            "| {name} | {} | {:.3} | {:.3} | {:.3} | {:.1} | {:.3} | {:.3} | {:.2} / {:.2} / {:.2} / {:.2} / {:.2} |",
+            s.len(),
+            pct(&t, 0.0),
+            pct(&t, 0.5),
+            col(&|x| x.op),
+            col(&|x| x.op) * 1e3 / ncalls as f64,
+            col(&|x| x.sync),
+            col(&|x| x.wait),
+            per(&|x| x.0.commits),
+            per(&|x| x.0.flushes),
+            per(&|x| x.0.cold),
+            per(&|x| x.1.dispatches),
+            per(&|x| x.1.barriers),
+        );
+    }
+
+    /// The `percall` group: where the extra cost of sending 16 decode
+    /// requests as 16 calls instead of one batched call goes.
+    pub fn percall(be: &MetalBackend, iters: usize) -> R<()> {
+        let n = iters * 25;
+        let (q_len, c_len) = (PC_H * PC_D, PC_T * PC_H * PC_D);
+        let host = [
+            super::values(PC_B * q_len, 171, 1.0),
+            super::values(PC_B * c_len, 172, 1.0),
+            super::values(PC_B * c_len, 173, 1.0),
+        ];
+        println!("start: GPU {}, load {}", gpu_util(), load());
+        infer_trace::set_enabled(true);
+
+        // 1. MetalBackend: host time of the calls vs the sync.
+        let up =
+            |v: &[f32], sh: &[usize]| be.upload(&Tensor::from_f32(v, sh, &super::host_budget())?);
+        let qb = up(&host[0], &[PC_B, 1, PC_H, PC_D])?;
+        let kb = up(&host[1], &[PC_B, PC_T, PC_H, PC_D])?;
+        let vb = up(&host[2], &[PC_B, PC_T, PC_H, PC_D])?;
+        let mut reqs = Vec::with_capacity(PC_B);
+        for i in 0..PC_B {
+            reqs.push((
+                up(&host[0][i * q_len..(i + 1) * q_len], &[1, 1, PC_H, PC_D])?,
+                up(&host[1][i * c_len..(i + 1) * c_len], &[1, PC_T, PC_H, PC_D])?,
+                up(&host[2][i * c_len..(i + 1) * c_len], &[1, PC_T, PC_H, PC_D])?,
+            ));
+        }
+        println!("\n`MetalBackend`, decode at H 12, D 64, 1024 cached positions; medians over {n} runs.\n");
+        println!(
+            "| scenario | runs | min ms | p50 ms | calls ms | per call µs | sync ms | event wait ms | per run: commits / residency flushes / cold allocs / dispatches / barriers |"
+        );
+        println!("|---|---:|---:|---:|---:|---:|---:|---:|---|");
+        let (q0, k0, v0) = &reqs[0];
+        let s = calls(be, n, || {
+            Ok(vec![be.cached_attention_forward(q0, k0, v0, PC_T)?])
+        })?;
+        report_calls("1 request, 1 call", 1, &s);
+        let s = calls(be, n, || {
+            Ok(vec![be.cached_attention_forward(&qb, &kb, &vb, PC_T)?])
+        })?;
+        report_calls("16 requests, 1 batched call", 1, &s);
+        let s = calls(be, n, || {
+            reqs.iter()
+                .map(|(q, k, v)| be.cached_attention_forward(q, k, v, PC_T))
+                .collect()
+        })?;
+        report_calls("16 requests, 16 calls", PC_B, &s);
+
+        // 2. tessl directly with this crate's kernel: GPU span only.
+        let rt = GpuRuntime::new().map_err(tessl_err)?;
+        rt.set_async_encode(true).map_err(tessl_err)?;
+        rt.add_metallib_bytes(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/ojas_per_head_gate.metallib"
+        )))
+        .map_err(tessl_err)?;
+        let ns_per_tick = calibrate(&rt).map_err(tessl_err)?;
+        let reps = n;
+        let run = || -> Result<(), String> {
+            let buf = |v: &[f32]| -> Result<GpuBuffer, String> {
+                let b = rt.alloc_buffer(4 * v.len())?;
+                b.write_f32_prefix(v);
+                Ok(b)
+            };
+            let (q, k, v) = (buf(&host[0])?, buf(&host[1])?, buf(&host[2])?);
+            let out = rt.alloc_buffer(4 * PC_B * q_len)?;
+            let st = rt.alloc_buffer(4 * 8)?;
+            let p = rt.pipeline("ojas_cached_attn")?;
+            // Requests `first..first + batch` of the batched tensors, into
+            // `dst` at the same rows.
+            let one = |bd: &mut Binder<'_>,
+                       first: usize,
+                       batch: usize,
+                       dst: &GpuBuffer,
+                       dst_off: usize| {
+                bd.set_pipeline(&p);
+                set_gpu_buf_offset(bd, &q, 4 * first * q_len, 0);
+                set_gpu_buf_offset(bd, &k, 4 * first * c_len, 1);
+                set_gpu_buf_offset(bd, &v, 4 * first * c_len, 2);
+                set_gpu_buf_offset(bd, dst, dst_off, 3);
+                set_gpu_buf(bd, &st, 4);
+                set_u32(bd, 1, 5);
+                set_u32(bd, PC_H as u32, 6);
+                set_u32(bd, PC_H as u32, 7);
+                set_u32(bd, PC_D as u32, 8);
+                set_u32(bd, PC_T as u32, 9);
+                set_u32(bd, PC_T as u32, 10);
+                set_f32(bd, 1.0 / (PC_D as f32).sqrt(), 11);
+                set_u32(bd, 1, 12);
+                set_u32(bd, PC_T as u32, 13);
+                set_gpu_buf_offset(bd, dst, dst_off, 14);
+                bd.dispatch(mtl_size(PC_H, batch, 1), mtl_size(PC_THREADS, 1, 1));
+            };
+            // Requests 0..batch with the cache walk in `splits` parts, then
+            // the merge: the two dispatches `MetalBackend` records.
+            let part = rt.alloc_buffer(4 * PC_B * PC_H * PC_MAX_SPLITS * (PC_D + 2))?;
+            let merge = rt.pipeline("ojas_cached_attn_merge")?;
+            let split = |batch: usize, splits: usize| -> Result<(), String> {
+                rt.with_binder(|bd| {
+                    bd.set_pipeline(&p);
+                    set_gpu_buf(bd, &q, 0);
+                    set_gpu_buf(bd, &k, 1);
+                    set_gpu_buf(bd, &v, 2);
+                    set_gpu_buf(bd, &out, 3);
+                    set_gpu_buf(bd, &st, 4);
+                    set_u32(bd, 1, 5);
+                    set_u32(bd, PC_H as u32, 6);
+                    set_u32(bd, PC_H as u32, 7);
+                    set_u32(bd, PC_D as u32, 8);
+                    set_u32(bd, PC_T as u32, 9);
+                    set_u32(bd, PC_T as u32, 10);
+                    set_f32(bd, 1.0 / (PC_D as f32).sqrt(), 11);
+                    set_u32(bd, splits as u32, 12);
+                    set_u32(bd, PC_T.div_ceil(splits) as u32, 13);
+                    set_gpu_buf(bd, &part, 14);
+                    bd.dispatch(
+                        mtl_size(PC_H * splits, batch, 1),
+                        mtl_size(PC_THREADS, 1, 1),
+                    );
+                    Ok(())
+                })?;
+                if splits > 1 {
+                    rt.with_binder(|bd| {
+                        bd.set_pipeline(&merge);
+                        set_gpu_buf(bd, &part, 0);
+                        set_gpu_buf(bd, &out, 1);
+                        set_gpu_buf(bd, &st, 2);
+                        set_u32(bd, PC_D as u32, 3);
+                        set_u32(bd, splits as u32, 4);
+                        bd.dispatch(mtl_size(PC_H, batch, 1), mtl_size(PC_D, 1, 1));
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            };
+            println!("\nGPU span of one command buffer, tessl directly, {reps} buffers.\n");
+            println!("| command buffer holds | min µs | median µs |");
+            println!("|---|---:|---:|");
+            let row = |name: &str, t: (f64, f64)| println!("| {name} | {:.1} | {:.1} |", t.0, t.1);
+            row(
+                "1 request, 1 dispatch",
+                gpu_span(&rt, reps, ns_per_tick, || {
+                    rt.with_binder(|bd| {
+                        one(bd, 0, 1, &out, 0);
+                        Ok(())
+                    })
+                })?,
+            );
+            row(
+                "16 requests, 1 batched dispatch",
+                gpu_span(&rt, reps, ns_per_tick, || {
+                    rt.with_binder(|bd| {
+                        one(bd, 0, PC_B, &out, 0);
+                        Ok(())
+                    })
+                })?,
+            );
+            row(
+                "16 dispatches, a barrier after each (as `MetalBackend` records them)",
+                gpu_span(&rt, reps, ns_per_tick, || {
+                    for i in 0..PC_B {
+                        rt.with_binder(|bd| {
+                            one(bd, i, 1, &out, 4 * i * q_len);
+                            Ok(())
+                        })?;
+                    }
+                    Ok(())
+                })?,
+            );
+            row(
+                "16 dispatches, no barrier between them",
+                gpu_span(&rt, reps, ns_per_tick, || {
+                    rt.with_binder_barriers(Some(true), |bd| {
+                        for i in 0..PC_B {
+                            one(bd, i, 1, &out, 4 * i * q_len);
+                        }
+                        Ok(())
+                    })
+                })?,
+            );
+
+            // 2b. The split cache walk: GPU span by request count and splits.
+            println!("\nSplit cache walk (`ojas_cached_attn` in parts, then `ojas_cached_attn_merge`), GPU span, {reps} buffers.\n");
+            println!("| requests | splits | threadgroups | min µs | median µs | GB/s at min |");
+            println!("|---:|---:|---:|---:|---:|---:|");
+            for batch in [1usize, 2, 4, 16] {
+                for splits in [1usize, 2, 4, 8, 16, PC_MAX_SPLITS] {
+                    let t = gpu_span(&rt, reps, ns_per_tick, || split(batch, splits))?;
+                    let bytes = (batch * 2 * c_len * 4) as f64;
+                    println!(
+                        "| {batch} | {splits} | {} | {:.1} | {:.1} | {:.0} |",
+                        PC_H * splits * batch,
+                        t.0,
+                        t.1,
+                        bytes / (t.0 * 1e3)
+                    );
+                }
+            }
+
+            // 3. Host cost of recording 16 dispatches: into one reused output
+            // buffer, or each into a fresh one as `MetalBackend` allocates.
+            println!("\nHost time to record 16 dispatches (no wait inside), tessl directly; medians over {reps} runs.\n");
+            println!("| recording | µs per dispatch | per run: residency flushes / cold allocs |");
+            println!("|---|---:|---|");
+            for fresh in [false, true] {
+                let mut us = Vec::with_capacity(reps);
+                let (mut fl, mut co) = (0u64, 0u64);
+                for i in 0..WARMUP + reps {
+                    let a = infer_trace::snapshot();
+                    let t0 = Instant::now();
+                    let mut kept = Vec::with_capacity(PC_B);
+                    for r in 0..PC_B {
+                        if fresh {
+                            let dst = rt.alloc_buffer(4 * q_len)?;
+                            rt.with_binder(|bd| {
+                                one(bd, r, 1, &dst, 0);
+                                Ok(())
+                            })?;
+                            kept.push(dst);
+                        } else {
+                            rt.with_binder(|bd| {
+                                one(bd, r, 1, &out, 4 * r * q_len);
+                                Ok(())
+                            })?;
+                        }
+                    }
+                    let dt = t0.elapsed().as_secs_f64() * 1e6;
+                    let b = infer_trace::snapshot();
+                    rt.synchronize()?;
+                    rt.take_metal4_stamps();
+                    drop(kept);
+                    if i >= WARMUP {
+                        us.push(dt / PC_B as f64);
+                        fl += b.residency_flushes.saturating_sub(a.residency_flushes);
+                        co += b.cold_allocs.saturating_sub(a.cold_allocs);
+                    }
+                }
+                println!(
+                    "| {} | {:.1} | {:.2} / {:.2} |",
+                    if fresh {
+                        "each into a fresh output (as `MetalBackend`)"
+                    } else {
+                        "all into one reused output"
+                    },
+                    median(us),
+                    fl as f64 / reps as f64,
+                    co as f64 / reps as f64
+                );
+            }
+            Ok(())
+        };
+        run().map_err(tessl_err)?;
+        infer_trace::set_enabled(false);
+        println!("\nend: GPU {}, load {}", gpu_util(), load());
         Ok(())
     }
 
@@ -1307,6 +1657,10 @@ mod probe {
     }
 
     pub fn kernels(_iters: usize) -> super::R<()> {
+        Err(unsupported())
+    }
+
+    pub fn percall(_be: &MetalBackend, _iters: usize) -> super::R<()> {
         Err(unsupported())
     }
 

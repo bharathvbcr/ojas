@@ -46,6 +46,22 @@ This list honours the prior rulings:
 - No new head-dim-256 attention kernel. Item 2 routes to a kernel tessl already ships.
 - No ojas inference engine.
 
+## Tessl vs PyTorch 2.12.1 MPS, 2026-10-04
+
+Apple M5 Pro, one GPU-lock hold. Same work on both sides: real Qwen3.5-2B snapshot `b1485b2f`, prefix state kept, 17 answer-letter rows at the last position, no full-vocabulary head. Lengths interleaved. Load average 4.61–5.68.
+
+| T | Tessl median/min ms | PyTorch median/min ms | PyTorch÷Tessl median |
+|---|---|---|---|
+| 200 | 55.98 / 53.70 | 119.94 / 116.81 | 2.14× |
+| 2048 | 420.49 / 401.55 | 891.08 / 835.50 | 2.12× |
+| 8192 | 1969.24 / 1882.59 | 4371.41 / 4317.57 | 2.22× |
+
+Tessl bench line: embed gather + 24 layers (state kept) + final norm + 17 answer rows; median of 7 after 2 warm-up. PyTorch: `torch_task_speed.last_only`, bf16 sdpa MPS, median of 10 after 3 warm-up. Load time about 2 s Tessl vs 19–22 s PyTorch because each length reloaded. Token streams differ: Tessl repeats tokenized `model.rs` to length T; PyTorch uses a val prompt of that length. Shapes match. **[V]**
+
+PyTorch gated-delta still used `torch_chunk_gated_delta_rule`. **[V]**
+
+flash-linear-attention 0.5.2 was pip-installed into `/Users/bharath/.venvs/ml` (import `fla` works; also pulled fla-core 0.5.2). `causal-conv1d` was not installed. Qwen3.5 from the same snapshot still printed: "The fast path is not available because one of the required library is not installed. Falling back to torch implementation." Transformers 5.12.1 only treats `fla` and `causal_conv1d` as available when `torch.cuda` is available; CUDA is false and MPS is true on this machine. Direct import of `chunk_gated_delta_rule` fails with `ModuleNotFoundError: triton`. One T=200 forward after a 1-token forward took 351.2 ms; that is one run, not the 119.9 ms median above. **[V]**
+
 ## Two things found in the source that shape the ranking
 
 1. **qd-metal's prefill uses the scalar attention kernel — superseded.** The selector now always uses the tiled kernel (verified results). The notes under this item are what the source said when the list was written.

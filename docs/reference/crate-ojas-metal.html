@@ -216,6 +216,8 @@
 </li>
 <li><code>cached_attention_forward</code> is grouped-query causal attention of <code>Tq</code> queries against the first <code>kv_len</code> positions, one 1,024-thread threadgroup per (query, head).
 </li>
+<li>A call with fewer than about 96 such threadgroups, such as one decode request, walks the cache in up to 96 / rows splits of at least 64 keys. <code>ojas_cached_attn_merge</code> then combines them in a fixed order, so results still repeat bit for bit. One request at 1024 keys runs about 22% less GPU time (<code>bench/results/2026-10-04-split/</code>).
+</li>
 <li>Positions at or past <code>kv_len</code> are not read.
 </li>
 </ul>

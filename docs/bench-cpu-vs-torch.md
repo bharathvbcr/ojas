@@ -210,7 +210,7 @@ Where ojas is behind, ms (ratio):
 | Muon `[2048,768]` / `[3072,768]` | 29.2 / 41.8 | 20.5 / 28.3 | 1.4 / 1.5 |
 | SiLU forward | 0.365 | 0.293 | 1.25 |
 
-Within 10% of torch: every prefill linear (1.00–1.08; both call Accelerate), the LM-head linear (1.03 / 1.08), decode linear forward (0.90–0.92), RMSNorm and QK-norm forward, SiLU backward, cross-entropy backward, embedding backward, Muon `[768,768]` and value-residual forward.
+Within 10% of torch on this run: every prefill linear (1.00–1.08; both call Accelerate), the LM-head linear (1.03 / 1.08), decode linear forward (0.90–0.92), RMSNorm and QK-norm forward, SiLU backward, cross-entropy backward, embedding backward, Muon `[768,768]` and value-residual forward. The 2026-10-04 section re-pairs embedding backward and Muon; both stay open there.
 
 Ahead of torch: SDPA forward / backward 0.83 / 0.82 against torch's default (flash) SDPA, RMSNorm backward 0.55, RoPE 0.63 / 0.58, value-residual backward 0.59, QK-norm backward 0.69, cross-entropy forward 0.69, clip 0.43, and AdamW 0.80–0.91 against torch's default (non-fused) AdamW.
 
@@ -241,7 +241,72 @@ Against torch after s11 (`bash target-matmul/cpu_vs_torch.sh 3 silu,rms_norm,rop
 
 Torch's own times moved between the two runs as much as ojas's did on unchanged code (SiLU forward 0.293 then 0.250, value-residual backward 0.300 then 0.219, gate backward 0.234 then 0.206), so a ratio within about 15% of the earlier one is not a change. RMSNorm and QK-norm forward went from par to ahead. Mul and add stay behind: each split pays a fresh scoped spawn (the crate forbids `unsafe`, so the persistent pool cannot write into one borrowed buffer), and add backward is the deliberate gradient copy.
 
-The rest of mul forward is the scoped spawn and the write: the crate forbids `unsafe`, so its persistent pool cannot run tasks that write into one borrowed buffer, and each split pays a fresh `std::thread::scope` (`pool/scoped.rs`). Add backward copies the incoming gradient into two new tensors (`pointwise.rs` `add_backward`) where torch passes it on without a copy. That copy stays: an in-place step on a gradient (clip, accumulate) needs sole ownership of its storage, and a shared gradient would be refused or replaced. SiLU already splits across the pool, so its 1.25 is per-element cost, not threading. The gate, decode linear backward and Muon gaps are not yet profiled.
+The rest of mul forward is the scoped spawn and the write: the crate forbids `unsafe`, so its persistent pool cannot run tasks that write into one borrowed buffer, and each split pays a fresh `std::thread::scope` (`pool/scoped.rs`). Add backward copies the incoming gradient into two new tensors (`pointwise.rs` `add_backward`) where torch passes it on without a copy. That copy stays: an in-place step on a gradient (clip, accumulate) needs sole ownership of its storage, and a shared gradient would be refused or replaced. SiLU already splits across the pool, so its 1.25 is per-element cost, not threading. The pairs that followed are in the next section. `ojas-cpu` still has no `unsafe`.
+
+---
+
+## Scorecard pairs (2026-10-04)
+
+Apple Silicon, 6 threads, release. A gap closes only when an interleaved `cpu_vs_torch.sh` ratio (ojas / torch) is at most 1. In-process timers are not scorecard evidence. One round at or under 1 leaves the gap open when torch time swings. Decode linear backward, mul backward, and gate forward are at most 1 on both rounds below. The other gaps in this section stay open, so the scorecard is not complete. The tables above stay the record of the day they were taken.
+
+Each cell is that round's minimum, in milliseconds. Two rounds are two invocations, written in order.
+
+| Case | ojas | torch | ratio | |
+| :--- | ---: | ---: | ---: | :--- |
+| gate forward | 0.1401 | 0.1542 | 0.91 | 1-minute load 9.02–8.73; parity ok; not noisy; both rounds at most 1; closed |
+| gate forward | 0.1428 | 0.1541 | 0.93 | 1-minute load 8.73; parity ok; not noisy; both rounds at most 1; closed |
+| gate backward | 0.2311 | 0.2290 | 1.01 | open |
+| gate backward | 0.2305 | 0.2149 | 1.07 | open |
+| mul forward | 0.1167 | 0.1014 | 1.15 | 1-minute load 5.14–5.21; parity ok; open |
+| mul forward | 0.1075 | 0.0876 | 1.23 | 1-minute load 5.25–5.39; parity ok; open |
+| mul backward | 0.2273 | 0.2766 | 0.82 | 1-minute load 5.14–5.21; parity ok; both rounds at most 1; closed |
+| mul backward | 0.2437 | 0.2543 | 0.96 | 1-minute load 5.25–5.39; parity ok; both rounds at most 1; closed |
+| Muon `[768,768]` | 9.6399 | 9.9154 | 0.97 | two rounds under; line stays open |
+| Muon `[768,768]` | 9.5854 | 9.9865 | 0.96 | two rounds under; line stays open |
+| Muon `[2048,768]` | 36.9958 | 31.1159 | 1.19 | 1-minute load 7.26–8.13; parity ok; not noisy; above 1 |
+| Muon `[2048,768]` | 31.7728 | 31.2013 | 1.02 | 1-minute load 6.50–6.14; parity ok; not noisy; above 1; line stays open |
+| Muon `[3072,768]` | 27.58 | 31.58 | 0.87 | two rounds under; line stays open |
+| Muon `[3072,768]` | 27.5074 | 32.0280 | 0.86 | two rounds under; line stays open |
+| permute (0,2,1,3) | 0.0503 | 0.0612 | 0.82 | 1-minute load 5.50–5.85; parity ok; line is open |
+| permute (0,2,1,3) | 0.0503 | 0.0448 | 1.12 | 1-minute load 5.78–6.36; parity ok; line is open |
+| add forward | 0.0544 | 0.0423 | 1.29 | 1-minute load 3.89–4.71; parity ok; open |
+| add forward | 0.0580 | 0.0468 | 1.24 | 1-minute load 3.60; parity ok; open |
+| add backward | 0.0699 | 0.0088 | 7.94 | load 17–20; earlier runs |
+| add backward | 0.0801 | 0.0094 | 8.52 | load 17–20; earlier runs |
+| embedding forward | 0.0536 | 0.0478 | 1.12 | 1-minute load 6.26–6.51; parity ok; open |
+| embedding forward | 0.0914 | 0.0467 | 1.96 | 1-minute load 6.47–6.59; parity ok; open |
+| embedding backward | 0.8149 | 0.8905 | 0.92 | same invocations; torch steady, ojas swung; open |
+| embedding backward | 1.0295 | 0.8899 | 1.16 | same invocations; torch steady, ojas swung; open |
+| SiLU forward | 0.3650 | 0.3251 | 1.12 | 1-minute load 5.40–5.74; parity ok; not noisy; above 1; open |
+| SiLU forward | 0.3675 | 0.4059 | 0.91 | 1-minute load 6.76–6.94; parity ok; not noisy; one round above 1; open |
+| AdamW `[50304,768]` vs fused | 15.2515 | 13.4804 | 1.13 | 1-minute load 5.86–6.03; parity ok; not noisy; above 1; open |
+| AdamW `[50304,768]` vs fused | 11.0512 | 11.9570 | 0.92 | 1-minute load 5.56–6.24; parity ok; not noisy; one round above 1; open |
+| decode linear backward (qkvo / up / down) | 0.0500 / 0.1342 / 0.1388 | 0.0610 / 0.1694 / 0.1803 | 0.82 / 0.79 / 0.77 | both rounds at most 1; load average 7.29–7.79 |
+| decode linear backward (qkvo / up / down) | 0.0512 / 0.1380 / 0.1467 | 0.0594 / 0.1682 / 0.1806 | 0.86 / 0.82 / 0.81 | both rounds at most 1; load average 7.29–7.79 |
+
+Gate forward, two invocations of `cpu_vs_torch.sh 1 gate`, is 0.1401 / 0.1542 (0.91) at 1-minute load 9.02–8.73 and 0.1428 / 0.1541 (0.93) at 1-minute load 8.73. Ojas medians were 0.1480 and 0.1505 ms, neither above 1.5× its minimum. Parity on `y` was ok on both (`ok=True`). Both rounds are at most 1, so that gap is closed. Gate backward is 1.01 and 1.07. An earlier gate-backward round, 0.241 / 0.247 (0.98), is not the current pair; those backward rounds leave that gap open.
+
+Mul forward, two invocations of `cpu_vs_torch.sh 1 mul`, is 0.1167 / 0.1014 (1.15) at 1-minute load 5.14–5.21 and 0.1075 / 0.0876 (1.23) at 1-minute load 5.25–5.39. Parity on `y` was ok on both (`ok=True`). Both rounds are above 1, so that gap stays open. Mul backward on those same invocations is 0.2273 / 0.2766 (0.82) and 0.2437 / 0.2543 (0.96). Parity on `ga` and `gb` was ok on both (`ok=True`). Both rounds are at most 1, so that gap is closed.
+
+Muon `[768,768]` is 0.97 and 0.96. An earlier round was about 9.79 / 9.81. `[2048,768]` is 36.9958 / 31.1159 (1.19) and 31.7728 / 31.2013 (1.02) from `cpu_vs_torch.sh 1 muon_2048x768` at 1-minute load 7.26–8.13 and 6.50–6.14. Ojas medians were 37.9091 and 32.8547 ms, neither above 1.5× its minimum. Both rounds are above 1, so the shape stays open. `[3072,768]` is 0.87 and then 27.5074 / 32.0280 (0.86) from `cpu_vs_torch.sh 1 muon_3072x768` at load average 5.65–5.88, two rounds at most 1. Parity on `update` and `mom` was ok on both (`ok=True`). The Muon line stays open.
+
+Permute, on the caller-640 / worker-384 kernel that runs, is 0.0503 / 0.0612 (0.82) at 1-minute load 5.50–5.85 and 0.0503 / 0.0448 (1.12) at 1-minute load 5.78–6.36. Ojas medians were 0.0526 and 0.0534 ms, neither above 1.5× its minimum. Parity on `y` was ok on both (`ok=True`). The second round is above 1, so the line stays open. Each 64-float head is one 8×8 block: `ldnp` loads, `trn1`/`trn2` transpose it twice, `stnp` stores.
+
+Add forward, two invocations of `cpu_vs_torch.sh 1 add`, is 0.0544 / 0.0423 (1.29) at 1-minute load 3.89–4.71 and 0.0580 / 0.0468 (1.24) at 1-minute load 3.60. Parity on `z` was ok on both (`ok=True`). Both rounds are above 1, so the gap stays open. Add backward on the earlier load 17–20 runs is 7.94 and 8.52. The backward still writes two independent copies of the `[1024, 768]` gradient. That gap stays open.
+
+Embedding forward, two invocations of `cpu_vs_torch.sh 1 embedding`, is 0.0536 / 0.0478 (1.12) at 1-minute load 6.26–6.51 and 0.0914 / 0.0467 (1.96) at 1-minute load 6.47–6.59. Parity on `y` was ok on both (`ok=True`). Both rounds are above 1, so the gap stays open. The second ojas minimum's median was 0.1502 ms (1.64× that minimum). Embedding backward on the earlier load 17–20 runs is 0.92 and 1.16: torch stayed near 0.89 ms and ojas moved from 0.8149 ms to 1.0295 ms. That gap stays open.
+
+SiLU forward, two invocations of `cpu_vs_torch.sh 1 silu`, is 0.3650 / 0.3251 (1.12) at 1-minute load 5.40–5.74 and 0.3675 / 0.4059 (0.91) at 1-minute load 6.76–6.94. Ojas medians were 0.3905 and 0.4010 ms, neither above 1.5× its minimum. Parity on `y` was ok on both (`ok=True`). The first round is above 1, so the gap stays open. The earlier pairs stay in the tables above: 0.365 / 0.293 (1.25) at step 3, and 0.310 / 0.250 (1.24) after s11.
+
+Decode linear backward (`linear_dec_qkvo`, `linear_dec_up`, `linear_dec_down`), two invocations at load average 7.29–7.79, is 0.0500 / 0.1342 / 0.1388 against 0.0610 / 0.1694 / 0.1803 (0.82 / 0.79 / 0.77) and 0.0512 / 0.1380 / 0.1467 against 0.0594 / 0.1682 / 0.1806 (0.86 / 0.82 / 0.81). Every ratio on both rounds is at most 1. Parity on `gx` and `gw` was ok for all three shapes on both invocations. The step-3 row above stays the record of that day: 0.084 / 0.209 / 0.205 against 0.060 / 0.136 / 0.134 (1.4 / 1.5 / 1.5). This line does not complete the scorecard.
+
+AdamW `[50304,768]`, two invocations of `cpu_vs_torch.sh 1 adamw_50304x768`, is 15.2515 / 13.4804 (1.13) at 1-minute load 5.86–6.03 and 11.0512 / 11.9570 (0.92) at 1-minute load 5.56–6.24 against torch fused. Ojas medians were 19.8658 and 16.5200 ms, neither above 1.5× its minimum. Parity on `delta`, `m1`, and `m2` was ok on both (`ok=True`) for fused and for default. The first fused round is above 1, so the gap stays open. The same rounds against torch default are 15.2515 / 24.6588 (0.62) and 11.0512 / 17.1310 (0.65). The step-3 fused row remains that day's record (2.8 / 2.2 / 2.4) for `[768,768]` / `[3072,768]` / `[50304,768]`. The two-pass contract is unchanged: the check finishes before any store, and a non-finite update writes nothing.
+
+### Progress (2026-10-04)
+
+These notes are what the tree does. They are not scorecard closes.
+
+The fast gate sign/−abs path is one NEON pass, and the logit finite test is in that pass. Muon `A@A` and `B@X` use six row bands except on tall `[2048,768]`, where each of those products is one `cblas_sgemm`. `X@Xᵀ` uses two bands when `k < 2m`. The nanolab permute path is a width-2 copy, tile 32. Each 64-float head is one 8×8 block: `ldnp`, two `trn1`/`trn2` passes, `stnp`. Embedding forward reserves a 768-wide output without zero-fill and stores each row with `stnp` (`ldp` loads). Other widths still use `Scratch::try_alloc` and `copy_from_slice`. Add backward still writes two new tensors. AdamW still writes nothing until every update is finite. `ojas-cpu` still has no `unsafe`.
 
 ---
 
@@ -287,7 +352,7 @@ Correctness found along the way:
 - **torch's own f32 norm is off at this size.** For the 38.6M-element embedding gradient it returns 3.5700 against an exact 3.5886, a 0.5% error. The ojas clip norm is 5.5e-9 from f64.
 
 Known remaining gaps:
-- **Embedding forward was bound by the NaN scan of the whole table.** Since 2026-10-02 the table is scanned once and then not again until it is written (`Tensor::all_finite_cached`): `bench_ops` embedding forward fell to 0.08 of before by min of 9 interleaved rounds (0.09 by median), under a load of about 30. The ops-table row above has not been re-timed with torch. Metal and wgpu keep their own fault checks.
+- **Embedding forward was bound by the NaN scan of the whole table.** Since 2026-10-02 the table is scanned once and then not again until it is written (`Tensor::all_finite_cached`): `bench_ops` embedding forward fell to 0.08 of before by min of 9 interleaved rounds (0.09 by median), under a load of about 30. The 2026-10-04 torch pair is 0.0536 / 0.0478 (1.12) and 0.0914 / 0.0467 (1.96), and that gap stays open. Metal and wgpu keep their own fault checks.
 - **AdamW is two in-place passes, against torch's fused one.** The first pass only checks that every element's step is finite, so a NaN is refused before anything is written; torch's fused kernel writes in one pass and does not refuse a non-finite step. Fast does the element arithmetic in f32, as torch and the Metal kernel do; Exact keeps f64.
 - **Most ops still paid one copy out**: a kernel built its result in a `Vec` and the tensor was a copy of it. Fixed by typed-storage step 3 (2026-10-02): every op now writes straight into its output tensor (see the section above).
 

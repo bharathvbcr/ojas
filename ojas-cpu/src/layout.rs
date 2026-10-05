@@ -20,6 +20,33 @@ const PARALLEL_MIN_FLOATS: usize = 1 << 22;
 /// head of those 64 times is still in cache while the tile is written.
 const TILE_SPAN_BYTES: usize = 192 * 1024;
 
+/// Caller prefix of the 1024 time rows. The worker copies the other 384.
+#[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+const NANOLAB_CALLER_ROWS: usize = 640;
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+fn permute_simd(err: ojas_simd::SimdError) -> OjasError {
+    OjasError::Backend {
+        id: BackendId::Cpu,
+        detail: format!("permute: {err}"),
+    }
+}
+
+/// Joins a handoff if the caller returns before [`crate::pool::Handoff::join`].
+#[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+struct HandoffJoin<T: Send> {
+    handoff: Option<crate::pool::Handoff<T>>,
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+impl<T: Send> Drop for HandoffJoin<T> {
+    fn drop(&mut self) {
+        if let Some(handoff) = self.handoff.take() {
+            let _ = handoff.join();
+        }
+    }
+}
+
 /// `torch.permute(input, dims).contiguous()` for a host f32 tensor.
 ///
 /// The input is read in place from its contiguous window, so no host copy
@@ -34,8 +61,14 @@ const TILE_SPAN_BYTES: usize = 192 * 1024;
 /// under [`ojas_core::Numerics::Fast`], a rank-4 strided run of 64 floats with more
 /// than one row is instead one `vDSP_mmov` per head into that same spare
 /// capacity: still one reserve, and the move writes every output lane, so
-/// the buffer is not zero-filled. Exact, other ranks, other widths, and a
-/// single-row run stay on the append. At or above the cutoff, and whenever
+/// the buffer is not zero-filled. The nanolab shape `[B, 1024, 12, 64]`
+/// with `(0, 2, 1, 3)` is the exception: each token's two adjacent heads
+/// (128 floats) are loaded once and stored into those two head blocks, in
+/// tiles of 32 tokens, still with no zero-fill. One batch with a worker
+/// already running hands that worker the last 384 time rows first, then the
+/// caller copies the first 640, then waits. No worker stays on the one-call
+/// loop. Exact, other ranks, other widths, and a single-row run stay on the
+/// append. At or above the cutoff, and whenever
 /// the gathered runs are already adjacent, the output is a
 /// [`Scratch::try_alloc`] buffer. That buffer is zeroed first: the parallel
 /// split and the adjacent-run copies write by index, and an append of a
@@ -205,6 +238,10 @@ impl Gather {
         };
         #[cfg(target_os = "macos")]
         if runs.use_mmov(exec.numerics) {
+            #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+            if runs.nanolab_pairs() {
+                return runs.append_pairs(exec, src, budget);
+            }
             return runs.append_mmov(src, budget);
         }
         #[cfg(not(target_os = "macos"))]
@@ -216,11 +253,10 @@ impl Gather {
 impl Runs {
     /// Fast macOS, rank 4, more than one row of 64 strided floats.
     ///
-    /// For `[1, 1024, 12, 64]` and `(0, 2, 1, 3)` each attention head is 1024
-    /// rows of 64 columns. The source row stride is `inner_step` (768) and
-    /// the destination row stride is 64. Head `mid` starts at `mid * mid_step`
-    /// (64) in the source, while the next row is 768 away, so the heads are
-    /// not one matrix. One `vDSP_mmov` per head.
+    /// Each head is `inner_extent` rows of 64 columns. The source row stride
+    /// is `inner_step` and the destination row stride is 64. Head `mid`
+    /// starts at `mid * mid_step`, so the heads are not one matrix. One
+    /// `vDSP_mmov` per head, except [`Self::nanolab_pairs`].
     #[cfg(target_os = "macos")]
     fn use_mmov(&self, numerics: Numerics) -> bool {
         numerics == Numerics::Fast
@@ -228,6 +264,97 @@ impl Runs {
             && self.run == 64
             && self.inner_extent > 1
             && self.inner_step > self.run
+    }
+
+    /// `[B, 1024, 12, 64]` and `(0, 2, 1, 3)`: twelve heads, source pitch 768.
+    ///
+    /// Adjacent heads are contiguous in the token. The pair move loads 128
+    /// floats once per token instead of twelve strided `vDSP_mmov` passes.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+    fn nanolab_pairs(&self) -> bool {
+        self.inner_extent == 1024
+            && self.mid_extent == 12
+            && self.mid_step == 64
+            && self.inner_step == 768
+            && self.run == 64
+    }
+
+    /// One batch at a time, two heads per load, into spare capacity.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+    fn append_pairs(
+        &self,
+        exec: Exec<'_>,
+        src: &[f32],
+        budget: &Budget,
+    ) -> Result<Scratch<f32>, OjasError> {
+        let mut outcome: Result<(), OjasError> = Ok(());
+        let scratch = Scratch::try_extend(src.len(), budget, |dst| {
+            outcome = self.pairs_into(exec, src, dst);
+        });
+        match outcome {
+            Err(err) => Err(err),
+            Ok(()) => scratch,
+        }
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+    fn pairs_into(&self, exec: Exec<'_>, src: &[f32], dst: &mut Vec<f32>) -> Result<(), OjasError> {
+        const N: usize = 1024 * 768;
+        if self.head_count == 1 && exec.pool.workers_ready() {
+            let base = self.head_base(0);
+            let end = base
+                .checked_add(N)
+                .ok_or_else(|| mmov_refused("source end overflow"))?;
+            let window = src
+                .get(base..end)
+                .ok_or_else(|| mmov_refused("source window is short"))?;
+            if self.write_caller_band(exec, window, dst, NANOLAB_CALLER_ROWS)? {
+                return Ok(());
+            }
+        }
+        for head in 0..self.head_count {
+            let base = self.head_base(head);
+            let end = base
+                .checked_add(N)
+                .ok_or_else(|| mmov_refused("source end overflow"))?;
+            let window = src
+                .get(base..end)
+                .ok_or_else(|| mmov_refused("source window is short"))?;
+            ojas_simd::split_nanolab_head_pairs_append(window, dst).map_err(permute_simd)?;
+        }
+        Ok(())
+    }
+
+    /// Hand the worker its suffix, copy the caller prefix, then wait.
+    ///
+    /// `Ok(false)` means no worker took the band; the caller uses the
+    /// one-call loop. `caller_rows` is in `1..1024`.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
+    fn write_caller_band(
+        &self,
+        exec: Exec<'_>,
+        window: &[f32],
+        dst: &mut Vec<f32>,
+        caller_rows: usize,
+    ) -> Result<bool, OjasError> {
+        let ran =
+            ojas_simd::with_nanolab_token_bands(window, dst, caller_rows, |caller, worker| {
+                let Some(handoff) = exec.pool.try_handoff(move || worker.write()) else {
+                    drop(caller);
+                    return Ok(false);
+                };
+                let mut guard = HandoffJoin {
+                    handoff: Some(handoff),
+                };
+                caller.write();
+                let handoff = guard
+                    .handoff
+                    .take()
+                    .ok_or_else(|| mmov_refused("handoff dropped"))?;
+                handoff.join().map(|_| true)
+            })
+            .map_err(permute_simd)?;
+        ran
     }
 
     /// One `vDSP_mmov` per `(head, mid)` into spare capacity. `__M` is the

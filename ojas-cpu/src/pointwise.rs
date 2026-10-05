@@ -13,7 +13,9 @@
 //! thread ([`extend_sums`]; on macOS Fast add is one `vDSP_vadd` into that
 //! buffer). Fast gate forward's broadcast does not spawn either: each head
 //! is scaled by that head's sigmoid into a reserved output
-//! ([`scale_heads`]).
+//! ([`scale_heads`]). When workers are already running, macOS Fast overlaps
+//! the second logit band with the first band's scale on one of those
+//! workers and still does not spawn.
 //! No output value depends on which chunk computed it,
 //! so the bits do not depend on the thread count. Under [`Numerics::Exact`]
 //! every value is the scalar formula below, evaluated as written
@@ -34,6 +36,7 @@
 
 use std::borrow::Cow;
 use std::mem::MaybeUninit;
+use std::sync::Arc;
 
 use ojas_core::{
     exp_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims, Numerics, OjasError,
@@ -41,7 +44,7 @@ use ojas_core::{
 };
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
-use crate::gemm::{fma, gemm, gemm_out, scratch as gemm_scratch, Mat};
+use crate::gemm::{fma, gemm, gemm_out, scratch as gemm_scratch, whole_call, Mat};
 use crate::pool::scoped;
 use crate::pool::{Exec, ROW_MIN_ELEMS};
 use crate::validate::{
@@ -61,6 +64,12 @@ pub(crate) fn sigmoid(x: f32) -> f32 {
 
 /// The rows of `table` (`[vocab, dim]`, read in place) that `ids` pick,
 /// copied value for value into one charged tensor shaped `dims.out_shape`.
+///
+/// A row of 768 floats on aarch64 NEON is reserved with [`Scratch::try_extend`]
+/// and stored with `stnp`. The reserve does not write the buffer. Source
+/// loads are `ldp`. Every other width still zero-fills with
+/// [`Scratch::try_alloc`] and then `copy_from_slice`. The bits match that
+/// copy, including −0. A refusal drops the buffer and releases the one charge.
 pub(crate) fn embedding_forward(
     op: &'static str,
     budget: &Budget,
@@ -70,7 +79,12 @@ pub(crate) fn embedding_forward(
 ) -> Result<Tensor, OjasError> {
     check_ids(op, ids, dims.vocab)?;
     let row = dims.dim;
-    let mut out = Scratch::<f32>::try_alloc(product(op, &[dims.tokens, row])?, budget)?;
+    let n = product(op, &[dims.tokens, row])?;
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    if row == 768 && ids.len().checked_mul(row) == Some(n) {
+        return embedding_forward_stnp(op, budget, table, ids, n, &dims.out_shape);
+    }
+    let mut out = Scratch::<f32>::try_alloc(n, budget)?;
     for (dst, id) in out.as_mut_slice().chunks_exact_mut(row).zip(ids) {
         let start = id_index(*id) * row;
         let src = table
@@ -79,6 +93,46 @@ pub(crate) fn embedding_forward(
         dst.copy_from_slice(src);
     }
     Tensor::from_scratch(out, &dims.out_shape)
+}
+
+/// 768-wide gather. One charge, no zero-fill, `stnp` of each row.
+///
+/// [`ojas_simd::gather_embedding_rows_768`] writes every lane before `dst`'s
+/// length grows. A refusal leaves that length short, so [`Scratch::try_extend`]
+/// drops the vector and releases the charge. No partial tensor is returned.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+fn embedding_forward_stnp(
+    op: &'static str,
+    budget: &Budget,
+    table: &[f32],
+    ids: &[u32],
+    n: usize,
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let mut refused = None;
+    let scratch = Scratch::<f32>::try_extend(n, budget, |dst| {
+        if let Err(err) = ojas_simd::gather_embedding_rows_768(table, ids, dst) {
+            refused = Some(err);
+        }
+    });
+    if let Some(err) = refused {
+        drop(scratch);
+        return Err(gather_refused(op, err));
+    }
+    Tensor::from_scratch(scratch?, shape)
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+fn gather_refused(op: &'static str, err: ojas_simd::SimdError) -> OjasError {
+    match err {
+        ojas_simd::SimdError::BufferTooShort { .. } => {
+            outside(op, "embedding row exceeds the table")
+        }
+        other => OjasError::Backend {
+            id: BackendId::Cpu,
+            detail: format!("{op}: {other}"),
+        },
+    }
 }
 
 /// The table gradient: each row of `grad` (`ids.shape ++ [dim]`, read in
@@ -168,9 +222,11 @@ fn same_len(op: &'static str, lens: &[usize], what: &str) -> Result<(), OjasErro
 /// output. Fast off macOS is the same fill with [`crate::exp`]. Fast on
 /// macOS does not zero-fill: the output is reserved in `ojas-simd`, every
 /// lane is stored with `-|x|` before it is read, `vvexpf` overwrites those
-/// lanes, then the [`sigmoid_pair_fast`] pair runs on that memory. The
-/// vector is moved into the scratch under the same `len * 4` charge. A
-/// refusal drops it and releases the charge. Exact is unchanged.
+/// lanes, then the [`sigmoid_pair_fast`] pair runs on that memory. Each
+/// stored value is tested with `to_bits() & MAGNITUDE` on that value; the
+/// chunk is not reloaded for a second scan. The vector is moved into the
+/// scratch under the same `len * 4` charge. A refusal drops it and releases
+/// the charge. Exact is unchanged.
 pub(crate) fn silu_forward(
     op: &'static str,
     budget: &Budget,
@@ -234,10 +290,12 @@ fn silu_forward_fast(
         })?;
     let reservation = budget.try_reserve(bytes)?;
     let min_chunk = scoped::min_rows(1);
+    // 16 chunks. At 6 threads on `[1024, 2048]` forward this beat
+    // `threads * 2` (12) and 24 on both runs, minimum and median.
     let pieces = if n == 0 {
         0
     } else {
-        (n / min_chunk.max(1)).clamp(1, exec.pool.threads().saturating_mul(2))
+        (n / min_chunk.max(1)).clamp(1, 16)
     };
     let parts = if n == 0 {
         Vec::new()
@@ -265,14 +323,19 @@ fn silu_forward_fast(
         let src = &x[start..start + len];
         let finite = buf
             .write_chunk(i, src, |dst| {
+                // Same magnitude test as `all_finite`, on the value stored
+                // into this lane. There is no later pass over `dst`.
+                let mut top = 0u32;
                 for (d, &v) in dst.iter_mut().zip(src) {
                     let e = *d;
                     let big = 1.0 / (1.0 + e);
                     let small = e * big;
                     let s = if v >= 0.0 { big } else { small };
-                    *d = v * s;
+                    let y = v * s;
+                    *d = y;
+                    top = top.max(y.to_bits() & MAGNITUDE);
                 }
-                all_finite(dst)
+                top < NON_FINITE
             })
             .map_err(|err| vdsp_refused(op, err))?;
         Ok(finite)
@@ -781,8 +844,11 @@ fn extend_sums(
 /// the next, at 2,097,152 floats, did not beat one `vDSP_vadd` plus one scan
 /// (release, 6 threads, min of 20 after 2 warmups): warmed whole forward
 /// 0.206 ms, scan 0.081 ms. Chunks of 16384, 65536, 262144, and 1048576 were
-/// not faster on both the minimum and the median. The bits do not depend on
-/// the thread count.
+/// not faster on both the minimum and the median. Overlapping the scan of
+/// the first half with `vDSP_vadd` of the second, at `[1024, 768]` on 6
+/// threads, was also slower (release, min/median of 20: 0.081/0.092 ms and
+/// 0.074/0.082 ms against 0.057/0.063 ms and 0.055/0.063 ms at load about
+/// 4.5). The bits do not depend on the thread count.
 pub(crate) fn add_forward(
     op: &'static str,
     budget: &Budget,
@@ -932,6 +998,183 @@ fn copy_tile_into_both(src: &[f32], a: &mut Vec<f32>, b: &mut Vec<f32>) {
     }
 }
 
+/// macOS Fast, and only when a worker is already running: two row bands.
+/// `None` means the caller keeps the one-call product. A `Some` is the
+/// output and the full `[rows, heads]` sigmoid, in row order.
+#[allow(clippy::too_many_arguments)]
+fn overlapped_fast_gate(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    input: &[f32],
+    weight: &[f32],
+    bias: &[f32],
+    attn: &[f32],
+    attn_tensor: Option<&Tensor>,
+    dims: &GateDims,
+    out_shape: &[usize],
+) -> Result<Option<(Tensor, Vec<f32>)>, OjasError> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (
+            op,
+            budget,
+            exec,
+            input,
+            weight,
+            bias,
+            attn,
+            attn_tensor,
+            dims,
+            out_shape,
+        );
+        Ok(None)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if exec.numerics != Numerics::Fast {
+            return Ok(None);
+        }
+        let Some(attn_tensor) = attn_tensor else {
+            return Ok(None);
+        };
+        if !exec.pool.workers_ready() {
+            return Ok(None);
+        }
+        let (rows, din, heads, dh) = (dims.rows, dims.d_model, dims.heads, dims.head_dim);
+        if rows < 2 || heads == 0 || din == 0 || dh == 0 {
+            return Ok(None);
+        }
+        let mid = rows / 2;
+        let rest = rows - mid;
+        if !whole_call(Numerics::Fast, mid, din, heads)
+            || !whole_call(Numerics::Fast, rest, din, heads)
+        {
+            return Ok(None);
+        }
+        let width = product(op, &[heads, dh])?;
+        let full = product(op, &[rows, width])?;
+        let in0 = product(op, &[mid, din])?;
+        let in1 = product(op, &[rest, din])?;
+        let n0 = product(op, &[mid, width])?;
+        let Some(input_len) = in0.checked_add(in1) else {
+            return Ok(None);
+        };
+        if product(op, out_shape)? != full || attn.len() != full || input.len() != input_len {
+            return Ok(None);
+        }
+
+        let mut z0 = fast_row_logits(op, exec, &input[..in0], weight, bias, mid, din, heads)?;
+        map_logits(op, LogitSigmoid::Vvexpf, &mut z0)?;
+        if !all_finite(&z0) {
+            return Err(nonfinite(op));
+        }
+
+        let y_bytes = payload_bytes(op, full)?;
+        let y_reservation = budget.try_reserve(y_bytes)?;
+        let mut dst = Vec::new();
+        if dst.try_reserve_exact(full).is_err() {
+            drop(y_reservation);
+            return Err(OjasError::CapacityExceeded {
+                requested: y_bytes,
+                cap: budget.cap_bytes(),
+                live: budget.live_bytes()?,
+            });
+        }
+
+        let shared = Arc::new(attn_tensor.clone());
+        let gates0 = z0.clone();
+        let head_dim = dh;
+        let Some(handoff) = exec
+            .pool
+            .try_handoff(move || -> Result<Vec<f32>, OjasError> {
+                let values = shared.f32_slice()?;
+                if values.len() < n0 {
+                    return Err(shape(op, "gate attention shortened during broadcast"));
+                }
+                ojas_simd::scale_heads_append(&values[..n0], &gates0, head_dim, &mut dst)
+                    .map_err(|err| vdsp_refused(op, err))?;
+                Ok(dst)
+            })
+        else {
+            drop(y_reservation);
+            return Ok(None);
+        };
+
+        let mut z1 = match fast_row_logits(
+            op,
+            exec,
+            &input[in0..in0 + in1],
+            weight,
+            bias,
+            rest,
+            din,
+            heads,
+        ) {
+            Ok(z) => z,
+            Err(err) => {
+                let _ = handoff.join();
+                drop(y_reservation);
+                return Err(err);
+            }
+        };
+        let mut dst = match handoff.join() {
+            Ok(Ok(dst)) => dst,
+            Ok(Err(err)) | Err(err) => {
+                drop(y_reservation);
+                return Err(err);
+            }
+        };
+        if let Err(err) = map_logits(op, LogitSigmoid::Vvexpf, &mut z1) {
+            drop(dst);
+            drop(y_reservation);
+            return Err(err);
+        }
+        if !all_finite(&z1) {
+            drop(dst);
+            drop(y_reservation);
+            return Err(nonfinite(op));
+        }
+        if let Err(err) = ojas_simd::scale_heads_append(&attn[n0..], &z1, dh, &mut dst)
+            .map_err(|err| vdsp_refused(op, err))
+        {
+            drop(dst);
+            drop(y_reservation);
+            return Err(err);
+        }
+        let y = Tensor::from_scratch(Scratch::<f32>::try_adopt(dst, y_reservation)?, out_shape)?;
+        if !y.all_finite_cached(|_| Ok(true))? {
+            return Err(nonfinite(op));
+        }
+        z0.append(&mut z1);
+        Ok(Some((y, z0)))
+    }
+}
+
+/// Fast logits `input_rows · Wᵀ + b` for one row band. `input_rows` is
+/// `band_rows * din` values, row-major.
+#[cfg(target_os = "macos")]
+fn fast_row_logits(
+    op: &'static str,
+    exec: Exec<'_>,
+    input_rows: &[f32],
+    weight: &[f32],
+    bias: &[f32],
+    band_rows: usize,
+    din: usize,
+    heads: usize,
+) -> Result<Vec<f32>, OjasError> {
+    let a = Mat::row_major(input_rows, band_rows, din);
+    let w = Mat::row_major(weight, heads, din);
+    let mut z = gemm(op, exec, &a, &w.t())?;
+    for row in z.chunks_exact_mut(heads) {
+        for (v, &b) in row.iter_mut().zip(bias) {
+            *v += b;
+        }
+    }
+    Ok(z)
+}
+
 /// `weight` is `[n_head, d_model]` (nn.Linear with bias).
 /// `input` is `[..., d_model]`, `attn` is `[..., n_head, head_dim]`.
 /// Output is `attn * sigmoid(input @ W^T + bias)`, with the sigmoid
@@ -956,14 +1199,29 @@ fn copy_tile_into_both(src: &[f32], a: &mut Vec<f32>, b: &mut Vec<f32>) {
 /// 0.012, and the multiply about 0.005). One serial write of each `a * g`
 /// into spare capacity, interleaved the same way (min of 24 after 2
 /// warmups), made the whole forward 0.158 ms against 0.178 ms for that fill.
-/// On macOS Fast each stored sigmoid is then clamped into `[0, 1]` (a
-/// non-finite scale is refused, not turned into 0 or 1) and the output scan
-/// is skipped. Attention was already scanned on the way in, and a finite
-/// value times a scale in `[0, 1]` cannot overflow. Alternating at this
-/// shape on 6 threads, min of 24 after 2 warmups: 0.1237 ms against 0.1493 ms
-/// with the scan, and the clamp changed no bit of that output.
+/// On macOS Fast a non-finite scale is refused, not turned into 0 or 1, and
+/// the output scan is skipped. Every finite `vvexpf` scale is already in
+/// `[0, 1]`, so the forward does not rewrite it. Attention was already
+/// scanned on the way in, and a finite value times a scale in `[0, 1]`
+/// cannot overflow. Skipping that scan, while a clamp was still applied,
+/// made the whole forward 0.1237 ms against 0.1493 ms with the scan (min of
+/// 24 after 2 warmups, 6 threads, this shape), and the clamp changed no bit
+/// of the output. The clamp loop is not run on this forward. Interleaved in
+/// one process, 20 calls per block after 4 warmups of both, load 4.85 at
+/// both ends: no-clamp minima 142.708 µs and 135.459 µs against the
+/// preceding clamp minima 148.250 µs and 140.292 µs, medians 149.583 µs and
+/// 139.208 µs against 154.104 µs and 158.771 µs.
 ///
 /// `dims` comes from [`ojas_core::per_head_sigmoid_gate_forward_dims`].
+///
+/// On macOS Fast, when `attn_tensor` is the attention operand and this
+/// pool's workers are already running, the logits are two row bands. Band
+/// 0 is the product and the sigmoid. Band 1's product then runs on the
+/// caller while that worker scales band 0. Band 1's sigmoid and scale
+/// follow on the caller. The bands do not share writable memory. This does
+/// not spawn a thread and does not create a pool. Exact, Fast off macOS,
+/// a missing `attn_tensor`, and a pool whose workers are not already
+/// running stay one product and one scale.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gate_forward(
     op: &'static str,
@@ -973,6 +1231,7 @@ pub(crate) fn gate_forward(
     weight: &[f32],
     bias: &[f32],
     attn: &[f32],
+    attn_tensor: Option<&Tensor>,
     dims: GateDims,
     out_shape: &[usize],
     keep_scales: bool,
@@ -1000,6 +1259,26 @@ pub(crate) fn gate_forward(
     };
     // The logits phase, held while the output is charged and written.
     let _hold = room_for(op, budget, scratch)?;
+    if let Some((y, gates)) = overlapped_fast_gate(
+        op,
+        budget,
+        exec,
+        input,
+        weight,
+        bias,
+        attn,
+        attn_tensor,
+        &dims,
+        out_shape,
+    )? {
+        let scales = if let Some(reservation) = scale_charge {
+            Some(persist_gate_scales(&dims, gates, reservation)?)
+        } else {
+            drop(gates);
+            None
+        };
+        return Ok((y, scales));
+    }
     let mut gates = gate_values(op, exec, &dims, input, weight, bias)?;
     let (heads, dh) = (dims.heads, dims.head_dim);
     let width = heads * dh;
@@ -1052,10 +1331,11 @@ fn persist_gate_scales(
 /// Nothing is zero-filled and the pool is not used. When `scan_output` is
 /// set, a non-finite product drops the scratch, so the charge is released,
 /// and is [`OjasError::NonFinite`]; a finite output is recorded finite.
-/// The macOS Fast forward passes `false` only after `bound_sigmoid_scales`:
-/// attention was already scanned on the way in, and every scale that reaches
-/// the multiply is in `[0, 1]`, so the product cannot overflow and is
-/// recorded finite without a second pass. A `shape` whose element count is
+/// The macOS Fast forward passes `false` only after refusing a non-finite
+/// scale. Attention was already scanned on the way in, and every finite
+/// scale from the `vvexpf` sigmoid is already in `[0, 1]`, so the product
+/// cannot overflow and is recorded finite without a second pass. A `shape`
+/// whose element count is
 /// not `rows * width` is refused before the reserve, the same check as
 /// [`fill_rows`].
 #[allow(clippy::too_many_arguments)]
@@ -1097,9 +1377,11 @@ fn scale_heads(
     })
 }
 
-/// macOS Fast broadcast: clamp each finite sigmoid into `[0, 1]` and skip
-/// the output scan. Off macOS the stored scales are multiplied as they are
-/// and the products are scanned.
+/// Row count of band 0 when the macOS Fast logit product, and each half of
+/// macOS Fast broadcast: refuse a non-finite scale and skip the output
+/// scan. A finite scale is already in `[0, 1]` and is not rewritten. Off
+/// macOS the stored scales are multiplied as they are and the products are
+/// scanned.
 #[allow(clippy::too_many_arguments)]
 fn fast_gate_broadcast(
     op: &'static str,
@@ -1119,11 +1401,13 @@ fn fast_gate_broadcast(
         // attention value here is finite. The scales were just stored by
         // [`gate_values`]. A non-finite scale is refused here, before the
         // output is reserved, and the logit charge in [`gate_forward`]
-        // drops with this error. A finite scale outside `[0, 1]` is clamped
-        // to that interval (`-0` stays `-0`). The multiply is then a finite
-        // value times a scale in `[0, 1]`, which cannot overflow, so the
-        // broadcast is not scanned.
-        bound_sigmoid_scales(op, gates)?;
+        // drops with this error. A finite scale is already in `[0, 1]`
+        // (`-0` stays `-0`) and is not rewritten. The multiply is then a
+        // finite value times a scale in `[0, 1]`, which cannot overflow, so
+        // the broadcast is not scanned.
+        if !all_finite(gates) {
+            return Err(nonfinite(op));
+        }
         scale_heads(
             op, budget, attn, gates, head_dim, rows, width, out_shape, false,
         )
@@ -1182,9 +1466,10 @@ pub(crate) type GateGrads<'a> = [&'a mut [f32]; 4];
 /// 0.2974 ms against 0.3226 ms with the `grad_attn` scan. The clamp changed
 /// no bit of that backward.
 ///
-/// A Fast caller can pass the scale the forward kept (`[rows, heads]`).
-/// That skips the logit product. The scale is a tensor the caller hands
-/// back, so it is held to the same rule on every platform. The scale is
+/// A Fast caller can pass the scale the forward kept (`[rows, heads]`,
+/// already in `[0, 1]` on macOS). That skips the logit product. The scale
+/// is a tensor the caller hands back, so it is held to the same rule on
+/// every platform. The scale is
 /// borrowed when every value is finite and in `[0, 1]`; a finite value
 /// outside that interval is copied and clamped, and a non-finite scale
 /// refuses and releases the scratch charge. `grad_bias` and the two GEMM
@@ -2230,6 +2515,18 @@ mod tests {
         let err = mul_forward("t", &budget, exec, &[f32::MAX], &[f32::MAX], &[1]).unwrap_err();
         assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
         assert_eq!(budget.live_bytes().unwrap(), 0);
+
+        let err = mul_forward(
+            "t",
+            &budget,
+            exec,
+            &[1.0, 0.0, -0.0],
+            &[2.0, f32::INFINITY, f32::NEG_INFINITY],
+            &[3],
+        )
+        .unwrap_err();
+        assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+        assert_eq!(budget.live_bytes().unwrap(), 0);
     }
 
     /// Both gradients are adopted together. A charge that cannot cover the
@@ -2354,6 +2651,7 @@ mod tests {
             &weight,
             &bias,
             &attn,
+            None,
             dims,
             &[dims.rows, dims.heads, dims.head_dim],
             true,
@@ -2371,6 +2669,121 @@ mod tests {
             "saved scale charged twice: peak {peak} > logit hold + output {once} (extra {})",
             peak.saturating_sub(once)
         );
+    }
+
+    /// A pool whose workers are already running still charges the saved
+    /// scale once. On macOS that is the two-band path. A logit that
+    /// overflows only in the second band is refused and releases the charge.
+    #[test]
+    fn live_worker_gate_scale_is_charged_once_and_a_late_overflow_releases() {
+        let budget = Budget::new(1 << 28);
+        let pool = Arc::new(Pool::new(4).unwrap());
+        pool.start().unwrap();
+        assert!(pool.workers_ready());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        let dims = GateDims {
+            rows: 64,
+            d_model: 128,
+            heads: 16,
+            head_dim: 4,
+        };
+        let input = vec![0.02f32; dims.rows * dims.d_model];
+        let weight = vec![0.01f32; dims.heads * dims.d_model];
+        let bias = vec![0.0f32; dims.heads];
+        let attn = vec![0.25f32; dims.rows * dims.heads * dims.head_dim];
+        let attn_budget = Budget::new(1 << 28);
+        let attn_tensor =
+            Tensor::from_f32(&attn, &[dims.rows, dims.heads, dims.head_dim], &attn_budget).unwrap();
+        let serial_pool = Arc::new(Pool::new(1).unwrap());
+        let serial = Exec {
+            pool: &serial_pool,
+            numerics: Numerics::Fast,
+        };
+        let (y_serial, scale_serial) = gate_forward(
+            "t",
+            &Budget::new(1 << 28),
+            serial,
+            &input,
+            &weight,
+            &bias,
+            &attn,
+            None,
+            dims,
+            &[dims.rows, dims.heads, dims.head_dim],
+            true,
+        )
+        .unwrap();
+        let (y, scales) = gate_forward(
+            "t",
+            &budget,
+            exec,
+            &input,
+            &weight,
+            &bias,
+            &attn,
+            Some(&attn_tensor),
+            dims,
+            &[dims.rows, dims.heads, dims.head_dim],
+            true,
+        )
+        .unwrap();
+        let scales = scales.expect("fast forward keeps the scale");
+        let y_bytes = payload_bytes("t", y.num_elements().unwrap()).unwrap();
+        let z_bytes = payload_bytes("t", scales.num_elements().unwrap()).unwrap();
+        assert_eq!(budget.live_bytes().unwrap(), y_bytes + z_bytes);
+        let logit = payload_bytes("t", logit_work("t", exec, &dims).unwrap()).unwrap();
+        let peak = budget.peak_bytes();
+        let once = logit + y_bytes;
+        assert!(
+            peak <= once,
+            "saved scale charged twice: peak {peak} > logit hold + output {once} (extra {})",
+            peak.saturating_sub(once)
+        );
+        let y_ref = y_serial.f32_slice().unwrap();
+        let y_got = y.f32_slice().unwrap();
+        let scale = y_ref.iter().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-6);
+        for (got, want) in y_got.iter().zip(y_ref) {
+            assert!(
+                (got - want).abs() <= 1e-5 * scale,
+                "live-worker gate left the one-call band: {got} vs {want}"
+            );
+        }
+        let s_ref = scale_serial.expect("serial fast keeps the scale");
+        for (got, want) in scales
+            .f32_slice()
+            .unwrap()
+            .iter()
+            .zip(s_ref.f32_slice().unwrap())
+        {
+            assert!((got - want).abs() <= 1e-5, "scale {got} vs {want}");
+        }
+        drop((y, scales, y_serial, s_ref));
+        assert_eq!(budget.live_bytes().unwrap(), 0);
+
+        let mut late = input.clone();
+        let mid = dims.rows / 2 * dims.d_model;
+        late[mid..].fill(1e20);
+        let heavy = vec![1e20f32; weight.len()];
+        let before = budget.live_bytes().unwrap();
+        let err = gate_forward(
+            "t",
+            &budget,
+            exec,
+            &late,
+            &heavy,
+            &bias,
+            &attn,
+            Some(&attn_tensor),
+            dims,
+            &[dims.rows, dims.heads, dims.head_dim],
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+        assert_eq!(budget.live_bytes().unwrap(), before);
     }
 
     /// NEON signs and `-|z|` match the scalar loop, including a tail and
@@ -2432,5 +2845,244 @@ mod tests {
         assert_eq!(zeros[1].to_bits(), (-0.0f32).to_bits());
         assert_eq!(zeros[2].to_bits(), (-0.0f32).to_bits());
         assert_eq!(zeros[3].to_bits(), (-1.0f32).to_bits());
+    }
+
+    /// Finite fast-path scales stay bit-identical to the unclamped sigmoid,
+    /// including `-0` and subnormals. NaN and infinities are refused and are
+    /// not stored as 0 or 1. A logit that overflows the product is refused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fast_gate_finite_scales_match_the_unclamped_sigmoid() {
+        // `(logit bits, scale bits)` from `vvexpf(-|z|)` and the stable pair.
+        const LOCKED: &[(u32, u32)] = &[
+            (0x0000_0000, 0x3f00_0000),
+            (0x8000_0000, 0x3f00_0000),
+            (0x3f80_0000, 0x3f3b_26a8),
+            (0xbf80_0000, 0x3e89_b2b1),
+            (0x3f00_0000, 0x3f1f_597f),
+            (0xbf00_0000, 0x3ec1_4d03),
+            (0x4000_0000, 0x3f61_7bea),
+            (0xc000_0000, 0x3df4_20a8),
+            (0x4100_0000, 0x3f7f_ea06),
+            (0xc100_0000, 0x39af_d1ef),
+            (0x41a0_0000, 0x3f80_0000),
+            (0xc1a0_0000, 0x310d_a433),
+            (0x42a0_0000, 0x3f80_0000),
+            (0xc2a0_0000, 0x05bf_ecbb),
+            (0x42b0_0000, 0x3f80_0000),
+            (0xc2b0_0000, 0x0041_edc4),
+            (0x42c8_0000, 0x3f80_0000),
+            (0xc2c8_0000, 0x0000_001b),
+            (0x0080_0000, 0x3f00_0000),
+            (0x8080_0000, 0x3f00_0000),
+            (0x0000_0001, 0x3f00_0000),
+            (0x8000_0001, 0x3f00_0000),
+            (0x1e3c_e508, 0x3f00_0000),
+            (0x9e3c_e508, 0x3f00_0000),
+            (0x7f7f_ffff, 0x3f80_0000),
+            (0xff7f_ffff, 0x0000_0000),
+            (0x3dcc_cccd, 0x3f06_6509),
+            (0xbdcc_cccd, 0x3ef3_35ec),
+        ];
+        let mut logits: Vec<f32> = LOCKED.iter().map(|(z, _)| f32::from_bits(*z)).collect();
+        let mut signs = Vec::new();
+        let mut zeros = [-0.0f32];
+        ojas_simd::store_neg_abs_signs(&mut zeros, &mut signs).unwrap();
+        assert_eq!(signs, [0]);
+        assert_eq!(zeros[0].to_bits(), (-0.0f32).to_bits());
+        for exp in 0u32..255 {
+            for mant in [0u32, 1, 0x20_0000, 0x7f_ffff] {
+                let bits = (exp << 23) | mant;
+                let pos = f32::from_bits(bits);
+                if pos.is_finite() {
+                    logits.push(pos);
+                    logits.push(f32::from_bits(bits | 0x8000_0000));
+                }
+            }
+        }
+        for i in -400..=400 {
+            logits.push((i as f32) * 0.05);
+        }
+        let mut state = 0x1234_5678_9abc_def0u64;
+        for _ in 0..8192 {
+            state = state
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(0x6a09_e667);
+            let z = f32::from_bits(state as u32);
+            if z.is_finite() {
+                logits.push(z);
+            }
+        }
+        map_logits_vvexpf("t", &mut logits).unwrap();
+        for (i, &(z_bits, want)) in LOCKED.iter().enumerate() {
+            assert_eq!(logits[i].to_bits(), want, "logit {z_bits:#x}");
+        }
+        assert_scales_already_clamped(&logits);
+        let before: Vec<u32> = logits.iter().map(|v| v.to_bits()).collect();
+        let budget = Budget::new(1 << 26);
+        let n = logits.len();
+        let attn = vec![1.0f32; n];
+        let y = fast_gate_broadcast("t", &budget, &attn, &mut logits, 1, n, 1, &[n]).unwrap();
+        assert_eq!(
+            logits.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            before,
+            "broadcast rewrote a scale"
+        );
+        assert_eq!(
+            y.f32_slice()
+                .unwrap()
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            before
+        );
+        drop(y);
+        assert_eq!(budget.live_bytes().unwrap(), 0);
+
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for at in [0usize, 2, 5] {
+                let mut gates = [0.25f32, 0.5, -0.0, 1.0, 0.0, 0.75];
+                gates[at] = bad;
+                let prior: Vec<u32> = gates.iter().map(|v| v.to_bits()).collect();
+                let err = fast_gate_broadcast("t", &budget, &[1.0; 6], &mut gates, 1, 6, 1, &[6])
+                    .unwrap_err();
+                assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+                assert_eq!(gates.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), prior);
+                assert_ne!(gates[at].to_bits(), 0);
+                assert_ne!(gates[at].to_bits(), 0x3f80_0000);
+                assert_eq!(budget.live_bytes().unwrap(), 0);
+            }
+        }
+
+        let pool = Arc::new(Pool::new(6).unwrap());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        let dims = GateDims {
+            rows: 2,
+            d_model: 4,
+            heads: 2,
+            head_dim: 3,
+        };
+        let err = gate_forward(
+            "t",
+            &budget,
+            exec,
+            &[1e30; 8],
+            &[1e30; 8],
+            &[0.0; 2],
+            &[1.0; 12],
+            None,
+            dims,
+            &[2, 2, 3],
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+        assert_eq!(budget.live_bytes().unwrap(), 0);
+
+        let wide = Budget::new(1 << 30);
+        let dims = GateDims {
+            rows: 1024,
+            d_model: 768,
+            heads: 12,
+            head_dim: 64,
+        };
+        let input: Vec<f32> = (0..1024 * 768)
+            .map(|i| ((i % 17) as f32) * 0.01 - 0.08)
+            .collect();
+        let weight: Vec<f32> = (0..12 * 768)
+            .map(|i| ((i % 13) as f32) * 0.002 - 0.01)
+            .collect();
+        let bias: Vec<f32> = (0..12).map(|i| (i as f32) * 0.15 - 0.7).collect();
+        let attn = vec![0.3f32; 1024 * 12 * 64];
+        let (y, scales) = gate_forward(
+            "t",
+            &wide,
+            exec,
+            &input,
+            &weight,
+            &bias,
+            &attn,
+            None,
+            dims,
+            &[1024, 12, 64],
+            true,
+        )
+        .unwrap();
+        let scales = scales.expect("fast forward keeps the scale");
+        assert_scales_already_clamped(scales.f32_slice().unwrap());
+        assert!(y.f32_slice().unwrap().iter().all(|v| v.is_finite()));
+        drop((y, scales));
+        assert_eq!(wide.live_bytes().unwrap(), 0);
+    }
+
+    /// Every finite f32 logit. About 9s. The run on 2026-10-04 checked
+    /// 4_278_190_080 values with `changed = 0` and `nonfinite_scale = 0`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn every_finite_logit_sigmoid_matches_its_clamp() {
+        const CHUNK: usize = 1 << 22;
+        const END: u32 = 0x7f80_0000;
+        let mut buf = vec![0.0f32; CHUNK];
+        let mut bits = 0u32;
+        let mut checked = 0u64;
+        while bits < END {
+            let n = ((END - bits) as usize).min(CHUNK);
+            for i in 0..n {
+                buf[i] = -f32::from_bits(bits + i as u32).abs();
+            }
+            ojas_simd::vvexpf_inplace(&mut buf[..n]).unwrap();
+            for i in 0..n {
+                let mag = bits + i as u32;
+                let e = buf[i];
+                check_pair(e, false, &mut checked);
+                if mag == 0 {
+                    check_pair(e, false, &mut checked);
+                } else {
+                    check_pair(e, true, &mut checked);
+                }
+            }
+            bits += n as u32;
+        }
+        assert_eq!(checked, 4_278_190_080);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn assert_scales_already_clamped(scales: &[f32]) {
+        for &s in scales {
+            assert!(s.is_finite(), "{s:?}");
+            let c = if s < 0.0 {
+                0.0
+            } else if s > 1.0 {
+                1.0
+            } else {
+                s
+            };
+            assert_eq!(s.to_bits(), c.to_bits(), "{s:?}");
+            assert!((0.0..=1.0).contains(&s), "{s:?}");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn check_pair(e: f32, neg: bool, checked: &mut u64) {
+        let big = 1.0 / (1.0 + e);
+        let scale = if neg { e * big } else { big };
+        assert!(scale.is_finite(), "e={e:?} neg={neg}");
+        let c = if scale < 0.0 {
+            0.0
+        } else if scale > 1.0 {
+            1.0
+        } else {
+            scale
+        };
+        assert_eq!(
+            scale.to_bits(),
+            c.to_bits(),
+            "e={e:?} neg={neg} scale={scale:?}"
+        );
+        *checked += 1;
     }
 }

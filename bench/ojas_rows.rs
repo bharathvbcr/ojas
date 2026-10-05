@@ -499,6 +499,96 @@ pub fn run_all<Bk: Backend>(r: &mut Runner<'_, Bk>) {
     block(r);
     decode_attention(r);
     accumulate_grad(r);
+    sweep(r);
+}
+
+/// Element counts of the fixed-cost sweep: one value up to `[4096, 2048]`.
+pub const SWEEP_N: [usize; 8] = [
+    1,
+    1 << 12,
+    1 << 16,
+    1 << 18,
+    1 << 20,
+    1 << 21,
+    1 << 22,
+    1 << 23,
+];
+/// Request counts of the decode sweep.
+pub const SWEEP_B: [usize; 5] = [1, 2, 4, 8, 16];
+
+/// Where the per-op fixed cost stops dominating.
+///
+/// - `sweep_silu_n{N}`: one `silu_forward` over `N` values, so `t(N)` splits
+///   into a fixed part and a per-value part.
+/// - `sweep_decode_b{B}`: `B` decode requests as one batched
+///   `cached_attention_forward` (q `[B, 1, H, D]`, caches `[B, T, H, D]`).
+/// - `sweep_decode_x{B}` (B > 1): the same `B` requests, the same bytes, as
+///   `B` separate batch-1 calls recorded before one sync. `x` minus `b` is
+///   the cost of dispatching the requests one at a time.
+fn sweep<Bk: Backend>(r: &mut Runner<'_, Bk>) {
+    for n in SWEEP_N {
+        let name = format!("sweep_silu_n{n}");
+        r.group(&[name.as_str()], |r| {
+            let x = r.dev(&[n], 161, 0)?;
+            let s = spec(&[("x", &[n], 161, 0)]);
+            r.op(&name, &s, TOL, |r| Ok(vec![r.be.silu_forward(&x)?]));
+            Ok(())
+        });
+    }
+    for b in SWEEP_B {
+        let batched = format!("sweep_decode_b{b}");
+        let split = format!("sweep_decode_x{b}");
+        let names: Vec<&str> = if b > 1 {
+            vec![batched.as_str(), split.as_str()]
+        } else {
+            vec![batched.as_str()]
+        };
+        r.group(&names, |r| {
+            let (qs, cs) = ([b, 1, H, D], [b, T, H, D]);
+            let (q1, c1) = ([1, 1, H, D], [1, T, H, D]);
+            let host = [
+                gen(b * H * D, 171, 0),
+                gen(b * T * H * D, 172, 0),
+                gen(b * T * H * D, 173, 0),
+            ];
+            let s = format!(
+                "{};kv_len:{T}",
+                spec(&[
+                    ("q", &qs, 171, 0),
+                    ("k_cache", &cs, 172, 0),
+                    ("v_cache", &cs, 173, 0),
+                ])
+            );
+            if r.want(&batched) {
+                let up = |v: &[f32], sh: &[usize]| r.be.upload(&Tensor::from_f32(v, sh, &r.host)?);
+                let (q, k, v) = (up(&host[0], &qs)?, up(&host[1], &cs)?, up(&host[2], &cs)?);
+                r.op(&batched, &s, TOL, |r| {
+                    Ok(vec![r.be.cached_attention_forward(&q, &k, &v, T)?])
+                });
+            }
+            if b > 1 && r.want(&split) {
+                // Request i is rows i of the batched inputs, uploaded alone.
+                let mut reqs = Vec::with_capacity(b);
+                for i in 0..b {
+                    let part = |v: &[f32], sh: &[usize]| {
+                        let len: usize = sh.iter().product();
+                        r.be.upload(&Tensor::from_f32(&v[i * len..(i + 1) * len], sh, &r.host)?)
+                    };
+                    reqs.push((
+                        part(&host[0], &q1)?,
+                        part(&host[1], &c1)?,
+                        part(&host[2], &c1)?,
+                    ));
+                }
+                r.op(&split, &format!("{s};requests:{b}"), TOL, |r| {
+                    reqs.iter()
+                        .map(|(q, k, v)| r.be.cached_attention_forward(q, k, v, T))
+                        .collect()
+                });
+            }
+            Ok(())
+        });
+    }
 }
 
 fn floor<Bk: Backend>(r: &mut Runner<'_, Bk>) {

@@ -735,6 +735,191 @@ pub fn vdsp_mmov_append(
     Ok(())
 }
 
+/// Append one batch of nanolab head pairs onto `dst`.
+///
+/// The source is 1024 tokens of 12 heads of 64 floats, packed, so the pitch
+/// is 768 and `src` must cover `1024 * 768` floats. Head `h` of token `t`
+/// is the 64 floats at `t * 768 + h * 64`. The destination is 12 contiguous
+/// blocks of `1024 * 64` floats, head `h` then token `t`.
+///
+/// Adjacent heads are loaded once per token (128 floats) and stored into
+/// the two head blocks. Each head is one 8×8 block transposed in registers
+/// and transposed back, so the stored lanes match the load. Tokens are
+/// visited in tiles of 32, one pair of heads at a time, so two destination
+/// blocks are live. Nothing is zero-filled: the 786_432 floats are written
+/// into spare capacity and `dst` grows by that count. Every lane is stored.
+/// −0, NaN payloads, and subnormals are unchanged. This does not call vDSP.
+///
+/// `dst` must already have room for those elements. On error `dst` is
+/// unchanged. The new elements must not overlap `src`.
+///
+/// Compiled only on aarch64 with NEON.
+///
+/// # Errors
+///
+/// [`SimdError::BufferTooShort`] when `src` is shorter than one batch.
+/// [`SimdError::OutputLength`] when spare capacity is short (`output` is
+/// the spare count). [`SimdError::OverlappingOutput`] when the spare range
+/// overlaps `src`. A refusal does not write `dst`.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub fn split_nanolab_head_pairs_append(src: &[f32], dst: &mut Vec<f32>) -> Result<(), SimdError> {
+    const N: usize = 1024 * 768;
+    if src.len() < N {
+        return Err(SimdError::BufferTooShort {
+            operand: Operand::A,
+            required: N,
+            len: src.len(),
+        });
+    }
+    let spare = dst.capacity() - dst.len();
+    if spare < N {
+        return Err(SimdError::OutputLength {
+            output: spare,
+            expected: N,
+        });
+    }
+    let dest = dst.as_ptr().wrapping_add(dst.len());
+    if ranges_overlap(src.as_ptr(), N, dest, N) {
+        return Err(SimdError::OverlappingOutput);
+    }
+    arch::split_nanolab_head_pairs_append(src, dst);
+    Ok(())
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub use arch::NanolabTokenBand;
+
+/// Run `body` on two disjoint time-row bands of one nanolab batch.
+///
+/// `caller_tokens` is the caller's prefix of the 1024 tokens. The other band
+/// is the remaining suffix. `body` receives `(caller, worker)`. Return
+/// `Ok(true)` only after both bands have been `write`n, including a write
+/// that ran on another thread: this then grows `dst` by the batch. Return
+/// `Ok(false)` to leave `dst` unchanged so the caller can take the one-call
+/// path. `Err` also leaves `dst` unchanged.
+///
+/// The worker band must be finished before `body` returns `Ok(true)`. Nothing
+/// is zero-filled. −0 is preserved. `dst` must already have room for
+/// `1024 * 768` elements.
+///
+/// # Errors
+///
+/// [`SimdError::LengthTooLarge`] when `caller_tokens` is `0` or at least 1024.
+/// [`SimdError::BufferTooShort`] when `src` is shorter than one batch.
+/// [`SimdError::OutputLength`] when spare capacity is short.
+/// [`SimdError::OverlappingOutput`] when the spare range overlaps `src`.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub fn with_nanolab_token_bands<E>(
+    src: &[f32],
+    dst: &mut Vec<f32>,
+    caller_tokens: usize,
+    body: impl FnOnce(NanolabTokenBand, NanolabTokenBand) -> Result<bool, E>,
+) -> Result<Result<bool, E>, SimdError> {
+    const TOKENS: usize = 1024;
+    const N: usize = TOKENS * 768;
+    if caller_tokens == 0 || caller_tokens >= TOKENS {
+        return Err(SimdError::LengthTooLarge { len: caller_tokens });
+    }
+    if src.len() < N {
+        return Err(SimdError::BufferTooShort {
+            operand: Operand::A,
+            required: N,
+            len: src.len(),
+        });
+    }
+    let spare = dst.capacity() - dst.len();
+    if spare < N {
+        return Err(SimdError::OutputLength {
+            output: spare,
+            expected: N,
+        });
+    }
+    let dest = dst.as_ptr().wrapping_add(dst.len());
+    if ranges_overlap(src.as_ptr(), N, dest, N) {
+        return Err(SimdError::OverlappingOutput);
+    }
+    let spare_dst = dst.spare_capacity_mut().as_mut_ptr().cast::<f32>();
+    let src_ptr = src.as_ptr();
+    let caller = NanolabTokenBand::new(src_ptr, spare_dst, 0, caller_tokens);
+    let worker = NanolabTokenBand::new(src_ptr, spare_dst, caller_tokens, TOKENS - caller_tokens);
+    let outcome = body(caller, worker);
+    if matches!(outcome, Ok(true)) {
+        // `body` returned `Ok(true)` only after both bands stored their
+        // tokens. Those ranges partition the batch, so all `N` spare lanes
+        // are initialized.
+        arch::commit_nanolab_spare(dst, N);
+    }
+    Ok(outcome)
+}
+
+/// Append gathered embedding rows of 768 floats onto `dst`.
+///
+/// Row `i` of the output is `table[ids[i] * 768 ..][..768]`, in id order.
+/// `table.len()` must be a multiple of 768. The copy is a move: `ldp` loads
+/// each row and `stnp` stores it into spare capacity. Nothing is zero-filled.
+/// `dst` grows by `ids.len() * 768` only after every row is stored. −0, NaN
+/// payloads, and subnormals are unchanged. A 768-float row is twelve blocks
+/// of 64, so this kernel has no tail.
+///
+/// `dst` must already have room for those elements. On error `dst` is
+/// unchanged. The new elements must not overlap `table`.
+///
+/// Compiled only on aarch64 with NEON.
+///
+/// # Errors
+///
+/// [`SimdError::BufferTooShort`] when `table` is not a whole number of rows,
+/// or an id selects a row past `table`. [`SimdError::LengthTooLarge`] when
+/// `ids.len() * 768` overflows. [`SimdError::OutputLength`] when spare
+/// capacity is short (`output` is the spare count). [`SimdError::OverlappingOutput`]
+/// when the spare range overlaps `table`. A refusal does not write `dst`.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub fn gather_embedding_rows_768(
+    table: &[f32],
+    ids: &[u32],
+    dst: &mut Vec<f32>,
+) -> Result<(), SimdError> {
+    const ROW: usize = 768;
+    if !table.len().is_multiple_of(ROW) {
+        return Err(SimdError::BufferTooShort {
+            operand: Operand::A,
+            required: table.len().div_ceil(ROW) * ROW,
+            len: table.len(),
+        });
+    }
+    let vocab = table.len() / ROW;
+    let n = match ids.len().checked_mul(ROW) {
+        Some(n) => n,
+        None => return Err(SimdError::LengthTooLarge { len: ids.len() }),
+    };
+    if n == 0 {
+        return Ok(());
+    }
+    for &id in ids {
+        if id as usize >= vocab {
+            let required = (id as usize).saturating_add(1).saturating_mul(ROW);
+            return Err(SimdError::BufferTooShort {
+                operand: Operand::A,
+                required,
+                len: table.len(),
+            });
+        }
+    }
+    let spare = dst.capacity() - dst.len();
+    if spare < n {
+        return Err(SimdError::OutputLength {
+            output: spare,
+            expected: n,
+        });
+    }
+    let dest = dst.as_ptr().wrapping_add(dst.len());
+    if ranges_overlap(table.as_ptr(), table.len(), dest, n) {
+        return Err(SimdError::OverlappingOutput);
+    }
+    arch::gather_embedding_rows_768(table, ids, dst);
+    Ok(())
+}
+
 /// `y[i] = exp(x[i])` through Accelerate vForce `vvexpf`.
 ///
 /// The macOS SDK declares

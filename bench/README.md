@@ -29,7 +29,7 @@ bytecode writing is disabled so that checkout is not touched).
 | :-- | :-- |
 | `run_paired.sh` | Builds the two release examples first (a stale binary looks like a valid run), records the toolchain (`env.txt`, `env_torch.json`), writes the torch references, then runs N rounds. Odd rounds run Metal, wgpu, torch; even rounds torch, wgpu, Metal. `uptime` load and `ioreg` "Device Utilization %" are recorded before and after every runtime block (`load.jsonl`). A crashed lane is recorded as such and the run continues. Ends with `aggregate.py`. |
 | `ojas_rows.rs` | The ojas side, generic over `ojas_core::Backend`: the shared input generator, the parity gate and the timing loop, and every row. Compiled into both examples by `#[path]`. |
-| `../ojas-metal/examples/metal_vs_torch.rs` | Opens `MetalBackend` and runs the rows. Metal ops synchronize before they return, so `Backend::sync` (the trait default, a no-op) adds nothing. |
+| `../ojas-metal/examples/metal_vs_torch.rs` | Opens `MetalBackend` and runs the rows. Metal ops are recorded and return before the device runs them (`docs/metal-deferred-faults.md`); `Backend::sync` after every iteration waits for them and reports any deferred fault. |
 | `../ojas-wgpu/examples/wgpu_vs_torch.rs` | Opens `WgpuBackend` and runs the rows with `Backend::sync` (submit and wait) after every iteration. Its first output line records the adapter and the HAL. |
 | `torch_rows.py` | The torch twin of every row. `ref` writes the reference outputs, `time` times the rows, `env` records versions and checks the optimizer parameter list against `GPT(Config())`. |
 | `aggregate.py` | Per-round ratios, spread flags, the ranked list and the load table, as markdown. |
@@ -55,8 +55,8 @@ bytecode writing is disabled so that checkout is not touched).
   their ranges.
 - **Timing.** Inputs are allocated once per row. 5 warm-ups (minimum), then 20
   timed iterations (minimum); each iteration is the op plus the device
-  synchronize (`torch.mps.synchronize()`; nothing extra for Metal;
-  `Backend::sync`, submit and wait, for wgpu). Each run reports min and median.
+  synchronize (`torch.mps.synchronize()`; `Backend::sync`, submit and wait,
+  for Metal and wgpu). Each run reports min and median.
 - **Pairing.** Per row, `ratio = torch median / ojas median` within a round
   (> 1: ojas faster). The summary reports the median ratio over rounds with its
   min and max, and each side's spread (max / min of its per-round medians). A
@@ -102,11 +102,21 @@ bytecode writing is disabled so that checkout is not touched).
   backward (neither GPU crate depends on `ojas-autograd`, so `Tape` cannot
   drive it from these examples). Parity checks the output and seven gradients.
   The forward is 24 device ops and forward + backward 53 (a residual add's
-  gradient passes through, so `residual_add_backward` is not called). On wgpu
-  the block records all of them and synchronizes once per iteration, while
-  each per-kernel row synchronizes after its one op, so the block is not the
-  sum of the kernel rows. On Metal every op synchronizes before it returns, in
-  both.
+  gradient passes through, so `residual_add_backward` is not called). On both
+  backends the block records all of them and synchronizes once per iteration
+  (the Metal worker commits early only when its 4096-slot status slab or
+  device memory fills), while each per-kernel row synchronizes after its one op, so the block is not
+  the sum of the kernel rows.
+- `sweep_silu_n{N}`: one `silu_forward` over N values, N = 1, 2^12, 2^16,
+  2^18, 2^20, 2^21, 2^22, 2^23. It splits each runtime's time into a fixed
+  per-op part and a per-value part.
+- `sweep_decode_b{B}`: B decode requests (one query per head, H = Hkv = 12,
+  D 64, a 1024-position cache each) as one batched `cached_attention_forward`,
+  B = 1, 2, 4, 8, 16. torch runs one SDPA over `[B, H, T, D]`.
+- `sweep_decode_x{B}` (B > 1): the same B requests over the same bytes
+  (request i is row i of the batched inputs), as B batch-1 calls recorded
+  before one synchronize; torch runs B SDPAs on `[1, H, T, D]` slices. `x`
+  minus `b` is what dispatching the requests one at a time costs.
 
 ## Results kept in the tree
 

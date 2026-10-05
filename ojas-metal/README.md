@@ -79,6 +79,7 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
 * **KV cache** (`ojas_kv_write`, `ojas_cached_attn`):
   * `kv_cache_write` copies `[B, Tn, Hkv, D]` into a time-major `[B, Tcap, Hkv, D]` cache in place, only if the source is finite. A range error is refused on the host, before any dispatch.
   * `cached_attention_forward` is grouped-query causal attention of `Tq` queries against the first `kv_len` positions, one 1,024-thread threadgroup per (query, head).
+  * A call with fewer than about 96 such threadgroups, such as one decode request, walks the cache in up to 96 / rows splits of at least 64 keys. `ojas_cached_attn_merge` then combines them in a fixed order, so results still repeat bit for bit. One request at 1024 keys runs about 22% less GPU time (`bench/results/2026-10-04-split/`).
   * Positions at or past `kv_len` are not read.
 * **QK-norm** validates and places both pairs first, so a refused call records nothing. It then runs as one command when q's and k's outputs and scratch fit the budget together; otherwise it runs the two `rms_norm_*` calls, which hold one side's scratch at a time.
 * **Causal attention** (`ojas_attn_fwd_d*` and `ojas_attn_bwd_{stats,dq,dkv}_d*`, at head dims 16, 32, 64 and 128): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives `matmul2d`), after tessl's `qwen35_attn_tiled.metal` and `qwen35_attn_bwd.metal`.

@@ -13,14 +13,53 @@ The harness, the commands and the row definitions are in
 round 3 in `bench/results/2026-10-01-r3b/`, and the round 3 regression A/B
 in `bench/results/2026-10-01-ab/`.
 
-The document has four dated sections:
-- **Round 5 and the LM-head GEMM** (first): round 5's remaining Metal gaps,
+The document has five dated sections:
+- **Fixed cost against op size and request batching** (first): where the
+  per-op fixed cost stops dominating, and what batching decode requests buys.
+- **Round 5 and the LM-head GEMM**: round 5's remaining Metal gaps,
   and the fix to tessl's exact-f32 GEMM tile walk that halves the LM head.
   It ends with the gate_bwd profile and its bias-sum fix.
 - **Round 3**, after typed host storage, Metal deferred faults and
   device-resident AdamW. It also settles the round 2 Metal "regressions".
 - **Round 2**, after the Metal and wgpu optimization rounds landed.
 - **Round 1**, kept below unchanged for comparison.
+
+## Fixed cost against op size and request batching: 2026-10-04
+
+Full reading and caveats: [`bench/results/2026-10-04-sweep/README.md`](../bench/results/2026-10-04-sweep/README.md).
+The rows are `sweep_*` (`bench/README.md`, "Row semantics").
+
+**Every row is "noisy - not quoted".** Another process kept the GPU 54–79%
+busy for the whole run. Treat the numbers as direction only. Every row passed
+parity on both backends in all 5 rounds.
+
+- **Fixed cost of a Metal op:** 0.13 ms (min) to 0.18 ms (median); torch's is
+  0.10–0.16 ms.
+- **Where size takes over:** `silu_forward` time doubles from its one-value
+  floor at about 4.1–4.5M values (about 16–18 MB) on Metal. On torch it is
+  3.3–5.2M. Below about 1M values, Metal's time barely moves with size.
+- **Batched decode, one call:** the cost per request falls about 4x from B=1
+  to B=16 (0.214 to 0.051 ms on Metal). At B=16 Metal is 0.93x torch (per
+  round 0.83–1.09).
+- **The same 16 requests as separate calls before one sync:** 1.342 ms
+  against 0.815 batched. Metal is 0.63–0.74x torch per round, which does not
+  overlap the batched range. Each extra call costs Metal about 0.04 ms. At
+  B ≥ 8 that is roughly 3–4x torch's.
+- **What the per-call cost is**
+  ([`bench/results/2026-10-04-percall/`](../bench/results/2026-10-04-percall/README.md),
+  `metal_bench 20 percall`):
+  - About 78% is GPU time. One request is a 12-threadgroup dispatch at about
+    140–180 GB/s; the batched dispatch reaches about 256 GB/s.
+  - About 18% is host time, about 7 µs per call. Allocation and residency are
+    about 0.6 µs of that.
+  - Batching at the caller is the fix the data supports.
+- **Split cache walk** ([`bench/results/2026-10-04-split/`](../bench/results/2026-10-04-split/README.md)):
+  - Small decode calls now walk the cache in splits and merge them (8 splits
+    for one 12-head request).
+  - One request's GPU median falls from 48 to 38 µs.
+  - In an interleaved A/B, 4–16 separate calls are 10–12% faster.
+  - A lone request is unchanged end to end, because the fixed cost dominates.
+  - 16 separate calls are still 0.84 ms against 0.54 ms batched.
 
 ## Round 5 and the LM-head GEMM: 2026-10-02
 

@@ -71,6 +71,22 @@ const ATTN_MAX_HEAD_DIM: u32 = 128;
 /// larger than the pipeline allows, so a device that cannot run that many
 /// fails the call rather than running it short.
 const CA_THREADS: usize = 1024;
+/// Threadgroups `ojas_cached_attn` splits the cache walk toward: below it a
+/// decode leaves most of the GPU idle (one threadgroup per head reads at
+/// about 180 GB/s against about 256 batched;
+/// `bench/results/2026-10-04-percall/`).
+const CA_TARGET_GROUPS: usize = 96;
+/// Fewest keys one split walks: two per simdgroup.
+const CA_MIN_KEYS: usize = 64;
+
+/// How many splits `ojas_cached_attn` walks the cache in for `rows`
+/// (query, head, batch) rows over `kv_len` keys: enough to reach
+/// [`CA_TARGET_GROUPS`] threadgroups, each split at least [`CA_MIN_KEYS`]
+/// keys. 1 means one pass and no merge.
+fn cached_attn_splits(rows: usize, kv_len: usize) -> usize {
+    let want = CA_TARGET_GROUPS.div_ceil(rows.max(1));
+    want.min(kv_len / CA_MIN_KEYS).max(1)
+}
 
 /// Every kernel `MetalBackend` dispatches from the crate's metallib. Start-up
 /// fails if one is missing, not the first op that needs it.
@@ -88,6 +104,7 @@ const KERNELS: &[&str] = &[
     "ojas_lce_grad",
     "ojas_add_into",
     "ojas_cached_attn",
+    "ojas_cached_attn_merge",
     "ojas_permute",
     "ojas_silu_fwd",
     "ojas_silu_bwd",
@@ -1967,9 +1984,23 @@ impl Worker {
         let out = self.fresh(qv.n)?;
         let st = self.status(OP)?;
         let groups = tq as usize * heads as usize;
+        let splits = cached_attn_splits(groups * batch as usize, kv_len as usize);
+        let chunk = u32_of((kv_len as usize).div_ceil(splits))?;
+        // Splits > 1 write (max, sum, output) per split here for the merge.
+        let part = if splits > 1 {
+            let rows = groups * batch as usize;
+            let n = rows
+                .checked_mul(splits)
+                .and_then(|x| x.checked_mul(d as usize + 2))
+                .ok_or_else(|| metal_err(format!("{OP}: split scratch overflows")))?;
+            self.fresh(n)?
+        } else {
+            out.clone()
+        };
+        let splits = u32_of(splits)?;
         self.ktg(
             "ojas_cached_attn",
-            groups,
+            groups * splits as usize,
             batch as usize,
             CA_THREADS,
             |b| {
@@ -1985,8 +2016,26 @@ impl Worker {
                 set_u32(b, cap, 9);
                 set_u32(b, kv_len, 10);
                 set_f32(b, scale, 11);
+                set_u32(b, splits, 12);
+                set_u32(b, chunk, 13);
+                bind(b, &part, 14);
             },
         )?;
+        if splits > 1 {
+            self.ktg(
+                "ojas_cached_attn_merge",
+                groups,
+                batch as usize,
+                d as usize,
+                |b| {
+                    bind(b, &part, 0);
+                    bind(b, &out, 1);
+                    bind_st(b, &st, 2);
+                    set_u32(b, d, 3);
+                    set_u32(b, splits, 4);
+                },
+            )?;
+        }
         Ok(self.keep(vec![out]))
     }
 
@@ -2189,6 +2238,30 @@ mod tests {
     use super::*;
 
     use ojas_core::{Backend, Budget, Tensor};
+
+    /// One decode request (12 heads, 1024 keys) splits; a batch that already
+    /// fills the GPU, a short cache, and degenerate inputs do not.
+    #[test]
+    fn cached_attn_splits_only_where_the_gpu_would_sit_idle() {
+        for (rows, kv_len, want) in [
+            (12usize, 1024usize, 8usize),
+            (24, 1024, 4),
+            (1, 4097, 64),
+            (12, 129, 2),
+            (12, 127, 1),
+            (12, 63, 1),
+            (96, 1024, 1),
+            (192, 1024, 1),
+            (0, 1024, 16),
+            (12, 0, 1),
+        ] {
+            assert_eq!(
+                cached_attn_splits(rows, kv_len),
+                want,
+                "rows {rows}, kv_len {kv_len}"
+            );
+        }
+    }
 
     fn pattern(n: usize, seed: u64) -> Vec<f32> {
         let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);

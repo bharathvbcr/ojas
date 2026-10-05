@@ -47,6 +47,9 @@ fn reference(data: &[f32], shape: &[usize], dims: &[usize]) -> Vec<f32> {
 
 fn check(threads: usize, shape: &[usize], dims: &[usize], data: &[f32]) {
     let backend = cpu(threads);
+    if threads > 1 {
+        backend.start_workers().unwrap();
+    }
     let x = f32t(&backend, data, shape);
     let y = backend
         .permute(&x, dims)
@@ -71,6 +74,9 @@ fn gather_matches_scalar_reference_at_one_and_six_threads() {
             let n: usize = shape.iter().product();
             let mut data = SplitMix64(0x0a5_0000 + n as u64).vec(n, 3.0);
             data[0] = -0.0;
+            if n > 64 {
+                data[64] = -0.0;
+            }
             if n > 3 {
                 data[n / 2] = f32::from_bits(1);
                 data[n - 1] = f32::MIN;
@@ -81,6 +87,31 @@ fn gather_matches_scalar_reference_at_one_and_six_threads() {
         }
         check(threads, &[17], &[0], &SplitMix64(9).vec(17, 1.0));
         check(threads, &[], &[], &[-0.0]);
+    }
+}
+
+/// Input `[1, 1024, 12, 64]` index 64 is head 1 of token 0. After
+/// `(0, 2, 1, 3)` that lane is output index `1 * 1024 * 64`.
+#[test]
+fn negative_zero_at_input_64_lands_at_output_65536() {
+    let shape = [1usize, 1024, 12, 64];
+    let mut data = vec![1.0f32; 1024 * 768];
+    data[64] = -0.0;
+    let dims = [0usize, 2, 1, 3];
+    for threads in [1usize, 6] {
+        let backend = cpu(threads);
+        if threads > 1 {
+            backend.start_workers().unwrap();
+        }
+        let x = f32t(&backend, &data, &shape);
+        let y = backend.permute(&x, &dims).unwrap();
+        let out = y.to_f32_vec().unwrap();
+        assert_eq!(
+            out[65536].to_bits(),
+            (-0.0f32).to_bits(),
+            "threads {threads}"
+        );
+        assert_eq!(bits(&out), bits(&reference(&data, &shape, &dims)));
     }
 }
 

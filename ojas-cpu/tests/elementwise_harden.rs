@@ -206,6 +206,86 @@ fn a_nonfinite_operand_or_overflow_refuses_and_releases_the_charge() {
     }
 }
 
+/// Fast and exact add match scalar `f32` addition, including `-0` and
+/// subnormals. A non-finite sum is not returned: NaN, infinity, and
+/// `2e38 + 2e38` in the first lane, a 16-wide lane, a one-element tail, and
+/// the last lane of a multi-chunk buffer are `NonFinite` and leave the
+/// budget where it was.
+#[test]
+fn add_forward_matches_scalar_and_drops_a_nonfinite_sum() {
+    let quiet_nan = f32::from_bits(0x7fc0_0000);
+    let pairs = [
+        (-0.0f32, -0.0f32),
+        (-0.0, 0.0),
+        (0.0, -0.0),
+        (1.0, -1.0),
+        (f32::from_bits(1), f32::from_bits(1)),
+        (f32::from_bits(0x007f_ffff), -0.0),
+        (f32::from_bits(0x8000_0001), f32::MIN_POSITIVE),
+        (-f32::MIN_POSITIVE, -0.0),
+        (-2.0e38, 1.0),
+        (2.0e38, -1.0),
+        (3.25, -0.5),
+        (-7.5, 0.25),
+    ];
+    let lengths = [1usize, 4, 15, 16, 17, 31, 32, 33, 65536, 65539];
+    for numerics in [Numerics::Exact, Numerics::Fast] {
+        for threads in [1usize, 6] {
+            let be = cpu(threads).with_numerics(numerics);
+            for &n in &lengths {
+                let a: Vec<f32> = (0..n).map(|i| pairs[i % pairs.len()].0).collect();
+                let b: Vec<f32> = (0..n).map(|i| pairs[i % pairs.len()].1).collect();
+                let want: Vec<u32> = a.iter().zip(&b).map(|(x, y)| (x + y).to_bits()).collect();
+                let at = f32t(&be, &a, &[n]);
+                let bt = f32t(&be, &b, &[n]);
+                let got = be.residual_add_forward(&at, &bt).unwrap_or_else(|err| {
+                    panic!("finite add {numerics:?} threads {threads} n={n}: {err}")
+                });
+                assert_eq!(
+                    bits(&got.to_f32_vec().unwrap()),
+                    want,
+                    "finite add {numerics:?} threads {threads} n={n}"
+                );
+                drop(got);
+
+                let spots = [0usize, 15, 16, n / 2, n - 1];
+                let poisons = [
+                    ("nan", f32::NAN, 1.0f32),
+                    ("inf", 1.0, f32::INFINITY),
+                    ("neg-inf", f32::NEG_INFINITY, 0.0),
+                    ("quiet-nan", quiet_nan, 0.0),
+                    ("overflow", 2.0e38, 2.0e38),
+                ];
+                for &index in &spots {
+                    if index >= n {
+                        continue;
+                    }
+                    for (name, va, vb) in poisons {
+                        let mut av = a.clone();
+                        let mut bv = b.clone();
+                        av[index] = va;
+                        bv[index] = vb;
+                        let at = f32t(&be, &av, &[n]);
+                        let bt = f32t(&be, &bv, &[n]);
+                        let held = live(&be);
+                        let got = be.residual_add_forward(&at, &bt);
+                        assert!(
+                            matches!(got, Err(OjasError::NonFinite { .. })),
+                            "{name} at {index} n={n} threads={threads} {numerics:?}: {got:?}"
+                        );
+                        assert_eq!(
+                            live(&be),
+                            held,
+                            "{name} at {index} n={n} threads={threads} {numerics:?} kept a buffer"
+                        );
+                        drop((at, bt));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Mul backward publishes both gradients or neither. A second charge that
 /// does not fit allocates no gradient. A one-element `-0` in both products
 /// is stored, including the last lane of a 17-element pair. A non-finite

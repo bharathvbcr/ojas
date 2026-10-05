@@ -1088,19 +1088,26 @@ kernel void ojas_kv_write(
 
 /// Causal attention of Tq queries against the first kv_len cache positions,
 /// grouped-query: head h reads KV head h / (H / Hkv). One threadgroup per
-/// (query, head) and batch; query i sits at position kv_len - Tq + i.
+/// (query, head, split) and batch, x = (i * H + h) * splits + s; query i
+/// sits at position kv_len - Tq + i.
 ///
-/// Each of the 32 simdgroups walks keys j = sg, sg + 32, ... <= pos with an
-/// online softmax; a lane holds dims lane, lane + 32, ... of its partial
-/// output, and the score is a `simd_sum`, whose order is fixed. The
-/// simdgroups' (max, sum, output) are merged in index order, so results
-/// repeat bit for bit.
+/// Split s walks keys [s * chunk, min((s + 1) * chunk, pos + 1)). Each of
+/// its 32 simdgroups walks keys j0 + sg, j0 + sg + 32, ... with an online
+/// softmax; a lane holds dims lane, lane + 32, ... of its partial output,
+/// and the score is a `simd_sum`, whose order is fixed. The simdgroups'
+/// (max, sum, output) are merged in index order, so results repeat bit for
+/// bit. With splits = 1 (chunk >= kv_len) the threadgroup writes the
+/// output; otherwise it writes (max, sum, unnormalized output) to `part` at
+/// ((row * splits + s) * (d + 2)), row = (b * Tq + i) * H + h, and
+/// `ojas_cached_attn_merge` combines the splits in index order. A split
+/// with no key writes max = -inf and adds nothing.
 ///
-/// Finite checks are folded in: every q element is read once, and every
-/// cache element at a position below kv_len is read by the last query row
-/// of each head that maps to its KV head, so a NaN or infinity there sets
-/// ST_IN. Positions at or past kv_len are not read and not checked. A
-/// non-finite output (scores that overflow) sets ST_OUT.
+/// Finite checks are folded in: every q element is read (once per split),
+/// and every cache element at a position below kv_len is read by the last
+/// query row of each head that maps to its KV head, whose splits cover
+/// [0, kv_len), so a NaN or infinity there sets ST_IN. Positions at or past
+/// kv_len are not read and not checked. A non-finite output (scores that
+/// overflow) sets ST_OUT, here or in the merge.
 kernel void ojas_cached_attn(
     device const float *q [[buffer(0)]],
     device const float *k [[buffer(1)]],
@@ -1114,6 +1121,9 @@ kernel void ojas_cached_attn(
     constant uint &cap [[buffer(9)]],
     constant uint &kv_len [[buffer(10)]],
     constant float &scale [[buffer(11)]],
+    constant uint &splits [[buffer(12)]],
+    constant uint &chunk [[buffer(13)]],
+    device float *part [[buffer(14)]],
     uint2 tg [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -1123,8 +1133,10 @@ kernel void ojas_cached_attn(
     threadgroup float sm[CA_SG];
     threadgroup float sl[CA_SG];
     threadgroup float so[CA_SG][CA_MAX_D];
-    const uint i = tg.x / heads;
-    const uint hh = tg.x - i * heads;
+    const uint row = tg.x / splits;
+    const uint split = tg.x - row * splits;
+    const uint i = row / heads;
+    const uint hh = row - i * heads;
     const uint b = tg.y;
     if (i >= tq) return;
     if (d > CA_MAX_D) {
@@ -1146,7 +1158,9 @@ kernel void ojas_cached_attn(
     float m = -INFINITY;
     float l = 0.0f;
     float o[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    for (uint j = sg; j <= pos; j += CA_SG) {
+    const uint j0 = split * chunk;
+    const uint j1 = min(j0 + chunk, pos + 1u);
+    for (uint j = j0 + sg; j < j1; j += CA_SG) {
         const ulong kb = (((ulong)b * cap + j) * kv_heads + kh) * d;
         float part = 0.0f;
         for (uint t = 0u; t < 4u; ++t) {
@@ -1194,9 +1208,51 @@ kernel void ojas_cached_attn(
         total += sl[s] * w;
         acc += so[s][tid] * w;
     }
+    if (splits > 1u) {
+        const ulong pb = ((((ulong)b * tq + i) * heads + hh) * splits + split) * (d + 2u);
+        if (tid == 0u) {
+            part[pb] = mx;
+            part[pb + 1u] = total;
+        }
+        part[pb + 2u + tid] = acc;
+        return;
+    }
     const float y = precise::divide(acc, total);
     if (!isfinite(y)) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
     out[qbase + tid] = y;
+}
+
+/// Combine `ojas_cached_attn`'s splits: one threadgroup per (query, head) and
+/// batch, x = i * H + h, one thread per output dim. Splits merge in index
+/// order, so results repeat bit for bit. A non-finite output sets ST_OUT.
+kernel void ojas_cached_attn_merge(
+    device const float *part [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    device atomic_uint *st [[buffer(2)]],
+    constant uint &d [[buffer(3)]],
+    constant uint &splits [[buffer(4)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint2 ntg [[threadgroups_per_grid]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    if (tid >= d) return;
+    const ulong row = (ulong)tg.y * ntg.x + tg.x;
+    const ulong pb = row * splits * (d + 2u);
+    float mx = -INFINITY;
+    for (uint s = 0u; s < splits; ++s) mx = max(mx, part[pb + s * (d + 2u)]);
+    float total = 0.0f;
+    float acc = 0.0f;
+    for (uint s = 0u; s < splits; ++s) {
+        const ulong at = pb + s * (d + 2u);
+        // A split with no key (or a row with none at all) adds nothing.
+        if (part[at] == -INFINITY) continue;
+        const float w = precise::exp(part[at] - mx);
+        total += part[at + 1u] * w;
+        acc += part[at + 2u + tid] * w;
+    }
+    const float y = precise::divide(acc, total);
+    if (!isfinite(y)) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
+    out[row * d + tid] = y;
 }
 
 // ------------------------------------------------------------- permute ---

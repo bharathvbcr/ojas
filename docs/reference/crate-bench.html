@@ -129,7 +129,7 @@ BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
 <tbody>
 <tr><td><code>run_paired.sh</code></td><td>Builds the two release examples first (a stale binary looks like a valid run), records the toolchain (<code>env.txt</code>, <code>env_torch.json</code>), writes the torch references, then runs N rounds. Odd rounds run Metal, wgpu, torch; even rounds torch, wgpu, Metal. <code>uptime</code> load and <code>ioreg</code> &#34;Device Utilization %&#34; are recorded before and after every runtime block (<code>load.jsonl</code>). A crashed lane is recorded as such and the run continues. Ends with <code>aggregate.py</code>.</td></tr>
 <tr><td><code>ojas_rows.rs</code></td><td>The ojas side, generic over <code>ojas_core::Backend</code>: the shared input generator, the parity gate and the timing loop, and every row. Compiled into both examples by <code>#[path]</code>.</td></tr>
-<tr><td><code>../ojas-metal/examples/metal_vs_torch.rs</code></td><td>Opens <code>MetalBackend</code> and runs the rows. Metal ops synchronize before they return, so <code>Backend::sync</code> (the trait default, a no-op) adds nothing.</td></tr>
+<tr><td><code>../ojas-metal/examples/metal_vs_torch.rs</code></td><td>Opens <code>MetalBackend</code> and runs the rows. Metal ops are recorded and return before the device runs them (<code>docs/metal-deferred-faults.md</code>); <code>Backend::sync</code> after every iteration waits for them and reports any deferred fault.</td></tr>
 <tr><td><code>../ojas-wgpu/examples/wgpu_vs_torch.rs</code></td><td>Opens <code>WgpuBackend</code> and runs the rows with <code>Backend::sync</code> (submit and wait) after every iteration. Its first output line records the adapter and the HAL.</td></tr>
 <tr><td><code>torch_rows.py</code></td><td>The torch twin of every row. <code>ref</code> writes the reference outputs, <code>time</code> times the rows, <code>env</code> records versions and checks the optimizer parameter list against <code>GPT(Config())</code>.</td></tr>
 <tr><td><code>aggregate.py</code></td><td>Per-round ratios, spread flags, the ranked list and the load table, as markdown.</td></tr>
@@ -142,7 +142,7 @@ BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
 </li>
 <li><strong>Load.</strong> Besides the before and after snapshot of each runtime block (<code>load.jsonl</code>), every lane writes a <code>_load</code> record (uptime load and an <code>ioreg</code> GPU sample) before and after every row. <code>summary.md</code> ends with their ranges.
 </li>
-<li><strong>Timing.</strong> Inputs are allocated once per row. 5 warm-ups (minimum), then 20 timed iterations (minimum); each iteration is the op plus the device synchronize (<code>torch.mps.synchronize()</code>; nothing extra for Metal; <code>Backend::sync</code>, submit and wait, for wgpu). Each run reports min and median.
+<li><strong>Timing.</strong> Inputs are allocated once per row. 5 warm-ups (minimum), then 20 timed iterations (minimum); each iteration is the op plus the device synchronize (<code>torch.mps.synchronize()</code>; <code>Backend::sync</code>, submit and wait, for Metal and wgpu). Each run reports min and median.
 </li>
 <li><strong>Pairing.</strong> Per row, <code>ratio = torch median / ojas median</code> within a round (&gt; 1: ojas faster). The summary reports the median ratio over rounds with its min and max, and each side&#39;s spread (max / min of its per-round medians). A row with either spread above 10% is flagged &#34;noisy - not quoted&#34;.
 </li>
@@ -165,7 +165,13 @@ BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
 </li>
 <li><code>accumulate_grad_50304x768</code>: <code>accumulate_grad</code> in place; torch <code>acc.add_(g)</code>.
 </li>
-<li><code>block_fwd</code>, <code>block_fwd_bwd</code>: nanolab&#39;s real <code>Block</code> (attention mixer with QK-norm, RoPE, value residual, per-head gate; SwiGLU) at B=4, T=1024. Weights come from the generator (not nanolab&#39;s zero init, so every gradient is non-trivial). The ojas side composes Backend ops by hand, forward and backward (neither GPU crate depends on <code>ojas-autograd</code>, so <code>Tape</code> cannot drive it from these examples). Parity checks the output and seven gradients. The forward is 24 device ops and forward + backward 53 (a residual add&#39;s gradient passes through, so <code>residual_add_backward</code> is not called). On wgpu the block records all of them and synchronizes once per iteration, while each per-kernel row synchronizes after its one op, so the block is not the sum of the kernel rows. On Metal every op synchronizes before it returns, in both.
+<li><code>block_fwd</code>, <code>block_fwd_bwd</code>: nanolab&#39;s real <code>Block</code> (attention mixer with QK-norm, RoPE, value residual, per-head gate; SwiGLU) at B=4, T=1024. Weights come from the generator (not nanolab&#39;s zero init, so every gradient is non-trivial). The ojas side composes Backend ops by hand, forward and backward (neither GPU crate depends on <code>ojas-autograd</code>, so <code>Tape</code> cannot drive it from these examples). Parity checks the output and seven gradients. The forward is 24 device ops and forward + backward 53 (a residual add&#39;s gradient passes through, so <code>residual_add_backward</code> is not called). On both backends the block records all of them and synchronizes once per iteration (the Metal worker commits early only when its 4096-slot status slab or device memory fills), while each per-kernel row synchronizes after its one op, so the block is not the sum of the kernel rows.
+</li>
+<li><code>sweep_silu_n{N}</code>: one <code>silu_forward</code> over N values, N = 1, 2^12, 2^16, 2^18, 2^20, 2^21, 2^22, 2^23. It splits each runtime&#39;s time into a fixed per-op part and a per-value part.
+</li>
+<li><code>sweep_decode_b{B}</code>: B decode requests (one query per head, H = Hkv = 12, D 64, a 1024-position cache each) as one batched <code>cached_attention_forward</code>, B = 1, 2, 4, 8, 16. torch runs one SDPA over <code>[B, H, T, D]</code>.
+</li>
+<li><code>sweep_decode_x{B}</code> (B &gt; 1): the same B requests over the same bytes (request i is row i of the batched inputs), as B batch-1 calls recorded before one synchronize; torch runs B SDPAs on <code>[1, H, T, D]</code> slices. <code>x</code> minus <code>b</code> is what dispatching the requests one at a time costs.
 </li>
 </ul>
 <h2 id="results-kept-in-the-tree">Results kept in the tree <a class="anchor" href="#results-kept-in-the-tree" aria-label="Link to this section">#</a></h2>

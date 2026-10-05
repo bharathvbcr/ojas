@@ -384,6 +384,48 @@ def _decode():
     ROWS.append(("decode_attn_kv1024", sp, make))
 
 
+SWEEP_N = [1, 1 << 12, 1 << 16, 1 << 18, 1 << 20, 1 << 21, 1 << 22, 1 << 23]
+SWEEP_B = [1, 2, 4, 8, 16]
+
+
+def _sweep():
+    """bench/ojas_rows.rs::sweep. silu over N values; B decode requests as one
+    batched SDPA (b) or as B batch-1 SDPAs before one sync (x), over the same
+    bytes: request i is row i of the batched tensors."""
+    for n in SWEEP_N:
+        def mk_silu(n=n):
+            x = gen([n], 161, 0)
+            fwd_row(f"sweep_silu_n{n}", spec([("x", [n], 161, 0)]), lambda: F.silu(x))
+        mk_silu()
+    for b in SWEEP_B:
+        qs, cs = [b, 1, H, D], [b, T, H, D]
+        sp = spec([("q", qs, 171, 0), ("k_cache", cs, 172, 0), ("v_cache", cs, 173, 0)]) + f";kv_len:{T}"
+
+        def inputs(qs=qs, cs=cs):
+            return (gen(qs, 171, 0).transpose(1, 2).contiguous(),
+                    gen(cs, 172, 0).permute(0, 2, 1, 3).contiguous(),
+                    gen(cs, 173, 0).permute(0, 2, 1, 3).contiguous())
+
+        def make_b(inputs=inputs):
+            q, k, v = inputs()
+
+            def run():
+                with torch.no_grad():
+                    return F.scaled_dot_product_attention(q, k, v)
+            return {"outs": lambda: [run().transpose(1, 2).contiguous()], "step": run}
+        ROWS.append((f"sweep_decode_b{b}", sp, make_b))
+        if b > 1:
+            def make_x(inputs=inputs, b=b):
+                q, k, v = inputs()
+                reqs = [(q[i:i + 1], k[i:i + 1], v[i:i + 1]) for i in range(b)]
+
+                def run():
+                    with torch.no_grad():
+                        return [F.scaled_dot_product_attention(*r) for r in reqs]
+                return {"outs": lambda: [o.transpose(1, 2).contiguous() for o in run()], "step": run}
+            ROWS.append((f"sweep_decode_x{b}", sp + f";requests:{b}", make_x))
+
+
 def _accumulate():
     sh = [V, DM]
     sp = spec([("acc", sh, 151, 0), ("g", sh, 152, 0)])
@@ -602,6 +644,7 @@ def register():
     _block()
     _decode()
     _accumulate()
+    _sweep()
 
 
 # ---------------------------------------------------------------------------

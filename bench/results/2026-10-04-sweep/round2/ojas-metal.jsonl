@@ -1,0 +1,52 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n1","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":71}
+{"runtime":"ojas-metal","row":"sweep_silu_n1","status":"ok","min_ms":0.109458,"median_ms":0.212001,"iters":20,"warmup":5,"parity_max_abs":1.4901161193847656e-8,"parity_rel":7.060752194640648e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n1","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":71}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n4096","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":72}
+{"runtime":"ojas-metal","row":"sweep_silu_n4096","status":"ok","min_ms":0.114000,"median_ms":0.173938,"iters":20,"warmup":5,"parity_max_abs":5.960464477539063e-8,"parity_rel":8.1559921585029e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n4096","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":77}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n65536","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":70}
+{"runtime":"ojas-metal","row":"sweep_silu_n65536","status":"ok","min_ms":0.148750,"median_ms":0.309729,"iters":20,"warmup":5,"parity_max_abs":5.960464477539063e-8,"parity_rel":8.153530988513713e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n65536","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":72}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n262144","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":67}
+{"runtime":"ojas-metal","row":"sweep_silu_n262144","status":"ok","min_ms":0.146250,"median_ms":0.178229,"iters":20,"warmup":5,"parity_max_abs":5.960464477539063e-8,"parity_rel":8.153221867919436e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n262144","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":75}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n1048576","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":74}
+{"runtime":"ojas-metal","row":"sweep_silu_n1048576","status":"ok","min_ms":0.158542,"median_ms":0.204250,"iters":20,"warmup":5,"parity_max_abs":5.960464477539063e-8,"parity_rel":8.153221867919436e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n1048576","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":80}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n2097152","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":70}
+{"runtime":"ojas-metal","row":"sweep_silu_n2097152","status":"ok","min_ms":0.191333,"median_ms":0.248333,"iters":20,"warmup":5,"parity_max_abs":5.960464477539063e-8,"parity_rel":8.153221867919436e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n2097152","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":77}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n4194304","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":70}
+{"runtime":"ojas-metal","row":"sweep_silu_n4194304","status":"ok","min_ms":0.272208,"median_ms":0.311208,"iters":20,"warmup":5,"parity_max_abs":5.960464477539063e-8,"parity_rel":8.153214555673043e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n4194304","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":78}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n8388608","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":73}
+{"runtime":"ojas-metal","row":"sweep_silu_n8388608","status":"ok","min_ms":0.436667,"median_ms":0.546917,"iters":20,"warmup":5,"parity_max_abs":5.960464477539063e-8,"parity_rel":8.153201925460166e-8,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_silu_n8388608","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":81}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b1","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":73}
+{"runtime":"ojas-metal","row":"sweep_decode_b1","status":"ok","min_ms":0.147625,"median_ms":0.185562,"iters":20,"warmup":5,"parity_max_abs":1.862645149230957e-8,"parity_rel":2.775318845280859e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b1","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":73}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b2","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":69}
+{"runtime":"ojas-metal","row":"sweep_decode_b2","status":"ok","min_ms":0.163416,"median_ms":0.266292,"iters":20,"warmup":5,"parity_max_abs":1.862645149230957e-8,"parity_rel":2.775318845280859e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b2","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":82}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x2","when":"before","load":"6.50 6.26 6.15","gpu_util_pct":71}
+{"runtime":"ojas-metal","row":"sweep_decode_x2","status":"ok","min_ms":0.185208,"median_ms":0.276479,"iters":20,"warmup":5,"parity_max_abs":1.862645149230957e-8,"parity_rel":2.775318845280859e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x2","when":"after","load":"6.50 6.26 6.15","gpu_util_pct":75}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b4","when":"before","load":"6.38 6.23 6.15","gpu_util_pct":69}
+{"runtime":"ojas-metal","row":"sweep_decode_b4","status":"ok","min_ms":0.234416,"median_ms":0.372708,"iters":20,"warmup":5,"parity_max_abs":1.862645149230957e-8,"parity_rel":2.7357685320960366e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b4","when":"after","load":"6.38 6.23 6.15","gpu_util_pct":80}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x4","when":"before","load":"6.38 6.23 6.15","gpu_util_pct":76}
+{"runtime":"ojas-metal","row":"sweep_decode_x4","status":"ok","min_ms":0.316250,"median_ms":0.435562,"iters":20,"warmup":5,"parity_max_abs":1.862645149230957e-8,"parity_rel":2.775318845280859e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x4","when":"after","load":"6.38 6.23 6.15","gpu_util_pct":78}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b8","when":"before","load":"6.38 6.23 6.15","gpu_util_pct":74}
+{"runtime":"ojas-metal","row":"sweep_decode_b8","status":"ok","min_ms":0.335458,"median_ms":0.477645,"iters":20,"warmup":5,"parity_max_abs":1.862645149230957e-8,"parity_rel":2.7357685320960366e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b8","when":"after","load":"6.38 6.23 6.15","gpu_util_pct":82}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x8","when":"before","load":"6.38 6.23 6.15","gpu_util_pct":75}
+{"runtime":"ojas-metal","row":"sweep_decode_x8","status":"ok","min_ms":0.543209,"median_ms":0.661167,"iters":20,"warmup":5,"parity_max_abs":1.862645149230957e-8,"parity_rel":2.775318845280859e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x8","when":"after","load":"6.38 6.23 6.15","gpu_util_pct":81}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b16","when":"before","load":"6.38 6.23 6.15","gpu_util_pct":71}
+{"runtime":"ojas-metal","row":"sweep_decode_b16","status":"ok","min_ms":0.584875,"median_ms":0.725958,"iters":20,"warmup":5,"parity_max_abs":2.60770320892334e-8,"parity_rel":3.4117423202655155e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_b16","when":"after","load":"6.38 6.23 6.15","gpu_util_pct":87}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x16","when":"before","load":"6.38 6.23 6.15","gpu_util_pct":66}
+{"runtime":"ojas-metal","row":"sweep_decode_x16","status":"ok","min_ms":0.958208,"median_ms":1.227437,"iters":20,"warmup":5,"parity_max_abs":2.60770320892334e-8,"parity_rel":3.951093366311793e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"sweep_decode_x16","when":"after","load":"6.38 6.23 6.15","gpu_util_pct":87}

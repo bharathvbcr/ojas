@@ -651,6 +651,18 @@ fn fast_gate_is_within_tolerance_of_f64() {
             assert_close(&format!("gate grad_b {at}"), &rb, &gb, TOL);
             assert_close(&format!("gate grad_attn {at}"), &ra, &ga, TOL);
         }
+        // Workers already running: macOS Fast uses two row-band products.
+        for threads in [2usize, 6] {
+            let cpu = backend(threads, Numerics::Fast);
+            cpu.start_workers().unwrap();
+            let (y, (rx, rw, rb, ra)) = case.run(&cpu);
+            let at = format!("rows {} din {} live workers {threads}", l.rows, l.din);
+            assert_close(&format!("gate y {at}"), &y, &want_y, TOL);
+            assert_close(&format!("gate grad_x {at}"), &rx, &gx, TOL);
+            assert_close(&format!("gate grad_w {at}"), &rw, &gw, TOL);
+            assert_close(&format!("gate grad_b {at}"), &rb, &gb, TOL);
+            assert_close(&format!("gate grad_attn {at}"), &ra, &ga, TOL);
+        }
     }
 }
 

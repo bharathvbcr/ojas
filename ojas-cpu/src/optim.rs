@@ -699,7 +699,8 @@ pub(crate) fn muon_ns5(
 /// 4096 cube). Row bands of that call match its bits (max abs 0, including
 /// when `A` and `B` alias) and each band stays one whole Accelerate call,
 /// so the pool's threads do the bands. `A @ A` and `B @ X` take one band per
-/// pool thread. `X @ Xᵀ` (both views of one buffer) takes two bands when
+/// pool thread. The tall 2048×768 step does not call this function for those
+/// two products. `X @ Xᵀ` (both views of one buffer) takes two bands when
 /// `k < 2m` and one band otherwise: at m = n = 768, two bands were faster
 /// for k = 512, 768, and 1024, and slower for k = 1536, 2048, and 3072. A
 /// band that would miss the whole-call cutoff is not split: the packed
@@ -766,8 +767,16 @@ fn newton_schulz(
     cols: usize,
 ) -> Result<Vec<f32>, OjasError> {
     const OP: &str = "muon_ns5_step";
+    // Tall 2048×768 only: the bytes stay row-major 2048×768. The iterate is
+    // that buffer read as 768×2048 (row stride 1, column stride 768), which
+    // Apple cblas accepts as `CblasTrans` with leading dimension 768. `B @ X`
+    // is stored as `Xᵀ @ Bᵀ`, one `cblas_sgemm` into that same orientation,
+    // so neither transpose allocates. Square 768 and tall 3072×768 still copy.
+    let view = rows == 2048 && cols == 768;
     let mut transposed = false;
-    let (mut x, r, c) = if rows > cols {
+    let (mut x, r, c) = if view {
+        (update, cols, rows)
+    } else if rows > cols {
         transposed = true;
         let x = transpose(OP, &update, rows, cols)?;
         drop(update);
@@ -776,8 +785,18 @@ fn newton_schulz(
         (update, rows, cols)
     };
     let mut sum_sq = 0.0f64;
-    for value in &x {
-        sum_sq += f64::from(*value) * f64::from(*value);
+    if view {
+        // Same add order as the row-major transpose the copy used to build.
+        for j in 0..cols {
+            for i in 0..rows {
+                let v = f64::from(x[i * cols + j]);
+                sum_sq += v * v;
+            }
+        }
+    } else {
+        for value in &x {
+            sum_sq += f64::from(*value) * f64::from(*value);
+        }
     }
     let norm = sum_sq.sqrt() as f32;
     let denom = norm + (MUON_NS_EPS as f32);
@@ -790,18 +809,45 @@ fn newton_schulz(
     let a = MUON_NS5_A as f32;
     let b_coef = MUON_NS5_B as f32;
     let c_coef = MUON_NS5_C as f32;
+    // Tall 2048×768 only: the iterate is 768×2048. `A @ A` and `B @ X` are
+    // each one `cblas_sgemm`. `X @ Xᵀ` is one call at this k (the view's
+    // transposed operand is on the left, so it cannot take `ns_gemm`'s
+    // right-hand band split). Square 768 and tall 3072×768 stay on that
+    // function's band loop.
+    let one_cblas = (transposed || view) && r == 768 && c == 2048;
     for _ in 0..5 {
-        let xm = Mat::row_major(&x, r, c);
+        let xm = if view {
+            Mat::row_major(&x, c, r).t()
+        } else {
+            Mat::row_major(&x, r, c)
+        };
         let xmt = xm.t();
-        let am = ns_gemm(exec, xm, xmt)?;
+        let am = if view {
+            gemm(OP, exec, &xm, &xmt)?
+        } else {
+            ns_gemm(exec, xm, xmt)?
+        };
         let a_mat = Mat::row_major(&am, r, r);
-        let a2 = ns_gemm(exec, a_mat, a_mat)?;
+        let a2 = if one_cblas {
+            gemm(OP, exec, &a_mat, &a_mat)?
+        } else {
+            ns_gemm(exec, a_mat, a_mat)?
+        };
         let b_mat = zip_map(exec, &am, &a2, |am, a2v| b_coef * am + c_coef * a2v)?;
         // Each intermediate is freed as soon as its last reader is done:
         // `muon_scratch` counts them that way.
         drop(a2);
-        let bm = Mat::row_major(&b_mat, r, r);
-        let bx = ns_gemm(exec, bm, xm)?;
+        let bx = if view {
+            let sm = Mat::row_major(&x, c, r);
+            let bt = Mat::row_major(&b_mat, r, r).t();
+            gemm(OP, exec, &sm, &bt)?
+        } else if one_cblas {
+            let bm = Mat::row_major(&b_mat, r, r);
+            gemm(OP, exec, &bm, &xm)?
+        } else {
+            let bm = Mat::row_major(&b_mat, r, r);
+            ns_gemm(exec, bm, xm)?
+        };
         drop(b_mat);
         let next = zip_map(exec, &x, &bx, |xv, bxv| a * xv + bxv)?;
         drop(bx);

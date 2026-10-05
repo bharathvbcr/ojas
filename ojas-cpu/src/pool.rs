@@ -200,6 +200,12 @@ impl Pool {
         self.threads
     }
 
+    /// `true` after [`Pool::start`] or a [`Pool::run`] that published work.
+    /// Does not spawn. A serial pool has no workers and is never ready.
+    pub(crate) fn workers_ready(&self) -> bool {
+        self.threads > 1 && self.spawned.load(Ordering::Acquire)
+    }
+
     /// Spawn the workers now instead of on the first batch that splits, so a
     /// spawn failure is reported here and not part-way through a run. A
     /// serial pool has none to spawn. Idempotent.
@@ -320,6 +326,97 @@ impl Pool {
         }
         Ok(out)
     }
+
+    /// Queue one task for a worker that is already running.
+    ///
+    /// Does not spawn, and the caller does not run the task. `None` when no
+    /// worker is up, this thread is itself a pool worker, or the pool is
+    /// shutting down. [`Handoff::join`] waits for that worker and drops the
+    /// task's captures before it returns.
+    pub(crate) fn try_handoff<T, F>(&self, task: F) -> Option<Handoff<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        if !self.workers_ready() || on_pool_worker() {
+            return None;
+        }
+        let once = Mutex::new(Some(task));
+        let batch = Arc::new(Batch {
+            next: AtomicUsize::new(0),
+            count: 1,
+            task: Mutex::new(Some(Arc::new(move |_index: usize| {
+                match lock(&once).take() {
+                    Some(run) => run(),
+                    None => panic!("handoff task ran twice"),
+                }
+            }))),
+            state: Mutex::new(BatchState {
+                results: vec![None],
+                finished: 0,
+                panic: None,
+            }),
+            done: Condvar::new(),
+        });
+        {
+            let mut queue = lock(&self.shared.queue);
+            if queue.shutdown {
+                return None;
+            }
+            let work: Arc<dyn Work> = batch.clone();
+            queue.batches.push_back(work);
+            self.shared.posted.fetch_add(1, Ordering::Release);
+        }
+        self.shared.wake.notify_one();
+        Some(Handoff {
+            batch,
+            shared: Arc::clone(&self.shared),
+        })
+    }
+}
+
+/// One task queued by [`Pool::try_handoff`].
+pub(crate) struct Handoff<T> {
+    batch: Arc<Batch<T>>,
+    shared: Arc<Shared>,
+}
+
+impl<T: Send> Handoff<T> {
+    /// Wait until the worker has finished. The task closure is dropped here.
+    pub(crate) fn join(self) -> Result<T, OjasError> {
+        {
+            let mut state = lock(&self.batch.state);
+            while state.finished < 1 {
+                state = match self.batch.done.wait(state) {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+            }
+        }
+        unpublish(&self.shared, Arc::as_ptr(&self.batch) as *const ());
+        let task = lock(&self.batch.task).take();
+        drop(task);
+        let mut state = lock(&self.batch.state);
+        if let Some(text) = state.panic.take() {
+            return Err(OjasError::Backend {
+                id: BackendId::Cpu,
+                detail: format!("worker task panicked: {text}"),
+            });
+        }
+        match state.results.first_mut().and_then(Option::take) {
+            Some(value) => Ok(value),
+            None => Err(OjasError::Backend {
+                id: BackendId::Cpu,
+                detail: "worker task finished without a result".to_string(),
+            }),
+        }
+    }
+}
+
+fn on_pool_worker() -> bool {
+    std::thread::current()
+        .name()
+        .is_some_and(|name| name.starts_with("ojas-cpu-w"))
 }
 
 impl Drop for Pool {
@@ -830,6 +927,41 @@ mod tests {
                 }
             }
         });
+    }
+
+    /// A handoff does not spawn. Before `start` there is nothing to run it,
+    /// and the closure is not called. After `start` an existing worker runs
+    /// it; the caller does not.
+    #[test]
+    fn handoff_does_not_spawn_and_runs_on_a_started_worker() {
+        let idle = Pool::new(4).unwrap();
+        assert!(!idle.workers_ready());
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        assert!(idle
+            .try_handoff(move || {
+                flag.store(true, Ordering::Release);
+            })
+            .is_none());
+        assert!(!ran.load(Ordering::Acquire));
+        assert!(!idle.workers_ready());
+
+        let serial = Pool::serial();
+        assert!(!serial.workers_ready());
+        assert!(serial.try_handoff(|| ()).is_none());
+
+        let pool = Pool::new(4).unwrap();
+        pool.start().unwrap();
+        assert!(pool.workers_ready());
+        let handoff = pool
+            .try_handoff(|| std::thread::current().name().unwrap_or("").to_string())
+            .unwrap();
+        let name = handoff.join().unwrap();
+        assert!(
+            name.starts_with("ojas-cpu-w"),
+            "handoff ran on {name}, not a pool worker"
+        );
+        assert_ne!(name, std::thread::current().name().unwrap_or(""));
     }
 
     #[test]

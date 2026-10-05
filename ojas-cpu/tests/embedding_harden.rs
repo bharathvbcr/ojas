@@ -224,3 +224,72 @@ fn empty_table_or_ids_are_an_empty_tensor_refusal() {
         assert_eq!(backend.budget().live_bytes().unwrap(), 0);
     }
 }
+
+/// `copy_from_slice` of each selected row. Independent of `embedding_forward`.
+fn copy_rows(table: &[f32], ids: &[u32], dim: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; ids.len() * dim];
+    for (dst, &id) in out.chunks_exact_mut(dim).zip(ids) {
+        let start = id as usize * dim;
+        dst.copy_from_slice(&table[start..start + dim]);
+    }
+    out
+}
+
+/// The 768-wide gather is twelve 64-float blocks and has no tail. This checks
+/// that path against `copy_from_slice`, including −0, then a non-finite row.
+#[test]
+fn gather_768_matches_copy_from_slice_and_a_nonfinite_row_releases_the_charge() {
+    const DIM: usize = 768;
+    const VOCAB: usize = 32;
+    assert_eq!(DIM % 64, 0, "the 768 kernel has no short tail");
+    let mut rng = SplitMix64(0x7680_57a1);
+    let mut table = rng.vec(VOCAB * DIM, 3.0);
+    table[0] = -0.0;
+    table[1] = f32::from_bits(0x8000_0001);
+    table[63] = -0.0;
+    table[767] = -0.0;
+    table[DIM] = -0.0;
+    let last = table.len() - 1;
+    table[last] = -0.0;
+    let mut ids = Vec::with_capacity(64);
+    for _ in 0..48 {
+        ids.push(rng.below(VOCAB) as u32);
+    }
+    ids.push(ids[0]);
+    ids.push(ids[3]);
+    ids.push(0);
+    ids.push((VOCAB - 1) as u32);
+    ids.push(ids[0]);
+    let expect = copy_rows(&table, &ids, DIM);
+    assert_eq!(table[767].to_bits(), (-0.0f32).to_bits());
+    assert_eq!(table[last].to_bits(), (-0.0f32).to_bits());
+    for threads in [1usize, 6] {
+        let backend = cpu(threads, 1 << 30);
+        let tt = f32_owned(&table, &[VOCAB, DIM]);
+        let it = u32_owned(&ids, &[ids.len()]);
+        assert_eq!(backend.budget().live_bytes().unwrap(), 0);
+        let y = backend
+            .embedding_forward(&tt, &it)
+            .unwrap_or_else(|err| panic!("threads {threads}: {err}"));
+        assert_eq!(bits(&y.to_f32_vec().unwrap()), bits(&expect));
+        let out_bytes = (ids.len() * DIM * 4) as u64;
+        assert_eq!(backend.budget().live_bytes().unwrap(), out_bytes);
+        drop(y);
+        assert_eq!(backend.budget().live_bytes().unwrap(), 0);
+    }
+
+    for threads in [1usize, 6] {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for at in [2usize, (VOCAB - 1) * DIM + 17] {
+                let backend = cpu(threads, 1 << 30);
+                let mut bad_table = table.clone();
+                bad_table[at] = bad;
+                let tt = f32_owned(&bad_table, &[VOCAB, DIM]);
+                let it = u32_owned(&[0, 1, 0], &[3]);
+                assert_eq!(backend.budget().live_bytes().unwrap(), 0);
+                assert_nonfinite(backend.embedding_forward(&tt, &it));
+                assert_eq!(backend.budget().live_bytes().unwrap(), 0);
+            }
+        }
+    }
+}

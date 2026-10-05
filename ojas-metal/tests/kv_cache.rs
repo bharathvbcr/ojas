@@ -356,6 +356,90 @@ fn cached_attention_matches_the_cpu_reference() {
     }
 }
 
+/// Decode-sized calls walk the cache in splits and merge them
+/// (`cached_attn_splits` in `device.rs`: rows below 96 threadgroups, at
+/// least 64 keys a split). Lengths that do not divide evenly, a last split
+/// shorter than the rest, grouped-query heads, Tq > 1 rows whose position
+/// ends inside an earlier split, and a batch.
+#[test]
+fn split_cache_walk_matches_a_naive_f64_reference() {
+    let cases = [
+        (
+            1usize, 1usize, 12usize, 12usize, 64usize, 1024usize, 1030usize,
+        ),
+        (1, 1, 12, 12, 64, 129, 129),
+        (1, 1, 12, 12, 64, 1000, 1024),
+        (1, 1, 1, 1, 64, 4097, 4100),
+        (2, 1, 4, 2, 128, 700, 701),
+        (1, 3, 4, 2, 32, 300, 310),
+        (1, 1, 2, 1, 16, 200, 200),
+        (1, 70, 1, 1, 64, 128, 128),
+    ];
+    for (n, (b, tq, h, hkv, d, kv_len, cap)) in cases.into_iter().enumerate() {
+        let s = Dims {
+            b,
+            tq,
+            h,
+            hkv,
+            d,
+            cap,
+            kv_len,
+        };
+        let (got, want) = attend(s, 300 + 3 * n as u64);
+        close(&format!("{s:?}"), &got, &want, 1e-5, 1e-5);
+    }
+}
+
+/// The split walk keeps the folded finite checks: a NaN or infinity in q,
+/// or in any split's part of either cache, is reported at the next sync;
+/// positions at or past kv_len stay unread; overflowing scores are reported.
+#[test]
+fn split_cache_walk_reports_non_finite_values() {
+    let m = metal();
+    let (h, d, kv_len, cap) = (12usize, 64usize, 1000usize, 1024usize);
+    let qs = [1, 1, h, d];
+    let cs = [1, cap, h, d];
+    let q = up(&m, &rand(&qs, 61, 1.0));
+    let k = up(&m, &rand(&cs, 62, 1.0));
+    let v = up(&m, &rand(&cs, 63, 1.0));
+    let poison_at = |shape: &[usize], idx: usize, seed: u64, val: f32| {
+        let mut x = values(shape.iter().product(), seed, 1.0);
+        x[idx] = val;
+        up(&m, &host(&x, shape))
+    };
+    let at = |pos: usize, head: usize, dim: usize| (pos * h + head) * d + dim;
+    // First key, a split boundary (125 keys a split at 8 splits), the last key.
+    for pos in [0usize, 124, 125, 500, kv_len - 1] {
+        for val in [f32::NAN, f32::INFINITY] {
+            let kk = poison_at(&cs, at(pos, h - 1, d - 1), 64, val);
+            let r = m.cached_attention_forward(&q, &kk, &v, kv_len);
+            deferred(
+                &m,
+                &format!("k at {pos}: {val}"),
+                r,
+                "cached_attention_forward",
+            );
+            let vv = poison_at(&cs, at(pos, 0, 0), 65, val);
+            let r = m.cached_attention_forward(&q, &k, &vv, kv_len);
+            deferred(
+                &m,
+                &format!("v at {pos}: {val}"),
+                r,
+                "cached_attention_forward",
+            );
+        }
+    }
+    let qq = poison_at(&qs, h * d - 1, 66, f32::NEG_INFINITY);
+    let r = m.cached_attention_forward(&qq, &k, &v, kv_len);
+    deferred(&m, "q", r, "cached_attention_forward");
+    let tail = poison_at(&cs, at(kv_len, 0, 0), 67, f32::NAN);
+    ok("tail", m.cached_attention_forward(&q, &tail, &tail, kv_len));
+    ok("tail leaves nothing pending", m.sync());
+    let huge = |shape: &[usize]| up(&m, &host(&vec![1e30; shape.iter().product()], shape));
+    let r = m.cached_attention_forward(&huge(&qs), &huge(&cs), &v, kv_len);
+    deferred(&m, "overflowing scores", r, "cached_attention_forward");
+}
+
 #[test]
 fn kv_cache_write_places_src_and_nothing_else() {
     let m = metal();

@@ -178,6 +178,7 @@ impl CpuBackend {
         weight: &[f32],
         bias: &[f32],
         attn: &[f32],
+        attn_tensor: &Tensor,
         dims: ojas_core::GateDims,
         out_shape: &[usize],
         keep_scales: bool,
@@ -190,6 +191,7 @@ impl CpuBackend {
             weight,
             bias,
             attn,
+            Some(attn_tensor),
             dims,
             out_shape,
             keep_scales,
@@ -528,7 +530,7 @@ impl Backend for CpuBackend {
         let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
         let exec = self.exec();
         let [x, w, b, attn] = f32_operands(OP, exec, [input, weight, bias, attn_out])?;
-        self.gate_forward_parts(exec, x, w, b, attn, dims, attn_out.shape(), false)
+        self.gate_forward_parts(exec, x, w, b, attn, attn_out, dims, attn_out.shape(), false)
             .map(|(y, _)| y)
     }
 
@@ -550,6 +552,7 @@ impl Backend for CpuBackend {
             w,
             b,
             attn,
+            attn_out,
             dims,
             attn_out.shape(),
             exec.numerics == Numerics::Fast,

@@ -538,6 +538,363 @@ pub(crate) fn vvexpf_inplace(y: &mut [f32]) {
     }
 }
 
+/// Append one batch of the nanolab head pairs onto `dst`.
+///
+/// The public wrapper has checked that `src` holds
+/// `1024 * 768` elements and that `dst` has that much spare capacity, not
+/// overlapping `src`. Group width 2, token tile 32. Each token's 128 source
+/// floats are loaded once and stored, 64 into each head block. One head is
+/// one 8×8 block: `ldnp` loads it, `trn1`/`trn2` transpose it in registers
+/// and transpose it again (a transpose is an involution, so the lanes match
+/// the load), and `stnp` writes every lane. Bits are unchanged, including −0.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub(crate) fn split_nanolab_head_pairs_append(src: &[f32], dst: &mut Vec<f32>) {
+    const N: usize = 1024 * 768;
+    debug_assert!(src.len() >= N);
+    debug_assert!(dst.capacity() - dst.len() >= N);
+    let dest = dst.spare_capacity_mut().as_mut_ptr().cast::<f32>();
+    // SAFETY: the public wrapper checked the source span, the spare
+    // capacity, and that those ranges do not overlap. `split_nanolab_pairs`
+    // stores `N` initialized `f32`s at `dest` and does not reallocate. Neon
+    // is enabled for this target.
+    unsafe {
+        split_nanolab_pairs(src.as_ptr(), dest);
+        dst.set_len(dst.len() + N);
+    }
+}
+
+/// One disjoint time-row band of [`split_nanolab_token_range`].
+///
+/// `write` stores `count` tokens starting at `begin`. Dropping the band
+/// stores nothing. Two bands from one split do not share a destination lane.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub struct NanolabTokenBand {
+    src: *const f32,
+    dst: *mut f32,
+    begin: usize,
+    count: usize,
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+impl NanolabTokenBand {
+    pub(crate) fn new(src: *const f32, dst: *mut f32, begin: usize, count: usize) -> Self {
+        Self {
+            src,
+            dst,
+            begin,
+            count,
+        }
+    }
+
+    /// Store this band. The 8×8 body is [`transpose_8x8_block`].
+    pub fn write(self) {
+        // SAFETY: `with_nanolab_token_bands` checked the full batch, the
+        // spare capacity, and that the two bands partition `0..1024`. Neon
+        // is enabled on the range function. This consumes the band.
+        unsafe {
+            split_nanolab_token_range(self.src, self.dst, self.begin, self.count);
+        }
+    }
+}
+
+// SAFETY: `write` only reads `src` and writes this band's tokens. The two
+// bands built for one call partition the 1024 tokens, so their destination
+// ranges are disjoint. The caller joins a worker holding a band before the
+// destination is freed or reallocated.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+unsafe impl Send for NanolabTokenBand {}
+
+/// Grow `dst` by `n` after both bands have stored their lanes.
+///
+/// The caller has written `n` initialized floats into spare capacity.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub(crate) fn commit_nanolab_spare(dst: &mut Vec<f32>, n: usize) {
+    debug_assert!(dst.capacity() - dst.len() >= n);
+    // SAFETY: the caller wrote `n` initialized floats into spare capacity
+    // and this does not reallocate.
+    unsafe { dst.set_len(dst.len() + n) }
+}
+
+/// # Safety
+///
+/// Neon must be available. `src` must be readable for `1024 * 768` floats.
+/// `dst` must be writable for `12 * 1024 * 64` floats. The ranges must not
+/// overlap.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[target_feature(enable = "neon")]
+unsafe fn split_nanolab_pairs(src: *const f32, dst: *mut f32) {
+    // SAFETY: the caller checked the full 1024-token batch.
+    unsafe { split_nanolab_token_range(src, dst, 0, 1024) }
+}
+
+/// # Safety
+///
+/// Neon must be available. `begin + count` must be at most 1024. `src` must
+/// be readable for `1024 * 768` floats. `dst` must be writable for
+/// `12 * 1024 * 64` floats. A second call with the same pointers is sound
+/// only when its token range does not overlap this one. The ranges must not
+/// overlap each other as source and destination.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[target_feature(enable = "neon")]
+unsafe fn split_nanolab_token_range(src: *const f32, dst: *mut f32, begin: usize, count: usize) {
+    const TOKENS: usize = 1024;
+    const HEADS: usize = 12;
+    const DIM: usize = 64;
+    const STRIDE: usize = HEADS * DIM;
+    const GROUP: usize = 2;
+    const TILE: usize = 32;
+    let end = begin + count;
+    debug_assert!(end <= TOKENS);
+    let groups = HEADS / GROUP;
+    let head_elems = TOKENS * DIM;
+    let mut token0 = begin;
+    while token0 < end {
+        let tn = TILE.min(end - token0);
+        for g in 0..groups {
+            // SAFETY: `token0 < 1024`, `g < 6`, so the source offset is at
+            // most `1023 * 768 + 10 * 64` and the 128-float load stays
+            // inside `1024 * 768`. Each destination head block is
+            // `1024 * 64` floats, and `g * 2 + 1` is at most 11. Each head
+            // is one 8×8 block. `stnp` of a full `q` register writes all
+            // four lanes.
+            unsafe {
+                let mut sp = src.add(token0 * STRIDE + g * GROUP * DIM);
+                let mut d0 = dst.add((g * GROUP) * head_elems + token0 * DIM);
+                let mut d1 = dst.add((g * GROUP + 1) * head_elems + token0 * DIM);
+                for _ in 0..tn {
+                    transpose_8x8_block(sp, d0);
+                    transpose_8x8_block(sp.add(DIM), d1);
+                    sp = sp.add(STRIDE);
+                    d0 = d0.add(DIM);
+                    d1 = d1.add(DIM);
+                }
+            }
+        }
+        token0 += tn;
+    }
+}
+
+/// One 64-float head as an 8×8 block.
+///
+/// `src` is readable for 64 floats and `dst` is writable for 64. The
+/// regions do not overlap. Both addresses are 16-byte aligned. `ldnp`
+/// loads each row of eight floats. `trn1`/`trn2` transpose that block,
+/// then transpose it again so the stored lanes are the loaded lanes.
+/// `stnp` writes every lane.
+///
+/// # Safety
+///
+/// Neon must be available. `src` and `dst` must be 16-byte aligned, in
+/// bounds for 64 floats, and non-overlapping.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn transpose_8x8_block(src: *const f32, dst: *mut f32) {
+    // SAFETY: the caller guarantees the 64-float windows, alignment, and
+    // that they do not overlap. Neon is enabled on this function. A
+    // transpose applied twice is the identity, so every bit, including −0,
+    // is stored where it was loaded.
+    unsafe {
+        core::arch::asm!(
+            "ldnp q0, q1, [{src}, #0]",
+            "ldnp q2, q3, [{src}, #32]",
+            "ldnp q4, q5, [{src}, #64]",
+            "ldnp q6, q7, [{src}, #96]",
+            "ldnp q8, q9, [{src}, #128]",
+            "ldnp q10, q11, [{src}, #160]",
+            "ldnp q12, q13, [{src}, #192]",
+            "ldnp q14, q15, [{src}, #224]",
+            "trn1 v16.4s, v0.4s, v2.4s",
+            "trn2 v17.4s, v0.4s, v2.4s",
+            "trn1 v18.4s, v4.4s, v6.4s",
+            "trn2 v19.4s, v4.4s, v6.4s",
+            "trn1 v0.2d, v16.2d, v18.2d",
+            "trn1 v2.2d, v17.2d, v19.2d",
+            "trn2 v4.2d, v16.2d, v18.2d",
+            "trn2 v6.2d, v17.2d, v19.2d",
+            "trn1 v16.4s, v1.4s, v3.4s",
+            "trn2 v17.4s, v1.4s, v3.4s",
+            "trn1 v18.4s, v5.4s, v7.4s",
+            "trn2 v19.4s, v5.4s, v7.4s",
+            "trn1 v1.2d, v16.2d, v18.2d",
+            "trn1 v3.2d, v17.2d, v19.2d",
+            "trn2 v5.2d, v16.2d, v18.2d",
+            "trn2 v7.2d, v17.2d, v19.2d",
+            "trn1 v16.4s, v8.4s, v10.4s",
+            "trn2 v17.4s, v8.4s, v10.4s",
+            "trn1 v18.4s, v12.4s, v14.4s",
+            "trn2 v19.4s, v12.4s, v14.4s",
+            "trn1 v8.2d, v16.2d, v18.2d",
+            "trn1 v10.2d, v17.2d, v19.2d",
+            "trn2 v12.2d, v16.2d, v18.2d",
+            "trn2 v14.2d, v17.2d, v19.2d",
+            "trn1 v16.4s, v9.4s, v11.4s",
+            "trn2 v17.4s, v9.4s, v11.4s",
+            "trn1 v18.4s, v13.4s, v15.4s",
+            "trn2 v19.4s, v13.4s, v15.4s",
+            "trn1 v9.2d, v16.2d, v18.2d",
+            "trn1 v11.2d, v17.2d, v19.2d",
+            "trn2 v13.2d, v16.2d, v18.2d",
+            "trn2 v15.2d, v17.2d, v19.2d",
+            "trn1 v24.4s, v0.4s, v2.4s",
+            "trn2 v25.4s, v0.4s, v2.4s",
+            "trn1 v26.4s, v4.4s, v6.4s",
+            "trn2 v27.4s, v4.4s, v6.4s",
+            "trn1 v16.2d, v24.2d, v26.2d",
+            "trn1 v17.2d, v25.2d, v27.2d",
+            "trn2 v18.2d, v24.2d, v26.2d",
+            "trn2 v19.2d, v25.2d, v27.2d",
+            "trn1 v24.4s, v1.4s, v3.4s",
+            "trn2 v25.4s, v1.4s, v3.4s",
+            "trn1 v26.4s, v5.4s, v7.4s",
+            "trn2 v27.4s, v5.4s, v7.4s",
+            "trn1 v20.2d, v24.2d, v26.2d",
+            "trn1 v21.2d, v25.2d, v27.2d",
+            "trn2 v22.2d, v24.2d, v26.2d",
+            "trn2 v23.2d, v25.2d, v27.2d",
+            "trn1 v24.4s, v8.4s, v10.4s",
+            "trn2 v25.4s, v8.4s, v10.4s",
+            "trn1 v26.4s, v12.4s, v14.4s",
+            "trn2 v27.4s, v12.4s, v14.4s",
+            "trn1 v28.2d, v24.2d, v26.2d",
+            "trn1 v29.2d, v25.2d, v27.2d",
+            "trn2 v30.2d, v24.2d, v26.2d",
+            "trn2 v31.2d, v25.2d, v27.2d",
+            "trn1 v24.4s, v9.4s, v11.4s",
+            "trn2 v25.4s, v9.4s, v11.4s",
+            "trn1 v26.4s, v13.4s, v15.4s",
+            "trn2 v27.4s, v13.4s, v15.4s",
+            "trn1 v8.2d, v24.2d, v26.2d",
+            "trn1 v10.2d, v25.2d, v27.2d",
+            "trn2 v12.2d, v24.2d, v26.2d",
+            "trn2 v14.2d, v25.2d, v27.2d",
+            "stnp q16, q20, [{dst}, #0]",
+            "stnp q17, q21, [{dst}, #32]",
+            "stnp q18, q22, [{dst}, #64]",
+            "stnp q19, q23, [{dst}, #96]",
+            "stnp q28, q8, [{dst}, #128]",
+            "stnp q29, q10, [{dst}, #160]",
+            "stnp q30, q12, [{dst}, #192]",
+            "stnp q31, q14, [{dst}, #224]",
+            src = in(reg) src,
+            dst = in(reg) dst,
+            out("v0") _,
+            out("v1") _,
+            out("v2") _,
+            out("v3") _,
+            out("v4") _,
+            out("v5") _,
+            out("v6") _,
+            out("v7") _,
+            out("v8") _,
+            out("v9") _,
+            out("v10") _,
+            out("v11") _,
+            out("v12") _,
+            out("v13") _,
+            out("v14") _,
+            out("v15") _,
+            out("v16") _,
+            out("v17") _,
+            out("v18") _,
+            out("v19") _,
+            out("v20") _,
+            out("v21") _,
+            out("v22") _,
+            out("v23") _,
+            out("v24") _,
+            out("v25") _,
+            out("v26") _,
+            out("v27") _,
+            out("v28") _,
+            out("v29") _,
+            out("v30") _,
+            out("v31") _,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// 768-wide embedding row. Twelve `ldp`/`stnp` pairs of 64 floats.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+const EMBED_ROW_FLOATS: usize = 768;
+
+/// # Safety
+///
+/// Neon must be available. `src` must be readable for 768 floats and `dst`
+/// writable for 768. The ranges must not overlap. `stnp` of a `q` pair
+/// keeps the non-temporal hint when `dst` is 32-byte aligned; a 16-byte
+/// aligned address still stores every lane.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[inline]
+unsafe fn store_row_768(src: *const f32, dst: *mut f32) {
+    // SAFETY: `blocks` starts at 12. Each pass reads and writes 64 floats
+    // (256 bytes) and then advances both pointers by that many bytes.
+    // Twelve passes cover 768 floats and stop on the exact end. Neon is a
+    // baseline feature of this target, so the `q` registers are available
+    // without a separate `target_feature` gate.
+    unsafe {
+        core::arch::asm!(
+            "2:",
+            "ldp q0, q1, [{src}, #0]",
+            "stnp q0, q1, [{dst}, #0]",
+            "ldp q0, q1, [{src}, #32]",
+            "stnp q0, q1, [{dst}, #32]",
+            "ldp q0, q1, [{src}, #64]",
+            "stnp q0, q1, [{dst}, #64]",
+            "ldp q0, q1, [{src}, #96]",
+            "stnp q0, q1, [{dst}, #96]",
+            "ldp q0, q1, [{src}, #128]",
+            "stnp q0, q1, [{dst}, #128]",
+            "ldp q0, q1, [{src}, #160]",
+            "stnp q0, q1, [{dst}, #160]",
+            "ldp q0, q1, [{src}, #192]",
+            "stnp q0, q1, [{dst}, #192]",
+            "ldp q0, q1, [{src}, #224]",
+            "stnp q0, q1, [{dst}, #224]",
+            "add {src}, {src}, #256",
+            "add {dst}, {dst}, #256",
+            "subs {blocks}, {blocks}, #1",
+            "b.ne 2b",
+            src = inout(reg) src => _,
+            dst = inout(reg) dst => _,
+            blocks = inout(reg) EMBED_ROW_FLOATS / 64 => _,
+            out("v0") _,
+            out("v1") _,
+            options(nostack),
+        );
+    }
+}
+
+/// Each row is loaded with `ldp` and stored with `stnp`. Nothing is written
+/// before the first `stnp`, and `dst`'s length grows only after every row
+/// is stored. Bits are unchanged, including −0.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub(crate) fn gather_embedding_rows_768(table: &[f32], ids: &[u32], dst: &mut Vec<f32>) {
+    let n = ids.len() * EMBED_ROW_FLOATS;
+    debug_assert!(n == 0 || table.len().is_multiple_of(EMBED_ROW_FLOATS));
+    debug_assert!(dst.capacity() - dst.len() >= n);
+    if n == 0 {
+        return;
+    }
+    let dest = dst.spare_capacity_mut().as_mut_ptr().cast::<f32>();
+    let base = table.as_ptr();
+    // SAFETY: the public wrapper checked the source span, every id, the
+    // spare capacity, and that those ranges do not overlap. Each
+    // `store_row_768` writes 768 initialized `f32`s. This does not
+    // reallocate between those stores and `set_len`. Neon is a baseline
+    // feature of this target. Every bit pattern is a valid `f32`.
+    unsafe {
+        for (i, &id) in ids.iter().enumerate() {
+            store_row_768(
+                base.add(id as usize * EMBED_ROW_FLOATS),
+                dest.add(i * EMBED_ROW_FLOATS),
+            );
+        }
+        dst.set_len(dst.len() + n);
+    }
+}
+
 /// Writes `gates[h] * head` into `dst`'s spare capacity and grows `dst`.
 ///
 /// `attn.len() == gates.len() * head_dim`, `head_dim > 0`, `attn` is
