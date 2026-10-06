@@ -1,7 +1,7 @@
 ---
 id: "gp-cuda-backend-provider"
-title: "Implement Whole-Step Qwen3.5 CUDA Training Provider for GH200"
-status: backlog
+title: "Implement Whole-Step Qwen3.5 CUDA Training Provider and Consolidate Crates"
+status: ready
 priority: 1
 severity: high
 type: feature
@@ -12,6 +12,8 @@ labels:
   - "gh200"
   - "backend"
   - "lappi"
+  - "cleanup"
+  - "tests"
 repositories:
   - "ojas"
 planned_files:
@@ -19,11 +21,20 @@ planned_files:
   - "ojas-cuda/src/lib.rs"
   - "ojas-cuda/src/backend.rs"
   - "ojas-cuda/src/step.rs"
+  - "ojas-cuda/src/buffer.rs"
+  - "ojas-cuda/src/runtime.rs"
+  - "ojas-cuda/tests/"
+  - "ojas-qwen35-cuda/"
   - "ojas-qwen35/src/cuda.rs"
+  - ".github/workflows/test.yml"
 acceptance_criteria:
-  - "cudarc pinned to cuda-12080 to match the GH200 driver environment (already met before 1f26a4b)"
+  - "cudarc pinned to cuda-12080 to match the GH200 driver environment (verified met)"
+  - "Every test file under ojas-qwen35-cuda/tests is moved to ojas-cuda/tests (or deliberately dropped, with recorded reason)"
+  - "The buffer.rs, lib.rs and runtime.rs differences between the two crates are reconciled into ojas-cuda"
+  - "Host-side CUDA tests run in CI, and device tests build (cargo test -p ojas-cuda --features cuda --no-run)"
+  - "ojas-qwen35-cuda/ is removed from the tree, and no doc or Cargo.toml still refers to it"
   - "Implement Qwen35Cuda step provider mirroring the Metal ojas-qwen35 API: forward, backward and adamw_step launch real kernels instead of the current stub"
-  - "Provide NVRTC-compiled kernel pipelines for GEMM, attention (none exists yet), and in-place AdamW, wired into the step and into CudaBackend's Backend ops"
+  - "Provide NVRTC-compiled kernel pipelines for GEMM, attention, and in-place AdamW, wired into the step and CudaBackend ops"
   - "Eliminate dead helper code (commit_resize) and replace mock tests with real GPU tests under ojas-cuda/tests"
   - "Verify execution on GH200 with zero symbol panics"
 ---
@@ -31,36 +42,42 @@ acceptance_criteria:
 # Task brief v1
 
 ## Title
-Implement Whole-Step Qwen3.5 CUDA Training Provider for GH200
+Implement Whole-Step Qwen3.5 CUDA Training Provider and Consolidate Crates
 
 Task: gp-cuda-backend-provider
 Type: feature
-Status: backlog
+Status: ready
 Priority: 1 (High)
 Severity: high
 Owner: unassigned
 Due: none
-Labels: cuda, gh200, backend, lappi
+Labels: cuda, gh200, backend, lappi, cleanup, tests
 
 ## Repositories
 - ojas
 
 ## Description
-Lappi GH200 training campaigns need a CUDA path for the whole Qwen3.5 training step. Following docs/cuda-backend-scoping.md, this task implements the whole-step Qwen3.5 training provider on CUDA and wires real NVRTC compute kernels into it.
+Consolidated task combining crate consolidation (`gp-cuda-crate-consolidation`) and whole-step training provider execution (`gp-cuda-backend-provider`).
 
-### Progress (audit of 9668bfa, 2026-10-05, code inspection only; tests not executed)
-1f26a4b's message says it added a "CUDA backend". What is actually there:
-- **The pin premise is stale.** `ojas-cuda/Cargo.toml` was already `cuda-12080` before 1f26a4b. Criterion 1 is met.
-- **`CudaBackend` is a shell.** `impl Backend for CudaBackend` (`ojas-cuda/src/backend.rs:73`) has working `upload`/`download`/`sync` only. All 28 compute ops return `Unsupported` "does not yet implement ..." (`backend.rs:179-486`). It also takes the refusing defaults for `linear_cross_entropy_mean`, `cached_attention_forward`, `kv_cache_write`, `optimizer_scratch_bytes` and `accumulate_grad`.
-- **`Qwen35Step` is a stub.** `forward` returns a zero `hidden` tensor; `backward` only validates and bumps `BankState`; `adamw_step` only validates hyperparameters and increments counters. Nothing on the step path launches a kernel (`ojas-cuda/src/step.rs:366-469`).
-- **Kernels exist, unwired:** GEMM (`gemm.rs`), AdamW (`k11_kernels.rs`), GDN, conv1d, CE rows, RMSNorm, embed. There is no attention/SDPA kernel; the only softmax is in CE rows.
-- **Dead code remains.** `commit_resize` is still in `ojas-cuda/src/lib.rs:228` with `#[allow(dead_code)]` and is called only from tests.
-- **Tests:** `ojas-cuda/tests/` holds only `fixtures/`. The real device tests are still in the leftover `ojas-qwen35-cuda/` crate, which is not a workspace member. See gp-cuda-crate-consolidation, which should land first.
+Lappi GH200 training campaigns need an end-to-end CUDA path for Qwen3.5 training. Following `docs/cuda-backend-scoping.md`, this task reconciles the standalone prototype crate, integrates its test coverage into `ojas-cuda`, and implements the whole-step Qwen3.5 training provider with real NVRTC compute kernels.
+
+### Audit status and progress notes (2026-10-05)
+1. **The cudarc pin premise is satisfied:** `ojas-cuda/Cargo.toml` is already pinned to `cuda-12080`.
+2. **Phase 1: Crate consolidation:** Commit 1f26a4b copied `ojas-qwen35-cuda` sources into `ojas-cuda/src`, but left the old crate in place: 443 tracked files with their own standalone workspace and lock file, unbuilt in CI. The shared `src` files are byte-identical except `buffer.rs`, `lib.rs`, and `runtime.rs`. Approximately 278 tests (43 `#[ignore]`d sm_90 device tests in `tests/device_*.rs`, plus host-side `reference_*.rs`, `fixture_pins.rs`, `runtime_refusal.rs`, `fmt_boundary.rs`) still reside only in the leftover crate.
+3. **Phase 2: Whole-step provider and kernels:** `impl Backend for CudaBackend` (`ojas-cuda/src/backend.rs:73`) has working `upload`/`download`/`sync` only; all 28 compute ops return `Unsupported`. `Qwen35Step` (`ojas-cuda/src/step.rs:366-469`) is currently a stub returning a zero `hidden` tensor. Kernels exist unwired for GEMM (`gemm.rs`), AdamW (`k11_kernels.rs`), GDN, conv1d, CE rows, RMSNorm, and embed. No attention/SDPA kernel is wired. `commit_resize` in `ojas-cuda/src/lib.rs:228` remains dead code called only from tests.
+
+### Execution plan
+- **Phase 1 (Consolidation):** Reconcile `buffer.rs`, `lib.rs`, and `runtime.rs`. Move test suites to `ojas-cuda/tests/`. Wire host-side CUDA tests into CI. Remove `ojas-qwen35-cuda/`.
+- **Phase 2 (Kernels & Step Provider):** Wire NVRTC kernels for GEMM, attention, and in-place AdamW into `CudaBackend` and `Qwen35Step`. Wire the step provider to match `ojas-qwen35` Metal semantics. Verify execution on GH200 without symbol panics.
 
 ## Acceptance criteria
-- [x] cudarc pinned to cuda-12080 to match the GH200 driver environment (already met before 1f26a4b)
+- [x] cudarc pinned to cuda-12080 to match the GH200 driver environment (verified met)
+- [ ] Every test file under ojas-qwen35-cuda/tests is moved to ojas-cuda/tests (or deliberately dropped, with recorded reason)
+- [ ] The buffer.rs, lib.rs and runtime.rs differences between the two crates are reconciled into ojas-cuda
+- [ ] Host-side CUDA tests run in CI, and device tests build (cargo test -p ojas-cuda --features cuda --no-run)
+- [ ] ojas-qwen35-cuda/ is removed from the tree, and no doc or Cargo.toml still refers to it
 - [ ] Implement Qwen35Cuda step provider mirroring the Metal ojas-qwen35 API: forward, backward and adamw_step launch real kernels instead of the current stub
-- [ ] Provide NVRTC-compiled kernel pipelines for GEMM, attention (none exists yet), and in-place AdamW, wired into the step and into CudaBackend's Backend ops
+- [ ] Provide NVRTC-compiled kernel pipelines for GEMM, attention, and in-place AdamW, wired into the step and CudaBackend ops
 - [ ] Eliminate dead helper code (commit_resize) and replace mock tests with real GPU tests under ojas-cuda/tests
 - [ ] Verify execution on GH200 with zero symbol panics
 
@@ -69,4 +86,9 @@ Lappi GH200 training campaigns need a CUDA path for the whole Qwen3.5 training s
 - ojas-cuda/src/lib.rs
 - ojas-cuda/src/backend.rs
 - ojas-cuda/src/step.rs
+- ojas-cuda/src/buffer.rs
+- ojas-cuda/src/runtime.rs
+- ojas-cuda/tests/
+- ojas-qwen35-cuda/
 - ojas-qwen35/src/cuda.rs
+- .github/workflows/test.yml

@@ -57,7 +57,7 @@ Verification across workspace crates and backend implementations:
 - **CPU Backend Layout & Pointwise Hardening (`ojas-cpu`):** Parallelized pointwise execution across scoped worker threads, optimized fast gate backward reductions, and verified permute/elementwise edge-case handling.
 - **KV Cache & Metal Parity (`ojas-metal`):** Extended cached attention suites, split cache walks, and verified concurrency and deferred faults.
 - **PyTorch Parity & Sweep Benchmarks (`bench/`, `docs/bench-*-vs-torch.md`):** Updated CPU and Metal vs PyTorch 2.13 CPU & MPS benchmarks, per-call breakdowns, and scaling sweeps across batch sizes.
-- **GitPulse Task Integration (`tasks/`):** Registered 9 prioritized tasks in `tasks/` tracking execution blockers and roadmap features (BF16 compute tier, head dim 256/GQA, u32 TokenBin, CUDA provider, attention LSE, activation checkpointing, Muon BF16, hybrid primitives, sliding window attention).
+- **GitPulse Task Integration (`tasks/`):** Consolidated into 9 unified, prioritized task briefs in `tasks/` tracking execution blockers and roadmap features (`gp-cuda-backend-provider`, `gp-bf16-compute-tier`, `gp-attention-kernels`, `gp-gpu-runtime-hardening`, `gp-autograd-and-model-primitives`, `gp-data-and-checkpoint-robustness`, `gp-backend-architecture-decisions`, `gp-ci-and-repo-hygiene`, `gp-docs-and-bench-parity`).
 
 ## Previous run: kernel hardening, SIMD vectorization & backend parity (verified, 2026-10-04)
 

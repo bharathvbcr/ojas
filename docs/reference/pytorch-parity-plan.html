@@ -154,22 +154,22 @@
 <tr><td>1</td><td>Linear / GEMM</td><td>all</td><td>Has: no-bias <code>x @ W^T</code> on CPU, Metal and wgpu</td></tr>
 <tr><td>2</td><td>Embedding, tied to LM head</td><td>all</td><td>Has</td></tr>
 <tr><td>3</td><td>RMSNorm (also used as QK-norm)</td><td>nanolab, sprint</td><td>Has</td></tr>
-<tr><td>4</td><td>Causal SDPA with GQA, sliding window, head_dim 64/128/256</td><td>all</td><td>Partial: causal only, grouped-query on CPU, Metal and wgpu, Tq = Tk. Metal and wgpu reach D ≤ 256, and Metal is tiled (flash-style) both ways. Sliding window attention is missing (tracked in Task <code>gp-sliding-window-attention</code>). Head dim 256 GQA is scoped in Task <code>gp-head-dim-256-gqa</code></td></tr>
+<tr><td>4</td><td>Causal SDPA with GQA, sliding window, head_dim 64/128/256</td><td>all</td><td>Partial: causal only, grouped-query on CPU, Metal and wgpu, Tq = Tk. Metal and wgpu reach D ≤ 256, and Metal is tiled (flash-style) both ways. Sliding window attention and GQA native kernels are tracked in Task <code>gp-attention-kernels</code></td></tr>
 <tr><td>5</td><td>RoPE</td><td>all</td><td>Has. <code>Backend::permute</code> moves <code>[B,T,H,D]</code> ↔ <code>[B,H,T,D]</code> (F1 closed)</td></tr>
 <tr><td>6</td><td>Fused or chunked linear + cross-entropy</td><td>nanolab, Lappi</td><td>Has: <code>Backend::linear_cross_entropy_mean</code> tiles rows/vocab without materializing full logits on CPU, Metal and wgpu</td></tr>
 <tr><td>7</td><td>Activations: SiLU/SwiGLU, GELU, ReLU², sigmoid</td><td>nanolab</td><td>Has: SiLU, GELU, ReLU, Sigmoid, Tanh in <code>ojas-cpu/src/pointwise.rs</code></td></tr>
 <tr><td>8</td><td>AdamW (fused, fp32 master)</td><td>all</td><td>Has, one tensor per call</td></tr>
-<tr><td>9</td><td>Muon NS5 in bf16, batched</td><td>nanolab, sprint</td><td>f32 on CPU, Metal and wgpu; not bf16; one matrix per call (bf16 NS5 tracked in Task <code>gp-muon-bf16-ns5</code>)</td></tr>
+<tr><td>9</td><td>Muon NS5 in bf16, batched</td><td>nanolab, sprint</td><td>f32 on CPU, Metal and wgpu; not bf16; one matrix per call (bf16 NS5 tracked in Task <code>gp-bf16-compute-tier</code>)</td></tr>
 <tr><td>10</td><td>Hand-written LR schedules (cosine, WSD)</td><td>all; <code>lr_scheduler</code> has 0 sites</td><td>Has: <code>CosineSchedule</code>, <code>WsdSchedule</code>, <code>LrSchedule</code> in <code>ojas-cpu/src/schedule.rs</code></td></tr>
 <tr><td>11</td><td><code>clip_grad_norm_</code></td><td>all</td><td>Has</td></tr>
 <tr><td>12</td><td>bf16 autocast / bf16 weights</td><td>sprint, Lappi</td><td>Optional <code>Autocast</code> region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype (bf16 compute tier scoped in Task <code>gp-bf16-compute-tier</code>)</td></tr>
-<tr><td>13</td><td>Activation checkpointing</td><td>nanolab, Lappi</td><td>Missing (scoped in Task <code>gp-activation-checkpointing</code>)</td></tr>
+<tr><td>13</td><td>Activation checkpointing</td><td>nanolab, Lappi</td><td>Missing (scoped in Task <code>gp-autograd-and-model-primitives</code>)</td></tr>
 <tr><td>14</td><td><code>torch.save</code> / safetensors</td><td>all</td><td>Has: Checkpoint v1, streaming <code>SafeTensorsWriter</code>, <code>replace_dir_with</code>, <code>Trainer</code> checkpoint save and resume</td></tr>
-<tr><td>15</td><td>Token-bin data loading (memmap u16/u32)</td><td>all; DataLoader has 0 sites</td><td><code>TokenBin</code> plus a seeded, epoch-shuffled, resumable <code>BatchSampler</code> (<code>DataCursor</code>). Supports <code>u16</code> and <code>u32</code> streams (headerless and FineWeb), so vocabularies &gt; 65536 (Qwen, LLaMA 3) are supported (tracked in Task <code>gp-tokenbin-u32</code>)</td></tr>
+<tr><td>15</td><td>Token-bin data loading (memmap u16/u32)</td><td>all; DataLoader has 0 sites</td><td><code>TokenBin</code> plus a seeded, epoch-shuffled, resumable <code>BatchSampler</code> (<code>DataCursor</code>). Supports <code>u16</code> and <code>u32</code> streams (headerless and FineWeb), so vocabularies &gt; 65536 (Qwen, LLaMA 3) are supported (tracked in Task <code>gp-data-and-checkpoint-robustness</code>)</td></tr>
 <tr><td>16</td><td>KV cache, temperature/top-k sampling</td><td>nanolab</td><td>Has: CPU <code>forward_token</code>, <code>Backend::kv_cache_write</code>, wgpu KV cache, <code>ojas-infer</code> greedy and temperature/top-k/top-p sampler</td></tr>
 <tr><td>17</td><td><code>torch.cuda/mps</code> synchronize, memory stats, seeding</td><td>about 330 sites</td><td>Has: <code>Backend::sync</code>, <code>Budget::peak_bytes()</code>, <code>Budget::reset_peak()</code>, <code>ResourcePlan</code>, <code>ojas-device</code> profiling, Go <code>SYSTEM_PROFILE</code> (opcode 16)</td></tr>
 <tr><td>18</td><td>Distributed collectives</td><td>sprint only</td><td>Missing; not needed on one device</td></tr>
-<tr><td>19</td><td>GDN chunk rule + causal conv1d (Qwen3.5)</td><td>Lappi</td><td>Missing in ojas. Exists Metal-only in tessl (hybrid layer primitives scoped in Task <code>gp-hybrid-layer-primitives</code>)</td></tr>
+<tr><td>19</td><td>GDN chunk rule + causal conv1d (Qwen3.5)</td><td>Lappi</td><td>Missing in ojas. Exists Metal-only in tessl (hybrid layer primitives scoped in Task <code>gp-autograd-and-model-primitives</code>)</td></tr>
 </tbody></table></div>
 <p><strong>The framework layer is landed (verified).</strong></p>
 <ul>
@@ -321,7 +321,7 @@
 </li>
 <li><strong>ojas-core has no typed device-lost variant.</strong> <code>kind_of</code> still reads backend detail text.
 </li>
-<li><strong>Readback-count race (found by the ojas-cpu session, scoped in Task <code>gp-gpu-test-budget-readbacks</code>).</strong> <code>device_readbacks()</code> is process-wide, so &#34;no readback&#34; assertions fail under parallel <code>cargo test</code> when sibling tests download (wgpu <code>muon.rs</code> 3, <code>permute.rs</code> 2). The CI gates pass <code>--test-threads=1</code> and are unaffected. <strong>Class fix landed in ojas-core:</strong> <code>Budget::device_readbacks()</code> counts per budget tree, from any thread (<code>budget_readbacks_count_only_their_own_tree_across_threads</code>). <strong>Pending, in slot (d):</strong> move the GPU tests (wgpu muon/permute/residency/parity/contract, autograd device and wgpu tapes, capi <code>readbacks_during</code>, metal training_step) onto it, and verify them under default threads.
+<li><strong>Readback-count race (found by the ojas-cpu session, scoped in Task <code>gp-ci-and-repo-hygiene</code>).</strong> <code>device_readbacks()</code> is process-wide, so &#34;no readback&#34; assertions fail under parallel <code>cargo test</code> when sibling tests download (wgpu <code>muon.rs</code> 3, <code>permute.rs</code> 2). The CI gates pass <code>--test-threads=1</code> and are unaffected. <strong>Class fix landed in ojas-core:</strong> <code>Budget::device_readbacks()</code> counts per budget tree, from any thread (<code>budget_readbacks_count_only_their_own_tree_across_threads</code>). <strong>Pending, in slot (d):</strong> move the GPU tests (wgpu muon/permute/residency/parity/contract, autograd device and wgpu tapes, capi <code>readbacks_during</code>, metal training_step) onto it, and verify them under default threads.
 </li>
 <li><strong><code>CpuBackend</code> now defaults to <code>Numerics::Fast</code>.</strong> A concurrent session made this change with the user&#39;s approval. Under Fast, <code>ojas-infer</code>&#39;s &#34;cached decode equals full forward&#34; is bit-identical only while every GEMM is below 2^21 multiply-adds; above that the full forward goes to Accelerate. <strong>Since resolved</strong> by the ojas-cpu session (lane-reported; ojas-infer 35 passed):
 </li>
@@ -331,7 +331,7 @@
 </li>
 <li>One test covers the 2^21-MAC Accelerate cutoff.
 </li>
-<li><strong>Attention LSE (tracked in Task <code>gp-attention-lse-return</code>):</strong> a forward that emits LSE would remove the backward&#39;s stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
+<li><strong>Attention LSE (tracked in Task <code>gp-attention-kernels</code>):</strong> a forward that emits LSE would remove the backward&#39;s stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
 <ul>
 <li>wgpu round 5 timed each backward dispatch: <code>attn_bwd_prep</code> reruns the forward, 11.5 of 52.1 ms at [4,12,1024,64] and 30.3 of 141.4 ms at [4,8,2048,64]. LSE from the forward would save about 21% of the wgpu backward (inferred).
 </li>
@@ -409,7 +409,7 @@
 </li>
 </ul>
 </li>
-<li><strong>wgpu fault word is full (wgpu round 3, scoped in Task <code>gp-wgpu-fault-word-64</code>).</strong> All 32 op bits are in use; the last four went to <code>accumulate_grad</code>, <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code> and <code>kv_cache_write</code>. A 33rd fault-reporting op needs a second word or a 64-bit word first.
+<li><strong>wgpu fault word is full (wgpu round 3, scoped in Task <code>gp-gpu-runtime-hardening</code>).</strong> All 32 op bits are in use; the last four went to <code>accumulate_grad</code>, <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code> and <code>kv_cache_write</code>. A 33rd fault-reporting op needs a second word or a 64-bit word first.
 </li>
 <li><strong>wgpu <code>clip_grad_norm</code> returned another caller&#39;s norm under concurrency (fixed, wgpu round 3).</strong> Job scratch went back to the pool before the read. The status buffer is now held until after the read. <code>clip_norms_stay_correct_while_other_threads_submit</code> failed 5/5 before the fix and passes 5/5 after.
 </li>
@@ -419,7 +419,7 @@
 </li>
 <li><strong>io:</strong> the single-file <code>replace_with</code> still replaces a symlink as a link (documented). Only <code>replace_dir_with</code> refuses symlinks. The <code>ojas-io/README.md</code> names <code>MAX_HEADER_SIZE</code> and <code>OjasError::InvalidSafetensors</code>, which predate this work and are wrong.
 </li>
-<li><strong>autograd (scoped in Task <code>gp-autograd-metal-tape-tests</code>):</strong> ojas-autograd has no ojas-metal dev-dependency, so G6 (seeded backward) is verified on CPU, the test doubles and wgpu, but not on Metal. Adding one changes Cargo.lock. Test helpers (<code>Resident</code>, <code>Rng</code>, <code>lin</code>, <code>ce</code>) are duplicated across <code>tests/common/mod.rs</code>, <code>device_tape.rs</code> and <code>gradcheck_random.rs</code>.
+<li><strong>autograd (scoped in Task <code>gp-ci-and-repo-hygiene</code>):</strong> ojas-autograd has no ojas-metal dev-dependency, so G6 (seeded backward) is verified on CPU, the test doubles and wgpu, but not on Metal. Adding one changes Cargo.lock. Test helpers (<code>Resident</code>, <code>Rng</code>, <code>lin</code>, <code>ce</code>) are duplicated across <code>tests/common/mod.rs</code>, <code>device_tape.rs</code> and <code>gradcheck_random.rs</code>.
 </li>
 <li><strong>Metal deferred faults landed (Metal round 5).</strong> Approved by the user; contract in <a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>.
 <ul>
@@ -534,7 +534,7 @@
 </li>
 <li>In-process Go API implemented via <code>ojas-capi</code>: <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>, <code>Resume</code>, GPT-2 tokenizer, and <code>GenerateIDs</code>.
 </li>
-<li>Follow-up prioritized work has been converted into active GitPulse task briefs in <code>tasks/</code> (<code>gp-bf16-compute-tier</code>, <code>gp-head-dim-256-gqa</code>, <code>gp-tokenbin-u32</code>, <code>gp-cuda-backend-provider</code>, <code>gp-attention-lse-return</code>, <code>gp-activation-checkpointing</code>, <code>gp-muon-bf16-ns5</code>, <code>gp-hybrid-layer-primitives</code>, <code>gp-sliding-window-attention</code>).
+<li>Follow-up prioritized work has been consolidated into 9 unified GitPulse task briefs in <code>tasks/</code> (<code>gp-cuda-backend-provider</code>, <code>gp-bf16-compute-tier</code>, <code>gp-attention-kernels</code>, <code>gp-gpu-runtime-hardening</code>, <code>gp-autograd-and-model-primitives</code>, <code>gp-data-and-checkpoint-robustness</code>, <code>gp-backend-architecture-decisions</code>, <code>gp-ci-and-repo-hygiene</code>, <code>gp-docs-and-bench-parity</code>).
 </li>
 </ul>
       </article>
