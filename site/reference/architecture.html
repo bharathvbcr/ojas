@@ -178,7 +178,7 @@
 <hr>
 <h2 id="3-general-purpose-tensor-engine--memory-model">3. General-Purpose Tensor Engine &amp; Memory Model <a class="anchor" href="#3-general-purpose-tensor-engine--memory-model" aria-label="Link to this section">#</a></h2>
 <h3 id="31-tensor-view-model">3.1 Tensor View Model <a class="anchor" href="#31-tensor-view-model" aria-label="Link to this section">#</a></h3>
-<p>A <code>Tensor</code> in <code>ojas-core</code> is an immutable or mutably borrowable view into a contiguous byte storage backing (<code>Arc&lt;Vec&lt;u8&gt;&gt;</code> or a backend&#39;s device buffer). <code>Tensor::from_device</code> wraps a device buffer; <code>to_host</code> copies it back and is counted by <code>device_readbacks()</code>; <code>device_buffer_mut</code> requires sole ownership. Host accessors such as <code>to_f32_vec</code> refuse a device tensor rather than reading it back implicitly.</p>
+<p>A <code>Tensor</code> in <code>ojas-core</code> is an immutable or mutably borrowable view into typed host storage (<code>HostData</code>: <code>Vec&lt;f32&gt;</code> for <code>F32</code>, <code>Vec&lt;u32&gt;</code> for <code>U32</code>, <code>Vec&lt;u16&gt;</code> for <code>Bf16</code>/<code>F16</code>) or an accelerator backend&#39;s device buffer (<code>Arc&lt;dyn DeviceBuffer&gt;</code>). <code>Tensor::from_device</code> wraps a device buffer; <code>to_host</code> copies it back and is counted by <code>device_readbacks()</code>; <code>device_buffer_mut</code> requires sole ownership. Host accessors such as <code>to_f32_vec</code>, <code>f32_slice</code>, and <code>f32_slice_mut</code> refuse a device tensor rather than reading it back implicitly across the PCIe/memory bus.</p>
 <p>$$\text{Element Index}(\mathbf{i}) = \text{byte\_offset} + \sum_{k=0}^{\text{rank}-1} i_k \cdot \text{strides}[k] \cdot \text{dtype.size\_bytes}()$$</p>
 <figure class="diagram"><pre class="mermaid">flowchart LR
     subgraph PhysicalBuffer[&#34;Underlying Physical Memory (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;]
@@ -316,7 +316,7 @@
     HiddenMat --&gt; Muon
     OneD --&gt; AdamW</pre></figure>
 <ul>
-<li><strong>Matrices ($\text{rank} \ge 2$):</strong> Optimized via <strong>Muon NS5</strong> (Nesterov momentum, quintic Newton-Schulz iterate in <code>bf16</code>).
+<li><strong>Matrices ($\text{rank} \ge 2$):</strong> Optimized via <strong>Muon NS5</strong> (Nesterov momentum, quintic Newton-Schulz iterate in <code>f32</code> in ojas across CPU, Metal and wgpu; nanolab baseline runs <code>bf16</code>).
 </li>
 <li><strong>Vectors &amp; Embeddings ($\text{rank} &lt; 2$):</strong> Optimized via <strong>AdamW</strong> (PyTorch single-tensor order, decay first, $\varepsilon=10^{-8}$ outside square root).
 </li>

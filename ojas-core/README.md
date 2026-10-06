@@ -11,16 +11,19 @@ It depends exclusively on the Rust standard library (`#![forbid(unsafe_code)]`).
 ```mermaid
 classDiagram
     class Tensor {
-        +Arc~Vec~u8~~ bytes
+        +Arc~Storage~ storage (HostData or DeviceBuffer)
         +usize byte_offset
-        +Vec~usize~ shape
-        +Vec~usize~ strides
+        +Box~[usize]~ shape
+        +Box~[usize]~ strides
         +DType dtype
         +narrow(dim, start, len) Result~Tensor~
-        +as_slice~T~() Result~&[T]~
+        +f32_slice() Result~&[f32]~
+        +f32_slice_mut() Result~&mut [f32]~
+        +u32_slice() Result~&[u32]~
+        +to_f32_vec() Result~Vec[f32]~
         +numel() usize
         +from_device(buf, shape, dtype) Tensor
-        +to_host(backend) Result~Tensor~
+        +to_host(budget) Result~Tensor~
         +is_device() bool
     }
 
@@ -145,14 +148,14 @@ The `Backend` trait defines the uniform operator interface implemented by comput
 
 ```mermaid
 flowchart LR
-    HostMem["Host Tensor (Arc<Vec<u8>>)"] -->|"Backend::upload()"| DeviceMem["Device Tensor (DeviceBuffer)"]
-    DeviceMem -->|"Tensor::to_host()"| HostCopy["Host Tensor Copy"]
+    HostMem["Host Tensor (HostData)"] -->|"Backend::upload()"| DeviceMem["Device Tensor (DeviceBuffer)"]
+    DeviceMem -->|"Tensor::to_host()"| HostCopy["Host Tensor Copy (HostData)"]
     DeviceMem -.->|"device_readbacks() counter increments"| Counter["Readback Audit Counter"]
     HostCopy --> Counter
 ```
 
 > [!CAUTION]
-> Host accessors such as `.to_f32_vec()` or `.as_slice::<f32>()` **refuse device tensors** rather than triggering an implicit, unmetered readback across PCIe / unified memory buses. Callers must explicitly call `.to_host(backend)`, which increments the counted readback metric.
+> Host accessors such as `.f32_slice()`, `.f32_slice_mut()`, or `.to_f32_vec()` **refuse device tensors** rather than triggering an implicit, unmetered readback across PCIe / unified memory buses. Callers must explicitly call `.to_host(budget)`, which increments the counted readback metric.
 
 ---
 

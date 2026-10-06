@@ -154,22 +154,22 @@
 <tr><td>1</td><td>Linear / GEMM</td><td>all</td><td>Has: no-bias <code>x @ W^T</code> on CPU, Metal and wgpu</td></tr>
 <tr><td>2</td><td>Embedding, tied to LM head</td><td>all</td><td>Has</td></tr>
 <tr><td>3</td><td>RMSNorm (also used as QK-norm)</td><td>nanolab, sprint</td><td>Has</td></tr>
-<tr><td>4</td><td>Causal SDPA with GQA, sliding window, head_dim 64/128/256</td><td>all</td><td>Partial: causal only, MHA only in the trait, Tq = Tk. Metal and wgpu reach D ≤ 128, and Metal is tiled (flash-style) both ways. GQA exists only in <code>ojas-infer</code>&#39;s CPU decode. Head dim 256 is not covered</td></tr>
+<tr><td>4</td><td>Causal SDPA with GQA, sliding window, head_dim 64/128/256</td><td>all</td><td>Partial: causal only, grouped-query on CPU, Metal and wgpu, Tq = Tk. Metal and wgpu reach D ≤ 256, and Metal is tiled (flash-style) both ways. Sliding window attention is missing (tracked in Task <code>gp-sliding-window-attention</code>). Head dim 256 GQA is scoped in Task <code>gp-head-dim-256-gqa</code></td></tr>
 <tr><td>5</td><td>RoPE</td><td>all</td><td>Has. <code>Backend::permute</code> moves <code>[B,T,H,D]</code> ↔ <code>[B,H,T,D]</code> (F1 closed)</td></tr>
 <tr><td>6</td><td>Fused or chunked linear + cross-entropy</td><td>nanolab, Lappi</td><td>Has: <code>Backend::linear_cross_entropy_mean</code> tiles rows/vocab without materializing full logits on CPU, Metal and wgpu</td></tr>
 <tr><td>7</td><td>Activations: SiLU/SwiGLU, GELU, ReLU², sigmoid</td><td>nanolab</td><td>Has: SiLU, GELU, ReLU, Sigmoid, Tanh in <code>ojas-cpu/src/pointwise.rs</code></td></tr>
 <tr><td>8</td><td>AdamW (fused, fp32 master)</td><td>all</td><td>Has, one tensor per call</td></tr>
-<tr><td>9</td><td>Muon NS5 in bf16, batched</td><td>nanolab, sprint</td><td>f32 on CPU, Metal and wgpu; not bf16; one matrix per call</td></tr>
+<tr><td>9</td><td>Muon NS5 in bf16, batched</td><td>nanolab, sprint</td><td>f32 on CPU, Metal and wgpu; not bf16; one matrix per call (bf16 NS5 tracked in Task <code>gp-muon-bf16-ns5</code>)</td></tr>
 <tr><td>10</td><td>Hand-written LR schedules (cosine, WSD)</td><td>all; <code>lr_scheduler</code> has 0 sites</td><td>Has: <code>CosineSchedule</code>, <code>WsdSchedule</code>, <code>LrSchedule</code> in <code>ojas-cpu/src/schedule.rs</code></td></tr>
 <tr><td>11</td><td><code>clip_grad_norm_</code></td><td>all</td><td>Has</td></tr>
-<tr><td>12</td><td>bf16 autocast / bf16 weights</td><td>sprint, Lappi</td><td>Optional <code>Autocast</code> region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype</td></tr>
-<tr><td>13</td><td>Activation checkpointing</td><td>nanolab, Lappi</td><td>Missing</td></tr>
+<tr><td>12</td><td>bf16 autocast / bf16 weights</td><td>sprint, Lappi</td><td>Optional <code>Autocast</code> region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype (bf16 compute tier scoped in Task <code>gp-bf16-compute-tier</code>)</td></tr>
+<tr><td>13</td><td>Activation checkpointing</td><td>nanolab, Lappi</td><td>Missing (scoped in Task <code>gp-activation-checkpointing</code>)</td></tr>
 <tr><td>14</td><td><code>torch.save</code> / safetensors</td><td>all</td><td>Has: Checkpoint v1, streaming <code>SafeTensorsWriter</code>, <code>replace_dir_with</code>, <code>Trainer</code> checkpoint save and resume</td></tr>
-<tr><td>15</td><td>Token-bin data loading (memmap u16/u32)</td><td>all; DataLoader has 0 sites</td><td><code>TokenBin</code> plus a seeded, epoch-shuffled, resumable <code>BatchSampler</code> (<code>DataCursor</code>). Supports <code>u16</code> and <code>u32</code> streams (headerless and FineWeb), so vocabularies &gt; 65536 (Qwen, LLaMA 3) are supported</td></tr>
+<tr><td>15</td><td>Token-bin data loading (memmap u16/u32)</td><td>all; DataLoader has 0 sites</td><td><code>TokenBin</code> plus a seeded, epoch-shuffled, resumable <code>BatchSampler</code> (<code>DataCursor</code>). Supports <code>u16</code> and <code>u32</code> streams (headerless and FineWeb), so vocabularies &gt; 65536 (Qwen, LLaMA 3) are supported (tracked in Task <code>gp-tokenbin-u32</code>)</td></tr>
 <tr><td>16</td><td>KV cache, temperature/top-k sampling</td><td>nanolab</td><td>Has: CPU <code>forward_token</code>, <code>Backend::kv_cache_write</code>, wgpu KV cache, <code>ojas-infer</code> greedy and temperature/top-k/top-p sampler</td></tr>
 <tr><td>17</td><td><code>torch.cuda/mps</code> synchronize, memory stats, seeding</td><td>about 330 sites</td><td>Has: <code>Backend::sync</code>, <code>Budget::peak_bytes()</code>, <code>Budget::reset_peak()</code>, <code>ResourcePlan</code>, <code>ojas-device</code> profiling, Go <code>SYSTEM_PROFILE</code> (opcode 16)</td></tr>
 <tr><td>18</td><td>Distributed collectives</td><td>sprint only</td><td>Missing; not needed on one device</td></tr>
-<tr><td>19</td><td>GDN chunk rule + causal conv1d (Qwen3.5)</td><td>Lappi</td><td>Missing in ojas. Exists Metal-only in tessl</td></tr>
+<tr><td>19</td><td>GDN chunk rule + causal conv1d (Qwen3.5)</td><td>Lappi</td><td>Missing in ojas. Exists Metal-only in tessl (hybrid layer primitives scoped in Task <code>gp-hybrid-layer-primitives</code>)</td></tr>
 </tbody></table></div>
 <p><strong>The framework layer is landed (verified).</strong></p>
 <ul>
@@ -315,7 +315,7 @@
 </li>
 <li><strong>Linux builds and links, but has never run.</strong> The Lappi session&#39;s L-cuda lane cross-checked and linked 67 test executables for <code>aarch64-unknown-linux-gnu</code> against the live tree at 22:35Z, including <code>ojas-cuda --features cuda</code>. That is reported in <a href="cuda-backend-scoping.html"><code>cuda-backend-scoping.md</code></a> §1.5 and was not re-run here. No binary has run on Linux. Windows has never been built, and gusset refuses it.
 </li>
-<li><strong>CUDA backend scoping</strong> is in <a href="cuda-backend-scoping.html"><code>cuda-backend-scoping.md</code></a>. It recommends a whole-step Qwen3.5 provider first, with a general <code>CudaBackend</code> as the destination, and lists six asks for the user. It also notes that <code>ojas-cuda</code>&#39;s <code>cuda-13040</code> binding pin mismatches the GH200&#39;s CUDA 12.8, so a missing-symbol call would panic.
+<li><strong>CUDA backend scoping</strong> is in <a href="cuda-backend-scoping.html"><code>cuda-backend-scoping.md</code></a> and scoped for implementation in Task <code>gp-cuda-backend-provider</code>. It recommends a whole-step Qwen3.5 provider first, with a general <code>CudaBackend</code> as the destination, and lists six asks for the user. It also notes that <code>ojas-cuda</code>&#39;s <code>cuda-13040</code> binding pin mismatches the GH200&#39;s CUDA 12.8, so a missing-symbol call would panic.
 </li>
 <li><strong><code>commit_resize</code> (<code>ojas-cuda/src/lib.rs:148</code>) is dead in the <code>cuda</code> build.</strong> Its test covers a helper the real resize path never calls (L-cuda finding; <code>cargo check --features cuda</code> warns).
 </li>
@@ -331,7 +331,7 @@
 </li>
 <li>One test covers the 2^21-MAC Accelerate cutoff.
 </li>
-<li><strong>Attention LSE:</strong> a forward that emits LSE would remove the backward&#39;s stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
+<li><strong>Attention LSE (tracked in Task <code>gp-attention-lse-return</code>):</strong> a forward that emits LSE would remove the backward&#39;s stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
 <ul>
 <li>wgpu round 5 timed each backward dispatch: <code>attn_bwd_prep</code> reruns the forward, 11.5 of 52.1 ms at [4,12,1024,64] and 30.3 of 141.4 ms at [4,8,2048,64]. LSE from the forward would save about 21% of the wgpu backward (inferred).
 </li>
@@ -521,21 +521,22 @@
 </li>
 </ol>
 <p><code>residual_add_bwd</code> scores 0.01× only because the API returns two gradient copies where torch returns the input tensor. It is an artefact of the API, not a slow kernel.</p>
-<h2 id="7-framework-layer-proposal">7. Framework layer (proposal) <a class="anchor" href="#7-framework-layer-proposal" aria-label="Link to this section">#</a></h2>
-<p>The design is in <a href="framework-design.html"><code>framework-design.md</code></a>. It proposes:</p>
+<h2 id="7-framework-layer-completed">7. Framework layer (completed) <a class="anchor" href="#7-framework-layer-completed" aria-label="Link to this section">#</a></h2>
+<p>The design is in <a href="framework-design.html"><code>framework-design.md</code></a>.</p>
 <ul>
-<li>a new <code>ojas-model</code> crate;
+<li><code>ojas-model</code> crate implemented: nanolab GPT architecture written once (spec, init, Graph block, Eval, and <code>Trainer&lt;B&gt;</code>).
 </li>
-<li>five <code>Backend</code> additions: <code>sync</code>, <code>accumulate_grad</code>, fused chunked <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code> and <code>kv_cache_write</code>, plus blanket impls for <code>&amp;B</code> and <code>Arc&lt;B&gt;</code>;
+<li>Five <code>Backend</code> additions landed across CPU, Metal, and wgpu: <code>sync</code>, <code>accumulate_grad</code>, fused chunked <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code> and <code>kv_cache_write</code>, plus blanket impls for <code>&amp;B</code> and <code>Arc&lt;B&gt;</code>.
 </li>
-<li>three <code>Tape</code> additions;
+<li><code>Tape</code> extensions landed.
 </li>
-<li>a device-resident <code>Trainer&lt;B&gt;</code> with a checkpoint directory;
+<li>Device-resident <code>Trainer&lt;B&gt;</code> with checkpoint directory save/resume verified.
 </li>
-<li>a real Go <code>LoadModel</code>/<code>TrainStep</code>/<code>SaveCheckpoint</code>/<code>GenerateIDs</code>.
+<li>In-process Go API implemented via <code>ojas-capi</code>: <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>, <code>Resume</code>, GPT-2 tokenizer, and <code>GenerateIDs</code>.
+</li>
+<li>Follow-up prioritized work has been converted into active GitPulse task briefs in <code>tasks/</code> (<code>gp-bf16-compute-tier</code>, <code>gp-head-dim-256-gqa</code>, <code>gp-tokenbin-u32</code>, <code>gp-cuda-backend-provider</code>, <code>gp-attention-lse-return</code>, <code>gp-activation-checkpointing</code>, <code>gp-muon-bf16-ns5</code>, <code>gp-hybrid-layer-primitives</code>, <code>gp-sliding-window-attention</code>).
 </li>
 </ul>
-<p>It is sized as 14 items, with an acceptance run against PyTorch nanolab&#39;s loss curve. Not started: it needs the user&#39;s go-ahead, and it should follow the concurrent ojas-cpu numerics work.</p>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/pytorch-parity-plan.md" rel="noopener"><code>docs/pytorch-parity-plan.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
@@ -553,7 +554,7 @@
 <li><a href="#5-work-queue">5. Work queue</a></li>
 <li><a href="#6-done-gate">6. Done-gate</a></li>
 <li><a href="#8-gpu-benchmark-verdict-against-torch-mps-2026-10-01">8. GPU benchmark verdict against torch MPS (2026-10-01)</a></li>
-<li><a href="#7-framework-layer-proposal">7. Framework layer (proposal)</a></li>
+<li><a href="#7-framework-layer-completed">7. Framework layer (completed)</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

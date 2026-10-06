@@ -82,7 +82,7 @@ Inside layer 3, `ojas-model` sits on `ojas-autograd`, `ojas-io` and `ojas-data`,
 ## 3. General-Purpose Tensor Engine & Memory Model
 
 ### 3.1 Tensor View Model
-A `Tensor` in `ojas-core` is an immutable or mutably borrowable view into a contiguous byte storage backing (`Arc<Vec<u8>>` or a backend's device buffer). `Tensor::from_device` wraps a device buffer; `to_host` copies it back and is counted by `device_readbacks()`; `device_buffer_mut` requires sole ownership. Host accessors such as `to_f32_vec` refuse a device tensor rather than reading it back implicitly.
+A `Tensor` in `ojas-core` is an immutable or mutably borrowable view into typed host storage (`HostData`: `Vec<f32>` for `F32`, `Vec<u32>` for `U32`, `Vec<u16>` for `Bf16`/`F16`) or an accelerator backend's device buffer (`Arc<dyn DeviceBuffer>`). `Tensor::from_device` wraps a device buffer; `to_host` copies it back and is counted by `device_readbacks()`; `device_buffer_mut` requires sole ownership. Host accessors such as `to_f32_vec`, `f32_slice`, and `f32_slice_mut` refuse a device tensor rather than reading it back implicitly across the PCIe/memory bus.
 
 $$\text{Element Index}(\mathbf{i}) = \text{byte\_offset} + \sum_{k=0}^{\text{rank}-1} i_k \cdot \text{strides}[k] \cdot \text{dtype.size\_bytes}()$$
 
@@ -258,7 +258,7 @@ flowchart TD
     OneD --> AdamW
 ```
 
-* **Matrices ($\text{rank} \ge 2$):** Optimized via **Muon NS5** (Nesterov momentum, quintic Newton-Schulz iterate in `bf16`).
+* **Matrices ($\text{rank} \ge 2$):** Optimized via **Muon NS5** (Nesterov momentum, quintic Newton-Schulz iterate in `f32` in ojas across CPU, Metal and wgpu; nanolab baseline runs `bf16`).
 * **Vectors & Embeddings ($\text{rank} < 2$):** Optimized via **AdamW** (PyTorch single-tensor order, decay first, $\varepsilon=10^{-8}$ outside square root).
 
 ---

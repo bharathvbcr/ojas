@@ -193,7 +193,7 @@
 <div class="table-wrap"><table>
 <thead><tr><th>Operation</th><th>CPU (<code>ojas-cpu</code>)</th><th>Metal (<code>ojas-metal</code>)</th><th>wgpu (<code>ojas-wgpu</code>)</th><th>DType</th><th>Specification</th></tr></thead>
 <tbody>
-<tr><td><strong>Embedding</strong></td><td>Table lookup / scatter-add</td><td><code>ojas_embed_*</code></td><td>WGSL</td><td><code>f32</code>, ids <code>u32</code></td><td>$y_t = W[x_t]$</td></tr>
+<tr><td><strong>Embedding</strong></td><td>Table lookup / scatter-add; ARM64 NEON <code>gather_embedding_rows_768</code> in <code>ojas-simd</code></td><td><code>ojas_embed_*</code></td><td>WGSL</td><td><code>f32</code>, ids <code>u32</code></td><td>$y_t = W[x_t]$</td></tr>
 <tr><td><strong>Linear</strong></td><td>Packed GEMM (Exact) or SIMD/Accelerate (Fast)</td><td>tessl GEMM, <code>ExactF32</code> operands</td><td>WGSL GEMM</td><td><code>f32</code></td><td>$y = x W^T$, no bias</td></tr>
 <tr><td><strong>RMSNorm</strong></td><td>Exact reduction</td><td><code>ojas_rms_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$y = x / \sqrt{\overline{x^2} + 10^{-6}} \odot w$</td></tr>
 <tr><td><strong>Half-split RoPE</strong></td><td>Split last axis</td><td><code>ojas_rope</code></td><td>WGSL</td><td><code>f32</code></td><td>Rotate halves $(-x_2, x_1)$; layout <code>[B, T, H, D]</code></td></tr>
@@ -202,7 +202,7 @@
 <tr><td><strong>Causal SDPA</strong></td><td>Exact softmax; blocked above 256 positions in Fast; grouped-query</td><td>Tiled TensorOps forward and FlashAttention-2 backward, D ≤ 256, grouped-query</td><td>WGSL, D ≤ 256, grouped-query</td><td><code>f32</code></td><td>$\mathrm{softmax}(QK^T/\sqrt{d} + M)V$; layout <code>[B, Hq, T, D]</code> query and <code>[B, Hkv, T, D]</code> KV; $T_q = T_k$</td></tr>
 <tr><td><strong>Per-Head Gate</strong></td><td>Sigmoid broadcast</td><td><code>ojas_per_head_gate_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$\sigma(x W_g^T + b_g) \odot \text{attn}$</td></tr>
 <tr><td><strong>Value Residual</strong></td><td>Linear blend</td><td><code>ojas_vres_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$(1 - s) v + s v_0$, $s = \sigma(\lambda)$, on <code>v</code> before attention</td></tr>
-<tr><td><strong>SiLU, Mul</strong> (SwiGLU)</td><td>Pointwise</td><td><code>ojas_silu_*</code>, <code>ojas_mul_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$\mathrm{silu}(x W_{gate}) \odot (x W_{up})$</td></tr>
+<tr><td><strong>SiLU, Mul</strong> (SwiGLU)</td><td>Pointwise parallel over scoped worker threads; ReLU, SiLU, GELU, Sigmoid, Tanh</td><td><code>ojas_silu_*</code>, <code>ojas_mul_*</code></td><td>WGSL</td><td><code>f32</code></td><td>$\mathrm{silu}(x W_{gate}) \odot (x W_{up})$</td></tr>
 <tr><td><strong>Residual Add</strong></td><td>Pointwise</td><td>tessl <code>residual_add</code></td><td>WGSL</td><td><code>f32</code></td><td>$x + f(x)$</td></tr>
 <tr><td><strong>Cross-Entropy</strong></td><td>Mean over valid targets</td><td><code>ojas_ce_rows</code>, <code>ojas_ce_mean</code></td><td>WGSL</td><td><code>f32</code></td><td>Mean NLL; <code>ignore_index</code>; all-ignored is <code>NonFinite</code>. Full <code>rows × vocab</code> logits and gradient are materialized</td></tr>
 <tr><td><strong>Linear Cross-Entropy</strong></td><td>Tiled online softmax, stream loss/grad</td><td>Tiled stream</td><td>WGSL <code>loss.wgsl</code></td><td><code>f32</code></td><td>Fused linear projection + CE loss; tiles rows/vocab without materializing full logits (<code>LinearCeChunk</code>)</td></tr>

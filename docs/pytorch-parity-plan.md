@@ -41,22 +41,22 @@ The ranking comes from the call sites in the user's own code (nanolab, the Rust_
 | 1 | Linear / GEMM | all | Has: no-bias `x @ W^T` on CPU, Metal and wgpu |
 | 2 | Embedding, tied to LM head | all | Has |
 | 3 | RMSNorm (also used as QK-norm) | nanolab, sprint | Has |
-| 4 | Causal SDPA with GQA, sliding window, head_dim 64/128/256 | all | Partial: causal only, MHA only in the trait, Tq = Tk. Metal and wgpu reach D ≤ 128, and Metal is tiled (flash-style) both ways. GQA exists only in `ojas-infer`'s CPU decode. Head dim 256 is not covered |
+| 4 | Causal SDPA with GQA, sliding window, head_dim 64/128/256 | all | Partial: causal only, grouped-query on CPU, Metal and wgpu, Tq = Tk. Metal and wgpu reach D ≤ 256, and Metal is tiled (flash-style) both ways. Sliding window attention is missing (tracked in Task `gp-sliding-window-attention`). Head dim 256 GQA is scoped in Task `gp-head-dim-256-gqa` |
 | 5 | RoPE | all | Has. `Backend::permute` moves `[B,T,H,D]` ↔ `[B,H,T,D]` (F1 closed) |
 | 6 | Fused or chunked linear + cross-entropy | nanolab, Lappi | Has: `Backend::linear_cross_entropy_mean` tiles rows/vocab without materializing full logits on CPU, Metal and wgpu |
 | 7 | Activations: SiLU/SwiGLU, GELU, ReLU², sigmoid | nanolab | Has: SiLU, GELU, ReLU, Sigmoid, Tanh in `ojas-cpu/src/pointwise.rs` |
 | 8 | AdamW (fused, fp32 master) | all | Has, one tensor per call |
-| 9 | Muon NS5 in bf16, batched | nanolab, sprint | f32 on CPU, Metal and wgpu; not bf16; one matrix per call |
+| 9 | Muon NS5 in bf16, batched | nanolab, sprint | f32 on CPU, Metal and wgpu; not bf16; one matrix per call (bf16 NS5 tracked in Task `gp-muon-bf16-ns5`) |
 | 10 | Hand-written LR schedules (cosine, WSD) | all; `lr_scheduler` has 0 sites | Has: `CosineSchedule`, `WsdSchedule`, `LrSchedule` in `ojas-cpu/src/schedule.rs` |
 | 11 | `clip_grad_norm_` | all | Has |
-| 12 | bf16 autocast / bf16 weights | sprint, Lappi | Optional `Autocast` region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype |
-| 13 | Activation checkpointing | nanolab, Lappi | Missing |
+| 12 | bf16 autocast / bf16 weights | sprint, Lappi | Optional `Autocast` region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype (bf16 compute tier scoped in Task `gp-bf16-compute-tier`) |
+| 13 | Activation checkpointing | nanolab, Lappi | Missing (scoped in Task `gp-activation-checkpointing`) |
 | 14 | `torch.save` / safetensors | all | Has: Checkpoint v1, streaming `SafeTensorsWriter`, `replace_dir_with`, `Trainer` checkpoint save and resume |
-| 15 | Token-bin data loading (memmap u16/u32) | all; DataLoader has 0 sites | `TokenBin` plus a seeded, epoch-shuffled, resumable `BatchSampler` (`DataCursor`). Supports `u16` and `u32` streams (headerless and FineWeb), so vocabularies > 65536 (Qwen, LLaMA 3) are supported |
+| 15 | Token-bin data loading (memmap u16/u32) | all; DataLoader has 0 sites | `TokenBin` plus a seeded, epoch-shuffled, resumable `BatchSampler` (`DataCursor`). Supports `u16` and `u32` streams (headerless and FineWeb), so vocabularies > 65536 (Qwen, LLaMA 3) are supported (tracked in Task `gp-tokenbin-u32`) |
 | 16 | KV cache, temperature/top-k sampling | nanolab | Has: CPU `forward_token`, `Backend::kv_cache_write`, wgpu KV cache, `ojas-infer` greedy and temperature/top-k/top-p sampler |
 | 17 | `torch.cuda/mps` synchronize, memory stats, seeding | about 330 sites | Has: `Backend::sync`, `Budget::peak_bytes()`, `Budget::reset_peak()`, `ResourcePlan`, `ojas-device` profiling, Go `SYSTEM_PROFILE` (opcode 16) |
 | 18 | Distributed collectives | sprint only | Missing; not needed on one device |
-| 19 | GDN chunk rule + causal conv1d (Qwen3.5) | Lappi | Missing in ojas. Exists Metal-only in tessl |
+| 19 | GDN chunk rule + causal conv1d (Qwen3.5) | Lappi | Missing in ojas. Exists Metal-only in tessl (hybrid layer primitives scoped in Task `gp-hybrid-layer-primitives`) |
 
 **The framework layer is landed (verified).**
 - `ojas-model` defines the nanolab GPT once (spec, `state_dict` names, order-independent init, the block over `Graph`) with `Trainer<B>` and checkpoint save/resume.
@@ -182,7 +182,7 @@ GEMM itself is not a target.
 - **Metal i32 plane cap:** `t·d > i32::MAX` returns `Unsupported`. That is tested by a construction check, not at real size.
 - **No start-up check that MPP pipelines accept 128 threads per threadgroup.** That would need objc2-metal. It works on the M5 Pro.
 - **Linux builds and links, but has never run.** The Lappi session's L-cuda lane cross-checked and linked 67 test executables for `aarch64-unknown-linux-gnu` against the live tree at 22:35Z, including `ojas-cuda --features cuda`. That is reported in [`cuda-backend-scoping.md`](cuda-backend-scoping.md) §1.5 and was not re-run here. No binary has run on Linux. Windows has never been built, and gusset refuses it.
-- **CUDA backend scoping** is in [`cuda-backend-scoping.md`](cuda-backend-scoping.md). It recommends a whole-step Qwen3.5 provider first, with a general `CudaBackend` as the destination, and lists six asks for the user. It also notes that `ojas-cuda`'s `cuda-13040` binding pin mismatches the GH200's CUDA 12.8, so a missing-symbol call would panic.
+- **CUDA backend scoping** is in [`cuda-backend-scoping.md`](cuda-backend-scoping.md) and scoped for implementation in Task `gp-cuda-backend-provider`. It recommends a whole-step Qwen3.5 provider first, with a general `CudaBackend` as the destination, and lists six asks for the user. It also notes that `ojas-cuda`'s `cuda-13040` binding pin mismatches the GH200's CUDA 12.8, so a missing-symbol call would panic.
 - **`commit_resize` (`ojas-cuda/src/lib.rs:148`) is dead in the `cuda` build.** Its test covers a helper the real resize path never calls (L-cuda finding; `cargo check --features cuda` warns).
 - **ojas-core has no typed device-lost variant.** `kind_of` still reads backend detail text.
 - **Readback-count race (found by the ojas-cpu session).** `device_readbacks()` is process-wide, so "no readback" assertions fail under parallel `cargo test` when sibling tests download (wgpu `muon.rs` 3, `permute.rs` 2). The CI gates pass `--test-threads=1` and are unaffected. **Class fix landed in ojas-core:** `Budget::device_readbacks()` counts per budget tree, from any thread (`budget_readbacks_count_only_their_own_tree_across_threads`). **Pending, in slot (d):** move the GPU tests (wgpu muon/permute/residency/parity/contract, autograd device and wgpu tapes, capi `readbacks_during`, metal training_step) onto it, and verify them under default threads.
@@ -190,7 +190,7 @@ GEMM itself is not a target.
 - `CpuGpt::with_numerics` sets the numerics. Under Exact, cached decode equals the full forward bit for bit, now asserted.
 - Under Fast the gap is 3.5e-7.
 - One test covers the 2^21-MAC Accelerate cutoff.
-- **Attention LSE:** a forward that emits LSE would remove the backward's stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
+- **Attention LSE (tracked in Task `gp-attention-lse-return`):** a forward that emits LSE would remove the backward's stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
   - wgpu round 5 timed each backward dispatch: `attn_bwd_prep` reruns the forward, 11.5 of 52.1 ms at [4,12,1024,64] and 30.3 of 141.4 ms at [4,8,2048,64]. LSE from the forward would save about 21% of the wgpu backward (inferred).
   - Measured and reverted: register-blocked score dots (1.4–1.6× slower), dropping dkv's Q reload (≤ 7% of dkv), and a shared P/dS tile (no gain).
 - **wgpu `Queue::drop` blocks without bound inside wgpu (wgpu-core 30.0.1 `queue.rs:275-289`; Metal `waitUntilCompleted`).** ojas now drops the queue on a helper thread and waits at most `DROP_WAIT` (2 s). On timeout the queue, its device and one parked thread leak until the GPU finishes. `tests/drop.rs` was still waiting at 1.0 s before the fix and returns at 0.31 s after.
@@ -301,13 +301,12 @@ In this table, a ratio is torch time / ojas time, so below 1 means ojas is slowe
 
 `residual_add_bwd` scores 0.01× only because the API returns two gradient copies where torch returns the input tensor. It is an artefact of the API, not a slow kernel.
 
-## 7. Framework layer (proposal)
+## 7. Framework layer (completed)
 
-The design is in [`framework-design.md`](framework-design.md). It proposes:
-- a new `ojas-model` crate;
-- five `Backend` additions: `sync`, `accumulate_grad`, fused chunked `linear_cross_entropy_mean`, `cached_attention_forward` and `kv_cache_write`, plus blanket impls for `&B` and `Arc<B>`;
-- three `Tape` additions;
-- a device-resident `Trainer<B>` with a checkpoint directory;
-- a real Go `LoadModel`/`TrainStep`/`SaveCheckpoint`/`GenerateIDs`.
-
-It is sized as 14 items, with an acceptance run against PyTorch nanolab's loss curve. Not started: it needs the user's go-ahead, and it should follow the concurrent ojas-cpu numerics work.
+The design is in [`framework-design.md`](framework-design.md).
+- `ojas-model` crate implemented: nanolab GPT architecture written once (spec, init, Graph block, Eval, and `Trainer<B>`).
+- Five `Backend` additions landed across CPU, Metal, and wgpu: `sync`, `accumulate_grad`, fused chunked `linear_cross_entropy_mean`, `cached_attention_forward` and `kv_cache_write`, plus blanket impls for `&B` and `Arc<B>`.
+- `Tape` extensions landed.
+- Device-resident `Trainer<B>` with checkpoint directory save/resume verified.
+- In-process Go API implemented via `ojas-capi`: `LoadModel`/`NewModel`, `OpenTrainer`, `TrainStep`, `SaveCheckpoint`, `Resume`, GPT-2 tokenizer, and `GenerateIDs`.
+- Follow-up prioritized work has been converted into active GitPulse task briefs in `tasks/` (`gp-bf16-compute-tier`, `gp-head-dim-256-gqa`, `gp-tokenbin-u32`, `gp-cuda-backend-provider`, `gp-attention-lse-return`, `gp-activation-checkpointing`, `gp-muon-bf16-ns5`, `gp-hybrid-layer-primitives`, `gp-sliding-window-attention`).

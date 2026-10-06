@@ -13,8 +13,9 @@ The harness, the commands and the row definitions are in
 round 3 in `bench/results/2026-10-01-r3b/`, and the round 3 regression A/B
 in `bench/results/2026-10-01-ab/`.
 
-The document has five dated sections:
-- **Fixed cost against op size and request batching** (first): where the
+The document has six dated sections:
+- **torch 2.15 MPS norm benchmark** (2026-10-05): torch 2.14.1 vs 2.15 nightly on `clip_grad_norm_`, where pytorch/pytorch#198611 ports norm to shared reduction kernels.
+- **Fixed cost against op size and request batching** (2026-10-04): where the
   per-op fixed cost stops dominating, and what batching decode requests buys.
 - **Round 5 and the LM-head GEMM**: round 5's remaining Metal gaps,
   and the fix to tessl's exact-f32 GEMM tile walk that halves the LM head.
@@ -23,6 +24,23 @@ The document has five dated sections:
   device-resident AdamW. It also settles the round 2 Metal "regressions".
 - **Round 2**, after the Metal and wgpu optimization rounds landed.
 - **Round 1**, kept below unchanged for comparison.
+
+## torch `clip_grad_norm_` on MPS: 2.14.1 against 2.15 nightly (2026-10-05)
+
+Full details and raw traces: [`bench/results/2026-10-05-torch215-clip/README.md`](../bench/results/2026-10-05-torch215-clip/README.md).
+
+Up to PyTorch 2.14, MPS ran `clip_grad_norm_` (`linalg.vector_norm`) on a single threadgroup per full reduction, producing an artificially slow baseline (137 ms at 123.7M parameters). In PR pytorch/pytorch#198611, PyTorch ported the norm to shared reduction kernels.
+
+### Measured results (`torch.jsonl`, Apple M5 Pro, macOS 27.0.1)
+
+| torch version | run 1 median | run 2 median | run 3 median | min of mins |
+| :--- | ---: | ---: | ---: | ---: |
+| **2.14.1** | 137.46 ms | 137.57 ms | 137.51 ms | 136.78 ms |
+| **2.15.0.dev20261004** | 8.36 ms | 8.54 ms | 8.45 ms | 7.90 ms |
+
+- The nightly is ~16× faster than 2.14.1 on this reduction.
+- Against ojas round 5 (`bench/results/2026-10-02-r5/summary.md`), which measured ojas at 18.96 ms median on Metal and 19.12 ms on wgpu, ojas is ~0.45× of the 2.15 nightly on this row. The previously measured 4.58× / 8.13× lead came from PyTorch's older single-threadgroup kernel.
+
 
 ## Fixed cost against op size and request batching: 2026-10-04
 

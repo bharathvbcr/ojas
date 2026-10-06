@@ -120,16 +120,19 @@
 <h2 id="core-abstractions">Core Abstractions <a class="anchor" href="#core-abstractions" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">classDiagram
     class Tensor {
-        +Arc~Vec~u8~~ bytes
+        +Arc~Storage~ storage (HostData or DeviceBuffer)
         +usize byte_offset
-        +Vec~usize~ shape
-        +Vec~usize~ strides
+        +Box~[usize]~ shape
+        +Box~[usize]~ strides
         +DType dtype
         +narrow(dim, start, len) Result~Tensor~
-        +as_slice~T~() Result~&amp;[T]~
+        +f32_slice() Result~&amp;[f32]~
+        +f32_slice_mut() Result~&amp;mut [f32]~
+        +u32_slice() Result~&amp;[u32]~
+        +to_f32_vec() Result~Vec[f32]~
         +numel() usize
         +from_device(buf, shape, dtype) Tensor
-        +to_host(backend) Result~Tensor~
+        +to_host(budget) Result~Tensor~
         +is_device() bool
     }
 
@@ -240,11 +243,11 @@
 <h2 id="device-tensors--readback-tracking">Device Tensors &amp; Readback Tracking <a class="anchor" href="#device-tensors--readback-tracking" aria-label="Link to this section">#</a></h2>
 <p><code>Tensor::from_device</code> encapsulates device-resident memory handles managed by GPU backends (<code>MetalBackend</code>, <code>WgpuBackend</code>).</p>
 <figure class="diagram"><pre class="mermaid">flowchart LR
-    HostMem[&#34;Host Tensor (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;] --&gt;|&#34;Backend::upload()&#34;| DeviceMem[&#34;Device Tensor (DeviceBuffer)&#34;]
-    DeviceMem --&gt;|&#34;Tensor::to_host()&#34;| HostCopy[&#34;Host Tensor Copy&#34;]
+    HostMem[&#34;Host Tensor (HostData)&#34;] --&gt;|&#34;Backend::upload()&#34;| DeviceMem[&#34;Device Tensor (DeviceBuffer)&#34;]
+    DeviceMem --&gt;|&#34;Tensor::to_host()&#34;| HostCopy[&#34;Host Tensor Copy (HostData)&#34;]
     DeviceMem -.-&gt;|&#34;device_readbacks() counter increments&#34;| Counter[&#34;Readback Audit Counter&#34;]
     HostCopy --&gt; Counter</pre></figure>
-<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>Host accessors such as <code>.to_f32_vec()</code> or <code>.as_slice::&lt;f32&gt;()</code> <strong>refuse device tensors</strong> rather than triggering an implicit, unmetered readback across PCIe / unified memory buses. Callers must explicitly call <code>.to_host(backend)</code>, which increments the counted readback metric.</p>
+<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>Host accessors such as <code>.f32_slice()</code>, <code>.f32_slice_mut()</code>, or <code>.to_f32_vec()</code> <strong>refuse device tensors</strong> rather than triggering an implicit, unmetered readback across PCIe / unified memory buses. Callers must explicitly call <code>.to_host(budget)</code>, which increments the counted readback metric.</p>
 </aside>
 <hr>
 <h2 id="immutable-numerical-invariants">Immutable Numerical Invariants <a class="anchor" href="#immutable-numerical-invariants" aria-label="Link to this section">#</a></h2>
