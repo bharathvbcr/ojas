@@ -26,16 +26,34 @@ acceptance_criteria:
   - "All wgpu fault test suites pass without regression"
 ---
 
-# Task Brief: Expand WGPU Fault Status Buffer to 64-Bit Word or Two-Word Structure
+# Task brief v1
 
-## Context & Problem Statement
+## Title
+Expand WGPU Fault Status Buffer to 64-Bit Word or Two-Word Structure
+
+Task: gp-wgpu-fault-word-64
+Type: refactor
+Status: ready
+Priority: 2 (Normal)
+Severity: medium
+Owner: unassigned
+Due: none
+Labels: wgpu, gpu, faults, contract
+
+## Repositories
+- ojas
+
+## Description
 In `ojas-wgpu`, kernel status and non-finite fault tracking is recorded in a shared device status buffer. As recorded in `docs/pytorch-parity-plan.md` (§4 open residue), all 32 bits of the current 32-bit status word are fully allocated. The last four bits were assigned to `accumulate_grad`, `linear_cross_entropy_mean`, `cached_attention_forward`, and `kv_cache_write`. Adding any 33rd op that reports faults through the deferred fault protocol requires expanding the status buffer capacity.
 
-## Scope & Implementation Details
-1. **Status Buffer Layout Update**:
-   - Update WGSL shader status bindings in `ojas-kernels` and `ojas-wgpu` to support either `atomic<u32>` pairs or 64-bit bitmasks.
-2. **Backend Fault Decoder**:
-   - Update `WgpuBackend::sync`, `download`, and error decoding in `ojas-wgpu/src/backend.rs` to read and decode across the widened status bitmask.
-   - Maintain the invariant that the first fault in recording order is reported.
-3. **Tests**:
-   - Add regression tests covering fault bits beyond bit 31 in `ojas-wgpu/tests/faults.rs`.
+## Acceptance criteria
+- [ ] Expand the 32-bit fault status word in WgpuBackend and WGSL kernels to a 64-bit word (atomic<u64> or array<u32, 2>)
+- [ ] Ensure new operations beyond the current 32 allocated op bits can record non-finite and numerical faults without collision or overflow
+- [ ] Verify deferred fault reporting order preserves first-fault precedence
+- [ ] All wgpu fault test suites pass without regression
+
+## Planned files
+- ojas-wgpu/src/backend.rs
+- ojas-wgpu/src/context.rs
+- ojas-kernels/src/wgsl/
+- ojas-wgpu/tests/faults.rs
