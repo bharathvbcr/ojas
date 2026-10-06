@@ -209,13 +209,21 @@
 </li>
 <li><strong>Sign &amp; Negative Absolute:</strong> [<code>store_neg_abs_signs</code>] processes data in chunked vector passes: it validates lane finiteness, records element signs (<code>z &lt; 0</code>), and stores <code>-|z|</code> in a single pass.
 </li>
+<li><strong>NEON Embedding Gather:</strong> [<code>gather_embedding_rows_768</code>] gathers 768-float embedding rows through ARM64 NEON pair loads/stores (<code>ldp</code>/<code>stnp</code>) into spare vector capacity with zero-copy preservation of subnormals and <code>-0.0</code>.
+</li>
+<li><strong>NEON Nanolab Head Pair Splitting:</strong> [<code>split_nanolab_head_pairs_append</code>] loads 128 floats per token across adjacent heads, transposing 8×8 blocks in registers to unpack contiguous head blocks.
+</li>
+<li><strong>Token Band Partitioning:</strong> [<code>with_nanolab_token_bands</code>] splits nanolab token batches across thread-safe time-row bands without allocation.
+</li>
 <li><strong>Edge Float Handling:</strong> Preserves IEEE 754 invariants across vector operations, including subnormals, signed zeros, and non-finite value detection.
 </li>
 </ul>
 <hr>
-<h2 id="test-suites-36-tests">Test Suites (36 tests) <a class="anchor" href="#test-suites-36-tests" aria-label="Link to this section">#</a></h2>
+<h2 id="test-suites-40-tests-under-workspace">Test Suites (40 tests under workspace) <a class="anchor" href="#test-suites-40-tests-under-workspace" aria-label="Link to this section">#</a></h2>
 <ul>
 <li><code>tests/gemm.rs</code>: Multi-architecture GEMM determinism and cross-validation against references.
+</li>
+<li><code>tests/embedding_gather.rs</code>: NEON embedding gather accuracy, duplicate IDs, and out-of-bounds refusals.
 </li>
 <li><code>tests/vdsp.rs</code>: Apple vDSP vector addition, multiplication, and matrix row copy operations.
 </li>
@@ -254,7 +262,7 @@
 <li><a href="#safety--boundaries">Safety &amp; Boundaries</a></li>
 <li class="sub"><a href="#simderror-taxonomy">SimdError Taxonomy</a></li>
 <li><a href="#accelerate-vector-operations--vforce-macos">Accelerate Vector Operations &amp; vForce (macOS)</a></li>
-<li><a href="#test-suites-36-tests">Test Suites (36 tests)</a></li>
+<li><a href="#test-suites-40-tests-under-workspace">Test Suites (40 tests under workspace)</a></li>
 <li><a href="#performance-profile-apple-m5-pro">Performance Profile (Apple M5 Pro)</a></li>
 </ol></nav>
   </div>

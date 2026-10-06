@@ -156,12 +156,12 @@
 <aside class="alert alert-caution"><p class="alert-title">Caution</p><p>Host tensor accessors (<code>to_f32_vec</code>, <code>as_slice</code>) refuse device-resident tensors immediately rather than reading them back implicitly across the bus. This prevents unmetered PCIe/memory bus bottlenecks from corrupting latency profiles.</p>
 </aside>
 <hr>
-<h2 id="backend-status-2026-10-04-apple-m5-pro">Backend Status (2026-10-04, Apple M5 Pro) <a class="anchor" href="#backend-status-2026-10-04-apple-m5-pro" aria-label="Link to this section">#</a></h2>
+<h2 id="backend-status-2026-10-05-apple-m5-pro">Backend Status (2026-10-05, Apple M5 Pro) <a class="anchor" href="#backend-status-2026-10-05-apple-m5-pro" aria-label="Link to this section">#</a></h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Backend</th><th>Implements <code>Backend</code></th><th>Numerics</th><th>Tests</th><th>Notes</th></tr></thead>
 <tbody>
-<tr><td><code>CpuBackend</code> (<code>ojas-cpu</code>)</td><td>Yes</td><td><code>Fast</code> default; <code>Exact</code> opt-in</td><td>261 passed, 12 ignored</td><td>Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (<code>FAST_WHOLE_CALL_MACS</code>) dispatch to Accelerate <code>cblas_sgemm</code>; smaller stay on <code>tile_fast</code>. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup</td></tr>
-<tr><td><code>ojas-simd</code></td><td>No (kernels for <code>ojas-cpu</code>)</td><td>—</td><td>36 passed</td><td>NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling</td></tr>
+<tr><td><code>CpuBackend</code> (<code>ojas-cpu</code>)</td><td>Yes</td><td><code>Fast</code> default; <code>Exact</code> opt-in</td><td>291 passed, 12 ignored</td><td>Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (<code>FAST_WHOLE_CALL_MACS</code>) dispatch to Accelerate <code>cblas_sgemm</code>; smaller stay on <code>tile_fast</code>. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup</td></tr>
+<tr><td><code>ojas-simd</code></td><td>No (kernels for <code>ojas-cpu</code>)</td><td>—</td><td>34 passed (standalone) / 40 (workspace)</td><td>NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. ARM64 NEON embedding gather, nanolab head pair splitting, token bands, Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling</td></tr>
 <tr><td><code>MetalBackend</code> (<code>ojas-metal</code>)</td><td>Yes, every op, device-resident</td><td><code>Fast</code></td><td>136 passed</td><td>Tiled causal attention, head dim above 256 refused. Faults surface at the next <code>sync</code> (<a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>). Attention forward/backward, device-resident training step</td></tr>
 <tr><td><code>WgpuBackend</code> (<code>ojas-wgpu</code>)</td><td>Yes, device-resident</td><td><code>Fast</code>, 1e-4 relative tolerance</td><td>208 passed, 3 ignored</td><td>Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (<code>accumulate_grad</code>), KV cache writes, tiled linear cross-entropy (<code>linear_ce</code>), and deferred fault reporting at next <code>sync</code></td></tr>
 <tr><td><code>ojas-kernels</code></td><td>No (shared geometry and sources)</td><td>—</td><td>11 passed</td><td>Launch geometry (<code>gemm_grid</code>, <code>attention_tiles</code>, <code>ATTENTION_MAX_HEAD_DIM</code>), WGSL modules in <code>src/wgsl/</code>, NaN-safe parity harness</td></tr>
@@ -231,7 +231,7 @@
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
 <li><a href="#who-selects-the-device">Who Selects the Device</a></li>
 <li><a href="#memory-residency--zero-copy-lifecycle">Memory Residency &amp; Zero-Copy Lifecycle</a></li>
-<li><a href="#backend-status-2026-10-04-apple-m5-pro">Backend Status (2026-10-04, Apple M5 Pro)</a></li>
+<li><a href="#backend-status-2026-10-05-apple-m5-pro">Backend Status (2026-10-05, Apple M5 Pro)</a></li>
 <li><a href="#package-adoption-decisions">Package Adoption Decisions</a></li>
 <li class="sub"><a href="#adopted">Adopted</a></li>
 <li class="sub"><a href="#rejected">Rejected</a></li>

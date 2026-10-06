@@ -30,7 +30,7 @@ The ranked list of gaps, and what has closed since it was written, is in [`docs/
 
 ```
 Status:          Kernel set, backends, nanolab model, trainer, adaptive resource planning and Go API built; remaining gaps in docs/pytorch-parity-plan.md
-Verification:    kernel hardening, SIMD vectorization & backend parity, 2026-10-04: 1286 passed across workspace crates (ojas-cpu 261, ojas-wgpu 208, ojas-metal 136, ojas-core 119, ojas-model 80, ojas-capi 77, ojas-device 72); Go 41/41; clippy -D warnings clean
+Verification:    NEON assembly gather, kernel hardening, SIMD vectorization & backend parity, 2026-10-05: 1510 passed across workspace crates (ojas-cpu 291, ojas-metal 175, ojas-core 154, ojas-wgpu 131, ojas-model 82, ojas-capi 79, ojas-io 76, ojas-device 72, ojas-autograd 68, ojas-simd 40, ojas-oracle 41, ojas-infer 40, ojas-data 37, ojas-qwen35 34, ojas-kernels 11, ojas-cuda/hip 16); Go 41/41; clippy -D warnings clean
 Host Target:     Apple M5 Pro (Metal 4), macOS 27 (Darwin 27.0.0 arm64)
 Interactive App: https://ojas.vbcr.dev (Alternate: https://bharath.vbcr.dev/ojas)
 License:         MIT OR Apache-2.0
@@ -327,27 +327,27 @@ flowchart TD
 
 ## Workspace Crate Catalog
 
-Test counts are verified on this tree (adaptive lane Gate E / test suites, 2026-10-02): `cargo test -p <crate> -- --test-threads=2` and `cargo test -p <crate> --release --no-fail-fast -- --test-threads=1` with clippy `-D warnings` clean across the workspace. The Go count is `go test -a -tags gusset_pkgconfig ./...`. Details are in [`docs/adaptive-resources.md`](docs/adaptive-resources.md) and [`docs/status.md`](docs/status.md).
+Test counts are verified on this tree (2026-10-05): `cargo test -p <crate> --release --no-fail-fast -- --test-threads=1` (1510 passed across workspace crates) with clippy `-D warnings` clean across the workspace. The Go count is `go test -a -tags gusset_pkgconfig ./...`. Details are in [`docs/status.md`](docs/status.md).
 
 | Crate | Purpose | Key Symbols | Tests Run |
 | :--- | :--- | :--- | :--- |
-| [`ojas-core`](file:///Users/bharath/Code/research/ojas/ojas-core) | Core tensor engine & invariants | `Tensor` (host & device, typed host storage), `Backend` (`optimizer_scratch_bytes`), `Numerics`, `Budget` (`peak_bytes`, `reset_peak`, `check_room`), `DType`, `OjasError`, `shapes` validators | 113 passed, 2 ignored |
-| [`ojas-cpu`](file:///Users/bharath/Code/research/ojas/ojas-cpu) | High-performance CPU backend | `CpuBackend`, `with_threads`, `with_numerics`, packed GEMM, Accelerate BLAS, cosine and WSD schedules, budget scratch & pool stress | 213 passed, 12 ignored |
-| [`ojas-simd`](file:///Users/bharath/Code/research/ojas/ojas-simd) | SIMD GEMM kernels | NEON GEMM, AVX2, `sgemm_accelerate` | 20 passed |
-| [`ojas-metal`](file:///Users/bharath/Code/research/ojas/ojas-metal) | Apple Silicon Metal backend | `MetalBackend` (every `Backend` op; tiled attention, D ≤ 256, grouped-query; deferred faults) | 154 passed |
-| [`ojas-wgpu`](file:///Users/bharath/Code/research/ojas/ojas-wgpu) | Portable WGSL backend | `WgpuBackend` (device-resident WGSL compute; Muon NS5; named first fault) | 124 passed, 3 ignored |
+| [`ojas-core`](file:///Users/bharath/Code/research/ojas/ojas-core) | Core tensor engine & invariants | `Tensor` (host & device, typed host storage), `Backend` (`optimizer_scratch_bytes`), `Numerics`, `Budget` (`peak_bytes`, `reset_peak`, `check_room`), `DType`, `OjasError`, `shapes` validators | 154 passed, 2 ignored |
+| [`ojas-cpu`](file:///Users/bharath/Code/research/ojas/ojas-cpu) | High-performance CPU backend | `CpuBackend`, `with_threads`, `with_numerics`, packed GEMM, Accelerate BLAS, cosine and WSD schedules, pointwise parallel, budget scratch & pool stress | 291 passed, 12 ignored |
+| [`ojas-simd`](file:///Users/bharath/Code/research/ojas/ojas-simd) | SIMD GEMM & NEON vector kernels | NEON GEMM, AVX2, `sgemm_accelerate`, `gather_embedding_rows_768`, `split_nanolab_head_pairs_append`, token bands, vDSP, vForce | 34 passed (standalone) / 40 (workspace) |
+| [`ojas-metal`](file:///Users/bharath/Code/research/ojas/ojas-metal) | Apple Silicon Metal backend | `MetalBackend` (every `Backend` op; tiled attention, D ≤ 256, grouped-query; deferred faults; training step) | 175 passed |
+| [`ojas-wgpu`](file:///Users/bharath/Code/research/ojas/ojas-wgpu) | Portable WGSL backend | `WgpuBackend` (device-resident WGSL compute; Muon NS5; named first fault; linear CE) | 131 passed, 3 ignored |
 | [`ojas-kernels`](file:///Users/bharath/Code/research/ojas/ojas-kernels) | Shared kernel geometry & sources | Launch geometry, kernel source, NaN-safe parity harness | 11 passed |
-| [`ojas-autograd`](file:///Users/bharath/Code/research/ojas/ojas-autograd) | Reverse-mode tape & gradcheck | `Tape`, `Var`, `backward_seeded`, `take_grad`, fused head, `central_diff` (f64 oracle) | 67 passed |
-| [`ojas-model`](file:///Users/bharath/Code/research/ojas/ojas-model) | The nanolab GPT, written once | `ModelSpec`, `param_table`, `init_params`, `Graph`, `Eval`, `block`, `Trainer` (`save`, `resume_from`, preflight room checks, step peak tracking) | 78 passed |
+| [`ojas-autograd`](file:///Users/bharath/Code/research/ojas/ojas-autograd) | Reverse-mode tape & gradcheck | `Tape`, `Var`, `backward_seeded`, `take_grad`, fused head, `central_diff` (f64 oracle) | 68 passed |
+| [`ojas-model`](file:///Users/bharath/Code/research/ojas/ojas-model) | The nanolab GPT, written once | `ModelSpec`, `param_table`, `init_params`, `Graph`, `Eval`, `block`, `Trainer` (`save`, `resume_from`, preflight room checks, step peak tracking) | 82 passed |
 | [`ojas-io`](file:///Users/bharath/Code/research/ojas/ojas-io) | Formats & serialization | Streaming safetensors (F32/BF16/F16/I64/U16), Checkpoint v1, `replace_dir_with` | 76 passed |
-| [`ojas-data`](file:///Users/bharath/Code/research/ojas/ojas-data) | Dataset ingestion & tokenization | Token bins, seeded resumable batch sampler, GPT-2 BPE, counter-based RNG | 26 passed |
+| [`ojas-data`](file:///Users/bharath/Code/research/ojas/ojas-data) | Dataset ingestion & tokenization | Token bins (u16/u32), seeded resumable batch sampler, GPT-2 BPE, counter-based RNG | 37 passed |
 | [`ojas-infer`](file:///Users/bharath/Code/research/ojas/ojas-infer) | Autoregressive inference | `CpuGpt` (nanolab block, GQA), KV cache, greedy and temperature/top-k/top-p sampling | 40 passed |
-| [`ojas-qwen35`](file:///Users/bharath/Code/research/ojas/ojas-qwen35) | Qwen3.5 whole-step training provider | Config reader that refuses unsupported fields, tensor-name pre-flight, parameter groups, state on disk; tessl Metal only, not a `Backend`, empty off macOS | 26 passed, 8 ignored |
-| [`ojas-capi`](file:///Users/bharath/Code/research/ojas/ojas-capi) | C-ABI dispatch & session store | `dispatch` opcodes (load, new, train, save, resume, tokenize, sample, system profile, memory ceiling), `DeviceCPUAuto`, preflight validation, typed error kinds (`ErrPressure`), panic firewall | 77 passed |
+| [`ojas-qwen35`](file:///Users/bharath/Code/research/ojas/ojas-qwen35) | Qwen3.5 whole-step training provider | Config reader that refuses unsupported fields, tensor-name pre-flight, parameter groups, state on disk; tessl Metal only, not a `Backend`, empty off macOS | 34 passed, 8 ignored |
+| [`ojas-capi`](file:///Users/bharath/Code/research/ojas/ojas-capi) | C-ABI dispatch & session store | `dispatch` opcodes (load, new, train, save, resume, tokenize, sample, system profile, memory ceiling), `DeviceCPUAuto`, preflight validation, typed error kinds (`ErrPressure`), panic firewall | 79 passed |
 | [`ojas-gusset-engine`](file:///Users/bharath/Code/research/ojas/ojas-gusset-engine) | Go link archive | Umbrella staticlib `libgusset.a` for Go CGO integration | 0 tests (the Go suite covers it) |
 | [`go/`](file:///Users/bharath/Code/research/ojas/go) | Go client SDK | `LoadModel`, `NewModel`, `OpenTrainer`, `TrainStep`, `SaveCheckpoint`, `Resume`, `GenerateIDs`, `SystemProfile`, `SetMemoryCeiling`, `Free`, `Close`; `DeviceCPUAuto`, `ErrPressure` | 41 passed |
 | [`ojas-device`](file:///Users/bharath/Code/research/ojas/ojas-device) | Device kinds, system profile & resource planning | `Device`, `probe_system` (memory, CPU clusters, caches, unified memory, pressure), `measure_bandwidth` (bounded 2 shared buffers, row-split copy), `ResourcePolicy`, `ResourcePlan`, `GemmBlocks` | 72 passed (macOS; 66 on Linux) |
-| [`ojas-oracle`](file:///Users/bharath/Code/research/ojas/ojas-oracle) | Mathematical fixtures | IEEE-754 f64 oracle data fixtures | 40 passed, 1 ignored |
+| [`ojas-oracle`](file:///Users/bharath/Code/research/ojas/ojas-oracle) | Mathematical fixtures | IEEE-754 f64 oracle data fixtures | 41 passed, 1 ignored |
 | [`ojas-cuda`](file:///Users/bharath/Code/research/ojas/ojas-cuda) | CUDA probe | One affine kernel behind feature `cuda`; not a `Backend` | 8 passed (feature off) |
 | [`ojas-hip`](file:///Users/bharath/Code/research/ojas/ojas-hip) | HIP probe | Copy probe behind feature `hip`; no kernel; not a `Backend` | 8 passed (feature off) |
 

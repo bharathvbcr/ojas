@@ -62,12 +62,12 @@ flowchart LR
 
 ---
 
-## Backend Status (2026-10-04, Apple M5 Pro)
+## Backend Status (2026-10-05, Apple M5 Pro)
 
 | Backend | Implements `Backend` | Numerics | Tests | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `CpuBackend` (`ojas-cpu`) | Yes | `Fast` default; `Exact` opt-in | 261 passed, 12 ignored | Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) dispatch to Accelerate `cblas_sgemm`; smaller stay on `tile_fast`. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup |
-| `ojas-simd` | No (kernels for `ojas-cpu`) | — | 36 passed | NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling |
+| `CpuBackend` (`ojas-cpu`) | Yes | `Fast` default; `Exact` opt-in | 291 passed, 12 ignored | Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) dispatch to Accelerate `cblas_sgemm`; smaller stay on `tile_fast`. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup |
+| `ojas-simd` | No (kernels for `ojas-cpu`) | — | 34 passed (standalone) / 40 (workspace) | NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. ARM64 NEON embedding gather, nanolab head pair splitting, token bands, Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling |
 | `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | 136 passed | Tiled causal attention, head dim above 256 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Attention forward/backward, device-resident training step |
 | `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | 208 passed, 3 ignored | Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (`accumulate_grad`), KV cache writes, tiled linear cross-entropy (`linear_ce`), and deferred fault reporting at next `sync` |
 | `ojas-kernels` | No (shared geometry and sources) | — | 11 passed | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |

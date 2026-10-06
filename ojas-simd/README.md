@@ -105,13 +105,17 @@ When compiled with the `accelerate` feature on macOS, `ojas-simd` exposes vector
 - **Row Movement:** [`vdsp_mmov`] and [`vdsp_mmov_append`] copy 2D matrix rows with bitwise preservation of sign bits, subnormals, and `-0.0`.
 - **vForce Vector Math:** [`vvexpf`] and [`vvexpf_inplace`] dispatch to Apple Accelerate's vectorized exponential function (`y[i] = exp(x[i])`).
 - **Sign & Negative Absolute:** [`store_neg_abs_signs`] processes data in chunked vector passes: it validates lane finiteness, records element signs (`z < 0`), and stores `-|z|` in a single pass.
+- **NEON Embedding Gather:** [`gather_embedding_rows_768`] gathers 768-float embedding rows through ARM64 NEON pair loads/stores (`ldp`/`stnp`) into spare vector capacity with zero-copy preservation of subnormals and `-0.0`.
+- **NEON Nanolab Head Pair Splitting:** [`split_nanolab_head_pairs_append`] loads 128 floats per token across adjacent heads, transposing 8×8 blocks in registers to unpack contiguous head blocks.
+- **Token Band Partitioning:** [`with_nanolab_token_bands`] splits nanolab token batches across thread-safe time-row bands without allocation.
 - **Edge Float Handling:** Preserves IEEE 754 invariants across vector operations, including subnormals, signed zeros, and non-finite value detection.
 
 ---
 
-## Test Suites (36 tests)
+## Test Suites (40 tests under workspace)
 
 - `tests/gemm.rs`: Multi-architecture GEMM determinism and cross-validation against references.
+- `tests/embedding_gather.rs`: NEON embedding gather accuracy, duplicate IDs, and out-of-bounds refusals.
 - `tests/vdsp.rs`: Apple vDSP vector addition, multiplication, and matrix row copy operations.
 - `tests/vforce.rs`: Vectorized exponential accuracy and in-place transformations via vForce.
 - `tests/neg_abs_signs.rs`: Vectorized negative-absolute transforms and boolean sign bit packing.

@@ -10,57 +10,56 @@ Recorded: 2026-10-01, Apple M5 Pro, macOS 27.
 
 ---
 
-## Latest run: kernel hardening, SIMD vectorization & backend parity (verified, 2026-10-04)
+## Latest run: SIMD assembly kernels, layout hardening & PyTorch parity (verified, 2026-10-05)
 
 Verification across workspace crates and backend implementations:
 - `cargo clippy --workspace --all-targets -- -D warnings` is clean.
-- `ojas-cpu`: 261 passed (expanded layout, pointwise parallel, linalg, GEMM, AdamW in-place, embedding, numerics, and permute hardening).
-- `ojas-simd`: 36 passed (vDSP, vForce, sign/abs/neg, and edge float handling suites).
-- `ojas-wgpu`: 208 passed (accumulate_grad, tiled attention, kv_cache, linear_ce, muon, norm, parity, permute, residency, shape_first, stress).
-- `ojas-metal`: 136 passed (attention forward/backward, training step, deferred faults).
-- `ojas-core`: 119 passed, 2 ignored (budget peak tracking, check_room, and trait extensions).
-- `ojas-model`: 80 passed (nanolab GPT model spec, block, trainer, forward, checkpointing).
+- `ojas-cpu`: 291 passed (expanded layout, pointwise parallel, linalg, GEMM, AdamW in-place, embedding, numerics, and permute hardening).
+- `ojas-simd`: 34 passed standalone / 40 under workspace (NEON embedding gather, head pair split, token bands, vDSP, vForce, sign/abs/neg).
+- `ojas-metal`: 175 passed (attention forward/backward, training step, deferred faults, KV cache, linear CE).
+- `ojas-wgpu`: 131 passed, 3 ignored (accumulate_grad, tiled attention, kv_cache, linear_ce, muon, norm, parity, permute, residency, shape_first, stress).
+- `ojas-core`: 154 passed, 2 ignored (budget peak tracking, check_room, trait extensions).
+- `ojas-model`: 82 passed (nanolab GPT model spec, block, trainer, forward, checkpointing, oracle parity).
 - `ojas-device`: 72 passed.
-- `ojas-capi`: 77 passed.
-- `ojas-autograd`: 67 passed.
+- `ojas-capi`: 79 passed.
+- `ojas-autograd`: 68 passed.
 - `ojas-io`: 76 passed.
 - `ojas-oracle`: 41 passed, 1 ignored.
+- `ojas-infer`: 40 passed.
+- `ojas-data`: 37 passed.
 - `ojas-qwen35`: 34 passed, 8 ignored.
-- `ojas-data`: 26 passed.
-- `ojas-infer`: 26 passed.
 - `ojas-kernels`: 11 passed.
 - `ojas-cuda`, `ojas-hip` (features off): 8 + 8 passed.
-- Total: 1,286 workspace tests, 0 failed.
+- Total: 1,510 per-crate tests (1,530 workspace tests), 0 failed.
 
-| crate | run 4 (typed storage) | 2026-10-02 (adaptive & profiling) | 2026-10-04 (hardening & SIMD) |
+| crate | 2026-10-02 (adaptive & profiling) | 2026-10-04 (hardening & SIMD) | 2026-10-05 (SIMD gather & parity) |
 | :--- | :--- | :--- | :--- |
-| ojas-core | 102, 2 ignored | 113, 2 ignored | 119, 2 ignored |
-| ojas-cpu | 211, 11 ignored | 213, 12 ignored | 261, 12 ignored |
-| ojas-simd | 20 | 20 | 36 |
-| ojas-autograd | 67 | 67 | 67 |
+| ojas-core | 113, 2 ignored | 119, 2 ignored | 154, 2 ignored |
+| ojas-cpu | 213, 12 ignored | 261, 12 ignored | 291, 12 ignored |
+| ojas-simd | 20 | 36 | 34 (40 workspace) |
+| ojas-autograd | 67 | 67 | 68 |
 | ojas-io | 76 | 76 | 76 |
-| ojas-data | 26 | 26 | 26 |
-| ojas-infer | 40 | 40 | 26 |
-| ojas-oracle | 40, 1 ignored | 40, 1 ignored | 41, 1 ignored |
-| ojas-device | 18 | 72 | 72 |
+| ojas-data | 26 | 26 | 37 |
+| ojas-infer | 40 | 26 | 40 |
+| ojas-oracle | 40, 1 ignored | 41, 1 ignored | 41, 1 ignored |
+| ojas-device | 72 | 72 | 72 |
 | ojas-kernels | 11 | 11 | 11 |
-| ojas-capi | 66 | 77 | 77 |
-| ojas-metal | 154 | 154 | 136 |
-| ojas-wgpu | 124, 3 ignored | 124, 3 ignored | 208, 3 ignored |
-| ojas-qwen35 | 26, 8 ignored | 26, 8 ignored | 34, 8 ignored |
-| ojas-model | 74 | 78 | 80 |
+| ojas-capi | 77 | 77 | 79 |
+| ojas-metal | 154 | 136 | 175 |
+| ojas-wgpu | 124, 3 ignored | 208, 3 ignored | 131, 3 ignored |
+| ojas-qwen35 | 26, 8 ignored | 34, 8 ignored | 34, 8 ignored |
+| ojas-model | 78 | 80 | 82 |
 | ojas-cuda, ojas-hip (features off) | 8 + 8 | 8 + 8 | 8 + 8 |
-| **total** | **1071, 0 failed** | **1147, 0 failed** | **1286, 0 failed** |
+| **total** | **1147, 0 failed** | **1286, 0 failed** | **1510, 0 failed** |
 
-**What changed in 2026-10-04 hardening:**
-- **SIMD Vectorization & vForce/vDSP (`ojas-simd`):** Added comprehensive vector operations utilizing Apple Accelerate vDSP and vForce, vector sign/abs/neg routines, and robust IEEE 754 edge-case float handling (subnormals, NaN/Inf invariants, sign bit preservation).
-- **CPU Backend Hardening (`ojas-cpu`):** Expanded and hardened memory layout transformations, pointwise parallel execution across scoped worker threads, linalg and GEMM edge handling, in-place AdamW step logic, and token embedding lookup tests.
-- **Backend Trait Expansion (`ojas-core`):** Trait now standardizes `linear_cross_entropy_mean` (tiling across micro-batches without materializing full logits), `accumulate_grad` (in-place accumulation for uniquely owned accumulators), and `kv_cache_write`. `Budget` supports `peak_bytes()`, `reset_peak()`, and `check_room()`.
-- **WGPU & Metal Parity (`ojas-wgpu`, `ojas-metal`):** WGPU test suites expanded across gradient accumulation, KV cache operations, linear CE fused ops, and attention tile invariants. Metal backend operations and deferred fault mechanics verified against reference suites.
-- **Lappi Inference & Qwen3.5 Benchmarks:** Benchmarks and rulings updated for Lappi inference evaluations and Qwen3.5 CUDA/Metal execution.
-- **Attention head dim and grouped-query training (2026-10-05):** Metal and wgpu causal SDPA and cached attention accept head dims 1..=256 (`METAL_MAX_HEAD_DIM`, `ATTENTION_MAX_HEAD_DIM`). 257 is `UnsupportedHeadDim`. Training grouped-query attention is causal SDPA: query head `h` reads KV head `h / (H / Hkv)`. The tiny Metal step stays at 64.
+**What changed in 2026-10-05 updates:**
+- **SIMD Embedding Gather & Batch Splitting (`ojas-simd`):** Added NEON-accelerated row gather (`gather_embedding_rows_768`), disjoint token band slicing (`with_nanolab_token_bands`), and head pair transpose/split (`split_nanolab_head_pairs_append`) with dedicated unit tests.
+- **CPU Backend Layout & Pointwise Hardening (`ojas-cpu`):** Parallelized pointwise execution across scoped worker threads, optimized fast gate backward reductions, and verified permute/elementwise edge-case handling.
+- **KV Cache & Metal Parity (`ojas-metal`):** Extended cached attention suites, split cache walks, and verified concurrency and deferred faults.
+- **PyTorch Parity & Sweep Benchmarks (`bench/`, `docs/bench-*-vs-torch.md`):** Updated CPU and Metal vs PyTorch 2.13 CPU & MPS benchmarks, per-call breakdowns, and scaling sweeps across batch sizes.
+- **GitPulse Task Integration (`tasks/`):** Registered 9 prioritized tasks in `tasks/` tracking execution blockers and roadmap features (BF16 compute tier, head dim 256/GQA, u32 TokenBin, CUDA provider, attention LSE, activation checkpointing, Muon BF16, hybrid primitives, sliding window attention).
 
-## Previous run: adaptive resources & kernel optimizations (verified, 2026-10-02)
+## Previous run: kernel hardening, SIMD vectorization & backend parity (verified, 2026-10-04)
 
 ## Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35)
 
