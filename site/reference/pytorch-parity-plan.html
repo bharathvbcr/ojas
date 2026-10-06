@@ -321,7 +321,7 @@
 </li>
 <li><strong>ojas-core has no typed device-lost variant.</strong> <code>kind_of</code> still reads backend detail text.
 </li>
-<li><strong>Readback-count race (found by the ojas-cpu session).</strong> <code>device_readbacks()</code> is process-wide, so &#34;no readback&#34; assertions fail under parallel <code>cargo test</code> when sibling tests download (wgpu <code>muon.rs</code> 3, <code>permute.rs</code> 2). The CI gates pass <code>--test-threads=1</code> and are unaffected. <strong>Class fix landed in ojas-core:</strong> <code>Budget::device_readbacks()</code> counts per budget tree, from any thread (<code>budget_readbacks_count_only_their_own_tree_across_threads</code>). <strong>Pending, in slot (d):</strong> move the GPU tests (wgpu muon/permute/residency/parity/contract, autograd device and wgpu tapes, capi <code>readbacks_during</code>, metal training_step) onto it, and verify them under default threads.
+<li><strong>Readback-count race (found by the ojas-cpu session, scoped in Task <code>gp-gpu-test-budget-readbacks</code>).</strong> <code>device_readbacks()</code> is process-wide, so &#34;no readback&#34; assertions fail under parallel <code>cargo test</code> when sibling tests download (wgpu <code>muon.rs</code> 3, <code>permute.rs</code> 2). The CI gates pass <code>--test-threads=1</code> and are unaffected. <strong>Class fix landed in ojas-core:</strong> <code>Budget::device_readbacks()</code> counts per budget tree, from any thread (<code>budget_readbacks_count_only_their_own_tree_across_threads</code>). <strong>Pending, in slot (d):</strong> move the GPU tests (wgpu muon/permute/residency/parity/contract, autograd device and wgpu tapes, capi <code>readbacks_during</code>, metal training_step) onto it, and verify them under default threads.
 </li>
 <li><strong><code>CpuBackend</code> now defaults to <code>Numerics::Fast</code>.</strong> A concurrent session made this change with the user&#39;s approval. Under Fast, <code>ojas-infer</code>&#39;s &#34;cached decode equals full forward&#34; is bit-identical only while every GEMM is below 2^21 multiply-adds; above that the full forward goes to Accelerate. <strong>Since resolved</strong> by the ojas-cpu session (lane-reported; ojas-infer 35 passed):
 </li>
@@ -409,7 +409,7 @@
 </li>
 </ul>
 </li>
-<li><strong>wgpu fault word is full (wgpu round 3).</strong> All 32 op bits are in use; the last four went to <code>accumulate_grad</code>, <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code> and <code>kv_cache_write</code>. A 33rd fault-reporting op needs a second word or a 64-bit word first.
+<li><strong>wgpu fault word is full (wgpu round 3, scoped in Task <code>gp-wgpu-fault-word-64</code>).</strong> All 32 op bits are in use; the last four went to <code>accumulate_grad</code>, <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code> and <code>kv_cache_write</code>. A 33rd fault-reporting op needs a second word or a 64-bit word first.
 </li>
 <li><strong>wgpu <code>clip_grad_norm</code> returned another caller&#39;s norm under concurrency (fixed, wgpu round 3).</strong> Job scratch went back to the pool before the read. The status buffer is now held until after the read. <code>clip_norms_stay_correct_while_other_threads_submit</code> failed 5/5 before the fix and passes 5/5 after.
 </li>
@@ -419,7 +419,7 @@
 </li>
 <li><strong>io:</strong> the single-file <code>replace_with</code> still replaces a symlink as a link (documented). Only <code>replace_dir_with</code> refuses symlinks. The <code>ojas-io/README.md</code> names <code>MAX_HEADER_SIZE</code> and <code>OjasError::InvalidSafetensors</code>, which predate this work and are wrong.
 </li>
-<li><strong>autograd:</strong> ojas-autograd has no ojas-metal dev-dependency, so G6 (seeded backward) is verified on CPU, the test doubles and wgpu, but not on Metal. Adding one changes Cargo.lock. Test helpers (<code>Resident</code>, <code>Rng</code>, <code>lin</code>, <code>ce</code>) are duplicated across <code>tests/common/mod.rs</code>, <code>device_tape.rs</code> and <code>gradcheck_random.rs</code>.
+<li><strong>autograd (scoped in Task <code>gp-autograd-metal-tape-tests</code>):</strong> ojas-autograd has no ojas-metal dev-dependency, so G6 (seeded backward) is verified on CPU, the test doubles and wgpu, but not on Metal. Adding one changes Cargo.lock. Test helpers (<code>Resident</code>, <code>Rng</code>, <code>lin</code>, <code>ce</code>) are duplicated across <code>tests/common/mod.rs</code>, <code>device_tape.rs</code> and <code>gradcheck_random.rs</code>.
 </li>
 <li><strong>Metal deferred faults landed (Metal round 5).</strong> Approved by the user; contract in <a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>.
 <ul>
