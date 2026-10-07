@@ -1,0 +1,147 @@
+--- a/kernels/matmul_tensorops.metal (tessl HEAD)
++++ b/kernels/matmul_tensorops.metal
+@@ -29,10 +29,16 @@
+     return uint2(x, y);
+ }
+ 
++/// True for the grids `tile_from_linear` walks in Morton order: square, with
++/// a power-of-two side.
++inline bool tile_grid_is_morton(uint tiles_n, uint tiles_m) {
++    return tiles_n == tiles_m && tiles_n != 0u && (tiles_n & (tiles_n - 1u)) == 0u;
++}
++
+ /// Decode linear TG id → (x, y) tile. Uses Morton when the grid is square and
+ /// power-of-two (cache-friendly); otherwise compact row-major (avoids pad tax).
+ inline uint2 tile_from_linear(uint linear, uint tiles_n, uint tiles_m) {
+-    if (tiles_n == tiles_m && tiles_n != 0u && (tiles_n & (tiles_n - 1u)) == 0u) {
++    if (tile_grid_is_morton(tiles_n, tiles_m)) {
+         return morton_decode_2d(linear);
+     }
+     return uint2(linear % tiles_n, linear / tiles_n);
+@@ -51,19 +57,41 @@
+     return uint2(rem / local_h, band * ph + rem % local_h);
+ }
+ 
+-/// Tile walk of the exact-f32 kernels. Row-major order re-reads all of B
+-/// (the N×K operand) once per 32-row tile row. That is free while B stays in
+-/// cache and DRAM-bound once it does not: the LM head's 50304×768 weight ran
+-/// at ~2.3 TFLOP/s against ~6.5 at N ≤ 2304. So the walk is chosen by B's
+-/// size, not the grid's. M5 Pro, interleaved A/B, min of 4 (ojas
+-/// bench/results/2026-10-02-gemm): column panels ran 0.39–0.47× the time of
+-/// row-major for nt with B ≥ 50 MB and 0.77× for TN at B = 32 MB, but ~1.08×
+-/// for TN at B = 12.6 MB; 25 MB was within run-to-run noise either way.
+-constexpr constant ulong F32_PANEL_MIN_B_ELEMS = 1ul << 23; // 32 MiB of f32
+-constexpr constant uint F32_PANEL_ROWS = 16u;
+-inline uint2 tile_walk_f32(uint linear, uint tiles_n, uint tiles_m, uint N, uint K) {
+-    if ((ulong)N * (ulong)K >= F32_PANEL_MIN_B_ELEMS) {
+-        return tile_from_linear_panel(linear, tiles_n, tiles_m, F32_PANEL_ROWS);
++/// Tile walk of the exact-f32, the bf16 TN/NT coop and the int8 dequant
++/// kernels, `SM` rows per tile. Every tile row reads all of B (the N×K
++/// operand), so row-major order re-reads B once per tile row. That is free
++/// while B stays in cache and DRAM-bound once it does not: the LM head's
++/// 50304×768 f32 weight ran at ~2.3 TFLOP/s against ~6.5 at N ≤ 2304. Column
++/// panels of `PANEL_BAND_ROWS` rows of C read B once per band instead, so the
++/// walk is chosen by B's size, not the grid's; a grid `tile_from_linear`
++/// walks in Morton order keeps Morton.
++///
++/// M5 Pro, panel time over the walk it replaces:
++/// - exact f32 (ojas bench/results/2026-10-02-gemm, interleaved A/B, min of
++///   4): 0.39–0.47× for NT with B ≥ 50 MB and 0.77× for TN at 32 MB, but
++///   ~1.08× for TN at 12.6 MB; 25 MB was within run-to-run noise.
++/// - bf16 coop, 512-row bands (ojas bench/results/2026-10-06-gemm-bf16,
++///   in-process sweep, median of per-round ratios over 3–6 rounds):
++///   0.45–0.95× with B ≥ 24 MiB (0.45–0.73× at K = 768), 0.73–1.01× at
++///   20 MiB, 0.87–1.02× at 16 MiB and 0.91–1.00× at 12 MiB. Against Morton
++///   on square power-of-two grids, 0.98–1.04×.
++/// - int8 dequant (same directory, production A/B, median of 6 paired
++///   rounds): 0.73–0.77× with B ≥ 24 MiB, 0.91× at 16 MiB and 0.99–1.00× at
++///   8–12 MiB. The same A/B put Morton at 0.99–1.02× of panels for exact f32
++///   on square power-of-two grids, so those keep Morton too.
++///
++/// So the gate counts B's elements: 2^23 is the 32 MiB of f32 the exact
++/// kernels' A/B chose, 16 MiB of bf16, where the coop kernels stop losing,
++/// and 8 MiB of int8, where panels neither win nor lose. Bands of 512 rows
++/// (16 tile rows of 32, 4 of 128, 8 of 64) were best or within noise of 1024
++/// and 2048 everywhere but bf16 NT at K = 768 (0.64× against 0.61×), and
++/// 1024 lost up to 10% on bf16 TN accumulate.
++constexpr constant ulong PANEL_MIN_B_ELEMS = 1ul << 23;
++constexpr constant uint PANEL_BAND_ROWS = 512u;
++template <int SM>
++inline uint2 tile_walk(uint linear, uint tiles_n, uint tiles_m, uint N, uint K) {
++    if ((ulong)N * (ulong)K >= PANEL_MIN_B_ELEMS && !tile_grid_is_morton(tiles_n, tiles_m)) {
++        return tile_from_linear_panel(linear, tiles_n, tiles_m, PANEL_BAND_ROWS / (uint)SM);
+     }
+     return tile_from_linear(linear, tiles_n, tiles_m);
+ }
+@@ -91,7 +119,7 @@
+                             matmul2d_descriptor::mode::multiply);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m, N, K);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -140,7 +168,7 @@
+                             matmul2d_descriptor::mode::multiply);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m, N, K);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -187,7 +215,7 @@
+                             matmul2d_descriptor::mode::multiply);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m, N, K);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -233,7 +261,7 @@
+                             matmul2d_descriptor::mode::multiply_accumulate);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m, N, K);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -278,7 +306,7 @@
+                             matmul2d_descriptor::mode::multiply_accumulate);
+     matmul2d<desc, execution_simdgroup> op;
+ 
+-    uint2 tile = tile_walk_f32(tgpig, tiles_n, tiles_m, N, K);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -719,7 +747,7 @@
+         matmul2d_descriptor::mode::multiply);
+     matmul2d<d, execution_simdgroups<NSG>> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -864,7 +892,7 @@
+         matmul2d_descriptor::mode::multiply);
+     matmul2d<d, execution_simdgroups<NSG>> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;
+@@ -934,7 +962,7 @@
+         matmul2d_descriptor::mode::multiply);
+     matmul2d<d, execution_simdgroups<NSG>> op;
+ 
+-    uint2 tile = tile_from_linear(tgpig, tiles_n, tiles_m);
++    uint2 tile = tile_walk<SM>(tgpig, tiles_n, tiles_m, N, K);
+     if (tile.x >= tiles_n || tile.y >= tiles_m) return;
+     int tx = (int)tile.x * SN;
+     int ty = (int)tile.y * SM;

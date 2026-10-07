@@ -1,0 +1,828 @@
+== f32nt_morton_sq128-new-r1
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 13.428 ms  5118 GFLOP/s
+== f32nt_morton_sq128-new-r2
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 12.947 ms  5308 GFLOP/s
+== f32nt_morton_sq128-new-r3
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 12.482 ms  5506 GFLOP/s
+== f32nt_morton_sq128-new-r4
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 13.790 ms  4983 GFLOP/s
+== f32nt_morton_sq128-new-r5
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 10.054 ms  6835 GFLOP/s
+== f32nt_morton_sq128-new-r6
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 11.056 ms  6216 GFLOP/s
+== f32nt_morton_sq128-old-r1
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 12.913 ms  5322 GFLOP/s
+== f32nt_morton_sq128-old-r2
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 13.146 ms  5228 GFLOP/s
+== f32nt_morton_sq128-old-r3
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 13.285 ms  5173 GFLOP/s
+== f32nt_morton_sq128-old-r4
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 12.496 ms  5499 GFLOP/s
+== f32nt_morton_sq128-old-r5
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 9.806 ms  7008 GFLOP/s
+== f32nt_morton_sq128-old-r6
+
+f32nt_morton_sq128  M=4096 N=4096 K=2048   production 10.958 ms  6271 GFLOP/s
+== f32nt_morton_sq64-new-r1
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.265 ms  5484 GFLOP/s
+== f32nt_morton_sq64-new-r2
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.568 ms  5232 GFLOP/s
+== f32nt_morton_sq64-new-r3
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.664 ms  5156 GFLOP/s
+== f32nt_morton_sq64-new-r4
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.474 ms  5307 GFLOP/s
+== f32nt_morton_sq64-new-r5
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 5.243 ms  6553 GFLOP/s
+== f32nt_morton_sq64-new-r6
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 5.521 ms  6224 GFLOP/s
+== f32nt_morton_sq64-old-r1
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.268 ms  5482 GFLOP/s
+== f32nt_morton_sq64-old-r2
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.445 ms  5331 GFLOP/s
+== f32nt_morton_sq64-old-r3
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.697 ms  5131 GFLOP/s
+== f32nt_morton_sq64-old-r4
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 6.517 ms  5272 GFLOP/s
+== f32nt_morton_sq64-old-r5
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 4.815 ms  7135 GFLOP/s
+== f32nt_morton_sq64-old-r6
+
+f32nt_morton_sq64  M=2048 N=2048 K=4096   production 5.636 ms  6097 GFLOP/s
+== f32nt_vocab_16384-new-r1
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 21.032 ms  4901 GFLOP/s
+== f32nt_vocab_16384-new-r2
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 20.546 ms  5017 GFLOP/s
+== f32nt_vocab_16384-new-r3
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 19.820 ms  5201 GFLOP/s
+== f32nt_vocab_16384-new-r4
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 20.334 ms  5069 GFLOP/s
+== f32nt_vocab_16384-new-r5
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 16.024 ms  6433 GFLOP/s
+== f32nt_vocab_16384-new-r6
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 17.680 ms  5830 GFLOP/s
+== f32nt_vocab_16384-old-r1
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 21.187 ms  4865 GFLOP/s
+== f32nt_vocab_16384-old-r2
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 20.980 ms  4913 GFLOP/s
+== f32nt_vocab_16384-old-r3
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 20.807 ms  4954 GFLOP/s
+== f32nt_vocab_16384-old-r4
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 20.643 ms  4994 GFLOP/s
+== f32nt_vocab_16384-old-r5
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 15.908 ms  6480 GFLOP/s
+== f32nt_vocab_16384-old-r6
+
+f32nt_vocab_16384  M=4096 N=16384 K=768   production 16.623 ms  6201 GFLOP/s
+== f32tn_morton_sq128-new-r1
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 13.168 ms  5219 GFLOP/s
+== f32tn_morton_sq128-new-r2
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 12.819 ms  5361 GFLOP/s
+== f32tn_morton_sq128-new-r3
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 12.556 ms  5473 GFLOP/s
+== f32tn_morton_sq128-new-r4
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 13.627 ms  5043 GFLOP/s
+== f32tn_morton_sq128-new-r5
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 9.793 ms  7017 GFLOP/s
+== f32tn_morton_sq128-new-r6
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 10.977 ms  6260 GFLOP/s
+== f32tn_morton_sq128-old-r1
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 13.354 ms  5146 GFLOP/s
+== f32tn_morton_sq128-old-r2
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 13.057 ms  5263 GFLOP/s
+== f32tn_morton_sq128-old-r3
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 13.473 ms  5100 GFLOP/s
+== f32tn_morton_sq128-old-r4
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 13.764 ms  4993 GFLOP/s
+== f32tn_morton_sq128-old-r5
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 9.839 ms  6985 GFLOP/s
+== f32tn_morton_sq128-old-r6
+
+f32tn_morton_sq128  M=4096 N=4096 K=2048   production 10.882 ms  6315 GFLOP/s
+== f32tn_morton_sq64-new-r1
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 6.726 ms  5109 GFLOP/s
+== f32tn_morton_sq64-new-r2
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 6.809 ms  5046 GFLOP/s
+== f32tn_morton_sq64-new-r3
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 6.588 ms  5215 GFLOP/s
+== f32tn_morton_sq64-new-r4
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 6.693 ms  5134 GFLOP/s
+== f32tn_morton_sq64-new-r5
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 4.852 ms  7081 GFLOP/s
+== f32tn_morton_sq64-new-r6
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 5.627 ms  6106 GFLOP/s
+== f32tn_morton_sq64-old-r1
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 7.470 ms  4600 GFLOP/s
+== f32tn_morton_sq64-old-r2
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 6.793 ms  5058 GFLOP/s
+== f32tn_morton_sq64-old-r3
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 6.456 ms  5323 GFLOP/s
+== f32tn_morton_sq64-old-r4
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 6.640 ms  5174 GFLOP/s
+== f32tn_morton_sq64-old-r5
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 4.931 ms  6968 GFLOP/s
+== f32tn_morton_sq64-old-r6
+
+f32tn_morton_sq64  M=2048 N=2048 K=4096   production 5.510 ms  6236 GFLOP/s
+== i8nn_b12m-new-r1
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 1.851 ms  41771 GFLOP/s
+== i8nn_b12m-new-r2
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 2.382 ms  32453 GFLOP/s
+== i8nn_b12m-new-r3
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 2.365 ms  32694 GFLOP/s
+== i8nn_b12m-new-r4
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 2.128 ms  36323 GFLOP/s
+== i8nn_b12m-new-r5
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 1.775 ms  43562 GFLOP/s
+== i8nn_b12m-new-r6
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 1.641 ms  47100 GFLOP/s
+== i8nn_b12m-old-r1
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 2.116 ms  36538 GFLOP/s
+== i8nn_b12m-old-r2
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 2.432 ms  31787 GFLOP/s
+== i8nn_b12m-old-r3
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 2.360 ms  32761 GFLOP/s
+== i8nn_b12m-old-r4
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 2.135 ms  36214 GFLOP/s
+== i8nn_b12m-old-r5
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 1.527 ms  50635 GFLOP/s
+== i8nn_b12m-old-r6
+
+i8nn_b12m  M=3072 N=6144 K=2048   production 1.759 ms  43962 GFLOP/s
+== i8nn_b16m-new-r1
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 3.841 ms  35784 GFLOP/s
+== i8nn_b16m-new-r2
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 3.851 ms  35686 GFLOP/s
+== i8nn_b16m-new-r3
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 3.837 ms  35823 GFLOP/s
+== i8nn_b16m-new-r4
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 3.841 ms  35786 GFLOP/s
+== i8nn_b16m-new-r5
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 2.788 ms  49288 GFLOP/s
+== i8nn_b16m-new-r6
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 2.796 ms  49163 GFLOP/s
+== i8nn_b16m-old-r1
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 4.031 ms  34092 GFLOP/s
+== i8nn_b16m-old-r2
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 4.153 ms  33092 GFLOP/s
+== i8nn_b16m-old-r3
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 4.257 ms  32287 GFLOP/s
+== i8nn_b16m-old-r4
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 4.052 ms  33915 GFLOP/s
+== i8nn_b16m-old-r5
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 3.172 ms  43327 GFLOP/s
+== i8nn_b16m-old-r6
+
+i8nn_b16m  M=4096 N=8192 K=2048   production 3.389 ms  40550 GFLOP/s
+== i8nn_b6m-new-r1
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.180 ms  32763 GFLOP/s
+== i8nn_b6m-new-r2
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.114 ms  34711 GFLOP/s
+== i8nn_b6m-new-r3
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.320 ms  29280 GFLOP/s
+== i8nn_b6m-new-r4
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.164 ms  33218 GFLOP/s
+== i8nn_b6m-new-r5
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 0.893 ms  43265 GFLOP/s
+== i8nn_b6m-new-r6
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.251 ms  30892 GFLOP/s
+== i8nn_b6m-old-r1
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.103 ms  35039 GFLOP/s
+== i8nn_b6m-old-r2
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.214 ms  31828 GFLOP/s
+== i8nn_b6m-old-r3
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.276 ms  30286 GFLOP/s
+== i8nn_b6m-old-r4
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 1.097 ms  35241 GFLOP/s
+== i8nn_b6m-old-r5
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 0.845 ms  45723 GFLOP/s
+== i8nn_b6m-old-r6
+
+i8nn_b6m  M=3072 N=3072 K=2048   production 0.879 ms  43975 GFLOP/s
+== i8nn_b8m-new-r1
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.507 ms  34198 GFLOP/s
+== i8nn_b8m-new-r2
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.602 ms  32181 GFLOP/s
+== i8nn_b8m-new-r3
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.961 ms  26278 GFLOP/s
+== i8nn_b8m-new-r4
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.371 ms  37580 GFLOP/s
+== i8nn_b8m-new-r5
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.096 ms  47024 GFLOP/s
+== i8nn_b8m-new-r6
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.963 ms  26257 GFLOP/s
+== i8nn_b8m-old-r1
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.500 ms  34349 GFLOP/s
+== i8nn_b8m-old-r2
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.614 ms  31923 GFLOP/s
+== i8nn_b8m-old-r3
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.652 ms  31207 GFLOP/s
+== i8nn_b8m-old-r4
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.449 ms  35565 GFLOP/s
+== i8nn_b8m-old-r5
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.103 ms  46721 GFLOP/s
+== i8nn_b8m-old-r6
+
+i8nn_b8m  M=3072 N=4096 K=2048   production 1.281 ms  40237 GFLOP/s
+== i8nn_grid_small_b-new-r1
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.469 ms  26321 GFLOP/s
+== i8nn_grid_small_b-new-r2
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.939 ms  19933 GFLOP/s
+== i8nn_grid_small_b-new-r3
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.768 ms  21859 GFLOP/s
+== i8nn_grid_small_b-new-r4
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.133 ms  34119 GFLOP/s
+== i8nn_grid_small_b-new-r5
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.020 ms  37884 GFLOP/s
+== i8nn_grid_small_b-new-r6
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.065 ms  36280 GFLOP/s
+== i8nn_grid_small_b-old-r1
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.366 ms  28294 GFLOP/s
+== i8nn_grid_small_b-old-r2
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.157 ms  33402 GFLOP/s
+== i8nn_grid_small_b-old-r3
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.466 ms  26370 GFLOP/s
+== i8nn_grid_small_b-old-r4
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.527 ms  25313 GFLOP/s
+== i8nn_grid_small_b-old-r5
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.050 ms  36804 GFLOP/s
+== i8nn_grid_small_b-old-r6
+
+i8nn_grid_small_b  M=8192 N=3072 K=768   production 1.047 ms  36908 GFLOP/s
+== i8nn_lmhead_50304-new-r1
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 11.817 ms  26783 GFLOP/s
+== i8nn_lmhead_50304-new-r2
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 12.027 ms  26314 GFLOP/s
+== i8nn_lmhead_50304-new-r3
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 11.819 ms  26778 GFLOP/s
+== i8nn_lmhead_50304-new-r4
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 11.524 ms  27464 GFLOP/s
+== i8nn_lmhead_50304-new-r5
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 8.517 ms  37159 GFLOP/s
+== i8nn_lmhead_50304-new-r6
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 8.442 ms  37488 GFLOP/s
+== i8nn_lmhead_50304-old-r1
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 15.127 ms  20922 GFLOP/s
+== i8nn_lmhead_50304-old-r2
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 14.975 ms  21135 GFLOP/s
+== i8nn_lmhead_50304-old-r3
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 15.332 ms  20642 GFLOP/s
+== i8nn_lmhead_50304-old-r4
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 15.545 ms  20359 GFLOP/s
+== i8nn_lmhead_50304-old-r5
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 11.510 ms  27497 GFLOP/s
+== i8nn_lmhead_50304-old-r6
+
+i8nn_lmhead_50304  M=4096 N=50304 K=768   production 12.555 ms  25208 GFLOP/s
+== i8nn_longk_8192-new-r1
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 10.986 ms  50040 GFLOP/s
+== i8nn_longk_8192-new-r2
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 11.576 ms  47491 GFLOP/s
+== i8nn_longk_8192-new-r3
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 11.029 ms  49844 GFLOP/s
+== i8nn_longk_8192-new-r4
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 11.093 ms  49558 GFLOP/s
+== i8nn_longk_8192-new-r5
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 10.870 ms  50574 GFLOP/s
+== i8nn_longk_8192-new-r6
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 10.828 ms  50769 GFLOP/s
+== i8nn_longk_8192-old-r1
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 14.576 ms  37718 GFLOP/s
+== i8nn_longk_8192-old-r2
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 16.158 ms  34024 GFLOP/s
+== i8nn_longk_8192-old-r3
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 15.794 ms  34807 GFLOP/s
+== i8nn_longk_8192-old-r4
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 15.015 ms  36614 GFLOP/s
+== i8nn_longk_8192-old-r5
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 14.393 ms  38197 GFLOP/s
+== i8nn_longk_8192-old-r6
+
+i8nn_longk_8192  M=4096 N=8192 K=8192   production 15.898 ms  34581 GFLOP/s
+== i8nn_morton_sq64-new-r1
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.756 ms  47751 GFLOP/s
+== i8nn_morton_sq64-new-r2
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.988 ms  45902 GFLOP/s
+== i8nn_morton_sq64-new-r3
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.959 ms  46132 GFLOP/s
+== i8nn_morton_sq64-new-r4
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.949 ms  46206 GFLOP/s
+== i8nn_morton_sq64-new-r5
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.232 ms  52535 GFLOP/s
+== i8nn_morton_sq64-new-r6
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.605 ms  49040 GFLOP/s
+== i8nn_morton_sq64-old-r1
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.731 ms  47965 GFLOP/s
+== i8nn_morton_sq64-old-r2
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 6.028 ms  45598 GFLOP/s
+== i8nn_morton_sq64-old-r3
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 6.069 ms  45289 GFLOP/s
+== i8nn_morton_sq64-old-r4
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 6.008 ms  45755 GFLOP/s
+== i8nn_morton_sq64-old-r5
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.049 ms  54438 GFLOP/s
+== i8nn_morton_sq64-old-r6
+
+i8nn_morton_sq64  M=8192 N=4096 K=4096   production 5.603 ms  49056 GFLOP/s
+== i8nn_vocab_32768-new-r1
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 7.835 ms  26312 GFLOP/s
+== i8nn_vocab_32768-new-r2
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 8.424 ms  24473 GFLOP/s
+== i8nn_vocab_32768-new-r3
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 9.557 ms  21570 GFLOP/s
+== i8nn_vocab_32768-new-r4
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 7.236 ms  28492 GFLOP/s
+== i8nn_vocab_32768-new-r5
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 5.660 ms  36426 GFLOP/s
+== i8nn_vocab_32768-new-r6
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 5.584 ms  36922 GFLOP/s
+== i8nn_vocab_32768-old-r1
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 10.057 ms  20498 GFLOP/s
+== i8nn_vocab_32768-old-r2
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 9.975 ms  20668 GFLOP/s
+== i8nn_vocab_32768-old-r3
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 10.126 ms  20359 GFLOP/s
+== i8nn_vocab_32768-old-r4
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 9.522 ms  21650 GFLOP/s
+== i8nn_vocab_32768-old-r5
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 7.362 ms  28004 GFLOP/s
+== i8nn_vocab_32768-old-r6
+
+i8nn_vocab_32768  M=4096 N=32768 K=768   production 7.827 ms  26339 GFLOP/s
+== ntap_vocab_32768-new-r1
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    14.733       13993      —      0.00e0
+== ntap_vocab_32768-new-r2
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    14.390       14326      —      0.00e0
+== ntap_vocab_32768-new-r3
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    13.744       15000      —      0.00e0
+== ntap_vocab_32768-new-r4
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32     9.403       21924      —      0.00e0
+== ntap_vocab_32768-new-r5
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    10.121       20369      —      0.00e0
+== ntap_vocab_32768-new-r6
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    11.096       18579      —      0.00e0
+== ntap_vocab_32768-old-r1
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    26.600        7750      —      0.00e0
+== ntap_vocab_32768-old-r2
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    26.220        7863      —      0.00e0
+== ntap_vocab_32768-old-r3
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    25.253        8164      —      0.00e0
+== ntap_vocab_32768-old-r4
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    22.091        9332      —      0.00e0
+== ntap_vocab_32768-old-r5
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    21.826        9445      —      0.00e0
+== ntap_vocab_32768-old-r6
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    26.420        7803      —      0.00e0
+== ntp_g16mib-new-r1
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.297 ms  22435 GFLOP/s
+== ntp_g16mib-new-r2
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.436 ms  21154 GFLOP/s
+== ntp_g16mib-new-r3
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.430 ms  21211 GFLOP/s
+== ntp_g16mib-new-r4
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 1.787 ms  28841 GFLOP/s
+== ntp_g16mib-new-r5
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 1.858 ms  27741 GFLOP/s
+== ntp_g16mib-new-r6
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.039 ms  25271 GFLOP/s
+== ntp_g16mib-old-r1
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.584 ms  19942 GFLOP/s
+== ntp_g16mib-old-r2
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.304 ms  22370 GFLOP/s
+== ntp_g16mib-old-r3
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.347 ms  21959 GFLOP/s
+== ntp_g16mib-old-r4
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 1.872 ms  27526 GFLOP/s
+== ntp_g16mib-old-r5
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 1.953 ms  26392 GFLOP/s
+== ntp_g16mib-old-r6
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.269 ms  22720 GFLOP/s
+== ntp_lm_head_248320-new-r1
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 38.476 ms  27070 GFLOP/s
+== ntp_lm_head_248320-new-r2
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 38.912 ms  26766 GFLOP/s
+== ntp_lm_head_248320-new-r3
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 39.296 ms  26505 GFLOP/s
+== ntp_lm_head_248320-new-r4
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 36.409 ms  28607 GFLOP/s
+== ntp_lm_head_248320-new-r5
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 34.296 ms  30368 GFLOP/s
+== ntp_lm_head_248320-new-r6
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 37.551 ms  27736 GFLOP/s
+== ntp_lm_head_248320-old-r1
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 53.488 ms  19472 GFLOP/s
+== ntp_lm_head_248320-old-r2
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 54.750 ms  19023 GFLOP/s
+== ntp_lm_head_248320-old-r3
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 52.471 ms  19850 GFLOP/s
+== ntp_lm_head_248320-old-r4
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 55.746 ms  18684 GFLOP/s
+== ntp_lm_head_248320-old-r5
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 47.574 ms  21893 GFLOP/s
+== ntp_lm_head_248320-old-r6
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 55.954 ms  18614 GFLOP/s
+== ntp_morton_sq64-new-r1
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 10.310 ms  26661 GFLOP/s
+== ntp_morton_sq64-new-r2
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 9.914 ms  27727 GFLOP/s
+== ntp_morton_sq64-new-r3
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 10.000 ms  27487 GFLOP/s
+== ntp_morton_sq64-new-r4
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 9.253 ms  29706 GFLOP/s
+== ntp_morton_sq64-new-r5
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 9.736 ms  28232 GFLOP/s
+== ntp_morton_sq64-new-r6
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 9.693 ms  28357 GFLOP/s
+== ntp_morton_sq64-old-r1
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 10.302 ms  26683 GFLOP/s
+== ntp_morton_sq64-old-r2
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 10.184 ms  26992 GFLOP/s
+== ntp_morton_sq64-old-r3
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 10.071 ms  27295 GFLOP/s
+== ntp_morton_sq64-old-r4
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 9.753 ms  28185 GFLOP/s
+== ntp_morton_sq64-old-r5
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 9.570 ms  28722 GFLOP/s
+== ntp_morton_sq64-old-r6
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 9.914 ms  27727 GFLOP/s
+== tnap_g20mib-new-r1
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.595       17920      —      0.00e0
+== tnap_g20mib-new-r2
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.930       16393      —      0.00e0
+== tnap_g20mib-new-r3
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.449       18681      —      0.00e0
+== tnap_g20mib-new-r4
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     2.530       25467      —      0.00e0
+== tnap_g20mib-new-r5
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     2.960       21762      —      0.00e0
+== tnap_g20mib-new-r6
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.503       18391      —      0.00e0
+== tnap_g20mib-old-r1
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.682       17496      —      0.00e0
+== tnap_g20mib-old-r2
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.484       18489      —      0.00e0
+== tnap_g20mib-old-r3
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.409       18897      —      0.00e0
+== tnap_g20mib-old-r4
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     2.636       24440      —      0.00e0
+== tnap_g20mib-old-r5
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     2.654       24276      —      0.00e0
+== tnap_g20mib-old-r6
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.358       19185      —      0.00e0
+== tnap_lmhead_dw-new-r1
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    15.422       20522      —      0.00e0
+== tnap_lmhead_dw-new-r2
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    16.149       19598      —      0.00e0
+== tnap_lmhead_dw-new-r3
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    15.891       19915      —      0.00e0
+== tnap_lmhead_dw-new-r4
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    12.420       25481      —      0.00e0
+== tnap_lmhead_dw-new-r5
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    13.329       23744      —      0.00e0
+== tnap_lmhead_dw-new-r6
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    15.395       20557      —      0.00e0
+== tnap_lmhead_dw-old-r1
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    25.954       12194      —      0.00e0
+== tnap_lmhead_dw-old-r2
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    24.670       12829      —      0.00e0
+== tnap_lmhead_dw-old-r3
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    22.654       13970      —      0.00e0
+== tnap_lmhead_dw-old-r4
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    22.943       13794      —      0.00e0
+== tnap_lmhead_dw-old-r5
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    23.157       13667      —      0.00e0
+== tnap_lmhead_dw-old-r6
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    25.621       12353      —      0.00e0
+== tnp_g12mib-new-r1
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 2.022 ms  19113 GFLOP/s
+== tnp_g12mib-new-r2
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.845 ms  20955 GFLOP/s
+== tnp_g12mib-new-r3
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.753 ms  22053 GFLOP/s
+== tnp_g12mib-new-r4
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.526 ms  25332 GFLOP/s
+== tnp_g12mib-new-r5
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.671 ms  23131 GFLOP/s
+== tnp_g12mib-new-r6
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.793 ms  21553 GFLOP/s
+== tnp_g12mib-old-r1
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.737 ms  22256 GFLOP/s
+== tnp_g12mib-old-r2
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.853 ms  20866 GFLOP/s
+== tnp_g12mib-old-r3
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.688 ms  22893 GFLOP/s
+== tnp_g12mib-old-r4
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.591 ms  24300 GFLOP/s
+== tnp_g12mib-old-r5
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.617 ms  23902 GFLOP/s
+== tnp_g12mib-old-r6
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.703 ms  22692 GFLOP/s
+== tnp_morton_sq64-new-r1
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 10.623 ms  25876 GFLOP/s
+== tnp_morton_sq64-new-r2
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 10.682 ms  25733 GFLOP/s
+== tnp_morton_sq64-new-r3
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 10.026 ms  27418 GFLOP/s
+== tnp_morton_sq64-new-r4
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 10.019 ms  27436 GFLOP/s
+== tnp_morton_sq64-new-r5
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 9.797 ms  28057 GFLOP/s
+== tnp_morton_sq64-new-r6
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 10.259 ms  26794 GFLOP/s
+== tnp_morton_sq64-old-r1
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 11.039 ms  24900 GFLOP/s
+== tnp_morton_sq64-old-r2
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 10.327 ms  26618 GFLOP/s
+== tnp_morton_sq64-old-r3
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 9.995 ms  27501 GFLOP/s
+== tnp_morton_sq64-old-r4
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 9.932 ms  27676 GFLOP/s
+== tnp_morton_sq64-old-r5
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 9.937 ms  27663 GFLOP/s
+== tnp_morton_sq64-old-r6
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 10.433 ms  26346 GFLOP/s

@@ -51,6 +51,10 @@ diff of its first (grid-gated) version against
 `N·K >= 2^23`. Write-up: `docs/bench-gpu-vs-torch.md`, "Round 5 and the
 LM-head GEMM".
 
+Since 2026-10-07, `tile_walk_f32` is `tile_walk<SM>`, shared with the bf16
+TN/NT and int8 kernels. Exact f32 on a square power-of-two grid keeps Morton
+order. See `../2026-10-06-gemm-bf16`.
+
 | Directory | What it holds |
 |---|---|
 | `ab-grid-gate/` | GEMM probe, interleaved, 4 rounds per side: panels on any grid of 2048 tiles or more. LM-head NT 0.47×; TN LM head 1.08× (a 12.6 MB B). |

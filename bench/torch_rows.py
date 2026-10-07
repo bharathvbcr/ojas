@@ -23,7 +23,8 @@ Row semantics
   muon_* nanolab Muon.step for one matrix; *_fp32 runs nanolab's
          zeropower_via_newtonschulz5 with the bf16 cast replaced by fp32 (the
          reference for ojas, whose NS5 is ExactF32 GEMMs); *_bf16 is nanolab's
-         own function unchanged (timing only, labelled)
+         own function unchanged, the reference for ojas's Ns5Precision::Bf16
+         rows of the same name
   block_* nanolab's real Block (attention mixer, SwiGLU), weights loaded from
          the shared generator, v0 given so the value-residual path runs
 """
@@ -667,7 +668,7 @@ def do_ref(ref, filt):
     os.makedirs(ref, exist_ok=True)
     write_generator(ref)
     for name, sp, make in ROWS:
-        if not wanted(name, filt) or name.endswith("_bf16"):
+        if not wanted(name, filt):
             continue
         st = make()
         outs = st["outs"]()

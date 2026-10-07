@@ -1,0 +1,210 @@
+
+ntp_lmhead_50304  M=4096 N=50304 K=768   production 16.185 ms  19554 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4              16.346       19362  0.99×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4          10.202       31021  1.59×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8          10.247       30886  1.58×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16         10.242       30900  1.58×      0.00e0
+
+ntp_vocab_32768  M=4096 N=32768 K=768   production 11.125 ms  18531 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4              11.061       18638  1.01×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           6.865       30032  1.62×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           6.707       30737  1.66×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          6.890       29922  1.61×      0.00e0
+
+ntp_b32mib  M=4096 N=8192 K=2048   production 6.332 ms  21707 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               6.306       21795  1.00×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           4.531       30333  1.40×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           4.457       30836  1.42×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          4.548       30218  1.39×      0.00e0
+
+ntp_vocab_16384  M=4096 N=16384 K=768   production 5.403 ms  19080 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               5.260       19596  1.03×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           3.487       29560  1.55×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           3.424       30105  1.58×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          3.408       30249  1.59×      0.00e0
+
+ntp_mlp_6144  M=4096 N=6144 K=2048   production 4.138 ms  24913 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               4.148       24849  1.00×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           3.490       29537  1.19×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           3.530       29202  1.17×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          3.615       28515  1.14×      0.00e0
+
+ntp_b16mib  M=4096 N=4096 K=2048   production 2.359 ms  29135 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               2.335       29433  1.01×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           2.315       29684  1.02×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           2.376       28927  0.99×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          2.349       29252  1.00×      0.00e0
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048   production 48.631 ms  21417 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4              45.775       22753  1.06×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4          36.783       28316  1.32×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8          37.014       28139  1.31×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16         36.642       28424  1.33×      0.00e0
+
+ntp_longk_8192  M=4096 N=8192 K=8192   production 27.852 ms  19738 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4              27.223       20195  1.02×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4          20.062       27403  1.39×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8          20.962       26226  1.33×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16         23.825       23075  1.17×      0.00e0
+
+tnp_longk_16384  M=2048 N=8192 K=16384   production 31.007 ms  17730 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4              30.986       17742  1.00×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4          26.231       20958  1.18×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8          26.077       21082  1.19×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16         25.773       21331  1.20×      0.00e0
+
+tnp_lmhead_dw  M=768 N=50304 K=4096   production 14.523 ms  21792 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4              14.610       21662  0.99×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4          12.340       25646  1.18×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8          12.187       25970  1.19×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16         12.071       26220  1.20×      0.00e0
+
+tnp_b64mib  M=2048 N=8192 K=4096   production 6.572 ms  20914 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4               6.116       22471  1.07×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4           5.323       25819  1.23×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8           5.311       25881  1.24×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16          5.275       26055  1.25×      0.00e0
+
+tnp_b32mib  M=2048 N=4096 K=4096   production 2.941 ms  23367 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4               2.922       23517  1.01×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4           2.846       24147  1.03×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8           2.770       24811  1.06×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16          2.850       24114  1.03×      0.00e0
+
+tnp_b16mib  M=2048 N=2048 K=4096   production 1.444 ms  23790 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4               1.475       23292  0.98×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4           1.401       24521  1.03×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8           1.434       23967  1.01×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16          1.556       22076  0.93×      0.00e0
+
+ntp_morton_sq64  M=8192 N=4096 K=4096   production 10.734 ms  25608 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4              13.047       21068  0.82×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4          10.928       25153  0.98×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8          10.575       25994  1.02×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16         11.345       24228  0.95×      0.00e0
+
+tnp_morton_sq64  M=8192 N=4096 K=4096   production 11.825 ms  23245 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4              12.435       22105  0.95×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4          11.177       24593  1.06×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8          11.548       23803  1.02×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16         12.465       22053  0.95×      0.00e0
+
+ntap_vocab_32768  M=4096 N=32768 K=768   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32    22.761        9057      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4         23.955        8606      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8     10.275       20063      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16    10.393       19837      —      0.00e0
+
+ntap_b16mib  M=4096 N=4096 K=2048   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32     2.910       23614      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4          3.256       21107      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      3.018       22773      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     3.167       21697      —      0.00e0
+
+ntap_morton_sq64  M=4096 N=4096 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32     6.966       19731      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4         12.066       11390      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      6.649       20671      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     6.173       22265      —      0.00e0
+
+tnap_lmhead_dw  M=768 N=50304 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32    22.085       14330      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4         22.488       14073      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8     14.314       22110      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16    16.821       18815      —      0.00e0
+
+tnap_b16mib  M=2048 N=2048 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     1.771       19402      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4          1.740       19752      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      1.752       19615      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     1.879       18283      —      0.00e0
+
+tnap_morton_sq64  M=4096 N=4096 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     7.844       17522      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4          9.383       14648      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      7.119       19306      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     7.100       19358      —      0.00e0
+
+ntp_g12mib  M=3072 N=3072 K=2048   production 1.618 ms  23886 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               1.823       21206  0.89×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           1.593       24272  1.02×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           1.698       22764  0.95×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          1.639       23587  0.99×      0.00e0
+
+ntp_g16mib  M=3072 N=4096 K=2048   production 2.096 ms  24595 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               2.109       24442  0.99×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           2.042       25243  1.03×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           2.188       23551  0.96×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          2.194       23490  0.96×      0.00e0
+
+ntp_g20mib  M=3072 N=5120 K=2048   production 3.180 ms  20256 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               3.489       18467  0.91×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           4.189       15379  0.76×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           2.813       22900  1.13×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          2.792       23078  1.14×      0.00e0
+
+ntp_g12mib_k768  M=3072 N=8192 K=768   production 1.706 ms  22654 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               1.677       23043  1.02×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           1.677       23045  1.02×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           1.674       23087  1.02×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          1.694       22824  1.01×      0.00e0
+
+ntp_g20mib_k768  M=3072 N=13696 K=768   production 3.346 ms  19317 GFLOP/s
+  mm_bf16_nt_coop_128x64_sg4               3.465       18653  0.97×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph4           2.387       27073  1.40×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph8           2.431       26587  1.38×      0.00e0
+  mm_bf16_nt_coop_128x64_sg4_ph16          2.392       27020  1.40×      0.00e0
+
+tnp_g12mib  M=3072 N=1536 K=4096   production 1.505 ms  25681 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4               1.538       25132  0.98×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4           1.506       25665  1.00×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8           1.531       25241  0.98×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16          1.585       24394  0.95×      0.00e0
+
+tnp_g20mib  M=3072 N=2560 K=4096   production 3.135 ms  20548 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4               3.305       19495  0.95×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4           3.153       20434  0.99×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8           2.901       22210  1.08×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16          2.983       21598  1.05×      0.00e0
+
+tnp_g24mib  M=3072 N=3072 K=4096   production 3.500 ms  22090 GFLOP/s
+  mm_bf16_tn_coop_128x64_sg4               3.521       21958  0.99×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph4           3.549       21784  0.99×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph8           3.500       22086  1.00×      0.00e0
+  mm_bf16_tn_coop_128x64_sg4_ph16          3.321       23281  1.05×      0.00e0
+
+ntap_g12mib  M=3072 N=3072 K=2048   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32     1.743       22178      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4          1.738       22242      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      1.739       22228      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     1.718       22504      —      0.00e0
+
+ntap_g16mib  M=3072 N=4096 K=2048   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32     2.616       19705      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4          2.568       20068      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      2.352       21913      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     2.305       22355      —      0.00e0
+
+ntap_g20mib  M=3072 N=5120 K=2048   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_nt_accum_bf16_f32     3.649       17657      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4          3.646       17670      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      2.906       22169      —      0.00e0
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     2.898       22229      —      0.00e0
+
+tnap_g12mib  M=3072 N=1536 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     2.017       19165      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4          2.315       16698      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      2.173       17786      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     2.120       18229      —      0.00e0
+
+tnap_g16mib  M=3072 N=2048 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     2.429       21218      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4          2.545       20254      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      2.480       20786      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     2.795       18438      —      0.00e0
+
+tnap_g20mib  M=3072 N=2560 K=4096   (raw accum kernels; ref = TN product + 0.25)
+  matmul2d_tensorops_tn_accum_bf16_f32     3.260       19760      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4          3.499       18410      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      3.415       18864      —      0.00e0
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     3.494       18440      —      0.00e0

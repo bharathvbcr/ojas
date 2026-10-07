@@ -1,0 +1,210 @@
+
+ntp_lmhead_50304  M=4096 N=50304 K=768
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  1.01  med  1.05  max  1.17
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.53  med  0.65  max  0.68
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.53  med  0.65  max  0.68
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.54  med  0.70  max  0.72
+
+ntp_vocab_32768  M=4096 N=32768 K=768
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  0.94  med  0.98  max  1.04
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.61  med  0.64  max  0.88
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.58  med  0.61  max  0.69
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.58  med  0.62  max  0.63
+
+ntp_b32mib  M=4096 N=8192 K=2048
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  0.97  med  0.99  max  1.06
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.72  med  0.74  max  0.80
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.70  med  0.77  max  0.82
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.72  med  0.78  max  0.85
+
+ntp_vocab_16384  M=4096 N=16384 K=768
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  0.96  med  0.99  max  1.10
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.59  med  0.65  max  0.70
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.58  med  0.63  max  0.68
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.58  med  0.62  max  0.67
+
+ntp_mlp_6144  M=4096 N=6144 K=2048
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  0.99  med  1.00  max  1.06
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.76  med  0.84  max  0.86
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.79  med  0.85  max  0.88
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.83  med  0.87  max  0.90
+
+ntp_b16mib  M=4096 N=4096 K=2048
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  0.99  med  0.99  max  1.02
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.97  med  0.98  max  1.00
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.97  med  0.99  max  1.03
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  1.00  med  1.01  max  1.03
+
+ntp_lm_head_248320  M=1024 N=248320 K=2048
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  0.94  med  1.00  max  1.06
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.70  med  0.78  max  0.81
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.70  med  0.82  max  0.92
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.70  med  0.80  max  0.86
+
+ntp_longk_8192  M=4096 N=8192 K=8192
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  0.98  med  1.05  max  1.13
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.65  med  0.78  max  0.95
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.66  med  0.79  max  0.97
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.69  med  0.86  max  0.97
+
+tnp_longk_16384  M=2048 N=8192 K=16384
+  mm_bf16_tn_coop_128x64_sg4               n=6  min  0.95  med  1.02  max  1.10
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=6  min  0.77  med  0.86  max  0.96
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=6  min  0.76  med  0.85  max  1.03
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=6  min  0.75  med  0.89  max  0.96
+
+tnp_lmhead_dw  M=768 N=50304 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=6  min  1.01  med  1.02  max  1.05
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=6  min  0.81  med  0.86  max  0.94
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=6  min  0.77  med  0.87  max  1.02
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=6  min  0.78  med  0.91  max  1.07
+
+tnp_b64mib  M=2048 N=8192 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=6  min  0.93  med  1.01  max  1.03
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=6  min  0.79  med  0.91  max  0.95
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=6  min  0.79  med  0.92  max  0.96
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=6  min  0.80  med  0.92  max  0.97
+
+tnp_b32mib  M=2048 N=4096 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=6  min  0.98  med  0.99  max  1.06
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=6  min  0.87  med  0.91  max  0.97
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=6  min  0.91  med  0.92  max  0.97
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=6  min  0.89  med  0.95  max  1.00
+
+tnp_b16mib  M=2048 N=2048 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=6  min  0.96  med  0.98  max  1.02
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=6  min  0.97  med  0.98  max  1.05
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=6  min  0.94  med  0.98  max  1.04
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=6  min  0.94  med  1.00  max  1.08
+
+ntp_morton_sq64  M=8192 N=4096 K=4096
+  mm_bf16_nt_coop_128x64_sg4               n=6  min  1.06  med  1.17  max  1.22
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=6  min  0.95  med  1.01  max  1.11
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=6  min  0.93  med  1.02  max  1.14
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=6  min  0.93  med  1.06  max  1.20
+
+tnp_morton_sq64  M=8192 N=4096 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=6  min  1.05  med  1.12  max  1.14
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=6  min  0.95  med  1.01  max  1.05
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=6  min  0.98  med  1.02  max  1.08
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=6  min  1.03  med  1.05  max  1.10
+
+ntap_vocab_32768  M=4096 N=32768 K=768
+  matmul2d_tensorops_nt_accum_bf16_f32     n=6  min  1.00  med  1.00  max  1.00
+  mm_bf16_nt_accum_coop_64x64_sg4          n=6  min  0.97  med  1.02  max  1.06
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      n=6  min  0.44  med  0.45  max  0.45
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     n=6  min  0.42  med  0.43  max  0.46
+
+ntap_b16mib  M=4096 N=4096 K=2048
+  matmul2d_tensorops_nt_accum_bf16_f32     n=6  min  1.00  med  1.00  max  1.00
+  mm_bf16_nt_accum_coop_64x64_sg4          n=6  min  1.03  med  1.13  max  1.19
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      n=6  min  0.83  med  1.02  max  1.06
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     n=6  min  0.85  med  1.02  max  1.09
+
+ntap_morton_sq64  M=4096 N=4096 K=4096
+  matmul2d_tensorops_nt_accum_bf16_f32     n=6  min  1.00  med  1.00  max  1.00
+  mm_bf16_nt_accum_coop_64x64_sg4          n=6  min  1.64  med  1.73  max  2.45
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      n=6  min  0.95  med  0.98  max  1.02
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     n=6  min  0.89  med  0.98  max  1.03
+
+tnap_lmhead_dw  M=768 N=50304 K=4096
+  matmul2d_tensorops_tn_accum_bf16_f32     n=6  min  1.00  med  1.00  max  1.00
+  mm_bf16_tn_accum_coop_64x64_sg4          n=6  min  0.96  med  1.02  max  1.05
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      n=6  min  0.56  med  0.63  max  0.65
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     n=6  min  0.59  med  0.71  max  0.82
+
+tnap_b16mib  M=2048 N=2048 K=4096
+  matmul2d_tensorops_tn_accum_bf16_f32     n=6  min  1.00  med  1.00  max  1.00
+  mm_bf16_tn_accum_coop_64x64_sg4          n=6  min  0.98  med  0.99  max  1.02
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      n=6  min  0.92  med  1.02  max  1.06
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     n=6  min  0.93  med  1.07  max  1.19
+
+tnap_morton_sq64  M=4096 N=4096 K=4096
+  matmul2d_tensorops_tn_accum_bf16_f32     n=6  min  1.00  med  1.00  max  1.00
+  mm_bf16_tn_accum_coop_64x64_sg4          n=6  min  1.20  med  1.37  max  1.49
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      n=6  min  0.91  med  1.04  max  1.18
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     n=6  min  0.91  med  1.04  max  1.30
+
+ntp_g12mib  M=3072 N=3072 K=2048
+  mm_bf16_nt_coop_128x64_sg4               n=3  min  0.99  med  1.00  max  1.13
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=3  min  0.98  med  0.98  max  0.99
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=3  min  0.98  med  1.00  max  1.05
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=3  min  0.98  med  0.99  max  1.01
+
+ntp_g16mib  M=3072 N=4096 K=2048
+  mm_bf16_nt_coop_128x64_sg4               n=3  min  0.96  med  0.99  max  1.01
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=3  min  0.94  med  0.96  max  0.97
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=3  min  0.97  med  0.97  max  1.04
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=3  min  0.96  med  0.97  max  1.05
+
+ntp_g20mib  M=3072 N=5120 K=2048
+  mm_bf16_nt_coop_128x64_sg4               n=3  min  1.01  med  1.03  max  1.10
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=3  min  0.95  med  0.98  max  1.32
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=3  min  0.88  med  0.94  max  1.01
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=3  min  0.88  med  0.95  max  1.00
+
+ntp_g12mib_k768  M=3072 N=8192 K=768
+  mm_bf16_nt_coop_128x64_sg4               n=3  min  0.98  med  1.00  max  1.03
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=3  min  0.92  med  0.98  max  0.98
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=3  min  0.91  med  0.96  max  0.98
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=3  min  0.93  med  0.96  max  0.99
+
+ntp_g20mib_k768  M=3072 N=13696 K=768
+  mm_bf16_nt_coop_128x64_sg4               n=3  min  0.96  med  0.97  max  1.04
+  mm_bf16_nt_coop_128x64_sg4_ph4           n=3  min  0.71  med  0.73  max  0.74
+  mm_bf16_nt_coop_128x64_sg4_ph8           n=3  min  0.70  med  0.72  max  0.73
+  mm_bf16_nt_coop_128x64_sg4_ph16          n=3  min  0.70  med  0.71  max  0.71
+
+tnp_g12mib  M=3072 N=1536 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=3  min  0.99  med  1.00  max  1.02
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=3  min  0.98  med  0.98  max  1.00
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=3  min  0.98  med  0.99  max  1.02
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=3  min  0.99  med  1.01  max  1.05
+
+tnp_g20mib  M=3072 N=2560 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=3  min  0.99  med  0.99  max  1.05
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=3  min  0.95  med  1.01  max  1.01
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=3  min  0.93  med  0.98  max  1.00
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=3  min  0.95  med  0.97  max  1.03
+
+tnp_g24mib  M=3072 N=3072 K=4096
+  mm_bf16_tn_coop_128x64_sg4               n=3  min  1.01  med  1.01  max  1.01
+  mm_bf16_tn_coop_128x64_sg4_ph4           n=3  min  0.95  med  0.95  max  1.01
+  mm_bf16_tn_coop_128x64_sg4_ph8           n=3  min  0.95  med  0.96  max  1.00
+  mm_bf16_tn_coop_128x64_sg4_ph16          n=3  min  0.95  med  0.96  max  1.01
+
+ntap_g12mib  M=3072 N=3072 K=2048
+  matmul2d_tensorops_nt_accum_bf16_f32     n=3  min  1.00  med  1.00  max  1.00
+  mm_bf16_nt_accum_coop_64x64_sg4          n=3  min  0.99  med  1.00  max  1.03
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      n=3  min  0.96  med  1.00  max  1.03
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     n=3  min  0.98  med  0.98  max  0.99
+
+ntap_g16mib  M=3072 N=4096 K=2048
+  matmul2d_tensorops_nt_accum_bf16_f32     n=3  min  1.00  med  1.00  max  1.00
+  mm_bf16_nt_accum_coop_64x64_sg4          n=3  min  0.97  med  0.98  max  0.98
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      n=3  min  0.87  med  0.87  max  0.90
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     n=3  min  0.85  med  0.87  max  0.88
+
+ntap_g20mib  M=3072 N=5120 K=2048
+  matmul2d_tensorops_nt_accum_bf16_f32     n=3  min  1.00  med  1.00  max  1.00
+  mm_bf16_nt_accum_coop_64x64_sg4          n=3  min  1.00  med  1.01  max  1.07
+  mm_bf16_nt_accum_coop_64x64_sg4_ph8      n=3  min  0.79  med  0.79  max  0.80
+  mm_bf16_nt_accum_coop_64x64_sg4_ph16     n=3  min  0.78  med  0.79  max  0.81
+
+tnap_g12mib  M=3072 N=1536 K=4096
+  matmul2d_tensorops_tn_accum_bf16_f32     n=3  min  1.00  med  1.00  max  1.00
+  mm_bf16_tn_accum_coop_64x64_sg4          n=3  min  0.96  med  1.01  max  1.15
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      n=3  min  0.90  med  0.91  max  1.08
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     n=3  min  0.90  med  0.91  max  1.05
+
+tnap_g16mib  M=3072 N=2048 K=4096
+  matmul2d_tensorops_tn_accum_bf16_f32     n=3  min  1.00  med  1.00  max  1.00
+  mm_bf16_tn_accum_coop_64x64_sg4          n=3  min  0.97  med  0.99  max  1.05
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      n=3  min  0.96  med  1.02  max  1.18
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     n=3  min  1.07  med  1.12  max  1.15
+
+tnap_g20mib  M=3072 N=2560 K=4096
+  matmul2d_tensorops_tn_accum_bf16_f32     n=3  min  1.00  med  1.00  max  1.00
+  mm_bf16_tn_accum_coop_64x64_sg4          n=3  min  0.96  med  1.00  max  1.07
+  mm_bf16_tn_accum_coop_64x64_sg4_ph8      n=3  min  0.93  med  0.95  max  1.05
+  mm_bf16_tn_accum_coop_64x64_sg4_ph16     n=3  min  0.95  med  0.98  max  1.07

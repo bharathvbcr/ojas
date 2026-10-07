@@ -31,6 +31,7 @@ bytecode writing is disabled so that checkout is not touched).
 | `ojas_rows.rs` | The ojas side, generic over `ojas_core::Backend`: the shared input generator, the parity gate and the timing loop, and every row. Compiled into both examples by `#[path]`. |
 | `../ojas-metal/examples/metal_vs_torch.rs` | Opens `MetalBackend` and runs the rows. Metal ops are recorded and return before the device runs them (`docs/metal-deferred-faults.md`); `Backend::sync` after every iteration waits for them and reports any deferred fault. |
 | `../ojas-wgpu/examples/wgpu_vs_torch.rs` | Opens `WgpuBackend` and runs the rows with `Backend::sync` (submit and wait) after every iteration. Its first output line records the adapter and the HAL. |
+| `gate_saved_ab.rs` | Per-head gate A/B: the plain forward and backward against the saved-sigmoid pair (`forward_saving`, `backward_saved`) at nanolab's shape (4096 rows, d_model 768, 12 heads of 64). Generic over `ojas_core::Backend`. It is compiled by `#[path]` into the ignored `bench_gate_saved_against_recomputed` tests of `ojas-metal/tests/gate_saved.rs` and `ojas-wgpu/tests/gate_saved.rs`. Each round times every variant once per iteration, alternating which goes first, with `Backend::sync` per call, and reports the min and median. Results are in `results/2026-10-06-gate-saved/`. |
 | `torch_rows.py` | The torch twin of every row. `ref` writes the reference outputs, `time` times the rows, `env` records versions and checks the optimizer parameter list against `GPT(Config())`. |
 | `aggregate.py` | Per-round ratios, spread flags, the ranked list and the load table, as markdown. |
 
@@ -84,6 +85,10 @@ bytecode writing is disabled so that checkout is not touched).
   NS5, lr 0.025, decay 0.1). ojas runs NS5 with f32 GEMMs; its reference is
   nanolab's NS5 with the bf16 cast replaced by f32. `muon_RxC vs muon_RxC_bf16`
   rows compare the same ojas time with nanolab's unchanged bf16 NS5 (timing only).
+- `muon_RxC_bf16` (ojas side): the same step with `Ns5Precision::Bf16`, every
+  NS5 intermediate rounded to bf16 as nanolab's is, against torch's
+  `muon_RxC_bf16` reference. wgpu refuses it (`Unsupported`), so its row
+  records that.
 - `linear_ce_c{rows}x{cols}`: `linear_cross_entropy_mean`, N 4096, d 768,
   V 50304, loss plus both gradients, with logit chunks of `rows x cols`
   (1024x8192 and 4096x50304). The torch twin is nanolab's own
