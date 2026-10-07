@@ -74,6 +74,34 @@ Consolidated task covering high-level model execution, Autograd Tape scaling, an
 3. **Shape Contracts:** Every other op's shapes are validated centrally in `ojas-core/src/shapes.rs` (`docs/shape-contract.md`), except `accumulate_grad` and `permute`, which have separate per-backend copies in CPU, Metal, and wgpu.
 4. **Qwen3.5 Metal Follow-ups:** Per-parameter learning rates are currently blocked on upstream tessl (`check_tessl_lr` in `ojas-qwen35/src/groups.rs:278` refuses `lr_scale != 1.0`). In addition, empirical 2B headroom measurements on Metal remain to be documented.
 
+### Progress (2026-10-06, Gated DeltaNet session; uncommitted in the working tree)
+- **GDN in the trait.** `Backend::chunked_gdn_forward` / `chunked_gdn_backward`
+  (`GdnInputs`, `GdnForward`, `GdnGrad`; validator `chunked_gdn_*_dims` in
+  `ojas-core/src/shapes.rs`) cover the published rule at transformers' seam,
+  with an optional initial state, a final-state gradient, and checkpoints
+  every 64 tokens. The CPU takes any dims (`ojas-cpu/src/gdn.rs`). Metal runs
+  tessl's `gdn_train` (Dk 128, Dv a multiple of 16; other dims are
+  `Unsupported`). wgpu, CUDA and HIP refuse through the trait default.
+  `Tape::chunked_gdn` records it. `Autocast` keeps it f32.
+- **Verified** (`target-gdn/step*.log`):
+  - the CPU against transformers' f64 goldens at T 1/63/64/65/130, worst 2.7e-6;
+  - a 120-shape sweep against the f64 forward (`ojas-oracle/src/gdn.rs`);
+  - central differences across checkpoints;
+  - T 4096 within 2.1e-7;
+  - the same bits across numerics, 1–18 threads and 8 concurrent callers;
+  - Metal against the CPU within 2e-4, including deferred NaN faults, forced commits, recycling and injected allocation failures;
+  - Metal bit-identical when every forward and backward operand starts at a byte offset that is not 16-aligned;
+  - the forced-commit stress counts its waited commits against an untuned round, so a tune that is ignored fails it (`step6.log`, `step7.log`);
+  - three fail-first mutants killed;
+  - workspace clippy clean.
+- **Full suites pass** for ojas-core, ojas-cpu, ojas-metal (59 lib tests plus
+  every integration suite), ojas-wgpu, ojas-autograd, ojas-capi, ojas-oracle,
+  ojas-model, ojas-infer, ojas-qwen35 and ojas-gusset-engine
+  (`target-gdn/step4.log`, `step5.log`). ojas-cuda and ojas-hip were
+  clippy-checked only; this Mac has no device for them.
+- **Still open in Phase 3:** causal conv1d, gated RMSNorm, MRoPE, the GDN
+  gates, a wgpu GDN kernel, and the 2B hybrid through Tape.
+
 ### Execution plan
 - **Phase 1 (Shape Validator Centralization):** Move `accumulate_grad` and `permute` validation into `ojas_core::shapes`, delete backend copies, and verify zero-length permute axes cross-backend.
 - **Phase 2 (Activation Checkpointing):** Implement block-level activation checkpointing on Tape, verifying exact gradient parity against uncheckpointed runs.
