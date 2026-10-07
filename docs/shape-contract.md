@@ -66,7 +66,7 @@
 | D12 | wgpu id lookup before the table rank check | — | — | lookup first | Validator first |
 | D15 | head_dim > u32::MAX | OutOfRange | Unsupported | OutOfRange | Device limit; stays in the backends |
 | D16 | Rank-0 detail text | specific | `"rank 0 input"` | specific | CPU's text |
-| D17 | `permute` with rank 0 or a zero axis | accepted | refused | refused | Out of scope (`permute_output_shape`); listed in pytorch-parity-plan.md residue |
+| D17 | `permute` with a zero axis | accepted | refused | refused | **Refused** as `"empty tensor"` by `permute_dims`, like every other op (Metal cannot hold an empty tensor). Rank 0 with `dims` `[]` is accepted everywhere. |
 
 ## Adoption gate (every backend)
 No existing test asserts that a malformed call returns Shape under `Budget::new(0)`, but that is the invariant this contract exists for. Each adoption lane adds a per-op sweep for two cases:
@@ -75,6 +75,8 @@ No existing test asserts that a malformed call returns Shape under `Budget::new(
 
 Both must return the validator's variant. The sweep must fail before adoption wherever D2 or D3 applies.
 
-## Not yet covered
-- `accumulate_grad` has no validator. Use `residual_add_forward_dims` semantics, but name the op `accumulate_grad`.
-- `permute` keeps its own `permute_output_shape`.
+## `accumulate_grad`, `permute` and the hybrid-layer ops (2026-10-07)
+- `accumulate_grad_dims`: `residual_add_forward_dims`'s rules under the name `accumulate_grad`. CPU, Metal, wgpu and the trait default call it first; the three per-backend copies and the two test-local copies are deleted.
+- `permute_dims`: the operand rule (F32, no zero axis, sizes fit) and then `permute_output_shape`'s axis rules. `permute_output_shape`, `inverse_permutation` and `MAX_PERMUTE_RANK` moved here from `backend.rs` (same names, re-exported); `Tape::permute` still calls `permute_output_shape` before it records. Every backend calls `permute_dims` before placement and contiguity, which also removes the wgpu residue where contiguity came before dtype.
+- Gates: the `permute` and `accumulate_grad` rows of `ojas-{cpu,metal,wgpu}/tests/shape_first.rs` (zero-axis and u32 cases added), and `edge_cases_match_the_cpu_error_for_error_and_bit_for_bit` in `ojas-{metal,wgpu}/tests/permute.rs` (rank 0, unit extents, rank 8 and 9, a zero axis as a host tensor and as a device view, u32, bad axes).
+- `causal_conv1d_silu_*_dims`, `gated_rms_norm_*_dims`, `rope_partial_*_dims` validate the Qwen3.5 hybrid-layer ops (`Conv1dDims`, `RmsDims`, `PartialRopeDims`).

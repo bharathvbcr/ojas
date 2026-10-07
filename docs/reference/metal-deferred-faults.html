@@ -318,6 +318,18 @@
 </li>
 <li><strong>Device loss and command-buffer errors</strong> surface at the next waited commit (§4.3), not at the op that caused them. That is the same deferral as wgpu, which records a lost device apart from its error queue and reports it on every later check (<code>ojas-wgpu/src/context.rs:21-22, :853-863</code>) (V).
 </li>
+<li><strong>The typed error.</strong> Once tessl&#39;s runtime is poisoned (<code>GpuRuntime::is_poisoned</code>), every later call returns <code>OjasError::DeviceLost { backend: Metal, .. }</code>: commands, sync points, uploads and downloads. Two cases are mapped:
+<ul>
+<li>A command that fails on a poisoned runtime (<code>Worker::serve</code>, <code>lost_if_poisoned</code>).
+</li>
+<li>The AdamW confirmation read (<code>gpu.rs</code>).
+</li>
+</ul>
+</li>
+<li><strong>Pinned by tests.</strong> <code>a_poisoned_runtime_surfaces_as_the_typed_device_lost_error</code> (<code>backend.rs</code>) and the poisoned test in <code>gpu.rs</code> pin it (V).
+</li>
+<li><strong>ojas-capi.</strong> It maps the variant to its <code>DeviceLost</code> kind, with no detail-text matching.
+</li>
 </ul>
 <h3 id="45-link-and-cmd-changes">4.5 Link and Cmd changes <a class="anchor" href="#45-link-and-cmd-changes" aria-label="Link to this section">#</a></h3>
 <ul>
@@ -578,9 +590,25 @@
 </li>
 </ul>
 </li>
-<li><strong>Uploads.</strong> tessl maps a buffer for the host only after <code>commit_m4(true)</code> (<code>tensor.rs:165-199</code>, <code>runtime.rs:572-579</code>) (V). So an upload made while work is recorded waits. The worker makes that wait itself (<code>settle</code> in <code>Worker::upload</code>), so it is counted and scanned.
+<li><strong>Uploads.</strong> tessl maps a buffer for the host only after <code>commit_m4(true)</code> (<code>tensor.rs:165-199</code>, <code>runtime.rs:572-579</code>) (V). So a mapped upload made while work is recorded waits.
+<ul>
+<li><strong>Inline uploads.</strong> An upload made behind recorded work skips that wait when it is at most <code>INLINE_UPLOAD_BYTES</code> (64 KiB) and a whole number of words. Instead its bytes go into tessl&#39;s constant arena with <code>bind_bytes</code>, and a recorded <code>ojas_upload_words</code> kernel copies them into the new buffer.
 </li>
-<li><strong>Wait counter.</strong> <code>MetalBackend::waits()</code> (doc-hidden) counts every waited commit the worker makes. Tessl&#39;s own commit counter cross-checks it (<code>tests/wait_count.rs</code>).
+<li><strong>Arena budget.</strong> The arena is 16 MiB, reset only by a waited commit, and poisons the runtime when exhausted. So inline bytes are also capped at <code>INLINE_ARENA_BYTES</code> (1 MiB) per wait window. Past either cap, the worker waits as before (<code>settle</code> in <code>Worker::upload</code>), and the wait is counted and scanned.
+</li>
+<li><strong>Off switch.</strong> <code>MetalBackend::set_inline_uploads(false)</code> (doc-hidden) restores the waiting path for A/B counts.
+</li>
+<li><strong>Tests.</strong> <code>tests/wait_triggers.rs</code> pins both paths and the arena fallback (17 × 64 KiB uploads give exactly one upload wait) (V).
+</li>
+</ul>
+</li>
+<li><strong>Wait counter, by trigger.</strong>
+<ul>
+<li><code>MetalBackend::wait_counts()</code> (doc-hidden) returns a <code>WaitCounts</code> with one counter per reason for a waited commit: <code>upload</code>, <code>read</code>, <code>sync</code>, <code>clip_norm</code>, <code>mem_cap</code>, <code>working_set</code>, <code>slab_full</code> and <code>recycle</code> (the allocation retry). <code>settle</code> takes the reason and counts it only when there was recorded work to wait for.
+</li>
+<li><code>waits()</code> is their total. Tessl&#39;s own commit counter cross-checks it (<code>tests/wait_count.rs</code>), and <code>tests/wait_triggers.rs</code> drives each trigger and checks that it lands under its own name (V).
+</li>
+</ul>
 </li>
 </ul>
 <h3 id="92-departures-from-28">9.2 Departures from §2–§8 <a class="anchor" href="#92-departures-from-28" aria-label="Link to this section">#</a></h3>
@@ -689,7 +717,23 @@
 <ul>
 <li><strong>Tiny:</strong> the 25 waits are 2 sync points and 23 upload waits.
 </li>
-<li><strong>124M:</strong> 2 sync points, at most 28 upload waits, and the rest (about 41) are memory-cap commits (I: by subtraction; there are no per-trigger counters).
+<li><strong>124M:</strong> 2 sync points, at most 28 upload waits, and the rest (about 41) are memory-cap commits (I: by subtraction; there were no per-trigger counters then).
+</li>
+</ul>
+<p><strong>Waits per trainer step by trigger, inline uploads off vs on</strong> (<code>ojas-model/tests/metal_waits.rs</code>, 2026-10-07; tiny spec, batch 2, sequence 32, K = 2; three steps after a warm-up step; every step identical) (V):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Trigger</th><th style="text-align:right">Inline off (before)</th><th style="text-align:right">Inline on (after)</th></tr></thead>
+<tbody>
+<tr><td>upload</td><td style="text-align:right">11</td><td style="text-align:right">0</td></tr>
+<tr><td>sync</td><td style="text-align:right">1</td><td style="text-align:right">1</td></tr>
+<tr><td>clip_norm</td><td style="text-align:right">1</td><td style="text-align:right">1</td></tr>
+<tr><td>read, mem_cap, working_set, slab_full, recycle</td><td style="text-align:right">0</td><td style="text-align:right">0</td></tr>
+<tr><td><strong>total</strong></td><td style="text-align:right"><strong>13</strong></td><td style="text-align:right"><strong>2</strong></td></tr>
+</tbody></table></div>
+<ul>
+<li>&#34;Inline off&#34; is how every upload behaved before inline uploads. The test asserts both counts: upload waits before, none after, and every other trigger unchanged.
+</li>
+<li>At this size no memory-cap commit happens. The 124M split above was not re-measured in this round.
 </li>
 </ul>
 <p><strong>Other checks.</strong></p>
@@ -707,15 +751,17 @@
 </ul>
 <h3 id="94-gaps">9.4 Gaps <a class="anchor" href="#94-gaps" aria-label="Link to this section">#</a></h3>
 <ul>
-<li><strong>Upload waits are now the largest share</strong> after memory caps: 28 host uploads per trainer step, 7 per micro-step.
+<li><strong>Upload waits</strong> were the largest share after memory caps (28 host uploads per trainer step).
 <ul>
-<li>tessl has no host write that skips the wait for a fresh buffer no recorded work references.
+<li>Closed for uploads of 64 KiB or less by inline uploads (§9.1): 11 → 0 per tiny step (§9.3).
 </li>
-<li>The fix belongs in tessl (an unwaited write for a new allocation) or in the trainer (upload all K micro-batches&#39; ids and the step&#39;s constants before recording).
+<li>A larger upload behind recorded work still waits and is counted under <code>upload</code>. At 124M the token ids and the targets are 16 KiB each per micro-batch (B 4 × T 1024 × 4 bytes), within the cap (I: by size; not measured at 124M).
+</li>
+<li>tessl still has no unwaited host write for a fresh buffer of any size.
 </li>
 </ul>
 </li>
-<li><strong>Memory-cap commits per 124M step (about 41) are inferred, not counted per trigger.</strong> A per-trigger counter would settle it. The cap trades waits for resident memory: at 1 GiB, the step&#39;s freed temporaries recycle every 1 GiB of allocation.
+<li><strong>Memory-cap commits are now counted per trigger</strong> (<code>WaitCounts::mem_cap</code>, <code>working_set</code>). The 124M split (about 41, inferred in §9.3) has not been re-measured with the counter. The cap trades waits for resident memory: at 1 GiB, the step&#39;s freed temporaries recycle every 1 GiB of allocation.
 </li>
 <li><strong>The capi early-return test runs on wgpu only</strong> (<code>an_early_return_never_leaks_a_deferred_fault_into_the_next_call</code>). A Metal twin would pin <code>settled</code> on Metal; that file belongs to the coordinator.
 </li>

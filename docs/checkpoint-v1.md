@@ -101,11 +101,42 @@ flowchart LR
 4. **`step`**: `u64` little-endian integer. Refuses values that could cause overflow (`u64::MAX`).
 5. **`data_cursor.shard`**: `u64` epoch of the batch sampler (`ojas_data::BatchSampler`).
 6. **`data_cursor.token_index`**: `u64` ordinal of the next window within that epoch (not a token offset). `ojas_model::Trainer::cursor` documents the same meaning.
-7. **`rng_state`**: Length-prefixed state buffer for deterministic resumption.
+7. **`rng_state`**: Length-prefixed state buffer for deterministic resumption. The trainer writes the sampler's layout below; the container itself treats it as opaque bytes.
 8. **`weights`**: `u64` section byte length, `u64` record count, followed by serialized `NamedBlob` records.
 9. **`optimizer.muon_momentum`**: Same framing; stores momentum buffers for 2D matrix parameters.
 10. **`optimizer.adamw_first_moment`**: Same framing; stores first moments for 1D parameters.
 11. **`optimizer.adamw_second_moment`**: Same framing; stores second moments for 1D parameters.
+
+---
+
+## `rng_state` Layout v1
+
+`ojas_model::Trainer` stores [`ojas_data::SamplerRngState`](file:///Users/bharath/Code/research/ojas/ojas-data/src/sampler.rs) here. The batch sampler draws nothing as it runs. Its order is a keyed permutation of `(seed, epoch, ordinal)`, and `data_cursor` already holds the epoch and ordinal. The rest of its random state is which permutation runs and which key it uses:
+
+| Byte Offset | Width | Type | Field |
+| :--- | :--- | :--- | :--- |
+| `0..4` | 4 bytes | `u32` | version, `1` (`RNG_STATE_VERSION`) |
+| `4..8` | 4 bytes | `u32` | generator, `1` = 4-round Feistel over SplitMix64 (`RNG_GENERATOR_FEISTEL4_SPLITMIX64`) |
+| `8..16` | 8 bytes | `u64` | seed, the train config's `data_seed` |
+
+Resume decodes it exactly. A length other than 16, an unknown version or generator, or a seed different from the caller's `data_seed` is refused. An empty `rng_state` is refused too: files saved before this layout wrote one, and they are not migrated. `permutation_is_pinned` (`ojas-data/tests/sampler.rs`) pins window starts against an independent Python oracle (`target-robust/sampler_oracle.py`). A change that moves any of them needs a new generator tag. `g9_forty_steps_equal_twenty_saved_dropped_resumed_and_twenty_more` (`ojas-model/tests/checkpoint.rs`) proves bit for bit on CPU that 20 steps, a save, a resume and 20 more equal 40 uninterrupted steps.
+
+---
+
+## Free Space Before Save
+
+`Trainer::save` computes the exact length of each file it will write: `model.safetensors` and `optim.safetensors` (`ojas_io::safetensors_file_len`), and `state.ojck` (`ojas_io::checkpoint_file_len`). It adds 1 MiB per file for block rounding. That total must fit the space an unprivileged writer can still allocate on the filesystem that stages the directory: `ojas_device::available_disk_bytes` of its parent (`statfs` on macOS, `statvfs` on Linux, `f_bavail`). The previous checkpoint stays until the swap, so all of it is new space. When the total does not fit, or the probe fails, the save is refused before a staging directory exists. Other platforms have no probe, so saves there are refused.
+
+---
+
+## Device Tensors Are Not Streamed in Pieces (Decision)
+
+A device tensor is read back with one whole-tensor `Backend::download`, written in 64 KiB little-endian pieces, and dropped before the next tensor is read. It is not streamed off the device in pieces. The reasons:
+
+- `Backend` has no ranged readback. Adding one changes the shared trait in `ojas-core/src/backend.rs` and every backend implementation (CPU, Metal, wgpu, CUDA, HIP).
+- The host cost is already bounded: one tensor plus one 64 KiB piece at a time. `write_tensors` refuses with `CapacityExceeded` before the file is created when the largest device tensor cannot be charged to the backend's budget. `save_fits_in_one_tensor_plus_one_readback_piece_of_host_headroom` and `save_reads_each_tensor_once_and_holds_one_at_a_time` (`ojas-model/tests/checkpoint.rs`) test that bound.
+
+Revisit this when one parameter tensor no longer fits in host memory beside the model. The embedding of a very large vocabulary is the likely first case.
 
 ---
 

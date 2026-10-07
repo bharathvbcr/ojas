@@ -117,7 +117,7 @@
 <ul>
 <li><code>CudaDevice</code>: the device probe (open ordinal 0, run one affine kernel before <code>Ok</code>).
 </li>
-<li><code>CudaBackend</code>: the <code>ojas_core::Backend</code> implementation. <code>upload</code>, <code>download</code> and <code>sync</code> work; every compute op returns <code>OjasError::Unsupported</code> naming the op.
+<li><code>CudaBackend</code>: the <code>ojas_core::Backend</code> implementation. <code>upload</code>, <code>download</code> and <code>sync</code> work; every compute op returns <code>OjasError::Unsupported</code> naming the op. A sticky driver failure (an illegal address, a failed launch, a device-side assert, …) is <code>OjasError::DeviceLost</code>, so a caller stops instead of retrying on a dead context.
 </li>
 <li><code>Qwen35Step</code>: the Qwen3.5 whole-step training provider, design (B) in <a href="cuda-backend-scoping.html"><code>docs/cuda-backend-scoping.md</code></a>, the CUDA counterpart of <code>ojas-qwen35</code>. Every compute method refuses with <code>Unsupported</code> until its kernels are wired and have run on a device. The kernels it will run are here already, each tested against a float64 host reference (table below).
 </li>

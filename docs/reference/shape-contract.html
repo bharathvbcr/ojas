@@ -223,7 +223,7 @@
 <tr><td>D12</td><td>wgpu id lookup before the table rank check</td><td>—</td><td>—</td><td>lookup first</td><td>Validator first</td></tr>
 <tr><td>D15</td><td>head_dim &gt; u32::MAX</td><td>OutOfRange</td><td>Unsupported</td><td>OutOfRange</td><td>Device limit; stays in the backends</td></tr>
 <tr><td>D16</td><td>Rank-0 detail text</td><td>specific</td><td><code>&#34;rank 0 input&#34;</code></td><td>specific</td><td>CPU&#39;s text</td></tr>
-<tr><td>D17</td><td><code>permute</code> with rank 0 or a zero axis</td><td>accepted</td><td>refused</td><td>refused</td><td>Out of scope (<code>permute_output_shape</code>); listed in pytorch-parity-plan.md residue</td></tr>
+<tr><td>D17</td><td><code>permute</code> with a zero axis</td><td>accepted</td><td>refused</td><td>refused</td><td><strong>Refused</strong> as <code>&#34;empty tensor&#34;</code> by <code>permute_dims</code>, like every other op (Metal cannot hold an empty tensor). Rank 0 with <code>dims</code> <code>[]</code> is accepted everywhere.</td></tr>
 </tbody></table></div>
 <h2 id="adoption-gate-every-backend">Adoption gate (every backend) <a class="anchor" href="#adoption-gate-every-backend" aria-label="Link to this section">#</a></h2>
 <p>No existing test asserts that a malformed call returns Shape under <code>Budget::new(0)</code>, but that is the invariant this contract exists for. Each adoption lane adds a per-op sweep for two cases:</p>
@@ -234,11 +234,15 @@
 </li>
 </ul>
 <p>Both must return the validator&#39;s variant. The sweep must fail before adoption wherever D2 or D3 applies.</p>
-<h2 id="not-yet-covered">Not yet covered <a class="anchor" href="#not-yet-covered" aria-label="Link to this section">#</a></h2>
+<h2 id="accumulate-grad-permute-and-the-hybrid-layer-ops-2026-10-07"><code>accumulate_grad</code>, <code>permute</code> and the hybrid-layer ops (2026-10-07) <a class="anchor" href="#accumulate-grad-permute-and-the-hybrid-layer-ops-2026-10-07" aria-label="Link to this section">#</a></h2>
 <ul>
-<li><code>accumulate_grad</code> has no validator. Use <code>residual_add_forward_dims</code> semantics, but name the op <code>accumulate_grad</code>.
+<li><code>accumulate_grad_dims</code>: <code>residual_add_forward_dims</code>&#39;s rules under the name <code>accumulate_grad</code>. CPU, Metal, wgpu and the trait default call it first; the three per-backend copies and the two test-local copies are deleted.
 </li>
-<li><code>permute</code> keeps its own <code>permute_output_shape</code>.
+<li><code>permute_dims</code>: the operand rule (F32, no zero axis, sizes fit) and then <code>permute_output_shape</code>&#39;s axis rules. <code>permute_output_shape</code>, <code>inverse_permutation</code> and <code>MAX_PERMUTE_RANK</code> moved here from <code>backend.rs</code> (same names, re-exported); <code>Tape::permute</code> still calls <code>permute_output_shape</code> before it records. Every backend calls <code>permute_dims</code> before placement and contiguity, which also removes the wgpu residue where contiguity came before dtype.
+</li>
+<li>Gates: the <code>permute</code> and <code>accumulate_grad</code> rows of <code>ojas-{cpu,metal,wgpu}/tests/shape_first.rs</code> (zero-axis and u32 cases added), and <code>edge_cases_match_the_cpu_error_for_error_and_bit_for_bit</code> in <code>ojas-{metal,wgpu}/tests/permute.rs</code> (rank 0, unit extents, rank 8 and 9, a zero axis as a host tensor and as a device view, u32, bad axes).
+</li>
+<li><code>causal_conv1d_silu_*_dims</code>, <code>gated_rms_norm_*_dims</code>, <code>rope_partial_*_dims</code> validate the Qwen3.5 hybrid-layer ops (<code>Conv1dDims</code>, <code>RmsDims</code>, <code>PartialRopeDims</code>).
 </li>
 </ul>
       </article>
@@ -254,7 +258,7 @@
 <li><a href="#decisions">Decisions</a></li>
 <li><a href="#where-the-backends-disagree-today-resolved-by-adopting-the-validators">Where the backends disagree today (resolved by adopting the validators)</a></li>
 <li><a href="#adoption-gate-every-backend">Adoption gate (every backend)</a></li>
-<li><a href="#not-yet-covered">Not yet covered</a></li>
+<li><a href="#accumulate-grad-permute-and-the-hybrid-layer-ops-2026-10-07">accumulate_grad, permute and the hybrid-layer ops (2026-10-07)</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

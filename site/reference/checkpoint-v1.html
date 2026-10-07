@@ -203,7 +203,7 @@
 </li>
 <li><strong><code>data_cursor.token_index</code></strong>: <code>u64</code> ordinal of the next window within that epoch (not a token offset). <code>ojas_model::Trainer::cursor</code> documents the same meaning.
 </li>
-<li><strong><code>rng_state</code></strong>: Length-prefixed state buffer for deterministic resumption.
+<li><strong><code>rng_state</code></strong>: Length-prefixed state buffer for deterministic resumption. The trainer writes the sampler&#39;s layout below; the container itself treats it as opaque bytes.
 </li>
 <li><strong><code>weights</code></strong>: <code>u64</code> section byte length, <code>u64</code> record count, followed by serialized <code>NamedBlob</code> records.
 </li>
@@ -214,6 +214,30 @@
 <li><strong><code>optimizer.adamw_second_moment</code></strong>: Same framing; stores second moments for 1D parameters.
 </li>
 </ol>
+<hr>
+<h2 id="rng-state-layout-v1"><code>rng_state</code> Layout v1 <a class="anchor" href="#rng-state-layout-v1" aria-label="Link to this section">#</a></h2>
+<p><code>ojas_model::Trainer</code> stores <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-data/src/sampler.rs" rel="noopener"><code>ojas_data::SamplerRngState</code></a> here. The batch sampler draws nothing as it runs. Its order is a keyed permutation of <code>(seed, epoch, ordinal)</code>, and <code>data_cursor</code> already holds the epoch and ordinal. The rest of its random state is which permutation runs and which key it uses:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Byte Offset</th><th>Width</th><th>Type</th><th>Field</th></tr></thead>
+<tbody>
+<tr><td><code>0..4</code></td><td>4 bytes</td><td><code>u32</code></td><td>version, <code>1</code> (<code>RNG_STATE_VERSION</code>)</td></tr>
+<tr><td><code>4..8</code></td><td>4 bytes</td><td><code>u32</code></td><td>generator, <code>1</code> = 4-round Feistel over SplitMix64 (<code>RNG_GENERATOR_FEISTEL4_SPLITMIX64</code>)</td></tr>
+<tr><td><code>8..16</code></td><td>8 bytes</td><td><code>u64</code></td><td>seed, the train config&#39;s <code>data_seed</code></td></tr>
+</tbody></table></div>
+<p>Resume decodes it exactly. A length other than 16, an unknown version or generator, or a seed different from the caller&#39;s <code>data_seed</code> is refused. An empty <code>rng_state</code> is refused too: files saved before this layout wrote one, and they are not migrated. <code>permutation_is_pinned</code> (<code>ojas-data/tests/sampler.rs</code>) pins window starts against an independent Python oracle (<code>target-robust/sampler_oracle.py</code>). A change that moves any of them needs a new generator tag. <code>g9_forty_steps_equal_twenty_saved_dropped_resumed_and_twenty_more</code> (<code>ojas-model/tests/checkpoint.rs</code>) proves bit for bit on CPU that 20 steps, a save, a resume and 20 more equal 40 uninterrupted steps.</p>
+<hr>
+<h2 id="free-space-before-save">Free Space Before Save <a class="anchor" href="#free-space-before-save" aria-label="Link to this section">#</a></h2>
+<p><code>Trainer::save</code> computes the exact length of each file it will write: <code>model.safetensors</code> and <code>optim.safetensors</code> (<code>ojas_io::safetensors_file_len</code>), and <code>state.ojck</code> (<code>ojas_io::checkpoint_file_len</code>). It adds 1 MiB per file for block rounding. That total must fit the space an unprivileged writer can still allocate on the filesystem that stages the directory: <code>ojas_device::available_disk_bytes</code> of its parent (<code>statfs</code> on macOS, <code>statvfs</code> on Linux, <code>f_bavail</code>). The previous checkpoint stays until the swap, so all of it is new space. When the total does not fit, or the probe fails, the save is refused before a staging directory exists. Other platforms have no probe, so saves there are refused.</p>
+<hr>
+<h2 id="device-tensors-are-not-streamed-in-pieces-decision">Device Tensors Are Not Streamed in Pieces (Decision) <a class="anchor" href="#device-tensors-are-not-streamed-in-pieces-decision" aria-label="Link to this section">#</a></h2>
+<p>A device tensor is read back with one whole-tensor <code>Backend::download</code>, written in 64 KiB little-endian pieces, and dropped before the next tensor is read. It is not streamed off the device in pieces. The reasons:</p>
+<ul>
+<li><code>Backend</code> has no ranged readback. Adding one changes the shared trait in <code>ojas-core/src/backend.rs</code> and every backend implementation (CPU, Metal, wgpu, CUDA, HIP).
+</li>
+<li>The host cost is already bounded: one tensor plus one 64 KiB piece at a time. <code>write_tensors</code> refuses with <code>CapacityExceeded</code> before the file is created when the largest device tensor cannot be charged to the backend&#39;s budget. <code>save_fits_in_one_tensor_plus_one_readback_piece_of_host_headroom</code> and <code>save_reads_each_tensor_once_and_holds_one_at_a_time</code> (<code>ojas-model/tests/checkpoint.rs</code>) test that bound.
+</li>
+</ul>
+<p>Revisit this when one parameter tensor no longer fits in host memory beside the model. The embedding of a very large vocabulary is the likely first case.</p>
 <hr>
 <h2 id="verification--safety-guarantees">Verification &amp; Safety Guarantees <a class="anchor" href="#verification--safety-guarantees" aria-label="Link to this section">#</a></h2>
 <aside class="alert alert-caution"><p class="alert-title">Caution</p><ol>
@@ -236,6 +260,9 @@
 <li class="sub"><a href="#record-fields">Record Fields</a></li>
 <li><a href="#prefix-specification">Prefix Specification</a></li>
 <li><a href="#body-ordering">Body Ordering</a></li>
+<li><a href="#rng-state-layout-v1">rng_state Layout v1</a></li>
+<li><a href="#free-space-before-save">Free Space Before Save</a></li>
+<li><a href="#device-tensors-are-not-streamed-in-pieces-decision">Device Tensors Are Not Streamed in Pieces (Decision)</a></li>
 <li><a href="#verification--safety-guarantees">Verification &amp; Safety Guarantees</a></li>
 </ol></nav>
   </div>

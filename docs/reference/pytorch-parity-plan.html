@@ -158,7 +158,7 @@
 <tr><td>6</td><td>Fused or chunked linear + cross-entropy</td><td>nanolab, Lappi</td><td>Has: <code>Backend::linear_cross_entropy_mean</code> tiles rows/vocab without materializing full logits on CPU, Metal and wgpu</td></tr>
 <tr><td>7</td><td>Activations: SiLU/SwiGLU, GELU, ReLU², sigmoid</td><td>nanolab</td><td>Has: SiLU, GELU, ReLU, Sigmoid, Tanh in <code>ojas-cpu/src/pointwise.rs</code></td></tr>
 <tr><td>8</td><td>AdamW (fused, fp32 master)</td><td>all</td><td>Has, one tensor per call</td></tr>
-<tr><td>9</td><td>Muon NS5 in bf16, batched</td><td>nanolab, sprint</td><td>f32 on CPU, Metal and wgpu; not bf16; one matrix per call (bf16 NS5 tracked in Task <code>gp-bf16-compute-tier</code>)</td></tr>
+<tr><td>9</td><td>Muon NS5 in bf16, batched</td><td>nanolab, sprint</td><td>f32 by default on CPU, Metal and wgpu; bf16 (<code>Ns5Precision::Bf16</code>) on CPU and Metal, not wgpu; one matrix per call, not batched</td></tr>
 <tr><td>10</td><td>Hand-written LR schedules (cosine, WSD)</td><td>all; <code>lr_scheduler</code> has 0 sites</td><td>Has: <code>CosineSchedule</code>, <code>WsdSchedule</code>, <code>LrSchedule</code> in <code>ojas-cpu/src/schedule.rs</code></td></tr>
 <tr><td>11</td><td><code>clip_grad_norm_</code></td><td>all</td><td>Has</td></tr>
 <tr><td>12</td><td>bf16 autocast / bf16 weights</td><td>sprint, Lappi</td><td>Optional <code>Autocast</code> region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype (bf16 compute tier scoped in Task <code>gp-bf16-compute-tier</code>)</td></tr>
@@ -168,7 +168,7 @@
 <tr><td>16</td><td>KV cache, temperature/top-k sampling</td><td>nanolab</td><td>Has: CPU <code>forward_token</code>, <code>Backend::kv_cache_write</code>, wgpu KV cache, <code>ojas-infer</code> greedy and temperature/top-k/top-p sampler</td></tr>
 <tr><td>17</td><td><code>torch.cuda/mps</code> synchronize, memory stats, seeding</td><td>about 330 sites</td><td>Has: <code>Backend::sync</code>, <code>Budget::peak_bytes()</code>, <code>Budget::reset_peak()</code>, <code>ResourcePlan</code>, <code>ojas-device</code> profiling, Go <code>SYSTEM_PROFILE</code> (opcode 16)</td></tr>
 <tr><td>18</td><td>Distributed collectives</td><td>sprint only</td><td>Missing; not needed on one device</td></tr>
-<tr><td>19</td><td>GDN chunk rule + causal conv1d (Qwen3.5)</td><td>Lappi</td><td>Missing in ojas. Exists Metal-only in tessl (hybrid layer primitives scoped in Task <code>gp-autograd-and-model-primitives</code>)</td></tr>
+<tr><td>19</td><td>GDN chunk rule + causal conv1d (Qwen3.5)</td><td>Lappi</td><td>GDN: <code>Backend::chunked_gdn_forward</code> / <code>_backward</code> on CPU and Metal (tessl <code>gdn_train</code>), <code>Tape::chunked_gdn</code>, checked against transformers&#39; f64 goldens (<code>ojas-oracle/tests/gdn.rs</code>); wgpu/CUDA/HIP refuse. Causal conv1d, gated RMSNorm and the gates: missing (Task <code>gp-autograd-and-model-primitives</code>)</td></tr>
 </tbody></table></div>
 <p><strong>The framework layer is landed (verified).</strong></p>
 <ul>
@@ -408,7 +408,7 @@
 </li>
 </ul>
 </li>
-<li><strong>wgpu fault word is full (wgpu round 3, scoped in Task <code>gp-gpu-runtime-hardening</code>).</strong> All 32 op bits are in use; the last four went to <code>accumulate_grad</code>, <code>linear_cross_entropy_mean</code>, <code>cached_attention_forward</code> and <code>kv_cache_write</code>. A 33rd fault-reporting op needs a second word or a 64-bit word first.
+<li><strong>wgpu fault words hold 64 ops (Task <code>gp-gpu-runtime-hardening</code>).</strong> The single u32 mask was full at 32 ops, and <code>cast_bf16</code> ran with fault mask 0. The mask is now two u32 words (ops 0–31, 32–63) plus a first-op word. Kernels take the op&#39;s fault id (index + 1) in parameter word 15, and <code>cast_bf16</code> has its own bit at index 32. The host refuses an id past 64 before recording, and the build refuses more than 64 op names. The per-call fault words that <code>kv_write</code> and <code>muon_commit</code> read check both mask words. Tests in <code>ojas-wgpu/src/backend.rs</code> cover ids 1, 31, 32, 33, 63 and 64, first-fault precedence across the words in both orders (and through a failed read), and the high-word gate of <code>kv_write</code> and <code>muon_commit</code>.
 </li>
 <li><strong>wgpu <code>clip_grad_norm</code> returned another caller&#39;s norm under concurrency (fixed, wgpu round 3).</strong> Job scratch went back to the pool before the read. The status buffer is now held until after the read. <code>clip_norms_stay_correct_while_other_threads_submit</code> failed 5/5 before the fix and passes 5/5 after.
 </li>

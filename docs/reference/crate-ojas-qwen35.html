@@ -128,7 +128,7 @@
 <li>the gradient bank, its global norm, and AdamW.
 </li>
 </ul>
-<p>None of these ops is added to <code>ojas_core::Backend</code>. Promoting GDN or head-dim-256 attention into the trait is a later decision, and it has to cover CPU, Metal and wgpu.</p>
+<p>This crate&#39;s step does not go through <code>ojas_core::Backend</code>. The gated delta rule alone is now also a trait op (<code>Backend::chunked_gdn_forward</code> / <code>chunked_gdn_backward</code>), on the CPU (any dims) and Metal (tessl&#39;s <code>gdn_train</code>, key dim 128). wgpu, CUDA and HIP refuse it with <code>Unsupported</code> through the trait default, as they do <code>permute</code>. Head-dim-256 attention, gated RMSNorm, causal conv1d and the gates are not trait ops.</p>
 </li>
 </ul>
 <p>The crate exists so that &#34;trained with ojas&#34; can rest on ojas code. Lappi&#39;s trainer (<code>crates/qd-train-metal</code>) depends on it by path and adapts this concrete API to its own step-provider trait. This crate does not depend on Lappi.</p>

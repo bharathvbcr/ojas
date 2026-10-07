@@ -67,7 +67,7 @@ flowchart TD
     end
 
     subgraph Optimizers["Dual Optimizers"]
-        Muon["Muon NS5 Optimizer\n- LR = 0.025, Momentum = 0.99, Nesterov = True\n- 5th-order Newton-Schulz iterate (nanolab: bf16; ojas: f32)\n- Zeropower orthogonalization"]
+        Muon["Muon NS5 Optimizer\n- LR = 0.025, Momentum = 0.99, Nesterov = True\n- 5th-order Newton-Schulz iterate (nanolab: bf16; ojas: f32, or bf16 by config)\n- Zeropower orthogonalization"]
         AdamW["AdamW Optimizer\n- PyTorch single-tensor order (decay first)\n- eps = 1e-8 outside sqrt: sqrt(v)/sqrt(bc2) + eps\n- Weight decay = 0.0 on Muon hybrid"]
     end
 
@@ -76,7 +76,7 @@ flowchart TD
 ```
 
 > [!NOTE]
-> * **Muon NS5:** nanolab runs the quintic Newton-Schulz iteration in `bf16` (`X = G.bfloat16()`). ojas runs it in `f32` on CPU, Metal and wgpu, so ojas and nanolab Muon updates differ by bf16 rounding. There is no bf16 Newton-Schulz kernel in ojas.
+> * **Muon NS5:** nanolab runs the quintic Newton-Schulz iteration in `bf16` (`X = G.bfloat16()`). ojas runs it in `f32` by default on CPU, Metal and wgpu. With `MuonNs5Config.ns5 = Ns5Precision::Bf16` (`TrainConfig.muon_ns5`), CPU and Metal run stock nanolab's bf16 iteration, rounding every intermediate as torch's eager bf16 ops do; wgpu refuses it with `Unsupported`. The CPU path is checked against one stock nanolab `Muon.step` per case (`ojas-oracle` `muon_step_bf16`) and against the stock bf16 training trace.
 > * **Value residual:** nanolab blends `v` with layer 0's `v0` *before* attention: `v = (1 - s) * v + s * v0`, `s = sigmoid(vr_lambda)` (`nanolab/mixers.py`). It is not applied to the attention output.
 > * **AdamW:** Follows PyTorch single-tensor order (weight decay applied before gradient update; bias correction computed; $\varepsilon = 10^{-8}$ added **outside** the square root).
 
@@ -96,18 +96,21 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | **Half-split RoPE** | Split last axis | `ojas_rope` | WGSL | `f32` | Rotate halves $(-x_2, x_1)$; layout `[B, T, H, D]` |
 | **RMS QK-Norm** | Head-wise RMSNorm | `ojas_rms_*` per head | WGSL | `f32` | Applied to Q and K before RoPE (nanolab order) |
 | **Permute** | Byte moves | `ojas_permute` | WGSL `layout` | `f32` | `torch.permute(x, dims).contiguous()`; rank ≤ 8 |
-| **Causal SDPA** | Exact softmax; blocked above 256 positions in Fast; grouped-query | Tiled TensorOps forward and FlashAttention-2 backward, D ≤ 256, grouped-query | WGSL, D ≤ 256, grouped-query | `f32` | $\mathrm{softmax}(QK^T/\sqrt{d} + M)V$; layout `[B, Hq, T, D]` query and `[B, Hkv, T, D]` KV; $T_q = T_k$ |
+| **Causal SDPA** | Exact softmax; blocked above 256 positions in Fast; grouped-query; sliding window | Tiled TensorOps forward and FlashAttention-2 backward, D ≤ 256, native grouped-query, sliding window | WGSL, D ≤ 256, native grouped-query, sliding window | `f32` | $\mathrm{softmax}(QK^T/\sqrt{d} + M)V$; layout `[B, Hq, T, D]` query and `[B, Hkv, T, D]` KV; $T_q = T_k$. The forward returns the output and the row log-sum-exp `[B, Hq, T]`; the backward takes both and does not recompute the softmax. Optional window `W`: query `t` sees keys `t - W < j <= t`. Grouped-query heads read their KV head in place (no repeated K/V or summed-back gradients) |
 | **Per-Head Gate** | Sigmoid broadcast | `ojas_per_head_gate_*` | WGSL | `f32` | $\sigma(x W_g^T + b_g) \odot \text{attn}$ |
 | **Value Residual** | Linear blend | `ojas_vres_*` | WGSL | `f32` | $(1 - s) v + s v_0$, $s = \sigma(\lambda)$, on `v` before attention |
 | **SiLU, Mul** (SwiGLU) | Pointwise parallel over scoped worker threads; ReLU, SiLU, GELU, Sigmoid, Tanh | `ojas_silu_*`, `ojas_mul_*` | WGSL | `f32` | $\mathrm{silu}(x W_{gate}) \odot (x W_{up})$ |
 | **Residual Add** | Pointwise | tessl `residual_add` | WGSL | `f32` | $x + f(x)$ |
+| **Causal Conv1d + SiLU** (Qwen3.5) | Exact scalar, `ojas-cpu/src/hybrid.rs` | Unsupported (trait default) | Unsupported | `f32` | Depthwise, zero state: $y_{b,t,c} = \mathrm{silu}(\sum_{j<K} w_{c,j}\, x_{b,t+j-K+1,c})$; `[B, T, C]`, weight `[C, K]` |
+| **Gated RMSNorm** (Qwen3.5) | Exact scalar, `hybrid.rs` | Unsupported | Unsupported | `f32` | $(w \odot x/\sqrt{\overline{x^2}+\epsilon}) \odot \mathrm{silu}(z)$ over the last axis (`Qwen3_5RMSNormGated`) |
+| **Partial RoPE** (Qwen3.5) | Exact, `hybrid.rs`; `R = D` is Half-split RoPE bit for bit | Unsupported | Unsupported | `f32` | Half-split rotation of the leading `R` of each head, the rest passed through; `[B, T, H, D]`, tables `[T, R]`. Text-only MRoPE tables from `ojas_core::mrope_text_tables` (the collapse) |
 | **Cross-Entropy** | Mean over valid targets | `ojas_ce_rows`, `ojas_ce_mean` | WGSL | `f32` | Mean NLL; `ignore_index`; all-ignored is `NonFinite`. Full `rows × vocab` logits and gradient are materialized |
 | **Linear Cross-Entropy** | Tiled online softmax, stream loss/grad | Tiled stream | WGSL `loss.wgsl` | `f32` | Fused linear projection + CE loss; tiles rows/vocab without materializing full logits (`LinearCeChunk`) |
 | **Grad Clip** | Global norm, f64 sum of squares | `ojas_reduce_*`, `ojas_scale` | WGSL | `f32` | Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$ |
 | **Accumulate Grad** | In-place add (finite check) | In-place / buffer | WGSL `accumulate` | `f32` | Accumulate step gradients into parameter gradient buffers |
 | **KV Cache Write** | Slice copy at timestep | Slice copy | WGSL `kv_cache` | `f32` | Write key/value token slices into time-major decode KV cache |
 | **AdamW** | Single-tensor torch order | tessl `qwen35_adamw` | WGSL | `f32` | Decay first; f64 bias correction; $\varepsilon$ outside sqrt |
-| **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32` (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
+| **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32`, or `bf16` on CPU and Metal (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
 
 > [!WARNING]
 > `MetalBackend` and `WgpuBackend` attention refuse $d_{\text{head}} > 256$ with `OjasError::UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, and `ATTENTION_MAX_HEAD_DIM` in `ojas-kernels/src/geometry.rs` for wgpu). The tiny Metal training step in `ojas-metal/src/gpu.rs` runs tessl `flash_attn_rows` and refuses above 64. Nothing is truncated. Causal SDPA accepts grouped-query head counts.

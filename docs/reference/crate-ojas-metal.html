@@ -223,9 +223,13 @@
 </li>
 <li><strong>QK-norm</strong> validates and places both pairs first, so a refused call records nothing. It then runs as one command when q&#39;s and k&#39;s outputs and scratch fit the budget together; otherwise it runs the two <code>rms_norm_*</code> calls, which hold one side&#39;s scratch at a time.
 </li>
-<li><strong>Causal attention</strong> (<code>ojas_attn_fwd_d*</code> and <code>ojas_attn_bwd_{stats,dq,dkv}_d*</code>, at head dims 16, 32, 64, 128 and 256): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives <code>matmul2d</code>), after tessl&#39;s <code>qwen35_attn_tiled.metal</code> and <code>qwen35_attn_bwd.metal</code>. Grouped-query training repeats KV heads into that kernel and sums the KV gradients.
+<li><strong>Causal attention</strong> (<code>ojas_attn_fwd_d*</code>, <code>ojas_attn_bwd_dr</code> and <code>ojas_attn_bwd_{dq,dkv}_d*</code>, at head dims 16, 32, 64, 128 and 256): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives <code>matmul2d</code>), after tessl&#39;s <code>qwen35_attn_tiled.metal</code> and <code>qwen35_attn_bwd.metal</code>. Grouped-query heads read their KV head in place: the forward and dQ index KV head <code>h / (Hq / Hkv)</code>, and dK/dV run one threadgroup per KV head that loops its query heads in a fixed order. Nothing is repeated or summed back.
 <ul>
-<li>The forward is one dispatch with an online softmax. The backward is three dispatches.
+<li>The forward is one dispatch with an online softmax. It writes the output and the row log-sum-exp.
+</li>
+<li>The backward takes the saved output and log-sum-exp and is three dispatches: <code>rowsum(dO * O)</code>, dQ, then dK/dV. Its only scratch is that row sum, <code>B * Hq * T</code> floats.
+</li>
+<li>An optional sliding window <code>W</code> (query <code>t</code> sees keys <code>t - W &lt; j &lt;= t</code>) skips whole key tiles before the window and masks inside the edge tile.
 </li>
 <li>Each threadgroup rebuilds 32 x 32 score blocks in about 8 KiB of threadgroup memory, so nothing T x T is stored.
 </li>

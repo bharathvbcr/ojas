@@ -113,10 +113,12 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Benchmarks</p>
       <article class="prose-ojas">
 <h1 id="gpu-backends-versus-pytorch-mps">GPU Backends versus PyTorch MPS <a class="anchor" href="#gpu-backends-versus-pytorch-mps" aria-label="Link to this section">#</a></h1>
-<p>Paired A/B of ojas&#39;s two GPU backends, <code>MetalBackend</code> (<code>ojas-metal</code>) and <code>WgpuBackend</code> (<code>ojas-wgpu</code>), against PyTorch 2.13 MPS, at nanolab&#39;s default shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabulary 50304, B 4, T 1024 (4096 rows). Each kernel is timed forward and backward where it has a backward. One composed nanolab block is timed forward, and forward plus backward. Everything is f32 on both sides.</p>
+<p>Paired A/B of ojas&#39;s two GPU backends, <code>MetalBackend</code> (<code>ojas-metal</code>) and <code>WgpuBackend</code> (<code>ojas-wgpu</code>), against PyTorch 2.13 MPS, at nanolab&#39;s default shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabulary 50304, B 4, T 1024 (4096 rows). Each kernel is timed forward and backward where it has a backward. One composed nanolab block is timed forward, and forward plus backward. Everything is f32 on both sides, except the <code>muon_RxC_bf16</code> rows (2026-10-07), which run bf16 Newton-Schulz on both sides.</p>
 <p>The harness, the commands and the row definitions are in <a href="crate-bench.html"><code>bench/README.md</code></a>. Raw data: round 1 in <code>bench/results/2026-10-01/</code>, round 2 in <code>bench/results/2026-10-01-r2/</code>, round 3 in <code>bench/results/2026-10-01-r3b/</code>, and the round 3 regression A/B in <code>bench/results/2026-10-01-ab/</code>.</p>
-<p>The document has six dated sections:</p>
+<p>The document has seven dated sections:</p>
 <ul>
+<li><strong>Muon with bf16 Newton-Schulz</strong> (2026-10-07): <code>Ns5Precision::Bf16</code> on Metal against its f32 iteration and against nanolab&#39;s stock bf16 Muon.
+</li>
 <li><strong>torch 2.15 MPS norm benchmark</strong> (2026-10-05): torch 2.14.1 vs 2.15 nightly on <code>clip_grad_norm_</code>, where pytorch/pytorch#198611 ports norm to shared reduction kernels.
 </li>
 <li><strong>Fixed cost against op size and request batching</strong> (2026-10-04): where the per-op fixed cost stops dominating, and what batching decode requests buys.
@@ -128,6 +130,25 @@
 <li><strong>Round 2</strong>, after the Metal and wgpu optimization rounds landed.
 </li>
 <li><strong>Round 1</strong>, kept below unchanged for comparison.
+</li>
+</ul>
+<h2 id="muon-with-bf16-newton-schulz-2026-10-07">Muon with bf16 Newton-Schulz: 2026-10-07 <a class="anchor" href="#muon-with-bf16-newton-schulz-2026-10-07" aria-label="Link to this section">#</a></h2>
+<p>Raw data: <a href="https://github.com/bharathvbcr/ojas/blob/main/bench/results/2026-10-07-muon-bf16/summary.md" rel="noopener"><code>bench/results/2026-10-07-muon-bf16/summary.md</code></a> (<code>BENCH_ROWS=muon</code>, 5 alternating rounds, 5 warm-ups and 20 timed iterations per row, 1-minute load 5.2–8.2, Apple M5 Pro, tessl 045f58a with 33 dirty files). One matrix of nanolab&#39;s <code>Muon.step</code>. ojas&#39;s <code>_bf16</code> rows run <code>MuonNs5Config.ns5 = Ns5Precision::Bf16</code>: every Newton-Schulz intermediate rounded to bf16, and the GEMMs on tessl&#39;s bf16 TensorOps lane with f32 accumulation. torch&#39;s <code>_bf16</code> rows are nanolab&#39;s unchanged <code>zeropower_via_newtonschulz5</code> on MPS, and are the parity reference.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>shape</th><th style="text-align:right">ojas f32 NS5, median ms</th><th style="text-align:right">ojas bf16 NS5, median ms</th><th style="text-align:right">bf16 over f32</th><th style="text-align:right">torch bf16 NS5, median ms</th><th>ojas bf16 against torch bf16 (median ratio, range)</th><th>parity, max abs (rel)</th></tr></thead>
+<tbody>
+<tr><td>768x768</td><td style="text-align:right">2.829</td><td style="text-align:right">2.101</td><td style="text-align:right">1.35x faster</td><td style="text-align:right">1.965</td><td>0.94x [0.81-0.99], noisy (torch spread 16%)</td><td>9.8e-05 (2.9e-03)</td></tr>
+<tr><td>2048x768</td><td style="text-align:right">5.900</td><td style="text-align:right">4.074</td><td style="text-align:right">1.45x faster</td><td style="text-align:right">4.404</td><td>1.07x [1.04-1.16]</td><td>8.0e-05 (2.4e-03)</td></tr>
+<tr><td>768x2048</td><td style="text-align:right">5.770</td><td style="text-align:right">3.933</td><td style="text-align:right">1.47x faster</td><td style="text-align:right">3.865</td><td>0.98x [0.96-1.01]</td><td>6.1e-05 (1.9e-03)</td></tr>
+</tbody></table></div>
+<ul>
+<li>On Metal, bf16 Newton-Schulz is 1.35–1.47x faster than ojas&#39;s f32 iteration by the median, and level with torch&#39;s own bf16 Muon (0.94–1.07x). The f32 rows are 1.28–1.32x faster than torch&#39;s fp32-NS5 twin in the same run.
+</li>
+<li>The parity gate for Muon rows is 1e-2 of the largest torch value. The bf16 rows sit at 1.9e-3 to 2.9e-3, the f32 rows at 2.9e-7 to 4.9e-7. bf16 Newton-Schulz is discontinuous in its input, so two bf16 runs that sum their GEMMs in different orders differ by about this much (<code>ojas-oracle/src/parity.rs</code>, <code>TRACE_BF16_PARAM_NORMWISE_REL_TOL</code>).
+</li>
+<li>wgpu refuses <code>Ns5Precision::Bf16</code> (<code>Unsupported</code>), and each of its <code>_bf16</code> rows records the refusal.
+</li>
+<li>On CPU there is no bf16 GEMM to use: Accelerate&#39;s <code>sgemm</code> is f32, so the bf16 path is the f32 GEMMs plus rounding passes and is slower. From <code>ojas-cpu/tests/bench_ops.rs</code> (<code>muon_*_bf16</code>, 6 threads, best of three rounds at load 9–14), f32 then bf16: 768x768 9.62 / 13.43 ms (1.40x slower), 2048x768 21.15 / 28.12 ms (1.33x), 3072x768 29.27 / 33.41 ms (1.14x).
 </li>
 </ul>
 <h2 id="torch-clip-grad-norm--on-mps-2141-against-215-nightly-2026-10-05">torch <code>clip_grad_norm_</code> on MPS: 2.14.1 against 2.15 nightly (2026-10-05) <a class="anchor" href="#torch-clip-grad-norm--on-mps-2141-against-215-nightly-2026-10-05" aria-label="Link to this section">#</a></h2>
@@ -260,6 +281,50 @@
 <li>All of them use rank-one operands, so the reference stays O(M·N) at N·K ≥ 2²³.
 </li>
 <li>Removing the partial-band clamp makes all three fail, as does tessl&#39;s existing bf16 swizzle test, which now goes through the shared helper.
+</li>
+</ul>
+<h3 id="follow-up-2026-10-07-bf16-tnnt-and-int8-take-the-same-walk-verified">Follow-up 2026-10-07: bf16 TN/NT and int8 take the same walk (verified) <a class="anchor" href="#follow-up-2026-10-07-bf16-tnnt-and-int8-take-the-same-walk-verified" aria-label="Link to this section">#</a></h3>
+<p>tessl&#39;s bf16 TN/NT coop kernels (plain and accumulate) and its int8 dequant kernel had the same defect. They walked tiles row-major, or in Morton order on square power-of-two grids, so a large B was re-read once per tile row. All three families, exact f32 included, now share one walk, <code>tile_walk&lt;SM&gt;</code> in <code>kernels/matmul_tensorops.metal</code>:</p>
+<ul>
+<li>column panels of 512 rows of C once N·K ≥ 2²³ elements;
+</li>
+<li>except on a grid walked in Morton order, which keeps Morton.
+</li>
+</ul>
+<p>Data, scripts and the shader diff are in <code>bench/results/2026-10-06-gemm-bf16/</code>:</p>
+<ul>
+<li><strong>Band.</strong> An in-process sweep against bands of 1024 and 2048 rows chose 512.
+</li>
+<li><strong>Production A/B.</strong> Both binaries were built from one tessl tree that differed only in the shader. Each case ran old and new back to back, over 6 rounds. The four controls over 2 ms read 0.99–1.00×; the three under 2 ms read 1.04–1.06×, with rounds from 0.74× to 1.68×.
+</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>GEMM</th><th>Shape</th><th style="text-align:right">B</th><th style="text-align:right">Time ratio, median (range)</th></tr></thead>
+<tbody>
+<tr><td>bf16 NT accumulate</td><td>4096 × 32768 × 768</td><td style="text-align:right">48 MiB</td><td style="text-align:right">0.50× (0.42–0.55)</td></tr>
+<tr><td>bf16 TN accumulate</td><td>768 × 50304 × 4096</td><td style="text-align:right">393 MiB</td><td style="text-align:right">0.60× (0.54–0.70)</td></tr>
+<tr><td>bf16 NT</td><td>1024 × 248320 × 2048</td><td style="text-align:right">970 MiB</td><td style="text-align:right">0.72× (0.65–0.75)</td></tr>
+<tr><td>int8 NN</td><td>B ≥ 24 MiB, 3 shapes</td><td style="text-align:right">24–64 MiB</td><td style="text-align:right">0.73–0.77×</td></tr>
+<tr><td>int8 NN</td><td>at and above the gate</td><td style="text-align:right">8–16 MiB</td><td style="text-align:right">0.91–1.00×</td></tr>
+<tr><td>exact f32 on square grids, Morton against panels</td><td>4 shapes</td><td style="text-align:right">32 MiB</td><td style="text-align:right">0.99–1.02×</td></tr>
+</tbody></table></div>
+<p>The last row is why the Morton exception stays for exact f32 as well.</p>
+<p><strong>What reaches ojas:</strong></p>
+<ul>
+<li>ojas-metal&#39;s own GEMMs are all <code>GemmOperands::ExactF32</code>, so they see no change except the Morton exception, measured above as a wash.
+</li>
+<li><code>Numerics::Bf16Operands</code> in ojas-qwen35 (<code>ojas-qwen35/src/step.rs:56</code>) hands tessl&#39;s Qwen3.5 training <code>GemmOperands::Bf16</code>. Several of its bf16 NT GEMMs have B past the gate: the cross-entropy walks the vocabulary in 8192-column chunks (<code>CE_CHUNK</code>, B = 8192 × 2048), and the backward multiplies by the MLP weights. These take panels, at M = T rows. Neither those shapes nor a training step was measured, so any step speed-up is inferred, not verified. The 1024 × 248320 × 2048 row is a standalone full-vocabulary NT, not a shape this training issues.
+</li>
+<li>Nothing in ojas calls <code>nn::gemm_i8_dequant</code>.
+</li>
+</ul>
+<p><strong>Tests (tessl):</strong></p>
+<ul>
+<li><code>panel_walk_matches_row_major_chunks_bit_for_bit</code> (<code>src/gemm.rs</code>): every bf16 TN/NT and exact-f32 lane past the gate, bit-exact against the same GEMM in column chunks under the gate.
+</li>
+<li><code>column_panels_cover_every_tile_exactly</code> (<code>tests/gemm_i8.rs</code>).
+</li>
+<li>With the partial-band clamp removed, both fail, as does <code>exact_f32_column_panels_cover_every_tile</code>.
 </li>
 </ul>
 <h3 id="fix-the-lm-heads-input-gradient-runs-as-k-partitions-verified">Fix: the LM head&#39;s input gradient runs as K partitions (verified) <a class="anchor" href="#fix-the-lm-heads-input-gradient-runs-as-k-partitions-verified" aria-label="Link to this section">#</a></h3>
@@ -1443,6 +1508,7 @@ BENCH_ITERS=30 bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5     
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#muon-with-bf16-newton-schulz-2026-10-07">Muon with bf16 Newton-Schulz: 2026-10-07</a></li>
 <li><a href="#torch-clip-grad-norm--on-mps-2141-against-215-nightly-2026-10-05">torch clip_grad_norm_ on MPS: 2.14.1 against 2.15 nightly (2026-10-05)</a></li>
 <li class="sub"><a href="#measured-results-torchjsonl-apple-m5-pro-macos-2701">Measured results (torch.jsonl, Apple M5 Pro, macOS 27.0.1)</a></li>
 <li><a href="#fixed-cost-against-op-size-and-request-batching-2026-10-04">Fixed cost against op size and request batching: 2026-10-04</a></li>
@@ -1450,6 +1516,7 @@ BENCH_ITERS=30 bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5     
 <li class="sub"><a href="#round-5-benchresults2026-10-02-r5summarymd">Round 5 (bench/results/2026-10-02-r5/summary.md)</a></li>
 <li class="sub"><a href="#what-makes-the-lm-head-slow-one-pass-over-the-weight-per-tile-row-verified">What makes the LM head slow: one pass over the weight per tile row (verified)</a></li>
 <li class="sub"><a href="#fix-tessl-walks-a-large-b-in-column-panels-verified">Fix: tessl walks a large B in column panels (verified)</a></li>
+<li class="sub"><a href="#follow-up-2026-10-07-bf16-tnnt-and-int8-take-the-same-walk-verified">Follow-up 2026-10-07: bf16 TN/NT and int8 take the same walk (verified)</a></li>
 <li class="sub"><a href="#fix-the-lm-heads-input-gradient-runs-as-k-partitions-verified">Fix: the LM head&#39;s input gradient runs as K partitions (verified)</a></li>
 <li class="sub"><a href="#gate-bwd-where-its-time-went-and-the-bias-sum-2026-10-02">gate_bwd: where its time went, and the bias sum (2026-10-02)</a></li>
 <li><a href="#round-3-2026-10-01-22502306-cdt">Round 3: 2026-10-01, 22:50–23:06 CDT</a></li>

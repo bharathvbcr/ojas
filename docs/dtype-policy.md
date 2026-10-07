@@ -16,8 +16,9 @@ flowchart TD
         MuonMom["Muon Momentum Buffers"]
     end
 
-    subgraph BF16Domain["optional bf16 autocast region"]
+    subgraph BF16Domain["optional bf16: autocast region, Muon NS5"]
         NSIterate["Matmul-class copies\n- Off by default; storage stays f32\n- Rounded operands and activation outputs only"]
+        NS5Bf16["Muon Newton-Schulz iterate\n- Ns5Precision::Bf16, off by default\n- Every intermediate rounded, f32 GEMM accumulation"]
     end
 
     subgraph U32Domain["u32 Integer Domain"]
@@ -35,6 +36,7 @@ flowchart TD
     Grads --> MuonMom
     Params -->|region on| NSIterate
     NSIterate -->|f32 master grads| MuonMom
+    MuonMom -->|ns5 Bf16| NS5Bf16
     TokenIDs --> Acts
     Oracles -.->|Verification Reference| Acts
 ```
@@ -49,7 +51,7 @@ flowchart TD
 | **Activations** | `f32` | `f32`, or bf16-rounded inside a region | Outside a region every activation stays f32. Inside `AutocastMode::Bf16`, matmul-class outputs are rounded and tagged; norms, RoPE, embeddings and the residual stream stay f32 unless every counted input is already tagged. |
 | **Gradients** | `f32` | `f32` for master weights | Weight and bias gradients stay untagged f32. Activation gradients of matmul-class ops are rounded inside a region. |
 | **Muon Momentum** | `f32` | `f32` | Standard first-moment buffer for matrix parameters. |
-| **Muon Newton-Schulz** | — | `f32` | Five Newton-Schulz steps run in f32 on CPU, Metal and wgpu. nanolab's `X = G.bfloat16()` is not what ojas runs. |
+| **Muon Newton-Schulz** | — | `f32` by default; `bf16` with `Ns5Precision::Bf16` | `MuonNs5Config.ns5` (`TrainConfig.muon_ns5`) picks it. `F32` is nanolab with `X = G.float()`. `Bf16` is stock nanolab's `X = G.bfloat16()` as torch's eager bf16 ops run it: every intermediate rounded to bf16, GEMMs on bf16 operands accumulating in f32. CPU and Metal implement it; wgpu refuses it (`Unsupported`). The momentum buffer and the parameter stay f32. |
 | **AdamW Moments** | `f32` | `f64` (internal) | First and second moments stored as `f32`; step updates computed with `f64` scalars before casting. |
 | **Tokens & Labels** | `u32` | `u32` | Accommodates vocabularies up to 50,304. `ignore_index: Option<u32>` drops rows whose target equals `Some(id)`. `None` drops nothing. |
 | **Oracle Fixtures** | `f64` | `f64` | Golden reference files stored on disk; verified against CPU kernels. |

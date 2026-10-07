@@ -125,8 +125,9 @@
         MuonMom[&#34;Muon Momentum Buffers&#34;]
     end
 
-    subgraph BF16Domain[&#34;optional bf16 autocast region&#34;]
+    subgraph BF16Domain[&#34;optional bf16: autocast region, Muon NS5&#34;]
         NSIterate[&#34;Matmul-class copies\n- Off by default; storage stays f32\n- Rounded operands and activation outputs only&#34;]
+        NS5Bf16[&#34;Muon Newton-Schulz iterate\n- Ns5Precision::Bf16, off by default\n- Every intermediate rounded, f32 GEMM accumulation&#34;]
     end
 
     subgraph U32Domain[&#34;u32 Integer Domain&#34;]
@@ -144,6 +145,7 @@
     Grads --&gt; MuonMom
     Params --&gt;|region on| NSIterate
     NSIterate --&gt;|f32 master grads| MuonMom
+    MuonMom --&gt;|ns5 Bf16| NS5Bf16
     TokenIDs --&gt; Acts
     Oracles -.-&gt;|Verification Reference| Acts</pre></figure>
 <hr>
@@ -155,7 +157,7 @@
 <tr><td><strong>Activations</strong></td><td><code>f32</code></td><td><code>f32</code>, or bf16-rounded inside a region</td><td>Outside a region every activation stays f32. Inside <code>AutocastMode::Bf16</code>, matmul-class outputs are rounded and tagged; norms, RoPE, embeddings and the residual stream stay f32 unless every counted input is already tagged.</td></tr>
 <tr><td><strong>Gradients</strong></td><td><code>f32</code></td><td><code>f32</code> for master weights</td><td>Weight and bias gradients stay untagged f32. Activation gradients of matmul-class ops are rounded inside a region.</td></tr>
 <tr><td><strong>Muon Momentum</strong></td><td><code>f32</code></td><td><code>f32</code></td><td>Standard first-moment buffer for matrix parameters.</td></tr>
-<tr><td><strong>Muon Newton-Schulz</strong></td><td>—</td><td><code>f32</code></td><td>Five Newton-Schulz steps run in f32 on CPU, Metal and wgpu. nanolab&#39;s <code>X = G.bfloat16()</code> is not what ojas runs.</td></tr>
+<tr><td><strong>Muon Newton-Schulz</strong></td><td>—</td><td><code>f32</code> by default; <code>bf16</code> with <code>Ns5Precision::Bf16</code></td><td><code>MuonNs5Config.ns5</code> (<code>TrainConfig.muon_ns5</code>) picks it. <code>F32</code> is nanolab with <code>X = G.float()</code>. <code>Bf16</code> is stock nanolab&#39;s <code>X = G.bfloat16()</code> as torch&#39;s eager bf16 ops run it: every intermediate rounded to bf16, GEMMs on bf16 operands accumulating in f32. CPU and Metal implement it; wgpu refuses it (<code>Unsupported</code>). The momentum buffer and the parameter stay f32.</td></tr>
 <tr><td><strong>AdamW Moments</strong></td><td><code>f32</code></td><td><code>f64</code> (internal)</td><td>First and second moments stored as <code>f32</code>; step updates computed with <code>f64</code> scalars before casting.</td></tr>
 <tr><td><strong>Tokens &amp; Labels</strong></td><td><code>u32</code></td><td><code>u32</code></td><td>Accommodates vocabularies up to 50,304. <code>ignore_index: Option&lt;u32&gt;</code> drops rows whose target equals <code>Some(id)</code>. <code>None</code> drops nothing.</td></tr>
 <tr><td><strong>Oracle Fixtures</strong></td><td><code>f64</code></td><td><code>f64</code></td><td>Golden reference files stored on disk; verified against CPU kernels.</td></tr>

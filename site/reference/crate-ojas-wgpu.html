@@ -155,7 +155,7 @@
     end
 
     subgraph Shaders[&#34;Compiled WGSL Shaders (ojas-kernels)&#34;]
-        Common[&#34;common.wgsl (fault word), fault.wgsl, layout.wgsl (permute)&#34;]
+        Common[&#34;common.wgsl (fault words), fault.wgsl, layout.wgsl (permute)&#34;]
         Ops[&#34;attention, gemm, norm, pointwise, reduce, loss, optim&#34;]
     end
 
@@ -176,7 +176,7 @@
 </li>
 <li><strong>Non-finite values are deferred:</strong> an op that produces a non-finite value returns <code>Ok</code>; the next <code>sync</code>, <code>download</code> or <code>clip_grad_norm</code> returns <code>NonFinite</code> naming the first op, in recording order, that faulted. <code>sync</code> is the <code>Backend::sync</code> override, so a caller holding <code>&amp;dyn Backend</code>, <code>impl Backend</code> or <code>Arc&lt;WgpuBackend&gt;</code> sees the fault too; a lost device makes it return <code>Backend</code> naming the loss. <code>adamw_step</code> and <code>muon_ns5_step</code> write nothing when their own values are non-finite. See the <code>backend</code> module docs.
 </li>
-<li><strong>Causal SDPA:</strong> tiled flash attention for head widths up to 256 (padded to 16/32/64/128/256). The forward keeps an online softmax per row; the backward recomputes the probabilities in tiles, in a dQ pass and a dK/dV pass, with no <code>T x T</code> matrix and no atomics, so repeated runs give the same bits (<code>tests/attention.rs</code>). Grouped-query heads are expanded into that equal-head kernel and the KV gradients are summed back.
+<li><strong>Causal SDPA:</strong> tiled flash attention for head widths up to 256 (padded to 16/32/64/128/256). The forward keeps an online softmax per row and writes the output and the row log-sum-exp. The backward takes both: one pass forms <code>rowsum(dO * O)</code> (its only scratch, <code>B * Hq * T</code> floats), then it rebuilds the probabilities in tiles as <code>exp(s - lse)</code>, in a dQ pass and a dK/dV pass, with no <code>T x T</code> matrix and no atomics, so repeated runs give the same bits (<code>tests/attention.rs</code>). Grouped-query heads read their KV head in place; the dK/dV pass runs per KV head and loops its query heads in a fixed order. An optional sliding window <code>W</code> (query <code>t</code> sees keys <code>t - W &lt; j &lt;= t</code>) starts and ends each row&#39;s key loop at the window (<code>tests/attention_window.rs</code>).
 </li>
 <li><strong>RMSNorm:</strong> a row is reduced by <code>next_pow2(min(D, 256))</code> lanes, so a 256-lane workgroup holds <code>256 / width</code> rows (four rows of D = 64). The segmented tree sum pairs lanes as the full 256-lane tree does, so the bits do not depend on the packing. <code>rms_qk_norm_forward</code> / <code>_backward</code> record q and k in one submission and give the bits, refusals and fault names of two <code>rms_norm</code> calls; a refused k still records q first, as the composition would (<code>tests/norm.rs</code>).
 </li>
@@ -213,6 +213,8 @@
 <li><code>tests/accumulate_grad.rs</code>: In-place vs buffered gradient accumulation and bit-matching against CPU.
 </li>
 <li><code>tests/attention.rs</code>: Tiled causal attention forward/backward, long sequences, and head dimensions up to 256.
+</li>
+<li><code>tests/attention_window.rs</code>: Sliding-window and grouped-query attention and the row log-sum-exp against CPU; native grouped-query against repeated heads, and the saved-statistics backward against the recomputing one, bit for bit.
 </li>
 <li><code>tests/contract.rs</code>: Backend trait implementation contracts and deferred fault reporting.
 </li>
