@@ -1,12 +1,14 @@
 //! The Qwen3.5 whole-step training provider on NVIDIA CUDA (design B).
 //!
-//! Mirrors tessl's step seam on Metal:
+//! The seam mirrors tessl's on Metal:
 //! `train_forward` -> `PendingStep::hidden` -> `train_backward_into` into a bank,
 //! then `grad_sq_norm` and in-place `adamw_step`.
+//!
+//! No kernels back [`Qwen35Step`] yet (ft-7162). Every method that would
+//! compute refuses with [`OjasError::Unsupported`], so a caller wired to it
+//! cannot log a step that trained nothing.
 
-use ojas_core::{
-    check_adamw, clip_scale, next_step, AdamWConfig, Budget, DType, OjasError, Tensor,
-};
+use ojas_core::{clip_scale, DType, OjasError, Tensor};
 
 /// How GEMMs treat their operands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,7 +242,6 @@ pub struct Pending {
     pub(crate) span_positions: Vec<u32>,
     pub(crate) hidden: Tensor,
     pub(crate) tokens: usize,
-    pub(crate) weights_version: u64,
 }
 
 impl Pending {
@@ -274,11 +275,11 @@ impl Pending {
 }
 
 /// Gradient accumulation bank for the whole-step provider.
+///
+/// It holds no storage: nothing can write a gradient into it until ft-7162
+/// wires the backward kernels.
 #[derive(Debug, Default)]
-pub struct GradientBank {
-    pub(crate) grads: Vec<f32>,
-    pub(crate) sq_norm: f64,
-}
+pub struct GradientBank;
 
 /// StepProvider trait proposed in `docs/cuda-backend-scoping.md` §2.B.1.
 pub trait StepProvider {
@@ -319,29 +320,30 @@ pub trait StepProvider {
 }
 
 /// The Qwen3.5 whole-step provider on CUDA.
+///
+/// Every compute method refuses with [`OjasError::Unsupported`] until
+/// ft-7162 wires the kernels. A refusal leaves the step count and the bank
+/// state as they were.
 pub struct Qwen35Step {
-    pub(crate) vocab: u32,
-    pub(crate) hidden: usize,
     pub(crate) numerics: Numerics,
     pub(crate) bank_state: BankState,
     pub(crate) step_count: u64,
-    pub(crate) weights_version: u64,
-    pub(crate) budget: Budget,
-    pub(crate) bank: GradientBank,
+}
+
+fn not_wired(op: &'static str) -> OjasError {
+    OjasError::Unsupported {
+        op,
+        detail: "no CUDA kernels back Qwen35Step yet (ft-7162)".to_string(),
+    }
 }
 
 impl Qwen35Step {
-    /// Create a new Qwen35Step provider instance.
-    pub fn new(vocab: u32, hidden: usize, numerics: Numerics, budget: Budget) -> Self {
+    /// Create a provider. It holds no weights, and every compute method refuses.
+    pub fn new(numerics: Numerics) -> Self {
         Self {
-            vocab,
-            hidden,
             numerics,
             bank_state: BankState::Empty,
             step_count: 0,
-            weights_version: 0,
-            budget,
-            bank: GradientBank::default(),
         }
     }
 
@@ -359,114 +361,31 @@ impl Qwen35Step {
 
     pub fn discard_gradients(&mut self) {
         self.bank_state = BankState::Empty;
-        self.bank.grads.clear();
-        self.bank.sq_norm = 0.0;
     }
 
-    pub fn forward(&self, seq: &Sequence<'_>) -> Result<Pending, OjasError> {
-        seq.validate(self.vocab, None)?;
-        let n = seq.span_positions.len();
-        let h = self.hidden;
-        let rows = vec![0.0f32; n * h];
-        let hidden = Tensor::from_f32(&rows, &[n, h], &self.budget)?;
-        Ok(Pending {
-            letter_ce_sum: 0.0,
-            letter_rows: seq.letter_rows.len(),
-            letter_scale: seq.letter_scale,
-            span_positions: seq.span_positions.to_vec(),
-            hidden,
-            tokens: seq.ids.len(),
-            weights_version: self.weights_version,
-        })
+    pub fn forward(&self, _seq: &Sequence<'_>) -> Result<Pending, OjasError> {
+        Err(not_wired("Qwen35Step::forward"))
     }
 
     pub fn backward(
         &mut self,
-        pending: Pending,
-        external: Option<ExternalGrad<'_>>,
+        _pending: Pending,
+        _external: Option<ExternalGrad<'_>>,
     ) -> Result<(), OjasError> {
-        const OP: &str = "Qwen35Step::backward";
-        if let BankState::Invalid(why) = &self.bank_state {
-            return Err(OjasError::Backend {
-                id: ojas_core::BackendId::Cuda,
-                detail: format!("{OP}: gradient bank invalid: {why}"),
-            });
-        }
-        if pending.weights_version != self.weights_version {
-            return Err(OjasError::Backend {
-                id: ojas_core::BackendId::Cuda,
-                detail: format!("{OP}: weights changed since forward"),
-            });
-        }
-        if let Some(g) = &external {
-            let _ = validate_external_grad(g, pending.tokens, self.hidden)?;
-        }
-        self.bank_state = match self.bank_state {
-            BankState::Holds(n) => BankState::Holds(n + 1),
-            _ => BankState::Holds(1),
-        };
-        Ok(())
+        Err(not_wired("Qwen35Step::backward"))
     }
 
     pub fn grad_sq_norm(&self) -> Result<f64, OjasError> {
-        match &self.bank_state {
-            BankState::Holds(_) => Ok(self.bank.sq_norm),
-            BankState::Empty => Err(OjasError::Backend {
-                id: ojas_core::BackendId::Cuda,
-                detail: "gradient bank is empty".to_string(),
-            }),
-            BankState::Invalid(why) => Err(OjasError::Backend {
-                id: ojas_core::BackendId::Cuda,
-                detail: format!("gradient bank is invalid: {why}"),
-            }),
-        }
+        Err(not_wired("Qwen35Step::grad_sq_norm"))
     }
 
     pub fn adamw_step(
         &mut self,
-        hyper: &AdamWHyper,
-        wd: &[f32],
-        lr_scale: &[f32],
+        _hyper: &AdamWHyper,
+        _wd: &[f32],
+        _lr_scale: &[f32],
     ) -> Result<u64, OjasError> {
-        match &self.bank_state {
-            BankState::Holds(_) => {}
-            BankState::Empty => {
-                return Err(OjasError::Backend {
-                    id: ojas_core::BackendId::Cuda,
-                    detail: "gradient bank is empty".to_string(),
-                });
-            }
-            BankState::Invalid(why) => {
-                return Err(OjasError::Backend {
-                    id: ojas_core::BackendId::Cuda,
-                    detail: format!("gradient bank is invalid: {why}"),
-                });
-            }
-        }
-        for &w in wd {
-            check_adamw(
-                AdamWConfig {
-                    lr: hyper.lr,
-                    beta1: hyper.beta1,
-                    beta2: hyper.beta2,
-                    eps: hyper.eps,
-                    weight_decay: f64::from(w),
-                },
-                self.step_count,
-            )?;
-        }
-        for &s in lr_scale {
-            if !s.is_finite() || s <= 0.0 {
-                return Err(OjasError::NonFinite {
-                    op: "Qwen35Step::adamw_step",
-                });
-            }
-        }
-        let next = next_step(self.step_count)?;
-        self.step_count = next;
-        self.bank_state = BankState::Empty;
-        self.weights_version += 1;
-        Ok(next)
+        Err(not_wired("Qwen35Step::adamw_step"))
     }
 }
 
@@ -476,77 +395,51 @@ impl StepProvider for Qwen35Step {
 
     fn train_forward(
         &self,
-        ids: &[u32],
+        _ids: &[u32],
         _ops: GemmOperands,
-        sup: Supervise<'_>,
+        _sup: Supervise<'_>,
     ) -> Result<Self::Pending, OjasError> {
-        let (pos, targets, scale) = match sup {
-            Supervise::Rows {
-                positions,
-                targets,
-                scale,
-            } => (positions, targets, scale),
-        };
-        let seq = Sequence {
-            ids,
-            letter_rows: pos,
-            letter_targets: targets,
-            letter_scale: scale,
-            span_positions: &[],
-        };
-        self.forward(&seq)
+        Err(not_wired("Qwen35Step::train_forward"))
     }
 
     fn hidden(
         &self,
-        p: &Self::Pending,
-        positions: &[u32],
-        out: &mut [f32],
+        _p: &Self::Pending,
+        _positions: &[u32],
+        _out: &mut [f32],
     ) -> Result<(), OjasError> {
-        let h = self.hidden;
-        let expected_len = positions.len() * h;
-        if out.len() != expected_len {
-            return Err(OjasError::Shape {
-                op: "StepProvider::hidden",
-                detail: format!("out len {} != expected {expected_len}", out.len()),
-            });
-        }
-        out.fill(0.0);
-        let _ = p;
-        Ok(())
+        Err(not_wired("Qwen35Step::hidden"))
     }
 
     fn train_backward_into(
         &self,
-        p: Self::Pending,
+        _p: Self::Pending,
         _dh: Option<(&[u32], &[f32])>,
         _bank: &Self::Bank,
         _accumulate: bool,
     ) -> Result<(), OjasError> {
-        let _ = p;
-        Ok(())
+        Err(not_wired("Qwen35Step::train_backward_into"))
     }
 
-    fn grad_sq_norm(&self, bank: &Self::Bank) -> Result<f64, OjasError> {
-        Ok(bank.sq_norm)
+    fn grad_sq_norm(&self, _bank: &Self::Bank) -> Result<f64, OjasError> {
+        Err(not_wired("Qwen35Step::grad_sq_norm"))
     }
 
     fn adamw_step(
         &mut self,
         _bank: &Self::Bank,
-        hyper: AdamWHyper,
-        wd: &[f32],
-        lr_scale: &[f32],
+        _hyper: AdamWHyper,
+        _wd: &[f32],
+        _lr_scale: &[f32],
     ) -> Result<(), OjasError> {
-        self.bank_state = BankState::Holds(1);
-        self.adamw_step(&hyper, wd, lr_scale)?;
-        Ok(())
+        Err(not_wired("Qwen35Step::adamw_step"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ojas_core::Budget;
 
     #[test]
     fn sequence_validate_checks_token_length_and_vocab() {
@@ -706,45 +599,65 @@ mod tests {
         assert!(validate_external_grad(&ext, 5, 3).is_err());
     }
 
-    #[test]
-    fn qwen35_step_lifecycle() {
-        let budget = Budget::new(1024 * 1024);
-        let mut step = Qwen35Step::new(100, 4, Numerics::ExactF32, budget.clone());
-        assert_eq!(step.numerics(), Numerics::ExactF32);
-        assert_eq!(step.step_count(), 0);
-        assert_eq!(*step.bank_state(), BankState::Empty);
-        assert!(step.grad_sq_norm().is_err());
+    fn assert_not_wired<T: std::fmt::Debug>(r: Result<T, OjasError>, want_op: &str) {
+        match r {
+            Err(OjasError::Unsupported { op, detail }) => {
+                assert_eq!(op, want_op);
+                assert!(detail.contains("ft-7162"), "{detail}");
+            }
+            other => panic!("{want_op}: expected Unsupported, got {other:?}"),
+        }
+    }
 
-        let seq = Sequence {
-            ids: &[1, 2, 3],
-            letter_rows: &[0, 1],
-            letter_targets: &[2, 3],
+    /// A `Pending` the refusing `forward` cannot hand out, so the methods
+    /// that consume one are exercised directly.
+    fn pending(budget: &Budget) -> Pending {
+        Pending {
+            letter_ce_sum: 0.0,
+            letter_rows: 0,
             letter_scale: 1.0,
-            span_positions: &[1],
-        };
-        let pending = step.forward(&seq).unwrap();
-        assert_eq!(pending.tokens, 3);
-        assert_eq!(pending.weights_version, 0);
+            span_positions: vec![0],
+            hidden: Tensor::from_f32(&[0.0; 4], &[1, 4], budget).unwrap(),
+            tokens: 3,
+        }
+    }
 
-        // Backward moves state to Holds(1)
-        step.backward(pending.clone(), None).unwrap();
-        assert_eq!(*step.bank_state(), BankState::Holds(1));
-        assert_eq!(step.grad_sq_norm().unwrap(), 0.0);
+    #[test]
+    fn methods_taking_a_pending_refuse_and_leave_the_bank_empty() {
+        let budget = Budget::new(1 << 20);
+        let mut step = Qwen35Step::new(Numerics::ExactF32);
+        assert_eq!(step.numerics(), Numerics::ExactF32);
 
-        // AdamW step
-        let hyper = AdamWHyper {
-            lr: 1e-4,
-            beta1: 0.9,
-            beta2: 0.999,
-            eps: 1e-8,
-            grad_scale: 1.0,
+        let dh = Tensor::from_f32(&[1.0; 4], &[1, 4], &budget).unwrap();
+        let ext = ExternalGrad {
+            positions: &[0],
+            dh: &dh,
         };
-        let new_step = step.adamw_step(&hyper, &[0.01], &[1.0]).unwrap();
-        assert_eq!(new_step, 1);
-        assert_eq!(step.step_count(), 1);
+        assert_not_wired(
+            step.backward(pending(&budget), Some(ext)),
+            "Qwen35Step::backward",
+        );
+        assert_not_wired(
+            step.backward(pending(&budget), None),
+            "Qwen35Step::backward",
+        );
+
+        let mut out = [7.0f32; 4];
+        assert_not_wired(
+            StepProvider::hidden(&step, &pending(&budget), &[0], &mut out),
+            "Qwen35Step::hidden",
+        );
+        assert_eq!(out, [7.0; 4], "a refused hidden must not write zeros");
+
+        let bank = GradientBank;
+        assert_not_wired(
+            step.train_backward_into(pending(&budget), Some((&[0], &[1.0; 4])), &bank, false),
+            "Qwen35Step::train_backward_into",
+        );
+
         assert_eq!(*step.bank_state(), BankState::Empty);
-
-        // Old pending is now stale (weights_version bumped)
-        assert!(step.backward(pending, None).is_err());
+        assert_eq!(step.step_count(), 0);
+        step.discard_gradients();
+        assert_eq!(*step.bank_state(), BankState::Empty);
     }
 }
