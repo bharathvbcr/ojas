@@ -13,6 +13,8 @@ ojas-cpu = { path = "../ojas-cpu" }
 ojas-autograd = { path = "../ojas-autograd" }
 ojas-io = { path = "../ojas-io" }
 ojas-data = { path = "../ojas-data" }
+# Free disk space before a checkpoint save (`statfs`/`statvfs`).
+ojas-device = { path = "../ojas-device" }
 
 [dev-dependencies]
 ojas-oracle = { path = "../ojas-oracle" }

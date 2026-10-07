@@ -97,8 +97,9 @@ pub struct DataCursor {
 ///
 /// `config` is an opaque byte string (the model config the training step
 /// used). `tokenizer_hash` is 32 bytes. `git_sha` is 20 bytes, the raw SHA-1,
-/// not hex. `rng_state` is an opaque byte string; the counter-RNG field order
-/// is not part of this scaffold.
+/// not hex. `rng_state` is an opaque byte string to this schema; its layout
+/// is its producer's (the trainer writes `ojas_data::SamplerRngState`, v1,
+/// specified in `docs/checkpoint-v1.md`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckpointV1 {
     pub config: Vec<u8>,

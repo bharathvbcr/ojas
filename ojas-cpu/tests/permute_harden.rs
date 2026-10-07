@@ -6,7 +6,7 @@
 
 use std::thread;
 
-use ojas_core::{Backend, Budget, DType, Tensor};
+use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;
@@ -115,17 +115,22 @@ fn negative_zero_at_input_64_lands_at_output_65536() {
     }
 }
 
+/// D17 (`docs/shape-contract.md`): a zero axis is refused as an empty tensor
+/// on every backend and at every thread count, with nothing charged.
 #[test]
-fn empty_axis_is_an_empty_tensor() {
+fn empty_axis_is_refused_as_an_empty_tensor() {
     for threads in [1usize, 6] {
         let backend = cpu(threads);
         let empty = Tensor::zeros(&[2, 0, 4], DType::F32, backend.budget()).unwrap();
-        let y = backend.permute(&empty, &[2, 0, 1]).unwrap();
-        assert_eq!(y.shape(), &[4, 2, 0]);
-        assert!(y.to_f32_vec().unwrap().is_empty());
-        let back = backend.permute(&y, &[1, 2, 0]).unwrap();
-        assert_eq!(back.shape(), &[2, 0, 4]);
-        assert!(back.to_f32_vec().unwrap().is_empty());
+        let live = backend.budget().live_bytes().unwrap();
+        match backend.permute(&empty, &[2, 0, 1]) {
+            Err(OjasError::Shape {
+                op: "permute",
+                detail,
+            }) => assert_eq!(detail, "empty tensor", "threads {threads}"),
+            other => panic!("threads {threads}: expected Shape(empty tensor), got {other:?}"),
+        }
+        assert_eq!(backend.budget().live_bytes().unwrap(), live);
     }
 }
 

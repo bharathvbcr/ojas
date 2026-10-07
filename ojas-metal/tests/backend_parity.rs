@@ -103,6 +103,84 @@ fn muon_matches_cpu_for_wide_tall_and_square() {
     }
 }
 
+/// `‖a − b‖ / ‖b‖`, normwise.
+fn normwise_rel(a: &[f32], b: &[f32]) -> f64 {
+    let (mut num, mut den) = (0.0f64, 0.0f64);
+    for (&a, &b) in a.iter().zip(b) {
+        let d = f64::from(a) - f64::from(b);
+        num += d * d;
+        den += f64::from(b) * f64::from(b);
+    }
+    (num / den).sqrt()
+}
+
+/// bf16 Newton-Schulz on Metal against the CPU's, which the ojas-oracle
+/// `muon_step_bf16` fixture holds to stock nanolab bit for bit.
+///
+/// The parameter starts at zero, `lr` is 1 and there is no decay, so on a
+/// square or wide matrix the new parameter is exactly `-NS5(update)`: every
+/// value must be bf16 (low 16 bits zero), which an f32 iteration never gives.
+/// That is the test that tells the precisions apart.
+///
+/// Closeness to the CPU is bounded by [`NS5_BF16_REL`] only. Metal sums each
+/// GEMM in another order, so a bf16 rounding of a GEMM output can land one
+/// bf16 step apart, and the bf16 iteration is discontinuous in its input:
+/// in torch alone, a 1e-6 relative change to a 64x192 input moves stock
+/// NS5 by 1.9e-2 (`ojas-oracle/src/parity.rs`,
+/// `TRACE_BF16_PARAM_NORMWISE_REL_TOL`). Measured here: 0 at 64x64, 6.4e-3 at
+/// 192x64, 1.2e-2 at 64x192; the f32 iteration is about 3e-2 from either.
+#[test]
+fn muon_bf16_ns5_matches_cpu_bf16() {
+    let (m, c) = (metal(), cpu());
+    let cfg = ojas_core::MuonNs5Config {
+        lr: 1.0,
+        momentum: 0.99,
+        weight_decay: 0.0,
+        nesterov: true,
+        ns5: ojas_core::Ns5Precision::Bf16,
+    };
+    for &(rows, cols) in &[
+        (64usize, 64usize),
+        (64, 192),
+        (192, 64),
+        (131, 67),
+        (768, 768),
+    ] {
+        let shape = [rows, cols];
+        let g = rand(&shape, 41 + cols as u64, 1e-3);
+        let mo0 = rand(&shape, 42, 1e-3);
+        let zeros = vec![0.0; rows * cols];
+        // Fresh, uniquely owned copies: the step writes in place.
+        let (mut p, mut mo) = (host(&zeros, &shape), host(&down(&mo0), &shape));
+        ok("cpu muon", c.muon_ns5_step(&mut p, &g, &mut mo, cfg));
+        let (mut dp, mut dmo) = (up(&m, &host(&zeros, &shape)), up(&m, &mo0));
+        ok(
+            "metal muon",
+            m.muon_ns5_step(&mut dp, &up(&m, &g), &mut dmo, cfg),
+        );
+        let (want, got) = (down(&p), down(&dp));
+        let rel = normwise_rel(&got, &want);
+        eprintln!("muon bf16 {rows}x{cols}: metal vs cpu normwise {rel:e}");
+        assert!(
+            rel <= NS5_BF16_REL,
+            "{rows}x{cols}: metal bf16 NS5 is {rel:e} from the CPU's"
+        );
+        if rows <= cols {
+            for (i, v) in got.iter().enumerate() {
+                assert_eq!(
+                    v.to_bits() & 0xffff,
+                    0,
+                    "{rows}x{cols}: value {i} ({v:e}) is not bf16"
+                );
+            }
+        }
+        same_tensor(&format!("bf16 muon {rows}x{cols} m"), &dmo, &mo, 1e-6, 1e-5);
+    }
+}
+
+/// Normwise bound on Metal's bf16-NS5 result against the CPU's.
+const NS5_BF16_REL: f64 = 5e-2;
+
 #[test]
 fn clip_grad_norm_matches_cpu_and_scales_only_when_needed() {
     let (m, c) = (metal(), cpu());
@@ -458,11 +536,21 @@ fn causal_attention_matches_cpu_across_t_heads_and_head_dim() {
                 let g = rand(&shape, s + 3, 1.0);
                 let dd = [up(&m, &q), up(&m, &k), up(&m, &v), up(&m, &g)];
                 let tag = format!("sdpa t{t} h{h} d{d}");
-                let want = ok(&tag, c.causal_sdpa_forward(&q, &k, &v));
-                let got = ok(&tag, m.causal_sdpa_forward(&dd[0], &dd[1], &dd[2]));
+                let want = ok(
+                    &tag,
+                    c.causal_sdpa_forward(&q, &k, &v, None).map(|(y, _)| y),
+                );
+                let got = ok(
+                    &tag,
+                    m.causal_sdpa_forward(&dd[0], &dd[1], &dd[2], None)
+                        .map(|(y, _)| y),
+                );
                 same_tensor(&tag, &got, &want, 2e-5, 1e-4);
-                let (wq, wk, wv) = ok(&tag, c.causal_sdpa_backward(&q, &k, &v, &g));
-                let (gq, gk, gv) = ok(&tag, m.causal_sdpa_backward(&dd[0], &dd[1], &dd[2], &dd[3]));
+                let (wq, wk, wv) = ok(&tag, c.causal_sdpa_backward_recompute(&q, &k, &v, &g, None));
+                let (gq, gk, gv) = ok(
+                    &tag,
+                    m.causal_sdpa_backward_recompute(&dd[0], &dd[1], &dd[2], &dd[3], None),
+                );
                 let tol = 2e-5 * (t as f32).sqrt().max(1.0);
                 same_tensor(&format!("{tag} dq"), &gq, &wq, tol, 1e-3);
                 same_tensor(&format!("{tag} dk"), &gk, &wk, tol, 1e-3);

@@ -66,6 +66,46 @@ fn exp_exact_wide(x: f32) -> f64 {
     y * f64::from_bits((((k >> 8) + 1023) as u64) << 52)
 }
 
+/// `ln 2` split so `e · LN2_HI` is exact for `|e| < 2^20`.
+const LN2_HI: f64 = f64::from_bits(0x3fe6_2e42_fee0_0000);
+const LN2_LO: f64 = f64::from_bits(0x3dea_39ef_3579_3c76);
+
+/// `max + ln(sum)` rounded once to `f32`: the log-sum-exp of a softmax row
+/// whose largest score is `max` and whose weights `e^(s - max)` add to
+/// `sum`. Plain `f64` arithmetic with no fused multiply-add and no libm
+/// call, so, like [`exp_exact`], the bits are the same on every platform.
+/// The `f64` logarithm is within `2^-50` relative; this is not claimed to
+/// be correctly rounded. `sum` not positive and finite, or `max` not
+/// finite, gives NaN.
+pub fn log_sum_exp_exact(max: f32, sum: f32) -> f32 {
+    if !(max.is_finite() && sum.is_finite() && sum > 0.0) {
+        return f32::NAN;
+    }
+    (f64::from(max) + ln_wide(f64::from(sum))) as f32
+}
+
+/// `ln x` for a positive normal `f64` (every positive finite `f32` is one):
+/// `x = m · 2^e` with `m` in `[√½, √2)`, then
+/// `ln m = 2·atanh(z)`, `z = (m - 1)/(m + 1)`, `|z| <= 0.1716`, by its odd
+/// series. Twelve terms leave out `z^25/25 < 2^-63` relative.
+fn ln_wide(x: f64) -> f64 {
+    let bits = x.to_bits();
+    let mut e = ((bits >> 52) & 0x7ff) as i64 - 1023;
+    let mut m = f64::from_bits((bits & 0x000f_ffff_ffff_ffff) | (1023u64 << 52));
+    if m > std::f64::consts::SQRT_2 {
+        m *= 0.5;
+        e += 1;
+    }
+    let z = (m - 1.0) / (m + 1.0);
+    let z2 = z * z;
+    let mut series = 0.0f64;
+    for k in (0..12).rev() {
+        series = series * z2 + 1.0 / (2 * k + 1) as f64;
+    }
+    let ef = e as f64;
+    ef * LN2_HI + (ef * LN2_LO + 2.0 * z * series)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +304,47 @@ mod tests {
         xs.extend(down - 3..down + 3);
         for b in xs {
             println!("p {b:08x} {:08x}", exp_exact(f32::from_bits(b)).to_bits());
+        }
+    }
+
+    #[test]
+    fn ln_wide_matches_the_platform_log_to_within_its_bound() {
+        assert_eq!(LN2_HI + LN2_LO, std::f64::consts::LN_2);
+        // Every 4099th positive finite f32, plus the edges.
+        let mut xs: Vec<u32> = (1u32..0x7f80_0000).step_by(4099).collect();
+        xs.extend([1, 0x0080_0000, 0x3f80_0000, 0x3fb5_04f3, 0x7f7f_ffff]);
+        for b in xs {
+            let x = f64::from(f32::from_bits(b));
+            let (got, want) = (ln_wide(x), x.ln());
+            let err = (got - want).abs() / want.abs().max(f64::MIN_POSITIVE);
+            // ln 1 = 0 exactly; elsewhere the relative bound holds.
+            assert!(
+                (want == 0.0 && got == 0.0) || err < 1.0 / (1u64 << 50) as f64,
+                "ln({x:e}) = {got:e}, platform {want:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_sum_exp_exact_is_max_plus_ln_sum_and_refuses_bad_input() {
+        for (max, sum) in [(0.0f32, 1.0f32), (3.5, 1.0), (-7.25, 17.0), (1e-3, 4096.0)] {
+            let want = (f64::from(max) + f64::from(sum).ln()) as f32;
+            let got = log_sum_exp_exact(max, sum);
+            assert!(
+                got.to_bits().abs_diff(want.to_bits()) <= 1,
+                "lse({max}, {sum}) = {got}, want {want}"
+            );
+        }
+        assert_eq!(log_sum_exp_exact(2.0, 1.0), 2.0);
+        for (max, sum) in [
+            (f32::NAN, 1.0),
+            (f32::INFINITY, 1.0),
+            (0.0, 0.0),
+            (0.0, -1.0),
+            (0.0, f32::INFINITY),
+            (0.0, f32::NAN),
+        ] {
+            assert!(log_sum_exp_exact(max, sum).is_nan(), "{max} {sum}");
         }
     }
 }

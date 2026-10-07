@@ -4,7 +4,7 @@
 //! Later crates own the CPU reference and the Metal kernels. There is no
 //! silent fallback from [`BackendId::Metal`] to [`BackendId::Cpu`].
 
-use crate::autocast::{round_f32_to_bf16, AutocastGuard, AutocastMode};
+use crate::autocast::{bf16_to_f32, f32_to_bf16, round_f32_to_bf16, AutocastGuard, AutocastMode};
 use crate::budget::Budget;
 use crate::dtype::DType;
 use crate::tensor::Tensor;
@@ -129,61 +129,6 @@ pub fn require_ns5(steps: u32) -> Result<(), OjasError> {
             detail: format!("Newton-Schulz steps {steps} != 5"),
         })
     }
-}
-
-/// Largest rank [`Backend::permute`] accepts.
-pub const MAX_PERMUTE_RANK: usize = 8;
-
-/// Output shape of permuting `shape` by `dims`, after checking that `dims`
-/// names every axis of `shape` exactly once.
-///
-/// Output axis `i` is input axis `dims[i]`, as in `torch.permute`. A rank
-/// above [`MAX_PERMUTE_RANK`], a length mismatch, an axis out of range, or a
-/// repeated axis is [`OjasError::Shape`]; nothing is clamped or reordered.
-pub fn permute_output_shape(
-    op: &'static str,
-    shape: &[usize],
-    dims: &[usize],
-) -> Result<Vec<usize>, OjasError> {
-    let refuse = |detail: String| OjasError::Shape { op, detail };
-    if shape.len() > MAX_PERMUTE_RANK {
-        return Err(refuse(format!(
-            "rank {} exceeds {MAX_PERMUTE_RANK}",
-            shape.len()
-        )));
-    }
-    if dims.len() != shape.len() {
-        return Err(refuse(format!(
-            "{} permutation axes for a rank-{} tensor",
-            dims.len(),
-            shape.len()
-        )));
-    }
-    let mut seen = [false; MAX_PERMUTE_RANK];
-    for &axis in dims {
-        if axis >= shape.len() {
-            return Err(refuse(format!(
-                "axis {axis} out of range for rank {}",
-                shape.len()
-            )));
-        }
-        if seen[axis] {
-            return Err(refuse(format!("axis {axis} repeated in {dims:?}")));
-        }
-        seen[axis] = true;
-    }
-    Ok(dims.iter().map(|&axis| shape[axis]).collect())
-}
-
-/// The permutation that undoes `dims`: permuting by `dims` and then by the
-/// result is the identity. The gradient of a permute is the upstream gradient
-/// permuted by this. `dims` must already have passed [`permute_output_shape`].
-pub fn inverse_permutation(dims: &[usize]) -> Vec<usize> {
-    let mut inverse = vec![0; dims.len()];
-    for (out_axis, &in_axis) in dims.iter().enumerate() {
-        inverse[in_axis] = out_axis;
-    }
-    inverse
 }
 
 /// f64 binary exponentiation. A huge exponent underflows to 0 for a base in
@@ -322,12 +267,31 @@ pub enum OptimizerKind {
     MuonNs5,
 }
 
+/// Precision of the Newton-Schulz iterate in [`Backend::muon_ns5_step`].
+///
+/// The momentum buffer, the parameter and its update stay f32 under both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Ns5Precision {
+    /// The iterate and every intermediate are f32. This is nanolab with
+    /// `X = G.float()` in place of `X = G.bfloat16()`.
+    #[default]
+    F32,
+    /// Stock nanolab and PyTorch Muon (`X = G.bfloat16()`, optim.py:46), as
+    /// torch's eager bf16 ops run it: every intermediate is rounded to bf16
+    /// (round to nearest even), and each GEMM takes bf16 operands and
+    /// accumulates in f32 before its output is rounded. Per step:
+    /// `A = r(X Xᵀ)`, `B = r(r(b A) + r(c r(A A)))`,
+    /// `X = r(r(a X) + r(B X))`. Before the loop `X = r(G)`, the Frobenius
+    /// norm is rounded, `+ eps` is a bf16 add, and the division is rounded.
+    /// The result is widened back to f32 for the update.
+    Bf16,
+}
+
 /// Muon NS5 as [`Backend::muon_ns5_step`] runs it.
 ///
 /// Nesterov momentum (`buf = mom * buf + g`, update = `g + mom * buf` when
-/// Nesterov is on). Orthogonalize with five Newton-Schulz steps in f32.
-/// nanolab casts that iterate to bf16; ojas does not, on any backend. Then
-/// scale by `max(1, rows/cols)^0.5`. Decoupled decay is
+/// Nesterov is on). Orthogonalize with five Newton-Schulz steps at `ns5`
+/// precision. Then scale by `max(1, rows/cols)^0.5`. Decoupled decay is
 /// `p *= 1 - lr * weight_decay` before the update is added.
 #[derive(Clone, Copy, Debug)]
 pub struct MuonNs5Config {
@@ -335,17 +299,21 @@ pub struct MuonNs5Config {
     pub momentum: f64,
     pub weight_decay: f64,
     pub nesterov: bool,
+    pub ns5: Ns5Precision,
 }
 
 impl MuonNs5Config {
     /// `lr` 0.025, momentum 0.99, weight decay 0.1, Nesterov on.
     /// Those are the nanolab defaults (`matrix_lr`, `muon_momentum`, `weight_decay`).
+    /// Newton-Schulz is [`Ns5Precision::F32`]; stock nanolab's is
+    /// [`Ns5Precision::Bf16`].
     pub fn nanolab_default() -> Self {
         Self {
             lr: 0.025,
             momentum: 0.99,
             weight_decay: 0.1,
             nesterov: true,
+            ns5: Ns5Precision::F32,
         }
     }
 }
@@ -365,6 +333,157 @@ pub struct ValueResidualGrad {
     pub value: Tensor,
     pub value0: Tensor,
     pub lambda: Tensor,
+}
+
+/// Tokens between the states [`Backend::chunked_gdn_forward`] saves. The
+/// backward recomputes each chunk's states from its checkpoint, as tessl's
+/// `gdn_train` kernels do (`GDN_TRAIN_CKPT`).
+pub const GDN_CHECKPOINT_TOKENS: usize = 64;
+
+/// The epsilon of the gated delta rule's in-kernel `l2norm` on `q` and `k`:
+/// `x * rsqrt(|x|^2 + eps)` (transformers `modeling_qwen3_5.py`).
+pub const GDN_L2NORM_EPS: f32 = 1e-6;
+
+/// The key head dim tessl's Metal `gdn_train` kernels are compiled for.
+pub const METAL_GDN_KEY_DIM: usize = 128;
+
+/// Metal's `gdn_train` kernels split the value dim into blocks of this many
+/// columns, so the value dim must be a multiple of it.
+pub const METAL_GDN_VALUE_BLOCK: usize = 16;
+
+/// Operands of the gated delta rule (Gated DeltaNet), at transformers'
+/// training seam `torch_chunk_gated_delta_rule(q, k, v, g, beta,
+/// initial_state, use_qk_l2norm_in_kernel=True)`, with the gates already
+/// computed.
+///
+/// `q`, `k` are `[B, T, H, Dk]`, `v` is `[B, T, H, Dv]`, `g` (the log decay)
+/// and `beta` are `[B, T, H]`, and `initial_state` is `[B, H, Dk, Dv]`
+/// (zeros when `None`). All `F32`. There is no head grouping: value heads
+/// equal key heads, and a grouped model repeats its key heads before the
+/// call, as transformers does.
+#[derive(Clone, Copy, Debug)]
+pub struct GdnInputs<'a> {
+    pub q: &'a Tensor,
+    pub k: &'a Tensor,
+    pub v: &'a Tensor,
+    pub g: &'a Tensor,
+    pub beta: &'a Tensor,
+    pub initial_state: Option<&'a Tensor>,
+}
+
+/// What [`Backend::chunked_gdn_forward`] produces.
+#[derive(Clone, Debug)]
+pub struct GdnForward {
+    /// `[B, T, H, Dv]`.
+    pub output: Tensor,
+    /// The state after the last token, `[B, H, Dk, Dv]`.
+    pub final_state: Tensor,
+    /// `[B, H, ceil(T / GDN_CHECKPOINT_TOKENS), Dk, Dv]`: checkpoint `c` is
+    /// the state entering token `64 c`, before that token's decay. The
+    /// backward consumes it.
+    pub checkpoints: Tensor,
+}
+
+/// Gradients of the gated delta rule, each shaped like its input.
+/// `initial_state` is `Some` exactly when the forward had one.
+#[derive(Clone, Debug)]
+pub struct GdnGrad {
+    pub q: Tensor,
+    pub k: Tensor,
+    pub v: Tensor,
+    pub g: Tensor,
+    pub beta: Tensor,
+    pub initial_state: Option<Tensor>,
+}
+
+/// Gradients of [`Backend::gated_rms_norm_forward`], each shaped like its
+/// input.
+#[derive(Clone, Debug)]
+pub struct GatedRmsGrad {
+    pub input: Tensor,
+    pub gate: Tensor,
+    pub weight: Tensor,
+}
+
+/// The refusal of a Qwen3.5 hybrid-layer op (causal conv1d, gated RMSNorm,
+/// partial RoPE) that backend `id` does not implement. There is no host
+/// fallback.
+fn unsupported_hybrid(id: BackendId, op: &'static str) -> OjasError {
+    OjasError::Unsupported {
+        op,
+        detail: format!("{id:?} backend does not implement {op}"),
+    }
+}
+
+/// Metal runs the gated delta rule on tessl's `gdn_train` kernels, which are
+/// compiled for a key dim of [`METAL_GDN_KEY_DIM`] and a value dim that is a
+/// multiple of [`METAL_GDN_VALUE_BLOCK`]. Any other shape on Metal is
+/// [`OjasError::Unsupported`]; other backends take any positive dims. This
+/// does not pad.
+pub fn refuse_unsupported_metal_gdn(
+    backend: BackendId,
+    key_dim: usize,
+    value_dim: usize,
+) -> Result<(), OjasError> {
+    if backend != BackendId::Metal {
+        return Ok(());
+    }
+    if key_dim != METAL_GDN_KEY_DIM {
+        return Err(OjasError::Unsupported {
+            op: "chunked_gdn",
+            detail: format!(
+                "Metal gdn_train is compiled for key dim {METAL_GDN_KEY_DIM}, got {key_dim}"
+            ),
+        });
+    }
+    if !value_dim.is_multiple_of(METAL_GDN_VALUE_BLOCK) {
+        return Err(OjasError::Unsupported {
+            op: "chunked_gdn",
+            detail: format!(
+                "Metal gdn_train needs a value dim that is a multiple of \
+                 {METAL_GDN_VALUE_BLOCK}, got {value_dim}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// The host defaults of the dtype casts do not download: a device tensor is
+/// [`OjasError::Unsupported`], and the device backend overrides the cast.
+fn refuse_device_cast(op: &'static str, tensor: &Tensor) -> Result<(), OjasError> {
+    match tensor.device() {
+        None => Ok(()),
+        Some(found) => Err(OjasError::Unsupported {
+            op,
+            detail: format!(
+                "{found:?} tensor is not downloaded to cast it; there is no CPU fallback"
+            ),
+        }),
+    }
+}
+
+/// Refuse a `Bf16` operand on a backend whose [`Backend::bf16_operands`] is
+/// `false`, with [`OjasError::Unsupported`] naming `op` and `backend`.
+///
+/// Such a backend calls this right after the op's shape validator, which
+/// accepts `Bf16` for the matmul-class operands, and before it reads,
+/// charges or writes anything, so a bf16 operand is never read as `f32`
+/// bytes.
+pub fn refuse_bf16_operands(
+    op: &'static str,
+    backend: BackendId,
+    operands: &[&Tensor],
+) -> Result<(), OjasError> {
+    match operands.iter().position(|t| t.dtype() == DType::Bf16) {
+        None => Ok(()),
+        Some(slot) => Err(OjasError::Unsupported {
+            op,
+            detail: format!(
+                "{backend:?} backend does not take bf16 operands (operand {slot}); \
+                 widen it with to_f32 first"
+            ),
+        }),
+    }
 }
 
 /// Nanolab-default training ops.
@@ -450,9 +569,10 @@ pub trait Backend {
     ///
     /// This is how `[B, T, H, D]` (RoPE, the per-head gate) reaches
     /// `[B, H, T, D]` (causal attention) and back. The gradient of a permute
-    /// is the upstream gradient permuted by [`inverse_permutation`], so there
-    /// is no separate backward method. Implementations validate with
-    /// [`permute_output_shape`], keep the result on this backend, and move
+    /// is the upstream gradient permuted by [`crate::inverse_permutation`], so
+    /// there is no separate backward method. Implementations validate with
+    /// [`crate::permute_dims`] before anything else, keep the result on this
+    /// backend, and move
     /// values without arithmetic, so a finite output's bits equal the input's
     /// bits. A non-finite input is [`OjasError::NonFinite`], reported the way
     /// this backend reports it for every other op; it is not passed through.
@@ -540,20 +660,54 @@ pub trait Backend {
 
     /// Causal SDPA. `q` is `[B, H, T, D]`; `k` and `v` are `[B, Hkv, T, D]`.
     /// `H` is a positive multiple of `Hkv`. Query head `h` reads KV head
-    /// `h / (H / Hkv)`. `T` is the same on every operand. The output matches
-    /// `q`. A device may refuse `D` above its own limit.
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError>;
+    /// `h / (H / Hkv)`. `T` is the same on every operand. With `window`
+    /// `Some(W)` (`W >= 1`) query `t` attends to keys `t - W < j <= t`;
+    /// with `None`, to `0..=t`. A window of at least `T` is `None`.
+    ///
+    /// Returns the output, shaped like `q`, and each query row's
+    /// log-sum-exp `ln sum_j e^(s_tj)` over the keys it attends to, `[B, H,
+    /// T]`, which [`Self::causal_sdpa_backward`] consumes. A device may
+    /// refuse `D` above its own limit.
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError>;
 
-    /// `(grad_q, grad_k, grad_v)`, shaped like `q`, `k` and `v`.
-    /// `grad_k` and `grad_v` sum the query heads of each KV head in
-    /// increasing query-head order.
+    /// `(grad_q, grad_k, grad_v)`, shaped like `q`, `k` and `v`, from the
+    /// forward's `output` and `lse` for the same operands and window: the
+    /// probabilities are `e^(s - lse)` and each row's `Dr = dO · O`, so no
+    /// row maximum or sum is formed again. `grad_k` and `grad_v` sum the
+    /// query heads of each KV head in increasing query-head order.
+    #[allow(clippy::too_many_arguments)]
     fn causal_sdpa_backward(
         &self,
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
         grad_output: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError>;
+
+    /// [`Self::causal_sdpa_backward`] for a caller that did not keep the
+    /// forward's output and log-sum-exp: the forward runs again first. The
+    /// gradient's shape is checked before that forward runs.
+    fn causal_sdpa_backward_recompute(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        grad_output: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        crate::shapes::causal_sdpa_grad_shape(q, grad_output)?;
+        let (output, lse) = self.causal_sdpa_forward(q, k, v, window)?;
+        self.causal_sdpa_backward(q, k, v, &output, &lse, grad_output, window)
+    }
 
     fn per_head_sigmoid_gate_forward(
         &self,
@@ -617,6 +771,160 @@ pub trait Backend {
         grad_output: &Tensor,
     ) -> Result<ValueResidualGrad, OjasError>;
 
+    /// The gated delta rule (Gated DeltaNet's mixer), published form
+    /// (`arXiv:2412.06464` eq. 8, transformers' recurrence). Per `(b, h)`,
+    /// with the state `S` `[Dk, Dv]` starting at `initial_state` or zeros:
+    ///
+    /// ```text
+    /// q^ = l2norm(q_t) / sqrt(Dk),  k^ = l2norm(k_t)   l2norm(x) = x / sqrt(|x|^2 + 1e-6)
+    /// S^ = exp(g_t) S
+    /// S  = S^ + k^ (beta_t (v_t - S^^T k^))^T
+    /// o_t = S^T q^
+    /// ```
+    ///
+    /// The correction reads the decayed state. Shapes are [`GdnInputs`];
+    /// [`crate::chunked_gdn_forward_dims`] validates them. The forward also
+    /// returns the state every [`GDN_CHECKPOINT_TOKENS`] tokens, which
+    /// [`Self::chunked_gdn_backward`] consumes in place of the per-token
+    /// states. A device may refuse dims its kernels are not compiled for
+    /// ([`refuse_unsupported_metal_gdn`]).
+    ///
+    /// The default refuses with [`OjasError::Unsupported`]. There is no host
+    /// fallback.
+    fn chunked_gdn_forward(&self, inputs: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
+        let _ = inputs;
+        Err(OjasError::Unsupported {
+            op: "chunked_gdn_forward",
+            detail: format!(
+                "{:?} backend does not implement the gated delta rule",
+                self.id()
+            ),
+        })
+    }
+
+    /// Gradients of `sum(grad_output * o) + sum(grad_final_state * S_T)`
+    /// with respect to every input of [`Self::chunked_gdn_forward`], given
+    /// the same inputs and the `checkpoints` that forward returned.
+    /// `grad_final_state` is zeros when `None`.
+    fn chunked_gdn_backward(
+        &self,
+        inputs: GdnInputs<'_>,
+        checkpoints: &Tensor,
+        grad_output: &Tensor,
+        grad_final_state: Option<&Tensor>,
+    ) -> Result<GdnGrad, OjasError> {
+        let _ = (inputs, checkpoints, grad_output, grad_final_state);
+        Err(OjasError::Unsupported {
+            op: "chunked_gdn_backward",
+            detail: format!(
+                "{:?} backend does not implement the gated delta rule",
+                self.id()
+            ),
+        })
+    }
+
+    /// Depthwise causal convolution over time, then SiLU: Qwen3.5's
+    /// `conv1d` in front of the gated delta rule, from a zero state.
+    ///
+    /// ```text
+    /// y[b, t, c] = silu(sum_{j < K} weight[c, j] * x[b, t + j - (K - 1), c])
+    /// ```
+    ///
+    /// with `x` zero before `t = 0`. `input` is `[B, T, C]`, `weight`
+    /// `[C, K]` (transformers' `conv1d.weight.squeeze(1)`); the output is
+    /// shaped like `input`. [`crate::causal_conv1d_silu_forward_dims`]
+    /// validates the shapes. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn causal_conv1d_silu_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, weight);
+        Err(unsupported_hybrid(self.id(), "causal_conv1d_silu_forward"))
+    }
+
+    /// `(grad_input, grad_weight)` of [`Self::causal_conv1d_silu_forward`]
+    /// for `grad_output` shaped like `input`.
+    fn causal_conv1d_silu_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let _ = (input, weight, grad_output);
+        Err(unsupported_hybrid(self.id(), "causal_conv1d_silu_backward"))
+    }
+
+    /// Gated RMSNorm (`Qwen3_5RMSNormGated`), elementwise in the gate:
+    ///
+    /// ```text
+    /// out = x / sqrt(mean(x^2) + eps) * weight * silu(gate)
+    /// ```
+    ///
+    /// over the last axis of `input`; `gate` is shaped like `input` and
+    /// `weight` is `[dim]` (a plain scale, not `1 + w`). A head is a row.
+    /// [`crate::gated_rms_norm_forward_dims`] validates the shapes. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn gated_rms_norm_forward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, gate, weight, eps);
+        Err(unsupported_hybrid(self.id(), "gated_rms_norm_forward"))
+    }
+
+    /// Gradients of [`Self::gated_rms_norm_forward`] for `grad_output`
+    /// shaped like `input`.
+    fn gated_rms_norm_backward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<GatedRmsGrad, OjasError> {
+        let _ = (input, gate, weight, grad_output, eps);
+        Err(unsupported_hybrid(self.id(), "gated_rms_norm_backward"))
+    }
+
+    /// Partial half-split RoPE: the leading `R` values of each head rotate
+    /// as [`Self::rope_half_split_forward`] rotates a whole head (pairs `p`,
+    /// `p + R / 2`), and the other `D - R` pass through unchanged. `x` is
+    /// `[B, T, H, D]`; `cos` and `sin` are `[T, R]` with `R` even and at
+    /// most `D`. Qwen3.5 rotates 64 of 256.
+    ///
+    /// Qwen3.5's multimodal RoPE assigns each frequency to a time, height
+    /// or width position stream; on text-only input every stream is the
+    /// token position, so it collapses to this op with the tables
+    /// [`crate::mrope_text_tables`] builds.
+    /// [`crate::rope_partial_forward_dims`] validates the shapes. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn rope_partial_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (x, cos, sin);
+        Err(unsupported_hybrid(self.id(), "rope_partial_forward"))
+    }
+
+    /// Gradient of [`Self::rope_partial_forward`]: the rotation by `-angle`
+    /// on the leading `R` values, the rest passed through.
+    fn rope_partial_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (grad_output, cos, sin);
+        Err(unsupported_hybrid(self.id(), "rope_partial_backward"))
+    }
+
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError>;
 
     fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError>;
@@ -677,9 +985,11 @@ pub trait Backend {
         config: AdamWConfig,
     ) -> Result<(), OjasError>;
 
-    /// One matrix. Every backend runs Newton-Schulz in f32 (nanolab runs it in
-    /// bf16; see `docs/op-coverage.md`). `step` uses [`next_step`]. Call
-    /// [`require_ns5`] if a caller can pass a step count.
+    /// One matrix. Newton-Schulz runs at `config.ns5` ([`Ns5Precision`]). A
+    /// backend without a [`Ns5Precision::Bf16`] path refuses it with
+    /// [`OjasError::Unsupported`] before it charges or writes anything. `step`
+    /// uses [`next_step`]. Call [`require_ns5`] if a caller can pass a step
+    /// count.
     fn muon_ns5_step(
         &self,
         param: &mut Tensor,
@@ -726,9 +1036,12 @@ pub trait Backend {
     /// sum is [`OjasError::NonFinite`], reported as [`Backend::sync`]
     /// describes: a backend that reports synchronously leaves `acc`
     /// unchanged; on a deferring backend, `acc` must be treated as invalid
-    /// once `sync` reports the fault. The default composes
+    /// once `sync` reports the fault. Shapes are checked by
+    /// [`crate::accumulate_grad_dims`] first, so a refusal names
+    /// `accumulate_grad` on every backend. The default then composes
     /// [`Backend::residual_add_forward`]; a backend may add in place.
     fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
+        crate::accumulate_grad_dims(acc, grad)?;
         *acc = self.residual_add_forward(acc, grad)?;
         Ok(())
     }
@@ -822,14 +1135,7 @@ pub trait Backend {
                 got: tensor.dtype(),
             });
         }
-        if let Some(found) = tensor.device() {
-            return Err(OjasError::Unsupported {
-                op: OP,
-                detail: format!(
-                    "{found:?} tensor is not downloaded to cast to bf16; there is no CPU fallback"
-                ),
-            });
-        }
+        refuse_device_cast(OP, tensor)?;
         let src = tensor.f32_slice()?;
         let mut out = Tensor::zeros(tensor.shape(), DType::F32, self.budget())?;
         {
@@ -837,6 +1143,85 @@ pub trait Backend {
             for (dst, src) in dst.iter_mut().zip(src.iter()) {
                 *dst = round_f32_to_bf16(*src);
             }
+        }
+        Ok(out)
+    }
+
+    /// Whether the matmul-class ops take `Bf16` storage as operands.
+    ///
+    /// The matmul-class ops are [`Self::linear_forward`],
+    /// [`Self::linear_backward`], [`Self::causal_sdpa_forward`] and
+    /// [`Self::causal_sdpa_backward`] (except its `lse`, which stays `F32`).
+    /// Their validators accept each operand as `F32` or `Bf16`, mixed freely.
+    /// A bf16 operand is widened exactly to `f32` (`bits << 16`), every
+    /// product and sum accumulates in `f32`, and every output is `F32`. So an
+    /// operand whose `f32` values are bf16-exact gives the same bits whether
+    /// it arrives as `F32` or as `Bf16`, under the same [`Self::numerics`].
+    /// Every other op refuses `Bf16` with [`OjasError::Dtype`].
+    ///
+    /// The default is `false`. Such a backend refuses a `Bf16` operand with
+    /// [`OjasError::Unsupported`] ([`refuse_bf16_operands`]) before it
+    /// charges or writes anything, and [`crate::Autocast`] keeps rounding in
+    /// `f32` storage for it.
+    fn bf16_operands(&self) -> bool {
+        false
+    }
+
+    /// A new `Bf16` tensor holding `tensor`'s `F32` values rounded to nearest
+    /// even ([`f32_to_bf16`]), on the same backend.
+    ///
+    /// A `Bf16` input is returned as a shared clone. Any other dtype is
+    /// [`OjasError::Dtype`]. A NaN stays a NaN and an infinity stays an
+    /// infinity; a finite value above the bf16 range rounds to an infinity,
+    /// which the matmul-class ops then refuse as [`OjasError::NonFinite`].
+    /// The default converts a contiguous host tensor and refuses a device
+    /// tensor with [`OjasError::Unsupported`]; it does not download.
+    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_bf16";
+        match tensor.dtype() {
+            DType::Bf16 => return Ok(tensor.clone()),
+            DType::F32 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::F32,
+                    got,
+                })
+            }
+        }
+        refuse_device_cast(OP, tensor)?;
+        let src = tensor.f32_slice()?;
+        let mut out = Tensor::zeros(tensor.shape(), DType::Bf16, self.budget())?;
+        for (dst, src) in out.bf16_slice_mut()?.iter_mut().zip(src) {
+            *dst = f32_to_bf16(*src);
+        }
+        Ok(out)
+    }
+
+    /// A new `F32` tensor holding `tensor`'s `Bf16` values widened exactly
+    /// ([`bf16_to_f32`]), on the same backend.
+    ///
+    /// An `F32` input is returned as a shared clone. Any other dtype is
+    /// [`OjasError::Dtype`]. The default converts a contiguous host tensor and
+    /// refuses a device tensor with [`OjasError::Unsupported`].
+    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_f32";
+        match tensor.dtype() {
+            DType::F32 => return Ok(tensor.clone()),
+            DType::Bf16 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::Bf16,
+                    got,
+                })
+            }
+        }
+        refuse_device_cast(OP, tensor)?;
+        let src = tensor.bf16_slice()?;
+        let mut out = Tensor::zeros(tensor.shape(), DType::F32, self.budget())?;
+        for (dst, src) in out.f32_slice_mut()?.iter_mut().zip(src) {
+            *dst = bf16_to_f32(*src);
         }
         Ok(out)
     }
@@ -970,17 +1355,21 @@ macro_rules! forward_backend {
             q: &Tensor,
             k: &Tensor,
             v: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).causal_sdpa_forward(q, k, v)
+            window: Option<usize>,
+        ) -> Result<(Tensor, Tensor), OjasError> {
+            (**self).causal_sdpa_forward(q, k, v, window)
         }
         fn causal_sdpa_backward(
             &self,
             q: &Tensor,
             k: &Tensor,
             v: &Tensor,
+            output: &Tensor,
+            lse: &Tensor,
             grad_output: &Tensor,
+            window: Option<usize>,
         ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
-            (**self).causal_sdpa_backward(q, k, v, grad_output)
+            (**self).causal_sdpa_backward(q, k, v, output, lse, grad_output, window)
         }
         fn per_head_sigmoid_gate_forward(
             &self,
@@ -1044,6 +1433,68 @@ macro_rules! forward_backend {
             grad_output: &Tensor,
         ) -> Result<ValueResidualGrad, OjasError> {
             (**self).value_residual_blend_backward(value, value0, lambda, grad_output)
+        }
+        fn chunked_gdn_forward(&self, inputs: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
+            (**self).chunked_gdn_forward(inputs)
+        }
+        fn chunked_gdn_backward(
+            &self,
+            inputs: GdnInputs<'_>,
+            checkpoints: &Tensor,
+            grad_output: &Tensor,
+            grad_final_state: Option<&Tensor>,
+        ) -> Result<GdnGrad, OjasError> {
+            (**self).chunked_gdn_backward(inputs, checkpoints, grad_output, grad_final_state)
+        }
+        fn causal_conv1d_silu_forward(
+            &self,
+            input: &Tensor,
+            weight: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            (**self).causal_conv1d_silu_forward(input, weight)
+        }
+        fn causal_conv1d_silu_backward(
+            &self,
+            input: &Tensor,
+            weight: &Tensor,
+            grad_output: &Tensor,
+        ) -> Result<(Tensor, Tensor), OjasError> {
+            (**self).causal_conv1d_silu_backward(input, weight, grad_output)
+        }
+        fn gated_rms_norm_forward(
+            &self,
+            input: &Tensor,
+            gate: &Tensor,
+            weight: &Tensor,
+            eps: f32,
+        ) -> Result<Tensor, OjasError> {
+            (**self).gated_rms_norm_forward(input, gate, weight, eps)
+        }
+        fn gated_rms_norm_backward(
+            &self,
+            input: &Tensor,
+            gate: &Tensor,
+            weight: &Tensor,
+            grad_output: &Tensor,
+            eps: f32,
+        ) -> Result<GatedRmsGrad, OjasError> {
+            (**self).gated_rms_norm_backward(input, gate, weight, grad_output, eps)
+        }
+        fn rope_partial_forward(
+            &self,
+            x: &Tensor,
+            cos: &Tensor,
+            sin: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            (**self).rope_partial_forward(x, cos, sin)
+        }
+        fn rope_partial_backward(
+            &self,
+            grad_output: &Tensor,
+            cos: &Tensor,
+            sin: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            (**self).rope_partial_backward(grad_output, cos, sin)
         }
         fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
             (**self).silu_forward(input)
@@ -1164,6 +1615,15 @@ macro_rules! forward_backend {
         fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
             (**self).cast_bf16(tensor)
         }
+        fn bf16_operands(&self) -> bool {
+            (**self).bf16_operands()
+        }
+        fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+            (**self).to_bf16(tensor)
+        }
+        fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+            (**self).to_f32(tensor)
+        }
         fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
             (**self).autocast_region(mode)
         }
@@ -1207,7 +1667,7 @@ pub struct LinearCe {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1363,7 +1823,8 @@ mod tests {
             _: &Tensor,
             _: &Tensor,
             _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
+            _: Option<usize>,
+        ) -> Result<(Tensor, Tensor), OjasError> {
             Err(none("causal_sdpa_forward"))
         }
         fn causal_sdpa_backward(
@@ -1372,6 +1833,9 @@ mod tests {
             _: &Tensor,
             _: &Tensor,
             _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: Option<usize>,
         ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
             Err(none("causal_sdpa_backward"))
         }
@@ -1551,56 +2015,6 @@ mod tests {
     }
 
     #[test]
-    fn permute_shape_accepts_exactly_the_permutations() {
-        // [B, T, H, D] -> [B, H, T, D], the RoPE-to-attention move.
-        assert_eq!(
-            permute_output_shape("t", &[2, 5, 3, 4], &[0, 2, 1, 3]).unwrap(),
-            vec![2, 3, 5, 4]
-        );
-        assert_eq!(
-            permute_output_shape("t", &[], &[]).unwrap(),
-            Vec::<usize>::new()
-        );
-        assert_eq!(permute_output_shape("t", &[7], &[0]).unwrap(), vec![7]);
-        let refused: [(&[usize], &[usize]); 5] = [
-            (&[2, 3], &[0]),                         // too few axes
-            (&[2, 3], &[0, 1, 2]),                   // too many axes
-            (&[2, 3], &[0, 2]),                      // axis out of range
-            (&[2, 3], &[1, 1]),                      // repeated axis
-            (&[1; 9], &[0, 1, 2, 3, 4, 5, 6, 7, 8]), // rank above the cap
-        ];
-        for (shape, dims) in refused {
-            match permute_output_shape("t", shape, dims) {
-                Err(OjasError::Shape { op, .. }) => assert_eq!(op, "t"),
-                other => panic!("{shape:?} by {dims:?}: expected Shape, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn inverse_permutation_round_trips_every_rank_four_order() {
-        let shape = [2usize, 3, 5, 7];
-        let mut count = 0;
-        for a in 0..4 {
-            for b in 0..4 {
-                for c in 0..4 {
-                    for d in 0..4 {
-                        let dims = [a, b, c, d];
-                        let Ok(out) = permute_output_shape("t", &shape, &dims) else {
-                            continue;
-                        };
-                        count += 1;
-                        let inverse = inverse_permutation(&dims);
-                        let back = permute_output_shape("t", &out, &inverse).unwrap();
-                        assert_eq!(back, shape, "{dims:?} then {inverse:?}");
-                    }
-                }
-            }
-        }
-        assert_eq!(count, 24);
-    }
-
-    #[test]
     fn pow_u64_matches_repeated_multiplication_and_underflows() {
         // Squaring and repeated multiplication round differently, so compare
         // with a relative tolerance of 64 ulps rather than bits.
@@ -1686,9 +2100,9 @@ mod tests {
 
     /// Overrides every method, required and defaulted, with a distinct
     /// marker, so a wrapper that runs a trait default instead of forwarding
-    /// is caught.
-    struct Marker {
-        budget: Budget,
+    /// is caught. `autocast.rs` reuses it for [`crate::Autocast`].
+    pub(crate) struct Marker {
+        pub(crate) budget: Budget,
     }
 
     fn mark(op: &str) -> OjasError {
@@ -1794,7 +2208,8 @@ mod tests {
             _: &Tensor,
             _: &Tensor,
             _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
+            _: Option<usize>,
+        ) -> Result<(Tensor, Tensor), OjasError> {
             Err(mark("causal_sdpa_forward"))
         }
         fn causal_sdpa_backward(
@@ -1803,6 +2218,9 @@ mod tests {
             _: &Tensor,
             _: &Tensor,
             _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: Option<usize>,
         ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
             Err(mark("causal_sdpa_backward"))
         }
@@ -1861,6 +2279,64 @@ mod tests {
             _: &Tensor,
         ) -> Result<ValueResidualGrad, OjasError> {
             Err(mark("value_residual_blend_backward"))
+        }
+        fn chunked_gdn_forward(&self, _: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
+            Err(mark("chunked_gdn_forward"))
+        }
+        fn chunked_gdn_backward(
+            &self,
+            _: GdnInputs<'_>,
+            _: &Tensor,
+            _: &Tensor,
+            _: Option<&Tensor>,
+        ) -> Result<GdnGrad, OjasError> {
+            Err(mark("chunked_gdn_backward"))
+        }
+        fn causal_conv1d_silu_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(mark("causal_conv1d_silu_forward"))
+        }
+        fn causal_conv1d_silu_backward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<(Tensor, Tensor), OjasError> {
+            Err(mark("causal_conv1d_silu_backward"))
+        }
+        fn gated_rms_norm_forward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: f32,
+        ) -> Result<Tensor, OjasError> {
+            Err(mark("gated_rms_norm_forward"))
+        }
+        fn gated_rms_norm_backward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: f32,
+        ) -> Result<GatedRmsGrad, OjasError> {
+            Err(mark("gated_rms_norm_backward"))
+        }
+        fn rope_partial_forward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            Err(mark("rope_partial_forward"))
+        }
+        fn rope_partial_backward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            Err(mark("rope_partial_backward"))
         }
         fn silu_forward(&self, _: &Tensor) -> Result<Tensor, OjasError> {
             Err(mark("silu_forward"))
@@ -1978,6 +2454,17 @@ mod tests {
     /// statically through its own impl) and require each to reach `inner`.
     /// Returns the number of methods checked.
     fn every_call_reaches<B: Backend + ?Sized>(backend: &B, inner: &Marker) -> usize {
+        every_call_reaches_except(backend, inner, &[])
+    }
+
+    /// [`every_call_reaches`], except that the methods named in `owned`
+    /// are ones the wrapper answers itself by design; each must be a method
+    /// the harness calls, and must not reach `inner`.
+    pub(crate) fn every_call_reaches_except<B: Backend + ?Sized>(
+        backend: &B,
+        inner: &Marker,
+        owned: &[&str],
+    ) -> usize {
         let budget = &inner.budget;
         let t = Tensor::from_f32(&[1.0], &[1], budget).unwrap();
         let mut m = t.clone();
@@ -1986,16 +2473,22 @@ mod tests {
         let adamw = AdamWConfig::nanolab(1e-3, 0.0);
         let muon = MuonNs5Config::nanolab_default();
         let chunk = CeChunk { rows: 1, cols: 1 };
+        let gdn = GdnInputs {
+            q: &t,
+            k: &t,
+            v: &t,
+            g: &t,
+            beta: &t,
+            initial_state: None,
+        };
+        /// The marker the call reached, or `"-"` when it did not.
         fn op<T: std::fmt::Debug>(result: Result<T, OjasError>) -> String {
             match result {
                 Err(OjasError::Backend {
                     id: BackendId::Wgpu,
                     detail,
-                }) => detail
-                    .strip_prefix("marker:")
-                    .unwrap_or(&detail)
-                    .to_string(),
-                other => panic!("call did not reach the inner backend: {other:?}"),
+                }) if detail.starts_with("marker:") => detail["marker:".len()..].to_string(),
+                _ => "-".to_string(),
             }
         }
         let reached = [
@@ -2012,8 +2505,8 @@ mod tests {
             op(backend.rope_half_split_backward(&t, &t, &t)),
             op(backend.rms_qk_norm_forward(&t, &t, &t, &t, 1e-6)),
             op(backend.rms_qk_norm_backward(&t, &t, &t, &t, &t, &t, 1e-6)),
-            op(backend.causal_sdpa_forward(&t, &t, &t)),
-            op(backend.causal_sdpa_backward(&t, &t, &t, &t)),
+            op(backend.causal_sdpa_forward(&t, &t, &t, None)),
+            op(backend.causal_sdpa_backward(&t, &t, &t, &t, &t, &t, None)),
             op(backend.per_head_sigmoid_gate_forward(&t, &t, &t, &t)),
             op(backend.per_head_sigmoid_gate_backward(&t, &t, &t, &t, &t)),
             op(backend
@@ -2022,6 +2515,14 @@ mod tests {
             op(backend.per_head_sigmoid_gate_backward_saved(&t, &t, &t, &t, &t, &t)),
             op(backend.value_residual_blend_forward(&t, &t, &t)),
             op(backend.value_residual_blend_backward(&t, &t, &t, &t)),
+            op(backend.chunked_gdn_forward(gdn).map(drop)),
+            op(backend.chunked_gdn_backward(gdn, &t, &t, None).map(drop)),
+            op(backend.causal_conv1d_silu_forward(&t, &t)),
+            op(backend.causal_conv1d_silu_backward(&t, &t, &t)),
+            op(backend.gated_rms_norm_forward(&t, &t, &t, 1e-6)),
+            op(backend.gated_rms_norm_backward(&t, &t, &t, &t, 1e-6)),
+            op(backend.rope_partial_forward(&t, &t, &t)),
+            op(backend.rope_partial_backward(&t, &t, &t)),
             op(backend.silu_forward(&t)),
             op(backend.silu_backward(&t, &t)),
             op(backend.mul_forward(&t, &t)),
@@ -2064,6 +2565,14 @@ mod tests {
             "per_head_sigmoid_gate_backward_saved",
             "value_residual_blend_forward",
             "value_residual_blend_backward",
+            "chunked_gdn_forward",
+            "chunked_gdn_backward",
+            "causal_conv1d_silu_forward",
+            "causal_conv1d_silu_backward",
+            "gated_rms_norm_forward",
+            "gated_rms_norm_backward",
+            "rope_partial_forward",
+            "rope_partial_backward",
             "silu_forward",
             "silu_backward",
             "mul_forward",
@@ -2084,7 +2593,20 @@ mod tests {
             "cast_bf16",
             "autocast_region",
         ];
-        assert_eq!(reached, expected);
+        for name in owned {
+            assert!(
+                expected.contains(name),
+                "{name} is not a method the harness calls"
+            );
+        }
+        for (got, want) in reached.iter().zip(expected) {
+            if owned.contains(&want) {
+                assert_eq!(got, "-", "{want} is owned by the wrapper but reached inner");
+            } else {
+                assert_eq!(got, want, "{want} did not reach the inner backend");
+            }
+        }
+        assert_eq!(reached.len(), expected.len());
         assert_eq!(backend.id(), BackendId::Wgpu);
         assert_eq!(backend.numerics(), Numerics::Fast);
         assert!(std::ptr::eq(backend.budget(), budget));
@@ -2105,7 +2627,7 @@ mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 43);
+        assert_eq!(checked, 51);
     }
 
     #[test]
@@ -2144,6 +2666,74 @@ mod tests {
             [7.0; 8],
             "refusal wrote the cache"
         );
+        let gates = Tensor::from_f32(&[0.0], &[1, 1, 1], &budget).unwrap();
+        let gdn = GdnInputs {
+            q: &q,
+            k: &q,
+            v: &q,
+            g: &gates,
+            beta: &gates,
+            initial_state: None,
+        };
+        refused(
+            backend.chunked_gdn_forward(gdn).map(drop),
+            "chunked_gdn_forward",
+        );
+        refused(
+            backend.chunked_gdn_backward(gdn, &q, &q, None).map(drop),
+            "chunked_gdn_backward",
+        );
+        refused(
+            backend.causal_conv1d_silu_forward(&x, &x).map(drop),
+            "causal_conv1d_silu_forward",
+        );
+        refused(
+            backend.causal_conv1d_silu_backward(&x, &x, &x).map(drop),
+            "causal_conv1d_silu_backward",
+        );
+        refused(
+            backend.gated_rms_norm_forward(&x, &x, &x, 1e-6).map(drop),
+            "gated_rms_norm_forward",
+        );
+        refused(
+            backend
+                .gated_rms_norm_backward(&x, &x, &x, &x, 1e-6)
+                .map(drop),
+            "gated_rms_norm_backward",
+        );
+        refused(
+            backend.rope_partial_forward(&x, &x, &x).map(drop),
+            "rope_partial_forward",
+        );
+        refused(
+            backend.rope_partial_backward(&x, &x, &x).map(drop),
+            "rope_partial_backward",
+        );
+    }
+
+    #[test]
+    fn metal_gdn_dims_are_refused_not_padded() {
+        refuse_unsupported_metal_gdn(BackendId::Metal, METAL_GDN_KEY_DIM, 16).unwrap();
+        refuse_unsupported_metal_gdn(BackendId::Metal, METAL_GDN_KEY_DIM, 256).unwrap();
+        for (dk, dv) in [
+            (64, 16),
+            (256, 16),
+            (METAL_GDN_KEY_DIM, 8),
+            (METAL_GDN_KEY_DIM, 24),
+        ] {
+            assert!(
+                matches!(
+                    refuse_unsupported_metal_gdn(BackendId::Metal, dk, dv),
+                    Err(OjasError::Unsupported {
+                        op: "chunked_gdn",
+                        ..
+                    })
+                ),
+                "dk {dk} dv {dv}"
+            );
+            refuse_unsupported_metal_gdn(BackendId::Cpu, dk, dv).unwrap();
+            refuse_unsupported_metal_gdn(BackendId::Wgpu, dk, dv).unwrap();
+        }
     }
 
     #[test]

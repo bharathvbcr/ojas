@@ -5,7 +5,9 @@ time). Three things live here:
 
 - `CudaDevice`: the device probe (open ordinal 0, run one affine kernel before `Ok`).
 - `CudaBackend`: the `ojas_core::Backend` implementation. `upload`, `download` and `sync` work;
-  every compute op returns `OjasError::Unsupported` naming the op.
+  every compute op returns `OjasError::Unsupported` naming the op. A sticky driver failure
+  (an illegal address, a failed launch, a device-side assert, …) is
+  `OjasError::DeviceLost`, so a caller stops instead of retrying on a dead context.
 - `Qwen35Step`: the Qwen3.5 whole-step training provider, design (B) in
   [`docs/cuda-backend-scoping.md`](../docs/cuda-backend-scoping.md), the CUDA counterpart of
   `ojas-qwen35`. Every compute method refuses with `Unsupported` until its kernels are wired and

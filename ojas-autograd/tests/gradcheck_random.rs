@@ -318,15 +318,18 @@ fn gradcheck_causal_sdpa_random_shapes() {
                 &t(&cpu, &q0, &shape),
                 &t(&cpu, &k0, &shape),
                 &t(&cpu, &v0, &shape),
+                None,
             )
+            .map(|(y, _)| y)
             .unwrap();
         gradients_match(&v(&y), &sdpa(&q0, &k0, &v0, shape), 1e-5, 1e-4).unwrap();
         let (gq, gk, gv) = cpu
-            .causal_sdpa_backward(
+            .causal_sdpa_backward_recompute(
                 &t(&cpu, &q0, &shape),
                 &t(&cpu, &k0, &shape),
                 &t(&cpu, &v0, &shape),
                 &t(&cpu, &r, &shape),
+                None,
             )
             .unwrap();
         check(
@@ -616,7 +619,7 @@ impl Block {
         let k = tape.rope(k, cos, sin)?;
         let v0 = tape.linear(x, p[7])?;
         let val = tape.value_residual(val, v0, p[8])?;
-        let a = tape.causal_sdpa(q, k, val)?;
+        let a = tape.causal_sdpa(q, k, val, None)?;
         let up = tape.linear(a, p[9])?;
         let gl = tape.linear(a, p[10])?;
         let act = tape.silu(gl)?;

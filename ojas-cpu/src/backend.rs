@@ -1,23 +1,32 @@
 use std::sync::Arc;
 
 use ojas_core::{
-    clip_scale, AdamWConfig, Backend, BackendId, Budget, MuonNs5Config, Numerics, OjasError,
-    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
+    causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
+    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, rope_partial_backward_dims,
+    rope_partial_forward_dims, AdamWConfig, Backend, BackendId, Budget, GatedRmsGrad, GdnForward,
+    GdnGrad, GdnInputs, MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Tensor,
+    ValueResidualGrad,
 };
 // Every op below runs its `ojas_core::shapes` validator before it checks
 // values, copies an input or charges the budget (docs/shape-contract.md).
 use ojas_core::{
-    causal_sdpa_backward_dims, causal_sdpa_forward_dims, linear_backward_dims, linear_forward_dims,
-    mul_backward_dims, mul_forward_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, residual_add_backward_dims, residual_add_forward_dims,
-    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
-    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    silu_backward_dims, silu_forward_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, RmsDims,
+    causal_sdpa_backward_dims, causal_sdpa_forward_dims, chunked_gdn_backward_dims,
+    chunked_gdn_forward_dims, linear_backward_dims, linear_forward_dims, mul_backward_dims,
+    mul_forward_dims, per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims,
+    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
+    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
+    rope_half_split_backward_dims, rope_half_split_forward_dims, silu_backward_dims,
+    silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
+    RmsDims,
 };
 
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
+use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
+use crate::hybrid::{
+    conv1d_silu_backward, conv1d_silu_forward, gated_rms_backward, gated_rms_forward, rope_partial,
+    Turn,
+};
 use crate::layout::permute;
 use crate::linalg::{linear_backward, linear_forward};
 use crate::norm::{rms_backward, rms_forward, rope_backward, rope_forward};
@@ -32,7 +41,8 @@ use crate::pointwise::{
 use crate::pool::{Exec, Pool};
 use crate::validate::{
     alloc_f32, check_f32s, f32_checked, f32_layouts, f32_operands, f32_values, fill_out, fill_outs,
-    headroom, nonfinite_first, payload_bytes, product, scanned_f32, trusted_finite_f32, u32_values,
+    headroom, matmul_operands, nonfinite_first, payload_bytes, product, scanned_f32,
+    trusted_finite_f32, u32_values, Wide,
 };
 use ojas_core::{
     adamw_step_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
@@ -134,6 +144,45 @@ impl CpuBackend {
     /// step and [`Backend::optimizer_scratch_bytes`] both read this.
     fn muon_headroom(&self, op: &'static str, rows: usize, cols: usize) -> Result<u64, OjasError> {
         payload_bytes(op, muon_scratch(op, self.exec(), rows, cols)?)
+    }
+
+    /// Causal SDPA forward after its validator: the output and the
+    /// `[B, H, T]` row log-sum-exp.
+    fn sdpa_forward(
+        &self,
+        op: &'static str,
+        dims: SdpaKernelDims,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let exec = self.exec();
+        let wide = matmul_operands(op, exec, &self.budget, [q, k, v])?;
+        let qkv = wide.each_ref().map(Wide::values);
+        let lse_shape = &q.shape()[..q.shape().len().saturating_sub(1)];
+        let [out, lse] = fill_outs(op, &self.budget, exec, [q.shape(), lse_shape], |outs| {
+            causal_sdpa_forward(op, &self.budget, exec, qkv, dims, outs)
+        })?;
+        Ok((out, lse))
+    }
+
+    /// Causal SDPA backward after its validator, from the forward's output
+    /// and log-sum-exp: `[q, k, v, output, lse, grad_output]`.
+    fn sdpa_backward(
+        &self,
+        op: &'static str,
+        dims: SdpaKernelDims,
+        operands: [&Tensor; 6],
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        let exec = self.exec();
+        let wide = matmul_operands(op, exec, &self.budget, operands)?;
+        let ins = wide.each_ref().map(Wide::values);
+        let [q, k, v, ..] = operands;
+        let shapes = [q.shape(), k.shape(), v.shape()];
+        let [grad_q, grad_k, grad_v] = fill_outs(op, &self.budget, exec, shapes, |grads| {
+            causal_sdpa_backward(op, &self.budget, exec, ins, dims, grads)
+        })?;
+        Ok((grad_q, grad_k, grad_v))
     }
 
     /// RMSNorm forward after its validator: the op itself, and each half of
@@ -298,6 +347,26 @@ impl CpuBackend {
     }
 }
 
+/// The gated delta rule's operands checked and scanned in argument order
+/// (`q, k, v, g, beta, initial_state`), read in place.
+fn gdn_operands<'t>(
+    op: &'static str,
+    exec: Exec<'_>,
+    inputs: GdnInputs<'t>,
+) -> Result<GdnOperands<'t>, OjasError> {
+    let mut ts = vec![inputs.q, inputs.k, inputs.v, inputs.g, inputs.beta];
+    ts.extend(inputs.initial_state);
+    let vals = check_f32s(op, exec, &ts)?;
+    Ok(GdnOperands {
+        q: vals[0],
+        k: vals[1],
+        v: vals[2],
+        g: vals[3],
+        beta: vals[4],
+        s0: vals.get(5).copied(),
+    })
+}
+
 impl Backend for CpuBackend {
     fn id(&self) -> BackendId {
         BackendId::Cpu
@@ -309,6 +378,13 @@ impl Backend for CpuBackend {
 
     fn numerics(&self) -> Numerics {
         self.numerics
+    }
+
+    /// A `Bf16` operand is widened into charged `f32` scratch for the
+    /// duration of the op ([`crate::validate::matmul_operands`]); the kernels
+    /// and their bits are the `F32` ones.
+    fn bf16_operands(&self) -> bool {
+        true
     }
 
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
@@ -348,7 +424,8 @@ impl Backend for CpuBackend {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
         let exec = self.exec();
-        let [x, w] = f32_operands(OP, exec, [input, weight])?;
+        let wide = matmul_operands(OP, exec, &self.budget, [input, weight])?;
+        let [x, w] = wide.each_ref().map(Wide::values);
         fill_out(OP, &self.budget, self.exec(), &dims.out_shape, |y| {
             linear_forward(OP, &self.budget, exec, x, w, &dims, y)
         })
@@ -363,7 +440,8 @@ impl Backend for CpuBackend {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
         let exec = self.exec();
-        let ins = f32_operands(OP, exec, [input, weight, grad_output])?;
+        let wide = matmul_operands(OP, exec, &self.budget, [input, weight, grad_output])?;
+        let ins = wide.each_ref().map(Wide::values);
         // One forward row, Fast whole call: `rank1_weight_grad` checks every
         // weight-gradient element as it stores `fma(g, x, +0.0)`. That buffer
         // is not scanned again. `grad_x` is still the Accelerate product and
@@ -491,14 +569,17 @@ impl Backend for CpuBackend {
         Ok((gq, gk, gqw, gkw))
     }
 
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_forward";
-        let dims = SdpaKernelDims::new(OP, causal_sdpa_forward_dims(q, k, v)?)?;
-        let exec = self.exec();
-        let qkv = f32_operands(OP, exec, [q, k, v])?;
-        fill_out(OP, &self.budget, self.exec(), q.shape(), |out| {
-            causal_sdpa_forward(OP, &self.budget, exec, qkv, dims, out)
-        })
+        let dims = causal_sdpa_forward_dims(q, k, v, window)?;
+        let dims = SdpaKernelDims::new(OP, dims, window)?;
+        self.sdpa_forward(OP, dims, q, k, v)
     }
 
     fn causal_sdpa_backward(
@@ -506,17 +587,15 @@ impl Backend for CpuBackend {
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
         grad_output: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_backward";
-        let dims = SdpaKernelDims::new(OP, causal_sdpa_backward_dims(q, k, v, grad_output)?)?;
-        let exec = self.exec();
-        let ins = f32_operands(OP, exec, [q, k, v, grad_output])?;
-        let shapes = [q.shape(), k.shape(), v.shape()];
-        let [grad_q, grad_k, grad_v] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
-            causal_sdpa_backward(OP, &self.budget, exec, ins, dims, grads)
-        })?;
-        Ok((grad_q, grad_k, grad_v))
+        let dims = causal_sdpa_backward_dims(q, k, v, output, lse, grad_output, window)?;
+        let dims = SdpaKernelDims::new(OP, dims, window)?;
+        self.sdpa_backward(OP, dims, [q, k, v, output, lse, grad_output])
     }
 
     fn per_head_sigmoid_gate_forward(
@@ -628,6 +707,190 @@ impl Backend for CpuBackend {
             value0: gv0,
             lambda: gl,
         })
+    }
+
+    fn chunked_gdn_forward(&self, inputs: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
+        const OP: &str = "chunked_gdn_forward";
+        let dims = chunked_gdn_forward_dims(inputs)?;
+        let exec = self.exec();
+        let x = gdn_operands(OP, exec, inputs)?;
+        let out_shape = inputs.v.shape();
+        let [output, final_state, checkpoints] = fill_outs(
+            OP,
+            &self.budget,
+            exec,
+            [out_shape, &dims.state_shape(), &dims.checkpoint_shape()],
+            |outs| gdn::forward(OP, &self.budget, exec, dims, x, outs),
+        )?;
+        Ok(GdnForward {
+            output,
+            final_state,
+            checkpoints,
+        })
+    }
+
+    fn chunked_gdn_backward(
+        &self,
+        inputs: GdnInputs<'_>,
+        checkpoints: &Tensor,
+        grad_output: &Tensor,
+        grad_final_state: Option<&Tensor>,
+    ) -> Result<GdnGrad, OjasError> {
+        const OP: &str = "chunked_gdn_backward";
+        let dims = chunked_gdn_backward_dims(inputs, checkpoints, grad_output, grad_final_state)?;
+        let exec = self.exec();
+        let x = gdn_operands(OP, exec, inputs)?;
+        let mut rest = vec![checkpoints, grad_output];
+        rest.extend(grad_final_state);
+        let rest = check_f32s(OP, exec, &rest)?;
+        let (ckpt, d_o, dfin) = (rest[0], rest[1], rest.get(2).copied());
+        let (qs, vs, gs) = (inputs.q.shape(), inputs.v.shape(), inputs.g.shape());
+        let run = |grads: GradsOut<'_>| {
+            gdn::backward(OP, &self.budget, exec, dims, x, ckpt, d_o, dfin, grads)
+        };
+        match inputs.initial_state {
+            Some(s0) => {
+                let [q, k, v, g, beta, ds0] = fill_outs(
+                    OP,
+                    &self.budget,
+                    exec,
+                    [qs, qs, vs, gs, gs, s0.shape()],
+                    |[dq, dk, dv, dg, dbeta, ds0]| {
+                        run(GradsOut {
+                            dq,
+                            dk,
+                            dv,
+                            dg,
+                            dbeta,
+                            ds0: Some(ds0),
+                        })
+                    },
+                )?;
+                Ok(GdnGrad {
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    initial_state: Some(ds0),
+                })
+            }
+            None => {
+                let [q, k, v, g, beta] = fill_outs(
+                    OP,
+                    &self.budget,
+                    exec,
+                    [qs, qs, vs, gs, gs],
+                    |[dq, dk, dv, dg, dbeta]| {
+                        run(GradsOut {
+                            dq,
+                            dk,
+                            dv,
+                            dg,
+                            dbeta,
+                            ds0: None,
+                        })
+                    },
+                )?;
+                Ok(GdnGrad {
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    initial_state: None,
+                })
+            }
+        }
+    }
+
+    fn causal_conv1d_silu_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "causal_conv1d_silu_forward";
+        let dims = causal_conv1d_silu_forward_dims(input, weight)?;
+        let exec = self.exec();
+        let [x, w] = f32_operands(OP, exec, [input, weight])?;
+        conv1d_silu_forward(OP, &self.budget, exec, dims, x, w, input.shape())
+    }
+
+    fn causal_conv1d_silu_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "causal_conv1d_silu_backward";
+        let dims = causal_conv1d_silu_backward_dims(input, weight, grad_output)?;
+        let exec = self.exec();
+        let [x, w, gy] = f32_operands(OP, exec, [input, weight, grad_output])?;
+        let shapes = [input.shape(), weight.shape()];
+        conv1d_silu_backward(OP, &self.budget, exec, dims, x, w, gy, shapes)
+    }
+
+    fn gated_rms_norm_forward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "gated_rms_norm_forward";
+        let dims = gated_rms_norm_forward_dims(input, gate, weight, eps)?;
+        let exec = self.exec();
+        let ins = f32_operands(OP, exec, [input, gate, weight])?;
+        gated_rms_forward(OP, &self.budget, exec, dims, ins, eps, input.shape())
+    }
+
+    fn gated_rms_norm_backward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<GatedRmsGrad, OjasError> {
+        const OP: &str = "gated_rms_norm_backward";
+        let dims = gated_rms_norm_backward_dims(input, gate, weight, grad_output, eps)?;
+        let exec = self.exec();
+        let ins = f32_operands(OP, exec, [input, gate, weight, grad_output])?;
+        let shapes = [input.shape(), gate.shape(), weight.shape()];
+        let (input, gate, weight) =
+            gated_rms_backward(OP, &self.budget, exec, dims, ins, eps, shapes)?;
+        Ok(GatedRmsGrad {
+            input,
+            gate,
+            weight,
+        })
+    }
+
+    fn rope_partial_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_partial_forward";
+        let dims = rope_partial_forward_dims(x, cos, sin)?;
+        let exec = self.exec();
+        let ins = f32_operands(OP, exec, [x, cos, sin])?;
+        rope_partial(OP, &self.budget, exec, dims, ins, Turn::Forward, x.shape())
+    }
+
+    fn rope_partial_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_partial_backward";
+        let dims = rope_partial_backward_dims(grad_output, cos, sin)?;
+        let exec = self.exec();
+        let ins = f32_operands(OP, exec, [grad_output, cos, sin])?;
+        let shape = grad_output.shape();
+        rope_partial(OP, &self.budget, exec, dims, ins, Turn::Backward, shape)
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

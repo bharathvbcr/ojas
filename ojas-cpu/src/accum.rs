@@ -1,23 +1,9 @@
 //! `acc += grad` in place, for gradient accumulation across micro-batches.
 
-use ojas_core::{residual_add_forward_dims, Budget, OjasError, Tensor};
+use ojas_core::{accumulate_grad_dims, Budget, OjasError, Tensor};
 
 use crate::pool::Exec;
 use crate::validate::{check_f32, fill_out, nonfinite};
-
-/// `ojas_core::shapes` has no validator for `accumulate_grad`. Its rules are
-/// `residual_add_forward_dims`'s (two `F32` tensors of one shape), and every
-/// refusal is reported under `op`, as Metal and wgpu report it. Runs before
-/// any value is read or anything is charged.
-fn accumulate_grad_dims(op: &'static str, acc: &Tensor, grad: &Tensor) -> Result<usize, OjasError> {
-    residual_add_forward_dims(acc, grad).map_err(|err| match err {
-        OjasError::Shape { detail, .. } => OjasError::Shape { op, detail },
-        OjasError::Dtype { expected, got, .. } => OjasError::Dtype { op, expected, got },
-        OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op, detail },
-        OjasError::NonFinite { .. } => OjasError::NonFinite { op },
-        other => other,
-    })
-}
 
 /// [`ojas_core::Backend::accumulate_grad`] on the CPU.
 ///
@@ -37,7 +23,9 @@ pub(crate) fn accumulate_grad(
     acc: &mut Tensor,
     grad: &Tensor,
 ) -> Result<(), OjasError> {
-    accumulate_grad_dims(op, acc, grad)?;
+    // `ojas_core::shapes` owns the rules; it runs before any value is read
+    // or anything is charged.
+    accumulate_grad_dims(acc, grad)?;
     let len = check_f32(op, acc)?;
     check_f32(op, grad)?;
     let g = grad.f32_slice()?;

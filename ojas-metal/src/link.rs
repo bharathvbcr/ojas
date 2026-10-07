@@ -18,6 +18,99 @@ use ojas_core::{BackendId, OjasError, MAX_PERMUTE_RANK};
 
 pub(crate) type Res<T> = Result<T, OjasError>;
 
+/// Why the device thread made a waited commit: the trigger that called it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Wait {
+    /// A host upload while work was recorded (tessl maps a buffer for the
+    /// host only after a waited commit).
+    Upload,
+    /// A raw read of a device buffer (`download`, `to_host`).
+    Read,
+    /// `Backend::sync`.
+    Sync,
+    /// `clip_grad_norm`, which returns the norm to the host.
+    ClipNorm,
+    /// The bytes allocated since the last wait passed the memory cap.
+    MemCap,
+    /// The device's working set passed its share of the recommended size.
+    WorkingSet,
+    /// Every status slot was taken.
+    SlabFull,
+    /// An allocation failed, and dropped buffers only recycle after a wait.
+    Recycle,
+}
+
+const WAIT_KINDS: usize = 8;
+
+/// Waited commits by [`Wait`] trigger, shared by the device thread and
+/// every handle on it.
+#[derive(Default)]
+pub(crate) struct Waits([AtomicU64; WAIT_KINDS]);
+
+impl Waits {
+    pub(crate) fn count(&self, why: Wait) {
+        self.0[why as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> WaitCounts {
+        let at = |why: Wait| self.0[why as usize].load(Ordering::Relaxed);
+        WaitCounts {
+            upload: at(Wait::Upload),
+            read: at(Wait::Read),
+            sync: at(Wait::Sync),
+            clip_norm: at(Wait::ClipNorm),
+            mem_cap: at(Wait::MemCap),
+            working_set: at(Wait::WorkingSet),
+            slab_full: at(Wait::SlabFull),
+            recycle: at(Wait::Recycle),
+        }
+    }
+}
+
+/// Waited GPU commits a Metal backend's device thread has made since it
+/// opened, counted by what triggered each one. Every commit that waits is
+/// counted under exactly one trigger, so [`WaitCounts::total`] is the
+/// number of waits. An upload, read or sync with nothing recorded does not
+/// wait and is not counted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WaitCounts {
+    pub upload: u64,
+    pub read: u64,
+    pub sync: u64,
+    pub clip_norm: u64,
+    pub mem_cap: u64,
+    pub working_set: u64,
+    pub slab_full: u64,
+    pub recycle: u64,
+}
+
+impl WaitCounts {
+    pub fn total(&self) -> u64 {
+        self.upload
+            + self.read
+            + self.sync
+            + self.clip_norm
+            + self.mem_cap
+            + self.working_set
+            + self.slab_full
+            + self.recycle
+    }
+
+    /// The waits made after `earlier` was taken, trigger by trigger.
+    pub fn since(&self, earlier: &WaitCounts) -> WaitCounts {
+        WaitCounts {
+            upload: self.upload.saturating_sub(earlier.upload),
+            read: self.read.saturating_sub(earlier.read),
+            sync: self.sync.saturating_sub(earlier.sync),
+            clip_norm: self.clip_norm.saturating_sub(earlier.clip_norm),
+            mem_cap: self.mem_cap.saturating_sub(earlier.mem_cap),
+            working_set: self.working_set.saturating_sub(earlier.working_set),
+            slab_full: self.slab_full.saturating_sub(earlier.slab_full),
+            recycle: self.recycle.saturating_sub(earlier.recycle),
+        }
+    }
+}
+
 /// A contiguous element window of a device buffer.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Arg {
@@ -44,6 +137,38 @@ pub(crate) struct RmsSide {
     pub gy: Option<Arg>,
     pub rows: u32,
     pub dim: u32,
+}
+
+/// The gated delta rule's operands (`ojas_core::GdnInputs`) and dims, for
+/// tessl's `gdn_train` kernels: `q`, `k` `[B, T, H, 128]`, `v`
+/// `[B, T, H, v_dim]`, `g`, `beta` `[B, T, H]`, `s0` `[B, H, 128, v_dim]`.
+/// `ws_elems` is the f32 count of tessl's backward workspace the backend
+/// charged; the device refuses a command whose figure disagrees with tessl's.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GdnArgs {
+    pub q: Arg,
+    pub k: Arg,
+    pub v: Arg,
+    pub g: Arg,
+    pub beta: Arg,
+    pub s0: Option<Arg>,
+    pub batch: u32,
+    pub seq: u32,
+    pub heads: u32,
+    pub v_dim: u32,
+    pub ws_elems: usize,
+}
+
+/// One causal attention launch: `bh` query planes of `[t, d]`, `rep` query
+/// planes per KV plane (`bh / rep` KV planes), and the sliding window, `0`
+/// for every earlier key (the backend sends a window below `t`, or `0`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SdpaGeom {
+    pub bh: u32,
+    pub t: u32,
+    pub d: u32,
+    pub rep: u32,
+    pub window: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -76,6 +201,11 @@ pub(crate) enum Cmd {
     /// Read the device's working set and current allocation. Answered even
     /// on a poisoned backend: it records nothing and commits nothing.
     Memory,
+    /// Carry small uploads inline while work is recorded (the default), or
+    /// make every such upload wait, for before/after wait measurements.
+    InlineUploads {
+        on: bool,
+    },
     /// Test hook: encode a dispatch, then panic on the device thread, as a
     /// bug mid-op would.
     #[cfg(test)]
@@ -84,6 +214,10 @@ pub(crate) enum Cmd {
     /// would.
     #[cfg(test)]
     FailNextRead,
+    /// Test hook: set tessl's runtime poison, as a command buffer that
+    /// failed or timed out on the GPU does.
+    #[cfg(test)]
+    PoisonRuntime,
     /// Test hook: override the commit triggers, and after letting
     /// `fail_allocs.0` device allocations through, fail the next
     /// `fail_allocs.1` as an exhausted device would.
@@ -146,27 +280,20 @@ pub(crate) enum Cmd {
         mode: RopeMode,
         backward: bool,
     },
+    /// Replies with the output and the `[bh, t]` row log-sum-exp.
     Sdpa {
         q: Arg,
         k: Arg,
         v: Arg,
-        bh: u32,
-        t: u32,
-        d: u32,
-        /// Query heads per KV head. `1` runs the equal-head kernel unchanged.
-        rep: u32,
+        geom: SdpaGeom,
     },
+    /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {
-        q: Arg,
-        k: Arg,
-        v: Arg,
-        gy: Arg,
-        bh: u32,
-        t: u32,
-        d: u32,
-        /// Query heads per KV head. `1` runs the equal-head kernel unchanged.
-        rep: u32,
+        args: [Arg; 6],
+        geom: SdpaGeom,
     },
+    /// With `save`, the reply carries the per-head sigmoid `[rows, heads]`
+    /// after the output.
     Gate {
         x: Arg,
         w: Arg,
@@ -176,13 +303,17 @@ pub(crate) enum Cmd {
         din: u32,
         heads: u32,
         dh: u32,
+        save: bool,
     },
+    /// With `scales` (a saving forward's sigmoid), the logits are not
+    /// recomputed and `b` is not read.
     GateBwd {
         x: Arg,
         w: Arg,
         b: Arg,
         attn: Arg,
         gy: Arg,
+        scales: Option<Arg>,
         rows: u32,
         din: u32,
         heads: u32,
@@ -198,6 +329,19 @@ pub(crate) enum Cmd {
         v0: Arg,
         lam: Arg,
         gy: Arg,
+    },
+    /// The gated delta rule's forward: `o`, the final state, the
+    /// checkpoints.
+    Gdn {
+        x: GdnArgs,
+    },
+    /// Its backward: `dq`, `dk`, `dv`, `dg`, `dbeta`, then `ds0` when the
+    /// forward had an initial state.
+    GdnBwd {
+        x: GdnArgs,
+        ckpt: Arg,
+        d_o: Arg,
+        d_fin: Option<Arg>,
     },
     RoundBf16 {
         x: Arg,
@@ -311,6 +455,8 @@ pub(crate) enum Cmd {
         nesterov: bool,
         decay: f32,
         alpha: f32,
+        /// Newton-Schulz at `Ns5Precision::Bf16`.
+        bf16: bool,
     },
 }
 
@@ -333,11 +479,11 @@ pub(crate) struct Msg {
 pub(crate) struct Link {
     tx: mpsc::Sender<Msg>,
     device_name: String,
-    waits: Arc<AtomicU64>,
+    waits: Arc<Waits>,
 }
 
 impl Link {
-    pub(crate) fn new(tx: mpsc::Sender<Msg>, device_name: String, waits: Arc<AtomicU64>) -> Self {
+    pub(crate) fn new(tx: mpsc::Sender<Msg>, device_name: String, waits: Arc<Waits>) -> Self {
         Self {
             tx,
             device_name,
@@ -349,9 +495,9 @@ impl Link {
         &self.device_name
     }
 
-    /// Waited GPU commits the device thread has made so far.
-    pub(crate) fn waits(&self) -> u64 {
-        self.waits.load(Ordering::Relaxed)
+    /// Waited GPU commits the device thread has made so far, by trigger.
+    pub(crate) fn wait_counts(&self) -> WaitCounts {
+        self.waits.snapshot()
     }
 
     /// Run `cmd` on the device thread and wait for its result.
@@ -483,6 +629,14 @@ impl LceGeom {
 pub(crate) fn metal_err(detail: impl Into<String>) -> OjasError {
     OjasError::Backend {
         id: BackendId::Metal,
+        detail: detail.into(),
+    }
+}
+
+/// The Metal device can no longer run work (tessl poisoned its runtime).
+pub(crate) fn device_lost(detail: impl Into<String>) -> OjasError {
+    OjasError::DeviceLost {
+        backend: BackendId::Metal,
         detail: detail.into(),
     }
 }

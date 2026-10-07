@@ -52,7 +52,7 @@ flowchart LR
     end
 
     subgraph Shaders["Compiled WGSL Shaders (ojas-kernels)"]
-        Common["common.wgsl (fault word), fault.wgsl, layout.wgsl (permute)"]
+        Common["common.wgsl (fault words), fault.wgsl, layout.wgsl (permute)"]
         Ops["attention, gemm, norm, pointwise, reduce, loss, optim"]
     end
 
@@ -73,7 +73,7 @@ flowchart LR
 > * **Muon NS5:** f32 Newton-Schulz on the device with the CPU reference's semantics (Nesterov momentum, Frobenius normalization, five steps on the wide orientation, `max(1, rows/cols)^0.5` scale, decoupled decay), reusing the WGSL GEMM. Parity against `ojas-cpu` is checked at 1e-4 of the largest reference value on square, wide and tall shapes including 768x768, 768x2304 and 2304x768 (`tests/muon.rs`).
 > * **Permute:** `Backend::permute` moves `u32` words on the device, so the output bits equal the input bits. F32 only.
 > * **Non-finite values are deferred:** an op that produces a non-finite value returns `Ok`; the next `sync`, `download` or `clip_grad_norm` returns `NonFinite` naming the first op, in recording order, that faulted. `sync` is the `Backend::sync` override, so a caller holding `&dyn Backend`, `impl Backend` or `Arc<WgpuBackend>` sees the fault too; a lost device makes it return `Backend` naming the loss. `adamw_step` and `muon_ns5_step` write nothing when their own values are non-finite. See the `backend` module docs.
-> * **Causal SDPA:** tiled flash attention for head widths up to 256 (padded to 16/32/64/128/256). The forward keeps an online softmax per row; the backward recomputes the probabilities in tiles, in a dQ pass and a dK/dV pass, with no `T x T` matrix and no atomics, so repeated runs give the same bits (`tests/attention.rs`). Grouped-query heads are expanded into that equal-head kernel and the KV gradients are summed back.
+> * **Causal SDPA:** tiled flash attention for head widths up to 256 (padded to 16/32/64/128/256). The forward keeps an online softmax per row and writes the output and the row log-sum-exp. The backward takes both: one pass forms `rowsum(dO * O)` (its only scratch, `B * Hq * T` floats), then it rebuilds the probabilities in tiles as `exp(s - lse)`, in a dQ pass and a dK/dV pass, with no `T x T` matrix and no atomics, so repeated runs give the same bits (`tests/attention.rs`). Grouped-query heads read their KV head in place; the dK/dV pass runs per KV head and loops its query heads in a fixed order. An optional sliding window `W` (query `t` sees keys `t - W < j <= t`) starts and ends each row's key loop at the window (`tests/attention_window.rs`).
 > * **RMSNorm:** a row is reduced by `next_pow2(min(D, 256))` lanes, so a 256-lane workgroup holds `256 / width` rows (four rows of D = 64). The segmented tree sum pairs lanes as the full 256-lane tree does, so the bits do not depend on the packing. `rms_qk_norm_forward` / `_backward` record q and k in one submission and give the bits, refusals and fault names of two `rms_norm` calls; a refused k still records q first, as the composition would (`tests/norm.rs`).
 > * **No subgroups:** the kernels use shared memory and barriers only. A subgroup-shuffle row exchange for SDPA was measured at 0.98-1.02x and removed, and dropping the tree reductions' sub-32 barriers outright moved RMSNorm and cross-entropy by no more than the noise.
 > * **Shape first:** every op calls its `ojas_core::shapes` validator before placement, id and target ranges, optimizer scalars, device limits or any budget charge, so a malformed call returns the validator's exact error whatever the budget, values or placement (docs/shape-contract.md). `clip_grad_norm` checks `max_norm` after the norm, as the CPU does. `tests/shape_first.rs` sweeps every op under `Budget::new(0)`, an inputs-only cap, a NaN operand and host operands.
@@ -98,6 +98,7 @@ flowchart LR
 
 - `tests/accumulate_grad.rs`: In-place vs buffered gradient accumulation and bit-matching against CPU.
 - `tests/attention.rs`: Tiled causal attention forward/backward, long sequences, and head dimensions up to 256.
+- `tests/attention_window.rs`: Sliding-window and grouped-query attention and the row log-sum-exp against CPU; native grouped-query against repeated heads, and the saved-statistics backward against the recomputing one, bit for bit.
 - `tests/contract.rs`: Backend trait implementation contracts and deferred fault reporting.
 - `tests/drop.rs`: Bounded timeout on queue and buffer cleanup.
 - `tests/faults.rs`: Non-finite deferred fault recording order and naming.

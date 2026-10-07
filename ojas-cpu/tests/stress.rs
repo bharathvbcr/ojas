@@ -202,6 +202,7 @@ fn ortho(cpu: &CpuBackend, g: &[f32], rows: usize, cols: usize) -> Vec<f32> {
         momentum: 0.0,
         weight_decay: 0.0,
         nesterov: false,
+        ns5: ojas_core::Ns5Precision::F32,
     };
     let mut p = f32t(cpu, &vec![0.0; rows * cols], &[rows, cols]);
     let grad = f32t(cpu, g, &[rows, cols]);
@@ -336,15 +337,22 @@ fn extreme_magnitudes_are_finite_or_nonfinite_errors() {
     let k = f32t(&cpu, &[100.0, -100.0], &[1, 1, 2, 1]);
     let v = f32t(&cpu, &[3.0, -7.0], &[1, 1, 2, 1]);
     assert_eq!(
-        vals(&cpu.causal_sdpa_forward(&q, &k, &v).unwrap()),
+        vals(
+            &cpu.causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)
+                .unwrap()
+        ),
         vec![3.0, 3.0]
     );
     let (gq, gk, gv) = cpu
-        .causal_sdpa_backward(&q, &k, &v, &f32t(&cpu, &[1.0, 1.0], &[1, 1, 2, 1]))
+        .causal_sdpa_backward_recompute(&q, &k, &v, &f32t(&cpu, &[1.0, 1.0], &[1, 1, 2, 1]), None)
         .unwrap();
     assert!(finite(&gq) && finite(&gk) && finite(&gv));
     let huge = f32t(&cpu, &[1e20, 1e20], &[1, 1, 2, 1]);
-    assert_nonfinite(cpu.causal_sdpa_forward(&huge, &huge, &v));
+    assert_nonfinite(
+        cpu.causal_sdpa_forward(&huge, &huge, &v, None)
+            .map(|(y, _)| y),
+    );
 
     // Saturated gate and blend are finite in both directions.
     let x = f32t(&cpu, &[1.0], &[1, 1]);
@@ -419,10 +427,12 @@ fn nan_and_inf_in_any_operand_are_nonfinite() {
             c.rope_half_split_backward(&t[0], &t[1], &t[2]).map(|_| ())
         }),
         (vec![vec![1, 1, 3, 2]; 3], |c, t| {
-            c.causal_sdpa_forward(&t[0], &t[1], &t[2]).map(|_| ())
+            c.causal_sdpa_forward(&t[0], &t[1], &t[2], None)
+                .map(|(y, _)| y)
+                .map(|_| ())
         }),
         (vec![vec![1, 1, 3, 2]; 4], |c, t| {
-            c.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3])
+            c.causal_sdpa_backward_recompute(&t[0], &t[1], &t[2], &t[3], None)
                 .map(|_| ())
         }),
         (
@@ -534,11 +544,23 @@ fn randomized_ops_are_bit_deterministic_and_finite() {
         let k = f32t(&cpu, &rng.vec(n, 2.0), &shape);
         let v = f32t(&cpu, &rng.vec(n, 2.0), &shape);
         let gy = f32t(&cpu, &rng.vec(n, 1.0), &shape);
-        let y1 = vals(&cpu.causal_sdpa_forward(&q, &k, &v).unwrap());
-        let y2 = vals(&cpu.causal_sdpa_forward(&q, &k, &v).unwrap());
+        let y1 = vals(
+            &cpu.causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)
+                .unwrap(),
+        );
+        let y2 = vals(
+            &cpu.causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)
+                .unwrap(),
+        );
         assert_eq!(bits(&y1), bits(&y2));
-        let (a1, b1, c1) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
-        let (a2, b2, c2) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+        let (a1, b1, c1) = cpu
+            .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+            .unwrap();
+        let (a2, b2, c2) = cpu
+            .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+            .unwrap();
         for (x, y) in [(a1, a2), (b1, b2), (c1, c2)] {
             assert!(finite(&x));
             assert_eq!(bits(&vals(&x)), bits(&vals(&y)));
@@ -579,6 +601,7 @@ fn newton_schulz_f64_accumulation_prevents_false_rejection() {
         momentum: 0.0,
         weight_decay: 0.0,
         nesterov: false,
+        ns5: ojas_core::Ns5Precision::F32,
     };
     let mut p = f32t(&cpu, &vec![0.0; n], &[8, 16]);
     let g = f32t(&cpu, &data, &[8, 16]);

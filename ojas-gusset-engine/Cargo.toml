@@ -16,3 +16,7 @@ crate-type = ["staticlib"]
 [dependencies]
 gusset = { package = "gusset", path = "../../../devtools/gusset/crates/gusset" }
 ojas-capi = { path = "../ojas-capi" }
+
+[dev-dependencies]
+# The heap-ceiling test drives `Tensor::to_ne_bytes` under this allocator.
+ojas-core = { path = "../ojas-core" }

@@ -360,7 +360,7 @@ fn host_refusals_stay_immediate_and_leave_nothing_pending() {
     assert_eq!(pending(&small), None, "capacity left a fault pending");
     let over = ojas_core::METAL_MAX_HEAD_DIM as usize + 16;
     let q = up(&m, &rand(&[1, 1, 2, over], 4, 1.0));
-    let r = m.causal_sdpa_forward(&q, &q, &q);
+    let r = m.causal_sdpa_forward(&q, &q, &q, None).map(|(y, _)| y);
     assert!(
         matches!(r, Err(OjasError::UnsupportedHeadDim { .. })),
         "{r:?}"

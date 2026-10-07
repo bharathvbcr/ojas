@@ -40,6 +40,15 @@ pub enum OjasError {
         live: u64,
     },
     Poisoned,
+    /// The backend's device can no longer run work: wgpu's device-lost
+    /// callback fired, Metal's runtime was poisoned by a failed or timed-out
+    /// command buffer, or CUDA reported a sticky context error. Set by the
+    /// backend where it detects the loss; loss is permanent, so every later
+    /// call on that backend fails too. Open a new backend to continue.
+    DeviceLost {
+        backend: BackendId,
+        detail: String,
+    },
     Backend {
         id: BackendId,
         detail: String,
@@ -80,6 +89,9 @@ impl fmt::Display for OjasError {
                 "capacity exceeded: requested {requested} bytes, cap {cap}, live {live}"
             ),
             OjasError::Poisoned => write!(f, "poisoned"),
+            OjasError::DeviceLost { backend, detail } => {
+                write!(f, "backend {backend:?}: device lost: {detail}")
+            }
             OjasError::Backend { id, detail } => write!(f, "backend {id:?}: {detail}"),
             OjasError::Unsupported { op, detail } => write!(f, "{op}: unsupported: {detail}"),
             OjasError::Placement {

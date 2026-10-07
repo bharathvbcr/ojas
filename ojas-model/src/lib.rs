@@ -9,7 +9,8 @@
 //!   `ojas.spec` metadata.
 //! - [`Graph`]: one op vocabulary with two executors, `ojas_autograd::Tape`
 //!   (training) and [`Eval`] (eager). [`block`] is the nanolab block over
-//!   any `Graph`; [`forward_loss`] ends in the fused tied-head CE.
+//!   any `Graph`; [`forward_loss`] ends in the fused tied-head CE, with
+//!   each block optionally a checkpointed segment ([`ActivationCheckpoint`]).
 //! - [`Trainer`]: the §3 step on any `Backend`; [`Trainer::save`] and
 //!   [`Trainer::resume_from`] for the §4 checkpoint directory.
 
@@ -27,7 +28,7 @@ mod trainer;
 
 pub use block::{
     bind, block, block_with, causal_attention, forward_hidden, forward_logits, forward_loss,
-    BlockOut, Rope,
+    ActivationCheckpoint, BlockOut, Rope,
 };
 pub use checkpoint::{
     MODEL_FILE, OPTIM_FILE, RUN_METADATA_KEY, STATE_FILE, STATE_FORMAT, STEP_METADATA_KEY,

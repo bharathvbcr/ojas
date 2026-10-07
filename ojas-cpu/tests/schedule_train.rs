@@ -167,6 +167,7 @@ fn one_hybrid_step_matches_adamw_and_muon_and_nan_updates_neither() {
             momentum: 0.99,
             weight_decay: 0.1,
             nesterov: true,
+            ns5: ojas_core::Ns5Precision::F32,
         },
     )
     .unwrap();

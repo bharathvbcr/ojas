@@ -246,10 +246,12 @@ fn cases() -> Vec<Case> {
         );
         let (q2, k2, v2) = (q.clone(), k.clone(), v.clone());
         out.push(Case::new(name_f, move |be, _| {
-            be.causal_sdpa_forward(&q, &k, &v).map(|y| vec![y])
+            be.causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)
+                .map(|y| vec![y])
         }));
         out.push(Case::new(name_b, move |be, _| {
-            be.causal_sdpa_backward(&q2, &k2, &v2, &gy)
+            be.causal_sdpa_backward_recompute(&q2, &k2, &v2, &gy, None)
                 .map(|(a, b, c)| vec![a, b, c])
         }));
     }

@@ -11,10 +11,10 @@
 //! - (c) with a NaN in a well-formed operand, under an ample budget.
 
 use ojas_core::{
-    cached_attention_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
-    kv_cache_write_dims, linear_backward_dims, linear_ce_dims, linear_forward_dims,
-    mul_backward_dims, mul_forward_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, permute_output_shape, residual_add_backward_dims,
+    accumulate_grad_dims, cached_attention_dims, causal_sdpa_backward_dims,
+    causal_sdpa_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
+    linear_forward_dims, mul_backward_dims, mul_forward_dims, per_head_sigmoid_gate_backward_dims,
+    per_head_sigmoid_gate_forward_dims, permute_dims, residual_add_backward_dims,
     residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
     rope_half_split_forward_dims, silu_backward_dims, silu_forward_dims,
@@ -74,24 +74,6 @@ where
         check: Box::new(check),
         run: Box::new(run),
     }
-}
-
-/// `accumulate_grad` has no validator of its own: it is
-/// `residual_add_forward_dims` reported as `accumulate_grad`.
-fn accumulate_grad_check(acc: &Tensor, grad: &Tensor) -> Result<(), OjasError> {
-    const OP: &str = "accumulate_grad";
-    residual_add_forward_dims(acc, grad)
-        .map(drop)
-        .map_err(|err| match err {
-            OjasError::Shape { detail, .. } => OjasError::Shape { op: OP, detail },
-            OjasError::Dtype { expected, got, .. } => OjasError::Dtype {
-                op: OP,
-                expected,
-                got,
-            },
-            OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
-            other => other,
-        })
 }
 
 const EPS: f32 = 1e-6;
@@ -247,29 +229,77 @@ fn cases() -> Vec<Case> {
             &format!("causal_sdpa_forward {name}"),
             vec![q, k, vv],
             Some(nan),
-            |o| causal_sdpa_forward_dims(&o[0], &o[1], &o[2]).map(drop),
-            |b, o| b.causal_sdpa_forward(&o[0], &o[1], &o[2]).map(drop),
+            |o| causal_sdpa_forward_dims(&o[0], &o[1], &o[2], None).map(drop),
+            |b, o| b.causal_sdpa_forward(&o[0], &o[1], &o[2], None).map(drop),
         ));
     }
-    for (name, q, k, vv, g, nan) in [
-        ("grad shape", f(&qkv), f(&qkv), f(&qkv), f(&[1, 2, 3, 5]), 0),
-        ("k differs", f(&qkv), f(&[1, 2, 4, 4]), f(&qkv), f(&qkv), 3),
+    // Operands: q, k, v, output, lse, grad_output.
+    let rows = [1usize, 2, 3];
+    for (name, ops, nan) in [
+        (
+            "grad shape",
+            [
+                f(&qkv),
+                f(&qkv),
+                f(&qkv),
+                f(&qkv),
+                f(&rows),
+                f(&[1, 2, 3, 5]),
+            ],
+            0,
+        ),
+        (
+            "k differs",
+            [
+                f(&qkv),
+                f(&[1, 2, 4, 4]),
+                f(&qkv),
+                f(&qkv),
+                f(&rows),
+                f(&qkv),
+            ],
+            5,
+        ),
+        (
+            "output shape",
+            [
+                f(&qkv),
+                f(&qkv),
+                f(&qkv),
+                f(&[1, 2, 3, 5]),
+                f(&rows),
+                f(&qkv),
+            ],
+            5,
+        ),
+        (
+            "lse shape",
+            [f(&qkv), f(&qkv), f(&qkv), f(&qkv), f(&[1, 2, 4]), f(&qkv)],
+            3,
+        ),
         // D9: the grad check runs before the rank.
         (
             "grad before rank",
-            f(&[2, 3, 4]),
-            f(&[2, 3, 4]),
-            f(&[2, 3, 4]),
-            f(&[2, 3, 5]),
+            [
+                f(&[2, 3, 4]),
+                f(&[2, 3, 4]),
+                f(&[2, 3, 4]),
+                f(&[2, 3, 4]),
+                f(&[2, 3]),
+                f(&[2, 3, 5]),
+            ],
             1,
         ),
     ] {
         v.push(case(
             &format!("causal_sdpa_backward {name}"),
-            vec![q, k, vv, g],
+            ops.to_vec(),
             Some(nan),
-            |o| causal_sdpa_backward_dims(&o[0], &o[1], &o[2], &o[3]).map(drop),
-            |b, o| b.causal_sdpa_backward(&o[0], &o[1], &o[2], &o[3]).map(drop),
+            |o| causal_sdpa_backward_dims(&o[0], &o[1], &o[2], &o[3], &o[4], &o[5], None).map(drop),
+            |b, o| {
+                b.causal_sdpa_backward(&o[0], &o[1], &o[2], &o[3], &o[4], &o[5], None)
+                    .map(drop)
+            },
         ));
     }
 
@@ -450,7 +480,7 @@ fn cases() -> Vec<Case> {
             &format!("accumulate_grad {name}"),
             vec![acc, g],
             Some(nan),
-            |o| accumulate_grad_check(&o[0], &o[1]),
+            |o| accumulate_grad_dims(&o[0], &o[1]).map(drop),
             |b, o| {
                 let mut acc = o[0].clone();
                 b.accumulate_grad(&mut acc, &o[1])
@@ -458,18 +488,21 @@ fn cases() -> Vec<Case> {
         ));
     }
 
-    // ---- permute: its validator is `permute_output_shape` ----------------
-    for (name, dims) in [
-        ("axis count", vec![1usize, 0, 2]),
-        ("repeated axis", vec![0, 0]),
-        ("axis out of range", vec![0, 2]),
+    // ---- permute: its validator is `permute_dims` -----------------------
+    for (name, x, dims, nan) in [
+        ("axis count", f(&[2, 3]), vec![1usize, 0, 2], Some(0)),
+        ("repeated axis", f(&[2, 3]), vec![0, 0], Some(0)),
+        ("axis out of range", f(&[2, 3]), vec![0, 2], Some(0)),
+        ("u32 input", u(&[2, 3]), vec![1, 0], None),
+        ("zero axis", f(&[2, 0, 3]), vec![2, 0, 1], None),
+        ("u32 input with a zero axis", u(&[0, 3]), vec![1, 0], None),
     ] {
         let check_dims = dims.clone();
         v.push(case(
             &format!("permute {name}"),
-            vec![f(&[2, 3])],
-            Some(0),
-            move |o| permute_output_shape("permute", o[0].shape(), &check_dims).map(drop),
+            vec![x],
+            nan,
+            move |o| permute_dims(&o[0], &check_dims).map(drop),
             move |b, o| b.permute(&o[0], &dims).map(drop),
         ));
     }

@@ -149,6 +149,7 @@ fn muon_1x1_and_tall_matrix_match_hand_newton_schulz() {
         momentum: 0.99,
         weight_decay: 0.1,
         nesterov: true,
+        ns5: ojas_core::Ns5Precision::F32,
     };
 
     let g = 0.37f32;
@@ -247,6 +248,7 @@ fn muon_step_scalars_round_once_from_f64_like_nanolab() {
             momentum: 0.0,
             weight_decay: wd,
             nesterov: false,
+            ns5: ojas_core::Ns5Precision::F32,
         };
         let mut param = f32t(&cpu, &[0.9, -1.7], &[1, 2]);
         let zero = f32t(&cpu, &[0.0, 0.0], &[1, 2]);
@@ -331,7 +333,8 @@ fn causal_sdpa_t1_t2_and_head_dim_65_match_hand_softmax() {
     let k = f32t(&cpu, &[0.1, 0.7], &[1, 1, 1, 2]);
     let v = f32t(&cpu, &[3.0, -4.0], &[1, 1, 1, 2]);
     let y = cpu
-        .causal_sdpa_forward(&q, &k, &v)
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -342,7 +345,8 @@ fn causal_sdpa_t1_t2_and_head_dim_65_match_hand_softmax() {
     let k = f32t(&cpu, &[1.0, 0.0], &[1, 1, 2, 1]);
     let v = f32t(&cpu, &[2.0, 100.0], &[1, 1, 2, 1]);
     let y = cpu
-        .causal_sdpa_forward(&q, &k, &v)
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -378,7 +382,10 @@ fn causal_sdpa_t1_t2_and_head_dim_65_match_hand_softmax() {
     let q = f32t(&cpu, &qv, &[1, 1, 2, dim]);
     let k = f32t(&cpu, &kv, &[1, 1, 2, dim]);
     let v = f32t(&cpu, &vv, &[1, 1, 2, dim]);
-    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
+    let y = cpu
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
+        .unwrap();
     let got = y.to_f32_vec().unwrap();
     assert_eq!(y.shape(), &[1, 1, 2, dim]);
     assert!(got.iter().all(|value| value.is_finite()));
@@ -398,7 +405,8 @@ fn causal_sdpa_t1_t2_and_head_dim_65_match_hand_softmax() {
         assert!((value - expect).abs() < 1e-5, "t1 d{d} {value} vs {expect}");
     }
     let y2 = cpu
-        .causal_sdpa_forward(&q, &k, &v)
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -422,9 +430,15 @@ fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
     }
     let empty_q = Tensor::zeros(&[0, 1, 2, 4], DType::F32, cpu.budget()).unwrap();
     let k = f32t(&cpu, &[0.0; 8], &[1, 1, 2, 4]);
-    assert_shape(cpu.causal_sdpa_forward(&empty_q, &k, &k));
+    assert_shape(
+        cpu.causal_sdpa_forward(&empty_q, &k, &k, None)
+            .map(|(y, _)| y),
+    );
     let zero_time = Tensor::zeros(&[1, 1, 0, 4], DType::F32, cpu.budget()).unwrap();
-    assert_shape(cpu.causal_sdpa_forward(&zero_time, &zero_time, &zero_time));
+    assert_shape(
+        cpu.causal_sdpa_forward(&zero_time, &zero_time, &zero_time, None)
+            .map(|(y, _)| y),
+    );
 
     // Contiguous view with a non-zero byte offset must be read at that offset.
     let parent = f32t(&cpu, &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0], &[6]);
@@ -564,7 +578,9 @@ fn operands_shared_with_pool_tasks_are_released_when_the_op_returns() {
     let mut q = Tensor::from_f32(&data, &shape, &inputs).unwrap();
     let k = Tensor::from_f32(&data, &shape, &inputs).unwrap();
 
-    be.causal_sdpa_forward(&q, &k, &k).unwrap();
+    be.causal_sdpa_forward(&q, &k, &k, None)
+        .map(|(y, _)| y)
+        .unwrap();
     be.silu_forward(&q).unwrap();
     q.f32_slice_mut().unwrap()[0] = 0.5;
 
@@ -575,7 +591,7 @@ fn operands_shared_with_pool_tasks_are_released_when_the_op_returns() {
         })
     });
     assert!(matches!(
-        be.causal_sdpa_forward(&q, &k, &k),
+        be.causal_sdpa_forward(&q, &k, &k, None).map(|(y, _)| y),
         Err(OjasError::Unsupported {
             op: "test-cancel",
             ..
@@ -587,7 +603,7 @@ fn operands_shared_with_pool_tasks_are_released_when_the_op_returns() {
     let mut nan = data.clone();
     nan[n - 1] = f32::NAN;
     let bad = Tensor::from_f32(&nan, &shape, &inputs).unwrap();
-    assert_nonfinite(be.causal_sdpa_forward(&q, &k, &bad));
+    assert_nonfinite(be.causal_sdpa_forward(&q, &k, &bad, None).map(|(y, _)| y));
     let flat = [n];
     let mut p = q.reshape(&flat).unwrap();
     drop(q);

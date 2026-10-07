@@ -34,9 +34,10 @@ not a `Config` field. 192 also matches framework-design.md §10.
 | `grads_step5.safetensors` | 500,572 | the same at the f32 trace's step-5 parameters |
 | `trace_ns5_f32.safetensors` | 505,280 | 40 steps with NS5 in f32: per-step losses, grad norms, LR multipliers; parameters after step 5 |
 | `trace_ns5_bf16.safetensors` | 505,000 | the same with stock bf16 NS5 |
+| `muon_step_bf16.safetensors` | 288,920 | one stock nanolab `Muon.step` (bf16 NS5) per case: square, tall, wide, and no decay or Nesterov; inputs and torch's results (`muon_step.py`) |
 | `lr_schedules.json` | 2,502 | cosine and WSD multipliers, 20 steps, tiny and §10 acceptance settings |
 
-Total about 3.1 MB. Every safetensors file carries
+Total about 3.4 MB. Every safetensors file carries
 `__metadata__["ojas.oracle"]`: generator, torch and Python versions, the
 nanolab commit, CPU / 1 thread / deterministic, the full nanolab `Config`,
 and the fixture's own numbers.
@@ -58,7 +59,9 @@ the gates use), `micro_loss`, and `nanolab_loss`, which is what
 train.py:348 logs: the **last** micro-batch's loss, not the mean.
 
 **The NS5 patch (pytorch-parity-plan F8).** ojas's Muon iterates
-Newton-Schulz in f32; nanolab's casts to bf16 (optim.py:46). For
+Newton-Schulz in f32 by default; nanolab's casts to bf16 (optim.py:46).
+`Ns5Precision::Bf16` runs nanolab's bf16 iteration, and
+`ojas-model/tests/oracle_parity.rs` gates it against `trace_ns5_bf16`. For
 `trace_ns5_f32`, `nanolab.optim.zeropower_via_newtonschulz5` is replaced, for
 the duration of the run, by a copy whose only change is `X = G.float()` in
 place of `X = G.bfloat16()`. `Muon._orthogonalize` looks the function up as a

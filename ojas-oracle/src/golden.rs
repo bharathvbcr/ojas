@@ -25,6 +25,7 @@ const GRADS_INIT: &[u8] = include_bytes!("../fixtures/tiny/grads_init.safetensor
 const GRADS_STEP5: &[u8] = include_bytes!("../fixtures/tiny/grads_step5.safetensors");
 const TRACE_F32: &[u8] = include_bytes!("../fixtures/tiny/trace_ns5_f32.safetensors");
 const TRACE_BF16: &[u8] = include_bytes!("../fixtures/tiny/trace_ns5_bf16.safetensors");
+const MUON_STEP_BF16: &[u8] = include_bytes!("../fixtures/tiny/muon_step_bf16.safetensors");
 const LR_SCHEDULES: &str = include_str!("../fixtures/tiny/lr_schedules.json");
 const BATCH_STARTS: &str = include_str!("../fixtures/tiny/batch_starts.json");
 const TOKENS: &[u8] = include_bytes!("../fixtures/tiny/tokens.bin");
@@ -202,6 +203,18 @@ impl Meta {
         let v = self.get(key)?;
         v.object()?;
         Ok(Meta(v.clone()))
+    }
+
+    /// An array of objects.
+    pub fn objects(&self, key: &str) -> Result<Vec<Meta>, OjasError> {
+        self.get(key)?
+            .items()?
+            .iter()
+            .map(|v| {
+                v.object()?;
+                Ok(Meta(v.clone()))
+            })
+            .collect()
     }
 }
 
@@ -591,9 +604,11 @@ pub struct TrainSetup {
     /// `fixtures/tiny/tokens.bin`; batches come from ojas-data's
     /// `BatchSampler` with `seed`, `batch` and `seq_len`, `accum` per step.
     pub token_bin: PathBuf,
+    /// The Newton-Schulz precision this trace's Muon ran (the file's tag).
+    pub ns5: Ns5,
 }
 
-fn train_setup(cfg: &Meta) -> Result<TrainSetup, OjasError> {
+fn train_setup(cfg: &Meta, ns5: Ns5) -> Result<TrainSetup, OjasError> {
     let lr_max = cfg.count("lr_max_steps")?;
     Ok(TrainSetup {
         seed: cfg.count("seed")? as u64,
@@ -619,6 +634,7 @@ fn train_setup(cfg: &Meta) -> Result<TrainSetup, OjasError> {
         eps: cfg.num("eps")?,
         grad_clip: cfg.num("grad_clip")?,
         token_bin: PathBuf::from(TINY_DIR).join("tokens.bin"),
+        ns5,
     })
 }
 
@@ -656,7 +672,7 @@ pub fn tiny_trace(ns5: Ns5) -> Result<TraceFixture, OjasError> {
     if provenance.kind()? != "trace" || meta.str("ns5")? != tag {
         return Err(bad("trace fixture kind or ns5 disagrees with its file"));
     }
-    let train = train_setup(&provenance.config()?)?;
+    let train = train_setup(&provenance.config()?, ns5)?;
     let steps = meta.count("steps")?;
     let params_after_step = meta.count("params_after_step")?;
     let per_step = |key: &str, n: usize| -> Result<Vec<f64>, OjasError> {
@@ -687,6 +703,75 @@ pub fn tiny_trace(ns5: Ns5) -> Result<TraceFixture, OjasError> {
         train,
         provenance,
     })
+}
+
+// ---------------------------------------------------------------------------
+// one stock Muon step
+// ---------------------------------------------------------------------------
+
+/// One unpatched `nanolab.optim.Muon.step` on one `[rows, cols]` matrix: its
+/// Newton-Schulz iterate is `G.bfloat16()` (`python/muon_step.py`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MuonStepCase {
+    pub rows: usize,
+    pub cols: usize,
+    pub lr: f64,
+    pub momentum: f64,
+    pub weight_decay: f64,
+    pub nesterov: bool,
+    /// Inputs: parameter, gradient and the momentum buffer before the step.
+    pub p: Vec<f32>,
+    pub g: Vec<f32>,
+    pub m: Vec<f32>,
+    /// torch's parameter and momentum buffer after the step.
+    pub p_after: Vec<f32>,
+    pub m_after: Vec<f32>,
+}
+
+/// The cases of `fixtures/tiny/muon_step_bf16.safetensors`, in file order.
+/// Refuses a file whose kind, NS5 tag, names or shapes disagree.
+pub fn muon_step_bf16() -> Result<Vec<MuonStepCase>, OjasError> {
+    let st = SafeTensors::parse(MUON_STEP_BF16)?;
+    let provenance = Provenance::of(&st)?;
+    let meta = &provenance.meta;
+    if provenance.kind()? != "muon_step" || meta.str("ns5")? != "bf16" {
+        return Err(bad("muon step fixture kind or ns5 disagrees with its file"));
+    }
+    let set = f32_set(&st)?;
+    let cases = meta.objects("cases")?;
+    if set.tensors.len() != cases.len() * 5 {
+        return Err(bad("muon step fixture holds tensors no case names"));
+    }
+    cases
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let (rows, cols) = (c.count("rows")?, c.count("cols")?);
+            let tensor = |name: &str| -> Result<Vec<f32>, OjasError> {
+                let key = format!("c{i}.{name}");
+                let t = set
+                    .get(&key)
+                    .ok_or_else(|| bad(&format!("muon step fixture has no {key}")))?;
+                if t.shape != [rows, cols] {
+                    return Err(bad(&format!("{key}: shape {:?}", t.shape)));
+                }
+                Ok(t.data.clone())
+            };
+            Ok(MuonStepCase {
+                rows,
+                cols,
+                lr: c.num("lr")?,
+                momentum: c.num("momentum")?,
+                weight_decay: c.num("weight_decay")?,
+                nesterov: c.bool("nesterov")?,
+                p: tensor("p")?,
+                g: tensor("g")?,
+                m: tensor("m")?,
+                p_after: tensor("p_after")?,
+                m_after: tensor("m_after")?,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

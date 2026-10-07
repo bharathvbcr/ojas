@@ -379,10 +379,56 @@ impl Tensor {
         Ok(tensor)
     }
 
+    /// Copy raw bf16 bits (`f32` bits `>> 16`) into a new contiguous `Bf16`
+    /// allocation. The bits are stored as given; NaN payloads are kept.
+    pub fn from_bf16_bits(
+        bits: &[u16],
+        shape: &[usize],
+        budget: &Budget,
+    ) -> Result<Self, OjasError> {
+        const OP: &str = "Tensor::from_bf16_bits";
+        let n = num_elements(shape)?;
+        if bits.len() != n {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: format!("data len {} != shape product {n}", bits.len()),
+            });
+        }
+        let mut tensor = Self::zeros(shape, DType::Bf16, budget)?;
+        tensor.bf16_slice_mut()?.copy_from_slice(bits);
+        Ok(tensor)
+    }
+
     /// The contiguous `F32` window, borrowed. Refusals, in order: dtype,
     /// placement, layout, window bounds.
     pub fn f32_slice(&self) -> Result<&[f32], OjasError> {
         self.f32_window("Tensor::f32_slice")
+    }
+
+    /// The contiguous `Bf16` window as raw bits, borrowed. Refusals as for
+    /// [`Tensor::f32_slice`]. An `F16` tensor is a dtype refusal: its bits
+    /// share the storage type but are not bf16.
+    pub fn bf16_slice(&self) -> Result<&[u16], OjasError> {
+        const OP: &str = "Tensor::bf16_slice";
+        self.expect_dtype(OP, DType::Bf16)?;
+        let w = self.host_window(OP)?;
+        match self.host_data(OP)? {
+            HostData::Half(v) => Ok(&v[w.start..w.start + w.len]),
+            _ => Err(storage_mismatch(OP, self.dtype)),
+        }
+    }
+
+    /// The contiguous `Bf16` window as raw bits, mutable. Refusals as for
+    /// [`Tensor::f32_slice_mut`]; the allocation must be uniquely owned.
+    pub fn bf16_slice_mut(&mut self) -> Result<&mut [u16], OjasError> {
+        const OP: &str = "Tensor::bf16_slice_mut";
+        self.expect_dtype(OP, DType::Bf16)?;
+        let w = self.host_window(OP)?;
+        let dtype = self.dtype;
+        match self.host_data_mut(OP)? {
+            HostData::Half(v) => Ok(&mut v[w.start..w.start + w.len]),
+            _ => Err(storage_mismatch(OP, dtype)),
+        }
     }
 
     /// Whether the contiguous `F32` window holds no NaN or infinity, with
@@ -505,7 +551,8 @@ impl Tensor {
     /// The contiguous window encoded native-endian, in a new vector. Any
     /// dtype. Refusals as for [`Tensor::write_ne_bytes`], all before
     /// anything is allocated; an allocation the allocator refuses is
-    /// [`OjasError::OutOfRange`]. The vector is not charged to any budget: this is for a caller
+    /// [`OjasError::CapacityExceeded`] with `cap` and `live` 0, since no
+    /// budget is involved. The vector is not charged to any budget: this is for a caller
     /// that hands the bytes on at once, such as a device upload that has
     /// already reserved the device copy.
     pub fn to_ne_bytes(&self) -> Result<Vec<u8>, OjasError> {
@@ -514,9 +561,10 @@ impl Tensor {
         let len = w.len * self.dtype.size();
         let mut out = Vec::new();
         if out.try_reserve_exact(len).is_err() {
-            return Err(OjasError::OutOfRange {
-                op: OP,
-                detail: format!("host allocation of {len} bytes failed"),
+            return Err(OjasError::CapacityExceeded {
+                requested: len as u64,
+                cap: 0,
+                live: 0,
             });
         }
         out.resize(len, 0);

@@ -280,6 +280,23 @@ fn batch_dims<G: Graph>(
     Ok((batch, seq))
 }
 
+/// Whether a training forward keeps every block's activations for the
+/// backward.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ActivationCheckpoint {
+    /// Every value inside every block stays on the tape until the backward.
+    #[default]
+    Off,
+    /// Each block is one [`Graph::checkpoint`] segment: the tape keeps the
+    /// block's output (and layer 0's raw `v`, which every later block
+    /// reads) and recomputes the rest of the block when the backward reaches
+    /// it. Activation memory goes from every block's intermediates to the
+    /// residual stream per block plus one block's intermediates, for a
+    /// second forward of every block. Gradients are the same bits as `Off`
+    /// wherever the backend gives the same bits for the same inputs.
+    Blocks,
+}
+
 /// Embedding, every block, then `norm_f`: `[B, T, n_embd]`.
 pub fn forward_hidden<G: Graph>(
     g: &mut G,
@@ -287,6 +304,19 @@ pub fn forward_hidden<G: Graph>(
     params: &ModelParams<G::V>,
     ids: &Tensor,
     rope: &Rope,
+) -> Result<G::V, OjasError> {
+    hidden(g, spec, params, ids, rope, ActivationCheckpoint::Off)
+}
+
+/// [`forward_hidden`], each block a checkpointed segment under
+/// [`ActivationCheckpoint::Blocks`].
+fn hidden<G: Graph>(
+    g: &mut G,
+    spec: &ModelSpec,
+    params: &ModelParams<G::V>,
+    ids: &Tensor,
+    rope: &Rope,
+    activations: ActivationCheckpoint,
 ) -> Result<G::V, OjasError> {
     let (batch, _) = batch_dims(g, spec, ids, rope)?;
     if params.blocks.len() != spec.n_layer {
@@ -302,11 +332,35 @@ pub fn forward_hidden<G: Graph>(
     let mut x = g.embedding(&params.tok_emb, ids)?;
     let mut v0: Option<G::V> = None;
     for p in &params.blocks {
-        let out = block(g, spec, p, &x, v0.as_ref(), rope, batch)?;
+        let (next, raw_v) = match activations {
+            ActivationCheckpoint::Off => {
+                let out = block(g, spec, p, &x, v0.as_ref(), rope, batch)?;
+                (out.x, Some(out.raw_v))
+            }
+            ActivationCheckpoint::Blocks => {
+                // Only layer 0's raw `v` is read later, so only its segment
+                // keeps a second output.
+                let first = v0.is_none();
+                let mut outs = g.checkpoint(|g| {
+                    let out = block(g, spec, p, &x, v0.as_ref(), rope, batch)?;
+                    Ok(if first {
+                        vec![out.x, out.raw_v]
+                    } else {
+                        vec![out.x]
+                    })
+                })?;
+                let raw_v = if first { outs.pop() } else { None };
+                let next = outs.pop().ok_or_else(|| OjasError::Shape {
+                    op: "forward",
+                    detail: "a checkpointed block returned no output".to_string(),
+                })?;
+                (next, raw_v)
+            }
+        };
         if v0.is_none() {
-            v0 = Some(out.raw_v);
+            v0 = raw_v;
         }
-        x = out.x;
+        x = next;
     }
     g.rms_norm(&x, &params.norm_f, spec.eps())
 }
@@ -325,6 +379,8 @@ pub fn forward_logits<G: Graph>(
 
 /// Mean cross-entropy of the next-token `targets` through the fused tied
 /// head (§5): a rank-0 loss. `targets` is `U32` `[B, T]` or `[B * T]`.
+/// `activations` chooses whether each block is a checkpointed segment
+/// ([`ActivationCheckpoint`]); it changes memory, not values.
 #[allow(clippy::too_many_arguments)]
 pub fn forward_loss<G: Graph>(
     g: &mut G,
@@ -335,6 +391,7 @@ pub fn forward_loss<G: Graph>(
     rope: &Rope,
     ignore: Option<u32>,
     chunk: CeChunk,
+    activations: ActivationCheckpoint,
 ) -> Result<G::V, OjasError> {
     let (batch, seq) = batch_dims(g, spec, ids, rope)?;
     let rows = batch * seq;
@@ -346,7 +403,7 @@ pub fn forward_loss<G: Graph>(
         });
     }
     let targets = targets.reshape(&[rows])?;
-    let h = forward_hidden(g, spec, params, ids, rope)?;
+    let h = hidden(g, spec, params, ids, rope, activations)?;
     let h = g.reshape(&h, &[rows, spec.n_embd])?;
     g.lin_ce(&h, &params.tok_emb, &targets, ignore, chunk)
 }

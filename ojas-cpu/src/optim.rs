@@ -1,4 +1,4 @@
-//! Torch `clip_grad_norm_` and single-tensor AdamW, plus Muon NS5 in f32.
+//! Torch `clip_grad_norm_` and single-tensor AdamW, plus Muon NS5 in f32 or bf16.
 //!
 //! Clip coefficient is `max_norm / (total_norm + CLIP_GRAD_NORM_EPS)` with
 //! [`ojas_core::CLIP_GRAD_NORM_EPS`] = `1e-6`, then `min(1, coefficient)`.
@@ -20,18 +20,23 @@
 //! `beta^step` is computed in f64 by [`ojas_core::pow_u64`] (binary exponentiation),
 //! not `f32` pow, inside [`ojas_core::check_adamw`], which also advances the step.
 //!
-//! Newton-Schulz on CPU stores the iterate in f32. Coefficients are the f64
+//! Newton-Schulz on CPU stores the iterate in f32. Under
+//! [`Ns5Precision::Bf16`] that iterate holds bf16 values and every
+//! intermediate is rounded as stock nanolab's `X = G.bfloat16()` rounds it
+//! (see `newton_schulz`). Coefficients are the f64
 //! literals 3.4445, -4.7750, 2.0315. Frobenius epsilon is 1e-7, added to the
 //! norm, not inside the square root. The step scalars `1 - lr * wd` and
 //! `-lr * max(1, rows/cols)^0.5` are formed in f64 and rounded to f32 once,
-//! as nanolab's Python floats are.
+//! as nanolab's Python floats are. The Nesterov blend and the parameter
+//! update are one fused `mul_add` per value, as torch's `add(.., alpha=..)`
+//! is; the momentum buffer and the decay are rounded op by op.
 //!
 //! Configs outside torch's accepted ranges (negative `lr`, `weight_decay`, or
 //! Muon `momentum`) are [`OjasError::OutOfRange`], matching the Metal path.
 
 use ojas_core::{
-    check_adamw, require_ns5, AdamWConfig, MuonNs5Config, Numerics, OjasError, Tensor, MUON_NS5_A,
-    MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    check_adamw, require_ns5, round_f32_to_bf16, AdamWConfig, MuonNs5Config, Ns5Precision,
+    Numerics, OjasError, Tensor, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 
 use std::sync::Mutex;
@@ -662,12 +667,17 @@ pub(crate) fn muon_ns5(
     if !all_finite(&buf) {
         return Err(nonfinite(OP));
     }
+    // torch's `g.add(buf, alpha=mom)` and `p.add_(o, alpha=-lr * scale)` are
+    // one fused multiply-add per value (`a + alpha * b` as `fmadd`), so
+    // both are `mul_add` here, under Exact too. The momentum buffer
+    // (`buf.mul_(mom).add_(g)`) and the decay (`p.mul_(1 - lr * wd)`) are
+    // separate ops, each rounded.
     let update: Vec<f32> = if config.nesterov {
-        zip_map(exec, grad, &buf, |g, b| g + mom * b)?
+        zip_map(exec, grad, &buf, |g, b| mom.mul_add(b, g))?
     } else {
         buf.to_vec()
     };
-    let ortho = newton_schulz(exec, update, rows, cols)?;
+    let ortho = newton_schulz(exec, update, rows, cols, config.ns5)?;
     if cols == 0 {
         return Err(shape(OP, "empty tensor"));
     }
@@ -679,9 +689,11 @@ pub(crate) fn muon_ns5(
         None
     } else if config.weight_decay != 0.0 {
         let decay = (1.0 - config.lr * config.weight_decay) as f32;
-        Some(zip_map(exec, param, &ortho, |p, o| p * decay + alpha * o)?)
+        Some(zip_map(exec, param, &ortho, |p, o| {
+            alpha.mul_add(o, p * decay)
+        })?)
     } else {
-        Some(zip_map(exec, param, &ortho, |p, o| p + alpha * o)?)
+        Some(zip_map(exec, param, &ortho, |p, o| alpha.mul_add(o, p))?)
     };
     drop(ortho);
     if new_p.as_deref().is_some_and(|p| !all_finite(p)) {
@@ -768,13 +780,40 @@ fn ns_gemm(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>) -> Result<Vec<f32>, OjasError
     Ok(c)
 }
 
+/// Round every value to bf16 where it is ([`Ns5Precision::Bf16`]), in
+/// [`ELEM_BLOCK`] pieces on the pool. Each value is rounded alone, so the
+/// cut changes no bit.
+fn round_bf16_in_place(exec: Exec<'_>, values: &mut [f32]) -> Result<(), OjasError> {
+    scoped::fill(exec, values, ELEM_BLOCK, |_, chunk| {
+        for value in chunk {
+            *value = round_f32_to_bf16(*value);
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Five Newton-Schulz steps on `update` (`rows x cols`, row-major).
+///
+/// Under [`Ns5Precision::Bf16`] the iterate holds bf16 values widened to
+/// f32, and every op rounds its result as torch's eager bf16 op does:
+/// `X = G.bfloat16()`, the norm, `norm + eps`, the division, each GEMM
+/// output (an f32 accumulation of bf16 operands, whose products are exact
+/// in f32), each scalar multiple and each sum. The GEMMs and the band split
+/// are the f32 path's; only the accumulation order inside a GEMM can differ
+/// from torch's, and then by at most one bf16 rounding of that output.
 fn newton_schulz(
     exec: Exec<'_>,
-    update: Vec<f32>,
+    mut update: Vec<f32>,
     rows: usize,
     cols: usize,
+    precision: Ns5Precision,
 ) -> Result<Vec<f32>, OjasError> {
     const OP: &str = "muon_ns5_step";
+    let bf16 = precision == Ns5Precision::Bf16;
+    if bf16 {
+        round_bf16_in_place(exec, &mut update)?;
+    }
     // Tall 2048×768 only: the bytes stay row-major 2048×768. The iterate is
     // that buffer read as 768×2048 (row stride 1, column stride 768), which
     // Apple cblas accepts as `CblasTrans` with leading dimension 768. `B @ X`
@@ -807,12 +846,19 @@ fn newton_schulz(
         }
     }
     let norm = sum_sq.sqrt() as f32;
-    let denom = norm + (MUON_NS_EPS as f32);
+    let denom = if bf16 {
+        round_f32_to_bf16(round_f32_to_bf16(norm) + (MUON_NS_EPS as f32))
+    } else {
+        norm + (MUON_NS_EPS as f32)
+    };
     if !(denom.is_finite() && denom != 0.0) {
         return Err(nonfinite(OP));
     }
     for value in &mut x {
         *value /= denom;
+    }
+    if bf16 {
+        round_bf16_in_place(exec, &mut x)?;
     }
     let a = MUON_NS5_A as f32;
     let b_coef = MUON_NS5_B as f32;
@@ -830,22 +876,33 @@ fn newton_schulz(
             Mat::row_major(&x, r, c)
         };
         let xmt = xm.t();
-        let am = if view {
+        let mut am = if view {
             gemm(OP, exec, &xm, &xmt)?
         } else {
             ns_gemm(exec, xm, xmt)?
         };
+        if bf16 {
+            round_bf16_in_place(exec, &mut am)?;
+        }
         let a_mat = Mat::row_major(&am, r, r);
-        let a2 = if one_cblas {
+        let mut a2 = if one_cblas {
             gemm(OP, exec, &a_mat, &a_mat)?
         } else {
             ns_gemm(exec, a_mat, a_mat)?
         };
-        let b_mat = zip_map(exec, &am, &a2, |am, a2v| b_coef * am + c_coef * a2v)?;
+        let b_mat = if bf16 {
+            round_bf16_in_place(exec, &mut a2)?;
+            zip_map(exec, &am, &a2, |am, a2v| {
+                let r = round_f32_to_bf16;
+                r(r(b_coef * am) + r(c_coef * a2v))
+            })?
+        } else {
+            zip_map(exec, &am, &a2, |am, a2v| b_coef * am + c_coef * a2v)?
+        };
         // Each intermediate is freed as soon as its last reader is done:
         // `muon_scratch` counts them that way.
         drop(a2);
-        let bx = if view {
+        let mut bx = if view {
             let sm = Mat::row_major(&x, c, r);
             let bt = Mat::row_major(&b_mat, r, r).t();
             gemm(OP, exec, &sm, &bt)?
@@ -857,7 +914,15 @@ fn newton_schulz(
             ns_gemm(exec, bm, xm)?
         };
         drop(b_mat);
-        let next = zip_map(exec, &x, &bx, |xv, bxv| a * xv + bxv)?;
+        let next = if bf16 {
+            round_bf16_in_place(exec, &mut bx)?;
+            zip_map(exec, &x, &bx, |xv, bxv| {
+                let r = round_f32_to_bf16;
+                r(r(a * xv) + bxv)
+            })?
+        } else {
+            zip_map(exec, &x, &bx, |xv, bxv| a * xv + bxv)?
+        };
         drop(bx);
         if !all_finite(&next) {
             return Err(nonfinite(OP));

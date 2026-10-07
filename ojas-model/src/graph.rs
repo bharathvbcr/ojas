@@ -78,6 +78,15 @@ pub trait Graph {
         ignore: Option<u32>,
         chunk: CeChunk,
     ) -> Result<Self::V, OjasError>;
+    /// Run `body` as one activation-checkpointed segment and return its
+    /// outputs. A tape keeps only those outputs and recomputes the rest of
+    /// the segment in the backward ([`Tape::checkpoint`]); use the returned
+    /// values, not the ones `body` made. [`Eval`] keeps nothing anyway and
+    /// runs `body` as it is.
+    fn checkpoint<F>(&mut self, body: F) -> Result<Vec<Self::V>, OjasError>
+    where
+        Self: Sized,
+        F: FnOnce(&mut Self) -> Result<Vec<Self::V>, OjasError>;
 }
 
 impl<B: Backend> Graph for Tape<B> {
@@ -120,7 +129,7 @@ impl<B: Backend> Graph for Tape<B> {
     }
 
     fn sdpa(&mut self, q: &Var, k: &Var, v: &Var) -> Result<Var, OjasError> {
-        Tape::causal_sdpa(self, *q, *k, *v)
+        Tape::causal_sdpa(self, *q, *k, *v, None)
     }
 
     /// Refused: cached attention is an inference op with no backward, and
@@ -173,6 +182,13 @@ impl<B: Backend> Graph for Tape<B> {
         chunk: CeChunk,
     ) -> Result<Var, OjasError> {
         Tape::linear_cross_entropy(self, *x, *w, targets.clone(), ignore, chunk)
+    }
+
+    fn checkpoint<F>(&mut self, body: F) -> Result<Vec<Var>, OjasError>
+    where
+        F: FnOnce(&mut Self) -> Result<Vec<Var>, OjasError>,
+    {
+        Tape::checkpoint(self, body)
     }
 }
 
@@ -256,7 +272,7 @@ impl<B: Backend> Graph for Eval<B> {
     }
 
     fn sdpa(&mut self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
-        self.backend.causal_sdpa_forward(q, k, v)
+        Ok(self.backend.causal_sdpa_forward(q, k, v, None)?.0)
     }
 
     fn cached_attn(
@@ -323,5 +339,12 @@ impl<B: Backend> Graph for Eval<B> {
             });
         }
         Ok(out.loss)
+    }
+
+    fn checkpoint<F>(&mut self, body: F) -> Result<Vec<Tensor>, OjasError>
+    where
+        F: FnOnce(&mut Self) -> Result<Vec<Tensor>, OjasError>,
+    {
+        body(self)
     }
 }

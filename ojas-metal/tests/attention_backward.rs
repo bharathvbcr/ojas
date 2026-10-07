@@ -23,9 +23,12 @@ fn check_case(m: &MetalBackend, b: usize, h: usize, t: usize, d: usize, seed: u6
     let v = rand(&shape, seed + 2, 1.0);
     let g = rand(&shape, seed + 3, 1.0);
     let tag = format!("sdpa bwd b{b} h{h} t{t} d{d}");
-    let (wq, wk, wv) = ok(&tag, c.causal_sdpa_backward(&q, &k, &v, &g));
+    let (wq, wk, wv) = ok(&tag, c.causal_sdpa_backward_recompute(&q, &k, &v, &g, None));
     let dd = [up(m, &q), up(m, &k), up(m, &v), up(m, &g)];
-    let (gq, gk, gv) = ok(&tag, m.causal_sdpa_backward(&dd[0], &dd[1], &dd[2], &dd[3]));
+    let (gq, gk, gv) = ok(
+        &tag,
+        m.causal_sdpa_backward_recompute(&dd[0], &dd[1], &dd[2], &dd[3], None),
+    );
     same_tensor(&format!("{tag} dq"), &gq, &wq, tol(t), 1e-3);
     same_tensor(&format!("{tag} dk"), &gk, &wk, tol(t), 1e-3);
     same_tensor(&format!("{tag} dv"), &gv, &wv, tol(t), 1e-3);
@@ -77,9 +80,15 @@ fn backward_is_deterministic() {
     let m = metal();
     let shape = [2usize, 2, 100, 64];
     let d: Vec<Tensor> = (0..4).map(|i| up(&m, &rand(&shape, 50 + i, 1.0))).collect();
-    let first = ok("first", m.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3]));
+    let first = ok(
+        "first",
+        m.causal_sdpa_backward_recompute(&d[0], &d[1], &d[2], &d[3], None),
+    );
     for _ in 0..3 {
-        let again = ok("again", m.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3]));
+        let again = ok(
+            "again",
+            m.causal_sdpa_backward_recompute(&d[0], &d[1], &d[2], &d[3], None),
+        );
         for (a, b) in [
             (&first.0, &again.0),
             (&first.1, &again.1),
@@ -113,16 +122,17 @@ fn backward_reads_views_at_unaligned_offsets() {
     }
     let (wq, wk, wv) = ok(
         "cpu",
-        c.causal_sdpa_backward(
+        c.causal_sdpa_backward_recompute(
             &host_inputs[0],
             &host_inputs[1],
             &host_inputs[2],
             &host_inputs[3],
+            None,
         ),
     );
     let (gq, gk, gv) = ok(
         "metal",
-        m.causal_sdpa_backward(&device[0], &device[1], &device[2], &device[3]),
+        m.causal_sdpa_backward_recompute(&device[0], &device[1], &device[2], &device[3], None),
     );
     same_tensor("offset dq", &gq, &wq, tol(37), 1e-3);
     same_tensor("offset dk", &gk, &wk, tol(37), 1e-3);
@@ -134,26 +144,45 @@ fn non_finite_inputs_and_overflowing_scores_are_refused() {
     let m = metal();
     let shape = [1usize, 2, 40, 64];
     let n: usize = shape.iter().product();
-    for which in 0..4 {
+    let rows = [1usize, 2, 40];
+    let c = cpu();
+    // q, k, v, output, lse, grad_output: a clean forward's output and lse,
+    // then one operand of six poisoned.
+    let qkv: Vec<Tensor> = (0..3).map(|i| rand(&shape, 90 + i, 1.0)).collect();
+    let (out, lse) = ok(
+        "cpu forward",
+        c.causal_sdpa_forward(&qkv[0], &qkv[1], &qkv[2], None),
+    );
+    let clean = [
+        qkv[0].clone(),
+        qkv[1].clone(),
+        qkv[2].clone(),
+        out,
+        lse,
+        rand(&shape, 93, 1.0),
+    ];
+    for which in 0..6 {
         for bad in [f32::NAN, f32::INFINITY] {
-            let mut ins: Vec<Tensor> = (0..4).map(|i| rand(&shape, 90 + i, 1.0)).collect();
-            let mut vals = values(n, 99, 1.0);
-            vals[n / 2 + which] = bad;
-            ins[which] = host(&vals, &shape);
+            let mut ins = clean.clone();
+            let mut vals = ins[which].to_f32_vec().expect("host values");
+            let at = vals.len() / 2 + which;
+            vals[at] = bad;
+            ins[which] = host(&vals, ins[which].shape());
             let d: Vec<Tensor> = ins.iter().map(|t| up(&m, t)).collect();
-            let r = m.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3]);
+            let r = m.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3], &d[4], &d[5], None);
             deferred(
                 &m,
-                &format!("input {which} = {bad}"),
+                &format!("operand {which} = {bad}"),
                 r,
                 "causal_sdpa_backward",
             );
         }
     }
-    // Finite inputs whose scores overflow f32.
+    // Finite operands whose scores overflow f32.
     let huge = host(&vec![3.0e19f32; n], &shape);
     let small = rand(&shape, 7, 1.0);
-    let (hq, s) = (up(&m, &huge), up(&m, &small));
-    let r = m.causal_sdpa_backward(&hq, &hq, &s, &s);
+    let zero_rows = host(&vec![0.0f32; rows.iter().product()], &rows);
+    let (hq, s, z) = (up(&m, &huge), up(&m, &small), up(&m, &zero_rows));
+    let r = m.causal_sdpa_backward(&hq, &hq, &s, &s, &z, &s, None);
     deferred(&m, "overflowing scores", r, "causal_sdpa_backward");
 }

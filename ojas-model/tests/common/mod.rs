@@ -263,25 +263,41 @@ impl Backend for Resident {
         )?;
         Ok((self.d(a)?, self.d(b)?, self.d(c)?, self.d(d)?))
     }
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_forward";
-        self.d(self
-            .cpu
-            .causal_sdpa_forward(&self.h(OP, q)?, &self.h(OP, k)?, &self.h(OP, v)?)?)
+        let (y, lse) = self.cpu.causal_sdpa_forward(
+            &self.h(OP, q)?,
+            &self.h(OP, k)?,
+            &self.h(OP, v)?,
+            window,
+        )?;
+        Ok((self.d(y)?, self.d(lse)?))
     }
     fn causal_sdpa_backward(
         &self,
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        o: &Tensor,
+        lse: &Tensor,
         g: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_backward";
         let (a, b, c) = self.cpu.causal_sdpa_backward(
             &self.h(OP, q)?,
             &self.h(OP, k)?,
             &self.h(OP, v)?,
+            &self.h(OP, o)?,
+            &self.h(OP, lse)?,
             &self.h(OP, g)?,
+            window,
         )?;
         Ok((self.d(a)?, self.d(b)?, self.d(c)?))
     }
@@ -808,19 +824,28 @@ impl<B: Backend> Backend for Probe<B> {
         self.gate("rms_qk_norm_backward")?;
         self.inner.rms_qk_norm_backward(q, k, qw, kw, gq, gk, eps)
     }
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         self.gate("causal_sdpa_forward")?;
-        self.inner.causal_sdpa_forward(q, k, v)
+        self.inner.causal_sdpa_forward(q, k, v, window)
     }
     fn causal_sdpa_backward(
         &self,
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        o: &Tensor,
+        lse: &Tensor,
         g: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         self.gate("causal_sdpa_backward")?;
-        self.inner.causal_sdpa_backward(q, k, v, g)
+        self.inner.causal_sdpa_backward(q, k, v, o, lse, g, window)
     }
     fn per_head_sigmoid_gate_forward(
         &self,

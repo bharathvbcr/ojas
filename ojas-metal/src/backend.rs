@@ -37,27 +37,30 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use ojas_core::{
-    adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
-    check_adamw, clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
-    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
-    kv_cache_write_dims, linear_backward_dims, linear_ce_dims, linear_forward_dims,
-    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, permute_output_shape, refuse_unsupported_metal_head_dim,
-    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
-    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
-    rope_half_split_backward_dims, rope_half_split_forward_dims, silu_backward_dims,
-    silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, DeviceBuffer, GateDims, LinearCe,
-    MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Reservation, RmsDims,
-    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
+    accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
+    check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
+    clip_scale, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
+    embedding_backward_dims, embedding_forward_dims, kv_cache_write_dims, linear_backward_dims,
+    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
+    refuse_bf16_operands, refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim,
+    residual_add_backward_dims,
+    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
+    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
+    rope_half_split_forward_dims, silu_backward_dims, silu_forward_dims,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
+    BackendId, Budget, CeChunk, DType, DeviceBuffer, GateDims, GdnDims, GdnForward, GdnGrad,
+    GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
 };
 
 use crate::link::{
-    metal_err, rms_w_chunks, Arg, Cmd, LceGeom, Link, Reply, Res, RmsSide, RopeMode,
+    metal_err, rms_w_chunks, Arg, Cmd, GdnArgs, LceGeom, Link, Reply, Res, RmsSide, RopeMode,
+    SdpaGeom, WaitCounts, Waits,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -132,7 +135,7 @@ impl MetalBackend {
     /// Open the default Metal device on its own thread. Off macOS, or without
     /// the `metal` feature, this is [`OjasError::Unsupported`].
     pub fn new(budget: Budget) -> Result<Self, OjasError> {
-        let waits = Arc::new(AtomicU64::new(0));
+        let waits = Arc::new(Waits::default());
         let (tx, name) = crate::device::spawn(Arc::clone(&waits), budget.cap_bytes())?;
         Ok(Self {
             link: Arc::new(Link::new(tx, name, waits)),
@@ -160,7 +163,31 @@ impl MetalBackend {
     /// stable API.
     #[doc(hidden)]
     pub fn waits(&self) -> u64 {
-        self.link.waits()
+        self.link.wait_counts().total()
+    }
+
+    /// [`Self::waits`] by trigger: every waited commit counted once, under
+    /// what made it wait (an upload while work was recorded, a read, a
+    /// sync, `clip_grad_norm`, the memory cap, the working set, a full
+    /// status slab, a recycle after a failed allocation). Telemetry for
+    /// tests and benches, not a stable API.
+    #[doc(hidden)]
+    pub fn wait_counts(&self) -> WaitCounts {
+        self.link.wait_counts()
+    }
+
+    /// Carry uploads of at most 64 KiB inline while work is recorded (the
+    /// default), or turn that off so every such upload waits as it did
+    /// before inline uploads existed. For before/after wait measurements;
+    /// not a stable API.
+    #[doc(hidden)]
+    pub fn set_inline_uploads(&self, on: bool) -> Result<(), OjasError> {
+        match self.link.call(Cmd::InlineUploads { on })? {
+            Reply::Done => Ok(()),
+            other => Err(metal_err(format!(
+                "set_inline_uploads: device returned {other:?}"
+            ))),
+        }
     }
 
     /// Another handle on this backend's device that charges `budget`
@@ -342,6 +369,74 @@ impl MetalBackend {
         }
     }
 
+    /// Causal SDPA forward after its validator: the output and the
+    /// `[B, H, T]` row log-sum-exp. Grouped-query heads read their KV head
+    /// in place, so nothing beyond the two outputs is charged.
+    fn sdpa_forward(
+        &self,
+        op: &'static str,
+        dims: &SdpaDims,
+        window: Option<usize>,
+        [q, k, v]: [&Tensor; 3],
+    ) -> Res<(Tensor, Tensor)> {
+        let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
+        let geom = sdpa_launch(op, dims, window)?;
+        let shapes = [q.shape(), lse_shape(q.shape())];
+        let mut out = self
+            .outputs(
+                op,
+                &shapes,
+                0,
+                Cmd::Sdpa {
+                    q: qa,
+                    k: ka,
+                    v: va,
+                    geom,
+                },
+            )?
+            .into_iter();
+        match (out.next(), out.next()) {
+            (Some(y), Some(lse)) => Ok((y, lse)),
+            _ => Err(metal_err(format!("{op}: missing outputs"))),
+        }
+    }
+
+    /// Causal SDPA backward after its validator, from the forward's output
+    /// and log-sum-exp: `[q, k, v, output, lse, grad_output]`. The only
+    /// scratch is the per-row `Dr = dO · O`, `B * H * T` floats; grouped-query
+    /// gradients are summed in place onto their KV head.
+    fn sdpa_backward(
+        &self,
+        op: &'static str,
+        dims: &SdpaDims,
+        window: Option<usize>,
+        operands: [&Tensor; 6],
+    ) -> Res<(Tensor, Tensor, Tensor)> {
+        let [q, k, v, ..] = operands;
+        let mut args = [Arg {
+            id: 0,
+            off: 0,
+            n: 0,
+        }; 6];
+        for (slot, t) in args.iter_mut().zip(operands) {
+            *slot = self.f32(op, t)?;
+        }
+        let geom = sdpa_launch(op, dims, window)?;
+        let scratch = product(op, lse_shape(q.shape()))?;
+        let mut out = self
+            .outputs(
+                op,
+                &[q.shape(), k.shape(), v.shape()],
+                scratch,
+                Cmd::SdpaBwd { args, geom },
+            )?
+            .into_iter();
+        match (out.next(), out.next(), out.next()) {
+            (Some(a), Some(b), Some(c)) => Ok((a, b, c)),
+            _ => Err(metal_err(format!("{op}: missing outputs"))),
+        }
+    }
+
     /// One RMSNorm operand set whose shapes `dims` already validated: x, w
     /// and the gradient placed in that order, then the 32-bit caps.
     fn rms_side(
@@ -472,6 +567,28 @@ fn muon_scratch_elems(op: &'static str, rows: usize, cols: usize) -> Res<usize> 
         .ok_or_else(|| overflow(op))
 }
 
+/// f32 values of tessl's `GdnTrainWorkspace` for these dims (its
+/// `bytes_for`): one 64-token chunk of recomputed `[128, 16]` state slices
+/// per (slice, batch x head), and per-slice partial `dq`, `dk` (128 wide),
+/// `dg` and `dbeta`. The device thread checks this against tessl's own
+/// figure before it allocates, so the two cannot drift silently.
+fn gdn_workspace_elems(op: &'static str, d: &GdnDims) -> Res<usize> {
+    let slices = d.value_dim / METAL_GDN_VALUE_BLOCK;
+    let chunk = product(
+        op,
+        &[
+            d.batch,
+            d.heads,
+            slices,
+            ojas_core::GDN_CHECKPOINT_TOKENS,
+            METAL_GDN_KEY_DIM,
+            METAL_GDN_VALUE_BLOCK,
+        ],
+    )?;
+    let parts = product(op, &[slices, d.rows(), 2 * METAL_GDN_KEY_DIM + 2])?;
+    chunk.checked_add(parts).ok_or_else(|| overflow(op))
+}
+
 fn product(op: &'static str, dims: &[usize]) -> Res<usize> {
     dims.iter()
         .try_fold(1usize, |acc, &d| acc.checked_mul(d))
@@ -516,22 +633,6 @@ fn u32_dim(op: &'static str, n: usize) -> Res<u32> {
     })
 }
 
-/// `accumulate_grad` has no validator of its own (docs/shape-contract.md):
-/// it is [`residual_add_forward_dims`] reported under its own name.
-fn accumulate_grad_dims(acc: &Tensor, grad: &Tensor) -> Res<usize> {
-    const OP: &str = "accumulate_grad";
-    residual_add_forward_dims(acc, grad).map_err(|err| match err {
-        OjasError::Shape { detail, .. } => OjasError::Shape { op: OP, detail },
-        OjasError::Dtype { expected, got, .. } => OjasError::Dtype {
-            op: OP,
-            expected,
-            got,
-        },
-        OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
-        other => other,
-    })
-}
-
 /// The rope kernel's `(rows, dim, mode)` of validated `dims`.
 fn rope_mode(op: &'static str, dims: &RopeDims) -> Res<(u32, u32, RopeMode)> {
     let mode = match dims.layout {
@@ -544,11 +645,12 @@ fn rope_mode(op: &'static str, dims: &RopeDims) -> Res<(u32, u32, RopeMode)> {
     Ok((u32_dim(op, dims.rows)?, u32_dim(op, dims.dim)?, mode))
 }
 
-/// The attention kernels' `(bh, t, d, rep)` of validated `dims`, with Metal's
+/// The attention kernels' geometry of validated `dims`, with Metal's
 /// head-dim cap: a device limit, so after the validator (D9). `rep` is 1
 /// when the head counts match, including both zero, so this never divides
-/// by zero. `bh` counts query heads.
-fn sdpa_launch(op: &'static str, dims: &SdpaDims) -> Res<(u32, u32, u32, u32)> {
+/// by zero. `bh` counts query heads. A window of at least `T` sees every
+/// earlier key and is sent as `0`.
+fn sdpa_launch(op: &'static str, dims: &SdpaDims, window: Option<usize>) -> Res<SdpaGeom> {
     let d = u32_dim(op, dims.head_dim)?;
     refuse_unsupported_metal_head_dim(BackendId::Metal, d)?;
     let bh = product(op, &[dims.batch, dims.heads])?;
@@ -557,12 +659,23 @@ fn sdpa_launch(op: &'static str, dims: &SdpaDims) -> Res<(u32, u32, u32, u32)> {
     } else {
         dims.heads / dims.kv_heads
     };
-    Ok((
-        u32_dim(op, bh)?,
-        u32_dim(op, dims.seq)?,
+    let window = match window {
+        Some(0) => return Err(metal_err(format!("{op}: sdpa window must be at least 1"))),
+        Some(w) if w < dims.seq => u32_dim(op, w)?,
+        _ => 0,
+    };
+    Ok(SdpaGeom {
+        bh: u32_dim(op, bh)?,
+        t: u32_dim(op, dims.seq)?,
         d,
-        u32_dim(op, rep)?,
-    ))
+        rep: u32_dim(op, rep)?,
+        window,
+    })
+}
+
+/// `[B, H, T]`: one log-sum-exp per query row of a `[B, H, T, D]` query.
+fn lse_shape(q: &[usize]) -> &[usize] {
+    &q[..q.len().saturating_sub(1)]
 }
 
 /// The gate kernels' `(rows, din, heads, dh)` of validated `dims`.
@@ -573,6 +686,145 @@ fn gate_params(op: &'static str, g: &GateDims) -> Res<(u32, u32, u32, u32)> {
         u32_dim(op, g.heads)?,
         u32_dim(op, g.head_dim)?,
     ))
+}
+
+impl MetalBackend {
+    /// The gate forward, with the per-head sigmoid when `save`.
+    fn gate_forward(
+        &self,
+        [input, weight, bias, attn_out]: [&Tensor; 4],
+        save: bool,
+    ) -> Res<(Tensor, Option<Tensor>)> {
+        const OP: &str = "per_head_sigmoid_gate_forward";
+        let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
+        let (x, w, b, a) = (
+            self.f32(OP, input)?,
+            self.f32(OP, weight)?,
+            self.f32(OP, bias)?,
+            self.f32(OP, attn_out)?,
+        );
+        let (rows, din, heads, dh) = gate_params(OP, &dims)?;
+        let units = rows as usize * heads as usize;
+        let scale_shape = [dims.rows, dims.heads];
+        let shapes: &[&[usize]] = if save {
+            &[attn_out.shape(), &scale_shape]
+        } else {
+            &[attn_out.shape()]
+        };
+        let cmd = Cmd::Gate {
+            x,
+            w,
+            b,
+            attn: a,
+            rows,
+            din,
+            heads,
+            dh,
+            save,
+        };
+        let mut out = self.outputs(OP, shapes, units, cmd)?.into_iter();
+        let y = out
+            .next()
+            .ok_or_else(|| metal_err(format!("{OP}: no output")))?;
+        Ok((y, out.next()))
+    }
+
+    /// The gate backward, from the saving forward's sigmoid when `scales`.
+    fn gate_backward(
+        &self,
+        [input, weight, bias, attn_out, grad_output]: [&Tensor; 5],
+        scales: Option<&Tensor>,
+    ) -> Res<PerHeadGateGrad> {
+        const OP: &str = "per_head_sigmoid_gate_backward";
+        let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
+        if let Some(s) = scales {
+            if s.shape() != [dims.rows, dims.heads] {
+                return Err(shape(
+                    OP,
+                    format!(
+                        "saved scales {:?}, expected [{}, {}]",
+                        s.shape(),
+                        dims.rows,
+                        dims.heads
+                    ),
+                ));
+            }
+        }
+        let (x, w, b, a) = (
+            self.f32(OP, input)?,
+            self.f32(OP, weight)?,
+            self.f32(OP, bias)?,
+            self.f32(OP, attn_out)?,
+        );
+        let gy = self.f32(OP, grad_output)?;
+        let scales = scales.map(|s| self.f32(OP, s)).transpose()?;
+        let (rows, din, heads, dh) = gate_params(OP, &dims)?;
+        let units = rows as usize * heads as usize;
+        // d_pre, plus the logits when they are recomputed.
+        let scratch = if scales.is_some() { units } else { 2 * units };
+        let mut out = self
+            .outputs(
+                OP,
+                &[
+                    input.shape(),
+                    weight.shape(),
+                    bias.shape(),
+                    attn_out.shape(),
+                ],
+                scratch,
+                Cmd::GateBwd {
+                    x,
+                    w,
+                    b,
+                    attn: a,
+                    gy,
+                    scales,
+                    rows,
+                    din,
+                    heads,
+                    dh,
+                },
+            )?
+            .into_iter();
+        match (out.next(), out.next(), out.next(), out.next()) {
+            (Some(input), Some(weight), Some(bias), Some(attn_out)) => Ok(PerHeadGateGrad {
+                input,
+                weight,
+                bias,
+                attn_out,
+            }),
+            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        }
+    }
+}
+
+impl MetalBackend {
+    /// The gated delta rule's operands placed in argument order, then
+    /// tessl's compiled dims ([`refuse_unsupported_metal_gdn`]) and the
+    /// 32-bit dims its kernels index with.
+    fn gdn_args(&self, op: &'static str, inputs: GdnInputs<'_>, d: &GdnDims) -> Res<GdnArgs> {
+        let q = self.f32(op, inputs.q)?;
+        let k = self.f32(op, inputs.k)?;
+        let v = self.f32(op, inputs.v)?;
+        let g = self.f32(op, inputs.g)?;
+        let beta = self.f32(op, inputs.beta)?;
+        let s0 = inputs.initial_state.map(|t| self.f32(op, t)).transpose()?;
+        refuse_unsupported_metal_gdn(BackendId::Metal, d.key_dim, d.value_dim)?;
+        u32_dim(op, d.rows())?;
+        Ok(GdnArgs {
+            q,
+            k,
+            v,
+            g,
+            beta,
+            s0,
+            batch: u32_dim(op, d.batch)?,
+            seq: u32_dim(op, d.seq)?,
+            heads: u32_dim(op, d.heads)?,
+            v_dim: u32_dim(op, d.value_dim)?,
+            ws_elems: gdn_workspace_elems(op, d)?,
+        })
+    }
 }
 
 impl Backend for MetalBackend {
@@ -660,7 +912,7 @@ impl Backend for MetalBackend {
     /// op: a Metal tensor is never empty.
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
         const OP: &str = "permute";
-        let out = permute_output_shape(OP, input.shape(), dims)?;
+        let out = permute_dims(input, dims)?;
         let x = self.f32(OP, input)?;
         let in_strides = row_major_strides(input.shape());
         let mut oshape = [1u32; MAX_PERMUTE_RANK];
@@ -734,6 +986,7 @@ impl Backend for MetalBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
+        refuse_bf16_operands(OP, BackendId::Metal, &[input, weight])?;
         let x = self.f32(OP, input)?;
         let w = self.f32(OP, weight)?;
         u32_dim(OP, product(OP, &dims.out_shape)?)?;
@@ -759,6 +1012,7 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
+        refuse_bf16_operands(OP, BackendId::Metal, &[input, weight, grad_output])?;
         let x = self.f32(OP, input)?;
         let w = self.f32(OP, weight)?;
         let gy = self.f32(OP, grad_output)?;
@@ -893,34 +1147,17 @@ impl Backend for MetalBackend {
         Ok((gq, gk, gqw, gkw))
     }
 
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_forward";
-        let dims = causal_sdpa_forward_dims(q, k, v)?;
-        let (qa, ka, va) = (self.f32(OP, q)?, self.f32(OP, k)?, self.f32(OP, v)?);
-        let (bh, t, d, rep) = sdpa_launch(OP, &dims)?;
-        // Multi-head charges nothing extra. Grouped-query holds the expanded
-        // K and V for the equal-head kernel.
-        let scratch = if rep == 1 {
-            0
-        } else {
-            product(OP, q.shape())?
-                .checked_mul(2)
-                .ok_or_else(|| overflow(OP))?
-        };
-        self.one(
-            OP,
-            q.shape(),
-            scratch,
-            Cmd::Sdpa {
-                q: qa,
-                k: ka,
-                v: va,
-                bh,
-                t,
-                d,
-                rep,
-            },
-        )
+        let dims = causal_sdpa_forward_dims(q, k, v, window)?;
+        refuse_bf16_operands(OP, BackendId::Metal, &[q, k, v])?;
+        self.sdpa_forward(OP, &dims, window, [q, k, v])
     }
 
     fn causal_sdpa_backward(
@@ -928,45 +1165,15 @@ impl Backend for MetalBackend {
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
         grad_output: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_backward";
-        let dims = causal_sdpa_backward_dims(q, k, v, grad_output)?;
-        let (qa, ka, va) = (self.f32(OP, q)?, self.f32(OP, k)?, self.f32(OP, v)?);
-        let gy = self.f32(OP, grad_output)?;
-        let (bh, t, d, rep) = sdpa_launch(OP, &dims)?;
-        // Multi-head scratch is the log-sum-exp and the row dot, `2 * bh * t`.
-        // Grouped-query also holds expanded K, V, dK and dV.
-        let scratch = if rep == 1 {
-            2 * bh as usize * t as usize
-        } else {
-            let stats = 2 * bh as usize * t as usize;
-            let extra = product(OP, q.shape())?
-                .checked_mul(4)
-                .ok_or_else(|| overflow(OP))?;
-            stats.checked_add(extra).ok_or_else(|| overflow(OP))?
-        };
-        let mut out = self
-            .outputs(
-                OP,
-                &[q.shape(), k.shape(), v.shape()],
-                scratch,
-                Cmd::SdpaBwd {
-                    q: qa,
-                    k: ka,
-                    v: va,
-                    gy,
-                    bh,
-                    t,
-                    d,
-                    rep,
-                },
-            )?
-            .into_iter();
-        match (out.next(), out.next(), out.next()) {
-            (Some(a), Some(b), Some(c)) => Ok((a, b, c)),
-            _ => Err(metal_err(format!("{OP}: missing outputs"))),
-        }
+        let dims = causal_sdpa_backward_dims(q, k, v, output, lse, grad_output, window)?;
+        refuse_bf16_operands(OP, BackendId::Metal, &[q, k, v, output, lse, grad_output])?;
+        self.sdpa_backward(OP, &dims, window, [q, k, v, output, lse, grad_output])
     }
 
     fn per_head_sigmoid_gate_forward(
@@ -976,30 +1183,20 @@ impl Backend for MetalBackend {
         bias: &Tensor,
         attn_out: &Tensor,
     ) -> Result<Tensor, OjasError> {
-        const OP: &str = "per_head_sigmoid_gate_forward";
-        let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
-        let (x, w, b, a) = (
-            self.f32(OP, input)?,
-            self.f32(OP, weight)?,
-            self.f32(OP, bias)?,
-            self.f32(OP, attn_out)?,
-        );
-        let (rows, din, heads, dh) = gate_params(OP, &dims)?;
-        self.one(
-            OP,
-            attn_out.shape(),
-            rows as usize * heads as usize,
-            Cmd::Gate {
-                x,
-                w,
-                b,
-                attn: a,
-                rows,
-                din,
-                heads,
-                dh,
-            },
-        )
+        self.gate_forward([input, weight, bias, attn_out], false)
+            .map(|(y, _)| y)
+    }
+
+    /// The forward and the per-head sigmoid `[rows, heads]` it multiplied
+    /// by, bit for bit the value the recomputing backward forms.
+    fn per_head_sigmoid_gate_forward_saving(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+    ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+        self.gate_forward([input, weight, bias, attn_out], true)
     }
 
     fn per_head_sigmoid_gate_backward(
@@ -1010,46 +1207,91 @@ impl Backend for MetalBackend {
         attn_out: &Tensor,
         grad_output: &Tensor,
     ) -> Result<PerHeadGateGrad, OjasError> {
-        const OP: &str = "per_head_sigmoid_gate_backward";
-        let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
-        let (x, w, b, a) = (
-            self.f32(OP, input)?,
-            self.f32(OP, weight)?,
-            self.f32(OP, bias)?,
-            self.f32(OP, attn_out)?,
-        );
-        let gy = self.f32(OP, grad_output)?;
-        let (rows, din, heads, dh) = gate_params(OP, &dims)?;
+        self.gate_backward([input, weight, bias, attn_out, grad_output], None)
+    }
+
+    /// The backward with the saving forward's sigmoid: no logits GEMM and
+    /// no bias read. `scales` must be this backend's `[rows, heads]` F32.
+    fn per_head_sigmoid_gate_backward_saved(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+        grad_output: &Tensor,
+        scales: &Tensor,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        self.gate_backward([input, weight, bias, attn_out, grad_output], Some(scales))
+    }
+
+    fn chunked_gdn_forward(&self, inputs: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
+        const OP: &str = "chunked_gdn_forward";
+        let dims = chunked_gdn_forward_dims(inputs)?;
+        let x = self.gdn_args(OP, inputs, &dims)?;
+        let shapes: [&[usize]; 3] = [
+            inputs.v.shape(),
+            &dims.state_shape(),
+            &dims.checkpoint_shape(),
+        ];
+        let mut out = self.outputs(OP, &shapes, 0, Cmd::Gdn { x })?.into_iter();
+        match (out.next(), out.next(), out.next()) {
+            (Some(output), Some(final_state), Some(checkpoints)) => Ok(GdnForward {
+                output,
+                final_state,
+                checkpoints,
+            }),
+            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        }
+    }
+
+    fn chunked_gdn_backward(
+        &self,
+        inputs: GdnInputs<'_>,
+        checkpoints: &Tensor,
+        grad_output: &Tensor,
+        grad_final_state: Option<&Tensor>,
+    ) -> Result<GdnGrad, OjasError> {
+        const OP: &str = "chunked_gdn_backward";
+        let dims = chunked_gdn_backward_dims(inputs, checkpoints, grad_output, grad_final_state)?;
+        let x = self.gdn_args(OP, inputs, &dims)?;
+        let ckpt = self.f32(OP, checkpoints)?;
+        let d_o = self.f32(OP, grad_output)?;
+        let d_fin = grad_final_state.map(|t| self.f32(OP, t)).transpose()?;
+        let (qs, vs, gs) = (inputs.q.shape(), inputs.v.shape(), inputs.g.shape());
+        let state = dims.state_shape();
+        let mut shapes: Vec<&[usize]> = vec![qs, qs, vs, gs, gs];
+        if inputs.initial_state.is_some() {
+            shapes.push(&state);
+        }
+        let scratch = x.ws_elems;
         let mut out = self
             .outputs(
                 OP,
-                &[
-                    input.shape(),
-                    weight.shape(),
-                    bias.shape(),
-                    attn_out.shape(),
-                ],
-                2 * rows as usize * heads as usize,
-                Cmd::GateBwd {
+                &shapes,
+                scratch,
+                Cmd::GdnBwd {
                     x,
-                    w,
-                    b,
-                    attn: a,
-                    gy,
-                    rows,
-                    din,
-                    heads,
-                    dh,
+                    ckpt,
+                    d_o,
+                    d_fin,
                 },
             )?
             .into_iter();
-        match (out.next(), out.next(), out.next(), out.next()) {
-            (Some(input), Some(weight), Some(bias), Some(attn_out)) => Ok(PerHeadGateGrad {
-                input,
-                weight,
-                bias,
-                attn_out,
-            }),
+        match (out.next(), out.next(), out.next(), out.next(), out.next()) {
+            (Some(q), Some(k), Some(v), Some(g), Some(beta)) => {
+                let initial_state = out.next();
+                if inputs.initial_state.is_some() != initial_state.is_some() {
+                    return Err(metal_err(format!("{OP}: initial-state gradient mismatch")));
+                }
+                Ok(GdnGrad {
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    initial_state,
+                })
+            }
             _ => Err(metal_err(format!("{OP}: missing outputs"))),
         }
     }
@@ -1482,6 +1724,7 @@ impl Backend for MetalBackend {
             nesterov: config.nesterov,
             decay,
             alpha,
+            bf16: config.ns5 == Ns5Precision::Bf16,
         })? {
             Reply::Done => Ok(()),
             other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
@@ -1832,6 +2075,39 @@ mod tests {
         (p, m1, m2)
     }
 
+    /// A tessl runtime poisoned by a failed or timed-out command buffer is
+    /// the device's loss: every later op, sync, upload and read is the
+    /// typed [`OjasError::DeviceLost`], not a `Backend` string.
+    #[test]
+    fn a_poisoned_runtime_surfaces_as_the_typed_device_lost_error() {
+        let host = Budget::new(1 << 20);
+        let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+        let x = m
+            .upload(&Tensor::from_f32(&[1.0, 2.0], &[2], &host).expect("host"))
+            .expect("upload");
+        let _pending = m.silu_forward(&x).expect("records");
+        assert!(matches!(m.link.call(Cmd::PoisonRuntime), Ok(Reply::Done)));
+        let fresh = Tensor::from_f32(&[3.0], &[1], &host).expect("host");
+        let results = [
+            ("silu_forward", m.silu_forward(&x).map(drop)),
+            ("sync", m.sync()),
+            ("upload", m.upload(&fresh).map(drop)),
+            ("download", m.download(&x).map(drop)),
+        ];
+        for (name, result) in results {
+            assert!(
+                matches!(
+                    &result,
+                    Err(OjasError::DeviceLost {
+                        backend: BackendId::Metal,
+                        ..
+                    })
+                ),
+                "{name} on a poisoned runtime: {result:?}"
+            );
+        }
+    }
+
     /// §7.4, F12: a read that fails after its wait keeps the fault for the
     /// next sync point.
     #[test]
@@ -2056,6 +2332,173 @@ mod tests {
                 );
             }
             assert_eq!(pending(&m), None);
+        });
+    }
+
+    /// One GDN forward and backward (key dim 128, two value slices, T 130,
+    /// an initial state and a final-state gradient), downloaded as bits.
+    fn gdn_round(m: &MetalBackend, seed: u32) -> Vec<Vec<u32>> {
+        let (b, t, h, dk, dv) = (1usize, 130usize, 2usize, METAL_GDN_KEY_DIM, 32usize);
+        let vals = |n: usize, k: u32, lo: f32, hi: f32| -> Vec<f32> {
+            (0..n)
+                .map(|i| {
+                    let x = (i as u32)
+                        .wrapping_mul(2_654_435_761)
+                        .wrapping_add(seed ^ k)
+                        >> 8;
+                    lo + (hi - lo) * (x as f32 / (1u32 << 24) as f32)
+                })
+                .collect()
+        };
+        let rows = b * t * h;
+        let q = put(m, &vals(rows * dk, 1, -1.0, 1.0), &[b, t, h, dk]);
+        let k = put(m, &vals(rows * dk, 2, -1.0, 1.0), &[b, t, h, dk]);
+        let v = put(m, &vals(rows * dv, 3, -1.0, 1.0), &[b, t, h, dv]);
+        let g = put(m, &vals(rows, 4, -1.0, -0.05), &[b, t, h]);
+        let beta = put(m, &vals(rows, 5, 0.1, 0.9), &[b, t, h]);
+        let s0 = put(m, &vals(b * h * dk * dv, 6, -0.5, 0.5), &[b, h, dk, dv]);
+        let d_o = put(m, &vals(rows * dv, 7, -1.0, 1.0), &[b, t, h, dv]);
+        let d_fin = put(m, &vals(b * h * dk * dv, 8, -1.0, 1.0), &[b, h, dk, dv]);
+        let x = GdnInputs {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+            initial_state: Some(&s0),
+        };
+        let f = m.chunked_gdn_forward(x).expect("gdn forward");
+        let gr = m
+            .chunked_gdn_backward(x, &f.checkpoints, &d_o, Some(&d_fin))
+            .expect("gdn backward");
+        let ds0 = gr.initial_state.expect("ds0");
+        let bits = |t: &Tensor| -> Vec<u32> {
+            let host = m.download(t).expect("download");
+            host.to_f32_vec()
+                .expect("f32")
+                .iter()
+                .map(|v| v.to_bits())
+                .collect()
+        };
+        [
+            &f.output,
+            &f.final_state,
+            &f.checkpoints,
+            &gr.q,
+            &gr.k,
+            &gr.v,
+            &gr.g,
+            &gr.beta,
+            &ds0,
+        ]
+        .into_iter()
+        .map(bits)
+        .collect()
+    }
+
+    /// The backward's tessl workspace is dropped when its command returns,
+    /// before the GPU has run it. tessl recycles such a buffer only after a
+    /// waited commit; this attacks that from the other side: an unwaited
+    /// commit after every dispatch, a waited one whenever anything was
+    /// allocated since the last, other ops allocating between rounds, and
+    /// rounds on six threads at once. Every round must keep the bits of an
+    /// unstressed run.
+    #[test]
+    fn gdn_bits_survive_forced_commits_recycling_and_threads() {
+        watchdog(600, || {
+            // One round: allocate and drop first, so a recycled workspace
+            // buffer would be handed to someone else, then the GDN round.
+            let body = |m: &MetalBackend| {
+                let junk = put(m, &vec![0.25; 1 << 16], &[1 << 16]);
+                drop(m.silu_forward(&junk).expect("silu"));
+                gdn_round(m, 11)
+            };
+            let calm = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            tune(&calm, Some(usize::MAX), None, None, (0, 0));
+            let before = calm.waits();
+            let want = body(&calm);
+            let calm_round = calm.waits() - before;
+            assert_eq!(pending(&calm), None);
+
+            let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            tune(&m, Some(1), Some(1), None, (0, 0));
+            let before = m.waits();
+            for round in 0..12 {
+                assert!(body(&m) == want, "round {round}: bits changed");
+            }
+            // The same body waits a fixed number of times untuned (each
+            // download waits). Only the tune's 1-byte cap can add waits, so
+            // equality would mean the stress never happened.
+            let forced = m.waits() - before;
+            assert!(
+                forced > 12 * calm_round,
+                "{forced} waited commits over 12 tuned rounds; one untuned round makes {calm_round}"
+            );
+            assert_eq!(pending(&m), None);
+            let start = Arc::new(std::sync::Barrier::new(6));
+            let handles: Vec<_> = (0..6)
+                .map(|_| {
+                    let (m, start) = (m.clone(), Arc::clone(&start));
+                    thread::spawn(move || {
+                        start.wait();
+                        (0..3).map(|_| gdn_round(&m, 11)).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            for h in handles {
+                for got in h.join().expect("gdn thread") {
+                    assert!(got == want, "a concurrent round changed bits");
+                }
+            }
+            assert_eq!(pending(&m), None);
+        });
+    }
+
+    /// An allocation that fails as an exhausted device is retried after a
+    /// waited commit, at every allocation the GDN round makes; a failure
+    /// that persists is `CapacityExceeded`, leaves no fault pending and
+    /// returns every budget charge.
+    #[test]
+    fn gdn_survives_or_cleanly_refuses_failed_allocations() {
+        watchdog(600, || {
+            let calm = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            let want = gdn_round(&calm, 12);
+            for skip in 0..24u32 {
+                let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+                tune(&m, None, None, None, (skip, 1));
+                assert!(
+                    gdn_round(&m, 12) == want,
+                    "skip {skip}: a retried allocation changed bits"
+                );
+                assert_eq!(pending(&m), None);
+            }
+            let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            let host = Budget::new(1 << 24);
+            let up = |n: usize, shape: &[usize]| {
+                m.upload(&Tensor::from_f32(&vec![0.5; n], shape, &host).expect("host"))
+                    .expect("upload")
+            };
+            let (t, dk, dv) = (70usize, METAL_GDN_KEY_DIM, 16usize);
+            let q = up(t * dk, &[1, t, 1, dk]);
+            let v = up(t * dv, &[1, t, 1, dv]);
+            let g = up(t, &[1, t, 1]);
+            let base = m.budget().live_bytes().expect("live");
+            tune(&m, None, None, None, (0, u32::MAX));
+            let r = m.chunked_gdn_forward(GdnInputs {
+                q: &q,
+                k: &q,
+                v: &v,
+                g: &g,
+                beta: &g,
+                initial_state: None,
+            });
+            assert!(
+                matches!(r, Err(OjasError::CapacityExceeded { .. })),
+                "{r:?}"
+            );
+            tune(&m, None, None, None, (0, 0));
+            assert_eq!(pending(&m), None);
+            assert_eq!(m.budget().live_bytes().expect("live"), base);
         });
     }
 

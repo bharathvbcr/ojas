@@ -23,6 +23,9 @@
 //! Accelerate's `sgemm` spent the call in `memset`. Under [`ojas_core::Numerics::Exact`]
 //! (opt in with [`CpuBackend::with_numerics`]) every output reduces from
 //! index 0 with no `mul_add`, and the bits do not depend on the thread count.
+//! The exception is Muon's Nesterov blend and parameter update, which are
+//! torch's fused `add(.., alpha=..)` under both tiers: one correctly rounded
+//! `mul_add` per value, the same on every platform.
 //! Off macOS those GEMMs use `ojas_simd::sgemm_tile`, which keeps the
 //! thread-count guarantee. Any positive head dimension is computed here; the
 //! Metal limit is `ojas_core::refuse_unsupported_metal_head_dim`.
@@ -48,6 +51,7 @@
 //! | SiLU forward and backward | 1e-6 of `f64`, per element | `pointwise_parallel.rs` |
 //! | Value residual, λ gradient | 1e-6 of `f64` | `pointwise_parallel.rs` |
 //! | Per-head gate | 1e-5 of `f64` | `pointwise_parallel.rs` |
+//! | Gated delta rule forward and backward | bit-equal (one kernel for both) | `ojas-oracle` `gdn.rs` |
 //!
 //! The last three compare Fast with an `f64` reference, not with Exact.
 //! Every Fast output above has the same bits at every thread count those
@@ -63,7 +67,9 @@ mod attn;
 mod backend;
 mod exp;
 mod fused_ce;
+mod gdn;
 mod gemm;
+mod hybrid;
 mod kv;
 mod layout;
 mod linalg;

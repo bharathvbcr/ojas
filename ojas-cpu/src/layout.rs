@@ -1,6 +1,6 @@
 //! Axis permutation: values move, nothing is computed.
 
-use ojas_core::{permute_output_shape, Budget, DType, OjasError, Scratch, Tensor};
+use ojas_core::{permute_dims, Budget, OjasError, Scratch, Tensor};
 #[cfg(target_os = "macos")]
 use ojas_core::{BackendId, Numerics};
 
@@ -74,10 +74,10 @@ impl<T: Send> Drop for HandoffJoin<T> {
 /// split and the adjacent-run copies write by index, and an append of a
 /// shared vector cannot be split across threads.
 ///
-/// Refused: a dtype other than f32, device memory (from the window read),
-/// a strided view, invalid `dims` (see [`permute_output_shape`]), and a
-/// NaN or infinity, as every other CPU op refuses one. Rank 0 and axes of
-/// length 0 are accepted. Thread count does not change bits.
+/// Refused first by [`permute_dims`]: a dtype other than f32, an axis of
+/// length 0, and invalid `dims`. Then device memory (from the window read),
+/// a strided view, and a NaN or infinity, as every other CPU op refuses
+/// one. Rank 0 is accepted. Thread count does not change bits.
 pub(crate) fn permute(
     op: &'static str,
     budget: &Budget,
@@ -85,15 +85,8 @@ pub(crate) fn permute(
     input: &Tensor,
     dims: &[usize],
 ) -> Result<Tensor, OjasError> {
-    if input.dtype() != DType::F32 {
-        return Err(OjasError::Dtype {
-            op,
-            expected: DType::F32,
-            got: input.dtype(),
-        });
-    }
     let in_shape = input.shape();
-    let out_shape = permute_output_shape(op, in_shape, dims)?;
+    let out_shape = permute_dims(input, dims)?;
     if !input.is_contiguous()? {
         return Err(shape(op, "non-contiguous view is not supported"));
     }
@@ -102,7 +95,7 @@ pub(crate) fn permute(
         return Err(nonfinite(op));
     }
     let gather = Gather::plan(in_shape, dims, &out_shape);
-    if src.is_empty() || gather.is_whole() {
+    if gather.is_whole() {
         let out = Scratch::try_from_slice(src, budget)?;
         return Tensor::from_scratch(out, &out_shape);
     }

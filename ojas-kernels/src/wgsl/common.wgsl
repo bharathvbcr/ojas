@@ -1,13 +1,16 @@
 // Shared by every ojas-wgpu module.
 //
-// Binding 0 is sixteen u32 parameter words. Word 15 is the fault bit of the
-// op that launched the kernel. Binding 1 is the backend's fault word: a
-// kernel that produces a non-finite value ORs its bit into word 0 and keeps
-// going, and the host reports it at the next synchronization. Word 1 holds
-// the first faulting op (bit index + 1, 0 = none): only the lane whose OR
-// newly set the bit tries to claim it, so the clean path costs nothing and a
+// Binding 0 is sixteen u32 parameter words. Word 15 is the fault id of the
+// op that launched the kernel: its op index + 1, or 0 for a launch that
+// reports nothing. Binding 1 is the backend's fault words. Words 0 and 1
+// are a 64-bit op mask, ops 0..31 in word 0 and ops 32..63 in word 1: a
+// kernel that produces a non-finite value ORs its op's bit in and keeps
+// going, and the host reports it at the next synchronization. Word 2 holds
+// the first faulting op (index + 1, 0 = none): only the lane whose OR newly
+// set the bit tries to claim it, so the clean path costs nothing and a
 // fault costs one compare-exchange per op. Dispatches all write binding 1,
-// so wgpu orders them, and "first" is first in recording order.
+// so wgpu orders them, and "first" is first in recording order. Word 3 is
+// unused.
 //
 // Non-finite tests use the exponent bits, not `x != x`, so a compiler that
 // assumes finite math cannot fold them away.
@@ -23,14 +26,19 @@ fn nonfinite(x: f32) -> bool { return (bitcast<u32>(x) & 0x7f800000u) == 0x7f800
 fn claim_first(id: u32) {
     // The weak form may fail spuriously; retry until claimed or taken.
     loop {
-        let r = atomicCompareExchangeWeak(&fault[1], 0u, id);
+        let r = atomicCompareExchangeWeak(&fault[2], 0u, id);
         if (r.exchanged || r.old_value != 0u) { break; }
     }
 }
 fn raise() {
-    let bit = pw(15u);
-    let old = atomicOr(&fault[0], bit);
-    if (bit != 0u && (old & bit) == 0u) { claim_first(firstTrailingBit(bit) + 1u); }
+    let id = pw(15u);
+    // The host refuses an id above 64, so this never drops a real fault; it
+    // keeps a bad id from writing into the first-op word.
+    if (id == 0u || id > 64u) { return; }
+    let index = id - 1u;
+    let bit = 1u << (index & 31u);
+    let old = atomicOr(&fault[index >> 5u], bit);
+    if ((old & bit) == 0u) { claim_first(id); }
 }
 fn report(x: f32) { if (nonfinite(x)) { raise(); } }
 fn flat_group(wg: vec3<u32>, nwg: vec3<u32>) -> u32 { return wg.y * nwg.x + wg.x; }

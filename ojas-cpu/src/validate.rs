@@ -117,6 +117,100 @@ pub(crate) fn f32_operands<'t, const N: usize>(
         .map_err(|_| shape(op, "input count changed while checking"))
 }
 
+/// A checked matmul-class operand's `f32` values: an `F32` tensor's read in
+/// place, or a `Bf16` tensor's widened exactly (`bits << 16`) into charged
+/// scratch that lives as long as this value.
+pub(crate) enum Wide<'t> {
+    Read(&'t [f32]),
+    Widened(Scratch<f32>),
+}
+
+impl Wide<'_> {
+    pub(crate) fn values(&self) -> &[f32] {
+        match self {
+            Wide::Read(values) => values,
+            Wide::Widened(scratch) => scratch.as_slice(),
+        }
+    }
+}
+
+/// Values per block of the bf16 finite scan and of the widening pass.
+const WIDEN_BLOCK: usize = 1 << 17;
+
+/// The operands of a matmul-class op ([`ojas_core::Backend::bf16_operands`]),
+/// each `F32` or `Bf16`.
+///
+/// With no `Bf16` operand this is [`f32_operands`]. Otherwise every
+/// operand's layout is checked in argument order, then each one's NaN and
+/// infinity scan in argument order (a `Bf16` operand's on its bits, before
+/// anything is charged), then each `Bf16` operand is widened into scratch
+/// charged to `budget`. Widening is exact, so the kernel sees the values a
+/// bf16-rounded `F32` operand would hold and gives the same bits.
+pub(crate) fn matmul_operands<'t, const N: usize>(
+    op: &'static str,
+    exec: Exec<'_>,
+    budget: &Budget,
+    ts: [&'t Tensor; N],
+) -> Result<[Wide<'t>; N], OjasError> {
+    if ts.iter().all(|t| t.dtype() != DType::Bf16) {
+        return Ok(f32_operands(op, exec, ts)?.map(Wide::Read));
+    }
+    for t in ts {
+        check_layout(op, t, matmul_dtype(t))?;
+    }
+    for t in ts {
+        let finite = match t.dtype() {
+            DType::Bf16 => bf16_window_finite(exec, t.bf16_slice()?)?,
+            _ => t.all_finite_cached(|w| window_finite(exec, w))?,
+        };
+        if !finite {
+            return Err(nonfinite(op));
+        }
+    }
+    let mut out = Vec::with_capacity(N);
+    for t in ts {
+        out.push(match t.dtype() {
+            DType::Bf16 => Wide::Widened(widen_bf16(exec, budget, t.bf16_slice()?)?),
+            _ => Wide::Read(t.f32_slice()?),
+        });
+    }
+    out.try_into()
+        .map_err(|_| shape(op, "input count changed while checking"))
+}
+
+/// `Bf16` for a bf16 tensor, else `F32`, the dtype a matmul operand is
+/// checked against.
+fn matmul_dtype(t: &Tensor) -> DType {
+    match t.dtype() {
+        DType::Bf16 => DType::Bf16,
+        _ => DType::F32,
+    }
+}
+
+/// No bf16 NaN or infinity (all eight exponent bits set) in `bits`, in
+/// [`WIDEN_BLOCK`] blocks on scoped threads.
+fn bf16_window_finite(exec: Exec<'_>, bits: &[u16]) -> Result<bool, OjasError> {
+    const EXPONENT: u16 = 0x7f80;
+    let blocks: Vec<&[u16]> = bits.chunks(WIDEN_BLOCK).collect();
+    let finite = scoped::map(exec, blocks.len(), |i| {
+        Ok(blocks[i].iter().all(|b| b & EXPONENT != EXPONENT))
+    })?;
+    Ok(finite.into_iter().all(|ok| ok))
+}
+
+/// `bits` widened to `f32` in new scratch charged to `budget`.
+fn widen_bf16(exec: Exec<'_>, budget: &Budget, bits: &[u16]) -> Result<Scratch<f32>, OjasError> {
+    let mut wide = Scratch::<f32>::try_alloc(bits.len(), budget)?;
+    scoped::fill(exec, wide.as_mut_slice(), WIDEN_BLOCK, |i, chunk| {
+        let from = &bits[i * WIDEN_BLOCK..i * WIDEN_BLOCK + chunk.len()];
+        for (dst, &b) in chunk.iter_mut().zip(from) {
+            *dst = ojas_core::bf16_to_f32(b);
+        }
+        Ok(())
+    })?;
+    Ok(wide)
+}
+
 /// A checked host `F32` operand that the pool's `'static` tasks read in
 /// place: one clone of the tensor (its shape and strides, and one more
 /// reference to its storage), shared by every task through an `Arc`. No

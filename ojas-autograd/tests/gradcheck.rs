@@ -201,9 +201,14 @@ fn gradcheck_attention_gate_and_value_residual() {
     let q = tensor(&cpu, &q0, &shape);
     let k = tensor(&cpu, &k0, &shape);
     let v = tensor(&cpu, &v0, &shape);
-    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
+    let y = cpu
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
+        .unwrap();
     let gy = ones(&cpu, y.shape());
-    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let (gq, gk, gv) = cpu
+        .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+        .unwrap();
     check(
         &gq.to_f32_vec().unwrap(),
         &central_diff(&q0, H, |p| Ok(sdpa_sum(p, &k0, &v0))).unwrap(),
@@ -357,9 +362,14 @@ fn gradcheck_grouped_query_attention() {
     let q = tensor(&cpu, &q0, &[1, 2, 2, 2]);
     let k = tensor(&cpu, &k0, &[1, 1, 2, 2]);
     let v = tensor(&cpu, &v0, &[1, 1, 2, 2]);
-    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
+    let y = cpu
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
+        .unwrap();
     let gy = ones(&cpu, y.shape());
-    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let (gq, gk, gv) = cpu
+        .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+        .unwrap();
     check(
         &gq.to_f32_vec().unwrap(),
         &central_diff(&q0, H, |p| Ok(gqa_sum(p, &k0, &v0))).unwrap(),
@@ -377,7 +387,7 @@ fn gradcheck_grouped_query_attention() {
     let qv = tape.leaf(q.clone()).unwrap();
     let kv = tape.leaf(k.clone()).unwrap();
     let vv = tape.leaf(v.clone()).unwrap();
-    let yv = tape.causal_sdpa(qv, kv, vv).unwrap();
+    let yv = tape.causal_sdpa(qv, kv, vv, None).unwrap();
     tape.backward(yv).unwrap();
     assert_eq!(
         tape.grad(qv).unwrap().to_f32_vec().unwrap(),

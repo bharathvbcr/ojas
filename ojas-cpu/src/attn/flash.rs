@@ -2,23 +2,27 @@
 //! [`super::FLASH_MIN_TIME`] positions.
 //!
 //! A head's queries are cut into blocks of [`BQ`] rows. Query block `b`
-//! (rows `qb..qb + nq`) sees keys `0..e` with `e = qb + nq`, so one block's
-//! scores are a `[nq, e]` product and each row's softmax is taken over its
-//! whole causal prefix at once: no online rescaling, no log-sum-exp pass and
-//! no `T x T` matrix (scratch is `O(BQ·T)` per task). Every product is one
-//! [`gemm`] call on a pool-free [`Exec`]; on macOS a product of at least
-//! [`crate::FAST_WHOLE_CALL_MACS`] is one Accelerate call, and several pool workers may make
-//! such calls at once. The exponential is [`crate::exp::exp2_affine`].
+//! (rows `qb..qb + nq`) sees keys `lo..e` with `e = qb + nq` and `lo` the
+//! first key its first row sees (0 without a window), so one block's scores
+//! are a `[nq, e - lo]` product and each row's softmax is taken over its
+//! whole window at once: no online rescaling and no `T x T` matrix (scratch
+//! is `O(BQ·T)` per task, `O(BQ·(BQ + W))` with a window `W`). Every
+//! product is one [`gemm`] call on a pool-free [`Exec`]; on macOS a product
+//! of at least [`crate::FAST_WHOLE_CALL_MACS`] is one Accelerate call, and
+//! several pool workers may make such calls at once. The exponential is
+//! [`crate::exp::exp2_affine`].
 //!
-//! Forward, per (head, query block): `S = Q_b·K[0..e]ᵀ`, softmax over each
-//! row's prefix (the masked tail is zero), `O_b = P·V[0..e]`.
+//! Forward, per (head, query block): `S = Q_b·K[lo..e]ᵀ`, softmax over each
+//! row's window (the rest of the row is zero), `O_b = P·V[lo..e]`, and
+//! each row's log-sum-exp `lse = scale·max + ln(sum)`.
 //!
 //! Backward, per (head, chunk of consecutive query blocks), for each block
-//! in ascending order: `P` as in the forward, `dP = dO_b·V[0..e]ᵀ`,
-//! `delta_t = sum_j P_tj·dP_tj` (Exact's `expected`; no forward output is
-//! recomputed), `dS = scale·P∘(dP - delta)`, `dQ_b = dS·K[0..e]`, and the
-//! chunk's `dK[0..e] += dSᵀ·Q_b`, `dV[0..e] += Pᵀ·dO_b`. A head's chunk
-//! partials are summed in ascending chunk order after the pool returns.
+//! in ascending order: `P = e^(scale·S - lse)` from the forward's
+//! log-sum-exp (no row maximum or sum is formed), `dP = dO_b·V[lo..e]ᵀ`,
+//! `delta_t = dO_t · O_t` from the forward's output, `dS =
+//! scale·P∘(dP - delta)`, `dQ_b = dS·K[lo..e]`, and the chunk's
+//! `dK[lo..e] += dSᵀ·Q_b`, `dV[lo..e] += Pᵀ·dO_b`. A head's chunk partials
+//! are summed in ascending chunk order after the pool returns.
 //!
 //! Bits: the block size, the chunk cuts and so every product's shape and
 //! operands depend only on `(T, D)`. The pool size decides which worker runs
@@ -97,13 +101,22 @@ fn mul(op: &'static str, a: usize, b: usize) -> Result<usize, OjasError> {
     a.checked_mul(b).ok_or_else(|| scratch_overflow(op))
 }
 
+/// Most keys one query block's scores span: the whole prefix, or the
+/// block's rows plus the window behind its first row.
+fn block_keys(d: &Dims) -> usize {
+    match d.window {
+        Some(w) => (BQ + w - 1).min(d.time),
+        None => d.time,
+    }
+}
+
 pub(super) fn forward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
     [q, k, v]: [&[f32]; 3],
     d: Dims,
-    out: &mut [f32],
+    [out, lse]: [&mut [f32]; 2],
 ) -> Result<(), OjasError> {
     let heads = d.batch * d.heads;
     let (time, dim, stride) = (d.time, d.dim, d.stride_h());
@@ -112,29 +125,32 @@ pub(super) fn forward(
     let inner = inner_pool(exec);
     // One task: its scores (reused as probabilities) and output block, plus
     // each product's packing; its query block is a view. The output block
-    // is copied into `out` before the task returns.
-    let (nq, sx) = (BQ.min(time), fast(&inner));
+    // and its log-sum-exp are copied into `out` and `lse` before the task
+    // returns.
+    let (nq, width, sx) = (BQ.min(time), block_keys(&d), fast(&inner));
     let per_task = sum(
         op,
         &[
             mul(op, nq, dim)?,
-            nq,
-            mul(op, nq, time)?,
-            scratch(op, sx, nq, dim, time)?,
-            scratch(op, sx, nq, time, dim)?,
+            2 * nq,
+            mul(op, nq, width)?,
+            scratch(op, sx, nq, dim, width)?,
+            scratch(op, sx, nq, width, dim)?,
         ],
     )?;
     let _hold = room_for(op, budget, mul(op, inflight(exec, tasks), per_task)?)?;
     let cancel = exec.pool.cancel_hook();
-    // `out` is head-major, blocks ascending. Late blocks see the most keys,
-    // so they are handed out first: task `t` writes block `blocks - 1 - t /
-    // heads` of head `t % heads`.
+    // `out` and `lse` are head-major, blocks ascending. Late blocks see the
+    // most keys, so they are handed out first: task `t` writes block
+    // `blocks - 1 - t / heads` of head `t % heads`.
     let order = |task: usize| (task % heads, blocks - 1 - task / heads);
-    let lens: Vec<usize> = (0..tasks)
-        .map(|i| block(i % blocks, time).1 * dim)
+    let rows: Vec<usize> = (0..tasks).map(|i| block(i % blocks, time).1).collect();
+    let lens: Vec<usize> = rows.iter().map(|r| r * dim).collect();
+    let mut by_place: Vec<Option<(&mut [f32], &mut [f32])>> = scoped::cut(out, &lens)?
+        .into_iter()
+        .zip(scoped::cut(lse, &rows)?)
+        .map(Some)
         .collect();
-    let mut by_place: Vec<Option<&mut [f32]>> =
-        scoped::cut(out, &lens)?.into_iter().map(Some).collect();
     let mut parts = Vec::with_capacity(tasks);
     for task in 0..tasks {
         let (head, b) = order(task);
@@ -144,25 +160,26 @@ pub(super) fn forward(
             .ok_or_else(|| shape(op, "flash output parts do not tile the output"))?;
         parts.push(part);
     }
-    fill_parts(exec, d.work(), parts, |task, part| {
+    fill_parts(exec, d.work(), parts, |task, (part, lse_part)| {
         cancel()?;
         let (head, b) = order(task);
         let (qb, nq) = block(b, time);
-        let e = qb + nq;
+        let (lo, e) = (d.first_key(qb), qb + nq);
         let sx = fast(&inner);
         let kv = d.kv_plane(head) * stride;
-        let span = kv..kv + stride;
+        let span = kv + lo * dim..kv + e * dim;
         let qm = rows_of(q, head * stride, qb, nq, dim);
-        let km = Mat::row_major(&k[span.clone()], e, dim);
+        let km = Mat::row_major(&k[span.clone()], e - lo, dim);
         let mut s = gemm(op, sx, &qm, &km.t())?;
-        let inv = softmax_rows(op, &mut s, qb, nq, e, d.scale)?;
-        let pm = Mat::row_major(&s, nq, e);
-        let mut o = gemm(op, sx, &pm, &Mat::row_major(&v[span], e, dim))?;
+        let (inv, row_lse) = softmax_rows(op, &mut s, &d, qb, nq, lo)?;
+        let pm = Mat::row_major(&s, nq, e - lo);
+        let mut o = gemm(op, sx, &pm, &Mat::row_major(&v[span], e - lo, dim))?;
         scale_rows(&mut o, &inv, dim);
-        if o.len() != part.len() {
+        if o.len() != part.len() || row_lse.len() != lse_part.len() {
             return Err(shape(op, "flash output block does not match its rows"));
         }
         part.copy_from_slice(&o);
+        lse_part.copy_from_slice(&row_lse);
         Ok(())
     })?;
     Ok(())
@@ -183,16 +200,22 @@ fn chunk_cuts(blocks: usize) -> Vec<usize> {
     cuts
 }
 
-/// `(dQ rows of the chunk, dK partial, dV partial)`.
-/// One chunk's dK and dV partials, `[keys, dim]` each.
+/// One chunk's dK and dV partials, `[keys, dim]` each, over the keys from
+/// the first one its first row sees.
 type ChunkPartials = (Vec<f32>, Vec<f32>);
 
-#[allow(clippy::too_many_arguments)]
+/// `(first key, end key)` of the rows of chunk `c`: the keys its partials
+/// cover.
+fn chunk_keys(d: &Dims, cuts: &[usize], c: usize) -> (usize, usize) {
+    let row0 = cuts[c] * BQ;
+    (d.first_key(row0), (cuts[c + 1] * BQ).min(d.time))
+}
+
 pub(super) fn backward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    [q, k, v, g]: [&[f32]; 4],
+    [q, k, v, out, lse, g]: [&[f32]; 6],
     d: Dims,
     [grad_q, grad_k, grad_v]: SdpaGrads<'_>,
 ) -> Result<(), OjasError> {
@@ -204,26 +227,26 @@ pub(super) fn backward(
     let tasks = heads * chunks;
     let inner = inner_pool(exec);
     // One block: P and dP/dS, the dQ block, and the dK and dV products
-    // before they are added, plus each product's packing; its query and
-    // output-gradient rows are views.
-    let (nq, sx) = (BQ.min(time), fast(&inner));
+    // before they are added, plus each product's packing; its query,
+    // output and output-gradient rows are views.
+    let (nq, width, sx) = (BQ.min(time), block_keys(&d), fast(&inner));
     let per_task = sum(
         op,
         &[
             mul(op, nq, dim)?,
             nq,
-            mul(op, 2 * nq, time)?,
-            mul(op, 2 * time, dim)?,
-            mul(op, scratch(op, sx, nq, dim, time)?, 2)?,
-            scratch(op, sx, nq, time, dim)?,
-            mul(op, scratch(op, sx, time, nq, dim)?, 2)?,
+            mul(op, 2 * nq, width)?,
+            mul(op, 2 * width, dim)?,
+            mul(op, scratch(op, sx, nq, dim, width)?, 2)?,
+            scratch(op, sx, nq, width, dim)?,
+            mul(op, scratch(op, sx, width, nq, dim)?, 2)?,
         ],
     )?;
     // Held until every task returns: each chunk's dK and dV partials. The
     // dQ rows go straight into `grad_q`.
-    let partial_rows = cuts[1..]
-        .iter()
-        .try_fold(0usize, |acc, &c| acc.checked_add((c * BQ).min(time)))
+    let partial_rows = (0..chunks)
+        .map(|c| chunk_keys(&d, &cuts, c))
+        .try_fold(0usize, |acc, (lo, end)| acc.checked_add(end - lo))
         .ok_or_else(|| scratch_overflow(op))?;
     let partials = mul(op, mul(op, heads, partial_rows)?, 2 * dim)?;
     let hold = sum(op, &[partials, mul(op, inflight(exec, tasks), per_task)?])?;
@@ -245,105 +268,162 @@ pub(super) fn backward(
             let (head, c) = (task / chunks, task % chunks);
             let (first, last) = (cuts[c], cuts[c + 1]);
             let row0 = first * BQ;
-            let keys = (last * BQ).min(time);
+            let (klo, keys) = chunk_keys(&d, &cuts, c);
             let base = head * stride;
             let kv = d.kv_plane(head) * stride;
             let sx = fast(&inner);
-            let span = kv..kv + stride;
-            let mut dk = vec![0.0f32; keys * dim];
-            let mut dv = vec![0.0f32; keys * dim];
+            let mut dk = vec![0.0f32; (keys - klo) * dim];
+            let mut dv = vec![0.0f32; (keys - klo) * dim];
             for b in first..last {
                 cancel()?;
                 let (qb, nq) = block(b, time);
-                let e = qb + nq;
+                let (lo, e) = (d.first_key(qb), qb + nq);
+                let span = kv + lo * dim..kv + e * dim;
                 let qm = rows_of(q, base, qb, nq, dim);
                 let gm = rows_of(g, base, qb, nq, dim);
-                let km = Mat::row_major(&k[span.clone()], e, dim);
-                let vm = Mat::row_major(&v[span.clone()], e, dim);
+                let km = Mat::row_major(&k[span.clone()], e - lo, dim);
+                let vm = Mat::row_major(&v[span], e - lo, dim);
+                let rows = head * time + qb..head * time + e;
                 let mut p = gemm(op, sx, &qm, &km.t())?;
-                let inv = softmax_rows(op, &mut p, qb, nq, e, d.scale)?;
+                probs_from_lse(op, &mut p, &d, qb, lo, &lse[rows])?;
+                let delta: Vec<f32> = (0..nq)
+                    .map(|i| {
+                        let at = base + (qb + i) * dim;
+                        dot8(&g[at..at + dim], &out[at..at + dim])
+                    })
+                    .collect();
+                if delta.iter().any(|x| !x.is_finite()) {
+                    return Err(nonfinite(op));
+                }
                 let mut ds = gemm(op, sx, &gm, &vm.t())?;
-                score_grads(&mut p, &mut ds, &inv, qb, nq, e, d.scale);
-                let pm = Mat::row_major(&p, nq, e);
-                let dsm = Mat::row_major(&ds, nq, e);
+                score_grads(&p, &mut ds, &delta, &d, qb, lo);
+                let pm = Mat::row_major(&p, nq, e - lo);
+                let dsm = Mat::row_major(&ds, nq, e - lo);
                 let rows = (qb - row0) * dim..(e - row0) * dim;
                 let block_dq = gemm(op, sx, &dsm, &km)?;
                 dq.get_mut(rows)
                     .filter(|rows| rows.len() == block_dq.len())
                     .ok_or_else(|| shape(op, "flash dQ block does not match its rows"))?
                     .copy_from_slice(&block_dq);
-                add_into(&mut dk[..e * dim], &gemm(op, sx, &dsm.t(), &qm)?);
-                add_into(&mut dv[..e * dim], &gemm(op, sx, &pm.t(), &gm)?);
+                let at = (lo - klo) * dim..(e - klo) * dim;
+                add_into(&mut dk[at.clone()], &gemm(op, sx, &dsm.t(), &qm)?);
+                add_into(&mut dv[at], &gemm(op, sx, &pm.t(), &gm)?);
             }
             Ok::<ChunkPartials, OjasError>((dk, dv))
         },
     )?;
     // Task order is head-major, chunks ascending: the partial sums run in
-    // ascending chunk order for every head.
+    // ascending chunk order for every head, and the query heads of one KV
+    // head in increasing order.
     for (task, (dk, dv)) in partials.into_iter().enumerate() {
-        let base = d.kv_plane(task / chunks) * stride;
+        let (klo, _) = chunk_keys(&d, &cuts, task % chunks);
+        let base = d.kv_plane(task / chunks) * stride + klo * dim;
         add_into(&mut grad_k[base..base + dk.len()], &dk);
         add_into(&mut grad_v[base..base + dv.len()], &dv);
     }
     Ok(())
 }
 
-/// Row `i` of the `[nq, e]` raw scores `q·k` is query `qb + i` against
-/// keys `0..e`; its causal prefix is the first `qb + i + 1` keys. A
-/// non-finite score in a prefix is refused (with `scale <= 1` a finite raw
-/// score is a finite scaled one). Each prefix becomes the unnormalized
-/// weights `e^(scale·(s - max)) = 2^(s·c - max·c)`, `c = scale·log2(e)`,
-/// and the masked tail zero. Returns each row's `1 / sum` of weights; the
-/// maximum contributes about 1, so the sum is at least about 1.
+/// The keys of query `qb + i` within a block's score row whose first
+/// column is key `lo`.
+fn live(d: &Dims, qb: usize, i: usize, lo: usize) -> std::ops::Range<usize> {
+    let keys = d.keys(qb + i);
+    keys.start - lo..keys.end - lo
+}
+
+/// Row `i` of the `[nq, e - lo]` raw scores `q·k` is query `qb + i`
+/// against keys `lo..e`; [`live`] is its window. A non-finite score there
+/// is refused (with `scale <= 1` a finite raw score is a finite scaled
+/// one). Each window becomes the unnormalized weights
+/// `e^(scale·(s - max)) = 2^(s·c - max·c)`, `c = scale·log2(e)`, and the
+/// rest of the row zero. Returns each row's `1 / sum` of weights (the
+/// maximum contributes about 1, so the sum is at least about 1) and its
+/// log-sum-exp `scale·max + ln(sum)`.
 fn softmax_rows(
     op: &'static str,
     s: &mut [f32],
+    d: &Dims,
     qb: usize,
     nq: usize,
-    e: usize,
-    scale: f32,
-) -> Result<Vec<f32>, OjasError> {
-    let c = scale * std::f32::consts::LOG2_E;
+    lo: usize,
+) -> Result<(Vec<f32>, Vec<f32>), OjasError> {
+    let c = d.scale * std::f32::consts::LOG2_E;
+    let width = s.len() / nq.max(1);
     let mut inv = Vec::with_capacity(nq);
-    for (i, row) in s.chunks_exact_mut(e).take(nq).enumerate() {
-        let (live, masked) = row.split_at_mut(qb + i + 1);
-        let max = max_finite(live).ok_or_else(|| nonfinite(op))?;
-        inv.push(1.0 / exp2_affine(live, c, -(max * c)));
-        masked.fill(0.0);
+    let mut lse = Vec::with_capacity(nq);
+    for (i, row) in s.chunks_exact_mut(width).take(nq).enumerate() {
+        let span = live(d, qb, i, lo);
+        let max = max_finite(&row[span.clone()]).ok_or_else(|| nonfinite(op))?;
+        let off = -(max * c);
+        let total = exp2_affine(&mut row[span.clone()], c, off);
+        inv.push(1.0 / total);
+        // `P = w / total = 2^(s·c + off - log2(total))`: the log-sum-exp
+        // that reproduces it, in `f64` from the `f32` offset the weights
+        // used, rounded once.
+        let row_lse = -f64::from(off) * std::f64::consts::LN_2 + f64::from(total).ln();
+        lse.push(row_lse as f32);
+        row[..span.start].fill(0.0);
+        row[span.end..].fill(0.0);
     }
-    Ok(inv)
+    Ok((inv, lse))
 }
 
-/// With `p` the unnormalized weights of [`softmax_rows`] and `inv` their
-/// row scales: `p` becomes `P = inv·p` and `dp` becomes
-/// `dS = scale·P∘(dP - delta)`, zero past each row's causal prefix, with
-/// `delta = sum_j P_j·dP_j` over the prefix.
-#[allow(clippy::too_many_arguments)]
-fn score_grads(
-    p: &mut [f32],
-    dp: &mut [f32],
-    inv: &[f32],
+/// The probabilities `P = e^(scale·s - lse)` of the raw scores `s` laid out
+/// as in [`softmax_rows`], from each row's forward log-sum-exp, zero outside
+/// the row's window. No row sum is formed.
+///
+/// `2^(s·c - lse·log2(e))` with the offset rounded to `f32` would put that
+/// rounding (about one ulp of `lse·log2(e)`) on every weight of the row
+/// uncancelled, unlike the forward, whose `1 / sum` absorbs any common
+/// factor. So the weights are taken as in the forward, `w = 2^(s·c - m·c)`
+/// with `m` the row maximum, and scaled by `2^(-lse·log2(e) - off)`, where
+/// `off = -(m·c)` is the offset `w` used, formed in `f64` and rounded once.
+/// A non-finite score in a window, or a non-finite `lse`, is refused.
+fn probs_from_lse(
+    op: &'static str,
+    s: &mut [f32],
+    d: &Dims,
     qb: usize,
-    nq: usize,
-    e: usize,
-    scale: f32,
-) {
-    for (i, ((p_row, d_row), &inv)) in p
-        .chunks_exact_mut(e)
-        .zip(dp.chunks_exact_mut(e))
-        .zip(inv)
-        .take(nq)
+    lo: usize,
+    lse: &[f32],
+) -> Result<(), OjasError> {
+    let c = d.scale * std::f32::consts::LOG2_E;
+    let width = s.len() / lse.len().max(1);
+    for (i, (row, &l)) in s.chunks_exact_mut(width).zip(lse).enumerate() {
+        let span = live(d, qb, i, lo);
+        let max = max_finite(&row[span.clone()]).ok_or_else(|| nonfinite(op))?;
+        if !l.is_finite() {
+            return Err(nonfinite(op));
+        }
+        let off = -(max * c);
+        exp2_affine(&mut row[span.clone()], c, off);
+        let corr = (-f64::from(l) * std::f64::consts::LOG2_E - f64::from(off)).exp2() as f32;
+        for p in &mut row[span.clone()] {
+            *p *= corr;
+        }
+        row[..span.start].fill(0.0);
+        row[span.end..].fill(0.0);
+    }
+    Ok(())
+}
+
+/// With `p` the probabilities of [`probs_from_lse`], `dp` becomes
+/// `dS = scale·P∘(dP - delta)`, zero outside each row's window, with
+/// `delta = dO · O` of the row.
+fn score_grads(p: &[f32], dp: &mut [f32], delta: &[f32], d: &Dims, qb: usize, lo: usize) {
+    let width = p.len() / delta.len().max(1);
+    for (i, ((p_row, d_row), &delta)) in p
+        .chunks_exact(width)
+        .zip(dp.chunks_exact_mut(width))
+        .zip(delta)
         .enumerate()
     {
-        let valid = qb + i + 1;
-        let delta = inv * dot8(&p_row[..valid], &d_row[..valid]);
-        let (live, masked) = d_row.split_at_mut(valid);
-        for (slot, pj) in live.iter_mut().zip(p_row.iter_mut()) {
-            let prob = *pj * inv;
-            *pj = prob;
-            *slot = scale * (prob * (*slot - delta));
+        let span = live(d, qb, i, lo);
+        for (slot, &prob) in d_row[span.clone()].iter_mut().zip(&p_row[span.clone()]) {
+            *slot = d.scale * (prob * (*slot - delta));
         }
-        masked.fill(0.0);
+        d_row[..span.start].fill(0.0);
+        d_row[span.end..].fill(0.0);
     }
 }
 

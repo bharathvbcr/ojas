@@ -141,7 +141,10 @@ fn regression_graph(
     let q_a = reshape(&q_r, &[b, 1, t, d]);
     let k_a = reshape(&k_r, &[b, 1, t, d]);
     let v_a = reshape(&v, &[b, 1, t, d]);
-    let attn = cpu.causal_sdpa_forward(&q_a, &k_a, &v_a).expect("sdpa");
+    let attn = cpu
+        .causal_sdpa_forward(&q_a, &k_a, &v_a, None)
+        .map(|(y, _)| y)
+        .expect("sdpa");
     let y = reshape(&attn, &[b, t, d]);
     let logits = cpu.linear_forward(&y, &wo).expect("logits");
     let loss = flat(
@@ -155,7 +158,7 @@ fn regression_graph(
     let (g_y, _) = cpu.linear_backward(&y, &wo, &g_logits).expect("dwo");
     let g_attn = reshape(&g_y, &[b, 1, t, d]);
     let (g_q, g_k, g_v) = cpu
-        .causal_sdpa_backward(&q_a, &k_a, &v_a, &g_attn)
+        .causal_sdpa_backward_recompute(&q_a, &k_a, &v_a, &g_attn, None)
         .expect("dsdpa");
     let g_q_bt = reshape(&g_q, &[b, t, 1, d]);
     let g_k_bt = reshape(&g_k, &[b, t, 1, d]);

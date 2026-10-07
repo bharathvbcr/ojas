@@ -7,6 +7,7 @@
 #![deny(unsafe_code)]
 
 mod bandwidth;
+mod disk;
 mod host;
 mod plan;
 #[cfg(target_os = "macos")]
@@ -24,6 +25,7 @@ pub use bandwidth::{
     BANDWIDTH_DEFAULT_BYTES, BANDWIDTH_MAX_BYTES, BANDWIDTH_MAX_REPS, BANDWIDTH_MAX_TIME,
     BANDWIDTH_MIN_BYTES,
 };
+pub use disk::available_disk_bytes;
 pub use host::{probe_host, HostMemory, MemoryReport};
 pub use plan::{MemoryProbe, ResourcePlan, ResourcePolicy};
 pub use system::{probe_pressure, probe_system, MemoryArchitecture, MemoryPressure, SystemProfile};

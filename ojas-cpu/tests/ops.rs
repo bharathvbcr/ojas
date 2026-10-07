@@ -2,7 +2,7 @@
 //! Empty, NaN, mismatched shape, and a full budget each return a typed error.
 
 use ojas_core::{
-    exp_exact, refuse_unsupported_metal_head_dim, AdamWConfig, Backend, BackendId, Budget, DType,
+    exp_exact, log_sum_exp_exact, refuse_unsupported_metal_head_dim, AdamWConfig, Backend, BackendId, Budget, DType,
     MuonNs5Config, Numerics, OjasError, Tensor, METAL_MAX_HEAD_DIM, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
@@ -51,7 +51,10 @@ fn metal_policy_refuses_above_its_limit_and_cpu_does_not_truncate() {
     let k = f32t(&cpu, &data, &[1, 1, 1, dim]);
     let values = vec![0.25f32; dim];
     let v = f32t(&cpu, &values, &[1, 1, 1, dim]);
-    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
+    let y = cpu
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
+        .unwrap();
     assert_eq!(y.shape(), &[1, 1, 1, dim]);
     let got = y.to_f32_vec().unwrap();
     assert_eq!(got.len(), dim);
@@ -262,7 +265,10 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     let q = f32t(&cpu, &[1.0, 2.0], &[1, 1, 2, 1]);
     let k = f32t(&cpu, &[0.0, 1.0], &[1, 1, 2, 1]);
     let v = f32t(&cpu, &[3.0, 4.0], &[1, 1, 2, 1]);
-    let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
+    let y = cpu
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
+        .unwrap();
     let got = y.to_f32_vec().unwrap();
     assert!((got[0] - 3.0).abs() < 1e-6);
     let e2 = (2.0_f64).exp();
@@ -272,19 +278,25 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     assert!((f64::from(got[1]) - expect1).abs() < 1e-5, "{}", got[1]);
     assert_eq!(
         got,
-        cpu.causal_sdpa_forward(&q, &k, &v)
+        cpu.causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
             .unwrap()
             .to_f32_vec()
             .unwrap()
     );
 
     let gy = f32t(&cpu, &[1.0, -1.0], &[1, 1, 2, 1]);
-    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let (gq, gk, gv) = cpu
+        .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+        .unwrap();
     assert!(gq.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
     assert!(gk.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
     assert!(gv.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
 
-    assert_shape(cpu.causal_sdpa_forward(&empty_f32(&cpu), &k, &v));
+    assert_shape(
+        cpu.causal_sdpa_forward(&empty_f32(&cpu), &k, &v, None)
+            .map(|(y, _)| y),
+    );
     assert_nonfinite(
         cpu.causal_sdpa_forward(
             &nan_f32(&cpu)
@@ -292,12 +304,20 @@ fn causal_sdpa_scale_mask_and_adversarial() {
                 .unwrap_or(nan_f32(&cpu)),
             &k,
             &v,
-        ),
+            None,
+        )
+        .map(|(y, _)| y),
     );
     let qnan = f32t(&cpu, &[f32::NAN, 1.0], &[1, 1, 2, 1]);
-    assert_nonfinite(cpu.causal_sdpa_forward(&qnan, &k, &v));
-    assert_shape(cpu.causal_sdpa_forward(&q, &f32t(&cpu, &[0.0, 1.0, 0.0], &[1, 1, 3, 1]), &v));
-    assert_shape(cpu.causal_sdpa_forward(&noncontig(&cpu), &k, &v));
+    assert_nonfinite(cpu.causal_sdpa_forward(&qnan, &k, &v, None).map(|(y, _)| y));
+    assert_shape(
+        cpu.causal_sdpa_forward(&q, &f32t(&cpu, &[0.0, 1.0, 0.0], &[1, 1, 3, 1]), &v, None)
+            .map(|(y, _)| y),
+    );
+    assert_shape(
+        cpu.causal_sdpa_forward(&noncontig(&cpu), &k, &v, None)
+            .map(|(y, _)| y),
+    );
 
     // 1x1 and an odd time/head-dim, including a second head. The reduction
     // order is head dimension upward, then causal key index upward.
@@ -305,14 +325,17 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     let k = f32t(&cpu, &[2.0], &[1, 1, 1, 1]);
     let v = f32t(&cpu, &[3.0], &[1, 1, 1, 1]);
     assert_bits(
-        &cpu.causal_sdpa_forward(&q, &k, &v)
+        &cpu.causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
             .unwrap()
             .to_f32_vec()
             .unwrap(),
         &causal_forward_reference(&[1.0], &[2.0], &[3.0], 1, 1, 1, 1),
     );
     let gy = f32t(&cpu, &[4.0], &[1, 1, 1, 1]);
-    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let (gq, gk, gv) = cpu
+        .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+        .unwrap();
     let (eq, ek, ev) = causal_backward_reference(&[1.0], &[2.0], &[3.0], &[4.0], 1, 1, 1, 1);
     assert_eq!(gq.to_f32_vec().unwrap(), eq);
     assert_eq!(gk.to_f32_vec().unwrap(), ek);
@@ -334,27 +357,27 @@ fn causal_sdpa_scale_mask_and_adversarial() {
         &data.iter().map(|x| x * 0.5).collect::<Vec<_>>(),
         &[batch, heads, time, dim],
     );
-    assert_bits(
-        &cpu.causal_sdpa_forward(&q, &k, &v)
-            .unwrap()
-            .to_f32_vec()
-            .unwrap(),
-        &causal_forward_reference(
-            q.to_f32_vec().unwrap().as_slice(),
-            k.to_f32_vec().unwrap().as_slice(),
-            v.to_f32_vec().unwrap().as_slice(),
-            batch,
-            heads,
-            time,
-            dim,
-        ),
+    let (y, lse) = cpu.causal_sdpa_forward(&q, &k, &v, None).unwrap();
+    let (want_y, want_lse) = causal_forward_lse_reference(
+        q.to_f32_vec().unwrap().as_slice(),
+        k.to_f32_vec().unwrap().as_slice(),
+        v.to_f32_vec().unwrap().as_slice(),
+        batch,
+        heads,
+        time,
+        dim,
     );
+    assert_bits(&y.to_f32_vec().unwrap(), &want_y);
+    assert_eq!(lse.shape(), &[batch, heads, time]);
+    assert_bits(&lse.to_f32_vec().unwrap(), &want_lse);
     let gy = f32t(
         &cpu,
         &data.iter().map(|x| -x).collect::<Vec<_>>(),
         &[batch, heads, time, dim],
     );
-    let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let (gq, gk, gv) = cpu
+        .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+        .unwrap();
     let (eq, ek, ev) = causal_backward_reference(
         q.to_f32_vec().unwrap().as_slice(),
         k.to_f32_vec().unwrap().as_slice(),
@@ -379,7 +402,8 @@ fn causal_sdpa_scale_mask_and_adversarial() {
         let k = f32t(&cpu, &kv, &[1, 1, time, dim]);
         let v = f32t(&cpu, &vv, &[1, 1, time, dim]);
         assert_bits(
-            &cpu.causal_sdpa_forward(&q, &k, &v)
+            &cpu.causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)
                 .unwrap()
                 .to_f32_vec()
                 .unwrap(),
@@ -397,7 +421,8 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     let k = f32t(&cpu, &kv, &[1, 1, time, dim]);
     let v = f32t(&cpu, &vv, &[1, 1, time, dim]);
     let y0 = cpu
-        .causal_sdpa_forward(&q, &k, &v)
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -405,7 +430,8 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     let future = 8 * dim;
     kv_future[future] = 40.0;
     let y1 = cpu
-        .causal_sdpa_forward(&q, &f32t(&cpu, &kv_future, &[1, 1, time, dim]), &v)
+        .causal_sdpa_forward(&q, &f32t(&cpu, &kv_future, &[1, 1, time, dim]), &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -426,7 +452,7 @@ fn causal_sdpa_scale_mask_and_adversarial() {
     let q = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
     let k = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
     let v = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
-    assert_capacity(tight.causal_sdpa_forward(&q, &k, &v));
+    assert_capacity(tight.causal_sdpa_forward(&q, &k, &v, None).map(|(y, _)| y));
 }
 
 fn assert_bits(got: &[f32], expect: &[f32]) {
@@ -447,9 +473,24 @@ fn causal_forward_reference(
     time: usize,
     dim: usize,
 ) -> Vec<f32> {
+    causal_forward_lse_reference(q, k, v, batch, heads, time, dim).0
+}
+
+/// [`causal_forward_reference`] and each row's log-sum-exp,
+/// `log_sum_exp_exact(max, sum)` of the same max and sum.
+fn causal_forward_lse_reference(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    batch: usize,
+    heads: usize,
+    time: usize,
+    dim: usize,
+) -> (Vec<f32>, Vec<f32>) {
     let scale = 1.0 / (dim as f32).sqrt();
     let width = time * dim;
     let mut out = vec![0.0f32; batch * heads * width];
+    let mut lse = vec![0.0f32; batch * heads * time];
     for b in 0..batch {
         for h in 0..heads {
             let base = (b * heads + h) * width;
@@ -477,6 +518,7 @@ fn causal_forward_reference(
                 for p in &mut probs {
                     *p /= sum;
                 }
+                lse[(b * heads + h) * time + t] = log_sum_exp_exact(max_score, sum);
                 for d in 0..dim {
                     let mut acc = 0.0f32;
                     for j in 0..=t {
@@ -487,11 +529,14 @@ fn causal_forward_reference(
             }
         }
     }
-    out
+    (out, lse)
 }
 
-/// Independent causal backward: scale `1/sqrt(dim)`, keys `0..=t`, sums in
-/// increasing index order. Used to lock the optimized kernel's association.
+/// Independent causal backward from the reference forward's output and
+/// log-sum-exp, as the kernel takes them from a saved forward: scale
+/// `1/sqrt(dim)`, keys `0..=t`, `p = exp_exact(s - lse)`, the row term
+/// `sum_d dy[d] * y[d]`, sums in increasing index order. Used to lock the
+/// optimized kernel's association.
 #[allow(clippy::too_many_arguments)]
 fn causal_backward_reference(
     q: &[f32],
@@ -503,6 +548,7 @@ fn causal_backward_reference(
     time: usize,
     dim: usize,
 ) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let (out, lse) = causal_forward_lse_reference(q, k, v, batch, heads, time, dim);
     let scale = 1.0 / (dim as f32).sqrt();
     let width = time * dim;
     let mut grad_q = vec![0.0f32; batch * heads * width];
@@ -512,28 +558,14 @@ fn causal_backward_reference(
         for h in 0..heads {
             let base = (b * heads + h) * width;
             for t in 0..time {
-                let mut scores = vec![0.0f32; t + 1];
-                let mut max_score = f32::NEG_INFINITY;
+                let row_lse = lse[(b * heads + h) * time + t];
+                let mut probs = vec![0.0f32; t + 1];
                 for j in 0..=t {
                     let mut dot = 0.0f32;
                     for d in 0..dim {
                         dot += q[base + t * dim + d] * k[base + j * dim + d];
                     }
-                    let score = dot * scale;
-                    scores[j] = score;
-                    if score > max_score {
-                        max_score = score;
-                    }
-                }
-                let mut sum = 0.0f32;
-                let mut probs = vec![0.0f32; t + 1];
-                for j in 0..=t {
-                    let e = exp_exact(scores[j] - max_score);
-                    probs[j] = e;
-                    sum += e;
-                }
-                for p in &mut probs {
-                    *p /= sum;
+                    probs[j] = exp_exact(dot * scale - row_lse);
                 }
                 let mut dprobs = vec![0.0f32; t + 1];
                 for j in 0..=t {
@@ -544,8 +576,8 @@ fn causal_backward_reference(
                     dprobs[j] = dot;
                 }
                 let mut expected = 0.0f32;
-                for j in 0..=t {
-                    expected += probs[j] * dprobs[j];
+                for d in 0..dim {
+                    expected += grad_y[base + t * dim + d] * out[base + t * dim + d];
                 }
                 for j in 0..=t {
                     let ds = probs[j] * (dprobs[j] - expected);
@@ -805,8 +837,13 @@ fn grouped_query_sdpa_matches_repeated_kv_mha() {
         let k = f32t(cpu, &pattern(kn, 2), &[b, hkv, t, d]);
         let v = f32t(cpu, &pattern(kn, 3), &[b, hkv, t, d]);
         let g = f32t(cpu, &pattern(qn, 4), &[b, h, t, d]);
-        let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
-        let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &g).unwrap();
+        let y = cpu
+            .causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
+            .unwrap();
+        let (gq, gk, gv) = cpu
+            .causal_sdpa_backward_recompute(&q, &k, &v, &g, None)
+            .unwrap();
         assert_eq!(y.shape(), &[b, h, t, d]);
         assert_eq!(gq.shape(), &[b, h, t, d]);
         assert_eq!(gk.shape(), &[b, hkv, t, d]);
@@ -821,9 +858,14 @@ fn grouped_query_sdpa_matches_repeated_kv_mha() {
             &expand(&v.to_f32_vec().unwrap(), b, h, hkv, t, d),
             &[b, h, t, d],
         );
-        let y_m = cpu.causal_sdpa_forward(&q, &k_m, &v_m).unwrap();
+        let y_m = cpu
+            .causal_sdpa_forward(&q, &k_m, &v_m, None)
+            .map(|(y, _)| y)
+            .unwrap();
         assert_eq!(y.to_f32_vec().unwrap(), y_m.to_f32_vec().unwrap());
-        let (gq_m, gk_m, gv_m) = cpu.causal_sdpa_backward(&q, &k_m, &v_m, &g).unwrap();
+        let (gq_m, gk_m, gv_m) = cpu
+            .causal_sdpa_backward_recompute(&q, &k_m, &v_m, &g, None)
+            .unwrap();
         assert_eq!(gq.to_f32_vec().unwrap(), gq_m.to_f32_vec().unwrap());
         let gk_sum = sum_kv(&gk_m.to_f32_vec().unwrap(), b, h, hkv, t, d);
         let gv_sum = sum_kv(&gv_m.to_f32_vec().unwrap(), b, h, hkv, t, d);
@@ -853,21 +895,33 @@ fn grouped_query_sdpa_matches_repeated_kv_mha() {
 
     let q = f32t(&cpu, &pattern(2 * 3 * 5 * 4, 1), &[2, 3, 5, 4]);
     let zeros = |shape: &[usize]| Tensor::zeros(shape, DType::F32, cpu.budget()).unwrap();
-    assert_shape(cpu.causal_sdpa_forward(&q, &zeros(&[2, 0, 5, 4]), &zeros(&[2, 0, 5, 4])));
+    assert_shape(
+        cpu.causal_sdpa_forward(&q, &zeros(&[2, 0, 5, 4]), &zeros(&[2, 0, 5, 4]), None)
+            .map(|(y, _)| y),
+    );
     let bad_group = f32t(&cpu, &pattern(2 * 2 * 5 * 4, 2), &[2, 2, 5, 4]);
-    assert_shape(cpu.causal_sdpa_forward(&q, &bad_group, &bad_group));
+    assert_shape(
+        cpu.causal_sdpa_forward(&q, &bad_group, &bad_group, None)
+            .map(|(y, _)| y),
+    );
     let kv = f32t(&cpu, &pattern(2 * 1 * 5 * 4, 2), &[2, 1, 5, 4]);
     let other = f32t(&cpu, &pattern(2 * 3 * 5 * 4, 3), &[2, 3, 5, 4]);
-    assert_shape(cpu.causal_sdpa_forward(&q, &other, &kv));
+    assert_shape(
+        cpu.causal_sdpa_forward(&q, &other, &kv, None)
+            .map(|(y, _)| y),
+    );
     let shifted = f32t(&cpu, &pattern(2 * 1 * 6 * 4, 2), &[2, 1, 6, 4]);
-    assert_shape(cpu.causal_sdpa_forward(&q, &shifted, &shifted));
+    assert_shape(
+        cpu.causal_sdpa_forward(&q, &shifted, &shifted, None)
+            .map(|(y, _)| y),
+    );
     let bad_g = f32t(&cpu, &pattern(2 * 1 * 5 * 4, 4), &[2, 1, 5, 4]);
-    assert_shape(cpu.causal_sdpa_backward(&q, &kv, &kv, &bad_g));
+    assert_shape(cpu.causal_sdpa_backward_recompute(&q, &kv, &kv, &bad_g, None));
     // A zero time extent is an empty tensor, refused before grouping.
     let qe = zeros(&[1, 2, 0, 4]);
     let ke = zeros(&[1, 1, 0, 4]);
-    assert_shape(cpu.causal_sdpa_forward(&qe, &ke, &ke));
-    assert_shape(cpu.causal_sdpa_backward(&qe, &ke, &ke, &qe));
+    assert_shape(cpu.causal_sdpa_forward(&qe, &ke, &ke, None).map(|(y, _)| y));
+    assert_shape(cpu.causal_sdpa_backward_recompute(&qe, &ke, &ke, &qe, None));
 }
 
 #[test]
@@ -1032,6 +1086,7 @@ fn muon_ns5_f32_reference_and_adversarial() {
         momentum: 0.99,
         weight_decay: 0.0,
         nesterov: true,
+        ns5: ojas_core::Ns5Precision::F32,
     };
     cpu.muon_ns5_step(&mut p, &g, &mut m, cfg).unwrap();
     assert_eq!(p.to_f32_vec().unwrap()[0].to_bits(), bits);

@@ -57,15 +57,15 @@ const LOSS: &str = include_str!("wgsl/loss.wgsl");
 const OPTIM: &str = include_str!("wgsl/optim.wgsl");
 const ATTENTION: &str = include_str!("wgsl/attention.wgsl");
 const CACHED_ATTENTION: &str = include_str!("wgsl/cached_attention.wgsl");
-const HEAD_REPEAT: &str = include_str!("wgsl/head_repeat.wgsl");
 const LAYOUT: &str = include_str!("wgsl/layout.wgsl");
 const FAULT: &str = include_str!("wgsl/fault.wgsl");
 
 /// WGSL module families for the device-resident wgpu backend.
 ///
 /// Every module starts with the shared header: binding 0 is sixteen u32
-/// parameter words (word 15 is the launching op's fault bit) and binding 1
-/// is the fault word. Kernel bindings start at 2.
+/// parameter words (word 15 is the launching op's fault id, its index + 1)
+/// and binding 1 is the fault words: a 64-bit op mask in words 0 and 1, the
+/// first faulting op in word 2. Kernel bindings start at 2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum WgslModule {
     Gemm,
@@ -83,9 +83,6 @@ pub enum WgslModule {
     /// Split-key causal attention of new queries against a time-major KV
     /// cache (decode, and prefill onto a non-empty cache).
     CachedAttention,
-    /// Repeat KV heads out to the query head count, and sum the expanded
-    /// gradients back. One module, not one per attention tile plan.
-    HeadRepeat,
 }
 
 /// The tiled attention template for `tiles`. A plan the template cannot
@@ -167,7 +164,6 @@ pub fn wgsl_module(module: WgslModule) -> Result<String, OjasError> {
         WgslModule::Fault => src.push_str(FAULT),
         WgslModule::Attention(tiles) => src.push_str(&attention_source(tiles)?),
         WgslModule::CachedAttention => src.push_str(CACHED_ATTENTION),
-        WgslModule::HeadRepeat => src.push_str(HEAD_REPEAT),
     }
     Ok(src)
 }
@@ -191,7 +187,6 @@ mod tests {
             WgslModule::Fault,
             WgslModule::Attention(tiles),
             WgslModule::CachedAttention,
-            WgslModule::HeadRepeat,
         ] {
             let src = wgsl_module(module).unwrap();
             assert!(

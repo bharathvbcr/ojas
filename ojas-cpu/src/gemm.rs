@@ -273,9 +273,9 @@ pub(crate) fn gemm(
     Ok(c)
 }
 
-/// [`gemm`] written into `c` (row-major `[a.rows, b.cols]`, zeroed), for an
-/// output that already lives in its tensor's buffer. The bits are
-/// [`gemm`]'s.
+/// [`gemm`] written into `c` (row-major `[a.rows, b.cols]`), for an output
+/// that already lives in its tensor's buffer. What `c` held is never read,
+/// so the bits are [`gemm`]'s whatever it held.
 pub(crate) fn gemm_out(
     op: &'static str,
     exec: Exec<'_>,
@@ -335,7 +335,8 @@ fn operands(op: &'static str, a: &Mat, b: &Mat) -> Result<usize, OjasError> {
     product(op, &[a.rows, b.cols])
 }
 
-/// `c = A · B` over a zeroed `c`, or `c += A · B` with `accumulate`.
+/// `c = A · B` without reading what `c` held, or `c += A · B` with
+/// `accumulate`.
 fn gemm_into(
     op: &'static str,
     exec: Exec<'_>,
@@ -345,7 +346,15 @@ fn gemm_into(
     accumulate: bool,
 ) -> Result<(), OjasError> {
     let (m, k, n) = (a.rows, a.cols, b.cols);
-    if c.is_empty() || k == 0 {
+    if c.is_empty() {
+        return Ok(());
+    }
+    if k == 0 {
+        // Each output is the empty sum, `+0.0`, as `ojas_simd::sgemm_tile`
+        // gives at `k == 0`; every other path overwrites `c` too.
+        if !accumulate {
+            c.fill(0.0);
+        }
         return Ok(());
     }
     if whole_call(exec.numerics, m, k, n) {
@@ -941,10 +950,16 @@ mod tests {
     use crate::pool::Pool;
 
     fn naive(a: &Mat, b: &Mat) -> Vec<f32> {
-        let mut c = vec![0.0f32; a.rows * b.cols];
+        naive_from(&vec![0.0f32; a.rows * b.cols], a, b)
+    }
+
+    /// The Exact chain continued from `init`: `acc = init`, then
+    /// `acc = acc + a * b` for `p` ascending, two roundings per step.
+    fn naive_from(init: &[f32], a: &Mat, b: &Mat) -> Vec<f32> {
+        let mut c = init.to_vec();
         for i in 0..a.rows {
             for j in 0..b.cols {
-                let mut acc = 0.0f32;
+                let mut acc = c[i * b.cols + j];
                 for p in 0..a.cols {
                     acc += a.data[i * a.rs + p * a.cs] * b.data[p * b.rs + j * b.cs];
                 }
@@ -1016,10 +1031,15 @@ mod tests {
 
     /// One `mul_add` chain per output, `p` ascending from `+0.0`.
     fn naive_fma(a: &Mat, b: &Mat) -> Vec<f32> {
-        let mut c = vec![0.0f32; a.rows * b.cols];
+        naive_fma_from(&vec![0.0f32; a.rows * b.cols], a, b)
+    }
+
+    /// One `mul_add` chain per output, `p` ascending from `init`.
+    fn naive_fma_from(init: &[f32], a: &Mat, b: &Mat) -> Vec<f32> {
+        let mut c = init.to_vec();
         for i in 0..a.rows {
             for j in 0..b.cols {
-                let mut acc = 0.0f32;
+                let mut acc = c[i * b.cols + j];
                 for p in 0..a.cols {
                     acc = a.data[i * a.rs + p * a.cs].mul_add(b.data[p * b.rs + j * b.cs], acc);
                 }
@@ -1478,6 +1498,418 @@ mod tests {
         let empty = Mat::row_major(&[], 0, 3);
         let b = Mat::row_major(&six, 3, 2);
         assert!(gemm("t", exec, &empty, &b).unwrap().is_empty());
+    }
+
+    /// Choices for the sweeps below, from the same LCG as [`random`].
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((self.0 >> 33) % n as u64) as usize
+        }
+    }
+
+    /// An owned `rows x cols` operand: 0 row-major, 1 stored transposed,
+    /// 2 strided with NaN in every slot outside the view ([`spread`]),
+    /// 3 one row broadcast down (`rs == 0`), 4 one column broadcast across
+    /// (`cs == 0`).
+    fn layout(kind: usize, rows: usize, cols: usize, seed: u64) -> Spread {
+        let base = random(rows * cols, seed);
+        let own = |data, rs, cs| Spread {
+            data,
+            rows,
+            cols,
+            rs,
+            cs,
+        };
+        match kind {
+            0 => own(base, cols, 1),
+            1 => own(naive_t(&Mat::row_major(&base, rows, cols)), 1, rows),
+            2 => spread(&Mat::row_major(&base, rows, cols)),
+            3 => own(random(cols, seed), 0, 1),
+            _ => own(random(rows, seed), 1, 0),
+        }
+    }
+
+    /// Bits equal at every output, except that any NaN matches any NaN.
+    fn assert_same(got: &[f32], want: &[f32], label: &str) {
+        assert_eq!(got.len(), want.len(), "{label}");
+        for (at, (g, w)) in got.iter().zip(want).enumerate() {
+            let same = if w.is_nan() {
+                g.is_nan()
+            } else {
+                g.to_bits() == w.to_bits()
+            };
+            assert!(same, "{label}: output {at} is {g:e}, want {w:e}");
+        }
+    }
+
+    /// `c` is within `(k + 2) * 2^-24 * (|init| + sum_p |a * b|)` of
+    /// `init + A·B` evaluated in f64: the bound for any summation order,
+    /// for products that are one Accelerate call and so not a fixed chain.
+    fn assert_close(c: &[f32], init: &[f32], a: &Mat, b: &Mat, label: &str) {
+        let k = a.cols;
+        let unit = f64::from(f32::EPSILON) / 2.0;
+        for i in 0..a.rows {
+            for j in 0..b.cols {
+                let at = i * b.cols + j;
+                let mut sum = f64::from(init[at]);
+                let mut size = sum.abs();
+                for p in 0..k {
+                    let t = f64::from(a.data[i * a.rs + p * a.cs])
+                        * f64::from(b.data[p * b.rs + j * b.cs]);
+                    sum += t;
+                    size += t.abs();
+                }
+                let tol = (k as f64 + 2.0) * unit * size;
+                let err = (f64::from(c[at]) - sum).abs();
+                assert!(
+                    err <= tol,
+                    "{label}: [{i}, {j}] = {:e}, f64 {sum:e}, tolerance {tol:e}",
+                    c[at]
+                );
+            }
+        }
+    }
+
+    /// `gemm_acc` over consecutive pieces of `k`, in order, gives the bits
+    /// of the one product over the whole `k` continued from what `c` held:
+    /// the Exact chain, and the Fast chain wherever no piece is one
+    /// Accelerate call. Pieces cross KC (256 Exact, 512 Fast) and the
+    /// larger pools split products into tiles. `fused_ce` relies on this.
+    #[test]
+    fn gemm_acc_over_split_k_continues_the_one_product_chain() {
+        let fused = cfg!(any(target_arch = "aarch64", target_feature = "fma"));
+        // (m, k, n, cuts): each cut starts a new piece of `k`.
+        let cases: [(usize, usize, usize, &[usize]); 5] = [
+            (7, 17, 9, &[1, 16]),
+            (13, 600, 33, &[255, 256, 257, 511, 513]),
+            (73, 300, 40, &[100, 256]),
+            (6, 1030, 16, &[512, 1024]),
+            (37, 260, 300, &[1, 2, 259]),
+        ];
+        for threads in [1usize, 3, 18] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            for numerics in [Numerics::Exact, Numerics::Fast] {
+                let exec = Exec {
+                    pool: &pool,
+                    numerics,
+                };
+                for &(m, k, n, cuts) in &cases {
+                    let (ad, bd) = (random(m * k, 21), random(k * n, 22));
+                    let a = Mat::row_major(&ad, m, k);
+                    let b = Mat::row_major(&bd, k, n);
+                    let mut bounds = vec![0usize];
+                    bounds.extend_from_slice(cuts);
+                    bounds.push(k);
+                    let mut signed = vec![0.0f32; m * n];
+                    signed.iter_mut().step_by(3).for_each(|v| *v = -0.0);
+                    for init in [vec![0.0f32; m * n], random(m * n, 23), signed] {
+                        let mut c = init.clone();
+                        let mut chain = true;
+                        for piece in bounds.windows(2) {
+                            let (p0, p1) = (piece[0], piece[1]);
+                            chain &=
+                                !(cfg!(target_os = "macos") && whole_call(numerics, m, p1 - p0, n));
+                            let ap = Mat {
+                                data: &a.data[p0 * a.cs..],
+                                rows: m,
+                                cols: p1 - p0,
+                                rs: a.rs,
+                                cs: a.cs,
+                            };
+                            let bp = Mat {
+                                data: &b.data[p0 * b.rs..],
+                                rows: p1 - p0,
+                                cols: n,
+                                rs: b.rs,
+                                cs: b.cs,
+                            };
+                            gemm_acc("test", exec, &ap, &bp, &mut c).unwrap();
+                        }
+                        let label =
+                            format!("{numerics:?} {m}x{k}x{n} cuts {cuts:?} threads {threads}");
+                        match numerics {
+                            Numerics::Exact => {
+                                assert_eq!(bits(&c), bits(&naive_from(&init, &a, &b)), "{label}")
+                            }
+                            Numerics::Fast if chain && fused => {
+                                assert_eq!(
+                                    bits(&c),
+                                    bits(&naive_fma_from(&init, &a, &b)),
+                                    "{label}"
+                                )
+                            }
+                            Numerics::Fast => assert_close(&c, &init, &a, &b, &label),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `gemm_out` writes every output and never reads what `c` held: NaN,
+    /// infinities, `f32::MAX` or `-0.0` there leave `gemm`'s bits on every
+    /// path, with `k == 0` giving the empty sum `+0.0` everywhere. A
+    /// refused view or output length is an error that leaves `c` as it was.
+    #[test]
+    fn gemm_out_never_reads_what_the_output_held() {
+        // Exact one tile, Exact tiled at 7 threads (64*300*256 is past two
+        // TASK_MACS), Fast packed, Fast whole call, and k == 0. Each runs
+        // row-major and through `spread`, which Accelerate refuses.
+        let shapes = [
+            (7usize, 17usize, 9usize),
+            (64, 256, 300),
+            (5, 3, 7),
+            (128, 128, 128),
+            (4, 0, 6),
+            (1, 0, 1),
+        ];
+        let garbage = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX, -0.0];
+        for threads in [1usize, 7] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            for numerics in [Numerics::Exact, Numerics::Fast] {
+                let exec = Exec {
+                    pool: &pool,
+                    numerics,
+                };
+                for &(m, k, n) in &shapes {
+                    let (ad, bd) = (random(m * k, 31), random(k * n, 32));
+                    let a = Mat::row_major(&ad, m, k);
+                    let b = Mat::row_major(&bd, k, n);
+                    let (sa, sb) = (spread(&a), spread(&b));
+                    for (x, y) in [(a, b), (sa.mat(), sb.mat())] {
+                        let want = gemm("test", exec, &x, &y).unwrap();
+                        if k == 0 {
+                            assert!(want.iter().all(|v| v.to_bits() == 0), "{m}x0x{n}");
+                        }
+                        for fill in garbage {
+                            let mut c = vec![fill; m * n];
+                            gemm_out("test", exec, &x, &y, &mut c).unwrap();
+                            let label = format!(
+                                "{numerics:?} {m}x{k}x{n} rs {} threads {threads} held {fill:e}",
+                                x.rs
+                            );
+                            assert_eq!(bits(&c), bits(&want), "{label}");
+                        }
+                    }
+                }
+                // Refusals: short data, an overflowing stride, a mismatched
+                // inner dimension and a wrong output length.
+                let six = vec![1.0f32; 6];
+                let good = Mat::row_major(&six, 2, 3);
+                let b = Mat::row_major(&six, 3, 2);
+                let refused = [
+                    (Mat::row_major(&six[..5], 2, 3), b, 4usize),
+                    (
+                        Mat {
+                            data: &six,
+                            rows: 2,
+                            cols: 3,
+                            rs: usize::MAX,
+                            cs: 1,
+                        },
+                        b,
+                        4,
+                    ),
+                    (good, Mat::row_major(&six, 2, 3), 6),
+                    (good, b, 5),
+                ];
+                for (x, y, len) in refused {
+                    let mut c = vec![f32::NAN; len];
+                    let err = gemm_out("test", exec, &x, &y, &mut c).unwrap_err();
+                    assert!(matches!(err, OjasError::Shape { .. }), "{err:?}");
+                    assert!(
+                        c.iter().all(|v| v.is_nan()),
+                        "{numerics:?}: a refusal wrote c"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Seeded sweep over shapes on every block edge, five operand layouts
+    /// ([`layout`]), pools of 1 to 18 threads, both numerics, and
+    /// `gemm_out` over a NaN-filled output or `gemm_acc` over a random one.
+    /// Exact gives the two-rounding chain's bits. Fast gives the FMA
+    /// chain's bits unless the product was one Accelerate call, which is
+    /// held to the f64 bound. Strided operands hold NaN outside the view,
+    /// so a read past it shows in the bits.
+    #[test]
+    fn random_views_on_every_path_match_their_reference() {
+        const CASES: usize = 240;
+        // Up to four TASK_MACS, so the larger pools split some products.
+        const MAX_MACS: usize = 4 * TASK_MACS;
+        let fused = cfg!(any(target_arch = "aarch64", target_feature = "fma"));
+        let edges = [
+            1usize, 2, 5, 6, 7, 15, 16, 17, 71, 72, 73, 143, 144, 145, 255, 256, 257, 511, 512, 513,
+        ];
+        let pools: Vec<Arc<Pool>> = [1usize, 2, 7, 18]
+            .iter()
+            .map(|&t| Arc::new(Pool::new(t).unwrap()))
+            .collect();
+        let mut rng = Lcg(0x0005_eed0_f0a5);
+        // (Exact, Fast chain, Fast Accelerate) cases checked.
+        let mut seen = [0usize; 3];
+        for case in 0..CASES {
+            let dim = |rng: &mut Lcg| {
+                if rng.below(4) == 0 {
+                    1 + rng.below(40)
+                } else {
+                    edges[rng.below(edges.len())]
+                }
+            };
+            let (m, k, n) = loop {
+                let (m, k, n) = (dim(&mut rng), dim(&mut rng), dim(&mut rng));
+                if m * k * n <= MAX_MACS {
+                    break (m, k, n);
+                }
+            };
+            // Half the operands are row-major or transposed, which
+            // Accelerate can address; the rest draw from all five.
+            let kind = |rng: &mut Lcg| {
+                if rng.below(2) == 0 {
+                    rng.below(2)
+                } else {
+                    rng.below(5)
+                }
+            };
+            let (ka, kb) = (kind(&mut rng), kind(&mut rng));
+            let seed = 1000 + 4 * case as u64;
+            let (sa, sb) = (layout(ka, m, k, seed), layout(kb, k, n, seed + 1));
+            let (a, b) = (sa.mat(), sb.mat());
+            let pool = &pools[rng.below(pools.len())];
+            let numerics = if rng.below(2) == 0 {
+                Numerics::Exact
+            } else {
+                Numerics::Fast
+            };
+            let exec = Exec { pool, numerics };
+            let accumulate = rng.below(2) == 0;
+            let init = if accumulate {
+                random(m * n, seed + 2)
+            } else {
+                vec![0.0f32; m * n]
+            };
+            let mut c = if accumulate {
+                init.clone()
+            } else {
+                vec![f32::NAN; m * n]
+            };
+            let before = whole_calls();
+            if accumulate {
+                gemm_acc("test", exec, &a, &b, &mut c).unwrap();
+            } else {
+                gemm_out("test", exec, &a, &b, &mut c).unwrap();
+            }
+            let accelerated = whole_calls().0 > before.0;
+            let label = format!(
+                "case {case}: {numerics:?} {m}x{k}x{n} A layout {ka} B layout {kb} threads {} accumulate {accumulate}",
+                pool.threads()
+            );
+            match numerics {
+                Numerics::Exact => {
+                    assert!(!accelerated, "{label}");
+                    assert_eq!(bits(&c), bits(&naive_from(&init, &a, &b)), "{label}");
+                    seen[0] += 1;
+                }
+                Numerics::Fast if !accelerated && fused => {
+                    assert_eq!(bits(&c), bits(&naive_fma_from(&init, &a, &b)), "{label}");
+                    seen[1] += 1;
+                }
+                Numerics::Fast => {
+                    assert_close(&c, &init, &a, &b, &label);
+                    seen[2] += 1;
+                }
+            }
+        }
+        // The sweep reached each path, so a pass is not a skipped check.
+        assert!(seen[0] >= 60 && seen[1] >= 30, "{seen:?}");
+        if cfg!(target_os = "macos") {
+            assert!(seen[2] >= 15, "{seen:?}");
+        }
+    }
+
+    /// NaN, infinities, signed zeros, subnormals and products that overflow
+    /// give the reference chain's bits (any NaN for a NaN) on the Exact and
+    /// Fast chains, on one thread and tiled across seven, continuing from
+    /// `+0.0` or from `-0.0`.
+    #[test]
+    fn nonfinite_and_signed_zero_operands_follow_the_reference_chain() {
+        let specials = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            0.0,
+            -0.0,
+            f32::MAX,
+            -f32::MAX,
+            f32::MIN_POSITIVE / 8.0,
+        ];
+        let sprinkle = |len: usize, seed: u64, every: usize| {
+            let mut v = random(len, seed);
+            for (i, x) in v
+                .iter_mut()
+                .enumerate()
+                .filter(|(i, _)| i.is_multiple_of(every))
+            {
+                *x = specials[(i / every) % specials.len()];
+            }
+            v
+        };
+        let fused = cfg!(any(target_arch = "aarch64", target_feature = "fma"));
+        // One tile, then 64*256*128 = 2 * TASK_MACS, tiled across 7.
+        for &(m, k, n) in &[(7usize, 17usize, 9usize), (64, 256, 128)] {
+            let a_sets = [
+                sprinkle(m * k, 41, 29),
+                sprinkle(m * k, 42, 3),
+                vec![-0.0f32; m * k],
+            ];
+            let b_sets = [
+                sprinkle(k * n, 43, 31),
+                sprinkle(k * n, 44, 5),
+                vec![1.0f32; k * n],
+            ];
+            for threads in [1usize, 7] {
+                let pool = Arc::new(Pool::new(threads).unwrap());
+                for numerics in [Numerics::Exact, Numerics::Fast] {
+                    let exec = Exec {
+                        pool: &pool,
+                        numerics,
+                    };
+                    for (ad, bd) in a_sets.iter().zip(&b_sets) {
+                        let a = Mat::row_major(ad, m, k);
+                        let b = Mat::row_major(bd, k, n);
+                        for init in [vec![0.0f32; m * n], vec![-0.0f32; m * n]] {
+                            let mut c = init.clone();
+                            let before = whole_calls();
+                            gemm_acc("test", exec, &a, &b, &mut c).unwrap();
+                            if whole_calls().0 > before.0 {
+                                // One Accelerate call: no fixed chain.
+                                continue;
+                            }
+                            let label = format!(
+                                "{numerics:?} {m}x{k}x{n} threads {threads} init {:e}",
+                                init[0]
+                            );
+                            match numerics {
+                                Numerics::Exact => {
+                                    assert_same(&c, &naive_from(&init, &a, &b), &label)
+                                }
+                                Numerics::Fast if fused => {
+                                    assert_same(&c, &naive_fma_from(&init, &a, &b), &label)
+                                }
+                                Numerics::Fast => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Fast packed kernel against one Accelerate call, per shape, on a

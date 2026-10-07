@@ -271,3 +271,66 @@ fn malformed_permutations_are_refused() {
         })
     ));
 }
+
+/// Edge cases against the CPU, error for error and bit for bit: rank 0, unit
+/// extents, the rank cap and one past it, a zero axis (D17: refused by
+/// `ojas_core::permute_dims` on every backend), a u32 input and malformed
+/// `dims`. An operand with a zero axis cannot be uploaded, so it is passed
+/// as the host tensor and as a zero-extent device view; both must give the
+/// CPU's error, with nothing charged.
+#[test]
+fn edge_cases_match_the_cpu_error_for_error_and_bit_for_bit() {
+    let g = own();
+    let c = cpu();
+    let eight = [1usize, 2, 1, 3, 1, 2, 1, 2];
+    let reversed: Vec<usize> = (0..8).rev().collect();
+    let nine: Vec<usize> = (0..=ojas_core::MAX_PERMUTE_RANK).collect();
+    let cases: Vec<(Tensor, Vec<usize>)> = vec![
+        (host(3800, &[]), vec![]),
+        (host(3801, &[1]), vec![0]),
+        (host(3802, &[1, 1, 1]), vec![2, 0, 1]),
+        (host(3803, &eight), reversed),
+        (host(3804, &[1; 9]), nine),
+        (host(3805, &[2, 0, 3]), vec![2, 0, 1]),
+        (host(3806, &[0]), vec![0]),
+        (host_u32(&[0; 6], &[2, 3]), vec![1, 0]),
+        (host(3807, &[2, 3]), vec![0]),
+        (host(3808, &[2, 3]), vec![1, 1]),
+        (host(3809, &[2, 3]), vec![0, 2]),
+    ];
+    let host_bits_of = |t: &Tensor| -> Vec<u32> {
+        t.to_f32_vec()
+            .unwrap()
+            .iter()
+            .map(|v| v.to_bits())
+            .collect()
+    };
+    for (x, dims) in &cases {
+        let what = format!("{:?} by {dims:?}", x.shape());
+        let want = c
+            .permute(x, dims)
+            .map(|y| (y.shape().to_vec(), host_bits_of(&y)));
+        let mut operands = Vec::new();
+        if x.shape().contains(&0) {
+            operands.push(x.clone());
+            let full: Vec<usize> = x.shape().iter().map(|&d| d.max(1)).collect();
+            let mut strides = vec![1usize; x.shape().len()];
+            for a in (0..x.shape().len().saturating_sub(1)).rev() {
+                strides[a] = strides[a + 1] * x.shape()[a + 1];
+            }
+            let dev = up(&host(3810, &full));
+            operands.push(dev.view(x.shape(), &strides, 0).unwrap());
+        } else {
+            operands.push(up(x));
+        }
+        for operand in operands {
+            let live = g.budget().live_bytes().unwrap();
+            let got = g
+                .permute(&operand, dims)
+                .map(|y| (y.shape().to_vec(), down_bits(&g, &y)));
+            assert_eq!(format!("{got:?}"), format!("{want:?}"), "{what}");
+            assert_eq!(g.budget().live_bytes().unwrap(), live, "{what}");
+            g.sync().unwrap();
+        }
+    }
+}

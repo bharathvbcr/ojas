@@ -578,6 +578,24 @@ func SetMemoryCeiling(ctx context.Context, bytes uint64) error {
 	return err
 }
 
+// NoHeapCeiling is SetHeapCeiling's "no ceiling", the default.
+const NoHeapCeiling uint64 = ^uint64(0)
+
+// SetHeapCeiling caps the engine's Rust heap and returns the previous cap;
+// NoHeapCeiling removes it. It is not SetMemoryCeiling, which caps what
+// models may charge.
+//
+// While it is set, one Rust allocation of 1 MiB or more that would take the
+// live Rust heap (gusset.Stats().LiveBytes) past bytes fails. Every such
+// allocation on an engine path is fallible, so the call that made it
+// returns ErrCapacity and the process, and every other model, carries on.
+// Smaller allocations are never refused. Use it to keep the engine inside
+// a hard heap limit, or to rehearse running out of memory. It takes effect
+// at once, process-wide.
+func SetHeapCeiling(bytes uint64) uint64 {
+	return setHeapCeiling(bytes)
+}
+
 // Free drops a model id. An unknown id, including a second free, is an
 // error. A call already running on the id finishes first.
 func Free(ctx context.Context, id uint64) error {

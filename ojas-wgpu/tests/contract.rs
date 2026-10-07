@@ -136,10 +136,13 @@ fn every_call_after_a_loss_names_it() {
     ];
     for (name, result) in results {
         match result {
-            Err(OjasError::Backend { detail, .. }) => {
+            Err(OjasError::DeviceLost {
+                backend: BackendId::Wgpu,
+                detail,
+            }) => {
                 assert!(
                     detail.contains("device lost"),
-                    "{name}: loss not named: {detail}"
+                    "{name}: the loss's reason is missing: {detail}"
                 )
             }
             other => panic!("{name} on a destroyed device: {other:?}"),
@@ -158,10 +161,11 @@ fn the_trait_sync_reports_a_lost_device() {
     // delivers the loss; the error must still say the device is gone.
     for _ in 0..2 {
         match g.sync() {
-            Err(OjasError::Backend { detail, .. }) => {
-                assert!(detail.contains("device lost"), "loss not named: {detail}")
-            }
-            other => panic!("a destroyed device synced clean: {other:?}"),
+            Err(OjasError::DeviceLost {
+                backend: BackendId::Wgpu,
+                ..
+            }) => {}
+            other => panic!("a destroyed device did not report the loss: {other:?}"),
         }
     }
 }

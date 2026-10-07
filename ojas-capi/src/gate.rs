@@ -22,8 +22,9 @@
 use std::sync::{Arc, Mutex};
 
 use ojas_core::{
-    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, LinearCe,
-    MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
+    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, GatedRmsGrad,
+    GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Numerics, OjasError, OptimizerKind,
+    PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 
 /// The per-call cancel check: `Err` carries the cancel's own message
@@ -278,19 +279,29 @@ impl<B: Backend> Backend for Gated<B> {
         self.inner
             .rms_qk_norm_backward(q, k, q_weight, k_weight, grad_q, grad_k, eps)
     }
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         self.enter("causal_sdpa_forward", true)?;
-        self.inner.causal_sdpa_forward(q, k, v)
+        self.inner.causal_sdpa_forward(q, k, v, window)
     }
     fn causal_sdpa_backward(
         &self,
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
         grad_output: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         self.enter("causal_sdpa_backward", true)?;
-        self.inner.causal_sdpa_backward(q, k, v, grad_output)
+        self.inner
+            .causal_sdpa_backward(q, k, v, output, lse, grad_output, window)
     }
     fn per_head_sigmoid_gate_forward(
         &self,
@@ -365,6 +376,79 @@ impl<B: Backend> Backend for Gated<B> {
         self.enter("value_residual_blend_backward", true)?;
         self.inner
             .value_residual_blend_backward(value, value0, lambda, grad_output)
+    }
+    fn chunked_gdn_forward(&self, inputs: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
+        self.enter("chunked_gdn_forward", true)?;
+        self.inner.chunked_gdn_forward(inputs)
+    }
+    fn chunked_gdn_backward(
+        &self,
+        inputs: GdnInputs<'_>,
+        checkpoints: &Tensor,
+        grad_output: &Tensor,
+        grad_final_state: Option<&Tensor>,
+    ) -> Result<GdnGrad, OjasError> {
+        self.enter("chunked_gdn_backward", true)?;
+        self.inner
+            .chunked_gdn_backward(inputs, checkpoints, grad_output, grad_final_state)
+    }
+    fn causal_conv1d_silu_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.enter("causal_conv1d_silu_forward", true)?;
+        self.inner.causal_conv1d_silu_forward(input, weight)
+    }
+    fn causal_conv1d_silu_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.enter("causal_conv1d_silu_backward", true)?;
+        self.inner
+            .causal_conv1d_silu_backward(input, weight, grad_output)
+    }
+    fn gated_rms_norm_forward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.enter("gated_rms_norm_forward", true)?;
+        self.inner.gated_rms_norm_forward(input, gate, weight, eps)
+    }
+    fn gated_rms_norm_backward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<GatedRmsGrad, OjasError> {
+        self.enter("gated_rms_norm_backward", true)?;
+        self.inner
+            .gated_rms_norm_backward(input, gate, weight, grad_output, eps)
+    }
+    fn rope_partial_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.enter("rope_partial_forward", true)?;
+        self.inner.rope_partial_forward(x, cos, sin)
+    }
+    fn rope_partial_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.enter("rope_partial_backward", true)?;
+        self.inner.rope_partial_backward(grad_output, cos, sin)
     }
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         self.enter("silu_forward", true)?;
@@ -499,6 +583,17 @@ impl<B: Backend> Backend for Gated<B> {
         self.enter("cast_bf16", true)?;
         self.inner.cast_bf16(tensor)
     }
+    fn bf16_operands(&self) -> bool {
+        self.inner.bf16_operands()
+    }
+    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        self.enter("to_bf16", true)?;
+        self.inner.to_bf16(tensor)
+    }
+    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        self.enter("to_f32", true)?;
+        self.inner.to_f32(tensor)
+    }
     fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
         self.enter("autocast_region", true)?;
         self.inner.autocast_region(mode)
@@ -547,6 +642,49 @@ mod tests {
         let armed = slot.arm(Box::new(|| Ok(())));
         assert_eq!(armed.tripped(), None);
         g.linear_forward(&x, &x).unwrap();
+    }
+
+    /// The gated delta rule goes through the gate to the inner backend
+    /// (not the trait default's refusal), and a cancel refuses it, as it
+    /// does every polling op.
+    #[test]
+    fn the_gated_delta_rule_reaches_the_inner_backend_and_polls() {
+        let slot = Arc::new(CancelSlot::default());
+        let g = gated(&slot);
+        let b = Budget::new(1 << 20);
+        let f = |shape: &[usize], v: f32| {
+            Tensor::from_f32(&vec![v; shape.iter().product()], shape, &b).unwrap()
+        };
+        let (q, v, gate, beta) = (
+            f(&[1, 3, 1, 2], 0.5),
+            f(&[1, 3, 1, 2], 0.25),
+            f(&[1, 3, 1], -0.5),
+            f(&[1, 3, 1], 0.5),
+        );
+        let x = GdnInputs {
+            q: &q,
+            k: &q,
+            v: &v,
+            g: &gate,
+            beta: &beta,
+            initial_state: None,
+        };
+        let fwd = g.chunked_gdn_forward(x).unwrap();
+        let want = g.inner.chunked_gdn_forward(x).unwrap();
+        assert_eq!(
+            fwd.output.to_f32_vec().unwrap(),
+            want.output.to_f32_vec().unwrap()
+        );
+        let grad = g
+            .chunked_gdn_backward(x, &fwd.checkpoints, &f(&[1, 3, 1, 2], 1.0), None)
+            .unwrap();
+        assert!(grad.initial_state.is_none());
+        let armed = slot.arm(Box::new(|| Err("cancelled: Explicit".to_string())));
+        assert!(g.chunked_gdn_forward(x).is_err());
+        assert!(g
+            .chunked_gdn_backward(x, &fwd.checkpoints, &f(&[1, 3, 1, 2], 1.0), None)
+            .is_err());
+        assert_eq!(armed.tripped().as_deref(), Some("cancelled: Explicit"));
     }
 
     #[test]

@@ -59,19 +59,19 @@
 use std::sync::Arc;
 
 use ojas_core::{
-    adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
-    check_adamw, clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
+    accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims,
+    causal_sdpa_forward_dims, check_adamw, clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
     cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
     kv_cache_write_dims, linear_backward_dims, linear_ce_dims, linear_forward_dims,
     mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, permute_output_shape, require_ns5,
+    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_bf16_operands, require_ns5,
     residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
     rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
     rope_half_split_backward_dims, rope_half_split_forward_dims, sdpa_scale, silu_backward_dims,
     silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Numerics,
-    OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Ns5Precision,
+    Numerics, OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims,
+    Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -79,10 +79,12 @@ use ojas_kernels::{
     ATTENTION_MAX_HEAD_DIM, GEMM_BIG_TILE,
 };
 
-use crate::context::{Job, Kernel, Slot, WgpuBuffer, WgpuContext};
+use crate::context::{Job, Kernel, Slot, WgpuBuffer, WgpuContext, FAULT_OPS};
 
-/// One fault bit per op: the u32 fault word holds exactly 32, all used.
-const OP_NAMES: [&str; 32] = [
+/// One fault bit per op, by index. The fault words hold a 64-bit mask
+/// ([`FAULT_OPS`]); `OP_NAMES` may grow to that many, and the build refuses
+/// more.
+const OP_NAMES: [&str; 33] = [
     "embedding_forward",
     "embedding_backward",
     "linear_forward",
@@ -115,7 +117,13 @@ const OP_NAMES: [&str; 32] = [
     "linear_cross_entropy_mean",
     "cached_attention_forward",
     "kv_cache_write",
+    "cast_bf16",
 ];
+
+const _: () = assert!(
+    OP_NAMES.len() as u32 <= FAULT_OPS,
+    "more ops than the fault words hold"
+);
 
 #[derive(Clone, Copy)]
 struct Op(u32);
@@ -125,8 +133,9 @@ impl Op {
         OP_NAMES.get(self.0 as usize).copied().unwrap_or("wgpu")
     }
 
-    fn bit(self) -> u32 {
-        1u32 << self.0
+    /// The id its kernels raise: index + 1, so 0 stays "reports nothing".
+    fn fault_id(self) -> u32 {
+        self.0 + 1
     }
 }
 
@@ -160,6 +169,8 @@ const ACC: Op = Op(28);
 const LCE: Op = Op(29);
 const CATTN: Op = Op(30);
 const KVW: Op = Op(31);
+/// Past the low mask word: its bit is bit 0 of fault word 1.
+const CAST: Op = Op(32);
 
 const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> Kernel {
     Kernel {
@@ -170,14 +181,12 @@ const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> K
 }
 
 use Slot::{R, W};
-use WgslModule::{CachedAttention, Gemm, HeadRepeat, Layout, Loss, Norm, Optim, Pointwise, Reduce};
+use WgslModule::{CachedAttention, Gemm, Layout, Loss, Norm, Optim, Pointwise, Reduce};
 
 const PERMUTE_K: Kernel = k(Layout, "permute", &[R(2), R(3), W(4)]);
 const KV_WRITE: Kernel = k(Layout, "kv_write", &[R(2), W(4), R(5)]);
 const CATTN_SPLIT: Kernel = k(CachedAttention, "cattn_split", &[R(2), R(3), R(4), W(5)]);
 const CATTN_MERGE: Kernel = k(CachedAttention, "cattn_merge", &[W(6), R(7)]);
-const HEAD_REPEAT: Kernel = k(HeadRepeat, "head_repeat", &[R(2), W(3)]);
-const HEAD_SUM: Kernel = k(HeadRepeat, "head_sum", &[R(2), W(3)]);
 
 const GEMM_NT: Kernel = k(Gemm, "gemm_nt", &[R(2), R(3), W(4)]);
 const GEMM_NN: Kernel = k(Gemm, "gemm_nn", &[R(2), R(3), W(4)]);
@@ -198,6 +207,8 @@ const VR_FWD: Kernel = k(Pointwise, "vr_fwd", &[R(2), R(3), R(4), W(6)]);
 const VR_BWD: Kernel = k(Pointwise, "vr_bwd", &[R(2), R(4), W(6), W(7)]);
 const GATE_FWD: Kernel = k(Pointwise, "gate_fwd", &[R(2), R(3), R(4), W(6)]);
 const GATE_BWD: Kernel = k(Pointwise, "gate_bwd", &[R(2), R(3), R(4), R(5), W(6), W(7)]);
+const GATE_FWD_SAVE: Kernel = k(Pointwise, "gate_fwd_save", &[R(2), R(3), R(4), W(6), W(7)]);
+const GATE_BWD_SAVED: Kernel = k(Pointwise, "gate_bwd_saved", &[R(2), R(4), R(5), W(6), W(7)]);
 const ROPE: Kernel = k(Pointwise, "rope", &[R(2), R(3), R(4), W(6)]);
 const SUM_PARTIAL: Kernel = k(Reduce, "sum_partial", &[R(2), R(3), R(4), W(5)]);
 const SUM_FINISH: Kernel = k(Reduce, "sum_finish", &[R(2), R(3), W(5)]);
@@ -230,8 +241,8 @@ const ADAM_COMMIT: Kernel = k(
 
 fn attn_kernel(module: WgslModule, entry: &'static str) -> Kernel {
     let slots: &'static [Slot] = match entry {
-        "attn_fwd" => &[R(2), R(3), R(4), W(7)],
-        "attn_bwd_prep" => &[R(2), R(3), R(4), R(5), W(7)],
+        "attn_fwd" => &[R(2), R(3), R(4), W(7), W(8)],
+        "attn_bwd_dr" => &[R(2), R(5), R(6), W(7)],
         "attn_bwd_dq" => &[R(2), R(3), R(4), R(5), R(6), W(7)],
         _ => &[R(2), R(3), R(4), R(5), R(6), W(7), W(8)],
     };
@@ -244,12 +255,30 @@ struct SdpaPlan {
     bh: usize,
     time: usize,
     dim: usize,
-    /// Query heads per KV head. `1` runs the equal-head kernel unchanged.
+    /// Query heads per KV head: query plane `bh` reads KV plane `bh / rep`.
     rep: usize,
+    /// Keys a query sees, counting itself; `0` is every earlier key. Always
+    /// below `time` when set.
+    window: usize,
     scale: f32,
     module: WgslModule,
     fwd_rows: usize,
     bwd_rows: usize,
+}
+
+impl SdpaPlan {
+    /// The attention kernels' words: time, scale bits, `bh * time`, D, rep,
+    /// window.
+    fn words(&self, op: Op) -> Result<[u32; 6], OjasError> {
+        Ok([
+            u(op, self.time)?,
+            self.scale.to_bits(),
+            u(op, product(op, &[self.bh, self.time])?)?,
+            u(op, self.dim)?,
+            u(op, self.rep)?,
+            u(op, self.window)?,
+        ])
+    }
 }
 
 /// Elements one stage-one reduction group covers (`CHUNK` in the WGSL).
@@ -275,18 +304,6 @@ fn product(op: Op, dims: &[usize]) -> Result<usize, OjasError> {
     dims.iter().try_fold(1usize, |n, &d| {
         n.checked_mul(d)
             .ok_or_else(|| overflow(op, "shape product overflows"))
-    })
-}
-
-/// `accumulate_grad` has no validator of its own (docs/shape-contract.md):
-/// it is [`residual_add_forward_dims`] reported under its own name.
-fn accumulate_grad_dims(acc: &Tensor, grad: &Tensor) -> Result<usize, OjasError> {
-    let op = ACC.name();
-    residual_add_forward_dims(acc, grad).map_err(|err| match err {
-        OjasError::Shape { detail, .. } => OjasError::Shape { op, detail },
-        OjasError::Dtype { expected, got, .. } => OjasError::Dtype { op, expected, got },
-        OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op, detail },
-        other => other,
     })
 }
 
@@ -446,6 +463,14 @@ impl WgpuBackend {
             Some(index) => index,
             None => bits.trailing_zeros(),
         };
+        // An id the kernels raised that names no op is a host bug, not a
+        // value fault; report it rather than a made-up op name.
+        if index as usize >= OP_NAMES.len() {
+            return Err(OjasError::Backend {
+                id: BackendId::Wgpu,
+                detail: format!("fault words name op index {index}, past the op table"),
+            });
+        }
         Err(OjasError::NonFinite {
             op: Op(index).name(),
         })
@@ -524,7 +549,152 @@ impl WgpuBackend {
     }
 
     fn job(&self, op: Op) -> Job<'_> {
-        self.ctx.job(&self.budget, op.bit())
+        self.ctx.job(&self.budget, op.fault_id())
+    }
+
+    /// The gate forward: `z = x @ W^T` on the GEMM, then the gated product,
+    /// and with `save` the per-head sigmoid `[rows, heads]` as well.
+    fn gate_forward(
+        &self,
+        [input, weight, bias, attn_out]: [&Tensor; 4],
+        save: bool,
+    ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+        let op = GATE_F;
+        let d = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
+        let (rows, din, heads, dh) = (d.rows, d.d_model, d.heads, d.head_dim);
+        let xv = self.placed(op, input)?;
+        let wv = self.placed(op, weight)?;
+        let bv = self.placed(op, bias)?;
+        let av = self.placed(op, attn_out)?;
+        let zlen = product(op, &[rows, heads])?;
+        self.fits(op, zlen)?;
+        let grid = self.lanes(av.elems)?;
+        let (y, yb) = self.out(op, av.shape())?;
+        let saved = if save {
+            Some(self.out(op, &[rows, heads])?)
+        } else {
+            None
+        };
+        let mut job = self.job(op);
+        let xb = bind(op, &mut job, &xv)?;
+        let wb = bind(op, &mut job, &wv)?;
+        let bb = bind(op, &mut job, &bv)?;
+        let ab = bind(op, &mut job, &av)?;
+        let z = job.scratch((zlen as u64) * 4)?;
+        self.gemm(
+            op,
+            &mut job,
+            Mm::Nt,
+            &xb,
+            &wb,
+            &z,
+            (rows, heads, din),
+            [din, 1, 1, din],
+        )?;
+        let words = [u(op, av.elems)?, u(op, heads)?, u(op, dh)?];
+        match &saved {
+            Some((_, sb)) => {
+                job.dispatch(&GATE_FWD_SAVE, &words, &[&z, &bb, &ab, &yb, sb], grid)?
+            }
+            None => job.dispatch(&GATE_FWD, &words, &[&z, &bb, &ab, &yb], grid)?,
+        }
+        job.commit()?;
+        Ok((y, saved.map(|(s, _)| s)))
+    }
+
+    /// The gate backward. With `scales` (a saving forward's sigmoid) the
+    /// logits GEMM is skipped and the bias is not read; it is still checked
+    /// finite, as the recomputing kernel's read of it checks it.
+    fn gate_backward(
+        &self,
+        [input, weight, bias, attn_out, grad_output]: [&Tensor; 5],
+        scales: Option<&Tensor>,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        let op = GATE_B;
+        let d = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
+        let (rows, din, heads, dh) = (d.rows, d.d_model, d.heads, d.head_dim);
+        if let Some(s) = scales {
+            if s.shape() != [rows, heads] || s.dtype() != DType::F32 {
+                return Err(shape(
+                    op,
+                    format!(
+                        "saved scales {:?} {:?}, expected F32 [{rows}, {heads}]",
+                        s.dtype(),
+                        s.shape()
+                    ),
+                ));
+            }
+        }
+        let xv = self.placed(op, input)?;
+        let wv = self.placed(op, weight)?;
+        let bv = self.placed(op, bias)?;
+        let av = self.placed(op, attn_out)?;
+        let gv = self.placed(op, grad_output)?;
+        let sv = scales.map(|s| self.placed(op, s)).transpose()?;
+        let zlen = product(op, &[rows, heads])?;
+        self.fits(op, zlen)?;
+        let grid = self.lanes(zlen)?;
+        let (gx, gxb) = self.out(op, xv.shape())?;
+        let (gw, gwb) = self.out(op, wv.shape())?;
+        let (gbias, gbb) = self.out(op, bv.shape())?;
+        let (ga, gab) = self.out(op, av.shape())?;
+        let mut job = self.job(op);
+        let xb = bind(op, &mut job, &xv)?;
+        let wb = bind(op, &mut job, &wv)?;
+        let bb = bind(op, &mut job, &bv)?;
+        let ab = bind(op, &mut job, &av)?;
+        let gb = bind(op, &mut job, &gv)?;
+        let gz = job.scratch((zlen as u64) * 4)?;
+        let words = [u(op, zlen)?, u(op, heads)?, u(op, dh)?];
+        match &sv {
+            Some(sv) => {
+                let sb = bind(op, &mut job, sv)?;
+                self.check_finite(op, &mut job, &bb, heads)?;
+                job.dispatch(&GATE_BWD_SAVED, &words, &[&sb, &ab, &gb, &gab, &gz], grid)?;
+            }
+            None => {
+                let z = job.scratch((zlen as u64) * 4)?;
+                self.gemm(
+                    op,
+                    &mut job,
+                    Mm::Nt,
+                    &xb,
+                    &wb,
+                    &z,
+                    (rows, heads, din),
+                    [din, 1, 1, din],
+                )?;
+                job.dispatch(&GATE_BWD, &words, &[&z, &bb, &ab, &gb, &gab, &gz], grid)?;
+            }
+        }
+        self.gemm(
+            op,
+            &mut job,
+            Mm::Nn,
+            &gz,
+            &wb,
+            &gxb,
+            (rows, din, heads),
+            [heads, 1, din, 1],
+        )?;
+        self.gemm(
+            op,
+            &mut job,
+            Mm::Tn,
+            &gz,
+            &xb,
+            &gwb,
+            (heads, din, rows),
+            [1, heads, din, 1],
+        )?;
+        self.col_sum(op, &mut job, &gz, None, rows, heads, &gbb)?;
+        job.commit()?;
+        Ok(PerHeadGateGrad {
+            input: gx,
+            weight: gw,
+            bias: gbias,
+            attn_out: ga,
+        })
     }
 
     /// `C[m, n] = A(m, k) B(k, n)` with element strides `[a_rs, a_cs, b_rs, b_cs]`.
@@ -665,7 +835,7 @@ impl WgpuBackend {
 
     /// Record `dst = permute(src)`, where `src` is contiguous with `shape` and
     /// output axis `a` is input axis `dims[a]`. The caller has validated
-    /// `dims` with [`permute_output_shape`]. Words move as `u32`, so the bits
+    /// `dims` with [`permute_dims`]. Words move as `u32`, so the bits
     /// are unchanged; a non-finite one raises `op`'s fault bit, as any op's
     /// non-finite output does.
     #[allow(clippy::too_many_arguments)]
@@ -970,8 +1140,12 @@ impl WgpuBackend {
     }
 
     /// The plan of a call whose shapes the op's validator accepted as `d`:
-    /// this device's head-dim and shared-memory limits.
-    fn sdpa_plan(&self, op: Op, d: SdpaDims) -> Result<SdpaPlan, OjasError> {
+    /// this device's head-dim and shared-memory limits. A window of 0 is
+    /// refused; one of at least `T` sees every earlier key and is dropped.
+    fn sdpa_plan(&self, op: Op, d: SdpaDims, window: Option<usize>) -> Result<SdpaPlan, OjasError> {
+        if window == Some(0) {
+            return Err(shape(op, "sdpa window must be at least 1"));
+        }
         let dim = d.head_dim;
         let dim_u32 = u32::try_from(dim)
             .map_err(|_| overflow(op, format!("head dim {dim} does not fit in u32")))?;
@@ -1003,6 +1177,7 @@ impl WgpuBackend {
             time: d.seq,
             dim,
             rep,
+            window: window.filter(|&w| w < d.seq).unwrap_or(0),
             scale,
             module: WgslModule::Attention(tiles),
             fwd_rows: tiles.fwd_rows as usize,
@@ -1010,55 +1185,92 @@ impl WgpuBackend {
         })
     }
 
-    /// One lane per element of `dst`. `n == 0` records nothing: a grid axis
-    /// of 0 is refused. `rep == 1` is not called; the equal-head kernel
-    /// reads K and V directly.
-    #[allow(clippy::too_many_arguments)]
-    fn head_map(
+    /// Causal SDPA forward after its validator: the output and the
+    /// `[B, H, T]` row log-sum-exp. Grouped-query heads read their KV head
+    /// in place, so nothing beyond the two outputs is allocated.
+    fn sdpa_forward(
         &self,
         op: Op,
-        job: &mut Job<'_>,
-        kernel: &Kernel,
-        src: &wgpu::Buffer,
-        dst: &wgpu::Buffer,
-        n: usize,
-        plane: usize,
-        rep: usize,
-    ) -> Result<(), OjasError> {
-        if n == 0 {
-            return Ok(());
-        }
+        d: SdpaDims,
+        window: Option<usize>,
+        [q, k, v]: [&Tensor; 3],
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let qv = self.placed(op, q)?;
+        let kv = self.placed(op, k)?;
+        let vv = self.placed(op, v)?;
+        let plan = self.sdpa_plan(op, d, window)?;
+        let grid = self.attn_grid(op, plan.bh, plan.time, plan.fwd_rows)?;
+        let (y, yb) = self.out(op, qv.shape())?;
+        let (lse, lb) = self.out(op, &qv.shape()[..qv.shape().len().saturating_sub(1)])?;
+        let mut job = self.job(op);
+        let qb = bind(op, &mut job, &qv)?;
+        let kb = bind(op, &mut job, &kv)?;
+        let vb = bind(op, &mut job, &vv)?;
         job.dispatch(
-            kernel,
-            &[u(op, n)?, u(op, plane)?, u(op, rep)?],
-            &[src, dst],
-            self.lanes(n)?,
-        )
+            &attn_kernel(plan.module, "attn_fwd"),
+            &plan.words(op)?,
+            &[&qb, &kb, &vb, &yb, &lb],
+            grid,
+        )?;
+        job.commit()?;
+        Ok((y, lse))
     }
 
-    /// Repeat each KV head `plan.rep` times into query-sized scratch.
-    /// `rep <= 1` returns the buffers it was given.
-    fn expand_kv(
+    /// Causal SDPA backward after its validator, from the forward's output
+    /// and log-sum-exp: `[q, k, v, output, lse, grad_output]`. The only
+    /// scratch is the `2 * B * H * T` row statistics; grouped-query
+    /// gradients are summed onto their KV head inside `attn_bwd_dkv`.
+    fn sdpa_backward(
         &self,
         op: Op,
-        job: &mut Job<'_>,
-        plan: &SdpaPlan,
-        q_elems: usize,
-        kb: wgpu::Buffer,
-        vb: wgpu::Buffer,
-    ) -> Result<(wgpu::Buffer, wgpu::Buffer), OjasError> {
-        if plan.rep <= 1 || q_elems == 0 {
-            return Ok((kb, vb));
-        }
-        let plane = product(op, &[plan.time, plan.dim])?;
-        let bytes = (q_elems as u64)
-            .checked_mul(4)
-            .ok_or_else(|| overflow(op, "expanded head bytes overflow"))?;
-        let kexp = job.scratch(bytes)?;
-        let vexp = job.scratch(bytes)?;
-        self.head_map(op, job, &HEAD_REPEAT, &kb, &kexp, q_elems, plane, plan.rep)?;
-        self.head_map(op, job, &HEAD_REPEAT, &vb, &vexp, q_elems, plane, plan.rep)?;
-        Ok((kexp, vexp))
+        d: SdpaDims,
+        window: Option<usize>,
+        [q, k, v, o, lse, grad_output]: [&Tensor; 6],
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        let qv = self.placed(op, q)?;
+        let kv = self.placed(op, k)?;
+        let vv = self.placed(op, v)?;
+        let ov = self.placed(op, o)?;
+        let lv = self.placed(op, lse)?;
+        let gv = self.placed(op, grad_output)?;
+        let plan = self.sdpa_plan(op, d, window)?;
+        let bht = product(op, &[plan.bh, plan.time])?;
+        let stats_len = product(op, &[bht, 2])?;
+        self.fits(op, stats_len)?;
+        let q_grid = self.attn_grid(op, plan.bh, plan.time, plan.bwd_rows)?;
+        let kv_grid = self.attn_grid(op, plan.bh / plan.rep, plan.time, plan.bwd_rows)?;
+        let (gq, gqb) = self.out(op, qv.shape())?;
+        let (gk, gkb) = self.out(op, kv.shape())?;
+        let (gvv, gvb) = self.out(op, vv.shape())?;
+        let mut job = self.job(op);
+        let qb = bind(op, &mut job, &qv)?;
+        let kb = bind(op, &mut job, &kv)?;
+        let vb = bind(op, &mut job, &vv)?;
+        let ob = bind(op, &mut job, &ov)?;
+        let lb = bind(op, &mut job, &lv)?;
+        let gb = bind(op, &mut job, &gv)?;
+        let stats = job.scratch((stats_len as u64) * 4)?;
+        let words = plan.words(op)?;
+        job.dispatch(
+            &attn_kernel(plan.module, "attn_bwd_dr"),
+            &words,
+            &[&ob, &gb, &lb, &stats],
+            self.lanes(bht)?,
+        )?;
+        job.dispatch(
+            &attn_kernel(plan.module, "attn_bwd_dq"),
+            &words,
+            &[&qb, &kb, &vb, &gb, &stats, &gqb],
+            q_grid,
+        )?;
+        job.dispatch(
+            &attn_kernel(plan.module, "attn_bwd_dkv"),
+            &words,
+            &[&qb, &kb, &vb, &gb, &stats, &gkb, &gvb],
+            kv_grid,
+        )?;
+        job.commit()?;
+        Ok((gq, gk, gvv))
     }
 
     /// `(ceil(time / rows), batch * heads)` workgroups.
@@ -1246,20 +1458,9 @@ impl Backend for WgpuBackend {
     /// `permute` at the next sync point (the module docs' contract).
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
         let op = PERMUTE;
-        let out_shape = permute_output_shape(op.name(), input.shape(), dims)?;
+        // dtype, zero axis and axes, before placement or contiguity (D17).
+        let out_shape = permute_dims(input, dims)?;
         let x = self.placed(op, input)?;
-        // F32 only and non-empty: this device's restrictions, not shape
-        // rules (`permute_output_shape` accepts a zero axis; D17).
-        if input.dtype() != DType::F32 {
-            return Err(OjasError::Dtype {
-                op: op.name(),
-                expected: DType::F32,
-                got: input.dtype(),
-            });
-        }
-        if x.elems == 0 || input.shape().contains(&0) {
-            return Err(shape(op, "empty tensor"));
-        }
         let (y, yb) = self.out(op, &out_shape)?;
         let mut job = self.job(op);
         let xb = bind(op, &mut job, &x)?;
@@ -1343,6 +1544,7 @@ impl Backend for WgpuBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         let op = LINEAR_F;
         let d = linear_forward_dims(input, weight)?;
+        refuse_bf16_operands(op.name(), BackendId::Wgpu, &[input, weight])?;
         let (rows, kin, nout) = (d.rows, d.in_features, d.out_features);
         let xv = self.placed(op, input)?;
         let wv = self.placed(op, weight)?;
@@ -1372,6 +1574,7 @@ impl Backend for WgpuBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         let op = LINEAR_B;
         let d = linear_backward_dims(input, weight, grad_output)?;
+        refuse_bf16_operands(op.name(), BackendId::Wgpu, &[input, weight, grad_output])?;
         let (rows, kin, nout) = (d.rows, d.in_features, d.out_features);
         let xv = self.placed(op, input)?;
         let wv = self.placed(op, weight)?;
@@ -1497,34 +1700,16 @@ impl Backend for WgpuBackend {
         Ok((pq.gx, pk.gx, pq.gw, pk.gw))
     }
 
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
-        let op = SDPA_F;
-        let d = causal_sdpa_forward_dims(q, k, v)?;
-        let qv = self.placed(op, q)?;
-        let kv = self.placed(op, k)?;
-        let vv = self.placed(op, v)?;
-        let plan = self.sdpa_plan(op, d)?;
-        let bht = product(op, &[plan.bh, plan.time])?;
-        let grid = self.attn_grid(op, plan.bh, plan.time, plan.fwd_rows)?;
-        let (y, yb) = self.out(op, qv.shape())?;
-        let mut job = self.job(op);
-        let qb = bind(op, &mut job, &qv)?;
-        let kb = bind(op, &mut job, &kv)?;
-        let vb = bind(op, &mut job, &vv)?;
-        let (kb, vb) = self.expand_kv(op, &mut job, &plan, qv.elems, kb, vb)?;
-        job.dispatch(
-            &attn_kernel(plan.module, "attn_fwd"),
-            &[
-                u(op, plan.time)?,
-                plan.scale.to_bits(),
-                u(op, bht)?,
-                u(op, plan.dim)?,
-            ],
-            &[&qb, &kb, &vb, &yb],
-            grid,
-        )?;
-        job.commit()?;
-        Ok(y)
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let d = causal_sdpa_forward_dims(q, k, v, window)?;
+        refuse_bf16_operands(SDPA_F.name(), BackendId::Wgpu, &[q, k, v])?;
+        self.sdpa_forward(SDPA_F, d, window, [q, k, v])
     }
 
     fn causal_sdpa_backward(
@@ -1532,75 +1717,18 @@ impl Backend for WgpuBackend {
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
         grad_output: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
-        let op = SDPA_B;
-        let d = causal_sdpa_backward_dims(q, k, v, grad_output)?;
-        let qv = self.placed(op, q)?;
-        let kv = self.placed(op, k)?;
-        let vv = self.placed(op, v)?;
-        let gv = self.placed(op, grad_output)?;
-        let plan = self.sdpa_plan(op, d)?;
-        let bht = product(op, &[plan.bh, plan.time])?;
-        let stats_len = product(op, &[bht, 2])?;
-        self.fits(op, stats_len)?;
-        let fwd_grid = self.attn_grid(op, plan.bh, plan.time, plan.fwd_rows)?;
-        let bwd_grid = self.attn_grid(op, plan.bh, plan.time, plan.bwd_rows)?;
-        let (gq, gqb) = self.out(op, qv.shape())?;
-        let (gk, gkb) = self.out(op, kv.shape())?;
-        let (gvv, gvb) = self.out(op, vv.shape())?;
-        let mut job = self.job(op);
-        let qb = bind(op, &mut job, &qv)?;
-        let kb = bind(op, &mut job, &kv)?;
-        let vb = bind(op, &mut job, &vv)?;
-        let gb = bind(op, &mut job, &gv)?;
-        let (kb, vb) = self.expand_kv(op, &mut job, &plan, qv.elems, kb, vb)?;
-        // `rep == 1` writes dK and dV straight into the outputs. A repeat
-        // writes query-sized gradients and sums them back, `r` ascending.
-        let (dkb, dvb) = if plan.rep > 1 && qv.elems > 0 {
-            let bytes = (qv.elems as u64)
-                .checked_mul(4)
-                .ok_or_else(|| overflow(op, "expanded head bytes overflow"))?;
-            (job.scratch(bytes)?, job.scratch(bytes)?)
-        } else {
-            (gkb.clone(), gvb.clone())
-        };
-        let stats = job.scratch((stats_len as u64) * 4)?;
-        let words = [
-            u(op, plan.time)?,
-            plan.scale.to_bits(),
-            u(op, bht)?,
-            u(op, plan.dim)?,
-        ];
-        job.dispatch(
-            &attn_kernel(plan.module, "attn_bwd_prep"),
-            &words,
-            &[&qb, &kb, &vb, &gb, &stats],
-            fwd_grid,
+        let d = causal_sdpa_backward_dims(q, k, v, output, lse, grad_output, window)?;
+        refuse_bf16_operands(
+            SDPA_B.name(),
+            BackendId::Wgpu,
+            &[q, k, v, output, lse, grad_output],
         )?;
-        job.dispatch(
-            &attn_kernel(plan.module, "attn_bwd_dq"),
-            &words,
-            &[&qb, &kb, &vb, &gb, &stats, &gqb],
-            bwd_grid,
-        )?;
-        job.dispatch(
-            &attn_kernel(plan.module, "attn_bwd_dkv"),
-            &words,
-            &[&qb, &kb, &vb, &gb, &stats, &dkb, &dvb],
-            bwd_grid,
-        )?;
-        if plan.rep > 1 && kv.elems > 0 {
-            let plane = product(op, &[plan.time, plan.dim])?;
-            self.head_map(
-                op, &mut job, &HEAD_SUM, &dkb, &gkb, kv.elems, plane, plan.rep,
-            )?;
-            self.head_map(
-                op, &mut job, &HEAD_SUM, &dvb, &gvb, kv.elems, plane, plan.rep,
-            )?;
-        }
-        job.commit()?;
-        Ok((gq, gk, gvv))
+        self.sdpa_backward(SDPA_B, d, window, [q, k, v, output, lse, grad_output])
     }
 
     fn per_head_sigmoid_gate_forward(
@@ -1610,41 +1738,20 @@ impl Backend for WgpuBackend {
         bias: &Tensor,
         attn_out: &Tensor,
     ) -> Result<Tensor, OjasError> {
-        let op = GATE_F;
-        let d = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
-        let (rows, din, heads, dh) = (d.rows, d.d_model, d.heads, d.head_dim);
-        let xv = self.placed(op, input)?;
-        let wv = self.placed(op, weight)?;
-        let bv = self.placed(op, bias)?;
-        let av = self.placed(op, attn_out)?;
-        let zlen = product(op, &[rows, heads])?;
-        self.fits(op, zlen)?;
-        let grid = self.lanes(av.elems)?;
-        let (y, yb) = self.out(op, av.shape())?;
-        let mut job = self.job(op);
-        let xb = bind(op, &mut job, &xv)?;
-        let wb = bind(op, &mut job, &wv)?;
-        let bb = bind(op, &mut job, &bv)?;
-        let ab = bind(op, &mut job, &av)?;
-        let z = job.scratch((zlen as u64) * 4)?;
-        self.gemm(
-            op,
-            &mut job,
-            Mm::Nt,
-            &xb,
-            &wb,
-            &z,
-            (rows, heads, din),
-            [din, 1, 1, din],
-        )?;
-        job.dispatch(
-            &GATE_FWD,
-            &[u(op, av.elems)?, u(op, heads)?, u(op, dh)?],
-            &[&z, &bb, &ab, &yb],
-            grid,
-        )?;
-        job.commit()?;
-        Ok(y)
+        self.gate_forward([input, weight, bias, attn_out], false)
+            .map(|(y, _)| y)
+    }
+
+    /// The forward and the per-head sigmoid `[rows, heads]` it multiplied
+    /// by, bit for bit the value the recomputing backward forms.
+    fn per_head_sigmoid_gate_forward_saving(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+    ) -> Result<(Tensor, Option<Tensor>), OjasError> {
+        self.gate_forward([input, weight, bias, attn_out], true)
     }
 
     fn per_head_sigmoid_gate_backward(
@@ -1655,73 +1762,22 @@ impl Backend for WgpuBackend {
         attn_out: &Tensor,
         grad_output: &Tensor,
     ) -> Result<PerHeadGateGrad, OjasError> {
-        let op = GATE_B;
-        let d = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
-        let (rows, din, heads, dh) = (d.rows, d.d_model, d.heads, d.head_dim);
-        let xv = self.placed(op, input)?;
-        let wv = self.placed(op, weight)?;
-        let bv = self.placed(op, bias)?;
-        let av = self.placed(op, attn_out)?;
-        let gv = self.placed(op, grad_output)?;
-        let zlen = product(op, &[rows, heads])?;
-        self.fits(op, zlen)?;
-        let grid = self.lanes(zlen)?;
-        let (gx, gxb) = self.out(op, xv.shape())?;
-        let (gw, gwb) = self.out(op, wv.shape())?;
-        let (gbias, gbb) = self.out(op, bv.shape())?;
-        let (ga, gab) = self.out(op, av.shape())?;
-        let mut job = self.job(op);
-        let xb = bind(op, &mut job, &xv)?;
-        let wb = bind(op, &mut job, &wv)?;
-        let bb = bind(op, &mut job, &bv)?;
-        let ab = bind(op, &mut job, &av)?;
-        let gb = bind(op, &mut job, &gv)?;
-        let z = job.scratch((zlen as u64) * 4)?;
-        let gz = job.scratch((zlen as u64) * 4)?;
-        self.gemm(
-            op,
-            &mut job,
-            Mm::Nt,
-            &xb,
-            &wb,
-            &z,
-            (rows, heads, din),
-            [din, 1, 1, din],
-        )?;
-        job.dispatch(
-            &GATE_BWD,
-            &[u(op, zlen)?, u(op, heads)?, u(op, dh)?],
-            &[&z, &bb, &ab, &gb, &gab, &gz],
-            grid,
-        )?;
-        self.gemm(
-            op,
-            &mut job,
-            Mm::Nn,
-            &gz,
-            &wb,
-            &gxb,
-            (rows, din, heads),
-            [heads, 1, din, 1],
-        )?;
-        self.gemm(
-            op,
-            &mut job,
-            Mm::Tn,
-            &gz,
-            &xb,
-            &gwb,
-            (heads, din, rows),
-            [1, heads, din, 1],
-        )?;
-        self.col_sum(op, &mut job, &gz, None, rows, heads, &gbb)?;
-        job.commit()?;
-        Ok(PerHeadGateGrad {
-            input: gx,
-            weight: gw,
-            bias: gbias,
-            attn_out: ga,
-        })
+        self.gate_backward([input, weight, bias, attn_out, grad_output], None)
+    }
+
+    /// The backward with the saving forward's sigmoid: no logits GEMM and
+    /// no bias read (the bias is still checked finite). `scales` must be
+    /// this context's `[rows, heads]` F32.
+    fn per_head_sigmoid_gate_backward_saved(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        attn_out: &Tensor,
+        grad_output: &Tensor,
+        scales: &Tensor,
+    ) -> Result<PerHeadGateGrad, OjasError> {
+        self.gate_backward([input, weight, bias, attn_out, grad_output], Some(scales))
     }
 
     fn value_residual_blend_forward(
@@ -1772,8 +1828,9 @@ impl Backend for WgpuBackend {
         })
     }
 
-    /// Device round. Fault bit 0, and the kernel never raises, so a NaN
-    /// stays a value. A host tensor is [`OjasError::Placement`].
+    /// Device round under its own fault bit ([`CAST`], in the high mask
+    /// word). `round_bf16` never raises: a NaN stays a value, as the CPU's
+    /// cast keeps it. A host tensor is [`OjasError::Placement`].
     fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "cast_bf16";
         let placement = |found| OjasError::Placement {
@@ -1824,7 +1881,7 @@ impl Backend for WgpuBackend {
         let wb = self.ctx.tensor_buffer(bytes)?;
         let raw_out = wb.raw()?.clone();
         let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::F32, charge)?;
-        let mut job = self.ctx.job(&self.budget, 0);
+        let mut job = self.job(CAST);
         let src = {
             let raw = buf.raw()?;
             let off = tensor.byte_offset();
@@ -2179,6 +2236,8 @@ impl Backend for WgpuBackend {
     /// norm, five steps with [`MUON_NS5_A`]/[`MUON_NS5_B`]/[`MUON_NS5_C`] on
     /// the wide orientation (a tall matrix is transposed first and back
     /// after), scale `max(1, rows/cols)^0.5`, and decoupled decay.
+    /// [`Ns5Precision::Bf16`] is [`OjasError::Unsupported`], refused before
+    /// anything is charged or written.
     ///
     /// In place on `param` and `momentum`, which must each be the sole owner
     /// of their device buffer. Everything is computed into scratch with a
@@ -2196,6 +2255,15 @@ impl Backend for WgpuBackend {
         let d = muon_ns5_step_dims(param, grad, momentum)?;
         let (rows, cols) = (d.rows, d.cols);
         require_ns5(5)?;
+        if config.ns5 != Ns5Precision::F32 {
+            return Err(OjasError::Unsupported {
+                op: op.name(),
+                detail: format!(
+                    "wgpu runs Newton-Schulz in f32 only; {:?} is not implemented here",
+                    config.ns5
+                ),
+            });
+        }
         self.placed(op, param)?;
         let gv = self.placed(op, grad)?;
         self.placed(op, momentum)?;
@@ -2697,5 +2765,177 @@ mod tests {
             max_abs(&dx, &cpu_dx) <= ELEMENT_ABS_TOL,
             "dx {dx:?} vs {cpu_dx:?}"
         );
+    }
+
+    /// The raw buffer behind a tensor this backend uploaded.
+    fn raw_of(t: &Tensor) -> wgpu::Buffer {
+        t.device_buffer()
+            .and_then(|d| d.as_any().downcast_ref::<WgpuBuffer>())
+            .expect("a wgpu tensor")
+            .raw()
+            .expect("a live buffer")
+            .clone()
+    }
+
+    /// Record `check_finite` over the first `n` floats of `buf` under fault
+    /// id `id`, as an op of that index would raise.
+    fn raise_as(gpu: &WgpuBackend, id: u32, buf: &wgpu::Buffer, n: usize) {
+        let mut job = gpu.ctx.job(&gpu.budget, id);
+        job.dispatch(&CHECK_FINITE, &[n as u32], &[buf], gpu.lanes(n).unwrap())
+            .unwrap();
+        job.commit().unwrap();
+    }
+
+    #[test]
+    fn fault_ids_at_both_ends_of_both_mask_words_land_on_their_own_bit() {
+        // Pre-fix, the fault word was one u32 mask holding exactly 32 ops:
+        // an op of index 32 had no bit, so cast_bf16 ran with mask 0 and a
+        // 33rd op could never report a fault.
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        let bad = gpu
+            .upload(&Tensor::from_f32(&[1.0, f32::NAN], &[2], &budget).unwrap())
+            .unwrap();
+        let buf = raw_of(&bad);
+        for id in [1, 31, 32, 33, 63, FAULT_OPS] {
+            raise_as(&gpu, id, &buf, 2);
+            gpu.ctx.sync().unwrap();
+            let (bits, first) = gpu.ctx.take_faults();
+            assert_eq!(bits, 1u64 << (id - 1), "id {id}: mask {bits:#x}");
+            assert_eq!(first, id, "id {id}");
+        }
+        // Every read released exactly what it saw: nothing is held over.
+        gpu.ctx.sync().unwrap();
+        assert_eq!(gpu.ctx.take_faults(), (0, 0));
+    }
+
+    #[test]
+    fn a_fault_id_past_the_mask_is_refused_before_anything_is_recorded() {
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        let bad = gpu
+            .upload(&Tensor::from_f32(&[f32::NAN], &[1], &budget).unwrap())
+            .unwrap();
+        let mut job = gpu.ctx.job(&gpu.budget, FAULT_OPS + 1);
+        let refused = job.dispatch(&CHECK_FINITE, &[1], &[&raw_of(&bad)], (1, 1, 1));
+        assert!(
+            matches!(refused, Err(OjasError::Backend { .. })),
+            "{refused:?}"
+        );
+        drop(job);
+        gpu.sync().expect("the refused dispatch recorded nothing");
+    }
+
+    #[test]
+    fn first_fault_precedence_holds_across_the_two_mask_words() {
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        let bad = gpu
+            .upload(&Tensor::from_f32(&[f32::INFINITY, 1.0], &[2], &budget).unwrap())
+            .unwrap();
+        let buf = raw_of(&bad);
+        let first_op = |gpu: &WgpuBackend| match gpu.sync() {
+            Err(OjasError::NonFinite { op }) => op,
+            other => panic!("expected a deferred fault, got {other:?}"),
+        };
+
+        // Low word (silu_forward, index 16), then high word (cast_bf16, 32).
+        let _y = gpu.silu_forward(&bad).unwrap();
+        raise_as(&gpu, CAST.fault_id(), &buf, 2);
+        assert_eq!(first_op(&gpu), "silu_forward");
+        gpu.sync().expect("both bits were reported by one sync");
+
+        // High word first, then low.
+        raise_as(&gpu, CAST.fault_id(), &buf, 2);
+        let _y = gpu.silu_forward(&bad).unwrap();
+        assert_eq!(first_op(&gpu), "cast_bf16");
+        gpu.sync().unwrap();
+
+        // A read that fails after its copy keeps a high-word fault held.
+        raise_as(&gpu, CAST.fault_id(), &buf, 2);
+        gpu.ctx.fail_next_read();
+        assert!(matches!(gpu.sync(), Err(OjasError::Backend { .. })));
+        let _y = gpu.silu_forward(&bad).unwrap();
+        assert_eq!(first_op(&gpu), "cast_bf16");
+        gpu.sync().unwrap();
+    }
+
+    #[test]
+    fn kv_write_refuses_a_bad_source_under_an_op_in_the_high_mask_word() {
+        // Pre-fix, kv_write read only word 0 of its per-call fault word, so
+        // under an op whose bit is in word 1 a non-finite source was written.
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        let src = gpu
+            .upload(&Tensor::from_f32(&[f32::NAN, 2.0, 3.0, 4.0], &[4], &budget).unwrap())
+            .unwrap();
+        let cache = gpu
+            .upload(&Tensor::from_f32(&[0.0; 8], &[8], &budget).unwrap())
+            .unwrap();
+        let mut job = gpu.ctx.job(&gpu.budget, CAST.fault_id());
+        let status = job.scratch(16).unwrap();
+        job.local_fault(&status);
+        job.dispatch(&CHECK_FINITE, &[4], &[&raw_of(&src)], (1, 1, 1))
+            .unwrap();
+        job.global_fault();
+        job.dispatch(
+            &KV_WRITE,
+            &[4, 4, 8, 0],
+            &[&raw_of(&src), &raw_of(&cache), &status],
+            (1, 1, 1),
+        )
+        .unwrap();
+        job.commit().unwrap();
+        match gpu.sync() {
+            Err(OjasError::NonFinite { op }) => assert_eq!(op, "cast_bf16"),
+            other => panic!("the refused write raised nothing: {other:?}"),
+        }
+        let after = gpu.download(&cache).unwrap().to_f32_vec().unwrap();
+        assert_eq!(after, vec![0.0; 8], "a faulting source reached the cache");
+    }
+
+    #[test]
+    fn muon_commit_refuses_a_bad_step_under_an_op_in_the_high_mask_word() {
+        // Pre-fix, muon_commit read only word 0 of its per-call fault word.
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        let up = |v: &[f32]| {
+            gpu.upload(&Tensor::from_f32(v, &[v.len()], &budget).unwrap())
+                .unwrap()
+        };
+        let new_p = up(&[f32::NAN, 9.0]);
+        let new_m = up(&[9.0, 9.0]);
+        let p = up(&[1.0, 2.0]);
+        let m = up(&[3.0, 4.0]);
+        let mut job = gpu.ctx.job(&gpu.budget, CAST.fault_id());
+        let status = job.scratch(16).unwrap();
+        job.local_fault(&status);
+        job.dispatch(&CHECK_FINITE, &[2], &[&raw_of(&new_p)], (1, 1, 1))
+            .unwrap();
+        job.global_fault();
+        job.dispatch(
+            &MUON_COMMIT,
+            &[2],
+            &[
+                &raw_of(&new_p),
+                &raw_of(&new_m),
+                &raw_of(&p),
+                &raw_of(&m),
+                &status,
+            ],
+            (1, 1, 1),
+        )
+        .unwrap();
+        job.commit().unwrap();
+        match gpu.sync() {
+            Err(OjasError::NonFinite { op }) => assert_eq!(op, "cast_bf16"),
+            other => panic!("the refused commit raised nothing: {other:?}"),
+        }
+        assert_eq!(gpu.download(&p).unwrap().to_f32_vec().unwrap(), [1.0, 2.0]);
+        assert_eq!(gpu.download(&m).unwrap().to_f32_vec().unwrap(), [3.0, 4.0]);
     }
 }

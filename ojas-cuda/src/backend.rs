@@ -12,7 +12,7 @@ use ojas_device::{Device, DeviceError};
 #[cfg(feature = "cuda")]
 use crate::buffer::CudaDeviceBuffer;
 #[cfg(feature = "cuda")]
-use crate::runtime::CudaRuntime;
+use crate::runtime::{driver_error, CudaRuntime};
 
 /// Device-resident [`Backend`] over NVIDIA CUDA.
 #[derive(Clone)]
@@ -94,12 +94,7 @@ impl Backend for CudaBackend {
         }
         #[cfg(feature = "cuda")]
         {
-            self.rt
-                .sync("CudaBackend::sync")
-                .map_err(|e| OjasError::Backend {
-                    id: BackendId::Cuda,
-                    detail: e.to_string(),
-                })
+            self.rt.sync("CudaBackend::sync").map_err(OjasError::from)
         }
     }
 
@@ -139,21 +134,15 @@ impl Backend for CudaBackend {
             }
             let byte_len = bytes.len();
             let reservation = self.budget.try_reserve(byte_len as u64)?;
-            let mut slice =
-                self.rt
-                    .stream()
-                    .alloc_zeros::<u8>(byte_len)
-                    .map_err(|e| OjasError::Backend {
-                        id: BackendId::Cuda,
-                        detail: format!("alloc_zeros: {e}"),
-                    })?;
+            let mut slice = self
+                .rt
+                .stream()
+                .alloc_zeros::<u8>(byte_len)
+                .map_err(|e| OjasError::from(driver_error("alloc_zeros", e)))?;
             self.rt
                 .stream()
                 .memcpy_htod(&bytes, &mut slice)
-                .map_err(|e| OjasError::Backend {
-                    id: BackendId::Cuda,
-                    detail: format!("memcpy_htod: {e}"),
-                })?;
+                .map_err(|e| OjasError::from(driver_error("memcpy_htod", e)))?;
             let shadow_u32 = if tensor.dtype() == DType::U32 {
                 Some(Arc::<[u32]>::from(tensor.u32_slice()?))
             } else {
@@ -309,7 +298,8 @@ impl Backend for CudaBackend {
         _q: &Tensor,
         _k: &Tensor,
         _v: &Tensor,
-    ) -> Result<Tensor, OjasError> {
+        _window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         Err(OjasError::Unsupported {
             op: "causal_sdpa_forward",
             detail: "Cuda backend does not yet implement causal_sdpa_forward".to_string(),
@@ -321,7 +311,10 @@ impl Backend for CudaBackend {
         _q: &Tensor,
         _k: &Tensor,
         _v: &Tensor,
+        _output: &Tensor,
+        _lse: &Tensor,
         _grad_output: &Tensor,
+        _window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         Err(OjasError::Unsupported {
             op: "causal_sdpa_backward",

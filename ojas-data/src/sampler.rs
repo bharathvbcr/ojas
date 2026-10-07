@@ -22,6 +22,9 @@
 //! (`torch.randint`), overlapping and with no epochs. This sampler is the
 //! without-replacement, exactly-once alternative; it does not reproduce
 //! torch's stream.
+//!
+//! The checkpoint's `rng_state` is [`SamplerRngState`]: the permutation's
+//! identity and key, so a resume can refuse a stream it would not reproduce.
 
 use crate::error::DataError;
 use crate::rng::CounterRng;
@@ -36,6 +39,79 @@ const ROUNDS: usize = 4;
 /// sibling from Steele et al.), so `(seed, epoch)` pairs do not collide by
 /// simple addition.
 const EPOCH_STEP: u64 = 0xD1B5_4A32_D192_ED03;
+
+/// Version of the [`SamplerRngState`] byte layout.
+pub const RNG_STATE_VERSION: u32 = 1;
+
+/// Generator tag of the permutation [`BatchSampler`] runs today:
+/// [`ROUNDS`]-round Feistel, SplitMix64 ([`CounterRng`]) round function and
+/// keys, [`EPOCH_STEP`] epoch spacing, cycle-walked into `0..W`. Any change
+/// that moves a window start for the same `(seed, W, epoch, ordinal)` needs
+/// a new tag; `permutation_is_pinned` in the tests holds this one fixed.
+pub const RNG_GENERATOR_FEISTEL4_SPLITMIX64: u32 = 1;
+
+/// Encoded length of [`SamplerRngState`].
+pub const RNG_STATE_BYTES: usize = 16;
+
+/// The sampler's random state as stored in a checkpoint's `rng_state`.
+///
+/// The sampler draws nothing as it runs: its order is a keyed permutation of
+/// `(seed, epoch, ordinal)`, and the checkpoint's `data_cursor` holds the
+/// epoch and ordinal. What remains is which permutation and which key:
+///
+/// | Bytes | Type | Field |
+/// | :--- | :--- | :--- |
+/// | `0..4` | `u32` LE | version, [`RNG_STATE_VERSION`] |
+/// | `4..8` | `u32` LE | generator, [`RNG_GENERATOR_FEISTEL4_SPLITMIX64`] |
+/// | `8..16` | `u64` LE | seed ([`SamplerConfig::seed`]) |
+///
+/// Any other length, version or generator is refused, never migrated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SamplerRngState {
+    pub seed: u64,
+}
+
+impl SamplerRngState {
+    pub fn encode(&self) -> [u8; RNG_STATE_BYTES] {
+        let mut out = [0u8; RNG_STATE_BYTES];
+        out[0..4].copy_from_slice(&RNG_STATE_VERSION.to_le_bytes());
+        out[4..8].copy_from_slice(&RNG_GENERATOR_FEISTEL4_SPLITMIX64.to_le_bytes());
+        out[8..16].copy_from_slice(&self.seed.to_le_bytes());
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, DataError> {
+        let bytes: &[u8; RNG_STATE_BYTES] = bytes.try_into().map_err(|_| {
+            DataError::new(format!(
+                "rng_state: {} bytes, the v{RNG_STATE_VERSION} layout is {RNG_STATE_BYTES}",
+                bytes.len()
+            ))
+        })?;
+        let word = |at: usize| {
+            let mut w = [0u8; 4];
+            w.copy_from_slice(&bytes[at..at + 4]);
+            u32::from_le_bytes(w)
+        };
+        let version = word(0);
+        if version != RNG_STATE_VERSION {
+            return Err(DataError::new(format!(
+                "rng_state: version {version}, expected {RNG_STATE_VERSION}"
+            )));
+        }
+        let generator = word(4);
+        if generator != RNG_GENERATOR_FEISTEL4_SPLITMIX64 {
+            return Err(DataError::new(format!(
+                "rng_state: generator {generator}, this sampler is \
+                 {RNG_GENERATOR_FEISTEL4_SPLITMIX64}"
+            )));
+        }
+        let mut seed = [0u8; 8];
+        seed.copy_from_slice(&bytes[8..16]);
+        Ok(Self {
+            seed: u64::from_le_bytes(seed),
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SamplerConfig {

@@ -172,9 +172,106 @@ impl fmt::Display for CudaError {
 
 impl std::error::Error for CudaError {}
 
+/// `CUresult` codes after which the CUDA context is unusable: every later
+/// call fails the same way, and only a new process recovers. The list is
+/// what NVIDIA's `cuda.h` text says, not a guess: every code documented
+/// "This leaves the process in an inconsistent state and any further CUDA
+/// work will return the same error" (CUDA 12.9 and 13.0 headers, as
+/// NVIDIA/cuda-python's `driver_cu_result_explanations.py` carries them),
+/// plus `CUDA_ERROR_ASSERT`, documented "The context cannot be used anymore".
+/// Codes whose text says nothing about it (`ECC_UNCORRECTABLE` 214,
+/// `UNKNOWN` 999, ...) stay [`OjasError::Backend`](ojas_core::OjasError).
+/// Values from cudarc 0.19.10's `CUresult`; 226 is named only in its newer
+/// header versions, and a newer driver may return it.
+pub const STICKY_DRIVER_CODES: &[u32] = &[
+    226, // CUDA_ERROR_CONTAINED
+    700, // CUDA_ERROR_ILLEGAL_ADDRESS
+    702, // CUDA_ERROR_LAUNCH_TIMEOUT
+    710, // CUDA_ERROR_ASSERT
+    714, // CUDA_ERROR_HARDWARE_STACK_ERROR
+    715, // CUDA_ERROR_ILLEGAL_INSTRUCTION
+    716, // CUDA_ERROR_MISALIGNED_ADDRESS
+    717, // CUDA_ERROR_INVALID_ADDRESS_SPACE
+    718, // CUDA_ERROR_INVALID_PC
+    719, // CUDA_ERROR_LAUNCH_FAILED
+    911, // CUDA_ERROR_EXTERNAL_DEVICE
+];
+
+impl CudaError {
+    /// A driver failure that leaves the context unusable
+    /// ([`STICKY_DRIVER_CODES`]).
+    pub fn is_device_lost(&self) -> bool {
+        matches!(self, CudaError::Driver { code, .. } if STICKY_DRIVER_CODES.contains(code))
+    }
+}
+
+/// The one mapping from this crate's errors to ojas's: a sticky driver
+/// failure is [`OjasError::DeviceLost`](ojas_core::OjasError::DeviceLost),
+/// so a caller stops instead of retrying on a dead context; everything else
+/// is [`OjasError::Backend`](ojas_core::OjasError::Backend) with this error's
+/// text.
+impl From<CudaError> for ojas_core::OjasError {
+    fn from(e: CudaError) -> Self {
+        if e.is_device_lost() {
+            ojas_core::OjasError::DeviceLost {
+                backend: ojas_core::BackendId::Cuda,
+                detail: e.to_string(),
+            }
+        } else {
+            ojas_core::OjasError::Backend {
+                id: ojas_core::BackendId::Cuda,
+                detail: e.to_string(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ojas_core::{BackendId, OjasError};
+
+    /// A sticky driver code (the context is gone) is `DeviceLost`; any other
+    /// failure, out-of-memory and a non-sticky driver code included, stays
+    /// `Backend`. Before this mapping every CUDA failure was `Backend`.
+    #[test]
+    fn sticky_driver_codes_map_to_device_lost_and_the_rest_to_backend() {
+        for &code in STICKY_DRIVER_CODES {
+            let e = CudaError::from_driver_code("cuStreamSynchronize", code, "sticky");
+            assert!(e.is_device_lost(), "{code}");
+            match OjasError::from(e) {
+                OjasError::DeviceLost { backend, detail } => {
+                    assert_eq!(backend, BackendId::Cuda);
+                    assert!(detail.contains(&format!("code {code}")), "{detail}");
+                }
+                other => panic!("code {code} mapped to {other}"),
+            }
+        }
+        for e in [
+            CudaError::from_driver_code("cuMemAlloc", CUDA_ERROR_OUT_OF_MEMORY, "oom"),
+            // CUDA_ERROR_INVALID_VALUE: a bad argument, the context is fine.
+            CudaError::from_driver_code("cuMemcpyHtoD", 1, "invalid value"),
+            // Documented without the sticky sentence: not assumed lost.
+            CudaError::from_driver_code("cuMemcpyDtoH", 214, "ecc uncorrectable"),
+            CudaError::from_driver_code("cuCtxSynchronize", 999, "unknown"),
+            CudaError::Timeout {
+                op: "sync".to_string(),
+                waited_ms: 5,
+            },
+        ] {
+            assert!(!e.is_device_lost(), "{e}");
+            assert!(
+                matches!(
+                    OjasError::from(e),
+                    OjasError::Backend {
+                        id: BackendId::Cuda,
+                        ..
+                    }
+                ),
+                "not Backend"
+            );
+        }
+    }
 
     #[test]
     fn out_of_memory_maps_to_capacity_and_other_codes_to_driver() {

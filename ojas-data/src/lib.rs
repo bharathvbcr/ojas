@@ -28,7 +28,10 @@ pub use bpe::{
 };
 pub use error::DataError;
 pub use rng::CounterRng;
-pub use sampler::{Batch, BatchSampler, SamplerConfig};
+pub use sampler::{
+    Batch, BatchSampler, SamplerConfig, SamplerRngState, RNG_GENERATOR_FEISTEL4_SPLITMIX64,
+    RNG_STATE_BYTES, RNG_STATE_VERSION,
+};
 pub use tokens::{
     TokenBin, TokenWidth, FINEWEB_HEADER_BYTES, FINEWEB_MAGIC, FINEWEB_U32_MAGIC,
     FINEWEB_U32_VERSION, FINEWEB_VERSION,

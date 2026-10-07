@@ -1,5 +1,5 @@
 //! `MetalBackend::permute`: a device-resident, bit-exact axis reorder that
-//! is validated by `ojas_core::permute_output_shape` and charged to the
+//! is validated by `ojas_core::permute_dims` and charged to the
 //! budget like every other output.
 
 #![cfg(target_os = "macos")]
@@ -310,4 +310,57 @@ fn the_output_is_charged_to_the_budget() {
     assert_eq!(ok("live", small.budget().live_bytes()), live + 16 * 8 * 4);
     drop(yt);
     assert_eq!(ok("live", small.budget().live_bytes()), live);
+}
+
+/// Edge cases against the CPU, error for error and bit for bit: rank 0, unit
+/// extents, the rank cap and one past it, a zero axis (D17: refused by
+/// `ojas_core::permute_dims` on every backend), a u32 input and malformed
+/// `dims`. An operand with a zero axis cannot be uploaded, so it is passed
+/// as the host tensor and as a zero-extent device view; both must give the
+/// CPU's error, with nothing charged.
+#[test]
+fn edge_cases_match_the_cpu_error_for_error_and_bit_for_bit() {
+    let m = metal();
+    let c = cpu();
+    let eight = [1usize, 2, 1, 3, 1, 2, 1, 2];
+    let reversed: Vec<usize> = (0..8).rev().collect();
+    let nine: Vec<usize> = (0..=MAX_PERMUTE_RANK).collect();
+    let cases: Vec<(Tensor, Vec<usize>)> = vec![
+        (rand(&[], 1, 1.0), vec![]),
+        (rand(&[1], 2, 1.0), vec![0]),
+        (rand(&[1, 1, 1], 3, 1.0), vec![2, 0, 1]),
+        (rand(&eight, 4, 1.0), reversed),
+        (rand(&[1; MAX_PERMUTE_RANK + 1], 5, 1.0), nine),
+        (rand(&[2, 0, 3], 6, 1.0), vec![2, 0, 1]),
+        (rand(&[0], 7, 1.0), vec![0]),
+        (host_u32(&[0; 6], &[2, 3]), vec![1, 0]),
+        (rand(&[2, 3], 8, 1.0), vec![0]),
+        (rand(&[2, 3], 9, 1.0), vec![1, 1]),
+        (rand(&[2, 3], 10, 1.0), vec![0, 2]),
+    ];
+    for (x, dims) in &cases {
+        let what = format!("{:?} by {dims:?}", x.shape());
+        let want = c.permute(x, dims).map(|y| (y.shape().to_vec(), bits(&y)));
+        let mut operands = Vec::new();
+        if x.shape().contains(&0) {
+            operands.push(x.clone());
+            let full: Vec<usize> = x.shape().iter().map(|&d| d.max(1)).collect();
+            let dev = up(&m, &rand(&full, 11, 1.0));
+            let view = ok("view", dev.view(x.shape(), &strides(x.shape()), 0));
+            operands.push(view);
+        } else {
+            operands.push(up(&m, x));
+        }
+        for operand in operands {
+            let g = m.with_budget(Budget::new(1 << 20));
+            let got = g
+                .permute(&operand, dims)
+                .map(|y| (y.shape().to_vec(), bits(&y)));
+            assert_eq!(format!("{got:?}"), format!("{want:?}"), "{what}");
+            if want.is_err() {
+                assert_eq!(ok("live", g.budget().live_bytes()), 0, "{what}");
+            }
+            ok("sync", g.sync());
+        }
+    }
 }

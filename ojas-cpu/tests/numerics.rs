@@ -91,8 +91,13 @@ fn outputs(cpu: &CpuBackend) -> Vec<(String, Vec<f32>)> {
         let k = f32t(cpu, &rng.vec(n, 1.0), shape);
         let v = f32t(cpu, &rng.vec(n, 1.0), shape);
         let gy = f32t(cpu, &rng.vec(n, 1.0), shape);
-        let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
-        let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+        let y = cpu
+            .causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
+            .unwrap();
+        let (gq, gk, gv) = cpu
+            .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+            .unwrap();
         let tag = format!("{shape:?}");
         out.push((format!("sdpa_fwd {tag}"), flat(&y)));
         out.push((format!("sdpa_gq {tag}"), flat(&gq)));
@@ -448,10 +453,14 @@ fn device_tensors_are_placement_errors_not_panics() {
             "linear_backward",
             cpu.linear_backward(&h(&[4, 8]), &h(&[3, 8]), &d(&[4, 3])),
         );
-        assert_placement("sdpa", cpu.causal_sdpa_forward(&h(&s), &d(&s), &h(&s)));
+        assert_placement(
+            "sdpa",
+            cpu.causal_sdpa_forward(&h(&s), &d(&s), &h(&s), None)
+                .map(|(y, _)| y),
+        );
         assert_placement(
             "sdpa_backward",
-            cpu.causal_sdpa_backward(&h(&s), &h(&s), &h(&s), &d(&s)),
+            cpu.causal_sdpa_backward_recompute(&h(&s), &h(&s), &h(&s), &d(&s), None),
         );
         assert_placement("rms", cpu.rms_norm_forward(&d(&[4, 8]), &h(&[8]), 1e-6));
         assert_placement(
@@ -514,7 +523,8 @@ fn ten_thousand_concurrent_calls_share_one_backend() {
     ));
     let want_a = bits(&flat(
         &backend(1, Numerics::Fast)
-            .causal_sdpa_forward(&q, &q, &q)
+            .causal_sdpa_forward(&q, &q, &q, None)
+            .map(|(y, _)| y)
             .unwrap(),
     ));
     std::thread::scope(|scope| {
@@ -528,7 +538,10 @@ fn ten_thousand_concurrent_calls_share_one_backend() {
                     .spawn_scoped(scope, move || {
                         for call in 0..625 {
                             if (caller + call) % 4 == 0 {
-                                let a = cpu.causal_sdpa_forward(q, q, q).unwrap();
+                                let a = cpu
+                                    .causal_sdpa_forward(q, q, q, None)
+                                    .map(|(y, _)| y)
+                                    .unwrap();
                                 assert!(
                                     bits(&flat(&a)) == *want_a,
                                     "sdpa caller {caller} call {call}"
@@ -569,9 +582,14 @@ fn nonfinite_and_empty_inputs_are_refused_on_every_path() {
                 let s = [1usize, 2, t, 16];
                 let n: usize = s.iter().product();
                 let huge = f32t(&cpu, &vec![1e20; n], &s);
-                assert_nonfinite(cpu.causal_sdpa_forward(&huge, &huge, &huge));
+                assert_nonfinite(
+                    cpu.causal_sdpa_forward(&huge, &huge, &huge, None)
+                        .map(|(y, _)| y),
+                );
                 let ones = f32t(&cpu, &vec![1.0; n], &s);
-                assert_nonfinite(cpu.causal_sdpa_backward(&huge, &huge, &huge, &ones));
+                assert_nonfinite(
+                    cpu.causal_sdpa_backward_recompute(&huge, &huge, &huge, &ones, None),
+                );
             }
             let rows = f32t(&cpu, &vec![1e30; 600 * 256], &[600, 256]);
             assert_nonfinite(cpu.rms_norm_forward(&rows, &f32t(&cpu, &[1.0; 256], &[256]), 1e-6));
@@ -579,7 +597,10 @@ fn nonfinite_and_empty_inputs_are_refused_on_every_path() {
             let empty = Tensor::from_f32(&[], &[0, 8], cpu.budget()).unwrap();
             assert_shape(cpu.linear_forward(&empty, &f32t(&cpu, &[0.5; 24], &[3, 8])));
             let empty_t = Tensor::from_f32(&[], &[1, 2, 0, 16], cpu.budget()).unwrap();
-            assert_shape(cpu.causal_sdpa_forward(&empty_t, &empty_t, &empty_t));
+            assert_shape(
+                cpu.causal_sdpa_forward(&empty_t, &empty_t, &empty_t, None)
+                    .map(|(y, _)| y),
+            );
         }
     }
 }

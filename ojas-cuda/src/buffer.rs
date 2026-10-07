@@ -282,14 +282,10 @@ impl DeviceBuffer for CudaDeviceBuffer {
         let mut out = vec![0u8; len];
         self.stream
             .memcpy_dtoh(&view, &mut out)
-            .map_err(|e| OjasError::Backend {
-                id: BackendId::Cuda,
-                detail: format!("memcpy_dtoh: {e}"),
-            })?;
-        self.stream.synchronize().map_err(|e| OjasError::Backend {
-            id: BackendId::Cuda,
-            detail: format!("synchronize: {e}"),
-        })?;
+            .map_err(|e| OjasError::from(crate::runtime::driver_error("memcpy_dtoh", e)))?;
+        self.stream
+            .synchronize()
+            .map_err(|e| OjasError::from(crate::runtime::driver_error("synchronize", e)))?;
         Ok(out)
     }
 

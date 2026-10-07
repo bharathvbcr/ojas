@@ -389,6 +389,16 @@ pub fn encode_safetensors(
 
 /// [`layout`] for `items`, plus the check that each item's data is exactly
 /// its declared size. Runs before anything is written.
+/// Length of the file [`SafeTensorsWriter::new`] would write for `tensors`
+/// and `metadata`, with the same refusals, before anything is written. It is
+/// [`SafeTensorsWriter::file_len`] without the writer.
+pub fn safetensors_file_len(
+    tensors: &[TensorSpec<'_>],
+    metadata: &[(&str, &str)],
+) -> Result<u64, IoError> {
+    layout(tensors, metadata).map(|l| l.file_len)
+}
+
 fn layout_items(items: &[TensorOut<'_>], metadata: &[(&str, &str)]) -> Result<Layout, IoError> {
     let specs: Vec<TensorSpec<'_>> = items.iter().map(TensorOut::spec).collect();
     let layout = layout(&specs, metadata)?;
@@ -1225,6 +1235,12 @@ mod tests {
             let bytes = encode_safetensors(&items(&t), &meta_refs(&meta)).unwrap();
             assert_eq!(header_len(&bytes) % 8, 0);
             assert_matches(&SafeTensors::parse(&bytes).unwrap(), &t, &meta);
+            let specs: Vec<TensorSpec<'_>> = items(&t).iter().map(TensorOut::spec).collect();
+            assert_eq!(
+                safetensors_file_len(&specs, &meta_refs(&meta)).unwrap(),
+                bytes.len() as u64,
+                "the predicted length is the written one"
+            );
             if i % 20 == 0 {
                 let path = tmp("prop");
                 write_safetensors(&path.0, &items(&t), &meta_refs(&meta)).unwrap();

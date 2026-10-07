@@ -308,25 +308,25 @@ fn a_lost_device_is_its_own_kind() {
     write_bin(&dir, "tokens.bin");
     let s = load_path("model.safetensors").unwrap();
     train_open(s.id, "tokens.bin").unwrap();
-    s.inject("linear_forward", || OjasError::Backend {
-        id: BackendId::Wgpu,
+    s.inject("linear_forward", || OjasError::DeviceLost {
+        backend: BackendId::Wgpu,
         detail: "device lost (Destroyed): injected".into(),
     });
     let err = step(s.id).unwrap_err();
     assert!(err.starts_with("ojas:E_DEVICE_LOST:"), "{err}");
     assert_eq!(step(s.id).unwrap().step, 1);
-    s.inject("muon_ns5_step", || OjasError::Backend {
-        id: BackendId::Metal,
-        detail: "runtime poisoned: injected".into(),
+    s.inject("muon_ns5_step", || OjasError::DeviceLost {
+        backend: BackendId::Metal,
+        detail: "injected".into(),
     });
     let err = step(s.id).unwrap_err();
     assert!(err.starts_with("ojas:E_DEVICE_LOST:"), "{err}");
     let err = step(s.id).unwrap_err();
     assert!(err.starts_with("ojas:E_POISONED:"), "{err}");
     let fresh_session = load_path("model.safetensors").unwrap();
-    fresh_session.inject("embedding_forward", || OjasError::Backend {
-        id: BackendId::Wgpu,
-        detail: "device lost: injected".into(),
+    fresh_session.inject("embedding_forward", || OjasError::DeviceLost {
+        backend: BackendId::Wgpu,
+        detail: "injected".into(),
     });
     let err = sample(fresh_session.id, &[1], 0.0, 1, 0).unwrap_err();
     assert!(err.starts_with("ojas:E_DEVICE_LOST:"), "{err}");

@@ -200,21 +200,28 @@ fn attention(m: &MetalBackend, iters: usize, b: usize, h: usize, t: usize, d: us
     // Causal: half the T x T scores, 2 GEMM-like products of D each.
     let fwd = 2.0 * 2.0 * (b * h * d) as f64 * (t * t) as f64 / 2.0;
     let res = time(m, iters, || {
-        m.causal_sdpa_forward(&dv[0], &dv[1], &dv[2]).map(drop)
-    })?;
-    let tr = time(m, iters, || {
-        let u = ups(m, &[&hs[0], &hs[1], &hs[2]])?;
-        let o = m.causal_sdpa_forward(&u[0], &u[1], &u[2])?;
-        downs(&[&o])
-    })?;
-    row(&format!("attn fwd B{b} H{h} T{t} D{d}"), res, tr, fwd);
-    let res = time(m, iters, || {
-        m.causal_sdpa_backward(&dv[0], &dv[1], &dv[2], &dv[3])
+        m.causal_sdpa_forward(&dv[0], &dv[1], &dv[2], None)
+            .map(|(y, _)| y)
             .map(drop)
     })?;
     let tr = time(m, iters, || {
-        let u = ups(m, &[&hs[0], &hs[1], &hs[2], &hs[3]])?;
-        let (a, bb, c) = m.causal_sdpa_backward(&u[0], &u[1], &u[2], &u[3])?;
+        let u = ups(m, &[&hs[0], &hs[1], &hs[2]])?;
+        let o = m
+            .causal_sdpa_forward(&u[0], &u[1], &u[2], None)
+            .map(|(y, _)| y)?;
+        downs(&[&o])
+    })?;
+    row(&format!("attn fwd B{b} H{h} T{t} D{d}"), res, tr, fwd);
+    // The backward from the forward's saved output and lse, as a tape runs it.
+    let (o, lse) = m.causal_sdpa_forward(&dv[0], &dv[1], &dv[2], None)?;
+    let res = time(m, iters, || {
+        m.causal_sdpa_backward(&dv[0], &dv[1], &dv[2], &o, &lse, &dv[3], None)
+            .map(drop)
+    })?;
+    let (ho, hl) = (m.download(&o)?, m.download(&lse)?);
+    let tr = time(m, iters, || {
+        let u = ups(m, &[&hs[0], &hs[1], &hs[2], &ho, &hl, &hs[3]])?;
+        let (a, bb, c) = m.causal_sdpa_backward(&u[0], &u[1], &u[2], &u[3], &u[4], &u[5], None)?;
         downs(&[&a, &bb, &c])
     })?;
     row(&format!("attn bwd B{b} H{h} T{t} D{d}"), res, tr, 2.5 * fwd);
@@ -285,7 +292,7 @@ impl Model {
         let vv = be.linear_forward(&hn, &p[WV])?;
         let s4 = [b, h, t, 64];
         let (q4, k4, v4) = (reshape(&q, &s4)?, reshape(&k, &s4)?, reshape(&vv, &s4)?);
-        let a = be.causal_sdpa_forward(&q4, &k4, &v4)?;
+        let (a, a_lse) = be.causal_sdpa_forward(&q4, &k4, &v4, None)?;
         let a4 = reshape(&a, &[b, t, h, 64])?;
         let ga = be.per_head_sigmoid_gate_forward(&hn, &p[GW], &p[GB], &a4)?;
         let ga3 = reshape(&ga, &[b, t, d])?;
@@ -308,7 +315,8 @@ impl Model {
             &a4,
             &reshape(&gga, &[b, t, h, 64])?,
         )?;
-        let (gq, gk, gv) = be.causal_sdpa_backward(&q4, &k4, &v4, &reshape(&gg.attn_out, &s4)?)?;
+        let gattn = reshape(&gg.attn_out, &s4)?;
+        let (gq, gk, gv) = be.causal_sdpa_backward(&q4, &k4, &v4, &a, &a_lse, &gattn, None)?;
         let (gh2, gwq) = be.linear_backward(&hn, &p[WQ], &reshape(&gq, &[b, t, d])?)?;
         let (gh3, gwk) = be.linear_backward(&hn, &p[WK], &reshape(&gk, &[b, t, d])?)?;
         let (gh4, gwv) = be.linear_backward(&hn, &p[WV], &reshape(&gv, &[b, t, d])?)?;

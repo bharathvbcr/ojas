@@ -64,8 +64,14 @@ fn sequence(m: &MetalBackend, seed: u64, iters: usize) -> Vec<Vec<u32>> {
         let (gx, gw) = ok("linear bwd", m.linear_backward(&x, &w, &g));
         let n = ok("rms", m.rms_norm_forward(&y, &rw, 1e-6));
         let (nx, nw) = ok("rms bwd", m.rms_norm_backward(&y, &rw, &g, 1e-6));
-        let a = ok("sdpa", m.causal_sdpa_forward(&q, &q, &q));
-        let (aq, ak, av) = ok("sdpa bwd", m.causal_sdpa_backward(&q, &q, &q, &a));
+        let a = ok(
+            "sdpa",
+            m.causal_sdpa_forward(&q, &q, &q, None).map(|(y, _)| y),
+        );
+        let (aq, ak, av) = ok(
+            "sdpa bwd",
+            m.causal_sdpa_backward_recompute(&q, &q, &q, &a, None),
+        );
         let t = ok("permute", m.permute(&a, &[0, 2, 1, 3]));
         let ce = ok("ce bwd", m.cross_entropy_mean_backward(&n, &tgt, None));
         ok(

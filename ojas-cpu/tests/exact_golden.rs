@@ -12,6 +12,12 @@
 //! the same everywhere: `expf(-2^-25)` is `0x3f800000` on glibc 2.41 and
 //! `0x3f7fffff` on macOS 27.
 //!
+//! The four `muon_p` digests were re-recorded on 2026-10-06 when Muon's
+//! Nesterov blend and parameter update became one `mul_add` per value, as
+//! torch's `add(.., alpha=..)` is (checked bit for bit against stock nanolab
+//! by `ojas-oracle/tests/ojas_cpu_parity.rs`); the `muon_m` digests did not
+//! move.
+//!
 //! Every digest but `ce_loss` is now plain `f32` arithmetic, `sqrt` and
 //! `exp_exact`, so it holds on every platform. `ce_loss` still takes the
 //! log-sum from libm `f32::ln`; it is checked only on Apple silicon, where it
@@ -100,10 +106,13 @@ fn digests(cpu: &CpuBackend) -> Vec<(String, u64)> {
         let k = f32t(cpu, &rng.vec(n, 0.5), shape);
         let v = f32t(cpu, &rng.vec(n, 0.5), shape);
         let gy = f32t(cpu, &rng.vec(n, 0.5), shape);
-        let y = cpu.causal_sdpa_forward(&q, &k, &v).unwrap();
-        let (gq, gk, gv) = cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+        let (y, lse) = cpu.causal_sdpa_forward(&q, &k, &v, None).unwrap();
+        let (gq, gk, gv) = cpu
+            .causal_sdpa_backward(&q, &k, &v, &y, &lse, &gy, None)
+            .unwrap();
         let tag = format!("{shape:?}");
         out.push((format!("sdpa_fwd {tag}"), fnv(&flat(&y))));
+        out.push((format!("sdpa_lse {tag}"), fnv(&flat(&lse))));
         out.push((format!("sdpa_gq {tag}"), fnv(&flat(&gq))));
         out.push((format!("sdpa_gk {tag}"), fnv(&flat(&gk))));
         out.push((format!("sdpa_gv {tag}"), fnv(&flat(&gv))));
@@ -223,13 +232,13 @@ const GOLDEN: &[(&str, u64)] = &[
     ("linear_fwd 200x300x520", 0xfb50ad4ec9a0e7c5),
     ("linear_gx 200x300x520", 0x0c34fdf44903b2c6),
     ("linear_gw 200x300x520", 0x8c870b66cbc1e789),
-    ("muon_p 64x48", 0x65cb51fe53eb8a32),
+    ("muon_p 64x48", 0x0125445c39fba96d),
     ("muon_m 64x48", 0xbbe854ecdd0d7f33),
-    ("muon_p 48x64", 0xbaff4c833efceb4f),
+    ("muon_p 48x64", 0x6d96f78902392cc7),
     ("muon_m 48x64", 0x9ca3993e33c2c47c),
-    ("muon_p 130x70", 0x2c43f77936251e31),
+    ("muon_p 130x70", 0x48089152b03a886e),
     ("muon_m 130x70", 0xf6c65cf8d4c4b1de),
-    ("muon_p 97x97", 0xdb6ad320000effe0),
+    ("muon_p 97x97", 0xd36ca0970420b395),
     ("muon_m 97x97", 0x79f473d9606dbbc2),
     ("sdpa_fwd [2, 3, 33, 24]", 0xe99bd019cac5e4ba),
     ("sdpa_gq [2, 3, 33, 24]", 0x2ec8021bbfc4c690),

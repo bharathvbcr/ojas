@@ -9,7 +9,7 @@
 //! reads KV head `h / (H / Hkv)`.
 //!
 //! Each query row runs the per-row kernel of `causal_sdpa_forward`
-//! ([`score_prefix`], [`softmax_prefix`], [`mix_values`]): scores sum the
+//! ([`score_range`], [`softmax_range`], [`mix_values`]): scores sum the
 //! head dimension from 0, the softmax sums keys from 0, and the value mix
 //! adds keys from 0. With `kv_len == Tq` and `H == Hkv` the result is
 //! therefore `causal_sdpa_forward`'s whenever that op runs its per-row
@@ -22,7 +22,7 @@ use ojas_core::{
     cached_attention_dims, kv_cache_write_dims, sdpa_scale, Budget, KvDims, OjasError, Tensor,
 };
 
-use crate::attn::{mix_values, score_prefix, softmax_prefix, TASK_WORK};
+use crate::attn::{mix_values, score_range, softmax_range, TASK_WORK};
 use crate::pool::Exec;
 use crate::validate::{
     all_finite, check_f32, fill_out, nonfinite, product, room_for, shape, Shared,
@@ -142,7 +142,7 @@ fn attend(
     let tasks = batch * heads;
 
     // K packed `[D, kv_len]` and V `[kv_len, D]` per (batch, kv head): the
-    // layouts `score_prefix` and `mix_values` read.
+    // layouts `score_range` and `mix_values` read.
     let mut keys = vec![0.0f32; batch * kv_heads * per_kv_head];
     let mut values = vec![0.0f32; batch * kv_heads * per_kv_head];
     for b in 0..batch {
@@ -181,9 +181,17 @@ fn attend(
                 cancel()?;
                 let visible = kv_len - tq + i + 1;
                 let qs = ((b * tq + i) * heads + h) * d;
-                score_prefix(op, kh, &q[qs..qs + d], &mut scores, visible, kv_len, scale)?;
-                softmax_prefix(op, &scores, &mut probs, visible)?;
-                mix_values(&mut out[i * d..(i + 1) * d], vh, &probs, visible, d);
+                score_range(
+                    op,
+                    kh,
+                    &q[qs..qs + d],
+                    &mut scores,
+                    0..visible,
+                    kv_len,
+                    scale,
+                )?;
+                softmax_range(op, &scores, &mut probs, 0..visible)?;
+                mix_values(&mut out[i * d..(i + 1) * d], vh, &probs, 0..visible, d);
             }
             Ok::<_, OjasError>(out)
         }

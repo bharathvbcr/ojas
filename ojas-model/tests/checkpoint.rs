@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use common::{snapshot, token_bin, Fault, Probe, Resident, TempBin, TempDir};
 use ojas_core::{Backend, Budget, DataCursor, Numerics, OjasError, Tensor, READBACK_CHUNK_BYTES};
 use ojas_cpu::{CosineSchedule, CpuBackend, LrSchedule};
-use ojas_data::TokenBin;
+use ojas_data::{SamplerRngState, TokenBin};
 use ojas_io::{
     encode_f32_as, read_checkpoint, write_checkpoint, write_safetensors, SafeTensors, StDtype,
     TensorOut,
@@ -206,6 +206,14 @@ fn g9_forty_steps_equal_twenty_saved_dropped_resumed_and_twenty_more() {
     let run = first.run_id().to_string();
     first.save(&dir.ckpt()).unwrap();
     drop(first);
+    // The resume below reads its sampler key back from this v1 rng_state.
+    let state = read_checkpoint(&dir.ckpt().join(STATE_FILE)).unwrap();
+    assert_eq!(
+        SamplerRngState::decode(&state.rng_state).unwrap(),
+        SamplerRngState {
+            seed: config().data_seed
+        }
+    );
 
     let mut resumed =
         Trainer::resume_from(exact(1 << 30), &dir.ckpt(), reopen(&tmp), config()).unwrap();
@@ -296,7 +304,15 @@ fn the_directory_holds_the_three_files_as_documented() {
     assert_eq!(state.data_cursor, t.cursor());
     assert_eq!(state.tokenizer_hash, [7; 32]);
     assert_eq!(state.git_sha, [9; 20]);
-    assert!(state.weights.is_empty() && state.rng_state.is_empty());
+    assert!(state.weights.is_empty());
+    // rng_state is the sampler's v1 record, byte for byte.
+    assert_eq!(
+        state.rng_state,
+        SamplerRngState {
+            seed: config().data_seed
+        }
+        .encode()
+    );
     let config_text = String::from_utf8(state.config).unwrap();
     assert!(
         config_text.starts_with("{\"format\":\"ojas-train-v1\",\"run\":"),
@@ -727,6 +743,46 @@ fn metadata_that_is_not_exactly_the_documented_set_is_refused() {
                 let path = d.join(STATE_FILE);
                 let mut state = read_checkpoint(&path).unwrap();
                 state.rng_state = vec![1];
+                write_checkpoint(&path, &state).unwrap();
+            }),
+        ),
+        (
+            "empty rng state, as written before the v1 layout",
+            Box::new(|d: &Path| {
+                let path = d.join(STATE_FILE);
+                let mut state = read_checkpoint(&path).unwrap();
+                state.rng_state = Vec::new();
+                write_checkpoint(&path, &state).unwrap();
+            }),
+        ),
+        (
+            "rng state version",
+            Box::new(|d: &Path| {
+                let path = d.join(STATE_FILE);
+                let mut state = read_checkpoint(&path).unwrap();
+                state.rng_state[0..4].copy_from_slice(&2u32.to_le_bytes());
+                write_checkpoint(&path, &state).unwrap();
+            }),
+        ),
+        (
+            "rng state generator",
+            Box::new(|d: &Path| {
+                let path = d.join(STATE_FILE);
+                let mut state = read_checkpoint(&path).unwrap();
+                state.rng_state[4..8].copy_from_slice(&2u32.to_le_bytes());
+                write_checkpoint(&path, &state).unwrap();
+            }),
+        ),
+        (
+            "rng state seed",
+            Box::new(|d: &Path| {
+                let path = d.join(STATE_FILE);
+                let mut state = read_checkpoint(&path).unwrap();
+                state.rng_state = SamplerRngState {
+                    seed: config().data_seed + 1,
+                }
+                .encode()
+                .to_vec();
                 write_checkpoint(&path, &state).unwrap();
             }),
         ),

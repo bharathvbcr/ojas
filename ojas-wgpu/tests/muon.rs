@@ -1,14 +1,15 @@
 //! `WgpuBackend::muon_ns5_step` against `CpuBackend` (the f32 Newton-Schulz
 //! reference in `ojas-cpu/src/optim.rs`): wide, tall and square matrices,
 //! the nanolab shapes, momentum carried over steps, Nesterov on and off,
-//! weight decay on and off, and the fail-closed paths.
+//! weight decay on and off, and the fail-closed paths (including
+//! `Ns5Precision::Bf16`, which this backend refuses).
 //!
 //! Tolerance is the shared `TOL * max(1, max |cpu|)` over each tensor.
 
 mod common;
 
 use common::*;
-use ojas_core::{Backend, DType, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{Backend, DType, MuonNs5Config, Ns5Precision, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 fn bits(g: &WgpuBackend, t: &Tensor) -> Vec<u32> {
@@ -80,6 +81,7 @@ fn orthogonalized(rows: usize, cols: usize, seed: u64) {
         momentum: 0.95,
         weight_decay: 0.0,
         nesterov: true,
+        ns5: ojas_core::Ns5Precision::F32,
     };
     let mut hp = Tensor::zeros(&[rows, cols], DType::F32, host_budget()).unwrap();
     let mut hm = host(seed, &[rows, cols]);
@@ -304,6 +306,15 @@ fn malformed_calls_are_refused_before_anything_is_written() {
             _ => panic!("{bad:?}: got {r:?}"),
         }
     }
+    // bf16 Newton-Schulz is CPU and Metal only: refused before any write.
+    let bf16 = MuonNs5Config {
+        ns5: Ns5Precision::Bf16,
+        ..cfg
+    };
+    assert!(matches!(
+        g.muon_ns5_step(&mut p, &grad, &mut m, bf16),
+        Err(OjasError::Unsupported { .. })
+    ));
     // A parameter shared with another tensor is refused, not written.
     let alias = p.clone();
     assert!(g.muon_ns5_step(&mut p, &grad, &mut m, cfg).is_err());

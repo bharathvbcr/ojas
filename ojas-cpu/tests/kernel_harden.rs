@@ -285,8 +285,8 @@ fn noncontiguous_linear_and_attention_views_are_shape_errors() {
     let wide_q = f32t(&cpu, &[0.1; 16], &[16]);
     let nc_q = wide_q.view(&[1, 1, 2, 4], &[8, 8, 4, 2], 0).unwrap();
     assert!(!nc_q.is_contiguous().unwrap());
-    assert_shape(cpu.causal_sdpa_forward(&nc_q, &k, &v));
-    assert_shape(cpu.causal_sdpa_backward(&q, &k, &v, &nc_q));
+    assert_shape(cpu.causal_sdpa_forward(&nc_q, &k, &v, None).map(|(y, _)| y));
+    assert_shape(cpu.causal_sdpa_backward_recompute(&q, &k, &v, &nc_q, None));
 }
 
 #[test]
@@ -351,8 +351,8 @@ fn zero_rows_and_zero_columns_are_shape_errors() {
     let q_bits = bits(&q.to_f32_vec().unwrap());
     for shape in [[1usize, 1, 0, 4], [1, 1, 4, 0], [0, 2, 2, 4], [1, 0, 2, 4]] {
         let z = Tensor::zeros(&shape, DType::F32, cpu.budget()).unwrap();
-        assert_shape(cpu.causal_sdpa_forward(&z, &z, &z));
-        assert_shape(cpu.causal_sdpa_backward(&z, &z, &z, &z));
+        assert_shape(cpu.causal_sdpa_forward(&z, &z, &z, None).map(|(y, _)| y));
+        assert_shape(cpu.causal_sdpa_backward_recompute(&z, &z, &z, &z, None));
     }
     assert_eq!(bits(&q.to_f32_vec().unwrap()), q_bits);
 
@@ -361,6 +361,7 @@ fn zero_rows_and_zero_columns_are_shape_errors() {
         momentum: 0.9,
         weight_decay: 0.0,
         nesterov: false,
+        ns5: ojas_core::Ns5Precision::F32,
     };
     let mut param = Tensor::zeros(&[0, 4], DType::F32, cpu.budget()).unwrap();
     let grad = Tensor::zeros(&[0, 4], DType::F32, cpu.budget()).unwrap();
@@ -428,13 +429,15 @@ fn attention_head_dim_not_multiple_of_eight_or_four_matches_scalar() {
         let k = f32t(&cpu, &kv, &[1, 1, time, dim]);
         let v = f32t(&cpu, &vv, &[1, 1, time, dim]);
         let y = cpu
-            .causal_sdpa_forward(&q, &k, &v)
+            .causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
             .unwrap()
             .to_f32_vec()
             .unwrap();
         assert_bits(&y, &causal_reference(&qv, &kv, &vv, time, dim));
         let y2 = cpu
-            .causal_sdpa_forward(&q, &k, &v)
+            .causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
             .unwrap()
             .to_f32_vec()
             .unwrap();
@@ -459,7 +462,8 @@ fn causal_t32_d64_future_key_does_not_touch_earlier_positions() {
     let q = f32t(&cpu, &qv, &[1, 1, time, dim]);
     let v = f32t(&cpu, &vv, &[1, 1, time, dim]);
     let y0 = cpu
-        .causal_sdpa_forward(&q, &f32t(&cpu, &kv, &[1, 1, time, dim]), &v)
+        .causal_sdpa_forward(&q, &f32t(&cpu, &kv, &[1, 1, time, dim]), &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -470,7 +474,8 @@ fn causal_t32_d64_future_key_does_not_touch_earlier_positions() {
     spiked[31 * dim + 30] = 40.0;
     spiked[31 * dim + 63] = -25.0;
     let y1 = cpu
-        .causal_sdpa_forward(&q, &f32t(&cpu, &spiked, &[1, 1, time, dim]), &v)
+        .causal_sdpa_forward(&q, &f32t(&cpu, &spiked, &[1, 1, time, dim]), &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -494,7 +499,8 @@ fn causal_t32_d64_future_key_does_not_touch_earlier_positions() {
     let mut at8 = kv.clone();
     at8[8 * dim + 8] = 40.0;
     let y8 = cpu
-        .causal_sdpa_forward(&q, &f32t(&cpu, &at8, &[1, 1, time, dim]), &v)
+        .causal_sdpa_forward(&q, &f32t(&cpu, &at8, &[1, 1, time, dim]), &v, None)
+        .map(|(y, _)| y)
         .unwrap()
         .to_f32_vec()
         .unwrap();
@@ -503,19 +509,21 @@ fn causal_t32_d64_future_key_does_not_touch_earlier_positions() {
 
     let gy = vec![0.05f32; n];
     let (gq0, _, _) = cpu
-        .causal_sdpa_backward(
+        .causal_sdpa_backward_recompute(
             &q,
             &f32t(&cpu, &kv, &[1, 1, time, dim]),
             &v,
             &f32t(&cpu, &gy, &[1, 1, time, dim]),
+            None,
         )
         .unwrap();
     let (gq1, _, _) = cpu
-        .causal_sdpa_backward(
+        .causal_sdpa_backward_recompute(
             &q,
             &f32t(&cpu, &spiked, &[1, 1, time, dim]),
             &v,
             &f32t(&cpu, &gy, &[1, 1, time, dim]),
+            None,
         )
         .unwrap();
     let gq0 = gq0.to_f32_vec().unwrap();
@@ -598,7 +606,10 @@ fn larger_step(
     let v_a = v
         .view(&[b, 1, t, d], &strides_of(&[b, 1, t, d]), v.byte_offset())
         .unwrap();
-    let attn = cpu.causal_sdpa_forward(&q_a, &k_a, &v_a).unwrap();
+    let attn = cpu
+        .causal_sdpa_forward(&q_a, &k_a, &v_a, None)
+        .map(|(y, _)| y)
+        .unwrap();
     let y = attn
         .view(&[b, t, d], &strides_of(&[b, t, d]), attn.byte_offset())
         .unwrap();
@@ -615,7 +626,9 @@ fn larger_step(
     let g_attn = g_y
         .view(&[b, 1, t, d], &strides_of(&[b, 1, t, d]), g_y.byte_offset())
         .unwrap();
-    let (g_q, g_k, g_v) = cpu.causal_sdpa_backward(&q_a, &k_a, &v_a, &g_attn).unwrap();
+    let (g_q, g_k, g_v) = cpu
+        .causal_sdpa_backward_recompute(&q_a, &k_a, &v_a, &g_attn, None)
+        .unwrap();
     let g_q_bt = g_q
         .view(&[b, t, 1, d], &strides_of(&[b, t, 1, d]), g_q.byte_offset())
         .unwrap();

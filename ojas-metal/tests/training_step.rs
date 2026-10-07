@@ -118,7 +118,7 @@ fn step<Bk: Backend>(
         reshape(&k, &[B, 1, T, D])?,
         reshape(&v, &[B, 1, T, D])?,
     );
-    let a = b.causal_sdpa_forward(&q4, &k4, &v4)?;
+    let (a, a_lse) = b.causal_sdpa_forward(&q4, &k4, &v4, None)?;
     let a4 = reshape(&a, &[B, T, 1, D])?;
     let ga = b.per_head_sigmoid_gate_forward(&h, &p.gw, &p.gb, &a4)?;
     let ga3 = reshape(&ga, &[B, T, D])?;
@@ -139,7 +139,7 @@ fn step<Bk: Backend>(
     let gga4 = reshape(&gga, &[B, T, 1, D])?;
     let gg = b.per_head_sigmoid_gate_backward(&h, &p.gw, &p.gb, &a4, &gga4)?;
     let gattn = reshape(&gg.attn_out, &[B, 1, T, D])?;
-    let (gq, gk, gv) = b.causal_sdpa_backward(&q4, &k4, &v4, &gattn)?;
+    let (gq, gk, gv) = b.causal_sdpa_backward(&q4, &k4, &v4, &a, &a_lse, &gattn, None)?;
     let (gh2, gwq) = b.linear_backward(&h, &p.wq, &reshape(&gq, &[B, T, D])?)?;
     let (gh3, gwk) = b.linear_backward(&h, &p.wk, &reshape(&gk, &[B, T, D])?)?;
     let (gh4, gwv) = b.linear_backward(&h, &p.wv, &reshape(&gv, &[B, T, D])?)?;

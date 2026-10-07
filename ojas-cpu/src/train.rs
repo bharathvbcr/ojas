@@ -315,6 +315,7 @@ impl HybridOptimizer {
                         momentum: self.momentum,
                         weight_decay: MUON_WEIGHT_DECAY,
                         nesterov: self.nesterov,
+                        ns5: ojas_core::Ns5Precision::F32,
                     };
                     let (new_p, new_m) = muon_ns5(
                         exec,

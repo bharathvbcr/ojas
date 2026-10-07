@@ -628,6 +628,7 @@ version = "0.1.0"
 dependencies = [
  "gusset",
  "ojas-capi",
+ "ojas-core",
 ]
 
 [[package]]
@@ -681,6 +682,7 @@ dependencies = [
  "ojas-core",
  "ojas-cpu",
  "ojas-data",
+ "ojas-device",
  "ojas-io",
  "ojas-metal",
  "ojas-oracle",

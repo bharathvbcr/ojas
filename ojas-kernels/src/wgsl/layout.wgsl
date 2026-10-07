@@ -40,7 +40,8 @@ fn permute(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: v
 fn kv_write(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = flat_group(wg, nwg) * 256u + lid.x;
     if (i >= pw(0u)) { return; }
-    if (status_in[0] != 0u) {
+    // Both mask words: the op's bit is in word 1 when its index is 32 or more.
+    if ((status_in[0] | status_in[1]) != 0u) {
         if (i == 0u) { raise(); }
         return;
     }

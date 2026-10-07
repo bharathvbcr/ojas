@@ -30,6 +30,13 @@ pub fn write_checkpoint(path: &Path, ckpt: &CheckpointV1) -> Result<(), IoError>
     })
 }
 
+/// Length of the file [`write_checkpoint`] would write for `ckpt`, with the
+/// same refusals (duplicate keys, byte windows, the cap), before anything is
+/// written.
+pub fn checkpoint_file_len(ckpt: &CheckpointV1) -> Result<u64, IoError> {
+    prepare(ckpt)
+}
+
 /// Refused before `read_checkpoint` reserves a buffer.
 pub const MAX_CHECKPOINT_BYTES: u64 = 1 << 30;
 
@@ -646,6 +653,7 @@ mod tests {
         let ckpt = sample();
         let bytes = encode_checkpoint(&ckpt).unwrap();
         assert_eq!(encoded_len(&ckpt).unwrap() as usize, bytes.len());
+        assert_eq!(checkpoint_file_len(&ckpt).unwrap(), bytes.len() as u64);
         assert!(bytes.len() as u64 <= MAX_CHECKPOINT_BYTES);
 
         let mut over = ckpt;
@@ -661,6 +669,8 @@ mod tests {
         over.weights[0].byte_offset = 0;
         over.weights[0].bytes = vec![0u8; usize::try_from(new_len).unwrap()];
         let err = encode_checkpoint(&over).unwrap_err();
+        assert!(err.detail().contains("cap"), "{err}");
+        let err = checkpoint_file_len(&over).unwrap_err();
         assert!(err.detail().contains("cap"), "{err}");
         let path = tmp("ckpt-over-cap");
         let err = write_checkpoint(&path.0, &over).unwrap_err();

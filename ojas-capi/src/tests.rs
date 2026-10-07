@@ -322,7 +322,7 @@ fn free_payload(id: u64) -> Vec<u8> {
 
 /// A model and token batch for a reference forward on a plain CPU backend.
 fn eval_loss(x: &[u32], y: &[u32], rows: usize) -> f32 {
-    use ojas_model::{bind, forward_loss, Eval, Rope, DEFAULT_CE_CHUNK};
+    use ojas_model::{bind, forward_loss, ActivationCheckpoint, Eval, Rope, DEFAULT_CE_CHUNK};
     let spec = nano_spec();
     let budget = Budget::new(1 << 26);
     let params = ojas_model::init_params(&spec, NANO_SEED, &budget).unwrap();
@@ -341,6 +341,7 @@ fn eval_loss(x: &[u32], y: &[u32], rows: usize) -> f32 {
         &rope,
         None,
         DEFAULT_CE_CHUNK,
+        ActivationCheckpoint::Off,
     )
     .unwrap();
     eval.backend()
@@ -1683,18 +1684,41 @@ fn error_kinds_follow_the_ojas_error_variant() {
         (OjasError::NonFinite { op: "x" }, Some(ErrorKind::NonFinite)),
         (OjasError::Poisoned, Some(ErrorKind::Poisoned)),
         (
+            OjasError::DeviceLost {
+                backend: BackendId::Wgpu,
+                detail: "device lost (Destroyed): gone".into(),
+            },
+            Some(ErrorKind::DeviceLost),
+        ),
+        (
+            OjasError::DeviceLost {
+                backend: BackendId::Metal,
+                detail: "tessl runtime poisoned".into(),
+            },
+            Some(ErrorKind::DeviceLost),
+        ),
+        (
+            OjasError::DeviceLost {
+                backend: BackendId::Cuda,
+                detail: String::new(),
+            },
+            Some(ErrorKind::DeviceLost),
+        ),
+        // Pre-fix, these two were DeviceLost by substring. A Backend error
+        // has no kind, whatever its text says.
+        (
             OjasError::Backend {
                 id: BackendId::Wgpu,
                 detail: "device lost (Destroyed): gone".into(),
             },
-            Some(ErrorKind::DeviceLost),
+            None,
         ),
         (
             OjasError::Backend {
                 id: BackendId::Metal,
                 detail: "runtime poisoned after adamw".into(),
             },
-            Some(ErrorKind::DeviceLost),
+            None,
         ),
         (
             OjasError::Backend {

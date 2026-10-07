@@ -210,7 +210,7 @@ fn block(inp: &Inputs) -> Block {
     let qh = tape.permute(qr, &SWAP_TH).unwrap();
     let kh = tape.permute(kr, &SWAP_TH).unwrap();
     let vh = tape.permute(v, &SWAP_TH).unwrap();
-    let y = tape.causal_sdpa(qh, kh, vh).unwrap();
+    let y = tape.causal_sdpa(qh, kh, vh, None).unwrap();
     let y = tape.permute(y, &SWAP_TH).unwrap();
     let out = tape.per_head_gate(x, w, bias, y).unwrap();
     let loss = tape.mul(out, weight).unwrap();

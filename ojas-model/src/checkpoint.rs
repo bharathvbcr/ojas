@@ -4,17 +4,23 @@
 //! | :--- | :--- |
 //! | [`MODEL_FILE`] | `F32` weights with nanolab names, in [`param_table`] order. Metadata: `ojas.spec`, `ojas.step`, `ojas.run`. [`crate::load_model`] reads it. |
 //! | [`OPTIM_FILE`] | `muon.<name>`, `adam_m.<name>`, `adam_v.<name>` for every trained parameter, in table order. Metadata: `ojas.step`, `ojas.run`. |
-//! | [`STATE_FILE`] | Checkpoint v1 with empty tensor sections and an empty `rng_state` (the sampler is a keyed permutation; its key is the config's `data_seed`). `config` is the JSON object `{"format","run","spec","train"}`. |
+//! | [`STATE_FILE`] | Checkpoint v1 with empty tensor sections. `rng_state` is [`SamplerRngState`] v1: the sampler is a keyed permutation, so its whole random state is the permutation's generator tag and its key, the config's `data_seed`. `config` is the JSON object `{"format","run","spec","train"}`. |
 //!
 //! [`Trainer::save`] builds the three files in a staging directory and
-//! swaps it in with [`ojas_io::replace_dir_with`]. Each tensor is read back
+//! swaps it in with [`ojas_io::replace_dir_with`], after checking the
+//! staging filesystem has room for all three. Each tensor is read back
 //! with one download and written before the next is read, so the host
-//! holds one tensor at a time.
+//! holds one tensor at a time. A device tensor is deliberately not read
+//! back in pieces: `Backend` has no ranged download, and the one-tensor
+//! peak is charged to the budget and refused before the file exists
+//! (`docs/checkpoint-v1.md`, "Device Tensors Are Not Streamed in Pieces").
 //!
 //! [`Trainer::resume_from`] runs [`ojas_io::recover_replaced_dir`], reads
 //! the state file, opens both safetensors files, checks that step and run
 //! agree across the three, that the saved train config and tokenizer hash
-//! equal the caller's, and that the tensor names, dtypes and shapes are
+//! equal the caller's, that `rng_state` decodes as [`SamplerRngState`] v1
+//! with the caller's `data_seed` (an empty state, as written before that
+//! layout, is refused), and that the tensor names, dtypes and shapes are
 //! exactly the expected ones. Only then are tensors streamed in, one at a
 //! time, and the trainer built. A refusal leaves nothing behind.
 
@@ -24,10 +30,11 @@ use std::path::Path;
 
 use ojas_core::{Backend, CheckpointV1, DType, OjasError, OptimizerCheckpoint, Tensor};
 use ojas_cpu::OptimGroup;
-use ojas_data::TokenBin;
+use ojas_data::{SamplerRngState, TokenBin};
 use ojas_io::{
-    read_checkpoint_from, recover_replaced_dir, replace_dir_with, write_checkpoint, IoError,
-    SafeTensors, SafeTensorsWriter, StDtype, TensorSpec,
+    checkpoint_file_len, read_checkpoint_from, recover_replaced_dir, replace_dir_with,
+    safetensors_file_len, write_checkpoint, IoError, SafeTensors, SafeTensorsWriter, StDtype,
+    TensorSpec,
 };
 
 use crate::json::{flat_object, quote};
@@ -162,9 +169,9 @@ fn open_nofollow(path: &Path) -> Result<File, OjasError> {
 }
 
 /// The state file, decoded, with every field the directory layout leaves
-/// empty checked empty. The state cap is checked on the open file's length
-/// before anything is read.
-fn read_state(path: &Path) -> Result<CheckpointV1, OjasError> {
+/// empty checked empty and `rng_state` decoded. The state cap is checked on
+/// the open file's length before anything is read.
+fn read_state(path: &Path) -> Result<(CheckpointV1, SamplerRngState), OjasError> {
     let what = path.display();
     let file = open_nofollow(path)?;
     let len = file
@@ -184,14 +191,15 @@ fn read_state(path: &Path) -> Result<CheckpointV1, OjasError> {
         ("muon_momentum", opt.muon_momentum.len()),
         ("adamw_first_moment", opt.adamw_first_moment.len()),
         ("adamw_second_moment", opt.adamw_second_moment.len()),
-        ("rng_state", state.rng_state.len()),
     ];
     if let Some((name, n)) = sections.iter().find(|(_, n)| *n != 0) {
         return Err(refuse(format!(
             "{what}: {name} has {n} entries; the directory layout keeps it empty"
         )));
     }
-    Ok(state)
+    let rng = SamplerRngState::decode(&state.rng_state)
+        .map_err(|e| refuse(format!("{what}: {}", e.detail())))?;
+    Ok((state, rng))
 }
 
 fn open_tensors(path: &Path) -> Result<SafeTensors<'static>, OjasError> {
@@ -269,6 +277,51 @@ fn check_layout(
     Ok(())
 }
 
+/// Each tensor's shape in `u64`, for [`f32_specs`].
+fn shapes_of(tensors: &[(&str, &Tensor)]) -> Vec<Vec<u64>> {
+    tensors
+        .iter()
+        .map(|(_, t)| t.shape().iter().map(|&d| d as u64).collect())
+        .collect()
+}
+
+/// The `F32` safetensors declarations of `tensors`, shapes from [`shapes_of`].
+fn f32_specs<'a>(tensors: &[(&'a str, &Tensor)], shapes: &'a [Vec<u64>]) -> Vec<TensorSpec<'a>> {
+    tensors
+        .iter()
+        .zip(shapes)
+        .map(|((name, _), shape)| TensorSpec {
+            name,
+            dtype: StDtype::F32,
+            shape,
+        })
+        .collect()
+}
+
+/// Length of the file [`write_tensors`] writes for `tensors` and `metadata`.
+fn tensors_file_len(
+    tensors: &[(&str, &Tensor)],
+    metadata: &[(&str, &str)],
+) -> Result<u64, OjasError> {
+    let shapes = shapes_of(tensors);
+    safetensors_file_len(&f32_specs(tensors, &shapes), metadata)
+        .map_err(|e| save_error(e.detail().to_string()))
+}
+
+/// Disk space allowed per checkpoint file on top of its length, for the
+/// filesystem rounding it up to whole blocks and for its directory entry.
+/// A mebibyte covers every block size in use.
+const DISK_SLACK_PER_FILE: u64 = 1 << 20;
+
+/// The directory [`replace_dir_with`] stages `dir` in: its parent, or `.`
+/// for a bare name.
+fn staging_parent(dir: &Path) -> &Path {
+    match dir.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    }
+}
+
 /// Write `tensors` as `F32` safetensors at `path`: each one downloaded,
 /// written in little-endian pieces of [`LE_CHUNK`] bytes, and dropped
 /// before the next is downloaded.
@@ -280,19 +333,8 @@ fn write_tensors<B: Backend + ?Sized>(
 ) -> Result<(), OjasError> {
     let what = path.display();
     let io = |e: IoError| save_error(format!("{what}: {}", e.detail()));
-    let shapes: Vec<Vec<u64>> = tensors
-        .iter()
-        .map(|(_, t)| t.shape().iter().map(|&d| d as u64).collect())
-        .collect();
-    let specs: Vec<TensorSpec<'_>> = tensors
-        .iter()
-        .zip(&shapes)
-        .map(|((name, _), shape)| TensorSpec {
-            name,
-            dtype: StDtype::F32,
-            shape,
-        })
-        .collect();
+    let shapes = shapes_of(tensors);
+    let specs = f32_specs(tensors, &shapes);
     // A device tensor is downloaded whole into charged host memory, one at
     // a time; refuse before the file is created when the largest cannot be.
     let mut largest = 0u64;
@@ -339,7 +381,23 @@ impl<B: Backend> Trainer<B> {
     /// whole (see the module docs). A [`crate::TrainState::Poisoned`]
     /// trainer is refused with [`OjasError::Poisoned`]: its parameters are
     /// partly updated. On any error the previous `dir` is left as it was.
+    ///
+    /// Before anything is written, the free space on the filesystem that
+    /// stages `dir` ([`ojas_device::available_disk_bytes`] of its parent)
+    /// must cover the three files' exact lengths plus one mebibyte each (for
+    /// block rounding); the old directory stays until the swap,
+    /// so all of it is new space. Less, or a probe that fails, is refused
+    /// with nothing created.
     pub fn save(&self, dir: &Path) -> Result<(), OjasError> {
+        self.save_with_free_space(dir, ojas_device::available_disk_bytes)
+    }
+
+    /// [`Self::save`] with the free-space probe passed in.
+    fn save_with_free_space(
+        &self,
+        dir: &Path,
+        free: impl FnOnce(&Path) -> std::io::Result<u64>,
+    ) -> Result<(), OjasError> {
         self.ready()?;
         let backend = self.tape.backend();
         let step = self.step.to_string();
@@ -376,7 +434,11 @@ impl<B: Backend> Trainer<B> {
             weights: Vec::new(),
             optimizer: OptimizerCheckpoint::default(),
             step: self.step,
-            rng_state: Vec::new(),
+            rng_state: SamplerRngState {
+                seed: self.cfg.data_seed,
+            }
+            .encode()
+            .to_vec(),
             data_cursor: self.cursor,
         };
         let model_meta = [
@@ -388,6 +450,35 @@ impl<B: Backend> Trainer<B> {
             (STEP_METADATA_KEY, step.as_str()),
             (RUN_METADATA_KEY, self.run.as_str()),
         ];
+        let lens = [
+            tensors_file_len(&model, &model_meta)?,
+            tensors_file_len(&optim, &optim_meta)?,
+            checkpoint_file_len(&state)
+                .map_err(|e| save_error(format!("{STATE_FILE}: {}", e.detail())))?,
+        ];
+        let need = lens
+            .iter()
+            .try_fold(0u64, |n, &len| {
+                n.checked_add(len)?.checked_add(DISK_SLACK_PER_FILE)
+            })
+            .ok_or_else(|| save_error("checkpoint size overflows u64".to_string()))?;
+        let parent = staging_parent(dir);
+        let have = free(parent).map_err(|e| {
+            save_error(format!(
+                "{}: free disk space could not be read ({e}); nothing was written",
+                parent.display()
+            ))
+        })?;
+        if have < need {
+            return Err(save_error(format!(
+                "{}: the checkpoint needs {need} bytes ({} + {} + {} plus \
+                 {DISK_SLACK_PER_FILE} per file), {have} are free; nothing was written",
+                parent.display(),
+                lens[0],
+                lens[1],
+                lens[2]
+            )));
+        }
         // `replace_dir_with` takes an `IoError`; the trainer's own error
         // is kept here and returned as it was.
         let mut failed: Option<OjasError> = None;
@@ -427,13 +518,21 @@ impl<B: Backend> Trainer<B> {
         cfg: TrainConfig,
     ) -> Result<Self, OjasError> {
         recover_replaced_dir(dir).map_err(|e| refuse(e.detail().to_string()))?;
-        let state = read_state(&dir.join(STATE_FILE))?;
+        let (state, rng) = read_state(&dir.join(STATE_FILE))?;
         let saved = SavedConfig::parse(&state.config)?;
         let train = cfg.to_json();
         if saved.train != train {
             return Err(refuse(format!(
                 "the saved train config {} differs from the caller's {train}",
                 saved.train
+            )));
+        }
+        // The train config carries `data_seed` too; the state's own copy is
+        // what the sampler stream was keyed by, so it must agree as well.
+        if rng.seed != cfg.data_seed {
+            return Err(refuse(format!(
+                "rng_state seed {} differs from the caller's data_seed {}",
+                rng.seed, cfg.data_seed
             )));
         }
         if state.tokenizer_hash != cfg.tokenizer_hash {
@@ -701,5 +800,97 @@ mod tests {
             assert!(SavedConfig::parse(b.as_bytes()).is_err(), "{b}");
         }
         assert!(SavedConfig::parse(&[0xff, 0xfe]).is_err());
+    }
+
+    /// A scratch directory, removed with everything in it on drop.
+    struct Root(std::path::PathBuf);
+
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Every entry under `root` (not following links) with its file bytes.
+    fn listing(root: &Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
+        let mut paths: Vec<_> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        paths.sort();
+        let mut out = Vec::new();
+        for path in paths {
+            if std::fs::symlink_metadata(&path).unwrap().is_dir() {
+                out.push((path.clone(), None));
+                out.extend(listing(&path));
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                out.push((path, Some(bytes)));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn save_refuses_before_writing_when_the_disk_cannot_hold_it() {
+        let root = Root(
+            std::env::temp_dir().join(format!("ojas-model-free-space-{}", std::process::id())),
+        );
+        std::fs::create_dir_all(&root.0).unwrap();
+        let tokens = root.0.join("tokens.bin");
+        let bytes: Vec<u8> = (0..20_000u32)
+            .flat_map(|i| ((i % 256) as u16).to_le_bytes())
+            .collect();
+        std::fs::write(&tokens, bytes).unwrap();
+        let bin = TokenBin::open_headerless(&tokens).unwrap();
+        let budget = ojas_core::Budget::new(1 << 30);
+        let params = crate::init_params(&ModelSpec::tiny(), 5, &budget).unwrap();
+        let backend = ojas_cpu::CpuBackend::new(budget);
+        let t = Trainer::new(backend, ModelSpec::tiny(), &params, bin, cfg()).unwrap();
+
+        // The exact lengths, from a save with room to spare.
+        let ckpt = root.0.join("ckpt");
+        t.save_with_free_space(&ckpt, |_| Ok(u64::MAX)).unwrap();
+        let written: u64 = [MODEL_FILE, OPTIM_FILE, STATE_FILE]
+            .iter()
+            .map(|f| std::fs::metadata(ckpt.join(f)).unwrap().len())
+            .sum();
+        let need = written + 3 * DISK_SLACK_PER_FILE;
+        let before = listing(&root.0);
+
+        // One byte short: refused before a stage exists; the old checkpoint
+        // is whole. The probe is asked about the directory that stages it.
+        let mut asked = None;
+        let err = t
+            .save_with_free_space(&ckpt, |p| {
+                asked = Some(p.to_path_buf());
+                Ok(need - 1)
+            })
+            .unwrap_err();
+        assert!(matches!(err, OjasError::OutOfRange { .. }), "{err:?}");
+        assert!(
+            err.to_string().contains(&format!("needs {need} bytes")),
+            "{err}"
+        );
+        assert_eq!(asked.as_deref(), Some(root.0.as_path()));
+        assert!(listing(&root.0) == before, "a refused save wrote");
+
+        // A probe that cannot answer refuses too; it never passes.
+        let err = t
+            .save_with_free_space(&ckpt, |_| Err(std::io::Error::other("probe down")))
+            .unwrap_err();
+        assert!(err.to_string().contains("probe down"), "{err}");
+        assert!(listing(&root.0) == before, "a refused save wrote");
+
+        // A first save under a new name leaves no directory behind.
+        let fresh = root.0.join("fresh");
+        assert!(t.save_with_free_space(&fresh, |_| Ok(need - 1)).is_err());
+        assert!(!fresh.exists());
+        assert!(listing(&root.0) == before, "a refused save wrote");
+
+        // Exactly enough is enough, and the real probe passes a small save.
+        t.save_with_free_space(&ckpt, |_| Ok(need)).unwrap();
+        t.save(&root.0.join("real")).unwrap();
+        assert!(root.0.join("real").join(STATE_FILE).is_file());
     }
 }

@@ -162,7 +162,8 @@ fn batch_sampler_end_to_end_with_qwen_u32_tokens() {
         (total_tokens as u64 - 1) / seq_len as u64
     );
 
-    let mut visited_starts = BTreeSet::new();
+    // Row start tokens in the order the sampler produced them.
+    let mut visited_starts = Vec::new();
     let batches_per_epoch = windows_per_epoch.div_ceil(batch_size as u64);
 
     for _ in 0..batches_per_epoch {
@@ -176,7 +177,7 @@ fn batch_sampler_end_to_end_with_qwen_u32_tokens() {
             let row_x = &batch.x[row * seq_len..(row + 1) * seq_len];
             let row_y = &batch.y[row * seq_len..(row + 1) * seq_len];
             let start_tok = row_x[0];
-            visited_starts.insert(start_tok);
+            visited_starts.push(start_tok);
 
             // Verify contiguous sequence and y is x shifted by 1
             for i in 0..seq_len {
@@ -187,6 +188,22 @@ fn batch_sampler_end_to_end_with_qwen_u32_tokens() {
             }
         }
     }
+
+    // Window k starts at token k * seq_len, so its first token is
+    // 100_000 + k * seq_len. Epoch 0 is the first W rows: each window once.
+    let w = usize::try_from(windows_per_epoch).unwrap();
+    let every_window: BTreeSet<u32> = (0..w).map(|k| 100_000 + (k * seq_len) as u32).collect();
+    let epoch0: BTreeSet<u32> = visited_starts[..w].iter().copied().collect();
+    assert_eq!(epoch0.len(), w, "a window repeated within epoch 0");
+    assert_eq!(epoch0, every_window, "epoch 0 visits every window");
+    // The last batch runs past the epoch end into epoch 1; those rows are
+    // windows too, and the cursor says where epoch 1 stands.
+    let spill = visited_starts.len() - w;
+    assert_eq!(spill, batches_per_epoch as usize * batch_size - w);
+    let all: BTreeSet<u32> = visited_starts.iter().copied().collect();
+    assert_eq!(all, every_window, "no start outside the window grid");
+    assert_eq!(sampler.cursor().shard, 1);
+    assert_eq!(sampler.cursor().token_index, spill as u64);
 }
 
 #[test]

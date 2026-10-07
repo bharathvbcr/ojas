@@ -83,29 +83,23 @@ pub(crate) fn kinded(kind: ErrorKind, msg: impl std::fmt::Display) -> String {
     format!("{}{msg}", kind.prefix())
 }
 
-/// The kind an error carries, by variant: [`OjasError::CapacityExceeded`],
-/// [`OjasError::NonFinite`] and [`OjasError::Poisoned`] map directly.
-/// `OjasError` has no device-lost variant, so an [`OjasError::Backend`] is
-/// device-lost when its `detail`, which only a backend writes, contains the
-/// markers `ojas-wgpu` (`context.rs`, "device lost") and `ojas-metal`
-/// (`gpu.rs`, "runtime poisoned") emit. Every other variant has no kind,
-/// whatever its text says.
+/// The kind an error carries, by variant alone: [`OjasError::CapacityExceeded`],
+/// [`OjasError::NonFinite`], [`OjasError::Poisoned`] and
+/// [`OjasError::DeviceLost`] (which the GPU backends set where they detect
+/// the loss) map directly. Every other variant has no kind, whatever its
+/// text says.
 ///
 /// [`OjasError::CapacityExceeded`]: ojas_core::OjasError::CapacityExceeded
 /// [`OjasError::NonFinite`]: ojas_core::OjasError::NonFinite
 /// [`OjasError::Poisoned`]: ojas_core::OjasError::Poisoned
-/// [`OjasError::Backend`]: ojas_core::OjasError::Backend
+/// [`OjasError::DeviceLost`]: ojas_core::OjasError::DeviceLost
 pub(crate) fn kind_of(err: &ojas_core::OjasError) -> Option<ErrorKind> {
     use ojas_core::OjasError;
     match err {
         OjasError::CapacityExceeded { .. } => Some(ErrorKind::Capacity),
         OjasError::NonFinite { .. } => Some(ErrorKind::NonFinite),
         OjasError::Poisoned => Some(ErrorKind::Poisoned),
-        OjasError::Backend { detail, .. }
-            if detail.contains("device lost") || detail.contains("runtime poisoned") =>
-        {
-            Some(ErrorKind::DeviceLost)
-        }
+        OjasError::DeviceLost { .. } => Some(ErrorKind::DeviceLost),
         _ => None,
     }
 }

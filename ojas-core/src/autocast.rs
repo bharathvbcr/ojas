@@ -2,16 +2,21 @@
 //!
 //! A region is a per-thread stack on one [`Autocast`] value, not a process
 //! global. Inside a [`AutocastMode::Bf16`] region, matmul-class ops round
-//! untagged f32 operands and their activation outputs. The storage compute
-//! tag records that the bits are already rounded, so a second cast clones.
-//! Norms, embeddings, the loss, and the optimizer stay f32. A device tensor
+//! untagged f32 operands and their activation outputs. An operand becomes
+//! `Bf16` storage when the inner backend takes bf16 operands
+//! ([`Backend::bf16_operands`]) and a rounded `F32` copy otherwise; both give
+//! the kernel the same values. Outputs stay `F32`, rounded. The storage
+//! compute tag records that the bits are already rounded, so a second cast
+//! clones.
+//! Norms, embeddings, the loss, the optimizer and the gated delta rule (its
+//! state is a running sum over the whole sequence) stay f32. A device tensor
 //! is never downloaded to round it.
 //!
 //! [`Backend`]: crate::Backend
 
 use crate::backend::{
-    AdamWConfig, Backend, BackendId, CeChunk, LinearCe, MuonNs5Config, PerHeadGateGrad,
-    ValueResidualGrad,
+    AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnForward, GdnGrad, GdnInputs,
+    LinearCe, MuonNs5Config, PerHeadGateGrad, ValueResidualGrad,
 };
 use crate::budget::Budget;
 use crate::dtype::DType;
@@ -262,9 +267,20 @@ impl<B: Backend> Autocast<B> {
         })
     }
 
+    /// A matmul-class operand inside a region: a `Bf16` tensor or an
+    /// already-rounded `F32` one as it is; otherwise new `Bf16` storage when
+    /// the inner backend takes it ([`Backend::bf16_operands`]), else a
+    /// rounded `F32` copy. The two arms give the kernel the same values, so
+    /// the same bits.
     fn prep<'a>(&self, tensor: &'a Tensor) -> Result<Operand<'a>, OjasError> {
-        if !self.region()? || tensor.compute_tag() == COMPUTE_BF16 {
+        if !self.region()?
+            || tensor.dtype() == DType::Bf16
+            || tensor.compute_tag() == COMPUTE_BF16
+        {
             return Ok(Operand::Same(tensor));
+        }
+        if self.inner.bf16_operands() {
+            return Ok(Operand::Rounded(self.inner.to_bf16(tensor)?));
         }
         Ok(Operand::Rounded(self.round_new(tensor)?))
     }
@@ -343,6 +359,26 @@ impl<B: Backend> Backend for Autocast<B> {
             return Ok(tensor.clone());
         }
         self.round_new(tensor)
+    }
+
+    fn bf16_operands(&self) -> bool {
+        self.inner.bf16_operands()
+    }
+
+    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        self.inner.to_bf16(tensor)
+    }
+
+    /// The widened values are bf16-exact, so the result is tagged rounded and
+    /// a later cast clones it.
+    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.to_f32(tensor)?;
+        if tensor.dtype() == DType::Bf16 {
+            out.set_compute_tag(COMPUTE_BF16);
+        }
+        Ok(out)
     }
 
     fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
@@ -513,26 +549,42 @@ impl<B: Backend> Backend for Autocast<B> {
             .rms_qk_norm_backward(q, k, q_weight, k_weight, grad_q, grad_k, eps)
     }
 
-    fn causal_sdpa_forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
+    /// The output is emitted like any activation. The log-sum-exp is a row
+    /// statistic the backward subtracts from every score, so it stays `F32`
+    /// unrounded.
+    fn causal_sdpa_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         let q = self.prep(q)?;
         let k = self.prep(k)?;
         let v = self.prep(v)?;
-        let out = self.inner.causal_sdpa_forward(&q, &k, &v)?;
-        self.emit(out)
+        let (out, lse) = self.inner.causal_sdpa_forward(&q, &k, &v, window)?;
+        Ok((self.emit(out)?, lse))
     }
 
+    /// `lse` is passed through unrounded (see the forward).
     fn causal_sdpa_backward(
         &self,
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
         grad_output: &Tensor,
+        window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         let q = self.prep(q)?;
         let k = self.prep(k)?;
         let v = self.prep(v)?;
+        let output = self.prep(output)?;
         let grad_output = self.prep(grad_output)?;
-        let (gq, gk, gv) = self.inner.causal_sdpa_backward(&q, &k, &v, &grad_output)?;
+        let (gq, gk, gv) =
+            self.inner
+                .causal_sdpa_backward(&q, &k, &v, &output, lse, &grad_output, window)?;
         Ok((self.emit(gq)?, self.emit(gk)?, self.emit(gv)?))
     }
 
@@ -658,6 +710,120 @@ impl<B: Backend> Backend for Autocast<B> {
             value0: self.promote(on, tagged, grad.value0)?,
             lambda: self.promote(on, tagged, grad.lambda)?,
         })
+    }
+
+    /// Always f32: operands are passed as given and every output is tagged
+    /// f32, inside a region or not.
+    fn chunked_gdn_forward(&self, inputs: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
+        self.pass()?;
+        let out = self.inner.chunked_gdn_forward(inputs)?;
+        Ok(GdnForward {
+            output: self.keep_f32(out.output),
+            final_state: self.keep_f32(out.final_state),
+            checkpoints: self.keep_f32(out.checkpoints),
+        })
+    }
+
+    fn chunked_gdn_backward(
+        &self,
+        inputs: GdnInputs<'_>,
+        checkpoints: &Tensor,
+        grad_output: &Tensor,
+        grad_final_state: Option<&Tensor>,
+    ) -> Result<GdnGrad, OjasError> {
+        self.pass()?;
+        let grad =
+            self.inner
+                .chunked_gdn_backward(inputs, checkpoints, grad_output, grad_final_state)?;
+        Ok(GdnGrad {
+            q: self.keep_f32(grad.q),
+            k: self.keep_f32(grad.k),
+            v: self.keep_f32(grad.v),
+            g: self.keep_f32(grad.g),
+            beta: self.keep_f32(grad.beta),
+            initial_state: grad.initial_state.map(|t| self.keep_f32(t)),
+        })
+    }
+
+    /// The Qwen3.5 hybrid-layer ops below are not matmul-class: always f32,
+    /// operands passed as given and every output tagged f32, as for the
+    /// gated delta rule.
+    fn causal_conv1d_silu_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.causal_conv1d_silu_forward(input, weight)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn causal_conv1d_silu_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.pass()?;
+        let (gx, gw) = self
+            .inner
+            .causal_conv1d_silu_backward(input, weight, grad_output)?;
+        Ok((self.keep_f32(gx), self.keep_f32(gw)))
+    }
+
+    fn gated_rms_norm_forward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self
+            .inner
+            .gated_rms_norm_forward(input, gate, weight, eps)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn gated_rms_norm_backward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<GatedRmsGrad, OjasError> {
+        self.pass()?;
+        let grad = self
+            .inner
+            .gated_rms_norm_backward(input, gate, weight, grad_output, eps)?;
+        Ok(GatedRmsGrad {
+            input: self.keep_f32(grad.input),
+            gate: self.keep_f32(grad.gate),
+            weight: self.keep_f32(grad.weight),
+        })
+    }
+
+    fn rope_partial_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.rope_partial_forward(x, cos, sin)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn rope_partial_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.rope_partial_backward(grad_output, cos, sin)?;
+        Ok(self.keep_f32(out))
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
@@ -858,7 +1024,8 @@ impl<B: Backend> Backend for Autocast<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{permute_output_shape, Numerics};
+    use crate::backend::Numerics;
+    use crate::permute_output_shape;
     use crate::tensor::DeviceBuffer;
     use std::any::Any;
     use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -881,6 +1048,7 @@ mod tests {
         seen_bias: AtomicU32,
         seen_attn: AtomicU32,
         seen_k: AtomicU32,
+        seen_lse: AtomicU32,
         scale_bits: AtomicU32,
     }
 
@@ -899,6 +1067,7 @@ mod tests {
                 seen_bias: AtomicU32::new(0),
                 seen_attn: AtomicU32::new(0),
                 seen_k: AtomicU32::new(0),
+                seen_lse: AtomicU32::new(0),
                 scale_bits: AtomicU32::new(0),
             }
         }
@@ -1183,14 +1352,19 @@ mod tests {
             q: &Tensor,
             k: &Tensor,
             v: &Tensor,
-        ) -> Result<Tensor, OjasError> {
+            _: Option<usize>,
+        ) -> Result<(Tensor, Tensor), OjasError> {
             const OP: &str = "causal_sdpa_forward";
             note(&self.seen_input, q);
             note(&self.seen_k, k);
             finite(OP, q)?;
             finite(OP, k)?;
             finite(OP, v)?;
-            dirty(self.budget(), q.shape())
+            let rows = &q.shape()[..q.shape().len().saturating_sub(1)];
+            Ok((
+                dirty(self.budget(), q.shape())?,
+                dirty(self.budget(), rows)?,
+            ))
         }
 
         fn causal_sdpa_backward(
@@ -1198,12 +1372,17 @@ mod tests {
             q: &Tensor,
             k: &Tensor,
             v: &Tensor,
+            output: &Tensor,
+            lse: &Tensor,
             grad_output: &Tensor,
+            _: Option<usize>,
         ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
             const OP: &str = "causal_sdpa_backward";
+            note(&self.seen_lse, lse);
             finite(OP, q)?;
             finite(OP, k)?;
             finite(OP, v)?;
+            finite(OP, output)?;
             finite(OP, grad_output)?;
             Ok((
                 dirty(self.budget(), q.shape())?,
@@ -1992,6 +2171,21 @@ mod tests {
         assert_eq!(autocast.inner.casts.load(Ordering::Relaxed), 1);
     }
 
+    /// Outside a region every method but `autocast_region` (whose region
+    /// stack this wrapper owns) reaches the inner backend, so a new trait
+    /// method that `Autocast` forgets to forward runs the trait default
+    /// here and fails this test.
+    #[test]
+    fn every_method_but_the_region_reaches_the_inner_backend() {
+        use crate::backend::tests::{every_call_reaches_except, Marker};
+        let inner = Marker {
+            budget: Budget::new(1 << 10),
+        };
+        let wrapped = Autocast::new(&inner);
+        let checked = every_call_reaches_except(&wrapped, &inner, &["autocast_region"]);
+        assert_eq!(checked, 51);
+    }
+
     #[test]
     fn signalling_nan_cast_reaches_linear_as_non_finite() {
         let (autocast, budget) = wrap(1 << 16);
@@ -2122,12 +2316,18 @@ mod tests {
         let q = host(&budget, DIRTY);
         let k = host(&budget, DIRTY);
         let v = host(&budget, DIRTY);
-        let out = autocast.causal_sdpa_forward(&q, &k, &v).unwrap();
+        let (out, lse) = autocast.causal_sdpa_forward(&q, &k, &v, None).unwrap();
         assert_eq!(out.compute_tag(), COMPUTE_BF16);
         assert_eq!(bits_of(&out), ONE);
+        // The log-sum-exp is never rounded, on the way out or back in.
+        assert_eq!(lse.compute_tag(), COMPUTE_F32);
+        assert_eq!(bits_of(&lse), DIRTY);
         assert_eq!(autocast.inner.seen_k.load(Ordering::Relaxed), ONE);
         assert_eq!(bits_of(&k), DIRTY);
-        let (gq, gk, gv) = autocast.causal_sdpa_backward(&q, &k, &v, &out).unwrap();
+        let (gq, gk, gv) = autocast
+            .causal_sdpa_backward(&q, &k, &v, &out, &lse, &out, None)
+            .unwrap();
+        assert_eq!(autocast.inner.seen_lse.load(Ordering::Relaxed), DIRTY);
         assert_eq!(gq.compute_tag(), COMPUTE_BF16);
         assert_eq!(gk.compute_tag(), COMPUTE_BF16);
         assert_eq!(gv.compute_tag(), COMPUTE_BF16);

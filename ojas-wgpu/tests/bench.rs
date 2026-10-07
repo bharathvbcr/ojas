@@ -148,7 +148,13 @@ fn bench_linear_and_attention() {
             name: format!("sdpa fwd B{b} H{h} T{t} D{d}"),
             flops: 2.0 * base,
             resident: time(
-                || drop(g.causal_sdpa_forward(&dq, &dk, &dv).unwrap()),
+                || {
+                    drop(
+                        g.causal_sdpa_forward(&dq, &dk, &dv, None)
+                            .map(|(y, _)| y)
+                            .unwrap(),
+                    )
+                },
                 || sync(&g),
             ),
             transfers: time(
@@ -158,19 +164,40 @@ fn bench_linear_and_attention() {
                             &g.upload(&q).unwrap(),
                             &g.upload(&k).unwrap(),
                             &g.upload(&v).unwrap(),
+                            None,
                         )
+                        .map(|(y, _)| y)
                         .unwrap();
                     down_all(&g, &[&y]);
                 },
                 || sync(&g),
             ),
-            cpu: time(|| drop(c.causal_sdpa_forward(&q, &k, &v).unwrap()), || {}),
+            cpu: time(
+                || {
+                    drop(
+                        c.causal_sdpa_forward(&q, &k, &v, None)
+                            .map(|(y, _)| y)
+                            .unwrap(),
+                    )
+                },
+                || {},
+            ),
         });
+        // The backward from the forward's saved output and lse, as a tape
+        // runs it.
+        let (go, gl) = g.causal_sdpa_forward(&dq, &dk, &dv, None).unwrap();
+        let (ho, hl) = (g.download(&go).unwrap(), g.download(&gl).unwrap());
+        let (co, cl) = c.causal_sdpa_forward(&q, &k, &v, None).unwrap();
         rows.push(Row {
             name: format!("sdpa bwd B{b} H{h} T{t} D{d}"),
             flops: 5.0 * base,
             resident: time(
-                || drop(g.causal_sdpa_backward(&dq, &dk, &dv, &dgy).unwrap()),
+                || {
+                    drop(
+                        g.causal_sdpa_backward(&dq, &dk, &dv, &go, &gl, &dgy, None)
+                            .unwrap(),
+                    )
+                },
                 || sync(&g),
             ),
             transfers: time(
@@ -180,7 +207,10 @@ fn bench_linear_and_attention() {
                             &g.upload(&q).unwrap(),
                             &g.upload(&k).unwrap(),
                             &g.upload(&v).unwrap(),
+                            &g.upload(&ho).unwrap(),
+                            &g.upload(&hl).unwrap(),
                             &g.upload(&gy).unwrap(),
+                            None,
                         )
                         .unwrap();
                     down_all(&g, &[&a, &bb, &cc]);
@@ -188,7 +218,12 @@ fn bench_linear_and_attention() {
                 || sync(&g),
             ),
             cpu: time(
-                || drop(c.causal_sdpa_backward(&q, &k, &v, &gy).unwrap()),
+                || {
+                    drop(
+                        c.causal_sdpa_backward(&q, &k, &v, &co, &cl, &gy, None)
+                            .unwrap(),
+                    )
+                },
                 || {},
             ),
         });

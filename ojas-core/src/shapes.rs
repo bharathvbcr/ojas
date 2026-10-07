@@ -29,7 +29,7 @@
 //! ([`crate::check_adamw`], [`crate::clip_scale`]), and device limits such as
 //! [`crate::METAL_MAX_HEAD_DIM`], 32-bit index caps and workgroup limits.
 
-use crate::{CeChunk, DType, OjasError, Tensor};
+use crate::{CeChunk, DType, GdnInputs, OjasError, Tensor, GDN_CHECKPOINT_TOKENS};
 
 const EMBEDDING_FORWARD: &str = "embedding_forward";
 const EMBEDDING_BACKWARD: &str = "embedding_backward";
@@ -45,12 +45,22 @@ const GATE_FORWARD: &str = "per_head_sigmoid_gate_forward";
 const GATE_BACKWARD: &str = "per_head_sigmoid_gate_backward";
 const VALUE_RESIDUAL_FORWARD: &str = "value_residual_blend_forward";
 const VALUE_RESIDUAL_BACKWARD: &str = "value_residual_blend_backward";
+const GDN_FORWARD: &str = "chunked_gdn_forward";
+const GDN_BACKWARD: &str = "chunked_gdn_backward";
+const CONV1D_FORWARD: &str = "causal_conv1d_silu_forward";
+const CONV1D_BACKWARD: &str = "causal_conv1d_silu_backward";
+const GATED_RMS_FORWARD: &str = "gated_rms_norm_forward";
+const GATED_RMS_BACKWARD: &str = "gated_rms_norm_backward";
+const ROPE_PARTIAL_FORWARD: &str = "rope_partial_forward";
+const ROPE_PARTIAL_BACKWARD: &str = "rope_partial_backward";
 const SILU_FORWARD: &str = "silu_forward";
 const SILU_BACKWARD: &str = "silu_backward";
 const MUL_FORWARD: &str = "mul_forward";
 const MUL_BACKWARD: &str = "mul_backward";
 const ADD_FORWARD: &str = "residual_add_forward";
 const ADD_BACKWARD: &str = "residual_add_backward";
+const ACCUMULATE_GRAD: &str = "accumulate_grad";
+const PERMUTE: &str = "permute";
 const CE_FORWARD: &str = "cross_entropy_mean_forward";
 const CE_BACKWARD: &str = "cross_entropy_mean_backward";
 const CLIP: &str = "clip_grad_norm";
@@ -124,6 +134,44 @@ pub struct SdpaDims {
     pub head_dim: usize,
 }
 
+/// Dimensions of the gated delta rule ([`crate::GdnInputs`]): `q`, `k`
+/// `[B, T, H, Dk]`, `v` `[B, T, H, Dv]`, `g`, `beta` `[B, T, H]`, states
+/// `[B, H, Dk, Dv]`, checkpoints `[B, H, checkpoints, Dk, Dv]`. Every one of
+/// those tensors' `f32` byte counts fits `usize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GdnDims {
+    pub batch: usize,
+    pub seq: usize,
+    pub heads: usize,
+    pub key_dim: usize,
+    pub value_dim: usize,
+    /// `ceil(seq / GDN_CHECKPOINT_TOKENS)`.
+    pub checkpoints: usize,
+}
+
+impl GdnDims {
+    /// `B * T * H`: the `(b, t, h)` rows of every per-token operand.
+    pub fn rows(&self) -> usize {
+        self.batch * self.seq * self.heads
+    }
+
+    /// `[B, H, Dk, Dv]`.
+    pub fn state_shape(&self) -> [usize; 4] {
+        [self.batch, self.heads, self.key_dim, self.value_dim]
+    }
+
+    /// `[B, H, checkpoints, Dk, Dv]`.
+    pub fn checkpoint_shape(&self) -> [usize; 5] {
+        [
+            self.batch,
+            self.heads,
+            self.checkpoints,
+            self.key_dim,
+            self.value_dim,
+        ]
+    }
+}
+
 /// Dimensions of the per-head sigmoid gate: `input` `[..., d_model]`,
 /// `weight` `[heads, d_model]`, `bias` `[heads]`, `attn_out`
 /// `[..., heads, head_dim]`.
@@ -134,6 +182,29 @@ pub struct GateDims {
     pub d_model: usize,
     pub heads: usize,
     pub head_dim: usize,
+}
+
+/// Dimensions of a depthwise causal conv: input `[batch, time, channels]`,
+/// weight `[channels, width]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Conv1dDims {
+    pub batch: usize,
+    pub time: usize,
+    pub channels: usize,
+    pub width: usize,
+}
+
+/// Dimensions of a partial RoPE over `[batch, time, heads, dim]` with
+/// `[time, rotary]` tables: the leading `rotary` of each head's `dim` values
+/// rotate, the rest pass through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartialRopeDims {
+    /// `batch * time * heads`.
+    pub rows: usize,
+    pub time: usize,
+    pub heads: usize,
+    pub dim: usize,
+    pub rotary: usize,
 }
 
 /// Dimensions of mean cross-entropy over `logits` `[..., vocab]`.
@@ -205,6 +276,25 @@ fn operand(op: &'static str, tensor: &Tensor, dtype: DType) -> Result<usize, Oja
 
 fn f32_operand(op: &'static str, tensor: &Tensor) -> Result<usize, OjasError> {
     operand(op, tensor, DType::F32)
+}
+
+/// A matmul-class operand ([`crate::Backend::bf16_operands`]): `F32`, or
+/// `Bf16` storage that the kernel widens exactly into its `f32`
+/// accumulation. Any other dtype is refused naming `F32`, the default.
+fn matmul_operand(op: &'static str, tensor: &Tensor) -> Result<usize, OjasError> {
+    let dtype = match tensor.dtype() {
+        DType::Bf16 => DType::Bf16,
+        _ => DType::F32,
+    };
+    operand(op, tensor, dtype)
+}
+
+/// [`matmul_operand`] over every tensor, in order.
+fn matmul_operands(op: &'static str, tensors: &[&Tensor]) -> Result<(), OjasError> {
+    for t in tensors {
+        matmul_operand(op, t)?;
+    }
+    Ok(())
 }
 
 /// [`f32_operand`] over every tensor, in order.
@@ -342,22 +432,23 @@ fn linear_dims(op: &'static str, input: &Tensor, weight: &Tensor) -> Result<Line
 }
 
 /// [`crate::Backend::linear_forward`]: `input` `[..., in]` (rank 1 or more)
-/// and `weight` `[out, in]`, both `F32`.
+/// and `weight` `[out, in]`, each `F32` or `Bf16`. The output is `F32`.
 pub fn linear_forward_dims(input: &Tensor, weight: &Tensor) -> Result<LinearDims, OjasError> {
     const OP: &str = LINEAR_FORWARD;
-    f32_operands(OP, &[input, weight])?;
+    matmul_operands(OP, &[input, weight])?;
     linear_dims(OP, input, weight)
 }
 
 /// [`crate::Backend::linear_backward`]: as the forward, plus `grad_output`
-/// shaped like the forward output.
+/// (`F32` or `Bf16`) shaped like the forward output. Both gradients are
+/// `F32`.
 pub fn linear_backward_dims(
     input: &Tensor,
     weight: &Tensor,
     grad_output: &Tensor,
 ) -> Result<LinearDims, OjasError> {
     const OP: &str = LINEAR_BACKWARD;
-    f32_operands(OP, &[input, weight, grad_output])?;
+    matmul_operands(OP, &[input, weight, grad_output])?;
     let dims = linear_dims(OP, input, weight)?;
     if grad_output.shape() != dims.out_shape.as_slice() {
         return Err(refuse(
@@ -546,29 +637,39 @@ fn sdpa_dims(op: &'static str, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Sdp
     })
 }
 
-/// [`crate::Backend::causal_sdpa_forward`]: `q`, `k` and `v` `F32`. Query is
-/// rank 4 `[B, H, T, D]`; K and V are `[B, Hkv, T, D]` with the same batch,
-/// sequence and head dimension, and `H` a positive multiple of `Hkv`. The
-/// head-dimension limit of a device is the backend's.
-pub fn causal_sdpa_forward_dims(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<SdpaDims, OjasError> {
-    const OP: &str = SDPA_FORWARD;
-    f32_operands(OP, &[q, k, v])?;
-    sdpa_dims(OP, q, k, v)
+/// A sliding window keeps at least the query's own key.
+fn sdpa_window(op: &'static str, window: Option<usize>) -> Result<(), OjasError> {
+    if window == Some(0) {
+        return Err(refuse(op, "sdpa window must be at least 1"));
+    }
+    Ok(())
 }
 
-/// [`crate::Backend::causal_sdpa_backward`]: `grad_output` shaped like `q`
-/// (checked first), then as the forward.
-pub fn causal_sdpa_backward_dims(
+/// [`crate::Backend::causal_sdpa_forward`]: `q`, `k` and `v` each `F32` or
+/// `Bf16`; the output and log-sum-exp are `F32`. Query is
+/// rank 4 `[B, H, T, D]`; K and V are `[B, Hkv, T, D]` with the same batch,
+/// sequence and head dimension, and `H` a positive multiple of `Hkv`. A
+/// window, when given, is at least 1. The head-dimension limit of a device
+/// is the backend's.
+pub fn causal_sdpa_forward_dims(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    grad_output: &Tensor,
+    window: Option<usize>,
 ) -> Result<SdpaDims, OjasError> {
-    const OP: &str = SDPA_BACKWARD;
-    f32_operands(OP, &[q, k, v, grad_output])?;
+    const OP: &str = SDPA_FORWARD;
+    matmul_operands(OP, &[q, k, v])?;
+    sdpa_window(OP, window)?;
+    sdpa_dims(OP, q, k, v)
+}
+
+/// `grad_output` is shaped like `q`: the first rule of
+/// [`causal_sdpa_backward_dims`], also checked by
+/// [`crate::Backend::causal_sdpa_backward_recompute`] before its forward.
+pub(crate) fn causal_sdpa_grad_shape(q: &Tensor, grad_output: &Tensor) -> Result<(), OjasError> {
     if grad_output.shape() != q.shape() {
         return Err(refuse(
-            OP,
+            SDPA_BACKWARD,
             format!(
                 "sdpa grad shape {:?} != query {:?}",
                 grad_output.shape(),
@@ -576,6 +677,46 @@ pub fn causal_sdpa_backward_dims(
             ),
         ));
     }
+    Ok(())
+}
+
+/// [`crate::Backend::causal_sdpa_backward`]: `lse` `F32`, every other
+/// operand `F32` or `Bf16`, checked in argument order; the gradients are
+/// `F32`. `grad_output` shaped like `q` (checked first), then `output` shaped like
+/// `q` and `lse` `[B, H, T]` (`q`'s shape without its last axis), then as the
+/// forward.
+pub fn causal_sdpa_backward_dims(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    output: &Tensor,
+    lse: &Tensor,
+    grad_output: &Tensor,
+    window: Option<usize>,
+) -> Result<SdpaDims, OjasError> {
+    const OP: &str = SDPA_BACKWARD;
+    matmul_operands(OP, &[q, k, v, output])?;
+    f32_operand(OP, lse)?;
+    matmul_operand(OP, grad_output)?;
+    causal_sdpa_grad_shape(q, grad_output)?;
+    if output.shape() != q.shape() {
+        return Err(refuse(
+            OP,
+            format!(
+                "sdpa output shape {:?} != query {:?}",
+                output.shape(),
+                q.shape()
+            ),
+        ));
+    }
+    let rows = &q.shape()[..q.shape().len().saturating_sub(1)];
+    if lse.shape() != rows {
+        return Err(refuse(
+            OP,
+            format!("sdpa lse shape {:?} != {rows:?}", lse.shape()),
+        ));
+    }
+    sdpa_window(OP, window)?;
     sdpa_dims(OP, q, k, v)
 }
 
@@ -652,9 +793,289 @@ pub fn per_head_sigmoid_gate_backward_dims(
     gate_layout(OP, input, weight, bias, attn_out)
 }
 
+fn gdn_layout(op: &'static str, x: &GdnInputs<'_>) -> Result<GdnDims, OjasError> {
+    let &[batch, seq, heads, key_dim] = x.q.shape() else {
+        return Err(refuse(op, "gdn q must be rank 4 [B, T, H, Dk]"));
+    };
+    if x.k.shape() != x.q.shape() {
+        return Err(refuse(
+            op,
+            format!("gdn k {:?} != q {:?}", x.k.shape(), x.q.shape()),
+        ));
+    }
+    let &[vb, vt, vh, value_dim] = x.v.shape() else {
+        return Err(refuse(op, "gdn v must be rank 4 [B, T, H, Dv]"));
+    };
+    if [vb, vt, vh] != [batch, seq, heads] {
+        return Err(refuse(
+            op,
+            format!(
+                "gdn v {:?} does not share q's [B, T, H] {:?}",
+                x.v.shape(),
+                [batch, seq, heads]
+            ),
+        ));
+    }
+    for (name, t) in [("g", x.g), ("beta", x.beta)] {
+        if t.shape() != [batch, seq, heads] {
+            return Err(refuse(
+                op,
+                format!(
+                    "gdn {name} {:?} != [B, T, H] {:?}",
+                    t.shape(),
+                    [batch, seq, heads]
+                ),
+            ));
+        }
+    }
+    let dims = GdnDims {
+        batch,
+        seq,
+        heads,
+        key_dim,
+        value_dim,
+        checkpoints: seq.div_ceil(GDN_CHECKPOINT_TOKENS),
+    };
+    if let Some(s0) = x.initial_state {
+        if s0.shape() != dims.state_shape() {
+            return Err(refuse(
+                op,
+                format!(
+                    "gdn initial state {:?} != [B, H, Dk, Dv] {:?}",
+                    s0.shape(),
+                    dims.state_shape()
+                ),
+            ));
+        }
+    }
+    f32_product(op, &dims.checkpoint_shape())?;
+    Ok(dims)
+}
+
+fn gdn_operands<'a>(x: &GdnInputs<'a>) -> Vec<&'a Tensor> {
+    let mut ts = vec![x.q, x.k, x.v, x.g, x.beta];
+    ts.extend(x.initial_state);
+    ts
+}
+
+/// [`crate::Backend::chunked_gdn_forward`]: every operand `F32`, in the order
+/// `q, k, v, g, beta, initial_state`. Then `q` rank 4 `[B, T, H, Dk]`, `k`
+/// shaped like `q`, `v` `[B, T, H, Dv]`, `g` and `beta` `[B, T, H]`, and
+/// `initial_state` `[B, H, Dk, Dv]`. The checkpoint tensor's size fits.
+/// The key and value dims a device's kernels take are the backend's.
+pub fn chunked_gdn_forward_dims(inputs: GdnInputs<'_>) -> Result<GdnDims, OjasError> {
+    const OP: &str = GDN_FORWARD;
+    f32_operands(OP, &gdn_operands(&inputs))?;
+    gdn_layout(OP, &inputs)
+}
+
+/// [`crate::Backend::chunked_gdn_backward`]: the forward's operands, then
+/// `checkpoints`, `grad_output` and `grad_final_state`, all `F32`. Then the
+/// forward's layout, `checkpoints` `[B, H, ceil(T / 64), Dk, Dv]`,
+/// `grad_output` shaped like `v`, and `grad_final_state` `[B, H, Dk, Dv]`.
+pub fn chunked_gdn_backward_dims(
+    inputs: GdnInputs<'_>,
+    checkpoints: &Tensor,
+    grad_output: &Tensor,
+    grad_final_state: Option<&Tensor>,
+) -> Result<GdnDims, OjasError> {
+    const OP: &str = GDN_BACKWARD;
+    let mut ts = gdn_operands(&inputs);
+    ts.push(checkpoints);
+    ts.push(grad_output);
+    ts.extend(grad_final_state);
+    f32_operands(OP, &ts)?;
+    let dims = gdn_layout(OP, &inputs)?;
+    if checkpoints.shape() != dims.checkpoint_shape() {
+        return Err(refuse(
+            OP,
+            format!(
+                "gdn checkpoints {:?} != [B, H, NC, Dk, Dv] {:?}",
+                checkpoints.shape(),
+                dims.checkpoint_shape()
+            ),
+        ));
+    }
+    same(OP, inputs.v.shape(), grad_output.shape())?;
+    if let Some(gf) = grad_final_state {
+        if gf.shape() != dims.state_shape() {
+            return Err(refuse(
+                OP,
+                format!(
+                    "gdn final state grad {:?} != [B, H, Dk, Dv] {:?}",
+                    gf.shape(),
+                    dims.state_shape()
+                ),
+            ));
+        }
+    }
+    Ok(dims)
+}
+
 /// One element of any rank: every axis is 1 (zero axes were refused).
 fn is_scalar(t: &Tensor) -> bool {
     t.shape().iter().all(|&d| d == 1)
+}
+
+fn conv1d_layout(
+    op: &'static str,
+    input: &Tensor,
+    weight: &Tensor,
+) -> Result<Conv1dDims, OjasError> {
+    let &[batch, time, channels] = input.shape() else {
+        return Err(refuse(
+            op,
+            format!(
+                "conv1d input rank {} != 3 [batch, time, channels]",
+                input.shape().len()
+            ),
+        ));
+    };
+    let &[w_channels, width] = weight.shape() else {
+        return Err(refuse(
+            op,
+            format!(
+                "conv1d weight rank {} != 2 [channels, width]",
+                weight.shape().len()
+            ),
+        ));
+    };
+    if w_channels != channels {
+        return Err(refuse(
+            op,
+            format!("conv1d weight channels {w_channels} != input channels {channels}"),
+        ));
+    }
+    Ok(Conv1dDims {
+        batch,
+        time,
+        channels,
+        width,
+    })
+}
+
+/// [`crate::Backend::causal_conv1d_silu_forward`]: `input` `[batch, time,
+/// channels]` and `weight` `[channels, width]`, both `F32`. The output is
+/// shaped like `input`. Which widths a kernel is compiled for is the
+/// device's to check.
+pub fn causal_conv1d_silu_forward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+) -> Result<Conv1dDims, OjasError> {
+    const OP: &str = CONV1D_FORWARD;
+    f32_operands(OP, &[input, weight])?;
+    conv1d_layout(OP, input, weight)
+}
+
+/// [`crate::Backend::causal_conv1d_silu_backward`]: the forward's operands,
+/// then `grad_output` shaped like `input`.
+pub fn causal_conv1d_silu_backward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    grad_output: &Tensor,
+) -> Result<Conv1dDims, OjasError> {
+    const OP: &str = CONV1D_BACKWARD;
+    f32_operands(OP, &[input, weight, grad_output])?;
+    same(OP, input.shape(), grad_output.shape())?;
+    conv1d_layout(OP, input, weight)
+}
+
+/// [`crate::Backend::gated_rms_norm_forward`]: `input` and `gate` of one
+/// shape, rank 1 or more, `weight` `[dim]` for the last axis `dim`, all
+/// `F32`; `eps` finite. Rows are every leading axis (a head is a row).
+pub fn gated_rms_norm_forward_dims(
+    input: &Tensor,
+    gate: &Tensor,
+    weight: &Tensor,
+    eps: f32,
+) -> Result<RmsDims, OjasError> {
+    const OP: &str = GATED_RMS_FORWARD;
+    f32_operands(OP, &[input, gate, weight])?;
+    same(OP, input.shape(), gate.shape())?;
+    rms_layout(OP, input, weight, eps)
+}
+
+/// [`crate::Backend::gated_rms_norm_backward`]: the forward's operands,
+/// then `grad_output` shaped like `input`.
+pub fn gated_rms_norm_backward_dims(
+    input: &Tensor,
+    gate: &Tensor,
+    weight: &Tensor,
+    grad_output: &Tensor,
+    eps: f32,
+) -> Result<RmsDims, OjasError> {
+    const OP: &str = GATED_RMS_BACKWARD;
+    f32_operands(OP, &[input, gate, weight, grad_output])?;
+    same(OP, input.shape(), gate.shape())?;
+    same(OP, input.shape(), grad_output.shape())?;
+    rms_layout(OP, input, weight, eps)
+}
+
+fn rope_partial_layout(
+    op: &'static str,
+    x: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+) -> Result<PartialRopeDims, OjasError> {
+    f32_operands(op, &[x, cos, sin])?;
+    let (c, s) = (cos.shape(), sin.shape());
+    if c != s {
+        return Err(refuse(op, format!("cos shape {c:?} != sin shape {s:?}")));
+    }
+    let &[batch, time, heads, dim] = x.shape() else {
+        return Err(refuse(
+            op,
+            format!(
+                "partial rope input rank {} != 4 [batch, time, heads, head_dim]",
+                x.shape().len()
+            ),
+        ));
+    };
+    let &[c_time, rotary] = c else {
+        return Err(refuse(
+            op,
+            format!("cos/sin {c:?} are not [time, rotary_dim]"),
+        ));
+    };
+    if c_time != time {
+        return Err(refuse(
+            op,
+            format!("cos/sin hold {c_time} positions for {time}"),
+        ));
+    }
+    if !rotary.is_multiple_of(2) || rotary > dim {
+        return Err(refuse(
+            op,
+            format!("rotary_dim {rotary} must be even and at most head_dim {dim}"),
+        ));
+    }
+    Ok(PartialRopeDims {
+        rows: f32_product(op, &[batch, time, heads])?,
+        time,
+        heads,
+        dim,
+        rotary,
+    })
+}
+
+/// [`crate::Backend::rope_partial_forward`]: `x` `[batch, time, heads,
+/// head_dim]`, `cos` and `sin` `[time, rotary_dim]` with `rotary_dim` even
+/// and at most `head_dim`, all `F32`.
+pub fn rope_partial_forward_dims(
+    x: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+) -> Result<PartialRopeDims, OjasError> {
+    rope_partial_layout(ROPE_PARTIAL_FORWARD, x, cos, sin)
+}
+
+/// [`crate::Backend::rope_partial_backward`]: `grad_output` in place of `x`.
+pub fn rope_partial_backward_dims(
+    grad_output: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+) -> Result<PartialRopeDims, OjasError> {
+    rope_partial_layout(ROPE_PARTIAL_BACKWARD, grad_output, cos, sin)
 }
 
 /// [`crate::Backend::value_residual_blend_forward`]: all `F32`, `lambda` one
@@ -726,6 +1147,82 @@ pub fn residual_add_backward_dims(
     grad_output: &Tensor,
 ) -> Result<usize, OjasError> {
     same_shape(ADD_BACKWARD, &[x, y, grad_output])
+}
+
+/// [`crate::Backend::accumulate_grad`]: `grad` shaped like `acc`, both `F32`
+/// (the rules of [`residual_add_forward_dims`], reported as
+/// `accumulate_grad`). Returns the element count.
+pub fn accumulate_grad_dims(acc: &Tensor, grad: &Tensor) -> Result<usize, OjasError> {
+    same_shape(ACCUMULATE_GRAD, &[acc, grad])
+}
+
+/// Largest rank [`crate::Backend::permute`] accepts.
+pub const MAX_PERMUTE_RANK: usize = 8;
+
+/// [`crate::Backend::permute`]: an `F32` `input` with no zero axis, and
+/// `dims` naming each of its axes exactly once ([`permute_output_shape`]).
+/// Returns the output shape. Rank 0 with `dims` `[]` is accepted: it is one
+/// element. A zero axis is `"empty tensor"`, as for every other op (D17 in
+/// `docs/shape-contract.md`).
+pub fn permute_dims(input: &Tensor, dims: &[usize]) -> Result<Vec<usize>, OjasError> {
+    f32_operand(PERMUTE, input)?;
+    permute_output_shape(PERMUTE, input.shape(), dims)
+}
+
+/// Output shape of permuting `shape` by `dims`, after checking that `dims`
+/// names every axis of `shape` exactly once. Reads shapes only, so a caller
+/// that holds no tensor (the tape, before it records) can check axes with
+/// it; a backend validates with [`permute_dims`].
+///
+/// Output axis `i` is input axis `dims[i]`, as in `torch.permute`. A rank
+/// above [`MAX_PERMUTE_RANK`], a length mismatch, an axis out of range, or a
+/// repeated axis is [`OjasError::Shape`]; nothing is clamped or reordered.
+pub fn permute_output_shape(
+    op: &'static str,
+    shape: &[usize],
+    dims: &[usize],
+) -> Result<Vec<usize>, OjasError> {
+    if shape.len() > MAX_PERMUTE_RANK {
+        return Err(refuse(
+            op,
+            format!("rank {} exceeds {MAX_PERMUTE_RANK}", shape.len()),
+        ));
+    }
+    if dims.len() != shape.len() {
+        return Err(refuse(
+            op,
+            format!(
+                "{} permutation axes for a rank-{} tensor",
+                dims.len(),
+                shape.len()
+            ),
+        ));
+    }
+    let mut seen = [false; MAX_PERMUTE_RANK];
+    for &axis in dims {
+        if axis >= shape.len() {
+            return Err(refuse(
+                op,
+                format!("axis {axis} out of range for rank {}", shape.len()),
+            ));
+        }
+        if seen[axis] {
+            return Err(refuse(op, format!("axis {axis} repeated in {dims:?}")));
+        }
+        seen[axis] = true;
+    }
+    Ok(dims.iter().map(|&axis| shape[axis]).collect())
+}
+
+/// The permutation that undoes `dims`: permuting by `dims` and then by the
+/// result is the identity. The gradient of a permute is the upstream gradient
+/// permuted by this. `dims` must already have passed [`permute_output_shape`].
+pub fn inverse_permutation(dims: &[usize]) -> Vec<usize> {
+    let mut inverse = vec![0; dims.len()];
+    for (out_axis, &in_axis) in dims.iter().enumerate() {
+        inverse[in_axis] = out_axis;
+    }
+    inverse
 }
 
 fn ce_dims(op: &'static str, logits: &Tensor, targets: &Tensor) -> Result<CeDims, OjasError> {
@@ -1502,7 +1999,7 @@ mod tests {
     fn causal_sdpa_forward_rules() {
         let op = "causal_sdpa_forward";
         let q = f(&[2, 3, 5, 4]);
-        let d = causal_sdpa_forward_dims(&q, &q, &q).unwrap();
+        let d = causal_sdpa_forward_dims(&q, &q, &q, None).unwrap();
         assert_eq!(
             d,
             SdpaDims {
@@ -1515,67 +2012,105 @@ mod tests {
         );
         for rank in [&[][..], &[4], &[5, 4], &[3, 5, 4], &[1, 2, 3, 5, 4]] {
             let t = f(rank);
-            shape_err(causal_sdpa_forward_dims(&t, &t, &t), op, "sdpa query rank");
+            shape_err(
+                causal_sdpa_forward_dims(&t, &t, &t, None),
+                op,
+                "sdpa query rank",
+            );
         }
         // A mismatch on each axis, in k and in v.
         for bad in [[1, 3, 5, 4], [2, 1, 5, 4], [2, 3, 6, 4], [2, 3, 5, 2]] {
             let t = f(&bad);
-            shape_err(causal_sdpa_forward_dims(&q, &t, &q), op, "differ");
-            shape_err(causal_sdpa_forward_dims(&q, &q, &t), op, "differ");
+            shape_err(causal_sdpa_forward_dims(&q, &t, &q, None), op, "differ");
+            shape_err(causal_sdpa_forward_dims(&q, &q, &t, None), op, "differ");
         }
         // Legal grouped-query: both K and V carry the smaller head count.
         let kv = f(&[2, 1, 5, 4]);
-        let gqa = causal_sdpa_forward_dims(&q, &kv, &kv).unwrap();
+        let gqa = causal_sdpa_forward_dims(&q, &kv, &kv, None).unwrap();
         assert_eq!(gqa.heads, 3);
         assert_eq!(gqa.kv_heads, 1);
         // Not a divisor, and more KV heads than query heads. A zero KV-head
         // count is an empty tensor, refused before the grouping check.
         for bad in [[2, 2, 5, 4], [2, 6, 5, 4]] {
             let t = f(&bad);
-            shape_err(causal_sdpa_forward_dims(&q, &t, &t), op, "differ");
+            shape_err(causal_sdpa_forward_dims(&q, &t, &t, None), op, "differ");
         }
         dtype_err(
-            causal_sdpa_forward_dims(&q, &q, &u(&[2, 3, 5, 4])),
+            causal_sdpa_forward_dims(&q, &q, &u(&[2, 3, 5, 4]), None),
             op,
             DType::F32,
             DType::U32,
         );
         // A wide head dimension is not a shape error; device limits are the backend's.
         let wide = f(&[1, 1, 1, 4096]);
-        assert!(causal_sdpa_forward_dims(&wide, &wide, &wide).is_ok());
+        assert!(causal_sdpa_forward_dims(&wide, &wide, &wide, None).is_ok());
+    }
+
+    #[test]
+    fn causal_sdpa_window_rules() {
+        let q = f(&[2, 3, 5, 4]);
+        for w in [Some(1), Some(4), Some(5), Some(usize::MAX), None] {
+            assert!(causal_sdpa_forward_dims(&q, &q, &q, w).is_ok(), "{w:?}");
+        }
+        shape_err(
+            causal_sdpa_forward_dims(&q, &q, &q, Some(0)),
+            "causal_sdpa_forward",
+            "sdpa window must be at least 1",
+        );
+        let lse = f(&[2, 3, 5]);
+        shape_err(
+            causal_sdpa_backward_dims(&q, &q, &q, &q, &lse, &q, Some(0)),
+            "causal_sdpa_backward",
+            "sdpa window must be at least 1",
+        );
     }
 
     #[test]
     fn causal_sdpa_backward_rules() {
         let op = "causal_sdpa_backward";
         let q = f(&[2, 3, 5, 4]);
-        assert!(causal_sdpa_backward_dims(&q, &q, &q, &f(&[2, 3, 5, 4])).is_ok());
+        let lse = f(&[2, 3, 5]);
+        let call = |q: &Tensor, k: &Tensor, v: &Tensor, o: &Tensor, l: &Tensor, g: &Tensor| {
+            causal_sdpa_backward_dims(q, k, v, o, l, g, None)
+        };
+        assert!(call(&q, &q, &q, &q, &lse, &f(&[2, 3, 5, 4])).is_ok());
         shape_err(
-            causal_sdpa_backward_dims(&q, &q, &q, &f(&[2, 3, 5, 2])),
+            call(&q, &q, &q, &q, &lse, &f(&[2, 3, 5, 2])),
             op,
             "sdpa grad shape",
         );
-        // The gradient is checked before the rank.
+        // The gradient is checked before the rank, the output and the lse.
         let r3 = f(&[3, 5, 4]);
         shape_err(
-            causal_sdpa_backward_dims(&r3, &r3, &r3, &f(&[4])),
+            call(&r3, &r3, &r3, &f(&[1]), &f(&[1]), &f(&[4])),
             op,
             "sdpa grad shape",
         );
         shape_err(
-            causal_sdpa_backward_dims(&r3, &r3, &r3, &r3),
+            call(&r3, &r3, &r3, &r3, &f(&[3, 5]), &r3),
             op,
             "sdpa query rank",
         );
+        // The output is the query's shape, the lse drops its last axis.
         shape_err(
-            causal_sdpa_backward_dims(&q, &f(&[2, 3, 6, 4]), &q, &q),
+            call(&q, &q, &q, &f(&[2, 3, 5, 2]), &lse, &q),
             op,
-            "differ",
+            "sdpa output shape",
         );
+        for bad in [&[2, 3, 5, 1][..], &[2, 3, 4], &[2, 3], &[3, 5]] {
+            shape_err(call(&q, &q, &q, &q, &f(bad), &q), op, "sdpa lse shape");
+        }
+        dtype_err(
+            call(&q, &q, &q, &q, &u(&[2, 3, 5]), &q),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        shape_err(call(&q, &f(&[2, 3, 6, 4]), &q, &q, &lse, &q), op, "differ");
         let kv = f(&[2, 1, 5, 4]);
-        assert!(causal_sdpa_backward_dims(&q, &kv, &kv, &q).is_ok());
+        assert!(call(&q, &kv, &kv, &q, &lse, &q).is_ok());
         shape_err(
-            causal_sdpa_backward_dims(&q, &f(&[2, 2, 5, 4]), &f(&[2, 2, 5, 4]), &q),
+            call(&q, &f(&[2, 2, 5, 4]), &f(&[2, 2, 5, 4]), &q, &lse, &q),
             op,
             "differ",
         );
@@ -1921,11 +2456,11 @@ mod tests {
             ),
             (
                 "causal_sdpa_forward",
-                unit(causal_sdpa_forward_dims(x, x, x)),
+                unit(causal_sdpa_forward_dims(x, x, x, None)),
             ),
             (
                 "causal_sdpa_backward",
-                unit(causal_sdpa_backward_dims(x, x, x, x)),
+                unit(causal_sdpa_backward_dims(x, x, x, x, x, x, None)),
             ),
             (
                 "per_head_sigmoid_gate_forward",
@@ -1969,6 +2504,14 @@ mod tests {
             ),
             ("adamw_step", unit(adamw_step_dims(x, x, x, x))),
             ("muon_ns5_step", unit(muon_ns5_step_dims(x, x, x))),
+            (
+                "chunked_gdn_forward",
+                unit(chunked_gdn_forward_dims(gdn_all(x))),
+            ),
+            (
+                "chunked_gdn_backward",
+                unit(chunked_gdn_backward_dims(gdn_all(x), x, x, Some(x))),
+            ),
         ];
         for (want, got) in cases {
             dtype_err(got, want, DType::F32, DType::U32);
@@ -2050,13 +2593,24 @@ mod tests {
             ),
             (
                 "causal_sdpa_forward",
-                |t| unit(causal_sdpa_forward_dims(&t[0], &t[1], &t[2])),
+                |t| unit(causal_sdpa_forward_dims(&t[0], &t[1], &t[2], None)),
                 vec![f(&[1, 2, 3, 4]); 3],
             ),
             (
                 "causal_sdpa_backward",
-                |t| unit(causal_sdpa_backward_dims(&t[0], &t[1], &t[2], &t[3])),
-                vec![f(&[1, 2, 3, 4]); 4],
+                |t| {
+                    unit(causal_sdpa_backward_dims(
+                        &t[0], &t[1], &t[2], &t[3], &t[4], &t[5], None,
+                    ))
+                },
+                vec![
+                    f(&[1, 2, 3, 4]),
+                    f(&[1, 2, 3, 4]),
+                    f(&[1, 2, 3, 4]),
+                    f(&[1, 2, 3, 4]),
+                    f(&[1, 2, 3]),
+                    f(&[1, 2, 3, 4]),
+                ],
             ),
             (
                 "per_head_sigmoid_gate_forward",
@@ -2151,6 +2705,23 @@ mod tests {
                 |t| unit(muon_ns5_step_dims(&t[0], &t[1], &t[2])),
                 vec![f(&[3, 4]); 3],
             ),
+            (
+                "chunked_gdn_forward",
+                |t| unit(chunked_gdn_forward_dims(gdn_slots(t))),
+                gdn_valid(false),
+            ),
+            (
+                "chunked_gdn_backward",
+                |t| {
+                    unit(chunked_gdn_backward_dims(
+                        gdn_slots(t),
+                        &t[6],
+                        &t[7],
+                        Some(&t[8]),
+                    ))
+                },
+                gdn_valid(true),
+            ),
         ];
         let mut positions = 0;
         for (op, call, valid) in &cases {
@@ -2170,8 +2741,129 @@ mod tests {
                 positions += 1;
             }
         }
-        assert_eq!(cases.len(), 27);
-        assert_eq!(positions, 81);
+        assert_eq!(cases.len(), 29);
+        assert_eq!(positions, 98);
+    }
+
+    /// Every slot of a GDN call is the same tensor.
+    fn gdn_all(x: &Tensor) -> GdnInputs<'_> {
+        GdnInputs {
+            q: x,
+            k: x,
+            v: x,
+            g: x,
+            beta: x,
+            initial_state: Some(x),
+        }
+    }
+
+    /// `q, k, v, g, beta, initial_state` from the first six slots.
+    fn gdn_slots(t: &[Tensor]) -> GdnInputs<'_> {
+        GdnInputs {
+            q: &t[0],
+            k: &t[1],
+            v: &t[2],
+            g: &t[3],
+            beta: &t[4],
+            initial_state: Some(&t[5]),
+        }
+    }
+
+    /// B 1, T 65 (two checkpoints), H 2, Dk 4, Dv 3, with an initial state;
+    /// the backward adds checkpoints, `grad_output` and `grad_final_state`.
+    fn gdn_valid(backward: bool) -> Vec<Tensor> {
+        let mut ts = vec![
+            f(&[1, 65, 2, 4]),
+            f(&[1, 65, 2, 4]),
+            f(&[1, 65, 2, 3]),
+            f(&[1, 65, 2]),
+            f(&[1, 65, 2]),
+            f(&[1, 2, 4, 3]),
+        ];
+        if backward {
+            ts.extend([f(&[1, 2, 2, 4, 3]), f(&[1, 65, 2, 3]), f(&[1, 2, 4, 3])]);
+        }
+        ts
+    }
+
+    #[test]
+    fn gdn_dims_and_checkpoint_count() {
+        let t = gdn_valid(true);
+        let dims = chunked_gdn_forward_dims(gdn_slots(&t)).unwrap();
+        assert_eq!(
+            dims,
+            GdnDims {
+                batch: 1,
+                seq: 65,
+                heads: 2,
+                key_dim: 4,
+                value_dim: 3,
+                checkpoints: 2,
+            }
+        );
+        assert_eq!(dims.rows(), 130);
+        assert_eq!(dims.checkpoint_shape(), [1, 2, 2, 4, 3]);
+        assert_eq!(
+            chunked_gdn_backward_dims(gdn_slots(&t), &t[6], &t[7], Some(&t[8])).unwrap(),
+            dims
+        );
+        // No initial state and no final-state gradient.
+        let bare = GdnInputs {
+            initial_state: None,
+            ..gdn_slots(&t)
+        };
+        assert_eq!(chunked_gdn_forward_dims(bare).unwrap(), dims);
+        assert_eq!(
+            chunked_gdn_backward_dims(bare, &t[6], &t[7], None).unwrap(),
+            dims
+        );
+        for (seq, nc) in [(1, 1), (63, 1), (64, 1), (65, 2), (128, 2), (129, 3)] {
+            let (q, v, gb) = (f(&[1, seq, 1, 2]), f(&[1, seq, 1, 2]), f(&[1, seq, 1]));
+            let x = GdnInputs {
+                q: &q,
+                k: &q,
+                v: &v,
+                g: &gb,
+                beta: &gb,
+                initial_state: None,
+            };
+            assert_eq!(
+                chunked_gdn_forward_dims(x).unwrap().checkpoints,
+                nc,
+                "T {seq}"
+            );
+        }
+    }
+
+    #[test]
+    fn gdn_layout_refusals() {
+        let op = "chunked_gdn_forward";
+        let t = gdn_valid(false);
+        let with = |slot: usize, bad: Tensor| {
+            let mut ts = t.clone();
+            ts[slot] = bad;
+            chunked_gdn_forward_dims(gdn_slots(&ts)).map(|_| ())
+        };
+        shape_err(with(0, f(&[65, 2, 4])), op, "q must be rank 4");
+        shape_err(with(1, f(&[1, 65, 2, 5])), op, "gdn k");
+        shape_err(with(2, f(&[65, 2, 3])), op, "v must be rank 4");
+        shape_err(with(2, f(&[1, 64, 2, 3])), op, "does not share");
+        shape_err(with(3, f(&[1, 65, 1])), op, "gdn g");
+        shape_err(with(4, f(&[1, 65, 2, 1])), op, "gdn beta");
+        shape_err(with(5, f(&[1, 2, 3, 4])), op, "initial state");
+
+        let op = "chunked_gdn_backward";
+        let t = gdn_valid(true);
+        let back = |slot: usize, bad: Tensor| {
+            let mut ts = t.clone();
+            ts[slot] = bad;
+            chunked_gdn_backward_dims(gdn_slots(&ts), &ts[6], &ts[7], Some(&ts[8])).map(|_| ())
+        };
+        shape_err(back(6, f(&[1, 2, 1, 4, 3])), op, "checkpoints");
+        shape_err(back(7, f(&[1, 65, 2, 4])), op, "does not match");
+        shape_err(back(8, f(&[1, 2, 3, 4])), op, "final state grad");
+        // The forward's layout is checked before the backward's own operands.
+        shape_err(back(0, f(&[65, 2, 4])), op, "q must be rank 4");
     }
 
     /// The validators read metadata only: a device tensor (whose bytes are
@@ -2329,5 +3021,146 @@ mod tests {
             kv_cache_write_dims(&cache, &ids, 0),
             Err(OjasError::Dtype { .. })
         ));
+    }
+
+    #[test]
+    fn accumulate_grad_has_residual_add_rules_under_its_own_name() {
+        const OP: &str = "accumulate_grad";
+        assert_eq!(accumulate_grad_dims(&f(&[3, 5]), &f(&[3, 5])).unwrap(), 15);
+        assert_eq!(accumulate_grad_dims(&f(&[]), &f(&[])).unwrap(), 1);
+        shape_err(
+            accumulate_grad_dims(&f(&[3, 5]), &f(&[5, 3])),
+            OP,
+            "does not match",
+        );
+        shape_err(
+            accumulate_grad_dims(&f(&[3, 5]), &f(&[15])),
+            OP,
+            "does not match",
+        );
+        // Each operand in argument order: acc's dtype outranks grad's.
+        dtype_err(
+            accumulate_grad_dims(&u(&[3]), &of(DType::Bf16, &[3])),
+            OP,
+            DType::F32,
+            DType::U32,
+        );
+        dtype_err(
+            accumulate_grad_dims(&f(&[3]), &u(&[3])),
+            OP,
+            DType::F32,
+            DType::U32,
+        );
+        shape_err(
+            accumulate_grad_dims(&f(&[0, 3]), &f(&[0, 3])),
+            OP,
+            "empty tensor",
+        );
+        shape_err(
+            accumulate_grad_dims(&f(&[2, 3]), &f(&[2, 0])),
+            OP,
+            "empty tensor",
+        );
+        let huge = broadcast(DType::F32, &[usize::MAX, 2]);
+        range_err(accumulate_grad_dims(&huge, &huge), OP, "overflows");
+        // The same verdict as residual_add_forward_dims, renamed and nothing else.
+        let cases = [
+            (f(&[2, 3]), f(&[3, 2])),
+            (u(&[2]), f(&[2])),
+            (f(&[0]), f(&[0])),
+            (huge.clone(), huge.clone()),
+            (f(&[4]), f(&[4])),
+        ];
+        for (a, b) in &cases {
+            let want = format!("{:?}", residual_add_forward_dims(a, b))
+                .replace("residual_add_forward", OP);
+            assert_eq!(format!("{:?}", accumulate_grad_dims(a, b)), want);
+        }
+    }
+
+    #[test]
+    fn permute_dims_checks_the_operand_then_the_axes() {
+        const OP: &str = "permute";
+        assert_eq!(
+            permute_dims(&f(&[2, 5, 3, 4]), &[0, 2, 1, 3]).unwrap(),
+            vec![2, 3, 5, 4]
+        );
+        // Rank 0 is one element and permutes by `[]`.
+        assert_eq!(permute_dims(&f(&[]), &[]).unwrap(), Vec::<usize>::new());
+        // D17: a zero axis is refused as every other op refuses one, before
+        // the axes are looked at.
+        shape_err(permute_dims(&f(&[2, 0, 3]), &[2, 0, 1]), OP, "empty tensor");
+        shape_err(permute_dims(&f(&[0]), &[1]), OP, "empty tensor");
+        // The dtype outranks both the zero axis and bad axes.
+        dtype_err(
+            permute_dims(&u(&[0, 3]), &[0, 0]),
+            OP,
+            DType::F32,
+            DType::U32,
+        );
+        range_err(
+            permute_dims(&broadcast(DType::F32, &[usize::MAX, 2]), &[1, 0]),
+            OP,
+            "overflows",
+        );
+        shape_err(permute_dims(&f(&[2, 3]), &[1, 1]), OP, "repeated");
+        shape_err(
+            permute_dims(&f(&[1; 9]), &[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+            OP,
+            "exceeds",
+        );
+        // Metadata only: a strided view is the backend's to refuse.
+        let strided = f(&[3, 2]).view(&[2, 3], &[1, 2], 0).unwrap();
+        assert_eq!(permute_dims(&strided, &[1, 0]).unwrap(), vec![3, 2]);
+    }
+
+    #[test]
+    fn permute_shape_accepts_exactly_the_permutations() {
+        // [B, T, H, D] -> [B, H, T, D], the RoPE-to-attention move.
+        assert_eq!(
+            permute_output_shape("t", &[2, 5, 3, 4], &[0, 2, 1, 3]).unwrap(),
+            vec![2, 3, 5, 4]
+        );
+        assert_eq!(
+            permute_output_shape("t", &[], &[]).unwrap(),
+            Vec::<usize>::new()
+        );
+        assert_eq!(permute_output_shape("t", &[7], &[0]).unwrap(), vec![7]);
+        let refused: [(&[usize], &[usize]); 5] = [
+            (&[2, 3], &[0]),                         // too few axes
+            (&[2, 3], &[0, 1, 2]),                   // too many axes
+            (&[2, 3], &[0, 2]),                      // axis out of range
+            (&[2, 3], &[1, 1]),                      // repeated axis
+            (&[1; 9], &[0, 1, 2, 3, 4, 5, 6, 7, 8]), // rank above the cap
+        ];
+        for (shape, dims) in refused {
+            match permute_output_shape("t", shape, dims) {
+                Err(OjasError::Shape { op, .. }) => assert_eq!(op, "t"),
+                other => panic!("{shape:?} by {dims:?}: expected Shape, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_permutation_round_trips_every_rank_four_order() {
+        let shape = [2usize, 3, 5, 7];
+        let mut count = 0;
+        for a in 0..4 {
+            for b in 0..4 {
+                for c in 0..4 {
+                    for d in 0..4 {
+                        let dims = [a, b, c, d];
+                        let Ok(out) = permute_output_shape("t", &shape, &dims) else {
+                            continue;
+                        };
+                        count += 1;
+                        let inverse = inverse_permutation(&dims);
+                        let back = permute_output_shape("t", &out, &inverse).unwrap();
+                        assert_eq!(back, shape, "{dims:?} then {inverse:?}");
+                    }
+                }
+            }
+        }
+        assert_eq!(count, 24);
     }
 }

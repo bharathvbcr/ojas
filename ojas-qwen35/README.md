@@ -14,9 +14,13 @@ A Qwen3.5 text-tower **training-step provider** for ojas, run on canonical
   - hidden rows exposed for a loss outside the crate;
   - the gradient bank, its global norm, and AdamW.
 
-  None of these ops is added to `ojas_core::Backend`. Promoting GDN or
-  head-dim-256 attention into the trait is a later decision, and it has to
-  cover CPU, Metal and wgpu.
+  This crate's step does not go through `ojas_core::Backend`. The gated
+  delta rule alone is now also a trait op (`Backend::chunked_gdn_forward` /
+  `chunked_gdn_backward`), on the CPU (any dims) and Metal (tessl's
+  `gdn_train`, key dim 128). wgpu, CUDA and HIP refuse it with
+  `Unsupported` through the trait default, as they do `permute`.
+  Head-dim-256 attention, gated RMSNorm, causal conv1d and the gates are
+  not trait ops.
 
 The crate exists so that "trained with ojas" can rest on ojas code. Lappi's
 trainer (`crates/qd-train-metal`) depends on it by path and adapts this

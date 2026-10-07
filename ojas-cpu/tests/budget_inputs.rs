@@ -115,15 +115,17 @@ fn cases(inputs: &Budget) -> Vec<Case> {
         // The per-row kernel's one task holds `time * dim + 2 * time` = 24
         // floats beside the output, which it writes in place: no per-task
         // result and no copy into the tensor (until 2026-10-02 the peak was
-        // the output twice, its charge and the tensor copied from it).
+        // the output twice, its charge and the tensor copied from it). The
+        // forward's second output, the 8-float row log-sum-exp, is charged
+        // with the first; the case keeps only the output.
         Case {
             name: "causal_sdpa_forward",
             input_bytes: 96 * F32,
             output_bytes: 32 * F32,
-            peak_bytes: (32 + 24) * F32,
+            peak_bytes: (32 + 8 + 24) * F32,
             run: {
                 let q = qkv.clone();
-                Box::new(move |cpu| cpu.causal_sdpa_forward(&q, &q, &q))
+                Box::new(move |cpu| cpu.causal_sdpa_forward(&q, &q, &q, None).map(|(y, _)| y))
             },
         },
         // `[4, 8] · [3, 8]ᵀ` is 96 multiply-adds, under the Fast whole-call
@@ -244,18 +246,23 @@ fn an_invalid_later_operand_is_reported_before_any_charge() {
 
 /// Causal SDPA backward returns three tensors, so it is not a [`Case`]. Its
 /// per-row kernel writes the three gradients into their output tensors (3 ×
-/// 32 floats) and holds `3 * time` = 12 floats of row scratch beside them:
-/// that is the exact peak. Until 2026-10-02 every head's three gradients
-/// were held as parts, joined into three vectors, then copied into the
-/// tensors, so it needed about twice the outputs and this bound fails.
+/// 32 floats) and holds `2 * time` = 8 floats of row scratch beside them
+/// (probabilities and their gradients; the forward's lse replaces the
+/// score row): that is the exact peak. Until 2026-10-02 every head's three
+/// gradients were held as parts, joined into three vectors, then copied
+/// into the tensors, so it needed about twice the outputs and this bound
+/// fails.
 #[test]
 fn sdpa_backward_charges_its_three_gradients_and_its_row_scratch_only() {
     let inputs = Budget::new(1 << 20);
     let qkv = f32t(&inputs, 32, &[1, 2, 4, 4]);
     let gy = f32t(&inputs, 32, &[1, 2, 4, 4]);
+    let (out, lse) = CpuBackend::new(inputs.clone())
+        .causal_sdpa_forward(&qkv, &qkv, &qkv, None)
+        .unwrap();
     let outputs = 3 * 32 * F32;
-    exact_peak("causal_sdpa_backward", outputs + 12 * F32, outputs, |cpu| {
-        cpu.causal_sdpa_backward(&qkv, &qkv, &qkv, &gy)
+    exact_peak("causal_sdpa_backward", outputs + 8 * F32, outputs, |cpu| {
+        cpu.causal_sdpa_backward(&qkv, &qkv, &qkv, &out, &lse, &gy, None)
     });
 }
 

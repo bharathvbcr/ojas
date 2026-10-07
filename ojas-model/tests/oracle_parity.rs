@@ -1,11 +1,11 @@
 //! The ojas-oracle torch fixtures (framework-design.md §9 item 13) against
 //! this crate on `CpuBackend` (Exact): forward loss and logits, gradients
-//! at the init and at step 5, the 5-step f32-NS5 trace, and the §10 40-step
-//! curve. The runners in `ojas_oracle::parity` own the fixtures and the
+//! at the init and at step 5, the 5-step trace and the §10 40-step curve,
+//! each against both the f32-NS5 trace and stock nanolab's bf16-NS5 one. The runners in `ojas_oracle::parity` own the fixtures and the
 //! tolerances; this file only adapts the model to `ParityModel`.
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, Budget, Ns5Precision, Numerics, OjasError, Tensor};
 use ojas_cpu::{
     CosineSchedule, CpuBackend, LrSchedule, WsdSchedule, COSINE_FLOOR_FRAC, MUON_MOMENTUM,
     MUON_WEIGHT_DECAY,
@@ -13,8 +13,8 @@ use ojas_cpu::{
 use ojas_data::TokenBin;
 use ojas_io::SafeTensors;
 use ojas_model::{
-    bind, forward_logits, forward_loss, load_model, param_table, Eval, Init, ModelSpec, Rope,
-    StepReport, TrainConfig, Trainer, DEFAULT_CE_CHUNK,
+    bind, forward_logits, forward_loss, load_model, param_table, ActivationCheckpoint::Off, Eval,
+    Init, ModelSpec, Rope, StepReport, TrainConfig, Trainer, DEFAULT_CE_CHUNK,
 };
 use ojas_oracle::golden::{
     tiny_init, tiny_trace, HostTensor, Ns5, TensorSet, TokenBatch, TrainSetup, TINY_DIR,
@@ -89,6 +89,10 @@ fn train_config(setup: &TrainSetup) -> Result<TrainConfig, OjasError> {
     );
     cfg.matrix_lr = setup.matrix_lr;
     cfg.adam_lr = setup.lr;
+    cfg.muon_ns5 = match setup.ns5 {
+        Ns5::F32 => Ns5Precision::F32,
+        Ns5::Bf16 => Ns5Precision::Bf16,
+    };
     cfg.grad_clip = setup.grad_clip as f32;
     if f64::from(cfg.grad_clip) != setup.grad_clip {
         return Err(refuse(format!(
@@ -120,7 +124,17 @@ impl ParityModel for Cpu {
         let (x, y) = ids(batch, &budget)?;
         let mut eval = Eval::new(cpu);
         let p = bind(&mut eval, &spec, &host)?;
-        let loss = forward_loss(&mut eval, &spec, &p, &x, &y, &rope, None, DEFAULT_CE_CHUNK)?;
+        let loss = forward_loss(
+            &mut eval,
+            &spec,
+            &p,
+            &x,
+            &y,
+            &rope,
+            None,
+            DEFAULT_CE_CHUNK,
+            Off,
+        )?;
         let logits = forward_logits(&mut eval, &spec, &p, &x, &rope)?;
         Ok((loss.to_f32_vec()?[0], logits.to_f32_vec()?))
     }
@@ -139,7 +153,17 @@ impl ParityModel for Cpu {
         let (x, y) = ids(batch, &budget)?;
         let mut tape = Tape::new(cpu);
         let p = bind(&mut tape, &spec, &host)?;
-        let loss = forward_loss(&mut tape, &spec, &p, &x, &y, &rope, None, DEFAULT_CE_CHUNK)?;
+        let loss = forward_loss(
+            &mut tape,
+            &spec,
+            &p,
+            &x,
+            &y,
+            &rope,
+            None,
+            DEFAULT_CE_CHUNK,
+            Off,
+        )?;
         tape.backward_seeded(loss, seed)?;
         let mut out = Vec::new();
         for (info, var) in param_table(&spec)?.into_iter().zip(p.into_flat()) {
@@ -213,12 +237,27 @@ fn oracle_grads_at_step5() {
 
 #[test]
 fn oracle_five_step_trace_with_grad_norms_and_schedule() {
+    five_step_trace(Ns5::F32);
+}
+
+/// Stock nanolab (`X = G.bfloat16()` in Newton-Schulz) against ojas's bf16
+/// NS5. The f32 and bf16 traces differ by up to 1.8e-4 nats over these five
+/// steps, so the 1e-4 gate tells the two iterations apart.
+#[test]
+fn oracle_five_step_trace_bf16_ns5_matches_stock_nanolab() {
+    five_step_trace(Ns5::Bf16);
+}
+
+fn five_step_trace(ns5: Ns5) {
     let mut m = Cpu::default();
-    let r = parity::trace_parity(&mut m).unwrap();
-    eprintln!("trace: worst |dloss| {:e} (tol {:e})", r.worst, r.tolerance);
+    let r = parity::trace_parity_ns5(&mut m, ns5).unwrap();
+    eprintln!(
+        "trace {ns5:?}: worst |dloss| {:e} (tol {:e})",
+        r.worst, r.tolerance
+    );
     // Beyond the runner: the pre-clip grad norm and the LR multiplier of
     // every step, from the same run.
-    let fx = tiny_trace(Ns5::F32).unwrap();
+    let fx = tiny_trace(ns5).unwrap();
     for (i, report) in m.reports.iter().enumerate() {
         let want = fx.grad_norm[i];
         let rel = (f64::from(report.grad_norm) - want).abs() / want;
@@ -247,6 +286,15 @@ fn oracle_five_step_trace_with_grad_norms_and_schedule() {
 fn oracle_forty_step_curve() {
     let r = parity::curve_parity(&mut Cpu::default()).unwrap();
     eprintln!("curve: worst |dloss| {:e} (tol {:e})", r.worst, r.tolerance);
+}
+
+#[test]
+fn oracle_forty_step_curve_bf16_ns5() {
+    let r = parity::curve_parity_ns5(&mut Cpu::default(), Ns5::Bf16).unwrap();
+    eprintln!(
+        "curve bf16 ns5: worst |dloss| {:e} (tol {:e})",
+        r.worst, r.tolerance
+    );
 }
 
 #[test]

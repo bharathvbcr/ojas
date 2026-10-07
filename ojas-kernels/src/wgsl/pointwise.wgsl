@@ -151,6 +151,42 @@ fn gate_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: 
     put0(i, x2[i] * sigmoid(z));
 }
 
+// gate_fwd, and y1 = the sigmoid [rows, heads] it multiplied by, written by
+// the lane of each (row, head)'s first element. The same sigmoid of the same
+// sum gate_bwd forms, so the saved backward reads exactly that value.
+@compute @workgroup_size(256, 1, 1)
+fn gate_fwd_save(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = lane_index(wg, nwg, lid);
+    if (i >= pw(0u)) { return; }
+    let rh = i / pw(2u);
+    let z = x0[rh] + x1[rh % pw(1u)];
+    report(z);
+    let g = sigmoid(z);
+    put0(i, x2[i] * g);
+    if (i % pw(2u) == 0u) { y1[rh] = g; }
+}
+
+// gate_bwd with g read from gate_fwd_save's y1 instead of recomputed: no
+// logits, no bias. One lane per (row, head). Words: 0 rows*heads, 1 heads,
+// 2 head_dim. x0 = saved sigmoid [rows, heads], x2 = attn, x3 = grad_output.
+// y0 = grad_attn, y1 = grad_z.
+@compute @workgroup_size(256, 1, 1)
+fn gate_bwd_saved(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let rh = lane_index(wg, nwg, lid);
+    if (rh >= pw(0u)) { return; }
+    let dh = pw(2u);
+    let g = x0[rh];
+    report(g);
+    var grad_g = 0.0;
+    let base = rh * dh;
+    for (var d = 0u; d < dh; d = d + 1u) {
+        let gy = x3[base + d];
+        put0(base + d, gy * g);
+        grad_g = grad_g + gy * x2[base + d];
+    }
+    put1(rh, grad_g * g * (1.0 - g));
+}
+
 // One lane per (row, head). Words: 0 rows*heads, 1 heads, 2 head_dim.
 // x0 = z, x1 = bias, x2 = attn, x3 = grad_output.
 // y0 = grad_attn (rows*heads*head_dim), y1 = grad_z (rows*heads).

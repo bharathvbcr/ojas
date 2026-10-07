@@ -31,7 +31,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use ojas_core::{AdamWConfig, Backend, Budget, CeChunk, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, Backend, Budget, CeChunk, MuonNs5Config, Ns5Precision, OjasError, Tensor,
+};
 
 pub type R<T> = Result<T, OjasError>;
 
@@ -494,7 +496,8 @@ pub fn run_all<Bk: Backend>(r: &mut Runner<'_, Bk>) {
     clip(r);
     adamw(r);
     for (rows, cols) in [(DM, DM), (FF, DM), (DM, FF)] {
-        muon(r, rows, cols);
+        muon(r, rows, cols, Ns5Precision::F32);
+        muon(r, rows, cols, Ns5Precision::Bf16);
     }
     block(r);
     decode_attention(r);
@@ -633,13 +636,19 @@ fn sdpa<Bk: Backend>(r: &mut Runner<'_, Bk>, tag: &str, s: [usize; 4]) {
         let v = r.dev(&s, 23, 0)?;
         let sf = spec(&[("q", &s, 21, 0), ("k", &s, 22, 0), ("v", &s, 23, 0)]);
         r.op(&fwd, &sf, TOL, |r| {
-            Ok(vec![r.be.causal_sdpa_forward(&q, &k, &v)?])
+            Ok(vec![r
+                .be
+                .causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)?])
         });
         if r.want(&bwd) {
             let g = r.dev(&s, 24, 0)?;
             let sb = format!("{sf};{}", spec(&[("gy", &s, 24, 0)]));
+            // Timed from the forward's saved output and lse, as torch's
+            // autograd runs it.
+            let (o, lse) = r.be.causal_sdpa_forward(&q, &k, &v, None)?;
             r.op(&bwd, &sb, TOL, |r| {
-                let (a, b, c) = r.be.causal_sdpa_backward(&q, &k, &v, &g)?;
+                let (a, b, c) = r.be.causal_sdpa_backward(&q, &k, &v, &o, &lse, &g, None)?;
                 Ok(vec![a, b, c])
             });
         }
@@ -1038,13 +1047,22 @@ fn adamw<Bk: Backend>(r: &mut Runner<'_, Bk>) {
     });
 }
 
-fn muon<Bk: Backend>(r: &mut Runner<'_, Bk>, rows: usize, cols: usize) {
-    let name = format!("muon_{rows}x{cols}");
+/// `muon_RxC` runs Newton-Schulz in f32 against nanolab's NS5 with an f32
+/// cast; `muon_RxC_bf16` runs `Ns5Precision::Bf16` against nanolab's own
+/// bf16 NS5 (torch's `muon_RxC_bf16` row).
+fn muon<Bk: Backend>(r: &mut Runner<'_, Bk>, rows: usize, cols: usize, ns5: Ns5Precision) {
+    let name = match ns5 {
+        Ns5Precision::F32 => format!("muon_{rows}x{cols}"),
+        Ns5Precision::Bf16 => format!("muon_{rows}x{cols}_bf16"),
+    };
     r.group(&[name.as_str()], |r| {
         let s = [rows, cols];
         let mut st = (r.dev(&s, 4001, -5)?, r.dev(&s, 4002, -6)?, r.zeros(&s)?);
         let sp = spec(&[("p", &s, 4001, -5), ("g", &s, 4002, -6)]);
-        let cfg = MuonNs5Config::nanolab_default();
+        let cfg = MuonNs5Config {
+            ns5,
+            ..MuonNs5Config::nanolab_default()
+        };
         // Five NS5 iterations compound rounding; the gate is looser here.
         r.run(
             &name,
@@ -1111,6 +1129,9 @@ struct Fwd {
     qp: Tensor,
     kp: Tensor,
     vp: Tensor,
+    /// The attention output and row lse, `[B, H, T, D]` and `[B, H, T]`.
+    ap: Tensor,
+    alse: Tensor,
     at: Tensor,
     ga: Tensor,
     x1: Tensor,
@@ -1144,8 +1165,8 @@ fn block_forward<Bk: Backend>(
     let qp = be.permute(&qr, &SWAP12)?;
     let kp = be.permute(&kr, &SWAP12)?;
     let vp = be.permute(&vb, &SWAP12)?;
-    let a = be.causal_sdpa_forward(&qp, &kp, &vp)?;
-    let at = be.permute(&a, &SWAP12)?;
+    let (ap, alse) = be.causal_sdpa_forward(&qp, &kp, &vp, None)?;
+    let at = be.permute(&ap, &SWAP12)?;
     let ga = be.per_head_sigmoid_gate_forward(&h1, &p.gw, &p.gb, &at)?;
     let o = be.linear_forward(&view(&ga, &[B, T, DM])?, &p.wo)?;
     let x1 = be.residual_add_forward(x, &o)?;
@@ -1164,6 +1185,8 @@ fn block_forward<Bk: Backend>(
         qp,
         kp,
         vp,
+        ap,
+        alse,
         at,
         ga,
         x1,
@@ -1205,7 +1228,8 @@ fn block_backward<Bk: Backend>(
     let (gga, _gwo) = be.linear_backward(&view(&f.ga, &s3)?, &p.wo, &gx1)?;
     let gg = be.per_head_sigmoid_gate_backward(&f.h1, &p.gw, &p.gb, &f.at, &view(&gga, &s4)?)?;
     let gap = be.permute(&gg.attn_out, &SWAP12)?;
-    let (gqp, gkp, gvp) = be.causal_sdpa_backward(&f.qp, &f.kp, &f.vp, &gap)?;
+    let (gqp, gkp, gvp) =
+        be.causal_sdpa_backward(&f.qp, &f.kp, &f.vp, &f.ap, &f.alse, &gap, None)?;
     let gqr = be.permute(&gqp, &SWAP12)?;
     let gkr = be.permute(&gkp, &SWAP12)?;
     let gvb = be.permute(&gvp, &SWAP12)?;

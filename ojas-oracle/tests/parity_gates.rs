@@ -12,9 +12,10 @@ use ojas_oracle::golden::{
 };
 use ojas_oracle::parity::{
     check_curve, check_tensors, curve_parity, forward_parity, grads_parity, normwise_rel,
-    trace_parity, ParityModel, CURVE_EARLY_ABS_TOL, CURVE_EARLY_STEPS, CURVE_LATE_ABS_TOL,
-    CURVE_MIN_DROP_NATS, FORWARD_LOSS_REL_TOL, GRAD_NORMWISE_REL_TOL, LOGITS_NORMWISE_REL_TOL,
-    LR_MULT_REL_TOL, TRACE_LOSS_ABS_TOL, TRACE_PARAM_NORMWISE_REL_TOL,
+    trace_parity, trace_parity_ns5, ParityModel, CURVE_EARLY_ABS_TOL, CURVE_EARLY_STEPS,
+    CURVE_LATE_ABS_TOL, CURVE_MIN_DROP_NATS, FORWARD_LOSS_REL_TOL, GRAD_NORMWISE_REL_TOL,
+    LOGITS_NORMWISE_REL_TOL, LR_MULT_REL_TOL, TRACE_BF16_PARAM_NORMWISE_REL_TOL,
+    TRACE_LOSS_ABS_TOL, TRACE_PARAM_NORMWISE_REL_TOL,
 };
 
 #[test]
@@ -24,6 +25,7 @@ fn tolerances_are_pinned() {
     assert_eq!(GRAD_NORMWISE_REL_TOL, 1e-4);
     assert_eq!(TRACE_LOSS_ABS_TOL, 1e-4);
     assert_eq!(TRACE_PARAM_NORMWISE_REL_TOL, 1e-4);
+    assert_eq!(TRACE_BF16_PARAM_NORMWISE_REL_TOL, 5e-2);
     assert_eq!((CURVE_EARLY_ABS_TOL, CURVE_EARLY_STEPS), (2e-4, 10));
     assert_eq!(CURVE_LATE_ABS_TOL, 2e-3);
     assert_eq!(CURVE_MIN_DROP_NATS, 1.0);
@@ -120,7 +122,7 @@ impl ParityModel for Replay {
     ) -> Result<(Vec<f64>, TensorSet), OjasError> {
         assert_eq!((setup.batch, setup.accum, setup.seq_len), (2, 2, 32));
         self.trace_steps_seen.push(steps);
-        let tr = tiny_trace(Ns5::F32)?;
+        let tr = tiny_trace(setup.ns5)?;
         let mut losses = tr.mean_loss[..steps].to_vec();
         if let Some((i, d)) = self.loss_shift {
             if i < steps {
@@ -236,6 +238,50 @@ fn trace_gate_is_1e4_on_losses_and_params() {
     .unwrap();
     assert!(trace_parity(&mut Replay {
         param_scale: Some((p, 1.0 + 2e-4)),
+        ..Replay::exact()
+    })
+    .is_err());
+}
+
+#[test]
+fn bf16_trace_gate_is_1e4_on_losses_and_5e2_on_params() {
+    trace_parity_ns5(&mut Replay::exact(), Ns5::Bf16).unwrap();
+    trace_parity_ns5(
+        &mut Replay {
+            loss_shift: Some((2, 0.9e-4)),
+            ..Replay::exact()
+        },
+        Ns5::Bf16,
+    )
+    .unwrap();
+    assert!(trace_parity_ns5(
+        &mut Replay {
+            loss_shift: Some((2, 1.5e-4)),
+            ..Replay::exact()
+        },
+        Ns5::Bf16,
+    )
+    .is_err());
+    let p = "blocks.0.ffn.down.weight".to_string();
+    trace_parity_ns5(
+        &mut Replay {
+            param_scale: Some((p.clone(), 1.0 + 4e-2)),
+            ..Replay::exact()
+        },
+        Ns5::Bf16,
+    )
+    .unwrap();
+    assert!(trace_parity_ns5(
+        &mut Replay {
+            param_scale: Some((p, 1.0 + 6e-2)),
+            ..Replay::exact()
+        },
+        Ns5::Bf16,
+    )
+    .is_err());
+    // The f32 trace keeps item 13's parameter gate.
+    assert!(trace_parity(&mut Replay {
+        param_scale: Some(("blocks.0.ffn.down.weight".into(), 1.0 + 4e-2)),
         ..Replay::exact()
     })
     .is_err());

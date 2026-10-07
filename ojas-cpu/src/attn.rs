@@ -21,7 +21,7 @@
 
 use std::ops::Range;
 
-use ojas_core::{exp_exact, sdpa_scale, Budget, Numerics, OjasError, SdpaDims};
+use ojas_core::{exp_exact, log_sum_exp_exact, sdpa_scale, Budget, Numerics, OjasError, SdpaDims};
 
 use crate::pool::{scoped, Exec};
 use crate::validate::{nonfinite, product, room_for, shape};
@@ -34,28 +34,40 @@ pub(crate) const TASK_WORK: usize = 1 << 20;
 /// The blocked fast path runs above this sequence length.
 const FLASH_MIN_TIME: usize = 256;
 
+/// `[output, lse]`: `[B, H, T, D]` and `[B, H, T]` zeroed values the caller
+/// charged.
+type SdpaOut<'a> = [&'a mut [f32]; 2];
+
 /// `dims` is [`Dims::new`] of the validator's result. Writes the output
-/// into `out` (`len` zeroed values, charged by the caller), each task its
-/// own rows, so there are no per-task results to join.
+/// into `out` and each query row's log-sum-exp into `lse` (zeroed values
+/// the caller charged), each task its own rows, so there are no per-task
+/// results to join.
 pub(crate) fn causal_sdpa_forward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
     [q, k, v]: [&[f32]; 3],
     dims: Dims,
-    out: &mut [f32],
+    [out, lse]: SdpaOut<'_>,
 ) -> Result<(), OjasError> {
     let q_len = dims.checked_len(op)?;
     let kv_len = dims.checked_kv_len(op)?;
-    if q.len() != q_len || out.len() != q_len || k.len() != kv_len || v.len() != kv_len {
+    let rows_len = dims.checked_rows(op)?;
+    if q.len() != q_len
+        || out.len() != q_len
+        || lse.len() != rows_len
+        || k.len() != kv_len
+        || v.len() != kv_len
+    {
         return Err(shape(
             op,
             format!(
-                "sdpa data lengths q {} k {} v {} out {} != query {q_len} kv {kv_len}",
+                "sdpa data lengths q {} k {} v {} out {} lse {} != query {q_len} kv {kv_len} rows {rows_len}",
                 q.len(),
                 k.len(),
                 v.len(),
-                out.len()
+                out.len(),
+                lse.len()
             ),
         ));
     }
@@ -63,7 +75,7 @@ pub(crate) fn causal_sdpa_forward(
         return Ok(());
     }
     if exec.numerics == Numerics::Fast && dims.time > FLASH_MIN_TIME {
-        return flash::forward(op, budget, exec, [q, k, v], dims, out);
+        return flash::forward(op, budget, exec, [q, k, v], dims, [out, lse]);
     }
     let heads = dims.batch * dims.heads;
     let work = dims.work();
@@ -86,11 +98,17 @@ pub(crate) fn causal_sdpa_forward(
     let cancel = exec.pool.cancel_hook();
     let d = dims;
     // Task `head * blocks + block` writes rows `cuts[block]..cuts[block + 1]`
-    // of `head`: in task order the parts tile `out` from the start.
-    let part_lens: Vec<usize> = (0..launched)
-        .map(|task| (cuts[task % blocks + 1] - cuts[task % blocks]) * d.dim)
+    // of `head`: in task order the parts tile `out` and `lse` from the start.
+    let row_lens: Vec<usize> = (0..launched)
+        .map(|task| cuts[task % blocks + 1] - cuts[task % blocks])
         .collect();
-    fill_parts(exec, work, scoped::cut(out, &part_lens)?, |task, part| {
+    let part_lens: Vec<usize> = row_lens.iter().map(|rows| rows * d.dim).collect();
+    let parts: Vec<SdpaOut<'_>> = scoped::cut(out, &part_lens)?
+        .into_iter()
+        .zip(scoped::cut(lse, &row_lens)?)
+        .map(|(o, l)| [o, l])
+        .collect();
+    fill_parts(exec, work, parts, |task, part| {
         cancel()?;
         let (head, block) = (task / blocks, task % blocks);
         let span = head * d.stride_h()..(head + 1) * d.stride_h();
@@ -98,16 +116,7 @@ pub(crate) fn causal_sdpa_forward(
         let kv_span = kv..kv + d.stride_h();
         let rows = cuts[block]..cuts[block + 1];
         let (qh, kh, vh) = (&q[span], &k[kv_span.clone()], &v[kv_span]);
-        forward_rows(
-            op,
-            [qh, kh, vh],
-            rows,
-            d.time,
-            d.dim,
-            d.scale,
-            cancel.as_ref(),
-            part,
-        )
+        forward_rows(op, [qh, kh, vh], rows, &d, cancel.as_ref(), part)
     })?;
     Ok(())
 }
@@ -115,7 +124,7 @@ pub(crate) fn causal_sdpa_forward(
 /// `task(i, parts[i])` for every part: on [`scoped`] threads when the pass
 /// has at least two tasks' worth of `work`, as the pool's `map` decides, and
 /// on the calling thread otherwise, so a small pass spawns nothing.
-fn fill_parts<P, R, F>(
+pub(crate) fn fill_parts<P, R, F>(
     exec: Exec<'_>,
     work: usize,
     parts: Vec<P>,
@@ -153,23 +162,22 @@ fn causal_cuts(time: usize, blocks: usize) -> Vec<usize> {
 }
 
 /// Causal forward for rows `rows` of one `[time, dim]` head, written into
-/// `out` (`rows.len() * dim` values).
+/// `out` (`rows.len() * dim` values) and their log-sum-exp into `lse`
+/// (`rows.len()` values).
 ///
-/// Query `t` scores keys `0..=t` only. Each score sums the head dimension
-/// from 0, then the value mix adds those keys from 0, one output lane at a
-/// time. Eight key columns share that reduction when the prefix is long
-/// enough; the tail uses the same product.
-#[allow(clippy::too_many_arguments)]
+/// Query `t` scores keys [`Dims::keys`] only. Each score sums the head
+/// dimension from 0, then the value mix adds those keys in increasing
+/// order, one output lane at a time. Eight key columns share that reduction
+/// when the span is long enough; the tail uses the same product.
 fn forward_rows(
     op: &'static str,
     [q, k, v]: [&[f32]; 3],
     rows: Range<usize>,
-    time: usize,
-    dim: usize,
-    scale: f32,
+    d: &Dims,
     cancel: &dyn Fn() -> Result<(), OjasError>,
-    out: &mut [f32],
+    [out, lse]: SdpaOut<'_>,
 ) -> Result<(), OjasError> {
+    let (time, dim) = (d.time, d.dim);
     let width = time.checked_mul(dim).ok_or_else(|| OjasError::OutOfRange {
         op,
         detail: "sdpa head length overflows".to_string(),
@@ -177,7 +185,7 @@ fn forward_rows(
     if q.len() != width || k.len() != width || v.len() != width || rows.end > time {
         return Err(shape(op, "sdpa head length does not match time*dim"));
     }
-    if out.len() != rows.len() * dim {
+    if out.len() != rows.len() * dim || lse.len() != rows.len() {
         return Err(shape(op, "sdpa output part does not match its rows"));
     }
     if rows.is_empty() {
@@ -190,10 +198,18 @@ fn forward_rows(
     pack_keys(k, &mut packed, time, dim);
     for t in rows.clone() {
         cancel()?;
-        let keys = t + 1;
-        score_prefix(op, &packed, row(q, t, dim), &mut scores, keys, time, scale)?;
-        softmax_prefix(op, &scores, &mut probs, keys)?;
+        let keys = d.keys(t);
+        score_range(
+            op,
+            &packed,
+            row(q, t, dim),
+            &mut scores,
+            keys.clone(),
+            time,
+            d.scale,
+        )?;
         let local = t - rows.start;
+        lse[local] = softmax_range(op, &scores, &mut probs, keys.clone())?;
         mix_values(
             &mut out[local * dim..(local + 1) * dim],
             v,
@@ -216,16 +232,21 @@ fn pack_keys(k: &[f32], packed: &mut [f32], time: usize, dim: usize) {
     }
 }
 
-pub(crate) fn score_prefix(
+/// `scores[j] = scale * q_row · k_j` for `j` in `keys`, from packed
+/// `[dim, time]` keys. A non-finite score is refused.
+pub(crate) fn score_range(
     op: &'static str,
     packed: &[f32],
     q_row: &[f32],
     scores: &mut [f32],
-    keys: usize,
+    keys: Range<usize>,
     time: usize,
     scale: f32,
 ) -> Result<(), OjasError> {
-    let mut j = 0usize;
+    let Range {
+        start: mut j,
+        end: keys,
+    } = keys;
     while j + 8 <= keys {
         let mut acc = [0.0f32; 8];
         for (lane, &qv) in packed.chunks_exact(time).zip(q_row) {
@@ -263,20 +284,23 @@ pub(crate) fn score_prefix(
     Ok(())
 }
 
-pub(crate) fn softmax_prefix(
+/// `probs[j] = softmax(scores)[j]` over `j` in `keys`, summed in increasing
+/// `j`. Returns the row's log-sum-exp, `max + ln(sum of e^(s - max))`
+/// ([`log_sum_exp_exact`]).
+pub(crate) fn softmax_range(
     op: &'static str,
     scores: &[f32],
     probs: &mut [f32],
-    keys: usize,
-) -> Result<(), OjasError> {
+    keys: Range<usize>,
+) -> Result<f32, OjasError> {
     let mut max_score = f32::NEG_INFINITY;
-    for &score in scores.iter().take(keys) {
+    for &score in &scores[keys.clone()] {
         if score > max_score {
             max_score = score;
         }
     }
     let mut sum = 0.0f32;
-    for j in 0..keys {
+    for j in keys.clone() {
         let e = exp_exact(scores[j] - max_score);
         if !e.is_finite() {
             return Err(nonfinite(op));
@@ -287,15 +311,24 @@ pub(crate) fn softmax_prefix(
     if !(sum.is_finite() && sum > 0.0) {
         return Err(nonfinite(op));
     }
-    for p in probs.iter_mut().take(keys) {
+    for p in &mut probs[keys] {
         *p /= sum;
     }
-    Ok(())
+    Ok(log_sum_exp_exact(max_score, sum))
 }
 
-/// `out[d] += probs[j] * v[j, d]` for `j` from 0 and `d` from 0.
-pub(crate) fn mix_values(out_row: &mut [f32], v: &[f32], probs: &[f32], keys: usize, dim: usize) {
-    let mut j = 0usize;
+/// `out[d] += probs[j] * v[j, d]` for `j` in `keys` ascending and `d` from 0.
+pub(crate) fn mix_values(
+    out_row: &mut [f32],
+    v: &[f32],
+    probs: &[f32],
+    keys: Range<usize>,
+    dim: usize,
+) {
+    let Range {
+        start: mut j,
+        end: keys,
+    } = keys;
     while j + 4 <= keys {
         let p0 = probs[j];
         let p1 = probs[j + 1];
@@ -324,20 +357,25 @@ pub(crate) fn mix_values(out_row: &mut [f32], v: &[f32], probs: &[f32], keys: us
 /// `[grad_q, grad_k, grad_v]`, each `len` zeroed values the caller charged.
 type SdpaGrads<'a> = [&'a mut [f32]; 3];
 
-/// `dims` is [`Dims::new`] of the validator's result. Writes the three
-/// gradients into `grads`, each head's rows by the task that computes them.
+/// `dims` is [`Dims::new`] of the validator's result. `out` and `lse` are
+/// the forward's output and log-sum-exp for the same operands. Writes the
+/// three gradients into `grads`, each head's rows by the task that computes
+/// them.
 pub(crate) fn causal_sdpa_backward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    [q, k, v, grad_y]: [&[f32]; 4],
+    [q, k, v, out, lse, grad_y]: [&[f32]; 6],
     dims: Dims,
     grads: SdpaGrads<'_>,
 ) -> Result<(), OjasError> {
     let q_len = dims.checked_len(op)?;
     let kv_len = dims.checked_kv_len(op)?;
+    let rows_len = dims.checked_rows(op)?;
     let [gq, gk, gv] = grads;
     if q.len() != q_len
+        || out.len() != q_len
+        || lse.len() != rows_len
         || grad_y.len() != q_len
         || gq.len() != q_len
         || k.len() != kv_len
@@ -348,10 +386,12 @@ pub(crate) fn causal_sdpa_backward(
         return Err(shape(
             op,
             format!(
-                "sdpa data lengths q {} k {} v {} grad {} != query {q_len} kv {kv_len}",
+                "sdpa data lengths q {} k {} v {} out {} lse {} grad {} != query {q_len} kv {kv_len} rows {rows_len}",
                 q.len(),
                 k.len(),
                 v.len(),
+                out.len(),
+                lse.len(),
                 grad_y.len()
             ),
         ));
@@ -360,7 +400,14 @@ pub(crate) fn causal_sdpa_backward(
         return Ok(());
     }
     if exec.numerics == Numerics::Fast && dims.time > FLASH_MIN_TIME {
-        return flash::backward(op, budget, exec, [q, k, v, grad_y], dims, [gq, gk, gv]);
+        return flash::backward(
+            op,
+            budget,
+            exec,
+            [q, k, v, out, lse, grad_y],
+            dims,
+            [gq, gk, gv],
+        );
     }
     // One KV group is an independent reduction. The `rep` query heads that
     // share it are contiguous and accumulate into the same grad_k / grad_v
@@ -393,11 +440,14 @@ pub(crate) fn causal_sdpa_backward(
         for r in 0..rep {
             let (gq_r, rest) = gq_rest.split_at_mut(stride);
             gq_rest = rest;
-            let span = (q0 + r) * stride..(q0 + r + 1) * stride;
+            let head = q0 + r;
+            let span = head * stride..(head + 1) * stride;
             let heads_in = [
                 &q[span.clone()],
                 &k[kv_span.clone()],
                 &v[kv_span.clone()],
+                &out[span.clone()],
+                &lse[head * d.time..(head + 1) * d.time],
                 &grad_y[span],
             ];
             // Reborrow the KV grads: every query head in the group
@@ -405,9 +455,7 @@ pub(crate) fn causal_sdpa_backward(
             backward_head(
                 op,
                 heads_in,
-                d.time,
-                d.dim,
-                d.scale,
+                &d,
                 cancel.as_ref(),
                 [gq_r, &mut gk[..], &mut gv[..]],
             )?;
@@ -418,24 +466,27 @@ pub(crate) fn causal_sdpa_backward(
 }
 
 /// Causal backward for one `[time, dim]` head, accumulated into `grads`
-/// (three zeroed `[time, dim]` slices).
+/// (three zeroed `[time, dim]` slices), from the forward's output rows and
+/// log-sum-exp (`time` values): `P = e^(S - lse)` and `Dr = dO · O`, so no
+/// row maximum or sum is formed again.
 ///
-/// Each row is contiguous. Dots and softmax sums walk the contracted index
-/// upward from 0, the same order as the per-element index loop.
+/// Each row is contiguous. Dots walk the contracted index upward from 0,
+/// and keys run in increasing order, the same order as the per-element
+/// index loop.
 fn backward_head(
     op: &'static str,
-    [q, k, v, grad_y]: [&[f32]; 4],
-    time: usize,
-    dim: usize,
-    scale: f32,
+    [q, k, v, out, lse, grad_y]: [&[f32]; 6],
+    d: &Dims,
     cancel: &dyn Fn() -> Result<(), OjasError>,
     [grad_q, grad_k, grad_v]: SdpaGrads<'_>,
 ) -> Result<(), OjasError> {
+    let (time, dim, scale) = (d.time, d.dim, d.scale);
     let width = time.checked_mul(dim).ok_or_else(|| OjasError::OutOfRange {
         op,
         detail: "sdpa head length overflows".to_string(),
     })?;
-    if q.len() != width || k.len() != width || v.len() != width || grad_y.len() != width {
+    let lens = [q.len(), k.len(), v.len(), out.len(), grad_y.len()];
+    if lens != [width; 5] || lse.len() != time {
         return Err(shape(op, "sdpa head length does not match time*dim"));
     }
     if [grad_q.len(), grad_k.len(), grad_v.len()] != [width; 3] {
@@ -444,48 +495,31 @@ fn backward_head(
     if time == 0 || dim == 0 {
         return Ok(());
     }
-    let mut scores = vec![0.0f32; time];
     let mut probs = vec![0.0f32; time];
     let mut dprobs = vec![0.0f32; time];
     for t in 0..time {
         cancel()?;
         let q_row = row(q, t, dim);
         let gy_row = row(grad_y, t, dim);
-        let mut max_score = f32::NEG_INFINITY;
-        for (j, slot) in scores.iter_mut().enumerate().take(t + 1) {
-            let dot = dot_up(q_row, row(k, j, dim));
-            let score = dot * scale;
+        let keys = d.keys(t);
+        let row_lse = lse[t];
+        let expected = dot_up(gy_row, row(out, t, dim));
+        if !(row_lse.is_finite() && expected.is_finite()) {
+            return Err(nonfinite(op));
+        }
+        for j in keys.clone() {
+            let score = dot_up(q_row, row(k, j, dim)) * scale;
             if !score.is_finite() {
                 return Err(nonfinite(op));
             }
-            *slot = score;
-            if score > max_score {
-                max_score = score;
-            }
-        }
-        let mut sum = 0.0f32;
-        for j in 0..=t {
-            let e = exp_exact(scores[j] - max_score);
-            if !e.is_finite() {
+            let p = exp_exact(score - row_lse);
+            if !p.is_finite() {
                 return Err(nonfinite(op));
             }
-            probs[j] = e;
-            sum += e;
+            probs[j] = p;
+            dprobs[j] = dot_up(gy_row, row(v, j, dim));
         }
-        if !(sum.is_finite() && sum > 0.0) {
-            return Err(nonfinite(op));
-        }
-        for p in probs.iter_mut().take(t + 1) {
-            *p /= sum;
-        }
-        for (j, slot) in dprobs.iter_mut().enumerate().take(t + 1) {
-            *slot = dot_up(gy_row, row(v, j, dim));
-        }
-        let mut expected = 0.0f32;
-        for j in 0..=t {
-            expected += probs[j] * dprobs[j];
-        }
-        for j in 0..=t {
+        for j in keys {
             let p = probs[j];
             let coef = scale * (p * (dprobs[j] - expected));
             saxpy_up(&mut grad_q[t * dim..(t + 1) * dim], row(k, j, dim), coef);
@@ -525,6 +559,9 @@ pub(crate) struct Dims {
     time: usize,
     dim: usize,
     scale: f32,
+    /// Keys a query sees, counting itself; `None` is every earlier key.
+    /// Always below `time` when set ([`Dims::new`] drops a wider one).
+    window: Option<usize>,
 }
 
 impl Dims {
@@ -561,13 +598,32 @@ impl Dims {
         product(op, &[self.batch, self.kv_heads, self.time, self.dim])
     }
 
-    /// `B*H*T*T*D`: the causal score and value-mix multiply-adds of one
-    /// forward pass, `T*T*D/2` each per head.
+    /// `B*H*T`: one log-sum-exp per query row.
+    fn checked_rows(&self, op: &'static str) -> Result<usize, OjasError> {
+        product(op, &[self.batch, self.heads, self.time])
+    }
+
+    /// The keys query `t` sees: `t - window < j <= t`, or `0..=t`.
+    fn keys(&self, t: usize) -> Range<usize> {
+        self.first_key(t)..t + 1
+    }
+
+    fn first_key(&self, t: usize) -> usize {
+        self.window.map_or(0, |w| (t + 1).saturating_sub(w))
+    }
+
+    /// Keys per query row at most: `T`, or the window.
+    fn span(&self) -> usize {
+        self.window.map_or(self.time, |w| w.min(self.time))
+    }
+
+    /// `B*H*T*span*D`: the score and value-mix multiply-adds of one forward
+    /// pass, about twice what a causal (or windowed) one does.
     fn work(&self) -> usize {
         self.batch
             .saturating_mul(self.heads)
             .saturating_mul(self.time)
-            .saturating_mul(self.time)
+            .saturating_mul(self.span())
             .saturating_mul(self.dim)
     }
 }
@@ -585,13 +641,13 @@ fn forward_scratch(op: &'static str, dims: &Dims, inflight: usize) -> Result<usi
         .ok_or_else(|| scratch_overflow(op))
 }
 
-/// The per-row backward keeps three length-`time` buffers per in-flight
+/// The per-row backward keeps two length-`time` buffers per in-flight
 /// head; each head writes its gradients straight into the outputs, which
 /// the caller charges.
 fn backward_scratch(op: &'static str, dims: &Dims, inflight: usize) -> Result<usize, OjasError> {
     let per_task = dims
         .time
-        .checked_mul(3)
+        .checked_mul(2)
         .ok_or_else(|| scratch_overflow(op))?;
     inflight
         .checked_mul(per_task)
@@ -609,8 +665,17 @@ impl Dims {
     /// The kernel's dimensions from [`ojas_core::causal_sdpa_forward_dims`]
     /// or its backward. A head dimension past `u32` is this backend's limit
     /// (shape-contract D15), checked here, after the validator and before
-    /// anything is copied or charged.
-    pub(crate) fn new(op: &'static str, dims: SdpaDims) -> Result<Self, OjasError> {
+    /// anything is copied or charged. A `window` of 0 is refused; one of at
+    /// least `T` is every earlier key and is dropped.
+    pub(crate) fn new(
+        op: &'static str,
+        dims: SdpaDims,
+        window: Option<usize>,
+    ) -> Result<Self, OjasError> {
+        if window == Some(0) {
+            return Err(shape(op, "sdpa window must be at least 1"));
+        }
+        let window = window.filter(|&w| w < dims.seq);
         let dim = dims.head_dim;
         let dim_u32 = u32::try_from(dim).map_err(|_| OjasError::OutOfRange {
             op,
@@ -638,6 +703,7 @@ impl Dims {
             time: dims.seq,
             dim,
             scale: sdpa_scale(dim_u32)?,
+            window,
         })
     }
 }

@@ -130,7 +130,10 @@ fn full_cache_mha_equals_causal_sdpa_bit_for_bit_under_exact() {
             let qp = be.permute(&q, &perm).unwrap();
             let kp = be.permute(&used(&kc), &perm).unwrap();
             let vp = be.permute(&used(&vc), &perm).unwrap();
-            let y = be.causal_sdpa_forward(&qp, &kp, &vp).unwrap();
+            let y = be
+                .causal_sdpa_forward(&qp, &kp, &vp, None)
+                .map(|(y, _)| y)
+                .unwrap();
             let want = be.permute(&y, &perm).unwrap();
             assert_eq!(
                 bits(&f(&got)),

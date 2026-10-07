@@ -73,7 +73,10 @@ fn causal_sdpa_refuses_scratch_when_the_output_tensor_would_fit() {
     let q = f32_fill(&budget, elems, &[1, 1, 8, 4], 0.1);
     let k = f32_fill(&budget, elems, &[1, 1, 8, 4], 0.2);
     let v = f32_fill(&budget, elems, &[1, 1, 8, 4], 0.3);
-    let err = cpu.causal_sdpa_forward(&q, &k, &v).unwrap_err();
+    let err = cpu
+        .causal_sdpa_forward(&q, &k, &v, None)
+        .map(|(y, _)| y)
+        .unwrap_err();
     assert!(matches!(err, OjasError::CapacityExceeded { .. }), "{err}");
     assert_eq!(budget.live_bytes().unwrap(), qkv as u64);
 }

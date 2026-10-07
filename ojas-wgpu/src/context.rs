@@ -7,10 +7,11 @@
 //! validated, so a refused op leaves nothing behind. The encoder is submitted
 //! every [`FLUSH_AT`] dispatches and at every read.
 //!
-//! Kernels that produce a non-finite value OR their op's bit into a device
-//! fault word and keep going; the first op to fault also records itself.
-//! Every read runs `fault_hold`, which moves those words into a second,
-//! held pair, and copies the held pair out in the same submission. Only
+//! Kernels that produce a non-finite value OR their op's bit into a 64-bit
+//! op mask held in two device words ([`FAULT_OPS`] ops) and keep going; the
+//! first op to fault also records itself in a third word. Every read runs
+//! `fault_hold`, which moves those words into a second, held set, and
+//! copies the held set out in the same submission. Only
 //! after the host has seen the copy does it record `fault_release`, which
 //! clears exactly what it saw. A read that fails between the two (a poll
 //! timeout, a failed map) therefore leaves the fault held for the next read
@@ -67,6 +68,10 @@ pub const ALLOW_CPU_ADAPTER_ENV: &str = "OJAS_WGPU_ALLOW_CPU_ADAPTER";
 pub(crate) fn storage_usage() -> wgpu::BufferUsages {
     wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST
 }
+
+/// Ops the fault words can name: a 64-bit mask across words 0 and 1. A fault
+/// id is an op index + 1, so ids run 1..=`FAULT_OPS`; 0 reports nothing.
+pub(crate) const FAULT_OPS: u32 = 64;
 
 const FAULT_HOLD: Kernel = Kernel {
     module: WgslModule::Fault,
@@ -162,12 +167,13 @@ pub(crate) struct Inner {
     pipelines: Mutex<HashMap<(WgslModule, &'static str), Arc<Pipe>>>,
     pool: Mutex<Pool>,
     rec: Mutex<Recorder>,
-    /// Live fault words, written by kernels: 0 op bits, 1 first op + 1.
+    /// Live fault words, written by kernels: 0 and 1 the op mask (ops 0..31,
+    /// then 32..63), 2 the first op + 1.
     fault: wgpu::Buffer,
     /// Faults moved out of `fault` by a read and not yet observed by the host.
     held: wgpu::Buffer,
     hold: Mutex<Option<(Arc<Pipe>, wgpu::BindGroup)>>,
-    observed: AtomicU32,
+    observed: AtomicU64,
     /// First op (+ 1) among the `observed` bits; 0 when none is recorded.
     first: AtomicU32,
     errors: Arc<Mutex<Vec<String>>>,
@@ -285,6 +291,13 @@ fn backend_err(detail: impl Into<String>) -> OjasError {
     }
 }
 
+fn device_lost(detail: impl Into<String>) -> OjasError {
+    OjasError::DeviceLost {
+        backend: BackendId::Wgpu,
+        detail: detail.into(),
+    }
+}
+
 impl WgpuContext {
     /// Open the adapter with every limit it reports.
     pub fn open() -> Result<Self, DeviceError> {
@@ -368,7 +381,7 @@ impl WgpuContext {
                 fault,
                 held,
                 hold: Mutex::new(None),
-                observed: AtomicU32::new(0),
+                observed: AtomicU64::new(0),
                 first: AtomicU32::new(0),
                 errors,
                 lost,
@@ -665,11 +678,13 @@ impl WgpuContext {
         Ok(pipe)
     }
 
-    pub(crate) fn job<'a>(&'a self, budget: &'a Budget, fault_bit: u32) -> Job<'a> {
+    /// A job whose kernels raise fault id `fault_id` (an op index + 1, or 0
+    /// for a job that reports nothing).
+    pub(crate) fn job<'a>(&'a self, budget: &'a Budget, fault_id: u32) -> Job<'a> {
         Job {
             ctx: self,
             budget,
-            fault_bit,
+            fault_id,
             local_fault: None,
             steps: Vec::new(),
             scratch: Vec::new(),
@@ -677,16 +692,22 @@ impl WgpuContext {
     }
 
     /// Pipeline and bind group for one dispatch of `kernel`: `params` in
-    /// words 0..15, `fault_bit` in word 15, `fault` at binding 1 and `bufs`
+    /// words 0..15, `fault_id` in word 15, `fault` at binding 1 and `bufs`
     /// at the kernel's slots.
     fn bind(
         &self,
         kernel: &Kernel,
         params: &[u32],
-        fault_bit: u32,
+        fault_id: u32,
         fault: &wgpu::Buffer,
         bufs: &[&wgpu::Buffer],
     ) -> Result<(Arc<Pipe>, wgpu::BindGroup), OjasError> {
+        if fault_id > FAULT_OPS {
+            return Err(backend_err(format!(
+                "{}: fault id {fault_id} is past the {FAULT_OPS} ops the fault words hold",
+                kernel.entry
+            )));
+        }
         if bufs.len() != kernel.slots.len() {
             return Err(backend_err(format!(
                 "{} takes {} buffers, given {}",
@@ -704,7 +725,7 @@ impl WgpuContext {
         let pipe = self.pipe(kernel)?;
         let mut words = [0u32; 16];
         words[..params.len()].copy_from_slice(params);
-        words[15] = fault_bit;
+        words[15] = fault_id;
         let uniform = self.params(&words)?;
         let mut entries = vec![
             wgpu::BindGroupEntry {
@@ -868,7 +889,8 @@ impl WgpuContext {
                 u32::from_le_bytes(w)
             };
             let lo = (offset - start) as usize;
-            (view[lo..lo + len as usize].to_vec(), word(0), word(1))
+            let bits = u64::from(word(0)) | (u64::from(word(1)) << 32);
+            (view[lo..lo + len as usize].to_vec(), bits, word(2))
         };
         staging.unmap();
         if bits != 0 || first != 0 {
@@ -887,7 +909,7 @@ impl WgpuContext {
             let mut job = self.job(&none, 0);
             job.dispatch(
                 &FAULT_RELEASE,
-                &[bits, first],
+                &[bits as u32, (bits >> 32) as u32, first],
                 &[&self.inner.held],
                 (1, 1, 1),
             )?;
@@ -912,17 +934,19 @@ impl WgpuContext {
     }
 
     /// `(bits, first)` seen by reads since the last call, then cleared:
-    /// every faulting op's bit, and the bit index + 1 of the first of them
-    /// in recording order (0 when no fault was seen).
-    pub(crate) fn take_faults(&self) -> (u32, u32) {
+    /// every faulting op's bit (bit `i` for op index `i`), and the fault id
+    /// (index plus one) of the first of them in recording order, 0 when no
+    /// fault was seen.
+    pub(crate) fn take_faults(&self) -> (u64, u32) {
         let bits = self.inner.observed.swap(0, Ordering::Relaxed);
         let first = self.inner.first.swap(0, Ordering::Relaxed);
         (bits, first)
     }
 
-    /// A backend error for a failed device call (a wait, a map, or a buffer,
-    /// shader, pipeline or bind group it creates), naming a lost device when
-    /// the loss is why.
+    /// The error for a failed device call (a wait, a map, or a buffer,
+    /// shader, pipeline or bind group it creates): [`OjasError::DeviceLost`]
+    /// when the device-lost callback has fired, naming the loss, otherwise
+    /// [`OjasError::Backend`].
     fn failure(&self, detail: String) -> OjasError {
         if lock(&self.inner.lost).is_none() {
             // wgpu runs the lost callback from a poll that finds the queue
@@ -936,22 +960,29 @@ impl WgpuContext {
             });
         }
         match lock(&self.inner.lost).as_deref() {
-            Some(lost) => backend_err(format!("{detail}; {lost}")),
+            Some(lost) => device_lost(format!("{detail}; {lost}")),
             None => backend_err(detail),
         }
     }
 
     /// Uncaptured wgpu errors since the last call, and a lost device on every
-    /// call after the loss.
+    /// call after the loss: [`OjasError::DeviceLost`] once the device is
+    /// lost, [`OjasError::Backend`] for errors alone.
     fn check_errors(&self) -> Result<(), OjasError> {
         let lost = lock(&self.inner.lost).clone();
         let mut errors = lock(&self.inner.errors);
         if errors.is_empty() && lost.is_none() {
             return Ok(());
         }
+        let is_lost = lost.is_some();
         let mut parts: Vec<String> = lost.into_iter().collect();
         parts.append(&mut errors);
-        Err(backend_err(format!("wgpu reported: {}", parts.join("; "))))
+        let detail = format!("wgpu reported: {}", parts.join("; "));
+        Err(if is_lost {
+            device_lost(detail)
+        } else {
+            backend_err(detail)
+        })
     }
 
     fn encoder(&self) -> wgpu::CommandEncoder {
@@ -1035,14 +1066,14 @@ enum Step {
 pub(crate) struct Job<'a> {
     ctx: &'a WgpuContext,
     budget: &'a Budget,
-    fault_bit: u32,
+    fault_id: u32,
     local_fault: Option<wgpu::Buffer>,
     steps: Vec<Step>,
     scratch: Vec<Scratch>,
 }
 
 impl Job<'_> {
-    /// `params` fill words 0..15; word 15 is this op's fault bit.
+    /// `params` fill words 0..15; word 15 is this op's fault id.
     pub fn dispatch(
         &mut self,
         kernel: &Kernel,
@@ -1060,7 +1091,7 @@ impl Job<'_> {
             }
         }
         let fault = self.local_fault.as_ref().unwrap_or(&self.ctx.inner.fault);
-        let (pipe, group) = self.ctx.bind(kernel, params, self.fault_bit, fault, bufs)?;
+        let (pipe, group) = self.ctx.bind(kernel, params, self.fault_id, fault, bufs)?;
         self.steps.push(Step::Dispatch { pipe, group, grid });
         Ok(())
     }
@@ -1313,11 +1344,49 @@ mod tests {
         let _ = ctx.device().poll(wgpu::PollType::Poll);
         let first = ctx.check_errors().expect_err("errors were queued");
         assert!(
-            first.to_string().contains("device lost"),
-            "device lost was dropped: {first}"
+            matches!(
+                &first,
+                OjasError::DeviceLost {
+                    backend: BackendId::Wgpu,
+                    ..
+                }
+            ),
+            "device lost was dropped: {first:?}"
         );
         // Loss is permanent: it is reported again, not consumed.
         let again = ctx.check_errors().expect_err("a lost device stays lost");
-        assert!(again.to_string().contains("device lost"), "{again}");
+        assert!(matches!(again, OjasError::DeviceLost { .. }), "{again:?}");
+    }
+
+    #[test]
+    fn a_device_call_after_loss_is_the_typed_device_lost_error() {
+        // Pre-fix, a lost device surfaced as OjasError::Backend with
+        // "device lost" in its text, and callers matched the substring.
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        ctx.sync().expect("a live device syncs");
+        ctx.device().destroy();
+        let lost = ctx.sync().expect_err("a destroyed device cannot sync");
+        assert!(
+            matches!(
+                &lost,
+                OjasError::DeviceLost {
+                    backend: BackendId::Wgpu,
+                    ..
+                }
+            ),
+            "{lost:?}"
+        );
+        // A plain uncaptured error on a live device stays Backend.
+        let live = WgpuContext::open().expect("wgpu adapter");
+        let _ = live.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("empty-usage"),
+            size: 4,
+            usage: wgpu::BufferUsages::empty(),
+            mapped_at_creation: false,
+        });
+        let plain = live
+            .check_errors()
+            .expect_err("the bad buffer was reported");
+        assert!(matches!(plain, OjasError::Backend { .. }), "{plain:?}");
     }
 }

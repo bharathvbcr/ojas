@@ -128,7 +128,8 @@ fn full_cache_without_grouping_equals_causal_sdpa_after_the_permute() {
         };
         let o = ok(
             "sdpa",
-            m.causal_sdpa_forward(&head_major(&qd), &head_major(&kd), &head_major(&vd)),
+            m.causal_sdpa_forward(&head_major(&qd), &head_major(&kd), &head_major(&vd), None)
+                .map(|(y, _)| y),
         );
         let want = ok("permute", m.permute(&o, &[0, 2, 1, 3]));
         close(

@@ -9,11 +9,15 @@ package ojas
 #cgo nocallback ojas_set_model_root
 #cgo noescape ojas_take_last_error
 #cgo nocallback ojas_take_last_error
+#cgo noescape ojas_set_heap_ceiling
+#cgo nocallback ojas_set_heap_ceiling
 #include <stddef.h>
+#include <stdint.h>
 int ojas_engine_init(void);
 void ojas_engine_reset(void);
 int ojas_set_model_root(const unsigned char *ptr, size_t len);
 size_t ojas_take_last_error(unsigned char *dst, size_t cap);
+uint64_t ojas_set_heap_ceiling(uint64_t bytes);
 */
 import "C"
 
@@ -411,6 +415,10 @@ func engineInit() error {
 
 func engineReset() {
 	C.ojas_engine_reset()
+}
+
+func setHeapCeiling(bytes uint64) uint64 {
+	return uint64(C.ojas_set_heap_ceiling(C.uint64_t(bytes)))
 }
 
 func lastCError() string {

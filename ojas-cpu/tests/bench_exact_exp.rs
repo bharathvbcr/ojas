@@ -42,10 +42,13 @@ fn sdpa(cpu: &CpuBackend, label: &str, t: usize) {
     let v = tensor(cpu, &mut rng, &shape, 1.0);
     let gy = tensor(cpu, &mut rng, &shape, 0.01);
     time(&format!("{label}_sdpa_fwd_t{t}"), || {
-        cpu.causal_sdpa_forward(&q, &k, &v).map(drop)
+        cpu.causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
+            .map(drop)
     });
     time(&format!("{label}_sdpa_bwd_t{t}"), || {
-        cpu.causal_sdpa_backward(&q, &k, &v, &gy).map(drop)
+        cpu.causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+            .map(drop)
     });
 }
 

@@ -246,11 +246,20 @@ fn causal_attention_matches_cpu() {
         let (gq, gk, gv) = (up(&q), up(&k), up(&v));
         close(
             &format!("{tag} y"),
-            &gpu().causal_sdpa_forward(&gq, &gk, &gv).unwrap(),
-            &c.causal_sdpa_forward(&q, &k, &v).unwrap(),
+            &gpu()
+                .causal_sdpa_forward(&gq, &gk, &gv, None)
+                .map(|(y, _)| y)
+                .unwrap(),
+            &c.causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)
+                .unwrap(),
         );
-        let got = gpu().causal_sdpa_backward(&gq, &gk, &gv, &up(&gy)).unwrap();
-        let want = c.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+        let got = gpu()
+            .causal_sdpa_backward_recompute(&gq, &gk, &gv, &up(&gy), None)
+            .unwrap();
+        let want = c
+            .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+            .unwrap();
         close(&format!("{tag} dq"), &got.0, &want.0);
         close(&format!("{tag} dk"), &got.1, &want.1);
         close(&format!("{tag} dv"), &got.2, &want.2);
@@ -260,7 +269,7 @@ fn causal_attention_matches_cpu() {
 #[test]
 fn attention_head_dim_past_the_kernel_limit_is_refused() {
     let q = up(&host(1, &[1, 1, 4, 257]));
-    match gpu().causal_sdpa_forward(&q, &q, &q) {
+    match gpu().causal_sdpa_forward(&q, &q, &q, None).map(|(y, _)| y) {
         Err(OjasError::UnsupportedHeadDim {
             head_dim: 257,
             limit: 256,
@@ -293,11 +302,20 @@ fn grouped_query_causal_attention_matches_cpu() {
         let (gq, gk, gv) = (up(&q), up(&k), up(&v));
         close(
             &format!("{tag} y"),
-            &gpu().causal_sdpa_forward(&gq, &gk, &gv).unwrap(),
-            &c.causal_sdpa_forward(&q, &k, &v).unwrap(),
+            &gpu()
+                .causal_sdpa_forward(&gq, &gk, &gv, None)
+                .map(|(y, _)| y)
+                .unwrap(),
+            &c.causal_sdpa_forward(&q, &k, &v, None)
+                .map(|(y, _)| y)
+                .unwrap(),
         );
-        let got = gpu().causal_sdpa_backward(&gq, &gk, &gv, &up(&gy)).unwrap();
-        let want = c.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+        let got = gpu()
+            .causal_sdpa_backward_recompute(&gq, &gk, &gv, &up(&gy), None)
+            .unwrap();
+        let want = c
+            .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+            .unwrap();
         close(&format!("{tag} dq"), &got.0, &want.0);
         close(&format!("{tag} dk"), &got.1, &want.1);
         close(&format!("{tag} dv"), &got.2, &want.2);
@@ -327,12 +345,14 @@ fn future_keys_do_not_leak_into_earlier_rows() {
     let v2 = Tensor::from_f32(&v2, &shape, host_budget()).unwrap();
     let a = down(
         &gpu()
-            .causal_sdpa_forward(&up(&q), &up(&k), &up(&v))
+            .causal_sdpa_forward(&up(&q), &up(&k), &up(&v), None)
+            .map(|(y, _)| y)
             .unwrap(),
     );
     let z = down(
         &gpu()
-            .causal_sdpa_forward(&up(&q), &up(&k2), &up(&v2))
+            .causal_sdpa_forward(&up(&q), &up(&k2), &up(&v2), None)
+            .map(|(y, _)| y)
             .unwrap(),
     );
     for head in 0..h {
@@ -351,13 +371,13 @@ fn future_keys_do_not_leak_into_earlier_rows() {
     let gy = host(503, &shape);
     let ga = down(
         &gpu()
-            .causal_sdpa_backward(&up(&q), &up(&k), &up(&v), &up(&gy))
+            .causal_sdpa_backward_recompute(&up(&q), &up(&k), &up(&v), &up(&gy), None)
             .unwrap()
             .0,
     );
     let gz = down(
         &gpu()
-            .causal_sdpa_backward(&up(&q), &up(&k2), &up(&v2), &up(&gy))
+            .causal_sdpa_backward_recompute(&up(&q), &up(&k2), &up(&v2), &up(&gy), None)
             .unwrap()
             .0,
     );
@@ -804,11 +824,15 @@ fn malformed_inputs_are_errors() {
         ),
         (
             "sdpa rank 3",
-            g.causal_sdpa_forward(&q3, &q3, &q3).map(drop),
+            g.causal_sdpa_forward(&q3, &q3, &q3, None)
+                .map(|(y, _)| y)
+                .map(drop),
         ),
         (
             "sdpa kv shape",
-            g.causal_sdpa_forward(&q, &q3, &q3).map(drop),
+            g.causal_sdpa_forward(&q, &q3, &q3, None)
+                .map(|(y, _)| y)
+                .map(drop),
         ),
         ("embed f32 ids", g.embedding_forward(&a, &a).map(drop)),
         (

@@ -11,6 +11,8 @@
 //!   apply them to any model implementing [`parity::ParityModel`].
 //! - [`spec`]: the `ojas.spec` JSON schema and the §2 parameter table.
 //! - [`safetensors`]: the fixture policy over `ojas_io::SafeTensors`.
+//! - [`gdn`]: the gated delta rule's f64 forward and transformers' published
+//!   goldens for it (`Backend::chunked_gdn_forward` / `_backward`).
 //!
 //! JSON is read with `ojas-io`'s strict RFC 8259 reader ([`ojas_io::json`]),
 //! held to the fixture limits (4 MiB, depth 16, a tree budget per input
@@ -21,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gdn;
 pub mod golden;
 pub mod parity;
 pub mod safetensors;

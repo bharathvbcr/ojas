@@ -313,7 +313,7 @@ fn forward_block(
     let k = tape.reshape(k, &[batch, 1, time, d])?;
     let v = tape.reshape(v, &[batch, 1, time, d])?;
     let v = tape.value_residual(v, v, leaves[9])?;
-    let y = tape.causal_sdpa(q, k, v)?;
+    let y = tape.causal_sdpa(q, k, v, None)?;
     let y = tape.reshape(y, &[batch, time, 1, d])?;
     let y = tape.per_head_gate(h, leaves[7], leaves[8], y)?;
     let y = tape.reshape(y, &[batch, time, d])?;

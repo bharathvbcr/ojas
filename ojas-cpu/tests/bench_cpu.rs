@@ -102,10 +102,17 @@ fn attention_wall_time_matrix() {
             let mut bwd = Vec::new();
             for i in 0..=calls {
                 let t0 = std::time::Instant::now();
-                std::hint::black_box(cpu.causal_sdpa_forward(&q, &k, &v).unwrap());
+                std::hint::black_box(
+                    cpu.causal_sdpa_forward(&q, &k, &v, None)
+                        .map(|(y, _)| y)
+                        .unwrap(),
+                );
                 let f = t0.elapsed().as_nanos();
                 let t1 = std::time::Instant::now();
-                std::hint::black_box(cpu.causal_sdpa_backward(&q, &k, &v, &gy).unwrap());
+                std::hint::black_box(
+                    cpu.causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+                        .unwrap(),
+                );
                 let bw = t1.elapsed().as_nanos();
                 if i > 0 {
                     fwd.push(f);

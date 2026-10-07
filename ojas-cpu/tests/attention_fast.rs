@@ -128,8 +128,13 @@ impl Fixture {
 type Outs = [Vec<f32>; 4];
 
 fn run(be: &CpuBackend, t: &[Tensor; 4]) -> Outs {
-    let y = be.causal_sdpa_forward(&t[0], &t[1], &t[2]).unwrap();
-    let (gq, gk, gv) = be.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3]).unwrap();
+    let y = be
+        .causal_sdpa_forward(&t[0], &t[1], &t[2], None)
+        .map(|(y, _)| y)
+        .unwrap();
+    let (gq, gk, gv) = be
+        .causal_sdpa_backward_recompute(&t[0], &t[1], &t[2], &t[3], None)
+        .unwrap();
     [y, gq, gk, gv].map(|x| x.to_f32_vec().unwrap())
 }
 
@@ -393,20 +398,42 @@ fn nan_and_inf_are_refused_before_any_charge() {
     let _serial = serial();
     let shape = [1usize, 2, 300, 64];
     let f = Fixture::new(shape, 0x0bad, 1.0);
-    let n: usize = shape.iter().product();
+    let rows = [1usize, 2, 300];
+    // q, k, v, the forward's output and lse (from a backend with room),
+    // and the output gradient.
+    let clean: Vec<Vec<f32>> = {
+        let t = f.tensors();
+        let (y, lse) = backend(1, Numerics::Fast)
+            .causal_sdpa_forward(&t[0], &t[1], &t[2], None)
+            .unwrap();
+        let mut v = f.values[..3].to_vec();
+        v.push(y.to_f32_vec().unwrap());
+        v.push(lse.to_f32_vec().unwrap());
+        v.push(f.values[3].clone());
+        v
+    };
+    let shapes = [&shape[..], &shape, &shape, &shape, &rows, &shape];
     for threads in [1usize, 7] {
         let be = CpuBackend::with_threads(Budget::new(0), threads).unwrap();
         assert_eq!(be.numerics(), Numerics::Fast);
-        for which in 0..4 {
+        for which in 0..6 {
             for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-                let mut values = f.values.clone();
-                values[which][n / 2 + which] = bad;
-                let t = values.each_ref().map(|v| tensor(v, &shape));
+                let mut values = clean.clone();
+                let at = values[which].len() / 2 + which;
+                values[which][at] = bad;
+                let t: Vec<Tensor> = values
+                    .iter()
+                    .zip(shapes)
+                    .map(|(v, s)| tensor(v, s))
+                    .collect();
                 let what = format!("threads {threads} operand {which} = {bad}");
                 if which < 3 {
-                    assert_nonfinite(&what, be.causal_sdpa_forward(&t[0], &t[1], &t[2]));
+                    assert_nonfinite(&what, be.causal_sdpa_forward(&t[0], &t[1], &t[2], None));
                 }
-                assert_nonfinite(&what, be.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3]));
+                assert_nonfinite(
+                    &what,
+                    be.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3], &t[4], &t[5], None),
+                );
                 assert_eq!(be.budget().live_bytes().unwrap(), 0, "{what}");
             }
         }
@@ -422,10 +449,15 @@ fn overflowing_scores_are_refused_and_release_their_charge() {
     let n: usize = shape.iter().product();
     let huge = tensor(&vec![3.0e19f32; n], &shape);
     let small = tensor(&SplitMix64(9).vec(n, 1.0), &shape);
+    // A finite saved output and lse: the backward's own scores overflow.
+    let lse = tensor(&vec![0.0f32; 3 * 300], &[1, 3, 300]);
     for threads in [1usize, 7] {
         let be = backend(threads, Numerics::Fast);
-        assert_nonfinite("fwd", be.causal_sdpa_forward(&huge, &huge, &small));
-        assert_nonfinite("bwd", be.causal_sdpa_backward(&huge, &huge, &small, &small));
+        assert_nonfinite("fwd", be.causal_sdpa_forward(&huge, &huge, &small, None));
+        assert_nonfinite(
+            "bwd",
+            be.causal_sdpa_backward(&huge, &huge, &small, &small, &lse, &small, None),
+        );
         assert_eq!(be.budget().live_bytes().unwrap(), 0);
     }
 }
@@ -514,9 +546,13 @@ fn sdpa_budget_is_sharp_balanced_and_covers_the_heap() {
     for shape in [[1usize, 4, 300, 64], [1, 12, 1024, 64]] {
         let f = Fixture::new(shape, 0x4ea9 + shape[2] as u64, 1.0);
         let t = f.tensors();
-        let fwd = |be: &CpuBackend| be.causal_sdpa_forward(&t[0], &t[1], &t[2]).map(|y| vec![y]);
+        let fwd = |be: &CpuBackend| {
+            be.causal_sdpa_forward(&t[0], &t[1], &t[2], None)
+                .map(|(y, _)| y)
+                .map(|y| vec![y])
+        };
         let bwd = |be: &CpuBackend| {
-            be.causal_sdpa_backward(&t[0], &t[1], &t[2], &t[3])
+            be.causal_sdpa_backward_recompute(&t[0], &t[1], &t[2], &t[3], None)
                 .map(|(a, b, c)| vec![a, b, c])
         };
         for threads in [1usize, 7] {

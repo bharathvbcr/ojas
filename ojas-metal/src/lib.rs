@@ -25,6 +25,7 @@ mod link;
 mod memory;
 
 pub use backend::{MetalBackend, MetalBuffer};
+pub use link::WaitCounts;
 pub use memory::MetalMemory;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -32,14 +33,13 @@ mod device;
 
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
 mod device {
-    use std::sync::atomic::AtomicU64;
     use std::sync::{mpsc, Arc};
 
     use ojas_core::OjasError;
 
-    use crate::link::{Msg, Res};
+    use crate::link::{Msg, Res, Waits};
 
-    pub(crate) fn spawn(_waits: Arc<AtomicU64>, _cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
+    pub(crate) fn spawn(_waits: Arc<Waits>, _cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
         Err(OjasError::Unsupported {
             op: "MetalBackend::new",
             detail: "ojas-metal was built without Metal (needs macOS and the `metal` feature)"

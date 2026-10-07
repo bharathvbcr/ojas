@@ -9,8 +9,8 @@ use ojas_cpu::CpuBackend;
 use ojas_io::{encode_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::{
     bind, block, forward_hidden, forward_logits, forward_loss, init_params, load_model,
-    load_params, load_spec, param_table, BlockParams, Eval, Graph, Init, ModelSpec, Rope,
-    COMPILED_PREFIX, LM_HEAD, SPEC_METADATA_KEY,
+    load_params, load_spec, param_table, ActivationCheckpoint, BlockParams, Eval, Graph, Init,
+    ModelSpec, Rope, COMPILED_PREFIX, LM_HEAD, SPEC_METADATA_KEY,
 };
 
 fn exact() -> CpuBackend {
@@ -90,13 +90,35 @@ fn eval_and_tape_forward_are_bit_identical_under_exact() {
     let ep = bind(&mut eval, &spec, &params).unwrap();
     let e_hidden = forward_hidden(&mut eval, &spec, &ep, &x, &rope).unwrap();
     let e_logits = forward_logits(&mut eval, &spec, &ep, &x, &rope).unwrap();
-    let e_loss = forward_loss(&mut eval, &spec, &ep, &x, &y, &rope, None, CHUNK).unwrap();
+    let e_loss = forward_loss(
+        &mut eval,
+        &spec,
+        &ep,
+        &x,
+        &y,
+        &rope,
+        None,
+        CHUNK,
+        ActivationCheckpoint::Off,
+    )
+    .unwrap();
 
     let mut tape = Tape::new(cpu.clone());
     let tp = bind(&mut tape, &spec, &params).unwrap();
     let t_hidden = forward_hidden(&mut tape, &spec, &tp, &x, &rope).unwrap();
     let t_logits = forward_logits(&mut tape, &spec, &tp, &x, &rope).unwrap();
-    let t_loss = forward_loss(&mut tape, &spec, &tp, &x, &y, &rope, None, CHUNK).unwrap();
+    let t_loss = forward_loss(
+        &mut tape,
+        &spec,
+        &tp,
+        &x,
+        &y,
+        &rope,
+        None,
+        CHUNK,
+        ActivationCheckpoint::Off,
+    )
+    .unwrap();
 
     assert_eq!(e_hidden.shape(), &[b, t, spec.n_embd]);
     assert_eq!(e_logits.shape(), &[b, t, spec.vocab]);
@@ -774,7 +796,18 @@ fn the_forward_refuses_mismatched_inputs() {
     assert!(forward_hidden(&mut eval, &spec, &p, &flat, &rope).is_err());
     let x = ids(&spec, 1, 4, 0, &budget);
     let bad_targets = Tensor::from_u32(&[1, 2, 3], &[3], &budget).unwrap();
-    assert!(forward_loss(&mut eval, &spec, &p, &x, &bad_targets, &rope, None, CHUNK).is_err());
+    assert!(forward_loss(
+        &mut eval,
+        &spec,
+        &p,
+        &x,
+        &bad_targets,
+        &rope,
+        None,
+        CHUNK,
+        ActivationCheckpoint::Off
+    )
+    .is_err());
     let out_of_vocab = Tensor::from_u32(&[1, 2, 3, 256], &[1, 4], &budget).unwrap();
     assert!(forward_hidden(&mut eval, &spec, &p, &out_of_vocab, &rope).is_err());
     // A grouped-query spec runs on Eval, but these are multi-head weights.

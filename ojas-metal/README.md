@@ -82,8 +82,10 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * A call with fewer than about 96 such threadgroups, such as one decode request, walks the cache in up to 96 / rows splits of at least 64 keys. `ojas_cached_attn_merge` then combines them in a fixed order, so results still repeat bit for bit. One request at 1024 keys runs about 22% less GPU time (`bench/results/2026-10-04-split/`).
   * Positions at or past `kv_len` are not read.
 * **QK-norm** validates and places both pairs first, so a refused call records nothing. It then runs as one command when q's and k's outputs and scratch fit the budget together; otherwise it runs the two `rms_norm_*` calls, which hold one side's scratch at a time.
-* **Causal attention** (`ojas_attn_fwd_d*` and `ojas_attn_bwd_{stats,dq,dkv}_d*`, at head dims 16, 32, 64, 128 and 256): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives `matmul2d`), after tessl's `qwen35_attn_tiled.metal` and `qwen35_attn_bwd.metal`. Grouped-query training repeats KV heads into that kernel and sums the KV gradients.
-  * The forward is one dispatch with an online softmax. The backward is three dispatches.
+* **Causal attention** (`ojas_attn_fwd_d*`, `ojas_attn_bwd_dr` and `ojas_attn_bwd_{dq,dkv}_d*`, at head dims 16, 32, 64, 128 and 256): FlashAttention-2 on the TensorOps matrix units (MetalPerformancePrimitives `matmul2d`), after tessl's `qwen35_attn_tiled.metal` and `qwen35_attn_bwd.metal`. Grouped-query heads read their KV head in place: the forward and dQ index KV head `h / (Hq / Hkv)`, and dK/dV run one threadgroup per KV head that loops its query heads in a fixed order. Nothing is repeated or summed back.
+  * The forward is one dispatch with an online softmax. It writes the output and the row log-sum-exp.
+  * The backward takes the saved output and log-sum-exp and is three dispatches: `rowsum(dO * O)`, dQ, then dK/dV. Its only scratch is that row sum, `B * Hq * T` floats.
+  * An optional sliding window `W` (query `t` sees keys `t - W < j <= t`) skips whole key tiles before the window and masks inside the edge tile.
   * Each threadgroup rebuilds 32 x 32 score blocks in about 8 KiB of threadgroup memory, so nothing T x T is stored.
   * Every output row is written once with no atomics, so results repeat bit for bit.
   * A `[T, D]` plane must fit i32 extents.

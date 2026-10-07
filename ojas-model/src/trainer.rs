@@ -38,14 +38,14 @@
 use ojas_autograd::Tape;
 use ojas_core::{
     next_step, AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, CeChunk, DType,
-    DataCursor, MuonNs5Config, OjasError, OptimizerKind, Tensor,
+    DataCursor, MuonNs5Config, Ns5Precision, OjasError, OptimizerKind, Tensor,
 };
 use ojas_cpu::{
     scaled_lr, LrSchedule, OptimGroup, ADAM_HYBRID_WEIGHT_DECAY, MUON_MOMENTUM, MUON_WEIGHT_DECAY,
 };
 use ojas_data::{Batch, BatchSampler, DataError, SamplerConfig, TokenBin};
 
-use crate::block::{bind, forward_loss, Rope};
+use crate::block::{bind, forward_loss, ActivationCheckpoint, Rope};
 use crate::init::{fnv1a, fnv1a_extend};
 use crate::json::quote;
 use crate::names::{param_table, ParamInfo};
@@ -116,6 +116,15 @@ pub struct TrainConfig {
     /// key from [`Self::to_json`], so a run id hashed from that text stays
     /// the same as a config written before the field existed.
     pub autocast: AutocastMode,
+    /// Precision of Muon's Newton-Schulz iterate. F32 omits the key from
+    /// [`Self::to_json`], as `autocast` Off does. [`Ns5Precision::Bf16`] is
+    /// stock nanolab's.
+    pub muon_ns5: Ns5Precision,
+    /// Whether each block's activations are recomputed in the backward
+    /// instead of kept ([`ActivationCheckpoint`]). It trades compute for
+    /// memory and leaves every value the same, so it is not part of
+    /// [`Self::to_json`] or the run id, and a resume may change it.
+    pub activations: ActivationCheckpoint,
 }
 
 impl TrainConfig {
@@ -143,6 +152,8 @@ impl TrainConfig {
             tokenizer_hash: [0; 32],
             git_sha: [0; 20],
             autocast: AutocastMode::Off,
+            muon_ns5: Ns5Precision::F32,
+            activations: ActivationCheckpoint::Off,
         }
     }
 
@@ -166,10 +177,15 @@ impl TrainConfig {
             AutocastMode::Off => "",
             AutocastMode::Bf16 => "\"autocast\":\"bf16\",",
         };
+        // Absent when F32, for the same reason.
+        let muon_ns5 = match self.muon_ns5 {
+            Ns5Precision::F32 => "",
+            Ns5Precision::Bf16 => "\"muon_ns5\":\"bf16\",",
+        };
         format!(
             "{{\"accum\":{},\"adam_lr\":{:?},{autocast}\"batch\":{},\"chunk_cols\":{},\
              \"chunk_rows\":{},\"data_seed\":{},\"decay_frac\":{:?},\"grad_clip\":{:?},\
-             \"ignore\":{},\"ignore_index\":{},\"matrix_lr\":{:?},\"on_nonfinite\":{},\
+             \"ignore\":{},\"ignore_index\":{},\"matrix_lr\":{:?},{muon_ns5}\"on_nonfinite\":{},\
              \"schedule\":{},\"seq_len\":{},\"total_steps\":{},\"warmup_steps\":{}}}",
             self.accum,
             self.adam_lr,
@@ -771,6 +787,7 @@ impl<B: Backend> Trainer<B> {
                         momentum: MUON_MOMENTUM,
                         weight_decay: MUON_WEIGHT_DECAY,
                         nesterov: true,
+                        ns5: self.cfg.muon_ns5,
                     }),
                     _ => StepConfig::AdamW(AdamWConfig::nanolab(lr, ADAM_HYBRID_WEIGHT_DECAY)),
                 })
@@ -829,6 +846,7 @@ impl<B: Backend> Trainer<B> {
                     rope,
                     cfg.ignore_index,
                     cfg.chunk,
+                    cfg.activations,
                 )?;
                 let loss_value = tape.value(loss)?.clone();
                 tape.backward_seeded(loss, seed)?;

@@ -121,7 +121,7 @@ fn non_finite_inputs_are_refused_by_every_op_family() {
     deferred(
         &m,
         "sdpa",
-        m.causal_sdpa_forward(&q, &k, &k),
+        m.causal_sdpa_forward(&q, &k, &k, None).map(|(y, _)| y),
         "causal_sdpa_forward",
     );
     let t = up(&m, &host_u32(&[0, 1], &[2]));
@@ -257,6 +257,7 @@ fn muon_refusal_at_the_last_element_leaves_both_tensors_bit_identical() {
         momentum: 0.95,
         weight_decay: 0.1,
         nesterov: true,
+        ns5: ojas_core::Ns5Precision::F32,
     };
     for which in 0..3 {
         for bad in [f32::NAN, f32::INFINITY] {
@@ -360,7 +361,7 @@ fn head_dim_above_64_is_refused_not_truncated() {
     // Derived from the core limit, so raising it keeps this a refusal test.
     let over = ojas_core::METAL_MAX_HEAD_DIM + 16;
     let q = up(&m, &rand(&[1, 1, 4, over as usize], 1, 1.0));
-    let r = m.causal_sdpa_forward(&q, &q, &q);
+    let r = m.causal_sdpa_forward(&q, &q, &q, None).map(|(y, _)| y);
     assert!(
         matches!(
             r,
@@ -369,7 +370,7 @@ fn head_dim_above_64_is_refused_not_truncated() {
         ),
         "{r:?}"
     );
-    let r = m.causal_sdpa_backward(&q, &q, &q, &q);
+    let r = m.causal_sdpa_backward_recompute(&q, &q, &q, &q, None);
     assert!(
         matches!(r, Err(OjasError::UnsupportedHeadDim { .. })),
         "{r:?}"
@@ -425,7 +426,8 @@ fn causal_attention_does_not_read_future_keys() {
     let v = rand(&[1, 2, t, d], 3, 1.0);
     let base = down(&ok(
         "base",
-        m.causal_sdpa_forward(&up(&m, &q), &up(&m, &k), &up(&m, &v)),
+        m.causal_sdpa_forward(&up(&m, &q), &up(&m, &k), &up(&m, &v), None)
+            .map(|(y, _)| y),
     ));
     // Replace every key and value at positions > cut with huge values.
     let cut = 20;
@@ -443,7 +445,8 @@ fn causal_attention_does_not_read_future_keys() {
     let (k2, v2) = (host(&k2, &[1, 2, t, d]), host(&v2, &[1, 2, t, d]));
     let out = down(&ok(
         "leak",
-        m.causal_sdpa_forward(&up(&m, &q), &up(&m, &k2), &up(&m, &v2)),
+        m.causal_sdpa_forward(&up(&m, &q), &up(&m, &k2), &up(&m, &v2), None)
+            .map(|(y, _)| y),
     ));
     for h in 0..2 {
         for pos in 0..=cut {
@@ -470,7 +473,7 @@ fn causal_attention_does_not_read_future_keys() {
     let g = up(&m, &host(&g, &[1, 2, t, d]));
     let (_, dk, dv) = ok(
         "bwd",
-        m.causal_sdpa_backward(&up(&m, &q), &up(&m, &k), &up(&m, &v), &g),
+        m.causal_sdpa_backward_recompute(&up(&m, &q), &up(&m, &k), &up(&m, &v), &g, None),
     );
     let (dk, dv) = (down(&dk), down(&dv));
     for h in 0..2 {
@@ -532,6 +535,7 @@ fn over_budget_outputs_are_capacity_exceeded_before_device_allocation() {
             momentum: 0.95,
             nesterov: true,
             weight_decay: 0.0,
+            ns5: ojas_core::Ns5Precision::F32,
         },
     );
     assert!(

@@ -231,7 +231,13 @@ impl Backend for Resident {
     ) -> Result<(Tensor, Tensor, Tensor, Tensor), OjasError> {
         Err(unsupported("rms_qk_norm_backward"))
     }
-    fn causal_sdpa_forward(&self, _: &Tensor, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
+    fn causal_sdpa_forward(
+        &self,
+        _: &Tensor,
+        _: &Tensor,
+        _: &Tensor,
+        _: Option<usize>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
         Err(unsupported("causal_sdpa_forward"))
     }
     fn causal_sdpa_backward(
@@ -240,6 +246,9 @@ impl Backend for Resident {
         _: &Tensor,
         _: &Tensor,
         _: &Tensor,
+        _: &Tensor,
+        _: &Tensor,
+        _: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         Err(unsupported("causal_sdpa_backward"))
     }

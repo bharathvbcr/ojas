@@ -114,6 +114,69 @@ kernel void ojas_per_head_gate_bwd(
     if (bad_out) ojas_gate_flag(st, GATE_ST_OUT);
 }
 
+/// scale[r, h] = sigmoid(pre[r, h] + bias[h]), the value the forward
+/// multiplies by, kept for `ojas_per_head_gate_bwd_saved`. The same
+/// `ojas_sigmoid` of the same sum, so it is bit for bit the `g` the
+/// recomputing backward forms. Grid: one thread per (row, head).
+kernel void ojas_per_head_gate_scale(
+    device const float *pre [[buffer(0)]],
+    device const float *bias [[buffer(1)]],
+    device float *scale [[buffer(2)]],
+    constant uint &rows [[buffer(3)]],
+    constant uint &n_head [[buffer(4)]],
+    constant uint &pre_len [[buffer(5)]],
+    constant uint &bias_len [[buffer(6)]],
+    uint rh [[thread_position_in_grid]])
+{
+    const uint units = rows * n_head;
+    if (rh >= units || n_head == 0u) return;
+    const uint h = rh % n_head;
+    if (rh >= pre_len || h >= bias_len) return;
+    scale[rh] = ojas_sigmoid(pre[rh] + bias[h]);
+}
+
+/// `ojas_per_head_gate_bwd` with g read from the forward's saved `scale`
+/// instead of recomputed from `pre` and `bias`, which the caller then
+/// never forms: d_attn = dy * g, d_pre = g * (1 - g) * sum_d(dy * attn),
+/// the sum in the same left-to-right order.
+/// Checks: `attn`, `dy` and `scale` (ST_IN); `d_attn` (ST_OUT).
+kernel void ojas_per_head_gate_bwd_saved(
+    device const float *attn [[buffer(0)]],
+    device const float *scale [[buffer(1)]],
+    device const float *dy [[buffer(2)]],
+    device float *d_attn [[buffer(3)]],
+    device float *d_pre [[buffer(4)]],
+    constant uint &rows [[buffer(5)]],
+    constant uint &n_head [[buffer(6)]],
+    constant uint &head_dim [[buffer(7)]],
+    constant uint &plane_len [[buffer(8)]],
+    constant uint &scale_len [[buffer(9)]],
+    device atomic_uint *st [[buffer(10)]],
+    uint rh [[thread_position_in_grid]])
+{
+    const uint units = rows * n_head;
+    if (rh >= units || n_head == 0u || rh >= scale_len) return;
+    const float g = scale[rh];
+    const ulong base = (ulong)rh * head_dim;
+    if (base + head_dim > plane_len) return;
+    bool bad_in = !isfinite(g);
+    bool bad_out = false;
+    float acc = 0.0f;
+    for (uint d = 0; d < head_dim; d++) {
+        const float dv = dy[base + d];
+        const float av = attn[base + d];
+        const float term = dv * av;
+        const float da = dv * g;
+        d_attn[base + d] = da;
+        acc += term;
+        bad_in = bad_in || !isfinite(dv) || !isfinite(av);
+        bad_out = bad_out || !isfinite(da);
+    }
+    d_pre[rh] = acc * g * (1.0f - g);
+    if (bad_in) ojas_gate_flag(st, GATE_ST_IN);
+    if (bad_out) ojas_gate_flag(st, GATE_ST_OUT);
+}
+
 /// Threadgroup floats the bias sum stages rows in, shared out evenly among a
 /// threadgroup's SIMD-groups (8 KiB; all of it when there is one).
 constexpr constant uint DBIAS_STAGE = 2048u;

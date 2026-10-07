@@ -17,6 +17,8 @@ use tessl::runtime::GpuRuntime;
 use tessl::tensor::Tensor;
 use tessl::DType;
 
+use crate::link::device_lost;
+
 pub const MAX_BATCH: u32 = 2;
 pub const MAX_SEQ: u32 = 16;
 pub const MAX_VOCAB: u32 = 128;
@@ -714,18 +716,18 @@ pub fn tiny_train_step(
 
 fn confirm_adamw(state: &mut TinyState) -> Result<(), OjasError> {
     if state.rt.is_poisoned() {
-        return Err(metal("runtime poisoned after adamw"));
+        return Err(device_lost("runtime poisoned after adamw"));
     }
     let lm = state.w_lm.read_f32().map_err(|err| {
         if state.rt.is_poisoned() {
-            metal(format!("runtime poisoned after adamw: {err}"))
+            device_lost(format!("runtime poisoned after adamw: {err}"))
         } else {
             metal(err)
         }
     })?;
     let wq = state.w_q.read_f32().map_err(|err| {
         if state.rt.is_poisoned() {
-            metal(format!("runtime poisoned after adamw: {err}"))
+            device_lost(format!("runtime poisoned after adamw: {err}"))
         } else {
             metal(err)
         }
@@ -1908,6 +1910,20 @@ mod tests {
         assert!(state.rt.is_poisoned());
         let alloc_err = state.rt.alloc_tensor_f32(&[4]).unwrap_err();
         assert!(alloc_err.contains("poison"), "{alloc_err}");
+        // Pre-fix, this was OjasError::Backend with "runtime poisoned" in
+        // its text, which the C ABI matched as a substring.
+        let mut state = state;
+        let lost = confirm_adamw(&mut state).unwrap_err();
+        assert!(
+            matches!(
+                lost,
+                OjasError::DeviceLost {
+                    backend: BackendId::Metal,
+                    ..
+                }
+            ),
+            "{lost:?}"
+        );
         let w = state.host_weights();
         assert_eq!(w.rms_w, snap.0.as_slice());
         assert_eq!(w.w_gate, snap.1.as_slice());

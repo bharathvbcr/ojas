@@ -16,12 +16,15 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
 use ojas_core::{sdpa_scale, OjasError, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS};
 use tessl::dispatch::{self, set_f32, set_gpu_buf_offset, set_u32, Binder};
+use tessl::gdn_train::{
+    gdn_train_backward, gdn_train_forward, GdnTrainDims, GdnTrainGrads, GdnTrainInputs,
+    GdnTrainWorkspace, GDN_TRAIN_DK,
+};
 use tessl::gemm::{transpose_f32_into, GemmOperands};
 use tessl::runtime::GpuRuntime;
 use tessl::tensor::{gpu_copy, GpuBuffer, Tensor as TT};
@@ -29,8 +32,8 @@ use tessl::DType;
 
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
-    metal_err, reduce_groups, rms_w_chunks, Arg, Cmd, LceGeom, Msg, NewBuf, Reply, Res, RmsSide,
-    RopeMode,
+    device_lost, metal_err, reduce_groups, rms_w_chunks, Arg, Cmd, GdnArgs, LceGeom, Msg, NewBuf,
+    Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
 };
 
 const ST_IN: u32 = 0;
@@ -46,6 +49,24 @@ const ST_BYTES: usize = ST_WORDS * 4;
 const SLAB_SLOTS: usize = 4096;
 /// Dispatches between unwaited commits.
 const OVERLAP_DISPATCHES: usize = 256;
+/// Largest upload carried inline (in tessl's constant arena) while work is
+/// recorded. Larger uploads wait and map.
+const INLINE_UPLOAD_BYTES: usize = 64 << 10;
+/// Inline upload bytes allowed between waited commits. tessl resets its
+/// 16 MiB constant arena only at a waited commit, and an exhausted arena
+/// poisons the runtime, so inline uploads keep to a sixteenth of it and the
+/// rest stays for the dispatches' own constants.
+const INLINE_ARENA_BYTES: usize = 1 << 20;
+
+/// Whether `len` upload bytes may ride inline after `used` inline bytes
+/// since the last wait: non-empty, whole words, and inside both caps.
+fn inline_upload_fits(len: usize, used: usize) -> bool {
+    len > 0
+        && len.is_multiple_of(4)
+        && len <= INLINE_UPLOAD_BYTES
+        && used.saturating_add(len) <= INLINE_ARENA_BYTES
+}
+
 /// Ceiling of the bytes allocated between waited commits; the default cap is
 /// the smaller of this and a quarter of the backend's budget.
 const MEM_CAP_CEILING: u64 = 1 << 30;
@@ -93,6 +114,7 @@ fn cached_attn_splits(rows: usize, kv_len: usize) -> usize {
 const KERNELS: &[&str] = &[
     "ojas_check_finite",
     "ojas_fill_u32",
+    "ojas_upload_words",
     "ojas_adamw_check",
     "ojas_adamw_apply",
     "ojas_copy_if_clean",
@@ -114,9 +136,12 @@ const KERNELS: &[&str] = &[
     "ojas_add_fwd",
     "ojas_add_bwd",
     "ojas_axpby",
+    "ojas_axpby_bf16",
+    "ojas_axpby_fma",
     "ojas_div_scalar",
     "ojas_scale",
     "ojas_ns_denom",
+    "ojas_ns_denom_bf16",
     "ojas_vres_fwd",
     "ojas_vres_bwd",
     "ojas_vres_lambda",
@@ -138,31 +163,27 @@ const KERNELS: &[&str] = &[
     "ojas_attn_fwd_d32",
     "ojas_attn_fwd_d64",
     "ojas_attn_fwd_d128",
-    "ojas_attn_bwd_stats_d16",
-    "ojas_attn_bwd_stats_d32",
-    "ojas_attn_bwd_stats_d64",
+    "ojas_attn_bwd_dr",
     "ojas_attn_bwd_dq_d16",
     "ojas_attn_bwd_dq_d32",
     "ojas_attn_bwd_dq_d64",
     "ojas_attn_bwd_dkv_d16",
     "ojas_attn_bwd_dkv_d32",
     "ojas_attn_bwd_dkv_d64",
-    "ojas_attn_bwd_stats_d128",
     "ojas_attn_bwd_dq_d128",
     "ojas_attn_bwd_dkv_d128",
     "ojas_attn_fwd_d256",
-    "ojas_attn_bwd_stats_d256",
     "ojas_attn_bwd_dq_d256",
     "ojas_attn_bwd_dkv_d256",
-    "ojas_head_repeat",
-    "ojas_head_sum",
     "ojas_per_head_gate_fwd",
     "ojas_per_head_gate_bwd",
+    "ojas_per_head_gate_scale",
+    "ojas_per_head_gate_bwd_saved",
     "ojas_per_head_gate_dbias",
 ];
 
 /// Start the device thread and wait until its runtime is up.
-pub(crate) fn spawn(waits: Arc<AtomicU64>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
+pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
     spawn_with(move || Worker::open(waits, budget_cap))
 }
 
@@ -281,6 +302,11 @@ struct Book {
     dirty: bool,
     since_overlap: usize,
     alloc_since_wait: u64,
+    /// Upload bytes carried in tessl's constant arena since the last
+    /// waited commit, which is the only point tessl resets the arena.
+    inline_since_wait: usize,
+    /// Small uploads behind recorded work ride inline; off, they wait.
+    inline_uploads: bool,
     overlap: usize,
     mem_cap: u64,
     ws_limit: u64,
@@ -289,6 +315,18 @@ struct Book {
     fail_allocs: (u32, u32),
     #[cfg(test)]
     fail_next_read: bool,
+}
+
+/// What one per-head gate command runs.
+#[derive(Clone, Copy)]
+enum GateMode {
+    Forward,
+    /// The forward, and the per-head sigmoid `[rows, heads]` after it.
+    ForwardSaving,
+    /// Gradient `gy`, recomputing the logits.
+    Backward(Arg),
+    /// Gradient `gy` with a saving forward's sigmoid.
+    BackwardSaved(Arg, Arg),
 }
 
 /// Which pending slots a waited commit may scan.
@@ -321,13 +359,13 @@ struct Worker {
     next_id: u64,
     poisoned: bool,
     /// Waited commits, shared with every handle (`MetalBackend::waits`).
-    waits: Arc<AtomicU64>,
+    waits: Arc<Waits>,
     slab: GpuBuffer,
     book: RefCell<Book>,
 }
 
 impl Worker {
-    fn open(waits: Arc<AtomicU64>, budget_cap: u64) -> Res<Self> {
+    fn open(waits: Arc<Waits>, budget_cap: u64) -> Res<Self> {
         let rt = GpuRuntime::new().map_err(metal_err)?;
         rt.set_async_encode(true).map_err(metal_err)?;
         let lib = include_bytes!(concat!(env!("OUT_DIR"), "/ojas_per_head_gate.metallib"));
@@ -349,6 +387,8 @@ impl Worker {
             dirty: false,
             since_overlap: 0,
             alloc_since_wait: 0,
+            inline_since_wait: 0,
+            inline_uploads: true,
             overlap: OVERLAP_DISPATCHES,
             mem_cap: MEM_CAP_CEILING.min(budget_cap / 4),
             ws_limit: ws / WS_DEN * WS_NUM,
@@ -394,9 +434,13 @@ impl Worker {
             }
             let out = if self.poisoned {
                 Err(OjasError::Poisoned)
+            } else if self.rt.is_poisoned() {
+                Err(device_lost(
+                    "the tessl runtime is poisoned by an earlier failed or timed-out command buffer",
+                ))
             } else {
                 match catch_unwind(AssertUnwindSafe(|| self.command(msg.cmd))) {
-                    Ok(out) => out,
+                    Ok(out) => out.map_err(|err| self.lost_if_poisoned(err)),
                     Err(_) => {
                         self.poisoned = true;
                         Err(metal_err(
@@ -408,6 +452,19 @@ impl Worker {
             if let Some(reply) = msg.reply {
                 let _ = reply.send(out);
             }
+        }
+    }
+
+    /// A command that failed on a runtime tessl has poisoned (a command
+    /// buffer that failed or timed out) failed because the device is gone:
+    /// its tessl error becomes [`OjasError::DeviceLost`]. Typed errors (a
+    /// fault, a capacity refusal) keep their kind.
+    fn lost_if_poisoned(&self, err: OjasError) -> OjasError {
+        match err {
+            OjasError::Backend { detail, .. } if self.rt.is_poisoned() => {
+                device_lost(format!("tessl runtime poisoned: {detail}"))
+            }
+            other => other,
         }
     }
 
@@ -478,10 +535,10 @@ impl Worker {
             return Ok(());
         }
         if alloc > cap {
-            return self.settle(Scan::All);
+            return self.settle(Scan::All, Wait::MemCap);
         }
         if alloc > WS_GROWTH && self.rt.current_allocated_bytes() > limit {
-            return self.settle(Scan::All);
+            return self.settle(Scan::All, Wait::WorkingSet);
         }
         if since >= overlap {
             self.rt.commit(false).map_err(metal_err)?;
@@ -493,16 +550,18 @@ impl Worker {
     /// Wait for everything recorded, then read the status slots `scan`
     /// allows, in recording order. A fault found is held for the next sync
     /// point; a fault already held stays first. On a failed wait or mapping
-    /// nothing is scanned and the pending list is kept.
-    fn settle(&self, scan: Scan) -> Res<()> {
+    /// nothing is scanned and the pending list is kept. A wait is counted
+    /// under `why`; with nothing recorded nothing waits and nothing counts.
+    fn settle(&self, scan: Scan, why: Wait) -> Res<()> {
         self.note_dispatches();
         if self.book.borrow().dirty {
-            self.waits.fetch_add(1, Ordering::Relaxed);
+            self.waits.count(why);
             self.rt.synchronize().map_err(metal_err)?;
             let mut book = self.book.borrow_mut();
             book.dirty = false;
             book.since_overlap = 0;
             book.alloc_since_wait = 0;
+            book.inline_since_wait = 0;
         }
         self.scan(scan)
     }
@@ -622,7 +681,7 @@ impl Worker {
     fn recycle(&self) -> Res<()> {
         self.note_dispatches();
         self.book.borrow_mut().dirty = true;
-        self.settle(Scan::BeforeCurrent)
+        self.settle(Scan::BeforeCurrent, Wait::Recycle)
     }
 
     /// `n` four-byte elements, offset 0.
@@ -699,7 +758,7 @@ impl Worker {
     fn status(&self, op: &'static str) -> Res<St> {
         if self.book.borrow().used == SLAB_SLOTS {
             self.note_dispatches();
-            self.settle(Scan::All)?;
+            self.settle(Scan::All, Wait::SlabFull)?;
         }
         let mut book = self.book.borrow_mut();
         if book.used == SLAB_SLOTS {
@@ -750,15 +809,30 @@ impl Worker {
         })
     }
 
-    fn axpby(&self, x: &V, y: &V, out: &V, alpha: f32, beta: f32) -> Res<()> {
+    /// `out = alpha x + beta y` through one of the three Muon combination
+    /// kernels: `ojas_axpby` (two products and a sum), `ojas_axpby_fma`
+    /// (`fma(beta, y, alpha x)`, torch's fused `add(.., alpha=beta)`) or
+    /// `ojas_axpby_bf16` (every op rounded to bf16).
+    #[allow(clippy::too_many_arguments)]
+    fn axpby(&self, kernel: &str, x: &V, y: &V, out: &V, alpha: f32, beta: f32) -> Res<()> {
         let n = u32_of(out.n)?;
-        self.k1("ojas_axpby", out.n, |b| {
+        self.k1(kernel, out.n, |b| {
             bind(b, x, 0);
             bind(b, y, 1);
             bind(b, out, 2);
             set_u32(b, n, 3);
             set_f32(b, alpha, 4);
             set_f32(b, beta, 5);
+        })
+    }
+
+    /// `dst = r(src)`, `r` rounding to bf16; `src` and `dst` may be one view.
+    fn round_bf16_into(&self, src: &V, dst: &V) -> Res<()> {
+        let n = u32_of(dst.n)?;
+        self.k1("ojas_round_bf16", dst.n, |b| {
+            bind(b, src, 0);
+            bind(b, dst, 1);
+            set_u32(b, n, 2);
         })
     }
 
@@ -806,6 +880,10 @@ impl Worker {
             }
             // `serve` answers it first; kept here so the match stays total.
             Cmd::Memory => Ok(Reply::Memory(self.memory())),
+            Cmd::InlineUploads { on } => {
+                self.book.borrow_mut().inline_uploads = on;
+                Ok(Reply::Done)
+            }
             Cmd::Upload { bytes } => self.upload(&bytes),
             #[cfg(test)]
             Cmd::InjectPanic => {
@@ -817,6 +895,11 @@ impl Worker {
             #[cfg(test)]
             Cmd::FailNextRead => {
                 self.book.borrow_mut().fail_next_read = true;
+                Ok(Reply::Done)
+            }
+            #[cfg(test)]
+            Cmd::PoisonRuntime => {
+                self.rt.poison_as_shared_event_timeout_for_test();
                 Ok(Reply::Done)
             }
             #[cfg(test)]
@@ -834,7 +917,7 @@ impl Worker {
                 Ok(Reply::Done)
             }
             Cmd::Sync => {
-                self.settle(Scan::All)?;
+                self.settle(Scan::All, Wait::Sync)?;
                 self.report()?;
                 Ok(Reply::Done)
             }
@@ -883,25 +966,8 @@ impl Worker {
                 mode,
                 backward,
             } => self.rope(x, cos, sin, rows, dim, mode, backward),
-            Cmd::Sdpa {
-                q,
-                k,
-                v,
-                bh,
-                t,
-                d,
-                rep,
-            } => self.sdpa(q, k, v, bh, t, d, rep),
-            Cmd::SdpaBwd {
-                q,
-                k,
-                v,
-                gy,
-                bh,
-                t,
-                d,
-                rep,
-            } => self.sdpa_bwd(q, k, v, gy, bh, t, d, rep),
+            Cmd::Sdpa { q, k, v, geom } => self.sdpa(q, k, v, geom),
+            Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
                 w,
@@ -911,20 +977,42 @@ impl Worker {
                 din,
                 heads,
                 dh,
-            } => self.gate(x, w, b, attn, None, rows, din, heads, dh),
+                save,
+            } => {
+                let mode = if save {
+                    GateMode::ForwardSaving
+                } else {
+                    GateMode::Forward
+                };
+                self.gate(x, w, b, attn, mode, [rows, din, heads, dh])
+            }
             Cmd::GateBwd {
                 x,
                 w,
                 b,
                 attn,
                 gy,
+                scales,
                 rows,
                 din,
                 heads,
                 dh,
-            } => self.gate(x, w, b, attn, Some(gy), rows, din, heads, dh),
+            } => {
+                let mode = match scales {
+                    Some(s) => GateMode::BackwardSaved(gy, s),
+                    None => GateMode::Backward(gy),
+                };
+                self.gate(x, w, b, attn, mode, [rows, din, heads, dh])
+            }
             Cmd::Vres { v, v0, lam } => self.vres(v, v0, lam, None),
             Cmd::VresBwd { v, v0, lam, gy } => self.vres(v, v0, lam, Some(gy)),
+            Cmd::Gdn { x } => self.gdn(x),
+            Cmd::GdnBwd {
+                x,
+                ckpt,
+                d_o,
+                d_fin,
+            } => self.gdn_bwd(x, ckpt, d_o, d_fin),
             Cmd::RoundBf16 { x } => self.round_bf16(x),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
@@ -990,17 +1078,41 @@ impl Worker {
                 nesterov,
                 decay,
                 alpha,
-            } => self.muon(p, g, m, rows, cols, momentum, nesterov, decay, alpha),
+                bf16,
+            } => self.muon(p, g, m, rows, cols, momentum, nesterov, decay, alpha, bf16),
         }
     }
 
-    /// tessl maps a buffer for the host only after a waited commit, so an
-    /// upload while work is recorded waits; it is made here, where it is
-    /// counted and its slots scanned.
+    /// tessl maps a buffer for the host only after a waited commit. With
+    /// nothing recorded that costs no wait, so the bytes are mapped in. With
+    /// work recorded, a small upload rides in the command itself: its words
+    /// go into tessl's constant arena and `ojas_upload_words` copies them,
+    /// in order with the recorded work, so nothing waits. Any other upload
+    /// waits ([`Wait::Upload`]) and maps.
     fn upload(&mut self, bytes: &[u8]) -> Res<Reply> {
         let buf = self.alloc(bytes.len())?;
-        self.settle(Scan::All)?;
-        {
+        self.note_dispatches();
+        let inline = {
+            let book = self.book.borrow();
+            book.dirty
+                && book.inline_uploads
+                && inline_upload_fits(bytes.len(), book.inline_since_wait)
+        };
+        if inline {
+            let n = bytes.len() / 4;
+            let dst = V {
+                buf: buf.clone(),
+                off: 0,
+                n,
+            };
+            self.k1("ojas_upload_words", n, |b| {
+                bind(b, &dst, 0);
+                set_u32(b, n as u32, 1);
+                b.bind_bytes(bytes, 2);
+            })?;
+            self.book.borrow_mut().inline_since_wait += bytes.len();
+        } else {
+            self.settle(Scan::All, Wait::Upload)?;
             let mut map = buf.try_contents_u8().map_err(metal_err)?;
             map[..bytes.len()].copy_from_slice(bytes);
         }
@@ -1024,7 +1136,7 @@ impl Worker {
             .checked_add(len)
             .filter(|end| *end <= buf.nbytes())
             .ok_or_else(|| metal_err("read past the end of a device buffer"))?;
-        self.settle(Scan::All)?;
+        self.settle(Scan::All, Wait::Read)?;
         #[cfg(test)]
         if std::mem::take(&mut self.book.borrow_mut().fail_next_read) {
             return Err(metal_err("injected read failure"));
@@ -1338,217 +1450,178 @@ impl Worker {
         }
     }
 
-    /// Copy each source plane `rep` times into `dst`. `dst.n == 0` launches
-    /// nothing: a zero-wide grid is refused.
-    fn head_repeat(&self, src: &V, dst: &V, plane: u32, rep: u32) -> Res<()> {
-        if dst.n == 0 {
-            return Ok(());
+    /// The views of one attention launch hold exactly the planes `g`
+    /// names: `bh` query planes and `bh / rep` KV planes of `t * d` each.
+    /// The kernels read KV plane `bh / rep`, so a short K or V would be read
+    /// past its end.
+    fn sdpa_views(op: &'static str, g: &SdpaGeom, q: &[&V], kv: &[&V], rows: &[&V]) -> Res<()> {
+        if g.rep == 0 || !g.bh.is_multiple_of(g.rep) {
+            return Err(metal_err(format!(
+                "{op}: {} query planes do not group by {}",
+                g.bh, g.rep
+            )));
         }
-        let n = u32_of(dst.n)?;
-        self.k1("ojas_head_repeat", dst.n, |b| {
-            bind(b, src, 0);
-            bind(b, dst, 1);
-            set_u32(b, n, 2);
-            set_u32(b, plane, 3);
-            set_u32(b, rep, 4);
-        })
+        let plane = g.t as usize * g.d as usize;
+        let q_n = g.bh as usize * plane;
+        let kv_n = (g.bh / g.rep) as usize * plane;
+        let rows_n = g.bh as usize * g.t as usize;
+        let fits = q.iter().all(|v| v.n == q_n)
+            && kv.iter().all(|v| v.n == kv_n)
+            && rows.iter().all(|v| v.n == rows_n);
+        if !fits {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold {} query and {} kv planes of [{}, {}]",
+                g.bh,
+                g.bh / g.rep,
+                g.t,
+                g.d
+            )));
+        }
+        Ok(())
     }
 
-    /// Sum `rep` source planes into each destination plane, `r` ascending.
-    fn head_sum(&self, src: &V, dst: &V, plane: u32, rep: u32) -> Res<()> {
-        if dst.n == 0 {
-            return Ok(());
-        }
-        let n = u32_of(dst.n)?;
-        self.k1("ojas_head_sum", dst.n, |b| {
-            bind(b, src, 0);
-            bind(b, dst, 1);
-            set_u32(b, n, 2);
-            set_u32(b, plane, 3);
-            set_u32(b, rep, 4);
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn sdpa(&mut self, q: Arg, k: Arg, v: Arg, bh: u32, t: u32, d: u32, rep: u32) -> Res<Reply> {
+    /// The tiled forward in `ojas_backend.metal`: the output and each query
+    /// row's log-sum-exp. Grouped-query heads read their KV plane in place.
+    fn sdpa(&mut self, q: Arg, k: Arg, v: Arg, g: SdpaGeom) -> Res<Reply> {
         const OP: &str = "causal_sdpa_forward";
-        let width = Self::attn_width(d)?;
-        let scale = sdpa_scale(d)?;
-        attn_plane_fits(OP, t, d)?;
-        let qv = self.view(q)?;
-        let mut kv = self.view(k)?;
-        let mut vv = self.view(v)?;
-        // `rep <= 1` is the equal-head kernel, bit for bit. A wider repeat
-        // expands K and V to the query head count first.
-        if rep > 1 && qv.n > 0 {
-            let plane = t
-                .checked_mul(d)
-                .ok_or_else(|| metal_err(format!("{OP}: plane overflows")))?;
-            let kexp = self.fresh(qv.n)?;
-            let vexp = self.fresh(qv.n)?;
-            self.head_repeat(&kv, &kexp, plane, rep)?;
-            self.head_repeat(&vv, &vexp, plane, rep)?;
-            kv = kexp;
-            vv = vexp;
-        }
+        let width = Self::attn_width(g.d)?;
+        let scale = sdpa_scale(g.d)?;
+        attn_plane_fits(OP, g.t, g.d)?;
+        let (qv, kv, vv) = (self.view(q)?, self.view(k)?, self.view(v)?);
+        Self::sdpa_views(OP, &g, &[&qv], &[&kv, &vv], &[])?;
         let o = self.fresh(qv.n)?;
+        let lse = self.fresh(g.bh as usize * g.t as usize)?;
         let st = self.status(OP)?;
         // No separate pass over Q, K or V. A non-finite Q or K makes a live
         // score non-finite, which the kernel reports; a non-finite V shows
         // up in O, which the output check reports.
-        let name = format!("ojas_attn_fwd_d{width}");
-        let groups = (t as usize).div_ceil(ATTN_ROWS);
-        self.ktg(&name, groups, bh as usize, ATTN_THREADS, |b| {
-            bind(b, &qv, 0);
-            bind(b, &kv, 1);
-            bind(b, &vv, 2);
-            bind(b, &o, 3);
-            bind_st(b, &st, 4);
-            set_u32(b, t, 5);
-            set_u32(b, d, 6);
-            set_f32(b, scale, 7);
-        })?;
+        if qv.n > 0 {
+            let name = format!("ojas_attn_fwd_d{width}");
+            let groups = (g.t as usize).div_ceil(ATTN_ROWS);
+            self.ktg(&name, groups, g.bh as usize, ATTN_THREADS, |b| {
+                bind(b, &qv, 0);
+                bind(b, &kv, 1);
+                bind(b, &vv, 2);
+                bind(b, &o, 3);
+                bind(b, &lse, 4);
+                bind_st(b, &st, 5);
+                set_u32(b, g.t, 6);
+                set_u32(b, g.d, 7);
+                set_u32(b, g.rep, 8);
+                set_u32(b, g.window, 9);
+                set_f32(b, scale, 10);
+            })?;
+        }
         self.check(&st, &o, ST_OUT)?;
-        Ok(self.keep(vec![o]))
+        self.check(&st, &lse, ST_OUT)?;
+        Ok(self.keep(vec![o, lse]))
     }
 
-    /// The tiled backward in `ojas_backend.metal`: `stats` writes each query
-    /// row's log-sum-exp and Dr, `dq` walks key blocks per query block, and
-    /// `dkv` walks query blocks per key block. Three dispatches, no T x T
-    /// buffer, no wait.
-    #[allow(clippy::too_many_arguments)]
-    fn sdpa_bwd(
-        &mut self,
-        q: Arg,
-        k: Arg,
-        v: Arg,
-        gy: Arg,
-        bh: u32,
-        t: u32,
-        d: u32,
-        rep: u32,
-    ) -> Res<Reply> {
+    /// The tiled backward in `ojas_backend.metal`, from the forward's output
+    /// and log-sum-exp: `dr` forms each query row's `Dr = dO · O`, `dq`
+    /// walks key blocks per query block, and `dkv` walks query blocks (of
+    /// every query plane sharing the KV plane) per key block. Three
+    /// dispatches, no T x T buffer, no expanded K or V, no wait.
+    fn sdpa_bwd(&mut self, args: [Arg; 6], g: SdpaGeom) -> Res<Reply> {
         const OP: &str = "causal_sdpa_backward";
-        let width = Self::attn_width(d)?;
-        let scale = sdpa_scale(d)?;
-        attn_plane_fits(OP, t, d)?;
-        let qv = self.view(q)?;
-        let kv0 = self.view(k)?;
-        let vv0 = self.view(v)?;
-        let gv = self.view(gy)?;
-        let (kv_n, vv_n) = (kv0.n, vv0.n);
-        let (kv, vv) = if rep > 1 && qv.n > 0 {
-            let plane = t
-                .checked_mul(d)
-                .ok_or_else(|| metal_err(format!("{OP}: plane overflows")))?;
-            let kexp = self.fresh(qv.n)?;
-            let vexp = self.fresh(qv.n)?;
-            self.head_repeat(&kv0, &kexp, plane, rep)?;
-            self.head_repeat(&vv0, &vexp, plane, rep)?;
-            (kexp, vexp)
-        } else {
-            (kv0, vv0)
-        };
-        let rows = bh as usize * t as usize;
-        let lse = self.fresh(rows)?;
+        let width = Self::attn_width(g.d)?;
+        let scale = sdpa_scale(g.d)?;
+        attn_plane_fits(OP, g.t, g.d)?;
+        let [q, k, v, o, lse, gy] = args;
+        let (qv, kv, vv) = (self.view(q)?, self.view(k)?, self.view(v)?);
+        let (ov, lv, gv) = (self.view(o)?, self.view(lse)?, self.view(gy)?);
+        Self::sdpa_views(OP, &g, &[&qv, &ov, &gv], &[&kv, &vv], &[&lv])?;
+        let rows = g.bh as usize * g.t as usize;
         let dvec = self.fresh(rows)?;
         let dq = self.fresh(qv.n)?;
-        let dk_wide = self.fresh(qv.n)?;
-        let dv_wide = self.fresh(qv.n)?;
+        let dk = self.fresh(kv.n)?;
+        let dv = self.fresh(vv.n)?;
         let st = self.status(OP)?;
-        for x in [&qv, &kv, &vv, &gv] {
+        for x in [&qv, &kv, &vv, &ov, &lv, &gv] {
             self.check(&st, x, ST_IN)?;
         }
-        let groups = (t as usize).div_ceil(ATTN_ROWS);
-        let planes = bh as usize;
-        let inputs = |b: &mut Binder<'_>| {
-            bind(b, &qv, 0);
-            bind(b, &kv, 1);
-            bind(b, &vv, 2);
-            bind(b, &gv, 3);
-        };
-        self.ktg(
-            &format!("ojas_attn_bwd_stats_d{width}"),
-            groups,
-            planes,
-            ATTN_THREADS,
-            |b| {
-                inputs(b);
-                bind(b, &lse, 4);
+        if qv.n > 0 {
+            let rows_u32 = u32_of(rows)?;
+            self.ktg(
+                "ojas_attn_bwd_dr",
+                rows.div_ceil(ATTN_THREADS / 32),
+                1,
+                ATTN_THREADS,
+                |b| {
+                    bind(b, &gv, 0);
+                    bind(b, &ov, 1);
+                    bind(b, &dvec, 2);
+                    set_u32(b, rows_u32, 3);
+                    set_u32(b, g.d, 4);
+                },
+            )?;
+            let groups = (g.t as usize).div_ceil(ATTN_ROWS);
+            let inputs = |b: &mut Binder<'_>| {
+                bind(b, &qv, 0);
+                bind(b, &kv, 1);
+                bind(b, &vv, 2);
+                bind(b, &gv, 3);
+                bind(b, &lv, 4);
                 bind(b, &dvec, 5);
-                bind_st(b, &st, 6);
-                set_u32(b, t, 7);
-                set_u32(b, d, 8);
-                set_f32(b, scale, 9);
-            },
-        )?;
-        self.ktg(
-            &format!("ojas_attn_bwd_dq_d{width}"),
-            groups,
-            planes,
-            ATTN_THREADS,
-            |b| {
-                inputs(b);
-                bind(b, &lse, 4);
-                bind(b, &dvec, 5);
-                bind(b, &dq, 6);
-                set_u32(b, t, 7);
-                set_u32(b, d, 8);
-                set_f32(b, scale, 9);
-            },
-        )?;
-        self.ktg(
-            &format!("ojas_attn_bwd_dkv_d{width}"),
-            groups,
-            planes,
-            ATTN_THREADS,
-            |b| {
-                inputs(b);
-                bind(b, &lse, 4);
-                bind(b, &dvec, 5);
-                bind(b, &dk_wide, 6);
-                bind(b, &dv_wide, 7);
-                set_u32(b, t, 8);
-                set_u32(b, d, 9);
-                set_f32(b, scale, 10);
-            },
-        )?;
-        // The equal-head kernel wrote query-sized gradients. Sum them back
-        // onto the KV heads, in increasing query-head order, then check the
-        // reduced buffers. `rep <= 1` returns the kernel's buffers directly.
-        let (dk, dv) = if rep > 1 && kv_n > 0 {
-            let plane = t
-                .checked_mul(d)
-                .ok_or_else(|| metal_err(format!("{OP}: plane overflows")))?;
-            let dk = self.fresh(kv_n)?;
-            let dv = self.fresh(vv_n)?;
-            self.head_sum(&dk_wide, &dk, plane, rep)?;
-            self.head_sum(&dv_wide, &dv, plane, rep)?;
-            (dk, dv)
-        } else {
-            (dk_wide, dv_wide)
-        };
+            };
+            self.ktg(
+                &format!("ojas_attn_bwd_dq_d{width}"),
+                groups,
+                g.bh as usize,
+                ATTN_THREADS,
+                |b| {
+                    inputs(b);
+                    bind(b, &dq, 6);
+                    set_u32(b, g.t, 7);
+                    set_u32(b, g.d, 8);
+                    set_u32(b, g.rep, 9);
+                    set_u32(b, g.window, 10);
+                    set_f32(b, scale, 11);
+                },
+            )?;
+            self.ktg(
+                &format!("ojas_attn_bwd_dkv_d{width}"),
+                groups,
+                (g.bh / g.rep) as usize,
+                ATTN_THREADS,
+                |b| {
+                    inputs(b);
+                    bind(b, &dk, 6);
+                    bind(b, &dv, 7);
+                    set_u32(b, g.t, 8);
+                    set_u32(b, g.d, 9);
+                    set_u32(b, g.rep, 10);
+                    set_u32(b, g.window, 11);
+                    set_f32(b, scale, 12);
+                },
+            )?;
+        }
         for x in [&dq, &dk, &dv] {
             self.check(&st, x, ST_OUT)?;
         }
         Ok(self.keep(vec![dq, dk, dv]))
     }
 
-    /// Forward when `gy` is `None`. `pre = x @ W^T` is a tessl GEMM; the
-    /// sigmoid, its backward and the bias sum are this crate's gate kernels.
-    #[allow(clippy::too_many_arguments)]
+    /// `pre = x @ W^T` is a tessl GEMM; the sigmoid, its backward and the
+    /// bias sum are this crate's gate kernels. A saving forward also writes
+    /// the sigmoid `[rows, heads]`; a saved backward reads it in place of
+    /// forming `pre` and reading `bias`. `dims` is rows, d_model, heads,
+    /// head_dim.
     fn gate(
         &mut self,
         x: Arg,
         w: Arg,
         bias: Arg,
         attn: Arg,
-        gy: Option<Arg>,
-        rows: u32,
-        din: u32,
-        heads: u32,
-        dh: u32,
+        mode: GateMode,
+        dims: [u32; 4],
     ) -> Res<Reply> {
+        let [rows, din, heads, dh] = dims;
+        let (gy, saved) = match mode {
+            GateMode::Forward | GateMode::ForwardSaving => (None, None),
+            GateMode::Backward(gy) => (Some(gy), None),
+            GateMode::BackwardSaved(gy, scales) => (Some(gy), Some(scales)),
+        };
         let op = if gy.is_some() {
             "per_head_sigmoid_gate_backward"
         } else {
@@ -1561,27 +1634,45 @@ impl Worker {
             self.view(attn)?,
         );
         let gv = gy.map(|g| self.view(g)).transpose()?;
+        let sv = saved.map(|s| self.view(s)).transpose()?;
         let (r, di, h) = (rows as usize, din as usize, heads as usize);
+        if sv.as_ref().is_some_and(|s| s.n != r * h) {
+            return Err(metal_err(format!(
+                "{op}: saved scales hold a different count than rows * heads"
+            )));
+        }
         let units = u32_of(r * h)?;
         let plane = u32_of(av.n)?;
-        let pre = self.fresh(r * h)?;
         let st = self.status(op)?;
         // `x` and `w` are read only by tessl GEMMs, so they keep standalone
         // checks in both directions. The backward kernels check `bias`,
-        // `attn`, `gy`, `pre`, `d_attn` and `d_bias` themselves (every row
-        // reads every head's bias, and an empty operand was refused).
+        // `attn`, `gy`, `pre` (or the saved scale), `d_attn` and `d_bias`
+        // themselves (every row reads every head's bias, and an empty
+        // operand was refused).
         self.check(&st, &xv, ST_IN)?;
         self.check(&st, &wv, ST_IN)?;
         if gv.is_none() {
             self.check(&st, &bv, ST_IN)?;
             self.check(&st, &av, ST_IN)?;
         }
+        // The saved backward never reads `bias`, but a non-finite bias is
+        // the same refusal it is for the recomputing one and the CPU.
+        if sv.is_some() {
+            self.check(&st, &bv, ST_IN)?;
+        }
         let x_t = self.mat(&xv, r, di)?;
         let w_t = self.mat(&wv, h, di)?;
-        GemmOperands::ExactF32
-            .nt(&x_t, &w_t, &self.tt(&pre, &[r, h])?)
-            .map_err(metal_err)?;
+        let pre = if sv.is_some() {
+            None
+        } else {
+            let pre = self.fresh(r * h)?;
+            GemmOperands::ExactF32
+                .nt(&x_t, &w_t, &self.tt(&pre, &[r, h])?)
+                .map_err(metal_err)?;
+            Some(pre)
+        };
         let Some(g) = gv else {
+            let pre = pre.ok_or_else(|| metal_err(format!("{op}: forward without logits")))?;
             self.check(&st, &pre, ST_OUT)?;
             let out = self.fresh(av.n)?;
             self.k2("ojas_per_head_gate_fwd", dh as usize, r * h, |b| {
@@ -1598,28 +1689,57 @@ impl Worker {
                 set_u32(b, plane, 10);
             })?;
             self.check(&st, &out, ST_OUT)?;
-            return Ok(self.keep(vec![out]));
+            if !matches!(mode, GateMode::ForwardSaving) {
+                return Ok(self.keep(vec![out]));
+            }
+            let scale = self.fresh(r * h)?;
+            self.k1("ojas_per_head_gate_scale", r * h, |b| {
+                bind(b, &pre, 0);
+                bind(b, &bv, 1);
+                bind(b, &scale, 2);
+                set_u32(b, rows, 3);
+                set_u32(b, heads, 4);
+                set_u32(b, units, 5);
+                set_u32(b, heads, 6);
+            })?;
+            return Ok(self.keep(vec![out, scale]));
         };
         let d_attn = self.fresh(av.n)?;
         let d_pre = self.fresh(r * h)?;
         let d_bias = self.fresh(h)?;
         let gx = self.fresh(r * di)?;
         let gw = self.fresh(h * di)?;
-        self.k1("ojas_per_head_gate_bwd", r * h, |b| {
-            bind(b, &av, 0);
-            bind(b, &pre, 1);
-            bind(b, &bv, 2);
-            bind(b, &g, 3);
-            bind(b, &d_attn, 4);
-            bind(b, &d_pre, 5);
-            set_u32(b, rows, 6);
-            set_u32(b, heads, 7);
-            set_u32(b, dh, 8);
-            set_u32(b, plane, 9);
-            set_u32(b, units, 10);
-            set_u32(b, heads, 11);
-            bind_st(b, &st, 12);
-        })?;
+        match (&pre, &sv) {
+            (_, Some(scale)) => self.k1("ojas_per_head_gate_bwd_saved", r * h, |b| {
+                bind(b, &av, 0);
+                bind(b, scale, 1);
+                bind(b, &g, 2);
+                bind(b, &d_attn, 3);
+                bind(b, &d_pre, 4);
+                set_u32(b, rows, 5);
+                set_u32(b, heads, 6);
+                set_u32(b, dh, 7);
+                set_u32(b, plane, 8);
+                set_u32(b, units, 9);
+                bind_st(b, &st, 10);
+            })?,
+            (Some(pre), None) => self.k1("ojas_per_head_gate_bwd", r * h, |b| {
+                bind(b, &av, 0);
+                bind(b, pre, 1);
+                bind(b, &bv, 2);
+                bind(b, &g, 3);
+                bind(b, &d_attn, 4);
+                bind(b, &d_pre, 5);
+                set_u32(b, rows, 6);
+                set_u32(b, heads, 7);
+                set_u32(b, dh, 8);
+                set_u32(b, plane, 9);
+                set_u32(b, units, 10);
+                set_u32(b, heads, 11);
+                bind_st(b, &st, 12);
+            })?,
+            (None, None) => return Err(metal_err(format!("{op}: backward without logits"))),
+        }
         self.k1("ojas_per_head_gate_dbias", gate_dbias_threads(h)?, |b| {
             bind(b, &d_pre, 0);
             bind(b, &d_bias, 1);
@@ -1692,16 +1812,149 @@ impl Worker {
         Ok(self.keep(vec![gvv, gv0, glam]))
     }
 
+    /// The gated delta rule's operand views and tessl dims. tessl's kernels
+    /// scan nothing, so every operand is checked into `ST_IN` and every
+    /// output into `ST_OUT`, as the GEMM ops are.
+    fn gdn_views(&self, x: &GdnArgs) -> Res<(GdnTrainDims, [V; 5], Option<V>)> {
+        let dims = GdnTrainDims {
+            batch: x.batch,
+            seq: x.seq,
+            heads: x.heads,
+            v_dim: x.v_dim,
+        };
+        let views = [
+            self.view(x.q)?,
+            self.view(x.k)?,
+            self.view(x.v)?,
+            self.view(x.g)?,
+            self.view(x.beta)?,
+        ];
+        let s0 = x.s0.map(|a| self.view(a)).transpose()?;
+        Ok((dims, views, s0))
+    }
+
+    /// `[B, T, H]`, `[B, T, H, 128]`, `[B, T, H, Dv]`, `[B, H, 128, Dv]`.
+    fn gdn_shapes(d: &GdnTrainDims) -> ([usize; 3], [usize; 4], [usize; 4], [usize; 4]) {
+        let (b, t, h, dv) = (
+            d.batch as usize,
+            d.seq as usize,
+            d.heads as usize,
+            d.v_dim as usize,
+        );
+        let dk = GDN_TRAIN_DK as usize;
+        ([b, t, h], [b, t, h, dk], [b, t, h, dv], [b, h, dk, dv])
+    }
+
+    fn gdn(&mut self, x: GdnArgs) -> Res<Reply> {
+        const OP: &str = "chunked_gdn_forward";
+        let (dims, [q, k, v, g, beta], s0) = self.gdn_views(&x)?;
+        let (tok, key, val, state) = Self::gdn_shapes(&dims);
+        let o = self.fresh(val.iter().product())?;
+        let fin = self.fresh(state.iter().product())?;
+        let ckpt = self.fresh(dims.checkpoint_shape().iter().product())?;
+        let st = self.status(OP)?;
+        for input in [&q, &k, &v, &g, &beta].into_iter().chain(s0.as_ref()) {
+            self.check(&st, input, ST_IN)?;
+        }
+        let s0_t = s0.as_ref().map(|s| self.tt(s, &state)).transpose()?;
+        gdn_train_forward(
+            &self.rt,
+            dims,
+            GdnTrainInputs {
+                q: &self.tt(&q, &key)?,
+                k: &self.tt(&k, &key)?,
+                v: &self.tt(&v, &val)?,
+                g: &self.tt(&g, &tok)?,
+                beta: &self.tt(&beta, &tok)?,
+                s0: s0_t.as_ref(),
+            },
+            &self.tt(&o, &val)?,
+            Some(&self.tt(&fin, &state)?),
+            &self.tt(&ckpt, &dims.checkpoint_shape())?,
+        )
+        .map_err(metal_err)?;
+        for out in [&o, &fin, &ckpt] {
+            self.check(&st, out, ST_OUT)?;
+        }
+        Ok(self.keep(vec![o, fin, ckpt]))
+    }
+
+    fn gdn_bwd(&mut self, x: GdnArgs, ckpt: Arg, d_o: Arg, d_fin: Option<Arg>) -> Res<Reply> {
+        const OP: &str = "chunked_gdn_backward";
+        let (dims, [q, k, v, g, beta], s0) = self.gdn_views(&x)?;
+        let (ckv, dov) = (self.view(ckpt)?, self.view(d_o)?);
+        let dfv = d_fin.map(|a| self.view(a)).transpose()?;
+        let ws_bytes = GdnTrainWorkspace::bytes_for(dims);
+        if x.ws_elems.checked_mul(4) != Some(ws_bytes) {
+            return Err(metal_err(format!(
+                "{OP}: the backend charged {} workspace values; tessl needs {ws_bytes} bytes",
+                x.ws_elems
+            )));
+        }
+        let (tok, key, val, state) = Self::gdn_shapes(&dims);
+        let n = |s: &[usize]| s.iter().product::<usize>();
+        let (dq, dk, dv) = (
+            self.fresh(n(&key))?,
+            self.fresh(n(&key))?,
+            self.fresh(n(&val))?,
+        );
+        let (dg, dbeta) = (self.fresh(n(&tok))?, self.fresh(n(&tok))?);
+        let ds0 = s0.as_ref().map(|_| self.fresh(n(&state))).transpose()?;
+        let ws = match GdnTrainWorkspace::new(&self.rt, dims) {
+            Err(e) if exhausted(&e) => {
+                self.recycle()?;
+                GdnTrainWorkspace::new(&self.rt, dims)
+            }
+            got => got,
+        }
+        .map_err(metal_err)?;
+        self.book.borrow_mut().alloc_since_wait += ws_bytes as u64;
+        let st = self.status(OP)?;
+        let inputs = [&q, &k, &v, &g, &beta, &ckv, &dov];
+        for input in inputs.into_iter().chain(s0.as_ref()).chain(dfv.as_ref()) {
+            self.check(&st, input, ST_IN)?;
+        }
+        let s0_t = s0.as_ref().map(|s| self.tt(s, &state)).transpose()?;
+        let df_t = dfv.as_ref().map(|s| self.tt(s, &state)).transpose()?;
+        let ds0_t = ds0.as_ref().map(|s| self.tt(s, &state)).transpose()?;
+        gdn_train_backward(
+            &self.rt,
+            dims,
+            GdnTrainInputs {
+                q: &self.tt(&q, &key)?,
+                k: &self.tt(&k, &key)?,
+                v: &self.tt(&v, &val)?,
+                g: &self.tt(&g, &tok)?,
+                beta: &self.tt(&beta, &tok)?,
+                s0: s0_t.as_ref(),
+            },
+            &self.tt(&ckv, &dims.checkpoint_shape())?,
+            &self.tt(&dov, &val)?,
+            df_t.as_ref(),
+            &ws,
+            GdnTrainGrads {
+                dq: &self.tt(&dq, &key)?,
+                dk: &self.tt(&dk, &key)?,
+                dv: &self.tt(&dv, &val)?,
+                dg: &self.tt(&dg, &tok)?,
+                dbeta: &self.tt(&dbeta, &tok)?,
+                ds0: ds0_t.as_ref(),
+            },
+        )
+        .map_err(metal_err)?;
+        let mut outs = vec![dq, dk, dv, dg, dbeta];
+        outs.extend(ds0);
+        for out in &outs {
+            self.check(&st, out, ST_OUT)?;
+        }
+        Ok(self.keep(outs))
+    }
+
     /// No status slot and no finite scan: NaN rounds to a quiet NaN.
     fn round_bf16(&mut self, x: Arg) -> Res<Reply> {
         let xv = self.view(x)?;
-        let n = u32_of(xv.n)?;
         let y = self.fresh(xv.n)?;
-        self.k1("ojas_round_bf16", xv.n, |b| {
-            bind(b, &xv, 0);
-            bind(b, &y, 1);
-            set_u32(b, n, 2);
-        })?;
+        self.round_bf16_into(&xv, &y)?;
         Ok(self.keep(vec![y]))
     }
 
@@ -1879,7 +2132,7 @@ impl Worker {
             self.reduce(v, 1, None, &stats.buf, slot)?;
             self.reduce(v, 2, Some((&stats.buf, 2 * i * 4)), &stats.buf, slot + 1)?;
         }
-        self.settle(Scan::All)?;
+        self.settle(Scan::All, Wait::ClipNorm)?;
         self.report()?;
         let map = stats.buf.try_contents_f32().map_err(metal_err)?;
         let mut sum_sq = 0.0f64;
@@ -2251,6 +2504,14 @@ impl Worker {
 
     /// Momentum, Nesterov, five Newton-Schulz iterations with tessl GEMMs,
     /// then the update. Written back only if every stage is finite.
+    ///
+    /// With `bf16` (`Ns5Precision::Bf16`) the iterate holds bf16 values in
+    /// f32 buffers and every stage rounds its output as the CPU reference
+    /// does: the cast, the norm and `norm + eps`, the division, each GEMM
+    /// output and each `axpby` (`ojas_axpby_bf16`). The GEMMs take tessl's
+    /// bf16 operand lane (f32 accumulation) when the device has TensorOps,
+    /// and exact f32 otherwise; on bf16 operands the two compute the same
+    /// products.
     #[allow(clippy::too_many_arguments)]
     fn muon(
         &mut self,
@@ -2263,6 +2524,7 @@ impl Worker {
         nesterov: bool,
         decay: f32,
         alpha: f32,
+        bf16: bool,
     ) -> Res<Reply> {
         const OP: &str = "muon_ns5_step";
         let (pv, gv, mv) = (self.view(p)?, self.view(g)?, self.view(m)?);
@@ -2278,26 +2540,40 @@ impl Worker {
             self.check(&st, x, ST_IN)?;
         }
         let buf = self.fresh(n)?;
-        self.axpby(&mv, &gv, &buf, momentum, 1.0)?;
+        self.axpby("ojas_axpby", &mv, &gv, &buf, momentum, 1.0)?;
         self.check(&st, &buf, ST_OUT)?;
         let update = if nesterov {
             let u = self.fresh(n)?;
-            self.axpby(&gv, &buf, &u, 1.0, momentum)?;
+            self.axpby("ojas_axpby_fma", &gv, &buf, &u, 1.0, momentum)?;
             u
         } else {
             buf.clone()
         };
         let x = self.fresh(n)?;
+        // Rounds a value to bf16 in place under bf16; nothing otherwise.
+        let round = |v: &V| {
+            if bf16 {
+                self.round_bf16_into(v, v)
+            } else {
+                Ok(())
+            }
+        };
         if transposed {
             transpose_f32_into(&self.tt(&update, &[rows, cols])?, &self.tt(&x, &[r, c])?)
                 .map_err(metal_err)?;
         } else {
             self.copy(&update, &x)?;
         }
+        round(&x)?;
         let stats = self.fresh(3)?;
         self.reduce(&x, 1, None, &stats.buf, 0)?;
         self.reduce(&x, 2, Some((&stats.buf, 0)), &stats.buf, 1)?;
-        self.k1("ojas_ns_denom", 1, |b| {
+        let denom = if bf16 {
+            "ojas_ns_denom_bf16"
+        } else {
+            "ojas_ns_denom"
+        };
+        self.k1(denom, 1, |b| {
             bind(b, &stats, 0);
             bind_st(b, &st, 1);
             set_f32(b, MUON_NS_EPS as f32, 2);
@@ -2310,6 +2586,12 @@ impl Worker {
             bind(b, &stats, 3);
             set_u32(b, 2, 4);
         })?;
+        round(&x)?;
+        let lane = if bf16 && self.rt.has_tensorops() {
+            GemmOperands::Bf16
+        } else {
+            GemmOperands::ExactF32
+        };
         let a = self.fresh(r * r)?;
         let a2 = self.fresh(r * r)?;
         let bm = self.fresh(r * r)?;
@@ -2319,18 +2601,23 @@ impl Worker {
         let a2_t = self.tt(&a2, &[r, r])?;
         let bm_t = self.tt(&bm, &[r, r])?;
         let bx_t = self.tt(&bx, &[r, c])?;
+        // Each GEMM output is rounded under bf16 before the combination
+        // reads it: B = r(r(b A) + r(c r(A A))), X = r(r(a X) + r(B X)); the
+        // 1.0 multiple of a bf16 value is exact.
+        let comb = if bf16 {
+            "ojas_axpby_bf16"
+        } else {
+            "ojas_axpby"
+        };
         for _ in 0..5 {
-            GemmOperands::ExactF32
-                .nt(&x_t, &x_t, &a_t)
-                .map_err(metal_err)?;
-            GemmOperands::ExactF32
-                .nn(&a_t, &a_t, &a2_t)
-                .map_err(metal_err)?;
-            self.axpby(&a, &a2, &bm, MUON_NS5_B as f32, MUON_NS5_C as f32)?;
-            GemmOperands::ExactF32
-                .nn(&bm_t, &x_t, &bx_t)
-                .map_err(metal_err)?;
-            self.axpby(&x, &bx, &x, MUON_NS5_A as f32, 1.0)?;
+            lane.nt(&x_t, &x_t, &a_t).map_err(metal_err)?;
+            round(&a)?;
+            lane.nn(&a_t, &a_t, &a2_t).map_err(metal_err)?;
+            round(&a2)?;
+            self.axpby(comb, &a, &a2, &bm, MUON_NS5_B as f32, MUON_NS5_C as f32)?;
+            lane.nn(&bm_t, &x_t, &bx_t).map_err(metal_err)?;
+            round(&bx)?;
+            self.axpby(comb, &x, &bx, &x, MUON_NS5_A as f32, 1.0)?;
             self.check(&st, &x, ST_OUT)?;
         }
         let ortho = if transposed {
@@ -2341,7 +2628,7 @@ impl Worker {
             x
         };
         let new_p = self.fresh(n)?;
-        self.axpby(&pv, &ortho, &new_p, decay, alpha)?;
+        self.axpby("ojas_axpby_fma", &pv, &ortho, &new_p, decay, alpha)?;
         self.check(&st, &new_p, ST_OUT)?;
         // Committed on the device only if every check above passed, so the
         // step needs no wait, neither before the write-back nor
@@ -2451,7 +2738,7 @@ mod tests {
     /// parity tests' tolerance. One past the compiled width is refused.
     #[test]
     fn tiled_backward_matches_cpu_at_head_dims_up_to_256() {
-        let mut w = Worker::open(Arc::new(AtomicU64::new(0)), 8 << 30).expect("Metal device");
+        let mut w = Worker::open(Arc::new(Waits::default()), 8 << 30).expect("Metal device");
         let cpu = ojas_cpu::CpuBackend::new(Budget::new(8 << 30))
             .with_numerics(ojas_core::Numerics::Exact);
         for (bh, t, d) in [
@@ -2469,18 +2756,36 @@ mod tests {
                 .map(|v| Tensor::from_f32(v, &shape, &Budget::new(1 << 30)).expect("host"))
                 .collect();
             let (wq, wk, wv) = cpu
-                .causal_sdpa_backward(&ht[0], &ht[1], &ht[2], &ht[3])
+                .causal_sdpa_backward_recompute(&ht[0], &ht[1], &ht[2], &ht[3], None)
                 .expect("cpu");
             let args: Vec<Arg> = host.iter().map(|v| upload(&mut w, v)).collect();
-            let bufs = match w.run(Cmd::SdpaBwd {
-                q: args[0],
-                k: args[1],
-                v: args[2],
-                gy: args[3],
+            let geom = SdpaGeom {
                 bh: bh as u32,
                 t: t as u32,
                 d: d as u32,
                 rep: 1,
+                window: 0,
+            };
+            let saved = match w.run(Cmd::Sdpa {
+                q: args[0],
+                k: args[1],
+                v: args[2],
+                geom,
+            }) {
+                Ok(Reply::Bufs(b)) if b.len() == 2 => b,
+                other => panic!("sdpa fwd d{d}: {other:?}"),
+            };
+            let whole = |id: u64, n: usize| Arg { id, off: 0, n };
+            let bufs = match w.run(Cmd::SdpaBwd {
+                args: [
+                    args[0],
+                    args[1],
+                    args[2],
+                    whole(saved[0].id, n),
+                    whole(saved[1].id, bh * t),
+                    args[3],
+                ],
+                geom,
             }) {
                 Ok(Reply::Bufs(b)) if b.len() == 3 => b,
                 other => panic!("sdpa bwd d{d}: {other:?}"),
@@ -2504,25 +2809,20 @@ mod tests {
         // One past the compiled width, both directions refuse and name it.
         let over = ATTN_MAX_HEAD_DIM + 1;
         let x = upload(&mut w, &pattern(4 * over as usize, 1));
+        let geom = SdpaGeom {
+            bh: 1,
+            t: 4,
+            d: over,
+            rep: 1,
+            window: 0,
+        };
         let fwd = w.run(Cmd::Sdpa {
             q: x,
             k: x,
             v: x,
-            bh: 1,
-            t: 4,
-            d: over,
-            rep: 1,
+            geom,
         });
-        let bwd = w.run(Cmd::SdpaBwd {
-            q: x,
-            k: x,
-            v: x,
-            gy: x,
-            bh: 1,
-            t: 4,
-            d: over,
-            rep: 1,
-        });
+        let bwd = w.run(Cmd::SdpaBwd { args: [x; 6], geom });
         for r in [fwd, bwd] {
             assert!(
                 matches!(
@@ -2539,7 +2839,7 @@ mod tests {
     /// the parity tests' tolerance.
     #[test]
     fn forward_matches_cpu_at_head_dims_up_to_256() {
-        let mut w = Worker::open(Arc::new(AtomicU64::new(0)), 8 << 30).expect("Metal device");
+        let mut w = Worker::open(Arc::new(Waits::default()), 8 << 30).expect("Metal device");
         let cpu = ojas_cpu::CpuBackend::new(Budget::new(8 << 30))
             .with_numerics(ojas_core::Numerics::Exact);
         for (bh, t, d) in [
@@ -2557,7 +2857,8 @@ mod tests {
                 .map(|v| Tensor::from_f32(v, &shape, &Budget::new(1 << 30)).expect("host"))
                 .collect();
             let want = cpu
-                .causal_sdpa_forward(&ht[0], &ht[1], &ht[2])
+                .causal_sdpa_forward(&ht[0], &ht[1], &ht[2], None)
+                .map(|(y, _)| y)
                 .expect("cpu")
                 .to_f32_vec()
                 .expect("cpu values");
@@ -2566,12 +2867,15 @@ mod tests {
                 q: args[0],
                 k: args[1],
                 v: args[2],
-                bh: bh as u32,
-                t: t as u32,
-                d: d as u32,
-                rep: 1,
+                geom: SdpaGeom {
+                    bh: bh as u32,
+                    t: t as u32,
+                    d: d as u32,
+                    rep: 1,
+                    window: 0,
+                },
             }) {
-                Ok(Reply::Bufs(b)) if b.len() == 1 => b,
+                Ok(Reply::Bufs(b)) if b.len() == 2 => b,
                 other => panic!("sdpa fwd d{d}: {other:?}"),
             };
             let got = read(&mut w, out[0].id, n);

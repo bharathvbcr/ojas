@@ -1,7 +1,10 @@
 //! Seeded, epoch-based `(x, y)` batches over a token bin.
 
 use ojas_core::DataCursor;
-use ojas_data::{BatchSampler, SamplerConfig, TokenBin};
+use ojas_data::{
+    BatchSampler, SamplerConfig, SamplerRngState, TokenBin, RNG_GENERATOR_FEISTEL4_SPLITMIX64,
+    RNG_STATE_BYTES, RNG_STATE_VERSION,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -224,4 +227,66 @@ fn a_single_window_repeats_every_epoch() {
             token_index: 0
         }
     );
+}
+
+/// Window starts for fixed `(seed, W = 100, epoch, ordinal)`, computed by the
+/// independent Python oracle `target-robust/sampler_oracle.py`. A change to
+/// the permutation that moves any of them must also change
+/// `RNG_GENERATOR_FEISTEL4_SPLITMIX64`, or a checkpoint's `rng_state` would
+/// name a stream the sampler no longer produces.
+#[test]
+fn permutation_is_pinned() {
+    let (_tmp, tokens) = bin(1001);
+    let cases: [(u64, u64, [u64; 8]); 6] = [
+        (42, 0, [460, 450, 170, 260, 80, 430, 60, 970]),
+        (42, 1, [310, 260, 960, 460, 810, 110, 470, 30]),
+        (42, 7, [830, 50, 290, 530, 740, 820, 630, 260]),
+        (0xDEAD_BEEF, 0, [570, 750, 980, 610, 430, 990, 840, 310]),
+        (0xDEAD_BEEF, 1, [410, 710, 390, 780, 250, 940, 800, 140]),
+        (0xDEAD_BEEF, 7, [630, 990, 250, 200, 900, 170, 360, 130]),
+    ];
+    for (seed, epoch, want) in cases {
+        let s = BatchSampler::new(&tokens, cfg(10, 1, seed)).unwrap();
+        assert_eq!(s.windows_per_epoch(), 100);
+        let got: Vec<u64> = (0..8).map(|o| s.window_start(epoch, o).unwrap()).collect();
+        assert_eq!(got, want, "seed {seed:#x} epoch {epoch}");
+    }
+}
+
+#[test]
+fn rng_state_layout_is_exact_and_refuses_anything_else() {
+    let state = SamplerRngState {
+        seed: 0x0123_4567_89AB_CDEF,
+    };
+    let bytes = state.encode();
+    assert_eq!(bytes.len(), RNG_STATE_BYTES);
+    assert_eq!(&bytes[0..4], &RNG_STATE_VERSION.to_le_bytes());
+    assert_eq!(
+        &bytes[4..8],
+        &RNG_GENERATOR_FEISTEL4_SPLITMIX64.to_le_bytes()
+    );
+    assert_eq!(&bytes[8..16], &0x0123_4567_89AB_CDEFu64.to_le_bytes());
+    assert_eq!(SamplerRngState::decode(&bytes).unwrap(), state);
+    let top = SamplerRngState { seed: u64::MAX };
+    assert_eq!(SamplerRngState::decode(&top.encode()).unwrap(), top);
+
+    // Every length but the layout's, including the empty pre-v1 state.
+    for n in [0, 1, 8, 15, 17, 32] {
+        let mut v = bytes.to_vec();
+        v.resize(n, 0);
+        let err = SamplerRngState::decode(&v).unwrap_err();
+        assert!(err.detail().contains("bytes"), "{n}: {err}");
+    }
+    for version in [0u32, 2, u32::MAX] {
+        let mut v = bytes;
+        v[0..4].copy_from_slice(&version.to_le_bytes());
+        let err = SamplerRngState::decode(&v).unwrap_err();
+        assert!(err.detail().contains("version"), "{version}: {err}");
+    }
+    for generator in [0u32, 2, u32::MAX] {
+        let mut v = bytes;
+        v[4..8].copy_from_slice(&generator.to_le_bytes());
+        let err = SamplerRngState::decode(&v).unwrap_err();
+        assert!(err.detail().contains("generator"), "{generator}: {err}");
+    }
 }

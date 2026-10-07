@@ -1,5 +1,5 @@
 //! `CpuBackend::permute`: a contiguous copy with axes reordered, moved bit
-//! for bit, validated by `permute_output_shape` and charged to the budget.
+//! for bit, validated by `ojas_core::permute_dims` and charged to the budget.
 
 use ojas_core::{inverse_permutation, Backend, Budget, DType, OjasError, Tensor, MAX_PERMUTE_RANK};
 use ojas_cpu::CpuBackend;
@@ -130,15 +130,24 @@ fn rank_zero_and_rank_one_are_copies() {
     assert_eq!(y.to_f32_vec().unwrap(), vec![1.0, 2.5, -3.0]);
 }
 
+/// D17 (`docs/shape-contract.md`): a zero axis is `"empty tensor"` on every
+/// backend, as for every other op. Metal cannot hold an empty tensor at
+/// all, so accepting one here made the CPU the only backend that did. The
+/// refusal comes from `ojas_core::permute_dims` and charges nothing.
 #[test]
-fn zero_size_axes_permute_to_an_empty_tensor() {
-    let cpu = wide();
-    let empty = Tensor::zeros(&[2, 0, 3], DType::F32, cpu.budget()).unwrap();
-    let y = cpu.permute(&empty, &[2, 0, 1]).unwrap();
-    assert_eq!(y.shape(), &[3, 2, 0]);
-    assert!(y.to_f32_vec().unwrap().is_empty());
-    let back = cpu.permute(&y, &inverse_permutation(&[2, 0, 1])).unwrap();
-    assert_eq!(back.shape(), &[2, 0, 3]);
+fn zero_size_axes_are_refused_as_an_empty_tensor() {
+    let cpu = CpuBackend::new(Budget::new(0));
+    let empty = Tensor::zeros(&[2, 0, 3], DType::F32, &Budget::new(u64::MAX)).unwrap();
+    for dims in [[2usize, 0, 1], [0, 1, 2]] {
+        match cpu.permute(&empty, &dims) {
+            Err(OjasError::Shape {
+                op: "permute",
+                detail,
+            }) => assert_eq!(detail, "empty tensor"),
+            other => panic!("{dims:?}: expected Shape(empty tensor), got {other:?}"),
+        }
+    }
+    assert_eq!(cpu.budget().live_bytes().unwrap(), 0);
 }
 
 #[test]

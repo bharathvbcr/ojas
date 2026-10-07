@@ -79,8 +79,8 @@ fn workload(g: &WgpuBackend, seed: u64) -> Result<Vec<Vec<u32>>, OjasError> {
     let (gx, gw) = g.linear_backward(&x, &w, &gy)?;
     let sy = g.silu_forward(&y)?;
     let r = g.rms_norm_forward(&x, &nw, RMS_NORM_EPS)?;
-    let a = g.causal_sdpa_forward(&q, &k, &v)?;
-    let (dq, dk, dv) = g.causal_sdpa_backward(&q, &k, &v, &q)?;
+    let a = g.causal_sdpa_forward(&q, &k, &v, None).map(|(y, _)| y)?;
+    let (dq, dk, dv) = g.causal_sdpa_backward_recompute(&q, &k, &v, &q, None)?;
     let pt = g.permute(&x, &[1, 0])?;
     let ce = g.cross_entropy_mean_forward(&y, &tgt, None)?;
     g.adamw_step(
@@ -246,16 +246,16 @@ fn a_device_lost_mid_flight_fails_every_thread_cleanly() {
         for (i, h) in handles.into_iter().enumerate() {
             let (ok, err) = h.join().unwrap_or_else(|_| panic!("thread {i} panicked"));
             match err {
-                Some(OjasError::Backend { .. }) => errors += 1,
+                // A thread's call can fail before the loss is delivered (an
+                // uncaptured error is Backend), or after it (DeviceLost).
+                Some(OjasError::Backend { .. } | OjasError::DeviceLost { .. }) => errors += 1,
                 Some(other) => panic!("thread {i}: unexpected error kind {other:?}"),
                 None => panic!("thread {i}: ran {ok} rounds past the loss without an error"),
             }
         }
         assert_eq!(errors, THREADS);
         match g.sync() {
-            Err(OjasError::Backend { detail, .. }) => {
-                assert!(detail.contains("lost"), "{detail}")
-            }
+            Err(OjasError::DeviceLost { .. }) => {}
             other => panic!("sync after the loss: {other:?}"),
         }
     });

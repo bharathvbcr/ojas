@@ -88,10 +88,13 @@ fn outputs(cpu: &CpuBackend, inp: &Inputs) -> Vec<(&'static str, Vec<u32>)> {
     out.push(("rms_gw", f(&rgw)));
     out.push((
         "sdpa_fwd",
-        f(&cpu.causal_sdpa_forward(&inp.q, &inp.q, &inp.q).unwrap()),
+        f(&cpu
+            .causal_sdpa_forward(&inp.q, &inp.q, &inp.q, None)
+            .map(|(y, _)| y)
+            .unwrap()),
     ));
     let (sq, sk, sv) = cpu
-        .causal_sdpa_backward(&inp.q, &inp.q, &inp.q, &inp.sgy)
+        .causal_sdpa_backward_recompute(&inp.q, &inp.q, &inp.q, &inp.sgy, None)
         .unwrap();
     out.push(("sdpa_gq", f(&sq)));
     out.push(("sdpa_gk", f(&sk)));

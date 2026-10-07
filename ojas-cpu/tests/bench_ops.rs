@@ -28,7 +28,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, DType, MuonNs5Config, Numerics, OjasError, Tensor, RMS_NORM_EPS,
+    AdamWConfig, Backend, Budget, DType, MuonNs5Config, Ns5Precision, Numerics, OjasError, Tensor,
+    RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 
@@ -345,11 +346,13 @@ fn sdpa_case(b: &Budget) -> Case {
             dir("fwd", 10, move |cpu, t| {
                 Ok(vec![out(
                     "y",
-                    cpu.causal_sdpa_forward(&t[q], &t[k], &t[v])?,
+                    cpu.causal_sdpa_forward(&t[q], &t[k], &t[v], None)
+                        .map(|(y, _)| y)?,
                 )])
             }),
             dir("bwd", 10, move |cpu, t| {
-                let (gq, gk, gv) = cpu.causal_sdpa_backward(&t[q], &t[k], &t[v], &t[gy])?;
+                let (gq, gk, gv) =
+                    cpu.causal_sdpa_backward_recompute(&t[q], &t[k], &t[v], &t[gy], None)?;
                 Ok(vec![out("gq", gq), out("gk", gk), out("gv", gv)])
             }),
         ],
@@ -548,8 +551,16 @@ fn adamw_case(b: &Budget, name: &'static str, rows: usize, cols: usize, n: usize
     )
 }
 
-/// nanolab Muon default: lr 0.025, momentum 0.99, weight decay 0.1, Nesterov.
-fn muon_case(b: &Budget, name: &'static str, rows: usize, cols: usize, n: usize) -> Case {
+/// nanolab Muon default: lr 0.025, momentum 0.99, weight decay 0.1, Nesterov,
+/// Newton-Schulz at `ns5` (the `_bf16` cases have no torch twin yet).
+fn muon_case(
+    b: &Budget,
+    name: &'static str,
+    rows: usize,
+    cols: usize,
+    n: usize,
+    ns5: Ns5Precision,
+) -> Case {
     let mut c = Ctx::new(b, name);
     let p = c.f32("p", &[rows, cols], 0.035, 0.0);
     let g = c.f32("g", &[rows, cols], 0.01, 0.0);
@@ -562,7 +573,11 @@ fn muon_case(b: &Budget, name: &'static str, rows: usize, cols: usize, n: usize)
             let [p, g, m] = t else {
                 unreachable!("muon case has three inputs")
             };
-            cpu.muon_ns5_step(p, g, m, MuonNs5Config::nanolab_default())?;
+            let cfg = MuonNs5Config {
+                ns5,
+                ..MuonNs5Config::nanolab_default()
+            };
+            cpu.muon_ns5_step(p, g, m, cfg)?;
             Ok(vec![out("p", p.clone()), out("mom", m.clone())])
         })],
     )
@@ -689,7 +704,9 @@ fn block_forward(cpu: &CpuBackend, t: &[Tensor], ix: &BlockIx) -> Result<Acts, O
     let qh = cpu.permute(&qr, &SWAP_TH)?;
     let kh = cpu.permute(&kr, &SWAP_TH)?;
     let vh = cpu.permute(&vr, &SWAP_TH)?;
-    let y = cpu.causal_sdpa_forward(&qh, &kh, &vh)?;
+    let y = cpu
+        .causal_sdpa_forward(&qh, &kh, &vh, None)
+        .map(|(y, _)| y)?;
     let yb = cpu.permute(&y, &SWAP_TH)?;
     let h3 = view(&h, &[1, T, D])?;
     let g = cpu.per_head_sigmoid_gate_forward(&h3, &t[ix.wg], &t[ix.bg], &yb)?;
@@ -746,7 +763,7 @@ fn block_backward(
     let gg = view(&gg2, &[1, T, NH, HD])?;
     let gate = cpu.per_head_sigmoid_gate_backward(&z.h3, &t[ix.wg], &t[ix.bg], &z.yb, &gg)?;
     let gyh = cpu.permute(&gate.attn_out, &SWAP_TH)?;
-    let (gqh, gkh, gvh) = cpu.causal_sdpa_backward(&z.qh, &z.kh, &z.vh, &gyh)?;
+    let (gqh, gkh, gvh) = cpu.causal_sdpa_backward_recompute(&z.qh, &z.kh, &z.vh, &gyh, None)?;
     let gqr = cpu.permute(&gqh, &SWAP_TH)?;
     let gkr = cpu.permute(&gkh, &SWAP_TH)?;
     let gvr = cpu.permute(&gvh, &SWAP_TH)?;
@@ -893,10 +910,23 @@ fn builders() -> Vec<(&'static str, Builder)> {
         ("adamw_50304x768", |b| {
             adamw_case(b, "adamw_50304x768", V, D, 5)
         }),
-        ("muon_768x768", |b| muon_case(b, "muon_768x768", D, D, 10)),
-        ("muon_2048x768", |b| muon_case(b, "muon_2048x768", FF, D, 5)),
+        ("muon_768x768", |b| {
+            muon_case(b, "muon_768x768", D, D, 10, Ns5Precision::F32)
+        }),
+        ("muon_2048x768", |b| {
+            muon_case(b, "muon_2048x768", FF, D, 5, Ns5Precision::F32)
+        }),
         ("muon_3072x768", |b| {
-            muon_case(b, "muon_3072x768", 3072, D, 5)
+            muon_case(b, "muon_3072x768", 3072, D, 5, Ns5Precision::F32)
+        }),
+        ("muon_768x768_bf16", |b| {
+            muon_case(b, "muon_768x768_bf16", D, D, 10, Ns5Precision::Bf16)
+        }),
+        ("muon_2048x768_bf16", |b| {
+            muon_case(b, "muon_2048x768_bf16", FF, D, 5, Ns5Precision::Bf16)
+        }),
+        ("muon_3072x768_bf16", |b| {
+            muon_case(b, "muon_3072x768_bf16", 3072, D, 5, Ns5Precision::Bf16)
         }),
         ("clip", clip_case),
         ("block", block_case),

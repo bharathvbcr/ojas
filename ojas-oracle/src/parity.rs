@@ -31,6 +31,17 @@ pub const TRACE_LOSS_ABS_TOL: f64 = 1e-4;
 /// 5-step trace, parameters after the last step: per tensor, normwise
 /// relative, exact zero where torch's is zero (item 13).
 pub const TRACE_PARAM_NORMWISE_REL_TOL: f64 = 1e-4;
+/// The bf16-NS5 trace's parameters after the last step, normwise relative.
+/// Not item 13's 1e-4: stock bf16 Newton-Schulz is discontinuous in its
+/// input. In torch alone, moving a 64x192 gradient by 1e-6 relative flips
+/// the bf16 rounding of 2 of its values and moves nanolab's NS5 output by
+/// 1.9e-2 normwise; the f32 iteration moves by 2e-6. A model whose
+/// gradients match torch's to [`GRAD_NORMWISE_REL_TOL`] rather than bit for
+/// bit lands that far from torch on a zero-initialized matrix (measured
+/// 1.87e-2 on `blocks.0.ffn.down.weight`). This bound catches a wrong update,
+/// not the precision; the loss gate, [`TRACE_LOSS_ABS_TOL`], is what tells
+/// a bf16 iteration from an f32 one on this trace.
+pub const TRACE_BF16_PARAM_NORMWISE_REL_TOL: f64 = 5e-2;
 /// framework-design.md §10, CI on CPU: the 40-step curve, |Δ| per step.
 pub const CURVE_EARLY_ABS_TOL: f64 = 2e-4;
 /// Steps `1..=CURVE_EARLY_STEPS` use the early tolerance.
@@ -240,9 +251,20 @@ pub fn grads_parity<M: ParityModel + ?Sized>(
 /// mean loss within [`TRACE_LOSS_ABS_TOL`], final parameters within
 /// [`TRACE_PARAM_NORMWISE_REL_TOL`].
 pub fn trace_parity<M: ParityModel + ?Sized>(m: &mut M) -> Result<ParityReport, ParityFailure> {
+    trace_parity_ns5(m, Ns5::F32)
+}
+
+/// (d) against the trace of either NS5 precision. [`Ns5::Bf16`] is stock
+/// nanolab; the model is told which one through [`TrainSetup::ns5`]. The loss
+/// gate is the same for both; the bf16 trace's parameters are held to
+/// [`TRACE_BF16_PARAM_NORMWISE_REL_TOL`].
+pub fn trace_parity_ns5<M: ParityModel + ?Sized>(
+    m: &mut M,
+    ns5: Ns5,
+) -> Result<ParityReport, ParityFailure> {
     const C: &str = "trace";
     let init = tiny_init().map_err(load(C))?;
-    let fx = tiny_trace(Ns5::F32).map_err(load(C))?;
+    let fx = tiny_trace(ns5).map_err(load(C))?;
     let n = fx.params_after_step;
     let (losses, params) = m.train(&init.params, &fx.train, n).map_err(from_ojas(C))?;
     if losses.len() != n {
@@ -259,7 +281,11 @@ pub fn trace_parity<M: ParityModel + ?Sized>(m: &mut M) -> Result<ParityReport, 
         }
         worst = worst.max(d);
     }
-    check_tensors(C, &params, &fx.params, &[], TRACE_PARAM_NORMWISE_REL_TOL)?;
+    let param_tol = match ns5 {
+        Ns5::F32 => TRACE_PARAM_NORMWISE_REL_TOL,
+        Ns5::Bf16 => TRACE_BF16_PARAM_NORMWISE_REL_TOL,
+    };
+    check_tensors(C, &params, &fx.params, &[], param_tol)?;
     Ok(ParityReport {
         worst,
         tolerance: TRACE_LOSS_ABS_TOL,
@@ -270,9 +296,17 @@ pub fn trace_parity<M: ParityModel + ?Sized>(m: &mut M) -> Result<ParityReport, 
 /// [`CURVE_EARLY_ABS_TOL`] for steps 1–10 and [`CURVE_LATE_ABS_TOL`] after,
 /// and the last loss at least [`CURVE_MIN_DROP_NATS`] below ln V.
 pub fn curve_parity<M: ParityModel + ?Sized>(m: &mut M) -> Result<ParityReport, ParityFailure> {
+    curve_parity_ns5(m, Ns5::F32)
+}
+
+/// The §10 curve gate against the trace of either NS5 precision.
+pub fn curve_parity_ns5<M: ParityModel + ?Sized>(
+    m: &mut M,
+    ns5: Ns5,
+) -> Result<ParityReport, ParityFailure> {
     const C: &str = "curve";
     let init = tiny_init().map_err(load(C))?;
-    let fx = tiny_trace(Ns5::F32).map_err(load(C))?;
+    let fx = tiny_trace(ns5).map_err(load(C))?;
     let (losses, _) = m
         .train(&init.params, &fx.train, fx.steps)
         .map_err(from_ojas(C))?;

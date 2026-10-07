@@ -1,14 +1,22 @@
 // Causal attention, FlashAttention-2 style, in plain WGSL (no matrix units,
-// no subgroups). Planes are [batch * heads, time, D] contiguous; D (word 3)
-// is the real head dimension and DP4 * 4 >= D its padded width, so one
-// pipeline serves every D that pads to the same width.
+// no subgroups). Query planes are [batch * heads, time, D] and KV planes
+// [batch * kv_heads, time, D], contiguous; D (word 3) is the real head
+// dimension and DP4 * 4 >= D its padded width, so one pipeline serves every
+// D that pads to the same width.
 //
-//   S   = scale * Q K^T              (query t sees keys 0..=t)
-//   O   = softmax(S) V, online over key blocks                    attn_fwd
-//   lse = m + log l, Dr = dO . O, per query row                attn_bwd_prep
+//   S   = scale * Q K^T     (query t sees keys t - W < j <= t; W = 0: 0..=t)
+//   O   = softmax(S) V, online over key blocks,
+//   lse = m + log l, per query row                                attn_fwd
+//   Dr  = dO . O, per query row, next to a copy of lse          attn_bwd_dr
 //   P   = exp(S - lse), dP = dO V^T, dS = scale * P * (dP - Dr)
 //   dQ  = dS K                                                  attn_bwd_dq
 //   dK  = dS^T Q, dV = P^T dO                                   attn_bwd_dkv
+//
+// The backward takes the forward's O and lse, so no pass rebuilds the row
+// statistics. Grouped-query attention is native: query plane `bh` reads KV
+// plane `bh / rep` (word 4), and attn_bwd_dkv owns a KV plane and walks its
+// `rep` query planes in increasing order into the same accumulators.
+// Nothing is expanded.
 //
 // A workgroup owns a block of rows; PARTS threads share a row. In each block
 // step a thread forms the scores of its row against its share of the keys
@@ -19,17 +27,21 @@
 // workgroup that owns it, in a fixed order, with no atomics: results repeat
 // bit for bit.
 //
-// Causality is exact: masked entries are never used, a row's accumulation
-// loops stop at its own position (so a future key or value never enters a
-// result, not even as 0 * NaN), and only live scores can raise the fault
-// bit. A live score that is not finite raises the bit and counts as masked.
-// Shared tiles use a row stride of DP4 + 1 vec4 (and BK + 1 floats) so the
-// rows that neighbouring threads read fall in different banks.
+// The window is exact: masked entries are never used, a row's accumulation
+// loops run over its own window only (so a key or value outside it never
+// enters a result, not even as 0 * NaN), and only live scores can raise the
+// fault bit. A live score that is not finite raises the bit and counts as
+// masked. Key blocks wholly before a query block's window, and query blocks
+// wholly after a key block's, are not visited. Shared tiles use a row
+// stride of DP4 + 1 vec4 (and BK + 1 floats) so the rows that neighbouring
+// threads read fall in different banks.
 //
-// Words: 0 time, 1 scale bits, 2 batch * heads * time, 3 D.
-// Grids: (ceil(time / FQ), batch * heads) for attn_fwd and attn_bwd_prep;
-// (ceil(time / BB), batch * heads) for attn_bwd_dq and attn_bwd_dkv.
-// stats holds lse at [row] and Dr at [bht + row]; prep writes it.
+// Words: 0 time, 1 scale bits, 2 batch * heads * time, 3 D, 4 rep (query
+// heads per KV head), 5 window (0: every earlier key).
+// Grids: (ceil(time / FQ), batch * heads) for attn_fwd;
+// 256-lane groups over bht for attn_bwd_dr; (ceil(time / BB), batch * heads)
+// for attn_bwd_dq and (ceil(time / BB), batch * kv_heads) for attn_bwd_dkv.
+// stats holds lse at [row] and Dr at [bht + row]; attn_bwd_dr writes it.
 
 const DP4: u32 = {{DP4}}u;
 const SP: u32 = {{SP}}u;
@@ -46,6 +58,7 @@ const BKPT: u32 = {{BKPT}}u;
 const BWG: u32 = {{BWG}}u;
 const NEG: f32 = -3.0e38;
 
+// attn_bwd_dr reads O through `aq` and the forward's lse through `astats`.
 @group(0) @binding(2) var<storage, read> aq: array<f32>;
 @group(0) @binding(3) var<storage, read> ak: array<f32>;
 @group(0) @binding(4) var<storage, read> av: array<f32>;
@@ -68,6 +81,26 @@ var<workgroup> b_c: array<vec4<f32>, {{BB_SP}}>;
 var<workgroup> b_p: array<f32, {{BB_BBP}}>;
 var<workgroup> b_s: array<f32, {{BB_BBP}}>;
 var<workgroup> b_st: array<f32, {{BB2}}>;
+
+// Key `j` is in query `i`'s window.
+fn live_key(i: u32, j: u32) -> bool {
+    let w = pw(5u);
+    return j <= i && (w == 0u || j + w > i);
+}
+
+// The first key query `i` sees.
+fn first_key(i: u32) -> u32 {
+    let w = pw(5u);
+    if (w == 0u || i + 1u <= w) {
+        return 0u;
+    }
+    return i + 1u - w;
+}
+
+// The KV plane of query plane `bh`, as an element offset.
+fn kv_base(bh: u32) -> u32 {
+    return (bh / pw(4u)) * pw(0u) * pw(3u);
+}
 
 // Four consecutive elements of row `row`, column `c`, zero past `time` or D.
 fn ld4_q(base: u32, row: u32, c: u32) -> vec4<f32> {
@@ -164,6 +197,7 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
     let qi = q0 + r;
     let live_row = qi < time;
     let base = bh * time * pw(3u);
+    let kvb = kv_base(bh);
     for (var e = lane; e < FQ * DP4; e = e + FWG) {
         f_q[(e / DP4) * SP + e % DP4] = ld4_q(base, q0 + e / DP4, (e % DP4) * 4u);
     }
@@ -174,10 +208,11 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
         st.acc[cv] = vec4<f32>(0.0);
     }
     let kend = min(time, q0 + FQ);
-    for (var kb = 0u; kb < kend; kb = kb + FK) {
+    let row_first = first_key(qi);
+    for (var kb = (first_key(q0) / FK) * FK; kb < kend; kb = kb + FK) {
         workgroupBarrier();
         for (var e = lane; e < FK * DP4; e = e + FWG) {
-            f_kv[(e / DP4) * SP + e % DP4] = ld4_k(base, kb + e / DP4, (e % DP4) * 4u);
+            f_kv[(e / DP4) * SP + e % DP4] = ld4_k(kvb, kb + e / DP4, (e % DP4) * 4u);
         }
         workgroupBarrier();
         var s: array<f32, {{FKPT}}>;
@@ -189,7 +224,7 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
                 dot = dot + f_q[r * SP + d4] * f_kv[jj * SP + d4];
             }
             var sv = hsum(dot) * scale;
-            if (live_row && kb + jj <= qi) {
+            if (live_row && live_key(qi, kb + jj)) {
                 if (nonfinite(sv)) {
                     raise();
                     sv = NEG;
@@ -224,7 +259,7 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
         f_red2[r * PARTS + part] = psum;
         workgroupBarrier();
         for (var e = lane; e < FK * DP4; e = e + FWG) {
-            f_kv[(e / DP4) * SP + e % DP4] = ld4_v(base, kb + e / DP4, (e % DP4) * 4u);
+            f_kv[(e / DP4) * SP + e % DP4] = ld4_v(kvb, kb + e / DP4, (e % DP4) * 4u);
         }
         workgroupBarrier();
         var bsum = 0.0;
@@ -236,9 +271,13 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
         for (var cv = 0u; cv < CV; cv = cv + 1u) {
             st.acc[cv] = st.acc[cv] * alpha;
         }
-        if (live_row && qi >= kb) {
+        if (live_row && qi >= kb && row_first < kb + FK) {
+            var jstart = 0u;
+            if (row_first > kb) {
+                jstart = row_first - kb;
+            }
             let jlim = min(FK, qi - kb + 1u);
-            for (var jj = 0u; jj < jlim; jj = jj + 1u) {
+            for (var jj = jstart; jj < jlim; jj = jj + 1u) {
                 let p = f_p[r * FKP + jj];
                 for (var cv = 0u; cv < CV; cv = cv + 1u) {
                     st.acc[cv] = st.acc[cv] + p * f_kv[jj * SP + part * CV + cv];
@@ -249,6 +288,7 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
     return st;
 }
 
+// out0 = O, out1 = the row log-sum-exp m + log l.
 @compute @workgroup_size({{FWG}}, 1, 1)
 fn attn_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let st = fwd_core(wg.x, wg.y, lid.x);
@@ -265,46 +305,40 @@ fn attn_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) 
         for (var cv = 0u; cv < CV; cv = cv + 1u) {
             st4_0(base, qi, (part * CV + cv) * 4u, st.acc[cv] * inv);
         }
+        if (part == 0u) {
+            let lse = st.m + log(st.l);
+            report(lse);
+            out1[wg.y * time + qi] = lse;
+        }
     }
 }
 
-// The forward again, for lse = m + log l and Dr = dO . O. out0 = stats.
-@compute @workgroup_size({{FWG}}, 1, 1)
-fn attn_bwd_prep(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-    let st = fwd_core(wg.x, wg.y, lid.x);
-    let time = pw(0u);
+// One thread per query row: Dr = dO . O summed over D from 0, and a copy of
+// the forward's lse, into stats (out0). O is read through `aq`, lse through
+// `astats`. A non-finite lse or Dr raises the fault bit: an infinite lse
+// would otherwise zero the row's gradients without a trace.
+@compute @workgroup_size(256, 1, 1)
+fn attn_bwd_dr(
+    @builtin(workgroup_id) wg: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
     let bht = pw(2u);
-    let r = lid.x / PARTS;
-    let part = lid.x % PARTS;
-    let qi = wg.x * FQ + r;
-    let live = qi < time;
-    var partial = 0.0;
-    if (live) {
-        var inv = 0.0;
-        if (st.l > 0.0) {
-            inv = 1.0 / st.l;
-        }
-        let base = wg.y * time * pw(3u);
-        for (var cv = 0u; cv < CV; cv = cv + 1u) {
-            let g = ld4_do(base, qi, (part * CV + cv) * 4u);
-            partial = partial + hsum(g * (st.acc[cv] * inv));
-        }
+    let row = flat_group(wg, nwg) * 256u + lid.x;
+    if (row >= bht) {
+        return;
     }
-    // fwd_core's last reads of f_red were before its final two barriers.
-    f_red[r * PARTS + part] = partial;
-    workgroupBarrier();
-    if (live && part == 0u) {
-        var delta = 0.0;
-        for (var p = 0u; p < PARTS; p = p + 1u) {
-            delta = delta + f_red[r * PARTS + p];
-        }
-        let lse = st.m + log(st.l);
-        report(lse);
-        report(delta);
-        let row = wg.y * time + qi;
-        out0[row] = lse;
-        out0[bht + row] = delta;
+    let d = pw(3u);
+    let at = row * d;
+    var acc = 0.0;
+    for (var c = 0u; c < d; c = c + 1u) {
+        acc = acc + ado[at + c] * aq[at + c];
     }
+    let lse = astats[row];
+    report(lse);
+    report(acc);
+    out0[row] = lse;
+    out0[bht + row] = acc;
 }
 
 // dQ for one block of BB query rows. b_a = Q, b_b = dO, b_c = V then K of
@@ -321,6 +355,7 @@ fn attn_bwd_dq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     let qi = q0 + r;
     let live_row = qi < time;
     let base = wg.y * time * pw(3u);
+    let kvb = kv_base(wg.y);
     for (var e = lane; e < BB * DP4; e = e + BWG) {
         let at = (e / DP4) * SP + e % DP4;
         b_a[at] = ld4_q(base, q0 + e / DP4, (e % DP4) * 4u);
@@ -337,10 +372,11 @@ fn attn_bwd_dq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
         acc[cv] = vec4<f32>(0.0);
     }
     let kend = min(time, q0 + BB);
-    for (var kb = 0u; kb < kend; kb = kb + BB) {
+    let row_first = first_key(qi);
+    for (var kb = (first_key(q0) / BB) * BB; kb < kend; kb = kb + BB) {
         workgroupBarrier();
         for (var e = lane; e < BB * DP4; e = e + BWG) {
-            b_c[(e / DP4) * SP + e % DP4] = ld4_v(base, kb + e / DP4, (e % DP4) * 4u);
+            b_c[(e / DP4) * SP + e % DP4] = ld4_v(kvb, kb + e / DP4, (e % DP4) * 4u);
         }
         workgroupBarrier();
         var dp: array<f32, {{BKPT}}>;
@@ -354,13 +390,13 @@ fn attn_bwd_dq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
         }
         workgroupBarrier();
         for (var e = lane; e < BB * DP4; e = e + BWG) {
-            b_c[(e / DP4) * SP + e % DP4] = ld4_k(base, kb + e / DP4, (e % DP4) * 4u);
+            b_c[(e / DP4) * SP + e % DP4] = ld4_k(kvb, kb + e / DP4, (e % DP4) * 4u);
         }
         workgroupBarrier();
         for (var c = 0u; c < BKPT; c = c + 1u) {
             let jj = part * BKPT + c;
             var ds = 0.0;
-            if (live_row && kb + jj <= qi) {
+            if (live_row && live_key(qi, kb + jj)) {
                 var dot = vec4<f32>(0.0);
                 for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
                     dot = dot + b_a[r * SP + d4] * b_c[jj * SP + d4];
@@ -373,9 +409,13 @@ fn attn_bwd_dq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
             b_s[r * BBP + jj] = ds;
         }
         workgroupBarrier();
-        if (live_row && qi >= kb) {
+        if (live_row && qi >= kb && row_first < kb + BB) {
+            var jstart = 0u;
+            if (row_first > kb) {
+                jstart = row_first - kb;
+            }
             let jlim = min(BB, qi - kb + 1u);
-            for (var jj = 0u; jj < jlim; jj = jj + 1u) {
+            for (var jj = jstart; jj < jlim; jj = jj + 1u) {
                 let ds = b_s[r * BBP + jj];
                 for (var cv = 0u; cv < CV; cv = cv + 1u) {
                     acc[cv] = acc[cv] + ds * b_c[jj * SP + part * CV + cv];
@@ -390,27 +430,38 @@ fn attn_bwd_dq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     }
 }
 
-// dK and dV for one block of BB key rows, walking the query blocks from the
-// one holding the first key. b_b = K, b_c = V (fixed), b_a = Q, then dO,
-// then Q of the current query block; b_p = P^T, b_s = dS^T, b_st = the
-// block's lse and Dr. out0 = grad_k, out1 = grad_v.
+// dK and dV for one block of BB key rows of KV plane wg.y. For each of its
+// `rep` query planes in increasing order, walk the query blocks from the
+// one holding the first key through the last query whose window holds a
+// key of the block. b_b = K, b_c = V (fixed), b_a = Q, then dO, then Q of
+// the current query block; b_p = P^T, b_s = dS^T, b_st = the block's lse
+// and Dr. out0 = grad_k, out1 = grad_v.
 @compute @workgroup_size({{BWG}}, 1, 1)
 fn attn_bwd_dkv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let time = pw(0u);
     let scale = pf(1u);
     let bht = pw(2u);
+    let rep = pw(4u);
+    let w = pw(5u);
     let lane = lid.x;
     let r = lane / PARTS;
     let part = lane % PARTS;
     let k0 = wg.x * BB;
     let kj = k0 + r;
-    let live_key = kj < time;
-    let base = wg.y * time * pw(3u);
-    let srow = wg.y * time;
+    let live_key_row = kj < time;
+    let kvb = wg.y * time * pw(3u);
+    // Exclusive end of the queries whose window holds a key of this block,
+    // and of those holding key kj.
+    var q_end = time;
+    var kj_end = time;
+    if (w != 0u) {
+        q_end = min(time, min(k0 + BB, time) - 1u + w);
+        kj_end = min(time, kj + w);
+    }
     for (var e = lane; e < BB * DP4; e = e + BWG) {
         let at = (e / DP4) * SP + e % DP4;
-        b_b[at] = ld4_k(base, k0 + e / DP4, (e % DP4) * 4u);
-        b_c[at] = ld4_v(base, k0 + e / DP4, (e % DP4) * 4u);
+        b_b[at] = ld4_k(kvb, k0 + e / DP4, (e % DP4) * 4u);
+        b_c[at] = ld4_v(kvb, k0 + e / DP4, (e % DP4) * 4u);
     }
     var dk: array<vec4<f32>, {{CV}}>;
     var dv: array<vec4<f32>, {{CV}}>;
@@ -418,90 +469,98 @@ fn attn_bwd_dkv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
         dk[cv] = vec4<f32>(0.0);
         dv[cv] = vec4<f32>(0.0);
     }
-    for (var qb = k0; qb < time; qb = qb + BB) {
-        workgroupBarrier();
-        for (var e = lane; e < BB * DP4; e = e + BWG) {
-            b_a[(e / DP4) * SP + e % DP4] = ld4_q(base, qb + e / DP4, (e % DP4) * 4u);
-        }
-        if (lane < BB) {
-            let i = qb + lane;
-            var lse = 0.0;
-            var dr = 0.0;
-            if (i < time) {
-                lse = astats[srow + i];
-                dr = astats[bht + srow + i];
+    for (var h = 0u; h < rep; h = h + 1u) {
+        let bh = wg.y * rep + h;
+        let base = bh * time * pw(3u);
+        let srow = bh * time;
+        for (var qb = k0; qb < q_end; qb = qb + BB) {
+            workgroupBarrier();
+            for (var e = lane; e < BB * DP4; e = e + BWG) {
+                b_a[(e / DP4) * SP + e % DP4] = ld4_q(base, qb + e / DP4, (e % DP4) * 4u);
             }
-            b_st[lane] = lse;
-            b_st[BB + lane] = dr;
-        }
-        workgroupBarrier();
-        var p: array<f32, {{BKPT}}>;
-        for (var c = 0u; c < BKPT; c = c + 1u) {
-            let ii = part * BKPT + c;
-            let i = qb + ii;
-            var pv = 0.0;
-            if (live_key && i < time && i >= kj) {
-                var dot = vec4<f32>(0.0);
-                for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
-                    dot = dot + b_a[ii * SP + d4] * b_b[r * SP + d4];
+            if (lane < BB) {
+                let i = qb + lane;
+                var lse = 0.0;
+                var dr = 0.0;
+                if (i < time) {
+                    lse = astats[srow + i];
+                    dr = astats[bht + srow + i];
                 }
-                let s = hsum(dot) * scale;
-                report(s);
-                pv = exp(s - b_st[ii]);
+                b_st[lane] = lse;
+                b_st[BB + lane] = dr;
             }
-            p[c] = pv;
-        }
-        workgroupBarrier();
-        for (var e = lane; e < BB * DP4; e = e + BWG) {
-            b_a[(e / DP4) * SP + e % DP4] = ld4_do(base, qb + e / DP4, (e % DP4) * 4u);
-        }
-        workgroupBarrier();
-        for (var c = 0u; c < BKPT; c = c + 1u) {
-            let ii = part * BKPT + c;
-            let i = qb + ii;
-            var ds = 0.0;
-            if (live_key && i < time && i >= kj) {
-                var dot = vec4<f32>(0.0);
-                for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
-                    dot = dot + b_a[ii * SP + d4] * b_c[r * SP + d4];
+            workgroupBarrier();
+            var p: array<f32, {{BKPT}}>;
+            for (var c = 0u; c < BKPT; c = c + 1u) {
+                let ii = part * BKPT + c;
+                let i = qb + ii;
+                var pv = 0.0;
+                if (live_key_row && i < time && live_key(i, kj)) {
+                    var dot = vec4<f32>(0.0);
+                    for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
+                        dot = dot + b_a[ii * SP + d4] * b_b[r * SP + d4];
+                    }
+                    let s = hsum(dot) * scale;
+                    report(s);
+                    pv = exp(s - b_st[ii]);
                 }
-                ds = scale * (p[c] * (hsum(dot) - b_st[BB + ii]));
+                p[c] = pv;
             }
-            b_p[r * BBP + ii] = p[c];
-            b_s[r * BBP + ii] = ds;
-        }
-        workgroupBarrier();
-        var istart = 0u;
-        if (kj > qb) {
-            istart = kj - qb;
-        }
-        let iend = min(BB, time - qb);
-        if (live_key) {
-            for (var ii = istart; ii < iend; ii = ii + 1u) {
-                let pv = b_p[r * BBP + ii];
-                for (var cv = 0u; cv < CV; cv = cv + 1u) {
-                    dv[cv] = dv[cv] + pv * b_a[ii * SP + part * CV + cv];
+            workgroupBarrier();
+            for (var e = lane; e < BB * DP4; e = e + BWG) {
+                b_a[(e / DP4) * SP + e % DP4] = ld4_do(base, qb + e / DP4, (e % DP4) * 4u);
+            }
+            workgroupBarrier();
+            for (var c = 0u; c < BKPT; c = c + 1u) {
+                let ii = part * BKPT + c;
+                let i = qb + ii;
+                var ds = 0.0;
+                if (live_key_row && i < time && live_key(i, kj)) {
+                    var dot = vec4<f32>(0.0);
+                    for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
+                        dot = dot + b_a[ii * SP + d4] * b_c[r * SP + d4];
+                    }
+                    ds = scale * (p[c] * (hsum(dot) - b_st[BB + ii]));
+                }
+                b_p[r * BBP + ii] = p[c];
+                b_s[r * BBP + ii] = ds;
+            }
+            workgroupBarrier();
+            var istart = 0u;
+            if (kj > qb) {
+                istart = kj - qb;
+            }
+            var iend = min(BB, time - qb);
+            if (kj_end < qb + iend) {
+                iend = select(0u, kj_end - qb, kj_end > qb);
+            }
+            if (live_key_row) {
+                for (var ii = istart; ii < iend; ii = ii + 1u) {
+                    let pv = b_p[r * BBP + ii];
+                    for (var cv = 0u; cv < CV; cv = cv + 1u) {
+                        dv[cv] = dv[cv] + pv * b_a[ii * SP + part * CV + cv];
+                    }
                 }
             }
-        }
-        workgroupBarrier();
-        for (var e = lane; e < BB * DP4; e = e + BWG) {
-            b_a[(e / DP4) * SP + e % DP4] = ld4_q(base, qb + e / DP4, (e % DP4) * 4u);
-        }
-        workgroupBarrier();
-        if (live_key) {
-            for (var ii = istart; ii < iend; ii = ii + 1u) {
-                let ds = b_s[r * BBP + ii];
-                for (var cv = 0u; cv < CV; cv = cv + 1u) {
-                    dk[cv] = dk[cv] + ds * b_a[ii * SP + part * CV + cv];
+            workgroupBarrier();
+            for (var e = lane; e < BB * DP4; e = e + BWG) {
+                b_a[(e / DP4) * SP + e % DP4] = ld4_q(base, qb + e / DP4, (e % DP4) * 4u);
+            }
+            workgroupBarrier();
+            if (live_key_row) {
+                for (var ii = istart; ii < iend; ii = ii + 1u) {
+                    let ds = b_s[r * BBP + ii];
+                    for (var cv = 0u; cv < CV; cv = cv + 1u) {
+                        dk[cv] = dk[cv] + ds * b_a[ii * SP + part * CV + cv];
+                    }
                 }
             }
         }
     }
-    if (live_key) {
+    if (live_key_row) {
         for (var cv = 0u; cv < CV; cv = cv + 1u) {
-            st4_0(base, kj, (part * CV + cv) * 4u, dk[cv]);
-            st4_1(base, kj, (part * CV + cv) * 4u, dv[cv]);
+            st4_0(kvb, kj, (part * CV + cv) * 4u, dk[cv]);
+            st4_1(kvb, kj, (part * CV + cv) * 4u, dv[cv]);
         }
     }
 }

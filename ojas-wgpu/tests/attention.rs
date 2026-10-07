@@ -29,11 +29,19 @@ fn parity(tag: &str, shape: [usize; 4], seed: u64) {
     let tag = format!("{tag} {shape:?}");
     close(
         &format!("{tag} y"),
-        &g.causal_sdpa_forward(&dq, &dk, &dv).unwrap(),
-        &c.causal_sdpa_forward(&q, &k, &v).unwrap(),
+        &g.causal_sdpa_forward(&dq, &dk, &dv, None)
+            .map(|(y, _)| y)
+            .unwrap(),
+        &c.causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
+            .unwrap(),
     );
-    let got = g.causal_sdpa_backward(&dq, &dk, &dv, &up(&gy)).unwrap();
-    let want = c.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+    let got = g
+        .causal_sdpa_backward_recompute(&dq, &dk, &dv, &up(&gy), None)
+        .unwrap();
+    let want = c
+        .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+        .unwrap();
     close(&format!("{tag} dq"), &got.0, &want.0);
     close(&format!("{tag} dk"), &got.1, &want.1);
     close(&format!("{tag} dv"), &got.2, &want.2);
@@ -81,16 +89,18 @@ fn views_with_a_byte_offset_match_cpu() {
     }
     close(
         "offset y",
-        &g.causal_sdpa_forward(&views[0], &views[1], &views[2])
+        &g.causal_sdpa_forward(&views[0], &views[1], &views[2], None)
+            .map(|(y, _)| y)
             .unwrap(),
-        &c.causal_sdpa_forward(&hosts[0], &hosts[1], &hosts[2])
+        &c.causal_sdpa_forward(&hosts[0], &hosts[1], &hosts[2], None)
+            .map(|(y, _)| y)
             .unwrap(),
     );
     let got = g
-        .causal_sdpa_backward(&views[0], &views[1], &views[2], &views[3])
+        .causal_sdpa_backward_recompute(&views[0], &views[1], &views[2], &views[3], None)
         .unwrap();
     let want = c
-        .causal_sdpa_backward(&hosts[0], &hosts[1], &hosts[2], &hosts[3])
+        .causal_sdpa_backward_recompute(&hosts[0], &hosts[1], &hosts[2], &hosts[3], None)
         .unwrap();
     close("offset dq", &got.0, &want.0);
     close("offset dk", &got.1, &want.1);
@@ -108,28 +118,52 @@ fn nonfinite_op(r: Result<(), OjasError>) -> &'static str {
 fn a_non_finite_value_in_any_input_is_reported() {
     let shape = [1usize, 2, 41, 32];
     // Row 40 is the last query, so every key and value row is live for it.
+    // q, k, v, the clean forward's output and lse, grad_output; head 1,
+    // row 23 (and column 5) is poisoned in one of them.
+    let at = |which: usize| {
+        if which == 4 {
+            41 + 23
+        } else {
+            (41 + 23) * 32 + 5
+        }
+    };
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        for which in 0..4 {
+        for which in 0..6 {
             let g = &fresh();
             g.sync().unwrap();
-            let mut ins = qkvg(6400, &shape);
+            let [q, k, v, gy] = qkvg(6400, &shape);
+            let clean: Vec<Tensor> = [&q, &k, &v].iter().map(|t| g.upload(t).unwrap()).collect();
+            let (y, lse) = g
+                .causal_sdpa_forward(&clean[0], &clean[1], &clean[2], None)
+                .unwrap();
+            let mut ins = [
+                q,
+                k,
+                v,
+                g.download(&y).unwrap(),
+                g.download(&lse).unwrap(),
+                gy,
+            ];
+            g.sync().unwrap();
             let mut vals = ins[which].to_f32_vec().unwrap();
-            vals[(41 + 23) * 32 + 5] = bad;
-            ins[which] = Tensor::from_f32(&vals, &shape, host_budget()).unwrap();
+            vals[at(which)] = bad;
+            ins[which] = Tensor::from_f32(&vals, ins[which].shape(), host_budget()).unwrap();
             let d: Vec<Tensor> = ins.iter().map(|t| g.upload(t).unwrap()).collect();
             if which < 3 {
-                let _ = g.causal_sdpa_forward(&d[0], &d[1], &d[2]).unwrap();
+                let _ = g.causal_sdpa_forward(&d[0], &d[1], &d[2], None).unwrap();
                 assert_eq!(
                     nonfinite_op(g.sync()),
                     "causal_sdpa_forward",
                     "{bad} in input {which}"
                 );
             }
-            let _ = g.causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3]).unwrap();
+            let _ = g
+                .causal_sdpa_backward(&d[0], &d[1], &d[2], &d[3], &d[4], &d[5], None)
+                .unwrap();
             assert_eq!(
                 nonfinite_op(g.sync()),
                 "causal_sdpa_backward",
-                "{bad} in input {which}"
+                "{bad} in operand {which}"
             );
         }
     }
@@ -143,10 +177,18 @@ fn overflowing_scores_are_reported() {
     let big = Tensor::from_f32(&vec![1.0e20; 9 * 64], &shape, host_budget()).unwrap();
     let v = g.upload(&host(6500, &shape)).unwrap();
     let qk = g.upload(&big).unwrap();
-    let _ = g.causal_sdpa_forward(&qk, &qk, &v).unwrap();
+    let _ = g
+        .causal_sdpa_forward(&qk, &qk, &v, None)
+        .map(|(y, _)| y)
+        .unwrap();
     assert_eq!(nonfinite_op(g.sync()), "causal_sdpa_forward");
+    // A finite saved output and lse: the backward's own scores overflow.
     let gy = g.upload(&host(6501, &shape)).unwrap();
-    let _ = g.causal_sdpa_backward(&qk, &qk, &v, &gy).unwrap();
+    let lse = Tensor::from_f32(&[0.0; 9], &[1, 1, 9], host_budget()).unwrap();
+    let lse = g.upload(&lse).unwrap();
+    let _ = g
+        .causal_sdpa_backward(&qk, &qk, &v, &v, &lse, &gy, None)
+        .unwrap();
     assert_eq!(nonfinite_op(g.sync()), "causal_sdpa_backward");
 }
 
@@ -186,13 +228,29 @@ fn future_keys_never_reach_an_earlier_row_across_blocks() {
         let (dq, dg) = (g.upload(&q).unwrap(), g.upload(&gy).unwrap());
         let (dk, dv) = (g.upload(&k).unwrap(), g.upload(&v).unwrap());
         let (dk2, dv2) = (g.upload(&k2).unwrap(), g.upload(&v2).unwrap());
-        let a = bits(g, &g.causal_sdpa_forward(&dq, &dk, &dv).unwrap());
-        let ga = bits(g, &g.causal_sdpa_backward(&dq, &dk, &dv, &dg).unwrap().0);
+        let a = bits(
+            g,
+            &g.causal_sdpa_forward(&dq, &dk, &dv, None)
+                .map(|(y, _)| y)
+                .unwrap(),
+        );
+        let ga = bits(
+            g,
+            &g.causal_sdpa_backward_recompute(&dq, &dk, &dv, &dg, None)
+                .unwrap()
+                .0,
+        );
         // The poisoned rows are live for the later queries, so a fault is
         // expected (unless nothing follows the cut); only rows 0..=cut are
         // compared.
-        let z = g.causal_sdpa_forward(&dq, &dk2, &dv2).unwrap();
-        let gz = g.causal_sdpa_backward(&dq, &dk2, &dv2, &dg).unwrap().0;
+        let z = g
+            .causal_sdpa_forward(&dq, &dk2, &dv2, None)
+            .map(|(y, _)| y)
+            .unwrap();
+        let gz = g
+            .causal_sdpa_backward_recompute(&dq, &dk2, &dv2, &dg, None)
+            .unwrap()
+            .0;
         let fault = g.sync();
         assert_eq!(fault.is_err(), cut + 1 < t, "cut {cut}: {fault:?}");
         let (z, gz) = (bits(g, &z), bits(g, &gz));
@@ -215,8 +273,13 @@ fn results_repeat_bit_for_bit() {
     let [q, k, v, gy] = qkvg(6700, &shape);
     let (q, k, v, gy) = (up(&q), up(&k), up(&v), up(&gy));
     let run = || {
-        let y = g.causal_sdpa_forward(&q, &k, &v).unwrap();
-        let (a, b, c) = g.causal_sdpa_backward(&q, &k, &v, &gy).unwrap();
+        let y = g
+            .causal_sdpa_forward(&q, &k, &v, None)
+            .map(|(y, _)| y)
+            .unwrap();
+        let (a, b, c) = g
+            .causal_sdpa_backward_recompute(&q, &k, &v, &gy, None)
+            .unwrap();
         [bits(g, &y), bits(g, &a), bits(g, &b), bits(g, &c)]
     };
     let first = run();
@@ -237,7 +300,13 @@ fn an_earlier_query_never_reaches_a_later_key_gradient() {
     let [q, k, v, gy] = qkvg(6800, &shape);
     let (dk, dv) = (g.upload(&k).unwrap(), g.upload(&v).unwrap());
     let clean = g
-        .causal_sdpa_backward(&g.upload(&q).unwrap(), &dk, &dv, &g.upload(&gy).unwrap())
+        .causal_sdpa_backward_recompute(
+            &g.upload(&q).unwrap(),
+            &dk,
+            &dv,
+            &g.upload(&gy).unwrap(),
+            None,
+        )
         .unwrap();
     let (ck, cv) = (bits(g, &clean.1), bits(g, &clean.2));
     for row in [0usize, 14, 15, 16, 33, 63, 64, 68] {
@@ -255,7 +324,9 @@ fn an_earlier_query_never_reaches_a_later_key_gradient() {
         let g2 = g
             .upload(&Tensor::from_f32(&g2, &shape, host_budget()).unwrap())
             .unwrap();
-        let got = g.causal_sdpa_backward(&q2, &dk, &dv, &g2).unwrap();
+        let got = g
+            .causal_sdpa_backward_recompute(&q2, &dk, &dv, &g2, None)
+            .unwrap();
         assert!(g.sync().is_err(), "row {row}: the poisoned row is live");
         let (gk, gv) = (bits(g, &got.1), bits(g, &got.2));
         for head in 0..h {

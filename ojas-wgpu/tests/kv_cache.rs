@@ -301,7 +301,9 @@ fn full_cache_without_grouping_equals_causal_sdpa_after_the_permute() {
         let (kp, vp) = (first(&k_full), first(&v_full));
         let cpu_y = c
             .permute(
-                &c.causal_sdpa_forward(&qp, &kp, &vp).unwrap(),
+                &c.causal_sdpa_forward(&qp, &kp, &vp, None)
+                    .map(|(y, _)| y)
+                    .unwrap(),
                 &[0, 2, 1, 3],
             )
             .unwrap();
@@ -311,7 +313,9 @@ fn full_cache_without_grouping_equals_causal_sdpa_after_the_permute() {
                     &g.upload(&qp).unwrap(),
                     &g.upload(&kp).unwrap(),
                     &g.upload(&vp).unwrap(),
+                    None,
                 )
+                .map(|(y, _)| y)
                 .unwrap(),
                 &[0, 2, 1, 3],
             )

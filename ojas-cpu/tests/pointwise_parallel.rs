@@ -910,15 +910,20 @@ fn permute_moves_bits_for_runs_and_single_values_at_every_thread_count() {
     }
 }
 
+/// Rank 0 is one element and permutes by `[]`. A zero axis is refused as an
+/// empty tensor (D17 in `docs/shape-contract.md`), as on Metal and wgpu.
 #[test]
-fn permute_accepts_rank_zero_and_empty_axes() {
+fn permute_accepts_rank_zero_and_refuses_empty_axes() {
     let cpu = backend(7, Numerics::Fast);
     let scalar = t(&[2.5], &[]);
     assert_eq!(v(&cpu.permute(&scalar, &[]).unwrap()), vec![2.5]);
     let empty = Tensor::zeros(&[2, 0, 3], ojas_core::DType::F32, &Budget::new(u64::MAX)).unwrap();
-    let y = cpu.permute(&empty, &[1, 2, 0]).unwrap();
-    assert_eq!(y.shape(), &[0, 3, 2]);
-    assert!(v(&y).is_empty());
+    match cpu.permute(&empty, &[1, 2, 0]) {
+        Err(OjasError::Shape { op, detail }) => {
+            assert_eq!((op, detail.as_str()), ("permute", "empty tensor"))
+        }
+        other => panic!("expected Shape(empty tensor), got {other:?}"),
+    }
 }
 
 // ---- NaN and infinity: refused before any charge ----
