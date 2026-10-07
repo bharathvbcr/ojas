@@ -10,7 +10,7 @@
 //! `host_ref::tests::mul_add_is_fused_on_this_host`). It
 //! follows the kernels' structure exactly: per (sequence, head, value slice)
 //! block, 128 rows of state, the warp-butterfly column sums
-//! ([`warp_sum`], [`block_colsum`]), the checkpoint every 64 tokens, the
+//! ([`crate::small_common::colsum_4warps`]), the checkpoint every 64 tokens, the
 //! chunked reverse recurrence, and the finish kernel's slice-order sums. Two
 //! consequences:
 //! - the whole algorithm (indexing, variable lengths, checkpoints, the
@@ -29,10 +29,12 @@ use crate::error::CudaError;
 use crate::gdn_plan::{GdnPublishedPlan, GDN_BV, GDN_CKPT, GDN_DK, GDN_L2_EPS};
 use crate::inputs::splitmix_f32;
 use crate::k8_act::exp_nonpos_f32;
+use crate::small_common::{colsum_4warps, COLSUM_4WARPS_THREADS};
 
 const DK: usize = GDN_DK;
 const BV: usize = GDN_BV;
-const WARP: usize = 32;
+// One state row per thread: the column sums run over small_common's four-warp block.
+const _: () = assert!(DK == COLSUM_4WARPS_THREADS);
 
 /// The bounds every K2(i) output is judged by, on the host mirror and on the
 /// device. Written before either ran.
@@ -96,38 +98,6 @@ pub fn rnorm(sumsq: f32) -> f32 {
 /// `1 / sqrt(128)`, as the kernels form it.
 pub fn q_scale() -> f32 {
     1.0 / (DK as f32).sqrt()
-}
-
-/// The value every lane holds after the device's butterfly
-/// `v += shfl_xor(v, off)` for `off = 16, 8, 4, 2, 1`. Lane `l < off` adds
-/// lane `l + off`'s value at each level; the other lanes hold the same bits
-/// (IEEE addition is commutative), so lane 0's tree is every lane's.
-pub fn warp_sum(lanes: &[f32; WARP]) -> f32 {
-    let mut s = *lanes;
-    for off in [16usize, 8, 4, 2, 1] {
-        for l in 0..off {
-            s[l] += s[l + off];
-        }
-    }
-    s[0]
-}
-
-/// The device's `qd_gdn_colsum<N>`: each column over 128 threads, as four
-/// warp butterflies then `(w0 + w1) + (w2 + w3)`.
-pub fn block_colsum<const N: usize>(p: &[[f32; N]; DK]) -> [f32; N] {
-    let mut out = [0.0f32; N];
-    for (n, slot) in out.iter_mut().enumerate() {
-        let mut w = [0.0f32; 4];
-        for (wi, wv) in w.iter_mut().enumerate() {
-            let mut lanes = [0.0f32; WARP];
-            for (l, lane) in lanes.iter_mut().enumerate() {
-                *lane = p[wi * WARP + l][n];
-            }
-            *wv = warp_sum(&lanes);
-        }
-        *slot = (w[0] + w[1]) + (w[2] + w[3]);
-    }
-    out
 }
 
 /// The operands, in [`crate::gdn_plan`]'s packed layout.
@@ -272,7 +242,7 @@ pub fn gdn_published_fwd_mirror(
                         p[i][BV] = ki * ki;
                         p[i][BV + 1] = qi * qi;
                     }
-                    let tot = block_colsum(&p);
+                    let tot = colsum_4warps(&p);
                     let rk = rnorm(tot[BV]);
                     let rq = rnorm(tot[BV + 1]);
                     for i in 0..DK {
@@ -284,7 +254,7 @@ pub fn gdn_published_fwd_mirror(
                             po[i][j] = s[i][j] * qh;
                         }
                     }
-                    let out = block_colsum(&po);
+                    let out = colsum_4warps(&po);
                     o[r * dv + j0..r * dv + j0 + BV].copy_from_slice(&out);
                 }
                 for (i, row) in s.iter().enumerate() {
@@ -380,7 +350,7 @@ pub fn gdn_published_bwd_mirror(
                             p18[i][BV] = ki * ki;
                             p18[i][BV + 1] = qi * qi;
                         }
-                        let tot = block_colsum(&p18);
+                        let tot = colsum_4warps(&p18);
                         let rk = rnorm(tot[BV]);
                         let bt = x.beta[r];
                         for j in 0..BV {
@@ -421,7 +391,7 @@ pub fn gdn_published_bwd_mirror(
                                 p16[i][j] = ds[i][j] * kh[i];
                             }
                         }
-                        let ddelta = block_colsum(&p16);
+                        let ddelta = colsum_4warps(&p16);
                         let mut dkh = [0.0f32; DK];
                         for i in 0..DK {
                             let mut dgp = 0.0f32;
@@ -434,7 +404,7 @@ pub fn gdn_published_bwd_mirror(
                             }
                             p1[i][0] = dgp;
                         }
-                        let dgt = block_colsum(&p1);
+                        let dgt = colsum_4warps(&p1);
                         for j in 0..BV {
                             gdv[r * dv + j0 + j] = bt * ddelta[j];
                         }
@@ -478,7 +448,7 @@ pub fn gdn_published_bwd_mirror(
             let (qi, ki) = (x.q[at], x.k[at]);
             pq[i] = [qi * qi, ki * ki];
         }
-        let tot = block_colsum(&pq);
+        let tot = colsum_4warps(&pq);
         let (rq, rk) = (rnorm(tot[0]), rnorm(tot[1]));
         for i in 0..DK {
             let at = r * DK + i;
@@ -486,7 +456,7 @@ pub fn gdn_published_bwd_mirror(
             let dyq = sums[i][0] * scale;
             pd[i] = [yq * dyq, yk * sums[i][1]];
         }
-        let dots = block_colsum(&pd);
+        let dots = colsum_4warps(&pd);
         for (i, sum) in sums.iter().enumerate() {
             let at = r * DK + i;
             let (yq, yk) = (x.q[at] * rq, x.k[at] * rk);
@@ -921,20 +891,6 @@ mod tests {
         c.g[2] = 0.0;
         let f = gdn_published_fwd_mirror(&c.plan, &c.inputs()).unwrap();
         assert!(f.o.iter().all(|x| x.is_finite()));
-    }
-
-    #[test]
-    fn published_warp_sum_is_the_butterfly_tree_not_a_sequential_sum() {
-        // Values whose sum depends on the order: 2^24 + 1 + ... .
-        let mut lanes = [1.0f32; 32];
-        lanes[0] = 16_777_216.0;
-        // The butterfly pairs lane 0 with lane 16 first: 2^24 + 1 rounds to
-        // 2^24; the other 30 ones sum exactly to 30 in the tree; 2^24 + 30.
-        assert_eq!(warp_sum(&lanes), 16_777_246.0);
-        // A sequential sum from lane 0 loses every 1: 2^24.
-        assert_eq!(lanes.iter().fold(0.0f32, |a, &x| a + x), 16_777_216.0);
-        let p: [[f32; 1]; 128] = std::array::from_fn(|i| [i as f32]);
-        assert_eq!(block_colsum(&p), [8128.0]);
     }
 
     #[test]

@@ -6,10 +6,10 @@
 //! [`CeWorkspace`] holds every buffer one call needs, sized by the plan and
 //! bounded by [`crate::ce_rows::scratch_elements`]: the gathered rows, the row state
 //! `(m, s, tlogit)`, the targets, and per chunk width (the full width, and
-//! the tail's when the vocabulary is not a multiple of the chunk) a weight
-//! chunk, a logits block and a `dW` chunk. K1's GEMMs take whole buffers, so
-//! the weight chunk is copied in and the `dW` chunk copied out with K0's
-//! `deliver` (cost note in the lane's handoff).
+//! the tail's when the vocabulary is not a multiple of the chunk) a logits
+//! block. K1's GEMMs take views, so the head chunk `W[v0..v0 + w]` is read in
+//! place and `dW[v0..v0 + w]` written in place: no weight or `dW` chunk is
+//! copied, as the host mirror already did.
 //!
 //! [`ce_rows`] **waits**: the per-row losses are formed in f64 on the host
 //! from the downloaded `(m, s, tlogit)`, as tessl does, and a non-finite row
@@ -24,8 +24,7 @@ use crate::gemm::{gemm, Accumulate, Bf16Engine, GemmSpec};
 use crate::gemm_plan::{GemmLayout, GemmShape};
 use crate::geometry::grid_1d;
 use crate::host_ref::Operands;
-use crate::k0::{ce_gather_rows, deliver, GatherSource};
-use crate::k0_plan::{DeliverMode, DeliverPlan};
+use crate::k0::{ce_gather_rows, GatherSource};
 use crate::runtime::{driver_error, CudaRuntime};
 use crate::small_common::{block_grid, to_usize, ROW_THREADS};
 use crate::small_common_cuda::{cfg, function};
@@ -33,12 +32,8 @@ use crate::small_common_cuda::{cfg, function};
 /// The scratch for one chunk width.
 struct ChunkScratch {
     width: u64,
-    /// `[width, hidden]`: the head rows `[v0, v0 + width)`.
-    wc: CudaBuffer<f32>,
     /// `[n, width]`: logits, then `dlogits` in place.
     logits: CudaBuffer<f32>,
-    /// `[width, hidden]`: the `dW` rows `[v0, v0 + width)`.
-    dwc: CudaBuffer<f32>,
 }
 
 /// Every device buffer a [`ce_rows`] call over `plan` uses.
@@ -63,9 +58,7 @@ impl CeWorkspace {
             let wu = to_usize(w, OP)?;
             sets.push(ChunkScratch {
                 width: w,
-                wc: rt.alloc_zeros(wu * hid, "ce_rows weight chunk")?,
                 logits: rt.alloc_zeros(n * wu, "ce_rows logits")?,
-                dwc: rt.alloc_zeros(wu * hid, "ce_rows dW chunk")?,
             });
         }
         Ok(CeWorkspace {
@@ -86,11 +79,7 @@ impl CeWorkspace {
 
     /// f32 elements held: [`crate::ce_rows::scratch_elements`] of the plan.
     pub fn elements(&self) -> u64 {
-        let set: usize = self
-            .sets
-            .iter()
-            .map(|c| c.wc.len() + c.logits.len() + c.dwc.len())
-            .sum();
+        let set: usize = self.sets.iter().map(|c| c.logits.len()).sum();
         let total = set + self.hr.len() + self.m.len() + self.s.len() + self.t.len();
         u64::try_from(total).unwrap_or(u64::MAX)
     }
@@ -164,6 +153,8 @@ pub fn ce_rows(
         load_logits(rt, ws, w, (v0, wd), operands, engine)?;
         softmax_grad(rt, ws, (v0, wd), factor)?;
         let wdu = to_usize(wd, OP)?;
+        // The head chunk W[v0..v0 + wd] and the dW rows it owns, in place.
+        let (off, len) = (to_usize(v0, OP)? * hid, wdu * hid);
         let set = scratch_for(&mut ws.sets, wd)?;
         let acc = if v0 == 0 {
             Accumulate::Overwrite
@@ -176,21 +167,28 @@ pub fn ce_rows(
             shape: GemmShape::new(n, hid, wdu)?,
             acc,
         };
-        gemm(rt, dh_spec, engine, &set.logits, &set.wc, g.dh)?;
+        gemm(
+            rt,
+            dh_spec,
+            engine,
+            set.logits.all(),
+            w.view(off, len, OP)?,
+            g.dh.all_mut(),
+        )?;
         let dw_spec = GemmSpec {
             operands,
             layout: GemmLayout::Tn,
             shape: GemmShape::new(wdu, hid, n)?,
             acc: Accumulate::Overwrite,
         };
-        gemm(rt, dw_spec, engine, &set.logits, &ws.hr, &mut set.dwc)?;
-        let copy_out = DeliverPlan::new(
-            (0, set.dwc.len()),
-            (v0 * plan.hidden, g.dw.len()),
-            wd * plan.hidden,
-            DeliverMode::Copy,
+        gemm(
+            rt,
+            dw_spec,
+            engine,
+            set.logits.all(),
+            ws.hr.all(),
+            g.dw.view_mut(off, len, OP)?,
         )?;
-        deliver(rt, &copy_out, &set.dwc, g.dw)?;
     }
     Ok(out)
 }
@@ -201,8 +199,7 @@ fn scratch_for(sets: &mut [ChunkScratch], width: u64) -> Result<&mut ChunkScratc
     })
 }
 
-/// Copy the head rows `[v0, v0 + wd)` into the width's weight chunk and form
-/// `logits = hr @ wc^T`.
+/// `logits = hr @ W[v0..v0 + wd]^T`, the head chunk read in place.
 fn load_logits(
     rt: &CudaRuntime,
     ws: &mut CeWorkspace,
@@ -215,21 +212,15 @@ fn load_logits(
     let hidden = ws.plan.hidden;
     let (n, hid) = (to_usize(ws.plan.n, OP)?, to_usize(hidden, OP)?);
     let wdu = to_usize(wd, OP)?;
+    let wc = w.view(to_usize(v0, OP)? * hid, wdu * hid, OP)?;
     let set = scratch_for(&mut ws.sets, wd)?;
-    let copy_in = DeliverPlan::new(
-        (v0 * hidden, w.len()),
-        (0, set.wc.len()),
-        wd * hidden,
-        DeliverMode::Copy,
-    )?;
-    deliver(rt, &copy_in, w, &mut set.wc)?;
     let spec = GemmSpec {
         operands,
         layout: GemmLayout::Nt,
         shape: GemmShape::new(n, wdu, hid)?,
         acc: Accumulate::Overwrite,
     };
-    gemm(rt, spec, engine, &ws.hr, &set.wc, &mut set.logits)
+    gemm(rt, spec, engine, ws.hr.all(), wc, set.logits.all_mut())
 }
 
 fn lse_update(

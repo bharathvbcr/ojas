@@ -1,9 +1,0 @@
-model.embed_tokens.weight
-model.layers.0.input_layernorm.weight
-model.layers.0.linear_attn.A_log
-model.layers.3.self_attn.q_proj.weight
-model.layers.7.mlp.down_proj.weight
-model.layers.8.mlp.down_proj.weight
-model.layers.10.linear_attn.dt_bias
-model.layers.23.post_attention_layernorm.weight
-model.norm.weight

@@ -86,9 +86,40 @@ pub fn gemm_grid(m: usize, n: usize) -> Result<Launch, CudaError> {
     })
 }
 
+/// Elements `[off, off + len)` of a `buf_len`-element buffer, checked: a view
+/// is never empty, its end never overflows, and it never runs past the
+/// buffer. The device views of [`crate::buffer`] are built only through this.
+pub fn view_range(
+    buf_len: usize,
+    off: usize,
+    len: usize,
+    op: &str,
+) -> Result<std::ops::Range<usize>, CudaError> {
+    if len == 0 {
+        return Err(CudaError::invalid(op, "an empty view"));
+    }
+    match off.checked_add(len) {
+        Some(end) if end <= buf_len => Ok(off..end),
+        _ => Err(CudaError::invalid(
+            op,
+            format!("elements {off} + {len} run past a {buf_len}-element buffer"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn views_stay_inside_their_buffer() {
+        assert_eq!(view_range(10, 0, 10, "v").unwrap(), 0..10);
+        assert_eq!(view_range(10, 4, 6, "v").unwrap(), 4..10);
+        assert!(view_range(10, 4, 7, "v").is_err(), "one past the end");
+        assert!(view_range(10, 10, 0, "v").is_err(), "empty");
+        assert!(view_range(10, usize::MAX, 2, "v").is_err(), "overflow");
+        assert!(view_range(0, 0, 1, "v").is_err());
+    }
 
     /// Simulate the kernels' grid-stride loop and count visits per index.
     fn visits(n: u64, launch: Launch) -> Vec<u32> {

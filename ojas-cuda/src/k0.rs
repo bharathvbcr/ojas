@@ -5,7 +5,7 @@
 
 use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 
-use crate::buffer::CudaBuffer;
+use crate::buffer::{BufView, BufViewMut, CudaBuffer};
 use crate::error::CudaError;
 use crate::geometry::{grid_1d, Launch};
 use crate::k0_plan::{
@@ -33,8 +33,8 @@ fn k0(rt: &CudaRuntime, entry: &str) -> Result<CudaFunction, CudaError> {
 /// `dst = bf16(src)`, round-to-nearest-even.
 pub fn cast_f32_to_bf16(
     rt: &CudaRuntime,
-    src: &CudaBuffer<f32>,
-    dst: &mut CudaBuffer<u16>,
+    src: BufView<'_, f32>,
+    mut dst: BufViewMut<'_, u16>,
 ) -> Result<(), CudaError> {
     const E: &str = "qd_cast_f32_to_bf16";
     if src.len() != dst.len() {
@@ -46,10 +46,13 @@ pub fn cast_f32_to_bf16(
     let n = len_u64(src.len());
     let Some(l) = grid_1d(n) else { return Ok(()) };
     let f = k0(rt, E)?;
+    let src_dev = src.device();
+    let mut dst_dev = dst.device();
     let mut b = rt.stream().launch_builder(&f);
-    b.arg(src.slice()).arg(dst.slice_mut()).arg(&n);
+    b.arg(&src_dev).arg(&mut dst_dev).arg(&n);
     // SAFETY: the kernel takes (const float*, unsigned short*, unsigned long
-    // long n); both buffers hold n elements and it touches indices < n only.
+    // long n); both views hold n elements inside their buffers (view_range)
+    // and it touches indices < n only.
     unsafe { b.launch(cfg(l)) }.map_err(|e| driver_error(E, e))?;
     Ok(())
 }

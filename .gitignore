@@ -22,6 +22,8 @@ go/coverage.out
 go.work
 go.work.sum
 bin/
+# Cargo binary sources, not build output (bin/ above hid ojas-cuda's rung0/runga).
+!**/src/bin/
 
 # Python artifacts & environments
 __pycache__/

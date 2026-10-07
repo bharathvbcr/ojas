@@ -126,14 +126,24 @@ pub struct BitDiff {
     pub first: Option<(usize, u64, u64)>,
 }
 
-fn diff_by<T: Copy>(got: &[T], want: &[T], bits: impl Fn(T) -> u64) -> BitDiff {
+/// `bits` maps a value to its bit pattern; `is_nan` says whether it is a NaN.
+/// Two NaNs match whatever their payloads (Fable's NaN ruling, 2026-10-02:
+/// kernels do not canonicalise, NaN-equivalence lives here, and bitwise
+/// claims are for finite values). Every other pair must match bit for bit,
+/// so `-0.0` against `+0.0`, or a NaN against a number, is a mismatch.
+fn diff_by<T: Copy>(
+    got: &[T],
+    want: &[T],
+    bits: impl Fn(T) -> u64,
+    is_nan: impl Fn(T) -> bool,
+) -> BitDiff {
     let mut d = BitDiff {
         compared: got.len().min(want.len()),
         mismatches: got.len().abs_diff(want.len()),
         first: None,
     };
     for (i, (&g, &w)) in got.iter().zip(want).enumerate() {
-        if bits(g) != bits(w) {
+        if bits(g) != bits(w) && !(is_nan(g) && is_nan(w)) {
             d.mismatches += 1;
             if d.first.is_none() {
                 d.first = Some((i, bits(g), bits(w)));
@@ -143,14 +153,14 @@ fn diff_by<T: Copy>(got: &[T], want: &[T], bits: impl Fn(T) -> u64) -> BitDiff {
     d
 }
 
-/// Compare f32 slices by their bit patterns (a NaN equals only its own bits).
+/// Compare f32 slices by their bit patterns; any NaN matches any NaN.
 pub fn diff_bits_f32(got: &[f32], want: &[f32]) -> BitDiff {
-    diff_by(got, want, |x| u64::from(x.to_bits()))
+    diff_by(got, want, |x| u64::from(x.to_bits()), f32::is_nan)
 }
 
-/// Compare u16 (bf16 bit) slices.
-pub fn diff_bits_u16(got: &[u16], want: &[u16]) -> BitDiff {
-    diff_by(got, want, u64::from)
+/// Compare bf16 bit slices; any bf16 NaN matches any bf16 NaN.
+pub fn diff_bits_bf16(got: &[u16], want: &[u16]) -> BitDiff {
+    diff_by(got, want, u64::from, |b| b & 0x7fff > 0x7f80)
 }
 
 /// A bitwise check: passes iff the lengths agree and no element differs.
@@ -271,17 +281,23 @@ mod tests {
         assert_eq!(overall(&[]), Status::NotRun);
     }
 
+    /// Fable's NaN ruling (2026-10-02): any NaN matches any NaN, payload and
+    /// sign included; every other value matches only its own bits, so the
+    /// sign of zero and a NaN against a number still count.
     #[test]
-    fn bit_diffs_count_nan_payloads_and_length_differences() {
+    fn bit_diffs_match_any_nan_and_count_everything_else() {
         let nan_a = f32::from_bits(0x7fc0_0000);
-        let nan_b = f32::from_bits(0x7fc0_0001);
-        let d = diff_bits_f32(&[1.0, nan_a, -0.0], &[1.0, nan_b, 0.0]);
+        let nan_b = f32::from_bits(0xffc0_0001);
+        let d = diff_bits_f32(&[1.0, nan_a, -0.0, nan_a], &[1.0, nan_b, 0.0, 2.0]);
         assert_eq!(d.mismatches, 2);
-        assert_eq!(d.first, Some((1, 0x7fc0_0000, 0x7fc0_0001)));
-        let short = diff_bits_u16(&[1, 2], &[1, 2, 3]);
+        assert_eq!(d.first, Some((2, 0x8000_0000, 0)));
+        // bf16: 0x7fc0 and 0xffc1 are both NaN; 0x7f80 (+inf) is not.
+        let b = diff_bits_bf16(&[0x7fc0, 0x7f80, 0x7fc0], &[0xffc1, 0x7fc0, 0x7fc0]);
+        assert_eq!((b.mismatches, b.first), (1, Some((1, 0x7f80, 0x7fc0))));
+        let short = diff_bits_bf16(&[1, 2], &[1, 2, 3]);
         assert_eq!((short.compared, short.mismatches), (2, 1));
         assert_eq!(bitwise_check("x", short, 3).status, Status::Fail);
-        let same = diff_bits_u16(&[1, 2, 3], &[1, 2, 3]);
+        let same = diff_bits_bf16(&[1, 2, 3], &[1, 2, 3]);
         assert_eq!(bitwise_check("x", same, 3).status, Status::Pass);
     }
 

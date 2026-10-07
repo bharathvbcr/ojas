@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas-cuda · ojas reference</title>
-  <meta name="description" content="ojas-cuda provides an optional NVIDIA CUDA GPU driver and kernel execution probe for ojas via cudarc.">
+  <meta name="description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -13,7 +13,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-cuda.html">
   <meta property="og:title" content="ojas-cuda · ojas reference">
-  <meta property="og:description" content="ojas-cuda provides an optional NVIDIA CUDA GPU driver and kernel execution probe for ojas via cudarc.">
+  <meta property="og:description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
@@ -104,7 +104,6 @@
 <li><a href="crate-ojas-model.html">ojas-model</a></li>
 <li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
 <li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
-<li><a href="crate-ojas-qwen35-cuda.html">ojas-qwen35-cuda</a></li>
 <li><a href="crate-ojas-simd.html">ojas-simd</a></li>
 <li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
 </ul>
@@ -114,32 +113,229 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
       <article class="prose-ojas">
 <h1 id="ojas-cuda">ojas-cuda <a class="anchor" href="#ojas-cuda" aria-label="Link to this section">#</a></h1>
-<p><code>ojas-cuda</code> provides an optional NVIDIA CUDA GPU driver and kernel execution probe for <strong>ojas</strong> via <code>cudarc</code>.</p>
-<p>It is feature-gated under <code>--features cuda</code> and is disabled in the default workspace build.</p>
-<hr>
-<h2 id="execution-model--compilation-gate">Execution Model &amp; Compilation Gate <a class="anchor" href="#execution-model--compilation-gate" aria-label="Link to this section">#</a></h2>
-<figure class="diagram"><pre class="mermaid">flowchart TD
-    Init[&#34;CudaDevice::open()&#34;] --&gt; CheckFeature{&#34;Is &#39;cuda&#39; feature flag enabled?&#34;}
-    
-    CheckFeature --&gt;|&#34;No (Default Build)&#34;| NotCompiled[&#34;Return Err(DeviceError::NotCompiled)\n(Strict refusal; never CPU fallback)&#34;]
-    CheckFeature --&gt;|Yes| CudaContext[&#34;Initialize CudaContext(0) via cudarc&#34;]
-    
-    CudaContext --&gt; Kernel[&#34;Compile PTX Kernel via NVRTC:\naffine_f32 (y = x * scale + bias)&#34;]
-    Kernel --&gt; Stream[&#34;Stream Launch &amp; Host-Device Memory Transfers&#34;]
-    Stream --&gt; Result[&#34;Result Vector (f32)&#34;]</pre></figure>
-<hr>
-<h2 id="architectural-role--boundaries">Architectural Role &amp; Boundaries <a class="anchor" href="#architectural-role--boundaries" aria-label="Link to this section">#</a></h2>
-<aside class="alert alert-note"><p class="alert-title">Note</p><p><code>ojas-cuda</code> does <strong>not</strong> implement the <code>ojas_core::Backend</code> trait and is not reachable from the Go C-ABI runtime (<code>ojas-capi</code>). It serves as an isolated affine kernel execution probe for systems testing on NVIDIA hardware.</p>
-</aside>
-<hr>
-<h2 id="defensive-countermeasures--safety-guarantees">Defensive Countermeasures &amp; Safety Guarantees <a class="anchor" href="#defensive-countermeasures--safety-guarantees" aria-label="Link to this section">#</a></h2>
-<aside class="alert alert-important"><p class="alert-title">Important</p><ol>
-<li><strong>Zero Silent Fallback:</strong> Attempting to invoke CUDA operations in a build without <code>--features cuda</code> immediately returns <code>Err(DeviceError::NotCompiled)</code>. The engine <strong>never silently redirects GPU workloads to host CPU execution</strong>.
+<p>NVIDIA CUDA for ojas, through <code>cudarc</code> (0.19.10, <code>cuda-12080</code> bindings, libraries loaded at run time). Three things live here:</p>
+<ul>
+<li><code>CudaDevice</code>: the device probe (open ordinal 0, run one affine kernel before <code>Ok</code>).
 </li>
-<li><strong>Device Mismatch Defense:</strong> Passing a mismatched device handle (such as <code>Device::Cpu</code>) to <code>CudaDevice::affine_f32</code> raises <code>Err(DeviceError::DeviceMismatch)</code> loud and early.
+<li><code>CudaBackend</code>: the <code>ojas_core::Backend</code> implementation. <code>upload</code>, <code>download</code> and <code>sync</code> work; every compute op returns <code>OjasError::Unsupported</code> naming the op.
+</li>
+<li><code>Qwen35Step</code>: the Qwen3.5 whole-step training provider, design (B) in <a href="cuda-backend-scoping.html"><code>docs/cuda-backend-scoping.md</code></a>, the CUDA counterpart of <code>ojas-qwen35</code>. Every compute method refuses with <code>Unsupported</code> until its kernels are wired and have run on a device. The kernels it will run are here already, each tested against a float64 host reference (table below).
+</li>
+</ul>
+<p>Everything that touches a device is behind the <code>cuda</code> feature, off by default. Without it the crate builds on any host and its host-side tests run there.</p>
+<p><strong>Status (2026-10-06).</strong> Milestones M0 (K0, K1) and M1 (K8, K11, the tiny-fixture loader), K2(i) (GDN at the published rule), and L-cuda-small&#39;s K3, K4, K6, K7, K9, K10. On 2026-10-05 the GH200 ran <code>rung0</code> (174/174 checks pass) and every device-test binary (<code>--ignored --test-threads=1</code>, exit 0), all cross-built from this code when it lived in the standalone sibling crate it was merged from. The merged crate has not yet run on a device.</p>
+<h2 id="what-is-here">What is here <a class="anchor" href="#what-is-here" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Piece</th><th>Where</th><th>Tested on the Mac</th></tr></thead>
+<tbody>
+<tr><td><code>CudaRuntime</code>: library probe before any cudarc call, sm_90 check, one stream, cuBLAS handle (32 MiB workspace, default math, atomics never set)</td><td><code>src/runtime.rs</code></td><td>refusal path only (<code>tests/runtime_refusal.rs</code>)</td></tr>
+<tr><td><code>CudaBuffer&lt;T&gt;</code>: typed, length-checked, held against a bounded <code>AllocBudget</code>; <code>CudaDeviceBuffer</code> backs an <code>ojas_core::Tensor</code></td><td><code>src/buffer.rs</code>, <code>src/budget.rs</code></td><td>budget logic</td></tr>
+<tr><td>NVRTC compile cache: key = module, FNV-1a of the source, length, options (architecture and <code>--fmad</code> included), NVRTC version; bounded in entries and bytes, LRU</td><td><code>src/nvrtc_cache.rs</code></td><td>yes</td></tr>
+<tr><td>K0: f32↔bf16 (RNE), <code>copy_cols</code>, <code>deliver</code> (copy / <code>+=</code>), <code>zero</code>, <code>scatter_add_rows</code> (distinct rows), <code>ce_gather_rows</code> (f32 / bf16)</td><td><code>src/kernels.rs</code>, <code>src/k0.rs</code>, <code>src/k0_plan.rs</code></td><td>plans and host references</td></tr>
+<tr><td>K1: GEMM <code>nn</code>/<code>tn</code>/<code>nt</code>: ExactF32 (fixed-k FFMA kernel) and Bf16 (cuBLAS <code>GemmEx</code> bf16→f32, or the FFMA kernel rounding on load)</td><td><code>src/gemm.rs</code>, <code>src/gemm_plan.rs</code></td><td>cuBLAS row-major mapping, host references</td></tr>
+<tr><td>The crate&#39;s one <code>exp</code>, <code>log</code>, softplus, sigmoid, SiLU and SiLU&#39; (device prelude plus bit-identical host emulation)</td><td><code>src/k8_act.rs</code></td><td>ulp bounds (release tier), special values</td></tr>
+<tr><td>K8: SwiGLU forward (f32 or bf16 out) and backward (one or two output buffers), exact-f32 residual add, over <code>ColWindow</code>s</td><td><code>src/k8_plan.rs</code>, <code>src/k8_kernels.rs</code>, <code>src/k8.rs</code></td><td>plans, bitwise host references</td></tr>
+<tr><td>K11: AdamW in place (torch single-tensor order, per-entry lr scale, decay and step count, inactive entries untouched) and the squared gradient norm (per-chunk f32 partials, f64 sum)</td><td><code>src/k11_host.rs</code>, <code>src/k11_kernels.rs</code>, <code>src/k11.rs</code></td><td>the f32 emulation against the decay-sensitive torch golden (≤ 1e-6, all 7 mutations ≥ 100x) and the adamw_f float64 golden</td></tr>
+<tr><td>K2(i): the GDN training scan at the published rule, forward and backward</td><td><code>src/gdn_kernels.rs</code>, <code>src/gdn_plan.rs</code>, <code>src/gdn.rs</code>, <code>src/gdn_host.rs</code></td><td>the bitwise host mirror against the float64 reference; the reference against tessl&#39;s in process</td></tr>
+<tr><td>K3 gates, K4 conv1d, K6 q/k norm + RoPE, K7 RMSNorm, K9 embed, K10 cross-entropy rows, and their shared reductions</td><td><code>src/small_common.rs</code> and one <code>*.rs</code> / <code>*_cuda.rs</code> pair each</td><td>host mirrors and goldens</td></tr>
+<tr><td>Tiny-fixture loader: tessl&#39;s <code>qwen35_train</code> (config through <code>ojas_io</code>&#39;s JSON reader, BF16 safetensors, <code>.npy</code> gradients), into device buffers</td><td><code>src/tiny_fixture_published.rs</code></td><td>parse, tamper and symlink refusal</td></tr>
+<tr><td>The report, the watchdog and the end of <code>main</code>, shared by both rung binaries</td><td><code>src/report_cli.rs</code></td><td>unit tests, and the watchdog end to end (<code>tests/watchdog_exit.rs</code>)</td></tr>
+<tr><td>Rung-0 and rung-(a) binaries</td><td><code>src/bin/rung0.rs</code>, <code>src/bin/runga.rs</code></td><td>arguments, refusal path</td></tr>
+</tbody></table></div>
+<p>Host references (<code>src/host_ref.rs</code>) are bitwise for K0 and for the FFMA GEMM, and float64 for GEMM tolerances. The float64 references live in <code>tests/reference/</code>.</p>
+<h2 id="tests">Tests <a class="anchor" href="#tests" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Files</th><th>What</th><th>Where they run</th></tr></thead>
+<tbody>
+<tr><td><code>src/**</code> unit tests, <code>tests/reference_*.rs</code>, <code>tests/fixture_pins.rs</code>, <code>tests/fmt_boundary.rs</code>, <code>tests/step_refuses.rs</code>, <code>tests/watchdog_exit.rs</code></td><td>host-side</td><td>everywhere; CI&#39;s linux job (<code>cargo test --workspace --release</code>)</td></tr>
+<tr><td><code>tests/runtime_refusal.rs</code></td><td>the runtime refuses by name without the libraries</td><td>with <code>--features cuda</code>, on a host without the driver</td></tr>
+<tr><td><code>tests/device_*.rs</code></td><td>every kernel against its host reference on the device, <code>#[ignore]</code>d</td><td>an sm_90 GPU, <code>--ignored --test-threads=1</code>; CI builds them (<code>cargo test -p ojas-cuda --features cuda --no-run</code>)</td></tr>
+</tbody></table></div>
+<p>Two tiers run only in release builds (<code>#[cfg_attr(debug_assertions, ignore)]</code>), at full density: the k8_act ulp sweeps (~226M bit patterns, ~16 s in debug) and the K2 reference against tessl&#39;s at Qwen3.5-2B heads (B=1, T=200, H=16, Dv=128). <code>cargo test --release</code> runs them.</p>
+<p><code>tests/reference_gdn_published_vs_tessl.rs</code> also reads tessl&#39;s live <code>tests/common/gdn_train.rs</code> from the sibling checkout and fails, never passes, when it is absent.</p>
+<h2 id="numerics">Numerics <a class="anchor" href="#numerics" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>ExactF32 GEMM.</strong>
+<ul>
+<li>One CUDA-core FFMA kernel: <code>acc = fmaf(a, b, acc)</code> over ascending k, from +0.0, for every output. No tensor cores (TF32) and no split-K.
+</li>
+<li>Its bits depend only on the inputs. They equal <code>host_ref::gemm_ffma_f32</code>, which uses Rust&#39;s fused <code>f32::mul_add</code>.
+</li>
+</ul>
+</li>
+<li><strong>Bf16 GEMM.</strong>
+<ul>
+<li>Operands are rounded to bf16 by the K0 cast, then <code>cublasGemmEx</code> runs with <code>CUDA_R_16BF</code> A/B, a <code>CUDA_R_32F</code> C and <code>CUBLAS_COMPUTE_32F</code>.
+</li>
+<li>cudarc&#39;s safe <code>Gemm&lt;bf16&gt;</code> writes a bf16 C, so it is not used.
+</li>
+<li>The fallback is the FFMA kernel rounding its operands on load: the same tier, bit-identical to the host emulation.
+</li>
+</ul>
+</li>
+<li><strong>cuBLAS determinism scope.</strong>
+<ul>
+<li>NVIDIA promises bitwise-identical results within one toolkit version only &#34;on GPUs with the same architecture and the same number of SMs&#34;. The promise does not hold across streams or with atomics allowed (cuBLAS docs, &#34;Results reproducibility&#34;).
+</li>
+<li>This crate uses one stream, one handle, a fixed workspace and atomics never allowed.
+</li>
+<li>So the Bf16 cuBLAS tier repeats run to run on one GH200, but a different SM count or cuBLAS version may change its bits. Each rung report records the SM count and the driver, NVRTC and cuBLAS versions.
+</li>
+<li>The FFMA tier has no such scope.
+</li>
+</ul>
+</li>
+<li><strong>NaN</strong> (Fable&#39;s ruling, 2026-10-02). No kernel canonicalises a NaN: an input NaN passes through, and a NaN an operation makes has the hardware&#39;s bits (PTX <code>0x7fffffff</code>, aarch64 <code>0x7fc00000</code>, x86 <code>0xffc00000</code>). Bitwise host-device claims are for finite values; the comparison harness (<code>check::diff_bits_f32</code>, <code>diff_bits_bf16</code>) matches any NaN with any NaN; and a non-finite loss or gradient stops the step before any moment moves.
+</li>
+<li><strong>NVRTC options.</strong>
+<ul>
+<li><code>--gpu-architecture=compute_90</code>: PTX, which the driver JITs for sm_90. cudarc 0.19.10 exposes no CUBIN getter.
+</li>
+<li><code>--fmad=false</code>: plain <code>*</code>/<code>+</code> become <code>.rn</code> instructions, which nothing may contract.
+</li>
+<li><code>--ftz=false --prec-div=true --prec-sqrt=true</code>.
+</li>
+</ul>
+</li>
+<li><strong>Grids and reductions.</strong> Every grid is a function of the shape, never of the SM count. Every output element has one writer, and there are no atomics. Every float reduction has a fixed tree, defined once in <code>small_common</code> (the warp butterfly, the block sums, GDN&#39;s four-warp column sum) with a bit-exact host mirror.
+</li>
+</ul>
+<h2 id="building-on-the-mac">Building on the Mac <a class="anchor" href="#building-on-the-mac" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test -p ojas-cuda</code></pre></div>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test -p ojas-cuda --features cuda</code></pre></div>
+<p>The first runs the host tests with no CUDA anywhere. The second links cudarc: the library-refusal test runs, and the device tests compile and are ignored.</p>
+<p>Cross-build for the GH200 (aarch64, glibc 2.39 sysroot), the recipe in <code>docs/cuda-backend-scoping.md</code> §1.5. No CUDA SDK is needed: cudarc <code>dlopen</code>s the libraries at run time.</p>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=&#34;-C linker-flavor=gcc&#34; cargo build --offline --release --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda --bin rung0 --bin runga --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda</code></pre></div>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=&#34;-C linker-flavor=gcc&#34; cargo test --offline --release --no-run --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda</code></pre></div>
+<p>The binaries are under <code>aarch64-unknown-linux-gnu/release/</code> in that target dir, and the device tests under its <code>deps/</code>. A binary&#39;s sha256 depends on the checkout path, which it embeds: pin the sha256 of the file you copy, not one rebuilt elsewhere.</p>
+<h2 id="libraries-on-the-box">Libraries on the box <a class="anchor" href="#libraries-on-the-box" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>cudarc opens bare sonames (<code>libcublas.so.12</code>, <code>libnvrtc.so.12</code>, <code>libcuda.so.1</code>, …) with <code>dlopen</code> and <strong>panics</strong> if none loads.
+</li>
+<li>glibc reads <code>LD_LIBRARY_PATH</code> once, when the process starts. So:
+<ul>
+<li>the venv&#39;s library directories must be on it in the launching command;
+</li>
+<li>the binary cannot add them itself.
+</li>
+</ul>
+</li>
+<li><code>CudaRuntime::open</code> probes <code>libcuda</code>, <code>libnvrtc</code> and <code>libcublas</code> first. It refuses by name, exits 2, and lists the names searched and any candidate file that exists but did not load.
+</li>
+<li>Both directories are needed:
+<ul>
+<li><code>libcublas.so.12</code> loads <code>libcublasLt.so.12</code> from <code>nvidia/cublas/lib</code>;
+</li>
+<li>NVRTC loads <code>libnvrtc-builtins.so.12.8</code> from <code>nvidia/cuda_nvrtc/lib</code>.
+</li>
+</ul>
+</li>
+<li><code>/usr/local/cuda/lib64</code> on the box holds neither (lead&#39;s read-only check, 2026-10-01).
+</li>
+</ul>
+<h2 id="rung-0-on-the-box">Rung 0 on the box <a class="anchor" href="#rung-0-on-the-box" aria-label="Link to this section">#</a></h2>
+<p>A single-GPU job of about 5 minutes.</p>
+<p><strong>1. On the Mac: copy the binary</strong> (<code>KEY=~/.ssh/bharath_m5_macbook_pro.pem</code>, <code>BOX=ubuntu@192.222.51.246</code>, <code>T</code> the cross-build target dir above):</p>
+<p>shasum -a 256 $T/aarch64-unknown-linux-gnu/release/rung0 ssh -i $KEY $BOX &#39;mkdir -p /home/ubuntu/bin /home/ubuntu/ojas-cuda&#39; scp -i $KEY $T/aarch64-unknown-linux-gnu/release/rung0 $BOX:/home/ubuntu/bin/ojas-cuda-rung0</p>
+<p><strong>2. On the box: one command.</strong> Check the sha256 against the HANDOFF&#39;s value first, with <code>sha256sum /home/ubuntu/bin/ojas-cuda-rung0</code>. Then:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 300 env LD_LIBRARY_PATH=/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cublas/lib:/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib NVIDIA_TF32_OVERRIDE=0 /home/ubuntu/bin/ojas-cuda-rung0 --out /home/ubuntu/ojas-cuda/rung0-$(date -u +%Y%m%dT%H%M%SZ); echo &#34;rung0 exit $?&#34;</p>
+<ul>
+<li><code>flock</code> waits for the GPU lock. <code>timeout 300</code> is the outer cap.
+</li>
+<li>The binary enforces its own cap: 280 s by default, <code>--cap-secs</code> at most 300. When the cap fires, it writes what finished and exits 3.
+</li>
+<li><code>NVIDIA_TF32_OVERRIDE=0</code> turns TF32 off library-wide. It is recorded in the report. The Bf16 tier&#39;s bf16 operands are unaffected.
+</li>
+</ul>
+<p><strong>Exit codes</strong> (both rung binaries):</p>
+<div class="table-wrap"><table>
+<thead><tr><th style="text-align:right">Exit</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td style="text-align:right">0</td><td>Every check ran and passed</td></tr>
+<tr><td style="text-align:right">1</td><td>A check failed or panicked</td></tr>
+<tr><td style="text-align:right">2</td><td>Refused before any check: arguments, a missing library, a non-sm_90 device, or an existing report</td></tr>
+<tr><td style="text-align:right">3</td><td>The wall-clock cap expired</td></tr>
+<tr><td style="text-align:right">124</td><td>The outer <code>timeout</code> fired</td></tr>
+</tbody></table></div>
+<p><strong>The report</strong> is <code>&lt;out&gt;/rung0-report.json</code>, one JSON object of kind <code>ojas-cuda.rung0</code> with <code>quick: true</code>, holding:</p>
+<ul>
+<li>the device: name, compute capability, SM count, driver, NVRTC and cuBLAS versions, and the cuBLAS math and atomics modes read back;
+</li>
+<li>the environment;
+</li>
+<li>the libraries actually mapped (from <code>/proc/self/maps</code>);
+</li>
+<li>the NVRTC cache counts;
+</li>
+<li>every check with its status (<code>pass</code>, <code>fail</code>, <code>panicked</code>, <code>not_run</code>), its detail and its numbers.
+</li>
+</ul>
+<p>A panic inside cudarc, such as a missing symbol, is caught per check and recorded as <code>panicked</code>. It is never recorded as <code>pass</code>.</p>
+<p><strong>What rung 0 checks</strong> (<code>smoke::m0_phases</code>, which <code>runga</code> also runs):</p>
+<ul>
+<li>all kernel modules compile through NVRTC, plus one module at <code>compute_90a</code>;
+</li>
+<li>every K0 kernel equals its host reference bitwise, and a second run equals the first;
+</li>
+<li>the cuBLAS <code>GemmEx</code> bf16→f32 probe at 64³, within <code>2^-8·max|ref|</code> of float64, with its <code>cublas_status</code> recorded either way;
+</li>
+<li>K1 on tessl&#39;s ragged shapes, in every layout, for FFMA ExactF32, FFMA bf16 and cuBLAS bf16:
+<ul>
+<li>against float64 within tessl&#39;s bounds, <code>1e-4 + 1e-7·k</code> and <code>2e-3</code> (<code>tessl/src/gemm.rs:2286</code>);
+</li>
+<li>the FFMA engines also bitwise against the host emulation;
+</li>
+</ul>
+</li>
+<li>5-run bit-equality per engine.
+</li>
+</ul>
+<h2 id="runga-on-the-box-rung-a-m0--m1--k2i">Runga on the box (rung (a): M0 + M1 + K2(i)) <a class="anchor" href="#runga-on-the-box-rung-a-m0--m1--k2i" aria-label="Link to this section">#</a></h2>
+<p><code>runga</code> runs every device check of M0 and M1 and K2(i)&#39;s in one process, with rung 0&#39;s watchdog, cap and exit codes. It writes one report, <code>&lt;out&gt;/runga-report.json</code> (kind <code>ojas-cuda.runga</code>). It is a single-GPU job of a few minutes. Build it with the cross-build recipe above and pin the sha256 of the file you copy.</p>
+<p>scp -i $KEY $T/aarch64-unknown-linux-gnu/release/runga $BOX:/home/ubuntu/bin/ojas-cuda-runga</p>
+<p>On the box, check <code>sha256sum /home/ubuntu/bin/ojas-cuda-runga</code>, then:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 300 env LD_LIBRARY_PATH=/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cublas/lib:/home/ubuntu/qd-venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib NVIDIA_TF32_OVERRIDE=0 /home/ubuntu/bin/ojas-cuda-runga --out /home/ubuntu/ojas-cuda/runga-$(date -u +%Y%m%dT%H%M%SZ); echo &#34;runga exit $?&#34;</p>
+<p><strong>What it checks</strong>, in order:</p>
+<ol>
+<li>the device, as rung 0 opens it, under a 4 GiB budget;
+</li>
+<li>M0, as rung 0 runs it (<code>smoke::m0_phases</code>);
+</li>
+<li>K8: SwiGLU forward (f32, bf16) and backward (shared and separate outputs) and the residual add, bit for bit against the host from sentinel-filled buffers, plus the activation sweep over ~1M inputs, bit for bit (any NaN matching any NaN);
+</li>
+<li>K11 in three tiers:
+<ul>
+<li>the device trajectory against the f32 emulation, bit for bit, and a repeat;
+</li>
+<li>on the decay-sensitive golden, the device within the pre-registered 1e-6 of torch&#39;s fp32 masters, and torch&#39;s per-entry step counts;
+</li>
+<li>on the adamw_f float64 golden, the sanity bounds;
+</li>
+</ul>
+</li>
+<li>the tiny-fixture loader: upload, read back, bit for bit;
+</li>
+<li>K3, K4, K6, K7, K9 and K10 (<code>small_smoke</code>&#39;s hooks), one phase each, at smoke scale;
+</li>
+<li>K2(i) at the published rule (<code>gdn_smoke::gdn_published_checks</code>);
+</li>
+<li><code>runtime.no_leaked_buffers</code>: only the cuBLAS workspace is still reserved at the end.
 </li>
 </ol>
-</aside>
+<p>Then, <strong>report-only and never a check</strong>: <code>extra.gdn_published_timing</code>.</p>
+<ul>
+<li>It times GDN at 4×8192, H=16, Dv=128, on its own runtime, opened after the first is dropped, with <code>--gdn-timing-budget-gib</code> (default 24, at least 16).
+</li>
+<li>It says <code>not_run</code> and why when <code>--no-gdn-timing</code> is passed, fewer than 60 s of the cap are left, the device has less memory than the budget, or an allocation is refused.
+</li>
+<li>The header&#39;s <code>golden_pins</code> names the sha256 of every golden compiled into the binary.
+</li>
+</ul>
+<h2 id="device-tests-on-the-box">Device tests on the box <a class="anchor" href="#device-tests-on-the-box" aria-label="Link to this section">#</a></h2>
+<p>From the <code>--no-run</code> cross-build above, copy each <code>deps/device_*-&lt;hash&gt;</code> binary and run it on the box:</p>
+<p>flock /home/ubuntu/queue/gpu.lock timeout 600 env LD_LIBRARY_PATH=&lt;cublas lib&gt;:&lt;nvrtc lib&gt; ./device_k0-&lt;hash&gt; --ignored --test-threads=1 --nocapture</p>
+<p>The binaries are <code>device_k0</code>, <code>device_k1</code> (tessl&#39;s 25-run determinism soak for every engine and layout), <code>device_k8</code>, <code>device_k11</code>, <code>device_k3_gates_published</code>, <code>device_k4_conv1d</code>, <code>device_k6_qk_norm_rope</code>, <code>device_k7_rmsnorm</code>, <code>device_k9_embed</code>, <code>device_k10_ce_rows</code>, <code>device_gdn_published</code> and <code>device_gdn_published_mirror</code>. Each embeds its goldens with <code>include_bytes!</code> and checks them against their pinned sha256, so the box needs no checkout.</p>
+<p><code>device_gdn_published</code> (K2(i)) needs <code>timeout 900</code>. Its timing test is report-only: it prints one <code>GDN_PUBLISHED_TIMING {json}</code> line per shape (4×2048 and 4×8192, H=16, Dv=128) and needs about 15 GiB free on the device. Its rows go to the ledger as <code>quick</code>.</p>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cuda/README.md" rel="noopener"><code>ojas-cuda/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
@@ -148,9 +344,14 @@
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
-<li><a href="#execution-model--compilation-gate">Execution Model &amp; Compilation Gate</a></li>
-<li><a href="#architectural-role--boundaries">Architectural Role &amp; Boundaries</a></li>
-<li><a href="#defensive-countermeasures--safety-guarantees">Defensive Countermeasures &amp; Safety Guarantees</a></li>
+<li><a href="#what-is-here">What is here</a></li>
+<li><a href="#tests">Tests</a></li>
+<li><a href="#numerics">Numerics</a></li>
+<li><a href="#building-on-the-mac">Building on the Mac</a></li>
+<li><a href="#libraries-on-the-box">Libraries on the box</a></li>
+<li><a href="#rung-0-on-the-box">Rung 0 on the box</a></li>
+<li><a href="#runga-on-the-box-rung-a-m0--m1--k2i">Runga on the box (rung (a): M0 + M1 + K2(i))</a></li>
+<li><a href="#device-tests-on-the-box">Device tests on the box</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

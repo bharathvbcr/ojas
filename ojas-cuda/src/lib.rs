@@ -1,6 +1,43 @@
-//! NVIDIA CUDA device, Backend implementation, and whole-step training provider.
+//! NVIDIA CUDA for ojas: the device probe ([`CudaDevice`]), the
+//! `ojas_core::Backend` implementation ([`CudaBackend`]), and the Qwen3.5
+//! whole-step training provider ([`Qwen35Step`]), design (B) in
+//! `docs/cuda-backend-scoping.md`, the CUDA counterpart of `ojas-qwen35`.
+//!
+//! The target is the parity ladder (rungs a–d), not campaign speed. Every
+//! kernel is tested against a float64 host reference before it is timed. GDN
+//! fixtures name the `published` rule.
+//!
+//! Everything that touches a device is behind the `cuda` feature. Without it,
+//! the crate builds on any host and its host-side tests run there.
+//!
+//! # What is here
+//!
+//! Host-side, built and tested everywhere:
+//! - [`error`]: the crate's one error enum.
+//! - [`bf16`]: round-to-nearest-even f32 to bf16, tessl's algorithm.
+//! - [`budget`]: the bounded device-allocation budget.
+//! - [`nvrtc_cache`]: the bounded compile cache, keyed by source hash,
+//!   options (architecture included) and NVRTC version.
+//! - [`kernels`] and the `*_kernels` / small-kernel modules: the CUDA-C
+//!   sources and their compile options.
+//! - [`k0_plan`], [`gemm_plan`], [`k8_plan`], [`gdn_plan`], [`geometry`]:
+//!   validated plans, the cuBLAS row-major mapping, and launch shapes that
+//!   never depend on SM count.
+//! - [`host_ref`], [`k8_act`], [`k11_host`], [`gdn_host`], [`small_common`]:
+//!   host references and bit-identical host emulations of the device code.
+//! - [`check`], [`json`], [`libprobe`], [`rung0_cli`], [`report_cli`],
+//!   [`inputs`]: what the rung binaries and the device tests share.
+//! - [`step`]: the step provider's contract. Every compute method refuses with
+//!   `Unsupported` until its kernels are wired and run on a device.
+//!
+//! Device-side, behind `cuda`: `runtime` (library probe, sm_90 check, one
+//! stream, cuBLAS handle), `buffer`, `k0`, `gemm` (ExactF32 FFMA and bf16
+//! cuBLAS tiers), K2 `gdn`, K3–K11, and the `smoke` checks the rung binaries
+//! run. Device tests live in `tests/device_*.rs`, `#[ignore]`d, for an sm_90
+//! GPU.
 
 #![cfg_attr(not(feature = "cuda"), forbid(unsafe_code))]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod backend;
 pub mod bf16;
@@ -220,31 +257,6 @@ fn cuda_status(code: u32, detail: String) -> DeviceError {
     }
 }
 
-/// Keep the previous buffers when any part of a resize fails.
-/// Pre-fix, `inp` was assigned before `out`, so a failed `out` allocation
-/// left `inp` at the new length and `len` at the old one.
-#[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
-fn commit_resize<T>(
-    len: &mut usize,
-    inp: &mut T,
-    out: &mut T,
-    host_gens: &mut u32,
-    new_len: usize,
-    new_inp: Result<T, &'static str>,
-    new_out: Result<T, &'static str>,
-    new_host: Result<(), &'static str>,
-) -> Result<(), &'static str> {
-    let new_inp = new_inp?;
-    let new_out = new_out?;
-    new_host?;
-    *inp = new_inp;
-    *out = new_out;
-    *len = new_len;
-    *host_gens = host_gens.saturating_add(1);
-    Ok(())
-}
-
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 fn device_bytes_fit(free: usize, need: usize) -> Result<(), DeviceError> {
     if need > free {
@@ -442,39 +454,6 @@ mod tests {
         );
         let other = cuda_status(1, "invalid".to_string());
         assert!(matches!(other, DeviceError::Launch { .. }), "{other}");
-    }
-
-    #[test]
-    fn failed_resize_keeps_the_previous_buffers() {
-        let mut len = 4usize;
-        let mut inp = 1u64;
-        let mut out = 2u64;
-        let mut host_gens = 0u32;
-        let err = commit_resize(
-            &mut len,
-            &mut inp,
-            &mut out,
-            &mut host_gens,
-            8,
-            Ok(9),
-            Err("oom"),
-            Ok(()),
-        )
-        .unwrap_err();
-        assert_eq!(err, "oom");
-        assert_eq!((len, inp, out, host_gens), (4, 1, 2, 0));
-        commit_resize(
-            &mut len,
-            &mut inp,
-            &mut out,
-            &mut host_gens,
-            8,
-            Ok(9),
-            Ok(10),
-            Ok(()),
-        )
-        .unwrap();
-        assert_eq!((len, inp, out, host_gens), (8, 9, 10, 1));
     }
 
     #[test]

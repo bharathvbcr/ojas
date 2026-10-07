@@ -6,7 +6,8 @@
 //! crate's `QD_GRID_STRIDE`); element `i` is row `i / width`, column `i %
 //! width`, and has one writer. Every float operation is an explicitly
 //! rounded intrinsic, and SiLU is the crate's one copy
-//! (`crate::act_prelude!()`). Every output passes through `qd_canon_nan`.
+//! (`crate::act_prelude!()`). No output is canonicalised: a NaN is whatever
+//! the hardware makes (Fable's NaN ruling; see [`crate::k8_plan`]).
 
 use crate::kernels::KernelModule;
 
@@ -44,7 +45,7 @@ extern "C" __global__ void qd_swiglu_f32(
         const unsigned long long c = i - r * width;
         const float g = gate[QD_WIN(ld_gate, gate_off, r, c)];
         const float u = up[QD_WIN(ld_up, up_off, r, c)];
-        out[QD_WIN(ld_out, out_off, r, c)] = qd_canon_nan(__fmul_rn(qd_silu(g), u));
+        out[QD_WIN(ld_out, out_off, r, c)] = __fmul_rn(qd_silu(g), u);
     }
 }
 
@@ -63,7 +64,7 @@ extern "C" __global__ void qd_swiglu_bf16(
         const float g = gate[QD_WIN(ld_gate, gate_off, r, c)];
         const float u = up[QD_WIN(ld_up, up_off, r, c)];
         out[QD_WIN(ld_out, out_off, r, c)] =
-            qd_f32_to_bf16_bits(qd_canon_nan(__fmul_rn(qd_silu(g), u)));
+            qd_f32_to_bf16_bits(__fmul_rn(qd_silu(g), u));
     }
 }
 
@@ -78,8 +79,8 @@ extern "C" __global__ void qd_swiglu_bf16(
         const float u = up[QD_WIN(ld_up, up_off, r, c)];                          \
         const float d = dy[QD_WIN(ld_dy, dy_off, r, c)];                          \
         DGATE[QD_WIN(ld_dgate, dgate_off, r, c)] =                                \
-            qd_canon_nan(__fmul_rn(__fmul_rn(d, u), qd_silu_grad(g)));            \
-        DUP[QD_WIN(ld_dup, dup_off, r, c)] = qd_canon_nan(__fmul_rn(d, qd_silu(g))); \
+            __fmul_rn(__fmul_rn(d, u), qd_silu_grad(g));                          \
+        DUP[QD_WIN(ld_dup, dup_off, r, c)] = __fmul_rn(d, qd_silu(g));            \
     }
 
 extern "C" __global__ void qd_swiglu_bwd_f32(
@@ -120,7 +121,7 @@ extern "C" __global__ void qd_residual_add_f32(
         const unsigned long long r = i / width;
         const unsigned long long c = i - r * width;
         const unsigned long long k = QD_WIN(ld_resid, resid_off, r, c);
-        resid[k] = qd_canon_nan(__fadd_rn(resid[k], y[QD_WIN(ld_y, y_off, r, c)]));
+        resid[k] = __fadd_rn(resid[k], y[QD_WIN(ld_y, y_off, r, c)]);
     }
 }
 

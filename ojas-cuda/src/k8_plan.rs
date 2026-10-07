@@ -14,15 +14,17 @@
 //! gradient takes `dgate` and `dup` as two windows of one buffer. SiLU and its
 //! derivative are [`crate::k8_act`]'s, the crate's one copy.
 //!
-//! **NaN.** tessl writes whatever NaN the hardware makes. Here every output
-//! goes through `canon_nan`, on the device and in these references, so a NaN
-//! compares bit for bit whichever operation produced it (an `inf * 0` makes a
-//! different NaN on the Mac than on sm_90). Finite results are untouched.
+//! **NaN** (Fable's ruling, 2026-10-02). As in tessl, the outputs carry
+//! whatever NaN the hardware makes; nothing canonicalises it. An `inf * 0`
+//! makes a different NaN on the Mac than on sm_90, so the bitwise claim is
+//! for finite results, and the harness ([`crate::check::diff_bits_f32`])
+//! matches any NaN with any NaN. A NaN reaching a gradient stops the step
+//! ([`crate::step::validate_external_grad`]).
 
 use crate::bf16::f32_to_bf16_bits;
 use crate::error::CudaError;
 use crate::k0_plan::ColWindow;
-use crate::k8_act::{canon_nan_f32, silu_f32, silu_grad_f32};
+use crate::k8_act::{silu_f32, silu_grad_f32};
 
 /// `(ld, off, buffer length)` of one operand.
 pub type WindowSpec = (u64, u64, usize);
@@ -47,20 +49,17 @@ fn check_len(op: &str, name: &str, w: &ColWindow, len: usize) -> Result<(), Cuda
 
 /// One element of the forward.
 pub fn swiglu_elem(g: f32, u: f32) -> f32 {
-    canon_nan_f32(silu_f32(g) * u)
+    silu_f32(g) * u
 }
 
 /// One element of the backward: `(dgate, dup)`.
 pub fn swiglu_bwd_elem(g: f32, u: f32, d: f32) -> (f32, f32) {
-    (
-        canon_nan_f32((d * u) * silu_grad_f32(g)),
-        canon_nan_f32(d * silu_f32(g)),
-    )
+    ((d * u) * silu_grad_f32(g), d * silu_f32(g))
 }
 
 /// One element of the residual add.
 pub fn residual_add_elem(resid: f32, y: f32) -> f32 {
-    canon_nan_f32(resid + y)
+    resid + y
 }
 
 /// `out[r, :] = silu(gate[r, :]) * up[r, :]` over `rows x width` windows.
@@ -467,19 +466,54 @@ mod tests {
         assert_eq!(residual_add_elem(1.5, 2.25), 3.75);
     }
 
+    /// Fable's NaN ruling (2026-10-02), rewritten from the old "every NaN
+    /// output is canonical" test: NaN in gives NaN out, with any payload; the
+    /// harness matches it against the device's NaN whatever the bits; the
+    /// device module no longer canonicalises; and the trainer stops on it
+    /// before any moment moves.
     #[test]
-    fn every_nan_output_is_canonical() {
-        let canon = crate::k8_act::CANONICAL_NAN_BITS;
-        assert_eq!(swiglu_elem(f32::NAN, 1.0).to_bits(), canon);
-        // inf * 0: a fresh NaN, whose bits differ between hosts.
-        assert_eq!(swiglu_elem(f32::INFINITY, 0.0).to_bits(), canon);
-        assert_eq!(
-            residual_add_elem(f32::INFINITY, f32::NEG_INFINITY).to_bits(),
-            canon
-        );
-        let (a, b) = swiglu_bwd_elem(1.0, f32::INFINITY, 0.0);
-        assert_eq!((a.to_bits(), b), (canon, 0.0));
-        assert_eq!(f32_to_bf16_bits(swiglu_elem(f32::NAN, 1.0)), 0x7fff);
+    fn nan_in_gives_nan_out_with_any_payload_and_the_trainer_stops() {
+        use crate::check::{diff_bits_bf16, diff_bits_f32};
+        use crate::step::{validate_external_grad, ExternalGrad};
+        use ojas_core::{Budget, OjasError, Tensor};
+
+        // PTX's default NaN: what sm_90 makes for inf * 0.
+        let device_nan = f32::from_bits(0x7fff_ffff);
+        // A NaN input with a payload of its own, and the fresh NaNs inf * 0
+        // and inf - inf make, whose bits differ between hosts.
+        let payload = f32::from_bits(0xffc0_1234);
+        let (dgate, dup) = swiglu_bwd_elem(1.0, f32::INFINITY, 0.0);
+        let outs = [
+            swiglu_elem(f32::NAN, 1.0),
+            swiglu_elem(payload, 1.0),
+            swiglu_elem(f32::INFINITY, 0.0),
+            residual_add_elem(f32::INFINITY, f32::NEG_INFINITY),
+            dgate,
+        ];
+        assert!(outs.iter().all(|x| x.is_nan()), "{outs:?}");
+        assert_eq!(dup, 0.0, "a finite output stays finite and exact");
+        // The harness: each host NaN matches the device's, any payload.
+        let d = diff_bits_f32(&outs, &[device_nan; 5]);
+        assert_eq!(d.mismatches, 0, "{d:?}");
+        // ... and against x86's default NaN, which is neither PTX's nor
+        // aarch64's bits.
+        let d = diff_bits_f32(&outs, &[f32::from_bits(0xffc0_0000); 5]);
+        assert_eq!(d.mismatches, 0, "{d:?}");
+        let bf = f32_to_bf16_bits(swiglu_elem(payload, 1.0));
+        assert_eq!(diff_bits_bf16(&[bf], &[0x7fff]).mismatches, 0);
+        // The device module does not canonicalise.
+        assert!(!crate::k8_kernels::K8.source.contains("qd_canon_nan"));
+        assert!(!crate::k8_act::ACT_PRELUDE.contains("qd_canon_nan"));
+        // The trainer stops: a NaN gradient is refused before any update.
+        let dh = Tensor::from_f32(&[dgate, 0.5], &[1, 2], &Budget::new(1 << 10)).unwrap();
+        let grad = ExternalGrad {
+            positions: &[0],
+            dh: &dh,
+        };
+        assert!(matches!(
+            validate_external_grad(&grad, 1, 2),
+            Err(OjasError::NonFinite { .. })
+        ));
     }
 
     #[test]

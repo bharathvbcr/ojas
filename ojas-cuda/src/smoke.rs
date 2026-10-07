@@ -20,12 +20,13 @@
 //!   (`tessl/src/gemm.rs:2371-2425`).
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::bf16::f32_slice_to_bf16;
 use crate::buffer::Element;
 use crate::check::{
-    bitwise_check, diff_bits_f32, diff_bits_u16, panic_text, tolerance_check, tolerance_vs_f64,
+    bitwise_check, diff_bits_bf16, diff_bits_f32, panic_text, tolerance_check, tolerance_vs_f64,
     BitDiff, Check,
 };
 use crate::error::CudaError;
@@ -35,12 +36,16 @@ use crate::host_ref;
 use crate::inputs::{
     bf16_cast_edge_cases, splitmix_bits, splitmix_f32, tessl_ragged_a, tessl_ragged_b,
 };
+use crate::json::{Json, JsonObj};
 use crate::k0::{self, GatherSource};
 use crate::k0_plan::{
     CopyColsPlan, DeliverMode, DeliverPlan, GatherRowsPlan, ScatterAddRowsPlan, ZeroPlan,
 };
 use crate::kernels::{ALL_MODULES, GEMM_FFMA, STRICT_SM90, STRICT_SM90A};
-use crate::runtime::CudaRuntime;
+use crate::libprobe;
+use crate::report_cli::{lock, Report};
+use crate::rung0_cli::{EXIT_FAIL, EXIT_REFUSED};
+use crate::runtime::{CudaRuntime, RuntimeConfig};
 
 /// tessl's ragged GEMM shapes `(m, n, k)` (`tessl/src/gemm.rs:2342-2348`).
 pub const TESSL_RAGGED_SHAPES: [(usize, usize, usize); 5] = [
@@ -141,10 +146,10 @@ pub fn k0_checks(rt: &CudaRuntime) -> Vec<Check> {
                 .map(f32::from_bits),
         );
         let want = host_ref::cast_f32_to_bf16(&input);
-        twice("k0.cast_f32_to_bf16", &want, diff_bits_u16, || {
+        twice("k0.cast_f32_to_bf16", &want, diff_bits_bf16, || {
             let src = rt.upload(&input, "cast src")?;
             let mut dst = rt.alloc_zeros::<u16>(input.len(), "cast dst")?;
-            k0::cast_f32_to_bf16(rt, &src, &mut dst)?;
+            k0::cast_f32_to_bf16(rt, src.all(), dst.all_mut())?;
             rt.download(&dst)
         })
     }));
@@ -323,9 +328,9 @@ pub fn cublas_probe(rt: &CudaRuntime) -> Vec<Check> {
                 rt,
                 GemmLayout::Nn,
                 shape,
-                &a16,
-                &b16,
-                &mut c,
+                a16.all(),
+                b16.all(),
+                c.all_mut(),
                 Accumulate::Overwrite,
             )?;
             rt.download(&c)
@@ -456,7 +461,7 @@ fn run_gemm(
     let ad = rt.upload(a, "gemm A")?;
     let bd = rt.upload(b, "gemm B")?;
     let mut cd = rt.upload(c0, "gemm C")?;
-    gemm(rt, case.spec, case.engine, &ad, &bd, &mut cd)?;
+    gemm(rt, case.spec, case.engine, ad.all(), bd.all(), cd.all_mut())?;
     rt.download(&cd)
 }
 
@@ -595,13 +600,105 @@ pub fn bf16_engines_agree(
     })
 }
 
+/// Open the rung binaries' runtime. A refusal (a missing library, a non-sm_90
+/// device) or a panic is recorded in the report and becomes the exit code:
+/// [`EXIT_REFUSED`] for a refusal, [`EXIT_FAIL`] otherwise.
+pub fn open_recorded(
+    state: &Mutex<Report>,
+    prog: &str,
+    config: RuntimeConfig,
+) -> Result<CudaRuntime, i32> {
+    match catch_unwind(AssertUnwindSafe(|| CudaRuntime::open(config))) {
+        Ok(Ok(rt)) => Ok(rt),
+        Ok(Err(e)) => {
+            let refused = matches!(e, CudaError::LibraryMissing { .. } | CudaError::Arch { .. });
+            eprintln!("{prog}: {e}");
+            let mut s = lock(state);
+            s.refusal = Some(
+                JsonObj::new()
+                    .with("kind", e.kind())
+                    .with("detail", e.to_string())
+                    .into(),
+            );
+            s.checks.push(Check::from_error("runtime.open", &e));
+            Err(if refused { EXIT_REFUSED } else { EXIT_FAIL })
+        }
+        Err(payload) => {
+            let text = panic_text(payload.as_ref());
+            eprintln!("{prog}: CudaRuntime::open panicked: {text}");
+            lock(state)
+                .checks
+                .push(Check::panicked("runtime.open", text));
+            Err(EXIT_FAIL)
+        }
+    }
+}
+
+/// Record the opened device in the report, with the `runtime.open` check and
+/// a failed `runtime.cublas_modes` check when cuBLAS is not in its default
+/// math mode with atomics disallowed.
+pub fn record_device(state: &Mutex<Report>, rt: &CudaRuntime) {
+    let info = rt.info();
+    println!(
+        "device {:?} cc {}.{} sms {} driver {} nvrtc {}.{} cublas {}.{}.{}",
+        info.name,
+        info.compute_capability.0,
+        info.compute_capability.1,
+        info.sm_count,
+        info.driver_version,
+        info.nvrtc_version.0,
+        info.nvrtc_version.1,
+        info.cublas_version.0,
+        info.cublas_version.1,
+        info.cublas_version.2
+    );
+    let mut s = lock(state);
+    s.device = Some(info.to_json());
+    s.checks.push(
+        Check::pass(
+            "runtime.open",
+            "libraries probed, sm_90 device opened, cuBLAS handle ready",
+        )
+        .with("cublas_math_mode_is_default", info.cublas_math_mode == 0)
+        .with("cublas_atomics_not_allowed", info.cublas_atomics_mode == 0),
+    );
+    if info.cublas_math_mode != 0 || info.cublas_atomics_mode != 0 {
+        s.checks.push(Check::fail(
+            "runtime.cublas_modes",
+            format!(
+                "math mode {} (want 0, CUBLAS_DEFAULT_MATH), atomics mode {} (want 0, NOT_ALLOWED)",
+                info.cublas_math_mode, info.cublas_atomics_mode
+            ),
+        ));
+    }
+}
+
+/// The CUDA libraries this process actually mapped (from `/proc/self/maps`),
+/// and the runtime's NVRTC cache counts: the rung reports' `extra` sections.
+pub fn loaded_libraries(rt: &CudaRuntime) -> (Json, JsonObj) {
+    let loaded = match std::fs::read_to_string("/proc/self/maps") {
+        Ok(maps) => Json::Arr(
+            libprobe::REQUIRED
+                .iter()
+                .flat_map(|spec| libprobe::mapped_paths(&maps, spec.mapped_prefixes))
+                .map(Json::from)
+                .collect(),
+        ),
+        Err(e) => Json::from(format!("/proc/self/maps unreadable: {e}")),
+    };
+    let stats = rt.cache_stats();
+    let cache = JsonObj::new()
+        .with("hits", stats.hits)
+        .with("misses", stats.misses)
+        .with("evictions", stats.evictions);
+    (loaded, cache)
+}
+
 /// Milestone M0's device checks in rung 0's order, phase by phase: NVRTC,
 /// K0, the cuBLAS probe, K1 on tessl's ragged shapes and the engines'
 /// agreement, then K1 determinism over `reps` runs per engine. `phase` is
 /// called before each phase's checks run (so a wall-clock cap names it),
-/// `record` with each batch of results. `runga` runs this; `src/bin/rung0.rs`
-/// still carries its own copy of the same sequence (frozen;
-/// `GAP-L-CUDA-M1-RUNG0-PRIVATE-WATCHDOG-COPY-2026-10-01`).
+/// `record` with each batch of results. Both rung binaries run it.
 pub fn m0_phases(
     rt: &CudaRuntime,
     reps: usize,

@@ -575,7 +575,7 @@ pub use device::{DeviceParam, DeviceTinyFixture};
 /// it, read every buffer back and compare bit for bit.
 #[cfg(feature = "cuda")]
 pub fn loader_checks(rt: &crate::runtime::CudaRuntime) -> Vec<crate::check::Check> {
-    use crate::check::{bitwise_check, diff_bits_f32, diff_bits_u16, Check};
+    use crate::check::{bitwise_check, diff_bits_bf16, diff_bits_f32, Check};
     const N: &str = "loader.tiny_fixture_published";
     let f = match TinyFixture::embedded() {
         Ok(f) => f,
@@ -619,7 +619,7 @@ pub fn loader_checks(rt: &crate::runtime::CudaRuntime) -> Vec<crate::check::Chec
     }
     out.push(bitwise_check(
         &format!("{N}.params_bf16"),
-        diff_bits_u16(&got16, &want16),
+        diff_bits_bf16(&got16, &want16),
         want16.len(),
     ));
     out.push(bitwise_check(

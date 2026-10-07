@@ -26,7 +26,9 @@
 //! column sum over the 128 rows is a fixed tree: a warp butterfly
 //! (`__shfl_xor_sync` at offsets 16, 8, 4, 2, 1, every lane ending with the
 //! same bits because IEEE addition is commutative), then lane 0 of each of
-//! the four warps to shared memory, then `(w0 + w1) + (w2 + w3)`. Metal's
+//! the four warps to shared memory, then `(w0 + w1) + (w2 + w3)`: the
+//! crate's one copy, `qd_colsum_4warps` in [`crate::small_common`]'s prelude,
+//! mirrored by [`crate::small_common::colsum_4warps`]. Metal's
 //! `simd_sum` has no specified order, so the CUDA bits are not Metal's; the
 //! comparison with Metal is a bound, not bit equality
 //! (`cuda-backend-scoping.md` §5.1).
@@ -103,37 +105,9 @@ __device__ __forceinline__ float qd_gdn_rnorm(float sumsq) {
     return __fdiv_rn(1.0f, __fsqrt_rn(qd_add(sumsq, QD_GDN_L2_EPS)));
 }
 
-// The butterfly: every lane ends with the same bits.
-__device__ __forceinline__ float qd_gdn_warp_sum(float v) {
-    v = qd_add(v, __shfl_xor_sync(0xffffffffu, v, 16));
-    v = qd_add(v, __shfl_xor_sync(0xffffffffu, v, 8));
-    v = qd_add(v, __shfl_xor_sync(0xffffffffu, v, 4));
-    v = qd_add(v, __shfl_xor_sync(0xffffffffu, v, 2));
-    v = qd_add(v, __shfl_xor_sync(0xffffffffu, v, 1));
-    return v;
-}
-
-// Sum each of N per-thread values over the block's 128 threads; every thread
-// receives all N totals. `red` holds 4 * N floats. Callers alternate between
-// two `red` buffers, as tessl's gdn_colsum: the barrier here orders this
-// call's writes after every thread's reads of the other buffer.
-template <int N>
-__device__ __forceinline__ void qd_gdn_colsum(const float (&p)[N], float* red,
-                                              unsigned int warp, unsigned int lane,
-                                              float (&out)[N]) {
-    #pragma unroll
-    for (int n = 0; n < N; ++n) {
-        const float s = qd_gdn_warp_sum(p[n]);
-        if (lane == 0u) {
-            red[warp * N + n] = s;
-        }
-    }
-    __syncthreads();
-    #pragma unroll
-    for (int n = 0; n < N; ++n) {
-        out[n] = qd_add(qd_add(red[n], red[N + n]), qd_add(red[2 * N + n], red[3 * N + n]));
-    }
-}
+// Column sums over the block's 128 threads are small_common's
+// qd_colsum_4warps<N> (spliced in by small_prelude): the warp butterfly at
+// offsets 16, 8, 4, 2, 1, then (w0 + w1) + (w2 + w3).
 
 // Forward. Grid (Dv / 16, nseq * H), 128 threads. flags: 1 = s0 given (else
 // zeros); 2 = write the final state to sfin. s0 / sfin are null when their
@@ -184,7 +158,7 @@ extern "C" __global__ void qd_gdn_published_fwd(
         }
         p[QD_GDN_BV] = qd_mul(ki, ki);
         p[QD_GDN_BV + 1] = qd_mul(qi, qi);
-        qd_gdn_colsum<QD_GDN_BV + 2>(p, red[0], warp, lane, tot);
+        qd_colsum_4warps<QD_GDN_BV + 2>(p, red[0], warp, lane, tot);
         const float rk = qd_gdn_rnorm(tot[QD_GDN_BV]);
         const float rq = qd_gdn_rnorm(tot[QD_GDN_BV + 1]);
         const float kh = qd_mul(ki, rk);
@@ -197,7 +171,7 @@ extern "C" __global__ void qd_gdn_published_fwd(
             S[j] = qd_add(S[j], qd_mul(kh, qd_mul(bt, u)));
             po[j] = qd_mul(S[j], qh);
         }
-        qd_gdn_colsum<QD_GDN_BV>(po, red[1], warp, lane, out);
+        qd_colsum_4warps<QD_GDN_BV>(po, red[1], warp, lane, out);
         #pragma unroll
         for (int j = 0; j < QD_GDN_BV; ++j) {
             if (i == (unsigned int)j) {
@@ -281,7 +255,7 @@ extern "C" __global__ void qd_gdn_published_bwd(
             }
             p[QD_GDN_BV] = qd_mul(ki, ki);
             p[QD_GDN_BV + 1] = qd_mul(qi, qi);
-            qd_gdn_colsum<QD_GDN_BV + 2>(p, red[lt & 1u], warp, lane, tot);
+            qd_colsum_4warps<QD_GDN_BV + 2>(p, red[lt & 1u], warp, lane, tot);
             const float rk = qd_gdn_rnorm(tot[QD_GDN_BV]);
             const float kh = qd_mul(ki, rk);
             const float bt = beta[r];
@@ -325,7 +299,7 @@ extern "C" __global__ void qd_gdn_published_bwd(
                 dS[j] = qd_add(dS[j], qd_mul(qh, dorow[j]));
                 p[j] = qd_mul(dS[j], kh);
             }
-            qd_gdn_colsum<QD_GDN_BV>(p, red[0], warp, lane, ddelta);
+            qd_colsum_4warps<QD_GDN_BV>(p, red[0], warp, lane, ddelta);
 
             float dkh = 0.0f, dgp[1] = {0.0f}, dgt[1];
             #pragma unroll
@@ -335,7 +309,7 @@ extern "C" __global__ void qd_gdn_published_bwd(
                 dgp[0] = qd_add(dgp[0], qd_mul(dSh, Sh[j]));
                 dS[j] = qd_mul(a, dSh);
             }
-            qd_gdn_colsum<1>(dgp, red[1], warp, lane, dgt);
+            qd_colsum_4warps<1>(dgp, red[1], warp, lane, dgt);
 
             #pragma unroll
             for (int j = 0; j < QD_GDN_BV; ++j) {
@@ -386,13 +360,13 @@ extern "C" __global__ void qd_gdn_published_bwd_finish(
         }
         const float qi = q[at], ki = k[at];
         float p[2] = {qd_mul(qi, qi), qd_mul(ki, ki)}, tot[2];
-        qd_gdn_colsum<2>(p, red[0], warp, lane, tot);
+        qd_colsum_4warps<2>(p, red[0], warp, lane, tot);
         const float rq = qd_gdn_rnorm(tot[0]);
         const float rk = qd_gdn_rnorm(tot[1]);
         const float yq = qd_mul(qi, rq), yk = qd_mul(ki, rk);
         const float dyq = qd_mul(dqh, scale);
         float p2[2] = {qd_mul(yq, dyq), qd_mul(yk, dkh)}, dots[2];
-        qd_gdn_colsum<2>(p2, red[1], warp, lane, dots);
+        qd_colsum_4warps<2>(p2, red[1], warp, lane, dots);
         dq[at] = qd_mul(rq, qd_sub(dyq, qd_mul(yq, dots[0])));
         dk[at] = qd_mul(rk, qd_sub(dkh, qd_mul(yk, dots[1])));
         if (i == 0u) {
@@ -414,9 +388,14 @@ extern "C" __global__ void qd_gdn_published_bwd_finish(
 pub const GDN_PUBLISHED_BODY: &str = gdn_published_body!();
 
 /// The CUDA-C NVRTC compiles: L-cuda-M1's activation prelude
-/// (`crate::act_prelude!()`, for `qd_exp_nonpos`), then
+/// (`crate::act_prelude!()`, for `qd_exp_nonpos`), the small-kernel prelude
+/// (`small_prelude!()`, for the column sum `qd_colsum_4warps`), then
 /// [`GDN_PUBLISHED_BODY`]. No `#include`: NVRTC has no default include path.
-pub const GDN_PUBLISHED_SOURCE: &str = concat!(crate::act_prelude!(), gdn_published_body!());
+pub const GDN_PUBLISHED_SOURCE: &str = concat!(
+    crate::act_prelude!(),
+    crate::small_common::small_prelude!(),
+    gdn_published_body!()
+);
 
 #[cfg(test)]
 mod tests {
@@ -488,6 +467,22 @@ mod tests {
         assert_eq!(GDN_PUBLISHED_BODY.matches("qd_exp_nonpos(g[r])").count(), 3);
         assert!(!GDN_PUBLISHED_BODY.contains("exp(float"));
         assert!(!GDN_PUBLISHED_BODY.contains("qd_exp("));
+    }
+
+    /// One column reduction in the crate: the scan sums its columns with
+    /// small_common's `qd_colsum_4warps`, spliced in by its prelude, and
+    /// defines no warp butterfly of its own.
+    #[test]
+    fn the_published_column_sum_is_small_commons_one_reduction() {
+        let small = crate::small_common::small_prelude!();
+        assert!(GDN_PUBLISHED
+            .source
+            .starts_with(&format!("{}{small}", crate::k8_act::ACT_PRELUDE)));
+        assert!(small.contains("void qd_colsum_4warps("));
+        assert!(GDN_PUBLISHED_BODY.contains("qd_colsum_4warps<"));
+        assert!(!GDN_PUBLISHED_BODY.contains("__shfl"));
+        assert!(!GDN_PUBLISHED.source.contains("qd_gdn_warp_sum"));
+        assert!(!GDN_PUBLISHED.source.contains("qd_gdn_colsum"));
     }
 
     /// The span of `source` between the first `from` and the next `to`.

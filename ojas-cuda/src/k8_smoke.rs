@@ -5,7 +5,7 @@
 //! each of the crate's activation functions on the device against its host
 //! emulation over [`act_sweep_inputs`].
 
-use crate::check::{bitwise_check, diff_bits_f32, diff_bits_u16, Check};
+use crate::check::{bitwise_check, diff_bits_bf16, diff_bits_f32, Check};
 use crate::error::CudaError;
 use crate::k8::{
     act_sweep, residual_add, swiglu_bf16, swiglu_bwd_separate, swiglu_bwd_shared, swiglu_f32,
@@ -57,7 +57,7 @@ pub fn case_checks(rt: &CudaRuntime, c: &K8Case) -> Vec<Check> {
     out.extend(twice(
         &format!("{name}.swiglu_bf16"),
         &want16,
-        diff_bits_u16,
+        diff_bits_bf16,
         || {
             let x = rt.upload(&c.fused, "k8 fused")?;
             let mut o = rt.upload(&vec![sentinel16; dense], "k8 out bf16")?;

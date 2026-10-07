@@ -157,6 +157,33 @@ __device__ __forceinline__ float qd_block_max(float v, float* scratch)
     __syncthreads();
     return qd_warp_max(lane < nwarps ? scratch[lane] : QD_NEG_FLT_MAX);
 }
+
+// Each of N per-thread values summed over a 128-thread block (four warps);
+// every thread receives all N totals. Per value: the warp butterfly, lane 0
+// of each warp to `red`, then (w0 + w1) + (w2 + w3) -- not qd_block_sum's
+// second butterfly, which pairs (w0 + w2) + (w1 + w3). `red` holds 4 * N
+// floats. Callers alternate between two `red` buffers: the barrier here
+// orders this call's writes after every thread's reads of the other buffer.
+// No multiply feeds these adds, so --fmad cannot contract them; each is one
+// IEEE rounding. small_common::colsum_4warps mirrors it.
+template <int N>
+__device__ __forceinline__ void qd_colsum_4warps(const float (&p)[N], float* red,
+                                                 unsigned int warp, unsigned int lane,
+                                                 float (&out)[N])
+{
+    #pragma unroll
+    for (int n = 0; n < N; ++n) {
+        const float s = qd_warp_sum(p[n]);
+        if (lane == 0u) {
+            red[warp * N + n] = s;
+        }
+    }
+    __syncthreads();
+    #pragma unroll
+    for (int n = 0; n < N; ++n) {
+        out[n] = (red[n] + red[N + n]) + (red[2 * N + n] + red[3 * N + n]);
+    }
+}
 // ---- end L-cuda-small prelude ----
 "#
     };
@@ -353,6 +380,19 @@ pub fn block_grid(blocks: u64, threads: u32, op: &str) -> Result<Launch, CudaErr
 /// value (every lane holds the same bits).
 pub fn warp_sum(lanes: [f32; 32]) -> f32 {
     butterfly(lanes, |a, b| a + b)
+}
+
+/// Threads in the block [`colsum_4warps`] reduces over: four warps.
+pub const COLSUM_4WARPS_THREADS: usize = 128;
+
+/// `qd_colsum_4warps<N>` on the host: each column over 128 threads, as four
+/// [`warp_sum`] butterflies then `(w0 + w1) + (w2 + w3)`.
+pub fn colsum_4warps<const N: usize>(p: &[[f32; N]; COLSUM_4WARPS_THREADS]) -> [f32; N] {
+    std::array::from_fn(|n| {
+        let w: [f32; 4] =
+            std::array::from_fn(|wi| warp_sum(std::array::from_fn(|l| p[wi * 32 + l][n])));
+        (w[0] + w[1]) + (w[2] + w[3])
+    })
 }
 
 /// `qd_warp_max` on the host (`fmaxf` and `f32::max` both drop a NaN operand).
@@ -703,6 +743,39 @@ mod tests {
         assert_eq!(warp_sum(lanes).to_bits(), v[0].to_bits());
         let exact: f64 = lanes.iter().map(|&x| f64::from(x)).sum();
         assert!((f64::from(warp_sum(lanes)) - exact).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_warp_butterfly_is_a_tree_not_a_sequential_sum() {
+        // Values whose sum depends on the order: 2^24 + 1 + ... .
+        let mut lanes = [1.0f32; 32];
+        lanes[0] = 16_777_216.0;
+        // The butterfly pairs lane 0 with lane 16 first: 2^24 + 1 rounds to
+        // 2^24; the other 30 ones sum exactly to 30 in the tree; 2^24 + 30.
+        assert_eq!(warp_sum(lanes), 16_777_246.0);
+        // A sequential sum from lane 0 loses every 1: 2^24.
+        assert_eq!(lanes.iter().fold(0.0f32, |a, &x| a + x), 16_777_216.0);
+        let p: [[f32; 1]; COLSUM_4WARPS_THREADS] = std::array::from_fn(|i| [i as f32]);
+        assert_eq!(colsum_4warps(&p), [8128.0]);
+    }
+
+    /// GDN's column sum folds the four warp totals as `(w0 + w1) + (w2 + w3)`,
+    /// not `block_sum`'s second butterfly `(w0 + w2) + (w1 + w3)`; the two
+    /// differ in bits on these totals.
+    #[test]
+    fn the_four_warp_colsum_pairs_adjacent_warps() {
+        let mut p = [[0.0f32; 2]; COLSUM_4WARPS_THREADS];
+        for (warp, total) in [16_777_216.0f32, 1.0, -16_777_216.0, 1.0]
+            .into_iter()
+            .enumerate()
+        {
+            p[warp * 32][0] = total;
+            p[warp * 32 + 5][1] = -total;
+        }
+        // (2^24 + 1) rounds to 2^24; (-2^24 + 1) is exact: the sum is 1.
+        assert_eq!(colsum_4warps(&p), [1.0, -1.0]);
+        let col0: Vec<f32> = p.iter().map(|r| r[0]).collect();
+        assert_eq!(block_sum(&col0), 2.0);
     }
 
     #[test]

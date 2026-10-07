@@ -136,7 +136,7 @@ impl fmt::Display for CudaError {
         match self {
             CudaError::NotCompiled => write!(
                 f,
-                "ojas-qwen35-cuda was built without the `cuda` feature; no device path exists"
+                "ojas-cuda was built without the `cuda` feature; no device path exists"
             ),
             CudaError::LibraryMissing { libraries, detail } => write!(
                 f,

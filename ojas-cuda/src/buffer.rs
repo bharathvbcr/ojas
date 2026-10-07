@@ -6,7 +6,7 @@
 //! cudarc's device-to-host copy into a `Vec` does not synchronise
 //! (`cudarc/src/driver/safe/core.rs:1434-1450`).
 
-use cudarc::driver::{CudaSlice, DeviceRepr, ValidAsZeroBits};
+use cudarc::driver::{CudaSlice, CudaView, CudaViewMut, DeviceRepr, ValidAsZeroBits};
 
 use crate::budget::Reservation;
 use crate::error::CudaError;
@@ -73,6 +73,104 @@ impl<T: Element> CudaBuffer<T> {
 
     pub(crate) fn slice_mut(&mut self) -> &mut CudaSlice<T> {
         &mut self.slice
+    }
+
+    /// The whole buffer as a [`BufView`].
+    pub fn all(&self) -> BufView<'_, T> {
+        BufView {
+            buf: self,
+            off: 0,
+            len: self.len(),
+        }
+    }
+
+    /// Elements `[off, off + len)` as a [`BufView`]: refused when empty or
+    /// past the end ([`crate::geometry::view_range`]).
+    pub fn view(&self, off: usize, len: usize, op: &str) -> Result<BufView<'_, T>, CudaError> {
+        crate::geometry::view_range(self.len(), off, len, op)?;
+        Ok(BufView {
+            buf: self,
+            off,
+            len,
+        })
+    }
+
+    /// The whole buffer as a [`BufViewMut`].
+    pub fn all_mut(&mut self) -> BufViewMut<'_, T> {
+        let len = self.len();
+        BufViewMut {
+            buf: self,
+            off: 0,
+            len,
+        }
+    }
+
+    /// Elements `[off, off + len)` as a [`BufViewMut`], checked as [`Self::view`].
+    pub fn view_mut(
+        &mut self,
+        off: usize,
+        len: usize,
+        op: &str,
+    ) -> Result<BufViewMut<'_, T>, CudaError> {
+        crate::geometry::view_range(self.len(), off, len, op)?;
+        Ok(BufViewMut {
+            buf: self,
+            off,
+            len,
+        })
+    }
+}
+
+/// A checked, non-empty element range of a [`CudaBuffer`], read-only. A
+/// kernel or cuBLAS gets it as a device pointer `off` elements in, so a block
+/// of rows of a larger matrix (K10's head chunk) is an operand without a copy.
+#[derive(Clone, Copy)]
+pub struct BufView<'a, T: Element> {
+    buf: &'a CudaBuffer<T>,
+    off: usize,
+    len: usize,
+}
+
+impl<'a, T: Element> BufView<'a, T> {
+    /// Elements in the view.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Never true: views are non-empty by construction.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The cudarc view: in range by construction.
+    pub(crate) fn device(&self) -> CudaView<'a, T> {
+        self.buf.slice().slice(self.off..self.off + self.len)
+    }
+}
+
+/// A checked, non-empty element range of a [`CudaBuffer`], writable.
+pub struct BufViewMut<'a, T: Element> {
+    buf: &'a mut CudaBuffer<T>,
+    off: usize,
+    len: usize,
+}
+
+impl<T: Element> BufViewMut<'_, T> {
+    /// Elements in the view.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Never true: views are non-empty by construction.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The cudarc view: in range by construction.
+    pub(crate) fn device(&mut self) -> CudaViewMut<'_, T> {
+        self.buf
+            .slice_mut()
+            .slice_mut(self.off..self.off + self.len)
     }
 }
 
@@ -168,7 +266,7 @@ impl DeviceBuffer for CudaDeviceBuffer {
     }
 
     fn read_bytes(&self, offset: usize, len: usize) -> Result<Vec<u8>, OjasError> {
-        if offset.checked_add(len).map_or(true, |end| end > self.len) {
+        if offset.checked_add(len).is_none_or(|end| end > self.len) {
             return Err(OjasError::OutOfRange {
                 op: "CudaDeviceBuffer::read_bytes",
                 detail: format!("offset {offset} + len {len} > byte_len {}", self.len),

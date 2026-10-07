@@ -2,11 +2,10 @@
 //! whoever gets there first (main or the wall-clock watchdog), the watchdog
 //! itself, and `runga`'s arguments. Host-side, so it is tested on the Mac.
 //!
-//! Lifted from `src/bin/rung0.rs` (whose four watchdog tests are ported
-//! below) so `runga` does not carry a second private copy. `rung0.rs` keeps
-//! its own copy for now: that binary is frozen by the lead's ruling, and
-//! moving it onto this module is a follow-up
-//! (`GAP-L-CUDA-M1-RUNG0-PRIVATE-WATCHDOG-COPY-2026-10-01`).
+//! Both rung binaries (`rung0`, `runga`) run on this module: neither carries
+//! a private copy of the report, the watchdog or the end of `main`
+//! ([`finish`]). The watchdog's end-to-end path (a phase blocked past the cap
+//! ends the process with exit 3) is `tests/watchdog_exit.rs`.
 //!
 //! Exit codes and the cap are [`crate::rung0_cli`]'s: 0 every check ran and
 //! passed, 1 a check failed or panicked, 2 refused before any check, 3 the
@@ -16,13 +15,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::check::{Check, Status};
+use crate::check::{overall, Check, Status};
 use crate::json::{Json, JsonObj};
-use crate::rung0_cli::{self, write_atomic, Args, EXIT_TIMEOUT};
+use crate::rung0_cli::{
+    self, write_atomic, Args, EXIT_FAIL, EXIT_PASS, EXIT_REFUSED, EXIT_TIMEOUT,
+};
 
 /// One run's report, filled in as checks finish.
 pub struct Report {
-    /// The binary's name (`runga`): the report kind is `ojas-qwen35-cuda.<prog>`.
+    /// The binary's name (`runga`): the report kind is `ojas-cuda.<prog>`.
     pub prog: &'static str,
     pub header: JsonObj,
     pub device: Option<Json>,
@@ -96,7 +97,7 @@ pub fn header(prog: &str, quick_reason: &str, args: &Args, argv: &[String]) -> J
         .map(|d| d.as_secs())
         .unwrap_or(0);
     JsonObj::new()
-        .with("kind", format!("ojas-qwen35-cuda.{prog}"))
+        .with("kind", format!("ojas-cuda.{prog}"))
         .with("schema", 1u32)
         .with("quick", true)
         .with("quick_reason", quick_reason)
@@ -202,7 +203,7 @@ pub fn fire(
         }
         if Instant::now() >= give_up {
             let text = format!(
-                "{{\"kind\":\"ojas-qwen35-cuda.{prog}\",\"status\":\"timeout\",\"exit_code\":{EXIT_TIMEOUT},\"detail\":\"report lock unavailable at the cap\"}}\n"
+                "{{\"kind\":\"ojas-cuda.{prog}\",\"status\":\"timeout\",\"exit_code\":{EXIT_TIMEOUT},\"detail\":\"report lock unavailable at the cap\"}}\n"
             );
             if let Err(e) = write_atomic(path, &text) {
                 eprintln!("{prog}: could not write the timeout report: {e}");
@@ -227,6 +228,43 @@ pub fn spawn_watchdog(
             std::process::exit(code);
         }
     });
+}
+
+/// How main ends a run that got past argument parsing: name the phase
+/// `done`, write the report (unless the watchdog already did), print the
+/// summary, and exit. A report the watchdog wrote first means the cap
+/// expired, whatever `code` says (exit 3); a report that could not be written
+/// is no evidence, so the run never exits 0.
+pub fn finish(state: &Mutex<Report>, path: &Path, code: i32, started: Instant) -> ! {
+    let status = match code {
+        EXIT_PASS => "pass",
+        EXIT_REFUSED => "refused",
+        _ => match overall(&lock(state).checks) {
+            Status::Panicked => "panicked",
+            _ => "fail",
+        },
+    };
+    let mut s = lock(state);
+    s.phase = "done".to_string();
+    let written = write_once(&mut s, path, status, code, started.elapsed());
+    let exit = match written {
+        Written::Now => code,
+        Written::Already => EXIT_TIMEOUT,
+        Written::Failed if code == EXIT_PASS => EXIT_FAIL,
+        Written::Failed => code,
+    };
+    if written == Written::Now {
+        let pass = s.checks.iter().filter(|c| c.status == Status::Pass).count();
+        println!(
+            "{}: {status} ({pass}/{} checks pass) in {:.1} s; report {}",
+            s.prog,
+            s.checks.len(),
+            started.elapsed().as_secs_f64(),
+            path.display()
+        );
+    }
+    drop(s);
+    std::process::exit(exit);
 }
 
 /// Print and append checks.
@@ -325,7 +363,6 @@ pub fn parse_runga(args: &[String]) -> Result<RungaArgs, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rung0_cli::EXIT_PASS;
 
     fn report() -> Mutex<Report> {
         let mut r = Report::new("runga", JsonObj::new().with("kind", "test"));
@@ -421,7 +458,7 @@ mod tests {
             text.contains("report lock unavailable at the cap"),
             "{text}"
         );
-        assert!(text.contains("ojas-qwen35-cuda.runga"), "{text}");
+        assert!(text.contains("ojas-cuda.runga"), "{text}");
         cleanup(&path);
     }
 

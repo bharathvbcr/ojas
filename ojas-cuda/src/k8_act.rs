@@ -32,13 +32,12 @@
 //! | Device (CUDA-C) | Host (Rust) | What |
 //! | --- | --- | --- |
 //! | `qd_exp(x)` | [`exp_f32`] | `e^x` for every f32: `+inf` above 88.8, `+0` below -104 |
-//! | `qd_exp_nonpos(x)` | [`exp_nonpos_f32`] | `qd_exp(x)` for `x <= 0`; the canonical NaN for `x > 0` (`+inf` included), by the lead's ruling, so a positive argument reaching a decay is loud |
+//! | `qd_exp_nonpos(x)` | [`exp_nonpos_f32`] | `qd_exp(x)` for `x <= 0`; a NaN for `x > 0` (`+inf` included), by the lead's ruling, so a positive argument reaching a decay is loud |
 //! | `qd_log(y)` | [`log_f32`] | `ln y`: `-inf` at 0, `+inf` at `+inf`, NaN below 0 |
 //! | `qd_softplus(x)` | [`softplus_f32`] | tessl's `qwen35_softplus` (`qwen35_act.h`): `x` above 20, a Horner `log1p(e^x)` below -3, else `log(1 + e^x)` |
 //! | `qd_sigmoid(x)` | [`sigmoid_f32`] | tessl's overflow-free `1 / (1 + e^-x)` |
 //! | `qd_silu(x)` | [`silu_f32`] | `x * sigmoid(x)` |
 //! | `qd_silu_grad(x)` | [`silu_grad_f32`] | `s * (1 + x * (1 - s))`, `s = sigmoid(x)` |
-//! | `qd_canon_nan(y)` | [`canon_nan_f32`] | any NaN becomes [`CANONICAL_NAN_BITS`] |
 //! | `qd_pow2i(n)` (int) | (private) | `2^n` for `n` in `[-126, 127]`, exactly |
 //!
 //! The prelude defines one macro, the include guard `QD_ACT_PRELUDE`, and no
@@ -55,7 +54,7 @@
 //! # The algorithm
 //!
 //! `qd_exp(x)`:
-//! 1. NaN gives the canonical NaN; `x > 88.8` gives `+inf`; `x < -104` gives
+//! 1. NaN gives the input NaN back; `x > 88.8` gives `+inf`; `x < -104` gives
 //!    `+0` (`e^-104 < 2^-150`, half the smallest subnormal).
 //! 2. `k = rint(x * log2(e))`, ties to even.
 //! 3. `r = x - k ln2` by Cody-Waite in two fused steps, with
@@ -72,12 +71,18 @@
 //! Sigmoid is tessl's form (`qwen35_act.h`): `e = exp(-|x|)`,
 //! `r = 1 / (1 + e)`, then `x >= 0 ? r : e * r`. It never forms `e^|x|`.
 //!
-//! NaN results are canonicalised to `0x7fffffff`, the value PTX arithmetic
-//! returns. The host's own NaN bits differ by platform (x86 gives `0xffc00000`
-//! for an invalid operation, aarch64 `0x7fc00000`), so without this a NaN
-//! output could not be compared bitwise.
+//! **NaN** (Fable's ruling, 2026-10-02): nothing here canonicalises. A NaN
+//! input comes back as itself, and a NaN an operation makes (`inf * 0`) has
+//! whatever bits the hardware gives, which differ between PTX (`0x7fffffff`),
+//! x86 (`0xffc00000`) and aarch64 (`0x7fc00000`). So the bitwise host-device
+//! claim is for finite values; the comparison harness
+//! ([`crate::check::diff_bits_f32`]) treats any NaN as equal to any NaN; and a
+//! non-finite loss or gradient stops the step before any moment moves
+//! ([`crate::step::validate_external_grad`]).
 
-/// The NaN every function here returns, as bits.
+/// The NaN the functions here make from a non-NaN argument outside their
+/// domain (`exp_nonpos` of a positive, `log` of a negative), as bits: PTX's
+/// default NaN.
 pub const CANONICAL_NAN_BITS: u32 = 0x7fff_ffff;
 
 /// Above this, `exp` is `+inf` (`88.8f32`).
@@ -150,12 +155,8 @@ macro_rules! act_prelude {
         r#"
 #ifndef QD_ACT_PRELUDE
 #define QD_ACT_PRELUDE
-// ojas-qwen35-cuda src/k8_act.rs: the crate's one exp / sigmoid / SiLU.
+// ojas-cuda src/k8_act.rs: the crate's one exp / sigmoid / SiLU.
 // Bit-identical to the host functions there; see that module for why.
-
-__device__ __forceinline__ float qd_canon_nan(float y) {
-    return (y != y) ? __uint_as_float(0x7fffffffu) : y;
-}
 
 // 2^n for n in [-126, 127], exactly.
 __device__ __forceinline__ float qd_pow2i(int n) {
@@ -163,7 +164,7 @@ __device__ __forceinline__ float qd_pow2i(int n) {
 }
 
 __device__ __forceinline__ float qd_exp(float x) {
-    if (x != x) return __uint_as_float(0x7fffffffu);
+    if (x != x) return x;
     if (x > __uint_as_float(0x42b1999au)) return __uint_as_float(0x7f800000u);
     if (x < __uint_as_float(0xc2d00000u)) return 0.0f;
     const float kf = rintf(__fmul_rn(x, __uint_as_float(0x3fb8aa3bu)));
@@ -183,14 +184,15 @@ __device__ __forceinline__ float qd_exp(float x) {
     return __fmul_rn(__fmul_rn(p, qd_pow2i(k1)), qd_pow2i(k2));
 }
 
-// For x <= 0 only: a positive argument (+inf included) is the canonical NaN.
+// For x <= 0 only: a positive argument (+inf included) gives a NaN.
 __device__ __forceinline__ float qd_exp_nonpos(float x) {
     if (x > 0.0f) return __uint_as_float(0x7fffffffu);
     return qd_exp(x);
 }
 
 __device__ __forceinline__ float qd_log(float y) {
-    if (y != y || y < 0.0f) return __uint_as_float(0x7fffffffu);
+    if (y != y) return y;
+    if (y < 0.0f) return __uint_as_float(0x7fffffffu);
     if (y == 0.0f) return __uint_as_float(0xff800000u);
     if (y == __uint_as_float(0x7f800000u)) return y;
     int k = 0;
@@ -241,20 +243,20 @@ __device__ __forceinline__ float qd_softplus(float x) {
 
 // tessl/kernels/qwen35_act.h: never forms e^|x|.
 __device__ __forceinline__ float qd_sigmoid(float x) {
-    if (x != x) return __uint_as_float(0x7fffffffu);
+    if (x != x) return x;
     const float e = qd_exp(-fabsf(x));
     const float r = __fdiv_rn(1.0f, __fadd_rn(1.0f, e));
     return (x >= 0.0f) ? r : __fmul_rn(e, r);
 }
 
 __device__ __forceinline__ float qd_silu(float x) {
-    return qd_canon_nan(__fmul_rn(x, qd_sigmoid(x)));
+    return __fmul_rn(x, qd_sigmoid(x));
 }
 
 // tessl/kernels/qwen35_bwd.metal:31-35.
 __device__ __forceinline__ float qd_silu_grad(float x) {
     const float s = qd_sigmoid(x);
-    return qd_canon_nan(__fmul_rn(s, __fadd_rn(1.0f, __fmul_rn(x, __fsub_rn(1.0f, s)))));
+    return __fmul_rn(s, __fadd_rn(1.0f, __fmul_rn(x, __fsub_rn(1.0f, s))));
 }
 #endif
 "#
@@ -263,15 +265,6 @@ __device__ __forceinline__ float qd_silu_grad(float x) {
 
 /// [`act_prelude!`] as a string.
 pub const ACT_PRELUDE: &str = act_prelude!();
-
-/// Any NaN as [`CANONICAL_NAN_BITS`]; every other value unchanged.
-pub fn canon_nan_f32(y: f32) -> f32 {
-    if y.is_nan() {
-        f32::from_bits(CANONICAL_NAN_BITS)
-    } else {
-        y
-    }
-}
 
 /// `2^n`, exactly, for `n` in `[-126, 127]`.
 fn pow2i(n: i32) -> f32 {
@@ -283,7 +276,7 @@ fn pow2i(n: i32) -> f32 {
 /// `e^x`, bit-identical to the device `qd_exp`.
 pub fn exp_f32(x: f32) -> f32 {
     if x.is_nan() {
-        return f32::from_bits(CANONICAL_NAN_BITS);
+        return x;
     }
     if x > f32::from_bits(EXP_HI_BITS) {
         return f32::INFINITY;
@@ -305,7 +298,7 @@ pub fn exp_f32(x: f32) -> f32 {
     (p * pow2i(k1)) * pow2i(k2)
 }
 
-/// [`exp_f32`] for `x <= 0`; the canonical NaN for `x > 0`, `+inf` included
+/// [`exp_f32`] for `x <= 0`; [`CANONICAL_NAN_BITS`] for `x > 0`, `+inf` included
 /// (device `qd_exp_nonpos`). `-0.0` is not positive: it gives 1.
 pub fn exp_nonpos_f32(x: f32) -> f32 {
     if x > 0.0 {
@@ -317,7 +310,10 @@ pub fn exp_nonpos_f32(x: f32) -> f32 {
 /// `ln y`, bit-identical to the device `qd_log`: NaN for NaN or `y < 0`,
 /// `-inf` at `+-0`, `+inf` at `+inf`.
 pub fn log_f32(y: f32) -> f32 {
-    if y.is_nan() || y < 0.0 {
+    if y.is_nan() {
+        return y;
+    }
+    if y < 0.0 {
         return f32::from_bits(CANONICAL_NAN_BITS);
     }
     if y == 0.0 {
@@ -379,7 +375,7 @@ pub fn softplus_f32(x: f32) -> f32 {
 /// `qd_sigmoid`.
 pub fn sigmoid_f32(x: f32) -> f32 {
     if x.is_nan() {
-        return f32::from_bits(CANONICAL_NAN_BITS);
+        return x;
     }
     let e = exp_f32(-x.abs());
     let r = 1.0 / (1.0 + e);
@@ -392,14 +388,14 @@ pub fn sigmoid_f32(x: f32) -> f32 {
 
 /// `x * sigmoid(x)`, bit-identical to `qd_silu`.
 pub fn silu_f32(x: f32) -> f32 {
-    canon_nan_f32(x * sigmoid_f32(x))
+    x * sigmoid_f32(x)
 }
 
 /// `s * (1 + x * (1 - s))` with `s = sigmoid(x)`: SiLU's derivative,
 /// bit-identical to `qd_silu_grad`.
 pub fn silu_grad_f32(x: f32) -> f32 {
     let s = sigmoid_f32(x);
-    canon_nan_f32(s * (1.0 + x * (1.0 - s)))
+    s * (1.0 + x * (1.0 - s))
 }
 
 /// Inputs every bitwise device check of these functions sweeps: the special
@@ -454,6 +450,11 @@ pub fn act_sweep_inputs(n: usize) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
+    //! The three full-density ulp sweeps (`exp` over its range, `exp_nonpos`
+    //! over `[-104, 0]`, `log` over the positive floats; ~226M inputs between
+    //! them) run in the release tier: `#[ignore]`d in a debug build, where
+    //! they took ~16 s, and run at the same density by
+    //! `cargo test --release` (CI's linux job). Nothing is thinned.
     use super::*;
 
     /// `|got - want|` in units of the f32 spacing at `want`.
@@ -542,6 +543,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full-density ulp sweep: release tier, run by cargo test --release"
+    )]
     fn exp_is_within_two_ulp_of_f64_over_its_whole_range() {
         let mut worst = (0.0f64, 0.0f32);
         // Every 97th f32 from -104 to 88.8, by bit pattern.
@@ -575,11 +580,9 @@ mod tests {
 
     #[test]
     fn exp_special_values_and_range_edges() {
-        assert_eq!(exp_f32(f32::NAN).to_bits(), CANONICAL_NAN_BITS);
-        assert_eq!(
-            exp_f32(f32::from_bits(0xffc0_0001)).to_bits(),
-            CANONICAL_NAN_BITS
-        );
+        // A NaN input comes back as itself, payload and sign included.
+        assert_eq!(exp_f32(f32::NAN).to_bits(), f32::NAN.to_bits());
+        assert_eq!(exp_f32(f32::from_bits(0xffc0_0001)).to_bits(), 0xffc0_0001);
         assert_eq!(exp_f32(f32::INFINITY), f32::INFINITY);
         assert_eq!(exp_f32(f32::NEG_INFINITY).to_bits(), 0);
         assert_eq!(exp_f32(0.0), 1.0);
@@ -614,10 +617,17 @@ mod tests {
         assert_eq!(exp_nonpos_f32(0.0), 1.0);
         assert_eq!(exp_nonpos_f32(-0.0), 1.0);
         assert_eq!(exp_nonpos_f32(f32::NEG_INFINITY).to_bits(), 0);
-        assert_eq!(exp_nonpos_f32(f32::NAN).to_bits(), CANONICAL_NAN_BITS);
+        assert_eq!(
+            exp_nonpos_f32(f32::from_bits(0xffc0_0001)).to_bits(),
+            0xffc0_0001
+        );
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full-density ulp sweep: release tier, run by cargo test --release"
+    )]
     fn exp_on_the_nonpositive_range_measured_for_the_gdn_decay() {
         // Every f32 in [-104, 0], by bit pattern: the domain of exp(g), g <= 0.
         let mut worst = (0.0f64, 0.0f32);
@@ -639,7 +649,11 @@ mod tests {
     }
 
     #[test]
-    fn log_is_within_two_ulp_of_f64_and_handles_the_edges() {
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full-density ulp sweep: release tier, run by cargo test --release"
+    )]
+    fn log_is_within_two_ulp_of_f64() {
         let mut worst = (0.0f64, 0.0f32);
         let mut n = 0usize;
         // Every 101st positive finite f32, subnormals included.
@@ -657,12 +671,16 @@ mod tests {
             worst.0, worst.1
         );
         assert!(worst.0 <= 2.0, "worst {} ulp at {:e}", worst.0, worst.1);
+    }
+
+    #[test]
+    fn log_handles_the_edges() {
         assert_eq!(log_f32(1.0).to_bits(), 0);
         assert_eq!(log_f32(0.0), f32::NEG_INFINITY);
         assert_eq!(log_f32(-0.0), f32::NEG_INFINITY);
         assert_eq!(log_f32(f32::INFINITY), f32::INFINITY);
         assert_eq!(log_f32(-1.0).to_bits(), CANONICAL_NAN_BITS);
-        assert_eq!(log_f32(f32::NAN).to_bits(), CANONICAL_NAN_BITS);
+        assert_eq!(log_f32(f32::from_bits(0x7fc0_0042)).to_bits(), 0x7fc0_0042);
         assert_eq!(log_f32(std::f32::consts::E), 1.0);
     }
 
@@ -695,7 +713,7 @@ mod tests {
         assert_eq!(softplus_f32(25.0), 25.0);
         assert_eq!(softplus_f32(f32::INFINITY), f32::INFINITY);
         assert_eq!(softplus_f32(f32::NEG_INFINITY).to_bits(), 0);
-        assert_eq!(softplus_f32(f32::NAN).to_bits(), CANONICAL_NAN_BITS);
+        assert!(softplus_f32(f32::NAN).is_nan());
         assert!(softplus_f32(-120.0) >= 0.0);
     }
 
@@ -737,18 +755,17 @@ mod tests {
         assert_eq!(sigmoid_f32(f32::NEG_INFINITY).to_bits(), 0);
         assert_eq!(sigmoid_f32(120.0), 1.0);
         assert_eq!(sigmoid_f32(-120.0).to_bits(), 0);
-        assert_eq!(sigmoid_f32(f32::NAN).to_bits(), CANONICAL_NAN_BITS);
+        assert_eq!(
+            sigmoid_f32(f32::from_bits(0xffc0_0001)).to_bits(),
+            0xffc0_0001
+        );
         assert_eq!(silu_f32(f32::INFINITY), f32::INFINITY);
-        // -inf * sigmoid(-inf) is -inf * 0, NaN as in torch; canonical here.
-        assert_eq!(silu_f32(f32::NEG_INFINITY).to_bits(), CANONICAL_NAN_BITS);
+        // -inf * sigmoid(-inf) is -inf * 0: NaN as in torch, with whatever
+        // bits this host makes (the harness matches any NaN).
+        assert!(silu_f32(f32::NEG_INFINITY).is_nan());
         assert_eq!(silu_f32(-120.0).to_bits(), 0x8000_0000, "-0");
         assert_eq!(silu_grad_f32(0.0), 0.5);
-        assert_eq!(silu_grad_f32(f32::NAN).to_bits(), CANONICAL_NAN_BITS);
-        assert_eq!(
-            canon_nan_f32(f32::from_bits(0xffc0_0000)).to_bits(),
-            CANONICAL_NAN_BITS
-        );
-        assert_eq!(canon_nan_f32(-2.5), -2.5);
+        assert!(silu_grad_f32(f32::NAN).is_nan());
     }
 
     #[test]
@@ -770,7 +787,6 @@ mod tests {
             "qd_sigmoid(",
             "qd_silu(",
             "qd_silu_grad(",
-            "qd_canon_nan(",
         ] {
             assert!(
                 ACT_PRELUDE.contains(&format!("float {f}float")),

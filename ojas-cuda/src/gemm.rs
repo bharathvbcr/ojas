@@ -31,13 +31,20 @@
 //! different SM count or cuBLAS version may change its bits. Every rung-0
 //! report records the SM count and the cuBLAS, NVRTC and driver versions for
 //! that reason. The FFMA tier has no such scope.
+//!
+//! **Operands are views** ([`BufView`], [`BufViewMut`]): each is a dense
+//! row-major matrix that starts some elements into its buffer, passed to the
+//! kernel or to cuBLAS as a device pointer at that offset. A whole buffer is
+//! `buf.all()`; K10 passes its head chunk `[v0, v0 + w)` of `W` and the rows
+//! of `dW` it writes as views, so neither is copied. The kernels and the
+//! arithmetic are unchanged: only the base pointer moves.
 
 use std::ffi::c_void;
 
 use cudarc::cublas::sys as cublas_sys;
 use cudarc::driver::{DevicePtr, DevicePtrMut, LaunchConfig, PushKernelArg};
 
-use crate::buffer::CudaBuffer;
+use crate::buffer::{BufView, BufViewMut};
 use crate::error::CudaError;
 use crate::gemm_plan::{cublas_args, GemmLayout, GemmShape, Trans};
 use crate::geometry::gemm_grid;
@@ -72,9 +79,9 @@ pub struct GemmSpec {
 pub fn gemm_ffma(
     rt: &CudaRuntime,
     spec: GemmSpec,
-    a: &CudaBuffer<f32>,
-    b: &CudaBuffer<f32>,
-    c: &mut CudaBuffer<f32>,
+    a: BufView<'_, f32>,
+    b: BufView<'_, f32>,
+    mut c: BufViewMut<'_, f32>,
 ) -> Result<(), CudaError> {
     let GemmSpec {
         operands,
@@ -95,11 +102,13 @@ pub fn gemm_ffma(
         Accumulate::Overwrite => 0,
         Accumulate::Add => 1,
     };
+    let (a_dev, b_dev) = (a.device(), b.device());
+    let mut c_dev = c.device();
     let mut builder = rt.stream().launch_builder(&f);
     builder
-        .arg(a.slice())
-        .arg(b.slice())
-        .arg(c.slice_mut())
+        .arg(&a_dev)
+        .arg(&b_dev)
+        .arg(&mut c_dev)
         .arg(&m)
         .arg(&n)
         .arg(&k)
@@ -110,8 +119,9 @@ pub fn gemm_ffma(
         shared_mem_bytes: 0,
     };
     // SAFETY: (const float* a, const float* b, float* c, ull m, ull n, ull k,
-    // int accumulate); check_lens matched every buffer to the shape and
-    // layout, and the kernel guards every index by m, n, k.
+    // int accumulate); check_lens matched every view to the shape and layout,
+    // every view lies inside its buffer (view_range), and the kernel guards
+    // every index by m, n, k.
     unsafe { builder.launch(cfg) }.map_err(|e| driver_error(entry, e))?;
     Ok(())
 }
@@ -129,9 +139,9 @@ pub fn gemm_bf16_cublas(
     rt: &CudaRuntime,
     layout: GemmLayout,
     shape: GemmShape,
-    a: &CudaBuffer<u16>,
-    b: &CudaBuffer<u16>,
-    c: &mut CudaBuffer<f32>,
+    a: BufView<'_, u16>,
+    b: BufView<'_, u16>,
+    mut c: BufViewMut<'_, f32>,
     acc: Accumulate,
 ) -> Result<(), CudaError> {
     const OP: &str = "cublasGemmEx(bf16, bf16 -> f32, COMPUTE_32F)";
@@ -143,11 +153,14 @@ pub fn gemm_bf16_cublas(
         Accumulate::Add => 1.0,
     };
     let stream = rt.stream();
-    let (a_ptr, _a_sync) = a.slice().device_ptr(stream);
-    let (b_ptr, _b_sync) = b.slice().device_ptr(stream);
-    let (c_ptr, _c_sync) = c.slice_mut().device_ptr_mut(stream);
-    // SAFETY: the handle is live and bound to `stream`; the pointers are live
-    // device allocations whose lengths check_lens matched to the shape, and
+    let (a_dev, b_dev) = (a.device(), b.device());
+    let mut c_dev = c.device();
+    let (a_ptr, _a_sync) = a_dev.device_ptr(stream);
+    let (b_ptr, _b_sync) = b_dev.device_ptr(stream);
+    let (c_ptr, _c_sync) = c_dev.device_ptr_mut(stream);
+    // SAFETY: the handle is live and bound to `stream`; the pointers point
+    // into live device allocations, at views whose lengths check_lens matched
+    // to the shape and which lie inside their buffers (view_range), and
     // cublas_args checked every leading dimension against BLAS's rule.
     // cuBLAS's first operand is the row-major B, its second the row-major A
     // (gemm_plan module docs). alpha and beta are host f32s, the scale type
@@ -188,15 +201,15 @@ pub enum Bf16Engine {
 }
 
 /// A GEMM on f32 operands at either tier, as tessl's `GemmOperands::{nn,tn,nt}`.
-/// The bf16 tier through cuBLAS first casts A and B to bf16 with the K0 cast
-/// (into temporary buffers freed in stream order).
+/// The bf16 tier through cuBLAS first casts A and B (their views only) to
+/// bf16 with the K0 cast, into temporary buffers freed in stream order.
 pub fn gemm(
     rt: &CudaRuntime,
     spec: GemmSpec,
     engine: Bf16Engine,
-    a: &CudaBuffer<f32>,
-    b: &CudaBuffer<f32>,
-    c: &mut CudaBuffer<f32>,
+    a: BufView<'_, f32>,
+    b: BufView<'_, f32>,
+    c: BufViewMut<'_, f32>,
 ) -> Result<(), CudaError> {
     match (spec.operands, engine) {
         (Operands::ExactF32, _) | (Operands::Bf16, Bf16Engine::Ffma) => {
@@ -207,9 +220,17 @@ pub fn gemm(
                 .check_lens(a.len(), b.len(), c.len(), "gemm bf16")?;
             let mut a16 = rt.alloc_zeros::<u16>(a.len(), "gemm A bf16")?;
             let mut b16 = rt.alloc_zeros::<u16>(b.len(), "gemm B bf16")?;
-            cast_f32_to_bf16(rt, a, &mut a16)?;
-            cast_f32_to_bf16(rt, b, &mut b16)?;
-            gemm_bf16_cublas(rt, spec.layout, spec.shape, &a16, &b16, c, spec.acc)
+            cast_f32_to_bf16(rt, a, a16.all_mut())?;
+            cast_f32_to_bf16(rt, b, b16.all_mut())?;
+            gemm_bf16_cublas(
+                rt,
+                spec.layout,
+                spec.shape,
+                a16.all(),
+                b16.all(),
+                c,
+                spec.acc,
+            )
         }
     }
 }

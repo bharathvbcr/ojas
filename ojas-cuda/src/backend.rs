@@ -18,8 +18,10 @@ use crate::runtime::CudaRuntime;
 #[derive(Clone)]
 pub struct CudaBackend {
     pub(crate) budget: Budget,
+    /// `Rc`, not `Arc`: the runtime owns a raw cuBLAS handle and is neither
+    /// `Send` nor `Sync`, so a backend and its clones stay on one thread.
     #[cfg(feature = "cuda")]
-    pub(crate) rt: Arc<CudaRuntime>,
+    pub(crate) rt: std::rc::Rc<CudaRuntime>,
 }
 
 impl std::fmt::Debug for CudaBackend {
@@ -44,28 +46,30 @@ impl CudaBackend {
                 kind: Device::Cuda,
                 detail: e.to_string(),
             })?;
-            let mut cfg = crate::runtime::RuntimeConfig::default();
-            cfg.budget_bytes = budget.cap_bytes();
+            let cfg = crate::runtime::RuntimeConfig {
+                budget_bytes: budget.cap_bytes(),
+                ..crate::runtime::RuntimeConfig::default()
+            };
             let rt = CudaRuntime::open(cfg).map_err(|e| DeviceError::NoDevice {
                 kind: Device::Cuda,
                 detail: e.to_string(),
             })?;
             Ok(Self {
                 budget,
-                rt: Arc::new(rt),
+                rt: std::rc::Rc::new(rt),
             })
         }
     }
 
     /// Construct a [`CudaBackend`] around an existing runtime.
     #[cfg(feature = "cuda")]
-    pub fn with_runtime(rt: Arc<CudaRuntime>, budget: Budget) -> Self {
+    pub fn with_runtime(rt: std::rc::Rc<CudaRuntime>, budget: Budget) -> Self {
         Self { budget, rt }
     }
 
     /// Access the underlying [`CudaRuntime`].
     #[cfg(feature = "cuda")]
-    pub fn runtime(&self) -> &Arc<CudaRuntime> {
+    pub fn runtime(&self) -> &std::rc::Rc<CudaRuntime> {
         &self.rt
     }
 }

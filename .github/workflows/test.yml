@@ -237,13 +237,17 @@ jobs:
           echo "tessl path: ${abs:-relative}"
       - name: Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy
           rustup default stable
       - name: ojas-cuda with the cuda feature
         # cudarc loads the driver at runtime (fallback-dynamic-loading), so the
-        # feature compiles without a CUDA toolkit. Nothing is executed.
+        # feature compiles and links without a CUDA toolkit. The device tests
+        # (tests/device_*.rs, #[ignore]d, sm_90) and the rung binaries are built,
+        # not run; ojas-cuda's host tests run in the linux job's workspace test.
         working-directory: ${{ env.OJAS }}
-        run: cargo check -p ojas-cuda --features cuda --all-targets
+        run: |
+          cargo clippy -p ojas-cuda --features cuda --all-targets -- -D warnings
+          cargo test -p ojas-cuda --features cuda --no-run
       - name: ojas-hip, default features
         # hip-runtime-sys 0.1.2 panics in its build script when
         # hip/hip_runtime_api.h is absent, so the hip feature is not built.

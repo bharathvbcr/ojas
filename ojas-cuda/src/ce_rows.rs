@@ -25,11 +25,12 @@
 //!    overwrites, the rest add) and `dW[v0..v0+w] = dlogitsᵀ @ h` (K1 `tn`).
 //!    `dW` is overwritten; with the tied embedding, K9's backward adds onto it.
 //!
-//! Scratch is bounded by the chunk: `[n, chunk]` logits, `[chunk, H]` weight
-//! and `dW` chunks, and `[n]` row state. K1's GEMMs take whole buffers (no
-//! views), so the weight chunk and the `dW` chunk move through K0's `deliver`
-//! copies, and a vocabulary that is not a multiple of the chunk needs a second
-//! set of scratch at the tail width ([`CeRowsPlan::widths`]).
+//! Scratch is bounded by the chunk: `[n, chunk]` logits and `[n]` row state.
+//! K1's GEMMs take buffer views, so the head chunk is read from `W` and the
+//! `dW` rows are written in place, never copied (before, two `[chunk, H]`
+//! scratch chunks and three chunk copies per vocabulary pass:
+//! [`chunk_copy_bytes`]). A vocabulary that is not a multiple of the chunk
+//! needs a second logits block at the tail width ([`CeRowsPlan::widths`]).
 //!
 //! **Numerics.** The three `exp`s have non-positive arguments by
 //! construction (`m_new` is a max over what it is subtracted from, and
@@ -472,17 +473,45 @@ pub fn ce_rows_mirror(
 }
 
 /// Elements of device scratch one call holds for `plan`, the bound the
-/// workspace and the per-call buffers stay within: weight and `dW` chunks at
-/// each width, logits at each width, the gathered rows and the row state.
+/// workspace and the per-call buffers stay within: logits at each width, the
+/// gathered rows and the row state.
 pub fn scratch_elements(plan: &CeRowsPlan) -> u64 {
     let widths: u64 = plan.widths().into_iter().flatten().sum();
-    2 * widths * plan.hidden + widths * plan.n + plan.n * plan.hidden + 3 * plan.n
+    widths * plan.n + plan.n * plan.hidden + 3 * plan.n
+}
+
+/// Device bytes the K10 walk used to move through K0's `deliver` before its
+/// GEMMs took views (now zero): with gradients, `W` was copied into chunk
+/// scratch on both walks and `dW` copied out once, each copy one read and one
+/// write of `vocab * hidden` f32s; without, `W` once. Arithmetic on the plan,
+/// not a measurement.
+pub fn chunk_copy_bytes(plan: &CeRowsPlan, with_grads: bool) -> u64 {
+    let copies: u64 = if with_grads { 3 } else { 1 };
+    copies * 2 * plan.vocab * plan.hidden * 4
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::inputs::splitmix_f32;
+
+    /// What the views removed, at Qwen3.5-2B's head (V = 248,320, H = 2048):
+    /// three `[V, H]` f32 copies with gradients, ~12.2 GB of device traffic
+    /// per call (arithmetic; the sm_90 measurement is the device bench's), and
+    /// two `[8192, H]` scratch chunks per width from the workspace.
+    #[test]
+    fn views_remove_the_chunk_copies_and_their_scratch() {
+        let p = plan(4, 2048, 248_320, CE_CHUNK);
+        assert_eq!(chunk_copy_bytes(&p, true), 12_205_424_640);
+        assert_eq!(chunk_copy_bytes(&p, false), 4_068_474_880);
+        let widths: u64 = p.widths().into_iter().flatten().sum();
+        assert_eq!(widths, 8192 + 2560);
+        assert_eq!(
+            scratch_elements(&p),
+            widths * 4 + 4 * 2048 + 3 * 4,
+            "no [chunk, H] weight or dW scratch"
+        );
+    }
 
     fn plan(n: u64, hidden: u64, vocab: u64, chunk: u64) -> CeRowsPlan {
         CeRowsPlan::new(
