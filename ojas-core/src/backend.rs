@@ -405,6 +405,15 @@ pub struct GatedRmsGrad {
     pub weight: Tensor,
 }
 
+/// Gradients of [`Backend::gdn_log_decay_forward`], each shaped like its
+/// input.
+#[derive(Clone, Debug)]
+pub struct GdnDecayGrad {
+    pub input: Tensor,
+    pub a_log: Tensor,
+    pub dt_bias: Tensor,
+}
+
 /// `host` where `backend` computes: as given on the CPU, uploaded otherwise.
 fn place_host<B: Backend + ?Sized>(backend: &B, host: Tensor) -> Result<Tensor, OjasError> {
     if backend.id() == BackendId::Cpu {
@@ -448,7 +457,8 @@ pub fn broadcast_scalar<B: Backend + ?Sized>(
 }
 
 /// The refusal of a Qwen3.5 hybrid-layer op (causal conv1d, gated RMSNorm,
-/// partial RoPE) that backend `id` does not implement. There is no host
+/// partial RoPE, sigmoid, the GDN log decay) that backend `id` does not
+/// implement. There is no host
 /// fallback.
 fn unsupported_hybrid(id: BackendId, op: &'static str) -> OjasError {
     OjasError::Unsupported {
@@ -965,6 +975,57 @@ pub trait Backend {
     ) -> Result<Tensor, OjasError> {
         let _ = (grad_output, cos, sin);
         Err(unsupported_hybrid(self.id(), "rope_partial_backward"))
+    }
+
+    /// Elementwise logistic sigmoid `1 / (1 + e^-x)`: Qwen3.5's attention
+    /// output gate (`attn * sigmoid(gate)`) and the delta rule's `beta`.
+    /// [`crate::sigmoid_forward_dims`] validates the shape. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_hybrid(self.id(), "sigmoid_forward"))
+    }
+
+    /// `grad_output * s * (1 - s)` with `s = sigmoid(input)`.
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_hybrid(self.id(), "sigmoid_backward"))
+    }
+
+    /// The gated delta rule's log decay (transformers
+    /// `Qwen3_5GatedDeltaNet`):
+    ///
+    /// ```text
+    /// g[..., h] = -exp(a_log[h]) * softplus(a[..., h] + dt_bias[h])
+    /// ```
+    ///
+    /// with torch's `softplus` at its defaults (linear above 20). `a` is
+    /// `[..., H]` (`in_proj_a`'s output), `a_log` and `dt_bias` `[H]`; the
+    /// output, the `g` of [`GdnInputs`], is shaped like `a`.
+    /// [`crate::gdn_log_decay_forward_dims`] validates the shapes. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn gdn_log_decay_forward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (a, a_log, dt_bias);
+        Err(unsupported_hybrid(self.id(), "gdn_log_decay_forward"))
+    }
+
+    /// Gradients of [`Self::gdn_log_decay_forward`] for `grad_output` shaped
+    /// like `a`: `da = grad * -exp(a_log) * softplus'(a + dt_bias)`, `ddt_bias`
+    /// the sum of `da` over rows, and `da_log` the sum of `grad * g`.
+    fn gdn_log_decay_backward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<GdnDecayGrad, OjasError> {
+        let _ = (a, a_log, dt_bias, grad_output);
+        Err(unsupported_hybrid(self.id(), "gdn_log_decay_backward"))
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError>;
@@ -1600,6 +1661,33 @@ macro_rules! forward_backend {
             sin: &Tensor,
         ) -> Result<Tensor, OjasError> {
             (**self).rope_partial_backward(grad_output, cos, sin)
+        }
+        fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+            (**self).sigmoid_forward(input)
+        }
+        fn sigmoid_backward(
+            &self,
+            input: &Tensor,
+            grad_output: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            (**self).sigmoid_backward(input, grad_output)
+        }
+        fn gdn_log_decay_forward(
+            &self,
+            a: &Tensor,
+            a_log: &Tensor,
+            dt_bias: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            (**self).gdn_log_decay_forward(a, a_log, dt_bias)
+        }
+        fn gdn_log_decay_backward(
+            &self,
+            a: &Tensor,
+            a_log: &Tensor,
+            dt_bias: &Tensor,
+            grad_output: &Tensor,
+        ) -> Result<GdnDecayGrad, OjasError> {
+            (**self).gdn_log_decay_backward(a, a_log, dt_bias, grad_output)
         }
         fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
             (**self).silu_forward(input)
@@ -2449,6 +2537,29 @@ pub(crate) mod tests {
         ) -> Result<Tensor, OjasError> {
             Err(mark("rope_partial_backward"))
         }
+        fn sigmoid_forward(&self, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(mark("sigmoid_forward"))
+        }
+        fn sigmoid_backward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(mark("sigmoid_backward"))
+        }
+        fn gdn_log_decay_forward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<Tensor, OjasError> {
+            Err(mark("gdn_log_decay_forward"))
+        }
+        fn gdn_log_decay_backward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<GdnDecayGrad, OjasError> {
+            Err(mark("gdn_log_decay_backward"))
+        }
         fn silu_forward(&self, _: &Tensor) -> Result<Tensor, OjasError> {
             Err(mark("silu_forward"))
         }
@@ -2640,6 +2751,10 @@ pub(crate) mod tests {
             op(backend.gated_rms_norm_backward(&t, &t, &t, &t, 1e-6)),
             op(backend.rope_partial_forward(&t, &t, &t)),
             op(backend.rope_partial_backward(&t, &t, &t)),
+            op(backend.sigmoid_forward(&t)),
+            op(backend.sigmoid_backward(&t, &t)),
+            op(backend.gdn_log_decay_forward(&t, &t, &t)),
+            op(backend.gdn_log_decay_backward(&t, &t, &t, &t).map(drop)),
             op(backend.silu_forward(&t)),
             op(backend.silu_backward(&t, &t)),
             op(backend.mul_forward(&t, &t)),
@@ -2692,6 +2807,10 @@ pub(crate) mod tests {
             "gated_rms_norm_backward",
             "rope_partial_forward",
             "rope_partial_backward",
+            "sigmoid_forward",
+            "sigmoid_backward",
+            "gdn_log_decay_forward",
+            "gdn_log_decay_backward",
             "silu_forward",
             "silu_backward",
             "mul_forward",
@@ -2748,7 +2867,7 @@ pub(crate) mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 53);
+        assert_eq!(checked, 57);
     }
 
     #[test]
@@ -2829,6 +2948,19 @@ pub(crate) mod tests {
         refused(
             backend.rope_partial_backward(&x, &x, &x).map(drop),
             "rope_partial_backward",
+        );
+        refused(backend.sigmoid_forward(&x).map(drop), "sigmoid_forward");
+        refused(
+            backend.sigmoid_backward(&x, &x).map(drop),
+            "sigmoid_backward",
+        );
+        refused(
+            backend.gdn_log_decay_forward(&x, &x, &x).map(drop),
+            "gdn_log_decay_forward",
+        );
+        refused(
+            backend.gdn_log_decay_backward(&x, &x, &x, &x).map(drop),
+            "gdn_log_decay_backward",
         );
     }
 

@@ -147,6 +147,11 @@ const KERNELS: &[&str] = &[
     "ojas_round_bf16",
     "ojas_silu_fwd",
     "ojas_silu_bwd",
+    "ojas_sigmoid_fwd",
+    "ojas_sigmoid_bwd",
+    "ojas_gdn_decay_fwd",
+    "ojas_gdn_decay_bwd",
+    "ojas_gdn_decay_bwd_sum",
     "ojas_mul_fwd",
     "ojas_mul_bwd",
     "ojas_add_fwd",
@@ -1099,6 +1104,21 @@ impl Worker {
             Cmd::RoundBf16 { x } => self.round_bf16(x),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
+            Cmd::Sigmoid { x } => self.sigmoid(x, None),
+            Cmd::SigmoidBwd { x, gy } => self.sigmoid(x, Some(gy)),
+            Cmd::GdnDecay {
+                a,
+                a_log,
+                dt_bias,
+                heads,
+            } => self.gdn_decay([a, a_log, dt_bias], heads),
+            Cmd::GdnDecayBwd {
+                a,
+                a_log,
+                dt_bias,
+                gy,
+                heads,
+            } => self.gdn_decay_bwd([a, a_log, dt_bias, gy], heads),
             Cmd::Mul { a, b } => self.mul(a, b, None),
             Cmd::MulBwd { a, b, gy } => self.mul(a, b, Some(gy)),
             Cmd::Add { x, y } => self.add(x, y),
@@ -2242,6 +2262,92 @@ impl Worker {
             })?,
         }
         Ok(self.keep(vec![y]))
+    }
+
+    fn sigmoid(&mut self, x: Arg, gy: Option<Arg>) -> Res<Reply> {
+        let op = if gy.is_some() {
+            "sigmoid_backward"
+        } else {
+            "sigmoid_forward"
+        };
+        let xv = self.view(x)?;
+        let gv = gy.map(|g| self.view(g)).transpose()?;
+        let n = u32_of(xv.n)?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(op)?;
+        // The kernels check their inputs and output themselves.
+        match &gv {
+            None => self.k1("ojas_sigmoid_fwd", xv.n, |b| {
+                bind(b, &xv, 0);
+                bind(b, &y, 1);
+                set_u32(b, n, 2);
+                bind_st(b, &st, 3);
+            })?,
+            Some(g) => self.k1("ojas_sigmoid_bwd", xv.n, |b| {
+                bind(b, &xv, 0);
+                bind(b, g, 1);
+                bind(b, &y, 2);
+                set_u32(b, n, 3);
+                bind_st(b, &st, 4);
+            })?,
+        }
+        Ok(self.keep(vec![y]))
+    }
+
+    /// The gated delta rule's log decay over `a` `[rows, heads]`. The kernel
+    /// checks its inputs and output itself.
+    fn gdn_decay(&mut self, [a, a_log, dt_bias]: [Arg; 3], heads: u32) -> Res<Reply> {
+        const OP: &str = "gdn_log_decay_forward";
+        let (av, lv, dv) = (self.view(a)?, self.view(a_log)?, self.view(dt_bias)?);
+        let n = u32_of(av.n)?;
+        let g = self.fresh(av.n)?;
+        let st = self.status(OP)?;
+        self.k1("ojas_gdn_decay_fwd", av.n, |b| {
+            bind(b, &av, 0);
+            bind(b, &lv, 1);
+            bind(b, &dv, 2);
+            bind(b, &g, 3);
+            set_u32(b, n, 4);
+            set_u32(b, heads, 5);
+            bind_st(b, &st, 6);
+        })?;
+        Ok(self.keep(vec![g]))
+    }
+
+    /// `da` per element, then `da_log` and `ddt_bias`, one thread per head
+    /// summing the rows in ascending order. The kernels check their inputs
+    /// and outputs themselves.
+    fn gdn_decay_bwd(&mut self, [a, a_log, dt_bias, gy]: [Arg; 4], heads: u32) -> Res<Reply> {
+        const OP: &str = "gdn_log_decay_backward";
+        let (av, lv, dv) = (self.view(a)?, self.view(a_log)?, self.view(dt_bias)?);
+        let gv = self.view(gy)?;
+        let n = u32_of(av.n)?;
+        let rows = n / heads.max(1);
+        let (da, dlog, ddt) = (self.fresh(av.n)?, self.fresh(lv.n)?, self.fresh(dv.n)?);
+        let st = self.status(OP)?;
+        self.k1("ojas_gdn_decay_bwd", av.n, |b| {
+            bind(b, &av, 0);
+            bind(b, &lv, 1);
+            bind(b, &dv, 2);
+            bind(b, &gv, 3);
+            bind(b, &da, 4);
+            set_u32(b, n, 5);
+            set_u32(b, heads, 6);
+            bind_st(b, &st, 7);
+        })?;
+        self.k1("ojas_gdn_decay_bwd_sum", heads as usize, |b| {
+            bind(b, &av, 0);
+            bind(b, &lv, 1);
+            bind(b, &dv, 2);
+            bind(b, &gv, 3);
+            bind(b, &da, 4);
+            bind(b, &dlog, 5);
+            bind(b, &ddt, 6);
+            set_u32(b, rows, 7);
+            set_u32(b, heads, 8);
+            bind_st(b, &st, 9);
+        })?;
+        Ok(self.keep(vec![da, dlog, ddt]))
     }
 
     fn mul(&mut self, a: Arg, b_arg: Arg, gy: Option<Arg>) -> Res<Reply> {

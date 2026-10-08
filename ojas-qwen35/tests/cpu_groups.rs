@@ -4,7 +4,7 @@
 #![cfg(target_os = "macos")]
 
 use ojas_qwen35::{
-    tower_tensors, GroupSpec, LrRule, OptimizerPlan, Qwen35Error, Qwen35TextConfig, Select, WdRule,
+    tower_tensors, GroupSpec, LrRule, OptimizerPlan, Qwen35TextConfig, Select, WdRule,
 };
 
 const REAL: &str = include_str!("fixtures/qwen35_2b_base_config.json");
@@ -118,7 +118,7 @@ fn weight_decay_exclusions_are_the_callers_data() {
     assert!(plan.weight_decay().iter().all(|&w| w == 0.01));
     assert_eq!(get(&plan, "norm.weight"), 0.01);
     assert_eq!(get(&plan, "layers.0.linear_attn.dt_bias"), 0.01);
-    plan.check_tessl_lr().unwrap();
+    assert!(plan.lr_scale().iter().all(|&s| s == 1.0));
 }
 
 #[test]
@@ -258,20 +258,29 @@ fn a_spec_that_is_not_a_partition_is_refused() {
     );
 }
 
-/// tessl's AdamW has one learning rate: a plan whose scales are not all 1.0
-/// is refused before any device work, naming what would lift it.
+/// A per-entry learning rate is a torch param group, which tessl's
+/// `adamw_step_scaled` runs: a plan with the embedding at 0.1x builds and
+/// carries that scale to the step, and so does a uniform scale other than 1.0
+/// (folding it into the learning rate stays the caller's choice, not a
+/// requirement). The GPU test `gpu_tiny_per_group_lr_scales_the_update`
+/// checks the update itself.
 #[test]
-fn a_per_entry_learning_rate_is_refused_until_tessl_has_lr_scale() {
-    let plan = OptimizerPlan::build(&table(), &lappi_like()).unwrap();
-    match plan.check_tessl_lr() {
-        Err(Qwen35Error::Unsupported { what, needs }) => {
-            assert!(what.contains("0.1 on embed_tokens.weight"), "{what}");
-            assert!(needs.contains("lappi-train-lrscale-mrope"), "{needs}");
-        }
-        other => panic!("expected Unsupported, got {other:?}"),
-    }
-    // A uniform scale other than 1.0 is refused too: folding it into the
-    // learning rate is the caller's decision.
+fn a_per_entry_learning_rate_is_carried_to_the_step() {
+    let t = table();
+    let plan = OptimizerPlan::build(&t, &lappi_like()).unwrap();
+    let embed = plan
+        .names()
+        .iter()
+        .position(|n| n == "embed_tokens.weight")
+        .unwrap();
+    assert_eq!(plan.lr_scale()[embed], 0.1);
+    assert!(plan.lr_scale().contains(&1.0));
+    let summary = plan
+        .groups()
+        .iter()
+        .find(|g| g.lr_label == "lower")
+        .unwrap();
+    assert_eq!(summary.lr_scale, 0.1);
     let uniform = GroupSpec {
         lr: vec![LrRule {
             label: "all".into(),
@@ -280,10 +289,6 @@ fn a_per_entry_learning_rate_is_refused_until_tessl_has_lr_scale() {
         }],
         weight_decay: lappi_like().weight_decay,
     };
-    assert!(matches!(
-        OptimizerPlan::build(&table(), &uniform)
-            .unwrap()
-            .check_tessl_lr(),
-        Err(Qwen35Error::Unsupported { .. })
-    ));
+    let plan = OptimizerPlan::build(&t, &uniform).unwrap();
+    assert!(plan.lr_scale().iter().all(|&s| s == 0.5));
 }

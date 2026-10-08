@@ -1,6 +1,8 @@
 //! Qwen3.5's hybrid-layer ops on Metal: `causal_conv1d_silu` and
 //! `gated_rms_norm` on tessl's `qwen35` kernels, `rope_partial` on
-//! `ojas_rope`, each forward and backward against the CPU backend, plus the
+//! `ojas_rope`, `sigmoid` and `gdn_log_decay` on ojas's own kernels (the
+//! softplus is tessl's `qwen35_softplus`), each forward and backward against
+//! the CPU backend, plus the
 //! refusals, unaligned operands and the deferred non-finite fault. The CPU
 //! itself is checked against f64 references in `ojas-cpu/tests/hybrid.rs`.
 
@@ -434,5 +436,179 @@ fn a_non_finite_operand_is_a_deferred_fault_naming_the_op() {
         "nan rope gy",
         m.rope_partial_backward(&nan_x4, &cos, &sin),
         "rope_partial_backward",
+    );
+}
+
+// ---- sigmoid and the GDN log decay -----------------------------------------
+
+/// `a` in `[-20, 30)`: above the softplus threshold 20 once `dt_bias` is
+/// added for some, and far below (to -27) for others; `a_log` in `[-1, 1)`
+/// and `dt_bias` in `[-7, -2)`, Qwen's range.
+fn decay_operands(rows: usize, heads: usize, seed: u64) -> [Tensor; 4] {
+    let a: Vec<f32> = values(rows * heads, seed, 25.0)
+        .iter()
+        .map(|v| v + 5.0)
+        .collect();
+    let dt: Vec<f32> = values(heads, seed + 2, 2.5)
+        .iter()
+        .map(|v| v - 4.5)
+        .collect();
+    [
+        host(&a, &[rows, heads]),
+        rand(&[heads], seed + 1, 1.0),
+        host(&dt, &[heads]),
+        rand(&[rows, heads], seed + 3, 1.0),
+    ]
+}
+
+#[test]
+fn sigmoid_matches_cpu_forward_and_backward() {
+    let (m, c) = (metal(), cpu());
+    for (i, shape) in [vec![1usize], vec![3, 7], vec![2, 300, 64]]
+        .iter()
+        .enumerate()
+    {
+        let x = rand(shape, 40 + i as u64, 30.0);
+        let gy = rand(shape, 50 + i as u64, 1.0);
+        let (xm, gm) = (up(&m, &x), up(&m, &gy));
+        let got = ok("fwd", m.sigmoid_forward(&xm));
+        let gx = ok("bwd", m.sigmoid_backward(&xm, &gm));
+        ok("sync", m.sync());
+        rel_close(
+            &format!("{shape:?} y"),
+            &got,
+            &ok("cpu", c.sigmoid_forward(&x)),
+        );
+        rel_close(
+            &format!("{shape:?} dx"),
+            &gx,
+            &ok("cpu", c.sigmoid_backward(&x, &gy)),
+        );
+    }
+}
+
+#[test]
+fn gdn_log_decay_matches_cpu_forward_and_backward() {
+    let (m, c) = (metal(), cpu());
+    // One row; the 2B's 16 heads; more rows than a 4096-token sequence.
+    for (i, &(rows, heads)) in [(1, 1), (300, 16), (4100, 16)].iter().enumerate() {
+        let [a, a_log, dt, gy] = decay_operands(rows, heads, 60 + 10 * i as u64);
+        let what = format!("[{rows}, {heads}]");
+        let want = ok("cpu fwd", c.gdn_log_decay_forward(&a, &a_log, &dt));
+        let wg = ok("cpu bwd", c.gdn_log_decay_backward(&a, &a_log, &dt, &gy));
+        let [am, lm, dm, gm] = [&a, &a_log, &dt, &gy].map(|t| up(&m, t));
+        let got = ok("fwd", m.gdn_log_decay_forward(&am, &lm, &dm));
+        let g = ok("bwd", m.gdn_log_decay_backward(&am, &lm, &dm, &gm));
+        ok("sync", m.sync());
+        rel_close(&format!("{what} g"), &got, &want);
+        rel_close(&format!("{what} da"), &g.input, &wg.input);
+        rel_close(&format!("{what} da_log"), &g.a_log, &wg.a_log);
+        rel_close(&format!("{what} ddt_bias"), &g.dt_bias, &wg.dt_bias);
+    }
+}
+
+#[test]
+fn gate_operands_at_unaligned_byte_offsets_give_the_same_bits() {
+    let m = metal();
+    let [a, a_log, dt, gy] = decay_operands(37, 16, 90);
+    let dense = [&a, &a_log, &dt, &gy].map(|t| up(&m, t));
+    let shifted = [
+        offset_view(&m, &a, 3, 91),
+        offset_view(&m, &a_log, 5, 92),
+        offset_view(&m, &dt, 7, 93),
+        offset_view(&m, &gy, 9, 94),
+    ];
+    let run = |[a, l, d, g]: &[Tensor; 4]| {
+        let y = ok("fwd", m.gdn_log_decay_forward(a, l, d));
+        let gr = ok("bwd", m.gdn_log_decay_backward(a, l, d, g));
+        let s = ok("sig", m.sigmoid_forward(a));
+        let sg = ok("sig bwd", m.sigmoid_backward(a, g));
+        ok("sync", m.sync());
+        [y, gr.input, gr.a_log, gr.dt_bias, s, sg].map(|t| bits(&t))
+    };
+    assert_eq!(run(&shifted), run(&dense));
+}
+
+#[test]
+fn gate_shapes_are_refused_before_any_work() {
+    let m = metal();
+    let a = up(&m, &rand(&[2, 3], 1, 1.0));
+    let h = up(&m, &rand(&[3], 2, 1.0));
+    let r = m.gdn_log_decay_forward(&a, &up(&m, &rand(&[2], 3, 1.0)), &h);
+    assert!(
+        matches!(
+            r,
+            Err(OjasError::Shape {
+                op: "gdn_log_decay_forward",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    let r = m.gdn_log_decay_backward(&a, &h, &h, &up(&m, &rand(&[3, 2], 4, 1.0)));
+    assert!(
+        matches!(
+            r,
+            Err(OjasError::Shape {
+                op: "gdn_log_decay_backward",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    let r = m.sigmoid_backward(&a, &h);
+    assert!(
+        matches!(
+            r,
+            Err(OjasError::Shape {
+                op: "sigmoid_backward",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    assert!(m.sync().is_ok(), "a refusal records nothing");
+}
+
+#[test]
+fn a_non_finite_gate_operand_is_a_deferred_fault_naming_the_op() {
+    let m = metal();
+    let poisoned = |shape: &[usize], seed: u64, at: usize, v: f32| {
+        let mut d = values(shape.iter().product(), seed, 1.0);
+        d[at] = v;
+        up(&m, &host(&d, shape))
+    };
+    let [a, a_log, dt, _] = decay_operands(6, 4, 100).map(|t| up(&m, &t));
+    deferred(
+        &m,
+        "nan sigmoid x",
+        m.sigmoid_forward(&poisoned(&[6, 4], 1, 3, f32::NAN)),
+        "sigmoid_forward",
+    );
+    deferred(
+        &m,
+        "inf sigmoid gy",
+        m.sigmoid_backward(&a, &poisoned(&[6, 4], 2, 0, f32::INFINITY)),
+        "sigmoid_backward",
+    );
+    deferred(
+        &m,
+        "nan decay a_log",
+        m.gdn_log_decay_forward(&a, &poisoned(&[4], 3, 1, f32::NAN), &dt),
+        "gdn_log_decay_forward",
+    );
+    deferred(
+        &m,
+        "inf decay gy",
+        m.gdn_log_decay_backward(&a, &a_log, &dt, &poisoned(&[6, 4], 4, 5, f32::INFINITY))
+            .map(|g| g.input),
+        "gdn_log_decay_backward",
+    );
+    // exp(a_log) overflows: a finite input, a non-finite output.
+    deferred(
+        &m,
+        "decay overflow",
+        m.gdn_log_decay_forward(&a, &up(&m, &host(&[100.0; 4], &[4])), &dt),
+        "gdn_log_decay_forward",
     );
 }

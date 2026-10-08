@@ -249,7 +249,9 @@
 </li>
 <li>tessl&#39;s kernels take a buffer and a column window, not a byte offset, so an operand that does not start its buffer is copied first. Every operand and output is checked for non-finite values, and a fault is deferred as for the other ops.
 </li>
-<li><code>chunked_gdn_*</code> runs tessl&#39;s <code>gdn_train</code> (<code>tests/gdn.rs</code>). The four ops make up a linear-attention layer on the tape (<code>ojas-model/tests/metal_hybrid_tape.rs</code>).
+<li><code>sigmoid_*</code> (<code>ojas_sigmoid_fwd/bwd</code>) and <code>gdn_log_decay_*</code> (<code>ojas_gdn_decay_fwd</code>, <code>ojas_gdn_decay_bwd</code>, <code>ojas_gdn_decay_bwd_sum</code>) are ojas&#39;s own elementwise kernels; the softplus is tessl&#39;s <code>qwen35_softplus</code>, copied (a series below -3, where <code>log(1 + e^x)</code> loses most of the value). The <code>A_log</code> and <code>dt_bias</code> gradients are one thread per head summing the rows in ascending order. They bind operands at any byte offset, check their own operands and outputs, and defer a fault as the other elementwise kernels do.
+</li>
+<li><code>chunked_gdn_*</code> runs tessl&#39;s <code>gdn_train</code> (<code>tests/gdn.rs</code>). With the gates above these make up a linear-attention layer on the tape (<code>ojas-model/tests/metal_hybrid_tape.rs</code>), and the whole Qwen3.5 tower runs natively on Metal (<code>ojas-model/tests/qwen35_metal_tape.rs</code> on tessl&#39;s fixture against transformers; <code>ojas-qwen35/tests/gpu_tape_2b.rs</code> on the real 2B).
 </li>
 </ul>
 </li>

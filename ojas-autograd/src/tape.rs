@@ -85,6 +85,16 @@ enum Rec {
     Silu {
         x: usize,
     },
+    Sigmoid {
+        x: usize,
+    },
+    /// The gated delta rule's log decay of `a` with per-head `a_log` and
+    /// `dt_bias`.
+    GdnDecay {
+        a: usize,
+        a_log: usize,
+        dt_bias: usize,
+    },
     /// Depthwise causal conv + SiLU from a zero state.
     Conv1d {
         x: usize,
@@ -221,6 +231,12 @@ impl Rec {
                 checkpoints,
             },
             Rec::Silu { x } => Rec::Silu { x: m(x) },
+            Rec::Sigmoid { x } => Rec::Sigmoid { x: m(x) },
+            Rec::GdnDecay { a, a_log, dt_bias } => Rec::GdnDecay {
+                a: m(a),
+                a_log: m(a_log),
+                dt_bias: m(dt_bias),
+            },
             Rec::Conv1d { x, w } => Rec::Conv1d { x: m(x), w: m(w) },
             Rec::GatedRms { x, z, w, eps } => Rec::GatedRms {
                 x: m(x),
@@ -543,6 +559,25 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::RopePartial { x, cos, sin })
     }
 
+    /// Elementwise sigmoid ([`Backend::sigmoid_forward`]).
+    pub fn sigmoid(&mut self, x: Var) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::sigmoid")?;
+        self.record(Rec::Sigmoid { x })
+    }
+
+    /// The gated delta rule's log decay ([`Backend::gdn_log_decay_forward`]):
+    /// `-exp(a_log) * softplus(a + dt_bias)`, `a` `[..., H]`, `a_log` and
+    /// `dt_bias` `[H]`. Its output is the `g` of [`Tape::chunked_gdn`].
+    pub fn gdn_log_decay(&mut self, a: Var, a_log: Var, dt_bias: Var) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::gdn_log_decay";
+        let (a, a_log, dt_bias) = (
+            self.index(a, OP)?,
+            self.index(a_log, OP)?,
+            self.index(dt_bias, OP)?,
+        );
+        self.record(Rec::GdnDecay { a, a_log, dt_bias })
+    }
+
     pub fn silu(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::silu")?;
         self.record(Rec::Silu { x })
@@ -826,6 +861,11 @@ impl<B: Backend> Tape<B> {
                 (out.output, rec)
             }
             Rec::Silu { x } => (be.silu_forward(&v[x])?, rec),
+            Rec::Sigmoid { x } => (be.sigmoid_forward(&v[x])?, rec),
+            Rec::GdnDecay { a, a_log, dt_bias } => (
+                be.gdn_log_decay_forward(&v[a], &v[a_log], &v[dt_bias])?,
+                rec,
+            ),
             Rec::Conv1d { x, w } => (be.causal_conv1d_silu_forward(&v[x], &v[w])?, rec),
             Rec::GatedRms { x, z, w, eps } => {
                 (be.gated_rms_norm_forward(&v[x], &v[z], &v[w], eps)?, rec)
@@ -1202,6 +1242,22 @@ impl<B: Backend> Tape<B> {
                 let xv = self.values[x].clone();
                 let gx = self.backend.silu_backward(&xv, grad)?;
                 self.acc(x, gx)
+            }
+            Rec::Sigmoid { x } => {
+                let xv = self.values[x].clone();
+                let gx = self.backend.sigmoid_backward(&xv, grad)?;
+                self.acc(x, gx)
+            }
+            Rec::GdnDecay { a, a_log, dt_bias } => {
+                let (av, lv, dv) = (
+                    self.values[a].clone(),
+                    self.values[a_log].clone(),
+                    self.values[dt_bias].clone(),
+                );
+                let g = self.backend.gdn_log_decay_backward(&av, &lv, &dv, grad)?;
+                self.acc(a, g.input)?;
+                self.acc(a_log, g.a_log)?;
+                self.acc(dt_bias, g.dt_bias)
             }
             Rec::Conv1d { x, w } => {
                 let (xv, wv) = (self.values[x].clone(), self.values[w].clone());

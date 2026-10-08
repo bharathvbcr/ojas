@@ -55,6 +55,10 @@ const ROPE_PARTIAL_FORWARD: &str = "rope_partial_forward";
 const ROPE_PARTIAL_BACKWARD: &str = "rope_partial_backward";
 const SILU_FORWARD: &str = "silu_forward";
 const SILU_BACKWARD: &str = "silu_backward";
+const SIGMOID_FORWARD: &str = "sigmoid_forward";
+const SIGMOID_BACKWARD: &str = "sigmoid_backward";
+const GDN_DECAY_FORWARD: &str = "gdn_log_decay_forward";
+const GDN_DECAY_BACKWARD: &str = "gdn_log_decay_backward";
 const MUL_FORWARD: &str = "mul_forward";
 const MUL_BACKWARD: &str = "mul_backward";
 const ADD_FORWARD: &str = "residual_add_forward";
@@ -205,6 +209,15 @@ pub struct PartialRopeDims {
     pub heads: usize,
     pub dim: usize,
     pub rotary: usize,
+}
+
+/// Dimensions of the gated delta rule's log decay: `a` `[..., heads]`, and
+/// `a_log`, `dt_bias` `[heads]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GdnDecayDims {
+    /// Product of `a`'s leading axes.
+    pub rows: usize,
+    pub heads: usize,
 }
 
 /// Dimensions of mean cross-entropy over `logits` `[..., vocab]`.
@@ -1142,6 +1155,64 @@ pub fn silu_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
 /// [`crate::Backend::silu_backward`]: `grad_output` shaped like `input`.
 pub fn silu_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(SILU_BACKWARD, &[input, grad_output])
+}
+
+/// [`crate::Backend::sigmoid_forward`]: one `F32` tensor of any rank.
+/// Returns its element count.
+pub fn sigmoid_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
+    same_shape(SIGMOID_FORWARD, &[input])
+}
+
+/// [`crate::Backend::sigmoid_backward`]: `grad_output` shaped like `input`.
+pub fn sigmoid_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
+    same_shape(SIGMOID_BACKWARD, &[input, grad_output])
+}
+
+fn gdn_decay_layout(
+    op: &'static str,
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+) -> Result<GdnDecayDims, OjasError> {
+    f32_operands(op, &[a, a_log, dt_bias])?;
+    let (lead, heads) = split_last(op, a.shape(), "gdn log decay input must have rank >= 1")?;
+    for (name, t) in [("a_log", a_log), ("dt_bias", dt_bias)] {
+        if t.shape() != [heads] {
+            return Err(refuse(
+                op,
+                format!("{name} shape {:?} is not [{heads}]", t.shape()),
+            ));
+        }
+    }
+    Ok(GdnDecayDims {
+        rows: f32_product(op, lead)?,
+        heads,
+    })
+}
+
+/// [`crate::Backend::gdn_log_decay_forward`]: `a` `[..., heads]` of rank 1
+/// or more, `a_log` and `dt_bias` `[heads]`, all `F32`.
+pub fn gdn_log_decay_forward_dims(
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+) -> Result<GdnDecayDims, OjasError> {
+    gdn_decay_layout(GDN_DECAY_FORWARD, a, a_log, dt_bias)
+}
+
+/// [`crate::Backend::gdn_log_decay_backward`]: the forward's operands, then
+/// `grad_output` shaped like `a`.
+pub fn gdn_log_decay_backward_dims(
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+    grad_output: &Tensor,
+) -> Result<GdnDecayDims, OjasError> {
+    const OP: &str = GDN_DECAY_BACKWARD;
+    f32_operand(OP, grad_output)?;
+    let dims = gdn_decay_layout(OP, a, a_log, dt_bias)?;
+    same(OP, a.shape(), grad_output.shape())?;
+    Ok(dims)
 }
 
 /// [`crate::Backend::mul_forward`]: `a` and `b` of one shape, no broadcast.
@@ -3182,5 +3253,63 @@ mod tests {
             }
         }
         assert_eq!(count, 24);
+    }
+
+    #[test]
+    fn gdn_log_decay_takes_per_head_parameters_over_any_leading_axes() {
+        let (fw, bw) = ("gdn_log_decay_forward", "gdn_log_decay_backward");
+        let a = f(&[2, 5, 3]);
+        let h = f(&[3]);
+        assert_eq!(
+            gdn_log_decay_forward_dims(&a, &h, &h).unwrap(),
+            GdnDecayDims { rows: 10, heads: 3 }
+        );
+        assert_eq!(
+            gdn_log_decay_forward_dims(&h, &h, &h).unwrap(),
+            GdnDecayDims { rows: 1, heads: 3 }
+        );
+        assert_eq!(
+            gdn_log_decay_backward_dims(&a, &h, &h, &a).unwrap(),
+            GdnDecayDims { rows: 10, heads: 3 }
+        );
+        shape_err(
+            gdn_log_decay_forward_dims(&a, &f(&[2]), &h),
+            fw,
+            "a_log shape [2] is not [3]",
+        );
+        shape_err(
+            gdn_log_decay_forward_dims(&a, &h, &f(&[1, 3])),
+            fw,
+            "dt_bias shape [1, 3] is not [3]",
+        );
+        shape_err(
+            gdn_log_decay_backward_dims(&a, &h, &h, &f(&[2, 5, 4])),
+            bw,
+            "does not match",
+        );
+        shape_err(gdn_log_decay_forward_dims(&f(&[2, 0]), &h, &h), fw, "empty");
+        dtype_err(
+            gdn_log_decay_backward_dims(&a, &h, &h, &u(&[2, 5, 3])),
+            bw,
+            DType::F32,
+            DType::U32,
+        );
+    }
+
+    #[test]
+    fn sigmoid_takes_one_shape_of_any_rank() {
+        assert_eq!(sigmoid_forward_dims(&f(&[2, 3, 4])).unwrap(), 24);
+        assert_eq!(sigmoid_backward_dims(&f(&[7]), &f(&[7])).unwrap(), 7);
+        shape_err(
+            sigmoid_backward_dims(&f(&[2, 3]), &f(&[3, 2])),
+            "sigmoid_backward",
+            "does not match",
+        );
+        dtype_err(
+            sigmoid_forward_dims(&u(&[2])),
+            "sigmoid_forward",
+            DType::F32,
+            DType::U32,
+        );
     }
 }

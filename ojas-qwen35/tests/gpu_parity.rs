@@ -345,6 +345,22 @@ fn no_decay() -> Select {
     ])
 }
 
+/// The norms and biases at no decay, everything else at `wd`.
+fn wd_rules(wd: f32) -> Vec<WdRule> {
+    vec![
+        WdRule {
+            label: "no_decay".into(),
+            select: no_decay(),
+            weight_decay: 0.0,
+        },
+        WdRule {
+            label: "decay".into(),
+            select: Select::Not(Box::new(no_decay())),
+            weight_decay: wd,
+        },
+    ]
+}
+
 fn plan(s: &Qwen35Step, lr_scale: f64, wd: f32) -> OptimizerPlan {
     OptimizerPlan::build(
         s.parameter_table(),
@@ -354,84 +370,63 @@ fn plan(s: &Qwen35Step, lr_scale: f64, wd: f32) -> OptimizerPlan {
                 select: Select::All,
                 lr_scale,
             }],
-            weight_decay: vec![
-                WdRule {
-                    label: "no_decay".into(),
-                    select: no_decay(),
-                    weight_decay: 0.0,
-                },
-                WdRule {
-                    label: "decay".into(),
-                    select: Select::Not(Box::new(no_decay())),
-                    weight_decay: wd,
-                },
-            ],
+            weight_decay: wd_rules(wd),
         },
     )
     .unwrap()
 }
 
-/// One AdamW step through the provider against torch's single-tensor AdamW
-/// formed in f64 on the host from the same f32 inputs (decoupled decay, the
-/// moments, bias correction outside the root, the clip scale on the
-/// gradient). Bounds before the first run: each moment within 1e-6 of its
-/// tensor's peak; each parameter within 2e-7 x max(1, its peak). The norm
-/// tessl reports is the host's sum of squares to 1e-5. Then the refusals an
-/// open provider makes.
-#[test]
-#[ignore]
-fn gpu_tiny_adamw_step_is_torchs_update() {
-    let dir = tiny_dir();
-    let ids = ids(&dir);
-    let mut s = open_tiny(Numerics::ExactF32);
-    let before = s.read_table(Which::Parameters).unwrap();
-    step_all_rows(&mut s, &ids);
-    let grads = s.read_table(Which::Gradients).unwrap();
-    let sq = s.grad_sq_norm().unwrap();
-    let host_sq: f64 = grads
-        .iter()
-        .flat_map(|g| g.tensor.to_f32_vec().unwrap())
-        .map(|x| f64::from(x) * f64::from(x))
-        .sum();
-    assert!((sq - host_sq).abs() <= 1e-5 * host_sq, "{sq} vs {host_sq}");
-    let clip = clip_coefficient(0.5, sq, 0.0).unwrap();
-    eprintln!("grad norm {:.6}, clip {clip}", sq.sqrt());
-    let hyper = AdamWHyper {
-        lr: 1e-3,
-        beta1: 0.9,
-        beta2: 0.95,
-        eps: 1e-8,
-        grad_scale: clip,
-    };
-    let p = plan(&s, 1.0, 0.1);
-    assert_eq!(s.adamw_step(&hyper, &p).unwrap(), 1);
-    assert_eq!(*s.bank_state(), BankState::Empty);
+/// torch's single-tensor AdamW for one tensor at its first step, in f64 on
+/// the host from the same f32 inputs, at learning rate `lr` (the group's):
+/// the new parameter and both moments.
+fn torch_first_step(
+    p0: &[f32],
+    g: &[f32],
+    hyper: &AdamWHyper,
+    lr: f64,
+    wd: f64,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let (bc1, bc2) = (1.0 - hyper.beta1, 1.0 - hyper.beta2);
+    let (mut want_p, mut want_m, mut want_v) = (Vec::new(), Vec::new(), Vec::new());
+    for (&p, &gj) in p0.iter().zip(g) {
+        let gs = f64::from(gj * hyper.grad_scale);
+        let mm = (1.0 - hyper.beta1) * gs;
+        let vv = (1.0 - hyper.beta2) * gs * gs;
+        let denom = vv.sqrt() / bc2.sqrt() + hyper.eps;
+        want_p.push(f64::from(p) * (1.0 - lr * wd) - lr / bc1 * mm / denom);
+        want_m.push(mm);
+        want_v.push(vv);
+    }
+    (want_p, want_m, want_v)
+}
+
+/// The provider's first AdamW step, read back, against [`torch_first_step`]
+/// with each entry at `hyper.lr * plan.lr_scale()[i]` (torch's param-group
+/// lr) and `plan.weight_decay()[i]`. Bounds before the first run: each
+/// moment within 1e-6 of its tensor's peak; each parameter within 2e-7 x
+/// max(1, its peak).
+fn assert_first_step_is_torchs(
+    s: &Qwen35Step,
+    before: &[Vec<f32>],
+    grads: &[Vec<f32>],
+    hyper: &AdamWHyper,
+    plan: &OptimizerPlan,
+) {
     let after = s.read_table(Which::Parameters).unwrap();
     let m = s.read_table(Which::ExpAvg).unwrap();
     let v = s.read_table(Which::ExpAvgSq).unwrap();
-    let (bc1, bc2) = (1.0 - hyper.beta1, 1.0 - hyper.beta2);
+    assert_eq!(after.len(), before.len());
     for i in 0..before.len() {
-        let wd = f64::from(p.weight_decay()[i]);
-        let (p0, g) = (
-            before[i].tensor.to_f32_vec().unwrap(),
-            grads[i].tensor.to_f32_vec().unwrap(),
-        );
+        let lr = hyper.lr * plan.lr_scale()[i];
+        let wd = f64::from(plan.weight_decay()[i]);
+        let (p0, g) = (&before[i], &grads[i]);
         let (p1, m1, v1) = (
             after[i].tensor.to_f32_vec().unwrap(),
             m[i].tensor.to_f32_vec().unwrap(),
             v[i].tensor.to_f32_vec().unwrap(),
         );
-        let (mut want_p, mut want_m, mut want_v) = (Vec::new(), Vec::new(), Vec::new());
-        for j in 0..p0.len() {
-            let gs = f64::from(g[j] * clip);
-            let mm = (1.0 - hyper.beta1) * gs;
-            let vv = (1.0 - hyper.beta2) * gs * gs;
-            let denom = vv.sqrt() / bc2.sqrt() + hyper.eps;
-            want_p.push(f64::from(p0[j]) * (1.0 - hyper.lr * wd) - hyper.lr / bc1 * mm / denom);
-            want_m.push(mm);
-            want_v.push(vv);
-        }
-        let name = &before[i].name;
+        let (want_p, want_m, want_v) = torch_first_step(p0, g, hyper, lr, wd);
+        let name = &after[i].name;
         assert!(
             rel(&m1, &want_m) <= 1e-6,
             "{name}: first moment {:.3e}",
@@ -450,9 +445,54 @@ fn gpu_tiny_adamw_step_is_torchs_update() {
             .fold(0.0, f64::max);
         assert!(
             worst <= 2e-7 * scale,
-            "{name}: parameter off by {worst:.3e}"
+            "{name}: parameter off by {worst:.3e} (lr {lr})"
         );
     }
+}
+
+fn f32_table(s: &Qwen35Step, which: Which) -> Vec<Vec<f32>> {
+    s.read_table(which)
+        .unwrap()
+        .iter()
+        .map(|t| t.tensor.to_f32_vec().unwrap())
+        .collect()
+}
+
+/// One AdamW step through the provider against torch's single-tensor AdamW
+/// formed in f64 on the host from the same f32 inputs (decoupled decay, the
+/// moments, bias correction outside the root, the clip scale on the
+/// gradient), at [`assert_first_step_is_torchs`]'s bounds. The norm tessl
+/// reports is the host's sum of squares to 1e-5. Then the refusals an open
+/// provider makes.
+#[test]
+#[ignore]
+fn gpu_tiny_adamw_step_is_torchs_update() {
+    let dir = tiny_dir();
+    let ids = ids(&dir);
+    let mut s = open_tiny(Numerics::ExactF32);
+    let before = f32_table(&s, Which::Parameters);
+    step_all_rows(&mut s, &ids);
+    let grads = f32_table(&s, Which::Gradients);
+    let sq = s.grad_sq_norm().unwrap();
+    let host_sq: f64 = grads
+        .iter()
+        .flatten()
+        .map(|&x| f64::from(x) * f64::from(x))
+        .sum();
+    assert!((sq - host_sq).abs() <= 1e-5 * host_sq, "{sq} vs {host_sq}");
+    let clip = clip_coefficient(0.5, sq, 0.0).unwrap();
+    eprintln!("grad norm {:.6}, clip {clip}", sq.sqrt());
+    let hyper = AdamWHyper {
+        lr: 1e-3,
+        beta1: 0.9,
+        beta2: 0.95,
+        eps: 1e-8,
+        grad_scale: clip,
+    };
+    let p = plan(&s, 1.0, 0.1);
+    assert_eq!(s.adamw_step(&hyper, &p).unwrap(), 1);
+    assert_eq!(*s.bank_state(), BankState::Empty);
+    assert_first_step_is_torchs(&s, &before, &grads, &hyper, &p);
 
     // Refusals on an open provider, each before device work.
     let e = s.adamw_step(&hyper, &p).unwrap_err().to_string();
@@ -469,15 +509,99 @@ fn gpu_tiny_adamw_step_is_torchs_update() {
         })
         .unwrap();
     step_all_rows(&mut s, &ids);
-    let e = s
-        .adamw_step(&hyper, &plan(&s, 0.1, 0.1))
-        .unwrap_err()
-        .to_string();
-    assert!(e.contains("lappi-train-lrscale-mrope"), "{e}");
-    assert_eq!(s.step_count(), 1, "a refused step moved the count");
     s.adamw_step(&hyper, &p).unwrap();
     let e = s.backward(stale, None).unwrap_err().to_string();
     assert!(e.contains("weights changed since this forward"), "{e}");
+}
+
+/// Per-group learning rates are torch param groups: the embedding at 0.5x,
+/// `layers.0.mlp.down_proj.weight` at 0 and the rest at 1x, one step through
+/// the provider, each entry against torch's update at its group's lr (both
+/// the decoupled decay and the step size take it) at
+/// [`assert_first_step_is_torchs`]'s bounds. The frozen entry keeps its bits
+/// while its moments update. The embedding's half-lr result must sit far
+/// (50x its bound) from the full-lr one, so a dropped scale cannot pass.
+#[test]
+#[ignore]
+fn gpu_tiny_per_group_lr_scales_the_update() {
+    const FROZEN: &str = "layers.0.mlp.down_proj.weight";
+    let dir = tiny_dir();
+    let ids = ids(&dir);
+    let mut s = open_tiny(Numerics::ExactF32);
+    let before = f32_table(&s, Which::Parameters);
+    step_all_rows(&mut s, &ids);
+    let grads = f32_table(&s, Which::Gradients);
+    let hyper = AdamWHyper {
+        lr: 1e-3,
+        beta1: 0.9,
+        beta2: 0.95,
+        eps: 1e-8,
+        grad_scale: 1.0,
+    };
+    let scaled = || Select::AnyOf(vec![Select::Embedding, Select::Name(FROZEN.into())]);
+    let p = OptimizerPlan::build(
+        s.parameter_table(),
+        &GroupSpec {
+            lr: vec![
+                LrRule {
+                    label: "embed".into(),
+                    select: Select::Embedding,
+                    lr_scale: 0.5,
+                },
+                LrRule {
+                    label: "frozen".into(),
+                    select: Select::Name(FROZEN.into()),
+                    lr_scale: 0.0,
+                },
+                LrRule {
+                    label: "rest".into(),
+                    select: Select::Not(Box::new(scaled())),
+                    lr_scale: 1.0,
+                },
+            ],
+            weight_decay: wd_rules(0.1),
+        },
+    )
+    .unwrap();
+    let at = |name: &str| p.names().iter().position(|n| n == name).unwrap();
+    let (embed, frozen) = (at("embed_tokens.weight"), at(FROZEN));
+    assert_eq!((p.lr_scale()[embed], p.lr_scale()[frozen]), (0.5, 0.0));
+    assert_eq!(s.adamw_step(&hyper, &p).unwrap(), 1);
+    assert_first_step_is_torchs(&s, &before, &grads, &hyper, &p);
+
+    let after = f32_table(&s, Which::Parameters);
+    assert_eq!(
+        after[frozen]
+            .iter()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>(),
+        before[frozen]
+            .iter()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>(),
+        "{FROZEN}: a scale-0 entry moved"
+    );
+    let m = f32_table(&s, Which::ExpAvg);
+    assert!(
+        m[frozen].iter().any(|&x| x != 0.0),
+        "{FROZEN}: the frozen entry's first moment did not update"
+    );
+
+    let wd = f64::from(p.weight_decay()[embed]);
+    let (full, _, _) = torch_first_step(&before[embed], &grads[embed], &hyper, hyper.lr, wd);
+    let peak = before[embed]
+        .iter()
+        .fold(1.0f64, |a, &x| a.max(f64::from(x).abs()));
+    let apart = after[embed]
+        .iter()
+        .zip(&full)
+        .map(|(&a, b)| (f64::from(a) - b).abs())
+        .fold(0.0, f64::max);
+    eprintln!("embedding at 0.5x sits {apart:.3e} from its full-lr update");
+    assert!(
+        apart > 50.0 * 2e-7 * peak,
+        "the embedding's scale moved it only {apart:.3e} from the full-lr update"
+    );
 }
 
 fn scratch(name: &str) -> PathBuf {

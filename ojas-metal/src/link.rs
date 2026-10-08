@@ -419,6 +419,28 @@ pub(crate) enum Cmd {
         x: Arg,
         gy: Arg,
     },
+    Sigmoid {
+        x: Arg,
+    },
+    SigmoidBwd {
+        x: Arg,
+        gy: Arg,
+    },
+    /// The gated delta rule's log decay over `a` `[rows, heads]`.
+    GdnDecay {
+        a: Arg,
+        a_log: Arg,
+        dt_bias: Arg,
+        heads: u32,
+    },
+    /// Its backward: `da`, `da_log`, then `ddt_bias`.
+    GdnDecayBwd {
+        a: Arg,
+        a_log: Arg,
+        dt_bias: Arg,
+        gy: Arg,
+        heads: u32,
+    },
     Mul {
         a: Arg,
         b: Arg,

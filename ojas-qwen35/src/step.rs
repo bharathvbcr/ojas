@@ -579,11 +579,14 @@ impl Qwen35Step {
 
     /// One AdamW step on every parameter from the bank, torch's
     /// single-tensor `AdamW` update (tessl's kernel), with `plan`'s per-entry
-    /// weight decays. Returns the new step count and empties the bank.
+    /// learning-rate scales and weight decays: entry `i` learns at
+    /// `hyper.lr * plan.lr_scale()[i]`, as a torch param group at that lr
+    /// would (the scaled lr forms both the decoupled decay and the step size;
+    /// a scale of 0 freezes the entry while its moments still update).
+    /// Returns the new step count and empties the bank.
     ///
     /// Refused before any device work: an empty or invalid bank; a plan built
-    /// against another table; a plan with any learning-rate scale other than
-    /// 1.0 ([`OptimizerPlan::check_tessl_lr`]); any `(lr, weight decay)` pair
+    /// against another table; any effective `(lr * scale, weight decay)` pair
     /// ojas-core's [`check_adamw`] refuses at this step; a grad scale that is
     /// not finite and >= 0. A tessl failure after that leaves the weights
     /// partly updated, so it poisons the provider.
@@ -592,16 +595,17 @@ impl Qwen35Step {
         self.check_live()?;
         self.require_gradients(OP)?;
         plan.check_table(&self.table)?;
-        plan.check_tessl_lr()?;
         let step = self.adamw.step_count();
-        let mut checked: Vec<u32> = Vec::new();
-        for &wd in plan.weight_decay() {
-            if checked.contains(&wd.to_bits()) {
+        // Each distinct effective group, as torch would see it, once.
+        let mut checked: Vec<(u64, u32)> = Vec::new();
+        for (&scale, &wd) in plan.lr_scale().iter().zip(plan.weight_decay()) {
+            let lr = hyper.lr * scale;
+            if checked.contains(&(lr.to_bits(), wd.to_bits())) {
                 continue;
             }
             check_adamw(
                 AdamWConfig {
-                    lr: hyper.lr,
+                    lr,
                     beta1: hyper.beta1,
                     beta2: hyper.beta2,
                     eps: hyper.eps,
@@ -609,7 +613,7 @@ impl Qwen35Step {
                 },
                 step,
             )?;
-            checked.push(wd.to_bits());
+            checked.push((lr.to_bits(), wd.to_bits()));
         }
         if !(hyper.grad_scale.is_finite() && hyper.grad_scale >= 0.0) {
             return Err(invalid(
@@ -625,10 +629,13 @@ impl Qwen35Step {
             eps: hyper.eps,
             grad_scale: f64::from(hyper.grad_scale),
         };
-        if let Err(e) = self
-            .model
-            .adamw_step(&self.bank, &mut self.adamw, &th, plan.weight_decay())
-        {
+        if let Err(e) = self.model.adamw_step_scaled(
+            &self.bank,
+            &mut self.adamw,
+            &th,
+            plan.weight_decay(),
+            plan.lr_scale(),
+        ) {
             self.poisoned = Some(format!(
                 "tessl's adamw_step failed after every host check passed: {e}"
             ));

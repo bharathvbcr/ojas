@@ -19,3 +19,9 @@ ojas-io = { path = "../ojas-io" }
 # lib.rs and every test file) and the ojas workspace's Linux CI still builds.
 [target.'cfg(target_os = "macos")'.dependencies]
 tessl = { path = "../../tessl" }
+# The hybrid tower over ojas's Tape (`Qwen35TextConfig::tape_spec`).
+ojas-model = { path = "../ojas-model" }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+ojas-autograd = { path = "../ojas-autograd" }
+ojas-metal = { path = "../ojas-metal" }

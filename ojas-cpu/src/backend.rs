@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
-    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, rope_partial_backward_dims,
-    rope_partial_forward_dims, AdamWConfig, Backend, BackendId, Budget, GatedRmsGrad, GdnForward,
-    GdnGrad, GdnInputs, MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Tensor,
-    ValueResidualGrad,
+    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
+    gdn_log_decay_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
+    sigmoid_backward_dims, sigmoid_forward_dims, AdamWConfig, Backend, BackendId, Budget,
+    GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, MuonNs5Config, Numerics, OjasError,
+    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 // Every op below runs its `ojas_core::shapes` validator before it checks
 // values, copies an input or charges the budget (docs/shape-contract.md).
@@ -24,7 +25,8 @@ use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelD
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
 use crate::hybrid::{
-    conv1d_silu_backward, conv1d_silu_forward, gated_rms_backward, gated_rms_forward, rope_partial,
+    conv1d_silu_backward, conv1d_silu_forward, gated_rms_backward, gated_rms_forward,
+    gdn_log_decay_backward, gdn_log_decay_forward, rope_partial, sigmoid_backward, sigmoid_forward,
     Turn,
 };
 use crate::layout::permute;
@@ -891,6 +893,56 @@ impl Backend for CpuBackend {
         let ins = f32_operands(OP, exec, [grad_output, cos, sin])?;
         let shape = grad_output.shape();
         rope_partial(OP, &self.budget, exec, dims, ins, Turn::Backward, shape)
+    }
+
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_forward";
+        sigmoid_forward_dims(input)?;
+        let exec = self.exec();
+        let [x] = f32_operands(OP, exec, [input])?;
+        sigmoid_forward(OP, &self.budget, exec, x, input.shape())
+    }
+
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_backward";
+        sigmoid_backward_dims(input, grad_output)?;
+        let exec = self.exec();
+        let [x, gy] = f32_operands(OP, exec, [input, grad_output])?;
+        sigmoid_backward(OP, &self.budget, exec, x, gy, input.shape())
+    }
+
+    fn gdn_log_decay_forward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "gdn_log_decay_forward";
+        let dims = gdn_log_decay_forward_dims(a, a_log, dt_bias)?;
+        let exec = self.exec();
+        let ins = f32_operands(OP, exec, [a, a_log, dt_bias])?;
+        gdn_log_decay_forward(OP, &self.budget, exec, dims, ins, a.shape())
+    }
+
+    fn gdn_log_decay_backward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<GdnDecayGrad, OjasError> {
+        const OP: &str = "gdn_log_decay_backward";
+        let dims = gdn_log_decay_backward_dims(a, a_log, dt_bias, grad_output)?;
+        let exec = self.exec();
+        let ins = f32_operands(OP, exec, [a, a_log, dt_bias, grad_output])?;
+        let shapes = [a.shape(), a_log.shape(), dt_bias.shape()];
+        let (input, a_log, dt_bias) =
+            gdn_log_decay_backward(OP, &self.budget, exec, dims, ins, shapes)?;
+        Ok(GdnDecayGrad {
+            input,
+            a_log,
+            dt_bias,
+        })
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

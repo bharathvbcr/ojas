@@ -270,26 +270,6 @@ impl OptimizerPlan {
         &self.groups
     }
 
-    /// Whether tessl's AdamW, as it stands, can run this plan: it takes one
-    /// learning rate for every entry and has no per-entry scale, so any
-    /// `lr_scale` other than exactly 1.0 is refused here, before any device
-    /// work. Folding a uniform scale into the learning rate is left to the
-    /// caller, who owns the learning rate.
-    pub fn check_tessl_lr(&self) -> Result<()> {
-        if let Some((i, s)) = self.lr_scale.iter().enumerate().find(|(_, &s)| s != 1.0) {
-            return Err(Qwen35Error::Unsupported {
-                what: format!(
-                    "per-parameter learning-rate scale {s} on {} (and every other entry not at 1.0)",
-                    self.names[i]
-                ),
-                needs: "a per-entry lr_scale in tessl's Qwen35Model::adamw_step (in progress on tessl branch \
-                        lappi-train-lrscale-mrope; not on the tessl this crate builds against)"
-                    .into(),
-            });
-        }
-        Ok(())
-    }
-
     /// The plan was built against exactly `table` (names, in order).
     pub(crate) fn check_table(&self, table: &[TensorSpec]) -> Result<()> {
         if self.names.len() != table.len()

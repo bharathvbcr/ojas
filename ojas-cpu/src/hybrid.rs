@@ -1,5 +1,7 @@
 //! Qwen3.5's hybrid-layer ops on the CPU: the depthwise causal conv with
-//! SiLU in front of the gated delta rule, gated RMSNorm, and partial RoPE.
+//! SiLU in front of the gated delta rule, gated RMSNorm, partial RoPE, the
+//! sigmoid of the attention output gate and the delta rule's `beta`, and the
+//! delta rule's log decay.
 //!
 //! Every value is the scalar formula below, evaluated as written in f32
 //! with [`sigmoid`] ([`ojas_core::exp_exact`], no `mul_add`), and every sum
@@ -11,7 +13,10 @@
 //! shapes are checked by the `ojas_core::shapes` validators before these
 //! run.
 
-use ojas_core::{Budget, Conv1dDims, OjasError, PartialRopeDims, RmsDims, Scratch, Tensor};
+use ojas_core::{
+    exp_exact, Budget, Conv1dDims, GdnDecayDims, OjasError, PartialRopeDims, RmsDims, Scratch,
+    Tensor,
+};
 
 use crate::pointwise::sigmoid;
 use crate::pool::{scoped, Exec, ROW_MIN_ELEMS};
@@ -330,4 +335,118 @@ pub(crate) fn rope_partial(
         }
         Ok(())
     })
+}
+
+/// [`ojas_core::Backend::sigmoid_forward`]: [`sigmoid`] of each value.
+pub(crate) fn sigmoid_forward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    x: &[f32],
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    fill_rows(op, budget, exec, shape, x.len(), 1, |range, out| {
+        for (o, &v) in out.iter_mut().zip(&x[range]) {
+            *o = sigmoid(v);
+        }
+        Ok(())
+    })
+}
+
+/// [`ojas_core::Backend::sigmoid_backward`]: `gy * s(x) * s(-x)`, which is
+/// `s * (1 - s)` without the cancellation: above `x` ~ 17 `s` rounds to 1
+/// in f32 and `1 - s` to 0, while `s(-x)` keeps the slope.
+pub(crate) fn sigmoid_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    x: &[f32],
+    gy: &[f32],
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    fill_rows(op, budget, exec, shape, x.len(), 1, |range, out| {
+        let each = x[range.clone()].iter().zip(&gy[range]);
+        for (o, (&v, &g)) in out.iter_mut().zip(each) {
+            *o = g * sigmoid(v) * sigmoid(-v);
+        }
+        Ok(())
+    })
+}
+
+/// torch's `F.softplus` at its defaults (beta 1, threshold 20): `x` above
+/// 20, `log1p(e^x)` otherwise. `e^x` is [`exp_exact`]; `log1p` is taken in
+/// `f64` and rounded once, since `ln(1 + e)` in `f32` loses most of the
+/// result where `a + dt_bias` sits (around -2 to -15).
+fn softplus(x: f32) -> f32 {
+    if x > 20.0 {
+        x
+    } else {
+        f64::from(exp_exact(x)).ln_1p() as f32
+    }
+}
+
+/// [`ojas_core::Backend::gdn_log_decay_forward`]:
+/// `g = -exp(a_log[h]) * softplus(a + dt_bias[h])`, `exp(a_log)` once per
+/// head.
+pub(crate) fn gdn_log_decay_forward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    d: GdnDecayDims,
+    [a, a_log, dt_bias]: [&[f32]; 3],
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let GdnDecayDims { rows, heads } = d;
+    let rate: Vec<f32> = a_log.iter().map(|&l| -exp_exact(l)).collect();
+    fill_rows(op, budget, exec, shape, rows, heads, |range, out| {
+        let src = &a[range.start * heads..range.end * heads];
+        for (row_out, row_a) in out.chunks_exact_mut(heads).zip(src.chunks_exact(heads)) {
+            for h in 0..heads {
+                row_out[h] = rate[h] * softplus(row_a[h] + dt_bias[h]);
+            }
+        }
+        Ok(())
+    })
+}
+
+/// [`ojas_core::Backend::gdn_log_decay_backward`]: `(da, da_log, ddt_bias)`.
+/// `da = gy * -exp(a_log) * softplus'(a + dt_bias)`, with `softplus' = 1`
+/// above 20 and [`sigmoid`] below; `ddt_bias[h]` sums `da` and `da_log[h]`
+/// sums `gy * g` over rows in ascending order on the calling thread, so the
+/// bits do not depend on the thread count. `da` is a row pass.
+pub(crate) fn gdn_log_decay_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    d: GdnDecayDims,
+    [a, a_log, dt_bias, gy]: [&[f32]; 4],
+    shapes: [&[usize]; 3],
+) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+    let GdnDecayDims { rows, heads } = d;
+    let rate: Vec<f32> = a_log.iter().map(|&l| -exp_exact(l)).collect();
+    let [da, dlog, ddt] = fill_outs(op, budget, exec, shapes, |[da, dlog, ddt]| {
+        scoped::rows_into(exec, da, rows, heads, |range, out| {
+            for (local, row) in range.enumerate() {
+                for h in 0..heads {
+                    let i = row * heads + h;
+                    let x = a[i] + dt_bias[h];
+                    let slope = if x > 20.0 { 1.0 } else { sigmoid(x) };
+                    out[local * heads + h] = gy[i] * rate[h] * slope;
+                }
+            }
+            Ok(())
+        })?;
+        dlog.fill(0.0);
+        ddt.fill(0.0);
+        for row in 0..rows {
+            for h in 0..heads {
+                let i = row * heads + h;
+                let g = rate[h] * softplus(a[i] + dt_bias[h]);
+                dlog[h] += gy[i] * g;
+                ddt[h] += da[i];
+            }
+        }
+        Ok(())
+    })?;
+    Ok((da, dlog, ddt))
 }

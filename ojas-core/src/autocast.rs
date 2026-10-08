@@ -15,8 +15,8 @@
 //! [`Backend`]: crate::Backend
 
 use crate::backend::{
-    AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnForward, GdnGrad, GdnInputs,
-    LinearCe, MuonNs5Config, PerHeadGateGrad, ValueResidualGrad,
+    AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad,
+    GdnInputs, LinearCe, MuonNs5Config, PerHeadGateGrad, ValueResidualGrad,
 };
 use crate::budget::Budget;
 use crate::dtype::DType;
@@ -834,6 +834,47 @@ impl<B: Backend> Backend for Autocast<B> {
         self.pass()?;
         let out = self.inner.rope_partial_backward(grad_output, cos, sin)?;
         Ok(self.keep_f32(out))
+    }
+
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.sigmoid_forward(input)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.sigmoid_backward(input, grad_output)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn gdn_log_decay_forward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.gdn_log_decay_forward(a, a_log, dt_bias)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn gdn_log_decay_backward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<GdnDecayGrad, OjasError> {
+        self.pass()?;
+        let grad = self
+            .inner
+            .gdn_log_decay_backward(a, a_log, dt_bias, grad_output)?;
+        Ok(GdnDecayGrad {
+            input: self.keep_f32(grad.input),
+            a_log: self.keep_f32(grad.a_log),
+            dt_bias: self.keep_f32(grad.dt_bias),
+        })
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
@@ -2242,7 +2283,7 @@ mod tests {
         };
         let wrapped = Autocast::new(&inner);
         let checked = every_call_reaches_except(&wrapped, &inner, &["autocast_region"]);
-        assert_eq!(checked, 53);
+        assert_eq!(checked, 57);
     }
 
     #[test]

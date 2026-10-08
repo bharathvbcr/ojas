@@ -169,6 +169,138 @@ kernel void ojas_silu_bwd(
     if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
+// `gy * s(x) * s(-x)`: `s * (1 - s)` without the cancellation above x ~ 17,
+// where `s` rounds to 1 in f32 (the CPU's expression).
+kernel void ojas_sigmoid_fwd(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    device atomic_uint *st [[buffer(3)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const float v = x[i];
+    const float r = ojas_sigmoid_ref(v);
+    y[i] = r;
+    if (!isfinite(v)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
+kernel void ojas_sigmoid_bwd(
+    device const float *x [[buffer(0)]],
+    device const float *g [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint &n [[buffer(3)]],
+    device atomic_uint *st [[buffer(4)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const float v = x[i];
+    const float gy = g[i];
+    const float r = gy * ojas_sigmoid_ref(v) * ojas_sigmoid_ref(-v);
+    out[i] = r;
+    if (!isfinite(v) || !isfinite(gy)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
+/// torch's `F.softplus` at its defaults (beta 1, threshold 20). tessl's
+/// `qwen35_softplus` (`kernels/qwen35_act.h`), copied: MSL has no `log1p`,
+/// and `log(1 + e)` loses most of the value for x in [-15, -8], which
+/// `a + dt_bias` reaches routinely, so below -3 it takes the series
+/// `e - e^2/2 + ... - e^8/8`, exact to f32 there.
+inline float ojas_softplus(float x)
+{
+    if (x > 20.0f) return x;
+    const float e = precise::exp(x);
+    if (x < -3.0f) {
+        float p = -1.0f / 8.0f;
+        p = p * e + 1.0f / 7.0f;
+        p = p * e - 1.0f / 6.0f;
+        p = p * e + 1.0f / 5.0f;
+        p = p * e - 1.0f / 4.0f;
+        p = p * e + 1.0f / 3.0f;
+        p = p * e - 1.0f / 2.0f;
+        p = p * e + 1.0f;
+        return e * p;
+    }
+    return precise::log(1.0f + e);
+}
+
+/// The gated delta rule's log decay `g = -exp(a_log[h]) * softplus(a +
+/// dt_bias[h])` over `a` `[rows, heads]`, one thread per element.
+kernel void ojas_gdn_decay_fwd(
+    device const float *a [[buffer(0)]],
+    device const float *a_log [[buffer(1)]],
+    device const float *dt_bias [[buffer(2)]],
+    device float *g [[buffer(3)]],
+    constant uint &n [[buffer(4)]],
+    constant uint &heads [[buffer(5)]],
+    device atomic_uint *st [[buffer(6)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const uint h = i % heads;
+    const float av = a[i], lv = a_log[h], dv = dt_bias[h];
+    const float r = -precise::exp(lv) * ojas_softplus(av + dv);
+    g[i] = r;
+    if (!isfinite(av) || !isfinite(lv) || !isfinite(dv)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
+/// `da = gy * -exp(a_log) * softplus'(a + dt_bias)` (1 above 20, the
+/// sigmoid below), one thread per element.
+kernel void ojas_gdn_decay_bwd(
+    device const float *a [[buffer(0)]],
+    device const float *a_log [[buffer(1)]],
+    device const float *dt_bias [[buffer(2)]],
+    device const float *gy [[buffer(3)]],
+    device float *da [[buffer(4)]],
+    constant uint &n [[buffer(5)]],
+    constant uint &heads [[buffer(6)]],
+    device atomic_uint *st [[buffer(7)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const uint h = i % heads;
+    const float av = a[i], lv = a_log[h], dv = dt_bias[h], gv = gy[i];
+    const float x = av + dv;
+    const float slope = x > 20.0f ? 1.0f : ojas_sigmoid_ref(x);
+    const float r = gv * -precise::exp(lv) * slope;
+    da[i] = r;
+    if (!isfinite(av) || !isfinite(lv) || !isfinite(dv) || !isfinite(gv)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
+/// `da_log[h]` sums `gy * g` and `ddt_bias[h]` sums `da` over the rows, one
+/// thread per head walking rows in ascending order (the CPU's order), so
+/// the sums do not depend on the launch.
+kernel void ojas_gdn_decay_bwd_sum(
+    device const float *a [[buffer(0)]],
+    device const float *a_log [[buffer(1)]],
+    device const float *dt_bias [[buffer(2)]],
+    device const float *gy [[buffer(3)]],
+    device const float *da [[buffer(4)]],
+    device float *dlog [[buffer(5)]],
+    device float *ddt [[buffer(6)]],
+    constant uint &rows [[buffer(7)]],
+    constant uint &heads [[buffer(8)]],
+    device atomic_uint *st [[buffer(9)]],
+    uint h [[thread_position_in_grid]])
+{
+    if (h >= heads) return;
+    const float rate = -precise::exp(a_log[h]);
+    const float dv = dt_bias[h];
+    float acc_log = 0.0f, acc_dt = 0.0f;
+    for (uint r = 0; r < rows; ++r) {
+        const ulong i = (ulong)r * heads + h;
+        acc_log += gy[i] * (rate * ojas_softplus(a[i] + dv));
+        acc_dt += da[i];
+    }
+    dlog[h] = acc_log;
+    ddt[h] = acc_dt;
+    if (!isfinite(acc_log) || !isfinite(acc_dt)) ojas_flag(st, ST_OUT);
+}
+
 kernel void ojas_mul_fwd(
     device const float *a [[buffer(0)]],
     device const float *b [[buffer(1)]],

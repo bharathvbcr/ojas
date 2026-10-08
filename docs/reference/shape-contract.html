@@ -244,6 +244,8 @@
 </li>
 <li><code>causal_conv1d_silu_*_dims</code>, <code>gated_rms_norm_*_dims</code>, <code>rope_partial_*_dims</code> validate the Qwen3.5 hybrid-layer ops (<code>Conv1dDims</code>, <code>RmsDims</code>, <code>PartialRopeDims</code>).
 </li>
+<li><code>sigmoid_*_dims</code> (one <code>F32</code> shape) and <code>gdn_log_decay_*_dims</code> (<code>a</code> <code>[..., H]</code> of rank 1 or more, <code>a_log</code> and <code>dt_bias</code> <code>[H]</code>, <code>GdnDecayDims</code>; 2026-10-08) validate the attention output gate and the delta rule&#39;s gates. Unit cases in <code>ojas-core/src/shapes.rs</code>; CPU and Metal refusals in <code>ojas-{cpu,metal}/tests/hybrid.rs</code>.
+</li>
 </ul>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/shape-contract.md" rel="noopener"><code>docs/shape-contract.md</code></a>. If this page and the repository disagree, the repository wins.</p>

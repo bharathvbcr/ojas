@@ -223,7 +223,7 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 </ul>
 <p>Each list must partition the parameters. Every parameter matches exactly one rule in each list, and every rule matches at least one parameter. Anything else is refused.</p>
 <p>No exclusion is built in. tessl&#39;s <code>default_weight_decay</code> is never called. The tests express transformers&#39; norm and <code>dt_bias</code> exclusions as data, and also decay everything, to show this.</p>
-<p><strong>Per-parameter learning rates are refused today.</strong> tessl&#39;s AdamW takes a single learning rate. <code>OptimizerPlan::check_tessl_lr</code> refuses any scale other than exactly 1.0, naming the missing capability: a per-entry <code>lr_scale</code> in tessl&#39;s <code>adamw_step</code>, in progress on tessl branch <code>lappi-train-lrscale-mrope</code>. A uniform scale is also refused. Folding it into the learning rate is the caller&#39;s decision.</p>
+<p><strong>Per-parameter learning rates are torch param groups.</strong> <code>Qwen35Step::adamw_step</code> passes the plan&#39;s scales to tessl&#39;s <code>Qwen35Model::adamw_step_scaled</code>, so entry <code>i</code> learns at <code>lr * lr_scale[i]</code>. The scaled learning rate forms both the decoupled decay and the step size, as a torch param group at that rate would. A scale of 0 freezes a parameter while its moments still update. Each distinct effective <code>(lr * scale, weight decay)</code> pair goes through ojas-core&#39;s <code>check_adamw</code> before any device work. <code>gpu_tiny_per_group_lr_scales_the_update</code> checks each group against torch&#39;s update at its own rate.</p>
 <h2 id="loading-and-why-tessls-loader">Loading, and why tessl&#39;s loader <a class="anchor" href="#loading-and-why-tessls-loader" aria-label="Link to this section">#</a></h2>
 <p><code>Snapshot::from_dir</code> runs on the CPU:</p>
 <ol>
@@ -323,7 +323,9 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 </li>
 <li>tessl&#39;s tiny fixture header;
 </li>
-<li>optimizer-plan construction and the learning-rate refusal;
+<li>optimizer-plan construction and per-entry learning-rate scales;
+</li>
+<li><code>Qwen35TextConfig::tape_spec</code> against the tower map, for the real 2B config and tessl&#39;s tiny fixture (<code>tests/cpu_tape_spec.rs</code>);
 </li>
 <li>sequence, gradient and clip checks;
 </li>
@@ -340,7 +342,10 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 </li>
 </ul>
 <div class="code"><span class="code-lang">text</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_tiny
-cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_real_2b</code></pre></div>
+cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_real_2b
+cargo test -p ojas-qwen35 --release --test gpu_tape_2b -- --ignored --test-threads=1 --nocapture gpu_real_2b</code></pre></div>
+<h2 id="the-same-tower-on-ojass-tape">The same tower on ojas&#39;s Tape <a class="anchor" href="#the-same-tower-on-ojass-tape" aria-label="Link to this section">#</a></h2>
+<p><code>ojas_model::qwen35</code> writes the Qwen3.5 text tower once over ojas-model&#39;s <code>Graph</code>, so it trains on <code>ojas_autograd::Tape</code> on any backend with the hybrid ops (CPU and Metal natively) instead of through tessl&#39;s monolithic step. <code>Qwen35TextConfig::tape_spec</code> hands it the shape this crate&#39;s parser validated, so <code>config.json</code> still has one reader. On tessl&#39;s tiny fixture it matches transformers on the CPU and on Metal (<code>ojas-model/tests/qwen35_{fixture,metal_tape}.rs</code>). <code>tests/gpu_tape_2b.rs</code> runs the real 2B through the Metal tape, each layer a checkpointed segment, against this provider&#39;s step on the same tokens. The two never hold the model at once.</p>
 <h2 id="json">JSON <a class="anchor" href="#json" aria-label="Link to this section">#</a></h2>
 <p><code>config.json</code> and <code>model.safetensors.index.json</code> are read with ojas-io&#39;s strict reader (<code>parse_json_with</code>). The limits are depth 32 and 16 MiB of input. Duplicate keys are refused.</p>
 <p>A dimension must be an integer literal; <code>2048.0</code> is refused. A float field written as an integer must be exact in <code>f64</code>, so <code>9007199254740993</code> is refused, not rounded. An integer literal beyond the <code>u64</code>/<code>i64</code> range is refused anywhere in the file.</p>
@@ -364,6 +369,7 @@ cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-thread
 <li class="sub"><a href="#device-working-set">Device working set</a></li>
 <li><a href="#threading">Threading</a></li>
 <li><a href="#tests">Tests</a></li>
+<li><a href="#the-same-tower-on-ojass-tape">The same tower on ojas&#39;s Tape</a></li>
 <li><a href="#json">JSON</a></li>
 </ol></nav>
   </div>

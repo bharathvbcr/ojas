@@ -1,16 +1,18 @@
 //! One op vocabulary, two executors (`docs/framework-design.md` §2).
 //!
-//! [`Graph`] has one method per op the nanolab block uses. `Tape<B>`
+//! [`Graph`] has one method per op the nanolab block and the Qwen3.5 hybrid
+//! layers ([`crate::qwen35`]) use. `Tape<B>`
 //! records each op for training (`V = Var`); [`Eval`] runs it eagerly with
 //! no record (`V = Tensor`). Both call the same [`Backend`] method for every
 //! op, so under `Numerics::Exact` their forward values are equal bit for bit.
 
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, BackendId, CeChunk, OjasError, Tensor};
+use ojas_core::{Backend, BackendId, CeChunk, GdnInputs, OjasError, Tensor};
 
 use crate::spec::ModelSpec;
 
-/// The ops the nanolab block and head need.
+/// The ops the nanolab block, the Qwen3.5 hybrid layers and their heads
+/// need.
 ///
 /// Host tensors passed by reference (`ids`, `cos`, `sin`, `targets`, a KV
 /// cache) are made resident on the executor's backend; a tensor already
@@ -63,6 +65,44 @@ pub trait Graph {
     /// Value residual `(1 - s) v + s v0`, `s = sigmoid(lambda)`.
     fn vres(&mut self, v: &Self::V, v0: &Self::V, lambda: &Self::V) -> Result<Self::V, OjasError>;
     fn silu(&mut self, x: &Self::V) -> Result<Self::V, OjasError>;
+    fn sigmoid(&mut self, x: &Self::V) -> Result<Self::V, OjasError>;
+    /// [`Backend::gdn_log_decay_forward`]: `a` `[..., H]`, `a_log` and
+    /// `dt_bias` `[H]`.
+    fn gdn_log_decay(
+        &mut self,
+        a: &Self::V,
+        a_log: &Self::V,
+        dt_bias: &Self::V,
+    ) -> Result<Self::V, OjasError>;
+    /// [`Backend::causal_conv1d_silu_forward`]: `x` `[B, T, C]`, `w` `[C, K]`.
+    fn conv1d_silu(&mut self, x: &Self::V, w: &Self::V) -> Result<Self::V, OjasError>;
+    /// The gated delta rule from a zero state
+    /// ([`Backend::chunked_gdn_forward`]): `q`, `k` `[B, T, H, Dk]`, `v`
+    /// `[B, T, H, Dv]`, `g` and `beta` `[B, T, H]`. Returns `[B, T, H, Dv]`.
+    fn gdn(
+        &mut self,
+        q: &Self::V,
+        k: &Self::V,
+        v: &Self::V,
+        g: &Self::V,
+        beta: &Self::V,
+    ) -> Result<Self::V, OjasError>;
+    /// [`Backend::gated_rms_norm_forward`].
+    fn gated_rms_norm(
+        &mut self,
+        x: &Self::V,
+        z: &Self::V,
+        w: &Self::V,
+        eps: f32,
+    ) -> Result<Self::V, OjasError>;
+    /// [`Backend::rope_partial_forward`]: `x` `[B, T, H, D]`, `cos` and `sin`
+    /// `[T, R]`.
+    fn rope_partial(
+        &mut self,
+        x: &Self::V,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Self::V, OjasError>;
     fn mul(&mut self, a: &Self::V, b: &Self::V) -> Result<Self::V, OjasError>;
     fn add(&mut self, x: &Self::V, y: &Self::V) -> Result<Self::V, OjasError>;
     /// The same contiguous values under another shape. No bytes move.
@@ -159,6 +199,30 @@ impl<B: Backend> Graph for Tape<B> {
 
     fn silu(&mut self, x: &Var) -> Result<Var, OjasError> {
         Tape::silu(self, *x)
+    }
+
+    fn sigmoid(&mut self, x: &Var) -> Result<Var, OjasError> {
+        Tape::sigmoid(self, *x)
+    }
+
+    fn gdn_log_decay(&mut self, a: &Var, a_log: &Var, dt_bias: &Var) -> Result<Var, OjasError> {
+        Tape::gdn_log_decay(self, *a, *a_log, *dt_bias)
+    }
+
+    fn conv1d_silu(&mut self, x: &Var, w: &Var) -> Result<Var, OjasError> {
+        Tape::causal_conv1d_silu(self, *x, *w)
+    }
+
+    fn gdn(&mut self, q: &Var, k: &Var, v: &Var, g: &Var, beta: &Var) -> Result<Var, OjasError> {
+        Tape::chunked_gdn(self, *q, *k, *v, *g, *beta)
+    }
+
+    fn gated_rms_norm(&mut self, x: &Var, z: &Var, w: &Var, eps: f32) -> Result<Var, OjasError> {
+        Tape::gated_rms_norm(self, *x, *z, *w, eps)
+    }
+
+    fn rope_partial(&mut self, x: &Var, cos: &Tensor, sin: &Tensor) -> Result<Var, OjasError> {
+        Tape::rope_partial(self, *x, cos.clone(), sin.clone())
     }
 
     fn mul(&mut self, a: &Var, b: &Var) -> Result<Var, OjasError> {
@@ -303,6 +367,63 @@ impl<B: Backend> Graph for Eval<B> {
 
     fn silu(&mut self, x: &Tensor) -> Result<Tensor, OjasError> {
         self.backend.silu_forward(x)
+    }
+
+    fn sigmoid(&mut self, x: &Tensor) -> Result<Tensor, OjasError> {
+        self.backend.sigmoid_forward(x)
+    }
+
+    fn gdn_log_decay(
+        &mut self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.backend.gdn_log_decay_forward(a, a_log, dt_bias)
+    }
+
+    fn conv1d_silu(&mut self, x: &Tensor, w: &Tensor) -> Result<Tensor, OjasError> {
+        self.backend.causal_conv1d_silu_forward(x, w)
+    }
+
+    fn gdn(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        g: &Tensor,
+        beta: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let out = self.backend.chunked_gdn_forward(GdnInputs {
+            q,
+            k,
+            v,
+            g,
+            beta,
+            initial_state: None,
+        })?;
+        Ok(out.output)
+    }
+
+    fn gated_rms_norm(
+        &mut self,
+        x: &Tensor,
+        z: &Tensor,
+        w: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.backend.gated_rms_norm_forward(x, z, w, eps)
+    }
+
+    fn rope_partial(
+        &mut self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let cos = self.place(cos)?;
+        let sin = self.place(sin)?;
+        self.backend.rope_partial_forward(x, &cos, &sin)
     }
 
     fn mul(&mut self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {

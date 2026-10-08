@@ -1,5 +1,6 @@
 //! Qwen3.5's hybrid-layer ops on the tape: `causal_conv1d_silu`,
-//! `gated_rms_norm` and `rope_partial` record their forward, and backward
+//! `gated_rms_norm`, `rope_partial`, `sigmoid` and `gdn_log_decay` record
+//! their forward, and backward
 //! hands every input exactly the gradient the backend's backward chain
 //! gives, bit for bit, directly and inside a checkpointed segment. The ops'
 //! own numerics are checked in `ojas-cpu/tests/hybrid.rs`.
@@ -130,4 +131,68 @@ fn tape_gradients_are_the_backend_backward_chain() {
 #[test]
 fn inside_a_checkpointed_segment_the_gradients_are_the_same_bits() {
     assert_eq!(tape_grads(true), tape_grads(false));
+}
+
+/// The delta rule's gates: `g = gdn_log_decay(a, a_log, dt_bias)` and
+/// `beta = sigmoid(b)`, then `(g * beta) * r`. Returns the gradients of `a`,
+/// `a_log`, `dt_bias` and `b`.
+fn gate_grads(checkpoint: bool) -> [Vec<u32>; 4] {
+    let be = cpu();
+    let bud = be.budget().clone();
+    let f = |seed, n, lo, hi, shape: &[usize]| {
+        Tensor::from_f32(&vals(seed, n, lo, hi), shape, &bud).unwrap()
+    };
+    let shape = [B, T, H];
+    let (a, b) = (
+        f(6, B * T * H, -8.0, 8.0, &shape),
+        f(7, B * T * H, -4.0, 4.0, &shape),
+    );
+    let (a_log, dt) = (f(8, H, -1.0, 1.0, &[H]), f(9, H, -7.0, -2.0, &[H]));
+    let r = f(10, B * T * H, -1.0, 1.0, &shape);
+    let mut t = Tape::new(be);
+    let v = [a, a_log, dt, b].map(|x| t.leaf(x).unwrap());
+    let r = t.leaf(r).unwrap();
+    let body = |t: &mut Tape| {
+        let g = t.gdn_log_decay(v[0], v[1], v[2])?;
+        let beta = t.sigmoid(v[3])?;
+        t.mul(g, beta).map(|y| vec![y])
+    };
+    let y = if checkpoint {
+        t.checkpoint(body).unwrap()[0]
+    } else {
+        body(&mut t).unwrap()[0]
+    };
+    let loss = t.mul(y, r).unwrap();
+    t.backward(loss).unwrap();
+    v.map(|v| bits(t.grad(v).unwrap()))
+}
+
+#[test]
+fn gate_gradients_are_the_backend_backward_chain() {
+    let be = cpu();
+    let bud = be.budget().clone();
+    let f = |seed, n, lo, hi, shape: &[usize]| {
+        Tensor::from_f32(&vals(seed, n, lo, hi), shape, &bud).unwrap()
+    };
+    let shape = [B, T, H];
+    let (a, b) = (
+        f(6, B * T * H, -8.0, 8.0, &shape),
+        f(7, B * T * H, -4.0, 4.0, &shape),
+    );
+    let (a_log, dt) = (f(8, H, -1.0, 1.0, &[H]), f(9, H, -7.0, -2.0, &[H]));
+    let r = f(10, B * T * H, -1.0, 1.0, &shape);
+    let g = be.gdn_log_decay_forward(&a, &a_log, &dt).unwrap();
+    let beta = be.sigmoid_forward(&b).unwrap();
+    // d((g * beta) * r)/d(g * beta) is r.
+    let (gg, gbeta) = be.mul_backward(&g, &beta, &r).unwrap();
+    let dg = be.gdn_log_decay_backward(&a, &a_log, &dt, &gg).unwrap();
+    let db = be.sigmoid_backward(&b, &gbeta).unwrap();
+    let want = [
+        bits(&dg.input),
+        bits(&dg.a_log),
+        bits(&dg.dt_bias),
+        bits(&db),
+    ];
+    assert_eq!(gate_grads(false), want);
+    assert_eq!(gate_grads(true), want);
 }

@@ -33,6 +33,7 @@
 use ojas_io::{parse_json_with, JsonLimits, JsonNumber, JsonValue};
 
 use crate::error::{Qwen35Error, Result};
+use ojas_model::qwen35::{Qwen35Mixer, Qwen35Spec};
 
 /// Which mixer a layer runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -791,6 +792,38 @@ impl Qwen35TextConfig {
             .iter()
             .map(|t| t.numel() as u64)
             .sum()
+    }
+
+    /// The same tower as ojas-model's [`Qwen35Spec`], for the hybrid graph
+    /// on `ojas_autograd::Tape` (`ojas_model::qwen35`). This parser stays
+    /// the one reader of `config.json`; the spec is built from what it
+    /// validated (GDN value heads equal key heads; query heads a multiple of
+    /// KV heads; text-only MRoPE, which is plain partial RoPE).
+    pub fn tape_spec(&self) -> Qwen35Spec {
+        let n = |v: u32| v as usize;
+        Qwen35Spec {
+            vocab: n(self.vocab),
+            hidden: n(self.hidden),
+            intermediate: n(self.intermediate),
+            layers: self
+                .layers
+                .iter()
+                .map(|k| match k {
+                    LayerKind::LinearAttention => Qwen35Mixer::GatedDeltaNet,
+                    LayerKind::FullAttention => Qwen35Mixer::Attention,
+                })
+                .collect(),
+            q_heads: n(self.q_heads),
+            kv_heads: n(self.kv_heads),
+            head_dim: n(self.head_dim),
+            rotary_dim: n(self.rotary_dim),
+            rope_theta: self.rope_theta,
+            gdn_heads: n(self.gdn_key_heads),
+            gdn_key_dim: n(self.gdn_key_dim),
+            gdn_value_dim: n(self.gdn_value_dim),
+            conv_width: n(self.conv_kernel),
+            eps: self.rms_norm_eps as f32,
+        }
     }
 
     /// An exact, readable one-line statement of the shape, stored in every

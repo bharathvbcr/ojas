@@ -703,8 +703,11 @@ dependencies = [
 name = "ojas-qwen35"
 version = "0.1.0"
 dependencies = [
+ "ojas-autograd",
  "ojas-core",
  "ojas-io",
+ "ojas-metal",
+ "ojas-model",
  "tessl",
 ]
 

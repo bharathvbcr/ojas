@@ -11,6 +11,9 @@
 //!   (training) and [`Eval`] (eager). [`block`] is the nanolab block over
 //!   any `Graph`; [`forward_loss`] ends in the fused tied-head CE, with
 //!   each block optionally a checkpointed segment ([`ActivationCheckpoint`]).
+//! - [`qwen35`]: the Qwen3.5 hybrid text tower (gated delta net and gated
+//!   attention layers) over the same [`Graph`], loaded from a Hugging Face
+//!   checkpoint.
 //! - [`Trainer`]: the §3 step on any `Backend`; [`Trainer::save`] and
 //!   [`Trainer::resume_from`] for the §4 checkpoint directory.
 
@@ -23,6 +26,7 @@ mod init;
 mod json;
 mod load;
 mod names;
+pub mod qwen35;
 mod spec;
 mod trainer;
 

@@ -67,6 +67,17 @@ Parameters are drawn deterministically from a `CounterRng` seeded with `seed ^ f
 
 ---
 
+## Qwen3.5 Hybrid Tower (`ojas_model::qwen35`)
+
+The Qwen3.5 text tower (gated delta net and gated attention layers, 3:1 in the 2B) written once over the same `Graph`, so it trains on `Tape` on the CPU and natively on Metal and runs eagerly on `Eval`.
+
+* **Spec:** `Qwen35Spec` holds the dims. ojas-qwen35's `Qwen35TextConfig::tape_spec` builds it from a Hugging Face `config.json`, which keeps one parser.
+* **Weights:** `load_hf` reads a Hugging Face checkpoint, bf16 widened exactly, under its tower prefix. `in_proj_qkv` and the depthwise `conv1d` are split into their `q`, `k` and `v` row blocks, and `q_proj` into its per-head query and output-gate rows, so the graph needs no slice op. `fuse_grads` is the inverse for gradients.
+* **Forward:** `forward_loss` runs to the fused tied-head cross-entropy. Every `Qwen3_5RMSNorm` scales by `1 + w`, formed once per weight on the graph before any layer, so the parameter keeps Hugging Face's value and name. `ActivationCheckpoint::Blocks` makes each layer a checkpointed segment.
+* **Gates:** `tests/qwen35_fixture.rs` covers the CPU tape against transformers on tessl's tiny fixture: the loss, all 27 gradients, checkpointed against direct bit for bit, and `Eval` against the tape. `tests/qwen35_metal_tape.rs` covers the same on Metal. `ojas-qwen35/tests/gpu_tape_2b.rs` covers the real 2B.
+
+---
+
 ## Trainer Guarantees & Lifecycle
 
 1. **Preflight Memory Bounds:** Before computing forward passes, `Trainer` evaluates `budget.check_room(self.preflight_bytes(rows, k))` to confirm headroom for activation tapes and optimizer scratch.

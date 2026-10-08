@@ -60,20 +60,21 @@ use ojas_core::{
     causal_sdpa_forward_dims, check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims,
     clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
     cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
-    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, kv_cache_write_dims,
-    linear_backward_dims, linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims,
-    muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims,
-    permute_dims, refuse_bf16_operands, refuse_unsupported_metal_gdn,
-    refuse_unsupported_metal_head_dim, residual_add_backward_dims, residual_add_forward_dims,
-    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
-    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    rope_partial_backward_dims, rope_partial_forward_dims, silu_backward_dims, silu_forward_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
-    BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDims,
-    GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
-    OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout,
-    SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM,
-    METAL_GDN_VALUE_BLOCK,
+    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
+    gdn_log_decay_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
+    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
+    refuse_bf16_operands, refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim,
+    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
+    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
+    rope_half_split_backward_dims, rope_half_split_forward_dims, rope_partial_backward_dims,
+    rope_partial_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
+    silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
+    AdamWConfig, Backend, BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims,
+    GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
+    Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad,
+    Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad,
+    MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
 };
 
 use crate::link::{
@@ -1597,6 +1598,68 @@ impl Backend for MetalBackend {
         const OP: &str = "rope_partial_backward";
         let dims = rope_partial_backward_dims(grad_output, cos, sin)?;
         rope_partial(self, OP, &dims, [grad_output, cos, sin], true)
+    }
+
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_forward";
+        sigmoid_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        self.one(OP, input.shape(), 0, Cmd::Sigmoid { x })
+    }
+
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_backward";
+        sigmoid_backward_dims(input, grad_output)?;
+        let x = self.f32(OP, input)?;
+        let gy = self.f32(OP, grad_output)?;
+        self.one(OP, input.shape(), 0, Cmd::SigmoidBwd { x, gy })
+    }
+
+    fn gdn_log_decay_forward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "gdn_log_decay_forward";
+        let dims = gdn_log_decay_forward_dims(a, a_log, dt_bias)?;
+        let heads = u32_dim(OP, dims.heads)?;
+        let cmd = Cmd::GdnDecay {
+            a: self.f32(OP, a)?,
+            a_log: self.f32(OP, a_log)?,
+            dt_bias: self.f32(OP, dt_bias)?,
+            heads,
+        };
+        self.one(OP, a.shape(), 0, cmd)
+    }
+
+    fn gdn_log_decay_backward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<GdnDecayGrad, OjasError> {
+        const OP: &str = "gdn_log_decay_backward";
+        let dims = gdn_log_decay_backward_dims(a, a_log, dt_bias, grad_output)?;
+        let heads = u32_dim(OP, dims.heads)?;
+        let cmd = Cmd::GdnDecayBwd {
+            a: self.f32(OP, a)?,
+            a_log: self.f32(OP, a_log)?,
+            dt_bias: self.f32(OP, dt_bias)?,
+            gy: self.f32(OP, grad_output)?,
+            heads,
+        };
+        let shapes = [a.shape(), a_log.shape(), dt_bias.shape()];
+        let mut out = self.outputs(OP, &shapes, 0, cmd)?.into_iter();
+        match (out.next(), out.next(), out.next()) {
+            (Some(input), Some(a_log), Some(dt_bias)) => Ok(GdnDecayGrad {
+                input,
+                a_log,
+                dt_bias,
+            }),
+            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        }
     }
 
     fn value_residual_blend_forward(

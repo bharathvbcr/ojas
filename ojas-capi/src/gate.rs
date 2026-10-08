@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex};
 
 use ojas_core::{
     AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, GatedRmsGrad,
-    GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Numerics, OjasError, OptimizerKind,
-    PerHeadGateGrad, Tensor, ValueResidualGrad,
+    GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Numerics, OjasError,
+    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 
 /// The per-call cancel check: `Err` carries the cancel's own message
@@ -449,6 +449,34 @@ impl<B: Backend> Backend for Gated<B> {
     ) -> Result<Tensor, OjasError> {
         self.enter("rope_partial_backward", true)?;
         self.inner.rope_partial_backward(grad_output, cos, sin)
+    }
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.enter("sigmoid_forward", true)?;
+        self.inner.sigmoid_forward(input)
+    }
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.enter("sigmoid_backward", true)?;
+        self.inner.sigmoid_backward(input, grad_output)
+    }
+    fn gdn_log_decay_forward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.enter("gdn_log_decay_forward", true)?;
+        self.inner.gdn_log_decay_forward(a, a_log, dt_bias)
+    }
+    fn gdn_log_decay_backward(
+        &self,
+        a: &Tensor,
+        a_log: &Tensor,
+        dt_bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<GdnDecayGrad, OjasError> {
+        self.enter("gdn_log_decay_backward", true)?;
+        self.inner
+            .gdn_log_decay_backward(a, a_log, dt_bias, grad_output)
     }
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         self.enter("silu_forward", true)?;

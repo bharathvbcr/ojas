@@ -125,12 +125,14 @@ No exclusion is built in. tessl's `default_weight_decay` is never called. The
 tests express transformers' norm and `dt_bias` exclusions as data, and also
 decay everything, to show this.
 
-**Per-parameter learning rates are refused today.** tessl's AdamW takes a
-single learning rate. `OptimizerPlan::check_tessl_lr` refuses any scale other
-than exactly 1.0, naming the missing capability: a per-entry `lr_scale` in
-tessl's `adamw_step`, in progress on tessl branch
-`lappi-train-lrscale-mrope`. A uniform scale is also refused. Folding it into
-the learning rate is the caller's decision.
+**Per-parameter learning rates are torch param groups.** `Qwen35Step::adamw_step`
+passes the plan's scales to tessl's `Qwen35Model::adamw_step_scaled`, so
+entry `i` learns at `lr * lr_scale[i]`. The scaled learning rate forms both
+the decoupled decay and the step size, as a torch param group at that rate
+would. A scale of 0 freezes a parameter while its moments still update. Each
+distinct effective `(lr * scale, weight decay)` pair goes through ojas-core's
+`check_adamw` before any device work. `gpu_tiny_per_group_lr_scales_the_update`
+checks each group against torch's update at its own rate.
 
 ## Loading, and why tessl's loader
 
@@ -249,7 +251,9 @@ tests and never opens a GPU runtime. It covers:
 - config parsing and every refusal;
 - the tower map against the real 2B config;
 - tessl's tiny fixture header;
-- optimizer-plan construction and the learning-rate refusal;
+- optimizer-plan construction and per-entry learning-rate scales;
+- `Qwen35TextConfig::tape_spec` against the tower map, for the real 2B config
+  and tessl's tiny fixture (`tests/cpu_tape_spec.rs`);
 - sequence, gradient and clip checks;
 - state-format round trips and refusals through ojas-io;
 - save-target refusals: anything present, and symbolic links.
@@ -264,7 +268,21 @@ These tests are `#[ignore]`d:
 ```text
 cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_tiny
 cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_real_2b
+cargo test -p ojas-qwen35 --release --test gpu_tape_2b -- --ignored --test-threads=1 --nocapture gpu_real_2b
 ```
+
+## The same tower on ojas's Tape
+
+`ojas_model::qwen35` writes the Qwen3.5 text tower once over ojas-model's
+`Graph`, so it trains on `ojas_autograd::Tape` on any backend with the
+hybrid ops (CPU and Metal natively) instead of through tessl's monolithic
+step. `Qwen35TextConfig::tape_spec` hands it the shape this crate's parser
+validated, so `config.json` still has one reader. On tessl's tiny fixture it
+matches transformers on the CPU and on Metal
+(`ojas-model/tests/qwen35_{fixture,metal_tape}.rs`). `tests/gpu_tape_2b.rs`
+runs the real 2B through the Metal tape, each layer a checkpointed segment,
+against this provider's step on the same tokens. The two never hold the
+model at once.
 
 ## JSON
 

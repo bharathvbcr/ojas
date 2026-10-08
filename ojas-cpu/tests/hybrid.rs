@@ -1,5 +1,6 @@
 //! Qwen3.5's hybrid-layer ops on the CPU: `causal_conv1d_silu`,
-//! `gated_rms_norm` and `rope_partial`, forward against f64 references of
+//! `gated_rms_norm`, `rope_partial`, `sigmoid` and `gdn_log_decay`, forward
+//! against f64 references of
 //! the published formulas (tessl's `tests/common/qwen35.rs` oracles,
 //! transformers' `Qwen3_5RMSNormGated` and causal conv), backward against
 //! central differences of those references, and the bit-level contracts:
@@ -544,5 +545,182 @@ fn refusals() {
         1e-6,
     ));
     assert_nonfinite(ample.rope_partial_forward(&f(f32::NAN, &[1, 2, 1, 8]), &c, &c));
+    assert_eq!(ample.budget().live_bytes().unwrap(), 0);
+}
+
+// ---- sigmoid and the GDN log decay -------------------------------------
+
+fn sigmoid64(x: f64) -> f64 {
+    1.0 / (1.0 + (-x).exp())
+}
+
+/// torch's `F.softplus` at its defaults, in f64.
+fn softplus64(x: f64) -> f64 {
+    if x > 20.0 {
+        x
+    } else {
+        x.exp().ln_1p()
+    }
+}
+
+#[test]
+fn sigmoid_forward_and_backward_match_the_reference() {
+    let shape = [3, 5, 7];
+    let n = 3 * 5 * 7;
+    let x = rounded(&vals(30, n, -30.0, 30.0));
+    let gy = rounded(&vals(31, n, -1.0, 1.0));
+    let want: Vec<f64> = x.iter().map(|&v| sigmoid64(v)).collect();
+    let want_g: Vec<f64> = x
+        .iter()
+        .zip(&gy)
+        .map(|(&v, &g)| g * sigmoid64(v) * sigmoid64(-v))
+        .collect();
+    for numerics in [Numerics::Exact, Numerics::Fast] {
+        let be = cpu(1, numerics);
+        let xt = t(&be, &x, &shape);
+        let y = be.sigmoid_forward(&xt).unwrap();
+        close("sigmoid", &host(&y), &want, 0.0, 1e-6);
+        let g = be.sigmoid_backward(&xt, &t(&be, &gy, &shape)).unwrap();
+        close("sigmoid grad", &host(&g), &want_g, 0.0, 1e-5);
+    }
+}
+
+/// `(g, da, da_log, ddt_bias)` in f64 for `a` `[rows, heads]`. With
+/// `f32_sum`, `a + dt_bias` is rounded to f32 first, as the kernel (and
+/// transformers) adds; without it the reference is smooth enough for
+/// central differences.
+fn decay_ref(
+    a: &[f64],
+    a_log: &[f64],
+    dt: &[f64],
+    gy: &[f64],
+    f32_sum: bool,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let h = a_log.len();
+    let (mut g, mut da) = (vec![0.0; a.len()], vec![0.0; a.len()]);
+    let (mut dlog, mut ddt) = (vec![0.0; h], vec![0.0; h]);
+    for i in 0..a.len() {
+        let j = i % h;
+        let x = if f32_sum {
+            f64::from(a[i] as f32 + dt[j] as f32)
+        } else {
+            a[i] + dt[j]
+        };
+        let rate = -a_log[j].exp();
+        g[i] = rate * softplus64(x);
+        let slope = if x > 20.0 { 1.0 } else { sigmoid64(x) };
+        da[i] = gy[i] * rate * slope;
+        dlog[j] += gy[i] * g[i];
+        ddt[j] += da[i];
+    }
+    (g, da, dlog, ddt)
+}
+
+/// Inputs reaching every branch: above the threshold 20, around 0, and far
+/// below (Qwen's `dt_bias` sits around -2 to -7, so `a + dt_bias` reaches
+/// -15 and below, where `ln(1 + e^x)` in f32 loses most of the value).
+fn decay_inputs(rows: usize, heads: usize) -> [Vec<f64>; 4] {
+    let a = rounded(&vals(40, rows * heads, -20.0, 30.0));
+    let a_log = rounded(&vals(41, heads, -1.0, 1.0));
+    let dt = rounded(&vals(42, heads, -7.0, -2.0));
+    let gy = rounded(&vals(43, rows * heads, -1.0, 1.0));
+    [a, a_log, dt, gy]
+}
+
+#[test]
+fn gdn_log_decay_forward_and_backward_match_the_reference() {
+    let (rows, heads) = (2 * 37, 5);
+    let [a, a_log, dt, gy] = decay_inputs(rows, heads);
+    assert!(a.iter().any(|&v| v + dt[0] > 20.0) && a.iter().any(|&v| v + dt[0] < -15.0));
+    let (g, da, dlog, ddt) = decay_ref(&a, &a_log, &dt, &gy, true);
+    for numerics in [Numerics::Exact, Numerics::Fast] {
+        let be = cpu(1, numerics);
+        let shape = [2, 37, heads];
+        let (at, lt, dtt) = (
+            t(&be, &a, &shape),
+            t(&be, &a_log, &[heads]),
+            t(&be, &dt, &[heads]),
+        );
+        let y = be.gdn_log_decay_forward(&at, &lt, &dtt).unwrap();
+        assert_eq!(y.shape(), &shape);
+        close("g", &host(&y), &g, 0.0, 1e-6);
+        let grad = be
+            .gdn_log_decay_backward(&at, &lt, &dtt, &t(&be, &gy, &shape))
+            .unwrap();
+        close("da", &host(&grad.input), &da, 0.0, 1e-6);
+        close("da_log", &host(&grad.a_log), &dlog, 1e-5, 1e-5);
+        close("ddt_bias", &host(&grad.dt_bias), &ddt, 1e-5, 1e-5);
+    }
+    // Away from the threshold the analytic gradient is the central
+    // difference of the f64 forward.
+    let a: Vec<f64> = a.iter().map(|v| v.clamp(-10.0, 10.0)).collect();
+    let (_, da, dlog, ddt) = decay_ref(&a, &a_log, &dt, &gy, false);
+    let loss = |a: &[f64], l: &[f64], d: &[f64]| dot(&decay_ref(a, l, d, &gy, false).0, &gy);
+    close(
+        "fd da",
+        &f32s(&da),
+        &numeric_grad(&a, |p| loss(p, &a_log, &dt)),
+        1e-6,
+        1e-4,
+    );
+    close(
+        "fd da_log",
+        &f32s(&dlog),
+        &numeric_grad(&a_log, |p| loss(&a, p, &dt)),
+        1e-5,
+        1e-4,
+    );
+    close(
+        "fd ddt",
+        &f32s(&ddt),
+        &numeric_grad(&dt, |p| loss(&a, &a_log, p)),
+        1e-5,
+        1e-4,
+    );
+}
+
+#[test]
+fn sigmoid_and_decay_bits_do_not_depend_on_the_thread_count() {
+    let (rows, heads) = (4096, 16);
+    let [a, a_log, dt, gy] = decay_inputs(rows, heads);
+    let run = |threads: usize| {
+        let be = cpu(threads, Numerics::Fast);
+        let shape = [rows, heads];
+        let (at, lt, dtt) = (
+            t(&be, &a, &shape),
+            t(&be, &a_log, &[heads]),
+            t(&be, &dt, &[heads]),
+        );
+        let gyt = t(&be, &gy, &shape);
+        let s = be.sigmoid_forward(&at).unwrap();
+        let sg = be.sigmoid_backward(&at, &gyt).unwrap();
+        let y = be.gdn_log_decay_forward(&at, &lt, &dtt).unwrap();
+        let g = be.gdn_log_decay_backward(&at, &lt, &dtt, &gyt).unwrap();
+        [s, sg, y, g.input, g.a_log, g.dt_bias].map(|t| bits(&host(&t)))
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn sigmoid_and_decay_refusals() {
+    let host_budget = Budget::new(1 << 20);
+    let f = |v: f32, shape: &[usize]| {
+        let n = shape.iter().product();
+        Tensor::from_f32(&vec![v; n], shape, &host_budget).unwrap()
+    };
+    let none = CpuBackend::new(Budget::new(0));
+    let (a, h) = (f(1.0, &[2, 3]), f(1.0, &[3]));
+    assert_shape(none.sigmoid_backward(&a, &f(1.0, &[3, 2])));
+    assert_shape(none.gdn_log_decay_forward(&a, &f(1.0, &[2]), &h));
+    assert_shape(none.gdn_log_decay_backward(&a, &h, &h, &f(1.0, &[2, 2])));
+    assert_eq!(none.budget().live_bytes().unwrap(), 0);
+    assert_capacity(none.sigmoid_forward(&a));
+    assert_capacity(none.gdn_log_decay_forward(&a, &h, &h));
+    assert_capacity(none.gdn_log_decay_backward(&a, &h, &h, &a).map(drop));
+    let ample = CpuBackend::new(Budget::new(1 << 20));
+    assert_nonfinite(ample.sigmoid_forward(&f(f32::NAN, &[2])));
+    assert_nonfinite(ample.gdn_log_decay_forward(&a, &f(f32::INFINITY, &[3]), &h));
+    // exp(a_log) overflows: the output is refused, not returned.
+    assert_nonfinite(ample.gdn_log_decay_forward(&f(30.0, &[2, 3]), &f(100.0, &[3]), &h));
     assert_eq!(ample.budget().live_bytes().unwrap(), 0);
 }

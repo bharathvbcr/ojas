@@ -140,6 +140,54 @@ checkout's workspace root, and gusset's logical path sits under it. This
 session pointed the two gusset path dependencies at the real path, as a
 local, uncommitted edit.
 
+### Re-audit (2026-10-08, main at 470e2cc)
+- **Criteria 1–5 and 7 re-verified** on main, release, `--test-threads=1`, all
+  green: ojas-core lib (144 + 3 ignored), ojas-autograd `checkpoint` (7),
+  ojas-model `activation_checkpoint` (2) and `metal_hybrid_tape` (2),
+  ojas-cpu `hybrid`/`permute`/`shape_first` (8/8/1), ojas-metal
+  `hybrid`/`permute`/`shape_first` (9/11/5), ojas-wgpu `permute`/`shape_first`
+  (9/4), ojas-qwen35 `cpu_groups` (4). No backend defines its own
+  `accumulate_grad` or `permute` validator; CPU, Metal and wgpu all call
+  `ojas_core::{accumulate_grad_dims, permute_dims}`.
+- **8 still blocked.** tessl main (144aa9b) `Qwen35Model::adamw_step` takes one
+  `AdamWHyper` and per-entry `weight_decay` only, with no `lr_scale`. No
+  `lappi-train-lrscale-mrope` branch, local or remote. `check_tessl_lr` stays.
+- **6 and 9 unchanged.** Both need the user's decision: a hybrid block in
+  ojas-model (6), and the ~50 GB 2B Metal runs (9). The HF cache has
+  `Qwen3.5-2B` and `Qwen3.5-4B-Base` but not `Qwen3.5-2B-Base`, which
+  `gpu_parity.rs::snapshot_dir` expects unless `QWEN35_2B_SNAPSHOT` is set.
+
+### Code work (2026-10-08, branch `feat/qwen35-hybrid-tape`, uncommitted)
+- **6: the Qwen3.5 tower on Tape.** `ojas_model::qwen35` (`spec.rs`,
+  `params.rs`, `forward.rs`) is the hybrid text tower over `Graph`:
+  `load_hf` splits `in_proj_qkv`, `conv1d` and `q_proj` into row blocks
+  (`fuse_grads` inverts it); every `Qwen3_5RMSNorm` is `1 + w` formed on the
+  graph; `ActivationCheckpoint::Blocks` checkpoints each layer. Two new
+  Backend ops back it, with validators in `shapes.rs`, CPU, Metal
+  (`ojas_sigmoid_*`, `ojas_gdn_decay_*`), autocast, capi gate and Tape:
+  `sigmoid_*` (attention output gate, `beta`) and `gdn_log_decay_*` (`g`).
+  `Qwen35TextConfig::tape_spec` (ojas-qwen35) feeds it the parsed config.
+- **Verified on tessl's tiny fixture** (copied to
+  `ojas-model/tests/fixtures/qwen35_tiny`): the CPU tape matches transformers'
+  loss to f32 and all 27 gradients within 3.8e-6 of peak; Metal within 8.2e-8
+  (loss) and 2.8e-6 (gradients), and within 2e-4 of the CPU tape; checkpointed
+  equals direct bit for bit on both; `Eval` gives the tape's loss bits. Two
+  planted layout mutants (no `1 + w`, swapped q/gate rows) fail the gate.
+  `cpu_tape_spec.rs` pins the tape's tensor names to the provider's for the
+  real 2B config.
+- **Not yet run:** `ojas-qwen35/tests/gpu_tape_2b.rs`
+  (`gpu_real_2b_tape_forward_backward_matches_the_provider`), the real 2B
+  through the Metal tape against tessl's step. It needs ~40 GB, and other
+  sessions held 2B jobs on the GPU throughout this session.
+- **8: per-parameter LR.** tessl (uncommitted): `Qwen35Model::adamw_step_scaled`,
+  `adamw_step` delegates; tests in `tests/qwen35_adamw.rs`. ojas-qwen35:
+  `check_tessl_lr` removed, `adamw_step` passes `plan.lr_scale()`;
+  `gpu_tiny_per_group_lr_scales_the_update` and a CPU plan test. Needs the
+  tessl change committed before this branch can merge.
+- **Checks:** workspace fmt and clippy `-D warnings` clean; sitegen `-check`
+  clean; 31 non-GPU and 11 GPU suites of the touched crates green.
+- **9** is unchanged: the 2B save/load and long-sequence headroom runs.
+
 ### Execution plan
 - **Phase 1 (Shape Validator Centralization):** Move `accumulate_grad` and `permute` validation into `ojas_core::shapes`, delete backend copies, and verify zero-length permute axes cross-backend.
 - **Phase 2 (Activation Checkpointing):** Implement block-level activation checkpointing on Tape, verifying exact gradient parity against uncheckpointed runs.
