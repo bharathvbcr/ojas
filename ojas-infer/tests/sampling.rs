@@ -493,7 +493,7 @@ const QWEN_VOCAB: usize = 248_320;
 /// `-0.0` at odd ones.
 fn tied_row(seed: u64, nonpositive: bool) -> Vec<f32> {
     let mut r = SplitMix64::new(seed);
-    (0..QWEN_VOCAB)
+    let mut row: Vec<f32> = (0..QWEN_VOCAB)
         .map(|i| {
             let x = r.next_u64();
             let m = (x >> 8) % 64;
@@ -511,7 +511,13 @@ fn tied_row(seed: u64, nonpositive: bool) -> Vec<f32> {
                 -(m as f32) * 0.25
             }
         })
-        .collect()
+        .collect();
+    if nonpositive {
+        // A `-0.0` ahead of every `+0.0`, whatever the seed, so greedy
+        // must pass over a tied value at a lower index.
+        row[0] = -0.0;
+    }
+    row
 }
 
 /// `sample_token` as it was before the partial select: every finite index
@@ -674,7 +680,26 @@ fn seeded_draws_are_pinned() {
                 .collect::<Vec<_>>(),
         );
     }
-    let want: [[u32; 12]; 3] = [[0; 12], [0; 12], [0; 12]];
+    // The full sort the partial select replaced draws the same ids.
+    for (c, ids) in [
+        cfg(0.8, Some(40), Some(0.95)),
+        cfg(1.0, None, None),
+        cfg(1.7, None, Some(0.5)),
+    ]
+    .iter()
+    .zip(&got)
+    {
+        let mut rng = SplitMix64::new(7);
+        let oracle: Vec<u32> = (0..12)
+            .map(|_| full_sort_oracle(&logits, c, &mut rng))
+            .collect();
+        assert_eq!(&oracle, ids, "{c:?}");
+    }
+    let want = [
+        [59, 261, 239, 607, 224, 84, 224, 646, 276, 59, 534, 227],
+        [239, 714, 0, 301, 99, 607, 6, 27, 928, 591, 84, 784],
+        [454, 261, 336, 217, 247, 773, 531, 813, 447, 27, 482, 761],
+    ];
     assert_eq!(got, want);
 }
 

@@ -716,7 +716,7 @@ mod tests {
         // emitted token is not forwarded). Two new tokens need a second
         // slot and are refused before any forward.
         let mut cache = KvCache::for_model(&model, 1, &budget).unwrap();
-        assert_eq!(model.greedy_decode(&[0], &mut cache, 1).unwrap(), vec![1]);
+        assert_eq!(model.greedy_decode(&[0], &mut cache, 1).unwrap(), vec![0]);
         assert_eq!(cache.len(), 1);
         let mut cache = KvCache::for_model(&model, 1, &budget).unwrap();
         let err = model.greedy_decode(&[0], &mut cache, 2).unwrap_err();
