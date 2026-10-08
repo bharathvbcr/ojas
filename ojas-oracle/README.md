@@ -134,6 +134,15 @@ a reader needs an f64-capable JSON parser: `ojas_io::json` keeps integers
 exact and floats as f64. `ojas_oracle::spec::parse_spec` is a reference
 reader.
 
+`ojas-spec-v2` is the same object with one more key, `window` (int, at least
+1): sliding-window attention on every layer, query `t` seeing keys
+`t - window < j <= t`, which is nanolab's `swa` mixer with `swa_sinks = 0`.
+`ojas_model::ModelSpec::to_json` writes v1 for a spec without a window, so
+every exported file is unchanged, and v2 for one with a window;
+`ModelSpec::from_json` reads both (`window` is required in v2 and refused in
+v1). The exporter and `ojas_oracle::spec::parse_spec` stay at v1: they
+refuse any mixer but `attention`, so no windowed checkpoint is exported yet.
+
 Tensor names are nanolab `state_dict` keys (§2): `_orig_mod.` stripped,
 `lm_head.weight` not stored (the exporter first checks it is bit-equal to
 `tok_emb.weight`), all F32.

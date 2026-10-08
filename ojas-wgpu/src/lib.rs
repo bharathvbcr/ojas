@@ -17,7 +17,7 @@ mod backend;
 mod context;
 mod memory;
 
-pub use backend::WgpuBackend;
+pub use backend::{WgpuBackend, WGPU_TOPK_MAX_K};
 pub use context::{
     drop_stats, CacheStats, DropStats, WgpuBuffer, WgpuContext, ALLOW_CPU_ADAPTER_ENV, DROP_WAIT,
     FLUSH_AT, MAX_ELEMENTS, MAX_PARKED_DROPS, POOL_CAP_BYTES,

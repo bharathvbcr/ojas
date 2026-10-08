@@ -427,7 +427,7 @@ impl CpuGpt {
     ) -> Result<Vec<u32>, OjasError> {
         self.check_cache(cache)?;
         let mut step = HostStep { model: self, cache };
-        decode::decode(&mut step, DECODE_OP, prompt, new_tokens, &[], None)
+        decode::decode(&mut step, DECODE_OP, prompt, new_tokens, &[], decode::Pick::Greedy)
     }
 
     /// Sampled continuation of `prompt` ([`crate::sample_token`] with a

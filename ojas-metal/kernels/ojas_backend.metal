@@ -9,8 +9,9 @@
 //   0  an input is non-finite        1  an output or intermediate is non-finite
 // The rest of the slot is unused. Token ids are range-checked, and the
 // cross-entropy valid-row count formed, on the host from its copy of the ids;
-// ids `ojas_argmax_rows` produced are below its column count by construction,
-// which the host checks against the embedding's vocabulary instead.
+// ids `ojas_argmax_rows` and `ojas_topk_rows` produced are below their column
+// count by construction, which the host checks against the embedding's
+// vocabulary instead.
 // The elementwise kernels (silu, mul, add, value-residual) set words 0 and 1
 // from the elements they read and write; every other op runs
 // `ojas_check_finite` over its inputs and outputs.
@@ -808,6 +809,91 @@ kernel void ojas_argmax_rows(
         // A row with no finite value has already set word 0; 0 keeps the
         // output a valid column.
         out[r] = bi[0] == ARGMAX_NONE ? 0u : bi[0];
+    }
+}
+
+/// An f32's rank key: unsigned order of keys is `f32::total_cmp` order, so
+/// `+0.0` outranks `-0.0` and `-inf` ranks below every finite value.
+static inline uint ojas_rank_key(float v) {
+    const uint b = as_type<uint>(v);
+    return b ^ ((b >> 31) != 0u ? 0xFFFFFFFFu : 0x80000000u);
+}
+
+/// Row `r`'s `k` leaders as `ojas_infer::sample_token` ranks candidates:
+/// value descending under `total_cmp`, then column ascending.
+/// `values[r * k + j]` and `ids[r * k + j]` are the `j`-th leader; every id
+/// is `< cols`. One threadgroup per row and `k` rounds: round `j` takes,
+/// over the columns ranked strictly after round `j - 1`'s pick (a smaller
+/// key, or the same key at a higher column), the largest key, then the
+/// lowest column: a strided walk per lane (rising columns, so a strict `>`
+/// keeps the lowest column of equal keys), then a tree over the lanes. The
+/// first round's walk sets status word 0 for a NaN or `+inf` (the host
+/// reports it at the next sync); `-inf` is a value. Distinct (key, column)
+/// pairs leave `cols - j` candidates in round `j`, so every round picks.
+kernel void ojas_topk_rows(
+    device const float *x [[buffer(0)]],
+    device float *values [[buffer(1)]],
+    device uint *ids [[buffer(2)]],
+    device atomic_uint *st [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &cols [[buffer(5)]],
+    constant uint &k [[buffer(6)]],
+    uint r [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]])
+{
+    threadgroup uint bk[ARGMAX_TG];
+    threadgroup uint bi[ARGMAX_TG];
+    if (r >= rows) return;
+    const ulong base = (ulong)r * cols;
+    const ulong obase = (ulong)r * k;
+    uint pk = 0u;
+    uint pi = ARGMAX_NONE;
+    for (uint j = 0u; j < k; ++j) {
+        uint best_k = 0u;
+        uint best_i = ARGMAX_NONE;
+        bool bad = false;
+        for (uint c = lane; c < cols; c += ARGMAX_TG) {
+            const float v = x[base + c];
+            const uint key = ojas_rank_key(v);
+            if (j == 0u && (isnan(v) || v == INFINITY)) {
+                bad = true;
+            }
+            const bool after = j == 0u || key < pk || (key == pk && c > pi);
+            if (after && (best_i == ARGMAX_NONE || key > best_k)) {
+                best_k = key;
+                best_i = c;
+            }
+        }
+        if (bad) {
+            atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
+        }
+        bk[lane] = best_k;
+        bi[lane] = best_i;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint s = ARGMAX_TG / 2u; s > 0u; s >>= 1u) {
+            if (lane < s) {
+                const uint ok = bk[lane + s];
+                const uint oi = bi[lane + s];
+                const uint mi = bi[lane];
+                const bool take = oi != ARGMAX_NONE
+                    && (mi == ARGMAX_NONE || ok > bk[lane] || (ok == bk[lane] && oi < mi));
+                if (take) {
+                    bk[lane] = ok;
+                    bi[lane] = oi;
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        pk = bk[0];
+        pi = bi[0];
+        if (lane == 0u) {
+            // Unreachable for 1 <= k <= cols; 0 keeps the id a valid column.
+            const uint col = pi == ARGMAX_NONE ? 0u : pi;
+            values[obase + j] = x[base + col];
+            ids[obase + j] = col;
+        }
+        // Every lane has read the pick before the next round overwrites it.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 }
 

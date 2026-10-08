@@ -10,7 +10,7 @@
 use ojas_core::OjasError;
 
 use crate::gpt::argmax_token;
-use crate::sample::{sample_token, GenerateConfig, SplitMix64};
+use crate::sample::{draw, ranked_candidates, sample_token, GenerateConfig, SamplingConfig, SplitMix64};
 
 /// A model plus its KV cache, forwarded from where the cache ends.
 pub(crate) trait Forward {
@@ -27,10 +27,18 @@ pub(crate) trait Forward {
     fn forward_greedy(&mut self, tokens: &[u32]) -> Result<u32, OjasError> {
         argmax_token(&self.forward(tokens)?)
     }
+    /// [`Self::forward`], then the `k` leaders of the logits as
+    /// [`ranked_candidates`] gives them: finite `(id, logit)` pairs ranked by
+    /// (logit desc, index asc), the refusals of [`sample_token`]. A device
+    /// decoder overrides it to select where the logits are and read back
+    /// only the `k` leaders.
+    fn forward_top(&mut self, tokens: &[u32], k: usize) -> Result<Vec<(u32, f32)>, OjasError> {
+        ranked_candidates(&self.forward(tokens)?, Some(k))
+    }
 }
 
-/// Sampled continuation of `prompt`: [`sample_token`] with a [`SplitMix64`]
-/// seeded from `cfg.seed`.
+/// Sampled continuation of `prompt`: [`sample_token`]'s draw with a
+/// [`SplitMix64`] seeded from `cfg.seed`.
 pub(crate) fn generate(
     f: &mut impl Forward,
     op: &'static str,
@@ -39,30 +47,54 @@ pub(crate) fn generate(
 ) -> Result<Vec<u32>, OjasError> {
     cfg.sampling.validate()?;
     let mut rng = SplitMix64::new(cfg.seed);
-    let mut select = |logits: &[f32]| sample_token(logits, &cfg.sampling, &mut rng);
     decode(
         f,
         op,
         prompt,
         cfg.max_new_tokens,
         &cfg.stop_tokens,
-        Some(&mut select),
+        Pick::Sample(&cfg.sampling, &mut rng),
     )
 }
 
-/// Picks the next id from a logit row.
-type Select<'a> = &'a mut dyn FnMut(&[f32]) -> Result<u32, OjasError>;
+/// How the decode loop picks the next id.
+pub(crate) enum Pick<'a> {
+    /// [`Forward::forward_greedy`]: `argmax_token`, which refuses `-inf`.
+    Greedy,
+    /// [`sample_token`]'s draw. When it needs only the leaders (temperature
+    /// 0, or a `top_k`), it reads them through [`Forward::forward_top`];
+    /// otherwise the whole logit row.
+    Sample(&'a SamplingConfig, &'a mut SplitMix64),
+}
 
-/// The decode loop. `select` picks the next id from a logit row; `None`
-/// is greedy through [`Forward::forward_greedy`]. A stop token is emitted
-/// and ends the loop.
+impl Pick<'_> {
+    fn next(&mut self, f: &mut impl Forward, tokens: &[u32]) -> Result<u32, OjasError> {
+        match self {
+            Pick::Greedy => f.forward_greedy(tokens),
+            Pick::Sample(cfg, rng) => {
+                let leaders = if cfg.temperature == 0.0 {
+                    Some(1)
+                } else {
+                    cfg.top_k
+                };
+                match leaders {
+                    Some(k) => draw(&f.forward_top(tokens, k)?, cfg, rng),
+                    None => sample_token(&f.forward(tokens)?, cfg, rng),
+                }
+            }
+        }
+    }
+}
+
+/// The decode loop. `pick` picks each next id. A stop token is emitted and
+/// ends the loop.
 pub(crate) fn decode(
     f: &mut impl Forward,
     op: &'static str,
     prompt: &[u32],
     new_tokens: usize,
     stop_tokens: &[u32],
-    mut select: Option<Select<'_>>,
+    mut pick: Pick<'_>,
 ) -> Result<Vec<u32>, OjasError> {
     if prompt.is_empty() {
         return Err(OjasError::Shape {
@@ -94,17 +126,13 @@ pub(crate) fn decode(
         f.forward(prompt)?;
         return Ok(out);
     }
-    let mut step = |tokens: &[u32]| match select.as_mut() {
-        Some(select) => select(&f.forward(tokens)?),
-        None => f.forward_greedy(tokens),
-    };
-    let mut next = step(prompt)?;
+    let mut next = pick.next(f, prompt)?;
     loop {
         out.push(next);
         if out.len() == new_tokens || stop_tokens.contains(&next) {
             break;
         }
-        next = step(&[next])?;
+        next = pick.next(f, &[next])?;
     }
     Ok(out)
 }

@@ -117,11 +117,7 @@ impl HostGen {
 impl Gen for HostGen {
     fn prefill(&mut self, prompt: &[u32]) -> R<Vec<f32>> {
         let mut cache = self.cache()?;
-        let mut logits = Vec::new();
-        for &id in prompt {
-            logits = self.model.forward_token(id, &mut cache)?;
-        }
-        Ok(logits)
+        self.model.forward_tokens(prompt, &mut cache)
     }
 
     fn greedy(&mut self, prompt: &[u32], n: usize) -> R<Vec<u32>> {
@@ -261,6 +257,48 @@ pub fn run_device<Bk: Backend>(r: &mut Runner<'_, Bk>) {
         run(r, &mut dec);
         Ok(())
     });
+    if r.want(&names[1]) {
+        if let Err(e) = readback(r, &names[1]) {
+            let body = format!("\"detail\":{}", json_string(&format!("{e}")));
+            emit_info(r, &names[1], "_gen_readback", &body);
+        }
+    }
+}
+
+/// What reading one `[1, vocab]` logit row back costs on this backend, min
+/// of [`READBACK_ITERS`]: `Tensor::to_host` (the device read, then the
+/// decode of its bytes into a typed host tensor: the transient double copy
+/// of `docs/typed-storage-plan.md`) against `DeviceBuffer::read_bytes`
+/// alone. The difference is what a read straight into a caller's buffer
+/// would save. A host backend has no device buffer and reports nothing.
+fn readback<Bk: Backend>(r: &mut Runner<'_, Bk>, row: &str) -> R<()> {
+    const READBACK_ITERS: usize = 50;
+    let vocab = spec().vocab;
+    let host = Tensor::from_f32(&gen(vocab, 77, -1), &[1, vocab], &r.host)?;
+    let dev = r.be.upload(&host)?;
+    r.be.sync()?;
+    let Some(buf) = dev.device_buffer() else {
+        return Ok(());
+    };
+    let bytes = vocab * 4;
+    let min_us = |f: &mut dyn FnMut() -> R<()>| -> R<f64> {
+        let mut best = f64::INFINITY;
+        for _ in 0..READBACK_ITERS {
+            let t = std::time::Instant::now();
+            f()?;
+            best = best.min(t.elapsed().as_secs_f64() * 1e6);
+        }
+        Ok(best)
+    };
+    let to_host = min_us(&mut || dev.to_host(&r.host).map(drop))?;
+    let raw = min_us(&mut || buf.read_bytes(0, bytes).map(drop))?;
+    let body = format!(
+        "\"bytes\":{bytes},\"to_host_us\":{to_host:.2},\"read_bytes_us\":{raw:.2},\
+         \"decode_pass_us\":{:.2},\"iters\":{READBACK_ITERS}",
+        to_host - raw
+    );
+    emit_info(r, row, "_gen_readback", &body);
+    Ok(())
 }
 
 /// The `CpuGpt` lane.

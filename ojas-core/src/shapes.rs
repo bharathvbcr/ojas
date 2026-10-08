@@ -382,6 +382,31 @@ pub fn argmax_rows_dims(x: &Tensor) -> Result<(usize, usize), OjasError> {
     Ok((rows, cols))
 }
 
+/// [`crate::Backend::topk_rows`]: `x` `F32` `[rows, cols]` and
+/// `1 <= k <= cols`. Returns `(rows, cols)`. Both must fit `u32` (so `k`
+/// and every result id do too); a zero extent is refused as for any operand.
+/// `k` out of `1..=cols` is [`OjasError::OutOfRange`].
+pub fn topk_rows_dims(x: &Tensor, k: usize) -> Result<(usize, usize), OjasError> {
+    const OP: &str = "topk_rows";
+    f32_operand(OP, x)?;
+    let &[rows, cols] = x.shape() else {
+        return Err(refuse(
+            OP,
+            format!("rank {} != 2 [rows, cols]", x.shape().len()),
+        ));
+    };
+    if u32::try_from(rows).is_err() || u32::try_from(cols).is_err() {
+        return Err(too_large(
+            OP,
+            format!("[{rows}, {cols}] does not fit u32 ids"),
+        ));
+    }
+    if k == 0 || k > cols {
+        return Err(too_large(OP, format!("k = {k} is outside 1..={cols}")));
+    }
+    Ok((rows, cols))
+}
+
 /// [`crate::Backend::embedding_forward`]: `table` `[vocab, dim]` `F32`,
 /// `token_ids` `U32` of any rank (rank 0 included). The output is
 /// `ids.shape ++ [dim]`. Id range is the backend's to check.
@@ -3395,5 +3420,31 @@ mod tests {
             DType::F32,
             DType::U32,
         );
+    }
+
+    #[test]
+    fn topk_rows_takes_a_rank_2_f32_and_k_in_one_to_cols() {
+        let op = "topk_rows";
+        assert_eq!(topk_rows_dims(&f(&[3, 5]), 1).unwrap(), (3, 5));
+        assert_eq!(topk_rows_dims(&f(&[3, 5]), 5).unwrap(), (3, 5));
+        range_err(topk_rows_dims(&f(&[3, 5]), 0), op, "k = 0");
+        range_err(topk_rows_dims(&f(&[3, 5]), 6), op, "k = 6");
+        range_err(topk_rows_dims(&f(&[3, 5]), usize::MAX), op, "1..=5");
+        shape_err(topk_rows_dims(&f(&[15]), 1), op, "rank 1");
+        shape_err(topk_rows_dims(&f(&[1, 3, 5]), 1), op, "rank 3");
+        shape_err(topk_rows_dims(&f(&[0, 5]), 1), op, "empty tensor");
+        shape_err(topk_rows_dims(&f(&[3, 0]), 1), op, "empty tensor");
+        dtype_err(topk_rows_dims(&u(&[3, 5]), 1), op, DType::F32, DType::U32);
+        dtype_err(
+            topk_rows_dims(&of(DType::Bf16, &[3, 5]), 1),
+            op,
+            DType::F32,
+            DType::Bf16,
+        );
+        // Columns or rows past u32 (metadata only: nothing is allocated).
+        let wide = phantom(DType::F32, &[1, 1 << 32]);
+        range_err(topk_rows_dims(&wide, 1), op, "does not fit u32");
+        let tall = broadcast(DType::F32, &[1 << 32, 2]);
+        range_err(topk_rows_dims(&tall, 1), op, "does not fit u32");
     }
 }

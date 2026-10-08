@@ -306,7 +306,7 @@ impl<B: Backend> DeviceDecoder<B> {
         prompt: &[u32],
         new_tokens: usize,
     ) -> Result<Vec<u32>, OjasError> {
-        decode::decode(self, DECODE_OP, prompt, new_tokens, &[], None)
+        decode::decode(self, DECODE_OP, prompt, new_tokens, &[], decode::Pick::Greedy)
     }
 
     /// Sampled continuation of `prompt`, the same loop and sampler as

@@ -169,6 +169,7 @@ const KERNELS: &[&str] = &[
     "ojas_rope",
     "ojas_embed_fwd",
     "ojas_argmax_rows",
+    "ojas_topk_rows",
     "ojas_embed_count",
     "ojas_scan_exclusive",
     "ojas_embed_place",
@@ -994,6 +995,7 @@ impl Worker {
                 dim,
             } => self.embed(table, ids, vocab, dim),
             Cmd::Argmax { x, rows, cols } => self.argmax(x, rows, cols),
+            Cmd::Topk { x, rows, cols, k } => self.topk(x, rows, cols, k),
             Cmd::EmbedBwd {
                 table,
                 ids,
@@ -1313,6 +1315,30 @@ impl Worker {
             set_u32(b, cols, 4);
         })?;
         Ok(self.keep(vec![out]))
+    }
+
+    /// Each row's `k` leaders through `ojas_topk_rows`, one threadgroup per
+    /// row and `k` rounds. The kernel flags a NaN or `+inf` input in word 0
+    /// itself (`-inf` is a value), so no separate finite pass runs.
+    fn topk(&mut self, x: Arg, rows: u32, cols: u32, k: u32) -> Res<Reply> {
+        const OP: &str = "topk_rows";
+        let xv = self.view(x)?;
+        let n = (rows as usize)
+            .checked_mul(k as usize)
+            .ok_or_else(|| metal_err(format!("{OP}: [{rows}, {k}] overflows")))?;
+        let values = self.fresh(n)?;
+        let ids = self.fresh(n)?;
+        let st = self.status(OP)?;
+        self.ktg("ojas_topk_rows", rows as usize, 1, 256, |b| {
+            bind(b, &xv, 0);
+            bind(b, &values, 1);
+            bind(b, &ids, 2);
+            bind_st(b, &st, 3);
+            set_u32(b, rows, 4);
+            set_u32(b, cols, 5);
+            set_u32(b, k, 6);
+        })?;
+        Ok(self.keep(vec![values, ids]))
     }
 
     /// Deterministic scatter-add: count rows per id, prefix-sum the counts,

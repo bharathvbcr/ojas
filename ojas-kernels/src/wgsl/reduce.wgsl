@@ -159,3 +159,88 @@ fn argmax_rows(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw
         yu[row] = r;
     }
 }
+
+// topk_rows: one workgroup per row and k rounds, ranked as
+// `ojas_infer::sample_token` ranks candidates: value descending under
+// `total_cmp`, then column ascending. Round j takes, over the columns ranked
+// strictly after round j - 1's pick (a smaller key, or the same key at a
+// higher column), the largest key, then the lowest column: a strided walk per
+// lane (rising columns, so a strict > keeps the lowest column of equal keys),
+// then a tree over the lanes. The first round's walk raises the op's fault for
+// a NaN or +inf; -inf is a value. Distinct (key, column) pairs leave cols - j
+// candidates in round j, so every round picks.
+var<workgroup> top_k: array<u32, 256>;
+var<workgroup> top_i: array<u32, 256>;
+
+// An f32's rank key: unsigned order of keys is `f32::total_cmp` order, so
+// +0.0 outranks -0.0 and -inf ranks below every finite value.
+fn rank_key(v: f32) -> u32 {
+    let b = bitcast<u32>(v);
+    return b ^ select(0x80000000u, 0xffffffffu, (b >> 31u) != 0u);
+}
+
+// Words: 0 rows, 1 cols, 2 k. y0[row * k + j] and yu[row * k + j] are the
+// row's j-th leader's value and column.
+@compute @workgroup_size(256, 1, 1)
+fn topk_rows(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let row = flat_group(wg, nwg);
+    let rows = pw(0u);
+    let cols = pw(1u);
+    let k = pw(2u);
+    // `row` and `k` are the same for every lane of the workgroup, so this
+    // return and the round loop leave the barriers in uniform control flow.
+    if (row >= rows) {
+        return;
+    }
+    let base = row * cols;
+    var pk = 0u;
+    var pi = ARG_NONE;
+    for (var j = 0u; j < k; j = j + 1u) {
+        var best_k = 0u;
+        var best_i = ARG_NONE;
+        var bad = false;
+        for (var c = lid.x; c < cols; c = c + 256u) {
+            let v = x0[base + c];
+            let key = rank_key(v);
+            if (j == 0u && nonfinite(v) && bitcast<u32>(v) != 0xff800000u) {
+                bad = true;
+            }
+            let after = j == 0u || key < pk || (key == pk && c > pi);
+            if (after && (best_i == ARG_NONE || key > best_k)) {
+                best_k = key;
+                best_i = c;
+            }
+        }
+        if (bad) {
+            raise();
+        }
+        top_k[lid.x] = best_k;
+        top_i[lid.x] = best_i;
+        workgroupBarrier();
+        for (var s = 128u; s > 0u; s = s >> 1u) {
+            if (lid.x < s) {
+                let ck = top_k[lid.x + s];
+                let oi = top_i[lid.x + s];
+                let mi = top_i[lid.x];
+                if (oi != ARG_NONE && (mi == ARG_NONE || ck > top_k[lid.x] || (ck == top_k[lid.x] && oi < mi))) {
+                    top_k[lid.x] = ck;
+                    top_i[lid.x] = oi;
+                }
+            }
+            workgroupBarrier();
+        }
+        pk = top_k[0];
+        pi = top_i[0];
+        if (lid.x == 0u) {
+            // Unreachable for 1 <= k <= cols; 0 keeps the id a valid column.
+            var col = pi;
+            if (col == ARG_NONE) {
+                col = 0u;
+            }
+            y0[row * k + j] = x0[base + col];
+            yu[row * k + j] = col;
+        }
+        // Every lane has read the pick before the next round overwrites it.
+        workgroupBarrier();
+    }
+}

@@ -617,6 +617,10 @@ impl<B: Backend> Backend for Gated<B> {
         self.enter("argmax_rows", true)?;
         self.inner.argmax_rows(x)
     }
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.enter("topk_rows", true)?;
+        self.inner.topk_rows(x, k)
+    }
     fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
         self.enter("cast_bf16", true)?;
         self.inner.cast_bf16(tensor)

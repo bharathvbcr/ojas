@@ -590,7 +590,7 @@ fn cases() -> Vec<Case> {
     for (name, cache, src, at, nan) in [
         ("src heads", f(&[1, 5, 2, 3]), f(&[1, 2, 3, 3]), 0, 0),
         ("cache rank 3", f(&[5, 2, 3]), f(&[1, 2, 2, 3]), 0, 1),
-        ("past capacity", f(&[1, 5, 2, 3]), f(&[1, 2, 2, 3]), 4, 1),
+        ("more positions than slots", f(&[1, 5, 2, 3]), f(&[1, 6, 2, 3]), 0, 1),
     ] {
         v.push(case(
             &format!("kv_cache_write {name}"),

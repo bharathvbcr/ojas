@@ -1095,6 +1095,12 @@ impl<B: Backend> Backend for Autocast<B> {
         self.pass()?;
         self.inner.argmax_rows(x)
     }
+
+    /// A selection, not arithmetic: the operand passes through unrounded.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.pass()?;
+        self.inner.topk_rows(x, k)
+    }
 }
 
 #[cfg(test)]
@@ -2285,7 +2291,7 @@ mod tests {
         };
         let wrapped = Autocast::new(&inner);
         let checked = every_call_reaches_except(&wrapped, &inner, &["autocast_region"]);
-        assert_eq!(checked, 57);
+        assert_eq!(checked, 58);
     }
 
     #[test]

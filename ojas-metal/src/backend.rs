@@ -69,12 +69,12 @@ use ojas_core::{
     rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
     rope_half_split_backward_dims, rope_half_split_forward_dims, rope_partial_backward_dims,
     rope_partial_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
-    silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims,
-    GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
-    Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad,
-    Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad,
-    MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
+    silu_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    value_residual_blend_forward_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk,
+    Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward,
+    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
 };
 
 use crate::link::{
@@ -97,7 +97,7 @@ pub struct MetalBuffer {
 enum Ids {
     /// An upload: the values themselves.
     Host(Arc<[u32]>),
-    /// Produced on the device (`argmax_rows`): every value is below this
+    /// Produced on the device (`argmax_rows`, `topk_rows`): every value is below this
     /// bound, by construction. Enough to range-check an embedding lookup;
     /// an op that needs the values (a valid-row count) refuses it.
     Below(u32),
@@ -647,6 +647,10 @@ const METAL_GATED_RMS_BWD_MAX_DIM: usize = 512;
 /// Rows per weight-gradient block of tessl's gated-norm backward
 /// (`GATED_UNITS_PER_BLOCK`).
 const METAL_GATED_RMS_BWD_ROWS: usize = 64;
+/// Largest `k` `ojas_topk_rows` takes. The kernel walks the whole row once
+/// per leader, so its cost grows as `k * cols`; sampling's top-k sits far
+/// below this, and a larger `k` belongs to a sort, not `k` selection rounds.
+pub const METAL_TOPK_MAX_K: usize = 1024;
 
 /// The conv kernels' geometry of validated `d`: a width tessl is compiled
 /// for, and `batch * seq` within 32-bit indexing.
@@ -1117,6 +1121,62 @@ impl Backend for MetalBackend {
         };
         let buf: Arc<dyn DeviceBuffer> = buf;
         Tensor::from_device_reserved(buf, &[rows], DType::U32, reservation)
+    }
+
+    /// `ojas_topk_rows`: one threadgroup per row and `k` rounds over the
+    /// row, so the kernel's cost is `k * cols / 256` reads per lane; `k` past
+    /// [`METAL_TOPK_MAX_K`] is [`OjasError::Unsupported`]. A NaN or `+inf` input
+    /// is a deferred fault, reported at the next sync. Both results stay on
+    /// the device; the ids carry [`Ids::Below`]`(cols)`, so they can feed
+    /// `embedding_forward` with no readback and no host copy.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "topk_rows";
+        let (rows, cols) = topk_rows_dims(x, k)?;
+        if k > METAL_TOPK_MAX_K {
+            return Err(OjasError::Unsupported {
+                op: OP,
+                detail: format!("k = {k} is past the Metal kernel's {METAL_TOPK_MAX_K}"),
+            });
+        }
+        let xa = self.f32(OP, x)?;
+        let (r, c, kk) = (u32_dim(OP, rows)?, u32_dim(OP, cols)?, u32_dim(OP, k)?);
+        let n = rows.checked_mul(k).ok_or_else(|| overflow(OP))?;
+        let value_charge = self.reserve(OP, n)?;
+        let id_charge = self.reserve(OP, n)?;
+        let bufs = match self.link.call(Cmd::Topk {
+            x: xa,
+            rows: r,
+            cols: c,
+            k: kk,
+        })? {
+            Reply::Bufs(bufs) => bufs,
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        // Wrapped before the count check, so a surplus buffer is freed. The
+        // first is the values (F32), the second the ids.
+        let mut owned: Vec<Arc<MetalBuffer>> = bufs
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| {
+                Arc::new(MetalBuffer {
+                    id: b.id,
+                    len: b.bytes,
+                    link: Arc::clone(&self.link),
+                    ids: (i == 1).then_some(Ids::Below(c)),
+                })
+            })
+            .collect();
+        let (Some(id_buf), Some(value_buf), true) = (owned.pop(), owned.pop(), owned.is_empty())
+        else {
+            return Err(metal_err(format!(
+                "{OP}: device did not return two outputs"
+            )));
+        };
+        let value_buf: Arc<dyn DeviceBuffer> = value_buf;
+        let id_buf: Arc<dyn DeviceBuffer> = id_buf;
+        let values = Tensor::from_device_reserved(value_buf, &[rows, k], DType::F32, value_charge)?;
+        let ids = Tensor::from_device_reserved(id_buf, &[rows, k], DType::U32, id_charge)?;
+        Ok((values, ids))
     }
 
     fn embedding_backward(

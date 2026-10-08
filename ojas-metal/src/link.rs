@@ -268,6 +268,14 @@ pub(crate) enum Cmd {
         rows: u32,
         cols: u32,
     },
+    /// Each row's `k` leaders: `[rows, k]` f32 values, then `[rows, k]` u32
+    /// columns.
+    Topk {
+        x: Arg,
+        rows: u32,
+        cols: u32,
+        k: u32,
+    },
     EmbedBwd {
         table: Arg,
         ids: Arg,

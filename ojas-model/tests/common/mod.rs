@@ -1042,6 +1042,10 @@ impl<B: Backend> Backend for Probe<B> {
         self.gate("argmax_rows")?;
         self.inner.argmax_rows(x)
     }
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.gate("topk_rows")?;
+        self.inner.topk_rows(x, k)
+    }
     fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
         self.gate("cast_bf16")?;
         self.inner.cast_bf16(tensor)

@@ -8,7 +8,7 @@ The model is defined once, in `ojas-model`. `GptConfig` is `ojas_model::ModelSpe
 
 ## The block
 
-`CpuGpt` runs nanolab's default attention block (`nanolab/mixers.py` `Attention.forward`, `nanolab/model.py` `Block` and `SwiGLU`):
+Both decoders run nanolab's default attention block (`nanolab/mixers.py` `Attention.forward`, `nanolab/model.py` `Block` and `SwiGLU`):
 
 | step | what | weights |
 | :--- | :--- | :--- |
@@ -24,9 +24,11 @@ The head is the tied embedding (`tok_emb`) after a final RMSNorm (`norm_f`). `he
 
 ## Three forwards, one model
 
-- `CpuGpt::forward_token(token, cache)`: the fast host path. One token at position `cache.len()`; the linears and single-query attention are local (the trait linear repacks the whole weight per call). RMSNorm, QK-norm (fused `rms_qk_norm_forward`), RoPE, the gate, the value residual, SiLU and the product run on `ojas_cpu::CpuBackend`.
-- The full forward is `ojas_model::forward_logits` on `ojas_model::Eval`: the model's one block, using causal SDPA for MHA and `cached_attention_forward` at `kv_len == T` for GQA. Only the training tape refuses GQA.
-- `DeviceDecoder<B>::forward(tokens)`: decode on any `Backend` with the KV cache resident there, one `[1, Tcap, Hkv, D]` key and value tensor per layer. Each layer is `ojas_model::block_with` on `Eval`, the same block the trainer uses (QK-norm as two `rms_norm` calls). Only the attention step belongs to this crate: it writes the new positions' post-RoPE keys and blended values with `kv_cache_write`, then attends with `cached_attention_forward` at `kv_len = len + Tn`. One path serves prefill (several tokens, onto an empty or warm cache) and decode (one token), and it runs GQA. The last position's hidden row is gathered on the device, normed and projected; the `[1, vocab]` logit row is the call's one readback. A call past the capacity is `CapacityExceeded` before anything runs, and a failed call leaves `len` unchanged.
+- `DeviceDecoder<B>::forward(tokens)`: decode on any `Backend` with the KV cache resident there, one `[1, slots, Hkv, D]` key and value tensor per layer. Each layer is `ojas_model::block_with` on `Eval`, the same block the trainer uses. Only the attention step belongs to this crate (`src/cache.rs`): it writes the new positions' post-RoPE keys and blended values with `kv_cache_write`, then attends with `cached_attention_forward` at `kv_len = len + Tn`. One path serves prefill (several tokens, onto an empty or warm cache) and decode (one token), and it runs GQA. Only the last position runs the final norm and the head. A call past the capacity is `CapacityExceeded` before anything runs, and a failed call leaves `len` unchanged.
+- `CpuGpt::forward_tokens(tokens, cache)`: the same step on an `ojas_cpu::CpuBackend` (one thread per core, `Numerics::Fast` by default) against a caller-owned host `KvCache`. `forward_token` is the one-token case. There is no second copy of the block.
+- The full forward is `ojas_model::forward_logits` on `ojas_model::Eval`: causal SDPA, with the model's sliding window if it has one.
+
+**Sliding window.** A `ModelSpec` with `window: Some(W)` attends to the last `W` positions on every layer (nanolab's `swa` mixer with `swa_sinks = 0`). Training (the tape's windowed SDPA) and both decoders read `ModelSpec::attention_window`, which is `None` once `W >= max_seq`. The caches are rings (position `j` in slot `j % slots`); a windowed model keeps `2W - 1` slots instead of the capacity. A call of more than `W` tokens runs as `W`-token pieces, each all or nothing: a failure leaves `len` after the last piece that completed. `truncate` refuses a prefix whose window the ring has overwritten.
 
 `tests/parity.rs` holds cached decode, the full forward and an f64 transcription of nanolab to each other at every position: MHA; GQA with `H*Dh != d`; and a second prompt appended to a warm cache. The decoder's prefill of every prefix is held to the full forward too. G7 holds `forward_token`, `Eval` and `DeviceDecoder<CpuBackend>` to each other over a 4-token prefill and 12 decode steps, on MHA and GQA, under both numerics.
 
@@ -39,7 +41,7 @@ Measured on 2026-10-01 (Apple silicon, release):
 
 ## Decoding
 
-`greedy_decode` and `generate` share one loop (`src/decode.rs`) on both decoders. `DeviceDecoder` forwards the prompt as one prefill; `CpuGpt` forwards it token by token. The prompt is forwarded from the cache's current length; every emitted token except the last is forwarded, so `N` new tokens need `prompt + N - 1` free positions. That is checked before any forward: a request that does not fit is `CapacityExceeded` and the cache is untouched. To continue, pass the last returned token as the first token of the next prompt.
+`greedy_decode` and `generate` share one loop (`src/decode.rs`) on both decoders. Both forward the prompt as one prefill. The prompt is forwarded from the cache's current length; every emitted token except the last is forwarded, so `N` new tokens need `prompt + N - 1` free positions. That is checked before any forward: a request that does not fit is `CapacityExceeded` and the cache is untouched. To continue, pass the last returned token as the first token of the next prompt.
 
 `generate` samples with a `SplitMix64` seeded from `GenerateConfig::seed` (the same stream as `ojas_data::CounterRng`), stops after `max_new_tokens` or right after a stop token (included in the output).
 
@@ -54,5 +56,6 @@ Refused: temperature that is negative or not finite, `top_k == 0`, `top_p` outsi
 ## Safety properties
 
 - An all-NaN logit row is `NonFinite`, never token 0.
-- Linear outputs and residual sums are checked finite, so returned logits are finite.
-- The KV cache is one budget-charged allocation; appending past `max_len` is `CapacityExceeded`, never a clamp or overwrite. A cache shaped for another model, or longer than `max_seq`, is refused before any position is written.
+- The backend's ops refuse non-finite results, so returned logits are finite.
+- `KvCache` is per-layer budget-charged tensors, refused as one request; appending past `max_len` is `CapacityExceeded`, never a clamp or overwrite. A cache shaped for another model (heads, layers, window), or longer than `max_seq`, is refused before any position is written.
+- `reset` and `truncate` (on both `KvCache` and `DeviceDecoder`) roll back to a prefix; the last token `generate` returns is not in the cache.

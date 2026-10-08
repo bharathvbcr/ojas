@@ -68,11 +68,11 @@ use ojas_core::{
     refuse_bf16_operands, require_ns5, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    sdpa_scale, silu_backward_dims, silu_forward_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, DType,
-    LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
-    RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B,
-    MUON_NS5_C, MUON_NS_EPS,
+    sdpa_scale, silu_backward_dims, silu_forward_dims, topk_rows_dims,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
+    BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
+    OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -82,10 +82,15 @@ use ojas_kernels::{
 
 use crate::context::{Job, Kernel, Slot, WgpuBuffer, WgpuContext, FAULT_OPS};
 
+/// Largest `k` the `topk_rows` kernel takes. It walks the whole row once per
+/// leader, so its cost grows as `k * cols`; sampling's top-k sits far below
+/// this, and a larger `k` belongs to a sort, not `k` selection rounds.
+pub const WGPU_TOPK_MAX_K: usize = 1024;
+
 /// One fault bit per op, by index. The fault words hold a 64-bit mask
 /// ([`FAULT_OPS`]); `OP_NAMES` may grow to that many, and the build refuses
 /// more.
-const OP_NAMES: [&str; 34] = [
+const OP_NAMES: [&str; 35] = [
     "embedding_forward",
     "embedding_backward",
     "linear_forward",
@@ -120,6 +125,7 @@ const OP_NAMES: [&str; 34] = [
     "kv_cache_write",
     "cast_bf16",
     "argmax_rows",
+    "topk_rows",
 ];
 
 const _: () = assert!(
@@ -174,6 +180,7 @@ const KVW: Op = Op(31);
 /// Past the low mask word: its bit is bit 0 of fault word 1.
 const CAST: Op = Op(32);
 const ARGMAX: Op = Op(33);
+const TOPK: Op = Op(34);
 
 const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> Kernel {
     Kernel {
@@ -216,6 +223,7 @@ const ROPE: Kernel = k(Pointwise, "rope", &[R(2), R(3), R(4), W(6)]);
 const SUM_PARTIAL: Kernel = k(Reduce, "sum_partial", &[R(2), R(3), R(4), W(5)]);
 const SUM_FINISH: Kernel = k(Reduce, "sum_finish", &[R(2), R(3), W(5)]);
 const ARGMAX_ROWS: Kernel = k(Reduce, "argmax_rows", &[R(2), W(6)]);
+const TOPK_ROWS: Kernel = k(Reduce, "topk_rows", &[R(2), W(5), W(6)]);
 const COL_PARTIAL: Kernel = k(Reduce, "col_partial", &[R(2), R(3), R(4), W(5)]);
 const COL_FINISH: Kernel = k(Reduce, "col_finish", &[R(2), W(5)]);
 const RMS_FWD: Kernel = k(Norm, "rms_fwd", &[R(2), R(3), W(5)]);
@@ -1545,6 +1553,50 @@ impl Backend for WgpuBackend {
         job.dispatch(&ARGMAX_ROWS, &words, &[&xb, &raw], grid)?;
         job.commit()?;
         Ok(y)
+    }
+
+    /// `topk_rows` in `reduce.wgsl`: one workgroup per row and `k` rounds
+    /// over the row, the grid folded past the per-dimension limit. The
+    /// kernel's cost grows as `k * cols / 256` reads per lane, so `k` past
+    /// [`WGPU_TOPK_MAX_K`] is [`OjasError::Unsupported`]. A NaN or `+inf`
+    /// input raises [`TOPK`]'s fault bit, reported at the next sync. The ids
+    /// have no host shadow; they are bounded below `cols`, so they can feed
+    /// `embedding_forward` with no readback.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        let op = TOPK;
+        let (rows, cols) = topk_rows_dims(x, k)?;
+        if k > WGPU_TOPK_MAX_K {
+            return Err(OjasError::Unsupported {
+                op: op.name(),
+                detail: format!("k = {k} is past the wgpu kernel's {WGPU_TOPK_MAX_K}"),
+            });
+        }
+        let xv = self.placed(op, x)?;
+        u(op, xv.elems)?;
+        // The kernel's column walk steps by 256 in u32.
+        if cols > (u32::MAX - 256) as usize {
+            return Err(overflow(op, format!("{cols} columns")));
+        }
+        let words = [u(op, rows)?, u(op, cols)?, u(op, k)?];
+        let bytes = (rows as u64)
+            .checked_mul(k as u64)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or_else(|| overflow(op, "byte length overflows"))?;
+        self.ctx.check_bytes(bytes, &self.budget)?;
+        let value_charge = self.budget.try_reserve(bytes)?;
+        let id_charge = self.budget.try_reserve(bytes)?;
+        let vb = self.ctx.tensor_buffer(bytes)?;
+        let ib = self.ctx.tensor_buffer(bytes)?.bounded(words[1]);
+        let (v_raw, i_raw) = (vb.raw()?.clone(), ib.raw()?.clone());
+        let values =
+            Tensor::from_device_reserved(Arc::new(vb), &[rows, k], DType::F32, value_charge)?;
+        let ids = Tensor::from_device_reserved(Arc::new(ib), &[rows, k], DType::U32, id_charge)?;
+        let grid = self.groups(rows)?;
+        let mut job = self.job(op);
+        let xb = bind(op, &mut job, &xv)?;
+        job.dispatch(&TOPK_ROWS, &words, &[&xb, &v_raw, &i_raw], grid)?;
+        job.commit()?;
+        Ok((values, ids))
     }
 
     fn embedding_backward(
