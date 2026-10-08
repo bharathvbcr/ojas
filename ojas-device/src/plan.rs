@@ -45,6 +45,12 @@ pub trait MemoryProbe {
     fn resident_bytes(&self) -> MemoryReport {
         MemoryReport::Unknown
     }
+    /// The most freed buffers the runtime keeps for reuse. That memory is
+    /// not charged to a [`ojas_core::Budget`], so the plan sets it aside
+    /// from the device's room.
+    fn pool_cache_bytes(&self) -> MemoryReport {
+        MemoryReport::Unknown
+    }
     /// Whether the device's memory is the host's. `Unknown` defers to the
     /// host profile.
     fn architecture(&self) -> MemoryArchitecture {
@@ -55,6 +61,8 @@ pub trait MemoryProbe {
 /// The numbers a caller can act on. Thread counts are advice, not spawn caps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourcePlan {
+    /// [`ResourcePolicy::caller_budget_bytes`], as asked.
+    pub caller_budget_bytes: u64,
     /// The caller budget cut by every known host and cgroup limit, and 0
     /// under [`MemoryPressure::Critical`]. `u64::MAX` only when the caller
     /// asked for that and no limit was known: it is then no bound at all.
@@ -73,13 +81,19 @@ pub struct ResourcePlan {
     pub devices: Vec<Device>,
     /// Parallel to [`ResourcePlan::devices`]. Missing probes stay unknown.
     pub device_memory: Vec<MemoryReport>,
+    /// Parallel to `devices`: [`MemoryProbe::pool_cache_bytes`], unknown
+    /// for a device with no probe.
+    pub device_pool_cache: Vec<MemoryReport>,
     /// Parallel to `devices`: bytes the device can still take, its memory
-    /// less what this process already holds there. For a device that shares
-    /// host memory a known room is also at most `budget_bytes`, so a device
-    /// figure never invites spending RAM the host budget already counts. A
-    /// device that reported no memory has an `Unknown` room even when it
-    /// shares host memory; `shared_budget` still bounds it. `Cpu`'s room is
-    /// `budget_bytes`.
+    /// less what this process already holds there and less the pool cache
+    /// its runtime may keep (uncharged memory that can grow to that cap).
+    /// Residency already counts the buffers cached now, so a known pool cap
+    /// is set aside twice for those: the room errs small, never large. For
+    /// a device that shares host memory a known room is also at most
+    /// `budget_bytes`, so a device figure never invites spending RAM the
+    /// host budget already counts. A device that reported no memory has an
+    /// `Unknown` room even when it shares host memory; `shared_budget`
+    /// still bounds it. `Cpu`'s room is `budget_bytes`.
     pub device_room: Vec<MemoryReport>,
     /// Parallel to `devices`: whether that device draws from host memory.
     /// `Cpu` always does.
@@ -127,6 +141,7 @@ impl ResourcePlan {
         }
         let thread_ceiling = thread_ceiling(host.cpu_count, profile.cpu.cpu_quota_millis);
         let mut device_memory = Vec::with_capacity(policy.devices.len());
+        let mut device_pool_cache = Vec::with_capacity(policy.devices.len());
         let mut device_room = Vec::with_capacity(policy.devices.len());
         let mut device_shares_host = Vec::with_capacity(policy.devices.len());
         let mut shared_budget = false;
@@ -134,6 +149,7 @@ impl ResourcePlan {
             let probe = probes.iter().find(|probe| probe.kind() == *device);
             let memory = probe.map_or(MemoryReport::Unknown, |p| p.memory_bytes());
             let resident = probe.map_or(MemoryReport::Unknown, |p| p.resident_bytes());
+            let pool = probe.map_or(MemoryReport::Unknown, |p| p.pool_cache_bytes());
             let shares = match device {
                 Device::Cpu => true,
                 _ => match probe.map_or(MemoryArchitecture::Unknown, |p| p.architecture()) {
@@ -144,11 +160,18 @@ impl ResourcePlan {
                     }
                 },
             };
-            let mut room = match (memory, resident) {
-                (MemoryReport::Known(m), MemoryReport::Known(r)) => {
-                    MemoryReport::Known(m.saturating_sub(r))
+            let mut room = match memory {
+                MemoryReport::Known(m) => {
+                    let taken = |r: MemoryReport| match r {
+                        MemoryReport::Known(n) => n,
+                        MemoryReport::Unknown => 0,
+                    };
+                    MemoryReport::Known(
+                        m.saturating_sub(taken(resident))
+                            .saturating_sub(taken(pool)),
+                    )
                 }
-                (known, _) => known,
+                MemoryReport::Unknown => MemoryReport::Unknown,
             };
             if *device == Device::Cpu {
                 // The host budget is the CPU's memory; nothing is assumed.
@@ -163,10 +186,12 @@ impl ResourcePlan {
                 shared_budget = true;
             }
             device_memory.push(memory);
+            device_pool_cache.push(pool);
             device_room.push(room);
             device_shares_host.push(shares);
         }
         Self {
+            caller_budget_bytes: policy.caller_budget_bytes,
             budget_bytes: budget,
             thread_ceiling,
             fast_threads: fast_threads(profile, thread_ceiling),
@@ -174,6 +199,7 @@ impl ResourcePlan {
             allow_split: policy.allow_split,
             devices: policy.devices.clone(),
             device_memory,
+            device_pool_cache,
             device_room,
             device_shares_host,
             shared_budget,
@@ -197,6 +223,23 @@ impl ResourcePlan {
             MemoryReport::Unknown => n.clamp(1, u64::from(CPU_THREAD_CEILING)),
         });
         self
+    }
+
+    /// The budget a backend on `device` should charge: the caller's number
+    /// cut by every limit this plan knows for that device, never widened.
+    /// `Cpu`, and a device that shares host memory, start from
+    /// `budget_bytes` (the host limits are theirs); a discrete device starts
+    /// from the caller's number, since host RAM does not bound its memory.
+    /// Either is then cut to the device's room when that is known. `None`
+    /// when `device` is not in the plan.
+    pub fn device_budget(&self, device: Device) -> Option<u64> {
+        let i = self.devices.iter().position(|d| *d == device)?;
+        let start = if self.device_shares_host[i] {
+            self.budget_bytes
+        } else {
+            self.caller_budget_bytes
+        };
+        Some(tighten(start, self.device_room[i]))
     }
 }
 
@@ -251,6 +294,7 @@ mod tests {
         kind: Device,
         memory: MemoryReport,
         resident: MemoryReport,
+        pool: MemoryReport,
         arch: MemoryArchitecture,
     }
 
@@ -263,6 +307,9 @@ mod tests {
         }
         fn resident_bytes(&self) -> MemoryReport {
             self.resident
+        }
+        fn pool_cache_bytes(&self) -> MemoryReport {
+            self.pool
         }
         fn architecture(&self) -> MemoryArchitecture {
             self.arch
@@ -290,7 +337,9 @@ mod tests {
         for host_arch in archs {
             for gpu_arch in archs {
                 for memory in reports() {
-                    for resident in reports() {
+                    for (resident, pool) in reports().into_iter().flat_map(|r| {
+                        [MemoryReport::Unknown, MemoryReport::Known(300)].map(|p| (r, p))
+                    }) {
                         for available in reports() {
                             for caller in [0u64, 1, 1_000, u64::MAX] {
                                 let mut profile = SystemProfile::from_memory(HostMemory {
@@ -304,6 +353,7 @@ mod tests {
                                     kind: Device::Metal,
                                     memory,
                                     resident,
+                                    pool,
                                     arch: gpu_arch,
                                 }];
                                 let plan = ResourcePlan::derive(&policy, &profile, &probes);
@@ -333,6 +383,12 @@ mod tests {
                                             if let MemoryReport::Known(r) = resident {
                                                 assert!(room <= m.saturating_sub(r));
                                             }
+                                            if let MemoryReport::Known(p) = pool {
+                                                assert!(
+                                                    room <= m.saturating_sub(p),
+                                                    "pool not set aside"
+                                                );
+                                            }
                                         }
                                     }
                                     MemoryReport::Unknown => {
@@ -345,6 +401,23 @@ mod tests {
                                 if let MemoryReport::Known(a) = available {
                                     assert!(plan.budget_bytes <= a);
                                 }
+                                assert_eq!(
+                                    plan.device_pool_cache,
+                                    vec![pool, MemoryReport::Unknown]
+                                );
+                                let metal = plan.device_budget(Device::Metal).unwrap();
+                                assert!(metal <= caller, "a device budget widened the caller");
+                                if let MemoryReport::Known(room) = plan.device_room[0] {
+                                    assert!(metal <= room, "a device budget past its room");
+                                }
+                                if shares {
+                                    assert!(metal <= plan.budget_bytes);
+                                }
+                                assert_eq!(
+                                    plan.device_budget(Device::Cpu),
+                                    Some(plan.budget_bytes)
+                                );
+                                assert_eq!(plan.device_budget(Device::Cuda), None);
                             }
                         }
                     }
@@ -361,6 +434,77 @@ mod tests {
         assert!(!plan.shared_budget);
         assert_eq!(plan.device_shares_host, vec![true]);
         assert_eq!(plan.device_room, vec![MemoryReport::Known(10)]);
+    }
+
+    /// A caller budget past what the device can hold is planned down to the
+    /// device's room: its memory less residency and its pool cap. A shared
+    /// device is also held to the host budget; a discrete one is not, since
+    /// host RAM does not bound its memory. A device with no memory figure
+    /// keeps the caller's number cut only by what is known.
+    #[test]
+    fn a_device_budget_is_the_caller_cut_to_the_device_room() {
+        const GIB: u64 = 1 << 30;
+        let mut profile = SystemProfile::from_memory(HostMemory {
+            available_bytes: MemoryReport::Known(GIB),
+            ..HostMemory::all_unknown()
+        });
+        profile.architecture = MemoryArchitecture::Unified;
+        let gpu = |kind, memory, arch| Gpu {
+            kind,
+            memory,
+            resident: MemoryReport::Known(GIB / 2),
+            pool: MemoryReport::Known(GIB / 4),
+            arch,
+        };
+        let mut policy = ResourcePolicy::new(8 * GIB);
+        policy.devices = vec![Device::Metal, Device::Cpu];
+        let unified = [gpu(
+            Device::Metal,
+            MemoryReport::Known(4 * GIB),
+            MemoryArchitecture::Unified,
+        )];
+        let plan = ResourcePlan::derive(&policy, &profile, &unified);
+        assert_eq!(plan.caller_budget_bytes, 8 * GIB);
+        assert_eq!(plan.device_pool_cache[0], MemoryReport::Known(GIB / 4));
+        assert_eq!(
+            plan.device_room[0],
+            MemoryReport::Known(GIB),
+            "cut to the host"
+        );
+        assert_eq!(plan.device_budget(Device::Metal), Some(GIB));
+        // With host room to spare the device's own room is the bound.
+        profile.memory.available_bytes = MemoryReport::Known(32 * GIB);
+        let plan = ResourcePlan::derive(&policy, &profile, &unified);
+        let room = 4 * GIB - GIB / 2 - GIB / 4;
+        assert_eq!(plan.device_room[0], MemoryReport::Known(room));
+        assert_eq!(plan.device_budget(Device::Metal), Some(room));
+
+        profile.memory.available_bytes = MemoryReport::Known(GIB);
+        policy.devices = vec![Device::Vulkan, Device::Cpu];
+        let discrete = [gpu(
+            Device::Vulkan,
+            MemoryReport::Known(4 * GIB),
+            MemoryArchitecture::Discrete,
+        )];
+        let plan = ResourcePlan::derive(&policy, &profile, &discrete);
+        assert!(!plan.shared_budget);
+        assert_eq!(
+            plan.device_budget(Device::Vulkan),
+            Some(room),
+            "host RAM is not VRAM"
+        );
+        let blind = [gpu(
+            Device::Vulkan,
+            MemoryReport::Unknown,
+            MemoryArchitecture::Unified,
+        )];
+        let plan = ResourcePlan::derive(&policy, &profile, &blind);
+        assert_eq!(plan.device_room[0], MemoryReport::Unknown);
+        assert_eq!(
+            plan.device_budget(Device::Vulkan),
+            Some(GIB),
+            "the host still bounds it"
+        );
     }
 
     fn clustered(levels: &[MemoryReport], usable: MemoryReport) -> SystemProfile {
@@ -730,6 +874,7 @@ mod tests {
             kind: Device::Metal,
             memory: MemoryReport::Known(48 << 30),
             resident: MemoryReport::Known(0),
+            pool: MemoryReport::Unknown,
             arch: MemoryArchitecture::Unified,
         }];
         let mut policy = ResourcePolicy::new(8 << 30);

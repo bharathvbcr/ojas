@@ -1,13 +1,20 @@
 //! `SYSTEM_PROFILE`: what this machine and process can use, for a host
 //! that sizes `threads` and the memory ceiling from it.
 //!
-//! The op reads; it changes nothing. It does not open a GPU (a Metal
-//! probe needs a device thread), so device rooms are not in the record.
+//! The op reads; it changes nothing. Without a device flag it opens no GPU
+//! and the device fields are unknown.
 //!
 //! Payload: empty; `budget: u64`; or `budget: u64, flags: u32`. Flag
 //! [`FLAG_BANDWIDTH`] runs [`ojas_device::cached_bandwidth`] (about half a
 //! second the first time in a process, a cached figure after that) and
-//! fills the bandwidth fields; any other flag bit is refused.
+//! fills the bandwidth fields. Flag [`FLAG_DEVICE_METAL`] or
+//! [`FLAG_DEVICE_WGPU`] (at most one) opens that device on a short-lived
+//! thread, as a load does, with the cancel check polled while it opens,
+//! reads its memory probe, closes it, and plans against the probe exactly
+//! as a load on that device plans its session budget
+//! ([`crate::model::device_plan`]): the device fields then say which probe
+//! was used, what it reported and the room it left. A device that does not
+//! open is its error (`metal:` or `wgpu:`). Any other flag bit is refused.
 //! The measurement runs on the job thread and is not cancellable once
 //! started; it is bounded (two phases of at most 250 ms plus one repetition
 //! each), and concurrent callers wait for it rather than measuring again.
@@ -19,9 +26,12 @@
 //! appends fields, so a reader takes the first `count` it knows.
 
 use ojas_device::{
-    cached_bandwidth, probe_system, Bandwidth, Device, MemoryArchitecture, MemoryPressure,
-    MemoryProbe, MemoryReport, ResourcePlan, ResourcePolicy,
+    cached_bandwidth, probe_system, Bandwidth, MemoryArchitecture, MemoryPressure, MemoryProbe,
+    MemoryReport, ResourcePlan, ResourcePolicy,
 };
+
+use crate::gate::Check;
+use crate::model::{self, DeviceProbe};
 
 pub const PROFILE_VERSION: u32 = 1;
 
@@ -60,11 +70,36 @@ pub enum Field {
     /// Threads past which memory-bound work stops scaling, from the two
     /// bandwidth figures, at most the thread ceiling.
     MemoryBoundThreads,
+    /// The device whose probe the plan used: the load's device number,
+    /// [`crate::load::DEVICE_METAL`] or [`crate::load::DEVICE_WGPU`].
+    /// Unknown, as is every field through `DeviceBudgetBytes`, without a
+    /// device flag.
+    ProbeDevice,
+    /// [`MemoryProbe::memory_bytes`]: Metal's recommended working set;
+    /// never known on wgpu, which reports no memory size.
+    DeviceMemoryBytes,
+    /// [`MemoryProbe::resident_bytes`]: what the process holds there.
+    DeviceResidentBytes,
+    /// [`MemoryProbe::pool_cache_bytes`]: the uncharged pool cap.
+    DevicePoolCacheBytes,
+    /// The plan's room for the device.
+    DeviceRoomBytes,
+    /// 1 when the device draws on host memory, 0 when it has its own.
+    DeviceSharesHost,
+    /// 1 when the plan puts the device on the host's budget.
+    SharedBudget,
+    /// The session budget a load on this device with this budget gets.
+    DeviceBudgetBytes,
+    /// [`ojas_wgpu::DropStats::parked`]: freed wgpu contexts still
+    /// holding their devices. Always known.
+    WgpuDropsParked,
+    /// [`ojas_wgpu::DropStats::timed_out`]. Always known.
+    WgpuDropsTimedOut,
 }
 
 impl Field {
     /// Every field, in wire order. `Field::ALL[i] as usize == i` is tested.
-    pub const ALL: [Field; 20] = [
+    pub const ALL: [Field; 30] = [
         Field::BudgetBytes,
         Field::TotalBytes,
         Field::AvailableBytes,
@@ -85,6 +120,16 @@ impl Field {
         Field::MultiBandwidth,
         Field::BandwidthThreads,
         Field::MemoryBoundThreads,
+        Field::ProbeDevice,
+        Field::DeviceMemoryBytes,
+        Field::DeviceResidentBytes,
+        Field::DevicePoolCacheBytes,
+        Field::DeviceRoomBytes,
+        Field::DeviceSharesHost,
+        Field::SharedBudget,
+        Field::DeviceBudgetBytes,
+        Field::WgpuDropsParked,
+        Field::WgpuDropsTimedOut,
     ];
 }
 
@@ -92,6 +137,11 @@ pub const FIELD_COUNT: u32 = Field::ALL.len() as u32;
 pub const ENTRY_BYTES: usize = 9;
 /// Payload flag: measure (or reuse) copy bandwidth.
 pub const FLAG_BANDWIDTH: u32 = 1;
+/// Payload flag: open the Metal device and plan against its probe.
+pub const FLAG_DEVICE_METAL: u32 = 2;
+/// Payload flag: open a wgpu device and plan against its probe.
+pub const FLAG_DEVICE_WGPU: u32 = 4;
+const KNOWN_FLAGS: u32 = FLAG_BANDWIDTH | FLAG_DEVICE_METAL | FLAG_DEVICE_WGPU;
 
 /// The planned budget as sent. `u64::MAX` survives the plan only when no
 /// limit was known and the caller set none: that is no bound, and is sent
@@ -105,8 +155,41 @@ fn budget_report(bytes: u64) -> MemoryReport {
     }
 }
 
+/// The probe of the device `flags` names, opened as a load opens it (with
+/// a budget of `caller`, which sets Metal's pool cap) and closed again.
+fn probe_device(
+    flags: u32,
+    caller: u64,
+    check: Check,
+) -> Result<Option<(DeviceProbe, u32)>, String> {
+    let budget = || ojas_core::Budget::new(caller);
+    match flags & (FLAG_DEVICE_METAL | FLAG_DEVICE_WGPU) {
+        0 => Ok(None),
+        FLAG_DEVICE_METAL => {
+            #[cfg(target_os = "macos")]
+            {
+                let opened = model::Opened::Metal(crate::owner::open_metal(budget(), check)?);
+                Ok(model::device_probe(&opened)?.map(|p| (p, crate::load::DEVICE_METAL)))
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = budget;
+                crate::owner::open_metal(check).and(Err("metal: Metal requires macOS".to_string()))
+            }
+        }
+        FLAG_DEVICE_WGPU => {
+            let opened = model::Opened::Wgpu(std::sync::Arc::new(crate::owner::open_wgpu(
+                budget(),
+                check,
+            )?));
+            Ok(model::device_probe(&opened)?.map(|p| (p, crate::load::DEVICE_WGPU)))
+        }
+        _ => Err("system profile: at most one device flag".to_string()),
+    }
+}
+
 /// Empty plans against `u64::MAX`, which reports the host limits alone.
-pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn profile_request(input: &[u8], check: Check) -> Result<Vec<u8>, String> {
     let mut r = crate::wire::Reader::new(input);
     let (caller, flags) = match input.len() {
         0 => (u64::MAX, 0),
@@ -119,14 +202,22 @@ pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
             ))
         }
     };
-    if flags & !FLAG_BANDWIDTH != 0 {
+    if flags & !KNOWN_FLAGS != 0 {
         return Err(format!("system profile: unknown flags {flags:#x}"));
     }
     if caller == 0 {
         return Err("system profile: budget is 0 bytes".to_string());
     }
+    let device = probe_device(flags, caller, check)?;
     let profile = probe_system();
-    let mut plan = ResourcePlan::derive(&ResourcePolicy::new(caller), &profile, &[] as &[NoProbe]);
+    let mut plan = match &device {
+        Some((probe, _)) => model::device_plan(caller, probe, &profile),
+        None => ResourcePlan::derive(
+            &ResourcePolicy::new(caller),
+            &profile,
+            &[] as &[DeviceProbe],
+        ),
+    };
     // A refused measurement leaves the bandwidth fields unknown; the rest of
     // the profile still answers.
     let bandwidth = if flags & FLAG_BANDWIDTH != 0 {
@@ -154,6 +245,13 @@ pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
         MemoryPressure::Critical => MemoryReport::Known(3),
         MemoryPressure::Unknown => MemoryReport::Unknown,
     };
+    let flag = |on: bool| MemoryReport::Known(u64::from(on));
+    let on_device = |f: &dyn Fn(&DeviceProbe, u32) -> MemoryReport| {
+        device
+            .as_ref()
+            .map_or(MemoryReport::Unknown, |(probe, number)| f(probe, *number))
+    };
+    let drops = ojas_wgpu::drop_stats();
     let mut out = Vec::with_capacity(8 + Field::ALL.len() * ENTRY_BYTES);
     out.extend_from_slice(&PROFILE_VERSION.to_le_bytes());
     out.extend_from_slice(&FIELD_COUNT.to_le_bytes());
@@ -179,6 +277,20 @@ pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
             Field::MultiBandwidth => bw_field(|b| b.multi_bytes_per_sec),
             Field::BandwidthThreads => bw_field(|b| b.threads as u64),
             Field::MemoryBoundThreads => plan.memory_bound_threads,
+            // The plan lists the probed device first.
+            Field::ProbeDevice => on_device(&|_, n| known(u64::from(n))),
+            Field::DeviceMemoryBytes => on_device(&|_, _| plan.device_memory[0]),
+            Field::DeviceResidentBytes => on_device(&|p, _| p.resident_bytes()),
+            Field::DevicePoolCacheBytes => on_device(&|_, _| plan.device_pool_cache[0]),
+            Field::DeviceRoomBytes => on_device(&|_, _| plan.device_room[0]),
+            Field::DeviceSharesHost => on_device(&|_, _| flag(plan.device_shares_host[0])),
+            Field::SharedBudget => on_device(&|_, _| flag(plan.shared_budget)),
+            Field::DeviceBudgetBytes => on_device(&|p, _| {
+                plan.device_budget(p.kind())
+                    .map_or(MemoryReport::Unknown, budget_report)
+            }),
+            Field::WgpuDropsParked => known(drops.parked as u64),
+            Field::WgpuDropsTimedOut => known(drops.timed_out),
         };
         let (known, value) = match entry {
             MemoryReport::Known(v) => (1u8, v),
@@ -190,21 +302,10 @@ pub fn profile_request(input: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// The plan's probe list is empty here; this names its element type.
-pub(crate) struct NoProbe;
-
-impl MemoryProbe for NoProbe {
-    fn kind(&self) -> Device {
-        Device::Cpu
-    }
-    fn memory_bytes(&self) -> MemoryReport {
-        MemoryReport::Unknown
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::never;
 
     fn decode(out: &[u8]) -> Vec<Option<u64>> {
         assert_eq!(
@@ -233,11 +334,11 @@ mod tests {
 
     #[test]
     fn the_record_has_every_field_and_never_widens_the_budget() {
-        let all = decode(&profile_request(&[]).unwrap());
+        let all = decode(&profile_request(&[], never()).unwrap());
         assert_eq!(all.len(), FIELD_COUNT as usize);
         assert!(all[Field::BudgetBytes as usize].is_some());
         for budget in [1u64, 4096, 1 << 30, u64::MAX] {
-            let got = decode(&profile_request(&budget.to_le_bytes()).unwrap());
+            let got = decode(&profile_request(&budget.to_le_bytes(), never()).unwrap());
             let b = got[Field::BudgetBytes as usize].unwrap();
             assert!(b <= budget);
             if let Some(avail) = got[Field::AvailableBytes as usize] {
@@ -255,9 +356,19 @@ mod tests {
             Field::MultiBandwidth,
             Field::BandwidthThreads,
             Field::MemoryBoundThreads,
+            Field::ProbeDevice,
+            Field::DeviceMemoryBytes,
+            Field::DeviceResidentBytes,
+            Field::DevicePoolCacheBytes,
+            Field::DeviceRoomBytes,
+            Field::DeviceSharesHost,
+            Field::SharedBudget,
+            Field::DeviceBudgetBytes,
         ] {
             assert_eq!(all[f as usize], None, "{f:?} without the flag");
         }
+        assert!(all[Field::WgpuDropsParked as usize].is_some());
+        assert!(all[Field::WgpuDropsTimedOut as usize].is_some());
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         assert_eq!(all[Field::Architecture as usize], Some(1));
     }
@@ -266,7 +377,7 @@ mod tests {
     fn the_bandwidth_flag_fills_its_fields_within_the_ceiling() {
         let mut payload = (1u64 << 30).to_le_bytes().to_vec();
         payload.extend_from_slice(&FLAG_BANDWIDTH.to_le_bytes());
-        let got = decode(&profile_request(&payload).unwrap());
+        let got = decode(&profile_request(&payload, never()).unwrap());
         let single = got[Field::SingleBandwidth as usize].expect("single");
         let multi = got[Field::MultiBandwidth as usize].expect("multi");
         let threads = got[Field::BandwidthThreads as usize].expect("threads");
@@ -277,7 +388,7 @@ mod tests {
             assert!(bound <= c);
         }
         // A second call reuses the cached figure.
-        let again = decode(&profile_request(&payload).unwrap());
+        let again = decode(&profile_request(&payload, never()).unwrap());
         assert_eq!(again[Field::SingleBandwidth as usize], Some(single));
     }
 
@@ -292,7 +403,11 @@ mod tests {
         );
         assert_eq!(budget_report(0), MemoryReport::Known(0));
         let blind = ojas_device::SystemProfile::from_memory(ojas_device::HostMemory::all_unknown());
-        let plan = ResourcePlan::derive(&ResourcePolicy::new(u64::MAX), &blind, &[] as &[NoProbe]);
+        let plan = ResourcePlan::derive(
+            &ResourcePolicy::new(u64::MAX),
+            &blind,
+            &[] as &[DeviceProbe],
+        );
         assert_eq!(budget_report(plan.budget_bytes), MemoryReport::Unknown);
     }
 
@@ -301,25 +416,97 @@ mod tests {
         for (i, f) in Field::ALL.iter().enumerate() {
             assert_eq!(*f as usize, i, "{f:?}");
         }
-        assert_eq!(FIELD_COUNT, 20, "the Go decoder reads 20 fields");
+        assert_eq!(FIELD_COUNT, 30, "the Go decoder reads 30 fields");
+    }
+
+    fn device_profile(budget: u64, flag: u32) -> Result<Vec<Option<u64>>, String> {
+        let mut payload = budget.to_le_bytes().to_vec();
+        payload.extend_from_slice(&flag.to_le_bytes());
+        profile_request(&payload, never()).map(|out| decode(&out))
+    }
+
+    /// The Metal flag plans against the device's own probe, the path a
+    /// load takes: on Apple silicon the device shares host memory, so the
+    /// plan takes the shared budget path and the room is at most the host
+    /// budget; the session budget is the caller's cut to that room.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_metal_flag_plans_on_the_shared_budget_with_the_device_room() {
+        let got = match device_profile(1 << 30, FLAG_DEVICE_METAL) {
+            Ok(got) => got,
+            Err(err) => return crate::tests::skip_or_fail("Metal device profile", &err),
+        };
+        let field = |f: Field| got[f as usize];
+        assert_eq!(
+            field(Field::ProbeDevice),
+            Some(u64::from(crate::load::DEVICE_METAL))
+        );
+        let memory = field(Field::DeviceMemoryBytes).expect("the working set");
+        let room = field(Field::DeviceRoomBytes).expect("a reporting device has a room");
+        let pool = field(Field::DevicePoolCacheBytes).expect("the pool cap");
+        assert_eq!(pool, 1 << 28, "a quarter of the 1 GiB budget");
+        assert!(
+            room <= memory - pool,
+            "room {room} of {memory} with pool {pool}"
+        );
+        let budget = field(Field::DeviceBudgetBytes).expect("the session budget");
+        assert!(budget <= 1 << 30 && budget <= room);
+        #[cfg(target_arch = "aarch64")]
+        {
+            assert_eq!(field(Field::DeviceSharesHost), Some(1));
+            assert_eq!(field(Field::SharedBudget), Some(1));
+            assert!(room <= field(Field::BudgetBytes).unwrap());
+        }
+    }
+
+    /// The wgpu flag records that wgpu reports no memory size: the room is
+    /// unknown, not a default, and the session budget is the caller's cut
+    /// only by what is known.
+    #[test]
+    fn the_wgpu_flag_records_an_unknown_room() {
+        let got = match device_profile(1 << 30, FLAG_DEVICE_WGPU) {
+            Ok(got) => got,
+            Err(err) if err.starts_with("wgpu:") => {
+                eprintln!("SKIP: no wgpu adapter: {err}");
+                return;
+            }
+            Err(err) => panic!("{err}"),
+        };
+        assert_eq!(
+            got[Field::ProbeDevice as usize],
+            Some(u64::from(crate::load::DEVICE_WGPU))
+        );
+        assert_eq!(got[Field::DeviceMemoryBytes as usize], None);
+        assert_eq!(got[Field::DeviceRoomBytes as usize], None);
+        assert_eq!(
+            got[Field::DevicePoolCacheBytes as usize],
+            Some(ojas_wgpu::POOL_CAP_BYTES)
+        );
+        let budget = got[Field::DeviceBudgetBytes as usize].expect("the session budget");
+        assert!(budget <= 1 << 30);
+        assert!(got[Field::DeviceSharesHost as usize].is_some());
     }
 
     #[test]
     fn bad_payloads_are_refused() {
         let mut flagged = 1u64.to_le_bytes().to_vec();
-        flagged.extend_from_slice(&2u32.to_le_bytes());
-        assert!(profile_request(&flagged)
+        flagged.extend_from_slice(&8u32.to_le_bytes());
+        assert!(profile_request(&flagged, never())
             .unwrap_err()
             .contains("unknown flags"));
+        flagged[8..].copy_from_slice(&(FLAG_DEVICE_METAL | FLAG_DEVICE_WGPU).to_le_bytes());
+        assert!(profile_request(&flagged, never())
+            .unwrap_err()
+            .contains("at most one device flag"));
         flagged[8..].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert!(profile_request(&flagged)
+        assert!(profile_request(&flagged, never())
             .unwrap_err()
             .contains("unknown flags"));
-        assert!(profile_request(&0u64.to_le_bytes())
+        assert!(profile_request(&0u64.to_le_bytes(), never())
             .unwrap_err()
             .contains("0 bytes"));
         for n in [1usize, 7, 9, 16] {
-            let err = profile_request(&vec![1u8; n]).unwrap_err();
+            let err = profile_request(&vec![1u8; n], never()).unwrap_err();
             assert!(err.contains("shape"), "{err}");
         }
     }

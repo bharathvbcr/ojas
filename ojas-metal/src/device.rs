@@ -74,6 +74,18 @@ fn inline_upload_fits(len: usize, used: usize) -> bool {
 /// Ceiling of the bytes allocated between waited commits; the default cap is
 /// the smaller of this and a quarter of the backend's budget.
 const MEM_CAP_CEILING: u64 = 1 << 30;
+/// Ceiling of the freed buffers tessl's pool keeps for reuse. tessl's own
+/// default is 2 GiB whatever the backend's budget, outside it.
+const POOL_CACHE_CEILING: u64 = 1 << 30;
+
+/// The pool cache cap of a backend opened with `budget_cap`: a quarter of
+/// the budget, at most [`POOL_CACHE_CEILING`]. The cached buffers are not
+/// charged to the budget, so the cap bounds what this backend can hold on
+/// the device past it, and [`crate::MetalMemory::pool_cache_cap`] reports
+/// it to the plan, which sets it aside from the device's room.
+pub(crate) fn pool_cache_cap(budget_cap: u64) -> u64 {
+    POOL_CACHE_CEILING.min(budget_cap / 4)
+}
 /// Device memory above this share of the recommended working set forces a
 /// waited commit once this backend has allocated more than [`WS_GROWTH`]
 /// since its last one. The device figure is every allocation on the device,
@@ -371,6 +383,9 @@ struct Worker {
 impl Worker {
     fn open(waits: Arc<Waits>, budget_cap: u64) -> Res<Self> {
         let rt = GpuRuntime::new().map_err(metal_err)?;
+        // Before the first allocation, so no buffer is ever cached past it.
+        let pool_cap = usize::try_from(pool_cache_cap(budget_cap)).unwrap_or(usize::MAX);
+        rt.set_pool_cache_cap_bytes(pool_cap);
         rt.set_async_encode(true).map_err(metal_err)?;
         let lib = include_bytes!(concat!(env!("OUT_DIR"), "/ojas_per_head_gate.metallib"));
         if lib.is_empty() {
@@ -478,6 +493,7 @@ impl Worker {
             recommended_working_set: info.recommended_working_set,
             allocated: self.rt.current_allocated_bytes(),
             has_unified_memory: info.has_unified_memory,
+            pool_cache_cap: info.pool_cache_cap as u64,
         }
     }
 
@@ -640,13 +656,23 @@ impl Worker {
 
     /// A device allocation. Buffers dropped since the last waited commit
     /// return to tessl's pool only at the next one, so an allocation that
-    /// fails as an exhausted device would is retried once after a waited
-    /// commit that leaves the current command's status slots alone.
+    /// fails as an exhausted device would is retried after a waited commit
+    /// that leaves the current command's status slots alone, and once more
+    /// after the pool's cached buffers are released (a cached buffer of
+    /// another size cannot serve the request, but its memory can). A
+    /// failure past both is `CapacityExceeded` against the device's working
+    /// set, with what the device holds now as `live`.
     fn alloc(&self, bytes: usize) -> Res<GpuBuffer> {
         let got = match self.try_alloc(bytes) {
             Err(e) if exhausted(&e) => {
                 self.recycle()?;
-                self.try_alloc(bytes)
+                match self.try_alloc(bytes) {
+                    Err(e) if exhausted(&e) => {
+                        self.drop_pool();
+                        self.try_alloc(bytes)
+                    }
+                    got => got,
+                }
             }
             got => got,
         };
@@ -655,7 +681,7 @@ impl Worker {
                 OjasError::CapacityExceeded {
                     requested: bytes as u64,
                     cap: self.rt.memory_info().recommended_working_set,
-                    live: 0,
+                    live: self.rt.current_allocated_bytes(),
                 }
             } else {
                 metal_err(e)
@@ -686,6 +712,23 @@ impl Worker {
         self.note_dispatches();
         self.book.borrow_mut().dirty = true;
         self.settle(Scan::BeforeCurrent, Wait::Recycle)
+    }
+
+    /// Release every buffer tessl's pool has cached: lowering the cap to 0
+    /// drops them (tessl `set_max_cache_bytes` trims to the new cap), and
+    /// the cap is then restored, so later frees cache as before.
+    fn drop_pool(&self) {
+        let cap = self.rt.memory_info().pool_cache_cap;
+        self.rt.set_pool_cache_cap_bytes(0);
+        self.rt.set_pool_cache_cap_bytes(cap);
+    }
+
+    /// [`Cmd::TrimPool`]: recycle what was freed since the last waited
+    /// commit, then release the whole cache.
+    fn trim_pool(&self) -> Res<Reply> {
+        self.recycle()?;
+        self.drop_pool();
+        Ok(Reply::Done)
     }
 
     /// `n` four-byte elements, offset 0.
@@ -884,6 +927,7 @@ impl Worker {
             }
             // `serve` answers it first; kept here so the match stays total.
             Cmd::Memory => Ok(Reply::Memory(self.memory())),
+            Cmd::TrimPool => self.trim_pool(),
             Cmd::InlineUploads { on } => {
                 self.book.borrow_mut().inline_uploads = on;
                 Ok(Reply::Done)
@@ -899,6 +943,11 @@ impl Worker {
             #[cfg(test)]
             Cmd::FailNextRead => {
                 self.book.borrow_mut().fail_next_read = true;
+                Ok(Reply::Done)
+            }
+            #[cfg(test)]
+            Cmd::SetPoolCap { bytes } => {
+                self.rt.set_pool_cache_cap_bytes(bytes);
                 Ok(Reply::Done)
             }
             #[cfg(test)]
@@ -2831,6 +2880,48 @@ mod tests {
     use super::*;
 
     use ojas_core::{Backend, Budget, Tensor};
+
+    /// The pool cache is a quarter of the budget, at most 1 GiB, never the
+    /// 2 GiB tessl default whatever the budget.
+    #[test]
+    fn the_pool_cache_cap_follows_the_budget() {
+        for (budget, want) in [
+            (0u64, 0u64),
+            (3, 0),
+            (1 << 20, 1 << 18),
+            (1 << 30, 1 << 28),
+            (4 << 30, 1 << 30),
+            (64 << 30, 1 << 30),
+            (u64::MAX, 1 << 30),
+        ] {
+            assert_eq!(pool_cache_cap(budget), want, "budget {budget}");
+        }
+    }
+
+    /// The bound `backend.rs` documents for what the budget does not
+    /// charge: a `Cold` buffer of up to 1 MiB is made at most 512 KiB
+    /// larger than asked, and never more than its own size larger past 256
+    /// bytes; a larger one at most 16 KiB larger. Read from tessl's own
+    /// rounding, so a tessl change that widens it fails here.
+    #[test]
+    fn cold_rounding_stays_inside_the_documented_bound() {
+        use tessl::BufferKind;
+        let mut sizes: Vec<usize> = (1..=4096).step_by(3).collect();
+        for shift in 8..=34 {
+            let p = 1usize << shift;
+            sizes.extend([p - 4, p, p + 4, p + p / 2 + 4]);
+        }
+        for n in sizes {
+            let made = GpuRuntime::allocated_bytes_for(n, BufferKind::Cold);
+            let extra = made - n as u64;
+            if n <= 1 << 20 {
+                assert!(extra < 512 << 10, "{n} -> {made}");
+                assert!(n <= 256 || extra < n as u64, "{n} -> {made}");
+            } else {
+                assert!(extra < 16 << 10, "{n} -> {made}");
+            }
+        }
+    }
 
     /// One decode request (12 heads, 1024 keys) splits; a batch that already
     /// fills the GPU, a short cache, and degenerate inputs do not.

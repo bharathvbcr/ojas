@@ -45,7 +45,7 @@ func TestDecodeProfileRefusesWhatItCannotReadWhole(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 	// A later version's appended fields are skipped.
-	if _, err := decodeProfile(profileRecord(1, profileFields+3, allKnown)); err != nil {
+	if _, err := decodeProfile(profileRecord(1, allProfileFields+3, deviceKnown)); err != nil {
 		t.Fatalf("appended fields: %v", err)
 	}
 	discrete := profileRecord(1, profileFields, func(i int) (byte, uint64) {
@@ -96,6 +96,57 @@ func TestDecodeProfileRefusesWhatItCannotReadWhole(t *testing.T) {
 	}
 	if _, err := decodeProfile(nil); err == nil || !strings.Contains(err.Error(), "short") {
 		t.Fatalf("nil: %v", err)
+	}
+}
+
+// deviceKnown is allKnown with the device fields a Metal probe sends.
+func deviceKnown(i int) (byte, uint64) {
+	switch i {
+	case 20:
+		return 1, uint64(DeviceMetal)
+	case 25, 26:
+		return 1, 1
+	}
+	return allKnown(i)
+}
+
+// The device fields are read when the record carries them, unknown when it
+// stops at the host fields, and refused when a flag or the device is out of
+// range.
+func TestDecodeProfileReadsTheDeviceFields(t *testing.T) {
+	p, err := decodeProfile(profileRecord(1, allProfileFields, deviceKnown))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ProbeDevice != (Reading{uint64(DeviceMetal), true}) || p.DeviceRoomBytes != (Reading{124, true}) ||
+		p.SharedBudget != (Reading{1, true}) || p.DeviceBudgetBytes != (Reading{127, true}) ||
+		p.WgpuDropsTimedOut != (Reading{129, true}) {
+		t.Fatalf("%+v", p)
+	}
+	for _, n := range []uint32{profileFields + 1, 25, allProfileFields - 1} {
+		if _, err := decodeProfile(profileRecord(1, n, deviceKnown)); err == nil {
+			t.Errorf("%d fields: half a device block decoded", n)
+		}
+	}
+	host, err := decodeProfile(profileRecord(1, profileFields, allKnown))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []Reading{host.ProbeDevice, host.DeviceRoomBytes, host.SharedBudget, host.WgpuDropsParked} {
+		if r.Known {
+			t.Fatalf("a host-only record reported a device field: %+v", host)
+		}
+	}
+	for name, field := range map[string]int{"shares host": 25, "shared budget": 26, "probe device": 20} {
+		bad := profileRecord(1, allProfileFields, func(i int) (byte, uint64) {
+			if i == field {
+				return 1, 9
+			}
+			return deviceKnown(i)
+		})
+		if _, err := decodeProfile(bad); err == nil {
+			t.Errorf("%s 9: decoded", name)
+		}
 	}
 }
 
@@ -178,5 +229,61 @@ func TestSystemProfileFromTheEngine(t *testing.T) {
 	}
 	if err := Free(ctx, id); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// DeviceProfile names the probe it planned against and the room it read.
+// On Apple silicon the Metal device shares host memory, so its room is at
+// most the host budget and the plan takes the shared budget path.
+func TestDeviceProfileShowsTheMetalProbeAndItsRoom(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Metal needs macOS")
+	}
+	harness(t)
+	skipWithoutMetal4(t)
+	ctx := context.Background()
+	if _, err := DeviceProfile(ctx, 0, DeviceCPU); err == nil {
+		t.Fatal("a CPU device profile was accepted")
+	}
+	if host, err := SystemProfile(ctx, 0, false); err != nil || host.ProbeDevice.Known {
+		t.Fatalf("a host profile named a probe: %+v %v", host.ProbeDevice, err)
+	}
+	p, err := DeviceProfile(ctx, 1<<30, DeviceMetal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ProbeDevice != (Reading{uint64(DeviceMetal), true}) || !p.DeviceMemoryBytes.Known ||
+		!p.DeviceRoomBytes.Known || !p.DeviceBudgetBytes.Known || !p.DevicePoolCacheBytes.Known {
+		t.Fatalf("metal probe fields: %+v", p)
+	}
+	if p.DeviceBudgetBytes.Value > 1<<30 || p.DeviceBudgetBytes.Value > p.DeviceRoomBytes.Value {
+		t.Fatalf("device budget %d past the caller or the room %d", p.DeviceBudgetBytes.Value, p.DeviceRoomBytes.Value)
+	}
+	if runtime.GOARCH == "arm64" {
+		if p.DeviceSharesHost != (Reading{1, true}) || p.SharedBudget != (Reading{1, true}) {
+			t.Fatalf("Apple silicon Metal not on the shared budget: %+v", p)
+		}
+		if p.DeviceRoomBytes.Value > p.BudgetBytes {
+			t.Fatalf("shared room %d past the host budget %d", p.DeviceRoomBytes.Value, p.BudgetBytes)
+		}
+	}
+}
+
+// wgpu reports no memory size: its room stays unknown, never a default,
+// and the session budget is the caller's cut only by what is known.
+func TestDeviceProfileShowsTheWgpuProbe(t *testing.T) {
+	harness(t)
+	w, err := DeviceProfile(context.Background(), 1<<30, DeviceWgpu)
+	if err != nil {
+		if !strings.HasPrefix(engineMessage(err), "wgpu:") {
+			t.Fatal(err)
+		}
+		t.Skipf("no wgpu adapter: %v", err)
+	}
+	if w.ProbeDevice != (Reading{uint64(DeviceWgpu), true}) || w.DeviceMemoryBytes.Known || w.DeviceRoomBytes.Known {
+		t.Fatalf("wgpu probe fields: %+v", w)
+	}
+	if !w.DeviceBudgetBytes.Known || w.DeviceBudgetBytes.Value > 1<<30 || !w.WgpuDropsParked.Known {
+		t.Fatalf("wgpu plan: %+v", w)
 	}
 }

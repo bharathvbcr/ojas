@@ -17,6 +17,11 @@ pub struct MetalMemory {
     /// true when the GPU has no memory of its own and draws on system RAM
     /// (Apple silicon), false for a discrete GPU with its own VRAM.
     pub has_unified_memory: bool,
+    /// The most freed buffers tessl's pool keeps for reuse on this device,
+    /// set when the backend opened from its budget (a quarter of it, at
+    /// most 1 GiB). Cached buffers are not charged to the budget; the plan
+    /// sets this much aside from the device's room.
+    pub pool_cache_cap: u64,
 }
 
 impl MemoryProbe for MetalMemory {
@@ -33,6 +38,10 @@ impl MemoryProbe for MetalMemory {
 
     fn resident_bytes(&self) -> MemoryReport {
         MemoryReport::Known(self.allocated)
+    }
+
+    fn pool_cache_bytes(&self) -> MemoryReport {
+        MemoryReport::Known(self.pool_cache_cap)
     }
 
     /// From the device itself rather than the host profile, so a device
@@ -57,15 +66,18 @@ mod tests {
             recommended_working_set: 0,
             allocated: 7,
             has_unified_memory: true,
+            pool_cache_cap: 3,
         };
         assert_eq!(m.kind(), Device::Metal);
         assert_eq!(m.memory_bytes(), MemoryReport::Unknown);
         assert_eq!(m.resident_bytes(), MemoryReport::Known(7));
+        assert_eq!(m.pool_cache_bytes(), MemoryReport::Known(3));
         assert_eq!(m.architecture(), MemoryArchitecture::Unified);
         let m = MetalMemory {
             recommended_working_set: 48 << 30,
             allocated: 0,
             has_unified_memory: false,
+            pool_cache_cap: 0,
         };
         assert_eq!(m.memory_bytes(), MemoryReport::Known(48 << 30));
         assert_eq!(m.architecture(), MemoryArchitecture::Discrete);
@@ -93,15 +105,21 @@ mod tests {
                     recommended_working_set: 24 << 30,
                     allocated: 1 << 30,
                     has_unified_memory: unified,
+                    pool_cache_cap: 1 << 28,
                 };
                 let plan = ResourcePlan::derive(&policy, &profile, &[m]);
                 assert_eq!(plan.device_shares_host[0], unified, "{host_arch:?}");
                 assert_eq!(plan.shared_budget, unified, "{host_arch:?}");
+                let room = match plan.device_room[0] {
+                    MemoryReport::Known(room) => room,
+                    MemoryReport::Unknown => panic!("a reporting device has a room"),
+                };
+                assert!(
+                    room <= (24 << 30) - (1 << 30) - (1 << 28),
+                    "pool not set aside"
+                );
                 if unified {
-                    match plan.device_room[0] {
-                        MemoryReport::Known(room) => assert!(room <= plan.budget_bytes),
-                        MemoryReport::Unknown => panic!("a shared device has a room"),
-                    }
+                    assert!(room <= plan.budget_bytes);
                 }
             }
         }
