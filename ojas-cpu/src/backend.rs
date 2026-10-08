@@ -1100,6 +1100,10 @@ impl Backend for CpuBackend {
         crate::accum::accumulate_grad("accumulate_grad", &self.budget, self.exec(), acc, grad)
     }
 
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        crate::accum::scale_grad("scale_grad", &self.budget, self.exec(), grad, scale)
+    }
+
     fn linear_cross_entropy_mean(
         &self,
         input: &Tensor,

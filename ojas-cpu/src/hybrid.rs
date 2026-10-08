@@ -4,16 +4,18 @@
 //! Every value is the scalar formula below, evaluated as written in f32
 //! with [`sigmoid`] ([`ojas_core::exp_exact`], no `mul_add`), and every sum
 //! ascends from index 0, under either [`ojas_core::Numerics`]. Row-parallel
-//! passes cut whole rows ([`fill_rows`]), and the weight gradients, which
-//! sum over rows, run on the calling thread, so the bits do not depend on
-//! the thread count. The shapes are checked by the `ojas_core::shapes`
-//! validators before these run.
+//! passes cut whole rows ([`fill_rows`], [`scoped::rows_into`]), and the
+//! weight gradients, which sum over rows, are cut by weight column instead,
+//! each piece walking every row in ascending order (plain RMSNorm's split,
+//! [`crate::norm`]), so the bits do not depend on the thread count. The
+//! shapes are checked by the `ojas_core::shapes` validators before these
+//! run.
 
 use ojas_core::{Budget, Conv1dDims, OjasError, PartialRopeDims, RmsDims, Scratch, Tensor};
 
 use crate::pointwise::sigmoid;
-use crate::pool::Exec;
-use crate::validate::{fill_outs, fill_rows, nonfinite};
+use crate::pool::{scoped, Exec, ROW_MIN_ELEMS};
+use crate::validate::{fill_outs, fill_rows, nonfinite, room_for};
 
 /// `silu(a)` and `d silu / d a` at `a`, in the CPU SiLU's expressions.
 fn silu_and_slope(a: f32) -> (f32, f32) {
@@ -67,6 +69,14 @@ pub(crate) fn conv1d_silu_forward(
 /// `gx[b, s, c] = sum_j w[c, j] * da[b, s + (K - 1) - j, c]` and
 /// `gw[c, j] = sum_(b, t) da[b, t, c] * x[b, t + j - (K - 1), c]`, each in
 /// ascending order.
+///
+/// `da` and `gx` are row passes over the `B * T` rows ([`scoped::rows_into`]).
+/// `gw` is cut by channel ([`scoped::chunks_into`], at least
+/// [`ROW_MIN_ELEMS`] `/ (B * T)` channels a piece): each piece walks every
+/// `(b, t)` row in ascending order, reading that row's channels of the piece
+/// contiguously, and adds into its own `[c, j]` sums, so each sum takes its
+/// terms in the serial order whatever the cut (before 2026-10-07 each
+/// `(c, j)` walked the whole input at channel stride on the calling thread).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conv1d_silu_backward(
     op: &'static str,
@@ -84,20 +94,26 @@ pub(crate) fn conv1d_silu_backward(
         channels,
         width,
     } = d;
+    let rows = batch * time;
     let [gx, gw] = fill_outs(op, budget, exec, shapes, |[gx, gw]| {
         // `da`, charged beside the two outputs.
         let mut scratch = Scratch::try_alloc(x.len(), budget)?;
         let da = scratch.as_mut_slice();
-        for b in 0..batch {
-            for t in 0..time {
+        scoped::rows_into(exec, da, rows, channels, |range, part| {
+            for (local, row) in range.enumerate() {
+                let (b, t) = (row / time, row % time);
+                let base = row * channels;
                 for c in 0..channels {
-                    let at = (b * time + t) * channels + c;
-                    da[at] = gy[at] * silu_and_slope(conv_pre(d, x, w, b, t, c)).1;
+                    let slope = silu_and_slope(conv_pre(d, x, w, b, t, c)).1;
+                    part[local * channels + c] = gy[base + c] * slope;
                 }
             }
-        }
-        for b in 0..batch {
-            for s in 0..time {
+            Ok(())
+        })?;
+        let da = &*da;
+        scoped::rows_into(exec, gx, rows, channels, |range, part| {
+            for (local, row) in range.enumerate() {
+                let (b, s) = (row / time, row % time);
                 for c in 0..channels {
                     let mut acc = 0.0f32;
                     for j in 0..width {
@@ -106,24 +122,31 @@ pub(crate) fn conv1d_silu_backward(
                             acc += w[c * width + j] * da[(b * time + t) * channels + c];
                         }
                     }
-                    gx[(b * time + s) * channels + c] = acc;
+                    part[local * channels + c] = acc;
                 }
             }
-        }
-        for c in 0..channels {
-            for j in 0..width {
-                let mut acc = 0.0f32;
-                for b in 0..batch {
-                    for t in 0..time {
-                        if let Some(src) = (t + j).checked_sub(width - 1) {
-                            acc += da[(b * time + t) * channels + c]
-                                * x[(b * time + src) * channels + c];
+            Ok(())
+        })?;
+        let min_channels = (ROW_MIN_ELEMS / rows.max(1)).max(1);
+        scoped::chunks_into(exec, gw, channels, width, min_channels, |cs, sums| {
+            sums.fill(0.0);
+            for b in 0..batch {
+                for t in 0..time {
+                    let row = (b * time + t) * channels;
+                    for j in 0..width {
+                        // Source time t + j - (width - 1), skipped below 0.
+                        let Some(src) = (t + j).checked_sub(width - 1) else {
+                            continue;
+                        };
+                        let from = (b * time + src) * channels;
+                        for (k, c) in cs.clone().enumerate() {
+                            sums[k * width + j] += da[row + c] * x[from + c];
                         }
                     }
                 }
-                gw[c * width + j] = acc;
             }
-        }
+            Ok(())
+        })?;
         Ok(())
     })?;
     Ok((gx, gw))
@@ -178,6 +201,12 @@ pub(crate) fn gated_rms_forward(
 /// `g = silu(z)` and `dn = gy * w * g`,
 /// `dx = rstd * (dn - n * sum(dn * n) / dim)`, `dz = gy * w * n * silu'(z)`
 /// and `dw = sum_rows gy * n * g`.
+///
+/// Plain RMSNorm's split ([`crate::norm`]): `dx` and `dz` are one row pass
+/// ([`scoped::chunks_into_n`] over whole rows), which also returns each row's
+/// `rstd`; then `dw` is cut by column, each piece summing its columns over
+/// every row in ascending order, so each sum takes its terms in the serial
+/// order whatever the cut. The `rstd`s are charged while they live.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gated_rms_backward(
     op: &'static str,
@@ -188,33 +217,59 @@ pub(crate) fn gated_rms_backward(
     eps: f32,
     shapes: [&[usize]; 3],
 ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
-    let dim = d.dim;
+    let RmsDims { rows, dim } = d;
+    let _hold = room_for(op, budget, rows)?;
     let [gx, gz, gw] = fill_outs(op, budget, exec, shapes, |[gx, gz, gw]| {
-        gw.fill(0.0);
-        let rows = x
-            .chunks_exact(dim)
-            .zip(z.chunks_exact(dim))
-            .zip(gy.chunks_exact(dim))
-            .zip(gx.chunks_exact_mut(dim).zip(gz.chunks_exact_mut(dim)));
-        for (((xs, zs), gs), (gxs, gzs)) in rows {
-            let r = rstd(op, xs, eps)?;
-            let mut dot = 0.0f32;
-            for (((&xv, &zv), &gv), &wv) in xs.iter().zip(zs).zip(gs).zip(w) {
-                let dn = (gv * wv) * silu_and_slope(zv).0;
-                dot += dn * (xv * r);
+        let parts = scoped::chunks_into_n(
+            exec,
+            [gx, gz],
+            rows,
+            [dim, dim],
+            scoped::min_rows(dim),
+            |range, [gxs, gzs]| {
+                let mut rstds = Vec::with_capacity(range.len());
+                for (local, row) in range.enumerate() {
+                    let xs = &x[row * dim..(row + 1) * dim];
+                    let zs = &z[row * dim..(row + 1) * dim];
+                    let gs = &gy[row * dim..(row + 1) * dim];
+                    let r = rstd(op, xs, eps)?;
+                    let mut dot = 0.0f32;
+                    for (((&xv, &zv), &gv), &wv) in xs.iter().zip(zs).zip(gs).zip(w) {
+                        let dn = (gv * wv) * silu_and_slope(zv).0;
+                        dot += dn * (xv * r);
+                    }
+                    let mean = dot / dim as f32;
+                    let each = xs.iter().zip(zs).zip(gs).zip(w);
+                    let outs = gxs[local * dim..(local + 1) * dim]
+                        .iter_mut()
+                        .zip(&mut gzs[local * dim..(local + 1) * dim]);
+                    for ((((&xv, &zv), &gv), &wv), (dx, dz)) in each.zip(outs) {
+                        let n = xv * r;
+                        let (g, slope) = silu_and_slope(zv);
+                        let dn = (gv * wv) * g;
+                        *dx = r * (dn - n * mean);
+                        *dz = ((gv * wv) * n) * slope;
+                    }
+                    rstds.push(r);
+                }
+                Ok(rstds)
+            },
+        )?;
+        let rstds = parts.concat();
+        let min_cols = (ROW_MIN_ELEMS / rows.max(1)).max(1);
+        scoped::chunks_into(exec, gw, dim, 1, min_cols, |cols, sums| {
+            sums.fill(0.0);
+            for (row, &r) in rstds.iter().enumerate() {
+                let at = row * dim;
+                let span = at + cols.start..at + cols.end;
+                let each = x[span.clone()].iter().zip(&z[span.clone()]).zip(&gy[span]);
+                for (dw, ((&xv, &zv), &gv)) in sums.iter_mut().zip(each) {
+                    let n = xv * r;
+                    *dw += (gv * n) * silu_and_slope(zv).0;
+                }
             }
-            let mean = dot / dim as f32;
-            let each = xs.iter().zip(zs).zip(gs).zip(w);
-            let outs = gxs.iter_mut().zip(gzs.iter_mut()).zip(gw.iter_mut());
-            for ((((&xv, &zv), &gv), &wv), ((dx, dz), dw)) in each.zip(outs) {
-                let n = xv * r;
-                let (g, slope) = silu_and_slope(zv);
-                let dn = (gv * wv) * g;
-                *dx = r * (dn - n * mean);
-                *dz = ((gv * wv) * n) * slope;
-                *dw += (gv * n) * g;
-            }
-        }
+            Ok(())
+        })?;
         Ok(())
     })?;
     Ok((gx, gz, gw))

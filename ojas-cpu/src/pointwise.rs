@@ -68,11 +68,13 @@ pub(crate) fn sigmoid(x: f32) -> f32 {
 /// The rows of `table` (`[vocab, dim]`, read in place) that `ids` pick,
 /// copied value for value into one charged tensor shaped `dims.out_shape`.
 ///
-/// A row of 768 floats on aarch64 NEON is reserved with [`Scratch::try_extend`]
+/// On aarch64 NEON a row that is a whole number of 64-float blocks (768
+/// for nanolab, 2048 for Qwen3.5) is reserved with [`Scratch::try_extend`]
 /// and stored with `stnp`. The reserve does not write the buffer. Source
-/// loads are `ldp`. Every other width still zero-fills with
-/// [`Scratch::try_alloc`] and then `copy_from_slice`. The bits match that
-/// copy, including −0. A refusal drops the buffer and releases the one charge.
+/// loads are `ldp`. Any other width zero-fills with [`Scratch::try_alloc`]
+/// and then `copy_from_slice` (the kernel has no tail). The bits match
+/// that copy, including −0. A refusal drops the buffer and releases the one
+/// charge. (Until 2026-10-07 only 768 took the `stnp` path.)
 pub(crate) fn embedding_forward(
     op: &'static str,
     budget: &Budget,
@@ -84,8 +86,8 @@ pub(crate) fn embedding_forward(
     let row = dims.dim;
     let n = product(op, &[dims.tokens, row])?;
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-    if row == 768 && ids.len().checked_mul(row) == Some(n) {
-        return embedding_forward_stnp(op, budget, table, ids, n, &dims.out_shape);
+    if row > 0 && row.is_multiple_of(64) && ids.len().checked_mul(row) == Some(n) {
+        return embedding_forward_stnp(op, budget, table, row, ids, n, &dims.out_shape);
     }
     let mut out = Scratch::<f32>::try_alloc(n, budget)?;
     for (dst, id) in out.as_mut_slice().chunks_exact_mut(row).zip(ids) {
@@ -98,9 +100,9 @@ pub(crate) fn embedding_forward(
     Tensor::from_scratch(out, &dims.out_shape)
 }
 
-/// 768-wide gather. One charge, no zero-fill, `stnp` of each row.
+/// Gather of whole-block rows. One charge, no zero-fill, `stnp` of each row.
 ///
-/// [`ojas_simd::gather_embedding_rows_768`] writes every lane before `dst`'s
+/// [`ojas_simd::gather_embedding_rows`] writes every lane before `dst`'s
 /// length grows. A refusal leaves that length short, so [`Scratch::try_extend`]
 /// drops the vector and releases the charge. No partial tensor is returned.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -108,13 +110,14 @@ fn embedding_forward_stnp(
     op: &'static str,
     budget: &Budget,
     table: &[f32],
+    row: usize,
     ids: &[u32],
     n: usize,
     shape: &[usize],
 ) -> Result<Tensor, OjasError> {
     let mut refused = None;
     let scratch = Scratch::<f32>::try_extend(n, budget, |dst| {
-        if let Err(err) = ojas_simd::gather_embedding_rows_768(table, ids, dst) {
+        if let Err(err) = ojas_simd::gather_embedding_rows(table, row, ids, dst) {
             refused = Some(err);
         }
     });

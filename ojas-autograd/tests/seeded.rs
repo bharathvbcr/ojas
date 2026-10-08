@@ -12,7 +12,7 @@ mod common;
 
 use common::{bits, data, Resident};
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, BackendId, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, BackendId, Budget, CeChunk, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 const VOCAB: usize = 7;
@@ -344,4 +344,98 @@ fn take_grad_off_the_tape_is_none() {
     let g = record(&mut tape, false).unwrap();
     assert!(tape.take_grad(g.params[0]).is_none(), "no backward yet");
     assert!(tape.take_grad(Var(10_000)).is_none());
+}
+
+/// An add hands its gradient to both inputs without a copy, and a fan-in
+/// adds into one allocation: `h + h` charges the seed and one sum during
+/// the walk (before 2026-10-07 the add's backward wrote two copies and the
+/// fan-in a third tensor), with the bits of `silu'(x)` at an upstream 1.
+#[test]
+fn add_fan_in_shares_the_gradient_and_sums_into_one_tensor() {
+    let n = 4096usize;
+    let cpu = cpu_exact();
+    let budget = cpu.budget().clone();
+    let xv = Tensor::from_f32(&data(5, n), &[n], &budget).unwrap();
+    let ones = Tensor::from_f32(&vec![1.0; n], &[n], &budget).unwrap();
+    let want = bits(&cpu.silu_backward(&xv, &ones).unwrap());
+    drop(ones);
+    let mut tape = Tape::new(cpu.clone());
+    let x = tape.leaf(xv).unwrap();
+    let h = tape.silu(x).unwrap();
+    let y = tape.add(h, h).unwrap();
+    let before = budget.live_bytes().unwrap();
+    budget.reset_peak();
+    tape.backward_seeded(y, 0.5).unwrap();
+    assert_eq!(budget.peak_bytes() - before, 2 * 4 * n as u64, "walk peak");
+    let mut g = tape.take_grad(x).unwrap();
+    assert_eq!(bits(&g), want);
+    g.ensure_writable_f32(n).expect("leaf gradient is shared");
+}
+
+/// Two leaves added directly, and a leaf added to a reshape of another,
+/// end the walk holding one gradient between them; each still hands out a
+/// sole owner, with the seed's bits.
+#[test]
+fn take_grad_is_unique_when_an_add_reaches_two_leaves() {
+    let cpu = cpu_exact();
+    for through_reshape in [false, true] {
+        let mut tape = Tape::new(cpu.clone());
+        let leaf = |tape: &mut Tape<CpuBackend>, seed: u32, shape: &[usize]| {
+            let v = Tensor::from_f32(&data(seed, 4), shape, cpu.budget()).unwrap();
+            tape.leaf(v).unwrap()
+        };
+        let a = leaf(&mut tape, 6, &[2, 2]);
+        let (b, other) = if through_reshape {
+            let b = leaf(&mut tape, 7, &[4]);
+            (b, tape.reshape(b, &[2, 2]).unwrap())
+        } else {
+            let b = leaf(&mut tape, 7, &[2, 2]);
+            (b, b)
+        };
+        let s = tape.add(a, other).unwrap();
+        tape.backward_seeded(s, 0.5).unwrap();
+        for (name, var) in [("a", a), ("b", b)] {
+            let mut g = tape.take_grad(var).unwrap();
+            assert_eq!(g.to_f32_vec().unwrap(), vec![0.5; 4], "{name}");
+            g.ensure_writable_f32(4)
+                .unwrap_or_else(|e| panic!("{name} (reshape {through_reshape}) is shared: {e}"));
+        }
+    }
+}
+
+/// A fused cross-entropy at the root seeded with 1/4 scales its stored
+/// gradients where they are: the walk charges exactly what the seed-1 walk
+/// does (before 2026-10-07 each gradient was copied to the host, scaled and
+/// rebuilt as a new charged tensor), and the bits are 1/4 of seed 1's.
+#[test]
+fn a_seeded_fused_loss_scales_its_gradients_without_a_charge() {
+    let (rows, dim, vocab) = (6usize, 8usize, 32usize);
+    let cpu = cpu_exact();
+    let budget = cpu.budget().clone();
+    let xv = Tensor::from_f32(&data(8, rows * dim), &[rows, dim], &budget).unwrap();
+    let wv = Tensor::from_f32(&data(9, vocab * dim), &[vocab, dim], &budget).unwrap();
+    let ids: Vec<u32> = (0..rows as u32).map(|i| (i * 5) % vocab as u32).collect();
+    let chunk = CeChunk { rows: 4, cols: 16 };
+    let walk = |seed: f32| {
+        let mut tape = Tape::new(cpu.clone());
+        let x = tape.leaf(xv.clone()).unwrap();
+        let w = tape.leaf(wv.clone()).unwrap();
+        let targets = Tensor::from_u32(&ids, &[rows], &budget).unwrap();
+        let loss = tape
+            .linear_cross_entropy(x, w, targets, None, chunk)
+            .unwrap();
+        let before = budget.live_bytes().unwrap();
+        budget.reset_peak();
+        tape.backward_seeded(loss, seed).unwrap();
+        let peak = budget.peak_bytes() - before;
+        let gx = tape.take_grad(x).unwrap();
+        let gw = tape.take_grad(w).unwrap();
+        (peak, gx.to_f32_vec().unwrap(), gw.to_f32_vec().unwrap())
+    };
+    let (unit_peak, gx1, gw1) = walk(1.0);
+    let (peak, gx, gw) = walk(0.25);
+    assert_eq!(peak, unit_peak, "seed 1/4 walk peak");
+    let quarter = |v: &[f32]| v.iter().map(|x| (x * 0.25).to_bits()).collect::<Vec<_>>();
+    assert_eq!(gx.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), quarter(&gx1));
+    assert_eq!(gw.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), quarter(&gw1));
 }

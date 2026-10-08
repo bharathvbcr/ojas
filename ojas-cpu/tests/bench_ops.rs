@@ -583,6 +583,204 @@ fn muon_case(
     )
 }
 
+/// `acc += grad` into a uniquely owned accumulator, as the trainer does per
+/// trainable parameter per micro-batch. `acc` keeps growing by a tiny
+/// `grad` across calls (no copy, so the call is the in-place path), and
+/// `grad` is recorded finite at build time, as a gradient a CPU op produced
+/// is.
+fn accum_case(b: &Budget, name: &'static str, rows: usize, cols: usize, n: usize) -> Case {
+    let mut c = Ctx::new(b, name);
+    let acc = c.f32("acc", &[rows, cols], 1.0, 0.0);
+    let g = c.f32("g", &[rows, cols], 1e-6, 0.0);
+    assert!(c.tensors[g]
+        .all_finite_cached(|w| Ok(w.iter().all(|v| v.is_finite())))
+        .unwrap());
+    c.case(
+        name,
+        format!("[{rows},{cols}]"),
+        vec![dir("step", n, move |cpu, t| {
+            let (head, tail) = t.split_at_mut(g);
+            cpu.accumulate_grad(&mut head[acc], &tail[0])?;
+            Ok(Vec::new())
+        })],
+    )
+}
+
+/// Qwen3.5-2B shapes: hidden 2048, attention 8 query heads of `QD`, the
+/// gated delta rule 16 heads of 128, the conv over `QCONV` channels with
+/// `QK` taps, MLP 6144.
+const QH: usize = 2048;
+const QD: usize = 256;
+const QNH: usize = 8;
+const QGH: usize = 16;
+const QGD: usize = 128;
+const QCONV: usize = 6144;
+const QK: usize = 4;
+const QROT: usize = 64;
+/// Embedding rows for the Qwen3.5 row width (the real vocab, 248,320 rows,
+/// is 2 GB at width 2048; the row width, not the row count, sets the cost
+/// of a lookup).
+const QV: usize = 32768;
+
+fn embedding_qwen_case(b: &Budget) -> Case {
+    let mut c = Ctx::new(b, "embedding_qwen");
+    let table = c.f32("table", &[QV, QH], 0.035, 0.0);
+    let ids = c.ids("ids", &[1, T], QV);
+    let gy = c.f32("gy", &[1, T, QH], 0.01, 0.0);
+    c.case(
+        "embedding_qwen",
+        format!("[{QV},{QH}][1,{T}]"),
+        vec![
+            dir("fwd", 20, move |cpu, t| {
+                Ok(vec![out("y", cpu.embedding_forward(&t[table], &t[ids])?)])
+            }),
+            dir("bwd", 5, move |cpu, t| {
+                Ok(vec![out(
+                    "gtable",
+                    cpu.embedding_backward(&t[table], &t[ids], &t[gy])?,
+                )])
+            }),
+        ],
+    )
+}
+
+fn permute_qwen_case(b: &Budget) -> Case {
+    let mut c = Ctx::new(b, "permute_qwen");
+    let x = c.f32("x", &[1, T, QNH, QD], 1.0, 0.0);
+    c.case(
+        "permute_qwen",
+        format!("[1,{T},{QNH},{QD}]->(0,2,1,3)"),
+        vec![dir("fwd", 20, move |cpu, t| {
+            Ok(vec![out("y", cpu.permute(&t[x], &SWAP_TH)?)])
+        })],
+    )
+}
+
+fn conv1d_case(b: &Budget) -> Case {
+    let mut c = Ctx::new(b, "conv1d");
+    let x = c.f32("x", &[1, T, QCONV], 1.0, 0.0);
+    let w = c.f32("w", &[QCONV, QK], 0.5, 0.0);
+    let gy = c.f32("gy", &[1, T, QCONV], 0.01, 0.0);
+    c.case(
+        "conv1d",
+        format!("[1,{T},{QCONV}]k{QK}"),
+        vec![
+            dir("fwd", 10, move |cpu, t| {
+                Ok(vec![out(
+                    "y",
+                    cpu.causal_conv1d_silu_forward(&t[x], &t[w])?,
+                )])
+            }),
+            dir("bwd", 5, move |cpu, t| {
+                let (gx, gw) = cpu.causal_conv1d_silu_backward(&t[x], &t[w], &t[gy])?;
+                Ok(vec![out("gx", gx), out("gw", gw)])
+            }),
+        ],
+    )
+}
+
+/// One row per GDN head: `[T * 16, 128]`.
+fn gated_rms_case(b: &Budget) -> Case {
+    let mut c = Ctx::new(b, "gated_rms");
+    let rows = T * QGH;
+    let x = c.f32("x", &[rows, QGD], 1.0, 0.0);
+    let z = c.f32("z", &[rows, QGD], 1.0, 0.0);
+    let w = c.f32("w", &[QGD], 0.1, 1.0);
+    let gy = c.f32("gy", &[rows, QGD], 0.01, 0.0);
+    c.case(
+        "gated_rms",
+        format!("[{rows},{QGD}]"),
+        vec![
+            dir("fwd", 10, move |cpu, t| {
+                Ok(vec![out(
+                    "y",
+                    cpu.gated_rms_norm_forward(&t[x], &t[z], &t[w], RMS_NORM_EPS)?,
+                )])
+            }),
+            dir("bwd", 10, move |cpu, t| {
+                let g = cpu.gated_rms_norm_backward(&t[x], &t[z], &t[w], &t[gy], RMS_NORM_EPS)?;
+                Ok(vec![
+                    out("gx", g.input),
+                    out("gz", g.gate),
+                    out("gw", g.weight),
+                ])
+            }),
+        ],
+    )
+}
+
+fn rope_partial_case(b: &Budget) -> Case {
+    let mut c = Ctx::new(b, "rope_partial");
+    let x = c.f32("x", &[1, T, QNH, QD], 1.0, 0.0);
+    let cos = c.f32("cos", &[T, QROT], 1.0, 0.0);
+    let sin = c.f32("sin", &[T, QROT], 1.0, 0.0);
+    c.case(
+        "rope_partial",
+        format!("[1,{T},{QNH},{QD}]r{QROT}"),
+        vec![
+            dir("fwd", 20, move |cpu, t| {
+                Ok(vec![out(
+                    "y",
+                    cpu.rope_partial_forward(&t[x], &t[cos], &t[sin])?,
+                )])
+            }),
+            dir("bwd", 20, move |cpu, t| {
+                Ok(vec![out(
+                    "gx",
+                    cpu.rope_partial_backward(&t[x], &t[cos], &t[sin])?,
+                )])
+            }),
+        ],
+    )
+}
+
+/// The gated delta rule at Qwen3.5's 16 heads of 128, over `GT` tokens.
+/// The forward's checkpoints for the backward are made once, at build.
+const GT: usize = 512;
+
+fn gdn_case(b: &Budget) -> Case {
+    let mut c = Ctx::new(b, "gdn");
+    let q = c.f32("q", &[1, GT, QGH, QGD], 1.0, 0.0);
+    let k = c.f32("k", &[1, GT, QGH, QGD], 1.0, 0.0);
+    let v = c.f32("v", &[1, GT, QGH, QGD], 1.0, 0.0);
+    let g = c.f32("g", &[1, GT, QGH], 0.05, -0.1);
+    let beta = c.f32("beta", &[1, GT, QGH], 0.25, 0.5);
+    let gy = c.f32("gy", &[1, GT, QGH, QGD], 0.01, 0.0);
+    let inputs = |t: &[Tensor]| ojas_core::GdnInputs {
+        q: &t[q],
+        k: &t[k],
+        v: &t[v],
+        g: &t[g],
+        beta: &t[beta],
+        initial_state: None,
+    };
+    let ckpt = CpuBackend::new(b.clone())
+        .chunked_gdn_forward(inputs(&c.tensors))
+        .unwrap()
+        .checkpoints;
+    let ckpt = c.push("checkpoints", ckpt);
+    c.case(
+        "gdn",
+        format!("[1,{GT},{QGH},{QGD}]"),
+        vec![
+            dir("fwd", 3, move |cpu, t| {
+                let f = cpu.chunked_gdn_forward(inputs(t))?;
+                Ok(vec![out("y", f.output), out("state", f.final_state)])
+            }),
+            dir("bwd", 3, move |cpu, t| {
+                let gr = cpu.chunked_gdn_backward(inputs(t), &t[ckpt], &t[gy], None)?;
+                Ok(vec![
+                    out("gq", gr.q),
+                    out("gk", gr.k),
+                    out("gv", gr.v),
+                    out("gg", gr.g),
+                    out("gbeta", gr.beta),
+                ])
+            }),
+        ],
+    )
+}
+
 /// Every nanolab parameter shape, in `named_parameters` order: 123.7M values.
 fn nanolab_param_shapes() -> Vec<(String, Vec<usize>)> {
     let mut shapes = vec![("tok_emb".to_string(), vec![V, D])];
@@ -930,6 +1128,22 @@ fn builders() -> Vec<(&'static str, Builder)> {
         }),
         ("clip", clip_case),
         ("block", block_case),
+        ("accum_768x768", |b| accum_case(b, "accum_768x768", D, D, 40)),
+        ("accum_50304x768", |b| {
+            accum_case(b, "accum_50304x768", V, D, 10)
+        }),
+        ("embedding_qwen", embedding_qwen_case),
+        ("permute_qwen", permute_qwen_case),
+        ("muon_2048x2048", |b| {
+            muon_case(b, "muon_2048x2048", QH, QH, 3, Ns5Precision::F32)
+        }),
+        ("muon_6144x2048", |b| {
+            muon_case(b, "muon_6144x2048", 3 * QH, QH, 3, Ns5Precision::F32)
+        }),
+        ("conv1d", conv1d_case),
+        ("gated_rms", gated_rms_case),
+        ("rope_partial", rope_partial_case),
+        ("gdn", gdn_case),
     ]
 }
 

@@ -162,6 +162,79 @@ fn every_refusal_leaves_acc_unchanged() {
     assert!(f(&nan_acc)[0].is_nan());
 }
 
+/// Long enough that the check and the add are each cut into several pieces
+/// on 6 threads (and one on 1): unique and shared `acc` both equal
+/// `residual_add_forward` bit for bit; a NaN in the last piece, or an
+/// overflow in the first, is refused with `acc` unchanged, because the
+/// whole check finishes before the first write.
+#[test]
+fn several_pieces_sum_like_residual_add_and_refuse_before_any_write() {
+    let n = 300_001usize;
+    let mut rng = SplitMix64(0xacc3);
+    let a = rng.vec(n, 2.0);
+    let g = rng.vec(n, 2.0);
+    for threads in [1, 6] {
+        let be = CpuBackend::with_threads(Budget::new(u64::MAX), threads).unwrap();
+        let want = bits(&f(&be.residual_add_forward(&t(&a, &[n]), &t(&g, &[n])).unwrap()));
+        let mut acc = t(&a, &[n]);
+        be.accumulate_grad(&mut acc, &t(&g, &[n])).unwrap();
+        assert_eq!(bits(&f(&acc)), want, "unique, {threads} threads");
+        let mut shared = t(&a, &[n]);
+        let keep = shared.clone();
+        be.accumulate_grad(&mut shared, &t(&g, &[n])).unwrap();
+        assert_eq!(bits(&f(&shared)), want, "shared, {threads} threads");
+        assert_eq!(bits(&f(&keep)), bits(&a));
+
+        let mut nan_last = g.clone();
+        nan_last[n - 1] = f32::NAN;
+        let mut acc = t(&a, &[n]);
+        assert_nonfinite(be.accumulate_grad(&mut acc, &t(&nan_last, &[n])));
+        assert_eq!(bits(&f(&acc)), bits(&a), "NaN last, {threads} threads");
+        let mut big = a.clone();
+        big[0] = f32::MAX;
+        let mut over = g.clone();
+        over[0] = f32::MAX;
+        let mut acc = t(&big, &[n]);
+        assert_nonfinite(be.accumulate_grad(&mut acc, &t(&over, &[n])));
+        assert_eq!(bits(&f(&acc)), bits(&big), "overflow, {threads} threads");
+    }
+}
+
+/// `scale_grad` (the tape's loss seed): each value is one rounding of
+/// `value * scale`, the host loop's bits, at one and several pieces. A
+/// unique tensor is scaled where it is with nothing charged; a shared one is
+/// replaced and the other handle keeps the old values; a NaN, an overflow
+/// or a non-finite scale is `NonFinite`.
+#[test]
+fn scale_grad_is_the_host_product_in_place_or_replaced() {
+    let mut rng = SplitMix64(0xacc4);
+    for n in [7usize, 300_001] {
+        let v = rng.vec(n, 3.0);
+        let want: Vec<f32> = v.iter().map(|x| x * 0.25).collect();
+        for threads in [1, 6] {
+            let be = CpuBackend::with_threads(Budget::new(4 * n as u64), threads).unwrap();
+            let mut g = t(&v, &[n]);
+            let (offset, storage) = (g.byte_offset(), g.storage_len());
+            be.scale_grad(&mut g, 0.25).unwrap();
+            assert_eq!(bits(&f(&g)), bits(&want), "{n} in place, {threads} threads");
+            assert_eq!((g.byte_offset(), g.storage_len()), (offset, storage));
+            assert_eq!(be.budget().live_bytes().unwrap(), 0, "in place charged");
+
+            let mut g = t(&v, &[n]);
+            let keep = g.clone();
+            be.scale_grad(&mut g, 0.25).unwrap();
+            assert_eq!(bits(&f(&g)), bits(&want), "{n} shared, {threads} threads");
+            assert_eq!(bits(&f(&keep)), bits(&v));
+            assert_eq!(be.budget().live_bytes().unwrap(), 4 * n as u64);
+        }
+    }
+    let be = CpuBackend::new(Budget::new(u64::MAX));
+    assert_nonfinite(be.scale_grad(&mut t(&[1.0, f32::NAN], &[2]), 0.5));
+    assert_nonfinite(be.scale_grad(&mut t(&[1.0, 3.0e38], &[2]), 4.0));
+    assert_nonfinite(be.scale_grad(&mut t(&[1.0, 2.0], &[2]), f32::INFINITY));
+    assert_nonfinite(be.scale_grad(&mut t(&[1.0, 2.0], &[2]), f32::NAN));
+}
+
 /// Interleaved A/B, min of N: the trait default's body
 /// (`*acc = residual_add_forward(acc, grad)`) against the override.
 /// `cargo test --release -p ojas-cpu --test framework_accum -- --ignored --nocapture`

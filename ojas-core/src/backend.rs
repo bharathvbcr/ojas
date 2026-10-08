@@ -405,6 +405,48 @@ pub struct GatedRmsGrad {
     pub weight: Tensor,
 }
 
+/// `host` where `backend` computes: as given on the CPU, uploaded otherwise.
+fn place_host<B: Backend + ?Sized>(backend: &B, host: Tensor) -> Result<Tensor, OjasError> {
+    if backend.id() == BackendId::Cpu {
+        Ok(host)
+    } else {
+        backend.upload(&host)
+    }
+}
+
+/// `scalar` (one element, where `backend` computes) repeated over `shape`,
+/// built on the backend without reading `scalar` back: `ones[cols, 1] @
+/// s[1, 1]^T` is a `[cols, 1]` column of `s`, and `ones[rows, 1] @
+/// column^T` is `[rows, cols]`. Each output is one product with 1, so it is
+/// `s` exactly. Holds `rows + cols` ones besides the result.
+pub fn broadcast_scalar<B: Backend + ?Sized>(
+    backend: &B,
+    scalar: &Tensor,
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    const OP: &str = "broadcast_scalar";
+    let cols = *shape.last().ok_or_else(|| OjasError::Shape {
+        op: OP,
+        detail: "cannot broadcast a scalar over rank 0".to_string(),
+    })?;
+    let n = crate::shape_product(shape)?;
+    if n == 0 {
+        return Err(OjasError::Shape {
+            op: OP,
+            detail: "empty tensor".to_string(),
+        });
+    }
+    let rows = n / cols;
+    let ones = |len: usize| {
+        let host = Tensor::from_f32(&vec![1.0; len], &[len, 1], backend.budget())?;
+        place_host(backend, host)
+    };
+    let s = scalar.reshape(&[1, 1])?;
+    let column = backend.linear_forward(&ones(cols)?, &s)?;
+    let full = backend.linear_forward(&ones(rows)?, &column)?;
+    full.reshape(shape)
+}
+
 /// The refusal of a Qwen3.5 hybrid-layer op (causal conv1d, gated RMSNorm,
 /// partial RoPE) that backend `id` does not implement. There is no host
 /// fallback.
@@ -1046,6 +1088,29 @@ pub trait Backend {
         Ok(())
     }
 
+    /// `grad *= scale`, for a gradient its caller owns: the loss seed a
+    /// tape applies to a loss's unit gradient when the walk was not seeded
+    /// with exactly 1 (a trainer averaging K micro-batches seeds `1 / K`).
+    ///
+    /// Each value is one rounding of `value * scale`. A non-finite `scale`,
+    /// input or product is [`OjasError::NonFinite`], reported as
+    /// [`Backend::sync`] describes, and `grad`'s values are then
+    /// unspecified: the caller discards it. A backend that overrides this
+    /// writes a uniquely owned `grad` in place and replaces a shared one
+    /// with a new tensor (the other handles keep the old values). The
+    /// default replaces `grad` with [`Backend::mul_forward`] of `grad` and
+    /// `scale` repeated over its shape ([`broadcast_scalar`]), built on the
+    /// backend from one uploaded value, so nothing is read back.
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        if !scale.is_finite() {
+            return Err(OjasError::NonFinite { op: "scale_grad" });
+        }
+        let scalar = place_host(self, Tensor::from_f32(&[scale], &[1], self.budget())?)?;
+        let full = broadcast_scalar(self, &scalar, grad.shape())?;
+        *grad = self.mul_forward(grad, &full)?;
+        Ok(())
+    }
+
     /// Mean cross-entropy of `input @ weight^T` without materializing the
     /// `[N, V]` logits, plus both gradients when `want_grad` is set.
     ///
@@ -1576,6 +1641,9 @@ macro_rules! forward_backend {
         }
         fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
             (**self).accumulate_grad(acc, grad)
+        }
+        fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+            (**self).scale_grad(grad, scale)
         }
         fn linear_cross_entropy_mean(
             &self,
@@ -2419,6 +2487,9 @@ pub(crate) mod tests {
         fn accumulate_grad(&self, _: &mut Tensor, _: &Tensor) -> Result<(), OjasError> {
             Err(mark("accumulate_grad"))
         }
+        fn scale_grad(&self, _: &mut Tensor, _: f32) -> Result<(), OjasError> {
+            Err(mark("scale_grad"))
+        }
         fn linear_cross_entropy_mean(
             &self,
             _: &Tensor,
@@ -2537,6 +2608,7 @@ pub(crate) mod tests {
             op(backend.optimizer_scratch_bytes(OptimizerKind::MuonNs5, 1, 1)),
             op(backend.sync()),
             op(backend.accumulate_grad(&mut m, &t)),
+            op(backend.scale_grad(&mut m, 0.5)),
             op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, true)),
             op(backend.cached_attention_forward(&t, &t, &t, 1)),
             op(backend.kv_cache_write(&mut m, &t, 0)),
@@ -2587,6 +2659,7 @@ pub(crate) mod tests {
             "optimizer_scratch_bytes",
             "sync",
             "accumulate_grad",
+            "scale_grad",
             "linear_cross_entropy_mean",
             "cached_attention_forward",
             "kv_cache_write",
@@ -2627,7 +2700,7 @@ pub(crate) mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 51);
+        assert_eq!(checked, 52);
     }
 
     #[test]

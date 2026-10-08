@@ -366,10 +366,6 @@ impl<B: Backend> Tape<B> {
         self.place(host)
     }
 
-    fn ones(&self, shape: &[usize]) -> Result<Tensor, OjasError> {
-        self.fill(shape, 1.0)
-    }
-
     pub fn value(&self, var: Var) -> Result<&Tensor, OjasError> {
         self.values.get(var.0).ok_or_else(|| OjasError::OutOfRange {
             op: "Tape::value",
@@ -387,8 +383,10 @@ impl<B: Backend> Tape<B> {
     /// pass it to [`Backend::accumulate_grad`] or an in-place op and then
     /// [`Tape::clear`] the tape. The tensor is uniquely owned as long as the
     /// backend returned a separate allocation for each gradient output, as
-    /// `CpuBackend` does. A second call, a call after a failed backward, and
-    /// a variable that is not on this tape all return `None`.
+    /// `CpuBackend` does: the one gradient the tape itself shares between
+    /// two inputs (an add's) is copied for a leaf that would otherwise
+    /// share it when the walk ends. A second call, a call after a failed
+    /// backward, and a variable that is not on this tape all return `None`.
     pub fn take_grad(&mut self, var: Var) -> Option<Tensor> {
         self.grads.get_mut(var.0).and_then(Option::take)
     }
@@ -957,10 +955,12 @@ impl<B: Backend> Tape<B> {
         self.grads[var.0] = Some(self.fill(&shape, seed)?);
         let len = self.values.len();
         // Nothing recorded after the root feeds it, so its gradient is
-        // still the seed. Only a seed of exactly 1 lets a loss hand its
-        // unscaled gradient straight through.
-        let unit_root = (seed == 1.0).then_some(var.0);
-        let walked = self.walk(0, var.0, unit_root);
+        // still the seed, known here on the host: a loss at the root scales
+        // by it without reading its gradient back, and a seed of exactly 1
+        // hands the loss's unscaled gradient straight through.
+        let walked = self
+            .walk(0, var.0, Some((var.0, seed)))
+            .and_then(|()| self.unshare_leaf_grads());
         // A replay that failed part way leaves its nodes past `len`, and
         // gradients pending in segments the walk did not reach.
         self.truncate(len);
@@ -974,12 +974,13 @@ impl<B: Backend> Tape<B> {
     }
 
     /// Backpropagate every node from `top` down to `bottom`, inclusive.
-    /// `unit_root` is the node whose gradient is still an exact seed of 1.
+    /// `root` is the node whose gradient is still the walk's seed, with that
+    /// seed.
     fn walk(
         &mut self,
         bottom: usize,
         top: usize,
-        unit_root: Option<usize>,
+        root: Option<(usize, f32)>,
     ) -> Result<(), OjasError> {
         for index in (bottom..=top).rev() {
             let grad = self.grads[index].take();
@@ -999,9 +1000,32 @@ impl<B: Backend> Tape<B> {
             // Leaves keep the gradient a caller reads. Every other node's
             // gradient has been pushed into its inputs, so it is dropped.
             let retain = matches!(op, Rec::Leaf);
-            self.backward_one(op, &grad, unit_root == Some(index))?;
+            let seed = root.and_then(|(at, seed)| (at == index).then_some(seed));
+            self.backward_one(op, &grad, seed)?;
             if retain {
                 self.grads[index] = Some(grad);
+            }
+        }
+        Ok(())
+    }
+
+    /// Give every leaf gradient an allocation of its own, as
+    /// [`Tape::take_grad`] promises. [`Rec::Add`] hands one gradient to both
+    /// of its inputs; once the walk is over, every handle a non-leaf held
+    /// has dropped, so a gradient still shared here is one that two leaves
+    /// reached (two leaves added, or one through a reshape view). Each such
+    /// leaf after the first that holds it gets a copy with the same bits
+    /// ([`Backend::residual_add_backward`], the copy that op made before
+    /// 2026-10-07). No other graph pays anything here.
+    fn unshare_leaf_grads(&mut self) -> Result<(), OjasError> {
+        let Self { backend, grads, .. } = self;
+        for slot in grads.iter_mut() {
+            let Some(grad) = slot else {
+                continue;
+            };
+            if grad.shares_allocation() {
+                let (copy, _) = backend.residual_add_backward(grad, grad, grad)?;
+                *grad = copy;
             }
         }
         Ok(())
@@ -1056,7 +1080,7 @@ impl<B: Backend> Tape<B> {
         op
     }
 
-    fn backward_one(&mut self, op: Rec, grad: &Tensor, unit_root: bool) -> Result<(), OjasError> {
+    fn backward_one(&mut self, op: Rec, grad: &Tensor, seed: Option<f32>) -> Result<(), OjasError> {
         match op {
             Rec::Leaf => Ok(()),
             // `walk` replays segments itself and never passes one here.
@@ -1210,11 +1234,18 @@ impl<B: Backend> Tape<B> {
                 self.acc(b, gb)
             }
             Rec::Add { x, y } => {
-                let xv = self.values[x].clone();
-                let yv = self.values[y].clone();
-                let (gx, gy) = self.backend.residual_add_backward(&xv, &yv, grad)?;
-                self.acc(x, gx)?;
-                self.acc(y, gy)
+                // Both gradients of `x + y` are `grad` itself, so both inputs
+                // share its allocation: no copy and no charge (before
+                // 2026-10-07 `residual_add_backward` wrote two copies). That
+                // op's checks would add nothing here: the forward's
+                // `residual_add_forward` refused a non-finite `x` or `y`, the
+                // tape's handles keep them unchanged, and `grad` came from
+                // an op that refused a non-finite output. A shared gradient
+                // is never written: `acc` adds into an unshared side or into
+                // a new tensor, and `unshare_leaf_grads` gives each leaf its
+                // own before `backward_seeded` returns.
+                self.acc(x, grad.clone())?;
+                self.acc(y, grad.clone())
             }
             Rec::Reshape { src, src_shape, .. } => {
                 let gx = grad.reshape(&src_shape)?;
@@ -1235,7 +1266,7 @@ impl<B: Backend> Tape<B> {
                     &targets,
                     ignore,
                 )?;
-                let scaled = self.scale_loss_grad(raw, grad, unit_root)?;
+                let scaled = self.scale_loss_grad(raw, grad, seed)?;
                 self.acc(logits, scaled)
             }
             Rec::LinearCe {
@@ -1251,8 +1282,8 @@ impl<B: Backend> Tape<B> {
                     Some(grads) => grads,
                     None => self.fused_ce(x, w, &targets, ignore, chunk)?.1,
                 };
-                let gx = self.scale_loss_grad(gx, grad, unit_root)?;
-                let gw = self.scale_loss_grad(gw, grad, unit_root)?;
+                let gx = self.scale_loss_grad(gx, grad, seed)?;
+                let gw = self.scale_loss_grad(gw, grad, seed)?;
                 self.acc(x, gx)?;
                 self.acc(w, gw)
             }
@@ -1269,49 +1300,34 @@ impl<B: Backend> Tape<B> {
     }
 
     /// A loss's seed-1 gradient `raw` times the scalar upstream gradient
-    /// `grad`. `raw` must be owned by the caller alone; at a root seeded with
-    /// exactly 1 it is returned as is. Otherwise the CPU path multiplies on
-    /// the host, and a device path multiplies by `grad` broadcast on the
-    /// device, so nothing is read back. Either way the result is a new
-    /// allocation.
+    /// `grad`. `raw` must be owned by the caller alone.
+    ///
+    /// A loss at the root knows its seed on the host (`seed`): 1 returns
+    /// `raw` as is, and any other seed (a trainer's `1 / K`) is
+    /// [`Backend::scale_grad`], which the CPU does in place with no copy
+    /// (before 2026-10-07 the CPU path copied `raw` out to a `Vec`, scaled
+    /// it and built a new tensor, for a fused loss including the
+    /// vocab-by-d_model weight gradient). A loss below the root scales by
+    /// `grad`: read on the CPU, and on a device broadcast there and
+    /// multiplied ([`ojas_core::broadcast_scalar`]), so nothing is read back.
     fn scale_loss_grad(
         &self,
-        raw: Tensor,
+        mut raw: Tensor,
         grad: &Tensor,
-        unit_root: bool,
+        seed: Option<f32>,
     ) -> Result<Tensor, OjasError> {
-        if unit_root {
-            Ok(raw)
-        } else if self.backend.id() == BackendId::Cpu {
-            let seed = scalar_seed(grad)?;
-            let mut data = raw.to_f32_vec()?;
-            for value in &mut data {
-                *value *= seed;
+        let seed = match seed {
+            Some(seed) => seed,
+            None if self.backend.id() == BackendId::Cpu => scalar_seed(grad)?,
+            None => {
+                let full = ojas_core::broadcast_scalar(&self.backend, grad, raw.shape())?;
+                return self.backend.mul_forward(&raw, &full);
             }
-            Tensor::from_f32(&data, raw.shape(), self.backend.budget())
-        } else {
-            let seed = self.broadcast_scalar(grad, raw.shape())?;
-            self.backend.mul_forward(&raw, &seed)
+        };
+        if seed != 1.0 {
+            self.backend.scale_grad(&mut raw, seed)?;
         }
-    }
-
-    /// `scalar` repeated over `shape`, built on the backend without reading
-    /// `scalar` back: `ones[cols, 1] @ s[1, 1]^T` is a `[cols, 1]` column of
-    /// `s`, and `ones[rows, 1] @ column^T` is `[rows, cols]`. Each output is
-    /// one product with 1, so it is `s` exactly.
-    fn broadcast_scalar(&self, scalar: &Tensor, shape: &[usize]) -> Result<Tensor, OjasError> {
-        let n = shape_product("Tape::backward", shape)?;
-        let cols = *shape.last().ok_or_else(|| OjasError::Shape {
-            op: "Tape::backward",
-            detail: "cannot broadcast a scalar over rank 0".to_string(),
-        })?;
-        let rows = n / cols;
-        let s = scalar.reshape(&[1, 1])?;
-        let column = self.backend.linear_forward(&self.ones(&[cols, 1])?, &s)?;
-        let full = self
-            .backend
-            .linear_forward(&self.ones(&[rows, 1])?, &column)?;
-        full.reshape(shape)
+        Ok(raw)
     }
 
     fn push(&mut self, value: Tensor, op: Rec) -> Var {
@@ -1322,10 +1338,24 @@ impl<B: Backend> Tape<B> {
         Var(id)
     }
 
+    /// Add `grad` into node `id`'s gradient. The first gradient is kept as
+    /// it is. A later one is added with [`Backend::accumulate_grad`] into
+    /// whichever of the two this tape holds alone, the existing gradient
+    /// unless only the incoming one is unshared, so a fan-in allocates
+    /// nothing while either is solely owned; with both shared (both came
+    /// from [`Rec::Add`]) the backend builds the sum in a new tensor. The
+    /// sum is one rounding of `old + grad`, and addition commutes, so the
+    /// bits do not depend on which side is written. Before 2026-10-07 every
+    /// fan-in built a new tensor with `residual_add_forward`.
     fn acc(&mut self, id: usize, grad: Tensor) -> Result<(), OjasError> {
-        if let Some(old) = &self.grads[id] {
-            let sum = self.backend.residual_add_forward(old, &grad)?;
-            self.grads[id] = Some(sum);
+        if let Some(old) = self.grads[id].take() {
+            let (mut into, from) = if old.shares_allocation() && !grad.shares_allocation() {
+                (grad, old)
+            } else {
+                (old, grad)
+            };
+            self.backend.accumulate_grad(&mut into, &from)?;
+            self.grads[id] = Some(into);
         } else {
             self.grads[id] = Some(grad);
         }

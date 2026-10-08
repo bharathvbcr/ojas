@@ -166,6 +166,12 @@ pub enum SimdError {
     /// [`store_neg_abs_signs`]: a lane was NaN or an infinity.
     /// `signs` was not published. Lanes before that chunk may hold `-|x|`.
     NonFinite,
+    /// [`gather_embedding_rows`]: the row width is not a positive multiple
+    /// of the kernel's 64-float block.
+    RowWidth {
+        /// The row width that was asked for.
+        row: usize,
+    },
 }
 
 impl fmt::Display for SimdError {
@@ -215,6 +221,9 @@ impl fmt::Display for SimdError {
                 write!(f, "stored {done} of {expected} chunks")
             }
             SimdError::NonFinite => write!(f, "a value is not finite"),
+            SimdError::RowWidth { row } => {
+                write!(f, "row width {row} is not a positive multiple of 64")
+            }
         }
     }
 }
@@ -852,14 +861,15 @@ pub fn with_nanolab_token_bands<E>(
     Ok(outcome)
 }
 
-/// Append gathered embedding rows of 768 floats onto `dst`.
+/// Append gathered embedding rows of `row` floats onto `dst`.
 ///
-/// Row `i` of the output is `table[ids[i] * 768 ..][..768]`, in id order.
-/// `table.len()` must be a multiple of 768. The copy is a move: `ldp` loads
-/// each row and `stnp` stores it into spare capacity. Nothing is zero-filled.
-/// `dst` grows by `ids.len() * 768` only after every row is stored. −0, NaN
-/// payloads, and subnormals are unchanged. A 768-float row is twelve blocks
-/// of 64, so this kernel has no tail.
+/// Row `i` of the output is `table[ids[i] * row ..][..row]`, in id order.
+/// `row` must be a positive multiple of 64 and `table.len()` a multiple of
+/// `row`. The copy is a move: `ldp` loads each 64-float block of a row and
+/// `stnp` stores it into spare capacity, so the kernel has no tail. Nothing
+/// is zero-filled. `dst` grows by `ids.len() * row` only after every row
+/// is stored. −0, NaN payloads, and subnormals are unchanged. (Until
+/// 2026-10-07 this took 768-float rows only.)
 ///
 /// `dst` must already have room for those elements. On error `dst` is
 /// unchanged. The new elements must not overlap `table`.
@@ -868,27 +878,31 @@ pub fn with_nanolab_token_bands<E>(
 ///
 /// # Errors
 ///
+/// [`SimdError::RowWidth`] when `row` is not a positive multiple of 64.
 /// [`SimdError::BufferTooShort`] when `table` is not a whole number of rows,
 /// or an id selects a row past `table`. [`SimdError::LengthTooLarge`] when
-/// `ids.len() * 768` overflows. [`SimdError::OutputLength`] when spare
+/// `ids.len() * row` overflows. [`SimdError::OutputLength`] when spare
 /// capacity is short (`output` is the spare count). [`SimdError::OverlappingOutput`]
 /// when the spare range overlaps `table`. A refusal does not write `dst`.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-pub fn gather_embedding_rows_768(
+pub fn gather_embedding_rows(
     table: &[f32],
+    row: usize,
     ids: &[u32],
     dst: &mut Vec<f32>,
 ) -> Result<(), SimdError> {
-    const ROW: usize = 768;
-    if !table.len().is_multiple_of(ROW) {
+    if row == 0 || !row.is_multiple_of(64) {
+        return Err(SimdError::RowWidth { row });
+    }
+    if !table.len().is_multiple_of(row) {
         return Err(SimdError::BufferTooShort {
             operand: Operand::A,
-            required: table.len().div_ceil(ROW) * ROW,
+            required: table.len().div_ceil(row) * row,
             len: table.len(),
         });
     }
-    let vocab = table.len() / ROW;
-    let n = match ids.len().checked_mul(ROW) {
+    let vocab = table.len() / row;
+    let n = match ids.len().checked_mul(row) {
         Some(n) => n,
         None => return Err(SimdError::LengthTooLarge { len: ids.len() }),
     };
@@ -897,7 +911,7 @@ pub fn gather_embedding_rows_768(
     }
     for &id in ids {
         if id as usize >= vocab {
-            let required = (id as usize).saturating_add(1).saturating_mul(ROW);
+            let required = (id as usize).saturating_add(1).saturating_mul(row);
             return Err(SimdError::BufferTooShort {
                 operand: Operand::A,
                 required,
@@ -916,7 +930,7 @@ pub fn gather_embedding_rows_768(
     if ranges_overlap(table.as_ptr(), table.len(), dest, n) {
         return Err(SimdError::OverlappingOutput);
     }
-    arch::gather_embedding_rows_768(table, ids, dst);
+    arch::gather_embedding_rows(table, row, ids, dst);
     Ok(())
 }
 
