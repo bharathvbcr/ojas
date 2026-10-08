@@ -28,7 +28,8 @@
 //! This differs from `ojas-cpu`: an FMA chain rounds once per step, and the
 //! Exact tier rounds the product and the sum separately.
 //!
-//! [`sgemm_accelerate`] does not follow this contract. See its docs.
+//! [`sgemm_accelerate`] and [`ssyrk_accelerate`] do not follow this
+//! contract. See their docs.
 //!
 //! With the `accelerate` feature on macOS, [`vdsp_vmul`], [`vdsp_vadd`],
 //! and their append forms call the stride-1 vDSP kernels. Each output is
@@ -114,13 +115,15 @@ pub enum SimdError {
         /// The backend that was requested.
         backend: Backend,
     },
-    /// [`sgemm_accelerate`] only: BLAS needs a unit stride on one axis and a
+    /// [`sgemm_accelerate`] and [`ssyrk_accelerate`] only: BLAS needs a unit
+    /// stride on one axis and a
     /// leading dimension at least the length of the other axis.
     UnsupportedLayout {
         /// The operand BLAS cannot address.
         operand: Operand,
     },
-    /// [`sgemm_accelerate`] only: a dimension or leading dimension exceeds
+    /// [`sgemm_accelerate`] and [`ssyrk_accelerate`] only: a dimension or
+    /// leading dimension exceeds
     /// `i32::MAX`, the largest value CBLAS `int` can hold.
     DimensionTooLarge {
         /// The value that does not fit.
@@ -468,6 +471,56 @@ pub fn sgemm_accelerate(
     }
     let call = layout::BlasCall::from_problem(&p)?;
     arch::accelerate_sgemm(&call, a, b, c);
+    Ok(())
+}
+
+/// `C[n×n] = A[n×k] · Aᵀ` through Accelerate's `cblas_ssyrk`, every element
+/// written.
+///
+/// `A` is addressed as in [`sgemm_accelerate`] (`a_rs`, `a_cs`, with the
+/// same BLAS-addressable layouts), and `C` is row-major with row stride
+/// `c_rs >= n`. What `C` held is never read. `cblas_ssyrk` computes the
+/// upper triangle (`j >= i`), about half the multiply-adds of the
+/// [`sgemm_accelerate`] call `A · Aᵀ`, and each value below the diagonal is
+/// then copied from its mirror, so `C` is exactly symmetric.
+///
+/// Determinism is [`sgemm_accelerate`]'s: repeatable on one machine and OS
+/// build, order unspecified. The bits are Accelerate's `ssyrk`, not its
+/// `sgemm` (they were equal on an M5 Pro, macOS 27, at `n` 768 and 2048, `k`
+/// 768 to 6144, but nothing promises that).
+///
+/// # Errors
+///
+/// [`sgemm_accelerate`]'s, for the product `A · Aᵀ`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn ssyrk_accelerate(
+    n: usize,
+    k: usize,
+    a: &[f32],
+    a_rs: usize,
+    a_cs: usize,
+    c: &mut [f32],
+    c_rs: usize,
+) -> Result<(), SimdError> {
+    // `Aᵀ` is `a` with the strides swapped, so this is the GEMM
+    // `sgemm_accelerate` would run for `A · Aᵀ`, validated the same way.
+    let p = layout::Problem::validate(n, n, k, a, a_rs, a_cs, a, a_cs, a_rs, c, c_rs, false)?;
+    if n == 0 {
+        return Ok(());
+    }
+    if k == 0 {
+        gemm::zero_unless_accumulate(&p, c);
+        return Ok(());
+    }
+    let call = layout::BlasCall::from_problem(&p)?;
+    arch::accelerate_ssyrk_upper(&call, a, c);
+    let ldc = p.c_rs;
+    for i in 1..n {
+        let (above, row) = c.split_at_mut(i * ldc);
+        for (j, value) in row[..i].iter_mut().enumerate() {
+            *value = above[j * ldc + i];
+        }
+    }
     Ok(())
 }
 

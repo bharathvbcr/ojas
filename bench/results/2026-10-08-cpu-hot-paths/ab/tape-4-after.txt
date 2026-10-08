@@ -1,0 +1,2 @@
+OJAS_TAPE row=ce_seed_1_[1024,768]x[50304,768] n=7 min_ms=0.0026 med_ms=0.0032
+OJAS_TAPE row=ce_seed_0.25_[1024,768]x[50304,768] n=7 min_ms=1.6000 med_ms=1.7025

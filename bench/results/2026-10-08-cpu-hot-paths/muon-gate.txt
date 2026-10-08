@@ -1,0 +1,48 @@
+round=1 gate=nanolab load={ 22.81 33.39 27.96 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=33.0656 med_ms=42.7233
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=47.5310 med_ms=49.8876
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=486.6494 med_ms=516.5884
+round=1 gate=off load={ 22.81 33.39 27.96 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=25.7211 med_ms=32.3415
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=44.0301 med_ms=53.4320
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=590.8123 med_ms=635.3446
+round=1 gate=tall load={ 22.02 33.05 27.87 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=58.3180 med_ms=75.8496
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=96.3268 med_ms=111.6202
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1410.1033 med_ms=1431.8407
+round=1 gate=tallbands load={ 27.34 33.83 28.21 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=55.3595 med_ms=56.3040
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=103.9773 med_ms=172.2779
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1247.8777 med_ms=1333.8212
+round=2 gate=nanolab load={ 34.73 35.19 28.75 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=56.4455 med_ms=78.7206
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=53.2640 med_ms=92.0571
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1117.2672 med_ms=1173.0400
+round=2 gate=off load={ 43.32 36.96 29.42 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=65.4008 med_ms=121.0925
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=101.1200 med_ms=153.1108
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1190.1840 med_ms=1302.0921
+round=2 gate=tall load={ 49.97 38.58 30.08 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=52.2135 med_ms=173.4840
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=146.5417 med_ms=297.9065
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1737.1656 med_ms=1800.4487
+round=2 gate=tallbands load={ 51.54 39.31 30.44 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=43.4449 med_ms=147.2550
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=71.5872 med_ms=167.3837
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1851.9227 med_ms=2060.6021
+round=3 gate=nanolab load={ 50.64 39.68 30.72 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=56.8473 med_ms=110.4834
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=62.4216 med_ms=130.3980
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=891.5458 med_ms=898.9763
+round=3 gate=off load={ 51.14 39.97 30.88 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=48.8242 med_ms=64.7849
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=63.9867 med_ms=136.6668
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=764.2789 med_ms=784.5983
+round=3 gate=tall load={ 50.97 40.12 30.98 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=59.4192 med_ms=78.9938
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=165.3250 med_ms=172.0413
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1722.9563 med_ms=1728.4240
+round=3 gate=tallbands load={ 49.29 40.13 31.09 }
+OJAS_OP op=muon_2048x768 dir=step shape=[2048,768] threads=6 n=5 min_ms=59.7503 med_ms=112.7185
+OJAS_OP op=muon_3072x768 dir=step shape=[3072,768] threads=6 n=5 min_ms=75.6858 med_ms=121.5254
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=1464.1188 med_ms=1494.2291

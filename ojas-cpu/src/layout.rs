@@ -251,7 +251,7 @@ impl Runs {
     /// `mid` starts at `mid * mid_step`, so the heads are not one matrix. One
     /// `vDSP_mmov` per head, except [`Self::nanolab_pairs`]. Until 2026-10-07
     /// only a 64-float run (nanolab's head dim) took this path; Qwen3.5's
-    /// head dim of 256 now does too (`bench/results/2026-10-07-cpu-hot-paths`).
+    /// head dim of 256 now does too (`bench/results/2026-10-08-cpu-hot-paths`).
     #[cfg(target_os = "macos")]
     fn use_mmov(&self, numerics: Numerics) -> bool {
         numerics == Numerics::Fast
@@ -265,6 +265,13 @@ impl Runs {
     ///
     /// Adjacent heads are contiguous in the token. The pair move loads 128
     /// floats once per token instead of twelve strided `vDSP_mmov` passes.
+    ///
+    /// The gate is the kernel's shape, kept on purpose. Its token bands and
+    /// caller/worker row split ([`NANOLAB_CALLER_ROWS`]) are tuned for exactly this
+    /// layout, and what it buys is pairing 64-float runs, each too short for
+    /// one `vDSP_mmov` row to stream well. Qwen3.5's `[B, T, 8, 256]` runs are
+    /// 1 KiB each, four times longer, and take [`Self::use_mmov`]
+    /// (`bench/results/2026-10-08-cpu-hot-paths`, `permute_qwen`).
     #[cfg(all(target_os = "macos", target_arch = "aarch64", target_feature = "neon"))]
     fn nanolab_pairs(&self) -> bool {
         self.inner_extent == 1024

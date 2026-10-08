@@ -293,6 +293,49 @@ pub(crate) fn gemm_out(
     gemm_into(op, exec, a, b, c, false)
 }
 
+/// `c = A · Aᵀ`, row-major `[a.rows, a.rows]`, for the Newton-Schulz Gram
+/// product. What `c` held is never read.
+///
+/// A Fast whole call on macOS is one `ojas_simd::ssyrk_accelerate`: about
+/// half the multiply-adds of the `A · Aᵀ` [`gemm_out`], and an exactly
+/// symmetric result (measured on an M5 Pro at the Muon shapes `768 × 768`
+/// to `2048 × 6144`, 0.46-0.94 of the time of the two-band `cblas_sgemm`
+/// split it replaced, with the same bits as one whole `cblas_sgemm`;
+/// `bench/results/2026-10-08-cpu-hot-paths`). Like that call, it runs on the
+/// calling thread and the cancel hook is consulted once before it. A layout
+/// Accelerate refuses, Exact numerics, a product below the whole-call
+/// cutoff and every other platform run [`gemm_out`] against `a.t()`.
+pub(crate) fn gram_out(
+    op: &'static str,
+    exec: Exec<'_>,
+    a: &Mat,
+    c: &mut [f32],
+) -> Result<(), OjasError> {
+    let at = a.t();
+    let len = operands(op, a, &at)?;
+    if c.len() != len {
+        return Err(shape(
+            op,
+            format!("gram output length {} != {len}", c.len()),
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    if !c.is_empty() && a.cols > 0 && whole_call(exec.numerics, a.rows, a.cols, a.rows) {
+        use ojas_simd::SimdError;
+        exec.pool.cancel_hook()()?;
+        match ojas_simd::ssyrk_accelerate(a.rows, a.cols, a.data, a.rs, a.cs, c, a.rows) {
+            Ok(()) => {
+                #[cfg(test)]
+                WHOLE_CALLS.with(|calls| calls.set((calls.get().0 + 1, calls.get().1)));
+                return Ok(());
+            }
+            Err(SimdError::UnsupportedLayout { .. } | SimdError::DimensionTooLarge { .. }) => {}
+            Err(err) => return Err(simd_error(op, err)),
+        }
+    }
+    gemm_into(op, exec, a, &at, c, false)
+}
+
 /// `c += A · B`, `c` row-major `[a.rows, b.cols]`.
 ///
 /// Every output continues from the value in `c` with the same steps
@@ -1221,6 +1264,82 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `gram_out` is `A · Aᵀ` for a row-major `A` and for a transposed view
+    /// (the Muon iterate's two layouts). Exact and a Fast product below the
+    /// cutoff are `gemm_out`'s bits. A Fast whole call is one Accelerate
+    /// call on macOS (`cblas_ssyrk`, exactly symmetric, within the f32
+    /// error bound of the Exact product), and `gemm_out`'s bits elsewhere.
+    #[test]
+    fn gram_out_is_a_times_a_transpose_and_one_whole_call() {
+        let pool = Arc::new(Pool::new(6).unwrap());
+        for (r, c) in [(5usize, 7usize), (96, 160), (192, 64)] {
+            let data = random(r * c, 21);
+            for transposed in [false, true] {
+                let a = if transposed {
+                    Mat::row_major(&data, c, r).t()
+                } else {
+                    Mat::row_major(&data, r, c)
+                };
+                let exact = Exec {
+                    pool: &pool,
+                    numerics: Numerics::Exact,
+                };
+                let mut want = vec![0.0f32; r * r];
+                gemm_out("test", exact, &a, &a.t(), &mut want).unwrap();
+                let mut got = vec![f32::NAN; r * r];
+                gram_out("test", exact, &a, &mut got).unwrap();
+                assert_eq!(bits(&got), bits(&want), "Exact {r}x{c} t={transposed}");
+
+                let fast = Exec {
+                    pool: &pool,
+                    numerics: Numerics::Fast,
+                };
+                let mut fast_gemm = vec![0.0f32; r * r];
+                gemm_out("test", fast, &a, &a.t(), &mut fast_gemm).unwrap();
+                let before = whole_calls();
+                let mut got = vec![f32::NAN; r * r];
+                gram_out("test", fast, &a, &mut got).unwrap();
+                let made = (whole_calls().0 - before.0, whole_calls().1 - before.1);
+                let what = format!("Fast {r}x{c} t={transposed}");
+                if !whole_call(Numerics::Fast, r, c, r) {
+                    assert_eq!(made, (0, 0), "{what}");
+                    assert_eq!(bits(&got), bits(&fast_gemm), "{what}");
+                } else if cfg!(target_os = "macos") {
+                    assert_eq!(made, (1, 0), "{what}");
+                    for i in 0..r {
+                        for j in 0..r {
+                            let (g, e) = (got[i * r + j], want[i * r + j]);
+                            assert_eq!(g.to_bits(), got[j * r + i].to_bits(), "{what} [{i},{j}]");
+                            let mag: f32 = (0..c)
+                                .map(|p| (data_at(&a, i, p) * data_at(&a, j, p)).abs())
+                                .sum();
+                            let tol = 2.0 * (c as f32 + 1.0) * f32::EPSILON * mag;
+                            assert!((g - e).abs() <= tol, "{what} [{i},{j}] {g} vs {e}");
+                        }
+                    }
+                } else {
+                    assert_eq!(made, (0, 1), "{what}");
+                    assert_eq!(bits(&got), bits(&fast_gemm), "{what}");
+                }
+            }
+        }
+        let a = Mat::row_major(&[1.0, 2.0], 1, 2);
+        let err = gram_out(
+            "test",
+            Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            },
+            &a,
+            &mut [0.0; 2],
+        );
+        assert!(matches!(err, Err(OjasError::Shape { .. })), "{err:?}");
+    }
+
+    fn data_at(a: &Mat, i: usize, j: usize) -> f32 {
+        a.data[i * a.rs + j * a.cs]
     }
 
     /// One forward row makes `grad_w` an outer product of two contiguous
