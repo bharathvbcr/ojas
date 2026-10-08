@@ -36,8 +36,12 @@ Use metal-native or `train_gpt_sprint_native.py` for full-arch BPB. This
 baseline answers: *what step time does a mature Metal stack get at these
 shapes with Muon + compile?*
 
-MLX also lacks fused SDPA backward on Metal (unfused GEMM attention) — same
-caveat called out in the throughput plan.
+Every number here is on the unfused SDPA backward (GEMM attention), the only
+Metal path in mlx 0.31.2 — same caveat called out in the throughput plan. MLX
+`main` added a fused SDPA VJP on Metal in ml-explore/mlx#4563 (commit 83b976e,
+2026-09-29), but no release contains it yet: v0.32.3, also published 2026-09-29,
+predates that commit (checked 2026-10-08). Rerun the step-time numbers on the
+first release that ships it before comparing them with fused-backward stacks.
 
 ## Requirements
 
