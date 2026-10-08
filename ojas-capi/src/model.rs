@@ -9,6 +9,10 @@ use std::sync::Arc;
 use ojas_core::{Autocast, Backend, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_data::Bpe;
+use ojas_device::{
+    Device, MemoryArchitecture, MemoryProbe, MemoryReport, ResourcePlan, ResourcePolicy,
+    SystemProfile,
+};
 use ojas_model::{ModelSpec, TrainState, Trainer};
 
 use crate::gate::{CancelSlot, Check, Gated};
@@ -123,16 +127,134 @@ pub enum Opened {
     Wgpu(Arc<ojas_wgpu::WgpuBackend>),
 }
 
+/// The memory probe of a GPU session's device, for [`ResourcePlan::derive`].
+/// A CPU session plans with none: its memory is the host's, which the
+/// system profile already reads.
+#[derive(Clone, Copy, Debug)]
+pub enum DeviceProbe {
+    #[cfg(target_os = "macos")]
+    Metal(ojas_metal::MetalMemory),
+    Wgpu(ojas_wgpu::WgpuMemory),
+}
+
+/// Forwards every reading to the backend's own probe.
+macro_rules! on_probe {
+    ($probe:expr, $p:ident => $body:expr) => {
+        match $probe {
+            #[cfg(target_os = "macos")]
+            DeviceProbe::Metal($p) => $body,
+            DeviceProbe::Wgpu($p) => $body,
+        }
+    };
+}
+
+impl MemoryProbe for DeviceProbe {
+    fn kind(&self) -> Device {
+        on_probe!(self, p => p.kind())
+    }
+    fn memory_bytes(&self) -> MemoryReport {
+        on_probe!(self, p => p.memory_bytes())
+    }
+    fn resident_bytes(&self) -> MemoryReport {
+        on_probe!(self, p => p.resident_bytes())
+    }
+    fn pool_cache_bytes(&self) -> MemoryReport {
+        on_probe!(self, p => p.pool_cache_bytes())
+    }
+    fn architecture(&self) -> MemoryArchitecture {
+        on_probe!(self, p => p.architecture())
+    }
+}
+
+/// What `opened`'s device reports about its memory; `None` for the CPU.
+pub fn device_probe(opened: &Opened) -> Result<Option<DeviceProbe>, String> {
+    match opened {
+        Opened::Cpu(_) => Ok(None),
+        #[cfg(target_os = "macos")]
+        Opened::Metal(b) => b
+            .memory()
+            .map(|m| Some(DeviceProbe::Metal(m)))
+            .map_err(|e| crate::ojas_error("metal", &e)),
+        Opened::Wgpu(b) => Ok(Some(DeviceProbe::Wgpu(b.context().memory()))),
+    }
+}
+
+/// The plan for a session of `caller` bytes on `probe`'s device: the device
+/// first, then the CPU, against `profile`.
+pub fn device_plan(caller: u64, probe: &DeviceProbe, profile: &SystemProfile) -> ResourcePlan {
+    let mut policy = ResourcePolicy::new(caller);
+    policy.devices = vec![probe.kind(), Device::Cpu];
+    ResourcePlan::derive(&policy, profile, std::slice::from_ref(probe))
+}
+
 /// Open `placement`'s backend charging its own budget, a child of the
 /// process ceiling ([`session::session_budget`]), and return the lease that
-/// pins that ceiling. `check` is polled while a device opens.
+/// pins that ceiling and the budget's size. `check` is polled while a device
+/// opens.
+///
+/// A GPU session's budget is then planned against what its device reports
+/// ([`device_plan`], [`ResourcePlan::device_budget`]): a caller budget past
+/// the device's room, or on shared memory past the host's limits, is cut to
+/// that, and the session charges the smaller budget. A device with no room
+/// at all is refused with `E_CAPACITY`. The budget is never raised.
 pub fn open(
     placement: &Placement,
     check: impl FnMut() -> Result<(), String>,
-) -> Result<(Opened, Lease), String> {
-    let (budget, lease) = session::session_budget(placement.budget_bytes)?;
+) -> Result<(Opened, Lease, u64), String> {
+    let caller = placement.budget_bytes;
+    let (budget, lease) = session::session_budget(caller)?;
     let opened = open_on(placement, budget, check)?;
-    Ok((opened, lease))
+    let Some(probe) = device_probe(&opened)? else {
+        return Ok((opened, lease, caller));
+    };
+    let plan = device_plan(caller, &probe, &ojas_device::probe_system());
+    let planned = plan.device_budget(probe.kind()).unwrap_or(caller);
+    if planned >= caller {
+        return Ok((opened, lease, caller));
+    }
+    if planned == 0 {
+        return Err(crate::kinded(
+            crate::ErrorKind::Capacity,
+            format!(
+                "capacity exceeded: load: the {} device has no room for a session (device \
+                 memory {:?}, held {:?}, pool cache {:?}, host budget {} bytes)",
+                device_label(probe.kind()),
+                plan.device_memory[0],
+                probe.resident_bytes(),
+                plan.device_pool_cache[0],
+                plan.budget_bytes
+            ),
+        ));
+    }
+    // Nothing has been charged yet; the session takes a smaller child
+    // instead, and the unused one and its lease go.
+    let (budget, planned_lease) = session::session_budget(planned)?;
+    drop(lease);
+    Ok((rebudget(opened, budget), planned_lease, planned))
+}
+
+/// How messages name a device: wgpu is `Device::Vulkan` in the plan.
+pub fn device_label(device: Device) -> &'static str {
+    match device {
+        Device::Metal => "Metal",
+        Device::Vulkan => "wgpu",
+        Device::Cpu => "CPU",
+        Device::Cuda => "CUDA",
+        Device::Hip => "HIP",
+    }
+}
+
+/// `opened` charging `budget` instead, on the same device.
+fn rebudget(opened: Opened, budget: Budget) -> Opened {
+    match opened {
+        Opened::Cpu(b) => Opened::Cpu(b),
+        #[cfg(target_os = "macos")]
+        Opened::Metal(b) => Opened::Metal(b.with_budget(budget)),
+        Opened::Wgpu(b) => Opened::Wgpu(Arc::new(ojas_wgpu::WgpuBackend::with_context(
+            b.context().clone(),
+            budget,
+        ))),
+    }
 }
 
 fn open_on(
@@ -172,6 +294,12 @@ fn open_on(
 
 /// Builds a session's model on whatever backend it was given.
 pub trait Build {
+    /// The parameters' bytes, when known before the build, so a session
+    /// budget planned below them is refused before anything uploads.
+    fn param_bytes(&self) -> Option<u64> {
+        None
+    }
+
     fn build<B: Backend + Clone>(self, backend: B) -> Result<Model<B>, OjasError>;
 }
 

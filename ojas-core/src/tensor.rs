@@ -246,6 +246,22 @@ impl Endian {
     }
 }
 
+/// `src` copied into a new vector whose allocation may fail:
+/// `CapacityExceeded` for the bytes asked, with no budget behind them (cap
+/// and live 0, as [`Tensor::to_ne_bytes`] reports).
+fn try_copy<T: Copy>(src: &[T]) -> Result<Vec<T>, OjasError> {
+    let mut v = Vec::new();
+    if v.try_reserve_exact(src.len()).is_err() {
+        return Err(OjasError::CapacityExceeded {
+            requested: std::mem::size_of_val(src) as u64,
+            cap: 0,
+            live: 0,
+        });
+    }
+    v.extend_from_slice(src);
+    Ok(v)
+}
+
 fn try_zeroed_vec<T: Copy + Default>(n: usize) -> Option<Vec<T>> {
     let mut v = Vec::new();
     v.try_reserve_exact(n).ok()?;
@@ -499,14 +515,17 @@ impl Tensor {
         self.f32_window_mut(OP)
     }
 
-    /// Contiguous `F32` elements in row-major order.
+    /// Contiguous `F32` elements in row-major order. The copy is not charged
+    /// to a budget, and an allocation the heap refuses is
+    /// `CapacityExceeded`, never an abort, as for [`Tensor::to_ne_bytes`].
     pub fn to_f32_vec(&self) -> Result<Vec<f32>, OjasError> {
-        Ok(self.f32_window("Tensor::to_f32_vec")?.to_vec())
+        try_copy(self.f32_window("Tensor::to_f32_vec")?)
     }
 
-    /// Contiguous `U32` elements in row-major order.
+    /// Contiguous `U32` elements in row-major order. Fallible as
+    /// [`Tensor::to_f32_vec`].
     pub fn to_u32_vec(&self) -> Result<Vec<u32>, OjasError> {
-        Ok(self.u32_window("Tensor::to_u32_vec")?.to_vec())
+        try_copy(self.u32_window("Tensor::to_u32_vec")?)
     }
 
     /// Encode the contiguous window, native-endian, into `dst`. Any dtype.

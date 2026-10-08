@@ -15,12 +15,14 @@
 
 mod backend;
 mod context;
+mod memory;
 
 pub use backend::WgpuBackend;
 pub use context::{
-    CacheStats, WgpuBuffer, WgpuContext, ALLOW_CPU_ADAPTER_ENV, DROP_WAIT, FLUSH_AT, MAX_ELEMENTS,
-    POOL_CAP_BYTES,
+    drop_stats, CacheStats, DropStats, WgpuBuffer, WgpuContext, ALLOW_CPU_ADAPTER_ENV, DROP_WAIT,
+    FLUSH_AT, MAX_ELEMENTS, MAX_PARKED_DROPS, POOL_CAP_BYTES,
 };
+pub use memory::WgpuMemory;
 
 use ojas_device::{require_kind, Device, DeviceError, DeviceInfo};
 use ojas_kernels::affine_wgsl;

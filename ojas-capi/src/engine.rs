@@ -182,7 +182,7 @@ fn dispatch_bytes(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
             load::inspect(path).map(|n| n.to_le_bytes().to_vec())
         }
         OP_SET_MEMORY_CEILING => op_set_memory_ceiling(input),
-        OP_SYSTEM_PROFILE => crate::profile::profile_request(input),
+        OP_SYSTEM_PROFILE => crate::profile::profile_request(input, check),
         other => Err(format!("unknown opcode {other}")),
     }
 }

@@ -1235,7 +1235,7 @@ fn device_fields_select_cpu_parallel_and_bound_its_thread_count() {
     let ceiling = ojas_device::ResourcePlan::derive(
         &ojas_device::ResourcePolicy::new(u64::MAX),
         &ojas_device::probe_system(),
-        &[] as &[crate::profile::NoProbe],
+        &[] as &[crate::model::DeviceProbe],
     )
     .thread_ceiling;
     assert_eq!(
@@ -2093,6 +2093,48 @@ fn metal_session_samples_on_the_device_and_matches_cpu() {
     if let Some(metal) = load_metal_or_skip("model.safetensors") {
         assert_device_samples_match_cpu(metal);
     }
+}
+
+/// A Metal session whose caller budget is past the device's recommended
+/// working set is planned down to the room the device reports, not run on
+/// the caller's number. Before the plan consulted the device, the session's
+/// budget was the caller's whatever the device could hold.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_metal_budget_past_the_device_working_set_is_planned_down() {
+    let (_g, _dir) = fresh();
+    let _restore = DefaultCeiling;
+    let probe = match crate::owner::open_metal(Budget::new(1 << 20), || Ok(())) {
+        Ok(backend) => backend.memory().unwrap(),
+        Err(err) => return skip_or_fail("open_metal", &err),
+    };
+    let ws = probe.recommended_working_set;
+    assert!(ws > 0, "{probe:?}");
+    let limit = session::hard_memory_limit().expect("this Mac reports its RAM");
+    let caller = ws + (1 << 30);
+    assert!(
+        caller <= limit,
+        "the working set {ws} leaves no room under the RAM {limit} to ask past it"
+    );
+    set_ceiling(caller).unwrap();
+    let s = load::load_request(
+        &Writer::default()
+            .str(tag::PATH, "model.safetensors")
+            .u32(tag::DEVICE, load::DEVICE_METAL)
+            .u64(tag::BUDGET, caller)
+            .finish(),
+        never(),
+    )
+    .unwrap();
+    let state = s.lock_state().unwrap();
+    let cap = match &state.engine {
+        crate::model::Engine::Metal(m) => m.backend.budget().cap_bytes(),
+        _ => panic!("a Metal load built another engine"),
+    };
+    assert!(
+        cap <= ws,
+        "the session budget {cap} is past the device's working set {ws} (caller {caller})"
+    );
 }
 
 #[cfg(target_os = "macos")]

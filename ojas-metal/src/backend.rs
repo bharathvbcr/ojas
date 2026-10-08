@@ -8,10 +8,25 @@
 //!
 //! Each op reserves its output and scratch bytes in the [`Budget`] before the
 //! device allocates anything, and refuses with
-//! [`OjasError::CapacityExceeded`] when they do not fit. Device memory is
-//! tessl's pool, which rounds each allocation up to a power of two (at least
-//! 256 bytes); the budget charges the logical byte count, so resident device
-//! memory can be up to twice the budget's live bytes.
+//! [`OjasError::CapacityExceeded`] when they do not fit. The budget charges
+//! each tensor's logical bytes; the device holds a little more, and the gap
+//! is bounded:
+//!
+//! - Rounding. Every buffer is a tessl `Cold` allocation, made at its pool
+//!   bucket (tessl `GpuRuntime::allocated_bytes_for`): up to 1 MiB, the
+//!   next power of two, at least 256 bytes, so under 512 KiB (and under the
+//!   buffer's own size) uncharged per buffer; past 1 MiB, the next multiple
+//!   of 16 KiB, Metal's own allocation granule, so under 16 KiB per buffer.
+//!   `cold_rounding_stays_inside_the_documented_bound` pins this.
+//! - The pool cache. Freed buffers tessl keeps for reuse are not charged.
+//!   The cache is capped when the backend opens, at a quarter of its budget
+//!   and at most 1 GiB (tessl's own default was 2 GiB whatever the budget),
+//!   reported as [`crate::MetalMemory::pool_cache_cap`] and set aside from
+//!   the device's room by `ojas_device::ResourcePlan`. [`MetalBackend::trim_pool`]
+//!   releases it, and a failed allocation does so before it gives up.
+//!
+//! So the device holds at most the budget's live bytes, plus the rounding
+//! above, plus the pool cap, plus the backend's status slab (128 KiB).
 //!
 //! Numerics are [`Numerics::Fast`]: GEMMs are tessl TensorOps with their own
 //! reduction order, and reductions are threadgroup trees, not ascending f32.
@@ -155,6 +170,19 @@ impl MetalBackend {
         match self.link.call(Cmd::Memory)? {
             Reply::Memory(m) => Ok(m),
             other => Err(metal_err(format!("memory: device returned {other:?}"))),
+        }
+    }
+
+    /// Release every freed buffer the device keeps cached for reuse, after
+    /// a waited commit returns the ones freed since the last. Live tensors
+    /// are untouched, and later frees cache as before. The cache is not
+    /// charged to the budget (see the module docs); this hands its memory
+    /// back, as wgpu's `WgpuContext::trim_pool` does. An allocation that
+    /// fails for want of device memory does it on its own before giving up.
+    pub fn trim_pool(&self) -> Result<(), OjasError> {
+        match self.link.call(Cmd::TrimPool)? {
+            Reply::Done => Ok(()),
+            other => Err(metal_err(format!("trim_pool: device returned {other:?}"))),
         }
     }
 
@@ -2217,8 +2245,9 @@ mod tests {
         let mut p = put(&m, &[0.5; 24], &[4, 6]);
         let mut mo = put(&m, &[0.0; 24], &[4, 6]);
         // Muon checks p, g and m, then allocates: fail that allocation and
-        // its retry, after the checks have run.
-        tune(&m, None, None, None, (0, 2));
+        // both its retries (after the recycle, after the trim), after the
+        // checks have run.
+        tune(&m, None, None, None, (0, 3));
         let r = m.muon_ns5_step(&mut p, &g, &mut mo, MuonNs5Config::nanolab_default());
         assert!(
             matches!(r, Err(OjasError::CapacityExceeded { .. })),
@@ -2238,8 +2267,9 @@ mod tests {
         let q = put(&m, &qv, &[64, 16]);
         let k = put(&m, &[0.25; 64 * 16], &[64, 16]);
         let w = put(&m, &[1.0; 16], &[16]);
-        // q's side allocates one output; fail k's output and its retry.
-        tune(&m, None, None, None, (1, 2));
+        // q's side allocates one output; fail k's output and both its
+        // retries.
+        tune(&m, None, None, None, (1, 3));
         let r = m.rms_qk_norm_forward(&q, &k, &w, &w, 1e-6);
         assert!(
             matches!(r, Err(OjasError::CapacityExceeded { .. })),
@@ -2499,6 +2529,133 @@ mod tests {
             tune(&m, None, None, None, (0, 0));
             assert_eq!(pending(&m), None);
             assert_eq!(m.budget().live_bytes().expect("live"), base);
+        });
+    }
+
+    /// The pool cache is capped from the budget when the backend opens (a
+    /// quarter, at most 1 GiB; tessl's default is 2 GiB whatever the
+    /// budget), the probe reports that cap, and a trim recycles first,
+    /// keeps the cap, and leaves the backend computing.
+    #[test]
+    fn the_pool_cache_is_capped_from_the_budget_and_trims() {
+        use ojas_device::{MemoryProbe, MemoryReport};
+        watchdog(120, || {
+            let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            let mem = m.memory().expect("memory");
+            assert_eq!(mem.pool_cache_cap, 1 << 28, "{mem:?}");
+            assert_eq!(mem.pool_cache_bytes(), MemoryReport::Known(1 << 28));
+            let x = put(&m, &vec![0.5; 1 << 20], &[1 << 20]);
+            drop(m.silu_forward(&x).expect("silu"));
+            let before = m.wait_counts().recycle;
+            m.trim_pool().expect("trim");
+            assert_eq!(m.wait_counts().recycle, before + 1, "a trim recycles first");
+            assert_eq!(m.memory().expect("memory").pool_cache_cap, 1 << 28);
+            // A session planned down (capi rebinds with `with_budget`) keeps
+            // the cap its device enforces, which is the cap the plan set
+            // aside when it chose the smaller budget.
+            let planned = m.with_budget(Budget::new(1 << 20));
+            assert_eq!(planned.memory().expect("memory").pool_cache_cap, 1 << 28);
+            let y = m.silu_forward(&x).expect("silu after a trim");
+            assert_eq!(y.shape(), x.shape());
+            assert_eq!(pending(&m), None);
+            let big = MetalBackend::new(Budget::new(16 << 30)).expect("Metal device");
+            assert_eq!(big.memory().expect("memory").pool_cache_cap, 1 << 30);
+        });
+    }
+
+    /// The cost of the pool cap a backend now opens with (a quarter of its
+    /// budget, at most 1 GiB) against tessl's 2 GiB default, at the case it
+    /// can matter: each step frees more temporaries than the cap holds, so
+    /// the capped pool misses and allocates afresh where the default reuses.
+    /// A 1 GiB budget (cap 256 MiB); each step makes eight 64 MiB outputs
+    /// (512 MiB) and drops them before the next. Interleaved A/B rounds,
+    /// min of the steps in each. A measurement, not a pass/fail: run with
+    /// `--ignored --nocapture` under the machine lock.
+    #[test]
+    #[ignore]
+    fn bench_the_pool_cap_against_the_tessl_default() {
+        use std::time::{Duration, Instant};
+        const N: usize = 16 << 20;
+        let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+        let opened = m.memory().expect("memory").pool_cache_cap as usize;
+        let x = put(&m, &vec![0.5; N], &[N]);
+        let tiny = put(&m, &[0.5; 64], &[64]);
+        let step = |m: &MetalBackend| {
+            let t = Instant::now();
+            let outs: Vec<Tensor> = (0..8).map(|_| m.silu_forward(&x).expect("silu")).collect();
+            m.sync().expect("sync");
+            let took = t.elapsed();
+            // Freed buffers reach tessl's pool only at a waited commit, so
+            // one more (untimed) puts these back before the next step asks.
+            drop(outs);
+            drop(m.silu_forward(&tiny).expect("silu"));
+            m.sync().expect("sync");
+            took
+        };
+        let set = |bytes: usize| {
+            let r = m.link.call(Cmd::SetPoolCap { bytes });
+            assert!(matches!(r, Ok(Reply::Done)), "{r:?}");
+        };
+        let (mut capped, mut default) = (Duration::MAX, Duration::MAX);
+        for round in 0..6 {
+            for (cap, best) in [(opened, &mut capped), (2 << 30, &mut default)] {
+                // Each side starts from an empty pool and warms it once.
+                set(0);
+                set(cap);
+                step(&m);
+                for _ in 0..5 {
+                    *best = (*best).min(step(&m));
+                }
+            }
+            eprintln!(
+                "round {round}: cap {} MiB {:.2} ms, tessl default 2048 MiB {:.2} ms",
+                opened >> 20,
+                capped.as_secs_f64() * 1e3,
+                default.as_secs_f64() * 1e3
+            );
+        }
+        eprintln!(
+            "pool cap {} MiB vs 2048 MiB, min step: {:.2} ms vs {:.2} ms ({:.2}x)",
+            opened >> 20,
+            capped.as_secs_f64() * 1e3,
+            default.as_secs_f64() * 1e3,
+            capped.as_secs_f64() / default.as_secs_f64()
+        );
+        assert_eq!(pending(&m), None);
+    }
+
+    /// An allocation still refused after the recycling commit is tried once
+    /// more with the pool cache released. A refusal past that reports the
+    /// device's working set as the cap and what the device holds as live:
+    /// before, `live` was always 0.
+    #[test]
+    fn a_failed_allocation_retries_after_a_trim_and_reports_live_bytes() {
+        watchdog(120, || {
+            let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            let x = put(&m, &vec![0.5; 1 << 16], &[1 << 16]);
+            let before = m.wait_counts().recycle;
+            tune(&m, None, None, None, (0, 2));
+            let y = m.silu_forward(&x).expect("the third try allocates");
+            assert_eq!(m.wait_counts().recycle, before + 1);
+            drop(y);
+            tune(&m, None, None, None, (0, u32::MAX));
+            let ws = m.memory().expect("memory").recommended_working_set;
+            let live_before = m.budget().live_bytes().expect("live");
+            match m.silu_forward(&x) {
+                Err(OjasError::CapacityExceeded {
+                    requested,
+                    cap,
+                    live,
+                }) => {
+                    assert_eq!(requested, 4 << 16);
+                    assert_eq!(cap, ws);
+                    assert!(live >= 4 << 16, "live {live}: x is held on the device");
+                }
+                other => panic!("{other:?}"),
+            }
+            tune(&m, None, None, None, (0, 0));
+            assert_eq!(pending(&m), None);
+            assert_eq!(m.budget().live_bytes().expect("live"), live_before);
         });
     }
 

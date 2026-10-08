@@ -29,7 +29,7 @@
 //! that read its previous contents, so reuse needs no fence.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ojas_core::{BackendId, Budget, DeviceBuffer, OjasError, Reservation};
@@ -48,8 +48,106 @@ pub const DROP_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Bytes of freed buffers the pool keeps for reuse. Larger frees go back to
 /// wgpu. Pooled memory is not live tensor memory and is not charged to a
-/// [`Budget`]; [`WgpuContext::trim_pool`] releases it.
+/// [`Budget`]; [`WgpuContext::trim_pool`] releases it, and an allocation the
+/// device refuses for want of memory releases it before its one retry. The
+/// probe ([`WgpuContext::memory`]) reports this cap to the plan, which sets
+/// it aside from the device's room.
 pub const POOL_CAP_BYTES: u64 = 512 << 20;
+
+/// Parked context drops allowed at once: drops that returned before the
+/// GPU finished, so their thread still holds the queue, the device, that
+/// device's memory and itself ([`Inner`]'s `Drop`). At this many,
+/// [`WgpuContext::open`] refuses a new context rather than park another, so
+/// what timed-out drops hold is bounded; [`drop_stats`] reports them. A drop
+/// that finishes within its wait never parks and never counts.
+pub const MAX_PARKED_DROPS: usize = 4;
+
+/// Drops parked now: each is decremented when its thread has released
+/// everything.
+static DROPS_PARKED: AtomicUsize = AtomicUsize::new(0);
+/// Drops that returned before the GPU finished, since the process started.
+static DROPS_TIMED_OUT: AtomicU64 = AtomicU64::new(0);
+
+/// A drop's thread is still releasing; its drop still waits.
+const DROP_RUNNING: u8 = 0;
+/// The drop returned first: the thread is parked and counted.
+const DROP_PARKED: u8 = 1;
+/// The thread has released everything.
+const DROP_DONE: u8 = 2;
+
+/// What context drops hold in this process ([`drop_stats`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DropStats {
+    /// Drops parked now, each holding a queue, a device, its memory and a
+    /// thread until its GPU work finishes. Opens stop at
+    /// [`MAX_PARKED_DROPS`]; contexts already open when that was reached can
+    /// still park, so this is at most that plus the contexts alive then.
+    pub parked: usize,
+    /// Drops that returned before the GPU had finished, ever.
+    pub timed_out: u64,
+}
+
+/// The process's parked context drops, and how many drops ever timed out.
+pub fn drop_stats() -> DropStats {
+    DropStats {
+        parked: DROPS_PARKED.load(Ordering::Acquire),
+        timed_out: DROPS_TIMED_OUT.load(Ordering::Relaxed),
+    }
+}
+
+/// Whether a new context may open while `parked` drops still hold their
+/// devices.
+fn admit_open(parked: usize) -> Result<(), DeviceError> {
+    if parked >= MAX_PARKED_DROPS {
+        return Err(DeviceError::Capacity {
+            kind: Device::Vulkan,
+            detail: format!(
+                "{parked} freed wgpu contexts are still waiting for their GPU work and \
+                 each holds its device and memory (at most {MAX_PARKED_DROPS}); retry once \
+                 that work finishes"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// The drop's side, once its wait ran out: count the drop as parked unless
+/// its thread has already finished. The count goes up before the state
+/// moves, so the thread's uncount ([`reap`]) can only follow it and the
+/// count never wraps below zero; a drop whose thread won the race takes its
+/// count back. Between the two steps the count may read one high, never low.
+fn park(state: &AtomicU8, parked: &AtomicUsize) -> bool {
+    parked.fetch_add(1, Ordering::AcqRel);
+    let won = state
+        .compare_exchange(
+            DROP_RUNNING,
+            DROP_PARKED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok();
+    if !won {
+        parked.fetch_sub(1, Ordering::AcqRel);
+    }
+    won
+}
+
+/// The thread's side, once it has released everything: done, and uncounted
+/// if its drop had parked it.
+fn reap(state: &AtomicU8, parked: &AtomicUsize) {
+    if state.swap(DROP_DONE, Ordering::AcqRel) == DROP_PARKED {
+        parked.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Reaps a drop's thread when it ends, panicking or not.
+struct Reaped(Arc<AtomicU8>);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        reap(&self.0, &DROPS_PARKED);
+    }
+}
 
 /// Distinct sizes the free list may remember. A byte cap alone still allows
 /// one tiny buffer per size until the map holds millions of keys.
@@ -106,11 +204,14 @@ pub(crate) struct Pipe {
 }
 
 /// Counters since the context opened. `pool_hits` counts allocations served
-/// from freed buffers; `uploads` are host-to-device copies.
+/// from freed buffers; `alloc_retries` counts allocations the device
+/// refused for want of memory and that were tried again after the pool was
+/// released; `uploads` are host-to-device copies.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
     pub compiles: u64,
     pub pool_hits: u64,
+    pub alloc_retries: u64,
     pub submits: u64,
     pub dispatches: u64,
     pub uploads: u64,
@@ -123,6 +224,7 @@ pub struct CacheStats {
 struct Counters {
     compiles: AtomicU64,
     pool_hits: AtomicU64,
+    alloc_retries: AtomicU64,
     submits: AtomicU64,
     dispatches: AtomicU64,
     uploads: AtomicU64,
@@ -160,6 +262,7 @@ pub(crate) struct Inner {
     /// [`DROP_WAIT`] unless a test changed it, in milliseconds.
     drop_wait_ms: AtomicU64,
     limits: wgpu::Limits,
+    device_type: wgpu::DeviceType,
     adapter_name: String,
     hal: String,
     vendor: String,
@@ -184,6 +287,9 @@ pub(crate) struct Inner {
     /// completes, before the host sees the copied bytes.
     #[cfg(test)]
     fail_next_read: std::sync::atomic::AtomicBool,
+    /// Test seam: this many next buffer creations fail as out of memory.
+    #[cfg(test)]
+    fail_allocs: AtomicU32,
 }
 
 impl Inner {
@@ -222,6 +328,16 @@ impl Inner {
 /// thread stay alive, and if the GPU never finishes they are released only
 /// at process exit. If the thread cannot be spawned, everything is dropped
 /// here, unbounded, as before.
+///
+/// That hold is bounded, counted and reported: a drop that returns first
+/// counts in [`DropStats::timed_out`] and, until its thread has released
+/// everything, in [`DropStats::parked`]; [`WgpuContext::open`] refuses
+/// while [`MAX_PARKED_DROPS`] are parked. The handoff is one atomic state
+/// the drop and its thread race on ([`park`], [`reap`]): whichever moves it
+/// off "running" first decides, so a thread that finishes at the deadline
+/// stays uncounted and a parked one is uncounted exactly once. The count is
+/// raised before the state moves, so while the two race it can read one
+/// high (a refusal one drop early), never wrap.
 impl Drop for Inner {
     fn drop(&mut self) {
         let Some(queue) = self.queue.take() else {
@@ -239,17 +355,23 @@ impl Drop for Inner {
         );
         let wait = std::time::Duration::from_millis(self.drop_wait_ms.load(Ordering::Relaxed));
         let (done, finished) = std::sync::mpsc::channel::<()>();
+        let state = Arc::new(AtomicU8::new(DROP_RUNNING));
+        let reaped = Reaped(Arc::clone(&state));
         let reaper = std::thread::Builder::new()
             .name("ojas-wgpu-queue-drop".to_string())
             .spawn(move || {
                 drop(queue);
                 drop(rest);
+                // Released: done, and uncounted if it had parked.
+                drop(reaped);
                 // The receiver may have given up waiting; nothing to report.
                 let _gone = done.send(());
             });
-        if reaper.is_ok() {
-            // A timeout leaves the drop to the thread, as documented above.
-            let _settled = finished.recv_timeout(wait);
+        // A spawn failure drops the closure and everything it held here,
+        // and the state is done before anything could count it.
+        if reaper.is_ok() && finished.recv_timeout(wait).is_err() && park(&state, &DROPS_PARKED) {
+            // The drop is left to the thread, as documented above.
+            DROPS_TIMED_OUT.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -311,6 +433,7 @@ impl WgpuContext {
     }
 
     fn open_inner(cap: Option<&wgpu::Limits>) -> Result<Self, DeviceError> {
+        admit_open(DROPS_PARKED.load(Ordering::Acquire))?;
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_desc.backends = hal_backends();
         let instance = wgpu::Instance::new(instance_desc);
@@ -371,6 +494,7 @@ impl WgpuContext {
                 queue: Some(queue),
                 drop_wait_ms: AtomicU64::new(DROP_WAIT.as_millis() as u64),
                 limits,
+                device_type: info.device_type,
                 adapter_name,
                 hal,
                 vendor,
@@ -388,6 +512,8 @@ impl WgpuContext {
                 counters: Counters::default(),
                 #[cfg(test)]
                 fail_next_read: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                fail_allocs: AtomicU32::new(0),
             }),
         })
     }
@@ -431,6 +557,7 @@ impl WgpuContext {
         CacheStats {
             compiles: get(&c.compiles),
             pool_hits: get(&c.pool_hits),
+            alloc_retries: get(&c.alloc_retries),
             submits: get(&c.submits),
             dispatches: get(&c.dispatches),
             uploads: get(&c.uploads),
@@ -440,11 +567,98 @@ impl WgpuContext {
         }
     }
 
-    /// Release every pooled buffer. Live tensors are not touched.
+    /// Release every pooled buffer. Live tensors are not touched. An
+    /// allocation the device refuses for want of memory does this before
+    /// its one retry.
     pub fn trim_pool(&self) {
         let mut pool = lock(&self.inner.pool);
         pool.free.clear();
         pool.bytes = 0;
+    }
+
+    /// Bytes of freed buffers the pool holds now, at most
+    /// [`POOL_CAP_BYTES`].
+    pub fn pooled_bytes(&self) -> u64 {
+        lock(&self.inner.pool).bytes
+    }
+
+    /// What the device reports about its memory, as an
+    /// [`ojas_device::MemoryProbe`] for [`ojas_device::ResourcePlan`]. wgpu
+    /// has no device memory size, so the plan's room stays unknown
+    /// ([`crate::WgpuMemory`]).
+    pub fn memory(&self) -> crate::WgpuMemory {
+        crate::WgpuMemory {
+            device_type: self.inner.device_type,
+            reserved_bytes: self
+                .inner
+                .device
+                .generate_allocator_report()
+                .map(|r| r.total_reserved_bytes),
+            pool_cache_cap: POOL_CAP_BYTES,
+        }
+    }
+
+    /// Make the next `n` buffer creations fail as out of memory.
+    #[cfg(test)]
+    pub(crate) fn fail_next_allocs(&self, n: u32) {
+        self.inner.fail_allocs.store(n, Ordering::Relaxed);
+    }
+
+    /// One buffer creation under an out-of-memory error scope: the buffer,
+    /// or wgpu's error text.
+    fn create_scoped(&self, desc: &wgpu::BufferDescriptor<'_>) -> Result<wgpu::Buffer, String> {
+        #[cfg(test)]
+        {
+            let left = &self.inner.fail_allocs;
+            let mut n = left.load(Ordering::Relaxed);
+            while n > 0 {
+                match left.compare_exchange_weak(n, n - 1, Ordering::Relaxed, Ordering::Relaxed) {
+                    Ok(_) => return Err("injected out of memory".to_string()),
+                    Err(now) => n = now,
+                }
+            }
+        }
+        let scope = self
+            .inner
+            .device
+            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let buf = self.inner.device.create_buffer(desc);
+        match pollster::block_on(scope.pop()) {
+            Some(err) => Err(err.to_string()),
+            None => Ok(buf),
+        }
+    }
+
+    /// A buffer of `desc`, as Metal allocates: a creation the device
+    /// refuses for want of memory is tried once more after the pool's
+    /// buffers are released and the device has had a bounded wait (5 s,
+    /// as [`Self::failure`] waits) to retire what finished work freed. A
+    /// second refusal is the error, naming both.
+    fn new_buffer(
+        &self,
+        what: &str,
+        desc: &wgpu::BufferDescriptor<'_>,
+    ) -> Result<wgpu::Buffer, OjasError> {
+        let first = match self.create_scoped(desc) {
+            Ok(buf) => return Ok(buf),
+            Err(first) => first,
+        };
+        self.inner
+            .counters
+            .alloc_retries
+            .fetch_add(1, Ordering::Relaxed);
+        self.trim_pool();
+        // Its own result is not this call's: the retry below reports.
+        let _settled = self.inner.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(5)),
+        });
+        self.create_scoped(desc).map_err(|again| {
+            self.failure(format!(
+                "{what} of {} bytes: {again} (retried after releasing the pool; first: {first})",
+                desc.size
+            ))
+        })
     }
 
     pub(crate) fn same(&self, other: &Arc<Inner>) -> bool {
@@ -495,20 +709,15 @@ impl WgpuContext {
                 return Ok(buf);
             }
         }
-        let scope = self
-            .inner
-            .device
-            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let buf = self.inner.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ojas-tensor"),
-            size: bytes,
-            usage: storage_usage(),
-            mapped_at_creation: false,
-        });
-        if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(self.failure(format!("allocating {bytes} bytes: {err}")));
-        }
-        Ok(buf)
+        self.new_buffer(
+            "allocating a tensor",
+            &wgpu::BufferDescriptor {
+                label: Some("ojas-tensor"),
+                size: bytes,
+                usage: storage_usage(),
+                mapped_at_creation: false,
+            },
+        )
     }
 
     fn give_back(&self, buf: wgpu::Buffer, bytes: u64) {
@@ -563,19 +772,15 @@ impl WgpuContext {
         if bytes == 0 {
             return Err(backend_err("refusing a zero-length upload"));
         }
-        let scope = self
-            .inner
-            .device
-            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let buf = self.inner.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ojas-upload"),
-            size: bytes,
-            usage,
-            mapped_at_creation: true,
-        });
-        if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(self.failure(format!("allocating {bytes} bytes: {err}")));
-        }
+        let buf = self.new_buffer(
+            "allocating an upload",
+            &wgpu::BufferDescriptor {
+                label: Some("ojas-upload"),
+                size: bytes,
+                usage,
+                mapped_at_creation: true,
+            },
+        )?;
         {
             let mut view = buf
                 .slice(..)
@@ -805,19 +1010,15 @@ impl WgpuContext {
         let end = (offset + len).div_ceil(4) * 4;
         let span = end - start;
         let stage_bytes = span + 16;
-        let stage_scope = self
-            .inner
-            .device
-            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let staging = self.inner.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ojas-staging"),
-            size: stage_bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        if let Some(err) = pollster::block_on(stage_scope.pop()) {
-            return Err(self.failure(format!("staging buffer of {stage_bytes} bytes: {err}")));
-        }
+        let staging = self.new_buffer(
+            "a staging buffer",
+            &wgpu::BufferDescriptor {
+                label: Some("ojas-staging"),
+                size: stage_bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        )?;
         let (hold_pipe, hold_group) = self.hold()?;
         let index = {
             let mut rec = lock(&self.inner.rec);
@@ -1324,6 +1525,125 @@ mod tests {
         for kind in [DiscreteGpu, IntegratedGpu, VirtualGpu, Other] {
             assert!(admits_adapter(kind, None), "{kind:?}");
             assert!(admits_adapter(kind, Some("0")), "{kind:?}");
+        }
+    }
+
+    /// An allocation the device refuses for want of memory is tried once
+    /// more after the pool is released, for tensors, uploads and staging
+    /// alike, as Metal recycles and retries. Before, the first refusal
+    /// failed the call while up to `POOL_CAP_BYTES` of idle buffers stayed
+    /// pooled. A second refusal is the error and names the retry.
+    #[test]
+    fn an_out_of_memory_allocation_is_retried_once_after_releasing_the_pool() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        drop(ctx.tensor_buffer(1 << 20).expect("alloc"));
+        assert_eq!(ctx.pooled_bytes(), 1 << 20, "a freed buffer is pooled");
+        ctx.fail_next_allocs(1);
+        let b = ctx.tensor_buffer(2 << 20).expect("the retry allocates");
+        assert_eq!(ctx.pooled_bytes(), 0, "the retry released the pool first");
+        assert_eq!(ctx.stats().alloc_retries, 1);
+        drop(b);
+        ctx.fail_next_allocs(1);
+        let up = ctx
+            .upload_bytes(&[1u8; 64], None)
+            .expect("an upload retries");
+        assert_eq!(ctx.stats().alloc_retries, 2);
+        drop(up);
+        ctx.fail_next_allocs(1);
+        ctx.sync().expect("a read's staging buffer retries");
+        assert_eq!(ctx.stats().alloc_retries, 3);
+        ctx.fail_next_allocs(2);
+        let err = ctx.tensor_buffer(3 << 20).expect_err("two refusals fail");
+        assert!(
+            matches!(&err, OjasError::Backend { detail, .. }
+                if detail.contains("retried after releasing the pool")),
+            "{err:?}"
+        );
+        assert_eq!(ctx.stats().alloc_retries, 4);
+        ctx.tensor_buffer(3 << 20)
+            .expect("a later allocation is unaffected");
+    }
+
+    /// The drop and its thread race on one state: whatever the order, the
+    /// count is back to 0 once both have run, a parked drop is counted until
+    /// its thread reaps it, and the count never reads past the drops that
+    /// could be parked (it wrapped to `usize::MAX` when the uncount could
+    /// run before the count, which refused every open).
+    #[test]
+    fn parking_and_reaping_race_without_wrapping_the_count() {
+        const ROUNDS: usize = 5_000;
+        let parked = Arc::new(AtomicUsize::new(0));
+        let seen_max = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let (parked, seen_max, stop) = (parked.clone(), seen_max.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    seen_max.fetch_max(parked.load(Ordering::Acquire), Ordering::Relaxed);
+                }
+            })
+        };
+        let mut parked_rounds = 0usize;
+        for _ in 0..ROUNDS {
+            let state = Arc::new(AtomicU8::new(DROP_RUNNING));
+            let reaper = {
+                let (state, parked) = (state.clone(), parked.clone());
+                std::thread::spawn(move || reap(&state, &parked))
+            };
+            if park(&state, &parked) {
+                parked_rounds += 1;
+            }
+            reaper.join().unwrap();
+            assert_eq!(parked.load(Ordering::Acquire), 0, "the count leaked");
+            assert_eq!(state.load(Ordering::Acquire), DROP_DONE);
+        }
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        // One round at a time: at most the drop's own count, briefly.
+        assert!(seen_max.load(Ordering::Relaxed) <= 1, "{seen_max:?}");
+        eprintln!("{parked_rounds} of {ROUNDS} rounds parked before their thread reaped");
+        // A thread that finished first is never counted.
+        let state = AtomicU8::new(DROP_RUNNING);
+        reap(&state, &parked);
+        assert!(!park(&state, &parked));
+        assert_eq!(parked.load(Ordering::Acquire), 0);
+    }
+
+    /// Drops still holding their devices bound how many more contexts may
+    /// open: below the cap one opens, at it the open is a capacity error
+    /// naming the count.
+    #[test]
+    fn opens_are_refused_while_too_many_drops_hold_their_devices() {
+        for n in 0..MAX_PARKED_DROPS {
+            assert!(admit_open(n).is_ok(), "{n}");
+        }
+        for n in [MAX_PARKED_DROPS, MAX_PARKED_DROPS + 1, usize::MAX] {
+            match admit_open(n) {
+                Err(DeviceError::Capacity { kind, detail }) => {
+                    assert_eq!(kind, Device::Vulkan);
+                    assert!(detail.contains(&n.to_string()), "{detail}");
+                }
+                other => panic!("{n}: {other:?}"),
+            }
+        }
+    }
+
+    /// The probe reports the adapter's type, its pool cap, and no device
+    /// memory size: wgpu has none to give.
+    #[test]
+    fn the_memory_probe_reports_what_wgpu_knows() {
+        use ojas_device::{MemoryProbe, MemoryReport};
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        let m = ctx.memory();
+        assert_eq!(m.pool_cache_cap, POOL_CAP_BYTES);
+        assert_eq!(m.memory_bytes(), MemoryReport::Unknown);
+        assert_eq!(m.kind(), Device::Vulkan);
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            // wgpu's Metal HAL keeps no allocator report, and an Apple GPU
+            // is integrated.
+            assert_eq!(m.reserved_bytes, None, "{m:?}");
+            assert_eq!(m.device_type, wgpu::DeviceType::IntegratedGpu, "{m:?}");
         }
     }
 

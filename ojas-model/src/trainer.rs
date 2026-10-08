@@ -959,7 +959,9 @@ fn fresh<B: Backend + ?Sized>(backend: &B, host: &Tensor) -> Result<Tensor, Ojas
         });
     }
     if backend.id() == BackendId::Cpu {
-        Tensor::from_f32(&host.to_f32_vec()?, host.shape(), backend.budget())
+        // Straight from the host window into the charged copy: one
+        // allocation, and that one fallible.
+        Tensor::from_f32(host.f32_slice()?, host.shape(), backend.budget())
     } else {
         backend.upload(host)
     }

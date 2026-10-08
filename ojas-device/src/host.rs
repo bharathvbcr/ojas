@@ -399,7 +399,7 @@ pub(crate) fn parse_cgroup_counter(token: &str, is_limit: bool) -> MemoryReport 
     MemoryReport::Known(n)
 }
 
-fn cgroup_file(mount: &Path, cgroup: &str, file: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn cgroup_file(mount: &Path, cgroup: &str, file: &str) -> Option<std::path::PathBuf> {
     if cgroup.contains("..") || cgroup.contains('\0') {
         return None;
     }

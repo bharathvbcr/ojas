@@ -275,11 +275,12 @@ pub(crate) fn placement(f: &Fields<'_>) -> Result<Placement, String> {
         DEVICE_METAL => DeviceKind::Metal,
         DEVICE_WGPU => DeviceKind::Wgpu,
         DEVICE_CPU_AUTO => {
+            // A CPU session: no device probe, the host profile is its memory.
             let profile = ojas_device::probe_system();
             let plan = ojas_device::ResourcePlan::derive(
                 &ojas_device::ResourcePolicy::new(u64::MAX),
                 &profile,
-                &[] as &[crate::profile::NoProbe],
+                &[] as &[model::DeviceProbe],
             );
             DeviceKind::Cpu {
                 threads: auto_threads(plan.thread_ceiling)?,
@@ -356,6 +357,10 @@ struct FromFile {
 }
 
 impl Build for FromFile {
+    fn param_bytes(&self) -> Option<u64> {
+        ojas_model::param_bytes(&self.spec).ok()
+    }
+
     fn build<B: Backend + Clone>(self, backend: B) -> Result<Model<B>, OjasError> {
         let host = ojas_model::load_params(&self.spec, &self.file, backend.budget())?;
         Model::resident(backend, self.spec, host)
@@ -369,6 +374,10 @@ struct Fresh {
 }
 
 impl Build for Fresh {
+    fn param_bytes(&self) -> Option<u64> {
+        ojas_model::param_bytes(&self.spec).ok()
+    }
+
     fn build<B: Backend + Clone>(self, backend: B) -> Result<Model<B>, OjasError> {
         let host = ojas_model::init_params(&self.spec, self.seed, backend.budget())?;
         Model::resident(backend, self.spec, host)
@@ -376,14 +385,26 @@ impl Build for Fresh {
 }
 
 /// Open the device, build the model on it, and add the session. Nothing
-/// is added unless every step succeeds.
+/// is added unless every step succeeds. A GPU session's budget can come
+/// back smaller than the caller's ([`model::open`]); parameters that no
+/// longer fit it are refused here, before a byte is uploaded.
 pub(crate) fn create(
     path: Option<PathBuf>,
     placement: &Placement,
     mut check: Check,
     build: impl Build,
 ) -> Result<session::Session, String> {
-    let (opened, lease) = model::open(placement, &mut check)?;
+    let (opened, lease, budget) = model::open(placement, &mut check)?;
+    if let Some(bytes) = build.param_bytes().filter(|&b| b > budget) {
+        return Err(crate::kinded(
+            crate::ErrorKind::Capacity,
+            format!(
+                "capacity exceeded: load: the model's parameters take {bytes} bytes, more than \
+                 the {budget}-byte session budget the device has room for (asked {} bytes)",
+                placement.budget_bytes
+            ),
+        ));
+    }
     let state = model::state_on(opened, lease, check, build)?;
     let tensors = state.engine.tensors()?;
     session::insert(path, tensors, placement.device, state)

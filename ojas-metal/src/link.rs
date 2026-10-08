@@ -201,6 +201,10 @@ pub(crate) enum Cmd {
     /// Read the device's working set and current allocation. Answered even
     /// on a poisoned backend: it records nothing and commits nothing.
     Memory,
+    /// Release every freed buffer tessl's pool keeps for reuse, after a
+    /// waited commit returns the ones freed since the last. Live buffers
+    /// are untouched, and the pool's cap stays what it was.
+    TrimPool,
     /// Carry small uploads inline while work is recorded (the default), or
     /// make every such upload wait, for before/after wait measurements.
     InlineUploads {
@@ -218,6 +222,12 @@ pub(crate) enum Cmd {
     /// failed or timed out on the GPU does.
     #[cfg(test)]
     PoisonRuntime,
+    /// Test hook: set tessl's pool cache cap, for an A/B of the cap a
+    /// backend opens with against another.
+    #[cfg(test)]
+    SetPoolCap {
+        bytes: usize,
+    },
     /// Test hook: override the commit triggers, and after letting
     /// `fail_allocs.0` device allocations through, fail the next
     /// `fail_allocs.1` as an exhausted device would.

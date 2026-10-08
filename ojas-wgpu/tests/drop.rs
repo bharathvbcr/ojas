@@ -88,4 +88,19 @@ fn dropping_a_busy_backend_returns_within_its_bound() {
         "the queued work does not outlast the limit, so this proves nothing"
     );
     assert!(returned, "the drop was still waiting after {limit:?}");
+    // The drop returned before its GPU work finished, so its thread still
+    // holds the device: counted as parked and as timed out, and released
+    // (parked back to 0) once the GPU is done.
+    let held = ojas_wgpu::drop_stats();
+    assert!(held.parked >= 1 && held.timed_out >= 1, "{held:?}");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while ojas_wgpu::drop_stats().parked != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the drop thread still holds its device after 120 s: {:?}",
+            ojas_wgpu::drop_stats()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(ojas_wgpu::drop_stats().timed_out >= 1);
 }
