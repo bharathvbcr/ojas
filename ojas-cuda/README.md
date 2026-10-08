@@ -242,6 +242,10 @@ layout), `device_k8`, `device_k11`, `device_k3_gates_published`, `device_k4_conv
 `device_gdn_published` and `device_gdn_published_mirror`. Each embeds its goldens with
 `include_bytes!` and checks them against their pinned sha256, so the box needs no checkout.
 
+`device_lost` runs a kernel that executes `__trap()`, which poisons the whole process's CUDA
+context. It then checks that `CudaBackend::sync`, a later upload and a second sync each return
+`OjasError::DeviceLost`. Run it as its own binary, like the others; it takes a few seconds.
+
 `device_gdn_published` (K2(i)) needs `timeout 900`. Its timing test is report-only: it prints one
 `GDN_PUBLISHED_TIMING {json}` line per shape (4×2048 and 4×8192, H=16, Dv=128) and needs about
 15 GiB free on the device. Its rows go to the ledger as `quick`.
