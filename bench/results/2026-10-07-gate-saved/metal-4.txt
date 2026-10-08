@@ -1,0 +1,20 @@
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running tests/gate_saved.rs (/Users/bharath/Code/research/ojas/target-gpuhard/release/deps/gate_saved-c8787b64118ba9a2)
+
+running 1 test
+device: Metal Apple M5 Pro; 4096 rows, d_model 768, 12 heads of 64; 6 rounds x 20 iterations, alternating order; each sample is one call plus Backend::sync
+
+| variant | min µs | median µs |
+|---|---:|---:|
+| forward | 416.6 | 462.3 |
+| forward_saving | 415.9 | 465.4 |
+| backward (recomputes logits) | 703.5 | 763.2 |
+| backward_saved | 651.4 | 716.6 |
+
+forward_saving / forward: min 0.998, median 1.007
+backward_saved / backward: min 0.926, median 0.939
+
+test bench_gate_saved_against_recomputed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.46s
+
