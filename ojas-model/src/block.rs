@@ -171,14 +171,18 @@ pub fn block<G: Graph>(
     rope: &Rope,
     batch: usize,
 ) -> Result<BlockOut<G::V>, OjasError> {
-    block_with(g, spec, p, x, v0, rope, batch, causal_attention)
+    let window = spec.attention_window();
+    block_with(g, spec, p, x, v0, rope, batch, |g, q, k, v| {
+        causal_attention(g, q, k, v, window)
+    })
 }
 
 /// Causal attention of a whole sequence, the attention step of [`block`].
 /// `q` is `[B, T, H, D]`, `k` and `v` `[B, T, Hkv, D]`; returns
 /// `[B, T, H, D]`.
 ///
-/// Permute to `[B, H, T, D]`, [`Graph::sdpa`], permute back. Query head `h`
+/// Permute to `[B, H, T, D]`, [`Graph::sdpa`] under `window`
+/// ([`ModelSpec::attention_window`]), permute back. Query head `h`
 /// reads KV head `h / (H / Hkv)`. The tape differentiates that op. Decode
 /// with a cache still goes through [`block_with`] and [`Graph::cached_attn`].
 pub fn causal_attention<G: Graph>(
@@ -186,11 +190,12 @@ pub fn causal_attention<G: Graph>(
     q: &G::V,
     k: &G::V,
     v: &G::V,
+    window: Option<usize>,
 ) -> Result<G::V, OjasError> {
     let qh = g.permute(q, &SWAP_TIME_HEADS)?;
     let kh = g.permute(k, &SWAP_TIME_HEADS)?;
     let vh = g.permute(v, &SWAP_TIME_HEADS)?;
-    let y = g.sdpa(&qh, &kh, &vh)?;
+    let y = g.sdpa(&qh, &kh, &vh, window)?;
     g.permute(&y, &SWAP_TIME_HEADS)
 }
 

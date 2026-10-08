@@ -77,7 +77,7 @@ fn attend(s: Dims, seed: u64) -> (Vec<f32>, Vec<f32>) {
     let v = rand(&[s.b, s.cap, s.hkv, s.d], seed + 2, 1.0);
     let got = ok(
         &format!("{s:?}"),
-        m.cached_attention_forward(&up(&m, &q), &up(&m, &k), &up(&m, &v), s.kv_len),
+        m.cached_attention_forward(&up(&m, &q), &up(&m, &k), &up(&m, &v), s.kv_len, None),
     );
     assert_eq!(got.shape(), &[s.b, s.tq, s.h, s.d]);
     let want = naive(
@@ -109,7 +109,7 @@ fn full_cache_without_grouping_equals_causal_sdpa_after_the_permute() {
         let k = rand(&[b, t + extra, h, d], seed + 1, 1.0);
         let v = rand(&[b, t + extra, h, d], seed + 2, 1.0);
         let (qd, kd, vd) = (up(&m, &q), up(&m, &k), up(&m, &v));
-        let cached = ok("cached", m.cached_attention_forward(&qd, &kd, &vd, t));
+        let cached = ok("cached", m.cached_attention_forward(&qd, &kd, &vd, t, None));
         // SDPA wants [B, H, T, D] over exactly T positions.
         let head_major = |x: &Tensor| {
             let full = down(x);
@@ -230,7 +230,13 @@ fn decode_after_each_cache_write_matches_the_reference() {
         };
         let got = ok(
             "attend",
-            m.cached_attention_forward(&up(&m, &host(&q, &[b, tn, h, d])), &cache_k, &cache_v, at),
+            m.cached_attention_forward(
+                &up(&m, &host(&q, &[b, tn, h, d])),
+                &cache_k,
+                &cache_v,
+                at,
+                None,
+            ),
         );
         close(
             &format!("step {step}"),
@@ -257,10 +263,16 @@ fn cached_attention_is_deterministic() {
     let q = up(&m, &rand(&[s.b, s.tq, s.h, s.d], 1, 1.0));
     let k = up(&m, &rand(&[s.b, s.cap, s.hkv, s.d], 2, 1.0));
     let v = up(&m, &rand(&[s.b, s.cap, s.hkv, s.d], 3, 1.0));
-    let first = bits(&ok("a", m.cached_attention_forward(&q, &k, &v, s.kv_len)));
+    let first = bits(&ok(
+        "a",
+        m.cached_attention_forward(&q, &k, &v, s.kv_len, None),
+    ));
     for _ in 0..5 {
         assert_eq!(
-            bits(&ok("b", m.cached_attention_forward(&q, &k, &v, s.kv_len))),
+            bits(&ok(
+                "b",
+                m.cached_attention_forward(&q, &k, &v, s.kv_len, None)
+            )),
             first
         );
     }
@@ -274,14 +286,14 @@ fn cached_attention_refusals() {
     let k = up(&m, &rand(&[b, cap, hkv, d], 2, 1.0));
     let v = up(&m, &rand(&[b, cap, hkv, d], 3, 1.0));
     for kv_len in [1usize, cap + 1] {
-        let r = m.cached_attention_forward(&q, &k, &v, kv_len);
+        let r = m.cached_attention_forward(&q, &k, &v, kv_len, None);
         assert!(
             matches!(r, Err(OjasError::OutOfRange { .. })),
             "kv_len {kv_len}: {r:?}"
         );
     }
     let q3 = up(&m, &rand(&[b, tq, 3, d], 4, 1.0));
-    let r = m.cached_attention_forward(&q3, &k, &v, 4);
+    let r = m.cached_attention_forward(&q3, &k, &v, 4, None);
     assert!(matches!(r, Err(OjasError::Shape { .. })), "{r:?}");
     let wide = |s: &[usize], seed| up(&m, &rand(s, seed, 1.0));
     let r = m.cached_attention_forward(
@@ -289,6 +301,7 @@ fn cached_attention_refusals() {
         &wide(&[1, 4, 1, 257], 6),
         &wide(&[1, 4, 1, 257], 7),
         2,
+        None,
     );
     assert!(
         matches!(
@@ -300,7 +313,7 @@ fn cached_attention_refusals() {
         ),
         "{r:?}"
     );
-    let r = m.cached_attention_forward(&rand(&[b, tq, h, d], 1, 1.0), &k, &v, 4);
+    let r = m.cached_attention_forward(&rand(&[b, tq, h, d], 1, 1.0), &k, &v, 4, None);
     assert!(matches!(r, Err(OjasError::Placement { .. })), "{r:?}");
 
     // Non-finite values in q or in the read window of either cache.
@@ -337,17 +350,20 @@ fn cached_attention_refusals() {
             ("k first", q.clone(), poison_at(&cs, 0, 11, val), v.clone()),
         ];
         for (what, qq, kk, vv) in cases {
-            let r = m.cached_attention_forward(&qq, &kk, &vv, kv_len);
+            let r = m.cached_attention_forward(&qq, &kk, &vv, kv_len, None);
             deferred(&m, &format!("{what} {val}"), r, "cached_attention_forward");
         }
     }
     // Positions at or past kv_len are not read, so they are not checked.
     let tail = poison_at(&cs, kv_len * hkv * d, 12, f32::NAN);
-    ok("tail", m.cached_attention_forward(&q, &tail, &tail, kv_len));
+    ok(
+        "tail",
+        m.cached_attention_forward(&q, &tail, &tail, kv_len, None),
+    );
     ok("tail leaves nothing pending", m.sync());
     // Scores that overflow f32 are a non-finite intermediate.
     let huge = |shape: &[usize]| up(&m, &host(&vec![1e30; shape.iter().product()], shape));
-    let r = m.cached_attention_forward(&huge(&qs), &huge(&cs), &v, kv_len);
+    let r = m.cached_attention_forward(&huge(&qs), &huge(&cs), &v, kv_len, None);
     deferred(&m, "overflowing scores", r, "cached_attention_forward");
 }
 
@@ -367,10 +383,10 @@ fn cached_attention_matches_the_cpu_reference() {
         let q = rand(&[1, tq, h, d], 50 + i as u64, 1.0);
         let k = rand(&[1, cap, hkv, d], 51 + i as u64, 1.0);
         let v = rand(&[1, cap, hkv, d], 52 + i as u64, 1.0);
-        let want = ok("cpu", c.cached_attention_forward(&q, &k, &v, kv_len));
+        let want = ok("cpu", c.cached_attention_forward(&q, &k, &v, kv_len, None));
         let got = ok(
             "metal",
-            m.cached_attention_forward(&up(&m, &q), &up(&m, &k), &up(&m, &v), kv_len),
+            m.cached_attention_forward(&up(&m, &q), &up(&m, &k), &up(&m, &v), kv_len, None),
         );
         same_tensor("cached attention", &got, &want, 1e-5, 1e-5);
     }
@@ -432,7 +448,7 @@ fn split_cache_walk_reports_non_finite_values() {
     for pos in [0usize, 124, 125, 500, kv_len - 1] {
         for val in [f32::NAN, f32::INFINITY] {
             let kk = poison_at(&cs, at(pos, h - 1, d - 1), 64, val);
-            let r = m.cached_attention_forward(&q, &kk, &v, kv_len);
+            let r = m.cached_attention_forward(&q, &kk, &v, kv_len, None);
             deferred(
                 &m,
                 &format!("k at {pos}: {val}"),
@@ -440,7 +456,7 @@ fn split_cache_walk_reports_non_finite_values() {
                 "cached_attention_forward",
             );
             let vv = poison_at(&cs, at(pos, 0, 0), 65, val);
-            let r = m.cached_attention_forward(&q, &k, &vv, kv_len);
+            let r = m.cached_attention_forward(&q, &k, &vv, kv_len, None);
             deferred(
                 &m,
                 &format!("v at {pos}: {val}"),
@@ -450,13 +466,16 @@ fn split_cache_walk_reports_non_finite_values() {
         }
     }
     let qq = poison_at(&qs, h * d - 1, 66, f32::NEG_INFINITY);
-    let r = m.cached_attention_forward(&qq, &k, &v, kv_len);
+    let r = m.cached_attention_forward(&qq, &k, &v, kv_len, None);
     deferred(&m, "q", r, "cached_attention_forward");
     let tail = poison_at(&cs, at(kv_len, 0, 0), 67, f32::NAN);
-    ok("tail", m.cached_attention_forward(&q, &tail, &tail, kv_len));
+    ok(
+        "tail",
+        m.cached_attention_forward(&q, &tail, &tail, kv_len, None),
+    );
     ok("tail leaves nothing pending", m.sync());
     let huge = |shape: &[usize]| up(&m, &host(&vec![1e30; shape.iter().product()], shape));
-    let r = m.cached_attention_forward(&huge(&qs), &huge(&cs), &v, kv_len);
+    let r = m.cached_attention_forward(&huge(&qs), &huge(&cs), &v, kv_len, None);
     deferred(&m, "overflowing scores", r, "cached_attention_forward");
 }
 
@@ -496,7 +515,14 @@ fn kv_cache_write_refusals_leave_the_cache_unchanged() {
     let mut cache = up(&m, &rand(&[b, cap, hkv, d], 1, 1.0));
     let before = bits(&cache);
     let src = |tn: usize, seed| up(&m, &rand(&[b, tn, hkv, d], seed, 1.0));
-    for (tn, at) in [(2usize, 5usize), (7, 0), (1, 6), (1, usize::MAX)] {
+    // Past Tcap positions wrap the ring; more positions than slots, or an
+    // `at + tn` that overflows, are refused.
+    for (tn, at) in [
+        (7usize, 0usize),
+        (7, 4),
+        (1, usize::MAX),
+        (2, usize::MAX - 1),
+    ] {
         let r = m.kv_cache_write(&mut cache, &src(tn, 2), at);
         assert!(
             matches!(r, Err(OjasError::OutOfRange { .. })),
@@ -528,4 +554,54 @@ fn kv_cache_write_refusals_leave_the_cache_unchanged() {
     drop(other);
     assert_eq!(bits(&cache), before, "a refused write changed the cache");
     ok("clean", m.kv_cache_write(&mut cache, &src(2, 7), 4));
+}
+
+/// A sliding-window decode on a ring of `2W - 1` slots, wrapping it more
+/// than twice: prefills and single tokens of up to `W`, every call's
+/// writes and windowed attention on Metal against the CPU backend's (which
+/// `ojas-cpu/tests/framework_kv.rs` checks against windowed SDPA and an f64
+/// reference). The windowed span (up to `Tq + W - 1` keys) is long enough
+/// for the split walk. Slots start as NaN, so a read of a slot no query
+/// should see faults.
+#[test]
+fn windowed_ring_decode_matches_the_cpu_backend() {
+    let m = metal();
+    let c = cpu();
+    let (h, hkv, d, w) = (4usize, 2usize, 64usize, 200usize);
+    let cap = 2 * w - 1;
+    let nan = || host(&vec![f32::NAN; cap * hkv * d], &[1, cap, hkv, d]);
+    let (mut kc, mut vc) = (nan(), nan());
+    let (mut km, mut vm) = (up(&m, &nan()), up(&m, &nan()));
+    let mut pos = 0usize;
+    let mut seed = 900u64;
+    for &step in [150usize, 1, 1, 37, 1, 200, 64, 1, 1, 199, 3, 200, 1, 77, 1]
+        .iter()
+        .cycle()
+        .take(18)
+    {
+        seed += 3;
+        let k = rand(&[1, step, hkv, d], seed, 1.0);
+        let v = rand(&[1, step, hkv, d], seed + 1, 1.0);
+        let q = rand(&[1, step, h, d], seed + 2, 1.0);
+        ok("cpu k", c.kv_cache_write(&mut kc, &k, pos));
+        ok("cpu v", c.kv_cache_write(&mut vc, &v, pos));
+        ok("metal k", m.kv_cache_write(&mut km, &up(&m, &k), pos));
+        ok("metal v", m.kv_cache_write(&mut vm, &up(&m, &v), pos));
+        pos += step;
+        let want = ok(
+            "cpu",
+            c.cached_attention_forward(&q, &kc, &vc, pos, Some(w)),
+        );
+        let got = ok(
+            "metal",
+            m.cached_attention_forward(&up(&m, &q), &km, &vm, pos, Some(w)),
+        );
+        ok("sync", m.sync());
+        same_tensor(&format!("to {pos} (+{step})"), &got, &want, 1e-5, 1e-5);
+    }
+    assert!(pos > 2 * cap, "the ring wrapped twice: {pos}");
+    // The caches agree slot for slot, so every write landed where the CPU
+    // ring put it.
+    assert_eq!(bits(&km), bits(&kc));
+    assert_eq!(bits(&vm), bits(&vc));
 }

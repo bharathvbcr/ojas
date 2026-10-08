@@ -321,6 +321,14 @@ pub(crate) enum Cmd {
         rows: u32,
         cols: u32,
     },
+    /// Each row's `k` leaders: `[rows, k]` f32 values, then `[rows, k]` u32
+    /// columns.
+    Topk {
+        x: Arg,
+        rows: u32,
+        cols: u32,
+        k: u32,
+    },
     /// `rows` is the host's grouping of the token ids ([`EmbedRows`]).
     EmbedBwd {
         table: Arg,
@@ -543,8 +551,10 @@ pub(crate) enum Cmd {
         /// Targets neither ignored nor out of range, counted on the host.
         valid: u32,
     },
-    /// Grouped-query causal attention of `q [B, Tq, H, D]` against the first
-    /// `kv_len` positions of `k`, `v [B, cap, Hkv, D]`.
+    /// Grouped-query causal attention of `q [B, Tq, H, D]` against the
+    /// `kv_len` positions written to the rings `k`, `v [B, cap, Hkv, D]`
+    /// (position `j` in slot `j % cap`), each query seeing the last
+    /// `window` of them (`0`: all).
     CachedAttn {
         q: Arg,
         k: Arg,
@@ -556,9 +566,10 @@ pub(crate) enum Cmd {
         d: u32,
         cap: u32,
         kv_len: u32,
+        window: u32,
     },
-    /// `cache[b, at..at + tn] = src[b]`, in place, only if `src` is finite.
-    /// `row` is `Hkv * D`.
+    /// `cache[b, (at + t) % cap] = src[b, t]`, in place, only if `src` is
+    /// finite. `row` is `Hkv * D`.
     KvWrite {
         cache: Arg,
         src: Arg,

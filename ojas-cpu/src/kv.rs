@@ -1,82 +1,96 @@
 //! KV-cache attention and cache writes, for decode and for prefill onto a
 //! non-empty cache.
 //!
-//! Caches are time-major `[B, Tcap, Hkv, D]`. Only the first `kv_len` time
-//! slots of a cache are read: they are checked for NaN and infinity and
-//! copied, and the slots past them are never touched, so a cache's unused
-//! capacity may hold anything. Query `i` of `Tq` sits at position
-//! `kv_len - Tq + i` and attends to keys `0..=` that position; head `h`
-//! reads KV head `h / (H / Hkv)`.
+//! Caches are time-major `[B, Tcap, Hkv, D]` rings: position `j` is slot
+//! `j % Tcap`. Only the slots of positions some query reads are touched:
+//! they are checked for NaN and infinity and read in place, and every other
+//! slot is never read, so a cache's unused capacity may hold anything.
+//! Query `i` of `Tq` sits at position `p = kv_len - Tq + i` and attends to
+//! positions [`KvDims::visible`] (`0..=p`, or the last `window` of them),
+//! oldest first; head `h` reads KV head `h / (H / Hkv)`.
 //!
 //! Each query row runs the per-row kernel of `causal_sdpa_forward`
 //! ([`score_range`], [`softmax_range`], [`mix_values`]): scores sum the
 //! head dimension from 0, the softmax sums keys from 0, and the value mix
 //! adds keys from 0. With `kv_len == Tq` and `H == Hkv` the result is
-//! therefore `causal_sdpa_forward`'s whenever that op runs its per-row
-//! kernel, which is always under `Numerics::Exact` (Fast switches to a
-//! blocked kernel above 256 positions; this op does not).
+//! therefore `causal_sdpa_forward`'s (under the same window) whenever that
+//! op runs its per-row kernel, which is always under `Numerics::Exact`
+//! (Fast switches to a blocked kernel above 256 positions; this op does
+//! not).
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use ojas_core::{
     cached_attention_dims, kv_cache_write_dims, sdpa_scale, Budget, KvDims, OjasError, Tensor,
 };
 
-use crate::attn::{mix_values, score_range, softmax_range, TASK_WORK};
+use crate::attn::{mix_values, score_rows, softmax_range, TASK_WORK};
 use crate::pool::Exec;
 use crate::validate::{
     all_finite, check_f32, fill_out, nonfinite, product, room_for, shape, Shared,
 };
 
-/// The `kv_len` prefix of every batch of `cache`, checked finite in place.
-/// Returns the cache's contiguous values. A device or strided cache is
-/// refused by [`Tensor::f32_slice`] before anything is read.
-fn cache_prefix<'t>(
+/// The cache slots holding `positions`, as at most two runs of slots
+/// (`positions` wraps the ring at most once: it is no longer than
+/// `capacity`, which [`cached_attention_dims`] checked).
+fn slot_runs(positions: Range<usize>, capacity: usize) -> [Range<usize>; 2] {
+    let first = positions.start % capacity;
+    let len = positions.len();
+    let head = len.min(capacity - first);
+    [first..first + head, 0..len - head]
+}
+
+/// Check the slots of every position some query reads, in every batch of
+/// `cache`, finite in place. A device or strided cache is refused by
+/// [`Tensor::f32_slice`] before anything is read.
+fn check_read_slots(
     op: &'static str,
-    cache: &'t Tensor,
+    cache: &Tensor,
     dims: &KvDims,
     kv_len: usize,
-) -> Result<&'t [f32], OjasError> {
+) -> Result<(), OjasError> {
     let values = cache.f32_slice()?;
     let step = product(op, &[dims.kv_heads, dims.head_dim])?;
     let per_batch = product(op, &[dims.capacity, step])?;
-    let used = product(op, &[kv_len, step])?;
+    let read = dims.visible(kv_len, 0).start..kv_len;
     for b in 0..dims.batch {
-        let start = b * per_batch;
-        let run = values
-            .get(start..start + used)
-            .ok_or_else(|| OjasError::OutOfRange {
-                op,
-                detail: format!("cache window {} is shorter than its shape", values.len()),
+        for run in slot_runs(read.clone(), dims.capacity) {
+            let start = b * per_batch + run.start * step;
+            let run = values.get(start..start + run.len() * step).ok_or_else(|| {
+                OjasError::OutOfRange {
+                    op,
+                    detail: format!("cache window {} is shorter than its shape", values.len()),
+                }
             })?;
-        if !all_finite(run) {
-            return Err(nonfinite(op));
+            if !all_finite(run) {
+                return Err(nonfinite(op));
+            }
         }
     }
-    Ok(values)
+    Ok(())
 }
 
 /// [`ojas_core::Backend::cached_attention_forward`] on the CPU: the
 /// `[B, Tq, H, D]` output as a new tensor. Each head's rows are computed on
-/// the pool, then copied once into the output tensor ([`fill_out`]).
+/// the pool, reading the cache in place (nothing is repacked), then copied
+/// once into the output tensor ([`fill_out`]).
 pub(crate) fn cached_attention_forward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    q: &Tensor,
-    k_cache: &Tensor,
-    v_cache: &Tensor,
+    [q, k_cache, v_cache]: [&Tensor; 3],
     kv_len: usize,
+    window: Option<usize>,
 ) -> Result<Tensor, OjasError> {
-    let dims = cached_attention_dims(q, k_cache, v_cache, kv_len)?;
+    let dims = cached_attention_dims(q, k_cache, v_cache, kv_len, window)?;
     check_f32(op, q)?;
-    let kb = cache_prefix(op, k_cache, &dims, kv_len)?;
-    let vb = cache_prefix(op, v_cache, &dims, kv_len)?;
+    check_read_slots(op, k_cache, &dims, kv_len)?;
+    check_read_slots(op, v_cache, &dims, kv_len)?;
     let KvDims {
         batch,
         new: tq,
         heads,
-        kv_heads,
         head_dim: d,
         ..
     } = dims;
@@ -85,26 +99,28 @@ pub(crate) fn cached_attention_forward(
         detail: format!("head dim {d} does not fit in u32"),
     })?)?;
     let out_len = product(op, &[batch, tq, heads, d])?;
-    let per_kv_head = product(op, &[kv_len, d])?;
-    let gathered = product(op, &[2, batch, kv_heads, per_kv_head])?;
     let tasks = batch * heads;
     let inflight = if exec.pool.threads() <= 1 {
         1
     } else {
         tasks.min(exec.pool.threads())
     };
-    // Gathered K and V prefixes, the per-head output parts (as large as the
-    // output, live while it is assembled), and two length-`kv_len` rows per
+    // The per-head output parts (as large as the output, live while it is
+    // assembled), and two rows as long as the widest query's keys per
     // running task.
-    let work = [gathered, out_len, product(op, &[inflight, 2, kv_len])?]
-        .into_iter()
-        .try_fold(0usize, |sum, n| sum.checked_add(n))
+    let keys = dims.visible(kv_len, tq - 1).len();
+    let work = out_len
+        .checked_add(product(op, &[inflight, 2, keys])?)
         .ok_or_else(|| OjasError::OutOfRange {
             op,
             detail: "cached attention scratch length overflows".to_string(),
         })?;
-    // `q` was scanned above; its tasks read it in place.
-    let qv = Shared::new(op, q)?;
+    // `q` and the cache prefixes were scanned above; tasks read them in place.
+    let operands = [
+        Shared::new(op, q)?,
+        Shared::new(op, k_cache)?,
+        Shared::new(op, v_cache)?,
+    ];
     fill_out(op, budget, exec, q.shape(), |out| {
         if out.len() != out_len {
             return Err(shape(
@@ -113,18 +129,19 @@ pub(crate) fn cached_attention_forward(
             ));
         }
         let _scratch = room_for(op, budget, work)?;
-        attend(op, exec, qv, [kb, vb], dims, kv_len, scale, out)
+        attend(op, exec, operands, dims, kv_len, scale, out)
     })
 }
 
 /// The heads of [`cached_attention_forward`], on the pool, each copied
-/// into its rows of `out` (`[B, Tq, H, D]`).
-#[allow(clippy::too_many_arguments)]
+/// into its rows of `out` (`[B, Tq, H, D]`). Key and value `j` of a head
+/// are read where the time-major ring holds them, slot `j % Tcap`, rows
+/// `kv_heads * D` apart; a query's keys are scored and mixed oldest first,
+/// one run of slots at a time.
 fn attend(
     op: &'static str,
     exec: Exec<'_>,
-    qv: Shared,
-    [kb, vb]: [&[f32]; 2],
+    [qv, kv, vv]: [Shared; 3],
     dims: KvDims,
     kv_len: usize,
     scale: f32,
@@ -137,61 +154,62 @@ fn attend(
         heads,
         kv_heads,
         head_dim: d,
+        ..
     } = dims;
-    let per_kv_head = kv_len * d;
     let tasks = batch * heads;
-
-    // K packed `[D, kv_len]` and V `[kv_len, D]` per (batch, kv head): the
-    // layouts `score_range` and `mix_values` read.
-    let mut keys = vec![0.0f32; batch * kv_heads * per_kv_head];
-    let mut values = vec![0.0f32; batch * kv_heads * per_kv_head];
-    for b in 0..batch {
-        for j in 0..kv_len {
-            for hk in 0..kv_heads {
-                let src = ((b * capacity + j) * kv_heads + hk) * d;
-                let base = (b * kv_heads + hk) * per_kv_head;
-                for dd in 0..d {
-                    keys[base + dd * kv_len + j] = kb[src + dd];
-                    values[base + j * d + dd] = vb[src + dd];
-                }
-            }
-        }
-    }
-
     let group = heads / kv_heads;
+    let stride = kv_heads * d;
+    let widest = dims.visible(kv_len, tq - 1).len();
     let work_units = tasks
         .saturating_mul(tq)
-        .saturating_mul(kv_len)
+        .saturating_mul(widest)
         .saturating_mul(d);
     let cancel = exec.pool.cancel_hook();
-    let (keys, values) = (Arc::new(keys), Arc::new(values));
     let parts = exec.map(tasks, work_units, 2 * TASK_WORK, {
         let cancel = Arc::clone(&cancel);
         move |task| {
             cancel()?;
-            let q = qv.values()?;
+            let (q, kb, vb) = (qv.values()?, kv.values()?, vv.values()?);
             let (b, h) = (task / heads, task % heads);
-            let base = (b * kv_heads + h / group) * per_kv_head;
-            let kh = &keys[base..base + per_kv_head];
-            let vh = &values[base..base + per_kv_head];
-            let mut scores = vec![0.0f32; kv_len];
-            let mut probs = vec![0.0f32; kv_len];
+            // Head `h`'s keys and values: slot 0's row, then every `stride`.
+            let base = (b * capacity * kv_heads + h / group) * d;
+            let span = (capacity - 1) * stride + d;
+            let (kh, vh) = (&kb[base..base + span], &vb[base..base + span]);
+            let mut scores = vec![0.0f32; widest];
+            let mut probs = vec![0.0f32; widest];
             let mut out = vec![0.0f32; tq * d];
             for i in 0..tq {
                 cancel()?;
-                let visible = kv_len - tq + i + 1;
+                let seen = dims.visible(kv_len, i);
+                let n = seen.len();
                 let qs = ((b * tq + i) * heads + h) * d;
-                score_range(
-                    op,
-                    kh,
-                    &q[qs..qs + d],
-                    &mut scores,
-                    0..visible,
-                    kv_len,
-                    scale,
-                )?;
-                softmax_range(op, &scores, &mut probs, 0..visible)?;
-                mix_values(&mut out[i * d..(i + 1) * d], vh, &probs, 0..visible, d);
+                let runs = slot_runs(seen, capacity);
+                let mut at = 0;
+                for run in runs.iter().filter(|r| !r.is_empty()) {
+                    score_rows(
+                        op,
+                        &kh[run.start * stride..],
+                        stride,
+                        &q[qs..qs + d],
+                        &mut scores[at..],
+                        0..run.len(),
+                        scale,
+                    )?;
+                    at += run.len();
+                }
+                softmax_range(op, &scores, &mut probs, 0..n)?;
+                let mut at = 0;
+                for run in runs.iter().filter(|r| !r.is_empty()) {
+                    mix_values(
+                        &mut out[i * d..(i + 1) * d],
+                        &vh[run.start * stride..],
+                        &probs[at..],
+                        0..run.len(),
+                        d,
+                        stride,
+                    );
+                    at += run.len();
+                }
             }
             Ok::<_, OjasError>(out)
         }
@@ -209,14 +227,13 @@ fn attend(
 
 /// [`ojas_core::Backend::kv_cache_write`] on the CPU: all-or-nothing.
 ///
-/// Every check (shapes, a finite `src`, a uniquely owned host cache, room for
-/// the scratch) runs before the cache changes, and the one write is last.
-/// `Tensor` has no in-place sub-range write, so the new contents are built
-/// in a cache-sized buffer and written whole: each call costs `O(Tcap)`, not
-/// `O(Tn)`. Slots outside `at..at + Tn` keep their bits, NaN padding included.
+/// Every check (shapes, a finite `src`, a uniquely owned host cache) runs
+/// before the cache changes; the copy of `src` into its slots, which cannot
+/// fail, is last. Position `at + t` goes to slot `(at + t) % Tcap`, in place:
+/// each call moves `O(Tn)` values, not `O(Tcap)`. Every other slot keeps
+/// its bits, NaN padding included.
 pub(crate) fn kv_cache_write(
     op: &'static str,
-    budget: &Budget,
     cache: &mut Tensor,
     src: &Tensor,
     at: usize,
@@ -227,12 +244,16 @@ pub(crate) fn kv_cache_write(
     cache.ensure_writable_f32(len)?;
     let step = product(op, &[dims.kv_heads, dims.head_dim])?;
     let run = product(op, &[dims.new, step])?;
-    let _hold = room_for(op, budget, len)?;
-    let mut next = cache.to_f32_vec()?;
     let sv = src.f32_slice()?;
+    let next = cache.f32_slice_mut()?;
     for b in 0..dims.batch {
-        let dst = (b * dims.capacity + at) * step;
-        next[dst..dst + run].copy_from_slice(&sv[b * run..(b + 1) * run]);
+        let mut from = b * run;
+        for slots in slot_runs(at..at + dims.new, dims.capacity) {
+            let dst = (b * dims.capacity + slots.start) * step;
+            let n = slots.len() * step;
+            next[dst..dst + n].copy_from_slice(&sv[from..from + n]);
+            from += n;
+        }
     }
-    cache.write_f32(&next)
+    Ok(())
 }

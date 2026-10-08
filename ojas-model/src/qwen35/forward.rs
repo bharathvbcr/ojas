@@ -282,7 +282,7 @@ fn attention<G: Graph>(
     let q = head(&m.wq, spec.q_heads, Some(q_norm))?;
     let k = head(&m.wk, spec.kv_heads, Some(k_norm))?;
     let v = head(&m.wv, spec.kv_heads, None)?;
-    let a = g.sdpa(&q, &k, &v)?;
+    let a = g.sdpa(&q, &k, &v, None)?;
     let a = g.permute(&a, &SWAP_TIME_HEADS)?;
     let a = g.reshape(&a, &[b, t, spec.q_heads * hd])?;
     let gate = g.linear(h, &m.wgate)?;

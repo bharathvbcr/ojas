@@ -9,8 +9,9 @@
 //   0  an input is non-finite        1  an output or intermediate is non-finite
 // The rest of the slot is unused. Token ids are range-checked, and the
 // cross-entropy valid-row count formed, on the host from its copy of the ids;
-// ids `ojas_argmax_rows` produced are below its column count by construction,
-// which the host checks against the embedding's vocabulary instead.
+// ids `ojas_argmax_rows` and `ojas_topk_rows` produced are below their column
+// count by construction, which the host checks against the embedding's
+// vocabulary instead.
 // The elementwise kernels (silu, mul, add, value-residual) set words 0 and 1
 // from the elements they read and write; every other op runs
 // `ojas_check_finite` over its inputs and outputs.
@@ -791,6 +792,91 @@ kernel void ojas_argmax_rows(
     }
 }
 
+/// An f32's rank key: unsigned order of keys is `f32::total_cmp` order, so
+/// `+0.0` outranks `-0.0` and `-inf` ranks below every finite value.
+static inline uint ojas_rank_key(float v) {
+    const uint b = as_type<uint>(v);
+    return b ^ ((b >> 31) != 0u ? 0xFFFFFFFFu : 0x80000000u);
+}
+
+/// Row `r`'s `k` leaders as `ojas_infer::sample_token` ranks candidates:
+/// value descending under `total_cmp`, then column ascending.
+/// `values[r * k + j]` and `ids[r * k + j]` are the `j`-th leader; every id
+/// is `< cols`. One threadgroup per row and `k` rounds: round `j` takes,
+/// over the columns ranked strictly after round `j - 1`'s pick (a smaller
+/// key, or the same key at a higher column), the largest key, then the
+/// lowest column: a strided walk per lane (rising columns, so a strict `>`
+/// keeps the lowest column of equal keys), then a tree over the lanes. The
+/// first round's walk sets status word 0 for a NaN or `+inf` (the host
+/// reports it at the next sync); `-inf` is a value. Distinct (key, column)
+/// pairs leave `cols - j` candidates in round `j`, so every round picks.
+kernel void ojas_topk_rows(
+    device const float *x [[buffer(0)]],
+    device float *values [[buffer(1)]],
+    device uint *ids [[buffer(2)]],
+    device atomic_uint *st [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &cols [[buffer(5)]],
+    constant uint &k [[buffer(6)]],
+    uint r [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]])
+{
+    threadgroup uint bk[ARGMAX_TG];
+    threadgroup uint bi[ARGMAX_TG];
+    if (r >= rows) return;
+    const ulong base = (ulong)r * cols;
+    const ulong obase = (ulong)r * k;
+    uint pk = 0u;
+    uint pi = ARGMAX_NONE;
+    for (uint j = 0u; j < k; ++j) {
+        uint best_k = 0u;
+        uint best_i = ARGMAX_NONE;
+        bool bad = false;
+        for (uint c = lane; c < cols; c += ARGMAX_TG) {
+            const float v = x[base + c];
+            const uint key = ojas_rank_key(v);
+            if (j == 0u && (isnan(v) || v == INFINITY)) {
+                bad = true;
+            }
+            const bool after = j == 0u || key < pk || (key == pk && c > pi);
+            if (after && (best_i == ARGMAX_NONE || key > best_k)) {
+                best_k = key;
+                best_i = c;
+            }
+        }
+        if (bad) {
+            atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
+        }
+        bk[lane] = best_k;
+        bi[lane] = best_i;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint s = ARGMAX_TG / 2u; s > 0u; s >>= 1u) {
+            if (lane < s) {
+                const uint ok = bk[lane + s];
+                const uint oi = bi[lane + s];
+                const uint mi = bi[lane];
+                const bool take = oi != ARGMAX_NONE
+                    && (mi == ARGMAX_NONE || ok > bk[lane] || (ok == bk[lane] && oi < mi));
+                if (take) {
+                    bk[lane] = ok;
+                    bi[lane] = oi;
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        pk = bk[0];
+        pi = bi[0];
+        if (lane == 0u) {
+            // Unreachable for 1 <= k <= cols; 0 keeps the id a valid column.
+            const uint col = pi == ARGMAX_NONE ? 0u : pi;
+            values[obase + j] = x[base + col];
+            ids[obase + j] = col;
+        }
+        // Every lane has read the pick before the next round overwrites it.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 /// out[v, d] = sum of grad[pos[k], d] over v's tokens, in ascending token
 /// order from 0. Grid: x = column, y = vocabulary row.
 kernel void ojas_embed_gather(
@@ -1445,9 +1531,10 @@ kernel void ojas_copy_if_clean(
 //
 // The cache is time-major [B, Tcap, Hkv, D], as ojas-infer's host cache is.
 
-/// cache[b, at + t, :, :] = src[b, t, :, :], written only if no status word is
-/// set (the source's finite check runs before it in the same command buffer).
-/// `span` is Tn * Hkv * D, `cap_span` Tcap * Hkv * D and `at_off` at * Hkv * D.
+/// cache[b, (at + t) % Tcap, :, :] = src[b, t, :, :] (the cache is a ring),
+/// written only if no status word is set (the source's finite check runs
+/// before it in the same command buffer). `span` is Tn * Hkv * D, `cap_span`
+/// Tcap * Hkv * D, `row` Hkv * D, and `at_slot` at % Tcap.
 kernel void ojas_kv_write(
     device const float *src [[buffer(0)]],
     device float *cache [[buffer(1)]],
@@ -1455,7 +1542,9 @@ kernel void ojas_kv_write(
     constant uint &n [[buffer(3)]],
     constant uint &span [[buffer(4)]],
     constant uint &cap_span [[buffer(5)]],
-    constant uint &at_off [[buffer(6)]],
+    constant uint &at_slot [[buffer(6)]],
+    constant uint &row [[buffer(7)]],
+    constant uint &cap [[buffer(8)]],
     uint i [[thread_position_in_grid]])
 {
     if (i >= n) return;
@@ -1464,7 +1553,9 @@ kernel void ojas_kv_write(
     }
     const uint b = i / span;
     const uint r = i - b * span;
-    cache[(ulong)b * cap_span + at_off + r] = src[i];
+    const uint t = r / row;
+    const uint slot = (at_slot + t) % cap;
+    cache[(ulong)b * cap_span + (ulong)slot * row + (r - t * row)] = src[i];
 }
 
 #define CA_SG 32u
@@ -1475,12 +1566,15 @@ kernel void ojas_kv_write(
 #define CA_PER_LANE 8u
 #define CA_CHUNK 128u
 
-/// Causal attention of Tq queries against the first kv_len cache positions,
-/// grouped-query: head h reads KV head h / (H / Hkv). One threadgroup per
-/// (query, head, split) and batch, x = (i * H + h) * splits + s; query i
-/// sits at position kv_len - Tq + i.
+/// Causal attention of Tq queries against the kv_len positions written to a
+/// ring cache (position j in slot j % cap), grouped-query: head h reads KV
+/// head h / (H / Hkv). One threadgroup per (query, head, split) and batch,
+/// x = (i * H + h) * splits + s; query i sits at position pos = kv_len - Tq
+/// + i and reads positions [lo, pos], lo = pos + 1 - window with a window
+/// (window > 0) and 0 without.
 ///
-/// Split s walks keys [s * chunk, min((s + 1) * chunk, pos + 1)). Each of
+/// Splits cover [origin, kv_len), origin being query 0's lo. Split s walks
+/// keys [max(origin + s * chunk, lo), min(origin + (s + 1) * chunk, pos + 1)). Each of
 /// its 32 simdgroups walks keys j0 + sg, j0 + sg + 32, ... with an online
 /// softmax; a lane holds dims lane, lane + 32, ... of its partial output,
 /// and the score is a `simd_sum`, whose order is fixed. The simdgroups'
@@ -1492,10 +1586,8 @@ kernel void ojas_kv_write(
 /// with no key writes max = -inf and adds nothing.
 ///
 /// Finite checks are folded in: every q element is read (once per split),
-/// and every cache element at a position below kv_len is read by the last
-/// query row of each head that maps to its KV head, whose splits cover
-/// [0, kv_len), so a NaN or infinity there sets ST_IN. Positions at or past
-/// kv_len are not read and not checked. A non-finite output (scores that
+/// and every cache element some query reads is checked as it is read, so a
+/// NaN or infinity there sets ST_IN. Slots no query reads are not checked. A non-finite output (scores that
 /// overflow) sets ST_OUT, here or in the merge.
 kernel void ojas_cached_attn(
     device const float *q [[buffer(0)]],
@@ -1513,6 +1605,8 @@ kernel void ojas_cached_attn(
     constant uint &splits [[buffer(12)]],
     constant uint &chunk [[buffer(13)]],
     device float *part [[buffer(14)]],
+    constant uint &window [[buffer(15)]],
+    constant uint &origin [[buffer(16)]],
     uint2 tg [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -1547,10 +1641,11 @@ kernel void ojas_cached_attn(
     float m = -INFINITY;
     float l = 0.0f;
     float o[CA_PER_LANE] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    const uint j0 = split * chunk;
-    const uint j1 = min(j0 + chunk, pos + 1u);
+    const uint lo = (window > 0u && pos + 1u > window) ? pos + 1u - window : 0u;
+    const uint j0 = max(origin + split * chunk, lo);
+    const uint j1 = min(origin + split * chunk + chunk, pos + 1u);
     for (uint j = j0 + sg; j < j1; j += CA_SG) {
-        const ulong kb = (((ulong)b * cap + j) * kv_heads + kh) * d;
+        const ulong kb = (((ulong)b * cap + j % cap) * kv_heads + kh) * d;
         float part = 0.0f;
         for (uint t = 0u; t < CA_PER_LANE; ++t) {
             const uint c = lane + 32u * t;

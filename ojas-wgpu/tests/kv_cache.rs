@@ -110,7 +110,14 @@ fn kv_cache_write_refusals_leave_the_cache_unchanged() {
     let mut cache = g.upload(&host(1, &[b, cap, hkv, d])).unwrap();
     let before = bits(&g, &cache);
     let src = |tn: usize, seed| g.upload(&host(seed, &[b, tn, hkv, d])).unwrap();
-    for (tn, at) in [(2usize, 5usize), (7, 0), (1, 6), (1, usize::MAX)] {
+    // Past Tcap positions wrap the ring; more positions than slots, or an
+    // `at + tn` that overflows, are refused.
+    for (tn, at) in [
+        (7usize, 0usize),
+        (7, 4),
+        (1, usize::MAX),
+        (2, usize::MAX - 1),
+    ] {
         let r = g.kv_cache_write(&mut cache, &src(tn, 2), at);
         assert!(
             matches!(r, Err(OjasError::OutOfRange { .. })),
@@ -236,6 +243,7 @@ fn attend(g: &WgpuBackend, s: Dims, seed: u64) -> (Vec<f32>, Vec<f32>) {
             &g.upload(&tensor(&k, &[s.b, s.cap, s.hkv, s.d])).unwrap(),
             &g.upload(&tensor(&v, &[s.b, s.cap, s.hkv, s.d])).unwrap(),
             s.kv_len,
+            None,
         )
         .unwrap();
     assert_eq!(got.shape(), &[s.b, s.tq, s.h, s.d]);
@@ -285,6 +293,7 @@ fn full_cache_without_grouping_equals_causal_sdpa_after_the_permute() {
                 &g.upload(&k_full).unwrap(),
                 &g.upload(&v_full).unwrap(),
                 t,
+                None,
             )
             .unwrap();
         // The first t positions of the cache, permuted to [B, H, T, D].
@@ -478,6 +487,7 @@ fn decode_after_each_cache_write_matches_the_reference() {
                 &kc,
                 &vc,
                 t + 1,
+                None,
             )
             .unwrap();
         g.sync().unwrap_or_else(|e| panic!("step {t}: {e:?}"));
@@ -517,13 +527,15 @@ fn cached_attention_is_deterministic() {
     let v = g.upload(&host(3, &[s.b, s.cap, s.hkv, s.d])).unwrap();
     let first = bits(
         &g,
-        &g.cached_attention_forward(&q, &k, &v, s.kv_len).unwrap(),
+        &g.cached_attention_forward(&q, &k, &v, s.kv_len, None)
+            .unwrap(),
     );
     for _ in 0..3 {
         assert_eq!(
             bits(
                 &g,
-                &g.cached_attention_forward(&q, &k, &v, s.kv_len).unwrap()
+                &g.cached_attention_forward(&q, &k, &v, s.kv_len, None)
+                    .unwrap()
             ),
             first
         );
@@ -566,14 +578,14 @@ fn cached_attention_refusals() {
     let k = g.upload(&host(2, &[b, cap, hkv, d])).unwrap();
     let v = g.upload(&host(3, &[b, cap, hkv, d])).unwrap();
     for kv_len in [1usize, cap + 1] {
-        let r = g.cached_attention_forward(&q, &k, &v, kv_len);
+        let r = g.cached_attention_forward(&q, &k, &v, kv_len, None);
         assert!(
             matches!(r, Err(OjasError::OutOfRange { .. })),
             "kv_len {kv_len}: {r:?}"
         );
     }
     let q3 = g.upload(&host(4, &[b, tq, 3, d])).unwrap();
-    let r = g.cached_attention_forward(&q3, &k, &v, 4);
+    let r = g.cached_attention_forward(&q3, &k, &v, 4, None);
     assert!(matches!(r, Err(OjasError::Shape { .. })), "{r:?}");
     let wide = |s: &[usize], seed| g.upload(&host(seed, s)).unwrap();
     let r = g.cached_attention_forward(
@@ -581,6 +593,7 @@ fn cached_attention_refusals() {
         &wide(&[1, 4, 1, 257], 6),
         &wide(&[1, 4, 1, 257], 7),
         2,
+        None,
     );
     assert!(
         matches!(
@@ -592,7 +605,7 @@ fn cached_attention_refusals() {
         ),
         "{r:?}"
     );
-    let r = g.cached_attention_forward(&host(1, &[b, tq, h, d]), &k, &v, 4);
+    let r = g.cached_attention_forward(&host(1, &[b, tq, h, d]), &k, &v, 4, None);
     assert!(matches!(r, Err(OjasError::Placement { .. })), "{r:?}");
     g.sync().unwrap();
 }
@@ -636,7 +649,9 @@ fn non_finite_values_in_the_read_window_are_reported() {
             ("k first", q.clone(), poison(&cs, 0, 11, val), v.clone()),
         ];
         for (what, qq, kk, vv) in cases {
-            assert!(g.cached_attention_forward(&qq, &kk, &vv, kv_len).is_ok());
+            assert!(g
+                .cached_attention_forward(&qq, &kk, &vv, kv_len, None)
+                .is_ok());
             match g.sync() {
                 Err(OjasError::NonFinite { op }) => {
                     assert_eq!(op, "cached_attention_forward", "{what} {val}")
@@ -647,21 +662,22 @@ fn non_finite_values_in_the_read_window_are_reported() {
     }
     // Positions at or past kv_len are not read.
     let tail = poison(&cs, kv_len * hkv * d, 12, f32::NAN);
-    g.cached_attention_forward(&q, &tail, &tail, kv_len)
+    g.cached_attention_forward(&q, &tail, &tail, kv_len, None)
         .unwrap();
     g.sync().unwrap();
     // A key only the last query reads: the earlier row stays clean only if
     // it never reads it, which the reference comparison checks; here the
     // poisoned key must still fault through the last row.
     let late = poison(&cs, (kv_len - 1) * hkv * d, 13, f32::NAN);
-    g.cached_attention_forward(&q, &late, &v, kv_len).unwrap();
+    g.cached_attention_forward(&q, &late, &v, kv_len, None)
+        .unwrap();
     assert!(matches!(g.sync(), Err(OjasError::NonFinite { .. })));
     // Scores that overflow f32.
     let huge = |shape: &[usize]| {
         g.upload(&tensor(&vec![1e30; shape.iter().product()], shape))
             .unwrap()
     };
-    g.cached_attention_forward(&huge(&qs), &huge(&cs), &v, kv_len)
+    g.cached_attention_forward(&huge(&qs), &huge(&cs), &v, kv_len, None)
         .unwrap();
     assert!(matches!(
         g.sync(),
@@ -688,6 +704,7 @@ fn a_minus_infinity_key_faults_even_when_the_output_stays_finite() {
             &g.upload(&tensor(&k, &[1, cap, hkv, d])).unwrap(),
             &g.upload(&tensor(&v, &[1, cap, hkv, d])).unwrap(),
             kv_len,
+            None,
         )
         .unwrap();
     match g.sync() {
@@ -723,6 +740,7 @@ fn an_earlier_query_never_reads_a_later_position() {
             &g.upload(&tensor(&k, &[1, s.cap, s.hkv, s.d])).unwrap(),
             &g.upload(&tensor(&v, &[1, s.cap, s.hkv, s.d])).unwrap(),
             s.kv_len,
+            None,
         )
         .unwrap();
     g.sync().unwrap();
@@ -753,7 +771,7 @@ fn cached_attention_matches_the_cpu_reference() {
         let q = host(50 + i as u64, &[1, tq, h, d]);
         let k = host(51 + i as u64, &[1, cap, hkv, d]);
         let v = host(52 + i as u64, &[1, cap, hkv, d]);
-        let want = match c.cached_attention_forward(&q, &k, &v, kv_len) {
+        let want = match c.cached_attention_forward(&q, &k, &v, kv_len, None) {
             Err(OjasError::Unsupported { .. }) => {
                 panic!(
                     "CpuBackend::cached_attention_forward is not implemented; nothing to compare"
@@ -767,6 +785,7 @@ fn cached_attention_matches_the_cpu_reference() {
                 &g.upload(&k).unwrap(),
                 &g.upload(&v).unwrap(),
                 kv_len,
+                None,
             )
             .unwrap();
         g.sync().unwrap();
@@ -777,4 +796,66 @@ fn cached_attention_matches_the_cpu_reference() {
             1e-5,
         );
     }
+}
+
+/// A sliding-window decode on a ring of `2W - 1` slots, wrapping it more
+/// than twice: prefills and single tokens of up to `W`, every call's
+/// writes and windowed attention on wgpu against the CPU backend's (which
+/// `ojas-cpu/tests/framework_kv.rs` checks against windowed SDPA and an f64
+/// reference). The windowed span is long enough for several splits. Slots
+/// start as NaN, so a read of a slot no query should see faults.
+#[test]
+fn windowed_ring_decode_matches_the_cpu_backend() {
+    let g = fresh();
+    let c = cpu();
+    let (h, hkv, d, w) = (4usize, 2usize, 64usize, 200usize);
+    let cap = 2 * w - 1;
+    let nan = || tensor(&vec![f32::NAN; cap * hkv * d], &[1, cap, hkv, d]);
+    let (mut kc, mut vc) = (nan(), nan());
+    let (mut kg, mut vg) = (g.upload(&nan()).unwrap(), g.upload(&nan()).unwrap());
+    let mut pos = 0usize;
+    let mut seed = 900u64;
+    for &step in [150usize, 1, 1, 37, 1, 200, 64, 1, 1, 199, 3, 200, 1, 77, 1]
+        .iter()
+        .cycle()
+        .take(18)
+    {
+        seed += 3;
+        let k = host(seed, &[1, step, hkv, d]);
+        let v = host(seed + 1, &[1, step, hkv, d]);
+        let q = host(seed + 2, &[1, step, h, d]);
+        c.kv_cache_write(&mut kc, &k, pos).unwrap();
+        c.kv_cache_write(&mut vc, &v, pos).unwrap();
+        g.kv_cache_write(&mut kg, &g.upload(&k).unwrap(), pos)
+            .unwrap();
+        g.kv_cache_write(&mut vg, &g.upload(&v).unwrap(), pos)
+            .unwrap();
+        pos += step;
+        let want = c
+            .cached_attention_forward(&q, &kc, &vc, pos, Some(w))
+            .unwrap();
+        let got = g
+            .cached_attention_forward(&g.upload(&q).unwrap(), &kg, &vg, pos, Some(w))
+            .unwrap();
+        g.sync()
+            .unwrap_or_else(|e| panic!("to {pos} (+{step}): {e:?}"));
+        within(
+            &format!("to {pos} (+{step})"),
+            &g.download(&got).unwrap().to_f32_vec().unwrap(),
+            &want.to_f32_vec().unwrap(),
+            1e-5,
+        );
+    }
+    assert!(pos > 2 * cap, "the ring wrapped twice: {pos}");
+    // The caches agree slot for slot, so every write landed where the CPU
+    // ring put it.
+    let host_bits = |t: &Tensor| {
+        t.to_f32_vec()
+            .unwrap()
+            .iter()
+            .map(|x| x.to_bits())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bits(&g, &kg), host_bits(&kc));
+    assert_eq!(bits(&g, &vg), host_bits(&vc));
 }

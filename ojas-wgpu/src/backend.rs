@@ -70,11 +70,11 @@ use ojas_core::{
     refuse_bf16_operands, require_ns5, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    sdpa_scale, silu_backward_dims, silu_forward_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, DType,
-    LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
-    RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B,
-    MUON_NS5_C, MUON_NS_EPS,
+    sdpa_scale, silu_backward_dims, silu_forward_dims, topk_rows_dims,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
+    BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
+    OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -85,10 +85,15 @@ use ojas_kernels::{
 
 use crate::context::{Binding, Job, Kernel, Slot, View, WgpuBuffer, WgpuContext, FAULT_OPS};
 
+/// Largest `k` the `topk_rows` kernel takes. It walks the whole row once per
+/// leader, so its cost grows as `k * cols`; sampling's top-k sits far below
+/// this, and a larger `k` belongs to a sort, not `k` selection rounds.
+pub const WGPU_TOPK_MAX_K: usize = 1024;
+
 /// One fault bit per op, by index. The fault words hold a 64-bit mask
 /// ([`FAULT_OPS`]); `OP_NAMES` may grow to that many, and the build refuses
 /// more.
-const OP_NAMES: [&str; 34] = [
+const OP_NAMES: [&str; 35] = [
     "embedding_forward",
     "embedding_backward",
     "linear_forward",
@@ -123,6 +128,7 @@ const OP_NAMES: [&str; 34] = [
     "kv_cache_write",
     "cast_bf16",
     "argmax_rows",
+    "topk_rows",
 ];
 
 const _: () = assert!(
@@ -177,6 +183,7 @@ const KVW: Op = Op(31);
 /// Past the low mask word: its bit is bit 0 of fault word 1.
 const CAST: Op = Op(32);
 const ARGMAX: Op = Op(33);
+const TOPK: Op = Op(34);
 
 const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> Kernel {
     Kernel {
@@ -218,6 +225,7 @@ const ROPE: Kernel = k(Pointwise, "rope", &[R(2), R(3), R(4), W(6)]);
 const SUM_PARTIAL: Kernel = k(Reduce, "sum_partial", &[R(2), R(3), R(4), W(5)]);
 const SUM_FINISH: Kernel = k(Reduce, "sum_finish", &[R(2), R(3), W(5)]);
 const ARGMAX_ROWS: Kernel = k(Reduce, "argmax_rows", &[R(2), W(6)]);
+const TOPK_ROWS: Kernel = k(Reduce, "topk_rows", &[R(2), W(5), W(6)]);
 const COL_PARTIAL: Kernel = k(Reduce, "col_partial", &[R(2), R(3), R(4), W(5)]);
 const COL_FINISH: Kernel = k(Reduce, "col_finish", &[R(2), W(5)]);
 const RMS_FWD: Kernel = k(Norm, "rms_fwd", &[R(2), R(3), W(5)]);
@@ -1597,6 +1605,50 @@ impl Backend for WgpuBackend {
         Ok(y)
     }
 
+    /// `topk_rows` in `reduce.wgsl`: one workgroup per row and `k` rounds
+    /// over the row, the grid folded past the per-dimension limit. The
+    /// kernel's cost grows as `k * cols / 256` reads per lane, so `k` past
+    /// [`WGPU_TOPK_MAX_K`] is [`OjasError::Unsupported`]. A NaN or `+inf`
+    /// input raises [`TOPK`]'s fault bit, reported at the next sync. The ids
+    /// have no host shadow; they are bounded below `cols`, so they can feed
+    /// `embedding_forward` with no readback.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        let op = TOPK;
+        let (rows, cols) = topk_rows_dims(x, k)?;
+        if k > WGPU_TOPK_MAX_K {
+            return Err(OjasError::Unsupported {
+                op: op.name(),
+                detail: format!("k = {k} is past the wgpu kernel's {WGPU_TOPK_MAX_K}"),
+            });
+        }
+        let xv = self.placed(op, x)?;
+        u(op, xv.elems)?;
+        // The kernel's column walk steps by 256 in u32.
+        if cols > (u32::MAX - 256) as usize {
+            return Err(overflow(op, format!("{cols} columns")));
+        }
+        let words = [u(op, rows)?, u(op, cols)?, u(op, k)?];
+        let bytes = (rows as u64)
+            .checked_mul(k as u64)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or_else(|| overflow(op, "byte length overflows"))?;
+        self.ctx.check_bytes(bytes, &self.budget)?;
+        let value_charge = self.budget.try_reserve(bytes)?;
+        let id_charge = self.budget.try_reserve(bytes)?;
+        let vb = self.ctx.tensor_buffer(bytes)?;
+        let ib = self.ctx.tensor_buffer(bytes)?.bounded(words[1]);
+        let (v_raw, i_raw) = (vb.raw()?.clone(), ib.raw()?.clone());
+        let values =
+            Tensor::from_device_reserved(Arc::new(vb), &[rows, k], DType::F32, value_charge)?;
+        let ids = Tensor::from_device_reserved(Arc::new(ib), &[rows, k], DType::U32, id_charge)?;
+        let grid = self.groups(rows)?;
+        let mut job = self.job(op);
+        let xb = bind(op, &mut job, &xv)?;
+        job.dispatch(&TOPK_ROWS, &words, &[&xb, &v_raw, &i_raw], grid)?;
+        job.commit()?;
+        Ok((values, ids))
+    }
+
     fn embedding_backward(
         &self,
         table: &Tensor,
@@ -2513,8 +2565,8 @@ impl Backend for WgpuBackend {
         }
     }
 
-    /// Copy `src` `[B, Tn, Hkv, D]` into `cache` `[B, Tcap, Hkv, D]` at time
-    /// `at`. Everything [`kv_cache_write_dims`] checks, placement, and a
+    /// Copy `src` `[B, Tn, Hkv, D]` into the ring `cache` `[B, Tcap, Hkv,
+    /// D]`, position `at + t` in slot `(at + t) % Tcap`. Everything [`kv_cache_write_dims`] checks, placement, and a
     /// cache shared with another handle are refused before anything is
     /// recorded. `src` is checked for non-finite values on the device into
     /// a per-call fault word, and the copy runs only if that word is clear,
@@ -2530,10 +2582,16 @@ impl Backend for WgpuBackend {
         let per_src = product(op, &[dims.new, row])?;
         let per_dst = product(op, &[dims.capacity, row])?;
         u(op, product(op, &[dims.batch, per_dst])?)?;
-        let offset = product(op, &[at, row])?;
         let n = sv.elems;
         let grid = self.lanes(n)?;
-        let words = [u(op, n)?, u(op, per_src)?, u(op, per_dst)?, u(op, offset)?];
+        let words = [
+            u(op, n)?,
+            u(op, per_src)?,
+            u(op, per_dst)?,
+            u(op, at % dims.capacity)?,
+            u(op, row)?,
+            u(op, dims.capacity)?,
+        ];
         let cb = exclusive(op, cache)?;
         let mut job = self.job(op);
         let sb = bind(op, &mut job, &sv)?;
@@ -2728,9 +2786,10 @@ impl Backend for WgpuBackend {
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         let op = CATTN;
-        let dims = cached_attention_dims(q, k_cache, v_cache, kv_len)?;
+        let dims = cached_attention_dims(q, k_cache, v_cache, kv_len, window)?;
         let head_dim = u(op, dims.head_dim)?;
         if head_dim > ATTENTION_MAX_HEAD_DIM {
             return Err(OjasError::UnsupportedHeadDim {
@@ -2745,7 +2804,10 @@ impl Backend for WgpuBackend {
         u(op, kv.elems)?;
         let row_heads = product(op, &[dims.new, dims.heads])?;
         let rows = product(op, &[dims.batch, row_heads])?;
-        let (split, splits) = cached_attention_splits(rows, kv_len)?;
+        // Splits cover the positions some query reads: from query 0's
+        // first key (`origin`) to `kv_len`.
+        let origin = dims.visible(kv_len, 0).start;
+        let (split, splits) = cached_attention_splits(rows, kv_len - origin)?;
         let partial = product(op, &[rows, splits, dims.head_dim + 2])?;
         u(op, partial)?;
         self.fits(op, partial)?;
@@ -2776,6 +2838,8 @@ impl Backend for WgpuBackend {
             u(op, splits)?,
             scale.to_bits(),
             0,
+            u(op, dims.window.unwrap_or(0))?,
+            u(op, origin)?,
         ];
         let (y, yb) = self.out(op, qv.shape())?;
         let mut job = self.job(op);

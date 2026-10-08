@@ -46,7 +46,7 @@ The dependency graph is `core ← cpu ← autograd ← model → {io, data}`, th
 5. Gate (it reads `h`), then o_proj and the residual.
 6. norm2, SwiGLU, residual.
 
-That is the same order as `CpuGpt` and `ojas-autograd/tests/multihead.rs`. `CpuGpt::forward_token` keeps its host KV cache, and a parity test binds it to `Eval<CpuBackend>`. Training v1 refuses GQA, because nanolab's default is MHA.
+That is the same order as `ojas-autograd/tests/multihead.rs`. `CpuGpt` runs `DeviceDecoder`'s step on `CpuBackend` against a host `KvCache`, and a parity test binds it to `Eval<CpuBackend>`. Training v1 refuses GQA, because nanolab's default is MHA.
 
 Safetensors names are nanolab `state_dict` keys, so torch exports load unchanged.
 
@@ -202,9 +202,11 @@ fn linear_cross_entropy_mean(&self, input: &Tensor /*[N,d]*/, weight: &Tensor /*
     targets: &Tensor /*U32 [N]*/, ignore_index: Option<u32>, chunk: CeChunk /*{rows, cols}*/, want_grad: bool)
     -> Result<LinearCe, OjasError>; // LinearCe { loss, grad_input: Option<Tensor>, grad_weight: Option<Tensor> }
 fn cached_attention_forward(&self, q: &Tensor /*[B,Tq,H,D]*/, k_cache: &Tensor /*[B,Tcap,Hkv,D]*/, // T4
-    v_cache: &Tensor, kv_len: usize) -> Result<Tensor, OjasError>;
-    // query i sits at position kv_len-Tq+i; head h reads kv head h/(H/Hkv); scale sdpa_scale(D)
+    v_cache: &Tensor, kv_len: usize, window: Option<usize>) -> Result<Tensor, OjasError>;
+    // the cache is a ring: position j is slot j % Tcap; query i sits at position p = kv_len-Tq+i
+    // and reads p+1-window..=p (0..=p without a window); head h reads kv head h/(H/Hkv)
 fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor /*[B,Tn,Hkv,D]*/, at: usize) -> Result<(), OjasError>; // T5
+    // position at+t goes to slot (at+t) % Tcap; Tn <= Tcap
 impl<B: Backend + ?Sized> Backend for &B / Arc<B>  // T6: forward every method, including the defaulted ones
 // ojas-autograd Tape
 pub fn backward_seeded(&mut self, var: Var, seed: f32) -> Result<(), OjasError>;               // A1
@@ -220,7 +222,7 @@ T3–T5 default to `Unsupported`, as `permute` does. T3 chunks both rows and voc
 | T1 | default | default (synchronous per op today) | override (inherent `sync`) | G1: a deferred NaN surfaces at `sync` |
 | T2 | native in place | native | native | G2: parity vs CPU; NaN leaves `acc` unchanged |
 | T3 | native | native | native | G3: (a) equals the linear→CE→linear_backward composition at 1e-6 rel; (b) f64 gradcheck; (c) a `Budget` below `N·V·4` still runs; (d) device vs CPU at N=4096, V=50304, 1e-4 |
-| T4, T5 | native (moves `attend_one`) | native | native | G4: `kv_len == Tq` equals causal SDPA; GQA vs `attend_one`; device vs CPU at 1e-5 |
+| T4, T5 | native (reads the ring in place) | native | native | G4: `kv_len == Tq` equals causal SDPA (with the same window, bit for bit under Exact); GQA and windowed rings vs an f64 reference; device vs CPU at 1e-5 |
 | T6 | — | — | — | G5: `Arc<WgpuBackend>` keeps `Numerics::Fast` and `permute` |
 | A1 | — | — | — | G6: seed 0.5 gives the same result on every device. The root-CE shortcut in `tape.rs` must not drop the seed |
 

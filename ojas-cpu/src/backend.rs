@@ -1183,20 +1183,20 @@ impl Backend for CpuBackend {
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "cached_attention_forward";
         crate::kv::cached_attention_forward(
             OP,
             &self.budget,
             self.exec(),
-            q,
-            k_cache,
-            v_cache,
+            [q, k_cache, v_cache],
             kv_len,
+            window,
         )
     }
 
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
-        crate::kv::kv_cache_write("kv_cache_write", &self.budget, cache, src, at)
+        crate::kv::kv_cache_write("kv_cache_write", cache, src, at)
     }
 }

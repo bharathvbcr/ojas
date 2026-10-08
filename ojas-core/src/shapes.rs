@@ -382,6 +382,31 @@ pub fn argmax_rows_dims(x: &Tensor) -> Result<(usize, usize), OjasError> {
     Ok((rows, cols))
 }
 
+/// [`crate::Backend::topk_rows`]: `x` `F32` `[rows, cols]` and
+/// `1 <= k <= cols`. Returns `(rows, cols)`. Both must fit `u32` (so `k`
+/// and every result id do too); a zero extent is refused as for any operand.
+/// `k` out of `1..=cols` is [`OjasError::OutOfRange`].
+pub fn topk_rows_dims(x: &Tensor, k: usize) -> Result<(usize, usize), OjasError> {
+    const OP: &str = "topk_rows";
+    f32_operand(OP, x)?;
+    let &[rows, cols] = x.shape() else {
+        return Err(refuse(
+            OP,
+            format!("rank {} != 2 [rows, cols]", x.shape().len()),
+        ));
+    };
+    if u32::try_from(rows).is_err() || u32::try_from(cols).is_err() {
+        return Err(too_large(
+            OP,
+            format!("[{rows}, {cols}] does not fit u32 ids"),
+        ));
+    }
+    if k == 0 || k > cols {
+        return Err(too_large(OP, format!("k = {k} is outside 1..={cols}")));
+    }
+    Ok((rows, cols))
+}
+
 /// [`crate::Backend::embedding_forward`]: `table` `[vocab, dim]` `F32`,
 /// `token_ids` `U32` of any rank (rank 0 included). The output is
 /// `ids.shape ++ [dim]`. Id range is the backend's to check.
@@ -1464,6 +1489,25 @@ pub struct KvDims {
     pub heads: usize,
     pub kv_heads: usize,
     pub head_dim: usize,
+    /// Keys an attention query sees, counting its own; `None` is every
+    /// earlier key, and so is a window that covers all `kv_len` positions
+    /// (it is stored as `None`). Always `None` for a write.
+    pub window: Option<usize>,
+}
+
+impl KvDims {
+    /// The absolute positions attention query `i` (of `new`) reads when
+    /// `kv_len` positions exist: it sits at `p = kv_len - new + i` and sees
+    /// `max(0, p + 1 - window)..=p`. Position `j` lives in cache slot
+    /// `j % capacity`.
+    pub fn visible(&self, kv_len: usize, i: usize) -> std::ops::Range<usize> {
+        let p = kv_len - self.new + i;
+        let start = match self.window {
+            Some(w) => (p + 1).saturating_sub(w),
+            None => 0,
+        };
+        start..p + 1
+    }
 }
 
 fn rank4(op: &'static str, name: &str, tensor: &Tensor) -> Result<[usize; 4], OjasError> {
@@ -1476,13 +1520,17 @@ fn rank4(op: &'static str, name: &str, tensor: &Tensor) -> Result<[usize; 4], Oj
 
 /// Check the operands of [`crate::Backend::cached_attention_forward`]: `F32`
 /// `q [B, Tq, H, D]`, `k_cache` and `v_cache [B, Tcap, Hkv, D]` of equal
-/// shape, every dimension non-zero, `H % Hkv == 0`, and
-/// `Tq <= kv_len <= Tcap`.
+/// shape, every dimension non-zero, `H % Hkv == 0`, `kv_len >= Tq`, a
+/// `window` of at least 1, and every position some query reads still in
+/// the ring: the span from the oldest visible position to `kv_len - 1`,
+/// `kv_len` without a window and `min(kv_len, Tq + window - 1)` with one,
+/// is at most `Tcap`.
 pub fn cached_attention_dims(
     q: &Tensor,
     k_cache: &Tensor,
     v_cache: &Tensor,
     kv_len: usize,
+    window: Option<usize>,
 ) -> Result<KvDims, OjasError> {
     const OP: &str = "cached_attention_forward";
     let [batch, tq, heads, head_dim] = rank4(OP, "q", q)?;
@@ -1510,10 +1558,28 @@ pub fn cached_attention_dims(
             format!("{heads} query heads over {kv_heads} kv heads"),
         ));
     }
-    if kv_len < tq || kv_len > capacity {
+    if window == Some(0) {
+        return Err(refuse(OP, "attention window must be at least 1"));
+    }
+    if kv_len < tq {
         return Err(OjasError::OutOfRange {
             op: OP,
-            detail: format!("kv_len {kv_len} outside {tq}..={capacity}"),
+            detail: format!("kv_len {kv_len} is below the {tq} new positions"),
+        });
+    }
+    // A window that covers every position is no window.
+    let window = window.filter(|&w| w < kv_len);
+    let span = match window {
+        Some(w) => kv_len.min(tq.saturating_add(w - 1)),
+        None => kv_len,
+    };
+    if span > capacity {
+        return Err(OjasError::OutOfRange {
+            op: OP,
+            detail: format!(
+                "the {span} positions read up to kv_len {kv_len} (window {window:?}) exceed \
+                 cache capacity {capacity}"
+            ),
         });
     }
     Ok(KvDims {
@@ -1523,12 +1589,15 @@ pub fn cached_attention_dims(
         heads,
         kv_heads,
         head_dim,
+        window,
     })
 }
 
 /// Check the operands of [`crate::Backend::kv_cache_write`]: `F32` `cache
 /// [B, Tcap, Hkv, D]` and `src [B, Tn, Hkv, D]`, every dimension non-zero,
-/// and `at + Tn <= Tcap` without overflow.
+/// `Tn <= Tcap`, and `at + Tn` without overflow. Position `at + t` goes to
+/// slot `(at + t) % Tcap`: a cache is a ring, and one that is never written
+/// past `Tcap` is a plain prefix.
 pub fn kv_cache_write_dims(cache: &Tensor, src: &Tensor, at: usize) -> Result<KvDims, OjasError> {
     const OP: &str = "kv_cache_write";
     let [batch, capacity, kv_heads, head_dim] = rank4(OP, "cache", cache)?;
@@ -1553,14 +1622,14 @@ pub fn kv_cache_write_dims(cache: &Tensor, src: &Tensor, at: usize) -> Result<Kv
             ),
         ));
     }
-    let end = at.checked_add(tn).ok_or_else(|| OjasError::OutOfRange {
+    at.checked_add(tn).ok_or_else(|| OjasError::OutOfRange {
         op: OP,
         detail: format!("at {at} + {tn} overflows"),
     })?;
-    if end > capacity {
+    if tn > capacity {
         return Err(OjasError::OutOfRange {
             op: OP,
-            detail: format!("positions {at}..{end} exceed capacity {capacity}"),
+            detail: format!("{tn} positions exceed capacity {capacity}"),
         });
     }
     Ok(KvDims {
@@ -1570,6 +1639,7 @@ pub fn kv_cache_write_dims(cache: &Tensor, src: &Tensor, at: usize) -> Result<Kv
         heads: kv_heads,
         kv_heads,
         head_dim,
+        window: None,
     })
 }
 
@@ -3037,7 +3107,7 @@ mod tests {
         // 6 query heads over 2 kv heads, 3 new queries, cache of 8.
         let q = f(&[2, 3, 6, 4]);
         let cache = f(&[2, 8, 2, 4]);
-        let dims = cached_attention_dims(&q, &cache, &cache, 5).unwrap();
+        let dims = cached_attention_dims(&q, &cache, &cache, 5, None).unwrap();
         assert_eq!(
             dims,
             KvDims {
@@ -3046,15 +3116,16 @@ mod tests {
                 capacity: 8,
                 heads: 6,
                 kv_heads: 2,
-                head_dim: 4
+                head_dim: 4,
+                window: None,
             }
         );
-        assert!(cached_attention_dims(&q, &cache, &cache, 3).is_ok());
-        assert!(cached_attention_dims(&q, &cache, &cache, 8).is_ok());
+        assert!(cached_attention_dims(&q, &cache, &cache, 3, None).is_ok());
+        assert!(cached_attention_dims(&q, &cache, &cache, 8, None).is_ok());
         for kv_len in [0, 2, 9, usize::MAX] {
             assert!(
                 matches!(
-                    cached_attention_dims(&q, &cache, &cache, kv_len),
+                    cached_attention_dims(&q, &cache, &cache, kv_len, None),
                     Err(OjasError::OutOfRange { .. })
                 ),
                 "kv_len {kv_len}"
@@ -3070,7 +3141,7 @@ mod tests {
         for (q, k, v) in &shape_refusals {
             assert!(
                 matches!(
-                    cached_attention_dims(q, k, v, 3),
+                    cached_attention_dims(q, k, v, 3, None),
                     Err(OjasError::Shape { .. })
                 ),
                 "{:?} {:?} {:?}",
@@ -3080,10 +3151,48 @@ mod tests {
             );
         }
 
+        // A window: query i of 3 at p = kv_len - 3 + i reads p - 3..=p, so
+        // the read spans min(kv_len, 3 + 4 - 1) = 6 positions, wherever
+        // kv_len is; past the 8-slot ring, positions are slots j % 8.
+        for kv_len in [3, 5, 9, 100, usize::MAX] {
+            let dims = cached_attention_dims(&q, &cache, &cache, kv_len, Some(4)).unwrap();
+            assert_eq!(dims.window, (kv_len > 4).then_some(4), "kv_len {kv_len}");
+        }
+        let dims = cached_attention_dims(&q, &cache, &cache, 9, Some(4)).unwrap();
+        assert_eq!(
+            (0..3).map(|i| dims.visible(9, i)).collect::<Vec<_>>(),
+            [3..7, 4..8, 5..9]
+        );
+        let full = cached_attention_dims(&q, &cache, &cache, 5, None).unwrap();
+        assert_eq!(full.visible(5, 0), 0..3);
+        // A window that covers kv_len is none; one whose span outgrows the
+        // ring (3 + 7 - 1 = 9 > 8) is refused, as is a window of 0.
+        assert_eq!(
+            cached_attention_dims(&q, &cache, &cache, 8, Some(8)).unwrap(),
+            cached_attention_dims(&q, &cache, &cache, 8, None).unwrap()
+        );
+        assert!(matches!(
+            cached_attention_dims(&q, &cache, &cache, 9, Some(7)),
+            Err(OjasError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            cached_attention_dims(&q, &cache, &cache, 5, Some(0)),
+            Err(OjasError::Shape { .. })
+        ));
+
+        // Writes wrap the ring: any `at` takes Tn <= Tcap positions, until
+        // `at + Tn` overflows.
         let src = f(&[2, 3, 2, 4]);
         assert_eq!(kv_cache_write_dims(&cache, &src, 0).unwrap().new, 3);
         assert!(kv_cache_write_dims(&cache, &src, 5).is_ok(), "exact fit");
-        for at in [6, 8, usize::MAX - 1, usize::MAX] {
+        for at in [6, 8, 1 << 40] {
+            assert!(kv_cache_write_dims(&cache, &src, at).is_ok(), "at {at}");
+        }
+        assert!(matches!(
+            kv_cache_write_dims(&cache, &f(&[2, 9, 2, 4]), 0),
+            Err(OjasError::OutOfRange { .. })
+        ));
+        for at in [usize::MAX - 1, usize::MAX] {
             assert!(
                 matches!(
                     kv_cache_write_dims(&cache, &src, at),
@@ -3311,5 +3420,31 @@ mod tests {
             DType::F32,
             DType::U32,
         );
+    }
+
+    #[test]
+    fn topk_rows_takes_a_rank_2_f32_and_k_in_one_to_cols() {
+        let op = "topk_rows";
+        assert_eq!(topk_rows_dims(&f(&[3, 5]), 1).unwrap(), (3, 5));
+        assert_eq!(topk_rows_dims(&f(&[3, 5]), 5).unwrap(), (3, 5));
+        range_err(topk_rows_dims(&f(&[3, 5]), 0), op, "k = 0");
+        range_err(topk_rows_dims(&f(&[3, 5]), 6), op, "k = 6");
+        range_err(topk_rows_dims(&f(&[3, 5]), usize::MAX), op, "1..=5");
+        shape_err(topk_rows_dims(&f(&[15]), 1), op, "rank 1");
+        shape_err(topk_rows_dims(&f(&[1, 3, 5]), 1), op, "rank 3");
+        shape_err(topk_rows_dims(&f(&[0, 5]), 1), op, "empty tensor");
+        shape_err(topk_rows_dims(&f(&[3, 0]), 1), op, "empty tensor");
+        dtype_err(topk_rows_dims(&u(&[3, 5]), 1), op, DType::F32, DType::U32);
+        dtype_err(
+            topk_rows_dims(&of(DType::Bf16, &[3, 5]), 1),
+            op,
+            DType::F32,
+            DType::Bf16,
+        );
+        // Columns or rows past u32 (metadata only: nothing is allocated).
+        let wide = phantom(DType::F32, &[1, 1 << 32]);
+        range_err(topk_rows_dims(&wide, 1), op, "does not fit u32");
+        let tall = broadcast(DType::F32, &[1 << 32, 2]);
+        range_err(topk_rows_dims(&tall, 1), op, "does not fit u32");
     }
 }

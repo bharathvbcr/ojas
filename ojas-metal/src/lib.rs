@@ -24,7 +24,7 @@ mod backend;
 mod link;
 mod memory;
 
-pub use backend::{MetalBackend, MetalBuffer};
+pub use backend::{MetalBackend, MetalBuffer, METAL_TOPK_MAX_K};
 pub use link::WaitCounts;
 pub use memory::MetalMemory;
 

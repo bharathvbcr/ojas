@@ -1,11 +1,12 @@
-// Causal attention of Tq new queries against the first kv_len positions of a
-// time-major KV cache, split over the keys so a single decode query still
-// fills the GPU.
+// Causal attention of Tq new queries against the kv_len positions written to
+// a time-major ring KV cache, split over the keys so a single decode query
+// still fills the GPU.
 //
-// q is [B, Tq, H, D]; k and v are [B, Tcap, Hkv, D]. Query i sits at position
-// kv_len - Tq + i and reads keys 0..=that position; head h reads KV head
-// h / (H / Hkv). Nothing at or past a row's own position is read, so values
-// there (stale or never written) cannot reach the output.
+// q is [B, Tq, H, D]; k and v are [B, Tcap, Hkv, D], position j in slot
+// j % Tcap. Query i sits at position pos = kv_len - Tq + i and reads
+// positions lo..=pos, lo = pos + 1 - window under a window (word 11 > 0) and
+// 0 without; head h reads KV head h / (H / Hkv). No other slot is read, so
+// values there (stale or never written) cannot reach the output.
 //
 // cattn_split: one workgroup per (split, query row * head, batch) computes,
 // over its key range, the running max m, the sum l of exp(score - m) and the
@@ -17,7 +18,9 @@
 // Words: 0 B, 1 Tq, 2 H, 3 Hkv, 4 D, 5 Tcap, 6 kv_len, 7 split length S
 // (multiple of 64, at most MAX_SPLIT), 8 split count, 9 scale bits, 10 the
 // first (query row * head) index of this dispatch: the host splits that axis
-// into dispatches of at most max_compute_workgroups_per_dimension groups.
+// into dispatches of at most max_compute_workgroups_per_dimension groups,
+// 11 the window (0: none), 12 origin, query 0's lo: split s covers
+// positions origin + s * S .. origin + (s + 1) * S.
 // Partial layout per (b, i, h, split): [m, l, acc[0..D]], D + 2 words.
 
 @group(0) @binding(2) var<storage, read> q: array<f32>;
@@ -88,11 +91,15 @@ fn cattn_split(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
         return;
     }
     let pos = kv_len - tq + i;
-    let start = s * split;
-    let end = min(start + split, pos + 1u);
+    let window = pw(11u);
+    var lo = 0u;
+    if (window > 0u && pos + 1u > window) { lo = pos + 1u - window; }
+    let first = pw(12u) + s * split;
+    let start = max(first, lo);
+    let end = min(first + split, pos + 1u);
     let base = (((b * tq + i) * heads + h) * splits + s) * (dim + 2u);
     if (start >= end) {
-        // Past this row's position: an empty split.
+        // Outside this row's keys: an empty split.
         if (lane == 0u) {
             part[base] = NEG;
             part[base + 1u] = 0.0;
@@ -112,7 +119,7 @@ fn cattn_split(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     let kvbase = (b * cap) * row + kvh * dim;
     var peak = NEG;
     for (var j = start + lane; j < end; j = j + LANES) {
-        let kb = kvbase + j * row;
+        let kb = kvbase + (j % cap) * row;
         var dot = 0.0;
         for (var d = 0u; d < dim; d = d + 1u) {
             dot = dot + q_s[d] * kc[kb + d];
@@ -133,7 +140,7 @@ fn cattn_split(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     for (var d = lane; d < dim; d = d + LANES) {
         var acc = 0.0;
         for (var j = start; j < end; j = j + 1u) {
-            acc = acc + p_s[j - start] * vc[kvbase + j * row + d];
+            acc = acc + p_s[j - start] * vc[kvbase + (j % cap) * row + d];
         }
         part[base + 2u + d] = acc;
     }

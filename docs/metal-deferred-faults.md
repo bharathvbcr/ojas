@@ -51,7 +51,7 @@ Everything the host can decide without the device:
 - **Shape and dtype:** dtype, rank, shape agreement, empty tensors, and the core validators (`linear_ce_dims`, `cached_attention_dims`, `kv_cache_write_dims`, `permute_output_shape`).
 - **Placement:** a host tensor, another device's tensor, or another `MetalBackend`'s tensor.
 - **Capacity:** `CapacityExceeded` from the budget, and from a device allocation, which happens on the device thread while the op is recorded, before the call returns.
-- **Limits:** the head-dim limit (`refuse_unsupported_metal_head_dim`), `u32` indexing limits, `kv_cache_write`'s `at + Tn > Tcap`, and `cached_attention_forward`'s `kv_len` range.
+- **Limits:** the head-dim limit (`refuse_unsupported_metal_head_dim`), `u32` indexing limits, `kv_cache_write`'s `Tn > Tcap` (and `at + Tn` overflow), and `cached_attention_forward`'s `kv_len` and ring-span range.
 - **Arguments:** `check_adamw` (step counter, config), Muon config, and `clip_grad_norm`'s `max_norm` (non-finite or negative).
 - **Uniqueness:** an in-place op whose target is shared is `Shape`.
 - **Token ids and the valid-row count (new, as wgpu).** Today these are found on the device by `ojas_check_ids` (`device.rs`, the `ST_RANGE` and `ST_COUNT` words) (V).
@@ -228,7 +228,7 @@ All of these fail today, because today the op itself returns `Err`.
 6. **In-place all-or-nothing under batching.**
    - `adamw_step`, `muon_ns5_step`, `accumulate_grad` (unique and shared) and `kv_cache_write` with a NaN at the last element return `Ok` and leave their targets bit-identical after `sync`.
    - A later clean call on the same tensors applies normally: its own words decide, not the pending fault.
-7. **Host refusals stay immediate.** Shape, dtype, placement, capacity, head dim, `kv_len`, `at + Tn`, out-of-range ids and all-ignored each return `Err` at the call, and nothing is pending (`sync` is `Ok`).
+7. **Host refusals stay immediate.** Shape, dtype, placement, capacity, head dim, `kv_len`, `Tn`, out-of-range ids and all-ignored each return `Err` at the call, and nothing is pending (`sync` is `Ok`).
 8. **Concurrency.**
    - Six threads on one backend run the round-3 mixed sequence; one thread injects a NaN op.
    - Exactly one `sync` across all threads reports it, and every clean thread's bits equal the serial run.

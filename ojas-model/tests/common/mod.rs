@@ -528,6 +528,7 @@ impl Backend for Resident {
         k: &Tensor,
         v: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "cached_attention_forward";
         self.d(self.cpu.cached_attention_forward(
@@ -535,6 +536,7 @@ impl Backend for Resident {
             &self.h(OP, k)?,
             &self.h(OP, v)?,
             kv_len,
+            window,
         )?)
     }
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
@@ -1027,9 +1029,10 @@ impl<B: Backend> Backend for Probe<B> {
         k: &Tensor,
         v: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         self.gate("cached_attention_forward")?;
-        self.inner.cached_attention_forward(q, k, v, kv_len)
+        self.inner.cached_attention_forward(q, k, v, kv_len, window)
     }
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         self.gate("kv_cache_write")?;
@@ -1038,6 +1041,10 @@ impl<B: Backend> Backend for Probe<B> {
     fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
         self.gate("argmax_rows")?;
         self.inner.argmax_rows(x)
+    }
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.gate("topk_rows")?;
+        self.inner.topk_rows(x, k)
     }
     fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
         self.gate("cast_bf16")?;

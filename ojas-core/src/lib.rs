@@ -56,7 +56,7 @@ pub use shapes::{
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
     rope_partial_backward_dims, rope_partial_forward_dims, sigmoid_backward_dims,
-    sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
+    sigmoid_forward_dims, silu_backward_dims, silu_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, CeDims, Conv1dDims,
     EmbeddingDims, GateDims, GdnDecayDims, GdnDims, KvDims, LinearCeDims, LinearDims, MuonDims,
     PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims, MAX_PERMUTE_RANK,

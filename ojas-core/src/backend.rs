@@ -1204,25 +1204,32 @@ pub trait Backend {
         })
     }
 
-    /// Causal attention of `Tq` new queries against the first `kv_len`
-    /// positions of a KV cache, for decode and for prefill onto a non-empty
+    /// Causal attention of `Tq` new queries against the `kv_len` positions
+    /// written to a KV cache, for decode and for prefill onto a non-empty
     /// cache.
     ///
     /// `q` is `[B, Tq, H, D]`; `k_cache` and `v_cache` are `[B, Tcap, Hkv, D]`,
-    /// time-major like `ojas-infer`'s host cache. Query `i` sits at position
-    /// `kv_len - Tq + i` and attends to keys `0..=` that position. Head `h`
-    /// reads KV head `h / (H / Hkv)` (grouped-query attention). Scale is
-    /// [`sdpa_scale`]`(D)`. Returns `[B, Tq, H, D]`. With `kv_len == Tq` and
-    /// `H == Hkv` this equals [`Backend::causal_sdpa_forward`] after the
-    /// layout permute. Validate with [`cached_attention_dims`].
+    /// time-major like `ojas-infer`'s host cache, and a ring: position `j`
+    /// is slot `j % Tcap` (as [`Backend::kv_cache_write`] puts it), so a
+    /// cache never written past `Tcap` is a plain prefix. Query `i` sits at
+    /// position `p = kv_len - Tq + i` and attends to positions `0..=p`, or
+    /// with a `window` to `p + 1 - window..=p` (as
+    /// [`Backend::causal_sdpa_forward`]'s window), visited oldest first.
+    /// Head `h` reads KV head `h / (H / Hkv)` (grouped-query attention).
+    /// Scale is [`sdpa_scale`]`(D)`. Returns `[B, Tq, H, D]`. With `kv_len
+    /// == Tq` and `H == Hkv` this equals [`Backend::causal_sdpa_forward`]
+    /// with the same window after the layout permute. Validate with
+    /// [`cached_attention_dims`], which refuses a read the ring no longer
+    /// holds; [`KvDims::visible`] gives each query's positions.
     fn cached_attention_forward(
         &self,
         q: &Tensor,
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
-        let _ = (q, k_cache, v_cache, kv_len);
+        let _ = (q, k_cache, v_cache, kv_len, window);
         Err(OjasError::Unsupported {
             op: "cached_attention_forward",
             detail: format!(
@@ -1233,7 +1240,8 @@ pub trait Backend {
     }
 
     /// Write `src` (`[B, Tn, Hkv, D]`) into `cache` (`[B, Tcap, Hkv, D]`) at
-    /// time positions `at..at + Tn`.
+    /// time positions `at..at + Tn`: position `j` goes to slot `j % Tcap`,
+    /// so `Tn <= Tcap` and the cache is a ring.
     ///
     /// `cache` must be uniquely owned. On any error the cache is unchanged.
     /// Validate with [`kv_cache_write_dims`].
@@ -1283,6 +1291,60 @@ pub trait Backend {
             ids.push(best as u32);
         }
         Tensor::from_u32(&ids, &[rows], self.budget())
+    }
+
+    /// The `k` leaders of each row of `x` (`F32` `[rows, cols]`, `1 <= k <= cols`),
+    /// ranked as `ojas_infer::sample_token` ranks candidates: value descending under
+    /// `f32::total_cmp` (so `+0.0` before `-0.0`, and `-inf` after every finite value),
+    /// then column ascending. Returns `(values, ids)`: `F32` `[rows, k]` and `U32`
+    /// `[rows, k]`, every id `< cols`. Any NaN or `+inf` in a row is
+    /// `OjasError::NonFinite` (a device backend may report it at the next sync);
+    /// `-inf` is a value (a masked logit). Validate with `topk_rows_dims`. The default
+    /// downloads `x` and selects on the host.
+    ///
+    /// As with [`Backend::argmax_rows`], a backend may let the ids index an
+    /// `embedding_forward` table of at least `cols` rows without reading them
+    /// back. A device kernel may refuse a large `k` as
+    /// [`OjasError::Unsupported`] (Metal and wgpu take `k <= 1024`). The
+    /// default's host scan is `O(cols + k log k)` per row (a
+    /// selection, then a sort of the `k` leaders), and its two results are
+    /// host tensors charged to this backend's budget.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "topk_rows";
+        let (rows, cols) = crate::topk_rows_dims(x, k)?;
+        let host = match x.device() {
+            None => x.clone(),
+            Some(_) => {
+                let host = self.download(x)?;
+                self.sync()?;
+                host
+            }
+        };
+        let values = host.to_f32_vec()?;
+        // `rows * k <= rows * cols`, the element count of `x`.
+        let mut top_values = Vec::with_capacity(rows * k);
+        let mut top_ids = Vec::with_capacity(rows * k);
+        // `topk_rows_dims` checked that `cols` fits u32.
+        let mut order: Vec<u32> = Vec::with_capacity(cols);
+        for row in values.chunks_exact(cols) {
+            if row.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
+                return Err(OjasError::NonFinite { op: OP });
+            }
+            let rank =
+                |a: &u32, b: &u32| row[*b as usize].total_cmp(&row[*a as usize]).then(a.cmp(b));
+            order.clear();
+            order.extend(0..cols as u32);
+            if k < cols {
+                order.select_nth_unstable_by(k - 1, rank);
+            }
+            let leaders = &mut order[..k];
+            leaders.sort_unstable_by(rank);
+            top_values.extend(leaders.iter().map(|&i| row[i as usize]));
+            top_ids.extend_from_slice(leaders);
+        }
+        let values = Tensor::from_f32(&top_values, &[rows, k], self.budget())?;
+        let ids = Tensor::from_u32(&top_ids, &[rows, k], self.budget())?;
+        Ok((values, ids))
     }
 
     /// Round a host f32 tensor to bf16 and widen it back to f32.
@@ -1797,8 +1859,9 @@ macro_rules! forward_backend {
             k_cache: &Tensor,
             v_cache: &Tensor,
             kv_len: usize,
+            window: Option<usize>,
         ) -> Result<Tensor, OjasError> {
-            (**self).cached_attention_forward(q, k_cache, v_cache, kv_len)
+            (**self).cached_attention_forward(q, k_cache, v_cache, kv_len, window)
         }
         fn kv_cache_write(
             &self,
@@ -1810,6 +1873,9 @@ macro_rules! forward_backend {
         }
         fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
             (**self).argmax_rows(x)
+        }
+        fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+            (**self).topk_rows(x, k)
         }
         fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
             (**self).cast_bf16(tensor)
@@ -2661,6 +2727,7 @@ pub(crate) mod tests {
             _: &Tensor,
             _: &Tensor,
             _: usize,
+            _: Option<usize>,
         ) -> Result<Tensor, OjasError> {
             Err(mark("cached_attention_forward"))
         }
@@ -2669,6 +2736,9 @@ pub(crate) mod tests {
         }
         fn argmax_rows(&self, _: &Tensor) -> Result<Tensor, OjasError> {
             Err(mark("argmax_rows"))
+        }
+        fn topk_rows(&self, _: &Tensor, _: usize) -> Result<(Tensor, Tensor), OjasError> {
+            Err(mark("topk_rows"))
         }
         fn cast_bf16(&self, _: &Tensor) -> Result<Tensor, OjasError> {
             Err(mark("cast_bf16"))
@@ -2771,9 +2841,10 @@ pub(crate) mod tests {
             op(backend.accumulate_grad(&mut m, &t)),
             op(backend.scale_grad(&mut m, 0.5)),
             op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, true)),
-            op(backend.cached_attention_forward(&t, &t, &t, 1)),
+            op(backend.cached_attention_forward(&t, &t, &t, 1, None)),
             op(backend.kv_cache_write(&mut m, &t, 0)),
             op(backend.argmax_rows(&t)),
+            op(backend.topk_rows(&t, 1)),
             op(backend.cast_bf16(&t)),
             op(backend.autocast_region(AutocastMode::Off).map(drop)),
         ];
@@ -2830,6 +2901,7 @@ pub(crate) mod tests {
             "cached_attention_forward",
             "kv_cache_write",
             "argmax_rows",
+            "topk_rows",
             "cast_bf16",
             "autocast_region",
         ];
@@ -2867,7 +2939,7 @@ pub(crate) mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 57);
+        assert_eq!(checked, 58);
     }
 
     #[test]
@@ -2896,7 +2968,9 @@ pub(crate) mod tests {
         );
         let q = Tensor::from_f32(&[1.0; 4], &[1, 1, 1, 4], &budget).unwrap();
         refused(
-            backend.cached_attention_forward(&q, &q, &q, 1).map(drop),
+            backend
+                .cached_attention_forward(&q, &q, &q, 1, None)
+                .map(drop),
             "cached_attention_forward",
         );
         let mut cache = Tensor::from_f32(&[7.0; 8], &[1, 2, 1, 4], &budget).unwrap();

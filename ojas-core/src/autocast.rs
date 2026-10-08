@@ -1072,13 +1072,14 @@ impl<B: Backend> Backend for Autocast<B> {
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         let q = self.prep(q)?;
         let k_cache = self.prep(k_cache)?;
         let v_cache = self.prep(v_cache)?;
         let out = self
             .inner
-            .cached_attention_forward(&q, &k_cache, &v_cache, kv_len)?;
+            .cached_attention_forward(&q, &k_cache, &v_cache, kv_len, window)?;
         self.emit(out)
     }
 
@@ -1093,6 +1094,12 @@ impl<B: Backend> Backend for Autocast<B> {
     fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
         self.pass()?;
         self.inner.argmax_rows(x)
+    }
+
+    /// A selection, not arithmetic: the operand passes through unrounded.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.pass()?;
+        self.inner.topk_rows(x, k)
     }
 }
 
@@ -1829,6 +1836,7 @@ mod tests {
             k_cache: &Tensor,
             v_cache: &Tensor,
             _kv_len: usize,
+            _window: Option<usize>,
         ) -> Result<Tensor, OjasError> {
             const OP: &str = "cached_attention_forward";
             note(&self.seen_input, q);
@@ -2283,7 +2291,7 @@ mod tests {
         };
         let wrapped = Autocast::new(&inner);
         let checked = every_call_reaches_except(&wrapped, &inner, &["autocast_region"]);
-        assert_eq!(checked, 57);
+        assert_eq!(checked, 58);
     }
 
     #[test]
@@ -2431,7 +2439,9 @@ mod tests {
         assert_eq!(gq.compute_tag(), COMPUTE_BF16);
         assert_eq!(gk.compute_tag(), COMPUTE_BF16);
         assert_eq!(gv.compute_tag(), COMPUTE_BF16);
-        let cached = autocast.cached_attention_forward(&q, &k, &v, 1).unwrap();
+        let cached = autocast
+            .cached_attention_forward(&q, &k, &v, 1, None)
+            .unwrap();
         assert_eq!(cached.compute_tag(), COMPUTE_BF16);
         assert_eq!(bits_of(&k), DIRTY);
         assert_eq!(autocast.inner.seen_k.load(Ordering::Relaxed), ONE);

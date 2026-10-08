@@ -603,10 +603,11 @@ impl<B: Backend> Backend for Gated<B> {
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         self.enter("cached_attention_forward", true)?;
         self.inner
-            .cached_attention_forward(q, k_cache, v_cache, kv_len)
+            .cached_attention_forward(q, k_cache, v_cache, kv_len, window)
     }
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         self.enter("kv_cache_write", true)?;
@@ -615,6 +616,10 @@ impl<B: Backend> Backend for Gated<B> {
     fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
         self.enter("argmax_rows", true)?;
         self.inner.argmax_rows(x)
+    }
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.enter("topk_rows", true)?;
+        self.inner.topk_rows(x, k)
     }
     fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
         self.enter("cast_bf16", true)?;

@@ -1,9 +1,9 @@
+use crate::cache::{append, run_pieces, Kv, Ring};
 use crate::decode::{self, Forward};
-use crate::kernels::{attend_one, linear};
 use crate::sample::GenerateConfig;
-use ojas_core::{Backend, Budget, DType, Numerics, OjasError, Scratch, Tensor};
+use ojas_core::{Backend, Budget, DType, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
-use ojas_model::{param_table, BlockParams, ModelParams, ModelSpec, Rope};
+use ojas_model::{param_table, BlockParams, Eval, ModelParams, ModelSpec, Rope};
 
 /// The decoder's shape: `ojas_model`'s [`ModelSpec`], the one definition
 /// the trainer, the checkpoint and both decoders share.
@@ -18,8 +18,8 @@ pub type BlockWeights = BlockParams<Tensor>;
 /// Nanolab's default attention block, for inference on the host.
 ///
 /// Per block, as `nanolab/mixers.py` `Attention.forward` and
-/// `nanolab/model.py` `Block` / `SwiGLU` compute it (and as
-/// [`ojas_model::block`] writes it once for every executor):
+/// `nanolab/model.py` `Block` / `SwiGLU` compute it, and as
+/// [`ojas_model::block_with`] writes it once for every executor:
 ///
 /// 1. `h = RMSNorm(x)` (eps [`ModelSpec::eps`]).
 /// 2. `q, k, v = h Wq^T, h Wk^T, h Wv^T`, no bias, split into heads.
@@ -37,19 +37,20 @@ pub type BlockWeights = BlockParams<Tensor>;
 ///
 /// The head is the tied embedding after a final RMSNorm.
 ///
-/// [`CpuGpt::forward_token`] is the fast host path: one token against a
-/// [`KvCache`] with local one-row linears and single-query attention (the
-/// trait linear copies and repacks the whole weight per call). RMSNorm,
-/// QK-norm, RoPE, the gate, the value residual, SiLU and the product run on
-/// [`CpuBackend`]. The whole-sequence forward is `ojas_model::Eval` through
-/// [`ojas_model::forward_logits`]; [`crate::DeviceDecoder`] decodes on any
-/// [`Backend`].
+/// [`CpuGpt::forward_tokens`] runs the same step as
+/// [`crate::DeviceDecoder`] on a [`CpuBackend`], against a caller-owned
+/// host [`KvCache`]: every op is the backend's, so [`Numerics::Exact`]
+/// gives the backend's index-order bits and [`Numerics::Fast`] its threaded
+/// kernels. The whole-sequence forward is `ojas_model::Eval` through
+/// [`ojas_model::forward_logits`].
 pub struct CpuGpt {
     spec: ModelSpec,
     cpu: CpuBackend,
     /// Clones of the caller's tensors: the bytes stay charged on the budget
     /// that allocated them, including the tied head.
     params: ModelParams<Tensor>,
+    /// RoPE rows for positions `0..max_seq`, charged to `cpu`'s budget.
+    rope: Rope,
 }
 
 /// Check `params` against `spec`'s [`param_table`]: `n_layer` blocks, and
@@ -99,185 +100,180 @@ pub(crate) fn check_params(
 /// Per-layer keys and values. `len` is how many positions are stored, and
 /// the next token goes at absolute position `len`.
 ///
-/// Storage is one allocation charged to the [`Budget`] for this value's
-/// lifetime: `2 * n_layer * width * max_len` f32s, where `width` is the
-/// model's `n_kv_head * head_dim`. A refusal reports that request against
-/// the budget's cap and live bytes. Appending when `len == max_len` returns
-/// [`OjasError::CapacityExceeded`] and does not clamp or overwrite the last
-/// position.
+/// Each layer has a key and a value tensor `[1, slots, n_kv_head,
+/// head_dim]`, time-major, the layout `Backend::kv_cache_write` and
+/// `Backend::cached_attention_forward` take. `slots` is `max_len`, or, for
+/// a model with a sliding window `W` below `max_len` ([`Self::for_model`]),
+/// `2W - 1`: a ring that keeps the positions the next call attends to.
+/// Together the tensors are `2 * n_layer * slots * n_kv_head * head_dim`
+/// f32s, charged to the [`Budget`] for this value's lifetime; a refusal
+/// reports that whole request against the budget's cap and live bytes.
+/// Appending when `len == max_len` returns [`OjasError::CapacityExceeded`]
+/// and does not clamp or overwrite the last position.
 pub struct KvCache {
-    width: usize,
-    n_layer: usize,
-    max_len: usize,
-    len: usize,
-    /// Keys, then values. Each side is `n_layer` rows of `max_len * width`.
-    storage: Scratch<f32>,
+    n_kv_head: usize,
+    head_dim: usize,
+    kv: Kv,
 }
 
 impl KvCache {
-    /// `width` is the per-position key width, `n_kv_head * head_dim`.
+    /// `n_layer` layers of `n_kv_head` heads of `head_dim`, up to `max_len`
+    /// positions, with no window.
     pub fn new(
         n_layer: usize,
-        width: usize,
+        n_kv_head: usize,
+        head_dim: usize,
         max_len: usize,
+        budget: &Budget,
+    ) -> Result<Self, OjasError> {
+        Self::with_ring(
+            n_layer,
+            n_kv_head,
+            head_dim,
+            Ring::new(None, max_len),
+            budget,
+        )
+    }
+
+    /// A cache shaped for `model`, holding up to `max_len` positions: a
+    /// ring of `2W - 1` slots when the model's sliding window `W` is below
+    /// `max_len`.
+    pub fn for_model(model: &CpuGpt, max_len: usize, budget: &Budget) -> Result<Self, OjasError> {
+        let s = model.spec();
+        let ring = Ring::new(s.attention_window(), max_len);
+        Self::with_ring(s.n_layer, s.n_kv_head, s.head_dim, ring, budget)
+    }
+
+    fn with_ring(
+        n_layer: usize,
+        n_kv_head: usize,
+        head_dim: usize,
+        ring: Ring,
         budget: &Budget,
     ) -> Result<Self, OjasError> {
         let overflow = || OjasError::OutOfRange {
             op: "KvCache::new",
             detail: "cache length overflows".into(),
         };
-        let cells = width.checked_mul(max_len).ok_or_else(overflow)?;
-        let side = cells.checked_mul(n_layer).ok_or_else(overflow)?;
-        let elems = side.checked_mul(2).ok_or_else(overflow)?;
-        let storage = Scratch::try_alloc(elems, budget)?;
-        Ok(Self {
-            width,
+        let bytes = [
+            ring.slots(),
+            n_kv_head,
+            head_dim,
             n_layer,
-            max_len,
-            len: 0,
-            storage,
+            2,
+            DType::F32.size(),
+        ]
+        .iter()
+        .try_fold(1usize, |n, &d| n.checked_mul(d))
+        .and_then(|b| u64::try_from(b).ok())
+        .ok_or_else(overflow)?;
+        // The whole request is refused as one, before any layer exists.
+        drop(budget.try_reserve(bytes)?);
+        let kv = Kv::new([n_layer, n_kv_head, head_dim], ring, |shape| {
+            Tensor::zeros(shape, DType::F32, budget)
+        })?;
+        Ok(Self {
+            n_kv_head,
+            head_dim,
+            kv,
         })
     }
 
-    /// A cache shaped for `model`, holding up to `max_len` positions.
-    pub fn for_model(model: &CpuGpt, max_len: usize, budget: &Budget) -> Result<Self, OjasError> {
-        Self::new(model.n_layer(), model.kv_width(), max_len, budget)
-    }
-
-    /// Key and value rows for one layer, each `[max_len, width]`.
-    fn layer_kv(&mut self, layer: usize) -> (&mut [f32], &mut [f32]) {
-        let cells = self.width * self.max_len;
-        let side = self.n_layer * cells;
-        let start = layer * cells;
-        let end = start + cells;
-        let (keys, values) = self.storage.as_mut_slice().split_at_mut(side);
-        (&mut keys[start..end], &mut values[start..end])
-    }
-
     pub fn len(&self) -> usize {
-        self.len
+        self.kv.ring.len()
     }
 
+    /// Most positions this cache takes.
     pub fn max_len(&self) -> usize {
-        self.max_len
+        self.kv.ring.capacity()
+    }
+
+    /// Slots per layer: [`Self::max_len`], or `2W - 1` for a ring.
+    pub fn slots(&self) -> usize {
+        self.kv.ring.slots()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     /// Positions still free.
     pub fn remaining(&self) -> usize {
-        self.max_len - self.len
+        self.kv.ring.remaining()
     }
 
     /// Forget every position. The storage stays allocated and charged; the
     /// next token goes at position 0.
     pub fn reset(&mut self) {
-        self.len = 0;
+        self.kv.ring.reset();
     }
 
     /// Keep positions `0..len` and forget the rest, so the next token goes
     /// at `len` (roll back to a prefix to regenerate from it). A `len`
     /// above [`Self::len`] is [`OjasError::OutOfRange`] and changes nothing:
-    /// the slots past the current length hold nothing valid.
+    /// the slots past the current length hold nothing valid. On a ring, so
+    /// is a prefix whose window the ring has since overwritten.
     pub fn truncate(&mut self, len: usize) -> Result<(), OjasError> {
-        truncate_len(&mut self.len, len, "KvCache::truncate")
-    }
-
-    fn push_slot(&mut self) -> Result<usize, OjasError> {
-        if self.len >= self.max_len {
-            return Err(self.refusal(1));
-        }
-        Ok(self.len)
+        self.kv.ring.truncate(len, "KvCache::truncate")
     }
 
     /// The error for a request of `extra` more positions than fit.
     pub(crate) fn refusal(&self, extra: usize) -> OjasError {
-        capacity_refusal(self.width, self.len, self.max_len, extra)
+        self.kv.ring.refusal(self.n_kv_head * self.head_dim, extra)
     }
-}
-
-/// Shorten a cache length to `to`, refusing to lengthen it.
-pub(crate) fn truncate_len(len: &mut usize, to: usize, op: &'static str) -> Result<(), OjasError> {
-    if to > *len {
-        return Err(OjasError::OutOfRange {
-            op,
-            detail: format!("cannot truncate {} filled positions to {to}", *len),
-        });
-    }
-    *len = to;
-    Ok(())
-}
-
-/// [`OjasError::CapacityExceeded`] for `extra` more positions of `width`
-/// f32s onto a cache holding `len` of `max_len`, in bytes.
-pub(crate) fn capacity_refusal(
-    width: usize,
-    len: usize,
-    max_len: usize,
-    extra: usize,
-) -> OjasError {
-    let width = u64::try_from(width)
-        .ok()
-        .and_then(|n| n.checked_mul(4))
-        .unwrap_or(u64::MAX);
-    let live = (len as u64).saturating_mul(width);
-    OjasError::CapacityExceeded {
-        requested: live.saturating_add((extra as u64).saturating_mul(width)),
-        cap: (max_len as u64).saturating_mul(width),
-        live,
-    }
-}
-
-fn add_into(x: &mut [f32], y: &[f32]) -> Result<(), OjasError> {
-    if x.len() != y.len() {
-        return Err(OjasError::Shape {
-            op: "residual_add",
-            detail: format!("{} != {}", x.len(), y.len()),
-        });
-    }
-    for (a, b) in x.iter_mut().zip(y) {
-        *a += b;
-        if !a.is_finite() {
-            return Err(OjasError::NonFinite { op: "residual_add" });
-        }
-    }
-    Ok(())
 }
 
 impl CpuGpt {
     /// Check `weights` against `cfg` ([`ModelSpec::validate`], then every
     /// parameter's dtype and shape from [`param_table`]) and keep clones.
-    /// Every weight must be a host tensor: the one-row linears read its
-    /// bytes directly.
+    /// Every weight must be a host tensor. Ops run on a [`CpuBackend`] with
+    /// one thread per available core ([`Self::with_backend`] picks
+    /// another), under [`Numerics::Fast`]; its budget holds the RoPE table
+    /// and the activations of a `max_seq`-token prefill.
     pub fn new(cfg: &GptConfig, weights: &GptWeights) -> Result<Self, OjasError> {
         const OP: &str = "CpuGpt::new";
-        check_params(OP, cfg, weights)?;
-        for tensor in weights.clone().into_flat() {
-            tensor.f32_slice()?;
-        }
-        // Backend outputs per token are a few rows of the widest activation.
+        cfg.validate()?;
+        // Per position, a few dozen rows of the widest activation; the
+        // head's `[1, vocab]` row once.
         let widest = cfg.n_embd.max(cfg.hidden).max(cfg.q_width());
-        let scratch = u64::try_from(widest)
-            .ok()
-            .and_then(|w| w.checked_mul(4 * 16))
+        let scratch = widest
+            .checked_mul(cfg.max_seq)
+            .and_then(|n| n.checked_mul(32 * DType::F32.size()))
+            .and_then(|n| n.checked_add(cfg.vocab.checked_mul(4 * DType::F32.size())?))
+            .and_then(|n| u64::try_from(n).ok())
             .ok_or_else(|| OjasError::OutOfRange {
                 op: OP,
                 detail: "activation scratch overflows".into(),
             })?
             .max(1 << 20);
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(64));
+        let cpu = CpuBackend::with_threads(Budget::new(scratch), threads)?;
+        Self::with_backend(cfg, weights, cpu)
+    }
+
+    /// [`Self::new`] on `cpu`: its threads, numerics and budget (which
+    /// holds the RoPE table and the activations) are this model's.
+    pub fn with_backend(
+        cfg: &GptConfig,
+        weights: &GptWeights,
+        cpu: CpuBackend,
+    ) -> Result<Self, OjasError> {
+        const OP: &str = "CpuGpt::new";
+        check_params(OP, cfg, weights)?;
+        for tensor in weights.clone().into_flat() {
+            tensor.f32_slice()?;
+        }
+        let rope = Rope::new(cfg, cfg.max_seq, Backend::budget(&cpu))?;
         Ok(Self {
             spec: *cfg,
-            cpu: CpuBackend::new(Budget::new(scratch)),
+            cpu,
             params: weights.clone(),
+            rope,
         })
     }
 
     /// Same model, with every [`CpuBackend`] op it runs under `numerics`.
-    /// The default is [`CpuBackend`]'s, [`Numerics::Fast`]. The one-row
-    /// linears and single-query attention of [`CpuGpt::forward_token`] are
-    /// this crate's own ascending-order kernels under either setting.
+    /// The default is [`CpuBackend`]'s, [`Numerics::Fast`].
     pub fn with_numerics(mut self, numerics: Numerics) -> Self {
         self.cpu = self.cpu.with_numerics(numerics);
         self
@@ -286,6 +282,11 @@ impl CpuGpt {
     /// Arithmetic contract of the [`CpuBackend`] ops this model runs.
     pub fn numerics(&self) -> Numerics {
         self.cpu.numerics()
+    }
+
+    /// The backend every op runs on.
+    pub fn backend(&self) -> &CpuBackend {
+        &self.cpu
     }
 
     /// The model's shape.
@@ -314,70 +315,40 @@ impl CpuGpt {
         self.spec.max_seq
     }
 
-    fn apply_linear(
-        x: &[f32],
-        weight: &Tensor,
-        in_dim: usize,
-        out_dim: usize,
-        y: &mut [f32],
-    ) -> Result<(), OjasError> {
-        linear(x, weight.f32_slice()?, in_dim, out_dim, y)
-    }
-
-    fn row(&self, data: &[f32], shape: &[usize]) -> Result<Tensor, OjasError> {
-        Tensor::from_f32(data, shape, Backend::budget(&self.cpu))
-    }
-
-    /// `embedding_forward` copies its whole table on every call, so it is
-    /// given the one-row view for `token` and looks up row 0.
-    fn embed_token(&self, token: u32) -> Result<Vec<f32>, OjasError> {
-        let row = self.check_token("CpuGpt::embed_token", token)?;
-        let d = self.spec.n_embd;
-        let offset = row
-            .checked_mul(d)
-            .and_then(|elems| elems.checked_mul(4))
-            .ok_or_else(|| OjasError::OutOfRange {
-                op: "CpuGpt::embed_token",
-                detail: "row offset overflows".into(),
-            })?;
-        let table = self.params.tok_emb.narrow(offset, &[1, d], &[d, 1])?;
-        let ids = Tensor::from_u32(&[0], &[1], Backend::budget(&self.cpu))?;
-        self.cpu.embedding_forward(&table, &ids)?.to_f32_vec()
-    }
-
-    fn check_token(&self, op: &'static str, token: u32) -> Result<usize, OjasError> {
-        usize::try_from(token)
-            .ok()
-            .filter(|&row| row < self.spec.vocab)
-            .ok_or_else(|| OjasError::OutOfRange {
+    fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError> {
+        if usize::try_from(token).is_ok_and(|row| row < self.spec.vocab) {
+            Ok(())
+        } else {
+            Err(OjasError::OutOfRange {
                 op,
                 detail: format!("token id {token} >= vocab {}", self.spec.vocab),
             })
-    }
-
-    fn rms_norm(&self, x: &[f32], weight: &Tensor) -> Result<Vec<f32>, OjasError> {
-        let row = self.row(x, &[1, self.spec.n_embd])?;
-        self.cpu
-            .rms_norm_forward(&row, weight, self.spec.eps())?
-            .to_f32_vec()
+        }
     }
 
     fn check_cache(&self, cache: &KvCache) -> Result<(), OjasError> {
-        if cache.width != self.kv_width()
-            || cache.n_layer != self.spec.n_layer
-            || cache.max_len > self.spec.max_seq
+        let s = &self.spec;
+        if cache.n_kv_head != s.n_kv_head
+            || cache.head_dim != s.head_dim
+            || cache.kv.keys.len() != s.n_layer
+            || cache.max_len() > s.max_seq
+            || cache.kv.ring.window() != Ring::new(s.attention_window(), cache.max_len()).window()
         {
             return Err(OjasError::Shape {
                 op: "CpuGpt::forward_token",
                 detail: format!(
-                    "cache (width {}, layers {}, max_len {}) does not match this model \
-                     (kv width {}, layers {}, max_seq {})",
-                    cache.width,
-                    cache.n_layer,
-                    cache.max_len,
-                    self.kv_width(),
-                    self.spec.n_layer,
-                    self.spec.max_seq
+                    "cache ({} x {} heads, layers {}, max_len {}, window {:?}) does not match \
+                     this model ({} x {} heads, layers {}, max_seq {}, window {:?})",
+                    cache.n_kv_head,
+                    cache.head_dim,
+                    cache.kv.keys.len(),
+                    cache.max_len(),
+                    cache.kv.ring.window(),
+                    s.n_kv_head,
+                    s.head_dim,
+                    s.n_layer,
+                    s.max_seq,
+                    s.attention_window(),
                 ),
             });
         }
@@ -385,153 +356,64 @@ impl CpuGpt {
     }
 
     /// Forward one token at absolute position `cache.len()`, appending its
-    /// keys and values. Linear outputs and residual sums are checked
-    /// finite, so the returned logits are finite. A cache longer than the
-    /// model's `max_seq` is refused before any position is written; a
-    /// failure part-way, the final norm and the head included, leaves
+    /// keys and values. The backend's ops refuse non-finite results, so the
+    /// returned logits are finite. A cache longer than the model's
+    /// `max_seq` is refused before any position is written; a failure
+    /// part-way, the final norm and the head included, leaves
     /// `cache.len()` unchanged.
     pub fn forward_token(&self, token: u32, cache: &mut KvCache) -> Result<Vec<f32>, OjasError> {
         self.forward_tokens(&[token], cache)
     }
 
     /// Forward `tokens` at positions `cache.len()..` (a prompt prefill when
-    /// there are several), appending their keys and values, and return the
-    /// last position's logits. Only the last position runs the final norm
-    /// and the vocabulary head. All or nothing, as
+    /// there are several) in one pass, appending their keys and values, and
+    /// return the last position's logits. Only the last position runs the
+    /// final norm and the vocabulary head. All or nothing, as
     /// [`crate::DeviceDecoder::forward`]: a request past the cache's room is
     /// [`OjasError::CapacityExceeded`] before anything runs, and a failure
     /// at any token leaves `cache.len()` where it was. Slots at or past
     /// `len` are never read, so what a failed call wrote there is never
-    /// seen.
+    /// seen. On a ring (a sliding window `W` below `max_len`), a call of
+    /// more than `W` tokens runs as `W`-token pieces, and a failure leaves
+    /// `len` after the last piece that completed.
     pub fn forward_tokens(
         &self,
         tokens: &[u32],
         cache: &mut KvCache,
     ) -> Result<Vec<f32>, OjasError> {
+        const OP: &str = "CpuGpt::forward_tokens";
         self.check_cache(cache)?;
-        let Some((&last, head)) = tokens.split_last() else {
+        if tokens.is_empty() {
             return Err(OjasError::Shape {
-                op: "CpuGpt::forward_tokens",
+                op: OP,
                 detail: "no tokens".into(),
             });
-        };
+        }
+        for &id in tokens {
+            self.check_token(OP, id)?;
+        }
         if tokens.len() > cache.remaining() {
             return Err(cache.refusal(tokens.len()));
         }
-        let start = cache.len;
-        let run = |cache: &mut KvCache| -> Result<Vec<f32>, OjasError> {
-            for &id in head {
-                let pos = cache.push_slot()?;
-                self.trunk(id, pos, cache)?;
-                cache.len = pos + 1;
-            }
-            let pos = cache.push_slot()?;
-            let x = self.trunk(last, pos, cache)?;
-            let norm = self.rms_norm(&x, &self.params.norm_f)?;
-            let mut logits = vec![0.0f32; self.spec.vocab];
-            Self::apply_linear(
-                &norm,
-                &self.params.tok_emb,
-                self.spec.n_embd,
-                self.spec.vocab,
-                &mut logits,
-            )?;
-            cache.len = pos + 1;
-            Ok(logits)
-        };
-        let out = run(cache);
-        if out.is_err() {
-            cache.len = start;
+        let mut eval = Eval::new(self.cpu.clone());
+        let (logits, last) = run_pieces(
+            &mut eval,
+            &self.spec,
+            &self.params,
+            &mut cache.kv,
+            &self.rope,
+            tokens,
+            |eval, piece| Tensor::from_u32(piece, &[1, piece.len()], eval.backend().budget()),
+        )?;
+        let logits = logits.to_f32_vec()?;
+        if logits.len() != self.spec.vocab {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: format!("{} logits for vocab {}", logits.len(), self.spec.vocab),
+            });
         }
-        out
-    }
-
-    /// Every block for `token` at position `pos`: writes the token's keys
-    /// and values into slot `pos`, attends over `0..=pos`, and returns the
-    /// residual stream. `cache.len` is the caller's to advance.
-    fn trunk(&self, token: u32, pos: usize, cache: &mut KvCache) -> Result<Vec<f32>, OjasError> {
-        let s = &self.spec;
-        let (d, qw, kvw, dh, hidden) = (s.n_embd, s.q_width(), s.kv_width(), s.head_dim, s.hidden);
-        let eps = s.eps();
-        let mut x = self.embed_token(token)?;
-        let rope = Rope::rows(s, pos, 1, Backend::budget(&self.cpu))?;
-        let mut q = vec![0.0f32; qw];
-        let mut k = vec![0.0f32; kvw];
-        let mut v = vec![0.0f32; kvw];
-        let mut proj = vec![0.0f32; d];
-        let mut gate = vec![0.0f32; hidden];
-        let mut up = vec![0.0f32; hidden];
-        let mut v0: Option<Vec<f32>> = None;
-        for (layer, b) in self.params.blocks.iter().enumerate() {
-            let h = self.rms_norm(&x, &b.norm1)?;
-            Self::apply_linear(&h, &b.q_proj, d, qw, &mut q)?;
-            Self::apply_linear(&h, &b.k_proj, d, kvw, &mut k)?;
-            Self::apply_linear(&h, &b.v_proj, d, kvw, &mut v)?;
-            let (qn, kn) = self.cpu.rms_qk_norm_forward(
-                &self.row(&q, &[1, 1, s.n_head, dh])?,
-                &self.row(&k, &[1, 1, s.n_kv_head, dh])?,
-                &b.q_norm,
-                &b.k_norm,
-                eps,
-            )?;
-            let qr = self
-                .cpu
-                .rope_half_split_forward(&qn, &rope.cos, &rope.sin)?
-                .to_f32_vec()?;
-            let kr = self
-                .cpu
-                .rope_half_split_forward(&kn, &rope.cos, &rope.sin)?
-                .to_f32_vec()?;
-            let vb = match &v0 {
-                None => {
-                    v0 = Some(v.clone());
-                    v.clone()
-                }
-                Some(first) => self
-                    .cpu
-                    .value_residual_blend_forward(
-                        &self.row(&v, &[1, kvw])?,
-                        &self.row(first, &[1, kvw])?,
-                        &b.vr_lambda,
-                    )?
-                    .to_f32_vec()?,
-            };
-            let base = pos * kvw;
-            let seen = (pos + 1) * kvw;
-            let (k_layer, v_layer) = cache.layer_kv(layer);
-            k_layer[base..base + kvw].copy_from_slice(&kr);
-            v_layer[base..base + kvw].copy_from_slice(&vb);
-            let mixed = attend_one(
-                &qr,
-                &k_layer[..seen],
-                &v_layer[..seen],
-                s.n_head,
-                s.n_kv_head,
-                dh,
-            )?;
-            let gated = self
-                .cpu
-                .per_head_sigmoid_gate_forward(
-                    &self.row(&h, &[1, d])?,
-                    &b.gate_w,
-                    &b.gate_b,
-                    &self.row(&mixed, &[1, s.n_head, dh])?,
-                )?
-                .to_f32_vec()?;
-            Self::apply_linear(&gated, &b.o_proj, qw, d, &mut proj)?;
-            add_into(&mut x, &proj)?;
-            let h2 = self.rms_norm(&x, &b.norm2)?;
-            Self::apply_linear(&h2, &b.ffn_gate, d, hidden, &mut gate)?;
-            Self::apply_linear(&h2, &b.ffn_up, d, hidden, &mut up)?;
-            let act = self.cpu.silu_forward(&self.row(&gate, &[1, hidden])?)?;
-            let mixed = self
-                .cpu
-                .mul_forward(&act, &self.row(&up, &[1, hidden])?)?
-                .to_f32_vec()?;
-            Self::apply_linear(&mixed, &b.ffn_down, hidden, d, &mut proj)?;
-            add_into(&mut x, &proj)?;
-        }
-        Ok(x)
+        append(&mut cache.kv, last);
+        Ok(logits)
     }
 
     /// Greedy continuation through [`argmax_token`]: a non-finite logit is
@@ -545,7 +427,7 @@ impl CpuGpt {
     ) -> Result<Vec<u32>, OjasError> {
         self.check_cache(cache)?;
         let mut step = HostStep { model: self, cache };
-        decode::decode(&mut step, DECODE_OP, prompt, new_tokens, &[], None)
+        decode::decode(&mut step, DECODE_OP, prompt, new_tokens, &[], decode::Pick::Greedy)
     }
 
     /// Sampled continuation of `prompt` ([`crate::sample_token`] with a
@@ -572,7 +454,7 @@ impl CpuGpt {
 
 const DECODE_OP: &str = "CpuGpt::decode";
 
-/// [`CpuGpt`] and its host cache, one [`CpuGpt::forward_token`] per token.
+/// [`CpuGpt`] and its host cache, one [`CpuGpt::forward_tokens`] per call.
 struct HostStep<'a> {
     model: &'a CpuGpt,
     cache: &'a mut KvCache,
@@ -588,7 +470,7 @@ impl Forward for HostStep<'_> {
     }
 
     fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError> {
-        self.model.check_token(op, token).map(|_| ())
+        self.model.check_token(op, token)
     }
 
     fn forward(&mut self, tokens: &[u32]) -> Result<Vec<f32>, OjasError> {
@@ -646,6 +528,7 @@ mod tests {
             rope_base: 10000.0,
             rms_eps: 1e-6,
             tie_embeddings: true,
+            window: None,
         }
     }
 
@@ -733,7 +616,7 @@ mod tests {
         ] {
             let got = std::panic::catch_unwind(|| {
                 let budget = Budget::new(u64::MAX);
-                KvCache::new(n_layer, width, max_len, &budget)
+                KvCache::new(n_layer, 1, width, max_len, &budget)
             });
             let err = got
                 .unwrap_or_else(|_| panic!("KvCache::new({n_layer}, {width}, {max_len}) panicked"))
@@ -790,6 +673,7 @@ mod tests {
             rope_base: 10000.0,
             rms_eps: 1e-6,
             tie_embeddings: true,
+            window: None,
         };
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut fill = |n: usize, scale: f32| -> Vec<f32> {
@@ -837,21 +721,25 @@ mod tests {
         let budget = Budget::new(1 << 24);
         let (model, _) = seeded(&budget);
         let weight = model.params.blocks[0].norm1.clone();
-        let ok = model.rms_norm(&[0.5; 16], &weight).unwrap();
+        let norm = |x: &[f32]| {
+            let row = Tensor::from_f32(x, &[1, x.len()], &budget)?;
+            model
+                .backend()
+                .rms_norm_forward(&row, &weight, model.spec().eps())?
+                .to_f32_vec()
+        };
+        let ok = norm(&[0.5; 16]).unwrap();
         assert!(ok.iter().all(|v| v.is_finite()));
         let mut nan = [1.0f32; 16];
         nan[3] = f32::NAN;
-        assert!(matches!(
-            model.rms_norm(&nan, &weight),
-            Err(OjasError::NonFinite { .. })
-        ));
+        assert!(matches!(norm(&nan), Err(OjasError::NonFinite { .. })));
         // The f64 kernel this replaced normalized rows whose f32 sum of
         // squares overflows. ojas-cpu accumulates in f32 and refuses them.
         assert!(matches!(
-            model.rms_norm(&[1.0e19; 16], &weight),
+            norm(&[1.0e19; 16]),
             Err(OjasError::NonFinite { .. })
         ));
-        assert!(model.rms_norm(&[1.0; 15], &weight).is_err());
+        assert!(norm(&[1.0; 15]).is_err());
     }
 
     #[test]
@@ -899,7 +787,7 @@ mod tests {
     fn a_cache_shaped_for_another_model_is_refused() {
         let budget = Budget::new(1 << 24);
         let (model, cfg) = tiny(&budget, &BIG_FIRST);
-        let mut wrong = KvCache::new(cfg.n_layer, 1, cfg.max_seq, &budget).unwrap();
+        let mut wrong = KvCache::new(cfg.n_layer, 1, 1, cfg.max_seq, &budget).unwrap();
         let err = model.forward_token(0, &mut wrong).unwrap_err();
         assert!(matches!(err, OjasError::Shape { .. }), "{err}");
         assert_eq!(wrong.len(), 0);
@@ -909,8 +797,9 @@ mod tests {
     fn kv_cache_refusal_reports_budget_bytes_and_releases_on_drop() {
         let budget = Budget::new(100);
         let held = budget.try_reserve(40).unwrap();
-        // 2 * 1 layer * 4 * 4 f32s = 128 bytes, above the cap.
-        let err = match KvCache::new(1, 4, 4, &budget) {
+        // 2 * 1 layer * 4 positions * (2 heads * 2) f32s = 128 bytes,
+        // above the cap: refused as one request.
+        let err = match KvCache::new(1, 2, 2, 4, &budget) {
             Err(err) => err,
             Ok(_) => panic!("cache allocated under a budget that cannot hold it"),
         };
@@ -929,7 +818,7 @@ mod tests {
         drop(held);
 
         let budget = Budget::new(128);
-        let cache = KvCache::new(1, 4, 4, &budget).unwrap();
+        let cache = KvCache::new(1, 2, 2, 4, &budget).unwrap();
         assert_eq!(budget.live_bytes().unwrap(), 128);
         drop(cache);
         assert_eq!(budget.live_bytes().unwrap(), 0);

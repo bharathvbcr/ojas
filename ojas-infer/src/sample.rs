@@ -105,14 +105,30 @@ pub struct GenerateConfig {
 }
 
 /// One token id from `logits`. A refused call does not advance `rng`; a
-/// greedy call never reads it.
+/// greedy call never reads it. The same draw as [`draw`] over
+/// [`ranked_candidates`]`(logits, cfg.top_k)`.
 pub fn sample_token(
     logits: &[f32],
     cfg: &SamplingConfig,
     rng: &mut SplitMix64,
 ) -> Result<u32, OjasError> {
-    const OP: &str = "sample_token";
     cfg.validate()?;
+    check_row(logits)?;
+    if cfg.temperature == 0.0 {
+        // The leader alone, in one pass with no allocation.
+        let best = (0..logits.len())
+            .filter(|&i| logits[i].is_finite())
+            .reduce(|a, b| if rank(logits, b, a).is_lt() { b } else { a })
+            .ok_or(OjasError::NonFinite { op: OP })?;
+        return to_id(best);
+    }
+    draw(&ranked_candidates(logits, cfg.top_k)?, cfg, rng)
+}
+
+const OP: &str = "sample_token";
+
+/// Refuse an empty row, and NaN or `+inf` anywhere in it.
+fn check_row(logits: &[f32]) -> Result<(), OjasError> {
     if logits.is_empty() {
         return Err(OjasError::Shape {
             op: OP,
@@ -122,24 +138,26 @@ pub fn sample_token(
     if logits.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
         return Err(OjasError::NonFinite { op: OP });
     }
-    // Candidates are the finite logits ranked by (logit desc, index asc),
-    // the order `rank` defines.
-    if cfg.temperature == 0.0 {
-        // The leader alone, in one pass with no allocation.
-        let best = (0..logits.len())
-            .filter(|&i| logits[i].is_finite())
-            .reduce(|a, b| if rank(logits, b, a).is_lt() { b } else { a })
-            .ok_or(OjasError::NonFinite { op: OP })?;
-        return to_id(best);
-    }
+    Ok(())
+}
+
+/// The candidates of a logit row, `(id, logit)`: its finite entries ranked
+/// by (logit desc, index asc), the order [`rank`] defines, and only the
+/// first `k` of them when `top_k` is `Some(k)`. The `k` leaders are
+/// selected in O(V) and only they are sorted. The refusals of
+/// [`sample_token`]: an empty row, NaN or `+inf` anywhere, no finite entry.
+pub(crate) fn ranked_candidates(
+    logits: &[f32],
+    top_k: Option<usize>,
+) -> Result<Vec<(u32, f32)>, OjasError> {
+    check_row(logits)?;
     let mut ranked: Vec<usize> = (0..logits.len())
         .filter(|&i| logits[i].is_finite())
         .collect();
     if ranked.is_empty() {
         return Err(OjasError::NonFinite { op: OP });
     }
-    match cfg.top_k {
-        // Select the k leaders in O(V), then order only them.
+    match top_k {
         Some(k) if k < ranked.len() => {
             ranked.select_nth_unstable_by(k - 1, |&a, &b| rank(logits, a, b));
             ranked.truncate(k);
@@ -147,13 +165,39 @@ pub fn sample_token(
         _ => {}
     }
     ranked.sort_unstable_by(|&a, &b| rank(logits, a, b));
+    ranked
+        .into_iter()
+        .map(|i| Ok((to_id(i)?, logits[i])))
+        .collect()
+}
+
+/// One id from `candidates`: finite `(id, logit)` pairs already ranked by
+/// (logit desc, index asc) and already cut to `top_k`. Temperature 0 takes
+/// the first without reading `rng`. Otherwise: divide by the temperature,
+/// softmax, keep the `top_p` prefix, renormalize, draw. No candidates is
+/// [`OjasError::NonFinite`]; a refused call does not advance `rng`.
+pub(crate) fn draw(
+    candidates: &[(u32, f32)],
+    cfg: &SamplingConfig,
+    rng: &mut SplitMix64,
+) -> Result<u32, OjasError> {
+    cfg.validate()?;
+    let Some(&(leader, _)) = candidates.first() else {
+        return Err(OjasError::NonFinite { op: OP });
+    };
+    if candidates.iter().any(|(_, v)| !v.is_finite()) {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    if cfg.temperature == 0.0 {
+        return Ok(leader);
+    }
     // Finite f32 over a positive f32 temperature stays below 2^280 in f64,
     // so every scaled logit is finite, `z - top <= 0`, and the leader
     // contributes exp(0) = 1: `total` is in [1, k]. The exponential is
     // `exp_exact` (the same bits on every platform) of the difference
     // rounded to f32, so a seed draws the same ids everywhere.
     let t = f64::from(cfg.temperature);
-    let scaled: Vec<f64> = ranked.iter().map(|&i| f64::from(logits[i]) / t).collect();
+    let scaled: Vec<f64> = candidates.iter().map(|&(_, v)| f64::from(v) / t).collect();
     let top = scaled[0];
     let mut probs: Vec<f64> = scaled
         .iter()
@@ -182,11 +226,11 @@ pub fn sample_token(
     for (slot, p) in kept.iter().enumerate() {
         acc += p;
         if u < acc {
-            return to_id(ranked[slot]);
+            return Ok(candidates[slot].0);
         }
     }
     // Rounding left `u` at or above the running sum: the last kept token.
-    to_id(ranked[keep - 1])
+    Ok(candidates[keep - 1].0)
 }
 
 /// Candidate order: logit descending (`total_cmp`, so `+0.0` ranks before
@@ -198,7 +242,7 @@ fn rank(logits: &[f32], a: usize, b: usize) -> Ordering {
 
 fn to_id(index: usize) -> Result<u32, OjasError> {
     u32::try_from(index).map_err(|_| OjasError::OutOfRange {
-        op: "sample_token",
+        op: OP,
         detail: "logit index exceeds u32".into(),
     })
 }

@@ -257,6 +257,7 @@ fn weights(budget: &Budget) -> (GptConfig, GptWeights) {
         rope_base: 10000.0,
         rms_eps: 1e-6,
         tie_embeddings: true,
+        window: None,
     };
     let mut r = SplitMix64::new(0xABCD);
     let mut fill = |n: usize, scale: f64| -> Vec<f32> {

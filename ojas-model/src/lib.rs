@@ -44,7 +44,9 @@ pub use names::{
     param_bytes, param_count, param_table, BlockParams, Init, ModelParams, ParamInfo, BLOCK_PARAMS,
     INIT_STD,
 };
-pub use spec::{swiglu_hidden, ModelSpec, MAX_LAYERS, SPEC_ARCH, SPEC_FORMAT, SPEC_METADATA_KEY};
+pub use spec::{
+    swiglu_hidden, ModelSpec, MAX_LAYERS, SPEC_ARCH, SPEC_FORMAT, SPEC_FORMAT_V2, SPEC_METADATA_KEY,
+};
 pub use trainer::{
     MomentsRef, NonFinitePolicy, StepReport, TrainConfig, TrainState, Trainer, DEFAULT_CE_CHUNK,
     NANOLAB_ADAM_LR, NANOLAB_GRAD_CLIP, NANOLAB_MATRIX_LR,

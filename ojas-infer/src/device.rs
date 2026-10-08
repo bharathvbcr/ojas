@@ -16,32 +16,33 @@
 //! token ids.
 
 use ojas_core::{Backend, DType, OjasError, Tensor};
-use ojas_model::{bind, block_with, Eval, Graph, ModelParams, ModelSpec, Rope};
+use ojas_model::{bind, Eval, ModelParams, ModelSpec, Rope};
 
+use crate::cache::{append, run_pieces, Kv, Ring};
 use crate::decode::{self, Forward};
-use crate::gpt::{capacity_refusal, check_params, truncate_len};
+use crate::gpt::check_params;
 use crate::sample::GenerateConfig;
 
 /// A nanolab GPT and its KV cache resident on `B`.
 ///
-/// The cache is one `[1, capacity, n_kv_head, head_dim]` key and value
-/// tensor per layer, time-major like the host [`crate::KvCache`].
-/// `len` positions are filled; the next token goes at absolute position
-/// `len`. A call that would pass `capacity` is
-/// [`OjasError::CapacityExceeded`] before anything runs, and a call that
-/// fails part-way leaves `len` unchanged: slots at or past `len` are never
-/// read, so whatever a failed call wrote there is never seen.
+/// The cache is one `[1, slots, n_kv_head, head_dim]` key and value tensor
+/// per layer, time-major like the host [`crate::KvCache`]: `slots` is the
+/// capacity, or `2W - 1` for a model with a sliding window `W` below it
+/// (a ring; see [`Self::slots`]). `len` positions are filled; the next
+/// token goes at absolute position `len`. A call that would pass
+/// `capacity` is [`OjasError::CapacityExceeded`] before anything runs, and
+/// a call that fails part-way leaves `len` unchanged: slots at or past
+/// `len` are never read, so whatever a failed call wrote there is never
+/// seen. On a ring, a call of more than `W` tokens runs as `W`-token
+/// pieces, and a failure leaves `len` after the last piece that completed.
 pub struct DeviceDecoder<B: Backend> {
     eval: Eval<B>,
     spec: ModelSpec,
     params: ModelParams<Tensor>,
-    keys: Vec<Tensor>,
-    values: Vec<Tensor>,
+    kv: Kv,
     /// RoPE rows for positions `0..capacity`, resident on `B` since `new`;
     /// each forward takes a view of its positions.
     rope: Rope,
-    capacity: usize,
-    len: usize,
     traffic: HostTraffic,
     /// The id the last [`DeviceDecoder::forward_greedy`] returned, and its
     /// `[1, 1]` U32 tensor on `B`, for the next call to feed back.
@@ -103,20 +104,18 @@ impl<B: Backend> DeviceDecoder<B> {
         }
         let mut eval = Eval::new(backend);
         let params = bind(&mut eval, spec, &params.clone().into_flat())?;
-        let shape = [1, capacity, spec.n_kv_head, spec.head_dim];
-        let alloc = || -> Result<Tensor, OjasError> {
-            let backend = eval.backend();
-            let host = Tensor::zeros(&shape, DType::F32, backend.budget())?;
-            let resident = backend.upload(&host)?;
-            drop(host);
-            Ok(resident)
-        };
-        let mut keys = Vec::with_capacity(spec.n_layer);
-        let mut values = Vec::with_capacity(spec.n_layer);
-        for _ in 0..spec.n_layer {
-            keys.push(alloc()?);
-            values.push(alloc()?);
-        }
+        let ring = Ring::new(spec.attention_window(), capacity);
+        let kv = Kv::new(
+            [spec.n_layer, spec.n_kv_head, spec.head_dim],
+            ring,
+            |shape| {
+                let backend = eval.backend();
+                let host = Tensor::zeros(shape, DType::F32, backend.budget())?;
+                let resident = backend.upload(&host)?;
+                drop(host);
+                Ok(resident)
+            },
+        )?;
         let rope = {
             let backend = eval.backend();
             Rope::new(spec, capacity, backend.budget())?.upload(backend)?
@@ -125,11 +124,8 @@ impl<B: Backend> DeviceDecoder<B> {
             eval,
             spec: *spec,
             params,
-            keys,
-            values,
+            kv,
             rope,
-            capacity,
-            len: 0,
             traffic: HostTraffic::default(),
             pending: None,
         })
@@ -150,34 +146,42 @@ impl<B: Backend> DeviceDecoder<B> {
 
     /// Positions filled.
     pub fn len(&self) -> usize {
-        self.len
+        self.kv.ring.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.kv.ring.capacity()
+    }
+
+    /// Slots per layer: the capacity, or `2W - 1` for a sliding window `W`
+    /// smaller than it, a ring holding the positions the next call needs.
+    pub fn slots(&self) -> usize {
+        self.kv.ring.slots()
     }
 
     /// Positions still free.
     pub fn remaining(&self) -> usize {
-        self.capacity - self.len
+        self.kv.ring.remaining()
     }
 
     /// Forget every position. The cache keeps its memory; the next call
     /// starts at position 0.
     pub fn reset(&mut self) {
-        self.len = 0;
+        self.kv.ring.reset();
         self.pending = None;
     }
 
     /// Keep positions `0..len` and forget the rest, as
     /// [`crate::KvCache::truncate`]. A `len` above [`Self::len`] is
-    /// [`OjasError::OutOfRange`] and changes nothing.
+    /// [`OjasError::OutOfRange`] and changes nothing, and so, on a ring, is
+    /// a prefix whose window has been overwritten (the ring holds the last
+    /// `slots` positions written).
     pub fn truncate(&mut self, len: usize) -> Result<(), OjasError> {
-        truncate_len(&mut self.len, len, "DeviceDecoder::truncate")?;
+        self.kv.ring.truncate(len, "DeviceDecoder::truncate")?;
         self.pending = None;
         Ok(())
     }
@@ -194,7 +198,7 @@ impl<B: Backend> DeviceDecoder<B> {
     }
 
     fn refusal(&self, needed: usize) -> OjasError {
-        capacity_refusal(self.spec.kv_width(), self.len, self.capacity, needed)
+        self.kv.ring.refusal(self.spec.kv_width(), needed)
     }
 
     /// Forward `tokens` at positions `len..len + tokens.len()` (a prefill
@@ -204,7 +208,7 @@ impl<B: Backend> DeviceDecoder<B> {
     /// backend defers to its next sync point is reported here and leaves
     /// `len` unchanged.
     pub fn forward(&mut self, tokens: &[u32]) -> Result<Vec<f32>, OjasError> {
-        let logits = self.run(tokens)?;
+        let (logits, last) = self.run(tokens)?;
         self.traffic.readback(&logits)?;
         let host = self.eval.backend().download(&logits)?;
         self.eval.backend().sync()?;
@@ -215,7 +219,7 @@ impl<B: Backend> DeviceDecoder<B> {
                 detail: format!("{} logits for vocab {}", row.len(), self.spec.vocab),
             });
         }
-        self.len += tokens.len();
+        append(&mut self.kv, last);
         Ok(row)
     }
 
@@ -227,7 +231,7 @@ impl<B: Backend> DeviceDecoder<B> {
     /// call forwards exactly that id, it is fed to the embedding from the
     /// device with no upload. The same `len` contract as [`Self::forward`].
     pub fn forward_greedy(&mut self, tokens: &[u32]) -> Result<u32, OjasError> {
-        let logits = self.run(tokens)?;
+        let (logits, last) = self.run(tokens)?;
         let next = self.eval.backend().argmax_rows(&logits)?;
         let host = if next.device().is_some() {
             self.traffic.readback(&next)?;
@@ -246,18 +250,19 @@ impl<B: Backend> DeviceDecoder<B> {
             }
         };
         self.check_token(OP, id)?;
-        self.len += tokens.len();
+        append(&mut self.kv, last);
         self.pending = Some((id, next.reshape(&[1, 1])?));
         Ok(id)
     }
 
     /// Validate `tokens`, run every block over them (writing their keys and
     /// values at `len..`), and return the last position's `[1, vocab]`
-    /// logits on the device. `len` is the caller's to advance.
-    fn run(&mut self, tokens: &[u32]) -> Result<Tensor, OjasError> {
+    /// logits on the device with the last piece's length ([`run_pieces`]),
+    /// which is the caller's to append.
+    fn run(&mut self, tokens: &[u32]) -> Result<(Tensor, usize), OjasError> {
         // A device id from the last greedy step serves only the very next
         // call, and only if it forwards exactly that id.
-        let pending = self.pending.take();
+        let mut pending = self.pending.take();
         if tokens.is_empty() {
             return Err(OjasError::Shape {
                 op: OP,
@@ -270,55 +275,24 @@ impl<B: Backend> DeviceDecoder<B> {
         if tokens.len() > self.remaining() {
             return Err(self.refusal(tokens.len()));
         }
-        let (at, tn, d) = (self.len, tokens.len(), self.spec.n_embd);
-        let rope = self.rope.slice(at, tn)?;
-        let ids = match pending {
-            Some((id, resident)) if tokens == [id] => resident,
-            _ => {
-                let budget = self.eval.backend().budget().clone();
-                let ids = Tensor::from_u32(tokens, &[1, tn], &budget)?;
-                self.traffic.upload(&ids)?;
-                ids
-            }
-        };
-        let mut x = self.eval.embedding(&self.params.tok_emb, &ids)?;
-        let mut v0: Option<Tensor> = None;
-        let layers = self
-            .params
-            .blocks
-            .iter()
-            .zip(self.keys.iter_mut().zip(self.values.iter_mut()));
-        for (p, (keys, values)) in layers {
-            // Append this layer's post-RoPE keys and blended values at
-            // `at..at + tn`, then attend over every filled position.
-            let attend = |g: &mut Eval<B>, q: &Tensor, k: &Tensor, v: &Tensor| {
-                g.kv_cache_write(keys, k, at)?;
-                g.kv_cache_write(values, v, at)?;
-                g.cached_attn(q, keys, values, at + tn)
-            };
-            let out = block_with(
-                &mut self.eval,
-                &self.spec,
-                p,
-                &x,
-                v0.as_ref(),
-                &rope,
-                1,
-                attend,
-            )?;
-            if v0.is_none() {
-                v0 = Some(out.raw_v);
-            }
-            x = out.x;
-        }
-        // The last position's row, a view of the hidden state: nothing is
-        // uploaded to pick it.
-        let row_bytes = d * DType::F32.size();
-        let last = x.narrow((tn - 1) * row_bytes, &[1, d], &[d, 1])?;
-        let h = self
-            .eval
-            .rms_norm(&last, &self.params.norm_f, self.spec.eps())?;
-        self.eval.linear(&h, &self.params.tok_emb)
+        let traffic = &mut self.traffic;
+        run_pieces(
+            &mut self.eval,
+            &self.spec,
+            &self.params,
+            &mut self.kv,
+            &self.rope,
+            tokens,
+            |eval, piece| match pending.take() {
+                Some((id, resident)) if piece == [id] => Ok(resident),
+                _ => {
+                    let budget = eval.backend().budget().clone();
+                    let ids = Tensor::from_u32(piece, &[1, piece.len()], &budget)?;
+                    traffic.upload(&ids)?;
+                    Ok(ids)
+                }
+            },
+        )
     }
 
     /// Greedy continuation. The prompt is one prefill call; every emitted
@@ -332,7 +306,7 @@ impl<B: Backend> DeviceDecoder<B> {
         prompt: &[u32],
         new_tokens: usize,
     ) -> Result<Vec<u32>, OjasError> {
-        decode::decode(self, DECODE_OP, prompt, new_tokens, &[], None)
+        decode::decode(self, DECODE_OP, prompt, new_tokens, &[], decode::Pick::Greedy)
     }
 
     /// Sampled continuation of `prompt`, the same loop and sampler as

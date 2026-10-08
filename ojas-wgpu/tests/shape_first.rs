@@ -747,9 +747,9 @@ fn cases() -> Vec<Case> {
             &format!("cached_attention_forward {name}"),
             vec![q, k, vv],
             Some(nan),
-            move |o| cached_attention_dims(&o[0], &o[1], &o[2], kv_len).map(drop),
+            move |o| cached_attention_dims(&o[0], &o[1], &o[2], kv_len, None).map(drop),
             move |b, o| {
-                b.cached_attention_forward(&o[0], &o[1], &o[2], kv_len)
+                b.cached_attention_forward(&o[0], &o[1], &o[2], kv_len, None)
                     .map(drop)
             },
         ));
@@ -757,7 +757,7 @@ fn cases() -> Vec<Case> {
     for (name, cache, src, at, nan) in [
         ("src heads", f(&[1, 5, 2, 3]), f(&[1, 2, 3, 3]), 0, 0),
         ("cache rank 3", f(&[5, 2, 3]), f(&[1, 2, 2, 3]), 0, 1),
-        ("past capacity", f(&[1, 5, 2, 3]), f(&[1, 2, 2, 3]), 4, 1),
+        ("more positions than slots", f(&[1, 5, 2, 3]), f(&[1, 6, 2, 3]), 0, 1),
     ] {
         v.push(case(
             &format!("kv_cache_write {name}"),

@@ -46,6 +46,7 @@ pub(crate) fn nano_spec() -> ModelSpec {
         rope_base: 10000.0,
         rms_eps: 1e-6,
         tie_embeddings: true,
+        window: None,
     }
 }
 

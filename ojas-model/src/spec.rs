@@ -1,4 +1,4 @@
-//! Model shape, and its `ojas.spec` JSON (`ojas-spec-v1`).
+//! Model shape, and its `ojas.spec` JSON (`ojas-spec-v1`, `ojas-spec-v2`).
 //!
 //! Field names and the JSON schema are the ones `ojas-oracle/README.md`
 //! defines ("The `ojas.spec` JSON"), which follow `ojas-infer`'s
@@ -7,8 +7,11 @@
 //! `n_embd`, `n_layer`, `n_head`, `n_kv_head`, `head_dim`, `hidden`,
 //! `max_seq` (integers), `rope_base`, `rms_eps` (numbers),
 //! `tie_embeddings`, `qk_norm`, `gated_attention`, `value_residual`
-//! (booleans). A missing key, an unknown key, a duplicate key, a value of
-//! the wrong type, or trailing text is refused; nothing is defaulted.
+//! (booleans). `ojas-spec-v2` is the same object with one more integer key,
+//! `window` (sliding-window attention); a spec without a window is written
+//! as v1, so every existing file and reader is unchanged. A missing key, an
+//! unknown key (`window` in v1 included), a duplicate key, a value of the
+//! wrong type, or trailing text is refused; nothing is defaulted.
 
 use ojas_core::{OjasError, RMS_NORM_EPS};
 use ojas_io::IoError;
@@ -17,8 +20,10 @@ use crate::json::flat_object;
 
 /// The safetensors `__metadata__` key that holds the spec JSON.
 pub const SPEC_METADATA_KEY: &str = "ojas.spec";
-/// The `format` value this crate reads and writes.
+/// The `format` value of a spec without a sliding window.
 pub const SPEC_FORMAT: &str = "ojas-spec-v1";
+/// The `format` value of a spec with a sliding window: v1 plus `window`.
+pub const SPEC_FORMAT_V2: &str = "ojas-spec-v2";
 /// The `arch` value this crate reads and writes.
 pub const SPEC_ARCH: &str = "nanolab-gpt";
 /// Longest spec JSON accepted.
@@ -56,6 +61,13 @@ pub struct ModelSpec {
     pub rms_eps: f64,
     /// `tie_embeddings`: the head is `tok_emb.weight`.
     pub tie_embeddings: bool,
+    /// Sliding-window attention on every layer: the query at position `t`
+    /// attends to keys `t - W < j <= t` (nanolab's `swa` mixer with
+    /// `swa_sinks = 0`, `Backend::causal_sdpa_forward`'s `window`). `None`
+    /// is full causal attention, and so is a window of at least the
+    /// sequence length. Decoders keep a ring of keys and values for it
+    /// rather than every position.
+    pub window: Option<usize>,
 }
 
 impl ModelSpec {
@@ -74,6 +86,7 @@ impl ModelSpec {
             rope_base: 10000.0,
             rms_eps: 1e-6,
             tie_embeddings: true,
+            window: None,
         }
     }
 
@@ -93,6 +106,7 @@ impl ModelSpec {
             rope_base: 10000.0,
             rms_eps: 1e-6,
             tie_embeddings: true,
+            window: None,
         }
     }
 
@@ -106,6 +120,13 @@ impl ModelSpec {
     /// that passed [`Self::validate`], which checks the product fits.
     pub fn q_width(&self) -> usize {
         self.n_head * self.head_dim
+    }
+
+    /// The window attention runs under: [`Self::window`], or `None` when it
+    /// is at least `max_seq` and so covers every key any query can see.
+    /// Training and decoding both read this, so they agree on full causal.
+    pub fn attention_window(&self) -> Option<usize> {
+        self.window.filter(|&w| w < self.max_seq)
     }
 
     /// `n_kv_head * head_dim`, the width of `k_proj` and `v_proj`.
@@ -203,6 +224,12 @@ impl ModelSpec {
                 detail: "an untied lm_head is not supported; nanolab ties it".to_string(),
             });
         }
+        if self.window == Some(0) {
+            return Err(OjasError::OutOfRange {
+                op: OP,
+                detail: "window is 0; a query sees at least its own key".to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -214,14 +241,19 @@ impl ModelSpec {
         self.validate()
     }
 
-    /// The `ojas-spec-v1` JSON of a valid spec.
+    /// The JSON of a valid spec: `ojas-spec-v1`, or `ojas-spec-v2` when it
+    /// has a window.
     pub fn to_json(&self) -> Result<String, OjasError> {
         self.validate()?;
+        let (format, window) = match self.window {
+            None => (SPEC_FORMAT, String::new()),
+            Some(w) => (SPEC_FORMAT_V2, format!(",\"window\":{w}")),
+        };
         Ok(format!(
-            "{{\"format\":\"{SPEC_FORMAT}\",\"arch\":\"{SPEC_ARCH}\",\"vocab\":{},\"n_embd\":{},\
+            "{{\"format\":\"{format}\",\"arch\":\"{SPEC_ARCH}\",\"vocab\":{},\"n_embd\":{},\
              \"n_layer\":{},\"n_head\":{},\"n_kv_head\":{},\"head_dim\":{},\"hidden\":{},\
              \"max_seq\":{},\"rope_base\":{:?},\"rms_eps\":{:?},\"tie_embeddings\":true,\
-             \"qk_norm\":true,\"gated_attention\":true,\"value_residual\":true}}",
+             \"qk_norm\":true,\"gated_attention\":true,\"value_residual\":true{window}}}",
             self.vocab,
             self.n_embd,
             self.n_layer,
@@ -235,7 +267,8 @@ impl ModelSpec {
         ))
     }
 
-    /// Parse and validate `ojas-spec-v1` JSON.
+    /// Parse and validate `ojas-spec-v1` or `ojas-spec-v2` JSON. `window`
+    /// is required in v2 and refused in v1.
     ///
     /// Integer keys take a JSON integer (digits only, no sign, fraction or
     /// exponent); `rope_base` and `rms_eps` take any JSON number whose value
@@ -245,7 +278,7 @@ impl ModelSpec {
     /// [`Self::validate`], and a model without QK-norm, the gate or the
     /// value residual is not one this crate implements.
     pub fn from_json(text: &str) -> Result<Self, OjasError> {
-        const KEYS: [&str; 16] = [
+        const KEYS: [&str; 17] = [
             "format",
             "arch",
             "vocab",
@@ -262,6 +295,7 @@ impl ModelSpec {
             "qk_norm",
             "gated_attention",
             "value_residual",
+            "window",
         ];
         let io = |e: IoError| spec_error(e.detail().to_string());
         let root = flat_object(text, MAX_SPEC_BYTES, &KEYS).map_err(io)?;
@@ -275,7 +309,20 @@ impl ModelSpec {
         };
         let real = |key: &str| root.get_f64(key).map_err(io);
         let flag = |key: &str| root.get_bool(key).map_err(io);
-        text_of("format", SPEC_FORMAT)?;
+        let window = match root.get_str("format").map_err(io)? {
+            SPEC_FORMAT => {
+                if root.field_opt("window").map_err(io)?.is_some() {
+                    return Err(spec_error(format!("window is not a {SPEC_FORMAT} key")));
+                }
+                None
+            }
+            SPEC_FORMAT_V2 => Some(count("window")?),
+            s => {
+                return Err(spec_error(format!(
+                    "format is {s:?}, expected {SPEC_FORMAT:?} or {SPEC_FORMAT_V2:?}"
+                )))
+            }
+        };
         text_of("arch", SPEC_ARCH)?;
         for key in ["qk_norm", "gated_attention", "value_residual"] {
             if !flag(key)? {
@@ -297,6 +344,7 @@ impl ModelSpec {
             rope_base: real("rope_base")?,
             rms_eps: real("rms_eps")?,
             tie_embeddings: flag("tie_embeddings")?,
+            window,
         };
         spec.validate()?;
         Ok(spec)
@@ -437,6 +485,64 @@ mod tests {
         );
     }
 
+    /// A window is written as `ojas-spec-v2` (v1 plus `window`) and read
+    /// back; v1 refuses the key and v2 requires it.
+    #[test]
+    fn a_window_rides_in_spec_v2_and_v1_stays_byte_identical() {
+        let v1 = ModelSpec::tiny().to_json().unwrap();
+        assert!(v1.starts_with("{\"format\":\"ojas-spec-v1\""));
+        assert!(!v1.contains("window"));
+        let windowed = ModelSpec {
+            window: Some(8),
+            ..ModelSpec::tiny()
+        };
+        let v2 = windowed.to_json().unwrap();
+        assert!(v2.starts_with("{\"format\":\"ojas-spec-v2\""), "{v2}");
+        assert!(v2.ends_with(",\"window\":8}"), "{v2}");
+        assert_eq!(ModelSpec::from_json(&v2).unwrap(), windowed);
+        let v2_style = ORACLE_STYLE
+            .replacen("ojas-spec-v1", "ojas-spec-v2", 1)
+            .replacen("true}", "true, \"window\": 8}", 1);
+        assert_eq!(ModelSpec::from_json(&v2_style).unwrap(), windowed);
+        for (what, text) in [
+            (
+                "window in v1",
+                ORACLE_STYLE.replacen("true}", "true, \"window\": 8}", 1),
+            ),
+            (
+                "v2 without window",
+                ORACLE_STYLE.replacen("ojas-spec-v1", "ojas-spec-v2", 1),
+            ),
+            (
+                "window 0",
+                v2_style.replacen("\"window\": 8", "\"window\": 0", 1),
+            ),
+            (
+                "window float",
+                v2_style.replacen("\"window\": 8", "\"window\": 8.0", 1),
+            ),
+            (
+                "unknown format",
+                ORACLE_STYLE.replacen("ojas-spec-v1", "ojas-spec-v3", 1),
+            ),
+        ] {
+            assert!(ModelSpec::from_json(&text).is_err(), "{what} accepted");
+        }
+        let zero = ModelSpec {
+            window: Some(0),
+            ..ModelSpec::tiny()
+        };
+        assert!(zero.validate().is_err());
+        assert!(zero.to_json().is_err());
+        // A window of at least max_seq is full causal.
+        let wide = ModelSpec {
+            window: Some(32),
+            ..ModelSpec::tiny()
+        };
+        assert_eq!(wide.attention_window(), None);
+        assert_eq!(windowed.attention_window(), Some(8));
+    }
+
     #[test]
     fn json_refuses_anything_off_schema() {
         let edits: &[(&str, &str, &str)] = &[
@@ -451,7 +557,7 @@ mod tests {
                 "\"vocab\": 256",
                 "\"vocab\": 256, \"vocab\": 256",
             ),
-            ("format", "ojas-spec-v1", "ojas-spec-v2"),
+            ("format", "ojas-spec-v1", "ojas-spec-v9"),
             ("arch", "nanolab-gpt", "llama"),
             ("float count", "\"vocab\": 256", "\"vocab\": 256.0"),
             ("negative count", "\"n_layer\": 2", "\"n_layer\": -2"),

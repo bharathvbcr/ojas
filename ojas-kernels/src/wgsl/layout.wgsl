@@ -31,9 +31,10 @@ fn permute(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: v
     dst[i] = w;
 }
 
-// kv_cache_write: src [B, Tn, row] into dst [B, Tcap, row] at time `at`, one
-// lane per source word. Words: 0 element count (B * Tn * row), 1 Tn * row,
-// 2 Tcap * row, 3 at * row. status_in is this call's fault word, set by a
+// kv_cache_write: src [B, Tn, row] into the ring dst [B, Tcap, row], time
+// `at + t` in slot (at + t) % Tcap, one lane per source word. Words: 0
+// element count (B * Tn * row), 1 Tn * row, 2 Tcap * row, 3 at % Tcap,
+// 4 row, 5 Tcap. status_in is this call's fault word, set by a
 // finiteness check of src: if it is set nothing is written and the op's bit
 // is raised in the context's word, so the cache is never half-written.
 @compute @workgroup_size(256, 1, 1)
@@ -46,5 +47,8 @@ fn kv_write(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: 
         return;
     }
     let per_src = pw(1u);
-    dst[(i / per_src) * pw(2u) + pw(3u) + i % per_src] = src[i];
+    let row = pw(4u);
+    let r = i % per_src;
+    let slot = (pw(3u) + r / row) % pw(5u);
+    dst[(i / per_src) * pw(2u) + slot * row + r % row] = src[i];
 }
