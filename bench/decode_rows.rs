@@ -191,11 +191,7 @@ pub fn run<Bk: Backend, G: Gen>(r: &mut Runner<'_, Bk>, g: &mut G) {
         Ok(mine) => match torch_ids(r, &greedy_row) {
             Ok(theirs) => {
                 let same = mine.iter().zip(&theirs).filter(|(a, b)| a == b).count();
-                let prefix = mine
-                    .iter()
-                    .zip(&theirs)
-                    .take_while(|(a, b)| a == b)
-                    .count();
+                let prefix = mine.iter().zip(&theirs).take_while(|(a, b)| a == b).count();
                 format!(
                     "\"ids_equal\":{same},\"common_prefix\":{prefix},\"of\":{},\"torch_of\":{}",
                     mine.len(),

@@ -1,0 +1,10 @@
+{"runtime":"ojas-wgpu","row":"_device","status":"info","device":{"backend":"WgpuBackend","adapter":"Apple M5 Pro","hal":"Metal","vendor":"Apple (wgpu vendor field 0)","binding_cap_bytes":4294967292}}
+{"runtime":"ojas-wgpu","row":"_device","status":"info","device":{"backend":"WgpuBackend","adapter":"Apple M5 Pro","hal":"Metal"}}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_prefill_p32","when":"before","load":"4.20 4.85 5.99","gpu_util_pct":63}
+{"runtime":"ojas-wgpu","row":"gen_prefill_p32","status":"ok","min_ms":31.790250,"median_ms":32.998063,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_prefill_p32","when":"after","load":"4.20 4.85 5.99","gpu_util_pct":97}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"before","load":"4.20 4.85 5.99","gpu_util_pct":47}
+{"runtime":"ojas-wgpu","row":"gen_greedy_p32_n32","status":"ok","min_ms":900.917708,"median_ms":943.296500,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"after","load":"3.71 4.69 5.90","gpu_util_pct":96}
+{"runtime":"ojas-wgpu","row":"_gen_ids","status":"info","for":"gen_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
+{"runtime":"ojas-wgpu","row":"_gen_traffic","status":"info","for":"gen_greedy_p32_n32","prefill_uploads":4,"prefill_upload_bytes":16516,"prefill_readback_bytes":201216,"step_uploads":3,"step_upload_bytes":516,"step_readbacks":1,"step_readback_bytes":201216}

@@ -43,7 +43,8 @@ pub use exp_exact::{exp_exact, log_sum_exp_exact};
 pub use limits::{shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE};
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
-    accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
+    causal_conv1d_silu_backward_dims,
     causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
     chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
     cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,

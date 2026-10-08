@@ -294,6 +294,37 @@ fn rope_rows_are_the_nanolab_table_at_any_offset() {
     }
 }
 
+/// A slice of a table is a view (no new allocation on the budget) with the
+/// bits `Rope::rows` builds for the same positions; positions outside the
+/// table, and an empty slice, are refused.
+#[test]
+fn rope_slice_is_a_view_with_the_rows_of_its_positions() {
+    let spec = ModelSpec::tiny();
+    let budget = Budget::new(1 << 20);
+    let table = Rope::rows(&spec, 3, 12, &budget).unwrap();
+    let live = budget.live_bytes().unwrap();
+    for (start, len) in [(3, 12), (3, 1), (9, 4), (14, 1)] {
+        let s = table.slice(start, len).unwrap();
+        assert_eq!(budget.live_bytes().unwrap(), live);
+        assert_eq!((s.start(), s.len()), (start, len));
+        let want = Rope::rows(&spec, start, len, &budget).unwrap();
+        for (got, want) in [(&s.cos, &want.cos), (&s.sin, &want.sin)] {
+            assert_eq!(got.shape(), want.shape());
+            assert_eq!(
+                f32s(&got.to_f32_vec().unwrap()),
+                f32s(&want.to_f32_vec().unwrap())
+            );
+        }
+    }
+    for (start, len) in [(2, 1), (14, 2), (15, 1), (5, 0), (usize::MAX, 2)] {
+        let err = table.slice(start, len).unwrap_err();
+        assert!(
+            matches!(err, OjasError::OutOfRange { .. }),
+            "{start}+{len}: {err}"
+        );
+    }
+}
+
 fn f32s(v: &[f32]) -> Vec<u32> {
     v.iter().map(|x| x.to_bits()).collect()
 }

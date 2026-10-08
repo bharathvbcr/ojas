@@ -1,0 +1,10 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_prefill_p32","when":"before","load":"3.75 4.65 5.86","gpu_util_pct":36}
+{"runtime":"ojas-metal","row":"gen_prefill_p32","status":"ok","min_ms":10.719167,"median_ms":11.341313,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_prefill_p32","when":"after","load":"3.75 4.65 5.86","gpu_util_pct":92}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"before","load":"3.75 4.65 5.86","gpu_util_pct":0}
+{"runtime":"ojas-metal","row":"gen_greedy_p32_n32","status":"ok","min_ms":358.516167,"median_ms":397.868229,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"after","load":"3.55 4.58 5.82","gpu_util_pct":95}
+{"runtime":"ojas-metal","row":"_gen_ids","status":"info","for":"gen_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
+{"runtime":"ojas-metal","row":"_gen_traffic","status":"info","for":"gen_greedy_p32_n32","prefill_uploads":4,"prefill_upload_bytes":16516,"prefill_readback_bytes":201216,"step_uploads":3,"step_upload_bytes":516,"step_readbacks":1,"step_readback_bytes":201216}

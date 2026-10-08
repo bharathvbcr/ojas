@@ -147,6 +147,7 @@ const KERNELS: &[&str] = &[
     "ojas_vres_lambda",
     "ojas_rope",
     "ojas_embed_fwd",
+    "ojas_argmax_rows",
     "ojas_embed_count",
     "ojas_scan_exclusive",
     "ojas_embed_place",
@@ -934,6 +935,7 @@ impl Worker {
                 vocab,
                 dim,
             } => self.embed(table, ids, vocab, dim),
+            Cmd::Argmax { x, rows, cols } => self.argmax(x, rows, cols),
             Cmd::EmbedBwd {
                 table,
                 ids,
@@ -1185,6 +1187,24 @@ impl Worker {
             set_u32(b, vocab, 5);
         })?;
         self.check(&st, &out, ST_OUT)?;
+        Ok(self.keep(vec![out]))
+    }
+
+    /// Each row's argmax column through `ojas_argmax_rows`, one threadgroup
+    /// per row. The kernel flags a non-finite input in word 0 itself, so no
+    /// separate finite pass runs.
+    fn argmax(&mut self, x: Arg, rows: u32, cols: u32) -> Res<Reply> {
+        const OP: &str = "argmax_rows";
+        let xv = self.view(x)?;
+        let out = self.fresh(rows as usize)?;
+        let st = self.status(OP)?;
+        self.ktg("ojas_argmax_rows", rows as usize, 1, 256, |b| {
+            bind(b, &xv, 0);
+            bind(b, &out, 1);
+            bind_st(b, &st, 2);
+            set_u32(b, rows, 3);
+            set_u32(b, cols, 4);
+        })?;
         Ok(self.keep(vec![out]))
     }
 

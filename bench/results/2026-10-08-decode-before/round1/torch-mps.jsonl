@@ -1,0 +1,7 @@
+{"runtime": "torch-mps", "row": "_device", "status": "info", "device": {"torch": "2.13.0", "mps": true}}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gen_prefill_p32", "when": "before", "load": "5.06 5.13 6.28", "gpu_util_pct": 70}
+{"runtime": "torch-mps", "row": "gen_prefill_p32", "status": "ok", "min_ms": 7.352000000537373, "median_ms": 8.388625501538627, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gen_prefill_p32", "when": "after", "load": "5.06 5.13 6.28", "gpu_util_pct": 72}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gen_greedy_p32_n32", "when": "before", "load": "5.06 5.13 6.28", "gpu_util_pct": 40}
+{"runtime": "torch-mps", "row": "gen_greedy_p32_n32", "status": "ok", "min_ms": 177.48695799673442, "median_ms": 190.66558349732077, "iters": 20, "warmup": 5}
+{"runtime": "torch-mps", "row": "_load", "status": "info", "for": "gen_greedy_p32_n32", "when": "after", "load": "5.45 5.21 6.30", "gpu_util_pct": 87}

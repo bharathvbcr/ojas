@@ -16,7 +16,9 @@
 //! [`OjasError::NonFinite`], and so is a row with no finite entry.
 //! [`crate::argmax_token`] stays strict and refuses `-inf` too.
 
-use ojas_core::OjasError;
+use std::cmp::Ordering;
+
+use ojas_core::{exp_exact, OjasError};
 
 /// SplitMix64 with the state as an explicit counter: the same stream as
 /// `ojas_data::CounterRng`. ojas-infer does not depend on ojas-data, so the
@@ -120,27 +122,43 @@ pub fn sample_token(
     if logits.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
         return Err(OjasError::NonFinite { op: OP });
     }
-    // Finite candidates ranked by (logit desc, index asc).
+    // Candidates are the finite logits ranked by (logit desc, index asc),
+    // the order `rank` defines.
+    if cfg.temperature == 0.0 {
+        // The leader alone, in one pass with no allocation.
+        let best = (0..logits.len())
+            .filter(|&i| logits[i].is_finite())
+            .reduce(|a, b| if rank(logits, b, a).is_lt() { b } else { a })
+            .ok_or(OjasError::NonFinite { op: OP })?;
+        return to_id(best);
+    }
     let mut ranked: Vec<usize> = (0..logits.len())
         .filter(|&i| logits[i].is_finite())
         .collect();
     if ranked.is_empty() {
         return Err(OjasError::NonFinite { op: OP });
     }
-    ranked.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
-    if cfg.temperature == 0.0 {
-        return to_id(ranked[0]);
+    match cfg.top_k {
+        // Select the k leaders in O(V), then order only them.
+        Some(k) if k < ranked.len() => {
+            ranked.select_nth_unstable_by(k - 1, |&a, &b| rank(logits, a, b));
+            ranked.truncate(k);
+        }
+        _ => {}
     }
-    if let Some(k) = cfg.top_k {
-        ranked.truncate(k);
-    }
+    ranked.sort_unstable_by(|&a, &b| rank(logits, a, b));
     // Finite f32 over a positive f32 temperature stays below 2^280 in f64,
     // so every scaled logit is finite, `z - top <= 0`, and the leader
-    // contributes exp(0) = 1: `total` is in [1, k].
+    // contributes exp(0) = 1: `total` is in [1, k]. The exponential is
+    // `exp_exact` (the same bits on every platform) of the difference
+    // rounded to f32, so a seed draws the same ids everywhere.
     let t = f64::from(cfg.temperature);
     let scaled: Vec<f64> = ranked.iter().map(|&i| f64::from(logits[i]) / t).collect();
     let top = scaled[0];
-    let mut probs: Vec<f64> = scaled.iter().map(|z| (z - top).exp()).collect();
+    let mut probs: Vec<f64> = scaled
+        .iter()
+        .map(|z| f64::from(exp_exact((z - top) as f32)))
+        .collect();
     let total: f64 = probs.iter().sum();
     for p in probs.iter_mut() {
         *p /= total;
@@ -169,6 +187,13 @@ pub fn sample_token(
     }
     // Rounding left `u` at or above the running sum: the last kept token.
     to_id(ranked[keep - 1])
+}
+
+/// Candidate order: logit descending (`total_cmp`, so `+0.0` ranks before
+/// `-0.0`), then index ascending. Indices are distinct, so no two compare
+/// equal and an unstable sort or select gives the one order.
+fn rank(logits: &[f32], a: usize, b: usize) -> Ordering {
+    logits[b].total_cmp(&logits[a]).then(a.cmp(&b))
 }
 
 fn to_id(index: usize) -> Result<u32, OjasError> {

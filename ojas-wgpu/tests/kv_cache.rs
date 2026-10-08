@@ -530,6 +530,34 @@ fn cached_attention_is_deterministic() {
     }
 }
 
+/// `Tq * H` one past the adapter's `max_compute_workgroups_per_dimension`
+/// (65,535 on Apple GPUs): the (query row * head) axis is split over
+/// several dispatches instead of refused, and every row still matches the
+/// f64 reference.
+#[test]
+fn cached_attention_splits_a_row_head_grid_past_the_axis_limit() {
+    let g = fresh();
+    let max = g.context().limits().max_compute_workgroups_per_dimension as usize;
+    assert!(
+        max <= 1 << 17,
+        "limit {max}: the test shape would be too large"
+    );
+    let h = 64;
+    let tq = max / h + 1;
+    let s = Dims {
+        b: 1,
+        tq,
+        h,
+        hkv: h,
+        d: 4,
+        cap: tq,
+        kv_len: tq,
+    };
+    assert!(s.tq * s.h > max);
+    let (got, want) = attend(&g, s, 900);
+    within(&format!("{s:?}"), &got, &want, 1e-5);
+}
+
 #[test]
 fn cached_attention_refusals() {
     let g = fresh();

@@ -15,7 +15,9 @@
 // score is reported, so a -inf key (whose exp is a clean 0) still faults.
 //
 // Words: 0 B, 1 Tq, 2 H, 3 Hkv, 4 D, 5 Tcap, 6 kv_len, 7 split length S
-// (multiple of 64, at most MAX_SPLIT), 8 split count, 9 scale bits.
+// (multiple of 64, at most MAX_SPLIT), 8 split count, 9 scale bits, 10 the
+// first (query row * head) index of this dispatch: the host splits that axis
+// into dispatches of at most max_compute_workgroups_per_dimension groups.
 // Partial layout per (b, i, h, split): [m, l, acc[0..D]], D + 2 words.
 
 @group(0) @binding(2) var<storage, read> q: array<f32>;
@@ -70,8 +72,9 @@ fn cattn_split(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     let splits = pw(8u);
     let scale = pf(9u);
     let s = wg.x;
-    let i = wg.y / heads;
-    let h = wg.y % heads;
+    let rh = wg.y + pw(10u);
+    let i = rh / heads;
+    let h = rh % heads;
     let b = wg.z;
     let lane = lid.x;
     // Before any barrier, and before `heads % kv_heads`. A dim past MAX_D
@@ -148,8 +151,9 @@ fn cattn_merge(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
     let splits = pw(8u);
     let d = lid.x;
     if (d >= dim) { return; }
-    let i = wg.x / heads;
-    let h = wg.x % heads;
+    let rh = wg.x + pw(10u);
+    let i = rh / heads;
+    let h = rh % heads;
     let b = wg.y;
     let rowpart = ((b * tq + i) * heads + h) * splits;
     var m = NEG;

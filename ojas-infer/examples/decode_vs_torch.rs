@@ -51,7 +51,10 @@ fn main() {
             );
             rows::main_rows(&be, "ojas-wgpu", &device, decode::run_device)
         }
-        other => fail("lane", format!("{other:?} is not cpu, cpu-host, metal or wgpu")),
+        other => fail(
+            "lane",
+            format!("{other:?} is not cpu, cpu-host, metal or wgpu"),
+        ),
     };
     if let Err(e) = result {
         eprintln!("decode_vs_torch: {e}");

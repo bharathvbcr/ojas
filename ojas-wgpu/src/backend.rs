@@ -59,19 +59,20 @@
 use std::sync::Arc;
 
 use ojas_core::{
-    accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims,
-    causal_sdpa_forward_dims, check_adamw, clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
-    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
-    kv_cache_write_dims, linear_backward_dims, linear_ce_dims, linear_forward_dims,
-    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_bf16_operands, require_ns5,
-    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
-    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
-    rope_half_split_backward_dims, rope_half_split_forward_dims, sdpa_scale, silu_backward_dims,
-    silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Ns5Precision,
-    Numerics, OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims,
-    Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
+    causal_sdpa_backward_dims, causal_sdpa_forward_dims, check_adamw, clip_grad_norm_dims,
+    clip_scale, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
+    embedding_backward_dims, embedding_forward_dims, kv_cache_write_dims, linear_backward_dims,
+    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
+    refuse_bf16_operands, require_ns5, residual_add_backward_dims, residual_add_forward_dims,
+    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
+    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
+    sdpa_scale, silu_backward_dims, silu_forward_dims, value_residual_blend_backward_dims,
+    value_residual_blend_forward_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, DType,
+    LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
+    RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B,
+    MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -84,7 +85,7 @@ use crate::context::{Job, Kernel, Slot, WgpuBuffer, WgpuContext, FAULT_OPS};
 /// One fault bit per op, by index. The fault words hold a 64-bit mask
 /// ([`FAULT_OPS`]); `OP_NAMES` may grow to that many, and the build refuses
 /// more.
-const OP_NAMES: [&str; 33] = [
+const OP_NAMES: [&str; 34] = [
     "embedding_forward",
     "embedding_backward",
     "linear_forward",
@@ -118,6 +119,7 @@ const OP_NAMES: [&str; 33] = [
     "cached_attention_forward",
     "kv_cache_write",
     "cast_bf16",
+    "argmax_rows",
 ];
 
 const _: () = assert!(
@@ -171,6 +173,7 @@ const CATTN: Op = Op(30);
 const KVW: Op = Op(31);
 /// Past the low mask word: its bit is bit 0 of fault word 1.
 const CAST: Op = Op(32);
+const ARGMAX: Op = Op(33);
 
 const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> Kernel {
     Kernel {
@@ -212,6 +215,7 @@ const GATE_BWD_SAVED: Kernel = k(Pointwise, "gate_bwd_saved", &[R(2), R(4), R(5)
 const ROPE: Kernel = k(Pointwise, "rope", &[R(2), R(3), R(4), W(6)]);
 const SUM_PARTIAL: Kernel = k(Reduce, "sum_partial", &[R(2), R(3), R(4), W(5)]);
 const SUM_FINISH: Kernel = k(Reduce, "sum_finish", &[R(2), R(3), W(5)]);
+const ARGMAX_ROWS: Kernel = k(Reduce, "argmax_rows", &[R(2), W(6)]);
 const COL_PARTIAL: Kernel = k(Reduce, "col_partial", &[R(2), R(3), R(4), W(5)]);
 const COL_FINISH: Kernel = k(Reduce, "col_finish", &[R(2), W(5)]);
 const RMS_FWD: Kernel = k(Norm, "rms_fwd", &[R(2), R(3), W(5)]);
@@ -512,6 +516,25 @@ impl WgpuBackend {
         shadow
             .get(start..start + a.elems)
             .ok_or_else(|| shape(op, "U32 view lies outside its upload"))
+    }
+
+    /// Range-check a U32 tensor's ids against `vocab`: from its upload's
+    /// host copy, or, for ids a kernel produced, from their bound.
+    fn check_ids_in(&self, op: Op, a: &In<'_>, vocab: usize) -> Result<(), OjasError> {
+        if a.buf.shadow().is_none() {
+            if let Some(bound) = a.buf.below() {
+                if bound as usize > vocab {
+                    return Err(OjasError::OutOfRange {
+                        op: op.name(),
+                        detail: format!(
+                            "device-produced ids are only known to be below {bound}, past vocab {vocab}"
+                        ),
+                    });
+                }
+                return Ok(());
+            }
+        }
+        check_ids(op, self.ids(op, a)?, vocab)
     }
 
     /// A new device tensor. The budget is charged before the buffer exists.
@@ -1474,7 +1497,7 @@ impl Backend for WgpuBackend {
         let d = embedding_forward_dims(table, token_ids)?;
         let tv = self.placed(op, table)?;
         let iv = self.placed(op, token_ids)?;
-        check_ids(op, self.ids(op, &iv)?, d.vocab)?;
+        self.check_ids_in(op, &iv, d.vocab)?;
         let n = product(op, &[d.tokens, d.dim])?;
         let dim = d.dim;
         let grid = self.lanes(n)?;
@@ -1489,6 +1512,37 @@ impl Backend for WgpuBackend {
             &[&tb, &ib, &yb],
             grid,
         )?;
+        job.commit()?;
+        Ok(y)
+    }
+
+    /// `argmax_rows` in `reduce.wgsl`: one workgroup per row, the grid
+    /// folded past the per-dimension limit. A non-finite input raises
+    /// [`ARGMAX`]'s fault bit, reported at the next sync. The result has no
+    /// host shadow; its values are bounded below `cols`, so it can feed
+    /// `embedding_forward` with no readback.
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        let op = ARGMAX;
+        let (rows, cols) = argmax_rows_dims(x)?;
+        let xv = self.placed(op, x)?;
+        u(op, xv.elems)?;
+        // The kernel's column walk steps by 256 in u32.
+        if cols > (u32::MAX - 256) as usize {
+            return Err(overflow(op, format!("{cols} columns")));
+        }
+        let words = [u(op, rows)?, u(op, cols)?];
+        let bytes = (rows as u64)
+            .checked_mul(4)
+            .ok_or_else(|| overflow(op, "byte length overflows"))?;
+        self.ctx.check_bytes(bytes, &self.budget)?;
+        let charge = self.budget.try_reserve(bytes)?;
+        let wb = self.ctx.tensor_buffer(bytes)?.bounded(words[1]);
+        let raw = wb.raw()?.clone();
+        let y = Tensor::from_device_reserved(Arc::new(wb), &[rows], DType::U32, charge)?;
+        let grid = self.groups(rows)?;
+        let mut job = self.job(op);
+        let xb = bind(op, &mut job, &xv)?;
+        job.dispatch(&ARGMAX_ROWS, &words, &[&xb, &raw], grid)?;
         job.commit()?;
         Ok(y)
     }
@@ -2640,17 +2694,22 @@ impl Backend for WgpuBackend {
         let partial = product(op, &[rows, splits, dims.head_dim + 2])?;
         u(op, partial)?;
         self.fits(op, partial)?;
+        // The (query row * head) axis is cut into dispatches of at most
+        // `max` groups (word 10 is each one's first index); the split and
+        // batch axes must fit one dispatch.
         let max = self.ctx.limits().max_compute_workgroups_per_dimension;
-        let split_grid = (u(op, splits)?, u(op, row_heads)?, u(op, dims.batch)?);
-        for g in [split_grid.0, split_grid.1, split_grid.2] {
-            if g > max {
-                return Err(OjasError::OutOfRange {
-                    op: op.name(),
-                    detail: format!("grid {split_grid:?} exceeds {max} per axis"),
-                });
-            }
+        let (splits_g, row_heads_g, batch_g) =
+            (u(op, splits)?, u(op, row_heads)?, u(op, dims.batch)?);
+        if splits_g > max || batch_g > max || max == 0 {
+            return Err(OjasError::OutOfRange {
+                op: op.name(),
+                detail: format!(
+                    "grid ({splits_g}, {row_heads_g}, {batch_g}) exceeds {max} on the split or \
+                     batch axis"
+                ),
+            });
         }
-        let words = [
+        let mut words = [
             u(op, dims.batch)?,
             u(op, dims.new)?,
             u(op, dims.heads)?,
@@ -2661,6 +2720,7 @@ impl Backend for WgpuBackend {
             u(op, split)?,
             u(op, splits)?,
             scale.to_bits(),
+            0,
         ];
         let (y, yb) = self.out(op, qv.shape())?;
         let mut job = self.job(op);
@@ -2668,13 +2728,19 @@ impl Backend for WgpuBackend {
         let kb = bind(op, &mut job, &kv)?;
         let vb = bind(op, &mut job, &vv)?;
         let part = job.scratch((partial as u64) * 4)?;
-        job.dispatch(&CATTN_SPLIT, &words, &[&qb, &kb, &vb, &part], split_grid)?;
-        job.dispatch(
-            &CATTN_MERGE,
-            &words,
-            &[&yb, &part],
-            (split_grid.1, split_grid.2, 1),
-        )?;
+        let mut first = 0u32;
+        while first < row_heads_g {
+            let count = (row_heads_g - first).min(max);
+            words[10] = first;
+            job.dispatch(
+                &CATTN_SPLIT,
+                &words,
+                &[&qb, &kb, &vb, &part],
+                (splits_g, count, batch_g),
+            )?;
+            job.dispatch(&CATTN_MERGE, &words, &[&yb, &part], (count, batch_g, 1))?;
+            first += count;
+        }
         job.commit()?;
         Ok(y)
     }
