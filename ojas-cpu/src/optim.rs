@@ -41,7 +41,7 @@ use ojas_core::{
 
 use std::sync::Mutex;
 
-use crate::gemm::{gemm_out, scratch as gemm_scratch, whole_call, Mat};
+use crate::gemm::{gemm_out, gram_out, scratch as gemm_scratch, whole_call, Mat};
 use crate::linalg::transpose;
 use crate::pool::Exec;
 use crate::pool::{self, scoped};
@@ -737,9 +737,9 @@ const MUON_ROW_BANDS: usize = 6;
 /// under Rosetta x86_64 the 768×768 step moved by up to 1.7e-8 between one
 /// call and six bands. `A @ A` and `B @ X` take [`MUON_ROW_BANDS`] bands.
 /// The tall 2048×768 step does not call this function for those two
-/// products. `X @ Xᵀ` (both views of one buffer) takes two bands when
-/// `k < 2m` and one band otherwise: at m = n = 768, two bands were faster
-/// for k = 512, 768, and 1024, and slower for k = 1536, 2048, and 3072. A
+/// products. `X @ Xᵀ` is not a call here: it is [`gram_out`], one
+/// `cblas_ssyrk` (until 2026-10-08 it was two `cblas_sgemm` bands here when
+/// `k < 2m`, which `ssyrk` beat at every Muon shape). A
 /// band that would miss the whole-call cutoff is not split: the packed
 /// kernel is a different result. A product Accelerate would not take for a
 /// single row stays one call.
@@ -753,14 +753,8 @@ const MUON_ROW_BANDS: usize = 6;
 fn ns_gemm_out(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>, c: &mut [f32]) -> Result<(), OjasError> {
     const OP: &str = "muon_ns5_step";
     let (m, k, n) = (a.rows, a.cols, b.cols);
-    let rhs_trans = b.rows > 1 && b.cols > 1 && b.rs == 1 && b.cs != 1;
     let bands = if !cfg!(target_os = "macos") || !whole_call(exec.numerics, 1, k, n) {
         1
-    } else if rhs_trans {
-        match m.checked_mul(2) {
-            Some(twice) if m >= 2 && k < twice => 2,
-            _ => 1,
-        }
     } else if m >= MUON_ROW_BANDS {
         MUON_ROW_BANDS
     } else {
@@ -836,6 +830,15 @@ fn newton_schulz(
     // Apple cblas accepts as `CblasTrans` with leading dimension 768. `B @ X`
     // is stored as `Xᵀ @ Bᵀ`, one `cblas_sgemm` into that same orientation,
     // so neither transpose allocates. Square 768 and tall 3072×768 still copy.
+    //
+    // The gate is a measured shape, not an oversight. On 2026-10-08 (M5 Pro,
+    // 6 threads, `bench/results/2026-10-08-cpu-hot-paths/muon-gate.txt`)
+    // this view and `one_cblas` below opened to every tall matrix were
+    // slower than the transpose and six bands in all three interleaved
+    // rounds: 3072×768 by 1.2-2.8×, Qwen3.5's 6144×2048 by 1.5-2.9×. A view
+    // runs `B @ X` and `A @ A` as single calls on the calling thread, which
+    // loses to six bands once the product is large. At 2048×768 itself the
+    // view and the general path were within that run's noise (load 23-51).
     let view = rows == 2048 && cols == 768;
     let mut transposed = false;
     let (mut x, r, c) = if view {
@@ -881,11 +884,11 @@ fn newton_schulz(
     let b_coef = MUON_NS5_B as f32;
     let c_coef = MUON_NS5_C as f32;
     // Tall 2048×768 only: the iterate is 768×2048. `A @ A` and `B @ X` are
-    // each one `cblas_sgemm`. `X @ Xᵀ` is one call at this k (the view's
-    // transposed operand is on the left, so it cannot take `ns_gemm`'s
-    // right-hand band split). Square 768 and tall 3072×768 stay on that
-    // function's band loop.
-    let one_cblas = (transposed || view) && r == 768 && c == 2048;
+    // each one `cblas_sgemm`. Square 768 and tall 3072×768 stay on
+    // `ns_gemm_out`'s band loop. At every shape `X @ Xᵀ` is [`gram_out`].
+    // (Only the view reaches 768×2048 here: a transposed copy of that shape
+    // would be a 2048×768 input, which `view` takes first.)
+    let one_cblas = view;
     // The five products and combinations of a step reuse three buffers made
     // once per call (before 2026-10-07 each step allocated five): `A` (r×r),
     // `A²` (r×r), which `B = b A + c A²` then overwrites, and `B X` (the
@@ -902,12 +905,7 @@ fn newton_schulz(
         } else {
             Mat::row_major(&x, r, c)
         };
-        let xmt = xm.t();
-        if view {
-            gemm_out(OP, exec, &xm, &xmt, &mut am)?;
-        } else {
-            ns_gemm_out(exec, xm, xmt, &mut am)?;
-        }
+        gram_out(OP, exec, &xm, &mut am)?;
         if bf16 {
             round_bf16_in_place(exec, &mut am)?;
         }
@@ -1009,5 +1007,46 @@ fn scratch_overflow(op: &'static str) -> OjasError {
     OjasError::OutOfRange {
         op,
         detail: "optimizer scratch length overflows".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use ojas_core::{Ns5Precision, Numerics};
+
+    use super::newton_schulz;
+    use crate::gemm::whole_calls;
+    use crate::pool::{Exec, Pool};
+
+    /// A square 768 Fast Newton-Schulz run on one thread (every band inline,
+    /// so this thread sees every whole call) makes 13 Accelerate calls a
+    /// step: `X @ Xᵀ` as one `cblas_ssyrk`, then six bands each of `A @ A`
+    /// and `B @ X`. Before 2026-10-08 `X @ Xᵀ` was two `cblas_sgemm` bands
+    /// at this shape (`k < 2m`), 14 a step and 70 a run.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn square_768_gram_product_is_one_accelerate_call_a_step() {
+        let pool = Arc::new(Pool::new(1).unwrap());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        let n = 768;
+        let mut state = 7u64;
+        let update: Vec<f32> = (0..n * n)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((state >> 40) as f32 / (1u64 << 24) as f32) - 0.5
+            })
+            .collect();
+        let before = whole_calls();
+        let out = newton_schulz(exec, update, n, n, Ns5Precision::F32).unwrap();
+        let after = whole_calls();
+        assert_eq!(out.len(), n * n);
+        assert_eq!((after.0 - before.0, after.1 - before.1), (5 * 13, 0));
     }
 }

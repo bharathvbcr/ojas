@@ -235,6 +235,7 @@ mod accelerate {
     pub(super) const CBLAS_ROW_MAJOR: c_int = 101;
     pub(super) const CBLAS_NO_TRANS: c_int = 111;
     pub(super) const CBLAS_TRANS: c_int = 112;
+    pub(super) const CBLAS_UPPER: c_int = 121;
 
     // Signature from the macOS SDK's vecLib `cblas.h`. CBLAS enums are C
     // `int`.
@@ -252,6 +253,23 @@ mod accelerate {
             lda: c_int,
             b: *const f32,
             ldb: c_int,
+            beta: f32,
+            c: *mut f32,
+            ldc: c_int,
+        );
+
+        // `cblas.h`: `C = alpha A Aᵀ + beta C` (`NoTrans`, `A` is `n × k`)
+        // or `alpha Aᵀ A + beta C` (`Trans`, `A` is `k × n`), only the
+        // `uplo` triangle of the `n × n` `C` read or written.
+        pub(super) fn cblas_ssyrk(
+            order: c_int,
+            uplo: c_int,
+            trans: c_int,
+            n: c_int,
+            k: c_int,
+            alpha: f32,
+            a: *const f32,
+            lda: c_int,
             beta: f32,
             c: *mut f32,
             ldc: c_int,
@@ -373,6 +391,57 @@ pub(crate) fn accelerate_sgemm(
             b.as_ptr(),
             call.b.ld,
             call.beta,
+            c.as_mut_ptr(),
+            call.ldc,
+        );
+    }
+}
+
+/// The upper triangle (`j >= i`) of `C[n×n] = A · Aᵀ` through one
+/// `cblas_ssyrk`, `beta = 0`. `call` is the validated `A · Aᵀ` GEMM of
+/// [`crate::ssyrk_accelerate`]: `call.a` addresses `A` (`n × k`), and a
+/// transposed `A` is passed as its `k × n` storage with `Trans`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub(crate) fn accelerate_ssyrk_upper(call: &crate::layout::BlasCall, a: &[f32], c: &mut [f32]) {
+    use accelerate::*;
+    assert!(call.m == call.n, "ssyrk output is square");
+    assert!(call.n > 0 && call.k > 0, "empty BLAS call");
+    assert!(call.beta == 0.0, "ssyrk here never accumulates");
+    let (a_rows, a_cols) = if call.a.trans {
+        (call.k, call.n)
+    } else {
+        (call.n, call.k)
+    };
+    assert!(
+        a.len() >= blas_span(a_rows, a_cols, call.a.ld),
+        "A shorter than BLAS span"
+    );
+    assert!(
+        c.len() >= blas_span(call.n, call.n, call.ldc),
+        "C shorter than BLAS span"
+    );
+    let trans = if call.a.trans {
+        CBLAS_TRANS
+    } else {
+        CBLAS_NO_TRANS
+    };
+    // SAFETY: the asserts above check that every element `cblas_ssyrk` may
+    // address for these dimensions and leading dimensions lies inside `a`
+    // and `c` (it touches a subset of the full `n × n` span of `c`). All
+    // dimensions are positive and each `ld` is at least its row length. `c`
+    // is an exclusive borrow, so it cannot alias `a`. Accelerate keeps no
+    // pointer after the call returns.
+    unsafe {
+        cblas_ssyrk(
+            CBLAS_ROW_MAJOR,
+            CBLAS_UPPER,
+            trans,
+            call.n,
+            call.k,
+            1.0,
+            a.as_ptr(),
+            call.a.ld,
+            0.0,
             c.as_mut_ptr(),
             call.ldc,
         );

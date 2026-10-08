@@ -28,7 +28,8 @@
 //! This differs from `ojas-cpu`: an FMA chain rounds once per step, and the
 //! Exact tier rounds the product and the sum separately.
 //!
-//! [`sgemm_accelerate`] does not follow this contract. See its docs.
+//! [`sgemm_accelerate`] and [`ssyrk_accelerate`] do not follow this
+//! contract. See their docs.
 //!
 //! With the `accelerate` feature on macOS, [`vdsp_vmul`], [`vdsp_vadd`],
 //! and their append forms call the stride-1 vDSP kernels. Each output is
@@ -114,13 +115,15 @@ pub enum SimdError {
         /// The backend that was requested.
         backend: Backend,
     },
-    /// [`sgemm_accelerate`] only: BLAS needs a unit stride on one axis and a
+    /// [`sgemm_accelerate`] and [`ssyrk_accelerate`] only: BLAS needs a unit
+    /// stride on one axis and a
     /// leading dimension at least the length of the other axis.
     UnsupportedLayout {
         /// The operand BLAS cannot address.
         operand: Operand,
     },
-    /// [`sgemm_accelerate`] only: a dimension or leading dimension exceeds
+    /// [`sgemm_accelerate`] and [`ssyrk_accelerate`] only: a dimension or
+    /// leading dimension exceeds
     /// `i32::MAX`, the largest value CBLAS `int` can hold.
     DimensionTooLarge {
         /// The value that does not fit.
@@ -469,6 +472,73 @@ pub fn sgemm_accelerate(
     let call = layout::BlasCall::from_problem(&p)?;
     arch::accelerate_sgemm(&call, a, b, c);
     Ok(())
+}
+
+/// `C[n×n] = A[n×k] · Aᵀ` through Accelerate's `cblas_ssyrk`, every element
+/// written.
+///
+/// `A` is addressed as in [`sgemm_accelerate`] (`a_rs`, `a_cs`, with the
+/// same BLAS-addressable layouts), and `C` is row-major with row stride
+/// `c_rs >= n`. What `C` held is never read. `cblas_ssyrk` computes the
+/// upper triangle (`j >= i`), about half the multiply-adds of the
+/// [`sgemm_accelerate`] call `A · Aᵀ`, and each value below the diagonal is
+/// then copied from its mirror, so `C` is exactly symmetric.
+///
+/// Determinism is [`sgemm_accelerate`]'s: repeatable on one machine and OS
+/// build, order unspecified. The bits are Accelerate's `ssyrk`, not its
+/// `sgemm` (they were equal on an M5 Pro, macOS 27, at `n` 768 and 2048, `k`
+/// 768 to 6144, but nothing promises that).
+///
+/// # Errors
+///
+/// [`sgemm_accelerate`]'s, for the product `A · Aᵀ`.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+pub fn ssyrk_accelerate(
+    n: usize,
+    k: usize,
+    a: &[f32],
+    a_rs: usize,
+    a_cs: usize,
+    c: &mut [f32],
+    c_rs: usize,
+) -> Result<(), SimdError> {
+    // `Aᵀ` is `a` with the strides swapped, so this is the GEMM
+    // `sgemm_accelerate` would run for `A · Aᵀ`, validated the same way.
+    let p = layout::Problem::validate(n, n, k, a, a_rs, a_cs, a, a_cs, a_rs, c, c_rs, false)?;
+    if n == 0 {
+        return Ok(());
+    }
+    if k == 0 {
+        gemm::zero_unless_accumulate(&p, c);
+        return Ok(());
+    }
+    let call = layout::BlasCall::from_problem(&p)?;
+    arch::accelerate_ssyrk_upper(&call, a, c);
+    mirror_upper_to_lower(c, n, p.c_rs);
+    Ok(())
+}
+
+/// `c[i, j] = c[j, i]` for every `j < i` of the `n × n` matrix with row
+/// stride `ldc`, in 16 × 16 tiles: each tile's source rows are read
+/// contiguously while its destination rows stay in cache. A plain column
+/// walk was 1.7× slower at n = 768 and n = 2048, and 32 × 32 tiles were
+/// 1.6× slower than it at n = 2048, where an 8 KiB row stride makes 32 rows
+/// collide in cache (M5 Pro, 2026-10-08,
+/// `bench/results/2026-10-08-cpu-hot-paths/probes/mirror.txt`). Only copies,
+/// so the tiling changes no bit.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+fn mirror_upper_to_lower(c: &mut [f32], n: usize, ldc: usize) {
+    const TILE: usize = 16;
+    for ib in (0..n).step_by(TILE) {
+        let ie = (ib + TILE).min(n);
+        for jb in (0..=ib).step_by(TILE) {
+            for j in jb..(jb + TILE).min(ie) {
+                for i in ib.max(j + 1)..ie {
+                    c[i * ldc + j] = c[j * ldc + i];
+                }
+            }
+        }
+    }
 }
 
 /// True when the half-open element ranges `[a, a+a_len)` and `[c, c+c_len)` overlap.

@@ -21,6 +21,21 @@
 //! task still runs exactly once and the result is the same. The in-place
 //! optimizer and clip steps run passes after their first tensor write, and a
 //! refusal there would leave the step half applied.
+//!
+//! The spawn stays, by decision (2026-10-08). Re-measured that day at 34-37
+//! µs minimum and about 70 µs median for five threads under load 26
+//! (`bench/results/2026-10-08-cpu-hot-paths/spawn.txt`), it is about the
+//! gap that keeps the 0.1 ms mul and add forwards behind torch
+//! (`docs/bench-cpu-vs-torch.md`). Removing it means persistent workers
+//! writing into one borrowed output, which takes either `unsafe` (a lifetime
+//! erased across the worker handoff) here, where the crate forbids it, or a
+//! new dependency whose scope API does that soundly (for example rayon's
+//! `scope`). Both need the owner's approval, and neither has it, so every
+//! split keeps paying this spawn and those two rows stay open. Two std-only
+//! mitigations remain open and unmeasured: spawning fewer threads for small
+//! bandwidth-bound passes (about 9 µs for one thread against 35 µs for five;
+//! the cut is shape-only, so no bit changes), and one scope around a whole
+//! optimizer or clip step.
 
 use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};

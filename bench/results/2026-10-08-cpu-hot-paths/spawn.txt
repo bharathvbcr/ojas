@@ -1,0 +1,8 @@
+{ 26.13 34.92 31.12 }
+scope threads=2 spawned=1 min_us=8.6 med_us=16.5
+scope threads=4 spawned=3 min_us=23.1 med_us=46.1
+scope threads=6 spawned=5 min_us=33.9 med_us=69.5
+{ 26.13 34.92 31.12 }
+scope threads=2 spawned=1 min_us=9.1 med_us=25.2
+scope threads=4 spawned=3 min_us=24.4 med_us=49.3
+scope threads=6 spawned=5 min_us=37.5 med_us=69.5

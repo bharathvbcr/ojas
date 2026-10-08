@@ -1,0 +1,16 @@
+round=1 lane=base loadavg={ 26.40 35.12 31.17 }
+round=1 lane=after loadavg={ 20.40 32.88 30.50 }
+round=1 lane=torch loadavg={ 20.61 31.68 30.14 }
+round=2 lane=torch loadavg={ 21.69 31.72 30.16 }
+round=2 lane=after loadavg={ 21.23 31.46 30.08 }
+round=2 lane=base loadavg={ 18.36 29.97 29.58 }
+round=3 lane=base loadavg={ 17.50 28.60 29.10 }
+round=3 lane=after loadavg={ 58.47 38.45 32.73 }
+round=3 lane=torch loadavg={ 82.24 47.93 36.58 }
+round=4 lane=torch loadavg={ 80.94 48.23 36.76 }
+round=4 lane=after loadavg={ 81.32 49.43 37.32 }
+round=4 lane=base loadavg={ 67.69 49.92 38.00 }
+round=5 lane=base loadavg={ 54.15 48.29 37.82 }
+round=5 lane=after loadavg={ 42.14 45.88 37.31 }
+round=5 lane=torch loadavg={ 31.18 43.00 36.52 }
+done rounds=5 out=/private/tmp/claude-501/-Users-bharath-Code-research-ojas/cc9be030-f016-442b-8a2a-d6df6dc7ba3a/scratchpad/ab-run1

@@ -1,0 +1,21 @@
+TORCH_META torch=2.13.0 threads=6 interop=18 sdpa_default=FLASH_ATTENTION pid=97938 blas=BLAS_INFO=accelerate_|_LAPACK_INFO=accelerate_|_USE_OPENMP=ON
+PARITY op=embedding dir=fwd variant=default out=y max_abs=0.000e+00 scale=3.500e-02 norm_err=0.000e+00 tol=0 ok=True
+PARITY op=embedding dir=bwd variant=default out=gtable max_abs=0.000e+00 scale=1.977e-02 norm_err=0.000e+00 tol=0 ok=True
+PARITY op=silu dir=fwd variant=default out=y max_abs=7.153e-07 scale=3.928e+00 norm_err=1.821e-07 tol=1e-06 ok=True
+PARITY op=silu dir=bwd variant=default out=gx max_abs=3.725e-09 scale=1.100e-02 norm_err=3.387e-07 tol=1e-06 ok=True
+PARITY op=mul dir=fwd variant=default out=y max_abs=0.000e+00 scale=9.992e-01 norm_err=0.000e+00 tol=1e-06 ok=True
+PARITY op=mul dir=bwd variant=default out=ga max_abs=0.000e+00 scale=9.989e-03 norm_err=0.000e+00 tol=1e-06 ok=True
+PARITY op=mul dir=bwd variant=default out=gb max_abs=0.000e+00 scale=9.990e-03 norm_err=0.000e+00 tol=1e-06 ok=True
+PARITY op=add dir=fwd variant=default out=z max_abs=0.000e+00 scale=1.998e+00 norm_err=0.000e+00 tol=0 ok=True
+PARITY op=add dir=bwd variant=default out=gx max_abs=0.000e+00 scale=1.000e-02 norm_err=0.000e+00 tol=0 ok=True
+PARITY op=add dir=bwd variant=default out=gy max_abs=0.000e+00 scale=1.000e-02 norm_err=0.000e+00 tol=0 ok=True
+PARITY op=permute dir=fwd variant=default out=y max_abs=0.000e+00 scale=1.000e+00 norm_err=0.000e+00 tol=0 ok=True
+PARITY op=adamw_50304x768 dir=step variant=default out=delta max_abs=3.725e-09 scale=7.291e-02 norm_err=5.109e-08 tol=1e-05 ok=True
+PARITY op=adamw_50304x768 dir=step variant=default out=m1 max_abs=1.164e-10 scale=1.900e-03 norm_err=6.128e-08 tol=1e-05 ok=True
+PARITY op=adamw_50304x768 dir=step variant=default out=m2 max_abs=0.000e+00 scale=1.450e-05 norm_err=0.000e+00 tol=1e-05 ok=True
+PARITY op=adamw_50304x768 dir=step variant=fused out=delta max_abs=3.725e-09 scale=7.291e-02 norm_err=5.109e-08 tol=1e-05 ok=True
+PARITY op=adamw_50304x768 dir=step variant=fused out=m1 max_abs=1.164e-10 scale=1.900e-03 norm_err=6.128e-08 tol=1e-05 ok=True
+PARITY op=adamw_50304x768 dir=step variant=fused out=m2 max_abs=0.000e+00 scale=1.450e-05 norm_err=0.000e+00 tol=1e-05 ok=True
+PARITY op=muon_2048x768 dir=step variant=default out=update max_abs=5.459e-06 scale=6.961e-02 norm_err=7.843e-05 tol=0.001 ok=True
+PARITY op=muon_2048x768 dir=step variant=default out=mom max_abs=0.000e+00 scale=1.989e-02 norm_err=0.000e+00 tol=0.001 ok=True
+TORCH_RSS ops=embedding,silu,mul,add,permute,adamw_50304x768,muon_2048x768 maxrss_bytes=3581411328

@@ -1,0 +1,18 @@
+11:19  up 1 day,  1:53, 1 user, load averages: 39.51 28.19 22.94
+XXt r=768 c=768 gemm=1.265 gemm_2band=1.073 syrk_mirror=0.911 syrk/2band=0.85 syrk/gemm=0.72 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=768 c=2048 gemm=3.154 gemm_2band=2.978 syrk_mirror=2.453 syrk/2band=0.82 syrk/gemm=0.78 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=768 c=3072 gemm=3.121 gemm_2band=3.634 syrk_mirror=3.405 syrk/2band=0.94 syrk/gemm=1.09 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=2048 c=2048 gemm=18.869 gemm_2band=19.720 syrk_mirror=14.590 syrk/2band=0.74 syrk/gemm=0.77 bits_syrk_eq_gemm=4194304/4194304 bits_2band_eq_gemm=4194304
+XXt r=2048 c=6144 gemm=34.244 gemm_2band=67.498 syrk_mirror=34.768 syrk/2band=0.52 syrk/gemm=1.02 bits_syrk_eq_gemm=4194304/4194304 bits_2band_eq_gemm=4194304
+11:19  up 1 day,  1:53, 1 user, load averages: 39.51 28.19 22.94
+XXt r=768 c=768 gemm=1.486 gemm_2band=0.816 syrk_mirror=0.723 syrk/2band=0.89 syrk/gemm=0.49 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=768 c=2048 gemm=1.912 gemm_2band=2.663 syrk_mirror=2.185 syrk/2band=0.82 syrk/gemm=1.14 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=768 c=3072 gemm=3.343 gemm_2band=3.496 syrk_mirror=2.791 syrk/2band=0.80 syrk/gemm=0.83 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=2048 c=2048 gemm=19.177 gemm_2band=19.781 syrk_mirror=13.377 syrk/2band=0.68 syrk/gemm=0.70 bits_syrk_eq_gemm=4194304/4194304 bits_2band_eq_gemm=4194304
+XXt r=2048 c=6144 gemm=35.711 gemm_2band=71.692 syrk_mirror=33.220 syrk/2band=0.46 syrk/gemm=0.93 bits_syrk_eq_gemm=4194304/4194304 bits_2band_eq_gemm=4194304
+11:19  up 1 day,  1:53, 1 user, load averages: 39.47 28.37 23.03
+XXt r=768 c=768 gemm=1.448 gemm_2band=0.928 syrk_mirror=0.871 syrk/2band=0.94 syrk/gemm=0.60 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=768 c=2048 gemm=2.526 gemm_2band=2.784 syrk_mirror=1.836 syrk/2band=0.66 syrk/gemm=0.73 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=768 c=3072 gemm=2.768 gemm_2band=3.958 syrk_mirror=2.460 syrk/2band=0.62 syrk/gemm=0.89 bits_syrk_eq_gemm=589824/589824 bits_2band_eq_gemm=589824
+XXt r=2048 c=2048 gemm=21.059 gemm_2band=21.267 syrk_mirror=15.673 syrk/2band=0.74 syrk/gemm=0.74 bits_syrk_eq_gemm=4194304/4194304 bits_2band_eq_gemm=4194304
+XXt r=2048 c=6144 gemm=37.673 gemm_2band=64.597 syrk_mirror=32.135 syrk/2band=0.50 syrk/gemm=0.85 bits_syrk_eq_gemm=4194304/4194304 bits_2band_eq_gemm=4194304

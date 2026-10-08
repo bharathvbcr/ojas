@@ -1,0 +1,11 @@
+round=1 lane=base loadavg={ 22.40 39.54 35.52 }
+round=1 lane=after loadavg={ 19.83 38.13 35.08 }
+round=2 lane=after loadavg={ 28.25 38.38 35.24 }
+round=2 lane=base loadavg={ 30.76 38.27 35.28 }
+round=3 lane=base loadavg={ 43.92 41.04 36.35 }
+round=3 lane=after loadavg={ 41.77 42.01 37.05 }
+round=4 lane=after loadavg={ 33.90 40.19 36.51 }
+round=4 lane=base loadavg={ 37.74 40.40 36.68 }
+round=5 lane=base loadavg={ 31.13 38.81 36.18 }
+round=5 lane=after loadavg={ 25.18 36.94 35.57 }
+done rounds=5 out=/private/tmp/claude-501/-Users-bharath-Code-research-ojas/cc9be030-f016-442b-8a2a-d6df6dc7ba3a/scratchpad/ab-tape

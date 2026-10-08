@@ -1,0 +1,13 @@
+TORCH_META torch=2.13.0 threads=6 interop=18 sdpa_default=FLASH_ATTENTION pid=40430 blas=BLAS_INFO=accelerate_|_LAPACK_INFO=accelerate_|_USE_OPENMP=ON
+TORCH_OP op=embedding dir=fwd variant=default threads=6 n=20 min_ms=0.0332 med_ms=0.0647
+TORCH_OP op=embedding dir=bwd variant=default threads=6 n=5 min_ms=0.8908 med_ms=0.9580
+TORCH_OP op=silu dir=fwd variant=default threads=6 n=20 min_ms=0.3094 med_ms=0.3323
+TORCH_OP op=silu dir=bwd variant=default threads=6 n=20 min_ms=0.3946 med_ms=0.4523
+TORCH_OP op=mul dir=fwd variant=default threads=6 n=20 min_ms=0.0747 med_ms=0.1206
+TORCH_OP op=mul dir=bwd variant=default threads=6 n=20 min_ms=0.3377 med_ms=0.4255
+TORCH_OP op=add dir=fwd variant=default threads=6 n=20 min_ms=0.0386 med_ms=0.0513
+TORCH_OP op=add dir=bwd variant=default threads=6 n=20 min_ms=0.0112 med_ms=0.0206
+TORCH_OP op=permute dir=fwd variant=default threads=6 n=20 min_ms=0.0448 med_ms=0.0596
+TORCH_OP op=adamw_50304x768 dir=step variant=default threads=6 n=5 min_ms=15.3058 med_ms=18.6038
+TORCH_OP op=adamw_50304x768 dir=step variant=fused threads=6 n=5 min_ms=6.9386 med_ms=7.2595
+TORCH_OP op=muon_2048x768 dir=step variant=default threads=6 n=5 min_ms=35.4248 med_ms=48.1196

@@ -247,7 +247,7 @@ The rest of mul forward is the scoped spawn and the write: the crate forbids `un
 
 ## Scorecard pairs (2026-10-04)
 
-Apple Silicon, 6 threads, release. A gap closes only when an interleaved `cpu_vs_torch.sh` ratio (ojas / torch) is at most 1. In-process timers are not scorecard evidence. One round at or under 1 leaves the gap open when torch time swings. Decode linear backward, mul backward, and gate forward are at most 1 on both rounds below. The other gaps in this section stay open, so the scorecard is not complete. The tables above stay the record of the day they were taken.
+Each line this section leaves open is ruled in "Open lines ruled (2026-10-08)" below. Apple Silicon, 6 threads, release. A gap closes only when an interleaved `cpu_vs_torch.sh` ratio (ojas / torch) is at most 1. In-process timers are not scorecard evidence. One round at or under 1 leaves the gap open when torch time swings. Decode linear backward, mul backward, and gate forward are at most 1 on both rounds below. The other gaps in this section stay open, so the scorecard is not complete. The tables above stay the record of the day they were taken.
 
 Each cell is that round's minimum, in milliseconds. Two rounds are two invocations, written in order.
 
@@ -307,6 +307,25 @@ AdamW `[50304,768]`, two invocations of `cpu_vs_torch.sh 1 adamw_50304x768`, is 
 These notes are what the tree does. They are not scorecard closes.
 
 The fast gate sign/−abs path is one NEON pass, and the logit finite test is in that pass. Muon `A@A` and `B@X` use six row bands except on tall `[2048,768]`, where each of those products is one `cblas_sgemm`. `X@Xᵀ` uses two bands when `k < 2m`. The nanolab permute path is a width-2 copy, tile 32. Each 64-float head is one 8×8 block: `ldnp`, two `trn1`/`trn2` passes, `stnp`. Embedding forward reserves a 768-wide output without zero-fill and stores each row with `stnp` (`ldp` loads). Other widths still use `Scratch::try_alloc` and `copy_from_slice`. Add backward still writes two new tensors. AdamW still writes nothing until every update is finite. `ojas-cpu` still has no `unsafe`.
+
+
+### Open lines ruled (2026-10-08)
+
+Each line the scorecard above left open, with the after tree of `bench/results/2026-10-08-cpu-hot-paths` (that commit's tree: in-place fan-in, seed scaling, pooled accumulate, `cblas_ssyrk` for Muon's X·Xᵀ). There, 5 interleaved rounds of base / after / torch 2.13 ran at 6 threads, parity 19 of 19. The machine was shared: 1-minute load was 17.5–82, and torch's own minima swung by up to 4.5× between rounds (permute 0.042–0.186 ms). No line meets the close rule above (every round at most 1), and none is claimed closed. Each cell is ojas / torch, the range of the five per-round ratios.
+
+| Line | ojas / torch, 5 rounds | Ruling |
+| :--- | ---: | :--- |
+| mul forward | 0.86–1.54 | Won't fix without approval: the gap is the 34–37 µs scoped spawn (`pool/scoped.rs`), and removing it needs `unsafe` or a dependency. |
+| add forward | 1.88–5.13 | Won't fix without approval, as mul forward. |
+| add backward | 3.32–7.64 (the op) | The op is won't-fix: `residual_add_backward` returns two separate allocations by contract, so an in-place step can own each. The tape no longer calls it: since 2026-10-07 `Rec::Add` hands both inputs the one gradient and `Tape::acc` adds into whichever is unshared. Tape fan-in (`tape_bench` `fanin_8x[1024,768]`) is 1.15 by min and 0.80 by median against base, so no time saving is claimed. Its memory saving is exact: the walk's peak charge falls from 18.0 to 12.0 MiB (`tape-peak.txt`). |
+| embedding forward | 0.68–1.88 | Won't fix here. The NEON `stnp` gather now covers every 64-multiple width (Qwen3.5's 2048: 0.62 of base). What is left is a one-thread 3 MB copy (inferred), and splitting it would pay the same spawn. |
+| embedding backward | 0.88–1.26 | Won't fix: par within noise. The code is unchanged since 2026-10-04, and after / base is 1.11 on identical code. |
+| SiLU forward | 0.91–1.05 | Won't fix: par within noise. Already row-split, so what remains is per-element cost (`exp_exact`). |
+| AdamW `[50304,768]` vs fused | 1.27–1.95 (against default 0.58–0.64) | Won't fix: the two-pass contract (every update checked finite before any store, so a non-finite step writes nothing) costs a second pass that torch's fused kernel does not make. |
+| Muon `[2048,768]` | 0.51–1.18 | Won't fix as a gap: 22.8 / 35.4 ms by the minimum over rounds (0.64), three of five rounds at most 1, and torch's minimum ranged 35.4–91.0 ms. After / base 0.75 by min. X·Xᵀ is one `cblas_ssyrk` (0.46–0.94 of the two-band split it replaced, same bits on this machine). The 2048×768 no-transpose gate is kept and justified in `optim.rs`. |
+| permute (0,2,1,3) | 0.38–1.61 | Won't fix: 0.0420 / 0.0417 ms by the minimum over rounds (1.01), and torch's minimum ranged 0.042–0.186 ms. The nanolab pair kernel is unchanged. Qwen3.5's `[1,1024,8,256]` now takes per-head `vDSP_mmov` (0.77 of base). |
+
+The scoped spawn is the one policy item. Re-measured at 34–37 µs minimum and about 70 µs median for five threads (`spawn.txt`), it is kept until the owner approves `unsafe` in `ojas-cpu` or a dependency such as rayon. That decision is recorded in `ojas-cpu/src/pool/scoped.rs`. Two safe, std-only mitigations are open and unmeasured. One is to spawn fewer threads for small, bandwidth-bound passes: the spawn costs about 9 µs for one thread against 35 µs for five, and the shape-only cut keeps the bits. The other is one scope around a whole optimizer or clip step, which amortises the spawn over all parameters but does not help forwards.
 
 ---
 

@@ -1,0 +1,3 @@
+OJAS_TAPE row=fanin_8x[1024,768] n=20 min_ms=6.3860 med_ms=6.7307
+OJAS_TAPE row=ce_seed_1_[1024,768]x[50304,768] n=7 min_ms=0.0030 med_ms=0.0041
+OJAS_TAPE row=ce_seed_0.25_[1024,768]x[50304,768] n=7 min_ms=1.7489 med_ms=2.4920

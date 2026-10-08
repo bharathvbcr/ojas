@@ -45,10 +45,7 @@ pub(crate) fn accumulate_grad(
         let pieces = scoped::pieces(exec, a.len(), min_chunk);
         let finite = scoped::map(exec, pieces.len(), |i| {
             let range = pieces[i].clone();
-            Ok(a[range.clone()]
-                .iter()
-                .zip(&g[range])
-                .all(|(a, g)| (a + g).is_finite()))
+            Ok(sums_finite(&a[range.clone()], &g[range]))
         })?;
         if !finite.into_iter().all(|piece| piece) {
             return Err(nonfinite(op));
@@ -103,6 +100,22 @@ pub(crate) fn accumulate_grad(
         Err(err) => Err(err),
     }
 }
+
+/// Every `a[i] + g[i]` is finite. Each block of [`FINITE_BLOCK`] sums is
+/// tested without a branch, so the loop vectorises (an element-wise
+/// short-circuit does not), and the first non-finite block ends the scan.
+fn sums_finite(a: &[f32], g: &[f32]) -> bool {
+    a.chunks(FINITE_BLOCK)
+        .zip(g.chunks(FINITE_BLOCK))
+        .all(|(a, g)| {
+            a.iter()
+                .zip(g)
+                .fold(true, |finite, (a, g)| finite & (a + g).is_finite())
+        })
+}
+
+/// Sums [`sums_finite`] tests per branch.
+const FINITE_BLOCK: usize = 64;
 
 /// [`ojas_core::Backend::scale_grad`] on the CPU: `grad *= scale`.
 ///
