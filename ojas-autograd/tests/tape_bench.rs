@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use common::data;
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, CeChunk, Tensor};
+use ojas_core::{Budget, CeChunk, Tensor};
 use ojas_cpu::CpuBackend;
 
 const T: usize = 1024;

@@ -297,7 +297,7 @@
 <ul>
 <li><strong>Nothing adapts on its own.</strong> That is the design (see Decisions): the probe and plan measure and recommend, and the caller adopts.
 </li>
-<li><strong>The Go <code>Profile</code> has no GPU figures.</strong> Opcode 16 opens no device, so it carries the unified-memory flag but no Metal working set, residency or room. Those are reachable only in Rust, through <code>MetalBackend::memory()</code> and <code>ResourcePlan::derive</code>.
+<li><strong>(Superseded 2026-10-07: <code>DeviceProfile</code>, below.)</strong> <strong>The Go <code>Profile</code> has no GPU figures.</strong> Opcode 16 opens no device, so it carries the unified-memory flag but no Metal working set, residency or room. Those are reachable only in Rust, through <code>MetalBackend::memory()</code> and <code>ResourcePlan::derive</code>.
 </li>
 <li><code>docs/status.md</code> lists <code>ojas-device</code> at 18 tests only inside dated run records (2026-10-01), which are correct for those runs; the current count belongs in the next integration run&#39;s table. This lane changed only the component diagram line (line 243); the file&#39;s other uncommitted hunk (line 124) belongs to the &#34;Rust/Go ML packages&#34; session.
 </li>
@@ -351,7 +351,7 @@
 <ul>
 <li><strong>Nothing raises a budget, ceiling or thread count by default.</strong> The prior ruling stands: every change here refuses earlier or tightens, and the one adaptive sizing (<code>DEVICE_CPU_AUTO</code>) is a new value a caller must choose.
 </li>
-<li><strong>Admission under Critical pressure is on by default.</strong> It only refuses, and only work that would allocate, while the kernel is already killing to stay up. A refused call leaves the session and trainer exactly as they were. On Linux, pressure is <code>Unknown</code> (PSI is not read), so this is macOS-only today. Fable confirmed keeping it on: with <code>E_PRESSURE</code> distinct (C18), a refused caller can back off and retry the same call.
+<li><strong>Admission under Critical pressure is on by default.</strong> It only refuses, and only work that would allocate, while the kernel is already killing to stay up. A refused call leaves the session and trainer exactly as they were. On Linux, pressure is <code>Unknown</code> (PSI is not read), so this is macOS-only today. (Superseded 2026-10-07: Linux reads PSI, below.) Fable confirmed keeping it on: with <code>E_PRESSURE</code> distinct (C18), a refused caller can back off and retry the same call.
 </li>
 <li><strong>Resolved (C18, on Fable&#39;s advice, at the user&#39;s request): <code>E_PRESSURE</code> is its own kind.</strong> The pressure refusal first reused <code>E_CAPACITY</code>, which gave that kind two contracts: &#34;this will not fit; stop&#34; and &#34;the machine is short right now; wait&#34;. <code>errors.Is(err, ErrCapacity)</code> could not tell them apart, so a Go loop that treats <code>ErrCapacity</code> as fatal would have aborted a run that could have resumed. <code>E_BUSY</code> was not reused either: it is per-model and retries at once, while pressure is machine-wide and wants a back-off. This is a public API addition. An older Go package against a newer engine receives the pressure refusal as a plain error with no sentinel; it never misreads it as <code>ErrCapacity</code>.- <strong>Prepaid session mode: deferred to the user (Fable concurred).</strong> The narrow case it would close: two sessions sharing the ceiling, where the other session takes room between this session&#39;s last <code>check_room</code> after clip and <code>apply</code>. A refusal inside <code>apply</code> poisons that trainer. Earlier refusals (open, the pre-compute check, forward, backward, clip, the pre-apply check) never poison. Closing the window means reserving room up front, which changes which loads succeed.
 </li>
@@ -400,15 +400,88 @@
 </li>
 <li><strong>L3 and L4 cannot separate the two quota paths.</strong> In the container std already rounds the quota down, so the plan&#39;s own cut is a no-op there. The probe-only path, where std cannot see cgroupfs, is covered by <code>a_known_cpu_quota_caps_the_thread_ceiling</code> alone.
 </li>
-<li><strong>Disk space at Save is not checked.</strong> std has no portable free-space call, and the atomic directory swap still keeps the previous checkpoint whole. Linux PSI is not read.
+<li><strong>Disk space at Save is not checked.</strong> std has no portable free-space call, and the atomic directory swap still keeps the previous checkpoint whole. Linux PSI is not read (superseded 2026-10-07: it is, below).
 </li>
-<li><strong>Metal physical bytes</strong> remain as stated in round 1: the budget charges logical bytes, and tessl rounds buffers up.
+<li><strong>(Superseded 2026-10-07: bounded and pinned, below.)</strong> <strong>Metal physical bytes</strong> remain as stated in round 1: the budget charges logical bytes, and tessl rounds buffers up.
 </li>
 <li>Under <code>Resident</code> (the model tests&#39; device double) <code>optimizer_scratch_bytes</code> is <code>None</code>, so the pre-apply check does not cover that double.
 </li>
 <li><strong>ojas does not build against committed tessl, and that predates C19.</strong> ojas builds tessl from the sibling checkout (<code>path = &#34;../../tessl&#34;</code>). ojas HEAD already calls <code>Runtime::is_poisoned</code> (<code>ojas-metal/src/gpu.rs</code>, <code>ojas-qwen35/src/step.rs</code>) and <code>Runtime::current_allocated_bytes</code> (<code>ojas-metal/src/device.rs</code>, <code>ojas-qwen35/src/state.rs</code>), and neither exists at tessl HEAD <code>cf65d9d</code>. Both live only in tessl&#39;s uncommitted <code>src/runtime.rs</code>, about 340 lines from another session. C19 adds a third such symbol, <code>DeviceMemoryInfo::has_unified_memory</code>. Each was checked with <code>git show HEAD:src/runtime.rs</code> against the working tree. A reset or stash in tessl breaks the ojas Metal and qwen35 builds. The fix is to commit tessl&#39;s <code>runtime.rs</code> (the user&#39;s call), then pin a tessl revision in ojas.
 </li>
 <li><strong>Only the <code>Unified</code> branch runs on a real device here.</strong> tessl is Apple-silicon-only, so <code>Discrete</code> is covered only by the unit test&#39;s constructed readings.
+</li>
+</ul>
+<h1 id="gpu-memory-accounting-2026-10-07">GPU memory accounting (2026-10-07) <a class="anchor" href="#gpu-memory-accounting-2026-10-07" aria-label="Link to this section">#</a></h1>
+<p>Task <code>ft-748ed8b545133b8290a2c4714916a5cf</code>, worktree <code>wire-gpu-memory-probes-into-resourceplan-ce0a01d4</code>. A budget that never consulted the device could admit a plan the device cannot hold; this round wires the probes into the plan and makes the uncharged GPU memory bounded, reported or trimmable.</p>
+<h2 id="findings-re-read-before-the-change">Findings (re-read before the change) <a class="anchor" href="#findings-re-read-before-the-change" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Finding</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>G1</td><td>Every <code>ResourcePlan::derive</code> in capi passed <code>&amp;[] as &amp;[NoProbe]</code>; GPU sessions ran on the caller&#39;s budget (or <code>DEFAULT_BUDGET_BYTES</code>) whatever the device held.</td><td><code>load.rs:282</code>, <code>profile.rs:129</code>; failing-first run below</td></tr>
+<tr><td>G2</td><td>wgpu had no <code>MemoryProbe</code>. wgpu 30.0.1 reports no device memory size (<code>AdapterInfo</code>, <code>Limits</code>); <code>Device::generate_allocator_report</code> is <code>Some</code> on the Vulkan and DX12 HALs only (<code>wgpu-hal-30.0.1</code> <code>vulkan/device.rs:2954</code>, <code>dx12/device.rs:2643</code>; default <code>None</code>, <code>lib.rs:1210</code>).</td><td>vendored source</td></tr>
+<tr><td>G3</td><td>Linux pressure and architecture were always <code>Unknown</code>.</td><td><code>system.rs</code> before</td></tr>
+<tr><td>G4</td><td><code>MetalBackend</code>&#39;s worker never set tessl&#39;s pool cap, so up to tessl&#39;s 2 GiB default of freed buffers sat outside the budget; Metal had no trim.</td><td><code>device.rs</code> <code>Worker::open</code>; tessl <code>runtime.rs:44</code></td></tr>
+<tr><td>G5</td><td>Metal&#39;s device-OOM error said <code>live: 0</code>.</td><td><code>device.rs</code> <code>alloc</code></td></tr>
+<tr><td>G6</td><td>wgpu failed an allocation OOM at once while up to <code>POOL_CAP_BYTES</code> of idle buffers stayed pooled; <code>trim_pool</code> had no library caller.</td><td><code>context.rs</code> <code>alloc</code>, <code>mapped</code>, <code>read</code></td></tr>
+<tr><td>G7</td><td>A wgpu context drop that timed out held its queue, device and a thread with nothing counting or bounding them.</td><td><code>context.rs</code> <code>Inner::drop</code></td></tr>
+</tbody></table></div>
+<h2 id="changes-2">Changes <a class="anchor" href="#changes-2" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Change</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td>H1</td><td><code>MemoryProbe::pool_cache_bytes</code> (default <code>Unknown</code>). <code>ResourcePlan</code> gains <code>caller_budget_bytes</code>, <code>device_pool_cache</code>, and <code>device_budget(device)</code>: the caller&#39;s number cut by the device&#39;s room (memory less residency less pool cap), starting from <code>budget_bytes</code> for a device that shares host memory and from the caller&#39;s number for a discrete one. Never widened.</td><td><code>ojas-device/src/plan.rs</code></td></tr>
+<tr><td>H2</td><td>capi <code>model::open</code> probes a GPU session&#39;s device after it opens (<code>DeviceProbe</code>: Metal&#39;s <code>MetalMemory</code>, wgpu&#39;s <code>WgpuMemory</code>), plans with <code>device_plan</code>, and when the planned budget is below the caller&#39;s, takes a smaller child of the ceiling and rebinds the backend to it (<code>MetalBackend::with_budget</code>, <code>WgpuBackend::with_context</code>). Planned to 0 is <code>E_CAPACITY</code>. <code>create</code> refuses parameters past the planned budget before anything uploads. <strong>Plan-down, not refuse:</strong> <code>DEFAULT_BUDGET_BYTES</code> is a number the caller never chose. <code>NoProbe</code> is gone; the CPU-auto path plans with an empty <code>DeviceProbe</code> list.</td><td><code>ojas-capi/src/model.rs</code>, <code>load.rs</code></td></tr>
+<tr><td>H3</td><td><code>WgpuMemory</code>/<code>WgpuContext::memory()</code>: architecture from the adapter type (integrated or CPU unified, discrete discrete, virtual or other unknown), residency from the allocator report where the HAL keeps one, pool cap <code>POOL_CAP_BYTES</code>, device memory always <code>Unknown</code>. The plan&#39;s room stays unknown and is visible as unknown.</td><td><code>ojas-wgpu/src/memory.rs</code>, <code>context.rs</code></td></tr>
+<tr><td>H4</td><td>Opcode 16 flags <code>FLAG_DEVICE_METAL</code> (2) and <code>FLAG_DEVICE_WGPU</code> (4) open that device on a short-lived thread, plan against its probe exactly as a load does, and append ten fields (version stays 1): probe device, device memory, residency, pool cap, room, shares-host, shared budget, the session budget, wgpu parked drops, wgpu timed-out drops. Go: <code>DeviceProfile(ctx, budget, device)</code> and the matching <code>Profile</code> fields.</td><td><code>ojas-capi/src/profile.rs</code>, <code>engine.rs</code>, <code>go/profile.go</code></td></tr>
+<tr><td>H5</td><td>Linux pressure from PSI: the worst of <code>/proc/pressure/memory</code> and every cgroup v2 ancestor&#39;s <code>memory.pressure</code>. Thresholds are this crate&#39;s own: Warning at <code>some avg10</code> 10%, Critical at <code>full avg10</code> 10% or <code>some avg10</code> 50%. So <code>E_PRESSURE</code> admission can fire on Linux.</td><td><code>ojas-device/src/system.rs</code></td></tr>
+<tr><td>H6</td><td>Linux architecture from <code>/sys/class/drm/card&lt;N&gt;</code>: no card, or only platform (no PCI vendor), virtio or bus-0 Intel cards, is <code>Unified</code>; only NVIDIA cards is <code>Discrete</code>; a mix, AMD, or off-bus-0 Intel is <code>Unknown</code>. With no <code>/sys/class/drm</code> at all it is <code>Unified</code> only when <code>/sys/class</code> itself is readable (sysfs mounted, no GPU driver loaded); with no sysfs nothing was learned and it is <code>Unknown</code>. <strong>Semantic call:</strong> a host with no GPU is reported <code>Unified</code> (one pool, the host&#39;s), so Go&#39;s <code>UnifiedMemory</code> reads 1 there.</td><td><code>ojas-device/src/system.rs</code></td></tr>
+<tr><td>H7</td><td>Metal pool cap at open: a quarter of the budget, at most 1 GiB (<code>pool_cache_cap</code>), reported as <code>MetalMemory::pool_cache_cap</code> and set aside from the room. <code>MetalBackend::trim_pool</code> (<code>Cmd::TrimPool</code>: recycle, then drop the cache). A failed allocation now retries after the recycle and again after dropping the cache; a final refusal reports <code>live</code> as <code>currentAllocatedSize</code>, in the same unit as <code>cap</code> (the working set).</td><td><code>ojas-metal/src/{device,backend,link,memory}.rs</code></td></tr>
+<tr><td>H8</td><td>Metal&#39;s logical-byte charge: <strong>bounded and documented</strong>, not changed. <code>Tensor::from_device_reserved</code> requires the reservation to equal the buffer&#39;s logical length. tessl&#39;s <code>Cold</code> rounding is under 512 KiB per buffer up to 1 MiB and under 16 KiB past it; <code>cold_rounding_stays_inside_the_documented_bound</code> pins it against tessl&#39;s own <code>allocated_bytes_for</code>.</td><td><code>ojas-metal/src/backend.rs</code> module docs</td></tr>
+<tr><td>H9</td><td>wgpu <code>new_buffer</code>: on OOM, <code>trim_pool</code>, a bounded 5 s poll, one retry, for tensors, uploads and staging; <code>CacheStats::alloc_retries</code>. A <code>#[cfg(test)]</code> seam injects OOMs.</td><td><code>ojas-wgpu/src/context.rs</code></td></tr>
+<tr><td>H10</td><td>wgpu drops: a drop that returns before its thread finishes is counted as parked (one atomic state the drop and its thread race on; the drop counts itself in before it tries to park and backs out if the thread already finished, so the count never wraps below zero, a thread that finishes at the deadline never stays counted, and a parked one is uncounted once) and timed out; <code>WgpuContext::open</code> refuses (<code>DeviceError::Capacity</code>) at <code>MAX_PARKED_DROPS</code> (4). <code>drop_stats()</code>, and the profile&#39;s two fields.</td><td><code>ojas-wgpu/src/context.rs</code></td></tr>
+</tbody></table></div>
+<p>| H11 | The Go heap-ceiling abort (below, found pre-existing): <code>Tensor::to_f32_vec</code>/<code>to_u32_vec</code> copy through <code>try_reserve_exact</code>, so a heap refusal is <code>CapacityExceeded</code> (cap and live 0, as <code>to_ne_bytes</code> already reported), and <code>trainer::fresh</code> builds the CPU copy straight from the host window, one fallible allocation instead of two. | <code>ojas-core/src/tensor.rs</code>, <code>ojas-model/src/trainer.rs</code> |</p>
+<h2 id="decisions-fable-review-2026-10-08">Decisions (Fable review, 2026-10-08) <a class="anchor" href="#decisions-fable-review-2026-10-08" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>The wgpu park race</strong> (Fable): the first H10 draft parked by compare-and-swap and then incremented, so a thread finishing between the two decremented first and the count wrapped. Fixed as H10 describes; <code>parking_and_reaping_race_without_wrapping_the_count</code> runs 5000 park/reap races with a watcher that fails on any count past 1.
+</li>
+<li><strong>The host cut stays for a unified device.</strong> <code>device_budget</code> starts a shares-host device from <code>budget_bytes</code> (the host plan&#39;s cut), not the caller&#39;s number: the Metal working set and host RAM are one pool, so a budget the host cannot back is not one the device can.
+</li>
+<li><strong>No retune after plan-down.</strong> A planned-down Metal session keeps the commit trigger (<code>mem_cap</code>) and pool cap its device thread opened with, derived from the caller&#39;s budget. Budget charges are logical and released when a tensor drops, whatever the commit cadence, so the trigger never decides whether a charge succeeds. The device side is bounded three ways: the pool cap is already taken out of the room the plan used, the working-set trigger commits past the device&#39;s share, and a refused allocation recycles and drops the cache before failing (H7). Retuning would only add commits.
+</li>
+<li><strong>wgpu device memory stays <code>Unknown</code>.</strong> The only way to a heap size is through <code>as_hal</code>, which is <code>unsafe</code>, and <code>ojas-wgpu</code> is <code>#![forbid(unsafe_code)]</code>. The plan records the room as unknown rather than guessing; an unclassified adapter on a unified host still gets the host cut (the <code>WgpuMemory</code> test with a 1 GiB cgroup).
+</li>
+<li><strong>The profile&#39;s wgpu flag opens and drops a context</strong>, so on a host already at <code>MAX_PARKED_DROPS</code> the profile itself is refused, and its drop can take a parked slot if the device hangs. That is the bound every open honours, and the fields report it.
+</li>
+<li><strong>The Go decoder</strong> refuses a device block cut part-way (<code>profileFields &lt; n &lt; allProfileFields</code>) and flag or probe values out of range, instead of reading zeros as measurements.
+</li>
+</ul>
+<h2 id="verification-macos-m5-pro-and-the-local-podman-vm-under-mac-heavysh--j-2">Verification (macOS M5 Pro and the local Podman VM, under <code>mac_heavy.sh</code>, <code>-j 2</code>) <a class="anchor" href="#verification-macos-m5-pro-and-the-local-podman-vm-under-mac-heavysh--j-2" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Failing first</strong> (window 1, <code>git archive HEAD</code> plus only the new test): <code>a_metal_budget_past_the_device_working_set_is_planned_down</code> failed: &#34;the session budget 52613349376 is past the device&#39;s working set 51539607552 (caller 52613349376)&#34;. ojas-device baseline: 74 passed.
+</li>
+<li><strong>After</strong> (window 4): clippy <code>-D warnings</code>, all targets, on ojas-device, ojas-metal, ojas-wgpu and ojas-capi: clean. ojas-device 78 passed; ojas-wgpu lib 32 and <code>tests/drop.rs</code> 1; ojas-capi lib 83 (the failing-first test now passes, plus the Metal and wgpu profile-flag tests). ojas-metal lib 64 passed in window 3, after the two persistent-failure tests were moved from 2 to 3 injected failures (there are now three attempts; both still fail every one).
+</li>
+<li><strong>Bug found by the run:</strong> window 3&#39;s <code>concurrent_calls_from_threads_match_cpu</code> failed with &#34;4 freed wgpu contexts are still waiting&#34;: the first draft counted every running drop thread, so ordinary concurrent frees tripped the cap. H10 counts only parked drops; window 4 passed.
+</li>
+<li><strong>Linux (Fedora 7.1.3 aarch64 VM kernel, native, <code>rust:1-bookworm</code> image, <code>--pull=never</code>):</strong> no musl target is installed any more, so the build ran inside the image from a two-crate copy with <code>libc</code> as a path dep, <code>--offline</code>. <code>RUSTFLAGS=&#39;-D warnings&#39; cargo check --all-targets</code>: clean (the image has no clippy). Suite: 72 passed unbounded and 72 in <code>--memory=1g --cpus=2</code>. Probe there: architecture <code>Unified</code> (<code>/sys/class/drm</code> holds only <code>version</code>), pressure <code>Normal</code>, read from <code>some avg10=0.00</code>/<code>full avg10=0.00</code> in both the system and cgroup files. An 8 GiB request planned to 1,070,845,952 bytes.
+</li>
+<li><strong>Go</strong> (windows 5 and 6, against this tree&#39;s <code>libgusset.a</code>): <code>go vet</code> clean (window 2); <code>go test -a -p 1 -skip TestHeapCeilingIsACleanError ./...</code> ok in 19.9 s, peak RSS 538 MiB, including <code>TestDeviceProfileShowsTheMetalProbeAndItsRoom</code> (Apple silicon: shares host, shared budget, room at most the host budget) and <code>TestDeviceProfileShowsTheWgpuProbe</code> (room unknown). Window 5 caught one stale expectation of mine: the appended-fields decoder case used 23 fields, which now reach the device fields; it now appends past all 30.
+</li>
+<li><strong>Pre-existing, not this change:</strong> <code>TestHeapCeilingIsACleanError</code> aborts the Go test binary (&#34;memory allocation of 8388608 bytes failed&#34;, an infallible <code>Tensor::to_f32_vec</code> in <code>ojas_model::trainer::fresh</code>). It aborts identically on the unmodified tree (window 4, <code>ojas-wire-base</code>), and it kills every Go test after it in the binary.
+</li>
+</ul>
+<h2 id="gaps-1">Gaps <a class="anchor" href="#gaps-1" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Pressure under real stall was not induced on Linux (only <code>Normal</code> was read live); the thresholds are covered by fixture tests.
+</li>
+<li><code>Discrete</code> stays unit-tested only: no discrete GPU here.
+</li>
+<li>wgpu&#39;s OOM retry ran through the injection seam; Metal through wgpu rarely refuses an allocation for real.
+</li>
+<li>The Metal pool cap (budget/4, at most 1 GiB) can lower pool hits for a model whose per-step temporaries pass it. No benchmark was run; no speed claim is made either way.
+</li>
+<li>The Qwen35Step pool cap is task ft-c57c98e0, not this one.
 </li>
 </ul>
       </article>
@@ -443,6 +516,11 @@
 <li><a href="#decisions-1">Decisions</a></li>
 <li><a href="#verification-1">Verification</a></li>
 <li><a href="#gaps">Gaps</a></li>
+<li><a href="#findings-re-read-before-the-change">Findings (re-read before the change)</a></li>
+<li><a href="#changes-2">Changes</a></li>
+<li><a href="#decisions-fable-review-2026-10-08">Decisions (Fable review, 2026-10-08)</a></li>
+<li><a href="#verification-macos-m5-pro-and-the-local-podman-vm-under-mac-heavysh--j-2">Verification (macOS M5 Pro and the local Podman VM, under mac_heavy.sh, -j 2)</a></li>
+<li><a href="#gaps-1">Gaps</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

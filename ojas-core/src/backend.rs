@@ -2748,7 +2748,7 @@ pub(crate) mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 52);
+        assert_eq!(checked, 53);
     }
 
     #[test]

@@ -315,11 +315,12 @@
 </ul>
 <p><strong>Activations.</strong> About 1.13 MB per token for 12 layers (I).</p>
 <div class="table-wrap"><table>
-<thead><tr><th>Micro-batch, T=1024</th><th style="text-align:right">Activations</th><th style="text-align:right">Total incl. state and CE</th><th style="text-align:right">Metal worst case (pool rounds up to 2×)</th></tr></thead>
+<thead><tr><th>Micro-batch, T=1024</th><th style="text-align:right">Activations</th><th style="text-align:right">Total incl. state and CE</th><th style="text-align:right">Metal device worst case</th></tr></thead>
 <tbody>
-<tr><td>B=4</td><td style="text-align:right">4.6 GB</td><td style="text-align:right">about 6.4 GB</td><td style="text-align:right">about 13 GB</td></tr>
-<tr><td>B=16</td><td style="text-align:right">18.5 GB</td><td style="text-align:right">about 20.3 GB</td><td style="text-align:right">about 40 GB</td></tr>
+<tr><td>B=4</td><td style="text-align:right">4.6 GB</td><td style="text-align:right">about 6.4 GB</td><td style="text-align:right">about 7.5 GB</td></tr>
+<tr><td>B=16</td><td style="text-align:right">18.5 GB</td><td style="text-align:right">about 20.3 GB</td><td style="text-align:right">about 21.4 GB</td></tr>
 </tbody></table></div>
+<p>The Metal column is the total plus the uncharged pool cache, capped at 1 GiB once a session&#39;s budget reaches 4 GiB, plus tessl&#39;s rounding: under 16 KiB per buffer past 1 MiB, and under 512 KiB per buffer up to 1 MiB (<code>ojas-metal/src/backend.rs</code> module docs). It was 2× when tessl rounded every buffer to a power of two and cached up to 2 GiB.</p>
 <p>v1 runs B=4 × K=16, the same 65,536 tokens per step as nanolab&#39;s 16×4, and needs no activation checkpointing. A single B=16 micro-batch needs per-block recompute, which is phase 2. The capi 1 GiB process step budget cannot hold the model state, so training sessions get a per-session <code>Budget</code> from the Load options.</p>
 <h2 id="6-inference-on-gpu">6. Inference on GPU <a class="anchor" href="#6-inference-on-gpu" aria-label="Link to this section">#</a></h2>
 <p><code>DeviceDecoder&lt;B&gt;</code> keeps a device K and V cache per layer, time-major <code>[B, Tcap, Hkv, D]</code>. That is the same order as the host <code>KvCache</code>, so a write needs no permute.</p>

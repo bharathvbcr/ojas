@@ -50,6 +50,9 @@ pub(crate) fn generate(
     )
 }
 
+/// Picks the next id from a logit row.
+type Select<'a> = &'a mut dyn FnMut(&[f32]) -> Result<u32, OjasError>;
+
 /// The decode loop. `select` picks the next id from a logit row; `None`
 /// is greedy through [`Forward::forward_greedy`]. A stop token is emitted
 /// and ends the loop.
@@ -59,7 +62,7 @@ pub(crate) fn decode(
     prompt: &[u32],
     new_tokens: usize,
     stop_tokens: &[u32],
-    mut select: Option<&mut dyn FnMut(&[f32]) -> Result<u32, OjasError>>,
+    mut select: Option<Select<'_>>,
 ) -> Result<Vec<u32>, OjasError> {
     if prompt.is_empty() {
         return Err(OjasError::Shape {

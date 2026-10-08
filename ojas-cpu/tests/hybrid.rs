@@ -454,9 +454,7 @@ fn split_backward_passes_match_the_serial_loops_bit_for_bit() {
     for threads in [1, 3, 6] {
         for numerics in [Numerics::Exact, Numerics::Fast] {
             let be = cpu(threads, numerics);
-            let f = |v: &[f32], shape: &[usize]| {
-                Tensor::from_f32(v, shape, be.budget()).unwrap()
-            };
+            let f = |v: &[f32], shape: &[usize]| Tensor::from_f32(v, shape, be.budget()).unwrap();
             let (gx, gw) = be
                 .causal_conv1d_silu_backward(
                     &f(&x, &[batch, time, ch]),
@@ -464,8 +462,16 @@ fn split_backward_passes_match_the_serial_loops_bit_for_bit() {
                     &f(&gy, &[batch, time, ch]),
                 )
                 .unwrap();
-            assert_eq!(bits(&host(&gx)), bits(&want_gx), "conv gx, {threads} threads");
-            assert_eq!(bits(&host(&gw)), bits(&want_gw), "conv gw, {threads} threads");
+            assert_eq!(
+                bits(&host(&gx)),
+                bits(&want_gx),
+                "conv gx, {threads} threads"
+            );
+            assert_eq!(
+                bits(&host(&gw)),
+                bits(&want_gw),
+                "conv gw, {threads} threads"
+            );
             let g = be
                 .gated_rms_norm_backward(
                     &f(&nx, &[rows, dim]),

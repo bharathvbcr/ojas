@@ -746,16 +746,9 @@ fn gdn_case(b: &Budget) -> Case {
     let g = c.f32("g", &[1, GT, QGH], 0.05, -0.1);
     let beta = c.f32("beta", &[1, GT, QGH], 0.25, 0.5);
     let gy = c.f32("gy", &[1, GT, QGH, QGD], 0.01, 0.0);
-    let inputs = |t: &[Tensor]| ojas_core::GdnInputs {
-        q: &t[q],
-        k: &t[k],
-        v: &t[v],
-        g: &t[g],
-        beta: &t[beta],
-        initial_state: None,
-    };
+    let ix = [q, k, v, g, beta];
     let ckpt = CpuBackend::new(b.clone())
-        .chunked_gdn_forward(inputs(&c.tensors))
+        .chunked_gdn_forward(gdn_inputs(&c.tensors, ix))
         .unwrap()
         .checkpoints;
     let ckpt = c.push("checkpoints", ckpt);
@@ -764,11 +757,11 @@ fn gdn_case(b: &Budget) -> Case {
         format!("[1,{GT},{QGH},{QGD}]"),
         vec![
             dir("fwd", 3, move |cpu, t| {
-                let f = cpu.chunked_gdn_forward(inputs(t))?;
+                let f = cpu.chunked_gdn_forward(gdn_inputs(t, ix))?;
                 Ok(vec![out("y", f.output), out("state", f.final_state)])
             }),
             dir("bwd", 3, move |cpu, t| {
-                let gr = cpu.chunked_gdn_backward(inputs(t), &t[ckpt], &t[gy], None)?;
+                let gr = cpu.chunked_gdn_backward(gdn_inputs(t, ix), &t[ckpt], &t[gy], None)?;
                 Ok(vec![
                     out("gq", gr.q),
                     out("gk", gr.k),
@@ -779,6 +772,19 @@ fn gdn_case(b: &Budget) -> Case {
             }),
         ],
     )
+}
+
+/// The gated delta rule's operands at `[q, k, v, g, beta]` in `t`, from a
+/// zero state.
+fn gdn_inputs(t: &[Tensor], [q, k, v, g, beta]: [usize; 5]) -> ojas_core::GdnInputs<'_> {
+    ojas_core::GdnInputs {
+        q: &t[q],
+        k: &t[k],
+        v: &t[v],
+        g: &t[g],
+        beta: &t[beta],
+        initial_state: None,
+    }
 }
 
 /// Every nanolab parameter shape, in `named_parameters` order: 123.7M values.
@@ -1128,7 +1134,9 @@ fn builders() -> Vec<(&'static str, Builder)> {
         }),
         ("clip", clip_case),
         ("block", block_case),
-        ("accum_768x768", |b| accum_case(b, "accum_768x768", D, D, 40)),
+        ("accum_768x768", |b| {
+            accum_case(b, "accum_768x768", D, D, 40)
+        }),
         ("accum_50304x768", |b| {
             accum_case(b, "accum_50304x768", V, D, 10)
         }),

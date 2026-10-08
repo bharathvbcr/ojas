@@ -25,13 +25,12 @@ pub use autocast::{
 };
 pub use backend::{
     broadcast_scalar, check_adamw, clip_scale, next_step, pow_u64, refuse_bf16_operands,
-    refuse_unsupported_metal_gdn,
-    refuse_unsupported_metal_head_dim, require_ns5, sdpa_scale, AdamWConfig, Backend, BackendId,
-    CeChunk, GatedRmsGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision,
-    Numerics, OptimizerKind, PerHeadGateGrad, ValueResidualGrad, ADAMW_BETA1, ADAMW_BETA2,
-    ADAMW_EPS, CLIP_GRAD_NORM_EPS, GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, METAL_GDN_KEY_DIM,
-    METAL_GDN_VALUE_BLOCK, METAL_MAX_HEAD_DIM, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
-    RMS_NORM_EPS,
+    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, require_ns5, sdpa_scale,
+    AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnForward, GdnGrad, GdnInputs,
+    LinearCe, MuonNs5Config, Ns5Precision, Numerics, OptimizerKind, PerHeadGateGrad,
+    ValueResidualGrad, ADAMW_BETA1, ADAMW_BETA2, ADAMW_EPS, CLIP_GRAD_NORM_EPS,
+    GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
+    METAL_MAX_HEAD_DIM, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS, RMS_NORM_EPS,
 };
 pub use budget::{Budget, Reservation, Scratch};
 pub use checkpoint::{
@@ -45,13 +44,12 @@ pub use limits::{shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
     accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
-    causal_conv1d_silu_backward_dims,
-    causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
-    chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
-    cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
-    embedding_forward_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
-    inverse_permutation, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
-    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
+    causal_sdpa_forward_dims, chunked_gdn_backward_dims, chunked_gdn_forward_dims,
+    clip_grad_norm_dims, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
+    embedding_backward_dims, embedding_forward_dims, gated_rms_norm_backward_dims,
+    gated_rms_norm_forward_dims, inverse_permutation, kv_cache_write_dims, linear_backward_dims,
+    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
     permute_output_shape, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,

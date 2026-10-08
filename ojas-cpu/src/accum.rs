@@ -58,12 +58,19 @@ pub(crate) fn accumulate_grad(
     let g = grad.f32_slice()?;
     match acc.ensure_writable_f32(len) {
         Ok(()) => {
-            scoped::chunks_into(exec, acc.f32_slice_mut()?, len, 1, min_chunk, |range, part| {
-                for (a, g) in part.iter_mut().zip(&g[range]) {
-                    *a += g;
-                }
-                Ok(())
-            })?;
+            scoped::chunks_into(
+                exec,
+                acc.f32_slice_mut()?,
+                len,
+                1,
+                min_chunk,
+                |range, part| {
+                    for (a, g) in part.iter_mut().zip(&g[range]) {
+                        *a += g;
+                    }
+                    Ok(())
+                },
+            )?;
             // Every sum was checked finite above.
             acc.all_finite_cached(|_| Ok(true))?;
             Ok(())
@@ -122,21 +129,15 @@ pub(crate) fn scale_grad(
     let min_chunk = scoped::min_rows(1);
     match grad.ensure_writable_f32(len) {
         Ok(()) => {
-            let finite = scoped::chunks_into(
-                exec,
-                grad.f32_slice_mut()?,
-                len,
-                1,
-                min_chunk,
-                |_, part| {
+            let finite =
+                scoped::chunks_into(exec, grad.f32_slice_mut()?, len, 1, min_chunk, |_, part| {
                     let mut finite = true;
                     for value in part {
                         *value *= scale;
                         finite &= value.is_finite();
                     }
                     Ok(finite)
-                },
-            )?;
+                })?;
             if !finite.into_iter().all(|piece| piece) {
                 return Err(nonfinite(op));
             }

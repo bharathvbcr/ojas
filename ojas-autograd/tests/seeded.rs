@@ -436,6 +436,12 @@ fn a_seeded_fused_loss_scales_its_gradients_without_a_charge() {
     let (peak, gx, gw) = walk(0.25);
     assert_eq!(peak, unit_peak, "seed 1/4 walk peak");
     let quarter = |v: &[f32]| v.iter().map(|x| (x * 0.25).to_bits()).collect::<Vec<_>>();
-    assert_eq!(gx.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), quarter(&gx1));
-    assert_eq!(gw.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), quarter(&gw1));
+    assert_eq!(
+        gx.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        quarter(&gx1)
+    );
+    assert_eq!(
+        gw.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        quarter(&gw1)
+    );
 }

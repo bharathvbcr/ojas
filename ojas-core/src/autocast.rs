@@ -273,9 +273,7 @@ impl<B: Backend> Autocast<B> {
     /// rounded `F32` copy. The two arms give the kernel the same values, so
     /// the same bits.
     fn prep<'a>(&self, tensor: &'a Tensor) -> Result<Operand<'a>, OjasError> {
-        if !self.region()?
-            || tensor.dtype() == DType::Bf16
-            || tensor.compute_tag() == COMPUTE_BF16
+        if !self.region()? || tensor.dtype() == DType::Bf16 || tensor.compute_tag() == COMPUTE_BF16
         {
             return Ok(Operand::Same(tensor));
         }
@@ -1278,7 +1276,9 @@ mod tests {
             Tensor::from_f32(&data, &shape, self.budget())
         }
 
-        unsup!(embedding_backward(table: &Tensor, token_ids: &Tensor, grad_output: &Tensor) -> Tensor);
+        unsup!(
+            embedding_backward(table: &Tensor, token_ids: &Tensor, grad_output: &Tensor) -> Tensor
+        );
 
         fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
             const OP: &str = "linear_forward";
@@ -1339,17 +1339,34 @@ mod tests {
             Tensor::from_f32(&y, input.shape(), self.budget())
         }
 
-        unsup!(rms_norm_backward(input: &Tensor, weight: &Tensor, grad_output: &Tensor, eps: f32) -> (Tensor, Tensor));
-        unsup!(rms_qk_norm_forward(q: &Tensor, k: &Tensor, q_weight: &Tensor, k_weight: &Tensor, eps: f32) -> (Tensor, Tensor));
-        unsup!(rms_qk_norm_backward(
-            q: &Tensor,
-            k: &Tensor,
-            q_weight: &Tensor,
-            k_weight: &Tensor,
-            grad_q: &Tensor,
-            grad_k: &Tensor,
-            eps: f32
-        ) -> (Tensor, Tensor, Tensor, Tensor));
+        unsup!(
+            rms_norm_backward(
+                input: &Tensor,
+                weight: &Tensor,
+                grad_output: &Tensor,
+                eps: f32,
+            ) -> (Tensor, Tensor)
+        );
+        unsup!(
+            rms_qk_norm_forward(
+                q: &Tensor,
+                k: &Tensor,
+                q_weight: &Tensor,
+                k_weight: &Tensor,
+                eps: f32,
+            ) -> (Tensor, Tensor)
+        );
+        unsup!(
+            rms_qk_norm_backward(
+                q: &Tensor,
+                k: &Tensor,
+                q_weight: &Tensor,
+                k_weight: &Tensor,
+                grad_q: &Tensor,
+                grad_k: &Tensor,
+                eps: f32,
+            ) -> (Tensor, Tensor, Tensor, Tensor)
+        );
 
         fn rope_half_split_forward(
             &self,
@@ -1684,7 +1701,13 @@ mod tests {
             Tensor::from_f32(&[sum / count as f32], &[1], self.budget())
         }
 
-        unsup!(cross_entropy_mean_backward(logits: &Tensor, targets: &Tensor, ignore_index: Option<u32>) -> Tensor);
+        unsup!(
+            cross_entropy_mean_backward(
+                logits: &Tensor,
+                targets: &Tensor,
+                ignore_index: Option<u32>,
+            ) -> Tensor
+        );
 
         fn clip_grad_norm(&self, grads: &mut [Tensor], _max_norm: f32) -> Result<f32, OjasError> {
             for grad in grads.iter() {
@@ -2207,7 +2230,7 @@ mod tests {
         };
         let wrapped = Autocast::new(&inner);
         let checked = every_call_reaches_except(&wrapped, &inner, &["autocast_region"]);
-        assert_eq!(checked, 52);
+        assert_eq!(checked, 53);
     }
 
     #[test]
@@ -2484,16 +2507,27 @@ mod tests {
         assert!(loss.to_f32_vec().unwrap()[0].is_finite());
         assert_eq!(loss.compute_tag(), COMPUTE_F32);
 
+        // A gradient not tagged bf16 takes the inner f32 sum, unrounded.
         let mut acc = host(&budget, ONE);
         tag(&acc);
-        let grad = host(&budget, DIRTY);
-        tag(&grad);
+        let plain = host(&budget, DIRTY);
         let before = autocast.inner.casts.load(Ordering::Relaxed);
-        autocast.accumulate_grad(&mut acc, &grad).unwrap();
+        autocast.accumulate_grad(&mut acc, &plain).unwrap();
         let raw = f32::from_bits(ONE) + f32::from_bits(DIRTY);
         assert_eq!(bits_of(&acc), raw.to_bits());
         assert_eq!(acc.compute_tag(), COMPUTE_F32);
         assert_eq!(autocast.inner.casts.load(Ordering::Relaxed), before);
+        // Two bf16-tagged gradients inside the region are a tape's fan-in:
+        // the bits and tag of `residual_add_forward` here.
+        let mut acc = host(&budget, ONE);
+        tag(&acc);
+        let grad = host(&budget, DIRTY);
+        tag(&grad);
+        let fan_in = autocast.residual_add_forward(&acc, &grad).unwrap();
+        autocast.accumulate_grad(&mut acc, &grad).unwrap();
+        assert_eq!(bits_of(&acc), bits_of(&fan_in));
+        assert_eq!(acc.compute_tag(), fan_in.compute_tag());
+        let before = autocast.inner.casts.load(Ordering::Relaxed);
         let wrong = Tensor::from_f32(&[1.0, 2.0], &[2], &budget).unwrap();
         tag(&acc);
         assert!(autocast.accumulate_grad(&mut acc, &wrong).is_err());

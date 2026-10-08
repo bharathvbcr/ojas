@@ -994,7 +994,7 @@ pub(crate) fn muon_scratch(
             .try_fold(0usize, |acc, &t| acc.checked_add(t))
             .ok_or_else(|| scratch_overflow(op))
     };
-    let (l2, l3, l4) = (times(l, 2)?, times(l, 3)?, times(l, 4)?);
+    let (l3, l4) = (times(l, 3)?, times(l, 4)?);
     let phases = [
         l3,
         sum(&[l3, times(sq, 2)?, gemm_scratch(op, exec, r, c, r)?])?,

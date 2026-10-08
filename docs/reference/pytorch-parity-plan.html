@@ -338,7 +338,7 @@
 </li>
 </ul>
 </li>
-<li><strong>wgpu <code>Queue::drop</code> blocks without bound inside wgpu (wgpu-core 30.0.1 <code>queue.rs:275-289</code>; Metal <code>waitUntilCompleted</code>).</strong> ojas now drops the queue on a helper thread and waits at most <code>DROP_WAIT</code> (2 s). On timeout the queue, its device and one parked thread leak until the GPU finishes. <code>tests/drop.rs</code> was still waiting at 1.0 s before the fix and returns at 0.31 s after.
+<li><strong>wgpu <code>Queue::drop</code> blocks without bound inside wgpu (wgpu-core 30.0.1 <code>queue.rs:275-289</code>; Metal <code>waitUntilCompleted</code>).</strong> ojas now drops the queue on a helper thread and waits at most <code>DROP_WAIT</code> (2 s). On timeout the queue, its device and one parked thread stay held until the GPU finishes. <code>tests/drop.rs</code> was still waiting at 1.0 s before the fix and returns at 0.31 s after. That hold is now bounded, counted and reported: <code>ojas_wgpu::drop_stats()</code> counts drops parked now and drops that ever timed out, <code>WgpuContext::open</code> refuses (<code>DeviceError::Capacity</code>) while <code>MAX_PARKED_DROPS</code> (4) are parked, and the Go <code>Profile</code> carries both counts (<code>WgpuDropsParked</code>, <code>WgpuDropsTimedOut</code>).
 </li>
 <li><strong>capi demo paths over- or under-charge (found by the ojas-cpu budget lane).</strong> Both are scheduled for removal in framework items 11–12, which replace these demo paths.
 <ul>

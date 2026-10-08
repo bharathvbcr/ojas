@@ -66,7 +66,10 @@ fn a_trapped_kernel_leaves_the_backend_with_the_typed_device_lost_error() {
     // The launch itself is asynchronous; the trap is reported by the next
     // wait. Some drivers report it at launch already, which must be sticky.
     if let Err(e) = &launched {
-        assert!(e.is_device_lost(), "launch failed with a non-sticky error: {e}");
+        assert!(
+            e.is_device_lost(),
+            "launch failed with a non-sticky error: {e}"
+        );
     }
 
     lost("sync after the trap", backend.sync());

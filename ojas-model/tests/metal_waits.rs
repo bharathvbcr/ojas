@@ -165,7 +165,11 @@ fn nanolab_124m_step_waits_by_trigger() {
         assert_eq!((w.sync, w.clip_norm), (1, 1), "step {n}: {w:?}");
         // Token ids and targets are 16 KiB per micro-batch: inline.
         assert_eq!(w.upload, 0, "step {n}: {w:?}");
-        assert_eq!((w.read, w.slab_full, w.recycle), (0, 0, 0), "step {n}: {w:?}");
+        assert_eq!(
+            (w.read, w.slab_full, w.recycle),
+            (0, 0, 0),
+            "step {n}: {w:?}"
+        );
         // At this size the step allocates past the 1 GiB cap.
         assert!(w.mem_cap > 0, "step {n}: no memory-cap commit: {w:?}");
         // Every step does the same work, so it waits the same way.

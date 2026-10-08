@@ -175,7 +175,9 @@ fn several_pieces_sum_like_residual_add_and_refuse_before_any_write() {
     let g = rng.vec(n, 2.0);
     for threads in [1, 6] {
         let be = CpuBackend::with_threads(Budget::new(u64::MAX), threads).unwrap();
-        let want = bits(&f(&be.residual_add_forward(&t(&a, &[n]), &t(&g, &[n])).unwrap()));
+        let want = bits(&f(&be
+            .residual_add_forward(&t(&a, &[n]), &t(&g, &[n]))
+            .unwrap()));
         let mut acc = t(&a, &[n]);
         be.accumulate_grad(&mut acc, &t(&g, &[n])).unwrap();
         assert_eq!(bits(&f(&acc)), want, "unique, {threads} threads");
