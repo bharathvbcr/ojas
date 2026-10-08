@@ -225,3 +225,46 @@ fn keys_outside_the_window_never_reach_a_row() {
     assert_eq!(pick(bitsg(&l), 1), pick(bitsg(&lp), 1), "lse");
     assert_eq!(pick(bitsg(&gq), d), pick(bitsg(&gqp), d), "dq");
 }
+
+/// Bytes a Qwen3.5-2B grouped-query attention call (8 query heads over 2
+/// KV heads, head dim 256) charges beyond its operands, with the figure the
+/// removed expand path charged (c74f3ba: K and V repeated to the query
+/// heads in the forward, and K, V, dK and dV in the backward).
+#[test]
+fn grouped_query_charges_no_expanded_heads_at_the_qwen35_shape() {
+    let g = own();
+    let (b, h, hkv, t, d) = (1usize, 8usize, 2usize, 2048usize, 256usize);
+    let (q_bytes, kv_bytes, rows_bytes) = (4 * b * h * t * d, 4 * b * hkv * t * d, 4 * b * h * t);
+    // The removed path: the forward held K and V repeated to the query
+    // heads; the backward also held dK and dV at query size, beside the
+    // log-sum-exp and `Dr` rows it formed itself.
+    let old_fwd = q_bytes + 2 * q_bytes;
+    let old_bwd = q_bytes + 2 * kv_bytes + 2 * rows_bytes + 4 * q_bytes;
+    let [q, k, v, gy] = inputs(b, h, hkv, t, d, 7700);
+    let dd = [&q, &k, &v, &gy].map(|x| g.upload(x).unwrap());
+    g.sync().unwrap();
+    let live = g.budget().live_bytes().unwrap();
+    g.budget().reset_peak();
+    let (y, l) = g.causal_sdpa_forward(&dd[0], &dd[1], &dd[2], None).unwrap();
+    g.sync().unwrap();
+    let fwd_peak = (g.budget().peak_bytes() - live) as usize;
+    let live = g.budget().live_bytes().unwrap();
+    g.budget().reset_peak();
+    let grads = g
+        .causal_sdpa_backward(&dd[0], &dd[1], &dd[2], &y, &l, &dd[3], None)
+        .unwrap();
+    g.sync().unwrap();
+    let bwd_peak = (g.budget().peak_bytes() - live) as usize;
+    drop(grads);
+    // Outputs only: y and the row lse; dQ, dK, dV and the two row
+    // statistics.
+    assert_eq!(fwd_peak, q_bytes + rows_bytes, "forward charge");
+    assert_eq!(
+        bwd_peak,
+        q_bytes + 2 * kv_bytes + 2 * rows_bytes,
+        "backward charge"
+    );
+    eprintln!(
+        "wgpu qwen35 b{b} h{h}/{hkv} t{t} d{d}: forward {fwd_peak} B (expand path {old_fwd} B), backward {bwd_peak} B (expand path {old_bwd} B)"
+    );
+}

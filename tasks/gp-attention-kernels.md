@@ -77,6 +77,14 @@ Modern architectures (Qwen3.5, Gemma, Llama 3) require head dimension 256, Group
 3. **LSE Return:** Attention backward currently recomputes row statistics / softmax. Emitting LSE from forward SDPA saves 10–25% backward latency on Metal and wgpu.
 4. **Sliding Window:** Local causal attention with window size W is currently missing in Ojas.
 
+### Verification notes (2026-10-08)
+The code for phases 1–3 landed in 6a0a926, whose message says its test suites were not rerun. This pass ran them (`target-attn/attn-verify.sh` under `mac_heavy.sh`, `-j 2`, `--test-threads=2`, `OJAS_ALLOW_NO_GPU` unset, so a missing device fails instead of skipping):
+- `cargo clippy -p ojas-metal -p ojas-wgpu --all-targets -- -D warnings` is clean.
+- Metal `attention_window`, `attention_backward` and `attention_forward` pass 22/22. wgpu `attention_window` passes 5/5, and `parity attention` passes 3/3 (18 filtered out). CPU `sliding_window` and `ops` pass 17/17.
+- `ojas-model` `gqa_tape` passes 3/3 (the CPU, Metal and wgpu Tape against f64 central differences, and both GPUs against the CPU tape). `forward` passes 15/15. `ojas-autograd` `gradcheck` and `multihead` pass 14/14.
+- New test `grouped_query_charges_no_expanded_heads_at_the_qwen35_shape`, in Metal's and wgpu's `attention_window.rs`, measures the budget charge at Qwen3.5-2B (B1, H8/Hkv2, T2048, D256). The forward charges 16.06 MiB and the backward 24.06 MiB (Metal) or 24.13 MiB (wgpu). The test asserts outputs plus row statistics only. c74f3ba's expand path charged 48 MiB and 88.13 MiB; that figure is inferred from its source.
+- Backward A/B against c74f3ba, in `bench/results/2026-10-08-attn-lse-ab/`: 6 paired rounds, with controls at 0.98–1.02. The backward is 19–24% faster on Metal and on wgpu at every shape, including Qwen3.5 GQA, and the forward is unchanged. W=256 at T=2048 runs the backward at 0.25–0.31 of the full-prefix time, which is consistent with block skipping. Bit-level equivalence: `saved_backward_equals_the_recomputing_one_bit_for_bit` passes on Metal and wgpu.
+
 ### Execution plan
 - **Phase 1 (GQA Hardening):** Add tape-level finite-difference GQA gradcheck. Implement native KV head indexing in Metal and wgpu attention kernels to eliminate repeat/sum-back scratch.
 - **Phase 2 (LSE Return):** Update `Backend::causal_sdpa_forward` to return `(Tensor, Tensor)` (output + row LSE). Refactor CPU, Metal, and wgpu backward kernels to consume preserved LSE, benchmarking the 10–25% backward speedup.
@@ -88,13 +96,13 @@ Modern architectures (Qwen3.5, Gemma, Llama 3) require head dimension 256, Group
 - [x] Generalize Backend::causal_sdpa_forward and backward to support Grouped-Query Attention (mismatched Q and KV head counts)
 - [x] Autograd Tape records and backpropagates GQA projections correctly
 - [x] Unit tests verifying head dimensions 64, 128, and 256 match analytical and CPU reference oracles
-- [ ] A finite-difference gradcheck runs GQA (H != Hkv) through the Tape on CPU, and through Metal and wgpu against CPU
-- [ ] Metal and wgpu attention forward and backward index KV heads natively, with no expand/sum-back scratch
-- [ ] Measure scratch saving of native GQA kernels at a Qwen3.5 shape
-- [ ] Update Backend::causal_sdpa_forward trait signature to return (Tensor, Tensor) representing output activations and row-wise LSE statistics
-- [ ] Modify CPU, Metal, and wgpu attention forward kernels to write out LSE and refactor backward kernels to consume preserved LSE without recomputing softmax
-- [ ] Benchmark attention backward latency reduction (targeting 10% to 25% speedup on Metal and wgpu) with bit-level equivalence tests
-- [ ] Add sliding window size parameter W to attention forward and backward dispatches (t - W < j <= t) with tiled block skipping and parity tests
+- [x] A finite-difference gradcheck runs GQA (H != Hkv) through the Tape on CPU, and through Metal and wgpu against CPU
+- [x] Metal and wgpu attention forward and backward index KV heads natively, with no expand/sum-back scratch
+- [x] Measure scratch saving of native GQA kernels at a Qwen3.5 shape
+- [x] Update Backend::causal_sdpa_forward trait signature to return (Tensor, Tensor) representing output activations and row-wise LSE statistics
+- [x] Modify CPU, Metal, and wgpu attention forward kernels to write out LSE and refactor backward kernels to consume preserved LSE without recomputing softmax
+- [x] Benchmark attention backward latency reduction (targeting 10% to 25% speedup on Metal and wgpu) with bit-level equivalence tests
+- [x] Add sliding window size parameter W to attention forward and backward dispatches (t - W < j <= t) with tiled block skipping and parity tests
 
 ## Planned files
 - ojas-core/src/backend.rs

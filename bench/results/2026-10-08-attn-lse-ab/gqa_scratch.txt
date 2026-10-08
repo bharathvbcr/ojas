@@ -1,0 +1,4 @@
+target-attn/logs/metal.log:52:metal qwen35 b1 h8/2 t2048 d256: forward 16842752 B (expand path 50331648 B), backward 25231360 B (expand path 92405760 B)
+target-attn/logs/metal.log:53:test grouped_query_charges_no_expanded_heads_at_the_qwen35_shape ... ok
+target-attn/logs/wgpu.log:59:wgpu qwen35 b1 h8/2 t2048 d256: forward 16842752 B (expand path 50331648 B), backward 25296896 B (expand path 92405760 B)
+target-attn/logs/wgpu.log:60:test grouped_query_charges_no_expanded_heads_at_the_qwen35_shape ... ok

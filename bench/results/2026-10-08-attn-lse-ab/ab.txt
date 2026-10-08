@@ -1,0 +1,168 @@
+round 1 metal old load: 6.32 5.60 8.43
+AB round=1 tree=old backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.464 fwd_med=3.704 bwd_min=13.203 bwd_med=14.159 ctl_min=0.844 ctl_med=0.909
+AB round=1 tree=old backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.884 fwd_med=0.932 bwd_min=3.749 bwd_med=3.814 ctl_min=0.813 ctl_med=0.869
+AB round=1 tree=old backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.111 fwd_med=3.155 bwd_min=17.352 bwd_med=18.840 ctl_min=0.815 ctl_med=0.904
+AB round=1 tree=old backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.351 fwd_med=3.486 bwd_min=18.789 bwd_med=20.257 ctl_min=0.854 ctl_med=0.916
+round 1 metal new load: 6.32 5.60 8.43
+AB round=1 tree=new backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.563 fwd_med=4.078 bwd_min=11.740 bwd_med=12.807 ctl_min=0.840 ctl_med=0.915
+AB round=1 tree=new backend=metal shape=mha_b4h8t2048d64 window=w256 fwd_min=1.120 fwd_med=1.162 bwd_min=3.257 bwd_med=3.802 ctl_min=0.819 ctl_med=0.880
+AB round=1 tree=new backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.895 fwd_med=0.971 bwd_min=3.009 bwd_med=3.075 ctl_min=0.813 ctl_med=0.877
+AB round=1 tree=new backend=metal shape=mha_b2h8t1024d128 window=w256 fwd_min=0.536 fwd_med=0.552 bwd_min=1.626 bwd_med=1.673 ctl_min=0.817 ctl_med=0.851
+AB round=1 tree=new backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.124 fwd_med=3.182 bwd_min=13.598 bwd_med=14.705 ctl_min=0.826 ctl_med=0.898
+AB round=1 tree=new backend=metal shape=mha_b1h8t2048d256 window=w256 fwd_min=0.974 fwd_med=1.013 bwd_min=3.879 bwd_med=4.377 ctl_min=0.818 ctl_med=0.856
+AB round=1 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=2.959 fwd_med=3.059 bwd_min=13.906 bwd_med=15.155 ctl_min=0.830 ctl_med=0.876
+AB round=1 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=0.956 fwd_med=0.995 bwd_min=3.743 bwd_med=4.133 ctl_min=0.808 ctl_med=0.855
+round 1 wgpu old load: 6.45 5.64 8.43
+AB round=1 tree=old backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=28.086 fwd_med=28.974 bwd_min=133.266 bwd_med=135.261 ctl_min=1.678 ctl_med=1.890
+AB round=1 tree=old backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.197 fwd_med=11.305 bwd_min=50.430 bwd_med=52.074 ctl_min=1.678 ctl_med=1.795
+AB round=1 tree=old backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=61.100 fwd_med=66.029 bwd_min=270.998 bwd_med=306.392 ctl_min=1.651 ctl_med=1.776
+AB round=1 tree=old backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=59.260 fwd_med=62.467 bwd_min=277.944 bwd_med=295.933 ctl_min=1.658 ctl_med=1.791
+round 1 wgpu new load: 4.65 5.29 8.22
+AB round=1 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=28.040 fwd_med=29.580 bwd_min=105.798 bwd_med=108.248 ctl_min=1.656 ctl_med=1.926
+AB round=1 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=w256 fwd_min=7.022 fwd_med=7.600 bwd_min=26.722 bwd_med=27.450 ctl_min=1.671 ctl_med=1.894
+AB round=1 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.250 fwd_med=11.116 bwd_min=40.649 bwd_med=42.605 ctl_min=1.642 ctl_med=2.032
+AB round=1 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=w256 fwd_min=4.730 fwd_med=5.127 bwd_min=20.356 bwd_med=20.897 ctl_min=1.654 ctl_med=1.743
+AB round=1 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=59.460 fwd_med=62.753 bwd_min=211.351 bwd_med=232.555 ctl_min=1.695 ctl_med=1.833
+AB round=1 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=w256 fwd_min=13.661 fwd_med=14.312 bwd_min=65.302 bwd_med=70.560 ctl_min=1.663 ctl_med=1.778
+AB round=1 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=58.045 fwd_med=65.339 bwd_min=212.403 bwd_med=235.882 ctl_min=1.647 ctl_med=1.857
+AB round=1 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=13.510 fwd_med=14.557 bwd_min=62.098 bwd_med=69.545 ctl_min=1.651 ctl_med=1.758
+round 2 metal new load: 3.70 5.01 8.03
+AB round=2 tree=new backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.535 fwd_med=4.469 bwd_min=11.174 bwd_med=11.610 ctl_min=0.838 ctl_med=0.906
+AB round=2 tree=new backend=metal shape=mha_b4h8t2048d64 window=w256 fwd_min=1.118 fwd_med=1.159 bwd_min=3.275 bwd_med=3.346 ctl_min=0.811 ctl_med=0.879
+AB round=2 tree=new backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.928 fwd_med=0.986 bwd_min=3.001 bwd_med=3.185 ctl_min=0.829 ctl_med=0.940
+AB round=2 tree=new backend=metal shape=mha_b2h8t1024d128 window=w256 fwd_min=0.544 fwd_med=0.590 bwd_min=1.654 bwd_med=1.731 ctl_min=0.816 ctl_med=0.947
+AB round=2 tree=new backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.143 fwd_med=4.547 bwd_min=17.372 bwd_med=18.631 ctl_min=0.846 ctl_med=0.922
+AB round=2 tree=new backend=metal shape=mha_b1h8t2048d256 window=w256 fwd_min=1.025 fwd_med=1.077 bwd_min=5.225 bwd_med=7.578 ctl_min=0.829 ctl_med=0.905
+AB round=2 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.014 fwd_med=4.297 bwd_min=15.746 bwd_med=17.603 ctl_min=0.856 ctl_med=2.174
+AB round=2 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=0.989 fwd_med=2.215 bwd_min=3.795 bwd_med=5.197 ctl_min=0.840 ctl_med=1.454
+round 2 metal old load: 3.64 4.97 8.00
+AB round=2 tree=old backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.547 fwd_med=5.049 bwd_min=15.483 bwd_med=17.983 ctl_min=0.852 ctl_med=2.085
+AB round=2 tree=old backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.933 fwd_med=1.952 bwd_min=5.120 bwd_med=5.858 ctl_min=0.845 ctl_med=2.061
+AB round=2 tree=old backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=4.145 fwd_med=4.578 bwd_min=21.474 bwd_med=23.446 ctl_min=0.835 ctl_med=2.068
+AB round=2 tree=old backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.344 fwd_med=4.994 bwd_min=20.331 bwd_med=23.881 ctl_min=0.857 ctl_med=0.925
+round 2 wgpu new load: 3.64 4.97 8.00
+AB round=2 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=30.013 fwd_med=31.599 bwd_min=108.285 bwd_med=113.983 ctl_min=1.670 ctl_med=2.340
+AB round=2 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=w256 fwd_min=7.893 fwd_med=8.671 bwd_min=28.833 bwd_med=30.169 ctl_min=1.967 ctl_med=2.269
+AB round=2 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.497 fwd_med=11.936 bwd_min=41.112 bwd_med=44.276 ctl_min=1.650 ctl_med=2.210
+AB round=2 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=w256 fwd_min=4.719 fwd_med=5.433 bwd_min=19.829 bwd_med=21.505 ctl_min=1.643 ctl_med=2.024
+AB round=2 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=61.308 fwd_med=67.659 bwd_min=226.373 bwd_med=248.416 ctl_min=1.672 ctl_med=1.762
+AB round=2 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=w256 fwd_min=13.928 fwd_med=15.231 bwd_min=64.749 bwd_med=70.997 ctl_min=1.696 ctl_med=2.025
+AB round=2 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=60.457 fwd_med=63.467 bwd_min=220.472 bwd_med=236.177 ctl_min=1.653 ctl_med=1.756
+AB round=2 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=13.847 fwd_med=14.860 bwd_min=62.870 bwd_med=67.722 ctl_min=1.688 ctl_med=1.997
+round 2 wgpu old load: 3.80 4.88 7.86
+AB round=2 tree=old backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=28.309 fwd_med=30.178 bwd_min=134.079 bwd_med=139.473 ctl_min=1.747 ctl_med=2.014
+AB round=2 tree=old backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.282 fwd_med=11.349 bwd_min=50.613 bwd_med=54.186 ctl_min=1.663 ctl_med=1.841
+AB round=2 tree=old backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=58.204 fwd_med=64.527 bwd_min=284.380 bwd_med=298.206 ctl_min=1.678 ctl_med=1.811
+AB round=2 tree=old backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=59.813 fwd_med=66.470 bwd_min=288.853 bwd_med=306.131 ctl_min=1.659 ctl_med=1.813
+round 3 metal old load: 3.22 4.65 7.69
+AB round=3 tree=old backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.476 fwd_med=4.477 bwd_min=15.059 bwd_med=16.541 ctl_min=0.829 ctl_med=0.970
+AB round=3 tree=old backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.902 fwd_med=0.981 bwd_min=3.835 bwd_med=5.456 ctl_min=0.832 ctl_med=0.893
+AB round=3 tree=old backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.124 fwd_med=3.288 bwd_min=19.974 bwd_med=20.595 ctl_min=0.825 ctl_med=0.904
+AB round=3 tree=old backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.362 fwd_med=3.553 bwd_min=19.245 bwd_med=20.584 ctl_min=0.846 ctl_med=0.913
+round 3 metal new load: 3.22 4.65 7.69
+AB round=3 tree=new backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.510 fwd_med=3.884 bwd_min=10.509 bwd_med=10.995 ctl_min=0.816 ctl_med=0.889
+AB round=3 tree=new backend=metal shape=mha_b4h8t2048d64 window=w256 fwd_min=1.131 fwd_med=1.174 bwd_min=3.270 bwd_med=3.729 ctl_min=0.828 ctl_med=0.876
+AB round=3 tree=new backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.907 fwd_med=1.019 bwd_min=2.997 bwd_med=4.485 ctl_min=0.827 ctl_med=0.882
+AB round=3 tree=new backend=metal shape=mha_b2h8t1024d128 window=w256 fwd_min=0.525 fwd_med=0.616 bwd_min=1.636 bwd_med=3.090 ctl_min=0.814 ctl_med=0.849
+AB round=3 tree=new backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.206 fwd_med=3.988 bwd_min=15.029 bwd_med=16.120 ctl_min=0.824 ctl_med=1.443
+AB round=3 tree=new backend=metal shape=mha_b1h8t2048d256 window=w256 fwd_min=1.001 fwd_med=1.061 bwd_min=3.953 bwd_med=6.025 ctl_min=0.832 ctl_med=0.922
+AB round=3 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=2.988 fwd_med=3.252 bwd_min=15.103 bwd_med=16.017 ctl_min=0.863 ctl_med=1.192
+AB round=3 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=0.963 fwd_med=1.021 bwd_min=3.751 bwd_med=5.053 ctl_min=0.839 ctl_med=0.906
+round 3 wgpu old load: 3.22 4.65 7.69
+AB round=3 tree=old backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=28.550 fwd_med=30.087 bwd_min=138.532 bwd_med=141.795 ctl_min=1.658 ctl_med=1.790
+AB round=3 tree=old backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.270 fwd_med=11.626 bwd_min=51.438 bwd_med=54.636 ctl_min=1.683 ctl_med=1.877
+AB round=3 tree=old backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=57.462 fwd_med=63.782 bwd_min=282.981 bwd_med=298.357 ctl_min=1.661 ctl_med=1.774
+AB round=3 tree=old backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=60.566 fwd_med=64.057 bwd_min=282.104 bwd_med=298.890 ctl_min=1.676 ctl_med=1.767
+round 3 wgpu new load: 3.34 4.56 7.57
+AB round=3 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=27.843 fwd_med=30.652 bwd_min=107.000 bwd_med=113.151 ctl_min=1.659 ctl_med=1.876
+AB round=3 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=w256 fwd_min=7.378 fwd_med=8.058 bwd_min=26.997 bwd_med=28.618 ctl_min=1.672 ctl_med=2.078
+AB round=3 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.753 fwd_med=11.258 bwd_min=42.058 bwd_med=43.876 ctl_min=1.676 ctl_med=2.015
+AB round=3 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=w256 fwd_min=4.762 fwd_med=5.550 bwd_min=20.245 bwd_med=21.696 ctl_min=1.662 ctl_med=2.076
+AB round=3 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=60.033 fwd_med=64.208 bwd_min=215.833 bwd_med=228.538 ctl_min=1.702 ctl_med=2.009
+AB round=3 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=w256 fwd_min=14.259 fwd_med=15.303 bwd_min=66.502 bwd_med=70.108 ctl_min=1.667 ctl_med=1.871
+AB round=3 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=58.396 fwd_med=63.137 bwd_min=215.918 bwd_med=235.119 ctl_min=1.662 ctl_med=2.102
+AB round=3 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=13.643 fwd_med=15.330 bwd_min=63.205 bwd_med=67.364 ctl_min=1.677 ctl_med=1.771
+round 4 metal new load: 3.78 4.55 7.46
+AB round=4 tree=new backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.558 fwd_med=4.429 bwd_min=11.181 bwd_med=11.551 ctl_min=0.824 ctl_med=1.001
+AB round=4 tree=new backend=metal shape=mha_b4h8t2048d64 window=w256 fwd_min=1.126 fwd_med=1.175 bwd_min=3.268 bwd_med=3.388 ctl_min=0.813 ctl_med=0.877
+AB round=4 tree=new backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.913 fwd_med=0.960 bwd_min=3.014 bwd_med=4.176 ctl_min=0.827 ctl_med=0.920
+AB round=4 tree=new backend=metal shape=mha_b2h8t1024d128 window=w256 fwd_min=0.537 fwd_med=0.572 bwd_min=1.660 bwd_med=1.882 ctl_min=0.877 ctl_med=1.329
+AB round=4 tree=new backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.368 fwd_med=4.304 bwd_min=15.675 bwd_med=16.686 ctl_min=0.864 ctl_med=1.054
+AB round=4 tree=new backend=metal shape=mha_b1h8t2048d256 window=w256 fwd_min=1.081 fwd_med=2.281 bwd_min=3.970 bwd_med=4.189 ctl_min=0.953 ctl_med=1.809
+AB round=4 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=2.990 fwd_med=3.182 bwd_min=14.933 bwd_med=16.006 ctl_min=0.830 ctl_med=0.955
+AB round=4 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=1.009 fwd_med=1.588 bwd_min=3.817 bwd_med=4.894 ctl_min=0.877 ctl_med=1.573
+round 4 metal old load: 3.78 4.55 7.46
+AB round=4 tree=old backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.559 fwd_med=3.827 bwd_min=15.457 bwd_med=16.027 ctl_min=0.860 ctl_med=0.936
+AB round=4 tree=old backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.925 fwd_med=1.157 bwd_min=3.784 bwd_med=4.045 ctl_min=0.822 ctl_med=0.883
+AB round=4 tree=old backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.153 fwd_med=3.244 bwd_min=18.357 bwd_med=19.020 ctl_min=0.837 ctl_med=0.940
+AB round=4 tree=old backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.361 fwd_med=3.427 bwd_min=19.461 bwd_med=20.128 ctl_min=0.838 ctl_med=0.902
+round 4 wgpu new load: 3.87 4.56 7.45
+AB round=4 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=28.041 fwd_med=30.570 bwd_min=107.114 bwd_med=111.755 ctl_min=1.703 ctl_med=1.988
+AB round=4 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=w256 fwd_min=7.213 fwd_med=7.933 bwd_min=27.268 bwd_med=28.239 ctl_min=1.659 ctl_med=2.149
+AB round=4 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.275 fwd_med=11.276 bwd_min=41.015 bwd_med=43.781 ctl_min=1.669 ctl_med=1.962
+AB round=4 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=w256 fwd_min=4.838 fwd_med=5.519 bwd_min=19.662 bwd_med=21.839 ctl_min=1.756 ctl_med=2.133
+AB round=4 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=58.246 fwd_med=65.363 bwd_min=219.677 bwd_med=232.684 ctl_min=1.675 ctl_med=2.127
+AB round=4 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=w256 fwd_min=14.915 fwd_med=16.095 bwd_min=67.275 bwd_med=72.132 ctl_min=1.886 ctl_med=2.316
+AB round=4 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=59.388 fwd_med=64.327 bwd_min=219.373 bwd_med=232.415 ctl_min=1.679 ctl_med=1.922
+AB round=4 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=14.453 fwd_med=15.221 bwd_min=64.136 bwd_med=67.477 ctl_min=1.678 ctl_med=2.162
+round 4 wgpu old load: 3.83 4.50 7.34
+AB round=4 tree=old backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=29.631 fwd_med=31.435 bwd_min=137.070 bwd_med=143.006 ctl_min=1.805 ctl_med=2.238
+AB round=4 tree=old backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=11.296 fwd_med=12.178 bwd_min=52.358 bwd_med=54.596 ctl_min=1.974 ctl_med=2.225
+AB round=4 tree=old backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=60.439 fwd_med=64.459 bwd_min=287.359 bwd_med=303.989 ctl_min=1.755 ctl_med=1.995
+AB round=4 tree=old backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=61.765 fwd_med=65.933 bwd_min=296.921 bwd_med=309.840 ctl_min=1.653 ctl_med=1.905
+round 5 metal old load: 4.28 4.54 7.27
+AB round=5 tree=old backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.471 fwd_med=4.434 bwd_min=14.112 bwd_med=15.871 ctl_min=0.871 ctl_med=1.294
+AB round=5 tree=old backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.913 fwd_med=1.041 bwd_min=3.785 bwd_med=5.394 ctl_min=0.854 ctl_med=1.045
+AB round=5 tree=old backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.154 fwd_med=3.193 bwd_min=18.674 bwd_med=20.659 ctl_min=0.854 ctl_med=0.944
+AB round=5 tree=old backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.378 fwd_med=3.525 bwd_min=19.280 bwd_med=20.975 ctl_min=0.851 ctl_med=0.944
+round 5 metal new load: 4.28 4.54 7.27
+AB round=5 tree=new backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.570 fwd_med=3.879 bwd_min=11.269 bwd_med=12.714 ctl_min=0.855 ctl_med=0.920
+AB round=5 tree=new backend=metal shape=mha_b4h8t2048d64 window=w256 fwd_min=1.142 fwd_med=1.201 bwd_min=3.349 bwd_med=4.574 ctl_min=0.834 ctl_med=0.920
+AB round=5 tree=new backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.912 fwd_med=0.961 bwd_min=3.031 bwd_med=3.340 ctl_min=0.860 ctl_med=0.933
+AB round=5 tree=new backend=metal shape=mha_b2h8t1024d128 window=w256 fwd_min=0.555 fwd_med=0.641 bwd_min=1.685 bwd_med=1.774 ctl_min=0.848 ctl_med=0.926
+AB round=5 tree=new backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.163 fwd_med=3.295 bwd_min=15.554 bwd_med=16.311 ctl_min=0.870 ctl_med=0.923
+AB round=5 tree=new backend=metal shape=mha_b1h8t2048d256 window=w256 fwd_min=1.031 fwd_med=1.060 bwd_min=3.952 bwd_med=5.420 ctl_min=0.852 ctl_med=0.921
+AB round=5 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.002 fwd_med=3.582 bwd_min=14.848 bwd_med=16.116 ctl_min=0.833 ctl_med=0.923
+AB round=5 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=0.989 fwd_med=1.038 bwd_min=3.784 bwd_med=4.801 ctl_min=0.854 ctl_med=0.912
+round 5 wgpu old load: 4.57 4.60 7.27
+AB round=5 tree=old backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=29.704 fwd_med=31.107 bwd_min=136.205 bwd_med=142.678 ctl_min=1.718 ctl_med=2.237
+AB round=5 tree=old backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=11.194 fwd_med=11.909 bwd_min=52.037 bwd_med=54.890 ctl_min=1.750 ctl_med=2.377
+AB round=5 tree=old backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=58.458 fwd_med=64.478 bwd_min=285.356 bwd_med=296.291 ctl_min=1.672 ctl_med=2.100
+AB round=5 tree=old backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=59.604 fwd_med=65.052 bwd_min=275.465 bwd_med=297.388 ctl_min=1.668 ctl_med=1.792
+round 5 wgpu new load: 4.57 4.59 7.20
+AB round=5 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=29.972 fwd_med=30.954 bwd_min=106.704 bwd_med=112.465 ctl_min=1.723 ctl_med=1.990
+AB round=5 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=w256 fwd_min=7.544 fwd_med=8.514 bwd_min=28.171 bwd_med=29.459 ctl_min=1.770 ctl_med=2.134
+AB round=5 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.827 fwd_med=11.659 bwd_min=40.470 bwd_med=43.217 ctl_min=1.657 ctl_med=2.093
+AB round=5 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=w256 fwd_min=5.178 fwd_med=5.746 bwd_min=20.916 bwd_med=21.932 ctl_min=1.791 ctl_med=2.353
+AB round=5 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=61.181 fwd_med=64.410 bwd_min=220.962 bwd_med=230.876 ctl_min=1.690 ctl_med=1.896
+AB round=5 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=w256 fwd_min=14.889 fwd_med=15.927 bwd_min=65.923 bwd_med=70.779 ctl_min=1.836 ctl_med=2.257
+AB round=5 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=59.948 fwd_med=62.688 bwd_min=216.714 bwd_med=228.869 ctl_min=1.690 ctl_med=2.149
+AB round=5 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=14.826 fwd_med=15.400 bwd_min=61.059 bwd_med=67.291 ctl_min=1.670 ctl_med=2.062
+round 6 metal new load: 4.14 4.48 7.08
+AB round=6 tree=new backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.578 fwd_med=4.530 bwd_min=12.306 bwd_med=14.469 ctl_min=0.856 ctl_med=0.970
+AB round=6 tree=new backend=metal shape=mha_b4h8t2048d64 window=w256 fwd_min=1.137 fwd_med=1.214 bwd_min=3.514 bwd_med=5.922 ctl_min=0.847 ctl_med=0.906
+AB round=6 tree=new backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.926 fwd_med=1.008 bwd_min=3.040 bwd_med=5.229 ctl_min=0.840 ctl_med=0.919
+AB round=6 tree=new backend=metal shape=mha_b2h8t1024d128 window=w256 fwd_min=0.545 fwd_med=0.605 bwd_min=1.650 bwd_med=1.785 ctl_min=0.832 ctl_med=0.906
+AB round=6 tree=new backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.184 fwd_med=4.021 bwd_min=15.869 bwd_med=18.238 ctl_min=0.862 ctl_med=0.924
+AB round=6 tree=new backend=metal shape=mha_b1h8t2048d256 window=w256 fwd_min=1.031 fwd_med=1.178 bwd_min=3.977 bwd_med=5.599 ctl_min=0.841 ctl_med=0.924
+AB round=6 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.003 fwd_med=4.047 bwd_min=15.587 bwd_med=17.030 ctl_min=0.855 ctl_med=0.930
+AB round=6 tree=new backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=0.982 fwd_med=1.028 bwd_min=3.833 bwd_med=6.250 ctl_min=0.849 ctl_med=0.905
+round 6 metal old load: 4.05 4.46 7.05
+AB round=6 tree=old backend=metal shape=mha_b4h8t2048d64 window=full fwd_min=3.489 fwd_med=4.248 bwd_min=15.285 bwd_med=18.014 ctl_min=0.825 ctl_med=0.894
+AB round=6 tree=old backend=metal shape=mha_b2h8t1024d128 window=full fwd_min=0.879 fwd_med=1.490 bwd_min=3.810 bwd_med=5.889 ctl_min=0.812 ctl_med=1.069
+AB round=6 tree=old backend=metal shape=mha_b1h8t2048d256 window=full fwd_min=3.124 fwd_med=3.224 bwd_min=21.958 bwd_med=22.782 ctl_min=0.821 ctl_med=0.911
+AB round=6 tree=old backend=metal shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=3.358 fwd_med=3.917 bwd_min=22.443 bwd_med=23.628 ctl_min=0.849 ctl_med=0.900
+round 6 wgpu new load: 4.05 4.46 7.05
+AB round=6 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=29.703 fwd_med=31.869 bwd_min=109.144 bwd_med=113.204 ctl_min=1.706 ctl_med=2.280
+AB round=6 tree=new backend=wgpu shape=mha_b4h8t2048d64 window=w256 fwd_min=7.871 fwd_med=8.553 bwd_min=28.077 bwd_med=29.462 ctl_min=1.712 ctl_med=2.043
+AB round=6 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.895 fwd_med=12.033 bwd_min=41.971 bwd_med=44.169 ctl_min=1.669 ctl_med=2.320
+AB round=6 tree=new backend=wgpu shape=mha_b2h8t1024d128 window=w256 fwd_min=5.195 fwd_med=5.559 bwd_min=20.702 bwd_med=21.846 ctl_min=1.695 ctl_med=1.974
+AB round=6 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=60.834 fwd_med=64.042 bwd_min=218.978 bwd_med=231.500 ctl_min=1.715 ctl_med=2.076
+AB round=6 tree=new backend=wgpu shape=mha_b1h8t2048d256 window=w256 fwd_min=14.461 fwd_med=15.776 bwd_min=64.840 bwd_med=72.744 ctl_min=1.686 ctl_med=2.214
+AB round=6 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=60.793 fwd_med=65.018 bwd_min=224.547 bwd_med=237.513 ctl_min=1.660 ctl_med=1.925
+AB round=6 tree=new backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=w256 fwd_min=13.964 fwd_med=14.976 bwd_min=66.043 bwd_med=71.700 ctl_min=1.673 ctl_med=1.783
+round 6 wgpu old load: 3.35 4.26 6.91
+AB round=6 tree=old backend=wgpu shape=mha_b4h8t2048d64 window=full fwd_min=28.975 fwd_med=31.371 bwd_min=134.416 bwd_med=139.130 ctl_min=1.663 ctl_med=1.947
+AB round=6 tree=old backend=wgpu shape=mha_b2h8t1024d128 window=full fwd_min=10.229 fwd_med=11.341 bwd_min=48.889 bwd_med=53.446 ctl_min=1.666 ctl_med=1.857
+AB round=6 tree=old backend=wgpu shape=mha_b1h8t2048d256 window=full fwd_min=60.362 fwd_med=68.432 bwd_min=284.417 bwd_med=323.459 ctl_min=1.651 ctl_med=1.755
+AB round=6 tree=old backend=wgpu shape=qwen35_gqa_b1h8kv2t2048d256 window=full fwd_min=59.450 fwd_med=67.138 bwd_min=285.931 bwd_med=305.459 ctl_min=1.684 ctl_med=2.014

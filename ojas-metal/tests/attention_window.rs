@@ -260,3 +260,46 @@ fn keys_outside_the_window_never_reach_a_row() {
         }
     }
 }
+
+/// Bytes a Qwen3.5-2B grouped-query attention call (8 query heads over 2
+/// KV heads, head dim 256) charges beyond its operands, with the figure the
+/// removed expand path charged (c74f3ba: K and V repeated to the query
+/// heads in the forward, and K, V, dK and dV in the backward).
+#[test]
+fn grouped_query_charges_no_expanded_heads_at_the_qwen35_shape() {
+    let m = metal();
+    let (b, h, hkv, t, d) = (1usize, 8usize, 2usize, 2048usize, 256usize);
+    let (q_bytes, kv_bytes, rows_bytes) = (4 * b * h * t * d, 4 * b * hkv * t * d, 4 * b * h * t);
+    // The removed path: the forward held K and V repeated to the query
+    // heads; the backward also held dK and dV at query size, beside the
+    // log-sum-exp and `Dr` rows it formed itself.
+    let old_fwd = q_bytes + 2 * q_bytes;
+    let old_bwd = q_bytes + 2 * kv_bytes + 2 * rows_bytes + 4 * q_bytes;
+    let [q, k, v, gy] = inputs(b, h, hkv, t, d, 7700);
+    let dd = [up(&m, &q), up(&m, &k), up(&m, &v), up(&m, &gy)];
+    ok("sync", m.sync());
+    let live = m.budget().live_bytes().unwrap();
+    m.budget().reset_peak();
+    let (y, l) = ok("fwd", m.causal_sdpa_forward(&dd[0], &dd[1], &dd[2], None));
+    ok("sync", m.sync());
+    let fwd_peak = (m.budget().peak_bytes() - live) as usize;
+    let live = m.budget().live_bytes().unwrap();
+    m.budget().reset_peak();
+    let grads = ok(
+        "bwd",
+        m.causal_sdpa_backward(&dd[0], &dd[1], &dd[2], &y, &l, &dd[3], None),
+    );
+    ok("sync", m.sync());
+    let bwd_peak = (m.budget().peak_bytes() - live) as usize;
+    drop(grads);
+    // Outputs only: y and the row lse; dQ, dK, dV and the `Dr` rows.
+    assert_eq!(fwd_peak, q_bytes + rows_bytes, "forward charge");
+    assert_eq!(
+        bwd_peak,
+        q_bytes + 2 * kv_bytes + rows_bytes,
+        "backward charge"
+    );
+    eprintln!(
+        "metal qwen35 b{b} h{h}/{hkv} t{t} d{d}: forward {fwd_peak} B (expand path {old_fwd} B), backward {bwd_peak} B (expand path {old_bwd} B)"
+    );
+}
