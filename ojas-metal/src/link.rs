@@ -171,6 +171,15 @@ pub(crate) struct SdpaGeom {
     pub window: u32,
 }
 
+/// Causal conv1d geometry, validated and within the kernels' limits.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Conv1dGeom {
+    pub batch: u32,
+    pub seq: u32,
+    pub channels: u32,
+    pub width: u32,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RopeMode {
     /// cos/sin have the shape of x.
@@ -271,12 +280,17 @@ pub(crate) enum Cmd {
         sides: Vec<RmsSide>,
         eps: f32,
     },
+    /// Half-split RoPE on the leading `rotary` values of each row of
+    /// `dim`, the rest copied; `rotary == dim` rotates the whole row. `op`
+    /// names a fault.
     Rope {
+        op: &'static str,
         x: Arg,
         cos: Arg,
         sin: Arg,
         rows: u32,
         dim: u32,
+        rotary: u32,
         mode: RopeMode,
         backward: bool,
     },
@@ -342,6 +356,42 @@ pub(crate) enum Cmd {
         ckpt: Arg,
         d_o: Arg,
         d_fin: Option<Arg>,
+    },
+    /// Depthwise causal conv + SiLU over `[batch, seq, channels]` from a
+    /// zero state, `w` `[channels, width]`.
+    Conv1d {
+        x: Arg,
+        w: Arg,
+        geom: Conv1dGeom,
+    },
+    /// Its backward: `dx`, then `dw`. `part` is the weight-gradient
+    /// scratch the backend charged, in f32 values.
+    Conv1dBwd {
+        x: Arg,
+        w: Arg,
+        gy: Arg,
+        geom: Conv1dGeom,
+        part: usize,
+    },
+    /// Gated RMSNorm over rows of `dim`, `w` `[dim]`.
+    GatedRms {
+        x: Arg,
+        z: Arg,
+        w: Arg,
+        rows: u32,
+        dim: u32,
+        eps: f32,
+    },
+    /// Its backward: `dx`, `dz`, then `dw`. `part` as for [`Cmd::Conv1dBwd`].
+    GatedRmsBwd {
+        x: Arg,
+        z: Arg,
+        w: Arg,
+        gy: Arg,
+        rows: u32,
+        dim: u32,
+        eps: f32,
+        part: usize,
     },
     RoundBf16 {
         x: Arg,

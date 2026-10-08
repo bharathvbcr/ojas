@@ -102,6 +102,44 @@ Consolidated task covering high-level model execution, Autograd Tape scaling, an
 - **Still open in Phase 3:** causal conv1d, gated RMSNorm, MRoPE, the GDN
   gates, a wgpu GDN kernel, and the 2B hybrid through Tape.
 
+### Audit and progress (2026-10-07, Metal hybrid-ops session)
+Criteria, checked against this branch:
+1. **Block checkpointing — met.** `Tape::checkpoint` (`ojas-autograd/src/tape.rs`)
+   and `ActivationCheckpoint::Blocks` (`ojas-model/src/block.rs`);
+   gates in `ojas-autograd/tests/checkpoint.rs`.
+2. **Past T = 2048 — met.** `ojas-model/tests/activation_checkpoint.rs`:
+   bit-equal loss and gradients, and at T 2304 a budget that holds the
+   checkpointed step refuses the uncheckpointed one.
+3. **GDN in the trait — met** (2026-10-06 notes above).
+4. **Conv1d in the trait — met** (CPU, autocast, capi gate, tape).
+5. **Gated RMSNorm and partial RoPE with MRoPE collapse — met**
+   (`rope_partial_*`, `ojas_core::mrope_text_tables`).
+6. **Metal — partly met.** This session added Metal
+   `causal_conv1d_silu_*` and `gated_rms_norm_*` on tessl's `qwen35` /
+   `qwen35_bwd` kernels, and `rope_partial_*` on `ojas_rope`, which now
+   takes a rotary width (`rotary == dim` is the old kernel). Gates:
+   `ojas-metal/tests/hybrid.rs` (CPU parity, unaligned offsets bit-equal,
+   refusals, deferred faults) and `ojas-model/tests/metal_hybrid_tape.rs`
+   (conv → GDN → gated norm → partial RoPE on the Metal tape against the
+   CPU tape, and checkpointed against direct bit for bit). **Open:** the
+   2B hybrid itself through Tape. ojas-model has no hybrid block, and
+   building one is a rework the user deferred.
+7. **Shape validators — met** (`accumulate_grad_dims`, `permute_dims`;
+   `docs/shape-contract.md`).
+8. **Per-parameter LR — blocked.** tessl main (4e5faac) has no per-entry
+   `lr_scale`, and the branch `check_tessl_lr` names is not in the local
+   tessl. `check_tessl_lr` stays.
+9. **2B headroom — open.** `ojas-qwen35/README.md` still lists
+   `save_state`, `load_state` and longer sequences as not measured. Those
+   are ~50 GB Metal runs, deferred by the user.
+
+Build note: in a GitPulse worktree, cargo fails to load gusset through
+`.gitpulse/devtools` ("`workspace.package.version` was not defined").
+Resolving tessl through `.gitpulse/worktrees/tessl` caches the main
+checkout's workspace root, and gusset's logical path sits under it. This
+session pointed the two gusset path dependencies at the real path, as a
+local, uncommitted edit.
+
 ### Execution plan
 - **Phase 1 (Shape Validator Centralization):** Move `accumulate_grad` and `permute` validation into `ojas_core::shapes`, delete backend copies, and verify zero-length permute axes cross-backend.
 - **Phase 2 (Activation Checkpointing):** Implement block-level activation checkpointing on Tape, verifying exact gradient parity against uncheckpointed runs.
