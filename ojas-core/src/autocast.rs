@@ -1037,6 +1037,12 @@ impl<B: Backend> Backend for Autocast<B> {
         self.wrote(cache);
         Ok(())
     }
+
+    /// A selection, not arithmetic: the operand passes through unrounded.
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        self.inner.argmax_rows(x)
+    }
 }
 
 #[cfg(test)]

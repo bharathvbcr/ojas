@@ -105,6 +105,39 @@ impl Rope {
         })
     }
 
+    /// Rows for positions `start..start + len`, a view of this table: no
+    /// copy, wherever the table lives. The positions must lie inside
+    /// `self.start()..self.start() + self.len()`; `len` 0 is refused.
+    pub fn slice(&self, start: usize, len: usize) -> Result<Self, OjasError> {
+        let end = start.checked_add(len);
+        let inside = start >= self.start && end.is_some_and(|e| e <= self.start + self.len);
+        if len == 0 || !inside {
+            return Err(OjasError::OutOfRange {
+                op: "Rope::slice",
+                detail: format!(
+                    "positions {start}..{start}+{len} are not inside the table's {}..{}",
+                    self.start,
+                    self.start + self.len
+                ),
+            });
+        }
+        let dim = self.cos.shape()[1];
+        let offset = (start - self.start)
+            .checked_mul(dim)
+            .and_then(|e| e.checked_mul(DType::F32.size()))
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: "Rope::slice",
+                detail: "row offset overflows".to_string(),
+            })?;
+        let view = |t: &Tensor| t.narrow(offset, &[len, dim], &[dim, 1]);
+        Ok(Self {
+            cos: view(&self.cos)?,
+            sin: view(&self.sin)?,
+            start,
+            len,
+        })
+    }
+
     pub fn start(&self) -> usize {
         self.start
     }

@@ -349,6 +349,26 @@ fn table_dims(op: &'static str, table: &Tensor) -> Result<(usize, usize), OjasEr
     }
 }
 
+/// [`crate::Backend::argmax_rows`]: `x` `F32` `[rows, cols]`. Returns
+/// `(rows, cols)`. Both must fit `u32`, so every result id does too.
+pub fn argmax_rows_dims(x: &Tensor) -> Result<(usize, usize), OjasError> {
+    const OP: &str = "argmax_rows";
+    f32_operand(OP, x)?;
+    let &[rows, cols] = x.shape() else {
+        return Err(refuse(
+            OP,
+            format!("rank {} != 2 [rows, cols]", x.shape().len()),
+        ));
+    };
+    if u32::try_from(rows).is_err() || u32::try_from(cols).is_err() {
+        return Err(too_large(
+            OP,
+            format!("[{rows}, {cols}] does not fit u32 ids"),
+        ));
+    }
+    Ok((rows, cols))
+}
+
 /// [`crate::Backend::embedding_forward`]: `table` `[vocab, dim]` `F32`,
 /// `token_ids` `U32` of any rank (rank 0 included). The output is
 /// `ids.shape ++ [dim]`. Id range is the backend's to check.

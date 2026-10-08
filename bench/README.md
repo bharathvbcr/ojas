@@ -31,6 +31,7 @@ bytecode writing is disabled so that checkout is not touched).
 | `ojas_rows.rs` | The ojas side, generic over `ojas_core::Backend`: the shared input generator, the parity gate and the timing loop, and every row. Compiled into both examples by `#[path]`. |
 | `../ojas-metal/examples/metal_vs_torch.rs` | Opens `MetalBackend` and runs the rows. Metal ops are recorded and return before the device runs them (`docs/metal-deferred-faults.md`); `Backend::sync` after every iteration waits for them and reports any deferred fault. |
 | `../ojas-wgpu/examples/wgpu_vs_torch.rs` | Opens `WgpuBackend` and runs the rows with `Backend::sync` (submit and wait) after every iteration. Its first output line records the adapter and the HAL. |
+| `decode_rows.rs` | Whole-model decode rows (see "Decode rows"), generic over `ojas_core::Backend`, compiled with `ojas_rows.rs` into `ojas-infer/examples/decode_vs_torch.rs`. |
 | `gate_saved_ab.rs` | Per-head gate A/B: the plain forward and backward against the saved-sigmoid pair (`forward_saving`, `backward_saved`) at nanolab's shape (4096 rows, d_model 768, 12 heads of 64). Generic over `ojas_core::Backend`. It is compiled by `#[path]` into the ignored `bench_gate_saved_against_recomputed` tests of `ojas-metal/tests/gate_saved.rs` and `ojas-wgpu/tests/gate_saved.rs`. Each round times every variant once per iteration, alternating which goes first, with `Backend::sync` per call, and reports the min and median. Results are in `results/2026-10-07-gate-saved/`. |
 | `torch_rows.py` | The torch twin of every row. `ref` writes the reference outputs, `time` times the rows, `env` records versions and checks the optimizer parameter list against `GPT(Config())`. |
 | `aggregate.py` | Per-round ratios, spread flags, the ranked list and the load table, as markdown. |
@@ -122,6 +123,33 @@ bytecode writing is disabled so that checkout is not touched).
   (request i is row i of the batched inputs), as B batch-1 calls recorded
   before one synchronize; torch runs B SDPAs on `[1, H, T, D]` slices. `x`
   minus `b` is what dispatching the requests one at a time costs.
+
+## Decode rows
+
+`decode_rows.rs`, compiled into `ojas-infer/examples/decode_vs_torch.rs`
+(argument `cpu`, `cpu-host`, `metal` or `wgpu`), times whole-model decode:
+nanolab's default GPT (124M, vocab 50304) with weights from the shared
+generator (seed per parameter `fnv1a32(name) % 2^20 + 1000`, scales in the
+file's docs), a 32-token prompt from `gen_targets(32, 1701)`.
+
+- `gen_prefill_p32`: the prompt forward from an empty cache.
+- `gen_greedy_p32_n32`: the prompt forward and 31 single-token forwards, each
+  fed the previous argmax (32 ids; the last is not forwarded).
+
+ojas runs `DeviceDecoder` on `CpuBackend` (`ojas-cpu`), Metal and wgpu, and
+`CpuGpt` (`ojas-cpu-host`). torch runs nanolab's own KV-cached path,
+`GPT.forward_hidden_window(..., commit=True, causal=True)` plus `lm_head` on
+the last position, under `torch.no_grad()`. Both rows are gated on the
+prompt's last-position logits (1e-3). Greedy ids are not a gate: a
+`_gen_ids` record counts how many equal torch's. A `_gen_traffic` record
+holds `DeviceDecoder::traffic()` per decode step (host tensors uploaded and
+bytes, bytes read back). `aggregate.py` ends with a "Decode" table: per-token
+ms = (greedy - prefill) / 31, tokens/s, and those records.
+
+The metal and wgpu lanes run their kernel rows and then the decode rows into
+the same lane file. The CPU lanes are opt-in: `BENCH_LANES="ojas-metal
+ojas-wgpu ojas-cpu ojas-cpu-host torch-mps"`. Decode rows only:
+`BENCH_ROWS=gen_`.
 
 ## Results kept in the tree
 

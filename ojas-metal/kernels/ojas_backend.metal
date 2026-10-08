@@ -8,7 +8,9 @@
 // thread's status slab, zeroed by the host after a waited commit:
 //   0  an input is non-finite        1  an output or intermediate is non-finite
 // The rest of the slot is unused. Token ids are range-checked, and the
-// cross-entropy valid-row count formed, on the host from its copy of the ids.
+// cross-entropy valid-row count formed, on the host from its copy of the ids;
+// ids `ojas_argmax_rows` produced are below its column count by construction,
+// which the host checks against the embedding's vocabulary instead.
 // The elementwise kernels (silu, mul, add, value-residual) set words 0 and 1
 // from the elements they read and write; every other op runs
 // `ojas_check_finite` over its inputs and outputs.
@@ -613,6 +615,68 @@ kernel void ojas_embed_fwd(
     const uint id = ids[gid.y];
     const ulong o = (ulong)gid.y * dim + gid.x;
     out[o] = id < vocab ? table[(ulong)id * dim + gid.x] : 0.0f;
+}
+
+#define ARGMAX_TG 256u
+#define ARGMAX_NONE 0xFFFFFFFFu
+
+/// `out[r]` = the column of row `r`'s largest value, ties to the lowest
+/// column, as `ojas_infer::argmax_token`; every column is `< cols`. One
+/// threadgroup per row: each lane keeps its best over a strided walk (in
+/// rising column order, so a strict `>` keeps the lowest tie), then a tree
+/// over the lanes keeps the larger value, or the lower column on a tie. A
+/// non-finite value sets status word 0 (the host reports it at the next
+/// sync) and does not take part.
+kernel void ojas_argmax_rows(
+    device const float *x [[buffer(0)]],
+    device uint *out [[buffer(1)]],
+    device atomic_uint *st [[buffer(2)]],
+    constant uint &rows [[buffer(3)]],
+    constant uint &cols [[buffer(4)]],
+    uint r [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]])
+{
+    threadgroup float bv[ARGMAX_TG];
+    threadgroup uint bi[ARGMAX_TG];
+    if (r >= rows) return;
+    const ulong base = (ulong)r * cols;
+    float best = 0.0f;
+    uint idx = ARGMAX_NONE;
+    bool bad = false;
+    for (uint c = lane; c < cols; c += ARGMAX_TG) {
+        const float v = x[base + c];
+        if (!isfinite(v)) {
+            bad = true;
+        } else if (idx == ARGMAX_NONE || v > best) {
+            best = v;
+            idx = c;
+        }
+    }
+    if (bad) {
+        atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
+    }
+    bv[lane] = best;
+    bi[lane] = idx;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint s = ARGMAX_TG / 2u; s > 0u; s >>= 1u) {
+        if (lane < s) {
+            const float ov = bv[lane + s];
+            const uint oi = bi[lane + s];
+            const uint mi = bi[lane];
+            const bool take = oi != ARGMAX_NONE
+                && (mi == ARGMAX_NONE || ov > bv[lane] || (ov == bv[lane] && oi < mi));
+            if (take) {
+                bv[lane] = ov;
+                bi[lane] = oi;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (lane == 0u) {
+        // A row with no finite value has already set word 0; 0 keeps the
+        // output a valid column.
+        out[r] = bi[0] == ARGMAX_NONE ? 0u : bi[0];
+    }
 }
 
 kernel void ojas_embed_count(

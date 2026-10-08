@@ -171,6 +171,20 @@ impl KvCache {
         self.max_len - self.len
     }
 
+    /// Forget every position. The storage stays allocated and charged; the
+    /// next token goes at position 0.
+    pub fn reset(&mut self) {
+        self.len = 0;
+    }
+
+    /// Keep positions `0..len` and forget the rest, so the next token goes
+    /// at `len` (roll back to a prefix to regenerate from it). A `len`
+    /// above [`Self::len`] is [`OjasError::OutOfRange`] and changes nothing:
+    /// the slots past the current length hold nothing valid.
+    pub fn truncate(&mut self, len: usize) -> Result<(), OjasError> {
+        truncate_len(&mut self.len, len, "KvCache::truncate")
+    }
+
     fn push_slot(&mut self) -> Result<usize, OjasError> {
         if self.len >= self.max_len {
             return Err(self.refusal(1));
@@ -182,6 +196,18 @@ impl KvCache {
     pub(crate) fn refusal(&self, extra: usize) -> OjasError {
         capacity_refusal(self.width, self.len, self.max_len, extra)
     }
+}
+
+/// Shorten a cache length to `to`, refusing to lengthen it.
+pub(crate) fn truncate_len(len: &mut usize, to: usize, op: &'static str) -> Result<(), OjasError> {
+    if to > *len {
+        return Err(OjasError::OutOfRange {
+            op,
+            detail: format!("cannot truncate {} filled positions to {to}", *len),
+        });
+    }
+    *len = to;
+    Ok(())
 }
 
 /// [`OjasError::CapacityExceeded`] for `extra` more positions of `width`
@@ -362,10 +388,68 @@ impl CpuGpt {
     /// keys and values. Linear outputs and residual sums are checked
     /// finite, so the returned logits are finite. A cache longer than the
     /// model's `max_seq` is refused before any position is written; a
-    /// failure part-way leaves `cache.len()` unchanged.
+    /// failure part-way, the final norm and the head included, leaves
+    /// `cache.len()` unchanged.
     pub fn forward_token(&self, token: u32, cache: &mut KvCache) -> Result<Vec<f32>, OjasError> {
+        self.forward_tokens(&[token], cache)
+    }
+
+    /// Forward `tokens` at positions `cache.len()..` (a prompt prefill when
+    /// there are several), appending their keys and values, and return the
+    /// last position's logits. Only the last position runs the final norm
+    /// and the vocabulary head. All or nothing, as
+    /// [`crate::DeviceDecoder::forward`]: a request past the cache's room is
+    /// [`OjasError::CapacityExceeded`] before anything runs, and a failure
+    /// at any token leaves `cache.len()` where it was. Slots at or past
+    /// `len` are never read, so what a failed call wrote there is never
+    /// seen.
+    pub fn forward_tokens(
+        &self,
+        tokens: &[u32],
+        cache: &mut KvCache,
+    ) -> Result<Vec<f32>, OjasError> {
         self.check_cache(cache)?;
-        let pos = cache.push_slot()?;
+        let Some((&last, head)) = tokens.split_last() else {
+            return Err(OjasError::Shape {
+                op: "CpuGpt::forward_tokens",
+                detail: "no tokens".into(),
+            });
+        };
+        if tokens.len() > cache.remaining() {
+            return Err(cache.refusal(tokens.len()));
+        }
+        let start = cache.len;
+        let run = |cache: &mut KvCache| -> Result<Vec<f32>, OjasError> {
+            for &id in head {
+                let pos = cache.push_slot()?;
+                self.trunk(id, pos, cache)?;
+                cache.len = pos + 1;
+            }
+            let pos = cache.push_slot()?;
+            let x = self.trunk(last, pos, cache)?;
+            let norm = self.rms_norm(&x, &self.params.norm_f)?;
+            let mut logits = vec![0.0f32; self.spec.vocab];
+            Self::apply_linear(
+                &norm,
+                &self.params.tok_emb,
+                self.spec.n_embd,
+                self.spec.vocab,
+                &mut logits,
+            )?;
+            cache.len = pos + 1;
+            Ok(logits)
+        };
+        let out = run(cache);
+        if out.is_err() {
+            cache.len = start;
+        }
+        out
+    }
+
+    /// Every block for `token` at position `pos`: writes the token's keys
+    /// and values into slot `pos`, attends over `0..=pos`, and returns the
+    /// residual stream. `cache.len` is the caller's to advance.
+    fn trunk(&self, token: u32, pos: usize, cache: &mut KvCache) -> Result<Vec<f32>, OjasError> {
         let s = &self.spec;
         let (d, qw, kvw, dh, hidden) = (s.n_embd, s.q_width(), s.kv_width(), s.head_dim, s.hidden);
         let eps = s.eps();
@@ -447,11 +531,7 @@ impl CpuGpt {
             Self::apply_linear(&mixed, &b.ffn_down, hidden, d, &mut proj)?;
             add_into(&mut x, &proj)?;
         }
-        cache.len = pos + 1;
-        let norm = self.rms_norm(&x, &self.params.norm_f)?;
-        let mut logits = vec![0.0f32; s.vocab];
-        Self::apply_linear(&norm, &self.params.tok_emb, d, s.vocab, &mut logits)?;
-        Ok(logits)
+        Ok(x)
     }
 
     /// Greedy continuation through [`argmax_token`]: a non-finite logit is
@@ -465,7 +545,7 @@ impl CpuGpt {
     ) -> Result<Vec<u32>, OjasError> {
         self.check_cache(cache)?;
         let mut step = HostStep { model: self, cache };
-        decode::decode(&mut step, DECODE_OP, prompt, new_tokens, &[], argmax_token)
+        decode::decode(&mut step, DECODE_OP, prompt, new_tokens, &[], None)
     }
 
     /// Sampled continuation of `prompt` ([`crate::sample_token`] with a
@@ -512,11 +592,7 @@ impl Forward for HostStep<'_> {
     }
 
     fn forward(&mut self, tokens: &[u32]) -> Result<Vec<f32>, OjasError> {
-        let mut logits = Vec::new();
-        for &id in tokens {
-            logits = self.model.forward_token(id, self.cache)?;
-        }
-        Ok(logits)
+        self.model.forward_tokens(tokens, self.cache)
     }
 }
 
@@ -640,7 +716,7 @@ mod tests {
         // emitted token is not forwarded). Two new tokens need a second
         // slot and are refused before any forward.
         let mut cache = KvCache::for_model(&model, 1, &budget).unwrap();
-        assert_eq!(model.greedy_decode(&[0], &mut cache, 1).unwrap(), vec![0]);
+        assert_eq!(model.greedy_decode(&[0], &mut cache, 1).unwrap(), vec![1]);
         assert_eq!(cache.len(), 1);
         let mut cache = KvCache::for_model(&model, 1, &budget).unwrap();
         let err = model.greedy_decode(&[0], &mut cache, 2).unwrap_err();
@@ -882,6 +958,111 @@ mod tests {
         assert!(logits.iter().all(|v| v.is_finite()), "{logits:?}");
         drop(model);
         assert_eq!(budget.live_bytes().unwrap(), 0);
+    }
+
+    /// The final norm and the head run after every block has written slot
+    /// 0. In the tiny model `x` stays `emb[token]` (`o_proj` and the MLP are
+    /// zero), so a vocabulary row of `f32::MAX` overflows the head's dot
+    /// product, and a `norm_f` of `f32::MAX` overflows the final norm.
+    #[test]
+    fn a_failure_in_the_final_norm_or_head_leaves_the_cache_length_unchanged() {
+        let budget = Budget::new(1 << 20);
+        let (head, cfg) = tiny(&budget, &[1.0, 0.0, f32::MAX, f32::MAX]);
+        let mut w = tiny_weights(&budget, &BIG_FIRST);
+        w.norm_f = tensor(&[f32::MAX, f32::MAX], &[2], &budget);
+        let norm = CpuGpt::new(&cfg, &w).unwrap();
+        for model in [&head, &norm] {
+            let mut cache = KvCache::for_model(model, cfg.max_seq, &budget).unwrap();
+            let err = model.forward_token(0, &mut cache).unwrap_err();
+            assert!(matches!(err, OjasError::NonFinite { .. }), "{err}");
+            assert_eq!(cache.len(), 0);
+        }
+    }
+
+    /// Token 0 runs clean (its logits are finite); token 1's embedding has a
+    /// sum of squares past `f32::MAX`, so `norm1` refuses it after token 0
+    /// filled slot 0. The prompt is all or nothing.
+    #[test]
+    fn a_failure_at_any_prompt_token_leaves_the_cache_length_unchanged() {
+        let budget = Budget::new(1 << 20);
+        let (model, cfg) = tiny(&budget, &[1.0, 0.0, 3.0e19, 0.0]);
+        let mut cache = KvCache::for_model(&model, cfg.max_seq, &budget).unwrap();
+        assert!(model.forward_token(0, &mut cache).is_ok());
+        assert_eq!(cache.len(), 1);
+        let mut cache = KvCache::for_model(&model, cfg.max_seq, &budget).unwrap();
+        let err = model.greedy_decode(&[0, 1], &mut cache, 1).unwrap_err();
+        assert!(matches!(err, OjasError::NonFinite { .. }), "{err}");
+        assert_eq!(cache.len(), 0);
+        let cfg_gen = GenerateConfig {
+            sampling: crate::SamplingConfig::greedy(),
+            seed: 0,
+            max_new_tokens: 1,
+            stop_tokens: Vec::new(),
+        };
+        let err = model
+            .generate(&[0, 0, 1], &mut cache, &cfg_gen)
+            .unwrap_err();
+        assert!(matches!(err, OjasError::NonFinite { .. }), "{err}");
+        assert_eq!(cache.len(), 0);
+        // The cache still decodes from where it was: row 1 (3e19) leads the
+        // head for token 0.
+        assert_eq!(model.greedy_decode(&[0], &mut cache, 1).unwrap(), vec![1]);
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn kv_cache_reset_and_truncate_roll_back_to_a_prefix() {
+        let budget = Budget::new(1 << 24);
+        let (model, cfg) = seeded(&budget);
+        let prompt = [3u32, 9, 14, 2, 30];
+        let mut cache = KvCache::for_model(&model, cfg.max_seq, &budget).unwrap();
+        let full = model.forward_tokens(&prompt, &mut cache).unwrap();
+        assert_eq!(cache.len(), prompt.len());
+
+        // Regenerate the last two positions from the 3-token prefix.
+        cache.truncate(3).unwrap();
+        assert_eq!(cache.len(), 3);
+        assert_eq!(
+            model.forward_tokens(&prompt[3..], &mut cache).unwrap(),
+            full
+        );
+
+        let err = cache.truncate(prompt.len() + 1).unwrap_err();
+        assert!(matches!(err, OjasError::OutOfRange { .. }), "{err}");
+        assert_eq!(cache.len(), prompt.len());
+        cache.truncate(prompt.len()).unwrap();
+        assert_eq!(cache.len(), prompt.len());
+
+        cache.reset();
+        assert!(cache.is_empty());
+        assert_eq!(cache.remaining(), cfg.max_seq);
+        assert_eq!(model.forward_tokens(&prompt, &mut cache).unwrap(), full);
+    }
+
+    /// Prefill computes the vocabulary head for the last prompt token only,
+    /// and its logits equal the token-by-token forward's bit for bit.
+    #[test]
+    fn prompt_prefill_equals_token_by_token_and_refuses_up_front() {
+        let budget = Budget::new(1 << 24);
+        let (model, cfg) = seeded(&budget);
+        let prompt = [5u32, 0, 36, 17, 8, 8, 21];
+        let mut one = KvCache::for_model(&model, cfg.max_seq, &budget).unwrap();
+        let mut want = Vec::new();
+        for &id in &prompt {
+            want = model.forward_token(id, &mut one).unwrap();
+        }
+        let mut all = KvCache::for_model(&model, cfg.max_seq, &budget).unwrap();
+        assert_eq!(model.forward_tokens(&prompt, &mut all).unwrap(), want);
+        assert_eq!(all.len(), prompt.len());
+
+        let mut small = KvCache::for_model(&model, prompt.len() - 1, &budget).unwrap();
+        let err = model.forward_tokens(&prompt, &mut small).unwrap_err();
+        assert!(matches!(err, OjasError::CapacityExceeded { .. }), "{err}");
+        assert_eq!(small.len(), 0);
+        assert!(matches!(
+            model.forward_tokens(&[], &mut small),
+            Err(OjasError::Shape { .. })
+        ));
     }
 
     /// A weight of the wrong shape or dtype, or a missing block, is refused

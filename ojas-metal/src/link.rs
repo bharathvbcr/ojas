@@ -262,6 +262,12 @@ pub(crate) enum Cmd {
         vocab: u32,
         dim: u32,
     },
+    /// Each row's argmax column, `[rows]` u32.
+    Argmax {
+        x: Arg,
+        rows: u32,
+        cols: u32,
+    },
     EmbedBwd {
         table: Arg,
         ids: Arg,

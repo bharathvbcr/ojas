@@ -1340,6 +1340,16 @@ pub fn check_generator(refdir: &std::path::Path) -> Result<(), String> {
 
 /// Shared `main` body: read the environment, check the generator, run rows.
 pub fn main_with<Bk: Backend>(be: &Bk, runtime: &str, device_json: &str) -> Result<(), String> {
+    main_rows(be, runtime, device_json, run_all)
+}
+
+/// [`main_with`] with the rows `rows` runs instead of [`run_all`]'s.
+pub fn main_rows<Bk: Backend>(
+    be: &Bk,
+    runtime: &str,
+    device_json: &str,
+    rows: impl FnOnce(&mut Runner<'_, Bk>),
+) -> Result<(), String> {
     let env = |k: &str| std::env::var(k).ok();
     let refdir = PathBuf::from(env("OJAS_BENCH_REF").ok_or("OJAS_BENCH_REF is not set")?);
     let out_path = env("OJAS_BENCH_OUT").ok_or("OJAS_BENCH_OUT is not set")?;
@@ -1382,7 +1392,7 @@ pub fn main_with<Bk: Backend>(be: &Bk, runtime: &str, device_json: &str) -> Resu
         "{{\"runtime\":{},\"row\":\"_device\",\"status\":\"info\",\"device\":{device_json}}}",
         json_str(runtime)
     ));
-    run_all(&mut r);
+    rows(&mut r);
     Ok(())
 }
 

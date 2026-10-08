@@ -579,6 +579,10 @@ impl<B: Backend> Backend for Gated<B> {
         self.enter("kv_cache_write", true)?;
         self.inner.kv_cache_write(cache, src, at)
     }
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        self.enter("argmax_rows", true)?;
+        self.inner.argmax_rows(x)
+    }
     fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
         self.enter("cast_bf16", true)?;
         self.inner.cast_bf16(tensor)

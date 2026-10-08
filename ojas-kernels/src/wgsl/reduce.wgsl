@@ -6,6 +6,7 @@
 @group(0) @binding(3) var<storage, read> x1: array<f32>;
 @group(0) @binding(4) var<storage, read> x2: array<f32>;
 @group(0) @binding(5) var<storage, read_write> y0: array<f32>;
+@group(0) @binding(6) var<storage, read_write> yu: array<u32>;
 
 const CHUNK: u32 = 4096u;
 
@@ -96,4 +97,65 @@ fn col_finish(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg
     }
     report(acc);
     y0[c] = acc;
+}
+
+// argmax_rows: one workgroup per row. Each lane keeps its best over a strided
+// walk in rising column order (a strict > keeps the lowest tie), then a tree
+// over the lanes keeps the larger value, or the lower column on a tie. A
+// non-finite value raises the op's fault and takes no part.
+var<workgroup> arg_v: array<f32, 256>;
+var<workgroup> arg_i: array<u32, 256>;
+
+const ARG_NONE: u32 = 0xffffffffu;
+
+// Words: 0 rows, 1 cols. yu[row] = the column of the row's largest value.
+@compute @workgroup_size(256, 1, 1)
+fn argmax_rows(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let row = flat_group(wg, nwg);
+    let rows = pw(0u);
+    let cols = pw(1u);
+    // `row` is the same for every lane of the workgroup, so this return
+    // leaves the barriers below in uniform control flow.
+    if (row >= rows) {
+        return;
+    }
+    var best = 0.0;
+    var idx = ARG_NONE;
+    var bad = false;
+    for (var c = lid.x; c < cols; c = c + 256u) {
+        let v = x0[row * cols + c];
+        if (nonfinite(v)) {
+            bad = true;
+        } else if (idx == ARG_NONE || v > best) {
+            best = v;
+            idx = c;
+        }
+    }
+    if (bad) {
+        raise();
+    }
+    arg_v[lid.x] = best;
+    arg_i[lid.x] = idx;
+    workgroupBarrier();
+    for (var s = 128u; s > 0u; s = s >> 1u) {
+        if (lid.x < s) {
+            let ov = arg_v[lid.x + s];
+            let oi = arg_i[lid.x + s];
+            let mi = arg_i[lid.x];
+            if (oi != ARG_NONE && (mi == ARG_NONE || ov > arg_v[lid.x] || (ov == arg_v[lid.x] && oi < mi))) {
+                arg_v[lid.x] = ov;
+                arg_i[lid.x] = oi;
+            }
+        }
+        workgroupBarrier();
+    }
+    if (lid.x == 0u) {
+        // A row with no finite value has raised already; 0 keeps the id a
+        // valid column.
+        var r = arg_i[0];
+        if (r == ARG_NONE) {
+            r = 0u;
+        }
+        yu[row] = r;
+    }
 }

@@ -1184,6 +1184,46 @@ pub trait Backend {
         })
     }
 
+    /// The column of each row's largest value: `x` `F32` `[rows, cols]` to
+    /// `U32` `[rows]`, ties to the lowest column (greedy decoding's pick).
+    /// Any NaN or infinity is [`OjasError::NonFinite`]; a device backend may
+    /// report it at the next [`Backend::sync`]. Every id is below `cols`, so
+    /// a backend may let the result index an `embedding_forward` table of at
+    /// least `cols` rows without reading the ids back. Validate with
+    /// [`crate::argmax_rows_dims`].
+    ///
+    /// The default reads `x` to the host (for a device tensor, a readback
+    /// and a [`Backend::sync`]), scans it there, and returns a host tensor
+    /// charged to this backend's budget.
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "argmax_rows";
+        let (rows, cols) = crate::argmax_rows_dims(x)?;
+        let host = match x.device() {
+            None => x.clone(),
+            Some(_) => {
+                let host = self.download(x)?;
+                self.sync()?;
+                host
+            }
+        };
+        let values = host.to_f32_vec()?;
+        let mut ids = Vec::with_capacity(rows);
+        for row in values.chunks_exact(cols) {
+            let mut best = 0usize;
+            for (i, &v) in row.iter().enumerate() {
+                if !v.is_finite() {
+                    return Err(OjasError::NonFinite { op: OP });
+                }
+                if v > row[best] {
+                    best = i;
+                }
+            }
+            // `argmax_rows_dims` checked that `cols` fits u32.
+            ids.push(best as u32);
+        }
+        Tensor::from_u32(&ids, &[rows], self.budget())
+    }
+
     /// Round a host f32 tensor to bf16 and widen it back to f32.
     ///
     /// A non-f32 tensor is [`OjasError::Dtype`]. A device tensor is
@@ -1679,6 +1719,9 @@ macro_rules! forward_backend {
             at: usize,
         ) -> Result<(), OjasError> {
             (**self).kv_cache_write(cache, src, at)
+        }
+        fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+            (**self).argmax_rows(x)
         }
         fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
             (**self).cast_bf16(tensor)
@@ -2513,6 +2556,9 @@ pub(crate) mod tests {
         fn kv_cache_write(&self, _: &mut Tensor, _: &Tensor, _: usize) -> Result<(), OjasError> {
             Err(mark("kv_cache_write"))
         }
+        fn argmax_rows(&self, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(mark("argmax_rows"))
+        }
         fn cast_bf16(&self, _: &Tensor) -> Result<Tensor, OjasError> {
             Err(mark("cast_bf16"))
         }
@@ -2612,6 +2658,7 @@ pub(crate) mod tests {
             op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, true)),
             op(backend.cached_attention_forward(&t, &t, &t, 1)),
             op(backend.kv_cache_write(&mut m, &t, 0)),
+            op(backend.argmax_rows(&t)),
             op(backend.cast_bf16(&t)),
             op(backend.autocast_region(AutocastMode::Off).map(drop)),
         ];
@@ -2663,6 +2710,7 @@ pub(crate) mod tests {
             "linear_cross_entropy_mean",
             "cached_attention_forward",
             "kv_cache_write",
+            "argmax_rows",
             "cast_bf16",
             "autocast_region",
         ];

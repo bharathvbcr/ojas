@@ -739,6 +739,7 @@ impl WgpuContext {
             bytes,
             ctx: Arc::clone(&self.inner),
             shadow: None,
+            below: None,
         })
     }
 
@@ -760,6 +761,7 @@ impl WgpuContext {
             bytes,
             ctx: Arc::clone(&self.inner),
             shadow,
+            below: None,
         })
     }
 
@@ -1417,12 +1419,14 @@ impl Job<'_> {
 
 /// Device memory behind a wgpu tensor. Dropping it returns the buffer to the
 /// pool. A U32 upload keeps a host copy of its values (`shadow`) so token ids
-/// and targets are validated without a device read.
+/// and targets are validated without a device read. A U32 tensor a kernel
+/// produced (`argmax_rows`) has no shadow; `below` bounds its values.
 pub struct WgpuBuffer {
     buf: Option<wgpu::Buffer>,
     bytes: u64,
     ctx: Arc<Inner>,
     shadow: Option<Arc<[u32]>>,
+    below: Option<u32>,
 }
 
 impl WgpuBuffer {
@@ -1438,6 +1442,17 @@ impl WgpuBuffer {
 
     pub(crate) fn shadow(&self) -> Option<&Arc<[u32]>> {
         self.shadow.as_ref()
+    }
+
+    /// Every value of this U32 buffer is below the bound, by construction.
+    pub(crate) fn below(&self) -> Option<u32> {
+        self.below
+    }
+
+    /// The same buffer, marked as holding U32 values below `bound`.
+    pub(crate) fn bounded(mut self, bound: u32) -> Self {
+        self.below = Some(bound);
+        self
     }
 }
 

@@ -55,19 +55,19 @@ use std::fmt;
 use std::sync::Arc;
 
 use ojas_core::{
-    accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
-    causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
-    check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
-    clip_scale, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
-    embedding_backward_dims, embedding_forward_dims, gated_rms_norm_backward_dims,
-    gated_rms_norm_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
-    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
-    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    refuse_bf16_operands, refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim,
-    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
-    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
-    rope_half_split_backward_dims, rope_half_split_forward_dims, rope_partial_backward_dims,
-    rope_partial_forward_dims, silu_backward_dims, silu_forward_dims,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
+    causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
+    causal_sdpa_forward_dims, check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims,
+    clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
+    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
+    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, kv_cache_write_dims,
+    linear_backward_dims, linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims,
+    muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims,
+    permute_dims, refuse_bf16_operands, refuse_unsupported_metal_gdn,
+    refuse_unsupported_metal_head_dim, residual_add_backward_dims, residual_add_forward_dims,
+    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
+    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
+    rope_partial_backward_dims, rope_partial_forward_dims, silu_backward_dims, silu_forward_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
     BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDims,
     GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
@@ -86,10 +86,20 @@ pub struct MetalBuffer {
     id: u64,
     len: usize,
     link: Arc<Link>,
-    /// The host's copy of a U32 upload. Every U32 Metal tensor is an upload
-    /// (no op produces one), so token ids are range-checked, and
-    /// cross-entropy's valid rows counted, here rather than on the device.
-    ids: Option<Arc<[u32]>>,
+    /// What the host knows of a U32 buffer's values, so token ids are
+    /// range-checked, and cross-entropy's valid rows counted, here rather
+    /// than on the device. `None` for an F32 buffer.
+    ids: Option<Ids>,
+}
+
+/// The host's knowledge of a U32 Metal buffer.
+enum Ids {
+    /// An upload: the values themselves.
+    Host(Arc<[u32]>),
+    /// Produced on the device (`argmax_rows`): every value is below this
+    /// bound, by construction. Enough to range-check an embedding lookup;
+    /// an op that needs the values (a valid-row count) refuses it.
+    Below(u32),
 }
 
 impl fmt::Debug for MetalBuffer {
@@ -301,11 +311,33 @@ impl MetalBackend {
         ignore: Option<u32>,
     ) -> Res<(Arg, u32)> {
         let a = self.arg(op, t, DType::U32)?;
-        let host = t
+        let known = t
             .device_buffer()
             .and_then(|b| b.as_any().downcast_ref::<MetalBuffer>())
             .and_then(|mb| mb.ids.as_ref())
             .ok_or_else(|| metal_err(format!("{op}: U32 tensor has no host copy of its ids")))?;
+        let host = match known {
+            Ids::Host(host) => host,
+            Ids::Below(bound) => {
+                if *bound > limit {
+                    return Err(OjasError::OutOfRange {
+                        op,
+                        detail: format!(
+                            "device-produced ids are only known to be below {bound}, past {limit}"
+                        ),
+                    });
+                }
+                if ignore.is_some_and(|i| i < *bound) {
+                    return Err(OjasError::Unsupported {
+                        op,
+                        detail: "counting rows equal to the ignore index needs the ids on the \
+                                 host; these were produced on the device"
+                            .to_string(),
+                    });
+                }
+                return Ok((a, u32_dim(op, a.n)?));
+            }
+        };
         let start = a.off / 4;
         let window = host
             .get(start..start + a.n)
@@ -981,7 +1013,7 @@ impl Backend for MetalBackend {
                 }
                 let reservation = self.budget.try_reserve(bytes.len() as u64)?;
                 let ids = match tensor.dtype() {
-                    DType::U32 => Some(Arc::<[u32]>::from(tensor.u32_slice()?)),
+                    DType::U32 => Some(Ids::Host(Arc::from(tensor.u32_slice()?))),
                     _ => None,
                 };
                 let nb = match self.link.call(Cmd::Upload { bytes })? {
@@ -1047,6 +1079,43 @@ impl Backend for MetalBackend {
                 dim,
             },
         )
+    }
+
+    /// `ojas_argmax_rows`: one threadgroup per row. A non-finite input is a
+    /// deferred fault, reported at the next sync. The result stays on the
+    /// device and carries [`Ids::Below`]`(cols)`, so it can feed
+    /// `embedding_forward` with no readback and no host copy.
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "argmax_rows";
+        let (rows, cols) = argmax_rows_dims(x)?;
+        let xa = self.f32(OP, x)?;
+        let (r, c) = (u32_dim(OP, rows)?, u32_dim(OP, cols)?);
+        let reservation = self.reserve(OP, rows)?;
+        let bufs = match self.link.call(Cmd::Argmax {
+            x: xa,
+            rows: r,
+            cols: c,
+        })? {
+            Reply::Bufs(bufs) => bufs,
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        // Wrapped before the count check, so a surplus buffer is freed.
+        let mut owned: Vec<Arc<MetalBuffer>> = bufs
+            .into_iter()
+            .map(|b| {
+                Arc::new(MetalBuffer {
+                    id: b.id,
+                    len: b.bytes,
+                    link: Arc::clone(&self.link),
+                    ids: Some(Ids::Below(c)),
+                })
+            })
+            .collect();
+        let (Some(buf), true) = (owned.pop(), owned.is_empty()) else {
+            return Err(metal_err(format!("{OP}: device did not return one output")));
+        };
+        let buf: Arc<dyn DeviceBuffer> = buf;
+        Tensor::from_device_reserved(buf, &[rows], DType::U32, reservation)
     }
 
     fn embedding_backward(

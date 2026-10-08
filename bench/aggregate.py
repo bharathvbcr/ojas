@@ -19,7 +19,10 @@ import statistics
 import sys
 
 SPREAD_LIMIT = 0.10
-OJAS = ("ojas-metal", "ojas-wgpu")
+OJAS = ("ojas-metal", "ojas-wgpu", "ojas-cpu", "ojas-cpu-host")
+# Lanes that run only the decode rows (bench/decode_rows.rs).
+DECODE_ONLY = ("ojas-cpu", "ojas-cpu-host")
+GEN_PREFIX = "gen_"
 TORCH = "torch-mps"
 
 
@@ -121,7 +124,10 @@ def main():
         lines += ["```", open(env).read().rstrip(), "```", ""]
     torch_rows = row_names(rounds, TORCH)
     ranked = []
+    present = {rt for rd in rounds.values() for (rt, _) in rd}
     for rt in OJAS:
+        if rt not in present:
+            continue
         rows = []
         names = row_names(rounds, rt)
         for n in names:
@@ -129,6 +135,8 @@ def main():
             if n + "_bf16" in torch_rows:
                 rows.append(summarize(rounds, rt, n, n + "_bf16"))
         for n in torch_rows:
+            if rt in DECODE_ONLY and not n.startswith(GEN_PREFIX):
+                continue
             if n not in names and not n.endswith("_bf16"):
                 rows.append({"row": n, "torch_row": n, "n": 0, "parity": None, "rel": None,
                              "problems": [f"NO DATA: row absent from {rt}"]})
@@ -152,8 +160,56 @@ def main():
         for line in open(load):
             d = json.loads(line)
             lines.append(f"| {d['round']} | {d['lane']} | {d['when']} | {d['time']} | {d['load']} | {d['gpu_util_pct']} |")
+    lines += decode_rates(rounds)
     lines += per_row_load(out)
     print("\n".join(lines))
+
+
+def decode_rates(rounds):
+    """Decode tokens/second per runtime from the two gen_ rows of each round:
+    per-token ms = (greedy median - prefill median) / (N - 1), N from the
+    greedy row's name; the median over rounds. Plus the last round's
+    `_gen_traffic` and `_gen_ids` records."""
+    out = []
+    for rt in (TORCH,) + OJAS:
+        per_tok, prefill, extra = [], [], {}
+        for r in sorted(rounds):
+            rd = rounds[r]
+            greedy = [(n, d) for (k, n), d in rd.items()
+                      if k == rt and n.startswith(GEN_PREFIX + "greedy_") and d["status"] == "ok"]
+            pre = [d for (k, n), d in rd.items()
+                   if k == rt and n.startswith(GEN_PREFIX + "prefill_") and d["status"] == "ok"]
+            for kind in ("_gen_traffic", "_gen_ids"):
+                if (rt, kind) in rd:
+                    extra[kind] = rd[(rt, kind)]
+            if len(greedy) != 1 or len(pre) != 1:
+                continue
+            name, g = greedy[0]
+            new = int(name.rsplit("_n", 1)[1])
+            per_tok.append((g["median_ms"] - pre[0]["median_ms"]) / (new - 1))
+            prefill.append(pre[0]["median_ms"])
+        if not per_tok:
+            continue
+        ms = statistics.median(per_tok)
+        cells = [rt, f"{fmt(statistics.median(prefill))}", f"{fmt(ms)}",
+                 f"{1e3 / ms:.1f}" if ms > 0 else "-", str(len(per_tok))]
+        t = extra.get("_gen_traffic", {})
+        cells.append("-" if "step_uploads" not in t else
+                     f"{t['step_uploads']:.0f} / {t['step_upload_bytes']:.0f} B / "
+                     f"{t['step_readback_bytes']:.0f} B")
+        i = extra.get("_gen_ids", {})
+        cells.append("-" if "ids_equal" not in i else
+                     f"{i['ids_equal']}/{i['of']} (prefix {i['common_prefix']})")
+        out.append("| " + " | ".join(cells) + " |")
+    if not out:
+        return []
+    return ["", "### Decode (gen_ rows)", "",
+            "Per-token ms = (greedy median - prefill median) / (N - 1), median over rounds. "
+            "Traffic is per decode step, from DeviceDecoder's counters (uploads / bytes up / "
+            "bytes read back).", "",
+            "| runtime | prefill median ms | decode ms / token | tokens / s | rounds "
+            "| step traffic | greedy ids equal to torch |",
+            "| :-- | --: | --: | --: | --: | :-- | :-- |"] + out
 
 
 def per_row_load(out):
