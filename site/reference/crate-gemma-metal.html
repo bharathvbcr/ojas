@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gemma-metal · ojas reference</title>
+  <meta name="description" content="Full-custom Rust + Metal 4 inference for Gemma 4. Prove on E4B (PLE + KV-share), then scale to 31B (no PLE; global k_eq_v).">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-gemma-metal.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-gemma-metal.html">
+  <meta property="og:title" content="gemma-metal · ojas reference">
+  <meta property="og:description" content="Full-custom Rust + Metal 4 inference for Gemma 4. Prove on E4B (PLE + KV-share), then scale to 31B (no PLE; global k_eq_v).">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-gemma-metal.html" class="current" aria-current="page">gemma-metal</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="gemma-metal">gemma-metal <a class="anchor" href="#gemma-metal" aria-label="Link to this section">#</a></h1>
+<p>Full-custom <strong>Rust + Metal 4</strong> inference for <strong>Gemma 4</strong>. Prove on <strong>E4B</strong> (PLE + KV-share), then scale to <strong>31B</strong> (no PLE; global <code>k_eq_v</code>).</p>
+<p><strong>Out of v1:</strong> vision/audio encoders; HF A10G challenge submissions.</p>
+<h2 id="goal">Goal <a class="anchor" href="#goal" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Step</th><th>Model</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Prove</td><td><code>google/gemma-4-E4B-it</code></td><td>Hardest correctness: PLE, KV-share, dual head dims 256/512</td></tr>
+<tr><td>Scale</td><td>Gemma 4 31B</td><td>Different deltas — not a scaled E4B</td></tr>
+<tr><td>Beat</td><td>Local Ollama <code>gemma4:31b-mlx</code> ≈ 11–12 tok/s on M5 Pro 64GB</td><td>Ship gate ≥15 tok/s Q4 decode</td></tr>
+</tbody></table></div>
+<p>Product lane is <strong>honest INT4 (+ MTP later)</strong>, not challenge frontier PPL-burn.</p>
+<h2 id="relation-to-mlsystemslab-training">Relation to MLSystemsLab training <a class="anchor" href="#relation-to-mlsystemslab-training" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Crate</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code><code>../../tessl/</code></code></td><td>Shared Metal 4 encode, residency, packed binder, TensorOps/simdgroup <strong>GEMM</strong> (prefill), util ops, MTLTensor prep</td></tr>
+<tr><td><strong><code>gemma-metal</code></strong> (this crate)</td><td>Gemma graph: Q4 banks, PLE split, dual KV, decode <strong>GEMV</strong>, dual FA, tokenizer, benches</td></tr>
+<tr><td><code>arch_02_value_resid/metal-native/</code></td><td><strong>Training</strong> stays here — do not train in gemma-metal / tessl</td></tr>
+</tbody></table></div>
+<p>Reuse the runtime substrate (~encode/GEMM). Do <strong>not</strong> drag bwd/Muon/XSA/VE or fork metal-native.</p>
+<h2 id="layout">Layout <a class="anchor" href="#layout" aria-label="Link to this section">#</a></h2>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>../MLSystemsLab/research/parameter-golf/
+  crates/tessl/   # Phase 0b extract
+  gemma-metal/            # this product crate
+    src/                  # config … gpu_model, mtp, kernels, thermal, …
+    src/bin/bench.rs      # Phase 4 speed harness
+    src/bin/serve.rs      # Phase 6 OpenAI-compatible stub
+    kernels/              # Gemma-only overlay: PLE + persistent-interp (general kernels live in tessl)
+    bench/                # Phase 0 multi-runtime harness → docs/gates.md
+    docs/
+    DECISIONS.md</code></pre></div>
+<h2 id="status-tree-as-of-2026-07-13">Status (tree as of 2026-07-13) <a class="anchor" href="#status-tree-as-of-2026-07-13" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Phase</th><th>Plan</th><th>In tree</th></tr></thead>
+<tbody>
+<tr><td><strong>0</strong> Baselines + gates</td><td>Measure LiteRT/MLX/Ollama</td><td><strong>Done</strong> — measured rows in <a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/docs/gates.md" rel="noopener"><code>docs/gates.md</code></a></td></tr>
+<tr><td><strong>0b</strong> Extract <code>tessl</code></td><td>Encode + GEMM + MTLTensor hooks</td><td><strong>Done</strong></td></tr>
+<tr><td><strong>1</strong> Scaffold</td><td>Q4 banks, PLE split, dual KV, tokenizer</td><td><strong>Done</strong></td></tr>
+<tr><td><strong>2</strong> E4B hot kernels</td><td>Real GEMV / dual FA / PLE / MLP</td><td><strong>Done</strong></td></tr>
+<tr><td><strong>3</strong> Parity</td><td>HF/MLX logits</td><td><strong>Partial</strong> — synthetic host forward + JSON stubs; <strong>no</strong> real-weight HF/MLX logit parity</td></tr>
+<tr><td><strong>4</strong> E4B speed</td><td>Hot banks + decode tok/s</td><td><strong>Measured</strong> — real E4B MLX Q4 <strong>~15.9 tok/s</strong> / TTFT ~230 ms (was ~13.9 / 265 ms); vectorized GEMV + GPU embed; <strong>still below</strong> gate ≥48–60 (vs mlx ~76). PLE Hot skipped.</td></tr>
+<tr><td><strong>5</strong> MTP</td><td>Draft / verify / centroids</td><td><strong>Real assistant weights loaded</strong> (<code>google/gemma-4-E4B-it-assistant</code>); draft~13 ms/4 toks; cross-KV stand-in; backbone accept <strong>unmeasured</strong></td></tr>
+<tr><td><strong>6</strong> 31B + serve</td><td>Config deltas + HTTP</td><td><strong>Hot path wired</strong>; HF 31B 4bit pull <strong>blocked</strong> (rate limit, ~129 MB/18 GB); Ollama ~12.3 tok/s documented; <code>serve --preset 31b</code> tries Hot when shards land</td></tr>
+</tbody></table></div>
+<p>Crate version tag: <code>gemma-metal-0.1.0-phase6</code> (<code>src/lib.rs</code>).</p>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo run --release --bin bench -- --e4b   # real E4B from HF cache
+cargo run --release --bin serve -- --preset 31b</code></pre></div>
+<h2 id="docs">Docs <a class="anchor" href="#docs" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Doc</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td><a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/docs/architecture.md" rel="noopener"><code>docs/architecture.md</code></a></td><td>E4B vs 31B, dual FA, GEMV vs GEMM, PLE 4GB, KV layout, MTP</td></tr>
+<tr><td><a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/docs/gates.md" rel="noopener"><code>docs/gates.md</code></a></td><td>Living Phase-0/4 numbers + locked honest targets</td></tr>
+<tr><td><a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/docs/dev.md" rel="noopener"><code>docs/dev.md</code></a></td><td>Build/test, module map, kernel inventory</td></tr>
+<tr><td><a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/docs/research.md" rel="noopener"><code>docs/research.md</code></a></td><td>Concise source links</td></tr>
+<tr><td><a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/DECISIONS.md" rel="noopener"><code>DECISIONS.md</code></a></td><td>Extract vs rewire, lanes, PLE/FA/Core AI</td></tr>
+</tbody></table></div>
+<h2 id="quick-commands">Quick commands <a class="anchor" href="#quick-commands" aria-label="Link to this section">#</a></h2>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cd gemma-metal &amp;&amp; cargo test
+cargo run --release --bin bench
+cargo run --release --bin bench -- --e4b
+cargo run --release --bin serve -- --port 8787 --preset e4b
+
+# Phase 0 baselines
+cd bench &amp;&amp; python3 bench.py probe</code></pre></div>
+<p>See <a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/docs/dev.md" rel="noopener"><code>docs/dev.md</code></a> and <a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/bench/README.md" rel="noopener"><code>bench/README.md</code></a>.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/gemma-metal/README.md" rel="noopener"><code>gemma-metal/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-bench.html" rel="prev"><span>Previous</span>bench</a>
+        <a href="crate-go.html" rel="next" class="next"><span>Next</span>go</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#goal">Goal</a></li>
+<li><a href="#relation-to-mlsystemslab-training">Relation to MLSystemsLab training</a></li>
+<li><a href="#layout">Layout</a></li>
+<li><a href="#status-tree-as-of-2026-07-13">Status (tree as of 2026-07-13)</a></li>
+<li><a href="#docs">Docs</a></li>
+<li><a href="#quick-commands">Quick commands</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>
