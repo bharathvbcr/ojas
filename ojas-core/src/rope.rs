@@ -213,18 +213,21 @@ mod tests {
     }
 
     /// Distinct streams (an image patch) do move the frequencies their
-    /// section assigns, and only those.
+    /// section assigns, and only those. A frequency is compared on cos and
+    /// sin together: at the low frequencies the angles are near 1e-4, whose
+    /// cos rounds to exactly 1.0 in f32 at either position, so only the sin
+    /// shows the move.
     #[test]
     fn distinct_streams_change_exactly_their_frequencies() {
         let budget = Budget::new(1 << 24);
         let t: Vec<u32> = vec![7; 4];
         let h: Vec<u32> = vec![2; 4];
         let w: Vec<u32> = vec![3; 4];
-        let (c, _) = mrope_tables([&t, &h, &w], QWEN, 64, 1e7, &budget).unwrap();
-        let (ct, _) = mrope_tables([&t, &t, &t], QWEN, 64, 1e7, &budget).unwrap();
-        let (c, ct) = (c.to_f32_vec().unwrap(), ct.to_f32_vec().unwrap());
+        let (c, s) = mrope_tables([&t, &h, &w], QWEN, 64, 1e7, &budget).unwrap();
+        let (ct, st) = mrope_tables([&t, &t, &t], QWEN, 64, 1e7, &budget).unwrap();
+        let [c, s, ct, st] = [c, s, ct, st].map(|x| x.to_f32_vec().unwrap());
         for i in 0..32 {
-            let same = c[i].to_bits() == ct[i].to_bits();
+            let same = c[i].to_bits() == ct[i].to_bits() && s[i].to_bits() == st[i].to_bits();
             assert_eq!(same, QWEN.stream(i) == 0, "frequency {i}");
         }
     }
