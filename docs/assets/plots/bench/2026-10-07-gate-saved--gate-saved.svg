@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="448" viewBox="0 0 920 448" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-07-gate-saved: saved-sigmoid gate pair against recompute</text>
+<text x="16" y="44" fill="#555">saved / plain, median per round; circle = min; hollow = noisy round (started at load 24)</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="671.9" y="72" width="107.0" height="326" fill="#eee"/>
+<line x1="336.4" x2="336.4" y1="72" y2="398" stroke="#ddd" stroke-width="1"/>
+<text x="336.4" y="414" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="725.3" x2="725.3" y1="72" y2="398" stroke="#222" stroke-width="1.5"/>
+<text x="725.3" y="414" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">Metal round 1 (noisy): forward_saving / forwar</text>
+<rect x="718.6" y="81" width="6.8" height="13" fill="#fff" stroke="#9aa0a6" stroke-width="1.4"/>
+<circle cx="757.5" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="713.6" y="92" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="112" text-anchor="end" fill="#222">Metal round 1 (noisy): backward_saved / backwa</text>
+<rect x="704.2" y="101" width="21.2" height="13" fill="#fff" stroke="#9aa0a6" stroke-width="1.4"/>
+<circle cx="681.6" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="699.2" y="112" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="132" text-anchor="end" fill="#222">Metal round 2 (noisy): forward_saving / forwar</text>
+<rect x="722.0" y="121" width="3.4" height="13" fill="#fff" stroke="#9aa0a6" stroke-width="1.4"/>
+<circle cx="767.0" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="717.0" y="132" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="152" text-anchor="end" fill="#222">Metal round 2 (noisy): backward_saved / backwa</text>
+<rect x="674.3" y="141" width="51.1" height="13" fill="#fff" stroke="#9aa0a6" stroke-width="1.4"/>
+<circle cx="673.0" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="669.3" y="152" text-anchor="end" fill="#333">0.91</text>
+<text x="292" y="172" text-anchor="end" fill="#222">Metal round 3: forward_saving / forward</text>
+<rect x="725.3" y="161" width="9.5" height="13" fill="#9aa0a6"/>
+<circle cx="730.9" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="739.8" y="172" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="192" text-anchor="end" fill="#222">Metal round 3: backward_saved / backward</text>
+<rect x="689.4" y="181" width="35.9" height="13" fill="#9aa0a6"/>
+<circle cx="683.4" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="684.4" y="192" text-anchor="end" fill="#333">0.94</text>
+<text x="292" y="212" text-anchor="end" fill="#222">Metal round 4: forward_saving / forward</text>
+<rect x="725.3" y="201" width="3.9" height="13" fill="#9aa0a6"/>
+<circle cx="724.2" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="734.2" y="212" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="232" text-anchor="end" fill="#222">Metal round 4: backward_saved / backward</text>
+<rect x="690.0" y="221" width="35.3" height="13" fill="#9aa0a6"/>
+<circle cx="682.2" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="685.0" y="232" text-anchor="end" fill="#333">0.94</text>
+<text x="292" y="252" text-anchor="end" fill="#222">wgpu round 1 (noisy): forward_saving / forward</text>
+<rect x="722.5" y="241" width="2.8" height="13" fill="#fff" stroke="#9aa0a6" stroke-width="1.4"/>
+<circle cx="729.2" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="717.5" y="252" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="272" text-anchor="end" fill="#222">wgpu round 1 (noisy): backward_saved / backwar</text>
+<rect x="656.8" y="261" width="68.6" height="13" fill="#fff" stroke="#2a9d8f" stroke-width="1.4"/>
+<circle cx="645.3" cy="267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="651.8" y="272" text-anchor="end" fill="#333">0.89</text>
+<text x="292" y="292" text-anchor="end" fill="#222">wgpu round 2 (noisy): forward_saving / forward</text>
+<rect x="725.3" y="281" width="3.9" height="13" fill="#fff" stroke="#9aa0a6" stroke-width="1.4"/>
+<circle cx="710.5" cy="287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="734.2" y="292" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="312" text-anchor="end" fill="#222">wgpu round 2 (noisy): backward_saved / backwar</text>
+<rect x="639.4" y="301" width="85.9" height="13" fill="#fff" stroke="#2a9d8f" stroke-width="1.4"/>
+<circle cx="645.9" cy="307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="634.4" y="312" text-anchor="end" fill="#333">0.86</text>
+<text x="292" y="332" text-anchor="end" fill="#222">wgpu round 3: forward_saving / forward</text>
+<rect x="725.3" y="321" width="6.7" height="13" fill="#9aa0a6"/>
+<circle cx="734.2" cy="327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="737.0" y="332" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="352" text-anchor="end" fill="#222">wgpu round 3: backward_saved / backward</text>
+<rect x="635.5" y="341" width="89.9" height="13" fill="#2a9d8f"/>
+<circle cx="632.2" cy="347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="630.5" y="352" text-anchor="end" fill="#333">0.85</text>
+<text x="292" y="372" text-anchor="end" fill="#222">wgpu round 4: forward_saving / forward</text>
+<rect x="725.3" y="361" width="6.1" height="13" fill="#9aa0a6"/>
+<circle cx="727.0" cy="367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="736.5" y="372" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="392" text-anchor="end" fill="#222">wgpu round 4: backward_saved / backward</text>
+<rect x="638.7" y="381" width="86.6" height="13" fill="#2a9d8f"/>
+<circle cx="629.5" cy="387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="633.7" y="392" text-anchor="end" fill="#333">0.86</text>
+</svg>

@@ -1,5 +1,7 @@
 # GPU Backends versus PyTorch MPS
 
+> Charts of every run behind this page, one per result folder, are in [bench-plots.md](bench-plots.md).
+
 Paired A/B of ojas's two GPU backends, `MetalBackend` (`ojas-metal`) and
 `WgpuBackend` (`ojas-wgpu`), against PyTorch 2.13 MPS, at nanolab's default
 shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabulary 50304, B 4,

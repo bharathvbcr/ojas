@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="258" viewBox="0 0 890 258" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-04-percall: GPU span of one command buffer</text>
+<text x="16" y="44" fill="#555">tessl directly, 500 buffers</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">min µs</text>
+<circle cx="102.4" cy="60" r="5" fill="#e08e2b"/><text x="113.4" y="64" fill="#333">median µs</text>
+<line x1="389.2" x2="389.2" y1="78" y2="208" stroke="#ddd"/>
+<text x="389.2" y="224" text-anchor="middle" fill="#444">50</text>
+<line x1="474.2" x2="474.2" y1="78" y2="208" stroke="#ddd"/>
+<text x="474.2" y="224" text-anchor="middle" fill="#444">100</text>
+<line x1="559.2" x2="559.2" y1="78" y2="208" stroke="#ddd"/>
+<text x="559.2" y="224" text-anchor="middle" fill="#444">200</text>
+<line x1="671.5" x2="671.5" y1="78" y2="208" stroke="#ddd"/>
+<text x="671.5" y="224" text-anchor="middle" fill="#444">500</text>
+<line x1="756.4" x2="756.4" y1="78" y2="208" stroke="#ddd"/>
+<text x="756.4" y="224" text-anchor="middle" fill="#444">1000</text>
+<text x="560.0" y="242" text-anchor="middle" fill="#444">µs (log axis)</text>
+<text x="292" y="99.0" text-anchor="end" fill="#222">1 request, 1 dispatch</text>
+<line x1="300" x2="343.7" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="343.7" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="351.7" y="93" fill="#333" font-size="10">34.5</text>
+<line x1="300" x2="362.5" y1="100.0" y2="100.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="362.5" cy="100.0" r="4.2" fill="#e08e2b"/>
+<text x="370.5" y="104" fill="#333" font-size="10">40.2</text>
+<text x="292" y="130.0" text-anchor="end" fill="#222">16 requests, 1 batched dispatch</text>
+<line x1="300" x2="642.2" y1="120.0" y2="120.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="642.2" cy="120.0" r="4.2" fill="#3d6fb6"/>
+<text x="650.2" y="124" fill="#333" font-size="10">394</text>
+<line x1="300" x2="685.9" y1="131.0" y2="131.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="685.9" cy="131.0" r="4.2" fill="#e08e2b"/>
+<text x="693.9" y="135" fill="#333" font-size="10">562</text>
+<text x="292" y="161.0" text-anchor="end" fill="#222">16 dispatches, a barrier after each (as `Metal</text>
+<line x1="300" x2="715.9" y1="151.0" y2="151.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="715.9" cy="151.0" r="4.2" fill="#3d6fb6"/>
+<text x="723.9" y="155" fill="#333" font-size="10">718</text>
+<line x1="300" x2="762.4" y1="162.0" y2="162.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="762.4" cy="162.0" r="4.2" fill="#e08e2b"/>
+<text x="770.4" y="166" fill="#333" font-size="10">1.05e+03</text>
+<text x="292" y="192.0" text-anchor="end" fill="#222">16 dispatches, no barrier between them</text>
+<line x1="300" x2="716.0" y1="182.0" y2="182.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="716.0" cy="182.0" r="4.2" fill="#3d6fb6"/>
+<text x="724.0" y="186" fill="#333" font-size="10">719</text>
+<line x1="300" x2="761.0" y1="193.0" y2="193.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="761.0" cy="193.0" r="4.2" fill="#e08e2b"/>
+<text x="769.0" y="197" fill="#333" font-size="10">1.04e+03</text>
+</svg>

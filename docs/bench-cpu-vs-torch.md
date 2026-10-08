@@ -1,5 +1,7 @@
 # CPU Reference versus PyTorch CPU Benchmarks
 
+> Charts of every run in `bench/results`, one per result folder, are in [bench-plots.md](bench-plots.md).
+
 Wall time of one forward, backward, and AdamW step. The graph is the regression test in `ojas-cpu/tests/torch_ref.rs`: RMSNorm (eps `1e-6`), bias-free linear `y = x @ W.T`, half-split RoPE, causal SDPA with scale `1/sqrt(d)` and one head, mean cross-entropy, backward, then AdamW on `wq` (weight decay 0.1) and the norm weight (weight decay 0). The learning rate is `6e-4` times the cosine multiplier at step 8 (warmup 4, total 20). `wk`, `wv`, and `wo` receive weight gradients and are not written by AdamW. Moments start at zero.
 
 ```mermaid
@@ -312,6 +314,14 @@ The fast gate sign/−abs path is one NEON pass, and the logit finite test is in
 ### Open lines ruled (2026-10-08)
 
 Each line the scorecard above left open, with the after tree of `bench/results/2026-10-08-cpu-hot-paths` (that commit's tree: in-place fan-in, seed scaling, pooled accumulate, `cblas_ssyrk` for Muon's X·Xᵀ). There, 5 interleaved rounds of base / after / torch 2.13 ran at 6 threads, parity 19 of 19. The machine was shared: 1-minute load was 17.5–82, and torch's own minima swung by up to 4.5× between rounds (permute 0.042–0.186 ms). No line meets the close rule above (every round at most 1), and none is claimed closed. Each cell is ojas / torch, the range of the five per-round ratios.
+
+![Horizontal bars of after / base per benchmark row on a log axis, sorted fastest first. conv1d backward is 0.08, fused cross-entropy backward at seed one quarter 0.17, gated RMSNorm backward 0.25 and the 50304 by 768 gradient accumulate 0.29. Most other rows sit inside the plus or minus 10 percent noise band, and the unchanged control ops read 0.98 to 1.11.](assets/plots/bench/2026-10-08-cpu-hot-paths--ab-vs-base.svg)
+
+*after / base per row (min over 5 rounds, circle = median of per-round ratios, grey band = ±10% noise). Source: `bench/results/2026-10-08-cpu-hot-paths/summary.md`, drawn by `bench/plot_all.py`.*
+
+![Horizontal bars of ojas divided by PyTorch 2.13 CPU time on the rows torch covers, log axis. Add backward is about 6.3 times, add forward 2.9, embedding forward 1.9, AdamW 1.5, and Muon 2048 by 768 is 0.64.](assets/plots/bench/2026-10-08-cpu-hot-paths--ab-vs-torch.svg)
+
+*ojas / torch 2.13 CPU on the same run (min over rounds; the table below gives the per-round range).*
 
 | Line | ojas / torch, 5 rounds | Ruling |
 | :--- | ---: | :--- |

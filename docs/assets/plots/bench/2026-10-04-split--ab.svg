@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="308" viewBox="0 0 920 308" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-04-split/ab: new / old</text>
+<text x="16" y="44" fill="#555">min-of-rounds ratio, circle = median-of-round-minimums ratio, 8 rounds</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="677.7" y="72" width="109.1" height="186" fill="#eee"/>
+<line x1="335.5" x2="335.5" y1="72" y2="258" stroke="#ddd" stroke-width="1"/>
+<text x="335.5" y="274" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="732.3" x2="732.3" y1="72" y2="258" stroke="#222" stroke-width="1.5"/>
+<text x="732.3" y="274" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">sweep_decode_x4</text>
+<rect x="642.2" y="81" width="90.1" height="13" fill="#2a9d8f"/>
+<circle cx="670.4" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="637.2" y="92" text-anchor="end" fill="#333">0.85</text>
+<text x="292" y="112" text-anchor="end" fill="#222">sweep_decode_x16</text>
+<rect x="659.9" y="101" width="72.4" height="13" fill="#2a9d8f"/>
+<circle cx="663.2" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="654.9" y="112" text-anchor="end" fill="#333">0.88</text>
+<text x="292" y="132" text-anchor="end" fill="#222">sweep_decode_b2</text>
+<rect x="673.2" y="121" width="59.1" height="13" fill="#2a9d8f"/>
+<circle cx="715.2" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="668.2" y="132" text-anchor="end" fill="#333">0.90</text>
+<text x="292" y="152" text-anchor="end" fill="#222">sweep_decode_x2</text>
+<rect x="689.4" y="141" width="42.9" height="13" fill="#9aa0a6"/>
+<circle cx="668.8" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="684.4" y="152" text-anchor="end" fill="#333">0.93</text>
+<text x="292" y="172" text-anchor="end" fill="#222">sweep_decode_b1</text>
+<rect x="691.2" y="161" width="41.1" height="13" fill="#9aa0a6"/>
+<circle cx="736.1" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="686.2" y="172" text-anchor="end" fill="#333">0.93</text>
+<text x="292" y="192" text-anchor="end" fill="#222">sweep_decode_x8</text>
+<rect x="698.6" y="181" width="33.7" height="13" fill="#9aa0a6"/>
+<circle cx="660.8" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="693.6" y="192" text-anchor="end" fill="#333">0.94</text>
+<text x="292" y="212" text-anchor="end" fill="#222">sweep_decode_b8</text>
+<rect x="700.1" y="201" width="32.2" height="13" fill="#9aa0a6"/>
+<circle cx="742.3" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="695.1" y="212" text-anchor="end" fill="#333">0.95</text>
+<text x="292" y="232" text-anchor="end" fill="#222">sweep_decode_b16</text>
+<rect x="712.1" y="221" width="20.2" height="13" fill="#9aa0a6"/>
+<circle cx="721.7" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="707.1" y="232" text-anchor="end" fill="#333">0.97</text>
+<text x="292" y="252" text-anchor="end" fill="#222">sweep_decode_b4</text>
+<rect x="724.5" y="241" width="7.8" height="13" fill="#9aa0a6"/>
+<circle cx="707.5" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="719.5" y="252" text-anchor="end" fill="#333">0.99</text>
+</svg>

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-04-sweep: silu_forward time against size</text>
+<text x="16" y="44" fill="#555">Median of per-round medians; the floor is the fixed cost of one call</text>
+<line x1="70" x2="570" y1="240.8" y2="240.8" stroke="#e5e5e5"/><text x="64" y="244.8" text-anchor="end" fill="#444">0.2</text>
+<line x1="70" x2="570" y1="129.9" y2="129.9" stroke="#e5e5e5"/><text x="64" y="133.9" text-anchor="end" fill="#444">0.5</text>
+<line x1="70.0" x2="70.0" y1="74" y2="320" stroke="#eee"/><text x="70.0" y="336" text-anchor="middle" fill="#444">1</text>
+<line x1="142.2" x2="142.2" y1="74" y2="320" stroke="#eee"/><text x="142.2" y="336" text-anchor="middle" fill="#444">10</text>
+<line x1="214.4" x2="214.4" y1="74" y2="320" stroke="#eee"/><text x="214.4" y="336" text-anchor="middle" fill="#444">100</text>
+<line x1="286.6" x2="286.6" y1="74" y2="320" stroke="#eee"/><text x="286.6" y="336" text-anchor="middle" fill="#444">1000</text>
+<line x1="358.9" x2="358.9" y1="74" y2="320" stroke="#eee"/><text x="358.9" y="336" text-anchor="middle" fill="#444">10000</text>
+<line x1="431.1" x2="431.1" y1="74" y2="320" stroke="#eee"/><text x="431.1" y="336" text-anchor="middle" fill="#444">100000</text>
+<line x1="503.3" x2="503.3" y1="74" y2="320" stroke="#eee"/><text x="503.3" y="336" text-anchor="middle" fill="#444">1e+06</text>
+<text x="320.0" y="368" text-anchor="middle" fill="#333">elements N</text>
+<text x="16" y="66" fill="#333">ms</text>
+<path d="M70.0,251.6 L330.9,257.7 L417.8,242.0 L461.3,246.4 L504.8,218.8 L526.5,214.3 L548.3,171.7 L570.0,123.8" fill="none" stroke="#3d6fb6" stroke-width="2"/>
+<circle cx="70.0" cy="251.6" r="2.6" fill="#3d6fb6"/>
+<circle cx="330.9" cy="257.7" r="2.6" fill="#3d6fb6"/>
+<circle cx="417.8" cy="242.0" r="2.6" fill="#3d6fb6"/>
+<circle cx="461.3" cy="246.4" r="2.6" fill="#3d6fb6"/>
+<circle cx="504.8" cy="218.8" r="2.6" fill="#3d6fb6"/>
+<circle cx="526.5" cy="214.3" r="2.6" fill="#3d6fb6"/>
+<circle cx="548.3" cy="171.7" r="2.6" fill="#3d6fb6"/>
+<circle cx="570.0" cy="123.8" r="2.6" fill="#3d6fb6"/>
+<rect x="582" y="80" width="10" height="10" fill="#3d6fb6"/><text x="597" y="89" fill="#333">ojas-metal</text>
+<path d="M70.0,218.3 L330.9,194.6 L417.8,198.4 L461.3,208.6 L504.8,187.0 L526.5,185.8 L548.3,158.4 L570.0,107.0" fill="none" stroke="#e08e2b" stroke-width="2"/>
+<circle cx="70.0" cy="218.3" r="2.6" fill="#e08e2b"/>
+<circle cx="330.9" cy="194.6" r="2.6" fill="#e08e2b"/>
+<circle cx="417.8" cy="198.4" r="2.6" fill="#e08e2b"/>
+<circle cx="461.3" cy="208.6" r="2.6" fill="#e08e2b"/>
+<circle cx="504.8" cy="187.0" r="2.6" fill="#e08e2b"/>
+<circle cx="526.5" cy="185.8" r="2.6" fill="#e08e2b"/>
+<circle cx="548.3" cy="158.4" r="2.6" fill="#e08e2b"/>
+<circle cx="570.0" cy="107.0" r="2.6" fill="#e08e2b"/>
+<rect x="582" y="98" width="10" height="10" fill="#e08e2b"/><text x="597" y="107" fill="#333">ojas-wgpu</text>
+<path d="M70.0,264.9 L330.9,278.1 L417.8,293.0 L461.3,284.9 L504.8,273.3 L526.5,252.2 L548.3,198.4 L570.0,140.3" fill="none" stroke="#2a9d8f" stroke-width="2"/>
+<circle cx="70.0" cy="264.9" r="2.6" fill="#2a9d8f"/>
+<circle cx="330.9" cy="278.1" r="2.6" fill="#2a9d8f"/>
+<circle cx="417.8" cy="293.0" r="2.6" fill="#2a9d8f"/>
+<circle cx="461.3" cy="284.9" r="2.6" fill="#2a9d8f"/>
+<circle cx="504.8" cy="273.3" r="2.6" fill="#2a9d8f"/>
+<circle cx="526.5" cy="252.2" r="2.6" fill="#2a9d8f"/>
+<circle cx="548.3" cy="198.4" r="2.6" fill="#2a9d8f"/>
+<circle cx="570.0" cy="140.3" r="2.6" fill="#2a9d8f"/>
+<rect x="582" y="116" width="10" height="10" fill="#2a9d8f"/><text x="597" y="125" fill="#333">torch-mps</text>
+</svg>

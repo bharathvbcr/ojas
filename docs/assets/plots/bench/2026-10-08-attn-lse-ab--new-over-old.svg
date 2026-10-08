@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="448" viewBox="0 0 920 448" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-attn-lse-ab: attention backward with saved log-sum-exp</text>
+<text x="16" y="44" fill="#555">new / old per round, median and range; circle = control op (should be 1.0)</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="708.6" y="72" width="75.1" height="326" fill="#eee"/>
+<line x1="473.0" x2="473.0" y1="72" y2="398" stroke="#ddd" stroke-width="1"/>
+<text x="473.0" y="414" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="746.2" x2="746.2" y1="72" y2="398" stroke="#222" stroke-width="1.5"/>
+<text x="746.2" y="414" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">metal mha_b4h8t2048d64 bwd</text>
+<rect x="638.5" y="81" width="107.6" height="13" fill="#2a9d8f"/>
+<line x1="604.5" x2="699.8" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="604.5" x2="604.5" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="699.8" x2="699.8" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="739.8" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="599.5" y="92" text-anchor="end" fill="#333">0.76</text>
+<text x="292" y="112" text-anchor="end" fill="#222">wgpu qwen35_gqa_b1h8kv2t2048d256 bwd</text>
+<rect x="640.6" y="101" width="105.6" height="13" fill="#2a9d8f"/>
+<line x1="627.0" x2="651.8" y1="107.5" y2="107.5" stroke="#222" stroke-width="1"/>
+<line x1="627.0" x2="627.0" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<line x1="651.8" x2="651.8" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<circle cx="744.2" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.0" y="112" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="132" text-anchor="end" fill="#222">metal qwen35_gqa_b1h8kv2t2048d256 bwd</text>
+<rect x="642.7" y="121" width="103.5" height="13" fill="#2a9d8f"/>
+<line x1="602.8" x2="650.8" y1="127.5" y2="127.5" stroke="#222" stroke-width="1"/>
+<line x1="602.8" x2="602.8" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<line x1="650.8" x2="650.8" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<circle cx="744.2" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="597.8" y="132" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="152" text-anchor="end" fill="#222">wgpu mha_b1h8t2048d256 bwd</text>
+<rect x="644.2" y="141" width="102.0" height="13" fill="#2a9d8f"/>
+<line x1="639.6" x2="656.3" y1="147.5" y2="147.5" stroke="#222" stroke-width="1"/>
+<line x1="639.6" x2="639.6" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<line x1="656.3" x2="656.3" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<circle cx="753.2" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="634.6" y="152" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="172" text-anchor="end" fill="#222">wgpu mha_b4h8t2048d64 bwd</text>
+<rect x="652.8" y="161" width="93.4" height="13" fill="#2a9d8f"/>
+<line x1="644.2" x2="664.1" y1="167.5" y2="167.5" stroke="#222" stroke-width="1"/>
+<line x1="644.2" x2="644.2" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<line x1="664.1" x2="664.1" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<circle cx="743.8" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="639.2" y="172" text-anchor="end" fill="#333">0.79</text>
+<text x="292" y="192" text-anchor="end" fill="#222">metal mha_b1h8t2048d256 bwd</text>
+<rect x="656.3" y="181" width="89.9" height="13" fill="#2a9d8f"/>
+<line x1="618.3" x2="684.0" y1="187.5" y2="187.5" stroke="#222" stroke-width="1"/>
+<line x1="618.3" x2="618.3" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<line x1="684.0" x2="684.0" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<circle cx="752.4" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="613.3" y="192" text-anchor="end" fill="#333">0.80</text>
+<text x="292" y="212" text-anchor="end" fill="#222">metal mha_b2h8t1024d128 bwd</text>
+<rect x="656.7" y="201" width="89.4" height="13" fill="#2a9d8f"/>
+<line x1="535.6" x2="659.7" y1="207.5" y2="207.5" stroke="#222" stroke-width="1"/>
+<line x1="535.6" x2="535.6" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<line x1="659.7" x2="659.7" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<circle cx="747.3" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="530.6" y="212" text-anchor="end" fill="#333">0.80</text>
+<text x="292" y="232" text-anchor="end" fill="#222">wgpu mha_b2h8t1024d128 bwd</text>
+<rect x="662.6" y="221" width="83.5" height="13" fill="#2a9d8f"/>
+<line x1="647.2" x2="685.8" y1="227.5" y2="227.5" stroke="#222" stroke-width="1"/>
+<line x1="647.2" x2="647.2" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<line x1="685.8" x2="685.8" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<circle cx="740.2" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="642.2" y="232" text-anchor="end" fill="#333">0.81</text>
+<text x="292" y="252" text-anchor="end" fill="#222">metal qwen35_gqa_b1h8kv2t2048d256 fwd</text>
+<rect x="699.8" y="241" width="46.4" height="13" fill="#2a9d8f"/>
+<line x1="697.1" x2="705.1" y1="247.5" y2="247.5" stroke="#222" stroke-width="1"/>
+<line x1="697.1" x2="697.1" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<line x1="705.1" x2="705.1" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<circle cx="744.2" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="692.1" y="252" text-anchor="end" fill="#333">0.89</text>
+<text x="292" y="272" text-anchor="end" fill="#222">wgpu qwen35_gqa_b1h8kv2t2048d256 fwd</text>
+<rect x="743.4" y="261" width="2.8" height="13" fill="#9aa0a6"/>
+<line x1="730.9" x2="755.1" y1="267.5" y2="267.5" stroke="#222" stroke-width="1"/>
+<line x1="730.9" x2="730.9" y1="264.5" y2="270.5" stroke="#222" stroke-width="1"/>
+<line x1="755.1" x2="755.1" y1="264.5" y2="270.5" stroke="#222" stroke-width="1"/>
+<circle cx="744.2" cy="267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="725.9" y="272" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="292" text-anchor="end" fill="#222">metal mha_b2h8t1024d128 fwd</text>
+<rect x="746.2" y="281" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="741.0" x2="766.5" y1="287.5" y2="287.5" stroke="#222" stroke-width="1"/>
+<line x1="741.0" x2="741.0" y1="284.5" y2="290.5" stroke="#222" stroke-width="1"/>
+<line x1="766.5" x2="766.5" y1="284.5" y2="290.5" stroke="#222" stroke-width="1"/>
+<circle cx="747.3" cy="287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="771.5" y="292" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="312" text-anchor="end" fill="#222">wgpu mha_b4h8t2048d64 fwd</text>
+<rect x="746.2" y="301" width="1.6" height="13" fill="#9aa0a6"/>
+<line x1="724.3" x2="769.1" y1="307.5" y2="307.5" stroke="#222" stroke-width="1"/>
+<line x1="724.3" x2="724.3" y1="304.5" y2="310.5" stroke="#222" stroke-width="1"/>
+<line x1="769.1" x2="769.1" y1="304.5" y2="310.5" stroke="#222" stroke-width="1"/>
+<circle cx="743.8" cy="307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="774.1" y="312" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="332" text-anchor="end" fill="#222">metal mha_b1h8t2048d256 fwd</text>
+<rect x="746.2" y="321" width="4.7" height="13" fill="#9aa0a6"/>
+<line x1="637.0" x2="772.1" y1="327.5" y2="327.5" stroke="#222" stroke-width="1"/>
+<line x1="637.0" x2="637.0" y1="324.5" y2="330.5" stroke="#222" stroke-width="1"/>
+<line x1="772.1" x2="772.1" y1="324.5" y2="330.5" stroke="#222" stroke-width="1"/>
+<circle cx="752.4" cy="327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="777.1" y="332" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="352" text-anchor="end" fill="#222">wgpu mha_b2h8t1024d128 fwd</text>
+<rect x="746.2" y="341" width="5.1" height="13" fill="#9aa0a6"/>
+<line x1="709.0" x2="771.0" y1="347.5" y2="347.5" stroke="#222" stroke-width="1"/>
+<line x1="709.0" x2="709.0" y1="344.5" y2="350.5" stroke="#222" stroke-width="1"/>
+<line x1="771.0" x2="771.0" y1="344.5" y2="350.5" stroke="#222" stroke-width="1"/>
+<circle cx="740.2" cy="347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="776.0" y="352" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="372" text-anchor="end" fill="#222">metal mha_b4h8t2048d64 fwd</text>
+<rect x="746.2" y="361" width="7.0" height="13" fill="#9aa0a6"/>
+<line x1="745.0" x2="757.4" y1="367.5" y2="367.5" stroke="#222" stroke-width="1"/>
+<line x1="745.0" x2="745.0" y1="364.5" y2="370.5" stroke="#222" stroke-width="1"/>
+<line x1="757.4" x2="757.4" y1="364.5" y2="370.5" stroke="#222" stroke-width="1"/>
+<circle cx="739.8" cy="367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="762.4" y="372" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="392" text-anchor="end" fill="#222">wgpu mha_b1h8t2048d256 fwd</text>
+<rect x="746.2" y="381" width="10.1" height="13" fill="#9aa0a6"/>
+<line x1="731.7" x2="766.5" y1="387.5" y2="387.5" stroke="#222" stroke-width="1"/>
+<line x1="731.7" x2="731.7" y1="384.5" y2="390.5" stroke="#222" stroke-width="1"/>
+<line x1="766.5" x2="766.5" y1="384.5" y2="390.5" stroke="#222" stroke-width="1"/>
+<circle cx="753.2" cy="387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="771.5" y="392" text-anchor="start" fill="#333">1.03</text>
+</svg>

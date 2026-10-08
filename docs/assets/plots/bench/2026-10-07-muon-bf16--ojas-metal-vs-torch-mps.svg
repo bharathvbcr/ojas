@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="308" viewBox="0 0 920 308" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-07-muon-bf16: ojas-metal vs torch-mps</text>
+<text x="16" y="44" fill="#555">ojas median / torch median, median of 5 per-round ratios</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="585.2" y="72" width="67.1" height="186" fill="#eee"/>
+<line x1="374.7" x2="374.7" y1="72" y2="258" stroke="#ddd" stroke-width="1"/>
+<text x="374.7" y="274" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="618.8" x2="618.8" y1="72" y2="258" stroke="#222" stroke-width="1.5"/>
+<text x="618.8" y="274" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">muon_2048x768</text>
+<rect x="521.0" y="81" width="97.8" height="13" fill="#2a9d8f"/>
+<line x1="518.3" x2="526.4" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="518.3" x2="518.3" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="526.4" x2="526.4" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="521.0" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="513.3" y="92" text-anchor="end" fill="#333">0.76</text>
+<text x="292" y="112" text-anchor="end" fill="#222">muon_768x2048</text>
+<rect x="521.0" y="101" width="97.8" height="13" fill="#2a9d8f"/>
+<line x1="510.5" x2="526.4" y1="107.5" y2="107.5" stroke="#222" stroke-width="1"/>
+<line x1="510.5" x2="510.5" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<line x1="526.4" x2="526.4" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<circle cx="521.0" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="505.5" y="112" text-anchor="end" fill="#333">0.76</text>
+<text x="292" y="132" text-anchor="end" fill="#222">muon_768x768</text>
+<rect x="531.8" y="121" width="86.9" height="13" fill="#2a9d8f"/>
+<line x1="523.7" x2="545.9" y1="127.5" y2="127.5" stroke="#222" stroke-width="1"/>
+<line x1="523.7" x2="523.7" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<line x1="545.9" x2="545.9" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<circle cx="531.8" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="518.7" y="132" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="152" text-anchor="end" fill="#222">muon_2048x768_bf16</text>
+<rect x="594.9" y="141" width="23.8" height="13" fill="#9aa0a6"/>
+<line x1="566.5" x2="604.9" y1="147.5" y2="147.5" stroke="#222" stroke-width="1"/>
+<line x1="566.5" x2="566.5" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<line x1="604.9" x2="604.9" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<circle cx="594.9" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="561.5" y="152" text-anchor="end" fill="#333">0.93</text>
+<text x="292" y="172" text-anchor="end" fill="#222">muon_768x2048_bf16</text>
+<rect x="618.8" y="161" width="7.1" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="633.1" y1="167.5" y2="167.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<line x1="633.1" x2="633.1" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<circle cx="625.9" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="638.1" y="172" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="192" text-anchor="end" fill="#222">muon_768x768_bf16</text>
+<rect x="618.8" y="181" width="21.8" height="13" fill="#fff" stroke="#9aa0a6" stroke-width="1.4"/>
+<line x1="622.3" x2="692.9" y1="187.5" y2="187.5" stroke="#222" stroke-width="1"/>
+<line x1="622.3" x2="622.3" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<line x1="692.9" x2="692.9" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<circle cx="640.5" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="697.9" y="192" text-anchor="start" fill="#333">1.06</text>
+<text x="292" y="212" text-anchor="end" fill="#222">muon_2048x768 vs muon_2048x768_bf16</text>
+<rect x="618.8" y="201" width="101.3" height="13" fill="#d1495b"/>
+<line x1="701.8" x2="729.6" y1="207.5" y2="207.5" stroke="#222" stroke-width="1"/>
+<line x1="701.8" x2="701.8" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<line x1="729.6" x2="729.6" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<circle cx="720.0" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="734.6" y="212" text-anchor="start" fill="#333">1.33</text>
+<text x="292" y="232" text-anchor="end" fill="#222">muon_768x768 vs muon_768x768_bf16</text>
+<rect x="618.8" y="221" width="141.0" height="13" fill="#fff" stroke="#d1495b" stroke-width="1.4"/>
+<line x1="729.6" x2="781.4" y1="227.5" y2="227.5" stroke="#222" stroke-width="1"/>
+<line x1="729.6" x2="729.6" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<line x1="781.4" x2="781.4" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<circle cx="759.8" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="786.4" y="232" text-anchor="start" fill="#333">1.49</text>
+<text x="292" y="252" text-anchor="end" fill="#222">muon_768x2048 vs muon_768x2048_bf16</text>
+<rect x="618.8" y="241" width="141.0" height="13" fill="#d1495b"/>
+<line x1="749.4" x2="765.1" y1="247.5" y2="247.5" stroke="#222" stroke-width="1"/>
+<line x1="749.4" x2="749.4" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<line x1="765.1" x2="765.1" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<circle cx="759.8" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="770.1" y="252" text-anchor="start" fill="#333">1.49</text>
+</svg>

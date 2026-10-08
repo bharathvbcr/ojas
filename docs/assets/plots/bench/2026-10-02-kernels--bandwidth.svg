@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="354" viewBox="0 0 890 354" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-kernels: achieved bandwidth, before the fold</text>
+<text x="16" y="44" fill="#555">GB/s at the minimum</text>
+<circle cx="22" cy="60" r="5" fill="#2a9d8f"/><text x="33" y="64" fill="#333">GB/s at min (higher is faster)</text>
+<line x1="530.6" x2="530.6" y1="78" y2="304" stroke="#ddd"/>
+<text x="530.6" y="320" text-anchor="middle" fill="#444">200</text>
+<text x="560.0" y="338" text-anchor="middle" fill="#444">GB/s (log axis)</text>
+<text x="292" y="93.5" text-anchor="end" fill="#222">tessl scale_f32_inplace (reference read + writ</text>
+<line x1="300" x2="653.5" y1="89.0" y2="89.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="653.5" cy="89.0" r="4.2" fill="#2a9d8f"/>
+<text x="661.5" y="93" fill="#333" font-size="10">283</text>
+<text x="292" y="113.5" text-anchor="end" fill="#222">ojas_check_finite</text>
+<line x1="300" x2="431.0" y1="109.0" y2="109.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="431.0" cy="109.0" r="4.2" fill="#2a9d8f"/>
+<text x="439.0" y="113" fill="#333" font-size="10">151</text>
+<text x="292" y="133.5" text-anchor="end" fill="#222">ojas_check_finite [4096, 768]</text>
+<line x1="300" x2="426.3" y1="129.0" y2="129.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="426.3" cy="129.0" r="4.2" fill="#2a9d8f"/>
+<text x="434.3" y="133" fill="#333" font-size="10">149</text>
+<text x="292" y="153.5" text-anchor="end" fill="#222">ojas_silu_fwd</text>
+<line x1="300" x2="618.0" y1="149.0" y2="149.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="618.0" cy="149.0" r="4.2" fill="#2a9d8f"/>
+<text x="626.0" y="153" fill="#333" font-size="10">256</text>
+<text x="292" y="173.5" text-anchor="end" fill="#222">silu_forward sequence: check x, silu, check y</text>
+<line x1="300" x2="523.4" y1="169.0" y2="169.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="523.4" cy="169.0" r="4.2" fill="#2a9d8f"/>
+<text x="531.4" y="173" fill="#333" font-size="10">196</text>
+<text x="292" y="193.5" text-anchor="end" fill="#222">ojas_silu_bwd</text>
+<line x1="300" x2="622.1" y1="189.0" y2="189.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="622.1" cy="189.0" r="4.2" fill="#2a9d8f"/>
+<text x="630.1" y="193" fill="#333" font-size="10">259</text>
+<text x="292" y="213.5" text-anchor="end" fill="#222">silu_backward sequence: check x, check gy, ker</text>
+<line x1="300" x2="528.8" y1="209.0" y2="209.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="528.8" cy="209.0" r="4.2" fill="#2a9d8f"/>
+<text x="536.8" y="213" fill="#333" font-size="10">199</text>
+<text x="292" y="233.5" text-anchor="end" fill="#222">ojas_mul_fwd</text>
+<line x1="300" x2="623.5" y1="229.0" y2="229.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="623.5" cy="229.0" r="4.2" fill="#2a9d8f"/>
+<text x="631.5" y="233" fill="#333" font-size="10">260</text>
+<text x="292" y="253.5" text-anchor="end" fill="#222">mul_forward sequence: check a, check b, mul, c</text>
+<line x1="300" x2="528.8" y1="249.0" y2="249.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="528.8" cy="249.0" r="4.2" fill="#2a9d8f"/>
+<text x="536.8" y="253" fill="#333" font-size="10">199</text>
+<text x="292" y="273.5" text-anchor="end" fill="#222">ojas_mul_bwd</text>
+<line x1="300" x2="626.2" y1="269.0" y2="269.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="626.2" cy="269.0" r="4.2" fill="#2a9d8f"/>
+<text x="634.2" y="273" fill="#333" font-size="10">262</text>
+<text x="292" y="293.5" text-anchor="end" fill="#222">mul_backward sequence: 3 input checks, kernel,</text>
+<line x1="300" x2="530.6" y1="289.0" y2="289.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="530.6" cy="289.0" r="4.2" fill="#2a9d8f"/>
+<text x="538.6" y="293" fill="#333" font-size="10">200</text>
+</svg>

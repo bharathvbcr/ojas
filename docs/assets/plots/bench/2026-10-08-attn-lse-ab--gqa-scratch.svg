@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="258" viewBox="0 0 890 258" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-attn-lse-ab: scratch charged at the Qwen3.5 shape</text>
+<text x="16" y="44" fill="#555">bytes charged by the backend's budget, b1 h8/2 t2048 d256</text>
+<circle cx="22" cy="60" r="5" fill="#2a9d8f"/><text x="33" y="64" fill="#333">native grouped-query</text>
+<circle cx="192.0" cy="60" r="5" fill="#d1495b"/><text x="203.0" y="64" fill="#333">expand path</text>
+<line x1="408.7" x2="408.7" y1="78" y2="208" stroke="#ddd"/>
+<text x="408.7" y="224" text-anchor="middle" fill="#444">2e+07</text>
+<line x1="597.1" x2="597.1" y1="78" y2="208" stroke="#ddd"/>
+<text x="597.1" y="224" text-anchor="middle" fill="#444">5e+07</text>
+<line x1="739.6" x2="739.6" y1="78" y2="208" stroke="#ddd"/>
+<text x="739.6" y="224" text-anchor="middle" fill="#444">1e+08</text>
+<text x="560.0" y="242" text-anchor="middle" fill="#444">bytes (log axis)</text>
+<text x="292" y="99.0" text-anchor="end" fill="#222">metal forward</text>
+<line x1="300" x2="373.3" y1="89.0" y2="89.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="373.3" cy="89.0" r="4.2" fill="#2a9d8f"/>
+<text x="381.3" y="93" fill="#333" font-size="10">1.68e+07</text>
+<line x1="300" x2="598.4" y1="100.0" y2="100.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="598.4" cy="100.0" r="4.2" fill="#d1495b"/>
+<text x="606.4" y="104" fill="#333" font-size="10">5.03e+07</text>
+<text x="292" y="130.0" text-anchor="end" fill="#222">metal backward</text>
+<line x1="300" x2="456.4" y1="120.0" y2="120.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="456.4" cy="120.0" r="4.2" fill="#2a9d8f"/>
+<text x="464.4" y="124" fill="#333" font-size="10">2.52e+07</text>
+<line x1="300" x2="723.4" y1="131.0" y2="131.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="723.4" cy="131.0" r="4.2" fill="#d1495b"/>
+<text x="731.4" y="135" fill="#333" font-size="10">9.24e+07</text>
+<text x="292" y="161.0" text-anchor="end" fill="#222">wgpu forward</text>
+<line x1="300" x2="373.3" y1="151.0" y2="151.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="373.3" cy="151.0" r="4.2" fill="#2a9d8f"/>
+<text x="381.3" y="155" fill="#333" font-size="10">1.68e+07</text>
+<line x1="300" x2="598.4" y1="162.0" y2="162.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="598.4" cy="162.0" r="4.2" fill="#d1495b"/>
+<text x="606.4" y="166" fill="#333" font-size="10">5.03e+07</text>
+<text x="292" y="192.0" text-anchor="end" fill="#222">wgpu backward</text>
+<line x1="300" x2="457.0" y1="182.0" y2="182.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="457.0" cy="182.0" r="4.2" fill="#2a9d8f"/>
+<text x="465.0" y="186" fill="#333" font-size="10">2.53e+07</text>
+<line x1="300" x2="723.4" y1="193.0" y2="193.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="723.4" cy="193.0" r="4.2" fill="#d1495b"/>
+<text x="731.4" y="197" fill="#333" font-size="10">9.24e+07</text>
+</svg>

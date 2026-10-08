@@ -1,0 +1,993 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="2928" viewBox="0 0 920 2928" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-06-gemm-bf16: panel-height sweep</text>
+<text x="16" y="44" fill="#555">ratio to the same round's production kernel; whisker = min..max</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="596.8" y="72" width="41.3" height="2806" fill="#eee"/>
+<line x1="467.3" x2="467.3" y1="72" y2="2878" stroke="#ddd" stroke-width="1"/>
+<text x="467.3" y="2894" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="617.5" x2="617.5" y1="72" y2="2878" stroke="#222" stroke-width="1.5"/>
+<text x="617.5" y="2894" text-anchor="middle" fill="#444">1x</text>
+<line x1="767.7" x2="767.7" y1="72" y2="2878" stroke="#ddd" stroke-width="1"/>
+<text x="767.7" y="2894" text-anchor="middle" fill="#444">2x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">ntp_lmhead_50304 / base</text>
+<rect x="617.5" y="81" width="10.6" height="13" fill="#9aa0a6"/>
+<line x1="619.7" x2="651.5" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="651.5" x2="651.5" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="628.1" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="656.5" y="92" text-anchor="start" fill="#333">1.05</text>
+<text x="292" y="112" text-anchor="end" fill="#222">ntp_lmhead_50304 / base_ph4</text>
+<rect x="524.2" y="101" width="93.3" height="13" fill="#2a9d8f"/>
+<line x1="479.9" x2="533.9" y1="107.5" y2="107.5" stroke="#222" stroke-width="1"/>
+<line x1="479.9" x2="479.9" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<line x1="533.9" x2="533.9" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<circle cx="524.2" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="474.9" y="112" text-anchor="end" fill="#333">0.65</text>
+<text x="292" y="132" text-anchor="end" fill="#222">ntp_lmhead_50304 / base_ph8</text>
+<rect x="524.2" y="121" width="93.3" height="13" fill="#2a9d8f"/>
+<line x1="479.9" x2="533.9" y1="127.5" y2="127.5" stroke="#222" stroke-width="1"/>
+<line x1="479.9" x2="479.9" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<line x1="533.9" x2="533.9" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<circle cx="524.2" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="474.9" y="132" text-anchor="end" fill="#333">0.65</text>
+<text x="292" y="152" text-anchor="end" fill="#222">ntp_lmhead_50304 / base_ph16</text>
+<rect x="540.2" y="141" width="77.3" height="13" fill="#2a9d8f"/>
+<line x1="484.0" x2="546.3" y1="147.5" y2="147.5" stroke="#222" stroke-width="1"/>
+<line x1="484.0" x2="484.0" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<line x1="546.3" x2="546.3" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<circle cx="540.2" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="479.0" y="152" text-anchor="end" fill="#333">0.70</text>
+<text x="292" y="172" text-anchor="end" fill="#222">ntp_vocab_32768 / base</text>
+<rect x="613.1" y="161" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="604.1" x2="626.0" y1="167.5" y2="167.5" stroke="#222" stroke-width="1"/>
+<line x1="604.1" x2="604.1" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<line x1="626.0" x2="626.0" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="599.1" y="172" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="192" text-anchor="end" fill="#222">ntp_vocab_32768 / base_ph4</text>
+<rect x="520.8" y="181" width="96.7" height="13" fill="#2a9d8f"/>
+<line x1="510.4" x2="589.8" y1="187.5" y2="187.5" stroke="#222" stroke-width="1"/>
+<line x1="510.4" x2="510.4" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<line x1="589.8" x2="589.8" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<circle cx="520.8" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="505.4" y="192" text-anchor="end" fill="#333">0.64</text>
+<text x="292" y="212" text-anchor="end" fill="#222">ntp_vocab_32768 / base_ph8</text>
+<rect x="510.4" y="201" width="107.1" height="13" fill="#2a9d8f"/>
+<line x1="499.5" x2="537.1" y1="207.5" y2="207.5" stroke="#222" stroke-width="1"/>
+<line x1="499.5" x2="499.5" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<line x1="537.1" x2="537.1" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<circle cx="510.4" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="494.5" y="212" text-anchor="end" fill="#333">0.61</text>
+<text x="292" y="232" text-anchor="end" fill="#222">ntp_vocab_32768 / base_ph16</text>
+<rect x="513.9" y="221" width="103.6" height="13" fill="#2a9d8f"/>
+<line x1="499.5" x2="517.4" y1="227.5" y2="227.5" stroke="#222" stroke-width="1"/>
+<line x1="499.5" x2="499.5" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<line x1="517.4" x2="517.4" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<circle cx="513.9" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="494.5" y="232" text-anchor="end" fill="#333">0.62</text>
+<text x="292" y="252" text-anchor="end" fill="#222">ntp_b32mib / base</text>
+<rect x="615.3" y="241" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="630.1" y1="247.5" y2="247.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="605.9" y="252" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="272" text-anchor="end" fill="#222">ntp_b32mib / base_ph4</text>
+<rect x="552.3" y="261" width="65.2" height="13" fill="#2a9d8f"/>
+<line x1="546.3" x2="569.1" y1="267.5" y2="267.5" stroke="#222" stroke-width="1"/>
+<line x1="546.3" x2="546.3" y1="264.5" y2="270.5" stroke="#222" stroke-width="1"/>
+<line x1="569.1" x2="569.1" y1="264.5" y2="270.5" stroke="#222" stroke-width="1"/>
+<circle cx="552.3" cy="267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="541.3" y="272" text-anchor="end" fill="#333">0.74</text>
+<text x="292" y="292" text-anchor="end" fill="#222">ntp_b32mib / base_ph8</text>
+<rect x="560.9" y="281" width="56.6" height="13" fill="#2a9d8f"/>
+<line x1="540.2" x2="574.5" y1="287.5" y2="287.5" stroke="#222" stroke-width="1"/>
+<line x1="540.2" x2="540.2" y1="284.5" y2="290.5" stroke="#222" stroke-width="1"/>
+<line x1="574.5" x2="574.5" y1="284.5" y2="290.5" stroke="#222" stroke-width="1"/>
+<circle cx="560.9" cy="287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="535.2" y="292" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="312" text-anchor="end" fill="#222">ntp_b32mib / base_ph16</text>
+<rect x="563.7" y="301" width="53.8" height="13" fill="#2a9d8f"/>
+<line x1="546.3" x2="582.3" y1="307.5" y2="307.5" stroke="#222" stroke-width="1"/>
+<line x1="546.3" x2="546.3" y1="304.5" y2="310.5" stroke="#222" stroke-width="1"/>
+<line x1="582.3" x2="582.3" y1="304.5" y2="310.5" stroke="#222" stroke-width="1"/>
+<circle cx="563.7" cy="307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="541.3" y="312" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="332" text-anchor="end" fill="#222">ntp_vocab_16384 / base</text>
+<rect x="615.3" y="321" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="638.1" y1="327.5" y2="327.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="324.5" y2="330.5" stroke="#222" stroke-width="1"/>
+<line x1="638.1" x2="638.1" y1="324.5" y2="330.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="603.7" y="332" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="352" text-anchor="end" fill="#222">ntp_vocab_16384 / base_ph4</text>
+<rect x="524.2" y="341" width="93.3" height="13" fill="#2a9d8f"/>
+<line x1="503.2" x2="540.2" y1="347.5" y2="347.5" stroke="#222" stroke-width="1"/>
+<line x1="503.2" x2="503.2" y1="344.5" y2="350.5" stroke="#222" stroke-width="1"/>
+<line x1="540.2" x2="540.2" y1="344.5" y2="350.5" stroke="#222" stroke-width="1"/>
+<circle cx="524.2" cy="347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="498.2" y="352" text-anchor="end" fill="#333">0.65</text>
+<text x="292" y="372" text-anchor="end" fill="#222">ntp_vocab_16384 / base_ph8</text>
+<rect x="517.4" y="361" width="100.1" height="13" fill="#2a9d8f"/>
+<line x1="499.5" x2="533.9" y1="367.5" y2="367.5" stroke="#222" stroke-width="1"/>
+<line x1="499.5" x2="499.5" y1="364.5" y2="370.5" stroke="#222" stroke-width="1"/>
+<line x1="533.9" x2="533.9" y1="364.5" y2="370.5" stroke="#222" stroke-width="1"/>
+<circle cx="517.4" cy="367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="494.5" y="372" text-anchor="end" fill="#333">0.63</text>
+<text x="292" y="392" text-anchor="end" fill="#222">ntp_vocab_16384 / base_ph16</text>
+<rect x="513.9" y="381" width="103.6" height="13" fill="#2a9d8f"/>
+<line x1="499.5" x2="530.7" y1="387.5" y2="387.5" stroke="#222" stroke-width="1"/>
+<line x1="499.5" x2="499.5" y1="384.5" y2="390.5" stroke="#222" stroke-width="1"/>
+<line x1="530.7" x2="530.7" y1="384.5" y2="390.5" stroke="#222" stroke-width="1"/>
+<circle cx="513.9" cy="387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="494.5" y="392" text-anchor="end" fill="#333">0.62</text>
+<text x="292" y="412" text-anchor="end" fill="#222">ntp_mlp_6144 / base</text>
+<rect x="617.5" y="401" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="630.1" y1="407.5" y2="407.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="404.5" y2="410.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="404.5" y2="410.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="407.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="635.1" y="412" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="432" text-anchor="end" fill="#222">ntp_mlp_6144 / base_ph4</text>
+<rect x="579.7" y="421" width="37.8" height="13" fill="#2a9d8f"/>
+<line x1="558.0" x2="584.8" y1="427.5" y2="427.5" stroke="#222" stroke-width="1"/>
+<line x1="558.0" x2="558.0" y1="424.5" y2="430.5" stroke="#222" stroke-width="1"/>
+<line x1="584.8" x2="584.8" y1="424.5" y2="430.5" stroke="#222" stroke-width="1"/>
+<circle cx="579.7" cy="427.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="553.0" y="432" text-anchor="end" fill="#333">0.84</text>
+<text x="292" y="452" text-anchor="end" fill="#222">ntp_mlp_6144 / base_ph8</text>
+<rect x="582.3" y="441" width="35.2" height="13" fill="#2a9d8f"/>
+<line x1="566.4" x2="589.8" y1="447.5" y2="447.5" stroke="#222" stroke-width="1"/>
+<line x1="566.4" x2="566.4" y1="444.5" y2="450.5" stroke="#222" stroke-width="1"/>
+<line x1="589.8" x2="589.8" y1="444.5" y2="450.5" stroke="#222" stroke-width="1"/>
+<circle cx="582.3" cy="447.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="561.4" y="452" text-anchor="end" fill="#333">0.85</text>
+<text x="292" y="472" text-anchor="end" fill="#222">ntp_mlp_6144 / base_ph16</text>
+<rect x="587.3" y="461" width="30.2" height="13" fill="#2a9d8f"/>
+<line x1="577.1" x2="594.7" y1="467.5" y2="467.5" stroke="#222" stroke-width="1"/>
+<line x1="577.1" x2="577.1" y1="464.5" y2="470.5" stroke="#222" stroke-width="1"/>
+<line x1="594.7" x2="594.7" y1="464.5" y2="470.5" stroke="#222" stroke-width="1"/>
+<circle cx="587.3" cy="467.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="572.1" y="472" text-anchor="end" fill="#333">0.87</text>
+<text x="292" y="492" text-anchor="end" fill="#222">ntp_b16mib / base</text>
+<rect x="615.3" y="481" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="621.8" y1="487.5" y2="487.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="484.5" y2="490.5" stroke="#222" stroke-width="1"/>
+<line x1="621.8" x2="621.8" y1="484.5" y2="490.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="487.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="610.3" y="492" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="512" text-anchor="end" fill="#222">ntp_b16mib / base_ph4</text>
+<rect x="613.1" y="501" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="617.5" y1="507.5" y2="507.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="504.5" y2="510.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="504.5" y2="510.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="507.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="605.9" y="512" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="532" text-anchor="end" fill="#222">ntp_b16mib / base_ph8</text>
+<rect x="615.3" y="521" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="623.9" y1="527.5" y2="527.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="524.5" y2="530.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="524.5" y2="530.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="527.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="605.9" y="532" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="552" text-anchor="end" fill="#222">ntp_b16mib / base_ph16</text>
+<rect x="617.5" y="541" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="623.9" y1="547.5" y2="547.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="544.5" y2="550.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="544.5" y2="550.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="547.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="628.9" y="552" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="572" text-anchor="end" fill="#222">ntp_lm_head_248320 / base</text>
+<rect x="617.5" y="561" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="604.1" x2="630.1" y1="567.5" y2="567.5" stroke="#222" stroke-width="1"/>
+<line x1="604.1" x2="604.1" y1="564.5" y2="570.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="564.5" y2="570.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="567.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="635.1" y="572" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="592" text-anchor="end" fill="#222">ntp_lm_head_248320 / base_ph4</text>
+<rect x="563.7" y="581" width="53.8" height="13" fill="#2a9d8f"/>
+<line x1="540.2" x2="571.8" y1="587.5" y2="587.5" stroke="#222" stroke-width="1"/>
+<line x1="540.2" x2="540.2" y1="584.5" y2="590.5" stroke="#222" stroke-width="1"/>
+<line x1="571.8" x2="571.8" y1="584.5" y2="590.5" stroke="#222" stroke-width="1"/>
+<circle cx="563.7" cy="587.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="535.2" y="592" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="612" text-anchor="end" fill="#222">ntp_lm_head_248320 / base_ph8</text>
+<rect x="574.5" y="601" width="43.0" height="13" fill="#2a9d8f"/>
+<line x1="540.2" x2="599.4" y1="607.5" y2="607.5" stroke="#222" stroke-width="1"/>
+<line x1="540.2" x2="540.2" y1="604.5" y2="610.5" stroke="#222" stroke-width="1"/>
+<line x1="599.4" x2="599.4" y1="604.5" y2="610.5" stroke="#222" stroke-width="1"/>
+<circle cx="574.5" cy="607.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="535.2" y="612" text-anchor="end" fill="#333">0.82</text>
+<text x="292" y="632" text-anchor="end" fill="#222">ntp_lm_head_248320 / base_ph16</text>
+<rect x="569.1" y="621" width="48.3" height="13" fill="#2a9d8f"/>
+<line x1="540.2" x2="584.8" y1="627.5" y2="627.5" stroke="#222" stroke-width="1"/>
+<line x1="540.2" x2="540.2" y1="624.5" y2="630.5" stroke="#222" stroke-width="1"/>
+<line x1="584.8" x2="584.8" y1="624.5" y2="630.5" stroke="#222" stroke-width="1"/>
+<circle cx="569.1" cy="627.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="535.2" y="632" text-anchor="end" fill="#333">0.80</text>
+<text x="292" y="652" text-anchor="end" fill="#222">ntp_longk_8192 / base</text>
+<rect x="617.5" y="641" width="10.6" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="644.0" y1="647.5" y2="647.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="644.5" y2="650.5" stroke="#222" stroke-width="1"/>
+<line x1="644.0" x2="644.0" y1="644.5" y2="650.5" stroke="#222" stroke-width="1"/>
+<circle cx="628.1" cy="647.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="649.0" y="652" text-anchor="start" fill="#333">1.05</text>
+<text x="292" y="672" text-anchor="end" fill="#222">ntp_longk_8192 / base_ph4</text>
+<rect x="563.7" y="661" width="53.8" height="13" fill="#2a9d8f"/>
+<line x1="524.2" x2="606.4" y1="667.5" y2="667.5" stroke="#222" stroke-width="1"/>
+<line x1="524.2" x2="524.2" y1="664.5" y2="670.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="664.5" y2="670.5" stroke="#222" stroke-width="1"/>
+<circle cx="563.7" cy="667.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="519.2" y="672" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="692" text-anchor="end" fill="#222">ntp_longk_8192 / base_ph8</text>
+<rect x="566.4" y="681" width="51.1" height="13" fill="#2a9d8f"/>
+<line x1="527.5" x2="610.9" y1="687.5" y2="687.5" stroke="#222" stroke-width="1"/>
+<line x1="527.5" x2="527.5" y1="684.5" y2="690.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="684.5" y2="690.5" stroke="#222" stroke-width="1"/>
+<circle cx="566.4" cy="687.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="522.5" y="692" text-anchor="end" fill="#333">0.79</text>
+<text x="292" y="712" text-anchor="end" fill="#222">ntp_longk_8192 / base_ph16</text>
+<rect x="584.8" y="701" width="32.7" height="13" fill="#2a9d8f"/>
+<line x1="537.1" x2="610.9" y1="707.5" y2="707.5" stroke="#222" stroke-width="1"/>
+<line x1="537.1" x2="537.1" y1="704.5" y2="710.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="704.5" y2="710.5" stroke="#222" stroke-width="1"/>
+<circle cx="584.8" cy="707.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="532.1" y="712" text-anchor="end" fill="#333">0.86</text>
+<text x="292" y="732" text-anchor="end" fill="#222">tnp_longk_16384 / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="617.5" y="721" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="638.1" y1="727.5" y2="727.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="724.5" y2="730.5" stroke="#222" stroke-width="1"/>
+<line x1="638.1" x2="638.1" y1="724.5" y2="730.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="727.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="643.1" y="732" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="752" text-anchor="end" fill="#222">tnp_longk_16384 / mm_bf16_tn_coop_128x64_sg4_p</text>
+<rect x="584.8" y="741" width="32.7" height="13" fill="#2a9d8f"/>
+<line x1="560.9" x2="608.7" y1="747.5" y2="747.5" stroke="#222" stroke-width="1"/>
+<line x1="560.9" x2="560.9" y1="744.5" y2="750.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="744.5" y2="750.5" stroke="#222" stroke-width="1"/>
+<circle cx="584.8" cy="747.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="555.9" y="752" text-anchor="end" fill="#333">0.86</text>
+<text x="292" y="772" text-anchor="end" fill="#222">tnp_longk_16384 / mm_bf16_tn_coop_128x64_sg4_p</text>
+<rect x="582.3" y="761" width="35.2" height="13" fill="#2a9d8f"/>
+<line x1="558.0" x2="623.9" y1="767.5" y2="767.5" stroke="#222" stroke-width="1"/>
+<line x1="558.0" x2="558.0" y1="764.5" y2="770.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="764.5" y2="770.5" stroke="#222" stroke-width="1"/>
+<circle cx="582.3" cy="767.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="553.0" y="772" text-anchor="end" fill="#333">0.85</text>
+<text x="292" y="792" text-anchor="end" fill="#222">tnp_longk_16384 / mm_bf16_tn_coop_128x64_sg4_p</text>
+<rect x="592.2" y="781" width="25.2" height="13" fill="#2a9d8f"/>
+<line x1="555.2" x2="608.7" y1="787.5" y2="787.5" stroke="#222" stroke-width="1"/>
+<line x1="555.2" x2="555.2" y1="784.5" y2="790.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="784.5" y2="790.5" stroke="#222" stroke-width="1"/>
+<circle cx="592.2" cy="787.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="550.2" y="792" text-anchor="end" fill="#333">0.89</text>
+<text x="292" y="812" text-anchor="end" fill="#222">tnp_lmhead_dw / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="617.5" y="801" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="619.7" x2="628.1" y1="807.5" y2="807.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="804.5" y2="810.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="804.5" y2="810.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="807.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="633.1" y="812" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="832" text-anchor="end" fill="#222">tnp_lmhead_dw / mm_bf16_tn_coop_128x64_sg4_ph4</text>
+<rect x="584.8" y="821" width="32.7" height="13" fill="#2a9d8f"/>
+<line x1="571.8" x2="604.1" y1="827.5" y2="827.5" stroke="#222" stroke-width="1"/>
+<line x1="571.8" x2="571.8" y1="824.5" y2="830.5" stroke="#222" stroke-width="1"/>
+<line x1="604.1" x2="604.1" y1="824.5" y2="830.5" stroke="#222" stroke-width="1"/>
+<circle cx="584.8" cy="827.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="566.8" y="832" text-anchor="end" fill="#333">0.86</text>
+<text x="292" y="852" text-anchor="end" fill="#222">tnp_lmhead_dw / mm_bf16_tn_coop_128x64_sg4_ph8</text>
+<rect x="587.3" y="841" width="30.2" height="13" fill="#2a9d8f"/>
+<line x1="560.9" x2="621.8" y1="847.5" y2="847.5" stroke="#222" stroke-width="1"/>
+<line x1="560.9" x2="560.9" y1="844.5" y2="850.5" stroke="#222" stroke-width="1"/>
+<line x1="621.8" x2="621.8" y1="844.5" y2="850.5" stroke="#222" stroke-width="1"/>
+<circle cx="587.3" cy="847.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="555.9" y="852" text-anchor="end" fill="#333">0.87</text>
+<text x="292" y="872" text-anchor="end" fill="#222">tnp_lmhead_dw / mm_bf16_tn_coop_128x64_sg4_ph1</text>
+<rect x="597.1" y="861" width="20.4" height="13" fill="#9aa0a6"/>
+<line x1="563.7" x2="632.2" y1="867.5" y2="867.5" stroke="#222" stroke-width="1"/>
+<line x1="563.7" x2="563.7" y1="864.5" y2="870.5" stroke="#222" stroke-width="1"/>
+<line x1="632.2" x2="632.2" y1="864.5" y2="870.5" stroke="#222" stroke-width="1"/>
+<circle cx="597.1" cy="867.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="558.7" y="872" text-anchor="end" fill="#333">0.91</text>
+<text x="292" y="892" text-anchor="end" fill="#222">tnp_b64mib / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="617.5" y="881" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="601.8" x2="623.9" y1="887.5" y2="887.5" stroke="#222" stroke-width="1"/>
+<line x1="601.8" x2="601.8" y1="884.5" y2="890.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="884.5" y2="890.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="887.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="628.9" y="892" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="912" text-anchor="end" fill="#222">tnp_b64mib / mm_bf16_tn_coop_128x64_sg4_ph4</text>
+<rect x="597.1" y="901" width="20.4" height="13" fill="#9aa0a6"/>
+<line x1="566.4" x2="606.4" y1="907.5" y2="907.5" stroke="#222" stroke-width="1"/>
+<line x1="566.4" x2="566.4" y1="904.5" y2="910.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="904.5" y2="910.5" stroke="#222" stroke-width="1"/>
+<circle cx="597.1" cy="907.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="561.4" y="912" text-anchor="end" fill="#333">0.91</text>
+<text x="292" y="932" text-anchor="end" fill="#222">tnp_b64mib / mm_bf16_tn_coop_128x64_sg4_ph8</text>
+<rect x="599.4" y="921" width="18.1" height="13" fill="#9aa0a6"/>
+<line x1="566.4" x2="608.7" y1="927.5" y2="927.5" stroke="#222" stroke-width="1"/>
+<line x1="566.4" x2="566.4" y1="924.5" y2="930.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="924.5" y2="930.5" stroke="#222" stroke-width="1"/>
+<circle cx="599.4" cy="927.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="561.4" y="932" text-anchor="end" fill="#333">0.92</text>
+<text x="292" y="952" text-anchor="end" fill="#222">tnp_b64mib / mm_bf16_tn_coop_128x64_sg4_ph16</text>
+<rect x="599.4" y="941" width="18.1" height="13" fill="#9aa0a6"/>
+<line x1="569.1" x2="610.9" y1="947.5" y2="947.5" stroke="#222" stroke-width="1"/>
+<line x1="569.1" x2="569.1" y1="944.5" y2="950.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="944.5" y2="950.5" stroke="#222" stroke-width="1"/>
+<circle cx="599.4" cy="947.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="564.1" y="952" text-anchor="end" fill="#333">0.92</text>
+<text x="292" y="972" text-anchor="end" fill="#222">tnp_b32mib / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="615.3" y="961" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="630.1" y1="967.5" y2="967.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="964.5" y2="970.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="964.5" y2="970.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="967.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="608.1" y="972" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="992" text-anchor="end" fill="#222">tnp_b32mib / mm_bf16_tn_coop_128x64_sg4_ph4</text>
+<rect x="597.1" y="981" width="20.4" height="13" fill="#9aa0a6"/>
+<line x1="587.3" x2="610.9" y1="987.5" y2="987.5" stroke="#222" stroke-width="1"/>
+<line x1="587.3" x2="587.3" y1="984.5" y2="990.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="984.5" y2="990.5" stroke="#222" stroke-width="1"/>
+<circle cx="597.1" cy="987.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="582.3" y="992" text-anchor="end" fill="#333">0.91</text>
+<text x="292" y="1012" text-anchor="end" fill="#222">tnp_b32mib / mm_bf16_tn_coop_128x64_sg4_ph8</text>
+<rect x="599.4" y="1001" width="18.1" height="13" fill="#9aa0a6"/>
+<line x1="597.1" x2="610.9" y1="1007.5" y2="1007.5" stroke="#222" stroke-width="1"/>
+<line x1="597.1" x2="597.1" y1="1004.5" y2="1010.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="1004.5" y2="1010.5" stroke="#222" stroke-width="1"/>
+<circle cx="599.4" cy="1007.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="592.1" y="1012" text-anchor="end" fill="#333">0.92</text>
+<text x="292" y="1032" text-anchor="end" fill="#222">tnp_b32mib / mm_bf16_tn_coop_128x64_sg4_ph16</text>
+<rect x="606.4" y="1021" width="11.1" height="13" fill="#9aa0a6"/>
+<line x1="592.2" x2="617.5" y1="1027.5" y2="1027.5" stroke="#222" stroke-width="1"/>
+<line x1="592.2" x2="592.2" y1="1024.5" y2="1030.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1024.5" y2="1030.5" stroke="#222" stroke-width="1"/>
+<circle cx="606.4" cy="1027.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="587.2" y="1032" text-anchor="end" fill="#333">0.95</text>
+<text x="292" y="1052" text-anchor="end" fill="#222">tnp_b16mib / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="613.1" y="1041" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="621.8" y1="1047.5" y2="1047.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="1044.5" y2="1050.5" stroke="#222" stroke-width="1"/>
+<line x1="621.8" x2="621.8" y1="1044.5" y2="1050.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="1047.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="603.7" y="1052" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="1072" text-anchor="end" fill="#222">tnp_b16mib / mm_bf16_tn_coop_128x64_sg4_ph4</text>
+<rect x="613.1" y="1061" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="628.1" y1="1067.5" y2="1067.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="1064.5" y2="1070.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="1064.5" y2="1070.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="1067.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="605.9" y="1072" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="1092" text-anchor="end" fill="#222">tnp_b16mib / mm_bf16_tn_coop_128x64_sg4_ph8</text>
+<rect x="613.1" y="1081" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="604.1" x2="626.0" y1="1087.5" y2="1087.5" stroke="#222" stroke-width="1"/>
+<line x1="604.1" x2="604.1" y1="1084.5" y2="1090.5" stroke="#222" stroke-width="1"/>
+<line x1="626.0" x2="626.0" y1="1084.5" y2="1090.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="1087.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="599.1" y="1092" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="1112" text-anchor="end" fill="#222">tnp_b16mib / mm_bf16_tn_coop_128x64_sg4_ph16</text>
+<rect x="617.5" y="1101" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="604.1" x2="634.2" y1="1107.5" y2="1107.5" stroke="#222" stroke-width="1"/>
+<line x1="604.1" x2="604.1" y1="1104.5" y2="1110.5" stroke="#222" stroke-width="1"/>
+<line x1="634.2" x2="634.2" y1="1104.5" y2="1110.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="639.2" y="1112" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1132" text-anchor="end" fill="#222">ntp_morton_sq64 / base</text>
+<rect x="617.5" y="1121" width="34.0" height="13" fill="#d1495b"/>
+<line x1="630.1" x2="660.6" y1="1127.5" y2="1127.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="1124.5" y2="1130.5" stroke="#222" stroke-width="1"/>
+<line x1="660.6" x2="660.6" y1="1124.5" y2="1130.5" stroke="#222" stroke-width="1"/>
+<circle cx="651.5" cy="1127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="665.6" y="1132" text-anchor="start" fill="#333">1.17</text>
+<text x="292" y="1152" text-anchor="end" fill="#222">ntp_morton_sq64 / base_ph4</text>
+<rect x="617.5" y="1141" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="640.1" y1="1147.5" y2="1147.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="1144.5" y2="1150.5" stroke="#222" stroke-width="1"/>
+<line x1="640.1" x2="640.1" y1="1144.5" y2="1150.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="1147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="645.1" y="1152" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="1172" text-anchor="end" fill="#222">ntp_morton_sq64 / base_ph8</text>
+<rect x="617.5" y="1161" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="601.8" x2="645.9" y1="1167.5" y2="1167.5" stroke="#222" stroke-width="1"/>
+<line x1="601.8" x2="601.8" y1="1164.5" y2="1170.5" stroke="#222" stroke-width="1"/>
+<line x1="645.9" x2="645.9" y1="1164.5" y2="1170.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="1167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="650.9" y="1172" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="1192" text-anchor="end" fill="#222">ntp_morton_sq64 / base_ph16</text>
+<rect x="617.5" y="1181" width="12.6" height="13" fill="#9aa0a6"/>
+<line x1="601.8" x2="657.0" y1="1187.5" y2="1187.5" stroke="#222" stroke-width="1"/>
+<line x1="601.8" x2="601.8" y1="1184.5" y2="1190.5" stroke="#222" stroke-width="1"/>
+<line x1="657.0" x2="657.0" y1="1184.5" y2="1190.5" stroke="#222" stroke-width="1"/>
+<circle cx="630.1" cy="1187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="662.0" y="1192" text-anchor="start" fill="#333">1.06</text>
+<text x="292" y="1212" text-anchor="end" fill="#222">tnp_morton_sq64 / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="617.5" y="1201" width="24.6" height="13" fill="#d1495b"/>
+<line x1="628.1" x2="645.9" y1="1207.5" y2="1207.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="1204.5" y2="1210.5" stroke="#222" stroke-width="1"/>
+<line x1="645.9" x2="645.9" y1="1204.5" y2="1210.5" stroke="#222" stroke-width="1"/>
+<circle cx="642.1" cy="1207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="650.9" y="1212" text-anchor="start" fill="#333">1.12</text>
+<text x="292" y="1232" text-anchor="end" fill="#222">tnp_morton_sq64 / mm_bf16_tn_coop_128x64_sg4_p</text>
+<rect x="617.5" y="1221" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="628.1" y1="1227.5" y2="1227.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="1224.5" y2="1230.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="1224.5" y2="1230.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="1227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="633.1" y="1232" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="1252" text-anchor="end" fill="#222">tnp_morton_sq64 / mm_bf16_tn_coop_128x64_sg4_p</text>
+<rect x="617.5" y="1241" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="634.2" y1="1247.5" y2="1247.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="1244.5" y2="1250.5" stroke="#222" stroke-width="1"/>
+<line x1="634.2" x2="634.2" y1="1244.5" y2="1250.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="1247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="639.2" y="1252" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="1272" text-anchor="end" fill="#222">tnp_morton_sq64 / mm_bf16_tn_coop_128x64_sg4_p</text>
+<rect x="617.5" y="1261" width="10.6" height="13" fill="#9aa0a6"/>
+<line x1="623.9" x2="638.1" y1="1267.5" y2="1267.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="1264.5" y2="1270.5" stroke="#222" stroke-width="1"/>
+<line x1="638.1" x2="638.1" y1="1264.5" y2="1270.5" stroke="#222" stroke-width="1"/>
+<circle cx="628.1" cy="1267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="643.1" y="1272" text-anchor="start" fill="#333">1.05</text>
+<text x="292" y="1292" text-anchor="end" fill="#222">ntap_vocab_32768 / matmul2d_tensorops_nt_accum</text>
+<rect x="617.5" y="1281" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="1287.5" y2="1287.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1284.5" y2="1290.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1284.5" y2="1290.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="1292" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1312" text-anchor="end" fill="#222">ntap_vocab_32768 / mm_bf16_nt_accum_coop_64x64</text>
+<rect x="617.5" y="1301" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="630.1" y1="1307.5" y2="1307.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="1304.5" y2="1310.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="1304.5" y2="1310.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="1307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="635.1" y="1312" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="1332" text-anchor="end" fill="#222">ntap_vocab_32768 / mm_bf16_nt_accum_coop_64x64</text>
+<rect x="444.5" y="1321" width="173.0" height="13" fill="#2a9d8f"/>
+<line x1="439.6" x2="444.5" y1="1327.5" y2="1327.5" stroke="#222" stroke-width="1"/>
+<line x1="439.6" x2="439.6" y1="1324.5" y2="1330.5" stroke="#222" stroke-width="1"/>
+<line x1="444.5" x2="444.5" y1="1324.5" y2="1330.5" stroke="#222" stroke-width="1"/>
+<circle cx="444.5" cy="1327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="434.6" y="1332" text-anchor="end" fill="#333">0.45</text>
+<text x="292" y="1352" text-anchor="end" fill="#222">ntap_vocab_32768 / mm_bf16_nt_accum_coop_64x64</text>
+<rect x="434.6" y="1341" width="182.9" height="13" fill="#2a9d8f"/>
+<line x1="429.5" x2="449.2" y1="1347.5" y2="1347.5" stroke="#222" stroke-width="1"/>
+<line x1="429.5" x2="429.5" y1="1344.5" y2="1350.5" stroke="#222" stroke-width="1"/>
+<line x1="449.2" x2="449.2" y1="1344.5" y2="1350.5" stroke="#222" stroke-width="1"/>
+<circle cx="434.6" cy="1347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="424.5" y="1352" text-anchor="end" fill="#333">0.43</text>
+<text x="292" y="1372" text-anchor="end" fill="#222">ntap_b16mib / matmul2d_tensorops_nt_accum_bf16</text>
+<rect x="617.5" y="1361" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="1367.5" y2="1367.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1364.5" y2="1370.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1364.5" y2="1370.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="1372" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1392" text-anchor="end" fill="#222">ntap_b16mib / mm_bf16_nt_accum_coop_64x64_sg4</text>
+<rect x="617.5" y="1381" width="26.5" height="13" fill="#d1495b"/>
+<line x1="623.9" x2="655.2" y1="1387.5" y2="1387.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="1384.5" y2="1390.5" stroke="#222" stroke-width="1"/>
+<line x1="655.2" x2="655.2" y1="1384.5" y2="1390.5" stroke="#222" stroke-width="1"/>
+<circle cx="644.0" cy="1387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="660.2" y="1392" text-anchor="start" fill="#333">1.13</text>
+<text x="292" y="1412" text-anchor="end" fill="#222">ntap_b16mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="617.5" y="1401" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="577.1" x2="630.1" y1="1407.5" y2="1407.5" stroke="#222" stroke-width="1"/>
+<line x1="577.1" x2="577.1" y1="1404.5" y2="1410.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="1404.5" y2="1410.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="1407.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="635.1" y="1412" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="1432" text-anchor="end" fill="#222">ntap_b16mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="617.5" y="1421" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="582.3" x2="636.2" y1="1427.5" y2="1427.5" stroke="#222" stroke-width="1"/>
+<line x1="582.3" x2="582.3" y1="1424.5" y2="1430.5" stroke="#222" stroke-width="1"/>
+<line x1="636.2" x2="636.2" y1="1424.5" y2="1430.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="1427.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="641.2" y="1432" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="1452" text-anchor="end" fill="#222">ntap_morton_sq64 / matmul2d_tensorops_nt_accum</text>
+<rect x="617.5" y="1441" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="1447.5" y2="1447.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1444.5" y2="1450.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1444.5" y2="1450.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1447.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="1452" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1472" text-anchor="end" fill="#222">ntap_morton_sq64 / mm_bf16_nt_accum_coop_64x64</text>
+<rect x="617.5" y="1461" width="118.8" height="13" fill="#d1495b"/>
+<line x1="724.7" x2="811.7" y1="1467.5" y2="1467.5" stroke="#222" stroke-width="1"/>
+<line x1="724.7" x2="724.7" y1="1464.5" y2="1470.5" stroke="#222" stroke-width="1"/>
+<line x1="811.7" x2="811.7" y1="1464.5" y2="1470.5" stroke="#222" stroke-width="1"/>
+<circle cx="736.3" cy="1467.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="816.7" y="1472" text-anchor="start" fill="#333">1.73</text>
+<text x="292" y="1492" text-anchor="end" fill="#222">ntap_morton_sq64 / mm_bf16_nt_accum_coop_64x64</text>
+<rect x="613.1" y="1481" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="621.8" y1="1487.5" y2="1487.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="1484.5" y2="1490.5" stroke="#222" stroke-width="1"/>
+<line x1="621.8" x2="621.8" y1="1484.5" y2="1490.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="1487.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="601.4" y="1492" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="1512" text-anchor="end" fill="#222">ntap_morton_sq64 / mm_bf16_nt_accum_coop_64x64</text>
+<rect x="613.1" y="1501" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="592.2" x2="623.9" y1="1507.5" y2="1507.5" stroke="#222" stroke-width="1"/>
+<line x1="592.2" x2="592.2" y1="1504.5" y2="1510.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="1504.5" y2="1510.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="1507.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="587.2" y="1512" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="1532" text-anchor="end" fill="#222">tnap_lmhead_dw / matmul2d_tensorops_tn_accum_b</text>
+<rect x="617.5" y="1521" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="1527.5" y2="1527.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1524.5" y2="1530.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1524.5" y2="1530.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1527.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="1532" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1552" text-anchor="end" fill="#222">tnap_lmhead_dw / mm_bf16_tn_accum_coop_64x64_s</text>
+<rect x="617.5" y="1541" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="628.1" y1="1547.5" y2="1547.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="1544.5" y2="1550.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="1544.5" y2="1550.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="1547.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="633.1" y="1552" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="1572" text-anchor="end" fill="#222">tnap_lmhead_dw / mm_bf16_tn_accum_coop_64x64_s</text>
+<rect x="517.4" y="1561" width="100.1" height="13" fill="#2a9d8f"/>
+<line x1="491.9" x2="524.2" y1="1567.5" y2="1567.5" stroke="#222" stroke-width="1"/>
+<line x1="491.9" x2="491.9" y1="1564.5" y2="1570.5" stroke="#222" stroke-width="1"/>
+<line x1="524.2" x2="524.2" y1="1564.5" y2="1570.5" stroke="#222" stroke-width="1"/>
+<circle cx="517.4" cy="1567.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="486.9" y="1572" text-anchor="end" fill="#333">0.63</text>
+<text x="292" y="1592" text-anchor="end" fill="#222">tnap_lmhead_dw / mm_bf16_tn_accum_coop_64x64_s</text>
+<rect x="543.3" y="1581" width="74.2" height="13" fill="#2a9d8f"/>
+<line x1="503.2" x2="574.5" y1="1587.5" y2="1587.5" stroke="#222" stroke-width="1"/>
+<line x1="503.2" x2="503.2" y1="1584.5" y2="1590.5" stroke="#222" stroke-width="1"/>
+<line x1="574.5" x2="574.5" y1="1584.5" y2="1590.5" stroke="#222" stroke-width="1"/>
+<circle cx="543.3" cy="1587.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="498.2" y="1592" text-anchor="end" fill="#333">0.71</text>
+<text x="292" y="1612" text-anchor="end" fill="#222">tnap_b16mib / matmul2d_tensorops_tn_accum_bf16</text>
+<rect x="617.5" y="1601" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="1607.5" y2="1607.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1604.5" y2="1610.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1604.5" y2="1610.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1607.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="1612" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1632" text-anchor="end" fill="#222">tnap_b16mib / mm_bf16_tn_accum_coop_64x64_sg4</text>
+<rect x="615.3" y="1621" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="621.8" y1="1627.5" y2="1627.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="1624.5" y2="1630.5" stroke="#222" stroke-width="1"/>
+<line x1="621.8" x2="621.8" y1="1624.5" y2="1630.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="1627.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="608.1" y="1632" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="1652" text-anchor="end" fill="#222">tnap_b16mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="617.5" y="1641" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="599.4" x2="630.1" y1="1647.5" y2="1647.5" stroke="#222" stroke-width="1"/>
+<line x1="599.4" x2="599.4" y1="1644.5" y2="1650.5" stroke="#222" stroke-width="1"/>
+<line x1="630.1" x2="630.1" y1="1644.5" y2="1650.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="1647.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="635.1" y="1652" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="1672" text-anchor="end" fill="#222">tnap_b16mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="617.5" y="1661" width="14.7" height="13" fill="#9aa0a6"/>
+<line x1="601.8" x2="655.2" y1="1667.5" y2="1667.5" stroke="#222" stroke-width="1"/>
+<line x1="601.8" x2="601.8" y1="1664.5" y2="1670.5" stroke="#222" stroke-width="1"/>
+<line x1="655.2" x2="655.2" y1="1664.5" y2="1670.5" stroke="#222" stroke-width="1"/>
+<circle cx="632.2" cy="1667.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="660.2" y="1672" text-anchor="start" fill="#333">1.07</text>
+<text x="292" y="1692" text-anchor="end" fill="#222">tnap_morton_sq64 / matmul2d_tensorops_tn_accum</text>
+<rect x="617.5" y="1681" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="1687.5" y2="1687.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1684.5" y2="1690.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1684.5" y2="1690.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1687.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="1692" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1712" text-anchor="end" fill="#222">tnap_morton_sq64 / mm_bf16_tn_accum_coop_64x64</text>
+<rect x="617.5" y="1701" width="68.2" height="13" fill="#d1495b"/>
+<line x1="657.0" x2="703.9" y1="1707.5" y2="1707.5" stroke="#222" stroke-width="1"/>
+<line x1="657.0" x2="657.0" y1="1704.5" y2="1710.5" stroke="#222" stroke-width="1"/>
+<line x1="703.9" x2="703.9" y1="1704.5" y2="1710.5" stroke="#222" stroke-width="1"/>
+<circle cx="685.7" cy="1707.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="708.9" y="1712" text-anchor="start" fill="#333">1.37</text>
+<text x="292" y="1732" text-anchor="end" fill="#222">tnap_morton_sq64 / mm_bf16_tn_accum_coop_64x64</text>
+<rect x="617.5" y="1721" width="8.5" height="13" fill="#9aa0a6"/>
+<line x1="597.1" x2="653.4" y1="1727.5" y2="1727.5" stroke="#222" stroke-width="1"/>
+<line x1="597.1" x2="597.1" y1="1724.5" y2="1730.5" stroke="#222" stroke-width="1"/>
+<line x1="653.4" x2="653.4" y1="1724.5" y2="1730.5" stroke="#222" stroke-width="1"/>
+<circle cx="626.0" cy="1727.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="658.4" y="1732" text-anchor="start" fill="#333">1.04</text>
+<text x="292" y="1752" text-anchor="end" fill="#222">tnap_morton_sq64 / mm_bf16_tn_accum_coop_64x64</text>
+<rect x="617.5" y="1741" width="8.5" height="13" fill="#9aa0a6"/>
+<line x1="597.1" x2="674.3" y1="1747.5" y2="1747.5" stroke="#222" stroke-width="1"/>
+<line x1="597.1" x2="597.1" y1="1744.5" y2="1750.5" stroke="#222" stroke-width="1"/>
+<line x1="674.3" x2="674.3" y1="1744.5" y2="1750.5" stroke="#222" stroke-width="1"/>
+<circle cx="626.0" cy="1747.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="679.3" y="1752" text-anchor="start" fill="#333">1.04</text>
+<text x="292" y="1772" text-anchor="end" fill="#222">ntp_g12mib / base</text>
+<rect x="617.5" y="1761" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="644.0" y1="1767.5" y2="1767.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="1764.5" y2="1770.5" stroke="#222" stroke-width="1"/>
+<line x1="644.0" x2="644.0" y1="1764.5" y2="1770.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1767.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="649.0" y="1772" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1792" text-anchor="end" fill="#222">ntp_g12mib / base_ph4</text>
+<rect x="613.1" y="1781" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="615.3" y1="1787.5" y2="1787.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="1784.5" y2="1790.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="1784.5" y2="1790.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="1787.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="608.1" y="1792" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="1812" text-anchor="end" fill="#222">ntp_g12mib / base_ph8</text>
+<rect x="617.5" y="1801" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="628.1" y1="1807.5" y2="1807.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="1804.5" y2="1810.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="1804.5" y2="1810.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="1807.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="633.1" y="1812" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="1832" text-anchor="end" fill="#222">ntp_g12mib / base_ph16</text>
+<rect x="615.3" y="1821" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="619.7" y1="1827.5" y2="1827.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="1824.5" y2="1830.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="1824.5" y2="1830.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="1827.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="608.1" y="1832" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="1852" text-anchor="end" fill="#222">ntp_g16mib / base</text>
+<rect x="615.3" y="1841" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="619.7" y1="1847.5" y2="1847.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="1844.5" y2="1850.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="1844.5" y2="1850.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="1847.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="603.7" y="1852" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="1872" text-anchor="end" fill="#222">ntp_g16mib / base_ph4</text>
+<rect x="608.7" y="1861" width="8.8" height="13" fill="#9aa0a6"/>
+<line x1="604.1" x2="610.9" y1="1867.5" y2="1867.5" stroke="#222" stroke-width="1"/>
+<line x1="604.1" x2="604.1" y1="1864.5" y2="1870.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="1864.5" y2="1870.5" stroke="#222" stroke-width="1"/>
+<circle cx="608.7" cy="1867.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="599.1" y="1872" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="1892" text-anchor="end" fill="#222">ntp_g16mib / base_ph8</text>
+<rect x="610.9" y="1881" width="6.6" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="626.0" y1="1887.5" y2="1887.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="1884.5" y2="1890.5" stroke="#222" stroke-width="1"/>
+<line x1="626.0" x2="626.0" y1="1884.5" y2="1890.5" stroke="#222" stroke-width="1"/>
+<circle cx="610.9" cy="1887.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="605.9" y="1892" text-anchor="end" fill="#333">0.97</text>
+<text x="292" y="1912" text-anchor="end" fill="#222">ntp_g16mib / base_ph16</text>
+<rect x="610.9" y="1901" width="6.6" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="628.1" y1="1907.5" y2="1907.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="1904.5" y2="1910.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="1904.5" y2="1910.5" stroke="#222" stroke-width="1"/>
+<circle cx="610.9" cy="1907.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="603.7" y="1912" text-anchor="end" fill="#333">0.97</text>
+<text x="292" y="1932" text-anchor="end" fill="#222">ntp_g20mib / base</text>
+<rect x="617.5" y="1921" width="6.4" height="13" fill="#9aa0a6"/>
+<line x1="619.7" x2="638.1" y1="1927.5" y2="1927.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="1924.5" y2="1930.5" stroke="#222" stroke-width="1"/>
+<line x1="638.1" x2="638.1" y1="1924.5" y2="1930.5" stroke="#222" stroke-width="1"/>
+<circle cx="623.9" cy="1927.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="643.1" y="1932" text-anchor="start" fill="#333">1.03</text>
+<text x="292" y="1952" text-anchor="end" fill="#222">ntp_g20mib / base_ph4</text>
+<rect x="613.1" y="1941" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="677.7" y1="1947.5" y2="1947.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="1944.5" y2="1950.5" stroke="#222" stroke-width="1"/>
+<line x1="677.7" x2="677.7" y1="1944.5" y2="1950.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="1947.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="601.4" y="1952" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="1972" text-anchor="end" fill="#222">ntp_g20mib / base_ph8</text>
+<rect x="604.1" y="1961" width="13.4" height="13" fill="#9aa0a6"/>
+<line x1="589.8" x2="619.7" y1="1967.5" y2="1967.5" stroke="#222" stroke-width="1"/>
+<line x1="589.8" x2="589.8" y1="1964.5" y2="1970.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="1964.5" y2="1970.5" stroke="#222" stroke-width="1"/>
+<circle cx="604.1" cy="1967.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="584.8" y="1972" text-anchor="end" fill="#333">0.94</text>
+<text x="292" y="1992" text-anchor="end" fill="#222">ntp_g20mib / base_ph16</text>
+<rect x="606.4" y="1981" width="11.1" height="13" fill="#9aa0a6"/>
+<line x1="589.8" x2="617.5" y1="1987.5" y2="1987.5" stroke="#222" stroke-width="1"/>
+<line x1="589.8" x2="589.8" y1="1984.5" y2="1990.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="1984.5" y2="1990.5" stroke="#222" stroke-width="1"/>
+<circle cx="606.4" cy="1987.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="584.8" y="1992" text-anchor="end" fill="#333">0.95</text>
+<text x="292" y="2012" text-anchor="end" fill="#222">ntp_g12mib_k768 / base</text>
+<rect x="617.5" y="2001" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="623.9" y1="2007.5" y2="2007.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="2004.5" y2="2010.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="2004.5" y2="2010.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2007.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="628.9" y="2012" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2032" text-anchor="end" fill="#222">ntp_g12mib_k768 / base_ph4</text>
+<rect x="613.1" y="2021" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="599.4" x2="613.1" y1="2027.5" y2="2027.5" stroke="#222" stroke-width="1"/>
+<line x1="599.4" x2="599.4" y1="2024.5" y2="2030.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="2024.5" y2="2030.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="2027.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="594.4" y="2032" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="2052" text-anchor="end" fill="#222">ntp_g12mib_k768 / base_ph8</text>
+<rect x="608.7" y="2041" width="8.8" height="13" fill="#9aa0a6"/>
+<line x1="597.1" x2="613.1" y1="2047.5" y2="2047.5" stroke="#222" stroke-width="1"/>
+<line x1="597.1" x2="597.1" y1="2044.5" y2="2050.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="2044.5" y2="2050.5" stroke="#222" stroke-width="1"/>
+<circle cx="608.7" cy="2047.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="592.1" y="2052" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="2072" text-anchor="end" fill="#222">ntp_g12mib_k768 / base_ph16</text>
+<rect x="608.7" y="2061" width="8.8" height="13" fill="#9aa0a6"/>
+<line x1="601.8" x2="615.3" y1="2067.5" y2="2067.5" stroke="#222" stroke-width="1"/>
+<line x1="601.8" x2="601.8" y1="2064.5" y2="2070.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="2064.5" y2="2070.5" stroke="#222" stroke-width="1"/>
+<circle cx="608.7" cy="2067.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="596.8" y="2072" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="2092" text-anchor="end" fill="#222">ntp_g20mib_k768 / base</text>
+<rect x="610.9" y="2081" width="6.6" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="626.0" y1="2087.5" y2="2087.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="2084.5" y2="2090.5" stroke="#222" stroke-width="1"/>
+<line x1="626.0" x2="626.0" y1="2084.5" y2="2090.5" stroke="#222" stroke-width="1"/>
+<circle cx="610.9" cy="2087.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="603.7" y="2092" text-anchor="end" fill="#333">0.97</text>
+<text x="292" y="2112" text-anchor="end" fill="#222">ntp_g20mib_k768 / base_ph4</text>
+<rect x="549.3" y="2101" width="68.2" height="13" fill="#2a9d8f"/>
+<line x1="543.3" x2="552.3" y1="2107.5" y2="2107.5" stroke="#222" stroke-width="1"/>
+<line x1="543.3" x2="543.3" y1="2104.5" y2="2110.5" stroke="#222" stroke-width="1"/>
+<line x1="552.3" x2="552.3" y1="2104.5" y2="2110.5" stroke="#222" stroke-width="1"/>
+<circle cx="549.3" cy="2107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="538.3" y="2112" text-anchor="end" fill="#333">0.73</text>
+<text x="292" y="2132" text-anchor="end" fill="#222">ntp_g20mib_k768 / base_ph8</text>
+<rect x="546.3" y="2121" width="71.2" height="13" fill="#2a9d8f"/>
+<line x1="540.2" x2="549.3" y1="2127.5" y2="2127.5" stroke="#222" stroke-width="1"/>
+<line x1="540.2" x2="540.2" y1="2124.5" y2="2130.5" stroke="#222" stroke-width="1"/>
+<line x1="549.3" x2="549.3" y1="2124.5" y2="2130.5" stroke="#222" stroke-width="1"/>
+<circle cx="546.3" cy="2127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="535.2" y="2132" text-anchor="end" fill="#333">0.72</text>
+<text x="292" y="2152" text-anchor="end" fill="#222">ntp_g20mib_k768 / base_ph16</text>
+<rect x="543.3" y="2141" width="74.2" height="13" fill="#2a9d8f"/>
+<line x1="540.2" x2="543.3" y1="2147.5" y2="2147.5" stroke="#222" stroke-width="1"/>
+<line x1="540.2" x2="540.2" y1="2144.5" y2="2150.5" stroke="#222" stroke-width="1"/>
+<line x1="543.3" x2="543.3" y1="2144.5" y2="2150.5" stroke="#222" stroke-width="1"/>
+<circle cx="543.3" cy="2147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="535.2" y="2152" text-anchor="end" fill="#333">0.71</text>
+<text x="292" y="2172" text-anchor="end" fill="#222">tnp_g12mib / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="617.5" y="2161" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="621.8" y1="2167.5" y2="2167.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="2164.5" y2="2170.5" stroke="#222" stroke-width="1"/>
+<line x1="621.8" x2="621.8" y1="2164.5" y2="2170.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="626.8" y="2172" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2192" text-anchor="end" fill="#222">tnp_g12mib / mm_bf16_tn_coop_128x64_sg4_ph4</text>
+<rect x="613.1" y="2181" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="617.5" y1="2187.5" y2="2187.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="2184.5" y2="2190.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2184.5" y2="2190.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="2187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="608.1" y="2192" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="2212" text-anchor="end" fill="#222">tnp_g12mib / mm_bf16_tn_coop_128x64_sg4_ph8</text>
+<rect x="615.3" y="2201" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="621.8" y1="2207.5" y2="2207.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="2204.5" y2="2210.5" stroke="#222" stroke-width="1"/>
+<line x1="621.8" x2="621.8" y1="2204.5" y2="2210.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="2207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="608.1" y="2212" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="2232" text-anchor="end" fill="#222">tnp_g12mib / mm_bf16_tn_coop_128x64_sg4_ph16</text>
+<rect x="617.5" y="2221" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="628.1" y1="2227.5" y2="2227.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="2224.5" y2="2230.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="2224.5" y2="2230.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="2227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="633.1" y="2232" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="2252" text-anchor="end" fill="#222">tnp_g20mib / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="615.3" y="2241" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="628.1" y1="2247.5" y2="2247.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="2244.5" y2="2250.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="2244.5" y2="2250.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="2247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="610.3" y="2252" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="2272" text-anchor="end" fill="#222">tnp_g20mib / mm_bf16_tn_coop_128x64_sg4_ph4</text>
+<rect x="617.5" y="2261" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="619.7" y1="2267.5" y2="2267.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="2264.5" y2="2270.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="2264.5" y2="2270.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="2267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="624.7" y="2272" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="2292" text-anchor="end" fill="#222">tnp_g20mib / mm_bf16_tn_coop_128x64_sg4_ph8</text>
+<rect x="613.1" y="2281" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="601.8" x2="617.5" y1="2287.5" y2="2287.5" stroke="#222" stroke-width="1"/>
+<line x1="601.8" x2="601.8" y1="2284.5" y2="2290.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2284.5" y2="2290.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="2287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="596.8" y="2292" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="2312" text-anchor="end" fill="#222">tnp_g20mib / mm_bf16_tn_coop_128x64_sg4_ph16</text>
+<rect x="610.9" y="2301" width="6.6" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="623.9" y1="2307.5" y2="2307.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="2304.5" y2="2310.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="2304.5" y2="2310.5" stroke="#222" stroke-width="1"/>
+<circle cx="610.9" cy="2307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="601.4" y="2312" text-anchor="end" fill="#333">0.97</text>
+<text x="292" y="2332" text-anchor="end" fill="#222">tnp_g24mib / mm_bf16_tn_coop_128x64_sg4</text>
+<rect x="617.5" y="2321" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="619.7" x2="619.7" y1="2327.5" y2="2327.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="2324.5" y2="2330.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="2324.5" y2="2330.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="2327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="624.7" y="2332" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="2352" text-anchor="end" fill="#222">tnp_g24mib / mm_bf16_tn_coop_128x64_sg4_ph4</text>
+<rect x="606.4" y="2341" width="11.1" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="619.7" y1="2347.5" y2="2347.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="2344.5" y2="2350.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="2344.5" y2="2350.5" stroke="#222" stroke-width="1"/>
+<circle cx="606.4" cy="2347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="601.4" y="2352" text-anchor="end" fill="#333">0.95</text>
+<text x="292" y="2372" text-anchor="end" fill="#222">tnp_g24mib / mm_bf16_tn_coop_128x64_sg4_ph8</text>
+<rect x="608.7" y="2361" width="8.8" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="617.5" y1="2367.5" y2="2367.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="2364.5" y2="2370.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2364.5" y2="2370.5" stroke="#222" stroke-width="1"/>
+<circle cx="608.7" cy="2367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="601.4" y="2372" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="2392" text-anchor="end" fill="#222">tnp_g24mib / mm_bf16_tn_coop_128x64_sg4_ph16</text>
+<rect x="608.7" y="2381" width="8.8" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="619.7" y1="2387.5" y2="2387.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="2384.5" y2="2390.5" stroke="#222" stroke-width="1"/>
+<line x1="619.7" x2="619.7" y1="2384.5" y2="2390.5" stroke="#222" stroke-width="1"/>
+<circle cx="608.7" cy="2387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="601.4" y="2392" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="2412" text-anchor="end" fill="#222">ntap_g12mib / matmul2d_tensorops_nt_accum_bf16</text>
+<rect x="617.5" y="2401" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="2407.5" y2="2407.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2404.5" y2="2410.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2404.5" y2="2410.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2407.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="2412" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2432" text-anchor="end" fill="#222">ntap_g12mib / mm_bf16_nt_accum_coop_64x64_sg4</text>
+<rect x="617.5" y="2421" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="615.3" x2="623.9" y1="2427.5" y2="2427.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="2424.5" y2="2430.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="2424.5" y2="2430.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2427.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="628.9" y="2432" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2452" text-anchor="end" fill="#222">ntap_g12mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="617.5" y="2441" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="623.9" y1="2447.5" y2="2447.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="2444.5" y2="2450.5" stroke="#222" stroke-width="1"/>
+<line x1="623.9" x2="623.9" y1="2444.5" y2="2450.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2447.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="628.9" y="2452" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2472" text-anchor="end" fill="#222">ntap_g12mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="613.1" y="2461" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="613.1" x2="615.3" y1="2467.5" y2="2467.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="2464.5" y2="2470.5" stroke="#222" stroke-width="1"/>
+<line x1="615.3" x2="615.3" y1="2464.5" y2="2470.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="2467.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="608.1" y="2472" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="2492" text-anchor="end" fill="#222">ntap_g16mib / matmul2d_tensorops_nt_accum_bf16</text>
+<rect x="617.5" y="2481" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="2487.5" y2="2487.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2484.5" y2="2490.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2484.5" y2="2490.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2487.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="2492" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2512" text-anchor="end" fill="#222">ntap_g16mib / mm_bf16_nt_accum_coop_64x64_sg4</text>
+<rect x="613.1" y="2501" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="613.1" y1="2507.5" y2="2507.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="2504.5" y2="2510.5" stroke="#222" stroke-width="1"/>
+<line x1="613.1" x2="613.1" y1="2504.5" y2="2510.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="2507.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="605.9" y="2512" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="2532" text-anchor="end" fill="#222">ntap_g16mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="587.3" y="2521" width="30.2" height="13" fill="#2a9d8f"/>
+<line x1="587.3" x2="594.7" y1="2527.5" y2="2527.5" stroke="#222" stroke-width="1"/>
+<line x1="587.3" x2="587.3" y1="2524.5" y2="2530.5" stroke="#222" stroke-width="1"/>
+<line x1="594.7" x2="594.7" y1="2524.5" y2="2530.5" stroke="#222" stroke-width="1"/>
+<circle cx="587.3" cy="2527.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="582.3" y="2532" text-anchor="end" fill="#333">0.87</text>
+<text x="292" y="2552" text-anchor="end" fill="#222">ntap_g16mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="587.3" y="2541" width="30.2" height="13" fill="#2a9d8f"/>
+<line x1="582.3" x2="589.8" y1="2547.5" y2="2547.5" stroke="#222" stroke-width="1"/>
+<line x1="582.3" x2="582.3" y1="2544.5" y2="2550.5" stroke="#222" stroke-width="1"/>
+<line x1="589.8" x2="589.8" y1="2544.5" y2="2550.5" stroke="#222" stroke-width="1"/>
+<circle cx="587.3" cy="2547.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="577.3" y="2552" text-anchor="end" fill="#333">0.87</text>
+<text x="292" y="2572" text-anchor="end" fill="#222">ntap_g20mib / matmul2d_tensorops_nt_accum_bf16</text>
+<rect x="617.5" y="2561" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="2567.5" y2="2567.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2564.5" y2="2570.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2564.5" y2="2570.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2567.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="2572" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2592" text-anchor="end" fill="#222">ntap_g20mib / mm_bf16_nt_accum_coop_64x64_sg4</text>
+<rect x="617.5" y="2581" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="632.2" y1="2587.5" y2="2587.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2584.5" y2="2590.5" stroke="#222" stroke-width="1"/>
+<line x1="632.2" x2="632.2" y1="2584.5" y2="2590.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="2587.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="637.2" y="2592" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="2612" text-anchor="end" fill="#222">ntap_g20mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="566.4" y="2601" width="51.1" height="13" fill="#2a9d8f"/>
+<line x1="566.4" x2="569.1" y1="2607.5" y2="2607.5" stroke="#222" stroke-width="1"/>
+<line x1="566.4" x2="566.4" y1="2604.5" y2="2610.5" stroke="#222" stroke-width="1"/>
+<line x1="569.1" x2="569.1" y1="2604.5" y2="2610.5" stroke="#222" stroke-width="1"/>
+<circle cx="566.4" cy="2607.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="561.4" y="2612" text-anchor="end" fill="#333">0.79</text>
+<text x="292" y="2632" text-anchor="end" fill="#222">ntap_g20mib / mm_bf16_nt_accum_coop_64x64_sg4_</text>
+<rect x="566.4" y="2621" width="51.1" height="13" fill="#2a9d8f"/>
+<line x1="563.7" x2="571.8" y1="2627.5" y2="2627.5" stroke="#222" stroke-width="1"/>
+<line x1="563.7" x2="563.7" y1="2624.5" y2="2630.5" stroke="#222" stroke-width="1"/>
+<line x1="571.8" x2="571.8" y1="2624.5" y2="2630.5" stroke="#222" stroke-width="1"/>
+<circle cx="566.4" cy="2627.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="558.7" y="2632" text-anchor="end" fill="#333">0.79</text>
+<text x="292" y="2652" text-anchor="end" fill="#222">tnap_g12mib / matmul2d_tensorops_tn_accum_bf16</text>
+<rect x="617.5" y="2641" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="2647.5" y2="2647.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2644.5" y2="2650.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2644.5" y2="2650.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2647.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="2652" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2672" text-anchor="end" fill="#222">tnap_g12mib / mm_bf16_tn_accum_coop_64x64_sg4</text>
+<rect x="617.5" y="2661" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="647.8" y1="2667.5" y2="2667.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="2664.5" y2="2670.5" stroke="#222" stroke-width="1"/>
+<line x1="647.8" x2="647.8" y1="2664.5" y2="2670.5" stroke="#222" stroke-width="1"/>
+<circle cx="619.7" cy="2667.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="652.8" y="2672" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="2692" text-anchor="end" fill="#222">tnap_g12mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="597.1" y="2681" width="20.4" height="13" fill="#9aa0a6"/>
+<line x1="594.7" x2="634.2" y1="2687.5" y2="2687.5" stroke="#222" stroke-width="1"/>
+<line x1="594.7" x2="594.7" y1="2684.5" y2="2690.5" stroke="#222" stroke-width="1"/>
+<line x1="634.2" x2="634.2" y1="2684.5" y2="2690.5" stroke="#222" stroke-width="1"/>
+<circle cx="597.1" cy="2687.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="589.7" y="2692" text-anchor="end" fill="#333">0.91</text>
+<text x="292" y="2712" text-anchor="end" fill="#222">tnap_g12mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="597.1" y="2701" width="20.4" height="13" fill="#9aa0a6"/>
+<line x1="594.7" x2="628.1" y1="2707.5" y2="2707.5" stroke="#222" stroke-width="1"/>
+<line x1="594.7" x2="594.7" y1="2704.5" y2="2710.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="2704.5" y2="2710.5" stroke="#222" stroke-width="1"/>
+<circle cx="597.1" cy="2707.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="589.7" y="2712" text-anchor="end" fill="#333">0.91</text>
+<text x="292" y="2732" text-anchor="end" fill="#222">tnap_g16mib / matmul2d_tensorops_tn_accum_bf16</text>
+<rect x="617.5" y="2721" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="2727.5" y2="2727.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2724.5" y2="2730.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2724.5" y2="2730.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2727.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="2732" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2752" text-anchor="end" fill="#222">tnap_g16mib / mm_bf16_tn_accum_coop_64x64_sg4</text>
+<rect x="615.3" y="2741" width="2.2" height="13" fill="#9aa0a6"/>
+<line x1="610.9" x2="628.1" y1="2747.5" y2="2747.5" stroke="#222" stroke-width="1"/>
+<line x1="610.9" x2="610.9" y1="2744.5" y2="2750.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="2744.5" y2="2750.5" stroke="#222" stroke-width="1"/>
+<circle cx="615.3" cy="2747.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="605.9" y="2752" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="2772" text-anchor="end" fill="#222">tnap_g16mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="617.5" y="2761" width="4.3" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="653.4" y1="2767.5" y2="2767.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="2764.5" y2="2770.5" stroke="#222" stroke-width="1"/>
+<line x1="653.4" x2="653.4" y1="2764.5" y2="2770.5" stroke="#222" stroke-width="1"/>
+<circle cx="621.8" cy="2767.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="658.4" y="2772" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="2792" text-anchor="end" fill="#222">tnap_g16mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="617.5" y="2781" width="24.6" height="13" fill="#d1495b"/>
+<line x1="632.2" x2="647.8" y1="2787.5" y2="2787.5" stroke="#222" stroke-width="1"/>
+<line x1="632.2" x2="632.2" y1="2784.5" y2="2790.5" stroke="#222" stroke-width="1"/>
+<line x1="647.8" x2="647.8" y1="2784.5" y2="2790.5" stroke="#222" stroke-width="1"/>
+<circle cx="642.1" cy="2787.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="652.8" y="2792" text-anchor="start" fill="#333">1.12</text>
+<text x="292" y="2812" text-anchor="end" fill="#222">tnap_g20mib / matmul2d_tensorops_tn_accum_bf16</text>
+<rect x="617.5" y="2801" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="617.5" x2="617.5" y1="2807.5" y2="2807.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2804.5" y2="2810.5" stroke="#222" stroke-width="1"/>
+<line x1="617.5" x2="617.5" y1="2804.5" y2="2810.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2807.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.5" y="2812" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2832" text-anchor="end" fill="#222">tnap_g20mib / mm_bf16_tn_accum_coop_64x64_sg4</text>
+<rect x="617.5" y="2821" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="608.7" x2="632.2" y1="2827.5" y2="2827.5" stroke="#222" stroke-width="1"/>
+<line x1="608.7" x2="608.7" y1="2824.5" y2="2830.5" stroke="#222" stroke-width="1"/>
+<line x1="632.2" x2="632.2" y1="2824.5" y2="2830.5" stroke="#222" stroke-width="1"/>
+<circle cx="617.5" cy="2827.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="637.2" y="2832" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="2852" text-anchor="end" fill="#222">tnap_g20mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="606.4" y="2841" width="11.1" height="13" fill="#9aa0a6"/>
+<line x1="601.8" x2="628.1" y1="2847.5" y2="2847.5" stroke="#222" stroke-width="1"/>
+<line x1="601.8" x2="601.8" y1="2844.5" y2="2850.5" stroke="#222" stroke-width="1"/>
+<line x1="628.1" x2="628.1" y1="2844.5" y2="2850.5" stroke="#222" stroke-width="1"/>
+<circle cx="606.4" cy="2847.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="596.8" y="2852" text-anchor="end" fill="#333">0.95</text>
+<text x="292" y="2872" text-anchor="end" fill="#222">tnap_g20mib / mm_bf16_tn_accum_coop_64x64_sg4_</text>
+<rect x="613.1" y="2861" width="4.4" height="13" fill="#9aa0a6"/>
+<line x1="606.4" x2="632.2" y1="2867.5" y2="2867.5" stroke="#222" stroke-width="1"/>
+<line x1="606.4" x2="606.4" y1="2864.5" y2="2870.5" stroke="#222" stroke-width="1"/>
+<line x1="632.2" x2="632.2" y1="2864.5" y2="2870.5" stroke="#222" stroke-width="1"/>
+<circle cx="613.1" cy="2867.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="601.4" y="2872" text-anchor="end" fill="#333">0.98</text>
+</svg>

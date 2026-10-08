@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="227" viewBox="0 0 890 227" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-cpu-hot-paths: tape walk time in the peak run</text>
+<text x="16" y="44" fill="#555">min ms of one run each, so noisy (the fan-in row reads slower here)</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">base</text>
+<circle cx="89.6" cy="60" r="5" fill="#2a9d8f"/><text x="100.6" y="64" fill="#333">final tree</text>
+<line x1="395.1" x2="395.1" y1="78" y2="177" stroke="#ddd"/>
+<text x="395.1" y="193" text-anchor="middle" fill="#444">0.01</text>
+<line x1="523.7" x2="523.7" y1="78" y2="177" stroke="#ddd"/>
+<text x="523.7" y="193" text-anchor="middle" fill="#444">0.1</text>
+<line x1="652.3" x2="652.3" y1="78" y2="177" stroke="#ddd"/>
+<text x="652.3" y="193" text-anchor="middle" fill="#444">1</text>
+<line x1="780.9" x2="780.9" y1="78" y2="177" stroke="#ddd"/>
+<text x="780.9" y="193" text-anchor="middle" fill="#444">10</text>
+<text x="560.0" y="211" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="99.0" text-anchor="end" fill="#222">fanin_8x[1024,768]</text>
+<line x1="300" x2="738.7" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="738.7" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="746.7" y="93" fill="#333" font-size="10">4.7</text>
+<line x1="300" x2="757.0" y1="100.0" y2="100.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="757.0" cy="100.0" r="4.2" fill="#2a9d8f"/>
+<text x="765.0" y="104" fill="#333" font-size="10">6.51</text>
+<text x="292" y="130.0" text-anchor="end" fill="#222">ce_seed_1_[1024,768]x[50304,768]</text>
+<line x1="300" x2="319.9" y1="120.0" y2="120.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="319.9" cy="120.0" r="4.2" fill="#3d6fb6"/>
+<text x="327.9" y="124" fill="#333" font-size="10">0.0026</text>
+<line x1="300" x2="326.0" y1="131.0" y2="131.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="326.0" cy="131.0" r="4.2" fill="#2a9d8f"/>
+<text x="334.0" y="135" fill="#333" font-size="10">0.0029</text>
+<text x="292" y="161.0" text-anchor="end" fill="#222">ce_seed_0.25_[1024,768]x[50304,768]</text>
+<line x1="300" x2="793.8" y1="151.0" y2="151.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="793.8" cy="151.0" r="4.2" fill="#3d6fb6"/>
+<text x="801.8" y="155" fill="#333" font-size="10">12.6</text>
+<line x1="300" x2="687.3" y1="162.0" y2="162.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="687.3" cy="162.0" r="4.2" fill="#2a9d8f"/>
+<text x="695.3" y="166" fill="#333" font-size="10">1.87</text>
+</svg>

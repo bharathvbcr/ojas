@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="168" viewBox="0 0 920 168" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-gate/paired-gate: ojas-wgpu vs torch-mps</text>
+<text x="16" y="44" fill="#555">ojas median / torch median, median of 5 per-round ratios</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="493.0" y="72" width="69.2" height="46" fill="#eee"/>
+<line x1="527.6" x2="527.6" y1="72" y2="118" stroke="#222" stroke-width="1.5"/>
+<text x="527.6" y="134" text-anchor="middle" fill="#444">1x</text>
+<line x1="779.1" x2="779.1" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="779.1" y="134" text-anchor="middle" fill="#444">2x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">gate_fwd</text>
+<rect x="527.6" y="81" width="80.9" height="13" fill="#fff" stroke="#d1495b" stroke-width="1.4"/>
+<line x1="516.9" x2="725.2" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="516.9" x2="516.9" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="725.2" x2="725.2" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="608.5" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="730.2" y="92" text-anchor="start" fill="#333">1.25</text>
+<text x="292" y="112" text-anchor="end" fill="#222">gate_bwd</text>
+<rect x="527.6" y="101" width="237.2" height="13" fill="#d1495b"/>
+<line x1="751.1" x2="779.1" y1="107.5" y2="107.5" stroke="#222" stroke-width="1"/>
+<line x1="751.1" x2="751.1" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<line x1="779.1" x2="779.1" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<circle cx="764.8" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="784.1" y="112" text-anchor="start" fill="#333">1.92</text>
+</svg>

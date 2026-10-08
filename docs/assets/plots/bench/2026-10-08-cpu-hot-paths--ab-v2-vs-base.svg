@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="328" viewBox="0 0 920 328" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-cpu-hot-paths: Follow-up edits against a9af0a0 (ab-v2/)</text>
+<text x="16" y="44" fill="#555">after / base, min over rounds; circle = median of per-round ratios; load 17-82 on the first table</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="666.7" y="72" width="76.1" height="206" fill="#eee"/>
+<line x1="427.9" x2="427.9" y1="72" y2="278" stroke="#ddd" stroke-width="1"/>
+<text x="427.9" y="294" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="704.8" x2="704.8" y1="72" y2="278" stroke="#222" stroke-width="1.5"/>
+<text x="704.8" y="294" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">fanin_8x[1024,768]</text>
+<rect x="538.8" y="81" width="166.0" height="13" fill="#2a9d8f"/>
+<circle cx="671.5" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="533.8" y="92" text-anchor="end" fill="#333">0.66</text>
+<text x="292" y="112" text-anchor="end" fill="#222">accum_50304x768</text>
+<rect x="589.9" y="101" width="114.9" height="13" fill="#2a9d8f"/>
+<circle cx="615.6" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="584.9" y="112" text-anchor="end" fill="#333">0.75</text>
+<text x="292" y="132" text-anchor="end" fill="#222">conv1d bwd</text>
+<rect x="630.3" y="121" width="74.4" height="13" fill="#2a9d8f"/>
+<circle cx="589.9" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="625.3" y="132" text-anchor="end" fill="#333">0.83</text>
+<text x="292" y="152" text-anchor="end" fill="#222">muon_2048x2048</text>
+<rect x="644.5" y="141" width="60.2" height="13" fill="#2a9d8f"/>
+<circle cx="716.6" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="639.5" y="152" text-anchor="end" fill="#333">0.86</text>
+<text x="292" y="172" text-anchor="end" fill="#222">muon_6144x2048</text>
+<rect x="649.1" y="161" width="55.6" height="13" fill="#2a9d8f"/>
+<circle cx="708.7" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="644.1" y="172" text-anchor="end" fill="#333">0.87</text>
+<text x="292" y="192" text-anchor="end" fill="#222">ce_seed_0.25_[1024,768]x[50304,768]</text>
+<rect x="671.5" y="181" width="33.3" height="13" fill="#9aa0a6"/>
+<circle cx="671.5" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="666.5" y="192" text-anchor="end" fill="#333">0.92</text>
+<text x="292" y="212" text-anchor="end" fill="#222">accum_768x768</text>
+<rect x="696.7" y="201" width="8.1" height="13" fill="#9aa0a6"/>
+<circle cx="696.7" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="691.7" y="212" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="232" text-anchor="end" fill="#222">conv1d fwd</text>
+<rect x="696.7" y="221" width="8.1" height="13" fill="#9aa0a6"/>
+<circle cx="675.8" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="691.7" y="232" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="252" text-anchor="end" fill="#222">ce_seed_1_[1024,768]x[50304,768]</text>
+<rect x="704.8" y="241" width="30.7" height="13" fill="#9aa0a6"/>
+<circle cx="692.6" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="740.5" y="252" text-anchor="start" fill="#333">1.08</text>
+<text x="292" y="272" text-anchor="end" fill="#222">muon_768x768</text>
+<rect x="704.8" y="261" width="66.1" height="13" fill="#d1495b"/>
+<circle cx="742.8" cy="267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="775.9" y="272" text-anchor="start" fill="#333">1.18</text>
+</svg>

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="194" viewBox="0 0 890 194" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-05-torch215-clip: clip_grad_norm on MPS</text>
+<text x="16" y="44" fill="#555">Median of run 1; lower is faster</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">median ms</text>
+<line x1="376.8" x2="376.8" y1="78" y2="144" stroke="#ddd"/>
+<text x="376.8" y="160" text-anchor="middle" fill="#444">10</text>
+<line x1="476.2" x2="476.2" y1="78" y2="144" stroke="#ddd"/>
+<text x="476.2" y="160" text-anchor="middle" fill="#444">20</text>
+<line x1="607.6" x2="607.6" y1="78" y2="144" stroke="#ddd"/>
+<text x="607.6" y="160" text-anchor="middle" fill="#444">50</text>
+<line x1="707.0" x2="707.0" y1="78" y2="144" stroke="#ddd"/>
+<text x="707.0" y="160" text-anchor="middle" fill="#444">100</text>
+<line x1="806.4" x2="806.4" y1="78" y2="144" stroke="#ddd"/>
+<text x="806.4" y="160" text-anchor="middle" fill="#444">200</text>
+<text x="560.0" y="178" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="93.5" text-anchor="end" fill="#222">torch 2.14.1</text>
+<line x1="300" x2="752.6" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="752.6" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="760.6" y="93" fill="#333" font-size="10">137</text>
+<text x="292" y="113.5" text-anchor="end" fill="#222">torch 2.15.0.dev20261004</text>
+<line x1="300" x2="351.1" y1="109.0" y2="109.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="351.1" cy="109.0" r="4.2" fill="#3d6fb6"/>
+<text x="359.1" y="113" fill="#333" font-size="10">8.36</text>
+<text x="292" y="133.5" text-anchor="end" fill="#222">ojas Metal (round 5, unpaired)</text>
+<line x1="300" x2="468.6" y1="129.0" y2="129.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="468.6" cy="129.0" r="4.2" fill="#3d6fb6"/>
+<text x="476.6" y="133" fill="#333" font-size="10">19</text>
+</svg>

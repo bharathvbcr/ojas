@@ -1,0 +1,337 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="3547" viewBox="0 0 890 3547" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-06-gemm-bf16: tune2 raw sweep</text>
+<text x="16" y="44" fill="#555">median over 3 rounds of the in-process time per kernel variant, by case</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">nt_coop_128x64_sg4</text>
+<circle cx="179.2" cy="60" r="5" fill="#e08e2b"/><text x="190.2" y="64" fill="#333">nt_coop_128x64_sg4_ph4</text>
+<circle cx="362.0" cy="60" r="5" fill="#2a9d8f"/><text x="373.0" y="64" fill="#333">nt_coop_128x64_sg4_ph8</text>
+<circle cx="544.8" cy="60" r="5" fill="#d1495b"/><text x="555.8" y="64" fill="#333">nt_coop_128x64_sg4_ph16</text>
+<circle cx="22" cy="78" r="5" fill="#7b5ea7"/><text x="33" y="82" fill="#333">tn_coop_128x64_sg4</text>
+<circle cx="179.2" cy="78" r="5" fill="#8c564b"/><text x="190.2" y="82" fill="#333">tn_coop_128x64_sg4_ph4</text>
+<circle cx="362.0" cy="78" r="5" fill="#17becf"/><text x="373.0" y="82" fill="#333">tn_coop_128x64_sg4_ph8</text>
+<circle cx="544.8" cy="78" r="5" fill="#bcbd22"/><text x="555.8" y="82" fill="#333">tn_coop_128x64_sg4_ph16</text>
+<line x1="302.3" x2="302.3" y1="96" y2="3497" stroke="#ddd"/>
+<text x="302.3" y="3513" text-anchor="middle" fill="#444">1</text>
+<line x1="385.5" x2="385.5" y1="96" y2="3497" stroke="#ddd"/>
+<text x="385.5" y="3513" text-anchor="middle" fill="#444">2</text>
+<line x1="495.4" x2="495.4" y1="96" y2="3497" stroke="#ddd"/>
+<text x="495.4" y="3513" text-anchor="middle" fill="#444">5</text>
+<line x1="578.6" x2="578.6" y1="96" y2="3497" stroke="#ddd"/>
+<text x="578.6" y="3513" text-anchor="middle" fill="#444">10</text>
+<line x1="661.8" x2="661.8" y1="96" y2="3497" stroke="#ddd"/>
+<text x="661.8" y="3513" text-anchor="middle" fill="#444">20</text>
+<line x1="771.7" x2="771.7" y1="96" y2="3497" stroke="#ddd"/>
+<text x="771.7" y="3513" text-anchor="middle" fill="#444">50</text>
+<text x="560.0" y="3531" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="150.0" text-anchor="end" fill="#222">ntp_lmhead_50304</text>
+<line x1="300" x2="642.7" y1="107.0" y2="107.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="642.7" cy="107.0" r="4.2" fill="#3d6fb6"/>
+<text x="650.7" y="111" fill="#333" font-size="10">17.1</text>
+<line x1="300" x2="588.8" y1="118.0" y2="118.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="588.8" cy="118.0" r="4.2" fill="#e08e2b"/>
+<text x="596.8" y="122" fill="#333" font-size="10">10.9</text>
+<line x1="300" x2="587.8" y1="129.0" y2="129.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="587.8" cy="129.0" r="4.2" fill="#2a9d8f"/>
+<text x="595.8" y="133" fill="#333" font-size="10">10.8</text>
+<line x1="300" x2="596.6" y1="140.0" y2="140.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="596.6" cy="140.0" r="4.2" fill="#d1495b"/>
+<text x="604.6" y="144" fill="#333" font-size="10">11.6</text>
+<text x="292" y="247.0" text-anchor="end" fill="#222">ntp_vocab_32768</text>
+<line x1="300" x2="597.0" y1="204.0" y2="204.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="597.0" cy="204.0" r="4.2" fill="#3d6fb6"/>
+<text x="605.0" y="208" fill="#333" font-size="10">11.7</text>
+<line x1="300" x2="542.6" y1="215.0" y2="215.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="542.6" cy="215.0" r="4.2" fill="#e08e2b"/>
+<text x="550.6" y="219" fill="#333" font-size="10">7.41</text>
+<line x1="300" x2="539.8" y1="226.0" y2="226.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="539.8" cy="226.0" r="4.2" fill="#2a9d8f"/>
+<text x="547.8" y="230" fill="#333" font-size="10">7.24</text>
+<line x1="300" x2="539.5" y1="237.0" y2="237.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="539.5" cy="237.0" r="4.2" fill="#d1495b"/>
+<text x="547.5" y="241" fill="#333" font-size="10">7.22</text>
+<text x="292" y="344.0" text-anchor="end" fill="#222">ntp_b32mib</text>
+<line x1="300" x2="528.2" y1="301.0" y2="301.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="528.2" cy="301.0" r="4.2" fill="#3d6fb6"/>
+<text x="536.2" y="305" fill="#333" font-size="10">6.57</text>
+<line x1="300" x2="494.6" y1="312.0" y2="312.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="494.6" cy="312.0" r="4.2" fill="#e08e2b"/>
+<text x="502.6" y="316" fill="#333" font-size="10">4.97</text>
+<line x1="300" x2="498.1" y1="323.0" y2="323.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="498.1" cy="323.0" r="4.2" fill="#2a9d8f"/>
+<text x="506.1" y="327" fill="#333" font-size="10">5.11</text>
+<line x1="300" x2="498.8" y1="334.0" y2="334.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="498.8" cy="334.0" r="4.2" fill="#d1495b"/>
+<text x="506.8" y="338" fill="#333" font-size="10">5.14</text>
+<text x="292" y="441.0" text-anchor="end" fill="#222">ntp_vocab_16384</text>
+<line x1="300" x2="506.9" y1="398.0" y2="398.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="506.9" cy="398.0" r="4.2" fill="#3d6fb6"/>
+<text x="514.9" y="402" fill="#333" font-size="10">5.5</text>
+<line x1="300" x2="457.2" y1="409.0" y2="409.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="457.2" cy="409.0" r="4.2" fill="#e08e2b"/>
+<text x="465.2" y="413" fill="#333" font-size="10">3.64</text>
+<line x1="300" x2="453.1" y1="420.0" y2="420.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="453.1" cy="420.0" r="4.2" fill="#2a9d8f"/>
+<text x="461.1" y="424" fill="#333" font-size="10">3.51</text>
+<line x1="300" x2="451.4" y1="431.0" y2="431.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="451.4" cy="431.0" r="4.2" fill="#d1495b"/>
+<text x="459.4" y="435" fill="#333" font-size="10">3.46</text>
+<text x="292" y="538.0" text-anchor="end" fill="#222">ntp_mlp_6144</text>
+<line x1="300" x2="477.9" y1="495.0" y2="495.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="477.9" cy="495.0" r="4.2" fill="#3d6fb6"/>
+<text x="485.9" y="499" fill="#333" font-size="10">4.32</text>
+<line x1="300" x2="452.3" y1="506.0" y2="506.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="452.3" cy="506.0" r="4.2" fill="#e08e2b"/>
+<text x="460.3" y="510" fill="#333" font-size="10">3.49</text>
+<line x1="300" x2="453.7" y1="517.0" y2="517.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="453.7" cy="517.0" r="4.2" fill="#2a9d8f"/>
+<text x="461.7" y="521" fill="#333" font-size="10">3.53</text>
+<line x1="300" x2="456.5" y1="528.0" y2="528.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="456.5" cy="528.0" r="4.2" fill="#d1495b"/>
+<text x="464.5" y="532" fill="#333" font-size="10">3.62</text>
+<text x="292" y="635.0" text-anchor="end" fill="#222">ntp_b16mib</text>
+<line x1="300" x2="409.2" y1="592.0" y2="592.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="409.2" cy="592.0" r="4.2" fill="#3d6fb6"/>
+<text x="417.2" y="596" fill="#333" font-size="10">2.44</text>
+<line x1="300" x2="408.2" y1="603.0" y2="603.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="408.2" cy="603.0" r="4.2" fill="#e08e2b"/>
+<text x="416.2" y="607" fill="#333" font-size="10">2.42</text>
+<line x1="300" x2="407.1" y1="614.0" y2="614.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="407.1" cy="614.0" r="4.2" fill="#2a9d8f"/>
+<text x="415.1" y="618" fill="#333" font-size="10">2.4</text>
+<line x1="300" x2="411.5" y1="625.0" y2="625.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="411.5" cy="625.0" r="4.2" fill="#d1495b"/>
+<text x="419.5" y="629" fill="#333" font-size="10">2.48</text>
+<text x="292" y="732.0" text-anchor="end" fill="#222">ntp_lm_head_248320</text>
+<line x1="300" x2="763.6" y1="689.0" y2="689.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="763.6" cy="689.0" r="4.2" fill="#3d6fb6"/>
+<text x="771.6" y="693" fill="#333" font-size="10">46.7</text>
+<line x1="300" x2="734.9" y1="700.0" y2="700.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="734.9" cy="700.0" r="4.2" fill="#e08e2b"/>
+<text x="742.9" y="704" fill="#333" font-size="10">36.8</text>
+<line x1="300" x2="735.6" y1="711.0" y2="711.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="735.6" cy="711.0" r="4.2" fill="#2a9d8f"/>
+<text x="743.6" y="715" fill="#333" font-size="10">37</text>
+<line x1="300" x2="734.4" y1="722.0" y2="722.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="734.4" cy="722.0" r="4.2" fill="#d1495b"/>
+<text x="742.4" y="726" fill="#333" font-size="10">36.6</text>
+<text x="292" y="829.0" text-anchor="end" fill="#222">ntp_longk_8192</text>
+<line x1="300" x2="698.8" y1="786.0" y2="786.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="698.8" cy="786.0" r="4.2" fill="#3d6fb6"/>
+<text x="706.8" y="790" fill="#333" font-size="10">27.2</text>
+<line x1="300" x2="662.2" y1="797.0" y2="797.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="662.2" cy="797.0" r="4.2" fill="#e08e2b"/>
+<text x="670.2" y="801" fill="#333" font-size="10">20.1</text>
+<line x1="300" x2="667.4" y1="808.0" y2="808.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="667.4" cy="808.0" r="4.2" fill="#2a9d8f"/>
+<text x="675.4" y="812" fill="#333" font-size="10">21</text>
+<line x1="300" x2="679.9" y1="819.0" y2="819.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="679.9" cy="819.0" r="4.2" fill="#d1495b"/>
+<text x="687.9" y="823" fill="#333" font-size="10">23.3</text>
+<text x="292" y="926.0" text-anchor="end" fill="#222">tnp_longk_16384</text>
+<line x1="300" x2="714.3" y1="927.0" y2="927.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="714.3" cy="927.0" r="4.2" fill="#7b5ea7"/>
+<text x="722.3" y="931" fill="#333" font-size="10">31</text>
+<line x1="300" x2="694.3" y1="938.0" y2="938.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="694.3" cy="938.0" r="4.2" fill="#8c564b"/>
+<text x="702.3" y="942" fill="#333" font-size="10">26.2</text>
+<line x1="300" x2="693.6" y1="949.0" y2="949.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="693.6" cy="949.0" r="4.2" fill="#17becf"/>
+<text x="701.6" y="953" fill="#333" font-size="10">26.1</text>
+<line x1="300" x2="692.2" y1="960.0" y2="960.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="692.2" cy="960.0" r="4.2" fill="#bcbd22"/>
+<text x="700.2" y="964" fill="#333" font-size="10">25.8</text>
+<text x="292" y="1023.0" text-anchor="end" fill="#222">tnp_lmhead_dw</text>
+<line x1="300" x2="624.1" y1="1024.0" y2="1024.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="624.1" cy="1024.0" r="4.2" fill="#7b5ea7"/>
+<text x="632.1" y="1028" fill="#333" font-size="10">14.6</text>
+<line x1="300" x2="603.8" y1="1035.0" y2="1035.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="603.8" cy="1035.0" r="4.2" fill="#8c564b"/>
+<text x="611.8" y="1039" fill="#333" font-size="10">12.3</text>
+<line x1="300" x2="602.3" y1="1046.0" y2="1046.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="602.3" cy="1046.0" r="4.2" fill="#17becf"/>
+<text x="610.3" y="1050" fill="#333" font-size="10">12.2</text>
+<line x1="300" x2="601.2" y1="1057.0" y2="1057.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="601.2" cy="1057.0" r="4.2" fill="#bcbd22"/>
+<text x="609.2" y="1061" fill="#333" font-size="10">12.1</text>
+<text x="292" y="1120.0" text-anchor="end" fill="#222">tnp_b64mib</text>
+<line x1="300" x2="519.6" y1="1121.0" y2="1121.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="519.6" cy="1121.0" r="4.2" fill="#7b5ea7"/>
+<text x="527.6" y="1125" fill="#333" font-size="10">6.12</text>
+<line x1="300" x2="503.0" y1="1132.0" y2="1132.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="503.0" cy="1132.0" r="4.2" fill="#8c564b"/>
+<text x="511.0" y="1136" fill="#333" font-size="10">5.32</text>
+<line x1="300" x2="502.7" y1="1143.0" y2="1143.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="502.7" cy="1143.0" r="4.2" fill="#17becf"/>
+<text x="510.7" y="1147" fill="#333" font-size="10">5.31</text>
+<line x1="300" x2="501.9" y1="1154.0" y2="1154.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="501.9" cy="1154.0" r="4.2" fill="#bcbd22"/>
+<text x="509.9" y="1158" fill="#333" font-size="10">5.28</text>
+<text x="292" y="1217.0" text-anchor="end" fill="#222">tnp_b32mib</text>
+<line x1="300" x2="431.0" y1="1218.0" y2="1218.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="431.0" cy="1218.0" r="4.2" fill="#7b5ea7"/>
+<text x="439.0" y="1222" fill="#333" font-size="10">2.92</text>
+<line x1="300" x2="427.8" y1="1229.0" y2="1229.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="427.8" cy="1229.0" r="4.2" fill="#8c564b"/>
+<text x="435.8" y="1233" fill="#333" font-size="10">2.85</text>
+<line x1="300" x2="424.6" y1="1240.0" y2="1240.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="424.6" cy="1240.0" r="4.2" fill="#17becf"/>
+<text x="432.6" y="1244" fill="#333" font-size="10">2.77</text>
+<line x1="300" x2="428.0" y1="1251.0" y2="1251.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="428.0" cy="1251.0" r="4.2" fill="#bcbd22"/>
+<text x="436.0" y="1255" fill="#333" font-size="10">2.85</text>
+<text x="292" y="1314.0" text-anchor="end" fill="#222">tnp_b16mib</text>
+<line x1="300" x2="349.0" y1="1315.0" y2="1315.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="349.0" cy="1315.0" r="4.2" fill="#7b5ea7"/>
+<text x="357.0" y="1319" fill="#333" font-size="10">1.48</text>
+<line x1="300" x2="342.8" y1="1326.0" y2="1326.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="342.8" cy="1326.0" r="4.2" fill="#8c564b"/>
+<text x="350.8" y="1330" fill="#333" font-size="10">1.4</text>
+<line x1="300" x2="345.6" y1="1337.0" y2="1337.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="345.6" cy="1337.0" r="4.2" fill="#17becf"/>
+<text x="353.6" y="1341" fill="#333" font-size="10">1.43</text>
+<line x1="300" x2="355.4" y1="1348.0" y2="1348.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="355.4" cy="1348.0" r="4.2" fill="#bcbd22"/>
+<text x="363.4" y="1352" fill="#333" font-size="10">1.56</text>
+<text x="292" y="1411.0" text-anchor="end" fill="#222">ntp_morton_sq64</text>
+<line x1="300" x2="609.4" y1="1368.0" y2="1368.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="609.4" cy="1368.0" r="4.2" fill="#3d6fb6"/>
+<text x="617.4" y="1372" fill="#333" font-size="10">12.9</text>
+<line x1="300" x2="589.3" y1="1379.0" y2="1379.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="589.3" cy="1379.0" r="4.2" fill="#e08e2b"/>
+<text x="597.3" y="1383" fill="#333" font-size="10">10.9</text>
+<line x1="300" x2="585.3" y1="1390.0" y2="1390.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="585.3" cy="1390.0" r="4.2" fill="#2a9d8f"/>
+<text x="593.3" y="1394" fill="#333" font-size="10">10.6</text>
+<line x1="300" x2="593.8" y1="1401.0" y2="1401.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="593.8" cy="1401.0" r="4.2" fill="#d1495b"/>
+<text x="601.8" y="1405" fill="#333" font-size="10">11.3</text>
+<text x="292" y="1508.0" text-anchor="end" fill="#222">tnp_morton_sq64</text>
+<line x1="300" x2="604.8" y1="1509.0" y2="1509.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="604.8" cy="1509.0" r="4.2" fill="#7b5ea7"/>
+<text x="612.8" y="1513" fill="#333" font-size="10">12.4</text>
+<line x1="300" x2="592.0" y1="1520.0" y2="1520.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="592.0" cy="1520.0" r="4.2" fill="#8c564b"/>
+<text x="600.0" y="1524" fill="#333" font-size="10">11.2</text>
+<line x1="300" x2="595.9" y1="1531.0" y2="1531.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="595.9" cy="1531.0" r="4.2" fill="#17becf"/>
+<text x="603.9" y="1535" fill="#333" font-size="10">11.5</text>
+<line x1="300" x2="599.2" y1="1542.0" y2="1542.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="599.2" cy="1542.0" r="4.2" fill="#bcbd22"/>
+<text x="607.2" y="1546" fill="#333" font-size="10">11.9</text>
+<text x="292" y="1605.0" text-anchor="end" fill="#222">ntap_vocab_32768</text>
+<text x="292" y="1702.0" text-anchor="end" fill="#222">ntap_b16mib</text>
+<text x="292" y="1799.0" text-anchor="end" fill="#222">ntap_morton_sq64</text>
+<text x="292" y="1896.0" text-anchor="end" fill="#222">tnap_lmhead_dw</text>
+<text x="292" y="1993.0" text-anchor="end" fill="#222">tnap_b16mib</text>
+<text x="292" y="2090.0" text-anchor="end" fill="#222">tnap_morton_sq64</text>
+<text x="292" y="2187.0" text-anchor="end" fill="#222">ntp_g12mib</text>
+<line x1="300" x2="374.4" y1="2144.0" y2="2144.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="374.4" cy="2144.0" r="4.2" fill="#3d6fb6"/>
+<text x="382.4" y="2148" fill="#333" font-size="10">1.82</text>
+<line x1="300" x2="358.2" y1="2155.0" y2="2155.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="358.2" cy="2155.0" r="4.2" fill="#e08e2b"/>
+<text x="366.2" y="2159" fill="#333" font-size="10">1.59</text>
+<line x1="300" x2="365.9" y1="2166.0" y2="2166.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="365.9" cy="2166.0" r="4.2" fill="#2a9d8f"/>
+<text x="373.9" y="2170" fill="#333" font-size="10">1.7</text>
+<line x1="300" x2="361.6" y1="2177.0" y2="2177.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="361.6" cy="2177.0" r="4.2" fill="#d1495b"/>
+<text x="369.6" y="2181" fill="#333" font-size="10">1.64</text>
+<text x="292" y="2284.0" text-anchor="end" fill="#222">ntp_g16mib</text>
+<line x1="300" x2="391.9" y1="2241.0" y2="2241.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="391.9" cy="2241.0" r="4.2" fill="#3d6fb6"/>
+<text x="399.9" y="2245" fill="#333" font-size="10">2.11</text>
+<line x1="300" x2="388.0" y1="2252.0" y2="2252.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="388.0" cy="2252.0" r="4.2" fill="#e08e2b"/>
+<text x="396.0" y="2256" fill="#333" font-size="10">2.04</text>
+<line x1="300" x2="396.3" y1="2263.0" y2="2263.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="396.3" cy="2263.0" r="4.2" fill="#2a9d8f"/>
+<text x="404.3" y="2267" fill="#333" font-size="10">2.19</text>
+<line x1="300" x2="396.6" y1="2274.0" y2="2274.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="396.6" cy="2274.0" r="4.2" fill="#d1495b"/>
+<text x="404.6" y="2278" fill="#333" font-size="10">2.19</text>
+<text x="292" y="2381.0" text-anchor="end" fill="#222">ntp_g20mib</text>
+<line x1="300" x2="446.6" y1="2338.0" y2="2338.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="446.6" cy="2338.0" r="4.2" fill="#3d6fb6"/>
+<text x="454.6" y="2342" fill="#333" font-size="10">3.33</text>
+<line x1="300" x2="440.4" y1="2349.0" y2="2349.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="440.4" cy="2349.0" r="4.2" fill="#e08e2b"/>
+<text x="448.4" y="2353" fill="#333" font-size="10">3.16</text>
+<line x1="300" x2="426.4" y1="2360.0" y2="2360.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="426.4" cy="2360.0" r="4.2" fill="#2a9d8f"/>
+<text x="434.4" y="2364" fill="#333" font-size="10">2.81</text>
+<line x1="300" x2="425.5" y1="2371.0" y2="2371.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="425.5" cy="2371.0" r="4.2" fill="#d1495b"/>
+<text x="433.5" y="2375" fill="#333" font-size="10">2.79</text>
+<text x="292" y="2478.0" text-anchor="end" fill="#222">ntp_g12mib_k768</text>
+<line x1="300" x2="364.4" y1="2435.0" y2="2435.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="364.4" cy="2435.0" r="4.2" fill="#3d6fb6"/>
+<text x="372.4" y="2439" fill="#333" font-size="10">1.68</text>
+<line x1="300" x2="364.4" y1="2446.0" y2="2446.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="364.4" cy="2446.0" r="4.2" fill="#e08e2b"/>
+<text x="372.4" y="2450" fill="#333" font-size="10">1.68</text>
+<line x1="300" x2="364.2" y1="2457.0" y2="2457.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="364.2" cy="2457.0" r="4.2" fill="#2a9d8f"/>
+<text x="372.2" y="2461" fill="#333" font-size="10">1.67</text>
+<line x1="300" x2="365.6" y1="2468.0" y2="2468.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="365.6" cy="2468.0" r="4.2" fill="#d1495b"/>
+<text x="373.6" y="2472" fill="#333" font-size="10">1.69</text>
+<text x="292" y="2575.0" text-anchor="end" fill="#222">ntp_g20mib_k768</text>
+<line x1="300" x2="444.8" y1="2532.0" y2="2532.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="444.8" cy="2532.0" r="4.2" fill="#3d6fb6"/>
+<text x="452.8" y="2536" fill="#333" font-size="10">3.28</text>
+<line x1="300" x2="406.7" y1="2543.0" y2="2543.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="406.7" cy="2543.0" r="4.2" fill="#e08e2b"/>
+<text x="414.7" y="2547" fill="#333" font-size="10">2.39</text>
+<line x1="300" x2="405.7" y1="2554.0" y2="2554.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="405.7" cy="2554.0" r="4.2" fill="#2a9d8f"/>
+<text x="413.7" y="2558" fill="#333" font-size="10">2.37</text>
+<line x1="300" x2="405.2" y1="2565.0" y2="2565.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="405.2" cy="2565.0" r="4.2" fill="#d1495b"/>
+<text x="413.2" y="2569" fill="#333" font-size="10">2.36</text>
+<text x="292" y="2672.0" text-anchor="end" fill="#222">tnp_g12mib</text>
+<line x1="300" x2="354.0" y1="2673.0" y2="2673.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="354.0" cy="2673.0" r="4.2" fill="#7b5ea7"/>
+<text x="362.0" y="2677" fill="#333" font-size="10">1.54</text>
+<line x1="300" x2="351.5" y1="2684.0" y2="2684.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="351.5" cy="2684.0" r="4.2" fill="#8c564b"/>
+<text x="359.5" y="2688" fill="#333" font-size="10">1.51</text>
+<line x1="300" x2="353.4" y1="2695.0" y2="2695.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="353.4" cy="2695.0" r="4.2" fill="#17becf"/>
+<text x="361.4" y="2699" fill="#333" font-size="10">1.53</text>
+<line x1="300" x2="357.2" y1="2706.0" y2="2706.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="357.2" cy="2706.0" r="4.2" fill="#bcbd22"/>
+<text x="365.2" y="2710" fill="#333" font-size="10">1.58</text>
+<text x="292" y="2769.0" text-anchor="end" fill="#222">tnp_g20mib</text>
+<line x1="300" x2="414.4" y1="2770.0" y2="2770.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="414.4" cy="2770.0" r="4.2" fill="#7b5ea7"/>
+<text x="422.4" y="2774" fill="#333" font-size="10">2.54</text>
+<line x1="300" x2="416.8" y1="2781.0" y2="2781.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="416.8" cy="2781.0" r="4.2" fill="#8c564b"/>
+<text x="424.8" y="2785" fill="#333" font-size="10">2.6</text>
+<line x1="300" x2="415.3" y1="2792.0" y2="2792.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="415.3" cy="2792.0" r="4.2" fill="#17becf"/>
+<text x="423.3" y="2796" fill="#333" font-size="10">2.56</text>
+<line x1="300" x2="418.5" y1="2803.0" y2="2803.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="418.5" cy="2803.0" r="4.2" fill="#bcbd22"/>
+<text x="426.5" y="2807" fill="#333" font-size="10">2.63</text>
+<text x="292" y="2866.0" text-anchor="end" fill="#222">tnp_g24mib</text>
+<line x1="300" x2="443.8" y1="2867.0" y2="2867.0" stroke="#7b5ea7" stroke-opacity="0.35"/>
+<circle cx="443.8" cy="2867.0" r="4.2" fill="#7b5ea7"/>
+<text x="451.8" y="2871" fill="#333" font-size="10">3.25</text>
+<line x1="300" x2="435.9" y1="2878.0" y2="2878.0" stroke="#8c564b" stroke-opacity="0.35"/>
+<circle cx="435.9" cy="2878.0" r="4.2" fill="#8c564b"/>
+<text x="443.9" y="2882" fill="#333" font-size="10">3.04</text>
+<line x1="300" x2="435.8" y1="2889.0" y2="2889.0" stroke="#17becf" stroke-opacity="0.35"/>
+<circle cx="435.8" cy="2889.0" r="4.2" fill="#17becf"/>
+<text x="443.8" y="2893" fill="#333" font-size="10">3.04</text>
+<line x1="300" x2="443.1" y1="2900.0" y2="2900.0" stroke="#bcbd22" stroke-opacity="0.35"/>
+<circle cx="443.1" cy="2900.0" r="4.2" fill="#bcbd22"/>
+<text x="451.1" y="2904" fill="#333" font-size="10">3.23</text>
+<text x="292" y="2963.0" text-anchor="end" fill="#222">ntap_g12mib</text>
+<text x="292" y="3060.0" text-anchor="end" fill="#222">ntap_g16mib</text>
+<text x="292" y="3157.0" text-anchor="end" fill="#222">ntap_g20mib</text>
+<text x="292" y="3254.0" text-anchor="end" fill="#222">tnap_g12mib</text>
+<text x="292" y="3351.0" text-anchor="end" fill="#222">tnap_g16mib</text>
+<text x="292" y="3448.0" text-anchor="end" fill="#222">tnap_g20mib</text>
+</svg>

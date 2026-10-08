@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-cpu-hot-paths: cost of one std::thread::scope</text>
+<text x="16" y="44" fill="#555">min over two runs of the best and median over 2000 spawns, load 26</text>
+<line x1="70" x2="570" y1="310.6" y2="310.6" stroke="#e5e5e5"/><text x="64" y="314.6" text-anchor="end" fill="#444">10</text>
+<line x1="70" x2="570" y1="280.6" y2="280.6" stroke="#e5e5e5"/><text x="64" y="284.6" text-anchor="end" fill="#444">20</text>
+<line x1="70" x2="570" y1="190.6" y2="190.6" stroke="#e5e5e5"/><text x="64" y="194.6" text-anchor="end" fill="#444">50</text>
+<line x1="70.0" x2="70.0" y1="74" y2="320" stroke="#eee"/><text x="70.0" y="336" text-anchor="middle" fill="#444">1</text>
+<line x1="195.0" x2="195.0" y1="74" y2="320" stroke="#eee"/><text x="195.0" y="336" text-anchor="middle" fill="#444">2</text>
+<line x1="570.0" x2="570.0" y1="74" y2="320" stroke="#eee"/><text x="570.0" y="336" text-anchor="middle" fill="#444">5</text>
+<text x="320.0" y="368" text-anchor="middle" fill="#333">threads spawned</text>
+<text x="16" y="66" fill="#333">µs</text>
+<path d="M70.0,314.8 L320.0,271.3 L570.0,238.9" fill="none" stroke="#3d6fb6" stroke-width="2"/>
+<circle cx="70.0" cy="314.8" r="2.6" fill="#3d6fb6"/>
+<circle cx="320.0" cy="271.3" r="2.6" fill="#3d6fb6"/>
+<circle cx="570.0" cy="238.9" r="2.6" fill="#3d6fb6"/>
+<rect x="582" y="80" width="10" height="10" fill="#3d6fb6"/><text x="597" y="89" fill="#333">min µs</text>
+<path d="M70.0,291.1 L320.0,202.3 L570.0,132.1" fill="none" stroke="#e08e2b" stroke-width="2"/>
+<circle cx="70.0" cy="291.1" r="2.6" fill="#e08e2b"/>
+<circle cx="320.0" cy="202.3" r="2.6" fill="#e08e2b"/>
+<circle cx="570.0" cy="132.1" r="2.6" fill="#e08e2b"/>
+<rect x="582" y="98" width="10" height="10" fill="#e08e2b"/><text x="597" y="107" fill="#333">median µs</text>
+</svg>

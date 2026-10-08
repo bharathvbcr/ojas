@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="348" viewBox="0 0 920 348" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-cpu-hot-paths: ojas / torch 2.13 CPU</text>
+<text x="16" y="44" fill="#555">min over rounds, rows torch covers</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="471.1" y="72" width="34.4" height="226" fill="#eee"/>
+<line x1="363.3" x2="363.3" y1="72" y2="298" stroke="#ddd" stroke-width="1"/>
+<text x="363.3" y="314" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="488.2" x2="488.2" y1="72" y2="298" stroke="#222" stroke-width="1.5"/>
+<text x="488.2" y="314" text-anchor="middle" fill="#444">1x</text>
+<line x1="613.2" x2="613.2" y1="72" y2="298" stroke="#ddd" stroke-width="1"/>
+<text x="613.2" y="314" text-anchor="middle" fill="#444">2x</text>
+<line x1="778.4" x2="778.4" y1="72" y2="298" stroke="#ddd" stroke-width="1"/>
+<text x="778.4" y="314" text-anchor="middle" fill="#444">5x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">muon_2048x768 step</text>
+<rect x="407.8" y="81" width="80.5" height="13" fill="#2a9d8f"/>
+<text x="402.8" y="92" text-anchor="end" fill="#333">0.64</text>
+<text x="292" y="112" text-anchor="end" fill="#222">mul bwd</text>
+<rect x="450.2" y="101" width="38.0" height="13" fill="#2a9d8f"/>
+<text x="445.2" y="112" text-anchor="end" fill="#333">0.81</text>
+<text x="292" y="132" text-anchor="end" fill="#222">permute fwd</text>
+<rect x="488.2" y="121" width="1.8" height="13" fill="#9aa0a6"/>
+<text x="495.0" y="132" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="152" text-anchor="end" fill="#222">silu fwd</text>
+<rect x="488.2" y="141" width="8.8" height="13" fill="#9aa0a6"/>
+<text x="502.0" y="152" text-anchor="start" fill="#333">1.05</text>
+<text x="292" y="172" text-anchor="end" fill="#222">embedding bwd</text>
+<rect x="488.2" y="161" width="15.5" height="13" fill="#9aa0a6"/>
+<text x="508.8" y="172" text-anchor="start" fill="#333">1.09</text>
+<text x="292" y="192" text-anchor="end" fill="#222">silu bwd</text>
+<rect x="488.2" y="181" width="28.3" height="13" fill="#d1495b"/>
+<text x="521.5" y="192" text-anchor="start" fill="#333">1.17</text>
+<text x="292" y="212" text-anchor="end" fill="#222">adamw_50304x768 step</text>
+<rect x="488.2" y="201" width="76.7" height="13" fill="#d1495b"/>
+<text x="569.9" y="212" text-anchor="start" fill="#333">1.53</text>
+<text x="292" y="232" text-anchor="end" fill="#222">mul fwd</text>
+<rect x="488.2" y="221" width="77.8" height="13" fill="#d1495b"/>
+<text x="571.1" y="232" text-anchor="start" fill="#333">1.54</text>
+<text x="292" y="252" text-anchor="end" fill="#222">embedding fwd</text>
+<rect x="488.2" y="241" width="113.8" height="13" fill="#d1495b"/>
+<text x="607.0" y="252" text-anchor="start" fill="#333">1.88</text>
+<text x="292" y="272" text-anchor="end" fill="#222">add fwd</text>
+<rect x="488.2" y="261" width="193.8" height="13" fill="#d1495b"/>
+<text x="687.0" y="272" text-anchor="start" fill="#333">2.93</text>
+<text x="292" y="292" text-anchor="end" fill="#222">add bwd</text>
+<rect x="488.2" y="281" width="331.5" height="13" fill="#d1495b"/>
+<text x="824.8" y="292" text-anchor="start" fill="#333">6.29</text>
+</svg>

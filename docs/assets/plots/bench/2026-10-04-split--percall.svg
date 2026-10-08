@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="227" viewBox="0 0 890 227" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-04-split: Metal decode call cost</text>
+<text x="16" y="44" fill="#555">H 12, D 64, 1024 cached positions, 500 runs</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">min ms</text>
+<circle cx="102.4" cy="60" r="5" fill="#e08e2b"/><text x="113.4" y="64" fill="#333">p50 ms</text>
+<line x1="325.3" x2="325.3" y1="78" y2="177" stroke="#ddd"/>
+<text x="325.3" y="193" text-anchor="middle" fill="#444">0.1</text>
+<line x1="442.6" x2="442.6" y1="78" y2="177" stroke="#ddd"/>
+<text x="442.6" y="193" text-anchor="middle" fill="#444">0.2</text>
+<line x1="597.7" x2="597.7" y1="78" y2="177" stroke="#ddd"/>
+<text x="597.7" y="193" text-anchor="middle" fill="#444">0.5</text>
+<line x1="715.0" x2="715.0" y1="78" y2="177" stroke="#ddd"/>
+<text x="715.0" y="193" text-anchor="middle" fill="#444">1</text>
+<text x="560.0" y="211" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="99.0" text-anchor="end" fill="#222">1 request, 1 call</text>
+<line x1="300" x2="360.4" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="360.4" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="368.4" y="93" fill="#333" font-size="10">0.123</text>
+<line x1="300" x2="425.8" y1="100.0" y2="100.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="425.8" cy="100.0" r="4.2" fill="#e08e2b"/>
+<text x="433.8" y="104" fill="#333" font-size="10">0.181</text>
+<text x="292" y="130.0" text-anchor="end" fill="#222">16 requests, 1 batched call</text>
+<line x1="300" x2="598.7" y1="120.0" y2="120.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="598.7" cy="120.0" r="4.2" fill="#3d6fb6"/>
+<text x="606.7" y="124" fill="#333" font-size="10">0.503</text>
+<line x1="300" x2="664.3" y1="131.0" y2="131.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="664.3" cy="131.0" r="4.2" fill="#e08e2b"/>
+<text x="672.3" y="135" fill="#333" font-size="10">0.741</text>
+<text x="292" y="161.0" text-anchor="end" fill="#222">16 requests, 16 calls</text>
+<line x1="300" x2="678.7" y1="151.0" y2="151.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="678.7" cy="151.0" r="4.2" fill="#3d6fb6"/>
+<text x="686.7" y="155" fill="#333" font-size="10">0.807</text>
+<line x1="300" x2="740.5" y1="162.0" y2="162.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="740.5" cy="162.0" r="4.2" fill="#e08e2b"/>
+<text x="748.5" y="166" fill="#333" font-size="10">1.16</text>
+</svg>

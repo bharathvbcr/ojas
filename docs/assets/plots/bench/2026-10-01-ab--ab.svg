@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="228" viewBox="0 0 920 228" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-01-ab: new / old</text>
+<text x="16" y="44" fill="#555">min-of-rounds ratio, circle = median-of-round-minimums ratio, 10 rounds</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="627.5" y="72" width="115.4" height="106" fill="#eee"/>
+<line x1="685.2" x2="685.2" y1="72" y2="178" stroke="#222" stroke-width="1.5"/>
+<text x="685.2" y="194" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">floor_silu_1</text>
+<rect x="661.9" y="81" width="23.3" height="13" fill="#9aa0a6"/>
+<circle cx="766.7" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="656.9" y="92" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="112" text-anchor="end" fill="#222">rope_bwd</text>
+<rect x="685.2" y="101" width="13.0" height="13" fill="#9aa0a6"/>
+<circle cx="704.1" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="703.2" y="112" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="132" text-anchor="end" fill="#222">residual_add_bwd</text>
+<rect x="685.2" y="121" width="26.3" height="13" fill="#9aa0a6"/>
+<circle cx="686.3" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="716.5" y="132" text-anchor="start" fill="#333">1.04</text>
+<text x="292" y="152" text-anchor="end" fill="#222">residual_add_fwd</text>
+<rect x="685.2" y="141" width="28.5" height="13" fill="#9aa0a6"/>
+<circle cx="716.9" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="718.7" y="152" text-anchor="start" fill="#333">1.05</text>
+<text x="292" y="172" text-anchor="end" fill="#222">permute_bthd_bhtd</text>
+<rect x="685.2" y="161" width="39.7" height="13" fill="#9aa0a6"/>
+<circle cx="705.9" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="729.9" y="172" text-anchor="start" fill="#333">1.07</text>
+</svg>

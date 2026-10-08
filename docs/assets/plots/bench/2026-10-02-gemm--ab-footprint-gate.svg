@@ -1,0 +1,195 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="648" viewBox="0 0 920 648" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-gemm/ab-footprint-gate: new / old</text>
+<text x="16" y="44" fill="#555">min over 4 interleaved rounds per side; whisker = per-round new/old range, circle = median</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="713.1" y="72" width="50.8" height="526" fill="#eee"/>
+<line x1="309.3" x2="309.3" y1="72" y2="598" stroke="#ddd" stroke-width="1"/>
+<text x="309.3" y="614" text-anchor="middle" fill="#444">0.2x</text>
+<line x1="553.7" x2="553.7" y1="72" y2="598" stroke="#ddd" stroke-width="1"/>
+<text x="553.7" y="614" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="738.5" x2="738.5" y1="72" y2="598" stroke="#222" stroke-width="1.5"/>
+<text x="738.5" y="614" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">nt lm head, 1024 rows</text>
+<rect x="484.0" y="81" width="254.5" height="13" fill="#2a9d8f"/>
+<line x1="459.4" x2="539.1" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="459.4" x2="459.4" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="539.1" x2="539.1" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="529.5" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="454.4" y="92" text-anchor="end" fill="#333">0.39</text>
+<text x="292" y="112" text-anchor="end" fill="#222">nt lm head, 512 rows</text>
+<rect x="490.8" y="101" width="247.7" height="13" fill="#2a9d8f"/>
+<line x1="488.9" x2="517.5" y1="107.5" y2="107.5" stroke="#222" stroke-width="1"/>
+<line x1="488.9" x2="488.9" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<line x1="517.5" x2="517.5" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<circle cx="496.9" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="483.9" y="112" text-anchor="end" fill="#333">0.39</text>
+<text x="292" y="132" text-anchor="end" fill="#222">nt lm head, 128 rows</text>
+<rect x="499.8" y="121" width="238.7" height="13" fill="#2a9d8f"/>
+<line x1="472.7" x2="507.2" y1="127.5" y2="127.5" stroke="#222" stroke-width="1"/>
+<line x1="472.7" x2="472.7" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<line x1="507.2" x2="507.2" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<circle cx="497.0" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="467.7" y="132" text-anchor="end" fill="#333">0.41</text>
+<text x="292" y="152" text-anchor="end" fill="#222">nt vocab chunk 16384</text>
+<rect x="520.7" y="141" width="217.7" height="13" fill="#2a9d8f"/>
+<line x1="519.1" x2="539.6" y1="147.5" y2="147.5" stroke="#222" stroke-width="1"/>
+<line x1="519.1" x2="519.1" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<line x1="539.6" x2="539.6" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<circle cx="533.0" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="514.1" y="152" text-anchor="end" fill="#333">0.44</text>
+<text x="292" y="172" text-anchor="end" fill="#222">nt lm head</text>
+<rect x="532.3" y="161" width="206.2" height="13" fill="#2a9d8f"/>
+<line x1="515.9" x2="536.6" y1="167.5" y2="167.5" stroke="#222" stroke-width="1"/>
+<line x1="515.9" x2="515.9" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<line x1="536.6" x2="536.6" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<circle cx="529.2" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="510.9" y="172" text-anchor="end" fill="#333">0.46</text>
+<text x="292" y="192" text-anchor="end" fill="#222">nt lm head, 2048 rows</text>
+<rect x="537.1" y="181" width="201.4" height="13" fill="#2a9d8f"/>
+<line x1="510.7" x2="546.0" y1="187.5" y2="187.5" stroke="#222" stroke-width="1"/>
+<line x1="510.7" x2="510.7" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<line x1="546.0" x2="546.0" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<circle cx="528.8" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="505.7" y="192" text-anchor="end" fill="#333">0.47</text>
+<text x="292" y="212" text-anchor="end" fill="#222">tn mlp down</text>
+<rect x="669.1" y="201" width="69.4" height="13" fill="#2a9d8f"/>
+<line x1="639.8" x2="673.4" y1="207.5" y2="207.5" stroke="#222" stroke-width="1"/>
+<line x1="639.8" x2="639.8" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<line x1="673.4" x2="673.4" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<circle cx="655.5" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="634.8" y="212" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="232" text-anchor="end" fill="#222">tn vocab chunk 16384</text>
+<rect x="735.6" y="221" width="2.9" height="13" fill="#9aa0a6"/>
+<line x1="722.2" x2="771.1" y1="227.5" y2="227.5" stroke="#222" stroke-width="1"/>
+<line x1="722.2" x2="722.2" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<line x1="771.1" x2="771.1" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<circle cx="737.7" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="717.2" y="232" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="252" text-anchor="end" fill="#222">tn vocab chunk 8192</text>
+<rect x="736.9" y="241" width="1.6" height="13" fill="#9aa0a6"/>
+<line x1="718.3" x2="740.0" y1="247.5" y2="247.5" stroke="#222" stroke-width="1"/>
+<line x1="718.3" x2="718.3" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<line x1="740.0" x2="740.0" y1="244.5" y2="250.5" stroke="#222" stroke-width="1"/>
+<circle cx="729.6" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="713.3" y="252" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="272" text-anchor="end" fill="#222">tn lm head</text>
+<rect x="737.0" y="261" width="1.5" height="13" fill="#9aa0a6"/>
+<line x1="727.6" x2="746.6" y1="267.5" y2="267.5" stroke="#222" stroke-width="1"/>
+<line x1="727.6" x2="727.6" y1="264.5" y2="270.5" stroke="#222" stroke-width="1"/>
+<line x1="746.6" x2="746.6" y1="264.5" y2="270.5" stroke="#222" stroke-width="1"/>
+<circle cx="740.5" cy="267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="722.6" y="272" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="292" text-anchor="end" fill="#222">nt mlp up</text>
+<rect x="738.1" y="281" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="738.1" x2="753.3" y1="287.5" y2="287.5" stroke="#222" stroke-width="1"/>
+<line x1="738.1" x2="738.1" y1="284.5" y2="290.5" stroke="#222" stroke-width="1"/>
+<line x1="753.3" x2="753.3" y1="284.5" y2="290.5" stroke="#222" stroke-width="1"/>
+<circle cx="740.6" cy="287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="733.1" y="292" text-anchor="end" fill="#333">1.00</text>
+<text x="292" y="312" text-anchor="end" fill="#222">tn mlp up</text>
+<rect x="738.1" y="301" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="729.2" x2="753.3" y1="307.5" y2="307.5" stroke="#222" stroke-width="1"/>
+<line x1="729.2" x2="729.2" y1="304.5" y2="310.5" stroke="#222" stroke-width="1"/>
+<line x1="753.3" x2="753.3" y1="304.5" y2="310.5" stroke="#222" stroke-width="1"/>
+<circle cx="743.5" cy="307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="724.2" y="312" text-anchor="end" fill="#333">1.00</text>
+<text x="292" y="332" text-anchor="end" fill="#222">nt lm head in 1024-column chunks (50 GEMMs)</text>
+<rect x="738.4" y="321" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="735.3" x2="739.1" y1="327.5" y2="327.5" stroke="#222" stroke-width="1"/>
+<line x1="735.3" x2="735.3" y1="324.5" y2="330.5" stroke="#222" stroke-width="1"/>
+<line x1="739.1" x2="739.1" y1="324.5" y2="330.5" stroke="#222" stroke-width="1"/>
+<circle cx="737.9" cy="327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="730.3" y="332" text-anchor="end" fill="#333">1.00</text>
+<text x="292" y="352" text-anchor="end" fill="#222">nn vocab chunk 8192</text>
+<rect x="738.5" y="341" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="711.6" x2="760.7" y1="347.5" y2="347.5" stroke="#222" stroke-width="1"/>
+<line x1="711.6" x2="711.6" y1="344.5" y2="350.5" stroke="#222" stroke-width="1"/>
+<line x1="760.7" x2="760.7" y1="344.5" y2="350.5" stroke="#222" stroke-width="1"/>
+<circle cx="743.0" cy="347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="765.7" y="352" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="372" text-anchor="end" fill="#222">nn mlp up</text>
+<rect x="738.5" y="361" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="733.0" x2="742.9" y1="367.5" y2="367.5" stroke="#222" stroke-width="1"/>
+<line x1="733.0" x2="733.0" y1="364.5" y2="370.5" stroke="#222" stroke-width="1"/>
+<line x1="742.9" x2="742.9" y1="364.5" y2="370.5" stroke="#222" stroke-width="1"/>
+<circle cx="740.5" cy="367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="747.9" y="372" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="392" text-anchor="end" fill="#222">nt lm head in 2048-column chunks (25 GEMMs)</text>
+<rect x="738.5" y="381" width="1.7" height="13" fill="#9aa0a6"/>
+<line x1="737.7" x2="742.5" y1="387.5" y2="387.5" stroke="#222" stroke-width="1"/>
+<line x1="737.7" x2="737.7" y1="384.5" y2="390.5" stroke="#222" stroke-width="1"/>
+<line x1="742.5" x2="742.5" y1="384.5" y2="390.5" stroke="#222" stroke-width="1"/>
+<circle cx="740.9" cy="387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="747.5" y="392" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="412" text-anchor="end" fill="#222">nt mlp down</text>
+<rect x="738.5" y="401" width="1.9" height="13" fill="#9aa0a6"/>
+<line x1="731.8" x2="743.5" y1="407.5" y2="407.5" stroke="#222" stroke-width="1"/>
+<line x1="731.8" x2="731.8" y1="404.5" y2="410.5" stroke="#222" stroke-width="1"/>
+<line x1="743.5" x2="743.5" y1="404.5" y2="410.5" stroke="#222" stroke-width="1"/>
+<circle cx="741.5" cy="407.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="748.5" y="412" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="432" text-anchor="end" fill="#222">tn qkv / up width</text>
+<rect x="738.5" y="421" width="2.0" height="13" fill="#9aa0a6"/>
+<line x1="739.3" x2="741.4" y1="427.5" y2="427.5" stroke="#222" stroke-width="1"/>
+<line x1="739.3" x2="739.3" y1="424.5" y2="430.5" stroke="#222" stroke-width="1"/>
+<line x1="741.4" x2="741.4" y1="424.5" y2="430.5" stroke="#222" stroke-width="1"/>
+<circle cx="740.1" cy="427.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="746.4" y="432" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="452" text-anchor="end" fill="#222">nt qkv / up width</text>
+<rect x="738.5" y="441" width="3.7" height="13" fill="#9aa0a6"/>
+<line x1="732.9" x2="747.8" y1="447.5" y2="447.5" stroke="#222" stroke-width="1"/>
+<line x1="732.9" x2="732.9" y1="444.5" y2="450.5" stroke="#222" stroke-width="1"/>
+<line x1="747.8" x2="747.8" y1="444.5" y2="450.5" stroke="#222" stroke-width="1"/>
+<circle cx="742.0" cy="447.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="752.8" y="452" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="472" text-anchor="end" fill="#222">nn lm head</text>
+<rect x="738.5" y="461" width="4.8" height="13" fill="#9aa0a6"/>
+<line x1="726.8" x2="766.4" y1="467.5" y2="467.5" stroke="#222" stroke-width="1"/>
+<line x1="726.8" x2="726.8" y1="464.5" y2="470.5" stroke="#222" stroke-width="1"/>
+<line x1="766.4" x2="766.4" y1="464.5" y2="470.5" stroke="#222" stroke-width="1"/>
+<circle cx="739.3" cy="467.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="771.4" y="472" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="492" text-anchor="end" fill="#222">nt lm head in 4096-column chunks (13 GEMMs)</text>
+<rect x="738.5" y="481" width="4.8" height="13" fill="#9aa0a6"/>
+<line x1="736.4" x2="743.8" y1="487.5" y2="487.5" stroke="#222" stroke-width="1"/>
+<line x1="736.4" x2="736.4" y1="484.5" y2="490.5" stroke="#222" stroke-width="1"/>
+<line x1="743.8" x2="743.8" y1="484.5" y2="490.5" stroke="#222" stroke-width="1"/>
+<circle cx="738.6" cy="487.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="748.8" y="492" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="512" text-anchor="end" fill="#222">nn mlp down</text>
+<rect x="738.5" y="501" width="5.3" height="13" fill="#9aa0a6"/>
+<line x1="733.6" x2="748.1" y1="507.5" y2="507.5" stroke="#222" stroke-width="1"/>
+<line x1="733.6" x2="733.6" y1="504.5" y2="510.5" stroke="#222" stroke-width="1"/>
+<line x1="748.1" x2="748.1" y1="504.5" y2="510.5" stroke="#222" stroke-width="1"/>
+<circle cx="734.7" cy="507.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="753.1" y="512" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="532" text-anchor="end" fill="#222">nt lm head, 32 rows</text>
+<rect x="738.5" y="521" width="5.7" height="13" fill="#9aa0a6"/>
+<line x1="729.5" x2="759.0" y1="527.5" y2="527.5" stroke="#222" stroke-width="1"/>
+<line x1="729.5" x2="729.5" y1="524.5" y2="530.5" stroke="#222" stroke-width="1"/>
+<line x1="759.0" x2="759.0" y1="524.5" y2="530.5" stroke="#222" stroke-width="1"/>
+<circle cx="745.5" cy="527.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="764.0" y="532" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="552" text-anchor="end" fill="#222">nn qkv / up width</text>
+<rect x="738.5" y="541" width="6.0" height="13" fill="#9aa0a6"/>
+<line x1="734.7" x2="747.3" y1="547.5" y2="547.5" stroke="#222" stroke-width="1"/>
+<line x1="734.7" x2="734.7" y1="544.5" y2="550.5" stroke="#222" stroke-width="1"/>
+<line x1="747.3" x2="747.3" y1="544.5" y2="550.5" stroke="#222" stroke-width="1"/>
+<circle cx="741.6" cy="547.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="752.3" y="552" text-anchor="start" fill="#333">1.02</text>
+<text x="292" y="572" text-anchor="end" fill="#222">nn vocab chunk 16384</text>
+<rect x="738.5" y="561" width="11.7" height="13" fill="#9aa0a6"/>
+<line x1="717.9" x2="753.1" y1="567.5" y2="567.5" stroke="#222" stroke-width="1"/>
+<line x1="717.9" x2="717.9" y1="564.5" y2="570.5" stroke="#222" stroke-width="1"/>
+<line x1="753.1" x2="753.1" y1="564.5" y2="570.5" stroke="#222" stroke-width="1"/>
+<circle cx="734.8" cy="567.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="758.1" y="572" text-anchor="start" fill="#333">1.04</text>
+<text x="292" y="592" text-anchor="end" fill="#222">nt vocab chunk 8192</text>
+<rect x="738.5" y="581" width="50.2" height="13" fill="#d1495b"/>
+<line x1="756.6" x2="800.5" y1="587.5" y2="587.5" stroke="#222" stroke-width="1"/>
+<line x1="756.6" x2="756.6" y1="584.5" y2="590.5" stroke="#222" stroke-width="1"/>
+<line x1="800.5" x2="800.5" y1="584.5" y2="590.5" stroke="#222" stroke-width="1"/>
+<circle cx="789.4" cy="587.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="805.5" y="592" text-anchor="start" fill="#333">1.21</text>
+</svg>

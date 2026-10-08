@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-04-sweep: decode cost per request</text>
+<text x="16" y="44" fill="#555">B requests in one call against B calls then one sync</text>
+<line x1="70" x2="570" y1="288.4" y2="288.4" stroke="#e5e5e5"/><text x="64" y="292.4" text-anchor="end" fill="#444">0.05</text>
+<line x1="70" x2="570" y1="217.1" y2="217.1" stroke="#e5e5e5"/><text x="64" y="221.1" text-anchor="end" fill="#444">0.1</text>
+<line x1="70" x2="570" y1="145.7" y2="145.7" stroke="#e5e5e5"/><text x="64" y="149.7" text-anchor="end" fill="#444">0.2</text>
+<line x1="70.0" x2="70.0" y1="74" y2="320" stroke="#eee"/><text x="70.0" y="336" text-anchor="middle" fill="#444">1</text>
+<line x1="195.0" x2="195.0" y1="74" y2="320" stroke="#eee"/><text x="195.0" y="336" text-anchor="middle" fill="#444">2</text>
+<line x1="360.2" x2="360.2" y1="74" y2="320" stroke="#eee"/><text x="360.2" y="336" text-anchor="middle" fill="#444">5</text>
+<line x1="485.2" x2="485.2" y1="74" y2="320" stroke="#eee"/><text x="485.2" y="336" text-anchor="middle" fill="#444">10</text>
+<text x="320.0" y="368" text-anchor="middle" fill="#333">requests B</text>
+<text x="16" y="66" fill="#333">ms per request</text>
+<path d="M70.0,138.8 L195.0,179.6 L320.0,236.3 L445.0,271.4 L570.0,286.4" fill="none" stroke="#3d6fb6" stroke-width="2"/>
+<circle cx="70.0" cy="138.8" r="2.6" fill="#3d6fb6"/>
+<circle cx="195.0" cy="179.6" r="2.6" fill="#3d6fb6"/>
+<circle cx="320.0" cy="236.3" r="2.6" fill="#3d6fb6"/>
+<circle cx="445.0" cy="271.4" r="2.6" fill="#3d6fb6"/>
+<circle cx="570.0" cy="286.4" r="2.6" fill="#3d6fb6"/>
+<rect x="582" y="80" width="10" height="10" fill="#3d6fb6"/><text x="597" y="89" fill="#333">ojas-metal batched</text>
+<path d="M195.0,178.1 L320.0,201.8 L445.0,218.1 L570.0,235.0" fill="none" stroke="#e08e2b" stroke-width="2"/>
+<circle cx="195.0" cy="178.1" r="2.6" fill="#e08e2b"/>
+<circle cx="320.0" cy="201.8" r="2.6" fill="#e08e2b"/>
+<circle cx="445.0" cy="218.1" r="2.6" fill="#e08e2b"/>
+<circle cx="570.0" cy="235.0" r="2.6" fill="#e08e2b"/>
+<rect x="582" y="98" width="10" height="10" fill="#e08e2b"/><text x="597" y="107" fill="#333">ojas-metal split</text>
+<path d="M70.0,103.0 L195.0,154.3 L320.0,207.3 L445.0,227.9 L570.0,263.0" fill="none" stroke="#2a9d8f" stroke-width="2"/>
+<circle cx="70.0" cy="103.0" r="2.6" fill="#2a9d8f"/>
+<circle cx="195.0" cy="154.3" r="2.6" fill="#2a9d8f"/>
+<circle cx="320.0" cy="207.3" r="2.6" fill="#2a9d8f"/>
+<circle cx="445.0" cy="227.9" r="2.6" fill="#2a9d8f"/>
+<circle cx="570.0" cy="263.0" r="2.6" fill="#2a9d8f"/>
+<rect x="582" y="116" width="10" height="10" fill="#2a9d8f"/><text x="597" y="125" fill="#333">ojas-wgpu batched</text>
+<path d="M195.0,141.7 L320.0,165.5 L445.0,180.3 L570.0,192.5" fill="none" stroke="#d1495b" stroke-width="2"/>
+<circle cx="195.0" cy="141.7" r="2.6" fill="#d1495b"/>
+<circle cx="320.0" cy="165.5" r="2.6" fill="#d1495b"/>
+<circle cx="445.0" cy="180.3" r="2.6" fill="#d1495b"/>
+<circle cx="570.0" cy="192.5" r="2.6" fill="#d1495b"/>
+<rect x="582" y="134" width="10" height="10" fill="#d1495b"/><text x="597" y="143" fill="#333">ojas-wgpu split</text>
+<path d="M70.0,163.7 L195.0,203.6 L320.0,244.0 L445.0,280.5 L570.0,297.0" fill="none" stroke="#7b5ea7" stroke-width="2"/>
+<circle cx="70.0" cy="163.7" r="2.6" fill="#7b5ea7"/>
+<circle cx="195.0" cy="203.6" r="2.6" fill="#7b5ea7"/>
+<circle cx="320.0" cy="244.0" r="2.6" fill="#7b5ea7"/>
+<circle cx="445.0" cy="280.5" r="2.6" fill="#7b5ea7"/>
+<circle cx="570.0" cy="297.0" r="2.6" fill="#7b5ea7"/>
+<rect x="582" y="152" width="10" height="10" fill="#7b5ea7"/><text x="597" y="161" fill="#333">torch-mps batched</text>
+<path d="M195.0,190.1 L320.0,244.0 L445.0,263.0 L570.0,275.0" fill="none" stroke="#8c564b" stroke-width="2"/>
+<circle cx="195.0" cy="190.1" r="2.6" fill="#8c564b"/>
+<circle cx="320.0" cy="244.0" r="2.6" fill="#8c564b"/>
+<circle cx="445.0" cy="263.0" r="2.6" fill="#8c564b"/>
+<circle cx="570.0" cy="275.0" r="2.6" fill="#8c564b"/>
+<rect x="582" y="170" width="10" height="10" fill="#8c564b"/><text x="597" y="179" fill="#333">torch-mps split</text>
+</svg>

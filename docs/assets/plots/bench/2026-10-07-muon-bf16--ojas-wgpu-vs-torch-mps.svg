@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="248" viewBox="0 0 920 248" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-07-muon-bf16: ojas-wgpu vs torch-mps</text>
+<text x="16" y="44" fill="#555">ojas median / torch median, median of 5 per-round ratios</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="363.9" y="72" width="64.9" height="126" fill="#eee"/>
+<line x1="396.3" x2="396.3" y1="72" y2="198" stroke="#222" stroke-width="1.5"/>
+<text x="396.3" y="214" text-anchor="middle" fill="#444">1x</text>
+<line x1="632.2" x2="632.2" y1="72" y2="198" stroke="#ddd" stroke-width="1"/>
+<text x="632.2" y="214" text-anchor="middle" fill="#444">2x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">muon_2048x768</text>
+<rect x="396.3" y="81" width="116.5" height="13" fill="#d1495b"/>
+<line x1="508.1" x2="517.7" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="508.1" x2="508.1" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="517.7" x2="517.7" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="512.9" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="522.7" y="92" text-anchor="start" fill="#333">1.41</text>
+<text x="292" y="112" text-anchor="end" fill="#222">muon_768x2048</text>
+<rect x="396.3" y="101" width="116.5" height="13" fill="#d1495b"/>
+<line x1="503.4" x2="522.6" y1="107.5" y2="107.5" stroke="#222" stroke-width="1"/>
+<line x1="503.4" x2="503.4" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<line x1="522.6" x2="522.6" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<circle cx="512.9" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="527.6" y="112" text-anchor="start" fill="#333">1.41</text>
+<text x="292" y="132" text-anchor="end" fill="#222">muon_768x768</text>
+<rect x="396.3" y="121" width="146.6" height="13" fill="#d1495b"/>
+<line x1="527.6" x2="548.2" y1="127.5" y2="127.5" stroke="#222" stroke-width="1"/>
+<line x1="527.6" x2="527.6" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<line x1="548.2" x2="548.2" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<circle cx="542.9" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="553.2" y="132" text-anchor="start" fill="#333">1.54</text>
+<text x="292" y="152" text-anchor="end" fill="#222">muon_2048x768 vs muon_2048x768_bf16</text>
+<rect x="396.3" y="141" width="311.8" height="13" fill="#d1495b"/>
+<line x1="691.5" x2="716.8" y1="147.5" y2="147.5" stroke="#222" stroke-width="1"/>
+<line x1="691.5" x2="691.5" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<line x1="716.8" x2="716.8" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<circle cx="708.1" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="721.8" y="152" text-anchor="start" fill="#333">2.50</text>
+<text x="292" y="172" text-anchor="end" fill="#222">muon_768x2048 vs muon_768x2048_bf16</text>
+<rect x="396.3" y="161" width="347.6" height="13" fill="#d1495b"/>
+<line x1="744.0" x2="744.0" y1="167.5" y2="167.5" stroke="#222" stroke-width="1"/>
+<line x1="744.0" x2="744.0" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<line x1="744.0" x2="744.0" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<circle cx="744.0" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="749.0" y="172" text-anchor="start" fill="#333">2.78</text>
+<text x="292" y="192" text-anchor="end" fill="#222">muon_768x768 vs muon_768x768_bf16</text>
+<rect x="396.3" y="181" width="357.2" height="13" fill="#fff" stroke="#d1495b" stroke-width="1.4"/>
+<line x1="734.7" x2="784.1" y1="187.5" y2="187.5" stroke="#222" stroke-width="1"/>
+<line x1="734.7" x2="734.7" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<line x1="784.1" x2="784.1" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<circle cx="753.6" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="789.1" y="192" text-anchor="start" fill="#333">2.86</text>
+</svg>

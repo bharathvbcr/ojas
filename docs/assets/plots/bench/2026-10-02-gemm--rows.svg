@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="194" viewBox="0 0 890 194" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-gemm: min time per row</text>
+<text x="16" y="44" fill="#555">min over rounds of each round's minimum (unpaired, machine under heavy load)</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">ojas-metal</text>
+<line x1="327.6" x2="327.6" y1="78" y2="144" stroke="#ddd"/>
+<text x="327.6" y="160" text-anchor="middle" fill="#444">0.1</text>
+<line x1="471.4" x2="471.4" y1="78" y2="144" stroke="#ddd"/>
+<text x="471.4" y="160" text-anchor="middle" fill="#444">1</text>
+<line x1="615.1" x2="615.1" y1="78" y2="144" stroke="#ddd"/>
+<text x="615.1" y="160" text-anchor="middle" fill="#444">10</text>
+<line x1="758.9" x2="758.9" y1="78" y2="144" stroke="#ddd"/>
+<text x="758.9" y="160" text-anchor="middle" fill="#444">100</text>
+<text x="560.0" y="178" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="93.5" text-anchor="end" fill="#222">floor_silu_1</text>
+<line x1="300" x2="322.3" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="322.3" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="330.3" y="93" fill="#333" font-size="10">0.0917</text>
+<text x="292" y="113.5" text-anchor="end" fill="#222">linear_ce_c4096x50304</text>
+<line x1="300" x2="790.7" y1="109.0" y2="109.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="790.7" cy="109.0" r="4.2" fill="#3d6fb6"/>
+<text x="798.7" y="113" fill="#333" font-size="10">166</text>
+<text x="292" y="133.5" text-anchor="end" fill="#222">linear_lmhead_bwd</text>
+<line x1="300" x2="764.3" y1="129.0" y2="129.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="764.3" cy="129.0" r="4.2" fill="#3d6fb6"/>
+<text x="772.3" y="133" fill="#333" font-size="10">109</text>
+</svg>

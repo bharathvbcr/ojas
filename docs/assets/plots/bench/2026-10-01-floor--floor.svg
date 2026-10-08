@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="611" viewBox="0 0 890 611" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-01-floor: submit-and-wait floor, before and after the condvar wait</text>
+<text x="16" y="44" fill="#555">Per-scenario wall time over 500 runs</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">p50 before</text>
+<circle cx="128.0" cy="60" r="5" fill="#2a9d8f"/><text x="139.0" y="64" fill="#333">p50 after condvar</text>
+<circle cx="278.8" cy="60" r="5" fill="#e08e2b"/><text x="289.8" y="64" fill="#333">p90 before</text>
+<circle cx="384.8" cy="60" r="5" fill="#d1495b"/><text x="395.8" y="64" fill="#333">p90 after condvar</text>
+<line x1="403.6" x2="403.6" y1="78" y2="561" stroke="#ddd"/>
+<text x="403.6" y="577" text-anchor="middle" fill="#444">0.01</text>
+<line x1="525.0" x2="525.0" y1="78" y2="561" stroke="#ddd"/>
+<text x="525.0" y="577" text-anchor="middle" fill="#444">0.1</text>
+<line x1="646.4" x2="646.4" y1="78" y2="561" stroke="#ddd"/>
+<text x="646.4" y="577" text-anchor="middle" fill="#444">1</text>
+<line x1="767.8" x2="767.8" y1="78" y2="561" stroke="#ddd"/>
+<text x="767.8" y="577" text-anchor="middle" fill="#444">10</text>
+<text x="560.0" y="595" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="110.0" text-anchor="end" fill="#222">tessl: scale 1 + synchronize</text>
+<line x1="300" x2="662.5" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="662.5" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="670.5" y="93" fill="#333" font-size="10">1.36</text>
+<line x1="300" x2="541.2" y1="100.0" y2="100.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="541.2" cy="100.0" r="4.2" fill="#2a9d8f"/>
+<text x="549.2" y="104" fill="#333" font-size="10">0.136</text>
+<line x1="300" x2="668.8" y1="111.0" y2="111.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="668.8" cy="111.0" r="4.2" fill="#e08e2b"/>
+<text x="676.8" y="115" fill="#333" font-size="10">1.53</text>
+<line x1="300" x2="562.3" y1="122.0" y2="122.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="562.3" cy="122.0" r="4.2" fill="#d1495b"/>
+<text x="570.3" y="126" fill="#333" font-size="10">0.203</text>
+<text x="292" y="163.0" text-anchor="end" fill="#222">tessl: same, 5 ms idle before</text>
+<line x1="300" x2="665.2" y1="142.0" y2="142.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="665.2" cy="142.0" r="4.2" fill="#3d6fb6"/>
+<text x="673.2" y="146" fill="#333" font-size="10">1.43</text>
+<line x1="300" x2="571.2" y1="153.0" y2="153.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="571.2" cy="153.0" r="4.2" fill="#2a9d8f"/>
+<text x="579.2" y="157" fill="#333" font-size="10">0.24</text>
+<line x1="300" x2="672.2" y1="164.0" y2="164.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="672.2" cy="164.0" r="4.2" fill="#e08e2b"/>
+<text x="680.2" y="168" fill="#333" font-size="10">1.63</text>
+<line x1="300" x2="596.5" y1="175.0" y2="175.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="596.5" cy="175.0" r="4.2" fill="#d1495b"/>
+<text x="604.5" y="179" fill="#333" font-size="10">0.388</text>
+<text x="292" y="216.0" text-anchor="end" fill="#222">tessl: fresh 4 B buffer + scale + synchronize</text>
+<line x1="300" x2="588.4" y1="195.0" y2="195.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="588.4" cy="195.0" r="4.2" fill="#3d6fb6"/>
+<text x="596.4" y="199" fill="#333" font-size="10">0.333</text>
+<line x1="300" x2="548.5" y1="206.0" y2="206.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="548.5" cy="206.0" r="4.2" fill="#2a9d8f"/>
+<text x="556.5" y="210" fill="#333" font-size="10">0.156</text>
+<line x1="300" x2="671.5" y1="217.0" y2="217.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="671.5" cy="217.0" r="4.2" fill="#e08e2b"/>
+<text x="679.5" y="221" fill="#333" font-size="10">1.61</text>
+<line x1="300" x2="571.8" y1="228.0" y2="228.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="571.8" cy="228.0" r="4.2" fill="#d1495b"/>
+<text x="579.8" y="232" fill="#333" font-size="10">0.243</text>
+<text x="292" y="269.0" text-anchor="end" fill="#222">backend: sync alone</text>
+<line x1="300" x2="340.2" y1="248.0" y2="248.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="340.2" cy="248.0" r="4.2" fill="#3d6fb6"/>
+<text x="348.2" y="252" fill="#333" font-size="10">0.003</text>
+<line x1="300" x2="318.8" y1="259.0" y2="259.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="318.8" cy="259.0" r="4.2" fill="#2a9d8f"/>
+<text x="326.8" y="263" fill="#333" font-size="10">0.002</text>
+<line x1="300" x2="413.3" y1="270.0" y2="270.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="413.3" cy="270.0" r="4.2" fill="#e08e2b"/>
+<text x="421.3" y="274" fill="#333" font-size="10">0.012</text>
+<line x1="300" x2="384.8" y1="281.0" y2="281.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="384.8" cy="281.0" r="4.2" fill="#d1495b"/>
+<text x="392.8" y="285" fill="#333" font-size="10">0.007</text>
+<text x="292" y="322.0" text-anchor="end" fill="#222">backend: silu 1 + sync</text>
+<line x1="300" x2="594.4" y1="301.0" y2="301.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="594.4" cy="301.0" r="4.2" fill="#3d6fb6"/>
+<text x="602.4" y="305" fill="#333" font-size="10">0.373</text>
+<line x1="300" x2="556.0" y1="312.0" y2="312.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="556.0" cy="312.0" r="4.2" fill="#2a9d8f"/>
+<text x="564.0" y="316" fill="#333" font-size="10">0.18</text>
+<line x1="300" x2="673.5" y1="323.0" y2="323.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="673.5" cy="323.0" r="4.2" fill="#e08e2b"/>
+<text x="681.5" y="327" fill="#333" font-size="10">1.67</text>
+<line x1="300" x2="586.0" y1="334.0" y2="334.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="586.0" cy="334.0" r="4.2" fill="#d1495b"/>
+<text x="594.0" y="338" fill="#333" font-size="10">0.318</text>
+<text x="292" y="375.0" text-anchor="end" fill="#222">backend: same, 1 ms idle before</text>
+<line x1="300" x2="626.0" y1="354.0" y2="354.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="626.0" cy="354.0" r="4.2" fill="#3d6fb6"/>
+<text x="634.0" y="358" fill="#333" font-size="10">0.679</text>
+<line x1="300" x2="572.7" y1="365.0" y2="365.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="572.7" cy="365.0" r="4.2" fill="#2a9d8f"/>
+<text x="580.7" y="369" fill="#333" font-size="10">0.247</text>
+<line x1="300" x2="683.8" y1="376.0" y2="376.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="683.8" cy="376.0" r="4.2" fill="#e08e2b"/>
+<text x="691.8" y="380" fill="#333" font-size="10">2.03</text>
+<line x1="300" x2="604.2" y1="387.0" y2="387.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="604.2" cy="387.0" r="4.2" fill="#d1495b"/>
+<text x="612.2" y="391" fill="#333" font-size="10">0.449</text>
+<text x="292" y="428.0" text-anchor="end" fill="#222">backend: same, 5 ms idle before</text>
+<line x1="300" x2="609.6" y1="407.0" y2="407.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="609.6" cy="407.0" r="4.2" fill="#3d6fb6"/>
+<text x="617.6" y="411" fill="#333" font-size="10">0.498</text>
+<line x1="300" x2="582.8" y1="418.0" y2="418.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="582.8" cy="418.0" r="4.2" fill="#2a9d8f"/>
+<text x="590.8" y="422" fill="#333" font-size="10">0.299</text>
+<line x1="300" x2="676.4" y1="429.0" y2="429.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="676.4" cy="429.0" r="4.2" fill="#e08e2b"/>
+<text x="684.4" y="433" fill="#333" font-size="10">1.77</text>
+<line x1="300" x2="607.5" y1="440.0" y2="440.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="607.5" cy="440.0" r="4.2" fill="#d1495b"/>
+<text x="615.5" y="444" fill="#333" font-size="10">0.478</text>
+<text x="292" y="481.0" text-anchor="end" fill="#222">backend: same, 20 ms idle before</text>
+<line x1="300" x2="715.1" y1="460.0" y2="460.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="715.1" cy="460.0" r="4.2" fill="#3d6fb6"/>
+<text x="723.1" y="464" fill="#333" font-size="10">3.68</text>
+<line x1="300" x2="587.0" y1="471.0" y2="471.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="587.0" cy="471.0" r="4.2" fill="#2a9d8f"/>
+<text x="595.0" y="475" fill="#333" font-size="10">0.324</text>
+<line x1="300" x2="795.2" y1="482.0" y2="482.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="795.2" cy="482.0" r="4.2" fill="#e08e2b"/>
+<text x="803.2" y="486" fill="#333" font-size="10">16.8</text>
+<line x1="300" x2="616.3" y1="493.0" y2="493.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="616.3" cy="493.0" r="4.2" fill="#d1495b"/>
+<text x="624.3" y="497" fill="#333" font-size="10">0.565</text>
+<text x="292" y="534.0" text-anchor="end" fill="#222">backend: 8 x silu 1 + sync</text>
+<line x1="300" x2="672.1" y1="513.0" y2="513.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="672.1" cy="513.0" r="4.2" fill="#3d6fb6"/>
+<text x="680.1" y="517" fill="#333" font-size="10">1.63</text>
+<line x1="300" x2="571.8" y1="524.0" y2="524.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="571.8" cy="524.0" r="4.2" fill="#2a9d8f"/>
+<text x="579.8" y="528" fill="#333" font-size="10">0.243</text>
+<line x1="300" x2="732.5" y1="535.0" y2="535.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="732.5" cy="535.0" r="4.2" fill="#e08e2b"/>
+<text x="740.5" y="539" fill="#333" font-size="10">5.12</text>
+<line x1="300" x2="590.8" y1="546.0" y2="546.0" stroke="#d1495b" stroke-opacity="0.35"/>
+<circle cx="590.8" cy="546.0" r="4.2" fill="#d1495b"/>
+<text x="598.8" y="550" fill="#333" font-size="10">0.348</text>
+</svg>

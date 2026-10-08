@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="308" viewBox="0 0 920 308" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-cpu-hot-paths: Muon no-transpose view gate</text>
+<text x="16" y="44" fill="#555">min over 3 rounds, divided by the shipped gate (nanolab); above 1 is slower than shipped</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="497.6" y="72" width="50.0" height="186" fill="#eee"/>
+<line x1="340.9" x2="340.9" y1="72" y2="258" stroke="#ddd" stroke-width="1"/>
+<text x="340.9" y="274" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="522.6" x2="522.6" y1="72" y2="258" stroke="#222" stroke-width="1.5"/>
+<text x="522.6" y="274" text-anchor="middle" fill="#444">1x</text>
+<line x1="704.3" x2="704.3" y1="72" y2="258" stroke="#ddd" stroke-width="1"/>
+<text x="704.3" y="274" text-anchor="middle" fill="#444">2x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">muon_2048x768: gate off</text>
+<rect x="456.7" y="81" width="65.9" height="13" fill="#2a9d8f"/>
+<text x="451.7" y="92" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="112" text-anchor="end" fill="#222">muon_3072x768: gate off</text>
+<rect x="502.5" y="101" width="20.1" height="13" fill="#9aa0a6"/>
+<text x="497.5" y="112" text-anchor="end" fill="#333">0.93</text>
+<text x="292" y="132" text-anchor="end" fill="#222">muon_6144x2048: gate off</text>
+<rect x="522.6" y="121" width="50.8" height="13" fill="#d1495b"/>
+<text x="578.4" y="132" text-anchor="start" fill="#333">1.21</text>
+<text x="292" y="152" text-anchor="end" fill="#222">muon_2048x768: gate tallbands</text>
+<rect x="522.6" y="141" width="71.6" height="13" fill="#d1495b"/>
+<text x="599.2" y="152" text-anchor="start" fill="#333">1.31</text>
+<text x="292" y="172" text-anchor="end" fill="#222">muon_3072x768: gate tallbands</text>
+<rect x="522.6" y="161" width="107.4" height="13" fill="#d1495b"/>
+<text x="635.0" y="172" text-anchor="start" fill="#333">1.51</text>
+<text x="292" y="192" text-anchor="end" fill="#222">muon_2048x768: gate tall</text>
+<rect x="522.6" y="181" width="119.8" height="13" fill="#d1495b"/>
+<text x="647.4" y="192" text-anchor="start" fill="#333">1.58</text>
+<text x="292" y="212" text-anchor="end" fill="#222">muon_3072x768: gate tall</text>
+<rect x="522.6" y="201" width="185.2" height="13" fill="#d1495b"/>
+<text x="712.8" y="212" text-anchor="start" fill="#333">2.03</text>
+<text x="292" y="232" text-anchor="end" fill="#222">muon_6144x2048: gate tallbands</text>
+<rect x="522.6" y="221" width="246.9" height="13" fill="#d1495b"/>
+<text x="774.5" y="232" text-anchor="start" fill="#333">2.56</text>
+<text x="292" y="252" text-anchor="end" fill="#222">muon_6144x2048: gate tall</text>
+<rect x="522.6" y="241" width="278.9" height="13" fill="#d1495b"/>
+<text x="806.5" y="252" text-anchor="start" fill="#333">2.90</text>
+</svg>

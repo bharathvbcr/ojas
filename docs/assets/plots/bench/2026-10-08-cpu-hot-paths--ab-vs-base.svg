@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="728" viewBox="0 0 920 728" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-cpu-hot-paths: interleaved A/B, base against after</text>
+<text x="16" y="44" fill="#555">after / base, min over rounds; circle = median of per-round ratios; load 17-82 on the first table</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="782.8" y="72" width="30.4" height="606" fill="#eee"/>
+<line x1="320.4" x2="320.4" y1="72" y2="678" stroke="#ddd" stroke-width="1"/>
+<text x="320.4" y="694" text-anchor="middle" fill="#444">0.05x</text>
+<line x1="430.9" x2="430.9" y1="72" y2="678" stroke="#ddd" stroke-width="1"/>
+<text x="430.9" y="694" text-anchor="middle" fill="#444">0.1x</text>
+<line x1="541.4" x2="541.4" y1="72" y2="678" stroke="#ddd" stroke-width="1"/>
+<text x="541.4" y="694" text-anchor="middle" fill="#444">0.2x</text>
+<line x1="687.5" x2="687.5" y1="72" y2="678" stroke="#ddd" stroke-width="1"/>
+<text x="687.5" y="694" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="798.0" x2="798.0" y1="72" y2="678" stroke="#222" stroke-width="1.5"/>
+<text x="798.0" y="694" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">conv1d bwd</text>
+<rect x="395.3" y="81" width="402.7" height="13" fill="#2a9d8f"/>
+<circle cx="414.1" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="390.3" y="92" text-anchor="end" fill="#333">0.08</text>
+<text x="292" y="112" text-anchor="end" fill="#222">ce_seed_0.25_[1024,768]x[50304,768]</text>
+<rect x="515.5" y="101" width="282.5" height="13" fill="#2a9d8f"/>
+<circle cx="524.6" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="510.5" y="112" text-anchor="end" fill="#333">0.17</text>
+<text x="292" y="132" text-anchor="end" fill="#222">gated_rms bwd</text>
+<rect x="577.0" y="121" width="221.0" height="13" fill="#2a9d8f"/>
+<circle cx="583.2" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="572.0" y="132" text-anchor="end" fill="#333">0.25</text>
+<text x="292" y="152" text-anchor="end" fill="#222">accum_50304x768</text>
+<rect x="600.7" y="141" width="197.4" height="13" fill="#2a9d8f"/>
+<circle cx="595.1" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="595.7" y="152" text-anchor="end" fill="#333">0.29</text>
+<text x="292" y="172" text-anchor="end" fill="#222">embedding_qwen fwd</text>
+<rect x="721.8" y="161" width="76.2" height="13" fill="#2a9d8f"/>
+<circle cx="756.4" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="716.8" y="172" text-anchor="end" fill="#333">0.62</text>
+<text x="292" y="192" text-anchor="end" fill="#222">accum_768x768</text>
+<rect x="734.2" y="181" width="63.9" height="13" fill="#2a9d8f"/>
+<circle cx="754.3" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="729.2" y="192" text-anchor="end" fill="#333">0.67</text>
+<text x="292" y="212" text-anchor="end" fill="#222">muon_6144x2048</text>
+<rect x="745.7" y="201" width="52.4" height="13" fill="#2a9d8f"/>
+<circle cx="781.2" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="740.7" y="212" text-anchor="end" fill="#333">0.72</text>
+<text x="292" y="232" text-anchor="end" fill="#222">muon_768x768</text>
+<rect x="745.7" y="221" width="52.4" height="13" fill="#2a9d8f"/>
+<circle cx="788.2" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="740.7" y="232" text-anchor="end" fill="#333">0.72</text>
+<text x="292" y="252" text-anchor="end" fill="#222">muon_2048x768</text>
+<rect x="752.2" y="241" width="45.9" height="13" fill="#2a9d8f"/>
+<circle cx="798.0" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="747.2" y="252" text-anchor="end" fill="#333">0.75</text>
+<text x="292" y="272" text-anchor="end" fill="#222">muon_3072x768</text>
+<rect x="756.4" y="261" width="41.7" height="13" fill="#2a9d8f"/>
+<circle cx="860.0" cy="267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="751.4" y="272" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="292" text-anchor="end" fill="#222">permute_qwen fwd</text>
+<rect x="756.4" y="281" width="41.7" height="13" fill="#2a9d8f"/>
+<circle cx="807.3" cy="287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="751.4" y="292" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="312" text-anchor="end" fill="#222">mul fwd</text>
+<rect x="762.5" y="301" width="35.6" height="13" fill="#2a9d8f"/>
+<circle cx="793.2" cy="307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="757.5" y="312" text-anchor="end" fill="#333">0.80</text>
+<text x="292" y="332" text-anchor="end" fill="#222">gdn fwd</text>
+<rect x="772.1" y="321" width="25.9" height="13" fill="#2a9d8f"/>
+<circle cx="796.4" cy="327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="767.1" y="332" text-anchor="end" fill="#333">0.85</text>
+<text x="292" y="352" text-anchor="end" fill="#222">rope_partial bwd</text>
+<rect x="774.0" y="341" width="24.0" height="13" fill="#2a9d8f"/>
+<circle cx="784.7" cy="347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="769.0" y="352" text-anchor="end" fill="#333">0.86</text>
+<text x="292" y="372" text-anchor="end" fill="#222">rope_partial fwd</text>
+<rect x="777.6" y="361" width="20.4" height="13" fill="#2a9d8f"/>
+<circle cx="801.2" cy="367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="772.6" y="372" text-anchor="end" fill="#333">0.88</text>
+<text x="292" y="392" text-anchor="end" fill="#222">conv1d fwd</text>
+<rect x="779.5" y="381" width="18.6" height="13" fill="#2a9d8f"/>
+<circle cx="799.6" cy="387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="774.5" y="392" text-anchor="end" fill="#333">0.89</text>
+<text x="292" y="412" text-anchor="end" fill="#222">embedding fwd</text>
+<rect x="781.2" y="401" width="16.8" height="13" fill="#2a9d8f"/>
+<circle cx="789.9" cy="407.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="776.2" y="412" text-anchor="end" fill="#333">0.90</text>
+<text x="292" y="432" text-anchor="end" fill="#222">gdn bwd</text>
+<rect x="781.2" y="421" width="16.8" height="13" fill="#2a9d8f"/>
+<circle cx="794.8" cy="427.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="776.2" y="432" text-anchor="end" fill="#333">0.90</text>
+<text x="292" y="452" text-anchor="end" fill="#222">permute fwd</text>
+<rect x="781.2" y="441" width="16.8" height="13" fill="#2a9d8f"/>
+<circle cx="805.8" cy="447.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="776.2" y="452" text-anchor="end" fill="#333">0.90</text>
+<text x="292" y="472" text-anchor="end" fill="#222">muon_2048x2048</text>
+<rect x="784.7" y="461" width="13.3" height="13" fill="#9aa0a6"/>
+<circle cx="788.2" cy="467.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="779.7" y="472" text-anchor="end" fill="#333">0.92</text>
+<text x="292" y="492" text-anchor="end" fill="#222">silu fwd</text>
+<rect x="784.7" y="481" width="13.3" height="13" fill="#9aa0a6"/>
+<circle cx="784.7" cy="487.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="779.7" y="492" text-anchor="end" fill="#333">0.92</text>
+<text x="292" y="512" text-anchor="end" fill="#222">adamw_50304x768</text>
+<rect x="786.5" y="501" width="11.6" height="13" fill="#9aa0a6"/>
+<circle cx="793.2" cy="507.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="781.5" y="512" text-anchor="end" fill="#333">0.93</text>
+<text x="292" y="532" text-anchor="end" fill="#222">gated_rms fwd</text>
+<rect x="786.5" y="521" width="11.6" height="13" fill="#9aa0a6"/>
+<circle cx="801.2" cy="527.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="781.5" y="532" text-anchor="end" fill="#333">0.93</text>
+<text x="292" y="552" text-anchor="end" fill="#222">add bwd</text>
+<rect x="794.8" y="541" width="3.2" height="13" fill="#9aa0a6"/>
+<circle cx="798.0" cy="547.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="789.8" y="552" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="572" text-anchor="end" fill="#222">embedding_qwen bwd</text>
+<rect x="794.8" y="561" width="3.2" height="13" fill="#9aa0a6"/>
+<circle cx="808.8" cy="567.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="789.8" y="572" text-anchor="end" fill="#333">0.98</text>
+<text x="292" y="592" text-anchor="end" fill="#222">silu bwd</text>
+<rect x="798.0" y="581" width="1.6" height="13" fill="#9aa0a6"/>
+<circle cx="798.0" cy="587.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="804.6" y="592" text-anchor="start" fill="#333">1.01</text>
+<text x="292" y="612" text-anchor="end" fill="#222">add fwd</text>
+<rect x="798.0" y="601" width="7.8" height="13" fill="#9aa0a6"/>
+<circle cx="817.5" cy="607.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="810.8" y="612" text-anchor="start" fill="#333">1.05</text>
+<text x="292" y="632" text-anchor="end" fill="#222">mul bwd</text>
+<rect x="798.0" y="621" width="13.7" height="13" fill="#9aa0a6"/>
+<circle cx="814.7" cy="627.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="816.8" y="632" text-anchor="start" fill="#333">1.09</text>
+<text x="292" y="652" text-anchor="end" fill="#222">embedding bwd</text>
+<rect x="798.0" y="641" width="16.6" height="13" fill="#d1495b"/>
+<circle cx="814.7" cy="647.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="819.7" y="652" text-anchor="start" fill="#333">1.11</text>
+<text x="292" y="672" text-anchor="end" fill="#222">ce_seed_1_[1024,768]x[50304,768]</text>
+<rect x="798.0" y="661" width="26.4" height="13" fill="#d1495b"/>
+<circle cx="823.1" cy="667.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="829.4" y="672" text-anchor="start" fill="#333">1.18</text>
+</svg>

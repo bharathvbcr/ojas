@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-04-split: split count for the decode attention kernel</text>
+<text x="16" y="44" fill="#555">median µs against number of key splits</text>
+<line x1="70" x2="570" y1="212.0" y2="212.0" stroke="#e5e5e5"/><text x="64" y="216.0" text-anchor="end" fill="#444">50</text>
+<line x1="70.0" x2="70.0" y1="74" y2="320" stroke="#eee"/><text x="70.0" y="336" text-anchor="middle" fill="#444">1</text>
+<line x1="170.0" x2="170.0" y1="74" y2="320" stroke="#eee"/><text x="170.0" y="336" text-anchor="middle" fill="#444">2</text>
+<line x1="302.2" x2="302.2" y1="74" y2="320" stroke="#eee"/><text x="302.2" y="336" text-anchor="middle" fill="#444">5</text>
+<line x1="402.2" x2="402.2" y1="74" y2="320" stroke="#eee"/><text x="402.2" y="336" text-anchor="middle" fill="#444">10</text>
+<line x1="502.2" x2="502.2" y1="74" y2="320" stroke="#eee"/><text x="502.2" y="336" text-anchor="middle" fill="#444">20</text>
+<text x="320.0" y="368" text-anchor="middle" fill="#333">splits</text>
+<text x="16" y="66" fill="#333">µs</text>
+<path d="M70.0,221.8 L170.0,270.8 L270.0,277.3 L370.0,279.0 L470.0,240.3 L570.0,160.8" fill="none" stroke="#3d6fb6" stroke-width="2"/>
+<circle cx="70.0" cy="221.8" r="2.6" fill="#3d6fb6"/>
+<circle cx="170.0" cy="270.8" r="2.6" fill="#3d6fb6"/>
+<circle cx="270.0" cy="277.3" r="2.6" fill="#3d6fb6"/>
+<circle cx="370.0" cy="279.0" r="2.6" fill="#3d6fb6"/>
+<circle cx="470.0" cy="240.3" r="2.6" fill="#3d6fb6"/>
+<circle cx="570.0" cy="160.8" r="2.6" fill="#3d6fb6"/>
+<rect x="582" y="80" width="10" height="10" fill="#3d6fb6"/><text x="597" y="89" fill="#333">median µs</text>
+</svg>

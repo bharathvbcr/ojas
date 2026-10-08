@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="289" viewBox="0 0 890 289" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-decode-before: generation, 32-token prompt and 32 new tokens</text>
+<text x="16" y="44" fill="#555">3 rounds; torch-mps against each ojas lane</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">prefill median ms (32 tokens)</text>
+<circle cx="249.60000000000002" cy="60" r="5" fill="#e08e2b"/><text x="260.6" y="64" fill="#333">decode ms per token</text>
+<line x1="326.7" x2="326.7" y1="78" y2="239" stroke="#ddd"/>
+<text x="326.7" y="255" text-anchor="middle" fill="#444">5</text>
+<line x1="381.4" x2="381.4" y1="78" y2="239" stroke="#ddd"/>
+<text x="381.4" y="255" text-anchor="middle" fill="#444">10</text>
+<line x1="436.1" x2="436.1" y1="78" y2="239" stroke="#ddd"/>
+<text x="436.1" y="255" text-anchor="middle" fill="#444">20</text>
+<line x1="508.4" x2="508.4" y1="78" y2="239" stroke="#ddd"/>
+<text x="508.4" y="255" text-anchor="middle" fill="#444">50</text>
+<line x1="563.1" x2="563.1" y1="78" y2="239" stroke="#ddd"/>
+<text x="563.1" y="255" text-anchor="middle" fill="#444">100</text>
+<line x1="617.8" x2="617.8" y1="78" y2="239" stroke="#ddd"/>
+<text x="617.8" y="255" text-anchor="middle" fill="#444">200</text>
+<line x1="690.1" x2="690.1" y1="78" y2="239" stroke="#ddd"/>
+<text x="690.1" y="255" text-anchor="middle" fill="#444">500</text>
+<line x1="744.8" x2="744.8" y1="78" y2="239" stroke="#ddd"/>
+<text x="744.8" y="255" text-anchor="middle" fill="#444">1000</text>
+<line x1="799.5" x2="799.5" y1="78" y2="239" stroke="#ddd"/>
+<text x="799.5" y="255" text-anchor="middle" fill="#444">2000</text>
+<text x="560.0" y="273" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="99.0" text-anchor="end" fill="#222">torch-mps</text>
+<line x1="300" x2="367.6" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="367.6" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="375.6" y="93" fill="#333" font-size="10">8.39</text>
+<line x1="300" x2="339.5" y1="100.0" y2="100.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="339.5" cy="100.0" r="4.2" fill="#e08e2b"/>
+<text x="347.5" y="104" fill="#333" font-size="10">5.88</text>
+<text x="292" y="130.0" text-anchor="end" fill="#222">ojas-metal</text>
+<line x1="300" x2="391.4" y1="120.0" y2="120.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="391.4" cy="120.0" r="4.2" fill="#3d6fb6"/>
+<text x="399.4" y="124" fill="#333" font-size="10">11.3</text>
+<line x1="300" x2="398.5" y1="131.0" y2="131.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="398.5" cy="131.0" r="4.2" fill="#e08e2b"/>
+<text x="406.5" y="135" fill="#333" font-size="10">12.4</text>
+<text x="292" y="161.0" text-anchor="end" fill="#222">ojas-wgpu</text>
+<line x1="300" x2="475.1" y1="151.0" y2="151.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="475.1" cy="151.0" r="4.2" fill="#3d6fb6"/>
+<text x="483.1" y="155" fill="#333" font-size="10">32.8</text>
+<line x1="300" x2="466.9" y1="162.0" y2="162.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="466.9" cy="162.0" r="4.2" fill="#e08e2b"/>
+<text x="474.9" y="166" fill="#333" font-size="10">29.5</text>
+<text x="292" y="192.0" text-anchor="end" fill="#222">ojas-cpu</text>
+<line x1="300" x2="401.1" y1="182.0" y2="182.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="401.1" cy="182.0" r="4.2" fill="#3d6fb6"/>
+<text x="409.1" y="186" fill="#333" font-size="10">12.8</text>
+<line x1="300" x2="328.1" y1="193.0" y2="193.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="328.1" cy="193.0" r="4.2" fill="#e08e2b"/>
+<text x="336.1" y="197" fill="#333" font-size="10">5.09</text>
+<text x="292" y="223.0" text-anchor="end" fill="#222">ojas-cpu-host</text>
+<line x1="300" x2="782.9" y1="213.0" y2="213.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="782.9" cy="213.0" r="4.2" fill="#3d6fb6"/>
+<text x="790.9" y="217" fill="#333" font-size="10">1.62e+03</text>
+<line x1="300" x2="509.6" y1="224.0" y2="224.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="509.6" cy="224.0" r="4.2" fill="#e08e2b"/>
+<text x="517.6" y="228" fill="#333" font-size="10">50.7</text>
+</svg>

@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="468" viewBox="0 0 920 468" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-kernels/ab-check: new / old</text>
+<text x="16" y="44" fill="#555">min-of-rounds ratio, circle = median-of-round-minimums ratio, 8 rounds</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="701.2" y="72" width="92.1" height="346" fill="#eee"/>
+<line x1="412.3" x2="412.3" y1="72" y2="418" stroke="#ddd" stroke-width="1"/>
+<text x="412.3" y="434" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="747.2" x2="747.2" y1="72" y2="418" stroke="#222" stroke-width="1.5"/>
+<text x="747.2" y="434" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">rope_fwd</text>
+<rect x="588.9" y="81" width="158.3" height="13" fill="#2a9d8f"/>
+<circle cx="650.1" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="583.9" y="92" text-anchor="end" fill="#333">0.72</text>
+<text x="292" y="112" text-anchor="end" fill="#222">rms_norm_fwd</text>
+<rect x="593.3" y="101" width="153.9" height="13" fill="#2a9d8f"/>
+<circle cx="623.9" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="588.3" y="112" text-anchor="end" fill="#333">0.73</text>
+<text x="292" y="132" text-anchor="end" fill="#222">silu_bwd</text>
+<rect x="619.4" y="121" width="127.8" height="13" fill="#2a9d8f"/>
+<circle cx="621.1" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="614.4" y="132" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="152" text-anchor="end" fill="#222">mul_fwd</text>
+<rect x="620.0" y="141" width="127.3" height="13" fill="#2a9d8f"/>
+<circle cx="637.3" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="615.0" y="152" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="172" text-anchor="end" fill="#222">vres_fwd</text>
+<rect x="621.4" y="161" width="125.8" height="13" fill="#2a9d8f"/>
+<circle cx="617.1" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="616.4" y="172" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="192" text-anchor="end" fill="#222">rms_qk_norm_fwd</text>
+<rect x="622.5" y="181" width="124.7" height="13" fill="#2a9d8f"/>
+<circle cx="629.3" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="617.5" y="192" text-anchor="end" fill="#333">0.77</text>
+<text x="292" y="212" text-anchor="end" fill="#222">mul_bwd</text>
+<rect x="624.8" y="201" width="122.4" height="13" fill="#2a9d8f"/>
+<circle cx="621.6" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="619.8" y="212" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="232" text-anchor="end" fill="#222">rope_bwd</text>
+<rect x="626.2" y="221" width="121.0" height="13" fill="#2a9d8f"/>
+<circle cx="621.1" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="621.2" y="232" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="252" text-anchor="end" fill="#222">gate_fwd</text>
+<rect x="629.7" y="241" width="117.5" height="13" fill="#2a9d8f"/>
+<circle cx="624.4" cy="247.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="624.7" y="252" text-anchor="end" fill="#333">0.78</text>
+<text x="292" y="272" text-anchor="end" fill="#222">residual_add_fwd</text>
+<rect x="639.6" y="261" width="107.6" height="13" fill="#2a9d8f"/>
+<circle cx="658.8" cy="267.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="634.6" y="272" text-anchor="end" fill="#333">0.80</text>
+<text x="292" y="292" text-anchor="end" fill="#222">silu_fwd</text>
+<rect x="640.3" y="281" width="106.9" height="13" fill="#2a9d8f"/>
+<circle cx="627.0" cy="287.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="635.3" y="292" text-anchor="end" fill="#333">0.80</text>
+<text x="292" y="312" text-anchor="end" fill="#222">vres_bwd</text>
+<rect x="649.6" y="301" width="97.6" height="13" fill="#2a9d8f"/>
+<circle cx="633.3" cy="307.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="644.6" y="312" text-anchor="end" fill="#333">0.82</text>
+<text x="292" y="332" text-anchor="end" fill="#222">residual_add_bwd</text>
+<rect x="655.7" y="321" width="91.6" height="13" fill="#2a9d8f"/>
+<circle cx="666.9" cy="327.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="650.7" y="332" text-anchor="end" fill="#333">0.83</text>
+<text x="292" y="352" text-anchor="end" fill="#222">permute_bthd_bhtd</text>
+<rect x="679.0" y="341" width="68.2" height="13" fill="#2a9d8f"/>
+<circle cx="677.7" cy="347.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="674.0" y="352" text-anchor="end" fill="#333">0.87</text>
+<text x="292" y="372" text-anchor="end" fill="#222">gate_bwd</text>
+<rect x="726.1" y="361" width="21.1" height="13" fill="#9aa0a6"/>
+<circle cx="709.8" cy="367.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="721.1" y="372" text-anchor="end" fill="#333">0.96</text>
+<text x="292" y="392" text-anchor="end" fill="#222">accumulate_grad_50304x768</text>
+<rect x="733.0" y="381" width="14.2" height="13" fill="#9aa0a6"/>
+<circle cx="749.0" cy="387.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="728.0" y="392" text-anchor="end" fill="#333">0.97</text>
+<text x="292" y="412" text-anchor="end" fill="#222">floor_silu_1</text>
+<rect x="747.2" y="401" width="5.0" height="13" fill="#9aa0a6"/>
+<circle cx="592.0" cy="407.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="757.2" y="412" text-anchor="start" fill="#333">1.01</text>
+</svg>

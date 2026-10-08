@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="754" viewBox="0 0 890 754" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-03-lappi-inference: tessl full decision time</text>
+<text x="16" y="44" fill="#555">Prefill plus decision head, per prompt</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">tessl base</text>
+<circle cx="128.0" cy="60" r="5" fill="#2a9d8f"/><text x="139.0" y="64" fill="#333">tessl Lappi</text>
+<line x1="358.3" x2="358.3" y1="78" y2="704" stroke="#ddd"/>
+<text x="358.3" y="720" text-anchor="middle" fill="#444">200</text>
+<line x1="487.6" x2="487.6" y1="78" y2="704" stroke="#ddd"/>
+<text x="487.6" y="720" text-anchor="middle" fill="#444">500</text>
+<line x1="585.5" x2="585.5" y1="78" y2="704" stroke="#ddd"/>
+<text x="585.5" y="720" text-anchor="middle" fill="#444">1000</text>
+<line x1="683.3" x2="683.3" y1="78" y2="704" stroke="#ddd"/>
+<text x="683.3" y="720" text-anchor="middle" fill="#444">2000</text>
+<line x1="812.6" x2="812.6" y1="78" y2="704" stroke="#ddd"/>
+<text x="812.6" y="720" text-anchor="middle" fill="#444">5000</text>
+<text x="560.0" y="738" text-anchor="middle" fill="#444">ms (log axis)</text>
+<text x="292" y="99.0" text-anchor="end" fill="#222">CLINC intent (16-way) p50</text>
+<line x1="300" x2="369.8" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="369.8" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="377.8" y="93" fill="#333" font-size="10">217</text>
+<line x1="300" x2="369.2" y1="100.0" y2="100.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="369.2" cy="100.0" r="4.2" fill="#2a9d8f"/>
+<text x="377.2" y="104" fill="#333" font-size="10">216</text>
+<text x="292" y="130.0" text-anchor="end" fill="#222">CLINC intent (16-way) p90</text>
+<line x1="300" x2="369.8" y1="120.0" y2="120.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="369.8" cy="120.0" r="4.2" fill="#3d6fb6"/>
+<text x="377.8" y="124" fill="#333" font-size="10">217</text>
+<line x1="300" x2="369.2" y1="131.0" y2="131.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="369.2" cy="131.0" r="4.2" fill="#2a9d8f"/>
+<text x="377.2" y="135" fill="#333" font-size="10">216</text>
+<text x="292" y="161.0" text-anchor="end" fill="#222">CLINC domain (10-way) p50</text>
+<line x1="300" x2="365.2" y1="151.0" y2="151.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="365.2" cy="151.0" r="4.2" fill="#3d6fb6"/>
+<text x="373.2" y="155" fill="#333" font-size="10">210</text>
+<line x1="300" x2="364.5" y1="162.0" y2="162.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="364.5" cy="162.0" r="4.2" fill="#2a9d8f"/>
+<text x="372.5" y="166" fill="#333" font-size="10">209</text>
+<text x="292" y="192.0" text-anchor="end" fill="#222">CLINC domain (10-way) p90</text>
+<line x1="300" x2="365.2" y1="182.0" y2="182.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="365.2" cy="182.0" r="4.2" fill="#3d6fb6"/>
+<text x="373.2" y="186" fill="#333" font-size="10">210</text>
+<line x1="300" x2="364.5" y1="193.0" y2="193.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="364.5" cy="193.0" r="4.2" fill="#2a9d8f"/>
+<text x="372.5" y="197" fill="#333" font-size="10">209</text>
+<text x="292" y="223.0" text-anchor="end" fill="#222">CLINC in-scope (2-way) p50</text>
+<line x1="300" x2="351.1" y1="213.0" y2="213.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="351.1" cy="213.0" r="4.2" fill="#3d6fb6"/>
+<text x="359.1" y="217" fill="#333" font-size="10">190</text>
+<line x1="300" x2="350.3" y1="224.0" y2="224.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="350.3" cy="224.0" r="4.2" fill="#2a9d8f"/>
+<text x="358.3" y="228" fill="#333" font-size="10">189</text>
+<text x="292" y="254.0" text-anchor="end" fill="#222">CLINC in-scope (2-way) p90</text>
+<line x1="300" x2="351.1" y1="244.0" y2="244.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="351.1" cy="244.0" r="4.2" fill="#3d6fb6"/>
+<text x="359.1" y="248" fill="#333" font-size="10">190</text>
+<line x1="300" x2="350.3" y1="255.0" y2="255.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="350.3" cy="255.0" r="4.2" fill="#2a9d8f"/>
+<text x="358.3" y="259" fill="#333" font-size="10">189</text>
+<text x="292" y="285.0" text-anchor="end" fill="#222">CLINC within-domain (15-way) p50</text>
+<line x1="300" x2="369.8" y1="275.0" y2="275.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="369.8" cy="275.0" r="4.2" fill="#3d6fb6"/>
+<text x="377.8" y="279" fill="#333" font-size="10">217</text>
+<line x1="300" x2="369.2" y1="286.0" y2="286.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="369.2" cy="286.0" r="4.2" fill="#2a9d8f"/>
+<text x="377.2" y="290" fill="#333" font-size="10">216</text>
+<text x="292" y="316.0" text-anchor="end" fill="#222">CLINC within-domain (15-way) p90</text>
+<line x1="300" x2="369.8" y1="306.0" y2="306.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="369.8" cy="306.0" r="4.2" fill="#3d6fb6"/>
+<text x="377.8" y="310" fill="#333" font-size="10">217</text>
+<line x1="300" x2="369.2" y1="317.0" y2="317.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="369.2" cy="317.0" r="4.2" fill="#2a9d8f"/>
+<text x="377.2" y="321" fill="#333" font-size="10">216</text>
+<text x="292" y="347.0" text-anchor="end" fill="#222">CSQA (5-way) p50</text>
+<line x1="300" x2="363.2" y1="337.0" y2="337.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="363.2" cy="337.0" r="4.2" fill="#3d6fb6"/>
+<text x="371.2" y="341" fill="#333" font-size="10">207</text>
+<line x1="300" x2="363.2" y1="348.0" y2="348.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="363.2" cy="348.0" r="4.2" fill="#2a9d8f"/>
+<text x="371.2" y="352" fill="#333" font-size="10">207</text>
+<text x="292" y="378.0" text-anchor="end" fill="#222">CSQA (5-way) p90</text>
+<line x1="300" x2="365.2" y1="368.0" y2="368.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="365.2" cy="368.0" r="4.2" fill="#3d6fb6"/>
+<text x="373.2" y="372" fill="#333" font-size="10">210</text>
+<line x1="300" x2="364.5" y1="379.0" y2="379.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="364.5" cy="379.0" r="4.2" fill="#2a9d8f"/>
+<text x="372.5" y="383" fill="#333" font-size="10">209</text>
+<text x="292" y="409.0" text-anchor="end" fill="#222">MMLU (4-way) p50</text>
+<line x1="300" x2="365.9" y1="399.0" y2="399.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="365.9" cy="399.0" r="4.2" fill="#3d6fb6"/>
+<text x="373.9" y="403" fill="#333" font-size="10">211</text>
+<line x1="300" x2="365.2" y1="410.0" y2="410.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="365.2" cy="410.0" r="4.2" fill="#2a9d8f"/>
+<text x="373.2" y="414" fill="#333" font-size="10">210</text>
+<text x="292" y="440.0" text-anchor="end" fill="#222">MMLU (4-way) p90</text>
+<line x1="300" x2="389.2" y1="430.0" y2="430.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="389.2" cy="430.0" r="4.2" fill="#3d6fb6"/>
+<text x="397.2" y="434" fill="#333" font-size="10">249</text>
+<line x1="300" x2="389.8" y1="441.0" y2="441.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="389.8" cy="441.0" r="4.2" fill="#2a9d8f"/>
+<text x="397.8" y="445" fill="#333" font-size="10">250</text>
+<text x="292" y="471.0" text-anchor="end" fill="#222">Code defect class (4-way) p50</text>
+<line x1="300" x2="405.3" y1="461.0" y2="461.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="405.3" cy="461.0" r="4.2" fill="#3d6fb6"/>
+<text x="413.3" y="465" fill="#333" font-size="10">279</text>
+<line x1="300" x2="406.3" y1="472.0" y2="472.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="406.3" cy="472.0" r="4.2" fill="#2a9d8f"/>
+<text x="414.3" y="476" fill="#333" font-size="10">281</text>
+<text x="292" y="502.0" text-anchor="end" fill="#222">Code defect class (4-way) p90</text>
+<line x1="300" x2="447.8" y1="492.0" y2="492.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="447.8" cy="492.0" r="4.2" fill="#3d6fb6"/>
+<text x="455.8" y="496" fill="#333" font-size="10">377</text>
+<line x1="300" x2="447.8" y1="503.0" y2="503.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="447.8" cy="503.0" r="4.2" fill="#2a9d8f"/>
+<text x="455.8" y="507" fill="#333" font-size="10">377</text>
+<text x="292" y="533.0" text-anchor="end" fill="#222">Code defect span p50</text>
+<line x1="300" x2="405.3" y1="523.0" y2="523.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="405.3" cy="523.0" r="4.2" fill="#3d6fb6"/>
+<text x="413.3" y="527" fill="#333" font-size="10">279</text>
+<line x1="300" x2="406.3" y1="534.0" y2="534.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="406.3" cy="534.0" r="4.2" fill="#2a9d8f"/>
+<text x="414.3" y="538" fill="#333" font-size="10">281</text>
+<text x="292" y="564.0" text-anchor="end" fill="#222">Code defect span p90</text>
+<line x1="300" x2="447.8" y1="554.0" y2="554.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="447.8" cy="554.0" r="4.2" fill="#3d6fb6"/>
+<text x="455.8" y="558" fill="#333" font-size="10">377</text>
+<line x1="300" x2="447.8" y1="565.0" y2="565.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="447.8" cy="565.0" r="4.2" fill="#2a9d8f"/>
+<text x="455.8" y="569" fill="#333" font-size="10">377</text>
+<text x="292" y="595.0" text-anchor="end" fill="#222">SQuAD answer span p50</text>
+<line x1="300" x2="386.4" y1="585.0" y2="585.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="386.4" cy="585.0" r="4.2" fill="#3d6fb6"/>
+<text x="394.4" y="589" fill="#333" font-size="10">244</text>
+<line x1="300" x2="384.6" y1="596.0" y2="596.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="384.6" cy="596.0" r="4.2" fill="#2a9d8f"/>
+<text x="392.6" y="600" fill="#333" font-size="10">241</text>
+<text x="292" y="626.0" text-anchor="end" fill="#222">SQuAD answer span p90</text>
+<line x1="300" x2="405.3" y1="616.0" y2="616.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="405.3" cy="616.0" r="4.2" fill="#3d6fb6"/>
+<text x="413.3" y="620" fill="#333" font-size="10">279</text>
+<line x1="300" x2="406.3" y1="627.0" y2="627.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="406.3" cy="627.0" r="4.2" fill="#2a9d8f"/>
+<text x="414.3" y="631" fill="#333" font-size="10">281</text>
+<text x="292" y="657.0" text-anchor="end" fill="#222">Long context (needle size) T=2048</text>
+<line x1="300" x2="547.3" y1="647.0" y2="647.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="547.3" cy="647.0" r="4.2" fill="#3d6fb6"/>
+<text x="555.3" y="651" fill="#333" font-size="10">763</text>
+<line x1="300" x2="549.1" y1="658.0" y2="658.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="549.1" cy="658.0" r="4.2" fill="#2a9d8f"/>
+<text x="557.1" y="662" fill="#333" font-size="10">773</text>
+<text x="292" y="688.0" text-anchor="end" fill="#222">Long context (needle size) T=8192</text>
+<line x1="300" x2="752.9" y1="678.0" y2="678.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="752.9" cy="678.0" r="4.2" fill="#3d6fb6"/>
+<text x="760.9" y="682" fill="#333" font-size="10">3.28e+03</text>
+<line x1="300" x2="753.7" y1="689.0" y2="689.0" stroke="#2a9d8f" stroke-opacity="0.35"/>
+<circle cx="753.7" cy="689.0" r="4.2" fill="#2a9d8f"/>
+<text x="761.7" y="693" fill="#333" font-size="10">3.29e+03</text>
+</svg>

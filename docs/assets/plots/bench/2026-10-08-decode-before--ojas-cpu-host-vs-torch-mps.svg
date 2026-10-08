@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="168" viewBox="0 0 920 168" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-08-decode-before: ojas-cpu-host vs torch-mps</text>
+<text x="16" y="44" fill="#555">ojas median / torch median, median of 3 per-round ratios</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="312.5" y="72" width="18.7" height="46" fill="#eee"/>
+<line x1="321.9" x2="321.9" y1="72" y2="118" stroke="#222" stroke-width="1.5"/>
+<text x="321.9" y="134" text-anchor="middle" fill="#444">1x</text>
+<line x1="389.9" x2="389.9" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="389.9" y="134" text-anchor="middle" fill="#444">2x</text>
+<line x1="479.7" x2="479.7" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="479.7" y="134" text-anchor="middle" fill="#444">5x</text>
+<line x1="547.7" x2="547.7" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="547.7" y="134" text-anchor="middle" fill="#444">10x</text>
+<line x1="615.7" x2="615.7" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="615.7" y="134" text-anchor="middle" fill="#444">20x</text>
+<line x1="705.6" x2="705.6" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="705.6" y="134" text-anchor="middle" fill="#444">50x</text>
+<line x1="773.6" x2="773.6" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="773.6" y="134" text-anchor="middle" fill="#444">100x</text>
+<line x1="841.5" x2="841.5" y1="72" y2="118" stroke="#ddd" stroke-width="1"/>
+<text x="841.5" y="134" text-anchor="middle" fill="#444">200x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">gen_greedy_p32_n32</text>
+<rect x="321.9" y="81" width="275.9" height="13" fill="#d1495b"/>
+<line x1="597.8" x2="597.8" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="597.8" x2="597.8" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="597.8" x2="597.8" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="597.8" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="602.8" y="92" text-anchor="start" fill="#333">16.67</text>
+<text x="292" y="112" text-anchor="end" fill="#222">gen_prefill_p32</text>
+<rect x="321.9" y="101" width="516.2" height="13" fill="#d1495b"/>
+<circle cx="838.1" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="843.1" y="112" text-anchor="start" fill="#333">193.15</text>
+</svg>

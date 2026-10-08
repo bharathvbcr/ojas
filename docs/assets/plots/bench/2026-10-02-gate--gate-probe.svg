@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="890" height="382" viewBox="0 0 890 382" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-gate: gate_bwd dispatch profile before the fix</text>
+<text x="16" y="44" fill="#555">GPU span of each dispatch, min µs</text>
+<circle cx="22" cy="60" r="5" fill="#3d6fb6"/><text x="33" y="64" fill="#333">probe 1</text>
+<circle cx="108.80000000000001" cy="60" r="5" fill="#e08e2b"/><text x="119.80000000000001" y="64" fill="#333">probe 2</text>
+<line x1="342.3" x2="342.3" y1="78" y2="332" stroke="#ddd"/>
+<text x="342.3" y="348" text-anchor="middle" fill="#444">50</text>
+<line x1="426.0" x2="426.0" y1="78" y2="332" stroke="#ddd"/>
+<text x="426.0" y="348" text-anchor="middle" fill="#444">100</text>
+<line x1="509.6" x2="509.6" y1="78" y2="332" stroke="#ddd"/>
+<text x="509.6" y="348" text-anchor="middle" fill="#444">200</text>
+<line x1="620.2" x2="620.2" y1="78" y2="332" stroke="#ddd"/>
+<text x="620.2" y="348" text-anchor="middle" fill="#444">500</text>
+<line x1="703.9" x2="703.9" y1="78" y2="332" stroke="#ddd"/>
+<text x="703.9" y="348" text-anchor="middle" fill="#444">1000</text>
+<line x1="787.5" x2="787.5" y1="78" y2="332" stroke="#ddd"/>
+<text x="787.5" y="348" text-anchor="middle" fill="#444">2000</text>
+<text x="560.0" y="366" text-anchor="middle" fill="#444">µs (log axis)</text>
+<text x="292" y="99.0" text-anchor="end" fill="#222">tessl scale_f32_inplace over attn (reference r</text>
+<line x1="300" x2="399.6" y1="89.0" y2="89.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="399.6" cy="89.0" r="4.2" fill="#3d6fb6"/>
+<text x="407.6" y="93" fill="#333" font-size="10">80.4</text>
+<line x1="300" x2="400.1" y1="100.0" y2="100.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="400.1" cy="100.0" r="4.2" fill="#e08e2b"/>
+<text x="408.1" y="104" fill="#333" font-size="10">80.7</text>
+<text x="292" y="130.0" text-anchor="end" fill="#222">nt pre = x · w^T (4096, 12, 768)</text>
+<line x1="300" x2="343.0" y1="120.0" y2="120.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="343.0" cy="120.0" r="4.2" fill="#3d6fb6"/>
+<text x="351.0" y="124" fill="#333" font-size="10">50.3</text>
+<line x1="300" x2="349.6" y1="131.0" y2="131.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="349.6" cy="131.0" r="4.2" fill="#e08e2b"/>
+<text x="357.6" y="135" fill="#333" font-size="10">53.1</text>
+<text x="292" y="161.0" text-anchor="end" fill="#222">ojas_per_head_gate_bwd</text>
+<line x1="300" x2="477.9" y1="151.0" y2="151.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="477.9" cy="151.0" r="4.2" fill="#3d6fb6"/>
+<text x="485.9" y="155" fill="#333" font-size="10">154</text>
+<line x1="300" x2="475.6" y1="162.0" y2="162.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="475.6" cy="162.0" r="4.2" fill="#e08e2b"/>
+<text x="483.6" y="166" fill="#333" font-size="10">151</text>
+<text x="292" y="192.0" text-anchor="end" fill="#222">ojas_per_head_gate_dbias</text>
+<line x1="300" x2="678.0" y1="182.0" y2="182.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="678.0" cy="182.0" r="4.2" fill="#3d6fb6"/>
+<text x="686.0" y="186" fill="#333" font-size="10">807</text>
+<line x1="300" x2="677.3" y1="193.0" y2="193.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="677.3" cy="193.0" r="4.2" fill="#e08e2b"/>
+<text x="685.3" y="197" fill="#333" font-size="10">803</text>
+<text x="292" y="223.0" text-anchor="end" fill="#222">nn gx = d_pre · w (4096, 768, 12)</text>
+<line x1="300" x2="441.7" y1="213.0" y2="213.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="441.7" cy="213.0" r="4.2" fill="#3d6fb6"/>
+<text x="449.7" y="217" fill="#333" font-size="10">114</text>
+<line x1="300" x2="437.1" y1="224.0" y2="224.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="437.1" cy="224.0" r="4.2" fill="#e08e2b"/>
+<text x="445.1" y="228" fill="#333" font-size="10">110</text>
+<text x="292" y="254.0" text-anchor="end" fill="#222">tn gw = d_pre^T · x (12, 768, 4096)</text>
+<line x1="300" x2="523.5" y1="244.0" y2="244.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="523.5" cy="244.0" r="4.2" fill="#3d6fb6"/>
+<text x="531.5" y="248" fill="#333" font-size="10">224</text>
+<line x1="300" x2="520.5" y1="255.0" y2="255.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="520.5" cy="255.0" r="4.2" fill="#e08e2b"/>
+<text x="528.5" y="259" fill="#333" font-size="10">219</text>
+<text x="292" y="285.0" text-anchor="end" fill="#222">ten ojas_check_finite passes</text>
+<line x1="300" x2="527.0" y1="275.0" y2="275.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="527.0" cy="275.0" r="4.2" fill="#3d6fb6"/>
+<text x="535.0" y="279" fill="#333" font-size="10">231</text>
+<line x1="300" x2="526.6" y1="286.0" y2="286.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="526.6" cy="286.0" r="4.2" fill="#e08e2b"/>
+<text x="534.6" y="290" fill="#333" font-size="10">230</text>
+<text x="292" y="316.0" text-anchor="end" fill="#222">whole backward, one command buffer</text>
+<line x1="300" x2="763.3" y1="306.0" y2="306.0" stroke="#3d6fb6" stroke-opacity="0.35"/>
+<circle cx="763.3" cy="306.0" r="4.2" fill="#3d6fb6"/>
+<text x="771.3" y="310" fill="#333" font-size="10">1.64e+03</text>
+<line x1="300" x2="761.9" y1="317.0" y2="317.0" stroke="#e08e2b" stroke-opacity="0.35"/>
+<circle cx="761.9" cy="317.0" r="4.2" fill="#e08e2b"/>
+<text x="769.9" y="321" fill="#333" font-size="10">1.62e+03</text>
+</svg>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="188" viewBox="0 0 920 188" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-gemm/ab-rows: new / old</text>
+<text x="16" y="44" fill="#555">min-of-rounds ratio, circle = median-of-round-minimums ratio, 6 rounds</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="741.1" y="72" width="71.2" height="66" fill="#eee"/>
+<line x1="517.8" x2="517.8" y1="72" y2="138" stroke="#ddd" stroke-width="1"/>
+<text x="517.8" y="154" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="776.7" x2="776.7" y1="72" y2="138" stroke="#222" stroke-width="1.5"/>
+<text x="776.7" y="154" text-anchor="middle" fill="#444">1x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">linear_lmhead_fwd</text>
+<rect x="523.3" y="81" width="253.4" height="13" fill="#2a9d8f"/>
+<circle cx="503.0" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="518.3" y="92" text-anchor="end" fill="#333">0.51</text>
+<text x="292" y="112" text-anchor="end" fill="#222">linear_lmhead_bwd</text>
+<rect x="759.2" y="101" width="17.5" height="13" fill="#9aa0a6"/>
+<circle cx="749.4" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="754.2" y="112" text-anchor="end" fill="#333">0.95</text>
+<text x="292" y="132" text-anchor="end" fill="#222">floor_silu_1</text>
+<rect x="767.1" y="121" width="9.5" height="13" fill="#9aa0a6"/>
+<circle cx="607.1" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="762.1" y="132" text-anchor="end" fill="#333">0.97</text>
+</svg>

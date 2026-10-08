@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="288" viewBox="0 0 920 288" font-family="Helvetica,Arial,sans-serif" font-size="12">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="16" y="24" font-size="15" font-weight="bold" fill="#111">2026-10-02-gate/ab-stage: new / old</text>
+<text x="16" y="44" fill="#555">min over 4 interleaved rounds per side; whisker = per-round new/old range, circle = median</text>
+<text x="16" y="62" fill="#555">Lower is faster. Grey band = within 10%. Hollow bar = run marked noisy. Whisker = per-round min..max.</text>
+<rect x="634.1" y="72" width="48.1" height="166" fill="#eee"/>
+<line x1="483.2" x2="483.2" y1="72" y2="238" stroke="#ddd" stroke-width="1"/>
+<text x="483.2" y="254" text-anchor="middle" fill="#444">0.5x</text>
+<line x1="658.1" x2="658.1" y1="72" y2="238" stroke="#222" stroke-width="1.5"/>
+<text x="658.1" y="254" text-anchor="middle" fill="#444">1x</text>
+<line x1="833.1" x2="833.1" y1="72" y2="238" stroke="#ddd" stroke-width="1"/>
+<text x="833.1" y="254" text-anchor="middle" fill="#444">2x</text>
+<text x="292" y="92" text-anchor="end" fill="#222">ojas_per_head_gate_dbias</text>
+<rect x="452.9" y="81" width="205.2" height="13" fill="#2a9d8f"/>
+<line x1="450.9" x2="465.3" y1="87.5" y2="87.5" stroke="#222" stroke-width="1"/>
+<line x1="450.9" x2="450.9" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<line x1="465.3" x2="465.3" y1="84.5" y2="90.5" stroke="#222" stroke-width="1"/>
+<circle cx="456.6" cy="87.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="445.9" y="92" text-anchor="end" fill="#333">0.44</text>
+<text x="292" y="112" text-anchor="end" fill="#222">whole backward, one command buffer</text>
+<rect x="627.3" y="101" width="30.8" height="13" fill="#2a9d8f"/>
+<line x1="627.3" x2="632.4" y1="107.5" y2="107.5" stroke="#222" stroke-width="1"/>
+<line x1="627.3" x2="627.3" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<line x1="632.4" x2="632.4" y1="104.5" y2="110.5" stroke="#222" stroke-width="1"/>
+<circle cx="630.5" cy="107.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="622.3" y="112" text-anchor="end" fill="#333">0.88</text>
+<text x="292" y="132" text-anchor="end" fill="#222">four standalone ojas_check_finite passes</text>
+<rect x="651.0" y="121" width="7.1" height="13" fill="#9aa0a6"/>
+<line x1="649.5" x2="669.5" y1="127.5" y2="127.5" stroke="#222" stroke-width="1"/>
+<line x1="649.5" x2="649.5" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<line x1="669.5" x2="669.5" y1="124.5" y2="130.5" stroke="#222" stroke-width="1"/>
+<circle cx="651.6" cy="127.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="644.5" y="132" text-anchor="end" fill="#333">0.97</text>
+<text x="292" y="152" text-anchor="end" fill="#222">nt pre = x · w^T (4096, 12, 768)</text>
+<rect x="656.1" y="141" width="2.0" height="13" fill="#9aa0a6"/>
+<line x1="653.4" x2="666.5" y1="147.5" y2="147.5" stroke="#222" stroke-width="1"/>
+<line x1="653.4" x2="653.4" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<line x1="666.5" x2="666.5" y1="144.5" y2="150.5" stroke="#222" stroke-width="1"/>
+<circle cx="660.3" cy="147.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="648.4" y="152" text-anchor="end" fill="#333">0.99</text>
+<text x="292" y="172" text-anchor="end" fill="#222">nn gx = d_pre · w (4096, 768, 12)</text>
+<rect x="657.9" y="161" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="648.8" x2="664.5" y1="167.5" y2="167.5" stroke="#222" stroke-width="1"/>
+<line x1="648.8" x2="648.8" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<line x1="664.5" x2="664.5" y1="164.5" y2="170.5" stroke="#222" stroke-width="1"/>
+<circle cx="653.6" cy="167.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="643.8" y="172" text-anchor="end" fill="#333">1.00</text>
+<text x="292" y="192" text-anchor="end" fill="#222">tessl scale_f32_inplace over attn (reference r</text>
+<rect x="658.1" y="181" width="1.0" height="13" fill="#9aa0a6"/>
+<line x1="656.2" x2="670.0" y1="187.5" y2="187.5" stroke="#222" stroke-width="1"/>
+<line x1="656.2" x2="656.2" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<line x1="670.0" x2="670.0" y1="184.5" y2="190.5" stroke="#222" stroke-width="1"/>
+<circle cx="658.6" cy="187.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="675.0" y="192" text-anchor="start" fill="#333">1.00</text>
+<text x="292" y="212" text-anchor="end" fill="#222">tn gw = d_pre^T · x (12, 768, 4096)</text>
+<rect x="658.1" y="201" width="13.6" height="13" fill="#9aa0a6"/>
+<line x1="656.4" x2="674.5" y1="207.5" y2="207.5" stroke="#222" stroke-width="1"/>
+<line x1="656.4" x2="656.4" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<line x1="674.5" x2="674.5" y1="204.5" y2="210.5" stroke="#222" stroke-width="1"/>
+<circle cx="660.1" cy="207.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="679.5" y="212" text-anchor="start" fill="#333">1.06</text>
+<text x="292" y="232" text-anchor="end" fill="#222">ojas_per_head_gate_bwd</text>
+<rect x="658.1" y="221" width="145.6" height="13" fill="#d1495b"/>
+<line x1="667.1" x2="803.7" y1="227.5" y2="227.5" stroke="#222" stroke-width="1"/>
+<line x1="667.1" x2="667.1" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<line x1="803.7" x2="803.7" y1="224.5" y2="230.5" stroke="#222" stroke-width="1"/>
+<circle cx="697.3" cy="227.5" r="3.2" fill="#fff" stroke="#222" stroke-width="1.2"/>
+<text x="808.7" y="232" text-anchor="start" fill="#333">1.78</text>
+</svg>
