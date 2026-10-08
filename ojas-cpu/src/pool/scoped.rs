@@ -200,8 +200,7 @@ where
             )));
         }
     }
-    let pieces = (len / min_chunk.max(1)).clamp(1, exec.pool.threads().saturating_mul(2));
-    let parts = ranges(len, pieces);
+    let parts = pieces(exec, len, min_chunk);
     let mut cuts = Vec::with_capacity(N);
     for (out, width) in outs.into_iter().zip(widths) {
         let end = out.len();
@@ -227,6 +226,15 @@ where
             .collect();
     }
     fill_parts(exec, slices, |i, part| task(parts[i].clone(), part))
+}
+
+/// The pieces [`chunks_into_n`] cuts items `0..len` into: at least
+/// `min_chunk` items each, at most two a thread, sizes differing by at most
+/// one. A read-only pass over the same items uses this cut to match a later
+/// write pass piece for piece.
+pub(crate) fn pieces(exec: Exec<'_>, len: usize, min_chunk: usize) -> Vec<Range<usize>> {
+    let count = (len / min_chunk.max(1)).clamp(1, exec.pool.threads().saturating_mul(2));
+    ranges(len, count)
 }
 
 /// Rows `0..rows` of `out` (`[rows, width]`), each task filling a chunk of

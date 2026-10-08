@@ -24,7 +24,8 @@ pub use autocast::{
     bf16_to_f32, f32_to_bf16, round_f32_to_bf16, Autocast, AutocastGuard, AutocastMode,
 };
 pub use backend::{
-    check_adamw, clip_scale, next_step, pow_u64, refuse_bf16_operands, refuse_unsupported_metal_gdn,
+    broadcast_scalar, check_adamw, clip_scale, next_step, pow_u64, refuse_bf16_operands,
+    refuse_unsupported_metal_gdn,
     refuse_unsupported_metal_head_dim, require_ns5, sdpa_scale, AdamWConfig, Backend, BackendId,
     CeChunk, GatedRmsGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision,
     Numerics, OptimizerKind, PerHeadGateGrad, ValueResidualGrad, ADAMW_BETA1, ADAMW_BETA2,

@@ -815,22 +815,23 @@ unsafe fn transpose_8x8_block(src: *const f32, dst: *mut f32) {
     }
 }
 
-/// 768-wide embedding row. Twelve `ldp`/`stnp` pairs of 64 floats.
+/// Floats one pass of [`store_row_blocks`] moves.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-const EMBED_ROW_FLOATS: usize = 768;
+const EMBED_BLOCK_FLOATS: usize = 64;
 
 /// # Safety
 ///
-/// Neon must be available. `src` must be readable for 768 floats and `dst`
-/// writable for 768. The ranges must not overlap. `stnp` of a `q` pair
-/// keeps the non-temporal hint when `dst` is 32-byte aligned; a 16-byte
-/// aligned address still stores every lane.
+/// Neon must be available. `blocks` must be at least 1. `src` must be
+/// readable for `blocks * 64` floats and `dst` writable for as many. The
+/// ranges must not overlap. `stnp` of a `q` pair keeps the non-temporal
+/// hint when `dst` is 32-byte aligned; a 16-byte aligned address still
+/// stores every lane.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
-unsafe fn store_row_768(src: *const f32, dst: *mut f32) {
-    // SAFETY: `blocks` starts at 12. Each pass reads and writes 64 floats
-    // (256 bytes) and then advances both pointers by that many bytes.
-    // Twelve passes cover 768 floats and stop on the exact end. Neon is a
+unsafe fn store_row_blocks(src: *const f32, dst: *mut f32, blocks: usize) {
+    // SAFETY: `blocks` is at least 1. Each pass reads and writes 64 floats
+    // (256 bytes) and then advances both pointers by that many bytes, so
+    // `blocks` passes cover the row and stop on its exact end. Neon is a
     // baseline feature of this target, so the `q` registers are available
     // without a separate `target_feature` gate.
     unsafe {
@@ -858,7 +859,7 @@ unsafe fn store_row_768(src: *const f32, dst: *mut f32) {
             "b.ne 2b",
             src = inout(reg) src => _,
             dst = inout(reg) dst => _,
-            blocks = inout(reg) EMBED_ROW_FLOATS / 64 => _,
+            blocks = inout(reg) blocks => _,
             out("v0") _,
             out("v1") _,
             options(nostack),
@@ -866,30 +867,29 @@ unsafe fn store_row_768(src: *const f32, dst: *mut f32) {
     }
 }
 
-/// Each row is loaded with `ldp` and stored with `stnp`. Nothing is written
-/// before the first `stnp`, and `dst`'s length grows only after every row
-/// is stored. Bits are unchanged, including −0.
+/// Each row is loaded with `ldp` and stored with `stnp`, 64 floats a
+/// pass. Nothing is written before the first `stnp`, and `dst`'s length
+/// grows only after every row is stored. Bits are unchanged, including −0.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-pub(crate) fn gather_embedding_rows_768(table: &[f32], ids: &[u32], dst: &mut Vec<f32>) {
-    let n = ids.len() * EMBED_ROW_FLOATS;
-    debug_assert!(n == 0 || table.len().is_multiple_of(EMBED_ROW_FLOATS));
+pub(crate) fn gather_embedding_rows(table: &[f32], row: usize, ids: &[u32], dst: &mut Vec<f32>) {
+    let n = ids.len() * row;
+    debug_assert!(row > 0 && row.is_multiple_of(EMBED_BLOCK_FLOATS));
+    debug_assert!(n == 0 || table.len().is_multiple_of(row));
     debug_assert!(dst.capacity() - dst.len() >= n);
     if n == 0 {
         return;
     }
+    let blocks = row / EMBED_BLOCK_FLOATS;
     let dest = dst.spare_capacity_mut().as_mut_ptr().cast::<f32>();
     let base = table.as_ptr();
-    // SAFETY: the public wrapper checked the source span, every id, the
-    // spare capacity, and that those ranges do not overlap. Each
-    // `store_row_768` writes 768 initialized `f32`s. This does not
-    // reallocate between those stores and `set_len`. Neon is a baseline
-    // feature of this target. Every bit pattern is a valid `f32`.
+    // SAFETY: the public wrapper checked the row width, the source span,
+    // every id, the spare capacity, and that those ranges do not overlap.
+    // Each `store_row_blocks` writes `row` initialized `f32`s. This does
+    // not reallocate between those stores and `set_len`. Neon is a
+    // baseline feature of this target. Every bit pattern is a valid `f32`.
     unsafe {
         for (i, &id) in ids.iter().enumerate() {
-            store_row_768(
-                base.add(id as usize * EMBED_ROW_FLOATS),
-                dest.add(i * EMBED_ROW_FLOATS),
-            );
+            store_row_blocks(base.add(id as usize * row), dest.add(i * row), blocks);
         }
         dst.set_len(dst.len() + n);
     }

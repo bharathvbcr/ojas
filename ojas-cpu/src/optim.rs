@@ -41,7 +41,7 @@ use ojas_core::{
 
 use std::sync::Mutex;
 
-use crate::gemm::{gemm, gemm_out, scratch as gemm_scratch, whole_call, Mat};
+use crate::gemm::{gemm_out, scratch as gemm_scratch, whole_call, Mat};
 use crate::linalg::transpose;
 use crate::pool::Exec;
 use crate::pool::{self, scoped};
@@ -612,6 +612,21 @@ where
     Ok(out)
 }
 
+/// `b[i] = f(a[i], b[i])` in place, in [`zip_map`]'s cut.
+fn zip_into<F>(exec: Exec<'_>, a: &[f32], b: &mut [f32], f: F) -> Result<(), OjasError>
+where
+    F: Fn(f32, f32) -> f32 + Sync,
+{
+    let len = a.len().min(b.len());
+    scoped::rows_into(exec, &mut b[..len], len, 1, |range, dst| {
+        for (slot, &x) in dst.iter_mut().zip(&a[range]) {
+            *slot = f(x, *slot);
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
 fn non_negative(op: &'static str, scalars: &[(&str, f64)]) -> Result<(), OjasError> {
     match scalars.iter().find(|(_, value)| *value < 0.0) {
         Some((name, value)) => Err(OjasError::OutOfRange {
@@ -734,8 +749,8 @@ const MUON_ROW_BANDS: usize = 6;
 /// do not depend on the tiling. Bands there would nest a second set of
 /// spawned threads, each packing into its own buffer that
 /// [`crate::gemm::scratch`] (and so [`muon_scratch`]) does not count, so
-/// every product stays one [`gemm`] call.
-fn ns_gemm(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>) -> Result<Vec<f32>, OjasError> {
+/// every product stays one [`crate::gemm::gemm`] call.
+fn ns_gemm_out(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>, c: &mut [f32]) -> Result<(), OjasError> {
     const OP: &str = "muon_ns5_step";
     let (m, k, n) = (a.rows, a.cols, b.cols);
     let rhs_trans = b.rows > 1 && b.cols > 1 && b.rs == 1 && b.cs != 1;
@@ -752,13 +767,15 @@ fn ns_gemm(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>) -> Result<Vec<f32>, OjasError
         1
     };
     if bands <= 1 {
-        return gemm(OP, exec, &a, &b);
+        return gemm_out(OP, exec, &a, &b, c);
     }
     let len = product(OP, &[m, n])?;
-    let mut c = vec![0.0f32; len];
+    if c.len() != len {
+        return Err(shape(OP, "muon gemm output length differs"));
+    }
     let rows = pool::ranges(m, bands);
     let lens: Vec<usize> = rows.iter().map(|band| band.len() * n).collect();
-    let parts = scoped::cut(&mut c, &lens)?;
+    let parts = scoped::cut(c, &lens)?;
     let jobs: Vec<_> = rows.into_iter().zip(parts).collect();
     scoped::fill_parts(exec, jobs, |_, (band, part)| {
         let start = band
@@ -777,7 +794,7 @@ fn ns_gemm(exec: Exec<'_>, a: Mat<'_>, b: Mat<'_>) -> Result<Vec<f32>, OjasError
         };
         gemm_out(OP, exec, &a_band, &b, part)
     })?;
-    Ok(c)
+    Ok(())
 }
 
 /// Round every value to bf16 where it is ([`Ns5Precision::Bf16`]), in
@@ -869,6 +886,16 @@ fn newton_schulz(
     // right-hand band split). Square 768 and tall 3072×768 stay on that
     // function's band loop.
     let one_cblas = (transposed || view) && r == 768 && c == 2048;
+    // The five products and combinations of a step reuse three buffers made
+    // once per call (before 2026-10-07 each step allocated five): `A` (r×r),
+    // `A²` (r×r), which `B = b A + c A²` then overwrites, and `B X` (the
+    // iterate's size), which `a X + B X` then overwrites before it trades
+    // places with `X`. Each value is the same single expression as before,
+    // so no bit changes.
+    let sq = product(OP, &[r, r])?;
+    let mut am = vec![0.0f32; sq];
+    let mut a2 = vec![0.0f32; sq];
+    let mut bx = vec![0.0f32; x.len()];
     for _ in 0..5 {
         let xm = if view {
             Mat::row_major(&x, c, r).t()
@@ -876,59 +903,56 @@ fn newton_schulz(
             Mat::row_major(&x, r, c)
         };
         let xmt = xm.t();
-        let mut am = if view {
-            gemm(OP, exec, &xm, &xmt)?
+        if view {
+            gemm_out(OP, exec, &xm, &xmt, &mut am)?;
         } else {
-            ns_gemm(exec, xm, xmt)?
-        };
+            ns_gemm_out(exec, xm, xmt, &mut am)?;
+        }
         if bf16 {
             round_bf16_in_place(exec, &mut am)?;
         }
         let a_mat = Mat::row_major(&am, r, r);
-        let mut a2 = if one_cblas {
-            gemm(OP, exec, &a_mat, &a_mat)?
+        if one_cblas {
+            gemm_out(OP, exec, &a_mat, &a_mat, &mut a2)?;
         } else {
-            ns_gemm(exec, a_mat, a_mat)?
-        };
-        let b_mat = if bf16 {
+            ns_gemm_out(exec, a_mat, a_mat, &mut a2)?;
+        }
+        if bf16 {
             round_bf16_in_place(exec, &mut a2)?;
-            zip_map(exec, &am, &a2, |am, a2v| {
+            zip_into(exec, &am, &mut a2, |am, a2v| {
                 let r = round_f32_to_bf16;
                 r(r(b_coef * am) + r(c_coef * a2v))
-            })?
+            })?;
         } else {
-            zip_map(exec, &am, &a2, |am, a2v| b_coef * am + c_coef * a2v)?
-        };
-        // Each intermediate is freed as soon as its last reader is done:
-        // `muon_scratch` counts them that way.
-        drop(a2);
-        let mut bx = if view {
+            zip_into(exec, &am, &mut a2, |am, a2v| b_coef * am + c_coef * a2v)?;
+        }
+        let b_mat = &a2;
+        if view {
             let sm = Mat::row_major(&x, c, r);
-            let bt = Mat::row_major(&b_mat, r, r).t();
-            gemm(OP, exec, &sm, &bt)?
+            let bt = Mat::row_major(b_mat, r, r).t();
+            gemm_out(OP, exec, &sm, &bt, &mut bx)?;
         } else if one_cblas {
-            let bm = Mat::row_major(&b_mat, r, r);
-            gemm(OP, exec, &bm, &xm)?
+            let bm = Mat::row_major(b_mat, r, r);
+            gemm_out(OP, exec, &bm, &xm, &mut bx)?;
         } else {
-            let bm = Mat::row_major(&b_mat, r, r);
-            ns_gemm(exec, bm, xm)?
-        };
-        drop(b_mat);
-        let next = if bf16 {
+            let bm = Mat::row_major(b_mat, r, r);
+            ns_gemm_out(exec, bm, xm, &mut bx)?;
+        }
+        if bf16 {
             round_bf16_in_place(exec, &mut bx)?;
-            zip_map(exec, &x, &bx, |xv, bxv| {
+            zip_into(exec, &x, &mut bx, |xv, bxv| {
                 let r = round_f32_to_bf16;
                 r(r(a * xv) + bxv)
-            })?
+            })?;
         } else {
-            zip_map(exec, &x, &bx, |xv, bxv| a * xv + bxv)?
-        };
-        drop(bx);
-        if !all_finite(&next) {
+            zip_into(exec, &x, &mut bx, |xv, bxv| a * xv + bxv)?;
+        }
+        if !all_finite(&bx) {
             return Err(nonfinite(OP));
         }
-        x = next;
+        std::mem::swap(&mut x, &mut bx);
     }
+    drop((am, a2, bx));
     if transposed {
         x = transpose(OP, &x, r, c)?;
     }
@@ -946,12 +970,10 @@ fn newton_schulz(
 /// - `buf`: parts and result, `2L`;
 /// - Nesterov `update`: `buf`, parts, result, `3L` (else `buf.to_vec()`, `2L`);
 /// - a tall matrix is transposed into the iterate before `update` drops, `3L`;
-/// - each Newton-Schulz step, with `buf` and the iterate `x` (`2L`) live:
-///   `A = x xᵀ`: `+ R + S(r, c, r)`;
-///   `A²`: `+ 2R + S(r, r, r)`;
-///   `B = b A + c A²`: `A`, `A²`, parts, result, `+ 4R`;
-///   `B x`: `A`, `B`, result, `+ 2R + L + S(r, r, c)`;
-///   `a x + B x`: `A`, `B x`, parts, result, `+ R + 3L`;
+/// - each Newton-Schulz step, with `buf`, the iterate `x` and the three
+///   buffers the steps reuse (`B x`, `L`; `A` and `A²`, `2R`) live, `3L + 2R`,
+///   plus a product's packing: `A = x xᵀ` `S(r, c, r)`, `A²` `S(r, r, r)`,
+///   `B x` `S(r, r, c)`; `B` and `a x + B x` are written over `A²` and `B x`;
 /// - the tall result transposed back, `3L`;
 /// - the new parameter: `buf`, the orthogonalized update, parts, result, `4L`.
 ///
@@ -975,11 +997,9 @@ pub(crate) fn muon_scratch(
     let (l2, l3, l4) = (times(l, 2)?, times(l, 3)?, times(l, 4)?);
     let phases = [
         l3,
-        sum(&[l2, sq, gemm_scratch(op, exec, r, c, r)?])?,
-        sum(&[l2, times(sq, 2)?, gemm_scratch(op, exec, r, r, r)?])?,
-        sum(&[l2, times(sq, 4)?])?,
+        sum(&[l3, times(sq, 2)?, gemm_scratch(op, exec, r, c, r)?])?,
+        sum(&[l3, times(sq, 2)?, gemm_scratch(op, exec, r, r, r)?])?,
         sum(&[l3, times(sq, 2)?, gemm_scratch(op, exec, r, r, c)?])?,
-        sum(&[l2, sq, l3])?,
         l4,
     ];
     Ok(phases.into_iter().max().unwrap_or(0))

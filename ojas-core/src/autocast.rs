@@ -961,10 +961,28 @@ impl<B: Backend> Backend for Autocast<B> {
         self.inner.sync()
     }
 
+    /// Outside a region, or for an operand not tagged bf16, the inner sum,
+    /// recorded f32 (a trainer's micro-batch accumulators, which it adds
+    /// with the region closed). Inside a region two bf16-tagged gradients
+    /// add as [`Backend::residual_add_forward`] does here, the sum rounded:
+    /// that is a tape's gradient fan-in, which composed that op until
+    /// 2026-10-07 and keeps its bits.
     fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-        self.pass()?;
+        let on = self.region()?;
+        if on && acc.compute_tag() == COMPUTE_BF16 && grad.compute_tag() == COMPUTE_BF16 {
+            crate::accumulate_grad_dims(acc, grad)?;
+            *acc = self.residual_add_forward(acc, grad)?;
+            return Ok(());
+        }
         self.inner.accumulate_grad(acc, grad)?;
         self.wrote(acc);
+        Ok(())
+    }
+
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        self.pass()?;
+        self.inner.scale_grad(grad, scale)?;
+        self.wrote(grad);
         Ok(())
     }
 
@@ -2183,7 +2201,7 @@ mod tests {
         };
         let wrapped = Autocast::new(&inner);
         let checked = every_call_reaches_except(&wrapped, &inner, &["autocast_region"]);
-        assert_eq!(checked, 51);
+        assert_eq!(checked, 52);
     }
 
     #[test]

@@ -244,17 +244,19 @@ impl Gather {
 }
 
 impl Runs {
-    /// Fast macOS, rank 4, more than one row of 64 strided floats.
+    /// Fast macOS, rank 4, more than one row of at least 64 strided floats.
     ///
-    /// Each head is `inner_extent` rows of 64 columns. The source row stride
-    /// is `inner_step` and the destination row stride is 64. Head `mid`
-    /// starts at `mid * mid_step`, so the heads are not one matrix. One
-    /// `vDSP_mmov` per head, except [`Self::nanolab_pairs`].
+    /// Each head is `inner_extent` rows of `run` columns. The source row
+    /// stride is `inner_step` and the destination row stride is `run`. Head
+    /// `mid` starts at `mid * mid_step`, so the heads are not one matrix. One
+    /// `vDSP_mmov` per head, except [`Self::nanolab_pairs`]. Until 2026-10-07
+    /// only a 64-float run (nanolab's head dim) took this path; Qwen3.5's
+    /// head dim of 256 now does too (`bench/results/2026-10-07-cpu-hot-paths`).
     #[cfg(target_os = "macos")]
     fn use_mmov(&self, numerics: Numerics) -> bool {
         numerics == Numerics::Fast
             && self.rank == 4
-            && self.run == 64
+            && self.run >= 64
             && self.inner_extent > 1
             && self.inner_step > self.run
     }

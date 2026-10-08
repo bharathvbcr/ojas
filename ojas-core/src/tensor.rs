@@ -721,6 +721,16 @@ impl Tensor {
         self.dtype
     }
 
+    /// Whether another handle (a clone, or a view of the same allocation)
+    /// holds this tensor's storage, on the host or a device. An in-place
+    /// write to a shared tensor is refused ([`Tensor::f32_slice_mut`],
+    /// [`Tensor::device_buffer_mut`]), so a caller that wants to write picks
+    /// a handle for which this is false. `true` can go stale when the other
+    /// handles drop; `false` holds until this handle is cloned or viewed.
+    pub fn shares_allocation(&self) -> bool {
+        Arc::strong_count(&self.storage) > 1
+    }
+
     /// [`COMPUTE_F32`] or [`COMPUTE_BF16`]. Views of one allocation agree.
     pub(crate) fn compute_tag(&self) -> u8 {
         self.storage.compute.load(Ordering::Acquire)

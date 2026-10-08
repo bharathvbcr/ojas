@@ -325,6 +325,167 @@ fn bits_do_not_depend_on_the_thread_count() {
     assert_eq!(run(1), run(6));
 }
 
+/// The CPU's f32 sigmoid, as `pointwise::sigmoid` writes it.
+fn sigmoid32(x: f32) -> f32 {
+    if x >= 0.0 {
+        let z = ojas_core::exp_exact(-x);
+        1.0 / (1.0 + z)
+    } else {
+        let z = ojas_core::exp_exact(x);
+        z / (1.0 + z)
+    }
+}
+
+fn silu_slope32(a: f32) -> (f32, f32) {
+    let s = sigmoid32(a);
+    (a * s, s * (1.0 + a * (1.0 - s)))
+}
+
+/// The conv1d backward as one serial loop nest, the order every sum took
+/// before the passes were split across threads (2026-10-07).
+fn conv_bwd_serial(x: &[f32], w: &[f32], gy: &[f32], dims: [usize; 4]) -> (Vec<f32>, Vec<f32>) {
+    let [batch, time, ch, k] = dims;
+    let pre = |b: usize, t: usize, c: usize| {
+        let mut acc = 0.0f32;
+        for j in 0..k {
+            if let Some(src) = (t + j).checked_sub(k - 1) {
+                acc += w[c * k + j] * x[(b * time + src) * ch + c];
+            }
+        }
+        acc
+    };
+    let mut da = vec![0.0f32; x.len()];
+    for b in 0..batch {
+        for t in 0..time {
+            for c in 0..ch {
+                let at = (b * time + t) * ch + c;
+                da[at] = gy[at] * silu_slope32(pre(b, t, c)).1;
+            }
+        }
+    }
+    let mut gx = vec![0.0f32; x.len()];
+    for b in 0..batch {
+        for s in 0..time {
+            for c in 0..ch {
+                let mut acc = 0.0f32;
+                for j in 0..k {
+                    let t = s + (k - 1) - j;
+                    if t < time {
+                        acc += w[c * k + j] * da[(b * time + t) * ch + c];
+                    }
+                }
+                gx[(b * time + s) * ch + c] = acc;
+            }
+        }
+    }
+    let mut gw = vec![0.0f32; ch * k];
+    for c in 0..ch {
+        for j in 0..k {
+            let mut acc = 0.0f32;
+            for b in 0..batch {
+                for t in 0..time {
+                    if let Some(src) = (t + j).checked_sub(k - 1) {
+                        acc += da[(b * time + t) * ch + c] * x[(b * time + src) * ch + c];
+                    }
+                }
+            }
+            gw[c * k + j] = acc;
+        }
+    }
+    (gx, gw)
+}
+
+/// The gated RMSNorm backward as one serial row loop, the order every sum
+/// took before the passes were split across threads (2026-10-07).
+fn gated_bwd_serial(
+    x: &[f32],
+    z: &[f32],
+    w: &[f32],
+    gy: &[f32],
+    dim: usize,
+    eps: f32,
+) -> [Vec<f32>; 3] {
+    let (mut gx, mut gz, mut gw) = (vec![0.0; x.len()], vec![0.0; x.len()], vec![0.0; dim]);
+    for row in 0..x.len() / dim {
+        let span = row * dim..(row + 1) * dim;
+        let (xs, zs, gs) = (&x[span.clone()], &z[span.clone()], &gy[span.clone()]);
+        let mut sum_sq = 0.0f32;
+        for &v in xs {
+            sum_sq += v * v;
+        }
+        let r = 1.0 / (sum_sq / dim as f32 + eps).sqrt();
+        let each = || xs.iter().zip(zs).zip(gs).zip(w);
+        let mut dot = 0.0f32;
+        for (((&xv, &zv), &gv), &wv) in each() {
+            let dn = (gv * wv) * silu_slope32(zv).0;
+            dot += dn * (xv * r);
+        }
+        let mean = dot / dim as f32;
+        let outs = gx[span.clone()].iter_mut().zip(&mut gz[span]).zip(&mut gw);
+        for ((((&xv, &zv), &gv), &wv), ((dx, dz), dw)) in each().zip(outs) {
+            let n = xv * r;
+            let (g, slope) = silu_slope32(zv);
+            let dn = (gv * wv) * g;
+            *dx = r * (dn - n * mean);
+            *dz = ((gv * wv) * n) * slope;
+            *dw += (gv * n) * g;
+        }
+    }
+    [gx, gz, gw]
+}
+
+/// Shapes large enough that every pass is cut into several pieces (rows,
+/// conv channels, norm columns), at 1, 3 and 6 threads: each output equals
+/// the serial loop nest bit for bit.
+#[test]
+fn split_backward_passes_match_the_serial_loops_bit_for_bit() {
+    let (batch, time, ch, k) = (2usize, 512usize, 96usize, 4usize);
+    let n = batch * time * ch;
+    let x = f32s(&vals(31, n, -2.0, 2.0));
+    let w = f32s(&vals(32, ch * k, -1.0, 1.0));
+    let gy = f32s(&vals(33, n, -1.0, 1.0));
+    let (want_gx, want_gw) = conv_bwd_serial(&x, &w, &gy, [batch, time, ch, k]);
+    let (rows, dim) = (4096usize, 32usize);
+    let nx = f32s(&vals(34, rows * dim, -2.0, 2.0));
+    let nz = f32s(&vals(35, rows * dim, -2.0, 2.0));
+    let nw = f32s(&vals(36, dim, 0.5, 1.5));
+    let ng = f32s(&vals(37, rows * dim, -1.0, 1.0));
+    let want_norm = gated_bwd_serial(&nx, &nz, &nw, &ng, dim, 1e-6);
+    for threads in [1, 3, 6] {
+        for numerics in [Numerics::Exact, Numerics::Fast] {
+            let be = cpu(threads, numerics);
+            let f = |v: &[f32], shape: &[usize]| {
+                Tensor::from_f32(v, shape, be.budget()).unwrap()
+            };
+            let (gx, gw) = be
+                .causal_conv1d_silu_backward(
+                    &f(&x, &[batch, time, ch]),
+                    &f(&w, &[ch, k]),
+                    &f(&gy, &[batch, time, ch]),
+                )
+                .unwrap();
+            assert_eq!(bits(&host(&gx)), bits(&want_gx), "conv gx, {threads} threads");
+            assert_eq!(bits(&host(&gw)), bits(&want_gw), "conv gw, {threads} threads");
+            let g = be
+                .gated_rms_norm_backward(
+                    &f(&nx, &[rows, dim]),
+                    &f(&nz, &[rows, dim]),
+                    &f(&nw, &[dim]),
+                    &f(&ng, &[rows, dim]),
+                    1e-6,
+                )
+                .unwrap();
+            for (name, got, want) in [
+                ("dx", &g.input, &want_norm[0]),
+                ("dz", &g.gate, &want_norm[1]),
+                ("dw", &g.weight, &want_norm[2]),
+            ] {
+                assert_eq!(bits(&host(got)), bits(want), "{name}, {threads} threads");
+            }
+        }
+    }
+}
+
 /// Shapes are refused by the `ojas_core::shapes` validators with nothing
 /// charged; a NaN is refused; an output with no room is CapacityExceeded.
 #[test]
