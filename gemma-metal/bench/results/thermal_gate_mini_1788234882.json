@@ -1,0 +1,162 @@
+{
+  "artifact": "thermal_gate",
+  "attribution": "no decline, and no OS thermal pressure (peak fair)",
+  "batch": 16,
+  "best_tok_s": 52.03939745548032,
+  "burst_tok_s_reference": 56.84094453741462,
+  "config": {
+    "duration_secs": 24.0,
+    "floor_tok_s": null,
+    "max_batch": 58,
+    "max_cv": 0.09,
+    "max_rss_growth_mib": 512.0,
+    "min_rolling_ratio": 0.85,
+    "min_sustained_ratio": 0.9,
+    "min_windows": 8,
+    "warmup_secs": 4.0,
+    "window_secs": 2.0
+  },
+  "cv": 0.017025837412096963,
+  "dropped_partial_windows": 0,
+  "graph": "vocab=512 hidden=256 layers=3",
+  "head_tok_s": 50.76093052804072,
+  "host": "Apple M5 Pro / macOS 27.0",
+  "label": "mini",
+  "low_power_any": false,
+  "mean_tok_s": 50.927368118595396,
+  "measured_secs": 24.191314916000007,
+  "model": "mini_synth",
+  "notes": [
+    "Sustained-load gate: continuous decode chopped into fixed windows.",
+    "sustained_ratio = median(last third) / median(first third) — directional.",
+    "cv = population sd / mean over window rates — dispersion; high cv turns a stable-looking run into SKIPPED, never PASS, but never excuses a low sustained_ratio.",
+    "rolling_ratio = min(2-window means) / median(2-window means): one stall cannot fail the run, and the statistic does not drift with run length the way a min/max would. worst_ratio is raw single-window data only.",
+    "throughput_state is DERIVED FROM THROUGHPUT; peak_thermal_state is the OS's own NSProcessInfo.thermalState reading. `attribution` combines them and is advisory: it never changes the verdict.",
+    "SKIPPED and ERROR are not passes; passed=true only for verdict=PASS."
+  ],
+  "passed": true,
+  "peak_thermal_state": "fair",
+  "rolling_ratio": 0.9736483691967468,
+  "rss_growth_mib": 0.015625,
+  "sustained_ratio": 1.0219823394775542,
+  "tail_tok_s": 51.87677453510465,
+  "throughput_state": "stable",
+  "total_tokens": 1232,
+  "unix_ts": 1788234882,
+  "verdict": "PASS",
+  "verdict_detail": "",
+  "windows": [
+    {
+      "index": 0,
+      "load_avg": 10.24,
+      "low_power": false,
+      "rss_mib": 39.5,
+      "secs": 2.206421333,
+      "thermal_state": "fair",
+      "tok_s": 50.76093052804072,
+      "tokens": 112
+    },
+    {
+      "index": 1,
+      "load_avg": 10.24,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.184294125,
+      "thermal_state": "fair",
+      "tok_s": 51.275145923857664,
+      "tokens": 112
+    },
+    {
+      "index": 2,
+      "load_avg": 10.46,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.222746583,
+      "thermal_state": "fair",
+      "tok_s": 50.38811030308082,
+      "tokens": 112
+    },
+    {
+      "index": 3,
+      "load_avg": 10.46,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.285618584,
+      "thermal_state": "fair",
+      "tok_s": 49.002051691403295,
+      "tokens": 112
+    },
+    {
+      "index": 4,
+      "load_avg": 9.7,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.18370325,
+      "thermal_state": "fair",
+      "tok_s": 51.28902015418074,
+      "tokens": 112
+    },
+    {
+      "index": 5,
+      "load_avg": 9.7,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.22623725,
+      "thermal_state": "fair",
+      "tok_s": 50.30910339857084,
+      "tokens": 112
+    },
+    {
+      "index": 6,
+      "load_avg": 9.7,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.159824625,
+      "thermal_state": "fair",
+      "tok_s": 51.856062155972495,
+      "tokens": 112
+    },
+    {
+      "index": 7,
+      "load_avg": 9.89,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.1823215830000002,
+      "thermal_state": "fair",
+      "tok_s": 51.321492154256894,
+      "tokens": 112
+    },
+    {
+      "index": 8,
+      "load_avg": 9.89,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.158962291,
+      "thermal_state": "fair",
+      "tok_s": 51.87677453510465,
+      "tokens": 112
+    },
+    {
+      "index": 9,
+      "load_avg": 10.05,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.22896975,
+      "thermal_state": "fair",
+      "tok_s": 50.24742933366413,
+      "tokens": 112
+    },
+    {
+      "index": 10,
+      "load_avg": 10.05,
+      "low_power": false,
+      "rss_mib": 39.515625,
+      "secs": 2.152215542,
+      "thermal_state": "fair",
+      "tok_s": 52.03939745548032,
+      "tokens": 112
+    }
+  ],
+  "worst_ratio": 0.941633725358264,
+  "worst_tok_s": 49.002051691403295
+}

@@ -1,0 +1,13 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f",
+  "lane": "honest-partial",
+  "layers": 42,
+  "hidden": 2560,
+  "vocab": 262144,
+  "decode_tok_s": 4.6326,
+  "ttft_ms": 801.78,
+  "decode_steps": 16,
+  "notes": "simd fuse gate_up_gelu + gemv_add residual; SIMD_ROWS=8; BlockedBn off; PLE residual on gate/proj skip; ~24 tok/s vs mlx~75.7 / gate 48-60; mid-commit off"
+}

@@ -1,0 +1,69 @@
+{
+  "created_at": "2026-07-13T17:09:28.944899+00:00",
+  "host": {
+    "cpu": "Apple M5 Pro",
+    "mem_gb": 64.0
+  },
+  "pins": {
+    "num_ctx": 4096,
+    "max_tokens": 128,
+    "temperature": 0.0,
+    "think": false
+  },
+  "missing": [
+    "LiteRT-LM",
+    "BaseRT",
+    "MTP (no draft/LiteRT)",
+    "mlx-lm 31B weights (not downloaded)"
+  ],
+  "measurements": [
+    {
+      "backend": "ollama",
+      "model": "gemma4:31b-mlx",
+      "prompt_id": "decode_pad",
+      "decode_tok_s": 12.27,
+      "ttft_ms": 426,
+      "prefill_tok_s": 215.5,
+      "rss_mb": 5271,
+      "artifact": "run_20260713_100106_ollama.json"
+    },
+    {
+      "backend": "ollama",
+      "model": "gemma4:e4b-it-q4_K_M",
+      "prompt_id": "decode_pad",
+      "decode_tok_s": 55.79,
+      "ttft_ms": 331,
+      "prefill_tok_s": 377.0,
+      "rss_mb": 10183,
+      "artifact": "run_20260713_100745_ollama.json"
+    },
+    {
+      "backend": "mlx_lm",
+      "model": "mlx-community/gemma-4-e4b-it-4bit",
+      "prompt_id": "mlx_benchmark",
+      "decode_tok_s": 75.718,
+      "prefill_tok_s": 1966.868,
+      "peak_memory_gb": 4.458,
+      "artifact": "mlx_e4b_benchmark_raw.txt"
+    },
+    {
+      "backend": "mlx_lm",
+      "model": "mlx-community/gemma-4-e4b-it-4bit",
+      "prompt_id": "generate",
+      "decode_tok_s": 76.253,
+      "prefill_tok_s": 313.133,
+      "peak_memory_gb": 4.302,
+      "artifact": "mlx_e4b_generate_raw.txt"
+    }
+  ],
+  "locked_targets": {
+    "e4b_q4_decode_tok_s": "48-60",
+    "e4b_q4_mtp_tok_s": "90-110",
+    "b31_q4_decode_tok_s": 15,
+    "b31_q4_mtp_tok_s": 25
+  },
+  "phase0_best": {
+    "e4b_decode_tok_s": 75.72,
+    "b31_decode_tok_s": 12.27
+  }
+}

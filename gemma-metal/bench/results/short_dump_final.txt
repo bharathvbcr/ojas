@@ -1,0 +1,19 @@
+short-dump dir=/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f
+target_next_argmax=531 (mlx golden 531) t=4
+L0: native sum=98.0957 absmean=0.211698 first8=[-0.04808, -0.0276, 0.00979, 0.12091, -0.07578, -0.09179, 0.20675, -0.09133]
+     mlx sum=97.6229 absmean=0.211965 first8_close=true absmean_close=true
+L1: native sum=-65.0098 absmean=0.167825 first8=[-0.00087, -0.00271, 0.00034, 0.00744, -0.00243, -0.00696, 0.01419, -0.00588]
+     mlx sum=-65.4924 absmean=0.167847 first8_close=true absmean_close=true
+L2: native sum=-52.1394 absmean=0.175129 first8=[0.00205, 0.00019, -0.00267, 0.01146, -0.00092, 0.00238, 0.01135, -0.00062]
+     mlx sum=-53.1320 absmean=0.175145 first8_close=true absmean_close=true
+L12: native sum=-64.6463 absmean=0.372241 first8=[-0.01975, 0.00787, 0.00082, -0.0042, -0.00249, -0.00718, -0.01493, -0.00609]
+     mlx sum=-65.0047 absmean=0.371683 first8_close=true absmean_close=true
+L23: native sum=135.3017 absmean=0.404576 first8=[0.29485, -0.01153, -0.11786, 0.00868, 0.16125, -0.00164, 0.15923, -0.02444]
+     mlx sum=136.8203 absmean=0.404288 first8_close=true absmean_close=true
+L35: native sum=351.0986 absmean=1.267766 first8=[0.70733, 1.34289, -3.39908, -1.51004, -1.91174, -0.03383, 0.75305, -3.44016]
+     mlx sum=353.5899 absmean=1.266726 first8_close=false absmean_close=true
+L46: native sum=19.7666 absmean=1.255898 first8=[0.66317, -1.61102, -3.9184, -2.29035, 0.20764, -1.61465, 1.1884, -2.36306]
+     mlx sum=17.1704 absmean=1.255302 first8_close=true absmean_close=true
+L57: native sum=143.9405 absmean=0.874437 first8=[1.47014, -1.63827, -1.71527, -0.79758, -0.73441, -1.42975, 1.83049, 0.4056]
+     mlx sum=139.9042 absmean=0.904890 first8_close=false absmean_close=true
+logits finite=true nan=0 min=-48.8246 max=22.7868

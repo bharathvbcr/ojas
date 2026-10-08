@@ -1,0 +1,6 @@
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running `target/release/bench --e4b`
+encode_once: DecodeIcb layer-graph attached (decode_icb cmds=71 layer_graph=true encoded=true optimized=false executes=0 sticky_buf=17/427 prebuilt=0/0 freeze=true last_setAddress=0/0 last_setArgTable=0 elided=0 last_execute_icb=0/0)
+encode_once: scalar-write tape ops=191 (skip-nop replay)
+encode_once: DecodeIcb layer-graph attached (decode_icb cmds=594 layer_graph=true encoded=true optimized=false executes=0 sticky_buf=106/5003 prebuilt=0/0 freeze=true last_setAddress=0/0 last_setArgTable=0 elided=0 last_execute_icb=0/0)
+encode_once: scalar-write tape ops=2361 (skip-nop replay)

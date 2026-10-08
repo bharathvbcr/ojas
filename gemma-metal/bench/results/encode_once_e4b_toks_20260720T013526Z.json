@@ -1,0 +1,25 @@
+{
+  "artifact": "encode_once_e4b_toks",
+  "unix_ts": "20260720T013526Z",
+  "slice": "D16 post-gemv_kv-banksplit quiet re-measure",
+  "config": "ENCODE_ONCE=1 + DECODE_ICB=1 prebuilt tape (FREEZE=0 RANGE=0)",
+  "flags_default": "OFF",
+  "no_31b": true,
+  "no_fuse_gate_down": true,
+  "arms": {
+    "shipping": { "tok_s": 23.56 },
+    "on": {
+      "tok_s": 23.46,
+      "encode_once": true,
+      "decode_icb": true,
+      "freeze_binds": false,
+      "range_batch": false,
+      "icb_command_count": 594,
+      "prebuilt": "594/594",
+      "last_execute_icb": "0/0",
+      "barrier_after_count": 360
+    }
+  },
+  "verdict": "Still no product win: shipping 23.56 vs prebuilt encode-once 23.46 (~flat). Keep ENCODE_ONCE/DECODE_ICB OFF. True-ICB remains PARKED. Fusion exactness green but tok/s flat — flags OFF.",
+  "next_lane": "Park encode-once default-on; optional 31B rope when free/serialize; or host dispatch-tax outside Metal fusion"
+}

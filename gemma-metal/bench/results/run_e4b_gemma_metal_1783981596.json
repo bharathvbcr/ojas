@@ -1,0 +1,13 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2",
+  "lane": "honest-partial",
+  "layers": 42,
+  "hidden": 2560,
+  "vocab": 262144,
+  "decode_tok_s": 25.0959,
+  "ttft_ms": 133.13,
+  "decode_steps": 16,
+  "notes": "MLX-close qmv: bf16 scales/biases, packs=2 (K-block 512), SIMD_ROWS=4\u00d72 SG; fused gate\u2225up\u2192gelu + simd_add + producer K\u2225V; simd enabled for cols%16==0 (31B 5376); GEMMA_METAL_INFER_LOG=0; vs mlx~75.7 / gate 48-60; interim\u226530 unmet"
+}

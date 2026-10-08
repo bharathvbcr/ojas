@@ -1,0 +1,68 @@
+{
+  "artifact": "verify_m_sweep",
+  "encode_once": {
+    "cb_replay_wired": false,
+    "pos_buf": true,
+    "scaffold": "cb_replay active=A A=Idle/0 B=Idle/0 dry_run=false wired=false",
+    "seed_tok_gpu": true
+  },
+  "iters": 4,
+  "model": "mini_synth",
+  "nax_verify_readiness": {
+    "fp8_e8m0_tensorops_dtype": false,
+    "int4_tensorops_dtype": false,
+    "int8_tensorops_dtype": true,
+    "note": "Int4 unbound in objc2-metal 0.3; verify(M) = hand simdgroup Q4; TensorOps Q4 not shipped",
+    "quant_prefill_gemm_wired": false
+  },
+  "notes": [
+    "Mini graph via GpuDecodeSession::bench_step_verify_ms; does not touch bench.rs Lane A writer.",
+    "E4B: load Hot session then same M=1..8 loop; write model=e4b into this schema.",
+    "TensorOps/NAX Int4 unbound — verify stays on simdgroup Q4; DDTree parked until verify(M) flattens."
+  ],
+  "prefill_tokens": 2,
+  "results": [
+    {
+      "M": 1,
+      "ms_per_iter": 3.2965417500000003,
+      "ratio_vs_m1": 1.0
+    },
+    {
+      "M": 2,
+      "ms_per_iter": 6.18617725,
+      "ratio_vs_m1": 1.8765657222451375
+    },
+    {
+      "M": 3,
+      "ms_per_iter": 9.8548645,
+      "ratio_vs_m1": 2.9894553891210385
+    },
+    {
+      "M": 4,
+      "ms_per_iter": 11.745229,
+      "ratio_vs_m1": 3.5628940540492167
+    },
+    {
+      "M": 5,
+      "ms_per_iter": 15.54052075,
+      "ratio_vs_m1": 4.714188967878232
+    },
+    {
+      "M": 6,
+      "ms_per_iter": 18.707198,
+      "ratio_vs_m1": 5.674794805799138
+    },
+    {
+      "M": 7,
+      "ms_per_iter": 21.61502075,
+      "ratio_vs_m1": 6.55687759756114
+    },
+    {
+      "M": 8,
+      "ms_per_iter": 24.85502075,
+      "ratio_vs_m1": 7.5397257595782
+    }
+  ],
+  "unix_ts": 1784444651,
+  "warmup": 1
+}

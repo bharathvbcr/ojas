@@ -1,0 +1,38 @@
+gemma-metal Phase 4 speed harness (gemma-metal-0.1.0-phase6)
+gates.md Phase-0 reference (this host):
+  E4B Q4 mlx-lm best decode ≈ 75.7 tok/s  (honest lane gate ≥48–60)
+  Ollama E4B Q4_K_M ≈ 55.8 tok/s
+  31B Ollama decode ≈ 12.3 tok/s          (product gate ≥15)
+  31B MLX+DFlash ≈ 37.2 tok/s             (MTP product gate ≥25)
+
+host synthetic prefill (T=8, 3 layers): 5.96 ms/iter
+encode_once: DecodeIcb layer-graph attached (decode_icb cmds=71 layer_graph=true encoded=true optimized=true executes=0 sticky_buf=17/427 prebuilt=71 last_setAddress=0/0 last_setArgTable=0 elided=0)
+encode_once: scalar-write tape ops=191 (skip-nop replay)
+
+=== GPU Hot-bank synthetic decode (honest, mini graph) ===
+  graph: vocab=512 hidden=256 layers=3 (SWA+global+consumer)
+  decode: 654.5 tok/s  (32 steps after prefill)
+  TTFT proxy (prefill T=8): 6.75 ms
+
+=== Real model Q4 (MLX affine) ===
+  weights: /Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2
+  loaded 579 matrices in 1.6s; hot≈4.31 GiB; layers=42 vocab=262144 hidden=2560
+  gaps: PLE Q4 Hot residual on; gate/proj still skipped; mid-commit off by default
+  Hot upload + session prep: 0.5s
+  warmup generate…
+encode_once: DecodeIcb layer-graph attached (decode_icb cmds=594 layer_graph=true encoded=true optimized=true executes=0 sticky_buf=106/4961 prebuilt=594 last_setAddress=0/0 last_setArgTable=0 elided=0)
+encode_once: scalar-write tape ops=2319 (skip-nop replay)
+  warmup ok, seq_len=5
+  TTFT (prefill T=4): 166.9 ms
+  decode: 16.11 tok/s  (16 steps after prefill)
+  vs Phase-0: mlx-lm ≈75.7 | Ollama ≈55.8 | gate ≥48–60
+  verdict: BELOW honest-lane gate (expected for partial/slow v1)
+  wrote /Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal/bench/results/run_e4b_gemma_metal_1784502621.json
+  wrote /Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal/bench/results/latest_e4b_gemma_metal.json
+
+=== Kernel microbenches ===
+GPU FA SWA h128 (DFlash draft stub): pipeline OK
+GPU gemv_q4 [2560x2560] @ M=1: 325.3 µs/call
+GPU softcap_argmax vocab=262144: 460.6 µs/call
+GPU FA SWA h128 stub prefill B=1 T=8 H=4: 5.7 µs/call
+GPU FA SWA h256 prefill B=1 T=16 H=8: 20.0 µs/call

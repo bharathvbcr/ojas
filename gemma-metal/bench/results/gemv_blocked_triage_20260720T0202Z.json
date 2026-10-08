@@ -1,0 +1,30 @@
+{
+  "lane": "gemv-blocked-triage",
+  "model": "e4b",
+  "date_utc": "2026-07-20T02:02:00Z",
+  "slice": "BlockedBn Hot repack vs gemv_q4_mlx_blocked* / blocked gate_up_gelu",
+  "root_cause": {
+    "catastrophic": "FUSE_BF16 bf16 x reinterpreted as float* in blocked GEMV/gate_up (fixed: cast_bf16_to_f32 before peel)",
+    "token_exact_blocker": "After cast fix, layout/scale/zero/kernel match float peel (real E4B weights max_err~1e-6). LAYER_PROBE lockstep L0-L2 then coop-reduce FP associativity drift → greedy diag_tok still diverges vs simd and vs SIMD=0 float peel. Not a repack bug."
+  },
+  "fixes_shipped": [
+    "HotQuantBanks::gemv_impl BlockedBn16 bf16→f32 expand",
+    "gemv_q4_mlx_gate_up_gelu_impl BlockedBn16 bf16→f32 expand",
+    "RowMajor float-peel fallback bf16→f32 when SIMD off/ineligible"
+  ],
+  "unit_evidence": {
+    "gemv_q4_mlx_blocked_matches_row_major": "PASS",
+    "gemv_q4_mlx_blocked_bf16_x_matches_f32": "PASS",
+    "gemv_q4_mlx_blocked_gate_up_gelu_matches": "PASS",
+    "gemv_q4_mlx_blocked_gate_up_gelu_bf16_x_matches": "PASS",
+    "gemv_q4_mlx_blocked_e4b_shapes_match_row_major": "PASS (incl cols>GEMV_X_TILE)",
+    "gemv_q4_mlx_blocked_real_e4b_weights_match": "PASS (GEMMA_METAL_BLOCKED_HOT_PARITY=1; max_err~1e-6..2e-6)"
+  },
+  "hot_diag": {
+    "vs_simd_after_bf16_fix": "FAIL tok0 (artifact gemv_blocked_bf16fix_20260720T020210Z)",
+    "vs_float_peel_SIMD0": "FAIL tok-level; LAYER_PROBE near-eq through L2 then drift",
+    "prior_quiet_tok_s": "0.895× (blocked slower; gemv_blocked_ab_e4b_20260720T015644Z)"
+  },
+  "verdict": "PARK GEMV_BLOCKED (keep default OFF). Cast hygiene kept. Next: simd occupancy without layout swap.",
+  "next_tick": "simd-path occupancy (rows_q / tg_mem / qdot) — no BlockedBn / no FUSE_GATE_DOWN / no 31B"
+}

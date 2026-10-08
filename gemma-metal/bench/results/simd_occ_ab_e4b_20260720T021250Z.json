@@ -1,0 +1,59 @@
+{
+  "lane": "simd-occupancy",
+  "model": "e4b",
+  "date_utc": "2026-07-20T02:12:50Z",
+  "slice": "Tune shipping simd GEMV occupancy without layout swap (rows_q / SG_PER_TG; tg_mem N/A on simd path)",
+  "pin": {
+    "FUSE_KV": 1,
+    "GEMV_INTERLEAVE": 0,
+    "GEMV_SIMD": 1,
+    "GEMV_BLOCKED": 0,
+    "fusion_encode_once_gate_down": "all OFF"
+  },
+  "exactness_hazard": 0,
+  "tok_s_hazard": "shipping_skip_auto",
+  "quiet_env": ["GEMMA_METAL_LOG=0", "GEMMA_METAL_INFER_LOG=0"],
+  "mlx_reference": "qmv_fast uses num_simdgroups=2, results_per_simdgroup=4, packs_per_thread=2 (bits=4) — already matches shipping",
+  "prior_history": {
+    "SIMD_ROWS=4": "25.10 tok/s peak (2026-07-13 benches)",
+    "SIMD_ROWS=8": "21.27 tok/s — slower; not retested"
+  },
+  "tg_mem_note": "Shipping gemv_q4_mlx_simd* uses no threadgroup memory (pointer-walk qdot). tg_mem=cols*4 only on classic float-peel / BlockedBn paths (not product default).",
+  "arms": {
+    "ship": {
+      "SIMD_ROWS": 4,
+      "SIMD_SG_PER_TG": 2,
+      "TPTG": 64,
+      "rows_per_tg": 8,
+      "tok_s": 20.54,
+      "tokens": [133533, 91962, 3301, 217288, 236782, 236743, 196059, 805, 217288, 236881, 59425, 240296, 28698, 178662, 67991, 17682],
+      "exact": true
+    },
+    "r2": {
+      "SIMD_ROWS": 2,
+      "SIMD_SG_PER_TG": 2,
+      "TPTG": 64,
+      "rows_per_tg": 4,
+      "tok_s": 20.34,
+      "tokens": [133533, 142360, 89294, 15411, 133533, 15750, 236772, 27026, 236772, 39890, 4039, 48676, 28859, 28859, 28859, 28859],
+      "exact": false,
+      "divergence": "token[1] (tok0 matches ship; stream drifts)"
+    },
+    "sg4": {
+      "SIMD_ROWS": 4,
+      "SIMD_SG_PER_TG": 4,
+      "TPTG": 128,
+      "rows_per_tg": 16,
+      "tok_s": 20.80,
+      "tokens": [133533, 91962, 3301, 217288, 236782, 236743, 196059, 805, 217288, 236881, 59425, 240296, 28698, 178662, 67991, 17682],
+      "exact": true
+    }
+  },
+  "speedup_vs_ship": {
+    "r2": 0.990,
+    "sg4": 1.013
+  },
+  "verdict": "PARK / NO-WIN. Shipping 4×2 already MLX-matched. r2 exactness FAIL + 0.990×. sg4 exact PASS but +1.3% within session noise (do not default-on). Keep SIMD_ROWS=4, SIMD_SG_PER_TG=2.",
+  "harness": "bench/simd_occ_ab.sh",
+  "next_tick": "Layer-scale / MLP-byte fusion or persistent megakernel (dispatch glue alone ≪10% ceiling). Serialize 31B rope when free. Do not default-on FUSE_*/ENCODE_ONCE/GEMV_BLOCKED."
+}

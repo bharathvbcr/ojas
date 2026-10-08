@@ -1,0 +1,34 @@
+{
+  "turns": [
+    {
+      "user": "Say hello in one short sentence.",
+      "completion_tokens": 24,
+      "decode_tok_s": 36.2,
+      "cached_tokens": 0,
+      "prefill_tokens": 23,
+      "ttft_ms": 370.1,
+      "client_ttft_ms": 399.6041249993141,
+      "text": "<|channel>thought\n*   Task: Say hello.\n    *   Constraint: One short sentence.\n\n    *   "
+    },
+    {
+      "user": "What is 2+2? Answer with one digit.",
+      "completion_tokens": 24,
+      "decode_tok_s": 35.9,
+      "cached_tokens": 23,
+      "prefill_tokens": 22,
+      "ttft_ms": 365.7,
+      "client_ttft_ms": 366.76783399889246,
+      "text": "<|channel>thought\nThe user is asking for the result of \"2+2\".\nThe constraint is to \"Answer with"
+    },
+    {
+      "user": "Name one primary color.",
+      "completion_tokens": 24,
+      "decode_tok_s": 36.9,
+      "cached_tokens": 45,
+      "prefill_tokens": 15,
+      "ttft_ms": 363.3,
+      "client_ttft_ms": 364.3061249968014,
+      "text": "<|channel>thought\n*   User asks: \"Name one primary color.\"\n    *   Constraint: None explicitly state"
+    }
+  ]
+}

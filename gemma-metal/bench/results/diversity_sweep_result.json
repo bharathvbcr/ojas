@@ -1,0 +1,70 @@
+{
+  "config": "DFlash q4-draft block=5 mlx0.32",
+  "max_tokens": 160,
+  "rows": [
+    {
+      "type": "code",
+      "dflash": 32.5,
+      "plain": 12.57,
+      "speedup": 2.59,
+      "accept": 3.56
+    },
+    {
+      "type": "math",
+      "dflash": 34.74,
+      "plain": 11.85,
+      "speedup": 2.93,
+      "accept": 4.0
+    },
+    {
+      "type": "reasoning",
+      "dflash": 29.6,
+      "plain": 12.38,
+      "speedup": 2.39,
+      "accept": 3.64
+    },
+    {
+      "type": "chat",
+      "dflash": 29.1,
+      "plain": 12.5,
+      "speedup": 2.33,
+      "accept": 3.14
+    },
+    {
+      "type": "prose",
+      "dflash": 18.94,
+      "plain": 12.48,
+      "speedup": 1.52,
+      "accept": 2.16
+    },
+    {
+      "type": "factual",
+      "dflash": 35.0,
+      "plain": 12.73,
+      "speedup": 2.75,
+      "accept": 3.9
+    },
+    {
+      "type": "translate",
+      "dflash": 30.9,
+      "plain": 12.94,
+      "speedup": 2.39,
+      "accept": 3.27
+    },
+    {
+      "type": "json",
+      "dflash": 36.12,
+      "plain": 12.02,
+      "speedup": 3.01,
+      "accept": 4.03
+    }
+  ],
+  "summary": {
+    "n_types": 8,
+    "dflash_min": 18.94,
+    "dflash_median": 31.7,
+    "dflash_max": 36.12,
+    "plain_median": 12.49,
+    "speedup_median": 2.49
+  }
+}

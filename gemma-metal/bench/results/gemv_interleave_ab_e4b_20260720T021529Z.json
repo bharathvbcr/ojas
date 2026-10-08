@@ -1,0 +1,49 @@
+{
+  "lane": "gemv-interleave-ab",
+  "model": "e4b",
+  "date_utc": "2026-07-20T02:15:29Z",
+  "slice": "Quiet product A/B GEMMA_METAL_GEMV_INTERLEAVE=1 (Interleaved4 Hot) vs shipping =0; GEMV_SIMD=1",
+  "pin": {
+    "FUSE_KV": 1,
+    "GEMV_SIMD": 1,
+    "GEMV_BLOCKED": 0,
+    "fusion_encode_once_gate_down": "all OFF"
+  },
+  "exactness_hazard": 0,
+  "tok_s_hazard": "shipping_skip_auto",
+  "quiet_env": [
+    "GEMMA_METAL_LOG=0",
+    "GEMMA_METAL_INFER_LOG=0"
+  ],
+  "tok_s_note": "Absolute tok/s on this host run ~18 (below prior 23.58 quiet reference); use paired arms for speedup.",
+  "quiet_tok_s_reference_prior": 23.58,
+  "historical_i4": "2026-07-14 ~22.8 vs row-major ~23.8 (default OFF)",
+  "arms": {
+    "ship": {
+      "GEMV_INTERLEAVE": 0,
+      "layout": "RowMajor",
+      "tok_s": 18.75,
+      "tokens": "[133533,91962,3301,217288,236782,236743,196059,805,217288,236881,59425,240296,28698,178662,67991,17682]",
+      "exact": true
+    },
+    "i4": {
+      "GEMV_INTERLEAVE": 1,
+      "layout": "Interleaved4",
+      "tok_s": 17.86,
+      "tokens": "[133533,91962,3301,217288,236782,236743,196059,805,217288,236881,59425,240296,28698,178662,67991,17682]",
+      "exact": true
+    }
+  },
+  "speedup_i4_vs_ship": 0.953,
+  "exactness_all_pass": true,
+  "verdict": "PARK / NO-WIN. Interleaved4 exactness PASS @ HAZARD=0 (identical greedy stream) but 0.953\u00d7 tok/s vs row-major. Do not default-on GEMV_INTERLEAVE. Confirms 2026-07-14 regression under current stack.",
+  "lane_pause": "Local tok/s levers exhausted (fusion exact/flat, encode-once flat, GEMV_BLOCKED PARK, simd occ PARK/NO-WIN, INTERLEAVE NO-WIN). Bottleneck remains ~75% MLP GEMV BW; dispatch fusion \u226a10% ceiling. Stop until new BW hypothesis (layer-scale MLP / megakernel / weight-traffic cut).",
+  "harness": "bench/gemv_interleave_ab.sh",
+  "next_tick": "PAUSE \u2014 no further local fusion-lane tick until a new MLP-byte / persistent-megakernel hypothesis with expected \u226b10% token-time cut.",
+  "logs": {
+    "ship_bench": "gemv_interleave_ab_e4b_20260720T021529Z_ship_bench.txt",
+    "i4_bench": "gemv_interleave_ab_e4b_20260720T021529Z_i4_bench.txt",
+    "ship_diag": "gemv_interleave_ab_e4b_20260720T021529Z_ship_diag.txt",
+    "i4_diag": "gemv_interleave_ab_e4b_20260720T021529Z_i4_diag.txt"
+  }
+}

@@ -1,0 +1,256 @@
+{
+  "date_utc": "2026-07-14T01:14:05Z",
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": {
+    "best_block": 3,
+    "best_dflash_tok_s": 2.106783869235004,
+    "block_sweep": [
+      {
+        "accepts": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 24,
+        "tok_s": 2.106783869235004
+      },
+      {
+        "accepts": [
+          3,
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 24,
+        "tok_s": 2.10318042499571
+      },
+      {
+        "accepts": [
+          4,
+          4,
+          4,
+          4,
+          3
+        ],
+        "block": 5,
+        "mean_accept": 3.8,
+        "n_new": 24,
+        "tok_s": 1.9829629810865714
+      },
+      {
+        "accepts": [
+          5,
+          5,
+          5,
+          5
+        ],
+        "block": 6,
+        "mean_accept": 5.0,
+        "n_new": 24,
+        "tok_s": 1.921548024760629
+      }
+    ],
+    "debug_bs5": {
+      "accepts": [
+        4,
+        4,
+        4,
+        4,
+        3
+      ],
+      "dflash_new": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "draft_attn_scale": 0.0883883461356163,
+      "embed_scale": 73.32121276855469
+    },
+    "dflash_token_ids_new": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "draft": "/Users/bharath/.cache/huggingface/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/eabd648301ce28583cc14757912e5e0f84e152e1",
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 5.663890350413183,
+    "greedy_token_ids_new": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "mean_accept_at_best": 2.0,
+    "notes": "GPU draft Hot Q4+D=128 FA (attn 1/\u221ad, embed \u221aH); M\u00d7GEMV verify; product MTP \u226525 unmet",
+    "target": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f"
+  },
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 3,
+    "best_dflash_tok_s": 400.8723081643734,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 1.0,
+        "n_new": 16,
+        "tok_s": 366.07059163436725
+      },
+      {
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 16,
+        "tok_s": 400.8723081643734
+      },
+      {
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 16,
+        "tok_s": 391.2426877658632
+      },
+      {
+        "block": 5,
+        "mean_accept": 4.0,
+        "n_new": 16,
+        "tok_s": 399.32447277252254
+      },
+      {
+        "block": 6,
+        "mean_accept": 4.333333333333333,
+        "n_new": 16,
+        "tok_s": 370.89946016742635
+      },
+      {
+        "block": 8,
+        "mean_accept": 7.0,
+        "n_new": 16,
+        "tok_s": 395.95507147298383
+      }
+    ],
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 682.0628137222512,
+    "mean_accept_at_best": 2.0,
+    "notes": "GPU D=128 draft + M\u00d7GEMV verify; not product E4B (no DFlash draft for E4B)"
+  },
+  "mlx_golden": {
+    "artifact": "bench/results/dflash_parity_mlx_golden.json",
+    "block_size": 5,
+    "max_tokens": 24,
+    "runs": [
+      {
+        "id": "say_hi",
+        "dflash_tok_s": 37.52601901729548,
+        "greedy_tok_s": 13.863161212291711,
+        "mean_accept": 3.0,
+        "dflash_matches_greedy_prefix": true
+      },
+      {
+        "id": "two_plus_two",
+        "dflash_tok_s": 33.02704001390947,
+        "greedy_tok_s": 14.188319151579623,
+        "mean_accept": 2.7777777777777777,
+        "dflash_matches_greedy_prefix": true
+      }
+    ],
+    "verdict": "PASS \u2014 MLX DFlash token stream matches MLX greedy on short prompts"
+  },
+  "gate_verdict": {
+    "dflash_parity_gates": "completed_with_measurements",
+    "mlx_exact_verify": true,
+    "gemma_metal_exact_vs_greedy": false,
+    "product_31b_decode_ge_15": false,
+    "product_31b_mtp_ge_25": false,
+    "block_retune": {
+      "mlx_prior": 5,
+      "engine_best_mini": 3,
+      "engine_best_31b": 3,
+      "note": "M\u00d7GEMV verify dominates \u2014 shorter blocks win on this engine vs MLX NAX GEMM"
+    },
+    "tok_s": {
+      "mlx_dflash_31b": "~33\u201337.5 (golden short) / ~37.2 median (prior)",
+      "gemma_metal_31b_greedy": 5.66,
+      "gemma_metal_31b_dflash_best": 2.11,
+      "gemma_metal_mini_greedy": 682.1,
+      "gemma_metal_mini_dflash_best": 400.9
+    },
+    "blockers": [
+      "step_verify still M\u00d7 decode GEMV (not true M>1 Q4 GEMM / FA Tq=M)",
+      "gemma-metal DFlash stream \u2260 greedy on same stack (exactness FAIL) \u2014 capture/draft/verify bug",
+      "31B DFlash ~2.1 tok/s < greedy ~5.7 \u2014 spec path regresses until verify amortizes",
+      "no E4B DFlash draft weights (z-lab draft is 31B H=5376 only)"
+    ]
+  }
+}

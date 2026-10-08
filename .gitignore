@@ -101,3 +101,8 @@ ehthumbs.db
 scan.txt
 *.tmp
 *.log
+
+# Imported from MLSystemsLab (2026-10-08): regenerable arch02 parity activations
+# (python3 arch02/metal-native/scripts/export_goldens.py) and run outputs.
+arch02/metal-native/golden/fwd/
+arch02/metal-native/out/

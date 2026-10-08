@@ -1,0 +1,30 @@
+{
+  "artifact": "encode_once_e4b_toks_ab",
+  "date_utc": "2026-07-19T23:10:12Z",
+  "model": "e4b_hot",
+  "steps": 16,
+  "prefill_T": 4,
+  "no_31b": true,
+  "no_fusion_ab_trace": true,
+  "sequential_hot_loads": true,
+  "shipping_hazard": true,
+  "arms": {
+    "off": {
+      "flags": "ENCODE_ONCE unset; DECODE_ICB unset",
+      "decode_tok_s": 20.69,
+      "ttft_ms": 156.8,
+      "log": "bench/results/encode_once_e4b_toks_20260719T231012Z_off.txt"
+    },
+    "on": {
+      "flags": "GEMMA_METAL_ENCODE_ONCE=1 GEMMA_METAL_DECODE_ICB=1 (prebuilt default ON)",
+      "decode_tok_s": 16.11,
+      "ttft_ms": 166.9,
+      "icb_command_count": 594,
+      "prebuilt_tables": 594,
+      "log": "bench/results/encode_once_e4b_toks_20260719T231012Z_on.txt"
+    }
+  },
+  "ratio_on_over_off": 0.779,
+  "verdict": "PASS measured: encode-once+DecodeIcb product tok/s REGRESSES vs shipping (20.69→16.11) under shipping hazard; light encode_us A/B still wins (ratio~0.80). Keep flags default OFF.",
+  "note": "Hot upload ~0.5–0.6s (weights page-cached after prior A/B). Do not treat as encode-once product win."
+}

@@ -1,0 +1,9 @@
+=== GREEDY ===
+GREEDY_TOK_S=13.26 tokens=64
+=== DFLASH block=5 ===
+DFLASH_TOK_S=23.59 tokens=64 mean_accept=None
+  attr accepted=0
+  attr generation_tps=23.587055519310333
+  attr prompt_tps=86.42618281208806
+=== MTP ===
+MTP_BLOCKED: mlx-lm PR#1276 loads gemma4_assistant but stream_generate lacks shared_kv_states wiring (NotImplementedError on make_cache). D14 not overturned.

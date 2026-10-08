@@ -1,0 +1,23 @@
+{
+  "api_gap_summary": "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only; mini layer-graph DecodeIcb capture→from_commands+skip landed; E4B/31B session graph not migrated; classic ICB setKernelBuffer does not feed MTL4 pipelines; DecodeIcb uses inheritBuffers+arg-table (binds still host-side per cmd)",
+  "api_gaps": [
+    "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only",
+    "mini layer-graph DecodeIcb capture→from_commands+skip landed; E4B/31B session graph not migrated",
+    "classic ICB setKernelBuffer does not feed MTL4 pipelines; DecodeIcb uses inheritBuffers+arg-table (binds still host-side per cmd)"
+  ],
+  "artifact": "encode_once_mini_ab",
+  "cb_replay_wired": true,
+  "decode_icb": "decode_icb cmds=71 layer_graph=true encoded=true optimized=true executes=9",
+  "encode_us_off": 4442.5625,
+  "encode_us_on": 3429.03125,
+  "icb_command_count": 71,
+  "icb_replays": 9,
+  "iters": 8,
+  "layer_graph": true,
+  "live_encodes_on": 1,
+  "model": "mini_synth",
+  "ratio_on_over_off": 0.7718588652382493,
+  "unix_ts": 1784501098,
+  "verdict": "DecodeIcb layer-graph capture+skip (cmds=71); live_encodes=1 icb_replays=9; encode_us ratio=0.77 (binds still host-side per cmd)",
+  "warmup": 2
+}

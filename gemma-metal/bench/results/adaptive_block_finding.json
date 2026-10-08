@@ -1,0 +1,13 @@
+{
+  "date": "2026-07-13",
+  "question": "Does adaptive block-size (EMA of acceptance) beat fixed block=5 on DFlash 31B?",
+  "verdict": "NOT WORTH IT — fixed block=5 is near-optimal; adaptive headroom <~4% and only on creative prose.",
+  "evidence_static_probe": {
+    "prose": {"by_block_tok_s": {"2":17.8,"3":19.9,"4":18.4,"5":19.2,"6":15.4,"8":13.0}, "best":"block=3 (19.9)", "vs_fixed5":"+3.7%", "accept_at_5":2.16},
+    "code":  {"by_block_tok_s": {"2":14.3,"3":21.3,"4":27.0,"5":30.6,"6":26.1,"8":24.9}, "best":"block=5 (30.6)", "note":"steep penalty below 5 — cannot safely shrink"}
+  },
+  "why_marginal": "code needs bs>=5 (bs3 = 21 vs bs5 = 31), prose barely prefers bs3 over bs5 (+3.7%, flat & noisy). A single accept->block policy (bs=round(accept+pad)) cannot satisfy both optima; best overall gain ~1-2%, below measurement noise.",
+  "real_ceiling": "The prose weak spot (1.6x, accept 2.16) is DRAFT-ACCEPTANCE-bound, not block-bound. Only a better/larger draft (or tree drafting) lifts it — block tuning cannot.",
+  "adaptive_ab_status": "A/B run aborted by GPU Timeout under heavy contention from the concurrent custom-engine benchmarking; not retried — verdict already established by the static probe, and further MLX GPU load corrupts the concurrent session's measurements.",
+  "recommendation": "Keep fixed block=5. Stop MLX-side GPU experiments; the remaining speed lever (native block-verify engine) is owned by the concurrent session and needs a clean GPU to measure."
+}

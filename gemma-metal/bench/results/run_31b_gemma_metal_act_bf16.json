@@ -1,0 +1,19 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-31b-it-4bit",
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f",
+  "status": "ok",
+  "lane": "honest-partial",
+  "layers": 60,
+  "hidden": 5376,
+  "vocab": 262144,
+  "matrices": 772,
+  "hot_gib": 17.87,
+  "decode_tok_s": 7.29,
+  "ttft_ms": 507.9,
+  "decode_steps": 16,
+  "vs_ollama_tok_s": 12.27,
+  "gate_tok_s": 15.0,
+  "gate_met": false,
+  "notes": "bf16 act stream on simd GEMV + bf16 scales; packs=2; fuse MLP+KV; quiet after E4B; ~7.29 tok/s \u2014 BELOW Ollama~12.3 (~1.7\u00d7) and gate\u226515 (~2.1\u00d7)"
+}

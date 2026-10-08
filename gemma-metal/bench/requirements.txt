@@ -1,0 +1,3 @@
+# Optional — Ollama path is stdlib-only.
+# mlx-lm / mlx must already be installed on the host for the mlx backend.
+psutil>=5.9.0

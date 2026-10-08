@@ -1,0 +1,6 @@
+encode_once: DecodeIcb layer-graph attached (decode_icb cmds=71 layer_graph=true encoded=true optimized=false executes=0 sticky_buf=17/427 prebuilt=0/0 freeze=true barriers=61 coarse_elided=0 last_setAddress=0/0 last_setArgTable=0 elided=0 last_execute_icb=0/0)
+encode_once: scalar-write tape ops=191 (skip-nop replay)
+decode_icb range_batch: cmds=71 barriers=61 coarse_elided=0 execute_icb=62/71 setArgTable=0
+encode_once: DecodeIcb layer-graph attached (decode_icb cmds=594 layer_graph=true encoded=true optimized=false executes=0 sticky_buf=106/5003 prebuilt=0/0 freeze=true barriers=360 coarse_elided=0 last_setAddress=0/0 last_setArgTable=0 elided=0 last_execute_icb=0/0)
+encode_once: scalar-write tape ops=2361 (skip-nop replay)
+decode_icb range_batch: cmds=594 barriers=360 coarse_elided=0 execute_icb=361/594 setArgTable=0

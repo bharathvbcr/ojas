@@ -1,0 +1,11 @@
+{
+  "lane": "gemv-blocked-bf16-fix",
+  "date_utc": "20260720T020210Z",
+  "exactness_hazard": 0,
+  "baseline_tokens": "[133533, 91962, 3301, 217288, 236782, 236743, 196059, 805, 217288, 236881, 59425, 240296, 28698, 178662, 67991, 17682]",
+  "blocked_tokens": "[62566, 11267, 43873, 236772, 5231, 236764, 28469, 240331, 59122, 236772, 19198, 9407, 43808, 42152, 236772, 21987]",
+  "exact": false,
+  "root_cause": "BlockedBn float peel + Hot FUSE_BF16 bf16 x reinterpret (no cast); fixed in gemv_impl + gate_up_gelu_impl",
+  "unit_tests": "gemv_q4_mlx_blocked_{matches_row_major,bf16_x_matches_f32,gate_up_gelu_matches,gate_up_gelu_bf16_x_matches} PASS",
+  "verdict": "FAIL still diverges"
+}

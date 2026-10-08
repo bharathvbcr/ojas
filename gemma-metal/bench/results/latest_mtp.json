@@ -1,0 +1,12 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-e4b-it-4bit + google/gemma-4-E4B-it-assistant",
+  "lane": "mtp",
+  "backbone_accept_rate": 0.75,
+  "accepted": 6,
+  "drafted": 8,
+  "e2e_tok_s": 12.13,
+  "wall_ms": 659,
+  "cross_kv": "shared_sliding+shared_global from target",
+  "notes": "generate_mtp_smoke early-rejects on first mismatch; accept 75%; e2e still draft+verify wall (not true batched verify). Gate 90–110 needs base ≥48 + GPU draft."
+}

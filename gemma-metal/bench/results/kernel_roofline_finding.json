@@ -1,0 +1,19 @@
+{
+  "date": "2026-07-13",
+  "host": "M5 Pro (20 GPU, 64GB, ~273 GB/s unified)",
+  "method": "isolated Q4 GEMV microbench: Hot banks uploaded once, 200 iters, dispatch+sync only (NOT gemv_quant_host which re-uploads each call)",
+  "note": "measured under GPU contention from a concurrent session; relative ratios robust, absolute GB/s mildly depressed",
+  "kernel_gbps": {
+    "attn_o_2560x2560":   {"old_1thread_row": "79-176", "simd_mlx": "93-113", "ratio": "0.53-1.43x"},
+    "mlp_up_10240x2560":  {"old": "170-226", "simd": "254-300", "ratio": "1.33-1.50x"},
+    "mlp_down_2560x10240":{"old": "213", "simd": "283-287", "ratio": "1.33-1.35x"},
+    "lm_head_262144x2560":{"old": "208-211", "simd": "226-229", "ratio": "1.09x"},
+    "31b_attn_5376x5376": {"old": "277", "simd": "285-289", "ratio": "1.03-1.04x"},
+    "31b_down_5376x10752":{"old": "173-178", "simd": "230-232", "ratio": "1.30-1.33x"}
+  },
+  "finding": "OLD one-thread-per-row Q4 GEMV already runs at 170-277 GB/s = 62-100% of peak. New MLX simd kernel is only 1.03-1.5x (near-noise on several shapes), NOT the 2-4x docs/bottleneck.md projected. Kernels are near roofline.",
+  "bottleneck_doc_error": "The '~6-20% of bandwidth / ~4x on the table' claim came from the gemv_quant_host microbench which re-uploads 4.9MB/call, measuring UPLOAD bandwidth not kernel bandwidth.",
+  "roofline": "E4B 21.5 tok/s = 46.5ms/tok; weight traffic ~2.86GB/tok at ~270GB/s = ~10.6ms streaming; remaining ~36ms (77%) is per-token OVERHEAD (dispatch encode, barriers, bf16 casts, sync, argmax, 42-layer serialization over ~780 tiny dispatches). MLX 76 tok/s = 13.2ms/tok = ~10.6ms weight + ~2.6ms overhead.",
+  "implication": "The gap vs MLX is per-token OVERHEAD, not GEMV efficiency. GEMV rewrite recovers ~1.3x max. Real levers: (1) cut dispatches/barriers/casts per token (per-layer or per-token megakernel / persistent-threadgroup decode); (2) block spec-decode (DFlash) amortizes overhead over K tokens per forward.",
+  "ship_now": "MLX + DFlash: 20.5 mean / 32 (code) tok/s on 31B clears the >=15 gate today; custom engine 3.4-21 tok/s does not."
+}

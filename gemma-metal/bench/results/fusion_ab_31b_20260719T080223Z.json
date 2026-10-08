@@ -1,0 +1,14 @@
+{
+  "lane": "layer-fusion-v1-ab",
+  "model": "31b",
+  "date_utc": "2026-07-19T08:26:39Z",
+  "arms_run": ["baseline","qkv"],
+  "exactness_hazard": 0,
+  "tok_s_hazard": "shipping_skip_auto",
+  "exactness_all_pass": true,
+  "pin": {"FUSE_KV": 1, "GEMV_INTERLEAVE": 0, "GEMV_SIMD": 1},
+  "arms": {
+    "baseline": {"tok_s": 5.64, "dispatches": 727.9, "tokens": "[759, 759, 759, 537, 759, 537, 537, 537, 537, 537, 537, 537, 537, 537, 240017, 240017]", "exact": true},
+    "qkv": {"tok_s": 5.71, "dispatches": 667.9, "tokens": "[759, 759, 759, 537, 759, 537, 537, 537, 537, 537, 537, 537, 537, 537, 240017, 240017]", "exact": true}
+  }
+}

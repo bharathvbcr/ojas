@@ -1,0 +1,39 @@
+{
+  "artifact": "encode_once_e4b_toks",
+  "unix_ts": "20260720T001404Z",
+  "slice": "D16 v0.5.9 coarse-ranges",
+  "fix": "GEMMA_METAL_ICB_FREEZE_BINDS=1 + RANGE_BATCH=1 (+ coarse elision default-with-range): large-Buf disjoint barrier elision; ambient IcbScalarPool ignored",
+  "flags_default": "OFF",
+  "no_31b": true,
+  "no_fuse_gate_down": true,
+  "arms": {
+    "shipping": {
+      "tok_s": 20.57
+    },
+    "on": {
+      "tok_s": 19.85,
+      "encode_once": true,
+      "decode_icb": true,
+      "freeze_binds": true,
+      "range_batch": true,
+      "coarse_ranges": true,
+      "icb_command_count": 594,
+      "barrier_after_count": 360,
+      "coarse_elided": 0,
+      "last_execute_icb_calls": 361,
+      "last_execute_icb_cmds": 594,
+      "last_set_argument_table_calls": 0
+    }
+  },
+  "mini_token_parity": "PASS under FREEZE+RANGE (+coarse); unit decode_icb_coarse_ranges_elides_disjoint_keeps_raw PASS",
+  "prior_v058": {
+    "execute_icb": "361/594",
+    "tok_s": "19.56\u219218.61"
+  },
+  "verdict": "SHIPPED coarse-ranges infra (v0.5.9): unit+mini PASS. Product E4B coarse_elided=0 (execute_icb still 361/594); quiet shipping 20.57 vs freeze+range+coarse 19.85 (still not a win). PARK true-ICB vs prebuilt \u2014 prefer prebuilt tape (~flat tok/s). Flags stay OFF.",
+  "park_recommendation": {
+    "true_icb_freeze_range": "PARK \u2014 execute_icb\u00d7N (361 after range-batch; 0 further coarse elisions on product hazard tape) loses wall clock vs dispatch+setArgumentTable\u00d7594",
+    "encode_once_default_path": "prebuilt arg-tables (v0.5.6 ~flat tok/s vs shipping)",
+    "next_lane": "E4B QKV+PLE fusion_ab exactness (GPU dispatch count; no FUSE_GATE_DOWN)"
+  }
+}

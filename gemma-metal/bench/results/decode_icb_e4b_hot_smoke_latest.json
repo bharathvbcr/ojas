@@ -1,0 +1,26 @@
+{
+  "artifact": "decode_icb_e4b_hot_smoke",
+  "icb_command_count": 594,
+  "icb_replays": 4,
+  "layer_graph": true,
+  "live_encodes": 1,
+  "model": "e4b_hot",
+  "scalar_write_tape_ops": 2385,
+  "seeds": [
+    2,
+    105,
+    4368,
+    1246,
+    235
+  ],
+  "tokens": [
+    6641,
+    55371,
+    226392,
+    2728,
+    108172
+  ],
+  "unix_ts": 1788277415,
+  "verdict": "PASS: E4B Hot DecodeIcb layer-graph wired cmds=594 live=1 replays=4 scalar_ops=2385",
+  "wired": true
+}

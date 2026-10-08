@@ -1,0 +1,16 @@
+{
+  "decode_steps": 16,
+  "decode_tok_s": 23.91007271020235,
+  "hidden": 2560,
+  "lane": "honest-partial",
+  "layers": 42,
+  "measured_at_unix": 1784445562,
+  "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "notes": "live dims from session; snapshot=475b9088d29754a3379866cf5aeb6b41acd313c2 cached=2026-07-13; Q4Mlx Hot decode; vs mlx~75.7 / gate 48-60",
+  "runtime": "gemma-metal",
+  "snapshot_cached_date": "2026-07-13",
+  "snapshot_hash": "475b9088d29754a3379866cf5aeb6b41acd313c2",
+  "ttft_ms": 260.916167,
+  "vocab": 262144,
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2"
+}
