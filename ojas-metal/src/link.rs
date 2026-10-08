@@ -42,18 +42,29 @@ pub(crate) enum Wait {
 
 const WAIT_KINDS: usize = 8;
 
-/// Waited commits by [`Wait`] trigger, shared by the device thread and
-/// every handle on it.
+/// Waited commits by [`Wait`] trigger, and the compute dispatches encoded,
+/// shared by the device thread and every handle on it.
 #[derive(Default)]
-pub(crate) struct Waits([AtomicU64; WAIT_KINDS]);
+pub(crate) struct Waits {
+    by: [AtomicU64; WAIT_KINDS],
+    dispatches: AtomicU64,
+}
 
 impl Waits {
     pub(crate) fn count(&self, why: Wait) {
-        self.0[why as usize].fetch_add(1, Ordering::Relaxed);
+        self.by[why as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_dispatches(&self, n: usize) {
+        self.dispatches.fetch_add(n as u64, Ordering::Relaxed);
+    }
+
+    pub(crate) fn dispatches(&self) -> u64 {
+        self.dispatches.load(Ordering::Relaxed)
     }
 
     pub(crate) fn snapshot(&self) -> WaitCounts {
-        let at = |why: Wait| self.0[why as usize].load(Ordering::Relaxed);
+        let at = |why: Wait| self.by[why as usize].load(Ordering::Relaxed);
         WaitCounts {
             upload: at(Wait::Upload),
             read: at(Wait::Read),
@@ -128,6 +139,46 @@ pub(crate) struct NewBuf {
     pub bytes: usize,
 }
 
+/// Which tokens feed each vocabulary row of an embedding gradient, built on
+/// the host from the ids it already holds: for row `v`, `pos[starts[v] ..
+/// starts[v] + counts[v]]` are its tokens in ascending order, the order the
+/// CPU reference adds them. O(tokens + vocab), where the device ranking it
+/// replaces compared every token with every earlier one.
+#[derive(Clone, Debug)]
+pub(crate) struct EmbedRows {
+    pub counts: Vec<u32>,
+    pub starts: Vec<u32>,
+    pub pos: Vec<u32>,
+}
+
+impl EmbedRows {
+    /// The grouping of `ids`, each already checked below `vocab`.
+    pub(crate) fn new(ids: &[u32], vocab: usize) -> Self {
+        let mut counts = vec![0u32; vocab];
+        for &id in ids {
+            counts[id as usize] += 1;
+        }
+        let mut starts = Vec::with_capacity(vocab);
+        let mut run = 0u32;
+        for &c in &counts {
+            starts.push(run);
+            run += c;
+        }
+        let mut next = starts.clone();
+        let mut pos = vec![0u32; ids.len()];
+        for (i, &id) in ids.iter().enumerate() {
+            let at = &mut next[id as usize];
+            pos[*at as usize] = i as u32;
+            *at += 1;
+        }
+        Self {
+            counts,
+            starts,
+            pos,
+        }
+    }
+}
+
 /// One RMSNorm operand set: `x [rows, dim]`, `w [dim]`, and for the
 /// backward the output gradient `gy`.
 #[derive(Clone, Copy, Debug)]
@@ -192,8 +243,10 @@ pub(crate) enum RopeMode {
 /// buffer ids and windows again before it binds anything.
 #[derive(Debug)]
 pub(crate) enum Cmd {
+    /// A host tensor's contiguous window, encoded by the device thread
+    /// straight into the new buffer (or, inline, into a bounded piece).
     Upload {
-        bytes: Vec<u8>,
+        src: ojas_core::Tensor,
     },
     /// Wait for everything recorded, then report the pending fault.
     Sync,
@@ -268,11 +321,11 @@ pub(crate) enum Cmd {
         rows: u32,
         cols: u32,
     },
+    /// `rows` is the host's grouping of the token ids ([`EmbedRows`]).
     EmbedBwd {
         table: Arg,
-        ids: Arg,
         grad: Arg,
-        vocab: u32,
+        rows: EmbedRows,
         dim: u32,
     },
     Linear {
@@ -588,6 +641,11 @@ impl Link {
         self.waits.snapshot()
     }
 
+    /// Compute dispatches the device thread has encoded so far.
+    pub(crate) fn dispatches(&self) -> u64 {
+        self.waits.dispatches()
+    }
+
     /// Run `cmd` on the device thread and wait for its result.
     pub(crate) fn call(&self, cmd: Cmd) -> Res<Reply> {
         let (reply, rx) = mpsc::sync_channel(1);
@@ -649,6 +707,12 @@ fn needs_stage(off: usize, step: usize, tile: usize, rows: usize) -> bool {
     let tiles = rows.div_ceil(tile);
     let tile_bytes = tile.saturating_mul(step).saturating_mul(4);
     !(off.is_multiple_of(16) && (tiles == 1 || tile_bytes.is_multiple_of(16)))
+}
+
+/// Chunks `ojas_norm_multi` cuts `n` gradient values into (`NORM_CHUNK`
+/// in the Metal source); `clip_grad_norm` charges two floats per chunk.
+pub(crate) fn norm_chunks(n: usize) -> usize {
+    n.div_ceil(4096)
 }
 
 /// Partial sums `ojas_reduce_partial` uses for `n` values.

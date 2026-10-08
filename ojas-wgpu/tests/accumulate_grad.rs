@@ -203,15 +203,17 @@ fn refusals_are_synchronous_and_leave_acc_unchanged() {
 // budget's measured peak; it lives here because it shares this file's
 // own-backend setup and adds no test binary.
 
-/// A gradient at byte offset 0 is bound in place, so a step charges the
-/// reported figure less the one gradient copy `bind` makes for an offset
-/// view; a gradient view at an offset charges the reported figure exactly.
-/// The figure is therefore never below what a step takes.
+/// A gradient at byte offset 0, or at an offset the device can bind in
+/// place, charges the reported figure less the one gradient copy `bind`
+/// makes for a view it cannot bind; a gradient view at such an offset
+/// charges the reported figure exactly. The figure is therefore never below
+/// what a step takes.
 #[test]
 fn reported_optimizer_scratch_bounds_the_measured_peak() {
     use ojas_core::{AdamWConfig, MuonNs5Config, OptimizerKind};
     for (rows, cols) in [(1, 1), (3, 5), (64, 17), (17, 64), (96, 96)] {
         let g = fresh();
+        let align = u64::from(g.context().limits().min_storage_buffer_offset_alignment);
         let copy = (rows * cols * 4) as u64;
         let what = format!("[{rows}, {cols}]");
         for (kind, offset) in [
@@ -255,8 +257,43 @@ fn reported_optimizer_scratch_bounds_the_measured_peak() {
             }
             g.sync().unwrap();
             let took = g.budget().peak_bytes() - live;
-            let expect = if offset { reported } else { reported - copy };
+            let copied = offset && (cols as u64 * 4) % align != 0;
+            let expect = if copied { reported } else { reported - copy };
             assert_eq!(took, expect, "{what} {kind:?} offset {offset}");
         }
+    }
+}
+
+/// AdamW decides on the device and writes in place: beyond its operands a
+/// step charges only its 16-byte status word, at every size. Before, it
+/// copied the parameter and both moments to scratch each step (`3 * 4n`
+/// more bytes) so it could restore them on a fault.
+#[test]
+fn adamw_step_copies_no_state() {
+    use ojas_core::AdamWConfig;
+    for n in [1usize, 255, 4096, 70_001] {
+        let g = fresh();
+        let mut p = g.upload(&host(11, &[n])).unwrap();
+        let grad = g.upload(&host(12, &[n])).unwrap();
+        let mut m1 = g.upload(&host(13, &[n])).unwrap();
+        let zeros = Tensor::zeros(&[n], ojas_core::DType::F32, host_budget()).unwrap();
+        let mut m2 = g.upload(&zeros).unwrap();
+        g.sync().unwrap();
+        let before = g.context().stats();
+        let live = g.budget().live_bytes().unwrap();
+        g.budget().reset_peak();
+        g.adamw_step(
+            &mut p,
+            &grad,
+            &mut m1,
+            &mut m2,
+            1,
+            AdamWConfig::nanolab(1e-3, 0.1),
+        )
+        .unwrap();
+        g.sync().unwrap();
+        assert_eq!(g.budget().peak_bytes() - live, 16, "n {n}");
+        let after = g.context().stats();
+        assert_eq!(after.dispatches - before.dispatches, 2, "check, then apply");
     }
 }

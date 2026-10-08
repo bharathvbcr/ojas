@@ -124,19 +124,25 @@
     CheckFeature --&gt;|&#34;No (Default Build)&#34;| NotCompiled[&#34;Return Err(DeviceError::NotCompiled)\n(Strict refusal; never CPU fallback)&#34;]
     CheckFeature --&gt;|Yes| HipContext[&#34;Initialize hipInit() &amp; hipGetDeviceCount()&#34;]
     
-    HipContext --&gt; Buffer[&#34;Allocate HIP device memory (hipMalloc)&#34;]
+    HipContext --&gt; Ordinal[&#34;Check the ordinal &amp; hipSetDevice()&#34;]
+    Ordinal --&gt; Buffer[&#34;Allocate HIP device memory (hipMalloc)&#34;]
     Buffer --&gt; Copy[&#34;Memory Transfer Probe (hipMemcpy HtoD / DtoH)&#34;]
     Copy --&gt; Free[&#34;Deallocate HIP memory (hipFree)&#34;]</pre></figure>
 <hr>
 <h2 id="architectural-role--boundaries">Architectural Role &amp; Boundaries <a class="anchor" href="#architectural-role--boundaries" aria-label="Link to this section">#</a></h2>
-<aside class="alert alert-note"><p class="alert-title">Note</p><p><code>ojas-hip</code> does <strong>not</strong> implement the <code>ojas_core::Backend</code> trait and carries no compute kernels. It operates strictly as an isolated device and memory transfer probe for AMD ROCm hardware.</p>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p><code>ojas-hip</code> does <strong>not</strong> implement the <code>ojas_core::Backend</code> trait and carries no compute kernels. It operates strictly as an isolated device and memory transfer probe for AMD ROCm hardware. A full HIP backend is planned: see <a href="https://github.com/bharathvbcr/ojas/blob/main/tasks/gp-hip-backend.md" rel="noopener"><code>tasks/gp-hip-backend.md</code></a> and the HIP decision in <a href="backends.html"><code>docs/backends.md</code></a>.</p>
 </aside>
+<p><code>HipDevice::open()</code> opens device 0; <code>HipDevice::open_ordinal(n)</code> opens device <code>n</code> and refuses an ordinal outside <code>hipGetDeviceCount</code> with <code>NoDevice</code>. Every copy sets the device first, because HIP keeps the current device per thread.</p>
 <hr>
 <h2 id="defensive-countermeasures--safety-guarantees">Defensive Countermeasures &amp; Safety Guarantees <a class="anchor" href="#defensive-countermeasures--safety-guarantees" aria-label="Link to this section">#</a></h2>
 <aside class="alert alert-important"><p class="alert-title">Important</p><ol>
 <li><strong>Zero Silent Fallback:</strong> Invocations in builds without <code>--features hip</code> return <code>Err(DeviceError::NotCompiled)</code> immediately. <strong>Missing ROCm drivers never silently trigger CPU execution.</strong>
 </li>
-<li><strong>Device Mismatch Defense:</strong> Passing an incompatible device handle to <code>HipDevice::affine_f32</code> immediately raises <code>Err(DeviceError::DeviceMismatch)</code>.
+<li><strong>Device Mismatch Defense:</strong> Passing a device kind other than <code>Device::Hip</code> to <code>HipDevice::copy_roundtrip</code> immediately raises <code>Err(DeviceError::DeviceMismatch)</code>.
+</li>
+<li><strong>Failures are named by class:</strong> a missing runtime or device (HIP status 3, 4, 35, 100, 101) is <code>NoDevice</code>; out of memory (2) is <code>Capacity</code>; any other status from a device that answered, including copy, stream and event failures, is <code>Launch</code>.
+</li>
+<li><strong>Every <code>unsafe</code> site carries a <code>// SAFETY:</code> comment.</strong> HIP calls go through a local <code>extern &#34;C&#34;</code> block that returns the raw <code>c_int</code> status, so a status the binding&#39;s <code>hipError_t</code> enum does not list cannot be an invalid enum value. The crate is <code>forbid(unsafe_code)</code> when the <code>hip</code> feature is off.
 </li>
 </ol>
 </aside>

@@ -491,6 +491,7 @@ pub fn run_all<Bk: Backend>(r: &mut Runner<'_, Bk>) {
     vres(r);
     permute(r);
     cross_entropy(r);
+    embed(r);
     linear_ce(r, 1024, 8192);
     linear_ce(r, N, V);
     clip(r);
@@ -851,6 +852,22 @@ fn cross_entropy<Bk: Backend>(r: &mut Runner<'_, Bk>) {
     });
 }
 
+/// Embedding backward: `N` token ids (targets stream 126) into the `[V, d]`
+/// table's gradient, the incoming gradient `[N, d]` at 2^0.
+fn embed<Bk: Backend>(r: &mut Runner<'_, Bk>) {
+    r.group(&["embed_bwd"], |r| {
+        let (ts, gs) = ([V, DM], [N, DM]);
+        let table = r.dev(&ts, 125, 0)?;
+        let ids = r.targets(N, 126)?;
+        let g = r.dev(&gs, 127, 0)?;
+        let s = spec(&[("table", &ts, 125, 0), ("ids", &[N], 126, 0), ("gy", &gs, 127, 0)]);
+        r.op("embed_bwd", &s, TOL, |r| {
+            Ok(vec![r.be.embedding_backward(&table, &ids, &g)?])
+        });
+        Ok(())
+    });
+}
+
 /// Fused linear + mean cross-entropy, loss and both gradients, with logit
 /// chunks of `rows x cols`. Inputs: x [N, d] at 2^0, the tied weight
 /// [V, d] at 2^-5, targets seed 132.
@@ -1083,7 +1100,7 @@ fn muon<Bk: Backend>(r: &mut Runner<'_, Bk>, rows: usize, cols: usize, ns5: Ns5P
 }
 
 /// One nanolab attention + SwiGLU block's parameters (`Block.state_dict`).
-struct BlockParams {
+pub struct BlockParams {
     n1: Tensor,
     lam: Tensor,
     wq: Tensor,
@@ -1121,7 +1138,7 @@ pub fn block_param_specs() -> Vec<(&'static str, Vec<usize>, u64, i32)> {
     ]
 }
 
-struct Fwd {
+pub struct Fwd {
     h1: Tensor,
     q4: Tensor,
     k4: Tensor,
@@ -1145,7 +1162,7 @@ struct Fwd {
 
 /// nanolab `Block.forward` (attention mixer, layer > 0 so `v0` blends in),
 /// through Backend ops. Returns every activation the backward needs.
-fn block_forward<Bk: Backend>(
+pub fn block_forward<Bk: Backend>(
     be: &Bk,
     p: &BlockParams,
     x: &Tensor,
@@ -1205,7 +1222,7 @@ fn block_forward<Bk: Backend>(
 /// Returns `[grad_x, grad_q_proj, grad_ffn_down, grad_gate_w, grad_vr_lambda,
 /// grad_norm1, grad_v0]`, the order `torch_rows.py` writes.
 #[allow(clippy::too_many_arguments)]
-fn block_backward<Bk: Backend>(
+pub fn block_backward<Bk: Backend>(
     be: &Bk,
     p: &BlockParams,
     x: &Tensor,
@@ -1249,37 +1266,55 @@ fn block_backward<Bk: Backend>(
     Ok(vec![gx, gwq, gwd, gg.weight, vr.lambda, gn1, vr.value0])
 }
 
+/// The block row's parameters and inputs, uploaded to `be`:
+/// `(params, x, cos, sin, v0, gy)`.
+pub fn block_setup<Bk: Backend>(
+    be: &Bk,
+    host: &Budget,
+) -> R<(BlockParams, Tensor, Tensor, Tensor, Tensor, Tensor)> {
+    let dev = |shape: &[usize], seed: u64, e: i32| {
+        let n = shape.iter().product();
+        be.upload(&Tensor::from_f32(&gen(n, seed, e), shape, host)?)
+    };
+    let specs = block_param_specs();
+    let mut ts = Vec::with_capacity(specs.len());
+    for (_, s, seed, e) in &specs {
+        ts.push(dev(s, *seed, *e)?);
+    }
+    let mut it = ts.into_iter();
+    let mut nx = || it.next().expect("block parameter count");
+    let p = BlockParams {
+        n1: nx(),
+        lam: nx(),
+        wq: nx(),
+        wk: nx(),
+        wv: nx(),
+        wo: nx(),
+        qn: nx(),
+        kn: nx(),
+        gw: nx(),
+        gb: nx(),
+        n2: nx(),
+        wg: nx(),
+        wu: nx(),
+        wd: nx(),
+    };
+    let (xs, cs, vs) = ([B, T, DM], [T, D], [B, T, H, D]);
+    Ok((
+        p,
+        dev(&xs, 520, 0)?,
+        dev(&cs, 521, 0)?,
+        dev(&cs, 522, 0)?,
+        dev(&vs, 523, 0)?,
+        dev(&xs, 524, 0)?,
+    ))
+}
+
 fn block<Bk: Backend>(r: &mut Runner<'_, Bk>) {
     r.group(&["block_fwd", "block_fwd_bwd"], |r| {
         let specs = block_param_specs();
-        let mut ts = Vec::with_capacity(specs.len());
-        for (_, s, seed, e) in &specs {
-            ts.push(r.dev(s, *seed, *e)?);
-        }
-        let mut it = ts.into_iter();
-        let mut nx = || it.next().expect("block parameter count");
-        let p = BlockParams {
-            n1: nx(),
-            lam: nx(),
-            wq: nx(),
-            wk: nx(),
-            wv: nx(),
-            wo: nx(),
-            qn: nx(),
-            kn: nx(),
-            gw: nx(),
-            gb: nx(),
-            n2: nx(),
-            wg: nx(),
-            wu: nx(),
-            wd: nx(),
-        };
+        let (p, x, cos, sin, v0, gy) = block_setup(r.be, &r.host)?;
         let (xs, cs, vs) = ([B, T, DM], [T, D], [B, T, H, D]);
-        let x = r.dev(&xs, 520, 0)?;
-        let cos = r.dev(&cs, 521, 0)?;
-        let sin = r.dev(&cs, 522, 0)?;
-        let v0 = r.dev(&vs, 523, 0)?;
-        let gy = r.dev(&xs, 524, 0)?;
         let mut parts: Vec<(&str, &[usize], u64, i32)> = specs
             .iter()
             .map(|(n, s, seed, e)| (*n, s.as_slice(), *seed, *e))

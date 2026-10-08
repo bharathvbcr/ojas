@@ -72,7 +72,7 @@ flowchart LR
 | `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | 208 passed, 3 ignored | Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (`accumulate_grad`), KV cache writes, tiled linear cross-entropy (`linear_ce`), and deferred fault reporting at next `sync` |
 | `ojas-kernels` | No (shared geometry and sources) | — | 11 passed | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |
 | `ojas-cuda` | No | — | 8 passed (feature off) | One affine kernel behind `--features cuda` |
-| `ojas-hip` | No | — | 8 passed (feature off) | Copy probe behind `--features hip`; no kernel |
+| `ojas-hip` | No (full backend planned) | — | 11 passed (feature off) | Copy probe behind `--features hip`; no kernel. Device ordinal is explicit (`open_ordinal`) |
 
 > [!WARNING]
 > Both `MetalBackend` and `WgpuBackend` enforce $d_{\text{head}} \le 256$ for attention operations (`METAL_MAX_HEAD_DIM`; `ATTENTION_MAX_HEAD_DIM` for wgpu). A larger head dimension raises `OjasError::UnsupportedHeadDim` loud and early. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64. Causal SDPA accepts grouped-query head counts on CPU, Metal and wgpu.
@@ -122,6 +122,12 @@ flowchart LR
 
 ---
 
+## HIP Decision
+
+Recorded 2026-10-08 by the user: `ojas-hip` will become a full `ojas_core::Backend` on ROCm. The roadmap, the CI runner it needs, and its acceptance gates are in [`tasks/gp-hip-backend.md`](../tasks/gp-hip-backend.md). Until that lands, `ojas-hip` remains the copy probe described above, and no engine path can select HIP: the C API has no HIP device code and the Go API no HIP selector, so a HIP request is refused at load.
+
+The probe already reports failures in the classes the backend will keep: a missing runtime or device (HIP status 3, 4, 35, 100, 101, or an ordinal outside `hipGetDeviceCount`) is `NoDevice`; out of memory (2) is `Capacity`; every other status from a device that answered, including copy, stream and event failures, is `Launch`. Every `unsafe` site carries a `// SAFETY:` comment. The runtime calls are declared locally to return the raw `c_int` status rather than hip-runtime-sys's `hipError_t` enum, so a status the binding does not list is an error value, not undefined behaviour.
+
 ## CUDA and HIP Verification Status
 
 **Reported** from an earlier session; not re-run on 2026-10-01.
@@ -132,5 +138,5 @@ flowchart LR
 | **CUDA Bindings** | `cargo check -p ojas-cuda --features cuda` | **Passed:** Typecheck only (dynamic loading; `nvcc` absent) |
 | **CUDA Execution** | Kernel launch | **Skipped:** No NVIDIA GPU present |
 | **HIP Default** | `cargo test -p ojas-hip` | **Passed:** `tests::default_build_reports_not_compiled` |
-| **HIP Bindings** | `cargo check -p ojas-hip --features hip` | **Skipped:** Build stopped in `hip-runtime-sys` (no `/opt/rocm`) |
+| **HIP Bindings** | `cargo check -p ojas-hip --features hip` | **Skipped:** Build stopped in `hip-runtime-sys` (no `/opt/rocm`). 2026-10-08: `cargo clippy -p ojas-hip --features hip --all-targets -- -D warnings` passed with `HIP_PATH` pointing at an empty stub `include/hip/hip_runtime_api.h` (type-check only; the build script only checks that file exists and nothing links) |
 | **HIP Execution** | Copy probe (there is no HIP kernel) | **Skipped:** `--features hip` was not built; no `/opt/rocm` and no AMD GPU |

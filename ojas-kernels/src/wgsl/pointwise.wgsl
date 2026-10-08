@@ -110,15 +110,6 @@ fn scale(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec
     put0(i, x0[i] * pf(1u));
 }
 
-// y0 *= word 1, in place. Binding the same buffer as x0 and y0 is a wgpu
-// usage conflict, so the in-place form has its own entry point.
-@compute @workgroup_size(256, 1, 1)
-fn scale_inplace(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-    let i = lane_index(wg, nwg, lid);
-    if (i >= pw(0u)) { return; }
-    put0(i, y0[i] * pf(1u));
-}
-
 // x0 = value, x1 = value0, x2 = [lambda].
 @compute @workgroup_size(256, 1, 1)
 fn vr_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {

@@ -591,6 +591,54 @@ impl Tensor {
         Ok(out)
     }
 
+    /// The contiguous window encoded native-endian, handed to `sink` in
+    /// order, at most `piece` bytes at a time (rounded down to whole
+    /// elements, at least one). The host holds one piece, never the window:
+    /// for a device upload that writes each piece into mapped or staged
+    /// memory as it goes, so no full host copy exists outside the budget, as
+    /// [`Tensor::to_ne_bytes`] makes. Any dtype. Refusals, in order:
+    /// placement, layout, window bounds, an allocation the allocator refuses
+    /// for the piece (`CapacityExceeded`), then whatever `sink` returns,
+    /// which stops the walk.
+    pub fn for_each_ne_piece(
+        &self,
+        piece: usize,
+        mut sink: impl FnMut(&[u8]) -> Result<(), OjasError>,
+    ) -> Result<(), OjasError> {
+        const OP: &str = "Tensor::for_each_ne_piece";
+        let w = self.host_window(OP)?;
+        let size = self.dtype.size();
+        let per = (piece / size).max(1).min(w.len.max(1));
+        let mut buf = Vec::new();
+        if buf.try_reserve_exact(per * size).is_err() {
+            return Err(OjasError::CapacityExceeded {
+                requested: (per * size) as u64,
+                cap: 0,
+                live: 0,
+            });
+        }
+        fn walk<T: Copy, const N: usize>(
+            values: &[T],
+            per: usize,
+            buf: &mut Vec<u8>,
+            enc: impl Fn(T) -> [u8; N],
+            sink: &mut impl FnMut(&[u8]) -> Result<(), OjasError>,
+        ) -> Result<(), OjasError> {
+            for part in values.chunks(per) {
+                buf.clear();
+                buf.extend(part.iter().flat_map(|&x| enc(x)));
+                sink(buf)?;
+            }
+            Ok(())
+        }
+        let range = w.start..w.start + w.len;
+        match self.host_data(OP)? {
+            HostData::F32(v) => walk(&v[range], per, &mut buf, f32::to_ne_bytes, &mut sink),
+            HostData::U32(v) => walk(&v[range], per, &mut buf, u32::to_ne_bytes, &mut sink),
+            HostData::Half(v) => walk(&v[range], per, &mut buf, u16::to_ne_bytes, &mut sink),
+        }
+    }
+
     /// Replace contiguous `F32` elements. The allocation must be uniquely owned.
     pub fn write_f32(&mut self, values: &[f32]) -> Result<(), OjasError> {
         self.writable_f32(values.len())?.copy_from_slice(values);
@@ -2133,6 +2181,49 @@ mod tests {
         ));
         assert!(matches!(
             t.write_f32(&[1.0, 2.0]).unwrap_err(),
+            OjasError::Placement { .. }
+        ));
+    }
+
+    #[test]
+    fn for_each_ne_piece_streams_the_window_in_bounded_pieces() {
+        let budget = Budget::new(1 << 16);
+        let vals: Vec<f32> = (0..1001).map(|i| i as f32 * 0.5 - 7.0).collect();
+        let t = Tensor::from_f32(&vals, &[1001], &budget).unwrap();
+        let tail = t.narrow(12, &[998], &[1]).unwrap();
+        for piece in [1usize, 4, 7, 64, 4096, 1 << 20] {
+            let mut got = Vec::new();
+            let mut largest = 0usize;
+            tail.for_each_ne_piece(piece, |b| {
+                largest = largest.max(b.len());
+                got.extend_from_slice(b);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(got, tail.to_ne_bytes().unwrap(), "piece {piece}");
+            assert!(largest <= piece.max(4), "piece {piece}: a {largest}-byte piece");
+        }
+        let half = Tensor::from_bf16_bits(&[1, 2, 3], &[3], &budget).unwrap();
+        let mut got = Vec::new();
+        half.for_each_ne_piece(2, |b| {
+            got.extend_from_slice(b);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(got, half.to_ne_bytes().unwrap());
+        // The sink's error stops the walk and is returned.
+        let mut calls = 0;
+        let err = t
+            .for_each_ne_piece(400, |_| {
+                calls += 1;
+                Err(OjasError::Poisoned)
+            })
+            .unwrap_err();
+        assert!(matches!(err, OjasError::Poisoned));
+        assert_eq!(calls, 1);
+        let dev = Tensor::from_device(fake(&[1.0], false), &[1], DType::F32, &budget).unwrap();
+        assert!(matches!(
+            dev.for_each_ne_piece(4, |_| Ok(())).unwrap_err(),
             OjasError::Placement { .. }
         ));
     }

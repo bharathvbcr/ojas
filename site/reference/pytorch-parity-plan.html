@@ -397,11 +397,17 @@
 </li>
 </ul>
 </li>
-<li><strong>wgpu matrix units need a user decision (wgpu round 4).</strong>
+<li><strong>wgpu matrix units: unsafe exemption approved by the user (2026-10-08), not yet implemented.</strong>
 <ul>
 <li><strong>What exists (verified from the registry source):</strong> wgpu 30 exposes <code>Features::EXPERIMENTAL_COOPERATIVE_MATRIX</code>. On this M5 Pro, Metal reports 8×8×8 configurations for f32, f16, and f16 inputs with an f32 accumulator.
 </li>
 <li><strong>The blocker:</strong> the feature is gated behind <code>unsafe ExperimentalFeatures::enabled()</code>, and <code>ojas-wgpu</code> is <code>#![forbid(unsafe_code)]</code>.
+</li>
+<li><strong>Decision:</strong> a narrow exemption. <code>ojas-wgpu</code> moves from <code>forbid(unsafe_code)</code> to <code>deny(unsafe_code)</code>, with one <code>#[allow(unsafe_code)]</code> on the single <code>ExperimentalFeatures::enabled()</code> call in <code>context.rs</code>, behind an opt-in cargo feature that is off by default. No other unsafe is permitted in the crate; the portable scalar-FMA GEMM stays the default and the fallback when the adapter lacks the feature.
+</li>
+<li><strong>Rationale:</strong> GEMM is about 1.6–3.2 TFLOP/s against torch&#39;s 5.2 on this machine, and the gap is matrix units the portable path cannot reach (item 5 below). The unsafe is an opt-in to an experimental API surface, one call site, not unsafe memory access in ojas code, so <code>deny</code> plus a single audited allow keeps the crate&#39;s guarantee checkable by the compiler.
+</li>
+<li><strong>Follow-up:</strong> <a href="https://github.com/bharathvbcr/ojas/blob/main/tasks/gp-wgpu-coop-matrix-gemm.md" rel="noopener"><code>tasks/gp-wgpu-coop-matrix-gemm.md</code></a>, with a throughput target of at least 4.5 TFLOP/s GPU-resident on the <code>linear fwd 2048x2048x2048</code> row of the <code>ojas-wgpu</code> release bench (<code>tests/bench.rs</code>).
 </li>
 <li><strong>Design:</strong> a GEMM and SDPA design exists in the wgpu lane&#39;s round-4 report, but nothing is implemented.
 </li>
@@ -517,7 +523,7 @@
 </li>
 <li><strong>Metal per-op cost.</strong> A status buffer, finite-check passes and a device wait on every op; the block issues 53 synchronous ops. Fixing this is a contract decision: defer faults to <code>sync</code> as wgpu does (<code>framework-design.md</code> §9).
 </li>
-<li><strong>wgpu GEMM.</strong> Scalar vec4 FMA tiles with no matrix units, about 1.6 TFLOP/s against torch&#39;s 5.2. WGSL has no portable cooperative-matrix path today, so this is largely a ceiling of the portable backend rather than a bug (inferred).
+<li><strong>wgpu GEMM.</strong> Scalar vec4 FMA tiles with no matrix units, about 1.6 TFLOP/s against torch&#39;s 5.2. WGSL has no portable cooperative-matrix path today, so this is largely a ceiling of the portable backend rather than a bug (inferred). The opt-in cooperative-matrix path is approved; see &#34;wgpu matrix units&#34; above.
 </li>
 </ol>
 <p><code>residual_add_bwd</code> scores 0.01× only because the API returns two gradient copies where torch returns the input tensor. It is an artefact of the API, not a slow kernel.</p>

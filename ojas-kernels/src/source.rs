@@ -59,6 +59,36 @@ const ATTENTION: &str = include_str!("wgsl/attention.wgsl");
 const CACHED_ATTENTION: &str = include_str!("wgsl/cached_attention.wgsl");
 const LAYOUT: &str = include_str!("wgsl/layout.wgsl");
 const FAULT: &str = include_str!("wgsl/fault.wgsl");
+const CLIP: &str = include_str!("wgsl/clip.wgsl");
+
+/// Most gradients one multi-tensor norm or scale dispatch binds.
+pub const CLIP_MAX_SLOTS: u32 = 16;
+
+/// Storage bindings `norm_partial` uses besides its gradients: the fault
+/// words, the partials, the slot table and the status words.
+const CLIP_FIXED_BINDINGS: u32 = 4;
+
+/// Gradients one multi-tensor norm dispatch binds on a device that allows
+/// `max_storage` storage buffers per shader stage: [`CLIP_MAX_SLOTS`], or
+/// fewer to fit. A device with no room for one is `Unsupported`.
+pub fn clip_slots(max_storage: u32) -> Result<u32, OjasError> {
+    let room = max_storage.saturating_sub(CLIP_FIXED_BINDINGS);
+    if room == 0 {
+        return Err(OjasError::Unsupported {
+            op: "clip_grad_norm",
+            detail: format!(
+                "the norm binds {CLIP_FIXED_BINDINGS} storage buffers besides one gradient; the \
+                 device allows {max_storage}"
+            ),
+        });
+    }
+    Ok(room.min(CLIP_MAX_SLOTS))
+}
+
+/// Binding of norm slot `s` (read-only); scale slot `s` is
+/// `CLIP_SCALE_BASE + s` (read-write).
+pub const CLIP_NORM_BASE: u32 = 10;
+pub const CLIP_SCALE_BASE: u32 = CLIP_NORM_BASE + CLIP_MAX_SLOTS;
 
 /// WGSL module families for the device-resident wgpu backend.
 ///
@@ -83,6 +113,39 @@ pub enum WgslModule {
     /// Split-key causal attention of new queries against a time-major KV
     /// cache (decode, and prefill onto a non-empty cache).
     CachedAttention,
+    /// The multi-tensor global norm and scale over this many gradient
+    /// bindings (1..=[`CLIP_MAX_SLOTS`], from [`clip_slots`]).
+    Clip(u32),
+}
+
+/// The multi-tensor clip template with `k` gradient bindings of each kind.
+fn clip_source(k: u32) -> Result<String, OjasError> {
+    if !(1..=CLIP_MAX_SLOTS).contains(&k) {
+        return Err(OjasError::OutOfRange {
+            op: "wgsl_module",
+            detail: format!("clip slot count {k} is outside 1..={CLIP_MAX_SLOTS}"),
+        });
+    }
+    let mut decls = String::new();
+    let mut load = String::new();
+    let mut store = String::new();
+    for s in 0..k {
+        decls.push_str(&format!(
+            "@group(0) @binding({}) var<storage, read> g{s}: array<f32>;\n\
+             @group(0) @binding({}) var<storage, read_write> w{s}: array<f32>;\n",
+            CLIP_NORM_BASE + s,
+            CLIP_SCALE_BASE + s
+        ));
+        load.push_str(&format!("        case {s}u: {{ return g{s}[i]; }}\n"));
+        store.push_str(&format!(
+            "        case {s}u: {{ let r = w{s}[i] * k; w{s}[i] = r; report(r); }}\n"
+        ));
+    }
+    Ok(CLIP
+        .replace("{{K}}", &k.to_string())
+        .replace("{{DECLS}}", &decls)
+        .replace("{{LOAD}}", &load)
+        .replace("{{STORE}}", &store))
 }
 
 /// The tiled attention template for `tiles`. A plan the template cannot
@@ -164,6 +227,10 @@ pub fn wgsl_module(module: WgslModule) -> Result<String, OjasError> {
         WgslModule::Fault => src.push_str(FAULT),
         WgslModule::Attention(tiles) => src.push_str(&attention_source(tiles)?),
         WgslModule::CachedAttention => src.push_str(CACHED_ATTENTION),
+        WgslModule::Clip(k) => {
+            src.push_str(TREE);
+            src.push_str(&clip_source(k)?);
+        }
     }
     Ok(src)
 }
@@ -187,6 +254,8 @@ mod tests {
             WgslModule::Fault,
             WgslModule::Attention(tiles),
             WgslModule::CachedAttention,
+            WgslModule::Clip(1),
+            WgslModule::Clip(CLIP_MAX_SLOTS),
         ] {
             let src = wgsl_module(module).unwrap();
             assert!(
@@ -246,5 +315,37 @@ mod tests {
                 assert!(!src.contains("{{"), "{t:?}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    #[test]
+    fn clip_slots_fit_the_device_and_refuse_a_device_without_room() {
+        // The WebGPU minimum of 8 storage buffers leaves 4 gradients.
+        assert_eq!(clip_slots(8).unwrap(), 4);
+        assert_eq!(clip_slots(5).unwrap(), 1);
+        assert_eq!(clip_slots(29).unwrap(), CLIP_MAX_SLOTS);
+        assert!(matches!(clip_slots(4), Err(OjasError::Unsupported { .. })));
+        assert!(matches!(
+            wgsl_module(WgslModule::Clip(0)),
+            Err(OjasError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            wgsl_module(WgslModule::Clip(CLIP_MAX_SLOTS + 1)),
+            Err(OjasError::OutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn the_clip_template_declares_every_slot_once() {
+        let src = wgsl_module(WgslModule::Clip(3)).unwrap();
+        for s in 0..3 {
+            assert_eq!(src.matches(&format!(" g{s}: array<f32>")).count(), 1);
+            assert_eq!(src.matches(&format!(" w{s}: array<f32>")).count(), 1);
+        }
+        assert!(!src.contains(" g3: "));
     }
 }

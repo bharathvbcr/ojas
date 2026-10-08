@@ -23,12 +23,24 @@
 //! every later error check reports it, and every error from a device call
 //! names it.
 //!
-//! Uploads write through a buffer mapped at creation, and parameters do the
-//! same, so no `Queue::write_buffer` is ever ordered against recorded work.
-//! A pooled buffer is only ever written by commands recorded after the ones
-//! that read its previous contents, so reuse needs no fence.
+//! Uploads write through a buffer mapped at creation. A pooled buffer is
+//! only ever written by commands recorded after the ones that read its
+//! previous contents, so reuse needs no fence.
+//!
+//! A dispatch's sixteen parameter words go to a slot of the context's
+//! parameter ring, bound at a dynamic offset. The host fills the slots of
+//! the open encoder and writes them with one `Queue::write_buffer` just
+//! before that encoder is submitted; the queue orders that write after
+//! every earlier submission's reads of the ring and before this one's. A
+//! job that would pass [`PARAM_SLOTS`] submits what is recorded first.
+//! Bind groups are cached by kernel and buffer identity
+//! ([`BIND_CACHE_CAP`]), and `MAP_READ` staging buffers are kept for the
+//! next read ([`STAGING_CACHE_BYTES`]), so a steady-state dispatch creates
+//! no wgpu object and pops no error scope. [`CacheStats`] counts what is
+//! still created and every blocking error-scope pop.
 
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -40,6 +52,28 @@ use crate::{gpu_error, hal_backends, info_of};
 
 /// Dispatches recorded before the encoder is submitted without a read.
 pub const FLUSH_AT: usize = 64;
+
+/// Bytes of one dispatch's parameter words: sixteen `u32`.
+const PARAM_BYTES: u64 = 64;
+
+/// Dispatches whose parameter words one submission's ring holds. A job that
+/// would pass it submits what is already recorded and goes on in a new
+/// encoder.
+pub const PARAM_SLOTS: usize = 1024;
+
+/// Bind groups the cache keeps. At the cap the cache is emptied and refills
+/// from the next dispatches.
+pub const BIND_CACHE_CAP: usize = 4096;
+
+/// Bytes of idle `MAP_READ` staging buffers kept for later reads. A read
+/// larger than this uses a buffer of its own and drops it.
+pub const STAGING_CACHE_BYTES: u64 = 64 << 20;
+
+/// Smallest staging buffer: reads of up to this many bytes share a size.
+const STAGING_MIN_BYTES: u64 = 256;
+
+/// Host bytes an upload encodes at a time into the device mapping.
+const UPLOAD_PIECE_BYTES: usize = 64 << 10;
 
 /// How long dropping the last handle on a context waits for its queue to go
 /// idle before it lets a background thread finish the drop (see
@@ -207,6 +241,14 @@ pub(crate) struct Pipe {
 /// from freed buffers; `alloc_retries` counts allocations the device
 /// refused for want of memory and that were tried again after the pool was
 /// released; `uploads` are host-to-device copies.
+///
+/// The fixed cost of a dispatch: `scope_pops` counts every blocking
+/// error-scope pop (a buffer creation, a bind group the cache missed, a
+/// shader or pipeline compile); `bind_groups` the bind groups created and
+/// `bind_hits` the dispatches the cache served; `staging_creates` the
+/// `MAP_READ` buffers created for reads; `offset_copies` the operands
+/// compacted into scratch because their byte offset cannot be bound in
+/// place.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
     pub compiles: u64,
@@ -218,6 +260,11 @@ pub struct CacheStats {
     pub upload_bytes: u64,
     pub reads: u64,
     pub read_bytes: u64,
+    pub scope_pops: u64,
+    pub bind_groups: u64,
+    pub bind_hits: u64,
+    pub staging_creates: u64,
+    pub offset_copies: u64,
 }
 
 #[derive(Default)]
@@ -231,6 +278,11 @@ struct Counters {
     upload_bytes: AtomicU64,
     reads: AtomicU64,
     read_bytes: AtomicU64,
+    scope_pops: AtomicU64,
+    bind_groups: AtomicU64,
+    bind_hits: AtomicU64,
+    staging_creates: AtomicU64,
+    offset_copies: AtomicU64,
 }
 
 #[derive(Default)]
@@ -252,6 +304,172 @@ struct Recorder {
     encoder: Option<wgpu::CommandEncoder>,
     scratch: Vec<Scratch>,
     dispatches: usize,
+    /// Host copy of the parameter ring's slots for the open encoder, written
+    /// to the device just before it is submitted.
+    params: Vec<u8>,
+    /// Slots of `params` the open encoder's dispatches use.
+    slots: usize,
+}
+
+impl Recorder {
+    /// The next parameter slot, holding `words`: its byte offset in the
+    /// ring. The caller has checked that a slot is free.
+    fn slot(&mut self, words: &[u32; 16], stride: u64) -> u32 {
+        put_slot(&mut self.params, &mut self.slots, words, stride)
+    }
+}
+
+/// Write `words` to slot `*slots` of the ring's host copy `params` and take
+/// the slot: its byte offset. Free-standing so a caller can hold the
+/// recorder's encoder while it fills slots.
+fn put_slot(params: &mut Vec<u8>, slots: &mut usize, words: &[u32; 16], stride: u64) -> u32 {
+    let at = *slots * stride as usize;
+    if params.len() < at + PARAM_BYTES as usize {
+        params.resize(PARAM_SLOTS * stride as usize, 0);
+    }
+    let (dst, _) = params[at..at + PARAM_BYTES as usize].as_chunks_mut::<4>();
+    for (d, w) in dst.iter_mut().zip(words) {
+        *d = w.to_le_bytes();
+    }
+    *slots += 1;
+    at as u32
+}
+
+/// A storage binding: a whole buffer, or a range of one.
+pub(crate) trait Binding {
+    fn buffer(&self) -> &wgpu::Buffer;
+    /// Byte offset and length of the bound range.
+    fn range(&self) -> (u64, u64);
+}
+
+impl Binding for wgpu::Buffer {
+    fn buffer(&self) -> &wgpu::Buffer {
+        self
+    }
+
+    fn range(&self) -> (u64, u64) {
+        (0, self.size())
+    }
+}
+
+/// `size` bytes at byte `offset` of a buffer, bound in place: a tensor view
+/// that does not start at byte 0.
+#[derive(Clone, Debug)]
+pub(crate) struct View {
+    buf: wgpu::Buffer,
+    offset: u64,
+    size: u64,
+}
+
+impl View {
+    /// `size` bytes at byte `offset` of `buf`; `offset` meets the device's
+    /// storage-offset alignment.
+    pub(crate) fn at(buf: &wgpu::Buffer, offset: u64, size: u64) -> Self {
+        Self {
+            buf: buf.clone(),
+            offset,
+            size,
+        }
+    }
+
+    pub(crate) fn whole(buf: &wgpu::Buffer) -> Self {
+        Self {
+            buf: buf.clone(),
+            offset: 0,
+            size: buf.size(),
+        }
+    }
+}
+
+impl Binding for View {
+    fn buffer(&self) -> &wgpu::Buffer {
+        &self.buf
+    }
+
+    fn range(&self) -> (u64, u64) {
+        (self.offset, self.size)
+    }
+}
+
+/// What a cached bind group binds: the kernel, the fault words at binding
+/// 1, and each storage slot's buffer and byte range. The parameter ring is
+/// the same for every key and is bound at a dynamic offset.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BindKey {
+    kernel: (WgslModule, &'static str),
+    fault: wgpu::Buffer,
+    bufs: Vec<(wgpu::Buffer, u64, u64)>,
+}
+
+impl BindKey {
+    fn buffers(&self) -> impl Iterator<Item = &wgpu::Buffer> {
+        std::iter::once(&self.fault).chain(self.bufs.iter().map(|(b, _, _)| b))
+    }
+}
+
+/// Bind groups by [`BindKey`], with every key that binds a buffer indexed by
+/// that buffer. A cached group holds its buffers alive, so a buffer that
+/// leaves the pool for good is forgotten here at once
+/// ([`BindCache::forget`]); otherwise the cache would keep freed device
+/// memory. The context's own fault words live as long as the context and
+/// are not indexed.
+#[derive(Default)]
+struct BindCache {
+    groups: HashMap<BindKey, wgpu::BindGroup>,
+    by_buf: HashMap<wgpu::Buffer, Vec<BindKey>>,
+}
+
+impl BindCache {
+    fn insert(&mut self, key: BindKey, group: wgpu::BindGroup, permanent: &[&wgpu::Buffer]) {
+        if self.groups.len() >= BIND_CACHE_CAP {
+            self.clear();
+        }
+        let mut seen: Vec<&wgpu::Buffer> = Vec::with_capacity(key.bufs.len() + 1);
+        for b in key.buffers() {
+            if permanent.contains(&b) || seen.contains(&b) {
+                continue;
+            }
+            seen.push(b);
+            self.by_buf.entry(b.clone()).or_default().push(key.clone());
+        }
+        self.groups.insert(key, group);
+    }
+
+    /// Drop every cached group that binds `buf`.
+    fn forget(&mut self, buf: &wgpu::Buffer) {
+        let Some(keys) = self.by_buf.remove(buf) else {
+            return;
+        };
+        for key in keys {
+            if self.groups.remove(&key).is_none() {
+                continue;
+            }
+            for other in key.buffers() {
+                if other == buf {
+                    continue;
+                }
+                if let Some(list) = self.by_buf.get_mut(other) {
+                    list.retain(|k| k != &key);
+                    if list.is_empty() {
+                        self.by_buf.remove(other);
+                    }
+                }
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.groups.clear();
+        self.by_buf.clear();
+    }
+}
+
+/// Idle `MAP_READ` staging buffers, each a power-of-two size of at least
+/// [`STAGING_MIN_BYTES`], at most [`STAGING_CACHE_BYTES`] in all.
+#[derive(Default)]
+struct StagingCache {
+    free: Vec<wgpu::Buffer>,
+    bytes: u64,
 }
 
 pub(crate) struct Inner {
@@ -270,6 +488,15 @@ pub(crate) struct Inner {
     pipelines: Mutex<HashMap<(WgslModule, &'static str), Arc<Pipe>>>,
     pool: Mutex<Pool>,
     rec: Mutex<Recorder>,
+    /// The parameter ring: [`PARAM_SLOTS`] slots of `param_stride` bytes,
+    /// bound at binding 0 of every dispatch at its slot's offset.
+    params: wgpu::Buffer,
+    param_stride: u64,
+    binds: Mutex<BindCache>,
+    staging: Mutex<StagingCache>,
+    /// Dispatches recorded before a submit without a read: [`FLUSH_AT`]
+    /// unless a benchmark changed it ([`WgpuContext::set_flush_at`]).
+    flush_at: AtomicUsize,
     /// Live fault words, written by kernels: 0 and 1 the op mask (ops 0..31,
     /// then 32..63), 2 the first op + 1.
     fault: wgpu::Buffer,
@@ -317,7 +544,8 @@ impl Inner {
 ///
 /// So the queue and every other GPU object this context owns (pipelines,
 /// shader modules, pooled buffers, the open encoder and its scratch, the
-/// held bind group, and handles to the device and the fault buffers) move
+/// held bind group, the bind group and staging caches, and handles to the
+/// device, the parameter ring and the fault buffers) move
 /// to a thread of their own. That thread drops the queue first, which waits
 /// for the GPU, then the rest. This drop waits for it at most
 /// [`WgpuContext::set_drop_wait`] (default [`DROP_WAIT`]) and then drops
@@ -344,7 +572,7 @@ impl Drop for Inner {
             return;
         };
         let rest = (
-            self.device.clone(),
+            (self.device.clone(), self.params.clone()),
             self.fault.clone(),
             self.held.clone(),
             std::mem::take(&mut *lock(&self.modules)),
@@ -352,6 +580,10 @@ impl Drop for Inner {
             std::mem::take(&mut *lock(&self.pool)),
             std::mem::take(&mut *lock(&self.rec)),
             lock(&self.hold).take(),
+            (
+                std::mem::take(&mut *lock(&self.binds)),
+                std::mem::take(&mut *lock(&self.staging)),
+            ),
         );
         let wait = std::time::Duration::from_millis(self.drop_wait_ms.load(Ordering::Relaxed));
         let (done, finished) = std::sync::mpsc::channel::<()>();
@@ -487,6 +719,9 @@ impl WgpuContext {
         });
         let fault = zeroed_words(&device, "ojas-fault")?;
         let held = zeroed_words(&device, "ojas-fault-held")?;
+        let param_stride = PARAM_BYTES
+            .next_multiple_of(u64::from(limits.min_uniform_buffer_offset_alignment.max(1)));
+        let params = param_ring(&device, param_stride)?;
         let (adapter_name, hal, vendor) = info_of(&info);
         Ok(Self {
             inner: Arc::new(Inner {
@@ -502,6 +737,11 @@ impl WgpuContext {
                 pipelines: Mutex::new(HashMap::new()),
                 pool: Mutex::new(Pool::default()),
                 rec: Mutex::new(Recorder::default()),
+                params,
+                param_stride,
+                binds: Mutex::new(BindCache::default()),
+                staging: Mutex::new(StagingCache::default()),
+                flush_at: AtomicUsize::new(FLUSH_AT),
                 fault,
                 held,
                 hold: Mutex::new(None),
@@ -564,7 +804,45 @@ impl WgpuContext {
             upload_bytes: get(&c.upload_bytes),
             reads: get(&c.reads),
             read_bytes: get(&c.read_bytes),
+            scope_pops: get(&c.scope_pops),
+            bind_groups: get(&c.bind_groups),
+            bind_hits: get(&c.bind_hits),
+            staging_creates: get(&c.staging_creates),
+            offset_copies: get(&c.offset_copies),
         }
+    }
+
+    /// Dispatches recorded before the encoder is submitted without a read
+    /// ([`FLUSH_AT`] by default). For the benchmark that chose that value;
+    /// 0 is taken as 1.
+    #[doc(hidden)]
+    pub fn set_flush_at(&self, dispatches: usize) {
+        self.inner
+            .flush_at
+            .store(dispatches.max(1), Ordering::Relaxed);
+    }
+
+    /// One more operand compacted into scratch for want of an aligned
+    /// in-place binding.
+    pub(crate) fn note_offset_copy(&self) {
+        self.inner
+            .counters
+            .offset_copies
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Byte alignment a storage binding's offset needs on this device.
+    pub(crate) fn storage_offset_alignment(&self) -> u64 {
+        u64::from(self.inner.limits.min_storage_buffer_offset_alignment.max(4))
+    }
+
+    /// One blocking error-scope pop, counted.
+    fn pop(&self, scope: wgpu::ErrorScopeGuard) -> Option<wgpu::Error> {
+        self.inner
+            .counters
+            .scope_pops
+            .fetch_add(1, Ordering::Relaxed);
+        pollster::block_on(scope.pop())
     }
 
     /// Release every pooled buffer. Live tensors are not touched. An
@@ -574,6 +852,12 @@ impl WgpuContext {
         let mut pool = lock(&self.inner.pool);
         pool.free.clear();
         pool.bytes = 0;
+        drop(pool);
+        // A cached group would keep a released buffer alive.
+        lock(&self.inner.binds).clear();
+        let mut staging = lock(&self.inner.staging);
+        staging.free.clear();
+        staging.bytes = 0;
     }
 
     /// Bytes of freed buffers the pool holds now, at most
@@ -623,7 +907,7 @@ impl WgpuContext {
             .device
             .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let buf = self.inner.device.create_buffer(desc);
-        match pollster::block_on(scope.pop()) {
+        match self.pop(scope) {
             Some(err) => Err(err.to_string()),
             None => Ok(buf),
         }
@@ -724,6 +1008,9 @@ impl WgpuContext {
         let mut pool = lock(&self.inner.pool);
         let exists = pool.free.contains_key(&bytes);
         if !pool_accepts(exists, pool.free.len(), pool.bytes, bytes) {
+            drop(pool);
+            // Gone for good: no cached bind group may keep it alive.
+            lock(&self.inner.binds).forget(&buf);
             return;
         }
         pool.bytes = pool.bytes.saturating_add(bytes);
@@ -743,19 +1030,30 @@ impl WgpuContext {
         })
     }
 
-    /// Copy host bytes to a new device buffer. `shadow` keeps the values of a
-    /// U32 tensor so ids can be range-checked without reading the device.
-    pub(crate) fn upload_bytes(
+    /// Copy a host tensor's contiguous window to a new device buffer,
+    /// encoded straight into the buffer's mapping a piece at a time
+    /// ([`ojas_core::Tensor::for_each_ne_piece`]), so the host never holds a
+    /// second full copy. `shadow` keeps the values of a U32 tensor so ids
+    /// can be range-checked without reading the device.
+    pub(crate) fn upload_tensor(
         &self,
-        data: &[u8],
+        tensor: &ojas_core::Tensor,
         shadow: Option<Arc<[u32]>>,
     ) -> Result<WgpuBuffer, OjasError> {
-        let bytes = (data.len() as u64).div_ceil(4) * 4;
-        let buf = self.mapped(bytes, storage_usage(), data)?;
+        let len = (tensor.num_elements()? * tensor.dtype().size()) as u64;
+        let bytes = len.div_ceil(4) * 4;
+        let buf = self.mapped_with(bytes, storage_usage(), |view| {
+            let mut at = 0usize;
+            tensor.for_each_ne_piece(UPLOAD_PIECE_BYTES, |piece| {
+                view.slice(at..at + piece.len()).copy_from_slice(piece);
+                at += piece.len();
+                Ok(())
+            })?;
+            Ok(at)
+        })?;
         let c = &self.inner.counters;
         c.uploads.fetch_add(1, Ordering::Relaxed);
-        c.upload_bytes
-            .fetch_add(data.len() as u64, Ordering::Relaxed);
+        c.upload_bytes.fetch_add(len, Ordering::Relaxed);
         Ok(WgpuBuffer {
             buf: Some(buf),
             bytes,
@@ -770,6 +1068,21 @@ impl WgpuContext {
         bytes: u64,
         usage: wgpu::BufferUsages,
         data: &[u8],
+    ) -> Result<wgpu::Buffer, OjasError> {
+        self.mapped_with(bytes, usage, |view| {
+            view.slice(..data.len()).copy_from_slice(data);
+            Ok(data.len())
+        })
+    }
+
+    /// A new buffer of `bytes`, mapped at creation: `fill` writes its
+    /// leading bytes and returns how many, the rest is zeroed, and the
+    /// buffer is unmapped.
+    fn mapped_with(
+        &self,
+        bytes: u64,
+        usage: wgpu::BufferUsages,
+        fill: impl FnOnce(&mut wgpu::BufferViewMut) -> Result<usize, OjasError>,
     ) -> Result<wgpu::Buffer, OjasError> {
         if bytes == 0 {
             return Err(backend_err("refusing a zero-length upload"));
@@ -788,8 +1101,7 @@ impl WgpuContext {
                 .slice(..)
                 .get_mapped_range_mut()
                 .map_err(|err| self.failure(format!("upload map: {err}")))?;
-            let n = data.len();
-            view.slice(..n).copy_from_slice(data);
+            let n = fill(&mut view)?;
             let mut rest = n;
             while rest < view.len() {
                 let end = (rest + 64).min(view.len());
@@ -827,7 +1139,7 @@ impl WgpuContext {
                         label: Some(kernel.entry),
                         source: wgpu::ShaderSource::Wgsl(src.into()),
                     });
-                    if let Some(err) = pollster::block_on(scope.pop()) {
+                    if let Some(err) = self.pop(scope) {
                         return Err(self.failure(format!("compiling {:?}: {err}", kernel.module)));
                     }
                     modules.insert(kernel.module, m.clone());
@@ -845,8 +1157,19 @@ impl WgpuContext {
             },
             count: None,
         };
+        // Binding 0 is one slot of the parameter ring, at a dynamic offset.
+        let uniform = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: true,
+                min_binding_size: NonZeroU64::new(PARAM_BYTES),
+            },
+            count: None,
+        };
         let mut entries = vec![
-            buffer(0, wgpu::BufferBindingType::Uniform),
+            uniform,
             buffer(1, wgpu::BufferBindingType::Storage { read_only: false }),
         ];
         for slot in kernel.slots {
@@ -876,7 +1199,7 @@ impl WgpuContext {
             },
             cache: None,
         });
-        if let Some(err) = pollster::block_on(scope.pop()) {
+        if let Some(err) = self.pop(scope) {
             return Err(self.failure(format!("pipeline {}: {err}", kernel.entry)));
         }
         self.inner.counters.compiles.fetch_add(1, Ordering::Relaxed);
@@ -898,16 +1221,18 @@ impl WgpuContext {
         }
     }
 
-    /// Pipeline and bind group for one dispatch of `kernel`: `params` in
-    /// words 0..15, `fault_id` in word 15, `fault` at binding 1 and `bufs`
-    /// at the kernel's slots.
+    /// Pipeline and bind group for one dispatch of `kernel`: parameter
+    /// words at binding 0 (a ring slot, given at the dynamic offset when the
+    /// dispatch is recorded), `fault` at binding 1 and `bufs` at the
+    /// kernel's slots. `params` words fill 0..15 and word 15 is `fault_id`.
+    /// The group comes from the cache when an identical one was made before.
     fn bind(
         &self,
         kernel: &Kernel,
-        params: &[u32],
+        params: usize,
         fault_id: u32,
         fault: &wgpu::Buffer,
-        bufs: &[&wgpu::Buffer],
+        bufs: &[&dyn Binding],
     ) -> Result<(Arc<Pipe>, wgpu::BindGroup), OjasError> {
         if fault_id > FAULT_OPS {
             return Err(backend_err(format!(
@@ -923,34 +1248,54 @@ impl WgpuContext {
                 bufs.len()
             )));
         }
-        if params.len() > 15 {
+        if params > 15 {
             return Err(backend_err(format!(
                 "{}: too many parameters",
                 kernel.entry
             )));
         }
         let pipe = self.pipe(kernel)?;
-        let mut words = [0u32; 16];
-        words[..params.len()].copy_from_slice(params);
-        words[15] = fault_id;
-        let uniform = self.params(&words)?;
+        let key = BindKey {
+            kernel: (kernel.module, kernel.entry),
+            fault: fault.clone(),
+            bufs: bufs
+                .iter()
+                .map(|b| {
+                    let (offset, size) = b.range();
+                    (b.buffer().clone(), offset, size)
+                })
+                .collect(),
+        };
+        let c = &self.inner.counters;
+        if let Some(hit) = lock(&self.inner.binds).groups.get(&key) {
+            c.bind_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok((pipe, hit.clone()));
+        }
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: uniform.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &self.inner.params,
+                    offset: 0,
+                    size: NonZeroU64::new(PARAM_BYTES),
+                }),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: fault.as_entire_binding(),
             },
         ];
-        for (slot, buf) in kernel.slots.iter().zip(bufs) {
+        for (slot, (buf, offset, size)) in kernel.slots.iter().zip(&key.bufs) {
             let binding = match *slot {
                 Slot::R(b) | Slot::W(b) => b,
             };
             entries.push(wgpu::BindGroupEntry {
                 binding,
-                resource: buf.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: buf,
+                    offset: *offset,
+                    size: NonZeroU64::new(*size),
+                }),
             });
         }
         let scope = self
@@ -961,9 +1306,15 @@ impl WgpuContext {
             layout: &pipe.layout,
             entries: &entries,
         });
-        if let Some(err) = pollster::block_on(scope.pop()) {
+        if let Some(err) = self.pop(scope) {
             return Err(self.failure(format!("bind group {}: {err}", kernel.entry)));
         }
+        c.bind_groups.fetch_add(1, Ordering::Relaxed);
+        lock(&self.inner.binds).insert(
+            key,
+            group.clone(),
+            &[&self.inner.fault, &self.inner.held],
+        );
         Ok((pipe, group))
     }
 
@@ -973,13 +1324,21 @@ impl WgpuContext {
         if let Some(hit) = cached.as_ref() {
             return Ok(hit.clone());
         }
-        let made = self.bind(&FAULT_HOLD, &[], 0, &self.inner.fault, &[&self.inner.held])?;
+        let made = self.bind(&FAULT_HOLD, 0, 0, &self.inner.fault, &[&self.inner.held])?;
         *cached = Some(made.clone());
         Ok(made)
     }
 
     fn submit_locked(&self, rec: &mut Recorder) -> Option<wgpu::SubmissionIndex> {
         let encoder = rec.encoder.take()?;
+        if rec.slots > 0 {
+            // Ordered after every earlier submission and before this one.
+            let used = rec.slots * self.inner.param_stride as usize;
+            self.inner
+                .queue()
+                .write_buffer(&self.inner.params, 0, &rec.params[..used]);
+            rec.slots = 0;
+        }
         let index = self.inner.queue().submit(std::iter::once(encoder.finish()));
         self.inner.counters.submits.fetch_add(1, Ordering::Relaxed);
         rec.dispatches = 0;
@@ -1012,18 +1371,14 @@ impl WgpuContext {
         let end = (offset + len).div_ceil(4) * 4;
         let span = end - start;
         let stage_bytes = span + 16;
-        let staging = self.new_buffer(
-            "a staging buffer",
-            &wgpu::BufferDescriptor {
-                label: Some("ojas-staging"),
-                size: stage_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            },
-        )?;
+        let staging = self.staging(stage_bytes)?;
         let (hold_pipe, hold_group) = self.hold()?;
         let index = {
             let mut rec = lock(&self.inner.rec);
+            if rec.slots == PARAM_SLOTS {
+                self.submit_locked(&mut rec);
+            }
+            let at = rec.slot(&[0; 16], self.inner.param_stride);
             let encoder = rec.encoder.get_or_insert_with(|| self.encoder());
             if span > 0 {
                 encoder.copy_buffer_to_buffer(buf, start, &staging, 0, span);
@@ -1037,7 +1392,7 @@ impl WgpuContext {
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&hold_pipe.pipeline);
-                pass.set_bind_group(0, &hold_group, &[]);
+                pass.set_bind_group(0, &hold_group, &[at]);
                 pass.dispatch_workgroups(1, 1, 1);
             }
             encoder.copy_buffer_to_buffer(&self.inner.held, 0, &staging, span, 16);
@@ -1046,7 +1401,7 @@ impl WgpuContext {
         let index = index.ok_or_else(|| backend_err("read recorded no commands"))?;
         let (sender, receiver) = std::sync::mpsc::channel();
         staging
-            .slice(..)
+            .slice(..stage_bytes)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(result);
             });
@@ -1082,7 +1437,7 @@ impl WgpuContext {
         mapped.map_err(|err| self.failure(format!("map_async: {err}")))?;
         let (out, bits, first) = {
             let view = staging
-                .slice(..)
+                .slice(..stage_bytes)
                 .get_mapped_range()
                 .map_err(|err| self.failure(format!("get_mapped_range: {err}")))?;
             let s = span as usize;
@@ -1096,6 +1451,8 @@ impl WgpuContext {
             (view[lo..lo + len as usize].to_vec(), bits, word(2))
         };
         staging.unmap();
+        // Unmapped and idle again: the next read may take it.
+        self.staging_back(staging);
         if bits != 0 || first != 0 {
             self.inner.observed.fetch_or(bits, Ordering::Relaxed);
             if first != 0 {
@@ -1196,13 +1553,67 @@ impl WgpuContext {
             })
     }
 
-    fn params(&self, words: &[u32; 16]) -> Result<wgpu::Buffer, OjasError> {
-        let mut raw = [0u8; 64];
-        for (i, w) in words.iter().enumerate() {
-            raw[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+    /// An idle `MAP_READ` buffer of at least `bytes`: a kept one of the
+    /// same power-of-two size, or a new one.
+    fn staging(&self, bytes: u64) -> Result<wgpu::Buffer, OjasError> {
+        let size = staging_size(bytes);
+        {
+            let mut cache = lock(&self.inner.staging);
+            if let Some(i) = cache.free.iter().position(|b| b.size() == size) {
+                let buf = cache.free.swap_remove(i);
+                cache.bytes = cache.bytes.saturating_sub(size);
+                return Ok(buf);
+            }
         }
-        self.mapped(64, wgpu::BufferUsages::UNIFORM, &raw)
+        self.inner
+            .counters
+            .staging_creates
+            .fetch_add(1, Ordering::Relaxed);
+        self.new_buffer(
+            "a staging buffer",
+            &wgpu::BufferDescriptor {
+                label: Some("ojas-staging"),
+                size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        )
     }
+
+    /// Keep an unmapped staging buffer for a later read, within
+    /// [`STAGING_CACHE_BYTES`].
+    fn staging_back(&self, buf: wgpu::Buffer) {
+        let mut cache = lock(&self.inner.staging);
+        let size = buf.size();
+        if cache.bytes.saturating_add(size) <= STAGING_CACHE_BYTES {
+            cache.bytes += size;
+            cache.free.push(buf);
+        }
+    }
+}
+
+/// The staging size a read of `bytes` uses: the next power of two, at least
+/// [`STAGING_MIN_BYTES`].
+fn staging_size(bytes: u64) -> u64 {
+    bytes.max(STAGING_MIN_BYTES).next_power_of_two()
+}
+
+/// The parameter ring: [`PARAM_SLOTS`] slots of `stride` bytes.
+fn param_ring(device: &wgpu::Device, stride: u64) -> Result<wgpu::Buffer, DeviceError> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("ojas-params"),
+        size: stride * PARAM_SLOTS as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if let Some(err) = pollster::block_on(scope.pop()) {
+        return Err(DeviceError::Capacity {
+            kind: Device::Vulkan,
+            detail: format!("ojas-params: {err}"),
+        });
+    }
+    Ok(buf)
 }
 
 /// A 16-byte storage buffer of four zero words.
@@ -1254,6 +1665,7 @@ enum Step {
     Dispatch {
         pipe: Arc<Pipe>,
         group: wgpu::BindGroup,
+        words: [u32; 16],
         grid: (u32, u32, u32),
     },
     Clear(wgpu::Buffer),
@@ -1281,7 +1693,7 @@ impl Job<'_> {
         &mut self,
         kernel: &Kernel,
         params: &[u32],
-        bufs: &[&wgpu::Buffer],
+        bufs: &[&dyn Binding],
         grid: (u32, u32, u32),
     ) -> Result<(), OjasError> {
         let max = self.ctx.limits().max_compute_workgroups_per_dimension;
@@ -1294,8 +1706,18 @@ impl Job<'_> {
             }
         }
         let fault = self.local_fault.as_ref().unwrap_or(&self.ctx.inner.fault);
-        let (pipe, group) = self.ctx.bind(kernel, params, self.fault_id, fault, bufs)?;
-        self.steps.push(Step::Dispatch { pipe, group, grid });
+        let (pipe, group) = self
+            .ctx
+            .bind(kernel, params.len(), self.fault_id, fault, bufs)?;
+        let mut words = [0u32; 16];
+        words[..params.len()].copy_from_slice(params);
+        words[15] = self.fault_id;
+        self.steps.push(Step::Dispatch {
+            pipe,
+            group,
+            words,
+            grid,
+        });
         Ok(())
     }
 
@@ -1318,10 +1740,12 @@ impl Job<'_> {
         self.steps.push(Step::Clear(buf.clone()));
     }
 
-    pub fn copy(&mut self, src: &wgpu::Buffer, src_offset: u64, dst: &wgpu::Buffer, size: u64) {
+    /// Copy `size` bytes from `src_offset` within `src`'s bound range to the
+    /// start of `dst`.
+    pub fn copy(&mut self, src: &dyn Binding, src_offset: u64, dst: &wgpu::Buffer, size: u64) {
         self.steps.push(Step::Copy {
-            src: src.clone(),
-            src_offset,
+            src: src.buffer().clone(),
+            src_offset: src.range().0 + src_offset,
             dst: dst.clone(),
             size,
         });
@@ -1346,6 +1770,16 @@ impl Job<'_> {
         Ok(buf)
     }
 
+    /// Byte alignment a storage binding's offset needs on this device.
+    pub fn storage_offset_alignment(&self) -> u64 {
+        self.ctx.storage_offset_alignment()
+    }
+
+    /// Count one operand compacted for want of an aligned binding.
+    pub fn note_offset_copy(&self) {
+        self.ctx.note_offset_copy();
+    }
+
     /// Small host-built index data, uploaded through a mapped buffer.
     pub fn upload_u32(&mut self, data: &[u32]) -> Result<wgpu::Buffer, OjasError> {
         let bytes = (data.len() as u64) * 4;
@@ -1366,41 +1800,57 @@ impl Job<'_> {
 
     /// Record every step into the shared encoder. Consecutive dispatches share
     /// one compute pass; wgpu orders dispatches that touch the same buffer.
+    /// When the parameter ring is full, what is recorded is submitted and
+    /// the job goes on in a new encoder; submissions run in order, so the
+    /// split changes nothing the job computes.
     pub fn commit(self) -> Result<(), OjasError> {
         let ctx = self.ctx;
+        let stride = ctx.inner.param_stride;
         let mut rec = lock(&ctx.inner.rec);
         let mut dispatched = 0usize;
-        {
+        let mut i = 0;
+        while i < self.steps.len() {
+            if matches!(self.steps[i], Step::Dispatch { .. }) && rec.slots == PARAM_SLOTS {
+                ctx.submit_locked(&mut rec);
+            }
+            let rec = &mut *rec;
             let encoder = rec.encoder.get_or_insert_with(|| ctx.encoder());
-            let mut i = 0;
-            while i < self.steps.len() {
-                match &self.steps[i] {
-                    Step::Dispatch { .. } => {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("ojas-op"),
-                            timestamp_writes: None,
-                        });
-                        while let Some(Step::Dispatch { pipe, group, grid }) = self.steps.get(i) {
-                            pass.set_pipeline(&pipe.pipeline);
-                            pass.set_bind_group(0, group, &[]);
-                            pass.dispatch_workgroups(grid.0, grid.1, grid.2);
-                            dispatched += 1;
-                            i += 1;
+            match &self.steps[i] {
+                Step::Dispatch { .. } => {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("ojas-op"),
+                        timestamp_writes: None,
+                    });
+                    while let Some(Step::Dispatch {
+                        pipe,
+                        group,
+                        words,
+                        grid,
+                    }) = self.steps.get(i)
+                    {
+                        if rec.slots == PARAM_SLOTS {
+                            break;
                         }
-                    }
-                    Step::Clear(buf) => {
-                        encoder.clear_buffer(buf, 0, None);
+                        let at = put_slot(&mut rec.params, &mut rec.slots, words, stride);
+                        pass.set_pipeline(&pipe.pipeline);
+                        pass.set_bind_group(0, group, &[at]);
+                        pass.dispatch_workgroups(grid.0, grid.1, grid.2);
+                        dispatched += 1;
                         i += 1;
                     }
-                    Step::Copy {
-                        src,
-                        src_offset,
-                        dst,
-                        size,
-                    } => {
-                        encoder.copy_buffer_to_buffer(src, *src_offset, dst, 0, *size);
-                        i += 1;
-                    }
+                }
+                Step::Clear(buf) => {
+                    encoder.clear_buffer(buf, 0, None);
+                    i += 1;
+                }
+                Step::Copy {
+                    src,
+                    src_offset,
+                    dst,
+                    size,
+                } => {
+                    encoder.copy_buffer_to_buffer(src, *src_offset, dst, 0, *size);
+                    i += 1;
                 }
             }
         }
@@ -1410,7 +1860,7 @@ impl Job<'_> {
             .counters
             .dispatches
             .fetch_add(dispatched as u64, Ordering::Relaxed);
-        if rec.dispatches >= FLUSH_AT {
+        if rec.dispatches >= ctx.inner.flush_at.load(Ordering::Relaxed) {
             ctx.submit_locked(&mut rec);
         }
         Ok(())
@@ -1560,7 +2010,10 @@ mod tests {
         drop(b);
         ctx.fail_next_allocs(1);
         let up = ctx
-            .upload_bytes(&[1u8; 64], None)
+            .upload_tensor(
+                &ojas_core::Tensor::from_f32(&[1.0; 16], &[16], &Budget::new(1 << 20)).unwrap(),
+                None,
+            )
             .expect("an upload retries");
         assert_eq!(ctx.stats().alloc_retries, 2);
         drop(up);
@@ -1577,6 +2030,48 @@ mod tests {
         assert_eq!(ctx.stats().alloc_retries, 4);
         ctx.tensor_buffer(3 << 20)
             .expect("a later allocation is unaffected");
+    }
+
+    /// A cached bind group holds its buffers alive, so a buffer the pool
+    /// will not keep must leave the cache with every group that binds it,
+    /// and only those; trimming the pool empties the cache.
+    #[test]
+    fn a_buffer_the_pool_refuses_leaves_the_bind_group_cache() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        let budget = Budget::new(1 << 30);
+        let kept = ctx.alloc(1 << 12).expect("alloc");
+        let other = ctx.alloc(1 << 12).expect("alloc");
+        let gone = ctx.alloc(1 << 12).expect("alloc");
+        let kernel = Kernel {
+            module: WgslModule::Pointwise,
+            entry: "add_inplace",
+            slots: &[Slot::R(2), Slot::W(6)],
+        };
+        for (a, b) in [(&kept, &gone), (&gone, &other), (&kept, &other)] {
+            let mut job = ctx.job(&budget, 0);
+            job.dispatch(&kernel, &[1], &[a, b], (1, 1, 1)).unwrap();
+            job.commit().unwrap();
+        }
+        ctx.sync().unwrap();
+        let groups = |ctx: &WgpuContext| lock(&ctx.inner.binds).groups.len();
+        // Three op groups and the read's fault hold.
+        assert_eq!(groups(&ctx), 4);
+        // Past every cap the pool has: refused, so forgotten.
+        lock(&ctx.inner.pool).bytes = POOL_CAP_BYTES;
+        ctx.give_back(gone.clone(), 1 << 12);
+        assert_eq!(groups(&ctx), 2, "only the two groups binding the freed buffer go");
+        {
+            let binds = lock(&ctx.inner.binds);
+            assert!(!binds.by_buf.contains_key(&gone));
+            assert!(binds
+                .by_buf
+                .values()
+                .flatten()
+                .all(|k| k.buffers().all(|b| b != &gone)));
+        }
+        lock(&ctx.inner.pool).bytes = 0;
+        ctx.trim_pool();
+        assert_eq!(groups(&ctx), 0);
     }
 
     /// The drop and its thread race on one state: whatever the order, the

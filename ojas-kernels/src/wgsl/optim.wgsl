@@ -1,13 +1,12 @@
-// Global-norm clipping and AdamW.
-//
-// The norm is amax * sqrt(sum((g / amax)^2)), so the f32 sum of squares cannot
-// overflow while the norm itself is finite. `result` is four words per call:
-// 0 norm bits, 1 non-finite flag, 2 amax bits.
+// AdamW and Muon. The global norm both use (clip_grad_norm, Muon's
+// normalization) is the multi-tensor pass in clip.wgsl.
 //
 // AdamW runs in f32; WGSL has no f64. The host forms the step scalars in f64
-// and rounds each once. adam_update writes the new state in place into fresh
-// copies; adam_commit restores the old values into those copies if any lane
-// saw a non-finite value, so a bad step is never applied in part.
+// and rounds each once. Transactional without copies, as Metal's
+// ojas_adamw_check / ojas_adamw_apply: adam_check computes every element and
+// only flags status[0]; adam_apply, recorded after it, recomputes with the
+// same function and writes in place only if no lane flagged, so a bad step
+// is never applied in part and what is written is what was checked.
 
 @group(0) @binding(2) var<storage, read> x0: array<f32>;
 @group(0) @binding(3) var<storage, read> x1: array<f32>;
@@ -18,93 +17,14 @@
 @group(0) @binding(8) var<storage, read_write> status: array<atomic<u32>>;
 @group(0) @binding(9) var<storage, read> status_in: array<u32>;
 
-const CHUNK: u32 = 4096u;
-
-// Words: 0 n, 1 partial base. x0 = grad. y0[base + group] = max |g| over the
-// chunk; a non-finite element sets status[1].
-@compute @workgroup_size(256, 1, 1)
-fn absmax_partial(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-    let group = flat_group(wg, nwg);
-    let n = pw(0u);
-    let start = group * CHUNK;
-    var peak = 0.0;
-    for (var j = 0u; j < CHUNK / 256u; j = j + 1u) {
-        let i = start + j * 256u + lid.x;
-        if (i < n) {
-            let v = x0[i];
-            if (nonfinite(v)) {
-                atomicOr(&status[1], 1u);
-            } else {
-                peak = max(peak, abs(v));
-            }
-        }
-    }
-    let m = tree_max(lid.x, peak);
-    if (lid.x == 0u) {
-        y0[pw(1u) + group] = m;
-    }
-}
-
-// Words: 0 partial count. x0 = partials. status[2] = amax bits.
-@compute @workgroup_size(256, 1, 1)
-fn absmax_finish(@builtin(local_invocation_id) lid: vec3<u32>) {
-    var peak = 0.0;
-    for (var i = lid.x; i < pw(0u); i = i + 256u) {
-        peak = max(peak, x0[i]);
-    }
-    let m = tree_max(lid.x, peak);
-    if (lid.x == 0u) {
-        atomicStore(&status[2], bitcast<u32>(m));
-    }
-}
-
-// Words: 0 n, 1 partial base. x0 = grad, status_in[2] = amax bits.
-@compute @workgroup_size(256, 1, 1)
-fn sumsq_partial(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-    let group = flat_group(wg, nwg);
-    let n = pw(0u);
-    let amax = bitcast<f32>(status_in[2]);
-    var inv = 0.0;
-    if (amax > 0.0) {
-        inv = 1.0 / amax;
-    }
-    let start = group * CHUNK;
-    var acc = 0.0;
-    for (var j = 0u; j < CHUNK / 256u; j = j + 1u) {
-        let i = start + j * 256u + lid.x;
-        if (i < n) {
-            let v = x0[i] * inv;
-            acc = acc + v * v;
-        }
-    }
-    let total = tree_sum(lid.x, acc);
-    if (lid.x == 0u) {
-        y0[pw(1u) + group] = total;
-    }
-}
-
-// Words: 0 partial count. x0 = partials. status[0] = norm bits.
-@compute @workgroup_size(256, 1, 1)
-fn clip_finish(@builtin(local_invocation_id) lid: vec3<u32>) {
-    var acc = 0.0;
-    for (var i = lid.x; i < pw(0u); i = i + 256u) {
-        acc = acc + x0[i];
-    }
-    let total = tree_sum(lid.x, acc);
-    if (lid.x == 0u) {
-        let amax = bitcast<f32>(atomicLoad(&status[2]));
-        atomicStore(&status[0], bitcast<u32>(amax * sqrt(total)));
-    }
-}
-
 // Words: 0 n, 1 step_size, 2 sqrt(bias_correction2), 3 eps, 4 beta1,
 // 5 1 - beta1, 6 beta2, 7 1 - beta2, 8 decay (1 - lr * wd), 9 flags
 // (bit 0 weight decay is non-zero, bit 1 lerp uses the low-weight form).
-// x0 = grad. y0, y1, y2 = param, moment1, moment2, updated in place.
-@compute @workgroup_size(256, 1, 1)
-fn adam_update(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-    let i = flat_group(wg, nwg) * 256u + lid.x;
-    if (i >= pw(0u)) { return; }
+// x0 = grad. y0, y1, y2 = param, moment1, moment2.
+struct AdamOut { p: f32, m: f32, v: f32, bad: bool, }
+
+// Element i's new state, and whether the step is non-finite there.
+fn adam_elem(i: u32) -> AdamOut {
     let flags = pw(9u);
     let decays = (flags & 1u) == 1u;
     let g = x0[i];
@@ -123,33 +43,40 @@ fn adam_update(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw
     v = pf(6u) * v + pf(7u) * g * g;
     let denom = sqrt(v) / pf(2u) + pf(3u);
     let delta = (-pf(1u)) * m / denom;
-    if (nonfinite(g) || nonfinite(m) || nonfinite(v) || nonfinite(denom) || nonfinite(delta)) {
-        atomicOr(&status[0], 1u);
-    }
+    var bad = nonfinite(g) || nonfinite(m) || nonfinite(v) || nonfinite(denom) || nonfinite(delta);
     if (!decays && delta == 0.0) {
         p = p0;
     } else {
         p = p + delta;
-        if (nonfinite(p)) {
-            atomicOr(&status[0], 1u);
-        }
+        bad = bad || nonfinite(p);
     }
-    y0[i] = p;
-    y1[i] = m;
-    y2[i] = v;
+    return AdamOut(p, m, v, bad);
 }
 
-// Words: 0 n. x0, x1, x2 = old param, moment1, moment2. y0, y1, y2 = new.
-// status_in[0] != 0 restores the old state and raises the fault bit.
+// Writes nothing but status[0], set when any element's step is non-finite.
 @compute @workgroup_size(256, 1, 1)
-fn adam_commit(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+fn adam_check(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let i = flat_group(wg, nwg) * 256u + lid.x;
     if (i >= pw(0u)) { return; }
-    if (status_in[0] == 0u) { return; }
-    if (i == 0u) { raise(); }
-    y0[i] = x0[i];
-    y1[i] = x1[i];
-    y2[i] = x2[i];
+    if (adam_elem(i).bad) {
+        atomicOr(&status[0], 1u);
+    }
+}
+
+// status_in[0] != 0 (adam_check flagged): nothing is written and the op's
+// fault bit is raised. Otherwise every element is updated in place.
+@compute @workgroup_size(256, 1, 1)
+fn adam_apply(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = flat_group(wg, nwg) * 256u + lid.x;
+    if (i >= pw(0u)) { return; }
+    if (status_in[0] != 0u) {
+        if (i == 0u) { raise(); }
+        return;
+    }
+    let o = adam_elem(i);
+    y0[i] = o.p;
+    y1[i] = o.m;
+    y2[i] = o.v;
 }
 
 // Muon NS5 in f32, the CPU reference's order of operations. The host runs

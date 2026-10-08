@@ -166,7 +166,7 @@
 <tr><td><code>WgpuBackend</code> (<code>ojas-wgpu</code>)</td><td>Yes, device-resident</td><td><code>Fast</code>, 1e-4 relative tolerance</td><td>208 passed, 3 ignored</td><td>Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (<code>accumulate_grad</code>), KV cache writes, tiled linear cross-entropy (<code>linear_ce</code>), and deferred fault reporting at next <code>sync</code></td></tr>
 <tr><td><code>ojas-kernels</code></td><td>No (shared geometry and sources)</td><td>—</td><td>11 passed</td><td>Launch geometry (<code>gemm_grid</code>, <code>attention_tiles</code>, <code>ATTENTION_MAX_HEAD_DIM</code>), WGSL modules in <code>src/wgsl/</code>, NaN-safe parity harness</td></tr>
 <tr><td><code>ojas-cuda</code></td><td>No</td><td>—</td><td>8 passed (feature off)</td><td>One affine kernel behind <code>--features cuda</code></td></tr>
-<tr><td><code>ojas-hip</code></td><td>No</td><td>—</td><td>8 passed (feature off)</td><td>Copy probe behind <code>--features hip</code>; no kernel</td></tr>
+<tr><td><code>ojas-hip</code></td><td>No (full backend planned)</td><td>—</td><td>11 passed (feature off)</td><td>Copy probe behind <code>--features hip</code>; no kernel. Device ordinal is explicit (<code>open_ordinal</code>)</td></tr>
 </tbody></table></div>
 <aside class="alert alert-warning"><p class="alert-title">Warning</p><p>Both <code>MetalBackend</code> and <code>WgpuBackend</code> enforce $d_{\text{head}} \le 256$ for attention operations (<code>METAL_MAX_HEAD_DIM</code>; <code>ATTENTION_MAX_HEAD_DIM</code> for wgpu). A larger head dimension raises <code>OjasError::UnsupportedHeadDim</code> loud and early. The tiny Metal training step in <code>ojas-metal/src/gpu.rs</code> keeps its own limit of 64. Causal SDPA accepts grouped-query head counts on CPU, Metal and wgpu.</p>
 </aside>
@@ -209,6 +209,9 @@
 <tr><td>Go GPU modules</td><td>—</td><td>Go GPU engines (<code>gorgonia</code>, <code>gocu</code>) add GC interference. The in-process gusset C-ABI boundary keeps compute in Rust.</td></tr>
 </tbody></table></div>
 <hr>
+<h2 id="hip-decision">HIP Decision <a class="anchor" href="#hip-decision" aria-label="Link to this section">#</a></h2>
+<p>Recorded 2026-10-08 by the user: <code>ojas-hip</code> will become a full <code>ojas_core::Backend</code> on ROCm. The roadmap, the CI runner it needs, and its acceptance gates are in <a href="https://github.com/bharathvbcr/ojas/blob/main/tasks/gp-hip-backend.md" rel="noopener"><code>tasks/gp-hip-backend.md</code></a>. Until that lands, <code>ojas-hip</code> remains the copy probe described above, and no engine path can select HIP: the C API has no HIP device code and the Go API no HIP selector, so a HIP request is refused at load.</p>
+<p>The probe already reports failures in the classes the backend will keep: a missing runtime or device (HIP status 3, 4, 35, 100, 101, or an ordinal outside <code>hipGetDeviceCount</code>) is <code>NoDevice</code>; out of memory (2) is <code>Capacity</code>; every other status from a device that answered, including copy, stream and event failures, is <code>Launch</code>. Every <code>unsafe</code> site carries a <code>// SAFETY:</code> comment. The runtime calls are declared locally to return the raw <code>c_int</code> status rather than hip-runtime-sys&#39;s <code>hipError_t</code> enum, so a status the binding does not list is an error value, not undefined behaviour.</p>
 <h2 id="cuda-and-hip-verification-status">CUDA and HIP Verification Status <a class="anchor" href="#cuda-and-hip-verification-status" aria-label="Link to this section">#</a></h2>
 <p><strong>Reported</strong> from an earlier session; not re-run on 2026-10-01.</p>
 <div class="table-wrap"><table>
@@ -218,7 +221,7 @@
 <tr><td><strong>CUDA Bindings</strong></td><td><code>cargo check -p ojas-cuda --features cuda</code></td><td><strong>Passed:</strong> Typecheck only (dynamic loading; <code>nvcc</code> absent)</td></tr>
 <tr><td><strong>CUDA Execution</strong></td><td>Kernel launch</td><td><strong>Skipped:</strong> No NVIDIA GPU present</td></tr>
 <tr><td><strong>HIP Default</strong></td><td><code>cargo test -p ojas-hip</code></td><td><strong>Passed:</strong> <code>tests::default_build_reports_not_compiled</code></td></tr>
-<tr><td><strong>HIP Bindings</strong></td><td><code>cargo check -p ojas-hip --features hip</code></td><td><strong>Skipped:</strong> Build stopped in <code>hip-runtime-sys</code> (no <code>/opt/rocm</code>)</td></tr>
+<tr><td><strong>HIP Bindings</strong></td><td><code>cargo check -p ojas-hip --features hip</code></td><td><strong>Skipped:</strong> Build stopped in <code>hip-runtime-sys</code> (no <code>/opt/rocm</code>). 2026-10-08: <code>cargo clippy -p ojas-hip --features hip --all-targets -- -D warnings</code> passed with <code>HIP_PATH</code> pointing at an empty stub <code>include/hip/hip_runtime_api.h</code> (type-check only; the build script only checks that file exists and nothing links)</td></tr>
 <tr><td><strong>HIP Execution</strong></td><td>Copy probe (there is no HIP kernel)</td><td><strong>Skipped:</strong> <code>--features hip</code> was not built; no <code>/opt/rocm</code> and no AMD GPU</td></tr>
 </tbody></table></div>
       </article>
@@ -235,6 +238,7 @@
 <li><a href="#package-adoption-decisions">Package Adoption Decisions</a></li>
 <li class="sub"><a href="#adopted">Adopted</a></li>
 <li class="sub"><a href="#rejected">Rejected</a></li>
+<li><a href="#hip-decision">HIP Decision</a></li>
 <li><a href="#cuda-and-hip-verification-status">CUDA and HIP Verification Status</a></li>
 </ol></nav>
   </div>

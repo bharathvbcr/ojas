@@ -14,7 +14,9 @@
 //! Data moves
 //! only through [`Backend::upload`] (contiguous, non-empty) and
 //! [`Backend::download`]. A contiguous view with a non-zero `byte_offset` is
-//! compacted on the device; a non-contiguous view is [`OjasError::Shape`]. A
+//! bound in place at that offset when the device's storage-offset alignment
+//! allows it, and compacted on the device otherwise; a non-contiguous view
+//! is [`OjasError::Shape`]. A
 //! U32 upload keeps a host copy of its ids so token ids and targets are
 //! range-checked, and the cross-entropy valid count formed, with no readback.
 //!
@@ -76,11 +78,12 @@ use ojas_core::{
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
-    attention_tiles, cached_attention_splits, fold_grid, gemm_grid, gemm_tile, WgslModule,
-    ATTENTION_MAX_HEAD_DIM, GEMM_BIG_TILE,
+    attention_tiles, cached_attention_splits, clip_slots, fold_grid, gemm_grid, gemm_tile,
+    WgslModule, ATTENTION_MAX_HEAD_DIM, CLIP_MAX_SLOTS, CLIP_NORM_BASE, CLIP_SCALE_BASE,
+    GEMM_BIG_TILE,
 };
 
-use crate::context::{Job, Kernel, Slot, WgpuBuffer, WgpuContext, FAULT_OPS};
+use crate::context::{Binding, Job, Kernel, Slot, View, WgpuBuffer, WgpuContext, FAULT_OPS};
 
 /// One fault bit per op, by index. The fault words hold a 64-bit mask
 /// ([`FAULT_OPS`]); `OP_NAMES` may grow to that many, and the build refuses
@@ -205,7 +208,6 @@ const MUL_BWD: Kernel = k(Pointwise, "mul_bwd", &[R(2), R(3), R(4), W(6), W(7)])
 const ADD_FWD: Kernel = k(Pointwise, "add_fwd", &[R(2), R(3), W(6)]);
 const ADD_INPLACE: Kernel = k(Pointwise, "add_inplace", &[R(2), W(6)]);
 const CHECK_FINITE: Kernel = k(Pointwise, "check_finite", &[R(2)]);
-const SCALE_INPLACE: Kernel = k(Pointwise, "scale_inplace", &[W(6)]);
 const VR_FWD: Kernel = k(Pointwise, "vr_fwd", &[R(2), R(3), R(4), W(6)]);
 const VR_BWD: Kernel = k(Pointwise, "vr_bwd", &[R(2), R(4), W(6), W(7)]);
 const GATE_FWD: Kernel = k(Pointwise, "gate_fwd", &[R(2), R(3), R(4), W(6)]);
@@ -227,21 +229,24 @@ const CE_BWD: Kernel = k(Loss, "ce_bwd", &[R(2), R(3), W(6)]);
 const LCE_STATS: Kernel = k(Loss, "lce_stats", &[R(2), R(3), W(6)]);
 const LCE_FINISH: Kernel = k(Loss, "lce_finish", &[R(2), R(3), W(6)]);
 const LCE_GRAD: Kernel = k(Loss, "lce_grad", &[R(2), R(3), W(6)]);
-const ABSMAX_PARTIAL: Kernel = k(Optim, "absmax_partial", &[R(2), W(5), W(8)]);
-const ABSMAX_FINISH: Kernel = k(Optim, "absmax_finish", &[R(2), W(8)]);
-const SUMSQ_PARTIAL: Kernel = k(Optim, "sumsq_partial", &[R(2), W(5), R(9)]);
-const CLIP_FINISH: Kernel = k(Optim, "clip_finish", &[R(2), W(8)]);
-const ADAM_UPDATE: Kernel = k(Optim, "adam_update", &[R(2), W(5), W(6), W(7), W(8)]);
+/// `norm_partial`'s bindings: the partials, the slot table, the status
+/// words, then [`CLIP_MAX_SLOTS`] gradients from [`CLIP_NORM_BASE`]; a
+/// device binding `k` gradients takes the first `3 + k`.
+const CLIP_NORM_SLOTS: [Slot; 3 + CLIP_MAX_SLOTS as usize] = [W(2), R(3), W(4), R(10), R(11), R(12), R(13), R(14), R(15), R(16), R(17), R(18), R(19), R(20), R(21), R(22), R(23), R(24), R(25)];
+/// `scale_multi`'s: the slot table, then the gradients from
+/// [`CLIP_SCALE_BASE`], read-write; `1 + k` are bound.
+const CLIP_SCALE_SLOTS: [Slot; 1 + CLIP_MAX_SLOTS as usize] = [R(3), W(26), W(27), W(28), W(29), W(30), W(31), W(32), W(33), W(34), W(35), W(36), W(37), W(38), W(39), W(40), W(41)];
+const _: () = assert!(
+    CLIP_NORM_BASE == 10 && CLIP_SCALE_BASE == 26,
+    "the clip slot lists above spell out the template's binding numbers"
+);
+const ADAM_CHECK: Kernel = k(Optim, "adam_check", &[R(2), W(5), W(6), W(7), W(8)]);
+const ADAM_APPLY: Kernel = k(Optim, "adam_apply", &[R(2), W(5), W(6), W(7), R(9)]);
 const MUON_MOMENTUM: Kernel = k(Optim, "muon_momentum", &[R(2), R(3), W(5), W(6)]);
 const MUON_NORMALIZE: Kernel = k(Optim, "muon_normalize", &[R(2), W(5), R(9)]);
 const MUON_LINCOMB: Kernel = k(Optim, "muon_lincomb", &[R(2), R(3), W(5)]);
 const MUON_APPLY: Kernel = k(Optim, "muon_apply", &[R(2), R(3), W(5)]);
 const MUON_COMMIT: Kernel = k(Optim, "muon_commit", &[R(2), R(3), W(5), W(6), R(9)]);
-const ADAM_COMMIT: Kernel = k(
-    Optim,
-    "adam_commit",
-    &[R(2), R(3), R(4), W(5), W(6), W(7), R(9)],
-);
 
 fn attn_kernel(module: WgslModule, entry: &'static str) -> Kernel {
     let slots: &'static [Slot] = match entry {
@@ -331,23 +336,36 @@ impl In<'_> {
     }
 }
 
-/// The buffer a kernel binds for `a`, compacting a view with a non-zero offset.
-fn bind(op: Op, job: &mut Job<'_>, a: &In<'_>) -> Result<wgpu::Buffer, OjasError> {
-    let raw = a.buf.raw()?;
+/// What a kernel binds for `a`: its elements in place, or a compacted copy.
+fn bind(op: Op, job: &mut Job<'_>, a: &In<'_>) -> Result<View, OjasError> {
     let off = a.t.byte_offset();
-    if off == 0 {
-        return Ok(raw.clone());
-    }
     if !off.is_multiple_of(4) {
         return Err(shape(
             op,
             format!("byte_offset {off} is not 4-byte aligned"),
         ));
     }
-    let bytes = (a.elems as u64) * 4;
+    view_at(job, a.buf.raw()?, off as u64, a.elems)
+}
+
+/// The binding of `elems` words at byte `off` of `raw`: in place when `off`
+/// meets the device's storage-offset alignment, otherwise copied into job
+/// scratch (counted in [`crate::CacheStats::offset_copies`]). `off` is a
+/// multiple of 4.
+fn view_at(
+    job: &mut Job<'_>,
+    raw: &wgpu::Buffer,
+    off: u64,
+    elems: usize,
+) -> Result<View, OjasError> {
+    let bytes = (elems as u64) * 4;
+    if off.is_multiple_of(job.storage_offset_alignment()) {
+        return Ok(View::at(raw, off, bytes));
+    }
     let dst = job.scratch(bytes)?;
-    job.copy(raw, off as u64, &dst, bytes);
-    Ok(dst)
+    job.copy(raw, off, &dst, bytes);
+    job.note_offset_copy();
+    Ok(View::whole(&dst))
 }
 
 /// The global count of targets that are not `ignore`, each checked against
@@ -727,9 +745,9 @@ impl WgpuBackend {
         op: Op,
         job: &mut Job<'_>,
         kind: Mm,
-        a: &wgpu::Buffer,
-        b: &wgpu::Buffer,
-        c: &wgpu::Buffer,
+        a: &dyn Binding,
+        b: &dyn Binding,
+        c: &dyn Binding,
         mnk: (usize, usize, usize),
         strides: [usize; 4],
     ) -> Result<(), OjasError> {
@@ -745,9 +763,9 @@ impl WgpuBackend {
         op: Op,
         job: &mut Job<'_>,
         kind: Mm,
-        a: &wgpu::Buffer,
-        b: &wgpu::Buffer,
-        c: &wgpu::Buffer,
+        a: &dyn Binding,
+        b: &dyn Binding,
+        c: &dyn Binding,
         (m, n, kk): (usize, usize, usize),
         strides: [usize; 4],
         place: Place,
@@ -788,11 +806,11 @@ impl WgpuBackend {
         op: Op,
         job: &mut Job<'_>,
         n: usize,
-        terms: [&wgpu::Buffer; 3],
+        terms: [&dyn Binding; 3],
         mode: u32,
         divisor: f32,
-        lambda: Option<&wgpu::Buffer>,
-        out: &wgpu::Buffer,
+        lambda: Option<&dyn Binding>,
+        out: &dyn Binding,
     ) -> Result<(), OjasError> {
         let groups = n.div_ceil(CHUNK);
         let grid = self.groups(groups)?;
@@ -817,11 +835,11 @@ impl WgpuBackend {
         &self,
         op: Op,
         job: &mut Job<'_>,
-        src: &wgpu::Buffer,
-        extra: Option<(&wgpu::Buffer, &wgpu::Buffer)>,
+        src: &dyn Binding,
+        extra: Option<(&dyn Binding, &dyn Binding)>,
         rows: usize,
         cols: usize,
-        out: &wgpu::Buffer,
+        out: &dyn Binding,
     ) -> Result<(), OjasError> {
         let per = rows.div_ceil(1024).max(64);
         let chunks = rows.div_ceil(per);
@@ -866,8 +884,8 @@ impl WgpuBackend {
         &self,
         op: Op,
         job: &mut Job<'_>,
-        src: &wgpu::Buffer,
-        dst: &wgpu::Buffer,
+        src: &dyn Binding,
+        dst: &dyn Binding,
         shape: &[usize],
         dims: &[usize],
     ) -> Result<(), OjasError> {
@@ -898,54 +916,83 @@ impl WgpuBackend {
         )
     }
 
-    /// Global L2 norm of `parts` (buffer, element count) into `status`:
-    /// word 0 the norm bits, 1 a non-finite flag, 2 the abs-max bits. The
-    /// norm is `amax * sqrt(sum((x / amax)^2))`, so the f32 sum of squares
-    /// cannot overflow while the norm itself is finite.
+    /// Gradients one multi-tensor norm or scale dispatch binds here.
+    fn clip_slots(&self) -> Result<usize, OjasError> {
+        Ok(clip_slots(self.ctx.limits().max_storage_buffers_per_shader_stage)? as usize)
+    }
+
+    /// The slot table of a multi-tensor norm or scale over tensors of
+    /// `sizes` elements: per tensor its count and the index of its first
+    /// [`CHUNK`]-value chunk, and the chunk total.
+    fn clip_table(&self, op: Op, sizes: &[usize]) -> Result<(Vec<u32>, usize), OjasError> {
+        let mut tbl = Vec::with_capacity(2 * sizes.len());
+        let mut total = 0usize;
+        for &n in sizes {
+            tbl.push(u(op, n)?);
+            tbl.push(u(op, total)?);
+            total = total
+                .checked_add(n.div_ceil(CHUNK))
+                .ok_or_else(|| overflow(op, "norm chunks overflow"))?;
+        }
+        u(op, total)?;
+        Ok((tbl, total))
+    }
+
+    /// Global L2 norm of `parts` (binding, element count) into `status`:
+    /// word 0 the norm bits, 1 a non-finite flag, 2 the abs-max bits. One
+    /// read of every value: `ceil(len / k)` dispatches of `norm_partial`
+    /// (each binding `k` gradients, [`Self::clip_slots`]) give every chunk
+    /// its max |g| and its sum of (g / max)^2, and `norm_finish` rescales
+    /// the chunks to the global max, so the norm is
+    /// `amax * sqrt(sum((x / amax)^2))` and the f32 sum of squares cannot
+    /// overflow while the norm itself is finite.
     fn global_norm(
         &self,
         op: Op,
         job: &mut Job<'_>,
-        parts: &[(&wgpu::Buffer, usize)],
+        parts: &[(&dyn Binding, usize)],
         status: &wgpu::Buffer,
     ) -> Result<(), OjasError> {
-        let mut total = 0usize;
-        for &(_, n) in parts {
-            total = total
-                .checked_add(n.div_ceil(CHUNK))
-                .ok_or_else(|| overflow(op, "norm partials overflow"))?;
-        }
-        self.fits(op, total)?;
-        let partial = job.scratch((total as u64) * 4)?;
+        let k = self.clip_slots()?;
+        let module = WgslModule::Clip(k as u32);
+        let sizes: Vec<usize> = parts.iter().map(|&(_, n)| n).collect();
+        let (tbl, total) = self.clip_table(op, &sizes)?;
+        let pairs = total
+            .checked_mul(2)
+            .ok_or_else(|| overflow(op, "norm partials overflow"))?;
+        self.fits(op, pairs)?;
+        let partial = job.scratch((pairs as u64) * 4)?;
+        let table = job.upload_u32(&tbl)?;
         job.clear(status);
-        let mut base = 0usize;
-        for &(b, n) in parts {
+        let kernel = Kernel {
+            module,
+            entry: "norm_partial",
+            slots: &CLIP_NORM_SLOTS[..3 + k],
+        };
+        for (g, group) in parts.chunks(k).enumerate() {
+            let t0 = g * k;
+            let first = tbl[2 * t0 + 1] as usize;
+            let end = match tbl.get(2 * (t0 + group.len()) + 1) {
+                Some(&next) => next as usize,
+                None => total,
+            };
+            let mut bufs: Vec<&dyn Binding> = vec![&partial as &dyn Binding, &table, status];
+            for slot in 0..k {
+                bufs.push(group.get(slot).unwrap_or(&group[0]).0);
+            }
             job.dispatch(
-                &ABSMAX_PARTIAL,
-                &[u(op, n)?, u(op, base)?],
-                &[b, &partial, status],
-                self.groups(n.div_ceil(CHUNK))?,
+                &kernel,
+                &[u(op, t0)?, u(op, group.len())?, u(op, first)?],
+                &bufs,
+                self.groups(end - first)?,
             )?;
-            base += n.div_ceil(CHUNK);
         }
         job.dispatch(
-            &ABSMAX_FINISH,
-            &[u(op, total)?],
-            &[&partial, status],
-            (1, 1, 1),
-        )?;
-        let mut base = 0usize;
-        for &(b, n) in parts {
-            job.dispatch(
-                &SUMSQ_PARTIAL,
-                &[u(op, n)?, u(op, base)?],
-                &[b, &partial, status],
-                self.groups(n.div_ceil(CHUNK))?,
-            )?;
-            base += n.div_ceil(CHUNK);
-        }
-        job.dispatch(
-            &CLIP_FINISH,
+            &Kernel {
+                module,
+                entry: "norm_finish",
+                slots: &[W(2), W(4)],
+            },
             &[u(op, total)?],
             &[&partial, status],
             (1, 1, 1),
@@ -960,10 +1007,10 @@ impl WgpuBackend {
         job: &mut Job<'_>,
         n: usize,
         s0: f32,
-        x0: &wgpu::Buffer,
+        x0: &dyn Binding,
         s1: f32,
-        x1: &wgpu::Buffer,
-        y: &wgpu::Buffer,
+        x1: &dyn Binding,
+        y: &dyn Binding,
     ) -> Result<(), OjasError> {
         job.dispatch(
             &MUON_LINCOMB,
@@ -979,7 +1026,7 @@ impl WgpuBackend {
         &self,
         op: Op,
         job: &mut Job<'_>,
-        buf: &wgpu::Buffer,
+        buf: &dyn Binding,
         n: usize,
     ) -> Result<(), OjasError> {
         job.dispatch(&CHECK_FINITE, &[u(op, n)?], &[buf], self.lanes(n)?)
@@ -1012,7 +1059,11 @@ impl WgpuBackend {
         }
         let mut words = vec![u(op, n)?];
         words.extend_from_slice(extra);
-        let bufs: Vec<&wgpu::Buffer> = bound.iter().chain(out_bufs.iter()).collect();
+        let bufs: Vec<&dyn Binding> = bound
+            .iter()
+            .map(|b| b as &dyn Binding)
+            .chain(out_bufs.iter().map(|b| b as &dyn Binding))
+            .collect();
         job.dispatch(kernel, &words, &bufs, grid)?;
         job.commit()?;
         Ok(tensors)
@@ -1351,8 +1402,8 @@ fn check_ids(op: Op, ids: &[u32], vocab: usize) -> Result<(), OjasError> {
 /// step on a `[rows, cols]` parameter charges, with `n = rows * cols`,
 /// `b = 4n` and `r = min(rows, cols)`. Both steps may first copy a gradient
 /// view that sits at a byte offset (`bind`, `b`). Then:
-/// - AdamW: old copies of the parameter and both moments, and a 16-byte
-///   status: `3b + 16`.
+/// - AdamW: a 16-byte status word, nothing else (`adam_check` decides,
+///   `adam_apply` writes in place): `16`.
 /// - Muon: two 16-byte words; six `b`-byte planes (momentum buffer, update,
 ///   X, X', BX, new parameter); three `r × r` f32 matrices; the global
 ///   norm's partials, 4 bytes per [`CHUNK`] values; and for a tall matrix
@@ -1377,7 +1428,7 @@ fn optimizer_scratch(kind: OptimizerKind, rows: usize, cols: usize) -> Result<u6
             .ok_or_else(overflow)
     };
     match kind {
-        OptimizerKind::AdamW => sum(&[Some(b), b.checked_mul(3), Some(16)]),
+        OptimizerKind::AdamW => sum(&[Some(b), Some(16)]),
         OptimizerKind::MuonNs5 => {
             let r = rows.min(cols) as u64;
             let partials = n.div_ceil(CHUNK as u64).checked_mul(4);
@@ -1461,8 +1512,7 @@ impl Backend for WgpuBackend {
         } else {
             None
         };
-        let bytes = tensor.to_ne_bytes()?;
-        let wb = self.ctx.upload_bytes(&bytes, shadow)?;
+        let wb = self.ctx.upload_tensor(tensor, shadow)?;
         Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), tensor.dtype(), charge)
     }
 
@@ -1936,23 +1986,14 @@ impl Backend for WgpuBackend {
         let raw_out = wb.raw()?.clone();
         let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::F32, charge)?;
         let mut job = self.job(CAST);
-        let src = {
-            let raw = buf.raw()?;
-            let off = tensor.byte_offset();
-            if off == 0 {
-                raw.clone()
-            } else {
-                if !off.is_multiple_of(4) {
-                    return Err(OjasError::Shape {
-                        op: OP,
-                        detail: format!("byte_offset {off} is not 4-byte aligned"),
-                    });
-                }
-                let dst = job.scratch(bytes)?;
-                job.copy(raw, off as u64, &dst, bytes);
-                dst
-            }
-        };
+        let off = tensor.byte_offset();
+        if !off.is_multiple_of(4) {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: format!("byte_offset {off} is not 4-byte aligned"),
+            });
+        }
+        let src = view_at(&mut job, buf.raw()?, off as u64, elems)?;
         let groups = elems.div_ceil(256);
         let (gx, gy) = fold_grid(
             groups as u64,
@@ -2138,26 +2179,25 @@ impl Backend for WgpuBackend {
         Ok(y)
     }
 
-    /// Reads back four words (the norm and a non-finite flag), then scales
-    /// every gradient in place. Any fault deferred by an earlier op is
-    /// reported here, before anything is scaled. `max_norm` is checked
-    /// after the norm, by [`clip_scale`], as the CPU and Metal do (shape
-    /// contract D13): non-finite gradients outrank a bad `max_norm`.
+    /// The global norm in one read of every gradient ([`Self::global_norm`]:
+    /// `ceil(len / k)` fused dispatches and a finish), then four words read
+    /// back (the norm and a non-finite flag), then, when the norm is over
+    /// `max_norm`, every gradient scaled in place in `ceil(len / k)` more
+    /// dispatches. Any fault deferred by an earlier op is reported here,
+    /// before anything is scaled. `max_norm` is checked after the norm, by
+    /// [`clip_scale`], as the CPU and Metal do (shape contract D13):
+    /// non-finite gradients outrank a bad `max_norm`.
     fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
         let op = CLIP;
         clip_grad_norm_dims(grads)?;
         let mut sizes = Vec::with_capacity(grads.len());
-        let mut total = 0usize;
         for g in grads.iter() {
-            let n = self.placed(op, g)?.elems;
-            self.lanes(n)?;
-            sizes.push(n);
-            total = total
-                .checked_add(n.div_ceil(CHUNK))
-                .ok_or_else(|| overflow(op, "clip partials overflow"))?;
+            sizes.push(self.placed(op, g)?.elems);
         }
-        self.groups(total)?;
-        self.fits(op, total)?;
+        let (_, chunks) = self.clip_table(op, &sizes)?;
+        self.groups(chunks)?;
+        self.fits(op, 2 * chunks)?;
+        let k = self.clip_slots()?;
         // The status words are read in a later submission. Job scratch goes
         // back to the pool at the next submit by any thread, where another
         // caller could take and overwrite it before that read; a tensor's
@@ -2170,8 +2210,11 @@ impl Backend for WgpuBackend {
                 let gv = self.placed(op, g)?;
                 bound.push(bind(op, &mut job, &gv)?);
             }
-            let parts: Vec<(&wgpu::Buffer, usize)> =
-                bound.iter().zip(sizes.iter().copied()).collect();
+            let parts: Vec<(&dyn Binding, usize)> = bound
+                .iter()
+                .map(|b| b as &dyn Binding)
+                .zip(sizes.iter().copied())
+                .collect();
             self.global_norm(op, &mut job, &parts, &status)?;
             job.commit()?;
         }
@@ -2195,13 +2238,35 @@ impl Backend for WgpuBackend {
             for g in grads.iter_mut() {
                 raws.push(exclusive(op, g)?);
             }
+            let (tbl, _) = self.clip_table(op, &sizes)?;
             let mut job = self.job(op);
-            for (raw, &n) in raws.iter().zip(&sizes) {
+            let table = job.upload_u32(&tbl)?;
+            let kernel = Kernel {
+                module: WgslModule::Clip(k as u32),
+                entry: "scale_multi",
+                slots: &CLIP_SCALE_SLOTS[..1 + k],
+            };
+            for (g, group) in raws.chunks(k).enumerate() {
+                let t0 = g * k;
+                let first = tbl[2 * t0 + 1] as usize;
+                let end = match tbl.get(2 * (t0 + group.len()) + 1) {
+                    Some(&next) => next as usize,
+                    None => chunks,
+                };
+                let mut bufs: Vec<&dyn Binding> = vec![&table as &dyn Binding];
+                for slot in 0..k {
+                    bufs.push(group.get(slot).unwrap_or(&group[0]));
+                }
                 job.dispatch(
-                    &SCALE_INPLACE,
-                    &[u(op, n)?, scale.to_bits()],
-                    &[raw],
-                    self.lanes(n)?,
+                    &kernel,
+                    &[
+                        u(op, t0)?,
+                        u(op, group.len())?,
+                        u(op, first)?,
+                        scale.to_bits(),
+                    ],
+                    &bufs,
+                    self.groups(end - first)?,
                 )?;
             }
             job.commit()?;
@@ -2209,12 +2274,6 @@ impl Backend for WgpuBackend {
         Ok(norm)
     }
 
-    /// In place on `param`, `moment1` and `moment2`, which must each be the
-    /// sole owner of their device buffer. The old state is copied to scratch
-    /// first and restored on the device if any lane saw a non-finite value;
-    /// the call still returns `Ok(())` and the fault surfaces as
-    /// [`OjasError::NonFinite`] at the next sync point, naming `adamw_step`
-    /// unless an op recorded earlier faulted first (see the module docs).
     fn optimizer_scratch_bytes(
         &self,
         kind: OptimizerKind,
@@ -2224,6 +2283,14 @@ impl Backend for WgpuBackend {
         optimizer_scratch(kind, rows, cols).map(Some)
     }
 
+    /// In place on `param`, `moment1` and `moment2`, which must each be the
+    /// sole owner of their device buffer. `adam_check` computes every
+    /// element's step into a per-call status word and `adam_apply` writes
+    /// only if that word is clear, so a step with any non-finite value
+    /// changes nothing and copies nothing. The call still returns `Ok(())`
+    /// and the fault surfaces as [`OjasError::NonFinite`] at the next sync
+    /// point, naming `adamw_step` unless an op recorded earlier faulted
+    /// first (see the module docs).
     fn adamw_step(
         &self,
         param: &mut Tensor,
@@ -2264,24 +2331,12 @@ impl Backend for WgpuBackend {
         let pb = exclusive(op, param)?;
         let mb = exclusive(op, moment1)?;
         let vb = exclusive(op, moment2)?;
-        let bytes = (n as u64) * 4;
         let mut job = self.job(op);
         let gb = bind(op, &mut job, &gv)?;
-        let old_p = job.scratch(bytes)?;
-        let old_m = job.scratch(bytes)?;
-        let old_v = job.scratch(bytes)?;
         let status = job.scratch(16)?;
-        job.copy(&pb, 0, &old_p, bytes);
-        job.copy(&mb, 0, &old_m, bytes);
-        job.copy(&vb, 0, &old_v, bytes);
         job.clear(&status);
-        job.dispatch(&ADAM_UPDATE, &words, &[&gb, &pb, &mb, &vb, &status], grid)?;
-        job.dispatch(
-            &ADAM_COMMIT,
-            &[u(op, n)?],
-            &[&old_p, &old_m, &old_v, &pb, &mb, &vb, &status],
-            grid,
-        )?;
+        job.dispatch(&ADAM_CHECK, &words, &[&gb, &pb, &mb, &vb, &status], grid)?;
+        job.dispatch(&ADAM_APPLY, &words, &[&gb, &pb, &mb, &vb, &status], grid)?;
         job.commit()
     }
 
@@ -2850,6 +2905,44 @@ mod tests {
         job.dispatch(&CHECK_FINITE, &[n as u32], &[buf], gpu.lanes(n).unwrap())
             .unwrap();
         job.commit().unwrap();
+    }
+
+    /// A job of more dispatches than the parameter ring holds is split
+    /// into submissions, and every dispatch still runs with its own words:
+    /// values move between two buffers, each step scaled alternately by 2
+    /// and 0.5, so an odd count leaves them doubled in the second buffer,
+    /// and any dispatch that read another's slot would not.
+    #[test]
+    fn a_job_past_the_parameter_ring_keeps_every_dispatchs_words() {
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        let up = |v: &[f32]| {
+            gpu.upload(&Tensor::from_f32(v, &[v.len()], &budget).unwrap())
+                .unwrap()
+        };
+        let (a, b) = (up(&[3.0, -5.0]), up(&[0.0, 0.0]));
+        let (ra, rb) = (raw_of(&a), raw_of(&b));
+        let n = 2 * crate::context::PARAM_SLOTS + 501;
+        let before = gpu.ctx.stats().submits;
+        let mut job = gpu.ctx.job(&gpu.budget, 0);
+        for i in 0..n {
+            let s: f32 = if i % 2 == 0 { 2.0 } else { 0.5 };
+            let (src, dst) = if i % 2 == 0 { (&ra, &rb) } else { (&rb, &ra) };
+            job.dispatch(
+                &MUON_LINCOMB,
+                &[2, s.to_bits(), 0f32.to_bits()],
+                &[src, src, dst],
+                (1, 1, 1),
+            )
+            .unwrap();
+        }
+        job.commit().unwrap();
+        gpu.sync().unwrap();
+        assert!(gpu.ctx.stats().submits - before >= 3, "the ring split the job");
+        assert_eq!(
+            gpu.download(&b).unwrap().to_f32_vec().unwrap(),
+            [6.0, -10.0]
+        );
     }
 
     #[test]

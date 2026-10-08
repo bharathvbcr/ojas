@@ -36,7 +36,8 @@ use tessl::DType;
 
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
-    device_lost, metal_err, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, GdnArgs, LceGeom,
+    device_lost, metal_err, norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom,
+    EmbedRows, GdnArgs, LceGeom,
     Msg, NewBuf, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
 };
 
@@ -49,6 +50,10 @@ const ST_WORDS: usize = 8;
 /// for mid-size tensors.
 const CHECK_PER_THREAD: usize = 4;
 const ST_BYTES: usize = ST_WORDS * 4;
+/// Gradients one `ojas_norm_multi` / `ojas_scale_multi` dispatch binds
+/// (`NORM_SLOTS` in the Metal source).
+const NORM_SLOTS: usize = 24;
+
 /// Status slots in the slab. A full slab forces a waited commit.
 const SLAB_SLOTS: usize = 4096;
 /// Dispatches between unwaited commits.
@@ -129,7 +134,6 @@ fn cached_attn_splits(rows: usize, kv_len: usize) -> usize {
 /// fails if one is missing, not the first op that needs it.
 const KERNELS: &[&str] = &[
     "ojas_check_finite",
-    "ojas_fill_u32",
     "ojas_upload_words",
     "ojas_adamw_check",
     "ojas_adamw_apply",
@@ -160,7 +164,6 @@ const KERNELS: &[&str] = &[
     "ojas_axpby_bf16",
     "ojas_axpby_fma",
     "ojas_div_scalar",
-    "ojas_scale",
     "ojas_ns_denom",
     "ojas_ns_denom_bf16",
     "ojas_vres_fwd",
@@ -169,12 +172,12 @@ const KERNELS: &[&str] = &[
     "ojas_rope",
     "ojas_embed_fwd",
     "ojas_argmax_rows",
-    "ojas_embed_count",
-    "ojas_scan_exclusive",
-    "ojas_embed_place",
     "ojas_embed_gather",
     "ojas_reduce_partial",
     "ojas_reduce_final",
+    "ojas_norm_multi",
+    "ojas_norm_finish",
+    "ojas_scale_multi",
     "ojas_ce_fused",
     "ojas_ce_mean",
     "ojas_rms_fwd",
@@ -282,6 +285,22 @@ const RMS_ROWS_PER_TG: usize = 8;
 
 fn rms_groups(rows: u32) -> usize {
     (rows as usize).div_ceil(RMS_ROWS_PER_TG)
+}
+
+/// The slot table of one multi-tensor clip dispatch over `group` (at most
+/// [`NORM_SLOTS`] views): per slot its element count and the index of its
+/// first chunk in the dispatch, as native-endian bytes; and the dispatch's
+/// chunk count, its threadgroups.
+fn norm_table(group: &[V]) -> Res<(Vec<u8>, usize)> {
+    let mut tbl = Vec::with_capacity(group.len() * 8);
+    let mut at = 0usize;
+    for v in group {
+        tbl.extend_from_slice(&u32_of(v.n)?.to_ne_bytes());
+        tbl.extend_from_slice(&u32_of(at)?.to_ne_bytes());
+        at += norm_chunks(v.n);
+    }
+    u32_of(at)?;
+    Ok((tbl, at))
 }
 
 /// Elements `start..start + n` of a view.
@@ -537,6 +556,7 @@ impl Worker {
     fn note_dispatches(&self) {
         let n = self.rt.take_dispatch_count();
         if n > 0 {
+            self.waits.add_dispatches(n);
             let mut book = self.book.borrow_mut();
             book.dirty = true;
             book.since_overlap += n;
@@ -749,6 +769,19 @@ impl Worker {
         })
     }
 
+    /// A new buffer holding `data`, written on the host without a wait: no
+    /// recorded command can be using a buffer fresh from the pool (tessl
+    /// `alloc_buffer_from_u32`). For small host-built index data.
+    fn fresh_from(&self, data: &[u32]) -> Res<V> {
+        let buf = self.rt.alloc_buffer_from_u32(data).map_err(metal_err)?;
+        self.book.borrow_mut().alloc_since_wait += (data.len().max(1) * 4) as u64;
+        Ok(V {
+            buf,
+            off: 0,
+            n: data.len(),
+        })
+    }
+
     /// Give `outs` ids. Called only after the op's checks passed.
     fn keep(&mut self, outs: Vec<V>) -> Reply {
         let mut ids = Vec::with_capacity(outs.len());
@@ -938,7 +971,7 @@ impl Worker {
                 self.book.borrow_mut().inline_uploads = on;
                 Ok(Reply::Done)
             }
-            Cmd::Upload { bytes } => self.upload(&bytes),
+            Cmd::Upload { src } => self.upload(&src),
             #[cfg(test)]
             Cmd::InjectPanic => {
                 let st = self.status("inject_panic")?;
@@ -996,11 +1029,10 @@ impl Worker {
             Cmd::Argmax { x, rows, cols } => self.argmax(x, rows, cols),
             Cmd::EmbedBwd {
                 table,
-                ids,
                 grad,
-                vocab,
+                rows,
                 dim,
-            } => self.embed_bwd(table, ids, grad, vocab, dim),
+            } => self.embed_bwd(table, grad, &rows, dim),
             Cmd::Linear {
                 x,
                 w,
@@ -1192,17 +1224,25 @@ impl Worker {
     /// go into tessl's constant arena and `ojas_upload_words` copies them,
     /// in order with the recorded work, so nothing waits. Any other upload
     /// waits ([`Wait::Upload`]) and maps.
-    fn upload(&mut self, bytes: &[u8]) -> Res<Reply> {
-        let buf = self.alloc(bytes.len())?;
+    /// A new buffer holding `src`'s contiguous window. Small uploads behind
+    /// recorded work ride inline (encoded into at most
+    /// [`INLINE_UPLOAD_BYTES`] of host memory); the rest wait and are
+    /// encoded straight into the buffer's mapping, so the host never holds a
+    /// second copy of the window.
+    fn upload(&mut self, src: &ojas_core::Tensor) -> Res<Reply> {
+        let len = src
+            .num_elements()?
+            .checked_mul(src.dtype().size())
+            .ok_or_else(|| metal_err("upload size overflows"))?;
+        let buf = self.alloc(len)?;
         self.note_dispatches();
         let inline = {
             let book = self.book.borrow();
-            book.dirty
-                && book.inline_uploads
-                && inline_upload_fits(bytes.len(), book.inline_since_wait)
+            book.dirty && book.inline_uploads && inline_upload_fits(len, book.inline_since_wait)
         };
         if inline {
-            let n = bytes.len() / 4;
+            let bytes = src.to_ne_bytes()?;
+            let n = len / 4;
             let dst = V {
                 buf: buf.clone(),
                 off: 0,
@@ -1211,21 +1251,18 @@ impl Worker {
             self.k1("ojas_upload_words", n, |b| {
                 bind(b, &dst, 0);
                 set_u32(b, n as u32, 1);
-                b.bind_bytes(bytes, 2);
+                b.bind_bytes(&bytes, 2);
             })?;
-            self.book.borrow_mut().inline_since_wait += bytes.len();
+            self.book.borrow_mut().inline_since_wait += len;
         } else {
             self.settle(Scan::All, Wait::Upload)?;
             let mut map = buf.try_contents_u8().map_err(metal_err)?;
-            map[..bytes.len()].copy_from_slice(bytes);
+            src.write_ne_bytes(&mut map[..len])?;
         }
         let id = self.next_id;
         self.next_id += 1;
         self.bufs.insert(id, buf);
-        Ok(Reply::Bufs(vec![NewBuf {
-            id,
-            bytes: bytes.len(),
-        }]))
+        Ok(Reply::Bufs(vec![NewBuf { id, bytes: len }]))
     }
 
     /// A raw read waits and scans, holding any fault for the next sync point.
@@ -1312,43 +1349,23 @@ impl Worker {
     /// Deterministic scatter-add: count rows per id, prefix-sum the counts,
     /// place each token in ascending order within its id, then gather. Each
     /// table row is a left-to-right f32 sum from 0, as on the CPU.
-    fn embed_bwd(&mut self, table: Arg, ids: Arg, grad: Arg, vocab: u32, dim: u32) -> Res<Reply> {
+    /// Every vocabulary row's gradient in one gather, from the host's
+    /// grouping of the token ids (`rows`, in fresh buffers written without a
+    /// wait): row `v` sums its tokens' gradient rows in ascending token
+    /// order, as the CPU reference adds them; a row with no token is 0.
+    fn embed_bwd(&mut self, table: Arg, grad: Arg, rows: &EmbedRows, dim: u32) -> Res<Reply> {
         const OP: &str = "embedding_backward";
         let t = self.view(table)?;
-        let ids = self.view(ids)?;
         let g = self.view(grad)?;
-        let n = u32_of(ids.n)?;
-        let v = vocab as usize;
-        let counts = self.fresh(v)?;
-        let starts = self.fresh(v)?;
-        let pos = self.fresh(ids.n)?;
+        let v = rows.counts.len();
+        let vocab = u32_of(v)?;
+        let counts = self.fresh_from(&rows.counts)?;
+        let starts = self.fresh_from(&rows.starts)?;
+        let pos = self.fresh_from(&rows.pos)?;
         let out = self.fresh(v * dim as usize)?;
         let st = self.status(OP)?;
         self.check(&st, &t, ST_IN)?;
         self.check(&st, &g, ST_IN)?;
-        self.k1("ojas_fill_u32", v, |b| {
-            bind(b, &counts, 0);
-            set_u32(b, vocab, 1);
-            set_u32(b, 0, 2);
-        })?;
-        self.k1("ojas_embed_count", ids.n, |b| {
-            bind(b, &ids, 0);
-            bind(b, &counts, 1);
-            set_u32(b, n, 2);
-            set_u32(b, vocab, 3);
-        })?;
-        self.ktg("ojas_scan_exclusive", 1, 1, 1024, |b| {
-            bind(b, &counts, 0);
-            bind(b, &starts, 1);
-            set_u32(b, vocab, 2);
-        })?;
-        self.ktg("ojas_embed_place", ids.n.div_ceil(256), 1, 256, |b| {
-            bind(b, &ids, 0);
-            bind(b, &starts, 1);
-            bind(b, &pos, 2);
-            set_u32(b, n, 3);
-            set_u32(b, vocab, 4);
-        })?;
         self.k2("ojas_embed_gather", dim as usize, v, |b| {
             bind(b, &g, 0);
             bind(b, &starts, 1);
@@ -2476,35 +2493,52 @@ impl Worker {
         Ok(self.keep(vec![loss]))
     }
 
-    /// Per gradient: max |g| and sum (g / max |g|)^2 on the device; the host
-    /// combines them in f64, so an f32 sum of squares cannot overflow. A
-    /// sync point: it waits, then reports the first pending fault (an
-    /// earlier op's, or a non-finite gradient here) before the norm.
+    /// The global L2 norm of `grads` in `ceil(len / NORM_SLOTS)` fused
+    /// dispatches and one finish: each chunk's max |g| and its sum of
+    /// (g / max)^2 in a single read, a non-finite gradient flagged by the
+    /// same kernel, and the finish rescaling every chunk to the global max
+    /// (`ojas_norm_multi`, `ojas_norm_finish`). A sync point: it waits, then
+    /// reports the first pending fault (an earlier op's, or a non-finite
+    /// gradient here) before the norm.
     fn clip_norm(&mut self, grads: &[Arg]) -> Res<Reply> {
         const OP: &str = "clip_grad_norm";
         let views = grads
             .iter()
             .map(|a| self.view(*a))
             .collect::<Res<Vec<_>>>()?;
-        let stats = self.fresh(2 * views.len())?;
+        let chunks = views.iter().map(|v| norm_chunks(v.n)).sum::<usize>();
+        let part = self.fresh(2 * chunks)?;
+        let out = self.fresh(2)?;
         let st = self.status(OP)?;
-        for (i, v) in views.iter().enumerate() {
-            let slot = u32_of(2 * i)?;
-            self.check(&st, v, ST_IN)?;
-            self.reduce(v, 1, None, &stats.buf, slot)?;
-            self.reduce(v, 2, Some((&stats.buf, 2 * i * 4)), &stats.buf, slot + 1)?;
+        let mut base = 0usize;
+        for group in views.chunks(NORM_SLOTS) {
+            let (tbl, groups) = norm_table(group)?;
+            let used = u32_of(group.len())?;
+            self.ktg("ojas_norm_multi", groups, 1, 256, |b| {
+                for slot in 0..NORM_SLOTS {
+                    bind(b, group.get(slot).unwrap_or(&group[0]), slot);
+                }
+                set_gpu_buf_offset(b, &part.buf, part.off + base * 8, 24);
+                bind_st(b, &st, 25);
+                b.bind_bytes(&tbl, 26);
+                set_u32(b, used, 27);
+            })?;
+            base += groups;
         }
+        let count = u32_of(chunks)?;
+        self.ktg("ojas_norm_finish", 1, 1, 256, |b| {
+            bind(b, &part, 0);
+            bind(b, &out, 1);
+            set_u32(b, count, 2);
+        })?;
         self.settle(Scan::All, Wait::ClipNorm)?;
         self.report()?;
-        let map = stats.buf.try_contents_f32().map_err(metal_err)?;
-        let mut sum_sq = 0.0f64;
-        for i in 0..views.len() {
-            let amax = f64::from(map[2 * i]);
-            sum_sq += amax * amax * f64::from(map[2 * i + 1]);
-        }
-        Ok(Reply::Norm(sum_sq.sqrt() as f32))
+        let map = out.buf.try_contents_f32().map_err(metal_err)?;
+        Ok(Reply::Norm(map[out.off / 4]))
     }
 
+    /// Every gradient times `scale` in place, `NORM_SLOTS` gradients per
+    /// dispatch; a non-finite product is flagged by the same kernel.
     fn scale(&mut self, grads: &[Arg], scale: f32) -> Res<Reply> {
         const OP: &str = "clip_grad_norm";
         let views = grads
@@ -2512,14 +2546,18 @@ impl Worker {
             .map(|a| self.view(*a))
             .collect::<Res<Vec<_>>>()?;
         let st = self.status(OP)?;
-        for v in &views {
-            let n = u32_of(v.n)?;
-            self.k1("ojas_scale", v.n, |b| {
-                bind(b, v, 0);
-                set_u32(b, n, 1);
-                set_f32(b, scale, 2);
+        for group in views.chunks(NORM_SLOTS) {
+            let (tbl, groups) = norm_table(group)?;
+            let used = u32_of(group.len())?;
+            self.ktg("ojas_scale_multi", groups, 1, 256, |b| {
+                for slot in 0..NORM_SLOTS {
+                    bind(b, group.get(slot).unwrap_or(&group[0]), slot);
+                }
+                bind_st(b, &st, 25);
+                b.bind_bytes(&tbl, 26);
+                set_u32(b, used, 27);
+                set_f32(b, scale, 28);
             })?;
-            self.check(&st, v, ST_OUT)?;
         }
         Ok(Reply::Done)
     }
@@ -3086,8 +3124,9 @@ mod tests {
     }
 
     fn upload(w: &mut Worker, v: &[f32]) -> Arg {
-        let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_ne_bytes()).collect();
-        match w.run(Cmd::Upload { bytes }) {
+        let src = ojas_core::Tensor::from_f32(v, &[v.len()], &ojas_core::Budget::new(1 << 30))
+            .unwrap();
+        match w.run(Cmd::Upload { src }) {
             Ok(Reply::Bufs(b)) if b.len() == 1 => Arg {
                 id: b[0].id,
                 off: 0,

@@ -59,16 +59,6 @@ kernel void ojas_check_finite(
     }
 }
 
-kernel void ojas_fill_u32(
-    device uint *x [[buffer(0)]],
-    constant uint &n [[buffer(1)]],
-    constant uint &value [[buffer(2)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i >= n) return;
-    x[i] = value;
-}
-
 /// An upload carried in the command: `words` are the host's bytes in the
 /// constant arena, copied bit for bit (a NaN is data, not a fault).
 kernel void ojas_upload_words(
@@ -606,16 +596,6 @@ kernel void ojas_rms_bwd_w_sum(
     gw[c] = s;
 }
 
-kernel void ojas_scale(
-    device float *x [[buffer(0)]],
-    constant uint &n [[buffer(1)]],
-    constant float &scale [[buffer(2)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i >= n) return;
-    x[i] = x[i] * scale;
-}
-
 /// y = (1 - s) * v + s * v0 with s = sigmoid(lambda[0]).
 /// Checks `v`, `v0` and `y` in-kernel (see the pointwise section); `lam` is
 /// one value and keeps its own `ojas_check_finite` pass.
@@ -811,91 +791,6 @@ kernel void ojas_argmax_rows(
     }
 }
 
-kernel void ojas_embed_count(
-    device const uint *ids [[buffer(0)]],
-    device atomic_uint *counts [[buffer(1)]],
-    constant uint &n [[buffer(2)]],
-    constant uint &vocab [[buffer(3)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i >= n) return;
-    const uint id = ids[i];
-    if (id < vocab) {
-        atomic_fetch_add_explicit(&counts[id], 1u, memory_order_relaxed);
-    }
-}
-
-#define SCAN_TG 1024u
-
-/// Exclusive prefix sum of `counts` into `starts`. One threadgroup of
-/// SCAN_TG threads; each owns a contiguous chunk.
-kernel void ojas_scan_exclusive(
-    device const uint *counts [[buffer(0)]],
-    device uint *starts [[buffer(1)]],
-    constant uint &n [[buffer(2)]],
-    uint lane [[thread_index_in_threadgroup]])
-{
-    threadgroup uint sh[SCAN_TG];
-    const uint chunk = (n + SCAN_TG - 1u) / SCAN_TG;
-    const ulong lo = (ulong)lane * chunk;
-    const ulong hi = min(lo + chunk, (ulong)n);
-    uint local = 0u;
-    for (ulong i = lo; i < hi; ++i) {
-        local += counts[i];
-    }
-    sh[lane] = local;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint off = 1u; off < SCAN_TG; off <<= 1u) {
-        const uint add = lane >= off ? sh[lane - off] : 0u;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        sh[lane] += add;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    uint run = sh[lane] - local;
-    for (ulong i = lo; i < hi; ++i) {
-        starts[i] = run;
-        run += counts[i];
-    }
-}
-
-#define PLACE_TG 256u
-
-/// pos[starts[id] + rank] = i, where rank counts earlier tokens with the same
-/// id. Each id's rows therefore sit in ascending token order, which is the
-/// order the CPU reference adds them.
-kernel void ojas_embed_place(
-    device const uint *ids [[buffer(0)]],
-    device const uint *starts [[buffer(1)]],
-    device uint *pos [[buffer(2)]],
-    constant uint &n [[buffer(3)]],
-    constant uint &vocab [[buffer(4)]],
-    uint i [[thread_position_in_grid]],
-    uint lane [[thread_index_in_threadgroup]],
-    uint group [[threadgroup_position_in_grid]])
-{
-    threadgroup uint tile[PLACE_TG];
-    const bool live = i < n;
-    const uint id = live ? ids[i] : 0xFFFFFFFFu;
-    uint rank = 0u;
-    // Earlier tokens only; the last tile is this threadgroup's own.
-    const uint group_end = min((group + 1u) * PLACE_TG, n);
-    for (uint t0 = 0u; t0 < group_end; t0 += PLACE_TG) {
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        const uint j = t0 + lane;
-        tile[lane] = j < n ? ids[j] : 0xFFFFFFFFu;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        if (live) {
-            const uint span = min(PLACE_TG, i > t0 ? i - t0 : 0u);
-            for (uint jj = 0u; jj < span; ++jj) {
-                rank += tile[jj] == id ? 1u : 0u;
-            }
-        }
-    }
-    if (live && id < vocab) {
-        pos[starts[id] + rank] = i;
-    }
-}
-
 /// out[v, d] = sum of grad[pos[k], d] over v's tokens, in ascending token
 /// order from 0. Grid: x = column, y = vocabulary row.
 kernel void ojas_embed_gather(
@@ -985,6 +880,198 @@ kernel void ojas_reduce_final(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     if (lane == 0u) out[slot] = sh[0];
+}
+
+// ------------------------------------------------- multi-tensor clip ---
+//
+// `clip_grad_norm` over many gradients in few dispatches. One dispatch binds
+// up to NORM_SLOTS gradients at buffers 0..23; `tbl` holds each slot's
+// element count and the dispatch-local index of its first chunk, so
+// threadgroup g finds its slot and its NORM_CHUNK-element chunk without a
+// per-tensor launch. The slot choice is uniform across a threadgroup.
+
+#define NORM_SLOTS 24u
+#define NORM_CHUNK 4096u
+#define NORM_TG 256u
+#define NORM_PER (NORM_CHUNK / NORM_TG)
+#define NORM_PICK(s) (s == 0u ? g0 : s == 1u ? g1 : s == 2u ? g2 : s == 3u ? g3 : s == 4u ? g4 : s == 5u ? g5 : s == 6u ? g6 : s == 7u ? g7 : s == 8u ? g8 : s == 9u ? g9 : s == 10u ? g10 : s == 11u ? g11 : s == 12u ? g12 : s == 13u ? g13 : s == 14u ? g14 : s == 15u ? g15 : s == 16u ? g16 : s == 17u ? g17 : s == 18u ? g18 : s == 19u ? g19 : s == 20u ? g20 : s == 21u ? g21 : s == 22u ? g22 : g23)
+
+/// The slot threadgroup `g` belongs to: the last whose first chunk is at
+/// or before `g`.
+inline uint norm_slot(constant uint *tbl, uint used, uint g)
+{
+    uint s = 0u;
+    for (uint k = 1u; k < used; ++k) {
+        if (g >= tbl[2u * k + 1u]) s = k;
+    }
+    return s;
+}
+
+/// One pass over each chunk: its max |g| m and its sum of (g / m)^2 (0 when
+/// m is 0), both kept so the finish can rescale every chunk to the global
+/// max with no f32 overflow while the norm is finite. A non-finite element
+/// sets st[ST_IN] and is left out of both. part[g] = (m, sum).
+kernel void ojas_norm_multi(
+    device const float *g0 [[buffer(0)]],
+    device const float *g1 [[buffer(1)]],
+    device const float *g2 [[buffer(2)]],
+    device const float *g3 [[buffer(3)]],
+    device const float *g4 [[buffer(4)]],
+    device const float *g5 [[buffer(5)]],
+    device const float *g6 [[buffer(6)]],
+    device const float *g7 [[buffer(7)]],
+    device const float *g8 [[buffer(8)]],
+    device const float *g9 [[buffer(9)]],
+    device const float *g10 [[buffer(10)]],
+    device const float *g11 [[buffer(11)]],
+    device const float *g12 [[buffer(12)]],
+    device const float *g13 [[buffer(13)]],
+    device const float *g14 [[buffer(14)]],
+    device const float *g15 [[buffer(15)]],
+    device const float *g16 [[buffer(16)]],
+    device const float *g17 [[buffer(17)]],
+    device const float *g18 [[buffer(18)]],
+    device const float *g19 [[buffer(19)]],
+    device const float *g20 [[buffer(20)]],
+    device const float *g21 [[buffer(21)]],
+    device const float *g22 [[buffer(22)]],
+    device const float *g23 [[buffer(23)]],
+    device float2 *part [[buffer(24)]],
+    device atomic_uint *st [[buffer(25)]],
+    constant uint *tbl [[buffer(26)]],
+    constant uint &used [[buffer(27)]],
+    uint g [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]])
+{
+    threadgroup float sh[NORM_TG];
+    const uint s = norm_slot(tbl, used, g);
+    const uint n = tbl[2u * s];
+    const ulong lo = (ulong)(g - tbl[2u * s + 1u]) * NORM_CHUNK;
+    device const float *x = NORM_PICK(s);
+    float v[NORM_PER];
+    float peak = 0.0f;
+    bool bad = false;
+    for (uint j = 0u; j < NORM_PER; ++j) {
+        const ulong i = lo + (ulong)(j * NORM_TG + lane);
+        float a = i < n ? x[i] : 0.0f;
+        if (!isfinite(a)) {
+            bad = true;
+            a = 0.0f;
+        }
+        v[j] = a;
+        peak = max(peak, fabs(a));
+    }
+    if (bad) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
+    sh[lane] = peak;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
+        if (lane < off) sh[lane] = max(sh[lane], sh[lane + off]);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    const float m = sh[0];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float acc = 0.0f;
+    if (m > 0.0f) {
+        for (uint j = 0u; j < NORM_PER; ++j) {
+            const float t = precise::divide(v[j], m);
+            acc += t * t;
+        }
+    }
+    sh[lane] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
+        if (lane < off) sh[lane] = sh[lane] + sh[lane + off];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (lane == 0u) part[g] = float2(m, sh[0]);
+}
+
+/// One threadgroup folds `count` chunk partials: M = max m, then
+/// total = sum sum_c * (m_c / M)^2, out[0] = M * sqrt(total), out[1] = M.
+kernel void ojas_norm_finish(
+    device const float2 *part [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint &count [[buffer(2)]],
+    uint lane [[thread_index_in_threadgroup]])
+{
+    threadgroup float sh[NORM_TG];
+    float peak = 0.0f;
+    for (uint i = lane; i < count; i += NORM_TG) peak = max(peak, part[i].x);
+    sh[lane] = peak;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
+        if (lane < off) sh[lane] = max(sh[lane], sh[lane + off]);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    const float big = sh[0];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float acc = 0.0f;
+    if (big > 0.0f) {
+        for (uint i = lane; i < count; i += NORM_TG) {
+            const float r = precise::divide(part[i].x, big);
+            acc += part[i].y * (r * r);
+        }
+    }
+    sh[lane] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
+        if (lane < off) sh[lane] = sh[lane] + sh[lane + off];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (lane == 0u) {
+        out[0] = big * precise::sqrt(sh[0]);
+        out[1] = big;
+    }
+}
+
+/// Every gradient of the dispatch times `scale`, in place; a non-finite
+/// product sets st[ST_OUT]. Same slot table as `ojas_norm_multi`.
+kernel void ojas_scale_multi(
+    device float *g0 [[buffer(0)]],
+    device float *g1 [[buffer(1)]],
+    device float *g2 [[buffer(2)]],
+    device float *g3 [[buffer(3)]],
+    device float *g4 [[buffer(4)]],
+    device float *g5 [[buffer(5)]],
+    device float *g6 [[buffer(6)]],
+    device float *g7 [[buffer(7)]],
+    device float *g8 [[buffer(8)]],
+    device float *g9 [[buffer(9)]],
+    device float *g10 [[buffer(10)]],
+    device float *g11 [[buffer(11)]],
+    device float *g12 [[buffer(12)]],
+    device float *g13 [[buffer(13)]],
+    device float *g14 [[buffer(14)]],
+    device float *g15 [[buffer(15)]],
+    device float *g16 [[buffer(16)]],
+    device float *g17 [[buffer(17)]],
+    device float *g18 [[buffer(18)]],
+    device float *g19 [[buffer(19)]],
+    device float *g20 [[buffer(20)]],
+    device float *g21 [[buffer(21)]],
+    device float *g22 [[buffer(22)]],
+    device float *g23 [[buffer(23)]],
+    device atomic_uint *st [[buffer(25)]],
+    constant uint *tbl [[buffer(26)]],
+    constant uint &used [[buffer(27)]],
+    constant float &scale [[buffer(28)]],
+    uint g [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]])
+{
+    const uint s = norm_slot(tbl, used, g);
+    const uint n = tbl[2u * s];
+    const ulong lo = (ulong)(g - tbl[2u * s + 1u]) * NORM_CHUNK;
+    device float *x = NORM_PICK(s);
+    bool bad = false;
+    for (uint j = 0u; j < NORM_PER; ++j) {
+        const ulong i = lo + (ulong)(j * NORM_TG + lane);
+        if (i < n) {
+            const float r = x[i] * scale;
+            bad = bad || !isfinite(r);
+            x[i] = r;
+        }
+    }
+    if (bad) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
 }
 
 // -------------------------------------------------------- cross-entropy ---

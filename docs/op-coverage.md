@@ -108,10 +108,10 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | **GDN log decay** (Qwen3.5) | Exact scalar, `hybrid.rs` | `ojas_gdn_decay_*` (tessl's `qwen35_softplus`) | Unsupported | `f32` | $g = -e^{A_{\log}} \,\mathrm{softplus}(a + b_{dt})$ per head, torch's softplus threshold 20; `a` `[..., H]`, `A_log`, `dt_bias` `[H]`. The backward sums $\partial A_{\log}$ and $\partial b_{dt}$ over rows in ascending order
 | **Cross-Entropy** | Mean over valid targets | `ojas_ce_rows`, `ojas_ce_mean` | WGSL | `f32` | Mean NLL; `ignore_index`; all-ignored is `NonFinite`. Full `rows × vocab` logits and gradient are materialized |
 | **Linear Cross-Entropy** | Tiled online softmax, stream loss/grad | Tiled stream | WGSL `loss.wgsl` | `f32` | Fused linear projection + CE loss; tiles rows/vocab without materializing full logits (`LinearCeChunk`) |
-| **Grad Clip** | Global norm, f64 sum of squares | `ojas_reduce_*`, `ojas_scale` | WGSL | `f32` | Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$ |
+| **Grad Clip** | Global norm, f64 sum of squares | `ojas_norm_multi` + `ojas_norm_finish`, then `ojas_scale_multi`: 24 gradients per dispatch, one read per value | WGSL `clip.wgsl` (`norm_partial`, `norm_finish`, `scale_multi`): up to 16 gradients per dispatch, as the device's binding limit allows | `f32` | Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$. GPU norm: each 4096-value chunk's max and its sum of $(g/\max)^2$, rescaled to the global max |
 | **Accumulate Grad** | In-place add (finite check) | In-place / buffer | WGSL `accumulate` | `f32` | Accumulate step gradients into parameter gradient buffers |
 | **KV Cache Write** | Slice copy at timestep | Slice copy | WGSL `kv_cache` | `f32` | Write key/value token slices into time-major decode KV cache |
-| **AdamW** | Single-tensor torch order | tessl `qwen35_adamw` | WGSL | `f32` | Decay first; f64 bias correction; $\varepsilon$ outside sqrt |
+| **AdamW** | Single-tensor torch order | `ojas_adamw_check` then `ojas_adamw_apply` (no copies) | WGSL `adam_check` then `adam_apply` (no copies) | `f32` | Decay first; f64 bias correction; $\varepsilon$ outside sqrt. A non-finite step writes nothing |
 | **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32`, or `bf16` on CPU and Metal (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
 
 > [!WARNING]

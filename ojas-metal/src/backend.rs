@@ -78,8 +78,8 @@ use ojas_core::{
 };
 
 use crate::link::{
-    metal_err, rms_w_chunks, Arg, Cmd, Conv1dGeom, GdnArgs, LceGeom, Link, Reply, Res, RmsSide,
-    RopeMode, SdpaGeom, WaitCounts, Waits,
+    metal_err, norm_chunks, rms_w_chunks, Arg, Cmd, Conv1dGeom, EmbedRows, GdnArgs, LceGeom, Link,
+    Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -208,6 +208,14 @@ impl MetalBackend {
         self.link.wait_counts().total()
     }
 
+    /// Compute dispatches this backend's device thread has encoded since it
+    /// opened, shared by every clone, counted when each command finishes.
+    /// Telemetry for tests and benches, not a stable API.
+    #[doc(hidden)]
+    pub fn dispatches(&self) -> u64 {
+        self.link.dispatches()
+    }
+
     /// [`Self::waits`] by trigger: every waited commit counted once, under
     /// what made it wait (an upload while work was recorded, a read, a
     /// sync, `clip_grad_norm`, the memory cap, the working set, a full
@@ -294,6 +302,27 @@ impl MetalBackend {
             off: t.byte_offset(),
             n,
         })
+    }
+
+    /// The host copy of `t`'s ids window `a` (an upload's values), or
+    /// [`OjasError::Unsupported`] for ids produced on the device, whose
+    /// values the host does not hold.
+    fn host_ids<'t>(&self, op: &'static str, t: &'t Tensor, a: Arg) -> Res<&'t [u32]> {
+        let known = t
+            .device_buffer()
+            .and_then(|b| b.as_any().downcast_ref::<MetalBuffer>())
+            .and_then(|mb| mb.ids.as_ref());
+        match known {
+            Some(Ids::Host(host)) => host
+                .get(a.off / 4..a.off / 4 + a.n)
+                .ok_or_else(|| metal_err(format!("{op}: id window is outside its buffer"))),
+            _ => Err(OjasError::Unsupported {
+                op,
+                detail: "the gradient's rows are grouped from the ids on the host; these were \
+                         produced on the device"
+                    .to_string(),
+            }),
+        }
     }
 
     fn f32(&self, op: &'static str, t: &Tensor) -> Res<Arg> {
@@ -1008,16 +1037,27 @@ impl Backend for MetalBackend {
                 }
             }
             None => {
-                let bytes = tensor.to_ne_bytes()?;
-                if bytes.is_empty() {
+                // The device thread encodes the window into the new buffer
+                // itself: no host copy of it is made here, and the device
+                // copy is charged before anything is allocated.
+                if !tensor.is_contiguous()? {
+                    return Err(shape(OP, "view is not contiguous"));
+                }
+                let len = tensor
+                    .num_elements()?
+                    .checked_mul(tensor.dtype().size())
+                    .ok_or_else(|| overflow(OP))?;
+                if len == 0 {
                     return Err(shape(OP, "empty tensor"));
                 }
-                let reservation = self.budget.try_reserve(bytes.len() as u64)?;
+                let reservation = self.budget.try_reserve(len as u64)?;
                 let ids = match tensor.dtype() {
                     DType::U32 => Some(Ids::Host(Arc::from(tensor.u32_slice()?))),
                     _ => None,
                 };
-                let nb = match self.link.call(Cmd::Upload { bytes })? {
+                let nb = match self.link.call(Cmd::Upload {
+                    src: tensor.clone(),
+                })? {
                     Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
                     other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
                 };
@@ -1132,6 +1172,11 @@ impl Backend for MetalBackend {
         let g = self.f32(OP, grad_output)?;
         let (vocab, dim) = (u32_dim(OP, dims.vocab)?, u32_dim(OP, dims.dim)?);
         let (ids, _) = self.ids(OP, token_ids, vocab, None)?;
+        // The rows are grouped on the host from the ids it holds, as wgpu
+        // does; ids produced on the device have no host copy and are
+        // refused, as on wgpu.
+        let host = self.host_ids(OP, token_ids, ids)?;
+        let rows = EmbedRows::new(host, dims.vocab);
         let scratch = 2 * vocab as usize + ids.n;
         self.one(
             OP,
@@ -1139,9 +1184,8 @@ impl Backend for MetalBackend {
             scratch,
             Cmd::EmbedBwd {
                 table: t,
-                ids,
                 grad: g,
-                vocab,
+                rows,
                 dim,
             },
         )
@@ -1799,7 +1843,9 @@ impl Backend for MetalBackend {
             .iter()
             .map(|g| self.f32(OP, g))
             .collect::<Res<Vec<_>>>()?;
-        let _stats = self.reserve(OP, 2 * args.len() + 2048)?;
+        // Two floats per chunk of partials, and the finish's two words.
+        let chunks = args.iter().map(|a| norm_chunks(a.n)).sum::<usize>();
+        let _stats = self.reserve(OP, 2 * chunks + 2)?;
         let norm = match self.link.call(Cmd::ClipNorm {
             grads: args.clone(),
         })? {

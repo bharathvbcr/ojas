@@ -19,8 +19,9 @@ mod memory;
 
 pub use backend::WgpuBackend;
 pub use context::{
-    drop_stats, CacheStats, DropStats, WgpuBuffer, WgpuContext, ALLOW_CPU_ADAPTER_ENV, DROP_WAIT,
-    FLUSH_AT, MAX_ELEMENTS, MAX_PARKED_DROPS, POOL_CAP_BYTES,
+    drop_stats, CacheStats, DropStats, WgpuBuffer, WgpuContext, ALLOW_CPU_ADAPTER_ENV,
+    BIND_CACHE_CAP, DROP_WAIT, FLUSH_AT, MAX_ELEMENTS, MAX_PARKED_DROPS, PARAM_SLOTS,
+    POOL_CAP_BYTES, STAGING_CACHE_BYTES,
 };
 pub use memory::WgpuMemory;
 

@@ -338,6 +338,19 @@ def _ce():
     grad_row("cross_entropy_bwd", sp, build)
 
 
+def _embed():
+    """Embedding backward: N token ids into the [V, d] table's gradient.
+    torch's `embedding_dense_backward` is what autograd runs."""
+    ts, gs = [V, DM], [N, DM]
+    sp = spec([("table", ts, 125, 0), ("ids", [N], 126, 0), ("gy", gs, 127, 0)])
+
+    def build():
+        w0, ids, gy = cached("embed", lambda: (gen(ts, 125, 0), gen_targets(N, 126), gen(gs, 127, 0)))
+        w = req(w0)
+        return [F.embedding(ids, w)], [w], [gy]
+    grad_row("embed_bwd", sp, build)
+
+
 def _linear_ce(rows, cols):
     """nanolab's FusedLinearCrossEntropy (imported, unchanged). It chunks over
     rows only: n_chunks = N / rows, always the full vocabulary per chunk, so
@@ -723,6 +736,7 @@ def register():
     _vres()
     _permute()
     _ce()
+    _embed()
     _linear_ce(1024, 8192)
     _linear_ce(N, V)
     _clip()
