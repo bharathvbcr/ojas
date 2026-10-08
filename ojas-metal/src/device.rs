@@ -26,14 +26,18 @@ use tessl::gdn_train::{
     GdnTrainWorkspace, GDN_TRAIN_DK,
 };
 use tessl::gemm::{transpose_f32_into, GemmOperands};
+use tessl::qwen35::{conv1d_silu, gated_rms_norm, Cols, OutCols, StateIn};
+use tessl::qwen35_bwd::{
+    conv1d_silu_bwd, conv1d_silu_bwd_part_len, gated_rms_norm_bwd, gated_rms_norm_bwd_part_len,
+};
 use tessl::runtime::GpuRuntime;
 use tessl::tensor::{gpu_copy, GpuBuffer, Tensor as TT};
 use tessl::DType;
 
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
-    device_lost, metal_err, reduce_groups, rms_w_chunks, Arg, Cmd, GdnArgs, LceGeom, Msg, NewBuf,
-    Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
+    device_lost, metal_err, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, GdnArgs, LceGeom,
+    Msg, NewBuf, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
 };
 
 const ST_IN: u32 = 0;
@@ -958,14 +962,16 @@ impl Worker {
             } => self.linear_bwd(x, w, gy, rows, kin, nout),
             Cmd::Rms { sides, eps } => self.rms_sides(&sides, eps),
             Cmd::Rope {
+                op,
                 x,
                 cos,
                 sin,
                 rows,
                 dim,
+                rotary,
                 mode,
                 backward,
-            } => self.rope(x, cos, sin, rows, dim, mode, backward),
+            } => self.rope(op, [x, cos, sin], [rows, dim, rotary], mode, backward),
             Cmd::Sdpa { q, k, v, geom } => self.sdpa(q, k, v, geom),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
@@ -1013,6 +1019,32 @@ impl Worker {
                 d_o,
                 d_fin,
             } => self.gdn_bwd(x, ckpt, d_o, d_fin),
+            Cmd::Conv1d { x, w, geom } => self.conv1d(x, w, geom),
+            Cmd::Conv1dBwd {
+                x,
+                w,
+                gy,
+                geom,
+                part,
+            } => self.conv1d_bwd([x, w, gy], geom, part),
+            Cmd::GatedRms {
+                x,
+                z,
+                w,
+                rows,
+                dim,
+                eps,
+            } => self.gated_rms([x, z, w], [rows, dim], eps),
+            Cmd::GatedRmsBwd {
+                x,
+                z,
+                w,
+                gy,
+                rows,
+                dim,
+                eps,
+                part,
+            } => self.gated_rms_bwd([x, z, w, gy], [rows, dim], eps, part),
             Cmd::RoundBf16 { x } => self.round_bf16(x),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
@@ -1388,22 +1420,17 @@ impl Worker {
         Ok(self.keep(outs))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn rope(
         &mut self,
-        x: Arg,
-        cos: Arg,
-        sin: Arg,
-        rows: u32,
-        dim: u32,
+        op: &'static str,
+        [x, cos, sin]: [Arg; 3],
+        [rows, dim, rotary]: [u32; 3],
         mode: RopeMode,
         backward: bool,
     ) -> Res<Reply> {
-        let op = if backward {
-            "rope_half_split_backward"
-        } else {
-            "rope_half_split_forward"
-        };
+        if rotary > dim || !rotary.is_multiple_of(2) {
+            return Err(metal_err(format!("{op}: rotary {rotary} of dim {dim}")));
+        }
         let xv = self.view(x)?;
         let cv = self.view(cos)?;
         let sv = self.view(sin)?;
@@ -1416,7 +1443,9 @@ impl Worker {
         for v in [&xv, &cv, &sv] {
             self.check(&st, v, ST_IN)?;
         }
-        self.k2("ojas_rope", (dim / 2) as usize, rows as usize, |b| {
+        // Units: one per rotated pair, then one per copied column.
+        let units = (rotary / 2 + (dim - rotary)) as usize;
+        self.k2("ojas_rope", units, rows as usize, |b| {
             bind(b, &xv, 0);
             bind(b, &cv, 1);
             bind(b, &sv, 2);
@@ -1427,6 +1456,7 @@ impl Worker {
             set_u32(b, time, 7);
             set_u32(b, heads, 8);
             set_u32(b, u32::from(backward), 9);
+            set_u32(b, rotary, 10);
         })?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
@@ -1948,6 +1978,163 @@ impl Worker {
             self.check(&st, out, ST_OUT)?;
         }
         Ok(self.keep(outs))
+    }
+
+    /// `v` at offset 0 of its own buffer: tessl's row-local kernels take a
+    /// buffer and a column window, not a byte offset, so a view that does
+    /// not start its buffer is copied first.
+    fn whole(&self, v: V) -> Res<V> {
+        if v.off == 0 {
+            return Ok(v);
+        }
+        let dst = self.fresh(v.n)?;
+        self.copy(&v, &dst)?;
+        Ok(dst)
+    }
+
+    /// The views of `args`, each at offset 0 ([`Self::whole`]).
+    fn wholes<const N: usize>(&self, args: [Arg; N]) -> Res<[V; N]> {
+        let mut out = Vec::with_capacity(N);
+        for a in args {
+            out.push(self.whole(self.view(a)?)?);
+        }
+        out.try_into()
+            .map_err(|_| metal_err("operand count changed"))
+    }
+
+    /// Weight-gradient scratch of `need` values, refused unless the backend
+    /// charged exactly that many.
+    fn part(&self, op: &'static str, charged: usize, need: usize) -> Res<V> {
+        if charged != need {
+            return Err(metal_err(format!(
+                "{op}: the backend charged {charged} scratch values; tessl needs {need}"
+            )));
+        }
+        self.fresh(need)
+    }
+
+    /// tessl's `qwen35::conv1d_silu` from a zero state. It scans nothing,
+    /// so the operands and the output are checked here.
+    fn conv1d(&mut self, x: Arg, w: Arg, g: Conv1dGeom) -> Res<Reply> {
+        const OP: &str = "causal_conv1d_silu_forward";
+        let [xv, wv] = self.wholes([x, w])?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        for v in [&xv, &wv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        conv1d_silu(
+            &self.rt,
+            Cols::dense(&xv.buf, g.channels),
+            &wv.buf,
+            g.width,
+            StateIn::Zero,
+            &y.buf,
+            None,
+            g.batch,
+            g.seq,
+            g.channels,
+        )
+        .map_err(metal_err)?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    fn conv1d_bwd(&mut self, args: [Arg; 3], g: Conv1dGeom, part: usize) -> Res<Reply> {
+        const OP: &str = "causal_conv1d_silu_backward";
+        let [xv, wv, gv] = self.wholes(args)?;
+        let need = conv1d_silu_bwd_part_len(g.batch, g.seq, g.channels, g.width);
+        let scratch = self.part(OP, part, need)?;
+        let (dx, dw) = (self.fresh(xv.n)?, self.fresh(wv.n)?);
+        let st = self.status(OP)?;
+        for v in [&xv, &wv, &gv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        conv1d_silu_bwd(
+            &self.rt,
+            Cols::dense(&xv.buf, g.channels),
+            &wv.buf,
+            g.width,
+            Cols::dense(&gv.buf, g.channels),
+            Cols::dense(&dx.buf, g.channels),
+            &dw.buf,
+            &scratch.buf,
+            g.batch,
+            g.seq,
+            g.channels,
+        )
+        .map_err(metal_err)?;
+        for v in [&dx, &dw] {
+            self.check(&st, v, ST_OUT)?;
+        }
+        Ok(self.keep(vec![dx, dw]))
+    }
+
+    /// tessl's `qwen35::gated_rms_norm` with one head per row: its `heads`
+    /// is 1 and its `dim` the row.
+    fn gated_rms(&mut self, args: [Arg; 3], [rows, dim]: [u32; 2], eps: f32) -> Res<Reply> {
+        const OP: &str = "gated_rms_norm_forward";
+        let [xv, zv, wv] = self.wholes(args)?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        for v in [&xv, &zv, &wv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        let out = OutCols {
+            cols: Cols::dense(&y.buf, dim),
+            dtype: DType::F32,
+        };
+        gated_rms_norm(
+            &self.rt,
+            Cols::dense(&xv.buf, dim),
+            Cols::dense(&zv.buf, dim),
+            &wv.buf,
+            out,
+            rows,
+            1,
+            dim,
+            eps,
+        )
+        .map_err(metal_err)?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    fn gated_rms_bwd(
+        &mut self,
+        args: [Arg; 4],
+        [rows, dim]: [u32; 2],
+        eps: f32,
+        part: usize,
+    ) -> Res<Reply> {
+        const OP: &str = "gated_rms_norm_backward";
+        let [xv, zv, wv, gv] = self.wholes(args)?;
+        let scratch = self.part(OP, part, gated_rms_norm_bwd_part_len(rows, 1, dim))?;
+        let (dx, dz, dw) = (self.fresh(xv.n)?, self.fresh(zv.n)?, self.fresh(wv.n)?);
+        let st = self.status(OP)?;
+        for v in [&xv, &zv, &wv, &gv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        gated_rms_norm_bwd(
+            &self.rt,
+            Cols::dense(&xv.buf, dim),
+            Cols::dense(&zv.buf, dim),
+            &wv.buf,
+            Cols::dense(&gv.buf, dim),
+            Cols::dense(&dx.buf, dim),
+            Cols::dense(&dz.buf, dim),
+            &dw.buf,
+            &scratch.buf,
+            rows,
+            1,
+            dim,
+            eps,
+        )
+        .map_err(metal_err)?;
+        for v in [&dx, &dz, &dw] {
+            self.check(&st, v, ST_OUT)?;
+        }
+        Ok(self.keep(vec![dx, dz, dw]))
     }
 
     /// No status slot and no finite scan: NaN rounds to a quiet NaN.

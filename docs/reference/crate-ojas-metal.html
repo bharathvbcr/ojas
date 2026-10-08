@@ -239,6 +239,20 @@
 </li>
 </ul>
 </li>
+<li><strong>Qwen3.5 hybrid-layer ops</strong> (<code>tests/hybrid.rs</code>, against the CPU within 1e-5 of each tensor&#39;s peak):
+<ul>
+<li><code>causal_conv1d_silu_*</code> runs tessl&#39;s <code>qwen35::conv1d_silu</code> from a zero state and <code>qwen35_bwd::conv1d_silu_bwd</code>, whose weight gradient is a fixed-order sum of 256-row partials. Widths other than 2 to 8 are <code>Unsupported</code>.
+</li>
+<li><code>gated_rms_norm_*</code> runs tessl&#39;s <code>qwen35::gated_rms_norm</code> and <code>gated_rms_norm_bwd</code> with one head per row. The backward takes rows of at most 512 values; a wider row is <code>Unsupported</code>.
+</li>
+<li><code>rope_partial_*</code> runs <code>ojas_rope</code> with a rotary width: the leading <code>R</code> values of each head turn and the rest are copied bit for bit. At <code>R = D</code> it is <code>rope_half_split</code>, bit for bit.
+</li>
+<li>tessl&#39;s kernels take a buffer and a column window, not a byte offset, so an operand that does not start its buffer is copied first. Every operand and output is checked for non-finite values, and a fault is deferred as for the other ops.
+</li>
+<li><code>chunked_gdn_*</code> runs tessl&#39;s <code>gdn_train</code> (<code>tests/gdn.rs</code>). The four ops make up a linear-attention layer on the tape (<code>ojas-model/tests/metal_hybrid_tape.rs</code>).
+</li>
+</ul>
+</li>
 </ul>
 <hr>
 <h2 id="cross-entropy-canary-offset-defense">Cross-Entropy Canary Offset Defense <a class="anchor" href="#cross-entropy-canary-offset-defense" aria-label="Link to this section">#</a></h2>

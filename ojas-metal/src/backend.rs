@@ -40,27 +40,30 @@ use std::fmt;
 use std::sync::Arc;
 
 use ojas_core::{
-    accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
+    accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
+    causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
     check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
     clip_scale, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
-    embedding_backward_dims, embedding_forward_dims, kv_cache_write_dims, linear_backward_dims,
-    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    embedding_backward_dims, embedding_forward_dims, gated_rms_norm_backward_dims,
+    gated_rms_norm_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
+    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
     refuse_bf16_operands, refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim,
-    residual_add_backward_dims,
-    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
-    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, silu_backward_dims, silu_forward_dims,
+    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
+    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
+    rope_half_split_backward_dims, rope_half_split_forward_dims, rope_partial_backward_dims,
+    rope_partial_forward_dims, silu_backward_dims, silu_forward_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
-    BackendId, Budget, CeChunk, DType, DeviceBuffer, GateDims, GdnDims, GdnForward, GdnGrad,
-    GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
+    BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDims,
+    GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
+    OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout,
+    SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM,
+    METAL_GDN_VALUE_BLOCK,
 };
 
 use crate::link::{
-    metal_err, rms_w_chunks, Arg, Cmd, GdnArgs, LceGeom, Link, Reply, Res, RmsSide, RopeMode,
-    SdpaGeom, WaitCounts, Waits,
+    metal_err, rms_w_chunks, Arg, Cmd, Conv1dGeom, GdnArgs, LceGeom, Link, Reply, Res, RmsSide,
+    RopeMode, SdpaGeom, WaitCounts, Waits,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -572,6 +575,69 @@ fn muon_scratch_elems(op: &'static str, rows: usize, cols: usize) -> Res<usize> 
 /// per (slice, batch x head), and per-slice partial `dq`, `dk` (128 wide),
 /// `dg` and `dbeta`. The device thread checks this against tessl's own
 /// figure before it allocates, so the two cannot drift silently.
+/// Widths tessl's `qwen35_conv1d_silu*` kernels take
+/// (`CONV_BWD_MAX_KW` in tessl's source).
+const METAL_CONV1D_WIDTHS: std::ops::RangeInclusive<usize> = 2..=8;
+/// Flattened rows per weight-gradient block of tessl's conv backward
+/// (`CONV_ROWS_PER_BLOCK` in `qwen35_bwd.rs`).
+const METAL_CONV1D_BWD_ROWS: usize = 256;
+/// Widest row tessl's gated-norm backward takes (`32 * MAX_COLS`).
+const METAL_GATED_RMS_BWD_MAX_DIM: usize = 512;
+/// Rows per weight-gradient block of tessl's gated-norm backward
+/// (`GATED_UNITS_PER_BLOCK`).
+const METAL_GATED_RMS_BWD_ROWS: usize = 64;
+
+/// The conv kernels' geometry of validated `d`: a width tessl is compiled
+/// for, and `batch * seq` within 32-bit indexing.
+fn conv1d_geom(op: &'static str, d: &Conv1dDims) -> Res<Conv1dGeom> {
+    if !METAL_CONV1D_WIDTHS.contains(&d.width) {
+        return Err(OjasError::Unsupported {
+            op,
+            detail: format!(
+                "Metal's conv1d kernels take widths {METAL_CONV1D_WIDTHS:?}, got {}",
+                d.width
+            ),
+        });
+    }
+    u32_dim(op, product(op, &[d.batch, d.time, d.channels])?)?;
+    Ok(Conv1dGeom {
+        batch: u32_dim(op, d.batch)?,
+        seq: u32_dim(op, d.time)?,
+        channels: u32_dim(op, d.channels)?,
+        width: u32_dim(op, d.width)?,
+    })
+}
+
+/// f32 values of weight-gradient scratch the conv backward needs; the device
+/// checks this against tessl's `conv1d_silu_bwd_part_len`.
+fn conv1d_part_elems(op: &'static str, d: &Conv1dDims) -> Res<usize> {
+    let blocks = product(op, &[d.batch, d.time])?.div_ceil(METAL_CONV1D_BWD_ROWS);
+    product(op, &[blocks, d.channels, d.width])
+}
+
+/// `(rows, dim)` of validated `d` within 32-bit indexing, every element too.
+fn gated_rms_geom(op: &'static str, d: &RmsDims) -> Res<(u32, u32)> {
+    u32_dim(op, product(op, &[d.rows, d.dim])?)?;
+    Ok((u32_dim(op, d.rows)?, u32_dim(op, d.dim)?))
+}
+
+/// The partial rope kernel's `(rows, dim, rotary, mode)` of validated `d`.
+fn rope_partial_geom(op: &'static str, d: &PartialRopeDims) -> Res<([u32; 3], RopeMode)> {
+    u32_dim(op, product(op, &[d.rows, d.dim])?)?;
+    let mode = RopeMode::TimeDim {
+        time: u32_dim(op, d.time)?,
+        heads: u32_dim(op, d.heads)?,
+    };
+    Ok((
+        [
+            u32_dim(op, d.rows)?,
+            u32_dim(op, d.dim)?,
+            u32_dim(op, d.rotary)?,
+        ],
+        mode,
+    ))
+}
+
 fn gdn_workspace_elems(op: &'static str, d: &GdnDims) -> Res<usize> {
     let slices = d.value_dim / METAL_GDN_VALUE_BLOCK;
     let chunk = product(
@@ -1296,6 +1362,146 @@ impl Backend for MetalBackend {
         }
     }
 
+    fn causal_conv1d_silu_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "causal_conv1d_silu_forward";
+        let dims = causal_conv1d_silu_forward_dims(input, weight)?;
+        let (x, w) = (self.f32(OP, input)?, self.f32(OP, weight)?);
+        let geom = conv1d_geom(OP, &dims)?;
+        self.one(OP, input.shape(), 0, Cmd::Conv1d { x, w, geom })
+    }
+
+    fn causal_conv1d_silu_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "causal_conv1d_silu_backward";
+        let dims = causal_conv1d_silu_backward_dims(input, weight, grad_output)?;
+        let (x, w) = (self.f32(OP, input)?, self.f32(OP, weight)?);
+        let gy = self.f32(OP, grad_output)?;
+        let geom = conv1d_geom(OP, &dims)?;
+        let part = conv1d_part_elems(OP, &dims)?;
+        let shapes = [input.shape(), weight.shape()];
+        let cmd = Cmd::Conv1dBwd {
+            x,
+            w,
+            gy,
+            geom,
+            part,
+        };
+        let mut out = self.outputs(OP, &shapes, part, cmd)?.into_iter();
+        match (out.next(), out.next()) {
+            (Some(dx), Some(dw)) => Ok((dx, dw)),
+            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        }
+    }
+
+    fn gated_rms_norm_forward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "gated_rms_norm_forward";
+        let dims = gated_rms_norm_forward_dims(input, gate, weight, eps)?;
+        let (x, z, w) = (
+            self.f32(OP, input)?,
+            self.f32(OP, gate)?,
+            self.f32(OP, weight)?,
+        );
+        let (rows, dim) = gated_rms_geom(OP, &dims)?;
+        let cmd = Cmd::GatedRms {
+            x,
+            z,
+            w,
+            rows,
+            dim,
+            eps,
+        };
+        self.one(OP, input.shape(), 0, cmd)
+    }
+
+    fn gated_rms_norm_backward(
+        &self,
+        input: &Tensor,
+        gate: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<GatedRmsGrad, OjasError> {
+        const OP: &str = "gated_rms_norm_backward";
+        let dims = gated_rms_norm_backward_dims(input, gate, weight, grad_output, eps)?;
+        let (x, z, w) = (
+            self.f32(OP, input)?,
+            self.f32(OP, gate)?,
+            self.f32(OP, weight)?,
+        );
+        let gy = self.f32(OP, grad_output)?;
+        if dims.dim > METAL_GATED_RMS_BWD_MAX_DIM {
+            return Err(OjasError::Unsupported {
+                op: OP,
+                detail: format!(
+                    "Metal's gated-norm backward takes rows of at most \
+                     {METAL_GATED_RMS_BWD_MAX_DIM}, got {}",
+                    dims.dim
+                ),
+            });
+        }
+        let (rows, dim) = gated_rms_geom(OP, &dims)?;
+        let part = product(
+            OP,
+            &[dims.rows.div_ceil(METAL_GATED_RMS_BWD_ROWS), dims.dim],
+        )?;
+        let shapes = [input.shape(), gate.shape(), weight.shape()];
+        let cmd = Cmd::GatedRmsBwd {
+            x,
+            z,
+            w,
+            gy,
+            rows,
+            dim,
+            eps,
+            part,
+        };
+        let mut out = self.outputs(OP, &shapes, part, cmd)?.into_iter();
+        match (out.next(), out.next(), out.next()) {
+            (Some(input), Some(gate), Some(weight)) => Ok(GatedRmsGrad {
+                input,
+                gate,
+                weight,
+            }),
+            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        }
+    }
+
+    fn rope_partial_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_partial_forward";
+        let dims = rope_partial_forward_dims(x, cos, sin)?;
+        rope_partial(self, OP, &dims, [x, cos, sin], false)
+    }
+
+    fn rope_partial_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_partial_backward";
+        let dims = rope_partial_backward_dims(grad_output, cos, sin)?;
+        rope_partial(self, OP, &dims, [grad_output, cos, sin], true)
+    }
+
     fn value_residual_blend_forward(
         &self,
         value: &Tensor,
@@ -1749,11 +1955,42 @@ fn rope(
         x.shape(),
         0,
         Cmd::Rope {
+            op,
             x: xa,
             cos: ca,
             sin: sa,
             rows,
             dim,
+            rotary: dim,
+            mode,
+            backward,
+        },
+    )
+}
+
+/// Partial rope of validated `dims`: the leading `rotary` of each head
+/// rotate on `ojas_rope`, the rest are copied.
+fn rope_partial(
+    be: &MetalBackend,
+    op: &'static str,
+    dims: &PartialRopeDims,
+    [x, cos, sin]: [&Tensor; 3],
+    backward: bool,
+) -> Res<Tensor> {
+    let (xa, ca, sa) = (be.f32(op, x)?, be.f32(op, cos)?, be.f32(op, sin)?);
+    let ([rows, dim, rotary], mode) = rope_partial_geom(op, dims)?;
+    be.one(
+        op,
+        x.shape(),
+        0,
+        Cmd::Rope {
+            op,
+            x: xa,
+            cos: ca,
+            sin: sa,
+            rows,
+            dim,
+            rotary,
             mode,
             backward,
         },

@@ -547,11 +547,14 @@ kernel void ojas_vres_lambda(
 
 // ----------------------------------------------------------------- RoPE ---
 
-/// Half-split RoPE. `mode` 0: cos/sin have the shape of x. `mode` 1: x is
-/// [batch, time, heads, dim] and cos/sin are [time, dim].
+/// Half-split RoPE on the leading `rot` values of each row of `dim` (pairs
+/// `p`, `p + rot/2`); the other `dim - rot` are copied. `rot == dim` rotates
+/// the whole row. `mode` 0: cos/sin have the shape of x (and `rot == dim`).
+/// `mode` 1: x is [batch, time, heads, dim] and cos/sin are [time, rot].
 /// Forward:  y1 = x1 c1 + (-x2) s1,  y2 = x2 c2 + x1 s2.
 /// Backward: g1' = g1 c1 + g2 s2,    g2' = -g1 s1 + g2 c2.
-/// Grid: x = column in [0, dim/2), y = row.
+/// Grid: x = unit in [0, rot/2 + dim - rot), y = row. Unit u < rot/2 rotates
+/// pair u; a later unit copies column rot + (u - rot/2).
 kernel void ojas_rope(
     device const float *x [[buffer(0)]],
     device const float *cs [[buffer(1)]],
@@ -563,27 +566,33 @@ kernel void ojas_rope(
     constant uint &time [[buffer(7)]],
     constant uint &heads [[buffer(8)]],
     constant uint &backward [[buffer(9)]],
+    constant uint &rot [[buffer(10)]],
     uint2 gid [[thread_position_in_grid]])
 {
-    const uint half_dim = dim / 2u;
+    const uint half_rot = rot / 2u;
     const uint col = gid.x;
     const uint row = gid.y;
-    if (col >= half_dim || row >= rows) return;
+    if (rot > dim || col >= half_rot + (dim - rot) || row >= rows) return;
     if (mode == 1u && (heads == 0u || time == 0u)) return;
     const ulong base = (ulong)row * dim;
-    const ulong cbase = mode == 0u ? base : (ulong)((row / heads) % time) * dim;
+    if (col >= half_rot) {
+        const ulong c = base + rot + (col - half_rot);
+        y[c] = x[c];
+        return;
+    }
+    const ulong cbase = mode == 0u ? base : (ulong)((row / heads) % time) * rot;
     const float a = x[base + col];
-    const float b = x[base + col + half_dim];
+    const float b = x[base + col + half_rot];
     const float c1 = cs[cbase + col];
     const float s1 = sn[cbase + col];
-    const float c2 = cs[cbase + col + half_dim];
-    const float s2 = sn[cbase + col + half_dim];
+    const float c2 = cs[cbase + col + half_rot];
+    const float s2 = sn[cbase + col + half_rot];
     if (backward == 0u) {
         y[base + col] = a * c1 + (-b) * s1;
-        y[base + col + half_dim] = b * c2 + a * s2;
+        y[base + col + half_rot] = b * c2 + a * s2;
     } else {
         y[base + col] = a * c1 + b * s2;
-        y[base + col + half_dim] = -a * s1 + b * c2;
+        y[base + col + half_rot] = -a * s1 + b * c2;
     }
 }
 

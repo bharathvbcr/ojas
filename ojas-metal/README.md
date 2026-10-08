@@ -89,6 +89,12 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * Each threadgroup rebuilds 32 x 32 score blocks in about 8 KiB of threadgroup memory, so nothing T x T is stored.
   * Every output row is written once with no atomics, so results repeat bit for bit.
   * A `[T, D]` plane must fit i32 extents.
+* **Qwen3.5 hybrid-layer ops** (`tests/hybrid.rs`, against the CPU within 1e-5 of each tensor's peak):
+  * `causal_conv1d_silu_*` runs tessl's `qwen35::conv1d_silu` from a zero state and `qwen35_bwd::conv1d_silu_bwd`, whose weight gradient is a fixed-order sum of 256-row partials. Widths other than 2 to 8 are `Unsupported`.
+  * `gated_rms_norm_*` runs tessl's `qwen35::gated_rms_norm` and `gated_rms_norm_bwd` with one head per row. The backward takes rows of at most 512 values; a wider row is `Unsupported`.
+  * `rope_partial_*` runs `ojas_rope` with a rotary width: the leading `R` values of each head turn and the rest are copied bit for bit. At `R = D` it is `rope_half_split`, bit for bit.
+  * tessl's kernels take a buffer and a column window, not a byte offset, so an operand that does not start its buffer is copied first. Every operand and output is checked for non-finite values, and a fault is deferred as for the other ops.
+  * `chunked_gdn_*` runs tessl's `gdn_train` (`tests/gdn.rs`). The four ops make up a linear-attention layer on the tape (`ojas-model/tests/metal_hybrid_tape.rs`).
 
 ---
 
