@@ -145,7 +145,7 @@ fn the_saved_backward_refuses_a_wrong_scale_and_still_checks_the_bias() {
 mod gate_ab;
 
 /// `cargo test --release -p ojas-wgpu --test gate_saved -- --ignored
-/// --nocapture bench_`; results in `bench/results/2026-10-06-gate-saved/`.
+/// --nocapture bench_`; results in `bench/results/2026-10-07-gate-saved/`.
 #[test]
 #[ignore = "benchmark; run with --ignored --nocapture in release"]
 fn bench_gate_saved_against_recomputed() {
