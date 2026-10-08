@@ -42,17 +42,27 @@ pub trait Graph {
     fn rope(&mut self, x: &Self::V, cos: &Tensor, sin: &Tensor) -> Result<Self::V, OjasError>;
     fn permute(&mut self, x: &Self::V, dims: &[usize]) -> Result<Self::V, OjasError>;
     /// Causal SDPA. Query is head-major `[B, H, T, D]`; key and value are
-    /// `[B, Hkv, T, D]`, with `H` a positive multiple of `Hkv`.
-    fn sdpa(&mut self, q: &Self::V, k: &Self::V, v: &Self::V) -> Result<Self::V, OjasError>;
+    /// `[B, Hkv, T, D]`, with `H` a positive multiple of `Hkv`. With a
+    /// `window`, query `t` attends to keys `t - window < j <= t`
+    /// ([`Backend::causal_sdpa_forward`]).
+    fn sdpa(
+        &mut self,
+        q: &Self::V,
+        k: &Self::V,
+        v: &Self::V,
+        window: Option<usize>,
+    ) -> Result<Self::V, OjasError>;
     /// [`Backend::cached_attention_forward`]: `q` `[B, Tq, H, D]` against
-    /// the first `kv_len` positions of a `[B, Tcap, Hkv, D]` cache. Decode
-    /// uses this path. Full-sequence training uses [`Graph::sdpa`].
+    /// the `kv_len` positions written to a `[B, Tcap, Hkv, D]` ring cache,
+    /// under the same `window` as [`Graph::sdpa`]. Decode uses this path.
+    /// Full-sequence training uses [`Graph::sdpa`].
     fn cached_attn(
         &mut self,
         q: &Self::V,
         k_cache: &Self::V,
         v_cache: &Self::V,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Self::V, OjasError>;
     /// Per-head sigmoid gate of `x` applied to `attn`.
     fn gate(
@@ -168,8 +178,8 @@ impl<B: Backend> Graph for Tape<B> {
         Tape::permute(self, *x, dims)
     }
 
-    fn sdpa(&mut self, q: &Var, k: &Var, v: &Var) -> Result<Var, OjasError> {
-        Tape::causal_sdpa(self, *q, *k, *v, None)
+    fn sdpa(&mut self, q: &Var, k: &Var, v: &Var, window: Option<usize>) -> Result<Var, OjasError> {
+        Tape::causal_sdpa(self, *q, *k, *v, window)
     }
 
     /// Refused: cached attention is an inference op with no backward, and
@@ -181,6 +191,7 @@ impl<B: Backend> Graph for Tape<B> {
         _k_cache: &Var,
         _v_cache: &Var,
         _kv_len: usize,
+        _window: Option<usize>,
     ) -> Result<Var, OjasError> {
         Err(OjasError::Unsupported {
             op: "Graph::cached_attn",
@@ -335,8 +346,14 @@ impl<B: Backend> Graph for Eval<B> {
         self.backend.permute(x, dims)
     }
 
-    fn sdpa(&mut self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor, OjasError> {
-        Ok(self.backend.causal_sdpa_forward(q, k, v, None)?.0)
+    fn sdpa(
+        &mut self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: Option<usize>,
+    ) -> Result<Tensor, OjasError> {
+        Ok(self.backend.causal_sdpa_forward(q, k, v, window)?.0)
     }
 
     fn cached_attn(
@@ -345,10 +362,12 @@ impl<B: Backend> Graph for Eval<B> {
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         let k = self.place(k_cache)?;
         let v = self.place(v_cache)?;
-        self.backend.cached_attention_forward(q, &k, &v, kv_len)
+        self.backend
+            .cached_attention_forward(q, &k, &v, kv_len, window)
     }
 
     fn gate(

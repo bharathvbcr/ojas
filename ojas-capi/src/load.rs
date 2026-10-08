@@ -466,6 +466,7 @@ fn spec_from(f: &Fields<'_>) -> Result<ModelSpec, String> {
         rope_base: required(f.f64(tag::ROPE_BASE), tag::ROPE_BASE)?,
         rms_eps: required(f.f64(tag::RMS_EPS), tag::RMS_EPS)?,
         tie_embeddings: true,
+        window: None,
     };
     spec.validate().map_err(|e| crate::ojas_error("new", &e))?;
     Ok(spec)

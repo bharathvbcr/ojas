@@ -1891,17 +1891,19 @@ impl Backend for MetalBackend {
 
     /// Validated by [`cached_attention_dims`] and the Metal head-dim limit
     /// before anything reaches the device. A NaN or infinity in `q`, or in
-    /// either cache at a position below `kv_len`, is [`OjasError::NonFinite`]
-    /// at the next sync point; positions at or past `kv_len` are not read.
+    /// either cache at a position some query reads (below `kv_len`, inside
+    /// its window), is [`OjasError::NonFinite`] at the next sync point;
+    /// other slots are not read.
     fn cached_attention_forward(
         &self,
         q: &Tensor,
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "cached_attention_forward";
-        let dims = cached_attention_dims(q, k_cache, v_cache, kv_len)?;
+        let dims = cached_attention_dims(q, k_cache, v_cache, kv_len, window)?;
         let d = u32_dim(OP, dims.head_dim)?;
         refuse_unsupported_metal_head_dim(BackendId::Metal, d)?;
         let (qa, ka, va) = (
@@ -1925,12 +1927,17 @@ impl Backend for MetalBackend {
                 d,
                 cap: u32_dim(OP, dims.capacity)?,
                 kv_len: u32_dim(OP, kv_len)?,
+                window: match dims.window {
+                    Some(w) => u32_dim(OP, w)?,
+                    None => 0,
+                },
             },
         )
     }
 
-    /// Validated by [`kv_cache_write_dims`] (so `at + Tn > Tcap` is refused
-    /// before any dispatch), then written in place. A shared `cache` is
+    /// Validated by [`kv_cache_write_dims`] (so `Tn > Tcap` is refused
+    /// before any dispatch), then written in place, position `at + t` in
+    /// slot `(at + t) % Tcap`. A shared `cache` is
     /// [`OjasError::Shape`]; a non-finite `src` writes nothing and is
     /// [`OjasError::NonFinite`] at the next sync point.
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
@@ -1945,7 +1952,7 @@ impl Backend for MetalBackend {
             tn: u32_dim(OP, dims.new)?,
             cap: u32_dim(OP, dims.capacity)?,
             row: u32_dim(OP, product(OP, &[dims.kv_heads, dims.head_dim])?)?,
-            at: u32_dim(OP, at)?,
+            at: u32_dim(OP, at % dims.capacity)?,
         })? {
             Reply::Done => Ok(()),
             other => Err(metal_err(format!("{OP}: device returned {other:?}"))),

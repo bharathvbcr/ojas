@@ -829,16 +829,16 @@ mod probe {
         println!("|---|---:|---:|---:|---:|---:|---:|---:|---|");
         let (q0, k0, v0) = &reqs[0];
         let s = calls(be, n, || {
-            Ok(vec![be.cached_attention_forward(q0, k0, v0, PC_T)?])
+            Ok(vec![be.cached_attention_forward(q0, k0, v0, PC_T, None)?])
         })?;
         report_calls("1 request, 1 call", 1, &s);
         let s = calls(be, n, || {
-            Ok(vec![be.cached_attention_forward(&qb, &kb, &vb, PC_T)?])
+            Ok(vec![be.cached_attention_forward(&qb, &kb, &vb, PC_T, None)?])
         })?;
         report_calls("16 requests, 1 batched call", 1, &s);
         let s = calls(be, n, || {
             reqs.iter()
-                .map(|(q, k, v)| be.cached_attention_forward(q, k, v, PC_T))
+                .map(|(q, k, v)| be.cached_attention_forward(q, k, v, PC_T, None))
                 .collect()
         })?;
         report_calls("16 requests, 16 calls", PC_B, &s);

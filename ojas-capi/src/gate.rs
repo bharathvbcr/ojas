@@ -603,10 +603,11 @@ impl<B: Backend> Backend for Gated<B> {
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         self.enter("cached_attention_forward", true)?;
         self.inner
-            .cached_attention_forward(q, k_cache, v_cache, kv_len)
+            .cached_attention_forward(q, k_cache, v_cache, kv_len, window)
     }
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         self.enter("kv_cache_write", true)?;

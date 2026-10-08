@@ -788,9 +788,9 @@ fn cases() -> Vec<Case> {
             &format!("cached_attention_forward {name}"),
             vec![q, k, vv],
             Some(nan),
-            move |o| cached_attention_dims(&o[0], &o[1], &o[2], kv_len).map(drop),
+            move |o| cached_attention_dims(&o[0], &o[1], &o[2], kv_len, None).map(drop),
             move |b, o| {
-                b.cached_attention_forward(&o[0], &o[1], &o[2], kv_len)
+                b.cached_attention_forward(&o[0], &o[1], &o[2], kv_len, None)
                     .map(drop)
             },
         ));

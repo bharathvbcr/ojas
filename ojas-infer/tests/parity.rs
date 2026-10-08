@@ -246,7 +246,9 @@ fn reference(fx: &Fixture, tokens: &[u32]) -> Vec<Vec<f64>> {
             for head in 0..nh {
                 let kvh = head / rep;
                 let qh = &q[pos][head * dh..(head + 1) * dh];
-                let scores: Vec<f64> = (0..=pos)
+                // Keys `pos - W < j <= pos` under a sliding window.
+                let first = cfg.window.map_or(0, |w| (pos + 1).saturating_sub(w));
+                let scores: Vec<f64> = (first..=pos)
                     .map(|j| {
                         let kj = &k[j][kvh * dh..(kvh + 1) * dh];
                         scale * qh.iter().zip(kj).map(|(a, c)| a * c).sum::<f64>()
@@ -261,7 +263,7 @@ fn reference(fx: &Fixture, tokens: &[u32]) -> Vec<Vec<f64>> {
                         .sum::<f64>()
                         + f64::from(b.gate_b[head]),
                 );
-                for (j, e) in ex.iter().enumerate() {
+                for (j, e) in (first..=pos).zip(&ex) {
                     let p = e / sum;
                     for c in 0..dh {
                         y[head * dh + c] += p * v[j][kvh * dh + c];
@@ -325,6 +327,7 @@ fn cfg_mha() -> GptConfig {
         rope_base: 10000.0,
         rms_eps: 1e-6,
         tie_embeddings: true,
+        window: None,
     }
 }
 
@@ -342,6 +345,7 @@ fn cfg_gqa() -> GptConfig {
         rope_base: 500.0,
         rms_eps: 1e-6,
         tie_embeddings: true,
+        window: None,
     }
 }
 
@@ -876,4 +880,118 @@ fn g7_forward_token_eval_and_device_decoder_agree() {
             }
         }
     }
+}
+
+/// A sliding window `W` with `2W - 1` below `max_seq`, so both caches are
+/// rings and the 16 tokens wrap them. Token-by-token decode (`CpuGpt`),
+/// prefill of every prefix (`DeviceDecoder`, `W`-token pieces), the full
+/// windowed forward (`Eval`, `causal_sdpa_forward` with the window) and
+/// the windowed f64 reference agree, bit for bit under Exact.
+#[test]
+fn sliding_window_decode_matches_full_forward_and_reference() {
+    for (cfg, w, seed) in [(cfg_mha(), 3, 0x5EED_0101), (cfg_gqa(), 4, 0x5EED_0102)] {
+        let cfg = GptConfig {
+            window: Some(w),
+            ..cfg
+        };
+        let budget = Budget::new(1 << 26);
+        let fx = fixture(cfg, seed, &budget);
+        let cache = KvCache::for_model(&fx.model, cfg.max_seq, &budget).unwrap();
+        assert_eq!((cache.max_len(), cache.slots()), (cfg.max_seq, 2 * w - 1));
+        assert_eq!(decoder(&fx, Numerics::Exact).slots(), 2 * w - 1);
+        assert!(TOKENS.len() > 2 * (2 * w - 1), "the rings wrap twice");
+        for numerics in [Numerics::Exact, Numerics::Fast] {
+            check_three_way_under(cfg, seed, Some(numerics));
+        }
+        // The window changes the logits: past position W - 1 they are not
+        // the full-causal ones.
+        let windowed = full_logits(&fx, &TOKENS);
+        let fx_full = fixture(
+            GptConfig {
+                window: None,
+                ..cfg
+            },
+            seed,
+            &budget,
+        );
+        let causal = full_logits(&fx_full, &TOKENS);
+        let v = cfg.vocab;
+        assert_eq!(windowed[..w * v], causal[..w * v]);
+        assert_ne!(windowed[w * v..], causal[w * v..]);
+    }
+}
+
+/// A window of at least `max_seq` is full causal attention, and the cache
+/// is not a ring.
+#[test]
+fn a_window_covering_max_seq_is_full_causal() {
+    let budget = Budget::new(1 << 26);
+    let cfg = cfg_mha();
+    let wide = GptConfig {
+        window: Some(cfg.max_seq),
+        ..cfg
+    };
+    assert_eq!(wide.attention_window(), None);
+    let fx = fixture(wide, 0x5EED_0103, &budget);
+    let cache = KvCache::for_model(&fx.model, cfg.max_seq, &budget).unwrap();
+    assert_eq!(cache.slots(), cfg.max_seq);
+    let fx_full = fixture(cfg, 0x5EED_0103, &budget);
+    assert_eq!(full_logits(&fx, &TOKENS), full_logits(&fx_full, &TOKENS));
+}
+
+/// On a ring of `2W - 1` slots, rolling back keeps working while the
+/// prefix's window is still held, and is refused, changing nothing, once
+/// it has been overwritten. A cache shaped without the window is refused
+/// by a windowed model (it would attend without one).
+#[test]
+fn a_windowed_ring_rolls_back_only_while_it_holds_the_prefix_window() {
+    let w = 4;
+    let cfg = GptConfig {
+        window: Some(w),
+        ..cfg_gqa()
+    };
+    let budget = Budget::new(1 << 26);
+    let mut fx = fixture(cfg, 0x5EED_0104, &budget);
+    fx.model = fx.model.with_numerics(Numerics::Exact);
+    let model = &fx.model;
+    let n = TOKENS.len();
+    let mut cache = KvCache::for_model(model, cfg.max_seq, &budget).unwrap();
+    let full = model.forward_tokens(&TOKENS, &mut cache).unwrap();
+    assert_eq!(cache.len(), n);
+    // The ring holds positions n - 7..n; regenerating from n - 3 needs
+    // n - 6..n - 3.
+    cache.truncate(n - 3).unwrap();
+    assert_eq!(
+        model.forward_tokens(&TOKENS[n - 3..], &mut cache).unwrap(),
+        full
+    );
+    assert!(matches!(
+        cache.truncate(n - 5),
+        Err(OjasError::OutOfRange { .. })
+    ));
+    assert_eq!(cache.len(), n);
+    cache.reset();
+    assert_eq!(model.forward_tokens(&TOKENS, &mut cache).unwrap(), full);
+
+    let mut dec = decoder(&fx, Numerics::Exact);
+    let got = dec.forward(&TOKENS).unwrap();
+    dec.truncate(n - 3).unwrap();
+    assert_eq!(dec.forward(&TOKENS[n - 3..]).unwrap(), got);
+    assert!(matches!(
+        dec.truncate(n - 5),
+        Err(OjasError::OutOfRange { .. })
+    ));
+
+    let mut plain = KvCache::new(
+        cfg.n_layer,
+        cfg.n_kv_head,
+        cfg.head_dim,
+        cfg.max_seq,
+        &budget,
+    )
+    .unwrap();
+    assert!(matches!(
+        model.forward_token(TOKENS[0], &mut plain),
+        Err(OjasError::Shape { .. })
+    ));
 }

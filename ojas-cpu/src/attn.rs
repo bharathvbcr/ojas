@@ -216,6 +216,7 @@ fn forward_rows(
             &probs,
             keys,
             dim,
+            dim,
         );
     }
     Ok(())
@@ -284,6 +285,52 @@ pub(crate) fn score_range(
     Ok(())
 }
 
+/// [`score_range`] over keys stored by row: key `j`'s `q_row.len()` values
+/// start at `k[j * stride]`. Each score sums the head dimension from 0, as
+/// [`score_range`] does, so the two give the same bits; eight keys run at
+/// once, each on its own accumulator.
+pub(crate) fn score_rows(
+    op: &'static str,
+    k: &[f32],
+    stride: usize,
+    q_row: &[f32],
+    scores: &mut [f32],
+    keys: Range<usize>,
+    scale: f32,
+) -> Result<(), OjasError> {
+    let dim = q_row.len();
+    let Range {
+        start: mut j,
+        end: keys,
+    } = keys;
+    let mut emit = |j: usize, dot: f32| {
+        let score = dot * scale;
+        if !score.is_finite() {
+            return Err(nonfinite(op));
+        }
+        scores[j] = score;
+        Ok(())
+    };
+    while j + 8 <= keys {
+        let rows: [&[f32]; 8] = std::array::from_fn(|lane| strided_row(k, j + lane, dim, stride));
+        let mut acc = [0.0f32; 8];
+        for (d, &qv) in q_row.iter().enumerate() {
+            for lane in 0..8 {
+                acc[lane] += qv * rows[lane][d];
+            }
+        }
+        for (lane, dot) in acc.into_iter().enumerate() {
+            emit(j + lane, dot)?;
+        }
+        j += 8;
+    }
+    while j < keys {
+        emit(j, dot_up(q_row, strided_row(k, j, dim, stride)))?;
+        j += 1;
+    }
+    Ok(())
+}
+
 /// `probs[j] = softmax(scores)[j]` over `j` in `keys`, summed in increasing
 /// `j`. Returns the row's log-sum-exp, `max + ln(sum of e^(s - max))`
 /// ([`log_sum_exp_exact`]).
@@ -318,12 +365,14 @@ pub(crate) fn softmax_range(
 }
 
 /// `out[d] += probs[j] * v[j, d]` for `j` in `keys` ascending and `d` from 0.
+/// Row `j` of `v` starts at `j * stride` and holds `dim` values.
 pub(crate) fn mix_values(
     out_row: &mut [f32],
     v: &[f32],
     probs: &[f32],
     keys: Range<usize>,
     dim: usize,
+    stride: usize,
 ) {
     let Range {
         start: mut j,
@@ -334,10 +383,10 @@ pub(crate) fn mix_values(
         let p1 = probs[j + 1];
         let p2 = probs[j + 2];
         let p3 = probs[j + 3];
-        let v0 = row(v, j, dim);
-        let v1 = row(v, j + 1, dim);
-        let v2 = row(v, j + 2, dim);
-        let v3 = row(v, j + 3, dim);
+        let v0 = strided_row(v, j, dim, stride);
+        let v1 = strided_row(v, j + 1, dim, stride);
+        let v2 = strided_row(v, j + 2, dim, stride);
+        let v3 = strided_row(v, j + 3, dim, stride);
         for d in 0..dim {
             let mut acc = out_row[d];
             acc += p0 * v0[d];
@@ -349,7 +398,7 @@ pub(crate) fn mix_values(
         j += 4;
     }
     while j < keys {
-        saxpy_up(out_row, row(v, j, dim), probs[j]);
+        saxpy_up(out_row, strided_row(v, j, dim, stride), probs[j]);
         j += 1;
     }
 }
@@ -524,7 +573,12 @@ fn backward_head(
 }
 
 fn row(data: &[f32], t: usize, dim: usize) -> &[f32] {
-    let start = t * dim;
+    strided_row(data, t, dim, dim)
+}
+
+/// The `dim` values of row `t` of rows `stride` apart.
+fn strided_row(data: &[f32], t: usize, dim: usize, stride: usize) -> &[f32] {
+    let start = t * stride;
     &data[start..start + dim]
 }
 

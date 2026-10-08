@@ -1,5 +1,6 @@
 //! G7 on the GPU backends: `DeviceDecoder` on wgpu and on Metal against
-//! `CpuGpt::forward_token` (`Numerics::Exact`) at [`TOL`], for MHA and GQA:
+//! `CpuGpt::forward_token` (`Numerics::Exact`) at [`TOL`], for MHA and GQA,
+//! with and without a sliding window:
 //! an 8-token prefill, 36 single-token decode steps, then a 3-token prefill
 //! onto the warm cache. Every call reads back exactly one tensor, the
 //! `[1, vocab]` logit row, counted on the backend's own budget.
@@ -38,6 +39,7 @@ fn spec(n_kv_head: usize) -> GptConfig {
         rope_base: 10000.0,
         rms_eps: 1e-6,
         tie_embeddings: true,
+        window: None,
     }
 }
 
@@ -107,9 +109,14 @@ fn reference(spec: &GptConfig, w: &GptWeights, calls: &[&[u32]]) -> Vec<Vec<f32>
         .collect()
 }
 
+/// With a sliding window of 6 the caches are 11-slot rings that the 47
+/// positions wrap four times, and the 8-token prompt runs as two pieces.
 fn check<B: Backend>(name: &str, open: impl Fn() -> B) {
-    for n_kv_head in [4, 2] {
-        let spec = spec(n_kv_head);
+    for (n_kv_head, window) in [(4, None), (2, None), (4, Some(6)), (2, Some(6))] {
+        let spec = GptConfig {
+            window,
+            ..spec(n_kv_head)
+        };
         let host = Budget::new(1 << 26);
         let w = weights(&spec, 0x6007 + n_kv_head as u64, &host);
         let ids = tokens(&spec);
@@ -121,6 +128,7 @@ fn check<B: Backend>(name: &str, open: impl Fn() -> B) {
         let want = reference(&spec, &w, &calls);
 
         let mut dec = DeviceDecoder::new(open(), &spec, &w, spec.max_seq).unwrap();
+        assert_eq!(dec.slots(), window.map_or(spec.max_seq, |w| 2 * w - 1));
         let mut worst = 0.0f64;
         for (i, (call, want)) in calls.iter().zip(&want).enumerate() {
             let before = dec.backend().budget().device_readbacks();
@@ -141,7 +149,7 @@ fn check<B: Backend>(name: &str, open: impl Fn() -> B) {
         }
         assert_eq!(dec.len(), ids.len());
         eprintln!(
-            "{name} G7 n_head {} n_kv_head {n_kv_head}: prefill {PROMPT} + {DECODE_STEPS} decode \
+            "{name} G7 n_head {} n_kv_head {n_kv_head} window {window:?}: prefill {PROMPT} + {DECODE_STEPS} decode \
              steps + prefill {TAIL} onto the warm cache, worst rel err vs CPU Exact {worst:e}, \
              1 readback of {} bytes per call",
             spec.n_head,

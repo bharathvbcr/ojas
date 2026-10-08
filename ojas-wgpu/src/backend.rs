@@ -2458,8 +2458,8 @@ impl Backend for WgpuBackend {
         }
     }
 
-    /// Copy `src` `[B, Tn, Hkv, D]` into `cache` `[B, Tcap, Hkv, D]` at time
-    /// `at`. Everything [`kv_cache_write_dims`] checks, placement, and a
+    /// Copy `src` `[B, Tn, Hkv, D]` into the ring `cache` `[B, Tcap, Hkv,
+    /// D]`, position `at + t` in slot `(at + t) % Tcap`. Everything [`kv_cache_write_dims`] checks, placement, and a
     /// cache shared with another handle are refused before anything is
     /// recorded. `src` is checked for non-finite values on the device into
     /// a per-call fault word, and the copy runs only if that word is clear,
@@ -2475,10 +2475,16 @@ impl Backend for WgpuBackend {
         let per_src = product(op, &[dims.new, row])?;
         let per_dst = product(op, &[dims.capacity, row])?;
         u(op, product(op, &[dims.batch, per_dst])?)?;
-        let offset = product(op, &[at, row])?;
         let n = sv.elems;
         let grid = self.lanes(n)?;
-        let words = [u(op, n)?, u(op, per_src)?, u(op, per_dst)?, u(op, offset)?];
+        let words = [
+            u(op, n)?,
+            u(op, per_src)?,
+            u(op, per_dst)?,
+            u(op, at % dims.capacity)?,
+            u(op, row)?,
+            u(op, dims.capacity)?,
+        ];
         let cb = exclusive(op, cache)?;
         let mut job = self.job(op);
         let sb = bind(op, &mut job, &sv)?;
@@ -2673,9 +2679,10 @@ impl Backend for WgpuBackend {
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         let op = CATTN;
-        let dims = cached_attention_dims(q, k_cache, v_cache, kv_len)?;
+        let dims = cached_attention_dims(q, k_cache, v_cache, kv_len, window)?;
         let head_dim = u(op, dims.head_dim)?;
         if head_dim > ATTENTION_MAX_HEAD_DIM {
             return Err(OjasError::UnsupportedHeadDim {
@@ -2690,7 +2697,10 @@ impl Backend for WgpuBackend {
         u(op, kv.elems)?;
         let row_heads = product(op, &[dims.new, dims.heads])?;
         let rows = product(op, &[dims.batch, row_heads])?;
-        let (split, splits) = cached_attention_splits(rows, kv_len)?;
+        // Splits cover the positions some query reads: from query 0's
+        // first key (`origin`) to `kv_len`.
+        let origin = dims.visible(kv_len, 0).start;
+        let (split, splits) = cached_attention_splits(rows, kv_len - origin)?;
         let partial = product(op, &[rows, splits, dims.head_dim + 2])?;
         u(op, partial)?;
         self.fits(op, partial)?;
@@ -2721,6 +2731,8 @@ impl Backend for WgpuBackend {
             u(op, splits)?,
             scale.to_bits(),
             0,
+            u(op, dims.window.unwrap_or(0))?,
+            u(op, origin)?,
         ];
         let (y, yb) = self.out(op, qv.shape())?;
         let mut job = self.job(op);

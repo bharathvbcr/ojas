@@ -224,7 +224,7 @@ fn a_tape_refuses_cached_attention_and_records_nothing() {
     let cache = Tensor::from_f32(&[0.5; 16], &[1, 2, 2, 4], &budget).unwrap();
     let qv = Graph::param(&mut tape, &q).unwrap();
     let cv = Graph::param(&mut tape, &cache).unwrap();
-    match tape.cached_attn(&qv, &cv, &cv, 1) {
+    match tape.cached_attn(&qv, &cv, &cv, 1, None) {
         Err(OjasError::Unsupported { .. }) => {}
         other => panic!("expected Unsupported, got {other:?}"),
     }
@@ -251,14 +251,14 @@ fn eval_cached_attention_equals_causal_attention_on_a_full_cache() {
     };
     let (q, k, v) = (mk(&mut rng), mk(&mut rng), mk(&mut rng));
     let mut eval = Eval::new(cpu);
-    let cached = eval.cached_attn(&q, &k, &v, t).unwrap();
+    let cached = eval.cached_attn(&q, &k, &v, t, None).unwrap();
     let swap = [0, 2, 1, 3];
     let (qh, kh, vh) = (
         eval.permute(&q, &swap).unwrap(),
         eval.permute(&k, &swap).unwrap(),
         eval.permute(&v, &swap).unwrap(),
     );
-    let y = eval.sdpa(&qh, &kh, &vh).unwrap();
+    let y = eval.sdpa(&qh, &kh, &vh, None).unwrap();
     let y = eval.permute(&y, &swap).unwrap();
     let (a, b) = (cached.to_f32_vec().unwrap(), y.to_f32_vec().unwrap());
     for (x, y) in a.iter().zip(&b) {
@@ -351,6 +351,7 @@ fn small_spec() -> ModelSpec {
         rope_base: 10000.0,
         rms_eps: 1e-6,
         tie_embeddings: true,
+        window: None,
     }
 }
 
@@ -413,7 +414,9 @@ fn at(b: usize, t: usize, h: usize, d: usize) -> usize {
 
 /// The nanolab block in f64 (`mixers.py` Attention.forward with a `v0`,
 /// `model.py` Block.forward), then `sum(out * r)`.
-fn block_ref(p: &[Vec<f64>], cos: &[f64], sin: &[f64]) -> f64 {
+/// `window`: query `t` attends to keys `t - W < j <= t` (all of `0..=t`
+/// for `None`).
+fn block_ref(p: &[Vec<f64>], cos: &[f64], sin: &[f64], window: Option<usize>) -> f64 {
     let (x, v0) = (&p[0], &p[1]);
     let (n1, wq, wk, wv, wo) = (&p[2], &p[3], &p[4], &p[5], &p[6]);
     let (qn, kn, gw, gb, lam) = (&p[7], &p[8], &p[9], &p[10], p[11][0]);
@@ -453,7 +456,8 @@ fn block_ref(p: &[Vec<f64>], cos: &[f64], sin: &[f64]) -> f64 {
     for b in 0..B {
         for hh in 0..NH {
             for t in 0..T {
-                let scores: Vec<f64> = (0..=t)
+                let first = window.map_or(0, |w| (t + 1).saturating_sub(w));
+                let scores: Vec<f64> = (first..=t)
                     .map(|j| {
                         (0..HD)
                             .map(|d| q[at(b, t, hh, d)] * k[at(b, j, hh, d)])
@@ -470,7 +474,10 @@ fn block_ref(p: &[Vec<f64>], cos: &[f64], sin: &[f64]) -> f64 {
                 }
                 let g = sig(zg);
                 for d in 0..HD {
-                    let a: f64 = (0..=t).map(|j| e[j] / z * v[at(b, j, hh, d)]).sum();
+                    let a: f64 = (first..=t)
+                        .zip(&e)
+                        .map(|(j, e)| e / z * v[at(b, j, hh, d)])
+                        .sum();
                     y[at(b, t, hh, d)] = a * g;
                 }
             }
@@ -492,7 +499,21 @@ fn block_ref(p: &[Vec<f64>], cos: &[f64], sin: &[f64]) -> f64 {
 
 #[test]
 fn one_block_gradients_match_f64_central_differences() {
-    let spec = small_spec();
+    check_block_gradients(None);
+}
+
+/// Training under a sliding window: the tape's forward and every gradient
+/// match the windowed f64 reference.
+#[test]
+fn one_block_gradients_match_f64_central_differences_under_a_window() {
+    check_block_gradients(Some(2));
+}
+
+fn check_block_gradients(window: Option<usize>) {
+    let spec = ModelSpec {
+        window,
+        ..small_spec()
+    };
     let cpu = exact();
     let budget = cpu.budget().clone();
     let mut rng = Rng(21);
@@ -563,7 +584,11 @@ fn one_block_gradients_match_f64_central_differences() {
         .iter()
         .map(|&v| f64::from(v))
         .sum();
-    let want = block_ref(&inputs, &cos, &sin);
+    let want = block_ref(&inputs, &cos, &sin, window);
+    if window.is_some() {
+        let full = block_ref(&inputs, &cos, &sin, None);
+        assert!((full - want).abs() > 1e-3, "the window changes the loss");
+    }
     assert!(
         (got - want).abs() < 1e-4 * want.abs().max(1.0),
         "{got} vs {want}"
@@ -591,7 +616,7 @@ fn one_block_gradients_match_f64_central_differences() {
         let numeric = central_diff(&inputs[i], 1e-3, |point| {
             let mut all = inputs.clone();
             all[i] = point.to_vec();
-            Ok(block_ref(&all, &cos, &sin))
+            Ok(block_ref(&all, &cos, &sin, window))
         })
         .unwrap();
         let analytic = tape.grad(vars[i]).unwrap().to_f32_vec().unwrap();
@@ -977,7 +1002,7 @@ fn block_with_hands_attention_the_cache_layout() {
             handed_v = Some(v.clone());
             g.kv_cache_write(&mut keys, k, 0)?;
             g.kv_cache_write(&mut values, v, 0)?;
-            g.cached_attn(q, &keys, &values, t)
+            g.cached_attn(q, &keys, &values, t, None)
         },
     )
     .unwrap();

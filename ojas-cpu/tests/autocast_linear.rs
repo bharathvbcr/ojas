@@ -158,9 +158,9 @@ fn bf16_region_rounds_non_matmul_operands_in_f32_storage() {
     let q = dirty(b * tq * h * dh, 8, &budget, &[b, tq, h, dh]);
     let kc = dirty(b * cap * hkv * dh, 9, &budget, &[b, cap, hkv, dh]);
     let vc = dirty(b * cap * hkv * dh, 10, &budget, &[b, cap, hkv, dh]);
-    let got = ac.cached_attention_forward(&q, &kc, &vc, 2);
+    let got = ac.cached_attention_forward(&q, &kc, &vc, 2, None);
     let want = ac
-        .cached_attention_forward(&r(&q), &r(&kc), &r(&vc), 2)
+        .cached_attention_forward(&r(&q), &r(&kc), &r(&vc), 2, None)
         .unwrap();
     assert_eq!(bits(&got.expect("cached attention")), bits(&want));
 }

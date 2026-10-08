@@ -369,7 +369,7 @@ fn host_refusals_stay_immediate_and_leave_nothing_pending() {
     let (cap, hkv, d) = (4usize, 1usize, 8usize);
     let qd = up(&m, &rand(&[1, 1, 2, d], 5, 1.0));
     let kc = up(&m, &rand(&[1, cap, hkv, d], 6, 1.0));
-    let r = m.cached_attention_forward(&qd, &kc, &kc, cap + 1);
+    let r = m.cached_attention_forward(&qd, &kc, &kc, cap + 1, None);
     assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "{r:?}");
     nothing("kv_len");
     let mut cache = up(&m, &rand(&[1, cap, hkv, d], 7, 1.0));

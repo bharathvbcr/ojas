@@ -152,6 +152,7 @@ fn past_2048_tokens_a_budget_that_holds_the_checkpointed_step_refuses_the_other(
         rope_base: 10000.0,
         rms_eps: 1e-6,
         tie_embeddings: true,
+        window: None,
     };
     let numerics = Numerics::Exact;
     let off = step(&spec, 1, SEQ, numerics, ActivationCheckpoint::Off, u64::MAX).unwrap();

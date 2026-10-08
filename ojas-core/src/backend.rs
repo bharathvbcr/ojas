@@ -1204,25 +1204,32 @@ pub trait Backend {
         })
     }
 
-    /// Causal attention of `Tq` new queries against the first `kv_len`
-    /// positions of a KV cache, for decode and for prefill onto a non-empty
+    /// Causal attention of `Tq` new queries against the `kv_len` positions
+    /// written to a KV cache, for decode and for prefill onto a non-empty
     /// cache.
     ///
     /// `q` is `[B, Tq, H, D]`; `k_cache` and `v_cache` are `[B, Tcap, Hkv, D]`,
-    /// time-major like `ojas-infer`'s host cache. Query `i` sits at position
-    /// `kv_len - Tq + i` and attends to keys `0..=` that position. Head `h`
-    /// reads KV head `h / (H / Hkv)` (grouped-query attention). Scale is
-    /// [`sdpa_scale`]`(D)`. Returns `[B, Tq, H, D]`. With `kv_len == Tq` and
-    /// `H == Hkv` this equals [`Backend::causal_sdpa_forward`] after the
-    /// layout permute. Validate with [`cached_attention_dims`].
+    /// time-major like `ojas-infer`'s host cache, and a ring: position `j`
+    /// is slot `j % Tcap` (as [`Backend::kv_cache_write`] puts it), so a
+    /// cache never written past `Tcap` is a plain prefix. Query `i` sits at
+    /// position `p = kv_len - Tq + i` and attends to positions `0..=p`, or
+    /// with a `window` to `p + 1 - window..=p` (as
+    /// [`Backend::causal_sdpa_forward`]'s window), visited oldest first.
+    /// Head `h` reads KV head `h / (H / Hkv)` (grouped-query attention).
+    /// Scale is [`sdpa_scale`]`(D)`. Returns `[B, Tq, H, D]`. With `kv_len
+    /// == Tq` and `H == Hkv` this equals [`Backend::causal_sdpa_forward`]
+    /// with the same window after the layout permute. Validate with
+    /// [`cached_attention_dims`], which refuses a read the ring no longer
+    /// holds; [`KvDims::visible`] gives each query's positions.
     fn cached_attention_forward(
         &self,
         q: &Tensor,
         k_cache: &Tensor,
         v_cache: &Tensor,
         kv_len: usize,
+        window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
-        let _ = (q, k_cache, v_cache, kv_len);
+        let _ = (q, k_cache, v_cache, kv_len, window);
         Err(OjasError::Unsupported {
             op: "cached_attention_forward",
             detail: format!(
@@ -1233,7 +1240,8 @@ pub trait Backend {
     }
 
     /// Write `src` (`[B, Tn, Hkv, D]`) into `cache` (`[B, Tcap, Hkv, D]`) at
-    /// time positions `at..at + Tn`.
+    /// time positions `at..at + Tn`: position `j` goes to slot `j % Tcap`,
+    /// so `Tn <= Tcap` and the cache is a ring.
     ///
     /// `cache` must be uniquely owned. On any error the cache is unchanged.
     /// Validate with [`kv_cache_write_dims`].
@@ -1797,8 +1805,9 @@ macro_rules! forward_backend {
             k_cache: &Tensor,
             v_cache: &Tensor,
             kv_len: usize,
+            window: Option<usize>,
         ) -> Result<Tensor, OjasError> {
-            (**self).cached_attention_forward(q, k_cache, v_cache, kv_len)
+            (**self).cached_attention_forward(q, k_cache, v_cache, kv_len, window)
         }
         fn kv_cache_write(
             &self,
@@ -2661,6 +2670,7 @@ pub(crate) mod tests {
             _: &Tensor,
             _: &Tensor,
             _: usize,
+            _: Option<usize>,
         ) -> Result<Tensor, OjasError> {
             Err(mark("cached_attention_forward"))
         }
@@ -2771,7 +2781,7 @@ pub(crate) mod tests {
             op(backend.accumulate_grad(&mut m, &t)),
             op(backend.scale_grad(&mut m, 0.5)),
             op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, true)),
-            op(backend.cached_attention_forward(&t, &t, &t, 1)),
+            op(backend.cached_attention_forward(&t, &t, &t, 1, None)),
             op(backend.kv_cache_write(&mut m, &t, 0)),
             op(backend.argmax_rows(&t)),
             op(backend.cast_bf16(&t)),
@@ -2896,7 +2906,9 @@ pub(crate) mod tests {
         );
         let q = Tensor::from_f32(&[1.0; 4], &[1, 1, 1, 4], &budget).unwrap();
         refused(
-            backend.cached_attention_forward(&q, &q, &q, 1).map(drop),
+            backend
+                .cached_attention_forward(&q, &q, &q, 1, None)
+                .map(drop),
             "cached_attention_forward",
         );
         let mut cache = Tensor::from_f32(&[7.0; 8], &[1, 2, 1, 4], &budget).unwrap();

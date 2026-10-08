@@ -1154,7 +1154,13 @@ impl Worker {
                 d,
                 cap,
                 kv_len,
-            } => self.cached_attn(q, k, v, [batch, tq, heads, kv_heads, d, cap, kv_len]),
+                window,
+            } => self.cached_attn(
+                q,
+                k,
+                v,
+                [batch, tq, heads, kv_heads, d, cap, kv_len, window],
+            ),
             Cmd::KvWrite {
                 cache,
                 src,
@@ -2704,9 +2710,21 @@ impl Worker {
 
     /// One threadgroup of [`CA_THREADS`] per (query, head) and batch; the
     /// finite checks are inside `ojas_cached_attn` (see its comment).
-    fn cached_attn(&mut self, q: Arg, k: Arg, v: Arg, dims: [u32; 7]) -> Res<Reply> {
+    fn cached_attn(&mut self, q: Arg, k: Arg, v: Arg, dims: [u32; 8]) -> Res<Reply> {
         const OP: &str = "cached_attention_forward";
-        let [batch, tq, heads, kv_heads, d, cap, kv_len] = dims;
+        let [batch, tq, heads, kv_heads, d, cap, kv_len, window] = dims;
+        if tq == 0 || tq > kv_len {
+            return Err(metal_err(format!(
+                "{OP}: {tq} queries over kv_len {kv_len}"
+            )));
+        }
+        // The first position any query reads: query 0's window start. The
+        // splits cover `origin..kv_len`.
+        let origin = match window {
+            0 => 0,
+            w => (kv_len - tq + 1).saturating_sub(w),
+        };
+        let span = (kv_len - origin) as usize;
         if d > ATTN_MAX_HEAD_DIM {
             return Err(OjasError::UnsupportedHeadDim {
                 head_dim: d,
@@ -2718,8 +2736,8 @@ impl Worker {
         let out = self.fresh(qv.n)?;
         let st = self.status(OP)?;
         let groups = tq as usize * heads as usize;
-        let splits = cached_attn_splits(groups * batch as usize, kv_len as usize);
-        let chunk = u32_of((kv_len as usize).div_ceil(splits))?;
+        let splits = cached_attn_splits(groups * batch as usize, span);
+        let chunk = u32_of(span.div_ceil(splits))?;
         // Splits > 1 write (max, sum, output) per split here for the merge.
         let part = if splits > 1 {
             let rows = groups * batch as usize;
@@ -2753,6 +2771,8 @@ impl Worker {
                 set_u32(b, splits, 12);
                 set_u32(b, chunk, 13);
                 bind(b, &part, 14);
+                set_u32(b, window, 15);
+                set_u32(b, origin, 16);
             },
         )?;
         if splits > 1 {
@@ -2789,7 +2809,12 @@ impl Worker {
         let (cv, sv) = (self.view(cache)?, self.view(src)?);
         let span = u32_of(tn as usize * row as usize)?;
         let cap_span = u32_of(cap as usize * row as usize)?;
-        let at_off = u32_of(at as usize * row as usize)?;
+        if tn > cap || cap == 0 {
+            return Err(metal_err(format!(
+                "{OP}: {tn} positions over a {cap}-slot ring"
+            )));
+        }
+        let at_slot = at % cap;
         if sv.n != batch as usize * span as usize || cv.n != batch as usize * cap_span as usize {
             return Err(metal_err(format!(
                 "{OP}: windows do not match the dimensions"
@@ -2805,7 +2830,9 @@ impl Worker {
             set_u32(b, n, 3);
             set_u32(b, span, 4);
             set_u32(b, cap_span, 5);
-            set_u32(b, at_off, 6);
+            set_u32(b, at_slot, 6);
+            set_u32(b, row, 7);
+            set_u32(b, cap, 8);
         })?;
         Ok(Reply::Done)
     }

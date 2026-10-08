@@ -566,7 +566,7 @@ fn sweep<Bk: Backend>(r: &mut Runner<'_, Bk>) {
                 let up = |v: &[f32], sh: &[usize]| r.be.upload(&Tensor::from_f32(v, sh, &r.host)?);
                 let (q, k, v) = (up(&host[0], &qs)?, up(&host[1], &cs)?, up(&host[2], &cs)?);
                 r.op(&batched, &s, TOL, |r| {
-                    Ok(vec![r.be.cached_attention_forward(&q, &k, &v, T)?])
+                    Ok(vec![r.be.cached_attention_forward(&q, &k, &v, T, None)?])
                 });
             }
             if b > 1 && r.want(&split) {
@@ -585,7 +585,7 @@ fn sweep<Bk: Backend>(r: &mut Runner<'_, Bk>) {
                 }
                 r.op(&split, &format!("{s};requests:{b}"), TOL, |r| {
                     reqs.iter()
-                        .map(|(q, k, v)| r.be.cached_attention_forward(q, k, v, T))
+                        .map(|(q, k, v)| r.be.cached_attention_forward(q, k, v, T, None))
                         .collect()
                 });
             }
@@ -897,7 +897,7 @@ fn decode_attention<Bk: Backend>(r: &mut Runner<'_, Bk>) {
             ("v_cache", &cs, 143, 0),
         ]);
         r.op(name, &format!("{s};kv_len:{T}"), TOL, |r| {
-            Ok(vec![r.be.cached_attention_forward(&q, &k, &v, T)?])
+            Ok(vec![r.be.cached_attention_forward(&q, &k, &v, T, None)?])
         });
         Ok(())
     });
