@@ -514,14 +514,31 @@ pub fn ssyrk_accelerate(
     }
     let call = layout::BlasCall::from_problem(&p)?;
     arch::accelerate_ssyrk_upper(&call, a, c);
-    let ldc = p.c_rs;
-    for i in 1..n {
-        let (above, row) = c.split_at_mut(i * ldc);
-        for (j, value) in row[..i].iter_mut().enumerate() {
-            *value = above[j * ldc + i];
+    mirror_upper_to_lower(c, n, p.c_rs);
+    Ok(())
+}
+
+/// `c[i, j] = c[j, i]` for every `j < i` of the `n × n` matrix with row
+/// stride `ldc`, in 16 × 16 tiles: each tile's source rows are read
+/// contiguously while its destination rows stay in cache. A plain column
+/// walk was 1.7× slower at n = 768 and n = 2048, and 32 × 32 tiles were
+/// 1.6× slower than it at n = 2048, where an 8 KiB row stride makes 32 rows
+/// collide in cache (M5 Pro, 2026-10-08,
+/// `bench/results/2026-10-08-cpu-hot-paths/probes/mirror.txt`). Only copies,
+/// so the tiling changes no bit.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+fn mirror_upper_to_lower(c: &mut [f32], n: usize, ldc: usize) {
+    const TILE: usize = 16;
+    for ib in (0..n).step_by(TILE) {
+        let ie = (ib + TILE).min(n);
+        for jb in (0..=ib).step_by(TILE) {
+            for j in jb..(jb + TILE).min(ie) {
+                for i in ib.max(j + 1)..ie {
+                    c[i * ldc + j] = c[j * ldc + i];
+                }
+            }
         }
     }
-    Ok(())
 }
 
 /// True when the half-open element ranges `[a, a+a_len)` and `[c, c+c_len)` overlap.

@@ -10,7 +10,8 @@
 # `cargo test -p ojas-autograd --release --test tape_bench --no-run` built in
 # that tree. Odd rounds run base, after, torch; even rounds torch, after,
 # base. `vm.loadavg` is recorded before every lane. Every lane is 6 threads.
-# TAPE_ONLY=1 runs only the tape_bench lanes (base and after).
+# TAPE_ONLY=1 runs only the tape_bench lanes (base and after); NO_TORCH=1
+# drops the torch lane and its parity pass.
 set -euo pipefail
 base=$1 after=$2 rounds=$3 out=$4
 here=$(cd "$(dirname "$0")" && pwd)
@@ -23,12 +24,16 @@ python=${PYTHON:-python3}
 
 # Inputs for the torch lane come from the after tree's dump, and its outputs
 # are the parity reference.
-if [ ! -d "$DUMP" ]; then
+if [ -n "${NO_TORCH:-}" ]; then
+    :
+elif [ ! -d "$DUMP" ]; then
     OJAS_BENCH_MODE=dump OJAS_BENCH_DIR="$DUMP" OJAS_BENCH_OPS="$TORCH_OPS" OJAS_BENCH_THREADS=6 \
         "$after/bench_ops" --ignored --nocapture --test-threads=1 > "$out/dump.txt" 2>&1
 fi
-"$python" "$repo/ojas-cpu/benches/torch_ops.py" --threads 6 --dir "$DUMP" --ops "$TORCH_OPS" --parity \
-    > "$out/parity.txt" 2>&1
+if [ -z "${NO_TORCH:-}" ]; then
+    "$python" "$repo/ojas-cpu/benches/torch_ops.py" --threads 6 --dir "$DUMP" --ops "$TORCH_OPS" --parity \
+        > "$out/parity.txt" 2>&1
+fi
 
 lane() {
     local round=$1 name=$2
@@ -55,7 +60,7 @@ lane() {
 for round in $(seq 1 "$rounds"); do
     if [ $((round % 2)) -eq 1 ]; then order="base after torch"; else order="torch after base"; fi
     for name in $order; do
-        [ -n "${TAPE_ONLY:-}" ] && [ "$name" = torch ] && continue
+        [ -n "${TAPE_ONLY:-}${NO_TORCH:-}" ] && [ "$name" = torch ] && continue
         lane "$round" "$name"
     done
 done

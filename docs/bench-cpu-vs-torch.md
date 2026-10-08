@@ -317,7 +317,7 @@ Each line the scorecard above left open, with the after tree of `bench/results/2
 | :--- | ---: | :--- |
 | mul forward | 0.86–1.54 | Won't fix without approval: the gap is the 34–37 µs scoped spawn (`pool/scoped.rs`), and removing it needs `unsafe` or a dependency. |
 | add forward | 1.88–5.13 | Won't fix without approval, as mul forward. |
-| add backward | 3.32–7.64 (the op) | The op is won't-fix: `residual_add_backward` returns two separate allocations by contract, so an in-place step can own each. The tape no longer calls it: since 2026-10-07 `Rec::Add` hands both inputs the one gradient and `Tape::acc` adds into whichever is unshared. Tape fan-in (`tape_bench` `fanin_8x[1024,768]`) is 1.15 by min and 0.80 by median against base, so no speedup is claimed. |
+| add backward | 3.32–7.64 (the op) | The op is won't-fix: `residual_add_backward` returns two separate allocations by contract, so an in-place step can own each. The tape no longer calls it: since 2026-10-07 `Rec::Add` hands both inputs the one gradient and `Tape::acc` adds into whichever is unshared. Tape fan-in (`tape_bench` `fanin_8x[1024,768]`) is 1.15 by min and 0.80 by median against base, so no time saving is claimed. Its memory saving is exact: the walk's peak charge falls from 18.0 to 12.0 MiB (`tape-peak.txt`). |
 | embedding forward | 0.68–1.88 | Won't fix here. The NEON `stnp` gather now covers every 64-multiple width (Qwen3.5's 2048: 0.62 of base). What is left is a one-thread 3 MB copy (inferred), and splitting it would pay the same spawn. |
 | embedding backward | 0.88–1.26 | Won't fix: par within noise. The code is unchanged since 2026-10-04, and after / base is 1.11 on identical code. |
 | SiLU forward | 0.91–1.05 | Won't fix: par within noise. Already row-split, so what remains is per-element cost (`exp_exact`). |
@@ -325,7 +325,7 @@ Each line the scorecard above left open, with the after tree of `bench/results/2
 | Muon `[2048,768]` | 0.51–1.18 | Won't fix as a gap: 22.8 / 35.4 ms by the minimum over rounds (0.64), three of five rounds at most 1, and torch's minimum ranged 35.4–91.0 ms. After / base 0.75 by min. X·Xᵀ is one `cblas_ssyrk` (0.46–0.94 of the two-band split it replaced, same bits on this machine). The 2048×768 no-transpose gate is kept and justified in `optim.rs`. |
 | permute (0,2,1,3) | 0.38–1.61 | Won't fix: 0.0420 / 0.0417 ms by the minimum over rounds (1.01), and torch's minimum ranged 0.042–0.186 ms. The nanolab pair kernel is unchanged. Qwen3.5's `[1,1024,8,256]` now takes per-head `vDSP_mmov` (0.77 of base). |
 
-The scoped spawn is the one policy item. Re-measured at 34–37 µs minimum and about 70 µs median for five threads (`spawn.txt`), it is kept until the owner approves `unsafe` in `ojas-cpu` or a dependency such as rayon. That decision is recorded in `ojas-cpu/src/pool/scoped.rs`.
+The scoped spawn is the one policy item. Re-measured at 34–37 µs minimum and about 70 µs median for five threads (`spawn.txt`), it is kept until the owner approves `unsafe` in `ojas-cpu` or a dependency such as rayon. That decision is recorded in `ojas-cpu/src/pool/scoped.rs`. Two safe, std-only mitigations are open and unmeasured. One is to spawn fewer threads for small, bandwidth-bound passes: the spawn costs about 9 µs for one thread against 35 µs for five, and the shape-only cut keeps the bits. The other is one scope around a whole optimizer or clip step, which amortises the spawn over all parameters but does not help forwards.
 
 ---
 

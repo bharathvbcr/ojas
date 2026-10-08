@@ -130,6 +130,12 @@ thread_local! {
     static WHOLE_CALLS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
+/// Whole calls entered on this thread so far: (Accelerate, `sgemm_tile`).
+#[cfg(test)]
+pub(crate) fn whole_calls() -> (usize, usize) {
+    WHOLE_CALLS.with(std::cell::Cell::get)
+}
+
 /// `a [m, k] · b [k, n]` under `numerics` bypasses the packed kernel.
 pub(crate) fn whole_call(numerics: Numerics, m: usize, k: usize, n: usize) -> bool {
     numerics == Numerics::Fast && m.saturating_mul(n).saturating_mul(k) >= FAST_WHOLE_CALL_MACS
@@ -1186,10 +1192,6 @@ mod tests {
         assert!(!whole_call(Numerics::Fast, c - 1, 1, 1));
         assert!(!whole_call(Numerics::Exact, 2048, 2048, 2048));
         assert!(whole_call(Numerics::Fast, usize::MAX, usize::MAX, 2));
-    }
-
-    fn whole_calls() -> (usize, usize) {
-        WHOLE_CALLS.with(std::cell::Cell::get)
     }
 
     /// What `ojas_core::linear_forward_dims` returns for `[rows, kin]` by

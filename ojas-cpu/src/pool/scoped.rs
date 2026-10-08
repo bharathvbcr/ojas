@@ -31,7 +31,11 @@
 //! erased across the worker handoff) here, where the crate forbids it, or a
 //! new dependency whose scope API does that soundly (for example rayon's
 //! `scope`). Both need the owner's approval, and neither has it, so every
-//! split keeps paying this spawn and those two rows stay open.
+//! split keeps paying this spawn and those two rows stay open. Two std-only
+//! mitigations remain open and unmeasured: spawning fewer threads for small
+//! bandwidth-bound passes (about 9 µs for one thread against 35 µs for five;
+//! the cut is shape-only, so no bit changes), and one scope around a whole
+//! optimizer or clip step.
 
 use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};

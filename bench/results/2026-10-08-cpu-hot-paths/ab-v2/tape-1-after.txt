@@ -1,0 +1,3 @@
+OJAS_TAPE row=fanin_8x[1024,768] n=20 min_ms=6.3957 med_ms=8.0340 walk_peak_bytes=12582912
+OJAS_TAPE row=ce_seed_1_[1024,768]x[50304,768] n=7 min_ms=0.0037 med_ms=0.0043 walk_peak_bytes=4
+OJAS_TAPE row=ce_seed_0.25_[1024,768]x[50304,768] n=7 min_ms=1.6800 med_ms=1.8303 walk_peak_bytes=4

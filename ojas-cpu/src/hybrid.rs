@@ -74,9 +74,11 @@ pub(crate) fn conv1d_silu_forward(
 /// `gw` is cut by channel ([`scoped::chunks_into`], at least
 /// [`ROW_MIN_ELEMS`] `/ (B * T)` channels a piece): each piece walks every
 /// `(b, t)` row in ascending order, reading that row's channels of the piece
-/// contiguously, and adds into its own `[c, j]` sums, so each sum takes its
-/// terms in the serial order whatever the cut (before 2026-10-07 each
-/// `(c, j)` walked the whole input at channel stride on the calling thread).
+/// contiguously, and adds into its own tap-major sums (charged while the
+/// piece runs, then transposed into `gw`), so each sum takes its terms in the
+/// serial order whatever the cut (before 2026-10-07 each `(c, j)` walked the
+/// whole input at channel stride on the calling thread; until 2026-10-08 the
+/// sums were written at stride `K` in place).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conv1d_silu_backward(
     op: &'static str,
@@ -129,20 +131,30 @@ pub(crate) fn conv1d_silu_backward(
         })?;
         let min_channels = (ROW_MIN_ELEMS / rows.max(1)).max(1);
         scoped::chunks_into(exec, gw, channels, width, min_channels, |cs, sums| {
-            sums.fill(0.0);
+            // Tap-major sums (`[j][k]`), so the inner loop reads and writes
+            // contiguously; transposed into `gw`'s `[c, j]` at the end.
+            let n = cs.len();
+            let mut tap_major = Scratch::try_alloc(width * n, budget)?;
+            let acc = tap_major.as_mut_slice();
             for b in 0..batch {
                 for t in 0..time {
-                    let row = (b * time + t) * channels;
+                    let row = (b * time + t) * channels + cs.start;
                     for j in 0..width {
                         // Source time t + j - (width - 1), skipped below 0.
                         let Some(src) = (t + j).checked_sub(width - 1) else {
                             continue;
                         };
-                        let from = (b * time + src) * channels;
-                        for (k, c) in cs.clone().enumerate() {
-                            sums[k * width + j] += da[row + c] * x[from + c];
+                        let from = (b * time + src) * channels + cs.start;
+                        let terms = da[row..row + n].iter().zip(&x[from..from + n]);
+                        for (sum, (&dv, &xv)) in acc[j * n..(j + 1) * n].iter_mut().zip(terms) {
+                            *sum += dv * xv;
                         }
                     }
+                }
+            }
+            for (k, out) in sums.chunks_exact_mut(width).enumerate() {
+                for (j, value) in out.iter_mut().enumerate() {
+                    *value = acc[j * n + k];
                 }
             }
             Ok(())

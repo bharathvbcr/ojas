@@ -1,0 +1,6 @@
+{ 12.96 25.50 30.55 }
+mirror n=768 same=true serial=0.181 t8=0.102 t16=0.103 t32=0.092 t64=0.108
+mirror n=2048 same=true serial=3.708 t8=2.066 t16=1.948 t32=5.697 t64=6.377
+{ 12.96 25.50 30.55 }
+mirror n=768 same=true serial=0.180 t8=0.105 t16=0.107 t32=0.090 t64=0.107
+mirror n=2048 same=true serial=3.454 t8=2.171 t16=2.108 t32=5.684 t64=6.383

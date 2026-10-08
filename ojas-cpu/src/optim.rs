@@ -886,7 +886,9 @@ fn newton_schulz(
     // Tall 2048×768 only: the iterate is 768×2048. `A @ A` and `B @ X` are
     // each one `cblas_sgemm`. Square 768 and tall 3072×768 stay on
     // `ns_gemm_out`'s band loop. At every shape `X @ Xᵀ` is [`gram_out`].
-    let one_cblas = (transposed || view) && r == 768 && c == 2048;
+    // (Only the view reaches 768×2048 here: a transposed copy of that shape
+    // would be a 2048×768 input, which `view` takes first.)
+    let one_cblas = view;
     // The five products and combinations of a step reuse three buffers made
     // once per call (before 2026-10-07 each step allocated five): `A` (r×r),
     // `A²` (r×r), which `B = b A + c A²` then overwrites, and `B X` (the
@@ -1005,5 +1007,46 @@ fn scratch_overflow(op: &'static str) -> OjasError {
     OjasError::OutOfRange {
         op,
         detail: "optimizer scratch length overflows".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use ojas_core::{Ns5Precision, Numerics};
+
+    use super::newton_schulz;
+    use crate::gemm::whole_calls;
+    use crate::pool::{Exec, Pool};
+
+    /// A square 768 Fast Newton-Schulz run on one thread (every band inline,
+    /// so this thread sees every whole call) makes 13 Accelerate calls a
+    /// step: `X @ Xᵀ` as one `cblas_ssyrk`, then six bands each of `A @ A`
+    /// and `B @ X`. Before 2026-10-08 `X @ Xᵀ` was two `cblas_sgemm` bands
+    /// at this shape (`k < 2m`), 14 a step and 70 a run.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn square_768_gram_product_is_one_accelerate_call_a_step() {
+        let pool = Arc::new(Pool::new(1).unwrap());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        let n = 768;
+        let mut state = 7u64;
+        let update: Vec<f32> = (0..n * n)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((state >> 40) as f32 / (1u64 << 24) as f32) - 0.5
+            })
+            .collect();
+        let before = whole_calls();
+        let out = newton_schulz(exec, update, n, n, Ns5Precision::F32).unwrap();
+        let after = whole_calls();
+        assert_eq!(out.len(), n * n);
+        assert_eq!((after.0 - before.0, after.1 - before.1), (5 * 13, 0));
     }
 }

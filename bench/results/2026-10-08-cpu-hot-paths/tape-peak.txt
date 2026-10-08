@@ -1,0 +1,6 @@
+base OJAS_TAPE row=fanin_8x[1024,768] n=20 min_ms=4.6977 med_ms=6.0552 walk_peak_bytes=18874368
+base OJAS_TAPE row=ce_seed_1_[1024,768]x[50304,768] n=7 min_ms=0.0026 med_ms=0.0032 walk_peak_bytes=4
+base OJAS_TAPE row=ce_seed_0.25_[1024,768]x[50304,768] n=7 min_ms=12.5858 med_ms=16.4284 walk_peak_bytes=154533892
+v2 OJAS_TAPE row=fanin_8x[1024,768] n=20 min_ms=6.5115 med_ms=16.6683 walk_peak_bytes=12582912
+v2 OJAS_TAPE row=ce_seed_1_[1024,768]x[50304,768] n=7 min_ms=0.0029 med_ms=0.0035 walk_peak_bytes=4
+v2 OJAS_TAPE row=ce_seed_0.25_[1024,768]x[50304,768] n=7 min_ms=1.8704 med_ms=2.2821 walk_peak_bytes=4

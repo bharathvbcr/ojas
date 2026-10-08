@@ -1,0 +1,8 @@
+OJAS_META pid=53985 numerics=Fast threads=[6]
+OJAS_OP op=muon_768x768 dir=step shape=[768,768] threads=6 n=10 min_ms=22.1396 med_ms=23.6973
+OJAS_OP op=accum_768x768 dir=step shape=[768,768] threads=6 n=40 min_ms=0.3483 med_ms=0.4865
+OJAS_OP op=accum_50304x768 dir=step shape=[50304,768] threads=6 n=10 min_ms=6.9414 med_ms=8.5476
+OJAS_OP op=muon_2048x2048 dir=step shape=[2048,2048] threads=6 n=3 min_ms=246.0974 med_ms=246.1489
+OJAS_OP op=muon_6144x2048 dir=step shape=[6144,2048] threads=6 n=3 min_ms=488.8363 med_ms=536.4943
+OJAS_OP op=conv1d dir=fwd shape=[1,1024,6144]k4 threads=6 n=10 min_ms=13.6208 med_ms=15.4330
+OJAS_OP op=conv1d dir=bwd shape=[1,1024,6144]k4 threads=6 n=5 min_ms=32.6750 med_ms=52.5108
