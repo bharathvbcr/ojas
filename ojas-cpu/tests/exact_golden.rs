@@ -18,6 +18,14 @@
 //! by `ojas-oracle/tests/ojas_cpu_parity.rs`); the `muon_m` digests did not
 //! move.
 //!
+//! The nine `sdpa_gq` / `sdpa_gk` / `sdpa_gv` digests were re-recorded on
+//! 2026-10-08, and the three `sdpa_lse` digests (the forward's new row
+//! log-sum-exp output) added, for the LSE-return backward of 6a0a926: the
+//! backward forms `P = e^(S - lse)` from the forward's saved statistics
+//! instead of a fresh row maximum and sum. The `sdpa_fwd` digests did not
+//! move. The f64 reference gates in `ops.rs` and `sliding_window.rs` hold
+//! the new gradients.
+//!
 //! Every digest but `ce_loss` is now plain `f32` arithmetic, `sqrt` and
 //! `exp_exact`, so it holds on every platform. `ce_loss` still takes the
 //! log-sum from libm `f32::ln`; it is checked only on Apple silicon, where it
@@ -241,17 +249,20 @@ const GOLDEN: &[(&str, u64)] = &[
     ("muon_p 97x97", 0xd36ca0970420b395),
     ("muon_m 97x97", 0x79f473d9606dbbc2),
     ("sdpa_fwd [2, 3, 33, 24]", 0xe99bd019cac5e4ba),
-    ("sdpa_gq [2, 3, 33, 24]", 0x2ec8021bbfc4c690),
-    ("sdpa_gk [2, 3, 33, 24]", 0x2e7d56a3a5239844),
-    ("sdpa_gv [2, 3, 33, 24]", 0xdc4e2d81ca41df77),
+    ("sdpa_lse [2, 3, 33, 24]", 0x7218eeeaabff1f8e),
+    ("sdpa_gq [2, 3, 33, 24]", 0x021e59535014e38a),
+    ("sdpa_gk [2, 3, 33, 24]", 0x80dfd92d419580fe),
+    ("sdpa_gv [2, 3, 33, 24]", 0x7b39e6ba82d138c6),
     ("sdpa_fwd [1, 2, 300, 64]", 0x4eea62887d667b58),
-    ("sdpa_gq [1, 2, 300, 64]", 0x61f643902ee5a8f8),
-    ("sdpa_gk [1, 2, 300, 64]", 0x6677948bb0f1d205),
-    ("sdpa_gv [1, 2, 300, 64]", 0x737f62859c95ca80),
+    ("sdpa_lse [1, 2, 300, 64]", 0xb2303c82e11e1a67),
+    ("sdpa_gq [1, 2, 300, 64]", 0x2f4057e424cd36f6),
+    ("sdpa_gk [1, 2, 300, 64]", 0xb976a5c53358ea12),
+    ("sdpa_gv [1, 2, 300, 64]", 0x0c34ed5022bf489d),
     ("sdpa_fwd [2, 2, 64, 16]", 0x0ee154d24d440900),
-    ("sdpa_gq [2, 2, 64, 16]", 0x163a731421ff0006),
-    ("sdpa_gk [2, 2, 64, 16]", 0x7ecb25193fa2bdd0),
-    ("sdpa_gv [2, 2, 64, 16]", 0x9f24340773f5220c),
+    ("sdpa_lse [2, 2, 64, 16]", 0x6a9eb7059b4ec9d6),
+    ("sdpa_gq [2, 2, 64, 16]", 0x1d3ea501f5f90084),
+    ("sdpa_gk [2, 2, 64, 16]", 0xe36b4785136a2c4e),
+    ("sdpa_gv [2, 2, 64, 16]", 0xb6ad6baac6cc8a37),
     ("rms_fwd", 0xabd4e1316a27eb03),
     ("rms_gx", 0xc9443895dbb5a0be),
     ("rms_gw", 0x4f69a30da2e929e3),
