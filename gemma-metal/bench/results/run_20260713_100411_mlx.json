@@ -1,0 +1,103 @@
+{
+  "created_at": "2026-07-13T17:01:12.731299+00:00",
+  "host": {
+    "platform": "darwin",
+    "cpu": "Apple M5 Pro",
+    "mem_gb": 64.0
+  },
+  "pins": {
+    "prompt_tokens": 128,
+    "generation_tokens": 128,
+    "max_kv_size": 4096,
+    "lane": "honest",
+    "mtp": false
+  },
+  "availability": {
+    "ollama": {
+      "installed": true,
+      "models": [
+        "hf.co/deepreinforce-ai/Ornith-1.0-35B-GGUF:Q8_0",
+        "ornith-cc:latest",
+        "all-minilm:latest",
+        "gemma4:31b-mlx"
+      ],
+      "mtp": "not exposed via API for gemma4:31b-mlx (no draft/speculative options)",
+      "path": "/opt/homebrew/bin/ollama",
+      "reachable": true
+    },
+    "mlx_lm": {
+      "installed": true,
+      "cli": "/opt/homebrew/bin/mlx_lm",
+      "mtp": "mlx_lm.generate --draft-model / --num-draft-tokens (stock mlx-lm; Gemma4 MTP stronger in mlx-vlm/Ollama when available)",
+      "benchmark": "/opt/homebrew/bin/mlx_lm.benchmark"
+    },
+    "litert_lm": {
+      "installed": false,
+      "notes": "not found on PATH"
+    },
+    "basert": {
+      "installed": false,
+      "notes": "not found on PATH / no libbaseRT"
+    }
+  },
+  "runs": [
+    {
+      "backend": "mlx_lm",
+      "model": "mlx-community/gemma-4-e4b-it-4bit",
+      "prompt_id": "mlx_benchmark",
+      "prompt": "synthetic p=128 g=128",
+      "lane": "honest",
+      "content": "",
+      "ttft_ms": null,
+      "total_ms": 174150.60300000187,
+      "load_ms": null,
+      "prompt_tokens": 128,
+      "output_tokens": 128,
+      "decode_tok_s": null,
+      "prefill_tok_s": null,
+      "rss_mb": 359.5,
+      "num_ctx": 4096,
+      "max_tokens": 128,
+      "temperature": null,
+      "mtp": false,
+      "notes": "mlx_lm.benchmark trials=3",
+      "error": null,
+      "raw": {
+        "parsed": {
+          "raw_tail": "Running warmup..\nTiming with prompt_tokens=128, generation_tokens=128, batch_size=1.\nTrial 1:  prompt_tps=1896.162, generation_tps=74.013, peak_memory=4.458, total_time=1.928\nTrial 2:  prompt_tps=1876.124, generation_tps=74.958, peak_memory=4.458, total_time=1.909\nTrial 3:  prompt_tps=1931.058, generation_tps=74.882, peak_memory=4.459, total_time=1.908\nAverages: prompt_tps=1901.115, generation_tps=74.618, peak_memory=4.458\n\n\nFetching 8 files:   0%|          | 0/8 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 8 files:  12%|\u2588\u258e        | 1/8 [00:00<00:02,  2.35it/s]\nFetching 8 files:  38%|\u2588\u2588\u2588\u258a      | 3/8 [00:00<00:00,  6.16it/s]\nFetching 8 files:  50%|\u2588\u2588\u2588\u2588\u2588     | 4/8 [02:39<03:40, 55.19s/it]\nFetching 8 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 8/8 [02:39<00:00, 19.97s/it]\n"
+        },
+        "returncode": 0
+      }
+    },
+    {
+      "backend": "mlx_lm",
+      "model": "mlx-community/gemma-4-e4b-it-4bit",
+      "prompt_id": "math_easy_generate",
+      "prompt": "What is 17 \u00d7 23? Respond with only the integer.",
+      "lane": "honest",
+      "content": "==========\n<|channel>thought\nThe user wants me to calculate $17 \\times 23$ and provide only the integer result.\n\nCalculation:\n$17 \\times 23$\n$17 \\times (20 + 3)$\n$17 \\times 20 + 17\n==========\nPrompt: 32 tokens, 282.924 tokens-per-sec\nGeneration: 64 tokens, 76.085 tokens-per-sec\nPeak memory: 4.316 GB\n",
+      "ttft_ms": null,
+      "total_ms": 5049.32941700099,
+      "load_ms": null,
+      "prompt_tokens": null,
+      "output_tokens": null,
+      "decode_tok_s": 76.085,
+      "prefill_tok_s": 282.924,
+      "rss_mb": 359.7,
+      "num_ctx": 4096,
+      "max_tokens": 64,
+      "temperature": 0.0,
+      "mtp": false,
+      "notes": "mlx_lm.generate verbose timing",
+      "error": null,
+      "raw": {
+        "parsed": {
+          "raw_tail": "==========\n<|channel>thought\nThe user wants me to calculate $17 \\times 23$ and provide only the integer result.\n\nCalculation:\n$17 \\times 23$\n$17 \\times (20 + 3)$\n$17 \\times 20 + 17\n==========\nPrompt: 32 tokens, 282.924 tokens-per-sec\nGeneration: 64 tokens, 76.085 tokens-per-sec\nPeak memory: 4.316 GB\n\n\nFetching 8 files:   0%|          | 0/8 [00:00<?, ?it/s]\nFetching 8 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 8/8 [00:00<00:00, 15067.10it/s]\n",
+          "prompt_tps": 282.924,
+          "generation_tps": 76.085
+        },
+        "returncode": 0
+      }
+    }
+  ]
+}

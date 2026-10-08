@@ -1,0 +1,2435 @@
+{
+  "config": {
+    "batch": 16,
+    "bigram_dim": 48,
+    "bigram_vocab_size": 512,
+    "gated_attention": false,
+    "head_dim": 32,
+    "ln_scale": true,
+    "logit_softcap": 30.0,
+    "mlp_dim": 384,
+    "model_dim": 128,
+    "num_heads": 4,
+    "num_kv_heads": 2,
+    "num_layers": 4,
+    "preset": "sota",
+    "rope_dims": 8,
+    "seq_len": 256,
+    "value_residual": true,
+    "ve_dim": 24,
+    "ve_layers": [
+      2,
+      3
+    ],
+    "vocab_size": 1024,
+    "xsa_last_n": 2
+  },
+  "created_utc": "2026-07-12T01:12:27.216418+00:00",
+  "deviations_from_reference": [
+    "No bf16 autocast; model + activations + grads kept in float32.",
+    "Muon Newton-Schulz5 and momentum buffers run in float32 (reference uses bfloat16 for both).",
+    "Muon.step patched to single-process f32 path (no reduce-scatter / all-gather).",
+    "Attention via SDPA MATH backend when flash_attn_interface is unavailable (SPRINT_FLASH_BACKEND=sdpa_fallback).",
+    "Synthetic input_ids/targets from torch.randint(seed=1337+10000*batch_idx); no FineWeb shards.",
+    "AdamW fused=False on non-CUDA devices.",
+    "EMA / SWA not exported (optimizer-state gate only)."
+  ],
+  "device": "cpu",
+  "dtype_policy": "f32_throughout",
+  "flash_backend": "sdpa_fallback",
+  "protocol": [
+    "1. Init GPT (sota) at seed 1337, f32.",
+    "2. Save initial weights.",
+    "3. Batch0: capture module forward outputs (no grad).",
+    "4. Batch0: forward+backward, clip_grad_norm_(0.3), save per-param grads (pre-optim).",
+    "5. Run 3 full optimizer steps (tok AdamW \u2192 scalar AdamW \u2192 Muon) on batches 0,1,2.",
+    "6. Save Muon momentum buffers + AdamW moments after step 3."
+  ],
+  "reference": "/Users/bharath/Code/research/MLSystemsLab/Rust_MLKit/arch_02_value_resid/train_gpt_sprint_native.py",
+  "seed": 1337,
+  "tensors": {
+    "fwd/final_norm": {
+      "dtype": "float32",
+      "file": "fwd/final_norm.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/final_norm",
+      "sha256_16": "51872c02b07dc79f",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer0_attn_out": {
+      "dtype": "float32",
+      "file": "fwd/layer0_attn_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer0_attn_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer0_mlp_out": {
+      "dtype": "float32",
+      "file": "fwd/layer0_mlp_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer0_mlp_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer0_x": {
+      "dtype": "float32",
+      "file": "fwd/layer0_x.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer0_x",
+      "sha256_16": "fabf6e84dc371b8b",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer1_attn_out": {
+      "dtype": "float32",
+      "file": "fwd/layer1_attn_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer1_attn_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer1_mlp_out": {
+      "dtype": "float32",
+      "file": "fwd/layer1_mlp_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer1_mlp_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer1_x": {
+      "dtype": "float32",
+      "file": "fwd/layer1_x.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer1_x",
+      "sha256_16": "fabf6e84dc371b8b",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer2_after_skip": {
+      "dtype": "float32",
+      "file": "fwd/layer2_after_skip.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer2_after_skip",
+      "sha256_16": "c0fa5efe27553e9b",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer2_attn_out": {
+      "dtype": "float32",
+      "file": "fwd/layer2_attn_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer2_attn_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer2_mlp_out": {
+      "dtype": "float32",
+      "file": "fwd/layer2_mlp_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer2_mlp_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer2_x": {
+      "dtype": "float32",
+      "file": "fwd/layer2_x.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer2_x",
+      "sha256_16": "c0fa5efe27553e9b",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer3_after_skip": {
+      "dtype": "float32",
+      "file": "fwd/layer3_after_skip.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer3_after_skip",
+      "sha256_16": "42194264b063d616",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer3_attn_out": {
+      "dtype": "float32",
+      "file": "fwd/layer3_attn_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer3_attn_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer3_mlp_out": {
+      "dtype": "float32",
+      "file": "fwd/layer3_mlp_out.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer3_mlp_out",
+      "sha256_16": "5647f05ec1895894",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/layer3_x": {
+      "dtype": "float32",
+      "file": "fwd/layer3_x.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/layer3_x",
+      "sha256_16": "42194264b063d616",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/logits_post_softcap": {
+      "dtype": "float32",
+      "file": "fwd/logits_post_softcap.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/logits_post_softcap",
+      "sha256_16": "9c8510ecd6b3a73d",
+      "shape": [
+        16,
+        256,
+        1024
+      ]
+    },
+    "fwd/logits_pre_softcap": {
+      "dtype": "float32",
+      "file": "fwd/logits_pre_softcap.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/logits_pre_softcap",
+      "sha256_16": "e9d43a963aa99745",
+      "shape": [
+        16,
+        256,
+        1024
+      ]
+    },
+    "fwd/loss": {
+      "dtype": "float32",
+      "file": "fwd/loss.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/loss",
+      "sha256_16": "6a200bb10276221b",
+      "shape": []
+    },
+    "fwd/loss_train_forward": {
+      "dtype": "float32",
+      "file": "fwd/loss_train_forward.npy",
+      "group": "fwd",
+      "how": "GPT.forward CE loss on batch0 (should match fwd/loss)",
+      "sha256_16": "6a200bb10276221b",
+      "shape": []
+    },
+    "fwd/stem_after_smear": {
+      "dtype": "float32",
+      "file": "fwd/stem_after_smear.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/stem_after_smear",
+      "sha256_16": "fabf6e84dc371b8b",
+      "shape": [
+        16,
+        256,
+        128
+      ]
+    },
+    "fwd/v0": {
+      "dtype": "float32",
+      "file": "fwd/v0.npy",
+      "group": "fwd",
+      "how": "Forward capture: fwd/v0",
+      "sha256_16": "ab30717606edb23b",
+      "shape": [
+        16,
+        256,
+        2,
+        32
+      ]
+    },
+    "grads/bigram/embed/weight": {
+      "dtype": "float32",
+      "file": "grads/bigram/embed/weight.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=bigram.embed.weight",
+      "sha256_16": "3a3ed164e42500a1",
+      "shape": [
+        512,
+        48
+      ]
+    },
+    "grads/bigram/proj/weight": {
+      "dtype": "float32",
+      "file": "grads/bigram/proj/weight.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=bigram.proj.weight",
+      "sha256_16": "de676bae28a48001",
+      "shape": [
+        128,
+        48
+      ]
+    },
+    "grads/bigram/scale": {
+      "dtype": "float32",
+      "file": "grads/bigram/scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=bigram.scale",
+      "sha256_16": "df3f619804a92fdb",
+      "shape": []
+    },
+    "grads/blocks/0/attn/q_gain": {
+      "dtype": "float32",
+      "file": "grads/blocks/0/attn/q_gain.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.0.attn.q_gain",
+      "sha256_16": "374708fff7719dd5",
+      "shape": [
+        4
+      ]
+    },
+    "grads/blocks/0/attn_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/0/attn_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.0.attn_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/0/mlp_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/0/mlp_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.0.mlp_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/0/resid_mix": {
+      "dtype": "float32",
+      "file": "grads/blocks/0/resid_mix.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.0.resid_mix",
+      "sha256_16": "d061440125c063fe",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "grads/blocks/1/attn/q_gain": {
+      "dtype": "float32",
+      "file": "grads/blocks/1/attn/q_gain.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.1.attn.q_gain",
+      "sha256_16": "374708fff7719dd5",
+      "shape": [
+        4
+      ]
+    },
+    "grads/blocks/1/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "grads/blocks/1/attn/vr_lambda.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.1.attn.vr_lambda",
+      "sha256_16": "af5570f5a1810b7a",
+      "shape": [
+        2
+      ]
+    },
+    "grads/blocks/1/attn_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/1/attn_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.1.attn_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/1/mlp_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/1/mlp_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.1.mlp_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/1/resid_mix": {
+      "dtype": "float32",
+      "file": "grads/blocks/1/resid_mix.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.1.resid_mix",
+      "sha256_16": "80176ffc7bc70efa",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "grads/blocks/2/attn/q_gain": {
+      "dtype": "float32",
+      "file": "grads/blocks/2/attn/q_gain.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.2.attn.q_gain",
+      "sha256_16": "374708fff7719dd5",
+      "shape": [
+        4
+      ]
+    },
+    "grads/blocks/2/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "grads/blocks/2/attn/vr_lambda.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.2.attn.vr_lambda",
+      "sha256_16": "af5570f5a1810b7a",
+      "shape": [
+        2
+      ]
+    },
+    "grads/blocks/2/attn_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/2/attn_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.2.attn_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/2/mlp_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/2/mlp_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.2.mlp_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/2/resid_mix": {
+      "dtype": "float32",
+      "file": "grads/blocks/2/resid_mix.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.2.resid_mix",
+      "sha256_16": "4128764893dcf421",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "grads/blocks/3/attn/q_gain": {
+      "dtype": "float32",
+      "file": "grads/blocks/3/attn/q_gain.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.3.attn.q_gain",
+      "sha256_16": "374708fff7719dd5",
+      "shape": [
+        4
+      ]
+    },
+    "grads/blocks/3/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "grads/blocks/3/attn/vr_lambda.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.3.attn.vr_lambda",
+      "sha256_16": "af5570f5a1810b7a",
+      "shape": [
+        2
+      ]
+    },
+    "grads/blocks/3/attn_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/3/attn_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.3.attn_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/3/mlp_scale": {
+      "dtype": "float32",
+      "file": "grads/blocks/3/mlp_scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.3.mlp_scale",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "grads/blocks/3/resid_mix": {
+      "dtype": "float32",
+      "file": "grads/blocks/3/resid_mix.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=blocks.3.resid_mix",
+      "sha256_16": "2eff4b23fb39c524",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "grads/kv_bank": {
+      "dtype": "float32",
+      "file": "grads/kv_bank.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=kv_bank",
+      "sha256_16": "8a39d2abd3999ab7",
+      "shape": [
+        8,
+        64,
+        128
+      ]
+    },
+    "grads/loss_step1": {
+      "dtype": "float32",
+      "file": "grads/loss_step1.npy",
+      "group": "grads",
+      "how": "Training loss for the grad-producing forward (batch0)",
+      "sha256_16": "6a200bb10276221b",
+      "shape": []
+    },
+    "grads/mlp_down_bank": {
+      "dtype": "float32",
+      "file": "grads/mlp_down_bank.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=mlp_down_bank",
+      "sha256_16": "8147c0faa5d1a105",
+      "shape": [
+        4,
+        128,
+        384
+      ]
+    },
+    "grads/mlp_up_bank": {
+      "dtype": "float32",
+      "file": "grads/mlp_up_bank.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=mlp_up_bank",
+      "sha256_16": "599c1bb5ffd4b872",
+      "shape": [
+        4,
+        384,
+        128
+      ]
+    },
+    "grads/qo_bank": {
+      "dtype": "float32",
+      "file": "grads/qo_bank.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=qo_bank",
+      "sha256_16": "0dd9cdba66fb4d64",
+      "shape": [
+        8,
+        128,
+        128
+      ]
+    },
+    "grads/skip_weights": {
+      "dtype": "float32",
+      "file": "grads/skip_weights.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=skip_weights",
+      "sha256_16": "de99f0d159906514",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "grads/smear/gate": {
+      "dtype": "float32",
+      "file": "grads/smear/gate.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=smear.gate",
+      "sha256_16": "24592c9e783f7551",
+      "shape": [
+        128
+      ]
+    },
+    "grads/tok_emb/weight": {
+      "dtype": "float32",
+      "file": "grads/tok_emb/weight.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=tok_emb.weight",
+      "sha256_16": "5d5bf1dabdc2c225",
+      "shape": [
+        1024,
+        128
+      ]
+    },
+    "grads/ve_layer_scales/0": {
+      "dtype": "float32",
+      "file": "grads/ve_layer_scales/0.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=ve_layer_scales.0",
+      "sha256_16": "df3f619804a92fdb",
+      "shape": [
+        1
+      ]
+    },
+    "grads/ve_layer_scales/1": {
+      "dtype": "float32",
+      "file": "grads/ve_layer_scales/1.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=ve_layer_scales.1",
+      "sha256_16": "df3f619804a92fdb",
+      "shape": [
+        1
+      ]
+    },
+    "grads/ve_shared/embed/weight": {
+      "dtype": "float32",
+      "file": "grads/ve_shared/embed/weight.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=ve_shared.embed.weight",
+      "sha256_16": "3a3ed164e42500a1",
+      "shape": [
+        1024,
+        24
+      ]
+    },
+    "grads/ve_shared/proj/weight": {
+      "dtype": "float32",
+      "file": "grads/ve_shared/proj/weight.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=ve_shared.proj.weight",
+      "sha256_16": "fd9243e1ba57263e",
+      "shape": [
+        64,
+        24
+      ]
+    },
+    "grads/ve_shared/scale": {
+      "dtype": "float32",
+      "file": "grads/ve_shared/scale.npy",
+      "group": "grads",
+      "how": "Gradient after 1 fwd+bwd on batch0, post clip_grad_norm_(0.3); name=ve_shared.scale",
+      "sha256_16": "df3f619804a92fdb",
+      "shape": []
+    },
+    "inputs/input_ids_batch0": {
+      "dtype": "int64",
+      "file": "inputs/input_ids_batch0.npy",
+      "group": "inputs",
+      "how": "Synthetic input_ids_batch0 (int64); generator seed SEED+10000*(batch_idx+1)",
+      "sha256_16": "22695fef4f503880",
+      "shape": [
+        16,
+        256
+      ]
+    },
+    "inputs/input_ids_batch1": {
+      "dtype": "int64",
+      "file": "inputs/input_ids_batch1.npy",
+      "group": "inputs",
+      "how": "Synthetic input_ids_batch1 (int64); generator seed SEED+10000*(batch_idx+1)",
+      "sha256_16": "f46dd52d2af4e5ec",
+      "shape": [
+        16,
+        256
+      ]
+    },
+    "inputs/input_ids_batch2": {
+      "dtype": "int64",
+      "file": "inputs/input_ids_batch2.npy",
+      "group": "inputs",
+      "how": "Synthetic input_ids_batch2 (int64); generator seed SEED+10000*(batch_idx+1)",
+      "sha256_16": "18e5901e9ec51cd5",
+      "shape": [
+        16,
+        256
+      ]
+    },
+    "inputs/target_ids_batch0": {
+      "dtype": "int64",
+      "file": "inputs/target_ids_batch0.npy",
+      "group": "inputs",
+      "how": "Synthetic target_ids_batch0 (int64); generator seed SEED+10000*(batch_idx+1)",
+      "sha256_16": "f719a385a8ce799a",
+      "shape": [
+        16,
+        256
+      ]
+    },
+    "inputs/target_ids_batch1": {
+      "dtype": "int64",
+      "file": "inputs/target_ids_batch1.npy",
+      "group": "inputs",
+      "how": "Synthetic target_ids_batch1 (int64); generator seed SEED+10000*(batch_idx+1)",
+      "sha256_16": "6ea3e8246939b769",
+      "shape": [
+        16,
+        256
+      ]
+    },
+    "inputs/target_ids_batch2": {
+      "dtype": "int64",
+      "file": "inputs/target_ids_batch2.npy",
+      "group": "inputs",
+      "how": "Synthetic target_ids_batch2 (int64); generator seed SEED+10000*(batch_idx+1)",
+      "sha256_16": "9ab278f992f1bf90",
+      "shape": [
+        16,
+        256
+      ]
+    },
+    "optim_step3/adamw_embed/bigram/embed/weight_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/bigram/embed/weight_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=bigram.embed.weight",
+      "sha256_16": "3a3ed164e42500a1",
+      "shape": [
+        512,
+        48
+      ]
+    },
+    "optim_step3/adamw_embed/bigram/embed/weight_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/bigram/embed/weight_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=bigram.embed.weight",
+      "sha256_16": "3a3ed164e42500a1",
+      "shape": [
+        512,
+        48
+      ]
+    },
+    "optim_step3/adamw_embed/bigram/embed/weight_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/bigram/embed/weight_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=bigram.embed.weight",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_embed/tok_emb/weight_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/tok_emb/weight_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=tok_emb.weight",
+      "sha256_16": "d5183698249444b3",
+      "shape": [
+        1024,
+        128
+      ]
+    },
+    "optim_step3/adamw_embed/tok_emb/weight_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/tok_emb/weight_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=tok_emb.weight",
+      "sha256_16": "6acf4c5791f7f3e3",
+      "shape": [
+        1024,
+        128
+      ]
+    },
+    "optim_step3/adamw_embed/tok_emb/weight_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/tok_emb/weight_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=tok_emb.weight",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_embed/ve_shared/embed/weight_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/ve_shared/embed/weight_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=ve_shared.embed.weight",
+      "sha256_16": "b63038d78f5f1ba7",
+      "shape": [
+        1024,
+        24
+      ]
+    },
+    "optim_step3/adamw_embed/ve_shared/embed/weight_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/ve_shared/embed/weight_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=ve_shared.embed.weight",
+      "sha256_16": "585aa8d4010d0e8d",
+      "shape": [
+        1024,
+        24
+      ]
+    },
+    "optim_step3/adamw_embed/ve_shared/embed/weight_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_embed/ve_shared/embed/weight_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=ve_shared.embed.weight",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/bigram/proj/weight_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/bigram/proj/weight_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=bigram.proj.weight",
+      "sha256_16": "de676bae28a48001",
+      "shape": [
+        128,
+        48
+      ]
+    },
+    "optim_step3/adamw_scalar/bigram/proj/weight_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/bigram/proj/weight_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=bigram.proj.weight",
+      "sha256_16": "de676bae28a48001",
+      "shape": [
+        128,
+        48
+      ]
+    },
+    "optim_step3/adamw_scalar/bigram/proj/weight_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/bigram/proj/weight_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=bigram.proj.weight",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/bigram/scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/bigram/scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=bigram.scale",
+      "sha256_16": "df3f619804a92fdb",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/bigram/scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/bigram/scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=bigram.scale",
+      "sha256_16": "df3f619804a92fdb",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/bigram/scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/bigram/scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=bigram.scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/0/attn/q_gain_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/attn/q_gain_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.0.attn.q_gain",
+      "sha256_16": "2cb7626437d0c698",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/attn/q_gain_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/attn/q_gain_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.0.attn.q_gain",
+      "sha256_16": "5ea42a2eab0cfc80",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/attn/q_gain_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/attn/q_gain_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.0.attn.q_gain",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/0/attn_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/attn_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.0.attn_scale",
+      "sha256_16": "d883a29857f9aff1",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/attn_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/attn_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.0.attn_scale",
+      "sha256_16": "a23e3bc6b75aa26b",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/attn_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/attn_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.0.attn_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/0/mlp_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/mlp_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.0.mlp_scale",
+      "sha256_16": "cd0f1cd6b21b9d58",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/mlp_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/mlp_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.0.mlp_scale",
+      "sha256_16": "0385c46bb4d31f41",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/mlp_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/mlp_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.0.mlp_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/0/resid_mix_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/resid_mix_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.0.resid_mix",
+      "sha256_16": "a596c1ca03760d95",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/resid_mix_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/resid_mix_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.0.resid_mix",
+      "sha256_16": "0c617798210f2859",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/0/resid_mix_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/0/resid_mix_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.0.resid_mix",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn/q_gain_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn/q_gain_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.1.attn.q_gain",
+      "sha256_16": "3c08afe4e87c26d6",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn/q_gain_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn/q_gain_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.1.attn.q_gain",
+      "sha256_16": "a254f2c948aa8ced",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn/q_gain_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn/q_gain_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.1.attn.q_gain",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn/vr_lambda_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn/vr_lambda_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.1.attn.vr_lambda",
+      "sha256_16": "634fb1272b6933a6",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn/vr_lambda_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn/vr_lambda_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.1.attn.vr_lambda",
+      "sha256_16": "66447072cb4e1265",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn/vr_lambda_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn/vr_lambda_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.1.attn.vr_lambda",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.1.attn_scale",
+      "sha256_16": "1284c27170a908fd",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.1.attn_scale",
+      "sha256_16": "3dccf146226292ae",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/attn_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/attn_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.1.attn_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/1/mlp_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/mlp_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.1.mlp_scale",
+      "sha256_16": "eee92ac39ce830ee",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/mlp_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/mlp_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.1.mlp_scale",
+      "sha256_16": "99f66d06cafbfa95",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/mlp_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/mlp_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.1.mlp_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/1/resid_mix_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/resid_mix_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.1.resid_mix",
+      "sha256_16": "2fe56d26d52d992a",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/resid_mix_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/resid_mix_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.1.resid_mix",
+      "sha256_16": "5e852d03bfd9643c",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/1/resid_mix_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/1/resid_mix_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.1.resid_mix",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn/q_gain_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn/q_gain_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.2.attn.q_gain",
+      "sha256_16": "0cf65c591a61fe65",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn/q_gain_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn/q_gain_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.2.attn.q_gain",
+      "sha256_16": "7ded9b223afcb548",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn/q_gain_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn/q_gain_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.2.attn.q_gain",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn/vr_lambda_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn/vr_lambda_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.2.attn.vr_lambda",
+      "sha256_16": "76ec5ab7eb9e0818",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn/vr_lambda_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn/vr_lambda_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.2.attn.vr_lambda",
+      "sha256_16": "a8476192beb18dbd",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn/vr_lambda_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn/vr_lambda_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.2.attn.vr_lambda",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.2.attn_scale",
+      "sha256_16": "a6daa65a9f08ecb1",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.2.attn_scale",
+      "sha256_16": "855cc3634a056f7a",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/attn_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/attn_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.2.attn_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/2/mlp_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/mlp_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.2.mlp_scale",
+      "sha256_16": "ed9c6af19d845aff",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/mlp_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/mlp_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.2.mlp_scale",
+      "sha256_16": "a158525996705284",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/mlp_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/mlp_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.2.mlp_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/2/resid_mix_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/resid_mix_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.2.resid_mix",
+      "sha256_16": "524c5e60fe41addf",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/resid_mix_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/resid_mix_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.2.resid_mix",
+      "sha256_16": "d82aac990413f388",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/2/resid_mix_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/2/resid_mix_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.2.resid_mix",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn/q_gain_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn/q_gain_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.3.attn.q_gain",
+      "sha256_16": "2c36e69e74c96527",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn/q_gain_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn/q_gain_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.3.attn.q_gain",
+      "sha256_16": "6da838a248b5ebf4",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn/q_gain_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn/q_gain_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.3.attn.q_gain",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn/vr_lambda_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn/vr_lambda_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.3.attn.vr_lambda",
+      "sha256_16": "318116d9a947c67e",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn/vr_lambda_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn/vr_lambda_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.3.attn.vr_lambda",
+      "sha256_16": "5d389e59c792a162",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn/vr_lambda_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn/vr_lambda_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.3.attn.vr_lambda",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.3.attn_scale",
+      "sha256_16": "44861246511d29d8",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.3.attn_scale",
+      "sha256_16": "3dee4138b810343e",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/attn_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/attn_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.3.attn_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/3/mlp_scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/mlp_scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.3.mlp_scale",
+      "sha256_16": "06878cd3365db132",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/mlp_scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/mlp_scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.3.mlp_scale",
+      "sha256_16": "244fe25e19933c6d",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/mlp_scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/mlp_scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.3.mlp_scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/blocks/3/resid_mix_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/resid_mix_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=blocks.3.resid_mix",
+      "sha256_16": "e9c9f8f15b73019e",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/resid_mix_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/resid_mix_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=blocks.3.resid_mix",
+      "sha256_16": "1b5ce4169b57161b",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/blocks/3/resid_mix_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/blocks/3/resid_mix_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=blocks.3.resid_mix",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/skip_weights_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/skip_weights_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=skip_weights",
+      "sha256_16": "ec3a79188f16a1b1",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/skip_weights_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/skip_weights_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=skip_weights",
+      "sha256_16": "b921be8e3b8c43a5",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/skip_weights_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/skip_weights_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=skip_weights",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/smear/gate_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/smear/gate_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=smear.gate",
+      "sha256_16": "9e47dbe8a45fe280",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/smear/gate_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/smear/gate_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=smear.gate",
+      "sha256_16": "6eb4e042f840c43e",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/adamw_scalar/smear/gate_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/smear/gate_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=smear.gate",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/ve_layer_scales/0_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_layer_scales/0_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=ve_layer_scales.0",
+      "sha256_16": "df56c5976d08df43",
+      "shape": [
+        1
+      ]
+    },
+    "optim_step3/adamw_scalar/ve_layer_scales/0_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_layer_scales/0_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=ve_layer_scales.0",
+      "sha256_16": "fb12239e931b9405",
+      "shape": [
+        1
+      ]
+    },
+    "optim_step3/adamw_scalar/ve_layer_scales/0_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_layer_scales/0_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=ve_layer_scales.0",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/ve_layer_scales/1_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_layer_scales/1_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=ve_layer_scales.1",
+      "sha256_16": "a3da5caa515ab0ce",
+      "shape": [
+        1
+      ]
+    },
+    "optim_step3/adamw_scalar/ve_layer_scales/1_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_layer_scales/1_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=ve_layer_scales.1",
+      "sha256_16": "830a05bc9176c6d1",
+      "shape": [
+        1
+      ]
+    },
+    "optim_step3/adamw_scalar/ve_layer_scales/1_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_layer_scales/1_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=ve_layer_scales.1",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/ve_shared/proj/weight_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_shared/proj/weight_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=ve_shared.proj.weight",
+      "sha256_16": "8c67ae708502b4e8",
+      "shape": [
+        64,
+        24
+      ]
+    },
+    "optim_step3/adamw_scalar/ve_shared/proj/weight_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_shared/proj/weight_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=ve_shared.proj.weight",
+      "sha256_16": "2c86c95e706b5568",
+      "shape": [
+        64,
+        24
+      ]
+    },
+    "optim_step3/adamw_scalar/ve_shared/proj/weight_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_shared/proj/weight_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=ve_shared.proj.weight",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/ve_shared/scale_exp_avg": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_shared/scale_exp_avg.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg (1st moment) after 3 steps; param=ve_shared.scale",
+      "sha256_16": "bef9f4fadf845706",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/ve_shared/scale_exp_avg_sq": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_shared/scale_exp_avg_sq.npy",
+      "group": "optim_step3",
+      "how": "AdamW exp_avg_sq (2nd moment) after 3 steps; param=ve_shared.scale",
+      "sha256_16": "bf20573fadd95e03",
+      "shape": []
+    },
+    "optim_step3/adamw_scalar/ve_shared/scale_step": {
+      "dtype": "float32",
+      "file": "optim_step3/adamw_scalar/ve_shared/scale_step.npy",
+      "group": "optim_step3",
+      "how": "AdamW step counter after 3 steps; param=ve_shared.scale",
+      "sha256_16": "ea2845900b5856c9",
+      "shape": []
+    },
+    "optim_step3/muon/kv_bank_momentum_buffer": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/kv_bank_momentum_buffer.npy",
+      "group": "optim_step3",
+      "how": "Muon momentum_buffer after 3 steps (Nesterov path, f32). Bank=kv_bank.",
+      "sha256_16": "5034a60d54e67f83",
+      "shape": [
+        8,
+        64,
+        128
+      ]
+    },
+    "optim_step3/muon/kv_bank_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/kv_bank_scale.npy",
+      "group": "optim_step3",
+      "how": "Muon LR scale = sqrt(max(1, out/in)) for bank kv_bank",
+      "sha256_16": "e00e5eb9444182f3",
+      "shape": []
+    },
+    "optim_step3/muon/mlp_down_bank_momentum_buffer": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/mlp_down_bank_momentum_buffer.npy",
+      "group": "optim_step3",
+      "how": "Muon momentum_buffer after 3 steps (Nesterov path, f32). Bank=mlp_down_bank.",
+      "sha256_16": "fd9cbd925e2166ae",
+      "shape": [
+        4,
+        128,
+        384
+      ]
+    },
+    "optim_step3/muon/mlp_down_bank_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/mlp_down_bank_scale.npy",
+      "group": "optim_step3",
+      "how": "Muon LR scale = sqrt(max(1, out/in)) for bank mlp_down_bank",
+      "sha256_16": "e00e5eb9444182f3",
+      "shape": []
+    },
+    "optim_step3/muon/mlp_up_bank_momentum_buffer": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/mlp_up_bank_momentum_buffer.npy",
+      "group": "optim_step3",
+      "how": "Muon momentum_buffer after 3 steps (Nesterov path, f32). Bank=mlp_up_bank.",
+      "sha256_16": "5f58162c97758174",
+      "shape": [
+        4,
+        384,
+        128
+      ]
+    },
+    "optim_step3/muon/mlp_up_bank_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/mlp_up_bank_scale.npy",
+      "group": "optim_step3",
+      "how": "Muon LR scale = sqrt(max(1, out/in)) for bank mlp_up_bank",
+      "sha256_16": "263f6ba97298941a",
+      "shape": []
+    },
+    "optim_step3/muon/qo_bank_momentum_buffer": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/qo_bank_momentum_buffer.npy",
+      "group": "optim_step3",
+      "how": "Muon momentum_buffer after 3 steps (Nesterov path, f32). Bank=qo_bank.",
+      "sha256_16": "069712a16c1018e9",
+      "shape": [
+        8,
+        128,
+        128
+      ]
+    },
+    "optim_step3/muon/qo_bank_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/muon/qo_bank_scale.npy",
+      "group": "optim_step3",
+      "how": "Muon LR scale = sqrt(max(1, out/in)) for bank qo_bank",
+      "sha256_16": "e00e5eb9444182f3",
+      "shape": []
+    },
+    "optim_step3/params/bigram/embed/weight": {
+      "dtype": "float32",
+      "file": "optim_step3/params/bigram/embed/weight.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=bigram.embed.weight",
+      "sha256_16": "3a3ed164e42500a1",
+      "shape": [
+        512,
+        48
+      ]
+    },
+    "optim_step3/params/bigram/proj/weight": {
+      "dtype": "float32",
+      "file": "optim_step3/params/bigram/proj/weight.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=bigram.proj.weight",
+      "sha256_16": "de676bae28a48001",
+      "shape": [
+        128,
+        48
+      ]
+    },
+    "optim_step3/params/bigram/scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/bigram/scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=bigram.scale",
+      "sha256_16": "5b5ff53345525c44",
+      "shape": []
+    },
+    "optim_step3/params/blocks/0/attn/q_gain": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/0/attn/q_gain.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.0.attn.q_gain",
+      "sha256_16": "1ba8a20f108d3034",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/params/blocks/0/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/0/attn/vr_lambda.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.0.attn.vr_lambda",
+      "sha256_16": "b3f689962d5d23d2",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/params/blocks/0/attn_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/0/attn_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.0.attn_scale",
+      "sha256_16": "d5f7d57f2a79d5af",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/0/mlp_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/0/mlp_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.0.mlp_scale",
+      "sha256_16": "ac24cb52f740eeeb",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/0/resid_mix": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/0/resid_mix.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.0.resid_mix",
+      "sha256_16": "0c32e05e9f90e3da",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/params/blocks/1/attn/q_gain": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/1/attn/q_gain.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.1.attn.q_gain",
+      "sha256_16": "cdba331d2c6565dc",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/params/blocks/1/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/1/attn/vr_lambda.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.1.attn.vr_lambda",
+      "sha256_16": "f32304f4b4d8849d",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/params/blocks/1/attn_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/1/attn_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.1.attn_scale",
+      "sha256_16": "ee296f3d70329432",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/1/mlp_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/1/mlp_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.1.mlp_scale",
+      "sha256_16": "f9ce2f78193fbc69",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/1/resid_mix": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/1/resid_mix.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.1.resid_mix",
+      "sha256_16": "f7537451aea9364c",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/params/blocks/2/attn/q_gain": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/2/attn/q_gain.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.2.attn.q_gain",
+      "sha256_16": "70312995400571b9",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/params/blocks/2/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/2/attn/vr_lambda.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.2.attn.vr_lambda",
+      "sha256_16": "9971e2390c5a62b2",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/params/blocks/2/attn_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/2/attn_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.2.attn_scale",
+      "sha256_16": "2e5da367948c993e",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/2/mlp_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/2/mlp_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.2.mlp_scale",
+      "sha256_16": "375cda89b5f4f9ce",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/2/resid_mix": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/2/resid_mix.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.2.resid_mix",
+      "sha256_16": "e5dba8b2c0cf89c2",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/params/blocks/3/attn/q_gain": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/3/attn/q_gain.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.3.attn.q_gain",
+      "sha256_16": "f1e4ca7a6de64be5",
+      "shape": [
+        4
+      ]
+    },
+    "optim_step3/params/blocks/3/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/3/attn/vr_lambda.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.3.attn.vr_lambda",
+      "sha256_16": "fe94097affe8f2b3",
+      "shape": [
+        2
+      ]
+    },
+    "optim_step3/params/blocks/3/attn_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/3/attn_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.3.attn_scale",
+      "sha256_16": "9bb59e87f5491958",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/3/mlp_scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/3/mlp_scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.3.mlp_scale",
+      "sha256_16": "dd5e69c888587f42",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/blocks/3/resid_mix": {
+      "dtype": "float32",
+      "file": "optim_step3/params/blocks/3/resid_mix.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=blocks.3.resid_mix",
+      "sha256_16": "ad8fc7ab2cbf7cd5",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/params/kv_bank": {
+      "dtype": "float32",
+      "file": "optim_step3/params/kv_bank.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=kv_bank",
+      "sha256_16": "c33e7ccde9ac20a5",
+      "shape": [
+        8,
+        64,
+        128
+      ]
+    },
+    "optim_step3/params/mlp_down_bank": {
+      "dtype": "float32",
+      "file": "optim_step3/params/mlp_down_bank.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=mlp_down_bank",
+      "sha256_16": "58fc6d2b0c88c9f9",
+      "shape": [
+        4,
+        128,
+        384
+      ]
+    },
+    "optim_step3/params/mlp_up_bank": {
+      "dtype": "float32",
+      "file": "optim_step3/params/mlp_up_bank.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=mlp_up_bank",
+      "sha256_16": "39f127a8c51055af",
+      "shape": [
+        4,
+        384,
+        128
+      ]
+    },
+    "optim_step3/params/qo_bank": {
+      "dtype": "float32",
+      "file": "optim_step3/params/qo_bank.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=qo_bank",
+      "sha256_16": "8e406f94e59bad4c",
+      "shape": [
+        8,
+        128,
+        128
+      ]
+    },
+    "optim_step3/params/skip_weights": {
+      "dtype": "float32",
+      "file": "optim_step3/params/skip_weights.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=skip_weights",
+      "sha256_16": "34a3a6e787f1697b",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "optim_step3/params/smear/gate": {
+      "dtype": "float32",
+      "file": "optim_step3/params/smear/gate.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=smear.gate",
+      "sha256_16": "d58462fc9c4aaf08",
+      "shape": [
+        128
+      ]
+    },
+    "optim_step3/params/tok_emb/weight": {
+      "dtype": "float32",
+      "file": "optim_step3/params/tok_emb/weight.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=tok_emb.weight",
+      "sha256_16": "20e1f77c00fceaa2",
+      "shape": [
+        1024,
+        128
+      ]
+    },
+    "optim_step3/params/ve_layer_scales/0": {
+      "dtype": "float32",
+      "file": "optim_step3/params/ve_layer_scales/0.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=ve_layer_scales.0",
+      "sha256_16": "f5bc6e01b0f77bc8",
+      "shape": [
+        1
+      ]
+    },
+    "optim_step3/params/ve_layer_scales/1": {
+      "dtype": "float32",
+      "file": "optim_step3/params/ve_layer_scales/1.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=ve_layer_scales.1",
+      "sha256_16": "b562e178bfb80eec",
+      "shape": [
+        1
+      ]
+    },
+    "optim_step3/params/ve_shared/embed/weight": {
+      "dtype": "float32",
+      "file": "optim_step3/params/ve_shared/embed/weight.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=ve_shared.embed.weight",
+      "sha256_16": "5b0c9cf0d46100b0",
+      "shape": [
+        1024,
+        24
+      ]
+    },
+    "optim_step3/params/ve_shared/proj/weight": {
+      "dtype": "float32",
+      "file": "optim_step3/params/ve_shared/proj/weight.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=ve_shared.proj.weight",
+      "sha256_16": "dfe16b44b684a669",
+      "shape": [
+        64,
+        24
+      ]
+    },
+    "optim_step3/params/ve_shared/scale": {
+      "dtype": "float32",
+      "file": "optim_step3/params/ve_shared/scale.npy",
+      "group": "optim_step3",
+      "how": "Parameter values after 3 optimizer steps; name=ve_shared.scale",
+      "sha256_16": "105fc183feef5d3c",
+      "shape": []
+    },
+    "weights_init/bigram/embed/weight": {
+      "dtype": "float32",
+      "file": "weights_init/bigram/embed/weight.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=bigram.embed.weight",
+      "sha256_16": "3a3ed164e42500a1",
+      "shape": [
+        512,
+        48
+      ]
+    },
+    "weights_init/bigram/proj/weight": {
+      "dtype": "float32",
+      "file": "weights_init/bigram/proj/weight.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=bigram.proj.weight",
+      "sha256_16": "de676bae28a48001",
+      "shape": [
+        128,
+        48
+      ]
+    },
+    "weights_init/bigram/scale": {
+      "dtype": "float32",
+      "file": "weights_init/bigram/scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=bigram.scale",
+      "sha256_16": "0b9d79ff0fc4d0a7",
+      "shape": []
+    },
+    "weights_init/blocks/0/attn/q_gain": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/0/attn/q_gain.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.0.attn.q_gain",
+      "sha256_16": "2c67da7dc70f5511",
+      "shape": [
+        4
+      ]
+    },
+    "weights_init/blocks/0/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/0/attn/vr_lambda.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.0.attn.vr_lambda",
+      "sha256_16": "b3f689962d5d23d2",
+      "shape": [
+        2
+      ]
+    },
+    "weights_init/blocks/0/attn_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/0/attn_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.0.attn_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/0/mlp_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/0/mlp_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.0.mlp_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/0/resid_mix": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/0/resid_mix.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.0.resid_mix",
+      "sha256_16": "25b46962a925321d",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "weights_init/blocks/1/attn/q_gain": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/1/attn/q_gain.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.1.attn.q_gain",
+      "sha256_16": "2c67da7dc70f5511",
+      "shape": [
+        4
+      ]
+    },
+    "weights_init/blocks/1/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/1/attn/vr_lambda.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.1.attn.vr_lambda",
+      "sha256_16": "b3f689962d5d23d2",
+      "shape": [
+        2
+      ]
+    },
+    "weights_init/blocks/1/attn_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/1/attn_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.1.attn_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/1/mlp_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/1/mlp_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.1.mlp_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/1/resid_mix": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/1/resid_mix.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.1.resid_mix",
+      "sha256_16": "25b46962a925321d",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "weights_init/blocks/2/attn/q_gain": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/2/attn/q_gain.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.2.attn.q_gain",
+      "sha256_16": "2c67da7dc70f5511",
+      "shape": [
+        4
+      ]
+    },
+    "weights_init/blocks/2/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/2/attn/vr_lambda.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.2.attn.vr_lambda",
+      "sha256_16": "b3f689962d5d23d2",
+      "shape": [
+        2
+      ]
+    },
+    "weights_init/blocks/2/attn_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/2/attn_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.2.attn_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/2/mlp_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/2/mlp_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.2.mlp_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/2/resid_mix": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/2/resid_mix.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.2.resid_mix",
+      "sha256_16": "25b46962a925321d",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "weights_init/blocks/3/attn/q_gain": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/3/attn/q_gain.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.3.attn.q_gain",
+      "sha256_16": "2c67da7dc70f5511",
+      "shape": [
+        4
+      ]
+    },
+    "weights_init/blocks/3/attn/vr_lambda": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/3/attn/vr_lambda.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.3.attn.vr_lambda",
+      "sha256_16": "b3f689962d5d23d2",
+      "shape": [
+        2
+      ]
+    },
+    "weights_init/blocks/3/attn_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/3/attn_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.3.attn_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/3/mlp_scale": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/3/mlp_scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.3.mlp_scale",
+      "sha256_16": "02722f124d0f1736",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/blocks/3/resid_mix": {
+      "dtype": "float32",
+      "file": "weights_init/blocks/3/resid_mix.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=blocks.3.resid_mix",
+      "sha256_16": "25b46962a925321d",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "weights_init/kv_bank": {
+      "dtype": "float32",
+      "file": "weights_init/kv_bank.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=kv_bank",
+      "sha256_16": "f9afcfc20140237d",
+      "shape": [
+        8,
+        64,
+        128
+      ]
+    },
+    "weights_init/mlp_down_bank": {
+      "dtype": "float32",
+      "file": "weights_init/mlp_down_bank.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=mlp_down_bank",
+      "sha256_16": "599c1bb5ffd4b872",
+      "shape": [
+        4,
+        128,
+        384
+      ]
+    },
+    "weights_init/mlp_up_bank": {
+      "dtype": "float32",
+      "file": "weights_init/mlp_up_bank.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=mlp_up_bank",
+      "sha256_16": "c72321aaa59f99ee",
+      "shape": [
+        4,
+        384,
+        128
+      ]
+    },
+    "weights_init/qo_bank": {
+      "dtype": "float32",
+      "file": "weights_init/qo_bank.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=qo_bank",
+      "sha256_16": "808cd93a5e5e252c",
+      "shape": [
+        8,
+        128,
+        128
+      ]
+    },
+    "weights_init/skip_weights": {
+      "dtype": "float32",
+      "file": "weights_init/skip_weights.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=skip_weights",
+      "sha256_16": "893a106828fbdb95",
+      "shape": [
+        2,
+        128
+      ]
+    },
+    "weights_init/smear/gate": {
+      "dtype": "float32",
+      "file": "weights_init/smear/gate.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=smear.gate",
+      "sha256_16": "076a27c79e5ace2a",
+      "shape": [
+        128
+      ]
+    },
+    "weights_init/tok_emb/weight": {
+      "dtype": "float32",
+      "file": "weights_init/tok_emb/weight.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=tok_emb.weight",
+      "sha256_16": "b06cb17b03132c00",
+      "shape": [
+        1024,
+        128
+      ]
+    },
+    "weights_init/ve_layer_scales/0": {
+      "dtype": "float32",
+      "file": "weights_init/ve_layer_scales/0.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=ve_layer_scales.0",
+      "sha256_16": "e00e5eb9444182f3",
+      "shape": [
+        1
+      ]
+    },
+    "weights_init/ve_layer_scales/1": {
+      "dtype": "float32",
+      "file": "weights_init/ve_layer_scales/1.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=ve_layer_scales.1",
+      "sha256_16": "e00e5eb9444182f3",
+      "shape": [
+        1
+      ]
+    },
+    "weights_init/ve_shared/embed/weight": {
+      "dtype": "float32",
+      "file": "weights_init/ve_shared/embed/weight.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=ve_shared.embed.weight",
+      "sha256_16": "537003d74c4cc9b5",
+      "shape": [
+        1024,
+        24
+      ]
+    },
+    "weights_init/ve_shared/proj/weight": {
+      "dtype": "float32",
+      "file": "weights_init/ve_shared/proj/weight.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=ve_shared.proj.weight",
+      "sha256_16": "fd9243e1ba57263e",
+      "shape": [
+        64,
+        24
+      ]
+    },
+    "weights_init/ve_shared/scale": {
+      "dtype": "float32",
+      "file": "weights_init/ve_shared/scale.npy",
+      "group": "weights_init",
+      "how": "Initial parameter after GPT._init_weights; torch layout; name=ve_shared.scale",
+      "sha256_16": "fb360f7241a770dc",
+      "shape": []
+    }
+  },
+  "torch_version": "2.13.0",
+  "weight_layout": {
+    "bank_shapes_burn_equivalent": {
+      "down": [
+        4,
+        384,
+        128
+      ],
+      "kv": [
+        8,
+        128,
+        64
+      ],
+      "qo": [
+        8,
+        128,
+        128
+      ],
+      "up": [
+        4,
+        128,
+        384
+      ]
+    },
+    "bank_shapes_python": {
+      "kv_bank": [
+        8,
+        64,
+        128
+      ],
+      "mlp_down_bank": [
+        4,
+        128,
+        384
+      ],
+      "mlp_up_bank": [
+        4,
+        384,
+        128
+      ],
+      "qo_bank": [
+        8,
+        128,
+        128
+      ]
+    },
+    "burn_metal": "[in, out] \u2014 x.matmul(w). Rust parity harness must transpose 2D slices (swap last two dims of each bank matrix) when loading these goldens.",
+    "muon_scale": "scale = sqrt(max(1, out/in)) = sqrt(max(1, shape[-2]/shape[-1])) on Python layout",
+    "python_torch": "[out, in] \u2014 nn.Linear / F.linear convention; banks shaped (bank, out_features, in_features). qo_bank[i]: Q [C,C]; qo_bank[L+i]: Out [C,C]; kv_bank[i]: K [kv_dim,C]; kv_bank[L+i]: V [kv_dim,C]; mlp_up [mlp,C]; mlp_down [C,mlp]."
+  }
+}

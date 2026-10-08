@@ -1,0 +1,78 @@
+{
+  "artifact": "verify_m_sweep",
+  "encode_once": {
+    "api_gap_summary": "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only; mini+E4B Hot DecodeIcb layer-graph capture→from_commands+skip landed (flags default OFF); 31B session graph not migrated; DecodeIcb default: inheritBuffers+prebuilt arg-tables (setArgumentTable × cmds; last_setAddress=0). Opt-in freeze/range/coarse (v0.5.7–0.5.9) PARKED: setArgTable=0 + execute_icb ranges, but product tok/s loses vs prebuilt — prefer prebuilt; flags default OFF",
+    "api_gaps": [
+      "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only",
+      "mini+E4B Hot DecodeIcb layer-graph capture→from_commands+skip landed (flags default OFF); 31B session graph not migrated",
+      "DecodeIcb default: inheritBuffers+prebuilt arg-tables (setArgumentTable × cmds; last_setAddress=0). Opt-in freeze/range/coarse (v0.5.7–0.5.9) PARKED: setArgTable=0 + execute_icb ranges, but product tok/s loses vs prebuilt — prefer prebuilt; flags default OFF"
+    ],
+    "cb_replay_wired": false,
+    "flag": false,
+    "icb_stub": "icb_stub phase=Idle cmds=64 stable=5/6 alloc_attempts=0 exec_attempts=0 smoke_proven=false decode_mini_wired=false",
+    "live_encodes": 0,
+    "not_wired_hits": 0,
+    "pos_buf": true,
+    "scaffold": "cb_replay active=A A=Idle/0 B=Idle/0 dry_run=false wired=false live_encodes=0 not_wired=0 icb_replays=0 | icb_stub phase=Idle cmds=64 stable=5/6 alloc_attempts=0 exec_attempts=0 smoke_proven=false decode_mini_wired=false",
+    "seed_tok_gpu": true
+  },
+  "iters": 4,
+  "model": "mini_synth",
+  "nax_verify_readiness": {
+    "fp8_e8m0_tensorops_dtype": false,
+    "int4_tensorops_dtype": false,
+    "int8_tensorops_dtype": true,
+    "note": "Int4 unbound in objc2-metal 0.3; verify(M) = hand simdgroup Q4; TensorOps Q4 not shipped",
+    "quant_prefill_gemm_wired": false
+  },
+  "notes": [
+    "Mini graph via GpuDecodeSession::bench_step_verify_ms; does not touch bench.rs Lane A writer.",
+    "E4B: load Hot session then same M=1..8 loop; write model=e4b into this schema.",
+    "TensorOps/NAX Int4 unbound — verify stays on simdgroup Q4; DDTree parked until verify(M) flattens."
+  ],
+  "prefill_tokens": 2,
+  "results": [
+    {
+      "M": 1,
+      "ms_per_iter": 20.50116675,
+      "ratio_vs_m1": 1.0
+    },
+    {
+      "M": 2,
+      "ms_per_iter": 42.71146875,
+      "ratio_vs_m1": 2.0833677063770044
+    },
+    {
+      "M": 3,
+      "ms_per_iter": 63.75749999999999,
+      "ratio_vs_m1": 3.1099449498404765
+    },
+    {
+      "M": 4,
+      "ms_per_iter": 84.77665625,
+      "ratio_vs_m1": 4.135211292303644
+    },
+    {
+      "M": 5,
+      "ms_per_iter": 105.32458325,
+      "ratio_vs_m1": 5.1374921502943245
+    },
+    {
+      "M": 6,
+      "ms_per_iter": 127.64072925,
+      "ratio_vs_m1": 6.226022684782075
+    },
+    {
+      "M": 7,
+      "ms_per_iter": 147.825125,
+      "ratio_vs_m1": 7.210571320288394
+    },
+    {
+      "M": 8,
+      "ms_per_iter": 169.905323,
+      "ratio_vs_m1": 8.287592851270283
+    }
+  ],
+  "unix_ts": 1788136255,
+  "warmup": 1
+}

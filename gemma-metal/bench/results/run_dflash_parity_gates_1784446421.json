@@ -1,0 +1,113 @@
+{
+  "date_utc": "1784446307",
+  "gate_verdict": {
+    "accept_speed": {
+      "mean_accept_at_exact": 2.0,
+      "mini_dflash_ge_greedy": false,
+      "notes": "ge_greedy compares speed-lane DFlash vs hazard greedy (barrier-matched)",
+      "root_cause_remaining": "DFlash still below hazard-matched greedy on speed lane; draft Q4g64 proposals ≠ MLX dense/Q4 stream tokens (native target_next≠531 on short prompt)",
+      "root_causes_fixed": [
+        "Synthetic mini draft mask-echo → steer MASK→anchor + steered short-circuit propose",
+        "Mini exactness always-on; speed lane restores ambient hazard after capture drop",
+        "Dual act-scratch ×VERIFY_MAX_M + gemm_q4_mlx for product cols>256; mini M×GEMV",
+        "31B: always-on-while-capture + Q8 conditioner → mean_accept≈1.3 @ bs=5 (sweep)"
+      ],
+      "task": "dflash-accept-speed",
+      "task_status": "pending"
+    },
+    "dflash_parity_gates": "dual_scratch_steered_mini_speed_hazard",
+    "exactness": {
+      "capture_note": "Capture steps force AO; product outer lane stays hazard. Mid-layer copy can still shift ultra-near ties vs capture-off",
+      "definition": "DFlash stream == capture-on greedy under always-on Dispatch barriers (short mini prompt)",
+      "mini_pass": true,
+      "real_31b_pass": false,
+      "root_cause_remaining": null,
+      "root_causes_fixed": [
+        "Draft/conditioner gemv_bf16_x into plain-Q4 gemv_q4 poisoned shared GPU",
+        "Device-side capture (copy_f32) + deferred host assemble after argmax readback",
+        "Missing lm_head→softcap RAW barrier under hazard skip-auto (GPU argmax 0 vs host winner)",
+        "Exactness lane forces always-on Dispatch barriers so mini near-ties are bit-stable",
+        "Capture-on steps force always-on Dispatch barriers (hazard skip-auto collapsed L46/57 absmean→0)",
+        "Conditioner fc plain Q8 g64 (was Q4; h_ctx absmean now ≈ MLX 0.0699)"
+      ],
+      "status": "PASS",
+      "task": "dflash-exact-parity",
+      "task_status": "completed"
+    },
+    "gemma_metal_exact_vs_greedy": true,
+    "mlx_exact_verify": true,
+    "product_31b_decode_ge_15": false,
+    "product_31b_mtp_ge_25": false,
+    "tok_s": {
+      "gemma_metal_mini_dflash_best": 727.2575540355772,
+      "gemma_metal_mini_greedy_always_on": 700.8847048602981,
+      "gemma_metal_mini_greedy_hazard": 742.5297561838574,
+      "mini_dflash_ge_greedy": false,
+      "mini_dflash_ge_greedy_always_on": true,
+      "mini_dflash_ge_greedy_hazard": false
+    },
+    "verify_path": "Q4 GEMM + FA(Tq=M) when M>1 && cols>256; else M×GEMV (act scratch ×VERIFY_MAX_M)"
+  },
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": {
+    "error": "31B greedy collapsed (unique=1) — refuse D-Flash measure on unhealthy target"
+  },
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 3,
+    "best_dflash_tok_s": 727.2575540355772,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 1.0,
+        "n_new": 16,
+        "tok_s": 720.0625446326268
+      },
+      {
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 16,
+        "tok_s": 727.2575540355772
+      },
+      {
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 16,
+        "tok_s": 677.1937564767234
+      },
+      {
+        "block": 5,
+        "mean_accept": 4.0,
+        "n_new": 16,
+        "tok_s": 712.0196164964443
+      },
+      {
+        "block": 6,
+        "mean_accept": 4.333333333333333,
+        "n_new": 16,
+        "tok_s": 672.339531463389
+      },
+      {
+        "block": 8,
+        "mean_accept": 7.0,
+        "n_new": 16,
+        "tok_s": 680.5240647770441
+      }
+    ],
+    "exact_block": 3,
+    "exact_max_new": 6,
+    "exact_prompt": [
+      3,
+      4,
+      5
+    ],
+    "exact_vs_greedy": true,
+    "exactness_lane": "always_on_dispatch_barriers",
+    "greedy_tok_s": 742.5297561838574,
+    "greedy_tok_s_always_on": 700.8847048602981,
+    "greedy_tok_s_hazard": 742.5297561838574,
+    "mean_accept_at_exact": 2.0,
+    "notes": "Q4Mlx mini + dual act scratch; M×GEMV verify (H=256); steered short-circuit; speed lane=hazard; exactness=always-on"
+  }
+}

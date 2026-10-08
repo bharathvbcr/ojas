@@ -1,0 +1,60 @@
+{
+  "host": "M5 Pro",
+  "target": "mlx-community/gemma-4-31b-it-4bit",
+  "draft": "z-lab/gemma-4-31B-it-DFlash",
+  "pins": {
+    "max_tokens": 128,
+    "block_size": 16,
+    "temp": 0,
+    "batch": 1
+  },
+  "mx_version": "0.31.2",
+  "plain": [
+    {
+      "prompt": "math",
+      "decode_tok_s": 13.22,
+      "prefill_tok_s": 15.2,
+      "tokens": 128
+    },
+    {
+      "prompt": "code",
+      "decode_tok_s": 11.16,
+      "prefill_tok_s": 95.5,
+      "tokens": 128
+    },
+    {
+      "prompt": "general",
+      "decode_tok_s": 13.67,
+      "prefill_tok_s": 72.8,
+      "tokens": 128
+    }
+  ],
+  "dflash": [
+    {
+      "prompt": "math",
+      "decode_tok_s": 15.66,
+      "prefill_tok_s": 191.3,
+      "gen_tokens": 128,
+      "yields": 23
+    },
+    {
+      "prompt": "code",
+      "decode_tok_s": 32.13,
+      "prefill_tok_s": 150.0,
+      "gen_tokens": 128,
+      "yields": 15
+    },
+    {
+      "prompt": "general",
+      "decode_tok_s": 13.65,
+      "prefill_tok_s": 110.0,
+      "gen_tokens": 128,
+      "yields": 34
+    }
+  ],
+  "summary": {
+    "plain_mean_tok_s": 12.68,
+    "dflash_mean_tok_s": 20.48,
+    "speedup": 1.61
+  }
+}

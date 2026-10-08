@@ -1,0 +1,107 @@
+{
+  "date_utc": "1784001531",
+  "gate_verdict": {
+    "accept_speed": {
+      "mean_accept_at_exact": 2.0,
+      "mini_dflash_ge_greedy": true,
+      "notes": "ge_greedy compares DFlash vs always-on greedy (same RAW barrier mode as mini DFlash)",
+      "root_cause_remaining": null,
+      "root_causes_fixed": [
+        "Synthetic mini draft mask-echo → steer MASK→anchor + steered short-circuit propose",
+        "Mini DFlash always-on barriers; drop capture after first anchor (steered draft ignores h_ctx)",
+        "Dual act-scratch ×VERIFY_MAX_M + unquarantined gemm_q4_mlx + Q4Mlx synthetic quant"
+      ],
+      "task": "dflash-accept-speed",
+      "task_status": "completed"
+    },
+    "dflash_parity_gates": "gemm_dual_scratch_steered_mini",
+    "exactness": {
+      "capture_note": "Mid-layer copy_f32 can still shift ultra-near ties vs capture-off; baseline is capture-on",
+      "definition": "DFlash stream == capture-on greedy under always-on Dispatch barriers (short mini prompt)",
+      "mini_pass": true,
+      "real_31b_pass": false,
+      "root_cause_remaining": null,
+      "root_causes_fixed": [
+        "Draft/conditioner gemv_bf16_x into plain-Q4 gemv_q4 poisoned shared GPU",
+        "Device-side capture (copy_f32) + deferred host assemble after argmax readback",
+        "Missing lm_head→softcap RAW barrier under hazard skip-auto (GPU argmax 0 vs host winner)",
+        "Exactness lane forces always-on Dispatch barriers so mini near-ties are bit-stable"
+      ],
+      "status": "PASS",
+      "task": "dflash-exact-parity",
+      "task_status": "completed"
+    },
+    "gemma_metal_exact_vs_greedy": true,
+    "mlx_exact_verify": true,
+    "product_31b_decode_ge_15": false,
+    "product_31b_mtp_ge_25": false,
+    "tok_s": {
+      "gemma_metal_mini_dflash_best": 1465.8110117036763,
+      "gemma_metal_mini_greedy_always_on": 722.3381073260796,
+      "gemma_metal_mini_greedy_hazard": 713.442991602018,
+      "mini_dflash_ge_greedy": true,
+      "mini_dflash_ge_greedy_hazard": true
+    },
+    "verify_path": "Q4 GEMM + FA(Tq=M) when M>1 (act scratch ×VERIFY_MAX_M); M×GEMV fallback"
+  },
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": null,
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 4,
+    "best_dflash_tok_s": 1465.8110117036763,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 1.0,
+        "n_new": 16,
+        "tok_s": 1028.9637209900561
+      },
+      {
+        "block": 3,
+        "mean_accept": 1.6666666666666667,
+        "n_new": 16,
+        "tok_s": 1192.6465587450734
+      },
+      {
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 16,
+        "tok_s": 1465.8110117036763
+      },
+      {
+        "block": 5,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 547.6638712989902
+      },
+      {
+        "block": 6,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 555.0721224289276
+      },
+      {
+        "block": 8,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 543.1000831622002
+      }
+    ],
+    "exact_block": 3,
+    "exact_max_new": 6,
+    "exact_prompt": [
+      3,
+      4,
+      5
+    ],
+    "exact_vs_greedy": true,
+    "exactness_lane": "always_on_dispatch_barriers",
+    "greedy_tok_s": 722.3381073260796,
+    "greedy_tok_s_always_on": 722.3381073260796,
+    "greedy_tok_s_hazard": 713.442991602018,
+    "mean_accept_at_exact": 2.0,
+    "notes": "Q4Mlx mini + dual act scratch + GEMM verify; steered mini short-circuit draft; capture dropped after first anchor"
+  }
+}

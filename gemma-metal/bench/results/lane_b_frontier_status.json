@@ -1,0 +1,131 @@
+{
+  "lane": "B-e4b-dispatch",
+  "date_utc": "2026-07-19T23:12:32Z",
+  "todos": {
+    "hazard-ab": {
+      "status": "done",
+      "artifact": "bench/results/hazard_ab_e4b_20260719T065759Z.json",
+      "e4b_tok_s": {
+        "hazard0": 17.72,
+        "hazard1": 22.54,
+        "default": 23.24
+      },
+      "shipping_default": "GemmaGpu::new_inference sets skip_auto=true",
+      "docs_aligned": true
+    },
+    "e4b-fusion-lane": {
+      "status": "done_with_limits",
+      "host_tax_f4": "lazy trace_op + OnceLock env flags",
+      "artifact": "bench/results/fusion_ab_e4b_20260719T071735Z.json",
+      "exactness": "PASS all arms @ HAZARD=0",
+      "dispatches": {
+        "baseline": 559.9,
+        "qkv": 535.9,
+        "ple": 517.9,
+        "rope": 535.9,
+        "both": 469.9
+      },
+      "tok_s_shipping": {
+        "baseline": 22.33,
+        "both": 23.25,
+        "speedup": 1.041
+      },
+      "rope_kv_store": "landed (rms_qkv_rope_kv_store)",
+      "block_kernels_4_5_disp": "NOT shipped — deferred (grid-sync / persistent interpreter); documented in D15"
+    },
+    "encode-once": {
+      "status": "v0_5_4_prebuilt_e4b_recheck",
+      "flag": "GEMMA_METAL_ENCODE_ONCE=1 (default OFF); GEMMA_METAL_DECODE_ICB=1 (default OFF); GEMMA_METAL_ICB_SMOKE=1 (default OFF); GEMMA_METAL_ICB_PREBUILT_TABLES=0 opts out",
+      "mechanism": "compute ICB / tape_execute + per-cmd prebuilt MTL4ArgumentTable; MTL4 CB object reuse impossible",
+      "artifact": "bench/results/encode_once_e4b_hot_ab_latest.json",
+      "measured": {
+        "mini": {
+          "icb_command_count": 71,
+          "encode_us_ratio_on_over_off": 0.44,
+          "last_set_address": "0/427",
+          "prebuilt_tables": 71,
+          "set_argument_table_calls": 71,
+          "prebuilt_elided": 427
+        },
+        "e4b_hot": {
+          "icb_command_count": 594,
+          "live_encodes_on": 1,
+          "icb_replays": 4,
+          "encode_us_off": 75439,
+          "encode_us_on": 60494,
+          "encode_us_ratio_on_over_off": 0.80,
+          "tok_s_off": 13.26,
+          "tok_s_on": 16.53,
+          "last_set_address": "42/5003",
+          "prebuilt_tables": 594,
+          "set_argument_table_calls": 594,
+          "prebuilt_elided": 4961,
+          "sticky_buf": "106/4961",
+          "note": "v0.5.4 prebuilt recheck PASS; setAddress 4897→42; ratio 0.90→0.80; residual Immediate"
+        },
+        "e4b_product_tok_s": {
+          "artifact": "bench/results/encode_once_e4b_toks_latest.json",
+          "shipping_tok_s": 20.69,
+          "encode_once_tok_s": 16.11,
+          "note": "product decode REGRESSES under shipping hazard; keep flags default OFF"
+        },
+        "a2": "prebuilt arg-tables: mini setAddress 0/427; E4B setAddress 42/5003 (elided 4961)"
+      },
+      "works": [
+        "pos_buf once/step",
+        "mini layer-graph DecodeIcb (cmds≈71; ratio~0.44; setAddress 0/427; parity PASS)",
+        "E4B Hot DecodeIcb eligible + smoke PASS (cmds=594)",
+        "light E4B encode A/B PASS with prebuilt (ratio~0.80; setAddress 42/5003; was ~0.90 / 4897)",
+        "quiet E4B product tok/s A/B measured (shipping 20.69 vs encode-once 16.11 — regress)",
+        "A2 sticky + scalar-write skip-nop + prebuilt per-cmd arg-tables",
+        "D16 doctrine (mechanism=ICB/tape)"
+      ],
+      "blockers": [
+        "IcbDecodeGraphNotMigrated (31B only; mini+E4B Hot landed opt-in)",
+        "E4B residual Immediate setAddress 42/5003 (Buf elided via prebuilt)",
+        "encode-once product tok/s regresses vs shipping (20.69→16.11) — flags stay OFF",
+        "true execute_icb inherit still residual no-op"
+      ]
+    },
+    "gate-down-fuse": {
+      "status": "hard_blocked_visibility_do_not_ship",
+      "flag": "GEMMA_METAL_FUSE_GATE_DOWN=1 (default OFF; separate from PERSISTENT_INTERP)",
+      "decision": "D18",
+      "artifact": "bench/results/fusion_ab_e4b_gate_down_latest.json",
+      "measured": {
+        "baseline_disp": 599.9,
+        "gate_down_disp": 557.9,
+        "dispatch_delta": -42.0,
+        "exactness_hazard0": "FAIL",
+        "tok_s_baseline": 20.87,
+        "tok_s_gate_down": 6.37,
+        "tok_s_speedup": 0.305
+      },
+      "works": [
+        "persistent_interp_gate_down_q4 + Hot step_inner replace (n_tg≤8)",
+        "persistent_interp_gate_down_e4b_dims_stress PASS",
+        "persistent_interp_gate_down_q4_matches_mlp_fuse PASS (small Q4)",
+        "E4B two-dispatch PRODUCE|sync|DOWN peel exact (split_err=0)",
+        "light fusion_ab dispatch engagement PASS (Δ=−42.0 exact)"
+      ],
+      "blockers": [
+        "ROOT CAUSE: single-dispatch relaxed grid barrier does not publish mid to DOWN at E4B Q4 (host mid_err=0, resid~1e9)",
+        "two-dispatch split has no dispatch win vs shipping gate_up+down",
+        "tok/s regresses 20.87→6.37 (sync-per-layer + wrong mid path) — keep default OFF",
+        "test lock: persistent_interp_gate_down_q4_e4b_dims_visibility_blocker"
+      ]
+    },
+    "nax-verify": {
+      "status": "done",
+      "artifact": "bench/results/verify_m_sweep_latest.json",
+      "mini_ms": {
+        "1": 3.3,
+        "8": 24.86,
+        "m8_vs_m1": 7.54
+      },
+      "flattens": false,
+      "tensorops_q4": "NOT shipped — raw-address shader-side sub-byte tensor construction and host dispatch are missing; the Int4 host descriptor binding is separate",
+      "ddtree": "not revisited (verify(M) does not flatten)"
+    }
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "created_at": "2026-07-13T17:07:39.801300+00:00",
+  "host": {
+    "platform": "darwin",
+    "cpu": "Apple M5 Pro",
+    "mem_gb": 64.0
+  },
+  "pins": {
+    "num_ctx": 4096,
+    "max_tokens": 128,
+    "temperature": 0.0,
+    "think": false,
+    "lane": "honest"
+  },
+  "availability": {
+    "ollama": {
+      "installed": true,
+      "models": [
+        "gemma4:e4b-it-q4_K_M",
+        "hf.co/deepreinforce-ai/Ornith-1.0-35B-GGUF:Q8_0",
+        "ornith-cc:latest",
+        "all-minilm:latest",
+        "gemma4:31b-mlx"
+      ],
+      "mtp": "not exposed via API for gemma4:31b-mlx (no draft/speculative options)",
+      "path": "/opt/homebrew/bin/ollama",
+      "reachable": true
+    },
+    "mlx_lm": {
+      "installed": true,
+      "cli": "/opt/homebrew/bin/mlx_lm",
+      "mtp": "mlx_lm.generate --draft-model / --num-draft-tokens (stock mlx-lm; Gemma4 MTP stronger in mlx-vlm/Ollama when available)",
+      "benchmark": "/opt/homebrew/bin/mlx_lm.benchmark"
+    },
+    "litert_lm": {
+      "installed": false,
+      "notes": "not found on PATH"
+    },
+    "basert": {
+      "installed": false,
+      "notes": "not found on PATH / no libbaseRT"
+    }
+  },
+  "runs": [
+    {
+      "backend": "ollama",
+      "model": "gemma4:e4b-it-q4_K_M",
+      "prompt_id": "math_easy",
+      "prompt": "What is 17 \u00d7 23? Respond with only the integer, no explanation.",
+      "lane": "honest",
+      "content": "391",
+      "ttft_ms": 340.93450001091696,
+      "total_ms": 396.143125,
+      "load_ms": 204.608708,
+      "prompt_tokens": 28,
+      "output_tokens": 4,
+      "decode_tok_s": 71.06310403638432,
+      "prefill_tok_s": 209.06599765547418,
+      "rss_mb": 10179.8,
+      "num_ctx": 4096,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "mtp": false,
+      "notes": "think=false; pinned num_ctx",
+      "error": null,
+      "raw": {
+        "total_duration": 396143125,
+        "load_duration": 204608708,
+        "prompt_eval_count": 28,
+        "prompt_eval_duration": 133929000,
+        "eval_count": 4,
+        "eval_duration": 56288000,
+        "done_reason": "stop"
+      }
+    },
+    {
+      "backend": "ollama",
+      "model": "gemma4:e4b-it-q4_K_M",
+      "prompt_id": "decode_pad",
+      "prompt": "Write a detailed step-by-step explanation of how a sliding-window attention KV cache works in transformers, including ring-buffer indexing, for exactly 200 words. Do not stop early.",
+      "lane": "honest",
+      "content": "The sliding-window attention KV cache optimizes memory usage by only storing key ($\\text{K}$) and value ($\\text{V}$) vectors from the most recent $W$ tokens, rather than all preceding ones. This is crucial for long sequence generation.\n\nStep 1: **Initialization:** A fixed-size buffer, often implemented as a ring buffer, of capacity $W$ is allocated to store $\\text{K}$ and $\\text{V}$. Pointers (read/write indices) track the current write position ($\\text{head}$) and the oldest valid data.\n\nStep 2: **Token Processing:** When processing token $",
+      "ttft_ms": 330.90470799652394,
+      "total_ms": 2624.11175,
+      "load_ms": 195.360583,
+      "prompt_tokens": 50,
+      "output_tokens": 128,
+      "decode_tok_s": 55.78798126395517,
+      "prefill_tok_s": 377.03125589111335,
+      "rss_mb": 10182.6,
+      "num_ctx": 4096,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "mtp": false,
+      "notes": "think=false; pinned num_ctx",
+      "error": null,
+      "raw": {
+        "total_duration": 2624111750,
+        "load_duration": 195360583,
+        "prompt_eval_count": 50,
+        "prompt_eval_duration": 132615000,
+        "eval_count": 128,
+        "eval_duration": 2294401000,
+        "done_reason": "length"
+      }
+    }
+  ]
+}

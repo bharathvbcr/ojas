@@ -1,0 +1,102 @@
+{
+  "date_utc": "1784001085",
+  "gate_verdict": {
+    "accept_speed": {
+      "mean_accept_at_exact": 2.0,
+      "mini_dflash_ge_greedy": false,
+      "notes": "mean_accept full (bs-1) on mini after steer; product HF drafts must not use mask-steer",
+      "root_cause_remaining": "M×GEMV verify costs ≈M decode steps even at full accept; true M>1 Q4 GEMM (dual act-scratch tiers) required to beat greedy",
+      "root_causes_fixed": [
+        "Synthetic mini draft mask-echo (tied lm_head + tiny weights → always propose mask_token_id=4); steer MASK embed→anchor + host f32 lm_head for mini only",
+        "generate_with_dflash forces always-on Dispatch barriers (hazard skip-auto corrupted target under capture+draft+verify)"
+      ],
+      "task": "dflash-accept-speed",
+      "task_status": "completed"
+    },
+    "dflash_parity_gates": "accept_speed_mask_steer_always_on_dflash",
+    "exactness": {
+      "capture_note": "Mid-layer copy_f32 can still shift ultra-near ties vs capture-off; baseline is capture-on",
+      "definition": "DFlash stream == capture-on greedy under always-on Dispatch barriers (short mini prompt)",
+      "mini_pass": true,
+      "real_31b_pass": false,
+      "root_cause_remaining": null,
+      "root_causes_fixed": [
+        "Draft/conditioner gemv_bf16_x into plain-Q4 gemv_q4 poisoned shared GPU",
+        "Device-side capture (copy_f32) + deferred host assemble after argmax readback",
+        "Missing lm_head→softcap RAW barrier under hazard skip-auto (GPU argmax 0 vs host winner)",
+        "Exactness lane forces always-on Dispatch barriers so mini near-ties are bit-stable"
+      ],
+      "status": "PASS",
+      "task": "dflash-exact-parity",
+      "task_status": "completed"
+    },
+    "gemma_metal_exact_vs_greedy": true,
+    "mlx_exact_verify": true,
+    "product_31b_decode_ge_15": false,
+    "product_31b_mtp_ge_25": false,
+    "tok_s": {
+      "gemma_metal_mini_dflash_best": 661.1012409614032,
+      "gemma_metal_mini_greedy": 699.1326385702738,
+      "mini_dflash_ge_greedy": false
+    },
+    "verify_path": "M×GEMV while act_scratch=M=1; Q4 GEMM in metallib gated until dual scratch"
+  },
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": null,
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 3,
+    "best_dflash_tok_s": 661.1012409614032,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 1.0,
+        "n_new": 16,
+        "tok_s": 628.5674147195089
+      },
+      {
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 16,
+        "tok_s": 661.1012409614032
+      },
+      {
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 16,
+        "tok_s": 606.8613412105958
+      },
+      {
+        "block": 5,
+        "mean_accept": 4.0,
+        "n_new": 16,
+        "tok_s": 653.2523207911474
+      },
+      {
+        "block": 6,
+        "mean_accept": 4.333333333333333,
+        "n_new": 16,
+        "tok_s": 623.0296929331962
+      },
+      {
+        "block": 8,
+        "mean_accept": 7.0,
+        "n_new": 16,
+        "tok_s": 590.3387230766801
+      }
+    ],
+    "exact_block": 3,
+    "exact_max_new": 6,
+    "exact_prompt": [
+      3,
+      4,
+      5
+    ],
+    "exact_vs_greedy": true,
+    "exactness_lane": "always_on_dispatch_barriers",
+    "greedy_tok_s": 699.1326385702738,
+    "mean_accept_at_exact": 2.0,
+    "notes": "GPU D=128 draft + Q4 GEMM/FA(Tq=M) verify; not product E4B (no DFlash draft for E4B)"
+  }
+}

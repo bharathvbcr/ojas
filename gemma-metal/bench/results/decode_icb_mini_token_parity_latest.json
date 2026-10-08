@@ -1,0 +1,62 @@
+{
+  "artifact": "decode_icb_mini_token_parity",
+  "evidence_status": "historical_unverified",
+  "icb_command_count": 71,
+  "icb_replays": 8,
+  "icb_tokens": [
+    155,
+    155,
+    155,
+    155,
+    155,
+    155,
+    155,
+    155,
+    155
+  ],
+  "icb_x_step0": {
+    "max": -1535.067138671875,
+    "min": -1659.57568359375
+  },
+  "icb_x_step1": {
+    "max": -1534.54443359375,
+    "min": -1659.445068359375
+  },
+  "layer_graph": true,
+  "live_encodes": 1,
+  "live_tokens": [
+    155,
+    155,
+    155,
+    155,
+    155,
+    155,
+    155,
+    155,
+    155
+  ],
+  "live_x_step0": {
+    "max": -1535.067138671875,
+    "min": -1659.57568359375
+  },
+  "live_x_step1": {
+    "max": -1534.54443359375,
+    "min": -1659.445068359375
+  },
+  "model": "mini_synth",
+  "replay_mode": "tape_execute",
+  "seeds": [
+    3,
+    4,
+    5,
+    7,
+    11,
+    13,
+    17,
+    19,
+    23
+  ],
+  "tokens_match": true,
+  "unix_ts": 1788277416,
+  "verdict": "PASS: tape_execute tokens ≡ live (Q4 bf16→f32 cast; densify stable)"
+}

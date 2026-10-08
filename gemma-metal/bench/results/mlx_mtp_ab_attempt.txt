@@ -1,0 +1,21 @@
+loading target…
+target 2.2s
+draft 1.4s type=Model
+running MTP draft_model generate…
+Traceback (most recent call last):
+  File "<stdin>", line 22, in <module>
+  File "/Users/bharath/.venvs/dflash32/lib/python3.14/site-packages/mlx_lm/generate.py", line 716, in stream_generate
+    for n, (token, logprobs, from_draft) in enumerate(token_generator):
+                                            ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/bharath/.venvs/dflash32/lib/python3.14/site-packages/mlx_lm/generate.py", line 524, in speculative_generate_step
+    draft_cache = cache.make_prompt_cache(draft_model)
+  File "/Users/bharath/.venvs/dflash32/lib/python3.14/site-packages/mlx_lm/models/cache.py", line 32, in make_prompt_cache
+    return model.make_cache()
+           ~~~~~~~~~~~~~~~~^^
+  File "/Users/bharath/.venvs/dflash32/lib/python3.14/site-packages/mlx_lm/models/gemma4_assistant.py", line 403, in make_cache
+    raise NotImplementedError(
+    ...<2 lines>...
+    )
+NotImplementedError: Gemma 4 assistant has no KV cache of its own; pass the target's per-layer-type (K, V) tensors in `shared_kv_states` to `__call__`.
+
+MTP_FAIL NotImplementedError: Gemma 4 assistant has no KV cache of its own; pass the target's per-layer-type (K, V) tensors in `shared_kv_states` to `__call__`.

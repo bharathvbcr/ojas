@@ -1,0 +1,55 @@
+{
+  "date_utc": "1783994382",
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": {
+    "error": "warmup: metal: kernel 'gemv_q4_mlx_simd_kv' not found in metallib"
+  },
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 2,
+    "best_dflash_tok_s": 299.24954013294496,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 0.23076923076923078,
+        "n_new": 16,
+        "tok_s": 299.24954013294496
+      },
+      {
+        "block": 3,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 185.13420685283293
+      },
+      {
+        "block": 4,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 146.58978337923807
+      },
+      {
+        "block": 5,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 119.81054926944132
+      },
+      {
+        "block": 6,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 104.78501902728945
+      },
+      {
+        "block": 8,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 85.76476808198974
+      }
+    ],
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 713.3184353805945,
+    "mean_accept_at_best": 0.15384615384615385,
+    "notes": "GPU D=128 draft + Q4 GEMM/FA(Tq=M) verify; not product E4B (no DFlash draft for E4B)"
+  }
+}

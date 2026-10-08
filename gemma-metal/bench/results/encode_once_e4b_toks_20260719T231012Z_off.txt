@@ -1,0 +1,34 @@
+gemma-metal Phase 4 speed harness (gemma-metal-0.1.0-phase6)
+gates.md Phase-0 reference (this host):
+  E4B Q4 mlx-lm best decode ≈ 75.7 tok/s  (honest lane gate ≥48–60)
+  Ollama E4B Q4_K_M ≈ 55.8 tok/s
+  31B Ollama decode ≈ 12.3 tok/s          (product gate ≥15)
+  31B MLX+DFlash ≈ 37.2 tok/s             (MTP product gate ≥25)
+
+host synthetic prefill (T=8, 3 layers): 5.81 ms/iter
+
+=== GPU Hot-bank synthetic decode (honest, mini graph) ===
+  graph: vocab=512 hidden=256 layers=3 (SWA+global+consumer)
+  decode: 637.3 tok/s  (32 steps after prefill)
+  TTFT proxy (prefill T=8): 7.95 ms
+
+=== Real model Q4 (MLX affine) ===
+  weights: /Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2
+  loaded 579 matrices in 1.7s; hot≈4.31 GiB; layers=42 vocab=262144 hidden=2560
+  gaps: PLE Q4 Hot residual on; gate/proj still skipped; mid-commit off by default
+  Hot upload + session prep: 0.6s
+  warmup generate…
+  warmup ok, seq_len=5
+  TTFT (prefill T=4): 156.8 ms
+  decode: 20.69 tok/s  (16 steps after prefill)
+  vs Phase-0: mlx-lm ≈75.7 | Ollama ≈55.8 | gate ≥48–60
+  verdict: BELOW honest-lane gate (expected for partial/slow v1)
+  wrote /Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal/bench/results/run_e4b_gemma_metal_1784502616.json
+  wrote /Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal/bench/results/latest_e4b_gemma_metal.json
+
+=== Kernel microbenches ===
+GPU FA SWA h128 (DFlash draft stub): pipeline OK
+GPU gemv_q4 [2560x2560] @ M=1: 395.6 µs/call
+GPU softcap_argmax vocab=262144: 302.4 µs/call
+GPU FA SWA h128 stub prefill B=1 T=8 H=4: 6.2 µs/call
+GPU FA SWA h256 prefill B=1 T=16 H=8: 22.3 µs/call

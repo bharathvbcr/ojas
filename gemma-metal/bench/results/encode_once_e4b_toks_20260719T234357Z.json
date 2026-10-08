@@ -1,0 +1,31 @@
+{
+  "artifact": "encode_once_e4b_toks",
+  "unix_ts": "20260719T234357Z",
+  "slice": "D16 v0.5.8 range-batch",
+  "fix": "GEMMA_METAL_ICB_FREEZE_BINDS=1 + GEMMA_METAL_ICB_RANGE_BATCH=1: safe executeCommandsInBuffer ranges between barrier_after; setArgumentTable=0",
+  "flags_default": "OFF",
+  "no_31b": true,
+  "no_fuse_gate_down": true,
+  "arms": {
+    "shipping": {
+      "tok_s": 19.56
+    },
+    "on": {
+      "tok_s": 18.61,
+      "encode_once": true,
+      "decode_icb": true,
+      "freeze_binds": true,
+      "range_batch": true,
+      "icb_command_count": 594,
+      "barrier_after_count": 360,
+      "last_execute_icb_calls": 361,
+      "last_execute_icb_cmds": 594,
+      "last_set_argument_table_calls": 0
+    }
+  },
+  "mini_token_parity": "PASS under FREEZE_BINDS+RANGE_BATCH",
+  "unit": "decode_icb_range_batch_merges_safe_spans PASS (3\u21921)",
+  "light_e4b_ab": "always-on test capture marks barrier_after\u2248cmds so range-batch no-op there; product skip-auto is honest (361/594)",
+  "verdict": "SHIPPED range-batch: E4B execute_icb 594\u2192361 (barriers=360); mini parity PASS. Quiet E4B shipping 19.56 vs freeze+range 18.61 tok/s (still not a win). Flags stay default OFF.",
+  "note": "Product skip-auto capture yields ~360 barrier markers; coalescing safe spans cuts execute_icb\u00d7N but 361 ranges still lose wall clock vs dispatch+prebuilt. Next: coarser capture barriers / GPU dispatch count / park true-ICB."
+}

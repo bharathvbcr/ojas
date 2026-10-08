@@ -1,0 +1,13 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2",
+  "lane": "honest-partial",
+  "layers": 42,
+  "hidden": 2560,
+  "vocab": 262144,
+  "decode_tok_s": 15.9071,
+  "ttft_ms": 230.08,
+  "decode_steps": 16,
+  "notes": "GPU KV + packed async encode + tiled Q4 GEMV; PLE Hot skipped on MLX package; not parity-green; compare to mlx~75.7 / Ollama~55.8 / gate 48-60"
+}

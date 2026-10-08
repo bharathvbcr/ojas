@@ -1,0 +1,11 @@
+# One Metal job at a time — applies to tests too.
+#
+# The suite shares a single GPU and mutates process-global state
+# (set_hazard_barriers, set_persistent_interp, set_encode_once, set_fuse_*).
+# Parallel test threads race those globals: 2026-07-19 failures
+# (persistent_interp_flag_default_off raced set_persistent_interp(true);
+# encode_once_mini_parity flipped a mini near-tie when a concurrent dflash
+# test toggled the hazard lane). Serial execution is also this repo's stated
+# doctrine for anything that touches Metal.
+[env]
+RUST_TEST_THREADS = "1"

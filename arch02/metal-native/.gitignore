@@ -1,0 +1,5 @@
+/target/
+/default.metallib
+.venv/
+out/coreml_export/.ct_cache/
+out/_ct_smoke.mlpackage/

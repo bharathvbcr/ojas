@@ -1,0 +1,48 @@
+{
+  "lane": "A",
+  "updated": "2026-07-19T16:49:23Z",
+  "todos": {
+    "evidence-hygiene": {
+      "status": "DONE",
+      "artifacts": [
+        "bench/results/latest_e4b_gemma_metal.json",
+        "bench/results/latest_31b_gemma_metal.json"
+      ],
+      "key": "F1 live dims/labels; R8 snap 696d436c\u2026; E4B 23.9 tok/s; 31B 5.7 tok/s"
+    },
+    "mlx-mtp-ab": {
+      "status": "DONE",
+      "artifacts": [
+        "bench/results/mlx_mtp_vs_dflash_ab_2026-07-19.md"
+      ],
+      "key": "MTP blocked; DFlash 23.59 > greedy 13.26; D14 not overturned"
+    },
+    "target-mlx-parity": {
+      "status": "DONE",
+      "artifacts": [
+        "bench/results/short_dump_final.txt",
+        "bench/results/greet16_final.txt"
+      ],
+      "key": "target_next=531; greet16 16/16 (capture-on + NeoX ProportionalRoPE)"
+    },
+    "draft-accept-parity": {
+      "status": "DONE",
+      "artifacts": [
+        "bench/results/latest_dflash_parity_gates.json",
+        "bench/results/latest_dflash_host_dense_ceiling.json",
+        "bench/results/native_intermediates_31b.json",
+        "bench/results/rebench_dflash_31b_product_final.log"
+      ],
+      "mean_accept_bs5_host_dense": 3.0,
+      "mean_accept_bs5_gpu_q4mlx": 2.43,
+      "exact_pass": true,
+      "key": "host-dense @ bs=5 mean_accept=3.0 exact PASS; product GPU Q4Mlx @ bs=5 = 2.43 exact PASS",
+      "follow_on": "GPU draft proposals still \u2260 host-dense/MLX q4 stream; closing that gap recovers product tok/s under AO+capture"
+    }
+  },
+  "blockers_remaining": [
+    "31B free-decode requires hidden capture (capture-off collapses even under always-on)",
+    "Product hazard skip-auto still unsafe for 31B (use GEMMA_METAL_31B_HAZARD=1 only after Lane B RAW fix)",
+    "GPU Q4Mlx draft mean_accept 2.43 < host-dense 3.0 on greet @ bs=5"
+  ]
+}

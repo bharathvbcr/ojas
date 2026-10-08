@@ -1,0 +1,12 @@
+   Compiling gemma-metal v0.1.0 (/Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal)
+    Finished `release` profile [optimized] target(s) in 5.70s
+     Running unittests src/lib.rs (target/release/deps/gemma_metal-a52537e4554409ac)
+
+running 1 test
+gemma-metal: uploaded E4B Hot banks — 42 layers, vocab=262144, hidden=2560, scheme=Q4Mlx { group_size: 64 }, hot≈2.67 GiB
+gemma-metal: loaded E4B assistant from /Users/bharath/.cache/huggingface/hub/models--google--gemma-4-E4B-it-assistant/snapshots/a9570954c167c2b4e8f9c155ef2ab068cd9d1e26 — centroids=2048 asst_h=256 vocab=262144 layers=4 pre=1310720 post=655360
+MTP_E2E real_asst: out_new=8 tok_s=10.01 accept=6/8 (75.0%) wall_ms=799 rounds=2 shared_kv=sliding:9 global:9 layers=4
+test gpu_model::tests::gpu_mtp_real_assistant_accept ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 2.34s
+

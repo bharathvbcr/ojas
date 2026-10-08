@@ -1,0 +1,82 @@
+{
+  "date_utc": "1783995082",
+  "gate_verdict": {
+    "dflash_parity_gates": "exactness_sprint_lm_head_softcap_barrier",
+    "exactness": {
+      "capture_note": "Mid-layer copy_f32 can still shift ultra-near ties vs capture-off; baseline is capture-on",
+      "definition": "DFlash stream == capture-on greedy under always-on Dispatch barriers",
+      "mini_pass": false,
+      "real_31b_pass": false,
+      "root_cause_remaining": "exactness still FAIL under always-on barriers",
+      "root_causes_fixed": [
+        "Draft/conditioner gemv_bf16_x into plain-Q4 gemv_q4 poisoned shared GPU",
+        "Device-side capture (copy_f32) + deferred host assemble after argmax readback",
+        "Missing lm_head→softcap RAW barrier under hazard skip-auto (GPU argmax 0 vs host winner)",
+        "Exactness lane forces always-on Dispatch barriers so mini near-ties are bit-stable"
+      ],
+      "status": "FAIL_pending",
+      "task": "dflash-exact-parity",
+      "task_status": "pending"
+    },
+    "gemma_metal_exact_vs_greedy": false,
+    "mlx_exact_verify": true,
+    "product_31b_decode_ge_15": false,
+    "product_31b_mtp_ge_25": false,
+    "tok_s": {
+      "gemma_metal_mini_dflash_best": 73.54890323806539,
+      "gemma_metal_mini_greedy": 319.88351122055394
+    },
+    "verify_path": "M×GEMV while act_scratch=M=1; Q4 GEMM in metallib gated until dual scratch"
+  },
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": null,
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 2,
+    "best_dflash_tok_s": 73.54890323806539,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 73.54890323806539
+      },
+      {
+        "block": 3,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 53.90336137992605
+      },
+      {
+        "block": 4,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 45.0904379901121
+      },
+      {
+        "block": 5,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 37.955405591428566
+      },
+      {
+        "block": 6,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 32.04786618016083
+      },
+      {
+        "block": 8,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 34.01985217842668
+      }
+    ],
+    "exact_vs_greedy": false,
+    "exactness_lane": "always_on_dispatch_barriers",
+    "greedy_tok_s": 319.88351122055394,
+    "mean_accept_at_best": 0.0,
+    "notes": "GPU D=128 draft + Q4 GEMM/FA(Tq=M) verify; not product E4B (no DFlash draft for E4B)"
+  }
+}

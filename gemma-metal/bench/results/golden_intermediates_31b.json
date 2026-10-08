@@ -1,0 +1,224 @@
+{
+  "input_ids": [
+    2,
+    105,
+    4368,
+    1246
+  ],
+  "target_layer_ids": [
+    1,
+    12,
+    23,
+    35,
+    46,
+    57
+  ],
+  "block_size": 5,
+  "mask_token_id": 4,
+  "embed_scale": 73.32121,
+  "target_hidden_per_layer": [
+    {
+      "sum": -65.4924,
+      "absmean": 0.167847,
+      "first8": [
+        -0.00094,
+        -0.0027,
+        0.00032,
+        0.00748,
+        -0.00238,
+        -0.00693,
+        0.01416,
+        -0.00589
+      ],
+      "shape": [
+        5376
+      ]
+    },
+    {
+      "sum": -65.0047,
+      "absmean": 0.371683,
+      "first8": [
+        -0.01941,
+        0.00793,
+        0.00067,
+        -0.00433,
+        -0.00249,
+        -0.00708,
+        -0.01526,
+        -0.00592
+      ],
+      "shape": [
+        5376
+      ]
+    },
+    {
+      "sum": 136.8203,
+      "absmean": 0.404288,
+      "first8": [
+        0.30469,
+        -0.01111,
+        -0.12158,
+        0.00824,
+        0.1582,
+        0.00099,
+        0.16016,
+        -0.03174
+      ],
+      "shape": [
+        5376
+      ]
+    },
+    {
+      "sum": 353.5899,
+      "absmean": 1.266726,
+      "first8": [
+        0.69531,
+        1.38281,
+        -3.32812,
+        -1.61719,
+        -1.92969,
+        -0.01855,
+        0.63672,
+        -3.46875
+      ],
+      "shape": [
+        5376
+      ]
+    },
+    {
+      "sum": 17.1704,
+      "absmean": 1.255302,
+      "first8": [
+        0.67188,
+        -1.57031,
+        -3.95312,
+        -2.3125,
+        0.22949,
+        -1.57031,
+        1.19531,
+        -2.40625
+      ],
+      "shape": [
+        5376
+      ]
+    },
+    {
+      "sum": 139.9042,
+      "absmean": 0.90489,
+      "first8": [
+        2.01562,
+        -1.39062,
+        -1.82812,
+        -0.84766,
+        -0.71875,
+        -1.98438,
+        1.85938,
+        0.5
+      ],
+      "shape": [
+        5376
+      ]
+    }
+  ],
+  "h_ctx_lastrow": {
+    "sum": -7.168,
+    "absmean": 0.069892,
+    "first8": [
+      -0.06445,
+      -0.26562,
+      0.01941,
+      0.06592,
+      0.00754,
+      0.04956,
+      0.15625,
+      -0.03296
+    ],
+    "shape": [
+      5376
+    ]
+  },
+  "draft_logits_lastpos": {
+    "sum": 544293.0625,
+    "absmean": 4.168714,
+    "first8": [
+      -23.875,
+      5.75,
+      7.5,
+      -23.75,
+      8.4375,
+      -0.87109,
+      -1.90625,
+      -8.5625
+    ],
+    "shape": [
+      262144
+    ]
+  },
+  "proposed_block_tokens": [
+    14359,
+    532,
+    107,
+    563
+  ],
+  "target_next_argmax": 531,
+  "fc_out_lastrow": {
+    "sum": 1799.9863,
+    "absmean": 38.93103,
+    "first8": [
+      -26.375,
+      -103.5,
+      6.8125,
+      21.125,
+      2.375,
+      18.625,
+      57.0,
+      -29.125
+    ],
+    "shape": [
+      5376
+    ]
+  },
+  "draft_attn_offsets_per_layer": [
+    {
+      "S": 4,
+      "Lq": 5,
+      "q_rope_offset": 4,
+      "ctx_rope_offset": 0,
+      "is_sliding": true,
+      "sliding_window": 2048
+    },
+    {
+      "S": 4,
+      "Lq": 5,
+      "q_rope_offset": 4,
+      "ctx_rope_offset": 0,
+      "is_sliding": true,
+      "sliding_window": 2048
+    },
+    {
+      "S": 4,
+      "Lq": 5,
+      "q_rope_offset": 4,
+      "ctx_rope_offset": 0,
+      "is_sliding": true,
+      "sliding_window": 2048
+    },
+    {
+      "S": 4,
+      "Lq": 5,
+      "q_rope_offset": 4,
+      "ctx_rope_offset": 0,
+      "is_sliding": true,
+      "sliding_window": 2048
+    },
+    {
+      "S": 4,
+      "Lq": 5,
+      "q_rope_offset": 4,
+      "ctx_rope_offset": 0,
+      "is_sliding": false,
+      "sliding_window": null
+    }
+  ],
+  "note": "Native src/dflash.rs must reproduce: target_hidden (layer OUTPUTS at target_layer_ids), fc_out, h_ctx, per-layer RoPE offsets (q=cache.offset+S, ctx=cache.offset), and proposed_block_tokens. First divergence = bug layer. See docs/dflash_draft_contract.md."
+}

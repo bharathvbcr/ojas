@@ -1,0 +1,13 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2",
+  "lane": "honest-partial",
+  "layers": 42,
+  "hidden": 2560,
+  "vocab": 262144,
+  "decode_tok_s": 10.1120,
+  "ttft_ms": 218.57,
+  "decode_steps": 16,
+  "notes": "vectorized 1-thread/row Q4 GEMV + GPU embed lookup + GPU argmax index propagate; PLE Hot skipped; not parity-green; compare to mlx~75.7 / Ollama~55.8 / gate 48-60; roofline: ~1.8GB Q4 traffic/tok → ~8% of ~273GB/s BW at 15.9 tok/s"
+}

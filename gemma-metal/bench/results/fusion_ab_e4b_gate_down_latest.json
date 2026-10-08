@@ -1,0 +1,49 @@
+{
+  "lane": "layer-fusion-v1-ab",
+  "model": "e4b",
+  "date_utc": "2026-07-19T23:12:32Z",
+  "arms_run": [
+    "baseline",
+    "gate_down"
+  ],
+  "exactness_hazard": 0,
+  "tok_s_hazard": "shipping_skip_auto",
+  "exactness_all_pass": false,
+  "pin": {
+    "FUSE_KV": 1,
+    "GEMV_INTERLEAVE": 0,
+    "GEMV_SIMD": 1
+  },
+  "arms": {
+    "baseline": {
+      "tok_s": 20.87,
+      "dispatches": 599.9,
+      "tokens": "[133533, 91962, 3301, 217288, 36042, 15486, 132414, 2546, 2546, 695, 95364, 129212, 236743, 26889, 9602, 26889]",
+      "exact": true
+    },
+    "gate_down": {
+      "tok_s": 6.37,
+      "dispatches": 557.9,
+      "tokens": "[135577, 68129, 103715, 127171, 67660, 113166, 33130, 55546, 189785, 115975, 240934, 14119, 60032, 63501, 67471, 23545]",
+      "exact": false
+    }
+  },
+  "slice": "D18-fuse-gate-down",
+  "flag": "GEMMA_METAL_FUSE_GATE_DOWN=1",
+  "default": "OFF",
+  "dispatch_delta": 42.0,
+  "dispatch_delta_expected": 42.0,
+  "dispatch_engagement": "PASS",
+  "exactness": "FAIL",
+  "tok_s_speedup": 0.305,
+  "verdict": "ENGAGED_BUT_DO_NOT_SHIP",
+  "notes": [
+    "Light fusion_ab via FUSION_AB_ARMS=baseline,gate_down TRACE=1",
+    "Dispatch \u0394=\u221242 exact (599.9\u2192557.9) \u2014 fusion engages on Hot E4B",
+    "Exactness FAIL @ HAZARD=0 \u2014 root cause: in-kernel relaxed grid barrier does not publish Q4 mid to DOWN (two-dispatch peel exact; host mid_err=0)",
+    "tok/s regresses 20.87\u21926.37 (0.305x) \u2014 do not product-default",
+    "Hard blocker documented D15/D17/D18 + layer_fusion_v1; flag stays default OFF"
+  ],
+  "root_cause": "mid_visibility_relaxed_grid_barrier",
+  "fix_lock": "persistent_interp_gate_down_q4_e4b_dims_visibility_blocker"
+}

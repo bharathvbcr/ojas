@@ -1,0 +1,42 @@
+{
+  "lane": "gemv-blocked-ab",
+  "model": "e4b",
+  "date_utc": "2026-07-20T01:56:44Z",
+  "slice": "GEMMA_METAL_GEMV_BLOCKED=1 (BlockedBn16/coop) vs default row-major simd",
+  "pin": {
+    "FUSE_KV": 1,
+    "GEMV_INTERLEAVE": 0,
+    "GEMV_SIMD": 1,
+    "fusion_encode_once": "all OFF"
+  },
+  "exactness_hazard": 0,
+  "tok_s_hazard": "shipping_skip_auto",
+  "quiet_env": ["GEMMA_METAL_LOG=0", "GEMMA_METAL_INFER_LOG=0"],
+  "exactness_all_pass": false,
+  "tok_s_note": "Absolute tok/s on this host run ~7–9 (below prior 23.58 quiet reference); use paired arms for speedup.",
+  "quiet_tok_s_reference_prior": 23.58,
+  "arms": {
+    "baseline": {
+      "GEMV_BLOCKED": 0,
+      "tok_s": 7.32,
+      "tokens": "[133533, 91962, 3301, 217288, 236782, 236743, 196059, 805, 217288, 236881, 59425, 240296, 28698, 178662, 67991, 17682]",
+      "exact": true
+    },
+    "blocked": {
+      "GEMV_BLOCKED": 1,
+      "tok_s": 6.55,
+      "tokens": "[63508, 30899, 58797, 157609, 213318, 48277, 2041, 183, 19334, 213318, 195, 12016, 227, 30899, 2041, 41620]",
+      "exact": false,
+      "divergence": "token[0] (greedy stream ≠ baseline @ HAZARD=0)"
+    }
+  },
+  "speedup_blocked_vs_baseline": 0.895,
+  "verdict": "DO NOT SHIP GEMV_BLOCKED: exactness FAIL (BlockedBn Hot path ≠ simd row-major). Paired tok/s blocked ~10% slower (6.55 vs 7.32); no MLP bucket win. Keep default OFF.",
+  "next_tick": "Triage BlockedBn repack vs gemv_q4_mlx_blocked* kernel parity (float/Hot unit); re-A/B only after diag_tok PASS. Parallel lane: simd occupancy (tg_mem/rows_q) without layout swap.",
+  "logs": {
+    "baseline_bench": "bench/results/gemv_blocked_ab_e4b_20260720T015644Z_baseline_bench.txt",
+    "blocked_bench": "bench/results/gemv_blocked_ab_e4b_20260720T015644Z_blocked_bench.txt",
+    "baseline_diag": "bench/results/gemv_blocked_ab_e4b_20260720T015644Z_baseline_diag.txt",
+    "blocked_diag": "bench/results/gemv_blocked_ab_e4b_20260720T015644Z_blocked_diag.txt"
+  }
+}

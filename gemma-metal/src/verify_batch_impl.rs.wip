@@ -1,0 +1,510 @@
+/// True M>1 block verify: one forward for `tokens[M]` using Q4 GEMM + FA(Tq=M).
+    ///
+    /// (Included into [`GpuDecodeSession`] impl.)
+    fn gemm_verify_available(&self) -> bool {
+        self.model
+            .gpu
+            .rt
+            .pipeline(KernelId::GemmQ4MlxSimd.entry_name())
+            .is_ok()
+            && self
+                .model
+                .gpu
+                .rt
+                .pipeline(KernelId::GemmQ4MlxSimdI4.entry_name())
+                .is_ok()
+    }
+
+    fn embed_verify_tokens(&self, m: usize, h: usize) -> Result<()> {
+        let scale = self.model.embed_scale;
+        let n = m as u32;
+        if let Some(ref hot) = self.model.embed_hot {
+            embed_lookup_quant_n(
+                &self.model.gpu,
+                hot,
+                &self.verify_seeds,
+                &self.x,
+                self.model.vocab as u32,
+                n,
+            )?;
+            return scale_f32_inplace(&self.model.gpu, &self.x, scale, (m * h) as u32);
+        }
+        let ids = self.verify_seeds.read_u32();
+        let mut packed = vec![0f32; m * h];
+        for mi in 0..m {
+            let tid = ids[mi];
+            if let Some(ref eq) = self.model.embed_q {
+                let mut row = eq.dequant_row(tid as usize)?;
+                if (scale - 1.0).abs() > 1e-12 {
+                    for v in &mut row {
+                        *v *= scale;
+                    }
+                }
+                packed[mi * h..(mi + 1) * h].copy_from_slice(&row[..h]);
+            } else {
+                let row = (tid as usize) * h;
+                if row + h > self.model.embed.len() {
+                    return Err(Error::Config(format!("token {tid} OOV")));
+                }
+                if (scale - 1.0).abs() <= 1e-12 {
+                    packed[mi * h..(mi + 1) * h]
+                        .copy_from_slice(&self.model.embed[row..row + h]);
+                } else {
+                    for d in 0..h {
+                        packed[mi * h + d] = self.model.embed[row + d] * scale;
+                    }
+                }
+            }
+        }
+        self.x.write_f32(&packed);
+        Ok(())
+    }
+
+    /// One batched verify forward (Q4 GEMM + FA Tq=M). Appends M KV steps.
+    fn step_verify_gemm(&mut self, tokens: &[u32]) -> Result<StepVerifyResult> {
+        let m = tokens.len();
+        let pos0 = self.pos;
+        let hidden = self.model.hidden as u32;
+        let h_usz = self.model.hidden;
+        let eps = self.model.eps;
+        let first_shared = self.model.kv.first_kv_shared;
+        let n_layers = self.model.layers.len();
+        let ple_dim_cfg = self.model.cfg.hidden_size_per_layer_input;
+        let vocab = self.model.vocab as u32;
+        let intermediate = self.model.intermediate as u32;
+        let softcap = self.model.softcap;
+        let m_u = m as u32;
+
+        {
+            let mut slot = vec![0u32; VERIFY_MAX_M];
+            slot[..m].copy_from_slice(tokens);
+            self.verify_seeds.write_u32(&slot);
+        }
+        self.embed_verify_tokens(m, h_usz)?;
+
+        // Capture staging: M rows × n_cap × H (host) filled at capture layers.
+        let mut capture_stage: Option<Vec<f32>> = None;
+        let capture_stride = self.capture.as_ref().map(|c| c.row_stride());
+        if let Some(stride) = capture_stride {
+            capture_stage = Some(vec![0f32; m * stride]);
+        }
+
+        for li in 0..n_layers {
+            let (
+                layer_type,
+                role,
+                hq,
+                hkv,
+                head_dim,
+                rotary_dim,
+                theta,
+                window,
+                has_ple,
+                is_producer,
+                has_post_ff,
+            ) = {
+                let layer = &self.model.layers[li];
+                (
+                    layer.layer_type,
+                    layer.role.clone(),
+                    layer.hq,
+                    layer.hkv,
+                    layer.head_dim,
+                    layer.rotary_dim,
+                    layer.theta,
+                    layer.window,
+                    layer.ple_table.is_some() || self.model.ple_q4.is_some(),
+                    matches!(layer.role, KvRole::Producer { .. }),
+                    layer.post_ff_norm.is_some(),
+                )
+            };
+
+            {
+                let gpu = &self.model.gpu;
+                let layer = &self.model.layers[li];
+                rms_norm_f32(gpu, &self.x, &layer.input_norm, &self.normed, m_u, hidden, eps)?;
+                let _ = prepare_act_bf16(gpu, &self.normed, m_u * hidden)?;
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                let x_bf16 = gpu.act_bf16_scratch((m * h_usz).max(1))?;
+                layer.q_proj.gemm_bf16_x(gpu, &x_bf16, &self.q, m_u)?;
+                if is_producer {
+                    let k = layer
+                        .k_proj
+                        .as_ref()
+                        .ok_or_else(|| Error::Weights(format!("layer {li} missing k_proj")))?;
+                    let v = layer
+                        .v_proj
+                        .as_ref()
+                        .ok_or_else(|| Error::Weights(format!("layer {li} missing v_proj")))?;
+                    // Separate GEMMs (KV fuse is M=1 only today).
+                    k.gemm_bf16_x(gpu, &x_bf16, &self.k, m_u)?;
+                    v.gemm_bf16_x(gpu, &x_bf16, &self.v, m_u)?;
+                }
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                rms_qkv_rope_ex(
+                    gpu,
+                    &self.q,
+                    &self.k,
+                    &self.v,
+                    &layer.q_norm,
+                    &layer.k_norm,
+                    &layer.v_norm,
+                    m_u,
+                    hq as u32,
+                    hkv as u32,
+                    head_dim as u32,
+                    rotary_dim as u32,
+                    pos0 as u32,
+                    theta,
+                    eps,
+                    /*q_only*/ !is_producer,
+                )?;
+            }
+
+            let tkv_want = (pos0 + m) as u32;
+            let update_shared = is_producer
+                && self
+                    .model
+                    .kv
+                    .layers
+                    .iter()
+                    .take(first_shared)
+                    .filter(|l| l.layer_type == layer_type)
+                    .map(|l| l.layer)
+                    .max()
+                    == Some(li);
+
+            if is_producer {
+                let gpu = &self.model.gpu;
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                match &role {
+                    KvRole::Producer { slot } => match slot {
+                        KvSlotId::SlidingRing { producer_index } => {
+                            let i = *producer_index;
+                            self.sliding_rings[i].append_m(gpu, &self.k, &self.v, m)?;
+                            if update_shared {
+                                self.shared_sliding.append_m(gpu, &self.k, &self.v, m)?;
+                            }
+                        }
+                        KvSlotId::GlobalFull { producer_index } => {
+                            let i = *producer_index;
+                            self.global_slots[i].append_m(gpu, &self.k, &self.v, m)?;
+                            if update_shared {
+                                self.shared_global.append_m(gpu, &self.k, &self.v, m)?;
+                            }
+                        }
+                    },
+                    KvRole::Consumer { .. } => unreachable!(),
+                }
+            }
+
+            {
+                let gpu = &self.model.gpu;
+                let layer = &self.model.layers[li];
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                let (k_fa, v_fa, kv_off, tkv) = if is_producer {
+                    match &role {
+                        KvRole::Producer { slot } => match slot {
+                            KvSlotId::SlidingRing { producer_index } => self.sliding_rings
+                                [*producer_index]
+                                .fa_buffers(gpu, &self.k_dense, &self.v_dense, tkv_want)?,
+                            KvSlotId::GlobalFull { producer_index } => self.global_slots
+                                [*producer_index]
+                                .fa_buffers(gpu, &self.k_dense, &self.v_dense, tkv_want)?,
+                        },
+                        KvRole::Consumer { .. } => unreachable!(),
+                    }
+                } else {
+                    let slot = if layer_type.is_sliding() {
+                        &self.shared_sliding
+                    } else {
+                        &self.shared_global
+                    };
+                    if tkv_want > slot.seq_len as u32 {
+                        return Err(Error::Kv(format!(
+                            "consumer verify pos0={pos0} M={m} shared tkv={}",
+                            slot.seq_len
+                        )));
+                    }
+                    slot.fa_buffers(gpu, &self.k_dense, &self.v_dense, tkv_want)?
+                };
+
+                if layer_type.is_sliding() {
+                    let win = window.unwrap_or(512) as u32;
+                    flash_attn_swa_h256(
+                        gpu,
+                        &self.q,
+                        &k_fa,
+                        &v_fa,
+                        &self.o,
+                        1,
+                        m_u,
+                        tkv,
+                        hq as u32,
+                        hkv as u32,
+                        win,
+                        1.0,
+                        pos0 as u32,
+                        kv_off,
+                    )?;
+                } else {
+                    flash_attn_global_h512(
+                        gpu,
+                        &self.q,
+                        &k_fa,
+                        &v_fa,
+                        &self.o,
+                        1,
+                        m_u,
+                        tkv,
+                        hq as u32,
+                        hkv as u32,
+                        1.0,
+                        pos0 as u32,
+                        kv_off,
+                    )?;
+                }
+
+                let o_elems = (m * hq * head_dim) as u32;
+                let _ = prepare_act_bf16(gpu, &self.o, o_elems)?;
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                let o_bf16 = gpu.act_bf16_scratch(o_elems as usize)?;
+                // o_proj: cols = hq*head_dim, rows = hidden — same as decode GEMV.
+                layer
+                    .o_proj
+                    .gemm_add_into_bf16_x(gpu, &o_bf16, &self.x, m_u)?;
+
+                if has_ple {
+                    // PLE is per-token; fall back to M× lookups into x rows.
+                    let ple_dim = ple_dim_cfg as u32;
+                    let scale = (ple_dim as f32).sqrt();
+                    let n_layers_u = n_layers as u32;
+                    for mi in 0..m {
+                        // seed_tok from verify_seeds[mi]
+                        copy_u32_from_index(
+                            gpu,
+                            &self.verify_seeds,
+                            mi as u32,
+                            &self.seed_tok,
+                        )?;
+                        if metal_runtime::ab_flags::need_barrier(true) {
+                            gpu.barrier()?;
+                        }
+                        if let Some(ref ple) = self.model.ple_q4 {
+                            ple_lookup_q4_mlx(
+                                gpu,
+                                &self.seed_tok,
+                                &ple.packed,
+                                &ple.scales,
+                                &ple.zeros,
+                                &self.ple_out,
+                                ple_dim,
+                                vocab,
+                                1,
+                                scale,
+                                li as u32,
+                                n_layers_u,
+                                ple.group_size,
+                            )?;
+                        } else if let Some(ref table) = layer.ple_table {
+                            ple_lookup(
+                                gpu,
+                                &self.seed_tok,
+                                table,
+                                &self.ple_out,
+                                ple_dim,
+                                vocab,
+                                1,
+                                scale,
+                            )?;
+                        }
+                        if metal_runtime::ab_flags::need_barrier(true) {
+                            gpu.barrier()?;
+                        }
+                        // Add PLE into residual row mi (first ple_dim dims).
+                        {
+                            use metal_runtime::dispatch::{dispatch_1d, set_gpu_buf, set_gpu_buf_offset, set_u32};
+                            let p = gpu.rt.pipeline("ple_residual_add").map_err(Error::Metal)?;
+                            let x_off = mi * h_usz * 4;
+                            dispatch_1d(&gpu.rt, &p, ple_dim as usize, |bnd| {
+                                set_gpu_buf_offset(bnd, &self.x, x_off, 0);
+                                set_gpu_buf(bnd, &self.ple_out, 1);
+                                metal_runtime::dispatch::set_f32(
+                                    bnd,
+                                    std::f32::consts::FRAC_1_SQRT_2,
+                                    2,
+                                );
+                                set_u32(bnd, ple_dim, 3);
+                            })
+                            .map_err(Error::Metal)?;
+                        }
+                    }
+                }
+
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                rms_norm_f32(
+                    gpu,
+                    &self.x,
+                    &layer.post_attn_norm,
+                    &self.normed,
+                    m_u,
+                    hidden,
+                    eps,
+                )?;
+                let _ = prepare_act_bf16(gpu, &self.normed, m_u * hidden)?;
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                let x_bf16 = gpu.act_bf16_scratch((m * h_usz).max(1))?;
+
+                // Gate / up: prefer separate GEMMs (fused gate_up is M=1).
+                layer
+                    .gate_proj
+                    .gemm_bf16_x(gpu, &x_bf16, &self.gate, m_u)?;
+                layer.up_proj.gemm_bf16_x(gpu, &x_bf16, &self.up, m_u)?;
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                mlp_gelu_tanh(
+                    gpu,
+                    &self.gate,
+                    &self.up,
+                    &self.mid,
+                    m_u * intermediate,
+                )?;
+                let _ = prepare_act_bf16(gpu, &self.mid, m_u * intermediate)?;
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                let mid_bf16 = gpu.act_bf16_scratch((m * intermediate as usize).max(1))?;
+                layer
+                    .down_proj
+                    .gemm_add_into_bf16_x(gpu, &mid_bf16, &self.x, m_u)?;
+
+                if has_post_ff {
+                    if let Some(ref w) = layer.post_ff_norm {
+                        rms_norm_f32(gpu, &self.x, w, &self.normed, m_u, hidden, eps)?;
+                        let p = gpu.rt.pipeline("copy_f32").map_err(Error::Metal)?;
+                        metal_runtime::dispatch::dispatch_1d(
+                            &gpu.rt,
+                            &p,
+                            (m * h_usz).max(1),
+                            |bnd| {
+                                metal_runtime::dispatch::set_gpu_buf(bnd, &self.normed, 0);
+                                metal_runtime::dispatch::set_gpu_buf(bnd, &self.x, 1);
+                                metal_runtime::dispatch::set_u32(bnd, (m * h_usz) as u32, 2);
+                            },
+                        )
+                        .map_err(Error::Metal)?;
+                    }
+                }
+            }
+
+            // Capture: after layer, x is [M,H] — fill each m's slot.
+            if self.capture.is_some() {
+                let need = self
+                    .capture
+                    .as_ref()
+                    .map(|c| c.layer_ids.contains(&li))
+                    .unwrap_or(false);
+                if need {
+                    self.model.gpu.synchronize()?;
+                    let x_host = self.x.read_f32();
+                    let slot = self
+                        .capture
+                        .as_ref()
+                        .and_then(|c| c.layer_ids.iter().position(|&id| id == li));
+                    if let (Some(slot), Some(ref mut stage), Some(stride)) =
+                        (slot, capture_stage.as_mut(), capture_stride)
+                    {
+                        for mi in 0..m {
+                            let dst = mi * stride + slot * h_usz;
+                            stage[dst..dst + h_usz]
+                                .copy_from_slice(&x_host[mi * h_usz..(mi + 1) * h_usz]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Final norm + lm_head GEMM + per-position softcap argmax.
+        {
+            let gpu = &self.model.gpu;
+            rms_norm_f32(
+                gpu,
+                &self.x,
+                &self.model.final_norm,
+                &self.normed,
+                m_u,
+                hidden,
+                eps,
+            )?;
+            let _ = prepare_act_bf16(gpu, &self.normed, m_u * hidden)?;
+            if metal_runtime::ab_flags::need_barrier(true) {
+                gpu.barrier()?;
+            }
+            let x_bf16 = gpu.act_bf16_scratch((m * h_usz).max(1))?;
+            self.model
+                .lm_head
+                .gemm_bf16_x(gpu, &x_bf16, &self.logits, m_u)?;
+            if metal_runtime::ab_flags::need_barrier(true) {
+                gpu.barrier()?;
+            }
+            for mi in 0..m {
+                softcap_argmax_encode_offset(
+                    gpu,
+                    &self.logits,
+                    mi * (vocab as usize) * 4,
+                    softcap,
+                    vocab,
+                    &mut self.argmax_scratch,
+                    &self.verify_outs,
+                    mi * 4,
+                )?;
+                if metal_runtime::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+            }
+        }
+
+        // Finish capture rows + conditioner (one timeline step per verified token).
+        if let (Some(stage), Some(stride)) = (capture_stage.as_ref(), capture_stride) {
+            for mi in 0..m {
+                if let Some(ref mut c) = self.capture {
+                    c.finish_step_complete(&stage[mi * stride..(mi + 1) * stride])?;
+                }
+                if let Some(ref mut cond) = self.conditioner {
+                    if let Some(ref row_buf) = self.capture_row {
+                        row_buf.write_f32(&stage[mi * stride..(mi + 1) * stride]);
+                        cond.project_row(&self.model.gpu, row_buf)?;
+                    }
+                }
+            }
+        }
+
+        self.pos = pos0 + m;
+        self.model.gpu.synchronize()?;
+        let outs = self.verify_outs.read_u32();
+        let next_tokens = outs[..m].to_vec();
+        // Seed argmax_tok with last next-token for chained decode continuity.
+        if let Some(&last) = next_tokens.last() {
+            self.argmax_tok.write_u32(&[last]);
+        }
+        Ok(StepVerifyResult {
+            pos0,
+            tokens: tokens.to_vec(),
+            next_tokens,
+        })
+    }

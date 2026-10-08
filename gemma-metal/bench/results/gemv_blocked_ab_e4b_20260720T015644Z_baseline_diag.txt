@@ -1,0 +1,11 @@
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running `target/release/diag_tok e4b`
+model=e4b dir=/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2
+loaded in 2.3s hidden=2560 layers=42 embed_scale=50.5964 softcap=30
+hot_gemv_q_ones: rows=2048 cols=2560 nz=2048/2048 nan=0 max_abs=4.8909 layout=RowMajor
+hot_gemv_gate_0.1: rows=10240 cols=2560 nan=0 max_abs=0.6341
+embed_only: finite=true nan=0 min=-5.9293 max=3.7305
+generated 16 new toks in 2.905s → 5.51 tok/s (wall includes prefill)
+new tokens: [133533, 91962, 3301, 217288, 236782, 236743, 196059, 805, 217288, 236881, 59425, 240296, 28698, 178662, 67991, 17682]
+unique=15 all_zero=false logits finite=true nan=0 min=-34.3109 max=42.6375 argmax=236772
+resid x: finite=true nan=0 min=-16.7680 max=43.8434

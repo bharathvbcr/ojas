@@ -1,0 +1,22 @@
+{
+  "api_gap_summary": "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); MTLIndirectCommandBuffer feature/objects not enabled in metal-runtime; ICB ConcurrentDispatch uses classic setKernelBuffer binds; encode path is MTL4 argument-table; per-token scalars still bump const-arena (FA/kv_store/softcap); need stable GpuBuffer slots",
+  "api_gaps": [
+    "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records)",
+    "MTLIndirectCommandBuffer feature/objects not enabled in metal-runtime",
+    "ICB ConcurrentDispatch uses classic setKernelBuffer binds; encode path is MTL4 argument-table",
+    "per-token scalars still bump const-arena (FA/kv_store/softcap); need stable GpuBuffer slots"
+  ],
+  "artifact": "encode_once_mini_ab",
+  "cb_replay_wired": false,
+  "encode_us_off": 1696.08325,
+  "encode_us_on": 1675.5625,
+  "icb_stub": "icb_stub phase=Planned cmds=64 stable=3/4 alloc_attempts=0 exec_attempts=9 wired=false",
+  "iters": 8,
+  "live_encodes_on": 10,
+  "model": "mini_synth",
+  "not_wired_hits": 9,
+  "ratio_on_over_off": 0.9879010950671201,
+  "unix_ts": 1784490895,
+  "verdict": "NotWired — MTL4 CB has no replay API; ICB stub planned; flag does not skip host encode",
+  "warmup": 2
+}

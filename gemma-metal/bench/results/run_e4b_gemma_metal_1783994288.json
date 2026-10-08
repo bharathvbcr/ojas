@@ -1,0 +1,13 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2",
+  "lane": "honest-partial",
+  "layers": 42,
+  "hidden": 2560,
+  "vocab": 262144,
+  "decode_tok_s": 23.5371,
+  "ttft_ms": 141.89,
+  "decode_steps": 16,
+  "notes": "simd GEMV streams bf16 activations (cast once/phase) + bf16 Hot scales; packs=2; SIMD_ROWS=4×2 SG; fuse MLP+KV; phase-coarse RAW; cols%16 simd (31B); INFER_LOG=0; ~25 tok/s vs mlx~75.7 / gate 48-60; interim≥30 unmet"
+}

@@ -1,0 +1,29 @@
+# CubeCL kernel-level logging / autotune config for the arch_02 Metal port.
+#
+# CubeCL sees one level below Burn: individual MSL kernels, autotune decisions,
+# and generated shader source. This file turns that visibility on and routes it
+# to files under `out/cubecl/` so a training run leaves a full kernel trace.
+#
+# It is picked up automatically from the crate root (or any parent dir). Env
+# vars override at runtime, e.g.:
+#   CUBECL_DEBUG_LOG=stdout CUBECL_DEBUG_OPTION=profile-full cargo run ...
+#   CUBECL_AUTOTUNE_LEVEL=full cargo run ...
+#
+# Cost note: profiling forces per-kernel syncs and autotune="full" benchmarks
+# many kernel variants on first sight of each shape — great for an optimization
+# pass, too slow for a real 20k-step run. Keep levels low for production runs.
+
+[profiling]
+# "disabled" | "minimal" | "medium" | "full" — per-kernel timing detail.
+logger = { level = "medium", file = "out/cubecl/profile.log", append = false }
+
+[autotune]
+# How hard to search kernel variants: minimal | balanced | extensive | full.
+level = "balanced"
+# Logs which kernel variant won for each (op, shape) — the key artifact for
+# understanding what the MSL compiler actually picked on the M5's GPU.
+logger = { level = "full", file = "out/cubecl/autotune.log", append = false }
+
+[compilation]
+# "basic" logs kernel compiles; bump to "full" to dump generated MSL source.
+logger = { level = "basic", file = "out/cubecl/compile.log", append = true }

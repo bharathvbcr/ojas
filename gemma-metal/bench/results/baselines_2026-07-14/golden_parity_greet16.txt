@@ -1,0 +1,7 @@
+   Compiling gemma-metal v0.1.0 (/Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal)
+    Finished `release` profile [optimized] target(s) in 3.44s
+     Running `target/release/golden_parity greet 16`
+case=greet n=16 dir=/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f
+match_prefix=0/16 first_mismatch=Some(0)
+got[:16]=[236773, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799, 236799]
+gold[:16]=[100, 45518, 107, 236829, 139, 6804, 236787, 22168, 29104, 236761, 107, 140, 236829, 139, 52240, 236787]

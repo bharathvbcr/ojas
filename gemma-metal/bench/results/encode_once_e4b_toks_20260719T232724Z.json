@@ -1,0 +1,39 @@
+{
+  "artifact": "encode_once_e4b_toks_ab",
+  "date_utc": "20260719T232724Z",
+  "model": "e4b_hot",
+  "steps": 16,
+  "prefill_T": 4,
+  "no_31b": true,
+  "no_fusion_ab_trace": true,
+  "sequential_hot_loads": true,
+  "shipping_hazard": true,
+  "fix": "tape barrier_after capture; execute skip-auto + replay markers (no force always-on)",
+  "arms": {
+    "off": {
+      "flags": "ENCODE_ONCE unset; DECODE_ICB unset",
+      "decode_tok_s": 23.5,
+      "ttft_ms": 135.4,
+      "log": "bench/results/encode_once_e4b_toks_20260719T232724Z_off.txt"
+    },
+    "on": {
+      "flags": "GEMMA_METAL_ENCODE_ONCE=1 GEMMA_METAL_DECODE_ICB=1 (prebuilt default ON)",
+      "decode_tok_s": 23.38,
+      "ttft_ms": 135.5,
+      "icb_command_count": 594,
+      "prebuilt_tables": 594,
+      "trace_bar_median": 365,
+      "trace_encode_us_median": 188,
+      "log": "bench/results/encode_once_e4b_toks_20260719T232724Z_on.txt"
+    }
+  },
+  "ratio_on_over_off": 0.9948936170212765,
+  "verdict": "FIXED: tape barrier_after \u2014 shipping 23.50 vs encode-once 23.38 tok/s (~flat); TRACE bar_med=365 (was ~599) enc_med=188 cmds=594. Prior regress 20.69\u219216.11. Flags stay default OFF.",
+  "prior_regress": {
+    "off": 20.69,
+    "on": 16.11,
+    "bar_off": 364,
+    "bar_on": 599
+  },
+  "note": "Product tok/s now ~flat vs shipping after barrier_after tape fix; encode_us still lower. Flags stay default OFF (no clear product win to default-on)."
+}

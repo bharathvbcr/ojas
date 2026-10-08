@@ -1,0 +1,3 @@
+{"tok":0,"host_encode_us":43182,"gpu_wait_us":0,"sync_us":0,"dispatches":689,"barriers":731,"commits":0,"cold_allocs":0,"bytes_est":10240,"top_ops":[{"name":"embed","host_us":40184,"bytes":10240}],"flags":{"hazard_barriers_auto":false,"ple":false,"async":true}}
+{"tok":0,"host_encode_us":2400,"gpu_wait_us":0,"sync_us":0,"dispatches":689,"barriers":731,"commits":0,"cold_allocs":0,"bytes_est":10240,"top_ops":[{"name":"embed","host_us":1,"bytes":10240}],"flags":{"hazard_barriers_auto":false,"ple":false,"async":true}}
+{"tok":0,"host_encode_us":207910,"gpu_wait_us":0,"sync_us":0,"dispatches":689,"barriers":731,"commits":146,"cold_allocs":0,"bytes_est":10240,"top_ops":[{"name":"embed","host_us":1,"bytes":10240}],"flags":{"hazard_barriers_auto":false,"ple":false,"async":true}}

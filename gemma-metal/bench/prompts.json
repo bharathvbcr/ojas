@@ -1,0 +1,18 @@
+[
+  {
+    "id": "math_easy",
+    "name": "Quick Math",
+    "difficulty": "easy",
+    "prompt": "What is 17 × 23? Respond with only the integer, no explanation.",
+    "expected": "391",
+    "check": "numeric"
+  },
+  {
+    "id": "decode_pad",
+    "name": "Decode Pad",
+    "difficulty": "bench",
+    "prompt": "Write a detailed step-by-step explanation of how a sliding-window attention KV cache works in transformers, including ring-buffer indexing, for exactly 200 words. Do not stop early.",
+    "expected": null,
+    "check": null
+  }
+]

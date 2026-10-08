@@ -1,0 +1,37 @@
+[package]
+name = "gemma-metal"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Gemma 4 full-custom Metal 4 inference"
+publish = false
+
+[features]
+default = ["tokenizer"]
+# Real HuggingFace tokenizers; disable for CPU-only unit tests without the crate.
+tokenizer = ["dep:tokenizers"]
+
+[dependencies]
+tessl = { path = "/Users/bharath/Code/research/tessl", features = ["quant-prep"] }
+# `NSProcessInfo.thermalState` / `isLowPowerModeEnabled` for the sustained-load
+# gate (`src/thermal.rs`): the OS's own view of thermal pressure, so a measured
+# decline can be attributed to heat rather than merely correlated with it.
+# Already an indirect dependency via tessl; named here because gemma-metal now
+# calls it directly. Apple-only, like the rest of this crate.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+safetensors = "0.4"
+thiserror = "2"
+bytemuck = "1"
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]

@@ -1,0 +1,83 @@
+{
+  "date_utc": "2026-07-14T02:01:45Z",
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": null,
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 2,
+    "best_dflash_tok_s": 273.74857890268976,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 0.15384615384615385,
+        "n_new": 16,
+        "tok_s": 273.74857890268976
+      },
+      {
+        "block": 3,
+        "mean_accept": 0.07142857142857142,
+        "n_new": 16,
+        "tok_s": 182.481146190539
+      },
+      {
+        "block": 4,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 130.67678322763487
+      },
+      {
+        "block": 5,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 109.57646982281142
+      },
+      {
+        "block": 6,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 94.86330050173792
+      },
+      {
+        "block": 8,
+        "mean_accept": 0.06666666666666667,
+        "n_new": 16,
+        "tok_s": 76.81673043807588
+      }
+    ],
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 643.5135841695658,
+    "mean_accept_at_best": 0.0,
+    "notes": "GPU D=128 draft + Q4 GEMM/FA(Tq=M) verify; not product E4B (no DFlash draft for E4B)"
+  },
+  "gate_verdict": {
+    "dflash_parity_gates": "exactness_sprint_after_draft_bf16_poison_fix",
+    "verify_path": "M\u00d7GEMV while act_scratch=M=1; Q4 GEMM in metallib gated until dual scratch",
+    "mlx_exact_verify": true,
+    "gemma_metal_exact_vs_greedy": false,
+    "product_31b_decode_ge_15": false,
+    "product_31b_mtp_ge_25": false,
+    "tok_s": {
+      "gemma_metal_mini_greedy": 643.51,
+      "gemma_metal_mini_dflash_best": 273.75,
+      "before_greedy_31b": 5.48,
+      "before_dflash_31b": 2.02
+    },
+    "exactness": {
+      "status": "FAIL_pending",
+      "task": "dflash-exact-parity",
+      "definition": "DFlash stream vs capture-on greedy (mid-layer device capture)",
+      "root_causes_fixed": [
+        "Draft/conditioner gemv_bf16_x into plain-Q4 gemv_q4 poisoned shared GPU \u2192 target NaN/all-zero after propose_block",
+        "Device-side capture (barrier-optional copy_f32) replaced mid-layer host sync stalls",
+        "E4B/31B greedy finite after metallib rebuild (prior mid-MLP NaN / all-zero streams)"
+      ],
+      "root_cause_remaining": "Mini capture-on greedy is near-tie nondeterministic; GPU draft (random/Hot Q4) rejects then still diverges vs capture-on greedy stream. Need 31B quiet re-bench or bit-stable mini for PASS."
+    },
+    "blockers": [
+      "exactness FAIL on mini vs capture-on greedy (nonsdeterministic near-ties + draft reject path)",
+      "DFlash mini still << greedy tok/s (273 vs 643); GEMM verify gated until dual H\u00d7M scratch",
+      "product \u226515/\u226525 unmet"
+    ]
+  }
+}

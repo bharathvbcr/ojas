@@ -1,0 +1,13 @@
+{
+  "runtime": "gemma-metal",
+  "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "weights_dir": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2",
+  "lane": "honest-partial",
+  "layers": 42,
+  "hidden": 2560,
+  "vocab": 262144,
+  "decode_tok_s": 24.1992,
+  "ttft_ms": 140.25,
+  "decode_steps": 16,
+  "notes": "simdgroup Q4 GEMV (SIMD_ROWS=8) + float4 peel; BlockedBn off by default; PLE Q4 Hot residual; gate/proj still skipped; compare to mlx~75.7 / Ollama~55.8 / gate 48-60; mid-commit off (METAL_RUNTIME_MID_COMMIT=N)"
+}

@@ -1,0 +1,74 @@
+{
+  "date": "2026-07-13",
+  "host": "M5 Pro",
+  "config": "DFlash q4-draft block=8 max_tokens=128 greedy",
+  "arms": [
+    {
+      "tag": "v0312_a",
+      "mlx": "0.31.2",
+      "wired": false,
+      "decode_median": 18.64,
+      "decode_all": [
+        18.63,
+        18.64,
+        18.65,
+        18.64
+      ],
+      "prefill_median": 177.2
+    },
+    {
+      "tag": "v0320_a",
+      "mlx": "0.32.0",
+      "wired": false,
+      "decode_median": 27.77,
+      "decode_all": [
+        27.75,
+        20.45,
+        27.78,
+        27.78
+      ],
+      "prefill_median": 177.4
+    },
+    {
+      "tag": "v0312_b",
+      "mlx": "0.31.2",
+      "wired": false,
+      "decode_median": 18.64,
+      "decode_all": [
+        18.64,
+        18.62,
+        18.65,
+        18.64
+      ],
+      "prefill_median": 177.4
+    },
+    {
+      "tag": "v0320_wired",
+      "mlx": "0.32.0",
+      "wired": true,
+      "decode_median": 27.81,
+      "decode_all": [
+        27.82,
+        27.81,
+        27.81,
+        27.81
+      ],
+      "prefill_median": 178.3
+    }
+  ],
+  "finding": "mlx 0.32.0 = 1.49x end-to-end vs 0.31.2 (27.77 vs 18.64 tok/s), drift-checked; wired-memory no effect. Mechanism: M=8 quantized GEMM (block-verify shapes) 1.5-2x faster in 0.32 via M5 GPU Neural Accelerators (macOS 26.2+, auto). M=1 decode unchanged (bandwidth-bound).",
+  "microbench_M8_us_0312_vs_0320": {
+    "attn_5376x5376": [
+      557,
+      378
+    ],
+    "mlp_10752x5376": [
+      965,
+      567
+    ],
+    "lm_head_262144x5376": [
+      18977,
+      9563
+    ]
+  }
+}

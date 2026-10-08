@@ -1,0 +1,35 @@
+{
+  "date_utc": "1783990972",
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": null,
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 3,
+    "best_dflash_tok_s": 312.82458605731046,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 1.0,
+        "n_new": 16,
+        "tok_s": 291.1254500503784
+      },
+      {
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 16,
+        "tok_s": 312.82458605731046
+      },
+      {
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 16,
+        "tok_s": 297.0476232504893
+      }
+    ],
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 406.9620213884995,
+    "mean_accept_at_best": 2.0,
+    "notes": "GPU D=128 draft + M×GEMV verify; not product E4B (no DFlash draft for E4B)"
+  }
+}

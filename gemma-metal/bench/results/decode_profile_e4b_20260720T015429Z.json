@@ -1,0 +1,51 @@
+{
+  "lane": "decode-time-profile",
+  "model": "e4b",
+  "date_utc": "2026-07-20T01:54:29Z",
+  "path": "shipping (all fusion/encode-once OFF; async_encode ON product default)",
+  "instrument": "GEMMA_METAL_TRACE=sync",
+  "artifacts": {
+    "trace_log": "bench/results/decode_profile_e4b_20260720T015429Z_trace_sync.log",
+    "stdout": "bench/results/decode_profile_e4b_20260720T015429Z_stdout.txt"
+  },
+  "quiet_tok_s_reference": 23.58,
+  "quiet_ms_per_token_est": 42.4,
+  "trace_sync_note": "Absolute tok/s under sync trace is not gate-quality (~6.5 tok/s); use bucket ratios only.",
+  "hot_steady_disp": 600,
+  "hot_steady_trace_us_median": {
+    "host_encode": 147340,
+    "gpu_wait": 146310,
+    "sync": 146620
+  },
+  "hot_gpu_buckets_ms_median": {
+    "layer_42x": 118.36,
+    "lm_head": 1.95,
+    "softcap_argmax": 0.21
+  },
+  "quiet_scaled_from_sync_median_ms": {
+    "layer_stack": 34.4,
+    "lm_head": 0.57,
+    "note": "scale = quiet_ms_per_token / sync_wait_median (~0.29)"
+  },
+  "trace1_host_encode_us_shipping": 170,
+  "fusion_both_delta": {
+    "dispatches": -90,
+    "launch_tax_ms_est": 3.3,
+    "tok_s_baseline": 23.58,
+    "tok_s_both": 23.26,
+    "pct_token_budget": 7.8
+  },
+  "top_sinks_quiet_order": [
+    "42-layer Q4 GEMV stack (~80% wall; ~75% MLP gate/up/down inside layer)",
+    "Attention projection GEMVs + FA/RMS/RoPE (~15% inside layer)",
+    "lm_head tall GEMV (~2-4% wall)"
+  ],
+  "why_minus_90_disp_flat": "Launch tax −90×~37µs≈3.3ms on ~42ms token (~8% ceiling); host encode already ~0.17ms (TRACE=1); remaining ~510 disp still stream ~2.86GiB/tok; measured Δtok/s within noise.",
+  "next_cut_recommended": "BlockedBn parity triage then re-A/B; else simd tg occupancy without layout swap.",
+  "gemv_blocked_ab": {
+    "artifact": "bench/results/gemv_blocked_ab_e4b_20260720T015644Z.json",
+    "exactness_hazard_0": "FAIL @ token 0",
+    "paired_tok_s": { "simd": 7.32, "blocked": 6.55, "speedup": 0.895 },
+    "ship": "GEMV_BLOCKED stays default OFF"
+  }
+}

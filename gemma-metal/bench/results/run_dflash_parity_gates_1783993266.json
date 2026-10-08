@@ -1,0 +1,208 @@
+{
+  "date_utc": "1783993072",
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": {
+    "best_block": 3,
+    "best_dflash_tok_s": 2.0162025679284534,
+    "block_sweep": [
+      {
+        "accepts": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 24,
+        "tok_s": 2.0162025679284534
+      },
+      {
+        "accepts": [
+          3,
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 24,
+        "tok_s": 1.7855062311948977
+      },
+      {
+        "accepts": [
+          4,
+          4,
+          4,
+          4,
+          3
+        ],
+        "block": 5,
+        "mean_accept": 3.8,
+        "n_new": 24,
+        "tok_s": 1.746564232978897
+      },
+      {
+        "accepts": [
+          5,
+          5,
+          5,
+          5
+        ],
+        "block": 6,
+        "mean_accept": 5.0,
+        "n_new": 24,
+        "tok_s": 1.8471227033588893
+      }
+    ],
+    "debug_bs5": {
+      "accepts": [
+        4,
+        4,
+        4,
+        4,
+        3
+      ],
+      "dflash_new": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "draft_attn_scale": 0.0883883461356163,
+      "embed_scale": 73.32121276855469
+    },
+    "dflash_token_ids_new": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "draft": "/Users/bharath/.cache/huggingface/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/eabd648301ce28583cc14757912e5e0f84e152e1",
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 5.481718739235524,
+    "greedy_token_ids_new": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "mean_accept_at_best": 2.0,
+    "notes": "GPU draft Hot Q4+D=128 FA; Q4 GEMM+FA(Tq=M) verify; product MTP ≥25 unmet",
+    "target": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f"
+  },
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 3,
+    "best_dflash_tok_s": 387.3716831299632,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 1.0,
+        "n_new": 16,
+        "tok_s": 367.21847975588787
+      },
+      {
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 16,
+        "tok_s": 387.3716831299632
+      },
+      {
+        "block": 4,
+        "mean_accept": 3.0,
+        "n_new": 16,
+        "tok_s": 363.8834322167608
+      },
+      {
+        "block": 5,
+        "mean_accept": 4.0,
+        "n_new": 16,
+        "tok_s": 381.6054259521503
+      },
+      {
+        "block": 6,
+        "mean_accept": 4.333333333333333,
+        "n_new": 16,
+        "tok_s": 354.12332344739053
+      },
+      {
+        "block": 8,
+        "mean_accept": 7.0,
+        "n_new": 16,
+        "tok_s": 370.2314650096094
+      }
+    ],
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 677.3729124583992,
+    "mean_accept_at_best": 2.0,
+    "notes": "GPU D=128 draft + Q4 GEMM/FA(Tq=M) verify; not product E4B (no DFlash draft for E4B)"
+  }
+}

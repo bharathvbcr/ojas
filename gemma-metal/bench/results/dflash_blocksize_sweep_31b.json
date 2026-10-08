@@ -1,0 +1,53 @@
+{
+  "host": "M5 Pro",
+  "target": "mlx-community/gemma-4-31b-it-4bit",
+  "max_tokens": 256,
+  "plain": {
+    "math": 15.12,
+    "code": 15.22,
+    "general": 15.23
+  },
+  "dflash": {
+    "8": {
+      "math": 20.66,
+      "code": 20.58,
+      "general": 12.69,
+      "_mean": 17.98,
+      "_accept": 4.35
+    },
+    "12": {
+      "math": 19.73,
+      "code": 20.85,
+      "general": 11.51,
+      "_mean": 17.36,
+      "_accept": 4.8
+    },
+    "16": {
+      "math": 17.48,
+      "code": 17.64,
+      "general": 10.75,
+      "_mean": 15.29,
+      "_accept": 4.92
+    },
+    "24": {
+      "math": 20.94,
+      "code": 20.22,
+      "general": 11.22,
+      "_mean": 17.46,
+      "_accept": 5.06
+    },
+    "32": {
+      "math": 20.89,
+      "code": 20.09,
+      "general": 11.92,
+      "_mean": 17.63,
+      "_accept": 4.8
+    }
+  },
+  "summary": {
+    "plain_mean": 15.19,
+    "best_block": 8,
+    "best_mean_tok_s": 17.98,
+    "best_speedup": 1.18
+  }
+}

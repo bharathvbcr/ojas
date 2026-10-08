@@ -1,0 +1,9 @@
+
+thread 'main' (6521380) panicked at src/bin/bench.rs:116:10:
+load E4B weights: Weights("MLX Q4 missing biases for language_model.model.layers.16.mlp.down_proj.weight")
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::result::unwrap_failed
+   3: bench::main
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.

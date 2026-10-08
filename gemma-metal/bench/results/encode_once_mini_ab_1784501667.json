@@ -1,0 +1,30 @@
+{
+  "api_gap_summary": "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only; mini layer-graph DecodeIcb capture→from_commands+skip landed; E4B/31B session graph not migrated; classic ICB setKernelBuffer does not feed MTL4 pipelines; DecodeIcb uses inheritBuffers+arg-table (binds still host-side per cmd)",
+  "api_gaps": [
+    "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only",
+    "mini layer-graph DecodeIcb capture→from_commands+skip landed; E4B/31B session graph not migrated",
+    "classic ICB setKernelBuffer does not feed MTL4 pipelines; DecodeIcb uses inheritBuffers+arg-table (binds still host-side per cmd)"
+  ],
+  "artifact": "encode_once_mini_ab",
+  "cb_replay_wired": true,
+  "decode_icb": "decode_icb cmds=71 layer_graph=true encoded=true optimized=true executes=9 sticky_buf=17/427 last_setAddress=410/427",
+  "encode_us_off": 5452.411375,
+  "encode_us_on": 3182.734375,
+  "icb_command_count": 71,
+  "icb_replays": 9,
+  "iters": 8,
+  "last_bind_total": 427,
+  "last_set_address_calls": 410,
+  "layer_graph": true,
+  "live_encodes_on": 1,
+  "model": "mini_synth",
+  "ratio_on_over_off": 0.5837296851065278,
+  "scalar_write_tape_ops": 191,
+  "skip_nop_layer_loop": true,
+  "sticky_skip_ratio": 0.03981264637002342,
+  "sticky_skippable_buf_binds": 17,
+  "total_buf_binds": 427,
+  "unix_ts": 1784501667,
+  "verdict": "DecodeIcb layer-graph capture+skip (cmds=71); live_encodes=1 icb_replays=9; encode_us ratio=0.58 (A2 v0.5.2: scalar tape ops=191 skip-nop; sticky setAddress skip=17/427 (4%); last_exec set=410/427)",
+  "warmup": 2
+}

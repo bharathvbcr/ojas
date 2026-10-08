@@ -1,0 +1,53 @@
+{
+  "date_utc": "1783990341",
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": null,
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 2,
+    "best_dflash_tok_s": 214.42367773461388,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 214.42367773461388
+      },
+      {
+        "block": 3,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 151.44290779848154
+      },
+      {
+        "block": 4,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 119.10130591083332
+      },
+      {
+        "block": 5,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 96.26677911910025
+      },
+      {
+        "block": 6,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 83.32436468062245
+      },
+      {
+        "block": 8,
+        "mean_accept": 0.0,
+        "n_new": 16,
+        "tok_s": 68.2626983284705
+      }
+    ],
+    "exact_vs_greedy": false,
+    "greedy_tok_s": 698.1196017629092,
+    "mean_accept_at_best": 0.0,
+    "notes": "Host D=128 draft + M×GEMV verify; not product E4B (no DFlash draft for E4B)"
+  }
+}

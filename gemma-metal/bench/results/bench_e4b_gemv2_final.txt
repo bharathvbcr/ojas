@@ -1,0 +1,49 @@
+   Compiling gemma-metal v0.1.0 (/Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal)
+    Finished `release` profile [optimized] target(s) in 4.38s
+     Running `target/release/bench --e4b`
+gemma-metal Phase 4 speed harness (gemma-metal-0.1.0-phase6)
+gates.md Phase-0 reference (this host):
+  E4B Q4 mlx-lm best decode ≈ 75.7 tok/s  (honest lane gate ≥48–60)
+  Ollama E4B Q4_K_M ≈ 55.8 tok/s
+  31B Ollama decode ≈ 12.3 tok/s          (product gate ≥15)
+
+host synthetic prefill (T=8, 3 layers): 5.95 ms/iter
+GPU Hot synthetic warmup failed (Metal busy?): metal: pipeline 'gemv_q4': Compilation failed due to an interrupted connection: XPC_ERROR_CONNECTION_INTERRUPTED. This error occurred after multiple retries.
+(continuing to microbenches / E4B if possible)
+
+=== Real E4B Q4 (MLX affine) ===
+  weights: /Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-e4b-it-4bit/snapshots/475b9088d29754a3379866cf5aeb6b41acd313c2
+  loaded 537 matrices in 1.0s; hot≈2.67 GiB; layers=42 vocab=262144 hidden=2560
+  gaps: PLE Hot tables still skipped on real E4B load (bandwidth); GPU KV + packed encode + tiled GEMV on
+gemma-metal: uploaded E4B Hot banks — 42 layers, vocab=262144, hidden=2560, scheme=Q4Mlx { group_size: 64 }, hot≈2.67 GiB
+  Hot upload + session prep: 0.4s
+  warmup generate…
+  warmup ok, seq_len=5
+  TTFT (prefill T=4): 242.8 ms
+  decode: 15.17 tok/s  (16 steps after prefill)
+  vs Phase-0: mlx-lm ≈75.7 | Ollama ≈55.8 | gate ≥48–60
+  verdict: BELOW honest-lane gate (expected for partial/slow v1)
+  wrote /Users/bharath/Code/parameter_golf/Rust_MLKit/gemma-metal/bench/results/run_e4b_gemma_metal_1783970929.json
+
+=== Kernel microbenches ===
+GPU gemv_q4 microbench skipped: metal: pipeline 'gemv_q4': Compilation failed due to an interrupted connection: XPC_ERROR_CONNECTION_INTERRUPTED. This error occurred after multiple retries.
+GPU softcap_argmax vocab=262144: 300.5 µs/call
+GPU FA SWA h256 prefill B=1 T=16 H=8: 176.6 µs/call
+        8.47 real         0.93 user         0.81 sys
+          9540452352  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              904767  page reclaims
+                   4  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   1  voluntary context switches
+                 841  involuntary context switches
+         28690806563  instructions retired
+          7613920582  cycles elapsed
+         10955350800  peak memory footprint

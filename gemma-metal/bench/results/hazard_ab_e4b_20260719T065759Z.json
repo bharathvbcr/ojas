@@ -1,0 +1,37 @@
+{
+  "lane": "hazard-ab-f3",
+  "model": "e4b",
+  "date_utc": "2026-07-19T06:58:13Z",
+  "declare": {
+    "hazard0": "METAL_RUNTIME_HAZARD_BARRIERS=0 \u2192 always-on Device barrier after every dispatch (golden-safe)",
+    "hazard1": "METAL_RUNTIME_HAZARD_BARRIERS=1 \u2192 skip auto; explicit RAW at phase edges (coarse by default)",
+    "default": "env unset \u2192 GemmaGpu::new_inference sets skip_auto=true (same shipping path as hazard1)",
+    "what_numbers_measure": "Real E4B Q4 Hot decode tok/s (16 steps after prefill T=4); TRACE off; FUSE_LAYER off. Mini-graph lines in same logs are not the gate metric."
+  },
+  "arms": {
+    "hazard0": {
+      "tok_s": 17.72,
+      "ttft_ms": 197.8,
+      "hazard_skip_auto": false,
+      "log": "bench/results/hazard_ab_e4b_20260719T065759Z_hazard0.txt"
+    },
+    "hazard1": {
+      "tok_s": 22.54,
+      "ttft_ms": 148.1,
+      "hazard_skip_auto": true,
+      "log": "bench/results/hazard_ab_e4b_20260719T065759Z_hazard1.txt"
+    },
+    "default": {
+      "tok_s": 23.24,
+      "ttft_ms": 145.0,
+      "hazard_skip_auto": true,
+      "log": "bench/results/hazard_ab_e4b_20260719T065759Z_default.txt"
+    }
+  },
+  "verdict": {
+    "speedup_hazard1_vs_0": 1.272,
+    "default_matches_hazard1": true,
+    "shipping_default": "hazard skip-auto ON (GemmaGpu::new_inference)",
+    "note": "Always-on costs ~5 tok/s on E4B (~27% relative). Keep shipping default = hazard ON; use =0 for golden/parity."
+  }
+}

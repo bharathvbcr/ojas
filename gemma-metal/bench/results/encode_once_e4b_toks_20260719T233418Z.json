@@ -1,0 +1,26 @@
+{
+  "artifact": "encode_once_e4b_toks",
+  "unix_ts": "20260719T233418Z",
+  "slice": "D16 v0.5.7 freeze-binds",
+  "fix": "GEMMA_METAL_ICB_FREEZE_BINDS=1: classic setKernelBuffer+tg_mem into ICB; execute_icb \u00d7 cmds; setArgumentTable=0",
+  "flags_default": "OFF",
+  "no_31b": true,
+  "no_fuse_gate_down": true,
+  "arms": {
+    "shipping": {
+      "tok_s": 23.48
+    },
+    "on": {
+      "tok_s": 22.63,
+      "encode_once": true,
+      "decode_icb": true,
+      "freeze_binds": true,
+      "icb_command_count": 594,
+      "last_set_argument_table_calls": 0
+    }
+  },
+  "mini_token_parity": "PASS under FREEZE_BINDS",
+  "light_e4b_ab": "setArgTable=0; ratio~1.03; tok_s 21.11\u219220.43",
+  "verdict": "SHIPPED freeze-binds: setArgumentTable=0 + true execute_icb; mini parity PASS. Quiet E4B shipping 23.48 vs freeze 22.63 tok/s (~flat-to-slight regress; execute_icb\u00d7N tax). Flags stay default OFF.",
+  "note": "Classic setKernelBuffer works with MTL4 ICB pipelines when tg_mem is frozen into each ICB cmd. Product limiter is now execute_icb\u00d7N vs dispatch+setArgumentTable\u00d7N, not bind traffic."
+}

@@ -1,0 +1,5 @@
+case=greet n=16 dir=/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f
+greet: hidden capture ON
+match_prefix=16/16 first_mismatch=None
+got[:16]=[100, 45518, 107, 236829, 139, 6804, 236787, 22168, 29104, 236761, 107, 140, 236829, 139, 52240, 236787]
+gold[:16]=[100, 45518, 107, 236829, 139, 6804, 236787, 22168, 29104, 236761, 107, 140, 236829, 139, 52240, 236787]

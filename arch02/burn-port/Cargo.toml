@@ -1,0 +1,55 @@
+[package]
+name = "arch02-burn"
+version = "0.1.0"
+edition = "2021"
+description = "Rust/Burn port of arch_02 (Value Residual GPT) — full training loop on Apple Silicon via Metal (CubeCL MSL)"
+
+[dependencies]
+# Metal backend uses CubeCL's native MSL compiler path (burn-wgpu/metal),
+# NOT the generic WGSL path. `fusion` + `autotune` come from burn-wgpu's
+# default features and are load-bearing for Apple-GPU throughput.
+burn = { version = "0.21", default-features = false, features = [
+    "std",
+    "autodiff",
+    "metal",
+    "fusion",
+    "autotune",
+    "ndarray",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.9"
+libc = "0.2"
+
+[dev-dependencies]
+# Cross-runtime GEMM comparison only (examples/candle_matmul.rs). Version 0.10.2
+# is already resolved in this lockfile via burn-candle, so this pulls nothing new.
+candle-core = { version = "0.10.2", features = ["metal"] }
+
+[features]
+default = []
+# Swap the training binary to the pure-Rust NdArray backend (CPU) so the whole
+# loop can be smoke-tested without a GPU. Metal is the default on the M5.
+cpu-smoke = []
+# Route attention through burn's fused `attention()` (CubeCL flash kernel with
+# a naive fallback for causal-on-Metal) instead of the hand-rolled SDPA.
+flash-attn = []
+
+[[bin]]
+name = "train"
+path = "src/bin/train.rs"
+
+[[bin]]
+name = "bench_matmul"
+path = "src/bin/bench_matmul.rs"
+
+[[bin]]
+name = "bench_overhead"
+path = "src/bin/bench_overhead.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]

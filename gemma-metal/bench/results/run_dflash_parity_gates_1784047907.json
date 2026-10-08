@@ -1,0 +1,285 @@
+{
+  "date_utc": "1784047907",
+  "gate_verdict": {
+    "accept_speed": {
+      "mean_accept_at_exact": 2.0,
+      "mini_dflash_ge_greedy": false,
+      "notes": "ge_greedy compares speed-lane DFlash vs hazard greedy (barrier-matched)",
+      "root_cause_remaining": "31B mean_accept material at bs=5 (~1.3) but DFlash tok/s still < greedy; draft Q4 proposals diverge from MLX (native target_next\u2260531 on short ids)",
+      "root_causes_fixed": [
+        "Synthetic mini draft mask-echo \u2192 steer MASK\u2192anchor + steered short-circuit propose",
+        "Mini exactness always-on; speed lane restores ambient hazard after capture drop",
+        "Dual act-scratch \u00d7VERIFY_MAX_M + gemm_q4_mlx for product cols>256; mini M\u00d7GEMV"
+      ],
+      "task": "dflash-accept-speed",
+      "task_status": "pending"
+    },
+    "dflash_parity_gates": "dual_scratch_steered_mini_speed_hazard",
+    "exactness": {
+      "capture_note": "Mid-layer copy_f32 can still shift ultra-near ties vs capture-off; baseline is capture-on",
+      "definition": "DFlash stream == capture-on greedy under always-on Dispatch barriers (short mini prompt)",
+      "mini_pass": true,
+      "real_31b_pass": true,
+      "root_cause_remaining": null,
+      "root_causes_fixed": [
+        "Draft/conditioner gemv_bf16_x into plain-Q4 gemv_q4 poisoned shared GPU",
+        "Device-side capture (copy_f32) + deferred host assemble after argmax readback",
+        "Missing lm_head\u2192softcap RAW barrier under hazard skip-auto (GPU argmax 0 vs host winner)",
+        "Exactness lane forces always-on Dispatch barriers so mini near-ties are bit-stable"
+      ],
+      "status": "PASS",
+      "task": "dflash-exact-parity",
+      "task_status": "completed"
+    },
+    "gemma_metal_exact_vs_greedy": true,
+    "mlx_exact_verify": true,
+    "product_31b_decode_ge_15": false,
+    "product_31b_mtp_ge_25": false,
+    "tok_s": {
+      "gemma_metal_mini_dflash_best": 716.856605291495,
+      "gemma_metal_mini_greedy_always_on": 766.7869675545118,
+      "gemma_metal_mini_greedy_hazard": 718.7363608545272,
+      "mini_dflash_ge_greedy": false,
+      "mini_dflash_ge_greedy_always_on": false,
+      "mini_dflash_ge_greedy_hazard": false
+    },
+    "verify_path": "Q4 GEMM + FA(Tq=M) when M>1 && cols>256; else M\u00d7GEMV (act scratch \u00d7VERIFY_MAX_M)"
+  },
+  "host": "Apple M5 Pro",
+  "lane": "dflash-parity-gates",
+  "real_31b": {
+    "best_block": 5,
+    "best_dflash_tok_s": 1.751696503703575,
+    "block_sweep": [
+      {
+        "accepts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "block": 3,
+        "mean_accept": 0.0,
+        "n_new": 24,
+        "tok_s": 1.4305838790259526
+      },
+      {
+        "accepts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          4,
+          4,
+          1,
+          0,
+          4
+        ],
+        "block": 5,
+        "mean_accept": 1.3,
+        "n_new": 24,
+        "tok_s": 1.751696503703575
+      }
+    ],
+    "debug_bs5": {
+      "accepts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        4,
+        1,
+        0,
+        4
+      ],
+      "dflash_new": [
+        929,
+        37355,
+        514,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715,
+        715
+      ],
+      "draft_attn_scale": 0.0883883461356163,
+      "embed_scale": 73.32121276855469
+    },
+    "dflash_token_ids_new": [
+      929,
+      37355,
+      514,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715
+    ],
+    "draft": "/Users/bharath/.cache/huggingface/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/eabd648301ce28583cc14757912e5e0f84e152e1",
+    "exact_vs_greedy": true,
+    "greedy_tok_s": 3.919838486321703,
+    "greedy_token_ids_new": [
+      929,
+      37355,
+      514,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715,
+      715
+    ],
+    "mean_accept_at_best": 0.2777777777777778,
+    "notes": "AO-while-capture + conditioner Q8g64; hazard outer lane. exact PASS mean_accept=0.2777777777777778; sweep bs5 mean_accept=1.3; DFlash~1.75 vs greedy~3.92. Golden proposed [14359\u2026] is dense pre-sample protocol; stream MLX Q4=[602,236787,532,532]; native anchor=929\u2260531 so proposed tokens differ (dump in native_intermediates_31b.json).",
+    "target": "/Users/bharath/.cache/huggingface/hub/models--mlx-community--gemma-4-31b-it-4bit/snapshots/696d436c404745a59f30e4939a658162b0a9e57f",
+    "dump_block1": {
+      "anchor": 929,
+      "h_ctx_absmean": 0.068772,
+      "mlx_h_ctx_absmean": 0.069892,
+      "proposed_stream": [
+        30692,
+        1390,
+        236744,
+        506
+      ],
+      "mlx_stream_q4g64": [
+        602,
+        236787,
+        532,
+        532
+      ],
+      "mlx_golden_protocol_dense": [
+        14359,
+        532,
+        107,
+        563
+      ]
+    }
+  },
+  "runtime": "gemma-metal",
+  "synthetic_mini": {
+    "best_block": 3,
+    "best_dflash_tok_s": 716.856605291495,
+    "block_sweep": [
+      {
+        "block": 2,
+        "mean_accept": 1.0,
+        "n_new": 16,
+        "tok_s": 670.08808056536
+      },
+      {
+        "block": 3,
+        "mean_accept": 2.0,
+        "n_new": 16,
+        "tok_s": 716.856605291495
+      },
+      {
+        "block": 4,
+        "mean_accept": 2.2,
+        "n_new": 16,
+        "tok_s": 569.3578778295351
+      },
+      {
+        "block": 5,
+        "mean_accept": 3.0,
+        "n_new": 16,
+        "tok_s": 630.2614024923372
+      },
+      {
+        "block": 6,
+        "mean_accept": 4.333333333333333,
+        "n_new": 16,
+        "tok_s": 698.4433966629423
+      },
+      {
+        "block": 8,
+        "mean_accept": 7.0,
+        "n_new": 16,
+        "tok_s": 696.7237653564995
+      }
+    ],
+    "exact_block": 3,
+    "exact_max_new": 6,
+    "exact_prompt": [
+      3,
+      4,
+      5
+    ],
+    "exact_vs_greedy": true,
+    "exactness_lane": "always_on_dispatch_barriers",
+    "greedy_tok_s": 718.7363608545272,
+    "greedy_tok_s_always_on": 766.7869675545118,
+    "greedy_tok_s_hazard": 718.7363608545272,
+    "mean_accept_at_exact": 2.0,
+    "notes": "Q4Mlx mini + dual act scratch; M\u00d7GEMV verify (H=256); steered short-circuit; speed lane=hazard; exactness=always-on"
+  }
+}
