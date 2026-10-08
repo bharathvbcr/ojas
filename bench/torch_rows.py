@@ -385,6 +385,93 @@ def _decode():
     ROWS.append(("decode_attn_kv1024", sp, make))
 
 
+GEN_PROMPT, GEN_NEW, GEN_PROMPT_SEED = 32, 32, 1701
+
+
+def _fnv1a32(name):
+    h = 0x811C9DC5
+    for b in name.encode():
+        h = ((h ^ b) * 0x01000193) & M32
+    return h
+
+
+def _gen_param(name, shape):
+    """bench/decode_rows.rs::gen_param: the same seed and scale per name."""
+    seed = _fnv1a32(name) % (1 << 20) + 1000
+    if "norm" in name:
+        return gen(shape, seed, -3) + 1.0
+    if len(shape) == 1:
+        return gen(shape, seed, -1)
+    if name == "tok_emb.weight":
+        return gen(shape, seed, -2)
+    return gen(shape, seed, -4)
+
+
+def _gen():
+    """Decode rows (bench/decode_rows.rs): nanolab's default GPT, a 32-token
+    prompt, greedy decode of 32 tokens through nanolab's own KV-cached path,
+    `GPT.forward_hidden_window(..., commit=True, causal=True)` (its cache
+    grows by torch.cat per step), then `lm_head` on the last position. The
+    reference outputs are the prompt's last-position logits; the greedy ids
+    go to `<row>.ids` for the ojas side's `_gen_ids` record."""
+    cfg = Config()
+    sp = (f"gen:nanolab_124m:vocab{cfg.vocab_size}:d{cfg.d_model}:L{cfg.n_layer}:"
+          f"H{cfg.n_head}x{cfg.head_dim}:hidden{FF}:prompt{GEN_PROMPT}:{GEN_PROMPT_SEED}:"
+          f"new{GEN_NEW}:weights=fnv1a32%2^20+1000,norm=1+2^-3,vec=2^-1,tok_emb=2^-2,mat=2^-4")
+
+    def build():
+        m = GPT(cfg).to(DEV).eval()
+        sd = m.state_dict()
+        new = {n: _gen_param(n, list(t.shape)) for n, t in sd.items() if n != "lm_head.weight"}
+        new["lm_head.weight"] = new["tok_emb.weight"]
+        m.load_state_dict(new)
+        if m.lm_head.weight.data_ptr() != m.tok_emb.weight.data_ptr():
+            raise SystemExit("nanolab GPT head is not tied")
+        ids = gen_targets(GEN_PROMPT, GEN_PROMPT_SEED).view(1, GEN_PROMPT)
+        return m, ids
+
+    def prefill(m, ids):
+        caches = [{} for _ in m.blocks]
+        h = m.forward_hidden_window(ids, 0, caches, commit=True, causal=True)
+        return m.lm_head(h[:, -1, :])[0], caches
+
+    def greedy(m, ids):
+        logits, caches = prefill(m, ids)
+        out = [logits.argmax()]
+        pos = GEN_PROMPT
+        for _ in range(GEN_NEW - 1):
+            h = m.forward_hidden_window(out[-1].view(1, 1), pos, caches, commit=True, causal=True)
+            out.append(m.lm_head(h[:, -1, :])[0].argmax())
+            pos += 1
+        return torch.stack(out)
+
+    def make_prefill():
+        m, ids = build()
+
+        def run():
+            with torch.no_grad():
+                return [prefill(m, ids)[0]]
+        return {"outs": run, "step": run}
+    ROWS.append((f"gen_prefill_p{GEN_PROMPT}", sp, make_prefill))
+
+    def make_greedy():
+        m, ids = build()
+
+        def outs():
+            with torch.no_grad():
+                return [prefill(m, ids)[0]]
+
+        def ids_out():
+            with torch.no_grad():
+                return greedy(m, ids)
+
+        def run():
+            with torch.no_grad():
+                return [greedy(m, ids)]
+        return {"outs": outs, "step": run, "ids": ids_out}
+    ROWS.append((f"gen_greedy_p{GEN_PROMPT}_n{GEN_NEW}", sp, make_greedy))
+
+
 SWEEP_N = [1, 1 << 12, 1 << 16, 1 << 18, 1 << 20, 1 << 21, 1 << 22, 1 << 23]
 SWEEP_B = [1, 2, 4, 8, 16]
 
@@ -646,6 +733,7 @@ def register():
     _decode()
     _accumulate()
     _sweep()
+    _gen()
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +768,10 @@ def do_ref(ref, filt):
         with open(os.path.join(ref, name + ".spec"), "w") as f:
             f.write(sp + "\n")
             f.write("counts=" + ",".join(str(s.numel()) for s in samples) + "\n")
+        if "ids" in st:
+            ids = st["ids"]().to(torch.int64).cpu()
+            with open(os.path.join(ref, name + ".ids"), "wb") as f:
+                f.write(ids.to(torch.int32).numpy().astype("<u4").tobytes())
         print(f"ref {name}: {[tuple(o.shape) for o in outs]}", file=sys.stderr)
         del st, outs, samples
         _CACHE.clear()

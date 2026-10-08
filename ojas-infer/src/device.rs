@@ -37,6 +37,38 @@ pub struct DeviceDecoder<B: Backend> {
     values: Vec<Tensor>,
     capacity: usize,
     len: usize,
+    traffic: HostTraffic,
+}
+
+/// Host tensors a [`DeviceDecoder`]'s forwards hand to the backend, and the
+/// device tensors they read back, since [`DeviceDecoder::new`] returned.
+/// Weight and cache uploads in `new` are not counted; transfers a backend
+/// makes inside an op are not seen. Bytes are the tensors' element bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostTraffic {
+    pub uploads: u64,
+    pub upload_bytes: u64,
+    pub readbacks: u64,
+    pub readback_bytes: u64,
+}
+
+impl HostTraffic {
+    fn bytes(t: &Tensor) -> Result<u64, OjasError> {
+        let n = t.num_elements()?.saturating_mul(t.dtype().size());
+        Ok(u64::try_from(n).unwrap_or(u64::MAX))
+    }
+
+    fn upload(&mut self, t: &Tensor) -> Result<(), OjasError> {
+        self.uploads = self.uploads.saturating_add(1);
+        self.upload_bytes = self.upload_bytes.saturating_add(Self::bytes(t)?);
+        Ok(())
+    }
+
+    fn readback(&mut self, t: &Tensor) -> Result<(), OjasError> {
+        self.readbacks = self.readbacks.saturating_add(1);
+        self.readback_bytes = self.readback_bytes.saturating_add(Self::bytes(t)?);
+        Ok(())
+    }
 }
 
 const OP: &str = "DeviceDecoder::forward";
@@ -85,7 +117,13 @@ impl<B: Backend> DeviceDecoder<B> {
             values,
             capacity,
             len: 0,
+            traffic: HostTraffic::default(),
         })
+    }
+
+    /// Transfers made by forwards so far, failed calls included.
+    pub fn traffic(&self) -> HostTraffic {
+        self.traffic
     }
 
     pub fn backend(&self) -> &B {
@@ -156,8 +194,12 @@ impl<B: Backend> DeviceDecoder<B> {
         }
         let (at, tn, d) = (self.len, tokens.len(), self.spec.n_embd);
         let budget = self.eval.backend().budget().clone();
-        let rope = Rope::rows(&self.spec, at, tn, &budget)?.upload(self.eval.backend())?;
+        let host_rope = Rope::rows(&self.spec, at, tn, &budget)?;
+        self.traffic.upload(&host_rope.cos)?;
+        self.traffic.upload(&host_rope.sin)?;
+        let rope = host_rope.upload(self.eval.backend())?;
         let ids = Tensor::from_u32(tokens, &[1, tn], &budget)?;
+        self.traffic.upload(&ids)?;
         let mut x = self.eval.embedding(&self.params.tok_emb, &ids)?;
         let mut v0: Option<Tensor> = None;
         let layers = self
@@ -197,12 +239,14 @@ impl<B: Backend> DeviceDecoder<B> {
                 detail: format!("position {} exceeds u32", tn - 1),
             })?;
             let index = Tensor::from_u32(&[last], &[1], &budget)?;
+            self.traffic.upload(&index)?;
             self.eval.embedding(&rows, &index)?
         };
         let h = self
             .eval
             .rms_norm(&last, &self.params.norm_f, self.spec.eps())?;
         let logits = self.eval.linear(&h, &self.params.tok_emb)?;
+        self.traffic.readback(&logits)?;
         let host = self.eval.backend().download(&logits)?;
         self.eval.backend().sync()?;
         let row = host.to_f32_vec()?;

@@ -27,7 +27,7 @@ mod gpt;
 mod kernels;
 mod sample;
 
-pub use device::DeviceDecoder;
+pub use device::{DeviceDecoder, HostTraffic};
 pub use gpt::{argmax_token, BlockWeights, CpuGpt, GptConfig, GptWeights, KvCache};
 pub use kernels::attend_one;
 pub use ojas_model::{BlockParams, ModelParams, ModelSpec};
