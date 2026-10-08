@@ -551,6 +551,11 @@ impl<B: Backend> Backend for Gated<B> {
         self.enter("accumulate_grad", true)?;
         self.inner.accumulate_grad(acc, grad)
     }
+    /// The tape's loss seed, applied during the backward (phase 2): polls.
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        self.enter("scale_grad", true)?;
+        self.inner.scale_grad(grad, scale)
+    }
     fn linear_cross_entropy_mean(
         &self,
         input: &Tensor,
@@ -689,6 +694,26 @@ mod tests {
             .chunked_gdn_backward(x, &fwd.checkpoints, &f(&[1, 3, 1, 2], 1.0), None)
             .is_err());
         assert_eq!(armed.tripped().as_deref(), Some("cancelled: Explicit"));
+    }
+
+    /// `scale_grad` reaches the inner backend: the CPU scales a uniquely
+    /// owned gradient in place with no charge, where the trait default
+    /// would build and charge a broadcast operand and a new product. A
+    /// cancel refuses it, as it does every polling op.
+    #[test]
+    fn scale_grad_reaches_the_inner_backend_in_place_and_polls() {
+        let slot = Arc::new(CancelSlot::default());
+        let g = gated(&slot);
+        let mut grad = Tensor::from_f32(&[1.0, -2.0, 4.0, 0.5], &[2, 2], g.budget()).unwrap();
+        let live = g.budget().live_bytes().unwrap();
+        g.budget().reset_peak();
+        g.scale_grad(&mut grad, 0.25).unwrap();
+        assert_eq!(grad.to_f32_vec().unwrap(), vec![0.25, -0.5, 1.0, 0.125]);
+        assert_eq!(g.budget().peak_bytes(), live, "scaled in place, no charge");
+        let armed = slot.arm(Box::new(|| Err("cancelled: Explicit".to_string())));
+        assert!(g.scale_grad(&mut grad, 0.5).is_err());
+        assert_eq!(armed.tripped().as_deref(), Some("cancelled: Explicit"));
+        assert_eq!(grad.to_f32_vec().unwrap(), vec![0.25, -0.5, 1.0, 0.125]);
     }
 
     #[test]
