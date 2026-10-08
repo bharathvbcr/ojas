@@ -58,6 +58,10 @@ Gap audit 2026-10-07 (rg + Read, DevMap unavailable). V = verified, I = inferred
 - **Hardening suites skip the new ops [V]:** `conv1d`, `gated_rms`, `rope_partial`, `chunked_gdn` appear only in `ojas-cpu/tests/hybrid.rs`.
 - **Stray diagnostic [V]:** `ojas-cpu/tests/zz_diag_flash.rs` is untracked, modified 2026-10-07, print-only, and runs as an always-passing test. It was chasing a Fast-vs-Exact backward gap at T=257 (`attention_fast.rs:273` already covers T=257 at 2e-6).
 
+### Progress (2026-10-08)
+- **Stray diagnostic — done.** `zz_diag_flash.rs` is deleted. It located the gap: Fast's flash backward took `delta = dO·O` from the forward, which disagrees with its own `exp2_affine` weights; `ojas-cpu/src/attn/flash.rs` now sums `P·dP` over the `P` it forms, and `attention_fast` passes 6/6 (T=257 D=64 grad_q 1.7e-7 of f64, Exact 2.1e-7).
+- **Sampler golden — partly.** `seeded_draws_are_pinned` (`ojas-infer/tests/sampling.rs`) now pins three seeded top-k / temperature / top-p rows, each checked against the in-file full-sort oracle before the pin. That is an internal reference, not torch; the torch-side golden stays open.
+
 The new ops come from `gp-attention-kernels` and `gp-autograd-and-model-primitives` (both in progress); this card adds coverage after they land and does not edit their files mid-flight.
 
 **Added by the second gap audit 2026-10-07** ([V] re-read by the auditor):

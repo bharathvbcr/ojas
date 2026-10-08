@@ -2,8 +2,9 @@
 //! Empty, NaN, mismatched shape, and a full budget each return a typed error.
 
 use ojas_core::{
-    exp_exact, log_sum_exp_exact, refuse_unsupported_metal_head_dim, AdamWConfig, Backend, BackendId, Budget, DType,
-    MuonNs5Config, Numerics, OjasError, Tensor, METAL_MAX_HEAD_DIM, RMS_NORM_EPS,
+    exp_exact, log_sum_exp_exact, refuse_unsupported_metal_head_dim, AdamWConfig, Backend,
+    BackendId, Budget, DType, MuonNs5Config, Numerics, OjasError, Tensor, METAL_MAX_HEAD_DIM,
+    RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 
