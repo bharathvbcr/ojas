@@ -267,18 +267,30 @@ impl<B: Backend> Autocast<B> {
         })
     }
 
-    /// A matmul-class operand inside a region: a `Bf16` tensor or an
-    /// already-rounded `F32` one as it is; otherwise new `Bf16` storage when
-    /// the inner backend takes it ([`Backend::bf16_operands`]), else a
-    /// rounded `F32` copy. The two arms give the kernel the same values, so
-    /// the same bits.
-    fn prep<'a>(&self, tensor: &'a Tensor) -> Result<Operand<'a>, OjasError> {
+    /// An operand of a matmul-class op ([`Backend::bf16_operands`]: linear
+    /// and causal SDPA, forward and backward) inside a region: a `Bf16`
+    /// tensor or an already-rounded `F32` one as it is; otherwise new `Bf16`
+    /// storage when the inner backend takes it, else a rounded `F32` copy.
+    /// The two arms give the kernel the same values, so the same bits.
+    fn prep_matmul<'a>(&self, tensor: &'a Tensor) -> Result<Operand<'a>, OjasError> {
         if !self.region()? || tensor.dtype() == DType::Bf16 || tensor.compute_tag() == COMPUTE_BF16
         {
             return Ok(Operand::Same(tensor));
         }
         if self.inner.bf16_operands() {
             return Ok(Operand::Rounded(self.inner.to_bf16(tensor)?));
+        }
+        Ok(Operand::Rounded(self.round_new(tensor)?))
+    }
+
+    /// An operand of any other op that rounds in a region: an already-rounded
+    /// tensor as it is, otherwise a rounded `F32` copy. Never `Bf16`
+    /// storage, which [`Backend::bf16_operands`] covers for the matmul-class
+    /// ops only; every other op refuses it.
+    fn prep<'a>(&self, tensor: &'a Tensor) -> Result<Operand<'a>, OjasError> {
+        if !self.region()? || tensor.dtype() == DType::Bf16 || tensor.compute_tag() == COMPUTE_BF16
+        {
+            return Ok(Operand::Same(tensor));
         }
         Ok(Operand::Rounded(self.round_new(tensor)?))
     }
@@ -453,8 +465,8 @@ impl<B: Backend> Backend for Autocast<B> {
     }
 
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
-        let input = self.prep(input)?;
-        let weight = self.prep(weight)?;
+        let input = self.prep_matmul(input)?;
+        let weight = self.prep_matmul(weight)?;
         let out = self.inner.linear_forward(&input, &weight)?;
         self.emit(out)
     }
@@ -465,9 +477,9 @@ impl<B: Backend> Backend for Autocast<B> {
         weight: &Tensor,
         grad_output: &Tensor,
     ) -> Result<(Tensor, Tensor), OjasError> {
-        let input = self.prep(input)?;
-        let weight = self.prep(weight)?;
-        let grad_output = self.prep(grad_output)?;
+        let input = self.prep_matmul(input)?;
+        let weight = self.prep_matmul(weight)?;
+        let grad_output = self.prep_matmul(grad_output)?;
         let (grad_input, grad_weight) =
             self.inner.linear_backward(&input, &weight, &grad_output)?;
         Ok((self.emit(grad_input)?, self.keep_f32(grad_weight)))
@@ -557,9 +569,9 @@ impl<B: Backend> Backend for Autocast<B> {
         v: &Tensor,
         window: Option<usize>,
     ) -> Result<(Tensor, Tensor), OjasError> {
-        let q = self.prep(q)?;
-        let k = self.prep(k)?;
-        let v = self.prep(v)?;
+        let q = self.prep_matmul(q)?;
+        let k = self.prep_matmul(k)?;
+        let v = self.prep_matmul(v)?;
         let (out, lse) = self.inner.causal_sdpa_forward(&q, &k, &v, window)?;
         Ok((self.emit(out)?, lse))
     }
@@ -575,11 +587,11 @@ impl<B: Backend> Backend for Autocast<B> {
         grad_output: &Tensor,
         window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
-        let q = self.prep(q)?;
-        let k = self.prep(k)?;
-        let v = self.prep(v)?;
-        let output = self.prep(output)?;
-        let grad_output = self.prep(grad_output)?;
+        let q = self.prep_matmul(q)?;
+        let k = self.prep_matmul(k)?;
+        let v = self.prep_matmul(v)?;
+        let output = self.prep_matmul(output)?;
+        let grad_output = self.prep_matmul(grad_output)?;
         let (gq, gk, gv) =
             self.inner
                 .causal_sdpa_backward(&q, &k, &v, &output, lse, &grad_output, window)?;
