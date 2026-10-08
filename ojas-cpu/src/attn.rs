@@ -400,14 +400,7 @@ pub(crate) fn causal_sdpa_backward(
         return Ok(());
     }
     if exec.numerics == Numerics::Fast && dims.time > FLASH_MIN_TIME {
-        return flash::backward(
-            op,
-            budget,
-            exec,
-            [q, k, v, out, lse, grad_y],
-            dims,
-            [gq, gk, gv],
-        );
+        return flash::backward(op, budget, exec, [q, k, v, lse, grad_y], dims, [gq, gk, gv]);
     }
     // One KV group is an independent reduction. The `rep` query heads that
     // share it are contiguous and accumulate into the same grad_k / grad_v

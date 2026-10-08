@@ -18,9 +18,9 @@
 //!
 //! Backward, per (head, chunk of consecutive query blocks), for each block
 //! in ascending order: `P = e^(scale·S - lse)` from the forward's
-//! log-sum-exp (no row maximum or sum is formed), `dP = dO_b·V[lo..e]ᵀ`,
-//! `delta_t = dO_t · O_t` from the forward's output, `dS =
-//! scale·P∘(dP - delta)`, `dQ_b = dS·K[lo..e]`, and the chunk's
+//! log-sum-exp (no row sum is formed), `dP = dO_b·V[lo..e]ᵀ`, `delta_t =
+//! sum_j P_tj·dP_tj` over this `P` (not `dO_t · O_t`, see
+//! [`score_grads`]), `dS = scale·P∘(dP - delta)`, `dQ_b = dS·K[lo..e]`, and the chunk's
 //! `dK[lo..e] += dSᵀ·Q_b`, `dV[lo..e] += Pᵀ·dO_b`. A head's chunk partials
 //! are summed in ascending chunk order after the pool returns.
 //!
@@ -215,7 +215,7 @@ pub(super) fn backward(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
-    [q, k, v, out, lse, g]: [&[f32]; 6],
+    [q, k, v, lse, g]: [&[f32]; 5],
     d: Dims,
     [grad_q, grad_k, grad_v]: SdpaGrads<'_>,
 ) -> Result<(), OjasError> {
@@ -286,17 +286,8 @@ pub(super) fn backward(
                 let rows = head * time + qb..head * time + e;
                 let mut p = gemm(op, sx, &qm, &km.t())?;
                 probs_from_lse(op, &mut p, &d, qb, lo, &lse[rows])?;
-                let delta: Vec<f32> = (0..nq)
-                    .map(|i| {
-                        let at = base + (qb + i) * dim;
-                        dot8(&g[at..at + dim], &out[at..at + dim])
-                    })
-                    .collect();
-                if delta.iter().any(|x| !x.is_finite()) {
-                    return Err(nonfinite(op));
-                }
                 let mut ds = gemm(op, sx, &gm, &vm.t())?;
-                score_grads(&p, &mut ds, &delta, &d, qb, lo);
+                score_grads(op, &p, &mut ds, nq, &d, qb, lo)?;
                 let pm = Mat::row_major(&p, nq, e - lo);
                 let dsm = Mat::row_major(&ds, nq, e - lo);
                 let rows = (qb - row0) * dim..(e - row0) * dim;
@@ -409,22 +400,42 @@ fn probs_from_lse(
 
 /// With `p` the probabilities of [`probs_from_lse`], `dp` becomes
 /// `dS = scale·P∘(dP - delta)`, zero outside each row's window, with
-/// `delta = dO · O` of the row.
-fn score_grads(p: &[f32], dp: &mut [f32], delta: &[f32], d: &Dims, qb: usize, lo: usize) {
-    let width = p.len() / delta.len().max(1);
-    for (i, ((p_row, d_row), &delta)) in p
+/// `delta = sum_j P_j·dP_j` over the window, from this same `P`.
+///
+/// `delta` is also `dO · O`, but only for the forward's own `P`. Fast's
+/// `exp2_affine` weights differ from the forward's by a few ulps, and `dP -
+/// delta` nearly cancels on rows with few keys, so a `delta` from the
+/// forward's output puts that mismatch on every `dS` of the row (at `[1, 1,
+/// 257, 64]` grad_q went from 2e-7 to 7e-7 of f64). Summing over this `P`
+/// keeps `sum_j dS_j` the rounding of zero, as Exact's per-row kernel does.
+/// A non-finite `delta` is refused.
+fn score_grads(
+    op: &'static str,
+    p: &[f32],
+    dp: &mut [f32],
+    nq: usize,
+    d: &Dims,
+    qb: usize,
+    lo: usize,
+) -> Result<(), OjasError> {
+    let width = (p.len() / nq.max(1)).max(1);
+    for (i, (p_row, d_row)) in p
         .chunks_exact(width)
         .zip(dp.chunks_exact_mut(width))
-        .zip(delta)
         .enumerate()
     {
         let span = live(d, qb, i, lo);
+        let delta = dot8(&p_row[span.clone()], &d_row[span.clone()]);
+        if !delta.is_finite() {
+            return Err(nonfinite(op));
+        }
         for (slot, &prob) in d_row[span.clone()].iter_mut().zip(&p_row[span.clone()]) {
             *slot = d.scale * (prob * (*slot - delta));
         }
         d_row[..span.start].fill(0.0);
         d_row[span.end..].fill(0.0);
     }
+    Ok(())
 }
 
 fn add_into(dst: &mut [f32], src: &[f32]) {
