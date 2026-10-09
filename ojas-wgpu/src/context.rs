@@ -20,8 +20,9 @@
 //! either release lands, so a fault may be reported twice; it is never lost.
 //!
 //! A lost device is recorded apart from the capped uncaptured-error queue,
-//! every later error check reports it, and every error from a device call
-//! names it.
+//! every later error check reports it, every error from a device call
+//! names it, and every op committed once it is recorded is refused naming
+//! it ([`Job::commit`]).
 //!
 //! Uploads write through a buffer mapped at creation. A pooled buffer is
 //! only ever written by commands recorded after the ones that read its
@@ -32,7 +33,8 @@
 //! the open encoder and writes them with one `Queue::write_buffer` just
 //! before that encoder is submitted; the queue orders that write after
 //! every earlier submission's reads of the ring and before this one's. A
-//! job that would pass [`PARAM_SLOTS`] submits what is recorded first.
+//! job that would pass the ring's slots ([`PARAM_SLOTS`] at most) submits
+//! what is recorded first.
 //! Bind groups are cached by kernel and buffer identity
 //! ([`BIND_CACHE_CAP`]), and `MAP_READ` staging buffers are kept for the
 //! next read ([`STAGING_CACHE_BYTES`]), so a steady-state dispatch creates
@@ -56,9 +58,10 @@ pub const FLUSH_AT: usize = 64;
 /// Bytes of one dispatch's parameter words: sixteen `u32`.
 const PARAM_BYTES: u64 = 64;
 
-/// Dispatches whose parameter words one submission's ring holds. A job that
-/// would pass it submits what is already recorded and goes on in a new
-/// encoder.
+/// Dispatches whose parameter words one submission's ring holds, at most:
+/// fewer on a device whose `max_buffer_size` cannot hold that many slots. A
+/// job that would pass the ring submits what is already recorded and goes on
+/// in a new encoder.
 pub const PARAM_SLOTS: usize = 1024;
 
 /// Bind groups the cache keeps. At the cap the cache is emptied and refills
@@ -324,8 +327,8 @@ impl Recorder {
 /// recorder's encoder while it fills slots.
 fn put_slot(params: &mut Vec<u8>, slots: &mut usize, words: &[u32; 16], stride: u64) -> u32 {
     let at = *slots * stride as usize;
-    if params.len() < at + PARAM_BYTES as usize {
-        params.resize(PARAM_SLOTS * stride as usize, 0);
+    if params.len() < at + stride as usize {
+        params.resize(at + stride as usize, 0);
     }
     let (dst, _) = params[at..at + PARAM_BYTES as usize].as_chunks_mut::<4>();
     for (d, w) in dst.iter_mut().zip(words) {
@@ -488,10 +491,12 @@ pub(crate) struct Inner {
     pipelines: Mutex<HashMap<(WgslModule, &'static str), Arc<Pipe>>>,
     pool: Mutex<Pool>,
     rec: Mutex<Recorder>,
-    /// The parameter ring: [`PARAM_SLOTS`] slots of `param_stride` bytes,
+    /// The parameter ring: `param_slots` slots of `param_stride` bytes,
     /// bound at binding 0 of every dispatch at its slot's offset.
     params: wgpu::Buffer,
     param_stride: u64,
+    /// Slots of the ring ([`ring_slots`]): at most [`PARAM_SLOTS`].
+    param_slots: usize,
     binds: Mutex<BindCache>,
     staging: Mutex<StagingCache>,
     /// Dispatches recorded before a submit without a read: [`FLUSH_AT`]
@@ -721,7 +726,8 @@ impl WgpuContext {
         let held = zeroed_words(&device, "ojas-fault-held")?;
         let param_stride = PARAM_BYTES
             .next_multiple_of(u64::from(limits.min_uniform_buffer_offset_alignment.max(1)));
-        let params = param_ring(&device, param_stride)?;
+        let param_slots = ring_slots(limits.max_buffer_size, param_stride)?;
+        let params = param_ring(&device, param_stride, param_slots)?;
         let (adapter_name, hal, vendor) = info_of(&info);
         Ok(Self {
             inner: Arc::new(Inner {
@@ -739,6 +745,7 @@ impl WgpuContext {
                 rec: Mutex::new(Recorder::default()),
                 params,
                 param_stride,
+                param_slots,
                 binds: Mutex::new(BindCache::default()),
                 staging: Mutex::new(StagingCache::default()),
                 flush_at: AtomicUsize::new(FLUSH_AT),
@@ -1322,6 +1329,12 @@ impl WgpuContext {
     fn hold(&self) -> Result<(Arc<Pipe>, wgpu::BindGroup), OjasError> {
         let mut cached = lock(&self.inner.hold);
         if let Some(hit) = cached.as_ref() {
+            // Kept apart from the bind cache so a read never creates a group
+            // after `trim_pool` empties that cache; still a served dispatch.
+            self.inner
+                .counters
+                .bind_hits
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(hit.clone());
         }
         let made = self.bind(&FAULT_HOLD, 0, 0, &self.inner.fault, &[&self.inner.held])?;
@@ -1375,7 +1388,7 @@ impl WgpuContext {
         let (hold_pipe, hold_group) = self.hold()?;
         let index = {
             let mut rec = lock(&self.inner.rec);
-            if rec.slots == PARAM_SLOTS {
+            if rec.slots >= self.inner.param_slots {
                 self.submit_locked(&mut rec);
             }
             let at = rec.slot(&[0; 16], self.inner.param_stride);
@@ -1598,16 +1611,42 @@ fn staging_size(bytes: u64) -> u64 {
     bytes.max(STAGING_MIN_BYTES).next_power_of_two()
 }
 
-/// The parameter ring: [`PARAM_SLOTS`] slots of `stride` bytes.
-fn param_ring(device: &wgpu::Device, stride: u64) -> Result<wgpu::Buffer, DeviceError> {
-    let scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+/// Slots of `stride` bytes the parameter ring has on a device whose buffers
+/// hold at most `max_buffer_size` bytes: [`PARAM_SLOTS`], or as many as fit.
+/// A device without room for one slot is refused.
+fn ring_slots(max_buffer_size: u64, stride: u64) -> Result<usize, DeviceError> {
+    let fit = usize::try_from(max_buffer_size / stride).unwrap_or(usize::MAX);
+    match fit.min(PARAM_SLOTS) {
+        0 => Err(DeviceError::Capacity {
+            kind: Device::Vulkan,
+            detail: format!(
+                "ojas-params: a {stride}-byte parameter slot is past the device's \
+                 {max_buffer_size}-byte buffer limit"
+            ),
+        }),
+        slots => Ok(slots),
+    }
+}
+
+/// The parameter ring: `slots` slots of `stride` bytes. Validation errors
+/// are caught too: a ring the device refused would otherwise fail every
+/// later submission without saying why.
+fn param_ring(
+    device: &wgpu::Device,
+    stride: u64,
+    slots: usize,
+) -> Result<wgpu::Buffer, DeviceError> {
+    let invalid = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("ojas-params"),
-        size: stride * PARAM_SLOTS as u64,
+        size: stride * slots as u64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    if let Some(err) = pollster::block_on(scope.pop()) {
+    let oom = pollster::block_on(oom.pop());
+    let invalid = pollster::block_on(invalid.pop());
+    if let Some(err) = oom.or(invalid) {
         return Err(DeviceError::Capacity {
             kind: Device::Vulkan,
             detail: format!("ojas-params: {err}"),
@@ -1805,12 +1844,19 @@ impl Job<'_> {
     /// split changes nothing the job computes.
     pub fn commit(self) -> Result<(), OjasError> {
         let ctx = self.ctx;
-        let stride = ctx.inner.param_stride;
+        // Recording an op makes no device call that could fail on a lost
+        // device (its parameters go to the ring, its bind group may be
+        // cached), so a loss already delivered is refused here, by name,
+        // before anything reaches the encoder.
+        if let Some(lost) = lock(&ctx.inner.lost).clone() {
+            return Err(device_lost(format!("recording an op: {lost}")));
+        }
+        let (stride, ring) = (ctx.inner.param_stride, ctx.inner.param_slots);
         let mut rec = lock(&ctx.inner.rec);
         let mut dispatched = 0usize;
         let mut i = 0;
         while i < self.steps.len() {
-            if matches!(self.steps[i], Step::Dispatch { .. }) && rec.slots == PARAM_SLOTS {
+            if matches!(self.steps[i], Step::Dispatch { .. }) && rec.slots >= ring {
                 ctx.submit_locked(&mut rec);
             }
             let rec = &mut *rec;
@@ -1828,7 +1874,7 @@ impl Job<'_> {
                         grid,
                     }) = self.steps.get(i)
                     {
-                        if rec.slots == PARAM_SLOTS {
+                        if rec.slots >= ring {
                             break;
                         }
                         let at = put_slot(&mut rec.params, &mut rec.slots, words, stride);
@@ -2136,6 +2182,59 @@ mod tests {
                 other => panic!("{n}: {other:?}"),
             }
         }
+    }
+
+    /// The parameter ring fits the device's buffer limit: every slot it can
+    /// hold up to [`PARAM_SLOTS`], and a device without room for one slot is
+    /// a capacity refusal. Pre-fix the ring was always `PARAM_SLOTS` slots,
+    /// so a device capped below that failed its first submission.
+    #[test]
+    fn the_parameter_ring_fits_the_buffer_limit() {
+        assert_eq!(ring_slots(u64::MAX, 256).unwrap(), PARAM_SLOTS);
+        assert_eq!(ring_slots(256 * PARAM_SLOTS as u64, 256).unwrap(), PARAM_SLOTS);
+        assert_eq!(ring_slots(1 << 16, 256).unwrap(), 256);
+        assert_eq!(ring_slots(256 + 255, 256).unwrap(), 1);
+        match ring_slots(255, 256) {
+            Err(DeviceError::Capacity { kind, detail }) => {
+                assert_eq!(kind, Device::Vulkan);
+                assert!(detail.contains("255"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A ring smaller than [`PARAM_SLOTS`] still splits a long job and keeps
+    /// every dispatch's own words.
+    #[test]
+    fn a_capped_ring_splits_a_job_and_keeps_its_words() {
+        let cap = wgpu::Limits {
+            max_buffer_size: 1 << 14,
+            ..wgpu::Limits::default()
+        };
+        let ctx = WgpuContext::open_capped(&cap).expect("wgpu adapter");
+        assert!(ctx.inner.param_slots < PARAM_SLOTS, "{}", ctx.inner.param_slots);
+        let budget = Budget::new(1 << 20);
+        let x = ctx.mapped(8, storage_usage(), &[0u8; 8]).expect("upload");
+        let kernel = Kernel {
+            module: WgslModule::Pointwise,
+            entry: "add_inplace",
+            slots: &[Slot::R(2), Slot::W(6)],
+        };
+        let one = ctx
+            .mapped(8, storage_usage(), &[1.0f32, 2.0].map(f32::to_le_bytes).concat())
+            .expect("upload");
+        let n = 3 * ctx.inner.param_slots + 7;
+        let before = ctx.stats().submits;
+        let mut job = ctx.job(&budget, 0);
+        for _ in 0..n {
+            job.dispatch(&kernel, &[2], &[&one, &x], (1, 1, 1)).unwrap();
+        }
+        job.commit().unwrap();
+        let got = ctx.read(&x, 0, 8).unwrap();
+        assert!(ctx.stats().submits - before >= 4, "the ring split the job");
+        let (words, _) = got.as_chunks::<4>();
+        let got: Vec<f32> = words.iter().map(|&b| f32::from_le_bytes(b)).collect();
+        assert_eq!(got, [n as f32, 2.0 * n as f32]);
     }
 
     /// The probe reports the adapter's type, its pool cap, and no device
