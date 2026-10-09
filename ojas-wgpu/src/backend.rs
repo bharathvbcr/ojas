@@ -301,6 +301,22 @@ impl SdpaPlan {
 /// Elements one stage-one reduction group covers (`CHUNK` in the WGSL).
 const CHUNK: usize = 4096;
 
+/// Words of the global norm's partials per [`CHUNK`]: its max |g| and its
+/// sum of (g / max)^2.
+const NORM_WORDS_PER_CHUNK: usize = 2;
+
+/// Words of the global norm's slot table per tensor: its count and the index
+/// of its first chunk.
+const NORM_WORDS_PER_PART: usize = 2;
+
+/// Budget bytes [`WgpuBackend::global_norm`] charges for `parts` tensors
+/// covering `chunks` chunks: the partials and the uploaded slot table.
+fn norm_scratch(parts: u64, chunks: u64) -> Option<u64> {
+    let partials = chunks.checked_mul(4 * NORM_WORDS_PER_CHUNK as u64)?;
+    let table = parts.checked_mul(4 * NORM_WORDS_PER_PART as u64)?;
+    partials.checked_add(table)
+}
+
 fn shape(op: Op, detail: impl Into<String>) -> OjasError {
     OjasError::Shape {
         op: op.name(),
@@ -933,7 +949,7 @@ impl WgpuBackend {
     /// `sizes` elements: per tensor its count and the index of its first
     /// [`CHUNK`]-value chunk, and the chunk total.
     fn clip_table(&self, op: Op, sizes: &[usize]) -> Result<(Vec<u32>, usize), OjasError> {
-        let mut tbl = Vec::with_capacity(2 * sizes.len());
+        let mut tbl = Vec::with_capacity(NORM_WORDS_PER_PART * sizes.len());
         let mut total = 0usize;
         for &n in sizes {
             tbl.push(u(op, n)?);
@@ -966,7 +982,7 @@ impl WgpuBackend {
         let sizes: Vec<usize> = parts.iter().map(|&(_, n)| n).collect();
         let (tbl, total) = self.clip_table(op, &sizes)?;
         let pairs = total
-            .checked_mul(2)
+            .checked_mul(NORM_WORDS_PER_CHUNK)
             .ok_or_else(|| overflow(op, "norm partials overflow"))?;
         self.fits(op, pairs)?;
         let partial = job.scratch((pairs as u64) * 4)?;
@@ -1414,9 +1430,10 @@ fn check_ids(op: Op, ids: &[u32], vocab: usize) -> Result<(), OjasError> {
 ///   `adam_apply` writes in place): `16`.
 /// - Muon: two 16-byte words; six `b`-byte planes (momentum buffer, update,
 ///   X, X', BX, new parameter); three `r × r` f32 matrices; the global
-///   norm's partials, 4 bytes per [`CHUNK`] values; and for a tall matrix
-///   (`rows > cols`) two `b`-byte transposes, each with a 16-byte geometry
-///   upload: `32 + 6b + 12 r² + 4 ceil(n / CHUNK) [+ 2b + 32]`.
+///   norm over one tensor ([`norm_scratch`]: 8 bytes per [`CHUNK`] values
+///   and an 8-byte slot table); and for a tall matrix (`rows > cols`) two
+///   `b`-byte transposes, each with a 16-byte geometry upload:
+///   `32 + 6b + 12 r² + 8 ceil(n / CHUNK) + 8 [+ 2b + 32]`.
 ///
 /// `adamw_step` and `muon_ns5_step` reserve exactly these pieces; the test
 /// `reported_optimizer_scratch_bounds_the_measured_peak` compares them.
@@ -1439,7 +1456,7 @@ fn optimizer_scratch(kind: OptimizerKind, rows: usize, cols: usize) -> Result<u6
         OptimizerKind::AdamW => sum(&[Some(b), Some(16)]),
         OptimizerKind::MuonNs5 => {
             let r = rows.min(cols) as u64;
-            let partials = n.div_ceil(CHUNK as u64).checked_mul(4);
+            let norm = norm_scratch(1, n.div_ceil(CHUNK as u64));
             let tall = if rows > cols {
                 b.checked_mul(2).and_then(|t| t.checked_add(32))
             } else {
@@ -1450,7 +1467,7 @@ fn optimizer_scratch(kind: OptimizerKind, rows: usize, cols: usize) -> Result<u6
                 Some(32),
                 b.checked_mul(6),
                 r.checked_mul(r).and_then(|rr| rr.checked_mul(12)),
-                partials,
+                norm,
                 tall,
             ])
         }
