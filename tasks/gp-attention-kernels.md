@@ -1,7 +1,7 @@
 ---
 id: "gp-attention-kernels"
 title: "GQA Native Kernels, Head Dim 256, Attention LSE Return, and Sliding Window"
-status: ready
+status: done
 priority: 0
 severity: critical
 type: feature
@@ -52,7 +52,7 @@ GQA Native Kernels, Head Dim 256, Attention LSE Return, and Sliding Window
 
 Task: gp-attention-kernels
 Type: feature
-Status: ready
+Status: done
 Priority: 0 (Urgent)
 Severity: critical
 Owner: unassigned
@@ -85,6 +85,26 @@ The code for phases 1–3 landed in 6a0a926, whose message says its test suites 
 - New test `grouped_query_charges_no_expanded_heads_at_the_qwen35_shape`, in Metal's and wgpu's `attention_window.rs`, measures the budget charge at Qwen3.5-2B (B1, H8/Hkv2, T2048, D256). The forward charges 16.06 MiB and the backward 24.06 MiB (Metal) or 24.13 MiB (wgpu). The test asserts outputs plus row statistics only. c74f3ba's expand path charged 48 MiB and 88.13 MiB; that figure is inferred from its source.
 - Backward A/B against c74f3ba, in `bench/results/2026-10-08-attn-lse-ab/`: 6 paired rounds, with controls at 0.98–1.02. The backward is 19–24% faster on Metal and on wgpu at every shape, including Qwen3.5 GQA, and the forward is unchanged. W=256 at T=2048 runs the backward at 0.25–0.31 of the full-prefix time, which is consistent with block skipping. Bit-level equivalence: `saved_backward_equals_the_recomputing_one_bit_for_bit` passes on Metal and wgpu.
 - Follow-up (2026-10-08): the CPU side of the LSE return moved bits the earlier pass had not checked. `exact_golden` re-records the nine Exact `sdpa_g*` digests and adds three `sdpa_lse` digests (the f64 gates in `sliding_window.rs` and `ops.rs` hold). `attention_fast` had regressed under Fast at T=257 (grad_q 6.9e-7 of f64 against Exact's 2.1e-7, passing at c74f3ba): the flash backward now forms `delta` from its own `P·dP`, and passes 6/6.
+
+### Close-out audit (2026-10-08, at 78289d5)
+Each criterion is met. [V] means verified by a test run of this commit (`--release`, `-j 2`, `--test-threads=2`, under `mac_heavy.sh`, with `OJAS_ALLOW_NO_GPU` unset so a missing GPU fails). [R] means read in the code. The attention batch ran 69 tests with no failures.
+1. **Head dim 256.**
+   - [R] `METAL_MAX_HEAD_DIM` (`ojas-core/src/backend.rs:64`), Metal's `ATTN_MAX_HEAD_DIM` and `ATTENTION_MAX_HEAD_DIM` (`ojas-kernels/src/geometry.rs:166`) are all 256. Head dim 257 returns `UnsupportedHeadDim`.
+   - [V] `ojas-metal --test attention_forward --test attention_backward --test attention_window` (22/22) covers head dims 64, 128 and 256 against the CPU, including `head_dims_above_64_follow_the_core_limit`.
+   - [V] `ojas-wgpu --test attention --test attention_window` (14/14) does the same on wgpu. `--test parity attention` passes 3/3.
+2. **GQA.**
+   - [R] The trait takes `k,v: [B,Hkv,T,D]`. Metal's tiled attention kernel and `attention.wgsl` (word 4, `rep`) read KV plane `bh / rep`. `rg -uu head_repeat` finds no code.
+   - [V] `ojas-model --test gqa_tape` (3/3) runs the CPU, Metal and wgpu Tapes against f64 central differences, and each GPU against the CPU Tape.
+   - [V] `grouped_query_charges_no_expanded_heads_at_the_qwen35_shape` passes on both GPUs. At B1 H8/Hkv2 T2048 D256 the forward charges 16.84 MB against 50.33 MB expanded, and the backward 25.2–25.3 MB against 92.4 MB (`bench/results/2026-10-08-attn-lse-ab/gqa_scratch.txt`).
+3. **LSE return.**
+   - [R] `causal_sdpa_forward` returns `(output, lse)`, `causal_sdpa_backward` consumes them, and the recomputing path survives as `causal_sdpa_backward_recompute`.
+   - [V] `saved_backward_equals_the_recomputing_one_bit_for_bit` passes on Metal and wgpu. `ojas-cpu --test exact_golden --test attention_fast` passes.
+   - [R] The A/B against c74f3ba is committed in `bench/results/2026-10-08-attn-lse-ab/`. The backward is 19–24% faster on both backends at every shape, with controls at 0.98–1.02. The benchmark was not re-run for this audit.
+4. **Sliding window.**
+   - [R] `window: Option<usize>` (t − W < j ≤ t) is on every forward and backward dispatch, and both kernels skip blocks wholly outside the window.
+   - [V] `windowed_attention_matches_cpu` and `keys_outside_the_window_never_reach_a_row` pass on Metal and wgpu. `ojas-cpu --test sliding_window` passes 6/6.
+   - [R] W=256 at T=2048 runs the backward at 0.25–0.31 of the full-prefix time (same bench folder).
+- **Not measured:** none against the criteria.
 
 ### Execution plan
 - **Phase 1 (GQA Hardening):** Add tape-level finite-difference GQA gradcheck. Implement native KV head indexing in Metal and wgpu attention kernels to eliminate repeat/sum-back scratch.
