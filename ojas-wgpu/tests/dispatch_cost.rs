@@ -49,33 +49,38 @@ fn offset_views_bind_in_place_when_the_device_allows_it() {
     let fused = host(7, &[3 * rows * d]);
     let dev = g.upload(&fused).unwrap();
     let align = u64::from(g.context().limits().min_storage_buffer_offset_alignment);
+    // The view's result must be the same kernel's result on exactly the
+    // slice's values: bit for bit against the slice uploaded on its own (a
+    // binding at the wrong offset or length reads other values), and close
+    // to the CPU like every parity test (the GPU's `exp` is not the CPU's,
+    // so the two may differ in the last place).
+    let check = |name: &str, view: &Tensor, slice: &Tensor| {
+        let got = g.silu_forward(view).unwrap();
+        let alone = g.silu_forward(&g.upload(slice).unwrap()).unwrap();
+        assert_eq!(
+            g.download(&got).unwrap().to_f32_vec().unwrap(),
+            g.download(&alone).unwrap().to_f32_vec().unwrap(),
+            "{name}"
+        );
+        close(name, &got, &c.silu_forward(slice).unwrap());
+    };
+    // The slice's values in a tensor of their own, at byte 0.
+    let own = |off: usize, shape: &[usize], strides: &[usize]| {
+        let v = fused.narrow(off, shape, strides).unwrap().to_f32_vec().unwrap();
+        Tensor::from_f32(&v, shape, host_budget()).unwrap()
+    };
     let before = g.context().stats().offset_copies;
     for i in 0..3 {
         let off = i * rows * d * 4;
         assert_eq!(off as u64 % align, 0, "the slices are aligned on this device");
         let view = dev.narrow(off, &[rows, d], &[d, 1]).unwrap();
-        let got = g.silu_forward(&view).unwrap();
-        let want = c
-            .silu_forward(&fused.narrow(off, &[rows, d], &[d, 1]).unwrap())
-            .unwrap();
-        assert_eq!(
-            g.download(&got).unwrap().to_f32_vec().unwrap(),
-            want.to_f32_vec().unwrap(),
-            "slice {i}"
-        );
+        check(&format!("slice {i}"), &view, &own(off, &[rows, d], &[d, 1]));
     }
     assert_eq!(g.context().stats().offset_copies, before, "aligned slices were copied");
 
     // One word in: not a storage-offset multiple, so compacted, and still right.
     let view = dev.narrow(4, &[rows * d], &[1]).unwrap();
-    let got = g.silu_forward(&view).unwrap();
-    let want = c
-        .silu_forward(&fused.narrow(4, &[rows * d], &[1]).unwrap())
-        .unwrap();
-    assert_eq!(
-        g.download(&got).unwrap().to_f32_vec().unwrap(),
-        want.to_f32_vec().unwrap()
-    );
+    check("one word in", &view, &own(4, &[rows * d], &[1]));
     assert_eq!(g.context().stats().offset_copies, before + 1);
 }
 
