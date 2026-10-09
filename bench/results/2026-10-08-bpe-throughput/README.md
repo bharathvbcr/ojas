@@ -44,3 +44,42 @@ processes and the median of per-round ratios against the base lane.
 3 processes, 1-minute load 9.5 to 13.5. Before this benchmark the only
 performance check was a 2 s wall-clock assertion on the 6-token fixture
 (`long_input_encodes_in_near_linear_time`).
+
+## Encode steps (`encode-steps/`)
+
+Four lanes, 3 interleaved rounds, built one after another from the same tree
+(binaries `base` = `c5aeee1`; `a`, `b`, `c` cumulative):
+
+- **a**: `encode_ordinary` keeps one set of merge buffers (`ids`, `next`,
+  `prev`, `alive`, and a `BinaryHeap` of `(rank, position)` with stale
+  entries checked on pop, in place of a fresh `BTreeSet` and five `Vec`s per
+  pre-token); a 256-entry byte-to-id table built at load replaces the per
+  character `encoder` lookup; `gpt2_split` yields pieces instead of
+  collecting a `Vec<&str>`.
+- **b**: the merge table moves from `BTreeMap<(u32, u32), _>` to a
+  `HashMap<u64, _>` with a one-multiply hasher (no new dependency).
+- **c**: a per-call pre-token cache (at most 65,536 pieces of at most 64
+  bytes, keys borrowed from the input, std's keyed hasher).
+
+| lane | encode_docs MB/s | Mtok/s | vs base | encode_joined MB/s | vs base |
+| :-- | --: | --: | --: | --: | --: |
+| base | 5.65 | 1.236 | 1.000 | 5.61 | 1.000 |
+| a | 11.13 | 2.435 | 0.508 | 11.13 | 0.504 |
+| b | 27.39 | 5.992 | 0.206 | 27.60 | 0.203 |
+| c | 31.38 | 6.865 | 0.180 | 64.59 | 0.087 |
+
+"vs base" is lane time / base time, minimum over rounds (the median of
+per-round ratios agrees within 0.005 on every encode row; `summary.md`).
+Every lane printed digest `5e0332ff9a859a7c` and matched tiktoken on 2434 of
+2434 documents. Decode code did not change in these lanes; its rows read
+0.97 to 1.00, which is noise. 1-minute load was 9.2 to 15.7.
+
+Decisions, from these numbers:
+
+- **Merges**: hash map kept (b against a: 0.41 of the time).
+- **Encoder**: left a `BTreeMap`. After step a, `encode_ordinary` no
+  longer queries it; only the fixture-style `Bpe::encode` (one lookup per
+  character) and `Bpe::piece_id` do, and neither is on this benchmark's path.
+- **Pre-token cache**: kept. Per document (about 4.7 KB a call) it is 0.87
+  of b's time; for the one 11.4 MB call, 0.43. It is per call, so the
+  tokenizer stays immutable and shareable.

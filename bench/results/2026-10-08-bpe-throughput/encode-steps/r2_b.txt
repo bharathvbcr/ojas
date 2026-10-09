@@ -1,0 +1,13 @@
+vocab_dir=/Users/bharath/Code/research/LocalModelBench/inference/audio/Step-Audio-EditX/funasr_detach/models/whisper/utils/assets/gpt2
+corpus=/Users/bharath/Code/research/MLSystemsLab/nanolab/data/HuggingFaceFW_fineweb-edu/val.bin
+load_hf_gpt2_s=0.0289
+documents=2434 doc_bytes=11412017 doc_tokens=2496959 joined_bytes=11416883 joined_tokens=2501825
+tiktoken_parity=ok documents_matched=2434/2434
+digest=5e0332ff9a859a7c
+rounds=5
+| row | min s | median s | MB/s (min) | Mtok/s (min) |
+| :-- | --: | --: | --: | --: |
+| encode_docs | 0.4167 | 0.4239 | 27.39 | 5.992 |
+| encode_joined | 0.4137 | 0.4204 | 27.60 | 6.047 |
+| decode_docs | 0.0374 | 0.0381 | 304.83 | 66.697 |
+| decode_joined | 0.0361 | 0.0366 | 316.64 | 69.386 |

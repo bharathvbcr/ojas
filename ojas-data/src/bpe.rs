@@ -13,7 +13,9 @@
 
 use crate::error::DataError;
 use crate::gpt2_class::{is_letter, is_number, is_space};
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -32,7 +34,54 @@ pub struct Bpe {
     tokens: Vec<String>,
     encoder: BTreeMap<String, u32>,
     /// `(left, right) -> (rank, merged id)`. Lower rank merges first.
-    merges: BTreeMap<(u32, u32), (u32, u32)>,
+    merges: PairMap,
+    /// For each byte, the id of the one-character piece that is its
+    /// [`bytes_to_unicode`] character, so [`Bpe::encode_ordinary`] does not
+    /// look pieces up by text. `None` when the vocabulary has no such piece.
+    byte_ids: [Option<u32>; 256],
+}
+
+/// `pair_key(left, right) -> (rank, merged id)`.
+type PairMap = HashMap<u64, (u32, u32), BuildHasherDefault<PairHasher>>;
+
+fn pair_key(left: u32, right: u32) -> u64 {
+    (u64::from(left) << 32) | u64::from(right)
+}
+
+/// Hasher for [`PairMap`] keys: one multiply, then the high half folded into
+/// the low half, which picks the bucket. The table's keys come from the
+/// vocabulary file, never from encoded text, so input text cannot shape the
+/// table; it only chooses which pairs are looked up.
+#[derive(Default)]
+struct PairHasher(u64);
+
+impl Hasher for PairHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        let h = (self.0 ^ v).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 = h ^ (h >> 32);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// Merge working buffers, reused across the pre-tokens of one encode.
+#[derive(Default)]
+struct MergeScratch {
+    ids: Vec<u32>,
+    next: Vec<u32>,
+    prev: Vec<u32>,
+    alive: Vec<bool>,
+    /// `(rank, left position)`, lowest first. An entry goes stale when its
+    /// pair changes; [`Bpe::merge_into`] checks each one when it pops it.
+    heap: BinaryHeap<Reverse<(u32, u32)>>,
 }
 
 pub struct BpeBuilder {
@@ -90,7 +139,7 @@ impl BpeBuilder {
                 return Err(DataError::new(format!("duplicate piece {piece:?}")));
             }
         }
-        let mut merges = BTreeMap::new();
+        let mut merges = PairMap::default();
         for (left, right, rank, merged) in self.merges {
             let l = tokens.get(left as usize).ok_or_else(|| {
                 DataError::new(format!("merge left id {left} is not in the vocabulary"))
@@ -106,17 +155,16 @@ impl BpeBuilder {
                     "merge {left}+{right} -> {merged} text is {m:?}, not the concatenation"
                 )));
             }
-            if merges.insert((left, right), (rank, merged)).is_some() {
+            if merges
+                .insert(pair_key(left, right), (rank, merged))
+                .is_some()
+            {
                 return Err(DataError::new(format!(
                     "duplicate merge pair ({left}, {right})"
                 )));
             }
         }
-        Ok(Bpe {
-            tokens,
-            encoder,
-            merges,
-        })
+        Ok(Bpe::assemble(tokens, encoder, merges))
     }
 }
 
@@ -127,6 +175,20 @@ impl Default for BpeBuilder {
 }
 
 impl Bpe {
+    fn assemble(tokens: Vec<String>, encoder: BTreeMap<String, u32>, merges: PairMap) -> Bpe {
+        let mut byte_ids = [None; 256];
+        let mut buf = [0u8; 4];
+        for (slot, ch) in byte_ids.iter_mut().zip(bytes_to_unicode()) {
+            *slot = encoder.get(&*ch.encode_utf8(&mut buf)).copied();
+        }
+        Bpe {
+            tokens,
+            encoder,
+            merges,
+            byte_ids,
+        }
+    }
+
     /// Encode `text` by splitting into vocabulary characters, then applying
     /// merges from lowest rank, leftmost first among equal ranks. A character
     /// that is not a vocabulary piece is an error. This split is one Unicode
@@ -136,7 +198,7 @@ impl Bpe {
     /// bookkeeping, and the file loaders already stop at that size.
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, DataError> {
         refuse_encode_len(text)?;
-        let mut ids = Vec::new();
+        let mut scratch = MergeScratch::default();
         let mut buf = [0u8; 4];
         for ch in text.chars() {
             let piece: &str = ch.encode_utf8(&mut buf);
@@ -144,30 +206,59 @@ impl Bpe {
                 .encoder
                 .get(piece)
                 .ok_or_else(|| DataError::new(format!("no vocabulary piece for {piece:?}")))?;
-            ids.push(*id);
+            scratch.ids.push(*id);
         }
+        let mut out = Vec::with_capacity(scratch.ids.len());
+        self.merge_into(&mut scratch, &mut out);
+        Ok(out)
+    }
+
+    /// `(rank, merged id)` of the pair `left, right`.
+    #[inline]
+    fn merge(&self, left: u32, right: u32) -> Option<&(u32, u32)> {
+        self.merges.get(&pair_key(left, right))
+    }
+
+    /// Merge `scratch.ids` and append the result to `out`. A doubly linked
+    /// list over positions; a merge keeps the left node. Every pair is pushed
+    /// on the heap when it forms, and an entry is used only if its position
+    /// is alive, has a right neighbour, and that pair's rank is still the
+    /// entry's, so the lowest-rank, leftmost live pair always merges next.
+    /// Positions fit `u32` because input is capped at [`HF_TEXT_CAP`] bytes.
+    fn merge_into(&self, scratch: &mut MergeScratch, out: &mut Vec<u32>) {
+        let MergeScratch {
+            ids,
+            next,
+            prev,
+            alive,
+            heap,
+        } = scratch;
         let n = ids.len();
-        // A doubly linked list over character positions. A merge keeps the
-        // left node. The live set holds one current pair per left node, so
-        // invalidating a node removes that pair instead of leaving it behind.
-        let mut next: Vec<usize> = (1..=n).collect();
-        let mut prev: Vec<usize> = (0..n).map(|i| i.wrapping_sub(1)).collect();
-        let mut alive = vec![true; n];
-        let mut live: BTreeSet<(u32, usize)> = BTreeSet::new();
-        let mut at = vec![None; n];
-        for i in 1..n {
-            self.link_pair(&mut live, &mut at, &ids, &next, i - 1);
+        if n < 2 {
+            out.extend_from_slice(ids);
+            return;
         }
-        while let Some(&(rank, l)) = live.iter().next() {
-            live.remove(&(rank, l));
-            at[l] = None;
+        let end = n as u32;
+        next.clear();
+        next.extend(1..=end);
+        prev.clear();
+        prev.extend((0..end).map(|i| i.wrapping_sub(1)));
+        alive.clear();
+        alive.resize(n, true);
+        heap.clear();
+        for l in 0..n - 1 {
+            if let Some(&(rank, _)) = self.merge(ids[l], ids[l + 1]) {
+                heap.push(Reverse((rank, l as u32)));
+            }
+        }
+        while let Some(Reverse((rank, l))) = heap.pop() {
+            let l = l as usize;
             let r = next[l];
-            if !alive[l] || r >= n || !alive[r] {
+            if !alive[l] || r >= end {
                 continue;
             }
-            let left_id = ids[l];
-            let right_id = ids[r];
-            let Some(&(stored, merged)) = self.merges.get(&(left_id, right_id)) else {
+            let r = r as usize;
+            let Some(&(stored, merged)) = self.merge(ids[l], ids[r]) else {
                 continue;
             };
             if stored != rank {
@@ -175,46 +266,26 @@ impl Bpe {
             }
             ids[l] = merged;
             alive[r] = false;
-            if let Some(key) = at[r].take() {
-                live.remove(&key);
+            let after = next[r];
+            next[l] = after;
+            if after < end {
+                prev[after as usize] = l as u32;
+                if let Some(&(rank, _)) = self.merge(merged, ids[after as usize]) {
+                    heap.push(Reverse((rank, l as u32)));
+                }
             }
-            next[l] = next[r];
-            if next[l] < n {
-                prev[next[l]] = l;
-            }
-            if prev[l] < n {
-                self.link_pair(&mut live, &mut at, &ids, &next, prev[l]);
-            }
-            if next[l] < n {
-                self.link_pair(&mut live, &mut at, &ids, &next, l);
+            let before = prev[l];
+            if before < end {
+                if let Some(&(rank, _)) = self.merge(ids[before as usize], merged) {
+                    heap.push(Reverse((rank, before)));
+                }
             }
         }
-        Ok(ids
-            .into_iter()
-            .zip(alive)
-            .filter_map(|(id, live)| live.then_some(id))
-            .collect())
-    }
-
-    fn link_pair(
-        &self,
-        live: &mut BTreeSet<(u32, usize)>,
-        at: &mut [Option<(u32, usize)>],
-        ids: &[u32],
-        next: &[usize],
-        l: usize,
-    ) {
-        if let Some(old) = at[l].take() {
-            live.remove(&old);
-        }
-        let r = next.get(l).copied().unwrap_or(ids.len());
-        if r >= ids.len() {
-            return;
-        }
-        if let Some(&(rank, _)) = self.merges.get(&(ids[l], ids[r])) {
-            live.insert((rank, l));
-            at[l] = Some((rank, l));
-        }
+        out.extend(
+            ids.iter()
+                .zip(alive.iter())
+                .filter_map(|(&id, &live)| live.then_some(id)),
+        );
     }
 
     pub fn decode(&self, ids: &[u32]) -> Result<String, DataError> {
@@ -231,18 +302,42 @@ impl Bpe {
     /// GPT-2 ordinary encode: regex pre-tokenize, map each piece's bytes through
     /// [`bytes_to_unicode`], then merge. Special tokens are ordinary text.
     ///
+    /// One call reuses its merge buffers across pre-tokens and keeps a
+    /// bounded cache of the pre-tokens it has already encoded (repeated words
+    /// are not merged again); nothing is kept between calls.
+    /// `bench/results/2026-10-08-bpe-throughput` has the measurements.
+    ///
     /// Byte-identity with tiktoken is [`TIKTOKEN_GPT2_BYTE_IDENTITY`].
     pub fn encode_ordinary(&self, text: &str) -> Result<Vec<u32>, DataError> {
         refuse_encode_len(text)?;
-        let map = bytes_to_unicode();
-        let mut ids = Vec::new();
-        let mut mapped = String::new();
+        let mut scratch = MergeScratch::default();
+        let mut ids = Vec::with_capacity(text.len() / 4);
+        // Pre-token -> its ids' span in `cached`. Keys borrow `text`. Only
+        // pieces up to CACHE_PIECE_BYTES are kept, and at most CACHE_ENTRIES
+        // of them, so `cached` holds at most 4 Mi ids on any input. The map
+        // keeps std's randomly keyed hasher: its keys are caller text.
+        let mut cache: HashMap<&str, (u32, u32)> = HashMap::new();
+        let mut cached: Vec<u32> = Vec::new();
         for piece in gpt2_split(text) {
-            mapped.clear();
-            for &b in piece.as_bytes() {
-                mapped.push(map[b as usize]);
+            if let Some(&(at, len)) = cache.get(piece) {
+                ids.extend_from_slice(&cached[at as usize..(at + len) as usize]);
+                continue;
             }
-            ids.extend(self.encode(&mapped)?);
+            let start = ids.len();
+            scratch.ids.clear();
+            for &b in piece.as_bytes() {
+                let id = self.byte_ids[b as usize].ok_or_else(|| {
+                    let piece = bytes_to_unicode()[b as usize].to_string();
+                    DataError::new(format!("no vocabulary piece for {piece:?}"))
+                })?;
+                scratch.ids.push(id);
+            }
+            self.merge_into(&mut scratch, &mut ids);
+            if piece.len() <= CACHE_PIECE_BYTES && cache.len() < CACHE_ENTRIES {
+                let at = cached.len() as u32;
+                cached.extend_from_slice(&ids[start..]);
+                cache.insert(piece, (at, (ids.len() - start) as u32));
+            }
         }
         Ok(ids)
     }
@@ -291,7 +386,7 @@ impl Bpe {
                 return Err(DataError::new(format!("duplicate piece {piece:?}")));
             }
         }
-        let mut merge_map = BTreeMap::new();
+        let mut merge_map = PairMap::default();
         for (rank, (left, right)) in merges.into_iter().enumerate() {
             let left_id = *encoder.get(&left).ok_or_else(|| {
                 DataError::new(format!("merge left {left:?} is not in the vocabulary"))
@@ -308,7 +403,7 @@ impl Bpe {
             let rank_u = u32::try_from(rank)
                 .map_err(|_| DataError::new(format!("merge rank {rank} exceeds u32")))?;
             if merge_map
-                .insert((left_id, right_id), (rank_u, merged_id))
+                .insert(pair_key(left_id, right_id), (rank_u, merged_id))
                 .is_some()
             {
                 return Err(DataError::new(format!(
@@ -316,52 +411,44 @@ impl Bpe {
                 )));
             }
         }
-        Ok(Bpe {
-            tokens: pieces,
-            encoder,
-            merges: merge_map,
-        })
+        Ok(Bpe::assemble(pieces, encoder, merge_map))
     }
 }
 
-/// GPT-2 pre-tokenizer pieces, in order.
+/// [`Bpe::encode_ordinary`]'s per-call pre-token cache bounds.
+const CACHE_ENTRIES: usize = 1 << 16;
+const CACHE_PIECE_BYTES: usize = 64;
+
+/// GPT-2 pre-tokenizer pieces, in order, without collecting them.
 ///
 /// Pattern: `'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+`.
 /// The optional space is one U+0020. The classes are in [`crate::gpt2_class`].
-pub fn gpt2_split(text: &str) -> Vec<&str> {
-    const CONTRACTIONS: [&str; 7] = ["'s", "'t", "'re", "'ve", "'m", "'ll", "'d"];
-    let mut out = Vec::new();
+pub fn gpt2_split(text: &str) -> impl Iterator<Item = &str> {
     let mut i = 0;
-    while i < text.len() {
-        let rest = &text[i..];
-        let mut end = 0;
-        for c in CONTRACTIONS {
-            if rest.starts_with(c) {
-                end = i + c.len();
-                break;
-            }
-        }
-        if end <= i {
-            if let Some(n) = opt_space_class(text, i, is_letter) {
-                end = n;
-            } else if let Some(n) = opt_space_class(text, i, is_number) {
-                end = n;
-            } else if let Some(n) = opt_space_class(text, i, is_other) {
-                end = n;
-            } else if let Some(n) = whitespace_token_end(text, i) {
-                end = n;
-            }
-        }
-        if end <= i {
-            let Some(ch) = rest.chars().next() else {
-                break;
-            };
-            end = i + ch.len_utf8();
-        }
-        out.push(&text[i..end]);
+    std::iter::from_fn(move || {
+        let end = next_piece_end(text, i)?;
+        let piece = &text[i..end];
         i = end;
+        Some(piece)
+    })
+}
+
+/// End of the pre-token that starts at byte `i`, or `None` at the end.
+fn next_piece_end(text: &str, i: usize) -> Option<usize> {
+    const CONTRACTIONS: [&str; 7] = ["'s", "'t", "'re", "'ve", "'m", "'ll", "'d"];
+    let rest = &text[i..];
+    let ch = rest.chars().next()?;
+    for c in CONTRACTIONS {
+        if rest.starts_with(c) {
+            return Some(i + c.len());
+        }
     }
-    out
+    let end = opt_space_class(text, i, is_letter)
+        .or_else(|| opt_space_class(text, i, is_number))
+        .or_else(|| opt_space_class(text, i, is_other))
+        .or_else(|| whitespace_token_end(text, i))
+        .unwrap_or(i);
+    Some(if end > i { end } else { i + ch.len_utf8() })
 }
 
 fn is_other(c: char) -> bool {
@@ -832,7 +919,7 @@ mod tests {
         loop {
             let mut best: Option<(u32, usize)> = None;
             for i in 0..seq.len().saturating_sub(1) {
-                if let Some(&(rank, _)) = bpe.merges.get(&(seq[i], seq[i + 1])) {
+                if let Some(&(rank, _)) = bpe.merge(seq[i], seq[i + 1]) {
                     if best.is_none_or(|(b, _)| rank < b) {
                         best = Some((rank, i));
                     }
@@ -841,7 +928,7 @@ mod tests {
             let Some((_, i)) = best else {
                 return Some(seq);
             };
-            seq[i] = bpe.merges[&(seq[i], seq[i + 1])].1;
+            seq[i] = bpe.merge(seq[i], seq[i + 1]).unwrap().1;
             seq.remove(i + 1);
         }
     }
@@ -985,14 +1072,17 @@ mod tests {
         ];
         assert_eq!(cases.len(), 20);
         for (text, parts) in cases {
-            assert_eq!(gpt2_split(text).as_slice(), *parts, "{text:?}");
+            assert_eq!(gpt2_split(text).collect::<Vec<_>>(), *parts, "{text:?}");
         }
-        assert_eq!(gpt2_split(" 12").as_slice(), [" 12"]);
-        assert_eq!(gpt2_split("  12").as_slice(), [" ", " 12"]);
-        assert_eq!(gpt2_split("a \nb").as_slice(), ["a", " ", "\n", "b"]);
+        assert_eq!(gpt2_split(" 12").collect::<Vec<_>>(), [" 12"]);
+        assert_eq!(gpt2_split("  12").collect::<Vec<_>>(), [" ", " 12"]);
+        assert_eq!(
+            gpt2_split("a \nb").collect::<Vec<_>>(),
+            ["a", " ", "\n", "b"]
+        );
         for cp in [0u32, 0x20, 0x41, 0x2019, 0x4F60, 0x1F642, 0xA0, 0x3000] {
             let s = char::from_u32(cp).unwrap().to_string();
-            assert_eq!(gpt2_split(&s).as_slice(), [s.as_str()]);
+            assert_eq!(gpt2_split(&s).collect::<Vec<_>>(), [s.as_str()]);
         }
     }
 
