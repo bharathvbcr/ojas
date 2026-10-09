@@ -72,6 +72,9 @@ pub struct Probe<'a, Bk: Backend + Knobs> {
 
 type R<T> = Result<T, OjasError>;
 
+/// One timed iteration of a probe variant ([`Probe::interleave`]).
+type Step<'a, Bk, S> = dyn FnMut(&Bk, &mut S) -> R<()> + 'a;
+
 impl<Bk: Backend + Knobs> Probe<'_, Bk> {
     fn want(&self, name: &str) -> bool {
         self.filter.is_empty() || self.filter.iter().any(|f| name.starts_with(f.as_str()))
@@ -101,7 +104,7 @@ impl<Bk: Backend + Knobs> Probe<'_, Bk> {
         &mut self,
         probe: &str,
         state: &mut S,
-        variants: &mut [(&str, &mut dyn FnMut(&Bk, &mut S) -> R<()>)],
+        variants: &mut [(&str, &mut Step<'_, Bk, S>)],
     ) {
         if !self.want(probe) {
             return;
@@ -316,9 +319,9 @@ fn flush<Bk: Backend + Knobs>(p: &mut Probe<'_, Bk>) -> R<()> {
             }),
         ));
     }
-    let mut variants: Vec<(&str, &mut dyn FnMut(&Bk, &mut ()) -> R<()>)> = fns
+    let mut variants: Vec<(&str, &mut Step<'_, Bk, ()>)> = fns
         .iter_mut()
-        .map(|(n, f)| (n.as_str(), f.as_mut() as &mut dyn FnMut(&Bk, &mut ()) -> R<()>))
+        .map(|(n, f)| (n.as_str(), f.as_mut() as &mut Step<'_, Bk, ()>))
         .collect();
     p.interleave("flush_block_fwd_bwd", &mut st, &mut variants);
     p.be.set_flush(ojas_default_flush(&values));
@@ -481,13 +484,13 @@ fn link<Bk: Backend + Knobs>(p: &mut Probe<'_, Bk>) -> R<()> {
             ("decode_attn_one_sync", &mut |be, st| {
                 let mut keep = Vec::with_capacity(CALLS);
                 for _ in 0..CALLS {
-                    keep.push(be.cached_attention_forward(&st.1, &st.2, &st.3, T)?);
+                    keep.push(be.cached_attention_forward(&st.1, &st.2, &st.3, T, None)?);
                 }
                 Ok(())
             }),
             ("decode_attn_sync_each", &mut |be, st| {
                 for _ in 0..CALLS {
-                    let y = be.cached_attention_forward(&st.1, &st.2, &st.3, T)?;
+                    let y = be.cached_attention_forward(&st.1, &st.2, &st.3, T, None)?;
                     be.sync()?;
                     drop(y);
                 }

@@ -257,7 +257,7 @@ fn reported_optimizer_scratch_bounds_the_measured_peak() {
             }
             g.sync().unwrap();
             let took = g.budget().peak_bytes() - live;
-            let copied = offset && (cols as u64 * 4) % align != 0;
+            let copied = offset && !(cols as u64 * 4).is_multiple_of(align);
             let expect = if copied { reported } else { reported - copy };
             assert_eq!(took, expect, "{what} {kind:?} offset {offset}");
         }

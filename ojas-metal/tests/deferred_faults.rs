@@ -372,8 +372,17 @@ fn host_refusals_stay_immediate_and_leave_nothing_pending() {
     let r = m.cached_attention_forward(&qd, &kc, &kc, cap + 1, None);
     assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "{r:?}");
     nothing("kv_len");
+    // The cache is a ring: positions past Tcap wrap, so only more positions
+    // than slots, or an `at + Tn` that overflows, is refused.
     let mut cache = up(&m, &rand(&[1, cap, hkv, d], 7, 1.0));
-    let r = m.kv_cache_write(&mut cache, &up(&m, &rand(&[1, 2, hkv, d], 8, 1.0)), 3);
+    let r = m.kv_cache_write(&mut cache, &up(&m, &rand(&[1, cap + 1, hkv, d], 8, 1.0)), 0);
+    assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "{r:?}");
+    nothing("Tn > Tcap");
+    let r = m.kv_cache_write(
+        &mut cache,
+        &up(&m, &rand(&[1, 2, hkv, d], 8, 1.0)),
+        usize::MAX,
+    );
     assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "{r:?}");
     nothing("at + Tn");
 

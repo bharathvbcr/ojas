@@ -3156,17 +3156,26 @@ mod tests {
             };
             let mut cache = up(2 * 4 * 3, &[1, 4, 2, 3]);
             let src = up(2 * 2 * 3, &[1, 2, 2, 3]);
+            let too_long = up(5 * 2 * 3, &[1, 5, 2, 3]);
             let injected = m.link.call(Cmd::InjectPanic);
             assert!(injected.is_err(), "{injected:?}");
-            for at in [3usize, 4, usize::MAX] {
-                let r = m.kv_cache_write(&mut cache, &src, at);
+            // The cache is a ring: only more positions than slots, or an
+            // `at + Tn` that overflows, is refused.
+            for (what, src, at) in [
+                ("Tn > Tcap", &too_long, 0usize),
+                ("at + Tn overflows", &src, usize::MAX),
+            ] {
+                let r = m.kv_cache_write(&mut cache, src, at);
                 assert!(
                     matches!(r, Err(OjasError::OutOfRange { .. })),
-                    "at {at}: {r:?}"
+                    "{what}: {r:?}"
                 );
             }
-            let r = m.kv_cache_write(&mut cache, &src, 2);
-            assert!(matches!(r, Err(OjasError::Poisoned)), "{r:?}");
+            // In range, wrapping or not, reaches the poisoned device.
+            for at in [2usize, 3] {
+                let r = m.kv_cache_write(&mut cache, &src, at);
+                assert!(matches!(r, Err(OjasError::Poisoned)), "at {at}: {r:?}");
+            }
         });
     }
 }
