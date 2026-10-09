@@ -149,10 +149,12 @@ flowchart TD
     DeviceEnum -->|DeviceCPUAuto| D4["DeviceCPUAuto\nAutomatic thread count from system thread ceiling"]
     DeviceEnum -->|DeviceMetal| D2["DeviceMetal\nApple Silicon Metal 4 (tessl + MSL)"]
     DeviceEnum -->|DeviceWgpu| D3["DeviceWgpu\nPortable WebGPU / WGSL (Vulkan/Metal/DX12)"]
+    DeviceEnum -->|DeviceCUDA| D5["DeviceCUDA\nReserved: refused until gp-cuda-backend-provider lands"]
 ```
 
 > [!IMPORTANT]
 > * **Zero Silent Fallback:** Selecting `DeviceMetal` or `DeviceWgpu` on a system where that hardware or driver is absent **returns an error immediately**. The client never silently degrades to CPU execution.
+> * **CUDA is refused:** `DeviceCUDA` (5) returns an error naming CUDA and creates no model. The engine's CUDA backend cannot yet hold a session (its runtime cannot move between threads, and no compute op is implemented); that waits on task gp-cuda-backend-provider.
 > * **Thread Constraints:** `DeviceCPUParallel` needs $1 \le \text{Threads} \le 256$ (`MaxCPUThreads`). 0 or more than 256 is an error.
 > * **Auto Thread Sizing:** `DeviceCPUAuto` sizes the CPU pool from this machine's thread ceiling (`SystemProfile`'s `ThreadCeiling`, clamped to `MaxCPUThreads`), factoring in usable CPUs and cgroup CPU quotas. An unreadable CPU count is refused, not guessed.
 > * **Numerics:** `NumericsExact` makes a CPU model bitwise reproducible; Metal and wgpu refuse a Numerics setting.

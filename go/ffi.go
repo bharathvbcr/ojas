@@ -68,6 +68,7 @@ const (
 	deviceMetal       uint32 = 2
 	deviceWgpu        uint32 = 3
 	deviceCPUAuto     uint32 = 4
+	deviceCUDA        uint32 = 5
 
 	inlineLimit = 4096
 

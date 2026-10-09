@@ -724,3 +724,51 @@ fn train_step_refuses_a_free_trainer_session_and_reports_the_policy() {
     write_tensor(&dir.join("t.safetensors"));
     assert_eq!(load::inspect("t.safetensors").unwrap(), 1);
 }
+
+/// LOAD, NEW and RESUME share one device decode, so CUDA (5) is refused by
+/// name on all three and creates nothing; every other value past the known
+/// devices is `unknown device` on all three, never a session.
+#[test]
+fn stress_cuda_and_every_unknown_device_are_refused_on_every_entry_point() {
+    let (_g, _dir) = fresh();
+    let before = session::session_count();
+    let codes = (load::DEVICE_CUDA..=300).chain([1 << 16, u32::MAX - 1, u32::MAX]);
+    for device in codes {
+        let payloads = [
+            (
+                "load",
+                Writer::default()
+                    .u32(tag::DEVICE, device)
+                    .str(tag::PATH, "model.safetensors")
+                    .finish(),
+            ),
+            (
+                "new",
+                spec_fields(Writer::default().u32(tag::DEVICE, device))
+                    .u64(tag::SEED, NANO_SEED)
+                    .finish(),
+            ),
+            (
+                "resume",
+                resume_fields("ckpt", "tokens.bin")
+                    .u32(tag::DEVICE, device)
+                    .finish(),
+            ),
+        ];
+        for (op, payload) in payloads {
+            let err = match op {
+                "load" => load::load_request(&payload, never()),
+                "new" => load::new_request(&payload, never()),
+                _ => train::resume_request(&payload, never()),
+            }
+            .map(|s| s.id)
+            .expect_err("a session was created");
+            if device == load::DEVICE_CUDA {
+                assert_eq!(err, load::CUDA_REFUSED, "{op}");
+            } else {
+                assert_eq!(err, format!("load: unknown device {device}"), "{op}");
+            }
+        }
+    }
+    assert_eq!(session::session_count(), before);
+}

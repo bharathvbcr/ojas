@@ -116,6 +116,30 @@ func TestTrainSaveResumeGenerateRoundTripWgpu(t *testing.T) {
 	roundTrip(t, LoadOptions{Device: DeviceWgpu})
 }
 
+// DeviceCUDA is refused by name, not as an unknown device, by every call
+// that places a model (LoadModel, NewModel, Resume), and no model is created.
+func TestDeviceCUDAIsRefusedUntilItsProviderLands(t *testing.T) {
+	harness(t)
+	ctx := context.Background()
+	opts := LoadOptions{Device: DeviceCUDA}
+	calls := map[string]func() (uint64, error){
+		"LoadModel": func() (uint64, error) { return LoadModel(ctx, "model.safetensors", opts) },
+		"NewModel":  func() (uint64, error) { return NewModel(ctx, nanoSpec(), 1, opts) },
+		"Resume":    func() (uint64, error) { return Resume(ctx, "ckpt", opts, testConfig()) },
+	}
+	for name, call := range calls {
+		id, err := call()
+		if err == nil {
+			_ = Free(ctx, id)
+			t.Fatalf("%s on CUDA succeeded", name)
+		}
+		msg := engineMessage(err)
+		if !strings.HasPrefix(msg, "load: device 5 (CUDA) is refused") || !strings.Contains(msg, "gp-cuda-backend-provider") {
+			t.Fatalf("%s on CUDA: %v", name, err)
+		}
+	}
+}
+
 // With two workers, two goroutines stepping one id either both succeed (one
 // waited for the pool) or exactly one gets ErrBusy; never both. Every
 // success is committed once: the step count is the successes plus one.

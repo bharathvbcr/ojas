@@ -47,7 +47,7 @@ fn a_trapped_kernel_leaves_the_backend_with_the_typed_device_lost_error() {
         ..RuntimeConfig::default()
     };
     let rt = Rc::new(CudaRuntime::open(config).unwrap_or_else(|e| panic!("open: {e}")));
-    let backend = CudaBackend::with_runtime(Rc::clone(&rt), Budget::new(1 << 30));
+    let backend = CudaBackend::with_runtime(Rc::clone(&rt));
     let host = Budget::new(1 << 20);
     let x = Tensor::from_f32(&[1.0, 2.0, 3.0, 4.0], &[4], &host).unwrap();
 

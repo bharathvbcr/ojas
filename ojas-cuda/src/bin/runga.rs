@@ -157,7 +157,10 @@ fn gdn_timing(args: &RungaArgs, started: Instant) -> Json {
             format!("the device has {total_mem} bytes, under the {budget}-byte budget"),
         );
     }
-    let used_before = rt.budget().used();
+    let used_before = match rt.budget().used() {
+        Ok(used) => used,
+        Err(e) => return not_run(base, format!("its budget could not be read: {e}")),
+    };
     let base = base.with("budget_used_before_bytes", used_before);
     let ran = catch_unwind(AssertUnwindSafe(|| {
         gdn_published_timing(
@@ -168,8 +171,10 @@ fn gdn_timing(args: &RungaArgs, started: Instant) -> Json {
             GDN_TIMING_REPS,
         )
     }));
-    let used_after = rt.budget().used();
-    let base = base.with("budget_used_after_bytes", used_after);
+    let base = match rt.budget().used() {
+        Ok(used_after) => base.with("budget_used_after_bytes", used_after),
+        Err(e) => base.with("budget_used_after_error", e.to_string()),
+    };
     match ran {
         Ok(Ok(t)) => {
             println!("REPORT   gdn_published_timing  {}", t.to_json().render());
@@ -246,29 +251,26 @@ fn run(state: &Mutex<Report>, args: &RungaArgs, started: Instant) -> i32 {
     set_phase(state, "libraries");
     let (loaded, cache) = smoke::loaded_libraries(&rt);
     let workspace = rt.config().cublas_workspace_bytes as u64;
-    let used = rt.budget().used();
     {
         let mut s = lock(state);
         s.extra.push("loaded_libraries", loaded);
         s.extra.push("nvrtc_cache", cache);
         s.extra.push(
             "alloc_budget",
-            JsonObj::new()
-                .with("cap_bytes", rt.budget().cap())
-                .with("reserved_at_end_bytes", used)
-                .with("cublas_workspace_bytes", workspace),
+            smoke::alloc_budget(&rt).with("cublas_workspace_bytes", workspace),
         );
         // Every check frees its buffers: only the cuBLAS workspace may remain.
-        s.checks.push(if used == workspace {
-            Check::pass(
-                "runtime.no_leaked_buffers",
+        const NO_LEAKS: &str = "runtime.no_leaked_buffers";
+        s.checks.push(match rt.budget().used() {
+            Ok(used) if used == workspace => Check::pass(
+                NO_LEAKS,
                 format!("{used} bytes reserved at the end: the cuBLAS workspace only"),
-            )
-        } else {
-            Check::fail(
-                "runtime.no_leaked_buffers",
+            ),
+            Ok(used) => Check::fail(
+                NO_LEAKS,
                 format!("{used} bytes reserved at the end; the workspace is {workspace}"),
-            )
+            ),
+            Err(e) => Check::fail(NO_LEAKS, format!("the budget could not be read: {e}")),
         });
     }
     let status = overall(&lock(state).checks);

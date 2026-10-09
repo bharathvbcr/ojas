@@ -1249,6 +1249,10 @@ fn device_fields_select_cpu_parallel_and_bound_its_thread_count() {
 
     let err = load_device(9, 1, "model.safetensors").unwrap_err();
     assert!(err.contains("unknown device"), "{err}");
+    // CUDA is a known device, refused by name until its provider lands.
+    let err = load_device(load::DEVICE_CUDA, 1, "model.safetensors").unwrap_err();
+    assert_eq!(err, load::CUDA_REFUSED);
+    assert!(err.contains("gp-cuda-backend-provider"), "{err}");
     let err = load_device(load::DEVICE_CPU_PARALLEL, 0, "model.safetensors").unwrap_err();
     assert!(err.contains("thread count is 0"), "{err}");
     for threads in [load::MAX_CPU_THREADS + 1, 1 << 20, u32::MAX] {
@@ -2204,4 +2208,38 @@ fn system_profile_routes_through_dispatch_and_reads_only() {
         before,
         "a profile changes nothing"
     );
+}
+
+/// A device open's typed error reaches C and Go by kind: `Capacity` (from
+/// any device, CUDA's budget-below-workspace included) is `E_CAPACITY`;
+/// the other kinds, `Unsupported` and `Init` among them, carry none.
+#[test]
+fn device_open_errors_are_kinded_by_variant() {
+    use ojas_device::{Device, DeviceError};
+    let err = crate::device_error(
+        "cuda",
+        &DeviceError::Capacity {
+            kind: Device::Cuda,
+            detail: "cuBLAS workspace: out of memory".to_string(),
+        },
+    );
+    assert!(err.starts_with("ojas:E_CAPACITY: cuda: "), "{err}");
+    for other in [
+        DeviceError::NoDevice {
+            kind: Device::Cuda,
+            detail: "no device".to_string(),
+        },
+        DeviceError::Unsupported {
+            kind: Device::Cuda,
+            detail: "compute capability 8.0".to_string(),
+        },
+        DeviceError::Init {
+            kind: Device::Cuda,
+            detail: "cublasCreate".to_string(),
+        },
+    ] {
+        let err = crate::device_error("cuda", &other);
+        assert!(!err.starts_with("ojas:E_"), "{err}");
+        assert_eq!(err, format!("cuda: {other}"));
+    }
 }

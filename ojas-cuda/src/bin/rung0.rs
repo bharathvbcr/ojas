@@ -25,7 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ojas_cuda::check::{overall, Status};
-use ojas_cuda::json::JsonObj;
 use ojas_cuda::report_cli::{finish, header, lock, record, set_phase, spawn_watchdog, Report};
 use ojas_cuda::rung0_cli::{parse, prepare_out, Args, EXIT_FAIL, EXIT_PASS, EXIT_REFUSED, USAGE};
 use ojas_cuda::runtime::RuntimeConfig;
@@ -63,12 +62,7 @@ fn run(state: &Mutex<Report>, args: &Args) -> i32 {
         let mut s = lock(state);
         s.extra.push("loaded_libraries", loaded);
         s.extra.push("nvrtc_cache", cache);
-        s.extra.push(
-            "alloc_budget",
-            JsonObj::new()
-                .with("cap_bytes", rt.budget().cap())
-                .with("reserved_at_end_bytes", rt.budget().used()),
-        );
+        s.extra.push("alloc_budget", smoke::alloc_budget(&rt));
     }
     if overall(&lock(state).checks) == Status::Pass {
         EXIT_PASS

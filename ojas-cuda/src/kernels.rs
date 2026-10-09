@@ -1,7 +1,8 @@
 //! CUDA-C kernel sources, compiled at run time by NVRTC.
 //!
 //! **How they are compiled** ([`STRICT_SM90`]):
-//! - `--gpu-architecture=compute_90`: NVRTC emits PTX and the driver JITs it
+//! - `--gpu-architecture=compute_90` (from [`REQUIRED_CC`], the one statement
+//!   of the target architecture): NVRTC emits PTX and the driver JITs it
 //!   for sm_90 at module load. cudarc 0.19.10's safe NVRTC layer exposes only
 //!   `nvrtcGetPTX` (`cudarc/src/nvrtc/result.rs` has no CUBIN getter), and
 //!   NVIDIA does not document PTX output for a real `sm_90` target, so the
@@ -28,11 +29,35 @@
 //! `#include`: NVRTC has no default include path, and the bf16 conversion is
 //! the integer form of [`crate::bf16`], so `cuda_bf16.h` is not needed.
 
+/// The compute capability every kernel here is written for and the only one
+/// [`crate::runtime::CudaRuntime::open`] accepts (GH200: sm_90). The NVRTC
+/// architectures ([`STRICT_SM90`], [`STRICT_SM90A`]) are derived from it. The
+/// runtime's check is an exact match, not a minimum: `compute_90a` code runs
+/// only on sm_90 itself.
+pub const REQUIRED_CC: (i32, i32) = (9, 0);
+
+/// An NVRTC virtual architecture, `compute_<major><minor>`, with an `a`
+/// suffix for the architecture-specific feature set (WGMMA, TMA).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Arch {
+    /// `(major, minor)` compute capability.
+    pub cc: (i32, i32),
+    /// The `a` (architecture-specific) variant.
+    pub specific: bool,
+}
+
+impl std::fmt::Display for Arch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let a = if self.specific { "a" } else { "" };
+        write!(f, "compute_{}{}{a}", self.cc.0, self.cc.1)
+    }
+}
+
 /// NVRTC options, part of the compile-cache key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CompileSpec {
     /// `--gpu-architecture`.
-    pub arch: &'static str,
+    pub arch: Arch,
     /// `--fmad`.
     pub fmad: bool,
     /// `--ftz`.
@@ -58,7 +83,10 @@ impl CompileSpec {
 
 /// The spec every kernel in this crate is compiled with.
 pub const STRICT_SM90: CompileSpec = CompileSpec {
-    arch: "compute_90",
+    arch: Arch {
+        cc: REQUIRED_CC,
+        specific: false,
+    },
     fmad: false,
     ftz: false,
     prec_div: true,
@@ -69,7 +97,10 @@ pub const STRICT_SM90: CompileSpec = CompileSpec {
 /// later GEMM tier needs. Rung 0 compiles one module with it to show the
 /// box's NVRTC accepts it; nothing launches it.
 pub const STRICT_SM90A: CompileSpec = CompileSpec {
-    arch: "compute_90a",
+    arch: Arch {
+        cc: REQUIRED_CC,
+        specific: true,
+    },
     ..STRICT_SM90
 };
 
@@ -413,6 +444,58 @@ mod tests {
         assert!(STRICT_SM90A
             .options()
             .contains(&"--gpu-architecture=compute_90a".to_string()));
+    }
+
+    /// Both NVRTC architectures come from `REQUIRED_CC`: the same (major,
+    /// minor), with and without the `a` feature set.
+    #[test]
+    fn the_nvrtc_architectures_derive_from_the_required_capability() {
+        assert_eq!(REQUIRED_CC, (9, 0));
+        assert_eq!(
+            STRICT_SM90.arch,
+            Arch {
+                cc: REQUIRED_CC,
+                specific: false
+            }
+        );
+        assert_eq!(
+            STRICT_SM90A.arch,
+            Arch {
+                cc: REQUIRED_CC,
+                specific: true
+            }
+        );
+        assert_eq!(STRICT_SM90.arch.to_string(), "compute_90");
+        assert_eq!(STRICT_SM90A.arch.to_string(), "compute_90a");
+        assert_ne!(
+            STRICT_SM90.options(),
+            STRICT_SM90A.options(),
+            "the a variant is its own cache entry"
+        );
+    }
+
+    /// `compute_<major><minor>[a]` for every capability a driver could
+    /// report, so a future `REQUIRED_CC` change yields the matching NVRTC
+    /// names with no second literal to update.
+    #[test]
+    fn arch_names_follow_the_capability_for_every_version() {
+        for major in 0..=12 {
+            for minor in 0..=9 {
+                for specific in [false, true] {
+                    let arch = Arch {
+                        cc: (major, minor),
+                        specific,
+                    };
+                    let want = format!("compute_{major}{minor}{}", if specific { "a" } else { "" });
+                    assert_eq!(arch.to_string(), want);
+                    let spec = CompileSpec {
+                        arch,
+                        ..STRICT_SM90
+                    };
+                    assert_eq!(spec.options()[0], format!("--gpu-architecture={want}"));
+                }
+            }
+        }
     }
 
     #[test]

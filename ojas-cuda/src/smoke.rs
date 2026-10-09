@@ -121,7 +121,8 @@ pub fn compile_checks(rt: &CudaRuntime) -> Vec<Check> {
             .with("compile_and_load_ms", start.elapsed().as_secs_f64() * 1e3)]
         }));
     }
-    let name = "nvrtc.compute_90a";
+    let name = format!("nvrtc.{}", STRICT_SM90A.arch);
+    let name = name.as_str();
     out.extend(guarded(name, || {
         match rt.function(&GEMM_FFMA, &STRICT_SM90A, GEMM_FFMA.entries[0]) {
             Ok(_) => vec![Check::pass(
@@ -670,6 +671,16 @@ pub fn record_device(state: &Mutex<Report>, rt: &CudaRuntime) {
                 info.cublas_math_mode, info.cublas_atomics_mode
             ),
         ));
+    }
+}
+
+/// The runtime's budget for a rung report's `alloc_budget` section: its cap
+/// and what is reserved now, or why that could not be read.
+pub fn alloc_budget(rt: &CudaRuntime) -> JsonObj {
+    let obj = JsonObj::new().with("cap_bytes", rt.budget().cap());
+    match rt.budget().used() {
+        Ok(used) => obj.with("reserved_at_end_bytes", used),
+        Err(e) => obj.with("reserved_at_end_error", e.to_string()),
     }
 }
 
