@@ -95,12 +95,52 @@ ehthumbs.db
 
 # Local development, agents & tooling caches
 .claude/
+.claude-account
 .devcouncil/
 .gemini/
+.gitnexus/
+.aider*
+.windsurf/
 .site-patch/
 scan.txt
 *.tmp
 *.log
+.cache/
+node_modules/
+.history/
+
+# Python extras
+*.pyo
+.tox/
+.nox/
+.pytype/
+.pyre/
+
+# Profiler & trace output (Instruments, nsys/ncu, samply, flamegraph)
+*.nsys-rep
+*.ncu-rep
+*.qdrep
+*.sqlite-journal
+flamegraph.svg
+cargo-flamegraph.svg
+profile.json.gz
+
+# Core dumps & crash reports
+/core
+/core.[0-9]*
+*.crash
+*.ips
+hs_err_pid*.log
+
+# Fuzzing & mutation-testing working dirs
+fuzz/artifacts/
+fuzz/corpus/
+mutants.out/
+mutants.out.old/
+
+# Cargo vendoring/output outside target dirs
+/vendor/
+*.rs.bk
 
 # Imported from MLSystemsLab (2026-10-08): regenerable arch02 parity activations
 # (python3 arch02/metal-native/scripts/export_goldens.py) and run outputs.
