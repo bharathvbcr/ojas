@@ -226,6 +226,47 @@ impl From<CudaError> for ojas_core::OjasError {
     }
 }
 
+/// `CUresult` codes that mean no usable device answered: the driver is not
+/// (or no longer) initialised (3, 4), the loaded `libcuda` is the toolkit's
+/// stub (34), the device is busy in exclusive mode (46), or there is no such
+/// device (100, 101). Values from cudarc 0.19.10's `CUresult`. Every other
+/// failing code came from a device that answered.
+pub const NO_DEVICE_DRIVER_CODES: &[u32] = &[3, 4, 34, 46, 100, 101];
+
+/// The one mapping from this crate's errors to a device open's
+/// [`ojas_device::DeviceError`], so an open names what failed instead of
+/// reporting every failure as `NoDevice`:
+///
+/// | `CudaError` | `DeviceError` |
+/// |---|---|
+/// | `NotCompiled` | `NotCompiled` |
+/// | `LibraryMissing`, `Driver` with a [`NO_DEVICE_DRIVER_CODES`] code | `NoDevice` |
+/// | `Arch` | `Unsupported` |
+/// | `Capacity` (the budget, the cuBLAS workspace, device memory) | `Capacity` |
+/// | `Compile` (NVRTC) | `Compile` |
+/// | `Cublas`, `Invalid`, `Timeout`, any other `Driver` | `Init` |
+impl From<CudaError> for ojas_device::DeviceError {
+    fn from(e: CudaError) -> Self {
+        use ojas_device::{Device, DeviceError};
+        let kind = Device::Cuda;
+        let detail = e.to_string();
+        match e {
+            CudaError::NotCompiled => DeviceError::NotCompiled { kind },
+            CudaError::LibraryMissing { .. } => DeviceError::NoDevice { kind, detail },
+            CudaError::Driver { code, .. } if NO_DEVICE_DRIVER_CODES.contains(&code) => {
+                DeviceError::NoDevice { kind, detail }
+            }
+            CudaError::Arch { .. } => DeviceError::Unsupported { kind, detail },
+            CudaError::Capacity { .. } => DeviceError::Capacity { kind, detail },
+            CudaError::Compile { .. } => DeviceError::Compile { kind, detail },
+            CudaError::Driver { .. }
+            | CudaError::Cublas { .. }
+            | CudaError::Invalid { .. }
+            | CudaError::Timeout { .. } => DeviceError::Init { kind, detail },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +338,129 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("libnvrtc, libcublas"), "{text}");
         assert!(text.starts_with("refusing to start"), "{text}");
+    }
+
+    /// Before this mapping `CudaBackend::open` reported every failure as
+    /// `NoDevice`. Each variant now lands on its own kind, and the text is kept.
+    #[test]
+    fn open_failures_map_to_distinct_device_error_kinds() {
+        use ojas_device::{Device, DeviceError};
+        let cases: Vec<(CudaError, &str)> = vec![
+            (CudaError::NotCompiled, "not_compiled"),
+            (
+                CudaError::LibraryMissing {
+                    libraries: vec!["libcublas".to_string()],
+                    detail: "searched libcublas.so.12".to_string(),
+                },
+                "no_device",
+            ),
+            (
+                CudaError::from_driver_code("CudaContext::new(0)", 100, "no device"),
+                "no_device",
+            ),
+            (
+                CudaError::from_driver_code("CudaContext::new(0)", 34, "stub"),
+                "no_device",
+            ),
+            (
+                CudaError::Arch {
+                    found: (8, 0),
+                    required: (9, 0),
+                    name: "A100".to_string(),
+                },
+                "unsupported",
+            ),
+            (
+                CudaError::capacity("cuBLAS workspace", "33554432 bytes requested"),
+                "capacity",
+            ),
+            (
+                CudaError::from_driver_code("cuMemAlloc", CUDA_ERROR_OUT_OF_MEMORY, "oom"),
+                "capacity",
+            ),
+            (
+                CudaError::Compile {
+                    module: "nvrtcVersion".to_string(),
+                    detail: "symbol missing".to_string(),
+                },
+                "compile",
+            ),
+            (
+                CudaError::Cublas {
+                    op: "cublasCreate".to_string(),
+                    status: "CUBLAS_STATUS_NOT_INITIALIZED".to_string(),
+                    code: 1,
+                },
+                "init",
+            ),
+            (
+                CudaError::from_driver_code("cuStreamCreate", 999, "unknown"),
+                "init",
+            ),
+            (CudaError::invalid("NvrtcCache::new", "0 entries"), "init"),
+            (
+                CudaError::Timeout {
+                    op: "open".to_string(),
+                    waited_ms: 60_000,
+                },
+                "init",
+            ),
+        ];
+        for (err, want) in cases {
+            let text = err.to_string();
+            let got = DeviceError::from(err);
+            let (kind, detail) = match &got {
+                DeviceError::NotCompiled { kind } => ("not_compiled", (*kind, None)),
+                DeviceError::NoDevice { kind, detail } => ("no_device", (*kind, Some(detail))),
+                DeviceError::Unsupported { kind, detail } => ("unsupported", (*kind, Some(detail))),
+                DeviceError::Capacity { kind, detail } => ("capacity", (*kind, Some(detail))),
+                DeviceError::Compile { kind, detail } => ("compile", (*kind, Some(detail))),
+                DeviceError::Init { kind, detail } => ("init", (*kind, Some(detail))),
+                other => panic!("{text} mapped to {other}"),
+            };
+            assert_eq!(kind, want, "{text} -> {got}");
+            assert_eq!(detail.0, Device::Cuda, "{got}");
+            if let Some(detail) = detail.1 {
+                assert_eq!(detail, &text, "{got}");
+            }
+        }
+    }
+
+    /// Every driver code from 0 to 1023, and the extremes, maps without a
+    /// panic onto exactly one kind: out-of-memory is `Capacity`, the
+    /// no-device codes `NoDevice`, everything else from a device that
+    /// answered `Init`. The text always survives.
+    #[test]
+    fn stress_every_driver_code_maps_to_one_kind_at_open() {
+        use ojas_device::{Device, DeviceError};
+        for code in (0..1024u32).chain([u32::MAX - 1, u32::MAX]) {
+            let err =
+                CudaError::from_driver_code("CudaContext::new(0)", code, format!("code {code}"));
+            let text = err.to_string();
+            match DeviceError::from(err) {
+                DeviceError::Capacity { kind, detail } => {
+                    assert_eq!(code, CUDA_ERROR_OUT_OF_MEMORY);
+                    assert_eq!((kind, detail), (Device::Cuda, text));
+                }
+                DeviceError::NoDevice { kind, detail } => {
+                    assert!(NO_DEVICE_DRIVER_CODES.contains(&code), "{code}");
+                    assert_eq!((kind, detail), (Device::Cuda, text));
+                }
+                DeviceError::Init { kind, detail } => {
+                    assert!(
+                        code != CUDA_ERROR_OUT_OF_MEMORY && !NO_DEVICE_DRIVER_CODES.contains(&code),
+                        "{code}"
+                    );
+                    assert_eq!((kind, detail), (Device::Cuda, text));
+                }
+                other => panic!("code {code} mapped to {other}"),
+            }
+        }
+        // The no-device list and the sticky (device-lost) list are disjoint:
+        // a lost context is never reported as a missing device.
+        for code in NO_DEVICE_DRIVER_CODES {
+            assert!(!STICKY_DRIVER_CODES.contains(code), "{code}");
+            assert_ne!(*code, CUDA_ERROR_OUT_OF_MEMORY);
+        }
     }
 }

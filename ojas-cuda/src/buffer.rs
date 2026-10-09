@@ -1,5 +1,6 @@
 //! [`CudaBuffer<T>`]: a typed, length-checked device allocation held against
-//! the runtime's [`crate::budget::AllocBudget`].
+//! the runtime's [`crate::budget::AllocBudget`], the view of the one budget
+//! every device byte is charged to.
 //!
 //! Uploads and writes must match the buffer's length exactly; downloads
 //! wait with the runtime's bounded sync before and after the copy, because
@@ -193,11 +194,16 @@ impl CudaRuntime {
         })
     }
 
-    /// A buffer holding a copy of `data`.
+    /// A buffer holding a copy of `data`. The allocation is not zeroed
+    /// first: the copy writes every element ([`CudaRuntime::copy_in`]).
     pub fn upload<T: Element>(&self, data: &[T], label: &str) -> Result<CudaBuffer<T>, CudaError> {
-        let mut buf = self.alloc_zeros::<T>(data.len(), label)?;
-        self.write(&mut buf, data)?;
-        Ok(buf)
+        let reservation = self.reserve::<T>(data.len(), label)?;
+        let slice = self.copy_in(data, label)?;
+        Ok(CudaBuffer {
+            slice,
+            _reservation: reservation,
+            label: label.to_string(),
+        })
     }
 
     /// Overwrite `buf` with `data`, which must have exactly `buf.len()` elements.
@@ -215,7 +221,9 @@ impl CudaRuntime {
         let label = format!("upload {}", buf.label);
         self.stream()
             .memcpy_htod(data, buf.slice_mut())
-            .map_err(|e| driver_error(&label, e))
+            .map_err(|e| driver_error(&label, e))?;
+        // `data` is the caller's to free or change once this returns.
+        self.htod_done(&label)
     }
 
     /// Copy `buf` to the host after all queued work.
@@ -236,11 +244,20 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// A device-resident buffer backing an [`ojas_core::Tensor`].
+///
+/// A `U32` upload keeps a host copy of its values (`shadow_u32`) for the
+/// token-range check: ids and targets are checked against the vocabulary on
+/// the host before a gather or a loss reads them, without a readback, as
+/// wgpu's `check_ids_in` does. No other dtype keeps one. No `CudaBackend` op
+/// reads it yet: embedding and cross-entropy still return `Unsupported`.
 pub struct CudaDeviceBuffer {
     pub(crate) slice: CudaSlice<u8>,
     pub(crate) len: usize,
     pub(crate) stream: Arc<cudarc::driver::CudaStream>,
     pub(crate) shadow_u32: Option<Arc<[u32]>>,
+    /// The runtime's [`crate::runtime::RuntimeConfig::sync_timeout`]: the
+    /// bound on [`DeviceBuffer::read_bytes`]'s wait.
+    pub(crate) sync_timeout: std::time::Duration,
 }
 
 impl CudaDeviceBuffer {
@@ -279,13 +296,14 @@ impl DeviceBuffer for CudaDeviceBuffer {
                     op: "CudaDeviceBuffer::read_bytes",
                     detail: format!("slice out of range: {offset}..{}", offset + len),
                 })?;
+        const OP: &str = "CudaDeviceBuffer::read_bytes";
         let mut out = vec![0u8; len];
         self.stream
             .memcpy_dtoh(&view, &mut out)
-            .map_err(|e| OjasError::from(crate::runtime::driver_error("memcpy_dtoh", e)))?;
-        self.stream
-            .synchronize()
-            .map_err(|e| OjasError::from(crate::runtime::driver_error("synchronize", e)))?;
+            .map_err(|e| OjasError::from(crate::runtime::driver_error(OP, e)))?;
+        // A bounded wait, not `cuStreamSynchronize`: a hung device is a
+        // `Timeout`, and a lost one `DeviceLost`, never a hang.
+        crate::runtime::wait_stream(&self.stream, self.sync_timeout, OP)?;
         Ok(out)
     }
 

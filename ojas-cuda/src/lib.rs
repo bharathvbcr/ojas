@@ -16,6 +16,7 @@
 //! - [`error`]: the crate's one error enum.
 //! - [`bf16`]: round-to-nearest-even f32 to bf16, tessl's algorithm.
 //! - [`budget`]: the bounded device-allocation budget.
+//! - [`wait`]: the crate's one bounded wait; no device wait blocks unbounded.
 //! - [`nvrtc_cache`]: the bounded compile cache, keyed by source hash,
 //!   options (architecture included) and NVRTC version.
 //! - [`kernels`] and the `*_kernels` / small-kernel modules: the CUDA-C
@@ -74,6 +75,7 @@ pub mod rung0_cli;
 pub mod small_common;
 pub mod step;
 pub mod tiny_fixture_published;
+pub mod wait;
 
 #[cfg(feature = "cuda")]
 pub mod buffer;
@@ -146,7 +148,9 @@ impl CudaDevice {
     ///
     /// When `cuda` is off this is [`DeviceError::NotCompiled`].
     /// When `cuda` is on, a small affine kernel is launched before `Ok`.
-    /// A driver failure is [`DeviceError::NoDevice`].
+    /// Missing libraries, or a context the driver refuses with a no-device
+    /// code ([`error::NO_DEVICE_DRIVER_CODES`]), are [`DeviceError::NoDevice`];
+    /// any other context failure is [`DeviceError::Init`].
     pub fn open() -> Result<Self, DeviceError> {
         #[cfg(not(feature = "cuda"))]
         {
@@ -154,10 +158,9 @@ impl CudaDevice {
         }
         #[cfg(feature = "cuda")]
         {
-            require_libraries()?;
-            let ctx = cudarc::driver::CudaContext::new(0).map_err(|err| DeviceError::NoDevice {
-                kind: Device::Cuda,
-                detail: format!("CudaContext::new(0): {err}"),
+            runtime::probe(&[libprobe::DRIVER, libprobe::NVRTC])?;
+            let ctx = cudarc::driver::CudaContext::new(0).map_err(|err| {
+                DeviceError::from(runtime::driver_error("CudaContext::new(0)", err))
             })?;
             let device = CudaDevice {
                 ctx,
@@ -199,23 +202,6 @@ impl CudaDevice {
 
 #[cfg(feature = "cuda")]
 const AFFINE_CUDA: &str = ojas_kernels::affine_cuda();
-
-/// cudarc panics when it cannot load `libcuda` or `libnvrtc`. Probe both
-/// first so a host without the driver gets [`DeviceError::NoDevice`].
-#[cfg(feature = "cuda")]
-fn require_libraries() -> Result<(), DeviceError> {
-    // SAFETY: both probes only try `dlopen` on cudarc's candidate names. A
-    // library's initialisers are the same ones the first cudarc call would run.
-    let driver = unsafe { cudarc::driver::sys::is_culib_present() };
-    let nvrtc = unsafe { cudarc::nvrtc::sys::is_culib_present() };
-    if driver && nvrtc {
-        return Ok(());
-    }
-    Err(DeviceError::NoDevice {
-        kind: Device::Cuda,
-        detail: format!("CUDA libraries not loadable: driver {driver}, nvrtc {nvrtc}"),
-    })
-}
 
 #[cfg(feature = "cuda")]
 struct AffineGpu {
@@ -269,27 +255,72 @@ fn device_bytes_fit(free: usize, need: usize) -> Result<(), DeviceError> {
     }
 }
 
+/// The probe's stream wait: [`wait::poll_until`] with a 1 ms poll, and a
+/// stream still busy at `timeout` is [`DeviceError::Launch`].
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
-fn poll_until(
-    deadline: std::time::Instant,
-    mut ready: impl FnMut() -> Result<bool, DeviceError>,
+fn stream_wait(
+    timeout: std::time::Duration,
+    ready: impl FnMut() -> Result<bool, DeviceError>,
 ) -> Result<(), DeviceError> {
-    loop {
-        if ready()? {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(DeviceError::Launch {
-                kind: Device::Cuda,
-                detail: "CUDA stream did not complete within 30s".to_string(),
-            });
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    wait::poll_until(
+        timeout,
+        std::time::Duration::from_millis(1),
+        ready,
+        |waited| DeviceError::Launch {
+            kind: Device::Cuda,
+            detail: format!("CUDA stream did not complete within {waited:?}"),
+        },
+    )
 }
 
 #[cfg(feature = "cuda")]
 impl CudaDevice {
+    /// Compile the affine module and allocate its buffers for `input.len()`.
+    fn new_affine(&self, input: &[f32]) -> Result<AffineGpu, DeviceError> {
+        let opts = cudarc::nvrtc::CompileOptions {
+            fmad: Some(false),
+            ..cudarc::nvrtc::CompileOptions::default()
+        };
+        let ptx = cudarc::nvrtc::compile_ptx_with_opts(AFFINE_CUDA, opts)
+            .map_err(|err| compile_err(format!("compile_ptx_with_opts: {err}")))?;
+        let module = self
+            .ctx
+            .load_module(ptx)
+            .map_err(|err| compile_err(format!("load_module: {err}")))?;
+        let func = module
+            .load_function("affine_f32")
+            .map_err(|err| compile_err(format!("load_function: {err}")))?;
+        let max_grid = self
+            .ctx
+            .attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X)
+            .map_err(|err| from_driver(err, "attribute MAX_GRID_DIM_X"))?;
+        let max_grid_x = u32::try_from(max_grid)
+            .ok()
+            .filter(|&g| g > 0)
+            .ok_or_else(|| DeviceError::Capacity {
+                kind: Device::Cuda,
+                detail: format!("MAX_GRID_DIM_X is {max_grid}"),
+            })?;
+        let stream = self.ctx.default_stream();
+        let inp = stream
+            .clone_htod(input)
+            .map_err(|err| from_driver(err, "clone_htod"))?;
+        let out = stream
+            .alloc_zeros::<f32>(input.len())
+            .map_err(|err| from_driver(err, "alloc_zeros"))?;
+        // SAFETY: flags 0 is the portable pinned allocation, not write-combined.
+        let host = unsafe { self.ctx.alloc_pinned_with_flags::<f32>(input.len(), 0) }
+            .map_err(|err| from_driver(err, "alloc_pinned_with_flags"))?;
+        Ok(AffineGpu {
+            func,
+            max_grid_x,
+            len: input.len(),
+            inp,
+            out,
+            host,
+        })
+    }
+
     fn launch_affine(&self, input: &[f32], scale: f32, bias: f32) -> Result<Vec<f32>, DeviceError> {
         use cudarc::driver::PushKernelArg;
         let n = u32::try_from(input.len()).map_err(|_| DeviceError::Capacity {
@@ -319,52 +350,10 @@ impl CudaDevice {
         if resizing {
             device_bytes_fit(free, device_bytes)?;
         }
-        if slot.is_none() {
-            let opts = cudarc::nvrtc::CompileOptions {
-                fmad: Some(false),
-                ..cudarc::nvrtc::CompileOptions::default()
-            };
-            let ptx = cudarc::nvrtc::compile_ptx_with_opts(AFFINE_CUDA, opts)
-                .map_err(|err| compile_err(format!("compile_ptx_with_opts: {err}")))?;
-            let module = self
-                .ctx
-                .load_module(ptx)
-                .map_err(|err| compile_err(format!("load_module: {err}")))?;
-            let func = module
-                .load_function("affine_f32")
-                .map_err(|err| compile_err(format!("load_function: {err}")))?;
-            let max_grid = self
-                .ctx
-                .attribute(
-                    cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
-                )
-                .map_err(|err| from_driver(err, "attribute MAX_GRID_DIM_X"))?;
-            if max_grid <= 0 {
-                return Err(DeviceError::Capacity {
-                    kind: Device::Cuda,
-                    detail: format!("MAX_GRID_DIM_X is {max_grid}"),
-                });
-            }
-            let stream = self.ctx.default_stream();
-            let inp = stream
-                .clone_htod(input)
-                .map_err(|err| from_driver(err, "clone_htod"))?;
-            let out = stream
-                .alloc_zeros::<f32>(input.len())
-                .map_err(|err| from_driver(err, "alloc_zeros"))?;
-            // SAFETY: flags 0 is the portable pinned allocation, not write-combined.
-            let host = unsafe { self.ctx.alloc_pinned_with_flags::<f32>(input.len(), 0) }
-                .map_err(|err| from_driver(err, "alloc_pinned_with_flags"))?;
-            *slot = Some(AffineGpu {
-                func,
-                max_grid_x: max_grid as u32,
-                len: input.len(),
-                inp,
-                out,
-                host,
-            });
-        }
-        let gpu = slot.as_mut().unwrap();
+        let gpu = match &mut *slot {
+            Some(gpu) => gpu,
+            empty @ None => empty.insert(self.new_affine(input)?),
+        };
         let cfg = cudarc::driver::LaunchConfig::for_num_elems(n);
         if cfg.grid_dim.0 > gpu.max_grid_x {
             return Err(DeviceError::Capacity {
@@ -398,6 +387,13 @@ impl CudaDevice {
                 .memset_zeros(&mut gpu.out)
                 .map_err(|err| from_driver(err, "memset"))?;
         }
+        // SAFETY: the arguments are `affine_f32`'s (float* out, const float*
+        // inp, float scale, float bias, unsigned int n) in order and type
+        // (`ojas_kernels::affine_cuda`). `out` and `inp` are distinct live
+        // allocations of `gpu.len == input.len() == n` f32s on this stream,
+        // resized above when the length changed; the kernel writes `out[i]`
+        // and reads `inp[i]` only for `i < n`, one writer per element, and the
+        // grid from `for_num_elems(n)` was checked against MAX_GRID_DIM_X.
         unsafe {
             stream
                 .launch_builder(&gpu.func)
@@ -421,8 +417,7 @@ impl CudaDevice {
         event
             .record(&stream)
             .map_err(|err| from_driver(err, "event.record"))?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        poll_until(deadline, || {
+        stream_wait(std::time::Duration::from_secs(30), || {
             event
                 .try_is_complete()
                 .map_err(|err| from_driver(err, "try_is_complete"))
@@ -474,7 +469,7 @@ mod tests {
 
     #[test]
     fn stream_wait_returns_when_the_deadline_has_passed() {
-        let err = poll_until(std::time::Instant::now(), || Ok(false)).unwrap_err();
+        let err = stream_wait(std::time::Duration::ZERO, || Ok(false)).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -485,7 +480,7 @@ mod tests {
             ),
             "{err}"
         );
-        assert!(poll_until(std::time::Instant::now(), || Ok(true)).is_ok());
+        assert!(stream_wait(std::time::Duration::ZERO, || Ok(true)).is_ok());
     }
 
     /// Without the feature the struct has no fields, so the kind check and the

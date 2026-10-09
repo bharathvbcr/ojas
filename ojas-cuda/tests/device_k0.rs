@@ -48,21 +48,21 @@ fn an_allocation_past_the_budget_is_refused_before_the_driver() {
         ..RuntimeConfig::default()
     });
     // The 32 MiB cuBLAS workspace is already reserved.
-    let used = rt.budget().used();
+    let used = rt.budget().used().unwrap();
     assert_eq!(used, 32 << 20);
     let err = rt
         .alloc_zeros::<f32>(9 << 20, "too big")
         .expect_err("36 MiB more must not fit a 64 MiB budget holding 32 MiB");
     assert!(matches!(err, CudaError::Capacity { .. }), "{err}");
     assert_eq!(
-        rt.budget().used(),
+        rt.budget().used().unwrap(),
         used,
         "a refused allocation reserved bytes"
     );
     let ok = rt.alloc_zeros::<f32>(1 << 20, "fits").unwrap();
-    assert_eq!(rt.budget().used(), used + (4 << 20));
+    assert_eq!(rt.budget().used().unwrap(), used + (4 << 20));
     drop(ok);
-    assert_eq!(rt.budget().used(), used);
+    assert_eq!(rt.budget().used().unwrap(), used);
 }
 
 #[test]

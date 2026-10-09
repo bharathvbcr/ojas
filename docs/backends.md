@@ -29,7 +29,7 @@ flowchart TD
 ```
 
 > [!IMPORTANT]
-> **Zero Silent Fallback Policy:** CUDA and HIP have no Go device selector and do not implement `Backend`. If Metal or wgpu cannot open their respective hardware contexts, `LoadModel` or `NewModel` returns an immediate error—**it will never silently substitute a CPU session**.
+> **Zero Silent Fallback Policy:** HIP has no Go device selector and does not implement `Backend`. CUDA implements `Backend` (`ojas-cuda`'s `CudaBackend`: upload, download and sync; every compute op returns `Unsupported`), and its Go selector `DeviceCUDA` (5) is refused by name at load until task gp-cuda-backend-provider lands. If Metal or wgpu cannot open their respective hardware contexts, `LoadModel` or `NewModel` returns an immediate error—**it will never silently substitute a CPU session**.
 >
 > **CPU Auto Thread Selection:** `DeviceCPUAuto` automatically queries `ResourcePlan::thread_ceiling` (usable host CPUs capped by cgroup CPU quota) to configure the CPU thread pool. If the host CPU count is unreadable, load is refused rather than guessed.
 

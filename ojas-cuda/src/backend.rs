@@ -7,16 +7,22 @@ use ojas_core::{
     AdamWConfig, Backend, BackendId, Budget, MuonNs5Config, Numerics, OjasError, PerHeadGateGrad,
     Tensor, ValueResidualGrad,
 };
-use ojas_device::{Device, DeviceError};
+use ojas_device::DeviceError;
 
 #[cfg(feature = "cuda")]
 use crate::buffer::CudaDeviceBuffer;
 #[cfg(feature = "cuda")]
-use crate::runtime::{driver_error, CudaRuntime};
+use crate::runtime::{CudaRuntime, RuntimeConfig};
 
 /// Device-resident [`Backend`] over NVIDIA CUDA.
+///
+/// Its [`Backend::budget`] is its runtime's ([`CudaRuntime::budget`]): the
+/// tensors it uploads, the runtime's kernel buffers and the cuBLAS workspace
+/// are charged to one [`Budget`], so together they never pass its cap.
 #[derive(Clone)]
 pub struct CudaBackend {
+    /// Without `cuda` there is no runtime to hold the budget.
+    #[cfg(not(feature = "cuda"))]
     pub(crate) budget: Budget,
     /// `Rc`, not `Arc`: the runtime owns a raw cuBLAS handle and is neither
     /// `Send` nor `Sync`, so a backend and its clones stay on one thread.
@@ -33,38 +39,39 @@ impl std::fmt::Debug for CudaBackend {
 }
 
 impl CudaBackend {
-    /// Open CUDA device 0 with `budget`.
+    /// Open CUDA device 0, charging `budget` for every device allocation,
+    /// the runtime's 32 MiB cuBLAS workspace included
+    /// ([`CudaRuntime::open_with`]).
+    ///
+    /// A failure keeps its kind (`impl From<CudaError> for DeviceError`):
+    /// missing libraries or no device are [`DeviceError::NoDevice`], a
+    /// compute capability other than [`crate::kernels::REQUIRED_CC`] is
+    /// [`DeviceError::Unsupported`], a budget too small for the workspace or
+    /// a device out of memory is [`DeviceError::Capacity`], an NVRTC failure
+    /// is [`DeviceError::Compile`], and a cuBLAS, stream or first-sync
+    /// failure is [`DeviceError::Init`].
     pub fn open(budget: Budget) -> Result<Self, DeviceError> {
         #[cfg(not(feature = "cuda"))]
         {
             let _ = budget;
-            Err(DeviceError::NotCompiled { kind: Device::Cuda })
+            Err(DeviceError::NotCompiled {
+                kind: ojas_device::Device::Cuda,
+            })
         }
         #[cfg(feature = "cuda")]
         {
-            crate::runtime::probe_libraries().map_err(|e| DeviceError::NoDevice {
-                kind: Device::Cuda,
-                detail: e.to_string(),
-            })?;
-            let cfg = crate::runtime::RuntimeConfig {
-                budget_bytes: budget.cap_bytes(),
-                ..crate::runtime::RuntimeConfig::default()
-            };
-            let rt = CudaRuntime::open(cfg).map_err(|e| DeviceError::NoDevice {
-                kind: Device::Cuda,
-                detail: e.to_string(),
-            })?;
+            let rt = CudaRuntime::open_with(RuntimeConfig::default(), budget)?;
             Ok(Self {
-                budget,
                 rt: std::rc::Rc::new(rt),
             })
         }
     }
 
-    /// Construct a [`CudaBackend`] around an existing runtime.
+    /// A [`CudaBackend`] on an existing runtime, charging the runtime's
+    /// budget.
     #[cfg(feature = "cuda")]
-    pub fn with_runtime(rt: std::rc::Rc<CudaRuntime>, budget: Budget) -> Self {
-        Self { budget, rt }
+    pub fn with_runtime(rt: std::rc::Rc<CudaRuntime>) -> Self {
+        Self { rt }
     }
 
     /// Access the underlying [`CudaRuntime`].
@@ -80,7 +87,14 @@ impl Backend for CudaBackend {
     }
 
     fn budget(&self) -> &Budget {
-        &self.budget
+        #[cfg(not(feature = "cuda"))]
+        {
+            &self.budget
+        }
+        #[cfg(feature = "cuda")]
+        {
+            self.rt.budget().budget()
+        }
     }
 
     fn numerics(&self) -> Numerics {
@@ -125,24 +139,30 @@ impl Backend for CudaBackend {
         }
         #[cfg(feature = "cuda")]
         {
-            let bytes = tensor.to_ne_bytes()?;
-            if bytes.is_empty() {
+            // The host window is the copy's source: no staging copy, except
+            // for F16, which has no borrowed accessor.
+            let staged;
+            let host: &[u8] = match tensor.dtype() {
+                DType::F32 => ne_bytes(tensor.f32_slice()?),
+                DType::U32 => ne_bytes(tensor.u32_slice()?),
+                DType::Bf16 => ne_bytes(tensor.bf16_slice()?),
+                DType::F16 => {
+                    staged = tensor.to_ne_bytes()?;
+                    &staged
+                }
+            };
+            if host.is_empty() {
                 return Err(OjasError::Shape {
                     op: OP,
                     detail: "cannot upload an empty tensor".to_string(),
                 });
             }
-            let byte_len = bytes.len();
-            let reservation = self.budget.try_reserve(byte_len as u64)?;
-            let mut slice = self
-                .rt
-                .stream()
-                .alloc_zeros::<u8>(byte_len)
-                .map_err(|e| OjasError::from(driver_error("alloc_zeros", e)))?;
-            self.rt
-                .stream()
-                .memcpy_htod(&bytes, &mut slice)
-                .map_err(|e| OjasError::from(driver_error("memcpy_htod", e)))?;
+            let byte_len = host.len();
+            // The runtime's budget, charged in `ojas_core` terms so a refusal
+            // stays `CapacityExceeded`; then the device's free memory.
+            let reservation = self.budget().try_reserve(byte_len as u64)?;
+            self.rt.check_free(byte_len as u64, OP)?;
+            let slice = self.rt.copy_in(host, OP)?;
             let shadow_u32 = if tensor.dtype() == DType::U32 {
                 Some(Arc::<[u32]>::from(tensor.u32_slice()?))
             } else {
@@ -153,6 +173,7 @@ impl Backend for CudaBackend {
                 len: byte_len,
                 stream: Arc::clone(self.rt.stream()),
                 shadow_u32,
+                sync_timeout: self.rt.config().sync_timeout,
             };
             Tensor::from_device_reserved(
                 Arc::new(dev_buf),
@@ -487,9 +508,32 @@ impl Backend for CudaBackend {
     }
 }
 
+/// Element types whose every byte is initialised value bits (no padding), so
+/// a slice of them may be read as bytes.
+#[cfg(feature = "cuda")]
+trait PlainBits: Copy {}
+#[cfg(feature = "cuda")]
+impl PlainBits for f32 {}
+#[cfg(feature = "cuda")]
+impl PlainBits for u32 {}
+#[cfg(feature = "cuda")]
+impl PlainBits for u16 {}
+
+/// `data`'s bytes in native order, borrowed.
+#[cfg(feature = "cuda")]
+fn ne_bytes<T: PlainBits>(data: &[T]) -> &[u8] {
+    // SAFETY: `T` is f32, u32 or u16 (`PlainBits`), so every byte of `data`
+    // is initialised and none is padding; the result covers exactly
+    // `size_of_val(data)` bytes of the same allocation, u8 needs alignment 1,
+    // and the returned borrow keeps `data` borrowed (so alive and unmutated)
+    // for as long as the bytes are.
+    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(data)) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ojas_device::Device;
 
     #[test]
     fn cuda_backend_open_without_cuda_feature() {
@@ -523,11 +567,16 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn cuda_backend_open_handles_no_device() {
-        let budget = Budget::new(1024 * 1024);
-        match std::panic::catch_unwind(|| CudaBackend::open(budget)) {
+        let budget = Budget::new(1 << 30);
+        match std::panic::catch_unwind(|| CudaBackend::open(budget.clone())) {
             Ok(Ok(backend)) => {
                 assert_eq!(backend.id(), BackendId::Cuda);
                 assert_eq!(backend.numerics(), Numerics::Fast);
+                // The backend charges the caller's budget, workspace included.
+                assert_eq!(
+                    budget.live_bytes().unwrap(),
+                    crate::runtime::CUBLAS_WORKSPACE_BYTES as u64
+                );
             }
             Ok(Err(DeviceError::NoDevice {
                 kind: Device::Cuda, ..
@@ -535,5 +584,70 @@ mod tests {
             Ok(Err(other)) => panic!("open returned {other}"),
             Err(_) => panic!("CudaBackend::open panicked instead of returning NoDevice"),
         }
+    }
+
+    /// A budget smaller than the cuBLAS workspace cannot open a backend: on a
+    /// device that is `Capacity` (`E_CAPACITY` through the C ABI), not
+    /// `NoDevice`; without one the open stops at `NoDevice` first.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn a_budget_below_the_workspace_is_capacity_on_a_device() {
+        let budget = Budget::new(1 << 20);
+        match std::panic::catch_unwind(|| CudaBackend::open(budget.clone())) {
+            Ok(Err(DeviceError::Capacity {
+                kind: Device::Cuda, ..
+            }))
+            | Ok(Err(DeviceError::NoDevice {
+                kind: Device::Cuda, ..
+            })) => assert_eq!(budget.live_bytes().unwrap(), 0),
+            Ok(Ok(_)) => panic!("a 1 MiB budget held the 32 MiB cuBLAS workspace"),
+            Ok(Err(other)) => panic!("open returned {other}"),
+            Err(_) => panic!("CudaBackend::open panicked"),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn ne_bytes_is_the_native_encoding() {
+        let x = [1.5f32, -2.0];
+        assert_eq!(
+            ne_bytes(&x),
+            [x[0].to_ne_bytes(), x[1].to_ne_bytes()].concat()
+        );
+        let ids = [7u32, u32::MAX];
+        assert_eq!(
+            ne_bytes(&ids),
+            [ids[0].to_ne_bytes(), ids[1].to_ne_bytes()].concat()
+        );
+        assert!(ne_bytes::<u16>(&[]).is_empty());
+    }
+
+    /// The borrowed view is byte-for-byte `Tensor::to_ne_bytes`'s encoding
+    /// (the staged path it replaces) for every length 0..=64, random bit
+    /// patterns (NaN payloads, subnormals, infinities included) and every
+    /// dtype the view serves.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn stress_ne_bytes_matches_the_staged_encoding() {
+        let host = Budget::new(1 << 20);
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for len in 1..=64usize {
+            let bits: Vec<u32> = (0..len).map(|_| next() as u32).collect();
+            let f: Vec<f32> = bits.iter().map(|&b| f32::from_bits(b)).collect();
+            let half: Vec<u16> = bits.iter().map(|&b| b as u16).collect();
+            let t = Tensor::from_f32(&f, &[len], &host).unwrap();
+            assert_eq!(ne_bytes(t.f32_slice().unwrap()), t.to_ne_bytes().unwrap());
+            let t = Tensor::from_u32(&bits, &[len], &host).unwrap();
+            assert_eq!(ne_bytes(t.u32_slice().unwrap()), t.to_ne_bytes().unwrap());
+            let t = Tensor::from_bf16_bits(&half, &[len], &host).unwrap();
+            assert_eq!(ne_bytes(t.bf16_slice().unwrap()), t.to_ne_bytes().unwrap());
+        }
+        assert!(ne_bytes::<f32>(&[]).is_empty());
     }
 }

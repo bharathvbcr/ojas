@@ -8,6 +8,25 @@ time). Three things live here:
   every compute op returns `OjasError::Unsupported` naming the op. A sticky driver failure
   (an illegal address, a failed launch, a device-side assert, …) is
   `OjasError::DeviceLost`, so a caller stops instead of retrying on a dead context.
+  - One budget: `CudaBackend::open(budget)` opens its runtime with `CudaRuntime::open_with`, so
+    uploaded tensors, the runtime's kernel buffers and the 32 MiB cuBLAS workspace are all charged
+    to that `ojas_core::Budget` (`AllocBudget` is a view of it). A budget smaller than the
+    workspace cannot open.
+  - Open errors keep their kind (`impl From<CudaError> for DeviceError`): missing libraries or no
+    device are `NoDevice`, a compute capability other than `REQUIRED_CC` is `Unsupported`, a
+    budget or device-memory refusal is `Capacity` (`E_CAPACITY` through the C ABI), NVRTC is
+    `Compile`, and a cuBLAS, stream or first-sync failure is `Init`.
+  - An upload copies straight from the host tensor (f32, u32, bf16; f16 is staged once) into an
+    allocation that is not zeroed first. A U32 upload also keeps a host copy of its ids for the
+    token-range check.
+  - Every upload (`CudaBackend::upload`, `CudaRuntime::upload` and `write`) returns only after its
+    copy has finished: NVIDIA documents an async copy from pageable memory only as one that "might
+    be synchronous with respect to host", and cudarc keeps nothing alive for a `&[T]` source. The
+    wait is bounded (`sync_timeout`), as is every device wait, a tensor readback's included
+    (`src/wait.rs`).
+  - Not selectable through the C ABI or Go yet: device 5 (`DEVICE_CUDA`, `DeviceCUDA`) is refused
+    by name until gp-cuda-backend-provider lands, because the runtime is an `Rc` (not `Send`) and
+    no compute op is implemented.
 - `Qwen35Step`: the Qwen3.5 whole-step training provider, design (B) in
   [`docs/cuda-backend-scoping.md`](../docs/cuda-backend-scoping.md), the CUDA counterpart of
   `ojas-qwen35`. Every compute method refuses with `Unsupported` until its kernels are wired and
@@ -28,7 +47,7 @@ merged from. The merged crate has not yet run on a device.
 | Piece | Where | Tested on the Mac |
 | --- | --- | --- |
 | `CudaRuntime`: library probe before any cudarc call, sm_90 check, one stream, cuBLAS handle (32 MiB workspace, default math, atomics never set) | `src/runtime.rs` | refusal path only (`tests/runtime_refusal.rs`) |
-| `CudaBuffer<T>`: typed, length-checked, held against a bounded `AllocBudget`; `CudaDeviceBuffer` backs an `ojas_core::Tensor` | `src/buffer.rs`, `src/budget.rs` | budget logic |
+| `CudaBuffer<T>`: typed, length-checked, held against a bounded `AllocBudget` (a view of the one `ojas_core::Budget` the backend also charges); `CudaDeviceBuffer` backs an `ojas_core::Tensor` | `src/buffer.rs`, `src/budget.rs` | budget logic |
 | NVRTC compile cache: key = module, FNV-1a of the source, length, options (architecture and `--fmad` included), NVRTC version; bounded in entries and bytes, LRU | `src/nvrtc_cache.rs` | yes |
 | K0: f32↔bf16 (RNE), `copy_cols`, `deliver` (copy / `+=`), `zero`, `scatter_add_rows` (distinct rows), `ce_gather_rows` (f32 / bf16) | `src/kernels.rs`, `src/k0.rs`, `src/k0_plan.rs` | plans and host references |
 | K1: GEMM `nn`/`tn`/`nt`: ExactF32 (fixed-k FFMA kernel) and Bf16 (cuBLAS `GemmEx` bf16→f32, or the FFMA kernel rounding on load) | `src/gemm.rs`, `src/gemm_plan.rs` | cuBLAS row-major mapping, host references |

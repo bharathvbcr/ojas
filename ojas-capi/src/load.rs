@@ -38,6 +38,22 @@ pub const DEVICE_WGPU: u32 = 3;
 /// opt-in adaptivity. `threads` is not read. Memory budgets are unchanged:
 /// they stay the caller's, under the process ceiling.
 pub const DEVICE_CPU_AUTO: u32 = 4;
+/// CUDA: reserved and refused ([`CUDA_REFUSED`]) at decode, before a file is
+/// read or a device opened, for load, new and resume alike.
+///
+/// A CUDA session would hold an `ojas_cuda::CudaBackend`, whose runtime is
+/// an `Rc` (it owns a raw cuBLAS handle, so it is neither `Send` nor
+/// `Sync`); a session's model crosses threads, so it would need an owner
+/// thread like Metal's ([`crate::owner`]). And every compute op on that
+/// backend still returns `Unsupported`, so a session could not train or
+/// sample. Both wait on task gp-cuda-backend-provider; until it lands this
+/// crate does not link ojas-cuda.
+pub const DEVICE_CUDA: u32 = 5;
+
+/// The error for [`DEVICE_CUDA`].
+pub const CUDA_REFUSED: &str = "load: device 5 (CUDA) is refused: CUDA sessions are not \
+     available through the C ABI until task gp-cuda-backend-provider lands \
+     (CudaBackend is not Send and implements no compute op yet)";
 
 /// A session's byte budget when the caller names none: 1 GiB. Every
 /// session budget is drawn from the process ceiling
@@ -252,7 +268,8 @@ pub(crate) const PLACEMENT_FIELDS: [(u32, &str, Kind); 4] = [
 ];
 
 /// Device 0 CPU, 1 CPU parallel (`threads` 1..=256), 2 Metal, 3 wgpu,
-/// 4 CPU auto ([`auto_threads`]); default CPU. `threads` is read only for CPU parallel. `budget` (bytes,
+/// 4 CPU auto ([`auto_threads`]); default CPU. 5 CUDA is refused
+/// ([`DEVICE_CUDA`]). `threads` is read only for CPU parallel. `budget` (bytes,
 /// non-zero) defaults to [`DEFAULT_BUDGET_BYTES`]; one above the process
 /// ceiling is refused when the device opens. `numerics` 1 Exact or
 /// 2 Fast is CPU only; absent keeps the backend's default.
@@ -274,6 +291,7 @@ pub(crate) fn placement(f: &Fields<'_>) -> Result<Placement, String> {
         }
         DEVICE_METAL => DeviceKind::Metal,
         DEVICE_WGPU => DeviceKind::Wgpu,
+        DEVICE_CUDA => return Err(CUDA_REFUSED.to_string()),
         DEVICE_CPU_AUTO => {
             // A CPU session: no device probe, the host profile is its memory.
             let profile = ojas_device::probe_system();

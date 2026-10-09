@@ -17,14 +17,20 @@
 //!
 //! Every wait is bounded ([`RuntimeConfig::sync_timeout`]): an event is
 //! recorded and polled, never an unbounded `cuStreamSynchronize`.
+//!
+//! Every device byte the runtime allocates, the cuBLAS workspace included,
+//! is charged to one [`ojas_core::Budget`] ([`CudaRuntime::open_with`]);
+//! [`crate::CudaBackend`] charges its tensors to the same one.
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cudarc::cublas::sys as cublas_sys;
 use cudarc::driver::{
-    CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, DevicePtr, DriverError,
+    CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
+    DriverError,
 };
+use ojas_core::Budget;
 
 use crate::budget::{bytes_for, AllocBudget, Reservation};
 use crate::error::CudaError;
@@ -32,9 +38,12 @@ use crate::json::{Json, JsonObj};
 use crate::kernels::{CompileSpec, KernelModule};
 use crate::libprobe;
 use crate::nvrtc_cache::{CacheKey, CacheStats, NvrtcCache};
+use crate::wait::poll_until;
 
-/// The compute capability this crate is written and tested for (GH200: sm_90).
-pub const REQUIRED_CC: (i32, i32) = (9, 0);
+/// The compute capability this crate is written and tested for (GH200:
+/// sm_90), required exactly. Stated once, in [`crate::kernels`], where the
+/// NVRTC architectures derive from it.
+pub use crate::kernels::REQUIRED_CC;
 
 /// cuBLAS workspace size on sm_90 and later, per NVIDIA's `cublasSetWorkspace`
 /// guidance (32 MiB).
@@ -45,7 +54,8 @@ pub const CUBLAS_WORKSPACE_BYTES: usize = 32 << 20;
 pub struct RuntimeConfig {
     /// CUDA device ordinal.
     pub ordinal: usize,
-    /// Cap on this runtime's device allocations, workspace included.
+    /// Cap on this runtime's device allocations, workspace included. With
+    /// [`CudaRuntime::open_with`] it is the given budget's cap.
     pub budget_bytes: u64,
     /// Longest any single device wait may take.
     pub sync_timeout: Duration,
@@ -149,27 +159,67 @@ pub fn cublas_error(op: &str, status: cublas_sys::cublasStatus_t) -> CudaError {
     }
 }
 
+/// Wait, at most `timeout`, for everything queued on `stream` so far, then
+/// report any error cudarc deferred from a drop path (frees, event waits).
+/// The crate's one device wait: an event is recorded and polled
+/// ([`poll_until`]), never an unbounded `cuStreamSynchronize`.
+pub(crate) fn wait_stream(
+    stream: &CudaStream,
+    timeout: Duration,
+    op: &str,
+) -> Result<(), CudaError> {
+    let ctx = stream.context();
+    let event = ctx
+        .new_event(Some(
+            cudarc::driver::sys::CUevent_flags::CU_EVENT_DISABLE_TIMING,
+        ))
+        .map_err(|e| driver_error(&format!("{op}: cuEventCreate"), e))?;
+    event
+        .record(stream)
+        .map_err(|e| driver_error(&format!("{op}: cuEventRecord"), e))?;
+    poll_until(
+        timeout,
+        Duration::from_micros(200),
+        || {
+            event
+                .try_is_complete()
+                .map_err(|e| driver_error(&format!("{op}: cuEventQuery"), e))
+        },
+        |waited| CudaError::Timeout {
+            op: op.to_string(),
+            waited_ms: waited.as_millis(),
+        },
+    )?;
+    ctx.check_err()
+        .map_err(|e| driver_error(&format!("{op}: deferred error"), e))
+}
+
 /// Load-probe every library the runtime needs, with cudarc's own candidate
 /// names, before any cudarc call that would panic on a missing one.
 pub fn probe_libraries() -> Result<(), CudaError> {
-    // SAFETY (all three): `is_culib_present` only `dlopen`s cudarc's candidate
-    // sonames and drops the handle. Loading runs the library's initialisers,
-    // which cudarc's first real call would run anyway.
-    let probes = [
-        (libprobe::DRIVER, unsafe {
-            cudarc::driver::sys::is_culib_present()
-        }),
-        (libprobe::NVRTC, unsafe {
-            cudarc::nvrtc::sys::is_culib_present()
-        }),
-        (libprobe::CUBLAS, unsafe {
-            cudarc::cublas::sys::is_culib_present()
-        }),
-    ];
+    probe(&libprobe::REQUIRED)
+}
+
+/// Load-probe `specs` (a subset of [`libprobe::REQUIRED`]), refusing by name
+/// with every missing library and where it was looked for. A spec this crate
+/// does not know how to probe counts as missing.
+pub(crate) fn probe(specs: &[libprobe::LibrarySpec]) -> Result<(), CudaError> {
     let ld = std::env::var("LD_LIBRARY_PATH").ok();
     let mut libraries = Vec::new();
     let mut details = Vec::new();
-    for (spec, present) in probes {
+    for &spec in specs {
+        // SAFETY (all three): `is_culib_present` only `dlopen`s cudarc's
+        // candidate sonames and drops the handle. Loading runs the library's
+        // initialisers, which cudarc's first real call would run anyway.
+        let present = if spec == libprobe::DRIVER {
+            unsafe { cudarc::driver::sys::is_culib_present() }
+        } else if spec == libprobe::NVRTC {
+            unsafe { cudarc::nvrtc::sys::is_culib_present() }
+        } else if spec == libprobe::CUBLAS {
+            unsafe { cudarc::cublas::sys::is_culib_present() }
+        } else {
+            false
+        };
         if !present {
             let candidates: Vec<String> = spec
                 .cudarc_names
@@ -209,7 +259,7 @@ impl CublasHandle {
     fn new(
         ctx: &Arc<CudaContext>,
         stream: &Arc<CudaStream>,
-        budget: &Arc<AllocBudget>,
+        budget: &AllocBudget,
         workspace_bytes: usize,
     ) -> Result<(Self, CublasReadback), CudaError> {
         ctx.bind_to_thread()
@@ -307,7 +357,7 @@ impl Drop for CublasHandle {
 pub struct CudaRuntime {
     blas: CublasHandle,
     cache: Mutex<NvrtcCache<Arc<CudaModule>>>,
-    budget: Arc<AllocBudget>,
+    budget: AllocBudget,
     stream: Arc<CudaStream>,
     ctx: Arc<CudaContext>,
     info: DeviceInfo,
@@ -315,8 +365,20 @@ pub struct CudaRuntime {
 }
 
 impl CudaRuntime {
-    /// Open the device; see the module docs for the order of checks.
+    /// Open the device with a budget of `config.budget_bytes` that nothing
+    /// else charges; see the module docs for the order of checks.
     pub fn open(config: RuntimeConfig) -> Result<Self, CudaError> {
+        let budget = Budget::new(config.budget_bytes);
+        Self::open_with(config, budget)
+    }
+
+    /// Open the device charging `budget` for every allocation, the cuBLAS
+    /// workspace included, so the caller's own charges on `budget` (or on
+    /// its parent) and the runtime's share one cap. `config.budget_bytes` is
+    /// replaced by `budget`'s cap. A 0-byte budget, or one too small for the
+    /// workspace, is [`CudaError::Capacity`].
+    pub fn open_with(mut config: RuntimeConfig, budget: Budget) -> Result<Self, CudaError> {
+        config.budget_bytes = budget.cap_bytes();
         probe_libraries()?;
         let ctx = CudaContext::new(config.ordinal)
             .map_err(|e| driver_error(&format!("CudaContext::new({})", config.ordinal), e))?;
@@ -362,7 +424,7 @@ impl CudaRuntime {
         let stream = ctx
             .new_stream()
             .map_err(|e| driver_error("cuStreamCreate", e))?;
-        let budget = AllocBudget::new(config.budget_bytes)?;
+        let budget = AllocBudget::over(budget)?;
         let (blas, readback) =
             CublasHandle::new(&ctx, &stream, &budget, config.cublas_workspace_bytes)?;
         let cache = NvrtcCache::new(config.cache_entries, config.cache_bytes)?;
@@ -413,8 +475,9 @@ impl CudaRuntime {
         &self.ctx
     }
 
-    /// The allocation budget.
-    pub fn budget(&self) -> &Arc<AllocBudget> {
+    /// The allocation budget: a view of the one [`Budget`] every device byte
+    /// is charged to.
+    pub fn budget(&self) -> &AllocBudget {
         &self.budget
     }
 
@@ -438,37 +501,10 @@ impl CudaRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Wait for all queued work, polling an event until `sync_timeout`.
+    /// Wait for all queued work, polling an event until `sync_timeout`
+    /// ([`wait_stream`]).
     pub fn sync(&self, op: &str) -> Result<(), CudaError> {
-        let event = self
-            .ctx
-            .new_event(Some(
-                cudarc::driver::sys::CUevent_flags::CU_EVENT_DISABLE_TIMING,
-            ))
-            .map_err(|e| driver_error(&format!("{op}: cuEventCreate"), e))?;
-        event
-            .record(&self.stream)
-            .map_err(|e| driver_error(&format!("{op}: cuEventRecord"), e))?;
-        let start = Instant::now();
-        loop {
-            let done = event
-                .try_is_complete()
-                .map_err(|e| driver_error(&format!("{op}: cuEventQuery"), e))?;
-            if done {
-                break;
-            }
-            if start.elapsed() >= self.config.sync_timeout {
-                return Err(CudaError::Timeout {
-                    op: op.to_string(),
-                    waited_ms: start.elapsed().as_millis(),
-                });
-            }
-            std::thread::sleep(Duration::from_micros(200));
-        }
-        // Errors cudarc recorded from drop paths (frees, event waits).
-        self.ctx
-            .check_err()
-            .map_err(|e| driver_error(&format!("{op}: deferred error"), e))
+        wait_stream(&self.stream, self.config.sync_timeout, op)
     }
 
     /// Compile (or fetch from the cache) `module` with `spec` and load `entry`.
@@ -529,6 +565,13 @@ impl CudaRuntime {
         }
         let bytes = bytes_for(len, std::mem::size_of::<T>(), label)?;
         let reservation = self.budget.reserve(bytes, label)?;
+        self.check_free(bytes, label)?;
+        Ok(reservation)
+    }
+
+    /// Refuse `bytes` more than the device has free, before the driver is
+    /// asked to allocate them.
+    pub(crate) fn check_free(&self, bytes: u64, label: &str) -> Result<(), CudaError> {
         let (free, _total) = self
             .ctx
             .mem_get_info()
@@ -539,6 +582,38 @@ impl CudaRuntime {
                 format!("{bytes} bytes requested, {free} bytes free on the device"),
             ));
         }
-        Ok(reservation)
+        Ok(())
+    }
+
+    /// A new device allocation holding a copy of `data`, already reserved by
+    /// the caller. `clone_htod` allocates without the `memset` that
+    /// `alloc_zeros` queues, since the copy overwrites every byte, and copies
+    /// from `data` itself, with no staging copy on the host.
+    ///
+    /// Returns only once the copy has finished ([`Self::htod_done`]), so the
+    /// caller may drop or change `data` at once.
+    pub(crate) fn copy_in<T: DeviceRepr>(
+        &self,
+        data: &[T],
+        label: &str,
+    ) -> Result<CudaSlice<T>, CudaError> {
+        let label = format!("upload {label}");
+        let slice = self
+            .stream
+            .clone_htod(data)
+            .map_err(|e| driver_error(&label, e))?;
+        self.htod_done(&label)?;
+        Ok(slice)
+    }
+
+    /// Wait (bounded) for a host-to-device copy from pageable memory just
+    /// queued on the stream. NVIDIA documents such an async copy only as one
+    /// that "might be synchronous with respect to host" (driver API,
+    /// "API synchronization behavior"), and cudarc keeps nothing alive for a
+    /// `&[T]` source, so until the copy is known done the source must not
+    /// be freed or written. Waiting here makes that hold whatever the driver
+    /// does, at the cost of also waiting for work queued before the copy.
+    pub(crate) fn htod_done(&self, label: &str) -> Result<(), CudaError> {
+        self.sync(label)
     }
 }

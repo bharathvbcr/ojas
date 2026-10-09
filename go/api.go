@@ -78,12 +78,19 @@ func SetModelRoot(ctx context.Context, dir string) error {
 // synchronizes, so it may come from an earlier op of the same call. Every
 // call synchronizes before it returns, so it never comes from an earlier
 // call.
+//
+// DeviceCUDA is reserved and refused: LoadModel, NewModel and Resume return
+// an error naming CUDA and create nothing. The engine's CUDA backend
+// (ojas-cuda) is not yet usable from a session: its runtime cannot move
+// between threads and none of its compute ops is implemented. That waits on
+// task gp-cuda-backend-provider.
 const (
 	DeviceCPU         uint32 = deviceCPU
 	DeviceCPUParallel uint32 = deviceCPUParallel
 	DeviceMetal       uint32 = deviceMetal
 	DeviceWgpu        uint32 = deviceWgpu
 	DeviceCPUAuto     uint32 = deviceCPUAuto
+	DeviceCUDA        uint32 = deviceCUDA
 )
 
 // MaxCPUThreads is the largest Threads DeviceCPUParallel accepts. Larger

@@ -69,6 +69,12 @@ pub enum DeviceError {
     Compile { kind: Device, detail: String },
     /// A kernel failed to launch or finish. The device itself was present.
     Launch { kind: Device, detail: String },
+    /// A device answered and this build does not run on it, such as a
+    /// compute capability other than the one the kernels target.
+    Unsupported { kind: Device, detail: String },
+    /// The device answered and the runtime around it failed to come up: a
+    /// vendor library handle (cuBLAS), a stream, or the first bounded wait.
+    Init { kind: Device, detail: String },
 }
 
 impl fmt::Display for DeviceError {
@@ -89,6 +95,10 @@ impl fmt::Display for DeviceError {
             DeviceError::Capacity { kind, detail } => write!(f, "{kind:?} capacity: {detail}"),
             DeviceError::Compile { kind, detail } => write!(f, "{kind:?} compile: {detail}"),
             DeviceError::Launch { kind, detail } => write!(f, "{kind:?} launch: {detail}"),
+            DeviceError::Unsupported { kind, detail } => {
+                write!(f, "{kind:?} device unsupported: {detail}")
+            }
+            DeviceError::Init { kind, detail } => write!(f, "{kind:?} init: {detail}"),
         }
     }
 }
