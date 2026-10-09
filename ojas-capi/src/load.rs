@@ -214,7 +214,7 @@ impl Verified {
     }
 
     /// A path naming this open file, for a loader that takes a path
-    /// (`ojas_data::TokenBin`, `ojas_data::load_hf_gpt2`). Opening it opens
+    /// (`ojas_data::load_hf_gpt2`). Opening it opens
     /// the file this descriptor holds, never whatever the original path names
     /// now, so the loader's own open cannot follow a symlink swapped in after
     /// this one. The descriptor stays open while `self` lives.

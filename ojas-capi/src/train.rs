@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use ojas_core::{Autocast, AutocastMode, Backend, OjasError, Tensor};
 use ojas_cpu::{scaled_lr, CosineSchedule, LrSchedule, WsdSchedule};
-use ojas_data::{Batch, TokenBin};
+use ojas_data::{Batch, BinLayout, TokenBin, TokenWidth};
 use ojas_model::{NonFinitePolicy, TrainConfig, Trainer};
 
 use crate::gate::Check;
@@ -122,19 +122,19 @@ fn autocast_mode(value: Option<u32>) -> Result<AutocastMode, String> {
     }
 }
 
-/// The token bin `raw` under the root. `ojas_data::TokenBin` opens by path,
-/// so it is handed the descriptor of the file opened here with
-/// `O_NOFOLLOW` ([`Verified::fd_path`]).
+/// The token bin `raw` under the root. [`TokenBin::from_file`] takes the
+/// descriptor opened here with `O_NOFOLLOW`; nothing is reopened by path.
 fn open_bin(raw: &str, format: u32) -> Result<TokenBin, String> {
-    let file = Verified::open(raw)?;
-    let opened = match format {
-        BIN_HEADERLESS => TokenBin::open_headerless(&file.fd_path()),
-        BIN_FINEWEB => TokenBin::open_fineweb(&file.fd_path()),
-        BIN_HEADERLESS_U32 => TokenBin::open_headerless_u32(&file.fd_path()),
-        BIN_FINEWEB_U32 => TokenBin::open_fineweb_u32(&file.fd_path()),
+    let layout = match format {
+        BIN_HEADERLESS => BinLayout::Headerless(TokenWidth::U16),
+        BIN_FINEWEB => BinLayout::FineWeb(None),
+        BIN_HEADERLESS_U32 => BinLayout::Headerless(TokenWidth::U32),
+        BIN_FINEWEB_U32 => BinLayout::FineWeb(Some(TokenWidth::U32)),
         other => return Err(format!("train: unknown bin_format {other}")),
     };
-    opened.map_err(|e| format!("token bin: {}", file.explain(e.detail())))
+    let Verified { path, file } = Verified::open(raw)?;
+    TokenBin::from_file(file, layout)
+        .map_err(|e| format!("token bin: {}: {}", path.display(), e.detail()))
 }
 
 /// TRAIN_OPEN: `id: u64`, then the train fields. The session's resident
