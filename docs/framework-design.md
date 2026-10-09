@@ -185,7 +185,7 @@ Opcodes 1–5 keep their numbers.
 | 7 TRAIN_OPEN | `OpenTrainer(ctx, id, TrainConfig{TokenBin, Batch, Seq, Accum, Seed, Schedule, MatrixLR, AdamLR, GradClip, OnNonFinite})` | `TokenBin` plus a `BatchSampler` |
 | 8 TRAIN_STEP | `TrainStep(ctx, id)`, `TrainStepTokens(ctx, id, x, y)` | `{Loss, GradNorm, LR; Step, Tokens}` |
 | 9 SAVE, 10 RESUME | `SaveCheckpoint(ctx, id, dir)`, `Resume(ctx, dir, opts)` | Checkpoint directory (§4) |
-| 11 TOKENIZER, 12 TOKENIZE | `LoadTokenizer`, `Tokenize`, `Detokenize` | ojas-data GPT-2 BPE |
+| 11 TOKENIZER, 12 TOKENIZE | `LoadTokenizer`, `Tokenize`, `Detokenize`, `DetokenizeLossy`, `TokenID` | ojas-data GPT-2 BPE |
 | 13 SAMPLE | `GenerateIDs(ctx, id, prompt, SampleOptions{Temperature, TopK, TopP, Seed, MaxNewTokens, Stop})` | ids |
 
 **Existing tests:**

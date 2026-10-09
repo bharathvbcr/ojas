@@ -29,6 +29,11 @@ use std::sync::OnceLock;
 /// This is not a million-line check.
 pub const TIKTOKEN_GPT2_BYTE_IDENTITY: &str = "verified-20-strings";
 
+/// GPT-2's end-of-text piece; [`Bpe::piece_id`] gives its id (50256 in
+/// GPT-2's `vocab.json`). [`Bpe::encode_ordinary`] encodes this text as
+/// ordinary text, never as that id.
+pub const ENDOFTEXT: &str = "<|endoftext|>";
+
 #[derive(Clone, Debug)]
 pub struct Bpe {
     tokens: Vec<String>,
@@ -39,6 +44,11 @@ pub struct Bpe {
     /// [`bytes_to_unicode`] character, so [`Bpe::encode_ordinary`] does not
     /// look pieces up by text. `None` when the vocabulary has no such piece.
     byte_ids: [Option<u32>; 256],
+    /// Every piece through the inverse byte alphabet, concatenated.
+    piece_bytes: Vec<u8>,
+    /// Per token, its range of `piece_bytes`, or `None` when its text has a
+    /// character outside the byte alphabet.
+    byte_spans: Vec<Option<(usize, usize)>>,
 }
 
 /// `pair_key(left, right) -> (rank, merged id)`.
@@ -181,11 +191,32 @@ impl Bpe {
         for (slot, ch) in byte_ids.iter_mut().zip(bytes_to_unicode()) {
             *slot = encoder.get(&*ch.encode_utf8(&mut buf)).copied();
         }
+        let mut inv = [None; 512];
+        for (b, ch) in bytes_to_unicode().iter().enumerate() {
+            inv[u32::from(*ch) as usize] = Some(b as u8);
+        }
+        let mut piece_bytes = Vec::new();
+        let byte_spans = tokens
+            .iter()
+            .map(|piece| {
+                let start = piece_bytes.len();
+                for ch in piece.chars() {
+                    let Some(b) = inv.get(u32::from(ch) as usize).copied().flatten() else {
+                        piece_bytes.truncate(start);
+                        return None;
+                    };
+                    piece_bytes.push(b);
+                }
+                Some((start, piece_bytes.len()))
+            })
+            .collect();
         Bpe {
             tokens,
             encoder,
             merges,
             byte_ids,
+            piece_bytes,
+            byte_spans,
         }
     }
 
@@ -288,15 +319,34 @@ impl Bpe {
         );
     }
 
+    /// The pieces of `ids` concatenated as written in the vocabulary. An id
+    /// outside the vocabulary, or output over [`HF_TEXT_CAP`] bytes, is an
+    /// error; the length is summed before anything is allocated.
     pub fn decode(&self, ids: &[u32]) -> Result<String, DataError> {
-        let mut out = String::new();
+        let mut len = 0usize;
         for &id in ids {
-            let piece = self.tokens.get(id as usize).ok_or_else(|| {
-                DataError::new(format!("token id {id} is outside the vocabulary"))
-            })?;
-            out.push_str(piece);
+            len = len.saturating_add(self.piece(id)?.len());
+        }
+        refuse_decode_len(len)?;
+        let mut out = String::with_capacity(len);
+        for &id in ids {
+            out.push_str(self.piece(id)?);
         }
         Ok(out)
+    }
+
+    fn piece(&self, id: u32) -> Result<&str, DataError> {
+        self.tokens
+            .get(id as usize)
+            .map(String::as_str)
+            .ok_or_else(|| DataError::new(format!("token id {id} is outside the vocabulary")))
+    }
+
+    /// The id of `piece`, spelled as the vocabulary spells it: a special
+    /// token such as [`ENDOFTEXT`] as itself, other GPT-2 pieces in the byte
+    /// alphabet (`" the"` is `"Ġthe"`). `None` when no piece is that text.
+    pub fn piece_id(&self, piece: &str) -> Option<u32> {
+        self.encoder.get(piece).copied()
     }
 
     /// GPT-2 ordinary encode: regex pre-tokenize, map each piece's bytes through
@@ -342,32 +392,56 @@ impl Bpe {
         Ok(ids)
     }
 
-    /// Invert [`Self::encode_ordinary`]: token pieces to bytes via the inverse
-    /// byte alphabet, then UTF-8. A piece character outside that alphabet, or
-    /// bytes that are not UTF-8, is an error.
+    /// The bytes [`Self::encode_ordinary`] read: each piece through the
+    /// inverse byte alphabet, with no UTF-8 check, so ids that stop inside a
+    /// character still decode. An id outside the vocabulary, a piece
+    /// character outside the alphabet, or output over [`HF_TEXT_CAP`] bytes
+    /// is an error; the length is summed before anything is allocated.
+    pub fn decode_bytes(&self, ids: &[u32]) -> Result<Vec<u8>, DataError> {
+        let mut len = 0usize;
+        for &id in ids {
+            let (start, end) = self.byte_span(id)?;
+            len = len.saturating_add(end - start);
+        }
+        refuse_decode_len(len)?;
+        let mut out = Vec::with_capacity(len);
+        for &id in ids {
+            let (start, end) = self.byte_span(id)?;
+            out.extend_from_slice(&self.piece_bytes[start..end]);
+        }
+        Ok(out)
+    }
+
+    fn byte_span(&self, id: u32) -> Result<(usize, usize), DataError> {
+        let piece = self.piece(id)?;
+        self.byte_spans[id as usize].ok_or_else(|| {
+            let map = bytes_to_unicode();
+            let ch = piece
+                .chars()
+                .find(|c| !map.contains(c))
+                .unwrap_or('\u{FFFD}');
+            DataError::new(format!("token text has no GPT-2 byte for {ch:?}"))
+        })
+    }
+
+    /// Invert [`Self::encode_ordinary`]: [`Self::decode_bytes`], then UTF-8.
+    /// Bytes that are not UTF-8 are an error; [`Self::decode_ordinary_lossy`]
+    /// shows them instead.
     pub fn decode_ordinary(&self, ids: &[u32]) -> Result<String, DataError> {
-        let rendered = self.decode(ids)?;
-        let map = bytes_to_unicode();
-        let mut inv = [None; 512];
-        for (b, ch) in map.iter().enumerate() {
-            let u = u32::from(*ch) as usize;
-            if u >= inv.len() {
-                return Err(DataError::new("byte alphabet exceeds the inverse table"));
-            }
-            inv[u] = Some(b as u8);
-        }
-        let mut bytes = Vec::with_capacity(rendered.len());
-        for ch in rendered.chars() {
-            let u = u32::from(ch) as usize;
-            let Some(b) = inv.get(u).copied().flatten() else {
-                return Err(DataError::new(format!(
-                    "token text has no GPT-2 byte for {ch:?}"
-                )));
-            };
-            bytes.push(b);
-        }
-        String::from_utf8(bytes)
+        String::from_utf8(self.decode_bytes(ids)?)
             .map_err(|e| DataError::new(format!("decoded bytes are not utf-8: {e}")))
+    }
+
+    /// [`Self::decode_bytes`] with each invalid UTF-8 sequence replaced by
+    /// U+FFFD, for showing a generation that stopped inside a character. The
+    /// byte cap applies before the replacement, which can make the text up
+    /// to three times longer.
+    pub fn decode_ordinary_lossy(&self, ids: &[u32]) -> Result<String, DataError> {
+        let bytes = self.decode_bytes(ids)?;
+        Ok(match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        })
     }
 
     fn from_ranked_pieces(
@@ -548,6 +622,15 @@ fn exceeds_encode_cap(len: usize, cap: u64) -> bool {
         Ok(n) => n > cap,
         Err(_) => true,
     }
+}
+
+fn refuse_decode_len(len: usize) -> Result<(), DataError> {
+    if exceeds_encode_cap(len, HF_TEXT_CAP) {
+        return Err(DataError::new(format!(
+            "decode output of {len} bytes exceeds {HF_TEXT_CAP} byte cap"
+        )));
+    }
+    Ok(())
 }
 
 fn refuse_encode_len(text: &str) -> Result<(), DataError> {
@@ -841,6 +924,61 @@ mod tests {
         let err = fixture_bpe().encode("z").unwrap_err();
         assert!(err.to_string().contains("vocabulary"), "{err}");
         assert_eq!(fixture_bpe().encode("a").unwrap().len(), 1);
+    }
+
+    /// Output over the cap is refused by every decode before it is built:
+    /// 8193 copies of a 4096-byte piece are 4 KiB over 32 MiB.
+    #[test]
+    fn decodes_refuse_output_past_the_file_cap() {
+        let long = "a".repeat(4096);
+        let bpe = BpeBuilder::new()
+            .token(0, "a")
+            .and_then(|b| b.token(1, &long))
+            .and_then(BpeBuilder::build)
+            .unwrap();
+        let over = vec![1u32; (HF_TEXT_CAP as usize) / 4096 + 1];
+        for err in [
+            bpe.decode(&over).map(|_| ()),
+            bpe.decode_bytes(&over).map(|_| ()),
+            bpe.decode_ordinary(&over).map(|_| ()),
+            bpe.decode_ordinary_lossy(&over).map(|_| ()),
+        ] {
+            let err = err.unwrap_err();
+            assert!(err.to_string().contains("exceeds"), "{err}");
+        }
+        assert_eq!(bpe.decode_ordinary(&[1, 0]).unwrap().len(), 4097);
+    }
+
+    /// A cut inside "é" (0xC3 0xA9): strict decode refuses it, the bytes and
+    /// the lossy text show it.
+    #[test]
+    fn lossy_and_byte_decode_show_a_cut_character() {
+        let map = bytes_to_unicode();
+        let bpe = BpeBuilder::new()
+            .token(0, &map[0xC3].to_string())
+            .and_then(|b| b.token(1, &map[0xA9].to_string()))
+            .and_then(|b| b.token(2, "a"))
+            .and_then(|b| b.token(3, "\u{3000}"))
+            .and_then(BpeBuilder::build)
+            .unwrap();
+        let err = bpe.decode_ordinary(&[2, 0]).unwrap_err();
+        assert!(err.to_string().contains("utf-8"), "{err}");
+        assert_eq!(bpe.decode_bytes(&[2, 0]).unwrap(), [b'a', 0xC3]);
+        assert_eq!(bpe.decode_ordinary_lossy(&[2, 0]).unwrap(), "a\u{FFFD}");
+        assert_eq!(bpe.decode_ordinary_lossy(&[0, 1, 2]).unwrap(), "éa");
+        assert_eq!(bpe.decode_ordinary(&[0, 1]).unwrap(), "é");
+        for err in [
+            bpe.decode_ordinary_lossy(&[3]).unwrap_err(),
+            bpe.decode_bytes(&[4]).unwrap_err(),
+        ] {
+            let text = err.to_string();
+            assert!(
+                text.contains("no GPT-2 byte") || text.contains("outside"),
+                "{text}"
+            );
+        }
+        assert_eq!(bpe.piece_id("a"), Some(2));
+        assert_eq!(bpe.piece_id("b"), None);
     }
 
     #[test]
@@ -1202,8 +1340,15 @@ mod tests {
         }
         assert_eq!(bpe.encode_ordinary(" t").unwrap(), vec![256]);
         assert_eq!(bpe.encode_ordinary("###").unwrap(), vec![21017]);
-        let special = bpe.encode_ordinary("<|endoftext|>").unwrap();
-        assert_ne!(special, vec![50256]);
+        assert_eq!(bpe.piece_id(ENDOFTEXT), Some(50256));
+        let special = bpe.encode_ordinary(ENDOFTEXT).unwrap();
+        assert!(!special.contains(&50256), "{special:?}");
+        // 🙂 is [8582, 25081]; its first token stops inside the character.
+        assert!(bpe.decode_ordinary(&[8582]).is_err());
+        assert_eq!(bpe.decode_ordinary_lossy(&[8582]).unwrap(), "\u{FFFD}");
+        let mut cut = bpe.decode_bytes(&[8582]).unwrap();
+        cut.extend(bpe.decode_bytes(&[25081]).unwrap());
+        assert_eq!(cut, "🙂".as_bytes());
         let rows = twenty_gpt2_ids();
         assert_eq!(rows.len(), 20);
         for (text, ids) in rows {

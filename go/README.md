@@ -105,13 +105,15 @@ func main() {
 		log.Fatal(err)
 	}
 	prompt, _ := ojas.Tokenize(ctx, id, "Once upon a time")
+	eot, _ := ojas.TokenID(ctx, id, ojas.EndOfText) // 50256 for GPT-2
 	out, err := ojas.GenerateIDs(ctx, id, prompt, ojas.SampleOptions{
-		Temperature: 0.8, TopK: 50, Seed: 1, MaxNewTokens: 64,
+		Temperature: 0.8, TopK: 50, Seed: 1, MaxNewTokens: 64, Stop: []uint32{eot},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	text, _ := ojas.Detokenize(ctx, id, out)
+	// MaxNewTokens can stop inside a character; the lossy decode shows U+FFFD there.
+	text, _ := ojas.DetokenizeLossy(ctx, id, out)
 	fmt.Println(text)
 
 	_ = ojas.Close(ctx)

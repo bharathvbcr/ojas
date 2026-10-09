@@ -23,7 +23,7 @@ mod sampler;
 mod tokens;
 
 pub use bpe::{
-    bytes_to_unicode, fixture_bpe, gpt2_split, load_hf_gpt2, Bpe, BpeBuilder,
+    bytes_to_unicode, fixture_bpe, gpt2_split, load_hf_gpt2, Bpe, BpeBuilder, ENDOFTEXT,
     TIKTOKEN_GPT2_BYTE_IDENTITY,
 };
 pub use error::DataError;

@@ -499,7 +499,8 @@ fn save_and_resume_refuse_and_add_nothing() {
     let _ = std::fs::remove_dir_all(&outside);
 }
 
-/// A vocabulary of the 256 byte pieces plus merges `h e` and `l l`.
+/// A vocabulary of the 256 byte pieces, merges `h e` and `l l`, and
+/// `<|endoftext|>` (258).
 fn write_tokenizer(dir: &Path) {
     let map = ojas_data::bytes_to_unicode();
     let mut vocab = String::from("{");
@@ -511,7 +512,7 @@ fn write_tokenizer(dir: &Path) {
         };
         vocab.push_str(&format!("\"{piece}\":{i},"));
     }
-    vocab.push_str("\"he\":256,\"ll\":257}");
+    vocab.push_str("\"he\":256,\"ll\":257,\"<|endoftext|>\":258}");
     std::fs::write(dir.join("vocab.json"), vocab).unwrap();
     std::fs::write(dir.join("merges.txt"), "#version: 0.2\nh e\nl l\n").unwrap();
 }
@@ -583,11 +584,46 @@ fn a_tokenizer_round_trips_text_and_refuses_what_it_cannot_read() {
             &[0xffu8, 0xfe][..],
             "utf-8",
         ),
+        (
+            crate::tokenize::TOKENIZE_DECODE,
+            &0xC3u32.to_le_bytes()[..],
+            "utf-8",
+        ),
+        (
+            crate::tokenize::TOKENIZE_DECODE_LOSSY,
+            &[1u8, 2, 3][..],
+            "whole number",
+        ),
+        (
+            crate::tokenize::TOKENIZE_DECODE_LOSSY,
+            &999u32.to_le_bytes()[..],
+            "outside the vocabulary",
+        ),
+        (
+            crate::tokenize::TOKENIZE_PIECE_ID,
+            &b"hello"[..],
+            "no vocabulary piece",
+        ),
+        (crate::tokenize::TOKENIZE_PIECE_ID, &[0xffu8][..], "utf-8"),
         (9, &[][..], "unknown mode"),
     ] {
         let err = tokenize(id, mode, body).unwrap_err();
         assert!(err.contains(want), "{want}: {err}");
     }
+    // A generation cut off inside "é" (0xC3 0xA9) decodes lossily.
+    let cut: Vec<u8> = [256u32, 257, u32::from(b'o'), 0xC3]
+        .iter()
+        .flat_map(|i| i.to_le_bytes())
+        .collect();
+    let text = tokenize(id, crate::tokenize::TOKENIZE_DECODE_LOSSY, &cut).unwrap();
+    assert_eq!(text, "hello\u{FFFD}".as_bytes());
+    let text = tokenize(id, crate::tokenize::TOKENIZE_DECODE_LOSSY, &body).unwrap();
+    assert_eq!(text, "hello héllo".as_bytes());
+    let eot = tokenize(id, crate::tokenize::TOKENIZE_PIECE_ID, b"<|endoftext|>").unwrap();
+    assert_eq!(eot, 258u32.to_le_bytes());
+    let special = tokenize(id, crate::tokenize::TOKENIZE_ENCODE, b"<|endoftext|>").unwrap();
+    let special = crate::tests::ids_of(&special);
+    assert!(special.len() > 1 && !special.contains(&258), "{special:?}");
 }
 
 /// Seeded sampling repeats; a stop token ends the output after it; every

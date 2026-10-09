@@ -83,3 +83,21 @@ Decisions, from these numbers:
 - **Pre-token cache**: kept. Per document (about 4.7 KB a call) it is 0.87
   of b's time; for the one 11.4 MB call, 0.43. It is per call, so the
   tokenizer stays immutable and shareable.
+
+## Decode (`decode/`)
+
+Lane `c` is the encode tree above; lane `d` adds `Bpe::decode_bytes` (each
+piece's GPT-2 bytes precomputed at load, the output length summed and
+checked against `HF_TEXT_CAP` before allocating), `decode_ordinary` on top
+of it, `decode_ordinary_lossy`, and `piece_id`. 3 interleaved rounds, load
+7.0 to 9.2.
+
+| row | c min s | d min s | d / c (min) | median of round ratios |
+| :-- | --: | --: | --: | --: |
+| decode_docs | 0.0415 | 0.0382 | 0.920 | 0.926 |
+| decode_joined | 0.0397 | 0.0379 | 0.955 | 0.977 |
+
+Inside the 0.9 to 1.1 band, so not quoted as a speedup: the change is for
+the byte and lossy decodes and the output cap, and costs nothing measurable.
+Encode rows read 0.997 to 1.075 (unchanged code). Digest and tiktoken
+parity are unchanged.
