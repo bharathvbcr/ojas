@@ -13,7 +13,7 @@
 //! | 9 SAVE | `id: u64`, directory | empty |
 //! | 10 RESUME | `{path}`, placement fields, train fields | `id: u64, tensors: u32` |
 //! | 11 TOKENIZER | `id: u64, {vocab_json, merges_txt}` | empty |
-//! | 12 TOKENIZE | `id: u64, mode: u32`, text or ids | ids or text |
+//! | 12 TOKENIZE | `id: u64, mode: u32`, text (1 encode, 4 piece id) or ids (2 decode, 3 lossy decode) | ids, text, or one id |
 //! | 13 SAMPLE | `id: u64, {temperature, top_k?, top_p?, seed, max_new_tokens, stop?, prompt}` | `[u32]` |
 //! | 14 INSPECT | relative path | `tensors: u32` |
 //! | 15 SET_MEMORY_CEILING | `bytes: u64` | empty |

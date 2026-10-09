@@ -62,6 +62,8 @@ const (
 	stepTokens      uint32 = 1
 	tokenizeText    uint32 = 1
 	tokenizeIDs     uint32 = 2
+	tokenizeLossy   uint32 = 3
+	tokenizePieceID uint32 = 4
 
 	deviceCPU         uint32 = 0
 	deviceCPUParallel uint32 = 1

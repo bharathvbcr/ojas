@@ -3,6 +3,9 @@
 //! and `magic` 20240801 for `u32` streams (version 7 or 1), token count at word 2.
 //!
 //! Reads are positioned. A shard is not loaded with `fs::read`.
+//! [`TokenBin::from_file`] reads a file the caller opened;
+//! [`TokenBin::open`] and the `open_*` helpers open a path. Both refuse
+//! anything but a regular file.
 
 use crate::error::DataError;
 use std::fs::File;
@@ -40,6 +43,22 @@ pub struct TokenBin {
     width: TokenWidth,
 }
 
+/// How a token bin's bytes are laid out. [`TokenBin::from_file`] and
+/// [`TokenBin::open`] take one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinLayout {
+    /// Little-endian tokens from byte 0. A byte length that is not a whole
+    /// number of tokens is an error; the whole-token prefix is not returned.
+    Headerless(TokenWidth),
+    /// FineWeb header: 256 little-endian `i32`s, then `u16` tokens (magic
+    /// [`FINEWEB_MAGIC`], version 1) or `u32` tokens (magic
+    /// [`FINEWEB_U32_MAGIC`], version 7 or 1). Any other magic is an error,
+    /// and the byte length must be exactly the header plus the token count's
+    /// bytes. `None` takes the width the magic names; `Some(width)` also
+    /// requires that width.
+    FineWeb(Option<TokenWidth>),
+}
+
 impl TokenBin {
     /// Headerless `u16` little-endian stream. An odd file length is an error.
     /// The first even prefix is not returned.
@@ -49,62 +68,99 @@ impl TokenBin {
 
     /// Headerless `u16` little-endian stream. Explicit alias for [`Self::open_headerless`].
     pub fn open_headerless_u16(path: &Path) -> Result<Self, DataError> {
-        let (file, len) = open_len(path)?;
-        if len % 2 != 0 {
-            return Err(DataError::new(format!(
-                "{}: truncated token bin, {len} bytes is not a multiple of 2",
-                path.display()
-            )));
-        }
-        Ok(Self {
-            file,
-            data_offset: 0,
-            len_tokens: len / 2,
-            width: TokenWidth::U16,
-        })
+        Self::open(path, BinLayout::Headerless(TokenWidth::U16))
     }
 
     /// Headerless `u32` little-endian stream. A file length not divisible by 4 is an error.
     /// The first multiple-of-4 prefix is not returned.
     pub fn open_headerless_u32(path: &Path) -> Result<Self, DataError> {
-        let (file, len) = open_len(path)?;
-        if len % 4 != 0 {
-            return Err(DataError::new(format!(
-                "{}: truncated token bin, {len} bytes is not a multiple of 4",
-                path.display()
-            )));
-        }
-        Ok(Self {
-            file,
-            data_offset: 0,
-            len_tokens: len / 4,
-            width: TokenWidth::U32,
-        })
+        Self::open(path, BinLayout::Headerless(TokenWidth::U32))
     }
 
     /// Headerless little-endian stream with specified [`TokenWidth`].
     pub fn open_headerless_with_width(path: &Path, width: TokenWidth) -> Result<Self, DataError> {
-        match width {
-            TokenWidth::U16 => Self::open_headerless_u16(path),
-            TokenWidth::U32 => Self::open_headerless_u32(path),
+        Self::open(path, BinLayout::Headerless(width))
+    }
+
+    /// FineWeb header with either token width ([`BinLayout::FineWeb`] `None`).
+    pub fn open_fineweb(path: &Path) -> Result<Self, DataError> {
+        Self::open(path, BinLayout::FineWeb(None))
+    }
+
+    /// FineWeb `u16` header (magic [`FINEWEB_MAGIC`], version 1).
+    pub fn open_fineweb_u16(path: &Path) -> Result<Self, DataError> {
+        Self::open(path, BinLayout::FineWeb(Some(TokenWidth::U16)))
+    }
+
+    /// FineWeb `u32` header (magic [`FINEWEB_U32_MAGIC`], version 7 or 1).
+    pub fn open_fineweb_u32(path: &Path) -> Result<Self, DataError> {
+        Self::open(path, BinLayout::FineWeb(Some(TokenWidth::U32)))
+    }
+
+    /// Open `path` and read it as `layout` ([`Self::from_file`]). A path that
+    /// names anything but a regular file is refused before it is opened, so a
+    /// FIFO cannot block the open; [`Self::from_file`] checks the opened file
+    /// again. Errors start with the path.
+    pub fn open(path: &Path, layout: BinLayout) -> Result<Self, DataError> {
+        let what = path.display();
+        let meta = std::fs::metadata(path).map_err(|e| DataError::new(format!("{what}: {e}")))?;
+        if !meta.is_file() {
+            return Err(DataError::new(format!("{what}: not a regular file")));
+        }
+        let file = File::open(path).map_err(|e| DataError::new(format!("{what}: {e}")))?;
+        Self::from_file(file, layout).map_err(|e| DataError::new(format!("{what}: {}", e.detail())))
+    }
+
+    /// Read a file the caller already opened (for example with
+    /// `O_NOFOLLOW`) as `layout`. Anything but a regular file is refused
+    /// before a byte is read, as `ojas_io::SafeTensors::from_file` does.
+    /// Reads are positioned: the file's cursor is neither used nor moved.
+    pub fn from_file(file: File, layout: BinLayout) -> Result<Self, DataError> {
+        let meta = file.metadata().map_err(|e| DataError::new(e.to_string()))?;
+        if !meta.is_file() {
+            return Err(DataError::new("not a regular file"));
+        }
+        let len = meta.len();
+        match layout {
+            BinLayout::Headerless(width) => {
+                let bpt = width.bytes_per_token() as u64;
+                if len % bpt != 0 {
+                    return Err(DataError::new(format!(
+                        "truncated token bin, {len} bytes is not a multiple of {bpt}"
+                    )));
+                }
+                Ok(Self {
+                    file,
+                    data_offset: 0,
+                    len_tokens: len / bpt,
+                    width,
+                })
+            }
+            BinLayout::FineWeb(want) => {
+                let bin = Self::fineweb(file, len)?;
+                match want {
+                    Some(w) if w != bin.width => Err(DataError::new(format!(
+                        "expected {} FineWeb bin, found {:?}",
+                        match w {
+                            TokenWidth::U16 => "u16",
+                            TokenWidth::U32 => "u32",
+                        },
+                        bin.width
+                    ))),
+                    _ => Ok(bin),
+                }
+            }
         }
     }
 
-    /// FineWeb header: 256 little-endian `i32`s, then `u16` tokens (magic [`FINEWEB_MAGIC`], version 1)
-    /// or `u32` tokens (magic [`FINEWEB_U32_MAGIC`], version 7 or 1).
-    /// A magic other than [`FINEWEB_MAGIC`] or [`FINEWEB_U32_MAGIC`] is an error.
-    /// The byte length must be exactly the header plus token bytes per token count.
-    pub fn open_fineweb(path: &Path) -> Result<Self, DataError> {
-        let (file, len) = open_len(path)?;
+    fn fineweb(file: File, len: u64) -> Result<Self, DataError> {
         if len < FINEWEB_HEADER_BYTES {
             return Err(DataError::new(format!(
-                "{}: truncated FineWeb header, {len} bytes",
-                path.display()
+                "truncated FineWeb header, {len} bytes"
             )));
         }
         let mut header = [0u8; FINEWEB_HEADER_BYTES as usize];
-        read_exact_at(&file, &mut header, 0)
-            .map_err(|e| DataError::new(format!("{}: header: {e}", path.display())))?;
+        read_exact_at(&file, &mut header, 0).map_err(|e| DataError::new(format!("header: {e}")))?;
         let magic = read_i32(&header, 0);
         let version = read_i32(&header, 1);
         let count = read_i32(&header, 2);
@@ -112,43 +168,34 @@ impl TokenBin {
         let (width, bytes_per_tok) = if magic == FINEWEB_MAGIC {
             if version != FINEWEB_VERSION {
                 return Err(DataError::new(format!(
-                    "{}: version {version} != {FINEWEB_VERSION}",
-                    path.display()
+                    "version {version} != {FINEWEB_VERSION}"
                 )));
             }
             (TokenWidth::U16, 2u64)
         } else if magic == FINEWEB_U32_MAGIC {
             if version != FINEWEB_U32_VERSION && version != 1 {
                 return Err(DataError::new(format!(
-                    "{}: version {version} != {FINEWEB_U32_VERSION}",
-                    path.display()
+                    "version {version} != {FINEWEB_U32_VERSION}"
                 )));
             }
             (TokenWidth::U32, 4u64)
         } else {
-            return Err(DataError::new(format!(
-                "{}: magic {magic} != {FINEWEB_MAGIC}",
-                path.display()
-            )));
+            return Err(DataError::new(format!("magic {magic} != {FINEWEB_MAGIC}")));
         };
 
         if count < 0 {
-            return Err(DataError::new(format!(
-                "{}: token count {count} is negative",
-                path.display()
-            )));
+            return Err(DataError::new(format!("token count {count} is negative")));
         }
         let count_u = count as u64;
-        let payload = count_u.checked_mul(bytes_per_tok).ok_or_else(|| {
-            DataError::new(format!("{}: token byte length overflows", path.display()))
-        })?;
+        let payload = count_u
+            .checked_mul(bytes_per_tok)
+            .ok_or_else(|| DataError::new("token byte length overflows"))?;
         let expect = FINEWEB_HEADER_BYTES
             .checked_add(payload)
-            .ok_or_else(|| DataError::new(format!("{}: file length overflows", path.display())))?;
+            .ok_or_else(|| DataError::new("file length overflows"))?;
         if len != expect {
             return Err(DataError::new(format!(
-                "{}: size mismatch, expected {expect} bytes, got {len}",
-                path.display()
+                "size mismatch, expected {expect} bytes, got {len}"
             )));
         }
         Ok(Self {
@@ -157,32 +204,6 @@ impl TokenBin {
             len_tokens: count_u,
             width,
         })
-    }
-
-    /// FineWeb `u16` header (magic [`FINEWEB_MAGIC`], version 1).
-    pub fn open_fineweb_u16(path: &Path) -> Result<Self, DataError> {
-        let bin = Self::open_fineweb(path)?;
-        if bin.width != TokenWidth::U16 {
-            return Err(DataError::new(format!(
-                "{}: expected u16 FineWeb bin, found {:?}",
-                path.display(),
-                bin.width
-            )));
-        }
-        Ok(bin)
-    }
-
-    /// FineWeb `u32` header (magic [`FINEWEB_U32_MAGIC`], version 7 or 1).
-    pub fn open_fineweb_u32(path: &Path) -> Result<Self, DataError> {
-        let bin = Self::open_fineweb(path)?;
-        if bin.width != TokenWidth::U32 {
-            return Err(DataError::new(format!(
-                "{}: expected u32 FineWeb bin, found {:?}",
-                path.display(),
-                bin.width
-            )));
-        }
-        Ok(bin)
     }
 
     pub fn len(&self) -> u64 {
@@ -313,15 +334,6 @@ impl TokenBin {
         }
         Ok(())
     }
-}
-
-fn open_len(path: &Path) -> Result<(File, u64), DataError> {
-    let file = File::open(path).map_err(|e| DataError::new(format!("{}: {e}", path.display())))?;
-    let len = file
-        .metadata()
-        .map_err(|e| DataError::new(format!("{}: {e}", path.display())))?
-        .len();
-    Ok((file, len))
 }
 
 fn read_i32(header: &[u8], index: usize) -> i32 {
@@ -779,5 +791,64 @@ mod tests {
             }
         }
         assert!(opened > 30, "opened {opened}");
+    }
+
+    /// `from_file` reads the descriptor it is given (the path can be gone),
+    /// and both entry points refuse anything but a regular file: a directory,
+    /// and a FIFO, which `open` refuses before opening it, so it cannot block.
+    #[cfg(unix)]
+    #[test]
+    fn from_file_reads_the_descriptor_and_non_regular_files_are_refused() {
+        let path = tmp("fd");
+        let bytes: Vec<u8> = [5u16, 6, 7].iter().flat_map(|t| t.to_le_bytes()).collect();
+        write(&path.0, &bytes);
+        let file = File::open(&path.0).unwrap();
+        std::fs::remove_file(&path.0).unwrap();
+        let bin = TokenBin::from_file(file, BinLayout::Headerless(TokenWidth::U16)).unwrap();
+        let mut dst = [0u16; 3];
+        bin.read_into(0, &mut dst).unwrap();
+        assert_eq!(dst, [5, 6, 7]);
+
+        let dir = std::env::temp_dir();
+        let err =
+            TokenBin::from_file(File::open(&dir).unwrap(), BinLayout::FineWeb(None)).unwrap_err();
+        assert_eq!(err.detail(), "not a regular file");
+        let err = TokenBin::open_headerless(&dir).unwrap_err();
+        assert!(err.detail().ends_with("not a regular file"), "{err}");
+
+        let fifo = tmp("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo.0)
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo {}", fifo.0.display());
+        for layout in [
+            BinLayout::Headerless(TokenWidth::U32),
+            BinLayout::FineWeb(Some(TokenWidth::U16)),
+        ] {
+            let err = TokenBin::open(&fifo.0, layout).unwrap_err();
+            assert!(err.detail().ends_with("not a regular file"), "{err}");
+        }
+    }
+
+    #[test]
+    fn fineweb_width_is_checked_after_the_header() {
+        let path = tmp("fw16");
+        write(
+            &path.0,
+            &fineweb(FINEWEB_MAGIC, FINEWEB_VERSION, 2, &[1, 2]),
+        );
+        let err = TokenBin::open_fineweb_u32(&path.0).unwrap_err();
+        assert!(
+            err.detail()
+                .ends_with("expected u32 FineWeb bin, found U16"),
+            "{err}"
+        );
+        let bin = TokenBin::from_file(
+            File::open(&path.0).unwrap(),
+            BinLayout::FineWeb(Some(TokenWidth::U16)),
+        )
+        .unwrap();
+        assert_eq!(bin.len(), 2);
     }
 }

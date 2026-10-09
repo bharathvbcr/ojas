@@ -1,0 +1,12 @@
+round 1 c before: 23:15  up  7:50, 1 user, load averages: 7.21 8.06 12.33
+round 1 c after:  23:15  up  7:50, 1 user, load averages: 6.95 7.99 12.28
+round 1 d before: 23:15  up  7:50, 1 user, load averages: 6.95 7.99 12.28
+round 1 d after:  23:15  up  7:50, 1 user, load averages: 9.20 8.44 12.41
+round 2 d before: 23:15  up  7:50, 1 user, load averages: 9.20 8.44 12.41
+round 2 d after:  23:15  up  7:50, 1 user, load averages: 8.86 8.38 12.37
+round 2 c before: 23:15  up  7:50, 1 user, load averages: 8.86 8.38 12.37
+round 2 c after:  23:15  up  7:50, 1 user, load averages: 8.82 8.38 12.32
+round 3 c before: 23:15  up  7:50, 1 user, load averages: 8.82 8.38 12.32
+round 3 c after:  23:15  up  7:50, 1 user, load averages: 8.59 8.34 12.28
+round 3 d before: 23:15  up  7:50, 1 user, load averages: 8.59 8.34 12.28
+round 3 d after:  23:16  up  7:50, 1 user, load averages: 8.39 8.31 12.25

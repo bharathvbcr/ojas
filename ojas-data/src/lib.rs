@@ -23,7 +23,7 @@ mod sampler;
 mod tokens;
 
 pub use bpe::{
-    bytes_to_unicode, fixture_bpe, gpt2_split, load_hf_gpt2, Bpe, BpeBuilder,
+    bytes_to_unicode, fixture_bpe, gpt2_split, load_hf_gpt2, Bpe, BpeBuilder, ENDOFTEXT,
     TIKTOKEN_GPT2_BYTE_IDENTITY,
 };
 pub use error::DataError;
@@ -33,7 +33,7 @@ pub use sampler::{
     RNG_STATE_BYTES, RNG_STATE_VERSION,
 };
 pub use tokens::{
-    TokenBin, TokenWidth, FINEWEB_HEADER_BYTES, FINEWEB_MAGIC, FINEWEB_U32_MAGIC,
+    BinLayout, TokenBin, TokenWidth, FINEWEB_HEADER_BYTES, FINEWEB_MAGIC, FINEWEB_U32_MAGIC,
     FINEWEB_U32_VERSION, FINEWEB_VERSION,
 };
 

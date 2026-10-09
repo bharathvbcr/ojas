@@ -5,8 +5,9 @@
 // initialises one, and Resume restores one with its trainer from a
 // checkpoint directory. OpenTrainer attaches a trainer over a token bin;
 // TrainStep and TrainStepTokens run optimizer steps on the device;
-// SaveCheckpoint writes the checkpoint directory. LoadTokenizer, Tokenize and
-// Detokenize use the GPT-2 byte-level BPE; GenerateIDs samples continuations
+// SaveCheckpoint writes the checkpoint directory. LoadTokenizer, Tokenize,
+// Detokenize, DetokenizeLossy and TokenID use the GPT-2 byte-level BPE;
+// GenerateIDs samples continuations
 // on the device. Every path is relative to SetModelRoot's directory.
 //
 // One gusset handle runs every call. The worker count defaults to 1 and
@@ -480,10 +481,21 @@ func Tokenize(ctx context.Context, id uint64, text string) ([]uint32, error) {
 }
 
 // Detokenize decodes ids with id's tokenizer. Ids that do not form UTF-8
-// are an error.
+// are an error. Text over 32 MiB is refused.
 func Detokenize(ctx context.Context, id uint64, ids []uint32) (string, error) {
+	return detokenize(ctx, id, tokenizeIDs, ids)
+}
+
+// DetokenizeLossy is Detokenize with each invalid UTF-8 sequence replaced by
+// U+FFFD, so ids that stop inside a character (a generation cut off at
+// MaxNewTokens) still decode.
+func DetokenizeLossy(ctx context.Context, id uint64, ids []uint32) (string, error) {
+	return detokenize(ctx, id, tokenizeLossy, ids)
+}
+
+func detokenize(ctx context.Context, id uint64, mode uint32, ids []uint32) (string, error) {
 	payload := binary.LittleEndian.AppendUint64(nil, id)
-	payload = binary.LittleEndian.AppendUint32(payload, tokenizeIDs)
+	payload = binary.LittleEndian.AppendUint32(payload, mode)
 	for _, v := range ids {
 		payload = binary.LittleEndian.AppendUint32(payload, v)
 	}
@@ -492,6 +504,28 @@ func Detokenize(ctx context.Context, id uint64, ids []uint32) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// EndOfText is GPT-2's end-of-text piece. TokenID(ctx, id, EndOfText) is its
+// id (50256 in GPT-2's vocab.json), for SampleOptions.Stop.
+const EndOfText = "<|endoftext|>"
+
+// TokenID returns the id of one vocabulary piece of id's tokenizer, spelled
+// as vocab.json spells it (a special token such as EndOfText as itself;
+// other pieces in GPT-2's byte alphabet, so " the" is "Ġthe"). A piece the
+// vocabulary does not hold is an error. Tokenize still encodes a special
+// token's text as ordinary text.
+func TokenID(ctx context.Context, id uint64, piece string) (uint32, error) {
+	payload := binary.LittleEndian.AppendUint64(nil, id)
+	payload = binary.LittleEndian.AppendUint32(payload, tokenizePieceID)
+	out, err := callEngine(ctx, opTokenize, append(payload, piece...))
+	if err != nil {
+		return 0, err
+	}
+	if len(out) != 4 {
+		return 0, errors.New("tokenize: short result")
+	}
+	return binary.LittleEndian.Uint32(out), nil
 }
 
 // SampleOptions controls GenerateIDs. Temperature 0 is greedy. TopK 0 and
@@ -503,7 +537,7 @@ type SampleOptions struct {
 	Seed         uint64
 	MaxNewTokens uint32
 	// Stop ends generation right after one of these ids is emitted; that id
-	// is the last returned.
+	// is the last returned. TokenID(ctx, id, EndOfText) gives GPT-2's.
 	Stop []uint32
 }
 

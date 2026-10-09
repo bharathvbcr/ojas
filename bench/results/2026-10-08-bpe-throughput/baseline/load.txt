@@ -1,0 +1,6 @@
+round 1 base before: 22:54  up  7:29, 1 user, load averages: 10.31 17.61 19.22
+round 1 base after:  22:54  up  7:29, 1 user, load averages: 9.50 16.53 18.76
+round 2 base before: 22:54  up  7:29, 1 user, load averages: 9.50 16.53 18.76
+round 2 base after:  22:55  up  7:30, 1 user, load averages: 13.45 16.85 18.79
+round 3 base before: 22:55  up  7:30, 1 user, load averages: 13.45 16.85 18.79
+round 3 base after:  22:56  up  7:30, 1 user, load averages: 11.57 16.10 18.44

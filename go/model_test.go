@@ -409,7 +409,7 @@ func TestTokenizerRoundTrip(t *testing.T) {
 		}
 		vocab.WriteString(`"` + piece + `":` + fmt.Sprint(i) + ",")
 	}
-	vocab.WriteString(`"he":256,"ll":257}`)
+	vocab.WriteString(`"he":256,"ll":257,"<|endoftext|>":258}`)
 	if err := os.WriteFile(filepath.Join(dir, "vocab.json"), []byte(vocab.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -443,5 +443,32 @@ func TestTokenizerRoundTrip(t *testing.T) {
 	}
 	if _, err := Detokenize(ctx, id, []uint32{999}); err == nil || !strings.Contains(err.Error(), "outside the vocabulary") {
 		t.Fatalf("id past the vocabulary: %v", err)
+	}
+	// A generation cut off inside "é" (0xC3 0xA9): strict refuses, lossy shows U+FFFD.
+	cut := append(append([]uint32{}, ids[:3]...), 0xC3)
+	if _, err := Detokenize(ctx, id, cut); err == nil || !strings.Contains(err.Error(), "utf-8") {
+		t.Fatalf("cut codepoint: %v", err)
+	}
+	if text, err := DetokenizeLossy(ctx, id, cut); err != nil || text != "hello\uFFFD" {
+		t.Fatalf("lossy: %q %v", text, err)
+	}
+	if text, err := DetokenizeLossy(ctx, id, ids); err != nil || text != "hello héllo" {
+		t.Fatalf("lossy of valid ids: %q %v", text, err)
+	}
+	eot, err := TokenID(ctx, id, EndOfText)
+	if err != nil || eot != 258 {
+		t.Fatalf("TokenID(EndOfText) = %d %v", eot, err)
+	}
+	if _, err := TokenID(ctx, id, "hello"); err == nil || !strings.Contains(err.Error(), "no vocabulary piece") {
+		t.Fatalf("absent piece: %v", err)
+	}
+	special, err := Tokenize(ctx, id, EndOfText)
+	if err != nil || len(special) < 2 {
+		t.Fatalf("special text is ordinary text: %v %v", special, err)
+	}
+	for _, v := range special {
+		if v == eot {
+			t.Fatalf("Tokenize emitted the special id: %v", special)
+		}
 	}
 }
