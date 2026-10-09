@@ -151,6 +151,16 @@ the same lane file. The CPU lanes are opt-in: `BENCH_LANES="ojas-metal
 ojas-wgpu ojas-cpu ojas-cpu-host torch-mps"`. Decode rows only:
 `BENCH_ROWS=gen_`.
 
+## Tokenizer throughput
+
+`bpe_throughput.rs` (compiled into `ojas-data/examples/bpe_throughput.rs`)
+times GPT-2 `encode_ordinary` and `decode_ordinary` on the real GPT-2 rank
+table over the complete documents of nanolab's FineWeb-Edu `val.bin`
+(11.4 MB of English), after checking every document's re-encode against the
+tiktoken ids in the bin. It is CPU-only and does not use the torch side.
+Runs, the runner and the reading are in
+`results/2026-10-08-bpe-throughput/`.
+
 ## Results kept in the tree
 
 `bench/results/<run>/` holds a quoted run's `summary.md`, `env.txt`,
