@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas Go Client · ojas reference</title>
   <meta name="description" content="The Go package github.com/bharathvbcr/ojas/go trains and serves the nanolab GPT in process: the Rust engine (ojas-capi, through gusset) holds each model on its device, and Go sends paths, token ids a…">
+  <meta name="keywords" content="ojas, ojas go client, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="ojas Go Client · ojas reference">
   <meta property="og:description" content="The Go package github.com/bharathvbcr/ojas/go trains and serves the nanolab GPT in process: the Rust engine (ojas-capi, through gusset) holds each model on its device, and Go sends paths, token ids a…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas Go Client · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas Go Client · ojas reference">
+  <meta name="twitter:description" content="The Go package github.com/bharathvbcr/ojas/go trains and serves the nanolab GPT in process: the Rust engine (ojas-capi, through gusset) holds each model on its device, and Go sends paths, token ids a…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas Go Client · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas Go Client · ojas reference",
+    "description": "The Go package github.com/bharathvbcr/ojas/go trains and serves the nanolab GPT in process: the Rust engine (ojas-capi, through gusset) holds each model on its device, and Go sends paths, token ids a…",
+    "url": "https://ojas.vbcr.dev/reference/crate-go.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -210,13 +241,15 @@ func main() {
 		log.Fatal(err)
 	}
 	prompt, _ := ojas.Tokenize(ctx, id, &#34;Once upon a time&#34;)
+	eot, _ := ojas.TokenID(ctx, id, ojas.EndOfText) // 50256 for GPT-2
 	out, err := ojas.GenerateIDs(ctx, id, prompt, ojas.SampleOptions{
-		Temperature: 0.8, TopK: 50, Seed: 1, MaxNewTokens: 64,
+		Temperature: 0.8, TopK: 50, Seed: 1, MaxNewTokens: 64, Stop: []uint32{eot},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	text, _ := ojas.Detokenize(ctx, id, out)
+	// MaxNewTokens can stop inside a character; the lossy decode shows U+FFFD there.
+	text, _ := ojas.DetokenizeLossy(ctx, id, out)
 	fmt.Println(text)
 
 	_ = ojas.Close(ctx)
@@ -245,9 +278,12 @@ func main() {
     DeviceEnum --&gt;|DeviceCPUParallel| D1[&#34;DeviceCPUParallel\nMultithreaded CPU pool (1..=256 threads)&#34;]
     DeviceEnum --&gt;|DeviceCPUAuto| D4[&#34;DeviceCPUAuto\nAutomatic thread count from system thread ceiling&#34;]
     DeviceEnum --&gt;|DeviceMetal| D2[&#34;DeviceMetal\nApple Silicon Metal 4 (tessl + MSL)&#34;]
-    DeviceEnum --&gt;|DeviceWgpu| D3[&#34;DeviceWgpu\nPortable WebGPU / WGSL (Vulkan/Metal/DX12)&#34;]</pre></figure>
+    DeviceEnum --&gt;|DeviceWgpu| D3[&#34;DeviceWgpu\nPortable WebGPU / WGSL (Vulkan/Metal/DX12)&#34;]
+    DeviceEnum --&gt;|DeviceCUDA| D5[&#34;DeviceCUDA\nReserved: refused until gp-cuda-backend-provider lands&#34;]</pre></figure>
 <aside class="alert alert-important"><p class="alert-title">Important</p><ul>
 <li><strong>Zero Silent Fallback:</strong> Selecting <code>DeviceMetal</code> or <code>DeviceWgpu</code> on a system where that hardware or driver is absent <strong>returns an error immediately</strong>. The client never silently degrades to CPU execution.
+</li>
+<li><strong>CUDA is refused:</strong> <code>DeviceCUDA</code> (5) returns an error naming CUDA and creates no model. The engine&#39;s CUDA backend cannot yet hold a session (its runtime cannot move between threads, and no compute op is implemented); that waits on task gp-cuda-backend-provider.
 </li>
 <li><strong>Thread Constraints:</strong> <code>DeviceCPUParallel</code> needs $1 \le \text{Threads} \le 256$ (<code>MaxCPUThreads</code>). 0 or more than 256 is an error.
 </li>

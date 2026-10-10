@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas · ojas reference</title>
   <meta name="description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
+  <meta name="keywords" content="ojas, ojas, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="ojas · ojas reference">
   <meta property="og:description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas · ojas reference">
+  <meta name="twitter:description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas · ojas reference",
+    "description": "ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…",
+    "url": "https://ojas.vbcr.dev/reference/readme.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -114,19 +145,38 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
       <article class="prose-ojas">
 <h1 id="ojas">ojas <a class="anchor" href="#ojas" aria-label="Link to this section">#</a></h1>
-<p><strong>ojas</strong> (vital energy, the essence training spends) is a deterministic, high-performance <strong>Rust deep learning engine and framework</strong> designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and, as the gaps below close, training and edge inference.</p>
+<p><strong>ojas</strong> (vital energy, the essence training spends) is a deterministic, high-performance <strong>Rust deep learning engine and framework</strong> designed as a safe, modern alternative to PyTorch and TensorFlow for systems research, LLM training, and edge inference.</p>
 <p>ojas pairs a compile-time safe Rust engine with an in-process Go API via <code>gusset</code>, zero-copy tensor views, reverse-mode automatic differentiation, and strict memory budgeting.</p>
+<h3 id="key-architectural-guarantees">Key Architectural Guarantees <a class="anchor" href="#key-architectural-guarantees" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Bit-Identical Reproducibility:</strong> Single-threaded-order, index-increasing accumulation under <code>Numerics::Exact</code> guarantees bit-identical results across thread counts, worker scheduling, and machines.
+</li>
+<li><strong>Zero Silent Fallbacks:</strong> Selecting a GPU backend (Apple Silicon Metal, wgpu, CUDA) that cannot be initialized returns an explicit error immediately. It will <strong>never silently downgrade to CPU execution</strong>.
+</li>
+<li><strong>Explicit Budget Governance:</strong> All allocations request permits from a hierarchical <code>Budget</code>. Over-budget allocations immediately return <code>OjasError::CapacityExceeded</code> without dynamic memory clamping, hidden page swapping, or uncatchable OOMs.
+</li>
+<li><strong>Zero-IPC Multi-Language Bindings:</strong> High-performance Go and C-ABI integrations via <code>gusset</code> and <code>ojas-capi</code> link directly in-process with panic isolation boundaries, eliminating Python runtime overhead and serialization penalties.
+</li>
+<li><strong>Hardware Acceleration:</strong> Native Apple Silicon Metal acceleration via <code>tessl</code> and custom Metal kernels, portable cross-platform <code>wgpu</code> compute shaders, and optimized CPU kernels (ARM64 NEON, x86_64 AVX2, Apple Accelerate).
+</li>
+<li><strong>Dual Optimizers &amp; Target Model:</strong> Out-of-the-box support for the nanolab GPT architecture with Muon NS5 (Newton-Schulz orthogonalization) and AdamW, sliding-window KV-cache autoregressive inference, top-k row sampling, streaming dataset loaders, and fast BPE tokenization.
+</li>
+</ul>
 <p><strong>What runs today:</strong></p>
 <ul>
 <li>Every <code>Backend</code> op runs on the CPU, on Apple Silicon Metal, and on wgpu: forward, backward, permute, clip, AdamW and Muon.
 </li>
-<li>The autograd <code>Tape</code> gradchecks a multi-head attention block.
+<li>The autograd <code>Tape</code> gradchecks a multi-head attention block against double-precision (<code>f64</code>) finite differences.
 </li>
 <li><code>ojas-model</code> defines the nanolab GPT once (spec, <code>state_dict</code> names, order-independent init, the block) and runs it two ways: recorded on the <code>Tape</code> for training, eagerly through <code>Eval</code> for decoding. Its <code>Trainer</code> takes Muon + AdamW steps on any <code>Backend</code> and saves and resumes a checkpoint directory.
 </li>
-<li>The Go API drives that model in process: <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, a GPT-2 tokenizer, and sampled <code>GenerateIDs</code>. Metal and wgpu fail closed when no device opens.
+<li>The Go API drives that model in process: <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, a high-throughput GPT-2 BPE tokenizer, and sampled <code>GenerateIDs</code>. Metal and wgpu fail closed when no device opens.
 </li>
-<li><code>ojas-infer</code> decodes a nanolab-architecture model on the CPU, greedy or sampled, with a KV cache.
+<li><code>ojas-infer</code> decodes a nanolab-architecture model on the CPU, greedy or sampled (top-k rows, temperature, top-p), with a sliding-window KV cache ring.
+</li>
+<li><code>ojas-data</code> streams token binary formats (<code>u16</code>/<code>u32</code>), resumable batch sampling with counter-based RNG, and provides an optimized GPT-2 BPE tokenizer with byte and lossy decoding, pre-token caching, and output capping.
+</li>
+<li><code>ojas-cuda</code> provides a host-side CUDA runtime with single-budget memory accounting, typed initialization and device-loss errors, bounded waits, watchdog protection, and an affine test kernel.
 </li>
 <li><code>ojas-qwen35</code> (macOS only) runs a Qwen3.5 whole training step through tessl&#39;s Metal kernels. It is a provider, not a <code>Backend</code>.
 </li>
@@ -358,7 +408,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 <hr>
 <h3 id="5-in-process-multi-language-integration-go-ojas-capi">5. In-Process Multi-Language Integration (<code>go/</code>, <code>ojas-capi</code>) <a class="anchor" href="#5-in-process-multi-language-integration-go-ojas-capi" aria-label="Link to this section">#</a></h3>
 <ul>
-<li><strong>Zero-IPC Overhead:</strong> Go calls the Rust engine in-process through CGO and <code>gusset</code>. Go sends paths, token ids and options; the engine holds each model on its device. The calls are <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>/<code>Resume</code>, <code>LoadTokenizer</code>/<code>Tokenize</code>/<code>Detokenize</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, and <code>Close</code> (see <a href="crate-go.html"><code>go/README.md</code></a>). The old stub <code>Step</code> opcode is retired.
+<li><strong>Zero-IPC Overhead:</strong> Go calls the Rust engine in-process through CGO and <code>gusset</code>. Go sends paths, token ids and options; the engine holds each model on its device. The calls are <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>/<code>Resume</code>, <code>LoadTokenizer</code>/<code>Tokenize</code>/<code>Detokenize</code>/<code>DetokenizeLossy</code>/<code>TokenID</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, and <code>Close</code> (see <a href="crate-go.html"><code>go/README.md</code></a>). The old stub <code>Step</code> opcode is retired.
 </li>
 <li><strong>Device Selection:</strong> <code>LoadOptions.Device</code> selects <code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code> or <code>DeviceWgpu</code>. <code>DeviceCPUAuto</code> automatically sizes CPU pool threads to the system thread ceiling (usable CPUs capped by cgroup quota). A GPU backend that cannot open is an error, never a CPU model. A step reads back only its loss.
 </li>
@@ -479,6 +529,10 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
 </li>
 <li><a href="bench-cpu-vs-torch.html"><code>docs/bench-cpu-vs-torch.md</code></a> — Benchmarks against PyTorch 2.13 CPU (tiny and larger step, single linear), plus Fast/Accelerate, Metal, and wgpu numbers taken under machine load.
 </li>
+<li><a href="bench-gpu-vs-torch.html"><code>docs/bench-gpu-vs-torch.md</code></a> — Metal and wgpu against PyTorch MPS at nanolab shapes.
+</li>
+<li><a href="bench-plots.html"><code>docs/bench-plots.md</code></a> — 83 benchmark charts covering every result folder, comparing ojas Metal, wgpu, and CPU against PyTorch MPS and CPU across training and inference runs.
+</li>
 <li><a href="op-coverage.html"><code>docs/op-coverage.md</code></a> — Mathematical specification of core operators and reference models.
 </li>
 <li><a href="checkpoint-v1.html"><code>docs/checkpoint-v1.md</code></a> — Binary checkpoint specification and framing.
@@ -497,8 +551,6 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
 </li>
 <li><a href="metal-deferred-faults.html"><code>docs/metal-deferred-faults.md</code></a> — Metal&#39;s deferred-fault contract, matching wgpu.
 </li>
-<li><a href="bench-gpu-vs-torch.html"><code>docs/bench-gpu-vs-torch.md</code></a> — Metal and wgpu against PyTorch MPS at nanolab shapes.
-</li>
 <li><a href="cuda-backend-scoping.html"><code>docs/cuda-backend-scoping.md</code></a> — Design-only scoping of a CUDA backend (no kernel written).
 </li>
 <li><a href="audit-resources.html"><code>docs/audit-resources.md</code></a> — What the resource governor locks, with verified and reported rows. Earlier audits: <a href="audit-phase2.html"><code>audit-phase2</code></a>, <a href="audit-phase3.html"><code>audit-phase3</code></a>, <a href="audit-close.html"><code>audit-close</code></a>, <a href="audit-cpu-hot.html"><code>audit-cpu-hot</code></a>, <a href="audit-larger-step.html"><code>audit-larger-step</code></a>.
@@ -508,6 +560,9 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
 <li><a href="baseline.html"><code>docs/baseline.md</code></a> — Benchmarks, toolchain baselines, and Apple Accelerate BLAS measurements.
 </li>
 </ul>
+<hr>
+<h2 id="topics--discoverability">Topics &amp; Discoverability <a class="anchor" href="#topics--discoverability" aria-label="Link to this section">#</a></h2>
+<p><code>rust</code> · <code>deep-learning</code> · <code>machine-learning</code> · <code>neural-networks</code> · <code>pytorch-alternative</code> · <code>tensorflow-alternative</code> · <code>deterministic-ai</code> · <code>metal-compute</code> · <code>wgpu</code> · <code>cuda</code> · <code>autograd</code> · <code>nanolab-gpt</code> · <code>muon-optimizer</code> · <code>adamw</code> · <code>in-process-go</code> · <code>gusset</code> · <code>zero-silent-fallback</code> · <code>memory-budget</code> · <code>tensor-engine</code> · <code>systems-research</code></p>
 <hr>
 <h2 id="license">License <a class="anchor" href="#license" aria-label="Link to this section">#</a></h2>
 <p>Dual-licensed under either <strong>MIT</strong> (<a href="https://github.com/bharathvbcr/ojas/blob/main/LICENSE-MIT" rel="noopener"><code>LICENSE-MIT</code></a>) or <strong>Apache-2.0</strong> (<a href="https://github.com/bharathvbcr/ojas/blob/main/LICENSE-APACHE" rel="noopener"><code>LICENSE-APACHE</code></a>) at your option.</p>
@@ -519,6 +574,7 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li class="sub"><a href="#key-architectural-guarantees">Key Architectural Guarantees</a></li>
 <li><a href="#why-ojas-a-pytorch--tensorflow-alternative">Why ojas? (A PyTorch &amp; TensorFlow Alternative)</a></li>
 <li><a href="#framework-architecture">Framework Architecture</a></li>
 <li><a href="#core-capabilities--subsystems">Core Capabilities &amp; Subsystems</a></li>
@@ -532,6 +588,7 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
 <li><a href="#verification--test-commands">Verification &amp; Test Commands</a></li>
 <li class="sub"><a href="#in-process-go-client-tests">In-Process Go Client Tests</a></li>
 <li><a href="#documentation--web-directory">Documentation &amp; Web Directory</a></li>
+<li><a href="#topics--discoverability">Topics &amp; Discoverability</a></li>
 <li><a href="#license">License</a></li>
 </ol></nav>
   </div>

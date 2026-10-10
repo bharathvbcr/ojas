@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>bench: ojas GPU backends against PyTorch MPS · ojas reference</title>
   <meta name="description" content="A paired A/B benchmark of MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu, which runs on wgpu&#39;s Metal HAL on macOS) against PyTorch MPS, at nanolab&#39;s default shapes. Results and their reading ar…">
+  <meta name="keywords" content="ojas, bench: ojas gpu backends against pytorch mps, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="bench: ojas GPU backends against PyTorch MPS · ojas reference">
   <meta property="og:description" content="A paired A/B benchmark of MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu, which runs on wgpu&#39;s Metal HAL on macOS) against PyTorch MPS, at nanolab&#39;s default shapes. Results and their reading ar…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="bench: ojas GPU backends against PyTorch MPS · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="bench: ojas GPU backends against PyTorch MPS · ojas reference">
+  <meta name="twitter:description" content="A paired A/B benchmark of MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu, which runs on wgpu&#39;s Metal HAL on macOS) against PyTorch MPS, at nanolab&#39;s default shapes. Results and their reading ar…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="bench: ojas GPU backends against PyTorch MPS · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "bench: ojas GPU backends against PyTorch MPS · ojas reference",
+    "description": "A paired A/B benchmark of MetalBackend (ojas-metal) and WgpuBackend (ojas-wgpu, which runs on wgpu's Metal HAL on macOS) against PyTorch MPS, at nanolab's default shapes. Results and their reading ar…",
+    "url": "https://ojas.vbcr.dev/reference/crate-bench.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -188,6 +219,8 @@ BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
 </ul>
 <p>ojas runs <code>DeviceDecoder</code> on <code>CpuBackend</code> (<code>ojas-cpu</code>), Metal and wgpu, and <code>CpuGpt</code> (<code>ojas-cpu-host</code>). torch runs nanolab&#39;s own KV-cached path, <code>GPT.forward_hidden_window(..., commit=True, causal=True)</code> plus <code>lm_head</code> on the last position, under <code>torch.no_grad()</code>. Both rows are gated on the prompt&#39;s last-position logits (1e-3). Greedy ids are not a gate: a <code>_gen_ids</code> record counts how many equal torch&#39;s. A <code>_gen_traffic</code> record holds <code>DeviceDecoder::traffic()</code> per decode step (host tensors uploaded and bytes, bytes read back). <code>aggregate.py</code> ends with a &#34;Decode&#34; table: per-token ms = (greedy - prefill) / 31, tokens/s, and those records.</p>
 <p>The metal and wgpu lanes run their kernel rows and then the decode rows into the same lane file. The CPU lanes are opt-in: <code>BENCH_LANES=&#34;ojas-metal ojas-wgpu ojas-cpu ojas-cpu-host torch-mps&#34;</code>. Decode rows only: <code>BENCH_ROWS=gen_</code>.</p>
+<h2 id="tokenizer-throughput">Tokenizer throughput <a class="anchor" href="#tokenizer-throughput" aria-label="Link to this section">#</a></h2>
+<p><code>bpe_throughput.rs</code> (compiled into <code>ojas-data/examples/bpe_throughput.rs</code>) times GPT-2 <code>encode_ordinary</code> and <code>decode_ordinary</code> on the real GPT-2 rank table over the complete documents of nanolab&#39;s FineWeb-Edu <code>val.bin</code> (11.4 MB of English), after checking every document&#39;s re-encode against the tiktoken ids in the bin. It is CPU-only and does not use the torch side. Runs, the runner and the reading are in <code>results/2026-10-08-bpe-throughput/</code>.</p>
 <h2 id="results-kept-in-the-tree">Results kept in the tree <a class="anchor" href="#results-kept-in-the-tree" aria-label="Link to this section">#</a></h2>
 <p><code>bench/results/&lt;run&gt;/</code> holds a quoted run&#39;s <code>summary.md</code>, <code>env.txt</code>, <code>env_torch.json</code>, <code>load.jsonl</code> and every round&#39;s JSONL (not the ~200 MB <code>ref/</code> directory, which <code>run_paired.sh</code> regenerates).</p>
       </article>
@@ -203,6 +236,7 @@ BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
 <li><a href="#protocol">Protocol</a></li>
 <li><a href="#row-semantics">Row semantics</a></li>
 <li><a href="#decode-rows">Decode rows</a></li>
+<li><a href="#tokenizer-throughput">Tokenizer throughput</a></li>
 <li><a href="#results-kept-in-the-tree">Results kept in the tree</a></li>
 </ol></nav>
   </div>

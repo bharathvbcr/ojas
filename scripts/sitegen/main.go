@@ -52,7 +52,7 @@ var docCategory = map[string]string{
 	"checkpoint-v1": "design", "adaptive-resources": "design",
 	"status": "status", "baseline": "status", "typed-storage-plan": "status",
 	"pytorch-parity-plan": "status", "cuda-backend-scoping": "status", "metal-deferred-faults": "status",
-	"bench-cpu-vs-torch": "bench", "bench-gpu-vs-torch": "bench",
+	"bench-cpu-vs-torch": "bench", "bench-gpu-vs-torch": "bench", "bench-plots": "bench",
 	"audit": "audit", "audit-phase2": "audit", "audit-phase3": "audit", "audit-cpu-hot": "audit",
 	"audit-larger-step": "audit", "audit-resources": "audit", "audit-close": "audit",
 }
@@ -759,6 +759,11 @@ func catTitle(key string) string {
 
 const tailwindConfig = `tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}`
 
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 func headHTML(title, desc, slug string) string {
 	t := html.EscapeString(title)
 	d := html.EscapeString(desc)
@@ -766,6 +771,26 @@ func headHTML(title, desc, slug string) string {
 	if slug != "" {
 		canon += slug + ".html"
 	}
+	ld := fmt.Sprintf(`{
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": %s,
+    "description": %s,
+    "url": %s,
+    "image": "%s/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "%s"
+    }
+  }`, jsonQuote(title+" · ojas reference"), jsonQuote(desc), jsonQuote(canon), siteURL, siteURL)
+	ldSafe := strings.ReplaceAll(ld, "</", "<\\/")
+
 	return `<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
@@ -773,6 +798,7 @@ func headHTML(title, desc, slug string) string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>` + t + ` · ojas reference</title>
   <meta name="description" content="` + d + `">
+  <meta name="keywords" content="ojas, ` + strings.ToLower(t) + `, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -783,6 +809,15 @@ func headHTML(title, desc, slug string) string {
   <meta property="og:title" content="` + t + ` · ojas reference">
   <meta property="og:description" content="` + d + `">
   <meta property="og:image" content="` + siteURL + `/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="` + t + ` · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="` + t + ` · ojas reference">
+  <meta name="twitter:description" content="` + d + `">
+  <meta name="twitter:image" content="` + siteURL + `/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="` + t + ` · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -793,6 +828,9 @@ func headHTML(title, desc, slug string) string {
   <script>` + tailwindConfig + `</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  ` + ldSafe + `
+  </script>
 </head>
 `
 }

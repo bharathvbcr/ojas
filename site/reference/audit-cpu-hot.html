@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CPU hot path for one step · ojas reference</title>
   <meta name="description" content="Read 2026-10-01. Counts are trip counts of the loops, not a profile. No cargo test was run.">
+  <meta name="keywords" content="ojas, cpu hot path for one step, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="CPU hot path for one step · ojas reference">
   <meta property="og:description" content="Read 2026-10-01. Counts are trip counts of the loops, not a profile. No cargo test was run.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="CPU hot path for one step · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CPU hot path for one step · ojas reference">
+  <meta name="twitter:description" content="Read 2026-10-01. Counts are trip counts of the loops, not a profile. No cargo test was run.">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="CPU hot path for one step · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "CPU hot path for one step · ojas reference",
+    "description": "Read 2026-10-01. Counts are trip counts of the loops, not a profile. No cargo test was run.",
+    "url": "https://ojas.vbcr.dev/reference/audit-cpu-hot.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>

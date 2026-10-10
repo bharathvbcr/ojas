@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Metal deferred-fault contract · ojas reference</title>
   <meta name="description" content="Status: implemented (round 5, phase B). The user approved Metal adopting wgpu&#39;s deferred-fault contract; phase A wrote this contract and phase B implemented it in ojas-metal. §9 records what was buil…">
+  <meta name="keywords" content="ojas, metal deferred-fault contract, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="Metal deferred-fault contract · ojas reference">
   <meta property="og:description" content="Status: implemented (round 5, phase B). The user approved Metal adopting wgpu&#39;s deferred-fault contract; phase A wrote this contract and phase B implemented it in ojas-metal. §9 records what was buil…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Metal deferred-fault contract · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Metal deferred-fault contract · ojas reference">
+  <meta name="twitter:description" content="Status: implemented (round 5, phase B). The user approved Metal adopting wgpu&#39;s deferred-fault contract; phase A wrote this contract and phase B implemented it in ojas-metal. §9 records what was buil…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Metal deferred-fault contract · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Metal deferred-fault contract · ojas reference",
+    "description": "Status: implemented (round 5, phase B). The user approved Metal adopting wgpu's deferred-fault contract; phase A wrote this contract and phase B implemented it in ojas-metal. §9 records what was buil…",
+    "url": "https://ojas.vbcr.dev/reference/metal-deferred-faults.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -189,7 +220,7 @@
 </li>
 <li><strong>Capacity:</strong> <code>CapacityExceeded</code> from the budget, and from a device allocation, which happens on the device thread while the op is recorded, before the call returns.
 </li>
-<li><strong>Limits:</strong> the head-dim limit (<code>refuse_unsupported_metal_head_dim</code>), <code>u32</code> indexing limits, <code>kv_cache_write</code>&#39;s <code>at + Tn &gt; Tcap</code>, and <code>cached_attention_forward</code>&#39;s <code>kv_len</code> range.
+<li><strong>Limits:</strong> the head-dim limit (<code>refuse_unsupported_metal_head_dim</code>), <code>u32</code> indexing limits, <code>kv_cache_write</code>&#39;s <code>Tn &gt; Tcap</code> (and <code>at + Tn</code> overflow), and <code>cached_attention_forward</code>&#39;s <code>kv_len</code> and ring-span range.
 </li>
 <li><strong>Arguments:</strong> <code>check_adamw</code> (step counter, config), Muon config, and <code>clip_grad_norm</code>&#39;s <code>max_norm</code> (non-finite or negative).
 </li>
@@ -476,7 +507,7 @@
 </li>
 </ul>
 </li>
-<li><strong>Host refusals stay immediate.</strong> Shape, dtype, placement, capacity, head dim, <code>kv_len</code>, <code>at + Tn</code>, out-of-range ids and all-ignored each return <code>Err</code> at the call, and nothing is pending (<code>sync</code> is <code>Ok</code>).
+<li><strong>Host refusals stay immediate.</strong> Shape, dtype, placement, capacity, head dim, <code>kv_len</code>, <code>Tn</code>, out-of-range ids and all-ignored each return <code>Err</code> at the call, and nothing is pending (<code>sync</code> is <code>Ok</code>).
 </li>
 <li><strong>Concurrency.</strong>
 <ul>

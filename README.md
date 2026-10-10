@@ -4,16 +4,36 @@
   <img src="site/assets/ojas-tile-512.png" alt="The ojas logo: a dark red liquid-glass icosahedron with a glowing core" width="180" height="180" />
 </p>
 
-**ojas** (vital energy, the essence training spends) is a deterministic, high-performance **Rust deep learning engine and framework** designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and, as the gaps below close, training and edge inference.
+<p align="center">
+  <a href="https://ojas.vbcr.dev/"><img src="https://img.shields.io/badge/docs-ojas.vbcr.dev-e11d48?style=flat-square" alt="Documentation"></a>
+  <a href="https://ojas.vbcr.dev/#labs"><img src="https://img.shields.io/badge/interactive-live_labs-be123c?style=flat-square" alt="Interactive Labs"></a>
+  <img src="https://img.shields.io/badge/rust-1.97%2B-orange?style=flat-square&logo=rust" alt="Rust 1.97+">
+  <img src="https://img.shields.io/badge/go-1.24%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.24+">
+  <img src="https://img.shields.io/badge/metal-4-999999?style=flat-square&logo=apple" alt="Apple Silicon Metal 4">
+  <img src="https://img.shields.io/badge/wgpu-portable_wgsl-blueviolet?style=flat-square" alt="wgpu Portable WGSL">
+  <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License: MIT or Apache-2.0">
+</p>
+
+**ojas** (vital energy, the essence training spends) is a deterministic, high-performance **Rust deep learning engine and framework** designed as a safe, modern alternative to PyTorch and TensorFlow for systems research, LLM training, and edge inference.
 
 ojas pairs a compile-time safe Rust engine with an in-process Go API via `gusset`, zero-copy tensor views, reverse-mode automatic differentiation, and strict memory budgeting.
 
+### Key Architectural Guarantees
+- **Bit-Identical Reproducibility:** Single-threaded-order, index-increasing accumulation under `Numerics::Exact` guarantees bit-identical results across thread counts, worker scheduling, and machines.
+- **Zero Silent Fallbacks:** Selecting a GPU backend (Apple Silicon Metal, wgpu, CUDA) that cannot be initialized returns an explicit error immediately. It will **never silently downgrade to CPU execution**.
+- **Explicit Budget Governance:** All allocations request permits from a hierarchical `Budget`. Over-budget allocations immediately return `OjasError::CapacityExceeded` without dynamic memory clamping, hidden page swapping, or uncatchable OOMs.
+- **Zero-IPC Multi-Language Bindings:** High-performance Go and C-ABI integrations via `gusset` and `ojas-capi` link directly in-process with panic isolation boundaries, eliminating Python runtime overhead and serialization penalties.
+- **Hardware Acceleration:** Native Apple Silicon Metal acceleration via `tessl` and custom Metal kernels, portable cross-platform `wgpu` compute shaders, and optimized CPU kernels (ARM64 NEON, x86_64 AVX2, Apple Accelerate).
+- **Dual Optimizers & Target Model:** Out-of-the-box support for the nanolab GPT architecture with Muon NS5 (Newton-Schulz orthogonalization) and AdamW, sliding-window KV-cache autoregressive inference, top-k row sampling, streaming dataset loaders, and fast BPE tokenization.
+
 **What runs today:**
 - Every `Backend` op runs on the CPU, on Apple Silicon Metal, and on wgpu: forward, backward, permute, clip, AdamW and Muon.
-- The autograd `Tape` gradchecks a multi-head attention block.
+- The autograd `Tape` gradchecks a multi-head attention block against double-precision (`f64`) finite differences.
 - `ojas-model` defines the nanolab GPT once (spec, `state_dict` names, order-independent init, the block) and runs it two ways: recorded on the `Tape` for training, eagerly through `Eval` for decoding. Its `Trainer` takes Muon + AdamW steps on any `Backend` and saves and resumes a checkpoint directory.
-- The Go API drives that model in process: `LoadModel` or `NewModel` (`DeviceCPU`, `DeviceCPUParallel`, `DeviceCPUAuto`, `DeviceMetal`, `DeviceWgpu`), `OpenTrainer`, `TrainStep`, `SaveCheckpoint` and `Resume`, a GPT-2 tokenizer, and sampled `GenerateIDs`. Metal and wgpu fail closed when no device opens.
-- `ojas-infer` decodes a nanolab-architecture model on the CPU, greedy or sampled, with a KV cache.
+- The Go API drives that model in process: `LoadModel` or `NewModel` (`DeviceCPU`, `DeviceCPUParallel`, `DeviceCPUAuto`, `DeviceMetal`, `DeviceWgpu`), `OpenTrainer`, `TrainStep`, `SaveCheckpoint` and `Resume`, a high-throughput GPT-2 BPE tokenizer, and sampled `GenerateIDs`. Metal and wgpu fail closed when no device opens.
+- `ojas-infer` decodes a nanolab-architecture model on the CPU, greedy or sampled (top-k rows, temperature, top-p), with a sliding-window KV cache ring.
+- `ojas-data` streams token binary formats (`u16`/`u32`), resumable batch sampling with counter-based RNG, and provides an optimized GPT-2 BPE tokenizer with byte and lossy decoding, pre-token caching, and output capping.
+- `ojas-cuda` provides a host-side CUDA runtime with single-budget memory accounting, typed initialization and device-loss errors, bounded waits, watchdog protection, and an affine test kernel.
 - `ojas-qwen35` (macOS only) runs a Qwen3.5 whole training step through tessl's Metal kernels. It is a provider, not a `Backend`.
 
 **What does not run yet:**
@@ -390,6 +410,8 @@ cd go && PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -time
 * [`docs/status.md`](file:///Users/bharath/Code/research/ojas/docs/status.md) — Verification run logs, test matrices, and machine profile.
 * [`docs/adaptive-resources.md`](file:///Users/bharath/Code/research/ojas/docs/adaptive-resources.md) — System profiling, adaptive resource planning, CPU topology, cache sizing, copy bandwidth, and unified memory governance.
 * [`docs/bench-cpu-vs-torch.md`](file:///Users/bharath/Code/research/ojas/docs/bench-cpu-vs-torch.md) — Benchmarks against PyTorch 2.13 CPU (tiny and larger step, single linear), plus Fast/Accelerate, Metal, and wgpu numbers taken under machine load.
+* [`docs/bench-gpu-vs-torch.md`](file:///Users/bharath/Code/research/ojas/docs/bench-gpu-vs-torch.md) — Metal and wgpu against PyTorch MPS at nanolab shapes.
+* [`docs/bench-plots.md`](file:///Users/bharath/Code/research/ojas/docs/bench-plots.md) — 83 benchmark charts covering every result folder, comparing ojas Metal, wgpu, and CPU against PyTorch MPS and CPU across training and inference runs.
 * [`docs/op-coverage.md`](file:///Users/bharath/Code/research/ojas/docs/op-coverage.md) — Mathematical specification of core operators and reference models.
 * [`docs/checkpoint-v1.md`](file:///Users/bharath/Code/research/ojas/docs/checkpoint-v1.md) — Binary checkpoint specification and framing.
 * [`docs/dtype-policy.md`](file:///Users/bharath/Code/research/ojas/docs/dtype-policy.md) — Data types, precision policies, and epsilon invariants.
@@ -399,11 +421,16 @@ cd go && PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -time
 * [`docs/shape-contract.md`](file:///Users/bharath/Code/research/ojas/docs/shape-contract.md) — One shape validator per `Backend` op, run before any budget or dispatch.
 * [`docs/typed-storage-plan.md`](file:///Users/bharath/Code/research/ojas/docs/typed-storage-plan.md) — Typed host storage (`f32`, `u32`, `u16`) and the bounded readback and load pieces.
 * [`docs/metal-deferred-faults.md`](file:///Users/bharath/Code/research/ojas/docs/metal-deferred-faults.md) — Metal's deferred-fault contract, matching wgpu.
-* [`docs/bench-gpu-vs-torch.md`](file:///Users/bharath/Code/research/ojas/docs/bench-gpu-vs-torch.md) — Metal and wgpu against PyTorch MPS at nanolab shapes.
 * [`docs/cuda-backend-scoping.md`](file:///Users/bharath/Code/research/ojas/docs/cuda-backend-scoping.md) — Design-only scoping of a CUDA backend (no kernel written).
 * [`docs/audit-resources.md`](file:///Users/bharath/Code/research/ojas/docs/audit-resources.md) — What the resource governor locks, with verified and reported rows. Earlier audits: [`audit-phase2`](file:///Users/bharath/Code/research/ojas/docs/audit-phase2.md), [`audit-phase3`](file:///Users/bharath/Code/research/ojas/docs/audit-phase3.md), [`audit-close`](file:///Users/bharath/Code/research/ojas/docs/audit-close.md), [`audit-cpu-hot`](file:///Users/bharath/Code/research/ojas/docs/audit-cpu-hot.md), [`audit-larger-step`](file:///Users/bharath/Code/research/ojas/docs/audit-larger-step.md).
 * [`docs/audit.md`](file:///Users/bharath/Code/research/ojas/docs/audit.md) — Defect analysis of upstream engines and ojas defensive countermeasures.
 * [`docs/baseline.md`](file:///Users/bharath/Code/research/ojas/docs/baseline.md) — Benchmarks, toolchain baselines, and Apple Accelerate BLAS measurements.
+
+---
+
+## Topics & Discoverability
+
+`rust` · `deep-learning` · `machine-learning` · `neural-networks` · `pytorch-alternative` · `tensorflow-alternative` · `deterministic-ai` · `metal-compute` · `wgpu` · `cuda` · `autograd` · `nanolab-gpt` · `muon-optimizer` · `adamw` · `in-process-go` · `gusset` · `zero-silent-fallback` · `memory-budget` · `tensor-engine` · `systems-research`
 
 ---
 

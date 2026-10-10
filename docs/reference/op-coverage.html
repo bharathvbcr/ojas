@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Op Coverage — nanolab Default GPT · ojas reference</title>
   <meta name="description" content="The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d_{\text{model}} = 768$, 12 attention heads, head dimension $d_{\text{head}} = 64$, vocabulary size 50,304, causal atten…">
+  <meta name="keywords" content="ojas, op coverage — nanolab default gpt, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="Op Coverage — nanolab Default GPT · ojas reference">
   <meta property="og:description" content="The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d_{\text{model}} = 768$, 12 attention heads, head dimension $d_{\text{head}} = 64$, vocabulary size 50,304, causal atten…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Op Coverage — nanolab Default GPT · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Op Coverage — nanolab Default GPT · ojas reference">
+  <meta name="twitter:description" content="The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d_{\text{model}} = 768$, 12 attention heads, head dimension $d_{\text{head}} = 64$, vocabulary size 50,304, causal atten…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Op Coverage — nanolab Default GPT · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Op Coverage — nanolab Default GPT · ojas reference",
+    "description": "The v1 model is the nanolab default GPT architecture: 12 layers, hidden width $d_{\\text{model}} = 768$, 12 attention heads, head dimension $d_{\\text{head}} = 64$, vocabulary size 50,304, causal atten…",
+    "url": "https://ojas.vbcr.dev/reference/op-coverage.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -211,10 +242,10 @@
 <tr><td><strong>GDN log decay</strong> (Qwen3.5)</td><td>Exact scalar, <code>hybrid.rs</code></td><td><code>ojas_gdn_decay_*</code> (tessl&#39;s <code>qwen35_softplus</code>)</td><td>Unsupported</td><td><code>f32</code></td><td>$g = -e^{A_{\log}} \,\mathrm{softplus}(a + b_{dt})$ per head, torch&#39;s softplus threshold 20; <code>a</code> <code>[..., H]</code>, <code>A_log</code>, <code>dt_bias</code> <code>[H]</code>. The backward sums $\partial A_{\log}$ and $\partial b_{dt}$ over rows in ascending order</td></tr>
 <tr><td><strong>Cross-Entropy</strong></td><td>Mean over valid targets</td><td><code>ojas_ce_rows</code>, <code>ojas_ce_mean</code></td><td>WGSL</td><td><code>f32</code></td><td>Mean NLL; <code>ignore_index</code>; all-ignored is <code>NonFinite</code>. Full <code>rows × vocab</code> logits and gradient are materialized</td></tr>
 <tr><td><strong>Linear Cross-Entropy</strong></td><td>Tiled online softmax, stream loss/grad</td><td>Tiled stream</td><td>WGSL <code>loss.wgsl</code></td><td><code>f32</code></td><td>Fused linear projection + CE loss; tiles rows/vocab without materializing full logits (<code>LinearCeChunk</code>)</td></tr>
-<tr><td><strong>Grad Clip</strong></td><td>Global norm, f64 sum of squares</td><td><code>ojas_reduce_*</code>, <code>ojas_scale</code></td><td>WGSL</td><td><code>f32</code></td><td>Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$</td></tr>
+<tr><td><strong>Grad Clip</strong></td><td>Global norm, f64 sum of squares</td><td><code>ojas_norm_multi</code> + <code>ojas_norm_finish</code>, then <code>ojas_scale_multi</code>: 24 gradients per dispatch, one read per value</td><td>WGSL <code>clip.wgsl</code> (<code>norm_partial</code>, <code>norm_finish</code>, <code>scale_multi</code>): up to 16 gradients per dispatch, as the device&#39;s binding limit allows</td><td><code>f32</code></td><td>Scale by $\min(1, m / (\lVert g \rVert + 10^{-6}))$. GPU norm: each 4096-value chunk&#39;s max and its sum of $(g/\max)^2$, rescaled to the global max</td></tr>
 <tr><td><strong>Accumulate Grad</strong></td><td>In-place add (finite check)</td><td>In-place / buffer</td><td>WGSL <code>accumulate</code></td><td><code>f32</code></td><td>Accumulate step gradients into parameter gradient buffers</td></tr>
 <tr><td><strong>KV Cache Write</strong></td><td>Slice copy at timestep</td><td>Slice copy</td><td>WGSL <code>kv_cache</code></td><td><code>f32</code></td><td>Write key/value token slices into time-major decode KV cache</td></tr>
-<tr><td><strong>AdamW</strong></td><td>Single-tensor torch order</td><td>tessl <code>qwen35_adamw</code></td><td>WGSL</td><td><code>f32</code></td><td>Decay first; f64 bias correction; $\varepsilon$ outside sqrt</td></tr>
+<tr><td><strong>AdamW</strong></td><td>Single-tensor torch order</td><td><code>ojas_adamw_check</code> then <code>ojas_adamw_apply</code> (no copies)</td><td>WGSL <code>adam_check</code> then <code>adam_apply</code> (no copies)</td><td><code>f32</code></td><td>Decay first; f64 bias correction; $\varepsilon$ outside sqrt. A non-finite step writes nothing</td></tr>
 <tr><td><strong>Muon NS5</strong></td><td>5-step Newton-Schulz</td><td>Newton-Schulz on tessl GEMM</td><td>WGSL GEMM</td><td><code>f32</code>, or <code>bf16</code> on CPU and Metal (nanolab: bf16)</td><td>$aX + b(XX^T)X + c(XX^T)^2X$</td></tr>
 </tbody></table></div>
 <aside class="alert alert-warning"><p class="alert-title">Warning</p><p><code>MetalBackend</code> and <code>WgpuBackend</code> attention refuse $d_{\text{head}} &gt; 256$ with <code>OjasError::UnsupportedHeadDim</code> (<code>METAL_MAX_HEAD_DIM</code>, and <code>ATTENTION_MAX_HEAD_DIM</code> in <code>ojas-kernels/src/geometry.rs</code> for wgpu). The tiny Metal training step in <code>ojas-metal/src/gpu.rs</code> runs tessl <code>flash_attn_rows</code> and refuses above 64. Nothing is truncated. Causal SDPA accepts grouped-query head counts.</p>

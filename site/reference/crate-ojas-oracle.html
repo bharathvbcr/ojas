@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas-oracle · ojas reference</title>
   <meta name="description" content="Golden numbers that ojas is checked against, with no Python or PyTorch at test time. Two kinds:">
+  <meta name="keywords" content="ojas, ojas-oracle, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="ojas-oracle · ojas reference">
   <meta property="og:description" content="Golden numbers that ojas is checked against, with no Python or PyTorch at test time. Two kinds:">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas-oracle · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas-oracle · ojas reference">
+  <meta name="twitter:description" content="Golden numbers that ojas is checked against, with no Python or PyTorch at test time. Two kinds:">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas-oracle · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas-oracle · ojas reference",
+    "description": "Golden numbers that ojas is checked against, with no Python or PyTorch at test time. Two kinds:",
+    "url": "https://ojas.vbcr.dev/reference/crate-ojas-oracle.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -177,6 +208,7 @@
 <tr><td><code>value_residual</code></td><td>bool</td><td>blend layer 0&#39;s values with <code>sigmoid(vr_lambda)</code></td></tr>
 </tbody></table></div>
 <p>The exporter refuses any nanolab config ojas does not implement (another mixer, FFN, norm or position scheme, μP, loops, dropout, an attention-scale ablation), so the booleans are always true today; they are explicit so a reader can refuse rather than assume. Floats are JSON numbers (<code>1e-06</code>), so a reader needs an f64-capable JSON parser: <code>ojas_io::json</code> keeps integers exact and floats as f64. <code>ojas_oracle::spec::parse_spec</code> is a reference reader.</p>
+<p><code>ojas-spec-v2</code> is the same object with one more key, <code>window</code> (int, at least 1): sliding-window attention on every layer, query <code>t</code> seeing keys <code>t - window &lt; j &lt;= t</code>, which is nanolab&#39;s <code>swa</code> mixer with <code>swa_sinks = 0</code>. <code>ojas_model::ModelSpec::to_json</code> writes v1 for a spec without a window, so every exported file is unchanged, and v2 for one with a window; <code>ModelSpec::from_json</code> reads both (<code>window</code> is required in v2 and refused in v1). The exporter and <code>ojas_oracle::spec::parse_spec</code> stay at v1: they refuse any mixer but <code>attention</code>, so no windowed checkpoint is exported yet.</p>
 <p>Tensor names are nanolab <code>state_dict</code> keys (§2): <code>_orig_mod.</code> stripped, <code>lm_head.weight</code> not stored (the exporter first checks it is bit-equal to <code>tok_emb.weight</code>), all F32.</p>
 <h2 id="regenerating">Regenerating <a class="anchor" href="#regenerating" aria-label="Link to this section">#</a></h2>
 <p>Interpreter: <code>/opt/homebrew/opt/python@3.14/bin/python3.14</code> (Python 3.14.7, torch 2.13.0, numpy 2.4.6, safetensors 0.8.0), the one <code>bench/</code> uses. nanolab is read from <code>/Users/bharath/Code/research/MLSystemsLab</code> (<code>OJAS_NANOLAB_ROOT</code> overrides) with bytecode writing off. CPU only.</p>

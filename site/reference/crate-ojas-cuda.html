@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas-cuda · ojas reference</title>
   <meta name="description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
+  <meta name="keywords" content="ojas, ojas-cuda, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="ojas-cuda · ojas reference">
   <meta property="og:description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas-cuda · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas-cuda · ojas reference">
+  <meta name="twitter:description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas-cuda · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas-cuda · ojas reference",
+    "description": "NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:",
+    "url": "https://ojas.vbcr.dev/reference/crate-ojas-cuda.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -119,6 +150,18 @@
 <li><code>CudaDevice</code>: the device probe (open ordinal 0, run one affine kernel before <code>Ok</code>).
 </li>
 <li><code>CudaBackend</code>: the <code>ojas_core::Backend</code> implementation. <code>upload</code>, <code>download</code> and <code>sync</code> work; every compute op returns <code>OjasError::Unsupported</code> naming the op. A sticky driver failure (an illegal address, a failed launch, a device-side assert, …) is <code>OjasError::DeviceLost</code>, so a caller stops instead of retrying on a dead context.
+<ul>
+<li>One budget: <code>CudaBackend::open(budget)</code> opens its runtime with <code>CudaRuntime::open_with</code>, so uploaded tensors, the runtime&#39;s kernel buffers and the 32 MiB cuBLAS workspace are all charged to that <code>ojas_core::Budget</code> (<code>AllocBudget</code> is a view of it). A budget smaller than the workspace cannot open.
+</li>
+<li>Open errors keep their kind (<code>impl From&lt;CudaError&gt; for DeviceError</code>): missing libraries or no device are <code>NoDevice</code>, a compute capability other than <code>REQUIRED_CC</code> is <code>Unsupported</code>, a budget or device-memory refusal is <code>Capacity</code> (<code>E_CAPACITY</code> through the C ABI), NVRTC is <code>Compile</code>, and a cuBLAS, stream or first-sync failure is <code>Init</code>.
+</li>
+<li>An upload copies straight from the host tensor (f32, u32, bf16; f16 is staged once) into an allocation that is not zeroed first. A U32 upload also keeps a host copy of its ids for the token-range check.
+</li>
+<li>Every upload (<code>CudaBackend::upload</code>, <code>CudaRuntime::upload</code> and <code>write</code>) returns only after its copy has finished: NVIDIA documents an async copy from pageable memory only as one that &#34;might be synchronous with respect to host&#34;, and cudarc keeps nothing alive for a <code>&amp;[T]</code> source. The wait is bounded (<code>sync_timeout</code>), as is every device wait, a tensor readback&#39;s included (<code>src/wait.rs</code>).
+</li>
+<li>Not selectable through the C ABI or Go yet: device 5 (<code>DEVICE_CUDA</code>, <code>DeviceCUDA</code>) is refused by name until gp-cuda-backend-provider lands, because the runtime is an <code>Rc</code> (not <code>Send</code>) and no compute op is implemented.
+</li>
+</ul>
 </li>
 <li><code>Qwen35Step</code>: the Qwen3.5 whole-step training provider, design (B) in <a href="cuda-backend-scoping.html"><code>docs/cuda-backend-scoping.md</code></a>, the CUDA counterpart of <code>ojas-qwen35</code>. Every compute method refuses with <code>Unsupported</code> until its kernels are wired and have run on a device. The kernels it will run are here already, each tested against a float64 host reference (table below).
 </li>
@@ -130,7 +173,7 @@
 <thead><tr><th>Piece</th><th>Where</th><th>Tested on the Mac</th></tr></thead>
 <tbody>
 <tr><td><code>CudaRuntime</code>: library probe before any cudarc call, sm_90 check, one stream, cuBLAS handle (32 MiB workspace, default math, atomics never set)</td><td><code>src/runtime.rs</code></td><td>refusal path only (<code>tests/runtime_refusal.rs</code>)</td></tr>
-<tr><td><code>CudaBuffer&lt;T&gt;</code>: typed, length-checked, held against a bounded <code>AllocBudget</code>; <code>CudaDeviceBuffer</code> backs an <code>ojas_core::Tensor</code></td><td><code>src/buffer.rs</code>, <code>src/budget.rs</code></td><td>budget logic</td></tr>
+<tr><td><code>CudaBuffer&lt;T&gt;</code>: typed, length-checked, held against a bounded <code>AllocBudget</code> (a view of the one <code>ojas_core::Budget</code> the backend also charges); <code>CudaDeviceBuffer</code> backs an <code>ojas_core::Tensor</code></td><td><code>src/buffer.rs</code>, <code>src/budget.rs</code></td><td>budget logic</td></tr>
 <tr><td>NVRTC compile cache: key = module, FNV-1a of the source, length, options (architecture and <code>--fmad</code> included), NVRTC version; bounded in entries and bytes, LRU</td><td><code>src/nvrtc_cache.rs</code></td><td>yes</td></tr>
 <tr><td>K0: f32↔bf16 (RNE), <code>copy_cols</code>, <code>deliver</code> (copy / <code>+=</code>), <code>zero</code>, <code>scatter_add_rows</code> (distinct rows), <code>ce_gather_rows</code> (f32 / bf16)</td><td><code>src/kernels.rs</code>, <code>src/k0.rs</code>, <code>src/k0_plan.rs</code></td><td>plans and host references</td></tr>
 <tr><td>K1: GEMM <code>nn</code>/<code>tn</code>/<code>nt</code>: ExactF32 (fixed-k FFMA kernel) and Bf16 (cuBLAS <code>GemmEx</code> bf16→f32, or the FFMA kernel rounding on load)</td><td><code>src/gemm.rs</code>, <code>src/gemm_plan.rs</code></td><td>cuBLAS row-major mapping, host references</td></tr>

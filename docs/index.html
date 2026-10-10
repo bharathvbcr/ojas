@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ojas — Deterministic Rust deep learning engine</title>
-  <meta name="description" content="ojas is a Rust deep learning engine that trains and serves a nanolab GPT from Go: bit-identical CPU math, memory budgets that refuse, no silent device fallback, and a host probe that plans around the machine or refuses. Live labs for each guarantee.">
+  <title>ojas — Deterministic Rust Deep Learning Engine &amp; Framework</title>
+  <meta name="description" content="ojas is a deterministic, high-performance Rust deep learning engine and framework. Features bit-identical CPU math, memory budgets that refuse, no silent device fallback, Apple Silicon Metal and wgpu compute, and zero-IPC in-process Go integration. Live interactive labs for every guarantee.">
+  <meta name="keywords" content="ojas, rust deep learning, pytorch alternative, tensorflow alternative, deterministic machine learning, rust neural network, rust autograd, apple silicon metal ml, wgpu compute shaders, llm training rust, in-process go api, gusset, nanolab gpt, muon optimizer, adamw optimizer, bit-identical reductions, zero silent fallback, ai systems research">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -12,12 +13,60 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/">
-  <meta property="og:title" content="ojas — Deterministic Rust deep learning engine">
-  <meta property="og:description" content="ojas is a Rust deep learning engine that trains and serves a nanolab GPT from Go: bit-identical CPU math, memory budgets that refuse, no silent device fallback, and a host probe that plans around the machine or refuses. Live labs for each guarantee.">
+  <meta property="og:title" content="ojas — Deterministic Rust Deep Learning Engine &amp; Framework">
+  <meta property="og:description" content="ojas is a deterministic, high-performance Rust deep learning engine and framework. Features bit-identical CPU math, memory budgets that refuse, no silent device fallback, Apple Silicon Metal and wgpu compute, and zero-IPC in-process Go integration.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas — Deterministic Rust Deep Learning Engine">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@bharathvaddaram">
+  <meta name="twitter:creator" content="@bharathvaddaram">
+  <meta name="twitter:title" content="ojas — Deterministic Rust Deep Learning Engine &amp; Framework">
+  <meta name="twitter:description" content="Deterministic, high-performance Rust deep learning engine and framework: bit-identical CPU numerics, memory budgets that refuse, zero silent device fallback, Apple Silicon Metal &amp; wgpu backends, and in-process Go integration.">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas — Deterministic Rust Deep Learning Engine">
   <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="site.webmanifest">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://ojas.vbcr.dev/#software",
+        "name": "ojas",
+        "description": "Deterministic, high-performance Rust deep learning engine and framework designed as a safe alternative to PyTorch and TensorFlow for systems research, training, and edge inference.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux",
+        "url": "https://ojas.vbcr.dev/",
+        "sameAs": "https://github.com/bharathvbcr/ojas",
+        "license": "https://opensource.org/licenses/MIT",
+        "author": {
+          "@type": "Person",
+          "name": "Bharath Chandra Vaddaram",
+          "url": "https://bharath.vbcr.dev/"
+        },
+        "softwareRequirements": "Rust 1.97+, Go 1.24+ (optional for Go API)"
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://ojas.vbcr.dev/#website",
+        "url": "https://ojas.vbcr.dev/",
+        "name": "ojas",
+        "description": "Deterministic Rust Deep Learning Engine Documentation and Interactive Labs",
+        "publisher": {
+          "@type": "Person",
+          "name": "Bharath Chandra Vaddaram",
+          "url": "https://bharath.vbcr.dev/"
+        }
+      }
+    ]
+  }
+  </script>
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -76,8 +125,8 @@
   <header class="sticky top-0 z-50 glass-nav" id="navbar">
     <div id="announcement" class="w-full bg-gradient-to-r from-brand-950 via-brand-900 to-black border-b border-brand-800/40 text-xs py-2 px-4 font-medium tracking-wide">
       <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified 2026-10-04</span>
-        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1280+ Rust tests and 41 Go tests passed in kernel hardening &amp; SIMD vectorization (2026-10-04). See <a href="#doc-status" class="underline underline-offset-2 hover:text-white">status</a> for what that covers.</span>
+        <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono uppercase">Verified</span>
+        <span class="text-slate-300 text-center"><strong>ojas v0.1.0</strong>: 1510+ Rust tests and 41+ Go tests passed across workspace crates. See <a href="reference/status.html" class="underline underline-offset-2 hover:text-white">status</a> for what that covers.</span>
         <button type="button" id="dismissAnnounce" class="ml-1 px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10" aria-label="Dismiss announcement">&times;</button>
       </div>
     </div>
@@ -179,7 +228,7 @@
             </div>
             <div>
               <dt class="text-xs text-slate-400">Rust + Go tests passed</dt>
-              <dd class="text-2xl font-bold font-mono text-white">1280+ / 41</dd>
+              <dd class="text-2xl font-bold font-mono text-white">1510+ / 41</dd>
             </div>
           </dl>
         </div>

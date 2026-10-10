@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Framework layer design (approved; items 1–13 landed) · ojas reference</title>
   <meta name="description" content="Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from pytorch-parity-plan.md §7.">
+  <meta name="keywords" content="ojas, framework layer design (approved; items 1–13 landed), rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="Framework layer design (approved; items 1–13 landed) · ojas reference">
   <meta property="og:description" content="Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from pytorch-parity-plan.md §7.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Framework layer design (approved; items 1–13 landed) · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Framework layer design (approved; items 1–13 landed) · ojas reference">
+  <meta name="twitter:description" content="Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from pytorch-parity-plan.md §7.">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Framework layer design (approved; items 1–13 landed) · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Framework layer design (approved; items 1–13 landed) · ojas reference",
+    "description": "Written 2026-10-01 by a read-only design pass over the tree at that date. It is linked from pytorch-parity-plan.md §7.",
+    "url": "https://ojas.vbcr.dev/reference/framework-design.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -167,7 +198,7 @@
 <li>norm2, SwiGLU, residual.
 </li>
 </ol>
-<p>That is the same order as <code>CpuGpt</code> and <code>ojas-autograd/tests/multihead.rs</code>. <code>CpuGpt::forward_token</code> keeps its host KV cache, and a parity test binds it to <code>Eval&lt;CpuBackend&gt;</code>. Training v1 refuses GQA, because nanolab&#39;s default is MHA.</p>
+<p>That is the same order as <code>ojas-autograd/tests/multihead.rs</code>. <code>CpuGpt</code> runs <code>DeviceDecoder</code>&#39;s step on <code>CpuBackend</code> against a host <code>KvCache</code>, and a parity test binds it to <code>Eval&lt;CpuBackend&gt;</code>. Training v1 refuses GQA, because nanolab&#39;s default is MHA.</p>
 <p>Safetensors names are nanolab <code>state_dict</code> keys, so torch exports load unchanged.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Name (layer i)</th><th>Shape</th><th>Init (nanolab)</th><th>Group</th></tr></thead>
@@ -344,7 +375,7 @@
 <tr><td>7 TRAIN_OPEN</td><td><code>OpenTrainer(ctx, id, TrainConfig{TokenBin, Batch, Seq, Accum, Seed, Schedule, MatrixLR, AdamLR, GradClip, OnNonFinite})</code></td><td><code>TokenBin</code> plus a <code>BatchSampler</code></td></tr>
 <tr><td>8 TRAIN_STEP</td><td><code>TrainStep(ctx, id)</code>, <code>TrainStepTokens(ctx, id, x, y)</code></td><td><code>{Loss, GradNorm, LR; Step, Tokens}</code></td></tr>
 <tr><td>9 SAVE, 10 RESUME</td><td><code>SaveCheckpoint(ctx, id, dir)</code>, <code>Resume(ctx, dir, opts)</code></td><td>Checkpoint directory (§4)</td></tr>
-<tr><td>11 TOKENIZER, 12 TOKENIZE</td><td><code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code></td><td>ojas-data GPT-2 BPE</td></tr>
+<tr><td>11 TOKENIZER, 12 TOKENIZE</td><td><code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code>, <code>DetokenizeLossy</code>, <code>TokenID</code></td><td>ojas-data GPT-2 BPE</td></tr>
 <tr><td>13 SAMPLE</td><td><code>GenerateIDs(ctx, id, prompt, SampleOptions{Temperature, TopK, TopP, Seed, MaxNewTokens, Stop})</code></td><td>ids</td></tr>
 </tbody></table></div>
 <p><strong>Existing tests:</strong></p>
@@ -362,9 +393,11 @@ fn linear_cross_entropy_mean(&amp;self, input: &amp;Tensor /*[N,d]*/, weight: &a
     targets: &amp;Tensor /*U32 [N]*/, ignore_index: Option&lt;u32&gt;, chunk: CeChunk /*{rows, cols}*/, want_grad: bool)
     -&gt; Result&lt;LinearCe, OjasError&gt;; // LinearCe { loss, grad_input: Option&lt;Tensor&gt;, grad_weight: Option&lt;Tensor&gt; }
 fn cached_attention_forward(&amp;self, q: &amp;Tensor /*[B,Tq,H,D]*/, k_cache: &amp;Tensor /*[B,Tcap,Hkv,D]*/, // T4
-    v_cache: &amp;Tensor, kv_len: usize) -&gt; Result&lt;Tensor, OjasError&gt;;
-    // query i sits at position kv_len-Tq+i; head h reads kv head h/(H/Hkv); scale sdpa_scale(D)
+    v_cache: &amp;Tensor, kv_len: usize, window: Option&lt;usize&gt;) -&gt; Result&lt;Tensor, OjasError&gt;;
+    // the cache is a ring: position j is slot j % Tcap; query i sits at position p = kv_len-Tq+i
+    // and reads p+1-window..=p (0..=p without a window); head h reads kv head h/(H/Hkv)
 fn kv_cache_write(&amp;self, cache: &amp;mut Tensor, src: &amp;Tensor /*[B,Tn,Hkv,D]*/, at: usize) -&gt; Result&lt;(), OjasError&gt;; // T5
+    // position at+t goes to slot (at+t) % Tcap; Tn &lt;= Tcap
 impl&lt;B: Backend + ?Sized&gt; Backend for &amp;B / Arc&lt;B&gt;  // T6: forward every method, including the defaulted ones
 // ojas-autograd Tape
 pub fn backward_seeded(&amp;mut self, var: Var, seed: f32) -&gt; Result&lt;(), OjasError&gt;;               // A1
@@ -378,7 +411,7 @@ pub fn linear_cross_entropy(&amp;mut self, x: Var, w: Var, targets: Tensor,
 <tr><td>T1</td><td>default</td><td>default (synchronous per op today)</td><td>override (inherent <code>sync</code>)</td><td>G1: a deferred NaN surfaces at <code>sync</code></td></tr>
 <tr><td>T2</td><td>native in place</td><td>native</td><td>native</td><td>G2: parity vs CPU; NaN leaves <code>acc</code> unchanged</td></tr>
 <tr><td>T3</td><td>native</td><td>native</td><td>native</td><td>G3: (a) equals the linear→CE→linear_backward composition at 1e-6 rel; (b) f64 gradcheck; (c) a <code>Budget</code> below <code>N·V·4</code> still runs; (d) device vs CPU at N=4096, V=50304, 1e-4</td></tr>
-<tr><td>T4, T5</td><td>native (moves <code>attend_one</code>)</td><td>native</td><td>native</td><td>G4: <code>kv_len == Tq</code> equals causal SDPA; GQA vs <code>attend_one</code>; device vs CPU at 1e-5</td></tr>
+<tr><td>T4, T5</td><td>native (reads the ring in place)</td><td>native</td><td>native</td><td>G4: <code>kv_len == Tq</code> equals causal SDPA (with the same window, bit for bit under Exact); GQA and windowed rings vs an f64 reference; device vs CPU at 1e-5</td></tr>
 <tr><td>T6</td><td>—</td><td>—</td><td>—</td><td>G5: <code>Arc&lt;WgpuBackend&gt;</code> keeps <code>Numerics::Fast</code> and <code>permute</code></td></tr>
 <tr><td>A1</td><td>—</td><td>—</td><td>—</td><td>G6: seed 0.5 gives the same result on every device. The root-CE shortcut in <code>tape.rs</code> must not drop the seed</td></tr>
 </tbody></table></div>

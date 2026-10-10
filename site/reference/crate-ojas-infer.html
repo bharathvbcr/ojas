@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas-infer · ojas reference</title>
   <meta name="description" content="ojas-infer serves nanolab&#39;s default decoder: KV-cached incremental decoding on the CPU (CpuGpt) and on any Backend (DeviceDecoder), greedy decoding, and seeded temperature / top-k / top-p sampling.">
+  <meta name="keywords" content="ojas, ojas-infer, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="ojas-infer · ojas reference">
   <meta property="og:description" content="ojas-infer serves nanolab&#39;s default decoder: KV-cached incremental decoding on the CPU (CpuGpt) and on any Backend (DeviceDecoder), greedy decoding, and seeded temperature / top-k / top-p sampling.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas-infer · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas-infer · ojas reference">
+  <meta name="twitter:description" content="ojas-infer serves nanolab&#39;s default decoder: KV-cached incremental decoding on the CPU (CpuGpt) and on any Backend (DeviceDecoder), greedy decoding, and seeded temperature / top-k / top-p sampling.">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas-infer · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas-infer · ojas reference",
+    "description": "ojas-infer serves nanolab's default decoder: KV-cached incremental decoding on the CPU (CpuGpt) and on any Backend (DeviceDecoder), greedy decoding, and seeded temperature / top-k / top-p sampling.",
+    "url": "https://ojas.vbcr.dev/reference/crate-ojas-infer.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -118,7 +149,7 @@
 <p>The model is defined once, in <code>ojas-model</code>. <code>GptConfig</code> is <code>ojas_model::ModelSpec</code>, <code>GptWeights</code> is <code>ojas_model::ModelParams&lt;Tensor&gt;</code> and <code>BlockWeights</code> is <code>ojas_model::BlockParams&lt;Tensor&gt;</code>, all under nanolab&#39;s <code>state_dict</code> names. Both decoders check the weights against <code>ojas_model::param_table</code>.</p>
 <hr>
 <h2 id="the-block">The block <a class="anchor" href="#the-block" aria-label="Link to this section">#</a></h2>
-<p><code>CpuGpt</code> runs nanolab&#39;s default attention block (<code>nanolab/mixers.py</code> <code>Attention.forward</code>, <code>nanolab/model.py</code> <code>Block</code> and <code>SwiGLU</code>):</p>
+<p>Both decoders run nanolab&#39;s default attention block (<code>nanolab/mixers.py</code> <code>Attention.forward</code>, <code>nanolab/model.py</code> <code>Block</code> and <code>SwiGLU</code>):</p>
 <div class="table-wrap"><table>
 <thead><tr><th>step</th><th>what</th><th>weights</th></tr></thead>
 <tbody>
@@ -133,13 +164,14 @@
 <p>The head is the tied embedding (<code>tok_emb</code>) after a final RMSNorm (<code>norm_f</code>). <code>head_dim</code> is its own config field, so <code>H * Dh</code> need not equal <code>d</code>. RoPE rows come from <code>ojas_model::Rope</code>: angles computed in f64 and rounded once, as <code>ojas-autograd</code>&#39;s <code>rope_cache</code> does; nanolab builds its table in f32, so the last bits differ and the gap grows with position.</p>
 <h2 id="three-forwards-one-model">Three forwards, one model <a class="anchor" href="#three-forwards-one-model" aria-label="Link to this section">#</a></h2>
 <ul>
-<li><code>CpuGpt::forward_token(token, cache)</code>: the fast host path. One token at position <code>cache.len()</code>; the linears and single-query attention are local (the trait linear repacks the whole weight per call). RMSNorm, QK-norm (fused <code>rms_qk_norm_forward</code>), RoPE, the gate, the value residual, SiLU and the product run on <code>ojas_cpu::CpuBackend</code>.
+<li><code>DeviceDecoder&lt;B&gt;::forward(tokens)</code>: decode on any <code>Backend</code> with the KV cache resident there, one <code>[1, slots, Hkv, D]</code> key and value tensor per layer. Each layer is <code>ojas_model::block_with</code> on <code>Eval</code>, the same block the trainer uses. Only the attention step belongs to this crate (<code>src/cache.rs</code>): it writes the new positions&#39; post-RoPE keys and blended values with <code>kv_cache_write</code>, then attends with <code>cached_attention_forward</code> at <code>kv_len = len + Tn</code>. One path serves prefill (several tokens, onto an empty or warm cache) and decode (one token), and it runs GQA. Only the last position runs the final norm and the head. A call past the capacity is <code>CapacityExceeded</code> before anything runs, and a failed call leaves <code>len</code> unchanged.
 </li>
-<li>The full forward is <code>ojas_model::forward_logits</code> on <code>ojas_model::Eval</code>: the model&#39;s one block, using causal SDPA for MHA and <code>cached_attention_forward</code> at <code>kv_len == T</code> for GQA. Only the training tape refuses GQA.
+<li><code>CpuGpt::forward_tokens(tokens, cache)</code>: the same step on an <code>ojas_cpu::CpuBackend</code> (one thread per core, <code>Numerics::Fast</code> by default) against a caller-owned host <code>KvCache</code>. <code>forward_token</code> is the one-token case. There is no second copy of the block.
 </li>
-<li><code>DeviceDecoder&lt;B&gt;::forward(tokens)</code>: decode on any <code>Backend</code> with the KV cache resident there, one <code>[1, Tcap, Hkv, D]</code> key and value tensor per layer. Each layer is <code>ojas_model::block_with</code> on <code>Eval</code>, the same block the trainer uses (QK-norm as two <code>rms_norm</code> calls). Only the attention step belongs to this crate: it writes the new positions&#39; post-RoPE keys and blended values with <code>kv_cache_write</code>, then attends with <code>cached_attention_forward</code> at <code>kv_len = len + Tn</code>. One path serves prefill (several tokens, onto an empty or warm cache) and decode (one token), and it runs GQA. The last position&#39;s hidden row is gathered on the device, normed and projected; the <code>[1, vocab]</code> logit row is the call&#39;s one readback. A call past the capacity is <code>CapacityExceeded</code> before anything runs, and a failed call leaves <code>len</code> unchanged.
+<li>The full forward is <code>ojas_model::forward_logits</code> on <code>ojas_model::Eval</code>: causal SDPA, with the model&#39;s sliding window if it has one.
 </li>
 </ul>
+<p><strong>Sliding window.</strong> A <code>ModelSpec</code> with <code>window: Some(W)</code> attends to the last <code>W</code> positions on every layer (nanolab&#39;s <code>swa</code> mixer with <code>swa_sinks = 0</code>). Training (the tape&#39;s windowed SDPA) and both decoders read <code>ModelSpec::attention_window</code>, which is <code>None</code> once <code>W &gt;= max_seq</code>. The caches are rings (position <code>j</code> in slot <code>j % slots</code>); a windowed model keeps <code>2W - 1</code> slots instead of the capacity. A call of more than <code>W</code> tokens runs as <code>W</code>-token pieces, each all or nothing: a failure leaves <code>len</code> after the last piece that completed. <code>truncate</code> refuses a prefix whose window the ring has overwritten.</p>
 <p><code>tests/parity.rs</code> holds cached decode, the full forward and an f64 transcription of nanolab to each other at every position: MHA; GQA with <code>H*Dh != d</code>; and a second prompt appended to a warm cache. The decoder&#39;s prefill of every prefix is held to the full forward too. G7 holds <code>forward_token</code>, <code>Eval</code> and <code>DeviceDecoder&lt;CpuBackend&gt;</code> to each other over a 4-token prefill and 12 decode steps, on MHA and GQA, under both numerics.</p>
 <p>Measured on 2026-10-01 (Apple silicon, release):</p>
 <ul>
@@ -150,7 +182,7 @@
 </ul>
 <p><code>tests/device.rs</code> runs <code>DeviceDecoder</code> on wgpu and on Metal against <code>CpuGpt</code> Exact. The run is an 8-token prefill, 36 decode steps, then a 3-token prefill onto the warm cache, on MHA and GQA. Measured worst relative error was 9.9e-7 to 1.25e-6 (asserted at 1e-4), with exactly one readback per call of <code>4 * vocab</code> bytes, counted with <code>Budget::device_readbacks</code>. A missing device fails unless <code>OJAS_ALLOW_NO_GPU=1</code>.</p>
 <h2 id="decoding">Decoding <a class="anchor" href="#decoding" aria-label="Link to this section">#</a></h2>
-<p><code>greedy_decode</code> and <code>generate</code> share one loop (<code>src/decode.rs</code>) on both decoders. <code>DeviceDecoder</code> forwards the prompt as one prefill; <code>CpuGpt</code> forwards it token by token. The prompt is forwarded from the cache&#39;s current length; every emitted token except the last is forwarded, so <code>N</code> new tokens need <code>prompt + N - 1</code> free positions. That is checked before any forward: a request that does not fit is <code>CapacityExceeded</code> and the cache is untouched. To continue, pass the last returned token as the first token of the next prompt.</p>
+<p><code>greedy_decode</code> and <code>generate</code> share one loop (<code>src/decode.rs</code>) on both decoders. Both forward the prompt as one prefill. The prompt is forwarded from the cache&#39;s current length; every emitted token except the last is forwarded, so <code>N</code> new tokens need <code>prompt + N - 1</code> free positions. That is checked before any forward: a request that does not fit is <code>CapacityExceeded</code> and the cache is untouched. To continue, pass the last returned token as the first token of the next prompt.</p>
 <p><code>generate</code> samples with a <code>SplitMix64</code> seeded from <code>GenerateConfig::seed</code> (the same stream as <code>ojas_data::CounterRng</code>), stops after <code>max_new_tokens</code> or right after a stop token (included in the output).</p>
 <p><code>sample_token</code> order: divide by temperature, keep the top <code>k</code>, softmax (f64), keep the smallest most-probable prefix whose mass reaches <code>top_p</code>, draw. Differences from nanolab&#39;s <code>GPT.generate</code>, on purpose:</p>
 <ul>
@@ -166,9 +198,11 @@
 <ul>
 <li>An all-NaN logit row is <code>NonFinite</code>, never token 0.
 </li>
-<li>Linear outputs and residual sums are checked finite, so returned logits are finite.
+<li>The backend&#39;s ops refuse non-finite results, so returned logits are finite.
 </li>
-<li>The KV cache is one budget-charged allocation; appending past <code>max_len</code> is <code>CapacityExceeded</code>, never a clamp or overwrite. A cache shaped for another model, or longer than <code>max_seq</code>, is refused before any position is written.
+<li><code>KvCache</code> is per-layer budget-charged tensors, refused as one request; appending past <code>max_len</code> is <code>CapacityExceeded</code>, never a clamp or overwrite. A cache shaped for another model (heads, layers, window), or longer than <code>max_seq</code>, is refused before any position is written.
+</li>
+<li><code>reset</code> and <code>truncate</code> (on both <code>KvCache</code> and <code>DeviceDecoder</code>) roll back to a prefix; the last token <code>generate</code> returns is not in the cache.
 </li>
 </ul>
       </article>

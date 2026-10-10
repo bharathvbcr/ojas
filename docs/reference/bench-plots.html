@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Benchmark Plots, Every Result Folder · ojas reference</title>
+  <meta name="description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…">
+  <meta name="keywords" content="ojas, benchmark plots, every result folder, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/bench-plots.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/bench-plots.html">
+  <meta property="og:title" content="Benchmark Plots, Every Result Folder · ojas reference">
+  <meta property="og:description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Benchmark Plots, Every Result Folder · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Benchmark Plots, Every Result Folder · ojas reference">
+  <meta name="twitter:description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Benchmark Plots, Every Result Folder · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Benchmark Plots, Every Result Folder · ojas reference",
+    "description": "Each chart is drawn from the text files kept under bench/results/\u003cfolder\u003e, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…",
+    "url": "https://ojas.vbcr.dev/reference/bench-plots.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html" class="current" aria-current="page">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-bench.html">bench</a></li>
+<li><a href="crate-gemma-metal.html">gemma-metal</a></li>
+<li><a href="crate-go.html">go</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Benchmarks</p>
+      <article class="prose-ojas">
+<h1 id="benchmark-plots-every-result-folder">Benchmark Plots, Every Result Folder <a class="anchor" href="#benchmark-plots-every-result-folder" aria-label="Link to this section">#</a></h1>
+<p>Each chart is drawn from the text files kept under <code>bench/results/&lt;folder&gt;</code>, by <code>bench/plot_all.py</code>. Regenerate with <code>python3 -I bench/plot_all.py</code> from the repository root. Ratio charts are times, so <strong>lower is faster</strong> and 1x is parity. Green bars are faster by more than 10%, red are slower by more than 10%, grey is inside the 10% band, which is the noise this machine showed. A hollow bar means the run itself flagged the row noisy. Whiskers are the per-round range and circles are medians where the source gives them.</p>
+<p>Two cautions on reading them. The paired GPU summaries print ratios to two decimals, so where the printed ratio is under 0.05x (ojas more than 20x slower) the chart uses the ratio of the two printed medians instead and draws no whisker. That is a different statistic from the median of per-round ratios, and on rows the run flagged noisy the two can differ by 2x or more. Dot charts of absolute times use a log axis, so distance between dots is a ratio, not a difference.</p>
+<p>Read each folder&#39;s own README or summary before quoting a number: several runs were taken under heavy load, and the charts show direction, not a verdict. The older prose analysis is in <a href="bench-gpu-vs-torch.html">bench-gpu-vs-torch.md</a> and <a href="bench-cpu-vs-torch.html">bench-cpu-vs-torch.md</a>.</p>
+<h2 id="2026-10-01">2026-10-01 <a class="anchor" href="#2026-10-01" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-01runa-ojas-metal-vs-torch-mps">2026-10-01/runA: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-01runa-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01--runA--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-01/runA: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01runa-ojas-wgpu-vs-torch-mps">2026-10-01/runA: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-01runa-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01--runA--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-01/runA: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01runb-ojas-metal-vs-torch-mps">2026-10-01/runB: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-01runb-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01--runB--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-01/runB: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01runb-ojas-wgpu-vs-torch-mps">2026-10-01/runB: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-01runb-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01--runB--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-01/runB: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01runc-ojas-metal-vs-torch-mps">2026-10-01/runC: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-01runc-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01--runC--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-01/runC: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01runc-ojas-wgpu-vs-torch-mps">2026-10-01/runC: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-01runc-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01--runC--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-01/runC: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 44 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<p>Source: <code>bench/results/2026-10-01/</code>.</p>
+<h2 id="2026-10-01-ab">2026-10-01-ab <a class="anchor" href="#2026-10-01-ab" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-01-ab-new--old">2026-10-01-ab: new / old <a class="anchor" href="#2026-10-01-ab-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-ab--ab.svg" rel="noopener">2026-10-01-ab: new / old: Old binary against new binary, 10 rounds, 5 rows.</a></p>
+<p><em>Old binary against new binary, 10 rounds, 5 rows.</em></p>
+<p>Source: <code>bench/results/2026-10-01-ab/</code>.</p>
+<h2 id="2026-10-01-floor">2026-10-01-floor <a class="anchor" href="#2026-10-01-floor" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-01-floor-submit-and-wait-floor-before-and-after-the-condvar-wait">2026-10-01-floor: submit-and-wait floor, before and after the condvar wait <a class="anchor" href="#2026-10-01-floor-submit-and-wait-floor-before-and-after-the-condvar-wait" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-floor--floor.svg" rel="noopener">2026-10-01-floor: submit-and-wait floor, before and after the condvar wait: Median and 90th-percentile wall time of tiny GPU calls. The first run was at load 45 with the GPU 100% busy.</a></p>
+<p><em>Median and 90th-percentile wall time of tiny GPU calls. The first run was at load 45 with the GPU 100% busy.</em></p>
+<h3 id="2026-10-01-floorab-submit-and-wait-floor-old-against-new">2026-10-01-floor/ab: submit-and-wait floor, old against new <a class="anchor" href="#2026-10-01-floorab-submit-and-wait-floor-old-against-new" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-floor--ab.svg" rel="noopener">2026-10-01-floor/ab: submit-and-wait floor, old against new: 600 runs per side. The old side had 388 to 507 slow (&gt;1 ms) runs of 600 per scenario; the new side had 0 to 6.</a></p>
+<p><em>600 runs per side. The old side had 388 to 507 slow (&gt;1 ms) runs of 600 per scenario; the new side had 0 to 6.</em></p>
+<p>Source: <code>bench/results/2026-10-01-floor/</code>.</p>
+<h2 id="2026-10-01-r2">2026-10-01-r2 <a class="anchor" href="#2026-10-01-r2" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-01-r2-ojas-metal-vs-torch-mps">2026-10-01-r2: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-01-r2-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r2--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-01-r2: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01-r2-ojas-wgpu-vs-torch-mps">2026-10-01-r2: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-01-r2-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r2--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-01-r2: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<p>Source: <code>bench/results/2026-10-01-r2/</code>.</p>
+<h2 id="2026-10-01-r3">2026-10-01-r3 <a class="anchor" href="#2026-10-01-r3" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-01-r3-ojas-metal-vs-torch-mps">2026-10-01-r3: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-01-r3-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r3--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-01-r3: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 48 rows charted, 2 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 48 rows charted, 2 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01-r3-ojas-wgpu-vs-torch-mps">2026-10-01-r3: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-01-r3-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r3--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-01-r3: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 48 rows charted, 2 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 48 rows charted, 2 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<p>Source: <code>bench/results/2026-10-01-r3/</code>.</p>
+<h2 id="2026-10-01-r3b">2026-10-01-r3b <a class="anchor" href="#2026-10-01-r3b" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-01-r3b-ojas-metal-vs-torch-mps">2026-10-01-r3b: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-01-r3b-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r3b--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-01-r3b: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01-r3b-ojas-wgpu-vs-torch-mps">2026-10-01-r3b: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-01-r3b-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r3b--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-01-r3b: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<p>Source: <code>bench/results/2026-10-01-r3b/</code>.</p>
+<h2 id="2026-10-01-r4-smallops">2026-10-01-r4-smallops <a class="anchor" href="#2026-10-01-r4-smallops" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-01-r4-smallops-ojas-metal-vs-torch-mps">2026-10-01-r4-smallops: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-01-r4-smallops-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r4-smallops--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-01-r4-smallops: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 19 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 19 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-01-r4-smallops-ojas-wgpu-vs-torch-mps">2026-10-01-r4-smallops: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-01-r4-smallops-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-01-r4-smallops--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-01-r4-smallops: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 19 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 19 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<p>Source: <code>bench/results/2026-10-01-r4-smallops/</code>.</p>
+<h2 id="2026-10-02-gate">2026-10-02-gate <a class="anchor" href="#2026-10-02-gate" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-02-gatepaired-gate-ojas-metal-vs-torch-mps">2026-10-02-gate/paired-gate: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-02-gatepaired-gate-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--paired-gate--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-02-gate/paired-gate: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-02-gatepaired-gate-ojas-wgpu-vs-torch-mps">2026-10-02-gate/paired-gate: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-02-gatepaired-gate-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--paired-gate--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-02-gate/paired-gate: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-02-gatepaired-gate-quiet-ojas-metal-vs-torch-mps">2026-10-02-gate/paired-gate-quiet: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-02-gatepaired-gate-quiet-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--paired-gate-quiet--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-02-gate/paired-gate-quiet: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-02-gatepaired-gate-quiet-ojas-wgpu-vs-torch-mps">2026-10-02-gate/paired-gate-quiet: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-02-gatepaired-gate-quiet-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--paired-gate-quiet--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-02-gate/paired-gate-quiet: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 2 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-02-gateab-dbias-new--old">2026-10-02-gate/ab-dbias: new / old <a class="anchor" href="#2026-10-02-gateab-dbias-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--ab-dbias.svg" rel="noopener">2026-10-02-gate/ab-dbias: new / old: Interleaved A/B, 4 rounds per side, 8 rows.</a></p>
+<p><em>Interleaved A/B, 4 rounds per side, 8 rows.</em></p>
+<h3 id="2026-10-02-gateab-fold-new--old">2026-10-02-gate/ab-fold: new / old <a class="anchor" href="#2026-10-02-gateab-fold-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--ab-fold.svg" rel="noopener">2026-10-02-gate/ab-fold: new / old: Interleaved A/B, 4 rounds per side, 7 rows.</a></p>
+<p><em>Interleaved A/B, 4 rounds per side, 7 rows.</em></p>
+<h3 id="2026-10-02-gateab-tn-new--old">2026-10-02-gate/ab-tn: new / old <a class="anchor" href="#2026-10-02-gateab-tn-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--ab-tn.svg" rel="noopener">2026-10-02-gate/ab-tn: new / old: Interleaved A/B, 4 rounds per side, 8 rows.</a></p>
+<p><em>Interleaved A/B, 4 rounds per side, 8 rows.</em></p>
+<h3 id="2026-10-02-gateab-stage-new--old">2026-10-02-gate/ab-stage: new / old <a class="anchor" href="#2026-10-02-gateab-stage-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--ab-stage.svg" rel="noopener">2026-10-02-gate/ab-stage: new / old: Interleaved A/B, 4 rounds per side, 8 rows.</a></p>
+<p><em>Interleaved A/B, 4 rounds per side, 8 rows.</em></p>
+<h3 id="2026-10-02-gatetn-sweep-1-tn-gemm-single-dispatch-against-split-k">2026-10-02-gate/tn-sweep-1: TN GEMM, single dispatch against split-K <a class="anchor" href="#2026-10-02-gatetn-sweep-1-tn-gemm-single-dispatch-against-split-k" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--tn-sweep-1.svg" rel="noopener">2026-10-02-gate/tn-sweep-1: TN GEMM, single dispatch against split-K: Contended (other jobs running; the readme says -2 supersedes it). Split-K at width 128 to 2048 against the single dispatch and what tessl routes to.</a></p>
+<p><em>Contended (other jobs running; the readme says -2 supersedes it). Split-K at width 128 to 2048 against the single dispatch and what tessl routes to.</em></p>
+<h3 id="2026-10-02-gatetn-sweep-2-tn-gemm-single-dispatch-against-split-k">2026-10-02-gate/tn-sweep-2: TN GEMM, single dispatch against split-K <a class="anchor" href="#2026-10-02-gatetn-sweep-2-tn-gemm-single-dispatch-against-split-k" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--tn-sweep-2.svg" rel="noopener">2026-10-02-gate/tn-sweep-2: TN GEMM, single dispatch against split-K: Quiet slot. Split-K at width 128 to 2048 against the single dispatch and what tessl routes to.</a></p>
+<p><em>Quiet slot. Split-K at width 128 to 2048 against the single dispatch and what tessl routes to.</em></p>
+<h3 id="2026-10-02-gate-gate-bwd-dispatch-profile-before-the-fix">2026-10-02-gate: gate_bwd dispatch profile before the fix <a class="anchor" href="#2026-10-02-gate-gate-bwd-dispatch-profile-before-the-fix" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gate--gate-probe.svg" rel="noopener">2026-10-02-gate: gate_bwd dispatch profile before the fix: ojas_per_head_gate_dbias (the serial bias sum) is the 800 µs outlier the fix removes.</a></p>
+<p><em>ojas_per_head_gate_dbias (the serial bias sum) is the 800 µs outlier the fix removes.</em></p>
+<p>Source: <code>bench/results/2026-10-02-gate/</code>.</p>
+<h2 id="2026-10-02-gemm">2026-10-02-gemm <a class="anchor" href="#2026-10-02-gemm" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-02-gemmab-grid-gate-new--old">2026-10-02-gemm/ab-grid-gate: new / old <a class="anchor" href="#2026-10-02-gemmab-grid-gate-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--ab-grid-gate.svg" rel="noopener">2026-10-02-gemm/ab-grid-gate: new / old: Interleaved A/B, 4 rounds per side, 26 rows.</a></p>
+<p><em>Interleaved A/B, 4 rounds per side, 26 rows.</em></p>
+<h3 id="2026-10-02-gemmab-footprint-gate-new--old">2026-10-02-gemm/ab-footprint-gate: new / old <a class="anchor" href="#2026-10-02-gemmab-footprint-gate-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--ab-footprint-gate.svg" rel="noopener">2026-10-02-gemm/ab-footprint-gate: new / old: Interleaved A/B, 4 rounds per side, 26 rows.</a></p>
+<p><em>Interleaved A/B, 4 rounds per side, 26 rows.</em></p>
+<h3 id="2026-10-02-gemmab-nn-splitk-new--old">2026-10-02-gemm/ab-nn-splitk: new / old <a class="anchor" href="#2026-10-02-gemmab-nn-splitk-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--ab-nn-splitk.svg" rel="noopener">2026-10-02-gemm/ab-nn-splitk: new / old: Interleaved A/B, 4 rounds per side, 26 rows.</a></p>
+<p><em>Interleaved A/B, 4 rounds per side, 26 rows.</em></p>
+<h3 id="2026-10-02-gemmab-rows-new--old">2026-10-02-gemm/ab-rows: new / old <a class="anchor" href="#2026-10-02-gemmab-rows-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--ab-rows.svg" rel="noopener">2026-10-02-gemm/ab-rows: new / old: Old binary against new binary, 6 rounds, 3 rows.</a></p>
+<p><em>Old binary against new binary, 6 rounds, 3 rows.</em></p>
+<h3 id="2026-10-02-gemmab-rows-ce-new--old">2026-10-02-gemm/ab-rows-ce: new / old <a class="anchor" href="#2026-10-02-gemmab-rows-ce-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--ab-rows-ce.svg" rel="noopener">2026-10-02-gemm/ab-rows-ce: new / old: Old binary against new binary, 6 rounds, 3 rows.</a></p>
+<p><em>Old binary against new binary, 6 rounds, 3 rows.</em></p>
+<h3 id="2026-10-02-gemm-min-time-per-row">2026-10-02-gemm: min time per row <a class="anchor" href="#2026-10-02-gemm-min-time-per-row" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--rows.svg" rel="noopener">2026-10-02-gemm: min time per row: Direction only. These rounds ran at load around 350.</a></p>
+<p><em>Direction only. These rounds ran at load around 350.</em></p>
+<h3 id="2026-10-02-gemmgemmmd-exact-f32-gemm-throughput">2026-10-02-gemm/gemm.md: exact-f32 GEMM throughput <a class="anchor" href="#2026-10-02-gemmgemmmd-exact-f32-gemm-throughput" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--gemm-md.svg" rel="noopener">2026-10-02-gemm/gemm.md: exact-f32 GEMM throughput: Before the panel-walk fix. The LM-head nt and nn rows drop to about 2 TFLOP/s while tn stays near 5.5.</a></p>
+<p><em>Before the panel-walk fix. The LM-head nt and nn rows drop to about 2 TFLOP/s while tn stays near 5.5.</em></p>
+<h3 id="2026-10-02-gemmgemm-relabelledmd-exact-f32-gemm-throughput">2026-10-02-gemm/gemm-relabelled.md: exact-f32 GEMM throughput <a class="anchor" href="#2026-10-02-gemmgemm-relabelledmd-exact-f32-gemm-throughput" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-gemm--gemm-relabelled-md.svg" rel="noopener">2026-10-02-gemm/gemm-relabelled.md: exact-f32 GEMM throughput: Before the panel-walk fix. The LM-head nt and nn rows drop to about 2 TFLOP/s while tn stays near 5.5.</a></p>
+<p><em>Before the panel-walk fix. The LM-head nt and nn rows drop to about 2 TFLOP/s while tn stays near 5.5.</em></p>
+<p>Source: <code>bench/results/2026-10-02-gemm/</code>.</p>
+<h2 id="2026-10-02-kernels">2026-10-02-kernels <a class="anchor" href="#2026-10-02-kernels" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-02-kernelsab-check-new--old">2026-10-02-kernels/ab-check: new / old <a class="anchor" href="#2026-10-02-kernelsab-check-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-kernels--ab-check.svg" rel="noopener">2026-10-02-kernels/ab-check: new / old: Old binary against new binary, 8 rounds, 17 rows.</a></p>
+<p><em>Old binary against new binary, 8 rounds, 17 rows.</em></p>
+<h3 id="2026-10-02-kernelsab-fold-new--old">2026-10-02-kernels/ab-fold: new / old <a class="anchor" href="#2026-10-02-kernelsab-fold-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-kernels--ab-fold.svg" rel="noopener">2026-10-02-kernels/ab-fold: new / old: Old binary against new binary, 8 rounds, 13 rows.</a></p>
+<p><em>Old binary against new binary, 8 rounds, 13 rows.</em></p>
+<h3 id="2026-10-02-kernelskernelsmd">2026-10-02-kernels/kernels.md <a class="anchor" href="#2026-10-02-kernelskernelsmd" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-kernels--kernels-md.svg" rel="noopener">2026-10-02-kernels/kernels.md: Per-dispatch GPU time at the minimum. The sequence rows are the old separate finite-check passes.</a></p>
+<p><em>Per-dispatch GPU time at the minimum. The sequence rows are the old separate finite-check passes.</em></p>
+<h3 id="2026-10-02-kernelskernels-after-foldmd">2026-10-02-kernels/kernels-after-fold.md <a class="anchor" href="#2026-10-02-kernelskernels-after-foldmd" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-kernels--kernels-after-fold-md.svg" rel="noopener">2026-10-02-kernels/kernels-after-fold.md: Per-dispatch GPU time at the minimum. The sequence rows are the old separate finite-check passes.</a></p>
+<p><em>Per-dispatch GPU time at the minimum. The sequence rows are the old separate finite-check passes.</em></p>
+<h3 id="2026-10-02-kernels-achieved-bandwidth-before-the-fold">2026-10-02-kernels: achieved bandwidth, before the fold <a class="anchor" href="#2026-10-02-kernels-achieved-bandwidth-before-the-fold" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-kernels--bandwidth.svg" rel="noopener">2026-10-02-kernels: achieved bandwidth, before the fold: Memory bandwidth reached by each kernel before the finite checks were folded in.</a></p>
+<p><em>Memory bandwidth reached by each kernel before the finite checks were folded in.</em></p>
+<p>Source: <code>bench/results/2026-10-02-kernels/</code>.</p>
+<h2 id="2026-10-02-r5">2026-10-02-r5 <a class="anchor" href="#2026-10-02-r5" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-02-r5-ojas-metal-vs-torch-mps">2026-10-02-r5: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-02-r5-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-r5--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-02-r5: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-02-r5-ojas-wgpu-vs-torch-mps">2026-10-02-r5: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-02-r5-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-02-r5--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-02-r5: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 48 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<p>Source: <code>bench/results/2026-10-02-r5/</code>.</p>
+<h2 id="2026-10-03-lappi-inference">2026-10-03-lappi-inference <a class="anchor" href="#2026-10-03-lappi-inference" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-03-lappi-inference-qwen35-2b-prefill">2026-10-03-lappi-inference: Qwen3.5-2B prefill <a class="anchor" href="#2026-10-03-lappi-inference-qwen35-2b-prefill" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-03-lappi-inference--prefill.svg" rel="noopener">2026-10-03-lappi-inference: Qwen3.5-2B prefill: tessl against PyTorch 2.12.1 MPS bf16. ojas has no Qwen3.5 inference path, so it is not in this comparison. The README tables were built from the raw logs in this folder; the charts read the tables.</a></p>
+<p><em>tessl against PyTorch 2.12.1 MPS bf16. ojas has no Qwen3.5 inference path, so it is not in this comparison. The README tables were built from the raw logs in this folder; the charts read the tables.</em></p>
+<h3 id="2026-10-03-lappi-inference-tessl-full-decision-time">2026-10-03-lappi-inference: tessl full decision time <a class="anchor" href="#2026-10-03-lappi-inference-tessl-full-decision-time" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-03-lappi-inference--decision.svg" rel="noopener">2026-10-03-lappi-inference: tessl full decision time: Base and Lappi weights run at the same speed, as expected for equal shapes.</a></p>
+<p><em>Base and Lappi weights run at the same speed, as expected for equal shapes.</em></p>
+<p>Source: <code>bench/results/2026-10-03-lappi-inference/</code>.</p>
+<h2 id="2026-10-03-lappi-inference-rerun">2026-10-03-lappi-inference-rerun <a class="anchor" href="#2026-10-03-lappi-inference-rerun" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-03-lappi-inference-rerun-qwen35-2b-prefill">2026-10-03-lappi-inference-rerun: Qwen3.5-2B prefill <a class="anchor" href="#2026-10-03-lappi-inference-rerun-qwen35-2b-prefill" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-03-lappi-inference-rerun--prefill.svg" rel="noopener">2026-10-03-lappi-inference-rerun: Qwen3.5-2B prefill: tessl against PyTorch 2.12.1 MPS bf16. ojas has no Qwen3.5 inference path, so it is not in this comparison. The README tables were built from the raw logs in this folder; the charts read the tables.</a></p>
+<p><em>tessl against PyTorch 2.12.1 MPS bf16. ojas has no Qwen3.5 inference path, so it is not in this comparison. The README tables were built from the raw logs in this folder; the charts read the tables.</em></p>
+<h3 id="2026-10-03-lappi-inference-rerun-tessl-full-decision-time">2026-10-03-lappi-inference-rerun: tessl full decision time <a class="anchor" href="#2026-10-03-lappi-inference-rerun-tessl-full-decision-time" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-03-lappi-inference-rerun--decision.svg" rel="noopener">2026-10-03-lappi-inference-rerun: tessl full decision time: Base and Lappi weights run at the same speed, as expected for equal shapes.</a></p>
+<p><em>Base and Lappi weights run at the same speed, as expected for equal shapes.</em></p>
+<p>Source: <code>bench/results/2026-10-03-lappi-inference-rerun/</code>.</p>
+<h2 id="2026-10-04-percall">2026-10-04-percall <a class="anchor" href="#2026-10-04-percall" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-04-percall-metal-decode-call-cost">2026-10-04-percall: Metal decode call cost <a class="anchor" href="#2026-10-04-percall-metal-decode-call-cost" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-percall--percall.svg" rel="noopener">2026-10-04-percall: Metal decode call cost: One request, one batched call, and sixteen separate calls.</a></p>
+<p><em>One request, one batched call, and sixteen separate calls.</em></p>
+<h3 id="2026-10-04-percall-gpu-span-of-one-command-buffer">2026-10-04-percall: GPU span of one command buffer <a class="anchor" href="#2026-10-04-percall-gpu-span-of-one-command-buffer" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-percall--gpu-span.svg" rel="noopener">2026-10-04-percall: GPU span of one command buffer: Batched dispatch against sixteen separate dispatches.</a></p>
+<p><em>Batched dispatch against sixteen separate dispatches.</em></p>
+<p>Source: <code>bench/results/2026-10-04-percall/</code>.</p>
+<h2 id="2026-10-04-split">2026-10-04-split <a class="anchor" href="#2026-10-04-split" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-04-splitab-new--old">2026-10-04-split/ab: new / old <a class="anchor" href="#2026-10-04-splitab-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-split--ab.svg" rel="noopener">2026-10-04-split/ab: new / old: Old binary against new binary, 8 rounds, 9 rows.</a></p>
+<p><em>Old binary against new binary, 8 rounds, 9 rows.</em></p>
+<h3 id="2026-10-04-split-metal-decode-call-cost">2026-10-04-split: Metal decode call cost <a class="anchor" href="#2026-10-04-split-metal-decode-call-cost" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-split--percall.svg" rel="noopener">2026-10-04-split: Metal decode call cost: One request, one batched call, and sixteen separate calls.</a></p>
+<p><em>One request, one batched call, and sixteen separate calls.</em></p>
+<h3 id="2026-10-04-split-gpu-span-of-one-command-buffer">2026-10-04-split: GPU span of one command buffer <a class="anchor" href="#2026-10-04-split-gpu-span-of-one-command-buffer" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-split--gpu-span.svg" rel="noopener">2026-10-04-split: GPU span of one command buffer: Batched dispatch against sixteen separate dispatches.</a></p>
+<p><em>Batched dispatch against sixteen separate dispatches.</em></p>
+<h3 id="2026-10-04-split-split-count-for-the-decode-attention-kernel">2026-10-04-split: split count for the decode attention kernel <a class="anchor" href="#2026-10-04-split-split-count-for-the-decode-attention-kernel" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-split--splits.svg" rel="noopener">2026-10-04-split: split count for the decode attention kernel: Time bottoms out near eight splits.</a></p>
+<p><em>Time bottoms out near eight splits.</em></p>
+<p>Source: <code>bench/results/2026-10-04-split/</code>.</p>
+<h2 id="2026-10-04-sweep">2026-10-04-sweep <a class="anchor" href="#2026-10-04-sweep" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-04-sweep-ojas-metal-vs-torch-mps">2026-10-04-sweep: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-04-sweep-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-sweep--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-04-sweep: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 17 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 17 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-04-sweep-ojas-wgpu-vs-torch-mps">2026-10-04-sweep: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-04-sweep-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-sweep--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-04-sweep: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 17 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 17 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-04-sweep-silu-forward-time-against-size">2026-10-04-sweep: silu_forward time against size <a class="anchor" href="#2026-10-04-sweep-silu-forward-time-against-size" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-sweep--silu-over-n.svg" rel="noopener">2026-10-04-sweep: silu_forward time against size: Below roughly 4M elements every runtime sits on its floor.</a></p>
+<p><em>Below roughly 4M elements every runtime sits on its floor.</em></p>
+<h3 id="2026-10-04-sweep-decode-cost-per-request">2026-10-04-sweep: decode cost per request <a class="anchor" href="#2026-10-04-sweep-decode-cost-per-request" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-04-sweep--decode-batching.svg" rel="noopener">2026-10-04-sweep: decode cost per request: Batching amortises the per-call cost; the gap between split and batched is the extra per call.</a></p>
+<p><em>Batching amortises the per-call cost; the gap between split and batched is the extra per call.</em></p>
+<p>Source: <code>bench/results/2026-10-04-sweep/</code>.</p>
+<h2 id="2026-10-05-torch215-clip">2026-10-05-torch215-clip <a class="anchor" href="#2026-10-05-torch215-clip" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-05-torch215-clip-clip-grad-norm-on-mps">2026-10-05-torch215-clip: clip_grad_norm on MPS <a class="anchor" href="#2026-10-05-torch215-clip-clip-grad-norm-on-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-05-torch215-clip--clip.svg" rel="noopener">2026-10-05-torch215-clip: clip_grad_norm on MPS: The folder&#39;s README attributes the 16x drop to a change in torch&#39;s MPS norm reduction and says a paired run with torch 2.15 is still needed before a new ratio is quoted.</a></p>
+<p><em>The folder&#39;s README attributes the 16x drop to a change in torch&#39;s MPS norm reduction and says a paired run with torch 2.15 is still needed before a new ratio is quoted.</em></p>
+<p>Source: <code>bench/results/2026-10-05-torch215-clip/</code>.</p>
+<h2 id="2026-10-06-gemm-bf16">2026-10-06-gemm-bf16 <a class="anchor" href="#2026-10-06-gemm-bf16" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-06-gemm-bf16-column-panel-tile-walk-new--old">2026-10-06-gemm-bf16: column-panel tile walk, new / old <a class="anchor" href="#2026-10-06-gemm-bf16-column-panel-tile-walk-new--old" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-06-gemm-bf16--ab2.svg" rel="noopener">2026-10-06-gemm-bf16: column-panel tile walk, new / old: The largest-B cases fall to 0.5 to 0.8 of the old time; the Morton-order and small-B controls stay near 1.0.</a></p>
+<p><em>The largest-B cases fall to 0.5 to 0.8 of the old time; the Morton-order and small-B controls stay near 1.0.</em></p>
+<h3 id="2026-10-06-gemm-bf16-panel-height-sweep">2026-10-06-gemm-bf16: panel-height sweep <a class="anchor" href="#2026-10-06-gemm-bf16-panel-height-sweep" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-06-gemm-bf16--sweep.svg" rel="noopener">2026-10-06-gemm-bf16: panel-height sweep: Panel heights 4, 8 and 16 against the shipped kernel across six B sizes.</a></p>
+<p><em>Panel heights 4, 8 and 16 against the shipped kernel across six B sizes.</em></p>
+<h3 id="2026-10-06-gemm-bf16-tune1-raw-sweep">2026-10-06-gemm-bf16: tune1 raw sweep <a class="anchor" href="#2026-10-06-gemm-bf16-tune1-raw-sweep" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-06-gemm-bf16--tune1-raw.svg" rel="noopener">2026-10-06-gemm-bf16: tune1 raw sweep: Raw times behind sweep/ratios.txt. Variants whose name ends _phN are column-panel heights.</a></p>
+<p><em>Raw times behind sweep/ratios.txt. Variants whose name ends _phN are column-panel heights.</em></p>
+<h3 id="2026-10-06-gemm-bf16-tune2-raw-sweep">2026-10-06-gemm-bf16: tune2 raw sweep <a class="anchor" href="#2026-10-06-gemm-bf16-tune2-raw-sweep" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-06-gemm-bf16--tune2-raw.svg" rel="noopener">2026-10-06-gemm-bf16: tune2 raw sweep: Raw times behind sweep/ratios.txt. Variants whose name ends _phN are column-panel heights.</a></p>
+<p><em>Raw times behind sweep/ratios.txt. Variants whose name ends _phN are column-panel heights.</em></p>
+<p>Source: <code>bench/results/2026-10-06-gemm-bf16/</code>.</p>
+<h2 id="2026-10-07-gate-saved">2026-10-07-gate-saved <a class="anchor" href="#2026-10-07-gate-saved" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-07-gate-saved-saved-sigmoid-gate-pair-against-recompute">2026-10-07-gate-saved: saved-sigmoid gate pair against recompute <a class="anchor" href="#2026-10-07-gate-saved-saved-sigmoid-gate-pair-against-recompute" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-07-gate-saved--gate-saved.svg" rel="noopener">2026-10-07-gate-saved: saved-sigmoid gate pair against recompute: The saved backward is 7% faster on Metal and 15% faster on wgpu; the forward costs at most about 2%.</a></p>
+<p><em>The saved backward is 7% faster on Metal and 15% faster on wgpu; the forward costs at most about 2%.</em></p>
+<p>Source: <code>bench/results/2026-10-07-gate-saved/</code>.</p>
+<h2 id="2026-10-07-muon-bf16">2026-10-07-muon-bf16 <a class="anchor" href="#2026-10-07-muon-bf16" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-07-muon-bf16-ojas-metal-vs-torch-mps">2026-10-07-muon-bf16: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-07-muon-bf16-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-07-muon-bf16--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-07-muon-bf16: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 9 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 9 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-07-muon-bf16-ojas-wgpu-vs-torch-mps">2026-10-07-muon-bf16: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-07-muon-bf16-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-07-muon-bf16--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-07-muon-bf16: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 6 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run. 3 further row(s) have no ratio and are not charted: <code>muon_768x768_bf16</code> (r1 ojas refused: muon_ns5_step: unsupported: wgpu runs Newton-Schulz in f32 only; Bf16 is not implemented here); <code>muon_2048x768_bf16</code> (r1 ojas refused: muon_ns5_step: unsupported: wgpu runs Newton-Schulz in f32 only; Bf16 is not implemented here); <code>muon_768x2048_bf16</code> (r1 ojas refused: muon_ns5_step: unsupported: wgpu runs Newton-Schulz in f32 only; Bf16 is not implemented here).</a></p>
+<p><em>ojas-wgpu vs torch-mps, 6 rows charted, 5 paired rounds. Hollow bars were flagged noisy by the run. 3 further row(s) have no ratio and are not charted: <code>muon_768x768_bf16</code> (r1 ojas refused: muon_ns5_step: unsupported: wgpu runs Newton-Schulz in f32 only; Bf16 is not implemented here); <code>muon_2048x768_bf16</code> (r1 ojas refused: muon_ns5_step: unsupported: wgpu runs Newton-Schulz in f32 only; Bf16 is not implemented here); <code>muon_768x2048_bf16</code> (r1 ojas refused: muon_ns5_step: unsupported: wgpu runs Newton-Schulz in f32 only; Bf16 is not implemented here).</em></p>
+<p>Source: <code>bench/results/2026-10-07-muon-bf16/</code>.</p>
+<h2 id="2026-10-08-attn-lse-ab">2026-10-08-attn-lse-ab <a class="anchor" href="#2026-10-08-attn-lse-ab" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-08-attn-lse-ab-attention-backward-with-saved-log-sum-exp">2026-10-08-attn-lse-ab: attention backward with saved log-sum-exp <a class="anchor" href="#2026-10-08-attn-lse-ab-attention-backward-with-saved-log-sum-exp" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-attn-lse-ab--new-over-old.svg" rel="noopener">2026-10-08-attn-lse-ab: attention backward with saved log-sum-exp: Backward is 0.76 to 0.81 of the old time on every shape and both backends. Forward is within noise on the multi-head shapes; the grouped-query shape&#39;s Metal forward is 0.89.</a></p>
+<p><em>Backward is 0.76 to 0.81 of the old time on every shape and both backends. Forward is within noise on the multi-head shapes; the grouped-query shape&#39;s Metal forward is 0.89.</em></p>
+<h3 id="2026-10-08-attn-lse-ab-sliding-window-of-256-against-full-attention">2026-10-08-attn-lse-ab: sliding window of 256 against full attention <a class="anchor" href="#2026-10-08-attn-lse-ab-sliding-window-of-256-against-full-attention" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-attn-lse-ab--window.svg" rel="noopener">2026-10-08-attn-lse-ab: sliding window of 256 against full attention: The 256-wide window cuts backward time by roughly 3x at 2048 tokens.</a></p>
+<p><em>The 256-wide window cuts backward time by roughly 3x at 2048 tokens.</em></p>
+<h3 id="2026-10-08-attn-lse-ab-scratch-charged-at-the-qwen35-shape">2026-10-08-attn-lse-ab: scratch charged at the Qwen3.5 shape <a class="anchor" href="#2026-10-08-attn-lse-ab-scratch-charged-at-the-qwen35-shape" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-attn-lse-ab--gqa-scratch.svg" rel="noopener">2026-10-08-attn-lse-ab: scratch charged at the Qwen3.5 shape: Reading each KV head in place cuts the charged scratch to about a third of the expanded-heads path (forward) and 27% (backward).</a></p>
+<p><em>Reading each KV head in place cuts the charged scratch to about a third of the expanded-heads path (forward) and 27% (backward).</em></p>
+<p>Source: <code>bench/results/2026-10-08-attn-lse-ab/</code>.</p>
+<h2 id="2026-10-08-cpu-hot-paths">2026-10-08-cpu-hot-paths <a class="anchor" href="#2026-10-08-cpu-hot-paths" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-08-cpu-hot-paths-interleaved-ab-base-against-after">2026-10-08-cpu-hot-paths: interleaved A/B, base against after <a class="anchor" href="#2026-10-08-cpu-hot-paths-interleaved-ab-base-against-after" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--ab-vs-base.svg" rel="noopener">2026-10-08-cpu-hot-paths: interleaved A/B, base against after: 30 rows. Ratios between 0.9 and 1.1 are noise on this machine.</a></p>
+<p><em>30 rows. Ratios between 0.9 and 1.1 are noise on this machine.</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-ojas--torch-213-cpu">2026-10-08-cpu-hot-paths: ojas / torch 2.13 CPU <a class="anchor" href="#2026-10-08-cpu-hot-paths-ojas--torch-213-cpu" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--ab-vs-torch.svg" rel="noopener">2026-10-08-cpu-hot-paths: ojas / torch 2.13 CPU: 11 rows with a torch counterpart.</a></p>
+<p><em>11 rows with a torch counterpart.</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-tape-bench-re-run-ab-tape">2026-10-08-cpu-hot-paths: tape_bench re-run (ab-tape/) <a class="anchor" href="#2026-10-08-cpu-hot-paths-tape-bench-re-run-ab-tape" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--ab-tape-vs-base.svg" rel="noopener">2026-10-08-cpu-hot-paths: tape_bench re-run (ab-tape/): 3 rows. Ratios between 0.9 and 1.1 are noise on this machine.</a></p>
+<p><em>3 rows. Ratios between 0.9 and 1.1 are noise on this machine.</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-follow-up-edits-against-a9af0a0-ab-v2">2026-10-08-cpu-hot-paths: Follow-up edits against a9af0a0 (ab-v2/) <a class="anchor" href="#2026-10-08-cpu-hot-paths-follow-up-edits-against-a9af0a0-ab-v2" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--ab-v2-vs-base.svg" rel="noopener">2026-10-08-cpu-hot-paths: Follow-up edits against a9af0a0 (ab-v2/): 10 rows. Ratios between 0.9 and 1.1 are noise on this machine.</a></p>
+<p><em>10 rows. Ratios between 0.9 and 1.1 are noise on this machine.</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-muon-no-transpose-view-gate">2026-10-08-cpu-hot-paths: Muon no-transpose view gate <a class="anchor" href="#2026-10-08-cpu-hot-paths-muon-no-transpose-view-gate" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--muon-gate.svg" rel="noopener">2026-10-08-cpu-hot-paths: Muon no-transpose view gate: Opening the view to every tall matrix (tall, tallbands) reads 1.3 to 2.9x slower than shipped, so the gate stays. Gate off reads 0.78 to 1.21 and is noise-bound at load 20-35 (the README calls 2048x768 on versus off within noise).</a></p>
+<p><em>Opening the view to every tall matrix (tall, tallbands) reads 1.3 to 2.9x slower than shipped, so the gate stays. Gate off reads 0.78 to 1.21 and is noise-bound at load 20-35 (the README calls 2048x768 on versus off within noise).</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-x-times-x-transpose-three-ways">2026-10-08-cpu-hot-paths: X times X-transpose, three ways <a class="anchor" href="#2026-10-08-cpu-hot-paths-x-times-x-transpose-three-ways" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--syrk.svg" rel="noopener">2026-10-08-cpu-hot-paths: X times X-transpose, three ways: The ssyrk product matched sgemm bit for bit at every probed shape (bits_syrk_eq_gemm).</a></p>
+<p><em>The ssyrk product matched sgemm bit for bit at every probed shape (bits_syrk_eq_gemm).</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-ssyrk-lower-from-upper-mirror">2026-10-08-cpu-hot-paths: ssyrk lower-from-upper mirror <a class="anchor" href="#2026-10-08-cpu-hot-paths-ssyrk-lower-from-upper-mirror" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--mirror.svg" rel="noopener">2026-10-08-cpu-hot-paths: ssyrk lower-from-upper mirror: 16 x 16 tiles shipped. At n = 2048 the 32 and 64 tile sizes are slower than the plain column walk.</a></p>
+<p><em>16 x 16 tiles shipped. At n = 2048 the 32 and 64 tile sizes are slower than the plain column walk.</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-cost-of-one-stdthreadscope">2026-10-08-cpu-hot-paths: cost of one std::thread::scope <a class="anchor" href="#2026-10-08-cpu-hot-paths-cost-of-one-stdthreadscope" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--spawn.svg" rel="noopener">2026-10-08-cpu-hot-paths: cost of one std::thread::scope: About 9 µs for one thread and 34-38 µs for five at the minimum.</a></p>
+<p><em>About 9 µs for one thread and 34-38 µs for five at the minimum.</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-tape-walk-peak-charge">2026-10-08-cpu-hot-paths: tape walk peak charge <a class="anchor" href="#2026-10-08-cpu-hot-paths-tape-walk-peak-charge" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--tape-peak-bytes.svg" rel="noopener">2026-10-08-cpu-hot-paths: tape walk peak charge: Fan-in peaks at 18,874,368 then 12,582,912 bytes. The seed one-quarter fused-CE walk falls from 154,533,892 to 4 bytes.</a></p>
+<p><em>Fan-in peaks at 18,874,368 then 12,582,912 bytes. The seed one-quarter fused-CE walk falls from 154,533,892 to 4 bytes.</em></p>
+<h3 id="2026-10-08-cpu-hot-paths-tape-walk-time-in-the-peak-run">2026-10-08-cpu-hot-paths: tape walk time in the peak run <a class="anchor" href="#2026-10-08-cpu-hot-paths-tape-walk-time-in-the-peak-run" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-cpu-hot-paths--tape-peak-time.svg" rel="noopener">2026-10-08-cpu-hot-paths: tape walk time in the peak run: One run per side under load; use the interleaved ab-tape table for time, not this chart.</a></p>
+<p><em>One run per side under load; use the interleaved ab-tape table for time, not this chart.</em></p>
+<p>Source: <code>bench/results/2026-10-08-cpu-hot-paths/</code>.</p>
+<h2 id="2026-10-08-decode-before">2026-10-08-decode-before <a class="anchor" href="#2026-10-08-decode-before" aria-label="Link to this section">#</a></h2>
+<h3 id="2026-10-08-decode-before-ojas-metal-vs-torch-mps">2026-10-08-decode-before: ojas-metal vs torch-mps <a class="anchor" href="#2026-10-08-decode-before-ojas-metal-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-decode-before--ojas-metal-vs-torch-mps.svg" rel="noopener">2026-10-08-decode-before: ojas-metal vs torch-mps: ojas-metal vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-metal vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-08-decode-before-ojas-wgpu-vs-torch-mps">2026-10-08-decode-before: ojas-wgpu vs torch-mps <a class="anchor" href="#2026-10-08-decode-before-ojas-wgpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-decode-before--ojas-wgpu-vs-torch-mps.svg" rel="noopener">2026-10-08-decode-before: ojas-wgpu vs torch-mps: ojas-wgpu vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-wgpu vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-08-decode-before-ojas-cpu-vs-torch-mps">2026-10-08-decode-before: ojas-cpu vs torch-mps <a class="anchor" href="#2026-10-08-decode-before-ojas-cpu-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-decode-before--ojas-cpu-vs-torch-mps.svg" rel="noopener">2026-10-08-decode-before: ojas-cpu vs torch-mps: ojas-cpu vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-cpu vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-08-decode-before-ojas-cpu-host-vs-torch-mps">2026-10-08-decode-before: ojas-cpu-host vs torch-mps <a class="anchor" href="#2026-10-08-decode-before-ojas-cpu-host-vs-torch-mps" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-decode-before--ojas-cpu-host-vs-torch-mps.svg" rel="noopener">2026-10-08-decode-before: ojas-cpu-host vs torch-mps: ojas-cpu-host vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</a></p>
+<p><em>ojas-cpu-host vs torch-mps, 2 rows charted, 3 paired rounds. Hollow bars were flagged noisy by the run.</em></p>
+<h3 id="2026-10-08-decode-before-generation-32-token-prompt-and-32-new-tokens">2026-10-08-decode-before: generation, 32-token prompt and 32 new tokens <a class="anchor" href="#2026-10-08-decode-before-generation-32-token-prompt-and-32-new-tokens" aria-label="Link to this section">#</a></h3>
+<p>!<a href="https://github.com/bharathvbcr/ojas/blob/main/docs/assets/plots/bench/2026-10-08-decode-before--decode-tokens.svg" rel="noopener">2026-10-08-decode-before: generation, 32-token prompt and 32 new tokens: Every ojas lane produced the same 32 greedy ids as torch. ojas-cpu decodes at 5.09 ms per token against torch-mps at 5.88; the GPU lanes are slower.</a></p>
+<p><em>Every ojas lane produced the same 32 greedy ids as torch. ojas-cpu decodes at 5.09 ms per token against torch-mps at 5.88; the GPU lanes are slower.</em></p>
+<p>Source: <code>bench/results/2026-10-08-decode-before/</code>.</p>
+<h2 id="2026-10-08-gpu-step-ab">2026-10-08-gpu-step-ab <a class="anchor" href="#2026-10-08-gpu-step-ab" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/bench-plots.md" rel="noopener"><code>docs/bench-plots.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="bench-gpu-vs-torch.html" rel="prev"><span>Previous</span>GPU Backends versus PyTorch MPS</a>
+        <a href="audit.html" rel="next" class="next"><span>Next</span>Audit Notes &amp; Structural Defect Countermeasures</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#2026-10-01">2026-10-01</a></li>
+<li class="sub"><a href="#2026-10-01runa-ojas-metal-vs-torch-mps">2026-10-01/runA: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01runa-ojas-wgpu-vs-torch-mps">2026-10-01/runA: ojas-wgpu vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01runb-ojas-metal-vs-torch-mps">2026-10-01/runB: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01runb-ojas-wgpu-vs-torch-mps">2026-10-01/runB: ojas-wgpu vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01runc-ojas-metal-vs-torch-mps">2026-10-01/runC: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01runc-ojas-wgpu-vs-torch-mps">2026-10-01/runC: ojas-wgpu vs torch-mps</a></li>
+<li><a href="#2026-10-01-ab">2026-10-01-ab</a></li>
+<li class="sub"><a href="#2026-10-01-ab-new--old">2026-10-01-ab: new / old</a></li>
+<li><a href="#2026-10-01-floor">2026-10-01-floor</a></li>
+<li class="sub"><a href="#2026-10-01-floor-submit-and-wait-floor-before-and-after-the-condvar-wait">2026-10-01-floor: submit-and-wait floor, before and after the condvar wait</a></li>
+<li class="sub"><a href="#2026-10-01-floorab-submit-and-wait-floor-old-against-new">2026-10-01-floor/ab: submit-and-wait floor, old against new</a></li>
+<li><a href="#2026-10-01-r2">2026-10-01-r2</a></li>
+<li class="sub"><a href="#2026-10-01-r2-ojas-metal-vs-torch-mps">2026-10-01-r2: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01-r2-ojas-wgpu-vs-torch-mps">2026-10-01-r2: ojas-wgpu vs torch-mps</a></li>
+<li><a href="#2026-10-01-r3">2026-10-01-r3</a></li>
+<li class="sub"><a href="#2026-10-01-r3-ojas-metal-vs-torch-mps">2026-10-01-r3: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01-r3-ojas-wgpu-vs-torch-mps">2026-10-01-r3: ojas-wgpu vs torch-mps</a></li>
+<li><a href="#2026-10-01-r3b">2026-10-01-r3b</a></li>
+<li class="sub"><a href="#2026-10-01-r3b-ojas-metal-vs-torch-mps">2026-10-01-r3b: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01-r3b-ojas-wgpu-vs-torch-mps">2026-10-01-r3b: ojas-wgpu vs torch-mps</a></li>
+<li><a href="#2026-10-01-r4-smallops">2026-10-01-r4-smallops</a></li>
+<li class="sub"><a href="#2026-10-01-r4-smallops-ojas-metal-vs-torch-mps">2026-10-01-r4-smallops: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-01-r4-smallops-ojas-wgpu-vs-torch-mps">2026-10-01-r4-smallops: ojas-wgpu vs torch-mps</a></li>
+<li><a href="#2026-10-02-gate">2026-10-02-gate</a></li>
+<li class="sub"><a href="#2026-10-02-gatepaired-gate-ojas-metal-vs-torch-mps">2026-10-02-gate/paired-gate: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-02-gatepaired-gate-ojas-wgpu-vs-torch-mps">2026-10-02-gate/paired-gate: ojas-wgpu vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-02-gatepaired-gate-quiet-ojas-metal-vs-torch-mps">2026-10-02-gate/paired-gate-quiet: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-02-gatepaired-gate-quiet-ojas-wgpu-vs-torch-mps">2026-10-02-gate/paired-gate-quiet: ojas-wgpu vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-02-gateab-dbias-new--old">2026-10-02-gate/ab-dbias: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gateab-fold-new--old">2026-10-02-gate/ab-fold: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gateab-tn-new--old">2026-10-02-gate/ab-tn: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gateab-stage-new--old">2026-10-02-gate/ab-stage: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gatetn-sweep-1-tn-gemm-single-dispatch-against-split-k">2026-10-02-gate/tn-sweep-1: TN GEMM, single dispatch against split-K</a></li>
+<li class="sub"><a href="#2026-10-02-gatetn-sweep-2-tn-gemm-single-dispatch-against-split-k">2026-10-02-gate/tn-sweep-2: TN GEMM, single dispatch against split-K</a></li>
+<li class="sub"><a href="#2026-10-02-gate-gate-bwd-dispatch-profile-before-the-fix">2026-10-02-gate: gate_bwd dispatch profile before the fix</a></li>
+<li><a href="#2026-10-02-gemm">2026-10-02-gemm</a></li>
+<li class="sub"><a href="#2026-10-02-gemmab-grid-gate-new--old">2026-10-02-gemm/ab-grid-gate: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gemmab-footprint-gate-new--old">2026-10-02-gemm/ab-footprint-gate: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gemmab-nn-splitk-new--old">2026-10-02-gemm/ab-nn-splitk: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gemmab-rows-new--old">2026-10-02-gemm/ab-rows: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gemmab-rows-ce-new--old">2026-10-02-gemm/ab-rows-ce: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-gemm-min-time-per-row">2026-10-02-gemm: min time per row</a></li>
+<li class="sub"><a href="#2026-10-02-gemmgemmmd-exact-f32-gemm-throughput">2026-10-02-gemm/gemm.md: exact-f32 GEMM throughput</a></li>
+<li class="sub"><a href="#2026-10-02-gemmgemm-relabelledmd-exact-f32-gemm-throughput">2026-10-02-gemm/gemm-relabelled.md: exact-f32 GEMM throughput</a></li>
+<li><a href="#2026-10-02-kernels">2026-10-02-kernels</a></li>
+<li class="sub"><a href="#2026-10-02-kernelsab-check-new--old">2026-10-02-kernels/ab-check: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-kernelsab-fold-new--old">2026-10-02-kernels/ab-fold: new / old</a></li>
+<li class="sub"><a href="#2026-10-02-kernelskernelsmd">2026-10-02-kernels/kernels.md</a></li>
+<li class="sub"><a href="#2026-10-02-kernelskernels-after-foldmd">2026-10-02-kernels/kernels-after-fold.md</a></li>
+<li class="sub"><a href="#2026-10-02-kernels-achieved-bandwidth-before-the-fold">2026-10-02-kernels: achieved bandwidth, before the fold</a></li>
+<li><a href="#2026-10-02-r5">2026-10-02-r5</a></li>
+<li class="sub"><a href="#2026-10-02-r5-ojas-metal-vs-torch-mps">2026-10-02-r5: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-02-r5-ojas-wgpu-vs-torch-mps">2026-10-02-r5: ojas-wgpu vs torch-mps</a></li>
+<li><a href="#2026-10-03-lappi-inference">2026-10-03-lappi-inference</a></li>
+<li class="sub"><a href="#2026-10-03-lappi-inference-qwen35-2b-prefill">2026-10-03-lappi-inference: Qwen3.5-2B prefill</a></li>
+<li class="sub"><a href="#2026-10-03-lappi-inference-tessl-full-decision-time">2026-10-03-lappi-inference: tessl full decision time</a></li>
+<li><a href="#2026-10-03-lappi-inference-rerun">2026-10-03-lappi-inference-rerun</a></li>
+<li class="sub"><a href="#2026-10-03-lappi-inference-rerun-qwen35-2b-prefill">2026-10-03-lappi-inference-rerun: Qwen3.5-2B prefill</a></li>
+<li class="sub"><a href="#2026-10-03-lappi-inference-rerun-tessl-full-decision-time">2026-10-03-lappi-inference-rerun: tessl full decision time</a></li>
+<li><a href="#2026-10-04-percall">2026-10-04-percall</a></li>
+<li class="sub"><a href="#2026-10-04-percall-metal-decode-call-cost">2026-10-04-percall: Metal decode call cost</a></li>
+<li class="sub"><a href="#2026-10-04-percall-gpu-span-of-one-command-buffer">2026-10-04-percall: GPU span of one command buffer</a></li>
+<li><a href="#2026-10-04-split">2026-10-04-split</a></li>
+<li class="sub"><a href="#2026-10-04-splitab-new--old">2026-10-04-split/ab: new / old</a></li>
+<li class="sub"><a href="#2026-10-04-split-metal-decode-call-cost">2026-10-04-split: Metal decode call cost</a></li>
+<li class="sub"><a href="#2026-10-04-split-gpu-span-of-one-command-buffer">2026-10-04-split: GPU span of one command buffer</a></li>
+<li class="sub"><a href="#2026-10-04-split-split-count-for-the-decode-attention-kernel">2026-10-04-split: split count for the decode attention kernel</a></li>
+<li><a href="#2026-10-04-sweep">2026-10-04-sweep</a></li>
+<li class="sub"><a href="#2026-10-04-sweep-ojas-metal-vs-torch-mps">2026-10-04-sweep: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-04-sweep-ojas-wgpu-vs-torch-mps">2026-10-04-sweep: ojas-wgpu vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-04-sweep-silu-forward-time-against-size">2026-10-04-sweep: silu_forward time against size</a></li>
+<li class="sub"><a href="#2026-10-04-sweep-decode-cost-per-request">2026-10-04-sweep: decode cost per request</a></li>
+<li><a href="#2026-10-05-torch215-clip">2026-10-05-torch215-clip</a></li>
+<li class="sub"><a href="#2026-10-05-torch215-clip-clip-grad-norm-on-mps">2026-10-05-torch215-clip: clip_grad_norm on MPS</a></li>
+<li><a href="#2026-10-06-gemm-bf16">2026-10-06-gemm-bf16</a></li>
+<li class="sub"><a href="#2026-10-06-gemm-bf16-column-panel-tile-walk-new--old">2026-10-06-gemm-bf16: column-panel tile walk, new / old</a></li>
+<li class="sub"><a href="#2026-10-06-gemm-bf16-panel-height-sweep">2026-10-06-gemm-bf16: panel-height sweep</a></li>
+<li class="sub"><a href="#2026-10-06-gemm-bf16-tune1-raw-sweep">2026-10-06-gemm-bf16: tune1 raw sweep</a></li>
+<li class="sub"><a href="#2026-10-06-gemm-bf16-tune2-raw-sweep">2026-10-06-gemm-bf16: tune2 raw sweep</a></li>
+<li><a href="#2026-10-07-gate-saved">2026-10-07-gate-saved</a></li>
+<li class="sub"><a href="#2026-10-07-gate-saved-saved-sigmoid-gate-pair-against-recompute">2026-10-07-gate-saved: saved-sigmoid gate pair against recompute</a></li>
+<li><a href="#2026-10-07-muon-bf16">2026-10-07-muon-bf16</a></li>
+<li class="sub"><a href="#2026-10-07-muon-bf16-ojas-metal-vs-torch-mps">2026-10-07-muon-bf16: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-07-muon-bf16-ojas-wgpu-vs-torch-mps">2026-10-07-muon-bf16: ojas-wgpu vs torch-mps</a></li>
+<li><a href="#2026-10-08-attn-lse-ab">2026-10-08-attn-lse-ab</a></li>
+<li class="sub"><a href="#2026-10-08-attn-lse-ab-attention-backward-with-saved-log-sum-exp">2026-10-08-attn-lse-ab: attention backward with saved log-sum-exp</a></li>
+<li class="sub"><a href="#2026-10-08-attn-lse-ab-sliding-window-of-256-against-full-attention">2026-10-08-attn-lse-ab: sliding window of 256 against full attention</a></li>
+<li class="sub"><a href="#2026-10-08-attn-lse-ab-scratch-charged-at-the-qwen35-shape">2026-10-08-attn-lse-ab: scratch charged at the Qwen3.5 shape</a></li>
+<li><a href="#2026-10-08-cpu-hot-paths">2026-10-08-cpu-hot-paths</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-interleaved-ab-base-against-after">2026-10-08-cpu-hot-paths: interleaved A/B, base against after</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-ojas--torch-213-cpu">2026-10-08-cpu-hot-paths: ojas / torch 2.13 CPU</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-tape-bench-re-run-ab-tape">2026-10-08-cpu-hot-paths: tape_bench re-run (ab-tape/)</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-follow-up-edits-against-a9af0a0-ab-v2">2026-10-08-cpu-hot-paths: Follow-up edits against a9af0a0 (ab-v2/)</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-muon-no-transpose-view-gate">2026-10-08-cpu-hot-paths: Muon no-transpose view gate</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-x-times-x-transpose-three-ways">2026-10-08-cpu-hot-paths: X times X-transpose, three ways</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-ssyrk-lower-from-upper-mirror">2026-10-08-cpu-hot-paths: ssyrk lower-from-upper mirror</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-cost-of-one-stdthreadscope">2026-10-08-cpu-hot-paths: cost of one std::thread::scope</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-tape-walk-peak-charge">2026-10-08-cpu-hot-paths: tape walk peak charge</a></li>
+<li class="sub"><a href="#2026-10-08-cpu-hot-paths-tape-walk-time-in-the-peak-run">2026-10-08-cpu-hot-paths: tape walk time in the peak run</a></li>
+<li><a href="#2026-10-08-decode-before">2026-10-08-decode-before</a></li>
+<li class="sub"><a href="#2026-10-08-decode-before-ojas-metal-vs-torch-mps">2026-10-08-decode-before: ojas-metal vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-08-decode-before-ojas-wgpu-vs-torch-mps">2026-10-08-decode-before: ojas-wgpu vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-08-decode-before-ojas-cpu-vs-torch-mps">2026-10-08-decode-before: ojas-cpu vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-08-decode-before-ojas-cpu-host-vs-torch-mps">2026-10-08-decode-before: ojas-cpu-host vs torch-mps</a></li>
+<li class="sub"><a href="#2026-10-08-decode-before-generation-32-token-prompt-and-32-new-tokens">2026-10-08-decode-before: generation, 32-token prompt and 32 new tokens</a></li>
+<li><a href="#2026-10-08-gpu-step-ab">2026-10-08-gpu-step-ab</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

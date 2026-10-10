@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas Status &amp; Verification Matrix · ojas reference</title>
   <meta name="description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
+  <meta name="keywords" content="ojas, ojas status &amp; verification matrix, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="ojas Status &amp; Verification Matrix · ojas reference">
   <meta property="og:description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas Status &amp; Verification Matrix · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas Status &amp; Verification Matrix · ojas reference">
+  <meta name="twitter:description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas Status &amp; Verification Matrix · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas Status \u0026 Verification Matrix · ojas reference",
+    "description": "Recorded: 2026-10-01, Apple M5 Pro, macOS 27.",
+    "url": "https://ojas.vbcr.dev/reference/status.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -125,6 +156,25 @@
 </li>
 </ul>
 </aside>
+<hr>
+<h2 id="changes-2026-10-06-to-2026-10-08-reported-from-git-history-suites-not-re-run">Changes 2026-10-06 to 2026-10-08 (reported from git history; suites not re-run) <a class="anchor" href="#changes-2026-10-06-to-2026-10-08-reported-from-git-history-suites-not-re-run" aria-label="Link to this section">#</a></h2>
+<p>Source: the 37 non-merge commits from <code>9668bfa</code> to <code>0e3254f</code> (<code>git log --since=2026-10-05 --no-merges</code>). This entry was written from those commit subjects and from the result files under <code>bench/results/</code>; this session did not re-run any test suite, so the 2026-10-05 counts below are <strong>not</strong> refreshed and the test totals for these commits are unverified here.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Area</th><th>Commits</th><th>What changed</th></tr></thead>
+<tbody>
+<tr><td>Qwen3.5 hybrid model</td><td><code>6a0a926</code>, <code>b363802</code>, <code>66c5e52</code></td><td>Gated DeltaNet and hybrid ops, sliding-window SDPA, bf16 Muon NS5; the hybrid-layer ops on tessl Metal kernels; the Qwen3.5 hybrid tower on <code>Tape</code> with sigmoid and GDN decay ops and per-group learning rates.</td></tr>
+<tr><td>CUDA</td><td><code>c74f3ba</code>, <code>cf4049f</code></td><td><code>ojas-qwen35-cuda</code> merged into <code>ojas-cuda</code> with its host-side gaps closed; every CUDA <code>Qwen35Step</code> method refuses until kernels back it. CUDA-C remains unrun on this Mac (NVRTC needs the GH200).</td></tr>
+<tr><td>CPU and autograd hot paths</td><td><code>7763814</code>, <code>a9af0a0</code>, <code>1dea12d</code></td><td>In-place gradient fan-in, seed scaling, pooled accumulate, <code>cblas_ssyrk</code> for Muon&#39;s X·Xᵀ, tap-major conv1d sums, a tiled mirror. Measured in <code>bench/results/2026-10-08-cpu-hot-paths</code>: conv1d backward 0.08 of base, fused-CE seed one-quarter 0.17, gated-RMSNorm backward 0.25, 50304×768 accumulate 0.29 (min over 5 rounds, load 17–82; ratios between 0.9 and 1.1 are noise).</td></tr>
+<tr><td>GPU runtime</td><td><code>0e3254f</code>, <code>2f10f3a</code>, <code>00adde8</code>, <code>9cd13e5</code>, <code>3c9c252</code></td><td>Step-throughput work across wgpu, Metal and HIP; the saved-sigmoid gate pair (backward 7% faster on Metal, 15% on wgpu, forward within 2%); GPU session budgets planned from the device memory probe; a typed CUDA <code>DeviceLost</code> test; the native grouped-query budget charge measured at the Qwen3.5 shape.</td></tr>
+<tr><td>Attention</td><td><code>6a0a926</code>, <code>143e469</code>, <code>19d834a</code>, <code>86a1096</code></td><td>Saved log-sum-exp backward, landed in <code>6a0a926</code> and measured against <code>c74f3ba</code> at <code>86a1096</code> (0.76–0.81 of the old backward time on Metal and wgpu, forward within noise except grouped-query Metal at 0.89, <code>bench/results/2026-10-08-attn-lse-ab</code>); Fast flash backward forms delta from its own P; Exact SDPA goldens re-pinned; a causal SDPA backward diagnostic for Fast against Exact.</td></tr>
+<tr><td>Inference</td><td><code>7f0a9f3</code>, <code>8967457</code>, <code>420c4a1</code></td><td>Device-side greedy argmax and upload-free decode steps; decode tokens/s rows on CPU, <code>CpuGpt</code>, Metal, wgpu and torch-mps. Before that change (<code>bench/results/2026-10-08-decode-before</code>), ojas-cpu decoded at 5.09 ms/token against torch-mps at 5.88, and the Metal and wgpu lanes were slower (12.42 and 29.52 ms/token).</td></tr>
+<tr><td>Correctness fixes</td><td><code>a5ccdc5</code>, <code>0837e43</code>, <code>7c69ea3</code></td><td>bf16 storage only for matmul-class operands under autocast; gated forwards pass <code>scale_grad</code> to the inner backend; MRoPE frequencies compared on cos and sin together.</td></tr>
+<tr><td>bf16 GEMM and Muon</td><td><code>fb98768</code></td><td>Column-panel tile walk: the largest-B cases fall to 0.50–0.77 of the old time, controls stay near 1.0 (<code>bench/results/2026-10-06-gemm-bf16</code>); bf16 Muon throughput recorded in <code>2026-10-07-muon-bf16</code> (wgpu refuses bf16 Newton-Schulz).</td></tr>
+<tr><td>Imports</td><td><code>1fc6a03</code>, <code>ca90094</code></td><td>gemma-metal and the arch02 Rust trainers imported from MLSystemsLab; reference pages regenerated.</td></tr>
+<tr><td>Docs and tasks</td><td><code>7eb09eb</code>, <code>b066122</code>, <code>cbd56ab</code>, <code>9668bfa</code>, <code>32e74b3</code>, <code>268c640</code>, <code>4be1069</code>, <code>afed9ad</code></td><td>Op coverage, dtype, checkpoint and Metal fault docs synced; task briefs formatted to the GitPulse Task Brief v1 spec and consolidated into 9 roadmap and audit tasks, then 11 more briefs added.</td></tr>
+<tr><td>Benchmark plots</td><td>(this change)</td><td><a href="bench-plots.html">bench-plots.md</a>: a chart for every folder under <code>bench/results/</code> (83 charts), drawn by <code>bench/plot_all.py</code>. Run <code>python3 -I bench/plot_all.py</code> from the repository root to regenerate them.</td></tr>
+</tbody></table></div>
+<p>Also landed after the 37 commits above: merge <code>8060846</code> brings in the <code>inference-decode-path</code> branch (<code>84ab777</code>, <code>topk_rows</code> on every backend for top-k sampling; new <code>ojas-{cpu,metal,wgpu}/tests/topk_rows.rs</code> and <code>ojas-infer/src/cache.rs</code>; <code>ojas-infer/src/kernels.rs</code> removed). That merge was concluded as another session had resolved and staged it. It was <strong>not built or tested</strong> in this session, so treat it as unverified until the workspace suites are re-run.</p>
 <hr>
 <h2 id="latest-run-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05">Latest run: SIMD assembly kernels, layout hardening &amp; PyTorch parity (verified, 2026-10-05) <a class="anchor" href="#latest-run-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05" aria-label="Link to this section">#</a></h2>
 <p>Verification across workspace crates and backend implementations:</p>
@@ -488,6 +538,7 @@
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#changes-2026-10-06-to-2026-10-08-reported-from-git-history-suites-not-re-run">Changes 2026-10-06 to 2026-10-08 (reported from git history; suites not re-run)</a></li>
 <li><a href="#latest-run-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05">Latest run: SIMD assembly kernels, layout hardening &amp; PyTorch parity (verified, 2026-10-05)</a></li>
 <li><a href="#previous-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04">Previous run: kernel hardening, SIMD vectorization &amp; backend parity (verified, 2026-10-04)</a></li>
 <li><a href="#previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35)</a></li>

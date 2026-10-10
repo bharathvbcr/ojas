@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas Architecture &amp; System Design · ojas reference</title>
   <meta name="description" content="This document specifies the technical architecture, memory model, execution graphs, and invariants of ojas as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.">
+  <meta name="keywords" content="ojas, ojas architecture &amp; system design, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="ojas Architecture &amp; System Design · ojas reference">
   <meta property="og:description" content="This document specifies the technical architecture, memory model, execution graphs, and invariants of ojas as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas Architecture &amp; System Design · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas Architecture &amp; System Design · ojas reference">
+  <meta name="twitter:description" content="This document specifies the technical architecture, memory model, execution graphs, and invariants of ojas as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas Architecture &amp; System Design · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas Architecture \u0026 System Design · ojas reference",
+    "description": "This document specifies the technical architecture, memory model, execution graphs, and invariants of ojas as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.",
+    "url": "https://ojas.vbcr.dev/reference/architecture.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -272,7 +303,7 @@
         Gusset--&gt;&gt;CGO: gusset.ErrPanic
         CGO--&gt;&gt;App: error (later calls: gusset.ErrPoisoned until Close)
     end</pre></figure>
-<p>The Go surface is <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, <code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code> and <code>Close</code>. The opcodes are in <code>ojas-capi/src/engine.rs</code>; the old stub step opcode (2) is retired. Every model&#39;s byte budget is a child of one process-wide ceiling (default 1 GiB, or machine hard limit <code>hard_memory_limit</code> if smaller), which <code>SetMemoryCeiling</code> raises up to physical/cgroup limits and which cannot change while a model is open. Failures cross the boundary as typed kinds (<code>ErrCapacity</code>, <code>ErrNonFinite</code>, <code>ErrDeviceLost</code>, <code>ErrBusy</code>, <code>ErrPoisoned</code>, <code>ErrPressure</code>), listed in <a href="crate-go.html"><code>go/README.md</code></a>.</p>
+<p>The Go surface is <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, <code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code>, <code>DetokenizeLossy</code>, <code>TokenID</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code> and <code>Close</code>. The opcodes are in <code>ojas-capi/src/engine.rs</code>; the old stub step opcode (2) is retired. Every model&#39;s byte budget is a child of one process-wide ceiling (default 1 GiB, or machine hard limit <code>hard_memory_limit</code> if smaller), which <code>SetMemoryCeiling</code> raises up to physical/cgroup limits and which cannot change while a model is open. Failures cross the boundary as typed kinds (<code>ErrCapacity</code>, <code>ErrNonFinite</code>, <code>ErrDeviceLost</code>, <code>ErrBusy</code>, <code>ErrPoisoned</code>, <code>ErrPressure</code>), listed in <a href="crate-go.html"><code>go/README.md</code></a>.</p>
 <aside class="alert alert-caution"><p class="alert-title">Caution</p><p>A panic on a gusset worker is caught by <code>catch_unwind</code> and poisons the entire gusset handle: subsequent calls return <code>gusset.ErrPoisoned</code> until the handle is closed. If the panic occurred while holding the session table lock, the next lock acquisition <strong>drops every session in the table</strong> (<code>ojas-capi/src/session.rs</code>) to prevent corruption. Note that <code>catch_unwind</code> cannot intercept OS process aborts or stack overflows.</p>
 </aside>
 <hr>

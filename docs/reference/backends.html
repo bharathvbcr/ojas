@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hardware Backends &amp; Device Architecture · ojas reference</title>
   <meta name="description" content="This machine is an Apple M5 Pro (system_profiler: Metal 4, 20 GPU cores, vendor Apple 0x106b). Neither nvcc nor /opt/rocm is present.">
+  <meta name="keywords" content="ojas, hardware backends &amp; device architecture, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
@@ -15,6 +16,15 @@
   <meta property="og:title" content="Hardware Backends &amp; Device Architecture · ojas reference">
   <meta property="og:description" content="This machine is an Apple M5 Pro (system_profiler: Metal 4, 20 GPU cores, vendor Apple 0x106b). Neither nvcc nor /opt/rocm is present.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Hardware Backends &amp; Device Architecture · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Hardware Backends &amp; Device Architecture · ojas reference">
+  <meta name="twitter:description" content="This machine is an Apple M5 Pro (system_profiler: Metal 4, 20 GPU cores, vendor Apple 0x106b). Neither nvcc nor /opt/rocm is present.">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Hardware Backends &amp; Device Architecture · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -25,6 +35,26 @@
   <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
   <link rel="stylesheet" href="../assets/ojas.css">
   <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Hardware Backends \u0026 Device Architecture · ojas reference",
+    "description": "This machine is an Apple M5 Pro (system_profiler: Metal 4, 20 GPU cores, vendor Apple 0x106b). Neither nvcc nor /opt/rocm is present.",
+    "url": "https://ojas.vbcr.dev/reference/backends.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
 </head>
 <body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -72,6 +102,7 @@
 <ul>
 <li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
 <li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
 </ul>
 <p class="ref-nav-cat">Audits</p>
 <ul>
@@ -133,7 +164,7 @@
     Metal --&gt;|No| MetalErr[&#34;Load returns explicit device error\n(NO silent CPU session)&#34;]
     Wgpu --&gt;|Yes| WgpuB[&#34;WgpuBackend session\nTrainStep / GenerateIDs on device&#34;]
     Wgpu --&gt;|No| WgpuErr[&#34;Load returns explicit wgpu error\n(NO silent CPU session)&#34;]</pre></figure>
-<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Zero Silent Fallback Policy:</strong> CUDA and HIP have no Go device selector and do not implement <code>Backend</code>. If Metal or wgpu cannot open their respective hardware contexts, <code>LoadModel</code> or <code>NewModel</code> returns an immediate error—<strong>it will never silently substitute a CPU session</strong>.</p>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Zero Silent Fallback Policy:</strong> HIP has no Go device selector and does not implement <code>Backend</code>. CUDA implements <code>Backend</code> (<code>ojas-cuda</code>&#39;s <code>CudaBackend</code>: upload, download and sync; every compute op returns <code>Unsupported</code>), and its Go selector <code>DeviceCUDA</code> (5) is refused by name at load until task gp-cuda-backend-provider lands. If Metal or wgpu cannot open their respective hardware contexts, <code>LoadModel</code> or <code>NewModel</code> returns an immediate error—<strong>it will never silently substitute a CPU session</strong>.</p>
 <p><strong>CPU Auto Thread Selection:</strong> <code>DeviceCPUAuto</code> automatically queries <code>ResourcePlan::thread_ceiling</code> (usable host CPUs capped by cgroup CPU quota) to configure the CPU thread pool. If the host CPU count is unreadable, load is refused rather than guessed.</p>
 </aside>
 <p>On a GPU session, <code>TrainStep</code> reads back only the loss; the device tape keeps activations resident. <code>to_host</code> reads in 1 MiB pieces and checkpoint load in 64 KiB pieces, so the peak is the window plus one piece (<a href="typed-storage-plan.html"><code>typed-storage-plan.md</code></a>). Every backend validates shapes through one shared contract before reserving budget (<a href="shape-contract.html"><code>shape-contract.md</code></a>), and Metal reports device faults at the next <code>sync</code> like wgpu (<a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>). Every backend implements <code>optimizer_scratch_bytes</code> so training preflights memory requirements before optimizer updates take place.</p>
