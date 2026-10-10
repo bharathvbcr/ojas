@@ -399,6 +399,8 @@ def _decode():
 
 
 GEN_PROMPT, GEN_NEW, GEN_PROMPT_SEED = 32, 32, 1701
+# bench/decode_rows.rs: GEN_TOP_K, SAMPLE_SEED, GQA_KV_HEADS.
+GEN_TOP_K, GEN_SAMPLE_SEED, GEN_GQA_KV_HEADS = 50, 1702, 4
 
 
 def _fnv1a32(name):
@@ -421,15 +423,25 @@ def _gen_param(name, shape):
 
 
 def _gen():
-    """Decode rows (bench/decode_rows.rs): nanolab's default GPT, a 32-token
-    prompt, greedy decode of 32 tokens through nanolab's own KV-cached path,
-    `GPT.forward_hidden_window(..., commit=True, causal=True)` (its cache
-    grows by torch.cat per step), then `lm_head` on the last position. The
-    reference outputs are the prompt's last-position logits; the greedy ids
-    go to `<row>.ids` for the ojas side's `_gen_ids` record."""
-    cfg = Config()
+    """Decode rows (bench/decode_rows.rs): nanolab's default GPT, then the same
+    with GEN_GQA_KV_HEADS KV heads, a 32-token prompt and 32 new tokens through
+    nanolab's own KV-cached path, `GPT.forward_hidden_window(..., commit=True,
+    causal=True)` (its cache grows by torch.cat per step), then `lm_head` on the
+    last position. Greedy rows take the argmax; the sampled row (default model
+    only) draws each id at temperature 1 from the top GEN_TOP_K logits with a
+    seeded torch generator, so its ids are not ojas's. The reference outputs
+    are the model's prompt last-position logits; greedy ids go to `<row>.ids`
+    for the ojas side's `_gen_ids` record."""
+    for kv in (0, GEN_GQA_KV_HEADS):
+        _gen_model(kv)
+
+
+def _gen_model(n_kv_head):
+    cfg = Config(n_kv_head=n_kv_head)
+    kv = "" if cfg.n_kv_head == cfg.n_head else f":kv{cfg.n_kv_head}"
+    tag = "" if not kv else f"gqa{cfg.n_kv_head}_"
     sp = (f"gen:nanolab_124m:vocab{cfg.vocab_size}:d{cfg.d_model}:L{cfg.n_layer}:"
-          f"H{cfg.n_head}x{cfg.head_dim}:hidden{FF}:prompt{GEN_PROMPT}:{GEN_PROMPT_SEED}:"
+          f"H{cfg.n_head}x{cfg.head_dim}{kv}:hidden{FF}:prompt{GEN_PROMPT}:{GEN_PROMPT_SEED}:"
           f"new{GEN_NEW}:weights=fnv1a32%2^20+1000,norm=1+2^-3,vec=2^-1,tok_emb=2^-2,mat=2^-4")
 
     def build():
@@ -448,15 +460,25 @@ def _gen():
         h = m.forward_hidden_window(ids, 0, caches, commit=True, causal=True)
         return m.lm_head(h[:, -1, :])[0], caches
 
-    def greedy(m, ids):
+    def decode(m, ids, pick):
         logits, caches = prefill(m, ids)
-        out = [logits.argmax()]
+        out = [pick(logits)]
         pos = GEN_PROMPT
         for _ in range(GEN_NEW - 1):
             h = m.forward_hidden_window(out[-1].view(1, 1), pos, caches, commit=True, causal=True)
-            out.append(m.lm_head(h[:, -1, :])[0].argmax())
+            out.append(pick(m.lm_head(h[:, -1, :])[0]))
             pos += 1
         return torch.stack(out)
+
+    def greedy(m, ids):
+        return decode(m, ids, lambda logits: logits.argmax())
+
+    def top_k(m, ids, rng):
+        def pick(logits):
+            vals, idx = torch.topk(logits, GEN_TOP_K)
+            probs = torch.softmax(vals, dim=-1)
+            return idx[torch.multinomial(probs, 1, generator=rng)[0]]
+        return decode(m, ids, pick)
 
     def make_prefill():
         m, ids = build()
@@ -465,7 +487,7 @@ def _gen():
             with torch.no_grad():
                 return [prefill(m, ids)[0]]
         return {"outs": run, "step": run}
-    ROWS.append((f"gen_prefill_p{GEN_PROMPT}", sp, make_prefill))
+    ROWS.append((f"gen_{tag}prefill_p{GEN_PROMPT}", sp, make_prefill))
 
     def make_greedy():
         m, ids = build()
@@ -482,7 +504,25 @@ def _gen():
             with torch.no_grad():
                 return [greedy(m, ids)]
         return {"outs": outs, "step": run, "ids": ids_out}
-    ROWS.append((f"gen_greedy_p{GEN_PROMPT}_n{GEN_NEW}", sp, make_greedy))
+    ROWS.append((f"gen_{tag}greedy_p{GEN_PROMPT}_n{GEN_NEW}", sp, make_greedy))
+
+    if tag:
+        return
+
+    def make_top_k():
+        m, ids = build()
+        rng = torch.Generator(device=DEV)
+        rng.manual_seed(GEN_SAMPLE_SEED)
+
+        def outs():
+            with torch.no_grad():
+                return [prefill(m, ids)[0]]
+
+        def run():
+            with torch.no_grad():
+                return [top_k(m, ids, rng)]
+        return {"outs": outs, "step": run}
+    ROWS.append((f"gen_topk{GEN_TOP_K}_p{GEN_PROMPT}_n{GEN_NEW}", sp, make_top_k))
 
 
 SWEEP_N = [1, 1 << 12, 1 << 16, 1 << 18, 1 << 20, 1 << 21, 1 << 22, 1 << 23]

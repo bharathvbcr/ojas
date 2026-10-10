@@ -15,6 +15,7 @@ either side is flagged "noisy - not quoted". A row that is missing or not
 import glob
 import json
 import os
+import re
 import statistics
 import sys
 
@@ -35,7 +36,10 @@ def load_rounds(out):
             if not line:
                 continue
             d = json.loads(line)
-            rounds.setdefault(r, {})[(d["runtime"], d["row"])] = d
+            # An info record about a row (`_gen_traffic` for each decode row)
+            # is keyed by that row too, so one per row survives.
+            row = d["row"] if "for" not in d else f"{d['row']}@{d['for']}"
+            rounds.setdefault(r, {})[(d["runtime"], row)] = d
     return rounds
 
 
@@ -165,51 +169,67 @@ def main():
     print("\n".join(lines))
 
 
+DECODE_ROW = re.compile(r"^gen_((?:[a-z0-9]+_)?)((?:greedy|topk\d+))_p(\d+)_n(\d+)$")
+
+
 def decode_rates(rounds):
-    """Decode tokens/second per runtime from the two gen_ rows of each round:
-    per-token ms = (greedy median - prefill median) / (N - 1), N from the
-    greedy row's name; the median over rounds. Plus the last round's
-    `_gen_traffic` and `_gen_ids` records."""
-    out = []
+    """Decode tokens/second per runtime and decode row: per-token ms =
+    (decode median - prefill median) / (N - 1), where a row
+    `gen_[<model>_]<kind>_p<P>_n<N>` (kind `greedy` or `topk<K>`) pairs with
+    `gen_[<model>_]prefill_p<P>`; the median over rounds. Plus the last
+    round's `_gen_traffic` and `_gen_ids` records for the row, and each
+    runtime's `_gen_readback` record."""
+    out, readback = [], []
+    names = sorted({n for rd in rounds.values() for (_, n) in rd if DECODE_ROW.match(n)})
     for rt in (TORCH,) + OJAS:
-        per_tok, prefill, extra = [], [], {}
-        for r in sorted(rounds):
-            rd = rounds[r]
-            greedy = [(n, d) for (k, n), d in rd.items()
-                      if k == rt and n.startswith(GEN_PREFIX + "greedy_") and d["status"] == "ok"]
-            pre = [d for (k, n), d in rd.items()
-                   if k == rt and n.startswith(GEN_PREFIX + "prefill_") and d["status"] == "ok"]
-            for kind in ("_gen_traffic", "_gen_ids"):
-                if (rt, kind) in rd:
-                    extra[kind] = rd[(rt, kind)]
-            if len(greedy) != 1 or len(pre) != 1:
+        for name in names:
+            model, _, p, new = DECODE_ROW.match(name).groups()
+            prefill_name = f"gen_{model}prefill_p{p}"
+            per_tok, prefill, extra = [], [], {}
+            for r in sorted(rounds):
+                rd = rounds[r]
+                for kind in ("_gen_traffic", "_gen_ids"):
+                    if (rt, f"{kind}@{name}") in rd:
+                        extra[kind] = rd[(rt, f"{kind}@{name}")]
+                dec, pre = rd.get((rt, name)), rd.get((rt, prefill_name))
+                if not dec or not pre or dec["status"] != "ok" or pre["status"] != "ok":
+                    continue
+                per_tok.append((dec["median_ms"] - pre["median_ms"]) / (int(new) - 1))
+                prefill.append(pre["median_ms"])
+            if not per_tok:
                 continue
-            name, g = greedy[0]
-            new = int(name.rsplit("_n", 1)[1])
-            per_tok.append((g["median_ms"] - pre[0]["median_ms"]) / (new - 1))
-            prefill.append(pre[0]["median_ms"])
-        if not per_tok:
-            continue
-        ms = statistics.median(per_tok)
-        cells = [rt, f"{fmt(statistics.median(prefill))}", f"{fmt(ms)}",
-                 f"{1e3 / ms:.1f}" if ms > 0 else "-", str(len(per_tok))]
-        t = extra.get("_gen_traffic", {})
-        cells.append("-" if "step_uploads" not in t else
-                     f"{t['step_uploads']:.0f} / {t['step_upload_bytes']:.0f} B / "
-                     f"{t['step_readback_bytes']:.0f} B")
-        i = extra.get("_gen_ids", {})
-        cells.append("-" if "ids_equal" not in i else
-                     f"{i['ids_equal']}/{i['of']} (prefix {i['common_prefix']})")
-        out.append("| " + " | ".join(cells) + " |")
+            ms = statistics.median(per_tok)
+            cells = [rt, name, f"{fmt(statistics.median(prefill))}", f"{fmt(ms)}",
+                     f"{1e3 / ms:.1f}" if ms > 0 else "-", str(len(per_tok))]
+            t = extra.get("_gen_traffic", {})
+            cells.append("-" if "step_uploads" not in t else
+                         f"{t['step_uploads']:.0f} / {t['step_upload_bytes']:.0f} B / "
+                         f"{t['step_readback_bytes']:.0f} B")
+            i = extra.get("_gen_ids", {})
+            cells.append("-" if "ids_equal" not in i else
+                         f"{i['ids_equal']}/{i['of']} (prefix {i['common_prefix']})")
+            out.append("| " + " | ".join(cells) + " |")
+        last = rounds[max(rounds)] if rounds else {}
+        for (k, n), d in sorted(last.items()):
+            if k == rt and n.startswith("_gen_readback@") and "to_host_us" in d:
+                readback.append(f"| {rt} | {d['bytes']} | {d['to_host_us']:.2f} | "
+                                f"{d['read_bytes_us']:.2f} | {d['decode_pass_us']:.2f} | {d['iters']} |")
     if not out:
         return []
-    return ["", "### Decode (gen_ rows)", "",
-            "Per-token ms = (greedy median - prefill median) / (N - 1), median over rounds. "
-            "Traffic is per decode step, from DeviceDecoder's counters (uploads / bytes up / "
-            "bytes read back).", "",
-            "| runtime | prefill median ms | decode ms / token | tokens / s | rounds "
-            "| step traffic | greedy ids equal to torch |",
-            "| :-- | --: | --: | --: | --: | :-- | :-- |"] + out
+    lines = ["", "### Decode (gen_ rows)", "",
+             "Per-token ms = (decode median - prefill median) / (N - 1), median over rounds, "
+             "each decode row against its model's prefill row. Traffic is per decode step, from "
+             "DeviceDecoder's counters (uploads / bytes up / bytes read back).", "",
+             "| runtime | row | prefill median ms | decode ms / token | tokens / s | rounds "
+             "| step traffic | greedy ids equal to torch |",
+             "| :-- | :-- | --: | --: | --: | --: | :-- | :-- |"] + out
+    if readback:
+        lines += ["", "Reading one `[1, vocab]` logit row back (last round, min of `iters`): "
+                  "`Tensor::to_host` against `DeviceBuffer::read_bytes` alone; the difference is "
+                  "the transient decode pass a read into a caller's buffer would save.", "",
+                  "| runtime | bytes | to_host us | read_bytes us | decode pass us | iters |",
+                  "| :-- | --: | --: | --: | --: | --: |"] + readback
+    return lines
 
 
 def per_row_load(out):

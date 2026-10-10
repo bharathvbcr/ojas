@@ -135,16 +135,27 @@ file's docs), a 32-token prompt from `gen_targets(32, 1701)`.
 - `gen_prefill_p32`: the prompt forward from an empty cache.
 - `gen_greedy_p32_n32`: the prompt forward and 31 single-token forwards, each
   fed the previous argmax (32 ids; the last is not forwarded).
+- `gen_topk50_p32_n32`: the same forwards through `generate`, each id drawn
+  at temperature 1 from the top 50 logits (seed 1702): the sampled path,
+  which needs only each row's 50 leaders. torch draws with
+  `torch.topk`, `softmax` and a seeded `torch.multinomial`, so its ids are
+  not compared.
+- `gen_gqa4_prefill_p32`, `gen_gqa4_greedy_p32_n32`: the first two on the
+  same model with 4 KV heads for its 12 query heads (nanolab
+  `Config(n_kv_head=4)`), weights from the same rule.
 
 ojas runs `DeviceDecoder` on `CpuBackend` (`ojas-cpu`), Metal and wgpu, and
 `CpuGpt` (`ojas-cpu-host`). torch runs nanolab's own KV-cached path,
 `GPT.forward_hidden_window(..., commit=True, causal=True)` plus `lm_head` on
 the last position, under `torch.no_grad()`. Both rows are gated on the
 prompt's last-position logits (1e-3). Greedy ids are not a gate: a
-`_gen_ids` record counts how many equal torch's. A `_gen_traffic` record
-holds `DeviceDecoder::traffic()` per decode step (host tensors uploaded and
-bytes, bytes read back). `aggregate.py` ends with a "Decode" table: per-token
-ms = (greedy - prefill) / 31, tokens/s, and those records.
+`_gen_ids` record counts how many equal torch's. A `_gen_traffic` record per
+decode row holds `DeviceDecoder::traffic()` per decode step (host tensors
+uploaded and bytes, bytes read back), and a `_gen_readback` record times one
+`[1, vocab]` logit readback (`Tensor::to_host` against
+`DeviceBuffer::read_bytes`). `aggregate.py` ends with a "Decode" table: per
+decode row, per-token ms = (decode - its model's prefill) / 31, tokens/s, and
+those records.
 
 The metal and wgpu lanes run their kernel rows and then the decode rows into
 the same lane file. The CPU lanes are opt-in: `BENCH_LANES="ojas-metal
