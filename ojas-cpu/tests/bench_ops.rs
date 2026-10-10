@@ -819,6 +819,37 @@ fn gdn_case(b: &Budget) -> Case {
     )
 }
 
+/// The gated delta rule's log-decay `g` over `4 * T` tokens of Qwen3.5's
+/// 16 heads. CPU only.
+fn gdn_decay_case(b: &Budget) -> Case {
+    let rows = 4 * T;
+    let mut c = Ctx::new(b, "gdn_decay");
+    let a = c.f32("a", &[1, rows, QGH], 2.0, 0.0);
+    let a_log = c.f32("a_log", &[QGH], 0.5, 0.0);
+    let dt_bias = c.f32("dt_bias", &[QGH], 0.5, 0.0);
+    let gy = c.f32("gy", &[1, rows, QGH], 0.01, 0.0);
+    c.case(
+        "gdn_decay",
+        format!("[1,{rows},{QGH}]"),
+        vec![
+            dir("fwd", 20, move |cpu, t| {
+                Ok(vec![out(
+                    "g",
+                    cpu.gdn_log_decay_forward(&t[a], &t[a_log], &t[dt_bias])?,
+                )])
+            }),
+            dir("bwd", 20, move |cpu, t| {
+                let gr = cpu.gdn_log_decay_backward(&t[a], &t[a_log], &t[dt_bias], &t[gy])?;
+                Ok(vec![
+                    out("ga", gr.input),
+                    out("ga_log", gr.a_log),
+                    out("gdt_bias", gr.dt_bias),
+                ])
+            }),
+        ],
+    )
+}
+
 /// The gated delta rule's operands at `[q, k, v, g, beta]` in `t`, from a
 /// zero state.
 fn gdn_inputs(t: &[Tensor], [q, k, v, g, beta]: [usize; 5]) -> ojas_core::GdnInputs<'_> {
@@ -1197,6 +1228,7 @@ fn builders() -> Vec<(&'static str, Builder)> {
         ("gated_rms", gated_rms_case),
         ("rope_partial", rope_partial_case),
         ("gdn", gdn_case),
+        ("gdn_decay", gdn_decay_case),
         ("cached_attn_dec", |b| {
             cached_attn_case(b, "cached_attn_dec", T)
         }),
