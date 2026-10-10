@@ -1,0 +1,6 @@
+round=1 lane=base loadavg=1.37 1.56 1.27
+round=1 lane=after loadavg=1.52 1.59 1.29
+round=2 lane=after loadavg=1.53 1.59 1.30
+round=2 lane=base loadavg=1.48 1.57 1.30
+round=3 lane=base loadavg=1.36 1.54 1.30
+round=3 lane=after loadavg=1.60 1.58 1.32

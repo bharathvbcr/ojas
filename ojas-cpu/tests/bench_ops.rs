@@ -28,8 +28,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, DType, MuonNs5Config, Ns5Precision, Numerics, OjasError, Tensor,
-    RMS_NORM_EPS,
+    AdamWConfig, Backend, Budget, CeChunk, DType, MuonNs5Config, Ns5Precision, Numerics, OjasError,
+    Tensor, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 
@@ -525,6 +525,51 @@ fn ce_case(b: &Budget) -> Case {
     )
 }
 
+/// The fused LM-head cross-entropy over `rows` rows of the nanolab head
+/// (`[V, D]` weight), tiled by `chunk`. CPU only: torch has no fused op.
+/// `fwd` is the loss alone, `bwd` the loss and both gradients.
+fn linear_ce_case(b: &Budget, name: &'static str, rows: usize, chunk: CeChunk) -> Case {
+    let mut c = Ctx::new(b, name);
+    let x = c.f32("x", &[rows, D], 1.0, 0.0);
+    let w = c.f32("w", &[V, D], 0.035, 0.0);
+    let targets = c.ids("targets", &[rows], V);
+    let run = move |cpu: &CpuBackend, t: &mut [Tensor], want_grad: bool| {
+        let ce =
+            cpu.linear_cross_entropy_mean(&t[x], &t[w], &t[targets], None, chunk, want_grad)?;
+        let mut outs = vec![out("loss", ce.loss)];
+        outs.extend(ce.grad_input.map(|g| out("gx", g)));
+        outs.extend(ce.grad_weight.map(|g| out("gw", g)));
+        Ok(outs)
+    };
+    c.case(
+        name,
+        format!("[{rows},{D}]x[{V},{D}] chunk {}x{}", chunk.rows, chunk.cols),
+        vec![
+            dir("fwd", 3, move |cpu, t| run(cpu, t, false)),
+            dir("bwd", 3, move |cpu, t| run(cpu, t, true)),
+        ],
+    )
+}
+
+/// One decode step's attention over a `[1, T, NH, HD]` KV cache holding
+/// `kv_len` positions. CPU only: torch has no cached-attention op.
+fn cached_attn_case(b: &Budget, name: &'static str, kv_len: usize) -> Case {
+    let mut c = Ctx::new(b, name);
+    let q = c.f32("q", &[1, 1, NH, HD], 1.0, 0.0);
+    let k = c.f32("k_cache", &[1, T, NH, HD], 1.0, 0.0);
+    let v = c.f32("v_cache", &[1, T, NH, HD], 1.0, 0.0);
+    c.case(
+        name,
+        format!("q[1,1,{NH},{HD}] cache[1,{T},{NH},{HD}] kv_len {kv_len}"),
+        vec![dir("fwd", 200, move |cpu, t| {
+            Ok(vec![out(
+                "out",
+                cpu.cached_attention_forward(&t[q], &t[k], &t[v], kv_len, None)?,
+            )])
+        })],
+    )
+}
+
 /// nanolab AdamW group: lr 6e-4, betas (0.9, 0.95), eps 1e-8, weight decay 0.
 /// Moments start non-zero so the step is not the first-step special case.
 fn adamw_case(b: &Budget, name: &'static str, rows: usize, cols: usize, n: usize) -> Case {
@@ -768,6 +813,37 @@ fn gdn_case(b: &Budget) -> Case {
                     out("gv", gr.v),
                     out("gg", gr.g),
                     out("gbeta", gr.beta),
+                ])
+            }),
+        ],
+    )
+}
+
+/// The gated delta rule's log-decay `g` over `4 * T` tokens of Qwen3.5's
+/// 16 heads. CPU only.
+fn gdn_decay_case(b: &Budget) -> Case {
+    let rows = 4 * T;
+    let mut c = Ctx::new(b, "gdn_decay");
+    let a = c.f32("a", &[1, rows, QGH], 2.0, 0.0);
+    let a_log = c.f32("a_log", &[QGH], 0.5, 0.0);
+    let dt_bias = c.f32("dt_bias", &[QGH], 0.5, 0.0);
+    let gy = c.f32("gy", &[1, rows, QGH], 0.01, 0.0);
+    c.case(
+        "gdn_decay",
+        format!("[1,{rows},{QGH}]"),
+        vec![
+            dir("fwd", 20, move |cpu, t| {
+                Ok(vec![out(
+                    "g",
+                    cpu.gdn_log_decay_forward(&t[a], &t[a_log], &t[dt_bias])?,
+                )])
+            }),
+            dir("bwd", 20, move |cpu, t| {
+                let gr = cpu.gdn_log_decay_backward(&t[a], &t[a_log], &t[dt_bias], &t[gy])?;
+                Ok(vec![
+                    out("ga", gr.input),
+                    out("ga_log", gr.a_log),
+                    out("gdt_bias", gr.dt_bias),
                 ])
             }),
         ],
@@ -1152,6 +1228,35 @@ fn builders() -> Vec<(&'static str, Builder)> {
         ("gated_rms", gated_rms_case),
         ("rope_partial", rope_partial_case),
         ("gdn", gdn_case),
+        ("gdn_decay", gdn_decay_case),
+        ("cached_attn_dec", |b| {
+            cached_attn_case(b, "cached_attn_dec", T)
+        }),
+        ("cached_attn_dec_short", |b| {
+            cached_attn_case(b, "cached_attn_dec_short", T / 8)
+        }),
+        ("linear_ce", |b| {
+            linear_ce_case(
+                b,
+                "linear_ce",
+                T / 8,
+                CeChunk {
+                    rows: T / 8,
+                    cols: 8192,
+                },
+            )
+        }),
+        ("linear_ce_whole_vocab", |b| {
+            linear_ce_case(
+                b,
+                "linear_ce_whole_vocab",
+                T / 8,
+                CeChunk {
+                    rows: T / 8,
+                    cols: V,
+                },
+            )
+        }),
     ]
 }
 

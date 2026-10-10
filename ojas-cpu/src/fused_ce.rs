@@ -5,7 +5,8 @@
 //! vocabulary in `chunk.cols` blocks; one `[rows, cols]` logit tile exists at
 //! a time. Each tile is the [`crate::gemm`] product `x_c · W_cᵀ`, so Fast and
 //! Exact numerics apply as they do to `linear_forward`. A row block makes
-//! three passes over the vocabulary, recomputing its tiles each time:
+//! three passes over the vocabulary, recomputing its tiles each time when
+//! the vocabulary takes more than one block:
 //!
 //! 1. the row maximum;
 //! 2. `sum exp(l - max)` in ascending vocabulary order, and the target logit;
@@ -25,18 +26,24 @@
 //! linear_backward` bit for bit, for every chunk. Under Fast they agree to
 //! rounding: a whole-call product (Accelerate on macOS) picks its own order.
 //!
-//! The exponentials and the softmax tile run on the calling thread; the
-//! GEMMs use the pool.
+//! When `chunk.cols` covers the vocabulary there is one tile per row block,
+//! so it is computed once and the three passes reuse it. The per-row work of
+//! each pass (maximum, exponential sums, softmax tile) is split by rows
+//! across scoped threads, each row on one thread in its own order, so the
+//! split changes no bit; the GEMMs use the pool.
 //!
 //! The valid-row count is global. An all-ignored batch is
 //! [`OjasError::NonFinite`], and a target outside the vocabulary that is not
 //! `ignore_index` is [`OjasError::OutOfRange`], as in the unfused path.
+
+use std::ops::Range;
 
 use ojas_core::{
     exp_exact, linear_ce_dims, Budget, CeChunk, LinearCe, LinearCeDims, OjasError, Tensor,
 };
 
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
+use crate::pool::scoped::{self, min_rows};
 use crate::pool::Exec;
 use crate::validate::{
     all_finite, alloc_f32, check_u32, f32_operands, fill_outs, nonfinite, product, room_for, shape,
@@ -224,6 +231,7 @@ fn fused(
     // the caller's.
     let _tiles = room_for(OP, budget, tile_scratch(exec, rows, cols, d, want_grad)?)?;
     let vocab_blocks = || (0..v).step_by(cols).map(move |c0| c0..(c0 + cols).min(v));
+    let single = cols == v;
     let mut total = 0.0f32;
     for r0 in (0..n).step_by(rows) {
         let r1 = (r0 + rows).min(n);
@@ -234,36 +242,33 @@ fn fused(
         let mut maxes = vec![f32::NEG_INFINITY; r];
         let mut sums = vec![0.0f32; r];
         let mut picked = vec![0.0f32; r];
+        // With one vocabulary block the tile is the same product in every
+        // pass, so it is computed once and kept: same bits, same one tile.
+        let mut kept = None;
 
         for range in vocab_blocks() {
-            let (logits, _) = logit_tile(exec, &x_block, w, range.clone(), d)?;
-            for (max, row) in maxes.iter_mut().zip(logits.chunks_exact(range.len())) {
-                for &value in row {
-                    if value > *max {
-                        *max = value;
-                    }
-                }
+            let (logits, w_block) = logit_tile(exec, &x_block, w, range.clone(), d)?;
+            row_maxes(exec, &logits, range.len(), &mut maxes)?;
+            if single {
+                kept = Some((logits, w_block));
             }
         }
 
         for range in vocab_blocks() {
-            let (logits, _) = logit_tile(exec, &x_block, w, range.clone(), d)?;
-            for (i, row) in logits.chunks_exact(range.len()).enumerate() {
-                if ignored(i) {
-                    continue;
+            let computed;
+            let logits = match &kept {
+                Some((logits, _)) => logits,
+                None => {
+                    computed = logit_tile(exec, &x_block, w, range.clone(), d)?.0;
+                    &computed
                 }
-                for &value in row {
-                    let e = exp_exact(value - maxes[i]);
-                    if !e.is_finite() {
-                        return Err(nonfinite(OP));
-                    }
-                    sums[i] += e;
-                }
-                let class = block_targets[i] as usize;
-                if range.contains(&class) {
-                    picked[i] = row[class - range.start];
-                }
-            }
+            };
+            let rows = Rows {
+                targets: block_targets,
+                ignore,
+                maxes: &maxes,
+            };
+            exp_sums(exec, logits, range, rows, [&mut sums, &mut picked])?;
         }
         for i in 0..r {
             if ignored(i) {
@@ -281,22 +286,16 @@ fn fused(
         };
         for range in vocab_blocks() {
             let width = range.len();
-            let (mut g, w_block) = logit_tile(exec, &x_block, w, range.clone(), d)?;
-            for (i, row) in g.chunks_exact_mut(width).enumerate() {
-                if ignored(i) {
-                    row.fill(0.0);
-                    continue;
-                }
-                let (max, sum) = (maxes[i], sums[i]);
-                for value in row.iter_mut() {
-                    let p = exp_exact(*value - max) / sum;
-                    *value = p / denom;
-                }
-                let class = block_targets[i] as usize;
-                if range.contains(&class) {
-                    row[class - range.start] -= 1.0 / denom;
-                }
-            }
+            let (mut g, w_block) = match kept.take() {
+                Some(tile) => tile,
+                None => logit_tile(exec, &x_block, w, range.clone(), d)?,
+            };
+            let rows = Rows {
+                targets: block_targets,
+                ignore,
+                maxes: &maxes,
+            };
+            softmax_grad(exec, &mut g, range.clone(), rows, &sums, denom)?;
             let g = Mat::row_major(&g, r, width);
             gemm_acc(OP, exec, &g, &w_block, &mut gx[r0 * d..r1 * d])?;
             gemm_acc(
@@ -313,4 +312,118 @@ fn fused(
         return Err(nonfinite(OP));
     }
     Ok(loss)
+}
+
+/// A row block's targets, the ignored id, and each row's maximum logit.
+#[derive(Clone, Copy)]
+struct Rows<'a> {
+    targets: &'a [u32],
+    ignore: Option<u32>,
+    maxes: &'a [f32],
+}
+
+impl Rows<'_> {
+    fn ignored(&self, i: usize) -> bool {
+        self.ignore == Some(self.targets[i])
+    }
+}
+
+/// Pass 1: each row's running maximum over this tile (`width` columns).
+/// Rows split across [`scoped`] threads; a row's maximum is the same
+/// whichever thread scans it.
+fn row_maxes(
+    exec: Exec<'_>,
+    logits: &[f32],
+    width: usize,
+    maxes: &mut [f32],
+) -> Result<(), OjasError> {
+    let r = maxes.len();
+    scoped::chunks_into(exec, maxes, r, 1, min_rows(width), |rows, part| {
+        let tile = &logits[rows.start * width..rows.end * width];
+        for (max, row) in part.iter_mut().zip(tile.chunks_exact(width)) {
+            for &value in row {
+                if value > *max {
+                    *max = value;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Pass 2: each valid row's `sum exp(l - max)` continued over this tile in
+/// ascending vocabulary order, and its target logit if the tile holds it.
+/// Rows split across [`scoped`] threads; each row's sum is one thread's
+/// sequence, so the bits do not depend on the split.
+fn exp_sums(
+    exec: Exec<'_>,
+    logits: &[f32],
+    range: Range<usize>,
+    rows: Rows<'_>,
+    [sums, picked]: [&mut [f32]; 2],
+) -> Result<(), OjasError> {
+    let (r, width) = (sums.len(), range.len());
+    let outs = [sums, picked];
+    scoped::chunks_into_n(
+        exec,
+        outs,
+        r,
+        [1, 1],
+        min_rows(width),
+        |part, [sums, picked]| {
+            for (local, i) in part.enumerate() {
+                if rows.ignored(i) {
+                    continue;
+                }
+                let row = &logits[i * width..(i + 1) * width];
+                for &value in row {
+                    let e = exp_exact(value - rows.maxes[i]);
+                    if !e.is_finite() {
+                        return Err(nonfinite(OP));
+                    }
+                    sums[local] += e;
+                }
+                let class = rows.targets[i] as usize;
+                if range.contains(&class) {
+                    picked[local] = row[class - range.start];
+                }
+            }
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// Pass 3: the logit tile turned in place into `G = (softmax - onehot) /
+/// denom`, zero rows for ignored targets. Rows split across [`scoped`]
+/// threads; every value is computed alone.
+fn softmax_grad(
+    exec: Exec<'_>,
+    g: &mut [f32],
+    range: Range<usize>,
+    rows: Rows<'_>,
+    sums: &[f32],
+    denom: f32,
+) -> Result<(), OjasError> {
+    let (r, width) = (sums.len(), range.len());
+    scoped::chunks_into(exec, g, r, width, min_rows(width), |part, tile| {
+        for (i, row) in part.zip(tile.chunks_exact_mut(width)) {
+            if rows.ignored(i) {
+                row.fill(0.0);
+                continue;
+            }
+            let (max, sum) = (rows.maxes[i], sums[i]);
+            for value in row.iter_mut() {
+                let p = exp_exact(*value - max) / sum;
+                *value = p / denom;
+            }
+            let class = rows.targets[i] as usize;
+            if range.contains(&class) {
+                row[class - range.start] -= 1.0 / denom;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }

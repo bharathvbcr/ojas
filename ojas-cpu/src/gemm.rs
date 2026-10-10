@@ -16,6 +16,11 @@
 //! ascending order with its own blocking; its bits also do not depend on the
 //! tiling or the thread count.
 //!
+//! A one-row product below the whole-call cutoff whose `B` is contiguous
+//! along either axis (a decode step's `x·Wᵀ` and `g·W`) skips the packing
+//! and runs the same per-output chain directly ([`gemv_into`]), so its bits
+//! are the packed kernel's.
+//!
 //! A Fast product of at least [`FAST_WHOLE_CALL_MACS`] skips the packed kernel.
 //! On macOS it is one `ojas_simd::sgemm_accelerate` call over the whole
 //! matrix, never split across the pool; Accelerate picks its own order and
@@ -418,7 +423,123 @@ fn gemm_into(
         }
         return simd_tiles_into(op, exec, a, b, c, accumulate);
     }
+    if m == 1 && (b.rs == 1 || b.cs == 1) {
+        return gemv_into(exec, a, b, c, accumulate);
+    }
     packed_into(exec, a, b, c, accumulate)
+}
+
+/// Output columns per [`gemv_into`] piece, in multiply-adds: a quarter of a
+/// [`TASK_MACS`], since a one-row product streams `B` once and is bound by
+/// memory, not by the multiply-adds a packed tile spends.
+const GEMV_PIECE_MACS: usize = TASK_MACS / 4;
+/// Columns the dot form of [`gemv_into`] carries at once.
+const GEMV_COLS: usize = 8;
+
+/// One output row (`m == 1`) without packing: [`gemm_into`] below the
+/// whole-call cutoff when `B` runs contiguously along the reduction
+/// (`x · Wᵀ`, `b.rs == 1`) or along the outputs (`g · W`, `b.cs == 1`).
+/// The packed path would copy all of `B` into panels for one row and spend
+/// five of its six panel rows on zero padding.
+///
+/// Each output keeps one accumulator, from `+0.0` (or its value in `c` with
+/// `accumulate`), stepped for `k` ascending with the packed kernel's own
+/// step: `acc + a * b` under Exact, [`fma`] under Fast. That is the packed
+/// kernel's chain, so the bits are its bits. Pieces of whole columns run on
+/// [`scoped`] threads and write `c` in place; the cut changes no bit.
+fn gemv_into(
+    exec: Exec<'_>,
+    a: &Mat,
+    b: &Mat,
+    c: &mut [f32],
+    accumulate: bool,
+) -> Result<(), OjasError> {
+    let (k, n) = (a.cols, b.cols);
+    let gathered;
+    let x = if a.cs == 1 {
+        &a.data[..k]
+    } else {
+        gathered = (0..k).map(|p| a.data[p * a.cs]).collect::<Vec<_>>();
+        &gathered[..]
+    };
+    let fast = exec.numerics == Numerics::Fast;
+    let cancel = exec.pool.cancel_hook();
+    let min_cols = (GEMV_PIECE_MACS / k).max(1);
+    scoped::chunks_into(exec, c, n, 1, min_cols, |cols, out| {
+        cancel()?;
+        if !accumulate {
+            out.fill(0.0);
+        }
+        match (b.rs == 1, fast) {
+            (true, false) => gemv_dot::<false>(x, b, cols.start, out),
+            (true, true) => gemv_dot::<true>(x, b, cols.start, out),
+            (false, false) => gemv_axpy::<false>(x, b, cols.start, out),
+            (false, true) => gemv_axpy::<true>(x, b, cols.start, out),
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// The packed kernels' step: [`steps_fast`] or [`steps_exact`].
+#[inline(always)]
+fn gemv_step<const FAST: bool>(acc: f32, a: f32, b: f32) -> f32 {
+    if FAST {
+        fma(a, b, acc)
+    } else {
+        acc + a * b
+    }
+}
+
+/// `out[j] += x · B[:, col0 + j]` with `B`'s columns contiguous (`b.rs ==
+/// 1`). [`GEMV_COLS`] columns at a time, eight reduction steps of each
+/// loaded together, so the inner step is one vector step across columns.
+fn gemv_dot<const FAST: bool>(x: &[f32], b: &Mat, col0: usize, out: &mut [f32]) {
+    let k = x.len();
+    let column = |j: usize| &b.data[(col0 + j) * b.cs..][..k];
+    let (blocks, rest) = out.as_chunks_mut::<GEMV_COLS>();
+    for (blk, acc) in blocks.iter_mut().enumerate() {
+        let cols: [&[f32]; GEMV_COLS] = std::array::from_fn(|l| column(blk * GEMV_COLS + l));
+        let mut r = *acc;
+        let (xs, x_tail) = x.as_chunks::<8>();
+        for (q, xs) in xs.iter().enumerate() {
+            let w: [[f32; 8]; GEMV_COLS] = std::array::from_fn(|l| {
+                <[f32; 8]>::try_from(&cols[l][8 * q..8 * q + 8]).unwrap_or([0.0; 8])
+            });
+            for (s, &xv) in xs.iter().enumerate() {
+                for l in 0..GEMV_COLS {
+                    r[l] = gemv_step::<FAST>(r[l], xv, w[l][s]);
+                }
+            }
+        }
+        let tail = k - x_tail.len();
+        for (s, &xv) in x_tail.iter().enumerate() {
+            for l in 0..GEMV_COLS {
+                r[l] = gemv_step::<FAST>(r[l], xv, cols[l][tail + s]);
+            }
+        }
+        *acc = r;
+    }
+    let done = blocks.len() * GEMV_COLS;
+    for (j, acc) in rest.iter_mut().enumerate() {
+        let col = column(done + j);
+        *acc = x
+            .iter()
+            .zip(col)
+            .fold(*acc, |acc, (&xv, &bv)| gemv_step::<FAST>(acc, xv, bv));
+    }
+}
+
+/// `out[j] += x · B[:, col0 + j]` with `B`'s rows contiguous (`b.cs == 1`):
+/// for each reduction step, one row of `B` scaled into every output.
+fn gemv_axpy<const FAST: bool>(x: &[f32], b: &Mat, col0: usize, out: &mut [f32]) {
+    let len = out.len();
+    for (p, &xv) in x.iter().enumerate() {
+        let row = &b.data[p * b.rs + col0..][..len];
+        for (acc, &bv) in out.iter_mut().zip(row) {
+            *acc = gemv_step::<FAST>(*acc, xv, bv);
+        }
+    }
 }
 
 /// The packed kernel over output tiles on the pool: [`gemm_into`] below the
@@ -1072,6 +1193,56 @@ mod tests {
                     ] {
                         let got = gemm("test", exec, x, y).unwrap();
                         assert_eq!(bits(&got), bits(&want), "{m}x{k}x{n} threads {threads}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A one-row product takes `gemv_into` and gives the packed kernel's bits
+    /// on both `B` layouts it serves, for strided and contiguous `A`, from
+    /// zero and accumulated, under both numerics and any thread count.
+    #[test]
+    fn one_row_products_match_the_packed_kernel_bitwise() {
+        let mut seed = 0x51ed_270bu64;
+        let mut rand = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 40) as f32 / (1u64 << 24) as f32) - 0.5
+        };
+        // Both sides of GEMV_COLS and the eight-step blocks, and a shape
+        // large enough to cut into several pieces.
+        let shapes = [(1, 1), (7, 9), (8, 8), (17, 23), (300, 61), (768, 4100)];
+        for threads in [1usize, 2, 4, 7] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            for numerics in [Numerics::Exact, Numerics::Fast] {
+                let exec = Exec {
+                    pool: &pool,
+                    numerics,
+                };
+                for &(k, n) in &shapes {
+                    if whole_call(numerics, 1, k, n) {
+                        continue;
+                    }
+                    let a_data: Vec<f32> = (0..k).map(|_| rand()).collect();
+                    let b_data: Vec<f32> = (0..k * n).map(|_| rand()).collect();
+                    let init: Vec<f32> = (0..n).map(|_| rand()).collect();
+                    let a = Mat::row_major(&a_data, 1, k);
+                    let sa = spread(&a);
+                    let a_spread = sa.mat();
+                    let b = Mat::row_major(&b_data, k, n);
+                    let bt_data = naive_t(&b);
+                    let bt = Mat::row_major(&bt_data, n, k).t();
+                    for (x, y) in [(&a, &b), (&a, &bt), (&a_spread, &b), (&a_spread, &bt)] {
+                        let label = format!("1x{k}x{n} {numerics:?} threads {threads}");
+                        for accumulate in [false, true] {
+                            let mut want = init.clone();
+                            packed_into(exec, x, y, &mut want, accumulate).unwrap();
+                            let mut got = init.clone();
+                            gemm_into("test", exec, x, y, &mut got, accumulate).unwrap();
+                            assert_eq!(bits(&got), bits(&want), "{label} accumulate {accumulate}");
+                        }
                     }
                 }
             }

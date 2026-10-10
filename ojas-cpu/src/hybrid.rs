@@ -424,8 +424,9 @@ pub(crate) fn gdn_log_decay_forward(
 /// [`ojas_core::Backend::gdn_log_decay_backward`]: `(da, da_log, ddt_bias)`.
 /// `da = gy * -exp(a_log) * softplus'(a + dt_bias)`, with `softplus' = 1`
 /// above 20 and [`sigmoid`] below; `ddt_bias[h]` sums `da` and `da_log[h]`
-/// sums `gy * g` over rows in ascending order on the calling thread, so the
-/// bits do not depend on the thread count. `da` is a row pass.
+/// sums `gy * g` over rows in ascending order from `+0.0`, each head on one
+/// [`scoped`] thread, so the bits do not depend on the thread count. `da`
+/// is a row pass.
 pub(crate) fn gdn_log_decay_backward(
     op: &'static str,
     budget: &Budget,
@@ -448,16 +449,31 @@ pub(crate) fn gdn_log_decay_backward(
             }
             Ok(())
         })?;
-        dlog.fill(0.0);
-        ddt.fill(0.0);
-        for row in 0..rows {
-            for h in 0..heads {
-                let i = row * heads + h;
-                let g = rate[h] * softplus(a[i] + dt_bias[h]);
-                dlog[h] += gy[i] * g;
-                ddt[h] += da[i];
-            }
-        }
+        let da = &*da;
+        // Each value costs a softplus, so a piece is worth a thread at an
+        // eighth of the usual row-pass size.
+        let min_heads = (ROW_MIN_ELEMS / 8 / rows.max(1)).max(1);
+        scoped::chunks_into_n(
+            exec,
+            [dlog, ddt],
+            heads,
+            [1, 1],
+            min_heads,
+            |cols, [dlog, ddt]| {
+                for ((h, dl), dd) in cols.zip(dlog.iter_mut()).zip(ddt.iter_mut()) {
+                    let (mut sum_log, mut sum_dt) = (0.0f32, 0.0f32);
+                    for row in 0..rows {
+                        let i = row * heads + h;
+                        let g = rate[h] * softplus(a[i] + dt_bias[h]);
+                        sum_log += gy[i] * g;
+                        sum_dt += da[i];
+                    }
+                    *dl = sum_log;
+                    *dd = sum_dt;
+                }
+                Ok(())
+            },
+        )?;
         Ok(())
     })?;
     Ok((da, dlog, ddt))

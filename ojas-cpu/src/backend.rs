@@ -419,7 +419,7 @@ impl Backend for CpuBackend {
         f32_checked(OP, self.exec(), table)?;
         let ids = u32_values(OP, token_ids)?;
         let grad = f32_checked(OP, self.exec(), grad_output)?;
-        embedding_backward(OP, &self.budget, ids, grad, &dims)
+        embedding_backward(OP, &self.budget, self.exec(), ids, grad, &dims)
     }
 
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
