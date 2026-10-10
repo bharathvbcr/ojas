@@ -50,8 +50,8 @@ What a decode step reads back on `DeviceDecoder`:
 | pick | path | readback per step |
 | :--- | :--- | :--- |
 | `greedy_decode` | `forward_greedy`: `Backend::argmax_rows` on the device | the 4-byte id |
-| `generate` at temperature 0 (Go's `GenerateIDs` at 0), or with a `top_k` | `forward_top`: `Backend::topk_rows` on the device | `k` values and `k` ids, `8k` bytes (`k` = 1 at temperature 0) |
-| `generate` with neither | `forward` | the `[vocab]` logit row |
+| `generate` at temperature 0 (Go's `GenerateIDs` at 0), or with `top_k = 1` | `forward_top`, `k` = 1: `Backend::topk_rows` on the device | the leader's value and id, 8 bytes |
+| `generate` with a `top_k` > 1, or neither | `forward_top` (`k` > 1) or `forward`: ranked on the host | the `[vocab]` logit row |
 
 `forward_top` clamps `k` to the vocabulary, drops `-inf` leaders (masked logits), and reads the row back and ranks it on the host when the backend refuses `k` (`Unsupported`: Metal and wgpu take `k <= 1024`). When the step picks the one id the device holds (greedy, temperature 0, `top_k = 1`), the next forward takes it from the device with no upload. Fewer bytes is not always less time: the `topk_rows` kernels make `k` passes over the row, so at nanolab's vocabulary and `top_k = 50` a sampled step is about 0.5 ms slower on Metal (+4.6%) than reading the 201 KB row back and selecting on the host (`bench/results/2026-10-10-decode-after/`, `ab/`). A per-`k` probe (`probes/` there) finds no `k` from 1 to 1024 at which the device selection is faster on this unified-memory machine: each pass costs about 17 µs on Metal and 20 µs on wgpu, against a flat 120–150 µs (Metal) for the readback and host select.
 

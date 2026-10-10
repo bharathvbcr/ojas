@@ -12,8 +12,9 @@
 //! Logits are the last position's only: its hidden row is a view of the
 //! `[Tn, n_embd]` hidden state, normed and projected. What is read back of
 //! that `[1, vocab]` row depends on the caller: all of it
-//! ([`DeviceDecoder::forward`]), its argmax ([`DeviceDecoder::forward_greedy`],
-//! 4 bytes) or its `k` leaders ([`DeviceDecoder::forward_top`], `8k` bytes).
+//! ([`DeviceDecoder::forward`], and [`DeviceDecoder::forward_top`] for
+//! `k` > 1), its argmax ([`DeviceDecoder::forward_greedy`], 4 bytes) or its
+//! one leader ([`DeviceDecoder::forward_top`] for `k` = 1, 8 bytes).
 //! RoPE rows come from a table for every cache position, uploaded once by
 //! `new`. The only per-call upload is the token ids, and none when the call
 //! forwards the one id the previous call picked on the device.
@@ -244,38 +245,34 @@ impl<B: Backend> DeviceDecoder<B> {
     }
 
     /// [`Self::forward`] for sampling that needs only the `k` leaders of the
-    /// last position's logits (a `top_k`, or temperature 0 as `k` = 1): they
-    /// are selected on the device (`Backend::topk_rows`), so the readback is
-    /// `k` values and `k` ids, `8k` bytes, not the `[vocab]` row. Returns
-    /// what `ranked_candidates` returns for that row: its finite leaders
-    /// ranked by (logit desc, index asc), at most `k` (a `k` past the
-    /// vocabulary keeps every finite logit), with the same refusals. `-inf`
-    /// leaders (masked logits) are dropped. A backend that refuses `k`
-    /// (`OjasError::Unsupported`: Metal and wgpu take `k <= 1024`) has the
-    /// row read back and ranked on the host instead. With one leader its id
-    /// is kept on the device for the next call, as
-    /// [`Self::forward_greedy`]'s is. The same `len` contract as
-    /// [`Self::forward`].
+    /// last position's logits (a `top_k`, or temperature 0 as `k` = 1).
+    /// Returns what `ranked_candidates` returns for that row: its finite
+    /// leaders ranked by (logit desc, index asc), at most `k` (a `k` past
+    /// the vocabulary keeps every finite logit), with the same refusals.
+    ///
+    /// With `k` = 1 the leader is selected on the device
+    /// (`Backend::topk_rows`), so the readback is its value and id, 8 bytes,
+    /// and its id is kept on the device for the next call, as
+    /// [`Self::forward_greedy`]'s is. A `-inf` leader (an all-masked row) is
+    /// refused as `ranked_candidates` refuses it. With `k` > 1 the `[vocab]`
+    /// row is read back and ranked on the host: the `topk_rows` kernels make
+    /// `k` passes over the row, which on Metal and wgpu cost more than the
+    /// readback at every `k` > 1 measured
+    /// (`bench/results/2026-10-10-decode-after/`). The same `len` contract
+    /// as [`Self::forward`].
     pub fn forward_top(&mut self, tokens: &[u32], k: usize) -> Result<Vec<(u32, f32)>, OjasError> {
         let (logits, last) = self.run(tokens)?;
-        // `topk_rows` refuses `k` past its columns; `ranked_candidates`
-        // keeps every finite logit then, and so do the row's `vocab` leaders.
-        let k = k.min(self.spec.vocab);
-        let (leaders, kept) = match self.eval.backend().topk_rows(&logits, k) {
-            Ok((values, ids)) => {
-                let host_values = self.read_back(&values)?;
-                let host_ids = self.read_back(&ids)?;
-                self.eval.backend().sync()?;
-                let leaders =
-                    leading_candidates(&host_values.to_f32_vec()?, host_ids.u32_slice()?)?;
-                (leaders, (k == 1).then_some(ids))
-            }
-            Err(OjasError::Unsupported { .. }) => {
-                let row = self.read_back(&logits)?;
-                self.eval.backend().sync()?;
-                (ranked_candidates(&row.to_f32_vec()?, Some(k))?, None)
-            }
-            Err(e) => return Err(e),
+        let (leaders, kept) = if k == 1 {
+            let (values, ids) = self.eval.backend().topk_rows(&logits, 1)?;
+            let host_values = self.read_back(&values)?;
+            let host_ids = self.read_back(&ids)?;
+            self.eval.backend().sync()?;
+            let leaders = leading_candidates(&host_values.to_f32_vec()?, host_ids.u32_slice()?)?;
+            (leaders, Some(ids))
+        } else {
+            let row = self.read_back(&logits)?;
+            self.eval.backend().sync()?;
+            (ranked_candidates(&row.to_f32_vec()?, Some(k))?, None)
         };
         for &(id, _) in &leaders {
             check_token(OP, id, self.spec.vocab)?;

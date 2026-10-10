@@ -202,13 +202,16 @@ fn check_greedy<B: Backend>(name: &str, open: impl Fn() -> B) {
     }
 }
 
-/// Sampled decode on the device: each forward selects the `k` leaders where
-/// the logits are (`topk_rows`) and reads back only them, `k` values and
-/// `k` ids, two readbacks of `4k` bytes. At temperature 0 (`k` = 1, the
-/// path of Go's `GenerateIDs`) the id is fed back from the device, so the
-/// prompt is the only upload. A `top_k` past the vocabulary is the whole
-/// row's leaders; one past the kernels' 1024 reads the `[vocab]` row back
-/// and ranks it on the host. The ids equal CPU `Exact`'s.
+/// Sampled decode on the device. With one leader (temperature 0, the path
+/// of Go's `GenerateIDs`, or `top_k` 1) each forward selects it where the
+/// logits are (`topk_rows`) and reads back its value and id, two readbacks
+/// of 4 bytes, and the id is fed back from the device, so the prompt is the
+/// only upload. With `k` > 1 each forward reads the `[vocab]` row back and
+/// ranks it on the host, one readback of `4 * vocab` bytes and the drawn id
+/// uploaded: the `topk_rows` kernels make `k` passes over the row, which
+/// cost more than the readback at every `k` > 1 measured
+/// (`bench/results/2026-10-10-decode-after/`). The ids equal CPU `Exact`'s,
+/// a `top_k` past the vocabulary included.
 fn check_top<B: Backend>(name: &str, open: impl Fn() -> B) {
     let small = spec(2);
     let wide = GptConfig {
@@ -216,8 +219,9 @@ fn check_top<B: Backend>(name: &str, open: impl Fn() -> B) {
         n_layer: 1,
         ..spec(2)
     };
-    let cases: [(&GptConfig, f32, usize, Option<u64>); 6] = [
+    let cases: [(&GptConfig, f32, usize, Option<u64>); 7] = [
         (&small, 0.0, 1, Some(1)),
+        (&small, 0.8, 1, Some(1)),
         (&small, 0.8, 5, None),
         (&small, 1.1, 200, None),
         (&wide, 0.0, 1, Some(1)),
@@ -257,10 +261,11 @@ fn check_top<B: Backend>(name: &str, open: impl Fn() -> B) {
         assert_eq!(dec.len(), cache.len(), "{what}");
         let calls = n as u64;
         let k = top_k.min(spec.vocab) as u64;
-        let per_call = if k > 1024 {
-            (1, 4 * spec.vocab as u64)
+        let one_leader = temperature == 0.0 || k == 1;
+        let per_call = if one_leader {
+            (2, 8)
         } else {
-            (2, 8 * k)
+            (1, 4 * spec.vocab as u64)
         };
         assert_eq!(
             (r1.0 - r0.0, r1.1 - r0.1),
