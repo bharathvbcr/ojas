@@ -28,8 +28,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, DType, MuonNs5Config, Ns5Precision, Numerics, OjasError, Tensor,
-    RMS_NORM_EPS,
+    AdamWConfig, Backend, Budget, CeChunk, DType, MuonNs5Config, Ns5Precision, Numerics, OjasError,
+    Tensor, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 
@@ -521,6 +521,32 @@ fn ce_case(b: &Budget) -> Case {
                     cpu.cross_entropy_mean_backward(&t[logits], &t[targets], None)?,
                 )])
             }),
+        ],
+    )
+}
+
+/// The fused LM-head cross-entropy over `rows` rows of the nanolab head
+/// (`[V, D]` weight), tiled by `chunk`. CPU only: torch has no fused op.
+/// `fwd` is the loss alone, `bwd` the loss and both gradients.
+fn linear_ce_case(b: &Budget, name: &'static str, rows: usize, chunk: CeChunk) -> Case {
+    let mut c = Ctx::new(b, name);
+    let x = c.f32("x", &[rows, D], 1.0, 0.0);
+    let w = c.f32("w", &[V, D], 0.035, 0.0);
+    let targets = c.ids("targets", &[rows], V);
+    let run = move |cpu: &CpuBackend, t: &mut [Tensor], want_grad: bool| {
+        let ce =
+            cpu.linear_cross_entropy_mean(&t[x], &t[w], &t[targets], None, chunk, want_grad)?;
+        let mut outs = vec![out("loss", ce.loss)];
+        outs.extend(ce.grad_input.map(|g| out("gx", g)));
+        outs.extend(ce.grad_weight.map(|g| out("gw", g)));
+        Ok(outs)
+    };
+    c.case(
+        name,
+        format!("[{rows},{D}]x[{V},{D}] chunk {}x{}", chunk.rows, chunk.cols),
+        vec![
+            dir("fwd", 3, move |cpu, t| run(cpu, t, false)),
+            dir("bwd", 3, move |cpu, t| run(cpu, t, true)),
         ],
     )
 }
@@ -1152,6 +1178,28 @@ fn builders() -> Vec<(&'static str, Builder)> {
         ("gated_rms", gated_rms_case),
         ("rope_partial", rope_partial_case),
         ("gdn", gdn_case),
+        ("linear_ce", |b| {
+            linear_ce_case(
+                b,
+                "linear_ce",
+                T / 8,
+                CeChunk {
+                    rows: T / 8,
+                    cols: 8192,
+                },
+            )
+        }),
+        ("linear_ce_whole_vocab", |b| {
+            linear_ce_case(
+                b,
+                "linear_ce_whole_vocab",
+                T / 8,
+                CeChunk {
+                    rows: T / 8,
+                    cols: V,
+                },
+            )
+        }),
     ]
 }
 
