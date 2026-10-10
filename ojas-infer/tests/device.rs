@@ -11,7 +11,10 @@
 use std::sync::{Mutex, MutexGuard};
 
 use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
-use ojas_infer::{argmax_token, CpuGpt, DeviceDecoder, GptConfig, GptWeights, KvCache, SplitMix64};
+use ojas_infer::{
+    argmax_token, CpuGpt, DeviceDecoder, GenerateConfig, GptConfig, GptWeights, KvCache,
+    SamplingConfig, SplitMix64,
+};
 use ojas_model::{param_table, Init, ModelParams};
 
 const TOL: f64 = 1e-4;
@@ -199,6 +202,91 @@ fn check_greedy<B: Backend>(name: &str, open: impl Fn() -> B) {
     }
 }
 
+/// Sampled decode on the device: each forward selects the `k` leaders where
+/// the logits are (`topk_rows`) and reads back only them, `k` values and
+/// `k` ids, two readbacks of `4k` bytes. At temperature 0 (`k` = 1, the
+/// path of Go's `GenerateIDs`) the id is fed back from the device, so the
+/// prompt is the only upload. A `top_k` past the vocabulary is the whole
+/// row's leaders; one past the kernels' 1024 reads the `[vocab]` row back
+/// and ranks it on the host. The ids equal CPU `Exact`'s.
+fn check_top<B: Backend>(name: &str, open: impl Fn() -> B) {
+    let small = spec(2);
+    let wide = GptConfig {
+        vocab: 2048,
+        n_layer: 1,
+        ..spec(2)
+    };
+    let cases: [(&GptConfig, f32, usize, Option<u64>); 6] = [
+        (&small, 0.0, 1, Some(1)),
+        (&small, 0.8, 5, None),
+        (&small, 1.1, 200, None),
+        (&wide, 0.0, 1, Some(1)),
+        (&wide, 0.9, 1024, None),
+        (&wide, 0.9, 1500, None),
+    ];
+    for (spec, temperature, top_k, uploads) in cases {
+        let host = Budget::new(1 << 26);
+        let w = weights(spec, 0x70b + spec.vocab as u64, &host);
+        let prompt = &tokens(spec)[..PROMPT];
+        let n = DECODE_STEPS;
+        let g = GenerateConfig {
+            sampling: SamplingConfig {
+                temperature,
+                top_k: Some(top_k),
+                top_p: None,
+            },
+            seed: 41,
+            max_new_tokens: n,
+            stop_tokens: Vec::new(),
+        };
+        let model = CpuGpt::new(spec, &w)
+            .unwrap()
+            .with_numerics(Numerics::Exact);
+        let mut cache = KvCache::for_model(&model, spec.max_seq, &host).unwrap();
+        let want = model.generate(prompt, &mut cache, &g).unwrap();
+
+        let mut dec = DeviceDecoder::new(open(), spec, &w, spec.max_seq).unwrap();
+        let (r0, t0) = (dec.backend().budget().device_readbacks(), dec.traffic());
+        let got = dec.generate(prompt, &g).unwrap();
+        let (r1, t1) = (dec.backend().budget().device_readbacks(), dec.traffic());
+        let what = format!(
+            "{name} vocab {} temperature {temperature} top_k {top_k}",
+            spec.vocab
+        );
+        assert_eq!(got, want, "{what}");
+        assert_eq!(dec.len(), cache.len(), "{what}");
+        let calls = n as u64;
+        let k = top_k.min(spec.vocab) as u64;
+        let per_call = if k > 1024 {
+            (1, 4 * spec.vocab as u64)
+        } else {
+            (2, 8 * k)
+        };
+        assert_eq!(
+            (r1.0 - r0.0, r1.1 - r0.1),
+            (per_call.0 * calls, per_call.1 * calls),
+            "{what}: backend readbacks (calls, bytes)"
+        );
+        assert_eq!(
+            (
+                t1.readbacks - t0.readbacks,
+                t1.readback_bytes - t0.readback_bytes
+            ),
+            (per_call.0 * calls, per_call.1 * calls),
+            "{what}: HostTraffic readbacks (calls, bytes)"
+        );
+        assert_eq!(
+            t1.uploads - t0.uploads,
+            uploads.unwrap_or(calls),
+            "{what}: uploads"
+        );
+        eprintln!(
+            "{what}: {n} ids equal CPU Exact, {} readbacks of {} bytes per forward",
+            per_call.0, per_call.1
+        );
+    }
+}
+
 /// `argmax_rows` on the device at Qwen's vocabulary, with hundreds of ties
 /// per row: the ids equal `argmax_token`'s; they index an embedding table
 /// straight from the device (no host copy exists); a table smaller than
@@ -286,6 +374,7 @@ fn wgpu_device_decoder_matches_cpu() {
     let open = || ojas_wgpu::WgpuBackend::open(Budget::new(1 << 30)).unwrap();
     check("wgpu", open);
     check_greedy("wgpu", open);
+    check_top("wgpu", open);
     check_argmax("wgpu", open);
 }
 
@@ -299,5 +388,6 @@ fn metal_device_decoder_matches_cpu() {
     let open = || ojas_metal::MetalBackend::new(Budget::new(1 << 30)).unwrap();
     check("metal", open);
     check_greedy("metal", open);
+    check_top("metal", open);
     check_argmax("metal", open);
 }

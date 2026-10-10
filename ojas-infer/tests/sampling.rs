@@ -465,6 +465,52 @@ fn device_decoder_follows_the_shared_decode_loop() {
     assert_eq!(dec.remaining(), 0);
 }
 
+/// A sampled decode that needs only the leaders (temperature 0, or a
+/// `top_k`) selects them where the logits are (`Backend::topk_rows`) and
+/// never reads the `[vocab]` row: on `CpuBackend` nothing is a device
+/// tensor, so nothing is read back. With one leader (temperature 0, as Go's
+/// `GenerateIDs` asks, or `top_k` 1) its id is fed back as given, so the
+/// prompt is the only upload. The ids equal `CpuGpt`'s, a `top_k` past the
+/// vocabulary included.
+#[test]
+fn device_decoder_samples_from_the_leaders_without_reading_the_row() {
+    let budget = Budget::new(1 << 24);
+    let (m, c) = model(&budget);
+    let (_, w) = weights(&budget);
+    let m = m.with_numerics(Numerics::Exact);
+    let cpu = CpuBackend::new(Budget::new(1 << 26)).with_numerics(Numerics::Exact);
+    let mut dec = DeviceDecoder::new(cpu, &c, &w, c.max_seq).unwrap();
+    let prompt = [3u32, 9, 14];
+    let n = 12;
+    for (g, uploads) in [
+        (gen_cfg(cfg(0.0, None, None), 1, n, &[]), 1),
+        (gen_cfg(cfg(0.0, Some(4), Some(0.5)), 1, n, &[]), 1),
+        (gen_cfg(cfg(0.8, Some(1), None), 6, n, &[]), 1),
+        (gen_cfg(cfg(0.9, Some(5), Some(0.9)), 3, n, &[]), n as u64),
+        (
+            gen_cfg(cfg(1.2, Some(4 * c.vocab), None), 8, n, &[]),
+            n as u64,
+        ),
+    ] {
+        let mut cache = KvCache::for_model(&m, c.max_seq, &budget).unwrap();
+        let want = m.generate(&prompt, &mut cache, &g).unwrap();
+        dec.reset();
+        let before = dec.traffic();
+        assert_eq!(dec.generate(&prompt, &g).unwrap(), want, "{g:?}");
+        let after = dec.traffic();
+        assert_eq!(
+            (
+                after.readbacks - before.readbacks,
+                after.readback_bytes - before.readback_bytes
+            ),
+            (0, 0),
+            "{g:?}: readbacks (calls, bytes)"
+        );
+        assert_eq!(after.uploads - before.uploads, uploads, "{g:?}: uploads");
+        assert_eq!(dec.len(), cache.len());
+    }
+}
+
 /// `truncate` keeps a prefix: forwarding the dropped tokens again gives the
 /// same logits as the first time (CPU `Exact`, so bit for bit), and a
 /// length past the filled positions is refused without a change.

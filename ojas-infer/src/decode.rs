@@ -10,7 +10,22 @@
 use ojas_core::OjasError;
 
 use crate::gpt::argmax_token;
-use crate::sample::{draw, ranked_candidates, sample_token, GenerateConfig, SamplingConfig, SplitMix64};
+use crate::sample::{
+    draw, ranked_candidates, sample_token, GenerateConfig, SamplingConfig, SplitMix64,
+};
+
+/// Refuse an id outside a vocabulary of `vocab` rows: every id a decoder
+/// forwards, from a prompt, a stop list, a caller or a device pick.
+pub(crate) fn check_token(op: &'static str, token: u32, vocab: usize) -> Result<(), OjasError> {
+    if usize::try_from(token).is_ok_and(|row| row < vocab) {
+        Ok(())
+    } else {
+        Err(OjasError::OutOfRange {
+            op,
+            detail: format!("token id {token} >= vocab {vocab}"),
+        })
+    }
+}
 
 /// A model plus its KV cache, forwarded from where the cache ends.
 pub(crate) trait Forward {
@@ -18,20 +33,25 @@ pub(crate) trait Forward {
     fn room(&self) -> usize;
     /// The error for a request of `needed` positions that do not fit.
     fn refusal(&self, needed: usize) -> OjasError;
-    /// Refuse an id outside the vocabulary.
-    fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError>;
+    /// Rows of the model's vocabulary.
+    fn vocab(&self) -> usize;
+    /// Refuse an id outside the vocabulary ([`check_token`]).
+    fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError> {
+        check_token(op, token, self.vocab())
+    }
     /// Forward `tokens` from the cache's end; the last position's logits.
     fn forward(&mut self, tokens: &[u32]) -> Result<Vec<f32>, OjasError>;
-    /// [`Self::forward`], then [`argmax_token`] of the logits. A device
-    /// decoder overrides it to take the argmax where the logits are.
+    /// [`Self::forward`], then [`argmax_token`] of the logits.
+    /// [`crate::DeviceDecoder`] overrides it to take the argmax where the
+    /// logits are.
     fn forward_greedy(&mut self, tokens: &[u32]) -> Result<u32, OjasError> {
         argmax_token(&self.forward(tokens)?)
     }
     /// [`Self::forward`], then the `k` leaders of the logits as
     /// [`ranked_candidates`] gives them: finite `(id, logit)` pairs ranked by
-    /// (logit desc, index asc), the refusals of [`sample_token`]. A device
-    /// decoder overrides it to select where the logits are and read back
-    /// only the `k` leaders.
+    /// (logit desc, index asc), the refusals of [`sample_token`].
+    /// [`crate::DeviceDecoder`] overrides it to select where the logits are
+    /// (`Backend::topk_rows`) and read back only the `k` leaders.
     fn forward_top(&mut self, tokens: &[u32], k: usize) -> Result<Vec<(u32, f32)>, OjasError> {
         ranked_candidates(&self.forward(tokens)?, Some(k))
     }

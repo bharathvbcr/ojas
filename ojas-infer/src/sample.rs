@@ -171,6 +171,43 @@ pub(crate) fn ranked_candidates(
         .collect()
 }
 
+/// [`ranked_candidates`] from one row of `Backend::topk_rows`: `values` and
+/// `ids` are its `k` leaders, ranked as [`rank`] ranks them, with `-inf` (a
+/// masked logit) after every finite value. The candidates are the finite
+/// prefix, so a row with fewer than `k` finite logits gives all of them and
+/// one with none is [`OjasError::NonFinite`], as [`ranked_candidates`] has
+/// it. A NaN or `+inf` leader (`topk_rows` reports it as a fault) and a
+/// finite value after a `-inf` one are refused too.
+pub(crate) fn leading_candidates(
+    values: &[f32],
+    ids: &[u32],
+) -> Result<Vec<(u32, f32)>, OjasError> {
+    if values.is_empty() || values.len() != ids.len() {
+        return Err(OjasError::Shape {
+            op: OP,
+            detail: format!("{} leader values for {} ids", values.len(), ids.len()),
+        });
+    }
+    if values.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    let finite = values.iter().take_while(|v| v.is_finite()).count();
+    if finite == 0 {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    if values[finite..].iter().any(|v| v.is_finite()) {
+        return Err(OjasError::Shape {
+            op: OP,
+            detail: "a finite leader ranks after a -inf one".into(),
+        });
+    }
+    Ok(ids[..finite]
+        .iter()
+        .copied()
+        .zip(values[..finite].iter().copied())
+        .collect())
+}
+
 /// One id from `candidates`: finite `(id, logit)` pairs already ranked by
 /// (logit desc, index asc) and already cut to `top_k`. Temperature 0 takes
 /// the first without reading `rng`. Otherwise: divide by the temperature,
@@ -245,4 +282,50 @@ fn to_id(index: usize) -> Result<u32, OjasError> {
         op: OP,
         detail: "logit index exceeds u32".into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NEG: f32 = f32::NEG_INFINITY;
+
+    /// `-inf` leaders are masks: the finite prefix is the candidates, the
+    /// same as `ranked_candidates` over the row they came from.
+    #[test]
+    fn leading_candidates_drop_trailing_masks() {
+        let row = [NEG, 2.0, NEG, -1.0, NEG];
+        let want = ranked_candidates(&row, Some(4)).unwrap();
+        assert_eq!(want, [(1, 2.0), (3, -1.0)]);
+        let got = leading_candidates(&[2.0, -1.0, NEG, NEG], &[1, 3, 0, 2]).unwrap();
+        assert_eq!(got, want);
+        assert_eq!(
+            leading_candidates(&[0.5, -0.0], &[7, 2]).unwrap(),
+            [(7, 0.5), (2, -0.0)]
+        );
+    }
+
+    #[test]
+    fn leading_candidates_refusals() {
+        let non_finite = |values: &[f32]| {
+            let ids: Vec<u32> = (0..values.len() as u32).collect();
+            matches!(
+                leading_candidates(values, &ids),
+                Err(OjasError::NonFinite { op: OP })
+            )
+        };
+        // Every leader masked: the row has no finite logit.
+        assert!(non_finite(&[NEG, NEG]));
+        assert!(non_finite(&[1.0, f32::NAN]));
+        assert!(non_finite(&[f32::INFINITY, 1.0]));
+        let shape = |values: &[f32], ids: &[u32]| {
+            matches!(
+                leading_candidates(values, ids),
+                Err(OjasError::Shape { op: OP, .. })
+            )
+        };
+        assert!(shape(&[], &[]));
+        assert!(shape(&[1.0], &[0, 1]));
+        assert!(shape(&[1.0, NEG, 0.5], &[0, 1, 2]));
+    }
 }
