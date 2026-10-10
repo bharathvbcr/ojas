@@ -140,6 +140,9 @@ file's docs), a 32-token prompt from `gen_targets(32, 1701)`.
   which needs only each row's 50 leaders. torch draws with
   `torch.topk`, `softmax` and a seeded `torch.multinomial`, so its ids are
   not compared.
+- `gen_temp0_p32_n32`: the same forwards through `generate` at temperature
+  0, which needs only each row's one leader (Go's `GenerateIDs` at
+  temperature 0). Its torch twin is the greedy row.
 - `gen_gqa4_prefill_p32`, `gen_gqa4_greedy_p32_n32`: the first two on the
   same model with 4 KV heads for its 12 query heads (nanolab
   `Config(n_kv_head=4)`), weights from the same rule.

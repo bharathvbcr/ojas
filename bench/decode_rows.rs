@@ -15,6 +15,10 @@
 //! - `gen_topk{K}_p{P}_n{N}`: the same forwards through `generate`, each id
 //!   drawn at temperature 1 from the top `K` logits (seed [`SAMPLE_SEED`]):
 //!   the sampled path, which needs only the `K` leaders of each row.
+//! - `gen_temp0_p{P}_n{N}`: the same forwards through `generate` at
+//!   temperature 0, which needs only each row's one leader: the greedy ids
+//!   through the sampled path (Go's `GenerateIDs` at temperature 0). Its
+//!   torch twin is the greedy row's.
 //! - `gen_gqa{G}_prefill_p{P}` and `gen_gqa{G}_greedy_p{P}_n{N}`: the first
 //!   two on the same model with `G` KV heads (grouped-query attention), its
 //!   weights from the same rule.
@@ -111,6 +115,19 @@ pub fn sampling() -> GenerateConfig {
     }
 }
 
+/// The temperature-0 row's settings: no `top_k`, so each step keeps one
+/// leader because of the temperature alone.
+pub fn temp0() -> GenerateConfig {
+    GenerateConfig {
+        sampling: SamplingConfig {
+            temperature: 0.0,
+            top_k: None,
+            top_p: None,
+        },
+        ..sampling()
+    }
+}
+
 /// One decoder and its cache, forwarded from an empty cache every call.
 pub trait Gen {
     fn prefill(&mut self, prompt: &[u32]) -> R<Vec<f32>>;
@@ -179,17 +196,24 @@ pub struct Model {
     pub spec: ModelSpec,
     pub prefill: String,
     pub greedy: String,
-    /// The sampled row; nanolab's default model only.
+    /// The sampled rows, top-k then temperature 0; nanolab's default model
+    /// only.
     pub topk: Option<String>,
+    pub temp0: Option<String>,
 }
 
 impl Model {
     pub fn names(&self) -> Vec<String> {
-        [Some(&self.prefill), Some(&self.greedy), self.topk.as_ref()]
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect()
+        [
+            Some(&self.prefill),
+            Some(&self.greedy),
+            self.topk.as_ref(),
+            self.temp0.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect()
     }
 }
 
@@ -206,12 +230,14 @@ pub fn models() -> [Model; 2] {
             prefill: format!("gen_prefill_p{GEN_PROMPT}"),
             greedy: format!("gen_greedy_p{GEN_PROMPT}_n{GEN_NEW}"),
             topk: Some(format!("gen_topk{GEN_TOP_K}_p{GEN_PROMPT}_n{GEN_NEW}")),
+            temp0: Some(format!("gen_temp0_p{GEN_PROMPT}_n{GEN_NEW}")),
         },
         Model {
             spec: gqa,
             prefill: format!("gen_gqa{GQA_KV_HEADS}_prefill_p{GEN_PROMPT}"),
             greedy: format!("gen_gqa{GQA_KV_HEADS}_greedy_p{GEN_PROMPT}_n{GEN_NEW}"),
             topk: None,
+            temp0: None,
         },
     ]
 }
@@ -246,6 +272,7 @@ pub fn run<Bk: Backend, G: Gen>(r: &mut Runner<'_, Bk>, g: &mut G, m: &Model) {
     let sp = spec_string(&m.spec);
     let ids = prompt();
     let cfg = sampling();
+    let t0 = temp0();
     let parity = |_: &Runner<'_, Bk>, g: &mut G| -> R<Vec<Vec<f32>>> { Ok(vec![g.prefill(&ids)?]) };
     r.run(&m.prefill, &sp, TOL, g, parity, |_, g| {
         g.prefill(&ids)?;
@@ -258,6 +285,12 @@ pub fn run<Bk: Backend, G: Gen>(r: &mut Runner<'_, Bk>, g: &mut G, m: &Model) {
     if let Some(topk) = &m.topk {
         r.run(topk, &sp, TOL, g, parity, |_, g| {
             g.sample(&ids, &cfg)?;
+            Ok(Vec::new())
+        });
+    }
+    if let Some(temp0) = &m.temp0 {
+        r.run(temp0, &sp, TOL, g, parity, |_, g| {
+            g.sample(&ids, &t0)?;
             Ok(Vec::new())
         });
     }
@@ -280,14 +313,16 @@ pub fn run<Bk: Backend, G: Gen>(r: &mut Runner<'_, Bk>, g: &mut G, m: &Model) {
         emit_info(r, &m.greedy, "_gen_ids", &body);
         traffic_record(r, g, &m.greedy, |g, n| g.greedy(&ids, n));
     }
-    if let Some(topk) = m.topk.as_ref().filter(|t| r.want(t)) {
-        traffic_record(r, g, topk, |g, n| {
-            let cfg = GenerateConfig {
-                max_new_tokens: n,
-                ..cfg.clone()
-            };
-            g.sample(&ids, &cfg)
-        });
+    for (row, cfg) in [(&m.topk, &cfg), (&m.temp0, &t0)] {
+        if let Some(row) = row.as_ref().filter(|t| r.want(t)) {
+            traffic_record(r, g, row, |g, n| {
+                let cfg = GenerateConfig {
+                    max_new_tokens: n,
+                    ..cfg.clone()
+                };
+                g.sample(&ids, &cfg)
+            });
+        }
     }
 }
 

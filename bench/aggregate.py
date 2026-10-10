@@ -169,13 +169,13 @@ def main():
     print("\n".join(lines))
 
 
-DECODE_ROW = re.compile(r"^gen_((?:[a-z0-9]+_)?)((?:greedy|topk\d+))_p(\d+)_n(\d+)$")
+DECODE_ROW = re.compile(r"^gen_((?:[a-z0-9]+_)?)((?:greedy|topk\d+|temp0))_p(\d+)_n(\d+)$")
 
 
 def decode_rates(rounds):
     """Decode tokens/second per runtime and decode row: per-token ms =
     (decode median - prefill median) / (N - 1), where a row
-    `gen_[<model>_]<kind>_p<P>_n<N>` (kind `greedy` or `topk<K>`) pairs with
+    `gen_[<model>_]<kind>_p<P>_n<N>` (kind `greedy`, `topk<K>` or `temp0`) pairs with
     `gen_[<model>_]prefill_p<P>`; the median over rounds. Plus the last
     round's `_gen_traffic` and `_gen_ids` records for the row, and each
     runtime's `_gen_readback` record."""

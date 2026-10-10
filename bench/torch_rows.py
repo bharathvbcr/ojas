@@ -429,7 +429,8 @@ def _gen():
     causal=True)` (its cache grows by torch.cat per step), then `lm_head` on the
     last position. Greedy rows take the argmax; the sampled row (default model
     only) draws each id at temperature 1 from the top GEN_TOP_K logits with a
-    seeded torch generator, so its ids are not ojas's. The reference outputs
+    seeded torch generator, so its ids are not ojas's. The temperature-0 row
+    (default model only) is the greedy row under another name. The reference outputs
     are the model's prompt last-position logits; greedy ids go to `<row>.ids`
     for the ojas side's `_gen_ids` record."""
     for kv in (0, GEN_GQA_KV_HEADS):
@@ -523,6 +524,8 @@ def _gen_model(n_kv_head):
                 return [top_k(m, ids, rng)]
         return {"outs": outs, "step": run}
     ROWS.append((f"gen_topk{GEN_TOP_K}_p{GEN_PROMPT}_n{GEN_NEW}", sp, make_top_k))
+    # Temperature 0 picks the argmax, so the greedy row is its twin.
+    ROWS.append((f"gen_temp0_p{GEN_PROMPT}_n{GEN_NEW}", sp, make_greedy))
 
 
 SWEEP_N = [1, 1 << 12, 1 << 16, 1 << 18, 1 << 20, 1 << 21, 1 << 22, 1 << 23]
