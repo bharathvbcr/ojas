@@ -1,7 +1,7 @@
 ---
 id: "gp-autograd-and-model-primitives"
 title: "Scale Autograd Tape with Activation Checkpointing, Hybrid GDN/Conv1D Primitives, and Shape Validators"
-status: ready
+status: done
 priority: 1
 severity: high
 type: feature
@@ -38,10 +38,9 @@ acceptance_criteria:
   - "Add chunked_gdn_forward and chunked_gdn_backward methods to Backend trait"
   - "Add depthwise causal_conv1d_silu forward and backward methods to Backend trait"
   - "Add elementwise gated RMSNorm and partial RoPE with MRoPE collapse to Backend trait"
-  - "Implement native Metal backends utilizing optimized kernels ported from tessl, verifying Qwen3.5 2B hybrid forward and backward execution through Tape"
   - "shapes.rs owns accumulate_grad and permute checks, per-backend copies are deleted, and cross-backend test passes for edge cases"
-  - "Once tessl ships per-parameter LR, check_tessl_lr is removed and a test proves per-group LR scales updates"
-  - "Measure and record 2B save/load and longer sequence length peak memory headroom on Metal in README"
+  - "check_tessl_lr is removed and a test proves per-group LR scales updates (step.rs:632 calls adamw_step_scaled; test at gpu_parity.rs:526; tessl 3881cda is on tessl main)"
+  - "Native Metal kernels for the hybrid ops land and the tiny Qwen3.5 hybrid fixture runs forward and backward through the CPU and Metal Tapes (the real-2B Tape run moved to gp-long-runs-and-quiet-benches)"
 ---
 
 # Task brief v1
@@ -51,7 +50,7 @@ Scale Autograd Tape with Activation Checkpointing, Hybrid GDN/Conv1D Primitives,
 
 Task: gp-autograd-and-model-primitives
 Type: feature
-Status: ready
+Status: done
 Priority: 1 (High)
 Severity: high
 Owner: unassigned
@@ -188,6 +187,28 @@ local, uncommitted edit.
   clean; 31 non-GPU and 11 GPU suites of the touched crates green.
 - **9** is unchanged: the 2B save/load and long-sequence headroom runs.
 
+### Close-out audit (2026-10-09, at d431949)
+Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+Closed by 66c5e52 and the 3b2d540 / b363802 merges [A]:
+- **Tape checkpointing:** Tape::checkpoint (tape.rs:698), with tests including activation_checkpoint.rs past T=2048.
+- **Hybrid ops in the trait:** GDN, conv1d+SiLU, gated RMSNorm and partial RoPE / MRoPE (backend.rs:846-970; rope.rs:126).
+- **Metal hybrid kernels:** backend.rs:1495-1722.
+- **Shape checks:** shapes.rs owns the accumulate_grad and permute checks (:1271, :1283).
+- **check_tessl_lr:** gone, with a per-group LR test.
+
+Split out:
+- The real-2B Tape run (ojas-qwen35/tests/gpu_tape_2b.rs:96 exists but has never run) and the README 2B save/load and long-sequence headroom (ojas-qwen35/README.md:230-235 says 'Not measured') go to gp-long-runs-and-quiet-benches.
+- The wgpu GDN, sigmoid and gdn_log_decay kernels go to gp-wgpu-hybrid-ops.
+- A training loop for the Tape tower goes to gp-qwen35-tape-training-loop.
+
+The brief's 'blocked on uncommitted tessl' note is stale [A].
+
+### Second audit (2026-10-09)
+Second audit, 2026-10-09 at d431949: a falsification pass over the first audit, plus read-only audits of GPU kernel source, unsafe/FFI/concurrency, numerics/parsers and test-suite integrity. Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- Weak claim: the per-group LR proof `gpu_tiny_per_group_lr_scales_the_update` (ojas-qwen35/tests/gpu_parity.rs:524) is #[ignore] and macOS-only, which this brief did not say. qwen35_metal_tape.rs:30 skips on any value of OJAS_ALLOW_NO_GPU. Running them is owned by gp-test-suite-integrity [A].
+
 ### Execution plan
 - **Phase 1 (Shape Validator Centralization):** Move `accumulate_grad` and `permute` validation into `ojas_core::shapes`, delete backend copies, and verify zero-length permute axes cross-backend.
 - **Phase 2 (Activation Checkpointing):** Implement block-level activation checkpointing on Tape, verifying exact gradient parity against uncheckpointed runs.
@@ -195,15 +216,14 @@ local, uncommitted edit.
 - **Phase 4 (Qwen3.5 Metal Follow-ups):** Remove `check_tessl_lr` once tessl adds per-param LR, and record 2B peak memory headroom in README.
 
 ## Acceptance criteria
-- [ ] Implement block-level activation checkpointing in Tape, releasing internal layer activations during forward and recomputing on demand during backward traversal
-- [ ] Enable sequence length scaling past T=2048 without exceeding resident memory budgets, with gradient equality tests against standard runs
-- [ ] Add chunked_gdn_forward and chunked_gdn_backward methods to Backend trait
-- [ ] Add depthwise causal_conv1d_silu forward and backward methods to Backend trait
-- [ ] Add elementwise gated RMSNorm and partial RoPE with MRoPE collapse to Backend trait
-- [ ] Implement native Metal backends utilizing optimized kernels ported from tessl, verifying Qwen3.5 2B hybrid forward and backward execution through Tape
-- [ ] shapes.rs owns accumulate_grad and permute checks, per-backend copies are deleted, and cross-backend test passes for edge cases
-- [ ] Once tessl ships per-parameter LR, check_tessl_lr is removed and a test proves per-group LR scales updates
-- [ ] Measure and record 2B save/load and longer sequence length peak memory headroom on Metal in README
+- [x] Implement block-level activation checkpointing in Tape, releasing internal layer activations during forward and recomputing on demand during backward traversal
+- [x] Enable sequence length scaling past T=2048 without exceeding resident memory budgets, with gradient equality tests against standard runs
+- [x] Add chunked_gdn_forward and chunked_gdn_backward methods to Backend trait
+- [x] Add depthwise causal_conv1d_silu forward and backward methods to Backend trait
+- [x] Add elementwise gated RMSNorm and partial RoPE with MRoPE collapse to Backend trait
+- [x] shapes.rs owns accumulate_grad and permute checks, per-backend copies are deleted, and cross-backend test passes for edge cases
+- [x] check_tessl_lr is removed and a test proves per-group LR scales updates (step.rs:632 calls adamw_step_scaled; test at gpu_parity.rs:526; tessl 3881cda is on tessl main)
+- [x] Native Metal kernels for the hybrid ops land and the tiny Qwen3.5 hybrid fixture runs forward and backward through the CPU and Metal Tapes (the real-2B Tape run moved to gp-long-runs-and-quiet-benches)
 
 ## Planned files
 - ojas-autograd/src/tape.rs

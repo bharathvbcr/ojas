@@ -1,6 +1,6 @@
 ---
 id: "gp-docs-and-bench-parity"
-title: "Synchronize Reference Documentation and Complete Quiet Benchmark Parity Runs"
+title: "Docs match the code: head-dim/CUDA/GQA/activation claims, op-coverage one row per trait method, README and status test counts, bench rows for new ops"
 status: ready
 priority: 1
 severity: medium
@@ -47,22 +47,21 @@ planned_files:
   - "bench/torch_rows.py"
 acceptance_criteria:
   - "Every checklist item identified in docs audit is fixed or annotated with why it stays"
-  - "docs/status.md test totals are recounted from an actual run (with command and date), not copied"
+  - "docs/status.md test totals are recounted from an actual run (with command and date), not copied (status.md:13 says 'suites not re-run'; README.md:330 still says '1510 passed (2026-10-05)'); generation of these numbers is gp-docs-pipeline-single-source's job, the content is this task's"
   - "docs/reference and site are regenerated from corrected markdown"
-  - "A full quiet GPU-vs-torch re-run is committed under bench/results/ with spread per row; rows still over 10% are marked as such in docs"
-  - "parity.sh, block_ab.sh and the sample profile are run for typed storage, and result is recorded in docs/typed-storage-plan.md"
-  - "The ~9% embedding-forward regression in typed storage step 1 is explained or fixed"
-  - "2026-10-07 checklist (section 3) fixed: head-dim 128/64 claims say 256, CUDA-probe and GQA-refusal claims match the code, 'every Backend op' claims list the hybrid ops Metal still refuses, and the hand-written site/index.html is corrected (sitegen never regenerates it)"
-  - "docs/op-coverage.md has one row per Backend trait method with its status per backend (adds chunked_gdn_forward/backward, cached_attention_forward, cast_bf16/to_bf16/to_f32/bf16_operands, causal_sdpa_backward_recompute, the *_saving/*_saved gate pair); its file:// link and stale 'Read from source 2026-10-01' date are fixed"
-  - "The GELU/ReLU/Sigmoid/Tanh claim in docs/pytorch-parity-plan.md:47 and op-coverage.md is corrected (only SiLU exists), or those activations are filed as a feature"
-  - "bench rows exist for the new trait ops: GDN, causal conv1d, gated RMSNorm, partial RoPE, sliding-window SDPA, GQA SDPA (Hkv < H), SDPA at d=256 and GQA decode; bench/README.md stops citing the missing results/2026-10-06-gate-saved/ and the 'backward recomputes' claim is corrected"
+  - "2026-10-07 checklist (section 3) fixed: 'head dim 128' (site/index.html:995,1179,1240,1241,1333), 'at most 64' (ojas-metal/src/lib.rs:12-13), CUDA 'probe' (README.md:21,208,351; site/index.html:691,1346,1371) and 'not a Backend' (docs/architecture.md:59-60, while impl Backend for CudaBackend is at ojas-cuda/src/backend.rs:84) match the code"
+  - "docs/op-coverage.md has one row per Backend trait method with its status per backend (adds chunked_gdn_forward/backward, cached_attention_forward, cast_bf16, sigmoid, gdn_log_decay and the *_saving variants; 0 rows today) and the file:// link at :87 is repo-relative"
+  - "The activation claim at docs/pytorch-parity-plan.md:47 and op-coverage.md:102 is corrected: SiLU and Sigmoid exist (sigmoid_forward/backward, ojas-core/src/backend.rs:984,990); GELU, ReLU and Tanh do not and are either filed or stated as missing"
+  - "bench rows exist for the new trait ops: GDN, causal conv1d, gated RMSNorm, partial RoPE, sliding-window SDPA, GQA SDPA (Hkv < H), SDPA at d=256 (ojas_rows.rs:481-483 has d64/d128 only); the bench/README.md:73 'recomputes' claim is corrected (the saved-LSE backward landed); the gate-saved citation is already done"
   - "Section 4 (second gap audit, 2026-10-07) fixed: present-but-called-missing claims (activation checkpointing, CPU conv1d/gated RMSNorm, typed DeviceLost), closed residue in pytorch-parity-plan.md (:180, :186, :198-199, :228), the Linux CI claims stated exactly (Go on Linux passes; Rust Linux tests blocked at fmt), the extra metal-deferred-faults.md section 9.4 lines, the wgpu QK-norm description, audit-resources.md S3/S6, dtype-policy.md:56, and audit-phase2/phase3/close marked historical"
+  - "docs/checkpoint-v1.md matches the code: OjasError::InvalidCheckpoint and TruncatedCheckpoint do not exist (the code returns OutOfRange or IoError), step == u64::MAX is accepted by the reader and refused later at next_step; ojas-model/src/load.rs:124 'checked finite' contradicts its module doc at :16"
+  - "The Metal simd_sum ordering claims agree: ojas_backend.metal (~:474) says fixed order, ojas-cuda/src/gdn_kernels.rs:31-34 says unspecified; the run-to-run repeatability claims for Metal RMSNorm, attention dr and cached attention state which is true, backed by a repeat-run test"
 ---
 
 # Task brief v1
 
 ## Title
-Synchronize Reference Documentation and Complete Quiet Benchmark Parity Runs
+Docs match the code: head-dim/CUDA/GQA/activation claims, op-coverage one row per trait method, README and status test counts, bench rows for new ops
 
 Task: gp-docs-and-bench-parity
 Type: chore
@@ -113,18 +112,29 @@ Multiple documents contain statements contradicted by codebase evolution followi
    - `docs/audit-phase2.md`, `audit-phase3.md` and `audit-close.md:65-68` describe `ojas-nn`, a tiny-step-only Metal step, CpuGpt without RoPE and "12 layers at 768 not implemented", all superseded by `ModelSpec::nanolab_124m`; mark them historical as `audit-cpu-hot.md:5` already is [A].
    - `pytorch-parity-plan.md:51` sends "the gates: missing" to gp-autograd-and-model-primitives, whose acceptance criteria do not list the GDN gates (only its progress notes do); keep the pointer accurate once that lane closes [V].
 
+### Re-audit (2026-10-09, at d431949)
+Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- Moved out: the quiet GPU-vs-torch rerun, the typed-storage parity.sh/block_ab.sh run and the ~9% embedding regression are measurement runs, not text fixes; they now live in gp-long-runs-and-quiet-benches. The typed-storage scripts are in the deleted target-matmul/, so that run depends on gp-docs-pipeline-single-source criteria 1-2.
+- Brief WRONG and corrected: 'only SiLU exists' is false since 66c5e52 added Sigmoid [A].
+- Overlap: the GQA decode bench row belongs to gp-inference-decode-path's decode benchmark.
+
+### Second audit (2026-10-09)
+Second audit, 2026-10-09 at d431949: a falsification pass over the first audit, plus read-only audits of GPU kernel source, unsafe/FFI/concurrency, numerics/parsers and test-suite integrity. Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- New: checkpoint-v1.md names error variants that don't exist; Metal simd_sum determinism is claimed both ways [A].
+
 ## Acceptance criteria
 - [ ] Every checklist item identified in docs audit is fixed or annotated with why it stays
-- [ ] docs/status.md test totals are recounted from an actual run (with command and date), not copied
+- [ ] docs/status.md test totals are recounted from an actual run (with command and date), not copied (status.md:13 says 'suites not re-run'; README.md:330 still says '1510 passed (2026-10-05)'); generation of these numbers is gp-docs-pipeline-single-source's job, the content is this task's
 - [ ] docs/reference and site are regenerated from corrected markdown
-- [ ] A full quiet GPU-vs-torch re-run is committed under bench/results/ with spread per row; rows still over 10% are marked as such in docs
-- [ ] parity.sh, block_ab.sh and the sample profile are run for typed storage, and result is recorded in docs/typed-storage-plan.md
-- [ ] The ~9% embedding-forward regression in typed storage step 1 is explained or fixed
-- [ ] 2026-10-07 checklist (section 3) fixed: head-dim 128/64 claims say 256, CUDA-probe and GQA-refusal claims match the code, 'every Backend op' claims list the hybrid ops Metal still refuses, and the hand-written site/index.html is corrected (sitegen never regenerates it)
-- [ ] docs/op-coverage.md has one row per Backend trait method with its status per backend (adds chunked_gdn_forward/backward, cached_attention_forward, cast_bf16/to_bf16/to_f32/bf16_operands, causal_sdpa_backward_recompute, the *_saving/*_saved gate pair); its file:// link and stale 'Read from source 2026-10-01' date are fixed
-- [ ] The GELU/ReLU/Sigmoid/Tanh claim in docs/pytorch-parity-plan.md:47 and op-coverage.md is corrected (only SiLU exists), or those activations are filed as a feature
-- [ ] bench rows exist for the new trait ops: GDN, causal conv1d, gated RMSNorm, partial RoPE, sliding-window SDPA, GQA SDPA (Hkv < H), SDPA at d=256 and GQA decode; bench/README.md stops citing the missing results/2026-10-06-gate-saved/ and the 'backward recomputes' claim is corrected
+- [ ] 2026-10-07 checklist (section 3) fixed: 'head dim 128' (site/index.html:995,1179,1240,1241,1333), 'at most 64' (ojas-metal/src/lib.rs:12-13), CUDA 'probe' (README.md:21,208,351; site/index.html:691,1346,1371) and 'not a Backend' (docs/architecture.md:59-60, while impl Backend for CudaBackend is at ojas-cuda/src/backend.rs:84) match the code
+- [ ] docs/op-coverage.md has one row per Backend trait method with its status per backend (adds chunked_gdn_forward/backward, cached_attention_forward, cast_bf16, sigmoid, gdn_log_decay and the *_saving variants; 0 rows today) and the file:// link at :87 is repo-relative
+- [ ] The activation claim at docs/pytorch-parity-plan.md:47 and op-coverage.md:102 is corrected: SiLU and Sigmoid exist (sigmoid_forward/backward, ojas-core/src/backend.rs:984,990); GELU, ReLU and Tanh do not and are either filed or stated as missing
+- [ ] bench rows exist for the new trait ops: GDN, causal conv1d, gated RMSNorm, partial RoPE, sliding-window SDPA, GQA SDPA (Hkv < H), SDPA at d=256 (ojas_rows.rs:481-483 has d64/d128 only); the bench/README.md:73 'recomputes' claim is corrected (the saved-LSE backward landed); the gate-saved citation is already done
 - [ ] Section 4 (second gap audit, 2026-10-07) fixed: present-but-called-missing claims (activation checkpointing, CPU conv1d/gated RMSNorm, typed DeviceLost), closed residue in pytorch-parity-plan.md (:180, :186, :198-199, :228), the Linux CI claims stated exactly (Go on Linux passes; Rust Linux tests blocked at fmt), the extra metal-deferred-faults.md section 9.4 lines, the wgpu QK-norm description, audit-resources.md S3/S6, dtype-policy.md:56, and audit-phase2/phase3/close marked historical
+- [ ] docs/checkpoint-v1.md matches the code: OjasError::InvalidCheckpoint and TruncatedCheckpoint do not exist (the code returns OutOfRange or IoError), step == u64::MAX is accepted by the reader and refused later at next_step; ojas-model/src/load.rs:124 'checked finite' contradicts its module doc at :16
+- [ ] The Metal simd_sum ordering claims agree: ojas_backend.metal (~:474) says fixed order, ojas-cuda/src/gdn_kernels.rs:31-34 says unspecified; the run-to-run repeatability claims for Metal RMSNorm, attention dr and cached attention state which is true, backed by a repeat-run test
 
 ## Planned files
 - ojas-cuda/README.md
@@ -142,3 +152,19 @@ Multiple documents contain statements contradicted by codebase evolution followi
 - bench/
 - bench/results/
 - docs/bench-gpu-vs-torch.md
+- docs/op-coverage.md
+- docs/architecture.md
+- docs/audit.md
+- docs/shape-contract.md
+- docs/cuda-backend-scoping.md
+- README.md
+- site/index.html
+- ojas-metal/README.md
+- ojas-metal/src/lib.rs
+- ojas-infer/README.md
+- ojas-oracle/README.md
+- ojas-oracle/tests/parity_gates.rs
+- ojas-core/src/limits.rs
+- bench/README.md
+- bench/ojas_rows.rs
+- bench/torch_rows.py

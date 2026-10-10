@@ -1,8 +1,8 @@
 ---
 id: "gp-cuda-backend-provider"
 title: "Implement Whole-Step Qwen3.5 CUDA Training Provider and Consolidate Crates"
-status: review
-priority: 1
+status: in_progress
+priority: 3
 severity: high
 type: feature
 owner: "unassigned"
@@ -31,12 +31,15 @@ acceptance_criteria:
   - "cudarc pinned to cuda-12080 to match the GH200 driver environment (verified met)"
   - "Every test file under ojas-qwen35-cuda/tests is moved to ojas-cuda/tests (or deliberately dropped, with recorded reason)"
   - "The buffer.rs, lib.rs and runtime.rs differences between the two crates are reconciled into ojas-cuda"
-  - "Host-side CUDA tests run in CI, and device tests build (cargo test -p ojas-cuda --features cuda --no-run)"
-  - "ojas-qwen35-cuda/ is removed from the tree, and no doc or Cargo.toml still refers to it"
-  - "Implement Qwen35Cuda step provider mirroring the Metal ojas-qwen35 API: forward, backward and adamw_step launch real kernels instead of the current stub"
-  - "Provide NVRTC-compiled kernel pipelines for GEMM, attention, and in-place AdamW, wired into the step and CudaBackend ops"
-  - "Eliminate dead helper code (commit_resize) and replace mock tests with real GPU tests under ojas-cuda/tests"
+  - "Host-side CUDA tests run in CI (the Linux test step has been skipped or failed on every run since c74f3ba; re-tick when gp-ci-main-green records a green Linux test step), and device tests build (cargo test -p ojas-cuda --features cuda --no-run)"
+  - "ojas-qwen35-cuda/ is removed from the tree, and no doc or Cargo.toml still refers to it (done; remaining mentions are the deliberate ones listed in this brief plus the dated changelog row at docs/status.md:20)"
+  - "Implement Qwen35Cuda step provider mirroring the Metal ojas-qwen35 API: forward, backward and adamw_step launch real kernels; today Qwen35Step refuses every compute method (step.rs:324-382, cf4049f)"
+  - "Provide NVRTC-compiled kernel pipelines for GEMM, attention, and in-place AdamW, wired into the step and CudaBackend ops: all 28 CudaBackend ops return Unsupported (backend.rs:193-520) and there is no SDPA kernel in ojas-cuda"
+  - "Replace mock tests with real GPU tests under ojas-cuda/tests (commit_resize is already deleted)"
   - "Verify execution on GH200 with zero symbol panics"
+  - "CudaBackend implements MemoryProbe (implementors today: Metal, wgpu, capi only), so ResourcePlan can plan a CUDA session before the C ABI refusal is lifted"
+  - "Once ops run, the C ABI's CUDA refusal (DEVICE_CUDA = 5, ojas-capi/src/load.rs:41-56) is lifted through an owner thread like Metal's (CudaBackend holds an Rc and is not Send)"
+  - "The CUDA step validates its input through the shared Qwen3.5 Sequence check (gp-qwen35-host-neutral-crate), not its own copy"
 ---
 
 # Task brief v1
@@ -46,8 +49,8 @@ Implement Whole-Step Qwen3.5 CUDA Training Provider and Consolidate Crates
 
 Task: gp-cuda-backend-provider
 Type: feature
-Status: review
-Priority: 1 (High)
+Status: in_progress
+Priority: 3 (Low)
 Severity: high
 Owner: unassigned
 Due: none
@@ -75,6 +78,18 @@ Phase 1 and the host-verifiable gap carry-overs landed in one commit. Verified o
 - `ojas-qwen35/src/cuda.rs` (planned file) does not exist; nothing was created there.
 - Still open: the step provider launching kernels, attention / AdamW in `CudaBackend`, the GH200 run (zero symbol panics), the GDN timing numbers, the sm_90 before/after K10 bench.
 
+### Re-audit (2026-10-09, at d431949)
+Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- Status moved from review to in_progress: phase 1 (crate consolidation) is done, phase 2 (real kernels) has not started [A].
+- The 'host-side CUDA tests run in CI' box is un-ticked: the Linux test step has not completed green on main since 85d1f5a [A, C].
+- The note that the step returns 'a zero hidden tensor' is stale; it now refuses every compute method (cf4049f) [A].
+
+### Mac-training re-rank (2026-10-09)
+The user's current focus is LoRA fine-tuning on the Mac (Metal), run by sibling session ojas-7c. Its recommended path, provisional until its user decides, is ojas-model's Tape on ojas-metal, with the tessl provider (ojas-qwen35) getting small fixes only. 16-bit (bf16) LoRA is the critical path; 4/8-bit QLoRA is gated P2, per Unsloth's Qwen3.5 guidance and Lappi AUDIT/training-audit-2026-10-06.md:469.
+
+- Lowered to P3: off the Mac (Metal) training path. Raise it again when CUDA, HIP or wgpu training becomes a goal.
+
 ### Execution plan
 - **Phase 1 (Consolidation):** Reconcile `buffer.rs`, `lib.rs`, and `runtime.rs`. Move test suites to `ojas-cuda/tests/`. Wire host-side CUDA tests into CI. Remove `ojas-qwen35-cuda/`.
 - **Phase 2 (Kernels & Step Provider):** Wire NVRTC kernels for GEMM, attention, and in-place AdamW into `CudaBackend` and `Qwen35Step`. Wire the step provider to match `ojas-qwen35` Metal semantics. Verify execution on GH200 without symbol panics.
@@ -83,12 +98,15 @@ Phase 1 and the host-verifiable gap carry-overs landed in one commit. Verified o
 - [x] cudarc pinned to cuda-12080 to match the GH200 driver environment (verified met)
 - [x] Every test file under ojas-qwen35-cuda/tests is moved to ojas-cuda/tests (or deliberately dropped, with recorded reason)
 - [x] The buffer.rs, lib.rs and runtime.rs differences between the two crates are reconciled into ojas-cuda
-- [x] Host-side CUDA tests run in CI, and device tests build (cargo test -p ojas-cuda --features cuda --no-run)
-- [ ] ojas-qwen35-cuda/ is removed from the tree, and no doc or Cargo.toml still refers to it
-- [ ] Implement Qwen35Cuda step provider mirroring the Metal ojas-qwen35 API: forward, backward and adamw_step launch real kernels instead of the current stub
-- [ ] Provide NVRTC-compiled kernel pipelines for GEMM, attention, and in-place AdamW, wired into the step and CudaBackend ops
-- [ ] Eliminate dead helper code (commit_resize) and replace mock tests with real GPU tests under ojas-cuda/tests
+- [ ] Host-side CUDA tests run in CI (the Linux test step has been skipped or failed on every run since c74f3ba; re-tick when gp-ci-main-green records a green Linux test step), and device tests build (cargo test -p ojas-cuda --features cuda --no-run)
+- [x] ojas-qwen35-cuda/ is removed from the tree, and no doc or Cargo.toml still refers to it (done; remaining mentions are the deliberate ones listed in this brief plus the dated changelog row at docs/status.md:20)
+- [ ] Implement Qwen35Cuda step provider mirroring the Metal ojas-qwen35 API: forward, backward and adamw_step launch real kernels; today Qwen35Step refuses every compute method (step.rs:324-382, cf4049f)
+- [ ] Provide NVRTC-compiled kernel pipelines for GEMM, attention, and in-place AdamW, wired into the step and CudaBackend ops: all 28 CudaBackend ops return Unsupported (backend.rs:193-520) and there is no SDPA kernel in ojas-cuda
+- [ ] Replace mock tests with real GPU tests under ojas-cuda/tests (commit_resize is already deleted)
 - [ ] Verify execution on GH200 with zero symbol panics
+- [ ] CudaBackend implements MemoryProbe (implementors today: Metal, wgpu, capi only), so ResourcePlan can plan a CUDA session before the C ABI refusal is lifted
+- [ ] Once ops run, the C ABI's CUDA refusal (DEVICE_CUDA = 5, ojas-capi/src/load.rs:41-56) is lifted through an owner thread like Metal's (CudaBackend holds an Rc and is not Send)
+- [ ] The CUDA step validates its input through the shared Qwen3.5 Sequence check (gp-qwen35-host-neutral-crate), not its own copy
 
 ## Planned files
 - ojas-cuda/Cargo.toml

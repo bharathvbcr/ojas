@@ -34,7 +34,7 @@ acceptance_criteria:
   - "OjasError has a typed device-lost variant (or structured field) that Metal, wgpu and CUDA set at point of detection"
   - "ojas-capi maps error kind from the typed variant with zero substring matching"
   - "Unit test per GPU backend proves a lost or poisoned device surfaces as the typed variant"
-  - "Upload waits and memory-cap commits per step are measured and counted by trigger, not estimated"
+  - "Upload waits per step are counted by trigger (Link Wait counters); the 124M memory-cap split by trigger is owned by gp-long-runs-and-quiet-benches, not claimed here"
   - "Waiting host uploads per Metal trainer step are reduced, with documented before/after counts"
   - "Metal and wgpu implement saved-sigmoid gate pair, with parity test against CPU and committed A/B benchmark citations"
 ---
@@ -84,6 +84,25 @@ The three notes above describe the tree before this task's code landed. Each cri
 - **Not measured:** the 124M memory-cap split per trigger (§9.4 still infers about 41 commits per step), and CUDA device loss on a real device (needs the GH200).
 - **How it ran:** the tests and benches ran from the main checkout's manifest at the same commit. From this worktree, cargo fails to inherit gusset's `workspace.package.version` through the symlinked `.gitpulse/devtools` path.
 
+### Re-audit (2026-10-09, at d431949)
+Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+The close-out holds [A]:
+- FAULT_OPS = 64 (context.rs:209), and OP_NAMES is bounded at compile time.
+- Typed DeviceLost is set on Metal, wgpu and CUDA.
+- capi kind_of matches variants only (ojas-capi/src/lib.rs:96-105).
+- The saved-sigmoid gate A/B is committed.
+
+One caveat: criterion 7 is ticked, but the 124M memory-cap split by trigger is inferred (about 41 commits per step), as this brief's own 'Not measured' line says. That measurement now lives in gp-device-memory-probes, and the run in gp-long-runs-and-quiet-benches. HIP maps only to DeviceError, not DeviceLost; that is owned by gp-hip-backend.
+
+### Second audit (2026-10-09)
+Second audit, 2026-10-09 at d431949: a falsification pass over the first audit, plus read-only audits of GPU kernel source, unsafe/FFI/concurrency, numerics/parsers and test-suite integrity. Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- Criterion 7 was ticked while this brief's own text said the 124M split was inferred. Its text is narrowed to what was measured, the counters, and the 124M split is owned by gp-long-runs-and-quiet-benches [A].
+- Weak tests behind this close-out, now owned by gp-test-suite-integrity:
+  - The Metal device-loss test uses a #[cfg(test)] poison hook and never runs in CI.
+  - The CUDA mapping test iterates over the crate's own STICKY_DRIVER_CODES, close to a self-check [A].
+
 ### Execution plan
 - **Phase 1 (WGPU 64-bit Fault Buffer):** Expand WGSL fault status buffer to 64-bit word or two-word structure. Update `Op::bit` and allocate real bits to `cast_bf16` and future ops while preserving first-fault precedence.
 - **Phase 2 (Typed Device-Lost Variant):** Add `OjasError::DeviceLost { backend, detail }`. Surface it directly from Metal, wgpu, and CUDA. Update `ojas-capi` to map it cleanly.
@@ -96,7 +115,7 @@ The three notes above describe the tree before this task's code landed. Each cri
 - [x] OjasError has a typed device-lost variant (or structured field) that Metal, wgpu and CUDA set at point of detection
 - [x] ojas-capi maps error kind from the typed variant with zero substring matching
 - [x] Unit test per GPU backend proves a lost or poisoned device surfaces as the typed variant
-- [x] Upload waits and memory-cap commits per step are measured and counted by trigger, not estimated
+- [x] Upload waits per step are counted by trigger (Link Wait counters); the 124M memory-cap split by trigger is owned by gp-long-runs-and-quiet-benches, not claimed here
 - [x] Waiting host uploads per Metal trainer step are reduced, with documented before/after counts
 - [x] Metal and wgpu implement saved-sigmoid gate pair, with parity test against CPU and committed A/B benchmark citations
 

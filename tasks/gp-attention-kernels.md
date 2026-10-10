@@ -106,6 +106,23 @@ Each criterion is met. [V] means verified by a test run of this commit (`--relea
    - [R] W=256 at T=2048 runs the backward at 0.25–0.31 of the full-prefix time (same bench folder).
 - **Not measured:** none against the criteria.
 
+### Re-audit (2026-10-09, at d431949)
+Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+Sanity check holds [A]:
+- Head-dim caps are 256 (ojas-core/src/backend.rs:64; ojas-kernels/src/geometry.rs:166).
+- `rg -uu head_repeat` finds no code.
+- causal_sdpa_backward_recompute is at backend.rs:751.
+- The GQA scratch figures match target-attn logs (16,842,752 B against 50,331,648 B expanded).
+
+The verification notes above cite `target-attn/attn-verify.sh`, which no longer exists on disk. gp-docs-pipeline-single-source owns repointing such citations. The tiny Metal step's head-dim-64 limit (gpu.rs) is owned by gp-structural-dedup (retire the tiny step). The wrappers that do not forward causal_sdpa_backward_recompute are owned by gp-backend-wrapper-forwarding.
+
+### Second audit (2026-10-09)
+Second audit, 2026-10-09 at d431949: a falsification pass over the first audit, plus read-only audits of GPU kernel source, unsafe/FFI/concurrency, numerics/parsers and test-suite integrity. Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- Weak claim: `saved_backward_equals_the_recomputing_one_bit_for_bit` (ojas-wgpu/tests/attention_window.rs:142, ojas-metal/tests/attention_window.rs:179) compares causal_sdpa_backward with the trait default of _recompute. That default calls the same backward (ojas-core/src/backend.rs:751-761), so it checks determinism, not 'saved-LSE backward equals the old recompute kernel'. The gqa_tape f64 oracle still backs correctness. An independent equivalence test is owned by gp-test-suite-integrity [A].
+- Kernel note: Metal attention passes whole 64-key V tiles through pv_op with masked p = 0, so an inf in a future V position turns earlier rows into NaN where WGSL does not. Faults fire on both backends either way. Owned by gp-oracle-and-hardening-coverage [A].
+
 ### Execution plan
 - **Phase 1 (GQA Hardening):** Add tape-level finite-difference GQA gradcheck. Implement native KV head indexing in Metal and wgpu attention kernels to eliminate repeat/sum-back scratch.
 - **Phase 2 (LSE Return):** Update `Backend::causal_sdpa_forward` to return `(Tensor, Tensor)` (output + row LSE). Refactor CPU, Metal, and wgpu backward kernels to consume preserved LSE, benchmarking the 10–25% backward speedup.

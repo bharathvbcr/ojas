@@ -28,21 +28,26 @@ planned_files:
   - "go/api_test.go"
   - "go/governor_test.go"
 acceptance_criteria:
-  - "A decode-session opcode keeps a DeviceDecoder and its KV cache alive across SAMPLE calls, so a multi-turn Go chat appends tokens instead of re-prefilling history; sessions are bounded, freed explicitly, and charged to the budget"
+  - "A decode-session opcode keeps a DeviceDecoder and its KV cache alive across SAMPLE calls, so a multi-turn Go chat appends tokens instead of re-prefilling history; today every SAMPLE builds a new decoder, allocating and uploading 2 x n_layer zeroed KV tensors and the RoPE table (generate.rs:93-94, ojas-infer/src/device.rs:105-118); sessions are bounded, freed explicitly, and charged to the budget"
   - "An eval/forward-loss opcode returns held-out loss without an optimizer step, backed by ojas_model::forward_loss; Go exposes it"
-  - "The C TRAIN_FIELDS and Go TrainConfig carry activations (activation checkpointing), ignore_index, chunk (CE chunk) and git_sha from ojas_model::TrainConfig; Go ModelSpec carries tie_embeddings; each field has a round-trip test and an out-of-range refusal test"
+  - "The C TRAIN_FIELDS (ojas-capi/src/train.rs:40-57) and Go TrainConfig (go/api.go:284-305) carry activations (activation checkpointing), ignore_index, chunk (CE chunk), git_sha and muon_ns5 (trainer.rs:122,183) from ojas_model::TrainConfig; Go ModelSpec carries tie_embeddings; each field has a round-trip test and an out-of-range refusal test"
   - "Unknown id, bad argument and unsupported request get typed ojas:E_* kinds chosen at the point of production (as DeviceLost already is); Go exposes sentinels usable with errors.Is; go/ffi.go no longer string-matches 'workers still running' and Go tests stop matching message text where a sentinel exists"
   - "A cargo-fuzz (or equivalent bounded) target covers wire::Reader / Fields::read and dispatch with hostile payloads; any crash found gets a regression test"
-  - "Payload decode allocates fallibly: Reader::values (wire.rs:70), Fields::u32s (wire.rs:204), tokenize encode/decode (tokenize.rs:62,75), train token batches (train.rs:252-253) and the SAMPLE result (engine.rs:179) use try_reserve and return OjasError::OutOfMemory; a Go test under SetHeapCeiling drives each path to a clean error instead of an abort (go/heap_ceiling_test.go covers only NewModel and OpenTrainer)"
-  - "The last-error channel is per call, not one global Mutex<String> (session.rs:232): a failing call's message cannot be replaced by another caller's, or cleared by engineReset or a successful set_model_root (session.rs:296); Go's setRoot then lastCError pair (ffi.go:442-455) is serialized with engineInit/engineReset or replaced; a race test proves it"
-  - "dispatch (engine.rs:107-188) catches a handler panic per call and poisons only that model (E_POISONED, session.rs:210-213), so one panic no longer makes Go reset the engine and drop every model (ffi.go:480-483)"
-  - "A payload above the gusset buffer budget (64 MiB default, ffi.go:79) is refused up front with ErrCapacity and a message naming the size, not gusset.ErrBufferBudget's 'Free buffers before allocating more'; Tokenize/Detokenize/LoadTokenizer get the same up-front size check the path APIs have (api.go:452-483)"
+  - "Payload decode and C ABI result building allocate fallibly: Reader::values (wire.rs:70), Fields::u32s (wire.rs:204), tokenize encode/decode (tokenize.rs:71,84), train token batches (train.rs:252-253), the SAMPLE result (engine.rs:179), and the BPE buffers the heap ceiling cannot refuse below 1 MiB-per-request granularity (Bpe::encode_ordinary Vec::with_capacity(text.len()/4), ojas-data/src/bpe.rs:364, up to 8 MiB; decode_bytes, :407, up to 32 MiB) use try_reserve and return CapacityExceeded (E_CAPACITY; there is no OutOfMemory variant); a Go test under SetHeapCeiling drives each path to a clean error"
+  - "The last-error channel is per call, not one global Mutex<String> (session.rs:232): a failing call's message cannot be replaced by another caller's, or cleared by engineReset or a successful set_model_root (session.rs:295); Go's setRoot then lastCError pair (ffi.go:427-458) is serialized with engineInit/engineReset or replaced; a race test proves it"
+  - "dispatch catches a handler panic per call and poisons only that model (E_POISONED), so one panic no longer makes Go reset the engine and drop every model (ffi.go:483-486); the test-only panic opcode registered in the production engine (engine.rs:46-53) is compiled only for tests"
+  - "A payload above the gusset buffer budget (64 MiB default) is refused up front with ErrCapacity and a message naming the size; Tokenize/Detokenize/LoadTokenizer get the same up-front size check the path APIs have (api.go:473-503); lossy decode, which can triple output after the 32 MiB cap check through U+FFFD replacement (bpe.rs:436-444), is capped on its output, matching the Go doc at api.go:484"
   - "A save refused for lack of disk space (today OjasError::OutOfRange, ojas-model/src/checkpoint.rs:79-84, 466-480) gets its own error kind and a Go sentinel usable with errors.Is"
-  - "Tokenize/Detokenize stop taking the model state lock (tokenize.rs:52; LoadTokenizer :36 may keep it) since the tokenizer is immutable after load, so they no longer return ErrBusy during TrainStep/GenerateIDs; TOKENIZE checks cancellation during a long encode, not only once before it (:47)"
-  - "Large calls copy less across the boundary: Go encodes payloads straight into the gusset buffer and decodes results from the view before Free (ffi.go:487-506, api.go:631-640); Rust builds token tensors without an intermediate Vec where it can (train.rs:252); copies per call counted before and after"
-  - "Go wraps model ids in a Model type with Close and runtime.AddCleanup, so a forgotten id stops holding its share of the memory ceiling and one of the 64 session slots; session() keeps the tensors count LOAD/NEW/RESUME return (api.go:625-628)"
+  - "Tokenize/Detokenize stop taking the model state lock (tokenize.rs:57; LoadTokenizer :43 may keep it) since the tokenizer is immutable after load, so they no longer return ErrBusy during TrainStep/GenerateIDs; TOKENIZE checks cancellation during a long encode"
+  - "Large calls copy less across the boundary: Go encodes payloads straight into the gusset buffer and decodes results from the view before Free (ffi.go:490-511); Rust builds token tensors without an intermediate Vec where it can (train.rs:252); copies per call counted before and after"
+  - "Go wraps model ids in a Model type with Close and runtime.AddCleanup, so a forgotten id stops holding its share of the memory ceiling and one of the 64 session slots; session() keeps the tensors count LOAD/NEW/RESUME return (api.go:669-678)"
   - "SetModelRoot either uses its ctx and the call gate or drops the parameter (api.go:53-58), and changing the root while models are open is refused or pinned per session, so a later SAVE or LoadTokenizer cannot resolve relative paths against a new root (session.rs:282-298, train.rs:299)"
   - "The Go module builds outside this directory layout: the replace of gusset with ../../../devtools/gusset (go/go.mod:7) and the .pc files hard-coding the sibling checkout and target/debug (no Linux release .pc) give way to a documented build a fresh clone can follow"
+  - "The STOP list from the wire (generate.rs:56) is bounded, and the per-token stop check (ojas-infer/src/decode.rs:132) is O(1) per token instead of O(len(stop))"
+  - "Loaders reachable from the C ABI grow memory fallibly under the heap ceiling: parse_merges has no node or byte budget and grows its Vec and strings infallibly (ojas-data/src/bpe.rs:752-776; vocab pairs :703, vec![None; n] :719); the safetensors JSON tree grows infallibly (ojas-io/src/json.rs:231,268; check_tiling with_capacity safetensors.rs:861) and the duplicate-key BTreeSet clone (json.rs:243) is outside the tree budget; a Go test loads a hostile 32 MiB merges.txt under SetHeapCeiling and gets E_CAPACITY, not an abort"
+  - "TRAIN_STEP's read_batches checks k <= MAX_ACCUM and rows > 0 before looping (ojas-capi/src/train.rs:239-261 loops up to u32::MAX pushing a 64-byte Batch per 4-byte record first)"
+  - "Go TrainConfig cannot silently train on zero gradients: GradClip 0 (the Go zero value) clips every gradient to zero (trainer.rs:226, :746); GradClip is documented and a zero literal either means 'no clipping' or is refused, matching the Rust side's decision"
+  - "Freeing or resetting sessions never drops model state while the global TABLE lock is held: try_free, clear/reset_sessions and the poison-recovery path (ojas-capi/src/session.rs:241-243, 361-378) take sessions out under the lock and drop them after it, since a wgpu drop can wait 2 s (context.rs:84, 593-609) and engine reset can hold the lock for up to N x 2 s; a test with a slow-dropping backend proves other calls proceed"
 ---
 
 # Task brief v1
@@ -55,6 +60,8 @@ Type: feature
 Status: backlog
 Priority: 2 (Normal)
 Severity: medium
+Owner: unassigned
+Due: none
 Labels: capi, go, gusset, api, errors, fuzzing
 
 ## Repositories
@@ -78,3 +85,50 @@ Ask before widening the C ABI's attack surface beyond these ops.
 - **Tokenizer behind the model lock [V]:** `session.lock_state()` at tokenize.rs:36 and :52.
 - **Module layout [V]:** `replace github.com/bharathvbcr/gusset => ../../../devtools/gusset` (go/go.mod:7).
 - Buffer-budget error, disk-full kind, copy counts, Model handle and SetModelRoot items are [A].
+
+### Re-audit (2026-10-09, at d431949)
+Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- All 15 original criteria are still open [A]. Line references are refreshed in the criteria text.
+- Absorbed from the closed gp-data-and-checkpoint-robustness: its fallible-allocation leftovers. That brief named `OjasError::OutOfMemory`, which does not exist; the code uses `CapacityExceeded`, which maps to `E_CAPACITY` [A].
+- New: BPE allocations the heap ceiling cannot refuse, lossy decode going past its cap, the unbounded STOP list, and the panic opcode in the production engine [A]. Impact is inferred and was not run.
+
+### Second audit (2026-10-09)
+Second audit, 2026-10-09 at d431949: a falsification pass over the first audit, plus read-only audits of GPU kernel source, unsafe/FFI/concurrency, numerics/parsers and test-suite integrity. Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- New: three loaders grow memory infallibly; TRAIN_STEP amplifies its payload before validating it; the GradClip zero-value trap; model state is dropped under the session-table lock (medium; a stalled wgpu queue blocks every C ABI call) [A].
+- Checked clean [A]: no panic unwinds across extern "C"; pointer and length validation on every entry; Go cgo noescape usage and view copy-before-Free are correct; no conflicting lock order.
+
+## Acceptance criteria
+- [ ] A decode-session opcode keeps a DeviceDecoder and its KV cache alive across SAMPLE calls, so a multi-turn Go chat appends tokens instead of re-prefilling history; today every SAMPLE builds a new decoder, allocating and uploading 2 x n_layer zeroed KV tensors and the RoPE table (generate.rs:93-94, ojas-infer/src/device.rs:105-118); sessions are bounded, freed explicitly, and charged to the budget
+- [ ] An eval/forward-loss opcode returns held-out loss without an optimizer step, backed by ojas_model::forward_loss; Go exposes it
+- [ ] The C TRAIN_FIELDS (ojas-capi/src/train.rs:40-57) and Go TrainConfig (go/api.go:284-305) carry activations (activation checkpointing), ignore_index, chunk (CE chunk), git_sha and muon_ns5 (trainer.rs:122,183) from ojas_model::TrainConfig; Go ModelSpec carries tie_embeddings; each field has a round-trip test and an out-of-range refusal test
+- [ ] Unknown id, bad argument and unsupported request get typed ojas:E_* kinds chosen at the point of production (as DeviceLost already is); Go exposes sentinels usable with errors.Is; go/ffi.go no longer string-matches 'workers still running' and Go tests stop matching message text where a sentinel exists
+- [ ] A cargo-fuzz (or equivalent bounded) target covers wire::Reader / Fields::read and dispatch with hostile payloads; any crash found gets a regression test
+- [ ] Payload decode and C ABI result building allocate fallibly: Reader::values (wire.rs:70), Fields::u32s (wire.rs:204), tokenize encode/decode (tokenize.rs:71,84), train token batches (train.rs:252-253), the SAMPLE result (engine.rs:179), and the BPE buffers the heap ceiling cannot refuse below 1 MiB-per-request granularity (Bpe::encode_ordinary Vec::with_capacity(text.len()/4), ojas-data/src/bpe.rs:364, up to 8 MiB; decode_bytes, :407, up to 32 MiB) use try_reserve and return CapacityExceeded (E_CAPACITY; there is no OutOfMemory variant); a Go test under SetHeapCeiling drives each path to a clean error
+- [ ] The last-error channel is per call, not one global Mutex<String> (session.rs:232): a failing call's message cannot be replaced by another caller's, or cleared by engineReset or a successful set_model_root (session.rs:295); Go's setRoot then lastCError pair (ffi.go:427-458) is serialized with engineInit/engineReset or replaced; a race test proves it
+- [ ] dispatch catches a handler panic per call and poisons only that model (E_POISONED), so one panic no longer makes Go reset the engine and drop every model (ffi.go:483-486); the test-only panic opcode registered in the production engine (engine.rs:46-53) is compiled only for tests
+- [ ] A payload above the gusset buffer budget (64 MiB default) is refused up front with ErrCapacity and a message naming the size; Tokenize/Detokenize/LoadTokenizer get the same up-front size check the path APIs have (api.go:473-503); lossy decode, which can triple output after the 32 MiB cap check through U+FFFD replacement (bpe.rs:436-444), is capped on its output, matching the Go doc at api.go:484
+- [ ] A save refused for lack of disk space (today OjasError::OutOfRange, ojas-model/src/checkpoint.rs:79-84, 466-480) gets its own error kind and a Go sentinel usable with errors.Is
+- [ ] Tokenize/Detokenize stop taking the model state lock (tokenize.rs:57; LoadTokenizer :43 may keep it) since the tokenizer is immutable after load, so they no longer return ErrBusy during TrainStep/GenerateIDs; TOKENIZE checks cancellation during a long encode
+- [ ] Large calls copy less across the boundary: Go encodes payloads straight into the gusset buffer and decodes results from the view before Free (ffi.go:490-511); Rust builds token tensors without an intermediate Vec where it can (train.rs:252); copies per call counted before and after
+- [ ] Go wraps model ids in a Model type with Close and runtime.AddCleanup, so a forgotten id stops holding its share of the memory ceiling and one of the 64 session slots; session() keeps the tensors count LOAD/NEW/RESUME return (api.go:669-678)
+- [ ] SetModelRoot either uses its ctx and the call gate or drops the parameter (api.go:53-58), and changing the root while models are open is refused or pinned per session, so a later SAVE or LoadTokenizer cannot resolve relative paths against a new root (session.rs:282-298, train.rs:299)
+- [ ] The Go module builds outside this directory layout: the replace of gusset with ../../../devtools/gusset (go/go.mod:7) and the .pc files hard-coding the sibling checkout and target/debug (no Linux release .pc) give way to a documented build a fresh clone can follow
+- [ ] The STOP list from the wire (generate.rs:56) is bounded, and the per-token stop check (ojas-infer/src/decode.rs:132) is O(1) per token instead of O(len(stop))
+- [ ] Loaders reachable from the C ABI grow memory fallibly under the heap ceiling: parse_merges has no node or byte budget and grows its Vec and strings infallibly (ojas-data/src/bpe.rs:752-776; vocab pairs :703, vec![None; n] :719); the safetensors JSON tree grows infallibly (ojas-io/src/json.rs:231,268; check_tiling with_capacity safetensors.rs:861) and the duplicate-key BTreeSet clone (json.rs:243) is outside the tree budget; a Go test loads a hostile 32 MiB merges.txt under SetHeapCeiling and gets E_CAPACITY, not an abort
+- [ ] TRAIN_STEP's read_batches checks k <= MAX_ACCUM and rows > 0 before looping (ojas-capi/src/train.rs:239-261 loops up to u32::MAX pushing a 64-byte Batch per 4-byte record first)
+- [ ] Go TrainConfig cannot silently train on zero gradients: GradClip 0 (the Go zero value) clips every gradient to zero (trainer.rs:226, :746); GradClip is documented and a zero literal either means 'no clipping' or is refused, matching the Rust side's decision
+- [ ] Freeing or resetting sessions never drops model state while the global TABLE lock is held: try_free, clear/reset_sessions and the poison-recovery path (ojas-capi/src/session.rs:241-243, 361-378) take sessions out under the lock and drop them after it, since a wgpu drop can wait 2 s (context.rs:84, 593-609) and engine reset can hold the lock for up to N x 2 s; a test with a slow-dropping backend proves other calls proceed
+
+## Planned files
+- ojas-capi/src/engine.rs
+- ojas-capi/src/generate.rs
+- ojas-capi/src/train.rs
+- ojas-capi/src/session.rs
+- ojas-capi/src/wire.rs
+- ojas-capi/src/lib.rs
+- go/api.go
+- go/ffi.go
+- go/api_test.go
+- go/governor_test.go

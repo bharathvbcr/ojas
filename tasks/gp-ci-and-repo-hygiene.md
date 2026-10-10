@@ -46,17 +46,17 @@ planned_files:
   - "docs/status.md"
 acceptance_criteria:
   - "scan.txt and analyze.py are no longer tracked in git"
-  - "The four dead CI steps in .github/workflows/test.yml are removed and CI stays green"
-  - "rg finds no bare ignores across workspace (every #[ignore] has an explicit documented reason)"
-  - "redteam.rs either asserts on before_prefix_budget or no longer computes it"
+  - "The four dead 'Point the absolute tessl path' steps in .github/workflows/test.yml (:63, :114, :178, :230, plus the header comment at :12-13; dead since ojas-metal/Cargo.toml:22 became ../../tessl) are removed; CI staying green depends on gp-ci-main-green"
+  - "rg finds no bare ignores across workspace (every #[ignore] has an explicit documented reason; 25 bare today, e.g. tape_bench.rs:59, exp_exact.rs:191/263/286, pointwise.rs:3032)"
+  - "redteam.rs either asserts on before_prefix_budget or no longer computes it (computed at ojas-cpu/tests/redteam.rs:490, discarded with `let _ =` at :500)"
   - "Migrate GPU test readback assertions from process-wide device_readbacks() to Budget::device_readbacks() scoped per budget tree (resolve remaining ojas-capi/src/tests.rs site)"
   - "Verify all GPU tests (wgpu, autograd, capi, metal) pass cleanly under default multi-threaded test execution (cargo test without --test-threads=1)"
-  - "Remove --test-threads=1 restriction from README.md"
+  - "Remove --test-threads=1 restriction from README.md (:330, :364, :367)"
   - "A decision and protocol are recorded for Metal GPU test execution (runner or manual protocol), and results are recorded in docs/status.md with a commit SHA"
-  - "Pin tessl and gusset revisions in CI workflows and document pin bump procedure"
+  - "Pin tessl and gusset revisions in CI workflows (GUSSET_REF/TESSL_REF default to `main`, test.yml:39-40) and document the bump procedure; the Rust toolchain pin lives in gp-ci-toolchain-reproducibility"
   - "Add optional target-gated ojas-metal dev-dependency on macOS in ojas-autograd and wire into G6 seeded backward tests"
-  - "De-duplicate test helpers (Resident, Rng, lin, ce) across ojas-autograd test suites"
-  - "Pin ojas_engine_init double initialization mutex safety with a dedicated test"
+  - "De-duplicate test helpers (Resident, Rng, lin, ce) across ojas-autograd test suites: tests/common/mod.rs exists, copies remain in device_tape.rs:60 and gradcheck_random.rs:15,77,166"
+  - "Pin ojas_engine_init double initialization safety with a dedicated test (symbol at ojas-gusset-engine/src/lib.rs:160, mutex at ojas-capi/src/engine.rs:90; no test today)"
   - "A scheduled CI job runs the CPU --ignored slow/soak tests"
 ---
 
@@ -93,24 +93,31 @@ Consolidated task combining test infrastructure, CI automation, concurrency safe
 4. **Sibling Dependency Pinning:** `tessl` and `gusset` paths float against unpinned local checkouts; pin tested git revisions in CI.
 5. **Autograd Metal Dev-Dependency:** `ojas-autograd` lacks target-gated `ojas-metal` dev-dependency on macOS, skipping G6 backward tests on Metal.
 
+### Re-audit (2026-10-09, at d431949)
+Labels: [V] re-read by the writer of this pass; [A] read by an audit subagent at d431949, not re-read; [C] command output; [U] unverified (needs a run). No cargo, GPU or device run was made in this audit.
+
+- Done: scan.txt and analyze.py untracked and gone (f3f8988) [A, C].
+- Still open, with refreshed evidence in the criteria: dead tessl-path steps, 25 bare `#[ignore]`, before_prefix_budget, capi readback site (now ojas-capi/src/tests.rs:1826-1828), README --test-threads=1, Metal test protocol, CI pins, autograd ojas-metal dev-dep, helper copies, engine-init test, scheduled soak job [A].
+- Test-helper duplication outside ojas-autograd moved to the new gp-test-support-dedup.
+
 ### Execution plan
 - **Phase 1 (Hygiene & Readbacks):** Remove tracked `scan.txt` / `analyze.py`. Migrate `ojas-capi/src/tests.rs` to tree-scoped budget reader, verify parallel `cargo test`, and update README. Clean up dead CI steps.
 - **Phase 2 (Dependency & CI Pinning):** Pin `tessl` and `gusset` in CI. Add scheduled slow/soak test workflow. Document Metal test runner protocol.
 - **Phase 3 (Test Coverage & Gaps):** Add Metal dev-dependency to `ojas-autograd`, wire G6 seeded backward tests, de-duplicate autograd helpers, and add double `ojas_engine_init` test.
 
 ## Acceptance criteria
-- [ ] scan.txt and analyze.py are no longer tracked in git
-- [ ] The four dead CI steps in .github/workflows/test.yml are removed and CI stays green
-- [ ] rg '#\[ignore\]$' finds no bare ignores across workspace (every ignore has an explicit reason)
-- [ ] redteam.rs either asserts on before_prefix_budget or no longer computes it
+- [x] scan.txt and analyze.py are no longer tracked in git
+- [ ] The four dead 'Point the absolute tessl path' steps in .github/workflows/test.yml (:63, :114, :178, :230, plus the header comment at :12-13; dead since ojas-metal/Cargo.toml:22 became ../../tessl) are removed; CI staying green depends on gp-ci-main-green
+- [ ] rg finds no bare ignores across workspace (every #[ignore] has an explicit documented reason; 25 bare today, e.g. tape_bench.rs:59, exp_exact.rs:191/263/286, pointwise.rs:3032)
+- [ ] redteam.rs either asserts on before_prefix_budget or no longer computes it (computed at ojas-cpu/tests/redteam.rs:490, discarded with `let _ =` at :500)
 - [ ] Migrate GPU test readback assertions from process-wide device_readbacks() to Budget::device_readbacks() scoped per budget tree (resolve remaining ojas-capi/src/tests.rs site)
 - [ ] Verify all GPU tests (wgpu, autograd, capi, metal) pass cleanly under default multi-threaded test execution (cargo test without --test-threads=1)
-- [ ] Remove --test-threads=1 restriction from README.md
+- [ ] Remove --test-threads=1 restriction from README.md (:330, :364, :367)
 - [ ] A decision and protocol are recorded for Metal GPU test execution (runner or manual protocol), and results are recorded in docs/status.md with a commit SHA
-- [ ] Pin tessl and gusset revisions in CI workflows and document pin bump procedure
+- [ ] Pin tessl and gusset revisions in CI workflows (GUSSET_REF/TESSL_REF default to `main`, test.yml:39-40) and document the bump procedure; the Rust toolchain pin lives in gp-ci-toolchain-reproducibility
 - [ ] Add optional target-gated ojas-metal dev-dependency on macOS in ojas-autograd and wire into G6 seeded backward tests
-- [ ] De-duplicate test helpers (Resident, Rng, lin, ce) across ojas-autograd test suites
-- [ ] Pin ojas_engine_init double initialization mutex safety with a dedicated test
+- [ ] De-duplicate test helpers (Resident, Rng, lin, ce) across ojas-autograd test suites: tests/common/mod.rs exists, copies remain in device_tape.rs:60 and gradcheck_random.rs:15,77,166
+- [ ] Pin ojas_engine_init double initialization safety with a dedicated test (symbol at ojas-gusset-engine/src/lib.rs:160, mutex at ojas-capi/src/engine.rs:90; no test today)
 - [ ] A scheduled CI job runs the CPU --ignored slow/soak tests
 
 ## Planned files
