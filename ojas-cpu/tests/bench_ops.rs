@@ -551,6 +551,25 @@ fn linear_ce_case(b: &Budget, name: &'static str, rows: usize, chunk: CeChunk) -
     )
 }
 
+/// One decode step's attention over a `[1, T, NH, HD]` KV cache holding
+/// `kv_len` positions. CPU only: torch has no cached-attention op.
+fn cached_attn_case(b: &Budget, name: &'static str, kv_len: usize) -> Case {
+    let mut c = Ctx::new(b, name);
+    let q = c.f32("q", &[1, 1, NH, HD], 1.0, 0.0);
+    let k = c.f32("k_cache", &[1, T, NH, HD], 1.0, 0.0);
+    let v = c.f32("v_cache", &[1, T, NH, HD], 1.0, 0.0);
+    c.case(
+        name,
+        format!("q[1,1,{NH},{HD}] cache[1,{T},{NH},{HD}] kv_len {kv_len}"),
+        vec![dir("fwd", 200, move |cpu, t| {
+            Ok(vec![out(
+                "out",
+                cpu.cached_attention_forward(&t[q], &t[k], &t[v], kv_len, None)?,
+            )])
+        })],
+    )
+}
+
 /// nanolab AdamW group: lr 6e-4, betas (0.9, 0.95), eps 1e-8, weight decay 0.
 /// Moments start non-zero so the step is not the first-step special case.
 fn adamw_case(b: &Budget, name: &'static str, rows: usize, cols: usize, n: usize) -> Case {
@@ -1178,6 +1197,12 @@ fn builders() -> Vec<(&'static str, Builder)> {
         ("gated_rms", gated_rms_case),
         ("rope_partial", rope_partial_case),
         ("gdn", gdn_case),
+        ("cached_attn_dec", |b| {
+            cached_attn_case(b, "cached_attn_dec", T)
+        }),
+        ("cached_attn_dec_short", |b| {
+            cached_attn_case(b, "cached_attn_dec_short", T / 8)
+        }),
         ("linear_ce", |b| {
             linear_ce_case(
                 b,

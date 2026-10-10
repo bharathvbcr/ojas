@@ -41,31 +41,60 @@ fn slot_runs(positions: Range<usize>, capacity: usize) -> [Range<usize>; 2] {
     [first..first + head, 0..len - head]
 }
 
+/// Floats of cache a [`check_read_slots`] task scans at least; below two
+/// of these the scan stays on the calling thread.
+const SCAN_PIECE: usize = 1 << 17;
+
 /// Check the slots of every position some query reads, in every batch of
-/// `cache`, finite in place. A device or strided cache is refused by
-/// [`Tensor::f32_slice`] before anything is read.
+/// both caches, finite in place. The runs are contiguous, so they are cut
+/// into pieces of at least [`SCAN_PIECE`] floats and scanned on the pool.
 fn check_read_slots(
     op: &'static str,
-    cache: &Tensor,
+    exec: Exec<'_>,
+    caches: [&Shared; 2],
     dims: &KvDims,
     kv_len: usize,
 ) -> Result<(), OjasError> {
-    let values = cache.f32_slice()?;
     let step = product(op, &[dims.kv_heads, dims.head_dim])?;
     let per_batch = product(op, &[dims.capacity, step])?;
     let read = dims.visible(kv_len, 0).start..kv_len;
-    for b in 0..dims.batch {
-        for run in slot_runs(read.clone(), dims.capacity) {
-            let start = b * per_batch + run.start * step;
-            let run = values.get(start..start + run.len() * step).ok_or_else(|| {
-                OjasError::OutOfRange {
-                    op,
-                    detail: format!("cache window {} is shorter than its shape", values.len()),
+    let mut runs = Vec::new();
+    for (cache, values) in caches.iter().enumerate() {
+        let len = values.values()?.len();
+        for b in 0..dims.batch {
+            for run in slot_runs(read.clone(), dims.capacity) {
+                let start = b * per_batch + run.start * step;
+                let end = start + run.len() * step;
+                if end > len {
+                    return Err(OjasError::OutOfRange {
+                        op,
+                        detail: format!("cache window {len} is shorter than its shape"),
+                    });
                 }
-            })?;
-            if !all_finite(run) {
-                return Err(nonfinite(op));
+                runs.push((cache, start..end));
             }
+        }
+    }
+    let total: usize = runs.iter().map(|(_, run)| run.len()).sum();
+    let piece = (total / (2 * exec.pool.threads()).max(1)).max(SCAN_PIECE);
+    let pieces: Vec<(usize, Range<usize>)> = runs
+        .into_iter()
+        .flat_map(|(cache, run)| {
+            (run.start..run.end)
+                .step_by(piece)
+                .map(move |at| (cache, at..(at + piece).min(run.end)))
+        })
+        .collect();
+    let caches = [caches[0].clone(), caches[1].clone()];
+    let pieces = Arc::new(pieces);
+    let count = pieces.len();
+    let finite = exec.map(count, total, 2 * SCAN_PIECE, move |i| {
+        let (cache, ref run) = pieces[i];
+        Ok::<_, OjasError>(all_finite(&caches[cache].values()?[run.clone()]))
+    })?;
+    for ok in finite {
+        if !ok? {
+            return Err(nonfinite(op));
         }
     }
     Ok(())
@@ -85,8 +114,12 @@ pub(crate) fn cached_attention_forward(
 ) -> Result<Tensor, OjasError> {
     let dims = cached_attention_dims(q, k_cache, v_cache, kv_len, window)?;
     check_f32(op, q)?;
-    check_read_slots(op, k_cache, &dims, kv_len)?;
-    check_read_slots(op, v_cache, &dims, kv_len)?;
+    let operands = [
+        Shared::new(op, q)?,
+        Shared::new(op, k_cache)?,
+        Shared::new(op, v_cache)?,
+    ];
+    check_read_slots(op, exec, [&operands[1], &operands[2]], &dims, kv_len)?;
     let KvDims {
         batch,
         new: tq,
@@ -116,11 +149,6 @@ pub(crate) fn cached_attention_forward(
             detail: "cached attention scratch length overflows".to_string(),
         })?;
     // `q` and the cache prefixes were scanned above; tasks read them in place.
-    let operands = [
-        Shared::new(op, q)?,
-        Shared::new(op, k_cache)?,
-        Shared::new(op, v_cache)?,
-    ];
     fill_out(op, budget, exec, q.shape(), |out| {
         if out.len() != out_len {
             return Err(shape(
@@ -133,8 +161,10 @@ pub(crate) fn cached_attention_forward(
     })
 }
 
-/// The heads of [`cached_attention_forward`], on the pool, each copied
-/// into its rows of `out` (`[B, Tq, H, D]`). Key and value `j` of a head
+/// The heads of [`cached_attention_forward`], each copied into its rows of
+/// `out` (`[B, Tq, H, D]`), on the pool from `TASK_WORK / 8` units: a decode
+/// step's heads past about 170 positions at nanolab's 12 x 64. The tasks
+/// are `'static`, so nothing is spawned. Key and value `j` of a head
 /// are read where the time-major ring holds them, slot `j % Tcap`, rows
 /// `kv_heads * D` apart; a query's keys are scored and mixed oldest first,
 /// one run of slots at a time.
@@ -165,7 +195,7 @@ fn attend(
         .saturating_mul(widest)
         .saturating_mul(d);
     let cancel = exec.pool.cancel_hook();
-    let parts = exec.map(tasks, work_units, 2 * TASK_WORK, {
+    let parts = exec.map(tasks, work_units, TASK_WORK / 8, {
         let cancel = Arc::clone(&cancel);
         move |task| {
             cancel()?;
