@@ -128,6 +128,32 @@ fn gather_matches_scalar_reference_at_one_and_six_threads() {
     }
 }
 
+/// A table large enough that the gradient is written in several pieces of
+/// rows: repeated ids on both sides of piece edges, unnamed rows, a `-0.0`
+/// gradient on a row named once (stored as `0.0 + -0.0`, so `+0.0`), and
+/// tokens out of id order all match the token-order scatter bit for bit.
+#[test]
+fn scatter_split_across_row_pieces_matches_the_reference() {
+    const VOCAB: usize = 300;
+    const DIM: usize = 769;
+    let ids: Vec<u32> = (0..97u32)
+        .map(|n| match n % 4 {
+            0 => (n * 37) % VOCAB as u32,
+            1 => 41,
+            2 => 42,
+            _ => VOCAB as u32 - 1 - n,
+        })
+        .collect();
+    let mut grad = SplitMix64(0x0e3b_bac0).vec(ids.len() * DIM, 3.0);
+    let single = (0..ids.len())
+        .find(|&n| ids.iter().filter(|&&id| id == ids[n]).count() == 1)
+        .unwrap();
+    grad[single * DIM] = -0.0;
+    for threads in [1usize, 3, 6] {
+        check_backward(threads, VOCAB, DIM, &ids, &grad);
+    }
+}
+
 #[test]
 fn duplicate_ids_scatter_in_token_order_at_one_and_six_threads() {
     // (1e20 + -1e20) + 1.0 is 1.0 in token order. A different association

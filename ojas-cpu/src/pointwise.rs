@@ -146,17 +146,28 @@ fn gather_refused(op: &'static str, err: ojas_simd::SimdError) -> OjasError {
 /// tensor, in token order. A table row is the f32 sum from 0 of its tokens'
 /// rows in ascending token order, the order Metal's scatter also uses.
 ///
-/// A sum that overflows is [`OjasError::NonFinite`].
+/// The table is the only charge. Its zeros are written in pieces of whole
+/// rows on [`scoped`] threads into a reserved buffer
+/// ([`ojas_simd::ReservedF32`]) rather than by one serial fill: on Linux
+/// x86_64 the serial fill of the nanolab table (`[50304, 768]`, 1024
+/// tokens) was almost all of 69 ms on 4 threads (bench_ops `embedding`, min
+/// of 5). The scatter that follows is serial and unchanged.
+///
+/// A sum that overflows is [`OjasError::NonFinite`]. Otherwise every value
+/// is a zero or a checked sum, so the output is recorded finite and the
+/// next op does not scan it again.
 pub(crate) fn embedding_backward(
     op: &'static str,
     budget: &Budget,
+    exec: Exec<'_>,
     ids: &[u32],
     grad: &[f32],
     dims: &EmbeddingDims,
 ) -> Result<Tensor, OjasError> {
     check_ids(op, ids, dims.vocab)?;
     let dim = dims.dim;
-    let mut out = Scratch::<f32>::try_alloc(product(op, &[dims.vocab, dim])?, budget)?;
+    let n = product(op, &[dims.vocab, dim])?;
+    let mut out = zeroed_f32(op, budget, exec, n, dim)?;
     let table = out.as_mut_slice();
     let mut finite = true;
     for (src, id) in grad.chunks_exact(dim).zip(ids) {
@@ -173,7 +184,67 @@ pub(crate) fn embedding_backward(
     if !finite {
         return Err(nonfinite(op));
     }
-    Tensor::from_scratch(out, &dims.out_shape)
+    trusted_finite_f32(op, out, &dims.out_shape)
+}
+
+/// `n` charged zeros, written in pieces of whole `width`-value rows on
+/// [`scoped`] threads into a reserved buffer instead of one serial fill.
+fn zeroed_f32(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    n: usize,
+    width: usize,
+) -> Result<Scratch<f32>, OjasError> {
+    let bytes = u64::try_from(n)
+        .ok()
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: format!("{n} * 4 overflows u64"),
+        })?;
+    let reservation = budget.try_reserve(bytes)?;
+    let rows = n / width.max(1);
+    let chunks: Vec<(usize, usize)> = scoped::pieces(exec, rows, scoped::min_rows(width))
+        .into_iter()
+        .map(|r| (r.start * width, r.len() * width))
+        .collect();
+    let buf = match ojas_simd::ReservedF32::try_new(n, &chunks) {
+        Ok(buf) => buf,
+        Err(ojas_simd::SimdError::ReserveFailed { .. }) => {
+            drop(reservation);
+            return Err(OjasError::CapacityExceeded {
+                requested: bytes,
+                cap: budget.cap_bytes(),
+                live: budget.live_bytes()?,
+            });
+        }
+        Err(err) => {
+            drop(reservation);
+            return Err(reserved_refused(op, err));
+        }
+    };
+    let written = scoped::map(exec, chunks.len(), |i| {
+        buf.write_chunk(i, |dst| {
+            for slot in dst {
+                slot.write(0.0);
+            }
+        })
+        .map_err(|err| reserved_refused(op, err))
+    });
+    if let Err(err) = written {
+        drop(buf);
+        drop(reservation);
+        return Err(err);
+    }
+    let vec = match buf.into_vec() {
+        Ok(vec) => vec,
+        Err(err) => {
+            drop(reservation);
+            return Err(reserved_refused(op, err));
+        }
+    };
+    Scratch::<f32>::try_adopt(vec, reservation)
 }
 
 fn id_index(id: u32) -> usize {
