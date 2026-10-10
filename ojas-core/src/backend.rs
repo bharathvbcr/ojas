@@ -89,6 +89,19 @@ pub fn sdpa_scale(head_dim: u32) -> Result<f32, OjasError> {
     Ok(1.0 / (head_dim as f32).sqrt())
 }
 
+/// The order logits are ranked in for decoding: column `a` of `row` against
+/// column `b`, value descending, then column ascending. `+0.0` and `-0.0`
+/// are one value, so a tie between them goes to the lower column, as
+/// `torch.argmax` and [`Backend::argmax_rows`] take ties; `-inf` ranks after
+/// every finite value. Distinct columns never compare equal. NaN is not
+/// ranked: callers refuse it first. [`Backend::topk_rows`] and
+/// `ojas_infer`'s sampler (`top_k`, and temperature 0) rank by it, so every
+/// greedy pick in ojas is the lowest column of the largest value.
+pub fn rank_logits(row: &[f32], a: usize, b: usize) -> std::cmp::Ordering {
+    let key = |v: f32| if v == 0.0 { 0.0 } else { v };
+    key(row[b]).total_cmp(&key(row[a])).then(a.cmp(&b))
+}
+
 /// Metal refuses `head_dim > METAL_MAX_HEAD_DIM`. CPU allows any non-zero
 /// head dimension.
 /// Neither path accepts 0. This does not clamp.
@@ -1294,10 +1307,11 @@ pub trait Backend {
     }
 
     /// The `k` leaders of each row of `x` (`F32` `[rows, cols]`, `1 <= k <= cols`),
-    /// ranked as `ojas_infer::sample_token` ranks candidates: value descending under
-    /// `f32::total_cmp` (so `+0.0` before `-0.0`, and `-inf` after every finite value),
-    /// then column ascending. Returns `(values, ids)`: `F32` `[rows, k]` and `U32`
-    /// `[rows, k]`, every id `< cols`. Any NaN or `+inf` in a row is
+    /// ranked by [`rank_logits`]: value descending with `+0.0` and `-0.0` one
+    /// value and `-inf` after every finite value, then column ascending (the
+    /// order `ojas_infer::sample_token` ranks candidates in). Returns
+    /// `(values, ids)`: `F32` `[rows, k]` and `U32` `[rows, k]`, every id
+    /// `< cols`. Any NaN or `+inf` in a row is
     /// `OjasError::NonFinite` (a device backend may report it at the next sync);
     /// `-inf` is a value (a masked logit). Validate with `topk_rows_dims`. The default
     /// downloads `x` and selects on the host.
@@ -1330,8 +1344,7 @@ pub trait Backend {
             if row.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
                 return Err(OjasError::NonFinite { op: OP });
             }
-            let rank =
-                |a: &u32, b: &u32| row[*b as usize].total_cmp(&row[*a as usize]).then(a.cmp(b));
+            let rank = |a: &u32, b: &u32| rank_logits(row, *a as usize, *b as usize);
             order.clear();
             order.extend(0..cols as u32);
             if k < cols {

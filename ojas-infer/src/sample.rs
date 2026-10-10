@@ -12,13 +12,19 @@
 //!   `logits < v[:, [-1]]` keeps every logit tied with the k-th.
 //! - nanolab has no top-p.
 //!
+//! One greedy rule: the rank is [`ojas_core::rank_logits`], in which `+0.0`
+//! and `-0.0` are one value, so temperature 0 (and `top_k == 1`) takes the
+//! lowest index of the largest logit, as [`crate::argmax_token`],
+//! `Backend::argmax_rows` and `torch.argmax` do; `Backend::topk_rows` ranks
+//! the same way on every backend. Decided 2026-10-10: until then the sampler
+//! ranked by `f32::total_cmp`, which put `+0.0` ahead of a `-0.0` at a lower
+//! index, so the sampler and the argmax disagreed on that one tie.
+//!
 //! Logits: `-inf` is a mask (the token cannot be drawn); NaN and `+inf` are
 //! [`OjasError::NonFinite`], and so is a row with no finite entry.
 //! [`crate::argmax_token`] stays strict and refuses `-inf` too.
 
-use std::cmp::Ordering;
-
-use ojas_core::{exp_exact, OjasError};
+use ojas_core::{exp_exact, rank_logits, OjasError};
 
 /// SplitMix64 with the state as an explicit counter: the same stream as
 /// `ojas_data::CounterRng`. ojas-infer does not depend on ojas-data, so the
@@ -118,7 +124,13 @@ pub fn sample_token(
         // The leader alone, in one pass with no allocation.
         let best = (0..logits.len())
             .filter(|&i| logits[i].is_finite())
-            .reduce(|a, b| if rank(logits, b, a).is_lt() { b } else { a })
+            .reduce(|a, b| {
+                if rank_logits(logits, b, a).is_lt() {
+                    b
+                } else {
+                    a
+                }
+            })
             .ok_or(OjasError::NonFinite { op: OP })?;
         return to_id(best);
     }
@@ -142,7 +154,7 @@ fn check_row(logits: &[f32]) -> Result<(), OjasError> {
 }
 
 /// The candidates of a logit row, `(id, logit)`: its finite entries ranked
-/// by (logit desc, index asc), the order [`rank`] defines, and only the
+/// by (logit desc, index asc), the order [`rank_logits`] defines, and only the
 /// first `k` of them when `top_k` is `Some(k)`. The `k` leaders are
 /// selected in O(V) and only they are sorted. The refusals of
 /// [`sample_token`]: an empty row, NaN or `+inf` anywhere, no finite entry.
@@ -159,12 +171,12 @@ pub(crate) fn ranked_candidates(
     }
     match top_k {
         Some(k) if k < ranked.len() => {
-            ranked.select_nth_unstable_by(k - 1, |&a, &b| rank(logits, a, b));
+            ranked.select_nth_unstable_by(k - 1, |&a, &b| rank_logits(logits, a, b));
             ranked.truncate(k);
         }
         _ => {}
     }
-    ranked.sort_unstable_by(|&a, &b| rank(logits, a, b));
+    ranked.sort_unstable_by(|&a, &b| rank_logits(logits, a, b));
     ranked
         .into_iter()
         .map(|i| Ok((to_id(i)?, logits[i])))
@@ -172,7 +184,7 @@ pub(crate) fn ranked_candidates(
 }
 
 /// [`ranked_candidates`] from one row of `Backend::topk_rows`: `values` and
-/// `ids` are its `k` leaders, ranked as [`rank`] ranks them, with `-inf` (a
+/// `ids` are its `k` leaders, ranked as [`rank_logits`] ranks them, with `-inf` (a
 /// masked logit) after every finite value. The candidates are the finite
 /// prefix, so a row with fewer than `k` finite logits gives all of them and
 /// one with none is [`OjasError::NonFinite`], as [`ranked_candidates`] has
@@ -268,13 +280,6 @@ pub(crate) fn draw(
     }
     // Rounding left `u` at or above the running sum: the last kept token.
     Ok(candidates[keep - 1].0)
-}
-
-/// Candidate order: logit descending (`total_cmp`, so `+0.0` ranks before
-/// `-0.0`), then index ascending. Indices are distinct, so no two compare
-/// equal and an unstable sort or select gives the one order.
-fn rank(logits: &[f32], a: usize, b: usize) -> Ordering {
-    logits[b].total_cmp(&logits[a]).then(a.cmp(&b))
 }
 
 fn to_id(index: usize) -> Result<u32, OjasError> {

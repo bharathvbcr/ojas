@@ -24,11 +24,11 @@ pub use autocast::{
     bf16_to_f32, f32_to_bf16, round_f32_to_bf16, Autocast, AutocastGuard, AutocastMode,
 };
 pub use backend::{
-    broadcast_scalar, check_adamw, clip_scale, next_step, pow_u64, refuse_bf16_operands,
-    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, require_ns5, sdpa_scale,
-    AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad,
-    GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OptimizerKind, PerHeadGateGrad,
-    ValueResidualGrad, ADAMW_BETA1, ADAMW_BETA2, ADAMW_EPS, CLIP_GRAD_NORM_EPS,
+    broadcast_scalar, check_adamw, clip_scale, next_step, pow_u64, rank_logits,
+    refuse_bf16_operands, refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim,
+    require_ns5, sdpa_scale, AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnDecayGrad,
+    GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OptimizerKind,
+    PerHeadGateGrad, ValueResidualGrad, ADAMW_BETA1, ADAMW_BETA2, ADAMW_EPS, CLIP_GRAD_NORM_EPS,
     GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
     METAL_MAX_HEAD_DIM, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS, RMS_NORM_EPS,
 };

@@ -1,6 +1,7 @@
 //! The trait's host `topk_rows` (CpuBackend keeps the default): each row's
-//! `k` leaders by value descending under `f32::total_cmp`, then column
-//! ascending, against a full sort of the row by the same order.
+//! `k` leaders by value descending (`+0.0` and `-0.0` one value, as
+//! `ojas_core::rank_logits` has it), then column ascending, against a full
+//! sort of the row by the same order.
 
 use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
@@ -62,7 +63,13 @@ fn reference(x: &[f32], cols: usize) -> Vec<Vec<u32>> {
     x.chunks(cols)
         .map(|row| {
             let mut order: Vec<u32> = (0..cols as u32).collect();
-            order.sort_by(|&a, &b| row[b as usize].total_cmp(&row[a as usize]).then(a.cmp(&b)));
+            // IEEE order: `+0.0 == -0.0`, `-inf` below every finite value.
+            order.sort_by(|&a, &b| {
+                let by_value = row[b as usize]
+                    .partial_cmp(&row[a as usize])
+                    .expect("no NaN");
+                by_value.then(a.cmp(&b))
+            });
             order
         })
         .collect()
@@ -103,14 +110,26 @@ fn topk_rows_default_matches_a_full_sort_at_qwen_vocab() {
         assert!(values.device().is_none() && ids.device().is_none());
         same_leaders("cpu", &host, COLS, k, &values, &ids);
     }
-    // Spelled out: +0.0 columns before -0.0 columns, each in column order;
-    // a row with fewer finite values than k ends in -inf in column order.
+    // Spelled out: the +0.0 and -0.0 columns tie, so they come in column
+    // order; a row with fewer finite values than k ends in -inf in column
+    // order.
     let (values, ids) = be.topk_rows(&x, 50).unwrap();
     let ids = ids.u32_slice().unwrap();
     let values = values.to_f32_vec().unwrap();
-    assert_eq!(ids[50..58], [6, 99, 7_001, 200_000, 5, 100, 7_000, 248_000]);
-    assert_eq!(bits(&values[50..58])[..4], [0u32; 4]);
-    assert_eq!(bits(&values[50..58])[4..], [0x8000_0000u32; 4]);
+    assert_eq!(ids[50..58], [5, 6, 99, 100, 7_000, 7_001, 200_000, 248_000]);
+    assert_eq!(
+        bits(&values[50..58]),
+        [
+            0x8000_0000u32,
+            0,
+            0,
+            0x8000_0000,
+            0x8000_0000,
+            0,
+            0,
+            0x8000_0000
+        ]
+    );
     assert_eq!(values[58], -1.0);
     assert_eq!(ids[100..107], [10, 300, COLS as u32 - 1, 0, 1, 2, 3]);
     assert_eq!(values[100..103], [2.5, 2.5, -7.0]);
@@ -138,7 +157,8 @@ fn topk_rows_default_takes_k_equal_to_cols() {
     let x = Tensor::from_f32(&host, &[2, 5], be.budget()).unwrap();
     let (values, ids) = be.topk_rows(&x, 5).unwrap();
     same_leaders("cpu", &host, 5, 5, &values, &ids);
-    assert_eq!(ids.u32_slice().unwrap(), [0, 4, 3, 1, 2, 2, 3, 4, 0, 1]);
+    // Row 0's -0.0 (column 1) and +0.0 (column 3) tie: column order.
+    assert_eq!(ids.u32_slice().unwrap(), [0, 4, 1, 3, 2, 2, 3, 4, 0, 1]);
     let one = Tensor::from_f32(&[f32::NEG_INFINITY], &[1, 1], be.budget()).unwrap();
     let (values, ids) = be.topk_rows(&one, 1).unwrap();
     assert_eq!(values.to_f32_vec().unwrap(), [f32::NEG_INFINITY]);

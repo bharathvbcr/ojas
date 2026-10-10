@@ -160,9 +160,9 @@ fn argmax_rows(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw
     }
 }
 
-// topk_rows: one workgroup per row and k rounds, ranked as
-// `ojas_infer::sample_token` ranks candidates: value descending under
-// `total_cmp`, then column ascending. Round j takes, over the columns ranked
+// topk_rows: one workgroup per row and k rounds, ranked by
+// `ojas_core::rank_logits`: value descending with +0.0 and -0.0 one value and
+// -inf after every finite value, then column ascending. Round j takes, over the columns ranked
 // strictly after round j - 1's pick (a smaller key, or the same key at a
 // higher column), the largest key, then the lowest column: a strided walk per
 // lane (rising columns, so a strict > keeps the lowest column of equal keys),
@@ -172,10 +172,14 @@ fn argmax_rows(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw
 var<workgroup> top_k: array<u32, 256>;
 var<workgroup> top_i: array<u32, 256>;
 
-// An f32's rank key: unsigned order of keys is `f32::total_cmp` order, so
-// +0.0 outranks -0.0 and -inf ranks below every finite value.
+// An f32's rank key: unsigned order of keys is `f32::total_cmp` order with
+// -0.0 read as +0.0, so the two tie (the lower column wins) and -inf ranks
+// below every finite value.
 fn rank_key(v: f32) -> u32 {
-    let b = bitcast<u32>(v);
+    var b = bitcast<u32>(v);
+    if (b == 0x80000000u) {
+        b = 0u;
+    }
     return b ^ select(0x80000000u, 0xffffffffu, (b >> 31u) != 0u);
 }
 
