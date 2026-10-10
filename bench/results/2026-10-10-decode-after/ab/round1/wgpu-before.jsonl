@@ -1,0 +1,14 @@
+{"runtime":"ojas-wgpu","row":"_device","status":"info","device":{"backend":"WgpuBackend","adapter":"Apple M5 Pro","hal":"Metal"}}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_prefill_p32","when":"before","load":"2.88 7.36 13.98","gpu_util_pct":60}
+{"runtime":"ojas-wgpu","row":"gen_prefill_p32","status":"ok","min_ms":26.512583,"median_ms":60.548063,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_prefill_p32","when":"after","load":"2.97 7.30 13.92","gpu_util_pct":69}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"before","load":"2.97 7.30 13.92","gpu_util_pct":0}
+{"runtime":"ojas-wgpu","row":"gen_greedy_p32_n32","status":"ok","min_ms":743.937667,"median_ms":1782.089270,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"after","load":"2.79 6.86 13.52","gpu_util_pct":98}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"before","load":"2.79 6.86 13.52","gpu_util_pct":100}
+{"runtime":"ojas-wgpu","row":"gen_topk50_p32_n32","status":"ok","min_ms":748.765791,"median_ms":1775.992854,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"after","load":"2.92 6.44 13.10","gpu_util_pct":98}
+{"runtime":"ojas-wgpu","row":"_gen_ids","status":"info","for":"gen_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
+{"runtime":"ojas-wgpu","row":"_gen_traffic","status":"info","for":"gen_greedy_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":4,"step_uploads":0,"step_upload_bytes":0,"step_readbacks":1,"step_readback_bytes":4}
+{"runtime":"ojas-wgpu","row":"_gen_traffic","status":"info","for":"gen_topk50_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":201216,"step_uploads":1,"step_upload_bytes":4,"step_readbacks":1,"step_readback_bytes":201216}
+{"runtime":"ojas-wgpu","row":"_gen_readback","status":"info","for":"gen_greedy_p32_n32","bytes":201216,"to_host_us":176.75,"read_bytes_us":173.50,"decode_pass_us":3.25,"iters":50}

@@ -1,0 +1,14 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_prefill_p32","when":"before","load":"11.35 7.41 9.26","gpu_util_pct":83}
+{"runtime":"ojas-metal","row":"gen_prefill_p32","status":"ok","min_ms":8.990292,"median_ms":9.201062,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_prefill_p32","when":"after","load":"11.35 7.41 9.26","gpu_util_pct":88}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"before","load":"11.35 7.41 9.26","gpu_util_pct":0}
+{"runtime":"ojas-metal","row":"gen_greedy_p32_n32","status":"ok","min_ms":339.312000,"median_ms":346.914042,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"after","load":"8.47 7.01 9.07","gpu_util_pct":95}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"before","load":"8.47 7.01 9.07","gpu_util_pct":100}
+{"runtime":"ojas-metal","row":"gen_topk50_p32_n32","status":"ok","min_ms":338.378125,"median_ms":412.746166,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"after","load":"4.87 6.23 8.66","gpu_util_pct":98}
+{"runtime":"ojas-metal","row":"_gen_ids","status":"info","for":"gen_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
+{"runtime":"ojas-metal","row":"_gen_traffic","status":"info","for":"gen_greedy_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":4,"step_uploads":0,"step_upload_bytes":0,"step_readbacks":1,"step_readback_bytes":4}
+{"runtime":"ojas-metal","row":"_gen_traffic","status":"info","for":"gen_topk50_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":201216,"step_uploads":1,"step_upload_bytes":4,"step_readbacks":1,"step_readback_bytes":201216}
+{"runtime":"ojas-metal","row":"_gen_readback","status":"info","for":"gen_greedy_p32_n32","bytes":201216,"to_host_us":16.08,"read_bytes_us":9.38,"decode_pass_us":6.71,"iters":50}
