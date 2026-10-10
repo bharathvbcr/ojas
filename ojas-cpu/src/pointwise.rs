@@ -510,6 +510,41 @@ pub(crate) fn mul_forward(
     } else {
         live
     };
+    zip_forward(
+        op,
+        budget,
+        exec,
+        [a, b],
+        shape,
+        pieces,
+        reservation,
+        mul_store,
+    )
+}
+
+/// Writes `out[i] = f(a[i], b[i])` for every lane; true when every stored
+/// value is finite.
+type ZipStore = fn(&mut [MaybeUninit<f32>], &[f32], &[f32]) -> bool;
+
+/// `store(out, a, b)` over `pieces` chunks of a reserved, never zero-filled
+/// output ([`ojas_simd::ReservedF32`]), the chunks on [`scoped`] threads,
+/// adopted under `reservation` (the output's charge) once every chunk's
+/// flag says its stored values are finite. A non-finite value drops the
+/// buffer and the charge and is [`OjasError::NonFinite`]. `store` computes
+/// each value alone, so the bits do not depend on the cut.
+#[allow(clippy::too_many_arguments)]
+fn zip_forward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    [a, b]: [&[f32]; 2],
+    shape: &[usize],
+    pieces: usize,
+    reservation: Reservation,
+    store: ZipStore,
+) -> Result<Tensor, OjasError> {
+    let n = a.len();
+    let bytes = (n as u64) * 4;
     let chunks: Vec<(usize, usize)> = crate::pool::ranges(n, pieces)
         .into_iter()
         .map(|r| (r.start, r.end - r.start))
@@ -532,7 +567,7 @@ pub(crate) fn mul_forward(
     let flags = match scoped::map(exec, chunks.len(), |i| {
         let (start, len) = chunks[i];
         let end = start + len;
-        buf.write_chunk(i, |dst| mul_store(dst, &a[start..end], &b[start..end]))
+        buf.write_chunk(i, |dst| store(dst, &a[start..end], &b[start..end]))
             .map_err(|err| reserved_refused(op, err))
     }) {
         Ok(flags) => flags,
@@ -774,18 +809,70 @@ fn mul_grad_lanes(
     top < NON_FINITE
 }
 
+/// `out[i] = a[i] + b[i]`. True only when every stored sum is finite; the
+/// test is on the stored register, as in [`mul_store`].
+#[cfg(not(target_os = "macos"))]
+fn add_store(out: &mut [MaybeUninit<f32>], a: &[f32], b: &[f32]) -> bool {
+    debug_assert_eq!(out.len(), a.len());
+    debug_assert_eq!(out.len(), b.len());
+    let mut top = 0u32;
+    for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
+        let s = x + y;
+        o.write(s);
+        top = top.max(s.to_bits() & MAGNITUDE);
+    }
+    top < NON_FINITE
+}
+
+/// `a + b` off macOS, under both numerics: [`zip_forward`] with
+/// [`add_store`], cut as [`mul_forward`]'s live cut. On Linux x86_64 at
+/// `[1024, 768]` (bench_ops `add`, min of 20, 2026-10-10) the serial tile
+/// append took 0.565 ms on 4 threads and 0.544 ms on 1; this takes 0.206 ms
+/// and 0.353 ms.
+#[cfg(not(target_os = "macos"))]
+fn add_zip(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    a: &[f32],
+    b: &[f32],
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let n = a.len();
+    let bytes = (n as u64)
+        .checked_mul(4)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: format!("{n} * 4 overflows u64"),
+        })?;
+    let reservation = budget.try_reserve(bytes)?;
+    let pieces = (n / scoped::min_rows(1)).clamp(1, exec.pool.threads().saturating_mul(2));
+    zip_forward(
+        op,
+        budget,
+        exec,
+        [a, b],
+        shape,
+        pieces,
+        reservation,
+        add_store,
+    )
+}
+
 /// Floats per stack tile of [`extend_sums`].
 ///
 /// 4096 is 16 KiB. On `[1024, 768]` at 6 threads it was faster than 1024
 /// and faster than the zero-filled parallel zip. Each tile is one `a + b`
 /// per element, scanned, then appended, so the output element is written
 /// once.
+#[cfg(target_os = "macos")]
 const ADD_FWD_TILE: usize = 4096;
 
 /// `a + b` appended in [`ADD_FWD_TILE`] chunks, including a short tail.
 ///
 /// Returns whether every sum is finite. `a` and `b` are the same length.
 /// Each sum is one rounding of `a + b`.
+#[cfg(target_os = "macos")]
 fn append_sums(a: &[f32], b: &[f32], dst: &mut Vec<f32>) -> bool {
     let mut tile = [0f32; ADD_FWD_TILE];
     let mut finite = true;
@@ -815,6 +902,7 @@ fn append_sums(a: &[f32], b: &[f32], dst: &mut Vec<f32>) -> bool {
 /// A non-finite sum drops the scratch (the charge comes off) and is
 /// [`OjasError::NonFinite`] before a tensor is returned. A finite output is
 /// recorded finite, so the next op does not scan it again.
+#[cfg(target_os = "macos")]
 fn extend_sums(
     op: &'static str,
     budget: &Budget,
@@ -840,9 +928,11 @@ fn extend_sums(
 
 /// `a + b` as a tensor of `shape`, one rounding per value.
 ///
-/// Exact, and Fast off macOS, append on the calling thread ([`extend_sums`]).
-/// The pool is not used: at `[1024, 768]` on 6 threads the zero-fill and the
-/// scoped spawn cost more than the extra arithmetic of six threads. On macOS
+/// Off macOS both numerics run [`add_zip`]: chunks of a reserved output,
+/// never zero-filled, on scoped threads. On macOS Exact appends on the
+/// calling thread ([`extend_sums`]): at `[1024, 768]` on 6 threads the
+/// zero-fill and the scoped spawn cost more than the extra arithmetic of
+/// six threads (measured before the reserved buffer existed). On macOS
 /// Fast is one `vDSP_vadd` into that same reserved buffer. Interleaved at
 /// `[1024, 768]` on 6 threads that was 0.080 ms against 0.117 ms for the
 /// scalar tiles. Writing vDSP into the stack tile and then appending was
@@ -868,26 +958,17 @@ pub(crate) fn add_forward(
         &[a.len(), b.len(), product(op, shape)?],
         "residual add operand",
     )?;
-    match exec.numerics {
-        Numerics::Exact => extend_sums(op, budget, a, b, shape),
-        Numerics::Fast => add_fast(op, budget, a, b, shape),
-    }
-}
-
-fn add_fast(
-    op: &'static str,
-    budget: &Budget,
-    a: &[f32],
-    b: &[f32],
-    shape: &[usize],
-) -> Result<Tensor, OjasError> {
     #[cfg(target_os = "macos")]
     {
-        add_vdsp(op, budget, a, b, shape)
+        match exec.numerics {
+            Numerics::Exact => extend_sums(op, budget, a, b, shape),
+            Numerics::Fast => add_vdsp(op, budget, a, b, shape),
+        }
     }
+    // One rounding per value either way, so both numerics share it.
     #[cfg(not(target_os = "macos"))]
     {
-        extend_sums(op, budget, a, b, shape)
+        add_zip(op, budget, exec, a, b, shape)
     }
 }
 
