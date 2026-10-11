@@ -55,6 +55,19 @@ pub fn bf16_to_f32(bits: u16) -> f32 {
 /// `0x0040`. The largest non-NaN magnitude, with the sign bit set
 /// (`0xFF7FFFFF`), plus the round increment `0x8000` is `0xFF87FFFF` and
 /// does not wrap a `u32`.
+///
+/// This is the one NaN rule of every ojas bf16 conversion: this function on
+/// the host (ojas-io, ojas-cuda's host side and the CPU's `to_bf16` and
+/// `cast_bf16` call it), and the same integer sequence in the Metal, wgpu
+/// and CUDA kernels. It is not torch's: torch 2.13 on arm64 (CPU and MPS,
+/// measured 2026-10-10) maps every f32 NaN to `0x7FC0`, dropping the sign
+/// and the payload; torch's x86 vector paths were not measured. The
+/// difference is kept on purpose (decided 2026-10-10, gp-bf16-compute-tier):
+/// the matmul-class ops refuse a NaN operand before reading it, so the bits
+/// of a bf16 NaN reach only `cast_bf16`, `to_bf16` and checkpoint writes,
+/// where keeping the payload round-trips a quiet NaN bit for bit.
+/// `ojas-io/tests/half_float.rs` pins the rule. (f16 is not split this way:
+/// ojas's `f32_to_f16` and torch's both keep the sign and the top payload.)
 pub fn f32_to_bf16(value: f32) -> u16 {
     let bits = value.to_bits();
     if value.is_nan() {
