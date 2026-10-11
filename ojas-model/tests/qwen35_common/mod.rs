@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, Numerics, Tensor};
+use ojas_core::{Backend, Budget, DType, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_io::SafeTensors;
 use ojas_model::qwen35::{
@@ -78,10 +78,20 @@ pub fn run<B: Backend>(
     up: impl Fn(&Tensor) -> Tensor,
     activations: ActivationCheckpoint,
 ) -> Run {
+    run_with(backend, up, activations, DType::F32)
+}
+
+/// [`run`] with the linear weights loaded as `linears` (`load_hf`).
+pub fn run_with<B: Backend>(
+    backend: B,
+    up: impl Fn(&Tensor) -> Tensor,
+    activations: ActivationCheckpoint,
+    linears: DType,
+) -> Run {
     let s = spec();
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let reference = SafeTensors::open(&dir().join("reference.safetensors")).unwrap();
-    let host = load_hf(&s, &model, PREFIX, &budget()).unwrap();
+    let host = load_hf(&s, &model, PREFIX, linears, &budget()).unwrap();
     let (ids, targets) = ids_and_targets(&reference);
     let tables = Qwen35Tables::new(&s, ids.shape()[1], &budget()).unwrap();
     let tables = Qwen35Tables {

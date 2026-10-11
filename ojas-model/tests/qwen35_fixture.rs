@@ -17,10 +17,10 @@
 
 mod qwen35_common;
 
-use ojas_core::Tensor;
+use ojas_core::{bf16_to_f32, Budget, DType, Tensor};
 use ojas_io::SafeTensors;
 use ojas_model::qwen35::{
-    bind, forward_loss, hf_tensors, load_hf, Qwen35Mixer, Qwen35Params, Qwen35Tables,
+    bind, forward_loss, hf_tensors, load_hf, MixerParams, Qwen35Mixer, Qwen35Params, Qwen35Tables,
 };
 use ojas_model::{ActivationCheckpoint, Eval, DEFAULT_CE_CHUNK};
 use qwen35_common::*;
@@ -75,7 +75,7 @@ fn eval_gives_the_tapes_loss_bits() {
     let s = spec();
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let reference = SafeTensors::open(&dir().join("reference.safetensors")).unwrap();
-    let params = load_hf(&s, &model, PREFIX, &budget()).unwrap();
+    let params = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap();
     let (ids, targets) = ids_and_targets(&reference);
     let tables = Qwen35Tables::new(&s, ids.shape()[1], &budget()).unwrap();
     let mut eval = Eval::new(cpu());
@@ -100,7 +100,7 @@ fn a_mismatched_checkpoint_is_refused_by_name() {
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let mut s = spec();
     s.layers = vec![Qwen35Mixer::Attention, Qwen35Mixer::GatedDeltaNet];
-    let err = load_hf(&s, &model, PREFIX, &budget()).unwrap_err();
+    let err = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap_err();
     assert!(
         format!("{err:?}").contains("model.layers.0.self_attn.q_proj.weight"),
         "{err:?}"
@@ -108,6 +108,103 @@ fn a_mismatched_checkpoint_is_refused_by_name() {
     let mut s = spec();
     s.head_dim = 128;
     s.rotary_dim = 32;
-    let err = load_hf(&s, &model, PREFIX, &budget()).unwrap_err();
+    let err = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap_err();
     assert!(format!("{err:?}").contains("shape"), "{err:?}");
+}
+
+/// Every weight a `linear` reads, in one fixed order.
+fn linears(p: &Qwen35Params<Tensor>) -> Vec<&Tensor> {
+    let mut out = Vec::new();
+    for l in &p.layers {
+        match &l.mixer {
+            MixerParams::GatedDeltaNet(m) => {
+                out.extend([&m.wq, &m.wk, &m.wv, &m.wz, &m.wa, &m.wb, &m.out])
+            }
+            MixerParams::Attention(m) => out.extend([&m.wq, &m.wgate, &m.wk, &m.wv, &m.wo]),
+        }
+        out.extend([&l.gate, &l.up, &l.down]);
+    }
+    out
+}
+
+fn elems(t: &Tensor) -> u64 {
+    t.num_elements().unwrap() as u64
+}
+
+#[test]
+fn a_bf16_frozen_base_holds_its_linears_at_two_bytes_and_keeps_the_rest_f32() {
+    let s = spec();
+    let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
+    let (fb, hb) = (Budget::new(1 << 30), Budget::new(1 << 30));
+    let full = load_hf(&s, &model, PREFIX, DType::F32, &fb).unwrap();
+    let half = load_hf(&s, &model, PREFIX, DType::Bf16, &hb).unwrap();
+
+    let lin_half = linears(&half);
+    let lin_elems: u64 = lin_half.iter().map(|t| elems(t)).sum();
+    let all_elems: u64 = half.values().iter().map(|t| elems(t)).sum();
+    assert_eq!(lin_half.len(), 7 + 5 + 2 * 3, "every linear of both layers");
+    for t in &lin_half {
+        assert_eq!(t.dtype(), DType::Bf16);
+    }
+    // The embedding, the norms, the convolutions, A_log and dt_bias: f32.
+    let lin_ptrs: Vec<*const Tensor> = lin_half.iter().map(|t| *t as *const Tensor).collect();
+    let rest: Vec<&Tensor> = half
+        .values()
+        .into_iter()
+        .filter(|t| !lin_ptrs.contains(&(*t as *const Tensor)))
+        .collect();
+    assert_eq!(rest.len(), half.values().len() - lin_half.len());
+    for t in &rest {
+        assert_eq!(t.dtype(), DType::F32, "shape {:?}", t.shape());
+    }
+    assert_eq!(half.embed.dtype(), DType::F32);
+
+    // Resident bytes: 2 per linear element, 4 for the rest.
+    assert_eq!(fb.live_bytes().unwrap(), 4 * all_elems);
+    assert_eq!(
+        hb.live_bytes().unwrap(),
+        2 * lin_elems + 4 * (all_elems - lin_elems)
+    );
+
+    // The checkpoint is bf16: its bits are kept, and widen to the f32 load.
+    for (h, f) in lin_half.iter().zip(linears(&full)) {
+        let widened: Vec<u32> = h
+            .bf16_slice()
+            .unwrap()
+            .iter()
+            .map(|&b| bf16_to_f32(b).to_bits())
+            .collect();
+        let want: Vec<u32> = f
+            .to_f32_vec()
+            .unwrap()
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
+        assert_eq!(widened, want);
+    }
+
+    let err = load_hf(&s, &model, PREFIX, DType::U32, &budget()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ojas_core::OjasError::Dtype {
+                got: DType::U32,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_bf16_frozen_base_gives_the_f32_loss_and_gradient_bits_on_the_cpu() {
+    let full = run(cpu(), Tensor::clone, ActivationCheckpoint::Blocks);
+    let half = run_with(
+        cpu(),
+        Tensor::clone,
+        ActivationCheckpoint::Blocks,
+        DType::Bf16,
+    );
+    assert_eq!(half.loss.to_bits(), full.loss.to_bits());
+    assert_eq!(bits(&half.grads), bits(&full.grads));
 }

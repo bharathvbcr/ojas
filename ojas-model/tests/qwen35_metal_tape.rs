@@ -13,7 +13,7 @@
 
 mod qwen35_common;
 
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{Backend, Budget, DType, Tensor};
 use ojas_metal::MetalBackend;
 use ojas_model::qwen35::Qwen35Params;
 use ojas_model::ActivationCheckpoint;
@@ -90,4 +90,23 @@ fn checkpointed_layers_give_the_same_bits_on_metal() {
     let ckpt = on_metal(&m, ActivationCheckpoint::Blocks);
     assert_eq!(direct.loss.to_bits(), ckpt.loss.to_bits());
     assert_eq!(bits(&direct.grads), bits(&ckpt.grads));
+}
+
+/// A bf16 frozen base on the Metal tape: every linear weight resident as
+/// `Bf16` (2 bytes per element), widened per op. The fixture's checkpoint is
+/// bf16, so the f32 load holds the same values and the run gives its bits.
+#[test]
+fn a_bf16_frozen_base_gives_the_f32_bits_on_metal() {
+    let Some(m) = metal() else { return };
+    let bits = |p: &Qwen35Params<Tensor>| -> Vec<Vec<u32>> {
+        host(p)
+            .into_iter()
+            .map(|v| v.iter().map(|x| x.to_bits()).collect())
+            .collect()
+    };
+    let up = |t: &Tensor| m.upload(t).unwrap();
+    let full = run(m.clone(), up, ActivationCheckpoint::Blocks);
+    let half = run_with(m.clone(), up, ActivationCheckpoint::Blocks, DType::Bf16);
+    assert_eq!(half.loss.to_bits(), full.loss.to_bits());
+    assert_eq!(bits(&half.grads), bits(&full.grads));
 }

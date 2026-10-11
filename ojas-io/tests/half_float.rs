@@ -224,6 +224,13 @@ fn header_dtype_strings_are_exactly_bf16_and_f16() {
     // The strict F32 reader still refuses a half-width tensor.
     assert!(st.read_f32("b").is_err());
     assert!(st.read_f32("h").is_err());
+    // The raw BF16 reader keeps the stored bits and refuses other storage.
+    let (shape, got) = st.read_bf16_bits("b").unwrap();
+    assert_eq!(shape, vec![2, 2]);
+    let want: Vec<u16> = values.iter().map(|&v| f32_to_bf16(v)).collect();
+    assert_eq!(got, want);
+    assert!(st.read_bf16_bits("h").is_err());
+    assert!(st.read_bf16_bits("f").is_err());
 
     // Integer dtypes are not float encodings.
     assert!(encode_f32_as(StDtype::I64, &values).is_err());

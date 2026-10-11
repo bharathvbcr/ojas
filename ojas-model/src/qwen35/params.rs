@@ -22,7 +22,7 @@
 
 use std::convert::Infallible;
 
-use ojas_core::{Budget, OjasError, Tensor};
+use ojas_core::{f32_to_bf16, Budget, DType, OjasError, Tensor};
 use ojas_io::SafeTensors;
 
 use crate::qwen35::spec::{Qwen35Mixer, Qwen35Spec};
@@ -218,7 +218,7 @@ fn refuse(op: &'static str, detail: String) -> OjasError {
 
 /// `rows` rows of `cols` values cut into consecutive blocks of `counts`
 /// rows.
-fn split_rows(v: &[f32], cols: usize, counts: &[usize]) -> Vec<Vec<f32>> {
+fn split_rows<T: Copy>(v: &[T], cols: usize, counts: &[usize]) -> Vec<Vec<T>> {
     let mut at = 0;
     counts
         .iter()
@@ -232,7 +232,7 @@ fn split_rows(v: &[f32], cols: usize, counts: &[usize]) -> Vec<Vec<f32>> {
 
 /// `q_proj`'s rows (per head: `d` query rows, then `d` gate rows) as
 /// `(query, gate)`, each `[heads d, cols]`.
-fn deinterleave(v: &[f32], heads: usize, d: usize, cols: usize) -> (Vec<f32>, Vec<f32>) {
+fn deinterleave<T: Copy>(v: &[T], heads: usize, d: usize, cols: usize) -> (Vec<T>, Vec<T>) {
     let block = d * cols;
     let (mut q, mut g) = (
         Vec::with_capacity(heads * block),
@@ -257,8 +257,59 @@ fn interleave(q: &[f32], g: &[f32], heads: usize, d: usize, cols: usize) -> Vec<
     out
 }
 
-/// The tower's parameters from a Hugging Face checkpoint, each widened to
-/// f32 (bf16 and f16 exactly) and split as the module docs say.
+/// One linear weight's values as read, in the storage [`load_hf`] keeps it.
+enum Rows {
+    F32(Vec<f32>),
+    Bf16(Vec<u16>),
+}
+
+impl Rows {
+    fn split(&self, cols: usize, counts: &[usize]) -> Vec<Rows> {
+        match self {
+            Rows::F32(v) => split_rows(v, cols, counts)
+                .into_iter()
+                .map(Rows::F32)
+                .collect(),
+            Rows::Bf16(v) => split_rows(v, cols, counts)
+                .into_iter()
+                .map(Rows::Bf16)
+                .collect(),
+        }
+    }
+
+    fn deinterleave(&self, heads: usize, d: usize, cols: usize) -> (Rows, Rows) {
+        match self {
+            Rows::F32(v) => {
+                let (q, g) = deinterleave(v, heads, d, cols);
+                (Rows::F32(q), Rows::F32(g))
+            }
+            Rows::Bf16(v) => {
+                let (q, g) = deinterleave(v, heads, d, cols);
+                (Rows::Bf16(q), Rows::Bf16(g))
+            }
+        }
+    }
+
+    fn tensor(&self, shape: &[usize], budget: &Budget) -> Result<Tensor, OjasError> {
+        match self {
+            Rows::F32(v) => Tensor::from_f32(v, shape, budget),
+            Rows::Bf16(v) => Tensor::from_bf16_bits(v, shape, budget),
+        }
+    }
+}
+
+/// The tower's parameters from a Hugging Face checkpoint, split as the
+/// module docs say.
+///
+/// `linears` is the storage of every weight a `linear` reads (the gated
+/// delta net and attention projections and the MLP): `F32`, widened exactly
+/// from bf16 or f16, or `Bf16`, a frozen base held at 2 bytes per element.
+/// A `Bf16` weight is read from a BF16 checkpoint as stored, never widened,
+/// and from an F32 or F16 one rounded once to nearest even. The tied
+/// embedding, every norm weight, the convolutions, `A_log` and `dt_bias`
+/// are `F32` either way: their ops do not take bf16 operands
+/// ([`ojas_core::Backend::bf16_operands`] covers the matmul-class ops
+/// only). Any other `linears` dtype is [`OjasError::Dtype`].
 ///
 /// Every name and shape of [`hf_tensors`] is checked from the header before
 /// any tensor is read; a missing tensor or another shape is refused by name.
@@ -267,9 +318,17 @@ pub fn load_hf(
     spec: &Qwen35Spec,
     file: &SafeTensors<'_>,
     prefix: &str,
+    linears: DType,
     budget: &Budget,
 ) -> Result<Qwen35Params<Tensor>, OjasError> {
     const OP: &str = "qwen35::load_hf";
+    if !matches!(linears, DType::F32 | DType::Bf16) {
+        return Err(OjasError::Dtype {
+            op: OP,
+            expected: DType::Bf16,
+            got: linears,
+        });
+    }
     spec.validate()?;
     let table = hf_tensors(spec, prefix);
     for want in &table {
@@ -290,6 +349,25 @@ pub fn load_hf(
             .map_err(|e| refuse(OP, format!("{name}: {e}")))
     };
     let new = |v: &[f32], shape: &[usize]| Tensor::from_f32(v, shape, budget);
+    let read_lin = |name: &str| -> Result<Rows, OjasError> {
+        if linears == DType::F32 {
+            return read(name).map(Rows::F32);
+        }
+        let stored = file
+            .info(name)
+            .map_err(|e| refuse(OP, format!("{name}: {e}")))?
+            .dtype;
+        if stored == ojas_io::StDtype::BF16 {
+            return file
+                .read_bf16_bits(name)
+                .map(|(_, v)| Rows::Bf16(v))
+                .map_err(|e| refuse(OP, format!("{name}: {e}")));
+        }
+        Ok(Rows::Bf16(
+            read(name)?.into_iter().map(f32_to_bf16).collect(),
+        ))
+    };
+    let lin = |name: String, shape: &[usize]| read_lin(&name)?.tensor(shape, budget);
     let d = spec.hidden;
     let f = spec.intermediate;
     let embed = new(&read(&table[0].name)?, &[spec.vocab, d])?;
@@ -302,36 +380,36 @@ pub fn load_hf(
                 let m = format!("{l}linear_attn.");
                 let chans = spec.gdn_qkv_channels();
                 let (h, dv, k) = (spec.gdn_heads, spec.gdn_value_dim, spec.conv_width);
-                let w = split_rows(&read(&format!("{m}in_proj_qkv.weight"))?, d, &chans);
+                let w = read_lin(&format!("{m}in_proj_qkv.weight"))?.split(d, &chans);
                 let c = split_rows(&read(&format!("{m}conv1d.weight"))?, k, &chans);
                 MixerParams::GatedDeltaNet(GdnParams {
-                    wq: new(&w[0], &[chans[0], d])?,
-                    wk: new(&w[1], &[chans[1], d])?,
-                    wv: new(&w[2], &[chans[2], d])?,
+                    wq: w[0].tensor(&[chans[0], d], budget)?,
+                    wk: w[1].tensor(&[chans[1], d], budget)?,
+                    wv: w[2].tensor(&[chans[2], d], budget)?,
                     conv_q: new(&c[0], &[chans[0], k])?,
                     conv_k: new(&c[1], &[chans[1], k])?,
                     conv_v: new(&c[2], &[chans[2], k])?,
-                    wz: new(&read(&format!("{m}in_proj_z.weight"))?, &[h * dv, d])?,
-                    wa: new(&read(&format!("{m}in_proj_a.weight"))?, &[h, d])?,
-                    wb: new(&read(&format!("{m}in_proj_b.weight"))?, &[h, d])?,
+                    wz: lin(format!("{m}in_proj_z.weight"), &[h * dv, d])?,
+                    wa: lin(format!("{m}in_proj_a.weight"), &[h, d])?,
+                    wb: lin(format!("{m}in_proj_b.weight"), &[h, d])?,
                     a_log: new(&read(&format!("{m}A_log"))?, &[h])?,
                     dt_bias: new(&read(&format!("{m}dt_bias"))?, &[h])?,
                     norm: new(&read(&format!("{m}norm.weight"))?, &[dv])?,
-                    out: new(&read(&format!("{m}out_proj.weight"))?, &[d, h * dv])?,
+                    out: lin(format!("{m}out_proj.weight"), &[d, h * dv])?,
                 })
             }
             Qwen35Mixer::Attention => {
                 let m = format!("{l}self_attn.");
                 let (hq, hkv, hd) = (spec.q_heads, spec.kv_heads, spec.head_dim);
-                let (q, g) = deinterleave(&read(&format!("{m}q_proj.weight"))?, hq, hd, d);
+                let (q, g) = read_lin(&format!("{m}q_proj.weight"))?.deinterleave(hq, hd, d);
                 MixerParams::Attention(AttnParams {
-                    wq: new(&q, &[hq * hd, d])?,
-                    wgate: new(&g, &[hq * hd, d])?,
-                    wk: new(&read(&format!("{m}k_proj.weight"))?, &[hkv * hd, d])?,
-                    wv: new(&read(&format!("{m}v_proj.weight"))?, &[hkv * hd, d])?,
+                    wq: q.tensor(&[hq * hd, d], budget)?,
+                    wgate: g.tensor(&[hq * hd, d], budget)?,
+                    wk: lin(format!("{m}k_proj.weight"), &[hkv * hd, d])?,
+                    wv: lin(format!("{m}v_proj.weight"), &[hkv * hd, d])?,
                     q_norm: new(&read(&format!("{m}q_norm.weight"))?, &[hd])?,
                     k_norm: new(&read(&format!("{m}k_norm.weight"))?, &[hd])?,
-                    wo: new(&read(&format!("{m}o_proj.weight"))?, &[d, hq * hd])?,
+                    wo: lin(format!("{m}o_proj.weight"), &[d, hq * hd])?,
                 })
             }
         };
@@ -339,9 +417,9 @@ pub fn load_hf(
             input_norm,
             mixer,
             post_norm: new(&read(&format!("{l}post_attention_layernorm.weight"))?, &[d])?,
-            gate: new(&read(&format!("{l}mlp.gate_proj.weight"))?, &[f, d])?,
-            up: new(&read(&format!("{l}mlp.up_proj.weight"))?, &[f, d])?,
-            down: new(&read(&format!("{l}mlp.down_proj.weight"))?, &[d, f])?,
+            gate: lin(format!("{l}mlp.gate_proj.weight"), &[f, d])?,
+            up: lin(format!("{l}mlp.up_proj.weight"), &[f, d])?,
+            down: lin(format!("{l}mlp.down_proj.weight"), &[d, f])?,
         });
     }
     let norm = new(&read(&format!("{prefix}norm.weight"))?, &[d])?;

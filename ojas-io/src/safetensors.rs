@@ -310,6 +310,12 @@ impl<'a> SafeTensors<'a> {
         }
     }
 
+    /// A BF16 tensor's raw bits (`f32` bits `>> 16`), not widened: half the
+    /// bytes of [`Self::read_f32_widened`]. Any other storage is refused.
+    pub fn read_bf16_bits(&self, name: &str) -> Result<(Vec<u64>, Vec<u16>), IoError> {
+        self.read_typed(name, StDtype::BF16, 2, |c| u16::from_le_bytes([c[0], c[1]]))
+    }
+
     pub fn read_i64(&self, name: &str) -> Result<(Vec<u64>, Vec<i64>), IoError> {
         self.read_typed(name, StDtype::I64, 8, |c| {
             i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])

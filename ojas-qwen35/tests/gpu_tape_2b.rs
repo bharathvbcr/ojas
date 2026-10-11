@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{Backend, Budget, DType, Tensor};
 use ojas_io::SafeTensors;
 use ojas_metal::MetalBackend;
 use ojas_model::qwen35::{bind, forward_loss, fuse_grads, load_hf, Qwen35Tables};
@@ -151,7 +151,7 @@ fn gpu_real_2b_tape_forward_backward_matches_the_provider() {
     let host_budget = Budget::new(16 * GIB);
     let device = {
         let file = SafeTensors::open(&snap.weights_path).unwrap();
-        let host = load_hf(&spec, &file, &cfg.tower_prefix, &host_budget).unwrap();
+        let host = load_hf(&spec, &file, &cfg.tower_prefix, DType::F32, &host_budget).unwrap();
         host.try_map(&mut |t| m.upload(t)).unwrap()
     };
     m.sync().unwrap();
