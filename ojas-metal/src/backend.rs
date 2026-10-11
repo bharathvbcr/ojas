@@ -77,17 +77,17 @@ use ojas_core::{
     gdn_log_decay_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
     linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    refuse_bf16_operands, refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim,
-    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
-    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
-    rope_half_split_backward_dims, rope_half_split_forward_dims, rope_partial_backward_dims,
-    rope_partial_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
-    silu_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk,
-    Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward,
-    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
+    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
+    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
+    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
+    rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
+    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
+    topk_rows_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
+    AdamWConfig, Backend, BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims,
+    GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
+    Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad,
+    Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad,
+    MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
 };
 
 use crate::link::{
@@ -195,7 +195,18 @@ impl MetalBackend {
     /// [`ojas_device::ResourcePlan::derive`]. Answered on a poisoned backend
     /// too; it records and commits nothing.
     pub fn memory(&self) -> Result<crate::MetalMemory, OjasError> {
-        match self.link.call(Cmd::Memory)? {
+        self.read_memory(false)
+    }
+
+    /// [`Self::memory`], then [`crate::MetalMemory::peak_allocated`]
+    /// restarts from what is allocated now: the reading's peak covers the
+    /// span since the backend opened or the last reset.
+    pub fn memory_and_reset_peak(&self) -> Result<crate::MetalMemory, OjasError> {
+        self.read_memory(true)
+    }
+
+    fn read_memory(&self, reset_peak: bool) -> Result<crate::MetalMemory, OjasError> {
+        match self.link.call(Cmd::Memory { reset_peak })? {
             Reply::Memory(m) => Ok(m),
             other => Err(metal_err(format!("memory: device returned {other:?}"))),
         }
@@ -343,6 +354,18 @@ impl MetalBackend {
 
     fn f32(&self, op: &'static str, t: &Tensor) -> Res<Arg> {
         self.arg(op, t, DType::F32)
+    }
+
+    /// An operand of a matmul-class op ([`Backend::bf16_operands`]): a
+    /// `Bf16` tensor widened exactly into a new `F32` one charged to the
+    /// budget, which lives for the call; any other tensor as it is, for the
+    /// op's own checks. The op then runs on `f32` values only, so a `Bf16`
+    /// operand gives the bits its widened `F32` copy gives.
+    fn widened(&self, t: &Tensor) -> Res<Tensor> {
+        match t.dtype() {
+            DType::Bf16 => self.to_f32(t),
+            _ => Ok(t.clone()),
+        }
     }
 
     /// A U32 tensor, with its ids range-checked against `limit` on the host
@@ -1287,9 +1310,9 @@ impl Backend for MetalBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
-        refuse_bf16_operands(OP, BackendId::Metal, &[input, weight])?;
-        let x = self.f32(OP, input)?;
-        let w = self.f32(OP, weight)?;
+        let (input, weight) = (self.widened(input)?, self.widened(weight)?);
+        let x = self.f32(OP, &input)?;
+        let w = self.f32(OP, &weight)?;
         u32_dim(OP, product(OP, &dims.out_shape)?)?;
         self.one(
             OP,
@@ -1313,10 +1336,12 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
-        refuse_bf16_operands(OP, BackendId::Metal, &[input, weight, grad_output])?;
-        let x = self.f32(OP, input)?;
-        let w = self.f32(OP, weight)?;
-        let gy = self.f32(OP, grad_output)?;
+        let input = self.widened(input)?;
+        let weight = self.widened(weight)?;
+        let grad_output = self.widened(grad_output)?;
+        let x = self.f32(OP, &input)?;
+        let w = self.f32(OP, &weight)?;
+        let gy = self.f32(OP, &grad_output)?;
         let cmd = Cmd::LinearBwd {
             x,
             w,
@@ -1460,8 +1485,8 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_forward";
         let dims = causal_sdpa_forward_dims(q, k, v, window)?;
-        refuse_bf16_operands(OP, BackendId::Metal, &[q, k, v])?;
-        self.sdpa_forward(OP, &dims, window, [q, k, v])
+        let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
+        self.sdpa_forward(OP, &dims, window, [&q, &k, &v])
     }
 
     fn causal_sdpa_backward(
@@ -1476,8 +1501,11 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         const OP: &str = "causal_sdpa_backward";
         let dims = causal_sdpa_backward_dims(q, k, v, output, lse, grad_output, window)?;
-        refuse_bf16_operands(OP, BackendId::Metal, &[q, k, v, output, lse, grad_output])?;
-        self.sdpa_backward(OP, &dims, window, [q, k, v, output, lse, grad_output])
+        // The log-sum-exp stays F32 (the op's own check refuses a Bf16 one).
+        let [q, k, v, output, grad_output] =
+            [q, k, v, output, grad_output].map(|t| self.widened(t));
+        let (q, k, v, output, grad_output) = (q?, k?, v?, output?, grad_output?);
+        self.sdpa_backward(OP, &dims, window, [&q, &k, &v, &output, lse, &grad_output])
     }
 
     fn per_head_sigmoid_gate_forward(
@@ -1859,6 +1887,64 @@ impl Backend for MetalBackend {
         const OP: &str = "cast_bf16";
         let x = self.f32(OP, tensor)?;
         self.one(OP, tensor.shape(), 0, Cmd::RoundBf16 { x })
+    }
+
+    /// The matmul-class ops widen each `Bf16` operand on the device into
+    /// an `F32` copy charged for the call, then run their `f32` kernels: a
+    /// resident `Bf16` weight costs 2 bytes per element, and its widened
+    /// copy exists only while one op runs.
+    fn bf16_operands(&self) -> bool {
+        true
+    }
+
+    /// Rounded on the device. A host tensor is [`OjasError::Placement`], as
+    /// for every Metal op; nothing is downloaded.
+    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_bf16";
+        match tensor.dtype() {
+            DType::Bf16 => return Ok(tensor.clone()),
+            DType::F32 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::F32,
+                    got,
+                })
+            }
+        }
+        let x = self.f32(OP, tensor)?;
+        let bytes = x.n.checked_mul(2).ok_or_else(|| overflow(OP))?;
+        let reservation = self.budget.try_reserve(bytes as u64)?;
+        let nb = match self.link.call(Cmd::ToBf16 { x })? {
+            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
+            id: nb.id,
+            len: nb.bytes,
+            link: Arc::clone(&self.link),
+            ids: None,
+        });
+        Tensor::from_device_reserved(buf, tensor.shape(), DType::Bf16, reservation)
+    }
+
+    /// Widened exactly on the device. A host tensor is
+    /// [`OjasError::Placement`], as for every Metal op.
+    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_f32";
+        match tensor.dtype() {
+            DType::F32 => return Ok(tensor.clone()),
+            DType::Bf16 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::Bf16,
+                    got,
+                })
+            }
+        }
+        let x = self.arg(OP, tensor, DType::Bf16)?;
+        self.one(OP, tensor.shape(), 0, Cmd::ToF32 { x })
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
@@ -2415,6 +2501,20 @@ mod tests {
                 after.allocated >= 16 << 20,
                 "a live 16 MiB upload is not counted: {after:?}"
             );
+            // The peak covers the live upload, survives its free, and
+            // restarts from what is allocated at a reset (other tests move
+            // the process-wide figure too, so only bounds are asserted).
+            assert!(after.peak_allocated >= after.allocated, "{after:?}");
+            let y = m
+                .upload(&Tensor::from_f32(&vals, &[4 << 20], &host).expect("host"))
+                .expect("second upload");
+            m.sync().expect("sync");
+            drop(y);
+            m.trim_pool().expect("trim");
+            let held = m.memory_and_reset_peak().expect("memory and reset");
+            assert!(held.peak_allocated >= 32 << 20, "{held:?}");
+            let reset = m.memory().expect("memory after reset");
+            assert!(reset.peak_allocated >= reset.allocated, "{reset:?}");
             // Concurrent queries from several threads all answer.
             thread::scope(|s| {
                 for _ in 0..8 {
