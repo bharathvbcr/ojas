@@ -38,8 +38,8 @@ gradient, and the peak over-counts a LoRA step's by those gradients (7.5 GB of w
 | 9,638 | bf16 | 2.75 GB | 4.80 GB | 9.95 GB | **18.97 GB** | 13.765928 |
 
 - **bf16 saves 2.75 GB resident**, exactly the linears' second two bytes (2,745,434,112 bytes).
-  The budget's resident charge is 4,781,866,240 bytes, against 2 × 2,745,434,112 linear bytes
-  plus 2,036,432,128 f32 bytes.
+  The budget's resident charge is 4,781,866,240 bytes: 2,745,434,112 bf16 linear bytes plus
+  2,036,432,128 f32 bytes.
 - **It saves 2.77 GB at the step peak at T = 2,048 and 3.75 GB at T = 9,638.** At 9,638 the peak
   falls by more than the resident saving. Not traced: the f32 arm's peak lands at a different
   point of the backward.
@@ -72,9 +72,11 @@ f32 masters (`UpdateRule::F32Master`) and f32 moments.
   not changed.
 - **"Stopped" means SIGTERM from the machine's `memguard`, inferred.** memguard (`-cap-gib 32`)
   terminates any process whose footprint passes 32 GiB, by SIGTERM. Its log file had been moved
-  to the Trash and deleted while it ran, so no kill record was read. Each stopped process died by
-  SIGTERM within seconds of passing about 33 GB of device allocation. The Tape arms, all under
-  23 GB, were never stopped. These rows are not out-of-memory results: the 51.5 GB working set
+  to the Trash and deleted while it ran, so no kill record was read. Every stopped process died by
+  SIGTERM. The two T = 2,048 rows show how far they got: the bf16 forward reached 32.98 GB, and
+  the f32 step, which finished, peaked at 33.89 GB. The T = 9,638 rows printed nothing past open
+  (30.13 GB), so how far their forwards got is not known. The Tape arms, all under 23 GB, were
+  never stopped. These rows are not out-of-memory results: the 51.5 GB working set
   was never reached, and no Metal allocation failed.
 - **The provider at 2B does not fit under this machine's 32 GiB guard past T = 2,048 f32.**
   Its 30.1 GB of state leaves under 4 GB for activations.
