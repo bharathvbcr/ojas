@@ -164,7 +164,7 @@ flowchart TD
 ### 1. General-Purpose Tensor Engine (`ojas-core`)
 * **Zero-Copy Views:** Tensor representations track an explicit `byte_offset`. Sub-views created via `.narrow()` adjust byte offsets without memory re-allocation or buffer copying.
 * **Strict Memory Budgets:** Memory consumption is governed by an explicit `Budget`. When an allocation exceeds limits, `try_reserve()` returns `OjasError::CapacityExceeded` immediately rather than swapping or resizing.
-* **Type System:** `DType` tags `F32`, `Bf16`, `F16` and `U32`. Every backend computes in `F32` (token ids in `U32`) and refuses other dtypes. `ojas-io` decodes BF16/F16 safetensors to `f32` and encodes back with round-to-nearest-even. There is no bf16 compute path yet.
+* **Type System:** `DType` tags `F32`, `Bf16`, `F16` and `U32`. Every backend computes in `F32` (token ids in `U32`). The matmul-class ops (linear and causal SDPA, forward and backward) also take `Bf16` operands on backends whose `bf16_operands()` is true (CPU and wgpu), widened exactly into `f32` accumulation; every other op refuses non-`F32` dtypes (`docs/dtype-policy.md`). `ojas-io` decodes BF16/F16 safetensors to `f32` and encodes back with round-to-nearest-even.
 * **Device Tensors:** `Tensor::from_device` wraps a backend's buffer. `to_host` copies it back and is counted by `device_readbacks()`. `device_buffer_mut` requires sole ownership of the storage. The default `Backend::upload` returns `Unsupported` for a host tensor on a non-CPU backend; there is no CPU fallback.
 
 ```mermaid
