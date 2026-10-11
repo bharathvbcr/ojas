@@ -26,6 +26,10 @@
 //! time. Shards are [`SHARD_BYTES`] unless one tensor is larger (the
 //! embedding). A resume opens the base snapshot (tessl's loader is the
 //! model's only constructor) and then writes these over it.
+//!
+//! A [`Precision::Bf16`] provider refuses both: its masters are AdamW's f32
+//! copies, which tessl's `read_parameters` does not return (it reads the
+//! bf16 weights), so a save would drop them.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -38,7 +42,7 @@ use tessl::qwen35_adamw::Moment;
 
 use crate::error::{invalid, tessl, Qwen35Error, Result};
 use crate::names::TensorSpec;
-use crate::step::{BankState, Qwen35Step};
+use crate::step::{BankState, Precision, Qwen35Step};
 
 /// Target bytes per shard file.
 pub const SHARD_BYTES: u64 = 1 << 30;
@@ -613,6 +617,7 @@ impl Qwen35Step {
     pub fn save_state(&self, dir: &Path) -> Result<()> {
         const OP: &str = "Qwen35Step::save_state";
         self.check_live()?;
+        self.require_f32_state(OP)?;
         check_new_state_dir(dir)?;
         let step = self.step_count();
         let summary = self.cfg.canonical_summary();
@@ -656,6 +661,7 @@ impl Qwen35Step {
     /// (the model would hold a mix of two states). The bank is emptied.
     pub fn load_state(&mut self, dir: &Path) -> Result<()> {
         self.check_live()?;
+        self.require_f32_state("Qwen35Step::load_state")?;
         let idx = StateIndex::read(dir, &self.table, &self.cfg.canonical_summary())?;
         let mut wrote = false;
         for kind in Kind::ALL {
@@ -690,6 +696,21 @@ impl Qwen35Step {
         self.adamw.set_step_count(idx.step);
         self.bank_state = BankState::Empty;
         self.weights_version += 1;
+        Ok(())
+    }
+
+    /// The state format holds f32 masters as the weights: a
+    /// [`Precision::Bf16`] provider's are AdamW's f32 copies, which tessl
+    /// does not read out, so its saves and loads are refused.
+    fn require_f32_state(&self, op: &'static str) -> Result<()> {
+        if self.precision == Precision::Bf16 {
+            return Err(Qwen35Error::Unsupported {
+                what: format!("{op} on a Precision::Bf16 provider"),
+                needs: "a read and write of AdamW's f32 masters (tessl reads only the bf16 \
+                        weights), so a save would drop them"
+                    .into(),
+            });
+        }
         Ok(())
     }
 

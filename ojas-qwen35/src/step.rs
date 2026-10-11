@@ -25,8 +25,10 @@ use ojas_core::{
     check_adamw, clip_scale, next_step, AdamWConfig, Budget, DType, OjasError, Tensor,
 };
 use tessl::gemm::GemmOperands;
-use tessl::qwen35_adamw::{AdamW, AdamWHyper as TesslHyper};
-use tessl::qwen35_model::{Precision, Qwen35Model};
+use tessl::qwen35_adamw::{
+    AdamW, AdamWConfig as TesslAdamWConfig, AdamWHyper as TesslHyper, MomentStorage, UpdateRule,
+};
+use tessl::qwen35_model::{Precision as TesslPrecision, Qwen35Model};
 use tessl::qwen35_train::{PendingStep, Qwen35Grads, Supervise};
 use tessl::GpuRuntime;
 
@@ -56,6 +58,44 @@ impl Numerics {
             Numerics::Bf16Operands => GemmOperands::Bf16,
         }
     }
+}
+
+/// How the tower's weights are stored on the GPU. There is no default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Precision {
+    /// f32 weights, f32 gradient bank, f32 AdamW moments: 16 bytes per
+    /// parameter.
+    F32,
+    /// bf16 weights (tessl's `Precision::Bf16`: every GEMM input rounded to
+    /// bf16, accumulation, the residual stream, the GDN state and attention
+    /// arithmetic in f32), each with an f32 master that AdamW updates
+    /// (`UpdateRule::F32Master`), and f32 moments. tessl keeps the gradient
+    /// bank in bf16, so gradients summed over several sequences are summed
+    /// in bf16. Trains only on [`Numerics::Bf16Operands`]. Also 16 bytes per
+    /// parameter (2 weight + 2 gradient + 4 master + 8 moments); the saving
+    /// is in the activations.
+    Bf16,
+}
+
+impl Precision {
+    fn tessl(self) -> TesslPrecision {
+        match self {
+            Precision::F32 => TesslPrecision::F32,
+            Precision::Bf16 => TesslPrecision::Bf16,
+        }
+    }
+}
+
+/// What the GPU holds for this process, from tessl's runtime: process-wide,
+/// not this provider's share.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceBytes {
+    /// `MTLDevice.currentAllocatedSize` now.
+    pub allocated: u64,
+    /// The most `allocated` has been since the provider opened or
+    /// [`Qwen35Step::reset_peak_device_bytes`] last ran (tessl's
+    /// `peak_allocated_bytes`, sampled at every buffer its pool creates).
+    pub peak: u64,
 }
 
 /// One sequence of a batch, with what it supervises.
@@ -315,6 +355,7 @@ pub struct Qwen35Step {
     pub(crate) model: Qwen35Model,
     pub(crate) cfg: Qwen35TextConfig,
     pub(crate) numerics: Numerics,
+    pub(crate) precision: Precision,
     /// tessl's live parameter table, and which entries it stores transposed.
     pub(crate) table: Vec<TensorSpec>,
     pub(crate) transposed: Vec<bool>,
@@ -329,14 +370,31 @@ pub struct Qwen35Step {
 }
 
 impl Qwen35Step {
-    /// Load the tower `snapshot` names onto the GPU in f32 (tessl's
-    /// `Qwen35Model::load`, the model's only constructor), with a zeroed
-    /// gradient bank and zeroed AdamW moments: four f32 copies of the
-    /// parameters, 30.1 GB on the 2B (1,881,825,088 x 16 bytes), allocated
-    /// here so a shortfall is a
-    /// refusal at open, not mid-run. `host_budget` charges the host tensors
-    /// this provider hands out (hidden rows).
-    pub fn open(snapshot: &Snapshot, numerics: Numerics, host_budget: Budget) -> Result<Self> {
+    /// Load the tower `snapshot` names onto the GPU at `precision` (tessl's
+    /// `Qwen35Model::load` at f32; at bf16 its `load_tower`, the same weights
+    /// without the packed `[hidden, vocab]` head copy, which a bf16 model
+    /// that trains cannot keep: tessl's AdamW refuses one), with a zeroed
+    /// gradient bank and zeroed AdamW state: 16 bytes per parameter at
+    /// either precision ([`Precision`]), 30.1 GB on the 2B (1,881,825,088 x
+    /// 16 bytes), allocated here so a shortfall is a refusal at open, not
+    /// mid-run. `host_budget` charges the host tensors this provider hands
+    /// out (hidden rows).
+    ///
+    /// [`Precision::Bf16`] with [`Numerics::ExactF32`] is refused before the
+    /// runtime opens: a bf16 model's weights are bf16 GEMM operands.
+    pub fn open(
+        snapshot: &Snapshot,
+        numerics: Numerics,
+        precision: Precision,
+        host_budget: Budget,
+    ) -> Result<Self> {
+        if precision == Precision::Bf16 && numerics == Numerics::ExactF32 {
+            return Err(invalid(
+                "Qwen35Step::open",
+                "Precision::Bf16 trains on Numerics::Bf16Operands: a bf16 model's weights are \
+                 bf16 GEMM operands, so Numerics::ExactF32 cannot apply",
+            ));
+        }
         let cfg = snapshot.config.clone();
         let rt = GpuRuntime::new().map_err(tessl("GpuRuntime::new"))?;
         if rt.relaxed_precision() {
@@ -353,14 +411,14 @@ impl Qwen35Step {
         }
         let st = tessl::safetensors::SafeTensors::open(&snapshot.weights_path)
             .map_err(tessl("SafeTensors::open"))?;
-        let model = Qwen35Model::load(
-            &rt,
-            &st,
-            &cfg.tower_prefix,
-            cfg.tessl.clone(),
-            Precision::F32,
-        )
-        .map_err(tessl("Qwen35Model::load"))?;
+        let (prefix, tcfg, p) = (&cfg.tower_prefix, cfg.tessl.clone(), precision.tessl());
+        let model = match precision {
+            Precision::F32 => {
+                Qwen35Model::load(&rt, &st, prefix, tcfg, p).map_err(tessl("Qwen35Model::load"))?
+            }
+            Precision::Bf16 => Qwen35Model::load_tower(&rt, &st, prefix, tcfg, p)
+                .map_err(tessl("Qwen35Model::load_tower"))?,
+        };
         drop(st);
         let live = model.parameter_table().map_err(tessl("parameter_table"))?;
         let table: Vec<TensorSpec> = live
@@ -388,12 +446,23 @@ impl Qwen35Step {
         }
         let transposed = live.iter().map(|p| p.transposed).collect();
         let bank = Qwen35Grads::zeros_like(&model).map_err(tessl("Qwen35Grads::zeros_like"))?;
-        let adamw = AdamW::new(&model).map_err(tessl("AdamW::new"))?;
+        let adamw = match precision {
+            Precision::F32 => AdamW::new(&model).map_err(tessl("AdamW::new"))?,
+            Precision::Bf16 => AdamW::with_config(
+                &model,
+                TesslAdamWConfig {
+                    update: UpdateRule::F32Master,
+                    moments: MomentStorage::F32,
+                },
+            )
+            .map_err(tessl("AdamW::with_config"))?,
+        };
         Ok(Self {
             rt,
             model,
             cfg,
             numerics,
+            precision,
             table,
             transposed,
             bank,
@@ -411,6 +480,23 @@ impl Qwen35Step {
 
     pub fn numerics(&self) -> Numerics {
         self.numerics
+    }
+
+    pub fn precision(&self) -> Precision {
+        self.precision
+    }
+
+    /// The device's allocation now and its peak, for memory measurements.
+    pub fn device_bytes(&self) -> DeviceBytes {
+        DeviceBytes {
+            allocated: self.rt.current_allocated_bytes(),
+            peak: self.rt.peak_allocated_bytes(),
+        }
+    }
+
+    /// Restart [`DeviceBytes::peak`] from what is allocated now.
+    pub fn reset_peak_device_bytes(&self) {
+        self.rt.reset_peak_allocated_bytes();
     }
 
     /// tessl's live parameter table: build an [`OptimizerPlan`] against this.

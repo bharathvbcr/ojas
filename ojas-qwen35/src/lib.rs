@@ -49,6 +49,6 @@ pub use state::{
     NamedTensor, StateIndex, Which, SHARD_BYTES, STATE_FORMAT,
 };
 pub use step::{
-    clip_coefficient, validate_external_grad, AdamWHyper, BankState, ExternalGrad, Numerics,
-    Pending, Qwen35Step, Sequence,
+    clip_coefficient, validate_external_grad, AdamWHyper, BankState, DeviceBytes, ExternalGrad,
+    Numerics, Pending, Precision, Qwen35Step, Sequence,
 };

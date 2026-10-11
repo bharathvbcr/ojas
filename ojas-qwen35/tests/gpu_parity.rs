@@ -56,8 +56,12 @@ fn ids(dir: &Path) -> Vec<u32> {
 }
 
 fn open_tiny(numerics: Numerics) -> Qwen35Step {
+    open_tiny_at(numerics, ojas_qwen35::Precision::F32)
+}
+
+fn open_tiny_at(numerics: Numerics, precision: ojas_qwen35::Precision) -> Qwen35Step {
     let snap = Snapshot::from_dir(&tiny_dir()).unwrap();
-    Qwen35Step::open(&snap, numerics, Budget::new(1 << 30)).unwrap()
+    Qwen35Step::open(&snap, numerics, precision, Budget::new(1 << 30)).unwrap()
 }
 
 /// Worst `|got - want| / max|want|`.
@@ -208,6 +212,41 @@ fn gpu_tiny_bf16_operands_stay_near_the_fixture() {
     assert!(
         loss.to_bits() != exact_loss.to_bits() || a != b,
         "the bf16-operand step is the exact step's bits: nothing was rounded"
+    );
+}
+
+/// A bf16-stored tower (tessl's `Precision::Bf16`, f32 masters and
+/// moments) trains near the float32 reference at the bf16-operand bounds
+/// (loss 2^-8, gradients 2^-5): the fixture's checkpoint is bf16, so its
+/// weights load exactly. An AdamW step runs, and the state format, which
+/// would drop the f32 masters, is refused.
+#[test]
+#[ignore]
+fn gpu_tiny_bf16_weights_train_near_the_fixture() {
+    let dir = tiny_dir();
+    let ids = ids(&dir);
+    let mut s = open_tiny_at(Numerics::Bf16Operands, ojas_qwen35::Precision::Bf16);
+    assert_eq!(s.precision(), ojas_qwen35::Precision::Bf16);
+    let loss = step_all_rows(&mut s, &ids);
+    let want = npy(&dir.join("loss.npy"))[0];
+    eprintln!("bf16 weights: loss {loss:.8} vs {want:.8}");
+    assert!((loss - want).abs() <= 2f64.powi(-8) * want.abs());
+    compare_to_fixture(&s, &dir, 2f64.powi(-5));
+    let before = f32_table(&s, Which::Parameters);
+    let hyper = AdamWHyper {
+        lr: 1e-3,
+        beta1: 0.9,
+        beta2: 0.95,
+        eps: 1e-8,
+        grad_scale: 1.0,
+    };
+    assert_eq!(s.adamw_step(&hyper, &plan(&s, 1.0, 0.1)).unwrap(), 1);
+    let after = f32_table(&s, Which::Parameters);
+    assert_ne!(before, after, "the step moved no weight");
+    let e = s.save_state(&scratch("bf16-save")).unwrap_err();
+    assert!(
+        matches!(e, ojas_qwen35::Qwen35Error::Unsupported { .. }),
+        "{e}"
     );
 }
 
@@ -710,7 +749,13 @@ fn gpu_real_2b_single_step_matches_the_transformers_reference() {
         .map(PathBuf::from)
         .unwrap_or_else(|| tessl_root().join("target/qwen35_train_ref"));
     let snap = Snapshot::from_dir(&snapshot_dir()).unwrap();
-    let mut s = Qwen35Step::open(&snap, Numerics::ExactF32, Budget::new(16 << 30)).unwrap();
+    let mut s = Qwen35Step::open(
+        &snap,
+        Numerics::ExactF32,
+        ojas_qwen35::Precision::F32,
+        Budget::new(16 << 30),
+    )
+    .unwrap();
     let ids = ids(&ref_dir);
     let loss = step_all_rows(&mut s, &ids);
     let want = npy(&ref_dir.join("loss.npy"))[0];
