@@ -25,6 +25,12 @@ and `batch_starts.json` (examples/dump_batch_starts.rs) from `--dir` and writes:
   stock nanolab.
 - `lr_schedules.json`: nanolab's cosine and WSD multipliers for 20 steps.
 
+`autocast-gap` (same `--dir` inputs) writes `autocast_gap.json`: the 40-step
+f32-NS5 trace's per-step mean losses run twice, plain and with every
+micro-batch forward under `torch.autocast("cpu", dtype=torch.bfloat16)`. The
+gap between the two sizes the bf16 tier's loss-divergence bound
+(`ojas-oracle/src/parity.rs`, `AUTOCAST_GAP_FACTOR`).
+
 Each trace is cross-checked against nanolab's real `train()` (through its
 `batchers=` seam) for 5 steps: the final weights must be bit-identical and
 the logged losses and grad norms equal. Any failed check aborts.
@@ -208,8 +214,10 @@ def grads_of(model, x, y, k: int) -> tuple[dict, float, list, list]:
     return grads, float(loss.detach()), no_grad, zero
 
 
-def run_trace(cfg, init: dict, replay, precision: str, steps: int):
-    """nanolab train.py:305-344, minus logging, eval and checkpointing."""
+def run_trace(cfg, init: dict, replay, precision: str, steps: int, autocast: bool = False):
+    """nanolab train.py:305-344, minus logging, eval and checkpointing. With
+    `autocast`, each micro-batch forward (and its loss) runs under CPU bf16
+    autocast; backward, clipping and the optimizers stay outside it."""
     model = fresh_model(cfg, init)
     model.train()
     k = cfg.grad_accum
@@ -226,7 +234,10 @@ def run_trace(cfg, init: dict, replay, precision: str, steps: int):
             micro = []
             for m in range(k):
                 x, y = replay.micro(step, m)
-                _, loss = model(x, y)
+                region = (torch.autocast("cpu", dtype=torch.bfloat16) if autocast
+                          else contextlib.nullcontext())
+                with region:
+                    _, loss = model(x, y)
                 micro.append(common.finite_float(loss.detach()))
                 loss = loss / k
                 loss.backward()
@@ -389,6 +400,35 @@ def fixtures(d: Path) -> None:
           f"init zero grads {len(zero)}, no grad {no_grad}", file=sys.stderr)
 
 
+AUTOCAST_REGION = ("torch.autocast('cpu', dtype=torch.bfloat16) around each micro-batch "
+                   "forward and its loss; backward, clip_grad_norm_ and the optimizers "
+                   "outside it. Both runs use the f32 NS5 copy, so the gap is autocast's "
+                   "alone.")
+
+
+def autocast_gap(d: Path) -> None:
+    common.setup_determinism()
+    cfg = trace_config()
+    init, init_meta = common.read_safetensors(d / "init.safetensors")
+    if json.loads(init_meta["ojas.spec"]) != common.spec_from_config(cfg):
+        raise SystemExit("init.safetensors spec does not match the trace config")
+    starts = batches.load_starts(d / "batch_starts.json")
+    replay = batches.StartReplay(starts, d / "tokens.bin")
+    plain, _, _ = run_trace(cfg, init, replay, "f32", TRACE_STEPS)
+    lowered, _, _ = run_trace(cfg, init, replay, "f32", TRACE_STEPS, autocast=True)
+    gap = [abs(a - b) for a, b in zip(plain["mean_loss"], lowered["mean_loss"])]
+    doc = {"op": "autocast_gap", "steps": TRACE_STEPS, "region": AUTOCAST_REGION,
+           "f32_mean_loss": plain["mean_loss"], "bf16_mean_loss": lowered["mean_loss"],
+           **common.provenance(GENERATOR, cfg)}
+    tmp = d / "autocast_gap.json.tmp"
+    tmp.write_text(json.dumps(doc, sort_keys=True, indent=1, allow_nan=False) + "\n")
+    tmp.replace(d / "autocast_gap.json")
+    print(f"autocast bf16 vs f32: max |dloss| {max(gap):.3e} over {TRACE_STEPS} steps "
+          f"(steps 1-5 {max(gap[:PARAM_SNAPSHOT_STEP]):.3e}); bf16 ends at "
+          f"{lowered['mean_loss'][-1]:.6f}, f32 at {plain['mean_loss'][-1]:.6f}",
+          file=sys.stderr)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -396,9 +436,13 @@ def main() -> None:
     tb.add_argument("--out", type=Path, required=True)
     fx = sub.add_parser("fixtures")
     fx.add_argument("--dir", type=Path, default=common.FIXTURE_DIR)
+    ag = sub.add_parser("autocast-gap")
+    ag.add_argument("--dir", type=Path, default=common.FIXTURE_DIR)
     args = ap.parse_args()
     if args.cmd == "token-bin":
         write_token_bin(args.out)
+    elif args.cmd == "autocast-gap":
+        autocast_gap(args.dir)
     else:
         fixtures(args.dir)
 

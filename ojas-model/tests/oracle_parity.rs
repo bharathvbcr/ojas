@@ -5,7 +5,9 @@
 //! tolerances; this file only adapts the model to `ParityModel`.
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, Ns5Precision, Numerics, OjasError, Tensor};
+use ojas_core::{
+    Autocast, AutocastMode, Backend, Budget, Ns5Precision, Numerics, OjasError, Tensor,
+};
 use ojas_cpu::{
     CosineSchedule, CpuBackend, LrSchedule, WsdSchedule, COSINE_FLOOR_FRAC, MUON_MOMENTUM,
     MUON_WEIGHT_DECAY,
@@ -286,6 +288,54 @@ fn five_step_trace(ns5: Ns5) {
 fn oracle_forty_step_curve() {
     let r = parity::curve_parity(&mut Cpu::default()).unwrap();
     eprintln!("curve: worst |dloss| {:e} (tol {:e})", r.worst, r.tolerance);
+}
+
+/// The f32-NS5 trace's 40 steps on CPU Exact through `Autocast`, with the
+/// trainer's autocast `mode`; the per-step mean losses.
+fn autocast_losses(mode: AutocastMode) -> Vec<f64> {
+    let init = tiny_init().unwrap();
+    let fx = tiny_trace(Ns5::F32).unwrap();
+    let spec = ModelSpec::tiny();
+    let mut cfg = train_config(&fx.train).unwrap();
+    cfg.autocast = mode;
+    let host = params_of(&spec, &init.params, &Budget::new(1 << 30)).unwrap();
+    let bin = TokenBin::open_headerless(&fx.train.token_bin).unwrap();
+    let mut t = Trainer::new(Autocast::new(exact()), spec, &host, bin, cfg).unwrap();
+    (0..fx.steps)
+        .map(|_| f64::from(t.step().unwrap().loss))
+        .collect()
+}
+
+/// Criterion 5 of gp-bf16-compute-tier: the bf16 tier's loss divergence
+/// against its own f32 run, at the pre-registered bound
+/// (`parity::AUTOCAST_GAP_FACTOR`: twice torch's own autocast gap on this
+/// trace, floored at the curve's late tolerance), and the bf16 curve's drop.
+/// The f32 run through the wrapper is the plain curve, bit for bit.
+#[test]
+fn oracle_autocast_bf16_loss_divergence_is_bounded() {
+    let f32 = autocast_losses(AutocastMode::Off);
+    let bf16 = autocast_losses(AutocastMode::Bf16);
+    let plain = {
+        let mut m = Cpu::default();
+        let init = tiny_init().unwrap();
+        let fx = tiny_trace(Ns5::F32).unwrap();
+        m.train(&init.params, &fx.train, fx.steps).unwrap().0
+    };
+    assert_eq!(f32, plain, "Autocast with no region changed the f32 run");
+    assert_ne!(f32, bf16, "the bf16 region changed no loss");
+    let r = parity::check_autocast_divergence(&f32, &bf16).unwrap();
+    for (i, (a, b)) in f32.iter().zip(&bf16).enumerate() {
+        eprintln!(
+            "autocast step {}: f32 {a} bf16 {b} |d| {:e}",
+            i + 1,
+            (a - b).abs()
+        );
+    }
+    eprintln!(
+        "autocast bf16 vs f32: worst {:e} (bound {:e}); torch's own gap {:e}; \
+         ojas bf16 vs torch bf16 {:e} (reported, not gated)",
+        r.worst, r.bound, r.torch_worst, r.vs_torch_bf16
+    );
 }
 
 #[test]

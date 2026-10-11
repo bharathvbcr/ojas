@@ -13,8 +13,8 @@ use std::fmt;
 use ojas_core::OjasError;
 
 use crate::golden::{
-    tiny_forward, tiny_grads, tiny_init, tiny_trace, GradsAt, Ns5, TensorSet, TokenBatch,
-    TrainSetup,
+    tiny_autocast_gap, tiny_forward, tiny_grads, tiny_init, tiny_trace, GradsAt, Ns5, TensorSet,
+    TokenBatch, TrainSetup,
 };
 
 /// Forward loss: |Δ| / |torch| (framework item 13).
@@ -51,6 +51,19 @@ pub const CURVE_LATE_ABS_TOL: f64 = 2e-3;
 pub const CURVE_MIN_DROP_NATS: f64 = 1.0;
 /// Schedule multipliers: nanolab computes `peak * m / peak` in f64.
 pub const LR_MULT_REL_TOL: f64 = 1e-12;
+/// The bf16 tier's loss-divergence bound, pre-registered 2026-10-10
+/// (gp-bf16-compute-tier): over the 40-step f32-NS5 trace, a model's
+/// autocast-bf16 run must stay within
+/// `max(CURVE_LATE_ABS_TOL, AUTOCAST_GAP_FACTOR * max_t gap_t)` nats of its
+/// own f32 run at every step, where `gap_t` is torch's autocast-bf16 vs f32
+/// gap on the same trace (`autocast_gap.json`). The max over the trace, not
+/// the per-step gap, because torch's gap crosses zero. Each run uses its
+/// own f32 Newton-Schulz, so the gap is the autocast tier's alone. torch's
+/// rounding scope differs from ojas's (torch autocast lowers matmul-class
+/// ops and keeps their outputs bf16; ojas also rounds the operands of the
+/// ops listed in `autocast.rs`), so the model's bf16 run is not gated on
+/// torch's bf16 run, only reported against it.
+pub const AUTOCAST_GAP_FACTOR: f64 = 2.0;
 
 /// A gate that did not hold.
 #[derive(Clone, Debug, PartialEq)]
@@ -346,5 +359,86 @@ pub fn check_curve(got: &[f64], want: &[f64], vocab: usize) -> Result<ParityRepo
     Ok(ParityReport {
         worst,
         tolerance: CURVE_LATE_ABS_TOL,
+    })
+}
+
+/// `max(CURVE_LATE_ABS_TOL, AUTOCAST_GAP_FACTOR * max_t gap_t)` over
+/// torch's autocast gap ([`AUTOCAST_GAP_FACTOR`]).
+pub fn autocast_divergence_bound() -> Result<f64, ParityFailure> {
+    const CHECK: &str = "autocast divergence bound";
+    let gap = tiny_autocast_gap().map_err(from_ojas(CHECK))?;
+    let worst = gap.gaps().into_iter().fold(0.0f64, f64::max);
+    Ok(CURVE_LATE_ABS_TOL.max(AUTOCAST_GAP_FACTOR * worst))
+}
+
+/// What [`check_autocast_divergence`] measured.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutocastReport {
+    /// Worst `|bf16 - f32|` of the model's two runs, and its bound.
+    pub worst: f64,
+    pub bound: f64,
+    /// torch's own worst gap on the trace.
+    pub torch_worst: f64,
+    /// Worst `|model bf16 - torch bf16|`, reported, not gated.
+    pub vs_torch_bf16: f64,
+}
+
+/// A model's 40-step f32 and autocast-bf16 losses (per-step means, on the
+/// f32-NS5 trace's setup) against the pre-registered bound
+/// ([`AUTOCAST_GAP_FACTOR`]), and the bf16 curve against the curve's own
+/// end-of-run drop ([`CURVE_MIN_DROP_NATS`] below ln V).
+pub fn check_autocast_divergence(
+    f32_losses: &[f64],
+    bf16_losses: &[f64],
+) -> Result<AutocastReport, ParityFailure> {
+    const CHECK: &str = "autocast divergence";
+    let gap = tiny_autocast_gap().map_err(from_ojas(CHECK))?;
+    let steps = gap.f32_mean_loss.len();
+    for (name, got) in [("f32", f32_losses), ("bf16", bf16_losses)] {
+        if got.len() != steps {
+            return Err(fail(
+                CHECK,
+                format!("{name} run has {} steps, the trace {steps}", got.len()),
+            ));
+        }
+        if let Some(i) = got.iter().position(|v| !v.is_finite()) {
+            return Err(fail(
+                CHECK,
+                format!("{name} loss at step {} is not finite", i + 1),
+            ));
+        }
+    }
+    let bound = autocast_divergence_bound()?;
+    let mut worst = 0.0f64;
+    for (i, (a, b)) in f32_losses.iter().zip(bf16_losses).enumerate() {
+        let d = (a - b).abs();
+        if d > bound {
+            return Err(fail(
+                CHECK,
+                format!("step {}: |bf16 {b} - f32 {a}| = {d:e} > {bound:e}", i + 1),
+            ));
+        }
+        worst = worst.max(d);
+    }
+    let vocab = tiny_init().map_err(from_ojas(CHECK))?.spec.vocab;
+    let floor = (vocab as f64).ln() - CURVE_MIN_DROP_NATS;
+    let last = bf16_losses[steps - 1];
+    if last > floor {
+        return Err(fail(
+            CHECK,
+            format!("bf16 curve ends at {last}, above ln V - {CURVE_MIN_DROP_NATS} = {floor}"),
+        ));
+    }
+    let torch_worst = gap.gaps().into_iter().fold(0.0f64, f64::max);
+    let vs_torch_bf16 = bf16_losses
+        .iter()
+        .zip(&gap.bf16_mean_loss)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    Ok(AutocastReport {
+        worst,
+        bound,
+        torch_worst,
+        vs_torch_bf16,
     })
 }

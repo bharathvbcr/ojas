@@ -36,6 +36,7 @@ not a `Config` field. 192 also matches framework-design.md §10.
 | `trace_ns5_bf16.safetensors` | 505,000 | the same with stock bf16 NS5 |
 | `muon_step_bf16.safetensors` | 288,920 | one stock nanolab `Muon.step` (bf16 NS5) per case: square, tall, wide, and no decay or Nesterov; inputs and torch's results (`muon_step.py`) |
 | `lr_schedules.json` | 2,502 | cosine and WSD multipliers, 20 steps, tiny and §10 acceptance settings |
+| `autocast_gap.json` | 4,764 | the f32-NS5 trace's 40 per-step mean losses, plain and with each micro-batch forward under torch's CPU bf16 autocast (`golden.py autocast-gap`); sizes the bf16 divergence bound |
 
 Total about 3.4 MB. Every safetensors file carries
 `__metadata__["ojas.oracle"]`: generator, torch and Python versions, the

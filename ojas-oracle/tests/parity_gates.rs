@@ -7,15 +7,16 @@
 
 use ojas_core::OjasError;
 use ojas_oracle::golden::{
-    tiny_forward, tiny_grads, tiny_trace, GradsAt, HostTensor, Ns5, TensorSet, TokenBatch,
-    TrainSetup,
+    tiny_autocast_gap, tiny_forward, tiny_grads, tiny_trace, GradsAt, HostTensor, Ns5, TensorSet,
+    TokenBatch, TrainSetup,
 };
 use ojas_oracle::parity::{
-    check_curve, check_tensors, curve_parity, forward_parity, grads_parity, normwise_rel,
-    trace_parity, trace_parity_ns5, ParityModel, CURVE_EARLY_ABS_TOL, CURVE_EARLY_STEPS,
-    CURVE_LATE_ABS_TOL, CURVE_MIN_DROP_NATS, FORWARD_LOSS_REL_TOL, GRAD_NORMWISE_REL_TOL,
-    LOGITS_NORMWISE_REL_TOL, LR_MULT_REL_TOL, TRACE_BF16_PARAM_NORMWISE_REL_TOL,
-    TRACE_LOSS_ABS_TOL, TRACE_PARAM_NORMWISE_REL_TOL,
+    autocast_divergence_bound, check_autocast_divergence, check_curve, check_tensors, curve_parity,
+    forward_parity, grads_parity, normwise_rel, trace_parity, trace_parity_ns5, ParityModel,
+    AUTOCAST_GAP_FACTOR, CURVE_EARLY_ABS_TOL, CURVE_EARLY_STEPS, CURVE_LATE_ABS_TOL,
+    CURVE_MIN_DROP_NATS, FORWARD_LOSS_REL_TOL, GRAD_NORMWISE_REL_TOL, LOGITS_NORMWISE_REL_TOL,
+    LR_MULT_REL_TOL, TRACE_BF16_PARAM_NORMWISE_REL_TOL, TRACE_LOSS_ABS_TOL,
+    TRACE_PARAM_NORMWISE_REL_TOL,
 };
 
 #[test]
@@ -30,6 +31,43 @@ fn tolerances_are_pinned() {
     assert_eq!(CURVE_LATE_ABS_TOL, 2e-3);
     assert_eq!(CURVE_MIN_DROP_NATS, 1.0);
     assert_eq!(LR_MULT_REL_TOL, 1e-12);
+    assert_eq!(AUTOCAST_GAP_FACTOR, 2.0);
+}
+
+/// torch's own autocast gap on the trace is at most 9.4e-4 nats (2026-10-10,
+/// torch 2.13), so twice it stays under the curve's late tolerance and the
+/// bound is that tolerance.
+#[test]
+fn the_autocast_bound_is_pinned_and_torchs_own_runs_pass_it() {
+    let gap = tiny_autocast_gap().unwrap();
+    let worst = gap.gaps().into_iter().fold(0.0f64, f64::max);
+    assert!(worst > 0.0 && worst < 1e-3, "torch gap {worst:e}");
+    assert_eq!(autocast_divergence_bound().unwrap(), CURVE_LATE_ABS_TOL);
+    let r = check_autocast_divergence(&gap.f32_mean_loss, &gap.bf16_mean_loss).unwrap();
+    assert_eq!(r.worst, worst);
+    assert_eq!(r.vs_torch_bf16, 0.0);
+}
+
+#[test]
+fn the_autocast_gate_fails_a_run_past_the_bound_or_off_the_curve() {
+    let gap = tiny_autocast_gap().unwrap();
+    let bound = autocast_divergence_bound().unwrap();
+    let f32 = &gap.f32_mean_loss;
+    // One step past the bound.
+    let mut far = f32.clone();
+    far[17] += bound * 1.01;
+    assert!(check_autocast_divergence(f32, &far).is_err());
+    // At the bound passes.
+    let mut near = f32.clone();
+    near[17] += bound * 0.99;
+    assert!(check_autocast_divergence(f32, &near).is_ok());
+    // A short run, a non-finite loss, and a curve that never drops.
+    assert!(check_autocast_divergence(f32, &f32[..39]).is_err());
+    let mut nan = f32.clone();
+    nan[3] = f64::NAN;
+    assert!(check_autocast_divergence(f32, &nan).is_err());
+    let flat = vec![(256f64).ln(); f32.len()];
+    assert!(check_autocast_divergence(&flat, &flat).is_err());
 }
 
 #[derive(Default)]
