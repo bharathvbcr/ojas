@@ -1,6 +1,6 @@
-//! `ojas_topk_rows`: each row's `k` leaders by value descending under
-//! `f32::total_cmp`, then column ascending, against a full sort of the row
-//! by the same order; the ids stay on the device and feed
+//! `ojas_topk_rows`: each row's `k` leaders by value descending (`+0.0` and
+//! `-0.0` one value, as `ojas_core::rank_logits` has it), then column
+//! ascending, against a full sort of the row by the same order; the ids stay on the device and feed
 //! `embedding_forward` with no host copy; NaN and `+inf` are deferred faults.
 
 #![cfg(all(target_os = "macos", feature = "metal"))]
@@ -69,7 +69,13 @@ fn reference(x: &[f32], cols: usize) -> Vec<Vec<u32>> {
     x.chunks(cols)
         .map(|row| {
             let mut order: Vec<u32> = (0..cols as u32).collect();
-            order.sort_by(|&a, &b| row[b as usize].total_cmp(&row[a as usize]).then(a.cmp(&b)));
+            // IEEE order: `+0.0 == -0.0`, `-inf` below every finite value.
+            order.sort_by(|&a, &b| {
+                let by_value = row[b as usize]
+                    .partial_cmp(&row[a as usize])
+                    .expect("no NaN");
+                by_value.then(a.cmp(&b))
+            });
             order
         })
         .collect()
@@ -117,17 +123,28 @@ fn topk_rows_matches_a_full_sort_at_qwen_vocab() {
     let m = metal();
     let x = logits();
     let out = check(&m, &x, COLS, &KS);
-    // Spelled out at k = 50: +0.0 columns before -0.0 columns, each in
-    // column order; a row with fewer finite values than k ends in -inf in
+    // Spelled out at k = 50: the +0.0 and -0.0 columns tie, so they come
+    // in column order; a row with fewer finite values than k ends in -inf in
     // column order.
     let (values, ids) = &out[2];
     let values = m.download(values).unwrap().to_f32_vec().unwrap();
     let ids = m.download(ids).unwrap();
     m.sync().unwrap();
     let ids = ids.u32_slice().unwrap();
-    assert_eq!(ids[50..58], [6, 99, 7_001, 200_000, 5, 100, 7_000, 248_000]);
-    assert_eq!(bits(&values[50..54]), [0u32; 4]);
-    assert_eq!(bits(&values[54..58]), [0x8000_0000u32; 4]);
+    assert_eq!(ids[50..58], [5, 6, 99, 100, 7_000, 7_001, 200_000, 248_000]);
+    assert_eq!(
+        bits(&values[50..58]),
+        [
+            0x8000_0000u32,
+            0,
+            0,
+            0x8000_0000,
+            0x8000_0000,
+            0,
+            0,
+            0x8000_0000
+        ]
+    );
     assert_eq!(ids[100..107], [10, 300, COLS as u32 - 1, 0, 1, 2, 3]);
     assert_eq!(values[100..103], [2.5, 2.5, -7.0]);
     assert!(values[103..150].iter().all(|&v| v == f32::NEG_INFINITY));

@@ -1,0 +1,18 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_prefill_p32","when":"before","load":"37.29 17.70 9.15","gpu_util_pct":92}
+{"runtime":"ojas-metal","row":"gen_prefill_p32","status":"ok","min_ms":9.520083,"median_ms":10.035791,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_prefill_p32","when":"after","load":"37.42 18.05 9.33","gpu_util_pct":84}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"before","load":"37.42 18.05 9.33","gpu_util_pct":30}
+{"runtime":"ojas-metal","row":"gen_greedy_p32_n32","status":"ok","min_ms":298.648000,"median_ms":348.486396,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"after","load":"38.71 18.96 9.75","gpu_util_pct":81}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"before","load":"38.71 18.96 9.75","gpu_util_pct":0}
+{"runtime":"ojas-metal","row":"gen_topk50_p32_n32","status":"ok","min_ms":291.798875,"median_ms":300.235208,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"after","load":"33.83 18.56 9.72","gpu_util_pct":91}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_temp0_p32_n32","when":"before","load":"33.83 18.56 9.72","gpu_util_pct":0}
+{"runtime":"ojas-metal","row":"gen_temp0_p32_n32","status":"ok","min_ms":283.650834,"median_ms":303.874063,"iters":20,"warmup":5,"parity_max_abs":7.867813110351563e-5,"parity_rel":4.434936418601231e-6,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"gen_temp0_p32_n32","when":"after","load":"31.60 18.35 9.69","gpu_util_pct":89}
+{"runtime":"ojas-metal","row":"_gen_ids","status":"info","for":"gen_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
+{"runtime":"ojas-metal","row":"_gen_traffic","status":"info","for":"gen_greedy_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":4,"step_uploads":0,"step_upload_bytes":0,"step_readbacks":1,"step_readback_bytes":4}
+{"runtime":"ojas-metal","row":"_gen_traffic","status":"info","for":"gen_topk50_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":201216,"step_uploads":1,"step_upload_bytes":4,"step_readbacks":1,"step_readback_bytes":201216}
+{"runtime":"ojas-metal","row":"_gen_traffic","status":"info","for":"gen_temp0_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":8,"step_uploads":0,"step_upload_bytes":0,"step_readbacks":2,"step_readback_bytes":8}
+{"runtime":"ojas-metal","row":"_gen_readback","status":"info","for":"gen_greedy_p32_n32","bytes":201216,"to_host_us":26.04,"read_bytes_us":7.50,"decode_pass_us":18.54,"iters":50}

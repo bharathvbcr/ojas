@@ -10,18 +10,22 @@
 //! (`Backend::cached_attention_forward`'s contract), and it folds in GQA.
 //!
 //! Logits are the last position's only: its hidden row is a view of the
-//! `[Tn, n_embd]` hidden state, normed and projected, and the `[1, vocab]`
-//! row is the one readback per call. RoPE rows come from a table for every
-//! cache position, uploaded once by `new`. The only per-call upload is the
-//! token ids.
+//! `[Tn, n_embd]` hidden state, normed and projected. What is read back of
+//! that `[1, vocab]` row depends on the caller: all of it
+//! ([`DeviceDecoder::forward`], and [`DeviceDecoder::forward_top`] for
+//! `k` > 1), its argmax ([`DeviceDecoder::forward_greedy`], 4 bytes) or its
+//! one leader ([`DeviceDecoder::forward_top`] for `k` = 1, 8 bytes).
+//! RoPE rows come from a table for every cache position, uploaded once by
+//! `new`. The only per-call upload is the token ids, and none when the call
+//! forwards the one id the previous call picked on the device.
 
 use ojas_core::{Backend, DType, OjasError, Tensor};
 use ojas_model::{bind, Eval, ModelParams, ModelSpec, Rope};
 
 use crate::cache::{append, run_pieces, Kv, Ring};
-use crate::decode::{self, Forward};
+use crate::decode::{self, check_token, Forward};
 use crate::gpt::check_params;
-use crate::sample::GenerateConfig;
+use crate::sample::{leading_candidates, ranked_candidates, GenerateConfig};
 
 /// A nanolab GPT and its KV cache resident on `B`.
 ///
@@ -44,8 +48,9 @@ pub struct DeviceDecoder<B: Backend> {
     /// each forward takes a view of its positions.
     rope: Rope,
     traffic: HostTraffic,
-    /// The id the last [`DeviceDecoder::forward_greedy`] returned, and its
-    /// `[1, 1]` U32 tensor on `B`, for the next call to feed back.
+    /// The id the last [`DeviceDecoder::forward_greedy`] returned, or the one
+    /// leader of the last [`DeviceDecoder::forward_top`], and its `[1, 1]`
+    /// U32 tensor on `B`, for the next call to feed back.
     pending: Option<(u32, Tensor)>,
 }
 
@@ -186,17 +191,6 @@ impl<B: Backend> DeviceDecoder<B> {
         Ok(())
     }
 
-    fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError> {
-        if usize::try_from(token).is_ok_and(|row| row < self.spec.vocab) {
-            Ok(())
-        } else {
-            Err(OjasError::OutOfRange {
-                op,
-                detail: format!("token id {token} >= vocab {}", self.spec.vocab),
-            })
-        }
-    }
-
     fn refusal(&self, needed: usize) -> OjasError {
         self.kv.ring.refusal(self.spec.kv_width(), needed)
     }
@@ -233,12 +227,7 @@ impl<B: Backend> DeviceDecoder<B> {
     pub fn forward_greedy(&mut self, tokens: &[u32]) -> Result<u32, OjasError> {
         let (logits, last) = self.run(tokens)?;
         let next = self.eval.backend().argmax_rows(&logits)?;
-        let host = if next.device().is_some() {
-            self.traffic.readback(&next)?;
-            self.eval.backend().download(&next)?
-        } else {
-            next.clone()
-        };
+        let host = self.read_back(&next)?;
         self.eval.backend().sync()?;
         let id = match host.u32_slice()? {
             &[id] => id,
@@ -249,10 +238,60 @@ impl<B: Backend> DeviceDecoder<B> {
                 })
             }
         };
-        self.check_token(OP, id)?;
+        check_token(OP, id, self.spec.vocab)?;
         append(&mut self.kv, last);
         self.pending = Some((id, next.reshape(&[1, 1])?));
         Ok(id)
+    }
+
+    /// [`Self::forward`] for sampling that needs only the `k` leaders of the
+    /// last position's logits (a `top_k`, or temperature 0 as `k` = 1).
+    /// Returns what `ranked_candidates` returns for that row: its finite
+    /// leaders ranked by (logit desc, index asc), at most `k` (a `k` past
+    /// the vocabulary keeps every finite logit), with the same refusals.
+    ///
+    /// With `k` = 1 the leader is selected on the device
+    /// (`Backend::topk_rows`), so the readback is its value and id, 8 bytes,
+    /// and its id is kept on the device for the next call, as
+    /// [`Self::forward_greedy`]'s is. A `-inf` leader (an all-masked row) is
+    /// refused as `ranked_candidates` refuses it. With `k` > 1 the `[vocab]`
+    /// row is read back and ranked on the host: the `topk_rows` kernels make
+    /// `k` passes over the row, which on Metal and wgpu cost more than the
+    /// readback at every `k` > 1 measured
+    /// (`bench/results/2026-10-10-decode-after/`). The same `len` contract
+    /// as [`Self::forward`].
+    pub fn forward_top(&mut self, tokens: &[u32], k: usize) -> Result<Vec<(u32, f32)>, OjasError> {
+        let (logits, last) = self.run(tokens)?;
+        let (leaders, kept) = if k == 1 {
+            let (values, ids) = self.eval.backend().topk_rows(&logits, 1)?;
+            let host_values = self.read_back(&values)?;
+            let host_ids = self.read_back(&ids)?;
+            self.eval.backend().sync()?;
+            let leaders = leading_candidates(&host_values.to_f32_vec()?, host_ids.u32_slice()?)?;
+            (leaders, Some(ids))
+        } else {
+            let row = self.read_back(&logits)?;
+            self.eval.backend().sync()?;
+            (ranked_candidates(&row.to_f32_vec()?, Some(k))?, None)
+        };
+        for &(id, _) in &leaders {
+            check_token(OP, id, self.spec.vocab)?;
+        }
+        append(&mut self.kv, last);
+        if let (Some(ids), &[(id, _)]) = (kept, leaders.as_slice()) {
+            self.pending = Some((id, ids.reshape(&[1, 1])?));
+        }
+        Ok(leaders)
+    }
+
+    /// `t` on the host: a device tensor is downloaded and counted as a
+    /// readback; a host tensor is shared as it is.
+    fn read_back(&mut self, t: &Tensor) -> Result<Tensor, OjasError> {
+        if t.device().is_none() {
+            return Ok(t.clone());
+        }
+        self.traffic.readback(t)?;
+        self.eval.backend().download(t)
     }
 
     /// Validate `tokens`, run every block over them (writing their keys and
@@ -270,7 +309,7 @@ impl<B: Backend> DeviceDecoder<B> {
             });
         }
         for &id in tokens {
-            self.check_token(OP, id)?;
+            check_token(OP, id, self.spec.vocab)?;
         }
         if tokens.len() > self.remaining() {
             return Err(self.refusal(tokens.len()));
@@ -306,11 +345,21 @@ impl<B: Backend> DeviceDecoder<B> {
         prompt: &[u32],
         new_tokens: usize,
     ) -> Result<Vec<u32>, OjasError> {
-        decode::decode(self, DECODE_OP, prompt, new_tokens, &[], decode::Pick::Greedy)
+        decode::decode(
+            self,
+            DECODE_OP,
+            prompt,
+            new_tokens,
+            &[],
+            decode::Pick::Greedy,
+        )
     }
 
     /// Sampled continuation of `prompt`, the same loop and sampler as
-    /// [`crate::CpuGpt::generate`].
+    /// [`crate::CpuGpt::generate`]. A setting that needs only the leaders
+    /// (temperature 0, or a `top_k`) forwards through [`Self::forward_top`],
+    /// so a step reads back `8k` bytes (`k` = 1 at temperature 0); otherwise
+    /// through [`Self::forward`] and the `[vocab]` row.
     ///
     /// The prompt is forwarded from position [`Self::len`]. Each emitted
     /// token except the last is forwarded, so the cache must have room for
@@ -336,8 +385,8 @@ impl<B: Backend> Forward for DeviceDecoder<B> {
         DeviceDecoder::refusal(self, needed)
     }
 
-    fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError> {
-        DeviceDecoder::check_token(self, op, token)
+    fn vocab(&self) -> usize {
+        self.spec.vocab
     }
 
     fn forward(&mut self, tokens: &[u32]) -> Result<Vec<f32>, OjasError> {
@@ -346,5 +395,9 @@ impl<B: Backend> Forward for DeviceDecoder<B> {
 
     fn forward_greedy(&mut self, tokens: &[u32]) -> Result<u32, OjasError> {
         DeviceDecoder::forward_greedy(self, tokens)
+    }
+
+    fn forward_top(&mut self, tokens: &[u32], k: usize) -> Result<Vec<(u32, f32)>, OjasError> {
+        DeviceDecoder::forward_top(self, tokens, k)
     }
 }

@@ -12,13 +12,19 @@
 //!   `logits < v[:, [-1]]` keeps every logit tied with the k-th.
 //! - nanolab has no top-p.
 //!
+//! One greedy rule: the rank is [`ojas_core::rank_logits`], in which `+0.0`
+//! and `-0.0` are one value, so temperature 0 (and `top_k == 1`) takes the
+//! lowest index of the largest logit, as [`crate::argmax_token`],
+//! `Backend::argmax_rows` and `torch.argmax` do; `Backend::topk_rows` ranks
+//! the same way on every backend. Decided 2026-10-10: until then the sampler
+//! ranked by `f32::total_cmp`, which put `+0.0` ahead of a `-0.0` at a lower
+//! index, so the sampler and the argmax disagreed on that one tie.
+//!
 //! Logits: `-inf` is a mask (the token cannot be drawn); NaN and `+inf` are
 //! [`OjasError::NonFinite`], and so is a row with no finite entry.
 //! [`crate::argmax_token`] stays strict and refuses `-inf` too.
 
-use std::cmp::Ordering;
-
-use ojas_core::{exp_exact, OjasError};
+use ojas_core::{exp_exact, rank_logits, OjasError};
 
 /// SplitMix64 with the state as an explicit counter: the same stream as
 /// `ojas_data::CounterRng`. ojas-infer does not depend on ojas-data, so the
@@ -118,7 +124,13 @@ pub fn sample_token(
         // The leader alone, in one pass with no allocation.
         let best = (0..logits.len())
             .filter(|&i| logits[i].is_finite())
-            .reduce(|a, b| if rank(logits, b, a).is_lt() { b } else { a })
+            .reduce(|a, b| {
+                if rank_logits(logits, b, a).is_lt() {
+                    b
+                } else {
+                    a
+                }
+            })
             .ok_or(OjasError::NonFinite { op: OP })?;
         return to_id(best);
     }
@@ -142,7 +154,7 @@ fn check_row(logits: &[f32]) -> Result<(), OjasError> {
 }
 
 /// The candidates of a logit row, `(id, logit)`: its finite entries ranked
-/// by (logit desc, index asc), the order [`rank`] defines, and only the
+/// by (logit desc, index asc), the order [`rank_logits`] defines, and only the
 /// first `k` of them when `top_k` is `Some(k)`. The `k` leaders are
 /// selected in O(V) and only they are sorted. The refusals of
 /// [`sample_token`]: an empty row, NaN or `+inf` anywhere, no finite entry.
@@ -159,16 +171,53 @@ pub(crate) fn ranked_candidates(
     }
     match top_k {
         Some(k) if k < ranked.len() => {
-            ranked.select_nth_unstable_by(k - 1, |&a, &b| rank(logits, a, b));
+            ranked.select_nth_unstable_by(k - 1, |&a, &b| rank_logits(logits, a, b));
             ranked.truncate(k);
         }
         _ => {}
     }
-    ranked.sort_unstable_by(|&a, &b| rank(logits, a, b));
+    ranked.sort_unstable_by(|&a, &b| rank_logits(logits, a, b));
     ranked
         .into_iter()
         .map(|i| Ok((to_id(i)?, logits[i])))
         .collect()
+}
+
+/// [`ranked_candidates`] from one row of `Backend::topk_rows`: `values` and
+/// `ids` are its `k` leaders, ranked as [`rank_logits`] ranks them, with `-inf` (a
+/// masked logit) after every finite value. The candidates are the finite
+/// prefix, so a row with fewer than `k` finite logits gives all of them and
+/// one with none is [`OjasError::NonFinite`], as [`ranked_candidates`] has
+/// it. A NaN or `+inf` leader (`topk_rows` reports it as a fault) and a
+/// finite value after a `-inf` one are refused too.
+pub(crate) fn leading_candidates(
+    values: &[f32],
+    ids: &[u32],
+) -> Result<Vec<(u32, f32)>, OjasError> {
+    if values.is_empty() || values.len() != ids.len() {
+        return Err(OjasError::Shape {
+            op: OP,
+            detail: format!("{} leader values for {} ids", values.len(), ids.len()),
+        });
+    }
+    if values.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    let finite = values.iter().take_while(|v| v.is_finite()).count();
+    if finite == 0 {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    if values[finite..].iter().any(|v| v.is_finite()) {
+        return Err(OjasError::Shape {
+            op: OP,
+            detail: "a finite leader ranks after a -inf one".into(),
+        });
+    }
+    Ok(ids[..finite]
+        .iter()
+        .copied()
+        .zip(values[..finite].iter().copied())
+        .collect())
 }
 
 /// One id from `candidates`: finite `(id, logit)` pairs already ranked by
@@ -233,16 +282,55 @@ pub(crate) fn draw(
     Ok(candidates[keep - 1].0)
 }
 
-/// Candidate order: logit descending (`total_cmp`, so `+0.0` ranks before
-/// `-0.0`), then index ascending. Indices are distinct, so no two compare
-/// equal and an unstable sort or select gives the one order.
-fn rank(logits: &[f32], a: usize, b: usize) -> Ordering {
-    logits[b].total_cmp(&logits[a]).then(a.cmp(&b))
-}
-
 fn to_id(index: usize) -> Result<u32, OjasError> {
     u32::try_from(index).map_err(|_| OjasError::OutOfRange {
         op: OP,
         detail: "logit index exceeds u32".into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NEG: f32 = f32::NEG_INFINITY;
+
+    /// `-inf` leaders are masks: the finite prefix is the candidates, the
+    /// same as `ranked_candidates` over the row they came from.
+    #[test]
+    fn leading_candidates_drop_trailing_masks() {
+        let row = [NEG, 2.0, NEG, -1.0, NEG];
+        let want = ranked_candidates(&row, Some(4)).unwrap();
+        assert_eq!(want, [(1, 2.0), (3, -1.0)]);
+        let got = leading_candidates(&[2.0, -1.0, NEG, NEG], &[1, 3, 0, 2]).unwrap();
+        assert_eq!(got, want);
+        assert_eq!(
+            leading_candidates(&[0.5, -0.0], &[7, 2]).unwrap(),
+            [(7, 0.5), (2, -0.0)]
+        );
+    }
+
+    #[test]
+    fn leading_candidates_refusals() {
+        let non_finite = |values: &[f32]| {
+            let ids: Vec<u32> = (0..values.len() as u32).collect();
+            matches!(
+                leading_candidates(values, &ids),
+                Err(OjasError::NonFinite { op: OP })
+            )
+        };
+        // Every leader masked: the row has no finite logit.
+        assert!(non_finite(&[NEG, NEG]));
+        assert!(non_finite(&[1.0, f32::NAN]));
+        assert!(non_finite(&[f32::INFINITY, 1.0]));
+        let shape = |values: &[f32], ids: &[u32]| {
+            matches!(
+                leading_candidates(values, ids),
+                Err(OjasError::Shape { op: OP, .. })
+            )
+        };
+        assert!(shape(&[], &[]));
+        assert!(shape(&[1.0], &[0, 1]));
+        assert!(shape(&[1.0, NEG, 0.5], &[0, 1, 2]));
+    }
 }

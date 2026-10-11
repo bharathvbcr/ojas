@@ -792,15 +792,17 @@ kernel void ojas_argmax_rows(
     }
 }
 
-/// An f32's rank key: unsigned order of keys is `f32::total_cmp` order, so
-/// `+0.0` outranks `-0.0` and `-inf` ranks below every finite value.
+/// An f32's rank key: unsigned order of keys is `f32::total_cmp` order with
+/// `-0.0` read as `+0.0`, so the two tie (the lower column wins) and `-inf`
+/// ranks below every finite value.
 static inline uint ojas_rank_key(float v) {
-    const uint b = as_type<uint>(v);
+    const uint raw = as_type<uint>(v);
+    const uint b = raw == 0x80000000u ? 0u : raw;
     return b ^ ((b >> 31) != 0u ? 0xFFFFFFFFu : 0x80000000u);
 }
 
-/// Row `r`'s `k` leaders as `ojas_infer::sample_token` ranks candidates:
-/// value descending under `total_cmp`, then column ascending.
+/// Row `r`'s `k` leaders ranked by `ojas_core::rank_logits`: value
+/// descending with `+0.0` and `-0.0` one value, then column ascending.
 /// `values[r * k + j]` and `ids[r * k + j]` are the `j`-th leader; every id
 /// is `< cols`. One threadgroup per row and `k` rounds: round `j` takes,
 /// over the columns ranked strictly after round `j - 1`'s pick (a smaller

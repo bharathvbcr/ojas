@@ -37,13 +37,23 @@ Measured on 2026-10-01 (Apple silicon, release):
 - **`Numerics::Exact`:** all three are bit-identical, on MHA and GQA. On the CPU, the fused QK-norm runs the same row kernel as two `rms_norm` calls, and `cached_attention_forward` runs causal SDPA's per-row kernel.
 - **`Numerics::Fast`:** cached decode vs the full forward is within 5.7e-7 relative (asserted at 2e-5; G7 at 1e-5). Cached decode is within 3.5e-7 of the f64 reference, and the full forward within 4.1e-7 (both asserted at 2e-4).
 
-`tests/device.rs` runs `DeviceDecoder` on wgpu and on Metal against `CpuGpt` Exact. The run is an 8-token prefill, 36 decode steps, then a 3-token prefill onto the warm cache, on MHA and GQA. Measured worst relative error was 9.9e-7 to 1.25e-6 (asserted at 1e-4), with exactly one readback per call of `4 * vocab` bytes, counted with `Budget::device_readbacks`. A missing device fails unless `OJAS_ALLOW_NO_GPU=1`.
+`tests/device.rs` runs `DeviceDecoder` on wgpu and on Metal against `CpuGpt` Exact. The run is an 8-token prefill, 36 decode steps, then a 3-token prefill onto the warm cache, on MHA and GQA. Measured worst relative error was 9.9e-7 to 1.25e-6 (asserted at 1e-4), with exactly one readback per call of `4 * vocab` bytes, counted with `Budget::device_readbacks`. The same file pins the decode paths' readbacks: greedy reads back the 4-byte id, and sampling with a `top_k` (or at temperature 0) reads back its `k` leaders, two readbacks of `4k` bytes, with ids equal to `CpuGpt`'s. A missing device fails unless `OJAS_ALLOW_NO_GPU=1`.
 
 ## Decoding
 
 `greedy_decode` and `generate` share one loop (`src/decode.rs`) on both decoders. Both forward the prompt as one prefill. The prompt is forwarded from the cache's current length; every emitted token except the last is forwarded, so `N` new tokens need `prompt + N - 1` free positions. That is checked before any forward: a request that does not fit is `CapacityExceeded` and the cache is untouched. To continue, pass the last returned token as the first token of the next prompt.
 
 `generate` samples with a `SplitMix64` seeded from `GenerateConfig::seed` (the same stream as `ojas_data::CounterRng`), stops after `max_new_tokens` or right after a stop token (included in the output).
+
+What a decode step reads back on `DeviceDecoder`:
+
+| pick | path | readback per step |
+| :--- | :--- | :--- |
+| `greedy_decode` | `forward_greedy`: `Backend::argmax_rows` on the device | the 4-byte id |
+| `generate` at temperature 0 (Go's `GenerateIDs` at 0), or with `top_k = 1` | `forward_top`, `k` = 1: `Backend::topk_rows` on the device | the leader's value and id, 8 bytes |
+| `generate` with a `top_k` > 1, or neither | `forward_top` (`k` > 1) or `forward`: ranked on the host | the `[vocab]` logit row |
+
+`forward_top` selects on the device only for one leader (temperature 0, or `top_k = 1`): it refuses an all-masked row (a `-inf` leader) as the host ranking does, and the next forward takes the id from the device with no upload, as after `forward_greedy`. With `k` > 1 it reads the row back and ranks it on the host, because the `topk_rows` kernels make `k` passes over the row. At nanolab's vocabulary and `top_k = 50`, device selection made a sampled step about 0.5 ms slower on Metal (+4.6%), and a per-`k` probe found it slower than the 201 KB readback plus a host select at every `k` from 2 to 1024 on Metal and wgpu (`bench/results/2026-10-10-decode-after/`, `ab/` and `probes/`). At `k` = 1 it reads back 8 B instead of 201 KB and uploads nothing; its time against the row path is below the A/B's noise (`ab-k1/` there), so no speedup is claimed. A faster selection would need a kernel that does not take `k` passes, and a machine where the readback costs more than this unified-memory one.
 
 `sample_token` order: divide by temperature, keep the top `k`, softmax (f64), keep the smallest most-probable prefix whose mass reaches `top_p`, draw. Differences from nanolab's `GPT.generate`, on purpose:
 
@@ -52,6 +62,15 @@ Measured on 2026-10-01 (Apple silicon, release):
 - top-p exists (nanolab has none).
 
 Refused: temperature that is negative or not finite, `top_k == 0`, `top_p` outside `(0, 1]`, NaN or `+inf` logits, and a row with no finite logit. `-inf` is a mask. `argmax_token` stays strict and refuses `-inf` as well.
+
+**One greedy rule** (decided 2026-10-10). Every greedy pick is the lowest index of the largest logit, with `+0.0` and `-0.0` one value. `argmax_token` and `Backend::argmax_rows` scan with IEEE `>`; `sample_token` (temperature 0, `top_k = 1`) and `Backend::topk_rows` on every backend rank by `ojas_core::rank_logits`; both give that pick. This is `torch.argmax`'s rule. Until then the sampler and `topk_rows` ranked by `f32::total_cmp`, which puts `+0.0` ahead of a `-0.0` at a lower index, so greedy decode and temperature-0 sampling could pick different ids on that one tie, and tests pinned both rules. The argmax rule won; the sampler's test (`partial_select_keeps_the_full_sort_order_at_qwen_vocab`) and the `topk_rows` tests changed, with the reason in their docs. The `-inf` difference stays on purpose: `argmax_token` and `argmax_rows` refuse it, and the sampler treats it as a mask, so no temperature-0 path is rerouted to `argmax_rows`.
+
+## Scope
+
+Recorded 2026-10-10:
+
+- **Batch > 1 decode and paged KV: out of scope.** `DeviceDecoder` and `KvCache` decode one request: the cache is `[1, slots, Hkv, D]` per layer (`src/cache.rs`). Every consumer decodes one request at a time: `ojas-capi`'s `sample_on` (Go's `GenerateIDs`) builds one decoder per request with a cache sized to it, and the bench's decode rows run one prompt. The fine-tune path, the current focus, scores with a forward pass, not decode. The trait already takes a batch (`kv_cache_write` and `cached_attention_forward` take `[B, ...]`, and `bench/`'s `sweep_decode_b{B}` rows price batched attention), so batching is a decoder change when a consumer serves concurrent requests. Paged KV pays off when many requests of different lengths share one pool; with one request per decoder, a cache sized to the request (a ring under a sliding window) is the whole cache.
+- **Hybrid (Gated DeltaNet) layers are not decoded in ojas.** These decoders run nanolab's attention block only. On the trait, `chunked_gdn_forward` already takes `GdnInputs::initial_state` and returns `GdnForward::final_state`, but the tape passes `initial_state: None` (whole training sequences), and `causal_conv1d_silu_forward` starts from a zero state and takes no tail. `ojas-qwen35` is a training provider and does not decode. Qwen3.5 decode with carried recurrent and conv state is tessl's (`tessl/src/qwen35.rs`: `gdn_recurrent`, `conv1d_silu` with `state_in` / `state_out`). Hybrid decode stays there; the conv tail and state threading come to the trait with the first ojas decoder for a hybrid model.
 
 ## Safety properties
 

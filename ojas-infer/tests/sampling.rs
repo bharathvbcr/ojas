@@ -465,6 +465,53 @@ fn device_decoder_follows_the_shared_decode_loop() {
     assert_eq!(dec.remaining(), 0);
 }
 
+/// A sampled decode that needs only the leaders (temperature 0, or a
+/// `top_k`) goes through `forward_top`: one leader is selected where the
+/// logits are (`Backend::topk_rows`), more are ranked from the row. On
+/// `CpuBackend` nothing is a device tensor, so nothing is read back either
+/// way (`tests/device.rs` `check_top` pins the GPU readbacks). With one
+/// leader (temperature 0, as Go's `GenerateIDs` asks, or `top_k` 1) its id
+/// is fed back as given, so the prompt is the only upload. The ids equal
+/// `CpuGpt`'s, a `top_k` past the vocabulary included.
+#[test]
+fn device_decoder_samples_from_the_leaders_without_reading_the_row() {
+    let budget = Budget::new(1 << 24);
+    let (m, c) = model(&budget);
+    let (_, w) = weights(&budget);
+    let m = m.with_numerics(Numerics::Exact);
+    let cpu = CpuBackend::new(Budget::new(1 << 26)).with_numerics(Numerics::Exact);
+    let mut dec = DeviceDecoder::new(cpu, &c, &w, c.max_seq).unwrap();
+    let prompt = [3u32, 9, 14];
+    let n = 12;
+    for (g, uploads) in [
+        (gen_cfg(cfg(0.0, None, None), 1, n, &[]), 1),
+        (gen_cfg(cfg(0.0, Some(4), Some(0.5)), 1, n, &[]), 1),
+        (gen_cfg(cfg(0.8, Some(1), None), 6, n, &[]), 1),
+        (gen_cfg(cfg(0.9, Some(5), Some(0.9)), 3, n, &[]), n as u64),
+        (
+            gen_cfg(cfg(1.2, Some(4 * c.vocab), None), 8, n, &[]),
+            n as u64,
+        ),
+    ] {
+        let mut cache = KvCache::for_model(&m, c.max_seq, &budget).unwrap();
+        let want = m.generate(&prompt, &mut cache, &g).unwrap();
+        dec.reset();
+        let before = dec.traffic();
+        assert_eq!(dec.generate(&prompt, &g).unwrap(), want, "{g:?}");
+        let after = dec.traffic();
+        assert_eq!(
+            (
+                after.readbacks - before.readbacks,
+                after.readback_bytes - before.readback_bytes
+            ),
+            (0, 0),
+            "{g:?}: readbacks (calls, bytes)"
+        );
+        assert_eq!(after.uploads - before.uploads, uploads, "{g:?}: uploads");
+        assert_eq!(dec.len(), cache.len());
+    }
+}
+
 /// `truncate` keeps a prefix: forwarding the dropped tokens again gives the
 /// same logits as the first time (CPU `Exact`, so bit for bit), and a
 /// length past the filled positions is refused without a change.
@@ -514,21 +561,26 @@ fn tied_row(seed: u64, nonpositive: bool) -> Vec<f32> {
         })
         .collect();
     if nonpositive {
-        // A `-0.0` ahead of every `+0.0`, whatever the seed, so greedy
-        // must pass over a tied value at a lower index.
+        // A `-0.0` ahead of every `+0.0`, whatever the seed. `+0.0` and
+        // `-0.0` are one value, so greedy must take it: the lowest index of
+        // the largest logit, as `argmax_token` and `torch.argmax` do.
         row[0] = -0.0;
     }
     row
 }
 
 /// `sample_token` as it was before the partial select: every finite index
-/// sorted by (logit desc via `total_cmp`, index asc), truncated to `top_k`,
-/// then the same draw. The oracle the select must reproduce.
+/// sorted by (logit desc, index asc), truncated to `top_k`, then the same
+/// draw. The oracle the select must reproduce. The logit order is IEEE
+/// comparison, under which `+0.0 == -0.0`: the one greedy rule.
 fn full_sort_oracle(logits: &[f32], c: &SamplingConfig, rng: &mut SplitMix64) -> u32 {
     let mut ranked: Vec<usize> = (0..logits.len())
         .filter(|&i| logits[i].is_finite())
         .collect();
-    ranked.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
+    ranked.sort_by(|&a, &b| {
+        let by_value = logits[b].partial_cmp(&logits[a]).expect("finite logits");
+        by_value.then(a.cmp(&b))
+    });
     if c.temperature == 0.0 {
         return ranked[0] as u32;
     }
@@ -569,9 +621,17 @@ fn full_sort_oracle(logits: &[f32], c: &SamplingConfig, rng: &mut SplitMix64) ->
     ranked[keep - 1] as u32
 }
 
-/// Greedy takes the lowest index of the leading value (`+0.0` before
-/// `-0.0`), and every setting draws what the full sort draws, with the rng
-/// left in the same state.
+/// Greedy takes the lowest index of the leading value, `+0.0` and `-0.0`
+/// tied (the one greedy rule, `argmax_token`'s), and every setting draws
+/// what the full sort draws, with the rng left in the same state.
+///
+/// Until 2026-10-10 the sampler ranked by `total_cmp` and this test
+/// required greedy to pass over the `-0.0` at index 0 for the first
+/// `+0.0`, while `argmax_rows_default_and_greedy_feedback_on_the_cpu`
+/// required argmax to take the lower index of a `-0.0`/`+0.0` tie. The
+/// argmax rule won (it is `torch.argmax`'s, and greedy decode, Go's
+/// temperature-0 `GenerateIDs` and `top_k == 1` should all pick the same
+/// id), so this test changed: greedy now takes index 0.
 #[test]
 fn partial_select_keeps_the_full_sort_order_at_qwen_vocab() {
     for (seed, nonpositive) in [(11, false), (12, true)] {
@@ -580,30 +640,26 @@ fn partial_select_keeps_the_full_sort_order_at_qwen_vocab() {
             .iter()
             .copied()
             .filter(|v| v.is_finite())
-            .fold(f32::NEG_INFINITY, |a, b| {
-                if b.total_cmp(&a).is_gt() {
-                    b
-                } else {
-                    a
-                }
-            });
-        let first = row
-            .iter()
-            .position(|v| v.to_bits() == best.to_bits())
-            .unwrap();
-        let ties = row.iter().filter(|v| v.to_bits() == best.to_bits()).count();
+            .fold(f32::NEG_INFINITY, f32::max);
+        let first = row.iter().position(|&v| v == best).unwrap();
+        let ties = row.iter().filter(|&&v| v == best).count();
         assert!(ties > 1000, "{ties} ties");
         if nonpositive {
-            assert_eq!(best.to_bits(), 0.0f32.to_bits());
-            assert_eq!(first % 2, 0);
+            assert_eq!(best, 0.0);
+            assert_eq!(first, 0);
+            assert_eq!(row[0].to_bits(), (-0.0f32).to_bits());
             assert!(
-                row[..first].contains(&-0.0),
-                "no -0.0 before the first +0.0"
+                row.iter().any(|v| v.to_bits() == 0.0f32.to_bits()),
+                "no +0.0 tied with the -0.0 at index 0"
             );
         }
         let mut rng = SplitMix64::new(0);
         assert_eq!(
             sample_token(&row, &cfg(0.0, None, None), &mut rng).unwrap() as usize,
+            first
+        );
+        assert_eq!(
+            argmax_token(&row.iter().map(|&v| v.max(-1e30)).collect::<Vec<_>>()).unwrap() as usize,
             first
         );
         for c in [
@@ -720,6 +776,16 @@ fn argmax_rows_default_and_greedy_feedback_on_the_cpu() {
     let ids = cpu.argmax_rows(&x).unwrap();
     assert_eq!(ids.shape(), &[2]);
     assert_eq!(ids.u32_slice().unwrap(), &[1, 1]);
+    // One greedy rule: the sampler's leader (`topk_rows`, `k` = 1) is the
+    // same pick, the `-0.0` at column 1 over the `+0.0` at column 2.
+    let (_, top) = cpu.topk_rows(&x, 1).unwrap();
+    assert_eq!(top.u32_slice().unwrap(), &[1, 1]);
+    let mut rng = SplitMix64::new(0);
+    let row = [-1.0, -0.0, 0.0, -2.0];
+    assert_eq!(
+        sample_token(&row, &cfg(0.0, None, None), &mut rng).unwrap(),
+        1
+    );
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let x = Tensor::from_f32(&[0.0, bad, 1.0], &[1, 3], cpu.budget()).unwrap();
         let err = cpu.argmax_rows(&x).unwrap_err();

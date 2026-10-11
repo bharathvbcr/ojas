@@ -1,5 +1,5 @@
 use crate::cache::{append, run_pieces, Kv, Ring};
-use crate::decode::{self, Forward};
+use crate::decode::{self, check_token, Forward};
 use crate::sample::GenerateConfig;
 use ojas_core::{Backend, Budget, DType, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
@@ -315,17 +315,6 @@ impl CpuGpt {
         self.spec.max_seq
     }
 
-    fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError> {
-        if usize::try_from(token).is_ok_and(|row| row < self.spec.vocab) {
-            Ok(())
-        } else {
-            Err(OjasError::OutOfRange {
-                op,
-                detail: format!("token id {token} >= vocab {}", self.spec.vocab),
-            })
-        }
-    }
-
     fn check_cache(&self, cache: &KvCache) -> Result<(), OjasError> {
         let s = &self.spec;
         if cache.n_kv_head != s.n_kv_head
@@ -390,7 +379,7 @@ impl CpuGpt {
             });
         }
         for &id in tokens {
-            self.check_token(OP, id)?;
+            check_token(OP, id, self.spec.vocab)?;
         }
         if tokens.len() > cache.remaining() {
             return Err(cache.refusal(tokens.len()));
@@ -427,7 +416,14 @@ impl CpuGpt {
     ) -> Result<Vec<u32>, OjasError> {
         self.check_cache(cache)?;
         let mut step = HostStep { model: self, cache };
-        decode::decode(&mut step, DECODE_OP, prompt, new_tokens, &[], decode::Pick::Greedy)
+        decode::decode(
+            &mut step,
+            DECODE_OP,
+            prompt,
+            new_tokens,
+            &[],
+            decode::Pick::Greedy,
+        )
     }
 
     /// Sampled continuation of `prompt` ([`crate::sample_token`] with a
@@ -469,8 +465,8 @@ impl Forward for HostStep<'_> {
         self.cache.refusal(needed)
     }
 
-    fn check_token(&self, op: &'static str, token: u32) -> Result<(), OjasError> {
-        self.model.check_token(op, token)
+    fn vocab(&self) -> usize {
+        self.model.spec.vocab
     }
 
     fn forward(&mut self, tokens: &[u32]) -> Result<Vec<f32>, OjasError> {

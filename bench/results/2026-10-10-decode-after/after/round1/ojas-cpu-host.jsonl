@@ -1,0 +1,18 @@
+{"runtime":"ojas-cpu-host","row":"_device","status":"info","device":{"backend":"CpuGpt"}}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_prefill_p32","when":"before","load":"24.52 13.34 14.41","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"gen_prefill_p32","status":"ok","min_ms":21.852250,"median_ms":22.991375,"iters":20,"warmup":5,"parity_max_abs":8.821487426757813e-5,"parity_rel":4.9725044693407735e-6,"tol":1e-3}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_prefill_p32","when":"after","load":"24.52 13.34 14.41","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"before","load":"24.52 13.34 14.41","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"gen_greedy_p32_n32","status":"ok","min_ms":163.011750,"median_ms":187.113937,"iters":20,"warmup":5,"parity_max_abs":8.821487426757813e-5,"parity_rel":4.9725044693407735e-6,"tol":1e-3}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"after","load":"26.24 13.88 14.60","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"before","load":"26.24 13.88 14.60","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"gen_topk50_p32_n32","status":"ok","min_ms":173.571084,"median_ms":198.131937,"iters":20,"warmup":5,"parity_max_abs":8.821487426757813e-5,"parity_rel":4.9725044693407735e-6,"tol":1e-3}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"after","load":"26.54 14.15 14.69","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"_gen_ids","status":"info","for":"gen_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_gqa4_prefill_p32","when":"before","load":"26.54 14.15 14.69","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"gen_gqa4_prefill_p32","status":"ok","min_ms":11.321875,"median_ms":12.213062,"iters":20,"warmup":5,"parity_max_abs":8.916854858398438e-5,"parity_rel":5.245706066987274e-6,"tol":1e-3}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_gqa4_prefill_p32","when":"after","load":"26.54 14.15 14.69","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_gqa4_greedy_p32_n32","when":"before","load":"26.54 14.15 14.69","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"gen_gqa4_greedy_p32_n32","status":"ok","min_ms":160.068791,"median_ms":182.622667,"iters":20,"warmup":5,"parity_max_abs":8.916854858398438e-5,"parity_rel":5.245706066987274e-6,"tol":1e-3}
+{"runtime":"ojas-cpu-host","row":"_load","status":"info","for":"gen_gqa4_greedy_p32_n32","when":"after","load":"26.98 14.45 14.79","gpu_util_pct":0}
+{"runtime":"ojas-cpu-host","row":"_gen_ids","status":"info","for":"gen_gqa4_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
