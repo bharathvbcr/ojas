@@ -1,6 +1,7 @@
 //! Exact linear under a bf16 region is round(linear(round(x), round(w))),
-//! and every other op that rounds its operands accepts them from the CPU,
-//! which takes `Bf16` storage for the matmul-class ops only.
+//! and every other op that rounds its operands accepts them from the CPU.
+//! The region rounds in `F32` storage; the CPU takes `Bf16` storage only
+//! for the matmul-class ops, and only from a caller that holds it.
 
 use ojas_core::{
     round_f32_to_bf16, Autocast, AutocastMode, Backend, Budget, CeChunk, Numerics, Tensor,

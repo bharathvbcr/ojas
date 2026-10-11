@@ -14,9 +14,10 @@
 //! the grid and keeps both. The row is one JSON line on stdout.
 //!
 //! Every backend runs through `Autocast`, so the two precisions differ only
-//! in the region. A backend whose `bf16_operands()` is true gets `Bf16`
-//! storage for the matmul-class operands; otherwise the operands are rounded
-//! in `F32` storage. Either way the tape keeps `F32` activations and the
+//! in the region, which rounds the matmul-class operands into `F32` copies
+//! (until 2026-10-11 it made `Bf16` copies on a backend whose
+//! `bf16_operands()` is true, which the op then widened; the 2026-10-10 rows
+//! ran that way). The tape keeps `F32` activations and the
 //! parameters are `F32` masters, so the bf16 row is not expected to be
 //! smaller: it measures what the tier costs, not what a frozen bf16 base
 //! (gp-ft-bf16-frozen-base) saves.

@@ -1402,8 +1402,9 @@ pub trait Backend {
     ///
     /// The default is `false`. Such a backend refuses a `Bf16` operand with
     /// [`OjasError::Unsupported`] ([`refuse_bf16_operands`]) before it
-    /// charges or writes anything, and [`crate::Autocast`] keeps rounding in
-    /// `f32` storage for it.
+    /// charges or writes anything. [`crate::Autocast`] rounds its operand
+    /// copies in `f32` storage on every backend; this flag decides only
+    /// whether a `Bf16` tensor the caller holds is accepted.
     fn bf16_operands(&self) -> bool {
         false
     }

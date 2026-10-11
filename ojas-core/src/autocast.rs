@@ -2,10 +2,11 @@
 //!
 //! A region is a per-thread stack on one [`Autocast`] value, not a process
 //! global. Inside a [`AutocastMode::Bf16`] region, matmul-class ops round
-//! untagged f32 operands and their activation outputs. An operand becomes
-//! `Bf16` storage when the inner backend takes bf16 operands
-//! ([`Backend::bf16_operands`]) and a rounded `F32` copy otherwise; both give
-//! the kernel the same values. Outputs stay `F32`, rounded. The storage
+//! untagged f32 operands and their activation outputs, into rounded `F32`
+//! copies. A `Bf16` tensor the caller holds passes through to the
+//! matmul-class ops that take it ([`Backend::bf16_operands`]); the region
+//! itself never makes `Bf16` storage, since every backend would widen it
+//! back to `f32`. Outputs stay `F32`, rounded. The storage
 //! compute tag records that the bits are already rounded, so a second cast
 //! clones.
 //! Norms, embeddings, the loss, the optimizer and the gated delta rule (its
@@ -280,26 +281,15 @@ impl<B: Backend> Autocast<B> {
         })
     }
 
-    /// An operand of a matmul-class op ([`Backend::bf16_operands`]: linear
-    /// and causal SDPA, forward and backward) inside a region: a `Bf16`
-    /// tensor or an already-rounded `F32` one as it is; otherwise new `Bf16`
-    /// storage when the inner backend takes it, else a rounded `F32` copy.
-    /// The two arms give the kernel the same values, so the same bits.
-    fn prep_matmul<'a>(&self, tensor: &'a Tensor) -> Result<Operand<'a>, OjasError> {
-        if !self.region()? || tensor.dtype() == DType::Bf16 || tensor.compute_tag() == COMPUTE_BF16
-        {
-            return Ok(Operand::Same(tensor));
-        }
-        if self.inner.bf16_operands() {
-            return Ok(Operand::Rounded(self.inner.to_bf16(tensor)?));
-        }
-        Ok(Operand::Rounded(self.round_new(tensor)?))
-    }
-
-    /// An operand of any other op that rounds in a region: an already-rounded
-    /// tensor as it is, otherwise a rounded `F32` copy. Never `Bf16`
-    /// storage, which [`Backend::bf16_operands`] covers for the matmul-class
-    /// ops only; every other op refuses it.
+    /// An operand of an op that rounds in a region: a `Bf16` tensor or an
+    /// already-rounded `F32` one as it is, otherwise a rounded `F32` copy
+    /// (`cast_bf16`). `Bf16` storage reaches a kernel only when the caller
+    /// holds it (a resident bf16 tensor, which only the matmul-class ops of
+    /// [`Backend::bf16_operands`] take). The copy is never `Bf16`, even when
+    /// the inner backend takes it: every backend widens a `Bf16` operand
+    /// back to `f32`, so a `Bf16` copy would cost 2 bytes plus the op's
+    /// 4-byte widened scratch per element, where this one costs 4, for the
+    /// same bits (gp-bf16-compute-tier, 2026-10-11).
     fn prep<'a>(&self, tensor: &'a Tensor) -> Result<Operand<'a>, OjasError> {
         if !self.region()? || tensor.dtype() == DType::Bf16 || tensor.compute_tag() == COMPUTE_BF16
         {
@@ -478,8 +468,8 @@ impl<B: Backend> Backend for Autocast<B> {
     }
 
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
-        let input = self.prep_matmul(input)?;
-        let weight = self.prep_matmul(weight)?;
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
         let out = self.inner.linear_forward(&input, &weight)?;
         self.emit(out)
     }
@@ -490,9 +480,9 @@ impl<B: Backend> Backend for Autocast<B> {
         weight: &Tensor,
         grad_output: &Tensor,
     ) -> Result<(Tensor, Tensor), OjasError> {
-        let input = self.prep_matmul(input)?;
-        let weight = self.prep_matmul(weight)?;
-        let grad_output = self.prep_matmul(grad_output)?;
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let grad_output = self.prep(grad_output)?;
         let (grad_input, grad_weight) =
             self.inner.linear_backward(&input, &weight, &grad_output)?;
         Ok((self.emit(grad_input)?, self.keep_f32(grad_weight)))
@@ -582,9 +572,9 @@ impl<B: Backend> Backend for Autocast<B> {
         v: &Tensor,
         window: Option<usize>,
     ) -> Result<(Tensor, Tensor), OjasError> {
-        let q = self.prep_matmul(q)?;
-        let k = self.prep_matmul(k)?;
-        let v = self.prep_matmul(v)?;
+        let q = self.prep(q)?;
+        let k = self.prep(k)?;
+        let v = self.prep(v)?;
         let (out, lse) = self.inner.causal_sdpa_forward(&q, &k, &v, window)?;
         Ok((self.emit(out)?, lse))
     }
@@ -600,11 +590,11 @@ impl<B: Backend> Backend for Autocast<B> {
         grad_output: &Tensor,
         window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
-        let q = self.prep_matmul(q)?;
-        let k = self.prep_matmul(k)?;
-        let v = self.prep_matmul(v)?;
-        let output = self.prep_matmul(output)?;
-        let grad_output = self.prep_matmul(grad_output)?;
+        let q = self.prep(q)?;
+        let k = self.prep(k)?;
+        let v = self.prep(v)?;
+        let output = self.prep(output)?;
+        let grad_output = self.prep(grad_output)?;
         let (gq, gk, gv) =
             self.inner
                 .causal_sdpa_backward(&q, &k, &v, &output, lse, &grad_output, window)?;
@@ -1145,6 +1135,8 @@ mod tests {
         seen_k: AtomicU32,
         seen_lse: AtomicU32,
         scale_bits: AtomicU32,
+        bf16_ops: bool,
+        to_bf16_calls: AtomicU64,
     }
 
     impl Rec {
@@ -1164,7 +1156,16 @@ mod tests {
                 seen_k: AtomicU32::new(0),
                 seen_lse: AtomicU32::new(0),
                 scale_bits: AtomicU32::new(0),
+                bf16_ops: false,
+                to_bf16_calls: AtomicU64::new(0),
             }
+        }
+
+        /// Report [`Backend::bf16_operands`], as the CPU and wgpu do. The
+        /// recorded ops still read their operands as `F32`.
+        fn taking_bf16(mut self) -> Self {
+            self.bf16_ops = true;
+            self
         }
 
         fn with_numerics(mut self, numerics: Numerics) -> Self {
@@ -1241,6 +1242,20 @@ mod tests {
 
         fn numerics(&self) -> Numerics {
             self.numerics
+        }
+
+        fn bf16_operands(&self) -> bool {
+            self.bf16_ops
+        }
+
+        fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+            self.to_bf16_calls.fetch_add(1, Ordering::Relaxed);
+            let bits: Vec<u16> = tensor
+                .f32_slice()?
+                .iter()
+                .map(|&v| f32_to_bf16(v))
+                .collect();
+            Tensor::from_bf16_bits(&bits, tensor.shape(), self.budget())
         }
 
         fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
@@ -2264,6 +2279,30 @@ mod tests {
         assert_eq!(y.compute_tag(), COMPUTE_BF16);
         assert_eq!(autocast.inner.casts.load(Ordering::Relaxed), 3);
         assert_eq!(bits_of(&x), DIRTY);
+    }
+
+    /// A backend that takes `Bf16` operands widens them back to `f32`, so a
+    /// region's operand copy is rounded `F32` storage there too: one 4-byte
+    /// copy (`cast_bf16`), not a 2-byte `to_bf16` copy the op then widens
+    /// into 4 more bytes. The bits are the same either way
+    /// ([`Backend::bf16_operands`]).
+    #[test]
+    fn a_region_rounds_in_f32_storage_even_when_the_backend_takes_bf16() {
+        let budget = Budget::new(1 << 16);
+        let autocast = Autocast::new(Rec::new(budget.clone()).taking_bf16());
+        assert!(autocast.bf16_operands());
+        let _guard = autocast.autocast_region(AutocastMode::Bf16).unwrap();
+        let x = host(&budget, DIRTY);
+        let w = host(&budget, DIRTY);
+        let y = autocast.linear_forward(&x, &w).unwrap();
+        assert_eq!(autocast.inner.seen_input.load(Ordering::Relaxed), ONE);
+        assert_eq!(autocast.inner.seen_weight.load(Ordering::Relaxed), ONE);
+        assert_eq!(bits_of(&y), ONE);
+        assert_eq!(autocast.inner.casts.load(Ordering::Relaxed), 3);
+        let gy = host(&budget, DIRTY);
+        autocast.linear_backward(&x, &w, &gy).unwrap();
+        assert_eq!(autocast.inner.seen_input.load(Ordering::Relaxed), ONE);
+        assert_eq!(autocast.inner.to_bf16_calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]
