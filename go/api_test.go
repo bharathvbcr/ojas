@@ -176,6 +176,34 @@ func TestInspectAndLoadModel(t *testing.T) {
 	if err != nil || id == 0 {
 		t.Fatalf("load: %d %v", id, err)
 	}
+	// The reply names the model's tensors and the budget it was given: the
+	// caller's, or the 1 GiB default (a CPU model is never planned down).
+	for _, c := range []struct{ asked, want uint64 }{{64 << 20, 64 << 20}, {0, 1 << 30}} {
+		info, err := LoadModelInfo(context.Background(), "model.safetensors", LoadOptions{BudgetBytes: c.asked})
+		if err != nil || info.ID == 0 || info.Tensors != 2+14*2 || info.BudgetBytes != c.want {
+			t.Fatalf("LoadModelInfo(budget %d) = %+v, %v; want budget %d", c.asked, info, err, c.want)
+		}
+		if err := Free(context.Background(), info.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A model-creating reply is exactly id, tensors and budget; any other
+// length is refused, not read as zeros.
+func TestDecodeModelInfo(t *testing.T) {
+	out := binary.LittleEndian.AppendUint64(nil, 7)
+	out = binary.LittleEndian.AppendUint32(out, 30)
+	out = binary.LittleEndian.AppendUint64(out, 5<<30)
+	info, err := decodeModelInfo(out)
+	if err != nil || info != (ModelInfo{ID: 7, Tensors: 30, BudgetBytes: 5 << 30}) {
+		t.Fatalf("decode: %+v %v", info, err)
+	}
+	for _, n := range []int{0, 12, 19, 21} {
+		if _, err := decodeModelInfo(make([]byte, n)); err == nil {
+			t.Fatalf("a %d-byte reply decoded", n)
+		}
+	}
 }
 
 func TestDoubleFree(t *testing.T) {

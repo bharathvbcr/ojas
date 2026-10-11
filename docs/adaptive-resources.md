@@ -307,8 +307,112 @@ Task `ft-748ed8b545133b8290a2c4714916a5cf`, worktree `wire-gpu-memory-probes-int
 
 ## Gaps
 
-- Pressure under real stall was not induced on Linux (only `Normal` was read live); the thresholds are covered by fixture tests.
+- Pressure under real stall was not induced on Linux (only `Normal` was read live); the thresholds are covered by fixture tests. (Superseded 2026-10-10: `scripts/linux_device_check.sh` induces it, below.)
 - `Discrete` stays unit-tested only: no discrete GPU here.
 - wgpu's OOM retry ran through the injection seam; Metal through wgpu rarely refuses an allocation for real.
 - The Metal pool cap (budget/4, at most 1 GiB) can lower pool hits for a model whose per-step temporaries pass it. No benchmark was run; no speed claim is made either way.
 - The Qwen35Step pool cap is task ft-c57c98e0, not this one.
+
+# Honest device memory (2026-10-10)
+
+Task `ft-748ed8b545133b8290a2c4714916a5cf` (`tasks/gp-device-memory-probes.md`), worktree `honest-device-memory-uncharged-metal-hyb-44d9debd`: the criteria the 2026-10-07 round left open. Memory the device allocates for a call is charged to the call, or bounded and documented; a budget the plan cut is visible to the caller; and the Linux pressure path runs from a committed script instead of a one-off manual run.
+
+## Findings (re-read before the change)
+
+| ID | Finding | Evidence |
+| :--- | :--- | :--- |
+| J1 | Metal's row-local hybrid ops (causal conv1d, gated RMS norm, forward and backward) read whole buffers, so `Worker::whole` copied every operand not at offset 0 into a fresh, uncharged buffer. The forwards charged no scratch and the backwards only their partials. | `device.rs` `whole`; failing-first run below |
+| J2 | The same class elsewhere, found by an audit of every `fresh` the device thread makes: `mat()` copies a GEMM operand off 16-byte alignment, uncharged, in `linear` and its backward and in the per-head gate's two GEMMs; a split cached-attention decode wrote `rows · splits · (head_dim + 2)` partials, uncharged. | `device.rs` `mat`, `cached_attn`; failing-first run below |
+| J3 | A dropped `MetalBuffer` gives its charge back at once, while tessl returns the buffer to its pool only when a commit after the drop completes. Nothing counted frees, so dropped buffers could sit on the device past every bound the module docs gave. | `backend.rs` module docs; `device.rs` `Cmd::Free`; failing-first run below |
+| J4 | A wgpu read's staging buffer is the next power of two over the span plus 16 fault bytes, so a read past about half of `max_buffer_size` asked for a buffer past the limit and failed outright, and a 256 MiB read allocated a 512 MiB staging buffer outside the budget. | `context.rs` `read`; failing-first run below |
+| J5 | LOAD, NEW and RESUME replied `id, tensors`; a budget the device plan cut (2026-10-07, H2) was invisible to the caller. `MetalBackend::with_budget` was documented as test-only and `#[doc(hidden)]`, yet `model::open` uses it on that production path. | `engine.rs` op table; `backend.rs` |
+| J6 | Linux PSI and architecture were proven by a manual run that read `Normal` only; no committed runner, and no live `E_PRESSURE`. | 2026-10-07 Gaps above |
+
+## Changes
+
+| ID | Change | Where |
+| :--- | :--- | :--- |
+| K1 | One rule for when the device copies an operand: `ReadAs::Whole` (tessl's row-local kernels; any offset but 0) or `ReadAs::Matrix` (tessl's GEMMs; any offset off 16 bytes), `copied_at`/`Arg::copied`. The device thread's `wholes` and `mat` copy by it, and the backend charges by it (`copied_elems`), so the copy and its charge cannot drift apart. Conv1d and gated RMS norm (forward and backward) charge their copies as scratch; `linear` charges its matrix copies, `linear_backward` charges `x`, `w` and `gy` copies (it now goes through `outputs` with that scratch instead of `two`), and the gate forward and backward add their GEMM copies to their partials. | `ojas-metal/src/{link,device,backend}.rs` |
+| K2 | The cached-attention split rule moved to `link.rs` beside the new `cached_attn_origin` and `cached_attn_part`, which both the device and the backend call: a split decode charges `rows · splits · (head_dim + 2)` partials as scratch; one pass charges none. | `link.rs`, `backend.rs` `cached_attention_forward` |
+| K3 | The device thread counts the bytes of buffers freed since the last waited commit (`Book::freed_since_wait`), and before a command whose start would find more than the memory cap of them, waits for one (`Wait::Freed`, `WaitCounts::freed`). The module docs' bound adds the term: dropped buffers awaiting a commit, under one memory cap of frees and another of temporaries plus the last command's own. The count is per handle, so a dropped view over a buffer something else still holds counts too; that only makes the wait come sooner. | `device.rs`, `link.rs`, `backend.rs` module docs; `docs/framework-design.md` §5 |
+| K4 | wgpu reads go in pieces: each piece's span plus the 16 fault bytes fits a staging buffer of at most `READ_STAGING_BYTES` (32 MiB, half of `STAGING_CACHE_BYTES`) and of the device's `max_buffer_size` (`read_piece`). A read that fits one piece is unchanged; a longer one fills one host `Vec` reserved fallibly (a refusal is `CapacityExceeded`), one submission and wait per piece. The staging cache stays outside the budget, bounded: the probe's `pool_cache_cap` now reports pool plus staging cache, so the plan sets both aside, and one read in flight holds at most one 32 MiB staging buffer more. | `ojas-wgpu/src/{context,memory,lib}.rs` |
+| K5 | LOAD, NEW and RESUME reply `id: u64, tensors: u32, budget: u64` (20 bytes): the bytes the session's budget allows after any plan-down. `Session` keeps it. Go: `LoadModelInfo`, `NewModelInfo` and `ResumeInfo` return `ModelInfo{ID, Tensors, BudgetBytes}`; `LoadModel`, `NewModel` and `Resume` keep their signatures and return `.ID`. `MetalBackend::with_budget` is documented as the production plan-down path and no longer `#[doc(hidden)]`. | `ojas-capi/src/{engine,session,load}.rs`, `go/api.go`, `ojas-metal/src/backend.rs` |
+| K6 | `scripts/linux_device_check.sh` runs on a real Linux kernel in podman. It has three phases, and any one failing fails the script. (1) It builds and runs the `ojas-device` suite and the profile example, and builds the `ojas-capi` test binary. (2) In an idle container it runs the ignored capi test `linux_runner_admission_follows_the_live_probe` with `OJAS_EXPECT_PRESSURE=normal`. The architecture must not be `Unknown`, pressure must read `Normal`, and NEW must not be refused for pressure. (3) A second container (`--systemd=always`, so its cgroup is writable) splits its cgroup into `hog` and `init`. `hog` gets a `memory.high` of 128 MiB and a bounded allocator: each pass, `tail` holds 512 MiB of `/dev/zero`. The same test runs in `init` with `critical`, under a 300 s `timeout`. It waits up to 60 s for the probe to read `Critical` through the container root, an ancestor of its own cgroup. Then NEW must be `ojas:E_PRESSURE` and FREE must still run. | `scripts/linux_device_check.sh`, `ojas-capi/src/tests.rs` |
+| K7 | ojas builds against tessl `main` again. tessl 04faf93 gave `CeWorkspace::new` a `GemmOperands` argument, and `ce_at_offset`, the cross-entropy of the legacy tiny GPU session's train step, now passes `GemmOperands::ExactF32`, the products it already used. | `ojas-metal/src/gpu.rs` |
+| K8 | `ojas-device`'s ignored `live_pressure_reaches_critical_under_a_throttled_cgroup` is removed. It was never green: its hog was a thread in the test's own cgroup, the layout under which both failed runs below never printed. The capi runner test reads the same `probe_pressure` and `probe_system` and also checks the admission they drive. | `ojas-device/src/system.rs` |
+
+## Decisions
+
+- **Charge the copies, do not remove them.** tessl's row-local kernels have no byte-offset argument and its GEMMs require 16-byte alignment; teaching tessl offsets is a kernel change in another repo. Charging the copy is exact and keeps the fast path (aligned operands copy nothing and charge nothing).
+- **Wait on frees rather than defer them.** Deferring a `Free` until the next waited commit would keep the budget charge on memory the caller dropped, so a session near its budget would be refused for memory it no longer holds. Waiting once past the memory cap keeps the charge honest and bounds the device side.
+- **The wire reply grew; the Go calls did not change.** The Go package and the engine are built together (gusset links the staticlib in-process), so the 12→20-byte reply is one change. Go callers that only want the id keep `LoadModel`; the `...Info` calls are additive.
+- **wgpu staging is bounded and documented, not charged.** Staging buffers are recycled across reads and sessions on the context; charging them to whichever session read last would make an unrelated session's budget move. They are bounded (32 MiB in flight, 64 MiB cached) and reported to the plan through `pool_cache_cap`.
+- **The stall is induced in a sibling cgroup, not the test's own.** The first two runs put the allocator in the test's own cgroup, and the test never printed. The likely cause, inferred but not traced, is that the kernel throttled the test as well: anonymous memory has no swap, so reclaim took the test's code pages.
+  - The first run used an unbounded `tail /dev/zero` and never printed. The script ended 2 h 4 min after it started, build included, with exit 137 (SIGKILL). That the 1 GiB `memory.max` OOM killer sent it is inferred, not checked.
+  - The second run used a bounded allocator and still had not printed after the 300 s `timeout` (exit 124).
+  - A shell probe of the split layout showed the container root's `full avg10` reaching 13% within 3 s and 78% by 36 s, while a shell in the sibling cgroup kept running. That is also the case the probe's ancestor walk exists for: a parent's limit stalling the process.
+- **wgpu's OOM error class stays with gp-oom-error-class.** The retry exists (2026-10-07 H9); what error it ends with is that task's fix across all GPU backends.
+- **Review rulings (Fable, 2026-10-10).**
+  - The 20-byte reply stands, with no op version. Engine and Go link into one binary, so a version protects no caller, and `LoadModel`, `NewModel` and `Resume` are one-line wrappers over the `...Info` calls.
+  - The freed trigger ships without a committed benchmark. It is a correctness bound, not a speedup claim. The interleaved 124M run that should carry the `freed` column belongs to gp-long-runs-and-quiet-benches.
+  - ojas is adapted to tessl `main` here (K7) and re-verified on it, because tessl b8d4010 ("a buffer freed into a full pool cache displaces a larger cached one") changed the pool policy the freed bound depends on after the first runs.
+  - The 124M upload waits are out of scope and go to gp-long-runs-and-quiet-benches.
+  - The same-cgroup device test is removed (K8), not repaired, so the live probe has one owner.
+  - The podman-only runner and the delegated wgpu OOM class are accepted.
+
+## Verification (macOS M5 Pro and the local Podman VM, under `mac_heavy.sh`, `-j 2`)
+
+- **Failing first** (`git archive HEAD` plus only the new tests, its own target dir):
+  - `offset_operands_charge_the_copies_the_device_makes` failed at its first op: "conv: shifted operands must charge their 704 copied bytes; left 576, right 1280".
+  - `a_split_decode_charges_its_partials` failed: "kv_len 1024; left 3072, right 28416" (the output only; no partials).
+  - `frees_past_the_memory_cap_are_recycled_before_the_next_command` failed: "the device holds 8388608 bytes past the 18694144 before them" (the HEAD copy omits only the `freed` field HEAD's `WaitCounts` lacks).
+  - wgpu `a_read_past_half_the_buffer_limit_is_copied_out_in_pieces` failed on its first read (16 KiB under a 16 KiB `max_buffer_size`): "poll: Tried to wait using a submission index (1) that has not been returned by a successful submission" (the 32 KiB staging buffer was invalid).
+  - capi `the_load_reply_names_the_session_budget` and the extended plan-down test failed on the 12-byte reply.
+- **After, before K7 and K8**, on tessl de4747a, the commit before tessl `main` changed `CeWorkspace::new`. The device, metal and wgpu runs had built before that merge.
+  - clippy `-D warnings`, all targets, on ojas-device, ojas-metal, ojas-wgpu and ojas-capi: clean.
+  - ojas-device 78 passed.
+  - ojas-metal: 30 test binaries, 228 passed, 2 ignored, 1 failed (an earlier count of 235 read one binary's result twice from overlapping output). The failure is the legacy `gpu::tests::scratch_cap_is_not_clamped`, which compares the device's process-wide allocated size before and after and so moves with sibling tests. Six full lib runs each on HEAD and on this tree: it failed once in six on each, 65,536 bytes off. Pre-existing, not changed here.
+  - ojas-wgpu lib and `drop`, `residency`, `upload_heap`, `faults`, `contract`: 52 passed. The chunked read also passed four parallel lib runs and one serial run.
+  - ojas-capi lib 87 passed; ojas-model `metal_waits` 2 and `metal_hybrid_tape` 1 passed.
+  - Go: `ojas-gusset-engine` built; `go vet` clean; `go test -a -p 1` ok in 20.7 s (`TestDecodeModelInfo`, and `TestInspectAndLoadModel` reading a 64 MiB and a default 1 GiB budget back through `LoadModelInfo`); `TestHeapCeilingIsACleanError` ok on its own (it aborted the binary on 2026-10-08; H11 fixed it).
+- **On tessl `main` (d0b1792, after K7 and K8):**
+  - clippy `-D warnings`, `--workspace --all-targets`, in a fresh target dir: clean.
+  - ojas-device 78 passed.
+  - ojas-metal: 30 binaries, 229 passed, 2 ignored, 0 failed. That includes `freed_buffers` and `charged_temporaries` under tessl's new pool policy, and `scratch_cap_is_not_clamped` passing this time.
+  - ojas-wgpu 52, ojas-capi lib 87, ojas-model `metal_waits` and `metal_hybrid_tape` 3 passed, 1 ignored.
+  - Go: `go vet` clean; `go test -a -p 1` ok in 27.9 s; `TestHeapCeilingIsACleanError` ok.
+- **Linux on tessl `main`** (d0b1792, through the default `../tessl` path, after K7 and K8, same VM and image): exit 0, "linux device check OK".
+  - `ojas-device` 72 passed, 0 ignored.
+  - Idle: Unified, Normal.
+  - Stalled: Unified, Critical; cgroup PSI `some avg10=14.12 … full avg10=14.12`. NEW was `E_PRESSURE` and FREE ran, in 2.02 s.
+- **Generated docs:** `go run scripts/sitegen/main.go`, then its `-check`: up to date.
+- **Linux** (`scripts/linux_device_check.sh`, Podman VM, Fedora kernel 7.1.3 aarch64, image `localhost/gusset-stress` with cargo 1.99.0, `--pull=never`, tessl via `OJAS_TESSL`): exit 0, "linux device check OK".
+  - `ojas-device`: 72 passed, 1 ignored. The ignored one was the same-cgroup live test K8 removes.
+  - The profile example ran.
+  - Idle: "live probe: architecture Unified, pressure Normal", cgroup PSI all 0.00, test ok.
+  - Stalled: "live probe: architecture Unified, pressure Critical", cgroup PSI `some avg10=11.95 … full avg10=11.95`. NEW was `E_PRESSURE` and FREE ran. The test passed in 2.03 s.
+- **What the freed trigger costs a real step** (nanolab 124M, batch 4, seq 1024, 4 micro-batches, 16 GiB budget, release, `metal_waits` `nanolab_124m_step_waits_by_trigger`, one run of 3 steps per tree, not an interleaved A/B):
+
+  | Tree | `mem_cap` | `freed` | Total waits per step | Step time | Peak |
+  | :--- | ---: | ---: | ---: | ---: | ---: |
+  | This change | 38 | 7 | 51 | 3.66 s | 6627 MiB |
+  | HEAD | 41 | n/a | 47 | 3.65–3.66 s | 6627 MiB |
+
+  Every step waited the same way on both trees. The test itself fails on both, on `upload == 0` (4 upload waits a step; see Gaps).
+- **A run hazard found on the way, not a code change:**
+  - The HEAD mirror and the worktree first shared one target dir. Cargo gave both trees' crates the same unit hashes, so one "after" run executed the HEAD wgpu test binary (its panic named the HEAD file's line). The mirror now has its own target dir, and the touched crates were cleaned before the run above.
+
+## Gaps
+
+- **wgpu's out-of-memory error class** is not changed here; `gp-oom-error-class` owns it for every GPU backend.
+- **Temporaries still uncharged, all small.** They come from a read-only audit of every device-thread allocation, and only the classes above were re-run here.
+  - Muon's charge, `6n + 3r² + 2048`, can be 3 elements short of its worst case, `6n + 3r² + 3 + 2·reduce_groups(n)`. That happens only with Nesterov, rows > cols and n > 4,186,112.
+  - O(1) scalars are uncharged: the loss `sum` (1 element), Muon's `stats` (3), ClipNorm's `out` (2), and the test-only `InjectPanic` work buffer (1). Each sits under the 256-byte bucket.
+  - Temporaries tessl allocates inside its own calls are outside ojas's book, such as a transpose copy that never passes through `TensorOps` and Muon's bf16 copies. Charging them needs tessl to report them.
+- **Frees are counted per handle.** A dropped view over a buffer that something else still holds counts as freed. This only makes the `freed` wait come sooner; it never lets the device hold more.
+- **The legacy test `gpu::tests::scratch_cap_is_not_clamped` is flaky** (1 in 6 lib runs on HEAD and on this tree). It measures the process-wide allocated size while sibling tests run. This change does not touch it.
+- **Wire-format consumers.** The 12-to-20-byte LOAD/NEW/RESUME reply was checked by text search only: in this repo (`rg --no-ignore`), only `ojas-capi` and `go/api.go` touch the LOAD, NEW and RESUME opcodes, plus generated docs. Under `~/Code` outside ojas, no file names `ojas_capi` or the gusset engine (`target`, `node_modules` and `.gitpulse` excluded). A consumer outside those trees would break on the longer reply.
+- **`nanolab_124m_step_waits_by_trigger` fails on HEAD** (ignored by default; release). Its step makes 4 upload waits where the test expects 0, on HEAD and on this tree alike. It is handed to gp-long-runs-and-quiet-benches, with the likely lead: a per-micro-batch upload over the 64 KiB inline limit (inferred, not traced).
+- **The runner is podman-only, and its default image is unrun.** Splitting the cgroup needs it writable, which `--systemd=always` gives; Docker has no equivalent short of `--privileged`. Every run here used the local `localhost/gusset-stress` image with `--pull=never`, not the default `rust:1-bookworm`.
+- **The freed trigger's time cost is measured once.** It is one run of 3 steps per tree, with no interleaved min-of-N. It shows 4 more waits a step and no visible change in step time; that is not a benchmark. The quiet interleaved run is gp-long-runs-and-quiet-benches'.
+- **Discrete GPUs are not run.** The Linux runner reads `Unified` from the Podman VM's sysfs (no card, or a virtio or platform one, per H6). A discrete card's path is covered only by the fixture tests in `ojas-device`.

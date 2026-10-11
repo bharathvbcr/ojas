@@ -68,9 +68,18 @@ pub const PARAM_SLOTS: usize = 1024;
 /// from the next dispatches.
 pub const BIND_CACHE_CAP: usize = 4096;
 
-/// Bytes of idle `MAP_READ` staging buffers kept for later reads. A read
-/// larger than this uses a buffer of its own and drops it.
+/// Bytes of idle `MAP_READ` staging buffers kept for later reads. Like the
+/// pool, it is not charged to a [`Budget`]; [`WgpuContext::trim_pool`]
+/// releases it, and the probe reports it with the pool cap.
 pub const STAGING_CACHE_BYTES: u64 = 64 << 20;
+
+/// Largest staging buffer one read uses. A staging buffer is a power of two
+/// holding the span and 16 fault bytes, so a longer read (or one past what
+/// the device's `max_buffer_size` allows, [`read_piece`]) is copied out in
+/// pieces, one submission and wait each. A read in flight holds one staging
+/// buffer of at most this size, uncharged; half of [`STAGING_CACHE_BYTES`],
+/// so the cache keeps two.
+pub const READ_STAGING_BYTES: u64 = 32 << 20;
 
 /// Smallest staging buffer: reads of up to this many bytes share a size.
 const STAGING_MIN_BYTES: u64 = 256;
@@ -885,7 +894,7 @@ impl WgpuContext {
                 .device
                 .generate_allocator_report()
                 .map(|r| r.total_reserved_bytes),
-            pool_cache_cap: POOL_CAP_BYTES,
+            pool_cache_cap: POOL_CAP_BYTES + STAGING_CACHE_BYTES,
         }
     }
 
@@ -1373,13 +1382,45 @@ impl WgpuContext {
     }
 
     /// Copy `len` bytes at `offset` of `buf` to the host after all recorded
-    /// work. The fault word rides in the same copy and is cleared.
+    /// work, in pieces of at most [`read_piece`] bytes. The fault words ride
+    /// in each piece's copy.
     pub(crate) fn read(
         &self,
         buf: &wgpu::Buffer,
         offset: u64,
         len: u64,
     ) -> Result<Vec<u8>, OjasError> {
+        let piece = read_piece(self.inner.limits.max_buffer_size);
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| backend_err("read window overflows"))?;
+        if end.div_ceil(4) * 4 - (offset & !3) <= piece {
+            return self.read_once(buf, offset, len);
+        }
+        let mut out = Vec::new();
+        let want =
+            usize::try_from(len).map_err(|_| backend_err("read exceeds the address space"))?;
+        out.try_reserve_exact(want)
+            .map_err(|_| OjasError::CapacityExceeded {
+                requested: len,
+                cap: 0,
+                live: 0,
+            })?;
+        let mut at = offset;
+        while at < end {
+            // Each piece starts on a word at or before `at` and spans at most
+            // `piece` bytes, so its staging buffer fits.
+            let to = ((at & !3) + piece).min(end);
+            out.extend_from_slice(&self.read_once(buf, at, to - at)?);
+            at = to;
+        }
+        Ok(out)
+    }
+
+    /// One piece of [`Self::read`]: its span, rounded out to words, plus the
+    /// 16 fault bytes fit one staging buffer. The fault words ride in the
+    /// same copy and are cleared.
+    fn read_once(&self, buf: &wgpu::Buffer, offset: u64, len: u64) -> Result<Vec<u8>, OjasError> {
         let start = offset & !3;
         let end = (offset + len).div_ceil(4) * 4;
         let span = end - start;
@@ -1609,6 +1650,20 @@ impl WgpuContext {
 /// [`STAGING_MIN_BYTES`].
 fn staging_size(bytes: u64) -> u64 {
     bytes.max(STAGING_MIN_BYTES).next_power_of_two()
+}
+
+/// Span bytes one piece of a read copies on a device whose buffers hold at
+/// most `max_buffer_size` bytes: the largest power of two within that and
+/// [`READ_STAGING_BYTES`] (at least [`STAGING_MIN_BYTES`]), less the 16
+/// fault bytes that ride with it. A multiple of 4.
+fn read_piece(max_buffer_size: u64) -> u64 {
+    let cap = max_buffer_size.min(READ_STAGING_BYTES);
+    let stage = if cap.is_power_of_two() {
+        cap
+    } else {
+        cap.next_power_of_two() / 2
+    };
+    stage.max(STAGING_MIN_BYTES) - 16
 }
 
 /// Slots of `stride` bytes the parameter ring has on a device whose buffers
@@ -2237,14 +2292,76 @@ mod tests {
         assert_eq!(got, [n as f32, 2.0 * n as f32]);
     }
 
-    /// The probe reports the adapter's type, its pool cap, and no device
-    /// memory size: wgpu has none to give.
+    /// A read's staging buffer is a power of two holding the span and the
+    /// 16 fault bytes, so before, a read past half of `max_buffer_size`
+    /// asked for a staging buffer past the limit and failed. Reads now go
+    /// in pieces whose staging fits both the limit and [`READ_STAGING_BYTES`],
+    /// at any offset, and the bytes come back whole.
+    #[test]
+    fn a_read_past_half_the_buffer_limit_is_copied_out_in_pieces() {
+        const MAX: u64 = 1 << 14;
+        let cap = wgpu::Limits {
+            max_buffer_size: MAX,
+            ..wgpu::Limits::default()
+        };
+        let ctx = WgpuContext::open_capped(&cap).expect("wgpu adapter");
+        assert_eq!(read_piece(MAX), MAX - 16);
+        let bytes: Vec<u8> = (0..MAX as usize)
+            .map(|i| (i * 31 + i / 251) as u8)
+            .collect();
+        let x = ctx.mapped(MAX, storage_usage(), &bytes).expect("upload");
+        for (offset, len) in [
+            (0, MAX),
+            (0, MAX / 2),
+            (3, MAX - 3),
+            (5, MAX - 16 - 2),
+            (MAX - 17, 17),
+            (1, 2),
+        ] {
+            let got = ctx
+                .read(&x, offset, len)
+                .unwrap_or_else(|e| panic!("read {len} bytes at {offset}: {e:?}"));
+            let (a, b) = (offset as usize, (offset + len) as usize);
+            assert!(got == bytes[a..b], "read {len} bytes at {offset}");
+        }
+        // No staging buffer past the piece, and the cache within its cap.
+        let staging = lock(&ctx.inner.staging);
+        assert!(
+            staging.free.iter().all(|b| b.size() <= MAX),
+            "staging past the limit"
+        );
+        assert!(staging.bytes <= STAGING_CACHE_BYTES);
+    }
+
+    /// The largest staging buffer one piece of a read uses: the largest
+    /// power of two within the device's buffer limit and
+    /// [`READ_STAGING_BYTES`], less the 16 fault bytes.
+    #[test]
+    fn a_read_piece_fits_the_limit_and_the_staging_cap() {
+        assert_eq!(read_piece(u64::MAX), READ_STAGING_BYTES - 16);
+        assert_eq!(read_piece(1 << 30), READ_STAGING_BYTES - 16);
+        assert_eq!(read_piece((1 << 20) + 5), (1 << 20) - 16);
+        assert_eq!(read_piece(3 << 10), (2 << 10) - 16);
+        const { assert!(READ_STAGING_BYTES <= STAGING_CACHE_BYTES) };
+        for max in [1u64 << 10, 3 << 10, 1 << 20, (1 << 28) + 12, u64::MAX] {
+            let piece = read_piece(max);
+            assert_eq!(piece % 4, 0, "{max}");
+            assert!(
+                staging_size(piece + 16) <= max.min(READ_STAGING_BYTES),
+                "{max}"
+            );
+        }
+    }
+
+    /// The probe reports the adapter's type, what its caches may keep idle
+    /// (the pool and the staging cache), and no device memory size: wgpu
+    /// has none to give.
     #[test]
     fn the_memory_probe_reports_what_wgpu_knows() {
         use ojas_device::{MemoryProbe, MemoryReport};
         let ctx = WgpuContext::open().expect("wgpu adapter");
         let m = ctx.memory();
-        assert_eq!(m.pool_cache_cap, POOL_CAP_BYTES);
+        assert_eq!(m.pool_cache_cap, POOL_CAP_BYTES + STAGING_CACHE_BYTES);
         assert_eq!(m.memory_bytes(), MemoryReport::Unknown);
         assert_eq!(m.kind(), Device::Vulkan);
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

@@ -1136,7 +1136,15 @@ fn ce_at_offset(
     let targets: Vec<u32> = targets_i.iter().map(|&t| t as u32).collect();
     let row_ids: Vec<u32> = (0..rows as u32).collect();
     let chunk = ce_chunk(vocab as u32);
-    let ws = CeWorkspace::new(rt, rows as u32, hs as u32, chunk, DType::F32).map_err(metal)?;
+    let ws = CeWorkspace::new(
+        rt,
+        rows as u32,
+        hs as u32,
+        chunk,
+        DType::F32,
+        GemmOperands::ExactF32,
+    )
+    .map_err(metal)?;
     let slab = zeros(rt, &[DH_PAD + rows * hs])?;
     let sentinel = vec![7.0f32; DH_PAD + rows * hs];
     slab.write_f32(&sentinel).map_err(metal)?;

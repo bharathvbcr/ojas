@@ -183,6 +183,10 @@ pub struct Session {
     /// Parameter tensors in the model.
     pub tensors: u32,
     pub device: DeviceKind,
+    /// The bytes the session's budget allows: the caller's number, or less
+    /// when the device plan cut it to what the device has room for
+    /// (`model::open`).
+    pub budget_bytes: u64,
     state: Arc<Mutex<ModelState>>,
 }
 
@@ -193,6 +197,7 @@ impl std::fmt::Debug for Session {
             .field("path", &self.path)
             .field("tensors", &self.tensors)
             .field("device", &self.device)
+            .field("budget_bytes", &self.budget_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -331,6 +336,7 @@ pub fn insert(
     path: Option<PathBuf>,
     tensors: u32,
     device: DeviceKind,
+    budget_bytes: u64,
     state: ModelState,
 ) -> Result<Session, String> {
     let mut table = lock();
@@ -342,6 +348,7 @@ pub fn insert(
         path,
         tensors,
         device,
+        budget_bytes,
         state: Arc::new(Mutex::new(state)),
     };
     table.sessions.insert(id, session.clone());

@@ -65,6 +65,10 @@ The user's current focus is LoRA fine-tuning on the Mac (Metal), run by sibling 
 - The real-2B Metal Tape run moved to gp-qwen35-2b-metal-tape-run at P1, because it is on the fine-tune path. The other runs stay P2.
 - Fine-tune briefs that depend on this one: gp-ft-step-memory-and-throughput.
 
+### Handed over by gp-device-memory-probes (2026-10-10)
+- `WaitCounts` gained `freed` (frees past the memory cap wait for a commit). One release run of 3 steps per tree, not interleaved, at nanolab 124M B=4 T=1024 K=4 on a 16 GiB budget: HEAD mem_cap 41, total 47; with the change mem_cap 38, freed 7, total 51; 3.65-3.66 s a step on both. The quiet interleaved run here should carry the `freed` column.
+- `ojas-model/tests/metal_waits.rs` `nanolab_124m_step_waits_by_trigger` (ignored, release) fails on HEAD b146559 and with the change alike: 4 upload waits a step where it asserts 0. The ids and targets are 16 KiB each and fit `inline_upload_fits` (ojas-metal/src/device.rs), so another per-micro-batch upload is the likely one, perhaps one over the 64 KiB inline limit; inferred, not traced. `WaitCounts` records no sizes, so `upload` needs instrumenting to find it.
+
 ## Acceptance criteria
 - [ ] The v1 acceptance run is executed and recorded: Metal 124M (ModelSpec::nanolab_124m) against PyTorch nanolab per docs/framework-design.md section 10 (fp32, compile off, B=4 K=4 T=1024, warmup 30, cosine over 300 steps, shared init.safetensors and dumped batch starts, NS5 patched to fp32), with every pass criterion in that table reported as met or missed; results committed under bench/results/ and README/docs/status.md stop saying no full 124M run is recorded
 - [ ] A full quiet GPU-vs-torch re-run is committed under bench/results/ with spread per row; rows still over 10% are marked as such in docs

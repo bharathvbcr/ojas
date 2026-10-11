@@ -425,7 +425,7 @@ pub(crate) fn create(
     }
     let state = model::state_on(opened, lease, check, build)?;
     let tensors = state.engine.tensors()?;
-    session::insert(path, tensors, placement.device, state)
+    session::insert(path, tensors, placement.device, budget, state)
 }
 
 /// LOAD: `{path, device?, threads?, budget?, numerics?}`.

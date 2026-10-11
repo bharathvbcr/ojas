@@ -356,61 +356,6 @@ mod tests {
         assert_ne!(p.pressure, MemoryPressure::Unknown);
     }
 
-    /// Live, on a real kernel: in a cgroup whose `memory.high` sits far
-    /// below what one thread keeps touching, the kernel throttles that
-    /// thread and charges the stall to the cgroup's PSI, and the probe must
-    /// read `Critical`, the level `E_PRESSURE` admission refuses at. Run in
-    /// the Linux container (`--memory=1g --cgroup-conf=memory.high=96m`)
-    /// with `OJAS_EXPECT_PRESSURE=critical` and `--ignored`; the hog stops
-    /// after 60 s whatever it reads, and `memory.max` bounds what it holds.
-    #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore]
-    fn live_pressure_reaches_critical_under_a_throttled_cgroup() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        use std::time::{Duration, Instant};
-        if std::env::var("OJAS_EXPECT_PRESSURE").as_deref() != Ok("critical") {
-            eprintln!("SKIP: set OJAS_EXPECT_PRESSURE=critical in a throttled cgroup");
-            return;
-        }
-        let stop = Arc::new(AtomicBool::new(false));
-        let hog = {
-            let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
-                const BYTES: usize = 256 << 20;
-                while !stop.load(Ordering::Relaxed) {
-                    let mut v = vec![0u8; BYTES];
-                    for page in v.chunks_mut(4096) {
-                        page[0] = 1;
-                        if stop.load(Ordering::Relaxed) {
-                            break;
-                        }
-                    }
-                    std::hint::black_box(&v);
-                }
-            })
-        };
-        let deadline = Instant::now() + Duration::from_secs(60);
-        let mut seen = Vec::new();
-        let level = loop {
-            std::thread::sleep(Duration::from_millis(500));
-            let level = probe_pressure();
-            seen.push(level);
-            if level == MemoryPressure::Critical || Instant::now() >= deadline {
-                break level;
-            }
-        };
-        stop.store(true, Ordering::Relaxed);
-        hog.join().expect("hog");
-        let cgroup = crate::host::read_text("/sys/fs/cgroup/memory.pressure");
-        eprintln!(
-            "after {} readings: {level:?}; cgroup memory.pressure: {cgroup:?}",
-            seen.len()
-        );
-        assert_eq!(level, MemoryPressure::Critical, "readings: {seen:?}");
-    }
-
     fn psi(some: &str, full: Option<&str>) -> String {
         let mut text = format!("some avg10={some} avg60=0.00 avg300=0.00 total=12345\n");
         if let Some(full) = full {
