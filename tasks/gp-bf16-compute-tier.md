@@ -146,6 +146,11 @@ Open, and why (status review):
 - Throughput of wgpu bf16 NS5 against f32 was not measured.
 - Pre-fix evidence is inferred, not run [I]: the new wgpu tests were not run against the pre-change code. At HEAD, muon.rs asserted Unsupported for Ns5Precision::Bf16 and passed, and the four deleted refuse_bf16_operands calls returned Unsupported for any Bf16 operand.
 - Collision check, 2026-10-11 [V]. gitpulse_collision_risk reports 0 overlaps, but it compares uncommitted changes only, so it cannot see this branch's commits. A manual comparison with the sibling worktree found two files touched by both branches, in different hunks: ojas-io/tests/half_float.rs and Cargo.lock. The sibling also cherry-picked 1aa85b6 as 0eb4c2d.
+- 2026-10-11, after review [V]. The sibling session reported that its Metal lanes pass bf16_operand_contract on Metal (192/15/26), on its branch (ft-3cc9ed3f, in review). It also flagged that Autocast::prep_matmul made a 2-byte to_bf16 copy which every backend then widened into 4 more bytes. Fable ruled to fold prep_matmul into prep. That is 749f979: the region now rounds in F32 storage on every backend, and a caller-held Bf16 tensor still passes through.
+  - New test: a_region_rounds_in_f32_storage_even_when_the_backend_takes_bf16 failed before the fix and passes after.
+  - Every workspace test with "autocast" in its name passes, and the oracle, model and wgpu bf16 tests pass. clippy is clean.
+  - B=8 re-run (bench/results/2026-10-10-bf16-memory/rows-2026-10-11.jsonl): the bf16 region's peak is 10.46 GiB on wgpu (was 10.64) and 10.50 GiB on CPU (was 10.53). Losses are unchanged.
+- Follow-ups noted, not filed by this session: ft-69744e54, filed by the sibling, needs a contract change in this tier (a bf16 tied embedding table: embedding_forward and linear_cross_entropy_mean taking Bf16).
 - Follow-ups not filed: a tape that keeps matmul-class operands as Bf16 (the activation-memory lever); tessl's Qwen35Grads::zeros_like gives a bf16 model a bf16 gradient bank (qwen35_train.rs:132-139, flagged by the sibling session).
 
 ### Execution plan

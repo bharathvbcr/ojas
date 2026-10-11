@@ -87,3 +87,23 @@ non-zero fault count. Under the amended rule every row fits.
 - The fine-tune shapes: Qwen3.5 0.8B and 2B with a frozen bf16 base at
   T = 2048 and T = 9,638. That brief owns them.
 - Activation checkpointing on. The `off` rows already fit at B = 8.
+
+## 2026-10-11: after `749f979` (the region rounds in F32 storage)
+
+The rows above ran with Autocast making a `Bf16` copy of each matmul-class
+operand on a backend that takes bf16 operands. The op then widened that copy
+into 4-byte scratch. `749f979` makes the copy a rounded `F32` one on every
+backend. The B = 8 rows on the two affected backends were re-run under the
+same command at a load of 11.8 (`rows-2026-10-11.jsonl`):
+
+| backend | prec | B | peak GiB | before (10-10) | footprint GiB | majflt | swaps | po | so | s/step |
+|---|---|---|---|---|---|---|---|---|---|---|
+| wgpu | f32 | 8 | 10.40 | 10.40 | 12.38 | 51 | 0 | 0 | 0 | 4.22, 4.17, 4.16 |
+| wgpu | bf16 | 8 | 10.46 | 10.64 | 14.21 | 1 | 0 | 0 | 0 | 4.38, 4.33, 4.33 |
+| cpu | f32 | 8 | 10.45 | 10.45 | 10.86 | 4 | 0 | 0 | 0 | 15.15, 14.52, 12.09 |
+| cpu | bf16 | 8 | 10.50 | 10.53 | 11.00 | 0 | 0 | 0 | 0 | 15.86, 15.55, 15.10 |
+
+The bf16 region's extra peak over f32 falls from 0.24 to 0.06 GiB on wgpu,
+which now matches Metal's (that row rounded in `F32` storage on 10-10). On
+the CPU it falls from 0.08 to 0.05 GiB. The losses are the 10-10 bits, as the
+operand contract says they must be. Every row fits without paging.
