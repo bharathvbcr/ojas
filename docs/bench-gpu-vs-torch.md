@@ -56,8 +56,9 @@ accumulation. torch's `_bf16` rows are nanolab's unchanged
   Newton-Schulz is discontinuous in its input, so two bf16 runs that sum
   their GEMMs in different orders differ by about this much
   (`ojas-oracle/src/parity.rs`, `TRACE_BF16_PARAM_NORMWISE_REL_TOL`).
-- wgpu refuses `Ns5Precision::Bf16` (`Unsupported`), and each of its
-  `_bf16` rows records the refusal.
+- wgpu refused `Ns5Precision::Bf16` (`Unsupported`) at this run, and each
+  of its `_bf16` rows records the refusal. wgpu runs it since 2026-10-10
+  (gp-bf16-compute-tier); these rows were not re-measured.
 - On CPU there is no bf16 GEMM to use: Accelerate's `sgemm` is f32, so the
   bf16 path is the f32 GEMMs plus rounding passes and is slower. From
   `ojas-cpu/tests/bench_ops.rs` (`muon_*_bf16`, 6 threads, best of three

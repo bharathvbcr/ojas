@@ -43,6 +43,19 @@ fn raise() {
 fn report(x: f32) { if (nonfinite(x)) { raise(); } }
 fn flat_group(wg: vec3<u32>, nwg: vec3<u32>) -> u32 { return wg.y * nwg.x + wg.x; }
 
+// f32 bits to bf16 bits, round to nearest even (ojas_core::f32_to_bf16): a
+// NaN keeps its sign and top payload bits and gets the quiet bit 0x0040, so
+// a payload only in the dropped bits stays NaN. The largest non-NaN
+// magnitude with the sign bit set plus the round increment does not wrap.
+fn bf16_bits(w: u32) -> u32 {
+    if ((w & 0x7fffffffu) > 0x7f800000u) {
+        return (w >> 16u) | 0x0040u;
+    }
+    return (w + 0x7fffu + ((w >> 16u) & 1u)) >> 16u;
+}
+// Round an f32 to bf16 and widen it back.
+fn bf16_round(v: f32) -> f32 { return bitcast<f32>(bf16_bits(bitcast<u32>(v)) << 16u); }
+
 // Same branch split as the CPU reference, so neither side overflows exp().
 fn sigmoid(x: f32) -> f32 {
     if (x >= 0.0) {

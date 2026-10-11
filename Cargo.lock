@@ -723,6 +723,7 @@ dependencies = [
  "ojas-cpu",
  "ojas-device",
  "ojas-kernels",
+ "ojas-oracle",
  "pollster",
  "wgpu",
 ]

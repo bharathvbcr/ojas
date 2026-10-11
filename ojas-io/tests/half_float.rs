@@ -244,3 +244,42 @@ fn header_dtype_strings_are_exactly_bf16_and_f16() {
     bytes.extend_from_slice(&[0, 0, 0]);
     assert!(SafeTensors::parse(&bytes).is_err());
 }
+
+/// The NaN rule, decided 2026-10-10 (gp-bf16-compute-tier): every host bf16
+/// encoder is `ojas_core::f32_to_bf16` and keeps the sign and top payload
+/// with the quiet bit set. Torch 2.13 on arm64 (CPU and MPS, measured
+/// 2026-10-10) writes `0x7FC0` for each of these NaNs, so the payload rows
+/// below are where ojas and torch differ on purpose. The f16 rows are
+/// torch's measured outputs: there the two rules agree.
+#[test]
+fn nan_conversion_is_one_rule_at_every_host_encoder() {
+    // (f32 bits, ojas bf16, torch bf16, ojas == torch f16)
+    let rows: [(u32, u16, u16, u16); 5] = [
+        (0x7fc0_0000, 0x7fc0, 0x7fc0, 0x7e00),
+        (0xffc0_0000, 0xffc0, 0x7fc0, 0xfe00),
+        (0x7f80_0001, 0x7fc0, 0x7fc0, 0x7e00),
+        (0x7fa1_2345, 0x7fe1, 0x7fc0, 0x7f09),
+        (0xffd2_b4c6, 0xffd2, 0x7fc0, 0xfe95),
+    ];
+    let values: Vec<f32> = rows.iter().map(|r| f32::from_bits(r.0)).collect();
+    let bf = encode_f32_as(StDtype::BF16, &values).unwrap();
+    let hf = encode_f32_as(StDtype::F16, &values).unwrap();
+    for (i, &(bits, ours, torch, half)) in rows.iter().enumerate() {
+        let v = f32::from_bits(bits);
+        assert_eq!(f32_to_bf16(v), ours, "{bits:#010x}");
+        assert_eq!(ojas_core::f32_to_bf16(v), ours, "{bits:#010x} ojas-core");
+        assert_eq!(
+            u16::from_le_bytes([bf[2 * i], bf[2 * i + 1]]),
+            ours,
+            "{bits:#010x} safetensors bf16"
+        );
+        assert_eq!(f32_to_f16(v), half, "{bits:#010x} f16");
+        assert_eq!(
+            u16::from_le_bytes([hf[2 * i], hf[2 * i + 1]]),
+            half,
+            "{bits:#010x} safetensors f16"
+        );
+        // The documented divergence: torch keeps neither sign nor payload.
+        assert_eq!(ours == torch, ours == 0x7fc0, "{bits:#010x}");
+    }
+}

@@ -30,3 +30,5 @@ cargo run -q --release --manifest-path "$ORACLE/../Cargo.toml" -p ojas-oracle \
 "$PY" "$ORACLE/python/golden.py" fixtures --dir "$F"
 # 6. one stock nanolab Muon step (bf16 NS5) per case
 "$PY" "$ORACLE/python/muon_step.py" --out "$F/muon_step_bf16.safetensors"
+# 7. torch's own autocast-bf16 vs f32 loss gap on the f32-NS5 trace
+"$PY" "$ORACLE/python/golden.py" autocast-gap --dir "$F"

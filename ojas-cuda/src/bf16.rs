@@ -1,27 +1,22 @@
 //! bf16 on the host: round-to-nearest-even from f32, and the exact widening.
 //!
-//! The algorithm is tessl's (`tessl/src/tensor.rs:641-654`), bit for bit, and
-//! the device cast kernel (`qd_cast_f32_to_bf16` in [`crate::kernels`]) is the
-//! same integer sequence. A NaN keeps its sign and its top payload bits and is
+//! Both are `ojas_core`'s ([`ojas_core::f32_to_bf16`],
+//! [`ojas_core::bf16_to_f32`]), the one host rule every ojas crate shares; it
+//! is tessl's (`tessl/src/tensor.rs:641-654`) bit for bit, and the device
+//! cast kernel (`qd_cast_f32_to_bf16` in [`crate::kernels`]) is the same
+//! integer sequence. A NaN keeps its sign and its top payload bits and is
 //! quieted (bit 6 of the bf16 set), so a NaN whose payload sits entirely in
 //! the discarded low half stays a NaN. Finite values round to nearest, ties
 //! to even; a value at or past `max + half an ulp` rounds to infinity.
 
 /// f32 to bf16 bits, round-to-nearest-even, NaNs quieted.
 pub fn f32_to_bf16_bits(x: f32) -> u16 {
-    let bits = x.to_bits();
-    if bits & 0x7fff_ffff > 0x7f80_0000 {
-        // NaN: keep sign and top payload, set the quiet bit. The `as` keeps
-        // the low 16 bits of a value already shifted into them.
-        return ((bits >> 16) as u16) | 0x0040;
-    }
-    // Largest non-NaN input is 0xff80_0000 (-inf); + 0x8000 cannot wrap.
-    ((bits + 0x7fff + ((bits >> 16) & 1)) >> 16) as u16
+    ojas_core::f32_to_bf16(x)
 }
 
 /// bf16 bits to f32: exact (bf16 is the top half of an f32).
 pub fn bf16_bits_to_f32(b: u16) -> f32 {
-    f32::from_bits(u32::from(b) << 16)
+    ojas_core::bf16_to_f32(b)
 }
 
 /// `x` rounded to the nearest bf16 and widened back to f32.

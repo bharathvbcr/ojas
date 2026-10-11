@@ -46,7 +46,7 @@ The ranking comes from the call sites in the user's own code (nanolab, the Rust_
 | 6 | Fused or chunked linear + cross-entropy | nanolab, Lappi | Has: `Backend::linear_cross_entropy_mean` tiles rows/vocab without materializing full logits on CPU, Metal and wgpu |
 | 7 | Activations: SiLU/SwiGLU, GELU, ReLU², sigmoid | nanolab | Has: SiLU, GELU, ReLU, Sigmoid, Tanh in `ojas-cpu/src/pointwise.rs` |
 | 8 | AdamW (fused, fp32 master) | all | Has, one tensor per call |
-| 9 | Muon NS5 in bf16, batched | nanolab, sprint | f32 by default on CPU, Metal and wgpu; bf16 (`Ns5Precision::Bf16`) on CPU and Metal, not wgpu; one matrix per call, not batched |
+| 9 | Muon NS5 in bf16, batched | nanolab, sprint | f32 by default on CPU, Metal and wgpu; bf16 (`Ns5Precision::Bf16`) on CPU, Metal and wgpu (wgpu since 2026-10-10); one matrix per call, not batched |
 | 10 | Hand-written LR schedules (cosine, WSD) | all; `lr_scheduler` has 0 sites | Has: `CosineSchedule`, `WsdSchedule`, `LrSchedule` in `ojas-cpu/src/schedule.rs` |
 | 11 | `clip_grad_norm_` | all | Has |
 | 12 | bf16 autocast / bf16 weights | sprint, Lappi | Optional `Autocast` region, off by default. On CPU, Metal and wgpu it rounds matmul-class f32 operands and activation outputs to bf16. Storage, norms, embeddings, the loss and both optimizers stay f32. Checkpoints stay f32; there is no bf16 weight dtype (bf16 compute tier scoped in Task `gp-bf16-compute-tier`) |

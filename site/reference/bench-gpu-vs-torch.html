@@ -180,7 +180,7 @@
 </li>
 <li>The parity gate for Muon rows is 1e-2 of the largest torch value. The bf16 rows sit at 1.9e-3 to 2.9e-3, the f32 rows at 2.9e-7 to 4.9e-7. bf16 Newton-Schulz is discontinuous in its input, so two bf16 runs that sum their GEMMs in different orders differ by about this much (<code>ojas-oracle/src/parity.rs</code>, <code>TRACE_BF16_PARAM_NORMWISE_REL_TOL</code>).
 </li>
-<li>wgpu refuses <code>Ns5Precision::Bf16</code> (<code>Unsupported</code>), and each of its <code>_bf16</code> rows records the refusal.
+<li>wgpu refused <code>Ns5Precision::Bf16</code> (<code>Unsupported</code>) at this run, and each of its <code>_bf16</code> rows records the refusal. wgpu runs it since 2026-10-10 (gp-bf16-compute-tier); these rows were not re-measured.
 </li>
 <li>On CPU there is no bf16 GEMM to use: Accelerate&#39;s <code>sgemm</code> is f32, so the bf16 path is the f32 GEMMs plus rounding passes and is slower. From <code>ojas-cpu/tests/bench_ops.rs</code> (<code>muon_*_bf16</code>, 6 threads, best of three rounds at load 9–14), f32 then bf16: 768x768 9.62 / 13.43 ms (1.40x slower), 2048x768 21.15 / 28.12 ms (1.33x), 3072x768 29.27 / 33.41 ms (1.14x).
 </li>

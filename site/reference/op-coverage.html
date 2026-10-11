@@ -209,7 +209,7 @@
     HiddenMat --&gt; Muon
     OneD --&gt; AdamW</pre></figure>
 <aside class="alert alert-note"><p class="alert-title">Note</p><ul>
-<li><strong>Muon NS5:</strong> nanolab runs the quintic Newton-Schulz iteration in <code>bf16</code> (<code>X = G.bfloat16()</code>). ojas runs it in <code>f32</code> by default on CPU, Metal and wgpu. With <code>MuonNs5Config.ns5 = Ns5Precision::Bf16</code> (<code>TrainConfig.muon_ns5</code>), CPU and Metal run stock nanolab&#39;s bf16 iteration, rounding every intermediate as torch&#39;s eager bf16 ops do; wgpu refuses it with <code>Unsupported</code>. The CPU path is checked against one stock nanolab <code>Muon.step</code> per case (<code>ojas-oracle</code> <code>muon_step_bf16</code>) and against the stock bf16 training trace.
+<li><strong>Muon NS5:</strong> nanolab runs the quintic Newton-Schulz iteration in <code>bf16</code> (<code>X = G.bfloat16()</code>). ojas runs it in <code>f32</code> by default on CPU, Metal and wgpu. With <code>MuonNs5Config.ns5 = Ns5Precision::Bf16</code> (<code>TrainConfig.muon_ns5</code>), CPU, Metal and wgpu run stock nanolab&#39;s bf16 iteration, rounding every intermediate as torch&#39;s eager bf16 ops do (wgpu since 2026-10-10, held to the same fixture at <code>TRACE_BF16_PARAM_NORMWISE_REL_TOL</code>). The CPU path is checked against one stock nanolab <code>Muon.step</code> per case (<code>ojas-oracle</code> <code>muon_step_bf16</code>) and against the stock bf16 training trace.
 </li>
 <li><strong>Value residual:</strong> nanolab blends <code>v</code> with layer 0&#39;s <code>v0</code> <em>before</em> attention: <code>v = (1 - s) * v + s * v0</code>, <code>s = sigmoid(vr_lambda)</code> (<code>nanolab/mixers.py</code>). It is not applied to the attention output.
 </li>

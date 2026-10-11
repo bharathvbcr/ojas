@@ -7,6 +7,9 @@
 //! (bf16 `0x0040`, f16 `0x0200`) set, so a NaN whose payload sits only in
 //! the dropped low bits stays NaN instead of turning into infinity. A quiet
 //! NaN therefore round-trips bit for bit; a signalling NaN comes back quiet.
+//! The f16 rule is torch's on arm64 (2.13, measured 2026-10-10); the bf16
+//! rule is not, where torch writes `0x7FC0` for every NaN
+//! ([`ojas_core::f32_to_bf16`] says why ojas keeps it).
 
 /// `bits << 16`. The rounding lives in `ojas_core` so training and checkpoints share one implementation.
 pub fn bf16_to_f32(bits: u16) -> f32 {

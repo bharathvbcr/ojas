@@ -76,7 +76,7 @@ flowchart TD
 ```
 
 > [!NOTE]
-> * **Muon NS5:** nanolab runs the quintic Newton-Schulz iteration in `bf16` (`X = G.bfloat16()`). ojas runs it in `f32` by default on CPU, Metal and wgpu. With `MuonNs5Config.ns5 = Ns5Precision::Bf16` (`TrainConfig.muon_ns5`), CPU and Metal run stock nanolab's bf16 iteration, rounding every intermediate as torch's eager bf16 ops do; wgpu refuses it with `Unsupported`. The CPU path is checked against one stock nanolab `Muon.step` per case (`ojas-oracle` `muon_step_bf16`) and against the stock bf16 training trace.
+> * **Muon NS5:** nanolab runs the quintic Newton-Schulz iteration in `bf16` (`X = G.bfloat16()`). ojas runs it in `f32` by default on CPU, Metal and wgpu. With `MuonNs5Config.ns5 = Ns5Precision::Bf16` (`TrainConfig.muon_ns5`), CPU, Metal and wgpu run stock nanolab's bf16 iteration, rounding every intermediate as torch's eager bf16 ops do (wgpu since 2026-10-10, held to the same fixture at `TRACE_BF16_PARAM_NORMWISE_REL_TOL`). The CPU path is checked against one stock nanolab `Muon.step` per case (`ojas-oracle` `muon_step_bf16`) and against the stock bf16 training trace.
 > * **Value residual:** nanolab blends `v` with layer 0's `v0` *before* attention: `v = (1 - s) * v + s * v0`, `s = sigmoid(vr_lambda)` (`nanolab/mixers.py`). It is not applied to the attention output.
 > * **AdamW:** Follows PyTorch single-tensor order (weight decay applied before gradient update; bias correction computed; $\varepsilon = 10^{-8}$ added **outside** the square root).
 

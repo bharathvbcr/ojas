@@ -27,6 +27,7 @@ const TRACE_F32: &[u8] = include_bytes!("../fixtures/tiny/trace_ns5_f32.safetens
 const TRACE_BF16: &[u8] = include_bytes!("../fixtures/tiny/trace_ns5_bf16.safetensors");
 const MUON_STEP_BF16: &[u8] = include_bytes!("../fixtures/tiny/muon_step_bf16.safetensors");
 const LR_SCHEDULES: &str = include_str!("../fixtures/tiny/lr_schedules.json");
+const AUTOCAST_GAP: &str = include_str!("../fixtures/tiny/autocast_gap.json");
 const BATCH_STARTS: &str = include_str!("../fixtures/tiny/batch_starts.json");
 const TOKENS: &[u8] = include_bytes!("../fixtures/tiny/tokens.bin");
 
@@ -833,6 +834,65 @@ pub fn lr_schedules() -> Result<LrSchedules, OjasError> {
     }
     Ok(LrSchedules {
         cases,
+        provenance: Provenance::from_meta(meta)?,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// torch's autocast-bf16 loss gap
+// ---------------------------------------------------------------------------
+
+/// `autocast_gap.json` (`golden.py autocast-gap`): the f32-NS5 trace's
+/// per-step mean losses, plain and with each micro-batch forward under
+/// torch's CPU bf16 autocast. It sizes the bf16 tier's divergence bound
+/// ([`crate::parity::autocast_divergence_bound`]).
+#[derive(Clone, Debug)]
+pub struct AutocastGap {
+    pub f32_mean_loss: Vec<f64>,
+    pub bf16_mean_loss: Vec<f64>,
+    pub provenance: Provenance,
+}
+
+impl AutocastGap {
+    /// `|bf16 - f32|` per step.
+    pub fn gaps(&self) -> Vec<f64> {
+        self.f32_mean_loss
+            .iter()
+            .zip(&self.bf16_mean_loss)
+            .map(|(a, b)| (a - b).abs())
+            .collect()
+    }
+}
+
+/// Refuses a file whose op, step count or loss lengths disagree, or whose
+/// plain run is not the f32-NS5 trace's own curve (the two runs must share
+/// the trace's config, batches and init).
+pub fn tiny_autocast_gap() -> Result<AutocastGap, OjasError> {
+    let meta = Meta::parse(AUTOCAST_GAP)?;
+    if meta.str("op")? != "autocast_gap" {
+        return Err(bad("autocast_gap.json op is not autocast_gap"));
+    }
+    let steps = meta.count("steps")?;
+    let losses = |key: &str| -> Result<Vec<f64>, OjasError> {
+        let v = meta.numbers(key)?;
+        if v.len() != steps || v.iter().any(|x| !x.is_finite()) {
+            return Err(bad(&format!(
+                "autocast_gap {key} has {} finite values, need {steps}",
+                v.len()
+            )));
+        }
+        Ok(v)
+    };
+    let f32_mean_loss = losses("f32_mean_loss")?;
+    let bf16_mean_loss = losses("bf16_mean_loss")?;
+    if f32_mean_loss != tiny_trace(Ns5::F32)?.mean_loss {
+        return Err(bad(
+            "autocast_gap f32 run is not the f32-NS5 trace's mean loss",
+        ));
+    }
+    Ok(AutocastGap {
+        f32_mean_loss,
+        bf16_mean_loss,
         provenance: Provenance::from_meta(meta)?,
     })
 }

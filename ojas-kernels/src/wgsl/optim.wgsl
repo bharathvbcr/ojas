@@ -119,6 +119,48 @@ fn muon_normalize(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups)
     y0[i] = v;
 }
 
+// Ns5Precision::Bf16, nanolab's `X = G.bfloat16()` iteration: every value
+// is rounded to bf16 where torch's eager bf16 op rounds it (the CPU
+// reference, ojas-cpu/src/optim.rs `newton_schulz`). The GEMMs stay the f32
+// ones: their operands are bf16 values, whose products are exact in f32.
+//
+// muon_normalize_bf16: words and bindings as muon_normalize, with
+// denom = r(r(norm) + eps) and y0 = r(x0 / denom).
+@compute @workgroup_size(256, 1, 1)
+fn muon_normalize_bf16(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = flat_group(wg, nwg) * 256u + lid.x;
+    if (i >= pw(0u)) { return; }
+    let denom = bf16_round(bf16_round(bitcast<f32>(status_in[0])) + pf(1u));
+    if (status_in[1] != 0u || nonfinite(denom) || denom == 0.0) {
+        raise();
+        return;
+    }
+    let v = bf16_round(x0[i] / denom);
+    report(v);
+    y0[i] = v;
+}
+
+// Words: 0 n. y0 = r(y0), in place.
+@compute @workgroup_size(256, 1, 1)
+fn muon_round(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = flat_group(wg, nwg) * 256u + lid.x;
+    if (i >= pw(0u)) { return; }
+    let v = bf16_round(y0[i]);
+    report(v);
+    y0[i] = v;
+}
+
+// Words: 0 n, 1 s0, 2 s1. y0 = r(r(s0 * x0) + r(s1 * x1)). With s1 = 1 and
+// x1 already bf16, r(s1 * x1) = x1: the `a X + B X` step.
+@compute @workgroup_size(256, 1, 1)
+fn muon_lincomb_bf16(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = flat_group(wg, nwg) * 256u + lid.x;
+    if (i >= pw(0u)) { return; }
+    let v = bf16_round(bf16_round(pf(1u) * x0[i]) + bf16_round(pf(2u) * x1[i]));
+    report(v);
+    y0[i] = v;
+}
+
 // Words: 0 n, 1 s0, 2 s1. y0 = s0 * x0 + s1 * x1.
 @compute @workgroup_size(256, 1, 1)
 fn muon_lincomb(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {

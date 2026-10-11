@@ -20,3 +20,4 @@ pollster = "=1.0.1"
 
 [dev-dependencies]
 ojas-cpu = { path = "../ojas-cpu" }
+ojas-oracle = { path = "../ojas-oracle" }
