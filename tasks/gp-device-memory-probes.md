@@ -1,7 +1,7 @@
 ---
 id: "gp-device-memory-probes"
 title: "Honest device memory: uncharged Metal hybrid-op copies and wgpu staging, Linux PSI runner, plan-down visible to callers"
-status: ready
+status: done
 priority: 1
 severity: high
 type: bug
@@ -47,7 +47,7 @@ Honest device memory: uncharged Metal hybrid-op copies and wgpu staging, Linux P
 
 Task: gp-device-memory-probes
 Type: bug
-Status: ready
+Status: done
 Priority: 1 (High)
 Severity: high
 Owner: unassigned
@@ -98,21 +98,33 @@ The user's current focus is LoRA fine-tuning on the Mac (Metal), run by sibling 
 - Kept P1: uncharged Metal copies make the fine-tune's memory plan wrong.
 - Fine-tune briefs that depend on this one: gp-ft-bf16-frozen-base, gp-ft-trainer-loop, gp-ft-step-memory-and-throughput.
 
+### Landed (2026-10-10, worktree honest-device-memory-uncharged-metal-hyb-44d9debd)
+Full record: docs/adaptive-resources.md, "Honest device memory (2026-10-10)" (findings J1-J6, changes K1-K6, verification, gaps).
+
+- Metal hybrid-op, GEMM-alignment and split-decode copies are charged by one `ReadAs` rule the device and the backend share; failing first in ojas-metal/tests/charged_temporaries.rs.
+- Frees past the memory cap wait for a commit (`Wait::Freed`) and the module-doc bound counts them; failing first in ojas-metal/tests/freed_buffers.rs.
+- wgpu reads go in pieces of at most 32 MiB staging; `pool_cache_cap` reports pool plus staging cache.
+- LOAD, NEW and RESUME reply `id, tensors, budget` (20 bytes); Go `LoadModelInfo`, `NewModelInfo`, `ResumeInfo`; `with_budget` documented as the production path.
+- scripts/linux_device_check.sh: Normal when idle; Critical, `E_PRESSURE` on NEW and FREE still running under a throttled sibling cgroup.
+- The wgpu OOM criterion is met by delegation: its error class is gp-oom-error-class's, as the criterion says.
+- ojas builds against tessl main again (`ce_at_offset` passes `GemmOperands::ExactF32` to `CeWorkspace::new`), and every suite above was re-run on tessl main d0b1792. The never-green same-cgroup live test in ojas-device was removed; the capi runner test owns the live probe.
+- Handed to gp-long-runs-and-quiet-benches: the `freed` column of the 124M wait split, and `nanolab_124m_step_waits_by_trigger` failing on HEAD (4 upload waits a step).
+
 ## Acceptance criteria
 - [x] A failing test first: a Metal session whose caller budget exceeds the device's recommended working set is planned down to device_room (or refused), not run on the caller's number
 - [x] ojas-capi load and profile pass the session backend's MemoryProbe to ResourcePlan::derive instead of `&[] as &[NoProbe]`
 - [x] wgpu implements MemoryProbe from what the adapter reports (limits/allocator info), or the plan records 'unknown' explicitly and that is visible in the profile output; never silently the default budget
 - [x] Unified-memory devices take the shared_budget path, proven by a test on Apple silicon
 - [x] The Go profile/describe output shows which probe was used and the room it reported
-- [ ] Linux reports memory pressure: PSI and architecture code exists (ojas-device/src/system.rs:76-91, 197-254); a committed podman (or CI) Linux runner proves E_PRESSURE admission and probe_architecture there, instead of the one-off manual run recorded in the doc
+- [x] Linux reports memory pressure: PSI and architecture code exists (ojas-device/src/system.rs:76-91, 197-254); a committed podman (or CI) Linux runner proves E_PRESSURE admission and probe_architecture there, instead of the one-off manual run recorded in the doc
 - [x] Idle GPU pools are bounded and charged or trimmable: MetalBackend's Worker::open (ojas-metal/src/device.rs:368-409) never calls set_pool_cache_cap_bytes, so tessl's 2 GiB default pool cache sits outside the Budget (only the legacy gpu.rs:325 session caps it, at 64 MiB); Metal gains a trim like wgpu's trim_pool, and the cap is recorded in the plan
 - [x] The Metal budget charges what the device actually allocates, or the gap is bounded and documented: ojas-metal/src/backend.rs:298-300 reserves elems*4 while the pool can round up to 2x (docs/framework-design.md:155, docs/adaptive-resources.md:253)
-- [ ] wgpu recovers from an allocation OOM by recycling the pool and retrying once (exists, ojas-wgpu/src/context.rs:928-955); the error class it ends with is fixed in gp-oom-error-class
+- [x] wgpu recovers from an allocation OOM by recycling the pool and retrying once (exists, ojas-wgpu/src/context.rs:928-955); the error class it ends with is fixed in gp-oom-error-class
 - [x] A wgpu Queue::drop that times out (DROP_WAIT 2 s, ojas-wgpu/src/context.rs:47) no longer leaks a queue, a device and a thread (docs/pytorch-parity-plan.md:196), or the leak is bounded, counted and reported
-- [ ] A failing budget test first: Metal hybrid ops charge the copies they make for offset views. Worker::whole (ojas-metal/src/device.rs:2123-2130) calls fresh(v.n) (uncharged, :762-771) for any operand with off != 0 (uses at :2158, :2183, :2215, :2249), while the forwards charge 0 scratch (backend.rs:1576) and the backwards only `part`; ojas-metal/tests/hybrid.rs:261 tests the bits of offset operands but not the budget
-- [ ] wgpu staging memory is charged and reported: the 64 MiB staging cache and the next-power-of-two readback buffer (span+16 rounded up, context.rs:1386, :1610-1612; a 256 MiB read allocates 512 MiB) count against the session budget or are bounded and documented; a read larger than about half of max_buffer_size, which fails outright today, is chunked
-- [ ] A session budget planned down to the device room is visible in the LOAD reply (ojas-capi/src/engine.rs:122-127 drops it today); MetalBackend::with_budget, documented as test-only but used by ojas-capi/src/model.rs:248 on the production path, has its doc corrected
-- [ ] Metal's documented device-memory bound (backend.rs:28-29: live + rounding + pool cap + slab) accounts for buffers freed since the last waited commit: a MetalBuffer drop posts Free and releases its budget charge at once (backend.rs:115-118), while the buffer returns to tessl's pool only at the next waited commit (device.rs:684-690, 736-741); the bound is corrected or the free is deferred until then
+- [x] A failing budget test first: Metal hybrid ops charge the copies they make for offset views. Worker::whole (ojas-metal/src/device.rs:2123-2130) calls fresh(v.n) (uncharged, :762-771) for any operand with off != 0 (uses at :2158, :2183, :2215, :2249), while the forwards charge 0 scratch (backend.rs:1576) and the backwards only `part`; ojas-metal/tests/hybrid.rs:261 tests the bits of offset operands but not the budget
+- [x] wgpu staging memory is charged and reported: the 64 MiB staging cache and the next-power-of-two readback buffer (span+16 rounded up, context.rs:1386, :1610-1612; a 256 MiB read allocates 512 MiB) count against the session budget or are bounded and documented; a read larger than about half of max_buffer_size, which fails outright today, is chunked
+- [x] A session budget planned down to the device room is visible in the LOAD reply (ojas-capi/src/engine.rs:122-127 drops it today); MetalBackend::with_budget, documented as test-only but used by ojas-capi/src/model.rs:248 on the production path, has its doc corrected
+- [x] Metal's documented device-memory bound (backend.rs:28-29: live + rounding + pool cap + slab) accounts for buffers freed since the last waited commit: a MetalBuffer drop posts Free and releases its budget charge at once (backend.rs:115-118), while the buffer returns to tessl's pool only at the next waited commit (device.rs:684-690, 736-741); the bound is corrected or the free is deferred until then
 
 ## Planned files
 - ojas-capi/src/load.rs

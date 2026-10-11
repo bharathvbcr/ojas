@@ -120,7 +120,7 @@ func main() {
 }
 ```
 
-`Resume(ctx, "runs/ckpt", opts, cfg)` continues the run in a new id; `cfg` must equal the saved config. `NewModel(ctx, spec, seed, opts)` starts from a fresh nanolab init. `Inspect(ctx, path)` counts a file's tensors without loading it.
+`Resume(ctx, "runs/ckpt", opts, cfg)` continues the run in a new id; `cfg` must equal the saved config. `NewModel(ctx, spec, seed, opts)` starts from a fresh nanolab init. `Inspect(ctx, path)` counts a file's tensors without loading it. On `DeviceMetal` and `DeviceWgpu` a budget past the device's room is cut to it, never raised: `LoadModelInfo`, `NewModelInfo` and `ResumeInfo` return the model's id with the budget it got (`ModelInfo.BudgetBytes`).
 
 ---
 

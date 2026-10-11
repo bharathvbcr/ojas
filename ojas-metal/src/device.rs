@@ -36,9 +36,9 @@ use tessl::DType;
 
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
-    device_lost, metal_err, norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom,
-    EmbedRows, GdnArgs, LceGeom,
-    Msg, NewBuf, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
+    cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
+    norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, EmbedRows, GdnArgs, LceGeom,
+    Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
 };
 
 const ST_IN: u32 = 0;
@@ -113,23 +113,6 @@ const ATTN_MAX_HEAD_DIM: u32 = 256;
 /// larger than the pipeline allows, so a device that cannot run that many
 /// fails the call rather than running it short.
 const CA_THREADS: usize = 1024;
-/// Threadgroups `ojas_cached_attn` splits the cache walk toward: below it a
-/// decode leaves most of the GPU idle (one threadgroup per head reads at
-/// about 180 GB/s against about 256 batched;
-/// `bench/results/2026-10-04-percall/`).
-const CA_TARGET_GROUPS: usize = 96;
-/// Fewest keys one split walks: two per simdgroup.
-const CA_MIN_KEYS: usize = 64;
-
-/// How many splits `ojas_cached_attn` walks the cache in for `rows`
-/// (query, head, batch) rows over `kv_len` keys: enough to reach
-/// [`CA_TARGET_GROUPS`] threadgroups, each split at least [`CA_MIN_KEYS`]
-/// keys. 1 means one pass and no merge.
-fn cached_attn_splits(rows: usize, kv_len: usize) -> usize {
-    let want = CA_TARGET_GROUPS.div_ceil(rows.max(1));
-    want.min(kv_len / CA_MIN_KEYS).max(1)
-}
-
 /// Every kernel `MetalBackend` dispatches from the crate's metallib. Start-up
 /// fails if one is missing, not the first op that needs it.
 const KERNELS: &[&str] = &[
@@ -344,6 +327,11 @@ struct Book {
     dirty: bool,
     since_overlap: usize,
     alloc_since_wait: u64,
+    /// Bytes of buffers freed ([`Cmd::Free`]) since the last waited
+    /// commit. tessl returns a dropped buffer to its pool only once a
+    /// commit after the drop completes, so these are still on the device
+    /// though their charges are off the budget.
+    freed_since_wait: u64,
     /// Upload bytes carried in tessl's constant arena since the last
     /// waited commit, which is the only point tessl resets the arena.
     inline_since_wait: usize,
@@ -432,6 +420,7 @@ impl Worker {
             dirty: false,
             since_overlap: 0,
             alloc_since_wait: 0,
+            freed_since_wait: 0,
             inline_since_wait: 0,
             inline_uploads: true,
             overlap: OVERLAP_DISPATCHES,
@@ -456,7 +445,7 @@ impl Worker {
     fn serve(&mut self, rx: mpsc::Receiver<Msg>) {
         for msg in rx {
             if let Cmd::Free { id } = msg.cmd {
-                self.bufs.remove(&id);
+                self.free(id);
                 continue;
             }
             if let Cmd::Memory = msg.cmd {
@@ -528,6 +517,7 @@ impl Worker {
     /// except sealed ones. A trigger that fails fails the command, and its
     /// outputs are released.
     fn command(&mut self, cmd: Cmd) -> Res<Reply> {
+        self.recycle_freed()?;
         let id = {
             let mut book = self.book.borrow_mut();
             book.cmd += 1;
@@ -562,6 +552,32 @@ impl Worker {
             book.dirty = true;
             book.since_overlap += n;
         }
+    }
+
+    /// Drop the buffer `id` names. Its bytes count toward [`Wait::Freed`]
+    /// until the next waited commit.
+    fn free(&mut self, id: u64) {
+        if let Some(buf) = self.bufs.remove(&id) {
+            self.book.borrow_mut().freed_since_wait += buf.nbytes() as u64;
+        }
+    }
+
+    /// The trigger checked before each command: buffers freed since the
+    /// last waited commit past the memory cap are recycled by one, so a
+    /// command never allocates while more than the cap of dropped buffers
+    /// still sits on the device. It waits even with nothing recorded:
+    /// what was freed waits for a commit too.
+    fn recycle_freed(&self) -> Res<()> {
+        let (freed, cap) = {
+            let b = self.book.borrow();
+            (b.freed_since_wait, b.mem_cap)
+        };
+        if freed <= cap {
+            return Ok(());
+        }
+        self.note_dispatches();
+        self.book.borrow_mut().dirty = true;
+        self.settle(Scan::All, Wait::Freed)
     }
 
     /// The commit triggers checked between commands: memory (bytes since
@@ -608,6 +624,7 @@ impl Worker {
             book.dirty = false;
             book.since_overlap = 0;
             book.alloc_since_wait = 0;
+            book.freed_since_wait = 0;
             book.inline_since_wait = 0;
         }
         self.scan(scan)
@@ -801,8 +818,11 @@ impl Worker {
 
     /// A GEMM operand: tessl needs a 16-byte aligned offset, so a view that is
     /// not aligned is copied first.
+    /// `v` as an `[r, c]` matrix for tessl's GEMMs, copied first when its
+    /// offset is off their alignment ([`ReadAs::Matrix`]), into memory the
+    /// backend charged as scratch.
     fn mat(&self, v: &V, r: usize, c: usize) -> Res<TT> {
-        if v.off.is_multiple_of(16) {
+        if !copied_at(v.off, ReadAs::Matrix) {
             return self.tt(v, &[r, c]);
         }
         let dst = self.fresh(v.n)?;
@@ -962,7 +982,7 @@ impl Worker {
     fn run(&mut self, cmd: Cmd) -> Res<Reply> {
         match cmd {
             Cmd::Free { id } => {
-                self.bufs.remove(&id);
+                self.free(id);
                 Ok(Reply::Done)
             }
             // `serve` answers it first; kept here so the match stays total.
@@ -2118,23 +2138,21 @@ impl Worker {
         Ok(self.keep(outs))
     }
 
-    /// `v` at offset 0 of its own buffer: tessl's row-local kernels take a
-    /// buffer and a column window, not a byte offset, so a view that does
-    /// not start its buffer is copied first.
-    fn whole(&self, v: V) -> Res<V> {
-        if v.off == 0 {
-            return Ok(v);
-        }
-        let dst = self.fresh(v.n)?;
-        self.copy(&v, &dst)?;
-        Ok(dst)
-    }
-
-    /// The views of `args`, each at offset 0 ([`Self::whole`]).
+    /// The views of `args`, each at offset 0 of its own buffer: tessl's
+    /// row-local kernels take a buffer and a column window, not a byte
+    /// offset, so a view that does not start its buffer ([`ReadAs::Whole`])
+    /// is copied first, into memory the backend charged as scratch.
     fn wholes<const N: usize>(&self, args: [Arg; N]) -> Res<[V; N]> {
         let mut out = Vec::with_capacity(N);
         for a in args {
-            out.push(self.whole(self.view(a)?)?);
+            let v = self.view(a)?;
+            if a.copied(ReadAs::Whole) {
+                let dst = self.fresh(v.n)?;
+                self.copy(&v, &dst)?;
+                out.push(dst);
+            } else {
+                out.push(v);
+            }
         }
         out.try_into()
             .map_err(|_| metal_err("operand count changed"))
@@ -2782,12 +2800,7 @@ impl Worker {
                 "{OP}: {tq} queries over kv_len {kv_len}"
             )));
         }
-        // The first position any query reads: query 0's window start. The
-        // splits cover `origin..kv_len`.
-        let origin = match window {
-            0 => 0,
-            w => (kv_len - tq + 1).saturating_sub(w),
-        };
+        let origin = cached_attn_origin(tq, kv_len, window);
         let span = (kv_len - origin) as usize;
         if d > ATTN_MAX_HEAD_DIM {
             return Err(OjasError::UnsupportedHeadDim {
@@ -2800,14 +2813,12 @@ impl Worker {
         let out = self.fresh(qv.n)?;
         let st = self.status(OP)?;
         let groups = tq as usize * heads as usize;
-        let splits = cached_attn_splits(groups * batch as usize, span);
+        let rows = groups * batch as usize;
+        let splits = cached_attn_splits(rows, span);
         let chunk = u32_of(span.div_ceil(splits))?;
         // Splits > 1 write (max, sum, output) per split here for the merge.
         let part = if splits > 1 {
-            let rows = groups * batch as usize;
-            let n = rows
-                .checked_mul(splits)
-                .and_then(|x| x.checked_mul(d as usize + 2))
+            let n = cached_attn_part(rows, span, d as usize)
                 .ok_or_else(|| metal_err(format!("{OP}: split scratch overflows")))?;
             self.fresh(n)?
         } else {

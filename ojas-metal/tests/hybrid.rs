@@ -43,18 +43,6 @@ fn bits(t: &Tensor) -> Vec<u32> {
     down(t).iter().map(|v| v.to_bits()).collect()
 }
 
-/// `t`'s values inside a larger device buffer, starting `lead` elements in:
-/// a contiguous view whose byte offset is neither zero nor 16-aligned.
-fn offset_view(m: &ojas_metal::MetalBackend, t: &Tensor, lead: usize, seed: u64) -> Tensor {
-    let mut padded = values(lead, seed, 1.0);
-    padded.extend_from_slice(&ok("host", t.to_f32_vec()));
-    padded.extend(values(5, seed + 1, 1.0));
-    let big = up(m, &host(&padded, &[padded.len()]));
-    let v = ok("narrow", big.narrow(lead * 4, t.shape(), t.strides()));
-    assert!(!v.byte_offset().is_multiple_of(16), "offset not exercised");
-    v
-}
-
 /// Qwen3.5's text-only MRoPE tables: interleaved sections, 64 of 256 turn.
 fn qwen_tables(time: usize, rotary: usize) -> (Tensor, Tensor) {
     let half = rotary / 2;

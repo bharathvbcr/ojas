@@ -38,9 +38,13 @@ pub(crate) enum Wait {
     SlabFull,
     /// An allocation failed, and dropped buffers only recycle after a wait.
     Recycle,
+    /// The bytes freed since the last wait passed the memory cap: their
+    /// charges are already off the budget, their buffers still on the
+    /// device until a commit after the free completes.
+    Freed,
 }
 
-const WAIT_KINDS: usize = 8;
+const WAIT_KINDS: usize = 9;
 
 /// Waited commits by [`Wait`] trigger, and the compute dispatches encoded,
 /// shared by the device thread and every handle on it.
@@ -74,6 +78,7 @@ impl Waits {
             working_set: at(Wait::WorkingSet),
             slab_full: at(Wait::SlabFull),
             recycle: at(Wait::Recycle),
+            freed: at(Wait::Freed),
         }
     }
 }
@@ -93,6 +98,7 @@ pub struct WaitCounts {
     pub working_set: u64,
     pub slab_full: u64,
     pub recycle: u64,
+    pub freed: u64,
 }
 
 impl WaitCounts {
@@ -105,6 +111,7 @@ impl WaitCounts {
             + self.working_set
             + self.slab_full
             + self.recycle
+            + self.freed
     }
 
     /// The waits made after `earlier` was taken, trigger by trigger.
@@ -118,6 +125,7 @@ impl WaitCounts {
             working_set: self.working_set.saturating_sub(earlier.working_set),
             slab_full: self.slab_full.saturating_sub(earlier.slab_full),
             recycle: self.recycle.saturating_sub(earlier.recycle),
+            freed: self.freed.saturating_sub(earlier.freed),
         }
     }
 }
@@ -130,6 +138,73 @@ pub(crate) struct Arg {
     pub off: usize,
     /// Element count, at most `u32::MAX`.
     pub n: usize,
+}
+
+/// How a device op reads an operand window, which decides whether it
+/// copies the window to a buffer of its own first ([`copied_at`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadAs {
+    /// tessl's row-local kernels take a buffer and a column window, not a
+    /// byte offset (`Worker::wholes`).
+    Whole,
+    /// tessl's GEMMs take a tensor at a 16-byte-aligned offset
+    /// (`Worker::mat`).
+    Matrix,
+}
+
+/// Whether the device copies a window at byte offset `off` before reading
+/// it `as`. The copy lives for the command, and the backend charges it
+/// with the op's scratch.
+pub(crate) fn copied_at(off: usize, how: ReadAs) -> bool {
+    match how {
+        ReadAs::Whole => off != 0,
+        ReadAs::Matrix => !off.is_multiple_of(16),
+    }
+}
+
+impl Arg {
+    /// [`copied_at`] for this window.
+    pub(crate) fn copied(&self, how: ReadAs) -> bool {
+        copied_at(self.off, how)
+    }
+}
+
+/// Threadgroups `ojas_cached_attn` splits the cache walk toward: below it a
+/// decode leaves most of the GPU idle (one threadgroup per head reads at
+/// about 180 GB/s against about 256 batched;
+/// `bench/results/2026-10-04-percall/`).
+const CA_TARGET_GROUPS: usize = 96;
+/// Fewest keys one split walks: two per simdgroup.
+const CA_MIN_KEYS: usize = 64;
+
+/// How many splits `ojas_cached_attn` walks the cache in for `rows`
+/// (query, head, batch) rows over `kv_len` keys: enough to reach
+/// [`CA_TARGET_GROUPS`] threadgroups, each split at least [`CA_MIN_KEYS`]
+/// keys. 1 means one pass and no merge.
+pub(crate) fn cached_attn_splits(rows: usize, kv_len: usize) -> usize {
+    let want = CA_TARGET_GROUPS.div_ceil(rows.max(1));
+    want.min(kv_len / CA_MIN_KEYS).max(1)
+}
+
+/// The first cached position `ojas_cached_attn` reads for `tq` new queries
+/// over `kv_len` positions: query 0's window start, or 0 with no window.
+/// Its splits cover `origin..kv_len`.
+pub(crate) fn cached_attn_origin(tq: u32, kv_len: u32, window: u32) -> u32 {
+    match window {
+        0 => 0,
+        w => (kv_len.saturating_sub(tq) + 1).saturating_sub(w),
+    }
+}
+
+/// f32 values of the split partials `ojas_cached_attn` writes for its
+/// merge when it splits `rows` rows over `span` keys of head dim `d`: max,
+/// sum and output per row and split, and none with one split. The backend
+/// charges them as scratch; `None` on overflow.
+pub(crate) fn cached_attn_part(rows: usize, span: usize, d: usize) -> Option<usize> {
+    match cached_attn_splits(rows, span) {
+        1 => Some(0),
+        splits => rows.checked_mul(splits)?.checked_mul(d.checked_add(2)?),
+    }
 }
 
 /// A buffer the device thread allocated for an op output.

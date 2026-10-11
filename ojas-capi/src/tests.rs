@@ -1459,6 +1459,60 @@ fn a_ceiling_above_the_machine_is_refused() {
     assert!(err.contains("exceeds this machine"), "{err}");
 }
 
+/// The Linux runner's check (`scripts/linux_device_check.sh`) on a real
+/// kernel: the live probe reads the memory architecture from sysfs and the
+/// pressure from PSI, and the engine's dispatcher admits or refuses an
+/// allocating call by what it reads. `OJAS_EXPECT_PRESSURE` names what the
+/// runner arranged: `normal` (an idle container) or `critical` (a container
+/// where the kernel throttles a sibling cgroup, so an ancestor's PSI is
+/// high while this test runs freely). Either is waited for, up to 60 s,
+/// since PSI averages over 10 s. Ignored by default: it needs that
+/// arrangement, and refuses to run without it.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "run by scripts/linux_device_check.sh"]
+fn linux_runner_admission_follows_the_live_probe() {
+    use ojas_device::{probe_pressure, probe_system, MemoryArchitecture, MemoryPressure};
+    use std::time::{Duration, Instant};
+    let (_g, _dir) = fresh();
+    let expect = std::env::var("OJAS_EXPECT_PRESSURE")
+        .expect("set OJAS_EXPECT_PRESSURE to normal or critical (scripts/linux_device_check.sh)");
+    let want = match expect.as_str() {
+        "normal" => MemoryPressure::Normal,
+        "critical" => MemoryPressure::Critical,
+        other => panic!("OJAS_EXPECT_PRESSURE={other}: expected normal or critical"),
+    };
+    let architecture = probe_system().architecture;
+    assert_ne!(
+        architecture,
+        MemoryArchitecture::Unknown,
+        "sysfs told the probe nothing"
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut seen = probe_pressure();
+    while seen != want && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        seen = probe_pressure();
+    }
+    let psi = std::fs::read_to_string("/sys/fs/cgroup/memory.pressure").unwrap_or_default();
+    println!("live probe: architecture {architecture:?}, pressure {seen:?}; cgroup PSI: {psi:?}");
+    assert_eq!(
+        seen, want,
+        "the probe read {seen:?} for 60 s; cgroup PSI {psi:?}"
+    );
+    // NEW allocates: under critical pressure it is refused before its
+    // payload is read; otherwise the empty payload is what is refused.
+    let err = call(crate::OP_NEW, &[]).unwrap_err();
+    if want == MemoryPressure::Critical {
+        assert!(err.starts_with("ojas:E_PRESSURE: "), "{err}");
+    } else {
+        assert!(!err.contains("E_PRESSURE"), "{err}");
+    }
+    // FREE still runs: its refusal is about the id.
+    let err = call(crate::OP_FREE, &0u64.to_le_bytes()).unwrap_err();
+    assert!(err.contains("unknown model"), "{err}");
+}
+
 /// The auto device's thread count: the plan's ceiling, clamped to
 /// `MAX_CPU_THREADS`, and a refusal (not a guess) when it is unknown.
 #[test]
@@ -2122,15 +2176,17 @@ fn a_metal_budget_past_the_device_working_set_is_planned_down() {
         "the working set {ws} leaves no room under the RAM {limit} to ask past it"
     );
     set_ceiling(caller).unwrap();
-    let s = load::load_request(
+    let reply = call(
+        crate::OP_LOAD,
         &Writer::default()
             .str(tag::PATH, "model.safetensors")
             .u32(tag::DEVICE, load::DEVICE_METAL)
             .u64(tag::BUDGET, caller)
             .finish(),
-        never(),
     )
     .unwrap();
+    let (id, planned) = session_reply(&reply);
+    let s = session::require(id).unwrap();
     let state = s.lock_state().unwrap();
     let cap = match &state.engine {
         crate::model::Engine::Metal(m) => m.backend.budget().cap_bytes(),
@@ -2140,6 +2196,39 @@ fn a_metal_budget_past_the_device_working_set_is_planned_down() {
         cap <= ws,
         "the session budget {cap} is past the device's working set {ws} (caller {caller})"
     );
+    // The caller learns the cut from the reply, not by a failure later.
+    assert_eq!(planned, cap, "the LOAD reply names the planned budget");
+}
+
+/// LOAD, NEW and RESUME's reply: `(id, budget)` from `id: u64, tensors: u32,
+/// budget: u64`.
+pub(crate) fn session_reply(reply: &[u8]) -> (u64, u64) {
+    assert_eq!(reply.len(), 20, "id, tensors, budget: {reply:?}");
+    (
+        u64::from_le_bytes(reply[..8].try_into().unwrap()),
+        u64::from_le_bytes(reply[12..].try_into().unwrap()),
+    )
+}
+
+/// A session the device plan leaves alone replies with the budget it was
+/// given: the caller's number, or the default when the caller named none.
+/// Before, the reply was the id and tensor count only, so a planned-down
+/// budget was invisible to the caller.
+#[test]
+fn the_load_reply_names_the_session_budget() {
+    let (_g, _dir) = fresh();
+    let open = |budget: Option<u64>| {
+        let mut w = Writer::default().str(tag::PATH, "model.safetensors");
+        if let Some(b) = budget {
+            w = w.u64(tag::BUDGET, b);
+        }
+        let (id, got) = session_reply(&call(crate::OP_LOAD, &w.finish()).unwrap());
+        assert_eq!(session::require(id).unwrap().budget_bytes, got);
+        session::try_free(id).unwrap();
+        got
+    };
+    assert_eq!(open(Some(64 << 20)), 64 << 20);
+    assert_eq!(open(None), load::DEFAULT_BUDGET_BYTES);
 }
 
 #[cfg(target_os = "macos")]

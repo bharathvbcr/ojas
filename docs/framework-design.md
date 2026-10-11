@@ -157,7 +157,7 @@ That exceeds `MAX_CHECKPOINT_BYTES = 1 GiB`. `CheckpointV1` also holds every pay
 | B=4 | 4.6 GB | about 6.4 GB | about 7.5 GB |
 | B=16 | 18.5 GB | about 20.3 GB | about 21.4 GB |
 
-The Metal column is the total plus the uncharged pool cache, capped at 1 GiB once a session's budget reaches 4 GiB, plus tessl's rounding: under 16 KiB per buffer past 1 MiB, and under 512 KiB per buffer up to 1 MiB (`ojas-metal/src/backend.rs` module docs). It was 2× when tessl rounded every buffer to a power of two and cached up to 2 GiB.
+The Metal column is the total plus the uncharged pool cache, capped at 1 GiB once a session's budget reaches 4 GiB, plus tessl's rounding: under 16 KiB per buffer past 1 MiB, and under 512 KiB per buffer up to 1 MiB, plus dropped buffers still waiting for a commit to recycle them: under one memory cap (a quarter of the budget, at most 1 GiB) of frees and another of temporaries (`ojas-metal/src/backend.rs` module docs). The column does not count that last term. It was 2× when tessl rounded every buffer to a power of two and cached up to 2 GiB.
 
 v1 runs B=4 × K=16, the same 65,536 tokens per step as nanolab's 16×4, and needs no activation checkpointing. A single B=16 micro-batch needs per-block recompute, which is phase 2. The capi 1 GiB process step budget cannot hold the model state, so training sessions get a per-session `Budget` from the Load options.
 

@@ -24,9 +24,22 @@
 //!   reported as [`crate::MetalMemory::pool_cache_cap`] and set aside from
 //!   the device's room by `ojas_device::ResourcePlan`. [`MetalBackend::trim_pool`]
 //!   releases it, and a failed allocation does so before it gives up.
+//! - Buffers dropped and not yet recycled. A dropped tensor's charge comes
+//!   off the budget at once, but tessl returns its buffer to the pool only
+//!   once a commit after the drop completes (an unwaited commit recycles
+//!   what the GPU has finished; a waited one, everything). The device
+//!   thread counts the bytes freed since the last waited commit and waits
+//!   before a command that would start past the memory cap
+//!   ([`WaitCounts::freed`]). An op's temporaries (its charged scratch,
+//!   dropped when it returns) count toward the bytes allocated since the
+//!   last waited commit, which wait after the command that passes the cap
+//!   ([`WaitCounts::mem_cap`]). The memory cap is a quarter of the budget
+//!   the backend opened with, at most 1 GiB.
 //!
 //! So the device holds at most the budget's live bytes, plus the rounding
-//! above, plus the pool cap, plus the backend's status slab (128 KiB).
+//! above, plus the pool cap, plus the backend's status slab (128 KiB), plus
+//! dropped buffers awaiting a commit: under one memory cap of frees, and
+//! under another of temporaries plus the last command's own.
 //!
 //! Numerics are [`Numerics::Fast`]: GEMMs are tessl TensorOps with their own
 //! reduction order, and reductions are threadgroup trees, not ascending f32.
@@ -78,8 +91,9 @@ use ojas_core::{
 };
 
 use crate::link::{
-    metal_err, norm_chunks, rms_w_chunks, Arg, Cmd, Conv1dGeom, EmbedRows, GdnArgs, LceGeom, Link,
-    Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits,
+    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, Cmd,
+    Conv1dGeom, EmbedRows, GdnArgs, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom,
+    WaitCounts, Waits,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -243,11 +257,13 @@ impl MetalBackend {
     /// Another handle on this backend's device that charges `budget`
     /// instead: it accepts this backend's tensors and shares its device
     /// thread, faults and `sync`, as wgpu's `WgpuBackend::with_context`
-    /// shares a context. The device's memory-cap trigger stays the one set
-    /// from the opening backend's cap. Lets a test hold operands on one
-    /// budget and run an op under another (`tests/shape_first.rs`); not a
-    /// stable API.
-    #[doc(hidden)]
+    /// shares a context. The device's memory cap and pool cache cap stay
+    /// the ones set from the opening backend's budget.
+    ///
+    /// ojas-capi's load uses it on the production path: a session whose
+    /// budget the device plan cuts below the caller's is rebound to the
+    /// smaller budget (`model::open`). Tests use it to hold operands on one
+    /// budget and run an op under another (`tests/shape_first.rs`).
     pub fn with_budget(&self, budget: Budget) -> Self {
         Self {
             link: Arc::clone(&self.link),
@@ -749,6 +765,20 @@ fn gdn_workspace_elems(op: &'static str, d: &GdnDims) -> Res<usize> {
     chunk.checked_add(parts).ok_or_else(|| overflow(op))
 }
 
+/// f32 values the device copies for `args` read `how` ([`Arg::copied`]).
+/// The copies live for the call, so the op charges them with its scratch.
+fn copied_elems(op: &'static str, how: ReadAs, args: &[Arg]) -> Res<usize> {
+    args.iter()
+        .filter(|a| a.copied(how))
+        .try_fold(0usize, |acc, a| acc.checked_add(a.n))
+        .ok_or_else(|| overflow(op))
+}
+
+/// `a + b` scratch values, or the op's overflow error.
+fn plus(op: &'static str, a: usize, b: usize) -> Res<usize> {
+    a.checked_add(b).ok_or_else(|| overflow(op))
+}
+
 fn product(op: &'static str, dims: &[usize]) -> Res<usize> {
     dims.iter()
         .try_fold(1usize, |acc, &d| acc.checked_mul(d))
@@ -882,7 +912,8 @@ impl MetalBackend {
             dh,
             save,
         };
-        let mut out = self.outputs(OP, shapes, units, cmd)?.into_iter();
+        let scratch = plus(OP, units, copied_elems(OP, ReadAs::Matrix, &[x, w])?)?;
+        let mut out = self.outputs(OP, shapes, scratch, cmd)?.into_iter();
         let y = out
             .next()
             .ok_or_else(|| metal_err(format!("{OP}: no output")))?;
@@ -920,8 +951,10 @@ impl MetalBackend {
         let scales = scales.map(|s| self.f32(OP, s)).transpose()?;
         let (rows, din, heads, dh) = gate_params(OP, &dims)?;
         let units = rows as usize * heads as usize;
-        // d_pre, plus the logits when they are recomputed.
-        let scratch = if scales.is_some() { units } else { 2 * units };
+        // d_pre, plus the logits when they are recomputed, plus the GEMM
+        // operands' copies.
+        let pre = if scales.is_some() { units } else { 2 * units };
+        let scratch = plus(OP, pre, copied_elems(OP, ReadAs::Matrix, &[x, w])?)?;
         let mut out = self
             .outputs(
                 OP,
@@ -1261,7 +1294,7 @@ impl Backend for MetalBackend {
         self.one(
             OP,
             &dims.out_shape,
-            0,
+            copied_elems(OP, ReadAs::Matrix, &[x, w])?,
             Cmd::Linear {
                 x,
                 w,
@@ -1284,19 +1317,22 @@ impl Backend for MetalBackend {
         let x = self.f32(OP, input)?;
         let w = self.f32(OP, weight)?;
         let gy = self.f32(OP, grad_output)?;
-        self.two(
-            OP,
-            input.shape(),
-            weight.shape(),
-            Cmd::LinearBwd {
-                x,
-                w,
-                gy,
-                rows: dims.rows,
-                kin: dims.in_features,
-                nout: dims.out_features,
-            },
-        )
+        let cmd = Cmd::LinearBwd {
+            x,
+            w,
+            gy,
+            rows: dims.rows,
+            kin: dims.in_features,
+            nout: dims.out_features,
+        };
+        let copies = copied_elems(OP, ReadAs::Matrix, &[x, w, gy])?;
+        let mut out = self
+            .outputs(OP, &[input.shape(), weight.shape()], copies, cmd)?
+            .into_iter();
+        match (out.next(), out.next()) {
+            (Some(gx), Some(gw)) => Ok((gx, gw)),
+            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        }
     }
 
     fn rms_norm_forward(
@@ -1573,7 +1609,8 @@ impl Backend for MetalBackend {
         let dims = causal_conv1d_silu_forward_dims(input, weight)?;
         let (x, w) = (self.f32(OP, input)?, self.f32(OP, weight)?);
         let geom = conv1d_geom(OP, &dims)?;
-        self.one(OP, input.shape(), 0, Cmd::Conv1d { x, w, geom })
+        let copies = copied_elems(OP, ReadAs::Whole, &[x, w])?;
+        self.one(OP, input.shape(), copies, Cmd::Conv1d { x, w, geom })
     }
 
     fn causal_conv1d_silu_backward(
@@ -1588,6 +1625,7 @@ impl Backend for MetalBackend {
         let gy = self.f32(OP, grad_output)?;
         let geom = conv1d_geom(OP, &dims)?;
         let part = conv1d_part_elems(OP, &dims)?;
+        let scratch = plus(OP, part, copied_elems(OP, ReadAs::Whole, &[x, w, gy])?)?;
         let shapes = [input.shape(), weight.shape()];
         let cmd = Cmd::Conv1dBwd {
             x,
@@ -1596,7 +1634,7 @@ impl Backend for MetalBackend {
             geom,
             part,
         };
-        let mut out = self.outputs(OP, &shapes, part, cmd)?.into_iter();
+        let mut out = self.outputs(OP, &shapes, scratch, cmd)?.into_iter();
         match (out.next(), out.next()) {
             (Some(dx), Some(dw)) => Ok((dx, dw)),
             _ => Err(metal_err(format!("{OP}: missing outputs"))),
@@ -1618,6 +1656,7 @@ impl Backend for MetalBackend {
             self.f32(OP, weight)?,
         );
         let (rows, dim) = gated_rms_geom(OP, &dims)?;
+        let copies = copied_elems(OP, ReadAs::Whole, &[x, z, w])?;
         let cmd = Cmd::GatedRms {
             x,
             z,
@@ -1626,7 +1665,7 @@ impl Backend for MetalBackend {
             dim,
             eps,
         };
-        self.one(OP, input.shape(), 0, cmd)
+        self.one(OP, input.shape(), copies, cmd)
     }
 
     fn gated_rms_norm_backward(
@@ -1660,6 +1699,7 @@ impl Backend for MetalBackend {
             OP,
             &[dims.rows.div_ceil(METAL_GATED_RMS_BWD_ROWS), dims.dim],
         )?;
+        let scratch = plus(OP, part, copied_elems(OP, ReadAs::Whole, &[x, z, w, gy])?)?;
         let shapes = [input.shape(), gate.shape(), weight.shape()];
         let cmd = Cmd::GatedRmsBwd {
             x,
@@ -1671,7 +1711,7 @@ impl Backend for MetalBackend {
             eps,
             part,
         };
-        let mut out = self.outputs(OP, &shapes, part, cmd)?.into_iter();
+        let mut out = self.outputs(OP, &shapes, scratch, cmd)?.into_iter();
         match (out.next(), out.next(), out.next()) {
             (Some(input), Some(gate), Some(weight)) => Ok(GatedRmsGrad {
                 input,
@@ -2018,25 +2058,32 @@ impl Backend for MetalBackend {
             self.f32(OP, v_cache)?,
         );
         u32_dim(OP, product(OP, &[dims.new, dims.heads])?)?;
+        let (tq, kv_len) = (u32_dim(OP, dims.new)?, u32_dim(OP, kv_len)?);
+        let window = match dims.window {
+            Some(w) => u32_dim(OP, w)?,
+            None => 0,
+        };
+        // A decode the device splits writes per-split partials for the merge.
+        let span = kv_len - cached_attn_origin(tq, kv_len, window);
+        let rows = product(OP, &[dims.batch, dims.new, dims.heads])?;
+        let part =
+            cached_attn_part(rows, span as usize, dims.head_dim).ok_or_else(|| overflow(OP))?;
         self.one(
             OP,
             q.shape(),
-            0,
+            part,
             Cmd::CachedAttn {
                 q: qa,
                 k: ka,
                 v: va,
                 batch: u32_dim(OP, dims.batch)?,
-                tq: u32_dim(OP, dims.new)?,
+                tq,
                 heads: u32_dim(OP, dims.heads)?,
                 kv_heads: u32_dim(OP, dims.kv_heads)?,
                 d,
                 cap: u32_dim(OP, dims.capacity)?,
-                kv_len: u32_dim(OP, kv_len)?,
-                window: match dims.window {
-                    Some(w) => u32_dim(OP, w)?,
-                    None => 0,
-                },
+                kv_len,
+                window,
             },
         )
     }

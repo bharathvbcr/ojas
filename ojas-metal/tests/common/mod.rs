@@ -145,3 +145,15 @@ pub fn deferred<T: std::fmt::Debug>(
     assert!(again.is_ok(), "{what}: a fault is reported once: {again:?}");
     v
 }
+
+/// `t`'s values inside a larger device buffer, starting `lead` elements in:
+/// a contiguous view whose byte offset is neither zero nor 16-aligned.
+pub fn offset_view(m: &MetalBackend, t: &Tensor, lead: usize, seed: u64) -> Tensor {
+    let mut padded = values(lead, seed, 1.0);
+    padded.extend_from_slice(&ok("host", t.to_f32_vec()));
+    padded.extend(values(5, seed + 1, 1.0));
+    let big = up(m, &host(&padded, &[padded.len()]));
+    let v = ok("narrow", big.narrow(lead * 4, t.shape(), t.strides()));
+    assert!(!v.byte_offset().is_multiple_of(16), "offset not exercised");
+    v
+}

@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(got[Field::DeviceRoomBytes as usize], None);
         assert_eq!(
             got[Field::DevicePoolCacheBytes as usize],
-            Some(ojas_wgpu::POOL_CAP_BYTES)
+            Some(ojas_wgpu::POOL_CAP_BYTES + ojas_wgpu::STAGING_CACHE_BYTES)
         );
         let budget = got[Field::DeviceBudgetBytes as usize].expect("the session budget");
         assert!(budget <= 1 << 30);

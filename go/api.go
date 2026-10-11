@@ -162,7 +162,8 @@ type LoadOptions struct {
 	// shows: a budget past the device's room (its memory less what the
 	// process holds and the runtime's pool cache), or on shared memory past
 	// what the host can spare, is cut to that, never raised; a device with
-	// no room at all is ErrCapacity.
+	// no room at all is ErrCapacity. LoadModelInfo, NewModelInfo and
+	// ResumeInfo return the budget the model got.
 	BudgetBytes uint64
 	// Numerics is CPU only; Metal and wgpu refuse anything but the default.
 	Numerics Numerics
@@ -182,17 +183,36 @@ func (o LoadOptions) put(r *record) *record {
 	return r
 }
 
+// ModelInfo is what LoadModelInfo, NewModelInfo and ResumeInfo return for
+// the model they create.
+type ModelInfo struct {
+	// ID names the model in every later call.
+	ID uint64
+	// Tensors counts its parameter tensors.
+	Tensors uint32
+	// BudgetBytes is what the model's budget allows: LoadOptions.BudgetBytes
+	// (1 GiB when 0), or less on DeviceMetal and DeviceWgpu when the device
+	// plan cut it to the device's room (see LoadOptions.BudgetBytes).
+	BudgetBytes uint64
+}
+
 // LoadModel reads a nanolab safetensors file (nanolab state_dict names, the
 // spec in __metadata__["ojas.spec"]) and returns a model id on opts.Device.
 // The path is relative to the model root, at most 4 KiB, and opened once
 // without following a final symlink. Every tensor is checked against the
 // spec before any is kept, and the weights are uploaded to the device.
 func LoadModel(ctx context.Context, path string, opts LoadOptions) (uint64, error) {
+	info, err := LoadModelInfo(ctx, path, opts)
+	return info.ID, err
+}
+
+// LoadModelInfo is LoadModel, returning the budget the model was given too.
+func LoadModelInfo(ctx context.Context, path string, opts LoadOptions) (ModelInfo, error) {
 	if ctx == nil {
-		return 0, errors.New("ojas: nil context")
+		return ModelInfo{}, errors.New("ojas: nil context")
 	}
 	if len(path) > inlineLimit {
-		return 0, errors.New("path exceeds 4096 bytes")
+		return ModelInfo{}, errors.New("path exceeds 4096 bytes")
 	}
 	return session(ctx, opLoad, opts.put(new(record)).str(tagPath, path).bytes(nil))
 }
@@ -223,6 +243,12 @@ type ModelSpec struct {
 // NewModel returns a model id holding a fresh nanolab init of spec: each
 // parameter is drawn from its own counter RNG keyed by seed and its name.
 func NewModel(ctx context.Context, spec ModelSpec, seed uint64, opts LoadOptions) (uint64, error) {
+	info, err := NewModelInfo(ctx, spec, seed, opts)
+	return info.ID, err
+}
+
+// NewModelInfo is NewModel, returning the budget the model was given too.
+func NewModelInfo(ctx context.Context, spec ModelSpec, seed uint64, opts LoadOptions) (ModelInfo, error) {
 	r := opts.put(new(record))
 	for _, f := range []struct{ tag, v uint32 }{
 		{tagVocab, spec.Vocab}, {tagNEmbd, spec.NEmbd}, {tagNLayer, spec.NLayer},
@@ -453,8 +479,14 @@ func SaveCheckpoint(ctx context.Context, id uint64, dir string) error {
 // Resume takes it rather than trusting the directory. A refusal creates
 // nothing.
 func Resume(ctx context.Context, dir string, opts LoadOptions, cfg TrainConfig) (uint64, error) {
+	info, err := ResumeInfo(ctx, dir, opts, cfg)
+	return info.ID, err
+}
+
+// ResumeInfo is Resume, returning the budget the model was given too.
+func ResumeInfo(ctx context.Context, dir string, opts LoadOptions, cfg TrainConfig) (ModelInfo, error) {
 	if len(dir) > inlineLimit {
-		return 0, errors.New("path exceeds 4096 bytes")
+		return ModelInfo{}, errors.New("path exceeds 4096 bytes")
 	}
 	r := cfg.put(opts.put(new(record))).str(tagPath, dir)
 	return session(ctx, opResume, r.bytes(nil))
@@ -665,16 +697,25 @@ func Close(ctx context.Context) error {
 	return closeHandle(ctx)
 }
 
-// session runs an op that creates a model id and returns it.
-func session(ctx context.Context, op uint32, payload []byte) (uint64, error) {
+// session runs an op that creates a model id and decodes its reply:
+// id u64, tensors u32, budget u64.
+func session(ctx context.Context, op uint32, payload []byte) (ModelInfo, error) {
 	out, err := callEngine(ctx, op, payload)
 	if err != nil {
-		return 0, err
+		return ModelInfo{}, err
 	}
-	if len(out) != 12 {
-		return 0, errors.New("load: short result")
+	return decodeModelInfo(out)
+}
+
+func decodeModelInfo(out []byte) (ModelInfo, error) {
+	if len(out) != 20 {
+		return ModelInfo{}, fmt.Errorf("ojas: model reply of %d bytes, want 20 (id, tensors, budget)", len(out))
 	}
-	return binary.LittleEndian.Uint64(out[:8]), nil
+	return ModelInfo{
+		ID:          binary.LittleEndian.Uint64(out[:8]),
+		Tensors:     binary.LittleEndian.Uint32(out[8:12]),
+		BudgetBytes: binary.LittleEndian.Uint64(out[12:]),
+	}, nil
 }
 
 func decodeIDs(out []byte) ([]uint32, error) {

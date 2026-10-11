@@ -2,22 +2,26 @@
 //!
 //! | Op | Payload | Result |
 //! | :--- | :--- | :--- |
-//! | 1 LOAD | `{path, device?, threads?, budget?, numerics?}` | `id: u64, tensors: u32` |
+//! | 1 LOAD | `{path, device?, threads?, budget?, numerics?}` | `id: u64, tensors: u32, budget: u64` |
 //! | 2 | retired (the payload-only Step); not registered | |
 //! | 3 GENERATE | `id: u64, mode: u32 = 1, n: u32, logits: [f32; n]` | `token: u32` |
 //! | 4 FREE | `id: u64` | empty |
 //! | 5 PANIC | anything | (panics) |
-//! | 6 NEW | spec fields, `seed`, placement fields | `id: u64, tensors: u32` |
+//! | 6 NEW | spec fields, `seed`, placement fields | `id: u64, tensors: u32, budget: u64` |
 //! | 7 TRAIN_OPEN | `id: u64`, train fields | empty |
 //! | 8 TRAIN_STEP | `id: u64, mode: u32`, caller tokens for mode 1 | [`crate::train::StepOut`], 40 bytes |
 //! | 9 SAVE | `id: u64`, directory | empty |
-//! | 10 RESUME | `{path}`, placement fields, train fields | `id: u64, tensors: u32` |
+//! | 10 RESUME | `{path}`, placement fields, train fields | `id: u64, tensors: u32, budget: u64` |
 //! | 11 TOKENIZER | `id: u64, {vocab_json, merges_txt}` | empty |
 //! | 12 TOKENIZE | `id: u64, mode: u32`, text (1 encode, 4 piece id) or ids (2 decode, 3 lossy decode) | ids, text, or one id |
 //! | 13 SAMPLE | `id: u64, {temperature, top_k?, top_p?, seed, max_new_tokens, stop?, prompt}` | `[u32]` |
 //! | 14 INSPECT | relative path | `tensors: u32` |
 //! | 15 SET_MEMORY_CEILING | `bytes: u64` | empty |
 //! | 16 SYSTEM_PROFILE | empty, `budget: u64`, or `budget: u64, flags: u32` | [`crate::profile`] record |
+//!
+//! A new session's `budget` is the bytes its budget allows: the caller's
+//! `budget` (or the default), or less when the device plan cut it to the
+//! device's room (`crate::model::open`).
 //!
 //! `{...}` is a [`crate::wire::Fields`] option record. Each handler polls the
 //! job's cancel flag before it starts, and a model op polls it before every
@@ -119,10 +123,13 @@ pub(crate) fn cancel_check(ctx: &JobContext) -> Check {
     })
 }
 
-fn session_result(session: session::Session) -> Vec<u8> {
-    let mut out = Vec::with_capacity(12);
+/// LOAD, NEW and RESUME's reply: the id, the parameter tensors, and the
+/// session budget, which a device plan may have cut below the caller's.
+pub(crate) fn session_result(session: session::Session) -> Vec<u8> {
+    let mut out = Vec::with_capacity(20);
     out.extend_from_slice(&session.id.to_le_bytes());
     out.extend_from_slice(&session.tensors.to_le_bytes());
+    out.extend_from_slice(&session.budget_bytes.to_le_bytes());
     out
 }
 

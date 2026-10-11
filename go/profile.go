@@ -98,10 +98,10 @@ type Profile struct {
 	// process), or wgpu's allocator report where its HAL keeps one (Vulkan,
 	// DX12; not Metal).
 	DeviceResidentBytes Reading
-	// DevicePoolCacheBytes is the most freed buffers the runtime keeps for
-	// reuse on a session opened with this budget. That memory is not
-	// charged to the session budget, so the room below already sets it
-	// aside.
+	// DevicePoolCacheBytes is the most idle memory the runtime keeps for
+	// reuse on a session opened with this budget: freed buffers, and on
+	// wgpu its read staging cache too. That memory is not charged to the
+	// session budget, so the room below already sets it aside.
 	DevicePoolCacheBytes Reading
 	// DeviceRoomBytes is DeviceMemoryBytes less DeviceResidentBytes and
 	// DevicePoolCacheBytes, and on shared memory at most BudgetBytes.

@@ -254,7 +254,7 @@ func main() {
 
 	_ = ojas.Close(ctx)
 }</code></pre></div>
-<p><code>Resume(ctx, &#34;runs/ckpt&#34;, opts, cfg)</code> continues the run in a new id; <code>cfg</code> must equal the saved config. <code>NewModel(ctx, spec, seed, opts)</code> starts from a fresh nanolab init. <code>Inspect(ctx, path)</code> counts a file&#39;s tensors without loading it.</p>
+<p><code>Resume(ctx, &#34;runs/ckpt&#34;, opts, cfg)</code> continues the run in a new id; <code>cfg</code> must equal the saved config. <code>NewModel(ctx, spec, seed, opts)</code> starts from a fresh nanolab init. <code>Inspect(ctx, path)</code> counts a file&#39;s tensors without loading it. On <code>DeviceMetal</code> and <code>DeviceWgpu</code> a budget past the device&#39;s room is cut to it, never raised: <code>LoadModelInfo</code>, <code>NewModelInfo</code> and <code>ResumeInfo</code> return the model&#39;s id with the budget it got (<code>ModelInfo.BudgetBytes</code>).</p>
 <hr>
 <h2 id="errors">Errors <a class="anchor" href="#errors" aria-label="Link to this section">#</a></h2>
 <div class="table-wrap"><table>

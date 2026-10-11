@@ -21,7 +21,10 @@ pub struct WgpuMemory {
     /// allocator holds on the device, live allocations and their free
     /// space. `None` when the HAL keeps no report.
     pub reserved_bytes: Option<u64>,
-    /// [`crate::POOL_CAP_BYTES`]: the most freed buffers the context keeps.
+    /// The most idle memory the context keeps outside the budget: freed
+    /// buffers ([`crate::POOL_CAP_BYTES`]) and `MAP_READ` staging buffers
+    /// ([`crate::STAGING_CACHE_BYTES`]). A read in flight holds one more
+    /// staging buffer, at most [`crate::READ_STAGING_BYTES`].
     pub pool_cache_cap: u64,
 }
 
