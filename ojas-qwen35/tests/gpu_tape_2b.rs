@@ -28,12 +28,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{Backend, Budget, DType, Tensor};
 use ojas_io::SafeTensors;
 use ojas_metal::MetalBackend;
 use ojas_model::qwen35::{bind, forward_loss, fuse_grads, load_hf, Qwen35Tables};
 use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};
-use ojas_qwen35::{Numerics, Qwen35Step, Sequence, Snapshot, Which};
+use ojas_qwen35::{Numerics, Precision, Qwen35Step, Sequence, Snapshot, Which};
 
 const LOSS_BOUND: f64 = 1e-4;
 const GRAD_BOUND: f64 = 1e-2;
@@ -102,7 +102,13 @@ fn gpu_real_2b_tape_forward_backward_matches_the_provider() {
 
     // The provider: one step, the loss and the subset to the host, dropped.
     let (want_loss, want) = {
-        let mut step = Qwen35Step::open(&snap, Numerics::ExactF32, Budget::new(16 * GIB)).unwrap();
+        let mut step = Qwen35Step::open(
+            &snap,
+            Numerics::ExactF32,
+            Precision::F32,
+            Budget::new(16 * GIB),
+        )
+        .unwrap();
         let rows: Vec<u32> = (0..n as u32).collect();
         let pending = step
             .forward(&Sequence {
@@ -151,7 +157,7 @@ fn gpu_real_2b_tape_forward_backward_matches_the_provider() {
     let host_budget = Budget::new(16 * GIB);
     let device = {
         let file = SafeTensors::open(&snap.weights_path).unwrap();
-        let host = load_hf(&spec, &file, &cfg.tower_prefix, &host_budget).unwrap();
+        let host = load_hf(&spec, &file, &cfg.tower_prefix, DType::F32, &host_budget).unwrap();
         host.try_map(&mut |t| m.upload(t)).unwrap()
     };
     m.sync().unwrap();

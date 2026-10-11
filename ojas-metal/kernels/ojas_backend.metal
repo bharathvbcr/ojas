@@ -127,6 +127,33 @@ kernel void ojas_round_bf16(
     y[i] = ojas_bf16(x[i]);
 }
 
+// Widen each bf16 to f32 exactly (`bits << 16`), from element `first` of
+// `x` (a 2-byte element offset under the 4-byte bind alignment). No status
+// word: a NaN or infinity is carried, and the matmul-class op that reads the
+// widened copy refuses it.
+kernel void ojas_bf16_to_f32(
+    device const ushort *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    constant uint &first [[buffer(3)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    y[i] = as_type<float>(uint(x[first + i]) << 16u);
+}
+
+// Round each f32 to bf16 (nearest even, the NaN rule of `ojas_bf16`) and
+// store its 16 bits. No status word, as `ojas_round_bf16`.
+kernel void ojas_f32_to_bf16(
+    device const float *x [[buffer(0)]],
+    device ushort *y [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    y[i] = ushort(as_type<uint>(ojas_bf16(x[i])) >> 16u);
+}
+
 kernel void ojas_silu_fwd(
     device const float *x [[buffer(0)]],
     device float *y [[buffer(1)]],

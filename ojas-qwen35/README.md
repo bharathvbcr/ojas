@@ -31,7 +31,7 @@ Lappi.
 
 ```text
 let snap = Snapshot::from_dir(dir)?;                       // CPU: config + header pre-flight
-let mut step = Qwen35Step::open(&snap, Numerics::Bf16Operands, budget)?;   // GPU
+let mut step = Qwen35Step::open(&snap, Numerics::Bf16Operands, Precision::F32, budget)?; // GPU
 let plan = OptimizerPlan::build(step.parameter_table(), &group_spec)?;
 
 for batch in batches {
@@ -59,9 +59,27 @@ add to it. `bank_state()` reports which case applies.
 ## Numerics
 
 `Numerics::ExactF32` gives exact f32 GEMMs. `Numerics::Bf16Operands` rounds
-GEMM operands to bf16 and accumulates in f32. In both modes the weights,
-activations, gradients, GDN state, attention and optimizer stay f32. There
-is no default, and the choice is made at `open`.
+GEMM operands to bf16 and accumulates in f32. At `Precision::F32` the
+weights, activations, gradients, GDN state, attention and optimizer stay f32
+in both modes. There is no default, and the choice is made at `open`.
+
+`Precision` is how the weights are stored, also chosen at `open`:
+
+- `Precision::F32` keeps f32 weights, bank and moments.
+- `Precision::Bf16` is tessl's bf16 model, loaded with `load_tower`: tessl's
+  AdamW refuses `load`'s packed head copy for a model that trains. Its weights
+  are bf16 and every GEMM input is rounded to bf16, while accumulation, the
+  residual stream, the GDN state and attention stay f32. AdamW updates an f32
+  master of each weight with f32 moments (`UpdateRule::F32Master`).
+- tessl keeps a bf16 model's gradient bank in bf16, so gradients summed over
+  sequences are summed in bf16.
+- `Precision::Bf16` trains only with `Numerics::Bf16Operands`; `ExactF32` is
+  refused before the GPU opens.
+- `save_state` and `load_state` refuse a bf16 provider, because tessl reads
+  out the bf16 weights rather than the f32 masters.
+
+Both precisions hold 16 bytes per parameter. The 2B measurements are in
+`bench/results/2026-10-11-bf16-frozen-base/`.
 
 ## Refused, never defaulted
 
@@ -147,9 +165,9 @@ checks each group against torch's update at its own rate.
 On the 2B, the check finds 320 tower tensors. It reports the vision tower and
 the MTP block as not loaded.
 
-`Qwen35Step::open` then calls tessl's `Qwen35Model::load`. ojas-io cannot do
-this bulk read, because `load` is the model's only constructor and its fields
-are `pub(crate)`.
+`Qwen35Step::open` then calls tessl's `Qwen35Model::load`, or `load_tower` at
+`Precision::Bf16`. ojas-io cannot do this bulk read, because tessl's loaders
+are the model's only constructors and its fields are `pub(crate)`.
 
 `open` compares tessl's live parameter table with the crate's map: names,
 shapes and order. It refuses any difference. Per-entry vectors are always
@@ -191,8 +209,10 @@ A resume opens the base snapshot and then loads the state over it.
 
 Memory on the 2B, from the shape of tessl's API:
 
-- `open` holds four f32 copies of the 1.88 B parameters: weights, bank and
-  two moments, about 30 GB.
+- `open` holds 16 bytes per parameter of the 1.88 B: 30,126,456,832 bytes,
+  measured. That is four f32 copies (weights, bank and two moments) at
+  `Precision::F32`. At `Precision::Bf16` it is bf16 weights and bank, an f32
+  master and f32 moments, the same total.
 - A table read (`read_entries`, `read_table`), and each kind of a save or
   load, also stages a whole table (7.53 GB requested) in device tensors,
   because tessl copies a whole table per call.

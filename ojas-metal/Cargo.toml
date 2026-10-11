@@ -23,6 +23,7 @@ tessl = { path = "../../tessl", optional = true }
 
 [dev-dependencies]
 ojas-cpu = { path = "../ojas-cpu" }
+ojas-oracle = { path = "../ojas-oracle" }
 
 [[example]]
 name = "metal_bench"

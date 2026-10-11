@@ -13,6 +13,11 @@ pub struct MetalMemory {
     /// buffer this process holds on the device, through every backend and
     /// session, including tessl's pools. It is not this backend's share.
     pub allocated: u64,
+    /// The highest `allocated` since the backend opened or
+    /// [`crate::MetalBackend::memory_and_reset_peak`] last ran (tessl's
+    /// `peak_allocated_bytes`, sampled at every buffer its pool creates, so
+    /// the exact peak of what the pool held). Process-wide, as `allocated`.
+    pub peak_allocated: u64,
     /// `MTLDevice.hasUnifiedMemory`, read by tessl when the device opened:
     /// true when the GPU has no memory of its own and draws on system RAM
     /// (Apple silicon), false for a discrete GPU with its own VRAM.
@@ -65,6 +70,7 @@ mod tests {
         let m = MetalMemory {
             recommended_working_set: 0,
             allocated: 7,
+            peak_allocated: 7,
             has_unified_memory: true,
             pool_cache_cap: 3,
         };
@@ -76,6 +82,7 @@ mod tests {
         let m = MetalMemory {
             recommended_working_set: 48 << 30,
             allocated: 0,
+            peak_allocated: 0,
             has_unified_memory: false,
             pool_cache_cap: 0,
         };
@@ -104,6 +111,7 @@ mod tests {
                 let m = MetalMemory {
                     recommended_working_set: 24 << 30,
                     allocated: 1 << 30,
+                    peak_allocated: 1 << 30,
                     has_unified_memory: unified,
                     pool_cache_cap: 1 << 28,
                 };

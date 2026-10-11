@@ -671,6 +671,7 @@ dependencies = [
  "ojas-core",
  "ojas-cpu",
  "ojas-device",
+ "ojas-oracle",
  "tessl",
 ]
 

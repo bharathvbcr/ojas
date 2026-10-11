@@ -11,8 +11,8 @@ use ojas_core::{Budget, OjasError, Tensor};
 use ojas_qwen35::{
     check_device_working_set, check_new_state_dir, clip_coefficient, plan_shards, tower_tensors,
     transpose_2d, validate_external_grad, write_kind, AdamWHyper, BankState, ExternalGrad, Kind,
-    NamedTensor, Numerics, OptimizerPlan, Pending, Qwen35Error, Qwen35Step, Qwen35TextConfig,
-    Sequence, Snapshot, StateIndex, Which, SHARD_BYTES,
+    NamedTensor, Numerics, OptimizerPlan, Pending, Precision, Qwen35Error, Qwen35Step,
+    Qwen35TextConfig, Sequence, Snapshot, StateIndex, Which, SHARD_BYTES,
 };
 
 const REAL: &str = include_str!("fixtures/qwen35_2b_base_config.json");
@@ -33,7 +33,7 @@ fn tiny() -> Qwen35TextConfig {
 /// runtime is opened). L-trainer's adapter is written against exactly these.
 #[test]
 fn the_provider_api_has_this_shape() {
-    let _open: fn(&Snapshot, Numerics, Budget) -> ojas_qwen35::Result<Qwen35Step> =
+    let _open: fn(&Snapshot, Numerics, Precision, Budget) -> ojas_qwen35::Result<Qwen35Step> =
         Qwen35Step::open;
     let _forward: fn(&Qwen35Step, &Sequence<'_>) -> ojas_qwen35::Result<Pending> =
         Qwen35Step::forward;
@@ -56,6 +56,12 @@ fn the_provider_api_has_this_shape() {
     for n in [Numerics::ExactF32, Numerics::Bf16Operands] {
         match n {
             Numerics::ExactF32 | Numerics::Bf16Operands => {}
+        }
+    }
+    // So has Precision.
+    for p in [Precision::F32, Precision::Bf16] {
+        match p {
+            Precision::F32 | Precision::Bf16 => {}
         }
     }
 }
@@ -437,4 +443,26 @@ fn staging_past_the_working_set_is_refused_before_any_gpu_work() {
 /// directory from another checkpoint shape would carry.
 fn tiny_other_summary(c: &Qwen35TextConfig) -> String {
     c.canonical_summary().replace("vocab=64", "vocab=65")
+}
+
+/// A bf16-stored tower trains on bf16 GEMM operands only: the exact-f32 arm
+/// is refused before any runtime opens.
+#[test]
+fn bf16_weights_with_exact_f32_operands_are_refused_before_the_gpu() {
+    let snap = Snapshot::from_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tessl/tests/fixtures/qwen35_train"),
+    )
+    .unwrap();
+    let e = match Qwen35Step::open(
+        &snap,
+        Numerics::ExactF32,
+        Precision::Bf16,
+        Budget::new(1 << 20),
+    ) {
+        Ok(_) => panic!("Precision::Bf16 with Numerics::ExactF32 opened"),
+        Err(e) => e,
+    };
+    let text = e.to_string();
+    assert!(matches!(e, Qwen35Error::Invalid { .. }), "{text}");
+    assert!(text.contains("Bf16Operands"), "{text}");
 }

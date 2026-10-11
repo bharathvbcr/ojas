@@ -337,7 +337,10 @@ pub(crate) enum Cmd {
     },
     /// Read the device's working set and current allocation. Answered even
     /// on a poisoned backend: it records nothing and commits nothing.
-    Memory,
+    Memory {
+        /// After the reading, restart the peak from what is allocated now.
+        reset_peak: bool,
+    },
     /// Release every freed buffer tessl's pool keeps for reuse, after a
     /// waited commit returns the ones freed since the last. Live buffers
     /// are untouched, and the pool's cap stays what it was.
@@ -546,6 +549,16 @@ pub(crate) enum Cmd {
         part: usize,
     },
     RoundBf16 {
+        x: Arg,
+    },
+    /// A `Bf16` window (`n` 2-byte elements) widened exactly into a new
+    /// `F32` buffer.
+    ToF32 {
+        x: Arg,
+    },
+    /// An `F32` window rounded into a new `Bf16` buffer of `n` 2-byte
+    /// elements.
+    ToBf16 {
         x: Arg,
     },
     Silu {

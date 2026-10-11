@@ -132,6 +132,8 @@ const KERNELS: &[&str] = &[
     "ojas_cached_attn_merge",
     "ojas_permute",
     "ojas_round_bf16",
+    "ojas_bf16_to_f32",
+    "ojas_f32_to_bf16",
     "ojas_silu_fwd",
     "ojas_silu_bwd",
     "ojas_sigmoid_fwd",
@@ -448,11 +450,17 @@ impl Worker {
                 self.free(id);
                 continue;
             }
-            if let Cmd::Memory = msg.cmd {
-                // A read of two device properties: not a command, so it
-                // neither counts toward nor fires the commit triggers, and a
+            if let Cmd::Memory { reset_peak } = msg.cmd {
+                // A read of device properties: not a command, so it neither
+                // counts toward nor fires the commit triggers, and a
                 // poisoned backend still reports what it holds.
-                let out = match catch_unwind(AssertUnwindSafe(|| self.memory())) {
+                let out = match catch_unwind(AssertUnwindSafe(|| {
+                    let m = self.memory();
+                    if reset_peak {
+                        self.rt.reset_peak_allocated_bytes();
+                    }
+                    m
+                })) {
                     Ok(m) => Ok(Reply::Memory(m)),
                     Err(_) => {
                         self.poisoned = true;
@@ -507,6 +515,7 @@ impl Worker {
         crate::MetalMemory {
             recommended_working_set: info.recommended_working_set,
             allocated: self.rt.current_allocated_bytes(),
+            peak_allocated: self.rt.peak_allocated_bytes(),
             has_unified_memory: info.has_unified_memory,
             pool_cache_cap: info.pool_cache_cap as u64,
         }
@@ -986,7 +995,7 @@ impl Worker {
                 Ok(Reply::Done)
             }
             // `serve` answers it first; kept here so the match stays total.
-            Cmd::Memory => Ok(Reply::Memory(self.memory())),
+            Cmd::Memory { .. } => Ok(Reply::Memory(self.memory())),
             Cmd::TrimPool => self.trim_pool(),
             Cmd::InlineUploads { on } => {
                 self.book.borrow_mut().inline_uploads = on;
@@ -1156,6 +1165,8 @@ impl Worker {
                 part,
             } => self.gated_rms_bwd([x, z, w, gy], [rows, dim], eps, part),
             Cmd::RoundBf16 { x } => self.round_bf16(x),
+            Cmd::ToF32 { x } => self.widen_bf16(x),
+            Cmd::ToBf16 { x } => self.narrow_bf16(x),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
             Cmd::Sigmoid { x } => self.sigmoid(x, None),
@@ -2301,6 +2312,68 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
+    /// `x` (a bf16 window: `n` 2-byte elements from byte offset `off`)
+    /// widened exactly into a new f32 buffer. No status slot and no finite
+    /// scan: a NaN or infinity is carried to the op that reads the copy.
+    fn widen_bf16(&mut self, x: Arg) -> Res<Reply> {
+        let buf = self
+            .bufs
+            .get(&x.id)
+            .cloned()
+            .ok_or_else(|| metal_err(format!("unknown device buffer {}", x.id)))?;
+        let end =
+            x.n.checked_mul(2)
+                .and_then(|b| b.checked_add(x.off))
+                .ok_or_else(|| metal_err("device window overflows"))?;
+        if !x.off.is_multiple_of(2) || end > buf.nbytes() {
+            return Err(metal_err(format!(
+                "bf16 window [{}, {end}) does not fit device buffer {} of {} bytes",
+                x.off,
+                x.id,
+                buf.nbytes()
+            )));
+        }
+        let n = u32_of(x.n)?;
+        // Bound at the 4-byte boundary below the window, with the odd
+        // element, if any, as the kernel's first index.
+        let base = x.off & !3;
+        let first = u32_of((x.off - base) / 2)?;
+        let y = self.fresh(x.n)?;
+        self.k1("ojas_bf16_to_f32", x.n, |b| {
+            set_gpu_buf_offset(b, &buf, base, 0);
+            bind(b, &y, 1);
+            set_u32(b, n, 2);
+            set_u32(b, first, 3);
+        })?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// `x` (f32) rounded to bf16 into a new buffer of `n` 2-byte elements,
+    /// its size rounded up to whole words. No status slot and no finite
+    /// scan, as [`Self::round_bf16`].
+    fn narrow_bf16(&mut self, x: Arg) -> Res<Reply> {
+        let xv = self.view(x)?;
+        let n = u32_of(xv.n)?;
+        let bytes =
+            xv.n.checked_mul(2)
+                .ok_or_else(|| metal_err("allocation size overflows"))?;
+        let buf = self.alloc(bytes.next_multiple_of(4))?;
+        let y = V {
+            buf,
+            off: 0,
+            n: xv.n,
+        };
+        self.k1("ojas_f32_to_bf16", xv.n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, n, 2);
+        })?;
+        let id = self.next_id;
+        self.next_id += 1;
+        self.bufs.insert(id, y.buf);
+        Ok(Reply::Bufs(vec![NewBuf { id, bytes }]))
+    }
+
     fn silu(&mut self, x: Arg, gy: Option<Arg>) -> Res<Reply> {
         let op = if gy.is_some() {
             "silu_backward"
@@ -3188,8 +3261,8 @@ mod tests {
     }
 
     fn upload(w: &mut Worker, v: &[f32]) -> Arg {
-        let src = ojas_core::Tensor::from_f32(v, &[v.len()], &ojas_core::Budget::new(1 << 30))
-            .unwrap();
+        let src =
+            ojas_core::Tensor::from_f32(v, &[v.len()], &ojas_core::Budget::new(1 << 30)).unwrap();
         match w.run(Cmd::Upload { src }) {
             Ok(Reply::Bufs(b)) if b.len() == 1 => Arg {
                 id: b[0].id,
