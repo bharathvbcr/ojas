@@ -20,6 +20,14 @@
 //! U32 upload keeps a host copy of its ids so token ids and targets are
 //! range-checked, and the cross-entropy valid count formed, with no readback.
 //!
+//! bf16 operands ([`Backend::bf16_operands`]): the matmul-class ops take a
+//! `Bf16` operand (two values a word, any element offset) and widen it
+//! exactly (`bits << 16`) into charged job scratch with `widen_bf16`, then
+//! run the f32 kernels, so a `Bf16` operand gives the bits its bf16-exact
+//! `F32` twin gives. WGSL has no bf16 type, so this is bf16 storage over f32
+//! compute. A bf16 NaN or infinity raises the op's fault bit, reported at
+//! the next sync point as below.
+//!
 //! Ops record into one shared encoder and do not wait. Nothing is read back
 //! until `download`, `clip_grad_norm` (the trait returns the norm) or
 //! [`WgpuBackend::sync`].
@@ -67,14 +75,14 @@ use ojas_core::{
     embedding_backward_dims, embedding_forward_dims, kv_cache_write_dims, linear_backward_dims,
     linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    refuse_bf16_operands, require_ns5, residual_add_backward_dims, residual_add_forward_dims,
-    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
-    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    sdpa_scale, silu_backward_dims, silu_forward_dims, topk_rows_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
-    BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
-    OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    require_ns5, residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
+    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
+    rope_half_split_backward_dims, rope_half_split_forward_dims, sdpa_scale, silu_backward_dims,
+    silu_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    value_residual_blend_forward_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, DType,
+    LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
+    RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B,
+    MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -93,7 +101,7 @@ pub const WGPU_TOPK_MAX_K: usize = 1024;
 /// One fault bit per op, by index. The fault words hold a 64-bit mask
 /// ([`FAULT_OPS`]); `OP_NAMES` may grow to that many, and the build refuses
 /// more.
-const OP_NAMES: [&str; 35] = [
+const OP_NAMES: [&str; 37] = [
     "embedding_forward",
     "embedding_backward",
     "linear_forward",
@@ -129,6 +137,8 @@ const OP_NAMES: [&str; 35] = [
     "cast_bf16",
     "argmax_rows",
     "topk_rows",
+    "to_bf16",
+    "to_f32",
 ];
 
 const _: () = assert!(
@@ -184,6 +194,8 @@ const KVW: Op = Op(31);
 const CAST: Op = Op(32);
 const ARGMAX: Op = Op(33);
 const TOPK: Op = Op(34);
+const TO_BF16: Op = Op(35);
+const TO_F32: Op = Op(36);
 
 const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> Kernel {
     Kernel {
@@ -198,6 +210,8 @@ use WgslModule::{CachedAttention, Gemm, Layout, Loss, Norm, Optim, Pointwise, Re
 
 const PERMUTE_K: Kernel = k(Layout, "permute", &[R(2), R(3), W(4)]);
 const KV_WRITE: Kernel = k(Layout, "kv_write", &[R(2), W(4), R(5)]);
+const WIDEN_BF16: Kernel = k(Layout, "widen_bf16", &[R(2), W(4)]);
+const NARROW_BF16: Kernel = k(Layout, "narrow_bf16", &[R(2), W(4)]);
 const CATTN_SPLIT: Kernel = k(CachedAttention, "cattn_split", &[R(2), R(3), R(4), W(5)]);
 const CATTN_MERGE: Kernel = k(CachedAttention, "cattn_merge", &[W(6), R(7)]);
 
@@ -253,6 +267,9 @@ const ADAM_APPLY: Kernel = k(Optim, "adam_apply", &[R(2), W(5), W(6), W(7), R(9)
 const MUON_MOMENTUM: Kernel = k(Optim, "muon_momentum", &[R(2), R(3), W(5), W(6)]);
 const MUON_NORMALIZE: Kernel = k(Optim, "muon_normalize", &[R(2), W(5), R(9)]);
 const MUON_LINCOMB: Kernel = k(Optim, "muon_lincomb", &[R(2), R(3), W(5)]);
+const MUON_NORMALIZE_BF16: Kernel = k(Optim, "muon_normalize_bf16", &[R(2), W(5), R(9)]);
+const MUON_ROUND: Kernel = k(Optim, "muon_round", &[W(5)]);
+const MUON_LINCOMB_BF16: Kernel = k(Optim, "muon_lincomb_bf16", &[R(2), R(3), W(5)]);
 const MUON_APPLY: Kernel = k(Optim, "muon_apply", &[R(2), R(3), W(5)]);
 const MUON_COMMIT: Kernel = k(Optim, "muon_commit", &[R(2), R(3), W(5), W(6), R(9)]);
 
@@ -370,6 +387,23 @@ fn bind(op: Op, job: &mut Job<'_>, a: &In<'_>) -> Result<View, OjasError> {
         ));
     }
     view_at(job, a.buf.raw()?, off as u64, a.elems)
+}
+
+/// The words holding `a`'s bf16 elements, and the half (0 low, 1 high) of the
+/// first word its first element sits in. A bf16 window may start mid-word;
+/// its byte offset is even.
+fn bf16_words(op: Op, job: &mut Job<'_>, a: &In<'_>) -> Result<(View, u32), OjasError> {
+    let off = a.t.byte_offset();
+    if !off.is_multiple_of(2) {
+        return Err(shape(
+            op,
+            format!("bf16 byte_offset {off} is not 2-byte aligned"),
+        ));
+    }
+    let first = (off / 2) % 2;
+    let words = (first + a.elems).div_ceil(2);
+    let view = view_at(job, a.buf.raw()?, (off - first * 2) as u64, words)?;
+    Ok((view, first as u32))
 }
 
 /// The binding of `elems` words at byte `off` of `raw`: in place when `off`
@@ -615,6 +649,25 @@ impl WgpuBackend {
 
     fn job(&self, op: Op) -> Job<'_> {
         self.ctx.job(&self.budget, op.fault_id())
+    }
+
+    /// A matmul-class operand ([`Backend::bf16_operands`]) as f32 words: an
+    /// `F32` operand's own ([`bind`]); a `Bf16` one's widened exactly by
+    /// `widen_bf16` into job scratch charged to the budget, raising `op`'s
+    /// fault bit on a NaN or an infinity.
+    fn operand(&self, op: Op, job: &mut Job<'_>, a: &In<'_>) -> Result<View, OjasError> {
+        if a.t.dtype() != DType::Bf16 {
+            return bind(op, job, a);
+        }
+        let (src, first) = bf16_words(op, job, a)?;
+        let dst = job.scratch((a.elems as u64) * 4)?;
+        job.dispatch(
+            &WIDEN_BF16,
+            &[u(op, a.elems)?, first, 1],
+            &[&src, &dst],
+            self.lanes(a.elems)?,
+        )?;
+        Ok(View::whole(&dst))
     }
 
     /// The gate forward: `z = x @ W^T` on the GEMM, then the gated product,
@@ -1044,6 +1097,39 @@ impl WgpuBackend {
         )
     }
 
+    /// [`Self::lincomb`] under `Ns5Precision::Bf16`:
+    /// `y = r(r(s0 x0) + r(s1 x1))`, `r` rounding to bf16.
+    #[allow(clippy::too_many_arguments)]
+    fn lincomb_bf16(
+        &self,
+        op: Op,
+        job: &mut Job<'_>,
+        n: usize,
+        s0: f32,
+        x0: &dyn Binding,
+        s1: f32,
+        x1: &dyn Binding,
+        y: &dyn Binding,
+    ) -> Result<(), OjasError> {
+        job.dispatch(
+            &MUON_LINCOMB_BF16,
+            &[u(op, n)?, s0.to_bits(), s1.to_bits()],
+            &[x0, x1, y],
+            self.lanes(n)?,
+        )
+    }
+
+    /// Round the first `n` values of `buf` to bf16 in place.
+    fn round_in_place(
+        &self,
+        op: Op,
+        job: &mut Job<'_>,
+        n: usize,
+        buf: &dyn Binding,
+    ) -> Result<(), OjasError> {
+        job.dispatch(&MUON_ROUND, &[u(op, n)?], &[buf], self.lanes(n)?)
+    }
+
     /// Raise `op`'s fault bit if any of the first `n` values of `buf` is not
     /// finite. Used for inputs whose values need not reach an output.
     fn check_finite(
@@ -1285,7 +1371,8 @@ impl WgpuBackend {
 
     /// Causal SDPA forward after its validator: the output and the
     /// `[B, H, T]` row log-sum-exp. Grouped-query heads read their KV head
-    /// in place, so nothing beyond the two outputs is allocated.
+    /// in place, so nothing beyond the two outputs is allocated except the
+    /// widened copy of a `Bf16` operand (`WgpuBackend::operand`).
     fn sdpa_forward(
         &self,
         op: Op,
@@ -1301,9 +1388,9 @@ impl WgpuBackend {
         let (y, yb) = self.out(op, qv.shape())?;
         let (lse, lb) = self.out(op, &qv.shape()[..qv.shape().len().saturating_sub(1)])?;
         let mut job = self.job(op);
-        let qb = bind(op, &mut job, &qv)?;
-        let kb = bind(op, &mut job, &kv)?;
-        let vb = bind(op, &mut job, &vv)?;
+        let qb = self.operand(op, &mut job, &qv)?;
+        let kb = self.operand(op, &mut job, &kv)?;
+        let vb = self.operand(op, &mut job, &vv)?;
         job.dispatch(
             &attn_kernel(plan.module, "attn_fwd"),
             &plan.words(op)?,
@@ -1341,12 +1428,12 @@ impl WgpuBackend {
         let (gk, gkb) = self.out(op, kv.shape())?;
         let (gvv, gvb) = self.out(op, vv.shape())?;
         let mut job = self.job(op);
-        let qb = bind(op, &mut job, &qv)?;
-        let kb = bind(op, &mut job, &kv)?;
-        let vb = bind(op, &mut job, &vv)?;
-        let ob = bind(op, &mut job, &ov)?;
+        let qb = self.operand(op, &mut job, &qv)?;
+        let kb = self.operand(op, &mut job, &kv)?;
+        let vb = self.operand(op, &mut job, &vv)?;
+        let ob = self.operand(op, &mut job, &ov)?;
         let lb = bind(op, &mut job, &lv)?;
-        let gb = bind(op, &mut job, &gv)?;
+        let gb = self.operand(op, &mut job, &gv)?;
         let stats = job.scratch((stats_len as u64) * 4)?;
         let words = plan.words(op)?;
         job.dispatch(
@@ -1485,6 +1572,85 @@ impl Backend for WgpuBackend {
 
     fn numerics(&self) -> Numerics {
         Numerics::Fast
+    }
+
+    /// A `Bf16` operand is widened into charged job scratch for the op
+    /// (`WgpuBackend::operand`); the kernels and their bits are the `F32`
+    /// ones.
+    fn bf16_operands(&self) -> bool {
+        true
+    }
+
+    /// On the device, under its own op: `narrow_bf16` rounds and packs two
+    /// values a word. A NaN is a value here (the rule of
+    /// [`ojas_core::f32_to_bf16`]), so this never raises. A host tensor is
+    /// [`OjasError::Placement`].
+    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        let op = TO_BF16;
+        match tensor.dtype() {
+            DType::Bf16 => return Ok(tensor.clone()),
+            DType::F32 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: op.name(),
+                    expected: DType::F32,
+                    got,
+                })
+            }
+        }
+        let a = self.placed(op, tensor)?;
+        if a.elems == 0 || tensor.shape().contains(&0) {
+            return Err(shape(op, "empty tensor"));
+        }
+        let words = a.elems.div_ceil(2);
+        let bytes = (words as u64) * 4;
+        self.ctx.check_bytes(bytes, &self.budget)?;
+        let charge = self.budget.try_reserve(bytes)?;
+        let wb = self.ctx.tensor_buffer(bytes)?;
+        let raw = wb.raw()?.clone();
+        let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::Bf16, charge)?;
+        let mut job = self.job(op);
+        let src = bind(op, &mut job, &a)?;
+        job.dispatch(
+            &NARROW_BF16,
+            &[u(op, a.elems)?],
+            &[&src, &raw],
+            self.lanes(words)?,
+        )?;
+        job.commit()?;
+        Ok(out)
+    }
+
+    /// On the device, under its own op: `widen_bf16`, exact, with no fault
+    /// on a NaN or an infinity. A host tensor is [`OjasError::Placement`].
+    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        let op = TO_F32;
+        match tensor.dtype() {
+            DType::F32 => return Ok(tensor.clone()),
+            DType::Bf16 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: op.name(),
+                    expected: DType::Bf16,
+                    got,
+                })
+            }
+        }
+        let a = self.placed(op, tensor)?;
+        if a.elems == 0 || tensor.shape().contains(&0) {
+            return Err(shape(op, "empty tensor"));
+        }
+        let (y, yb) = self.out(op, tensor.shape())?;
+        let mut job = self.job(op);
+        let (src, first) = bf16_words(op, &mut job, &a)?;
+        job.dispatch(
+            &WIDEN_BF16,
+            &[u(op, a.elems)?, first, 0],
+            &[&src, &yb],
+            self.lanes(a.elems)?,
+        )?;
+        job.commit()?;
+        Ok(y)
     }
 
     /// Submit everything recorded, wait for it, and report a deferred fault
@@ -1717,14 +1883,13 @@ impl Backend for WgpuBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         let op = LINEAR_F;
         let d = linear_forward_dims(input, weight)?;
-        refuse_bf16_operands(op.name(), BackendId::Wgpu, &[input, weight])?;
         let (rows, kin, nout) = (d.rows, d.in_features, d.out_features);
         let xv = self.placed(op, input)?;
         let wv = self.placed(op, weight)?;
         let (y, yb) = self.out(op, &d.out_shape)?;
         let mut job = self.job(op);
-        let xb = bind(op, &mut job, &xv)?;
-        let wb = bind(op, &mut job, &wv)?;
+        let xb = self.operand(op, &mut job, &xv)?;
+        let wb = self.operand(op, &mut job, &wv)?;
         self.gemm(
             op,
             &mut job,
@@ -1747,7 +1912,6 @@ impl Backend for WgpuBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         let op = LINEAR_B;
         let d = linear_backward_dims(input, weight, grad_output)?;
-        refuse_bf16_operands(op.name(), BackendId::Wgpu, &[input, weight, grad_output])?;
         let (rows, kin, nout) = (d.rows, d.in_features, d.out_features);
         let xv = self.placed(op, input)?;
         let wv = self.placed(op, weight)?;
@@ -1755,9 +1919,9 @@ impl Backend for WgpuBackend {
         let (gx, gxb) = self.out(op, xv.shape())?;
         let (gw, gwb) = self.out(op, wv.shape())?;
         let mut job = self.job(op);
-        let xb = bind(op, &mut job, &xv)?;
-        let wb = bind(op, &mut job, &wv)?;
-        let gb = bind(op, &mut job, &gv)?;
+        let xb = self.operand(op, &mut job, &xv)?;
+        let wb = self.operand(op, &mut job, &wv)?;
+        let gb = self.operand(op, &mut job, &gv)?;
         self.gemm(
             op,
             &mut job,
@@ -1881,7 +2045,6 @@ impl Backend for WgpuBackend {
         window: Option<usize>,
     ) -> Result<(Tensor, Tensor), OjasError> {
         let d = causal_sdpa_forward_dims(q, k, v, window)?;
-        refuse_bf16_operands(SDPA_F.name(), BackendId::Wgpu, &[q, k, v])?;
         self.sdpa_forward(SDPA_F, d, window, [q, k, v])
     }
 
@@ -1896,11 +2059,6 @@ impl Backend for WgpuBackend {
         window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
         let d = causal_sdpa_backward_dims(q, k, v, output, lse, grad_output, window)?;
-        refuse_bf16_operands(
-            SDPA_B.name(),
-            BackendId::Wgpu,
-            &[q, k, v, output, lse, grad_output],
-        )?;
         self.sdpa_backward(SDPA_B, d, window, [q, k, v, output, lse, grad_output])
     }
 
@@ -2409,13 +2567,16 @@ impl Backend for WgpuBackend {
         job.commit()
     }
 
-    /// f32 Newton-Schulz with the CPU reference's semantics: Nesterov
+    /// Newton-Schulz with the CPU reference's semantics: Nesterov
     /// momentum, Frobenius normalization with [`MUON_NS_EPS`] added to the
     /// norm, five steps with [`MUON_NS5_A`]/[`MUON_NS5_B`]/[`MUON_NS5_C`] on
     /// the wide orientation (a tall matrix is transposed first and back
     /// after), scale `max(1, rows/cols)^0.5`, and decoupled decay.
-    /// [`Ns5Precision::Bf16`] is [`OjasError::Unsupported`], refused before
-    /// anything is charged or written.
+    /// [`Ns5Precision::Bf16`] is stock nanolab's iteration as the CPU runs
+    /// it: the update, the norm, `norm + eps`, the division, each GEMM
+    /// output and each scalar multiple and sum rounded to bf16, with the
+    /// f32 GEMMs on those bf16 values. Only a GEMM's summation order differs
+    /// from the CPU's.
     ///
     /// In place on `param` and `momentum`, which must each be the sole owner
     /// of their device buffer. Everything is computed into scratch with a
@@ -2433,15 +2594,7 @@ impl Backend for WgpuBackend {
         let d = muon_ns5_step_dims(param, grad, momentum)?;
         let (rows, cols) = (d.rows, d.cols);
         require_ns5(5)?;
-        if config.ns5 != Ns5Precision::F32 {
-            return Err(OjasError::Unsupported {
-                op: op.name(),
-                detail: format!(
-                    "wgpu runs Newton-Schulz in f32 only; {:?} is not implemented here",
-                    config.ns5
-                ),
-            });
-        }
+        let bf16 = config.ns5 == Ns5Precision::Bf16;
         self.placed(op, param)?;
         let gv = self.placed(op, grad)?;
         self.placed(op, momentum)?;
@@ -2500,6 +2653,10 @@ impl Backend for WgpuBackend {
             &[&gb, &mb, &buf, &upd],
             grid,
         )?;
+        // `X = G.bfloat16()`: the update is rounded before its norm.
+        if bf16 {
+            self.round_in_place(op, &mut job, n, &upd)?;
+        }
         let src = if tall {
             let t = job.scratch(bytes)?;
             self.permute_into(op, &mut job, &upd, &t, &[rows, cols], &[1, 0])?;
@@ -2509,18 +2666,40 @@ impl Backend for WgpuBackend {
         };
         self.global_norm(op, &mut job, &[(&src, n)], &norm)?;
         job.dispatch(
-            &MUON_NORMALIZE,
+            if bf16 {
+                &MUON_NORMALIZE_BF16
+            } else {
+                &MUON_NORMALIZE
+            },
             &[u(op, n)?, (MUON_NS_EPS as f32).to_bits()],
             &[&src, &x, &norm],
             grid,
         )?;
+        // Under bf16 each GEMM output is rounded before the combination
+        // reads it, and each combination rounds its products and its sum:
+        // B = r(r(b A) + r(c r(A A))), X' = r(r(a X) + r(B X)), the CPU's
+        // order (ojas-cpu/src/optim.rs `newton_schulz`).
+        let comb = if bf16 {
+            Self::lincomb_bf16
+        } else {
+            Self::lincomb
+        };
         for _ in 0..5 {
             // A = X X^T, A2 = A A, B = b A + c A2, X' = a X + B X.
             self.gemm(op, &mut job, Mm::Nt, &x, &x, &am, (r, r, c), [c, 1, 1, c])?;
+            if bf16 {
+                self.round_in_place(op, &mut job, rr, &am)?;
+            }
             self.gemm(op, &mut job, Mm::Nn, &am, &am, &a2, (r, r, r), [r, 1, r, 1])?;
-            self.lincomb(op, &mut job, rr, b, &am, cc, &a2, &bm)?;
+            if bf16 {
+                self.round_in_place(op, &mut job, rr, &a2)?;
+            }
+            comb(self, op, &mut job, rr, b, &am, cc, &a2, &bm)?;
             self.gemm(op, &mut job, Mm::Nn, &bm, &x, &bx, (r, c, r), [r, 1, c, 1])?;
-            self.lincomb(op, &mut job, n, a, &x, 1.0, &bx, &x_next)?;
+            if bf16 {
+                self.round_in_place(op, &mut job, n, &bx)?;
+            }
+            comb(self, op, &mut job, n, a, &x, 1.0, &bx, &x_next)?;
             std::mem::swap(&mut x, &mut x_next);
         }
         let ortho = if tall {

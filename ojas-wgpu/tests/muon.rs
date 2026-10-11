@@ -1,8 +1,9 @@
 //! `WgpuBackend::muon_ns5_step` against `CpuBackend` (the f32 Newton-Schulz
 //! reference in `ojas-cpu/src/optim.rs`): wide, tall and square matrices,
 //! the nanolab shapes, momentum carried over steps, Nesterov on and off,
-//! weight decay on and off, and the fail-closed paths (including
-//! `Ns5Precision::Bf16`, which this backend refuses).
+//! weight decay on and off, and the fail-closed paths. `Ns5Precision::Bf16`
+//! is held to stock nanolab's step (the ojas-oracle `muon_step_bf16`
+//! fixture) and to the CPU's bf16 iteration.
 //!
 //! Tolerance is the shared `TOL * max(1, max |cpu|)` over each tensor.
 
@@ -10,6 +11,8 @@ mod common;
 
 use common::*;
 use ojas_core::{Backend, DType, MuonNs5Config, Ns5Precision, OjasError, Tensor};
+use ojas_oracle::golden::{muon_step_bf16, MuonStepCase};
+use ojas_oracle::parity::TRACE_BF16_PARAM_NORMWISE_REL_TOL;
 use ojas_wgpu::WgpuBackend;
 
 fn bits(g: &WgpuBackend, t: &Tensor) -> Vec<u32> {
@@ -306,15 +309,6 @@ fn malformed_calls_are_refused_before_anything_is_written() {
             _ => panic!("{bad:?}: got {r:?}"),
         }
     }
-    // bf16 Newton-Schulz is CPU and Metal only: refused before any write.
-    let bf16 = MuonNs5Config {
-        ns5: Ns5Precision::Bf16,
-        ..cfg
-    };
-    assert!(matches!(
-        g.muon_ns5_step(&mut p, &grad, &mut m, bf16),
-        Err(OjasError::Unsupported { .. })
-    ));
     // A parameter shared with another tensor is refused, not written.
     let alias = p.clone();
     assert!(g.muon_ns5_step(&mut p, &grad, &mut m, cfg).is_err());
@@ -333,4 +327,125 @@ fn malformed_calls_are_refused_before_anything_is_written() {
         .map(|v| v.to_bits())
         .collect();
     assert_eq!(bits(g, &p), want);
+}
+
+/// `‖(got − p) − (want − p)‖ / ‖want − p‖`: the error of the step's whole
+/// change to the parameter, relative to torch's.
+fn update_rel(case: &MuonStepCase, got: &[f32]) -> f64 {
+    let (mut num, mut den) = (0.0f64, 0.0f64);
+    for ((&g, &w), &p) in got.iter().zip(&case.p_after).zip(&case.p) {
+        let (dg, dw) = (f64::from(g) - f64::from(p), f64::from(w) - f64::from(p));
+        num += (dg - dw) * (dg - dw);
+        den += dw * dw;
+    }
+    (num / den).sqrt()
+}
+
+fn wgpu_step(case: &MuonStepCase, ns5: Ns5Precision) -> (Vec<f32>, Vec<f32>) {
+    let shape = [case.rows, case.cols];
+    let hb = host_budget();
+    let mut p = up(&Tensor::from_f32(&case.p, &shape, hb).unwrap());
+    let g = up(&Tensor::from_f32(&case.g, &shape, hb).unwrap());
+    let mut m = up(&Tensor::from_f32(&case.m, &shape, hb).unwrap());
+    let cfg = MuonNs5Config {
+        lr: case.lr,
+        momentum: case.momentum,
+        weight_decay: case.weight_decay,
+        nesterov: case.nesterov,
+        ns5,
+    };
+    gpu().muon_ns5_step(&mut p, &g, &mut m, cfg).unwrap();
+    (down(&p), down(&m))
+}
+
+/// Stock nanolab's Muon step (`X = G.bfloat16()`, the ojas-oracle fixture
+/// the CPU matches bit for bit) against wgpu's bf16 iteration. The update
+/// is gated at [`TRACE_BF16_PARAM_NORMWISE_REL_TOL`]: stock bf16 NS5 is
+/// discontinuous in its input, so a GEMM summed in another order may move a
+/// bf16 rounding by one step, and nothing tighter holds against any
+/// reference. The wgpu f32 iteration on the same inputs is the contrast the
+/// bf16 one must beat.
+#[test]
+fn bf16_ns5_matches_stock_nanolab_steps() {
+    let cases = muon_step_bf16().unwrap();
+    assert_eq!(cases.len(), 4);
+    for (i, case) in cases.iter().enumerate() {
+        let what = format!("case {i} {}x{}", case.rows, case.cols);
+        let (p, m) = wgpu_step(case, Ns5Precision::Bf16);
+        close_vec(&format!("{what} momentum"), &m, &case.m_after);
+        let rel = update_rel(case, &p);
+        let (p32, _) = wgpu_step(case, Ns5Precision::F32);
+        let rel32 = update_rel(case, &p32);
+        eprintln!("{what}: bf16 NS5 update rel {rel:e}; f32 NS5 update rel {rel32:e}");
+        assert!(
+            rel <= TRACE_BF16_PARAM_NORMWISE_REL_TOL,
+            "{what}: bf16 update is {rel:e} from torch's"
+        );
+        assert!(
+            rel < rel32,
+            "{what}: bf16 ({rel:e}) is no closer to torch than f32 ({rel32:e})"
+        );
+    }
+}
+
+/// With a zero parameter, `lr` 1 and no decay, a square or wide matrix's new
+/// parameter is exactly `-NS5(update)`, so under bf16 every value must be
+/// bf16 (low 16 bits zero), which an f32 iteration never gives; a tall one
+/// is scaled by `sqrt(rows / cols)`. Each shape is also held to the CPU's
+/// bf16 iteration at [`TRACE_BF16_PARAM_NORMWISE_REL_TOL`].
+#[test]
+fn bf16_ns5_rounds_every_value_and_tracks_cpu_bf16() {
+    let c = cpu();
+    let cfg = MuonNs5Config {
+        lr: 1.0,
+        momentum: 0.99,
+        weight_decay: 0.0,
+        nesterov: true,
+        ns5: Ns5Precision::Bf16,
+    };
+    for &(rows, cols) in &[
+        (64usize, 64usize),
+        (64, 192),
+        (192, 64),
+        (131, 67),
+        (768, 768),
+    ] {
+        let shape = [rows, cols];
+        let grad = host(41 + cols as u64, &shape);
+        let mo0 = host(42, &shape);
+        let mut hp = Tensor::zeros(&shape, DType::F32, host_budget()).unwrap();
+        let mut hm = Tensor::from_f32(&mo0.to_f32_vec().unwrap(), &shape, host_budget()).unwrap();
+        c.muon_ns5_step(&mut hp, &grad, &mut hm, cfg).unwrap();
+        let mut dp = up(&Tensor::zeros(&shape, DType::F32, host_budget()).unwrap());
+        let mut dm = up(&mo0);
+        gpu()
+            .muon_ns5_step(&mut dp, &up(&grad), &mut dm, cfg)
+            .unwrap();
+        let (got, want) = (down(&dp), hp.to_f32_vec().unwrap());
+        let (mut num, mut den) = (0.0f64, 0.0f64);
+        for (&g, &w) in got.iter().zip(&want) {
+            num += (f64::from(g) - f64::from(w)).powi(2);
+            den += f64::from(w).powi(2);
+        }
+        let rel = (num / den).sqrt();
+        eprintln!("bf16 ns5 {rows}x{cols}: wgpu vs cpu normwise {rel:e}");
+        assert!(
+            rel <= TRACE_BF16_PARAM_NORMWISE_REL_TOL,
+            "{rows}x{cols}: wgpu bf16 NS5 is {rel:e} from the CPU's"
+        );
+        if rows <= cols {
+            for (i, v) in got.iter().enumerate() {
+                assert_eq!(
+                    v.to_bits() & 0xffff,
+                    0,
+                    "{rows}x{cols}: value {i} ({v:e}) is not bf16"
+                );
+            }
+        }
+        close_vec(
+            &format!("bf16 ns5 {rows}x{cols} momentum"),
+            &down(&dm),
+            &hm.to_f32_vec().unwrap(),
+        );
+    }
 }

@@ -52,3 +52,35 @@ fn kv_write(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: 
     let slot = (pw(3u) + r / row) % pw(5u);
     dst[(i / per_src) * pw(2u) + slot * row + r % row] = src[i];
 }
+
+// bf16 storage packs two values a word, element 2j in the low half of word
+// j (little-endian bytes).
+//
+// widen_bf16: one lane per output element, `bits << 16`, so every value is
+// exact. Words: 0 element count, 1 the first element's half within src
+// word 0 (0 or 1), 2 raise on a NaN or an infinity (a matmul-class operand,
+// which refuses them) or not (to_f32, where a NaN is a value). The value is
+// widened either way.
+@compute @workgroup_size(256, 1, 1)
+fn widen_bf16(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = flat_group(wg, nwg) * 256u + lid.x;
+    if (i >= pw(0u)) { return; }
+    let e = pw(1u) + i;
+    let w = ((src[e >> 1u] >> ((e & 1u) * 16u)) & 0xffffu) << 16u;
+    if (pw(2u) != 0u && (w & 0x7f800000u) == 0x7f800000u) { raise(); }
+    dst[i] = w;
+}
+
+// narrow_bf16: src's f32 words rounded to bf16 (bf16_bits) and packed. One
+// lane per output word. Word 0: element count; an odd count leaves the high
+// half of the last word zero. A NaN is a value here, so this never raises.
+@compute @workgroup_size(256, 1, 1)
+fn narrow_bf16(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let j = flat_group(wg, nwg) * 256u + lid.x;
+    let n = pw(0u);
+    let e = 2u * j;
+    if (e >= n) { return; }
+    var hi = 0u;
+    if (e + 1u < n) { hi = bf16_bits(src[e + 1u]); }
+    dst[j] = bf16_bits(src[e]) | (hi << 16u);
+}
