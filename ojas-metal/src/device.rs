@@ -1165,8 +1165,8 @@ impl Worker {
                 part,
             } => self.gated_rms_bwd([x, z, w, gy], [rows, dim], eps, part),
             Cmd::RoundBf16 { x } => self.round_bf16(x),
-            Cmd::ToF32 { x } => self.to_f32(x),
-            Cmd::ToBf16 { x } => self.to_bf16(x),
+            Cmd::ToF32 { x } => self.widen_bf16(x),
+            Cmd::ToBf16 { x } => self.narrow_bf16(x),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
             Cmd::Sigmoid { x } => self.sigmoid(x, None),
@@ -2315,7 +2315,7 @@ impl Worker {
     /// `x` (a bf16 window: `n` 2-byte elements from byte offset `off`)
     /// widened exactly into a new f32 buffer. No status slot and no finite
     /// scan: a NaN or infinity is carried to the op that reads the copy.
-    fn to_f32(&mut self, x: Arg) -> Res<Reply> {
+    fn widen_bf16(&mut self, x: Arg) -> Res<Reply> {
         let buf = self
             .bufs
             .get(&x.id)
@@ -2351,7 +2351,7 @@ impl Worker {
     /// `x` (f32) rounded to bf16 into a new buffer of `n` 2-byte elements,
     /// its size rounded up to whole words. No status slot and no finite
     /// scan, as [`Self::round_bf16`].
-    fn to_bf16(&mut self, x: Arg) -> Res<Reply> {
+    fn narrow_bf16(&mut self, x: Arg) -> Res<Reply> {
         let xv = self.view(x)?;
         let n = u32_of(xv.n)?;
         let bytes =
