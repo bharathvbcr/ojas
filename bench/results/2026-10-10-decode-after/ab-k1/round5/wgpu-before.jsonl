@@ -1,0 +1,18 @@
+{"runtime":"ojas-wgpu","row":"_device","status":"info","device":{"backend":"WgpuBackend","adapter":"Apple M5 Pro","hal":"Metal"}}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_prefill_p32","when":"before","load":"9.80 24.75 21.30","gpu_util_pct":96}
+{"runtime":"ojas-wgpu","row":"gen_prefill_p32","status":"ok","min_ms":30.557542,"median_ms":33.461625,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_prefill_p32","when":"after","load":"9.80 24.75 21.30","gpu_util_pct":98}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"before","load":"9.80 24.75 21.30","gpu_util_pct":78}
+{"runtime":"ojas-wgpu","row":"gen_greedy_p32_n32","status":"ok","min_ms":737.947750,"median_ms":914.787562,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_greedy_p32_n32","when":"after","load":"7.91 23.11 20.81","gpu_util_pct":95}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"before","load":"7.91 23.11 20.81","gpu_util_pct":0}
+{"runtime":"ojas-wgpu","row":"gen_topk50_p32_n32","status":"ok","min_ms":741.847375,"median_ms":743.136542,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_topk50_p32_n32","when":"after","load":"6.39 21.77 20.38","gpu_util_pct":96}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_temp0_p32_n32","when":"before","load":"6.39 21.77 20.38","gpu_util_pct":0}
+{"runtime":"ojas-wgpu","row":"gen_temp0_p32_n32","status":"ok","min_ms":743.047875,"median_ms":744.496250,"iters":20,"warmup":5,"parity_max_abs":8.630752563476563e-5,"parity_rel":4.864990859192865e-6,"tol":1e-3}
+{"runtime":"ojas-wgpu","row":"_load","status":"info","for":"gen_temp0_p32_n32","when":"after","load":"5.84 20.90 20.09","gpu_util_pct":95}
+{"runtime":"ojas-wgpu","row":"_gen_ids","status":"info","for":"gen_greedy_p32_n32","ids_equal":32,"common_prefix":32,"of":32,"torch_of":32}
+{"runtime":"ojas-wgpu","row":"_gen_traffic","status":"info","for":"gen_greedy_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":4,"step_uploads":0,"step_upload_bytes":0,"step_readbacks":1,"step_readback_bytes":4}
+{"runtime":"ojas-wgpu","row":"_gen_traffic","status":"info","for":"gen_topk50_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":201216,"step_uploads":1,"step_upload_bytes":4,"step_readbacks":1,"step_readback_bytes":201216}
+{"runtime":"ojas-wgpu","row":"_gen_traffic","status":"info","for":"gen_temp0_p32_n32","prefill_uploads":1,"prefill_upload_bytes":128,"prefill_readback_bytes":201216,"step_uploads":1,"step_upload_bytes":4,"step_readbacks":1,"step_readback_bytes":201216}
+{"runtime":"ojas-wgpu","row":"_gen_readback","status":"info","for":"gen_greedy_p32_n32","bytes":201216,"to_host_us":205.67,"read_bytes_us":179.83,"decode_pass_us":25.83,"iters":50}

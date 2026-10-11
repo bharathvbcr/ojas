@@ -218,6 +218,8 @@ BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
 </li>
 <li><code>gen_topk50_p32_n32</code>: the same forwards through <code>generate</code>, each id drawn at temperature 1 from the top 50 logits (seed 1702): the sampled path, which needs only each row&#39;s 50 leaders. torch draws with <code>torch.topk</code>, <code>softmax</code> and a seeded <code>torch.multinomial</code>, so its ids are not compared.
 </li>
+<li><code>gen_temp0_p32_n32</code>: the same forwards through <code>generate</code> at temperature 0, which needs only each row&#39;s one leader (Go&#39;s <code>GenerateIDs</code> at temperature 0). Its torch twin is the greedy row.
+</li>
 <li><code>gen_gqa4_prefill_p32</code>, <code>gen_gqa4_greedy_p32_n32</code>: the first two on the same model with 4 KV heads for its 12 query heads (nanolab <code>Config(n_kv_head=4)</code>), weights from the same rule.
 </li>
 </ul>

@@ -9,6 +9,10 @@ beside `../2026-10-08-decode-before/` (taken at `8967457`, before `7f0a9f3`,
   `generate` with a `top_k` reads the whole `[vocab]` row back every token.
 - **`after/`** is `2b68d11`: `DeviceDecoder::forward_top`, which selects the
   leaders on the device (`Backend::topk_rows`) and reads back only them.
+- **`ab-k1/`** is `cefc864`, the outcome: `forward_top` selects on the
+  device only for one leader (`k` = 1) and reads the row back for `k` > 1,
+  because `ab/` and `probes/` below show the device selection slower at
+  every `k` > 1. See "`ab-k1/`" below.
 
 Both are `bench/run_paired.sh 3` with `BENCH_ROWS=gen_` and all five lanes
 (`ojas-metal ojas-wgpu ojas-cpu ojas-cpu-host torch-mps`), built from a clean
@@ -109,6 +113,48 @@ from `8967457` to `de5efaf` (device argmax and upload-free steps, the shared
 decode step for `CpuGpt`, in-place KV, the CPU hot paths), so no one change
 owns them.
 
+### `ab-k1/`: device selection only at `k` = 1
+
+`cefc864` keeps `topk_rows` for one leader only: temperature 0, as Go's
+`GenerateIDs` asks, or `top_k = 1`. There the id stays on the device for the
+next forward with no upload, as `forward_greedy`'s does. Every other `k`
+reads the row back and ranks it on the host. `ab-k1/` times that against the
+decoder before `forward_top` existed. **before** is `de5efaf` with
+`867c921`'s bench files, so its temperature-0 and top-50 steps both read
+back the row and upload the id. **after** is `cefc864`. Both use the same
+runner as `ab/` (6 rounds, Metal then wgpu, order alternating), with the new
+row `gen_temp0_p32_n32` (`generate` at temperature 0; its torch twin is the
+greedy row) and torch references from `867c921`'s `torch_rows.py`. The
+greedy row is a control, and so is top-50, which reads the row on both
+sides.
+
+Traffic per decode step (`_gen_traffic`, measured; independent of load):
+
+| row | before | after |
+| :-- | :-- | :-- |
+| `gen_temp0_p32_n32` | 1 upload / 4 B / 201,216 B (1 readback) | 0 uploads / 0 B / 8 B (2 readbacks) |
+| `gen_topk50_p32_n32` | 1 / 4 B / 201,216 B | 1 / 4 B / 201,216 B |
+
+**Time: unresolved.** The 1-minute load ran from 3 to 46 (rounds 2–4 at
+20–46), and even the controls moved by about ±1 ms per token from round to
+round. The table gives after minus before for temperature 0 minus the same
+difference for greedy (min_ms, ms per token), in the quiet rounds only:
+
+| lane | round (load) | temp0 - greedy control |
+| :-- | :-- | --: |
+| Metal | 1 (6) | -0.06 |
+| Metal | 6 (4) | -0.21 |
+| wgpu | 1 (9-15) | +0.09 |
+| wgpu | 5 (5-10) | +0.10 |
+| wgpu | 6 (3-4) | +0.39 |
+
+The probe bounds the loss at about +0.08 ms per token on Metal (196 against
+121 µs at `k` = 1), and the probe does not count the id upload that the
+device path skips. That is under 1% of a 10 ms step, so no speedup is
+claimed for `forward_top` at any `k`. `k` = 1 stays on the device because it
+reads back 8 B instead of 201 KB, uploads nothing, and costs no measurable
+time. `summary.md` has every row's tables.
+
 ## GQA decode row
 
 `gen_gqa4_prefill_p32` and `gen_gqa4_greedy_p32_n32` run nanolab's default
@@ -163,10 +209,11 @@ so it is not the in-place change alone.
 | `base/`, `after/` | `env.txt`, `env_torch.json`, `load.jsonl`, `summary.md` and every round's JSONL, as `run_paired.sh` wrote them (not `ref/`), except that `summary.md`'s first line names the output directory relative to the scratch directory |
 | `ab/` | `ab_decode.sh` (the runner), `summarize.py` (the table; analysis only), `load.jsonl`, `summary.md` and every round's JSONL |
 | `probes/` | `probe_topk.rs` (the device-against-host selection probe) and `probe_topk.txt` (its two runs) |
+| `ab-k1/` | the `k` = 1 A/B: `ab_decode.sh` (`ab/`'s runner, with `BENCH_ROWS` overridable), `summarize.py` (`ab/`'s, over every decode row), `load.jsonl`, `summary.md` and every round's JSONL |
 
 ## tessl revision
 
-`base/` and `after/` record tessl `de4747a` (`env.txt`), as did the probe.
+`base/` and `after/` record tessl `de4747a` (`env.txt`), as did the probe and `ab-k1/`'s two binaries.
 tessl `d0b1792` (merged 2026-10-10) breaks `ojas-metal`'s build:
 `CeWorkspace::new` gained a sixth argument (`GemmOperands`) that
 `ojas-metal/src/gpu.rs:1139` does not pass (E0061). That break is upstream
