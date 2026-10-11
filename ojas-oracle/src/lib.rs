@@ -11,6 +11,8 @@
 //!   apply them to any model implementing [`parity::ParityModel`].
 //! - [`spec`]: the `ojas.spec` JSON schema and the §2 parameter table.
 //! - [`safetensors`]: the fixture policy over `ojas_io::SafeTensors`.
+//! - [`bf16_operands`]: the bf16 operand contract of
+//!   `Backend::bf16_operands`, run on any backend that reports it.
 //! - [`gdn`]: the gated delta rule's f64 forward and transformers' published
 //!   goldens for it (`Backend::chunked_gdn_forward` / `_backward`).
 //!
@@ -23,6 +25,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bf16_operands;
 pub mod gdn;
 pub mod golden;
 pub mod parity;
