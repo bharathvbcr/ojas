@@ -1,7 +1,7 @@
 ---
 id: "gp-ft-bf16-frozen-base"
 title: "bf16 frozen base on Metal: four bf16 operand lanes (linear fwd, linear dX, SDPA fwd/bwd), HF bf16 load without widening, Precision::Bf16 through the provider, measured memory at T=2048 and T=9,638"
-status: ready
+status: review
 priority: 1
 severity: high
 type: feature
@@ -40,7 +40,7 @@ bf16 frozen base on Metal: four bf16 operand lanes (linear fwd, linear dX, SDPA 
 
 Task: gp-ft-bf16-frozen-base
 Type: feature
-Status: ready
+Status: review
 Priority: 1 (High)
 Severity: high
 Owner: unassigned
@@ -62,12 +62,12 @@ Depends on: gp-ft-frozen-params-and-lora (linear_backward_input), gp-backend-wra
 Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune audit); [A] read by an audit subagent at d431949, not re-read; [U] unverified, needs a run or an upstream source read. No cargo, GPU or device run was made in this audit.
 
 ## Acceptance criteria
-- [ ] Metal linear_forward accepts a bf16 weight (2 bytes per element resident) with f32 input and f32 accumulation; today Metal refuses bf16 operands (ojas-metal/src/backend.rs:1257, 1283) [V by Fable]
+- [x] Metal linear_forward accepts a bf16 weight (2 bytes per element resident) with f32 input and f32 accumulation; today Metal refuses bf16 operands (ojas-metal/src/backend.rs:1257, 1283) [V by Fable]
 - [ ] Metal linear_backward_input (from gp-ft-frozen-params-and-lora) accepts the same bf16 weight
-- [ ] Metal SDPA forward and backward accept bf16 operands with f32 accumulation (backend.rs:1427, 1443 refuse today) [V by Fable]
-- [ ] HF bf16 safetensors load into bf16 frozen weights without widening to f32 (today ojas-model/src/qwen35/params.rs:304 reads through read_f32_widened [A]); a test asserts resident bytes for the frozen base
+- [x] Metal SDPA forward and backward accept bf16 operands with f32 accumulation (backend.rs:1427, 1443 refuse today) [V by Fable]
+- [x] HF bf16 safetensors load into bf16 frozen weights without widening to f32 (today ojas-model/src/qwen35/params.rs:304 reads through read_f32_widened [A]); a test asserts resident bytes for the frozen base
 - [ ] LoRA weights, D17, the span head, norm weights, the residual stream and optimizer state stay f32
-- [ ] Qwen35Step::open takes a precision and passes Precision::Bf16 to tessl's Qwen35Model::load; today it hard-codes Precision::F32 (ojas-qwen35/src/step.rs:361) [V] although tessl trains a bf16-stored model with f32 masters (qwen35_model.rs:389-392) [V by Fable]. A 2B memory row f32 vs bf16 is committed
+- [x] Qwen35Step::open takes a precision and passes Precision::Bf16 to tessl's Qwen35Model::load; today it hard-codes Precision::F32 (ojas-qwen35/src/step.rs:361) [V] although tessl trains a bf16-stored model with f32 masters (qwen35_model.rs:389-392) [V by Fable]. A 2B memory row f32 vs bf16 is committed
 - [ ] Peak device bytes for one bf16-base LoRA step with checkpointing on, for 0.8B-Base and 2B-Base, at T=2048 and at T=9,638, micro-batch 1, committed under bench/results/ on the M5 Pro. If T=9,638 does not fit, the row says so and the pre-registered fallback applies (buckets capped at 8,192, longer rows dropped and counted; Fable D6)
 - [ ] A Metal out-of-memory at these shapes surfaces as the typed capacity error (gp-oom-error-class)
 
@@ -78,3 +78,35 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-io/src/safetensors.rs
 - ojas-qwen35/src/step.rs
 - bench/results/
+
+### Landed for review (2026-10-11, worktree bf16-frozen-base-on-metal-four-bf16-oper-b35da9b5)
+- **Criteria 1 and 3: met** (14cb81b, 2de4421).
+  - Metal's linear_forward, linear_backward (dX and dW) and causal SDPA forward and backward take Bf16 operands. Each
+    is widened exactly on the device into an f32 copy charged for the call, then runs the existing exact-f32 command.
+  - bf16_operands() is true. ojas-oracle's bf16_operand_contract passes on Metal (192 mixed calls, 15 refusals,
+    26 non-finite cases), and tests/bf16_operands.rs shows a 2-byte residency with the copy released.
+  - No TensorOps bf16 lane is used: it would round the f32 input.
+- **Criterion 2: blocked** on gp-ft-frozen-params-and-lora, since linear_backward_input does not exist yet.
+  linear_backward's dX already takes the bf16 weight, so the new op adopts that lane.
+- **Criterion 4: met** (c32dccb).
+  - load_hf(…, DType::Bf16) keeps a BF16 checkpoint's linears as stored (ojas-io read_bf16_bits).
+  - A fixture test asserts the resident bytes: 2 per linear element, 4 for the rest.
+  - The Tape gives the f32 load's loss and gradient bits on the CPU and on Metal.
+  - The tied embedding stays f32 (Fable). The follow-up is ft-69744e54.
+- **Criterion 5: met for what exists.** Norms, conv, A_log, dt_bias, the residual stream and the optimizer
+  state are f32. LoRA, D17 and the span head are not in the tree yet.
+- **Criterion 6: met with one deviation** (d65879c).
+  - open(snapshot, numerics, precision, budget). Bf16 uses tessl's load_tower rather than load, because
+    tessl's AdamW refuses load's packed head copy for a training model.
+  - AdamW runs with UpdateRule::F32Master and MomentStorage::F32. Bf16 with ExactF32 is refused, and save_state and
+    load_state refuse a bf16 provider.
+  - The 2B row is committed: resident 30.13 GB at both precisions (16 bytes per parameter). Steps past
+    T=2048 f32 were stopped by the machine's 32 GiB memguard.
+  - Lappi's two open() call sites need the new argument after merge.
+- **Criterion 7: blocked** on frozen leaves and LoRA.
+  - Interim full-gradient Tape rows at 2B are committed (bench/results/2026-10-11-bf16-frozen-base). They are
+    labelled as not the LoRA step: bf16 peaks are 16.37 GB at T=2048 and 18.97 GB at T=9,638.
+  - T=9,638 fits, so the fallback is not triggered.
+  - They were measured on Qwen3.5-2B (identical text_config). 2B-Base and 0.8B-Base weights are not on the machine.
+- **Criterion 8: blocked** on gp-oom-error-class. No device OOM was reached: the peak was 33.9 GB of 51.5 GB.
+
