@@ -150,6 +150,7 @@ Open, and why (status review):
   - New test: a_region_rounds_in_f32_storage_even_when_the_backend_takes_bf16 failed before the fix and passes after.
   - Every workspace test with "autocast" in its name passes, and the oracle, model and wgpu bf16 tests pass. clippy is clean.
   - B=8 re-run (bench/results/2026-10-10-bf16-memory/rows-2026-10-11.jsonl): the bf16 region's peak is 10.46 GiB on wgpu (was 10.64) and 10.50 GiB on CPU (was 10.53). Losses are unchanged.
+- Merge check, reported by the sibling session [A, not re-run here]. It merged this branch at 749f979 into its own branch at d09031b with no conflicts; Cargo.lock keeps both ojas-oracle dev-dep entries. cargo test --release --no-fail-fast over ojas-core, ojas-metal, ojas-model, ojas-oracle and ojas-qwen35 gave 72 binaries ok and 0 failures. Since 749f979 this branch has changed only bench results and these notes.
 - Follow-ups noted, not filed by this session: ft-69744e54, filed by the sibling, needs a contract change in this tier (a bf16 tied embedding table: embedding_forward and linear_cross_entropy_mean taking Bf16).
 - Follow-ups not filed: a tape that keeps matmul-class operands as Bf16 (the activation-memory lever); tessl's Qwen35Grads::zeros_like gives a bf16 model a bf16 gradient bank (qwen35_train.rs:132-139, flagged by the sibling session).
 
