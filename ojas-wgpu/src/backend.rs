@@ -1097,7 +1097,7 @@ impl WgpuBackend {
             }
             job.dispatch(
                 &kernel,
-                &[u(op, t0)?, u(op, group.len())?, u(op, first)?],
+                &[u(op, t0)?, u(op, group.len())?, u(op, first)?, u(op, end)?],
                 &bufs,
                 self.groups(end - first)?,
             )?;
@@ -2529,6 +2529,7 @@ impl Backend for WgpuBackend {
                         u(op, group.len())?,
                         u(op, first)?,
                         scale.to_bits(),
+                        u(op, end)?,
                     ],
                     &bufs,
                     self.groups(end - first)?,
@@ -3397,5 +3398,141 @@ mod tests {
         }
         assert_eq!(gpu.download(&p).unwrap().to_f32_vec().unwrap(), [1.0, 2.0]);
         assert_eq!(gpu.download(&m).unwrap().to_f32_vec().unwrap(), [3.0, 4.0]);
+    }
+
+    /// A backend whose device reports `max` workgroups per dimension, so a
+    /// few chunks fold into a 2-D grid with spare workgroups.
+    fn capped(max: u32) -> WgpuBackend {
+        let cap = wgpu::Limits {
+            max_compute_workgroups_per_dimension: max,
+            ..wgpu::Limits::default()
+        };
+        let ctx = WgpuContext::open_capped(&cap).expect("wgpu adapter");
+        assert_eq!(ctx.limits().max_compute_workgroups_per_dimension, max);
+        WgpuBackend::with_context(ctx, Budget::new(1 << 30))
+    }
+
+    /// Positive values, the last chunk a thousand times the rest: a chunk
+    /// that drops out of a sum or a norm moves it by orders of magnitude.
+    fn spiked(n: usize) -> Vec<f32> {
+        let mut v: Vec<f32> = (0..n).map(|i| 1.0 + (i % 7) as f32 * 0.125).collect();
+        let from = (n - 1) / CHUNK * CHUNK;
+        for x in &mut v[from..] {
+            *x *= 1000.0;
+        }
+        v
+    }
+
+    /// `sum_partial` + `sum_finish` over `v`, divided by 1.
+    fn sum_of(gpu: &WgpuBackend, v: &[f32]) -> f32 {
+        let budget = &gpu.budget;
+        let t = gpu
+            .upload(&Tensor::from_f32(v, &[v.len()], budget).unwrap())
+            .unwrap();
+        let (out, raw_out) = gpu.out(CE_F, &[1]).unwrap();
+        let src = raw_of(&t);
+        let mut job = gpu.job(CE_F);
+        gpu.sum(
+            CE_F,
+            &mut job,
+            v.len(),
+            [&src, &src, &src],
+            0,
+            1.0,
+            None,
+            &raw_out,
+        )
+        .unwrap();
+        job.commit().unwrap();
+        gpu.download(&out).unwrap().to_f32_vec().unwrap()[0]
+    }
+
+    /// `global_norm` (clip's and Muon's norm) over one tensor of `v`:
+    /// `(norm, status[1])`.
+    fn norm_of(gpu: &WgpuBackend, v: &[f32]) -> (f32, u32) {
+        let t = gpu
+            .upload(&Tensor::from_f32(v, &[v.len()], &gpu.budget).unwrap())
+            .unwrap();
+        let (held, status) = gpu.out(MUON, &[4]).unwrap();
+        let src = raw_of(&t);
+        let mut job = gpu.job(MUON);
+        gpu.global_norm(MUON, &mut job, &[(&src, v.len())], &status)
+            .unwrap();
+        job.commit().unwrap();
+        let words = gpu.ctx.read(&status, 0, 8).unwrap();
+        drop(held);
+        let w = |i: usize| u32::from_le_bytes(words[4 * i..4 * i + 4].try_into().unwrap());
+        (f32::from_bits(w(0)), w(1))
+    }
+
+    /// Sizes that cover every grid shape under `cap`: exact multiples of a
+    /// chunk, one more, one fewer, and one element.
+    fn grid_sizes(cap: u32) -> Vec<usize> {
+        let mut sizes = vec![1usize];
+        for chunks in 1..=(cap * cap) as usize {
+            sizes.extend([chunks * CHUNK - 1, chunks * CHUNK, (chunks - 1) * CHUNK + 1]);
+        }
+        sizes.sort_unstable();
+        sizes.dedup();
+        sizes
+    }
+
+    #[test]
+    fn the_sum_stage_keeps_its_last_chunk_on_a_folded_grid() {
+        let open = WgpuBackend::open(Budget::new(1 << 30)).expect("wgpu adapter");
+        for cap in [2u32, 3, 4] {
+            let gpu = capped(cap);
+            for n in grid_sizes(cap) {
+                let v = spiked(n);
+                let want = v.iter().map(|&x| f64::from(x)).sum::<f64>();
+                let first = sum_of(&gpu, &v);
+                let rel = (f64::from(first) - want).abs() / want;
+                assert!(rel < 1e-5, "cap {cap} n {n}: sum {first} vs f64 {want}");
+                assert_eq!(
+                    first.to_bits(),
+                    sum_of(&open, &v).to_bits(),
+                    "cap {cap} n {n}"
+                );
+                for run in 1..20 {
+                    assert_eq!(
+                        first.to_bits(),
+                        sum_of(&gpu, &v).to_bits(),
+                        "cap {cap} n {n} run {run}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_global_norm_keeps_its_last_chunk_on_a_folded_grid() {
+        let open = WgpuBackend::open(Budget::new(1 << 30)).expect("wgpu adapter");
+        for cap in [2u32, 3, 4] {
+            let gpu = capped(cap);
+            for n in grid_sizes(cap) {
+                let v = spiked(n);
+                let want = v
+                    .iter()
+                    .map(|&x| f64::from(x) * f64::from(x))
+                    .sum::<f64>()
+                    .sqrt();
+                let (first, bad) = norm_of(&gpu, &v);
+                assert_eq!(bad, 0, "cap {cap} n {n}: a finite gradient flagged");
+                let rel = (f64::from(first) - want).abs() / want;
+                assert!(rel < 1e-5, "cap {cap} n {n}: norm {first} vs f64 {want}");
+                assert_eq!(
+                    first.to_bits(),
+                    norm_of(&open, &v).0.to_bits(),
+                    "cap {cap} n {n}"
+                );
+                for run in 1..20 {
+                    assert_eq!(
+                        first.to_bits(),
+                        norm_of(&gpu, &v).0.to_bits(),
+                        "cap {cap} n {n} run {run}"
+                    );
+                }
+            }
+        }
     }
 }

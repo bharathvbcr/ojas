@@ -3,8 +3,11 @@
 // the norm, w0.. for the scale); `tbl` holds every gradient of the call as
 // (element count, index of its first CHUNK-element chunk among all the
 // call's chunks). Words: 0 the dispatch's first gradient, 1 gradients bound,
-// 2 the dispatch's first chunk. Workgroup g takes chunk word2 + g, finds its
-// slot (uniform across the workgroup) and reads its chunk once.
+// 2 the dispatch's first chunk, then the chunk end: one past the dispatch's
+// last chunk (word 3 of norm_partial, word 4 of scale_multi, whose word 3 is
+// the scale). Workgroup g takes chunk word2 + g, finds its slot (uniform
+// across the workgroup) and reads its chunk once; a workgroup whose chunk is
+// at or past the chunk end is a spare one of a folded grid and does nothing.
 //
 // The norm is amax * sqrt(sum((g / amax)^2)), so the f32 sum of squares
 // cannot overflow while the norm is finite: each chunk keeps its own max m
@@ -52,6 +55,13 @@ fn slot_of(c: u32) -> u32 {
 @compute @workgroup_size(256, 1, 1)
 fn norm_partial(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let c = pw(2u) + flat_group(wg, nwg);
+    // `fold_grid` rounds the grid up to a rectangle: the flat ids at and past
+    // the word-3 chunk end are spare workgroups. They return before they
+    // read the table or touch a gradient or `part`; under the Restrict
+    // bounds policy an out-of-range write would be clamped onto the last
+    // real entry and race with its owner. `c` is the same for every lane, so
+    // the barriers below stay in uniform control flow.
+    if (c >= pw(3u)) { return; }
     let s = slot_of(c);
     let t = pw(0u) + s;
     let n = tbl[2u * t];
@@ -113,11 +123,14 @@ fn norm_finish(@builtin(local_invocation_id) lid: vec3<u32>) {
     }
 }
 
-// Word 3: the scale. Every bound gradient times it, in place; a non-finite
+// Words 3 the scale, 4 the chunk end. Every bound gradient times it, in place; a non-finite
 // product raises the op's fault bit.
 @compute @workgroup_size(256, 1, 1)
 fn scale_multi(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let c = pw(2u) + flat_group(wg, nwg);
+    // A spare workgroup of a folded grid (word 4 is the chunk end) returns
+    // before it reads the table or writes a gradient.
+    if (c >= pw(4u)) { return; }
     let s = slot_of(c);
     let t = pw(0u) + s;
     let n = tbl[2u * t];

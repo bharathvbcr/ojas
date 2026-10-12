@@ -42,6 +42,8 @@ fn raise() {
 }
 fn report(x: f32) { if (nonfinite(x)) { raise(); } }
 fn flat_group(wg: vec3<u32>, nwg: vec3<u32>) -> u32 { return wg.y * nwg.x + wg.x; }
+// ceil(n / chunk) without the overflow of n + chunk - 1.
+fn chunks_of(n: u32, chunk: u32) -> u32 { return n / chunk + select(0u, 1u, n % chunk != 0u); }
 
 // f32 bits to bf16 bits, round to nearest even (ojas_core::f32_to_bf16): a
 // NaN keeps its sign and top payload bits and gets the quiet bit 0x0040, so
