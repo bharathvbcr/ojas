@@ -279,6 +279,7 @@ fn tape(snap: &Snapshot, ids: &[u32], linears: DType, mut r: Row) -> Row {
         &ids_t,
         &targets,
         &tables,
+        None,
         DEFAULT_CE_CHUNK,
         ActivationCheckpoint::Blocks,
     ) {

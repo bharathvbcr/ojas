@@ -618,6 +618,22 @@ impl Qwen35Step {
         const OP: &str = "Qwen35Step::save_state";
         self.check_live()?;
         self.require_f32_state(OP)?;
+        // The checkpoint holds masters and moments, not the gradient bank, and
+        // `load_state` empties the bank. A checkpoint cut mid-accumulation
+        // would resume without those gradients and give no sign of it.
+        match &self.bank_state {
+            BankState::Empty => {}
+            held => {
+                return Err(invalid(
+                    OP,
+                    format!(
+                        "the gradient bank is {held:?}; the checkpoint does not hold it and \
+                         load_state empties the bank, so those gradients would be lost on \
+                         resume. Take the AdamW step, or discard_gradients, before saving"
+                    ),
+                ))
+            }
+        }
         check_new_state_dir(dir)?;
         let step = self.step_count();
         let summary = self.cfg.canonical_summary();

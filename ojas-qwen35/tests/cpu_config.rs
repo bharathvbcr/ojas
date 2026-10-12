@@ -366,3 +366,25 @@ fn malformed_json_is_a_config_error() {
         );
     }
 }
+
+/// The value-head refusal names the piece that is actually missing. tessl's
+/// step repeats key heads over value heads (its `qwen35_train` scope note), so
+/// a message blaming "no head grouping" in tessl states a false reason.
+#[test]
+fn the_value_head_refusal_does_not_blame_tessl_for_a_missing_grouping() {
+    let text = mutate(
+        "\"linear_num_value_heads\": 16",
+        "\"linear_num_value_heads\": 32",
+    );
+    let msg = Qwen35TextConfig::from_json(&text).unwrap_err().to_string();
+    assert!(!msg.contains("has no head grouping"), "{msg}");
+    for needle in [
+        "tessl's step can group GDN heads",
+        "single GDN head count",
+        "does not repeat key heads over value heads",
+        "grouped torch golden",
+        "value heads must equal key heads",
+    ] {
+        assert!(msg.contains(needle), "{msg:?} lacks {needle:?}");
+    }
+}

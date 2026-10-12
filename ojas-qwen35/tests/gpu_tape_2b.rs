@@ -178,6 +178,7 @@ fn gpu_real_2b_tape_forward_backward_matches_the_provider() {
         &ids_t,
         &targets,
         &tables,
+        None,
         DEFAULT_CE_CHUNK,
         ActivationCheckpoint::Blocks,
     )

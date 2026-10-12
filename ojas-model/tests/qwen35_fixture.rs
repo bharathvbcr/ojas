@@ -1,15 +1,13 @@
 //! The Qwen3.5 hybrid tower on the CPU tape against transformers' autograd.
 //!
-//! The fixture is tessl's committed `tests/fixtures/qwen35_train` (tessl
-//! 56f3058, `make_train_fixture.py tiny`): a random `Qwen3_5ForCausalLM` of
-//! the 2B's shape family (head_dim 256, GDN heads of 128, grouped KV heads,
-//! tied embeddings), one gated delta net layer and one gated attention
-//! layer, as a bf16 checkpoint, with transformers' float32 loss over
-//! `labels=ids` and every parameter's gradient. `reference.safetensors`
-//! packs `ids.npy`, `loss.npy` (rounded to f32) and the 27 `grad.*.npy` under
-//! their Hugging Face names (`qwen35_common`). Every parameter is non-trivial in the fixture,
-//! so a weight applied in the wrong place (a `1 + w` norm, a fused row
-//! block) shows in that tensor's gradient.
+//! The fixture is `tests/fixtures/qwen35_tiny` (see `qwen35_common`): a random
+//! `Qwen3_5ForCausalLM` of the 2B's shape family (head_dim 256, two GDN heads
+//! of 128, grouped KV heads, tied embeddings, vocab 8320), one gated delta net
+//! layer and one gated attention layer, as a bf16 checkpoint, run at batch 2
+//! with `-100` labels on a prompt and on right padding, with transformers'
+//! float32 loss and every parameter's gradient. Every parameter is non-trivial
+//! in the fixture, so a weight applied in the wrong place (a `1 + w` norm, a
+//! fused row block) shows in that tensor's gradient.
 //!
 //! Bounds are tessl's for the same fixture against the same reference
 //! (`tests/qwen35_train.rs`): loss within 1e-5 relative, and each gradient
@@ -17,7 +15,7 @@
 
 mod qwen35_common;
 
-use ojas_core::{bf16_to_f32, Budget, DType, Tensor};
+use ojas_core::{bf16_to_f32, Budget, DType, OjasError, Tensor};
 use ojas_io::SafeTensors;
 use ojas_model::qwen35::{
     bind, forward_loss, hf_tensors, load_hf, MixerParams, Qwen35Mixer, Qwen35Params, Qwen35Tables,
@@ -87,6 +85,7 @@ fn eval_gives_the_tapes_loss_bits() {
         &ids,
         &targets,
         &tables,
+        Some(IGNORE),
         DEFAULT_CE_CHUNK,
         ActivationCheckpoint::Off,
     )
@@ -207,4 +206,73 @@ fn a_bf16_frozen_base_gives_the_f32_loss_and_gradient_bits_on_the_cpu() {
     );
     assert_eq!(half.loss.to_bits(), full.loss.to_bits());
     assert_eq!(bits(&half.grads), bits(&full.grads));
+}
+
+fn loss_with(
+    ignore: Option<u32>,
+    targets_of: impl Fn(&Tensor) -> Tensor,
+) -> Result<f32, OjasError> {
+    let s = spec();
+    let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
+    let reference = SafeTensors::open(&dir().join("reference.safetensors")).unwrap();
+    let params = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap();
+    let (ids, targets) = ids_and_targets(&reference);
+    let targets = targets_of(&targets);
+    let tables = Qwen35Tables::new(&s, ids.shape()[1], &budget()).unwrap();
+    let mut eval = Eval::new(cpu());
+    let bound = bind(&mut eval, &params).unwrap();
+    let loss = forward_loss(
+        &mut eval,
+        &s,
+        &bound,
+        &ids,
+        &targets,
+        &tables,
+        ignore,
+        DEFAULT_CE_CHUNK,
+        ActivationCheckpoint::Off,
+    )?;
+    Ok(loss.to_f32_vec().unwrap()[0])
+}
+
+/// Without an ignore index the `-100` labels are targets outside the
+/// vocabulary: refused, never trained on or silently dropped.
+#[test]
+fn masked_labels_without_an_ignore_index_are_refused() {
+    let err = loss_with(None, Tensor::clone).unwrap_err();
+    assert!(matches!(err, OjasError::OutOfRange { .. }), "{err:?}");
+}
+
+/// The ignore index is whatever the caller says, and only it masks: the same
+/// positions under another ignore value give the same bits, and scoring them
+/// as token 5 instead moves the loss.
+#[test]
+fn only_the_ignore_index_masks_a_position() {
+    let masked = loss_with(Some(IGNORE), Tensor::clone).unwrap();
+    let remap = |to: u32| {
+        move |t: &Tensor| {
+            let v: Vec<u32> = t
+                .to_u32_vec()
+                .unwrap()
+                .into_iter()
+                .map(|x| if x == IGNORE { to } else { x })
+                .collect();
+            Tensor::from_u32(&v, t.shape(), &budget()).unwrap()
+        }
+    };
+    let other = loss_with(Some(8319), remap(8319)).unwrap();
+    assert_eq!(masked.to_bits(), other.to_bits());
+    let scored = loss_with(None, remap(5)).unwrap();
+    assert!((scored - masked).abs() > 1e-3, "{scored} vs {masked}");
+}
+
+/// A batch whose every target is ignored has no mean: refused, not zero.
+#[test]
+fn a_batch_with_every_target_ignored_is_refused() {
+    let err = loss_with(Some(IGNORE), |t| {
+        let n = t.num_elements().unwrap();
+        Tensor::from_u32(&vec![IGNORE; n], t.shape(), &budget()).unwrap()
+    })
+    .unwrap_err();
+    assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
 }
