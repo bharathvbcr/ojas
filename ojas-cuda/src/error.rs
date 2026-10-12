@@ -44,6 +44,12 @@ pub enum CudaError {
         op: String,
         /// Requested and available bytes.
         detail: String,
+        /// The bytes asked for, when the refusing check knew them (the
+        /// driver's own out-of-memory status does not say).
+        requested: Option<u64>,
+        /// The bytes the refusing check found available (the budget's room,
+        /// or the device's free memory), when it knew them.
+        available: Option<u64>,
     },
     /// NVRTC failed to compile, or the driver failed to load the result.
     Compile {
@@ -91,6 +97,19 @@ impl CudaError {
         CudaError::Capacity {
             op: op.into(),
             detail: detail.into(),
+            requested: None,
+            available: None,
+        }
+    }
+
+    /// [`CudaError::Capacity`] from a check that knows the figures, which
+    /// [`ojas_core::OjasError::CapacityExceeded`] carries.
+    pub fn capacity_of(op: impl Into<String>, requested: u64, available: u64) -> Self {
+        CudaError::Capacity {
+            op: op.into(),
+            detail: format!("{requested} bytes requested, {available} bytes available"),
+            requested: Some(requested),
+            available: Some(available),
         }
     }
 
@@ -99,10 +118,7 @@ impl CudaError {
     /// `ojas-cuda/src/lib.rs` `cuda_status`.
     pub fn from_driver_code(op: impl Into<String>, code: u32, detail: impl Into<String>) -> Self {
         if code == CUDA_ERROR_OUT_OF_MEMORY {
-            CudaError::Capacity {
-                op: op.into(),
-                detail: detail.into(),
-            }
+            Self::capacity(op, detail)
         } else {
             CudaError::Driver {
                 op: op.into(),
@@ -155,7 +171,7 @@ impl fmt::Display for CudaError {
             CudaError::Driver { op, code, detail } => {
                 write!(f, "CUDA driver call {op} failed with code {code}: {detail}")
             }
-            CudaError::Capacity { op, detail } => write!(f, "{op}: out of memory: {detail}"),
+            CudaError::Capacity { op, detail, .. } => write!(f, "{op}: out of memory: {detail}"),
             CudaError::Compile { module, detail } => {
                 write!(f, "compiling kernel module {module} failed: {detail}")
             }
@@ -207,8 +223,12 @@ impl CudaError {
 
 /// The one mapping from this crate's errors to ojas's: a sticky driver
 /// failure is [`OjasError::DeviceLost`](ojas_core::OjasError::DeviceLost),
-/// so a caller stops instead of retrying on a dead context; everything else
-/// is [`OjasError::Backend`](ojas_core::OjasError::Backend) with this error's
+/// so a caller stops instead of retrying on a dead context; out of memory
+/// ([`CudaError::Capacity`]: the driver's status, the budget, or the
+/// device-free check) is
+/// [`OjasError::CapacityExceeded`](ojas_core::OjasError::CapacityExceeded),
+/// as on every other backend; everything else is
+/// [`OjasError::Backend`](ojas_core::OjasError::Backend) with this error's
 /// text.
 impl From<CudaError> for ojas_core::OjasError {
     fn from(e: CudaError) -> Self {
@@ -216,6 +236,19 @@ impl From<CudaError> for ojas_core::OjasError {
             ojas_core::OjasError::DeviceLost {
                 backend: ojas_core::BackendId::Cuda,
                 detail: e.to_string(),
+            }
+        } else if let CudaError::Capacity {
+            requested,
+            available,
+            ..
+        } = &e
+        {
+            // `live` is not known here: the runtime's budget is charged in
+            // `ojas_core` terms before this error exists.
+            ojas_core::OjasError::CapacityExceeded {
+                requested: requested.unwrap_or(0),
+                cap: available.unwrap_or(0),
+                live: 0,
             }
         } else {
             ojas_core::OjasError::Backend {
@@ -273,8 +306,9 @@ mod tests {
     use ojas_core::{BackendId, OjasError};
 
     /// A sticky driver code (the context is gone) is `DeviceLost`; any other
-    /// failure, out-of-memory and a non-sticky driver code included, stays
-    /// `Backend`. Before this mapping every CUDA failure was `Backend`.
+    /// failure, a non-sticky driver code included, stays `Backend`
+    /// (out-of-memory is `CapacityExceeded`, tested below). Before this
+    /// mapping every CUDA failure was `Backend`.
     #[test]
     fn sticky_driver_codes_map_to_device_lost_and_the_rest_to_backend() {
         for &code in STICKY_DRIVER_CODES {
@@ -289,7 +323,6 @@ mod tests {
             }
         }
         for e in [
-            CudaError::from_driver_code("cuMemAlloc", CUDA_ERROR_OUT_OF_MEMORY, "oom"),
             // CUDA_ERROR_INVALID_VALUE: a bad argument, the context is fine.
             CudaError::from_driver_code("cuMemcpyHtoD", 1, "invalid value"),
             // Documented without the sticky sentence: not assumed lost.
@@ -312,6 +345,36 @@ mod tests {
                 "not Backend"
             );
         }
+    }
+
+    /// Out of memory is `CapacityExceeded` however it was detected: the
+    /// driver's status (no figures), a refusing check with figures (the
+    /// device-free refusal `check_free` makes, and the budget's), never
+    /// `Backend`.
+    #[test]
+    fn out_of_memory_maps_to_capacity_exceeded() {
+        let driver = CudaError::from_driver_code("cuMemAlloc", CUDA_ERROR_OUT_OF_MEMORY, "oom");
+        assert!(
+            matches!(OjasError::from(driver), OjasError::CapacityExceeded { .. }),
+            "driver status"
+        );
+        let checked = CudaError::capacity_of("upload w", 4096, 1024);
+        assert!(
+            matches!(
+                OjasError::from(checked),
+                OjasError::CapacityExceeded {
+                    requested: 4096,
+                    cap: 1024,
+                    live: 0
+                }
+            ),
+            "figures kept"
+        );
+        let text = CudaError::capacity("cuBLAS workspace", "33554432 bytes requested");
+        assert!(matches!(
+            OjasError::from(text),
+            OjasError::CapacityExceeded { .. }
+        ));
     }
 
     #[test]

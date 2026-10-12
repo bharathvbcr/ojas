@@ -577,10 +577,7 @@ impl CudaRuntime {
             .mem_get_info()
             .map_err(|e| driver_error("cuMemGetInfo", e))?;
         if usize::try_from(bytes).map_or(true, |b| b > free) {
-            return Err(CudaError::capacity(
-                label,
-                format!("{bytes} bytes requested, {free} bytes free on the device"),
-            ));
+            return Err(CudaError::capacity_of(label, bytes, free as u64));
         }
         Ok(())
     }

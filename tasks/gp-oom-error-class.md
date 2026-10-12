@@ -1,7 +1,7 @@
 ---
 id: "gp-oom-error-class"
 title: "Device out-of-memory is misclassified on every GPU backend: Metal's retry never fires on tessl's real error, and wgpu and CUDA OOM reach callers as Backend instead of CapacityExceeded"
-status: ready
+status: in_progress
 priority: 0
 severity: medium
 type: bug
@@ -85,3 +85,13 @@ The user's current focus is LoRA fine-tuning on the Mac (Metal), run by sibling 
 - ojas-cuda/src/backend.rs
 - ojas-core/src/error.rs
 - ojas-capi/src/lib.rs
+
+## Progress 2026-10-12 (branch gitpulse/oom-error-class)
+
+- Criterion 1 (Metal): partial. Cause confirmed: tessl's real failures are `buffer request N exceeds host/device allocation limit` (runtime.rs:269-270, which `exhausted()` also missed), `rounded buffer size exceeds device limit` (:273-275) and `newBuffer({key}) failed` (:283); the old matcher read `"newBuffer failed"`. `classify_alloc` (ojas-metal/src/device.rs) now sorts them into Limit (permanent, refused at once, no waited commit), Exhausted (recycle, trim, retry) and Other; `Worker::retrying` serves `alloc`, `fresh_from` and gdn backward's workspace (`gdn_workspace`). Real-path tests: `a_real_oversize_allocation_is_capacity_exceeded_without_a_retry`, `a_real_oversize_gdn_workspace_is_capacity_exceeded`, `classify_alloc_reads_tessls_failures`. The newBuffer failure cannot be forced on a 64 GiB Mac without resident memory (allocations are lazy; 30 GiB succeeds), so that arm is pinned by `classify_alloc_matches_the_text_tessl_builds` (reads tessl's source) and the injected test now injects tessl's real text. No Backend op reaches the device limit: every kernel indexes with 32 bits (max 16 GiB f32), so the real test is at the Worker.
+- Criterion 2: partial. wgpu is typed at detection (error scope filtered to OutOfMemory). Metal cannot be typed without a tessl change: tessl needs a typed alloc error (`Limit { requested, max_buffer_length }` / `Device { bytes }`) and `GpuRuntime::max_buffer_length()` (the cap is `recommended_working_set` until then). `classify_alloc` is the single place that reads tessl's text; delete it when tessl lands the type. tessl was not edited.
+- Criterion 3: wgpu `new_buffer` post-retry and bind-group OOM now `CapacityExceeded` (via `out_of_memory`, which keeps `DeviceLost`); the budget is not plumbed into the context so `live` is the allocator's reserved bytes (0 if unreported) and `cap` the binding cap. The post-retry test now expects CapacityExceeded; new `a_bind_group_out_of_memory_is_capacity_exceeded`. CUDA: `CudaError::Capacity` survives `From<CudaError> for OjasError` (new `capacity_of`, `check_free` uses it); compile-checked only, GPU tests cannot run here.
+- Criterion 4 (Go real device OOM on Metal): blocked, see criterion 1 (no public op can ask for more than the device limit; a Go test would need a tens-of-GiB resident allocation). The C ABI and Go mappings already exist.
+- Criterion 5: unchanged, now reachable.
+
+- VERIFICATION STATUS: nothing above has been compiled or run. Every cargo invocation queued behind the machine lock, held for over 2 hours by another tree's `fg-post` job (pid 84257, ojas-wt-wgpu-folded-grid-tails). Not set to review for that reason. Needed before review: `cargo test -p ojas-metal --features metal --lib -- a_real_oversize classify_alloc a_device_refusal`, the existing metal retry tests in backend.rs, `cargo test -p ojas-wgpu --lib out_of_memory` and `bind_group_out_of_memory`, `cargo test -p ojas-cuda --lib`, `cargo check -p ojas-cuda --features cuda --tests`. Fail-first runs against unmodified code were also not made.

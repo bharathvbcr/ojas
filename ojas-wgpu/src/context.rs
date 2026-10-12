@@ -898,25 +898,54 @@ impl WgpuContext {
         }
     }
 
-    /// Make the next `n` buffer creations fail as out of memory.
+    /// Make the next `n` device-memory creations (a buffer, or a bind group)
+    /// fail as out of memory.
     #[cfg(test)]
     pub(crate) fn fail_next_allocs(&self, n: u32) {
         self.inner.fail_allocs.store(n, Ordering::Relaxed);
+    }
+
+    /// Whether this creation is one [`Self::fail_next_allocs`] failed.
+    #[cfg(test)]
+    fn take_injected_oom(&self) -> bool {
+        let left = &self.inner.fail_allocs;
+        let mut n = left.load(Ordering::Relaxed);
+        while n > 0 {
+            match left.compare_exchange_weak(n, n - 1, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return true,
+                Err(now) => n = now,
+            }
+        }
+        false
+    }
+
+    /// The error for a device-memory creation wgpu refused under an
+    /// out-of-memory error scope, which reports nothing else: the typed
+    /// [`OjasError::CapacityExceeded`], with the device's binding cap as
+    /// `cap` and the bytes its allocator holds as `live` (0 when it cannot
+    /// report). A device that was lost is still [`OjasError::DeviceLost`],
+    /// as [`Self::failure`] decides.
+    fn out_of_memory(&self, requested: u64, detail: String) -> OjasError {
+        match self.failure(detail) {
+            lost @ OjasError::DeviceLost { .. } => lost,
+            _ => OjasError::CapacityExceeded {
+                requested,
+                cap: self.binding_cap(),
+                live: self
+                    .inner
+                    .device
+                    .generate_allocator_report()
+                    .map_or(0, |r| r.total_reserved_bytes),
+            },
+        }
     }
 
     /// One buffer creation under an out-of-memory error scope: the buffer,
     /// or wgpu's error text.
     fn create_scoped(&self, desc: &wgpu::BufferDescriptor<'_>) -> Result<wgpu::Buffer, String> {
         #[cfg(test)]
-        {
-            let left = &self.inner.fail_allocs;
-            let mut n = left.load(Ordering::Relaxed);
-            while n > 0 {
-                match left.compare_exchange_weak(n, n - 1, Ordering::Relaxed, Ordering::Relaxed) {
-                    Ok(_) => return Err("injected out of memory".to_string()),
-                    Err(now) => n = now,
-                }
-            }
+        if self.take_injected_oom() {
+            return Err("injected out of memory".to_string());
         }
         let scope = self
             .inner
@@ -954,10 +983,13 @@ impl WgpuContext {
             timeout: Some(std::time::Duration::from_secs(5)),
         });
         self.create_scoped(desc).map_err(|again| {
-            self.failure(format!(
-                "{what} of {} bytes: {again} (retried after releasing the pool; first: {first})",
-                desc.size
-            ))
+            self.out_of_memory(
+                desc.size,
+                format!(
+                    "{what} of {} bytes: {again} (retried after releasing the pool; first: {first})",
+                    desc.size
+                ),
+            )
         })
     }
 
@@ -1314,6 +1346,13 @@ impl WgpuContext {
                 }),
             });
         }
+        #[cfg(test)]
+        if self.take_injected_oom() {
+            return Err(self.out_of_memory(
+                0,
+                format!("bind group {}: injected out of memory", kernel.entry),
+            ));
+        }
         let scope = self
             .device()
             .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
@@ -1323,7 +1362,8 @@ impl WgpuContext {
             entries: &entries,
         });
         if let Some(err) = self.pop(scope) {
-            return Err(self.failure(format!("bind group {}: {err}", kernel.entry)));
+            let bound = key.bufs.iter().map(|(_, _, size)| size).sum();
+            return Err(self.out_of_memory(bound, format!("bind group {}: {err}", kernel.entry)));
         }
         c.bind_groups.fetch_add(1, Ordering::Relaxed);
         lock(&self.inner.binds).insert(key, group.clone(), &[&self.inner.fault, &self.inner.held]);
@@ -2119,14 +2159,32 @@ mod tests {
         assert_eq!(ctx.stats().alloc_retries, 3);
         ctx.fail_next_allocs(2);
         let err = ctx.tensor_buffer(3 << 20).expect_err("two refusals fail");
+        // The error scope that caught it filters for out-of-memory alone, so
+        // a second refusal is the typed capacity error (as Metal's is), not
+        // a `Backend` string a caller must read.
         assert!(
-            matches!(&err, OjasError::Backend { detail, .. }
-                if detail.contains("retried after releasing the pool")),
+            matches!(&err, OjasError::CapacityExceeded { requested, cap, .. }
+                if *requested == 3 << 20 && *cap > 0),
             "{err:?}"
         );
         assert_eq!(ctx.stats().alloc_retries, 4);
         ctx.tensor_buffer(3 << 20)
             .expect("a later allocation is unaffected");
+    }
+
+    /// A bind group the device refuses for want of memory is the typed
+    /// capacity error too, and the refusal does not poison the cache: the
+    /// next attempt builds the group.
+    #[test]
+    fn a_bind_group_out_of_memory_is_capacity_exceeded() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        ctx.fail_next_allocs(1);
+        let err = ctx.hold().map(drop).expect_err("the group is refused");
+        assert!(
+            matches!(&err, OjasError::CapacityExceeded { .. }),
+            "{err:?}"
+        );
+        ctx.hold().expect("a later attempt builds the group");
     }
 
     /// A cached bind group holds its buffers alive, so a buffer the pool

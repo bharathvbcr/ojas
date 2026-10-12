@@ -379,10 +379,35 @@ fn bind_st(b: &mut Binder<'_>, st: &St, index: usize) {
     set_gpu_buf_offset(b, &st.buf, st.off, index);
 }
 
-/// An allocation error that a waited commit (which recycles dropped
-/// buffers) might cure.
-fn exhausted(e: &str) -> bool {
-    e.contains("exceeds device limit") || e.contains("newBuffer failed")
+/// How tessl reported a failed device allocation.
+///
+/// tessl's allocator returns its failures as `String`s, so this is the one
+/// place ojas reads them: no other code in this crate decides "out of
+/// memory" from a message. `contract_matches_tessls_source` pins the
+/// fragments below to tessl's own source, and the oversize tests run them
+/// against tessl's real refusals.
+#[derive(Debug, PartialEq, Eq)]
+enum AllocFailure {
+    /// The request is past what the device can ever hold (tessl's
+    /// "exceeds host/device allocation limit" and "rounded buffer size
+    /// exceeds device limit"). Permanent: a waited commit does not cure it.
+    Limit,
+    /// The device refused the buffer (tessl's `newBuffer({key}) failed`).
+    /// Buffers dropped since the last waited commit return to the pool only
+    /// at the next one, so a waited commit might cure it.
+    Exhausted,
+    /// Not an allocation failure.
+    Other,
+}
+
+fn classify_alloc(e: &str) -> AllocFailure {
+    if e.contains("exceeds host/device allocation limit") || e.contains("exceeds device limit") {
+        AllocFailure::Limit
+    } else if e.starts_with("newBuffer(") && e.ends_with(") failed") {
+        AllocFailure::Exhausted
+    } else {
+        AllocFailure::Other
+    }
 }
 
 struct Worker {
@@ -707,41 +732,60 @@ impl Worker {
         })
     }
 
-    /// A device allocation. Buffers dropped since the last waited commit
-    /// return to tessl's pool only at the next one, so an allocation that
-    /// fails as an exhausted device would is retried after a waited commit
-    /// that leaves the current command's status slots alone, and once more
-    /// after the pool's cached buffers are released (a cached buffer of
-    /// another size cannot serve the request, but its memory can). A
-    /// failure past both is `CapacityExceeded` against the device's working
-    /// set, with what the device holds now as `live`.
+    /// A device allocation. See [`Self::retrying`].
     fn alloc(&self, bytes: usize) -> Res<GpuBuffer> {
-        let got = match self.try_alloc(bytes) {
-            Err(e) if exhausted(&e) => {
-                self.recycle()?;
-                match self.try_alloc(bytes) {
-                    Err(e) if exhausted(&e) => {
-                        self.drop_pool();
-                        self.try_alloc(bytes)
-                    }
-                    got => got,
-                }
-            }
-            got => got,
-        };
-        let buf = got.map_err(|e| {
-            if exhausted(&e) {
-                OjasError::CapacityExceeded {
-                    requested: bytes as u64,
-                    cap: self.rt.memory_info().recommended_working_set,
-                    live: self.rt.current_allocated_bytes(),
-                }
-            } else {
-                metal_err(e)
-            }
-        })?;
+        let buf = self.retrying(bytes, || self.try_alloc(bytes))?;
         self.book.borrow_mut().alloc_since_wait += bytes as u64;
         Ok(buf)
+    }
+
+    /// Run a device allocation of `bytes`. Buffers dropped since the last
+    /// waited commit return to tessl's pool only at the next one, so one
+    /// the device refused ([`AllocFailure::Exhausted`]) is retried after a
+    /// waited commit that leaves the current command's status slots alone,
+    /// and once more after the pool's cached buffers are released (a cached
+    /// buffer of another size cannot serve the request, but its memory
+    /// can). A request past the device's limit ([`AllocFailure::Limit`]) is
+    /// refused at once. Either failing past that is `CapacityExceeded`
+    /// against the device's working set, with what the device holds now as
+    /// `live`; a failure that is not an allocation's stays `Backend`.
+    fn retrying<T>(&self, bytes: usize, mut attempt: impl FnMut() -> Result<T, String>) -> Res<T> {
+        let mut failed = match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) => e,
+        };
+        for step in 0..2 {
+            match classify_alloc(&failed) {
+                AllocFailure::Other => return Err(metal_err(failed)),
+                AllocFailure::Limit => break,
+                AllocFailure::Exhausted => {}
+            }
+            if step == 0 {
+                self.recycle()?;
+            } else {
+                self.drop_pool();
+            }
+            failed = match attempt() {
+                Ok(v) => return Ok(v),
+                Err(e) => e,
+            };
+        }
+        if classify_alloc(&failed) == AllocFailure::Other {
+            return Err(metal_err(failed));
+        }
+        Err(OjasError::CapacityExceeded {
+            requested: bytes as u64,
+            cap: self.rt.memory_info().recommended_working_set,
+            live: self.rt.current_allocated_bytes(),
+        })
+    }
+
+    /// gdn backward's scratch, retried like any device allocation.
+    fn gdn_workspace(&self, dims: GdnTrainDims) -> Res<GdnTrainWorkspace> {
+        let bytes = GdnTrainWorkspace::bytes_for(dims);
+        let ws = self.retrying(bytes, || GdnTrainWorkspace::new(&self.rt, dims))?;
+        self.book.borrow_mut().alloc_since_wait += bytes as u64;
+        Ok(ws)
     }
 
     fn try_alloc(&self, bytes: usize) -> Result<GpuBuffer, String> {
@@ -753,7 +797,7 @@ impl Worker {
                 book.fail_allocs.0 -= 1;
             } else if fail > 0 {
                 book.fail_allocs.1 -= 1;
-                return Err("injected: allocation exceeds device limit".to_string());
+                return Err(format!("newBuffer({bytes}) failed"));
             }
         }
         self.rt.alloc_buffer(bytes)
@@ -800,8 +844,9 @@ impl Worker {
     /// recorded command can be using a buffer fresh from the pool (tessl
     /// `alloc_buffer_from_u32`). For small host-built index data.
     fn fresh_from(&self, data: &[u32]) -> Res<V> {
-        let buf = self.rt.alloc_buffer_from_u32(data).map_err(metal_err)?;
-        self.book.borrow_mut().alloc_since_wait += (data.len().max(1) * 4) as u64;
+        let bytes = data.len().max(1) * 4;
+        let buf = self.retrying(bytes, || self.rt.alloc_buffer_from_u32(data))?;
+        self.book.borrow_mut().alloc_since_wait += bytes as u64;
         Ok(V {
             buf,
             off: 0,
@@ -2099,15 +2144,7 @@ impl Worker {
         );
         let (dg, dbeta) = (self.fresh(n(&tok))?, self.fresh(n(&tok))?);
         let ds0 = s0.as_ref().map(|_| self.fresh(n(&state))).transpose()?;
-        let ws = match GdnTrainWorkspace::new(&self.rt, dims) {
-            Err(e) if exhausted(&e) => {
-                self.recycle()?;
-                GdnTrainWorkspace::new(&self.rt, dims)
-            }
-            got => got,
-        }
-        .map_err(metal_err)?;
-        self.book.borrow_mut().alloc_since_wait += ws_bytes as u64;
+        let ws = self.gdn_workspace(dims)?;
         let st = self.status(OP)?;
         let inputs = [&q, &k, &v, &g, &beta, &ckv, &dov];
         for input in inputs.into_iter().chain(s0.as_ref()).chain(dfv.as_ref()) {
@@ -3181,6 +3218,162 @@ mod tests {
     use super::*;
 
     use ojas_core::{Backend, Budget, Tensor};
+
+    /// Every public op indexes elements with 32 bits, so no op on the
+    /// backend can ask for more than the device's buffer limit (about
+    /// 36 GiB here); the worker's own allocation is the lowest layer that
+    /// can, and nothing is resident when tessl refuses it.
+    fn oversize_worker() -> (Worker, Arc<Waits>) {
+        let waits = Arc::new(Waits::default());
+        let w = Worker::open(Arc::clone(&waits), 1 << 44).expect("Metal device");
+        (w, waits)
+    }
+
+    /// A request past the device's limit, through tessl's real allocator
+    /// (nothing injected), is `CapacityExceeded` at once: no waited commit
+    /// and no second try, whichever of tessl's permanent refusals it is.
+    #[test]
+    fn a_real_oversize_allocation_is_capacity_exceeded_without_a_retry() {
+        let (w, waits) = oversize_worker();
+        let before = waits.snapshot();
+        for bytes in [1usize << 50, 1 << 46, isize::MAX as usize, usize::MAX] {
+            let r = w.alloc(bytes);
+            assert!(
+                matches!(&r, Err(OjasError::CapacityExceeded { requested, .. }) if *requested == bytes as u64),
+                "{bytes}: {:?}",
+                r.map(|_| ())
+            );
+        }
+        assert_eq!(
+            waits.snapshot(),
+            before,
+            "a permanent refusal is not retried behind a commit"
+        );
+        assert_eq!(
+            w.book.borrow().alloc_since_wait,
+            0,
+            "a refused allocation is not counted"
+        );
+    }
+
+    /// gdn backward's scratch goes through the same classification: a
+    /// workspace past the device limit (tessl sizes it from the dims alone,
+    /// so no operand exists) is `CapacityExceeded`, and one that tessl
+    /// rejects as malformed stays `Backend`.
+    #[test]
+    fn a_real_oversize_gdn_workspace_is_capacity_exceeded() {
+        let (w, waits) = oversize_worker();
+        let before = waits.snapshot();
+        let huge = GdnTrainDims {
+            batch: 1,
+            seq: 1 << 20,
+            heads: 64,
+            v_dim: 128,
+        };
+        assert!(GdnTrainWorkspace::bytes_for(huge) > 1 << 40);
+        let r = w.gdn_workspace(huge);
+        assert!(
+            matches!(&r, Err(OjasError::CapacityExceeded { .. })),
+            "{:?}",
+            r.map(|_| ())
+        );
+        assert_eq!(waits.snapshot(), before);
+        let bad = GdnTrainDims {
+            batch: 1,
+            seq: 1,
+            heads: 1,
+            v_dim: 7,
+        };
+        let r = w.gdn_workspace(bad);
+        assert!(
+            matches!(&r, Err(OjasError::Backend { .. })),
+            "{:?}",
+            r.map(|_| ())
+        );
+    }
+
+    /// The matcher against tessl's three real allocation failures and
+    /// against ones that are not allocation failures.
+    #[test]
+    fn classify_alloc_reads_tessls_failures() {
+        let rt = GpuRuntime::new().expect("Metal device");
+        let real = rt
+            .alloc_buffer(usize::MAX)
+            .map(|_| ())
+            .expect_err("past any device");
+        assert_eq!(classify_alloc(&real), AllocFailure::Limit, "{real}");
+        for e in [
+            "rounded buffer size exceeds device limit",
+            "buffer request 9 exceeds host/device allocation limit",
+        ] {
+            assert_eq!(classify_alloc(e), AllocFailure::Limit, "{e}");
+        }
+        assert_eq!(
+            classify_alloc("newBuffer(4096) failed"),
+            AllocFailure::Exhausted
+        );
+        for e in [
+            "",
+            "newBuffer failed",
+            "pipeline 'x' not found",
+            "poisoned: newBuffer(1) failed later",
+        ] {
+            assert_eq!(classify_alloc(e), AllocFailure::Other, "{e:?}");
+        }
+    }
+
+    /// Where tessl cannot be made to fail the transient way without
+    /// exhausting this machine, pin the exact text it builds: the source of
+    /// the sibling checkout must still contain each fragment
+    /// `classify_alloc` reads. A tessl change that moves one fails here
+    /// until tessl exposes a typed error and this function is deleted.
+    #[test]
+    fn classify_alloc_matches_the_text_tessl_builds() {
+        let src = include_str!("../../../tessl/src/runtime.rs");
+        for fragment in [
+            r#"format!("newBuffer({key}) failed")"#,
+            r#""rounded buffer size exceeds device limit""#,
+            "exceeds host/device allocation limit",
+        ] {
+            assert!(src.contains(fragment), "tessl no longer builds {fragment}");
+        }
+    }
+
+    /// A device refusal is retried behind a waited commit, then after the
+    /// pool is trimmed, and is `CapacityExceeded` only if both fail; one
+    /// that is not an allocation failure is neither retried nor capacity.
+    #[test]
+    fn a_device_refusal_takes_both_retries_and_other_errors_none() {
+        let (w, waits) = oversize_worker();
+        let mut calls = 0;
+        let r: Res<()> = w.retrying(8, || {
+            calls += 1;
+            Err("newBuffer(8) failed".to_string())
+        });
+        assert!(
+            matches!(r, Err(OjasError::CapacityExceeded { requested: 8, .. })),
+            "{r:?}"
+        );
+        assert_eq!(calls, 3);
+        calls = 0;
+        let r = w.retrying(8, || {
+            calls += 1;
+            if calls < 3 {
+                Err("newBuffer(8) failed".to_string())
+            } else {
+                Ok(calls)
+            }
+        });
+        assert!(matches!(r, Ok(3)), "{r:?}");
+        calls = 0;
+        let r: Res<()> = w.retrying(8, || {
+            calls += 1;
+            Err("pipeline 'x' not found".to_string())
+        });
+        assert!(matches!(r, Err(OjasError::Backend { .. })), "{r:?}");
+        assert_eq!(calls, 1);
+        let _ = waits;
+    }
 
     /// The pool cache is a quarter of the budget, at most 1 GiB, never the
     /// 2 GiB tessl default whatever the budget.
