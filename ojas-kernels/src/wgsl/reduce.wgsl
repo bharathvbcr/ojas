@@ -24,6 +24,10 @@ fn sum_partial(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nw
     let group = flat_group(wg, nwg);
     let n = pw(0u);
     let mode = pw(1u);
+    // Spare workgroups of a folded grid: `group` is uniform, so the barriers
+    // in tree_sum stay in uniform control flow, and y0 is written only by
+    // the real chunks.
+    if (group >= chunks_of(n, CHUNK)) { return; }
     let start = group * CHUNK;
     var acc = 0.0;
     for (var j = 0u; j < CHUNK / 256u; j = j + 1u) {

@@ -98,8 +98,14 @@ pub fn cover_1d(n: u64, grid: Grid) -> Result<Vec<u64>, OjasError> {
 
 /// Fold `groups` workgroups into `(x, y)` with each dimension at most
 /// `max_per_dim`. The kernel recovers the flat id as `y * x_count + x` and
-/// guards the tail. Too many groups is [`OjasError::OutOfRange`]; nothing is
-/// clamped.
+/// guards the tail: the grid is a rectangle of `x * y >= groups`, so the
+/// workgroups past `groups` are spare, and a kernel must `return` for them
+/// before it reads or writes any buffer (an out-of-range write is clamped
+/// onto the last real entry under wgpu's Restrict policy, and races with its
+/// owner). Every WGSL entry point is classified in [`KERNEL_GRIDS`], and a
+/// unit test of this module fails on a folded-grid kernel that is missing
+/// there or whose guard does not come before its first buffer access. Too
+/// many groups is [`OjasError::OutOfRange`]; nothing is clamped.
 pub fn fold_grid(groups: u64, max_per_dim: u32) -> Result<(u32, u32), OjasError> {
     if max_per_dim == 0 {
         return Err(OjasError::OutOfRange {
@@ -122,6 +128,240 @@ pub fn fold_grid(groups: u64, max_per_dim: u32) -> Result<(u32, u32), OjasError>
     }
     Ok((max_per_dim, rows as u32))
 }
+
+/// How one WGSL entry point's dispatch grid relates to its real work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridKind {
+    /// Dispatched on a [`fold_grid`] grid (the backend's `groups()` and
+    /// `lanes()`): the kernel recovers a flat id with `flat_group` and the
+    /// string names the real bound that id is guarded against.
+    Folded(&'static str),
+    /// A 2-D grid whose axes are the real extents, each checked against the
+    /// per-axis limit and never folded; the string says why no workgroup is
+    /// spare or how a rounded-up tile is guarded.
+    Exact(&'static str),
+    /// One workgroup.
+    Single(&'static str),
+}
+
+/// Every WGSL `@compute` entry point and its grid. A unit test of this
+/// module reads the module sources and fails when an entry point is absent
+/// here, when a row names no entry point, when a kernel that reads the flat
+/// group id is not [`GridKind::Folded`], or when a folded kernel's first
+/// `if (... >= ...) { return; }` guard does not precede its first access to a
+/// storage buffer (the fault words included), directly or through a helper.
+pub const KERNEL_GRIDS: &[(&str, GridKind)] = &[
+    // pointwise.wgsl: one lane per element.
+    (
+        "round_bf16",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    ("silu_fwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("silu_bwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("mul_fwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("mul_bwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("add_fwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    (
+        "add_inplace",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "check_finite",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    ("scale", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("vr_fwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("vr_bwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("gate_fwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    (
+        "gate_fwd_save",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "gate_bwd_saved",
+        GridKind::Folded("lane rh >= word 0 (rows * heads)"),
+    ),
+    (
+        "gate_bwd",
+        GridKind::Folded("lane rh >= word 0 (rows * heads)"),
+    ),
+    ("rope", GridKind::Folded("lane i >= word 0 (rotated pairs)")),
+    // loss.wgsl: one lane per element or one workgroup per row.
+    (
+        "embed_fwd",
+        GridKind::Folded("lane i >= word 0 (tokens * dim)"),
+    ),
+    (
+        "embed_bwd",
+        GridKind::Folded("lane i >= word 0 (distinct ids * dim)"),
+    ),
+    ("ce_fwd", GridKind::Folded("workgroup row >= word 0 (rows)")),
+    ("ce_bwd", GridKind::Folded("workgroup row >= word 0 (rows)")),
+    (
+        "lce_stats",
+        GridKind::Folded("workgroup row >= word 0 (tile rows)"),
+    ),
+    ("lce_finish", GridKind::Folded("lane g >= word 0 (rows)")),
+    (
+        "lce_grad",
+        GridKind::Folded("lane i >= word 0 (tile elements)"),
+    ),
+    // layout.wgsl.
+    ("permute", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("kv_write", GridKind::Folded("lane i >= word 0 (elements)")),
+    (
+        "widen_bf16",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "narrow_bf16",
+        GridKind::Folded("lane 2 * j >= word 0 (elements)"),
+    ),
+    // norm.wgsl: `256 / width` rows per workgroup.
+    (
+        "rms_fwd",
+        GridKind::Folded("first row of the workgroup >= word 0 (rows)"),
+    ),
+    (
+        "rms_bwd",
+        GridKind::Folded("first row of the workgroup >= word 0 (rows)"),
+    ),
+    // optim.wgsl: one lane per element.
+    (
+        "adam_check",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "adam_apply",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_momentum",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_normalize",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_normalize_bf16",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_round",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_lincomb_bf16",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_lincomb",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_apply",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    (
+        "muon_commit",
+        GridKind::Folded("lane i >= word 0 (elements)"),
+    ),
+    // reduce.wgsl.
+    (
+        "sum_partial",
+        GridKind::Folded("group >= ceil(word 0 / CHUNK) (chunks)"),
+    ),
+    ("col_finish", GridKind::Folded("lane c >= word 1 (columns)")),
+    (
+        "argmax_rows",
+        GridKind::Folded("workgroup row >= word 0 (rows)"),
+    ),
+    (
+        "topk_rows",
+        GridKind::Folded("workgroup row >= word 0 (rows)"),
+    ),
+    ("sum_finish", GridKind::Single("one workgroup, (1, 1, 1)")),
+    (
+        "col_partial",
+        GridKind::Exact("grid (cols / 256, row chunks) are the real axes; lane c >= cols returns"),
+    ),
+    // clip.wgsl.
+    (
+        "norm_partial",
+        GridKind::Folded("chunk c >= word 3 (the dispatch's chunk end)"),
+    ),
+    (
+        "scale_multi",
+        GridKind::Folded("chunk c >= word 4 (the dispatch's chunk end)"),
+    ),
+    ("norm_finish", GridKind::Single("one workgroup, (1, 1, 1)")),
+    // attention.wgsl, cached_attention.wgsl.
+    (
+        "attn_bwd_dr",
+        GridKind::Folded("lane row >= word 2 (query rows)"),
+    ),
+    (
+        "attn_fwd",
+        GridKind::Exact(
+            "grid (ceil(time / rows), bh), each axis checked; query qi >= time writes nothing",
+        ),
+    ),
+    (
+        "attn_bwd_dq",
+        GridKind::Exact(
+            "grid (ceil(time / rows), bh), each axis checked; query rows past time are masked",
+        ),
+    ),
+    (
+        "attn_bwd_dkv",
+        GridKind::Exact(
+            "grid (ceil(time / rows), bh / rep), each axis checked; key rows past time are masked",
+        ),
+    ),
+    (
+        "cattn_split",
+        GridKind::Exact(
+            "grid (splits, row-heads in dispatches of at most max, batch), each axis exact",
+        ),
+    ),
+    (
+        "cattn_merge",
+        GridKind::Exact("grid (row-heads in dispatches of at most max, batch), each axis exact"),
+    ),
+    // gemm.wgsl: gemm_grid is (ceil(n / tile), ceil(m / tile)), each axis
+    // checked; edge tiles guard their rows and columns.
+    (
+        "gemm_nt",
+        GridKind::Exact("gemm_grid axes are the real tile counts"),
+    ),
+    (
+        "gemm_nn",
+        GridKind::Exact("gemm_grid axes are the real tile counts"),
+    ),
+    (
+        "gemm_tn",
+        GridKind::Exact("gemm_grid axes are the real tile counts"),
+    ),
+    (
+        "gemm_nt_big",
+        GridKind::Exact("gemm_grid axes are the real tile counts"),
+    ),
+    (
+        "gemm_nn_big",
+        GridKind::Exact("gemm_grid axes are the real tile counts"),
+    ),
+    (
+        "gemm_tn_big",
+        GridKind::Exact("gemm_grid axes are the real tile counts"),
+    ),
+    // fault.wgsl.
+    ("fault_hold", GridKind::Single("one workgroup, (1, 1, 1)")),
+    (
+        "fault_release",
+        GridKind::Single("one workgroup, (1, 1, 1)"),
+    ),
+];
 
 /// Edge of the square output tile one GEMM workgroup owns.
 pub const GEMM_TILE: u32 = 64;
@@ -288,6 +528,281 @@ pub fn attention_tiles(head_dim: u32, max_shared_bytes: u32) -> Result<Attention
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::{wgsl_module, WgslModule};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    struct Func {
+        name: String,
+        body: String,
+        entry: bool,
+    }
+
+    /// Source with `//` comments removed.
+    fn uncommented(src: &str) -> String {
+        src.lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn is_ident(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+
+    /// Byte offsets where `needle` occurs as a whole identifier prefix, that
+    /// is, not preceded by an identifier character.
+    fn occurrences(hay: &str, needle: &str) -> Vec<usize> {
+        hay.match_indices(needle)
+            .map(|(at, _)| at)
+            .filter(|&at| !hay[..at].chars().next_back().is_some_and(is_ident))
+            .collect()
+    }
+
+    /// The text from `open` (an opening delimiter) to its match.
+    fn balanced(src: &str, open: usize) -> &str {
+        let (o, c) = match src.as_bytes()[open] {
+            b'(' => (b'(', b')'),
+            _ => (b'{', b'}'),
+        };
+        let mut depth = 0usize;
+        for (k, b) in src.bytes().enumerate().skip(open) {
+            if b == o {
+                depth += 1;
+            } else if b == c {
+                depth -= 1;
+                if depth == 0 {
+                    return &src[open..=k];
+                }
+            }
+        }
+        panic!("unbalanced delimiter at {open}");
+    }
+
+    fn functions(src: &str) -> Vec<Func> {
+        let src = uncommented(src);
+        let mut out = Vec::new();
+        for at in occurrences(&src, "fn ") {
+            if !src[..at].ends_with('\n') {
+                continue;
+            }
+            let name: String = src[at + 3..].chars().take_while(|&c| is_ident(c)).collect();
+            let params = at + 3 + src[at + 3..].find('(').expect("fn parameters");
+            let after = params + balanced(&src, params).len();
+            let open = after + src[after..].find('{').expect("fn body");
+            let body = balanced(&src, open).to_string();
+            let entry = src[..at]
+                .lines()
+                .next_back()
+                .is_some_and(|l| l.trim_start().starts_with("@compute"));
+            out.push(Func { name, body, entry });
+        }
+        out
+    }
+
+    fn storage_names(src: &str) -> Vec<String> {
+        uncommented(src)
+            .lines()
+            .filter_map(|l| {
+                let rest = l.split("var<storage").nth(1)?;
+                let rest = rest.split('>').nth(1)?;
+                let name: String = rest.trim().chars().take_while(|&c| is_ident(c)).collect();
+                Some(name)
+            })
+            .collect()
+    }
+
+    /// Offset of the first access to a storage buffer in `body`: an index of
+    /// one, its address taken, or a call to a helper that does either.
+    fn first_touch(body: &str, buffers: &[String], touching: &BTreeSet<String>) -> Option<usize> {
+        let mut at = Vec::new();
+        for b in buffers {
+            at.extend(occurrences(body, &format!("{b}[")));
+            at.extend(occurrences(body, &format!("&{b}")).iter().map(|&k| k + 1));
+        }
+        for h in touching {
+            at.extend(occurrences(body, &format!("{h}(")));
+        }
+        at.into_iter().min()
+    }
+
+    /// For every entry point in `src`: whether it derives a folded flat group
+    /// id, and, when it does, `Ok` if its first `if (... >= ...) { return; }`
+    /// precedes its first storage access, else why not.
+    fn audit(src: &str) -> BTreeMap<String, (bool, Result<(), String>)> {
+        let funcs = functions(src);
+        let buffers = storage_names(src);
+        let helpers: Vec<&Func> = funcs.iter().filter(|f| !f.entry).collect();
+        let mut touching = BTreeSet::new();
+        let mut flat: BTreeSet<String> = BTreeSet::new();
+        loop {
+            let mut grew = false;
+            for h in &helpers {
+                if !touching.contains(&h.name)
+                    && first_touch(&h.body, &buffers, &touching).is_some()
+                {
+                    grew |= touching.insert(h.name.clone());
+                }
+                let reads_flat = !occurrences(&h.body, "flat_group(").is_empty()
+                    || flat
+                        .iter()
+                        .any(|f| !occurrences(&h.body, &format!("{f}(")).is_empty());
+                if reads_flat && !flat.contains(&h.name) {
+                    grew |= flat.insert(h.name.clone());
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        flat.insert("flat_group".to_string());
+        funcs
+            .iter()
+            .filter(|f| f.entry)
+            .map(|f| {
+                let folded = flat
+                    .iter()
+                    .any(|h| !occurrences(&f.body, &format!("{h}(")).is_empty());
+                let guard = if folded {
+                    guard_before_access(&f.body, &buffers, &touching)
+                } else {
+                    Ok(())
+                };
+                (f.name.clone(), (folded, guard))
+            })
+            .collect()
+    }
+
+    fn guard_before_access(
+        body: &str,
+        buffers: &[String],
+        touching: &BTreeSet<String>,
+    ) -> Result<(), String> {
+        let Some(ret) = body.find("return;") else {
+            return Err("no early return: the tail is not guarded".to_string());
+        };
+        let Some(start) = body[..ret].rfind("if (") else {
+            return Err("the first return is not under an if".to_string());
+        };
+        if !body[start..ret].contains(">=") {
+            return Err("the first return is not a `>=` bound".to_string());
+        }
+        match first_touch(body, buffers, touching) {
+            Some(touch) if touch < ret => Err(format!(
+                "a storage buffer is accessed before the tail guard: `{}`",
+                body[touch..].chars().take(24).collect::<String>().trim()
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    fn every_module() -> Vec<(String, String)> {
+        let tiles = attention_tiles(64, 32 * 1024).unwrap();
+        [
+            WgslModule::Gemm,
+            WgslModule::Pointwise,
+            WgslModule::Reduce,
+            WgslModule::Norm,
+            WgslModule::Loss,
+            WgslModule::Optim,
+            WgslModule::Layout,
+            WgslModule::Fault,
+            WgslModule::Attention(tiles),
+            WgslModule::CachedAttention,
+            WgslModule::Clip(1),
+        ]
+        .into_iter()
+        .map(|m| (format!("{m:?}"), wgsl_module(m).unwrap()))
+        .collect()
+    }
+
+    /// The audit of the real kernels: every entry point is classified in
+    /// `KERNEL_GRIDS`, every kernel that reads a folded flat id is `Folded`
+    /// and returns for its spare workgroups before it touches a buffer.
+    #[test]
+    fn every_folded_grid_kernel_guards_its_tail_before_any_buffer_access() {
+        let mut found = BTreeMap::new();
+        for (module, src) in every_module() {
+            for (entry, audited) in audit(&src) {
+                assert!(
+                    found
+                        .insert(entry.clone(), (module.clone(), audited))
+                        .is_none(),
+                    "entry point {entry} is defined twice"
+                );
+            }
+        }
+        let mut table = BTreeMap::new();
+        for (entry, kind) in KERNEL_GRIDS {
+            assert!(
+                table.insert(*entry, *kind).is_none(),
+                "{entry} is listed twice"
+            );
+        }
+        let mut problems = Vec::new();
+        for (entry, (module, (folded, guard))) in &found {
+            match table.get(entry.as_str()) {
+                None => problems.push(format!("{module}::{entry} is not in KERNEL_GRIDS")),
+                Some(GridKind::Folded(_)) if !folded => problems.push(format!(
+                    "{module}::{entry} is marked Folded but reads no flat group id"
+                )),
+                Some(GridKind::Exact(_) | GridKind::Single(_)) if *folded => {
+                    problems.push(format!(
+                    "{module}::{entry} reads the flat group id of a folded grid but is not Folded"
+                ))
+                }
+                Some(GridKind::Folded(_)) => {
+                    if let Err(why) = guard {
+                        problems.push(format!("{module}::{entry}: {why}"));
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        for entry in table.keys() {
+            if !found.contains_key(*entry) {
+                problems.push(format!(
+                    "KERNEL_GRIDS lists {entry}, which no module defines"
+                ));
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    /// The scanner itself: a guarded kernel passes, and an unguarded one, a
+    /// guard behind a write, a guard behind a helper that reads a buffer, and
+    /// a tail test that is not a bound each fail.
+    #[test]
+    fn the_tail_audit_catches_what_it_is_for() {
+        let head = "var<storage, read_write> y0: array<f32>;\n\
+                    fn flat_group(a: u32) -> u32 { return a; }\n\
+                    fn peek(i: u32) -> f32 { return y0[i]; }\n";
+        let kernel = |body: &str| {
+            let src = format!("{head}@compute\nfn k() {{\n{body}\n}}\n");
+            audit(&src).remove("k").unwrap()
+        };
+        let ok = kernel("let i = flat_group(1u); if (i >= 4u) { return; } y0[i] = 1.0;");
+        assert_eq!(ok, (true, Ok(())));
+        for (what, body) in [
+            ("none", "let i = flat_group(1u); y0[i] = 1.0;"),
+            (
+                "late",
+                "let i = flat_group(1u); y0[i] = 1.0; if (i >= 4u) { return; }",
+            ),
+            (
+                "helper",
+                "let i = flat_group(1u); let v = peek(i); if (i >= 4u) { return; }",
+            ),
+            (
+                "not a bound",
+                "let i = flat_group(1u); if (i == 9u) { return; } y0[i] = 1.0;",
+            ),
+        ] {
+            let (folded, guard) = kernel(body);
+            assert!(folded && guard.is_err(), "{what}: {guard:?}");
+        }
+        // A kernel that never reads a flat id is not folded.
+        assert_eq!(kernel("y0[0] = 1.0;"), (false, Ok(())));
+    }
 
     #[test]
     fn cached_attention_splits_cover_every_key_once() {
