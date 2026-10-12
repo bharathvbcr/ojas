@@ -2343,7 +2343,7 @@ mod tests {
         };
         let wrapped = Autocast::new(&inner);
         let checked = every_call_reaches_except(&wrapped, &inner, &["autocast_region"]);
-        assert_eq!(checked, 58);
+        assert_eq!(checked, crate::BACKEND_METHODS.len());
     }
 
     #[test]

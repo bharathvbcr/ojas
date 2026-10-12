@@ -26,7 +26,7 @@ pub use autocast::{
 pub use backend::{
     broadcast_scalar, check_adamw, clip_scale, next_step, pow_u64, rank_logits,
     refuse_bf16_operands, refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim,
-    require_ns5, sdpa_scale, AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnDecayGrad,
+    require_ns5, sdpa_scale, AdamWConfig, Backend, BackendId, CeChunk, BACKEND_METHODS, GatedRmsGrad, GdnDecayGrad,
     GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OptimizerKind,
     PerHeadGateGrad, ValueResidualGrad, ADAMW_BETA1, ADAMW_BETA2, ADAMW_EPS, CLIP_GRAD_NORM_EPS,
     GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
