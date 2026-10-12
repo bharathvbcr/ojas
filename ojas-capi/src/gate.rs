@@ -645,7 +645,9 @@ impl<B: Backend> Backend for Gated<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ojas_core::forward_backend_methods;
     use ojas_cpu::CpuBackend;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn gated(slot: &Arc<CancelSlot>) -> Gated<CpuBackend> {
         Gated::new(CpuBackend::new(Budget::new(1 << 20)), Arc::clone(slot))
@@ -747,6 +749,76 @@ mod tests {
         assert!(g.scale_grad(&mut grad, 0.5).is_err());
         assert_eq!(armed.tripped().as_deref(), Some("cancelled: Explicit"));
         assert_eq!(grad.to_f32_vec().unwrap(), vec![0.25, -0.5, 1.0, 0.125]);
+    }
+
+    /// Forwards every method to `inner` except
+    /// `causal_sdpa_backward_recompute`, which `Spy` overrides.
+    macro_rules! all_but_recompute {
+        (causal_sdpa_backward_recompute, { $($item:tt)* }) => {};
+        ($name:ident, { $($item:tt)* }) => {
+            $($item)*
+        };
+    }
+
+    /// A backend whose `causal_sdpa_backward_recompute` is an override
+    /// (the trait default would compose the forward and the backward): it
+    /// counts the call and answers with its own marker error.
+    struct Spy {
+        inner: CpuBackend,
+        recomputes: AtomicUsize,
+    }
+
+    impl Spy {
+        fn new() -> Self {
+            Self {
+                inner: CpuBackend::new(Budget::new(1 << 20)),
+                recomputes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl Backend for Spy {
+        ojas_core::with_backend_methods!(
+            forward_backend_methods,
+            { self, self.inner, none, all_but_recompute }
+        );
+        fn causal_sdpa_backward_recompute(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+            _: Option<usize>,
+        ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+            self.recomputes.fetch_add(1, Ordering::SeqCst);
+            Err(OjasError::Backend {
+                id: BackendId::Cpu,
+                detail: "spy:recompute".into(),
+            })
+        }
+    }
+
+    /// A backend's own `causal_sdpa_backward_recompute` is what a gated
+    /// call runs (not the trait default's forward and backward), and a
+    /// cancel refuses it before it runs.
+    #[test]
+    fn the_gated_recompute_override_is_reached_and_polls() {
+        let slot = Arc::new(CancelSlot::default());
+        let g = Gated::new(Spy::new(), Arc::clone(&slot));
+        let b = Budget::new(1 << 10);
+        let t = Tensor::from_f32(&[1.0], &[1], &b).unwrap();
+        let err = g
+            .causal_sdpa_backward_recompute(&t, &t, &t, &t, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("spy:recompute"), "{err}");
+        assert_eq!(g.inner().recomputes.load(Ordering::SeqCst), 1);
+        let armed = slot.arm(Box::new(|| Err("cancelled: Explicit".to_string())));
+        let err = g
+            .causal_sdpa_backward_recompute(&t, &t, &t, &t, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("refused after"), "{err}");
+        assert_eq!(armed.tripped().as_deref(), Some("cancelled: Explicit"));
+        assert_eq!(g.inner().recomputes.load(Ordering::SeqCst), 1);
     }
 
     #[test]

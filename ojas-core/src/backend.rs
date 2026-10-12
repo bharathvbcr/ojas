@@ -1487,438 +1487,182 @@ pub trait Backend {
     }
 }
 
-/// Forward every [`Backend`] method, including the defaulted ones, to the
-/// value behind `self`. A defaulted method that were not forwarded would run
-/// the trait default on the wrapper, for example a `sync` that skips the
-/// inner backend's deferred faults.
-macro_rules! forward_backend {
-    () => {
-        fn id(&self) -> BackendId {
-            (**self).id()
+/// The one list of [`Backend`] methods. Every wrapper that must forward the
+/// whole trait (`&B`, `Arc<B>`, `Gated`, the test `Probe`) is generated from
+/// it, so a method a wrapper forgets cannot silently run the trait default
+/// on the wrapper instead of the wrapped backend's override.
+///
+/// `with_backend_methods!(callback, ctx)` expands to `callback! { ctx
+/// <entries> }`. Each entry is `kind fn name(&self, args..) -> ret;` where
+/// `kind` is `op` (a computation, which an admission hook may gate) or `pure`
+/// (an accessor or size query that is never gated).
+///
+/// `backend.rs`'s `trait_and_method_list_agree` test reads this trait's
+/// source and fails when a method here is missing from the list, or the list
+/// names a method the trait does not have.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! with_backend_methods {
+    ($callback:ident, $ctx:tt) => {
+        $callback! { $ctx
+            pure fn id(&self) -> $crate::BackendId;
+            pure fn budget(&self) -> &$crate::Budget;
+            pure fn numerics(&self) -> $crate::Numerics;
+            op fn upload(&self, tensor: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn download(&self, tensor: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn permute(&self, input: &$crate::Tensor, dims: &[usize]) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn embedding_forward(&self, table: &$crate::Tensor, token_ids: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn embedding_backward(&self, table: &$crate::Tensor, token_ids: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn linear_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn linear_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn rms_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn rms_norm_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, grad_output: &$crate::Tensor, eps: f32) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn rope_half_split_forward(&self, x: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn rope_half_split_backward(&self, grad_output: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn rms_qk_norm_forward(&self, q: &$crate::Tensor, k: &$crate::Tensor, q_weight: &$crate::Tensor, k_weight: &$crate::Tensor, eps: f32) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn rms_qk_norm_backward(&self, q: &$crate::Tensor, k: &$crate::Tensor, q_weight: &$crate::Tensor, k_weight: &$crate::Tensor, grad_q: &$crate::Tensor, grad_k: &$crate::Tensor, eps: f32) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn causal_sdpa_forward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn causal_sdpa_backward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, output: &$crate::Tensor, lse: &$crate::Tensor, grad_output: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn causal_sdpa_backward_recompute(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, grad_output: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn per_head_sigmoid_gate_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, attn_out: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn per_head_sigmoid_gate_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, attn_out: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::PerHeadGateGrad, $crate::OjasError>;
+            op fn per_head_sigmoid_gate_forward_saving(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, attn_out: &$crate::Tensor) -> Result<($crate::Tensor, Option<$crate::Tensor>), $crate::OjasError>;
+            op fn per_head_sigmoid_gate_backward_saved(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, attn_out: &$crate::Tensor, grad_output: &$crate::Tensor, scales: &$crate::Tensor) -> Result<$crate::PerHeadGateGrad, $crate::OjasError>;
+            op fn value_residual_blend_forward(&self, value: &$crate::Tensor, value0: &$crate::Tensor, lambda: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn value_residual_blend_backward(&self, value: &$crate::Tensor, value0: &$crate::Tensor, lambda: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::ValueResidualGrad, $crate::OjasError>;
+            op fn chunked_gdn_forward(&self, inputs: $crate::GdnInputs<'_>) -> Result<$crate::GdnForward, $crate::OjasError>;
+            op fn chunked_gdn_backward(&self, inputs: $crate::GdnInputs<'_>, checkpoints: &$crate::Tensor, grad_output: &$crate::Tensor, grad_final_state: Option<&$crate::Tensor>) -> Result<$crate::GdnGrad, $crate::OjasError>;
+            op fn causal_conv1d_silu_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn causal_conv1d_silu_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn gated_rms_norm_forward(&self, input: &$crate::Tensor, gate: &$crate::Tensor, weight: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn gated_rms_norm_backward(&self, input: &$crate::Tensor, gate: &$crate::Tensor, weight: &$crate::Tensor, grad_output: &$crate::Tensor, eps: f32) -> Result<$crate::GatedRmsGrad, $crate::OjasError>;
+            op fn rope_partial_forward(&self, x: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn rope_partial_backward(&self, grad_output: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn sigmoid_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn sigmoid_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn gdn_log_decay_forward(&self, a: &$crate::Tensor, a_log: &$crate::Tensor, dt_bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn gdn_log_decay_backward(&self, a: &$crate::Tensor, a_log: &$crate::Tensor, dt_bias: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::GdnDecayGrad, $crate::OjasError>;
+            op fn silu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn silu_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn mul_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn mul_backward(&self, a: &$crate::Tensor, b: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn residual_add_forward(&self, x: &$crate::Tensor, y: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn residual_add_backward(&self, x: &$crate::Tensor, y: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn cross_entropy_mean_forward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn cross_entropy_mean_backward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn clip_grad_norm(&self, grads: &mut [$crate::Tensor], max_norm: f32) -> Result<f32, $crate::OjasError>;
+            op fn adamw_step(&self, param: &mut $crate::Tensor, grad: &$crate::Tensor, moment1: &mut $crate::Tensor, moment2: &mut $crate::Tensor, step: u64, config: $crate::AdamWConfig) -> Result<(), $crate::OjasError>;
+            op fn muon_ns5_step(&self, param: &mut $crate::Tensor, grad: &$crate::Tensor, momentum: &mut $crate::Tensor, config: $crate::MuonNs5Config) -> Result<(), $crate::OjasError>;
+            pure fn optimizer_scratch_bytes(&self, kind: $crate::OptimizerKind, rows: usize, cols: usize) -> Result<Option<u64>, $crate::OjasError>;
+            op fn sync(&self) -> Result<(), $crate::OjasError>;
+            op fn accumulate_grad(&self, acc: &mut $crate::Tensor, grad: &$crate::Tensor) -> Result<(), $crate::OjasError>;
+            op fn scale_grad(&self, grad: &mut $crate::Tensor, scale: f32) -> Result<(), $crate::OjasError>;
+            op fn linear_cross_entropy_mean(&self, input: &$crate::Tensor, weight: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>, chunk: $crate::CeChunk, want_grad: bool) -> Result<$crate::LinearCe, $crate::OjasError>;
+            op fn cached_attention_forward(&self, q: &$crate::Tensor, k_cache: &$crate::Tensor, v_cache: &$crate::Tensor, kv_len: usize, window: Option<usize>) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn kv_cache_write(&self, cache: &mut $crate::Tensor, src: &$crate::Tensor, at: usize) -> Result<(), $crate::OjasError>;
+            op fn argmax_rows(&self, x: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn topk_rows(&self, x: &$crate::Tensor, k: usize) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn cast_bf16(&self, tensor: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            pure fn bf16_operands(&self) -> bool;
+            op fn to_bf16(&self, tensor: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn to_f32(&self, tensor: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn autocast_region(&self, mode: $crate::AutocastMode) -> Result<$crate::AutocastGuard, $crate::OjasError>;
         }
-        fn budget(&self) -> &Budget {
-            (**self).budget()
-        }
-        fn numerics(&self) -> Numerics {
-            (**self).numerics()
-        }
-        fn upload(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).upload(tensor)
-        }
-        fn download(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).download(tensor)
-        }
-        fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
-            (**self).permute(input, dims)
-        }
-        fn embedding_forward(
-            &self,
-            table: &Tensor,
-            token_ids: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).embedding_forward(table, token_ids)
-        }
-        fn embedding_backward(
-            &self,
-            table: &Tensor,
-            token_ids: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).embedding_backward(table, token_ids, grad_output)
-        }
-        fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).linear_forward(input, weight)
-        }
-        fn linear_backward(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).linear_backward(input, weight, grad_output)
-        }
-        fn rms_norm_forward(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            eps: f32,
-        ) -> Result<Tensor, OjasError> {
-            (**self).rms_norm_forward(input, weight, eps)
-        }
-        fn rms_norm_backward(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            grad_output: &Tensor,
-            eps: f32,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).rms_norm_backward(input, weight, grad_output, eps)
-        }
-        fn rope_half_split_forward(
-            &self,
-            x: &Tensor,
-            cos: &Tensor,
-            sin: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).rope_half_split_forward(x, cos, sin)
-        }
-        fn rope_half_split_backward(
-            &self,
-            grad_output: &Tensor,
-            cos: &Tensor,
-            sin: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).rope_half_split_backward(grad_output, cos, sin)
-        }
-        fn rms_qk_norm_forward(
-            &self,
-            q: &Tensor,
-            k: &Tensor,
-            q_weight: &Tensor,
-            k_weight: &Tensor,
-            eps: f32,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).rms_qk_norm_forward(q, k, q_weight, k_weight, eps)
-        }
-        fn rms_qk_norm_backward(
-            &self,
-            q: &Tensor,
-            k: &Tensor,
-            q_weight: &Tensor,
-            k_weight: &Tensor,
-            grad_q: &Tensor,
-            grad_k: &Tensor,
-            eps: f32,
-        ) -> Result<(Tensor, Tensor, Tensor, Tensor), OjasError> {
-            (**self).rms_qk_norm_backward(q, k, q_weight, k_weight, grad_q, grad_k, eps)
-        }
-        fn causal_sdpa_forward(
-            &self,
-            q: &Tensor,
-            k: &Tensor,
-            v: &Tensor,
-            window: Option<usize>,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).causal_sdpa_forward(q, k, v, window)
-        }
-        fn causal_sdpa_backward(
-            &self,
-            q: &Tensor,
-            k: &Tensor,
-            v: &Tensor,
-            output: &Tensor,
-            lse: &Tensor,
-            grad_output: &Tensor,
-            window: Option<usize>,
-        ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
-            (**self).causal_sdpa_backward(q, k, v, output, lse, grad_output, window)
-        }
-        fn per_head_sigmoid_gate_forward(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            bias: &Tensor,
-            attn_out: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).per_head_sigmoid_gate_forward(input, weight, bias, attn_out)
-        }
-        fn per_head_sigmoid_gate_backward(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            bias: &Tensor,
-            attn_out: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<PerHeadGateGrad, OjasError> {
-            (**self).per_head_sigmoid_gate_backward(input, weight, bias, attn_out, grad_output)
-        }
-        fn per_head_sigmoid_gate_forward_saving(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            bias: &Tensor,
-            attn_out: &Tensor,
-        ) -> Result<(Tensor, Option<Tensor>), OjasError> {
-            (**self).per_head_sigmoid_gate_forward_saving(input, weight, bias, attn_out)
-        }
-        fn per_head_sigmoid_gate_backward_saved(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            bias: &Tensor,
-            attn_out: &Tensor,
-            grad_output: &Tensor,
-            scales: &Tensor,
-        ) -> Result<PerHeadGateGrad, OjasError> {
-            (**self).per_head_sigmoid_gate_backward_saved(
-                input,
-                weight,
-                bias,
-                attn_out,
-                grad_output,
-                scales,
-            )
-        }
-        fn value_residual_blend_forward(
-            &self,
-            value: &Tensor,
-            value0: &Tensor,
-            lambda: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).value_residual_blend_forward(value, value0, lambda)
-        }
-        fn value_residual_blend_backward(
-            &self,
-            value: &Tensor,
-            value0: &Tensor,
-            lambda: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<ValueResidualGrad, OjasError> {
-            (**self).value_residual_blend_backward(value, value0, lambda, grad_output)
-        }
-        fn chunked_gdn_forward(&self, inputs: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
-            (**self).chunked_gdn_forward(inputs)
-        }
-        fn chunked_gdn_backward(
-            &self,
-            inputs: GdnInputs<'_>,
-            checkpoints: &Tensor,
-            grad_output: &Tensor,
-            grad_final_state: Option<&Tensor>,
-        ) -> Result<GdnGrad, OjasError> {
-            (**self).chunked_gdn_backward(inputs, checkpoints, grad_output, grad_final_state)
-        }
-        fn causal_conv1d_silu_forward(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).causal_conv1d_silu_forward(input, weight)
-        }
-        fn causal_conv1d_silu_backward(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).causal_conv1d_silu_backward(input, weight, grad_output)
-        }
-        fn gated_rms_norm_forward(
-            &self,
-            input: &Tensor,
-            gate: &Tensor,
-            weight: &Tensor,
-            eps: f32,
-        ) -> Result<Tensor, OjasError> {
-            (**self).gated_rms_norm_forward(input, gate, weight, eps)
-        }
-        fn gated_rms_norm_backward(
-            &self,
-            input: &Tensor,
-            gate: &Tensor,
-            weight: &Tensor,
-            grad_output: &Tensor,
-            eps: f32,
-        ) -> Result<GatedRmsGrad, OjasError> {
-            (**self).gated_rms_norm_backward(input, gate, weight, grad_output, eps)
-        }
-        fn rope_partial_forward(
-            &self,
-            x: &Tensor,
-            cos: &Tensor,
-            sin: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).rope_partial_forward(x, cos, sin)
-        }
-        fn rope_partial_backward(
-            &self,
-            grad_output: &Tensor,
-            cos: &Tensor,
-            sin: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).rope_partial_backward(grad_output, cos, sin)
-        }
-        fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).sigmoid_forward(input)
-        }
-        fn sigmoid_backward(
-            &self,
-            input: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).sigmoid_backward(input, grad_output)
-        }
-        fn gdn_log_decay_forward(
-            &self,
-            a: &Tensor,
-            a_log: &Tensor,
-            dt_bias: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            (**self).gdn_log_decay_forward(a, a_log, dt_bias)
-        }
-        fn gdn_log_decay_backward(
-            &self,
-            a: &Tensor,
-            a_log: &Tensor,
-            dt_bias: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<GdnDecayGrad, OjasError> {
-            (**self).gdn_log_decay_backward(a, a_log, dt_bias, grad_output)
-        }
-        fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).silu_forward(input)
-        }
-        fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).silu_backward(input, grad_output)
-        }
-        fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).mul_forward(a, b)
-        }
-        fn mul_backward(
-            &self,
-            a: &Tensor,
-            b: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).mul_backward(a, b, grad_output)
-        }
-        fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).residual_add_forward(x, y)
-        }
-        fn residual_add_backward(
-            &self,
-            x: &Tensor,
-            y: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).residual_add_backward(x, y, grad_output)
-        }
-        fn cross_entropy_mean_forward(
-            &self,
-            logits: &Tensor,
-            targets: &Tensor,
-            ignore_index: Option<u32>,
-        ) -> Result<Tensor, OjasError> {
-            (**self).cross_entropy_mean_forward(logits, targets, ignore_index)
-        }
-        fn cross_entropy_mean_backward(
-            &self,
-            logits: &Tensor,
-            targets: &Tensor,
-            ignore_index: Option<u32>,
-        ) -> Result<Tensor, OjasError> {
-            (**self).cross_entropy_mean_backward(logits, targets, ignore_index)
-        }
-        fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
-            (**self).clip_grad_norm(grads, max_norm)
-        }
-        fn adamw_step(
-            &self,
-            param: &mut Tensor,
-            grad: &Tensor,
-            moment1: &mut Tensor,
-            moment2: &mut Tensor,
-            step: u64,
-            config: AdamWConfig,
-        ) -> Result<(), OjasError> {
-            (**self).adamw_step(param, grad, moment1, moment2, step, config)
-        }
-        fn muon_ns5_step(
-            &self,
-            param: &mut Tensor,
-            grad: &Tensor,
-            momentum: &mut Tensor,
-            config: MuonNs5Config,
-        ) -> Result<(), OjasError> {
-            (**self).muon_ns5_step(param, grad, momentum, config)
-        }
-        fn optimizer_scratch_bytes(
-            &self,
-            kind: OptimizerKind,
-            rows: usize,
-            cols: usize,
-        ) -> Result<Option<u64>, OjasError> {
-            (**self).optimizer_scratch_bytes(kind, rows, cols)
-        }
-        fn sync(&self) -> Result<(), OjasError> {
-            (**self).sync()
-        }
-        fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-            (**self).accumulate_grad(acc, grad)
-        }
-        fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
-            (**self).scale_grad(grad, scale)
-        }
-        fn linear_cross_entropy_mean(
-            &self,
-            input: &Tensor,
-            weight: &Tensor,
-            targets: &Tensor,
-            ignore_index: Option<u32>,
-            chunk: CeChunk,
-            want_grad: bool,
-        ) -> Result<LinearCe, OjasError> {
-            (**self).linear_cross_entropy_mean(
-                input,
-                weight,
-                targets,
-                ignore_index,
-                chunk,
-                want_grad,
-            )
-        }
-        fn cached_attention_forward(
-            &self,
-            q: &Tensor,
-            k_cache: &Tensor,
-            v_cache: &Tensor,
-            kv_len: usize,
-            window: Option<usize>,
-        ) -> Result<Tensor, OjasError> {
-            (**self).cached_attention_forward(q, k_cache, v_cache, kv_len, window)
-        }
-        fn kv_cache_write(
-            &self,
-            cache: &mut Tensor,
-            src: &Tensor,
-            at: usize,
-        ) -> Result<(), OjasError> {
-            (**self).kv_cache_write(cache, src, at)
-        }
-        fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).argmax_rows(x)
-        }
-        fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
-            (**self).topk_rows(x, k)
-        }
-        fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).cast_bf16(tensor)
-        }
-        fn bf16_operands(&self) -> bool {
-            (**self).bf16_operands()
-        }
-        fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).to_bf16(tensor)
-        }
-        fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-            (**self).to_f32(tensor)
-        }
-        fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
-            (**self).autocast_region(mode)
-        }
+    };
+}
+
+/// Every name in [`with_backend_methods!`], in trait order.
+#[doc(hidden)]
+pub use backend_method_names::BACKEND_METHODS;
+
+mod backend_method_names {
+    macro_rules! names {
+        ({} $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
+            pub const BACKEND_METHODS: &[&str] = &[$(stringify!($name)),*];
+        };
+    }
+    with_backend_methods!(names, {});
+}
+
+/// Generates forwarding impls of every [`Backend`] method from
+/// [`with_backend_methods!`]. The context is
+/// `{ self_ident, inner_expr, admit, hand }`:
+///
+/// - `inner_expr` is the backend each method forwards to (`(**self)`,
+///   `self.inner`);
+/// - `admit` is `none`, or the name of a `&self` method taking the op name
+///   and returning `Result<(), OjasError>`; it runs before every `op`
+///   method and a refusal returns before the inner backend is touched;
+/// - `hand` is a macro `(name, { item.. })` that emits the generated `item`
+///   or, for the methods the wrapper writes itself, nothing.
+///   [`forward_backend_keep`] emits them all.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! forward_backend_methods {
+    ({ $s:ident, $inner:expr, $admit:tt, $hand:ident }
+     $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
+        $(
+            $crate::forward_backend_methods!(
+                @one $s, $inner, $admit, $hand, $kind, $name, [$($arg: $ty),*], $ret
+            );
+        )*
+    };
+    (@one $s:ident, $inner:expr, none, $hand:ident, $kind:ident, $name:ident,
+     [$($arg:ident : $ty:ty),*], $ret:ty) => {
+        $hand! { $name, {
+            #[allow(clippy::too_many_arguments)]
+            fn $name(&$s $(, $arg: $ty)*) -> $ret {
+                $inner.$name($($arg),*)
+            }
+        } }
+    };
+    (@one $s:ident, $inner:expr, $admit:ident, $hand:ident, pure, $name:ident,
+     [$($arg:ident : $ty:ty),*], $ret:ty) => {
+        $hand! { $name, {
+            #[allow(clippy::too_many_arguments)]
+            fn $name(&$s $(, $arg: $ty)*) -> $ret {
+                $inner.$name($($arg),*)
+            }
+        } }
+    };
+    (@one $s:ident, $inner:expr, $admit:ident, $hand:ident, op, $name:ident,
+     [$($arg:ident : $ty:ty),*], $ret:ty) => {
+        $hand! { $name, {
+            #[allow(clippy::too_many_arguments)]
+            fn $name(&$s $(, $arg: $ty)*) -> $ret {
+                $s.$admit(stringify!($name))?;
+                $inner.$name($($arg),*)
+            }
+        } }
+    };
+}
+
+/// The `hand` argument of [`forward_backend_methods`] that keeps every
+/// generated method.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! forward_backend_keep {
+    ($name:ident, { $($item:tt)* }) => {
+        $($item)*
     };
 }
 
 /// A shared reference to a backend is a backend, so one backend can serve a
 /// `Tape` and a trainer at once.
 impl<B: Backend + ?Sized> Backend for &B {
-    forward_backend!();
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep }
+    );
 }
 
 /// An `Arc` of a backend is a backend, for backends that are not `Clone`
 /// (for example `WgpuBackend`) shared across sessions.
 impl<B: Backend + ?Sized> Backend for std::sync::Arc<B> {
-    forward_backend!();
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep }
+    );
 }
 
 /// Tiling of [`Backend::linear_cross_entropy_mean`]: at most `rows` rows and
@@ -2391,6 +2135,22 @@ pub(crate) mod tests {
         }
     }
 
+    /// One `op` method of [`Marker`]; the `pure` ones are written by hand.
+    macro_rules! marker_method {
+        ($name:ident, pure, [$($ty:ty),*], $ret:ty) => {};
+        ($name:ident, op, [$($ty:ty),*], $ret:ty) => {
+            fn $name(&self $(, _: $ty)*) -> $ret {
+                Err(mark(stringify!($name)))
+            }
+        };
+    }
+
+    macro_rules! marker_methods {
+        ({} $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
+            $( marker_method!($name, $kind, [$($ty),*], $ret); )*
+        };
+    }
+
     impl Backend for Marker {
         fn id(&self) -> BackendId {
             BackendId::Wgpu
@@ -2401,311 +2161,8 @@ pub(crate) mod tests {
         fn numerics(&self) -> Numerics {
             Numerics::Fast
         }
-        fn upload(&self, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("upload"))
-        }
-        fn download(&self, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("download"))
-        }
-        fn permute(&self, _: &Tensor, _: &[usize]) -> Result<Tensor, OjasError> {
-            Err(mark("permute"))
-        }
-        fn embedding_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("embedding_forward"))
-        }
-        fn embedding_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("embedding_backward"))
-        }
-        fn linear_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("linear_forward"))
-        }
-        fn linear_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("linear_backward"))
-        }
-        fn rms_norm_forward(&self, _: &Tensor, _: &Tensor, _: f32) -> Result<Tensor, OjasError> {
-            Err(mark("rms_norm_forward"))
-        }
-        fn rms_norm_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: f32,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("rms_norm_backward"))
-        }
-        fn rope_half_split_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("rope_half_split_forward"))
-        }
-        fn rope_half_split_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("rope_half_split_backward"))
-        }
-        fn rms_qk_norm_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: f32,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("rms_qk_norm_forward"))
-        }
-        fn rms_qk_norm_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: f32,
-        ) -> Result<(Tensor, Tensor, Tensor, Tensor), OjasError> {
-            Err(mark("rms_qk_norm_backward"))
-        }
-        fn causal_sdpa_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: Option<usize>,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("causal_sdpa_forward"))
-        }
-        fn causal_sdpa_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: Option<usize>,
-        ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
-            Err(mark("causal_sdpa_backward"))
-        }
-        fn per_head_sigmoid_gate_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("per_head_sigmoid_gate_forward"))
-        }
-        fn per_head_sigmoid_gate_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<PerHeadGateGrad, OjasError> {
-            Err(mark("per_head_sigmoid_gate_backward"))
-        }
-        fn per_head_sigmoid_gate_forward_saving(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<(Tensor, Option<Tensor>), OjasError> {
-            Err(mark("per_head_sigmoid_gate_forward_saving"))
-        }
-        fn per_head_sigmoid_gate_backward_saved(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<PerHeadGateGrad, OjasError> {
-            Err(mark("per_head_sigmoid_gate_backward_saved"))
-        }
-        fn value_residual_blend_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("value_residual_blend_forward"))
-        }
-        fn value_residual_blend_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<ValueResidualGrad, OjasError> {
-            Err(mark("value_residual_blend_backward"))
-        }
-        fn chunked_gdn_forward(&self, _: GdnInputs<'_>) -> Result<GdnForward, OjasError> {
-            Err(mark("chunked_gdn_forward"))
-        }
-        fn chunked_gdn_backward(
-            &self,
-            _: GdnInputs<'_>,
-            _: &Tensor,
-            _: &Tensor,
-            _: Option<&Tensor>,
-        ) -> Result<GdnGrad, OjasError> {
-            Err(mark("chunked_gdn_backward"))
-        }
-        fn causal_conv1d_silu_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("causal_conv1d_silu_forward"))
-        }
-        fn causal_conv1d_silu_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("causal_conv1d_silu_backward"))
-        }
-        fn gated_rms_norm_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: f32,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("gated_rms_norm_forward"))
-        }
-        fn gated_rms_norm_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: f32,
-        ) -> Result<GatedRmsGrad, OjasError> {
-            Err(mark("gated_rms_norm_backward"))
-        }
-        fn rope_partial_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("rope_partial_forward"))
-        }
-        fn rope_partial_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("rope_partial_backward"))
-        }
-        fn sigmoid_forward(&self, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("sigmoid_forward"))
-        }
-        fn sigmoid_backward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("sigmoid_backward"))
-        }
-        fn gdn_log_decay_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("gdn_log_decay_forward"))
-        }
-        fn gdn_log_decay_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<GdnDecayGrad, OjasError> {
-            Err(mark("gdn_log_decay_backward"))
-        }
-        fn silu_forward(&self, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("silu_forward"))
-        }
-        fn silu_backward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("silu_backward"))
-        }
-        fn mul_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("mul_forward"))
-        }
-        fn mul_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("mul_backward"))
-        }
-        fn residual_add_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("residual_add_forward"))
-        }
-        fn residual_add_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("residual_add_backward"))
-        }
-        fn cross_entropy_mean_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: Option<u32>,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("cross_entropy_mean_forward"))
-        }
-        fn cross_entropy_mean_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: Option<u32>,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("cross_entropy_mean_backward"))
-        }
-        fn clip_grad_norm(&self, _: &mut [Tensor], _: f32) -> Result<f32, OjasError> {
-            Err(mark("clip_grad_norm"))
-        }
-        fn adamw_step(
-            &self,
-            _: &mut Tensor,
-            _: &Tensor,
-            _: &mut Tensor,
-            _: &mut Tensor,
-            _: u64,
-            _: AdamWConfig,
-        ) -> Result<(), OjasError> {
-            Err(mark("adamw_step"))
-        }
-        fn muon_ns5_step(
-            &self,
-            _: &mut Tensor,
-            _: &Tensor,
-            _: &mut Tensor,
-            _: MuonNs5Config,
-        ) -> Result<(), OjasError> {
-            Err(mark("muon_ns5_step"))
+        fn bf16_operands(&self) -> bool {
+            true
         }
         fn optimizer_scratch_bytes(
             &self,
@@ -2715,51 +2172,7 @@ pub(crate) mod tests {
         ) -> Result<Option<u64>, OjasError> {
             Err(mark("optimizer_scratch_bytes"))
         }
-        fn sync(&self) -> Result<(), OjasError> {
-            Err(mark("sync"))
-        }
-        fn accumulate_grad(&self, _: &mut Tensor, _: &Tensor) -> Result<(), OjasError> {
-            Err(mark("accumulate_grad"))
-        }
-        fn scale_grad(&self, _: &mut Tensor, _: f32) -> Result<(), OjasError> {
-            Err(mark("scale_grad"))
-        }
-        fn linear_cross_entropy_mean(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: Option<u32>,
-            _: CeChunk,
-            _: bool,
-        ) -> Result<LinearCe, OjasError> {
-            Err(mark("linear_cross_entropy_mean"))
-        }
-        fn cached_attention_forward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-            _: usize,
-            _: Option<usize>,
-        ) -> Result<Tensor, OjasError> {
-            Err(mark("cached_attention_forward"))
-        }
-        fn kv_cache_write(&self, _: &mut Tensor, _: &Tensor, _: usize) -> Result<(), OjasError> {
-            Err(mark("kv_cache_write"))
-        }
-        fn argmax_rows(&self, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("argmax_rows"))
-        }
-        fn topk_rows(&self, _: &Tensor, _: usize) -> Result<(Tensor, Tensor), OjasError> {
-            Err(mark("topk_rows"))
-        }
-        fn cast_bf16(&self, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(mark("cast_bf16"))
-        }
-        fn autocast_region(&self, _: AutocastMode) -> Result<AutocastGuard, OjasError> {
-            Err(mark("autocast_region"))
-        }
+        with_backend_methods!(marker_methods, {});
     }
 
     /// Call every method through `backend` (a wrapper, dispatched
@@ -2819,6 +2232,7 @@ pub(crate) mod tests {
             op(backend.rms_qk_norm_backward(&t, &t, &t, &t, &t, &t, 1e-6)),
             op(backend.causal_sdpa_forward(&t, &t, &t, None)),
             op(backend.causal_sdpa_backward(&t, &t, &t, &t, &t, &t, None)),
+            op(backend.causal_sdpa_backward_recompute(&t, &t, &t, &t, None)),
             op(backend.per_head_sigmoid_gate_forward(&t, &t, &t, &t)),
             op(backend.per_head_sigmoid_gate_backward(&t, &t, &t, &t, &t)),
             op(backend
@@ -2860,6 +2274,8 @@ pub(crate) mod tests {
             op(backend.argmax_rows(&t)),
             op(backend.topk_rows(&t, 1)),
             op(backend.cast_bf16(&t)),
+            op(backend.to_bf16(&t)),
+            op(backend.to_f32(&t)),
             op(backend.autocast_region(AutocastMode::Off).map(drop)),
         ];
         let expected = [
@@ -2878,6 +2294,7 @@ pub(crate) mod tests {
             "rms_qk_norm_backward",
             "causal_sdpa_forward",
             "causal_sdpa_backward",
+            "causal_sdpa_backward_recompute",
             "per_head_sigmoid_gate_forward",
             "per_head_sigmoid_gate_backward",
             "per_head_sigmoid_gate_forward_saving",
@@ -2917,8 +2334,18 @@ pub(crate) mod tests {
             "argmax_rows",
             "topk_rows",
             "cast_bf16",
+            "to_bf16",
+            "to_f32",
             "autocast_region",
         ];
+        // The harness calls every method in the generated list: a method
+        // added to the trait and the list but not called here fails.
+        let accessors = ["id", "budget", "numerics", "bf16_operands"];
+        let mut called: Vec<&str> = expected.iter().chain(&accessors).copied().collect();
+        let mut listed: Vec<&str> = crate::BACKEND_METHODS.to_vec();
+        called.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(called, listed, "the harness and BACKEND_METHODS disagree");
         for name in owned {
             assert!(
                 expected.contains(name),
@@ -2935,9 +2362,45 @@ pub(crate) mod tests {
         assert_eq!(reached.len(), expected.len());
         assert_eq!(backend.id(), BackendId::Wgpu);
         assert_eq!(backend.numerics(), Numerics::Fast);
+        assert!(backend.bf16_operands(), "bf16_operands did not reach inner");
         assert!(std::ptr::eq(backend.budget(), budget));
-        // The three accessors plus every op above.
-        3 + reached.len()
+        // The four accessors plus every op above.
+        accessors.len() + reached.len()
+    }
+
+    /// The generated wrappers forward exactly the methods in
+    /// `with_backend_methods!`; this reads the trait's own source so a method
+    /// added to the trait but not to the list (which every wrapper then
+    /// silently runs as the trait default) fails here, as does a stale name.
+    #[test]
+    fn the_method_list_names_every_trait_method() {
+        let source = include_str!("backend.rs");
+        let start = source.find("pub trait Backend {").unwrap();
+        let end = start + source[start..].find("\n}\n").unwrap();
+        let mut in_trait: Vec<&str> = source[start..end]
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("    fn ")?;
+                Some(&rest[..rest.find(['(', '<'])?])
+            })
+            .collect();
+        let mut listed: Vec<&str> = crate::BACKEND_METHODS.to_vec();
+        in_trait.sort_unstable();
+        listed.sort_unstable();
+        assert!(
+            in_trait.len() > 50,
+            "the trait scan found {}",
+            in_trait.len()
+        );
+        let unlisted: Vec<_> = in_trait.iter().filter(|n| !listed.contains(n)).collect();
+        let stale: Vec<_> = listed.iter().filter(|n| !in_trait.contains(n)).collect();
+        assert!(
+            unlisted.is_empty() && stale.is_empty(),
+            "not in with_backend_methods!: {unlisted:?}; not in the trait: {stale:?}"
+        );
+        let mut deduped = listed.clone();
+        deduped.dedup();
+        assert_eq!(deduped, listed, "a method is listed twice");
     }
 
     #[test]
@@ -2953,7 +2416,7 @@ pub(crate) mod tests {
         assert_eq!(every_call_reaches(&&shared, &inner), checked);
         // A forwarding impl that misses a method fails above; this pins the
         // count so a new trait method is added to `every_call_reaches` too.
-        assert_eq!(checked, 58);
+        assert_eq!(checked, crate::BACKEND_METHODS.len());
     }
 
     #[test]
