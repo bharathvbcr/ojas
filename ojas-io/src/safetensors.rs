@@ -21,9 +21,18 @@ use std::path::Path;
 /// 100_000_000, not 100 MiB (104_857_600).
 pub const MAX_HEADER_BYTES: u64 = 100_000_000;
 
-/// Dtypes this crate reads and writes: f32, bf16 and f16 weights, and
-/// integer token ids. The header strings are exactly `"F32"`, `"BF16"`,
-/// `"F16"`, `"I64"` and `"U16"`. Other safetensors dtypes are rejected.
+/// Every dtype in the safetensors specification, so one tensor of an
+/// unfamiliar type never rejects the file that holds it. The header strings
+/// are the spec's: `"BOOL"`, `"F4"`, `"F6_E2M3"`, `"F6_E3M2"`, `"U8"`, `"I8"`,
+/// `"F8_E5M2"`, `"F8_E4M3"`, `"F8_E8M0"`, `"I16"`, `"U16"`, `"F16"`,
+/// `"BF16"`, `"I32"`, `"U32"`, `"F32"`, `"F64"`, `"I64"` and `"U64"`.
+///
+/// This crate decodes F32, BF16, F16, I64 and U16 ([`SafeTensors::read_f32`],
+/// [`SafeTensors::read_f32_widened`], [`SafeTensors::read_bf16_bits`],
+/// [`SafeTensors::read_i64`], [`SafeTensors::read_u16`]); a tensor of any
+/// other dtype parses, its raw bytes stay readable through
+/// [`SafeTensors::read_bytes`], and a typed read of it is refused naming the
+/// tensor and its dtype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StDtype {
     F32,
@@ -31,14 +40,48 @@ pub enum StDtype {
     F16,
     I64,
     U16,
+    Bool,
+    F4,
+    F6E2M3,
+    F6E3M2,
+    U8,
+    I8,
+    F8E5M2,
+    F8E4M3,
+    F8E8M0,
+    I16,
+    I32,
+    U32,
+    F64,
+    U64,
 }
 
 impl StDtype {
+    /// Bits per element: 4 and 6 for the sub-byte floats, otherwise 8 times
+    /// [`Self::size`].
+    pub fn bits(self) -> u64 {
+        match self {
+            StDtype::F4 => 4,
+            StDtype::F6E2M3 | StDtype::F6E3M2 => 6,
+            other => other.size() * 8,
+        }
+    }
+
+    /// Bytes per element, for the byte-aligned dtypes. The sub-byte floats
+    /// (`F4`, `F6_*`) have no whole-byte width and report 0; use
+    /// [`Self::bits`] for sizes.
     pub fn size(self) -> u64 {
         match self {
-            StDtype::U16 | StDtype::BF16 | StDtype::F16 => 2,
-            StDtype::F32 => 4,
-            StDtype::I64 => 8,
+            StDtype::F4 | StDtype::F6E2M3 | StDtype::F6E3M2 => 0,
+            StDtype::Bool
+            | StDtype::U8
+            | StDtype::I8
+            | StDtype::F8E5M2
+            | StDtype::F8E4M3
+            | StDtype::F8E8M0 => 1,
+            StDtype::U16 | StDtype::BF16 | StDtype::F16 | StDtype::I16 => 2,
+            StDtype::F32 | StDtype::I32 | StDtype::U32 => 4,
+            StDtype::I64 | StDtype::F64 | StDtype::U64 => 8,
         }
     }
 
@@ -49,18 +92,50 @@ impl StDtype {
             StDtype::F16 => "F16",
             StDtype::I64 => "I64",
             StDtype::U16 => "U16",
+            StDtype::Bool => "BOOL",
+            StDtype::F4 => "F4",
+            StDtype::F6E2M3 => "F6_E2M3",
+            StDtype::F6E3M2 => "F6_E3M2",
+            StDtype::U8 => "U8",
+            StDtype::I8 => "I8",
+            StDtype::F8E5M2 => "F8_E5M2",
+            StDtype::F8E4M3 => "F8_E4M3",
+            StDtype::F8E8M0 => "F8_E8M0",
+            StDtype::I16 => "I16",
+            StDtype::I32 => "I32",
+            StDtype::U32 => "U32",
+            StDtype::F64 => "F64",
+            StDtype::U64 => "U64",
         }
     }
 
     fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "F32" => Ok(StDtype::F32),
-            "BF16" => Ok(StDtype::BF16),
-            "F16" => Ok(StDtype::F16),
-            "I64" => Ok(StDtype::I64),
-            "U16" => Ok(StDtype::U16),
-            other => Err(format!("unsupported dtype {other:?}")),
-        }
+        Ok(match s {
+            "F32" => StDtype::F32,
+            "BF16" => StDtype::BF16,
+            "F16" => StDtype::F16,
+            "I64" => StDtype::I64,
+            "U16" => StDtype::U16,
+            "BOOL" => StDtype::Bool,
+            "F4" => StDtype::F4,
+            "F6_E2M3" => StDtype::F6E2M3,
+            "F6_E3M2" => StDtype::F6E3M2,
+            "U8" => StDtype::U8,
+            "I8" => StDtype::I8,
+            "F8_E5M2" => StDtype::F8E5M2,
+            "F8_E4M3" => StDtype::F8E4M3,
+            "F8_E8M0" => StDtype::F8E8M0,
+            "I16" => StDtype::I16,
+            "I32" => StDtype::I32,
+            "U32" => StDtype::U32,
+            "F64" => StDtype::F64,
+            "U64" => StDtype::U64,
+            other => {
+                return Err(format!(
+                    "unknown dtype {other:?} (not in the safetensors spec)"
+                ))
+            }
+        })
     }
 }
 
@@ -73,7 +148,7 @@ pub fn encode_f32_as(dtype: StDtype, values: &[f32]) -> Result<Vec<u8>, IoError>
     let width = match dtype {
         StDtype::F32 => 4,
         StDtype::BF16 | StDtype::F16 => 2,
-        StDtype::I64 | StDtype::U16 => {
+        _ => {
             return Err(IoError::new(format!(
                 "{dtype:?} is not a floating-point encoding"
             )))
@@ -304,8 +379,8 @@ impl<'a> SafeTensors<'a> {
             StDtype::F16 => self.read_typed(name, dtype, 2, |c| {
                 f16_to_f32(u16::from_le_bytes([c[0], c[1]]))
             }),
-            StDtype::I64 | StDtype::U16 => Err(IoError::new(format!(
-                "{name}: {dtype:?} is not a floating-point tensor"
+            _ => Err(IoError::new(format!(
+                "{name}: {dtype:?} is not a floating-point tensor this crate decodes"
             ))),
         }
     }
@@ -712,9 +787,15 @@ fn byte_len(name: &str, shape: &[u64], dtype: StDtype) -> Result<u64, IoError> {
         .iter()
         .try_fold(1u64, |acc, &d| acc.checked_mul(d))
         .ok_or_else(|| IoError::new(format!("{name:?}: shape product overflows")))?;
-    numel
-        .checked_mul(dtype.size())
-        .ok_or_else(|| IoError::new(format!("{name:?}: byte size overflows")))
+    let bits = numel
+        .checked_mul(dtype.bits())
+        .ok_or_else(|| IoError::new(format!("{name:?}: byte size overflows")))?;
+    if bits % 8 != 0 {
+        return Err(IoError::new(format!(
+            "{name:?}: {numel} elements of {dtype:?} is not a whole number of bytes"
+        )));
+    }
+    Ok(bits / 8)
 }
 
 fn push_json_str(out: &mut String, s: &str) {
@@ -1220,6 +1301,9 @@ mod tests {
                 StDtype::BF16 | StDtype::F16 => {
                     assert!(st.read_f32(&o.name).is_err(), "{:?}", o.name);
                     st.read_f32_widened(&o.name).map(|(_, v)| v.len())
+                }
+                other => {
+                    unreachable!("the generators draw only the five decoded dtypes, not {other:?}")
                 }
             };
             assert_eq!(typed.unwrap(), numel);

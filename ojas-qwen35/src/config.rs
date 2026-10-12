@@ -9,8 +9,10 @@
 //! - **every key is known.** A key outside the tables below is refused by
 //!   name. The tables say which keys are read, which must hold one value, and
 //!   which do not touch the text tower's training step (and why);
-//! - GDN value heads equal to key heads (tessl refuses only inside a step:
-//!   `gdn_train` has no head grouping);
+//! - GDN value heads equal to key heads. tessl's own step does repeat key
+//!   heads over value heads (its `qwen35_train` scope note), so the refusal
+//!   is not tessl's: it is ojas's `Qwen35Spec` (one `gdn_heads` count), the
+//!   Tape GDN path with no repeat, and the missing grouped torch golden;
 //! - query heads a non-zero multiple of KV heads (tessl checks only inside
 //!   `AttnTrainDims::validate`);
 //! - `head_dim` and the GDN key dim the training kernels are compiled for,
@@ -503,7 +505,9 @@ impl Qwen35TextConfig {
         if gdn_value_heads != gdn_key_heads {
             return Err(cfg_err(format!(
                 "text_config.linear_num_value_heads {gdn_value_heads} != linear_num_key_heads {gdn_key_heads}: \
-                 tessl's gdn_train has no head grouping, so value heads must equal key heads"
+                 tessl's step can group GDN heads, but ojas's Qwen35Spec has a single GDN head count, \
+                 its Tape GDN path does not repeat key heads over value heads, and no grouped torch golden \
+                 exists, so value heads must equal key heads"
             )));
         }
         let gdn_value_dim = dim(tc, "linear_value_head_dim")?;

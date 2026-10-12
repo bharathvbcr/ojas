@@ -1,7 +1,7 @@
 ---
 id: "gp-ft-training-path-correctness"
 title: "Fine-tune path bugs before any feature work: Qwen3.5 Tape loss cannot mask labels, save_state drops a half-filled gradient bank, a stale 4B refusal states a false reason, one unknown safetensors dtype rejects the whole file; widen the tiny fixture so torch sees batch, heads and CE tiling"
-status: ready
+status: review
 priority: 0
 severity: high
 type: bug
@@ -74,3 +74,14 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-io/src/safetensors.rs
 - ojas-model/tests/
 - ojas-oracle/
+
+## Progress 2026-10-12 (branch gitpulse/ft-training-path-correctness)
+
+Fixture regenerated with `ojas-oracle/python/qwen35_wide_fixture.py` (python3.14, torch 2.13, transformers 5.15; goldens are torch's, not hand-written).
+
+- Tape loss ignore index: DONE. `ojas-model/src/qwen35/forward.rs` `forward_loss` takes `ignore: Option<u32>` (same slot as the GPT one) and passes it to `lin_ce`. Tests (`ojas-model/tests/qwen35_fixture.rs`): `the_cpu_tape_matches_transformers` (CPU) and `qwen35_metal_tape.rs::the_metal_tape_matches_transformers_and_the_cpu_tape` (Metal) run the -100-labelled fixture against torch `cross_entropy(ignore_index=-100)` within 1e-5 loss / 1e-4 gradient; plus `masked_labels_without_an_ignore_index_are_refused`, `only_the_ignore_index_masks_a_position`, `a_batch_with_every_target_ignored_is_refused`. At d431949 the argument does not exist (compile error), and `None` with -100 labels is an out-of-range target.
+- save_state with a non-empty bank: DONE, chose refusal. `ojas-qwen35/src/state.rs` `save_state` returns `Qwen35Error::Invalid` for `Holds(_)`/`Invalid(_)`; nothing is written. Test `ojas-qwen35/tests/gpu_save_state_bank.rs` (ignored, Metal).
+- Head-grouping refusal message: DONE, kept the refusal, message now names the real missing pieces (ojas `Qwen35Spec` one `gdn_heads`, Tape GDN path no key-head repeat, no grouped torch golden); tessl is not blamed. Test `cpu_config.rs::the_value_head_refusal_does_not_blame_tessl_for_a_missing_grouping`.
+- safetensors dtypes: DONE. `StDtype` holds every spec dtype; an unfamiliar-but-spec dtype parses, typed reads of it are refused naming tensor and dtype, a name outside the spec still rejects the file (naming it). Tests `ojas-io/tests/unknown_dtype.rs`.
+- Wide fixture: DONE in place (`ojas-model/tests/fixtures/qwen35_tiny`): batch 2, 2 GDN heads, vocab 8320 (> one 8192-column CE tile), -100 labels (prompt 20 in row 0, padding 15 in row 1).
+- Moved-out items untouched, as ruled.

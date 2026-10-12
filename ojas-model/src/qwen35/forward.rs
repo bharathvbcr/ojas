@@ -105,6 +105,12 @@ fn shape(op: &'static str, detail: String) -> OjasError {
 /// length; transformers' `labels=ids` is `ids[.., ..T - 1]` against
 /// `ids[.., 1..]`. `activations` makes each layer a checkpointed segment
 /// ([`ActivationCheckpoint::Blocks`]); it changes memory, not values.
+///
+/// A target equal to `ignore` (transformers' `ignore_index`, `-100` as a
+/// `u32` is `4294967196`) contributes no loss and no gradient and is left out
+/// of the mean's divisor, as in the GPT [`crate::forward_loss`]; `None`
+/// scores every position. A batch with every target ignored is refused by the
+/// fused CE, not scored as zero.
 #[allow(clippy::too_many_arguments)]
 pub fn forward_loss<G: Graph>(
     g: &mut G,
@@ -113,6 +119,7 @@ pub fn forward_loss<G: Graph>(
     ids: &Tensor,
     targets: &Tensor,
     tables: &Qwen35Tables,
+    ignore: Option<u32>,
     chunk: CeChunk,
     activations: ActivationCheckpoint,
 ) -> Result<G::V, OjasError> {
@@ -192,7 +199,7 @@ pub fn forward_loss<G: Graph>(
     let rows = batch * seq;
     let h = g.reshape(&h, &[rows, spec.hidden])?;
     let targets = targets.reshape(&[rows])?;
-    g.lin_ce(&h, &params.embed, &targets, None, chunk)
+    g.lin_ce(&h, &params.embed, &targets, ignore, chunk)
 }
 
 struct Dims<'a> {
