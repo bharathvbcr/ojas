@@ -38,7 +38,10 @@ fn clip_dispatches_scale_with_slot_groups_not_tensors() {
         let got = m.download(d).unwrap().to_f32_vec().unwrap();
         let want = h.to_f32_vec().unwrap();
         for (j, (a, b)) in got.iter().zip(&want).enumerate() {
-            assert!((a - b).abs() <= 1e-6 + 1e-5 * b.abs(), "{i}[{j}]: {a} vs {b}");
+            assert!(
+                (a - b).abs() <= 1e-6 + 1e-5 * b.abs(),
+                "{i}[{j}]: {a} vs {b}"
+            );
         }
     }
 }

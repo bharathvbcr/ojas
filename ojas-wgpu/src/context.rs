@@ -1326,11 +1326,7 @@ impl WgpuContext {
             return Err(self.failure(format!("bind group {}: {err}", kernel.entry)));
         }
         c.bind_groups.fetch_add(1, Ordering::Relaxed);
-        lock(&self.inner.binds).insert(
-            key,
-            group.clone(),
-            &[&self.inner.fault, &self.inner.held],
-        );
+        lock(&self.inner.binds).insert(key, group.clone(), &[&self.inner.fault, &self.inner.held]);
         Ok((pipe, group))
     }
 
@@ -2160,7 +2156,11 @@ mod tests {
         // Past every cap the pool has: refused, so forgotten.
         lock(&ctx.inner.pool).bytes = POOL_CAP_BYTES;
         ctx.give_back(gone.clone(), 1 << 12);
-        assert_eq!(groups(&ctx), 2, "only the two groups binding the freed buffer go");
+        assert_eq!(
+            groups(&ctx),
+            2,
+            "only the two groups binding the freed buffer go"
+        );
         {
             let binds = lock(&ctx.inner.binds);
             assert!(!binds.by_buf.contains_key(&gone));
@@ -2246,7 +2246,10 @@ mod tests {
     #[test]
     fn the_parameter_ring_fits_the_buffer_limit() {
         assert_eq!(ring_slots(u64::MAX, 256).unwrap(), PARAM_SLOTS);
-        assert_eq!(ring_slots(256 * PARAM_SLOTS as u64, 256).unwrap(), PARAM_SLOTS);
+        assert_eq!(
+            ring_slots(256 * PARAM_SLOTS as u64, 256).unwrap(),
+            PARAM_SLOTS
+        );
         assert_eq!(ring_slots(1 << 16, 256).unwrap(), 256);
         assert_eq!(ring_slots(256 + 255, 256).unwrap(), 1);
         match ring_slots(255, 256) {
@@ -2267,7 +2270,11 @@ mod tests {
             ..wgpu::Limits::default()
         };
         let ctx = WgpuContext::open_capped(&cap).expect("wgpu adapter");
-        assert!(ctx.inner.param_slots < PARAM_SLOTS, "{}", ctx.inner.param_slots);
+        assert!(
+            ctx.inner.param_slots < PARAM_SLOTS,
+            "{}",
+            ctx.inner.param_slots
+        );
         let budget = Budget::new(1 << 20);
         let x = ctx.mapped(8, storage_usage(), &[0u8; 8]).expect("upload");
         let kernel = Kernel {
@@ -2276,7 +2283,11 @@ mod tests {
             slots: &[Slot::R(2), Slot::W(6)],
         };
         let one = ctx
-            .mapped(8, storage_usage(), &[1.0f32, 2.0].map(f32::to_le_bytes).concat())
+            .mapped(
+                8,
+                storage_usage(),
+                &[1.0f32, 2.0].map(f32::to_le_bytes).concat(),
+            )
             .expect("upload");
         let n = 3 * ctx.inner.param_slots + 7;
         let before = ctx.stats().submits;

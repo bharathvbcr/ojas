@@ -1,7 +1,7 @@
 //! The step-throughput probes on `WgpuBackend` (`bench/step_probe.rs`).
 //!
 //! `OJAS_PROBE_OUT=<file> [OJAS_PROBES=flush,adamw] cargo run -p ojas-wgpu
-//! --release --example step_probe`
+//! --release --example wgpu_step_probe`
 
 #[path = "../../bench/ojas_rows.rs"]
 #[allow(dead_code)]
@@ -16,7 +16,11 @@ impl step_probe::Knobs for WgpuBackend {
     /// The default first: the sweep leaves it set.
     fn flush_values(&self) -> Vec<usize> {
         let mut v = vec![FLUSH_AT];
-        v.extend([16, 32, 64, 128, 256, 1024].into_iter().filter(|&f| f != FLUSH_AT));
+        v.extend(
+            [16, 32, 64, 128, 256, 1024]
+                .into_iter()
+                .filter(|&f| f != FLUSH_AT),
+        );
         v
     }
 

@@ -860,7 +860,11 @@ fn embed<Bk: Backend>(r: &mut Runner<'_, Bk>) {
         let table = r.dev(&ts, 125, 0)?;
         let ids = r.targets(N, 126)?;
         let g = r.dev(&gs, 127, 0)?;
-        let s = spec(&[("table", &ts, 125, 0), ("ids", &[N], 126, 0), ("gy", &gs, 127, 0)]);
+        let s = spec(&[
+            ("table", &ts, 125, 0),
+            ("ids", &[N], 126, 0),
+            ("gy", &gs, 127, 0),
+        ]);
         r.op("embed_bwd", &s, TOL, |r| {
             Ok(vec![r.be.embedding_backward(&table, &ids, &g)?])
         });

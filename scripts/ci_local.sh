@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Local gates for this tree. .github/workflows/test.yml exists but has never
-# run, because the repository has no remote.
+# Local gates for this tree, mirroring .github/workflows/test.yml (Linux and
+# Go jobs) so a push is not the first place a gate runs.
 # Invoke: ./scripts/ci_local.sh
 set -euo pipefail
 
@@ -8,7 +8,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "==> fmt"
-cargo fmt --all --check
+./scripts/fmt_check.sh
+
+echo "==> cargo target sources are tracked"
+./scripts/check_tracked_targets.sh
 
 echo "==> clippy"
 cargo clippy --workspace --all-targets -- -D warnings

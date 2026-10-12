@@ -2201,7 +2201,10 @@ mod tests {
             })
             .unwrap();
             assert_eq!(got, tail.to_ne_bytes().unwrap(), "piece {piece}");
-            assert!(largest <= piece.max(4), "piece {piece}: a {largest}-byte piece");
+            assert!(
+                largest <= piece.max(4),
+                "piece {piece}: a {largest}-byte piece"
+            );
         }
         let half = Tensor::from_bf16_bits(&[1, 2, 3], &[3], &budget).unwrap();
         let mut got = Vec::new();

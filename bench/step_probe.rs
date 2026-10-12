@@ -404,7 +404,8 @@ fn parts<Bk: Backend + Knobs>(p: &mut Probe<'_, Bk>) -> R<()> {
         let ls = [N, V];
         let l = p.dev(&ls, 121, 2)?;
         let other = p.dev(&ls, 122, 0)?;
-        let t = p.be.upload(&Tensor::from_u32(&gen_targets(N, 122), &[N], &p.host)?)?;
+        let t =
+            p.be.upload(&Tensor::from_u32(&gen_targets(N, 122), &[N], &p.host)?)?;
         let mut st = (l, other, t);
         p.interleave(
             "parts_ce_bwd",
@@ -521,7 +522,12 @@ pub fn probe_main<Bk: Backend + Knobs>(be: &Bk, runtime: &str) -> Result<(), Str
         iters: num("PROBE_ITERS", 10)?,
         runtime: runtime.to_string(),
         filter: env("OJAS_PROBES")
-            .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+            .map(|s| {
+                s.split(',')
+                    .filter(|x| !x.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default(),
         out,
     };

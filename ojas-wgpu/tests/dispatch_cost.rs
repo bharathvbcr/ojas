@@ -66,17 +66,29 @@ fn offset_views_bind_in_place_when_the_device_allows_it() {
     };
     // The slice's values in a tensor of their own, at byte 0.
     let own = |off: usize, shape: &[usize], strides: &[usize]| {
-        let v = fused.narrow(off, shape, strides).unwrap().to_f32_vec().unwrap();
+        let v = fused
+            .narrow(off, shape, strides)
+            .unwrap()
+            .to_f32_vec()
+            .unwrap();
         Tensor::from_f32(&v, shape, host_budget()).unwrap()
     };
     let before = g.context().stats().offset_copies;
     for i in 0..3 {
         let off = i * rows * d * 4;
-        assert_eq!(off as u64 % align, 0, "the slices are aligned on this device");
+        assert_eq!(
+            off as u64 % align,
+            0,
+            "the slices are aligned on this device"
+        );
         let view = dev.narrow(off, &[rows, d], &[d, 1]).unwrap();
         check(&format!("slice {i}"), &view, &own(off, &[rows, d], &[d, 1]));
     }
-    assert_eq!(g.context().stats().offset_copies, before, "aligned slices were copied");
+    assert_eq!(
+        g.context().stats().offset_copies,
+        before,
+        "aligned slices were copied"
+    );
 
     // One word in: not a storage-offset multiple, so compacted, and still right.
     let view = dev.narrow(4, &[rows * d], &[1]).unwrap();
@@ -150,12 +162,13 @@ fn clip_norm_of_huge_values_is_finite_and_right() {
     a[4999] = -2.0 * big;
     let b = vec![0.5f32 * big; 3];
     let mut dg = vec![
-        g.upload(&Tensor::from_f32(&a, &[5000], host_budget()).unwrap()).unwrap(),
-        g.upload(&Tensor::from_f32(&b, &[3], host_budget()).unwrap()).unwrap(),
+        g.upload(&Tensor::from_f32(&a, &[5000], host_budget()).unwrap())
+            .unwrap(),
+        g.upload(&Tensor::from_f32(&b, &[3], host_budget()).unwrap())
+            .unwrap(),
     ];
     let norm = g.clip_grad_norm(&mut dg, f32::MAX).unwrap();
-    let want = (f64::from(big)
-        * (4999.0f64 + 4.0 + 3.0 * 0.25).sqrt()) as f32;
+    let want = (f64::from(big) * (4999.0f64 + 4.0 + 3.0 * 0.25).sqrt()) as f32;
     assert!(norm.is_finite(), "{norm}");
     assert!((norm - want).abs() <= 1e-5 * want, "{norm} vs {want}");
 }

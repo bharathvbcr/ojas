@@ -254,10 +254,48 @@ const LCE_GRAD: Kernel = k(Loss, "lce_grad", &[R(2), R(3), W(6)]);
 /// `norm_partial`'s bindings: the partials, the slot table, the status
 /// words, then [`CLIP_MAX_SLOTS`] gradients from [`CLIP_NORM_BASE`]; a
 /// device binding `k` gradients takes the first `3 + k`.
-const CLIP_NORM_SLOTS: [Slot; 3 + CLIP_MAX_SLOTS as usize] = [W(2), R(3), W(4), R(10), R(11), R(12), R(13), R(14), R(15), R(16), R(17), R(18), R(19), R(20), R(21), R(22), R(23), R(24), R(25)];
+const CLIP_NORM_SLOTS: [Slot; 3 + CLIP_MAX_SLOTS as usize] = [
+    W(2),
+    R(3),
+    W(4),
+    R(10),
+    R(11),
+    R(12),
+    R(13),
+    R(14),
+    R(15),
+    R(16),
+    R(17),
+    R(18),
+    R(19),
+    R(20),
+    R(21),
+    R(22),
+    R(23),
+    R(24),
+    R(25),
+];
 /// `scale_multi`'s: the slot table, then the gradients from
 /// [`CLIP_SCALE_BASE`], read-write; `1 + k` are bound.
-const CLIP_SCALE_SLOTS: [Slot; 1 + CLIP_MAX_SLOTS as usize] = [R(3), W(26), W(27), W(28), W(29), W(30), W(31), W(32), W(33), W(34), W(35), W(36), W(37), W(38), W(39), W(40), W(41)];
+const CLIP_SCALE_SLOTS: [Slot; 1 + CLIP_MAX_SLOTS as usize] = [
+    R(3),
+    W(26),
+    W(27),
+    W(28),
+    W(29),
+    W(30),
+    W(31),
+    W(32),
+    W(33),
+    W(34),
+    W(35),
+    W(36),
+    W(37),
+    W(38),
+    W(39),
+    W(40),
+    W(41),
+];
 const _: () = assert!(
     CLIP_NORM_BASE == 10 && CLIP_SCALE_BASE == 26,
     "the clip slot lists above spell out the template's binding numbers"
@@ -3198,7 +3236,10 @@ mod tests {
         }
         job.commit().unwrap();
         gpu.sync().unwrap();
-        assert!(gpu.ctx.stats().submits - before >= 3, "the ring split the job");
+        assert!(
+            gpu.ctx.stats().submits - before >= 3,
+            "the ring split the job"
+        );
         assert_eq!(
             gpu.download(&b).unwrap().to_f32_vec().unwrap(),
             [6.0, -10.0]

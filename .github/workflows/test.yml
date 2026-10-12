@@ -30,9 +30,11 @@ on:
 permissions:
   contents: read
 
+# A push to main always finishes, so every main commit has a recorded result;
+# superseded pull-request runs are cancelled.
 concurrency:
   group: test-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -44,18 +46,18 @@ env:
 jobs:
   linux:
     name: linux (fmt, clippy, test)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: code/research/ojas
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/gusset
           ref: ${{ env.GUSSET_REF }}
           path: code/devtools/gusset
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
@@ -78,9 +80,12 @@ jobs:
         # WgpuContext refuses a CPU adapter unless OJAS_WGPU_ALLOW_CPU_ADAPTER=1,
         # which only the test step below sets.
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
-      - name: fmt
+      - name: Cargo target sources are tracked
         working-directory: ${{ env.OJAS }}
-        run: cargo fmt --all --check
+        run: ./scripts/check_tracked_targets.sh
+      - name: fmt (ojas packages only, not the tessl/gusset path deps)
+        working-directory: ${{ env.OJAS }}
+        run: ./scripts/fmt_check.sh
       - name: clippy
         working-directory: ${{ env.OJAS }}
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -98,15 +103,15 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: code/research/ojas
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/gusset
           ref: ${{ env.GUSSET_REF }}
           path: code/devtools/gusset
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
@@ -155,22 +160,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             pc: linux
           - os: macos-latest
             pc: .
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: code/research/ojas
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/gusset
           ref: ${{ env.GUSSET_REF }}
           path: code/devtools/gusset
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
@@ -192,7 +197,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
@@ -211,18 +216,18 @@ jobs:
 
   gpu-compile:
     name: CUDA / HIP compile-only
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: code/research/ojas
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/gusset
           ref: ${{ env.GUSSET_REF }}
           path: code/devtools/gusset
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
