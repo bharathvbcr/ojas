@@ -166,7 +166,7 @@
 <p>The crate exists so that &#34;trained with ojas&#34; can rest on ojas code. Lappi&#39;s trainer (<code>crates/qd-train-metal</code>) depends on it by path and adapts this concrete API to its own step-provider trait. This crate does not depend on Lappi.</p>
 <h2 id="the-loop-it-serves">The loop it serves <a class="anchor" href="#the-loop-it-serves" aria-label="Link to this section">#</a></h2>
 <div class="code"><span class="code-lang">text</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>let snap = Snapshot::from_dir(dir)?;                       // CPU: config + header pre-flight
-let mut step = Qwen35Step::open(&amp;snap, Numerics::Bf16Operands, budget)?;   // GPU
+let mut step = Qwen35Step::open(&amp;snap, Numerics::Bf16Operands, Precision::F32, budget)?; // GPU
 let plan = OptimizerPlan::build(step.parameter_table(), &amp;group_spec)?;
 
 for batch in batches {
@@ -185,7 +185,21 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 <p>The step works on one sequence at a time. tessl&#39;s pending step holds every layer&#39;s <code>T x hidden</code> input between its forward and its backward, so the API does not offer a batch-level step.</p>
 <p>The first backward after an AdamW step overwrites the bank. Later backwards add to it. <code>bank_state()</code> reports which case applies.</p>
 <h2 id="numerics">Numerics <a class="anchor" href="#numerics" aria-label="Link to this section">#</a></h2>
-<p><code>Numerics::ExactF32</code> gives exact f32 GEMMs. <code>Numerics::Bf16Operands</code> rounds GEMM operands to bf16 and accumulates in f32. In both modes the weights, activations, gradients, GDN state, attention and optimizer stay f32. There is no default, and the choice is made at <code>open</code>.</p>
+<p><code>Numerics::ExactF32</code> gives exact f32 GEMMs. <code>Numerics::Bf16Operands</code> rounds GEMM operands to bf16 and accumulates in f32. At <code>Precision::F32</code> the weights, activations, gradients, GDN state, attention and optimizer stay f32 in both modes. There is no default, and the choice is made at <code>open</code>.</p>
+<p><code>Precision</code> is how the weights are stored, also chosen at <code>open</code>:</p>
+<ul>
+<li><code>Precision::F32</code> keeps f32 weights, bank and moments.
+</li>
+<li><code>Precision::Bf16</code> is tessl&#39;s bf16 model, loaded with <code>load_tower</code>: tessl&#39;s AdamW refuses <code>load</code>&#39;s packed head copy for a model that trains. Its weights are bf16 and every GEMM input is rounded to bf16, while accumulation, the residual stream, the GDN state and attention stay f32. AdamW updates an f32 master of each weight with f32 moments (<code>UpdateRule::F32Master</code>).
+</li>
+<li>tessl keeps a bf16 model&#39;s gradient bank in bf16, so gradients summed over sequences are summed in bf16.
+</li>
+<li><code>Precision::Bf16</code> trains only with <code>Numerics::Bf16Operands</code>; <code>ExactF32</code> is refused before the GPU opens.
+</li>
+<li><code>save_state</code> and <code>load_state</code> refuse a bf16 provider, because tessl reads out the bf16 weights rather than the f32 masters.
+</li>
+</ul>
+<p>Both precisions hold 16 bytes per parameter. The 2B measurements are in <code>bench/results/2026-10-11-bf16-frozen-base/</code>.</p>
 <h2 id="refused-never-defaulted">Refused, never defaulted <a class="anchor" href="#refused-never-defaulted" aria-label="Link to this section">#</a></h2>
 <p>Every refusal names the field and fires before any GPU work runs.</p>
 <h3 id="config-refusals">Config refusals <a class="anchor" href="#config-refusals" aria-label="Link to this section">#</a></h3>
@@ -267,7 +281,7 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 </li>
 </ol>
 <p>On the 2B, the check finds 320 tower tensors. It reports the vision tower and the MTP block as not loaded.</p>
-<p><code>Qwen35Step::open</code> then calls tessl&#39;s <code>Qwen35Model::load</code>. ojas-io cannot do this bulk read, because <code>load</code> is the model&#39;s only constructor and its fields are <code>pub(crate)</code>.</p>
+<p><code>Qwen35Step::open</code> then calls tessl&#39;s <code>Qwen35Model::load</code>, or <code>load_tower</code> at <code>Precision::Bf16</code>. ojas-io cannot do this bulk read, because tessl&#39;s loaders are the model&#39;s only constructors and its fields are <code>pub(crate)</code>.</p>
 <p><code>open</code> compares tessl&#39;s live parameter table with the crate&#39;s map: names, shapes and order. It refuses any difference. Per-entry vectors are always built against the live table.</p>
 <h2 id="state-on-disk">State on disk <a class="anchor" href="#state-on-disk" aria-label="Link to this section">#</a></h2>
 <p><code>save_state</code> and <code>load_state</code> store three kinds of f32 safetensors shards, written and read with ojas-io:</p>
@@ -304,7 +318,7 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 <p>A resume opens the base snapshot and then loads the state over it.</p>
 <p>Memory on the 2B, from the shape of tessl&#39;s API:</p>
 <ul>
-<li><code>open</code> holds four f32 copies of the 1.88 B parameters: weights, bank and two moments, about 30 GB.
+<li><code>open</code> holds 16 bytes per parameter of the 1.88 B: 30,126,456,832 bytes, measured. That is four f32 copies (weights, bank and two moments) at <code>Precision::F32</code>. At <code>Precision::Bf16</code> it is bf16 weights and bank, an f32 master and f32 moments, the same total.
 </li>
 <li>A table read (<code>read_entries</code>, <code>read_table</code>), and each kind of a save or load, also stages a whole table (7.53 GB requested) in device tensors, because tessl copies a whole table per call.
 </li>
