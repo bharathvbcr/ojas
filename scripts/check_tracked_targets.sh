@@ -5,7 +5,8 @@
 # Invoke: ./scripts/check_tracked_targets.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# -P: cargo reports canonical paths, so a symlinked checkout root is resolved.
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
 srcs=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].targets[].src_path')

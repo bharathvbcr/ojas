@@ -82,7 +82,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
       - name: Cargo target sources are tracked
         working-directory: ${{ env.OJAS }}
-        run: ./scripts/check_tracked_targets.sh
+        run: |
+          ./scripts/check_tracked_targets_test.sh
+          ./scripts/check_tracked_targets.sh
       - name: fmt (ojas packages only, not the tessl/gusset path deps)
         working-directory: ${{ env.OJAS }}
         run: ./scripts/fmt_check.sh
