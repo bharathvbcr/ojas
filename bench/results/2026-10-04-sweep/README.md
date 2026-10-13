@@ -5,7 +5,7 @@ fixed per-op cost stops dominating?
 
 **Run.**
 - `BENCH_ROWS=sweep_ bash bench/run_paired.sh 5`, driven by
-  `target-baseline/sweep-run.sh` under the Lappi lead's machine lock
+  `sweep-run.sh` (a gitignored lane file, not kept) under the Lappi lead's machine lock
   (`tools/mac_heavy.sh`), 15:54:10–15:55:28Z.
 - 5 rounds, alternating lane order; 5 warm-ups and 20 timed iterations per row.
 - Rows are `sweep_*` in `bench/ojas_rows.rs` and `bench/torch_rows.py`; their

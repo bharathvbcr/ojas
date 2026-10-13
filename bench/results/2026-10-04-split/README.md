@@ -9,7 +9,7 @@ threadgroup each, and `ojas_cached_attn_merge` combines them in index order.
   bit for bit.
 
 **Run.**
-- `target-baseline/split-run.sh` under the Lappi lead's lock,
+- `split-run.sh` (a gitignored lane file, not kept) under the Lappi lead's lock,
   16:14:47–16:51:38Z.
 - Apple M5 Pro. Other work kept the GPU 69–94% busy.
 - Raw output: `percall.md` and `ab/`.

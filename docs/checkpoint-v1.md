@@ -2,7 +2,7 @@
 
 Little-endian binary format for persisting training state, model parameters, and optimizer moments in **ojas**.
 
-The in-memory types are [`CheckpointV1`](file:///Users/bharath/Code/research/ojas/ojas-core/src/checkpoint.rs) and its member fields in `ojas-core`. Serialization and deserialization are implemented in [`ojas-io`](file:///Users/bharath/Code/research/ojas/ojas-io/src/checkpoint.rs) (`write_checkpoint` and `read_checkpoint`).
+The in-memory types are [`CheckpointV1`](../ojas-core/src/checkpoint.rs) and its member fields in `ojas-core`. Serialization and deserialization are implemented in [`ojas-io`](../ojas-io/src/checkpoint.rs) (`write_checkpoint` and `read_checkpoint`).
 
 ---
 
@@ -111,7 +111,7 @@ flowchart LR
 
 ## `rng_state` Layout v1
 
-`ojas_model::Trainer` stores [`ojas_data::SamplerRngState`](file:///Users/bharath/Code/research/ojas/ojas-data/src/sampler.rs) here. The batch sampler draws nothing as it runs. Its order is a keyed permutation of `(seed, epoch, ordinal)`, and `data_cursor` already holds the epoch and ordinal. The rest of its random state is which permutation runs and which key it uses:
+`ojas_model::Trainer` stores [`ojas_data::SamplerRngState`](../ojas-data/src/sampler.rs) here. The batch sampler draws nothing as it runs. Its order is a keyed permutation of `(seed, epoch, ordinal)`, and `data_cursor` already holds the epoch and ordinal. The rest of its random state is which permutation runs and which key it uses:
 
 | Byte Offset | Width | Type | Field |
 | :--- | :--- | :--- | :--- |

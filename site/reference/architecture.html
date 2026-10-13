@@ -96,6 +96,7 @@
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
 <li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
 </ul>
 <p class="ref-nav-cat">Benchmarks</p>
@@ -117,9 +118,6 @@
 <p class="ref-nav-cat">Crates</p>
 <ul>
 <li><a href="readme.html">Project README</a></li>
-<li><a href="crate-bench.html">bench</a></li>
-<li><a href="crate-gemma-metal.html">gemma-metal</a></li>
-<li><a href="crate-go.html">go</a></li>
 <li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
 <li><a href="crate-ojas-capi.html">ojas-capi</a></li>
 <li><a href="crate-ojas-core.html">ojas-core</a></li>
@@ -303,7 +301,7 @@
         Gusset--&gt;&gt;CGO: gusset.ErrPanic
         CGO--&gt;&gt;App: error (later calls: gusset.ErrPoisoned until Close)
     end</pre></figure>
-<p>The Go surface is <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, <code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code>, <code>DetokenizeLossy</code>, <code>TokenID</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code> and <code>Close</code>. The opcodes are in <code>ojas-capi/src/engine.rs</code>; the old stub step opcode (2) is retired. Every model&#39;s byte budget is a child of one process-wide ceiling (default 1 GiB, or machine hard limit <code>hard_memory_limit</code> if smaller), which <code>SetMemoryCeiling</code> raises up to physical/cgroup limits and which cannot change while a model is open. Failures cross the boundary as typed kinds (<code>ErrCapacity</code>, <code>ErrNonFinite</code>, <code>ErrDeviceLost</code>, <code>ErrBusy</code>, <code>ErrPoisoned</code>, <code>ErrPressure</code>), listed in <a href="crate-go.html"><code>go/README.md</code></a>.</p>
+<p>The Go surface is <code>LoadModel</code> or <code>NewModel</code> (<code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code>, <code>DeviceWgpu</code>), <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code> and <code>Resume</code>, <code>LoadTokenizer</code>, <code>Tokenize</code>, <code>Detokenize</code>, <code>DetokenizeLossy</code>, <code>TokenID</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code> and <code>Close</code>. The opcodes are in <code>ojas-capi/src/engine.rs</code>; the old stub step opcode (2) is retired. Every model&#39;s byte budget is a child of one process-wide ceiling (default 1 GiB, or machine hard limit <code>hard_memory_limit</code> if smaller), which <code>SetMemoryCeiling</code> raises up to physical/cgroup limits and which cannot change while a model is open. Failures cross the boundary as typed kinds (<code>ErrCapacity</code>, <code>ErrNonFinite</code>, <code>ErrDeviceLost</code>, <code>ErrBusy</code>, <code>ErrPoisoned</code>, <code>ErrPressure</code>), listed in <a href="https://github.com/bharathvbcr/ojas/blob/main/go/README.md" rel="noopener"><code>go/README.md</code></a>.</p>
 <aside class="alert alert-caution"><p class="alert-title">Caution</p><p>A panic on a gusset worker is caught by <code>catch_unwind</code> and poisons the entire gusset handle: subsequent calls return <code>gusset.ErrPoisoned</code> until the handle is closed. If the panic occurred while holding the session table lock, the next lock acquisition <strong>drops every session in the table</strong> (<code>ojas-capi/src/session.rs</code>) to prevent corruption. Note that <code>catch_unwind</code> cannot intercept OS process aborts or stack overflows.</p>
 </aside>
 <hr>
@@ -355,7 +353,7 @@
 <hr>
 <h2 id="7-web-documentation-identity--domain-ecosystem">7. Web Documentation, Identity &amp; Domain Ecosystem <a class="anchor" href="#7-web-documentation-identity--domain-ecosystem" aria-label="Link to this section">#</a></h2>
 <h3 id="71-web-application-architecture">7.1 Web Application Architecture <a class="anchor" href="#71-web-application-architecture" aria-label="Link to this section">#</a></h3>
-<p>The site (<a href="../"><code>site/index.html</code></a>, mirrored to <a href="../"><code>docs/index.html</code></a>) is one page. The labs, why, benchmarks, roadmap, and guide are sections of it:</p>
+<p>The site (<a href="../"><code>site/index.html</code></a>) is one page. The labs, why, benchmarks, roadmap, and guide are sections of it:</p>
 <ul>
 <li><strong>Guarantee labs:</strong> a determinism lab that sums the same float32 values with split-k and with the Exact order, plus memory budget, device refusal, panic firewall, and checked shape and view labs. Each prints the error text from the source.
 </li>

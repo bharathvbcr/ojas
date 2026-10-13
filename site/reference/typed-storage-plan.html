@@ -96,6 +96,7 @@
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
 <li><a href="typed-storage-plan.html" class="current" aria-current="page">Typed Host Storage: Plan</a></li>
 </ul>
 <p class="ref-nav-cat">Benchmarks</p>
@@ -117,9 +118,6 @@
 <p class="ref-nav-cat">Crates</p>
 <ul>
 <li><a href="readme.html">Project README</a></li>
-<li><a href="crate-bench.html">bench</a></li>
-<li><a href="crate-gemma-metal.html">gemma-metal</a></li>
-<li><a href="crate-go.html">go</a></li>
 <li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
 <li><a href="crate-ojas-capi.html">ojas-capi</a></li>
 <li><a href="crate-ojas-core.html">ojas-core</a></li>
@@ -155,7 +153,7 @@
 </li>
 <li><strong>Rollback point:</strong> the snapshot <code>wip/framework-layer-2026-10-01</code> (c686bb0), taken before step 1.
 </li>
-<li><strong>Not yet run for step 1:</strong> <code>target-matmul/parity.sh</code> and the <code>block_ab.sh</code> / <code>sample</code> profile that the success criterion below calls for.
+<li><strong>Not yet run for step 1:</strong> <code>parity.sh</code> (a gitignored lane file, not kept) and the <code>block_ab.sh</code> / <code>sample</code> profile that the success criterion below calls for.
 </li>
 </ul>
 <h2 id="why">Why <a class="anchor" href="#why" aria-label="Link to this section">#</a></h2>
@@ -167,7 +165,7 @@
 <tr><td>Storage tax</td><td style="text-align:right">975</td><td><code>to_f32_vec</code> 263, <code>memmove</code> 195, <code>f32_input_list</code> 184, <code>alloc_out</code> 179, <code>madvise</code> 154</td></tr>
 <tr><td><code>softmax_rows</code></td><td style="text-align:right">365</td><td>attention</td></tr>
 </tbody></table></div>
-<p>Counts are top of stack from <code>target-matmul/block.sample.txt</code> (2026-10-01; <code>target-matmul/</code> is uncommitted scratch, so reproduce with <code>OJAS_BENCH_MODE=loop OJAS_BENCH_OPS=block OJAS_BENCH_DIRSEL=step OJAS_BENCH_SAMPLE_OUT=&lt;file&gt;</code> in <code>bench_ops.rs</code>, which runs <code>/usr/bin/sample</code>). The BLAS row sums the three hottest Accelerate frames. The storage tax is about 20–25% of active block time. That share is measured. What removing it would save is an estimate until it is measured, because some of those copies also warm the cache for the kernel that follows.</p>
+<p>Counts are top of stack from <code>block.sample.txt</code> (a gitignored lane file, not kept; 2026-10-01; the lane directory was uncommitted scratch, so reproduce with <code>OJAS_BENCH_MODE=loop OJAS_BENCH_OPS=block OJAS_BENCH_DIRSEL=step OJAS_BENCH_SAMPLE_OUT=&lt;file&gt;</code> in <code>bench_ops.rs</code>, which runs <code>/usr/bin/sample</code>). The BLAS row sums the three hottest Accelerate frames. The storage tax is about 20–25% of active block time. That share is measured. What removing it would save is an estimate until it is measured, because some of those copies also warm the cache for the kernel that follows.</p>
 <p>Two CPU paths already avoid the copy: <code>validate::f32_words</code> reads <code>&amp;[[u8; 4]]</code> in place, and <code>pool::scoped::fill</code> writes output blocks in place. They do not help an operand that has to be a <code>&amp;[f32]</code>, and they cost every kernel a decode at each load.</p>
 <h2 id="what-does-not-change">What does not change <a class="anchor" href="#what-does-not-change" aria-label="Link to this section">#</a></h2>
 <ul>
@@ -393,7 +391,7 @@ impl Tensor {
 </li>
 <li>Already in step 1, as staged on 2026-10-01: in ojas-cpu, <code>validate::f32_words</code>/<code>u32_words</code> became <code>f32_values</code>/<code>u32_values</code> (borrowed <code>&amp;[f32]</code>/<code>&amp;[u32]</code>), <code>bytes_all_finite</code> was deleted, and every kernel that read words in place (optim, cross-entropy, embedding, exp, kv, accum, permute) reads typed values. Outputs built in a <code>Scratch</code> use <code>Scratch&lt;f32&gt;</code>. 9 files, +185 −258.
 </li>
-<li>Measured after landing (byte-storage binary against step 1, minimum of 3–5 interleaved rounds, 6 threads, load 23–27). Step 1 alone moves no time: block forward+backward 123.1 against 125.0 ms, cross-entropy, AdamW, clip and decode within noise. The in-place kernels already read the bytes without a copy, so the decode they lose was nearly free. Embedding forward (1.01 to 1.11 ms) and permute (0.130 to 0.143 ms) are about 9% slower. In the <code>sample</code> profile the output row copy in <code>pointwise::embedding_forward</code> doubled (439 to 809 samples), along with thread start-up and <code>vm_deallocate</code>. That looks like fresh output pages being faulted in on each call; it is not yet explained, and step 3 reworks output allocation. Profiles: <code>target-matmul/emb-pre-ts.sample.txt</code>, <code>emb-cur.sample.txt</code>.
+<li>Measured after landing (byte-storage binary against step 1, minimum of 3–5 interleaved rounds, 6 threads, load 23–27). Step 1 alone moves no time: block forward+backward 123.1 against 125.0 ms, cross-entropy, AdamW, clip and decode within noise. The in-place kernels already read the bytes without a copy, so the decode they lose was nearly free. Embedding forward (1.01 to 1.11 ms) and permute (0.130 to 0.143 ms) are about 9% slower. In the <code>sample</code> profile the output row copy in <code>pointwise::embedding_forward</code> doubled (439 to 809 samples), along with thread start-up and <code>vm_deallocate</code>. That looks like fresh output pages being faulted in on each call; it is not yet explained, and step 3 reworks output allocation. Profiles: <code>emb-pre-ts.sample.txt</code> (a gitignored lane file, not kept), <code>emb-cur.sample.txt</code>.
 </li>
 </ul>
 </li>
@@ -407,7 +405,7 @@ impl Tensor {
 </li>
 <li>Budget contract: an op&#39;s peak is its output plus its own scratch (<code>tests/budget_inputs.rs</code> pins each one exactly; <code>ojas-cpu/README.md</code> point 6). Dropping the input charges exposed one real gap they had masked: per-row SDPA backward never charged its per-head gradient parts (<code>3 * len</code>); <code>attn.rs::backward_scratch</code> now does.
 </li>
-<li>Measured against the step-1 build (5 interleaved rounds, 6 threads, load 21–34; <code>target-matmul/ab_stage.sh</code>): mul fwd 0.88→0.45 ms and bwd 1.55→0.86, add fwd 0.33→0.19, value residual 1.3–1.5×, SiLU bwd 1.19→0.92, gate 1.1–1.2×, decode linear fwd 56→35 µs. Norms, RoPE, SDPA, Muon and the training block are flat within noise (block step median 140.7→135.7 ms).
+<li>Measured against the step-1 build (5 interleaved rounds, 6 threads, load 21–34; <code>ab_stage.sh</code> (a gitignored lane file, not kept)): mul fwd 0.88→0.45 ms and bwd 1.55→0.86, add fwd 0.33→0.19, value residual 1.3–1.5×, SiLU bwd 1.19→0.92, gate 1.1–1.2×, decode linear fwd 56→35 µs. Norms, RoPE, SDPA, Muon and the training block are flat within noise (block step median 140.7→135.7 ms).
 </li>
 <li>Landed ahead of the rest of step 2, on 2026-10-01: AdamW and <code>clip_grad_norm</code> write through <code>f32_slice_mut</code>. AdamW is a check pass then an in-place store pass; the clip scales each gradient where it is. Neither has a buffer, a copy back or a budget charge (contract change recorded in <code>ojas-cpu/README.md</code>, point 5). Same bits. Against the buffered build, 5 interleaved rounds, 6 threads: AdamW <code>[50304,768]</code> 20.8 to 11.2 ms (torch 15.5, fused 5.4), clip 25.7 to 16.0 ms (torch 27.9); details in <a href="bench-cpu-vs-torch.html"><code>bench-cpu-vs-torch.md</code></a>.
 </li>
@@ -485,16 +483,16 @@ impl Tensor {
 </ul>
 <p>After each step:</p>
 <ul>
-<li><code>target-matmul/gate.sh</code>: the integrated CPU gate, 78 test binaries plus clippy with <code>-D warnings</code>.
+<li><code>gate.sh</code> (a gitignored lane file, not kept): the integrated CPU gate, 78 test binaries plus clippy with <code>-D warnings</code>.
 </li>
 <li><code>redteam_ops_heap.rs</code> (64 KiB slack). Peak heap must not rise, and should fall in steps 2 and 3.
 </li>
-<li><code>target-matmul/parity.sh</code>: every op and the composed block against torch.
+<li><code>parity.sh</code> (a gitignored lane file, not kept): every op and the composed block against torch.
 </li>
 <li><code>ojas-infer</code> three-way parity under both numerics tiers.
 </li>
 </ul>
-<p>After steps 2 and 3, <code>target-matmul/block_ab.sh</code>: the block, forward and backward, interleaved against the frozen binary and torch. The plan only counts as successful if the storage bucket shrinks in a new <code>sample</code> profile and the block time falls.</p>
+<p>After steps 2 and 3, <code>block_ab.sh</code> (a gitignored lane file, not kept): the block, forward and backward, interleaved against the frozen binary and torch. The plan only counts as successful if the storage bucket shrinks in a new <code>sample</code> profile and the block time falls.</p>
 <h2 id="open-questions">Open questions <a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
 <ol>
 <li><strong>Step 1 cannot be split.</strong> Typed storage cannot lend <code>&amp;[u8]</code> without <code>unsafe</code>, so <code>contiguous_bytes</code> cannot survive alongside it, and there is no green state in between. One change touches <code>ojas-core</code>, <code>ojas-cpu</code>, <code>ojas-infer</code>, <code>ojas-model</code>, <code>ojas-metal</code>, <code>ojas-wgpu</code> and about 15 test sites, in a crate this session does not own. It needs a snapshot first, and either the peer making the change or a quiet window agreed with the peer.
@@ -505,7 +503,7 @@ impl Tensor {
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/typed-storage-plan.md" rel="noopener"><code>docs/typed-storage-plan.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
-        <a href="status.html" rel="prev"><span>Previous</span>ojas Status &amp; Verification Matrix</a>
+        <a href="status-archive-2026-10-05.html" rel="prev"><span>Previous</span>ojas Status Archive: test runs through 2026-10-05</a>
         <a href="bench-cpu-vs-torch.html" rel="next" class="next"><span>Next</span>CPU Reference versus PyTorch CPU Benchmarks</a>
       </nav>
     </main>

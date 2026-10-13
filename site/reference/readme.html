@@ -96,6 +96,7 @@
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
 <li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
 </ul>
 <p class="ref-nav-cat">Benchmarks</p>
@@ -117,9 +118,6 @@
 <p class="ref-nav-cat">Crates</p>
 <ul>
 <li><a href="readme.html" class="current" aria-current="page">Project README</a></li>
-<li><a href="crate-bench.html">bench</a></li>
-<li><a href="crate-gemma-metal.html">gemma-metal</a></li>
-<li><a href="crate-go.html">go</a></li>
 <li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
 <li><a href="crate-ojas-capi.html">ojas-capi</a></li>
 <li><a href="crate-ojas-core.html">ojas-core</a></li>
@@ -201,10 +199,10 @@
 </li>
 </ul>
 <div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>Status:          Kernel set, backends, nanolab model, trainer, adaptive resource planning and Go API built; remaining gaps in docs/pytorch-parity-plan.md
-Verification:    NEON assembly gather, kernel hardening, SIMD vectorization &amp; backend parity, 2026-10-05: 1510 passed across workspace crates (ojas-cpu 291, ojas-metal 175, ojas-core 154, ojas-wgpu 131, ojas-model 82, ojas-capi 79, ojas-io 76, ojas-device 72, ojas-autograd 68, ojas-simd 40, ojas-oracle 41, ojas-infer 40, ojas-data 37, ojas-qwen35 34, ojas-kernels 11, ojas-cuda/hip 16); Go 41/41; clippy -D warnings clean
 Host Target:     Apple M5 Pro (Metal 4), macOS 27 (Darwin 27.0.0 arm64)
 Interactive App: https://ojas.vbcr.dev (Alternate: https://bharath.vbcr.dev/ojas)
 License:         MIT OR Apache-2.0</code></pre></div>
+<p><strong>Verification:</strong> the latest full workspace run: 1825 passed, 0 failed, 41 ignored, 211 suites (<code>cargo test --workspace --release -- --test-threads=2</code> at <code>d431949</code>, 2026-10-09, macOS, Metal and wgpu on the real GPU, no SKIP lines). Per-crate counts are from the run of 2026-10-05 (1347 passed across the crates below, Go 41 passed). Every number comes from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/data/test-runs.json" rel="noopener"><code>docs/data/test-runs.json</code></a>.</p>
 <blockquote><p><strong>Explore the Interactive Web Experience:</strong> The <a href="https://ojas.vbcr.dev" rel="noopener"><strong>ojas interactive documentation</strong></a> has live labs for each guarantee: bit-identical reductions across thread counts, memory budget refusal, no silent device fallback, the Go panic firewall, and checked shape arithmetic, plus the CPU versus PyTorch timings.</p>
 </blockquote>
 <hr>
@@ -408,7 +406,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 <hr>
 <h3 id="5-in-process-multi-language-integration-go-ojas-capi">5. In-Process Multi-Language Integration (<code>go/</code>, <code>ojas-capi</code>) <a class="anchor" href="#5-in-process-multi-language-integration-go-ojas-capi" aria-label="Link to this section">#</a></h3>
 <ul>
-<li><strong>Zero-IPC Overhead:</strong> Go calls the Rust engine in-process through CGO and <code>gusset</code>. Go sends paths, token ids and options; the engine holds each model on its device. The calls are <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>/<code>Resume</code>, <code>LoadTokenizer</code>/<code>Tokenize</code>/<code>Detokenize</code>/<code>DetokenizeLossy</code>/<code>TokenID</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, and <code>Close</code> (see <a href="crate-go.html"><code>go/README.md</code></a>). The old stub <code>Step</code> opcode is retired.
+<li><strong>Zero-IPC Overhead:</strong> Go calls the Rust engine in-process through CGO and <code>gusset</code>. Go sends paths, token ids and options; the engine holds each model on its device. The calls are <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>/<code>Resume</code>, <code>LoadTokenizer</code>/<code>Tokenize</code>/<code>Detokenize</code>/<code>DetokenizeLossy</code>/<code>TokenID</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, and <code>Close</code> (see <a href="https://github.com/bharathvbcr/ojas/blob/main/go/README.md" rel="noopener"><code>go/README.md</code></a>). The old stub <code>Step</code> opcode is retired.
 </li>
 <li><strong>Device Selection:</strong> <code>LoadOptions.Device</code> selects <code>DeviceCPU</code>, <code>DeviceCPUParallel</code>, <code>DeviceCPUAuto</code>, <code>DeviceMetal</code> or <code>DeviceWgpu</code>. <code>DeviceCPUAuto</code> automatically sizes CPU pool threads to the system thread ceiling (usable CPUs capped by cgroup quota). A GPU backend that cannot open is an error, never a CPU model. A step reads back only its loss.
 </li>
@@ -473,13 +471,13 @@ License:         MIT OR Apache-2.0</code></pre></div>
     end</pre></figure>
 <hr>
 <h2 id="workspace-crate-catalog">Workspace Crate Catalog <a class="anchor" href="#workspace-crate-catalog" aria-label="Link to this section">#</a></h2>
-<p>Test counts are verified on this tree (2026-10-05): <code>cargo test -p &lt;crate&gt; --release --no-fail-fast -- --test-threads=1</code> (1510 passed across workspace crates) with clippy <code>-D warnings</code> clean across the workspace. The Go count is <code>go test -a -tags gusset_pkgconfig ./...</code>. Details are in <a href="status.html"><code>docs/status.md</code></a>.</p>
+<p>Per-crate counts are from the run of 2026-10-05: <code>cargo test -p &lt;crate&gt; --release --no-fail-fast -- --test-threads=1</code>, 1347 passed across the crates below. The Go count is <code>go test -a -tags gusset_pkgconfig ./...</code>. The latest full workspace run is at the top of this file; the numbers live in <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/data/test-runs.json" rel="noopener"><code>docs/data/test-runs.json</code></a> and details are in <a href="status.html"><code>docs/status.md</code></a>.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Crate</th><th>Purpose</th><th>Key Symbols</th><th>Tests Run</th></tr></thead>
 <tbody>
 <tr><td><a href="crate-ojas-core.html"><code>ojas-core</code></a></td><td>Core tensor engine &amp; invariants</td><td><code>Tensor</code> (host &amp; device, typed host storage), <code>Backend</code> (<code>optimizer_scratch_bytes</code>), <code>Numerics</code>, <code>Budget</code> (<code>peak_bytes</code>, <code>reset_peak</code>, <code>check_room</code>), <code>DType</code>, <code>OjasError</code>, <code>shapes</code> validators</td><td>154 passed, 2 ignored</td></tr>
 <tr><td><a href="crate-ojas-cpu.html"><code>ojas-cpu</code></a></td><td>High-performance CPU backend</td><td><code>CpuBackend</code>, <code>with_threads</code>, <code>with_numerics</code>, packed GEMM, Accelerate BLAS, cosine and WSD schedules, pointwise parallel, budget scratch &amp; pool stress</td><td>291 passed, 12 ignored</td></tr>
-<tr><td><a href="crate-ojas-simd.html"><code>ojas-simd</code></a></td><td>SIMD GEMM &amp; NEON vector kernels</td><td>NEON GEMM, AVX2, <code>sgemm_accelerate</code>, <code>gather_embedding_rows_768</code>, <code>split_nanolab_head_pairs_append</code>, token bands, vDSP, vForce</td><td>34 passed (standalone) / 40 (workspace)</td></tr>
+<tr><td><a href="crate-ojas-simd.html"><code>ojas-simd</code></a></td><td>SIMD GEMM &amp; NEON vector kernels</td><td>NEON GEMM, AVX2, <code>sgemm_accelerate</code>, <code>gather_embedding_rows_768</code>, <code>split_nanolab_head_pairs_append</code>, token bands, vDSP, vForce</td><td>40 passed (workspace; 34 standalone)</td></tr>
 <tr><td><a href="crate-ojas-metal.html"><code>ojas-metal</code></a></td><td>Apple Silicon Metal backend</td><td><code>MetalBackend</code> (every <code>Backend</code> op; tiled attention, D ≤ 256, grouped-query; deferred faults; training step)</td><td>175 passed</td></tr>
 <tr><td><a href="crate-ojas-wgpu.html"><code>ojas-wgpu</code></a></td><td>Portable WGSL backend</td><td><code>WgpuBackend</code> (device-resident WGSL compute; Muon NS5; named first fault; linear CE)</td><td>131 passed, 3 ignored</td></tr>
 <tr><td><a href="crate-ojas-kernels.html"><code>ojas-kernels</code></a></td><td>Shared kernel geometry &amp; sources</td><td>Launch geometry, kernel source, NaN-safe parity harness</td><td>11 passed</td></tr>
@@ -491,7 +489,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 <tr><td><a href="crate-ojas-qwen35.html"><code>ojas-qwen35</code></a></td><td>Qwen3.5 whole-step training provider</td><td>Config reader that refuses unsupported fields, tensor-name pre-flight, parameter groups, state on disk; tessl Metal only, not a <code>Backend</code>, empty off macOS</td><td>34 passed, 8 ignored</td></tr>
 <tr><td><a href="crate-ojas-capi.html"><code>ojas-capi</code></a></td><td>C-ABI dispatch &amp; session store</td><td><code>dispatch</code> opcodes (load, new, train, save, resume, tokenize, sample, system profile, memory ceiling), <code>DeviceCPUAuto</code>, preflight validation, typed error kinds (<code>ErrPressure</code>), panic firewall</td><td>79 passed</td></tr>
 <tr><td><a href="crate-ojas-gusset-engine.html"><code>ojas-gusset-engine</code></a></td><td>Go link archive</td><td>Umbrella staticlib <code>libgusset.a</code> for Go CGO integration</td><td>0 tests (the Go suite covers it)</td></tr>
-<tr><td><a href="crate-go.html"><code>go/</code></a></td><td>Go client SDK</td><td><code>LoadModel</code>, <code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>, <code>Resume</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, <code>Close</code>; <code>DeviceCPUAuto</code>, <code>ErrPressure</code></td><td>41 passed</td></tr>
+<tr><td><a href="https://github.com/bharathvbcr/ojas/tree/main/go" rel="noopener"><code>go/</code></a></td><td>Go client SDK</td><td><code>LoadModel</code>, <code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>, <code>Resume</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, <code>Close</code>; <code>DeviceCPUAuto</code>, <code>ErrPressure</code></td><td>41 passed</td></tr>
 <tr><td><a href="crate-ojas-device.html"><code>ojas-device</code></a></td><td>Device kinds, system profile &amp; resource planning</td><td><code>Device</code>, <code>probe_system</code> (memory, CPU clusters, caches, unified memory, pressure), <code>measure_bandwidth</code> (bounded 2 shared buffers, row-split copy), <code>ResourcePolicy</code>, <code>ResourcePlan</code>, <code>GemmBlocks</code></td><td>72 passed (macOS; 66 on Linux)</td></tr>
 <tr><td><a href="crate-ojas-oracle.html"><code>ojas-oracle</code></a></td><td>Mathematical fixtures</td><td>IEEE-754 f64 oracle data fixtures</td><td>41 passed, 1 ignored</td></tr>
 <tr><td><a href="crate-ojas-cuda.html"><code>ojas-cuda</code></a></td><td>CUDA probe</td><td>One affine kernel behind feature <code>cuda</code>; not a <code>Backend</code></td><td>8 passed (feature off)</td></tr>
@@ -500,7 +498,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 <p>The dropped scaffold crates <code>ojas-nn</code>, <code>ojas-optim</code> and <code>ojas-engine</code> are gone; the model layer lives in <code>ojas-model</code>.</p>
 <hr>
 <h2 id="verification--test-commands">Verification &amp; Test Commands <a class="anchor" href="#verification--test-commands" aria-label="Link to this section">#</a></h2>
-<p>The per-crate command below is how the counts above were produced (run 4: 1071 passed, 0 failed). <code>cargo clippy --workspace --all-targets -- -D warnings</code> and <code>cargo fmt --all --check</code> are clean across the workspace. <code>ojas-qwen35</code> needs macOS with Apple silicon and the sibling <code>tessl</code> checkout.</p>
+<p>The per-crate command below is how the counts above were produced (see <code>docs/data/test-runs.json</code>). <code>cargo clippy --workspace --all-targets -- -D warnings</code> and <code>cargo fmt --all --check</code> are clean across the workspace. <code>ojas-qwen35</code> needs macOS with Apple silicon and the sibling <code>tessl</code> checkout.</p>
 <div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code># Run one crate&#39;s suite in release mode (how docs/status.md counts are taken)
 cargo test -p ojas-model --release --no-fail-fast -- --test-threads=1
 
@@ -570,7 +568,7 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/README.md" rel="noopener"><code>README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
         <a href="audit-resources.html" rel="prev"><span>Previous</span>Resource governor audit</a>
-        <a href="crate-bench.html" rel="next" class="next"><span>Next</span>bench</a>
+        <a href="crate-ojas-autograd.html" rel="next" class="next"><span>Next</span>ojas-autograd</a>
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>

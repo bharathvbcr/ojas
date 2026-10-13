@@ -96,6 +96,7 @@
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html" class="current" aria-current="page">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
 <li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
 </ul>
 <p class="ref-nav-cat">Benchmarks</p>
@@ -117,9 +118,6 @@
 <p class="ref-nav-cat">Crates</p>
 <ul>
 <li><a href="readme.html">Project README</a></li>
-<li><a href="crate-bench.html">bench</a></li>
-<li><a href="crate-gemma-metal.html">gemma-metal</a></li>
-<li><a href="crate-go.html">go</a></li>
 <li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
 <li><a href="crate-ojas-capi.html">ojas-capi</a></li>
 <li><a href="crate-ojas-core.html">ojas-core</a></li>
@@ -156,7 +154,7 @@
 </ul>
 <p>The research behind this plan came from six read-only agents plus a per-crate test baseline. Their findings are summarized here, and the load-bearing ones were spot-checked against source.</p>
 <h2 id="0-baseline-of-the-working-tree-before-any-edit-verified">0. Baseline of the working tree before any edit (verified) <a class="anchor" href="#0-baseline-of-the-working-tree-before-any-edit-verified" aria-label="Link to this section">#</a></h2>
-<p><code>target-baseline/run_baseline.sh</code> ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree as it stood.</p>
+<p><code>run_baseline.sh</code> (a gitignored lane file, not kept) ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree as it stood.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>crate</th><th style="text-align:right">passed</th><th style="text-align:right">failed</th><th style="text-align:right">ignored</th></tr></thead>
 <tbody>
@@ -267,7 +265,7 @@
 <tr><td style="text-align:right">1.0%</td><td>AdamW</td><td>A per-parameter Python loop, because MPS has no foreach path</td></tr>
 </tbody></table></div>
 <p><strong>Decode</strong> at B=1 (prompt 128, generate 128, KV cache) runs about 9 ms/token fp32, or 111 tok/s. Each token issues 783 aten ops, so dispatch overhead is the limit, not compute (inferred). No CPU fallback warnings appeared.</p>
-<p>The scripts are in <code>target-baseline/research/mps_profile/</code> (<code>mps_profile.py</code>, <code>run_all.sh</code>, plus probes). The benchmark lane moves the torch side into the repo.</p>
+<p>The scripts are in <code>research/mps_profile/</code> (a gitignored lane file, not kept) (<code>mps_profile.py</code>, <code>run_all.sh</code>, plus probes). The benchmark lane moves the torch side into the repo.</p>
 <p><strong>Targets this sets for ojas, in order:</strong></p>
 <ol>
 <li>Flash-style attention forward and backward with no T×T materialization.
@@ -308,7 +306,7 @@
 <ul>
 <li>&#34;Fail → pass&#34; evidence (the test failed on the pre-fix code and passes after) comes from the lane reports. That evidence is not verified independently.
 </li>
-<li>The coordinator&#39;s integration run (<code>target-baseline/logs-integration/</code>) verified only the final state: every named test below passes in it.
+<li>The coordinator&#39;s integration run (<code>logs-integration/</code> (a gitignored lane file, not kept)) verified only the final state: every named test below passes in it.
 </li>
 <li>Go 27 is lane-reported, against a debug <code>libgusset</code>.
 </li>
@@ -365,6 +363,8 @@
 <li><strong>Attention LSE (tracked in Task <code>gp-attention-kernels</code>):</strong> a forward that emits LSE would remove the backward&#39;s stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
 <ul>
 <li>wgpu round 5 timed each backward dispatch: <code>attn_bwd_prep</code> reruns the forward, 11.5 of 52.1 ms at [4,12,1024,64] and 30.3 of 141.4 ms at [4,8,2048,64]. LSE from the forward would save about 21% of the wgpu backward (inferred).
+</li>
+<li>The driver for attention backward latency and scratch bytes is <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-model/examples/attn_bwd_bench.rs" rel="noopener"><code>ojas-model/examples/attn_bwd_bench.rs</code></a> (<code>cargo run -p ojas-model --release --example attn_bwd_bench [iters] [metal|wgpu]</code>): per <code>[B, H, Hkv, T, D]</code> row it reports forward and backward scratch bytes and the min and median backward time.
 </li>
 <li>Measured and reverted: register-blocked score dots (1.4–1.6× slower), dropping dkv&#39;s Q reload (≤ 7% of dkv), and a shared P/dS tile (no gain).
 </li>

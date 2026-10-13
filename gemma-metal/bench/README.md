@@ -1,7 +1,7 @@
 # gemma-metal Phase 0 bench harness
 
 Local baseline ladder for Gemma 4 on the M5 Pro host. Inspired by
-[`/Users/bharath/Code/Benchmark`](/Users/bharath/Code/Benchmark), extended for
+`/Users/bharath/Code/Benchmark`, extended for
 multi-runtime compare (Ollama, mlx-lm, LiteRT-LM, BaseRT) with pinned KV /
 max tokens.
 
