@@ -3,6 +3,10 @@
 //!
 //! `cargo run -p ojas-model --release --example attn_bwd_bench [iters] [metal|wgpu]`
 //!
+//! Exits non-zero, with a message, on a bad argument, an unknown backend, a
+//! backend that is not available on this OS, or a run that measured nothing.
+//! Cited from `docs/pytorch-parity-plan.md`.
+//!
 //! Per shape `[B, H, Hkv, T, D]` (multi-head at the bench shapes, and the
 //! Qwen3.5-2B attention: 8 query heads over 2 KV heads of 256): the bytes a
 //! forward and a backward charge beyond their outputs (the budget's peak
@@ -110,21 +114,40 @@ fn run<B: Backend>(name: &str, be: &B, iters: usize) -> R<()> {
     Ok(())
 }
 
+/// Every way to run nothing, or something other than what was asked, is an
+/// error with a non-zero exit: a driver that quietly measured no rows would
+/// leave a result folder that looks like a run.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let iters = std::env::args()
-        .nth(1)
-        .and_then(|a| a.parse().ok())
-        .unwrap_or(20usize)
-        .max(1);
-    let only = std::env::args().nth(2).unwrap_or_default();
+    let usage = "usage: attn_bwd_bench [iters >= 1] [metal|wgpu]";
+    let mut args = std::env::args().skip(1);
+    let iters = match args.next() {
+        None => 20usize,
+        Some(a) => match a.parse::<usize>() {
+            Ok(n) if n >= 1 => n,
+            _ => return Err(format!("iters must be an integer >= 1, got {a:?}; {usage}").into()),
+        },
+    };
+    let only = args.next().unwrap_or_default();
+    if let Some(extra) = args.next() {
+        return Err(format!("unexpected argument {extra:?}; {usage}").into());
+    }
+    if !matches!(only.as_str(), "" | "wgpu" | "metal") {
+        return Err(format!("unknown backend {only:?}; {usage}").into());
+    }
+    let mut ran = 0usize;
     if only.is_empty() || only == "wgpu" {
         let gpu = ojas_wgpu::WgpuBackend::open(Budget::new(8 << 30))?;
         run("wgpu", &gpu, iters)?;
+        ran += 1;
     }
     #[cfg(target_os = "macos")]
     if only.is_empty() || only == "metal" {
         let gpu = ojas_metal::MetalBackend::new(Budget::new(8 << 30))?;
         run("metal", &gpu, iters)?;
+        ran += 1;
+    }
+    if ran == 0 {
+        return Err(format!("no backend ran: {only:?} is not available on this OS; {usage}").into());
     }
     Ok(())
 }
