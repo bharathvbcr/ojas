@@ -290,6 +290,7 @@ fn random_shapes_stream_to_a_file_and_read_back_through_from_file() {
                 }
                 StDtype::I64 => st.read_i64(&o.name).unwrap().1.len(),
                 StDtype::U16 => st.read_u16(&o.name).unwrap().1.len(),
+                other => panic!("case {i}: the generator never produces {other:?}"),
             };
             assert_eq!(got, numel, "case {i}");
         }
