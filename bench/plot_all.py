@@ -23,7 +23,8 @@ import plotlib as P  # noqa: E402
 
 ROOT = os.path.dirname(HERE)
 RES = os.path.join(HERE, "results")
-OUT = os.path.join(ROOT, "docs", "assets", "plots", "bench")
+# The one served location: sitegen publishes site/ only, and docs/bench-plots.md links here.
+OUT = os.path.join(ROOT, "site", "assets", "plots", "bench")
 DOC = os.path.join(ROOT, "docs", "bench-plots.md")
 PALETTE = [P.BLUE, P.ORANGE, P.GREEN, P.RED, "#7b5ea7", "#8c564b", "#17becf", "#bcbd22"]
 
@@ -72,7 +73,7 @@ def svg(folder, name):
 
 
 def rel(folder, name):
-    return f"assets/plots/bench/{folder.replace('/', '--')}--{name}.svg"
+    return f"../site/assets/plots/bench/{folder.replace('/', '--')}--{name}.svg"
 
 
 def emit_ratio(folder, name, rows, title, subtitle, note, band=1.1, sort=True):

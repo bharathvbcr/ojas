@@ -32,13 +32,6 @@ magick "$out/ojas-tile-512.png" -filter Lanczos -resize 32x32 "$out/favicon-32.p
 magick "$out/icon-512.png" -filter Lanczos -resize 192x192 "$out/icon-192.png"
 magick "$out/icon-512.png" -filter Lanczos -resize 180x180 -alpha off "$out/apple-touch-icon.png"
 
-# 4. docs/ mirrors the one-page site for local previewing.
-cp "$out"/* docs/assets/
-rm -f docs/why.html docs/benchmarks.html docs/roadmap.html docs/guide/*.html
-if [ -d site/assets/plots ]; then
-  mkdir -p docs/assets/plots
-  cp site/assets/plots/* docs/assets/plots/
-fi
-# The page, scripts, styles, reference pages, sitemap and search index are
-# mirrored (and verified) by the generator.
+# 4. The one-page site and the reference pages are generated into site/ by the
+#    sitegen tool; docs/ carries no copy of it. Serve site/ to preview locally.
 go run scripts/sitegen/main.go
