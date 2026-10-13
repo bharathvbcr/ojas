@@ -230,7 +230,7 @@ fn a_single_window_repeats_every_epoch() {
 }
 
 /// Window starts for fixed `(seed, W = 100, epoch, ordinal)`, computed by the
-/// independent Python oracle `target-robust/sampler_oracle.py`. A change to
+/// independent Python oracle `bench/evidence/robust/sampler_oracle.py`. A change to
 /// the permutation that moves any of them must also change
 /// `RNG_GENERATOR_FEISTEL4_SPLITMIX64`, or a checkpoint's `rng_state` would
 /// name a stream the sampler no longer produces.

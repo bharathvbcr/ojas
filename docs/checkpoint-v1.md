@@ -119,7 +119,7 @@ flowchart LR
 | `4..8` | 4 bytes | `u32` | generator, `1` = 4-round Feistel over SplitMix64 (`RNG_GENERATOR_FEISTEL4_SPLITMIX64`) |
 | `8..16` | 8 bytes | `u64` | seed, the train config's `data_seed` |
 
-Resume decodes it exactly. A length other than 16, an unknown version or generator, or a seed different from the caller's `data_seed` is refused. An empty `rng_state` is refused too: files saved before this layout wrote one, and they are not migrated. `permutation_is_pinned` (`ojas-data/tests/sampler.rs`) pins window starts against an independent Python oracle (`target-robust/sampler_oracle.py`). A change that moves any of them needs a new generator tag. `g9_forty_steps_equal_twenty_saved_dropped_resumed_and_twenty_more` (`ojas-model/tests/checkpoint.rs`) proves bit for bit on CPU that 20 steps, a save, a resume and 20 more equal 40 uninterrupted steps.
+Resume decodes it exactly. A length other than 16, an unknown version or generator, or a seed different from the caller's `data_seed` is refused. An empty `rng_state` is refused too: files saved before this layout wrote one, and they are not migrated. `permutation_is_pinned` (`ojas-data/tests/sampler.rs`) pins window starts against an independent Python oracle (`bench/evidence/robust/sampler_oracle.py`). A change that moves any of them needs a new generator tag. `g9_forty_steps_equal_twenty_saved_dropped_resumed_and_twenty_more` (`ojas-model/tests/checkpoint.rs`) proves bit for bit on CPU that 20 steps, a save, a resume and 20 more equal 40 uninterrupted steps.
 
 ---
 
