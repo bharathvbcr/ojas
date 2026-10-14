@@ -286,7 +286,9 @@ pub const KERNEL_GRIDS: &[(&str, GridKind)] = &[
     ("sum_finish", GridKind::Single("one workgroup, (1, 1, 1)")),
     (
         "col_partial",
-        GridKind::Exact("grid (cols / 256, row chunks) are the real axes; lane c >= cols returns"),
+        GridKind::Exact(
+            "grid (cols / 256, row chunks) are the real axes, the chunks sized to fit the y limit; lane c >= cols returns",
+        ),
     ),
     // clip.wgsl.
     (

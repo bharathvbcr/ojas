@@ -849,6 +849,25 @@ impl<B: Backend> Backend for Probe<B> {
         self.gate("causal_sdpa_backward")?;
         self.inner.causal_sdpa_backward(q, k, v, o, lse, g, window)
     }
+    fn causal_sdpa_backward_recompute(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        g: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        self.gate("causal_sdpa_backward_recompute")?;
+        self.inner
+            .causal_sdpa_backward_recompute(q, k, v, g, window)
+    }
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        self.gate("scale_grad")?;
+        self.inner.scale_grad(grad, scale)
+    }
+    fn bf16_operands(&self) -> bool {
+        self.inner.bf16_operands()
+    }
     fn per_head_sigmoid_gate_forward(
         &self,
         x: &Tensor,
