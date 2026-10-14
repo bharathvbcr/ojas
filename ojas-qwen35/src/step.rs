@@ -655,6 +655,16 @@ impl Qwen35Step {
     /// The squared global L2 norm of the bank (tessl: f32 row sums added in
     /// f64, deterministic). Add the span head's on the host, then
     /// [`clip_coefficient`].
+    ///
+    /// The norm is over every entry of the bank, including one whose plan
+    /// `lr_scale` is 0. This provider is full fine-tuning: tessl's backward
+    /// writes a gradient for every parameter and its `grad_sq_norm` takes no
+    /// per-entry selection, so a "frozen" (scale 0) entry still feeds this
+    /// norm and so still lowers the clip coefficient of the entries that
+    /// learn. To train a subset without that coupling, freeze the leaves on
+    /// the Tape (`Tape::frozen_leaf`, `ojas_model::lora`), where a frozen
+    /// leaf has no gradient to count. Pinned by
+    /// `gpu_tiny_scale_zero_entry_still_feeds_the_norm`.
     pub fn grad_sq_norm(&self) -> Result<f64> {
         self.check_live()?;
         self.require_gradients("Qwen35Step::grad_sq_norm")?;
@@ -668,7 +678,11 @@ impl Qwen35Step {
     /// learning-rate scales and weight decays: entry `i` learns at
     /// `hyper.lr * plan.lr_scale()[i]`, as a torch param group at that lr
     /// would (the scaled lr forms both the decoupled decay and the step size;
-    /// a scale of 0 freezes the entry while its moments still update).
+    /// a scale of 0 freezes the entry while its moments still update). The
+    /// moments of a scale-0 entry also keep accumulating its gradient, so
+    /// raising its scale later starts from non-zero moments; see
+    /// [`Qwen35Step::grad_sq_norm`] for the norm and for the Tape route
+    /// that really freezes a parameter.
     /// Returns the new step count and empties the bank.
     ///
     /// Refused before any device work: an empty or invalid bank; a plan built
