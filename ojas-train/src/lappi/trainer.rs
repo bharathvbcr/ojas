@@ -1381,6 +1381,16 @@ impl ResumeState {
                 })
             }
         };
+        // advance_to_epoch is the only way past epoch 0 and always sets the link; epoch 0 never
+        // has one. The other two shapes are bodies no run wrote.
+        if (epoch == 0) != epoch_link.is_none() {
+            return Err(TrainError::Refused(format!(
+                "{}: epoch {epoch} with {} epoch_link; a checkpoint past epoch 0 carries the link \
+                 to the epochs before it and an epoch-0 checkpoint carries none",
+                p.display(),
+                if epoch_link.is_some() { "an" } else { "no" }
+            )));
+        }
         let state = Self {
             dir: ckpt_dir.to_path_buf(),
             epoch,
