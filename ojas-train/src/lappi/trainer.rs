@@ -345,11 +345,28 @@ impl TrainResult {
     }
 }
 
+/// Where the consumed-batch digest stood when an epoch began: the earlier epochs' digest and
+/// how many batches they folded. The epoch's own digest is chained onto it
+/// ([`ConsumedPrefix::continuing`]), so the digest is never reset between epochs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpochLink {
+    pub digest: String,
+    pub n: u64,
+}
+
+impl EpochLink {
+    fn prefix(&self) -> ConsumedPrefix {
+        ConsumedPrefix::continuing(&self.digest, self.n)
+    }
+}
+
 /// A checkpoint read back: where the run was and what it had done.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResumeState {
     pub dir: PathBuf,
     pub epoch: u64,
+    /// `None` in epoch 0; in a later epoch, what the earlier epochs consumed.
+    pub epoch_link: Option<EpochLink>,
     pub next_index: u64,
     pub optimizer_step: u64,
     pub seed: u64,
@@ -469,6 +486,7 @@ where
     let mut channel_log: Vec<(String, Vec<f64>)> = Vec::new();
     let mut start_index = 0u64;
     let mut resume_digest: Option<String> = None;
+    let mut epoch_link: Option<EpochLink> = None;
     if let Some(r) = resume {
         if r.seed != cfg.seed {
             return Err(TrainError::Refused(format!(
@@ -479,7 +497,9 @@ where
         }
         if r.epoch != cfg.epoch {
             return Err(TrainError::Refused(format!(
-                "checkpoint is at epoch {} but this call was given epoch {}",
+                "checkpoint is at epoch {} but this call was given epoch {}; a checkpoint's position \
+                 is in its own epoch's batch order, so the only way to the next epoch is \
+                 ResumeState::advance_to_epoch",
                 r.epoch, cfg.epoch
             )));
         }
@@ -526,6 +546,7 @@ where
         channel_log = r.channel_log;
         start_index = r.next_index;
         resume_digest = Some(r.consumed_digest);
+        epoch_link = r.epoch_link;
     } else if provider.step_count() != 0 {
         return Err(TrainError::Refused(format!(
             "a fresh run was handed a provider that has already taken {} step(s)",
@@ -539,7 +560,9 @@ where
         .ok_or_else(|| TrainError::Refused("total_steps * grad_accum overflows".into()))?;
 
     let mut clock = RunClock::start(clock, cfg.cap)?;
-    let mut consumed = ConsumedPrefix::new();
+    let mut consumed = epoch_link
+        .as_ref()
+        .map_or_else(ConsumedPrefix::new, EpochLink::prefix);
     let mut source = batches.into_iter();
     let mut pending: Option<O::Batch> = None;
 
@@ -815,6 +838,7 @@ where
                     steps: &steps,
                     channel_log: &channel_log,
                     consumed: &consumed,
+                    epoch_link: epoch_link.as_ref(),
                 };
                 last_checkpoint = Some(write_checkpoint(
                     &policy.dir,
@@ -856,6 +880,7 @@ where
                 steps: &steps,
                 channel_log: &channel_log,
                 consumed: &consumed,
+                epoch_link: epoch_link.as_ref(),
             };
             last_checkpoint = Some(write_checkpoint(
                 &policy.dir,
@@ -933,6 +958,7 @@ struct CheckpointBody<'a> {
     steps: &'a [StepRecord],
     channel_log: &'a [(String, Vec<f64>)],
     consumed: &'a ConsumedPrefix,
+    epoch_link: Option<&'a EpochLink>,
 }
 
 fn checkpoint_name(step: u64) -> String {
@@ -1027,6 +1053,19 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     let host_path = staging.join("host.f32");
     write_synced(&host_path, &host_bytes)?;
 
+    // Only a checkpoint past epoch 0 has a link; epoch 0's body is byte-for-byte what it was.
+    let epoch_link_json = body
+        .epoch_link
+        .map(|l| {
+            Ok::<_, PyJsonError>((
+                "epoch_link",
+                obj([
+                    ("digest", Value::from(l.digest.clone())),
+                    ("n", Value::from(l.n)),
+                ])?,
+            ))
+        })
+        .transpose()?;
     let body_json = obj([
         ("format", Value::from(CHECKPOINT_FORMAT)),
         ("epoch", Value::from(body.epoch)),
@@ -1084,7 +1123,9 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
             "host_sha256",
             Value::from(hex(&Sha256::digest(&host_bytes))),
         ),
-    ])?;
+    ]
+    .into_iter()
+    .chain(epoch_link_json))?;
     write_synced(
         &staging.join("trainer.json"),
         dumps(&body_json, CANONICAL)?.as_bytes(),
@@ -1127,6 +1168,54 @@ fn as_hex(v: &serde_json::Value, path: &Path) -> Result<f64, TrainError> {
 }
 
 impl ResumeState {
+    /// Move a checkpoint taken at the end of epoch `self.epoch` to the start of `epoch`, the
+    /// next one: position 0, the consumed digest chained onto the finished epoch's. Everything
+    /// else (step count, loss log, host moments, the provider directory) is carried as it is, so
+    /// the schedule and the optimizer continue where the last epoch stopped.
+    ///
+    /// `epoch_batches` is how many batches epoch `self.epoch` has, from the caller's plan; the
+    /// loop cannot know it (a truncated source also ends with `DataExhausted`). It is refused
+    /// unless the checkpoint consumed exactly that many, and unless `epoch` is the immediate
+    /// successor (no skipped epoch, no going back) and the schedule still has steps to take.
+    pub fn advance_to_epoch(mut self, epoch: u64, epoch_batches: u64) -> Result<Self, TrainError> {
+        if self.epoch.checked_add(1) != Some(epoch) {
+            return Err(TrainError::Refused(format!(
+                "a checkpoint at epoch {} can only advance to epoch {}, not {epoch}",
+                self.epoch,
+                self.epoch.saturating_add(1)
+            )));
+        }
+        if epoch_batches == 0 {
+            return Err(TrainError::Refused(
+                "an epoch has at least one batch; advancing past a zero-length epoch proves nothing"
+                    .into(),
+            ));
+        }
+        if self.next_index != epoch_batches {
+            return Err(TrainError::Refused(format!(
+                "epoch {} is not finished: the checkpoint consumed {} of its {epoch_batches} batches",
+                self.epoch, self.next_index
+            )));
+        }
+        let total = self.schedule.total_steps();
+        if self.optimizer_step >= total {
+            return Err(TrainError::Refused(format!(
+                "the schedule has no steps left ({} of {total} taken); epoch {epoch} would train \
+                 nothing",
+                self.optimizer_step
+            )));
+        }
+        let link = EpochLink {
+            digest: self.consumed_digest.clone(),
+            n: self.epoch_link.as_ref().map_or(0, |l| l.n) + self.next_index,
+        };
+        self.consumed_digest = link.prefix().hexdigest();
+        self.epoch_link = Some(link);
+        self.epoch = epoch;
+        self.next_index = 0;
+        Ok(self)
+    }
+
     /// Read `ckpt_dir` (one `ckpt-<step>` directory), checking every recorded digest.
     pub fn read(ckpt_dir: &Path) -> Result<Self, TrainError> {
         let body_path = ckpt_dir.join("trainer.json");
@@ -1272,9 +1361,30 @@ impl ResumeState {
         }
         let grad_accum = u32::try_from(as_u64(&v, "grad_accum", p)?)
             .map_err(|e| TrainError::Refused(e.to_string()))?;
+        let epoch = as_u64(&v, "epoch", p)?;
+        let epoch_link = match v.get("epoch_link") {
+            None => None,
+            Some(l) => {
+                let digest = field(l, "digest", p)?
+                    .as_str()
+                    .filter(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .ok_or_else(|| {
+                        TrainError::Refused(format!(
+                            "{}: epoch_link.digest is not a sha256 hex digest",
+                            p.display()
+                        ))
+                    })?
+                    .to_string();
+                Some(EpochLink {
+                    digest,
+                    n: as_u64(l, "n", p)?,
+                })
+            }
+        };
         let state = Self {
             dir: ckpt_dir.to_path_buf(),
-            epoch: as_u64(&v, "epoch", p)?,
+            epoch,
+            epoch_link,
             next_index: as_u64(&v, "next_index", p)?,
             optimizer_step: as_u64(&v, "optimizer_step", p)?,
             seed: as_u64(&v, "seed", p)?,
