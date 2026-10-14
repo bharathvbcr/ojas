@@ -88,3 +88,25 @@ fn the_probe_reports_the_inner_bf16_operands() {
     assert!(probe.inner().bf16_operands());
     assert!(probe.bf16_operands());
 }
+
+/// Adversarial: every method `Probe` leaves to the trait default is a way a
+/// probe-based test silently exercises something other than the backend.
+/// `CpuBackend` implements the hybrid sigmoid; the probe must give what the
+/// CPU gives, not the trait's Unsupported default.
+#[test]
+fn the_probe_runs_the_cpu_sigmoid_forward() {
+    let probe = Probe::new(CpuBackend::new(Budget::new(1 << 20)));
+    let x = Tensor::from_f32(&[0.0, 1.0, -2.0], &[3], probe.budget()).unwrap();
+    let want = probe
+        .inner()
+        .sigmoid_forward(&x)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
+    let got = probe
+        .sigmoid_forward(&x)
+        .expect("Probe<Cpu>::sigmoid_forward fell to the Unsupported trait default")
+        .to_f32_vec()
+        .unwrap();
+    assert_eq!(got, want);
+}
