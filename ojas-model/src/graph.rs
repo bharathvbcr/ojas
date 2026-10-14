@@ -33,6 +33,12 @@ pub trait Graph {
     /// gradient [`Tape::take_grad`] returns.
     fn param(&mut self, value: &Tensor) -> Result<Self::V, OjasError>;
 
+    /// Bring a constant or frozen parameter into the graph. On a tape it is
+    /// a frozen leaf ([`Tape::frozen_leaf`]): no gradient is kept for it and
+    /// a linear over it skips the weight gradient. On [`Eval`] it is
+    /// [`Graph::param`].
+    fn frozen(&mut self, value: &Tensor) -> Result<Self::V, OjasError>;
+
     /// The tensor behind `v`.
     fn tensor<'a>(&'a self, v: &'a Self::V) -> Result<&'a Tensor, OjasError>;
 
@@ -152,6 +158,10 @@ impl<B: Backend> Graph for Tape<B> {
 
     fn param(&mut self, value: &Tensor) -> Result<Var, OjasError> {
         self.leaf(value.clone())
+    }
+
+    fn frozen(&mut self, value: &Tensor) -> Result<Var, OjasError> {
+        self.frozen_leaf(value.clone())
     }
 
     fn tensor<'a>(&'a self, v: &'a Var) -> Result<&'a Tensor, OjasError> {
@@ -316,6 +326,10 @@ impl<B: Backend> Graph for Eval<B> {
     }
 
     fn param(&mut self, value: &Tensor) -> Result<Tensor, OjasError> {
+        self.place(value)
+    }
+
+    fn frozen(&mut self, value: &Tensor) -> Result<Tensor, OjasError> {
         self.place(value)
     }
 

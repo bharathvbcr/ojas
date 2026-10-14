@@ -671,6 +671,26 @@ pub trait Backend {
         grad_output: &Tensor,
     ) -> Result<(Tensor, Tensor), OjasError>;
 
+    /// `grad_input` of [`Backend::linear_backward`] alone, for a frozen
+    /// weight: the same operands and the same bits, with no weight
+    /// gradient. `input` is not read by the product, but it is checked
+    /// (shape, dtype, finiteness) exactly as the full path checks it, so
+    /// both return the same verdict.
+    ///
+    /// The default runs `linear_backward` and drops the weight gradient,
+    /// so every backend answers it correctly; CPU and Metal override it
+    /// with a body that never allocates, charges or computes that
+    /// gradient.
+    fn linear_backward_input(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.linear_backward(input, weight, grad_output)
+            .map(|(grad_input, _)| grad_input)
+    }
+
     fn rms_norm_forward(
         &self,
         input: &Tensor,
@@ -1515,6 +1535,7 @@ macro_rules! with_backend_methods {
             op fn embedding_backward(&self, table: &$crate::Tensor, token_ids: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn linear_backward_input(&self, input: &$crate::Tensor, weight: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn rms_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn rms_norm_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, grad_output: &$crate::Tensor, eps: f32) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn rope_half_split_forward(&self, x: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2224,6 +2245,7 @@ pub(crate) mod tests {
             op(backend.embedding_backward(&t, &t, &t)),
             op(backend.linear_forward(&t, &t)),
             op(backend.linear_backward(&t, &t, &t)),
+            op(backend.linear_backward_input(&t, &t, &t)),
             op(backend.rms_norm_forward(&t, &t, 1e-6)),
             op(backend.rms_norm_backward(&t, &t, &t, 1e-6)),
             op(backend.rope_half_split_forward(&t, &t, &t)),
@@ -2286,6 +2308,7 @@ pub(crate) mod tests {
             "embedding_backward",
             "linear_forward",
             "linear_backward",
+            "linear_backward_input",
             "rms_norm_forward",
             "rms_norm_backward",
             "rope_half_split_forward",

@@ -134,6 +134,27 @@ impl Wide<'_> {
     }
 }
 
+/// The layout and finite scan [`matmul_operands`] runs on one operand, with
+/// nothing widened or copied: for an operand a matmul-class op validates
+/// but does not read (the activation of a dX-only backward), so its verdict
+/// is the full op's.
+pub(crate) fn scan_matmul_operand(
+    op: &'static str,
+    exec: Exec<'_>,
+    t: &Tensor,
+) -> Result<(), OjasError> {
+    check_layout(op, t, matmul_dtype(t))?;
+    let finite = match t.dtype() {
+        DType::Bf16 => bf16_window_finite(exec, t.bf16_slice()?)?,
+        _ => t.all_finite_cached(|w| window_finite(exec, w))?,
+    };
+    if finite {
+        Ok(())
+    } else {
+        Err(nonfinite(op))
+    }
+}
+
 /// Values per block of the bf16 finite scan and of the widening pass.
 const WIDEN_BLOCK: usize = 1 << 17;
 

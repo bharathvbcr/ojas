@@ -643,6 +643,64 @@ fn gpu_tiny_per_group_lr_scales_the_update() {
     );
 }
 
+/// The provider is full fine-tuning, so a scale-0 ("frozen") plan entry is
+/// still in the gradient bank: `grad_sq_norm` counts its gradient (it equals
+/// the host's sum over every entry, and exceeds the sum without the frozen
+/// one), so it lowers the clip coefficient of the entries that learn. Pins
+/// the behaviour documented on [`Qwen35Step::grad_sq_norm`]; a true freeze
+/// is the Tape's frozen leaf.
+#[test]
+#[ignore]
+fn gpu_tiny_scale_zero_entry_still_feeds_the_norm() {
+    const FROZEN: &str = "layers.0.mlp.down_proj.weight";
+    let dir = tiny_dir();
+    let ids = ids(&dir);
+    let mut s = open_tiny(Numerics::ExactF32);
+    step_all_rows(&mut s, &ids);
+    let grads = f32_table(&s, Which::Gradients);
+    let p = OptimizerPlan::build(
+        s.parameter_table(),
+        &GroupSpec {
+            lr: vec![
+                LrRule {
+                    label: "frozen".into(),
+                    select: Select::Name(FROZEN.into()),
+                    lr_scale: 0.0,
+                },
+                LrRule {
+                    label: "rest".into(),
+                    select: Select::Not(Box::new(Select::Name(FROZEN.into()))),
+                    lr_scale: 1.0,
+                },
+            ],
+            weight_decay: wd_rules(0.1),
+        },
+    )
+    .unwrap();
+    let frozen = p.names().iter().position(|n| n == FROZEN).unwrap();
+    let sq_of = |skip: Option<usize>| -> f64 {
+        grads
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != skip)
+            .flat_map(|(_, g)| g.iter())
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum()
+    };
+    let (all, without) = (sq_of(None), sq_of(Some(frozen)));
+    assert!(
+        all > without * (1.0 + 1e-3),
+        "the frozen entry must carry gradient for this pin to mean anything: {all} vs {without}"
+    );
+    let sq = s.grad_sq_norm().unwrap();
+    assert!((sq - all).abs() <= 1e-5 * all, "{sq} vs all {all}");
+    assert!(
+        (sq - without).abs() > 1e-4 * all,
+        "{sq} matches the sum without the scale-0 entry ({without})"
+    );
+    s.discard_gradients();
+}
+
 fn scratch(name: &str) -> PathBuf {
     let d = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("ojas-qwen35-gpu-{name}-{}", std::process::id()));

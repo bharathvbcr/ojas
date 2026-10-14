@@ -181,6 +181,34 @@ pub(crate) fn linear_backward(
     Ok(false)
 }
 
+/// `grad_x` (`[rows, in]`) alone for `grad_y` `[rows, out]`: the first
+/// product of [`linear_backward`], the same [`gemm_out`] call with the same
+/// operands, so the bits equal that function's `grad_x`. The weight
+/// gradient is never allocated, charged or computed.
+pub(crate) fn linear_backward_input(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    [weight, grad_y]: [&[f32]; 2],
+    dims: &LinearDims,
+    grad_x: &mut [f32],
+) -> Result<(), OjasError> {
+    let (rows, kin, nout) = (dims.rows, dims.in_features, dims.out_features);
+    if weight.len() != product(op, &[nout, kin])?
+        || grad_y.len() != product(op, &[rows, nout])?
+        || grad_x.len() != product(op, &[rows, kin])?
+    {
+        return Err(shape(
+            op,
+            "linear backward data length does not match shape",
+        ));
+    }
+    let _work = room_for(op, budget, scratch(op, exec, rows, nout, kin)?)?;
+    let w = Mat::row_major(weight, nout, kin);
+    let g = Mat::row_major(grad_y, rows, nout);
+    gemm_out(op, exec, &g, &w, grad_x)
+}
+
 /// `grad_w[col, inner] = fma(g[col], x[inner], +0.0)` for a single forward
 /// row. That is the Fast ascending chain with `k = 1`: one product per
 /// output, from `+0.0`, no second rounding and no panel pack.

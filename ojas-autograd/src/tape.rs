@@ -29,6 +29,8 @@ pub struct Var(pub usize);
 #[derive(Clone)]
 enum Rec {
     Leaf,
+    /// A leaf that takes no gradient ([`Tape::frozen_leaf`]).
+    Frozen,
     Embed {
         table: usize,
         ids: Tensor,
@@ -171,6 +173,7 @@ impl Rec {
         let m = |i: usize| if i >= from { i - from + to } else { i };
         match self {
             Rec::Leaf => Rec::Leaf,
+            Rec::Frozen => Rec::Frozen,
             Rec::Embed { table, ids } => Rec::Embed {
                 table: m(table),
                 ids,
@@ -362,6 +365,37 @@ impl<B: Backend> Tape<B> {
     pub fn leaf(&mut self, value: Tensor) -> Result<Var, OjasError> {
         let value = self.place(value)?;
         Ok(self.push(value, Rec::Leaf))
+    }
+
+    /// Record a leaf that takes no gradient: a frozen parameter.
+    ///
+    /// No gradient is ever stored for it, so [`Tape::grad`] and
+    /// [`Tape::take_grad`] return `None` (absent, not zero), and the
+    /// backward skips the work only it would have used: a [`Tape::linear`]
+    /// whose weight is frozen runs [`Backend::linear_backward_input`] (no
+    /// weight gradient) and an embedding with a frozen table runs no
+    /// backward at all. A frozen leaf seen through [`Tape::reshape`] or
+    /// [`Tape::permute`] is frozen too. A graph with no trainable leaf
+    /// makes [`Tape::backward`] a no-op that allocates nothing.
+    ///
+    /// Frozen is per record, not per tensor: the same tensor recorded
+    /// again with [`Tape::leaf`] is a separate trainable leaf. Like any
+    /// leaf it is refused inside a [`Tape::checkpoint`] body.
+    pub fn frozen_leaf(&mut self, value: Tensor) -> Result<Var, OjasError> {
+        let value = self.place(value)?;
+        Ok(self.push(value, Rec::Frozen))
+    }
+
+    /// Whether node `index` is a frozen leaf or a reshape or permute view
+    /// of one: nothing recorded would ever read its gradient.
+    fn is_frozen(&self, mut index: usize) -> bool {
+        loop {
+            match &self.ops[index] {
+                Rec::Frozen => return true,
+                Rec::Reshape { src, .. } | Rec::Permute { src, .. } => index = *src,
+                _ => return false,
+            }
+        }
     }
 
     /// Make `tensor` resident on the backend. The CPU path keeps the tensor
@@ -748,7 +782,10 @@ impl<B: Backend> Tape<B> {
                 "a segment must return at least one output".to_string(),
             ));
         }
-        if self.ops[start..].iter().any(|r| matches!(r, Rec::Leaf)) {
+        if self.ops[start..]
+            .iter()
+            .any(|r| matches!(r, Rec::Leaf | Rec::Frozen))
+        {
             return Err(refuse(
                 "a segment recorded a leaf; record it before the checkpoint".to_string(),
             ));
@@ -784,7 +821,7 @@ impl<B: Backend> Tape<B> {
         let v = &self.values;
         let be = &self.backend;
         Ok(match rec {
-            Rec::Leaf | Rec::Checkpoint { .. } => {
+            Rec::Leaf | Rec::Frozen | Rec::Checkpoint { .. } => {
                 return Err(OjasError::Backend {
                     id: be.id(),
                     detail: "Tape: a leaf or checkpoint output has no forward to run".to_string(),
@@ -991,6 +1028,14 @@ impl<B: Backend> Tape<B> {
                 detail: "variable is not on this tape".to_string(),
             });
         }
+        // No trainable leaf and no checkpointed segment (whose inputs are
+        // opaque here): no gradient would be kept, so none is computed.
+        if !self.ops[..=var.0]
+            .iter()
+            .any(|r| matches!(r, Rec::Leaf | Rec::Checkpoint { .. }))
+        {
+            return Ok(());
+        }
         let shape = self.values[var.0].shape().to_vec();
         self.grads[var.0] = Some(self.fill(&shape, seed)?);
         let len = self.values.len();
@@ -1122,14 +1167,23 @@ impl<B: Backend> Tape<B> {
 
     fn backward_one(&mut self, op: Rec, grad: &Tensor, seed: Option<f32>) -> Result<(), OjasError> {
         match op {
-            Rec::Leaf => Ok(()),
+            Rec::Leaf | Rec::Frozen => Ok(()),
             // `walk` replays segments itself and never passes one here.
             Rec::Checkpoint { .. } => Err(self.missing("a checkpoint output")),
+            // The table is frozen: its gradient would be table-sized and
+            // nothing else reads it (the ids take none).
+            Rec::Embed { table, .. } if self.is_frozen(table) => Ok(()),
             Rec::Embed { table, ids } => {
                 let gx = self
                     .backend
                     .embedding_backward(&self.values[table], &ids, grad)?;
                 self.acc(table, gx)
+            }
+            Rec::Linear { x, w } if self.is_frozen(w) => {
+                let xv = self.values[x].clone();
+                let wv = self.values[w].clone();
+                let gx = self.backend.linear_backward_input(&xv, &wv, grad)?;
+                self.acc(x, gx)
             }
             Rec::Linear { x, w } => {
                 let xv = self.values[x].clone();
@@ -1404,6 +1458,9 @@ impl<B: Backend> Tape<B> {
     /// bits do not depend on which side is written. Before 2026-10-07 every
     /// fan-in built a new tensor with `residual_add_forward`.
     fn acc(&mut self, id: usize, grad: Tensor) -> Result<(), OjasError> {
+        if self.is_frozen(id) {
+            return Ok(());
+        }
         if let Some(old) = self.grads[id].take() {
             let (mut into, from) = if old.shares_allocation() && !grad.shares_allocation() {
                 (grad, old)

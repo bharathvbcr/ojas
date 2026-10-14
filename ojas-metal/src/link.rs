@@ -429,6 +429,15 @@ pub(crate) enum Cmd {
         kin: usize,
         nout: usize,
     },
+    /// `LinearBwd`'s `grad_x` alone: no weight gradient is allocated.
+    LinearBwdInput {
+        x: Arg,
+        w: Arg,
+        gy: Arg,
+        rows: usize,
+        kin: usize,
+        nout: usize,
+    },
     /// RMSNorm forward, or backward when the sides carry `gy`, of one side
     /// (`rms_norm_*`) or two (q then k, `rms_qk_norm_*`) in one command.
     Rms {

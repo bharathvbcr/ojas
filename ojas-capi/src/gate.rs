@@ -214,6 +214,15 @@ impl<B: Backend> Backend for Gated<B> {
         self.enter("linear_backward", true)?;
         self.inner.linear_backward(input, weight, grad_output)
     }
+    fn linear_backward_input(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.enter("linear_backward_input", true)?;
+        self.inner.linear_backward_input(input, weight, grad_output)
+    }
     fn rms_norm_forward(
         &self,
         input: &Tensor,

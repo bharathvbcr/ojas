@@ -488,6 +488,21 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok((self.emit(grad_input)?, self.keep_f32(grad_weight)))
     }
 
+    fn linear_backward_input(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let grad_output = self.prep(grad_output)?;
+        let grad_input = self
+            .inner
+            .linear_backward_input(&input, &weight, &grad_output)?;
+        self.emit(grad_input)
+    }
+
     fn rms_norm_forward(
         &self,
         input: &Tensor,

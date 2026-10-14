@@ -30,7 +30,7 @@ use crate::hybrid::{
     Turn,
 };
 use crate::layout::permute;
-use crate::linalg::{linear_backward, linear_forward};
+use crate::linalg::{linear_backward, linear_backward_input, linear_forward};
 use crate::norm::{rms_backward, rms_forward, rope_backward, rope_forward};
 use crate::optim::{
     adamw_in_place, check_muon, grad_norm, muon_ns5, muon_scratch, scale_in_place, AdamCoeffs,
@@ -43,8 +43,8 @@ use crate::pointwise::{
 use crate::pool::{Exec, Pool};
 use crate::validate::{
     alloc_f32, check_f32s, f32_checked, f32_layouts, f32_operands, f32_values, fill_out, fill_outs,
-    headroom, matmul_operands, nonfinite_first, payload_bytes, product, scanned_f32,
-    trusted_finite_f32, u32_values, Wide,
+    headroom, matmul_operands, nonfinite_first, payload_bytes, product, scan_matmul_operand,
+    scanned_f32, trusted_finite_f32, u32_values, Wide,
 };
 use ojas_core::{
     adamw_step_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
@@ -482,6 +482,25 @@ impl Backend for CpuBackend {
             Ok(())
         })?;
         Ok((grad_x, grad_w))
+    }
+
+    fn linear_backward_input(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "linear_backward_input";
+        let dims = linear_backward_dims(input, weight, grad_output)?;
+        let exec = self.exec();
+        // `input` is not read by the product, but it is scanned as the full
+        // path scans it, so a poisoned activation is refused here too.
+        scan_matmul_operand(OP, exec, input)?;
+        let wide = matmul_operands(OP, exec, &self.budget, [weight, grad_output])?;
+        let ins = wide.each_ref().map(Wide::values);
+        fill_out(OP, &self.budget, exec, input.shape(), |grad_x| {
+            linear_backward_input(OP, &self.budget, exec, ins, &dims, grad_x)
+        })
     }
 
     fn rms_norm_forward(
