@@ -338,7 +338,12 @@ pub struct TrainConfig {
     pub grad_accum: u32,
     pub optimizer: OptimizerRecipe,
     pub max_grad_norm: f64,
+    /// The epoch this call trains. [`train`] runs exactly one; [`train_epochs`] sets it itself.
     pub epoch: u64,
+    /// How many epochs the whole run has (at least 1; `epoch < epochs`). The schedule's
+    /// `total_steps` covers all of them. A checkpoint of a run of more than one epoch records it,
+    /// and a resume of another count is refused; a one-epoch checkpoint records nothing.
+    pub epochs: u64,
     pub seed: u64,
     pub checkpoint: Option<CheckpointPolicy>,
     pub eta: Option<EtaRule>,
@@ -412,6 +417,8 @@ impl EpochLink {
 pub struct ResumeState {
     pub dir: PathBuf,
     pub epoch: u64,
+    /// How many epochs the run this checkpoint belongs to has (1 when it recorded none).
+    pub epochs: u64,
     /// `None` in epoch 0; in a later epoch, what the earlier epochs consumed.
     pub epoch_link: Option<EpochLink>,
     pub next_index: u64,
@@ -475,6 +482,12 @@ where
             cfg.max_grad_norm
         )));
     }
+    if cfg.epochs == 0 || cfg.epoch >= cfg.epochs {
+        return Err(TrainError::Refused(format!(
+            "epoch {} of {} epoch(s): a run has at least one epoch and trains one inside it",
+            cfg.epoch, cfg.epochs
+        )));
+    }
     cfg.optimizer.validate()?;
     if let Some(eta) = &cfg.eta {
         eta.validate(cfg.schedule.total_steps(), cfg.cap.cap_s())?;
@@ -534,6 +547,7 @@ where
     let mut start_index = 0u64;
     let mut resume_digest: Option<String> = None;
     let mut epoch_link: Option<EpochLink> = None;
+    let mut resumed_from: Option<PathBuf> = None;
     if let Some(r) = resume {
         if r.seed != cfg.seed {
             return Err(TrainError::Refused(format!(
@@ -548,6 +562,13 @@ where
                  is in its own epoch's batch order, so the only way to the next epoch is \
                  ResumeState::advance_to_epoch",
                 r.epoch, cfg.epoch
+            )));
+        }
+        if r.epochs != cfg.epochs {
+            return Err(TrainError::Refused(format!(
+                "checkpoint belongs to a run of {} epoch(s) but this run has {}; the schedule and the \
+                 batch plan of a run are fixed by its epoch count",
+                r.epochs, cfg.epochs
             )));
         }
         if r.schedule != cfg.schedule || r.grad_accum != cfg.grad_accum {
@@ -586,6 +607,7 @@ where
                 s.steps, r.optimizer_step
             )));
         }
+        resumed_from = Some(r.dir.clone());
         host_state = r.host_state;
         optimizer_step = r.optimizer_step;
         log = r.loss_log;
@@ -876,6 +898,7 @@ where
             if policy.every > 0 && done.is_multiple_of(policy.every) {
                 let state = CheckpointBody {
                     epoch: cfg.epoch,
+                    epochs: cfg.epochs,
                     next_index: index + 1,
                     optimizer_step,
                     seed: cfg.seed,
@@ -912,12 +935,26 @@ where
     let next_index = last_index.map_or(start_index, |i| i + 1);
     let wall = clock.elapsed_s()?;
     if let Some(policy) = &cfg.checkpoint {
+        // A call that took no step (resumed at the cap, at the end of the schedule, or right
+        // after an epoch advance that the cap then stopped) has nothing to add to the checkpoint
+        // it resumed from, when that one is already this call's step in this call's directory:
+        // that checkpoint is its resume point, not a name to refuse.
+        if optimizer_step == first_step
+            && last_checkpoint.is_none()
+            && let Some(from) = &resumed_from
+            && from.parent() == Some(policy.dir.as_path())
+            && from.file_name().and_then(|n| n.to_str())
+                == Some(checkpoint_name(optimizer_step).as_str())
+        {
+            last_checkpoint = Some(from.clone());
+        }
         let already = last_checkpoint.as_ref().is_some_and(|p| {
             p.file_name().and_then(|n| n.to_str()) == Some(checkpoint_name(optimizer_step).as_str())
         });
         if !already {
             let state = CheckpointBody {
                 epoch: cfg.epoch,
+                epochs: cfg.epochs,
                 next_index,
                 optimizer_step,
                 seed: cfg.seed,
@@ -954,6 +991,155 @@ where
         final_checkpoint: last_checkpoint,
         eta_projected_s,
     })
+}
+
+/// One epoch's data as [`train_epochs`] asks for it: the batches in order and how many there are.
+/// The count is the caller's plan (the loop cannot know it: a truncated source also ends with
+/// `DataExhausted`); it is what proves an epoch finished before the next one starts.
+pub struct EpochSource<I> {
+    pub batches: I,
+    pub count: u64,
+}
+
+/// Run every epoch of `cfg.epochs`, one [`train`] call each, from `resume` (or the start) to the
+/// last. Epoch `e`'s data is `source(e)`, drawn by the caller from (seed, `e`); between epochs the
+/// epoch-end checkpoint is read back and moved on with [`ResumeState::advance_to_epoch`], so the
+/// step count, the moments, the loss log and the consumed digest continue and the schedule (whose
+/// `total_steps` covers all epochs) is one cosine over the run, never restarted. A resume
+/// checkpoint from the middle of epoch `k` continues into epoch `k` and on to the end; one cut at
+/// the very end of an epoch moves straight on to the next.
+///
+/// The wall-clock cap is the run's: each epoch gets what the earlier ones left. The ETA rule is
+/// refused for more than one epoch (its projection is over one process's steps and one cap), and
+/// so is a run with no checkpoint policy (the epoch-end checkpoint is how the model crosses an
+/// epoch). A run that stops early (`WallClockCap`, `EtaRule`) returns that epoch's result, whose
+/// checkpoint resumes it. The result is the last epoch's, its micro-batch and position counters
+/// and wall clock summed over the epochs this call ran. An epoch-end checkpoint the next epoch
+/// has superseded is removed.
+pub fn train_epochs<P, O, I, F>(
+    provider: &mut P,
+    objective: &mut O,
+    mut source: F,
+    cfg: &TrainConfig,
+    clock: &dyn Clock,
+    resume: Option<ResumeState>,
+    hooks: &mut Hooks<'_>,
+) -> Result<TrainResult, TrainError>
+where
+    P: StepProvider,
+    O: Objective,
+    I: IntoIterator<Item = Result<O::Batch, TrainError>>,
+    F: FnMut(u64) -> Result<EpochSource<I>, TrainError>,
+{
+    if cfg.epochs == 0 {
+        return Err(TrainError::Refused(
+            "a run has at least one epoch, got 0".into(),
+        ));
+    }
+    if cfg.epoch != 0 {
+        return Err(TrainError::Refused(format!(
+            "train_epochs owns the epoch and starts a fresh run at 0 (a resume carries its own), \
+             got epoch {}",
+            cfg.epoch
+        )));
+    }
+    if cfg.epochs > 1 {
+        if cfg.eta.is_some() {
+            return Err(TrainError::Refused(
+                "the ETA rule projects one process's steps against one cap and is not defined \
+                 across epochs; give no rule for a run of more than one epoch"
+                    .into(),
+            ));
+        }
+        if cfg.checkpoint.is_none() {
+            return Err(TrainError::Refused(
+                "a run of more than one epoch needs a checkpoint policy: the epoch-end checkpoint \
+                 is how the model and optimizer cross into the next epoch"
+                    .into(),
+            ));
+        }
+    }
+    let mut run_clock = RunClock::start(clock, cfg.cap)?;
+    let mut state = resume;
+    let mut epoch = state.as_ref().map_or(0, |r| r.epoch);
+    if epoch >= cfg.epochs {
+        return Err(TrainError::Refused(format!(
+            "the checkpoint is at epoch {epoch} of a run of {} epoch(s)",
+            cfg.epochs
+        )));
+    }
+    let mut micro_batches = 0u64;
+    let mut counts = BatchCounts::default();
+    // The epoch-end checkpoint the epoch now running started from; removed once it has a successor.
+    let mut crossed: Option<PathBuf> = None;
+    loop {
+        let EpochSource { batches, count } = source(epoch)?;
+        if let Some(s) = &state
+            && s.next_index == count
+            && epoch + 1 < cfg.epochs
+        {
+            // Cut exactly at an epoch's end: nothing of this epoch is left to train.
+            let dir = s.dir.clone();
+            state = state
+                .take()
+                .map(|s| s.advance_to_epoch(epoch + 1, count))
+                .transpose()?;
+            crossed = Some(dir);
+            epoch += 1;
+            continue;
+        }
+        let mut epoch_cfg = cfg.clone();
+        epoch_cfg.epoch = epoch;
+        let elapsed = run_clock.elapsed_s()?;
+        if elapsed > 0.0 {
+            epoch_cfg.cap = WallClockCap::new(cfg.cap.cap_s() - elapsed)?;
+        }
+        let mut result = train(
+            provider,
+            objective,
+            batches,
+            &epoch_cfg,
+            clock,
+            state.take(),
+            hooks,
+        )?;
+        micro_batches += result.micro_batches;
+        counts.add(&result.counts);
+        result.micro_batches = micro_batches;
+        result.counts = counts;
+        result.wall_clock_s = run_clock.elapsed_s()?;
+        if let (Some(old), Some(new), Some(policy)) =
+            (&crossed, &result.final_checkpoint, &cfg.checkpoint)
+            && old != new
+            && old.parent() == Some(policy.dir.as_path())
+        {
+            fs::remove_dir_all(old).map_err(|e| io(old, e))?;
+        }
+        if epoch + 1 == cfg.epochs || result.termination != Termination::DataExhausted {
+            if result.termination == Termination::StepsExhausted && epoch + 1 < cfg.epochs {
+                return Err(TrainError::Refused(format!(
+                    "the schedule's {} steps ended inside epoch {epoch} of {}: its total_steps \
+                     must cover every epoch",
+                    cfg.schedule.total_steps(),
+                    cfg.epochs
+                )));
+            }
+            return Ok(result);
+        }
+        if run_clock.expired()? {
+            result.termination = Termination::WallClockCap;
+            return Ok(result);
+        }
+        let Some(ckpt) = result.final_checkpoint.clone() else {
+            return Err(TrainError::Refused(format!(
+                "epoch {epoch} wrote no checkpoint to carry into epoch {}",
+                epoch + 1
+            )));
+        };
+        state = Some(ResumeState::read(&ckpt)?.advance_to_epoch(epoch + 1, count)?);
+        crossed = Some(ckpt);
+        epoch += 1;
+    }
 }
 
 /// sha256 over every parameter's f32 bytes (provider entries, then host entries, each with its
@@ -996,6 +1182,7 @@ pub fn parameters_digest<P: StepProvider>(
 
 struct CheckpointBody<'a> {
     epoch: u64,
+    epochs: u64,
     next_index: u64,
     optimizer_step: u64,
     seed: u64,
@@ -1113,6 +1300,9 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
             ))
         })
         .transpose()?;
+    // Only a run of several epochs records its count: a one-epoch body is byte-for-byte what it
+    // was before epochs existed.
+    let epochs_json = (body.epochs > 1).then(|| ("epochs", Value::from(body.epochs)));
     let body_json = obj([
         ("format", Value::from(CHECKPOINT_FORMAT)),
         ("epoch", Value::from(body.epoch)),
@@ -1172,7 +1362,8 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         ),
     ]
     .into_iter()
-    .chain(epoch_link_json))?;
+    .chain(epoch_link_json)
+    .chain(epochs_json))?;
     write_synced(
         &staging.join("trainer.json"),
         dumps(&body_json, CANONICAL)?.as_bytes(),
@@ -1256,6 +1447,12 @@ impl ResumeState {
             digest: self.consumed_digest.clone(),
             n: self.epoch_link.as_ref().map_or(0, |l| l.n) + self.next_index,
         };
+        if epoch >= self.epochs {
+            return Err(TrainError::Refused(format!(
+                "the run has {} epoch(s); epoch {epoch} is past its last",
+                self.epochs
+            )));
+        }
         self.consumed_digest = link.prefix().hexdigest();
         self.epoch_link = Some(link);
         self.epoch = epoch;
@@ -1438,9 +1635,25 @@ impl ResumeState {
                 if epoch_link.is_some() { "an" } else { "no" }
             )));
         }
+        let epochs = match v.get("epochs") {
+            None => 1,
+            Some(e) => e.as_u64().filter(|&e| e > 1).ok_or_else(|| {
+                TrainError::Refused(format!(
+                    "{}: \"epochs\" is {e}; a checkpoint records it only for a run of more than one",
+                    p.display()
+                ))
+            })?,
+        };
+        if epoch >= epochs {
+            return Err(TrainError::Refused(format!(
+                "{}: epoch {epoch} of a run of {epochs} epoch(s)",
+                p.display()
+            )));
+        }
         let state = Self {
             dir: ckpt_dir.to_path_buf(),
             epoch,
+            epochs,
             epoch_link,
             next_index: as_u64(&v, "next_index", p)?,
             optimizer_step: as_u64(&v, "optimizer_step", p)?,
