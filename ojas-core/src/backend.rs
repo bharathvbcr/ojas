@@ -673,7 +673,9 @@ pub trait Backend {
 
     /// `grad_input` of [`Backend::linear_backward`] alone, for a frozen
     /// weight: the same operands and the same bits, with no weight
-    /// gradient. `input` supplies the shape and dtype checks only.
+    /// gradient. `input` is not read by the product, but it is checked
+    /// (shape, dtype, finiteness) exactly as the full path checks it, so
+    /// both return the same verdict.
     ///
     /// The default runs `linear_backward` and drops the weight gradient,
     /// so every backend answers it correctly; CPU and Metal override it
