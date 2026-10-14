@@ -39,6 +39,7 @@
 //! 7. Every method fails closed: a refusal is an `Err`, and nothing moves after an `Err` from
 //!    `adamw_step` is returned before its first write.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// One parameter-table entry: its name and its shape, as the model's reference implementation
@@ -190,20 +191,29 @@ impl AdamWHyper {
 /// returns a block of the same shape.
 pub type HiddenGrad<'a> = dyn FnMut(&[u32], &[f32]) -> Result<Vec<f32>, StepError> + 'a;
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StepError {
     /// The caller asked for something the contract above does not allow.
-    #[error("refused: {0}")]
     Contract(String),
     /// The provider cannot do this at all (for example a per-entry learning rate).
-    #[error("unsupported: {0}")]
     Unsupported(String),
     /// The provider's backend failed.
-    #[error("backend: {0}")]
     Backend(String),
-    #[error("io: {0}")]
     Io(String),
 }
+
+impl fmt::Display for StepError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Contract(m) => write!(f, "refused: {m}"),
+            Self::Unsupported(m) => write!(f, "unsupported: {m}"),
+            Self::Backend(m) => write!(f, "backend: {m}"),
+            Self::Io(m) => write!(f, "io: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for StepError {}
 
 /// A model a training loop can drive one sequence at a time. See the module docs for the
 /// contract every method is held to.

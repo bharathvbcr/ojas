@@ -16,6 +16,8 @@
 //! warmup half still matches bit for bit; the cosine half is glibc's and is compared there only
 //! if the fixture is regenerated on that host.
 
+use std::fmt;
+
 use serde_json::Value;
 
 use crate::pyjson::{PyJsonError, float, obj};
@@ -23,16 +25,26 @@ use crate::pyjson::{PyJsonError, float, obj};
 /// `run_control.MAX_LOSS_POINTS`: one loss point per optimizer step bounds the schedule too.
 pub const MAX_LOSS_POINTS: u64 = 5_000_000;
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScheduleError {
-    #[error("{0}")]
     Invalid(String),
-    #[error(
-        "step {step} is past the end of a {total}-step schedule. The loop and the schedule \
-         disagree about how long this run is; that is a bug in one of them, not a rate to clamp."
-    )]
     PastEnd { step: u64, total: u64 },
 }
+
+impl fmt::Display for ScheduleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(m) => f.write_str(m),
+            Self::PastEnd { step, total } => write!(
+                f,
+                "step {step} is past the end of a {total}-step schedule. The loop and the schedule \
+                 disagree about how long this run is; that is a bug in one of them, not a rate to clamp."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScheduleError {}
 
 /// Linear warmup, then cosine decay to `min_lr`.
 #[derive(Debug, Clone, Copy, PartialEq)]

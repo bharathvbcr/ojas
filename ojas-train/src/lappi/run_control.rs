@@ -14,9 +14,10 @@
 //!   the repo's canonical digest of a tensor set, which pins the span-head init file
 //!   (Amendment 2 (iv); `tests/head_init.rs` checks them against Python's own functions).
 //!
-//! The consumed-batch digest (`ConsumedPrefix`) has one owner, beside the `Batch` it folds:
-//! [`crate::shards::ConsumedPrefix`].
+//! The consumed-batch digest ([`ConsumedPrefix`]) is here too; only the shard-specific folding
+//! of a `Batch` (`ConsumedPrefix::fold_batch`) lives beside the `Batch`, in `shards`.
 
+use std::fmt;
 use std::time::Instant;
 
 use sha2::{Digest, Sha256};
@@ -31,17 +32,27 @@ pub const MAX_CAP_S: f64 = 40.0 * 3600.0;
 /// `real_ft_run.WALL_CLOCK_CAP_S`, the cap a run carries when none is given.
 pub const DEFAULT_CAP_S: f64 = 1_800.0;
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RunControlError {
-    #[error("{0}")]
     Invalid(String),
-    #[error(
-        "the clock went backwards: {now}s elapsed now against {high_water}s already observed. \
-         Clamping the difference away would extend the cap by the size of the step back; fix \
-         the clock, the cap cannot be trusted until you do."
-    )]
     ClockBackwards { now: f64, high_water: f64 },
 }
+
+impl fmt::Display for RunControlError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(m) => f.write_str(m),
+            Self::ClockBackwards { now, high_water } => write!(
+                f,
+                "the clock went backwards: {now}s elapsed now against {high_water}s already observed. \
+                 Clamping the difference away would extend the cap by the size of the step back; fix \
+                 the clock, the cap cannot be trusted until you do."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RunControlError {}
 
 /// The hard stop: positive, finite, at most [`MAX_CAP_S`]. There is no value meaning "no cap".
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -270,6 +281,72 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     s
 }
 
+/// `run_control.ConsumedPrefix.DOMAIN`.
+pub const CONSUMED_PREFIX_DOMAIN: &[u8] = b"qd-consumed-prefix-v1";
+/// Rust-only (Python's trainer has one epoch): the tag between the domain and the earlier
+/// epoch's digest in [`ConsumedPrefix::continuing`].
+const CONSUMED_PREFIX_EPOCH_LINK: &[u8] = b"qd-consumed-prefix-epoch-link-v1";
+
+/// `run_control.ConsumedPrefix`: a running sha256 over the batches consumed, in order. What
+/// one batch folds is the caller's (`ConsumedPrefix::fold_batch` for a shard `Batch`).
+#[derive(Clone)]
+pub struct ConsumedPrefix {
+    hasher: Sha256,
+    n: u64,
+}
+
+impl Default for ConsumedPrefix {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConsumedPrefix {
+    /// An empty prefix, seeded with the domain string.
+    pub fn new() -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(CONSUMED_PREFIX_DOMAIN);
+        Self { hasher, n: 0 }
+    }
+
+    /// A prefix that continues an earlier epoch's: seeded with the domain string, then the
+    /// earlier digest (length-prefixed) and its fold count, so the digest of a second epoch
+    /// commits to everything the first consumed and `n_folded` counts across epochs. Epoch 0
+    /// never calls this, so its digest is `new()`'s and the Python oracle's.
+    pub fn continuing(prior_digest: &str, prior_n: u64) -> Self {
+        let mut prefix = Self::new();
+        prefix.hasher.update(CONSUMED_PREFIX_EPOCH_LINK);
+        prefix
+            .hasher
+            .update((prior_digest.len() as u64).to_be_bytes());
+        prefix.hasher.update(prior_digest.as_bytes());
+        prefix.n = prior_n;
+        prefix
+    }
+
+    /// `ConsumedPrefix.fold(*parts)`: every part length-prefixed, the count first.
+    pub fn fold(&mut self, parts: &[&[u8]]) {
+        let mut head = vec![0u8];
+        head.extend_from_slice(&(parts.len() as u32).to_be_bytes());
+        self.hasher.update(&head);
+        for p in parts {
+            self.hasher.update((p.len() as u64).to_be_bytes());
+            self.hasher.update(p);
+        }
+        self.n += 1;
+    }
+
+    /// Batches folded.
+    pub fn n_folded(&self) -> u64 {
+        self.n
+    }
+
+    /// The digest so far.
+    pub fn hexdigest(&self) -> String {
+        hex(&self.hasher.clone().finalize())
+    }
+}
+
 /// `run_control._TENSOR_REF_DOMAIN`.
 pub const TENSOR_REF_DOMAIN: &[u8] = b"qd-tensor-ref-v1";
 /// `run_control._SIDECAR_DOMAIN`.
@@ -361,6 +438,21 @@ fn unhex32(s: &str) -> Option<[u8; 32]> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn an_empty_prefix_has_a_real_digest() {
+        let empty = ConsumedPrefix::new().hexdigest();
+        assert_eq!(empty.len(), 64);
+        let mut one = ConsumedPrefix::new();
+        one.fold(&[b"ab"]);
+        let mut two = ConsumedPrefix::new();
+        two.fold(&[b"a", b"b"]);
+        assert_ne!(
+            one.hexdigest(),
+            two.hexdigest(),
+            "parts are length-prefixed"
+        );
+    }
 
     struct Fake(Cell<f64>);
     impl Clock for Fake {

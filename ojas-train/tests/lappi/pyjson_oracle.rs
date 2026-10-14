@@ -8,8 +8,8 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use qd_train::ledger::isoformat_utc;
 use qd_train::pyjson::{CANONICAL, CANONICAL_ASCII, dumps, float, float_hex, float_repr, obj};
+use qd_train::run_control::ConsumedPrefix;
 use qd_train::run_control::{LossLog, LossPoint};
-use qd_train::shards::ConsumedPrefix;
 use serde_json::Value;
 
 #[test]

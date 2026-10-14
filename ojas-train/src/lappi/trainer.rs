@@ -29,6 +29,7 @@
 //! checkpoint that resumes the exact trajectory (the consumed digest of the skipped prefix must
 //! match), and the three termination reasons.
 
+use std::fmt;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -40,9 +41,10 @@ use serde_json::Value;
 
 use crate::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
 use crate::recipe::{self, OptimizerRecipe};
-use crate::run_control::{Clock, LossLog, LossPoint, RunClock, RunControlError, WallClockCap, hex};
+use crate::run_control::{
+    Clock, ConsumedPrefix, LossLog, LossPoint, RunClock, RunControlError, WallClockCap, hex,
+};
 use crate::schedule::{LrSchedule, ScheduleError};
-use crate::shards::ConsumedPrefix;
 use crate::step::{
     AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider,
 };
@@ -55,24 +57,69 @@ pub const MAX_GRAD_ACCUM: u32 = 4096;
 /// would have to guess them.
 pub const CHECKPOINT_FORMAT: &str = "qd-train-checkpoint-v2";
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TrainError {
     /// `TrainerContractViolation`: the run was asked to do something its contract forbids.
-    #[error("refused: {0}")]
     Refused(String),
     /// A non-finite loss or gradient norm. The step it belongs to was not applied.
-    #[error("non-finite: {0}")]
     NonFinite(String),
-    #[error(transparent)]
-    Step(#[from] StepError),
-    #[error(transparent)]
-    Schedule(#[from] ScheduleError),
-    #[error(transparent)]
-    RunControl(#[from] RunControlError),
-    #[error(transparent)]
-    Json(#[from] PyJsonError),
-    #[error("io: {0}")]
+    Step(StepError),
+    Schedule(ScheduleError),
+    RunControl(RunControlError),
+    Json(PyJsonError),
     Io(String),
+}
+
+impl fmt::Display for TrainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refused(m) => write!(f, "refused: {m}"),
+            Self::NonFinite(m) => write!(f, "non-finite: {m}"),
+            Self::Step(e) => e.fmt(f),
+            Self::Schedule(e) => e.fmt(f),
+            Self::RunControl(e) => e.fmt(f),
+            Self::Json(e) => e.fmt(f),
+            Self::Io(m) => write!(f, "io: {m}"),
+        }
+    }
+}
+
+/// The wrapped errors were `#[error(transparent)]`: `source()` is the inner error's own
+/// source, not the inner error.
+impl std::error::Error for TrainError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Step(e) => e.source(),
+            Self::Schedule(e) => e.source(),
+            Self::RunControl(e) => e.source(),
+            Self::Json(e) => e.source(),
+            Self::Refused(_) | Self::NonFinite(_) | Self::Io(_) => None,
+        }
+    }
+}
+
+impl From<StepError> for TrainError {
+    fn from(e: StepError) -> Self {
+        Self::Step(e)
+    }
+}
+
+impl From<ScheduleError> for TrainError {
+    fn from(e: ScheduleError) -> Self {
+        Self::Schedule(e)
+    }
+}
+
+impl From<RunControlError> for TrainError {
+    fn from(e: RunControlError) -> Self {
+        Self::RunControl(e)
+    }
+}
+
+impl From<PyJsonError> for TrainError {
+    fn from(e: PyJsonError) -> Self {
+        Self::Json(e)
+    }
 }
 
 fn io(path: &Path, e: impl std::fmt::Display) -> TrainError {
@@ -86,7 +133,7 @@ pub trait ConsumedBatch {
     fn index(&self) -> u64;
 
     /// Fold this batch into `prefix` exactly as `trainer._fold` does, so the digest is the one
-    /// Python computes over the same batch: for a real [`crate::shards::Batch`],
+    /// Python computes over the same batch: for a real shard `Batch`,
     /// [`ConsumedPrefix::fold_batch`]; for anything else, one call to [`ConsumedPrefix::fold`]
     /// with the parts `[index (8 bytes BE), bucket (8 bytes BE), tokens, lengths, slot_kind,
     /// target_index, span_target, line_starts]`, each array as its numpy buffer's bytes (C
@@ -158,7 +205,7 @@ pub struct MicroLoss {
 
 /// What the loop trains toward: how a batch becomes sequence jobs, the loss outside the model,
 /// and how the micro-batch's loss is formed. Lappi's letter + span objective is
-/// [`crate::objective::LetterSpanObjective`].
+/// `LetterSpanObjective` (the `objective` module).
 pub trait Objective {
     type Batch: ConsumedBatch;
 

@@ -25,8 +25,9 @@
 //! [`float_hex`] / [`float_fromhex`] carry floats as bits. `tests/pyjson_oracle.rs` checks
 //! every one against what `tools/qd_train_oracle_trainer.py` dumped from Python itself.
 
+use std::fmt;
+
 use serde_json::{Map, Number, Value};
-use thiserror::Error;
 
 /// How `json.dumps` was called.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,22 +68,37 @@ pub const CANONICAL_ASCII: DumpOptions = DumpOptions {
 };
 
 /// A value Python's `json.dumps` would format in a way this port cannot reproduce exactly.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PyJsonError {
     /// A number serde_json holds as neither `i64`, `u64` nor a finite `f64`.
-    #[error("number {0} has no exact Python json.dumps rendering in this port")]
     UnrepresentableNumber(String),
     /// A float that is not finite: Python would write a bare `NaN`/`Infinity`, which is not
     /// JSON, and `float.hex` would write `nan`/`inf`.
-    #[error("{0} is not finite: Python would write it as a bare NaN/Infinity, which is not JSON")]
     NonFinite(String),
     /// An object built with the same key twice: the later value would win silently.
-    #[error("key {0:?} given twice")]
     DuplicateKey(String),
     /// A string that is not the 13-hex-digit form `float.hex()` writes.
-    #[error("{0:?} is not a float.hex() string")]
     NotFloatHex(String),
 }
+
+impl fmt::Display for PyJsonError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnrepresentableNumber(n) => write!(
+                f,
+                "number {n} has no exact Python json.dumps rendering in this port"
+            ),
+            Self::NonFinite(v) => write!(
+                f,
+                "{v} is not finite: Python would write it as a bare NaN/Infinity, which is not JSON"
+            ),
+            Self::DuplicateKey(k) => write!(f, "key {k:?} given twice"),
+            Self::NotFloatHex(s) => write!(f, "{s:?} is not a float.hex() string"),
+        }
+    }
+}
+
+impl std::error::Error for PyJsonError {}
 
 /// An object from `(key, value)` pairs, refusing a repeated key rather than letting the later
 /// value win silently.

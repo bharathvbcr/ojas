@@ -210,7 +210,7 @@ pub fn open_and_drain(
 
 use qd_train::objective::{FtBatch, LetterTarget, SpanHead};
 use qd_train::pyjson::float_fromhex;
-use qd_train::shards::ConsumedPrefix;
+use qd_train::run_control::ConsumedPrefix;
 use qd_train::step::ParamSpec;
 use qd_train::trainer::{ConsumedBatch, HostParams, TrainError};
 
