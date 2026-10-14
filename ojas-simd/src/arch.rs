@@ -632,12 +632,112 @@ pub(crate) fn split_nanolab_head_pairs_append(src: &[f32], dst: &mut Vec<f32>) {
     }
 }
 
-/// One disjoint time-row band of [`split_nanolab_token_range`].
-///
-/// `write` stores `count` tokens starting at `begin`. Dropping the band
-/// stores nothing. Two bands from one split do not share a destination lane.
+/// Where a worker band is in its life. `Pending` is the only state a band
+/// can be written from; every other state is final once left, except that
+/// `Running` ends in `Done` or `Failed`.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-pub struct NanolabTokenBand {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BandState {
+    /// Not started. A write may still begin.
+    Pending,
+    /// A write is storing lanes. The scope must not end until it finishes.
+    Running,
+    /// Every lane of the band is stored.
+    Done,
+    /// The scope ended first. A late write stores nothing.
+    Cancelled,
+    /// The write unwound part way. Its lanes are not all stored.
+    Failed,
+}
+
+/// The shared state of one worker band. It holds no pointer, so it is
+/// ordinary `Send + Sync` data that may outlive the call.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub(crate) struct BandCell {
+    state: std::sync::Mutex<BandState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+impl BandCell {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(BandState::Pending),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BandState> {
+        // The state is a plain enum that every writer leaves valid, so a
+        // poisoned lock still holds a meaningful value.
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn set(&self, to: BandState) {
+        *self.lock() = to;
+        self.changed.notify_all();
+    }
+
+    /// Run `store` only if the band is still `Pending`. It is `Running`
+    /// while `store` runs, `Done` if it returns and `Failed` if it unwinds.
+    /// Returns whether `store` ran.
+    pub(crate) fn run(&self, store: impl FnOnce()) -> bool {
+        {
+            let mut state = self.lock();
+            if *state != BandState::Pending {
+                return false;
+            }
+            *state = BandState::Running;
+        }
+        struct Unwound<'a>(&'a BandCell);
+        impl Drop for Unwound<'_> {
+            fn drop(&mut self) {
+                self.0.set(BandState::Failed);
+            }
+        }
+        let unwound = Unwound(self);
+        store();
+        std::mem::forget(unwound);
+        self.set(BandState::Done);
+        true
+    }
+
+    /// End the scope: a `Pending` band becomes `Cancelled` without waiting,
+    /// a `Running` band is waited for. Returns the state left behind, which
+    /// is `Done`, `Cancelled` or `Failed`.
+    pub(crate) fn close(&self) -> BandState {
+        let mut state = self.lock();
+        if *state == BandState::Pending {
+            *state = BandState::Cancelled;
+        }
+        while *state == BandState::Running {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *state
+    }
+}
+
+/// Ends a [`BandCell`] when `with_nanolab_token_bands` leaves, by return or
+/// by unwind, so no worker write is running or can start afterwards.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub(crate) struct BandScope(pub(crate) std::sync::Arc<BandCell>);
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+impl Drop for BandScope {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
+/// The raw ends of one band: where its tokens are read and stored.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[derive(Clone, Copy)]
+struct BandSpan {
     src: *const f32,
     dst: *mut f32,
     begin: usize,
@@ -645,37 +745,120 @@ pub struct NanolabTokenBand {
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-impl NanolabTokenBand {
+impl BandSpan {
+    /// # Safety
+    ///
+    /// `src` must be readable for the whole batch and `dst` writable for it,
+    /// for as long as this call runs, and no other write may touch this
+    /// span's destination lanes meanwhile.
+    unsafe fn store(self) {
+        // SAFETY: the caller's contract. Neon is enabled on the target.
+        unsafe { split_nanolab_token_range(self.src, self.dst, self.begin, self.count) }
+    }
+}
+
+/// The caller's band of one [`crate::with_nanolab_token_bands`] call.
+///
+/// `'band` is a brand: it is chosen by the call, not the caller, so the
+/// band cannot be kept after `body` returns, and the
+/// [`NanolabBandWritten`] that [`Self::write`] returns names this band's
+/// call alone. Dropping the band stores nothing.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub struct NanolabCallerBand<'band> {
+    span: BandSpan,
+    // Invariant in `'band`, so the brand cannot be shortened or lengthened
+    // to match another call's.
+    brand: std::marker::PhantomData<fn(&'band ()) -> &'band ()>,
+}
+
+/// Proof that a [`NanolabCallerBand`] stored every lane of its tokens.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub struct NanolabBandWritten<'band> {
+    brand: std::marker::PhantomData<fn(&'band ()) -> &'band ()>,
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+impl<'band> NanolabCallerBand<'band> {
     pub(crate) fn new(src: *const f32, dst: *mut f32, begin: usize, count: usize) -> Self {
         Self {
-            src,
-            dst,
-            begin,
-            count,
+            span: BandSpan {
+                src,
+                dst,
+                begin,
+                count,
+            },
+            brand: std::marker::PhantomData,
         }
     }
 
-    /// Store this band. The 8×8 body is [`transpose_8x8_block`].
-    pub fn write(self) {
-        // SAFETY: `with_nanolab_token_bands` checked the full batch, the
-        // spare capacity, and that the two bands partition `0..1024`. Neon
-        // is enabled on the range function. This consumes the band.
-        unsafe {
-            split_nanolab_token_range(self.src, self.dst, self.begin, self.count);
+    /// Store this band on the calling thread. The 8x8 body is
+    /// [`transpose_8x8_block`].
+    pub fn write(self) -> NanolabBandWritten<'band> {
+        // SAFETY: the brand ties this band to `body`, which
+        // `with_nanolab_token_bands` runs while it holds the `&mut Vec`
+        // and the `&[f32]` it checked. It checked the batch, the spare
+        // capacity and that the two bands partition `0..1024`, so this
+        // band's destination lanes are its own. This consumes the band.
+        unsafe { self.span.store() };
+        NanolabBandWritten {
+            brand: std::marker::PhantomData,
         }
     }
 }
 
-// SAFETY: `write` only reads `src` and writes this band's tokens. The two
-// bands built for one call partition the 1024 tokens, so their destination
-// ranges are disjoint. The caller joins a worker holding a band before the
-// destination is freed or reallocated.
+/// The worker's band of one [`crate::with_nanolab_token_bands`] call.
+///
+/// It may move to another thread and outlive the call. Past the call
+/// [`Self::write`] stores nothing: the call ends the band first, and a
+/// write only starts from the `Pending` state. Dropping the band stores
+/// nothing.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-unsafe impl Send for NanolabTokenBand {}
+pub struct NanolabWorkerBand {
+    span: BandSpan,
+    cell: std::sync::Arc<BandCell>,
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+impl NanolabWorkerBand {
+    pub(crate) fn new(
+        span_of: (*const f32, *mut f32, usize, usize),
+        cell: std::sync::Arc<BandCell>,
+    ) -> Self {
+        let (src, dst, begin, count) = span_of;
+        Self {
+            span: BandSpan {
+                src,
+                dst,
+                begin,
+                count,
+            },
+            cell,
+        }
+    }
+
+    /// Store this band if its call is still running, and do nothing if the
+    /// call has ended. Returns whether the band was stored.
+    pub fn write(self) -> bool {
+        // SAFETY: `run` calls this only while the band is `Pending` and then
+        // marks it `Running`. The scope's `close` does not return while a
+        // band is `Running`, and a `Pending` band it finds is `Cancelled`
+        // and never runs. So the spans' pointers are live for this call, as
+        // in `NanolabCallerBand::write`, and the bands partition `0..1024`.
+        self.cell.run(|| unsafe { self.span.store() })
+    }
+}
+
+// SAFETY: the raw pointers in `span` are dereferenced only inside
+// `BandCell::run`, which `BandScope` outwaits, so a band sent to another
+// thread cannot touch freed memory. The two bands of one call store
+// disjoint lanes and only read `src`.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+unsafe impl Send for NanolabWorkerBand {}
 
 /// Grow `dst` by `n` after both bands have stored their lanes.
 ///
-/// The caller has written `n` initialized floats into spare capacity.
+/// The caller has seen a [`NanolabBandWritten`] and the worker band `Done`:
+/// `n` initialized floats are in spare capacity.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub(crate) fn commit_nanolab_spare(dst: &mut Vec<f32>, n: usize) {
     debug_assert!(dst.capacity() - dst.len() >= n);
@@ -1189,16 +1372,28 @@ fn chunk_overlaps(a: *const f32, a_len: usize, b: *mut f32, b_len: usize) -> boo
     a0 < b1 && b0 < a1
 }
 
+/// Every source slice is `len` long.
+fn check_sources(srcs: &[&[f32]], len: usize) -> Result<(), SimdError> {
+    match srcs.iter().find(|src| src.len() != len) {
+        Some(src) => Err(SimdError::OutputLength {
+            output: src.len(),
+            expected: len,
+        }),
+        None => Ok(()),
+    }
+}
+
 /// An `f32` buffer reserved without zero-fill and published only after every
 /// chunk has been stored.
 ///
 /// `try_new` reserves `n` elements and does not write them. Each
-/// [`Self::write_chunk`] hands that chunk to the caller as
-/// `&mut [MaybeUninit<f32>]`. The caller must store every lane before
-/// returning, including a one-element chunk. [`Self::into_vec`] then
-/// [`Vec::set_len`]s, which is the `assume_init` of those lanes. Dropping
-/// the buffer earlier frees the allocation with length 0, so uninitialized
-/// lanes are not read.
+/// [`Self::write_chunk`] (or its `_map` and `_pair_map` forms) stores a value
+/// into every lane of one chunk itself, from a per-lane closure, and marks
+/// the chunk complete only after the last lane. The caller never holds the
+/// uninitialized slice. [`Self::into_vec`] then [`Vec::set_len`]s, which is
+/// the `assume_init` of lanes that were all stored. Dropping the buffer
+/// earlier frees the allocation with length 0, so uninitialized lanes are
+/// not read.
 ///
 /// Chunks must be contiguous, non-overlapping, and cover `0..n` in order.
 /// Two `write_chunk` calls may run at once only on different chunks.
@@ -1255,17 +1450,8 @@ impl ReservedF32 {
         })
     }
 
-    /// Run `write` on chunk `index`. `write` must store an `f32` into every
-    /// lane of the slice before it returns, and must not read a lane first.
-    /// Its return value is this function's `Ok` value.
-    ///
-    /// A second call on the same chunk is [`SimdError::OverlappingOutput`]
-    /// and does not write. An index past the chunk list is
-    /// [`SimdError::OutputLength`] and does not write.
-    pub fn write_chunk<R, F>(&self, index: usize, write: F) -> Result<R, SimdError>
-    where
-        F: FnOnce(&mut [std::mem::MaybeUninit<f32>]) -> R,
-    {
+    /// Claim chunk `index` and return its `(start, len)`.
+    fn claim(&self, index: usize) -> Result<(usize, usize), SimdError> {
         use std::sync::atomic::Ordering;
         let Some(&(start, len)) = self.chunks.get(index) else {
             return Err(SimdError::OutputLength {
@@ -1279,19 +1465,143 @@ impl ReservedF32 {
         {
             return Err(SimdError::OverlappingOutput);
         }
+        Ok((start, len))
+    }
+
+    /// Store `lane(i)` into lane `i` of chunk `index`, for `i` in
+    /// `0..chunk_len`, in order.
+    ///
+    /// This function does the storing, so a chunk is marked complete only
+    /// after every one of its lanes has been written. `lane` cannot read the
+    /// output. If `lane` panics the chunk stays unmarked and
+    /// [`Self::into_vec`] is [`SimdError::Incomplete`].
+    ///
+    /// A second call on the same chunk is [`SimdError::OverlappingOutput`]
+    /// and does not call `lane`. An index past the chunk list is
+    /// [`SimdError::OutputLength`] and does not call `lane`.
+    pub fn write_chunk<F>(&self, index: usize, mut lane: F) -> Result<(), SimdError>
+    where
+        F: FnMut(usize) -> f32,
+    {
+        use std::sync::atomic::Ordering;
+        let (start, len) = self.claim(index)?;
         // SAFETY: this chunk was claimed, so no other call writes it.
         // `start..start+len` lies inside the `n`-element allocation (a
-        // zero-length chunk at `n` is the one-past-end pointer and is not
-        // dereferenced). The slice is `MaybeUninit`, so the caller stores
-        // with `MaybeUninit::write` and this block does not read the lanes.
-        // The pointer is not kept. `into_vec` is what assumes the lanes are
-        // initialized, and only after every chunk has returned from here.
-        let result = unsafe {
-            let p = self.ptr.add(start).cast::<std::mem::MaybeUninit<f32>>();
-            write(std::slice::from_raw_parts_mut(p, len))
-        };
+        // zero-length chunk at `n` is the one-past-end pointer, which is
+        // not written). Each lane is stored once and none is read. The
+        // pointer is not kept. `into_vec` assumes the lanes are initialized
+        // only for chunks marked below, which is after this loop stored all
+        // `len` of them.
+        unsafe {
+            let p = self.ptr.add(start);
+            for i in 0..len {
+                p.add(i).write(lane(i));
+            }
+        }
         self.state[index].store(2, Ordering::Release);
-        Ok(result)
+        Ok(())
+    }
+
+    /// Store `lane([srcs[0][i], srcs[1][i], ..])` into lane `i` of chunk
+    /// `index`: [`Self::write_chunk`] over `K` source slices of the chunk's
+    /// length, which are checked first. Because the lengths are known to be
+    /// equal the per-lane reads need no bounds check, so the loop is the
+    /// same machine code as a zip of the slices.
+    ///
+    /// A source of another length is [`SimdError::OutputLength`] and the
+    /// chunk is not claimed. Otherwise as [`Self::write_chunk`].
+    #[allow(clippy::needless_range_loop)] // `i` indexes every source slice
+    pub fn write_chunk_map<const K: usize, F>(
+        &self,
+        index: usize,
+        srcs: [&[f32]; K],
+        mut lane: F,
+    ) -> Result<(), SimdError>
+    where
+        F: FnMut([f32; K]) -> f32,
+    {
+        use std::sync::atomic::Ordering;
+        let len = self.chunk_len(index)?;
+        check_sources(&srcs, len)?;
+        let (start, len) = self.claim(index)?;
+        // SAFETY: as in `write_chunk`. The sources are `len` long, so
+        // `srcs[j][i]` is in range for `i < len`.
+        unsafe {
+            let p = self.ptr.add(start);
+            for i in 0..len {
+                p.add(i).write(lane(std::array::from_fn(|j| srcs[j][i])));
+            }
+        }
+        self.state[index].store(2, Ordering::Release);
+        Ok(())
+    }
+
+    /// [`Self::write_chunk_map`] into chunk `index` of this buffer and of
+    /// `other` at once: lane `i` of this chunk is `lane(..).0` and lane `i`
+    /// of `other`'s is `lane(..).1`.
+    ///
+    /// `other` must be a different buffer with the same chunk at `index`.
+    /// The same buffer is [`SimdError::OverlappingOutput`] and a different
+    /// chunk is [`SimdError::OutputLength`]; neither calls `lane`. A chunk
+    /// of either buffer that was already claimed is
+    /// [`SimdError::OverlappingOutput`] and nothing stays claimed by this
+    /// call.
+    #[allow(clippy::needless_range_loop)] // `i` indexes every source slice
+    pub fn write_chunk_pair_map<const K: usize, F>(
+        &self,
+        other: &Self,
+        index: usize,
+        srcs: [&[f32]; K],
+        mut lane: F,
+    ) -> Result<(), SimdError>
+    where
+        F: FnMut([f32; K]) -> (f32, f32),
+    {
+        use std::sync::atomic::Ordering;
+        if std::ptr::eq(self, other) {
+            return Err(SimdError::OverlappingOutput);
+        }
+        let len = self.chunk_len(index)?;
+        let other_len = other.chunk_len(index)?;
+        if other.chunks[index] != self.chunks[index] {
+            return Err(SimdError::OutputLength {
+                output: other_len,
+                expected: len,
+            });
+        }
+        check_sources(&srcs, len)?;
+        let (start, len) = self.claim(index)?;
+        if let Err(err) = other.claim(index) {
+            self.state[index].store(0, Ordering::Release);
+            return Err(err);
+        }
+        // SAFETY: as in `write_chunk`, for both buffers. They are distinct
+        // allocations, so the two pointers do not alias, both chunks are
+        // claimed and have this `start` and `len`, and the sources are
+        // `len` long.
+        unsafe {
+            let p = self.ptr.add(start);
+            let q = other.ptr.add(start);
+            for i in 0..len {
+                let (u, v) = lane(std::array::from_fn(|j| srcs[j][i]));
+                p.add(i).write(u);
+                q.add(i).write(v);
+            }
+        }
+        self.state[index].store(2, Ordering::Release);
+        other.state[index].store(2, Ordering::Release);
+        Ok(())
+    }
+
+    /// The length of chunk `index`, without claiming it.
+    fn chunk_len(&self, index: usize) -> Result<usize, SimdError> {
+        self.chunks
+            .get(index)
+            .map(|&(_, len)| len)
+            .ok_or(SimdError::OutputLength {
+                output: index,
+                expected: self.chunks.len(),
+            })
     }
 
     /// The filled vector, or [`SimdError::Incomplete`] if a chunk was not stored.
@@ -1310,9 +1620,10 @@ impl ReservedF32 {
                 expected: self.state.len(),
             });
         }
-        // SAFETY: every chunk's `write` returned, and the contract of
-        // `write_chunk` is that it stored an `f32` into each lane first.
-        // The chunks cover `0..n` without gaps. `capacity >= n`. `f32` has
+        // SAFETY: every chunk is marked 2, and `write_chunk` and
+        // `write_chunk_map` and `write_chunk_pair_map` mark a chunk only after their own loop stored
+        // an `f32` into each of its lanes. The chunks cover `0..n` without
+        // gaps. `capacity >= n`. `f32` has
         // no drop. `set_len` is the `assume_init` of those lanes.
         unsafe { self.data.set_len(self.n) };
         Ok(std::mem::take(&mut self.data))
@@ -1486,4 +1797,77 @@ unsafe fn write_neg_abs_signs(z: *mut f32, signs: *mut u8, n: usize) -> bool {
         i += width;
     }
     true
+}
+
+#[cfg(all(test, target_arch = "aarch64", target_feature = "neon"))]
+mod band_cell_tests {
+    use super::{BandCell, BandScope, BandState};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::{mpsc, Arc};
+
+    #[test]
+    fn a_pending_band_is_cancelled_without_waiting_and_a_late_run_does_nothing() {
+        let cell = BandCell::new();
+        assert_eq!(cell.close(), BandState::Cancelled);
+        let mut ran = false;
+        assert!(!cell.run(|| ran = true));
+        assert!(!ran);
+        assert_eq!(cell.close(), BandState::Cancelled);
+    }
+
+    #[test]
+    fn a_completed_run_is_done_and_runs_once() {
+        let cell = BandCell::new();
+        let mut count = 0;
+        assert!(cell.run(|| count += 1));
+        assert!(!cell.run(|| count += 1));
+        assert_eq!(count, 1);
+        assert_eq!(cell.close(), BandState::Done);
+    }
+
+    #[test]
+    fn a_run_that_unwinds_is_failed_and_does_not_hang_close() {
+        let cell = BandCell::new();
+        let outcome = catch_unwind(AssertUnwindSafe(|| cell.run(|| panic!("store fails"))));
+        assert!(outcome.is_err());
+        assert_eq!(cell.close(), BandState::Failed);
+    }
+
+    #[test]
+    fn close_waits_for_a_running_band() {
+        let cell = Arc::new(BandCell::new());
+        let (started_tx, started) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel::<()>();
+        let worker = {
+            let cell = Arc::clone(&cell);
+            std::thread::spawn(move || {
+                cell.run(|| {
+                    started_tx.send(()).unwrap();
+                    release.recv().unwrap();
+                })
+            })
+        };
+        started.recv().unwrap();
+        let closer = {
+            let cell = Arc::clone(&cell);
+            std::thread::spawn(move || cell.close())
+        };
+        // `close` cannot return while the store is still running.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!closer.is_finished());
+        release_tx.send(()).unwrap();
+        assert!(worker.join().unwrap());
+        assert_eq!(closer.join().unwrap(), BandState::Done);
+    }
+
+    #[test]
+    fn the_scope_guard_ends_the_band_on_unwind() {
+        let cell = Arc::new(BandCell::new());
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _scope = BandScope(Arc::clone(&cell));
+            panic!("body fails");
+        }));
+        assert!(outcome.is_err());
+        assert!(!cell.run(|| unreachable!("a cancelled band never runs")));
+    }
 }

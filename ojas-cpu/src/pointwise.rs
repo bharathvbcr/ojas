@@ -35,7 +35,6 @@
 //! run that logit product again.
 
 use std::borrow::Cow;
-use std::mem::MaybeUninit;
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
 
@@ -225,12 +224,8 @@ fn zeroed_f32(
         }
     };
     let written = scoped::map(exec, chunks.len(), |i| {
-        buf.write_chunk(i, |dst| {
-            for slot in dst {
-                slot.write(0.0);
-            }
-        })
-        .map_err(|err| reserved_refused(op, err))
+        buf.write_chunk(i, |_| 0.0)
+            .map_err(|err| reserved_refused(op, err))
     });
     if let Err(err) = written {
         drop(buf);
@@ -524,7 +519,7 @@ pub(crate) fn silu_backward(
 ///
 /// The operands are read where they are and each value is written once.
 /// The output is reserved without a zero-fill ([`ojas_simd::ReservedF32`]):
-/// [`mul_store`] writes every lane, including a one-element tail, and the
+/// [`zip_chunk`] stores every lane, including a one-element tail, and the
 /// finite test is that stored product. Chunk flags AND-reduce. The vector
 /// is adopted under the `len * 4` charge only when every flag is true. A
 /// refusal drops the buffer and releases the charge. A failed charge does
@@ -589,22 +584,18 @@ pub(crate) fn mul_forward(
         shape,
         pieces,
         reservation,
-        mul_store,
+        mul_lane,
     )
 }
 
-/// Writes `out[i] = f(a[i], b[i])` for every lane; true when every stored
-/// value is finite.
-type ZipStore = fn(&mut [MaybeUninit<f32>], &[f32], &[f32]) -> bool;
-
-/// `store(out, a, b)` over `pieces` chunks of a reserved, never zero-filled
+/// `lane(a[i], b[i])` stored into every lane over `pieces` chunks of a reserved, never zero-filled
 /// output ([`ojas_simd::ReservedF32`]), the chunks on [`scoped`] threads,
 /// adopted under `reservation` (the output's charge) once every chunk's
 /// flag says its stored values are finite. A non-finite value drops the
 /// buffer and the charge and is [`OjasError::NonFinite`]. `store` computes
 /// each value alone, so the bits do not depend on the cut.
 #[allow(clippy::too_many_arguments)]
-fn zip_forward(
+fn zip_forward<L>(
     op: &'static str,
     budget: &Budget,
     exec: Exec<'_>,
@@ -612,8 +603,11 @@ fn zip_forward(
     shape: &[usize],
     pieces: usize,
     reservation: Reservation,
-    store: ZipStore,
-) -> Result<Tensor, OjasError> {
+    lane: L,
+) -> Result<Tensor, OjasError>
+where
+    L: Fn(f32, f32) -> f32 + Sync,
+{
     let n = a.len();
     let bytes = (n as u64) * 4;
     let chunks: Vec<(usize, usize)> = crate::pool::ranges(n, pieces)
@@ -638,7 +632,7 @@ fn zip_forward(
     let flags = match scoped::map(exec, chunks.len(), |i| {
         let (start, len) = chunks[i];
         let end = start + len;
-        buf.write_chunk(i, |dst| store(dst, &a[start..end], &b[start..end]))
+        zip_chunk(&buf, i, &a[start..end], &b[start..end], &lane)
             .map_err(|err| reserved_refused(op, err))
     }) {
         Ok(flags) => flags,
@@ -671,21 +665,32 @@ fn reserved_refused(op: &'static str, err: ojas_simd::SimdError) -> OjasError {
     }
 }
 
-/// `out[i] = a[i] * b[i]`. True only when every stored product is finite.
+/// One lane of a product.
+fn mul_lane(x: f32, y: f32) -> f32 {
+    x * y
+}
+
+/// Store `lane(a[i], b[i])` into every lane of chunk `index`; true only when
+/// every stored value is finite.
 ///
-/// Every lane is stored, including a one-element tail. The finite test is
-/// `p.to_bits() & MAGNITUDE` on the product register that is stored, not a
-/// reload of `out`.
-fn mul_store(out: &mut [MaybeUninit<f32>], a: &[f32], b: &[f32]) -> bool {
-    debug_assert_eq!(out.len(), a.len());
-    debug_assert_eq!(out.len(), b.len());
+/// [`ojas_simd::ReservedF32::write_chunk`] stores each lane, including a
+/// one-element tail, and marks the chunk only after the last. The finite
+/// test is `to_bits() & MAGNITUDE` on the value that is stored, not a
+/// reload of the output.
+fn zip_chunk(
+    buf: &ojas_simd::ReservedF32,
+    index: usize,
+    a: &[f32],
+    b: &[f32],
+    lane: impl Fn(f32, f32) -> f32,
+) -> Result<bool, ojas_simd::SimdError> {
     let mut top = 0u32;
-    for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
-        let p = x * y;
-        o.write(p);
-        top = top.max(p.to_bits() & MAGNITUDE);
-    }
-    top < NON_FINITE
+    buf.write_chunk_map(index, [a, b], |[x, y]| {
+        let v = lane(x, y);
+        top = top.max(v.to_bits() & MAGNITUDE);
+        v
+    })?;
+    Ok(top < NON_FINITE)
 }
 
 /// `(grad_y * b, grad_y * a)` as tensors of `a_shape` and `b_shape` (see
@@ -693,7 +698,7 @@ fn mul_store(out: &mut [MaybeUninit<f32>], a: &[f32], b: &[f32]) -> bool {
 ///
 /// Both outputs are reserved without a zero-fill ([`ojas_simd::ReservedF32`]),
 /// the same adopt path as [`mul_forward`]. Charges are taken before either
-/// buffer is allocated. [`mul_grad_lanes`] stores every lane of both,
+/// buffer is allocated. [`mul_grad_chunk`] stores every lane of both,
 /// including a one-element tail and an empty chunk, and the finite test is
 /// those stored products. Neither vector is adopted unless every chunk flag
 /// is true: a non-finite product drops both buffers and releases both
@@ -816,8 +821,8 @@ pub(crate) fn mul_backward(
     Ok((grad_a, grad_b))
 }
 
-/// Store one chunk of both gradients. Every lane of both slices is written
-/// before this returns.
+/// Store one chunk of both gradients. Every lane of both is stored by
+/// [`ojas_simd::ReservedF32::write_chunk_pair_map`].
 fn mul_grad_chunk(
     buf_a: &ojas_simd::ReservedF32,
     buf_b: &ojas_simd::ReservedF32,
@@ -826,9 +831,16 @@ fn mul_grad_chunk(
     b: &[f32],
     g: &[f32],
 ) -> Result<bool, ojas_simd::SimdError> {
-    buf_a.write_chunk(index, |ga| {
-        buf_b.write_chunk(index, |gb| mul_grad_lanes(ga, gb, a, b, g))
-    })?
+    let mut top = 0u32;
+    buf_a.write_chunk_pair_map(buf_b, index, [a, b, g], |[x, y, gv]| {
+        let pa = gv * y;
+        let pb = gv * x;
+        top = top
+            .max(pa.to_bits() & MAGNITUDE)
+            .max(pb.to_bits() & MAGNITUDE);
+        (pa, pb)
+    })?;
+    Ok(top < NON_FINITE)
 }
 
 /// A simd reserve that failed after the charges were released, or any other
@@ -849,54 +861,14 @@ fn reserved_alloc_err(
     }
 }
 
-/// `ga[i] = g[i] * b[i]` and `gb[i] = g[i] * a[i]`, one read of `g`.
-///
-/// True only when every stored product is finite. Every lane of both outputs
-/// is stored, including a one-element tail. The finite test is
-/// `to_bits() & MAGNITUDE` on the product registers that are stored, not a
-/// reload of either output.
-fn mul_grad_lanes(
-    ga: &mut [MaybeUninit<f32>],
-    gb: &mut [MaybeUninit<f32>],
-    a: &[f32],
-    b: &[f32],
-    g: &[f32],
-) -> bool {
-    debug_assert_eq!(ga.len(), gb.len());
-    debug_assert_eq!(ga.len(), a.len());
-    debug_assert_eq!(ga.len(), b.len());
-    debug_assert_eq!(ga.len(), g.len());
-    let mut top = 0u32;
-    for i in 0..ga.len() {
-        let gv = g[i];
-        let pa = gv * b[i];
-        let pb = gv * a[i];
-        ga[i].write(pa);
-        gb[i].write(pb);
-        top = top
-            .max(pa.to_bits() & MAGNITUDE)
-            .max(pb.to_bits() & MAGNITUDE);
-    }
-    top < NON_FINITE
-}
-
-/// `out[i] = a[i] + b[i]`. True only when every stored sum is finite; the
-/// test is on the stored register, as in [`mul_store`].
+/// One lane of a sum, as [`mul_lane`].
 #[cfg(not(target_os = "macos"))]
-fn add_store(out: &mut [MaybeUninit<f32>], a: &[f32], b: &[f32]) -> bool {
-    debug_assert_eq!(out.len(), a.len());
-    debug_assert_eq!(out.len(), b.len());
-    let mut top = 0u32;
-    for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
-        let s = x + y;
-        o.write(s);
-        top = top.max(s.to_bits() & MAGNITUDE);
-    }
-    top < NON_FINITE
+fn add_lane(x: f32, y: f32) -> f32 {
+    x + y
 }
 
 /// `a + b` off macOS, under both numerics: [`zip_forward`] with
-/// [`add_store`], cut as [`mul_forward`]'s live cut. On Linux x86_64 at
+/// [`add_lane`], cut as [`mul_forward`]'s live cut. On Linux x86_64 at
 /// `[1024, 768]` (bench_ops `add`, min of 20, 2026-10-10) the serial tile
 /// append took 0.565 ms on 4 threads and 0.544 ms on 1; this takes 0.206 ms
 /// and 0.353 ms.
@@ -926,7 +898,7 @@ fn add_zip(
         shape,
         pieces,
         reservation,
-        add_store,
+        add_lane,
     )
 }
 
