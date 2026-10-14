@@ -18,7 +18,7 @@
 
 use serde_json::Value;
 
-use crate::pyjson::{float, obj, PyJsonError};
+use crate::pyjson::{PyJsonError, float, obj};
 
 /// `run_control.MAX_LOSS_POINTS`: one loss point per optimizer step bounds the schedule too.
 pub const MAX_LOSS_POINTS: u64 = 5_000_000;
@@ -45,7 +45,12 @@ pub struct LrSchedule {
 
 impl LrSchedule {
     /// The checks of `LRSchedule.__post_init__`, in its order.
-    pub fn new(peak_lr: f64, total_steps: u64, warmup_steps: u64, min_lr: f64) -> Result<Self, ScheduleError> {
+    pub fn new(
+        peak_lr: f64,
+        total_steps: u64,
+        warmup_steps: u64,
+        min_lr: f64,
+    ) -> Result<Self, ScheduleError> {
         let bad = |m: String| Err(ScheduleError::Invalid(m));
         if !peak_lr.is_finite() {
             return bad(format!("peak_lr must be finite, got {peak_lr}"));
@@ -157,18 +162,33 @@ mod tests {
         assert!(LrSchedule::new(0.0, 10, 1, 0.0).is_err());
         assert!(LrSchedule::new(f64::NAN, 10, 1, 0.0).is_err());
         assert!(LrSchedule::new(1e-5, 10, 1, -1.0).is_err());
-        assert!(LrSchedule::new(1e-5, 10, 1, 1e-4).is_err(), "decays upwards");
+        assert!(
+            LrSchedule::new(1e-5, 10, 1, 1e-4).is_err(),
+            "decays upwards"
+        );
         assert!(LrSchedule::new(1e-5, 0, 0, 0.0).is_err());
-        assert!(LrSchedule::new(1e-5, 10, 10, 0.0).is_err(), "warmup never ends");
+        assert!(
+            LrSchedule::new(1e-5, 10, 10, 0.0).is_err(),
+            "warmup never ends"
+        );
         assert!(LrSchedule::new(1e-5, MAX_LOSS_POINTS + 1, 1, 0.0).is_err());
-        assert!(LrSchedule::new(1e-5, 10, 0, 0.0).is_ok(), "no warmup is a schedule");
+        assert!(
+            LrSchedule::new(1e-5, 10, 0, 0.0).is_ok(),
+            "no warmup is a schedule"
+        );
     }
 
     #[test]
     fn refuses_a_step_past_the_end_rather_than_clamping() {
         let s = LrSchedule::real_ft(1e-5, 20).unwrap();
         assert!(s.lr_at(19).is_ok());
-        assert_eq!(s.lr_at(20), Err(ScheduleError::PastEnd { step: 20, total: 20 }));
+        assert_eq!(
+            s.lr_at(20),
+            Err(ScheduleError::PastEnd {
+                step: 20,
+                total: 20
+            })
+        );
     }
 
     #[test]
@@ -178,7 +198,10 @@ mod tests {
         for steps in [1u64, 2, 19] {
             let s = LrSchedule::real_ft(1e-5, steps);
             if steps == 1 {
-                assert!(s.is_err(), "warmup 1 >= total 1 is refused, as LRSchedule refuses it");
+                assert!(
+                    s.is_err(),
+                    "warmup 1 >= total 1 is refused, as LRSchedule refuses it"
+                );
             } else {
                 assert_eq!(s.unwrap().warmup_steps(), 1);
             }
@@ -187,7 +210,11 @@ mod tests {
         assert_eq!(LrSchedule::real_ft(1e-5, 1505).unwrap().warmup_steps(), 75);
         let s = LrSchedule::real_ft(1e-5, 100).unwrap();
         assert_eq!(s.min_lr(), 1e-5 / 10.0);
-        assert_eq!(s.lr_at(4).unwrap(), 1e-5, "the last warmup step is the peak exactly");
+        assert_eq!(
+            s.lr_at(4).unwrap(),
+            1e-5,
+            "the last warmup step is the peak exactly"
+        );
     }
 
     #[test]
@@ -200,11 +227,17 @@ mod tests {
             assert_eq!(zero.warmup_steps(), default.warmup_steps());
             assert_eq!(zero.min_lr(), 0.0);
             let last = zero.lr_at(steps - 1).unwrap();
-            assert!(last > 0.0, "the last step of a zero floor is still a positive rate");
+            assert!(
+                last > 0.0,
+                "the last step of a zero floor is still a positive rate"
+            );
             assert!(last <= default.lr_at(steps - 1).unwrap());
         }
         assert!(LrSchedule::real_ft_with_floor(1e-5, 200, -1e-9).is_err());
         assert!(LrSchedule::real_ft_with_floor(1e-5, 200, f64::NAN).is_err());
-        assert!(LrSchedule::real_ft_with_floor(1e-5, 200, 2e-5).is_err(), "above the peak");
+        assert!(
+            LrSchedule::real_ft_with_floor(1e-5, 200, 2e-5).is_err(),
+            "above the peak"
+        );
     }
 }

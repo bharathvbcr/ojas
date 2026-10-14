@@ -37,7 +37,10 @@ pub fn qd_data_dir() -> PathBuf {
 /// once every file in it matches `shards-tiny/SHA256SUMS` (checked once per test binary).
 pub fn fixture() -> PathBuf {
     pins::verified(
-        &crate_dir().join("tests").join("fixtures").join("shards-tiny"),
+        &crate_dir()
+            .join("tests")
+            .join("fixtures")
+            .join("shards-tiny"),
         pins::Form::Sha256Sums,
     )
 }
@@ -213,7 +216,10 @@ use qd_train::trainer::{ConsumedBatch, HostParams, TrainError};
 
 /// `tools/qd_train_oracle_trainer.py --out` this file.
 pub fn trainer_oracle() -> serde_json::Value {
-    let path = crate_dir().join("tests").join("fixtures").join("trainer-oracle.json");
+    let path = crate_dir()
+        .join("tests")
+        .join("fixtures")
+        .join("trainer-oracle.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
@@ -351,7 +357,10 @@ impl ToySpanHead {
 
 impl HostParams for ToySpanHead {
     fn entries(&self) -> Vec<ParamSpec> {
-        vec![ParamSpec::new("pointer.weight", &[self.u.len()]), ParamSpec::new("abstain", &[1])]
+        vec![
+            ParamSpec::new("pointer.weight", &[self.u.len()]),
+            ParamSpec::new("abstain", &[1]),
+        ]
     }
 
     fn zero_grads(&mut self) {
@@ -362,7 +371,10 @@ impl HostParams for ToySpanHead {
 
     fn grads(&self) -> Vec<Option<&[f32]>> {
         let r = self.reached;
-        vec![r.then_some(self.gu.as_slice()), r.then_some(self.gb.as_slice())]
+        vec![
+            r.then_some(self.gu.as_slice()),
+            r.then_some(self.gb.as_slice()),
+        ]
     }
 
     fn values(&self) -> Vec<&[f32]> {
@@ -371,7 +383,10 @@ impl HostParams for ToySpanHead {
 
     fn values_and_grads(&mut self) -> Vec<(&mut [f32], Option<&[f32]>)> {
         let r = self.reached;
-        vec![(&mut self.u, r.then_some(self.gu.as_slice())), (&mut self.b, r.then_some(self.gb.as_slice()))]
+        vec![
+            (&mut self.u, r.then_some(self.gu.as_slice())),
+            (&mut self.b, r.then_some(self.gb.as_slice())),
+        ]
     }
 }
 
@@ -405,7 +420,11 @@ impl SpanHead for ToySpanHead {
         let loss = (lse - s[span.start]) + (lse - s[span.end]);
         // d loss / d s_j = 2 softmax_j - [j == start] - [j == end]
         let ds: Vec<f64> = (0..s.len())
-            .map(|j| 2.0 * (s[j] - lse).exp() - f64::from(u8::from(j == span.start)) - f64::from(u8::from(j == span.end)))
+            .map(|j| {
+                2.0 * (s[j] - lse).exp()
+                    - f64::from(u8::from(j == span.start))
+                    - f64::from(u8::from(j == span.end))
+            })
             .collect();
         let sc = f64::from(scale);
         let mut dh = vec![0.0f32; hidden.len()];

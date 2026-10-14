@@ -35,15 +35,17 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::adamw::{adamw_entry_step, EntryState, Moments};
+use crate::adamw::{EntryState, Moments, adamw_entry_step};
 use serde_json::Value;
 
-use crate::pyjson::{dumps, float_fromhex, float_hex, obj, PyJsonError, CANONICAL};
+use crate::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
 use crate::recipe::{self, OptimizerRecipe};
-use crate::run_control::{hex, Clock, LossLog, LossPoint, RunClock, RunControlError, WallClockCap};
+use crate::run_control::{Clock, LossLog, LossPoint, RunClock, RunControlError, WallClockCap, hex};
 use crate::schedule::{LrSchedule, ScheduleError};
 use crate::shards::ConsumedPrefix;
-use crate::step::{AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider};
+use crate::step::{
+    AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider,
+};
 
 /// `run_control.MAX_GRAD_ACCUM`.
 pub const MAX_GRAD_ACCUM: u32 = 4096;
@@ -169,7 +171,13 @@ pub trait Objective {
     /// The outside loss's gradient at sequence `seq` of the batch last planned: `hidden` is
     /// `[positions.len(), width]`, row-major; returns the same shape. Accumulates the host
     /// parameters' own gradients as a side effect.
-    fn hidden_grad(&mut self, seq: usize, positions: &[u32], hidden: &[f32], width: usize) -> Result<Vec<f32>, TrainError>;
+    fn hidden_grad(
+        &mut self,
+        seq: usize,
+        positions: &[u32],
+        hidden: &[f32],
+        width: usize,
+    ) -> Result<Vec<f32>, TrainError>;
 
     /// Close the micro-batch last planned, given the provider's unscaled row-loss sum per
     /// sequence.
@@ -205,7 +213,10 @@ impl Termination {
 
     /// Whether the run ended because it ran out of work, not because it ran out of time.
     pub fn finished(&self) -> bool {
-        matches!(self, Termination::DataExhausted | Termination::StepsExhausted)
+        matches!(
+            self,
+            Termination::DataExhausted | Termination::StepsExhausted
+        )
     }
 }
 
@@ -245,7 +256,13 @@ impl EtaRule {
 
     /// The projected seconds for this process's whole schedule, when the rule is evaluated
     /// after `optimizer_step` steps (only at `at_step`, and only by the process that took it).
-    fn projection(&self, optimizer_step: u64, first_step: u64, total_steps: u64, elapsed_s: f64) -> Option<f64> {
+    fn projection(
+        &self,
+        optimizer_step: u64,
+        first_step: u64,
+        total_steps: u64,
+        elapsed_s: f64,
+    ) -> Option<f64> {
         if optimizer_step != self.at_step || first_step >= self.at_step {
             return None;
         }
@@ -389,7 +406,10 @@ where
         )));
     }
     if !(cfg.max_grad_norm.is_finite() && cfg.max_grad_norm > 0.0) {
-        return Err(TrainError::Refused(format!("max_grad_norm must be positive, got {}", cfg.max_grad_norm)));
+        return Err(TrainError::Refused(format!(
+            "max_grad_norm must be positive, got {}",
+            cfg.max_grad_norm
+        )));
     }
     cfg.optimizer.validate()?;
     if let Some(eta) = &cfg.eta {
@@ -403,7 +423,10 @@ where
         )));
     }
     let entries = provider.parameters().to_vec();
-    let host_entries = objective.host_ref().map(|h| h.entries()).unwrap_or_default();
+    let host_entries = objective
+        .host_ref()
+        .map(|h| h.entries())
+        .unwrap_or_default();
     // Every per-entry number the optimizer uses comes out of this one table (Amendment 2 (ii)).
     let table = recipe::optimizer_table(&entries, &host_entries, &cfg.optimizer)?;
     let (provider_rows, host_rows) = table.split_at(entries.len());
@@ -412,10 +435,15 @@ where
     let host_rows = host_rows.to_vec();
     // One AdamWHyper serves every entry, so eps and the betas must be one value across the table.
     let Some(first) = table.first() else {
-        return Err(TrainError::Refused("the model has no parameters to train".into()));
+        return Err(TrainError::Refused(
+            "the model has no parameters to train".into(),
+        ));
     };
     let (beta1, beta2, eps) = (first.beta1, first.beta2, first.eps);
-    if let Some(e) = table.iter().find(|e| e.beta1 != beta1 || e.beta2 != beta2 || e.eps != eps) {
+    if let Some(e) = table
+        .iter()
+        .find(|e| e.beta1 != beta1 || e.beta2 != beta2 || e.eps != eps)
+    {
         return Err(TrainError::Refused(format!(
             "{} has betas ({}, {}) and eps {} but the step applies ({beta1}, {beta2}) and {eps} to every entry",
             e.name, e.beta1, e.beta2, e.eps
@@ -463,7 +491,9 @@ where
             ));
         }
         if r.host_entries != host_entries {
-            return Err(TrainError::Refused("the checkpoint's host parameters describe a different head".into()));
+            return Err(TrainError::Refused(
+                "the checkpoint's host parameters describe a different head".into(),
+            ));
         }
         provider.load_state(&r.dir.join("provider"))?;
         if provider.step_count() != r.optimizer_step {
@@ -476,7 +506,9 @@ where
         if let Some(h) = objective.host() {
             for ((value, _), saved) in h.values_and_grads().into_iter().zip(&r.host_values) {
                 if value.len() != saved.len() {
-                    return Err(TrainError::Refused("a host tensor changed size since the checkpoint".into()));
+                    return Err(TrainError::Refused(
+                        "a host tensor changed size since the checkpoint".into(),
+                    ));
                 }
                 value.copy_from_slice(saved);
             }
@@ -610,7 +642,9 @@ where
 
         let plan = objective.plan(&batch)?;
         if plan.sequences.is_empty() {
-            return Err(TrainError::Refused(format!("batch {index} planned no sequence")));
+            return Err(TrainError::Refused(format!(
+                "batch {index} planned no sequence"
+            )));
         }
         if first_in_group && let Some(h) = objective.host() {
             h.zero_grads();
@@ -618,7 +652,11 @@ where
         let width = provider.hidden_size();
         let mut row_sums = Vec::with_capacity(plan.sequences.len());
         for (i, seq) in plan.sequences.iter().enumerate() {
-            let mode = if first_in_group { BankMode::Overwrite } else { BankMode::Add };
+            let mode = if first_in_group {
+                BankMode::Overwrite
+            } else {
+                BankMode::Add
+            };
             first_in_group = false;
             let job = SequenceJob {
                 tokens: &seq.tokens,
@@ -640,7 +678,9 @@ where
                     obj.hidden_grad(i, pos, hidden, width).map_err(|e| {
                         let msg = e.to_string();
                         *err = Some(e);
-                        StepError::Contract(format!("the objective's hidden-state loss failed: {msg}"))
+                        StepError::Contract(format!(
+                            "the objective's hidden-state loss failed: {msg}"
+                        ))
                     })
                 };
                 provider.accumulate(&job, mode, Some(&mut ext))
@@ -661,7 +701,9 @@ where
             )));
         }
         if let Some((name, v)) = loss.channels.iter().find(|(_, v)| !v.is_finite()) {
-            return Err(TrainError::NonFinite(format!("non-finite {name} loss {v} at {where_}")));
+            return Err(TrainError::NonFinite(format!(
+                "non-finite {name} loss {v} at {where_}"
+            )));
         }
         group.losses.push(loss.total);
         group.channels.push(loss.channels);
@@ -698,8 +740,9 @@ where
             })
             .unwrap_or(0.0);
         let sq = tower_sq + host_sq;
-        let coef = recipe::clip_coefficient(sq, cfg.max_grad_norm)
-            .map_err(|e| TrainError::NonFinite(format!("at {where_}: {e}; this step was not applied")))?;
+        let coef = recipe::clip_coefficient(sq, cfg.max_grad_norm).map_err(|e| {
+            TrainError::NonFinite(format!("at {where_}: {e}; this step was not applied"))
+        })?;
         let hyper = AdamWHyper {
             lr,
             beta1,
@@ -711,18 +754,27 @@ where
         // Host shapes are checked before the provider moves, so the two halves move together.
         if let Some(h) = objective.host_ref() {
             if h.values().len() != host_rows.len() || host_state.len() != host_rows.len() {
-                return Err(TrainError::Refused("the host parameters no longer match the optimizer table".into()));
+                return Err(TrainError::Refused(
+                    "the host parameters no longer match the optimizer table".into(),
+                ));
             }
             for ((g, v), s) in h.grads().into_iter().zip(h.values()).zip(&host_state) {
                 if g.is_some_and(|g| g.len() != v.len()) || s.moments.m.len() != v.len() {
-                    return Err(TrainError::Refused("a host tensor's gradient or moments do not fit it".into()));
+                    return Err(TrainError::Refused(
+                        "a host tensor's gradient or moments do not fit it".into(),
+                    ));
                 }
             }
         }
         provider.adamw_step(&hyper, t, &lr_scale, &weight_decay)?;
         if let Some(h) = objective.host() {
             // Each host entry steps on its own count, and not at all without a gradient.
-            for (((value, grad), s), row) in h.values_and_grads().into_iter().zip(host_state.iter_mut()).zip(&host_rows) {
+            for (((value, grad), s), row) in h
+                .values_and_grads()
+                .into_iter()
+                .zip(host_state.iter_mut())
+                .zip(&host_rows)
+            {
                 adamw_entry_step(value, grad, s, row, lr, coef)?;
             }
         }
@@ -764,11 +816,19 @@ where
                     channel_log: &channel_log,
                     consumed: &consumed,
                 };
-                last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_state, last_checkpoint.as_deref())?);
+                last_checkpoint = Some(write_checkpoint(
+                    &policy.dir,
+                    &state,
+                    provider,
+                    objective,
+                    &host_state,
+                    last_checkpoint.as_deref(),
+                )?);
             }
         }
         if let Some(eta) = &cfg.eta
-            && let Some(projected) = eta.projection(optimizer_step, first_step, total_steps, clock.elapsed_s()?)
+            && let Some(projected) =
+                eta.projection(optimizer_step, first_step, total_steps, clock.elapsed_s()?)
         {
             eta_projected_s = Some(projected);
             if eta.stops(projected, cfg.cap.cap_s()) {
@@ -781,9 +841,9 @@ where
     let next_index = last_index.map_or(start_index, |i| i + 1);
     let wall = clock.elapsed_s()?;
     if let Some(policy) = &cfg.checkpoint {
-        let already = last_checkpoint
-            .as_ref()
-            .is_some_and(|p| p.file_name().and_then(|n| n.to_str()) == Some(checkpoint_name(optimizer_step).as_str()));
+        let already = last_checkpoint.as_ref().is_some_and(|p| {
+            p.file_name().and_then(|n| n.to_str()) == Some(checkpoint_name(optimizer_step).as_str())
+        });
         if !already {
             let state = CheckpointBody {
                 epoch: cfg.epoch,
@@ -797,7 +857,14 @@ where
                 channel_log: &channel_log,
                 consumed: &consumed,
             };
-            last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_state, last_checkpoint.as_deref())?);
+            last_checkpoint = Some(write_checkpoint(
+                &policy.dir,
+                &state,
+                provider,
+                objective,
+                &host_state,
+                last_checkpoint.as_deref(),
+            )?);
         }
     }
     Ok(TrainResult {
@@ -819,12 +886,17 @@ where
 
 /// sha256 over every parameter's f32 bytes (provider entries, then host entries, each with its
 /// name and shape), the identity of a trained model for a repeat-run comparison.
-pub fn parameters_digest<P: StepProvider>(provider: &mut P, host: Option<&dyn HostParams>) -> Result<String, TrainError> {
+pub fn parameters_digest<P: StepProvider>(
+    provider: &mut P,
+    host: Option<&dyn HostParams>,
+) -> Result<String, TrainError> {
     let mut h = Sha256::new();
     let values = provider.read_parameters()?;
     let entries = provider.parameters().to_vec();
     if values.len() != entries.len() {
-        return Err(TrainError::Refused("the provider read a different number of tensors than it lists".into()));
+        return Err(TrainError::Refused(
+            "the provider read a different number of tensors than it lists".into(),
+        ));
     }
     let mut feed = |e: &ParamSpec, v: &[f32]| {
         h.update((e.name.len() as u64).to_le_bytes());
@@ -868,17 +940,27 @@ fn checkpoint_name(step: u64) -> String {
 }
 
 fn hex_list(xs: &[f64]) -> Result<Value, PyJsonError> {
-    Ok(Value::Array(xs.iter().map(|x| float_hex(*x).map(Value::from)).collect::<Result<_, _>>()?))
+    Ok(Value::Array(
+        xs.iter()
+            .map(|x| float_hex(*x).map(Value::from))
+            .collect::<Result<_, _>>()?,
+    ))
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), TrainError> {
-    let mut f = fs::File::options().write(true).create_new(true).open(path).map_err(|e| io(path, e))?;
+    let mut f = fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| io(path, e))?;
     f.write_all(bytes).map_err(|e| io(path, e))?;
     f.sync_all().map_err(|e| io(path, e))
 }
 
 fn sync_dir(dir: &Path) -> Result<(), TrainError> {
-    fs::File::open(dir).and_then(|f| f.sync_all()).map_err(|e| io(dir, e))
+    fs::File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| io(dir, e))
 }
 
 /// Write `<dir>/ckpt-<step>/` through a staging directory and a rename, then remove the
@@ -896,7 +978,10 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     let final_dir = dir.join(&name);
     let staging = dir.join(format!(".{name}.partial"));
     if final_dir.exists() || staging.exists() {
-        return Err(TrainError::Refused(format!("{} or its staging directory already exists", final_dir.display())));
+        return Err(TrainError::Refused(format!(
+            "{} or its staging directory already exists",
+            final_dir.display()
+        )));
     }
     fs::create_dir(&staging).map_err(|e| io(&staging, e))?;
     let provider_dir = staging.join("provider");
@@ -907,7 +992,12 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         let bytes = fs::read(path).map_err(|e| io(path, e))?;
         let rel = path
             .strip_prefix(&provider_dir)
-            .map_err(|_| TrainError::Refused(format!("{} was written outside the provider directory", path.display())))?
+            .map_err(|_| {
+                TrainError::Refused(format!(
+                    "{} was written outside the provider directory",
+                    path.display()
+                ))
+            })?
             .to_string_lossy()
             .into_owned();
         provider_files.push((rel, Value::from(hex(&Sha256::digest(&bytes)))));
@@ -916,7 +1006,10 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     // Host values and moments: raw little-endian f32, value then m then v per entry. Each
     // entry's own AdamW step count goes in trainer.json beside its name.
     let mut host_bytes = Vec::new();
-    let host_entries = objective.host_ref().map(|h| h.entries()).unwrap_or_default();
+    let host_entries = objective
+        .host_ref()
+        .map(|h| h.entries())
+        .unwrap_or_default();
     if host_entries.len() != host_state.len() {
         return Err(TrainError::Refused(format!(
             "{} host entries and {} optimizer states",
@@ -962,7 +1055,8 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         ),
         (
             "channel_log",
-            obj(body.channel_log
+            obj(body
+                .channel_log
                 .iter()
                 .map(|(n, vs)| Ok((n.clone(), hex_list(vs)?)))
                 .collect::<Result<Vec<_>, PyJsonError>>()?)?,
@@ -986,9 +1080,15 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
                     .collect::<Result<_, PyJsonError>>()?,
             ),
         ),
-        ("host_sha256", Value::from(hex(&Sha256::digest(&host_bytes)))),
+        (
+            "host_sha256",
+            Value::from(hex(&Sha256::digest(&host_bytes))),
+        ),
     ])?;
-    write_synced(&staging.join("trainer.json"), dumps(&body_json, CANONICAL)?.as_bytes())?;
+    write_synced(
+        &staging.join("trainer.json"),
+        dumps(&body_json, CANONICAL)?.as_bytes(),
+    )?;
     sync_dir(&staging)?;
     fs::rename(&staging, &final_dir).map_err(|e| io(&final_dir, e))?;
     sync_dir(dir)?;
@@ -1000,21 +1100,29 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     Ok(final_dir)
 }
 
-fn field<'a>(v: &'a serde_json::Value, key: &str, path: &Path) -> Result<&'a serde_json::Value, TrainError> {
-    v.get(key)
-        .ok_or_else(|| TrainError::Refused(format!("{}: checkpoint has no {key:?}", path.display())))
+fn field<'a>(
+    v: &'a serde_json::Value,
+    key: &str,
+    path: &Path,
+) -> Result<&'a serde_json::Value, TrainError> {
+    v.get(key).ok_or_else(|| {
+        TrainError::Refused(format!("{}: checkpoint has no {key:?}", path.display()))
+    })
 }
 
 fn as_u64(v: &serde_json::Value, key: &str, path: &Path) -> Result<u64, TrainError> {
-    field(v, key, path)?
-        .as_u64()
-        .ok_or_else(|| TrainError::Refused(format!("{}: {key:?} is not a non-negative integer", path.display())))
+    field(v, key, path)?.as_u64().ok_or_else(|| {
+        TrainError::Refused(format!(
+            "{}: {key:?} is not a non-negative integer",
+            path.display()
+        ))
+    })
 }
 
 fn as_hex(v: &serde_json::Value, path: &Path) -> Result<f64, TrainError> {
-    let s = v
-        .as_str()
-        .ok_or_else(|| TrainError::Refused(format!("{}: expected a float.hex string", path.display())))?;
+    let s = v.as_str().ok_or_else(|| {
+        TrainError::Refused(format!("{}: expected a float.hex string", path.display()))
+    })?;
     Ok(float_fromhex(s)?)
 }
 
@@ -1026,17 +1134,27 @@ impl ResumeState {
         let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| io(&body_path, e))?;
         let p = body_path.as_path();
         if field(&v, "format", p)?.as_str() != Some(CHECKPOINT_FORMAT) {
-            return Err(TrainError::Refused(format!("{}: not a {CHECKPOINT_FORMAT} checkpoint", p.display())));
+            return Err(TrainError::Refused(format!(
+                "{}: not a {CHECKPOINT_FORMAT} checkpoint",
+                p.display()
+            )));
         }
         let sched = field(&v, "schedule", p)?;
         let schedule = LrSchedule::new(
-            field(sched, "peak_lr", p)?.as_f64().ok_or_else(|| TrainError::Refused("peak_lr".into()))?,
+            field(sched, "peak_lr", p)?
+                .as_f64()
+                .ok_or_else(|| TrainError::Refused("peak_lr".into()))?,
             as_u64(sched, "total_steps", p)?,
             as_u64(sched, "warmup_steps", p)?,
-            field(sched, "min_lr", p)?.as_f64().ok_or_else(|| TrainError::Refused("min_lr".into()))?,
+            field(sched, "min_lr", p)?
+                .as_f64()
+                .ok_or_else(|| TrainError::Refused("min_lr".into()))?,
         )?;
         let mut loss_log = LossLog::new();
-        for pt in field(&v, "loss_log", p)?.as_array().ok_or_else(|| TrainError::Refused("loss_log".into()))? {
+        for pt in field(&v, "loss_log", p)?
+            .as_array()
+            .ok_or_else(|| TrainError::Refused("loss_log".into()))?
+        {
             loss_log.append(LossPoint {
                 optimizer_step: as_u64(pt, "step", p)?,
                 epoch: as_u64(pt, "epoch", p)?,
@@ -1045,7 +1163,10 @@ impl ResumeState {
             })?;
         }
         let mut steps = Vec::new();
-        for s in field(&v, "steps", p)?.as_array().ok_or_else(|| TrainError::Refused("steps".into()))? {
+        for s in field(&v, "steps", p)?
+            .as_array()
+            .ok_or_else(|| TrainError::Refused("steps".into()))?
+        {
             steps.push(StepRecord {
                 optimizer_step: as_u64(s, "step", p)?,
                 lr: as_hex(field(s, "lr_hex", p)?, p)?,
@@ -1055,7 +1176,10 @@ impl ResumeState {
             });
         }
         let mut channel_log = Vec::new();
-        for (name, vals) in field(&v, "channel_log", p)?.as_object().ok_or_else(|| TrainError::Refused("channel_log".into()))? {
+        for (name, vals) in field(&v, "channel_log", p)?
+            .as_object()
+            .ok_or_else(|| TrainError::Refused("channel_log".into()))?
+        {
             let xs = vals
                 .as_array()
                 .ok_or_else(|| TrainError::Refused("channel_log values".into()))?
@@ -1065,30 +1189,49 @@ impl ResumeState {
             channel_log.push((name.clone(), xs));
         }
         let provider_dir = ckpt_dir.join("provider");
-        for (rel, digest) in field(&v, "provider_files", p)?.as_object().ok_or_else(|| TrainError::Refused("provider_files".into()))? {
+        for (rel, digest) in field(&v, "provider_files", p)?
+            .as_object()
+            .ok_or_else(|| TrainError::Refused("provider_files".into()))?
+        {
             let path = provider_dir.join(rel);
             let bytes = fs::read(&path).map_err(|e| io(&path, e))?;
             if Some(hex(&Sha256::digest(&bytes)).as_str()) != digest.as_str() {
-                return Err(TrainError::Refused(format!("{} does not match its recorded sha256", path.display())));
+                return Err(TrainError::Refused(format!(
+                    "{} does not match its recorded sha256",
+                    path.display()
+                )));
             }
         }
         let mut host_entries = Vec::new();
         let mut host_steps = Vec::new();
-        for e in field(&v, "host_entries", p)?.as_array().ok_or_else(|| TrainError::Refused("host_entries".into()))? {
-            let name = field(e, "name", p)?.as_str().ok_or_else(|| TrainError::Refused("host entry name".into()))?;
+        for e in field(&v, "host_entries", p)?
+            .as_array()
+            .ok_or_else(|| TrainError::Refused("host_entries".into()))?
+        {
+            let name = field(e, "name", p)?
+                .as_str()
+                .ok_or_else(|| TrainError::Refused("host entry name".into()))?;
             let shape = field(e, "shape", p)?
                 .as_array()
                 .ok_or_else(|| TrainError::Refused("host entry shape".into()))?
                 .iter()
-                .map(|d| d.as_u64().and_then(|d| usize::try_from(d).ok()).ok_or_else(|| TrainError::Refused("host dim".into())))
+                .map(|d| {
+                    d.as_u64()
+                        .and_then(|d| usize::try_from(d).ok())
+                        .ok_or_else(|| TrainError::Refused("host dim".into()))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             host_steps.push(as_u64(e, "adamw_steps", p)?);
             host_entries.push(ParamSpec::new(name, &shape));
         }
         let host_path = ckpt_dir.join("host.f32");
         let host_bytes = fs::read(&host_path).map_err(|e| io(&host_path, e))?;
-        if Some(hex(&Sha256::digest(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str() {
-            return Err(TrainError::Refused(format!("{} does not match its recorded sha256", host_path.display())));
+        if Some(hex(&Sha256::digest(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str()
+        {
+            return Err(TrainError::Refused(format!(
+                "{} does not match its recorded sha256",
+                host_path.display()
+            )));
         }
         let floats: Vec<f32> = host_bytes
             .as_chunks::<4>()
@@ -1103,9 +1246,12 @@ impl ResumeState {
             let n = e.numel()?;
             let take = |at: &mut usize| -> Result<Vec<f32>, TrainError> {
                 let end = *at + n;
-                let s = floats
-                    .get(*at..end)
-                    .ok_or_else(|| TrainError::Refused(format!("{} is shorter than its entries", host_path.display())))?;
+                let s = floats.get(*at..end).ok_or_else(|| {
+                    TrainError::Refused(format!(
+                        "{} is shorter than its entries",
+                        host_path.display()
+                    ))
+                })?;
                 *at = end;
                 Ok(s.to_vec())
             };
@@ -1119,9 +1265,13 @@ impl ResumeState {
             });
         }
         if at != floats.len() {
-            return Err(TrainError::Refused(format!("{} is longer than its entries", host_path.display())));
+            return Err(TrainError::Refused(format!(
+                "{} is longer than its entries",
+                host_path.display()
+            )));
         }
-        let grad_accum = u32::try_from(as_u64(&v, "grad_accum", p)?).map_err(|e| TrainError::Refused(e.to_string()))?;
+        let grad_accum = u32::try_from(as_u64(&v, "grad_accum", p)?)
+            .map_err(|e| TrainError::Refused(e.to_string()))?;
         let state = Self {
             dir: ckpt_dir.to_path_buf(),
             epoch: as_u64(&v, "epoch", p)?,
@@ -1141,7 +1291,9 @@ impl ResumeState {
             host_values,
             host_state,
         };
-        if state.loss_log.len() as u64 != state.optimizer_step || state.steps.len() as u64 != state.optimizer_step {
+        if state.loss_log.len() as u64 != state.optimizer_step
+            || state.steps.len() as u64 != state.optimizer_step
+        {
             return Err(TrainError::Refused(format!(
                 "{}: {} loss points and {} step records for optimizer step {}",
                 p.display(),

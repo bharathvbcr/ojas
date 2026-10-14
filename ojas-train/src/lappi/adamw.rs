@@ -101,7 +101,15 @@ pub fn adamw_entry_step(
         eps: row.eps,
         grad_scale,
     };
-    adamw_update(param, grad, &mut state.moments, &hyper, lr * row.lr_scale, row.weight_decay, t)?;
+    adamw_update(
+        param,
+        grad,
+        &mut state.moments,
+        &hyper,
+        lr * row.lr_scale,
+        row.weight_decay,
+        t,
+    )?;
     state.steps = t;
     Ok(true)
 }
@@ -119,13 +127,19 @@ pub fn adamw_update(
 ) -> Result<(), StepError> {
     hyper.validate()?;
     if !(lr.is_finite() && lr > 0.0) {
-        return Err(StepError::Contract(format!("lr {lr} must be finite and > 0")));
+        return Err(StepError::Contract(format!(
+            "lr {lr} must be finite and > 0"
+        )));
     }
     if !(weight_decay.is_finite() && weight_decay >= 0.0) {
-        return Err(StepError::Contract(format!("weight decay {weight_decay} must be finite and >= 0")));
+        return Err(StepError::Contract(format!(
+            "weight decay {weight_decay} must be finite and >= 0"
+        )));
     }
     if step == 0 {
-        return Err(StepError::Contract("step 0 zeroes the bias correction; steps count from 1".into()));
+        return Err(StepError::Contract(
+            "step 0 zeroes the bias correction; steps count from 1".into(),
+        ));
     }
     let n = param.len();
     if grad.len() != n || moments.m.len() != n || moments.v.len() != n {
@@ -139,7 +153,9 @@ pub fn adamw_update(
     // torch keeps `step` as a float tensor and `_get_value` hands Python a float, so the bias
     // corrections are C `pow(beta, (double)step)` -- `powf`, not `powi`'s repeated products.
     if step > (1u64 << 53) {
-        return Err(StepError::Contract(format!("step {step} is not exact in f64")));
+        return Err(StepError::Contract(format!(
+            "step {step} is not exact in f64"
+        )));
     }
     let t = step as f64;
     let scale = hyper.grad_scale as f32;

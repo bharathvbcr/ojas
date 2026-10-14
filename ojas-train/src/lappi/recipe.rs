@@ -48,10 +48,16 @@ pub struct OptimizerRecipe {
 impl OptimizerRecipe {
     pub fn validate(&self) -> Result<(), StepError> {
         if !(self.lr.is_finite() && self.lr > 0.0) {
-            return Err(StepError::Contract(format!("lr must be positive and finite, got {}", self.lr)));
+            return Err(StepError::Contract(format!(
+                "lr must be positive and finite, got {}",
+                self.lr
+            )));
         }
         if !(self.beta2 > 0.0 && self.beta2 < 1.0) {
-            return Err(StepError::Contract(format!("beta2 must be in (0, 1), got {}", self.beta2)));
+            return Err(StepError::Contract(format!(
+                "beta2 must be in (0, 1), got {}",
+                self.beta2
+            )));
         }
         if let Some(l) = self.lower_layers {
             if l.n == 0 {
@@ -80,7 +86,10 @@ pub fn layer_index(name: &str) -> Option<usize> {
         let at = from + off;
         let boundary = at == 0 || bytes[at - 1] == b'.';
         let digits_start = at + needle.len();
-        let digits_len = bytes[digits_start..].iter().take_while(|b| b.is_ascii_digit()).count();
+        let digits_len = bytes[digits_start..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
         if boundary && digits_len > 0 && bytes.get(digits_start + digits_len) == Some(&b'.') {
             return name[digits_start..digits_start + digits_len].parse().ok();
         }
@@ -94,7 +103,11 @@ pub fn layer_index(name: &str) -> Option<usize> {
 /// below `n` (a name containing `visual` is never split), `1.0` for the rest. Refused when the
 /// split matches nothing, covers every layer, or leaves the base group empty -- the host
 /// parameters (the span head) join the base group, so `host_entries > 0` keeps it non-empty.
-pub fn lr_scales(entries: &[ParamSpec], lower: Option<LowerLayers>, host_entries: usize) -> Result<Vec<f64>, StepError> {
+pub fn lr_scales(
+    entries: &[ParamSpec],
+    lower: Option<LowerLayers>,
+    host_entries: usize,
+) -> Result<Vec<f64>, StepError> {
     let Some(l) = lower else {
         return Ok(vec![1.0; entries.len()]);
     };
@@ -136,7 +149,9 @@ pub fn lr_scales(entries: &[ParamSpec], lower: Option<LowerLayers>, host_entries
         )));
     }
     if base_count == 0 {
-        return Err(StepError::Contract("every trainable parameter fell in the lower group".into()));
+        return Err(StepError::Contract(
+            "every trainable parameter fell in the lower group".into(),
+        ));
     }
     Ok(out)
 }
@@ -163,7 +178,11 @@ pub struct EntryHyper {
 /// `layerwise_param_groups` + `build_optimizer` produce on the 2B
 /// (`tests/optimizer_table.rs`), and the loop derives every vector it hands
 /// [`crate::step::StepProvider::adamw_step`] from it, so the table tested is the table run.
-pub fn optimizer_table(entries: &[ParamSpec], host: &[ParamSpec], recipe: &OptimizerRecipe) -> Result<Vec<EntryHyper>, StepError> {
+pub fn optimizer_table(
+    entries: &[ParamSpec],
+    host: &[ParamSpec],
+    recipe: &OptimizerRecipe,
+) -> Result<Vec<EntryHyper>, StepError> {
     recipe.validate()?;
     let scales = lr_scales(entries, recipe.lower_layers, host.len())?;
     let row = |name: &str, lr_scale: f64| EntryHyper {
@@ -208,12 +227,23 @@ mod tests {
     #[test]
     fn the_layer_index_is_read_as_the_python_regex_reads_it() {
         assert_eq!(layer_index("layers.3.mlp.gate_proj.weight"), Some(3));
-        assert_eq!(layer_index("model.layers.12.input_layernorm.weight"), Some(12));
+        assert_eq!(
+            layer_index("model.layers.12.input_layernorm.weight"),
+            Some(12)
+        );
         assert_eq!(layer_index("embed_tokens.weight"), None);
         assert_eq!(layer_index("norm.weight"), None);
-        assert_eq!(layer_index("xlayers.3.w"), None, "a boundary is required before 'layers.'");
+        assert_eq!(
+            layer_index("xlayers.3.w"),
+            None,
+            "a boundary is required before 'layers.'"
+        );
         assert_eq!(layer_index("layers.x.w"), None);
-        assert_eq!(layer_index("layers.3"), None, "the index must be followed by a dot");
+        assert_eq!(
+            layer_index("layers.3"),
+            None,
+            "the index must be followed by a dot"
+        );
         assert_eq!(layer_index("sublayers.1.layers.4.w"), Some(4));
     }
 
@@ -225,33 +255,87 @@ mod tests {
 
     #[test]
     fn the_split_scales_the_lower_layers_and_refuses_a_split_that_means_nothing() {
-        let e = specs(&["embed_tokens.weight", "layers.0.a", "layers.1.a", "layers.2.a", "norm.weight"]);
-        let two = Some(LowerLayers { n: 2, lr_scale: 0.1 });
-        assert_eq!(lr_scales(&e, two, 0).unwrap(), vec![1.0, 0.1, 0.1, 1.0, 1.0]);
+        let e = specs(&[
+            "embed_tokens.weight",
+            "layers.0.a",
+            "layers.1.a",
+            "layers.2.a",
+            "norm.weight",
+        ]);
+        let two = Some(LowerLayers {
+            n: 2,
+            lr_scale: 0.1,
+        });
+        assert_eq!(
+            lr_scales(&e, two, 0).unwrap(),
+            vec![1.0, 0.1, 0.1, 1.0, 1.0]
+        );
         // Past the deepest layer: the "lower" group would be the whole tower.
-        assert!(lr_scales(&e, Some(LowerLayers { n: 4, lr_scale: 0.1 }), 0).is_err());
+        assert!(
+            lr_scales(
+                &e,
+                Some(LowerLayers {
+                    n: 4,
+                    lr_scale: 0.1
+                }),
+                0
+            )
+            .is_err()
+        );
         // n == deepest + 1 is admitted: the base keeps the embedding and the norm.
-        assert!(lr_scales(&e, Some(LowerLayers { n: 3, lr_scale: 0.1 }), 0).is_ok());
+        assert!(
+            lr_scales(
+                &e,
+                Some(LowerLayers {
+                    n: 3,
+                    lr_scale: 0.1
+                }),
+                0
+            )
+            .is_ok()
+        );
         // No layer names at all.
         assert!(lr_scales(&specs(&["embed_tokens.weight"]), two, 1).is_err());
         // Every entry in the lower group and no host parameter to keep the base non-empty.
         let only = specs(&["layers.0.a", "layers.1.a"]);
         assert!(lr_scales(&only, two, 0).is_err());
-        assert!(lr_scales(&only, two, 1).is_ok(), "the span head joins the base group");
+        assert!(
+            lr_scales(&only, two, 1).is_ok(),
+            "the span head joins the base group"
+        );
         // A vision tower's layers are never split.
         let vis = specs(&["visual.layers.0.a", "layers.0.a", "norm.weight"]);
-        assert_eq!(lr_scales(&vis, Some(LowerLayers { n: 1, lr_scale: 0.5 }), 0).unwrap(), vec![1.0, 0.5, 1.0]);
+        assert_eq!(
+            lr_scales(
+                &vis,
+                Some(LowerLayers {
+                    n: 1,
+                    lr_scale: 0.5
+                }),
+                0
+            )
+            .unwrap(),
+            vec![1.0, 0.5, 1.0]
+        );
     }
 
     #[test]
     fn weight_decay_is_lappis_on_every_entry_not_tesslls_exclusions() {
-        let e = specs(&["layers.0.input_layernorm.weight", "layers.0.linear_attn.dt_bias", "norm.weight"]);
+        let e = specs(&[
+            "layers.0.input_layernorm.weight",
+            "layers.0.linear_attn.dt_bias",
+            "norm.weight",
+        ]);
         assert_eq!(weight_decays(&e), vec![0.01; 3]);
     }
 
     #[test]
     fn the_clip_coefficient_is_torchs_and_refuses_a_non_finite_norm() {
-        assert_eq!(clip_coefficient(0.25, 1.0).unwrap(), 1.0, "a norm under the bound is not scaled");
+        assert_eq!(
+            clip_coefficient(0.25, 1.0).unwrap(),
+            1.0,
+            "a norm under the bound is not scaled"
+        );
         let c = clip_coefficient(16.0, 1.0).unwrap();
         assert_eq!(c, 1.0 / (4.0 + 1e-6));
         assert!(clip_coefficient(f64::NAN, 1.0).is_err());

@@ -63,7 +63,12 @@ impl ParamSpec {
         self.shape
             .iter()
             .try_fold(1usize, |acc, &d| acc.checked_mul(d))
-            .ok_or_else(|| StepError::Contract(format!("{}: shape {:?} overflows usize", self.name, self.shape)))
+            .ok_or_else(|| {
+                StepError::Contract(format!(
+                    "{}: shape {:?} overflows usize",
+                    self.name, self.shape
+                ))
+            })
     }
 }
 
@@ -99,10 +104,14 @@ impl SequenceJob<'_> {
     pub fn validate(&self, vocab: usize) -> Result<(), StepError> {
         let t = self.tokens.len();
         if t == 0 {
-            return Err(StepError::Contract("a sequence needs at least one token".into()));
+            return Err(StepError::Contract(
+                "a sequence needs at least one token".into(),
+            ));
         }
         if let Some(bad) = self.tokens.iter().find(|&&id| id as usize >= vocab) {
-            return Err(StepError::Contract(format!("token {bad} >= vocabulary {vocab}")));
+            return Err(StepError::Contract(format!(
+                "token {bad} >= vocabulary {vocab}"
+            )));
         }
         let rows = &self.rows;
         if rows.positions.len() != rows.targets.len() {
@@ -113,13 +122,20 @@ impl SequenceJob<'_> {
             )));
         }
         if !(rows.scale.is_finite() && rows.scale >= 0.0) {
-            return Err(StepError::Contract(format!("row scale {} must be finite and >= 0", rows.scale)));
+            return Err(StepError::Contract(format!(
+                "row scale {} must be finite and >= 0",
+                rows.scale
+            )));
         }
         if let Some(bad) = rows.positions.iter().find(|&&p| p as usize >= t) {
-            return Err(StepError::Contract(format!("row position {bad} >= {t} tokens")));
+            return Err(StepError::Contract(format!(
+                "row position {bad} >= {t} tokens"
+            )));
         }
         if let Some(bad) = rows.targets.iter().find(|&&id| id as usize >= vocab) {
-            return Err(StepError::Contract(format!("row target {bad} >= vocabulary {vocab}")));
+            return Err(StepError::Contract(format!(
+                "row target {bad} >= vocabulary {vocab}"
+            )));
         }
         let mut seen = self.hidden_at.to_vec();
         seen.sort_unstable();
@@ -130,7 +146,9 @@ impl SequenceJob<'_> {
             )));
         }
         if let Some(bad) = self.hidden_at.iter().find(|&&p| p as usize >= t) {
-            return Err(StepError::Contract(format!("hidden position {bad} >= {t} tokens")));
+            return Err(StepError::Contract(format!(
+                "hidden position {bad} >= {t} tokens"
+            )));
         }
         Ok(())
     }
@@ -160,7 +178,9 @@ impl AdamWHyper {
         if ok {
             Ok(())
         } else {
-            Err(StepError::Contract(format!("AdamW hyperparameters out of range: {self:?}")))
+            Err(StepError::Contract(format!(
+                "AdamW hyperparameters out of range: {self:?}"
+            )))
         }
     }
 }
@@ -221,7 +241,13 @@ pub trait StepProvider {
     /// tower does: each entry is on the forward path of every sequence. The span head does not,
     /// so it is a host entry ([`crate::adamw::adamw_entry_step`]). A provider whose model can
     /// leave an entry without a gradient breaks this contract.
-    fn adamw_step(&mut self, hyper: &AdamWHyper, step: u64, lr_scale: &[f64], weight_decay: &[f64]) -> Result<(), StepError>;
+    fn adamw_step(
+        &mut self,
+        hyper: &AdamWHyper,
+        step: u64,
+        lr_scale: &[f64],
+        weight_decay: &[f64],
+    ) -> Result<(), StepError>;
 
     /// Optimizer steps taken so far (torch's `state["step"]`).
     fn step_count(&self) -> u64;
@@ -252,11 +278,23 @@ pub fn check_per_entry(n: usize, lr_scale: &[f64], weight_decay: &[f64]) -> Resu
             weight_decay.len()
         )));
     }
-    if let Some((i, s)) = lr_scale.iter().enumerate().find(|(_, s)| !(s.is_finite() && **s > 0.0)) {
-        return Err(StepError::Contract(format!("entry {i}: lr scale {s} must be finite and > 0")));
+    if let Some((i, s)) = lr_scale
+        .iter()
+        .enumerate()
+        .find(|(_, s)| !(s.is_finite() && **s > 0.0))
+    {
+        return Err(StepError::Contract(format!(
+            "entry {i}: lr scale {s} must be finite and > 0"
+        )));
     }
-    if let Some((i, w)) = weight_decay.iter().enumerate().find(|(_, w)| !(w.is_finite() && **w >= 0.0)) {
-        return Err(StepError::Contract(format!("entry {i}: weight decay {w} must be finite and >= 0")));
+    if let Some((i, w)) = weight_decay
+        .iter()
+        .enumerate()
+        .find(|(_, w)| !(w.is_finite() && **w >= 0.0))
+    {
+        return Err(StepError::Contract(format!(
+            "entry {i}: weight decay {w} must be finite and >= 0"
+        )));
     }
     Ok(())
 }
@@ -276,7 +314,12 @@ pub fn refuse_lr_scale(lr_scale: &[f64], who: &str) -> Result<(), StepError> {
 mod tests {
     use super::*;
 
-    fn job<'a>(tokens: &'a [u32], pos: &'a [u32], tgt: &'a [u32], hidden: &'a [u32]) -> SequenceJob<'a> {
+    fn job<'a>(
+        tokens: &'a [u32],
+        pos: &'a [u32],
+        tgt: &'a [u32],
+        hidden: &'a [u32],
+    ) -> SequenceJob<'a> {
         SequenceJob {
             tokens,
             rows: RowTargets {
@@ -292,13 +335,34 @@ mod tests {
     fn a_job_is_checked_before_anything_runs() {
         let toks = [1u32, 2, 3];
         assert!(job(&toks, &[1], &[3], &[0, 2]).validate(8).is_ok());
-        assert!(job(&[], &[], &[], &[]).validate(8).is_err(), "empty sequence");
-        assert!(job(&toks, &[3], &[3], &[]).validate(8).is_err(), "row past the end");
-        assert!(job(&toks, &[1], &[9], &[]).validate(8).is_err(), "target past the vocabulary");
-        assert!(job(&toks, &[1, 2], &[3], &[]).validate(8).is_err(), "lengths differ");
-        assert!(job(&toks, &[], &[], &[2, 2]).validate(8).is_err(), "a repeated hidden position");
-        assert!(job(&toks, &[], &[], &[3]).validate(8).is_err(), "hidden past the end");
-        assert!(job(&[1, 9], &[], &[], &[]).validate(8).is_err(), "token past the vocabulary");
+        assert!(
+            job(&[], &[], &[], &[]).validate(8).is_err(),
+            "empty sequence"
+        );
+        assert!(
+            job(&toks, &[3], &[3], &[]).validate(8).is_err(),
+            "row past the end"
+        );
+        assert!(
+            job(&toks, &[1], &[9], &[]).validate(8).is_err(),
+            "target past the vocabulary"
+        );
+        assert!(
+            job(&toks, &[1, 2], &[3], &[]).validate(8).is_err(),
+            "lengths differ"
+        );
+        assert!(
+            job(&toks, &[], &[], &[2, 2]).validate(8).is_err(),
+            "a repeated hidden position"
+        );
+        assert!(
+            job(&toks, &[], &[], &[3]).validate(8).is_err(),
+            "hidden past the end"
+        );
+        assert!(
+            job(&[1, 9], &[], &[], &[]).validate(8).is_err(),
+            "token past the vocabulary"
+        );
         let mut nan = job(&toks, &[1], &[3], &[]);
         nan.rows.scale = f32::NAN;
         assert!(nan.validate(8).is_err());
@@ -311,6 +375,9 @@ mod tests {
         assert!(check_per_entry(1, &[0.0], &[0.01]).is_err());
         assert!(check_per_entry(1, &[1.0], &[-0.01]).is_err());
         assert!(refuse_lr_scale(&[1.0, 1.0], "x").is_ok());
-        assert!(matches!(refuse_lr_scale(&[1.0, 0.1], "x"), Err(StepError::Unsupported(_))));
+        assert!(matches!(
+            refuse_lr_scale(&[1.0, 0.1], "x"),
+            Err(StepError::Unsupported(_))
+        ));
     }
 }

@@ -27,8 +27,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use qd_export::safetensors::{Dtype, SafeTensorsFile};
-use qd_train::adamw::{adamw_entry_step, EntryState};
-use qd_train::recipe::{self, optimizer_table, EntryHyper, LowerLayers, OptimizerRecipe};
+use qd_train::adamw::{EntryState, adamw_entry_step};
+use qd_train::recipe::{self, EntryHyper, LowerLayers, OptimizerRecipe, optimizer_table};
 use qd_train::step::ParamSpec;
 use serde_json::Value;
 
@@ -39,8 +39,10 @@ fn dir() -> PathBuf {
 }
 
 fn json(path: &Path) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
-        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    serde_json::from_str(
+        &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
+    )
+    .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 /// The manifest, after every file it pins has been checked against its pin (sha256 and byte
@@ -50,8 +52,17 @@ fn pinned_manifest() -> Value {
     let dir = common::pins::verified(&dir(), common::pins::Form::JsonFiles);
     let m = json(&dir.join(common::pins::MANIFEST_JSON));
     let files = m["files"].as_object().expect("manifest.files");
-    let want = ["golden.safetensors", "inputs.safetensors", "preregistration.json", "table.json"];
-    assert_eq!(files.keys().map(String::as_str).collect::<Vec<_>>(), want, "the manifest pins exactly these files");
+    let want = [
+        "golden.safetensors",
+        "inputs.safetensors",
+        "preregistration.json",
+        "table.json",
+    ];
+    assert_eq!(
+        files.keys().map(String::as_str).collect::<Vec<_>>(),
+        want,
+        "the manifest pins exactly these files"
+    );
     assert_eq!(
         m["preregistration"]["sha256"], files["preregistration.json"]["sha256"],
         "the golden was generated from the pre-registration that is committed"
@@ -69,7 +80,14 @@ fn tensors(path: &Path) -> BTreeMap<String, Vec<f32>> {
             let n: usize = info.shape.iter().product();
             let mut b = vec![0u8; n * 4];
             file.read_tensor_range(info, 0, &mut b).unwrap();
-            (name.clone(), b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect())
+            (
+                name.clone(),
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
+                    .collect(),
+            )
         })
         .collect()
 }
@@ -94,8 +112,18 @@ fn load() -> Golden {
         .unwrap()
         .iter()
         .map(|e| {
-            let shape = e["shape"].as_array().unwrap().iter().map(|d| d.as_u64().unwrap() as usize).collect();
-            let steps = e["grad_steps"].as_array().unwrap().iter().map(|s| s.as_u64().unwrap()).collect();
+            let shape = e["shape"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| d.as_u64().unwrap() as usize)
+                .collect();
+            let steps = e["grad_steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_u64().unwrap())
+                .collect();
             (e["name"].as_str().unwrap().to_owned(), shape, steps)
         })
         .collect();
@@ -105,7 +133,10 @@ fn load() -> Golden {
     let recipe = OptimizerRecipe {
         lr: 1e-2,
         beta2: recipe::DEFAULT_BETA2,
-        lower_layers: Some(LowerLayers { n: 8, lr_scale: 0.1 }),
+        lower_layers: Some(LowerLayers {
+            n: 8,
+            lr_scale: 0.1,
+        }),
     };
     assert_eq!(o["lr"].as_f64(), Some(recipe.lr));
     assert_eq!(pre["settings"]["lr"].as_f64(), Some(recipe.lr));
@@ -134,7 +165,12 @@ fn load() -> Golden {
 /// the golden's names.
 fn trainer_table(g: &Golden) -> BTreeMap<String, EntryHyper> {
     let spec = |(name, shape, _): &(String, Vec<usize>, Vec<u64>)| ParamSpec::new(name, shape);
-    let tower: Vec<ParamSpec> = g.entries.iter().filter(|e| !e.0.starts_with(HEAD_PREFIX)).map(spec).collect();
+    let tower: Vec<ParamSpec> = g
+        .entries
+        .iter()
+        .filter(|e| !e.0.starts_with(HEAD_PREFIX))
+        .map(spec)
+        .collect();
     let head: Vec<ParamSpec> = g
         .entries
         .iter()
@@ -142,11 +178,16 @@ fn trainer_table(g: &Golden) -> BTreeMap<String, EntryHyper> {
         .map(|e| ParamSpec::new(e.0.trim_start_matches(HEAD_PREFIX), &e.1))
         .collect();
     assert_eq!((tower.len(), head.len()), (15, 4));
-    let rows = optimizer_table(&tower, &head, &g.recipe).expect("F's recipe builds a table on these names");
+    let rows = optimizer_table(&tower, &head, &g.recipe)
+        .expect("F's recipe builds a table on these names");
     rows.into_iter()
         .enumerate()
         .map(|(i, r)| {
-            let key = if i < tower.len() { r.name.clone() } else { format!("{HEAD_PREFIX}{}", r.name) };
+            let key = if i < tower.len() {
+                r.name.clone()
+            } else {
+                format!("{HEAD_PREFIX}{}", r.name)
+            };
             (key, r)
         })
         .collect()
@@ -182,14 +223,22 @@ fn run(g: &Golden, table: &BTreeMap<String, EntryHyper>) -> Outcome {
     for t in 1..=g.steps {
         for (name, _, grad_steps) in &g.entries {
             let grad = g.inputs.get(&format!("grad.step{t}.{name}"));
-            assert_eq!(grad.is_some(), grad_steps.contains(&t), "{name} step {t}: the inputs and the pre-registration agree");
+            assert_eq!(
+                grad.is_some(),
+                grad_steps.contains(&t),
+                "{name} step {t}: the inputs and the pre-registration agree"
+            );
             let before = values[name.as_str()].clone();
             let v = values.get_mut(name.as_str()).unwrap();
             let s = state.get_mut(name.as_str()).unwrap();
-            let stepped = adamw_entry_step(v, grad.map(Vec::as_slice), s, &table[name], g.lr, 1.0).unwrap();
+            let stepped =
+                adamw_entry_step(v, grad.map(Vec::as_slice), s, &table[name], g.lr, 1.0).unwrap();
             assert_eq!(stepped, grad.is_some());
             if !stepped {
-                assert_eq!(*v, before, "{name} step {t}: no gradient, so no decay and no move");
+                assert_eq!(
+                    *v, before,
+                    "{name} step {t}: no gradient, so no decay and no move"
+                );
             }
             let want = &g.golden[&format!("w.step{t}.{name}")];
             assert_eq!(want.len(), v.len(), "{name}");
@@ -206,7 +255,11 @@ fn run(g: &Golden, table: &BTreeMap<String, EntryHyper>) -> Outcome {
             // the pre-registered weight measure, except that presence must agree.
             let m = g.golden.get(&format!("exp_avg.step{t}.{name}"));
             let sq = g.golden.get(&format!("exp_avg_sq.step{t}.{name}"));
-            assert_eq!(m.is_some(), s.steps > 0, "{name} step {t}: torch has moments exactly when the entry has stepped");
+            assert_eq!(
+                m.is_some(),
+                s.steps > 0,
+                "{name} step {t}: torch has moments exactly when the entry has stepped"
+            );
             if let (Some(m), Some(sq)) = (m, sq) {
                 for (a, b) in s.moments.m.iter().zip(m).chain(s.moments.v.iter().zip(sq)) {
                     out.moments_max_abs = out.moments_max_abs.max(f64::from((a - b).abs()));
@@ -214,7 +267,10 @@ fn run(g: &Golden, table: &BTreeMap<String, EntryHyper>) -> Outcome {
             }
         }
     }
-    out.steps_taken = state.into_iter().map(|(n, s)| (n.to_owned(), s.steps)).collect();
+    out.steps_taken = state
+        .into_iter()
+        .map(|(n, s)| (n.to_owned(), s.steps))
+        .collect();
     out
 }
 
@@ -223,10 +279,21 @@ fn the_trainers_table_is_fs_builders_on_the_goldens_entries() {
     let g = load();
     let table = trainer_table(&g);
     let want = g.table.as_object().unwrap();
-    assert_eq!(table.keys().collect::<Vec<_>>(), want.keys().collect::<Vec<_>>(), "the same 19 names");
+    assert_eq!(
+        table.keys().collect::<Vec<_>>(),
+        want.keys().collect::<Vec<_>>(),
+        "the same 19 names"
+    );
     for (name, row) in &table {
         let w = &want[name];
-        let got = [row.lr_scale, row.weight_decay, row.eps, row.beta1, row.beta2].map(f64::to_bits);
+        let got = [
+            row.lr_scale,
+            row.weight_decay,
+            row.eps,
+            row.beta1,
+            row.beta2,
+        ]
+        .map(f64::to_bits);
         let exp = [
             w["lr_scale"].as_f64().unwrap(),
             w["weight_decay"].as_f64().unwrap(),
@@ -235,13 +302,28 @@ fn the_trainers_table_is_fs_builders_on_the_goldens_entries() {
             w["betas"][1].as_f64().unwrap(),
         ]
         .map(f64::to_bits);
-        assert_eq!(got, exp, "{name}: (lr_scale, weight_decay, eps, beta1, beta2)");
+        assert_eq!(
+            got, exp,
+            "{name}: (lr_scale, weight_decay, eps, beta1, beta2)"
+        );
     }
     // The pre-registered decay targets really are decayed, and the 0.1 group really is scaled.
-    let excluded: Vec<&String> = want.iter().filter(|(_, w)| w["tessl_default_excludes"] == true).map(|(n, _)| n).collect();
+    let excluded: Vec<&String> = want
+        .iter()
+        .filter(|(_, w)| w["tessl_default_excludes"] == true)
+        .map(|(n, _)| n)
+        .collect();
     assert!(excluded.len() >= 6, "{excluded:?}");
-    assert!(excluded.iter().all(|n| table[*n].weight_decay == recipe::WEIGHT_DECAY));
-    assert_eq!(table.values().filter(|r| r.lr_scale == 0.1).count(), 8, "layers 0, 3 and 7's entries");
+    assert!(
+        excluded
+            .iter()
+            .all(|n| table[*n].weight_decay == recipe::WEIGHT_DECAY)
+    );
+    assert_eq!(
+        table.values().filter(|r| r.lr_scale == 0.1).count(),
+        8,
+        "layers 0, 3 and 7's entries"
+    );
 }
 
 #[test]
@@ -252,15 +334,40 @@ fn the_trainers_entry_step_reproduces_the_golden_within_the_preregistered_bound(
     eprintln!(
         "adamw-decay-sensitive: max |w - golden| = {:e} at step {} {} (bound {:e}); {} of {} elements bit-identical; \
          moments max |d| = {:e} (report-only)",
-        out.max_abs, out.at.0, out.at.1, g.bound, out.bit_identical, out.elements, out.moments_max_abs
+        out.max_abs,
+        out.at.0,
+        out.at.1,
+        g.bound,
+        out.bit_identical,
+        out.elements,
+        out.moments_max_abs
     );
-    let per_step: u64 = g.entries.iter().map(|e| e.1.iter().product::<usize>() as u64).sum();
+    let per_step: u64 = g
+        .entries
+        .iter()
+        .map(|e| e.1.iter().product::<usize>() as u64)
+        .sum();
     assert_eq!(per_step, 214, "the 19 entries' elements");
-    assert_eq!(out.elements, g.steps * per_step, "every element of every step was measured");
-    assert!(out.max_abs <= g.bound, "max |w - golden| {:e} at step {} {} is over {:e}", out.max_abs, out.at.0, out.at.1, g.bound);
+    assert_eq!(
+        out.elements,
+        g.steps * per_step,
+        "every element of every step was measured"
+    );
+    assert!(
+        out.max_abs <= g.bound,
+        "max |w - golden| {:e} at step {} {} is over {:e}",
+        out.max_abs,
+        out.at.0,
+        out.at.1,
+        g.bound
+    );
     // Each entry's own count is torch's `state["step"]` after the run.
     for (name, taken) in &out.steps_taken {
-        assert_eq!(Some(*taken), g.table[name]["adamw_steps_taken"].as_u64(), "{name}: AdamW steps taken");
+        assert_eq!(
+            Some(*taken),
+            g.table[name]["adamw_steps_taken"].as_u64(),
+            "{name}: AdamW steps taken"
+        );
     }
     assert_eq!(out.steps_taken["layers.23.mlp.up_proj.weight"], 0);
     assert_eq!(out.steps_taken["span_head.start_proj.weight"], 3);
