@@ -1124,6 +1124,13 @@ impl Worker {
                 kin,
                 nout,
             } => self.linear_bwd(x, w, gy, rows, kin, nout),
+            Cmd::LinearBwdInput {
+                w,
+                gy,
+                rows,
+                kin,
+                nout,
+            } => self.linear_bwd_input(w, gy, rows, kin, nout),
             Cmd::Rms { sides, eps } => self.rms_sides(&sides, eps),
             Cmd::Rope {
                 op,
@@ -1537,6 +1544,33 @@ impl Worker {
         self.check(&st, &gx, ST_OUT)?;
         self.check(&st, &gw, ST_OUT)?;
         Ok(self.keep(vec![gx, gw]))
+    }
+
+    fn linear_bwd_input(
+        &mut self,
+        w: Arg,
+        gy: Arg,
+        rows: usize,
+        kin: usize,
+        nout: usize,
+    ) -> Res<Reply> {
+        const OP: &str = "linear_backward_input";
+        let wv = self.view(w)?;
+        let gv = self.view(gy)?;
+        let gx = self.fresh(rows * kin)?;
+        let st = self.status(OP)?;
+        for v in [&wv, &gv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        GemmOperands::ExactF32
+            .nn(
+                &self.mat(&gv, rows, nout)?,
+                &self.mat(&wv, nout, kin)?,
+                &self.tt(&gx, &[rows, kin])?,
+            )
+            .map_err(metal_err)?;
+        self.check(&st, &gx, ST_OUT)?;
+        Ok(self.keep(vec![gx]))
     }
 
     /// RMSNorm forward of one side into `st`.
