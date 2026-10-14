@@ -97,7 +97,7 @@ fn the_gated_dx_only_backward_reaches_the_inner_override_and_polls() {
 /// `impl Backend for Gated`: a method added to the trait and forgotten here
 /// would run the trait default on the wrapper.
 #[test]
-#[ignore = "BREAK (pre-existing on main, not this card): Gated has no causal_sdpa_backward_recompute, so it runs the trait default on the wrapper"]
+#[ignore = "BREAK on main bc498c4: fixed by gitpulse/ci-main-green (ft-b4f9); un-ignore on rebase"]
 fn every_backend_method_has_a_gated_forward() {
     let src = include_str!("gate.rs");
     let body = src

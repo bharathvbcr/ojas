@@ -1368,16 +1368,18 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_backward_input";
         let dims = linear_backward_dims(input, weight, grad_output)?;
-        // `input` is not bound: only its shape and dtype were checked above.
+        let input = self.widened(input)?;
         let weight = self.widened(weight)?;
         let grad_output = self.widened(grad_output)?;
+        let x = self.f32(OP, &input)?;
         let w = self.f32(OP, &weight)?;
         let gy = self.f32(OP, &grad_output)?;
         self.one(
             OP,
             input.shape(),
-            copied_elems(OP, ReadAs::Matrix, &[w, gy])?,
+            copied_elems(OP, ReadAs::Matrix, &[x, w, gy])?,
             Cmd::LinearBwdInput {
+                x,
                 w,
                 gy,
                 rows: dims.rows,

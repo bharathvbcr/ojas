@@ -293,7 +293,6 @@ fn dropout_mask_statistics() {
 /// The public draw helpers take a rank or shape the config/shape check
 /// would refuse: they must return a typed error, not panic or wrap.
 #[test]
-#[ignore = "BREAK (low): pub init_a / init_b / dropout_mask multiply unchecked dimensions (rank * in_features, shape product) and panic or wrap instead of returning LoraError"]
 fn public_draw_helpers_do_not_panic_on_absurd_dimensions() {
     let huge = LoraConfig::new(usize::MAX / 2, 8.0, 0.0).unwrap();
     let b = budget();
@@ -666,7 +665,6 @@ fn repeated_kinds_give_each_target_once() {
 /// discovery reads only the index, so it must still refuse a dtype the
 /// load would refuse.
 #[test]
-#[ignore = "BREAK (low): lora_targets checks name and shape only; an I64 tensor with the right shape is accepted as a LoRA target"]
 fn a_target_stored_as_an_integer_dtype_is_refused() {
     let bytes = synthetic_index("model.", StDtype::I64, |n| n.to_string(), |_, s| s.to_vec());
     let file = SafeTensors::parse(&bytes).unwrap();

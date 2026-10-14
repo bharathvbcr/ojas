@@ -81,7 +81,6 @@ fn dx_only_does_not_depend_on_input_values() {
 /// An input that holds NaN: the full path refuses it, so does dX-only
 /// (a frozen weight must not make a poisoned activation pass silently).
 #[test]
-#[ignore = "BREAK (low): linear_backward_input never reads `input`, so a NaN activation passes where linear_backward refuses it"]
 fn dx_only_with_a_nan_input_matches_the_full_paths_verdict() {
     let budget = Budget::new(BIG);
     let be = CpuBackend::new(budget.clone());
@@ -220,7 +219,7 @@ fn trainable_gradients_ignore_whether_the_partner_is_frozen() {
     let (gx_f, gw_f, has_f) = run(true);
     assert_eq!(gx_t, gx_f);
     assert_eq!(gw_t, gw_f);
-    assert_eq!(has_t[0], true);
+    assert!(has_t[0]);
     // f, p (permute), r (reshape of permute) and the norm weight.
     assert_eq!(has_f, [false, false, false, false]);
 }
@@ -278,7 +277,7 @@ fn frozen_embedding_and_fused_head_leave_the_trainable_gradient_unchanged() {
 /// gradient: the tied Qwen3.5 lm_head is vocab x hidden (about 2 GiB at
 /// 248k x 2048 in f32) and is always frozen under LoRA.
 #[test]
-#[ignore = "BREAK: a frozen weight of Tape::linear_cross_entropy still gets a full dW from the fused kernel and a scale_loss_grad pass"]
+#[ignore = "BREAK: tracked by ft-2bbced18 (fused CE weight gradient with a frozen tied head)"]
 fn a_frozen_fused_head_allocates_no_head_sized_gradient() {
     let (n, d, v) = (4usize, 64usize, 8192usize);
     let head_bytes = (v * d * 4) as u64;

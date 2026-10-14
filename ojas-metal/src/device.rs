@@ -1125,12 +1125,13 @@ impl Worker {
                 nout,
             } => self.linear_bwd(x, w, gy, rows, kin, nout),
             Cmd::LinearBwdInput {
+                x,
                 w,
                 gy,
                 rows,
                 kin,
                 nout,
-            } => self.linear_bwd_input(w, gy, rows, kin, nout),
+            } => self.linear_bwd_input(x, w, gy, rows, kin, nout),
             Cmd::Rms { sides, eps } => self.rms_sides(&sides, eps),
             Cmd::Rope {
                 op,
@@ -1548,6 +1549,7 @@ impl Worker {
 
     fn linear_bwd_input(
         &mut self,
+        x: Arg,
         w: Arg,
         gy: Arg,
         rows: usize,
@@ -1555,11 +1557,14 @@ impl Worker {
         nout: usize,
     ) -> Res<Reply> {
         const OP: &str = "linear_backward_input";
+        let xv = self.view(x)?;
         let wv = self.view(w)?;
         let gv = self.view(gy)?;
         let gx = self.fresh(rows * kin)?;
         let st = self.status(OP)?;
-        for v in [&wv, &gv] {
+        // `x` is not an operand of the product; it is checked as the full
+        // path checks it, so a poisoned activation is refused here too.
+        for v in [&xv, &wv, &gv] {
             self.check(&st, v, ST_IN)?;
         }
         GemmOperands::ExactF32

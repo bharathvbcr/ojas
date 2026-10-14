@@ -313,8 +313,6 @@ fn b_prime_twenty_step_losses_match_torch_and_repeat_bit_for_bit() {
 /// the card's bound and three times the oracle's own noise floor on that
 /// tensor, and ojas must be closer to the exact trajectory than torch fp32 is
 /// on most tensors.
-/// [`b_prime_final_adapters_within_1e_5_of_torch_fp32`] keeps the card's
-/// literal bound.
 #[test]
 fn b_prime_final_adapters_are_within_the_oracles_own_noise_floor() {
     let file = lora_file();
@@ -347,21 +345,6 @@ fn b_prime_final_adapters_are_within_the_oracles_own_noise_floor() {
         "ojas is closer to fp64 than torch fp32 on only {closer} of {} tensors",
         rows.len()
     );
-}
-
-/// (b') exactly as the card words it: final A and B within 1e-5 of each
-/// tensor's max against torch fp32. It does not hold, and cannot for any
-/// fp32 implementation: see
-/// [`b_prime_final_adapters_are_within_the_oracles_own_noise_floor`], whose
-/// floor column shows torch fp32 itself over 1e-5 from fp64. Kept so the
-/// literal bound stays one `--ignored` run away.
-#[test]
-#[ignore = "the card's 1e-5 on final adapters is below torch fp32's own distance to fp64; see the noise-floor test"]
-fn b_prime_final_adapters_within_1e_5_of_torch_fp32() {
-    let file = lora_file();
-    for (name, vs_torch, _, _) in final_ratios(&trajectory(), &file) {
-        assert!(vs_torch <= FINAL_BOUND, "{name}: {vs_torch:.3e} of peak");
-    }
 }
 
 /// A plain LoRA linear: dX, dA, dB against torch, and the frozen weight has

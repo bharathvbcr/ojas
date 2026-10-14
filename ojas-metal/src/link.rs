@@ -431,6 +431,7 @@ pub(crate) enum Cmd {
     },
     /// `LinearBwd`'s `grad_x` alone: no weight gradient is allocated.
     LinearBwdInput {
+        x: Arg,
         w: Arg,
         gy: Arg,
         rows: usize,

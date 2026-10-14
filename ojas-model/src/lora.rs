@@ -172,6 +172,20 @@ fn unit(rng: &mut impl Entropy) -> f64 {
     (rng.next_u64() >> 11) as f64 * ULP53
 }
 
+/// The element count of `dims`, refused if it overflows or its f32 bytes
+/// would not fit `budget`, before anything is allocated.
+fn element_count(dims: &[usize], budget: &Budget) -> Result<usize, LoraError> {
+    let n = dims
+        .iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .ok_or_else(|| LoraError::Mismatch(format!("shape {dims:?} overflows")))?;
+    let bytes = n
+        .checked_mul(4)
+        .ok_or_else(|| LoraError::Mismatch(format!("shape {dims:?} overflows in bytes")))?;
+    budget.check_room(bytes as u64)?;
+    Ok(n)
+}
+
 /// `A` `[r, in]` as PEFT initialises it: `kaiming_uniform_(a = sqrt(5))`,
 /// i.e. `U(-bound, bound)` with `bound = gain * sqrt(3 / fan_in)`,
 /// `gain = sqrt(2 / (1 + a^2)) = sqrt(1/3)`, so `bound = 1 / sqrt(in)`.
@@ -186,7 +200,7 @@ pub fn init_a(
     }
     let gain = (2.0 / (1.0 + 5.0f64)).sqrt();
     let bound = gain * (3.0 / in_features as f64).sqrt();
-    let n = config.rank * in_features;
+    let n = element_count(&[config.rank, in_features], budget)?;
     let values: Vec<f32> = (0..n)
         .map(|_| ((2.0 * unit(rng) - 1.0) * bound) as f32)
         .collect();
@@ -203,7 +217,7 @@ pub fn init_b(
     out_features: usize,
     budget: &Budget,
 ) -> Result<Tensor, LoraError> {
-    let n = out_features * config.rank;
+    let n = element_count(&[out_features, config.rank], budget)?;
     Ok(Tensor::from_f32(
         &vec![0.0; n],
         &[out_features, config.rank],
@@ -222,7 +236,7 @@ pub fn dropout_mask(
     if !(0.0..1.0).contains(&p) {
         return Err(LoraError::BadDropout(p));
     }
-    let n: usize = shape.iter().product();
+    let n = element_count(shape, budget)?;
     let keep = 1.0 / (1.0 - p);
     let values: Vec<f32> = (0..n)
         .map(|_| if unit(rng) < f64::from(p) { 0.0 } else { keep })

@@ -672,6 +672,18 @@ pub fn lora_targets(
                     format!("LoRA target {name} is not in the checkpoint: {e}"),
                 )
             })?;
+            if !matches!(
+                info.dtype,
+                ojas_io::StDtype::F32 | ojas_io::StDtype::BF16 | ojas_io::StDtype::F16
+            ) {
+                return Err(refuse(
+                    OP,
+                    format!(
+                        "LoRA target {name} is stored as {:?}, not a float weight the loader reads",
+                        info.dtype
+                    ),
+                ));
+            }
             let got: Vec<usize> = info.shape.iter().map(|&n| n as usize).collect();
             let want = [parts.iter().sum::<usize>(), inn];
             if got != want {
