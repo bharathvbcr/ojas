@@ -147,7 +147,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ran += 1;
     }
     if ran == 0 {
-        return Err(format!("no backend ran: {only:?} is not available on this OS; {usage}").into());
+        return Err(
+            format!("no backend ran: {only:?} is not available on this OS; {usage}").into(),
+        );
     }
     Ok(())
 }

@@ -15,12 +15,10 @@ mod forward;
 mod params;
 mod spec;
 
-pub use forward::{
-    bind, bind_frozen, forward_loss, forward_loss_lora, LoraForward, Qwen35Tables,
-};
+pub use forward::{bind, bind_frozen, forward_loss, forward_loss_lora, LoraForward, Qwen35Tables};
 pub use params::{
     fuse_grads, hf_tensors, load_hf, lora_targets, AttnParams, GdnParams, HfTensor, HfValues,
-    LayerLora, LayerParams, LoraKind, LoraTarget, MixerLora, MixerParams, Qwen35Lora,
-    Qwen35Params, LORA_KINDS,
+    LayerLora, LayerParams, LoraKind, LoraTarget, MixerLora, MixerParams, Qwen35Lora, Qwen35Params,
+    LORA_KINDS,
 };
 pub use spec::{Qwen35Mixer, Qwen35Spec};
