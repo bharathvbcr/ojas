@@ -641,7 +641,7 @@ Those were medians compared across separate runs.
   (`adamw_scratch`) were removed. `ojas-cpu` is a dev-dependency of
   `ojas-metal` and the Metal bench never calls it.
 - **What is durable:** the old tree was a `git archive` of ed17286 in the
-  git-ignored `target-baseline/ab/ojas`, so it is not kept. The raw
+  git-ignored `ab/ojas` (a gitignored lane file, not kept), so it is not kept. The raw
   per-round results in `bench/results/2026-10-01-ab/` are the record.
 
 | row | old min / median of mins / median of medians ms | new, same | new min slower in |
@@ -798,7 +798,7 @@ scenario; `bench/results/2026-10-01-floor/sample-tessl-sync.txt`):
 - Old is the same ojas tree built against tessl with the pre-change
   `runtime.rs`, saved as
   `bench/results/2026-10-01-floor/tessl-runtime-before-condvar.rs.txt`. The
-  driver is `target-baseline/floor_ab.sh`, which is git-ignored; the raw
+  driver is `floor_ab.sh` (a gitignored lane file, not kept), which is git-ignored; the raw
   per-round tables beside the summary are the record.
 
 | scenario | slow runs, old → new (of 600) | p50 ms, median of rounds [range] old → new | p90 ms old → new |
@@ -1005,7 +1005,7 @@ the one-float kernel and dispatch; `bench/results/2026-10-02-kernels/ab-check/`)
 The two columns come from separate runs (load 58, then 19), not paired. Within that, the checks inside change kernel time by −4% to +8%.
 
 **Interleaved A/B** (`bench/ab_metal_rows.sh 8`; old is the step-1 tree;
-`bench/results/2026-10-02-kernels/ab-fold/`). The old side is the live tree mirrored, with the two step-1 snapshot files copied back over `ojas-metal/src/device.rs` and `ojas-metal/kernels/ojas_backend.metal`, passed as `OLD_SRC`. Fix 1's old side was the same, with `ojas_check_finite` put back to one float per thread and `fn check` dispatching `n` threads. The driver scripts are in the git-ignored `target-baseline/`; the raw rounds beside each summary are the record. 8 rounds, load 19–20, median
+`bench/results/2026-10-02-kernels/ab-fold/`). The old side is the live tree mirrored, with the two step-1 snapshot files copied back over `ojas-metal/src/device.rs` and `ojas-metal/kernels/ojas_backend.metal`, passed as `OLD_SRC`. Fix 1's old side was the same, with `ojas_check_finite` put back to one float per thread and `fn check` dispatching `n` threads. The driver scripts are in the git-ignored `` (a gitignored lane file, not kept); the raw rounds beside each summary are the record. 8 rounds, load 19–20, median
 of round minimums. The torch column is round 4's torch minimum, unpaired:
 
 | row | step 1 ms | folded ms | change | vs torch now |

@@ -66,7 +66,7 @@ order. See `../2026-10-06-gemm-bf16`.
 | `splitk-rows/` | The split-K `metal_vs_torch`, 3 rounds, unpaired (load ~350): `linear_lmhead_bwd` 109.1 ms min, `linear_ce_c4096x50304` 166.4 ms. |
 
 `run.sh` and `sum.sh` are the probe A/B scripts. The binaries they ran are in
-the ignored `target-baseline/gemm-ab/`.
+the ignored `gemm-ab/` (a gitignored lane file, not kept).
 
 ## Where ojas issues these shapes
 

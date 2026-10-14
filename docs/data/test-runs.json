@@ -1,0 +1,43 @@
+{
+  "workspace": {
+    "recorded": "2026-10-09",
+    "commit": "d431949",
+    "host": "macOS, Metal and wgpu on the real GPU, no SKIP lines",
+    "command": "cargo test --workspace --release -- --test-threads=2",
+    "source": "gate run on a git archive mirror of d431949 under mac_heavy.sh, recorded in the CI card ft-b4f9ce4e61238a5853e72ee85f56fb03 (rustc 1.99.0)",
+    "passed": 1825,
+    "failed": 0,
+    "ignored": 41,
+    "suites": 211
+  },
+  "per_crate": {
+    "recorded": "2026-10-05",
+    "host": "Apple M5 Pro, macOS 27",
+    "command": "cargo test -p <crate> --release --no-fail-fast -- --test-threads=1",
+    "source": "docs/status-archive-2026-10-05.md, section \"Latest run: SIMD assembly kernels, layout hardening & PyTorch parity\"; the commit was not recorded",
+    "crates": [
+      {"name": "ojas-core", "passed": 154, "ignored": 2},
+      {"name": "ojas-cpu", "passed": 291, "ignored": 12},
+      {"name": "ojas-simd", "passed": 40, "note": "(workspace; 34 standalone)"},
+      {"name": "ojas-autograd", "passed": 68},
+      {"name": "ojas-io", "passed": 76},
+      {"name": "ojas-data", "passed": 37},
+      {"name": "ojas-infer", "passed": 40},
+      {"name": "ojas-oracle", "passed": 41, "ignored": 1},
+      {"name": "ojas-device", "passed": 72, "note": "(macOS; 66 on Linux)"},
+      {"name": "ojas-kernels", "passed": 11},
+      {"name": "ojas-capi", "passed": 79},
+      {"name": "ojas-metal", "passed": 175},
+      {"name": "ojas-wgpu", "passed": 131, "ignored": 3},
+      {"name": "ojas-qwen35", "passed": 34, "ignored": 8},
+      {"name": "ojas-model", "passed": 82},
+      {"name": "ojas-cuda", "passed": 8, "note": "(feature off)"},
+      {"name": "ojas-hip", "passed": 8, "note": "(feature off)"}
+    ],
+    "go": {
+      "passed": 41,
+      "failed": 0,
+      "command": "go test -a -tags gusset_pkgconfig ./..."
+    }
+  }
+}

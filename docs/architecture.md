@@ -266,7 +266,7 @@ flowchart TD
 ## 7. Web Documentation, Identity & Domain Ecosystem
 
 ### 7.1 Web Application Architecture
-The site ([`site/index.html`](file:///Users/bharath/Code/research/ojas/site/index.html), mirrored to [`docs/index.html`](file:///Users/bharath/Code/research/ojas/docs/index.html)) is one page. The labs, why, benchmarks, roadmap, and guide are sections of it:
+The site ([`site/index.html`](../site/index.html)) is one page. The labs, why, benchmarks, roadmap, and guide are sections of it:
 * **Guarantee labs:** a determinism lab that sums the same float32 values with split-k and with the Exact order, plus memory budget, device refusal, panic firewall, and checked shape and view labs. Each prints the error text from the source.
 * **Why ojas:** the reasons, the author's account of the defects in `docs/audit.md` that led to ojas, and what it is and is not ready for.
 * **Benchmarks:** the 2026-10-02 CPU plots (block forward + backward, both recorded training-step runs, and the ops where ojas is slower) beside the scorecard tables.
@@ -278,5 +278,5 @@ The site ([`site/index.html`](file:///Users/bharath/Code/research/ojas/site/inde
 One logo: a regular icosahedron of dark red liquid glass with a glowing core, in the same material as the LiquiTask logo. [`docs/brand/ojas-logo-source.png`](brand/ojas-logo-source.png) is the only source; [`docs/brand/render.sh`](brand/render.sh) derives the transparent logo, the tile, the favicon, touch and manifest icons, and the 1200×630 social card from it. Asset list and regeneration: [`web-and-domain.md`](web-and-domain.md#2-visual-identity-one-logo).
 
 ### 7.3 Domain Wiring & Deployment Topology
-* **Canonical Domain:** [`https://ojas.vbcr.dev/`](https://ojas.vbcr.dev/) via [`site/CNAME`](file:///Users/bharath/Code/research/ojas/site/CNAME) and [`.github/workflows/deploy-pages.yml`](file:///Users/bharath/Code/research/ojas/.github/workflows/deploy-pages.yml).
+* **Canonical Domain:** [`https://ojas.vbcr.dev/`](https://ojas.vbcr.dev/) via [`site/CNAME`](../site/CNAME) and [`.github/workflows/deploy-pages.yml`](../.github/workflows/deploy-pages.yml).
 * **Integrated Portfolio Route:** [`https://bharath.vbcr.dev/ojas`](https://bharath.vbcr.dev/ojas) resolved via `APP_ROUTES['ojas']` and `PROJECT_SITES['ojas']` (`p41`) in the portfolio engine.

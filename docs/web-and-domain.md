@@ -11,7 +11,7 @@ The interactive web documentation for **ojas** is hosted at:
 * **Portfolio Integrated Route:** [`https://bharath.vbcr.dev/ojas`](https://bharath.vbcr.dev/ojas)
 * **GitHub Repository:** [`https://github.com/bharathvbcr/ojas`](https://github.com/bharathvbcr/ojas)
 
-The application source lives at [`site/index.html`](file:///Users/bharath/Code/research/ojas/site/index.html) and is mirrored at [`docs/index.html`](file:///Users/bharath/Code/research/ojas/docs/index.html) for direct local previewing.
+The application source lives at [`site/index.html`](../site/index.html) and is the only copy. Preview it locally by serving `site/` (for example `python3 -m http.server -d site`); `docs/` carries no generated copy.
 
 ```mermaid
 flowchart TD
@@ -78,21 +78,20 @@ sh docs/brand/render.sh
 ```
 
 > [!NOTE]
-> `docs/index.html`, `docs/site.webmanifest` and `docs/assets/` are a full copy of `site/`; the script's last step keeps them in step. Re-run it after any edit to `site/index.html`.
+> The script's last step runs `scripts/sitegen`, which regenerates `site/reference/` and the test counts. `docs/` holds no copy of `site/`. Re-run `sitegen` after any edit to `site/index.html`, since its test counts are marked spans filled from `docs/data/test-runs.json`.
 ---
 
 ## 3. Domain Wiring (`vbcr.dev`)
 
 ### CNAME & DNS Setup
 1. **Repository CNAME Files:**
-   * [`site/CNAME`](file:///Users/bharath/Code/research/ojas/site/CNAME) contains `ojas.vbcr.dev`.
-   * [`docs/CNAME`](file:///Users/bharath/Code/research/ojas/docs/CNAME) contains `ojas.vbcr.dev`.
+   * [`site/CNAME`](../site/CNAME) contains `ojas.vbcr.dev`.
 2. **DNS Zone Configuration:**
    ```zone
    ojas.vbcr.dev.    300    IN    CNAME    bharathvbcr.github.io.
    ```
 3. **Automated CI/CD Deployment:**
-   The workflow at [`.github/workflows/deploy-pages.yml`](file:///Users/bharath/Code/research/ojas/.github/workflows/deploy-pages.yml) builds and publishes the `site/` directory directly to GitHub Pages on every push to `main`.
+   The workflow at [`.github/workflows/deploy-pages.yml`](../.github/workflows/deploy-pages.yml) builds and publishes the `site/` directory directly to GitHub Pages on every push to `main`.
 4. **Integrated Portfolio Router (`Portfolio` / `vbcr.dev`):**
    * Configured `ojas` in `/Users/bharath/Code/web/Portfolio/src/lib/routes.js` (`APP_ROUTES.ojas`, subdomain `ojas.vbcr.dev`, path `/ojas`).
    * Configured `ojas` landing page specification in `/Users/bharath/Code/web/Portfolio/src/data/projectSites.js` (`PROJECT_SITES.ojas`).
@@ -121,16 +120,16 @@ Sums 4,096 fixed float32 values in the browser with `Math.fround` after every ad
 * **Developer docs (`#docs`):** quickstart, core concepts, feature reference, Go API reference, architecture and crates, status and limits, and contributing. The Rust and Go snippets were compiled against this tree on 2026-10-01, and the Rust output shown is from that run. The Go reference states what `Load`, `Step` and `GenerateGreedy` do today, from the doc comments in `go/api.go`.
 
 ### 4.3a Reference library (`/reference/`)
-Forty-five pages rendered from the repository's own markdown, so they cannot drift from it: the `docs/*.md` files (design contracts, status and plans, the two benchmark documents, the seven audits) and one page per crate README, the Go package, the bench harness and the project README. `web-and-domain.md` itself is excluded.
+Reference pages are rendered from the repository's own markdown, so they cannot drift from it: the `docs/*.md` files (design contracts, status and plans, the two benchmark documents, the seven audits) and one page per crate README, the Go package, the bench harness and the project README. `web-and-domain.md` itself is excluded.
 
-[`scripts/sitegen/main.go`](../scripts/sitegen/main.go) (Go, standard library only) writes `site/reference/`, `site/assets/reference-index.json` (which the ⌘K palette loads) and `site/sitemap.xml`, and mirrors the result and the hand-written site files into `docs/`.
+[`scripts/sitegen/main.go`](../scripts/sitegen/main.go) (Go, standard library only) writes `site/reference/`, `site/assets/reference-index.json` (which the ⌘K palette loads) and `site/sitemap.xml`. It writes nothing under `docs/`, and it fills the marked test-count spans in `README.md`, `docs/status.md`, `docs/backends.md` and `site/index.html` from `docs/data/test-runs.json`.
 
 ```bash
 go run scripts/sitegen/main.go          # regenerate
 go run scripts/sitegen/main.go -check   # fail if anything is stale
 ```
 
-`-check` runs in `scripts/ci_local.sh` and in the `test` workflow, and generation fails if a markdown link points at nothing. A new `docs/*.md` must be given a category in `docCategory`, or the generator stops. Mermaid diagrams are drawn in the browser by Mermaid 11.15.0 from cdnjs, loaded by `site/assets/reference.js` only on pages that have a diagram and pinned with its SRI hash. If the script cannot load, the diagram source stays visible. To upgrade, take the new version and its `sri` value from `https://api.cdnjs.com/libraries/mermaid/<version>?fields=sri` and edit both in `reference.js`.
+`-check` runs in `scripts/ci_local.sh`, in the `test` workflow and before every Pages deploy (`deploy-pages.yml`), and generation fails if a markdown link points at nothing, is a `file://` or absolute path, or an image is not a tracked file. Crate pages exist only for workspace members. A new `docs/*.md` must be given a category in `docCategory`, or the generator stops. Mermaid diagrams are drawn in the browser by Mermaid 11.15.0 from cdnjs, loaded by `site/assets/reference.js` only on pages that have a diagram and pinned with its SRI hash. If the script cannot load, the diagram source stays visible. To upgrade, take the new version and its `sri` value from `https://api.cdnjs.com/libraries/mermaid/<version>?fields=sri` and edit both in `reference.js`.
 
 ### 4.4 Benchmarks
 Both recorded runs from the final optimized table, selectable, with no single speedup stated:

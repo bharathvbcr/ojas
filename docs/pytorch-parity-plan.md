@@ -10,7 +10,7 @@ The research behind this plan came from six read-only agents plus a per-crate te
 
 ## 0. Baseline of the working tree before any edit (verified)
 
-`target-baseline/run_baseline.sh` ran `cargo test -p <crate> --release -- --test-threads=1` on the uncommitted tree as it stood.
+`run_baseline.sh` (a gitignored lane file, not kept) ran `cargo test -p <crate> --release -- --test-threads=1` on the uncommitted tree as it stood.
 
 | crate | passed | failed | ignored |
 | :--- | ---: | ---: | ---: |
@@ -118,7 +118,7 @@ The run imported the real `nanolab.model.GPT` and `build_optimizers` (123.7M par
 
 **Decode** at B=1 (prompt 128, generate 128, KV cache) runs about 9 ms/token fp32, or 111 tok/s. Each token issues 783 aten ops, so dispatch overhead is the limit, not compute (inferred). No CPU fallback warnings appeared.
 
-The scripts are in `target-baseline/research/mps_profile/` (`mps_profile.py`, `run_all.sh`, plus probes). The benchmark lane moves the torch side into the repo.
+The scripts are in `research/mps_profile/` (a gitignored lane file, not kept) (`mps_profile.py`, `run_all.sh`, plus probes). The benchmark lane moves the torch side into the repo.
 
 **Targets this sets for ojas, in order:**
 1. Flash-style attention forward and backward with no T×T materialization.
@@ -153,7 +153,7 @@ GEMM itself is not a target.
 
 **Provenance.**
 - "Fail → pass" evidence (the test failed on the pre-fix code and passes after) comes from the lane reports. That evidence is not verified independently.
-- The coordinator's integration run (`target-baseline/logs-integration/`) verified only the final state: every named test below passes in it.
+- The coordinator's integration run (`logs-integration/` (a gitignored lane file, not kept)) verified only the final state: every named test below passes in it.
 - Go 27 is lane-reported, against a debug `libgusset`.
 
 | id | resolution | gating test(s) |
@@ -192,6 +192,7 @@ GEMM itself is not a target.
 - One test covers the 2^21-MAC Accelerate cutoff.
 - **Attention LSE (tracked in Task `gp-attention-kernels`):** a forward that emits LSE would remove the backward's stats pass, about 10–25% of the backward time (Metal lane estimate). That needs a trait change.
   - wgpu round 5 timed each backward dispatch: `attn_bwd_prep` reruns the forward, 11.5 of 52.1 ms at [4,12,1024,64] and 30.3 of 141.4 ms at [4,8,2048,64]. LSE from the forward would save about 21% of the wgpu backward (inferred).
+  - The driver for attention backward latency and scratch bytes is [`ojas-model/examples/attn_bwd_bench.rs`](../ojas-model/examples/attn_bwd_bench.rs) (`cargo run -p ojas-model --release --example attn_bwd_bench [iters] [metal|wgpu]`): per `[B, H, Hkv, T, D]` row it reports forward and backward scratch bytes and the min and median backward time.
   - Measured and reverted: register-blocked score dots (1.4–1.6× slower), dropping dkv's Q reload (≤ 7% of dkv), and a shared P/dS tile (no gain).
 - **wgpu `Queue::drop` blocks without bound inside wgpu (wgpu-core 30.0.1 `queue.rs:275-289`; Metal `waitUntilCompleted`).** ojas now drops the queue on a helper thread and waits at most `DROP_WAIT` (2 s). On timeout the queue, its device and one parked thread stay held until the GPU finishes. `tests/drop.rs` was still waiting at 1.0 s before the fix and returns at 0.31 s after. That hold is now bounded, counted and reported: `ojas_wgpu::drop_stats()` counts drops parked now and drops that ever timed out, `WgpuContext::open` refuses (`DeviceError::Capacity`) while `MAX_PARKED_DROPS` (4) are parked, and the Go `Profile` carries both counts (`WgpuDropsParked`, `WgpuDropsTimedOut`).
 - **capi demo paths over- or under-charge (found by the ojas-cpu budget lane).** Both are scheduled for removal in framework items 11–12, which replace these demo paths.

@@ -22,7 +22,7 @@ with the GPU shared with other sessions' work.
 | `sweep/ratios.txt` | `sweep_ratio.sh` over all six: per case and variant, the ratio to the same round's production time, min / median / max. |
 | `ab2/runs.txt` | Production A/B, 22 cases × 6 rounds × 2 sides (2026-10-07, ~17:01–17:04 UTC, load 8–11). Each run headed by `<case>-<old\|new>-r<round>`. |
 | `ab2/summary.txt` | `ab_sum.sh` over those runs: per case, the new/old ratio of each back-to-back pair, min / median / max, and each side's best time. |
-| `scripts/` | The scripts as run. Their paths are this machine's (`target-mathsrc/` is gitignored). |
+| `scripts/` | The scripts as run. Their paths are this machine's (the lane directory they ran in is gitignored and not kept). |
 | `tile-walk.diff` | The shader change. |
 
 ## How each was measured

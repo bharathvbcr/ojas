@@ -5,7 +5,7 @@ Status (2026-10-01):
 - **Integration run 4:** Rust 1071 passed and 0 failed (`--no-fail-fast`), Go 38/38, and clippy `-D warnings` is clean ([`status.md`](status.md)).
 - **Steps 2–4 are not started.**
 - **Rollback point:** the snapshot `wip/framework-layer-2026-10-01` (c686bb0), taken before step 1.
-- **Not yet run for step 1:** `target-matmul/parity.sh` and the `block_ab.sh` / `sample` profile that the success criterion below calls for.
+- **Not yet run for step 1:** `parity.sh` (a gitignored lane file, not kept) and the `block_ab.sh` / `sample` profile that the success criterion below calls for.
 
 ## Why
 
@@ -17,7 +17,7 @@ A host `Tensor` keeps its elements in a `Vec<u8>` (`ojas-core/src/tensor.rs`, `P
 | Storage tax | 975 | `to_f32_vec` 263, `memmove` 195, `f32_input_list` 184, `alloc_out` 179, `madvise` 154 |
 | `softmax_rows` | 365 | attention |
 
-Counts are top of stack from `target-matmul/block.sample.txt` (2026-10-01; `target-matmul/` is uncommitted scratch, so reproduce with `OJAS_BENCH_MODE=loop OJAS_BENCH_OPS=block OJAS_BENCH_DIRSEL=step OJAS_BENCH_SAMPLE_OUT=<file>` in `bench_ops.rs`, which runs `/usr/bin/sample`). The BLAS row sums the three hottest Accelerate frames. The storage tax is about 20–25% of active block time. That share is measured. What removing it would save is an estimate until it is measured, because some of those copies also warm the cache for the kernel that follows.
+Counts are top of stack from `block.sample.txt` (a gitignored lane file, not kept; 2026-10-01; the lane directory was uncommitted scratch, so reproduce with `OJAS_BENCH_MODE=loop OJAS_BENCH_OPS=block OJAS_BENCH_DIRSEL=step OJAS_BENCH_SAMPLE_OUT=<file>` in `bench_ops.rs`, which runs `/usr/bin/sample`). The BLAS row sums the three hottest Accelerate frames. The storage tax is about 20–25% of active block time. That share is measured. What removing it would save is an estimate until it is measured, because some of those copies also warm the cache for the kernel that follows.
 
 Two CPU paths already avoid the copy: `validate::f32_words` reads `&[[u8; 4]]` in place, and `pool::scoped::fill` writes output blocks in place. They do not help an operand that has to be a `&[f32]`, and they cost every kernel a decode at each load.
 
@@ -207,13 +207,13 @@ Every step leaves the whole workspace compiling and the integrated gate green.
    - checkpoint load (`ojas-model/src/checkpoint.rs`) moved to `from_le_reader`;
    - the call sites in the table above moved in the same change, so no step leaves two storage paths.
    - Already in step 1, as staged on 2026-10-01: in ojas-cpu, `validate::f32_words`/`u32_words` became `f32_values`/`u32_values` (borrowed `&[f32]`/`&[u32]`), `bytes_all_finite` was deleted, and every kernel that read words in place (optim, cross-entropy, embedding, exp, kv, accum, permute) reads typed values. Outputs built in a `Scratch` use `Scratch<f32>`. 9 files, +185 −258.
-   - Measured after landing (byte-storage binary against step 1, minimum of 3–5 interleaved rounds, 6 threads, load 23–27). Step 1 alone moves no time: block forward+backward 123.1 against 125.0 ms, cross-entropy, AdamW, clip and decode within noise. The in-place kernels already read the bytes without a copy, so the decode they lose was nearly free. Embedding forward (1.01 to 1.11 ms) and permute (0.130 to 0.143 ms) are about 9% slower. In the `sample` profile the output row copy in `pointwise::embedding_forward` doubled (439 to 809 samples), along with thread start-up and `vm_deallocate`. That looks like fresh output pages being faulted in on each call; it is not yet explained, and step 3 reworks output allocation. Profiles: `target-matmul/emb-pre-ts.sample.txt`, `emb-cur.sample.txt`.
+   - Measured after landing (byte-storage binary against step 1, minimum of 3–5 interleaved rounds, 6 threads, load 23–27). Step 1 alone moves no time: block forward+backward 123.1 against 125.0 ms, cross-entropy, AdamW, clip and decode within noise. The in-place kernels already read the bytes without a copy, so the decode they lose was nearly free. Embedding forward (1.01 to 1.11 ms) and permute (0.130 to 0.143 ms) are about 9% slower. In the `sample` profile the output row copy in `pointwise::embedding_forward` doubled (439 to 809 samples), along with thread start-up and `vm_deallocate`. That looks like fresh output pages being faulted in on each call; it is not yet explained, and step 3 reworks output allocation. Profiles: `emb-pre-ts.sample.txt` (a gitignored lane file, not kept), `emb-cur.sample.txt`.
 2. **ojas-cpu owned copies (landed 2026-10-02):**
    - `validate::f32_in`, `f32_inputs`, `f32_input_list`, `copy_checked`, `u32_in` and their `F32V`/`U32V` are deleted; no op copies or charges an operand.
    - The GEMM core's `Mat` borrows `&[f32]`; its two passes that split across threads (parallel packing, `sgemm_tile` tiles) and the paired linear backward run on `pool::scoped`. Flash attention reads each K/V head as a slice of the tensor instead of copying it per head, and fused cross-entropy reads its row and weight blocks as views.
    - Kernels that run on the persistent pool share their operands as `validate::Shared`, a clone of the tensor (one more owner of the storage) that the `'static` tasks capture; the pool frees captures before `run` returns, on errors and panics too (`captured_buffers_are_freed_after_errors_and_panics_too`, `operands_shared_with_pool_tasks_are_released_when_the_op_returns`). Mul, add and the value-residual blend write straight into their output tensor (`validate::fill_out`).
    - Budget contract: an op's peak is its output plus its own scratch (`tests/budget_inputs.rs` pins each one exactly; `ojas-cpu/README.md` point 6). Dropping the input charges exposed one real gap they had masked: per-row SDPA backward never charged its per-head gradient parts (`3 * len`); `attn.rs::backward_scratch` now does.
-   - Measured against the step-1 build (5 interleaved rounds, 6 threads, load 21–34; `target-matmul/ab_stage.sh`): mul fwd 0.88→0.45 ms and bwd 1.55→0.86, add fwd 0.33→0.19, value residual 1.3–1.5×, SiLU bwd 1.19→0.92, gate 1.1–1.2×, decode linear fwd 56→35 µs. Norms, RoPE, SDPA, Muon and the training block are flat within noise (block step median 140.7→135.7 ms).
+   - Measured against the step-1 build (5 interleaved rounds, 6 threads, load 21–34; `ab_stage.sh` (a gitignored lane file, not kept)): mul fwd 0.88→0.45 ms and bwd 1.55→0.86, add fwd 0.33→0.19, value residual 1.3–1.5×, SiLU bwd 1.19→0.92, gate 1.1–1.2×, decode linear fwd 56→35 µs. Norms, RoPE, SDPA, Muon and the training block are flat within noise (block step median 140.7→135.7 ms).
    - Landed ahead of the rest of step 2, on 2026-10-01: AdamW and `clip_grad_norm` write through `f32_slice_mut`. AdamW is a check pass then an in-place store pass; the clip scales each gradient where it is. Neither has a buffer, a copy back or a budget charge (contract change recorded in `ojas-cpu/README.md`, point 5). Same bits. Against the buffered build, 5 interleaved rounds, 6 threads: AdamW `[50304,768]` 20.8 to 11.2 ms (torch 15.5, fused 5.4), clip 25.7 to 16.0 ms (torch 27.9); details in [`bench-cpu-vs-torch.md`](bench-cpu-vs-torch.md).
 3. **ojas-cpu outputs:**
    - `alloc_out`, `F32Out` and `scoped::fill` targets become `Scratch<f32>` (done 2026-10-02: every output is a `Scratch` filled by `fill_out` / `fill_outs`, and `alloc_out` and `F32Out` are deleted);
@@ -250,12 +250,12 @@ Before step 1 lands:
 - **The existing tensor unit tests**, unchanged.
 
 After each step:
-- `target-matmul/gate.sh`: the integrated CPU gate, 78 test binaries plus clippy with `-D warnings`.
+- `gate.sh` (a gitignored lane file, not kept): the integrated CPU gate, 78 test binaries plus clippy with `-D warnings`.
 - `redteam_ops_heap.rs` (64 KiB slack). Peak heap must not rise, and should fall in steps 2 and 3.
-- `target-matmul/parity.sh`: every op and the composed block against torch.
+- `parity.sh` (a gitignored lane file, not kept): every op and the composed block against torch.
 - `ojas-infer` three-way parity under both numerics tiers.
 
-After steps 2 and 3, `target-matmul/block_ab.sh`: the block, forward and backward, interleaved against the frozen binary and torch. The plan only counts as successful if the storage bucket shrinks in a new `sample` profile and the block time falls.
+After steps 2 and 3, `block_ab.sh` (a gitignored lane file, not kept): the block, forward and backward, interleaved against the frozen binary and torch. The plan only counts as successful if the storage bucket shrinks in a new `sample` profile and the block time falls.
 
 ## Open questions
 

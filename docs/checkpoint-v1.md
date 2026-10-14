@@ -2,7 +2,7 @@
 
 Little-endian binary format for persisting training state, model parameters, and optimizer moments in **ojas**.
 
-The in-memory types are [`CheckpointV1`](file:///Users/bharath/Code/research/ojas/ojas-core/src/checkpoint.rs) and its member fields in `ojas-core`. Serialization and deserialization are implemented in [`ojas-io`](file:///Users/bharath/Code/research/ojas/ojas-io/src/checkpoint.rs) (`write_checkpoint` and `read_checkpoint`).
+The in-memory types are [`CheckpointV1`](../ojas-core/src/checkpoint.rs) and its member fields in `ojas-core`. Serialization and deserialization are implemented in [`ojas-io`](../ojas-io/src/checkpoint.rs) (`write_checkpoint` and `read_checkpoint`).
 
 ---
 
@@ -111,7 +111,7 @@ flowchart LR
 
 ## `rng_state` Layout v1
 
-`ojas_model::Trainer` stores [`ojas_data::SamplerRngState`](file:///Users/bharath/Code/research/ojas/ojas-data/src/sampler.rs) here. The batch sampler draws nothing as it runs. Its order is a keyed permutation of `(seed, epoch, ordinal)`, and `data_cursor` already holds the epoch and ordinal. The rest of its random state is which permutation runs and which key it uses:
+`ojas_model::Trainer` stores [`ojas_data::SamplerRngState`](../ojas-data/src/sampler.rs) here. The batch sampler draws nothing as it runs. Its order is a keyed permutation of `(seed, epoch, ordinal)`, and `data_cursor` already holds the epoch and ordinal. The rest of its random state is which permutation runs and which key it uses:
 
 | Byte Offset | Width | Type | Field |
 | :--- | :--- | :--- | :--- |
@@ -119,7 +119,7 @@ flowchart LR
 | `4..8` | 4 bytes | `u32` | generator, `1` = 4-round Feistel over SplitMix64 (`RNG_GENERATOR_FEISTEL4_SPLITMIX64`) |
 | `8..16` | 8 bytes | `u64` | seed, the train config's `data_seed` |
 
-Resume decodes it exactly. A length other than 16, an unknown version or generator, or a seed different from the caller's `data_seed` is refused. An empty `rng_state` is refused too: files saved before this layout wrote one, and they are not migrated. `permutation_is_pinned` (`ojas-data/tests/sampler.rs`) pins window starts against an independent Python oracle (`target-robust/sampler_oracle.py`). A change that moves any of them needs a new generator tag. `g9_forty_steps_equal_twenty_saved_dropped_resumed_and_twenty_more` (`ojas-model/tests/checkpoint.rs`) proves bit for bit on CPU that 20 steps, a save, a resume and 20 more equal 40 uninterrupted steps.
+Resume decodes it exactly. A length other than 16, an unknown version or generator, or a seed different from the caller's `data_seed` is refused. An empty `rng_state` is refused too: files saved before this layout wrote one, and they are not migrated. `permutation_is_pinned` (`ojas-data/tests/sampler.rs`) pins window starts against an independent Python oracle (`bench/evidence/robust/sampler_oracle.py`). A change that moves any of them needs a new generator tag. `g9_forty_steps_equal_twenty_saved_dropped_resumed_and_twenty_more` (`ojas-model/tests/checkpoint.rs`) proves bit for bit on CPU that 20 steps, a save, a resume and 20 more equal 40 uninterrupted steps.
 
 ---
 

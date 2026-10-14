@@ -7,38 +7,68 @@ on:
     paths:
       - 'site/**'
       - 'docs/**'
+      - 'README.md'
+      - '*/README.md'
+      - 'scripts/sitegen/**'
+      - 'Cargo.toml'
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: 'pages'
   cancel-in-progress: false
 
+env:
+  GO_VERSION: "1.27.x"
+
 jobs:
+  # The site is generated from the markdown. Publishing a tree whose generated
+  # files are stale, or whose links point at nothing, is refused here.
+  check:
+    name: sitegen (vet, test, check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: go vet
+        run: go vet scripts/sitegen/main.go
+      - name: go test
+        run: go test -count=1 scripts/sitegen/main.go scripts/sitegen/main_test.go
+      - name: site is generated from the markdown
+        run: go run scripts/sitegen/main.go -check
+
   deploy:
+    needs: check
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
         with:
           enable_cname: true
 
       - name: Upload Artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: './site'
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

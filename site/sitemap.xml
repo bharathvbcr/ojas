@@ -15,6 +15,7 @@
   <url><loc>https://ojas.vbcr.dev/reference/metal-deferred-faults.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/pytorch-parity-plan.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/status.html</loc></url>
+  <url><loc>https://ojas.vbcr.dev/reference/status-archive-2026-10-05.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/typed-storage-plan.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/bench-cpu-vs-torch.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/bench-gpu-vs-torch.html</loc></url>
@@ -27,9 +28,6 @@
   <url><loc>https://ojas.vbcr.dev/reference/audit-phase3.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/audit-resources.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/readme.html</loc></url>
-  <url><loc>https://ojas.vbcr.dev/reference/crate-bench.html</loc></url>
-  <url><loc>https://ojas.vbcr.dev/reference/crate-gemma-metal.html</loc></url>
-  <url><loc>https://ojas.vbcr.dev/reference/crate-go.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/crate-ojas-autograd.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/crate-ojas-capi.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/crate-ojas-core.html</loc></url>

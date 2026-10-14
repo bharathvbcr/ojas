@@ -96,6 +96,7 @@
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
 <li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
 </ul>
 <p class="ref-nav-cat">Benchmarks</p>
@@ -117,9 +118,6 @@
 <p class="ref-nav-cat">Crates</p>
 <ul>
 <li><a href="readme.html">Project README</a></li>
-<li><a href="crate-bench.html">bench</a></li>
-<li><a href="crate-gemma-metal.html">gemma-metal</a></li>
-<li><a href="crate-go.html">go</a></li>
 <li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
 <li><a href="crate-ojas-capi.html">ojas-capi</a></li>
 <li><a href="crate-ojas-core.html">ojas-core</a></li>
@@ -148,7 +146,7 @@
 <blockquote><p>Charts of every run behind this page, one per result folder, are in <a href="bench-plots.html">bench-plots.md</a>.</p>
 </blockquote>
 <p>Paired A/B of ojas&#39;s two GPU backends, <code>MetalBackend</code> (<code>ojas-metal</code>) and <code>WgpuBackend</code> (<code>ojas-wgpu</code>), against PyTorch 2.13 MPS, at nanolab&#39;s default shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabulary 50304, B 4, T 1024 (4096 rows). Each kernel is timed forward and backward where it has a backward. One composed nanolab block is timed forward, and forward plus backward. Everything is f32 on both sides, except the <code>muon_RxC_bf16</code> rows (2026-10-07), which run bf16 Newton-Schulz on both sides.</p>
-<p>The harness, the commands and the row definitions are in <a href="crate-bench.html"><code>bench/README.md</code></a>. Raw data: round 1 in <code>bench/results/2026-10-01/</code>, round 2 in <code>bench/results/2026-10-01-r2/</code>, round 3 in <code>bench/results/2026-10-01-r3b/</code>, and the round 3 regression A/B in <code>bench/results/2026-10-01-ab/</code>.</p>
+<p>The harness, the commands and the row definitions are in <a href="https://github.com/bharathvbcr/ojas/blob/main/bench/README.md" rel="noopener"><code>bench/README.md</code></a>. Raw data: round 1 in <code>bench/results/2026-10-01/</code>, round 2 in <code>bench/results/2026-10-01-r2/</code>, round 3 in <code>bench/results/2026-10-01-r3b/</code>, and the round 3 regression A/B in <code>bench/results/2026-10-01-ab/</code>.</p>
 <p>The document has seven dated sections:</p>
 <ul>
 <li><strong>Muon with bf16 Newton-Schulz</strong> (2026-10-07): <code>Ns5Precision::Bf16</code> on Metal against its f32 iteration and against nanolab&#39;s stock bf16 Muon.
@@ -615,7 +613,7 @@
 </li>
 <li><strong>Build caveat:</strong> ed17286&#39;s <code>ojas-cpu</code> does not compile; it was captured mid-edit. In the A/B copy only, one unused import and one uncalled function (<code>adamw_scratch</code>) were removed. <code>ojas-cpu</code> is a dev-dependency of <code>ojas-metal</code> and the Metal bench never calls it.
 </li>
-<li><strong>What is durable:</strong> the old tree was a <code>git archive</code> of ed17286 in the git-ignored <code>target-baseline/ab/ojas</code>, so it is not kept. The raw per-round results in <code>bench/results/2026-10-01-ab/</code> are the record.
+<li><strong>What is durable:</strong> the old tree was a <code>git archive</code> of ed17286 in the git-ignored <code>ab/ojas</code> (a gitignored lane file, not kept), so it is not kept. The raw per-round results in <code>bench/results/2026-10-01-ab/</code> are the record.
 </li>
 </ul>
 <div class="table-wrap"><table>
@@ -766,7 +764,7 @@
 <ul>
 <li>Protocol: <code>metal_bench 4 floor</code>, 6 rounds alternating old and new, 100 runs per scenario per round, load 18–20 on every run.
 </li>
-<li>Old is the same ojas tree built against tessl with the pre-change <code>runtime.rs</code>, saved as <code>bench/results/2026-10-01-floor/tessl-runtime-before-condvar.rs.txt</code>. The driver is <code>target-baseline/floor_ab.sh</code>, which is git-ignored; the raw per-round tables beside the summary are the record.
+<li>Old is the same ojas tree built against tessl with the pre-change <code>runtime.rs</code>, saved as <code>bench/results/2026-10-01-floor/tessl-runtime-before-condvar.rs.txt</code>. The driver is <code>floor_ab.sh</code> (a gitignored lane file, not kept), which is git-ignored; the raw per-round tables beside the summary are the record.
 </li>
 </ul>
 <div class="table-wrap"><table>
@@ -972,7 +970,7 @@
 <tr><td>add_bwd</td><td style="text-align:right">—</td><td style="text-align:right">652</td></tr>
 </tbody></table></div>
 <p>The two columns come from separate runs (load 58, then 19), not paired. Within that, the checks inside change kernel time by −4% to +8%.</p>
-<p><strong>Interleaved A/B</strong> (<code>bench/ab_metal_rows.sh 8</code>; old is the step-1 tree; <code>bench/results/2026-10-02-kernels/ab-fold/</code>). The old side is the live tree mirrored, with the two step-1 snapshot files copied back over <code>ojas-metal/src/device.rs</code> and <code>ojas-metal/kernels/ojas_backend.metal</code>, passed as <code>OLD_SRC</code>. Fix 1&#39;s old side was the same, with <code>ojas_check_finite</code> put back to one float per thread and <code>fn check</code> dispatching <code>n</code> threads. The driver scripts are in the git-ignored <code>target-baseline/</code>; the raw rounds beside each summary are the record. 8 rounds, load 19–20, median of round minimums. The torch column is round 4&#39;s torch minimum, unpaired:</p>
+<p><strong>Interleaved A/B</strong> (<code>bench/ab_metal_rows.sh 8</code>; old is the step-1 tree; <code>bench/results/2026-10-02-kernels/ab-fold/</code>). The old side is the live tree mirrored, with the two step-1 snapshot files copied back over <code>ojas-metal/src/device.rs</code> and <code>ojas-metal/kernels/ojas_backend.metal</code>, passed as <code>OLD_SRC</code>. Fix 1&#39;s old side was the same, with <code>ojas_check_finite</code> put back to one float per thread and <code>fn check</code> dispatching <code>n</code> threads. The driver scripts are in the git-ignored `` (a gitignored lane file, not kept); the raw rounds beside each summary are the record. 8 rounds, load 19–20, median of round minimums. The torch column is round 4&#39;s torch minimum, unpaired:</p>
 <div class="table-wrap"><table>
 <thead><tr><th>row</th><th style="text-align:right">step 1 ms</th><th style="text-align:right">folded ms</th><th style="text-align:right">change</th><th>vs torch now</th></tr></thead>
 <tbody>

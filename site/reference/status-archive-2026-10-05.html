@@ -3,28 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ojas Status &amp; Verification Matrix · ojas reference</title>
-  <meta name="description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
-  <meta name="keywords" content="ojas, ojas status &amp; verification matrix, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <title>ojas Status Archive: test runs through 2026-10-05 · ojas reference</title>
+  <meta name="description" content="Older test runs, moved out of status.md so that page keeps one current set of counts. The counts here are historical records of the runs named in each heading; they are not current. The current count…">
+  <meta name="keywords" content="ojas, ojas status archive: test runs through 2026-10-05, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#08080a">
-  <link rel="canonical" href="https://ojas.vbcr.dev/reference/status.html">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/status-archive-2026-10-05.html">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="ojas">
-  <meta property="og:url" content="https://ojas.vbcr.dev/reference/status.html">
-  <meta property="og:title" content="ojas Status &amp; Verification Matrix · ojas reference">
-  <meta property="og:description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/status-archive-2026-10-05.html">
+  <meta property="og:title" content="ojas Status Archive: test runs through 2026-10-05 · ojas reference">
+  <meta property="og:description" content="Older test runs, moved out of status.md so that page keeps one current set of counts. The counts here are historical records of the runs named in each heading; they are not current. The current count…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="ojas Status &amp; Verification Matrix · ojas reference">
+  <meta property="og:image:alt" content="ojas Status Archive: test runs through 2026-10-05 · ojas reference">
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="ojas Status &amp; Verification Matrix · ojas reference">
-  <meta name="twitter:description" content="Recorded: 2026-10-01, Apple M5 Pro, macOS 27.">
+  <meta name="twitter:title" content="ojas Status Archive: test runs through 2026-10-05 · ojas reference">
+  <meta name="twitter:description" content="Older test runs, moved out of status.md so that page keeps one current set of counts. The counts here are historical records of the runs named in each heading; they are not current. The current count…">
   <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
-  <meta name="twitter:image:alt" content="ojas Status &amp; Verification Matrix · ojas reference">
+  <meta name="twitter:image:alt" content="ojas Status Archive: test runs through 2026-10-05 · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
   <link rel="manifest" href="../site.webmanifest">
@@ -39,9 +39,9 @@
   {
     "@context": "https://schema.org",
     "@type": "TechArticle",
-    "headline": "ojas Status \u0026 Verification Matrix · ojas reference",
-    "description": "Recorded: 2026-10-01, Apple M5 Pro, macOS 27.",
-    "url": "https://ojas.vbcr.dev/reference/status.html",
+    "headline": "ojas Status Archive: test runs through 2026-10-05 · ojas reference",
+    "description": "Older test runs, moved out of status.md so that page keeps one current set of counts. The counts here are historical records of the runs named in each heading; they are not current. The current count…",
+    "url": "https://ojas.vbcr.dev/reference/status-archive-2026-10-05.html",
     "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
     "author": {
       "@type": "Person",
@@ -95,7 +95,8 @@
 <li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
-<li><a href="status.html" class="current" aria-current="page">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html" class="current" aria-current="page">ojas Status Archive: test runs through 2026-10-05</a></li>
 <li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
 </ul>
 <p class="ref-nav-cat">Benchmarks</p>
@@ -117,9 +118,6 @@
 <p class="ref-nav-cat">Crates</p>
 <ul>
 <li><a href="readme.html">Project README</a></li>
-<li><a href="crate-bench.html">bench</a></li>
-<li><a href="crate-gemma-metal.html">gemma-metal</a></li>
-<li><a href="crate-go.html">go</a></li>
 <li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
 <li><a href="crate-ojas-capi.html">ojas-capi</a></li>
 <li><a href="crate-ojas-core.html">ojas-core</a></li>
@@ -144,39 +142,10 @@
     <main id="main" class="min-w-0">
       <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
       <article class="prose-ojas">
-<h1 id="ojas-status--verification-matrix">ojas Status &amp; Verification Matrix <a class="anchor" href="#ojas-status--verification-matrix" aria-label="Link to this section">#</a></h1>
-<p>Recorded: 2026-10-01, Apple M5 Pro, macOS 27.</p>
-<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Verification Protocol Standards:</strong></p>
-<ul>
-<li><strong>Verified:</strong> A claim is verified when this session executed the command directly and recorded its exact output.
-</li>
-<li><strong>Reported:</strong> An earlier lane or audit session recorded the outcome and this session did not re-execute it.
-</li>
-<li><strong>Inferred:</strong> Logically deduced from code structure or invariant dependencies.
-</li>
-</ul>
-</aside>
+<h1 id="ojas-status-archive-test-runs-through-2026-10-05">ojas Status Archive: test runs through 2026-10-05 <a class="anchor" href="#ojas-status-archive-test-runs-through-2026-10-05" aria-label="Link to this section">#</a></h1>
+<p>Older test runs, moved out of <a href="status.html">status.md</a> so that page keeps one current set of counts. The counts here are historical records of the runs named in each heading; they are not current. The current counts come from <code>docs/data/test-runs.json</code>.</p>
 <hr>
-<h2 id="changes-2026-10-06-to-2026-10-08-reported-from-git-history-suites-not-re-run">Changes 2026-10-06 to 2026-10-08 (reported from git history; suites not re-run) <a class="anchor" href="#changes-2026-10-06-to-2026-10-08-reported-from-git-history-suites-not-re-run" aria-label="Link to this section">#</a></h2>
-<p>Source: the 37 non-merge commits from <code>9668bfa</code> to <code>0e3254f</code> (<code>git log --since=2026-10-05 --no-merges</code>). This entry was written from those commit subjects and from the result files under <code>bench/results/</code>; this session did not re-run any test suite, so the 2026-10-05 counts below are <strong>not</strong> refreshed and the test totals for these commits are unverified here.</p>
-<div class="table-wrap"><table>
-<thead><tr><th>Area</th><th>Commits</th><th>What changed</th></tr></thead>
-<tbody>
-<tr><td>Qwen3.5 hybrid model</td><td><code>6a0a926</code>, <code>b363802</code>, <code>66c5e52</code></td><td>Gated DeltaNet and hybrid ops, sliding-window SDPA, bf16 Muon NS5; the hybrid-layer ops on tessl Metal kernels; the Qwen3.5 hybrid tower on <code>Tape</code> with sigmoid and GDN decay ops and per-group learning rates.</td></tr>
-<tr><td>CUDA</td><td><code>c74f3ba</code>, <code>cf4049f</code></td><td><code>ojas-qwen35-cuda</code> merged into <code>ojas-cuda</code> with its host-side gaps closed; every CUDA <code>Qwen35Step</code> method refuses until kernels back it. CUDA-C remains unrun on this Mac (NVRTC needs the GH200).</td></tr>
-<tr><td>CPU and autograd hot paths</td><td><code>7763814</code>, <code>a9af0a0</code>, <code>1dea12d</code></td><td>In-place gradient fan-in, seed scaling, pooled accumulate, <code>cblas_ssyrk</code> for Muon&#39;s X·Xᵀ, tap-major conv1d sums, a tiled mirror. Measured in <code>bench/results/2026-10-08-cpu-hot-paths</code>: conv1d backward 0.08 of base, fused-CE seed one-quarter 0.17, gated-RMSNorm backward 0.25, 50304×768 accumulate 0.29 (min over 5 rounds, load 17–82; ratios between 0.9 and 1.1 are noise).</td></tr>
-<tr><td>GPU runtime</td><td><code>0e3254f</code>, <code>2f10f3a</code>, <code>00adde8</code>, <code>9cd13e5</code>, <code>3c9c252</code></td><td>Step-throughput work across wgpu, Metal and HIP; the saved-sigmoid gate pair (backward 7% faster on Metal, 15% on wgpu, forward within 2%); GPU session budgets planned from the device memory probe; a typed CUDA <code>DeviceLost</code> test; the native grouped-query budget charge measured at the Qwen3.5 shape.</td></tr>
-<tr><td>Attention</td><td><code>6a0a926</code>, <code>143e469</code>, <code>19d834a</code>, <code>86a1096</code></td><td>Saved log-sum-exp backward, landed in <code>6a0a926</code> and measured against <code>c74f3ba</code> at <code>86a1096</code> (0.76–0.81 of the old backward time on Metal and wgpu, forward within noise except grouped-query Metal at 0.89, <code>bench/results/2026-10-08-attn-lse-ab</code>); Fast flash backward forms delta from its own P; Exact SDPA goldens re-pinned; a causal SDPA backward diagnostic for Fast against Exact.</td></tr>
-<tr><td>Inference</td><td><code>7f0a9f3</code>, <code>8967457</code>, <code>420c4a1</code></td><td>Device-side greedy argmax and upload-free decode steps; decode tokens/s rows on CPU, <code>CpuGpt</code>, Metal, wgpu and torch-mps. Before that change (<code>bench/results/2026-10-08-decode-before</code>), ojas-cpu decoded at 5.09 ms/token against torch-mps at 5.88, and the Metal and wgpu lanes were slower (12.42 and 29.52 ms/token).</td></tr>
-<tr><td>Correctness fixes</td><td><code>a5ccdc5</code>, <code>0837e43</code>, <code>7c69ea3</code></td><td>bf16 storage only for matmul-class operands under autocast; gated forwards pass <code>scale_grad</code> to the inner backend; MRoPE frequencies compared on cos and sin together.</td></tr>
-<tr><td>bf16 GEMM and Muon</td><td><code>fb98768</code></td><td>Column-panel tile walk: the largest-B cases fall to 0.50–0.77 of the old time, controls stay near 1.0 (<code>bench/results/2026-10-06-gemm-bf16</code>); bf16 Muon throughput recorded in <code>2026-10-07-muon-bf16</code> (wgpu refuses bf16 Newton-Schulz).</td></tr>
-<tr><td>Imports</td><td><code>1fc6a03</code>, <code>ca90094</code></td><td>gemma-metal and the arch02 Rust trainers imported from MLSystemsLab; reference pages regenerated.</td></tr>
-<tr><td>Docs and tasks</td><td><code>7eb09eb</code>, <code>b066122</code>, <code>cbd56ab</code>, <code>9668bfa</code>, <code>32e74b3</code>, <code>268c640</code>, <code>4be1069</code>, <code>afed9ad</code></td><td>Op coverage, dtype, checkpoint and Metal fault docs synced; task briefs formatted to the GitPulse Task Brief v1 spec and consolidated into 9 roadmap and audit tasks, then 11 more briefs added.</td></tr>
-<tr><td>Benchmark plots</td><td>(this change)</td><td><a href="bench-plots.html">bench-plots.md</a>: a chart for every folder under <code>bench/results/</code> (83 charts), drawn by <code>bench/plot_all.py</code>. Run <code>python3 -I bench/plot_all.py</code> from the repository root to regenerate them.</td></tr>
-</tbody></table></div>
-<p>Also landed after the 37 commits above: merge <code>8060846</code> brings in the <code>inference-decode-path</code> branch (<code>84ab777</code>, <code>topk_rows</code> on every backend for top-k sampling; new <code>ojas-{cpu,metal,wgpu}/tests/topk_rows.rs</code> and <code>ojas-infer/src/cache.rs</code>; <code>ojas-infer/src/kernels.rs</code> removed). That merge was concluded as another session had resolved and staged it. It was <strong>not built or tested</strong> in this session, so treat it as unverified until the workspace suites are re-run.</p>
-<hr>
-<h2 id="latest-run-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05">Latest run: SIMD assembly kernels, layout hardening &amp; PyTorch parity (verified, 2026-10-05) <a class="anchor" href="#latest-run-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05" aria-label="Link to this section">#</a></h2>
+<h2 id="run-of-2026-10-05-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05">Run of 2026-10-05: SIMD assembly kernels, layout hardening &amp; PyTorch parity (verified, 2026-10-05) <a class="anchor" href="#run-of-2026-10-05-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05" aria-label="Link to this section">#</a></h2>
 <p>Verification across workspace crates and backend implementations:</p>
 <ul>
 <li><code>cargo clippy --workspace --all-targets -- -D warnings</code> is clean.
@@ -250,9 +219,9 @@
 <li><strong>GitPulse Task Integration (<code>tasks/</code>):</strong> Consolidated into 9 unified, prioritized task briefs in <code>tasks/</code> tracking execution blockers and roadmap features (<code>gp-cuda-backend-provider</code>, <code>gp-bf16-compute-tier</code>, <code>gp-attention-kernels</code>, <code>gp-gpu-runtime-hardening</code>, <code>gp-autograd-and-model-primitives</code>, <code>gp-data-and-checkpoint-robustness</code>, <code>gp-backend-architecture-decisions</code>, <code>gp-ci-and-repo-hygiene</code>, <code>gp-docs-and-bench-parity</code>).
 </li>
 </ul>
-<h2 id="previous-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04">Previous run: kernel hardening, SIMD vectorization &amp; backend parity (verified, 2026-10-04) <a class="anchor" href="#previous-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04" aria-label="Link to this section">#</a></h2>
-<h2 id="previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35) <a class="anchor" href="#previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235" aria-label="Link to this section">#</a></h2>
-<p>Integration run 4 (<code>target-baseline/run_integration4.sh</code>, logs in <code>target-baseline/logs-integration-4/</code>):</p>
+<h2 id="earlier-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04">Earlier run: kernel hardening, SIMD vectorization &amp; backend parity (verified, 2026-10-04) <a class="anchor" href="#earlier-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04" aria-label="Link to this section">#</a></h2>
+<h2 id="earlier-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Earlier run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35) <a class="anchor" href="#earlier-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235" aria-label="Link to this section">#</a></h2>
+<p>Integration run 4 (<code>run_integration4.sh</code> (a gitignored lane file, not kept), logs in <code>logs-integration-4/</code> (a gitignored lane file, not kept)):</p>
 <ul>
 <li>Each crate ran <code>cargo test -p &lt;crate&gt; --release --no-fail-fast -- --test-threads=1</code> on the uncommitted tree, after <code>cargo build --workspace --release --all-targets</code> exited 0.
 </li>
@@ -305,8 +274,8 @@
 <li><strong>Formatting:</strong> <code>cargo fmt --all --check</code> and <code>go fmt</code> are verified clean across all workspace crates and Go packages.
 </li>
 </ul>
-<h2 id="previous-run-after-the-framework-round-verified-2026-10-01-18521855">Previous run: after the framework round (verified, 2026-10-01 18:52–18:55) <a class="anchor" href="#previous-run-after-the-framework-round-verified-2026-10-01-18521855" aria-label="Link to this section">#</a></h2>
-<p>Each crate ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree (<code>target-baseline/run_integration2.sh</code>, logs in <code>target-baseline/logs-integration-2/</code>). The script first ran <code>cargo build --workspace --release --all-targets</code>, which exited 0. Load average was 12–17. Afterwards, the Metal cached-attention CPU-parity test (G4) was un-ignored and passes (<code>ojas-metal --test kv_cache</code>: 8 passed).</p>
+<h2 id="earlier-run-after-the-framework-round-verified-2026-10-01-18521855">Earlier run: after the framework round (verified, 2026-10-01 18:52–18:55) <a class="anchor" href="#earlier-run-after-the-framework-round-verified-2026-10-01-18521855" aria-label="Link to this section">#</a></h2>
+<p>Each crate ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree (<code>run_integration2.sh</code> (a gitignored lane file, not kept), logs in <code>logs-integration-2/</code> (a gitignored lane file, not kept)). The script first ran <code>cargo build --workspace --release --all-targets</code>, which exited 0. Load average was 12–17. Afterwards, the Metal cached-attention CPU-parity test (G4) was un-ignored and passes (<code>ojas-metal --test kv_cache</code>: 8 passed).</p>
 <div class="table-wrap"><table>
 <thead><tr><th>crate</th><th>previous run (below)</th><th>this run</th></tr></thead>
 <tbody>
@@ -359,8 +328,8 @@
 </ul>
 </li>
 </ul>
-<h2 id="previous-run-after-the-parity-and-hardening-lanes-verified-2026-10-01">Previous run: after the parity and hardening lanes (verified, 2026-10-01) <a class="anchor" href="#previous-run-after-the-parity-and-hardening-lanes-verified-2026-10-01" aria-label="Link to this section">#</a></h2>
-<p>Each crate ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree (<code>target-baseline/run_integration.sh</code>, logs in <code>target-baseline/logs-integration/</code>). ojas-metal was re-run with <code>--no-fail-fast</code> after the tiny-step head-dim fix. Load average was 16–36. The plan and findings are in <a href="pytorch-parity-plan.html"><code>pytorch-parity-plan.md</code></a>.</p>
+<h2 id="earlier-run-after-the-parity-and-hardening-lanes-verified-2026-10-01">Earlier run: after the parity and hardening lanes (verified, 2026-10-01) <a class="anchor" href="#earlier-run-after-the-parity-and-hardening-lanes-verified-2026-10-01" aria-label="Link to this section">#</a></h2>
+<p>Each crate ran <code>cargo test -p &lt;crate&gt; --release -- --test-threads=1</code> on the uncommitted tree (<code>run_integration.sh</code> (a gitignored lane file, not kept), logs in <code>logs-integration/</code> (a gitignored lane file, not kept)). ojas-metal was re-run with <code>--no-fail-fast</code> after the tiny-step head-dim fix. Load average was 16–36. The plan and findings are in <a href="pytorch-parity-plan.html"><code>pytorch-parity-plan.md</code></a>.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>crate</th><th>before (per crate, same method)</th><th>after</th></tr></thead>
 <tbody>
@@ -390,7 +359,7 @@
 <tr><td>ojas-autograd</td><td>36</td></tr>
 <tr><td>ojas-infer</td><td>32</td></tr>
 </tbody></table></div>
-<p>The rest are unchanged. Logs are in <code>target-baseline/logs-postflip/</code>. The ojas-capi, ojas-metal and ojas-wgpu re-runs after the flip belong to that session and are not recorded here.</p>
+<p>The rest are unchanged. Logs are in <code>logs-postflip/</code> (a gitignored lane file, not kept). The ojas-capi, ojas-metal and ojas-wgpu re-runs after the flip belong to that session and are not recorded here.</p>
 <p><strong>GPU against torch MPS:</strong> see <a href="bench-gpu-vs-torch.html"><code>bench-gpu-vs-torch.md</code></a>. ojas is slower on most rows. In round 3, a nanolab block forward + backward is 0.92× torch on Metal (mixed) and 0.41× on wgpu. Metal leads on <code>clip_grad_norm</code> (7.2×, against torch 2.13; the 2.15 nightly fixes the torch kernel behind it and is about 2× faster than ojas, see <code>bench/results/2026-10-05-torch215-clip</code>), <code>adamw_full</code> (1.55×), SDPA backward (1.5–1.6×) and <code>cross_entropy_fwd</code> (3.6×). Round 3 ran on a GPU that read 100% busy throughout, so every row fails the spread gate and only direction is verified. Round 2&#39;s four Metal &#34;regressions&#34; were noise: an interleaved A/B against ed17286 puts the minimums within 0–5%. The Metal per-op fixed cost (a median of 1–2 ms for sub-millisecond ops) was a 1 ms sleep poll in tessl&#39;s <code>synchronize</code>. A Condvar wait removed it: in an interleaved A/B, an op plus sync went from a 1.43 ms to a 0.165 ms median. After the fix, Metal <code>permute</code> is 1.13× torch, <code>rope</code> 3.5–3.9×, and <code>decode_attn</code> 0.96×. The elementwise gap was standalone finite-check passes (62% of each op&#39;s GPU time). They now read 4 floats per thread, and silu, mul, add and value-residual check inside their own kernels. Interleaved A/B: silu, mul and add are 40–45% faster, and these ops are now 0.83–1.63× torch (against round 4&#39;s torch minimums, not paired). In round 5, the Metal block forward + backward is 1.07× torch. The LM head was 0.48× because tessl&#39;s exact-f32 GEMM re-read the 154 MB weight from DRAM for every 32-row tile row. tessl now walks any B of 32 MiB or more in column panels. In an interleaved A/B, <code>linear_lmhead_fwd</code> went from 134 to 68 ms and <code>linear_ce_c4096x50304</code> from 305 to 239 ms, with identical parity. The LM head&#39;s input gradient (NN with K = 50304) now runs as zero-then-accumulate K partitions in tessl: 99.8 → 45.4 ms in a paired GEMM A/B. Unpaired end to end, <code>linear_lmhead_bwd</code> went from 157 to 109 ms (about torch parity) and <code>linear_ce_c4096x50304</code> from 239 to 166 ms.</p>
 <p>The per-crate total differs from the workspace run below because of feature unification. <code>ojas-simd</code> runs 20 tests alone and 24 under <code>--workspace</code>, where <code>ojas-cpu</code> turns on its <code>accelerate</code> feature. 445 + 4 = 449.</p>
 <p>Go: 27 passed. The infer lane ran it against a <code>libgusset</code> built into <code>target-lane-infer</code>. Some ojas-core tests come from a concurrent session&#39;s decode-path work (<code>ojas-core/tests/tensor_decode_contract.rs</code>, <code>bench_decode.rs</code>).</p>
@@ -475,79 +444,20 @@
 <tr><td><a href="crate-ojas-hip.html"><code>ojas-hip</code></a></td><td style="text-align:right">8</td><td style="text-align:right">0</td><td style="text-align:right">0</td><td>Copy probe behind feature hip</td></tr>
 <tr><td><strong>Total Workspace</strong></td><td style="text-align:right"><strong>449</strong></td><td style="text-align:right"><strong>0</strong></td><td style="text-align:right"><strong>4</strong></td><td><strong>All passing</strong></td></tr>
 </tbody></table></div>
-<hr>
-<h2 id="in-process-go-client-test-suite">In-Process Go Client Test Suite <a class="anchor" href="#in-process-go-client-test-suite" aria-label="Link to this section">#</a></h2>
-<p><strong>Verified.</strong> <code>cargo build -p ojas-gusset-engine</code> then:</p>
-<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfig -count=1 -timeout 15m ./...</code></pre></div>
-<p>Exited 0 with <strong>27 tests passed</strong> (total runtime 3.417s with <code>-a</code>).</p>
-<aside class="alert alert-caution"><p class="alert-title">Caution</p><p>The <code>-a</code> flag is required because Go&#39;s build cache does not track changes to external archives like <code>libgusset.a</code>. <code>go/gusset.pc</code> links Apple frameworks (<code>-framework Accelerate</code>, <code>-framework Metal</code>); on Linux machines point <code>PKG_CONFIG_PATH</code> to <code>go/linux</code>.</p>
-</aside>
-<hr>
-<h2 id="component-implementation-status">Component Implementation Status <a class="anchor" href="#component-implementation-status" aria-label="Link to this section">#</a></h2>
-<figure class="diagram"><pre class="mermaid">flowchart LR
-    subgraph Backends[&#34;Hardware Compute Backends&#34;]
-        direction TB
-        b1[&#34;ojas-cpu CpuBackend (Exact, or Fast with Accelerate)&#34;]
-        b2[&#34;ojas-metal MetalBackend (every op, device-resident, Fast)&#34;]
-        b3[&#34;ojas-wgpu WgpuBackend (device-resident WGSL, Fast)&#34;]
-    end
-
-    subgraph Host[&#34;Host-Side Subsystems&#34;]
-        direction TB
-        h1[&#34;ojas-core (Tensor host &amp; device, Budget, Numerics)&#34;]
-        h2[&#34;ojas-autograd Tape (Reverse-mode AD, device tape)&#34;]
-        h3[&#34;ojas-infer (KV cache, greedy decode, CPU)&#34;]
-        h4[&#34;ojas-capi + go/ (In-process Go &amp; C-ABI bridge)&#34;]
-        h5[&#34;ojas-io, ojas-data, ojas-oracle&#34;]
-    end
-
-    subgraph Probes[&#34;Hardware Probes (Not Backends)&#34;]
-        direction TB
-        p1[&#34;ojas-cuda (one affine kernel, feature cuda)&#34;]
-        p2[&#34;ojas-hip (copy probe, feature hip)&#34;]
-        p3[&#34;ojas-device (kinds, system profile, ResourcePlan, bandwidth)&#34;]
-    end
-
-    Host --&gt; Backends</pre></figure>
-<hr>
-<h2 id="defect-countermeasures--hardening-invariants">Defect Countermeasures &amp; Hardening Invariants <a class="anchor" href="#defect-countermeasures--hardening-invariants" aria-label="Link to this section">#</a></h2>
-<figure class="diagram"><pre class="mermaid">flowchart TD
-    subgraph InvariantChecks[&#34;Defensive Hardening Guarantees&#34;]
-        C1[&#34;CE dh offset preservation: 16 canary padding elements (DH_PAD)&#34;]
-        C2[&#34;AdamW step counter overflow: next_step checked_add refuses u64::MAX&#34;]
-        C3[&#34;All-ignored cross-entropy: Zero valid targets returns Err(NonFinite)&#34;]
-        C4[&#34;AdamW non-finite store: Aborts before touching moment buffers&#34;]
-        C5[&#34;Metal head dim limit: Dimensions &gt; 64 produce UnsupportedHeadDim&#34;]
-        C6[&#34;Safetensors parser: Capped 100MB header, max depth 64, no overlaps&#34;]
-    end</pre></figure>
-<ul>
-<li><strong>CE <code>dh</code> offset preservation (verified):</strong> <code>ojas-metal</code> reserves 16 canary padding elements (<code>DH_PAD</code>) before the <code>dh</code> slice; verified by <code>ce_nonzero_dh_offset_keeps_prefix</code> (<code>ojas-metal/src/gpu.rs</code>).
-</li>
-<li><strong>AdamW step counter overflow (verified):</strong> <code>next_step</code> uses <code>checked_add</code> and refuses <code>u64::MAX</code>; verified by <code>step_count_at_u64_max_is_refused</code> (<code>ojas-metal/src/gpu.rs</code>).
-</li>
-<li><strong>All-ignored cross entropy (verified):</strong> Mean loss over zero valid targets returns <code>OjasError::NonFinite</code>; verified by <code>all_ignored_cross_entropy_is_nonfinite_not_a_zero_loss</code> (<code>ojas-cpu/tests/redteam.rs</code>).
-</li>
-<li><strong>AdamW non-finite store protection (verified):</strong> Non-finite updates are rejected before moments change; verified by <code>adamw_refuses_a_nonfinite_f32_store_without_touching_moments</code> (<code>ojas-cpu/tests/redteam.rs</code>).
-</li>
-</ul>
       </article>
-      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/status.md" rel="noopener"><code>docs/status.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/status-archive-2026-10-05.md" rel="noopener"><code>docs/status-archive-2026-10-05.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
-        <a href="pytorch-parity-plan.html" rel="prev"><span>Previous</span>PyTorch parity plan</a>
+        <a href="status.html" rel="prev"><span>Previous</span>ojas Status &amp; Verification Matrix</a>
         <a href="typed-storage-plan.html" rel="next" class="next"><span>Next</span>Typed Host Storage: Plan</a>
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
-<li><a href="#changes-2026-10-06-to-2026-10-08-reported-from-git-history-suites-not-re-run">Changes 2026-10-06 to 2026-10-08 (reported from git history; suites not re-run)</a></li>
-<li><a href="#latest-run-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05">Latest run: SIMD assembly kernels, layout hardening &amp; PyTorch parity (verified, 2026-10-05)</a></li>
-<li><a href="#previous-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04">Previous run: kernel hardening, SIMD vectorization &amp; backend parity (verified, 2026-10-04)</a></li>
-<li><a href="#previous-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Previous run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35)</a></li>
-<li><a href="#previous-run-after-the-framework-round-verified-2026-10-01-18521855">Previous run: after the framework round (verified, 2026-10-01 18:52–18:55)</a></li>
-<li><a href="#previous-run-after-the-parity-and-hardening-lanes-verified-2026-10-01">Previous run: after the parity and hardening lanes (verified, 2026-10-01)</a></li>
+<li><a href="#run-of-2026-10-05-simd-assembly-kernels-layout-hardening--pytorch-parity-verified-2026-10-05">Run of 2026-10-05: SIMD assembly kernels, layout hardening &amp; PyTorch parity (verified, 2026-10-05)</a></li>
+<li><a href="#earlier-run-kernel-hardening-simd-vectorization--backend-parity-verified-2026-10-04">Earlier run: kernel hardening, SIMD vectorization &amp; backend parity (verified, 2026-10-04)</a></li>
+<li><a href="#earlier-run-after-typed-host-storage-step-1-verified-2026-10-01-22322235">Earlier run: after typed host storage step 1 (verified, 2026-10-01 22:32–22:35)</a></li>
+<li><a href="#earlier-run-after-the-framework-round-verified-2026-10-01-18521855">Earlier run: after the framework round (verified, 2026-10-01 18:52–18:55)</a></li>
+<li><a href="#earlier-run-after-the-parity-and-hardening-lanes-verified-2026-10-01">Earlier run: after the parity and hardening lanes (verified, 2026-10-01)</a></li>
 <li><a href="#workspace-test-suite-results-earlier-the-same-day">Workspace Test Suite Results (earlier the same day)</a></li>
-<li><a href="#in-process-go-client-test-suite">In-Process Go Client Test Suite</a></li>
-<li><a href="#component-implementation-status">Component Implementation Status</a></li>
-<li><a href="#defect-countermeasures--hardening-invariants">Defect Countermeasures &amp; Hardening Invariants</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

@@ -1,10 +1,19 @@
 // sitegen renders the repository's markdown docs and crate READMEs into the
 // static reference library under site/reference/.
 //
-// The markdown files are the source of truth. Run it from the repository root:
+// The markdown files are the source of truth, and site/ is the only generated
+// tree: nothing is mirrored into docs/. Run it from the repository root:
 //
-//	go run scripts/sitegen/main.go          # write site/reference/
-//	go run scripts/sitegen/main.go -check   # exit 1 if site/reference/ is stale
+//	go run scripts/sitegen/main.go          # write site/reference/ and the test counts
+//	go run scripts/sitegen/main.go -check   # exit 1 if anything generated is stale
+//
+// Preview locally by serving site/ (for example python3 -m http.server -d site).
+//
+// Test counts come from one recorded file, docs/data/test-runs.json. Marked
+// spans in README.md, docs/status.md, docs/backends.md and site/index.html
+// (see countRe) are rewritten from it, so a number is never typed twice.
+//
+// Tests: go test scripts/sitegen/main.go scripts/sitegen/main_test.go
 //
 // It uses only the standard library.
 package main
@@ -15,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -28,7 +38,7 @@ const (
 	siteURL = "https://ojas.vbcr.dev"
 	ghBlob  = "https://github.com/bharathvbcr/ojas/blob/main/"
 	ghTree  = "https://github.com/bharathvbcr/ojas/tree/main/"
-	absRoot = "/Users/bharath/Code/research/ojas/"
+	ghRaw   = "https://raw.githubusercontent.com/bharathvbcr/ojas/main/"
 	outDir  = "site/reference"
 )
 
@@ -41,7 +51,7 @@ var categories = []category{
 	{"status", "Status and plans", "What passes today, what is planned, and the limits that remain."},
 	{"bench", "Benchmarks", "Raw tables and commands behind the numbers on the home page."},
 	{"audit", "Audits", "The defects found in the author's own engines and how each was closed."},
-	{"crates", "Crates", "One README per workspace crate, plus the Go package and the bench harness."},
+	{"crates", "Crates", "One README per workspace crate, plus the project README."},
 }
 
 // docCategory maps docs/<slug>.md to a category. A doc missing from the map is
@@ -50,7 +60,7 @@ var docCategory = map[string]string{
 	"architecture": "design", "framework-design": "design", "shape-contract": "design",
 	"dtype-policy": "design", "op-coverage": "design", "backends": "design",
 	"checkpoint-v1": "design", "adaptive-resources": "design",
-	"status": "status", "baseline": "status", "typed-storage-plan": "status",
+	"status": "status", "status-archive-2026-10-05": "status", "baseline": "status", "typed-storage-plan": "status",
 	"pytorch-parity-plan": "status", "cuda-backend-scoping": "status", "metal-deferred-faults": "status",
 	"bench-cpu-vs-torch": "bench", "bench-gpu-vs-torch": "bench", "bench-plots": "bench",
 	"audit": "audit", "audit-phase2": "audit", "audit-phase3": "audit", "audit-cpu-hot": "audit",
@@ -73,7 +83,7 @@ type head struct {
 }
 
 func main() {
-	check := flag.Bool("check", false, "verify site/reference is up to date instead of writing it")
+	check := flag.Bool("check", false, "verify every generated file (reference pages, test counts) is current instead of writing it")
 	flag.Parse()
 	if err := run(*check); err != nil {
 		fmt.Fprintln(os.Stderr, "sitegen:", err)
@@ -89,7 +99,15 @@ func run(check bool) error {
 	if err != nil {
 		return err
 	}
-	docs, err := collect(tracked)
+	members, err := workspaceMembersFile("Cargo.toml")
+	if err != nil {
+		return err
+	}
+	runs, err := loadTestRuns(testRunsPath)
+	if err != nil {
+		return err
+	}
+	docs, err := collect(tracked, members)
 	if err != nil {
 		return err
 	}
@@ -97,14 +115,43 @@ func run(check bool) error {
 	for _, d := range docs {
 		bySrc[d.Src] = d
 	}
-	unresolved := 0
-	for _, d := range docs {
-		src, err := os.ReadFile(d.Src)
+	files := map[string][]byte{}
+	// Count-bearing sources are regenerated first; the pages render the
+	// regenerated text, so a page can never show a number its source does not.
+	sources := map[string]string{}
+	for _, p := range countFiles {
+		raw, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
+		esc := func(v string) string { return v }
+		if strings.HasSuffix(p, ".html") {
+			esc = html.EscapeString
+		}
+		gen, n, err := applyCountsWith(string(raw), runs, esc)
+		if err != nil {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+		if n == 0 {
+			return fmt.Errorf("%s has no count markers; wrap its numbers in <!--count:KEY-->...<!--/count-->", p)
+		}
+		sources[p] = gen
+		files[p] = []byte(gen)
+	}
+	unresolved := 0
+	for _, d := range docs {
+		text, ok := sources[d.Src]
+		if !ok {
+			src, err := os.ReadFile(d.Src)
+			if err != nil {
+				return err
+			}
+			text = string(src)
+		}
 		r := &renderer{tracked: tracked, doc: d, bySrc: bySrc, ids: map[string]int{}}
-		d.Body = r.blocks(splitLines(string(src)))
+		lines := splitLines(text)
+		r.scanRaw(lines)
+		d.Body = r.blocks(lines)
 		d.Heads = r.heads
 		d.Title = r.title
 		if d.Title == "" {
@@ -116,7 +163,6 @@ func run(check bool) error {
 	if unresolved > 0 {
 		return fmt.Errorf("%d links in the markdown point at nothing; fix the source", unresolved)
 	}
-	files := map[string][]byte{}
 	for i, d := range docs {
 		var prev, next *doc
 		if i > 0 {
@@ -130,57 +176,39 @@ func run(check bool) error {
 	files[outDir+"/index.html"] = []byte(indexHTML(docs))
 	files["site/assets/reference-index.json"] = searchJSON(docs)
 	files["site/sitemap.xml"] = []byte(sitemap(docs))
-	// docs/ is a full local-preview mirror of site/.
-	mirrored := map[string][]byte{}
-	for name, b := range files {
-		mirrored["docs/"+strings.TrimPrefix(name, "site/")] = b
-	}
-	for name, b := range mirrored {
-		files[name] = b
-	}
-	for _, f := range staticMirror {
-		b, err := os.ReadFile("site/" + f)
-		if err != nil {
-			return err
-		}
-		files["docs/"+f] = b
-	}
 
 	if check {
 		return verify(files)
 	}
+	n := 0
 	for name, b := range files {
+		if got, err := os.ReadFile(name); err == nil && bytes.Equal(got, b) {
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 			return err
 		}
 		if err := os.WriteFile(name, b, 0o644); err != nil {
 			return err
 		}
+		n++
 	}
 	for _, f := range orphans(files) {
 		if err := os.Remove(f); err != nil {
 			return err
 		}
 	}
-	fmt.Printf("sitegen: wrote %d files (%d reference pages in site/reference and docs/reference)\n", len(files), len(docs)+1)
+	fmt.Printf("sitegen: %d of %d generated files changed (%d reference pages in site/reference)\n", n, len(files), len(docs)+1)
 	return nil
-}
-
-// staticMirror lists hand-written site files copied unchanged into docs/.
-var staticMirror = []string{
-	"index.html", "robots.txt", "site.webmanifest",
-	"assets/ojas.js", "assets/ojas.css", "assets/reference.css", "assets/reference.js",
 }
 
 // orphans lists generated pages on disk that no longer have a source.
 func orphans(files map[string][]byte) []string {
 	var out []string
-	for _, dir := range []string{"site/reference", "docs/reference"} {
-		existing, _ := filepath.Glob(filepath.Join(dir, "*.html"))
-		for _, f := range existing {
-			if _, ok := files[filepath.ToSlash(f)]; !ok {
-				out = append(out, f)
-			}
+	existing, _ := filepath.Glob(filepath.Join(outDir, "*.html"))
+	for _, f := range existing {
+		if _, ok := files[filepath.ToSlash(f)]; !ok {
+			out = append(out, f)
 		}
 	}
 	return out
@@ -199,9 +227,9 @@ func verify(files map[string][]byte) error {
 	}
 	if len(bad) > 0 {
 		sort.Strings(bad)
-		return fmt.Errorf("generated site files are stale (%d): %s\nrun: go run scripts/sitegen/main.go", len(bad), strings.Join(bad, ", "))
+		return fmt.Errorf("generated files are stale (%d): %s\nrun: go run scripts/sitegen/main.go", len(bad), strings.Join(bad, ", "))
 	}
-	fmt.Printf("sitegen: site/ and docs/ are up to date (%d files)\n", len(files))
+	fmt.Printf("sitegen: generated files are up to date (%d files)\n", len(files))
 	return nil
 }
 
@@ -232,8 +260,10 @@ func sitemap(docs []*doc) string {
 
 // collect lists every tracked source file in a stable order: category, then
 // name. Untracked files are ignored so a local scratch directory cannot add a
-// page that a clean checkout (CI) would not have.
-func collect(tracked trackedSet) ([]*doc, error) {
+// page that a clean checkout (CI) would not have. Crate pages exist only for
+// workspace members; other directories with a README (bench, go, gemma-metal)
+// are reached through GitHub links.
+func collect(tracked trackedSet, members []string) ([]*doc, error) {
 	var out []*doc
 	mds, err := filepath.Glob("docs/*.md")
 	if err != nil {
@@ -253,13 +283,12 @@ func collect(tracked trackedSet) ([]*doc, error) {
 		}
 		out = append(out, &doc{Slug: slug, Src: filepath.ToSlash(p), Cat: cat})
 	}
-	crates, _ := filepath.Glob("*/README.md")
-	for _, p := range crates {
-		dir := filepath.Dir(p)
-		if _, ok := tracked[filepath.ToSlash(p)]; !ok || dir == "docs" || dir == "site" {
+	for _, dir := range members {
+		p := dir + "/README.md"
+		if _, ok := tracked[p]; !ok {
 			continue
 		}
-		out = append(out, &doc{Slug: "crate-" + dir, Src: filepath.ToSlash(p), Cat: "crates"})
+		out = append(out, &doc{Slug: "crate-" + strings.ReplaceAll(dir, "/", "-"), Src: p, Cat: "crates"})
 	}
 	out = append(out, &doc{Slug: "readme", Src: "README.md", Cat: "crates"})
 	order := map[string]int{}
@@ -279,6 +308,147 @@ func collect(tracked trackedSet) ([]*doc, error) {
 	return out, nil
 }
 
+// tomlStrings reads the string array assigned to key in the [workspace] table.
+// It handles comments (including brackets inside them), both quote styles and
+// multi-line arrays; a key that is absent returns nil.
+func tomlStrings(doc, key string) ([]string, error) {
+	inWorkspace := false
+	lines := strings.Split(doc, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "[[") {
+			end := strings.Index(line, "]")
+			inWorkspace = end > 0 && strings.TrimSpace(line[1:end]) == "workspace"
+			continue
+		}
+		if !inWorkspace || !strings.HasPrefix(line, key) {
+			continue
+		}
+		rest := strings.TrimSpace(line[len(key):])
+		if !strings.HasPrefix(rest, "=") {
+			continue
+		}
+		// Scan from the opening bracket, across lines, until its closing one.
+		text := strings.TrimSpace(rest[1:])
+		for j := i + 1; ; j++ {
+			vals, closed, err := scanTOMLArray(text)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
+			if closed {
+				return vals, nil
+			}
+			if j >= len(lines) {
+				return nil, fmt.Errorf("%s: unterminated array", key)
+			}
+			text += "\n" + lines[j]
+		}
+	}
+	return nil, nil
+}
+
+// scanTOMLArray parses text that starts at '['. closed is false when the array
+// has not ended yet.
+func scanTOMLArray(text string) (vals []string, closed bool, err error) {
+	if !strings.HasPrefix(text, "[") {
+		return nil, false, fmt.Errorf("expected an array")
+	}
+	for i := 1; i < len(text); i++ {
+		switch c := text[i]; c {
+		case '#':
+			for i < len(text) && text[i] != '\n' {
+				i++
+			}
+		case '"':
+			var b strings.Builder
+			for i++; i < len(text) && text[i] != '"'; i++ {
+				if text[i] == '\\' && i+1 < len(text) {
+					i++
+				}
+				b.WriteByte(text[i])
+			}
+			if i >= len(text) {
+				return nil, false, nil
+			}
+			vals = append(vals, b.String())
+		case '\'':
+			j := strings.IndexByte(text[i+1:], '\'')
+			if j < 0 {
+				return nil, false, nil
+			}
+			vals = append(vals, text[i+1:i+1+j])
+			i += j + 1
+		case ']':
+			return vals, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// workspaceMembers reads the `members` array of a workspace Cargo.toml (patterns
+// as written; see expandMembers for globs).
+func workspaceMembers(cargoToml string) ([]string, error) {
+	out, err := tomlStrings(cargoToml, "members")
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no workspace members array")
+	}
+	return out, nil
+}
+
+// expandMembers expands glob patterns against the filesystem and drops the
+// workspace `exclude` entries. A pattern that matches nothing is an error.
+func expandMembers(patterns, exclude []string) ([]string, error) {
+	skip := map[string]bool{}
+	for _, e := range exclude {
+		skip[path.Clean(e)] = true
+	}
+	var out []string
+	for _, pat := range patterns {
+		matches := []string{path.Clean(pat)}
+		if strings.ContainsAny(pat, "*?[") {
+			g, err := filepath.Glob(pat)
+			if err != nil {
+				return nil, fmt.Errorf("member pattern %q: %w", pat, err)
+			}
+			matches = matches[:0]
+			for _, m := range g {
+				if fi, err := os.Stat(filepath.Join(m, "Cargo.toml")); err == nil && !fi.IsDir() {
+					matches = append(matches, filepath.ToSlash(m))
+				}
+			}
+			if len(matches) == 0 {
+				return nil, fmt.Errorf("member pattern %q matches no crate directory", pat)
+			}
+			sort.Strings(matches)
+		}
+		for _, m := range matches {
+			if !skip[m] {
+				out = append(out, m)
+			}
+		}
+	}
+	return out, nil
+}
+
+func workspaceMembersFile(p string) ([]string, error) {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	pats, err := workspaceMembers(string(b))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", p, err)
+	}
+	excl, err := tomlStrings(string(b), "exclude")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", p, err)
+	}
+	return expandMembers(pats, excl)
+}
+
 func splitLines(s string) []string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	return strings.Split(strings.TrimRight(s, "\n"), "\n")
@@ -292,12 +462,12 @@ func splitLines(s string) []string {
 type trackedSet map[string]bool // path -> is a directory
 
 func loadTracked() (trackedSet, error) {
-	out, err := exec.Command("git", "ls-files").Output()
+	out, err := exec.Command("git", "ls-files", "-z").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git ls-files (needed to validate links against a clean checkout): %w", err)
 	}
 	t := trackedSet{}
-	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, f := range strings.Split(string(out), "\x00") {
 		if f == "" {
 			continue
 		}
@@ -326,14 +496,15 @@ type renderer struct {
 }
 
 var (
-	reHTMLBlock = regexp.MustCompile(`^</?(p|div|img|details|summary|br|table|center)[\s>/]`)
-	reHeading   = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*#*\s*$`)
-	reFence     = regexp.MustCompile("^(\\s*)(```+|~~~+)\\s*([A-Za-z0-9_+-]*)")
-	reUL        = regexp.MustCompile(`^(\s*)([-*+])\s+(.*)$`)
-	reOL        = regexp.MustCompile(`^(\s*)(\d+)[.)]\s+(.*)$`)
-	reHR        = regexp.MustCompile(`^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$`)
-	reTableSp   = regexp.MustCompile(`^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$`)
-	reAlert     = regexp.MustCompile(`^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$`)
+	reHTMLBlock   = regexp.MustCompile(`^</?(p|div|img|details|summary|br|table|center)[\s>/]`)
+	reHeading     = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*#*\s*$`)
+	reFence       = regexp.MustCompile("^(\\s*)(```+|~~~+)\\s*([A-Za-z0-9_+-]*)")
+	reUL          = regexp.MustCompile(`^(\s*)([-*+])\s+(.*)$`)
+	reOL          = regexp.MustCompile(`^(\s*)(\d+)[.)]\s+(.*)$`)
+	reHR          = regexp.MustCompile(`^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$`)
+	reTableSp     = regexp.MustCompile(`^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$`)
+	reCommentLine = regexp.MustCompile(`^\s*(<!--.*?-->\s*)+$`)
+	reAlert       = regexp.MustCompile(`^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$`)
 )
 
 func (r *renderer) slug(text string) string {
@@ -405,6 +576,10 @@ func (r *renderer) blocks(lines []string) string {
 	for i < len(lines) {
 		l := lines[i]
 		if strings.TrimSpace(l) == "" {
+			i++
+			continue
+		}
+		if reCommentLine.MatchString(l) {
 			i++
 			continue
 		}
@@ -661,11 +836,13 @@ func codeBlock(lang, code string) string {
 }
 
 var (
-	reCode   = regexp.MustCompile("`+([^`]+?)`+")
-	reLink   = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
-	reBold   = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__`)
-	reItalic = regexp.MustCompile(`(^|[^\w*])\*([^*\s][^*]*?)\*([^\w*]|$)`)
-	reAuto   = regexp.MustCompile(`(^|[\s(])(https?://[^\s<)]+[^\s<).,;:])`)
+	reCode    = regexp.MustCompile("`+([^`]+?)`+")
+	reLink    = regexp.MustCompile(`\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\((?:<([^>]*)>|([^)\s]+))(?:\s+"[^"]*")?\)`)
+	reImage   = regexp.MustCompile(`!\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\((?:<([^>]*)>|([^)\s]+))(?:\s+"([^"]*)")?\)`)
+	reComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+	reBold    = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__`)
+	reItalic  = regexp.MustCompile(`(^|[^\w*])\*([^*\s][^*]*?)\*([^\w*]|$)`)
+	reAuto    = regexp.MustCompile(`(^|[\s(])(https?://[^\s<)]+[^\s<).,;:])`)
 )
 
 func (r *renderer) inline(s string) string {
@@ -675,10 +852,18 @@ func (r *renderer) inline(s string) string {
 		codes = append(codes, "<code>"+html.EscapeString(strings.TrimSpace(inner))+"</code>")
 		return fmt.Sprintf("\x00%d\x00", len(codes)-1)
 	})
+	s = reComment.ReplaceAllString(s, "")
+	// Images first, so [![alt](img)](link) keeps its image as the link label.
+	var images []string
+	s = reImage.ReplaceAllStringFunc(s, func(m string) string {
+		sm := reImage.FindStringSubmatch(m)
+		images = append(images, r.image(sm[1], sm[2]+sm[3], sm[4]))
+		return fmt.Sprintf("\x02%d\x02", len(images)-1)
+	})
 	var links []string
 	s = reLink.ReplaceAllStringFunc(s, func(m string) string {
 		sm := reLink.FindStringSubmatch(m)
-		links = append(links, r.link(sm[1], sm[2]))
+		links = append(links, r.link(sm[1], sm[2]+sm[3]))
 		return fmt.Sprintf("\x01%d\x01", len(links)-1)
 	})
 	s = html.EscapeString(s)
@@ -687,6 +872,9 @@ func (r *renderer) inline(s string) string {
 	s = reItalic.ReplaceAllString(s, "$1<em>$2</em>$3")
 	for i, l := range links {
 		s = strings.Replace(s, fmt.Sprintf("\x01%d\x01", i), l, 1)
+	}
+	for i, im := range images {
+		s = strings.Replace(s, fmt.Sprintf("\x02%d\x02", i), im, 1)
 	}
 	for i, c := range codes {
 		s = strings.Replace(s, fmt.Sprintf("\x00%d\x00", i), c, 1)
@@ -704,19 +892,12 @@ func (r *renderer) link(text, target string) string {
 		return fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(target), label)
 	}
 	frag := ""
-	if k := strings.Index(target, "#"); k >= 0 {
+	if k := strings.IndexAny(target, "#?"); k >= 0 {
 		target, frag = target[:k], target[k:]
 	}
-	var repo string
-	if strings.HasPrefix(target, "file://") {
-		t := strings.TrimPrefix(target, "file://")
-		if !strings.HasPrefix(t, absRoot) {
-			r.unresolved++
-			return "<code>" + html.EscapeString(text) + "</code>"
-		}
-		repo = strings.TrimPrefix(t, absRoot)
-	} else {
-		repo = path.Clean(path.Join(path.Dir(r.doc.Src), target))
+	repo, ok := r.repoPath(target)
+	if !ok {
+		return "<code>" + html.EscapeString(text) + "</code>"
 	}
 	repo = strings.TrimSuffix(repo, "/")
 	if d, ok := r.bySrc[repo]; ok {
@@ -724,10 +905,6 @@ func (r *renderer) link(text, target string) string {
 	}
 	if repo == "site/index.html" || repo == "docs/index.html" {
 		return fmt.Sprintf("<a href=\"../\">%s</a>", label)
-	}
-	if repo == ".." || strings.HasPrefix(repo, "../") {
-		// A sibling checkout (tessl, gusset): not part of this repository, so no page to link to.
-		return "<code>" + html.EscapeString(text) + "</code>"
 	}
 	isDir, ok := r.tracked.lookup(repo)
 	if !ok {
@@ -739,12 +916,461 @@ func (r *renderer) link(text, target string) string {
 		if d, ok := r.bySrc[repo+"/README.md"]; ok {
 			return fmt.Sprintf("<a href=\"%s.html\">%s</a>", d.Slug, label)
 		}
-		return fmt.Sprintf("<a href=\"%s%s\" rel=\"noopener\">%s</a>", ghTree, html.EscapeString(repo), label)
+		return fmt.Sprintf("<a href=\"%s%s\" rel=\"noopener\">%s</a>", ghTree, html.EscapeString(escPath(repo)), label)
 	}
-	return fmt.Sprintf("<a href=\"%s%s%s\" rel=\"noopener\">%s</a>", ghBlob, html.EscapeString(repo), html.EscapeString(frag), label)
+	return fmt.Sprintf("<a href=\"%s%s%s\" rel=\"noopener\">%s</a>", ghBlob, html.EscapeString(escPath(repo)), html.EscapeString(frag), label)
+}
+
+var pathEscaper = strings.NewReplacer("%", "%25", " ", "%20", "?", "%3F", "#", "%23", "\"", "%22", "<", "%3C", ">", "%3E")
+
+// escPath makes a repository path safe inside a URL without touching characters
+// (unicode, slashes) that browsers accept.
+func escPath(p string) string { return pathEscaper.Replace(p) }
+
+var (
+	reRefDef   = regexp.MustCompile(`^\s{0,3}\[[^\]]+\]:\s*<?([^\s>]+)`)
+	reAutolink = regexp.MustCompile(`<([A-Za-z][A-Za-z0-9+.-]*:[^>\s]*)>`)
+	reHTMLRef  = regexp.MustCompile(`(?i)\b(?:href|src)\s*=\s*["']?([^"'\s>]+)`)
+	reCodeSpan = regexp.MustCompile("`+[^`]+`+")
+)
+
+// machineLocal reports whether a link target only works on one machine.
+func machineLocal(t string) bool {
+	l := strings.ToLower(t)
+	return strings.HasPrefix(l, "file:") || (strings.HasPrefix(t, "/") && !strings.HasPrefix(t, "//")) || strings.Contains(t, "\\")
+}
+
+// scanRaw rejects machine-local targets written in the forms the inline link
+// renderer never sees: reference definitions, autolinks and raw HTML href/src.
+// Fenced code and code spans are skipped.
+func (r *renderer) scanRaw(lines []string) {
+	fenced, mark := false, ""
+	for _, line := range lines {
+		if m := reFence.FindStringSubmatch(line); m != nil {
+			if !fenced {
+				fenced, mark = true, m[2][:3]
+			} else if strings.HasPrefix(strings.TrimSpace(line), mark) {
+				fenced = false
+			}
+			continue
+		}
+		if fenced {
+			continue
+		}
+		line = reCodeSpan.ReplaceAllString(line, "")
+		var targets []string
+		if m := reRefDef.FindStringSubmatch(line); m != nil {
+			targets = append(targets, m[1])
+		}
+		for _, m := range reAutolink.FindAllStringSubmatch(line, -1) {
+			if strings.HasPrefix(strings.ToLower(m[1]), "file:") {
+				targets = append(targets, m[1])
+			}
+		}
+		for _, m := range reHTMLRef.FindAllStringSubmatch(line, -1) {
+			targets = append(targets, m[1])
+		}
+		for _, t := range targets {
+			if machineLocal(t) {
+				fmt.Fprintf(os.Stderr, "sitegen: %s has a machine-local target %q in a reference, autolink or HTML attribute; use a repo-relative path\n", r.doc.Src, t)
+				r.unresolved++
+			}
+		}
+	}
 }
 
 func (r *renderer) inlineLabel(text string) string { return r.inline(text) }
+
+// repoPath resolves a relative link target to a repository path. Targets that
+// only work on one machine are rejected, never rewritten: file:// URLs, absolute
+// paths and backslash paths. ok is false after counting the rejection.
+func (r *renderer) repoPath(target string) (repo string, ok bool) {
+	switch {
+	case strings.HasPrefix(strings.ToLower(target), "file:"):
+		fmt.Fprintf(os.Stderr, "sitegen: %s has a file:// link %q; use a repo-relative path\n", r.doc.Src, target)
+	case strings.HasPrefix(target, "/"):
+		fmt.Fprintf(os.Stderr, "sitegen: %s has an absolute link %q; use a repo-relative path\n", r.doc.Src, target)
+	case strings.Contains(target, "\\"):
+		fmt.Fprintf(os.Stderr, "sitegen: %s has a backslash in link %q; use forward slashes\n", r.doc.Src, target)
+	default:
+		dec, err := url.PathUnescape(target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sitegen: %s has a link %q with a bad percent-escape: %v\n", r.doc.Src, target, err)
+			break
+		}
+		repo := path.Clean(path.Join(path.Dir(r.doc.Src), dec))
+		if repo == ".." || strings.HasPrefix(repo, "../") {
+			fmt.Fprintf(os.Stderr, "sitegen: %s links to %q, which leaves the repository; name it in code instead of linking it\n", r.doc.Src, target)
+			break
+		}
+		return repo, true
+	}
+	r.unresolved++
+	return "", false
+}
+
+// image renders ![alt](src "title"). A tracked file under site/ is served by the
+// site itself; any other tracked file is loaded from GitHub raw, so the page never
+// points at a path the deployed site does not have.
+func (r *renderer) image(alt, target, title string) string {
+	attrs := fmt.Sprintf(" alt=\"%s\"", html.EscapeString(stripInline(alt)))
+	if title != "" {
+		attrs += fmt.Sprintf(" title=\"%s\"", html.EscapeString(title))
+	}
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return fmt.Sprintf("<img src=\"%s\"%s loading=\"lazy\">", html.EscapeString(target), attrs)
+	}
+	frag := ""
+	if k := strings.IndexAny(target, "#?"); k >= 0 {
+		target, frag = target[:k], target[k:]
+	}
+	repo, ok := r.repoPath(target)
+	if !ok {
+		return "<code>" + html.EscapeString(alt) + "</code>"
+	}
+	if isDir, tracked := r.tracked.lookup(repo); !tracked || isDir {
+		fmt.Fprintf(os.Stderr, "sitegen: %s embeds image %q, which is not a tracked file\n", r.doc.Src, repo)
+		r.unresolved++
+		return "<code>" + html.EscapeString(alt) + "</code>"
+	}
+	src := ghRaw + escPath(repo)
+	if rest, served := strings.CutPrefix(repo, "site/"); served {
+		src = "../" + escPath(rest)
+	}
+	return fmt.Sprintf("<img src=\"%s%s\"%s loading=\"lazy\">", html.EscapeString(src), html.EscapeString(frag), attrs)
+}
+
+// ---------------------------------------------------------------- test counts
+
+// testRunsPath is the one recorded run file every count in the docs comes from.
+// To refresh the counts, edit it after a run and execute sitegen.
+const testRunsPath = "docs/data/test-runs.json"
+
+// countFiles are the sources that carry count markers.
+var countFiles = []string{"README.md", "docs/status.md", "docs/backends.md", "site/index.html"}
+
+type workspaceRun struct {
+	Recorded string `json:"recorded"`
+	Commit   string `json:"commit"`
+	Host     string `json:"host"`
+	Command  string `json:"command"`
+	Source   string `json:"source"`
+	Passed   int    `json:"passed"`
+	Failed   int    `json:"failed"`
+	Ignored  int    `json:"ignored"`
+	Suites   int    `json:"suites"`
+}
+
+type crateCount struct {
+	Name    string `json:"name"`
+	Passed  int    `json:"passed"`
+	Ignored int    `json:"ignored"`
+	Note    string `json:"note,omitempty"`
+}
+
+type perCrateRun struct {
+	Recorded string       `json:"recorded"`
+	Commit   string       `json:"commit,omitempty"`
+	Host     string       `json:"host"`
+	Command  string       `json:"command"`
+	Source   string       `json:"source"`
+	Crates   []crateCount `json:"crates"`
+	Go       struct {
+		Passed  int    `json:"passed"`
+		Failed  int    `json:"failed"`
+		Command string `json:"command"`
+	} `json:"go"`
+}
+
+// testRuns is the schema of docs/data/test-runs.json: the latest full-suite run
+// and the latest run that recorded per-crate counts. They may be different runs;
+// each carries its own date so the docs can say which numbers are older.
+type testRuns struct {
+	Workspace workspaceRun `json:"workspace"`
+	PerCrate  perCrateRun  `json:"per_crate"`
+}
+
+func loadTestRuns(p string) (*testRuns, error) {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	return parseTestRuns(b, p)
+}
+
+var reCommit = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// requiredRunKeys lists, per object path, the keys that must be present: a
+// missing count must not read as zero.
+var requiredRunKeys = map[string][]string{
+	"":                   {"workspace", "per_crate"},
+	"workspace":          {"recorded", "commit", "host", "command", "source", "passed", "failed", "ignored", "suites"},
+	"per_crate":          {"recorded", "host", "command", "source", "crates", "go"},
+	"per_crate.crates[]": {"name", "passed"},
+	"per_crate.go":       {"passed", "failed", "command"},
+}
+
+// checkRunShape rejects duplicate keys (encoding/json keeps the last one) and
+// absent required keys, by walking the token stream.
+func checkRunShape(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	return walkRunObject(dec, "")
+}
+
+func walkRunValue(dec *json.Decoder, path string) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch d := tok.(type) {
+	case json.Delim:
+		if d == '{' {
+			return walkRunMembers(dec, path)
+		}
+		for dec.More() { // array: elements share the path of their array
+			if tok, err := dec.Token(); err != nil {
+				return err
+			} else if e, ok := tok.(json.Delim); ok && e == '{' {
+				if err := walkRunMembers(dec, path+"[]"); err != nil {
+					return err
+				}
+			} else if ok {
+				return fmt.Errorf("unexpected nested array at %q", path)
+			}
+		}
+		_, err := dec.Token()
+		return err
+	}
+	return nil
+}
+
+func walkRunObject(dec *json.Decoder, path string) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return fmt.Errorf("the run file must be a JSON object")
+	}
+	return walkRunMembers(dec, path)
+}
+
+func walkRunMembers(dec *json.Decoder, path string) error {
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := tok.(string)
+		if seen[key] {
+			return fmt.Errorf("duplicate key %q in %q", key, path)
+		}
+		seen[key] = true
+		child := key
+		if path != "" {
+			child = path + "." + key
+		}
+		if err := walkRunValue(dec, child); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	for _, k := range requiredRunKeys[path] {
+		if !seen[k] {
+			return fmt.Errorf("missing required key %q in %q", k, path)
+		}
+	}
+	return nil
+}
+
+func parseTestRuns(b []byte, name string) (*testRuns, error) {
+	if err := checkRunShape(b); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	var t testRuns
+	if err := dec.Decode(&t); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("%s: trailing data after the run object", name)
+	}
+	w := t.Workspace
+	if !reCommit.MatchString(w.Commit) || (t.PerCrate.Commit != "" && !reCommit.MatchString(t.PerCrate.Commit)) {
+		return nil, fmt.Errorf("%s: commit must be 7 to 40 lowercase hex digits", name)
+	}
+	if w.Recorded == "" || w.Commit == "" || w.Command == "" || w.Source == "" || w.Host == "" {
+		return nil, fmt.Errorf("%s: workspace needs recorded, commit, host, command and source", name)
+	}
+	if w.Passed <= 0 || w.Failed < 0 || w.Ignored < 0 || w.Suites <= 0 {
+		return nil, fmt.Errorf("%s: workspace counts must be positive (failed and ignored may be 0)", name)
+	}
+	c := t.PerCrate
+	if c.Recorded == "" || c.Command == "" || c.Source == "" || c.Host == "" || len(c.Crates) == 0 {
+		return nil, fmt.Errorf("%s: per_crate needs recorded, host, command, source and crates", name)
+	}
+	seen := map[string]bool{}
+	for _, cr := range c.Crates {
+		if cr.Name == "" || seen[cr.Name] || cr.Passed < 0 || cr.Ignored < 0 {
+			return nil, fmt.Errorf("%s: per_crate crate %q is empty, duplicated or negative", name, cr.Name)
+		}
+		seen[cr.Name] = true
+	}
+	if c.Go.Passed < 0 || c.Go.Failed < 0 || c.Go.Command == "" {
+		return nil, fmt.Errorf("%s: per_crate go needs a command and non-negative counts", name)
+	}
+	return &t, nil
+}
+
+func (c crateCount) text() string {
+	s := fmt.Sprintf("%d passed", c.Passed)
+	if c.Ignored > 0 {
+		s += fmt.Sprintf(", %d ignored", c.Ignored)
+	}
+	if c.Note != "" {
+		s += " " + c.Note
+	}
+	return s
+}
+
+func (t *testRuns) sumPassed() int {
+	n := 0
+	for _, c := range t.PerCrate.Crates {
+		n += c.Passed
+	}
+	return n
+}
+
+// value resolves a count key to its text. Block keys (crates.list) return
+// markdown wrapped in blank lines.
+func (t *testRuns) value(key string) (string, error) {
+	w, c := t.Workspace, t.PerCrate
+	switch key {
+	case "ws.passed":
+		return fmt.Sprint(w.Passed), nil
+	case "ws.failed":
+		return fmt.Sprint(w.Failed), nil
+	case "ws.ignored":
+		return fmt.Sprint(w.Ignored), nil
+	case "ws.suites":
+		return fmt.Sprint(w.Suites), nil
+	case "ws.date":
+		return w.Recorded, nil
+	case "ws.commit":
+		return w.Commit, nil
+	case "ws.line":
+		return fmt.Sprintf("%d passed, %d failed, %d ignored, %d suites", w.Passed, w.Failed, w.Ignored, w.Suites), nil
+	case "ws.summary":
+		return fmt.Sprintf("%d passed, %d failed, %d ignored, %d suites (`%s` at `%s`, %s, %s)", w.Passed, w.Failed, w.Ignored, w.Suites, w.Command, w.Commit, w.Recorded, w.Host), nil
+	case "crates.date":
+		return c.Recorded, nil
+	case "crates.sum":
+		return fmt.Sprint(t.sumPassed()), nil
+	case "crates.command":
+		return "`" + c.Command + "`", nil
+	case "go.passed":
+		return fmt.Sprint(c.Go.Passed), nil
+	case "go.failed":
+		return fmt.Sprint(c.Go.Failed), nil
+	case "go.command":
+		return "`" + c.Go.Command + "`", nil
+	case "crates.list":
+		var b strings.Builder
+		b.WriteString("\n\n")
+		for _, cr := range c.Crates {
+			fmt.Fprintf(&b, "- `%s`: %s\n", cr.Name, cr.text())
+		}
+		b.WriteString("\n")
+		return b.String(), nil
+	}
+	if name, ok := strings.CutPrefix(key, "crate."); ok {
+		bare := false
+		if n, ok := strings.CutSuffix(name, ".passed"); ok {
+			name, bare = n, true
+		}
+		for _, cr := range c.Crates {
+			if cr.Name == name {
+				if bare {
+					return fmt.Sprint(cr.Passed), nil
+				}
+				return cr.text(), nil
+			}
+		}
+		return "", fmt.Errorf("count key %q: no crate %q in %s", key, name, testRunsPath)
+	}
+	return "", fmt.Errorf("unknown count key %q", key)
+}
+
+// countRe matches <!--count:KEY-->old text<!--/count-->. The comments are
+// invisible in rendered markdown and HTML; the text between them is rewritten.
+var countRe = regexp.MustCompile(`(?s)<!--count:([A-Za-z0-9._-]+)-->(.*?)<!--/count-->`)
+
+// countTokenRe finds anything that looks like a count marker, well formed or not,
+// so a malformed one is an error rather than an ignored comment.
+var countTokenRe = regexp.MustCompile(`(?s)<!--\s*/?\s*count\b.*?-->`)
+
+var (
+	countOpenRe  = regexp.MustCompile(`^<!--count:([A-Za-z0-9._-]+)-->$`)
+	countCloseTk = "<!--/count-->"
+)
+
+// validateCountSpans requires markers to alternate open, close, exactly spelled.
+func validateCountSpans(text string) error {
+	open := ""
+	for _, tok := range countTokenRe.FindAllString(text, -1) {
+		switch {
+		case countOpenRe.MatchString(tok):
+			if open != "" {
+				return fmt.Errorf("count span %q is opened inside the unclosed span %q", tok, open)
+			}
+			open = tok
+		case tok == countCloseTk:
+			if open == "" {
+				return fmt.Errorf("stray %s with no open marker", countCloseTk)
+			}
+			open = ""
+		default:
+			return fmt.Errorf("malformed count marker %q: write <!--count:KEY--> ... %s", tok, countCloseTk)
+		}
+	}
+	if open != "" {
+		return fmt.Errorf("count span %q is never closed", open)
+	}
+	return nil
+}
+
+// applyCounts rewrites every marked span from the run file (markdown text) and
+// returns the new text and how many spans it saw.
+func applyCounts(text string, t *testRuns) (string, int, error) {
+	return applyCountsWith(text, t, func(v string) string { return v })
+}
+
+// applyCountsWith is applyCounts with an escaper for the inserted values, so an
+// HTML source never receives a raw value.
+func applyCountsWith(text string, t *testRuns, esc func(string) string) (string, int, error) {
+	if err := validateCountSpans(text); err != nil {
+		return "", 0, err
+	}
+	n := 0
+	var firstErr error
+	out := countRe.ReplaceAllStringFunc(text, func(m string) string {
+		key := countRe.FindStringSubmatch(m)[1]
+		v, err := t.value(key)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			return m
+		}
+		n++
+		return "<!--count:" + key + "-->" + esc(v) + "<!--/count-->"
+	})
+	return out, n, firstErr
+}
 
 // ---------------------------------------------------------------- pages
 

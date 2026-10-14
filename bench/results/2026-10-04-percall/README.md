@@ -6,7 +6,7 @@ What is that time?
 
 **Run.**
 - `metal_bench 20 percall` (`ojas-metal/examples/metal_bench.rs`, the
-  `percall` group). Driven by `target-baseline/percall-run.sh` under the
+  `percall` group). Driven by `percall-run.sh` (a gitignored lane file, not kept) under the
   Lappi lead's lock, 16:02:29–16:03:04Z.
 - Apple M5 Pro. 500 runs per scenario after 20 warm-ups.
 - Before the run the GPU read 71% busy from other work. The 95% reading at the
