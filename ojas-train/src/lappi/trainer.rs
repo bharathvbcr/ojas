@@ -134,7 +134,7 @@ pub trait ConsumedBatch {
 
     /// Fold this batch into `prefix` exactly as `trainer._fold` does, so the digest is the one
     /// Python computes over the same batch: for a real shard `Batch`,
-    /// [`ConsumedPrefix::fold_batch`]; for anything else, one call to [`ConsumedPrefix::fold`]
+    /// the shard `Batch::fold_into`; for anything else, one call to [`ConsumedPrefix::fold`]
     /// with the parts `[index (8 bytes BE), bucket (8 bytes BE), tokens, lengths, slot_kind,
     /// target_index, span_target, line_starts]`, each array as its numpy buffer's bytes (C
     /// order, its own dtype) and an absent optional array as no bytes.

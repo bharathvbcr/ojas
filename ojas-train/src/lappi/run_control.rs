@@ -15,7 +15,7 @@
 //!   (Amendment 2 (iv); `tests/head_init.rs` checks them against Python's own functions).
 //!
 //! The consumed-batch digest ([`ConsumedPrefix`]) is here too; only the shard-specific folding
-//! of a `Batch` (`ConsumedPrefix::fold_batch`) lives beside the `Batch`, in `shards`.
+//! of a `Batch` (`Batch::fold_into`) lives beside the `Batch`, in `shards`.
 
 use std::fmt;
 use std::time::Instant;
@@ -288,7 +288,7 @@ pub const CONSUMED_PREFIX_DOMAIN: &[u8] = b"qd-consumed-prefix-v1";
 const CONSUMED_PREFIX_EPOCH_LINK: &[u8] = b"qd-consumed-prefix-epoch-link-v1";
 
 /// `run_control.ConsumedPrefix`: a running sha256 over the batches consumed, in order. What
-/// one batch folds is the caller's (`ConsumedPrefix::fold_batch` for a shard `Batch`).
+/// one batch folds is the caller's (`Batch::fold_into` for a shard `Batch`).
 #[derive(Clone)]
 pub struct ConsumedPrefix {
     hasher: Sha256,
