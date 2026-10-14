@@ -425,3 +425,38 @@ fn seeded_backward_with_a_frozen_weight_scales_exactly() {
         assert_eq!((a * 0.25).to_bits(), b.to_bits());
     }
 }
+
+/// A backend that does not override `linear_backward_input` (the `Resident`
+/// doubles implement only `linear_backward`) runs the trait default: a
+/// frozen weight gives the trainable path's dX bit for bit and no weight
+/// gradient is kept, on both the host and the device placement path.
+#[test]
+fn a_backend_without_the_override_runs_the_trait_default_correctly() {
+    use common::Resident;
+    let budget = Budget::new(BIG);
+    for device in [false, true] {
+        let run = |frozen: bool| {
+            let backend = if device {
+                Resident::new()
+            } else {
+                Resident::host()
+            };
+            let mut tp = Tape::new(backend);
+            let x = tp.leaf(t(&budget, 1, &[5, 12])).unwrap();
+            let wv = t(&budget, 2, &[7, 12]);
+            let w = if frozen {
+                tp.frozen_leaf(wv).unwrap()
+            } else {
+                tp.leaf(wv).unwrap()
+            };
+            let y = tp.linear(x, w).unwrap();
+            tp.backward(y).unwrap();
+            let dx = tp.grad(x).unwrap().to_host(&budget).unwrap();
+            (bits(&dx), tp.grad(w).is_some())
+        };
+        let (live, live_has) = run(false);
+        let (frozen, frozen_has) = run(true);
+        assert_eq!(live, frozen, "device={device}");
+        assert!(live_has && !frozen_has, "device={device}");
+    }
+}
