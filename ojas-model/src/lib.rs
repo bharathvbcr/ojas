@@ -25,6 +25,7 @@ mod graph;
 mod init;
 mod json;
 mod load;
+pub mod lora;
 mod names;
 pub mod qwen35;
 mod spec;
