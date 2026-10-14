@@ -102,7 +102,7 @@ pub fn cover_1d(n: u64, grid: Grid) -> Result<Vec<u64>, OjasError> {
 /// workgroups past `groups` are spare, and a kernel must `return` for them
 /// before it reads or writes any buffer (an out-of-range write is clamped
 /// onto the last real entry under wgpu's Restrict policy, and races with its
-/// owner). Every WGSL entry point is classified in [`KERNEL_GRIDS`], and a
+/// owner). Every WGSL entry point is classified in `KERNEL_GRIDS` (test-only), and a
 /// unit test of this module fails on a folded-grid kernel that is missing
 /// there or whose guard does not come before its first buffer access. Too
 /// many groups is [`OjasError::OutOfRange`]; nothing is clamped.
@@ -130,6 +130,7 @@ pub fn fold_grid(groups: u64, max_per_dim: u32) -> Result<(u32, u32), OjasError>
 }
 
 /// How one WGSL entry point's dispatch grid relates to its real work.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GridKind {
     /// Dispatched on a [`fold_grid`] grid (the backend's `groups()` and
@@ -150,6 +151,7 @@ pub enum GridKind {
 /// group id is not [`GridKind::Folded`], or when a folded kernel's first
 /// `if (... >= ...) { return; }` guard does not precede its first access to a
 /// storage buffer (the fault words included), directly or through a helper.
+#[cfg(test)]
 pub const KERNEL_GRIDS: &[(&str, GridKind)] = &[
     // pointwise.wgsl: one lane per element.
     (
@@ -284,7 +286,9 @@ pub const KERNEL_GRIDS: &[(&str, GridKind)] = &[
     ("sum_finish", GridKind::Single("one workgroup, (1, 1, 1)")),
     (
         "col_partial",
-        GridKind::Exact("grid (cols / 256, row chunks) are the real axes; lane c >= cols returns"),
+        GridKind::Exact(
+            "grid (cols / 256, row chunks) are the real axes, the chunks sized to fit the y limit; lane c >= cols returns",
+        ),
     ),
     // clip.wgsl.
     (

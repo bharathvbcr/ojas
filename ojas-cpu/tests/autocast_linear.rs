@@ -165,3 +165,55 @@ fn bf16_region_rounds_non_matmul_operands_in_f32_storage() {
         .unwrap();
     assert_eq!(bits(&got.expect("cached attention")), bits(&want));
 }
+
+/// Under a bf16 region `causal_sdpa_backward_recompute` is the forward then
+/// the backward the region would run: operands rounded once on the way in,
+/// gradients emitted bf16 on the way out. The two paths may differ only by
+/// the bf16 rounding of the intermediate output and log-sum-exp.
+#[test]
+fn bf16_region_sdpa_recompute_matches_forward_then_backward() {
+    let budget = Budget::new(1 << 20);
+    let (b, h, t, d) = (1usize, 2usize, 3usize, 4usize);
+    let n = b * h * t * d;
+    let make = |seed: f32| -> Tensor {
+        let v: Vec<f32> = (0..n)
+            .map(|i| ((i as f32 + seed) * 0.37).sin() * 1.3)
+            .collect();
+        Tensor::from_f32(&v, &[b, h, t, d], &budget).unwrap()
+    };
+    let (q, k, v, g) = (make(0.0), make(1.0), make(2.0), make(3.0));
+    let wrapped = Autocast::new(CpuBackend::new(Budget::new(1 << 20)));
+    let _region = wrapped.autocast_region(AutocastMode::Bf16).unwrap();
+    let (out, lse) = wrapped.causal_sdpa_forward(&q, &k, &v, None).unwrap();
+    let (rq, rk, rv) = wrapped
+        .causal_sdpa_backward(&q, &k, &v, &out, &lse, &g, None)
+        .unwrap();
+    let (cq, ck, cv) = wrapped
+        .causal_sdpa_backward_recompute(&q, &k, &v, &g, None)
+        .unwrap();
+    for (name, want, got) in [("dq", &rq, &cq), ("dk", &rk, &ck), ("dv", &rv, &cv)] {
+        assert_eq!(got.shape(), want.shape(), "{name}");
+        let scale = want
+            .f32_slice()
+            .unwrap()
+            .iter()
+            .fold(1.0f32, |m, x| m.max(x.abs()));
+        for (i, (a, e)) in got
+            .f32_slice()
+            .unwrap()
+            .iter()
+            .zip(want.f32_slice().unwrap())
+            .enumerate()
+        {
+            assert_eq!(
+                round_f32_to_bf16(*a).to_bits(),
+                a.to_bits(),
+                "{name}[{i}] is emitted as bf16"
+            );
+            assert!(
+                (a - e).abs() <= scale * 2.0f32.powi(-6),
+                "{name}[{i}]: recompute {a} vs forward+backward {e}"
+            );
+        }
+    }
+}

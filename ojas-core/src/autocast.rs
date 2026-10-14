@@ -601,6 +601,27 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok((self.emit(gq)?, self.emit(gk)?, self.emit(gv)?))
     }
 
+    /// The inner backend's own recompute (a device may fuse it) sees the
+    /// operands the forward and backward above would give it, and its
+    /// gradients are emitted the same way.
+    fn causal_sdpa_backward_recompute(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        grad_output: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        let q = self.prep(q)?;
+        let k = self.prep(k)?;
+        let v = self.prep(v)?;
+        let grad_output = self.prep(grad_output)?;
+        let (gq, gk, gv) =
+            self.inner
+                .causal_sdpa_backward_recompute(&q, &k, &v, &grad_output, window)?;
+        Ok((self.emit(gq)?, self.emit(gk)?, self.emit(gv)?))
+    }
+
     fn per_head_sigmoid_gate_forward(
         &self,
         input: &Tensor,

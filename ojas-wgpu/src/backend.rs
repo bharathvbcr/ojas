@@ -956,9 +956,15 @@ impl WgpuBackend {
         cols: usize,
         out: &dyn Binding,
     ) -> Result<(), OjasError> {
-        let per = rows.div_ceil(1024).max(64);
-        let chunks = rows.div_ceil(per);
         let max = self.ctx.limits().max_compute_workgroups_per_dimension;
+        // Rows per chunk grow until the chunk count fits the y axis, so a
+        // device with a small per-axis limit gets fewer, longer chunks
+        // rather than a refusal. The x axis (columns) is not foldable here.
+        let per = rows
+            .div_ceil(1024)
+            .max(64)
+            .max(rows.div_ceil((max as usize).max(1)));
+        let chunks = rows.div_ceil(per);
         let gx = u(op, cols.div_ceil(256))?;
         let gy = u(op, chunks)?;
         if gx > max || gy > max {

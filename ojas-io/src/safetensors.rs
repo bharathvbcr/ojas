@@ -787,15 +787,16 @@ fn byte_len(name: &str, shape: &[u64], dtype: StDtype) -> Result<u64, IoError> {
         .iter()
         .try_fold(1u64, |acc, &d| acc.checked_mul(d))
         .ok_or_else(|| IoError::new(format!("{name:?}: shape product overflows")))?;
-    let bits = numel
-        .checked_mul(dtype.bits())
-        .ok_or_else(|| IoError::new(format!("{name:?}: byte size overflows")))?;
-    if bits % 8 != 0 {
+    // Exact in u128 (a u64 numel times a width of at most 64 bits cannot
+    // overflow it), so a byte count that fits u64 is never refused because
+    // its bit count would not.
+    let bits = u128::from(numel) * u128::from(dtype.bits());
+    if !bits.is_multiple_of(8) {
         return Err(IoError::new(format!(
             "{name:?}: {numel} elements of {dtype:?} is not a whole number of bytes"
         )));
     }
-    Ok(bits / 8)
+    u64::try_from(bits / 8).map_err(|_| IoError::new(format!("{name:?}: byte size overflows")))
 }
 
 fn push_json_str(out: &mut String, s: &str) {

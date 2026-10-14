@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ojas_core::DataCursor;
+use ojas_core::{forward_backend_methods, DataCursor};
 use ojas_core::{
     AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, DType,
     DeviceBuffer, LinearCe, MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
@@ -710,7 +710,67 @@ impl<B: Backend> Probe<B> {
     }
 }
 
+/// The `Probe` methods left to the trait's generated forwarding: every
+/// `Backend` method the probe does not instrument itself. The method list is
+/// `ojas_core::with_backend_methods!`, so a method added to the trait is
+/// forwarded (and counted and faultable) here without an edit. Naming a
+/// method in `Probe`'s impl below means adding an arm here, or the impl
+/// defines it twice.
+macro_rules! forward_unwritten {
+    (id, { $($item:tt)* }) => {};
+    (budget, { $($item:tt)* }) => {};
+    (numerics, { $($item:tt)* }) => {};
+    (upload, { $($item:tt)* }) => {};
+    (download, { $($item:tt)* }) => {};
+    (permute, { $($item:tt)* }) => {};
+    (embedding_forward, { $($item:tt)* }) => {};
+    (embedding_backward, { $($item:tt)* }) => {};
+    (linear_forward, { $($item:tt)* }) => {};
+    (linear_backward, { $($item:tt)* }) => {};
+    (rms_norm_forward, { $($item:tt)* }) => {};
+    (rms_norm_backward, { $($item:tt)* }) => {};
+    (rope_half_split_forward, { $($item:tt)* }) => {};
+    (rope_half_split_backward, { $($item:tt)* }) => {};
+    (rms_qk_norm_forward, { $($item:tt)* }) => {};
+    (rms_qk_norm_backward, { $($item:tt)* }) => {};
+    (causal_sdpa_forward, { $($item:tt)* }) => {};
+    (causal_sdpa_backward, { $($item:tt)* }) => {};
+    (per_head_sigmoid_gate_forward, { $($item:tt)* }) => {};
+    (per_head_sigmoid_gate_backward, { $($item:tt)* }) => {};
+    (value_residual_blend_forward, { $($item:tt)* }) => {};
+    (value_residual_blend_backward, { $($item:tt)* }) => {};
+    (silu_forward, { $($item:tt)* }) => {};
+    (silu_backward, { $($item:tt)* }) => {};
+    (mul_forward, { $($item:tt)* }) => {};
+    (mul_backward, { $($item:tt)* }) => {};
+    (residual_add_forward, { $($item:tt)* }) => {};
+    (residual_add_backward, { $($item:tt)* }) => {};
+    (cross_entropy_mean_forward, { $($item:tt)* }) => {};
+    (cross_entropy_mean_backward, { $($item:tt)* }) => {};
+    (clip_grad_norm, { $($item:tt)* }) => {};
+    (adamw_step, { $($item:tt)* }) => {};
+    (muon_ns5_step, { $($item:tt)* }) => {};
+    (optimizer_scratch_bytes, { $($item:tt)* }) => {};
+    (sync, { $($item:tt)* }) => {};
+    (accumulate_grad, { $($item:tt)* }) => {};
+    (linear_cross_entropy_mean, { $($item:tt)* }) => {};
+    (cached_attention_forward, { $($item:tt)* }) => {};
+    (kv_cache_write, { $($item:tt)* }) => {};
+    (argmax_rows, { $($item:tt)* }) => {};
+    (topk_rows, { $($item:tt)* }) => {};
+    (cast_bf16, { $($item:tt)* }) => {};
+    (autocast_region, { $($item:tt)* }) => {};
+    ($name:ident, { $($item:tt)* }) => {
+        $($item)*
+    };
+}
+
 impl<B: Backend> Backend for Probe<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, gate, forward_unwritten }
+    );
+
     fn id(&self) -> BackendId {
         self.inner.id()
     }

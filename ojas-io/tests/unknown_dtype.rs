@@ -6,7 +6,7 @@ use ojas_io::SafeTensors;
 
 fn frame(header: &str, data: &[u8]) -> Vec<u8> {
     let mut h = header.as_bytes().to_vec();
-    while h.len() % 8 != 0 {
+    while !h.len().is_multiple_of(8) {
         h.push(b' ');
     }
     let mut out = (h.len() as u64).to_le_bytes().to_vec();

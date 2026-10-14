@@ -5,7 +5,8 @@
 # Invoke: ./scripts/check_tracked_targets.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# -P: cargo reports canonical paths, so a symlinked checkout root is resolved.
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
 srcs=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].targets[].src_path')
@@ -22,7 +23,7 @@ while IFS= read -r src; do
   if [ "$rel" = "$src" ]; then
     echo "check_tracked_targets: $src is outside $ROOT" >&2
     missing=$((missing + 1))
-  elif ! git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+  elif ! git --literal-pathspecs ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
     echo "check_tracked_targets: $rel is a Cargo target source but is not tracked" >&2
     missing=$((missing + 1))
   fi

@@ -303,6 +303,18 @@ impl<B: Backend> Backend for Gated<B> {
         self.inner
             .causal_sdpa_backward(q, k, v, output, lse, grad_output, window)
     }
+    fn causal_sdpa_backward_recompute(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        grad_output: &Tensor,
+        window: Option<usize>,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        self.enter("causal_sdpa_backward_recompute", true)?;
+        self.inner
+            .causal_sdpa_backward_recompute(q, k, v, grad_output, window)
+    }
     fn per_head_sigmoid_gate_forward(
         &self,
         input: &Tensor,
