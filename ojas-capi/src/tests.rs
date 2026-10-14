@@ -1951,22 +1951,41 @@ fn assert_device_steps_match_cpu(device: session::Session, dir: &Path) {
     assert_eq!(session::session_count(), 0);
 }
 
-/// Sampling on a device session matches the CPU session token for token and
-/// reads back one `[vocab]` logit row per forward. Caller-logits argmax
-/// reads nothing from the device.
+/// Sampling on a device session matches the CPU session token for token.
+/// Temperature 0 reaches `DeviceDecoder::forward_top` with `k` = 1, which
+/// selects on the device and reads back `k` values and `k` ids per token
+/// (two reads, `8 * k` bytes), not the `[vocab]` logit row (card
+/// ft-ffb271da, criterion 1: a readback-bytes counter pins `k * 8` bytes per
+/// token). Caller-logits argmax reads nothing from the device.
 fn assert_device_samples_match_cpu(device: session::Session) {
+    /// Tokens generated per sample call, and the `k` temperature 0 selects.
+    const TOKENS: u32 = 3;
+    const K: u64 = 1;
+    /// A `k`-value readback and a `k`-id readback, 4 bytes each element.
+    const READS_PER_TOKEN: u64 = 2;
+    const BYTES_PER_TOKEN: u64 = K * (4 + 4);
     let cpu = load_path("model.safetensors").unwrap();
-    let vocab = nano_spec().vocab as u64;
     for prompt in [&[0u32][..], &[1], &[0, 1, 1], &[1, 0, 0, 1, 0]] {
-        let want = call(crate::OP_SAMPLE, &sample_payload(cpu.id, prompt, 0.0, 3, 0)).unwrap();
+        let want = call(
+            crate::OP_SAMPLE,
+            &sample_payload(cpu.id, prompt, 0.0, TOKENS, 0),
+        )
+        .unwrap();
         let (got, reads) = readbacks_during(|| {
             call(
                 crate::OP_SAMPLE,
-                &sample_payload(device.id, prompt, 0.0, 3, 0),
+                &sample_payload(device.id, prompt, 0.0, TOKENS, 0),
             )
         });
         assert_eq!(got.unwrap(), want, "{prompt:?}");
-        assert_eq!(reads, (3, 3 * vocab * 4), "{prompt:?}");
+        assert_eq!(
+            reads,
+            (
+                u64::from(TOKENS) * READS_PER_TOKEN,
+                u64::from(TOKENS) * BYTES_PER_TOKEN
+            ),
+            "{prompt:?}"
+        );
     }
     let (token, reads) =
         readbacks_during(|| call(crate::OP_GENERATE, &argmax_payload(device.id, &[0.0, 2.0])));
