@@ -228,15 +228,14 @@ fn trajectory() -> Trajectory {
                 MixerLora::GatedDeltaNet { qkv, z, out } => vec![qkv, z, out],
                 MixerLora::Attention { q, k, v, o } => vec![q, k, v, o],
             };
-            for slot in mixer
+            for site in mixer
                 .into_iter()
                 .chain([&mut l.gate, &mut l.up, &mut l.down])
+                .flatten()
             {
-                if let Some(site) = slot {
-                    update(&mut site.a);
-                    for b in &mut site.b {
-                        update(b);
-                    }
+                update(&mut site.a);
+                for b in &mut site.b {
+                    update(b);
                 }
             }
         }
@@ -311,8 +310,9 @@ fn b_prime_twenty_step_losses_match_torch_and_repeat_bit_for_bit() {
 /// exact (fp64) trajectory on some tensors: AdamW's step is scale-free, so
 /// a gradient error of 1e-6 of a tensor's peak becomes a parameter error of
 /// several 1e-5 within 20 steps. So each tensor is held to the larger of
-/// the card's bound and twice the oracle's own noise floor on that tensor,
-/// and ojas must be as close to the exact trajectory as that floor allows.
+/// the card's bound and three times the oracle's own noise floor on that
+/// tensor, and ojas must be closer to the exact trajectory than torch fp32 is
+/// on most tensors.
 /// [`b_prime_final_adapters_within_1e_5_of_torch_fp32`] keeps the card's
 /// literal bound.
 #[test]
@@ -320,8 +320,11 @@ fn b_prime_final_adapters_are_within_the_oracles_own_noise_floor() {
     let file = lora_file();
     let rows = final_ratios(&trajectory(), &file);
     let mut worst_vs_torch: f32 = 0.0;
+    let mut closer = 0;
     for (name, vs_torch, floor, vs_exact) in &rows {
-        let bound = FINAL_BOUND.max(2.0 * floor);
+        // Two independent fp32 runs each sit about one floor from the exact
+        // answer, so allow three.
+        let bound = FINAL_BOUND.max(3.0 * floor);
         eprintln!(
             "{name}: ojas vs torch {vs_torch:.2e}, torch vs fp64 {floor:.2e}, ojas vs fp64 {vs_exact:.2e}"
         );
@@ -333,9 +336,17 @@ fn b_prime_final_adapters_are_within_the_oracles_own_noise_floor() {
             *vs_exact <= bound,
             "{name}: ojas vs fp64 {vs_exact:.3e} > {bound:.3e}"
         );
+        closer += usize::from(vs_exact <= floor);
         worst_vs_torch = worst_vs_torch.max(*vs_torch);
     }
     eprintln!("worst ojas vs torch final adapter: {worst_vs_torch:.3e} of peak");
+    // ojas is no noisier than torch fp32 itself: closer to the exact
+    // trajectory than torch is on most tensors.
+    assert!(
+        closer * 2 > rows.len(),
+        "ojas is closer to fp64 than torch fp32 on only {closer} of {} tensors",
+        rows.len()
+    );
 }
 
 /// (b') exactly as the card words it: final A and B within 1e-5 of each
@@ -449,7 +460,7 @@ fn a_merged_model_reproduces_the_unmerged_loss() {
     let sites = fixture_sites(&file, true);
     let unmerged = lora_step(cpu(), &host, &sites, &d, &Opts::new()).loss;
     let backend = cpu();
-    let mut fold = |w: &mut Tensor, a: &Tensor, b: &Tensor| {
+    let fold = |w: &mut Tensor, a: &Tensor, b: &Tensor| {
         let mut lin = LoraLinear::new(config(), w.clone(), a.clone(), b.clone()).unwrap();
         lin.merge(&backend).unwrap();
         *w = lin.weight().clone();

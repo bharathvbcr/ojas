@@ -7,7 +7,7 @@
 
 mod qwen35_common;
 
-use ojas_core::{Autocast, Backend, Budget, DType, Tensor};
+use ojas_core::{Autocast, Budget, DType, Tensor};
 use ojas_metal::MetalBackend;
 use ojas_model::qwen35::{load_hf, Qwen35Params};
 use qwen35_common::lora::*;
