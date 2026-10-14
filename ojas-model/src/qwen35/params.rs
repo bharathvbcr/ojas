@@ -23,7 +23,11 @@
 use std::convert::Infallible;
 
 use ojas_core::{f32_to_bf16, Budget, DType, OjasError, Tensor};
+use ojas_data::CounterRng;
 use ojas_io::SafeTensors;
+
+use crate::init::fnv1a;
+use crate::lora::{LoraConfig, LoraSite};
 
 use crate::qwen35::spec::{Qwen35Mixer, Qwen35Spec};
 
@@ -521,6 +525,320 @@ pub fn fuse_grads(
             })
         })
         .collect()
+}
+
+/// The ten linears the LoRA recipe adapts, per layer kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoraKind {
+    GdnQkv,
+    GdnZ,
+    GdnOut,
+    AttnQ,
+    AttnK,
+    AttnV,
+    AttnO,
+    MlpGate,
+    MlpUp,
+    MlpDown,
+}
+
+/// Every [`LoraKind`], in the canonical order of [`Qwen35Lora::sites`]
+/// within a layer's mixer, then the MLP.
+pub const LORA_KINDS: [LoraKind; 10] = [
+    LoraKind::GdnQkv,
+    LoraKind::GdnZ,
+    LoraKind::GdnOut,
+    LoraKind::AttnQ,
+    LoraKind::AttnK,
+    LoraKind::AttnV,
+    LoraKind::AttnO,
+    LoraKind::MlpGate,
+    LoraKind::MlpUp,
+    LoraKind::MlpDown,
+];
+
+impl LoraKind {
+    /// The Hugging Face module path under a layer, as the checkpoint's
+    /// tensor index spells it (`<suffix>.weight` is the tensor).
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::GdnQkv => "linear_attn.in_proj_qkv",
+            Self::GdnZ => "linear_attn.in_proj_z",
+            Self::GdnOut => "linear_attn.out_proj",
+            Self::AttnQ => "self_attn.q_proj",
+            Self::AttnK => "self_attn.k_proj",
+            Self::AttnV => "self_attn.v_proj",
+            Self::AttnO => "self_attn.o_proj",
+            Self::MlpGate => "mlp.gate_proj",
+            Self::MlpUp => "mlp.up_proj",
+            Self::MlpDown => "mlp.down_proj",
+        }
+    }
+
+    pub fn from_suffix(suffix: &str) -> Option<Self> {
+        LORA_KINDS.into_iter().find(|k| k.suffix() == suffix)
+    }
+
+    fn mixer(self) -> Option<Qwen35Mixer> {
+        match self {
+            Self::GdnQkv | Self::GdnZ | Self::GdnOut => Some(Qwen35Mixer::GatedDeltaNet),
+            Self::AttnQ | Self::AttnK | Self::AttnV | Self::AttnO => Some(Qwen35Mixer::Attention),
+            _ => None,
+        }
+    }
+}
+
+/// One adapted linear: where it is and the shape of its Hugging Face
+/// tensor, which is one fused weight that the model holds as `out_parts`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoraTarget {
+    /// The Hugging Face tensor, `<prefix>layers.<i>.<suffix>.weight`.
+    pub name: String,
+    pub layer: usize,
+    pub kind: LoraKind,
+    pub in_features: usize,
+    /// Output rows of each part the model holds: `[q, k, v]` of
+    /// `in_proj_qkv`, `[query, gate]` of `q_proj`, else one.
+    pub out_parts: Vec<usize>,
+}
+
+impl LoraTarget {
+    /// The adapter's module name, the tensor name without `.weight`.
+    pub fn module(&self) -> &str {
+        self.name.strip_suffix(".weight").unwrap_or(&self.name)
+    }
+
+    /// The fused `B` `[out, r]` from its parts, in the fused tensor's row
+    /// order (`q_proj` interleaves query and gate rows per head).
+    pub fn fuse_b(&self, spec: &Qwen35Spec, parts: &[Vec<f32>], rank: usize) -> Vec<f32> {
+        match self.kind {
+            LoraKind::AttnQ => interleave(&parts[0], &parts[1], spec.q_heads, spec.head_dim, rank),
+            _ => parts.concat(),
+        }
+    }
+
+    /// [`LoraTarget::fuse_b`]'s inverse.
+    pub fn split_b(&self, spec: &Qwen35Spec, fused: &[f32], rank: usize) -> Vec<Vec<f32>> {
+        match self.kind {
+            LoraKind::AttnQ => {
+                let (q, g) = deinterleave(fused, spec.q_heads, spec.head_dim, rank);
+                vec![q, g]
+            }
+            _ => split_rows(fused, rank, &self.out_parts),
+        }
+    }
+}
+
+/// Every [`LoraTarget`] of `spec` for `kinds`, layer by layer in the order
+/// of [`Qwen35Lora::sites`], checked against the checkpoint's tensor index:
+/// each name must be present with the shape the spec gives. A selected
+/// target the index lacks, or has with another shape, is refused by name;
+/// nothing is read from tensor data.
+pub fn lora_targets(
+    spec: &Qwen35Spec,
+    file: &SafeTensors<'_>,
+    prefix: &str,
+    kinds: &[LoraKind],
+) -> Result<Vec<LoraTarget>, OjasError> {
+    const OP: &str = "qwen35::lora_targets";
+    spec.validate()?;
+    if kinds.is_empty() {
+        return Err(refuse(OP, "no LoRA target selected".to_string()));
+    }
+    let (d, f) = (spec.hidden, spec.intermediate);
+    let [cq, ck, cv] = spec.gdn_qkv_channels();
+    let (hq, hkv, hd) = (spec.q_heads, spec.kv_heads, spec.head_dim);
+    let hv = spec.gdn_heads * spec.gdn_value_dim;
+    let mut out = Vec::new();
+    for (layer, mixer) in spec.layers.iter().enumerate() {
+        for kind in LORA_KINDS {
+            if !kinds.contains(&kind) || kind.mixer().is_some_and(|m| m != *mixer) {
+                continue;
+            }
+            let (inn, parts): (usize, Vec<usize>) = match kind {
+                LoraKind::GdnQkv => (d, vec![cq, ck, cv]),
+                LoraKind::GdnZ => (d, vec![hv]),
+                LoraKind::GdnOut => (hv, vec![d]),
+                LoraKind::AttnQ => (d, vec![hq * hd, hq * hd]),
+                LoraKind::AttnK | LoraKind::AttnV => (d, vec![hkv * hd]),
+                LoraKind::AttnO => (hq * hd, vec![d]),
+                LoraKind::MlpGate | LoraKind::MlpUp => (d, vec![f]),
+                LoraKind::MlpDown => (f, vec![d]),
+            };
+            let name = format!("{prefix}layers.{layer}.{}.weight", kind.suffix());
+            let info = file.info(&name).map_err(|e| {
+                refuse(
+                    OP,
+                    format!("LoRA target {name} is not in the checkpoint: {e}"),
+                )
+            })?;
+            let got: Vec<usize> = info.shape.iter().map(|&n| n as usize).collect();
+            let want = [parts.iter().sum::<usize>(), inn];
+            if got != want {
+                return Err(refuse(
+                    OP,
+                    format!("LoRA target {name}: shape {got:?}, expected {want:?}"),
+                ));
+            }
+            out.push(LoraTarget {
+                name,
+                layer,
+                kind,
+                in_features: inn,
+                out_parts: parts,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// One slot per adapted linear, `None` where a linear is not adapted. `S`
+/// is whatever sits in a slot: a [`crate::lora::LoraSite`] of host tensors
+/// or of graph values, or one mask per site.
+#[derive(Clone, Debug)]
+pub struct Qwen35Lora<S> {
+    pub layers: Vec<LayerLora<S>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LayerLora<S> {
+    pub mixer: MixerLora<S>,
+    pub gate: Option<S>,
+    pub up: Option<S>,
+    pub down: Option<S>,
+}
+
+#[derive(Clone, Debug)]
+pub enum MixerLora<S> {
+    GatedDeltaNet {
+        qkv: Option<S>,
+        z: Option<S>,
+        out: Option<S>,
+    },
+    Attention {
+        q: Option<S>,
+        k: Option<S>,
+        v: Option<S>,
+        o: Option<S>,
+    },
+}
+
+impl<S> Qwen35Lora<S> {
+    /// Every slot empty, for `spec`.
+    pub fn empty(spec: &Qwen35Spec) -> Self {
+        let layers = spec
+            .layers
+            .iter()
+            .map(|m| LayerLora {
+                mixer: match m {
+                    Qwen35Mixer::GatedDeltaNet => MixerLora::GatedDeltaNet {
+                        qkv: None,
+                        z: None,
+                        out: None,
+                    },
+                    Qwen35Mixer::Attention => MixerLora::Attention {
+                        q: None,
+                        k: None,
+                        v: None,
+                        o: None,
+                    },
+                },
+                gate: None,
+                up: None,
+                down: None,
+            })
+            .collect();
+        Self { layers }
+    }
+
+    /// The slot of `kind` in `layer`, or `None` if that layer has no such
+    /// linear.
+    pub fn slot_mut(&mut self, layer: usize, kind: LoraKind) -> Option<&mut Option<S>> {
+        let l = self.layers.get_mut(layer)?;
+        Some(match (&mut l.mixer, kind) {
+            (MixerLora::GatedDeltaNet { qkv, .. }, LoraKind::GdnQkv) => qkv,
+            (MixerLora::GatedDeltaNet { z, .. }, LoraKind::GdnZ) => z,
+            (MixerLora::GatedDeltaNet { out, .. }, LoraKind::GdnOut) => out,
+            (MixerLora::Attention { q, .. }, LoraKind::AttnQ) => q,
+            (MixerLora::Attention { k, .. }, LoraKind::AttnK) => k,
+            (MixerLora::Attention { v, .. }, LoraKind::AttnV) => v,
+            (MixerLora::Attention { o, .. }, LoraKind::AttnO) => o,
+            (_, LoraKind::MlpGate) => &mut l.gate,
+            (_, LoraKind::MlpUp) => &mut l.up,
+            (_, LoraKind::MlpDown) => &mut l.down,
+            _ => return None,
+        })
+    }
+
+    /// Every filled slot, layer by layer: a mixer's slots in
+    /// [`LORA_KINDS`] order, then gate, up, down. This is the order of
+    /// [`lora_targets`].
+    pub fn sites(&self) -> Vec<&S> {
+        let mut out = Vec::new();
+        for l in &self.layers {
+            match &l.mixer {
+                MixerLora::GatedDeltaNet { qkv, z, out: o } => out.extend([qkv, z, o]),
+                MixerLora::Attention { q, k, v, o } => out.extend([q, k, v, o]),
+            }
+            out.extend([&l.gate, &l.up, &l.down]);
+        }
+        out.into_iter().flatten().collect()
+    }
+
+    /// `f` of every filled slot, in [`Qwen35Lora::sites`] order.
+    pub fn try_map<T, E>(
+        &self,
+        f: &mut impl FnMut(&S) -> Result<T, E>,
+    ) -> Result<Qwen35Lora<T>, E> {
+        let mut m = |s: &Option<S>| s.as_ref().map(&mut *f).transpose();
+        let mut layers = Vec::with_capacity(self.layers.len());
+        for l in &self.layers {
+            let mixer = match &l.mixer {
+                MixerLora::GatedDeltaNet { qkv, z, out } => MixerLora::GatedDeltaNet {
+                    qkv: m(qkv)?,
+                    z: m(z)?,
+                    out: m(out)?,
+                },
+                MixerLora::Attention { q, k, v, o } => MixerLora::Attention {
+                    q: m(q)?,
+                    k: m(k)?,
+                    v: m(v)?,
+                    o: m(o)?,
+                },
+            };
+            layers.push(LayerLora {
+                mixer,
+                gate: m(&l.gate)?,
+                up: m(&l.up)?,
+                down: m(&l.down)?,
+            });
+        }
+        Ok(Qwen35Lora { layers })
+    }
+}
+
+impl Qwen35Lora<LoraSite<Tensor>> {
+    /// A fresh adapter over `targets`: `A` from a [`CounterRng`] seeded
+    /// `seed ^ fnv1a(module)` (a site's values depend on the seed and its
+    /// name only), every `B` zero.
+    pub fn init(
+        spec: &Qwen35Spec,
+        targets: &[LoraTarget],
+        config: &LoraConfig,
+        seed: u64,
+        budget: &Budget,
+    ) -> Result<Self, OjasError> {
+        let mut lora = Self::empty(spec);
+        for t in targets {
+            let mut rng = CounterRng::new(seed ^ fnv1a(t.module().as_bytes()));
+            let site = LoraSite::init(config, t.in_features, &t.out_parts, &mut rng, budget)?;
+            let slot = lora
+                .slot_mut(t.layer, t.kind)
+                .ok_or_else(|| refuse("qwen35::lora_init", format!("{}: no such slot", t.name)))?;
+            *slot = Some(site);
+        }
+        Ok(lora)
+    }
 }
 
 #[cfg(test)]

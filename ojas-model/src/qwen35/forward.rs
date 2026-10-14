@@ -25,7 +25,12 @@ use ojas_core::{mrope_text_tables, Backend, Budget, CeChunk, MropeSection, OjasE
 
 use crate::block::ActivationCheckpoint;
 use crate::graph::Graph;
-use crate::qwen35::params::{AttnParams, GdnParams, LayerParams, MixerParams, Qwen35Params};
+use crate::lora::{
+    dropout_mask, lora_down, lora_up, scale_constant, scaled_b, Entropy, LoraConfig, LoraSite,
+};
+use crate::qwen35::params::{
+    AttnParams, GdnParams, LayerLora, LayerParams, MixerLora, MixerParams, Qwen35Lora, Qwen35Params,
+};
 use crate::qwen35::spec::Qwen35Spec;
 
 /// `[B, T, H, D]` to `[B, H, T, D]`; it is its own inverse.
@@ -96,6 +101,127 @@ pub fn bind<G: Graph>(
     params.try_map(&mut |t| g.param(t))
 }
 
+/// [`bind`] with every parameter frozen ([`Graph::frozen`]): no gradient
+/// is kept for it. This is the base model of a LoRA run.
+pub fn bind_frozen<G: Graph>(
+    g: &mut G,
+    params: &Qwen35Params<Tensor>,
+) -> Result<Qwen35Params<G::V>, OjasError> {
+    params.try_map(&mut |t| g.frozen(t))
+}
+
+/// What the forward needs to add the LoRA branches: the bound sites, the
+/// scaling, the frozen constants that apply it, and the dropout masks.
+///
+/// Everything here is recorded before any layer runs, because a
+/// checkpointed segment refuses a leaf recorded inside it; a replayed layer
+/// then reads the same masks the first forward did.
+pub struct LoraForward<V> {
+    sites: Qwen35Lora<LoraSite<V>>,
+    scale: f32,
+    /// One `scale` constant per distinct `B` shape.
+    consts: Vec<(Vec<usize>, V)>,
+    /// One mask per site when dropout is on.
+    masks: Option<Qwen35Lora<V>>,
+}
+
+impl<V: Clone> LoraForward<V> {
+    /// `sites` are the adapters' `A` and `B` as graph values (leaves for a
+    /// training tape). With `config.dropout() > 0` a mask `[batch, seq, in]`
+    /// is drawn per site from `rng`, in [`Qwen35Lora::sites`] order, so a
+    /// fixed seed fixes every step's masks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<G: Graph<V = V>>(
+        g: &mut G,
+        sites: Qwen35Lora<LoraSite<V>>,
+        config: &LoraConfig,
+        batch: usize,
+        seq: usize,
+        rng: &mut impl Entropy,
+        budget: &Budget,
+    ) -> Result<Self, OjasError> {
+        let scale = config.scaling();
+        let mut consts: Vec<(Vec<usize>, V)> = Vec::new();
+        if scale != 1.0 {
+            for site in sites.sites() {
+                for b in &site.b {
+                    let shape = g.tensor(b)?.shape().to_vec();
+                    if !consts.iter().any(|(s, _)| *s == shape) {
+                        let c = scale_constant(g, &shape, scale, budget)?;
+                        consts.push((shape, c));
+                    }
+                }
+            }
+        }
+        let masks = if config.dropout() > 0.0 {
+            let mut one = |site: &LoraSite<V>| -> Result<V, OjasError> {
+                let inn = g.tensor(&site.a)?.shape()[1];
+                let m = dropout_mask(config.dropout(), &[batch, seq, inn], rng, budget)?;
+                g.frozen(&m)
+            };
+            Some(sites.try_map(&mut one)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            sites,
+            scale,
+            consts,
+            masks,
+        })
+    }
+
+    /// The bound sites, e.g. to read each leaf's gradient.
+    pub fn sites(&self) -> &Qwen35Lora<LoraSite<V>> {
+        &self.sites
+    }
+}
+
+/// One layer's view of a [`LoraForward`].
+struct LayerLoraCtx<'a, V> {
+    scale: f32,
+    consts: &'a [(Vec<usize>, V)],
+    sites: &'a LayerLora<LoraSite<V>>,
+    masks: Option<&'a LayerLora<V>>,
+}
+
+/// A site's `x A^T`, once, for every part that shares it.
+fn site_down<G: Graph>(
+    g: &mut G,
+    site: Option<&LoraSite<G::V>>,
+    mask: Option<&G::V>,
+    x: &G::V,
+) -> Result<Option<G::V>, OjasError> {
+    site.map(|s| lora_down(g, x, &s.a, mask)).transpose()
+}
+
+/// `base + (x A^T) B_part_eff^T`, or `base` where there is no adapter.
+fn add_lora<G: Graph>(
+    g: &mut G,
+    ctx: Option<&LayerLoraCtx<'_, G::V>>,
+    site: Option<&LoraSite<G::V>>,
+    down: Option<&G::V>,
+    part: usize,
+    base: G::V,
+) -> Result<G::V, OjasError> {
+    let (Some(ctx), Some(site), Some(down)) = (ctx, site, down) else {
+        return Ok(base);
+    };
+    let b = site
+        .b
+        .get(part)
+        .ok_or_else(|| shape("qwen35::lora", format!("a site has no B part {part}")))?;
+    let like = if ctx.scale == 1.0 {
+        None
+    } else {
+        let want = g.tensor(b)?.shape().to_vec();
+        ctx.consts.iter().find(|(s, _)| *s == want).map(|(_, c)| c)
+    };
+    let b_eff = scaled_b(g, b, ctx.scale, like)?;
+    let delta = lora_up(g, down, &b_eff)?;
+    g.add(&base, &delta)
+}
+
 fn shape(op: &'static str, detail: String) -> OjasError {
     OjasError::Shape { op, detail }
 }
@@ -116,6 +242,36 @@ pub fn forward_loss<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
     params: &Qwen35Params<G::V>,
+    ids: &Tensor,
+    targets: &Tensor,
+    tables: &Qwen35Tables,
+    ignore: Option<u32>,
+    chunk: CeChunk,
+    activations: ActivationCheckpoint,
+) -> Result<G::V, OjasError> {
+    forward_loss_lora(
+        g,
+        spec,
+        params,
+        None,
+        ids,
+        targets,
+        tables,
+        ignore,
+        chunk,
+        activations,
+    )
+}
+
+/// [`forward_loss`] with LoRA branches on the linears `lora` has sites for
+/// (`None` is [`forward_loss`] exactly). The base `params` are used as
+/// bound: bind them with [`bind_frozen`] to train the adapters alone.
+#[allow(clippy::too_many_arguments)]
+pub fn forward_loss_lora<G: Graph>(
+    g: &mut G,
+    spec: &Qwen35Spec,
+    params: &Qwen35Params<G::V>,
+    lora: Option<&LoraForward<G::V>>,
     ids: &Tensor,
     targets: &Tensor,
     tables: &Qwen35Tables,
@@ -159,8 +315,8 @@ pub fn forward_loss<G: Graph>(
     let (cos, sin) = (rows(&tables.cos)?, rows(&tables.sin)?);
     // Every `1 + w` before any layer: a checkpointed segment refuses a leaf
     // recorded inside it, and the ones are leaves on a tape.
-    let one_d = g.param(&tables.ones_hidden)?;
-    let one_h = g.param(&tables.ones_head)?;
+    let one_d = g.frozen(&tables.ones_hidden)?;
+    let one_h = g.frozen(&tables.ones_head)?;
     let mut norms = Vec::with_capacity(params.layers.len());
     for l in &params.layers {
         let qk = match &l.mixer {
@@ -184,12 +340,31 @@ pub fn forward_loss<G: Graph>(
         cos: &cos,
         sin: &sin,
     };
-    for (l, n) in params.layers.iter().zip(&norms) {
+    if let Some(lora) = lora {
+        if lora.sites.layers.len() != params.layers.len() {
+            return Err(shape(
+                OP,
+                format!(
+                    "{} LoRA layers for a spec of {}",
+                    lora.sites.layers.len(),
+                    params.layers.len()
+                ),
+            ));
+        }
+    }
+    for (i, (l, n)) in params.layers.iter().zip(&norms).enumerate() {
+        let ctx = lora.map(|f| LayerLoraCtx {
+            scale: f.scale,
+            consts: &f.consts,
+            sites: &f.sites.layers[i],
+            masks: f.masks.as_ref().map(|m| &m.layers[i]),
+        });
         x = match activations {
-            ActivationCheckpoint::Off => layer(g, spec, l, n, &x, &dims)?,
+            ActivationCheckpoint::Off => layer(g, spec, l, n, ctx.as_ref(), &x, &dims)?,
             ActivationCheckpoint::Blocks => {
-                let mut outs =
-                    g.checkpoint(|g| layer(g, spec, l, n, &x, &dims).map(|y| vec![y]))?;
+                let mut outs = g.checkpoint(|g| {
+                    layer(g, spec, l, n, ctx.as_ref(), &x, &dims).map(|y| vec![y])
+                })?;
                 outs.pop()
                     .ok_or_else(|| shape(OP, "a checkpointed layer returned no output".into()))?
             }
@@ -214,13 +389,14 @@ fn layer<G: Graph>(
     spec: &Qwen35Spec,
     l: &LayerParams<G::V>,
     n: &LayerNorms<G::V>,
+    lc: Option<&LayerLoraCtx<'_, G::V>>,
     x: &G::V,
     d: &Dims<'_>,
 ) -> Result<G::V, OjasError> {
     let h = g.rms_norm(x, &n.input, spec.eps)?;
     let mixed = match (&l.mixer, &n.qk) {
-        (MixerParams::GatedDeltaNet(m), None) => gated_delta_net(g, spec, m, &h, d)?,
-        (MixerParams::Attention(m), Some((qn, kn))) => attention(g, spec, m, qn, kn, &h, d)?,
+        (MixerParams::GatedDeltaNet(m), None) => gated_delta_net(g, spec, m, lc, &h, d)?,
+        (MixerParams::Attention(m), Some((qn, kn))) => attention(g, spec, m, lc, qn, kn, &h, d)?,
         _ => {
             return Err(shape(
                 "qwen35::layer",
@@ -230,11 +406,40 @@ fn layer<G: Graph>(
     };
     let x = g.add(x, &mixed)?;
     let h = g.rms_norm(&x, &n.post, spec.eps)?;
-    let gate = g.linear(&h, &l.gate)?;
+    let mlp = |g: &mut G,
+               input: &G::V,
+               w: &G::V,
+               site: &Option<LoraSite<G::V>>,
+               mask: Option<&G::V>|
+     -> Result<G::V, OjasError> {
+        let base = g.linear(input, w)?;
+        let down = site_down(g, site.as_ref(), mask, input)?;
+        add_lora(g, lc, site.as_ref(), down.as_ref(), 0, base)
+    };
+    let masks = lc.and_then(|c| c.masks);
+    let gate = mlp(
+        g,
+        &h,
+        &l.gate,
+        lc.map_or(&None, |c| &c.sites.gate),
+        masks.and_then(|m| m.gate.as_ref()),
+    )?;
     let gate = g.silu(&gate)?;
-    let up = g.linear(&h, &l.up)?;
+    let up = mlp(
+        g,
+        &h,
+        &l.up,
+        lc.map_or(&None, |c| &c.sites.up),
+        masks.and_then(|m| m.up.as_ref()),
+    )?;
     let act = g.mul(&gate, &up)?;
-    let down = g.linear(&act, &l.down)?;
+    let down = mlp(
+        g,
+        &act,
+        &l.down,
+        lc.map_or(&None, |c| &c.sites.down),
+        masks.and_then(|m| m.down.as_ref()),
+    )?;
     g.add(&x, &down)
 }
 
@@ -242,20 +447,36 @@ fn gated_delta_net<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
     m: &GdnParams<G::V>,
+    lc: Option<&LayerLoraCtx<'_, G::V>>,
     h: &G::V,
     d: &Dims<'_>,
 ) -> Result<G::V, OjasError> {
     let (b, t, heads) = (d.batch, d.seq, spec.gdn_heads);
     let (dk, dv) = (spec.gdn_key_dim, spec.gdn_value_dim);
-    let mut branch = |w: &G::V, conv: &G::V, dim: usize| -> Result<G::V, OjasError> {
+    let (qkv, z_site, out_site) = match lc.map(|c| (&c.sites.mixer, c.masks.map(|m| &m.mixer))) {
+        Some((MixerLora::GatedDeltaNet { qkv, z, out }, _)) => {
+            (qkv.as_ref(), z.as_ref(), out.as_ref())
+        }
+        _ => (None, None, None),
+    };
+    let (qkv_mask, z_mask, out_mask) = match lc.and_then(|c| c.masks.map(|m| &m.mixer)) {
+        Some(MixerLora::GatedDeltaNet { qkv, z, out }) => (qkv.as_ref(), z.as_ref(), out.as_ref()),
+        _ => (None, None, None),
+    };
+    // One `x A^T` for the three parts of `in_proj_qkv`.
+    let qkv_down = site_down(g, qkv, qkv_mask, h)?;
+    let mut branch = |w: &G::V, part: usize, conv: &G::V, dim: usize| -> Result<G::V, OjasError> {
         let y = g.linear(h, w)?;
+        let y = add_lora(g, lc, qkv, qkv_down.as_ref(), part, y)?;
         let y = g.conv1d_silu(&y, conv)?;
         g.reshape(&y, &[b, t, heads, dim])
     };
-    let q = branch(&m.wq, &m.conv_q, dk)?;
-    let k = branch(&m.wk, &m.conv_k, dk)?;
-    let v = branch(&m.wv, &m.conv_v, dv)?;
+    let q = branch(&m.wq, 0, &m.conv_q, dk)?;
+    let k = branch(&m.wk, 1, &m.conv_k, dk)?;
+    let v = branch(&m.wv, 2, &m.conv_v, dv)?;
     let z = g.linear(h, &m.wz)?;
+    let z_down = site_down(g, z_site, z_mask, h)?;
+    let z = add_lora(g, lc, z_site, z_down.as_ref(), 0, z)?;
     let z = g.reshape(&z, &[b, t, heads, dv])?;
     let beta = g.linear(h, &m.wb)?;
     let beta = g.sigmoid(&beta)?;
@@ -264,21 +485,49 @@ fn gated_delta_net<G: Graph>(
     let o = g.gdn(&q, &k, &v, &decay, &beta)?;
     let o = g.gated_rms_norm(&o, &z, &m.norm, spec.eps)?;
     let o = g.reshape(&o, &[b, t, heads * dv])?;
-    g.linear(&o, &m.out)
+    let y = g.linear(&o, &m.out)?;
+    let out_down = site_down(g, out_site, out_mask, &o)?;
+    add_lora(g, lc, out_site, out_down.as_ref(), 0, y)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn attention<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
     m: &AttnParams<G::V>,
+    lc: Option<&LayerLoraCtx<'_, G::V>>,
     q_norm: &G::V,
     k_norm: &G::V,
     h: &G::V,
     d: &Dims<'_>,
 ) -> Result<G::V, OjasError> {
     let (b, t, hd) = (d.batch, d.seq, spec.head_dim);
-    let mut head = |w: &G::V, heads: usize, norm: Option<&G::V>| -> Result<G::V, OjasError> {
+    let (qs, ks, vs, os) = match lc.map(|c| &c.sites.mixer) {
+        Some(MixerLora::Attention { q, k, v, o }) => {
+            (q.as_ref(), k.as_ref(), v.as_ref(), o.as_ref())
+        }
+        _ => (None, None, None, None),
+    };
+    let (qm, km, vm, om) = match lc.and_then(|c| c.masks.map(|m| &m.mixer)) {
+        Some(MixerLora::Attention { q, k, v, o }) => {
+            (q.as_ref(), k.as_ref(), v.as_ref(), o.as_ref())
+        }
+        _ => (None, None, None, None),
+    };
+    // `q_proj` is one fused weight: its adapter's `A` is shared by the
+    // query rows (part 0) and the output gate rows (part 1).
+    let q_down = site_down(g, qs, qm, h)?;
+    let k_down = site_down(g, ks, km, h)?;
+    let v_down = site_down(g, vs, vm, h)?;
+    let mut head = |w: &G::V,
+                    site: Option<&LoraSite<G::V>>,
+                    down: Option<&G::V>,
+                    part: usize,
+                    heads: usize,
+                    norm: Option<&G::V>|
+     -> Result<G::V, OjasError> {
         let y = g.linear(h, w)?;
+        let y = add_lora(g, lc, site, down, part, y)?;
         let mut y = g.reshape(&y, &[b, t, heads, hd])?;
         if let Some(norm) = norm {
             y = g.rms_norm(&y, norm, spec.eps)?;
@@ -286,14 +535,17 @@ fn attention<G: Graph>(
         }
         g.permute(&y, &SWAP_TIME_HEADS)
     };
-    let q = head(&m.wq, spec.q_heads, Some(q_norm))?;
-    let k = head(&m.wk, spec.kv_heads, Some(k_norm))?;
-    let v = head(&m.wv, spec.kv_heads, None)?;
+    let q = head(&m.wq, qs, q_down.as_ref(), 0, spec.q_heads, Some(q_norm))?;
+    let k = head(&m.wk, ks, k_down.as_ref(), 0, spec.kv_heads, Some(k_norm))?;
+    let v = head(&m.wv, vs, v_down.as_ref(), 0, spec.kv_heads, None)?;
     let a = g.sdpa(&q, &k, &v, None)?;
     let a = g.permute(&a, &SWAP_TIME_HEADS)?;
     let a = g.reshape(&a, &[b, t, spec.q_heads * hd])?;
     let gate = g.linear(h, &m.wgate)?;
+    let gate = add_lora(g, lc, qs, q_down.as_ref(), 1, gate)?;
     let gate = g.sigmoid(&gate)?;
     let a = g.mul(&a, &gate)?;
-    g.linear(&a, &m.wo)
+    let y = g.linear(&a, &m.wo)?;
+    let o_down = site_down(g, os, om, &a)?;
+    add_lora(g, lc, os, o_down.as_ref(), 0, y)
 }
