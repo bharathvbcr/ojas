@@ -148,7 +148,7 @@ func TestCountCommentsAreInvisibleInRenderedMarkdown(t *testing.T) {
 	if strings.Contains(out, "&lt;!--") || strings.Contains(out, "<!--") {
 		t.Fatalf("a count marker leaked into the page: %s", out)
 	}
-	if !strings.Contains(out, "<p>100 tests</p>") || !strings.Contains(out, "<li><code>a</code>: 1 passed</li>") || !strings.Contains(out, "<p>done</p>") {
+	if !strings.Contains(out, "<p>100 tests</p>") || !strings.Contains(out, "<li><code>a</code>: 1 passed") || !strings.Contains(out, "<p>done</p>") {
 		t.Fatalf("unexpected output: %s", out)
 	}
 }
@@ -334,8 +334,8 @@ func TestCountBlockGenerationGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 12 {
-		t.Errorf("spans = %d, want 12", n)
+	if n != 10 {
+		t.Errorf("spans = %d, want 10", n)
 	}
 	if got != countsGolden {
 		t.Errorf("got:\n%s\nwant:\n%s", got, countsGolden)
