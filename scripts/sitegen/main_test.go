@@ -405,3 +405,144 @@ func TestLinkToUntrackedFileIsRejected(t *testing.T) {
 		t.Fatalf("unresolved = %d, rendered %s", r.unresolved, got)
 	}
 }
+
+// ---------------------------------------------------------------- adversarial cases
+//
+// Each test below pins a way the pipeline accepts input it should refuse or
+// misread, found by attacking the implementation rather than its happy path.
+
+// A run file that omits a count must not read as that count being zero:
+// "failed" absent would publish "0 failed" for a run that recorded nothing.
+func TestAdvRunFileMissingFieldsAreRejected(t *testing.T) {
+	cases := map[string]string{
+		"workspace.failed absent":  strings.Replace(fixtureRuns, `"failed": 1, `, "", 1),
+		"workspace.ignored absent": strings.Replace(fixtureRuns, `"ignored": 4, `, "", 1),
+		"crate passed absent":      strings.Replace(fixtureRuns, `"passed": 7, "ignored": 2`, `"ignored": 2`, 1),
+		"go passed absent":         strings.Replace(fixtureRuns, `"passed": 3, "failed": 0, `, "", 1),
+		"duplicate key, last wins": strings.Replace(fixtureRuns, `"passed": 100`, `"passed": 100, "passed": 5`, 1),
+	}
+	for name, js := range cases {
+		if js == fixtureRuns {
+			t.Fatalf("%s: mutation did not apply", name)
+		}
+		if _, err := parseTestRuns([]byte(js), "x"); err == nil {
+			t.Errorf("%s: parseTestRuns accepted it", name)
+		}
+	}
+}
+
+// An open marker without its close, or markers nested in each other, must fail
+// loudly: today the first is ignored (the number stays hand-typed and stale) and
+// the second collapses into one span plus an orphan close marker.
+func TestAdvMalformedCountSpansFail(t *testing.T) {
+	for name, in := range map[string]string{
+		"open without close":   "<!--count:ws.passed-->1 and <!--count:ws.failed-->2<!--/count-->",
+		"nested spans":         "<!--count:ws.passed-->1<!--count:ws.failed-->2<!--/count-->z<!--/count-->",
+		"close without open":   "x<!--/count--> <!--count:ws.passed-->1<!--/count-->",
+		"spaced marker is not": "<!-- count:ws.passed -->1<!--/count--> <!--count:ws.failed-->2<!--/count-->",
+	} {
+		if _, _, err := applyCounts(in, mustRuns(t)); err == nil {
+			t.Errorf("%s: applyCounts accepted %q", name, in)
+		}
+	}
+}
+
+// Machine-local targets written in any markdown link form must fail -check, not
+// only the inline [t](target) form.
+func TestAdvMachineLocalLinksInOtherSyntaxFailCheck(t *testing.T) {
+	for name, md := range map[string]string{
+		"reference definition":     "See [x].\n\n[x]: file:///Users/bharath/Code/research/ojas/ojas-a\n",
+		"reference def, absolute":  "See [x].\n\n[x]: /Users/bharath/Code/research/ojas/ojas-a\n",
+		"autolink":                 "See <file:///Users/bharath/Code/research/ojas/ojas-a>.\n",
+		"raw html anchor":          "See <a href=\"file:///Users/bharath/Code/research/ojas/ojas-a\">crate</a>.\n",
+		"angle-bracket target":     "See [x](<file:///Users/bharath/Code/research/ojas/ojas-a>).\n",
+		"raw html img (non-block)": "See <img src=\"/Users/bharath/a.png\"> inline.\n",
+	} {
+		files := baseFiles()
+		files["README.md"] += "\n" + md
+		scratchRepo(t, files)
+		if err := run(false); err == nil {
+			t.Errorf("%s: sitegen accepted it", name)
+		}
+	}
+}
+
+// Valid CommonMark targets for a tracked file with a space in its name:
+// percent-encoding and <...>. Both are reported as dead or rendered as literal
+// text today.
+func TestAdvEncodedAndAngleTargetsResolve(t *testing.T) {
+	for name, target := range map[string]string{
+		"percent-encoded": "bench/my%20doc.md",
+		"percent-utf8":    "bench/%C3%BCn%C3%AF.md",
+		"angle brackets":  "<bench/my doc.md>",
+	} {
+		files := baseFiles()
+		files["bench/my doc.md"] = "# a\n"
+		files["bench/ünï.md"] = "# b\n"
+		files["README.md"] += "\nSee [x](" + target + ").\n"
+		scratchRepo(t, files)
+		if err := run(false); err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		b, _ := os.ReadFile("site/reference/readme.html")
+		if strings.Contains(string(b), "[x](") || strings.Contains(string(b), ">x</code>") {
+			t.Errorf("%s: link was not rendered as a link", name)
+		}
+	}
+}
+
+// The members list must be read as TOML: comments (even ones containing `]`),
+// default-members, and literal strings do not change which crates are members.
+func TestAdvWorkspaceMembersParsing(t *testing.T) {
+	cases := []struct{ name, toml, want string }{
+		{"default-members first", "[workspace]\ndefault-members = [\"b\"]\nmembers = [\"a\", \"b\"]\n", "a,b"},
+		{"commented members line first", "[workspace]\n# members = [\"zzz\"]\nmembers = [\"a\"]\n", "a"},
+		{"bracket in a trailing comment", "[workspace]\nmembers = [\n  \"a\", # see [x]\n  \"b\",\n]\n", "a,b"},
+		{"literal string", "[workspace]\nmembers = [\"a\", 'b']\n", "a,b"},
+	}
+	for _, c := range cases {
+		got, err := workspaceMembers(c.toml)
+		if err != nil || strings.Join(got, ",") != c.want {
+			t.Errorf("%s: got %q err %v, want %s", c.name, got, err, c.want)
+		}
+	}
+}
+
+// A glob member ("ojas-*", "crates/*") is valid Cargo. Silently producing no crate
+// pages for it would publish a library with the crates section missing.
+func TestAdvGlobMembersAreNotSilentlyDropped(t *testing.T) {
+	files := baseFiles()
+	files["Cargo.toml"] = "[workspace]\nmembers = [\"ojas-*\"]\n"
+	scratchRepo(t, files)
+	if err := run(false); err != nil {
+		return // failing loudly is acceptable
+	}
+	if _, err := os.Stat("site/reference/crate-ojas-a.html"); err != nil {
+		t.Errorf("glob member produced neither an error nor the crate page: %v", err)
+	}
+}
+
+// A page slug must be a single file name: a nested member path would write
+// into a subdirectory that orphan cleanup never looks in.
+func TestAdvNestedMemberSlugIsAFileName(t *testing.T) {
+	files := baseFiles()
+	files["Cargo.toml"] = "[workspace]\nmembers = [\"crates/a\"]\n"
+	files["crates/a/README.md"] = "# a\n\nNested workspace member with a long enough description for a summary.\n"
+	scratchRepo(t, files)
+	if err := run(false); err != nil {
+		return
+	}
+	if _, err := os.Stat("site/reference/crate-crates"); err == nil {
+		t.Errorf("a slash in the slug created a subdirectory site/reference/crate-crates")
+	}
+}
+
+// An image whose alt text contains brackets must still be an image (or fail).
+func TestAdvNestedBracketAltImage(t *testing.T) {
+	r := newRenderer("docs/page.md", "site/assets/a.png")
+	got := r.inline("![a [b]](../site/assets/a.png)")
+	if strings.Contains(got, "![") {
+		t.Errorf("image left as literal markdown: %s", got)
+	}
+}
