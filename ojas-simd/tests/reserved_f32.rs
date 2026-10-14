@@ -1,6 +1,6 @@
 //! `ReservedF32` publishes a vector only after every lane of every chunk is stored.
 
-use std::mem::MaybeUninit;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use ojas_simd::{ReservedF32, SimdError};
 
@@ -8,21 +8,14 @@ fn bits(xs: &[f32]) -> Vec<u32> {
     xs.iter().map(|v| v.to_bits()).collect()
 }
 
-fn store_all(dst: &mut [MaybeUninit<f32>], src: &[f32]) {
-    assert_eq!(dst.len(), src.len());
-    for (slot, &v) in dst.iter_mut().zip(src) {
-        slot.write(v);
-    }
-}
-
 #[test]
 fn a_one_element_tail_is_stored_and_negative_zero_keeps_its_sign() {
     let src = [1.0f32, -2.0, 0.0, -0.0, 3.5];
     let buf = ReservedF32::try_new(src.len(), &[(0, 4), (4, 1)]).unwrap();
-    buf.write_chunk(0, |dst| store_all(dst, &src[..4])).unwrap();
-    buf.write_chunk(1, |dst| {
-        assert_eq!(dst.len(), 1);
-        store_all(dst, &src[4..]);
+    buf.write_chunk(0, |i| src[i]).unwrap();
+    buf.write_chunk(1, |i| {
+        assert_eq!(i, 0);
+        src[4 + i]
     })
     .unwrap();
     let got = buf.into_vec().unwrap();
@@ -32,10 +25,45 @@ fn a_one_element_tail_is_stored_and_negative_zero_keeps_its_sign() {
 }
 
 #[test]
+fn every_lane_is_asked_for_once_in_order() {
+    let buf = ReservedF32::try_new(7, &[(0, 7)]).unwrap();
+    let mut seen = Vec::new();
+    buf.write_chunk(0, |i| {
+        seen.push(i);
+        i as f32
+    })
+    .unwrap();
+    assert_eq!(seen, (0..7).collect::<Vec<_>>());
+    assert_eq!(
+        buf.into_vec().unwrap(),
+        (0..7).map(|i| i as f32).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn a_missing_chunk_is_not_published() {
     let buf = ReservedF32::try_new(4, &[(0, 3), (3, 1)]).unwrap();
-    buf.write_chunk(0, |dst| store_all(dst, &[1.0, 2.0, 3.0]))
-        .unwrap();
+    buf.write_chunk(0, |i| i as f32).unwrap();
+    assert!(matches!(
+        buf.into_vec(),
+        Err(SimdError::Incomplete {
+            done: 1,
+            expected: 2
+        })
+    ));
+}
+
+#[test]
+fn a_chunk_whose_lane_closure_panics_is_not_published() {
+    let buf = ReservedF32::try_new(8, &[(0, 4), (4, 4)]).unwrap();
+    buf.write_chunk(0, |i| i as f32).unwrap();
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        buf.write_chunk(1, |i| {
+            assert!(i < 2, "stops part way");
+            0.0
+        })
+    }));
+    assert!(outcome.is_err());
     assert!(matches!(
         buf.into_vec(),
         Err(SimdError::Incomplete {
@@ -60,12 +88,12 @@ fn a_gap_in_the_chunks_refuses_before_a_write() {
 #[test]
 fn a_second_write_does_not_replace_the_first() {
     let buf = ReservedF32::try_new(2, &[(0, 2)]).unwrap();
-    buf.write_chunk(0, |dst| store_all(dst, &[-0.0, 1.0]))
-        .unwrap();
+    buf.write_chunk(0, |i| [-0.0, 1.0][i]).unwrap();
     let mut called = false;
     let err = buf
         .write_chunk(0, |_| {
             called = true;
+            9.0
         })
         .unwrap_err();
     assert_eq!(err, SimdError::OverlappingOutput);
@@ -80,6 +108,7 @@ fn an_index_past_the_chunks_does_not_run_the_write() {
     let err = buf
         .write_chunk(1, |_| {
             called = true;
+            0.0
         })
         .unwrap_err();
     assert!(matches!(err, SimdError::OutputLength { .. }), "{err:?}");
@@ -92,14 +121,15 @@ fn empty_is_an_empty_vector() {
     let buf = ReservedF32::try_new(0, &[]).unwrap();
     assert!(buf.into_vec().unwrap().is_empty());
     let buf = ReservedF32::try_new(0, &[(0, 0)]).unwrap();
-    buf.write_chunk(0, |dst| assert!(dst.is_empty())).unwrap();
+    buf.write_chunk(0, |_| panic!("a zero-length chunk has no lane"))
+        .unwrap();
     assert!(buf.into_vec().unwrap().is_empty());
 }
 
 #[test]
 fn dropping_before_publish_does_not_read_the_lanes() {
     let buf = ReservedF32::try_new(8, &[(0, 7), (7, 1)]).unwrap();
-    buf.write_chunk(0, |dst| store_all(dst, &[1.0; 7])).unwrap();
+    buf.write_chunk(0, |_| 1.0).unwrap();
     drop(buf);
 }
 
@@ -108,23 +138,104 @@ fn two_threads_store_disjoint_chunks() {
     let buf = ReservedF32::try_new(1001, &[(0, 1000), (1000, 1)]).unwrap();
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            buf.write_chunk(0, |dst| {
-                for (i, slot) in dst.iter_mut().enumerate() {
-                    slot.write(i as f32);
-                }
-            })
-            .unwrap();
+            buf.write_chunk(0, |i| i as f32).unwrap();
         });
         scope.spawn(|| {
-            buf.write_chunk(1, |dst| {
-                assert_eq!(dst.len(), 1);
-                dst[0].write(-0.0);
-            })
-            .unwrap();
+            buf.write_chunk(1, |_| -0.0).unwrap();
         });
     });
     let got = buf.into_vec().unwrap();
     assert_eq!(got.len(), 1001);
     assert_eq!(got[999].to_bits(), 999.0f32.to_bits());
     assert_eq!(got[1000].to_bits(), (-0.0f32).to_bits());
+}
+
+#[test]
+fn a_map_stores_lane_function_of_the_sources_and_checks_their_length_first() {
+    let a = [1.0f32, 2.0, 3.0, 4.0, 5.0];
+    let b = [10.0f32, 20.0, 30.0, 40.0, 50.0];
+    let buf = ReservedF32::try_new(5, &[(0, 3), (3, 0), (3, 2)]).unwrap();
+    let mut never = |_: [f32; 2]| -> f32 { panic!("a refused call stores nothing") };
+    assert!(matches!(
+        buf.write_chunk_map(0, [&a[..3], &b[..2]], &mut never),
+        Err(SimdError::OutputLength {
+            output: 2,
+            expected: 3
+        })
+    ));
+    assert!(matches!(
+        buf.write_chunk_map(9, [&a[..3], &b[..3]], &mut never),
+        Err(SimdError::OutputLength { .. })
+    ));
+    // The refusal did not claim the chunk.
+    for (index, (start, len)) in [(0, 3), (3, 0), (3, 2)].into_iter().enumerate() {
+        buf.write_chunk_map(
+            index,
+            [&a[start..start + len], &b[start..start + len]],
+            |[x, y]| x + y,
+        )
+        .unwrap();
+    }
+    assert_eq!(buf.into_vec().unwrap(), [11.0, 22.0, 33.0, 44.0, 55.0]);
+}
+
+#[test]
+fn a_pair_stores_both_outputs_lane_for_lane() {
+    let chunks = [(0, 3), (3, 0), (3, 2)];
+    let src = [0.0f32, 1.0, 2.0, 3.0, 4.0];
+    let a = ReservedF32::try_new(5, &chunks).unwrap();
+    let b = ReservedF32::try_new(5, &chunks).unwrap();
+    for (index, &(start, len)) in chunks.iter().enumerate() {
+        a.write_chunk_pair_map(&b, index, [&src[start..start + len]], |[v]| (v, -v))
+            .unwrap();
+    }
+    assert_eq!(a.into_vec().unwrap(), [0.0, 1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(b.into_vec().unwrap(), [-0.0, -1.0, -2.0, -3.0, -4.0]);
+}
+
+#[test]
+fn a_pair_refuses_the_same_buffer_a_taken_chunk_and_a_different_layout() {
+    let a = ReservedF32::try_new(4, &[(0, 4)]).unwrap();
+    let b = ReservedF32::try_new(4, &[(0, 2), (2, 2)]).unwrap();
+    let c = ReservedF32::try_new(4, &[(0, 4)]).unwrap();
+    let src = [1.0f32; 4];
+    let mut lane = |_: [f32; 1]| -> (f32, f32) { panic!("a refused call stores nothing") };
+    assert_eq!(
+        a.write_chunk_pair_map(&a, 0, [&src[..]], &mut lane),
+        Err(SimdError::OverlappingOutput)
+    );
+    assert!(matches!(
+        a.write_chunk_pair_map(&b, 0, [&src[..]], &mut lane),
+        Err(SimdError::OutputLength { .. })
+    ));
+    assert!(matches!(
+        a.write_chunk_pair_map(&c, 0, [&src[..3]], &mut lane),
+        Err(SimdError::OutputLength { .. })
+    ));
+    // No refusal left a claim behind: both chunks are still free.
+    c.write_chunk(0, |_| 5.0).unwrap();
+    assert_eq!(
+        a.write_chunk_pair_map(&c, 0, [&src[..]], &mut lane),
+        Err(SimdError::OverlappingOutput)
+    );
+    a.write_chunk(0, |i| i as f32).unwrap();
+    assert_eq!(a.into_vec().unwrap(), [0.0, 1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn a_pair_whose_lane_closure_panics_publishes_neither_buffer() {
+    let a = ReservedF32::try_new(2, &[(0, 2)]).unwrap();
+    let b = ReservedF32::try_new(2, &[(0, 2)]).unwrap();
+    let src = [0.0f32; 2];
+    let mut seen = 0;
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        a.write_chunk_pair_map(&b, 0, [&src[..]], |[_]| {
+            assert!(seen == 0, "stops part way");
+            seen += 1;
+            (1.0, 2.0)
+        })
+    }));
+    assert!(outcome.is_err());
+    assert!(matches!(a.into_vec(), Err(SimdError::Incomplete { .. })));
+    assert!(matches!(b.into_vec(), Err(SimdError::Incomplete { .. })));
 }

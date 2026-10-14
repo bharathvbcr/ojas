@@ -341,17 +341,17 @@ impl Runs {
     ) -> Result<bool, OjasError> {
         ojas_simd::with_nanolab_token_bands(window, dst, caller_rows, |caller, worker| {
             let Some(handoff) = exec.pool.try_handoff(move || worker.write()) else {
-                return Ok(false);
+                return Ok(None);
             };
             let mut guard = HandoffJoin {
                 handoff: Some(handoff),
             };
-            caller.write();
+            let written = caller.write();
             let handoff = guard
                 .handoff
                 .take()
                 .ok_or_else(|| mmov_refused("handoff dropped"))?;
-            handoff.join().map(|_| true)
+            handoff.join().map(|_| Some(written))
         })
         .map_err(permute_simd)?
     }

@@ -159,7 +159,9 @@ pub enum SimdError {
         len: usize,
     },
     /// [`ReservedF32::into_vec`] (and `NegAbsExp::into_vec` on macOS): not
-    /// every chunk has been stored.
+    /// every chunk has been stored. [`with_nanolab_token_bands`] on aarch64:
+    /// `body` published a batch but the worker band had not stored its
+    /// tokens (`done` of 2 bands, `expected` 2); nothing was committed.
     Incomplete {
         /// Chunks whose lanes were stored.
         done: usize,
@@ -866,19 +868,28 @@ pub fn split_nanolab_head_pairs_append(src: &[f32], dst: &mut Vec<f32>) -> Resul
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-pub use arch::NanolabTokenBand;
+pub use arch::{NanolabBandWritten, NanolabCallerBand, NanolabWorkerBand};
 
 /// Run `body` on two disjoint time-row bands of one nanolab batch.
 ///
 /// `caller_tokens` is the caller's prefix of the 1024 tokens. The other band
-/// is the remaining suffix. `body` receives `(caller, worker)`. Return
-/// `Ok(true)` only after both bands have been `write`n, including a write
-/// that ran on another thread: this then grows `dst` by the batch. Return
-/// `Ok(false)` to leave `dst` unchanged so the caller can take the one-call
-/// path. `Err` also leaves `dst` unchanged.
+/// is the remaining suffix. `body` receives `(caller, worker)`.
 ///
-/// The worker band must be finished before `body` returns `Ok(true)`. Nothing
-/// is zero-filled. −0 is preserved. `dst` must already have room for
+/// `body` returns `Ok(Some(written))` to publish the batch, the
+/// [`NanolabBandWritten`] being what [`NanolabCallerBand::write`] returns,
+/// or `Ok(None)` to leave `dst` unchanged so the caller can take the
+/// one-call path. `Err` also leaves `dst` unchanged. `dst` grows by the
+/// batch only when `body` returned its proof **and** the worker band's
+/// write has finished: a worker band that was dropped, forgotten or never
+/// written makes this [`SimdError::Incomplete`] and leaves `dst` unchanged.
+///
+/// The caller band carries a brand lifetime fixed by this call, so it cannot
+/// be kept past `body`. The worker band may be sent to another thread (and
+/// kept): when this function returns or unwinds it ends the band, waiting
+/// for a write that has started and cancelling one that has not, so a late
+/// [`NanolabWorkerBand::write`] stores nothing.
+///
+/// Nothing is zero-filled. -0 is preserved. `dst` must already have room for
 /// `1024 * 768` elements.
 ///
 /// # Errors
@@ -887,12 +898,68 @@ pub use arch::NanolabTokenBand;
 /// [`SimdError::BufferTooShort`] when `src` is shorter than one batch.
 /// [`SimdError::OutputLength`] when spare capacity is short.
 /// [`SimdError::OverlappingOutput`] when the spare range overlaps `src`.
+/// [`SimdError::Incomplete`] when `body` published but the worker band did
+/// not finish a write.
+///
+/// # Examples
+///
+/// The caller band cannot be kept past the call:
+///
+/// ```compile_fail
+/// use ojas_simd::{with_nanolab_token_bands, NanolabCallerBand};
+///
+/// let src = vec![0.0f32; 1024 * 768];
+/// let mut dst: Vec<f32> = Vec::with_capacity(1024 * 768);
+/// let mut kept: Option<NanolabCallerBand<'_>> = None;
+/// let _ = with_nanolab_token_bands(&src, &mut dst, 640, |caller, _worker| {
+///     kept = Some(caller);
+///     Ok::<_, ()>(None)
+/// });
+/// ```
+///
+/// The same call without keeping the band compiles:
+///
+/// ```
+/// use ojas_simd::with_nanolab_token_bands;
+///
+/// let src = vec![0.0f32; 1024 * 768];
+/// let mut dst: Vec<f32> = Vec::with_capacity(1024 * 768);
+/// let done = with_nanolab_token_bands(&src, &mut dst, 640, |caller, worker| {
+///     let written = caller.write();
+///     worker.write();
+///     Ok::<_, ()>(Some(written))
+/// })
+/// .unwrap();
+/// assert_eq!(done, Ok(true));
+/// assert_eq!(dst.len(), 1024 * 768);
+/// ```
+///
+/// A proof from one call cannot be returned from another:
+///
+/// ```compile_fail
+/// use ojas_simd::{with_nanolab_token_bands, NanolabBandWritten};
+///
+/// let src = vec![0.0f32; 1024 * 768];
+/// let mut a: Vec<f32> = Vec::with_capacity(1024 * 768);
+/// let mut b: Vec<f32> = Vec::with_capacity(1024 * 768);
+/// let mut proof: Option<NanolabBandWritten<'_>> = None;
+/// let _ = with_nanolab_token_bands(&src, &mut a, 640, |caller, _worker| {
+///     proof = Some(caller.write());
+///     Ok::<_, ()>(None)
+/// });
+/// let _ = with_nanolab_token_bands(&src, &mut b, 640, |_caller, _worker| {
+///     Ok::<_, ()>(proof.take())
+/// });
+/// ```
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn with_nanolab_token_bands<E>(
     src: &[f32],
     dst: &mut Vec<f32>,
     caller_tokens: usize,
-    body: impl FnOnce(NanolabTokenBand, NanolabTokenBand) -> Result<bool, E>,
+    body: impl for<'band> FnOnce(
+        NanolabCallerBand<'band>,
+        NanolabWorkerBand,
+    ) -> Result<Option<NanolabBandWritten<'band>>, E>,
 ) -> Result<Result<bool, E>, SimdError> {
     const TOKENS: usize = 1024;
     const N: usize = TOKENS * 768;
@@ -919,16 +986,37 @@ pub fn with_nanolab_token_bands<E>(
     }
     let spare_dst = dst.spare_capacity_mut().as_mut_ptr().cast::<f32>();
     let src_ptr = src.as_ptr();
-    let caller = NanolabTokenBand::new(src_ptr, spare_dst, 0, caller_tokens);
-    let worker = NanolabTokenBand::new(src_ptr, spare_dst, caller_tokens, TOKENS - caller_tokens);
+    let cell = std::sync::Arc::new(arch::BandCell::new());
+    // Declared before `body` runs so that an unwind out of `body` still ends
+    // the worker band before `dst` or `src` can be touched.
+    let scope = arch::BandScope(std::sync::Arc::clone(&cell));
+    let caller = NanolabCallerBand::new(src_ptr, spare_dst, 0, caller_tokens);
+    let worker = NanolabWorkerBand::new(
+        (src_ptr, spare_dst, caller_tokens, TOKENS - caller_tokens),
+        cell,
+    );
     let outcome = body(caller, worker);
-    if matches!(outcome, Ok(true)) {
-        // `body` returned `Ok(true)` only after both bands stored their
-        // tokens. Those ranges partition the batch, so all `N` spare lanes
-        // are initialized.
-        arch::commit_nanolab_spare(dst, N);
+    // Ends the worker band: waits for a write that began, cancels one that
+    // did not. After this no write can touch `src` or `dst`.
+    let worker_state = scope.0.close();
+    drop(scope);
+    match outcome {
+        Ok(Some(_written)) => {
+            if worker_state != arch::BandState::Done {
+                return Err(SimdError::Incomplete {
+                    done: 1,
+                    expected: 2,
+                });
+            }
+            // The proof says the caller band stored its tokens and the cell
+            // says the worker band did. Those ranges partition the batch, so
+            // all `N` spare lanes are initialized.
+            arch::commit_nanolab_spare(dst, N);
+            Ok(Ok(true))
+        }
+        Ok(None) => Ok(Ok(false)),
+        Err(err) => Ok(Err(err)),
     }
-    Ok(outcome)
 }
 
 /// Append gathered embedding rows of `row` floats onto `dst`.
