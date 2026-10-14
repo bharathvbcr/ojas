@@ -24,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -123,7 +124,11 @@ func run(check bool) error {
 		if err != nil {
 			return err
 		}
-		gen, n, err := applyCounts(string(raw), runs)
+		esc := func(v string) string { return v }
+		if strings.HasSuffix(p, ".html") {
+			esc = html.EscapeString
+		}
+		gen, n, err := applyCountsWith(string(raw), runs, esc)
 		if err != nil {
 			return fmt.Errorf("%s: %w", p, err)
 		}
@@ -144,7 +149,9 @@ func run(check bool) error {
 			text = string(src)
 		}
 		r := &renderer{tracked: tracked, doc: d, bySrc: bySrc, ids: map[string]int{}}
-		d.Body = r.blocks(splitLines(text))
+		lines := splitLines(text)
+		r.scanRaw(lines)
+		d.Body = r.blocks(lines)
 		d.Heads = r.heads
 		d.Title = r.title
 		if d.Title == "" {
@@ -281,7 +288,7 @@ func collect(tracked trackedSet, members []string) ([]*doc, error) {
 		if _, ok := tracked[p]; !ok {
 			continue
 		}
-		out = append(out, &doc{Slug: "crate-" + dir, Src: p, Cat: "crates"})
+		out = append(out, &doc{Slug: "crate-" + strings.ReplaceAll(dir, "/", "-"), Src: p, Cat: "crates"})
 	}
 	out = append(out, &doc{Slug: "readme", Src: "README.md", Cat: "crates"})
 	order := map[string]int{}
@@ -301,25 +308,127 @@ func collect(tracked trackedSet, members []string) ([]*doc, error) {
 	return out, nil
 }
 
-var reMembers = regexp.MustCompile(`(?s)\bmembers\s*=\s*\[(.*?)\]`)
-
-// workspaceMembers reads the `members` array of a workspace Cargo.toml.
-func workspaceMembers(cargoToml string) ([]string, error) {
-	m := reMembers.FindStringSubmatch(cargoToml)
-	if m == nil {
-		return nil, fmt.Errorf("no workspace members array")
+// tomlStrings reads the string array assigned to key in the [workspace] table.
+// It handles comments (including brackets inside them), both quote styles and
+// multi-line arrays; a key that is absent returns nil.
+func tomlStrings(doc, key string) ([]string, error) {
+	inWorkspace := false
+	lines := strings.Split(doc, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "[[") {
+			end := strings.Index(line, "]")
+			inWorkspace = end > 0 && strings.TrimSpace(line[1:end]) == "workspace"
+			continue
+		}
+		if !inWorkspace || !strings.HasPrefix(line, key) {
+			continue
+		}
+		rest := strings.TrimSpace(line[len(key):])
+		if !strings.HasPrefix(rest, "=") {
+			continue
+		}
+		// Scan from the opening bracket, across lines, until its closing one.
+		text := strings.TrimSpace(rest[1:])
+		for j := i + 1; ; j++ {
+			vals, closed, err := scanTOMLArray(text)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
+			if closed {
+				return vals, nil
+			}
+			if j >= len(lines) {
+				return nil, fmt.Errorf("%s: unterminated array", key)
+			}
+			text += "\n" + lines[j]
+		}
 	}
-	var out []string
-	for _, line := range strings.Split(m[1], "\n") {
-		if i := strings.Index(line, "#"); i >= 0 {
-			line = line[:i]
+	return nil, nil
+}
+
+// scanTOMLArray parses text that starts at '['. closed is false when the array
+// has not ended yet.
+func scanTOMLArray(text string) (vals []string, closed bool, err error) {
+	if !strings.HasPrefix(text, "[") {
+		return nil, false, fmt.Errorf("expected an array")
+	}
+	for i := 1; i < len(text); i++ {
+		switch c := text[i]; c {
+		case '#':
+			for i < len(text) && text[i] != '\n' {
+				i++
+			}
+		case '"':
+			var b strings.Builder
+			for i++; i < len(text) && text[i] != '"'; i++ {
+				if text[i] == '\\' && i+1 < len(text) {
+					i++
+				}
+				b.WriteByte(text[i])
+			}
+			if i >= len(text) {
+				return nil, false, nil
+			}
+			vals = append(vals, b.String())
+		case '\'':
+			j := strings.IndexByte(text[i+1:], '\'')
+			if j < 0 {
+				return nil, false, nil
+			}
+			vals = append(vals, text[i+1:i+1+j])
+			i += j + 1
+		case ']':
+			return vals, true, nil
 		}
-		for _, q := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(line, -1) {
-			out = append(out, q[1])
-		}
+	}
+	return nil, false, nil
+}
+
+// workspaceMembers reads the `members` array of a workspace Cargo.toml (patterns
+// as written; see expandMembers for globs).
+func workspaceMembers(cargoToml string) ([]string, error) {
+	out, err := tomlStrings(cargoToml, "members")
+	if err != nil {
+		return nil, err
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("workspace members array is empty")
+		return nil, fmt.Errorf("no workspace members array")
+	}
+	return out, nil
+}
+
+// expandMembers expands glob patterns against the filesystem and drops the
+// workspace `exclude` entries. A pattern that matches nothing is an error.
+func expandMembers(patterns, exclude []string) ([]string, error) {
+	skip := map[string]bool{}
+	for _, e := range exclude {
+		skip[path.Clean(e)] = true
+	}
+	var out []string
+	for _, pat := range patterns {
+		matches := []string{path.Clean(pat)}
+		if strings.ContainsAny(pat, "*?[") {
+			g, err := filepath.Glob(pat)
+			if err != nil {
+				return nil, fmt.Errorf("member pattern %q: %w", pat, err)
+			}
+			matches = matches[:0]
+			for _, m := range g {
+				if fi, err := os.Stat(filepath.Join(m, "Cargo.toml")); err == nil && !fi.IsDir() {
+					matches = append(matches, filepath.ToSlash(m))
+				}
+			}
+			if len(matches) == 0 {
+				return nil, fmt.Errorf("member pattern %q matches no crate directory", pat)
+			}
+			sort.Strings(matches)
+		}
+		for _, m := range matches {
+			if !skip[m] {
+				out = append(out, m)
+			}
+		}
 	}
 	return out, nil
 }
@@ -329,11 +438,15 @@ func workspaceMembersFile(p string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := workspaceMembers(string(b))
+	pats, err := workspaceMembers(string(b))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p, err)
 	}
-	return m, nil
+	excl, err := tomlStrings(string(b), "exclude")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", p, err)
+	}
+	return expandMembers(pats, excl)
 }
 
 func splitLines(s string) []string {
@@ -349,12 +462,12 @@ func splitLines(s string) []string {
 type trackedSet map[string]bool // path -> is a directory
 
 func loadTracked() (trackedSet, error) {
-	out, err := exec.Command("git", "ls-files").Output()
+	out, err := exec.Command("git", "ls-files", "-z").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git ls-files (needed to validate links against a clean checkout): %w", err)
 	}
 	t := trackedSet{}
-	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, f := range strings.Split(string(out), "\x00") {
 		if f == "" {
 			continue
 		}
@@ -724,8 +837,8 @@ func codeBlock(lang, code string) string {
 
 var (
 	reCode    = regexp.MustCompile("`+([^`]+?)`+")
-	reLink    = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
-	reImage   = regexp.MustCompile(`!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)`)
+	reLink    = regexp.MustCompile(`\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\((?:<([^>]*)>|([^)\s]+))(?:\s+"[^"]*")?\)`)
+	reImage   = regexp.MustCompile(`!\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\((?:<([^>]*)>|([^)\s]+))(?:\s+"([^"]*)")?\)`)
 	reComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 	reBold    = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__`)
 	reItalic  = regexp.MustCompile(`(^|[^\w*])\*([^*\s][^*]*?)\*([^\w*]|$)`)
@@ -744,13 +857,13 @@ func (r *renderer) inline(s string) string {
 	var images []string
 	s = reImage.ReplaceAllStringFunc(s, func(m string) string {
 		sm := reImage.FindStringSubmatch(m)
-		images = append(images, r.image(sm[1], sm[2], sm[3]))
+		images = append(images, r.image(sm[1], sm[2]+sm[3], sm[4]))
 		return fmt.Sprintf("\x02%d\x02", len(images)-1)
 	})
 	var links []string
 	s = reLink.ReplaceAllStringFunc(s, func(m string) string {
 		sm := reLink.FindStringSubmatch(m)
-		links = append(links, r.link(sm[1], sm[2]))
+		links = append(links, r.link(sm[1], sm[2]+sm[3]))
 		return fmt.Sprintf("\x01%d\x01", len(links)-1)
 	})
 	s = html.EscapeString(s)
@@ -793,10 +906,6 @@ func (r *renderer) link(text, target string) string {
 	if repo == "site/index.html" || repo == "docs/index.html" {
 		return fmt.Sprintf("<a href=\"../\">%s</a>", label)
 	}
-	if repo == ".." || strings.HasPrefix(repo, "../") {
-		// A sibling checkout (tessl, gusset): not part of this repository, so no page to link to.
-		return "<code>" + html.EscapeString(text) + "</code>"
-	}
 	isDir, ok := r.tracked.lookup(repo)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "sitegen: %s links to %q, which is not tracked by git\n", r.doc.Src, repo)
@@ -807,9 +916,67 @@ func (r *renderer) link(text, target string) string {
 		if d, ok := r.bySrc[repo+"/README.md"]; ok {
 			return fmt.Sprintf("<a href=\"%s.html\">%s</a>", d.Slug, label)
 		}
-		return fmt.Sprintf("<a href=\"%s%s\" rel=\"noopener\">%s</a>", ghTree, html.EscapeString(repo), label)
+		return fmt.Sprintf("<a href=\"%s%s\" rel=\"noopener\">%s</a>", ghTree, html.EscapeString(escPath(repo)), label)
 	}
-	return fmt.Sprintf("<a href=\"%s%s%s\" rel=\"noopener\">%s</a>", ghBlob, html.EscapeString(repo), html.EscapeString(frag), label)
+	return fmt.Sprintf("<a href=\"%s%s%s\" rel=\"noopener\">%s</a>", ghBlob, html.EscapeString(escPath(repo)), html.EscapeString(frag), label)
+}
+
+var pathEscaper = strings.NewReplacer("%", "%25", " ", "%20", "?", "%3F", "#", "%23", "\"", "%22", "<", "%3C", ">", "%3E")
+
+// escPath makes a repository path safe inside a URL without touching characters
+// (unicode, slashes) that browsers accept.
+func escPath(p string) string { return pathEscaper.Replace(p) }
+
+var (
+	reRefDef   = regexp.MustCompile(`^\s{0,3}\[[^\]]+\]:\s*<?([^\s>]+)`)
+	reAutolink = regexp.MustCompile(`<([A-Za-z][A-Za-z0-9+.-]*:[^>\s]*)>`)
+	reHTMLRef  = regexp.MustCompile(`(?i)\b(?:href|src)\s*=\s*["']?([^"'\s>]+)`)
+	reCodeSpan = regexp.MustCompile("`+[^`]+`+")
+)
+
+// machineLocal reports whether a link target only works on one machine.
+func machineLocal(t string) bool {
+	l := strings.ToLower(t)
+	return strings.HasPrefix(l, "file:") || (strings.HasPrefix(t, "/") && !strings.HasPrefix(t, "//")) || strings.Contains(t, "\\")
+}
+
+// scanRaw rejects machine-local targets written in the forms the inline link
+// renderer never sees: reference definitions, autolinks and raw HTML href/src.
+// Fenced code and code spans are skipped.
+func (r *renderer) scanRaw(lines []string) {
+	fenced, mark := false, ""
+	for _, line := range lines {
+		if m := reFence.FindStringSubmatch(line); m != nil {
+			if !fenced {
+				fenced, mark = true, m[2][:3]
+			} else if strings.HasPrefix(strings.TrimSpace(line), mark) {
+				fenced = false
+			}
+			continue
+		}
+		if fenced {
+			continue
+		}
+		line = reCodeSpan.ReplaceAllString(line, "")
+		var targets []string
+		if m := reRefDef.FindStringSubmatch(line); m != nil {
+			targets = append(targets, m[1])
+		}
+		for _, m := range reAutolink.FindAllStringSubmatch(line, -1) {
+			if strings.HasPrefix(strings.ToLower(m[1]), "file:") {
+				targets = append(targets, m[1])
+			}
+		}
+		for _, m := range reHTMLRef.FindAllStringSubmatch(line, -1) {
+			targets = append(targets, m[1])
+		}
+		for _, t := range targets {
+			if machineLocal(t) {
+				fmt.Fprintf(os.Stderr, "sitegen: %s has a machine-local target %q in a reference, autolink or HTML attribute; use a repo-relative path\n", r.doc.Src, t)
+				r.unresolved++
+			}
+		}
+	}
 }
 
 func (r *renderer) inlineLabel(text string) string { return r.inline(text) }
@@ -826,7 +993,17 @@ func (r *renderer) repoPath(target string) (repo string, ok bool) {
 	case strings.Contains(target, "\\"):
 		fmt.Fprintf(os.Stderr, "sitegen: %s has a backslash in link %q; use forward slashes\n", r.doc.Src, target)
 	default:
-		return path.Clean(path.Join(path.Dir(r.doc.Src), target)), true
+		dec, err := url.PathUnescape(target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sitegen: %s has a link %q with a bad percent-escape: %v\n", r.doc.Src, target, err)
+			break
+		}
+		repo := path.Clean(path.Join(path.Dir(r.doc.Src), dec))
+		if repo == ".." || strings.HasPrefix(repo, "../") {
+			fmt.Fprintf(os.Stderr, "sitegen: %s links to %q, which leaves the repository; name it in code instead of linking it\n", r.doc.Src, target)
+			break
+		}
+		return repo, true
 	}
 	r.unresolved++
 	return "", false
@@ -856,9 +1033,9 @@ func (r *renderer) image(alt, target, title string) string {
 		r.unresolved++
 		return "<code>" + html.EscapeString(alt) + "</code>"
 	}
-	src := ghRaw + repo
+	src := ghRaw + escPath(repo)
 	if rest, served := strings.CutPrefix(repo, "site/"); served {
-		src = "../" + rest
+		src = "../" + escPath(rest)
 	}
 	return fmt.Sprintf("<img src=\"%s%s\"%s loading=\"lazy\">", html.EscapeString(src), html.EscapeString(frag), attrs)
 }
@@ -921,7 +1098,98 @@ func loadTestRuns(p string) (*testRuns, error) {
 	return parseTestRuns(b, p)
 }
 
+var reCommit = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// requiredRunKeys lists, per object path, the keys that must be present: a
+// missing count must not read as zero.
+var requiredRunKeys = map[string][]string{
+	"":                   {"workspace", "per_crate"},
+	"workspace":          {"recorded", "commit", "host", "command", "source", "passed", "failed", "ignored", "suites"},
+	"per_crate":          {"recorded", "host", "command", "source", "crates", "go"},
+	"per_crate.crates[]": {"name", "passed"},
+	"per_crate.go":       {"passed", "failed", "command"},
+}
+
+// checkRunShape rejects duplicate keys (encoding/json keeps the last one) and
+// absent required keys, by walking the token stream.
+func checkRunShape(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	return walkRunObject(dec, "")
+}
+
+func walkRunValue(dec *json.Decoder, path string) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch d := tok.(type) {
+	case json.Delim:
+		if d == '{' {
+			return walkRunMembers(dec, path)
+		}
+		for dec.More() { // array: elements share the path of their array
+			if tok, err := dec.Token(); err != nil {
+				return err
+			} else if e, ok := tok.(json.Delim); ok && e == '{' {
+				if err := walkRunMembers(dec, path+"[]"); err != nil {
+					return err
+				}
+			} else if ok {
+				return fmt.Errorf("unexpected nested array at %q", path)
+			}
+		}
+		_, err := dec.Token()
+		return err
+	}
+	return nil
+}
+
+func walkRunObject(dec *json.Decoder, path string) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return fmt.Errorf("the run file must be a JSON object")
+	}
+	return walkRunMembers(dec, path)
+}
+
+func walkRunMembers(dec *json.Decoder, path string) error {
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := tok.(string)
+		if seen[key] {
+			return fmt.Errorf("duplicate key %q in %q", key, path)
+		}
+		seen[key] = true
+		child := key
+		if path != "" {
+			child = path + "." + key
+		}
+		if err := walkRunValue(dec, child); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	for _, k := range requiredRunKeys[path] {
+		if !seen[k] {
+			return fmt.Errorf("missing required key %q in %q", k, path)
+		}
+	}
+	return nil
+}
+
 func parseTestRuns(b []byte, name string) (*testRuns, error) {
+	if err := checkRunShape(b); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	var t testRuns
@@ -932,6 +1200,9 @@ func parseTestRuns(b []byte, name string) (*testRuns, error) {
 		return nil, fmt.Errorf("%s: trailing data after the run object", name)
 	}
 	w := t.Workspace
+	if !reCommit.MatchString(w.Commit) || (t.PerCrate.Commit != "" && !reCommit.MatchString(t.PerCrate.Commit)) {
+		return nil, fmt.Errorf("%s: commit must be 7 to 40 lowercase hex digits", name)
+	}
 	if w.Recorded == "" || w.Commit == "" || w.Command == "" || w.Source == "" || w.Host == "" {
 		return nil, fmt.Errorf("%s: workspace needs recorded, commit, host, command and source", name)
 	}
@@ -1038,9 +1309,52 @@ func (t *testRuns) value(key string) (string, error) {
 // invisible in rendered markdown and HTML; the text between them is rewritten.
 var countRe = regexp.MustCompile(`(?s)<!--count:([A-Za-z0-9._-]+)-->(.*?)<!--/count-->`)
 
-// applyCounts rewrites every marked span from the run file and returns the new
-// text and how many spans it saw.
+// countTokenRe finds anything that looks like a count marker, well formed or not,
+// so a malformed one is an error rather than an ignored comment.
+var countTokenRe = regexp.MustCompile(`(?s)<!--\s*/?\s*count\b.*?-->`)
+
+var (
+	countOpenRe  = regexp.MustCompile(`^<!--count:([A-Za-z0-9._-]+)-->$`)
+	countCloseTk = "<!--/count-->"
+)
+
+// validateCountSpans requires markers to alternate open, close, exactly spelled.
+func validateCountSpans(text string) error {
+	open := ""
+	for _, tok := range countTokenRe.FindAllString(text, -1) {
+		switch {
+		case countOpenRe.MatchString(tok):
+			if open != "" {
+				return fmt.Errorf("count span %q is opened inside the unclosed span %q", tok, open)
+			}
+			open = tok
+		case tok == countCloseTk:
+			if open == "" {
+				return fmt.Errorf("stray %s with no open marker", countCloseTk)
+			}
+			open = ""
+		default:
+			return fmt.Errorf("malformed count marker %q: write <!--count:KEY--> ... %s", tok, countCloseTk)
+		}
+	}
+	if open != "" {
+		return fmt.Errorf("count span %q is never closed", open)
+	}
+	return nil
+}
+
+// applyCounts rewrites every marked span from the run file (markdown text) and
+// returns the new text and how many spans it saw.
 func applyCounts(text string, t *testRuns) (string, int, error) {
+	return applyCountsWith(text, t, func(v string) string { return v })
+}
+
+// applyCountsWith is applyCounts with an escaper for the inserted values, so an
+// HTML source never receives a raw value.
+func applyCountsWith(text string, t *testRuns, esc func(string) string) (string, int, error) {
+	if err := validateCountSpans(text); err != nil {
+		return "", 0, err
+	}
 	n := 0
 	var firstErr error
 	out := countRe.ReplaceAllStringFunc(text, func(m string) string {
@@ -1053,7 +1367,7 @@ func applyCounts(text string, t *testRuns) (string, int, error) {
 			return m
 		}
 		n++
-		return "<!--count:" + key + "-->" + v + "<!--/count-->"
+		return "<!--count:" + key + "-->" + esc(v) + "<!--/count-->"
 	})
 	return out, n, firstErr
 }

@@ -1,7 +1,7 @@
 # ojas-qwen35
 
 A Qwen3.5 text-tower **training-step provider** for ojas, run on canonical
-[tessl](../../tessl)'s Metal kernels.
+`tessl`'s Metal kernels (a sibling checkout, not part of this repository).
 
 - **Metal only.** tessl builds only on macOS on Apple silicon. On any other
   target this crate compiles to an empty library, and its tests compile to
