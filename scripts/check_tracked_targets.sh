@@ -23,7 +23,7 @@ while IFS= read -r src; do
   if [ "$rel" = "$src" ]; then
     echo "check_tracked_targets: $src is outside $ROOT" >&2
     missing=$((missing + 1))
-  elif ! git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+  elif ! git --literal-pathspecs ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
     echo "check_tracked_targets: $rel is a Cargo target source but is not tracked" >&2
     missing=$((missing + 1))
   fi

@@ -84,6 +84,7 @@ jobs:
         working-directory: ${{ env.OJAS }}
         run: |
           ./scripts/check_tracked_targets_test.sh
+          ./scripts/check_tracked_targets_adversarial_test.sh
           ./scripts/check_tracked_targets.sh
       - name: fmt (ojas packages only, not the tessl/gusset path deps)
         working-directory: ${{ env.OJAS }}
