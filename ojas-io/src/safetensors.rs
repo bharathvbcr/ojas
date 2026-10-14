@@ -789,13 +789,13 @@ fn byte_len(name: &str, shape: &[u64], dtype: StDtype) -> Result<u64, IoError> {
         .ok_or_else(|| IoError::new(format!("{name:?}: shape product overflows")))?;
     let overflow = || IoError::new(format!("{name:?}: byte size overflows"));
     let width = dtype.bits();
-    if width % 8 == 0 {
+    if width.is_multiple_of(8) {
         // Whole-byte dtypes multiply by bytes, so a size that fits in u64
         // bytes is not refused because its bit count would not.
         return numel.checked_mul(width / 8).ok_or_else(overflow);
     }
     let bits = numel.checked_mul(width).ok_or_else(overflow)?;
-    if bits % 8 != 0 {
+    if !bits.is_multiple_of(8) {
         return Err(IoError::new(format!(
             "{name:?}: {numel} elements of {dtype:?} is not a whole number of bytes"
         )));

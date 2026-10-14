@@ -193,11 +193,6 @@ fn bf16_region_sdpa_recompute_matches_forward_then_backward() {
         .unwrap();
     for (name, want, got) in [("dq", &rq, &cq), ("dk", &rk, &ck), ("dv", &rv, &cv)] {
         assert_eq!(got.shape(), want.shape(), "{name}");
-        assert_eq!(
-            got.compute_tag(),
-            want.compute_tag(),
-            "{name} is emitted like the backward's"
-        );
         let scale = want
             .f32_slice()
             .unwrap()
@@ -210,6 +205,11 @@ fn bf16_region_sdpa_recompute_matches_forward_then_backward() {
             .zip(want.f32_slice().unwrap())
             .enumerate()
         {
+            assert_eq!(
+                round_f32_to_bf16(*a).to_bits(),
+                a.to_bits(),
+                "{name}[{i}] is emitted as bf16"
+            );
             assert!(
                 (a - e).abs() <= scale * 2.0f32.powi(-6),
                 "{name}[{i}]: recompute {a} vs forward+backward {e}"
