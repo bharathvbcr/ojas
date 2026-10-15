@@ -99,3 +99,5 @@ DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read 
 ### Fable rulings (2026-10-15)
 Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two items directly (Lappi pin bump, hand-rolled sha256).
 - **Board: review now, done after a recorded run** of its only criterion 2 pin, `gpu_save_state_refuses_a_half_filled_gradient_bank` (ojas-qwen35/tests/gpu_save_state_bank.rs, #[ignore], a tiny-fixture GPU test), and of gpu_parity.rs:654. A check that has not run is not reported as passed.
+- **Recorded run (2026-10-15, main 132b46e, M5 Pro, under mac_heavy, `cargo test --release -p ojas-qwen35 --test gpu_save_state_bank --test gpu_parity -- --ignored --exact ... --test-threads=1`):** `gpu_save_state_refuses_a_half_filled_gradient_bank ... ok` (1 passed); `gpu_tiny_scale_zero_entry_still_feeds_the_norm ... ok` (1 passed, 9 filtered out).
+- Board: done.
