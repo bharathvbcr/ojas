@@ -41,16 +41,16 @@ fn fixed(run: &LoraRun) -> Vec<Vec<u32>> {
         .collect()
 }
 
-#[test]
-fn metal_adapter_gradients_match_the_cpu_tape() {
+/// Metal's adapter gradients against the CPU tape's, at `fx`'s scaling.
+fn adapter_gradients_match_the_cpu_tape(fx: Fixture) {
     let Some(m) = metal() else { return };
-    let (d, host, sites) = (data(), host_params(), fixture_sites(&lora_file(), true));
-    let on_cpu = lora_step(cpu(), &host, &sites, &d, &Opts::new());
-    let on_gpu = lora_step(m, &host, &sites, &d, &Opts::new());
+    let (d, host, sites) = (data(), host_params(), fixture_sites(&fx.file(), true));
+    let on_cpu = lora_step(cpu(), &host, &sites, &d, &fx.opts());
+    let on_gpu = lora_step(m, &host, &sites, &d, &fx.opts());
     let r = (f64::from(on_gpu.loss) - f64::from(on_cpu.loss)).abs() / f64::from(on_cpu.loss);
     eprintln!(
-        "metal loss {} vs cpu {} (rel {r:.2e})",
-        on_gpu.loss, on_cpu.loss
+        "{}: metal loss {} vs cpu {} (rel {r:.2e})",
+        fx.dir, on_gpu.loss, on_cpu.loss
     );
     assert!(r <= LORA_LOSS_BOUND.max(2e-5), "loss rel {r:.3e}");
     for ((module, ga, gb), (_, ca, cb)) in on_gpu.grads.iter().zip(&on_cpu.grads) {
@@ -59,6 +59,17 @@ fn metal_adapter_gradients_match_the_cpu_tape() {
         eprintln!("{module}: dA {ra:.2e} dB {rb:.2e} of peak");
         assert!(ra <= METAL_GRAD_BOUND && rb <= METAL_GRAD_BOUND, "{module}");
     }
+}
+
+#[test]
+fn metal_adapter_gradients_match_the_cpu_tape() {
+    adapter_gradients_match_the_cpu_tape(SCALING_2);
+}
+
+/// The pre-registered run's alpha == r: no scale node on either device.
+#[test]
+fn metal_adapter_gradients_match_the_cpu_tape_at_scaling_one() {
+    adapter_gradients_match_the_cpu_tape(SCALING_1);
 }
 
 /// A bf16 frozen base: every base linear is `Bf16`, so the dX-only backward

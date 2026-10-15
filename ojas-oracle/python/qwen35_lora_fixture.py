@@ -1,6 +1,8 @@
 """Torch reference for ojas's LoRA-on-the-Tape tests (ojas-model/tests/fixtures/qwen35_tiny_lora).
 
     /opt/homebrew/opt/python@3.14/bin/python3.14 ojas-oracle/python/qwen35_lora_fixture.py
+    /opt/homebrew/opt/python@3.14/bin/python3.14 ojas-oracle/python/qwen35_lora_fixture.py \
+        --alpha 4 --out ojas-model/tests/fixtures/qwen35_tiny_lora_s1
 
 The oracle is the plain-torch LoRA arm of Lappi's `python/qd_train/lora.py`
 (Fable D7), not peft and not mlx-lm. `LoRALinear` and `attach_lora` below
@@ -14,7 +16,10 @@ on the dotted module-name tail (attention q/k/v/o, GDN in_proj_qkv / in_proj_z
 The base model is the widened tiny Qwen3.5 (`qwen35_tiny`, written by
 `qwen35_wide_fixture.py`), loaded from its bf16 checkpoint into float32, so
 ojas and torch hold the same base values. Rank 4 and alpha 8 (scaling 2, so
-a dropped scaling cannot pass). Four cases, every one on CPU, fp32, one
+a dropped scaling cannot pass); `--alpha 4` writes the scaling-1 twin
+(`qwen35_tiny_lora_s1`), the pre-registered run's alpha == r, where ojas
+skips the scale node. The seed is shared, so both fixtures hold the same A,
+B and data and differ only by the scale. Four cases, every one on CPU, fp32, one
 thread, deterministic algorithms:
 
 - `c.*`   B = 0 (the init): the loss equals the base model's.
@@ -34,6 +39,7 @@ thread, deterministic algorithms:
 
 Adapter tensors are named `<hf module>.lora_A.weight` / `.lora_B.weight`.
 """
+import argparse
 import json
 import math
 import os
@@ -134,9 +140,15 @@ def loss_of(model, ids, labels):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--alpha", type=int, default=ALPHA,
+                    help="LoRA alpha at rank 4 (default 8: scaling 2; 4 is scaling 1, the run's)")
+    ap.add_argument("--out", default=OUT, help="where to write lora.safetensors")
+    args = ap.parse_args()
+    alpha, out_dir = args.alpha, args.out
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
-    os.makedirs(OUT, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     ids, labels, base_loss = batch()
     out = {}
 
@@ -144,7 +156,7 @@ def main():
     model = build_model()
     base = loss_of(model, ids, labels).item()
     assert abs(base - base_loss) <= 1e-6 * abs(base_loss), (base, base_loss)
-    names = attach_lora(model, seed=SEED, r=RANK, alpha=ALPHA)
+    names = attach_lora(model, seed=SEED, r=RANK, alpha=alpha)
     init = {n: p.detach().clone() for n, p in adapters(model)}
     c_loss = loss_of(model, ids, labels).item()
     out["c.loss"] = torch.tensor([c_loss], dtype=torch.float32)
@@ -176,7 +188,7 @@ def main():
 
     # b: 20 AdamW steps from the init (A random, B = 0).
     model = build_model()
-    attach_lora(model, seed=SEED, r=RANK, alpha=ALPHA)
+    attach_lora(model, seed=SEED, r=RANK, alpha=alpha)
     params = [p for _, p in adapters(model)]
     opt = torch.optim.AdamW(params, lr=LR, betas=(0.9, 0.999), eps=1e-8, weight_decay=WD)
     losses = []
@@ -193,7 +205,7 @@ def main():
 
     # b64: the same trajectory in float64.
     m64 = build_model().double()
-    attach_lora(m64, seed=SEED, r=RANK, alpha=ALPHA)
+    attach_lora(m64, seed=SEED, r=RANK, alpha=alpha)
     with torch.no_grad():
         for n, p in adapters(m64):
             if n.endswith("lora_A.weight"):
@@ -210,14 +222,14 @@ def main():
     for n, p in adapters(m64):
         out[f"b.final64.{n}"] = p.detach().float().contiguous()  # fp64 result rounded once to f32
 
-    # lin: one LoRA linear alone, scaling 2.
+    # lin: one LoRA linear alone, at the fixture's scaling.
     g = torch.Generator().manual_seed(SEED + 2)
     rows, inn, outf = 12, 40, 24
     w = torch.randn(outf, inn, generator=g) / inn ** 0.5
     base_lin = nn.Linear(inn, outf, bias=False)
     with torch.no_grad():
         base_lin.weight.copy_(w)
-    lin = LoRALinear(base_lin, r=RANK, alpha=ALPHA)
+    lin = LoRALinear(base_lin, r=RANK, alpha=alpha)
     base_lin.weight.requires_grad_(False)
     a = torch.randn(RANK, inn, generator=g) / inn ** 0.5
     b = 0.3 * torch.randn(outf, RANK, generator=g)
@@ -234,13 +246,13 @@ def main():
         "lin.b": b.contiguous(), "lin.gy": gy.contiguous(), "lin.y": y.detach().contiguous(),
         "lin.dx": x.grad.contiguous(), "lin.da": lin.lora_A.weight.grad.contiguous(),
         "lin.db": lin.lora_B.weight.grad.contiguous(),
-        "lin.merged": (w + (ALPHA / RANK) * (b @ a)).contiguous(),
+        "lin.merged": (w + (alpha / RANK) * (b @ a)).contiguous(),
     })
 
-    meta = {"torch": torch.__version__, "rank": str(RANK), "alpha": str(ALPHA), "seed": str(SEED),
+    meta = {"torch": torch.__version__, "rank": str(RANK), "alpha": str(alpha), "seed": str(SEED),
             "steps": str(STEPS), "lr": str(LR), "weight_decay": str(WD), "targets": json.dumps(names)}
-    save_file(out, os.path.join(OUT, "lora.safetensors"), metadata=meta)
-    print(f"{len(out)} tensors -> {OUT}")
+    save_file(out, os.path.join(out_dir, "lora.safetensors"), metadata=meta)
+    print(f"{len(out)} tensors -> {out_dir}")
 
 
 if __name__ == "__main__":

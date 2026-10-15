@@ -20,11 +20,7 @@ use ojas_cpu::CpuBackend;
 use ojas_data::CounterRng;
 use ojas_io::{encode_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::lora::{dropout_mask, init_a, init_b, LoraConfig, LoraError, LoraLinear};
-use ojas_model::qwen35::{
-    bind_frozen, forward_loss_lora, load_hf, lora_targets, LoraForward, LoraKind, Qwen35Lora,
-    Qwen35Params, LORA_KINDS,
-};
-use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};
+use ojas_model::qwen35::{load_hf, lora_targets, LoraKind, Qwen35Lora, Qwen35Params, LORA_KINDS};
 use qwen35_common::lora::*;
 use qwen35_common::*;
 
@@ -673,115 +669,14 @@ fn a_target_stored_as_an_integer_dtype_is_refused() {
 
 // ---- can the bounds tell a wrong ojas from a right one? --------------------
 
-struct Traj {
-    losses: Vec<f32>,
-    finals: Vec<(String, Vec<f32>, Vec<f32>)>,
-}
-
-/// `trajectory()` of `qwen35_lora.rs` with the optimizer and scaling knobs
-/// exposed, so a deliberately wrong run can be scored against the same
-/// bounds.
-fn trajectory(alpha: f32, cfg: AdamWConfig) -> Traj {
-    use ojas_model::lora::LoraSite;
-    use ojas_model::qwen35::MixerLora;
-    let file = lora_file();
-    let (s, tg, d, host) = (spec(), targets(), data(), host_params());
-    let backend = cpu();
-    let lcfg = LoraConfig::new(RANK, alpha, 0.0).unwrap();
-    let mut sites = fixture_sites(&file, false);
-    let zero = |t: &Tensor| {
-        Tensor::from_f32(&vec![0.0; t.num_elements().unwrap()], t.shape(), &budget()).unwrap()
-    };
-    let mut moments: Vec<(Tensor, Tensor)> = sites
-        .sites()
-        .iter()
-        .flat_map(|site| std::iter::once(&site.a).chain(&site.b))
-        .map(|t| (zero(t), zero(t)))
-        .collect();
-    let mut losses = Vec::new();
-    for step in 0..STEPS {
-        let grads: Vec<Tensor> = {
-            let mut tape = Tape::new(backend.clone());
-            let params = bind_frozen(&mut tape, &host).unwrap();
-            let bound = sites
-                .try_map(&mut |site| site.try_map(&mut |t| tape.leaf(t.clone())))
-                .unwrap();
-            let mut rng = CounterRng::new(0);
-            let [b, t] = [d.ids.shape()[0], d.ids.shape()[1]];
-            let fwd = LoraForward::new(&mut tape, bound, &lcfg, b, t, &mut rng, &budget()).unwrap();
-            let loss = forward_loss_lora(
-                &mut tape,
-                &s,
-                &params,
-                Some(&fwd),
-                &d.ids,
-                &d.targets,
-                &d.tables,
-                Some(IGNORE),
-                DEFAULT_CE_CHUNK,
-                ActivationCheckpoint::Off,
-            )
-            .unwrap();
-            tape.backward(loss).unwrap();
-            losses.push(to_vec(tape.value(loss).unwrap())[0]);
-            fwd.sites()
-                .sites()
-                .iter()
-                .flat_map(|site| std::iter::once(&site.a).chain(&site.b))
-                .map(|v| tape.take_grad(*v).unwrap())
-                .collect()
-        };
-        let mut grads = grads.into_iter();
-        let mut moment = moments.iter_mut();
-        let mut update = |p: &mut Tensor| {
-            let g = grads.next().unwrap();
-            let (m1, m2) = moment.next().unwrap();
-            backend.adamw_step(p, &g, m1, m2, step as u64, cfg).unwrap();
-        };
-        for l in &mut sites.layers {
-            let mixer: Vec<&mut Option<LoraSite<Tensor>>> = match &mut l.mixer {
-                MixerLora::GatedDeltaNet { qkv, z, out } => vec![qkv, z, out],
-                MixerLora::Attention { q, k, v, o } => vec![q, k, v, o],
-            };
-            for site in mixer
-                .into_iter()
-                .chain([&mut l.gate, &mut l.up, &mut l.down])
-                .flatten()
-            {
-                update(&mut site.a);
-                for b in &mut site.b {
-                    update(b);
-                }
-            }
-        }
-    }
-    let finals = tg
-        .iter()
-        .zip(sites.sites())
-        .map(|(t, site)| {
-            let parts: Vec<Vec<f32>> = site.b.iter().map(to_vec).collect();
-            (
-                t.module().to_string(),
-                to_vec(&site.a),
-                t.fuse_b(&s, &parts, RANK),
-            )
-        })
-        .collect();
-    Traj { losses, finals }
-}
-
-fn good_cfg() -> AdamWConfig {
-    AdamWConfig {
-        lr: LR,
-        beta1: 0.9,
-        beta2: 0.999,
-        eps: 1e-8,
-        weight_decay: WD,
-    }
+/// [`trajectory`] at the scaling-2 fixture with `alpha` and `cfg` free, so
+/// a deliberately wrong run can be scored against the same bounds.
+fn mutant(alpha: f32, cfg: AdamWConfig) -> Trajectory {
+    trajectory(SCALING_2, &LoraConfig::new(RANK, alpha, 0.0).unwrap(), cfg)
 }
 
 /// Does the (b') loss clause pass: steps 0-5 within 1e-5, to 20 within 1e-4.
-fn loss_clause_passes(t: &Traj, file: &SafeTensors<'_>) -> bool {
+fn loss_clause_passes(t: &Trajectory, file: &SafeTensors<'_>) -> bool {
     let want = read(file, "b.losses");
     t.losses
         .iter()
@@ -790,27 +685,18 @@ fn loss_clause_passes(t: &Traj, file: &SafeTensors<'_>) -> bool {
         .all(|(i, (&g, &w))| rel(g, w) <= if i <= 5 { 1e-5 } else { 1e-4 })
 }
 
-/// The noise-floor test's final-adapter clause exactly as written in
-/// `qwen35_lora.rs`: per tensor `max(1e-5, 3 * floor)` against torch fp32
-/// and against fp64, where the floor is torch fp32's own distance to fp64.
+/// The noise-floor final-adapter clause ([`check_b_prime_finals`]): per
+/// tensor [`final_bound`] of its floor against torch fp32 and against fp64.
 /// Returns the worst `ratio / bound` over tensors (above 1 = rejected) and
 /// the count of tensors rejected.
-fn final_clause(t: &Traj, file: &SafeTensors<'_>) -> (f64, usize) {
+fn final_clause(t: &Trajectory, file: &SafeTensors<'_>) -> (f64, usize) {
     let mut worst = 0.0f64;
     let mut rejected = 0;
-    for (module, a, b) in &t.finals {
-        for (w, v) in [("A", a), ("B", b)] {
-            let name = format!("{module}.lora_{w}.weight");
-            let torch = read(file, &format!("b.final.{name}"));
-            let exact = read(file, &format!("b.final64.{name}"));
-            let floor = peak_ratio(&torch, &exact, &name);
-            let bound = f64::from(1e-5f32.max(3.0 * floor));
-            let vs_torch = f64::from(peak_ratio(v, &torch, &name));
-            let vs_exact = f64::from(peak_ratio(v, &exact, &name));
-            let ratio = (vs_torch / bound).max(vs_exact / bound);
-            worst = worst.max(ratio);
-            rejected += usize::from(ratio > 1.0);
-        }
+    for (_, vs_torch, floor, vs_exact) in final_ratios(t, file) {
+        let bound = f64::from(final_bound(floor));
+        let ratio = (f64::from(vs_torch) / bound).max(f64::from(vs_exact) / bound);
+        worst = worst.max(ratio);
+        rejected += usize::from(ratio > 1.0);
     }
     (worst, rejected)
 }
@@ -864,7 +750,7 @@ fn the_fixture_exercises_what_the_bounds_claim() {
 #[test]
 fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
     let file = lora_file();
-    let good = trajectory(ALPHA, good_cfg());
+    let good = mutant(ALPHA, adamw());
     let (gw, gr) = final_clause(&good, &file);
     eprintln!(
         "baseline: loss clause {}, final clause worst {gw:.2} rejected {gr}",
@@ -877,7 +763,7 @@ fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
             ALPHA,
             AdamWConfig {
                 lr: LR * 1.01,
-                ..good_cfg()
+                ..adamw()
             },
         ),
         (
@@ -885,7 +771,7 @@ fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
             ALPHA,
             AdamWConfig {
                 lr: LR * 1.001,
-                ..good_cfg()
+                ..adamw()
             },
         ),
         (
@@ -893,7 +779,7 @@ fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
             ALPHA,
             AdamWConfig {
                 weight_decay: 0.0,
-                ..good_cfg()
+                ..adamw()
             },
         ),
         (
@@ -901,7 +787,7 @@ fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
             ALPHA,
             AdamWConfig {
                 weight_decay: WD * 10.0,
-                ..good_cfg()
+                ..adamw()
             },
         ),
         (
@@ -909,7 +795,7 @@ fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
             ALPHA,
             AdamWConfig {
                 beta2: 0.99,
-                ..good_cfg()
+                ..adamw()
             },
         ),
         (
@@ -917,7 +803,7 @@ fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
             ALPHA,
             AdamWConfig {
                 beta1: 0.89,
-                ..good_cfg()
+                ..adamw()
             },
         ),
         (
@@ -925,15 +811,15 @@ fn the_b_prime_bounds_reject_a_wrong_optimizer_or_scaling() {
             ALPHA,
             AdamWConfig {
                 eps: 1e-6,
-                ..good_cfg()
+                ..adamw()
             },
         ),
-        ("alpha 8.08 (+1%)", ALPHA * 1.01, good_cfg()),
-        ("alpha 8.008 (+0.1%)", ALPHA * 1.001, good_cfg()),
+        ("alpha 8.08 (+1%)", ALPHA * 1.01, adamw()),
+        ("alpha 8.008 (+0.1%)", ALPHA * 1.001, adamw()),
     ];
     let mut missed = Vec::new();
     for (name, alpha, cfg) in mutants {
-        let m = trajectory(alpha, cfg);
+        let m = mutant(alpha, cfg);
         let loss_ok = loss_clause_passes(&m, &file);
         let (worst, rejected) = final_clause(&m, &file);
         eprintln!("{name}: loss clause passes={loss_ok}, final clause worst {worst:.2} of bound, rejected {rejected}/26");
