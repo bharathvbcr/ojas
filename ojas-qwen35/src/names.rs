@@ -9,9 +9,10 @@
 //! (and `Qwen35Step::open` refuses a live table that differs from this one).
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ojas_io::{SafeTensors, StDtype};
+use tessl::safetensors::{CheckpointView, TensorSource, INDEX_FILE_NAME};
 
 use crate::config::{LayerKind, Qwen35TextConfig};
 use crate::error::{Qwen35Error, Result};
@@ -176,36 +177,74 @@ pub fn check_header<'a>(
     })
 }
 
-/// [`check_header`] on a checkpoint: a `.safetensors` file, or a
-/// `model.safetensors.index.json` whose every shard is read (header only,
-/// ojas-io) and checked together. A name in two shards is refused.
+/// [`check_header`] on a checkpoint: a `.safetensors` file, a
+/// `model.safetensors.index.json`, or a checkpoint directory.
+///
+/// tessl's `CheckpointView::open` is the one validator of what a checkpoint
+/// may be (the index's fields, every shard's name, containment and format,
+/// and that the `weight_map` and the shards agree name for name), and it is
+/// the same call the loader makes, so nothing is accepted here that loading
+/// would refuse. Only then are the shards' headers read (ojas-io, header
+/// only) for the dtype and shape of each tensor, which the view does not
+/// expose.
 pub fn check_weights_file(cfg: &Qwen35TextConfig, path: &Path) -> Result<HeaderReport> {
-    let shards = if path.extension().is_some_and(|e| e == "json") {
-        shard_paths(cfg, path)?
-    } else {
-        vec![path.to_path_buf()]
-    };
+    let what = path.display().to_string();
+    let view = CheckpointView::open(path).map_err(Qwen35Error::Config)?;
     let mut infos: Vec<(String, StDtype, Vec<u64>)> = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for shard in &shards {
-        let st = SafeTensors::open(shard)
+    for shard in shard_files(path)? {
+        let st = SafeTensors::open(&shard)
             .map_err(|e| Qwen35Error::Io(format!("{}: {e}", shard.display())))?;
         for n in st.names() {
-            if !seen.insert(n.to_string()) {
-                return Err(Qwen35Error::Config(format!(
-                    "{}: tensor {n} is in more than one shard",
-                    path.display()
-                )));
-            }
             let i = st.info(n).map_err(|e| Qwen35Error::Io(e.to_string()))?;
             infos.push((n.to_string(), i.dtype, i.shape.clone()));
         }
     }
+    if infos.len() != view.names().count() {
+        return Err(Qwen35Error::Io(format!(
+            "{what}: the shards changed while the header was read"
+        )));
+    }
     check_header(
         cfg,
         infos.iter().map(|(n, d, s)| (n.as_str(), *d, s.as_slice())),
-        &path.display().to_string(),
+        &what,
     )
+}
+
+/// The `.safetensors` files behind a checkpoint [`CheckpointView::open`]
+/// accepted at `path`. The index is already validated, so this only reads
+/// which files its `weight_map` names.
+fn shard_files(path: &Path) -> Result<Vec<PathBuf>> {
+    let index = if path.is_dir() {
+        let index = path.join(INDEX_FILE_NAME);
+        if std::fs::symlink_metadata(&index).is_err() {
+            return Ok(vec![path.join("model.safetensors")]);
+        }
+        index
+    } else if path.extension().is_some_and(|e| e == "json") {
+        path.to_path_buf()
+    } else {
+        return Ok(vec![path.to_path_buf()]);
+    };
+    let what = index.display().to_string();
+    let text =
+        std::fs::read_to_string(&index).map_err(|e| Qwen35Error::Io(format!("{what}: {e}")))?;
+    let root = crate::config::parse_hf_json(&text, &what).map_err(Qwen35Error::Config)?;
+    let map = root
+        .field_opt("weight_map")
+        .ok()
+        .flatten()
+        .and_then(|m| m.as_object().ok())
+        .ok_or_else(|| Qwen35Error::Config(format!("{what}: no weight_map object")))?;
+    let dir = index.parent().unwrap_or_else(|| Path::new("."));
+    let files: std::collections::BTreeSet<&str> = map
+        .iter()
+        .filter_map(|(_, f)| match f {
+            ojas_io::JsonValue::String(f) => Some(f.as_str()),
+            _ => None,
+        })
+        .collect();
+    Ok(files.into_iter().map(|f| dir.join(f)).collect())
 }
 
 /// A snapshot resolved to the config and the checkpoint the provider loads,
@@ -229,18 +268,14 @@ impl Snapshot {
     pub fn from_dir(dir: &Path) -> Result<Self> {
         let config_path = dir.join("config.json");
         let config = Qwen35TextConfig::from_file(&config_path)?;
-        let index = dir.join("model.safetensors.index.json");
-        let weights_path = if index.is_file() {
+        // tessl's rule for a checkpoint directory: an index if one is there
+        // in any form (a dangling link included, which then fails to open),
+        // else `model.safetensors`.
+        let index = dir.join(INDEX_FILE_NAME);
+        let weights_path = if std::fs::symlink_metadata(&index).is_ok() {
             index
         } else {
-            let single = dir.join("model.safetensors");
-            if !single.is_file() {
-                return Err(Qwen35Error::Io(format!(
-                    "{}: neither model.safetensors.index.json nor model.safetensors",
-                    dir.display()
-                )));
-            }
-            single
+            dir.join("model.safetensors")
         };
         Self::from_parts(config_path, weights_path, config)
     }
@@ -264,49 +299,4 @@ impl Snapshot {
             header,
         })
     }
-}
-
-/// The shard files an index's `weight_map` names, as paths beside the index.
-/// Each must be a bare file name (the same lexical rule tessl applies), and
-/// the map must hold at least one tensor under the tower prefix.
-fn shard_paths(cfg: &Qwen35TextConfig, index: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let text = std::fs::read_to_string(index)
-        .map_err(|e| Qwen35Error::Io(format!("{}: {e}", index.display())))?;
-    let what = index.display().to_string();
-    let root = crate::config::parse_hf_json(&text, &what).map_err(Qwen35Error::Config)?;
-    let map = root
-        .field_opt("weight_map")
-        .ok()
-        .flatten()
-        .and_then(|m| m.as_object().ok())
-        .ok_or_else(|| Qwen35Error::Config(format!("{what}: no weight_map object")))?;
-    let mut files = std::collections::BTreeSet::new();
-    let mut tower = false;
-    for (name, file) in map {
-        tower |= name.starts_with(&cfg.tower_prefix);
-        match file {
-            ojas_io::JsonValue::String(f) => {
-                if f.contains('/') || f.contains('\\') || f == ".." || f.is_empty() {
-                    return Err(Qwen35Error::Config(format!(
-                        "{what}: {name} maps to {f:?}, not a file name"
-                    )));
-                }
-                files.insert(f.clone());
-            }
-            v => {
-                return Err(Qwen35Error::Config(format!(
-                    "{what}: {name} maps to {}",
-                    crate::config::shown(v)
-                )))
-            }
-        }
-    }
-    if !tower {
-        return Err(Qwen35Error::Config(format!(
-            "{what}: no tensor under {:?}",
-            cfg.tower_prefix
-        )));
-    }
-    let dir = index.parent().unwrap_or_else(|| Path::new("."));
-    Ok(files.into_iter().map(|f| dir.join(f)).collect())
 }

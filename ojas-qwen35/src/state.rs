@@ -313,8 +313,13 @@ pub fn check_new_state_dir(dir: &Path) -> Result<()> {
 /// A state directory whose headers have all been checked against a table.
 pub struct StateIndex {
     pub step: u64,
-    /// For each kind, for each table entry, the file that holds it.
-    files: Vec<Vec<PathBuf>>,
+    /// For each kind, for each table entry, the index in `shards` of the
+    /// file that holds it.
+    files: Vec<Vec<usize>>,
+    /// Every state file, opened once and held: a header that passed is the
+    /// file that is later read, so a file replaced after [`Self::read`]
+    /// cannot swap in a different entry.
+    shards: Vec<(PathBuf, SafeTensors<'static>)>,
     table: Vec<TensorSpec>,
 }
 
@@ -340,6 +345,7 @@ impl StateIndex {
         }
         let mut step: Option<u64> = None;
         let mut files = Vec::with_capacity(3);
+        let mut held: Vec<(PathBuf, SafeTensors<'static>)> = Vec::new();
         for (k, kind) in Kind::ALL.iter().enumerate() {
             let mut shards = std::mem::take(&mut by_kind[k]);
             shards.sort();
@@ -351,7 +357,7 @@ impl StateIndex {
                 )));
             }
             let n = shards.len();
-            let mut where_: Vec<Option<PathBuf>> = vec![None; table.len()];
+            let mut where_: Vec<Option<usize>> = vec![None; table.len()];
             let index: std::collections::HashMap<&str, usize> = table
                 .iter()
                 .enumerate()
@@ -419,7 +425,7 @@ impl StateIndex {
                             info.shape
                         )));
                     }
-                    if where_[i].replace(path.clone()).is_some() {
+                    if where_[i].replace(held.len()).is_some() {
                         return Err(Qwen35Error::Io(format!(
                             "{}: {tname} appears in two {} files",
                             dir.display(),
@@ -427,6 +433,7 @@ impl StateIndex {
                         )));
                     }
                 }
+                held.push((path.clone(), st));
             }
             let mut kind_files = Vec::with_capacity(table.len());
             for (i, w) in where_.into_iter().enumerate() {
@@ -445,6 +452,7 @@ impl StateIndex {
             step: step
                 .ok_or_else(|| Qwen35Error::Io(format!("{}: no state files", dir.display())))?,
             files,
+            shards: held,
             table: table.to_vec(),
         })
     }
@@ -456,18 +464,10 @@ impl StateIndex {
             Kind::ExpAvg => 1,
             Kind::ExpAvgSq => 2,
         };
-        let path = &self.files[k][i];
-        let st = SafeTensors::open(path)
+        let (path, st) = &self.shards[self.files[k][i]];
+        let (_, values) = st
+            .read_f32(&self.table[i].name)
             .map_err(|e| Qwen35Error::Io(format!("{}: {e}", path.display())))?;
-        let (shape, values) = st.read_f32(&self.table[i].name)?;
-        let want: Vec<u64> = self.table[i].shape.iter().map(|&d| d as u64).collect();
-        if shape != want {
-            return Err(Qwen35Error::Io(format!(
-                "{}: {} changed shape since the index was read",
-                path.display(),
-                self.table[i].name
-            )));
-        }
         Ok(values)
     }
 }
@@ -625,26 +625,42 @@ impl Qwen35Step {
         self.check_live()?;
         self.require_f32_state("Qwen35Step::load_state")?;
         let idx = StateIndex::read(dir, &self.table, &self.cfg.canonical_summary())?;
+        self.load_state_from_index(&idx)
+    }
+
+    /// [`Self::load_state`] from a [`StateIndex`] already read for this
+    /// tower. Every header, shape, dtype and byte length of every kind was
+    /// checked when the index was read, so a malformed directory is refused
+    /// before the first write and leaves the provider usable. Only a failure
+    /// after a write has landed (a file cut short underneath the held index,
+    /// a device error) poisons it: a refused first write moved nothing.
+    pub fn load_state_from_index(&mut self, idx: &StateIndex) -> Result<()> {
+        self.check_live()?;
+        self.require_f32_state("Qwen35Step::load_state")?;
+        if idx.table != self.table {
+            return Err(invalid(
+                "Qwen35Step::load_state",
+                "the state index was read for a different parameter table",
+            ));
+        }
         let mut wrote = false;
         for kind in Kind::ALL {
             for i in 0..self.table.len() {
-                // The headers were checked above; an entry that still fails
-                // to read after the first write leaves a mix, which poisons.
                 let result = idx
                     .read_entry(kind, i)
                     .and_then(|v| hf_to_storage(&self.table[i], self.transposed[i], v))
-                    .and_then(|v| {
-                        wrote = true;
-                        self.write_host(kind, i, &v)
-                    });
-                if let Err(e) = result {
-                    if wrote {
-                        self.poisoned = Some(format!(
-                            "load_state from {} failed part-way: {e}",
-                            dir.display()
-                        ));
+                    .and_then(|v| self.write_host(kind, i, &v));
+                match result {
+                    Ok(()) => wrote = true,
+                    Err(e) => {
+                        if wrote {
+                            self.poisoned = Some(format!(
+                                "load_state failed part-way ({} entry {i}): {e}",
+                                kind.tag()
+                            ));
+                        }
+                        return Err(e);
                     }
-                    return Err(e);
                 }
             }
         }

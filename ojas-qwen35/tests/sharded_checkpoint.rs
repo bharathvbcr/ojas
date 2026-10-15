@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use ojas_core::Budget;
 use ojas_io::{write_safetensors, SafeTensors, TensorOut};
-use ojas_qwen35::{Numerics, Precision, Qwen35Error, Qwen35Step, Sequence, Snapshot, Which};
+use ojas_qwen35::{Numerics, Precision, Qwen35Step, Sequence, Snapshot, Which};
 
 fn tiny_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tessl/tests/fixtures/qwen35_train")
@@ -32,8 +32,9 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// The tiny fixture's tensors split alternately into two shard files written
-/// to `blobs_dir` as `shard-0`, `shard-1`; returns the `weight_map` JSON body.
-fn write_shards(blobs_dir: &Path) -> String {
+/// to `blobs_dir` as `shard-0`, `shard-1`; returns the `weight_map` entries
+/// (tensor name, shard file name the index uses).
+fn write_shards(blobs_dir: &Path) -> Vec<(String, String)> {
     let st = SafeTensors::open(&tiny_dir().join("model.safetensors")).unwrap();
     let names: Vec<String> = st.names().map(str::to_string).collect();
     let mut map = Vec::new();
@@ -55,22 +56,40 @@ fn write_shards(blobs_dir: &Path) -> String {
             .collect();
         write_safetensors(&blobs_dir.join(format!("shard-{shard}")), &items, &[]).unwrap();
         for n in &mine {
-            map.push(format!(
-                "{n:?}: \"model-0000{}-of-00002.safetensors\"",
-                shard + 1
+            map.push((
+                (*n).clone(),
+                format!("model-0000{}-of-00002.safetensors", shard + 1),
             ));
         }
     }
+    map
+}
+
+/// An index over `entries`; `extra` is spliced in as top-level fields.
+fn index_json(entries: &[(String, String)], extra: &str) -> String {
+    let body: Vec<String> = entries
+        .iter()
+        .map(|(n, f)| format!("{n:?}: {f:?}"))
+        .collect();
     format!(
-        "{{\"metadata\": {{\"total_size\": 1}}, \"weight_map\": {{{}}}}}",
-        map.join(", ")
+        "{{{extra}\"metadata\": {{\"total_size\": 1}}, \"weight_map\": {{{}}}}}",
+        body.join(", ")
     )
 }
 
 /// A plain sharded directory: config, two shard files, the index.
 fn plain_sharded(name: &str) -> PathBuf {
+    plain_sharded_with(name, |entries| index_json(entries, ""))
+}
+
+/// [`plain_sharded`] with the index text made from the true entries by `make`.
+fn plain_sharded_with(
+    name: &str,
+    make: impl FnOnce(&mut Vec<(String, String)>) -> String,
+) -> PathBuf {
     let dir = scratch(name);
-    let index = write_shards(&dir);
+    let mut entries = write_shards(&dir);
+    let index = make(&mut entries);
     for shard in 0..2 {
         std::fs::rename(
             dir.join(format!("shard-{shard}")),
@@ -90,7 +109,7 @@ fn hf_cache_snapshot(name: &str) -> PathBuf {
     let snap = root.join("snapshots").join("0123abcd");
     std::fs::create_dir_all(&blobs).unwrap();
     std::fs::create_dir_all(&snap).unwrap();
-    let index = write_shards(&blobs);
+    let index = index_json(&write_shards(&blobs), "");
     let link = |file: &str, blob: &str| {
         std::os::unix::fs::symlink(Path::new("../../blobs").join(blob), snap.join(file)).unwrap();
     };
@@ -127,11 +146,65 @@ fn a_tensor_in_two_shards_is_refused() {
         dir.join("model-00002-of-00002.safetensors"),
     )
     .unwrap();
-    let e = Snapshot::from_dir(&dir).unwrap_err();
+    refused_with(&dir, &["is in both", "no such tensor"]);
+}
+
+/// Everything tessl's `CheckpointView::open` refuses must be refused by the
+/// header pre-flight too: it is the one owner of what an index may say.
+/// tessl names the first inconsistency it meets, so a test gives every
+/// wording that is right for its fault.
+fn refused_with(dir: &Path, needles: &[&str]) {
+    let e = Snapshot::from_dir(dir).expect_err(needles[0]).to_string();
     assert!(
-        matches!(&e, Qwen35Error::Config(m) if m.contains("more than one shard")),
-        "{e:?}"
+        needles.iter().any(|n| e.contains(n)),
+        "{e:?} lacks any of {needles:?}"
     );
+}
+
+#[test]
+fn an_index_with_an_unknown_top_level_field_is_refused() {
+    let dir = plain_sharded_with("bogus", |e| index_json(e, "\"bogus\": {}, "));
+    refused_with(&dir, &["bogus"]);
+}
+
+#[test]
+fn a_shard_tensor_missing_from_the_weight_map_is_refused() {
+    let dir = plain_sharded_with("unlisted", |e| {
+        e.remove(0);
+        index_json(e, "")
+    });
+    refused_with(&dir, &["weight_map does not list"]);
+}
+
+#[test]
+fn a_weight_map_entry_pointing_at_the_wrong_shard_is_refused() {
+    let dir = plain_sharded_with("wrong-shard", |e| {
+        e[0].1 = if e[0].1.contains("00001") {
+            "model-00002-of-00002.safetensors".into()
+        } else {
+            "model-00001-of-00002.safetensors".into()
+        };
+        index_json(e, "")
+    });
+    refused_with(&dir, &["no such tensor", "is in both"]);
+}
+
+#[test]
+fn a_dangling_index_symlink_beside_model_safetensors_is_refused() {
+    let dir = scratch("dangling");
+    std::fs::copy(tiny_dir().join("config.json"), dir.join("config.json")).unwrap();
+    std::fs::copy(
+        tiny_dir().join("model.safetensors"),
+        dir.join("model.safetensors"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        "no-such-index.json",
+        dir.join("model.safetensors.index.json"),
+    )
+    .unwrap();
+    let e = Snapshot::from_dir(&dir).unwrap_err().to_string();
+    assert!(e.contains("model.safetensors.index.json"), "{e:?}");
 }
 
 fn open(snap: &Snapshot) -> Qwen35Step {

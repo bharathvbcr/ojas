@@ -266,21 +266,21 @@ fn a_snapshot_index_resolves_to_its_shards_or_is_refused() {
     let mut up = all_in(shard);
     up[0].1 = "\"../model.safetensors\"".into();
     index(&up);
-    refused("not a file name");
+    refused("not a bare file name");
     let mut num = all_in(shard);
     num[0].1 = "3".into();
     index(&num);
-    refused("maps to the number 3");
+    refused("is not a file name");
     index(&[("vision.x".into(), format!("{shard:?}"))]);
-    refused("no tensor under \"model.\"");
+    refused("which has no such tensor");
     std::fs::write(
         dir.join("model.safetensors.index.json"),
         "{\"metadata\": {}}",
     )
     .unwrap();
-    refused("no weight_map object");
+    refused("weight_map");
     std::fs::write(dir.join("model.safetensors.index.json"), "[]").unwrap();
-    refused("no weight_map object");
+    refused("not a JSON object");
     std::fs::write(
         dir.join("model.safetensors.index.json"),
         "{\"weight_map\": {\"a\": \"x\", \"a\": \"y\"}}",
