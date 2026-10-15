@@ -588,6 +588,39 @@ pub(crate) fn mul_forward(
     )
 }
 
+/// Bench-only: the same product as [`mul_forward`] with the caller choosing
+/// the piece count. Not a second production path; `cargo build` drops it.
+#[cfg(test)]
+pub(crate) fn mul_forward_with_pieces(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    a: &[f32],
+    b: &[f32],
+    shape: &[usize],
+    pieces: usize,
+) -> Result<Tensor, OjasError> {
+    let n = a.len();
+    same_len(op, &[n, b.len(), product(op, shape)?], "mul operand")?;
+    let bytes = (n as u64)
+        .checked_mul(4)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: format!("{n} * 4 overflows u64"),
+        })?;
+    let reservation = budget.try_reserve(bytes)?;
+    zip_forward(
+        op,
+        budget,
+        exec,
+        [a, b],
+        shape,
+        pieces.max(1),
+        reservation,
+        mul_lane,
+    )
+}
+
 /// `lane(a[i], b[i])` stored into every lane over `pieces` chunks of a reserved, never zero-filled
 /// output ([`ojas_simd::ReservedF32`]), the chunks on [`scoped`] threads,
 /// adopted under `reservation` (the output's charge) once every chunk's
@@ -3202,5 +3235,117 @@ mod tests {
             "e={e:?} neg={neg} scale={scale:?}"
         );
         *checked += 1;
+    }
+}
+
+/// Release interleaved A/B of 4 pieces against the live width-1 cut.
+/// `cargo test -p ojas-cpu --release --lib followup_bench_mul_pieces -- --ignored --nocapture --test-threads=1`
+#[cfg(test)]
+mod followup_bench {
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use ojas_core::{Budget, Numerics};
+
+    use super::mul_forward_with_pieces;
+    use crate::pool::{Exec, Pool, ROW_MIN_ELEMS};
+
+    fn live_pieces(threads: usize, n: usize) -> usize {
+        let wide = threads.saturating_mul(2);
+        (n / ROW_MIN_ELEMS.max(1)).clamp(1, wide)
+    }
+
+    fn min_median(samples: &mut [f64]) -> (f64, f64) {
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = samples.len() / 2;
+        let median = if samples.len() % 2 == 0 {
+            (samples[mid - 1] + samples[mid]) / 2.0
+        } else {
+            samples[mid]
+        };
+        (samples[0], median)
+    }
+
+    #[test]
+    #[ignore = "release measurement; writes bench/results"]
+    fn followup_bench_mul_pieces() {
+        const WARMUP: usize = 3;
+        const REPS: usize = 24;
+        let sizes = [1024 * 1024, 1024 * 2048, 1024 * 4096];
+        let threads_n = [1usize, 4, 6, 8];
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "mul pieces A/B 4 vs live. warmup {WARMUP} reps {REPS} alternating order. load {}",
+            loadavg()
+        ));
+        lines.push(
+            "us are one mul_forward_with_pieces call, inputs outside the timer, output dropped"
+                .to_string(),
+        );
+        for &threads in &threads_n {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            let exec = || Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            };
+            for &n in &sizes {
+                let budget = Budget::new((n as u64) * 16 + (1 << 20));
+                let a = vec![1.25f32; n];
+                let b = vec![0.75f32; n];
+                let live = live_pieces(threads, n);
+                let mut us4 = Vec::with_capacity(REPS);
+                let mut us_live = Vec::with_capacity(REPS);
+                let time_pieces = |pieces: usize| {
+                    let t = Instant::now();
+                    let y = mul_forward_with_pieces("b", &budget, exec(), &a, &b, &[n], pieces)
+                        .unwrap();
+                    let us = t.elapsed().as_secs_f64() * 1e6;
+                    std::hint::black_box(y.f32_slice().unwrap()[0]);
+                    us
+                };
+                for _ in 0..WARMUP {
+                    let _ = time_pieces(4);
+                    let _ = time_pieces(live);
+                }
+                us4.clear();
+                us_live.clear();
+                for i in 0..REPS {
+                    if i % 2 == 0 {
+                        us4.push(time_pieces(4));
+                        us_live.push(time_pieces(live));
+                    } else {
+                        us_live.push(time_pieces(live));
+                        us4.push(time_pieces(4));
+                    }
+                }
+                let (min4, med4) = min_median(&mut us4);
+                let (min_l, med_l) = min_median(&mut us_live);
+                let faster = if min4 < min_l { "four" } else { "live" };
+                lines.push(format!(
+                    "threads={threads} n={n} live_pieces={live} four_min_us={min4:.1} four_med_us={med4:.1} live_min_us={min_l:.1} live_med_us={med_l:.1} faster_min={faster} four_over_live={:.4}",
+                    min4 / min_l
+                ));
+                eprintln!("{}", lines.last().unwrap());
+            }
+        }
+        let dir = format!(
+            "{}/../bench/results/2026-10-14-cpu-gdn-followups",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/pieces-ab.txt");
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+        eprintln!("wrote {path}");
+    }
+
+    fn loadavg() -> String {
+        std::process::Command::new("sysctl")
+            .args(["-n", "vm.loadavg"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unavailable".to_string())
     }
 }
