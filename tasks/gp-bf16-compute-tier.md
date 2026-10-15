@@ -154,6 +154,12 @@ Open, and why (status review):
 - Follow-ups noted, not filed by this session: ft-69744e54, filed by the sibling, needs a contract change in this tier (a bf16 tied embedding table: embedding_forward and linear_cross_entropy_mean taking Bf16).
 - Follow-ups not filed: a tape that keeps matmul-class operands as Bf16 (the activation-memory lever); tessl's Qwen35Grads::zeros_like gives a bf16 model a bf16 gradient bank (qwen35_train.rs:132-139, flagged by the sibling session).
 
+### Operand decision amended (2026-10-14): the tied-table lane (ft-69744e54)
+- Decided. The bf16 operand rule now also covers the tied table: embedding_forward's and embedding_backward's `table` and linear_cross_entropy_mean's `weight` may be Bf16, widened exactly with f32 accumulation. Their other operands stay F32 (U32 for ids and targets). Recorded in `Backend::bf16_operands` and docs/dtype-policy.md.
+- Why in the contract and not the Tape. Fable's ruling 1 in gp-ft-bf16-frozen-base ruled out a per-call Tape-level widen: it puts a 2.03 GB f32 transient at the LM head at 2B, where activations peak. So the lane reads the table in place: a gathered row, or one `[chunk.cols, d]` vocabulary block, at a time.
+- Backends. CPU and Metal take the lane (1ea6c06). wgpu has none and refuses a Bf16 table with Dtype (`refuse_bf16_table`), as the validators did before. `bf16_operand_contract` reports `table_lane` and requires a backend without it to refuse every Bf16 table with Dtype.
+- Measured (07e6a3c, bench/results/2026-10-14-bf16-tied-table): 1,017,118,720 bytes less resident at 2B; the full-gradient step peak falls 16.37 to 15.35 GB at T=2,048 and 18.97 to 18.02 GB at T=9,638.
+
 ### Execution plan
 1. Introduce BF16 tensor storage representation and operands to `Backend` trait methods.
 2. Implement BF16 GEMM with FP32 accumulation on CPU (Accelerate / NEON), Metal (Apple matrix units), and wgpu.

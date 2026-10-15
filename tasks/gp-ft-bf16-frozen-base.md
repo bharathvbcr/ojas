@@ -92,7 +92,8 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
   - load_hf(…, DType::Bf16) keeps a BF16 checkpoint's linears as stored (ojas-io read_bf16_bits).
   - A fixture test asserts the resident bytes: 2 per linear element, 4 for the rest.
   - The Tape gives the f32 load's loss and gradient bits on the CPU and on Metal.
-  - The tied embedding stays f32 (Fable). The follow-up is ft-69744e54.
+  - The tied embedding stays f32 here (Fable). The follow-up ft-69744e54 landed the bf16 table lane on CPU and Metal
+    (1ea6c06, 3a9c55c; 2B rows in bench/results/2026-10-14-bf16-tied-table).
 - **Criterion 5: met for what exists.** Norms, conv, A_log, dt_bias, the residual stream and the optimizer
   state are f32. LoRA, D17 and the span head are not in the tree yet.
 - **Criterion 6: met with one deviation** (d65879c).
