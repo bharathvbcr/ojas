@@ -105,3 +105,62 @@ Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two i
 - **A scaling-1 parity test is required before any LoRA number is read as evidence** (before the 0.8B smoke). A second oracle fixture dir at r = 4, alpha = 4 (the scaling-2 fixture is not edited) and a test file pinning (a') one-step loss and dA/dB within 1e-5, (b') the 20-step losses and a bit-identical rerun, (c') identity at B = 0, the Metal-vs-CPU adapter-gradient clause, and a structural pin that no scale constant exists at scaling 1 (`scaled_b`, lora.rs:308-316).
 - **Board: stays in review** until the criterion 6 floor column, the scaling-1 test and a recorded run of gpu_parity.rs:654 are logged. Waived here, owned elsewhere: criterion 2's A/B bench (gp-ft-step-memory-and-throughput's interleaved rows) and criterion 8's model-level fold (gp-ft-export).
 - **Recorded run (2026-10-15, main 132b46e, M5 Pro, under mac_heavy, `cargo test --release -p ojas-qwen35 --test gpu_save_state_bank --test gpu_parity -- --ignored --exact ... --test-threads=1`):** `gpu_save_state_refuses_a_half_filled_gradient_bank ... ok` (1 passed); `gpu_tiny_scale_zero_entry_still_feeds_the_norm ... ok` (1 passed, 9 filtered out).
+- **Scaling-1 parity landed for review (2026-10-15, branch gitpulse/lora-scaling-one-parity, bc08eeb on main 132b46e):** fixture `qwen35_tiny_lora_s1` (`qwen35_lora_fixture.py --alpha 4`: rank 4, alpha 4, same seed as the scaling-2 fixture, so the same A, B and batch); `ojas-model/tests/qwen35_lora_scale1.rs` holds (a'), (b') losses and bit-identical rerun, (b') finals, (c') and the LoRA-linear clause at scaling 1, plus a structural pin (LoraForward charges no scale constant at scaling 1 and does at 2; `scaled_b(1, None)` is B). The clauses now live once in `qwen35_common/lora.rs` per fixture, and the adversarial mutants are scored with the same trajectory and bound.
+  - Run (M5 Pro, under mac_heavy, `cargo test --release -p ojas-model --test qwen35_lora --test qwen35_lora_scale1 --test qwen35_lora_adversarial --test qwen35_lora_metal -- --test-threads=1`; clippy -D warnings clean): qwen35_lora 15 passed, qwen35_lora_scale1 7 passed, qwen35_lora_adversarial 22 passed, qwen35_lora_metal 4 passed (Metal vs CPU at scaling 1: loss rel 2.62e-7).
+  - Scaling 1: a' loss rel 1.75e-7, worst adapter gradient 1.83e-6 of peak; worst final adapter vs torch 5.37e-4 of peak, 0.67 of its bound; ojas closer to fp64 than torch fp32 on 21 of 26 tensors. Scaling 2: worst final 2.45e-4, 0.76 of bound, closer on 24 of 26.
+  - The structural pin bites: with LoraForward building constants at scaling 1, or with scaled_b's short-circuit removed, `scaling_one_records_no_scale_constant` fails (qwen35_lora_scale1.rs:59 and :66); restored, it passes.
+- **Criterion 6, the printed floor column** (the run above; ratified bound max(1e-5, 3 x floor)). The literal 1e-5 against torch would reject 20 of 26 tensors at scaling 2 and 26 of 26 at scaling 1, every one within three times torch fp32's own distance from fp64:
+  - `b_prime_final_adapters_are_within_the_oracles_own_noise_floor`, qwen35_tiny_lora (scaling 2): tensor: ojas vs torch / torch vs fp64 (floor) / ojas vs fp64, each of the tensor's peak
+    - l0.linear_attn.in_proj_qkv.lora_A.weight: 2.15e-5 / 1.32e-5 / 3.02e-5
+    - l0.linear_attn.in_proj_qkv.lora_B.weight: 4.48e-5 / 4.16e-5 / 6.15e-5
+    - l0.linear_attn.in_proj_z.lora_A.weight: 3.49e-6 / 8.26e-6 / 6.75e-6
+    - l0.linear_attn.in_proj_z.lora_B.weight: 1.21e-5 / 2.46e-5 / 2.05e-5
+    - l0.linear_attn.out_proj.lora_A.weight: 1.22e-5 / 1.95e-5 / 1.82e-5
+    - l0.linear_attn.out_proj.lora_B.weight: 1.65e-5 / 4.11e-5 / 2.46e-5
+    - l0.mlp.gate_proj.lora_A.weight: 6.91e-6 / 8.55e-6 / 6.79e-6
+    - l0.mlp.gate_proj.lora_B.weight: 1.07e-5 / 3.79e-5 / 3.12e-5
+    - l0.mlp.up_proj.lora_A.weight: 1.85e-5 / 1.51e-5 / 7.79e-6
+    - l0.mlp.up_proj.lora_B.weight: 2.22e-5 / 2.89e-5 / 2.43e-5
+    - l0.mlp.down_proj.lora_A.weight: 1.58e-5 / 2.99e-5 / 1.41e-5
+    - l0.mlp.down_proj.lora_B.weight: 7.46e-6 / 1.79e-5 / 1.15e-5
+    - l1.self_attn.q_proj.lora_A.weight: 1.44e-5 / 2.08e-5 / 8.60e-6
+    - l1.self_attn.q_proj.lora_B.weight: 6.72e-5 / 4.74e-4 / 4.51e-4
+    - l1.self_attn.k_proj.lora_A.weight: 3.13e-6 / 6.67e-6 / 6.46e-6
+    - l1.self_attn.k_proj.lora_B.weight: 1.28e-5 / 4.22e-5 / 3.82e-5
+    - l1.self_attn.v_proj.lora_A.weight: 4.93e-6 / 5.50e-6 / 4.70e-6
+    - l1.self_attn.v_proj.lora_B.weight: 1.35e-5 / 2.15e-5 / 1.93e-5
+    - l1.self_attn.o_proj.lora_A.weight: 2.45e-4 / 5.02e-4 / 2.57e-4
+    - l1.self_attn.o_proj.lora_B.weight: 2.20e-5 / 4.70e-5 / 2.51e-5
+    - l1.mlp.gate_proj.lora_A.weight: 1.35e-4 / 3.37e-4 / 2.01e-4
+    - l1.mlp.gate_proj.lora_B.weight: 9.29e-5 / 2.31e-4 / 1.38e-4
+    - l1.mlp.up_proj.lora_A.weight: 4.29e-6 / 1.86e-5 / 1.49e-5
+    - l1.mlp.up_proj.lora_B.weight: 1.12e-4 / 2.76e-4 / 1.65e-4
+    - l1.mlp.down_proj.lora_A.weight: 1.80e-5 / 4.26e-5 / 2.46e-5
+    - l1.mlp.down_proj.lora_B.weight: 1.76e-5 / 2.00e-5 / 1.58e-5
+  - `b_prime_final_adapters_are_within_the_oracles_noise_floor_at_scaling_one`, qwen35_tiny_lora_s1 (scaling 1): tensor: ojas vs torch / torch vs fp64 (floor) / ojas vs fp64, each of the tensor's peak
+    - l0.linear_attn.in_proj_qkv.lora_A.weight: 1.67e-5 / 1.07e-5 / 2.15e-5
+    - l0.linear_attn.in_proj_qkv.lora_B.weight: 4.10e-5 / 5.18e-5 / 5.76e-5
+    - l0.linear_attn.in_proj_z.lora_A.weight: 1.01e-5 / 2.49e-5 / 2.47e-5
+    - l0.linear_attn.in_proj_z.lora_B.weight: 3.92e-5 / 5.38e-5 / 2.86e-5
+    - l0.linear_attn.out_proj.lora_A.weight: 5.37e-4 / 5.70e-4 / 6.06e-5
+    - l0.linear_attn.out_proj.lora_B.weight: 1.70e-4 / 1.73e-4 / 1.97e-5
+    - l0.mlp.gate_proj.lora_A.weight: 3.79e-5 / 2.74e-5 / 1.41e-5
+    - l0.mlp.gate_proj.lora_B.weight: 4.53e-5 / 8.60e-5 / 4.07e-5
+    - l0.mlp.up_proj.lora_A.weight: 1.75e-5 / 1.60e-5 / 9.68e-6
+    - l0.mlp.up_proj.lora_B.weight: 3.52e-5 / 3.43e-5 / 2.07e-5
+    - l0.mlp.down_proj.lora_A.weight: 2.79e-5 / 2.15e-5 / 1.20e-5
+    - l0.mlp.down_proj.lora_B.weight: 2.05e-5 / 2.17e-5 / 1.18e-5
+    - l1.self_attn.q_proj.lora_A.weight: 1.49e-5 / 2.32e-5 / 2.34e-5
+    - l1.self_attn.q_proj.lora_B.weight: 1.20e-4 / 7.51e-4 / 7.04e-4
+    - l1.self_attn.k_proj.lora_A.weight: 1.78e-5 / 1.76e-5 / 7.98e-6
+    - l1.self_attn.k_proj.lora_B.weight: 2.41e-5 / 3.12e-5 / 3.36e-5
+    - l1.self_attn.v_proj.lora_A.weight: 2.07e-5 / 2.15e-5 / 8.80e-6
+    - l1.self_attn.v_proj.lora_B.weight: 3.48e-5 / 3.64e-5 / 1.80e-5
+    - l1.self_attn.o_proj.lora_A.weight: 4.35e-5 / 5.08e-5 / 6.63e-5
+    - l1.self_attn.o_proj.lora_B.weight: 1.81e-5 / 1.71e-5 / 1.64e-5
+    - l1.mlp.gate_proj.lora_A.weight: 5.48e-5 / 1.52e-4 / 9.72e-5
+    - l1.mlp.gate_proj.lora_B.weight: 8.62e-5 / 2.93e-4 / 2.07e-4
+    - l1.mlp.up_proj.lora_A.weight: 1.21e-5 / 3.44e-5 / 3.18e-5
+    - l1.mlp.up_proj.lora_B.weight: 4.39e-5 / 3.36e-5 / 2.79e-5
+    - l1.mlp.down_proj.lora_A.weight: 4.38e-5 / 4.43e-5 / 2.15e-5
+    - l1.mlp.down_proj.lora_B.weight: 7.48e-5 / 1.44e-4 / 6.91e-5
