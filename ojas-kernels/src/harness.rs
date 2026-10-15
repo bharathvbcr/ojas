@@ -8,6 +8,8 @@
 
 use ojas_core::{Backend, OjasError, Tensor};
 
+use crate::SplitMix64;
+
 /// Largest `|got - expect|`. A non-finite value on either side is
 /// `f64::INFINITY`, so no tolerance accepts it: a NaN difference must never
 /// read as agreement.
@@ -28,20 +30,10 @@ pub fn max_abs(got: &[f32], expect: &[f32]) -> Result<f64, OjasError> {
     Ok(worst)
 }
 
-/// SplitMix64 values in `[-scale, scale)`. Local so the harness adds no crate.
+/// `n` [`SplitMix64`] values in `[-scale, scale)`, from `seed`.
 pub fn splitmix_f32(seed: u64, n: usize, scale: f32) -> Vec<f32> {
-    let mut state = seed;
-    (0..n)
-        .map(|_| {
-            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            z ^= z >> 31;
-            let mantissa = (z >> 40) as f32 / (1u64 << 24) as f32;
-            scale * (2.0 * mantissa - 1.0)
-        })
-        .collect()
+    let mut rng = SplitMix64::new(seed);
+    (0..n).map(|_| scale * rng.next_signed_f32()).collect()
 }
 
 /// `linear_forward` on `other` against `reference` for `[rows, kin] x
@@ -89,6 +81,22 @@ pub fn linear_close(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bits of the inline generator `splitmix_f32` carried before it moved
+    /// onto [`SplitMix64`].
+    #[test]
+    fn splitmix_f32_keeps_its_bits() {
+        let bits = |v: Vec<f32>| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(
+            bits(splitmix_f32(7, 4, 0.5)),
+            [0xbde1_a0f8, 0xbef7_6788, 0x3ecd_3080, 0x3da9_d758]
+        );
+        assert_eq!(
+            bits(splitmix_f32(0, 3, 1.0)),
+            [0x3f44_4150, 0xbe0c_3b10, 0xbf72_7746]
+        );
+        assert!(splitmix_f32(9, 0, 1.0).is_empty());
+    }
 
     #[test]
     fn non_finite_values_never_pass_parity() {

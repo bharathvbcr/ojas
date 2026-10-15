@@ -46,7 +46,7 @@ The ranked list of gaps, and what has closed since it was written, is in [`docs/
 **Against PyTorch MPS on the GPU** ([`docs/bench-gpu-vs-torch.md`](docs/bench-gpu-vs-torch.md), measured under heavy external GPU load, so only direction is verified):
 - ojas is slower on most rows. In round 3 (the latest), a nanolab block forward + backward ran at 0.92× torch's speed on Metal (mixed) and 0.41× on wgpu; the earlier optimization rounds measured 0.37× and 0.18×. Round 3's GPU read 100% busy, so only the direction is verified.
 - It is faster on Metal attention backward and AdamW. Its `clip_grad_norm` lead is against torch 2.13–2.14 only, whose MPS norm ran each full reduction on one threadgroup. PyTorch fixed that kernel for 2.15. On the 2.15 nightly, torch's row takes 8.5 ms against ojas's 19.0 ms ([`bench/results/2026-10-05-torch215-clip`](bench/results/2026-10-05-torch215-clip/README.md), unpaired).
-- CUDA is one affine kernel behind a feature, and HIP is a copy probe; neither implements `Backend`.
+- CUDA's `CudaBackend` implements `Backend` behind a feature (upload, download and sync; every compute op returns `Unsupported`), and HIP is a copy probe that does not.
 
 ```
 Status:          Kernel set, backends, nanolab model, trainer, adaptive resource planning and Go API built; remaining gaps in docs/pytorch-parity-plan.md
@@ -140,7 +140,7 @@ flowchart TD
         Metal["ojas-metal\n(MetalBackend, device-resident, via tessl)"]
         WGPU["ojas-wgpu\n(WgpuBackend, device-resident WGSL)"]
         Kernels["ojas-kernels\n(Shared WGSL/CUDA sources, workgroup geometry, parity harness)"]
-        CUDA["ojas-cuda\n(One affine kernel behind feature cuda; not a Backend)"]
+        CUDA["ojas-cuda\n(CudaBackend behind feature cuda; compute ops Unsupported)"]
         HIP["ojas-hip\n(Copy probe; no HIP kernel; not a Backend)"]
     end
 
@@ -369,7 +369,7 @@ Per-crate counts are from the run of <!--count:crates.date-->2026-10-05<!--/coun
 | [`go/`](go) | Go client SDK | `LoadModel`, `NewModel`, `OpenTrainer`, `TrainStep`, `SaveCheckpoint`, `Resume`, `GenerateIDs`, `SystemProfile`, `SetMemoryCeiling`, `Free`, `Close`; `DeviceCPUAuto`, `ErrPressure` | <!--count:go.passed-->41<!--/count--> passed |
 | [`ojas-device`](ojas-device) | Device kinds, system profile & resource planning | `Device`, `probe_system` (memory, CPU clusters, caches, unified memory, pressure), `measure_bandwidth` (bounded 2 shared buffers, row-split copy), `ResourcePolicy`, `ResourcePlan`, `GemmBlocks` | <!--count:crate.ojas-device-->72 passed (macOS; 66 on Linux)<!--/count--> |
 | [`ojas-oracle`](ojas-oracle) | Mathematical fixtures | IEEE-754 f64 oracle data fixtures | <!--count:crate.ojas-oracle-->41 passed, 1 ignored<!--/count--> |
-| [`ojas-cuda`](ojas-cuda) | CUDA probe | One affine kernel behind feature `cuda`; not a `Backend` | <!--count:crate.ojas-cuda-->8 passed (feature off)<!--/count--> |
+| [`ojas-cuda`](ojas-cuda) | CUDA backend | `CudaBackend` behind feature `cuda`: upload, download and sync; every compute op returns `Unsupported` | <!--count:crate.ojas-cuda-->8 passed (feature off)<!--/count--> |
 | [`ojas-hip`](ojas-hip) | HIP probe | Copy probe behind feature `hip`; no kernel; not a `Backend` | <!--count:crate.ojas-hip-->8 passed (feature off)<!--/count--> |
 
 The dropped scaffold crates `ojas-nn`, `ojas-optim` and `ojas-engine` are gone; the model layer lives in `ojas-model`.

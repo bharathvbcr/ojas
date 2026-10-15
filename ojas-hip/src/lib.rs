@@ -28,6 +28,9 @@ pub struct HipDevice {
 /// Copy larger than this is refused before `hipMalloc`. 1 GiB.
 pub const MAX_COPY_BYTES: usize = 1 << 30;
 
+/// Longest a copy's event wait may take before it is [`DeviceError::Launch`].
+pub const COPY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Byte length of an f32 copy, or [`DeviceError::Capacity`] when it does not fit.
 pub fn copy_bytes(elems: usize) -> Result<usize, DeviceError> {
     let bytes = elems
@@ -133,36 +136,51 @@ fn check_ordinal(ordinal: i32, count: i32) -> Result<(), DeviceError> {
     }
 }
 
+/// The copy's free-memory check: [`ojas_device::free_bytes_fit`].
 #[cfg_attr(not(feature = "hip"), allow(dead_code))]
 fn hip_free_covers(free: usize, need: usize) -> Result<(), DeviceError> {
-    if need > free {
-        Err(DeviceError::Capacity {
+    let bytes = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    ojas_device::free_bytes_fit(bytes(free), bytes(need))
+        .map_err(|short| short.capacity(Device::Hip, "hipMemGetInfo"))
+}
+
+/// The copy's event wait: [`ojas_device::poll_until`] with a 1 ms poll. A
+/// copy still running at `timeout` is [`DeviceError::Launch`], naming that
+/// bound.
+#[cfg_attr(not(feature = "hip"), allow(dead_code))]
+fn copy_wait(
+    timeout: std::time::Duration,
+    ready: impl FnMut() -> Result<bool, DeviceError>,
+) -> Result<(), DeviceError> {
+    ojas_device::poll_until(
+        timeout,
+        std::time::Duration::from_millis(1),
+        ready,
+        |waited| DeviceError::Launch {
             kind: Device::Hip,
-            detail: format!("hipMemGetInfo free {free} bytes, copy needs {need}"),
-        })
+            detail: format!("HIP copy did not finish within {timeout:?} (waited {waited:?})"),
+        },
+    )
+}
+
+/// A HIP query's status as readiness: `hipErrorNotReady` (600) is still
+/// running, success is done, anything else is [`hip_status`]'s error.
+#[cfg_attr(not(feature = "hip"), allow(dead_code))]
+fn not_ready(op: &str, status: i32) -> Result<bool, DeviceError> {
+    if status == HIP_ERROR_NOT_READY {
+        Ok(false)
     } else {
-        Ok(())
+        hip_status(op, status).map(|()| true)
     }
 }
 
+/// `hipErrorNotReady` in hip-runtime-sys 0.1.2's `hipError_t`, as a literal
+/// so the host build can test [`not_ready`]; the `hip` build checks it
+/// against the binding.
 #[cfg_attr(not(feature = "hip"), allow(dead_code))]
-fn poll_until(
-    deadline: std::time::Instant,
-    mut ready: impl FnMut() -> Result<bool, DeviceError>,
-) -> Result<(), DeviceError> {
-    loop {
-        if ready()? {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(DeviceError::Launch {
-                kind: Device::Hip,
-                detail: "HIP copy did not finish within 30s".to_string(),
-            });
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
+const HIP_ERROR_NOT_READY: i32 = 600;
+#[cfg(feature = "hip")]
+const _: () = assert!(HIP_ERROR_NOT_READY == hip_runtime_sys::hipError_t::hipErrorNotReady as i32);
 
 /// The HIP runtime calls this crate makes, declared to return the raw status.
 ///
@@ -202,6 +220,7 @@ mod ffi {
         ) -> c_int;
         pub fn hipEventRecord(event: hipEvent_t, stream: hipStream_t) -> c_int;
         pub fn hipEventQuery(event: hipEvent_t) -> c_int;
+        pub fn hipStreamQuery(stream: hipStream_t) -> c_int;
     }
 }
 
@@ -272,7 +291,8 @@ fn copy_through_hip(ordinal: i32, input: &[f32]) -> Result<Vec<f32>, DeviceError
     })?;
     let _ = total;
     hip_free_covers(free, nbytes)?;
-    // Freed on every return, including a panic in `vec!`.
+    // Freed on drop: on any return before a copy is queued, and after that
+    // only once a wait saw the stream drain (`leak_unless_idle` below).
     struct Dev(*mut std::ffi::c_void);
     impl Drop for Dev {
         fn drop(&mut self) {
@@ -304,9 +324,10 @@ fn copy_through_hip(ordinal: i32, input: &[f32]) -> Result<Vec<f32>, DeviceError
         fn drop(&mut self) {
             if !self.0.is_null() {
                 // SAFETY: a non-null handle here came from a successful
-                // hipStreamCreateWithFlags and is destroyed once. It drops
-                // before `host` and `dev` (reverse declaration order), and
-                // hipStreamDestroy waits for its queued work first.
+                // hipStreamCreateWithFlags and is destroyed once. Once work
+                // is queued on it, it drops only after a wait saw the stream
+                // drain (`leak_unless_idle` below), so nothing in flight
+                // still reads or writes `host` or `dev`.
                 unsafe {
                     let _ = ffi::hipStreamDestroy(self.0);
                 }
@@ -368,42 +389,54 @@ fn copy_through_hip(ordinal: i32, input: &[f32]) -> Result<Vec<f32>, DeviceError
         ffi::hipEventCreateWithFlags(&mut event, hip_runtime_sys::hipEventDisableTiming)
     })?;
     let event = Event(event);
-    // SAFETY: both buffers hold `nbytes` and outlive the stream (they drop
-    // after it, and it drains before destroy). Nothing else touches `host`
-    // until the event below completes.
-    hip_status("hipMemcpyAsync host to device", unsafe {
-        ffi::hipMemcpyAsync(
-            dev.0,
-            host.0,
-            nbytes,
-            hip_runtime_sys::hipMemcpyKind::hipMemcpyHostToDevice,
-            stream.0,
-        )
-    })?;
-    // SAFETY: as above; same-stream order puts this after the upload.
-    hip_status("hipMemcpyAsync device to host", unsafe {
-        ffi::hipMemcpyAsync(
-            host.0,
-            dev.0,
-            nbytes,
-            hip_runtime_sys::hipMemcpyKind::hipMemcpyDeviceToHost,
-            stream.0,
-        )
-    })?;
-    // SAFETY: `event` and `stream` are live handles created above.
-    hip_status("hipEventRecord", unsafe {
-        ffi::hipEventRecord(event.0, stream.0)
-    })?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    poll_until(deadline, || {
-        // SAFETY: `event` is a live handle recorded above.
-        let status = unsafe { ffi::hipEventQuery(event.0) };
-        if status == hip_runtime_sys::hipError_t::hipErrorNotReady as i32 {
-            Ok(false)
-        } else {
-            hip_status("hipEventQuery", status).map(|()| true)
-        }
-    })?;
+    // From the first copy queued on, the four handles are freed only after a
+    // wait saw the stream drain. A timed-out or failed wait leaks them
+    // (`leak_unless_idle`): freeing `dev` or `host`, or destroying `stream`,
+    // with a copy possibly still running would wait on that device again,
+    // without a bound.
+    let queued = (|| {
+        // SAFETY: both buffers hold `nbytes` and are not freed until the
+        // stream is known to have drained (below). Nothing else touches
+        // `host` until then.
+        hip_status("hipMemcpyAsync host to device", unsafe {
+            ffi::hipMemcpyAsync(
+                dev.0,
+                host.0,
+                nbytes,
+                hip_runtime_sys::hipMemcpyKind::hipMemcpyHostToDevice,
+                stream.0,
+            )
+        })?;
+        // SAFETY: as above; same-stream order puts this after the upload.
+        hip_status("hipMemcpyAsync device to host", unsafe {
+            ffi::hipMemcpyAsync(
+                host.0,
+                dev.0,
+                nbytes,
+                hip_runtime_sys::hipMemcpyKind::hipMemcpyDeviceToHost,
+                stream.0,
+            )
+        })?;
+        // SAFETY: `event` and `stream` are live handles created above.
+        hip_status("hipEventRecord", unsafe {
+            ffi::hipEventRecord(event.0, stream.0)
+        })
+    })();
+    let drained = match &queued {
+        Ok(()) => copy_wait(COPY_TIMEOUT, || {
+            // SAFETY: `event` is a live handle recorded above.
+            not_ready("hipEventQuery", unsafe { ffi::hipEventQuery(event.0) })
+        }),
+        // A copy may have been queued before the call that failed: wait for
+        // the stream itself under the same bound.
+        Err(_) => copy_wait(COPY_TIMEOUT, || {
+            // SAFETY: `stream` is a live handle created above.
+            not_ready("hipStreamQuery", unsafe { ffi::hipStreamQuery(stream.0) })
+        }),
+    };
+    let held = ojas_device::leak_unless_idle((event, stream, host, dev), drained);
+    queued?;
+    let (_event, _stream, host, _dev) = held?;
     let mut back = vec![0.0f32; input.len()];
     // SAFETY: the event completed, so both copies have finished and `host.0`
     // holds `input.len()` f32 values; `back` is a distinct allocation of that length.
@@ -536,7 +569,7 @@ mod tests {
 
     #[test]
     fn copy_wait_returns_when_the_deadline_has_passed() {
-        let err = poll_until(std::time::Instant::now(), || Ok(false)).unwrap_err();
+        let err = copy_wait(std::time::Duration::ZERO, || Ok(false)).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -547,7 +580,47 @@ mod tests {
             ),
             "{err}"
         );
-        assert!(poll_until(std::time::Instant::now(), || Ok(true)).is_ok());
+        assert!(copy_wait(std::time::Duration::ZERO, || Ok(true)).is_ok());
+    }
+
+    /// Pre-fix the message said "within 30s" whatever the deadline was.
+    #[test]
+    fn not_ready_is_still_running_success_is_done_and_the_rest_keep_their_kind() {
+        assert!(!not_ready("q", HIP_ERROR_NOT_READY).unwrap());
+        assert!(not_ready("q", 0).unwrap());
+        assert!(matches!(
+            not_ready("q", 2),
+            Err(DeviceError::Capacity {
+                kind: Device::Hip,
+                ..
+            })
+        ));
+        assert!(matches!(
+            not_ready("q", 101),
+            Err(DeviceError::NoDevice {
+                kind: Device::Hip,
+                ..
+            })
+        ));
+        match not_ready("hipStreamQuery", 400) {
+            Err(DeviceError::Launch {
+                kind: Device::Hip,
+                detail,
+            }) => {
+                assert!(detail.contains("hipStreamQuery"), "{detail}");
+                assert!(detail.contains("400"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn copy_wait_timeout_names_the_bound_it_was_given() {
+        let bound = std::time::Duration::from_millis(3);
+        let err = copy_wait(bound, || Ok(false)).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("within 3ms"), "{text}");
+        assert!(!text.contains("30s"), "{text}");
     }
 
     #[test]

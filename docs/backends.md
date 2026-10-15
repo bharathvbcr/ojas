@@ -8,7 +8,7 @@ This machine is an **Apple M5 Pro** (`system_profiler`: Metal 4, 20 GPU cores, v
 
 ## Who Selects the Device
 
-There is no device router in Rust. `ojas-device` defines the `Device` kinds (`Cpu`, `Metal`, `Cuda`, `Hip`, `Vulkan`), `require_kind` (returns `DeviceMismatch` when two kinds differ), `probe()` (host CPU only; GPU probes live in the crates that link those runtimes), and memory planning (`ResourcePlan`, `ResourcePolicy`). It does not open a GPU and does not choose a backend.
+There is no device router in Rust. `ojas-device` defines the `Device` kinds (`Cpu`, `Metal`, `Cuda`, `Hip`, `Vulkan`), `require_kind` (returns `DeviceMismatch` when two kinds differ), `probe()` (host CPU only; GPU probes live in the crates that link those runtimes), what those crates share (`poll_until`, the one bounded device wait, and `free_bytes_fit`, the free-memory check), and memory planning (`ResourcePlan`, `ResourcePolicy`). It does not open a GPU and does not choose a backend.
 
 A caller chooses a backend by constructing it in Rust (`CpuBackend`, `MetalBackend`, `WgpuBackend`), or through the Go `LoadModel(ctx, path, LoadOptions{Device: ...})` or `NewModel` call, which `ojas-capi` turns into a session on one backend at load time:
 
@@ -71,7 +71,7 @@ flowchart LR
 | `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | <!--count:crate.ojas-metal-->175 passed<!--/count--> | Tiled causal attention, head dim above 256 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Attention forward/backward, device-resident training step |
 | `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | <!--count:crate.ojas-wgpu-->131 passed, 3 ignored<!--/count--> | Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (`accumulate_grad`), KV cache writes, tiled linear cross-entropy (`linear_ce`), and deferred fault reporting at next `sync` |
 | `ojas-kernels` | No (shared geometry and sources) | — | <!--count:crate.ojas-kernels-->11 passed<!--/count--> | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |
-| `ojas-cuda` | No | — | <!--count:crate.ojas-cuda-->8 passed (feature off)<!--/count--> | One affine kernel behind `--features cuda` |
+| `ojas-cuda` | Yes: upload, download and sync; every compute op returns `Unsupported` | — | <!--count:crate.ojas-cuda-->8 passed (feature off)<!--/count--> | `CudaBackend` behind `--features cuda`. `CudaBackend::open` is the device probe (`NotCompiled` without the feature); the second runtime `CudaDevice` and its affine kernel were retired 2026-10-14. Public API: `backend`, `step`, `error`, and behind `cuda` `runtime` and `buffer`; the parity ladder and the rung harness are behind the non-default `harness` feature |
 | `ojas-hip` | No (full backend planned) | — | <!--count:crate.ojas-hip-->8 passed (feature off)<!--/count--> | Copy probe behind `--features hip`; no kernel. Device ordinal is explicit (`open_ordinal`) |
 
 > [!WARNING]
@@ -134,7 +134,7 @@ The probe already reports failures in the classes the backend will keep: a missi
 
 | Check | Command | Reported Result |
 | :--- | :--- | :--- |
-| **CUDA Default** | `cargo test -p ojas-cuda` | **Passed:** `tests::default_build_reports_not_compiled` |
+| **CUDA Default** | `cargo test -p ojas-cuda` | **Passed:** `tests::default_build_reports_not_compiled` (that test went with `CudaDevice` on 2026-10-14; `backend::tests::cuda_backend_open_without_cuda_feature` holds the same refusal) |
 | **CUDA Bindings** | `cargo check -p ojas-cuda --features cuda` | **Passed:** Typecheck only (dynamic loading; `nvcc` absent) |
 | **CUDA Execution** | Kernel launch | **Skipped:** No NVIDIA GPU present |
 | **HIP Default** | `cargo test -p ojas-hip` | **Passed:** `tests::default_build_reports_not_compiled` |

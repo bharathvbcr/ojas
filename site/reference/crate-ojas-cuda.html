@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas-cuda · ojas reference</title>
-  <meta name="description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
+  <meta name="description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Two things are its API:">
   <meta name="keywords" content="ojas, ojas-cuda, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
@@ -14,7 +14,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-cuda.html">
   <meta property="og:title" content="ojas-cuda · ojas reference">
-  <meta property="og:description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
+  <meta property="og:description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Two things are its API:">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="ojas-cuda · ojas reference">
-  <meta name="twitter:description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:">
+  <meta name="twitter:description" content="NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Two things are its API:">
   <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta name="twitter:image:alt" content="ojas-cuda · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
@@ -40,7 +40,7 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "ojas-cuda · ojas reference",
-    "description": "NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Three things live here:",
+    "description": "NVIDIA CUDA for ojas, through cudarc (0.19.10, cuda-12080 bindings, libraries loaded at run time). Two things are its API:",
     "url": "https://ojas.vbcr.dev/reference/crate-ojas-cuda.html",
     "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
     "author": {
@@ -143,11 +143,9 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
       <article class="prose-ojas">
 <h1 id="ojas-cuda">ojas-cuda <a class="anchor" href="#ojas-cuda" aria-label="Link to this section">#</a></h1>
-<p>NVIDIA CUDA for ojas, through <code>cudarc</code> (0.19.10, <code>cuda-12080</code> bindings, libraries loaded at run time). Three things live here:</p>
+<p>NVIDIA CUDA for ojas, through <code>cudarc</code> (0.19.10, <code>cuda-12080</code> bindings, libraries loaded at run time). Two things are its API:</p>
 <ul>
-<li><code>CudaDevice</code>: the device probe (open ordinal 0, run one affine kernel before <code>Ok</code>).
-</li>
-<li><code>CudaBackend</code>: the <code>ojas_core::Backend</code> implementation. <code>upload</code>, <code>download</code> and <code>sync</code> work; every compute op returns <code>OjasError::Unsupported</code> naming the op. A sticky driver failure (an illegal address, a failed launch, a device-side assert, …) is <code>OjasError::DeviceLost</code>, so a caller stops instead of retrying on a dead context.
+<li><code>CudaBackend</code>: the <code>ojas_core::Backend</code> implementation, and the device probe: <code>CudaBackend::open(budget)</code> is <code>DeviceError::NotCompiled</code> without the <code>cuda</code> feature, and with it opens device 0 through <code>CudaRuntime</code>. <code>upload</code>, <code>download</code> and <code>sync</code> work; every compute op returns <code>OjasError::Unsupported</code> naming the op. A sticky driver failure (an illegal address, a failed launch, a device-side assert, …) is <code>OjasError::DeviceLost</code>, so a caller stops instead of retrying on a dead context.
 <ul>
 <li>One budget: <code>CudaBackend::open(budget)</code> opens its runtime with <code>CudaRuntime::open_with</code>, so uploaded tensors, the runtime&#39;s kernel buffers and the 32 MiB cuBLAS workspace are all charged to that <code>ojas_core::Budget</code> (<code>AllocBudget</code> is a view of it). A budget smaller than the workspace cannot open.
 </li>
@@ -155,7 +153,7 @@
 </li>
 <li>An upload copies straight from the host tensor (f32, u32, bf16; f16 is staged once) into an allocation that is not zeroed first. A U32 upload also keeps a host copy of its ids for the token-range check.
 </li>
-<li>Every upload (<code>CudaBackend::upload</code>, <code>CudaRuntime::upload</code> and <code>write</code>) returns only after its copy has finished: NVIDIA documents an async copy from pageable memory only as one that &#34;might be synchronous with respect to host&#34;, and cudarc keeps nothing alive for a <code>&amp;[T]</code> source. The wait is bounded (<code>sync_timeout</code>), as is every device wait, a tensor readback&#39;s included (<code>src/wait.rs</code>).
+<li>Every upload (<code>CudaBackend::upload</code>, <code>CudaRuntime::upload</code> and <code>write</code>) returns only after its copy has finished: NVIDIA documents an async copy from pageable memory only as one that &#34;might be synchronous with respect to host&#34;, and cudarc keeps nothing alive for a <code>&amp;[T]</code> source. The wait is bounded (<code>sync_timeout</code>), as is every device wait, a tensor readback&#39;s included (<code>ojas_device::poll_until</code>, shared with <code>ojas-hip</code>).
 </li>
 <li>Not selectable through the C ABI or Go yet: device 5 (<code>DEVICE_CUDA</code>, <code>DeviceCUDA</code>) is refused by name until gp-cuda-backend-provider lands, because the runtime is an <code>Rc</code> (not <code>Send</code>) and no compute op is implemented.
 </li>
@@ -165,6 +163,8 @@
 </li>
 </ul>
 <p>Everything that touches a device is behind the <code>cuda</code> feature, off by default. Without it the crate builds on any host and its host-side tests run there.</p>
+<p><strong>What stays public</strong> (the default build): <code>CudaBackend</code> (<code>backend</code>), <code>Qwen35Step</code> and its contract (<code>step</code>), <code>CudaError</code> (<code>error</code>), and, behind <code>cuda</code>, what <code>CudaBackend::with_runtime</code> and <code>CudaBackend::runtime</code> hand over: <code>CudaRuntime</code>, <code>DeviceInfo</code>, <code>RuntimeConfig</code> (<code>runtime</code>) and <code>CudaBuffer</code>, <code>CudaDeviceBuffer</code> (<code>buffer</code>). The C ABI does not link this crate yet (device 5 is refused by name), so it adds nothing. The runtime&#39;s own pieces (<code>budget</code>, <code>nvrtc_cache</code>, <code>libprobe</code>, <code>geometry</code>, <code>kernels</code>) are private.</p>
+<p><strong>The <code>harness</code> feature</strong>, off by default, compiles the rest: the parity ladder the step provider does not call yet (the K0–K11 and K2(i) wrappers, their plans, host references and emulations) and what the rung binaries and the device tests share (<code>smoke</code> and the <code>*_smoke</code> modules, <code>report_cli</code>, <code>rung0_cli</code>, <code>check</code>, <code>json</code>, <code>npy</code>, <code>inputs</code>, <code>k11_golden</code>, <code>tiny_fixture_published</code>, <code>host_ref</code>). The rung binaries require it. The crate&#39;s tests turn it on themselves (a dev-dependency on <code>ojas-cuda</code> with <code>harness</code>), so <code>cargo test -p ojas-cuda</code> still runs every host test. A ladder module joins the default build when the step provider starts calling it.</p>
 <p><strong>Status (2026-10-06).</strong> Milestones M0 (K0, K1) and M1 (K8, K11, the tiny-fixture loader), K2(i) (GDN at the published rule), and L-cuda-small&#39;s K3, K4, K6, K7, K9, K10. On 2026-10-05 the GH200 ran <code>rung0</code> (174/174 checks pass) and every device-test binary (<code>--ignored --test-threads=1</code>, exit 0), all cross-built from this code when it lived in the standalone sibling crate it was merged from. The merged crate has not yet run on a device.</p>
 <h2 id="what-is-here">What is here <a class="anchor" href="#what-is-here" aria-label="Link to this section">#</a></h2>
 <div class="table-wrap"><table>
@@ -182,7 +182,7 @@
 <tr><td>K3 gates, K4 conv1d, K6 q/k norm + RoPE, K7 RMSNorm, K9 embed, K10 cross-entropy rows, and their shared reductions</td><td><code>src/small_common.rs</code> and one <code>*.rs</code> / <code>*_cuda.rs</code> pair each</td><td>host mirrors and goldens</td></tr>
 <tr><td>Tiny-fixture loader: tessl&#39;s <code>qwen35_train</code> (config through <code>ojas_io</code>&#39;s JSON reader, BF16 safetensors, <code>.npy</code> gradients), into device buffers</td><td><code>src/tiny_fixture_published.rs</code></td><td>parse, tamper and symlink refusal</td></tr>
 <tr><td>The report, the watchdog and the end of <code>main</code>, shared by both rung binaries</td><td><code>src/report_cli.rs</code></td><td>unit tests, and the watchdog end to end (<code>tests/watchdog_exit.rs</code>)</td></tr>
-<tr><td>Rung-0 and rung-(a) binaries</td><td><code>src/bin/rung0.rs</code>, <code>src/bin/runga.rs</code></td><td>arguments, refusal path</td></tr>
+<tr><td>Rung-0 and rung-(a) binaries (<code>--features cuda,harness</code>)</td><td><code>src/bin/rung0.rs</code>, <code>src/bin/runga.rs</code></td><td>arguments, refusal path</td></tr>
 </tbody></table></div>
 <p>Host references (<code>src/host_ref.rs</code>) are bitwise for K0 and for the FFMA GEMM, and float64 for GEMM tolerances. The float64 references live in <code>tests/reference/</code>.</p>
 <h2 id="tests">Tests <a class="anchor" href="#tests" aria-label="Link to this section">#</a></h2>
@@ -247,7 +247,7 @@
 <div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test -p ojas-cuda --features cuda</code></pre></div>
 <p>The first runs the host tests with no CUDA anywhere. The second links cudarc: the library-refusal test runs, and the device tests compile and are ignored.</p>
 <p>Cross-build for the GH200 (aarch64, glibc 2.39 sysroot), the recipe in <code>docs/cuda-backend-scoping.md</code> §1.5. No CUDA SDK is needed: cudarc <code>dlopen</code>s the libraries at run time.</p>
-<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=&#34;-C linker-flavor=gcc&#34; cargo build --offline --release --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda --bin rung0 --bin runga --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda</code></pre></div>
+<div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=&#34;-C linker-flavor=gcc&#34; cargo build --offline --release --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda,harness --bin rung0 --bin runga --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda</code></pre></div>
 <div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=&#34;-C linker-flavor=gcc&#34; cargo test --offline --release --no-run --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda</code></pre></div>
 <p>The binaries are under <code>aarch64-unknown-linux-gnu/release/</code> in that target dir, and the device tests under its <code>deps/</code>. A binary&#39;s sha256 depends on the checkout path, which it embeds: pin the sha256 of the file you copy, not one rebuilt elsewhere.</p>
 <h2 id="libraries-on-the-box">Libraries on the box <a class="anchor" href="#libraries-on-the-box" aria-label="Link to this section">#</a></h2>

@@ -5,34 +5,9 @@
 //! `CounterRng` hashes a domain string with SHA-256. That `sha2` dependency is
 //! not in this workspace, so this stream is **not** that one.
 
-/// Seeded counter. `state` is the whole stream.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CounterRng {
-    state: u64,
-}
-
-impl CounterRng {
-    pub fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    pub fn state(&self) -> u64 {
-        self.state
-    }
-
-    /// Replace the counter. The next [`Self::next_u64`] continues from `state`.
-    pub fn set_state(&mut self, state: u64) {
-        self.state = state;
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E3779B97F4A7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-        z ^ (z >> 31)
-    }
-}
+/// Seeded counter: ojas's one SplitMix64 (`ojas_kernels`). `state` is the
+/// whole stream.
+pub use ojas_kernels::SplitMix64 as CounterRng;
 
 #[cfg(test)]
 mod tests {

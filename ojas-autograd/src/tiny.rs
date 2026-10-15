@@ -16,6 +16,7 @@ use ojas_cpu::{
     clip_grads, mean_micrograds, optim_group, CosineSchedule, CpuBackend, GradAccumulator,
     HybridOptimizer, HybridParam, OptimGroup,
 };
+use ojas_kernels::SplitMix64;
 
 use crate::tape::{Tape, Var};
 
@@ -82,7 +83,7 @@ impl TinyTrain {
         let cpu = CpuBackend::new(Budget::new(16 << 20));
         let schedule = CosineSchedule::new(4, 20)?;
         let (rope_cos, rope_sin) = rope_cache(T, D);
-        let mut rng = SplitMix64(seed);
+        let mut rng = SplitMix64::new(seed);
         let specs: &[(&str, &[usize], bool, Init)] = &[
             ("tok_emb", &[V, D], true, Init::Normal),
             ("norm1", &[D], false, Init::Ones),
@@ -364,24 +365,7 @@ impl Init {
         match self {
             Init::Zeros => vec![0.0; n],
             Init::Ones => vec![1.0; n],
-            Init::Normal => (0..n).map(|_| 0.02 * rng.unit()).collect(),
+            Init::Normal => (0..n).map(|_| 0.02 * rng.next_signed_f32()).collect(),
         }
-    }
-}
-
-struct SplitMix64(u64);
-
-impl SplitMix64 {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn unit(&mut self) -> f32 {
-        let mantissa = (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
-        2.0 * mantissa - 1.0
     }
 }

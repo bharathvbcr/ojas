@@ -81,6 +81,7 @@ impl CompileSpec {
     }
 }
 
+#[cfg(feature = "harness")]
 /// The spec every kernel in this crate is compiled with.
 pub const STRICT_SM90: CompileSpec = CompileSpec {
     arch: Arch {
@@ -93,6 +94,7 @@ pub const STRICT_SM90: CompileSpec = CompileSpec {
     prec_sqrt: true,
 };
 
+#[cfg(feature = "harness")]
 /// The same, for the architecture-specific `sm_90a` features (WGMMA, TMA) a
 /// later GEMM tier needs. Rung 0 compiles one module with it to show the
 /// box's NVRTC accepts it; nothing launches it.
@@ -115,6 +117,7 @@ pub struct KernelModule {
     pub entries: &'static [&'static str],
 }
 
+#[cfg(feature = "harness")]
 /// K0: casts, column-window copy, deliver, zero, scatter-add, gather.
 pub const K0: KernelModule = KernelModule {
     name: "k0_plumbing",
@@ -132,6 +135,7 @@ pub const K0: KernelModule = KernelModule {
     ],
 };
 
+#[cfg(feature = "harness")]
 /// K1 ExactF32 tier: fixed-k-order FFMA GEMM, plus the same kernel rounding
 /// its operands to bf16 on load (the bf16 tier's fallback and on-device oracle).
 pub const GEMM_FFMA: KernelModule = KernelModule {
@@ -147,9 +151,11 @@ pub const GEMM_FFMA: KernelModule = KernelModule {
     ],
 };
 
+#[cfg(feature = "harness")]
 /// Every module this crate compiles.
 pub const ALL_MODULES: [&KernelModule; 2] = [&K0, &GEMM_FFMA];
 
+#[cfg(feature = "harness")]
 /// The FFMA GEMM entry point for a layout and operand rounding.
 pub fn gemm_ffma_entry(layout: crate::gemm_plan::GemmLayout, round_bf16: bool) -> &'static str {
     use crate::gemm_plan::GemmLayout;
@@ -163,6 +169,7 @@ pub fn gemm_ffma_entry(layout: crate::gemm_plan::GemmLayout, round_bf16: bool) -
     }
 }
 
+#[cfg(feature = "harness")]
 /// Device helpers every module starts with: tessl's bf16 rounding
 /// (`tessl/src/tensor.rs:641-654`) in integers, and the 64-bit grid-stride
 /// loop. A macro, so `concat!` can splice one copy into each module.
@@ -204,6 +211,7 @@ __device__ __forceinline__ float qd_round_bf16(float x) {
     };
 }
 
+#[cfg(feature = "harness")]
 const K0_SOURCE: &str = concat!(
     device_prelude!(),
     r#"
@@ -299,6 +307,7 @@ extern "C" __global__ void qd_ce_gather_rows_bf16(
 "#
 );
 
+#[cfg(feature = "harness")]
 const GEMM_FFMA_SOURCE: &str = concat!(
     device_prelude!(),
     r#"
@@ -381,8 +390,10 @@ QD_GEMM_ENTRY(qd_gemm_ffma_nt_bf16r, 2, true)
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "harness")]
     use crate::gemm_plan::GemmLayout;
 
+    #[cfg(feature = "harness")]
     /// The entry names of `QD_GEMM_ENTRY(...)` lines and `extern "C"` kernels.
     fn defined_entries(source: &str) -> Vec<String> {
         let mut out = Vec::new();
@@ -404,6 +415,7 @@ mod tests {
         out
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn every_module_defines_exactly_its_listed_entries() {
         for module in ALL_MODULES {
@@ -415,6 +427,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn sources_have_no_nul_no_include_and_no_float_atomics() {
         // cudarc's NVRTC wrapper panics on an interior NUL (nvrtc/safe.rs:138).
@@ -425,6 +438,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn the_device_rounding_is_the_host_rounding() {
         // The integer sequence in both device modules is crate::bf16's, once each.
@@ -436,6 +450,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn strict_options_turn_fma_contraction_off() {
         let opts = STRICT_SM90.options();
@@ -446,6 +461,7 @@ mod tests {
             .contains(&"--gpu-architecture=compute_90a".to_string()));
     }
 
+    #[cfg(feature = "harness")]
     /// Both NVRTC architectures come from `REQUIRED_CC`: the same (major,
     /// minor), with and without the `a` feature set.
     #[test]
@@ -474,6 +490,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "harness")]
     /// `compute_<major><minor>[a]` for every capability a driver could
     /// report, so a future `REQUIRED_CC` change yields the matching NVRTC
     /// names with no second literal to update.
@@ -498,6 +515,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn every_gemm_entry_is_reachable() {
         for layout in GemmLayout::ALL {
