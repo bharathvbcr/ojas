@@ -73,3 +73,14 @@ Checked by this session [V]: the local Qwen3.5-2B snapshot exists (4.3 GB). ojas
 - ojas-qwen35/tests/gpu_tape_2b.rs
 - ojas-qwen35/README.md
 - bench/results/
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: ready; gpu_tape_2b.rs has never run (no result under bench/results/, README unchanged) [A]. Part of the memory half was measured by gpu_memory_rows (bench/results/2026-10-11-bf16-frozen-base, full-gradient Tape rows at T = 2,048 and 9,638) [V].
+- Criteria: 1 open (ojas-qwen35/README.md:250-255 still "Not measured: save_state, load_state, Bf16Operands, longer sequences") [V]; 2 partial (snapshot recorded, file shas not) [A]; 3a open (the T = 128 Tape-vs-provider bounds are written, gpu_tape_2b.rs:38-39, never run) [A]; 3b met for the memory figures, full-gradient only [V]; 4 open (no LoRA step to time) [A].
+- New, P0 [I]: the gate likely cannot run under the 32 GiB memguard as written. The provider holds 30.13 GB at open (measured) and the test stages a gradient subset through it (gpu_tape_2b.rs:16-18: "about 40 GB with a staged gradient table"); provider rows past T = 2,048 f32 were stopped on 2026-10-11. Options: save the provider reference once to disk from a run that fits, or read entries one at a time; or a user-approved memguard window. User decision.
+- New, P1 [A]: a provider 2B save/load row serves no one under D1 (the provider is not the LoRA path); measure adapter save and resume on the Tape instead. User decision.
+- New, P2 [A]: gpu_tape_2b samples memory after forward and backward only, where gpu_memory_rows reads the exact peak, and writes nothing to bench/results/.
+- Stale: header P0 vs body "P1 because ... Priority 1 -> 0" (:52, :64); "only the config and tokenizer are local" (:47) is false since 2026-10-12 [V]; README:230-235 is now :250-255 [V].

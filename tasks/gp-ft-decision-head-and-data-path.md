@@ -71,3 +71,14 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-model/src/heads.rs
 - ojas-autograd/src/tape.rs
 - ojas-data/src/bpe.rs
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: ready; nothing implemented [A]. The label-mask dependency landed (forward_loss takes `ignore`, forward.rs:249).
+- Criteria: 1 open: no forward_hidden for Qwen3.5 (h feeds lin_ce inline, forward.rs:~372); DevMap finds forward_hidden only in the GPT block (block.rs:339) [A]; 2 open: no gather op on Graph or Tape; inferred: `Tape::embedding` does not require a leaf table and its backward is a scatter-add (tape.rs:455, :1176), so a hidden-state gather may need no new op [I]; 3 open: no D17 in ojas; the parts exist (a 17-row lin_ce, frozen-gradient drop) and Lappi has AnswerRowDelta (python/qd_train/lora.py:245) [A]; 4 open; 5 partial: a right-pad -100 fixture exists (torch parity only), no alone-equals-batched test, no refusal API [A]; 6 open and mis-specified: load_hf_gpt2 (ojas-data/src/bpe.rs:582) never opens tokenizer.json, so the refusal needs a new probe on both entry points [A]; 7 n/a.
+- New, P1 [A]: the StepProvider contract (Lappi crates/qd-train/src/step.rs) cannot carry the 17 answer ids or a report-only full-vocab CE; decide where D17 lives first (host-side like the span head is an option).
+- New, P2 [V via gp-ft-frozen-params-and-lora]: the report-only full-vocab CE over a frozen tied table pays the [V, d] head gradient (tape.rs:955-990) until ft-2bbced18 lands.
+- Stale: forward.rs:109 is now :241 [A].
+- Acceptance path: criteria 1-5 and the contract decision are on it; 6 and 7 can wait (Lappi sends token ids).

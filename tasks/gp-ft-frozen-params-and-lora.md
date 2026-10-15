@@ -87,3 +87,14 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-model/src/qwen35/forward.rs
 - ojas-qwen35/src/step.rs
 - ojas-oracle/
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: merged at efa507f [V]. Header and body say ready, the board review; every criterion is still [ ] and there is no progress section. Propose: board review stays until (b') and the gaps below are ruled on.
+- Criteria: 1 partial: frozen leaves take no gradient (tape.rs:384, :1460-1462; tests frozen.rs:123-228) [A], but the optimizer-state, clip-norm and finite-check clauses have no consumer because no Qwen3.5 Tape trainer exists (gp-ft-trainer-loop) [A]; 2 partial: dX-only exists on the trait, CPU, Metal, Autocast and Gated with bit-parity and no-dW-charge tests, but the A/B bench (frozen_linear_bench.rs) is ignored and no result is committed [A]; 3, 4, 5, 7 met [A]; 6 partial: losses and bit-identical rerun pinned, but the final-adapter bound was relaxed to max(1e-5, 3 x torch's own fp32 noise floor) (qwen35_lora.rs, `b_prime_final_adapters_are_within_the_oracles_own_noise_floor`) and the literal 1e-5 test was dropped in 60efedc [V]; the brief needs amending or the relaxation ratified; 8 partial: LoraLinear merge/unmerge tested, the model-level fold exists only inside a test [A]; 9 met as documented, its pin gpu_parity.rs:654 is #[ignore] [A].
+- New, P2 [V]: no model-level LoRA test runs at scaling 1. Every (a'), (b'), (c') run uses RANK 4, ALPHA 8 (qwen35_common/lora.rs:21-22); the (b') sensitivity mutants vary alpha only by +1% and +0.1%. The pre-registered recipe is r = 16, alpha = 16, where `scaled_b` (lora.rs:308-316) returns B unscaled and LoraForward records no consts: the path the run takes is the one path no parity test exercises.
+- New, P2 [V]: no adapter read or write in src (`rg -uu lora_A|lora_B` over ojas-model, ojas-qwen35, ojas-io src finds only a doc comment, lora.rs:289); `fixture_sites` is a test helper. Shared-init parity and the kill -9 resume need it. Home: gp-ft-trainer-loop (checkpoint) or gp-ft-export (PEFT format).
+- Known, P1 [V]: a frozen tied head still gets a weight gradient: `Tape::fused_ce` always calls with want_grad = true and requires both gradients (tape.rs:955-990). Tracked by ft-2bbced18 (BREAK test frozen_adversarial.rs:280).
+- Stale: line 59 "no LoRA code ... no way to freeze a parameter" and the "Today ..." clauses of criteria 1, 2 and 9 are false; cited lines moved (tape.rs:362-365 -> :365-386, backend.rs:653-659 -> :659-690, step.rs:572-586 -> :655-686) [A].

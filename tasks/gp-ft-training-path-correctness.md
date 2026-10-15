@@ -85,3 +85,13 @@ Fixture regenerated with `ojas-oracle/python/qwen35_wide_fixture.py` (python3.14
 - safetensors dtypes: DONE. `StDtype` holds every spec dtype; an unfamiliar-but-spec dtype parses, typed reads of it are refused naming tensor and dtype, a name outside the spec still rejects the file (naming it). Tests `ojas-io/tests/unknown_dtype.rs`.
 - Wide fixture: DONE in place (`ojas-model/tests/fixtures/qwen35_tiny`): batch 2, 2 GDN heads, vocab 8320 (> one 8192-column CE tile), -100 labels (prompt 20 in row 0, padding 15 in row 1).
 - Moved-out items untouched, as ruled.
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: merged at b8a53ab [V]. The header says review, the body ready, the board in_progress: all stale. Propose: board done once the two GPU pins below have a recorded run, else review.
+- Criteria: 1 met (forward_loss takes `ignore`, forward.rs:248 -> lin_ce :377; transformers parity tests use Some(IGNORE)) [A]; 2 met, but its only pin `gpu_save_state_refuses_a_half_filled_gradient_bank` (ojas-qwen35/tests/gpu_save_state_bank.rs:80) is #[ignore] and GPU-only, no recorded run [A]; 3 met (config.rs:505-512, pinned by cpu_config.rs:374) [A]; 4 met (safetensors.rs:37-57, unknown_dtype.rs:19) [A]; 5 met (2 GDN heads, vocab 8,320 = two 8,192-column CE tiles, batch 2 with -100 labels) [A]; 6 (fails at d431949) unverified.
+- Stale: cited lines moved (forward.rs:195 -> :377, state.rs:613 -> :617, config.rs:503-508 -> :505-512, safetensors.rs:26-34 -> :24-57); "batch 1, one GDN head, vocab 64" is false; the Metal gradient bound is METAL_GRAD_BOUND = 2e-4 (qwen35_metal_tape.rs:25), not 1e-4 [A].
+- New, P3: the head-grouping refusal says no grouped golden exists; tessl has `tiny_grouped_gdn_step_matches_transformers_autograd` (tessl tests/qwen35_train.rs:326) [A].
+- Acceptance path: nothing left in code.

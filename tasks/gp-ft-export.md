@@ -63,3 +63,12 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-model/src/lora.rs
 - ojas-model/src/export.rs
 - ojas-io/src/safetensors.rs
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: backlog, P2; nothing on the ojas side [A]. On the acceptance path earlier than its placement: the reduced 2B row exports through this card.
+- Criteria: 1 partial: LoraLinear::merge folds in f32 and stores f32 (lora.rs:435-474), no bf16 round, no manifest, no ojas-model/src/export.rs, nothing maps split q/k/v back to the fused HF names [A]; 2 open on the ojas side (Lappi's qd-export/src/layout.rs:38-45 and qd-metal weights.rs:270 exist) [A]; 3 met on the Lappi side (merged-weight averaging, tools/ckpt_average.py) [A]; 4 open; 5 n/a.
+- New, P1 [V]: the single-seed route. The Mac row is one seed, D17 is part of the served model, Lappi's Metal export contract carries only tower.* and span_head.* (crates/qd-train/src/export.rs:1-20), and ckpt_average needs at least 2 inputs (tools/ckpt_average.py:1585). Add a criterion: a one-seed LoRA + D17 export the scorer reads (or a merged-only fallback named in the pre-registration).
+- Stale [A]: ojas-io already has a streaming writer (write_safetensors, safetensors.rs:437) and parses every dtype; the planned edit there is likely unnecessary.

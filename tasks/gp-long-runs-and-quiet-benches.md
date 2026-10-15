@@ -84,3 +84,10 @@ The user's current focus is LoRA fine-tuning on the Mac (Metal), run by sibling 
 - ojas-qwen35/README.md
 - ojas-qwen35/tests/gpu_tape_2b.rs
 - README.md
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Fine-tune scope only (the real-2B items). The real-2B Tape run was split to gp-qwen35-2b-metal-tape-run on 2026-10-09; this brief still lists gpu_tape_2b.rs and ojas-qwen35/README.md in its planned files [A]. Propose: strike the 2B item here so it is not counted twice.
+- Headroom: the only figure is README:213 (1.34 GB at the provider, 128 tokens); it is not comparable to the Tape rows (16-23 GB of 51.5 GB) [A].
