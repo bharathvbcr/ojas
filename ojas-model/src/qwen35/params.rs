@@ -306,14 +306,16 @@ impl Rows {
 /// module docs say.
 ///
 /// `linears` is the storage of every weight a `linear` reads (the gated
-/// delta net and attention projections and the MLP): `F32`, widened exactly
-/// from bf16 or f16, or `Bf16`, a frozen base held at 2 bytes per element.
-/// A `Bf16` weight is read from a BF16 checkpoint as stored, never widened,
-/// and from an F32 or F16 one rounded once to nearest even. The tied
-/// embedding, every norm weight, the convolutions, `A_log` and `dt_bias`
-/// are `F32` either way: their ops do not take bf16 operands
-/// ([`ojas_core::Backend::bf16_operands`] covers the matmul-class ops
-/// only). Any other `linears` dtype is [`OjasError::Dtype`].
+/// delta net and attention projections and the MLP), and `table` that of the
+/// tied embedding: `F32`, widened exactly from bf16 or f16, or `Bf16`, a
+/// frozen base held at 2 bytes per element. A `Bf16` weight is read from a
+/// BF16 checkpoint as stored, never widened, and from an F32 or F16 one
+/// rounded once to nearest even. A `Bf16` table feeds the gather and the
+/// fused LM head, which read it in place
+/// ([`ojas_core::Backend::bf16_operands`]'s tied-table lane: 1.02 GB instead
+/// of 2.03 GB at 2B). Every norm weight, the convolutions, `A_log` and
+/// `dt_bias` are `F32` either way: their ops do not take bf16 operands. Any
+/// other `linears` or `table` dtype is [`OjasError::Dtype`].
 ///
 /// Every name and shape of [`hf_tensors`] is checked from the header before
 /// any tensor is read; a missing tensor or another shape is refused by name.
@@ -323,19 +325,22 @@ pub fn load_hf(
     file: &SafeTensors<'_>,
     prefix: &str,
     linears: DType,
+    table: DType,
     budget: &Budget,
 ) -> Result<Qwen35Params<Tensor>, OjasError> {
     const OP: &str = "qwen35::load_hf";
-    if !matches!(linears, DType::F32 | DType::Bf16) {
-        return Err(OjasError::Dtype {
-            op: OP,
-            expected: DType::Bf16,
-            got: linears,
-        });
+    for storage in [linears, table] {
+        if !matches!(storage, DType::F32 | DType::Bf16) {
+            return Err(OjasError::Dtype {
+                op: OP,
+                expected: DType::Bf16,
+                got: storage,
+            });
+        }
     }
     spec.validate()?;
-    let table = hf_tensors(spec, prefix);
-    for want in &table {
+    let names = hf_tensors(spec, prefix);
+    for want in &names {
         let info = file
             .info(&want.name)
             .map_err(|e| refuse(OP, format!("{}: {e}", want.name)))?;
@@ -353,8 +358,8 @@ pub fn load_hf(
             .map_err(|e| refuse(OP, format!("{name}: {e}")))
     };
     let new = |v: &[f32], shape: &[usize]| Tensor::from_f32(v, shape, budget);
-    let read_lin = |name: &str| -> Result<Rows, OjasError> {
-        if linears == DType::F32 {
+    let read_as = |name: &str, storage: DType| -> Result<Rows, OjasError> {
+        if storage == DType::F32 {
             return read(name).map(Rows::F32);
         }
         let stored = file
@@ -371,10 +376,11 @@ pub fn load_hf(
             read(name)?.into_iter().map(f32_to_bf16).collect(),
         ))
     };
+    let read_lin = |name: &str| read_as(name, linears);
     let lin = |name: String, shape: &[usize]| read_lin(&name)?.tensor(shape, budget);
     let d = spec.hidden;
     let f = spec.intermediate;
-    let embed = new(&read(&table[0].name)?, &[spec.vocab, d])?;
+    let embed = read_as(&names[0].name, table)?.tensor(&[spec.vocab, d], budget)?;
     let mut layers = Vec::with_capacity(spec.layers.len());
     for (i, kind) in spec.layers.iter().enumerate() {
         let l = format!("{prefix}layers.{i}.");

@@ -69,8 +69,15 @@ fn a_bf16_frozen_base_gives_the_f32_bits_through_dx_only_on_metal() {
     let Some(m) = metal() else { return };
     let (d, sites) = (data(), fixture_sites(&lora_file(), true));
     let f32_base = host_params();
-    let bf16_base: Qwen35Params<Tensor> =
-        load_hf(&spec(), &base_file(), PREFIX, DType::Bf16, &budget()).unwrap();
+    let bf16_base: Qwen35Params<Tensor> = load_hf(
+        &spec(),
+        &base_file(),
+        PREFIX,
+        DType::Bf16,
+        DType::F32,
+        &budget(),
+    )
+    .unwrap();
     let full = lora_step(m.clone(), &f32_base, &sites, &d, &Opts::new());
     let half = lora_step(m, &bf16_base, &sites, &d, &Opts::new());
     assert_eq!(half.loss.to_bits(), full.loss.to_bits());

@@ -14,10 +14,12 @@
 //!   `Numerics::ExactF32`; `provider-bf16`: `Precision::Bf16`,
 //!   `Numerics::Bf16Operands`. One forward, backward and AdamW step.
 //! - `tape-f32` / `tape-bf16`: ojas's Tape on `MetalBackend`, linear weights
-//!   loaded `F32` or `Bf16` (`load_hf`), every layer a checkpointed segment,
-//!   one forward and backward. Every parameter takes a gradient: this is a
-//!   full-gradient step, not the LoRA step (the Tape has no frozen leaves
-//!   yet), so its peak over-counts a LoRA step's by the weight gradients.
+//!   loaded `F32` or `Bf16` (`load_hf`) and the tied table `F32`, every layer
+//!   a checkpointed segment, one forward and backward. `tape-bf16-table`:
+//!   `tape-bf16` with the tied table `Bf16` too, read in place by the gather
+//!   and the fused head. Every parameter takes a gradient (no leaf is
+//!   frozen): this is a full-gradient step, not the LoRA step, so its peak
+//!   over-counts a LoRA step's by the weight gradients.
 //!
 //! Every position is scored (the causal loss as letter rows), micro-batch 1.
 //! The snapshot is `QWEN35_MEM_SNAPSHOT`, or the one snapshot of
@@ -147,8 +149,9 @@ fn gpu_memory_row() {
     let mut row = match arm.as_str() {
         "provider-f32" => provider(&snap, &ids, Precision::F32, Numerics::ExactF32, row),
         "provider-bf16" => provider(&snap, &ids, Precision::Bf16, Numerics::Bf16Operands, row),
-        "tape-f32" => tape(&snap, &ids, DType::F32, row),
-        "tape-bf16" => tape(&snap, &ids, DType::Bf16, row),
+        "tape-f32" => tape(&snap, &ids, DType::F32, DType::F32, row),
+        "tape-bf16" => tape(&snap, &ids, DType::Bf16, DType::F32, row),
+        "tape-bf16-table" => tape(&snap, &ids, DType::Bf16, DType::Bf16, row),
         other => panic!("unknown QWEN35_MEM_ARM {other}"),
     };
     row.num("wall_ms", started.elapsed().as_millis() as u64);
@@ -224,7 +227,7 @@ fn provider(snap: &Snapshot, ids: &[u32], p: Precision, n: Numerics, mut r: Row)
     r
 }
 
-fn tape(snap: &Snapshot, ids: &[u32], linears: DType, mut r: Row) -> Row {
+fn tape(snap: &Snapshot, ids: &[u32], linears: DType, table: DType, mut r: Row) -> Row {
     let cfg = snap.config.clone();
     let spec = cfg.tape_spec();
     let n = ids.len() - 1;
@@ -235,7 +238,14 @@ fn tape(snap: &Snapshot, ids: &[u32], linears: DType, mut r: Row) -> Row {
     let host_budget = Budget::new(24 * GIB);
     let device = {
         let file = SafeTensors::open(&snap.weights_path).unwrap();
-        let host = match load_hf(&spec, &file, &cfg.tower_prefix, linears, &host_budget) {
+        let host = match load_hf(
+            &spec,
+            &file,
+            &cfg.tower_prefix,
+            linears,
+            table,
+            &host_budget,
+        ) {
             Ok(h) => h,
             Err(e) => refused(r, "load_hf", e),
         };
@@ -251,6 +261,10 @@ fn tape(snap: &Snapshot, ids: &[u32], linears: DType, mut r: Row) -> Row {
         r.num(
             "tied_embed_f32_bytes",
             (host.embed.num_elements().unwrap() * 4) as u64,
+        );
+        r.num(
+            "tied_embed_bytes",
+            (host.embed.num_elements().unwrap() * host.embed.dtype().size()) as u64,
         );
         match host.try_map(&mut |t| m.upload(t)) {
             Ok(d) => d,
