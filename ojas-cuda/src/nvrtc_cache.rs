@@ -107,16 +107,19 @@ impl<V: Clone> NvrtcCache<V> {
         self.stats
     }
 
+    #[cfg(feature = "harness")]
     /// Entries held.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[cfg(feature = "harness")]
     /// Whether the cache holds nothing.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    #[cfg(feature = "harness")]
     /// Image bytes held.
     pub fn bytes(&self) -> usize {
         self.bytes

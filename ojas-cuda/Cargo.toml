@@ -11,6 +11,11 @@ description = "NVIDIA CUDA device, Backend implementation, and whole-step traini
 default = []
 # Links cudarc. Off by default so a host without the CUDA driver still tests.
 cuda = ["dep:cudarc"]
+# The parity ladder (K0-K11 and K2(i) wrappers the step provider does not call
+# yet, host references, goldens, fixtures) and what the rung binaries share
+# (smokes, report CLI, json, npy). Not part of the library API; the bins
+# require it and this crate's own tests turn it on (dev-dependency below).
+harness = []
 
 [dependencies]
 ojas-core = { path = "../ojas-core" }
@@ -30,12 +35,17 @@ cudarc = { version = "=0.19.10", optional = true, default-features = false, feat
     "cuda-12080",
 ] }
 
+[dev-dependencies]
+# The crate itself with `harness`, so its unit and integration tests see the
+# ladder and the harness while the library's default build does not.
+ojas-cuda = { path = ".", features = ["harness"] }
+
 [[bin]]
 name = "rung0"
 path = "src/bin/rung0.rs"
-required-features = ["cuda"]
+required-features = ["cuda", "harness"]
 
 [[bin]]
 name = "runga"
 path = "src/bin/runga.rs"
-required-features = ["cuda"]
+required-features = ["cuda", "harness"]

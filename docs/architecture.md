@@ -56,7 +56,7 @@ flowchart TD
         Metal["ojas-metal (MetalBackend via tessl & MSL, device-resident)"]
         WGPU["ojas-wgpu (WgpuBackend, device-resident WGSL)"]
         Kernels["ojas-kernels (Shared WGSL/CUDA sources, workgroup geometry)"]
-        CUDA["ojas-cuda (one affine kernel, feature cuda; not a Backend)"]
+        CUDA["ojas-cuda (CudaBackend, feature cuda; compute ops Unsupported)"]
         HIP["ojas-hip (copy probe, feature hip; not a Backend)"]
     end
 

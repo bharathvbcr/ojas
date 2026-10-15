@@ -28,6 +28,9 @@ pub struct HipDevice {
 /// Copy larger than this is refused before `hipMalloc`. 1 GiB.
 pub const MAX_COPY_BYTES: usize = 1 << 30;
 
+/// Longest a copy's event wait may take before it is [`DeviceError::Launch`].
+pub const COPY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Byte length of an f32 copy, or [`DeviceError::Capacity`] when it does not fit.
 pub fn copy_bytes(elems: usize) -> Result<usize, DeviceError> {
     let bytes = elems
@@ -133,35 +136,31 @@ fn check_ordinal(ordinal: i32, count: i32) -> Result<(), DeviceError> {
     }
 }
 
+/// The copy's free-memory check: [`ojas_device::free_bytes_fit`].
 #[cfg_attr(not(feature = "hip"), allow(dead_code))]
 fn hip_free_covers(free: usize, need: usize) -> Result<(), DeviceError> {
-    if need > free {
-        Err(DeviceError::Capacity {
-            kind: Device::Hip,
-            detail: format!("hipMemGetInfo free {free} bytes, copy needs {need}"),
-        })
-    } else {
-        Ok(())
-    }
+    let bytes = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    ojas_device::free_bytes_fit(bytes(free), bytes(need))
+        .map_err(|short| short.capacity(Device::Hip, "hipMemGetInfo"))
 }
 
+/// The copy's event wait: [`ojas_device::poll_until`] with a 1 ms poll. A
+/// copy still running at `timeout` is [`DeviceError::Launch`], naming that
+/// bound.
 #[cfg_attr(not(feature = "hip"), allow(dead_code))]
-fn poll_until(
-    deadline: std::time::Instant,
-    mut ready: impl FnMut() -> Result<bool, DeviceError>,
+fn copy_wait(
+    timeout: std::time::Duration,
+    ready: impl FnMut() -> Result<bool, DeviceError>,
 ) -> Result<(), DeviceError> {
-    loop {
-        if ready()? {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(DeviceError::Launch {
-                kind: Device::Hip,
-                detail: "HIP copy did not finish within 30s".to_string(),
-            });
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    ojas_device::poll_until(
+        timeout,
+        std::time::Duration::from_millis(1),
+        ready,
+        |waited| DeviceError::Launch {
+            kind: Device::Hip,
+            detail: format!("HIP copy did not finish within {timeout:?} (waited {waited:?})"),
+        },
+    )
 }
 
 /// The HIP runtime calls this crate makes, declared to return the raw status.
@@ -394,8 +393,7 @@ fn copy_through_hip(ordinal: i32, input: &[f32]) -> Result<Vec<f32>, DeviceError
     hip_status("hipEventRecord", unsafe {
         ffi::hipEventRecord(event.0, stream.0)
     })?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    poll_until(deadline, || {
+    copy_wait(COPY_TIMEOUT, || {
         // SAFETY: `event` is a live handle recorded above.
         let status = unsafe { ffi::hipEventQuery(event.0) };
         if status == hip_runtime_sys::hipError_t::hipErrorNotReady as i32 {
@@ -536,7 +534,7 @@ mod tests {
 
     #[test]
     fn copy_wait_returns_when_the_deadline_has_passed() {
-        let err = poll_until(std::time::Instant::now(), || Ok(false)).unwrap_err();
+        let err = copy_wait(std::time::Duration::ZERO, || Ok(false)).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -547,7 +545,17 @@ mod tests {
             ),
             "{err}"
         );
-        assert!(poll_until(std::time::Instant::now(), || Ok(true)).is_ok());
+        assert!(copy_wait(std::time::Duration::ZERO, || Ok(true)).is_ok());
+    }
+
+    /// Pre-fix the message said "within 30s" whatever the deadline was.
+    #[test]
+    fn copy_wait_timeout_names_the_bound_it_was_given() {
+        let bound = std::time::Duration::from_millis(3);
+        let err = copy_wait(bound, || Ok(false)).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("within 3ms"), "{text}");
+        assert!(!text.contains("30s"), "{text}");
     }
 
     #[test]

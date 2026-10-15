@@ -10,6 +10,7 @@ description = "Tape autograd. CPU gradcheck; GPU backends upload."
 [dependencies]
 ojas-core = { path = "../ojas-core" }
 ojas-cpu = { path = "../ojas-cpu" }
+ojas-kernels = { path = "../ojas-kernels" }
 
 [dev-dependencies]
 ojas-wgpu = { path = "../ojas-wgpu" }

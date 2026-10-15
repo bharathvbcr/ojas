@@ -565,6 +565,7 @@ version = "0.1.0"
 dependencies = [
  "ojas-core",
  "ojas-cpu",
+ "ojas-kernels",
  "ojas-wgpu",
 ]
 
@@ -602,6 +603,7 @@ version = "0.1.0"
 dependencies = [
  "cudarc",
  "ojas-core",
+ "ojas-cuda",
  "ojas-device",
  "ojas-io",
  "ojas-kernels",
@@ -612,6 +614,7 @@ name = "ojas-data"
 version = "0.1.0"
 dependencies = [
  "ojas-core",
+ "ojas-kernels",
 ]
 
 [[package]]
@@ -645,6 +648,7 @@ version = "0.1.0"
 dependencies = [
  "ojas-core",
  "ojas-cpu",
+ "ojas-kernels",
  "ojas-metal",
  "ojas-model",
  "ojas-wgpu",

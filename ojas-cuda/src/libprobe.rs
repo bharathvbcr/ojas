@@ -17,7 +17,7 @@
 //! NVRTC loads `libnvrtc-builtins.so.12.8` by name at compile time, so both
 //! directories must be on `LD_LIBRARY_PATH`, not only the files cudarc names.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A library cudarc loads, by the names its `sys` module searches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +107,7 @@ pub fn missing_detail(spec: &LibrarySpec, candidates: &[String], ld_path: Option
     )
 }
 
+#[cfg(feature = "harness")]
 /// The absolute paths in a `/proc/self/maps` text whose file name starts with
 /// one of `prefixes`, sorted and de-duplicated.
 pub fn mapped_paths(maps: &str, prefixes: &[&str]) -> Vec<String> {
@@ -115,7 +116,7 @@ pub fn mapped_paths(maps: &str, prefixes: &[&str]) -> Vec<String> {
         .filter_map(|line| line.split_whitespace().nth(5))
         .filter(|path| path.starts_with('/'))
         .filter(|path| {
-            Path::new(path)
+            std::path::Path::new(path)
                 .file_name()
                 .and_then(|f| f.to_str())
                 .is_some_and(|f| prefixes.iter().any(|p| f.starts_with(p)))

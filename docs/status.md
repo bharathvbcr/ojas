@@ -99,7 +99,7 @@ flowchart LR
 
     subgraph Probes["Hardware Probes (Not Backends)"]
         direction TB
-        p1["ojas-cuda (one affine kernel, feature cuda)"]
+        p1["ojas-cuda (CudaBackend, feature cuda; compute ops Unsupported)"]
         p2["ojas-hip (copy probe, feature hip)"]
         p3["ojas-device (kinds, system profile, ResourcePlan, bandwidth)"]
     end

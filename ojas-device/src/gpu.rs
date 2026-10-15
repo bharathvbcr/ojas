@@ -1,17 +1,18 @@
-//! The crate's one bounded wait.
-//!
-//! Every wait on the device polls a readiness check until a timeout and then
-//! fails with the caller's error, never blocking without a bound: an
-//! unbounded `cuStreamSynchronize` on a hung or lost device would hang the
-//! process. [`crate::runtime::wait_stream`] and the device probe's
-//! affine check both wait through [`poll_until`].
+//! What the crates that link a GPU runtime (`ojas-cuda`, `ojas-hip`) share:
+//! the one bounded wait and the one free-memory check. Neither opens a
+//! device; each runtime calls them with its own readiness query and error.
 
 use std::time::{Duration, Instant};
+
+use crate::{Device, DeviceError};
 
 /// Poll `ready` every `interval` until it reports `true`, it fails, or
 /// `timeout` has passed, whichever comes first. `ready` is always called at
 /// least once, so a zero timeout still answers an already-finished wait. A
 /// timeout is `timed_out(waited)`. No sleep runs past the deadline.
+///
+/// Every device wait polls through this instead of blocking: an unbounded
+/// stream synchronize on a hung or lost device would hang the process.
 pub fn poll_until<E>(
     timeout: Duration,
     interval: Duration,
@@ -28,6 +29,37 @@ pub fn poll_until<E>(
             return Err(timed_out(waited));
         }
         std::thread::sleep(interval.min(timeout - waited));
+    }
+}
+
+/// `need` device bytes do not fit in the `free` bytes the runtime reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FreeShortfall {
+    pub need: u64,
+    pub free: u64,
+}
+
+impl FreeShortfall {
+    /// The shortfall as [`DeviceError::Capacity`] for `kind`, naming `op`.
+    pub fn capacity(self, kind: Device, op: &str) -> DeviceError {
+        DeviceError::Capacity {
+            kind,
+            detail: format!(
+                "{op}: {} device bytes needed, {} bytes free",
+                self.need, self.free
+            ),
+        }
+    }
+}
+
+/// Refuse `need` bytes more than the `free` bytes a device reported, before
+/// the driver is asked to allocate them. The figures come back structured so
+/// each runtime reports them in its own error type.
+pub fn free_bytes_fit(free: u64, need: u64) -> Result<(), FreeShortfall> {
+    if need > free {
+        Err(FreeShortfall { need, free })
+    } else {
+        Ok(())
     }
 }
 
@@ -131,5 +163,39 @@ mod tests {
         );
         assert_eq!(got, Err(E::TimedOut));
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_need_past_free_bytes_is_a_shortfall_and_equal_fits() {
+        assert_eq!(free_bytes_fit(64, 64), Ok(()));
+        assert_eq!(free_bytes_fit(64, 0), Ok(()));
+        assert_eq!(free_bytes_fit(0, 0), Ok(()));
+        assert_eq!(
+            free_bytes_fit(32, 64),
+            Err(FreeShortfall { need: 64, free: 32 })
+        );
+        assert_eq!(
+            free_bytes_fit(u64::MAX - 1, u64::MAX),
+            Err(FreeShortfall {
+                need: u64::MAX,
+                free: u64::MAX - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn a_shortfall_is_capacity_for_the_named_device_with_both_figures() {
+        let err = FreeShortfall { need: 16, free: 8 }.capacity(Device::Hip, "hipMemGetInfo");
+        match &err {
+            DeviceError::Capacity {
+                kind: Device::Hip,
+                detail,
+            } => {
+                assert!(detail.contains("hipMemGetInfo"), "{detail}");
+                assert!(detail.contains("16 device bytes"), "{detail}");
+                assert!(detail.contains("8 bytes free"), "{detail}");
+            }
+            other => panic!("{other}"),
+        }
     }
 }

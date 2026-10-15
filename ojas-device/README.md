@@ -85,4 +85,4 @@ The plan never widens the caller's request:
 > In `ojas`, selecting `Device::Cuda` or `Device::Hip` when that runtime is disabled returns `Err(DeviceError::NotCompiled)` immediately. Calling an unsupported operation on a device returns `Err(DeviceError::DeviceMismatch)`.
 
 > [!NOTE]
-> `ojas-device` defines device kinds and memory policies; it does **not** open GPU contexts or implement compute backends. Driver initialization and backend kernels reside in `ojas-metal`, `ojas-wgpu`, `ojas-cuda`, and `ojas-hip`.
+> `ojas-device` defines device kinds and memory policies; it does **not** open GPU contexts or implement compute backends. Driver initialization and backend kernels reside in `ojas-metal`, `ojas-wgpu`, `ojas-cuda`, and `ojas-hip`. What `ojas-cuda` and `ojas-hip` share lives here once: `poll_until`, the bounded wait every device wait polls through, and `free_bytes_fit`, the check that refuses an allocation larger than the free bytes the driver reported.

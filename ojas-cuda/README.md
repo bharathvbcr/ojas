@@ -1,10 +1,11 @@
 # ojas-cuda
 
 NVIDIA CUDA for ojas, through `cudarc` (0.19.10, `cuda-12080` bindings, libraries loaded at run
-time). Three things live here:
+time). Two things are its API:
 
-- `CudaDevice`: the device probe (open ordinal 0, run one affine kernel before `Ok`).
-- `CudaBackend`: the `ojas_core::Backend` implementation. `upload`, `download` and `sync` work;
+- `CudaBackend`: the `ojas_core::Backend` implementation, and the device probe:
+  `CudaBackend::open(budget)` is `DeviceError::NotCompiled` without the `cuda` feature, and with it
+  opens device 0 through `CudaRuntime`. `upload`, `download` and `sync` work;
   every compute op returns `OjasError::Unsupported` naming the op. A sticky driver failure
   (an illegal address, a failed launch, a device-side assert, …) is
   `OjasError::DeviceLost`, so a caller stops instead of retrying on a dead context.
@@ -23,7 +24,7 @@ time). Three things live here:
     copy has finished: NVIDIA documents an async copy from pageable memory only as one that "might
     be synchronous with respect to host", and cudarc keeps nothing alive for a `&[T]` source. The
     wait is bounded (`sync_timeout`), as is every device wait, a tensor readback's included
-    (`src/wait.rs`).
+    (`ojas_device::poll_until`, shared with `ojas-hip`).
   - Not selectable through the C ABI or Go yet: device 5 (`DEVICE_CUDA`, `DeviceCUDA`) is refused
     by name until gp-cuda-backend-provider lands, because the runtime is an `Rc` (not `Send`) and
     no compute op is implemented.
@@ -35,6 +36,21 @@ time). Three things live here:
 
 Everything that touches a device is behind the `cuda` feature, off by default. Without it the
 crate builds on any host and its host-side tests run there.
+
+**What stays public** (the default build): `CudaBackend` (`backend`), `Qwen35Step` and its contract
+(`step`), `CudaError` (`error`), and, behind `cuda`, what `CudaBackend::with_runtime` and
+`CudaBackend::runtime` hand over: `CudaRuntime`, `DeviceInfo`, `RuntimeConfig` (`runtime`) and
+`CudaBuffer`, `CudaDeviceBuffer` (`buffer`). The C ABI does not link this crate yet (device 5 is
+refused by name), so it adds nothing. The runtime's own pieces (`budget`, `nvrtc_cache`,
+`libprobe`, `geometry`, `kernels`) are private.
+
+**The `harness` feature**, off by default, compiles the rest: the parity ladder the step provider
+does not call yet (the K0–K11 and K2(i) wrappers, their plans, host references and emulations) and
+what the rung binaries and the device tests share (`smoke` and the `*_smoke` modules, `report_cli`,
+`rung0_cli`, `check`, `json`, `npy`, `inputs`, `k11_golden`, `tiny_fixture_published`, `host_ref`).
+The rung binaries require it. The crate's tests turn it on themselves (a dev-dependency on
+`ojas-cuda` with `harness`), so `cargo test -p ojas-cuda` still runs every host test. A ladder
+module joins the default build when the step provider starts calling it.
 
 **Status (2026-10-06).** Milestones M0 (K0, K1) and M1 (K8, K11, the tiny-fixture loader), K2(i)
 (GDN at the published rule), and L-cuda-small's K3, K4, K6, K7, K9, K10. On 2026-10-05 the GH200
@@ -58,7 +74,7 @@ merged from. The merged crate has not yet run on a device.
 | K3 gates, K4 conv1d, K6 q/k norm + RoPE, K7 RMSNorm, K9 embed, K10 cross-entropy rows, and their shared reductions | `src/small_common.rs` and one `*.rs` / `*_cuda.rs` pair each | host mirrors and goldens |
 | Tiny-fixture loader: tessl's `qwen35_train` (config through `ojas_io`'s JSON reader, BF16 safetensors, `.npy` gradients), into device buffers | `src/tiny_fixture_published.rs` | parse, tamper and symlink refusal |
 | The report, the watchdog and the end of `main`, shared by both rung binaries | `src/report_cli.rs` | unit tests, and the watchdog end to end (`tests/watchdog_exit.rs`) |
-| Rung-0 and rung-(a) binaries | `src/bin/rung0.rs`, `src/bin/runga.rs` | arguments, refusal path |
+| Rung-0 and rung-(a) binaries (`--features cuda,harness`) | `src/bin/rung0.rs`, `src/bin/runga.rs` | arguments, refusal path |
 
 Host references (`src/host_ref.rs`) are bitwise for K0 and for the FFMA GEMM, and float64 for GEMM
 tolerances. The float64 references live in `tests/reference/`.
@@ -133,7 +149,7 @@ Cross-build for the GH200 (aarch64, glibc 2.39 sysroot), the recipe in
 time.
 
 ```bash
-CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C linker-flavor=gcc" cargo build --offline --release --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda --bin rung0 --bin runga --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot-aarch64-linux-gnu/link.sh CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C linker-flavor=gcc" cargo build --offline --release --target aarch64-unknown-linux-gnu -p ojas-cuda --features cuda,harness --bin rung0 --bin runga --target-dir /Users/bharath/qd-campaign/target-aarch64-linux-ojas-cuda
 ```
 
 ```bash
