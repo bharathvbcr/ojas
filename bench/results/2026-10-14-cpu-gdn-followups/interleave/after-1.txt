@@ -1,0 +1,30 @@
+public API baseline-or-after. warmup 3 reps 20 min/median us. threads noted per row. load { 25.40 21.91 20.47 }
+gdn_fwd B=1 T=512 H=1 Dk=128 Dv=128 threads=1 min_us=2110.7 med_us=2332.8
+gdn_fwd B=1 T=512 H=1 Dk=128 Dv=128 threads=6 min_us=2080.2 med_us=2449.4
+gdn_fwd B=1 T=512 H=16 Dk=128 Dv=128 threads=1 min_us=40185.5 med_us=42424.1
+gdn_fwd B=1 T=512 H=16 Dk=128 Dv=128 threads=6 min_us=10271.6 med_us=15648.4
+gdn_fwd B=4 T=512 H=1 Dk=128 Dv=128 threads=1 min_us=9128.8 med_us=9168.7
+gdn_fwd B=4 T=512 H=1 Dk=128 Dv=128 threads=6 min_us=2885.8 med_us=4316.5
+gdn_bwd B=1 T=512 H=16 Dk=128 Dv=128 threads=6 reps=8 warmup=1 min_us=93922.6 med_us=153341.0
+mul_fwd n=1048576 threads=1 min_us=122.2 med_us=145.5
+mul_fwd n=2097152 threads=1 min_us=282.9 med_us=295.8
+mul_fwd n=4194304 threads=1 min_us=553.0 med_us=743.8
+mul_fwd n=1048576 threads=4 min_us=97.3 med_us=125.5
+mul_fwd n=2097152 threads=4 min_us=153.6 med_us=196.0
+mul_fwd n=4194304 threads=4 min_us=336.6 med_us=390.4
+mul_fwd n=1048576 threads=6 min_us=100.3 med_us=119.8
+mul_fwd n=2097152 threads=6 min_us=162.7 med_us=241.0
+mul_fwd n=4194304 threads=6 min_us=340.4 med_us=372.1
+mul_fwd n=1048576 threads=8 min_us=76.8 med_us=101.3
+mul_fwd n=2097152 threads=8 min_us=150.8 med_us=277.6
+mul_fwd n=4194304 threads=8 min_us=331.2 med_us=451.2
+rms_fwd small rows=1536 dim=128 threads=1 min_us=61.5 med_us=62.3
+rms_fwd large rows=65536 dim=128 threads=1 min_us=4316.2 med_us=5248.0
+rms_fwd small rows=1536 dim=128 threads=2 min_us=65.2 med_us=65.9
+rms_fwd large rows=65536 dim=128 threads=2 min_us=2184.6 med_us=2745.7
+rms_fwd small rows=1536 dim=128 threads=4 min_us=62.5 med_us=63.6
+rms_fwd large rows=65536 dim=128 threads=4 min_us=1201.5 med_us=1435.1
+rms_fwd small rows=1536 dim=128 threads=6 min_us=54.8 med_us=63.2
+rms_fwd large rows=65536 dim=128 threads=6 min_us=991.7 med_us=1257.5
+spawn_extra=1 stack=8MiB reps=50 warmup=5 min_us=16.6 med_us=21.6
+spawn_extra=5 stack=8MiB reps=50 warmup=5 min_us=40.9 med_us=80.2

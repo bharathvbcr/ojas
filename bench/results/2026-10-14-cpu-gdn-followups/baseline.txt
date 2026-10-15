@@ -1,0 +1,56 @@
+## baseline 2026-10-14 unmodified tree
+machine: Apple M5 Pro, 18 cores
+method: release, same process, min after warmup. load is vm.loadavg at the start of each file.
+
+public API baseline-or-after. warmup 3 reps 20 min/median us. threads noted per row. load { 25.56 20.18 18.76 }
+gdn_fwd B=1 T=512 H=1 Dk=128 Dv=128 threads=1 min_us=1636.0 med_us=1914.4
+gdn_fwd B=1 T=512 H=1 Dk=128 Dv=128 threads=6 min_us=1640.0 med_us=1925.7
+gdn_fwd B=1 T=512 H=16 Dk=128 Dv=128 threads=1 min_us=30730.0 med_us=33734.8
+gdn_fwd B=1 T=512 H=16 Dk=128 Dv=128 threads=6 min_us=8185.9 med_us=8754.6
+gdn_fwd B=4 T=512 H=1 Dk=128 Dv=128 threads=1 min_us=6666.3 med_us=7284.3
+gdn_fwd B=4 T=512 H=1 Dk=128 Dv=128 threads=6 min_us=2207.8 med_us=2818.0
+gdn_bwd B=1 T=512 H=16 Dk=128 Dv=128 threads=6 reps=8 warmup=1 min_us=72334.8 med_us=74795.7
+mul_fwd n=1048576 threads=1 min_us=105.0 med_us=115.9
+mul_fwd n=2097152 threads=1 min_us=223.1 med_us=232.9
+mul_fwd n=4194304 threads=1 min_us=515.8 med_us=543.2
+mul_fwd n=1048576 threads=4 min_us=77.1 med_us=103.5
+mul_fwd n=2097152 threads=4 min_us=149.0 med_us=184.6
+mul_fwd n=4194304 threads=4 min_us=286.8 med_us=331.4
+mul_fwd n=1048576 threads=6 min_us=89.6 med_us=110.5
+mul_fwd n=2097152 threads=6 min_us=112.5 med_us=141.9
+mul_fwd n=4194304 threads=6 min_us=266.2 med_us=313.9
+mul_fwd n=1048576 threads=8 min_us=112.9 med_us=153.6
+mul_fwd n=2097152 threads=8 min_us=157.2 med_us=184.4
+mul_fwd n=4194304 threads=8 min_us=270.1 med_us=297.8
+rms_fwd small rows=1536 dim=128 threads=1 min_us=46.8 med_us=48.9
+rms_fwd large rows=65536 dim=128 threads=1 min_us=2205.5 med_us=2576.7
+rms_fwd small rows=1536 dim=128 threads=2 min_us=47.2 med_us=63.4
+rms_fwd large rows=65536 dim=128 threads=2 min_us=1347.2 med_us=1573.4
+rms_fwd small rows=1536 dim=128 threads=4 min_us=57.9 med_us=97.7
+rms_fwd large rows=65536 dim=128 threads=4 min_us=1114.0 med_us=1261.5
+rms_fwd small rows=1536 dim=128 threads=6 min_us=88.0 med_us=106.3
+rms_fwd large rows=65536 dim=128 threads=6 min_us=831.5 med_us=1062.3
+spawn_extra=1 stack=8MiB reps=50 warmup=5 min_us=28.7 med_us=39.2
+spawn_extra=5 stack=8MiB reps=50 warmup=5 min_us=55.5 med_us=75.9
+mul pieces A/B 4 vs live. warmup 3 reps 24 alternating order. load { 13.01 17.91 17.94 }
+us are one mul_forward_with_pieces call, inputs outside the timer, output dropped
+threads=1 n=1048576 live_pieces=2 four_min_us=99.8 four_med_us=107.1 live_min_us=101.0 live_med_us=110.2 faster_min=four four_over_live=0.9872
+threads=1 n=2097152 live_pieces=2 four_min_us=233.3 four_med_us=264.1 live_min_us=225.5 live_med_us=279.1 faster_min=live four_over_live=1.0346
+threads=1 n=4194304 live_pieces=2 four_min_us=508.0 four_med_us=571.8 live_min_us=512.7 live_med_us=565.2 faster_min=four four_over_live=0.9908
+threads=4 n=1048576 live_pieces=8 four_min_us=115.5 four_med_us=159.3 live_min_us=89.0 live_med_us=152.2 faster_min=live four_over_live=1.2978
+threads=4 n=2097152 live_pieces=8 four_min_us=164.3 four_med_us=210.3 live_min_us=144.2 live_med_us=185.6 faster_min=live four_over_live=1.1389
+threads=4 n=4194304 live_pieces=8 four_min_us=325.3 four_med_us=388.0 live_min_us=290.2 live_med_us=366.6 faster_min=live four_over_live=1.1207
+threads=6 n=1048576 live_pieces=12 four_min_us=89.1 four_med_us=124.9 live_min_us=94.4 live_med_us=140.9 faster_min=four four_over_live=0.9435
+threads=6 n=2097152 live_pieces=12 four_min_us=139.7 four_med_us=221.4 live_min_us=157.6 live_med_us=210.7 faster_min=four four_over_live=0.8861
+threads=6 n=4194304 live_pieces=12 four_min_us=296.2 four_med_us=370.7 live_min_us=277.6 live_med_us=356.1 faster_min=live four_over_live=1.0668
+threads=8 n=1048576 live_pieces=16 four_min_us=98.4 four_med_us=130.6 live_min_us=148.2 live_med_us=178.6 faster_min=four four_over_live=0.6636
+threads=8 n=2097152 live_pieces=16 four_min_us=142.8 four_med_us=219.8 live_min_us=174.2 live_med_us=214.2 faster_min=four four_over_live=0.8194
+threads=8 n=4194304 live_pieces=16 four_min_us=287.3 four_med_us=363.0 live_min_us=257.4 live_med_us=328.5 faster_min=live four_over_live=1.1162
+chunks_into triad thread A/B. warmup 3 reps 24 round-robin. ROW_MIN=32768. load { 26.39 20.26 18.77 }
+n=65536 bytes=262144 best_threads=1 t1_min_us=4.9 t1_med_us=6.5 t2_min_us=29.3 t2_med_us=42.8 t4_min_us=24.2 t4_med_us=43.5 t6_min_us=21.9 t6_med_us=41.4
+n=196608 bytes=786432 best_threads=1 t1_min_us=17.0 t1_med_us=18.6 t2_min_us=21.3 t2_med_us=54.2 t4_min_us=47.9 t4_med_us=83.1 t6_min_us=66.5 t6_med_us=93.6
+n=393216 bytes=1572864 best_threads=1 t1_min_us=30.8 t1_med_us=37.1 t2_min_us=38.6 t2_med_us=72.9 t4_min_us=68.2 t4_med_us=101.3 t6_min_us=91.6 t6_med_us=114.2
+n=786432 bytes=3145728 best_threads=2 t1_min_us=75.3 t1_med_us=82.9 t2_min_us=60.8 t2_med_us=88.6 t4_min_us=68.5 t4_med_us=109.6 t6_min_us=88.7 t6_med_us=123.9
+n=1572864 bytes=6291456 best_threads=4 t1_min_us=152.7 t1_med_us=181.0 t2_min_us=110.8 t2_med_us=162.3 t4_min_us=106.2 t4_med_us=160.6 t6_min_us=133.2 t6_med_us=170.0
+n=2097152 bytes=8388608 best_threads=4 t1_min_us=210.7 t1_med_us=230.2 t2_min_us=167.7 t2_med_us=220.8 t4_min_us=135.2 t4_med_us=196.6 t6_min_us=165.6 t6_med_us=205.1
+n=8388608 bytes=33554432 best_threads=6 t1_min_us=984.3 t1_med_us=1098.4 t2_min_us=684.5 t2_med_us=872.8 t4_min_us=617.9 t4_med_us=711.4 t6_min_us=579.0 t6_med_us=648.1

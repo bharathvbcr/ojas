@@ -529,11 +529,15 @@ pub(crate) fn silu_backward(
 /// threads, the same cut as [`fill_outs_chunked_trusted`] with width 1
 /// (`(n / ROW_MIN_ELEMS).clamp(1, threads * 2)`). One chunk, or one thread,
 /// stays on the calling thread. Fewer chunks lost on backward, so backward
-/// keeps that count. Forward does too, except at 6 threads for a length
-/// from `1024 * 1024` through `1024 * 2048` inclusive, which uses 4 pieces.
-/// Release, same process, alternating, min of 24 after 2 warmups: 4 pieces
-/// beat the 12-piece cut at both ends of that band and lost at double the
-/// upper end, which stays on the live cut. Each value is the same single
+/// keeps that count. Forward does too, except when the pool has at least 6
+/// threads and the length is from `1024 * 1024` through `1024 * 2048`
+/// inclusive, which uses 4 pieces. Measured 2026-10-14, same process,
+/// alternating, min of 24 after 3 warmups, at 1, 4, 6 and 8 threads
+/// (`bench/results/2026-10-14-cpu-gdn-followups/pieces-ab.txt`): 4 pieces
+/// lost to the live cut at 4 threads inside the band (1.30× and 1.14×) and
+/// won at 6 (0.94×, 0.89×) and at 8 (0.66×, 0.82×). At `1024 * 4096` the
+/// live cut won at 4, 6 and 8 threads, so that length stays on it. Threads
+/// 5 and 7 were not measured. Each value is the same single
 /// rounding wherever it is computed, so the bits do not depend on the split.
 /// A serial one-write was
 /// slower for this shape at 6 threads, and so was `vDSP_vmul` on those
@@ -562,16 +566,12 @@ pub(crate) fn mul_forward(
         })?;
     let reservation = budget.try_reserve(bytes)?;
     // Width-1 cut of `chunks_into_n` / `fill_outs_chunked_trusted`, except
-    // 6 threads on [1024*1024, 1024*2048]. Forward-only, release, same
-    // process, alternating, min of 24 after 2 warmups against the live cut
-    // (12 pieces at these lengths): 4 pieces was 0.0655 ms vs 0.0828 ms at
-    // the low end and 0.1227 ms vs 0.1383 ms at 1024*2048. At double
-    // (1024*4096) the live cut was faster, 0.2552 ms vs 0.2943 ms, so the
-    // band stops at the upper end.
+    // at least 6 threads on [1024*1024, 1024*2048]. The 2026-10-14 A/B is
+    // in the function comment. Bits do not depend on the split.
     let min_chunk = scoped::min_rows(1);
     let wide = exec.pool.threads().saturating_mul(2);
     let live = (n / min_chunk.max(1)).clamp(1, wide);
-    let pieces = if exec.pool.threads() == 6 && ((1024 * 1024)..=(1024 * 2048)).contains(&n) {
+    let pieces = if exec.pool.threads() >= 6 && ((1024 * 1024)..=(1024 * 2048)).contains(&n) {
         4
     } else {
         live
@@ -583,6 +583,39 @@ pub(crate) fn mul_forward(
         [a, b],
         shape,
         pieces,
+        reservation,
+        mul_lane,
+    )
+}
+
+/// Bench-only: the same product as [`mul_forward`] with the caller choosing
+/// the piece count. Not a second production path; `cargo build` drops it.
+#[cfg(test)]
+pub(crate) fn mul_forward_with_pieces(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    a: &[f32],
+    b: &[f32],
+    shape: &[usize],
+    pieces: usize,
+) -> Result<Tensor, OjasError> {
+    let n = a.len();
+    same_len(op, &[n, b.len(), product(op, shape)?], "mul operand")?;
+    let bytes = (n as u64)
+        .checked_mul(4)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: format!("{n} * 4 overflows u64"),
+        })?;
+    let reservation = budget.try_reserve(bytes)?;
+    zip_forward(
+        op,
+        budget,
+        exec,
+        [a, b],
+        shape,
+        pieces.max(1),
         reservation,
         mul_lane,
     )
@@ -3202,5 +3235,117 @@ mod tests {
             "e={e:?} neg={neg} scale={scale:?}"
         );
         *checked += 1;
+    }
+}
+
+/// Release interleaved A/B of 4 pieces against the live width-1 cut.
+/// `cargo test -p ojas-cpu --release --lib followup_bench_mul_pieces -- --ignored --nocapture --test-threads=1`
+#[cfg(test)]
+mod followup_bench {
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use ojas_core::{Budget, Numerics};
+
+    use super::mul_forward_with_pieces;
+    use crate::pool::{Exec, Pool, ROW_MIN_ELEMS};
+
+    fn live_pieces(threads: usize, n: usize) -> usize {
+        let wide = threads.saturating_mul(2);
+        (n / ROW_MIN_ELEMS.max(1)).clamp(1, wide)
+    }
+
+    fn min_median(samples: &mut [f64]) -> (f64, f64) {
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = samples.len() / 2;
+        let median = if samples.len().is_multiple_of(2) {
+            (samples[mid - 1] + samples[mid]) / 2.0
+        } else {
+            samples[mid]
+        };
+        (samples[0], median)
+    }
+
+    #[test]
+    #[ignore = "release measurement; writes bench/results"]
+    fn followup_bench_mul_pieces() {
+        const WARMUP: usize = 3;
+        const REPS: usize = 24;
+        let sizes = [1024 * 1024, 1024 * 2048, 1024 * 4096];
+        let threads_n = [1usize, 4, 6, 8];
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "mul pieces A/B 4 vs live. warmup {WARMUP} reps {REPS} alternating order. load {}",
+            loadavg()
+        ));
+        lines.push(
+            "us are one mul_forward_with_pieces call, inputs outside the timer, output dropped"
+                .to_string(),
+        );
+        for &threads in &threads_n {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            let exec = || Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            };
+            for &n in &sizes {
+                let budget = Budget::new((n as u64) * 16 + (1 << 20));
+                let a = vec![1.25f32; n];
+                let b = vec![0.75f32; n];
+                let live = live_pieces(threads, n);
+                let mut us4 = Vec::with_capacity(REPS);
+                let mut us_live = Vec::with_capacity(REPS);
+                let time_pieces = |pieces: usize| {
+                    let t = Instant::now();
+                    let y = mul_forward_with_pieces("b", &budget, exec(), &a, &b, &[n], pieces)
+                        .unwrap();
+                    let us = t.elapsed().as_secs_f64() * 1e6;
+                    std::hint::black_box(y.f32_slice().unwrap()[0]);
+                    us
+                };
+                for _ in 0..WARMUP {
+                    let _ = time_pieces(4);
+                    let _ = time_pieces(live);
+                }
+                us4.clear();
+                us_live.clear();
+                for i in 0..REPS {
+                    if i % 2 == 0 {
+                        us4.push(time_pieces(4));
+                        us_live.push(time_pieces(live));
+                    } else {
+                        us_live.push(time_pieces(live));
+                        us4.push(time_pieces(4));
+                    }
+                }
+                let (min4, med4) = min_median(&mut us4);
+                let (min_l, med_l) = min_median(&mut us_live);
+                let faster = if min4 < min_l { "four" } else { "live" };
+                lines.push(format!(
+                    "threads={threads} n={n} live_pieces={live} four_min_us={min4:.1} four_med_us={med4:.1} live_min_us={min_l:.1} live_med_us={med_l:.1} faster_min={faster} four_over_live={:.4}",
+                    min4 / min_l
+                ));
+                eprintln!("{}", lines.last().unwrap());
+            }
+        }
+        let dir = format!(
+            "{}/../bench/results/2026-10-14-cpu-gdn-followups",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/pieces-ab.txt");
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+        eprintln!("wrote {path}");
+    }
+
+    fn loadavg() -> String {
+        std::process::Command::new("sysctl")
+            .args(["-n", "vm.loadavg"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unavailable".to_string())
     }
 }

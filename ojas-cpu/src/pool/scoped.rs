@@ -31,11 +31,19 @@
 //! erased across the worker handoff) here, where the crate forbids it, or a
 //! new dependency whose scope API does that soundly (for example rayon's
 //! `scope`). Both need the owner's approval, and neither has it, so every
-//! split keeps paying this spawn and those two rows stay open. Two std-only
-//! mitigations remain open and unmeasured: spawning fewer threads for small
-//! bandwidth-bound passes (about 9 µs for one thread against 35 µs for five;
-//! the cut is shape-only, so no bit changes), and one scope around a whole
-//! optimizer or clip step.
+//! split keeps paying this spawn and those two rows stay open. The two
+//! std-only mitigations were measured on 2026-10-14
+//! (`bench/results/2026-10-14-cpu-gdn-followups/`,
+//! `docs/bench-cpu-vs-torch.md`). [`chunks_into_n`] runs a pass on the
+//! calling thread when its outputs total at most 2 MiB: a 1.5 MiB triad
+//! was 30.8 µs on one thread against 91.6 µs at six, and a 3 MiB triad was
+//! faster with more than one thread (60.8 µs at two against 75.3 µs
+//! serial), so a larger pass keeps the pool's width. Piece boundaries stay
+//! the ones [`pieces`] already chose, so reduction order does not move.
+//! One scope around a whole optimizer or clip step was rejected. Five extra
+//! threads on a trivial task cost 55.5 µs minimum against 28.7 µs for one
+//! (median 75.9 against 39.2), and wrapping the parameter loop would edit
+//! `trainer.rs` / `optim.rs`, which this cut does not.
 
 use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -215,6 +223,9 @@ where
             )));
         }
     }
+    // Shape only: the same pieces, on the calling thread when the outputs
+    // are at most 2 MiB. An overflowing byte sum is treated as large.
+    let small = output_bytes_within(&outs, 2 << 20);
     let parts = pieces(exec, len, min_chunk);
     let mut cuts = Vec::with_capacity(N);
     for (out, width) in outs.into_iter().zip(widths) {
@@ -233,7 +244,7 @@ where
             .map_err(|_| backend("chunks_into: a piece lacks an output".to_string()))?;
         slices.push(piece);
     }
-    if parts.len() == 1 || exec.pool.threads() <= 1 {
+    if parts.len() == 1 || exec.pool.threads() <= 1 || small {
         return parts
             .into_iter()
             .zip(slices)
@@ -241,6 +252,18 @@ where
             .collect();
     }
     fill_parts(exec, slices, |i, part| task(parts[i].clone(), part))
+}
+
+/// `outs` together hold at most `max_bytes` f32 bytes. Overflow is not small.
+fn output_bytes_within<const N: usize>(outs: &[&mut [f32]; N], max_bytes: usize) -> bool {
+    let mut bytes = 0usize;
+    for out in outs {
+        match out.len().checked_mul(4).and_then(|n| bytes.checked_add(n)) {
+            Some(sum) => bytes = sum,
+            None => return false,
+        }
+    }
+    bytes <= max_bytes
 }
 
 /// The pieces [`chunks_into_n`] cuts items `0..len` into: at least
@@ -424,5 +447,124 @@ mod tests {
                 (t, other) => panic!("threads {t}: {:?}", other.map(|r| r.map(drop))),
             }
         }
+    }
+
+    /// Release A/B of pool widths on a bandwidth-bound `chunks_into` triad.
+    /// The piece cut stays the production one; only the pool width changes.
+    #[test]
+    #[ignore = "release measurement; writes bench/results"]
+    fn followup_bench_chunks_threads() {
+        use std::time::Instant;
+
+        const WARMUP: usize = 3;
+        const REPS: usize = 24;
+        let thread_counts = [1usize, 2, 4, 6];
+        let lengths = [
+            2 * ROW_MIN_ELEMS,
+            6 * ROW_MIN_ELEMS,
+            12 * ROW_MIN_ELEMS,
+            24 * ROW_MIN_ELEMS,
+            48 * ROW_MIN_ELEMS,
+            64 * ROW_MIN_ELEMS,
+            256 * ROW_MIN_ELEMS,
+        ];
+        let mut lines = vec![format!(
+            "chunks_into triad thread A/B. warmup {WARMUP} reps {REPS} round-robin. ROW_MIN={ROW_MIN_ELEMS}. load {}",
+            loadavg()
+        )];
+        for &n in &lengths {
+            let a = vec![1.01f32; n];
+            let b = vec![0.99f32; n];
+            let pools: Vec<Arc<Pool>> = thread_counts
+                .iter()
+                .copied()
+                .map(|t| Arc::new(Pool::new(t).unwrap()))
+                .collect();
+            let mut samples = vec![Vec::with_capacity(REPS); thread_counts.len()];
+            let mut out = vec![0.0f32; n];
+            let run = |pool: &Arc<Pool>, out: &mut [f32]| {
+                let exec = Exec {
+                    pool,
+                    numerics: Numerics::Fast,
+                };
+                chunks_into(exec, out, n, 1, ROW_MIN_ELEMS, |range, part| {
+                    for (o, (&x, &y)) in part.iter_mut().zip(a[range.clone()].iter().zip(&b[range]))
+                    {
+                        *o = x * y;
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            };
+            for _ in 0..WARMUP {
+                for pool in &pools {
+                    run(pool, &mut out);
+                }
+            }
+            for _ in 0..REPS {
+                for (pool, bucket) in pools.iter().zip(samples.iter_mut()) {
+                    let t = Instant::now();
+                    run(pool, &mut out);
+                    bucket.push(t.elapsed().as_secs_f64() * 1e6);
+                    std::hint::black_box(out[0]);
+                }
+            }
+            let mut parts = Vec::new();
+            let mut mins = Vec::new();
+            for (threads, bucket) in thread_counts.iter().zip(samples.iter_mut()) {
+                let (mn, med) = min_median(bucket);
+                mins.push(mn);
+                parts.push(format!(
+                    "t{threads}_min_us={mn:.1} t{threads}_med_us={med:.1}"
+                ));
+            }
+            let best = mins
+                .iter()
+                .enumerate()
+                .min_by(|p, q| p.1.partial_cmp(q.1).unwrap())
+                .map(|(i, _)| thread_counts[i])
+                .unwrap();
+            lines.push(format!(
+                "n={n} bytes={} best_threads={best} {}",
+                n * 4,
+                parts.join(" ")
+            ));
+            eprintln!("{}", lines.last().unwrap());
+        }
+        let dir = format!(
+            "{}/../bench/results/2026-10-14-cpu-gdn-followups",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        let tag = std::env::var("OJAS_FOLLOWUP_TAG").unwrap_or_default();
+        let name = if tag.is_empty() {
+            "chunks-threads.txt".to_string()
+        } else {
+            format!("chunks-threads-{tag}.txt")
+        };
+        let path = format!("{dir}/{name}");
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        eprintln!("wrote {path}");
+    }
+
+    fn min_median(samples: &mut [f64]) -> (f64, f64) {
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid = samples.len() / 2;
+        let median = if samples.len().is_multiple_of(2) {
+            (samples[mid - 1] + samples[mid]) / 2.0
+        } else {
+            samples[mid]
+        };
+        (samples[0], median)
+    }
+
+    fn loadavg() -> String {
+        std::process::Command::new("sysctl")
+            .args(["-n", "vm.loadavg"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unavailable".to_string())
     }
 }

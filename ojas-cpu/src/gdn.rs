@@ -29,10 +29,16 @@
 //! [`exp_exact`], and tasks split whole `(b, h)` heads, so the bits do not
 //! depend on [`ojas_core::Numerics`], the thread count or the platform.
 //!
-//! The operands' per-token layout is `[B, T, H, ...]`, so one head's rows
-//! are not contiguous. Each head is computed into a head-major scratch
-//! (`[B, H, T, ...]`, charged to the budget) and then moved into the
-//! output; the states and checkpoints are head-major already.
+//! The operands' per-token layout is `[B, T, H, ...]`. When `H == 1` a
+//! head's tokens are already contiguous (`row = b * T + t`), so the forward
+//! writes `out` directly and does not allocate a head-major buffer. When
+//! `H > 1` consecutive tokens of one head are strided by `H`. Safe Rust
+//! cannot hand the parallel head tasks non-overlapping strided
+//! `&mut [f32]` subslices, and this crate forbids `unsafe`, so those heads
+//! still land in a head-major scratch (`[B, H, T, Dv]`, charged to the
+//! budget) and are copied into the output. The forward keeps each row's
+//! l2norm scale as a scalar and does not store it; the backward does. The
+//! states and checkpoints are head-major already.
 
 use ojas_core::{
     exp_exact, sdpa_scale, Budget, GdnDims, OjasError, GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS,
@@ -120,23 +126,39 @@ impl Geom {
     }
 }
 
-/// Each `d`-wide row through `l2norm`: the normalized rows, and each
-/// row's `1 / sqrt(|x|^2 + eps)` in `f64`. The sum of squares, the scale
-/// and the product are `f64` (ascending, no fused multiply-add), so no
-/// finite row overflows or loses its scale to an `f32` subnormal.
-fn l2norm_rows(x: &[f32], d: usize) -> (Vec<f32>, Vec<f64>) {
-    let mut out = Vec::with_capacity(x.len());
-    let mut rs = Vec::with_capacity(x.len() / d.max(1));
-    for row in x.chunks_exact(d) {
-        let mut ss = 0.0f64;
-        for &v in row {
-            let v = f64::from(v);
-            ss += v * v;
-        }
-        let r = 1.0 / (ss + f64::from(GDN_L2NORM_EPS)).sqrt();
-        out.extend(row.iter().map(|&v| (f64::from(v) * r) as f32));
-        rs.push(r);
+/// `1 / sqrt(|row|^2 + eps)` in `f64`. The sum of squares ascends from
+/// `0.0` with a separate multiply and add (no fused multiply-add), so the
+/// scale the forward uses and the scale the backward stores cannot drift.
+fn row_l2_scale(row: &[f32]) -> f64 {
+    let mut ss = 0.0f64;
+    for &v in row {
+        let v = f64::from(v);
+        ss += v * v;
     }
+    1.0 / (ss + f64::from(GDN_L2NORM_EPS)).sqrt()
+}
+
+/// Normalized rows, and, when `scales` is `Some`, each row's scale. The
+/// forward passes `None` and does not allocate the scale vector.
+fn l2norm_apply(x: &[f32], d: usize, mut scales: Option<&mut Vec<f64>>) -> Vec<f32> {
+    let mut out = Vec::with_capacity(x.len());
+    for row in x.chunks_exact(d) {
+        let r = row_l2_scale(row);
+        out.extend(row.iter().map(|&v| (f64::from(v) * r) as f32));
+        if let Some(rs) = scales.as_mut() {
+            rs.push(r);
+        }
+    }
+    out
+}
+
+/// Each `d`-wide row through `l2norm`: the normalized rows, and each
+/// row's scale. The backward keeps both. The sum of squares, the scale
+/// and the product are `f64`, so no finite row overflows or loses its
+/// scale to an `f32` subnormal.
+fn l2norm_rows(x: &[f32], d: usize) -> (Vec<f32>, Vec<f64>) {
+    let mut rs = Vec::with_capacity(x.len() / d.max(1));
+    let out = l2norm_apply(x, d, Some(&mut rs));
     (out, rs)
 }
 
@@ -196,24 +218,35 @@ pub(crate) fn forward(
     let g = Geom::new(op, &d)?;
     let rows = d.rows();
     let work = g.work(3);
-    // Normalized q and k, their norms, and the head-major output.
-    let scratch = product(op, &[rows, 2 * g.dk + 2 + g.dv])?;
+    // Normalized q and k only. Scales are scalars inside `l2norm_apply`.
+    // The head-major output is charged only when H > 1.
+    let qk = product(op, &[rows, 2, g.dk])?;
+    let head_major = if g.h == 1 {
+        0
+    } else {
+        product(op, &[rows, g.dv])?
+    };
+    let scratch = qk
+        .checked_add(head_major)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: "gdn forward scratch length overflows".to_string(),
+        })?;
     let per_task = product(op, &[g.inflight(exec, work), g.per + 2 * g.dv])?;
-    let _hold = room_for(op, budget, scratch.saturating_add(per_task))?;
-    let (mut qh, _) = l2norm_rows(x.q, g.dk);
-    for q in qh.iter_mut() {
-        *q *= g.scale;
+    let charged = scratch
+        .checked_add(per_task)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op,
+            detail: "gdn forward scratch length overflows".to_string(),
+        })?;
+    let _hold = room_for(op, budget, charged)?;
+    let mut qh = l2norm_apply(x.q, g.dk, None);
+    for qv in qh.iter_mut() {
+        *qv *= g.scale;
     }
-    let (kh, _) = l2norm_rows(x.k, g.dk);
-    let mut heads_out = vec![0.0f32; rows * g.dv];
+    let kh = l2norm_apply(x.k, g.dk, None);
     let cancel = exec.pool.cancel_hook();
-    let parts: Vec<_> = heads_out
-        .chunks_mut(g.t * g.dv)
-        .zip(fin.chunks_mut(g.per))
-        .zip(ckpt.chunks_mut(g.nc * g.per))
-        .map(|((o, f), c)| (o, f, c))
-        .collect();
-    fill_parts(exec, work, parts, |head, (oh, fh, ch)| {
+    let head = |head: usize, oh: &mut [f32], fh: &mut [f32], ch: &mut [f32]| {
         cancel()?;
         let mut st = match x.s0 {
             Some(s0) => s0[head * g.per..(head + 1) * g.per].to_vec(),
@@ -243,8 +276,28 @@ pub(crate) fn forward(
         }
         fh.copy_from_slice(&st);
         Ok(())
-    })?;
-    to_token_major(&g, &heads_out, out, g.dv);
+    };
+    if g.h == 1 {
+        // `chunks_mut(0)` panics. T and Dv are non-zero: an empty operand
+        // is refused before this function runs.
+        let parts: Vec<_> = out
+            .chunks_mut(g.t * g.dv)
+            .zip(fin.chunks_mut(g.per))
+            .zip(ckpt.chunks_mut(g.nc * g.per))
+            .map(|((o, f), c)| (o, f, c))
+            .collect();
+        fill_parts(exec, work, parts, |i, (oh, fh, ch)| head(i, oh, fh, ch))?;
+    } else {
+        let mut heads_out = vec![0.0f32; rows * g.dv];
+        let parts: Vec<_> = heads_out
+            .chunks_mut(g.t * g.dv)
+            .zip(fin.chunks_mut(g.per))
+            .zip(ckpt.chunks_mut(g.nc * g.per))
+            .map(|((o, f), c)| (o, f, c))
+            .collect();
+        fill_parts(exec, work, parts, |i, (oh, fh, ch)| head(i, oh, fh, ch))?;
+        to_token_major(&g, &heads_out, out, g.dv);
+    }
     Ok(())
 }
 
