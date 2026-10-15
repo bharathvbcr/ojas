@@ -551,6 +551,24 @@ pub fn refuse_bf16_operands(
     }
 }
 
+/// Refuse a `Bf16` tied table on a backend that has no bf16 table lane
+/// ([`Backend::bf16_operands`]): [`OjasError::Dtype`] naming `op`, expecting
+/// `F32`, as the validators refused it before the lane existed.
+///
+/// Such a backend calls this right after the op's shape validator, which
+/// accepts a `Bf16` table, and before it reads, charges or writes anything,
+/// so the table's 2-byte elements are never read as `f32` bytes.
+pub fn refuse_bf16_table(op: &'static str, table: &Tensor) -> Result<(), OjasError> {
+    match table.dtype() {
+        DType::Bf16 => Err(OjasError::Dtype {
+            op,
+            expected: DType::F32,
+            got: DType::Bf16,
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Nanolab-default training ops.
 ///
 /// Every method returns [`Result`]. Implementations live in `ojas-cpu`
@@ -652,8 +670,17 @@ pub trait Backend {
         })
     }
 
+    /// The rows of `table` (`[vocab, dim]`) that `token_ids` pick, as an
+    /// `F32` tensor shaped `ids.shape ++ [dim]`. A `Bf16` table is a
+    /// bf16-operand slot ([`Self::bf16_operands`]): each picked row is
+    /// widened exactly as it is read, never through an `f32` copy of the
+    /// table. Validate with [`crate::embedding_forward_dims`].
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError>;
 
+    /// The table gradient of [`Self::embedding_forward`], `F32` shaped like
+    /// `table`. The table is read for its shape (and scanned as every other
+    /// operand is), so a `Bf16` table gives the `F32` table's bits.
+    /// Validate with [`crate::embedding_backward_dims`].
     fn embedding_backward(
         &self,
         table: &Tensor,
@@ -1208,8 +1235,12 @@ pub trait Backend {
     /// Mean cross-entropy of `input @ weight^T` without materializing the
     /// `[N, V]` logits, plus both gradients when `want_grad` is set.
     ///
-    /// `input` is `[N, d]` `F32`, `weight` is `[V, d]` `F32` (the tied
-    /// embedding), `targets` is `[N]` `U32`. Values equal
+    /// `input` is `[N, d]` `F32`, `weight` is `[V, d]` `F32` or `Bf16` (the
+    /// tied embedding, a bf16-operand slot of [`Self::bf16_operands`]),
+    /// `targets` is `[N]` `U32`. A `Bf16` weight is widened exactly one
+    /// vocabulary chunk at a time (`chunk.cols * d` values, charged as
+    /// scratch), never as a whole-table `f32` copy, and every gradient is
+    /// `F32`. Values equal
     /// [`Backend::linear_forward`] → [`Backend::cross_entropy_mean_forward`],
     /// and the gradients equal [`Backend::cross_entropy_mean_backward`] →
     /// [`Backend::linear_backward`] at seed 1, within the backend's
@@ -1418,11 +1449,20 @@ pub trait Backend {
     /// product and sum accumulates in `f32`, and every output is `F32`. So an
     /// operand whose `f32` values are bf16-exact gives the same bits whether
     /// it arrives as `F32` or as `Bf16`, under the same [`Self::numerics`].
-    /// Every other op refuses `Bf16` with [`OjasError::Dtype`].
     ///
-    /// The default is `false`. Such a backend refuses a `Bf16` operand with
-    /// [`OjasError::Unsupported`] ([`refuse_bf16_operands`]) before it
-    /// charges or writes anything. [`crate::Autocast`] rounds its operand
+    /// The tied table takes the same rule (decided 2026-10-14): the `table`
+    /// of [`Self::embedding_forward`] and [`Self::embedding_backward`] and
+    /// the `weight` of [`Self::linear_cross_entropy_mean`]. Their other
+    /// operands stay `F32` (`U32` for ids and targets). The table lane reads
+    /// bf16 rows in place, a gathered row or one vocabulary chunk at a time,
+    /// so a frozen bf16 table never costs an `f32` copy of itself. The CPU
+    /// and Metal take it; a backend without the lane refuses a `Bf16` table
+    /// with [`OjasError::Dtype`] ([`refuse_bf16_table`]), whatever this flag
+    /// says. Every other op refuses `Bf16` with [`OjasError::Dtype`].
+    ///
+    /// The default is `false`. Such a backend refuses a matmul-class `Bf16`
+    /// operand with [`OjasError::Unsupported`] ([`refuse_bf16_operands`])
+    /// before it charges or writes anything. [`crate::Autocast`] rounds its operand
     /// copies in `f32` storage on every backend; this flag decides only
     /// whether a `Bf16` tensor the caller holds is accepted.
     fn bf16_operands(&self) -> bool {

@@ -389,6 +389,8 @@ pub(crate) enum Cmd {
     },
     Embed {
         table: Arg,
+        /// `table` is `Bf16`: `n` 2-byte elements, widened as gathered.
+        half: bool,
         ids: Arg,
         vocab: u32,
         dim: u32,
@@ -410,6 +412,8 @@ pub(crate) enum Cmd {
     /// `rows` is the host's grouping of the token ids ([`EmbedRows`]).
     EmbedBwd {
         table: Arg,
+        /// `table` is `Bf16` (only scanned, on its bits).
+        half: bool,
         grad: Arg,
         rows: EmbedRows,
         dim: u32,
@@ -803,10 +807,13 @@ pub(crate) struct LceGeom {
     pub rt: usize,
     pub ct: usize,
     /// Whether some x (or weight) row tile starts at a byte offset tessl's
-    /// GEMMs cannot take (not 16-aligned), so it is staged in a copy.
+    /// GEMMs cannot take (not 16-aligned), so it is staged in a copy. A
+    /// `w_half` weight always is: each tile is widened into the stage.
     pub stage_x: bool,
     pub stage_w: bool,
     pub grad: bool,
+    /// The weight is `Bf16` (the tied table at 2 bytes per element).
+    pub w_half: bool,
 }
 
 /// Whether a row tile of a `[rows, step]` matrix at byte offset `off`, cut
@@ -831,7 +838,8 @@ pub(crate) fn reduce_groups(n: usize) -> usize {
 impl LceGeom {
     /// `rows` and `cols` are the caller's chunk, clamped to the problem and
     /// to the GEMMs' i32 element limit for one tile (a smaller tile only
-    /// lowers scratch).
+    /// lowers scratch). `w_half` is a `Bf16` weight, whose tiles are always
+    /// staged ([`Self::scratch`] then charges one `[ct, d]` f32 tile).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         n: usize,
@@ -842,6 +850,7 @@ impl LceGeom {
         x_off: usize,
         w_off: usize,
         grad: bool,
+        w_half: bool,
     ) -> Self {
         let limit = i32::MAX as usize;
         let rt = rows.min(n).min(limit).max(1);
@@ -853,8 +862,9 @@ impl LceGeom {
             rt,
             ct,
             stage_x: needs_stage(x_off, d, rt, n),
-            stage_w: needs_stage(w_off, d, ct, v),
+            stage_w: w_half || needs_stage(w_off, d, ct, v),
             grad,
+            w_half,
         }
     }
 

@@ -291,9 +291,10 @@ fn f32_operand(op: &'static str, tensor: &Tensor) -> Result<usize, OjasError> {
     operand(op, tensor, DType::F32)
 }
 
-/// A matmul-class operand ([`crate::Backend::bf16_operands`]): `F32`, or
-/// `Bf16` storage that the kernel widens exactly into its `f32`
-/// accumulation. Any other dtype is refused naming `F32`, the default.
+/// A bf16-operand slot ([`crate::Backend::bf16_operands`]: a matmul-class
+/// operand or the tied table): `F32`, or `Bf16` storage that the kernel
+/// widens exactly into its `f32` accumulation. Any other dtype is refused
+/// naming `F32`, the default.
 fn matmul_operand(op: &'static str, tensor: &Tensor) -> Result<usize, OjasError> {
     let dtype = match tensor.dtype() {
         DType::Bf16 => DType::Bf16,
@@ -407,15 +408,15 @@ pub fn topk_rows_dims(x: &Tensor, k: usize) -> Result<(usize, usize), OjasError>
     Ok((rows, cols))
 }
 
-/// [`crate::Backend::embedding_forward`]: `table` `[vocab, dim]` `F32`,
-/// `token_ids` `U32` of any rank (rank 0 included). The output is
-/// `ids.shape ++ [dim]`. Id range is the backend's to check.
+/// [`crate::Backend::embedding_forward`]: `table` `[vocab, dim]` `F32` or
+/// `Bf16`, `token_ids` `U32` of any rank (rank 0 included). The output is
+/// `ids.shape ++ [dim]`, `F32`. Id range is the backend's to check.
 pub fn embedding_forward_dims(
     table: &Tensor,
     token_ids: &Tensor,
 ) -> Result<EmbeddingDims, OjasError> {
     const OP: &str = EMBEDDING_FORWARD;
-    f32_operand(OP, table)?;
+    matmul_operand(OP, table)?;
     let tokens = operand(OP, token_ids, DType::U32)?;
     let (vocab, dim) = table_dims(OP, table)?;
     let mut out_shape = token_ids.shape().to_vec();
@@ -430,14 +431,15 @@ pub fn embedding_forward_dims(
 }
 
 /// [`crate::Backend::embedding_backward`]: as the forward, plus `grad_output`
-/// `F32` shaped `ids.shape ++ [dim]`. The result is shaped like `table`.
+/// `F32` shaped `ids.shape ++ [dim]`. The result is `F32` shaped like
+/// `table`, whichever of `F32` and `Bf16` the table is.
 pub fn embedding_backward_dims(
     table: &Tensor,
     token_ids: &Tensor,
     grad_output: &Tensor,
 ) -> Result<EmbeddingDims, OjasError> {
     const OP: &str = EMBEDDING_BACKWARD;
-    f32_operand(OP, table)?;
+    matmul_operand(OP, table)?;
     let tokens = operand(OP, token_ids, DType::U32)?;
     f32_operand(OP, grad_output)?;
     let (vocab, dim) = table_dims(OP, table)?;
@@ -1437,7 +1439,8 @@ pub struct LinearCeDims {
 }
 
 /// Check the operands of [`crate::Backend::linear_cross_entropy_mean`]: `input`
-/// `[N, d]` and `weight` `[V, d]` in `F32`, `targets` `[N]` in `U32`, `N`,
+/// `[N, d]` in `F32`, `weight` `[V, d]` in `F32` or `Bf16`, `targets` `[N]` in
+/// `U32`, `N`,
 /// `d` and `V` non-zero, and both chunk dimensions non-zero. Target values
 /// are the backend's to check, as in the unfused path.
 pub fn linear_ce_dims(
@@ -1448,7 +1451,7 @@ pub fn linear_ce_dims(
 ) -> Result<LinearCeDims, OjasError> {
     const OP: &str = "linear_cross_entropy_mean";
     operand(OP, input, DType::F32)?;
-    operand(OP, weight, DType::F32)?;
+    matmul_operand(OP, weight)?;
     operand(OP, targets, DType::U32)?;
     let (x, w, t) = (input.shape(), weight.shape(), targets.shape());
     let ([rows, model_dim], [vocab, w_dim], [t_rows]) = (x, w, t) else {
@@ -1808,6 +1811,23 @@ mod tests {
         // Rank-0 ids give a [dim] row.
         let d = embedding_forward_dims(&table, &u(&[])).unwrap();
         assert_eq!((d.tokens, d.out_shape), (1, vec![4]));
+        // A Bf16 table is a bf16-operand slot; its dims are the F32 ones.
+        let d = embedding_forward_dims(&of(DType::Bf16, &[10, 4]), &u(&[2, 3])).unwrap();
+        assert_eq!((d.vocab, d.dim, d.out_shape), (10, 4, vec![2, 3, 4]));
+        // The ids are not: Bf16 ids are refused naming U32, and an F16
+        // table naming F32.
+        dtype_err(
+            embedding_forward_dims(&table, &of(DType::Bf16, &[3])),
+            op,
+            DType::U32,
+            DType::Bf16,
+        );
+        dtype_err(
+            embedding_forward_dims(&of(DType::F16, &[10, 4]), &u(&[3])),
+            op,
+            DType::F32,
+            DType::F16,
+        );
         for bad in [&[10][..], &[], &[2, 5, 4]] {
             shape_err(
                 embedding_forward_dims(&f(bad), &u(&[3])),
@@ -1855,6 +1875,16 @@ mod tests {
         assert_eq!(
             (d.vocab, d.dim, d.tokens, d.out_shape),
             (10, 4, 6, vec![10, 4])
+        );
+        // A Bf16 table gives the same dims; the gradient stays F32.
+        let half = of(DType::Bf16, &[10, 4]);
+        let d = embedding_backward_dims(&half, &ids, &f(&[2, 3, 4])).unwrap();
+        assert_eq!((d.vocab, d.dim, d.out_shape), (10, 4, vec![10, 4]));
+        dtype_err(
+            embedding_backward_dims(&half, &ids, &of(DType::Bf16, &[2, 3, 4])),
+            op,
+            DType::F32,
+            DType::Bf16,
         );
         for bad in [&[2, 3][..], &[2, 3, 5], &[6, 4], &[3, 2, 4], &[1, 2, 3, 4]] {
             shape_err(
@@ -3094,6 +3124,32 @@ mod tests {
         assert!(matches!(
             linear_ce_dims(&u(4), &f(&[11, 8]), &u(4), chunk),
             Err(OjasError::Dtype { .. })
+        ));
+        // The weight (the tied table) may be Bf16; the input may not.
+        let bf = |shape: &[usize]| Tensor::zeros(shape, DType::Bf16, &budget).unwrap();
+        assert_eq!(
+            linear_ce_dims(&f(&[4, 8]), &bf(&[11, 8]), &u(4), chunk).unwrap(),
+            LinearCeDims {
+                rows: 4,
+                model_dim: 8,
+                vocab: 11
+            }
+        );
+        assert!(matches!(
+            linear_ce_dims(&bf(&[4, 8]), &f(&[11, 8]), &u(4), chunk),
+            Err(OjasError::Dtype {
+                expected: DType::F32,
+                got: DType::Bf16,
+                ..
+            })
+        ));
+        assert!(matches!(
+            linear_ce_dims(&f(&[4, 8]), &bf(&[11, 8]), &bf(&[4]), chunk),
+            Err(OjasError::Dtype {
+                expected: DType::U32,
+                got: DType::Bf16,
+                ..
+            })
         ));
     }
 

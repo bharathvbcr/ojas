@@ -60,6 +60,30 @@ kernel void ojas_check_finite(
     }
 }
 
+/// `ojas_check_finite` of a bf16 window: `n` elements from element `first`
+/// of `x` (a 2-byte element offset under the 4-byte bind alignment). A bf16
+/// is NaN or infinite when its eight exponent bits are all set, so the scan
+/// reads the bits and widens nothing.
+kernel void ojas_check_finite_bf16(
+    device const ushort *x [[buffer(0)]],
+    device atomic_uint *st [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    constant uint &word [[buffer(3)]],
+    constant uint &first [[buffer(4)]],
+    uint i [[thread_position_in_grid]],
+    uint stride [[threads_per_grid]])
+{
+    if (i >= n || word >= ST_WORDS) return;
+    bool bad = false;
+    for (uint j = i;; j += stride) {
+        bad = bad || (x[first + j] & 0x7f80u) == 0x7f80u;
+        if (n - j <= stride) break;
+    }
+    if (bad) {
+        atomic_store_explicit(&st[word], 1u, memory_order_relaxed);
+    }
+}
+
 /// An upload carried in the command: `words` are the host's bytes in the
 /// constant arena, copied bit for bit (a NaN is data, not a fault).
 kernel void ojas_upload_words(
@@ -755,6 +779,28 @@ kernel void ojas_embed_fwd(
     const uint id = ids[gid.y];
     const ulong o = (ulong)gid.y * dim + gid.x;
     out[o] = id < vocab ? table[(ulong)id * dim + gid.x] : 0.0f;
+}
+
+/// `ojas_embed_fwd` of a bf16 table, from element `first` of `table` (a
+/// 2-byte element offset under the 4-byte bind alignment): each picked
+/// value is widened exactly (`bits << 16`) as it is gathered, so the output
+/// holds an f32 table's bits and no f32 copy of the table exists.
+kernel void ojas_embed_fwd_bf16(
+    device const ushort *table [[buffer(0)]],
+    device const uint *ids [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint &n [[buffer(3)]],
+    constant uint &dim [[buffer(4)]],
+    constant uint &vocab [[buffer(5)]],
+    constant uint &first [[buffer(6)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= dim || gid.y >= n) return;
+    const uint id = ids[gid.y];
+    const ulong o = (ulong)gid.y * dim + gid.x;
+    out[o] = id < vocab
+        ? as_type<float>(uint(table[(ulong)first + (ulong)id * dim + gid.x]) << 16u)
+        : 0.0f;
 }
 
 #define ARGMAX_TG 256u

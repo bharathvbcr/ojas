@@ -117,12 +117,15 @@ pub(crate) fn f32_operands<'t, const N: usize>(
         .map_err(|_| shape(op, "input count changed while checking"))
 }
 
-/// A checked matmul-class operand's `f32` values: an `F32` tensor's read in
+/// A checked bf16-operand slot's `f32` values: an `F32` tensor's read in
 /// place, or a `Bf16` tensor's widened exactly (`bits << 16`) into charged
-/// scratch that lives as long as this value.
+/// scratch that lives as long as this value (`Widened`), or into a block
+/// whose bytes the caller reserved with the rest of its scratch (`Owned`,
+/// the fused cross-entropy's vocabulary block).
 pub(crate) enum Wide<'t> {
     Read(&'t [f32]),
     Widened(Scratch<f32>),
+    Owned(Vec<f32>),
 }
 
 impl Wide<'_> {
@@ -130,6 +133,7 @@ impl Wide<'_> {
         match self {
             Wide::Read(values) => values,
             Wide::Widened(scratch) => scratch.as_slice(),
+            Wide::Owned(values) => values,
         }
     }
 }
@@ -222,14 +226,31 @@ fn bf16_window_finite(exec: Exec<'_>, bits: &[u16]) -> Result<bool, OjasError> {
 /// `bits` widened to `f32` in new scratch charged to `budget`.
 fn widen_bf16(exec: Exec<'_>, budget: &Budget, bits: &[u16]) -> Result<Scratch<f32>, OjasError> {
     let mut wide = Scratch::<f32>::try_alloc(bits.len(), budget)?;
-    scoped::fill(exec, wide.as_mut_slice(), WIDEN_BLOCK, |i, chunk| {
+    widen_bf16_into(exec, bits, wide.as_mut_slice())?;
+    Ok(wide)
+}
+
+/// `bits` widened exactly (`bits << 16`) into `dst`, in [`WIDEN_BLOCK`]
+/// blocks on scoped threads. `dst` must be as long as `bits`.
+pub(crate) fn widen_bf16_into(
+    exec: Exec<'_>,
+    bits: &[u16],
+    dst: &mut [f32],
+) -> Result<(), OjasError> {
+    if dst.len() != bits.len() {
+        return Err(shape(
+            "widen_bf16",
+            format!("{} values widened into {}", bits.len(), dst.len()),
+        ));
+    }
+    scoped::fill(exec, dst, WIDEN_BLOCK, |i, chunk| {
         let from = &bits[i * WIDEN_BLOCK..i * WIDEN_BLOCK + chunk.len()];
         for (dst, &b) in chunk.iter_mut().zip(from) {
             *dst = ojas_core::bf16_to_f32(b);
         }
         Ok(())
     })?;
-    Ok(wide)
+    Ok(())
 }
 
 /// A checked host `F32` operand that the pool's `'static` tasks read in

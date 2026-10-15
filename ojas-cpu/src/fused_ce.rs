@@ -32,6 +32,13 @@
 //! across scoped threads, each row on one thread in its own order, so the
 //! split changes no bit; the GEMMs use the pool.
 //!
+//! A `Bf16` weight (the tied table held at 2 bytes) is read in place: each
+//! vocabulary block is widened exactly into an `f32` block of `chunk.cols *
+//! d` values when its tile is made, charged with the tile scratch, and
+//! dropped with the tile. The GEMMs then see the values a bf16-exact `F32`
+//! weight holds, so the bits are that weight's, and no `f32` copy of the
+//! whole table exists.
+//!
 //! The valid-row count is global. An all-ignored batch is
 //! [`OjasError::NonFinite`], and a target outside the vocabulary that is not
 //! `ignore_index` is [`OjasError::OutOfRange`], as in the unfused path.
@@ -39,15 +46,15 @@
 use std::ops::Range;
 
 use ojas_core::{
-    exp_exact, linear_ce_dims, Budget, CeChunk, LinearCe, LinearCeDims, OjasError, Tensor,
+    exp_exact, linear_ce_dims, Budget, CeChunk, DType, LinearCe, LinearCeDims, OjasError, Tensor,
 };
 
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
 use crate::pool::scoped::{self, min_rows};
 use crate::pool::Exec;
 use crate::validate::{
-    all_finite, alloc_f32, check_u32, f32_operands, fill_outs, nonfinite, product, room_for, shape,
-    u32_values,
+    all_finite, alloc_f32, check_u32, f32_operands, fill_outs, nonfinite, product, room_for,
+    scan_matmul_operand, shape, u32_values, widen_bf16_into, Wide,
 };
 
 const OP: &str = "linear_cross_entropy_mean";
@@ -55,9 +62,10 @@ const OP: &str = "linear_cross_entropy_mean";
 /// [`ojas_core::Backend::linear_cross_entropy_mean`] on the CPU.
 ///
 /// Every operand is validated before the first charge, then read in place:
-/// the input rows and weight blocks of each tile are views, not copies. The
-/// gradients are written straight into their output tensors (charged before
-/// they are allocated, never copied), and the tile scratch is charged too.
+/// the input rows and weight blocks of each tile are views, not copies (a
+/// `Bf16` weight's block is widened, see the module docs). The gradients
+/// are written straight into their output tensors (charged before they are
+/// allocated, never copied), and the tile scratch is charged too.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn linear_cross_entropy_mean(
     budget: &Budget,
@@ -71,7 +79,14 @@ pub(crate) fn linear_cross_entropy_mean(
 ) -> Result<LinearCe, OjasError> {
     let dims = linear_ce_dims(input, weight, targets, chunk)?;
     check_u32(OP, targets)?;
-    let [x, w] = f32_operands(OP, exec, [input, weight])?;
+    let [x] = f32_operands(OP, exec, [input])?;
+    let w = match weight.dtype() {
+        DType::Bf16 => {
+            scan_matmul_operand(OP, exec, weight)?;
+            Weight::Bf16(weight.bf16_slice()?)
+        }
+        _ => Weight::F32(f32_operands(OP, exec, [weight])?[0]),
+    };
     let t = u32_values(OP, targets)?;
     // The targets are values too: checked before the gradients are charged.
     let targets = Targets {
@@ -97,6 +112,23 @@ pub(crate) fn linear_cross_entropy_mean(
         grad_input,
         grad_weight,
     })
+}
+
+/// The `[V, d]` weight, read in place: `F32` values, or a `Bf16` weight's
+/// bits, widened one vocabulary block at a time ([`logit_tile`]).
+#[derive(Clone, Copy)]
+enum Weight<'w> {
+    F32(&'w [f32]),
+    Bf16(&'w [u16]),
+}
+
+impl Weight<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Weight::F32(w) => w.len(),
+            Weight::Bf16(w) => w.len(),
+        }
+    }
 }
 
 /// Valid rows, after checking every non-ignored target is inside the
@@ -131,9 +163,10 @@ fn valid_rows(targets: &[u32], vocab: usize, ignore: Option<u32>) -> Result<u32,
 /// Floats live at once besides the inputs and the two gradients: one logit
 /// tile, the larger of the two [`gemm_acc`] output snapshots (a split
 /// product copies its `[rows, d]` or `[cols, d]` output), three per-row
-/// statistics, and the largest [`scratch`] of the three GEMMs. The row block
-/// of `x` and the vocabulary block of `W` are views of the inputs, not
-/// copies. Every block is at most `rows x cols`, so the full-size block
+/// statistics, and the largest [`scratch`] of the three GEMMs; with a
+/// `widened` (`Bf16`) weight, one `[cols, d]` widened vocabulary block. The
+/// row block of `x` and an `F32` weight's block are views of the inputs,
+/// not copies. Every block is at most `rows x cols`, so the full-size block
 /// bounds the partial ones.
 fn tile_scratch(
     exec: Exec<'_>,
@@ -141,8 +174,14 @@ fn tile_scratch(
     cols: usize,
     dim: usize,
     want_grad: bool,
+    widened: bool,
 ) -> Result<usize, OjasError> {
     let tile = product(OP, &[rows, cols])?;
+    let block = if widened {
+        product(OP, &[cols, dim])?
+    } else {
+        0
+    };
     let stats = product(OP, &[rows, 3])?;
     let mut gemm_work = scratch(OP, exec, rows, dim, cols)?;
     let mut grad_product = 0;
@@ -152,7 +191,7 @@ fn tile_scratch(
             .max(scratch(OP, exec, cols, rows, dim)?);
         grad_product = product(OP, &[rows, dim])?.max(product(OP, &[cols, dim])?);
     }
-    [tile, stats, gemm_work, grad_product]
+    [tile, stats, gemm_work, grad_product, block]
         .into_iter()
         .try_fold(0usize, |sum, n| sum.checked_add(n))
         .ok_or_else(|| OjasError::OutOfRange {
@@ -161,17 +200,28 @@ fn tile_scratch(
         })
 }
 
-/// Rows `c0..c1` of `W` as their own matrix, and the logit tile `x_c · W_cᵀ`.
-/// A non-finite logit is `NonFinite`, as `linear_forward` reports it.
+/// Rows `c0..c1` of `W` (a view of an `F32` weight, or a `Bf16` weight's
+/// rows widened into a new block, which [`tile_scratch`] charged), and the
+/// logit tile `x_c · W_cᵀ`. A non-finite logit is `NonFinite`, as
+/// `linear_forward` reports it.
 fn logit_tile<'w>(
     exec: Exec<'_>,
     x_block: &Mat,
-    w: &'w [f32],
+    w: Weight<'w>,
     cols: std::ops::Range<usize>,
     dim: usize,
-) -> Result<(Vec<f32>, Mat<'w>), OjasError> {
-    let w_block = Mat::row_major(&w[cols.start * dim..cols.end * dim], cols.len(), dim);
-    let logits = gemm(OP, exec, x_block, &w_block.t())?;
+) -> Result<(Vec<f32>, Wide<'w>), OjasError> {
+    let rows = cols.start * dim..cols.end * dim;
+    let w_block = match w {
+        Weight::F32(w) => Wide::Read(&w[rows]),
+        Weight::Bf16(bits) => {
+            let mut wide = vec![0.0f32; rows.len()];
+            widen_bf16_into(exec, &bits[rows], &mut wide)?;
+            Wide::Owned(wide)
+        }
+    };
+    let w_mat = Mat::row_major(w_block.values(), cols.len(), dim);
+    let logits = gemm(OP, exec, x_block, &w_mat.t())?;
     if !all_finite(&logits) {
         return Err(nonfinite(OP));
     }
@@ -194,7 +244,7 @@ fn fused(
     budget: &Budget,
     exec: Exec<'_>,
     x: &[f32],
-    w: &[f32],
+    w: Weight<'_>,
     targets: &Targets<'_>,
     dims: LinearCeDims,
     chunk: CeChunk,
@@ -229,7 +279,9 @@ fn fused(
     let (rows, cols) = (chunk.rows.min(n), chunk.cols.min(v));
     // The tile charge ends when this function returns; the gradients are
     // the caller's.
-    let _tiles = room_for(OP, budget, tile_scratch(exec, rows, cols, d, want_grad)?)?;
+    let widened = matches!(w, Weight::Bf16(_));
+    let scratch = tile_scratch(exec, rows, cols, d, want_grad, widened)?;
+    let _tiles = room_for(OP, budget, scratch)?;
     let vocab_blocks = || (0..v).step_by(cols).map(move |c0| c0..(c0 + cols).min(v));
     let single = cols == v;
     let mut total = 0.0f32;
@@ -297,6 +349,7 @@ fn fused(
             };
             softmax_grad(exec, &mut g, range.clone(), rows, &sums, denom)?;
             let g = Mat::row_major(&g, r, width);
+            let w_block = Mat::row_major(w_block.values(), width, d);
             gemm_acc(OP, exec, &g, &w_block, &mut gx[r0 * d..r1 * d])?;
             gemm_acc(
                 OP,

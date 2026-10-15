@@ -39,8 +39,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use ojas_core::{
-    exp_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims, Numerics, OjasError,
-    Reservation, Scratch, Tensor,
+    bf16_to_f32, exp_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims, Numerics,
+    OjasError, Reservation, Scratch, Tensor,
 };
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
@@ -95,6 +95,34 @@ pub(crate) fn embedding_forward(
             .get(start..start + row)
             .ok_or_else(|| outside(op, "embedding row exceeds the table"))?;
         dst.copy_from_slice(src);
+    }
+    Tensor::from_scratch(out, &dims.out_shape)
+}
+
+/// [`embedding_forward`] of a `Bf16` table (`table` is its bits, read in
+/// place): each picked row is widened exactly (`bits << 16`) as it is
+/// copied, so the output holds the bits a `F32` table of the widened values
+/// gives, and the table is never widened as a whole. The output is the only
+/// charge.
+pub(crate) fn embedding_forward_bf16(
+    op: &'static str,
+    budget: &Budget,
+    table: &[u16],
+    ids: &[u32],
+    dims: &EmbeddingDims,
+) -> Result<Tensor, OjasError> {
+    check_ids(op, ids, dims.vocab)?;
+    let row = dims.dim;
+    let n = product(op, &[dims.tokens, row])?;
+    let mut out = Scratch::<f32>::try_alloc(n, budget)?;
+    for (dst, id) in out.as_mut_slice().chunks_exact_mut(row).zip(ids) {
+        let start = id_index(*id) * row;
+        let src = table
+            .get(start..start + row)
+            .ok_or_else(|| outside(op, "embedding row exceeds the table"))?;
+        for (d, &bits) in dst.iter_mut().zip(src) {
+            *d = bf16_to_f32(bits);
+        }
     }
     Tensor::from_scratch(out, &dims.out_shape)
 }

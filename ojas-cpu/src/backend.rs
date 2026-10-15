@@ -4,7 +4,7 @@ use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
     gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
     gdn_log_decay_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
-    sigmoid_backward_dims, sigmoid_forward_dims, AdamWConfig, Backend, BackendId, Budget,
+    sigmoid_backward_dims, sigmoid_forward_dims, AdamWConfig, Backend, BackendId, Budget, DType,
     GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, MuonNs5Config, Numerics, OjasError,
     OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
@@ -37,8 +37,8 @@ use crate::optim::{
 };
 use crate::pointwise::{
     add_backward, add_forward, ce_input, cross_entropy_grad, embedding_backward, embedding_forward,
-    gate_backward, gate_forward, mul_backward, mul_forward, silu_backward, silu_forward,
-    value_residual_backward, value_residual_forward,
+    embedding_forward_bf16, gate_backward, gate_forward, mul_backward, mul_forward, silu_backward,
+    silu_forward, value_residual_backward, value_residual_forward,
 };
 use crate::pool::{Exec, Pool};
 use crate::validate::{
@@ -384,7 +384,9 @@ impl Backend for CpuBackend {
 
     /// A `Bf16` operand is widened into charged `f32` scratch for the
     /// duration of the op ([`crate::validate::matmul_operands`]); the kernels
-    /// and their bits are the `F32` ones.
+    /// and their bits are the `F32` ones. The tied table is read in place:
+    /// the gather widens each picked row, and the fused head one vocabulary
+    /// block at a time.
     fn bf16_operands(&self) -> bool {
         true
     }
@@ -398,7 +400,13 @@ impl Backend for CpuBackend {
         let dims = embedding_forward_dims(table, token_ids)?;
         // The whole table is scanned, in place and in parallel, as Metal and
         // wgpu scan it: a NaN in any row is refused, read or not. Nothing is
-        // copied; the output is the only charge.
+        // copied; the output is the only charge. A Bf16 table is scanned on
+        // its bits and each picked row widened as it is gathered.
+        if table.dtype() == DType::Bf16 {
+            scan_matmul_operand(OP, self.exec(), table)?;
+            let ids = u32_values(OP, token_ids)?;
+            return embedding_forward_bf16(OP, &self.budget, table.bf16_slice()?, ids, &dims);
+        }
         let table_w = f32_checked(OP, self.exec(), table)?;
         let ids = u32_values(OP, token_ids)?;
         embedding_forward(OP, &self.budget, table_w, ids, &dims)
@@ -412,11 +420,11 @@ impl Backend for CpuBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "embedding_backward";
         let dims = embedding_backward_dims(table, token_ids, grad_output)?;
-        // Only the table's shape is used, but its values are scanned as
-        // every backend scans them. Operands are checked in argument order;
-        // nothing is copied, and the table-shaped gradient is the only
-        // charge.
-        f32_checked(OP, self.exec(), table)?;
+        // Only the table's shape is used, but its values (a Bf16 table's
+        // bits) are scanned as every backend scans them. Operands are
+        // checked in argument order; nothing is copied, and the table-shaped
+        // gradient is the only charge.
+        scan_matmul_operand(OP, self.exec(), table)?;
         let ids = u32_values(OP, token_ids)?;
         let grad = f32_checked(OP, self.exec(), grad_output)?;
         embedding_backward(OP, &self.budget, self.exec(), ids, grad, &dims)

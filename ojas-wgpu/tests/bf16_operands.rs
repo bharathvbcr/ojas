@@ -2,7 +2,10 @@
 //! mix of `F32` and `Bf16` operands of the matmul-class ops gives the
 //! all-`F32` bits, the other ops refuse `Bf16`, a bf16 NaN or infinity is a
 //! deferred `NonFinite`, and the device `to_bf16` / `to_f32` give the host
-//! conversions' bits. It injects faults, so it runs on a backend of its own.
+//! conversions' bits. wgpu has no tied-table lane, so every `Bf16` table
+//! (embedding forward and backward, the fused cross-entropy weight) is
+//! refused with `Dtype`. It injects faults, so it runs on a backend of its
+//! own.
 
 mod common;
 
@@ -14,4 +17,8 @@ fn wgpu_keeps_the_bf16_operand_contract() {
     let r = bf16_operand_contract(&fresh()).unwrap();
     eprintln!("wgpu: {r:?}");
     assert_eq!(r.mixed_calls, 2 * (2 * 10 + 2 * 38));
+    assert!(!r.table_lane);
+    // The CPU's 2 + 14, plus the three Bf16 tables.
+    assert_eq!(r.refusals, 2 + 14 + 3);
+    assert_eq!(r.non_finite, 2 * 5 + 2 * 8);
 }

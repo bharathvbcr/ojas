@@ -61,8 +61,9 @@ fn metal_takes_bf16_operands() {
 }
 
 /// The backend-neutral contract (`ojas_oracle::bf16_operands`): every F32 /
-/// Bf16 mix of the matmul-class ops gives the all-F32 bits (packed and at an
-/// odd element offset), every other op refuses Bf16 with `Dtype`, a Bf16
+/// Bf16 mix of the matmul-class ops and the tied table gives the all-F32
+/// bits (packed and at an odd element offset), every other op refuses Bf16
+/// with `Dtype`, a Bf16
 /// NaN or infinity is `NonFinite`, and the device casts give the host
 /// conversions' bits. The counts are the CPU's.
 #[test]
@@ -70,9 +71,13 @@ fn metal_keeps_the_bf16_operand_contract() {
     let r = ojas_oracle::bf16_operands::bf16_operand_contract(&metal())
         .unwrap_or_else(|f| panic!("{f}"));
     eprintln!("metal: {r:?}");
-    assert_eq!(r.mixed_calls, 2 * (2 * 10 + 2 * 38));
-    assert_eq!(r.refusals, 2 + 13);
-    assert_eq!(r.non_finite, 2 * 5 + 2 * 8);
+    // The tied table: one Bf16 slot (2 layouts) in embedding_forward,
+    // embedding_backward and 4 fused cross-entropy calls (2 chunks, with
+    // and without gradients).
+    assert!(r.table_lane);
+    assert_eq!(r.mixed_calls, 2 * (2 * 10 + 2 * 38) + 2 * 6);
+    assert_eq!(r.refusals, 2 + 14);
+    assert_eq!(r.non_finite, 2 * 5 + 2 * 8 + 3);
 }
 
 #[test]
@@ -262,4 +267,90 @@ fn a_bf16_operand_that_rounded_to_infinity_is_a_non_finite_fault() {
         ),
         "{err:?}"
     );
+}
+
+/// The tied table resident as `Bf16`: the gather and the fused head read it
+/// on the device without an `f32` copy of the table. The bits are the `F32`
+/// table's (one vocabulary tile and several), and under a budget with room
+/// for the 2-byte table, the inputs, the outputs and the call's scratch but
+/// not a widened table, every op still runs: every device buffer a call
+/// makes is charged, so a whole-table copy would be refused.
+#[test]
+fn a_bf16_tied_table_is_read_in_place_by_the_gather_and_the_fused_head() {
+    let m = metal();
+    let (vocab, dim, n) = (6000usize, 64usize, 24usize);
+    let (half, full) = pair(&values(vocab * dim, 31, 0.5), &[vocab, dim]);
+    let table_f32 = (vocab * dim * 4) as u64;
+    let base = live(&m);
+    let (th, tf) = (up(&m, &half), up(&m, &full));
+    assert_eq!(live(&m) - base, table_f32 + table_f32 / 2, "resident bytes");
+    let ids_host: Vec<u32> = (0..n as u32)
+        .map(|i| (i * 977 + 5) % vocab as u32)
+        .collect();
+    let ids = up(&m, &common::host_u32(&ids_host, &[n]));
+    let x = up(&m, &rand(&[n, dim], 32, 1.0));
+    let g = up(&m, &rand(&[n, dim], 33, 1.0));
+
+    let embed = |t: &Tensor| bits(&ok("embed", m.embedding_forward(t, &ids)));
+    assert_eq!(embed(&th), embed(&tf), "gather");
+    let embed_bwd = |t: &Tensor| bits(&ok("embed bwd", m.embedding_backward(t, &ids, &g)));
+    assert_eq!(embed_bwd(&th), embed_bwd(&tf), "embedding backward");
+    for chunk in [
+        ojas_core::CeChunk {
+            rows: 7,
+            cols: 1024,
+        },
+        ojas_core::CeChunk {
+            rows: n,
+            cols: vocab,
+        },
+    ] {
+        let lce = |t: &Tensor| -> Vec<Vec<u32>> {
+            let r = ok(
+                "lce",
+                m.linear_cross_entropy_mean(&x, t, &ids, None, chunk, true),
+            );
+            let mut out = vec![bits(&r.loss)];
+            out.extend(r.grad_input.iter().map(bits));
+            out.extend(r.grad_weight.iter().map(bits));
+            out
+        };
+        assert_eq!(lce(&th), lce(&tf), "fused head {chunk:?}");
+    }
+    ok("sync", m.sync());
+
+    // A budget for the 2-byte table, the inputs, the fused head's outputs
+    // and scratch at 1024-column tiles, and less than a widened table.
+    let chunk = ojas_core::CeChunk {
+        rows: 8,
+        cols: 1024,
+    };
+    let inputs = table_f32 / 2 + (n * 4 + 2 * n * dim * 4) as u64;
+    let outputs = 4 + (n * dim * 4) as u64 + table_f32;
+    let scratch = 4 * (8 * 1024 + 3 * 8 + n + 2 + 8 * dim + 2 * 1024 * dim) as u64;
+    let room = inputs + outputs + scratch;
+    assert!(
+        room < table_f32 / 2 + outputs + table_f32,
+        "the room must not fit a copy"
+    );
+    let small = m.with_budget(Budget::new(room));
+    let th = ok("upload small", small.upload(&half));
+    let ids = ok(
+        "ids small",
+        small.upload(&common::host_u32(&ids_host, &[n])),
+    );
+    let x = ok("x small", small.upload(&rand(&[n, dim], 32, 1.0)));
+    let g = ok("g small", small.upload(&rand(&[n, dim], 33, 1.0)));
+    let r = ok(
+        "lce small",
+        small.linear_cross_entropy_mean(&x, &th, &ids, None, chunk, true),
+    );
+    ok("sync", small.sync());
+    drop(r);
+    drop(ok("embed small", small.embedding_forward(&th, &ids)));
+    drop(ok(
+        "embed bwd small",
+        small.embedding_backward(&th, &ids, &g),
+    ));
+    ok("sync", small.sync());
 }
