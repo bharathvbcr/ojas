@@ -17,6 +17,8 @@
 
 #![cfg(target_os = "macos")]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use ojas_core::{Budget, Tensor};
@@ -25,34 +27,13 @@ use ojas_qwen35::{
     Numerics, OptimizerPlan, Qwen35Step, Select, Sequence, Snapshot, WdRule, Which,
 };
 use tessl::gemm::GemmOperands;
-use tessl::npy::read_npy;
 use tessl::qwen35_model::{Precision, Qwen35Config, Qwen35Model};
 use tessl::qwen35_train::{Qwen35Grads, Supervise};
 
-fn tessl_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tessl")
-}
+use common::{ids, npy, reference_files, rel, snapshot_dir, tessl_root, train_ref_dir};
 
 fn tiny_dir() -> PathBuf {
     tessl_root().join("tests/fixtures/qwen35_train")
-}
-
-fn npy(path: &Path) -> Vec<f64> {
-    let a = read_npy(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    if let Ok(s) = a.f32_slice() {
-        s.iter().map(|&x| f64::from(x)).collect()
-    } else if let Ok(s) = a.f64_slice() {
-        s.to_vec()
-    } else {
-        a.i64_slice().unwrap().iter().map(|&x| x as f64).collect()
-    }
-}
-
-fn ids(dir: &Path) -> Vec<u32> {
-    npy(&dir.join("ids.npy"))
-        .iter()
-        .map(|&x| x as u32)
-        .collect()
 }
 
 fn open_tiny(numerics: Numerics) -> Qwen35Step {
@@ -62,17 +43,6 @@ fn open_tiny(numerics: Numerics) -> Qwen35Step {
 fn open_tiny_at(numerics: Numerics, precision: ojas_qwen35::Precision) -> Qwen35Step {
     let snap = Snapshot::from_dir(&tiny_dir()).unwrap();
     Qwen35Step::open(&snap, numerics, precision, Budget::new(1 << 30)).unwrap()
-}
-
-/// Worst `|got - want| / max|want|`.
-fn rel(got: &[f32], want: &[f64]) -> f64 {
-    assert_eq!(got.len(), want.len());
-    let peak = want.iter().fold(0.0f64, |m, x| m.max(x.abs())).max(1e-30);
-    got.iter()
-        .zip(want)
-        .map(|(&g, w)| (f64::from(g) - w).abs())
-        .fold(0.0, f64::max)
-        / peak
 }
 
 fn bits(t: &Tensor) -> Vec<u32> {
@@ -100,19 +70,6 @@ fn step_all_rows(s: &mut Qwen35Step, ids: &[u32]) -> f64 {
     let loss = pending.letter_ce_sum() / n as f64;
     s.backward(pending, None).unwrap();
     loss
-}
-
-fn reference_files(dir: &Path) -> usize {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .filter(|e| {
-            e.as_ref()
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with("grad.")
-        })
-        .count()
 }
 
 /// Every reference gradient `grad.model.<name>.npy` in `dir` against the
@@ -769,26 +726,6 @@ fn gpu_tiny_state_round_trip_is_bit_exact() {
     }
 }
 
-fn snapshot_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("QWEN35_2B_SNAPSHOT") {
-        return PathBuf::from(d);
-    }
-    let root = PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-        .join(".cache/huggingface/hub/models--Qwen--Qwen3.5-2B-Base/snapshots");
-    let dirs: Vec<PathBuf> = std::fs::read_dir(&root)
-        .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.join("config.json").is_file())
-        .collect();
-    assert_eq!(
-        dirs.len(),
-        1,
-        "expected one snapshot under {}",
-        root.display()
-    );
-    dirs[0].clone()
-}
-
 /// The real Qwen3.5-2B-Base, opened from its snapshot directory (the
 /// snapshot's own `config.json`, MRoPE fields included), one step on
 /// `make_train_fixture.py 2b`'s sequence against its transformers float32
@@ -799,14 +736,14 @@ fn snapshot_dir() -> PathBuf {
 /// Needs `tessl/target/qwen35_train_ref` (or `QWEN35_TRAIN_REF_DIR`) and the
 /// snapshot (`QWEN35_2B_SNAPSHOT` or the HF cache). Holds about 40 GB of
 /// unified memory: f32 weights, bank, two moments, and one table staged for
-/// read-back.
+/// read-back, over this Mac's 32 GiB memguard; there the provider's leg on
+/// the same reference is tessl's own `real_2b_step_matches_transformers`
+/// (gp-qwen35-2b-metal-tape-run, 2026-10-15).
 #[test]
 #[ignore]
 fn gpu_real_2b_single_step_matches_the_transformers_reference() {
-    let ref_dir = std::env::var_os("QWEN35_TRAIN_REF_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| tessl_root().join("target/qwen35_train_ref"));
-    let snap = Snapshot::from_dir(&snapshot_dir()).unwrap();
+    let ref_dir = train_ref_dir();
+    let snap = Snapshot::from_dir(&snapshot_dir("QWEN35_2B_SNAPSHOT")).unwrap();
     let mut s = Qwen35Step::open(
         &snap,
         Numerics::ExactF32,
