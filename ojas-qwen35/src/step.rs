@@ -409,8 +409,8 @@ impl Qwen35Step {
                 needs: "a GPU with TensorOps (tessl's bf16 GEMM lane)".into(),
             });
         }
-        let st = tessl::safetensors::SafeTensors::open(&snapshot.weights_path)
-            .map_err(tessl("SafeTensors::open"))?;
+        let st = tessl::safetensors::CheckpointView::open(&snapshot.weights_path)
+            .map_err(tessl("CheckpointView::open"))?;
         let (prefix, tcfg, p) = (&cfg.tower_prefix, cfg.tessl.clone(), precision.tessl());
         let model = match precision {
             Precision::F32 => {

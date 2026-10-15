@@ -176,17 +176,31 @@ pub fn check_header<'a>(
     })
 }
 
-/// [`check_header`] on a `.safetensors` file, reading its header only (ojas-io).
+/// [`check_header`] on a checkpoint: a `.safetensors` file, or a
+/// `model.safetensors.index.json` whose every shard is read (header only,
+/// ojas-io) and checked together. A name in two shards is refused.
 pub fn check_weights_file(cfg: &Qwen35TextConfig, path: &Path) -> Result<HeaderReport> {
-    let st =
-        SafeTensors::open(path).map_err(|e| Qwen35Error::Io(format!("{}: {e}", path.display())))?;
-    let infos: Vec<(String, StDtype, Vec<u64>)> = st
-        .names()
-        .map(|n| {
+    let shards = if path.extension().is_some_and(|e| e == "json") {
+        shard_paths(cfg, path)?
+    } else {
+        vec![path.to_path_buf()]
+    };
+    let mut infos: Vec<(String, StDtype, Vec<u64>)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for shard in &shards {
+        let st = SafeTensors::open(shard)
+            .map_err(|e| Qwen35Error::Io(format!("{}: {e}", shard.display())))?;
+        for n in st.names() {
+            if !seen.insert(n.to_string()) {
+                return Err(Qwen35Error::Config(format!(
+                    "{}: tensor {n} is in more than one shard",
+                    path.display()
+                )));
+            }
             let i = st.info(n).map_err(|e| Qwen35Error::Io(e.to_string()))?;
-            Ok((n.to_string(), i.dtype, i.shape.clone()))
-        })
-        .collect::<Result<_>>()?;
+            infos.push((n.to_string(), i.dtype, i.shape.clone()));
+        }
+    }
     check_header(
         cfg,
         infos.iter().map(|(n, d, s)| (n.as_str(), *d, s.as_slice())),
@@ -194,12 +208,15 @@ pub fn check_weights_file(cfg: &Qwen35TextConfig, path: &Path) -> Result<HeaderR
     )
 }
 
-/// A snapshot resolved to the two files the provider loads, validated on the
-/// CPU: the config parsed and refused where it must be, and the weights
-/// file's header matched against the tower. Nothing here touches the GPU.
+/// A snapshot resolved to the config and the checkpoint the provider loads,
+/// validated on the CPU: the config parsed and refused where it must be, and
+/// every shard's header matched against the tower. Nothing here touches the
+/// GPU.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub config_path: std::path::PathBuf,
+    /// What `tessl::safetensors::CheckpointView::open` takes: a single
+    /// `.safetensors` file, or a snapshot's `model.safetensors.index.json`.
     pub weights_path: std::path::PathBuf,
     pub config: Qwen35TextConfig,
     pub header: HeaderReport,
@@ -207,14 +224,14 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// A Hugging Face snapshot directory: `config.json`, and either
-    /// `model.safetensors.index.json` (whose `weight_map` must put every tower
-    /// tensor in one file: tessl's loader reads one) or `model.safetensors`.
+    /// `model.safetensors.index.json` (any number of shards, symlinked ones
+    /// included) or `model.safetensors`.
     pub fn from_dir(dir: &Path) -> Result<Self> {
         let config_path = dir.join("config.json");
         let config = Qwen35TextConfig::from_file(&config_path)?;
         let index = dir.join("model.safetensors.index.json");
         let weights_path = if index.is_file() {
-            dir.join(tower_file_from_index(&config, &index)?)
+            index
         } else {
             let single = dir.join("model.safetensors");
             if !single.is_file() {
@@ -228,7 +245,7 @@ impl Snapshot {
         Self::from_parts(config_path, weights_path, config)
     }
 
-    /// An explicit config and single weights file.
+    /// An explicit config and a weights file (a `.safetensors` file or an index).
     pub fn from_files(config_json: &Path, weights: &Path) -> Result<Self> {
         let config = Qwen35TextConfig::from_file(config_json)?;
         Self::from_parts(config_json.to_path_buf(), weights.to_path_buf(), config)
@@ -249,8 +266,10 @@ impl Snapshot {
     }
 }
 
-/// The one file of a sharded snapshot holding every tower tensor.
-fn tower_file_from_index(cfg: &Qwen35TextConfig, index: &Path) -> Result<String> {
+/// The shard files an index's `weight_map` names, as paths beside the index.
+/// Each must be a bare file name (the same lexical rule tessl applies), and
+/// the map must hold at least one tensor under the tower prefix.
+fn shard_paths(cfg: &Qwen35TextConfig, index: &Path) -> Result<Vec<std::path::PathBuf>> {
     let text = std::fs::read_to_string(index)
         .map_err(|e| Qwen35Error::Io(format!("{}: {e}", index.display())))?;
     let what = index.display().to_string();
@@ -262,10 +281,9 @@ fn tower_file_from_index(cfg: &Qwen35TextConfig, index: &Path) -> Result<String>
         .and_then(|m| m.as_object().ok())
         .ok_or_else(|| Qwen35Error::Config(format!("{what}: no weight_map object")))?;
     let mut files = std::collections::BTreeSet::new();
+    let mut tower = false;
     for (name, file) in map {
-        if !name.starts_with(&cfg.tower_prefix) {
-            continue;
-        }
+        tower |= name.starts_with(&cfg.tower_prefix);
         match file {
             ojas_io::JsonValue::String(f) => {
                 if f.contains('/') || f.contains('\\') || f == ".." || f.is_empty() {
@@ -283,16 +301,12 @@ fn tower_file_from_index(cfg: &Qwen35TextConfig, index: &Path) -> Result<String>
             }
         }
     }
-    match files.len() {
-        1 => Ok(files.into_iter().next().unwrap_or_default()),
-        0 => Err(Qwen35Error::Config(format!(
+    if !tower {
+        return Err(Qwen35Error::Config(format!(
             "{what}: no tensor under {:?}",
             cfg.tower_prefix
-        ))),
-        n => Err(Qwen35Error::Unsupported {
-            what: format!("the tower's tensors span {n} files ({files:?})"),
-            needs: "a tessl loader over several safetensors files; Qwen35Model::load reads one"
-                .into(),
-        }),
+        )));
     }
+    let dir = index.parent().unwrap_or_else(|| Path::new("."));
+    Ok(files.into_iter().map(|f| dir.join(f)).collect())
 }

@@ -211,12 +211,11 @@ fn snapshot_header_matches_the_name_map() {
     eprintln!("weights: {}", s.weights_path.display());
 }
 
-/// A sharded snapshot's `model.safetensors.index.json`: the tower must sit
-/// in one plain file name, and every other shape of index is refused by
-/// what it is. Built on the tiny fixture, with its weights copied under a
-/// shard name.
+/// A sharded snapshot's `model.safetensors.index.json`: every shard must be a
+/// plain file name, and every other shape of index is refused by what it is.
+/// Built on the tiny fixture, with its weights copied under a shard name.
 #[test]
-fn a_snapshot_index_resolves_to_one_tower_file_or_is_refused() {
+fn a_snapshot_index_resolves_to_its_shards_or_is_refused() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("ojas-qwen35-index-{}", std::process::id()));
     if dir.exists() {
@@ -257,13 +256,13 @@ fn a_snapshot_index_resolves_to_one_tower_file_or_is_refused() {
 
     index(&all_in(shard));
     let s = Snapshot::from_dir(&dir).unwrap();
-    assert_eq!(s.weights_path, dir.join(shard));
+    assert_eq!(s.weights_path, dir.join("model.safetensors.index.json"));
     assert_eq!(s.header.tower_tensors, names.len());
 
     let mut two = all_in(shard);
     two[1].1 = "\"model-00002-of-00002.safetensors\"".into();
     index(&two);
-    refused("span 2 files");
+    refused("model-00002-of-00002.safetensors"); // named by the index, absent on disk
     let mut up = all_in(shard);
     up[0].1 = "\"../model.safetensors\"".into();
     index(&up);
