@@ -72,3 +72,36 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 ## Planned files
 - bench/results/
 - ojas-oracle/
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: ready; no LoRA-2B run exists on any stack (Lappi campaign/lora-2b-preregistered.json:3) [A].
+- Criteria: 1 decisions recorded, met (Lappi AUDIT/lora-2b-2026-10-09/fable-ft-decisions.md, human-decisions.md) [A]; 2 gating run open (gp-qwen35-2b-metal-tape-run); 3 pre-registration met (Lappi 5b6d6cb, amended c61584b before any result) [A]; 4 plain-torch reference partial: python/qd_train/lora.py has the module, D17, schedule and groups with 19 tests, but no driver runs shards, supervision, batch order and per-step logging [A]; 5 0.8B smoke open (weights local; no Tape trainer) [V weights]; 6 reduced 2B-Base run open; 7 dependencies open.
+- Stale [V]: download approval is shown pending; 2B-Base and 0.8B-Base weights are local since 2026-10-12 (sha256 in Lappi AUDIT/lora-2b-2026-10-09/downloads.md). The pre-registration and reference arm are described as to-build; both mostly exist.
+- New, P1 [V]: a one-seed D17 export has no route to the scorer. The Mac row is one seed (pre-registration :4, :8); the served model includes D17 (recipe.head.d17, "served as embed[answer ids] + D17"); Lappi's Metal export contract holds only `tower.*` and `span_head.*` (crates/qd-train/src/export.rs:1-20); `ckpt_average` refuses fewer than 2 inputs (tools/ckpt_average.py:1585-1586). Home: gp-ft-export.
+- New, P1 [A]: Lappi's StepProvider contract cannot express the 17-way readout (RowTargets is full-vocab CE; accumulate returns one loss). Decide where D17 lives (host-side like the span head is an option) before gp-ft-trainer-loop's Tape provider. Home: gp-ft-decision-head-and-data-path.
+
+Critical path to this run, ordered (merge state at 88be893):
+1. gp-qwen35-2b-metal-tape-run: make the provider reference fit under the 32 GiB memguard (save the T = 128 reference to disk, or read gradients per entry), then run the T = 128 gate on 2B. Needs a user call (redesign vs a memguard window). Not started.
+2. gp-ft-step-memory-and-throughput: per-gradient want flags on the fused CE (frozen head). Not started.
+3. gp-ft-bf16-frozen-base criterion 7: a LoRA arm in gpu_memory_rows, 0.8B-Base and 2B-Base at T = 2,048 and 9,638, with tokens/s; the T = 9,638 row is required before the Mac run. Not started; merge the tied-table branch first (1.02 GB less resident).
+4. gp-ft-frozen-params-and-lora: a parity run at alpha == r; ratify or amend (b'). Merged at efa507f.
+5. gp-ft-decision-head-and-data-path: hidden-state forward, gather at answer positions, D17 and its place in the provider contract. Not started.
+6. gp-ft-trainer-loop: ojas-train per Lappi's 2026-10-14 Fable ruling, the Tape StepProvider, adapter checkpoint with sha256. Not started; Lappi pins ojas at bc498c4 and a pin bump needs the user.
+7. gp-ft-export: merged-bf16 tower export and the single-seed D17 route. Not started.
+8. This card: the reference-arm driver, the 0.8B 60-step smoke (GPU, ~2 h), the reduced 2B-Base run with kill -9 resume (GPU, 3-6 h).
+
+### Fable rulings (2026-10-15)
+Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two items directly (Lappi pin bump, hand-rolled sha256).
+Revised order. Start now on main:
+1. Run the two tiny GPU pins (gpu_save_state_bank.rs, gpu_parity.rs:654) and record them.
+2. gpu_tape_2b redesign against transformers' reference (gp-qwen35-2b-metal-tape-run); queue tessl's fixture generator first.
+3. The scaling-1 LoRA parity test (gp-ft-frozen-params-and-lora).
+
+After the tied-table branch (ft-69744e54) merges, the owner's call:
+4. Per-gradient want flags on the fused CE (ft-2bbced18); it conflicts with the branch's Metal linear_cross_entropy_mean rewrite. Not on the run's correctness path (D17 is host-side), but it decides the D1 tokens/s reading and the 0.8B full-vocab arm's cost, so it lands before the smoke.
+5. The LoRA arm in gpu_memory_rows in the run's configuration (bf16 linears and table, frozen base, r = 16, alpha = 16), 0.8B-Base and 2B-Base at T = 2,048 and 9,638 with tokens/s.
+
+Then the decision head with host-side D17, ojas-train with hand-rolled sha256, export with the one-seed D17 route, and the runs. The Lappi pin is bumped to 132b46e (Lappi 21fb7ad, branch ojas-pin-88be893); the bump to the ojas-train sha comes later.

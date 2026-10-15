@@ -67,3 +67,15 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-model/src/qwen35/forward.rs
 - ojas-qwen35/src/step.rs
 - bench/
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: backlog, nothing landed; header accurate [A].
+- GDN backward workspace: still per call (device.rs:2186) and charged; the brief's 2.7 GB does not reproduce: 0.34 GB at T = 2,048 and 1.34 GB at T = 9,638 from backend.rs:774-791 with H = 16 [A].
+- Attention layout copies: 4 permutes per attention layer, 6 layers (forward.rs:536, 542); a few hundred MB, low value [A].
+- RoPE tables device-resident: obsolete in practice; both GPU harnesses call `Qwen35Tables::upload` (forward.rs:72-79) [A].
+- Fused CE "logits 4 times": wording wrong and the cite stale (:2684-2741 is now clip_norm). Per tile it is 2 logits GEMMs (pass 0, pass 1 unless one tile) plus gx and gw GEMMs, once per step (tape.rs:970) [A].
+- Provider multi-sequence launches: off the LoRA path (grad_accum 1 on the Tape) [A].
+- None of this gates the acceptance run.
