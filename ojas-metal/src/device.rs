@@ -3428,10 +3428,13 @@ mod tests {
     fn a_real_oversize_gdn_workspace_is_capacity_exceeded() {
         let (w, waits) = oversize_worker();
         let before = waits.snapshot();
+        // heads 64 at this seq is ~516 GiB, under the 1 TiB bar, so the
+        // classification below never ran. heads 256 is ~2 TiB and still
+        // inside tessl's shape check.
         let huge = GdnTrainDims {
             batch: 1,
             seq: 1 << 20,
-            heads: 64,
+            heads: 256,
             v_dim: 128,
         };
         assert!(GdnTrainWorkspace::bytes_for(huge) > 1 << 40);

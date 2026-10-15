@@ -70,7 +70,7 @@ mod tests {
         sign | pick
     }
 
-    use crate::inputs::splitmix64;
+    use crate::inputs::SplitMix64;
 
     #[test]
     fn ties_go_to_even_and_carries_propagate() {
@@ -129,10 +129,10 @@ mod tests {
 
     #[test]
     fn integer_trick_matches_the_value_rounding_on_two_million_inputs() {
-        let mut state = 0x5eed_b16f_2026_1001u64;
+        let mut rng = SplitMix64::new(0x5eed_b16f_2026_1001);
         let mut checked = 0usize;
         for _ in 0..2_000_000 {
-            let x = f32::from_bits((splitmix64(&mut state) >> 32) as u32);
+            let x = f32::from_bits((rng.next_u64() >> 32) as u32);
             if x.is_nan() {
                 continue;
             }

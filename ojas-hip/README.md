@@ -18,7 +18,9 @@ flowchart TD
     HipContext --> Ordinal["Check the ordinal & hipSetDevice()"]
     Ordinal --> Buffer["Allocate HIP device memory (hipMalloc)"]
     Buffer --> Copy["Memory Transfer Probe (hipMemcpy HtoD / DtoH)"]
-    Copy --> Free["Deallocate HIP memory (hipFree)"]
+    Copy --> Wait["Poll the copy's event (30 s bound)"]
+    Wait -->|Drained| Free["Deallocate HIP memory (hipFree)"]
+    Wait -->|"Timed out or failed"| Leak["Leak the buffers, stream and event"]
 ```
 
 ---
@@ -38,4 +40,5 @@ flowchart TD
 > 1. **Zero Silent Fallback:** Invocations in builds without `--features hip` return `Err(DeviceError::NotCompiled)` immediately. **Missing ROCm drivers never silently trigger CPU execution.**
 > 2. **Device Mismatch Defense:** Passing a device kind other than `Device::Hip` to `HipDevice::copy_roundtrip` immediately raises `Err(DeviceError::DeviceMismatch)`.
 > 3. **Failures are named by class:** a missing runtime or device (HIP status 3, 4, 35, 100, 101) is `NoDevice`; out of memory (2) is `Capacity`; any other status from a device that answered, including copy, stream and event failures, is `Launch`.
-> 4. **Every `unsafe` site carries a `// SAFETY:` comment.** HIP calls go through a local `extern "C"` block that returns the raw `c_int` status, so a status the binding's `hipError_t` enum does not list cannot be an invalid enum value. The crate is `forbid(unsafe_code)` when the `hip` feature is off.
+> 4. **Every wait is bounded, and so is what follows it:** the copy's event is polled for at most `COPY_TIMEOUT` (30 s) through `ojas_device::poll_until`, and the error names that bound. Once a copy is queued, its buffers, stream and event are freed only after a wait saw the stream drain (`ojas_device::leak_unless_idle`); after a timed-out or failed wait they are leaked, because freeing them would wait on the device again without a bound.
+> 5. **Every `unsafe` site carries a `// SAFETY:` comment.** HIP calls go through a local `extern "C"` block that returns the raw `c_int` status, so a status the binding's `hipError_t` enum does not list cannot be an invalid enum value. The crate is `forbid(unsafe_code)` when the `hip` feature is off.

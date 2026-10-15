@@ -1,0 +1,14 @@
+mul pieces A/B 4 vs live. warmup 3 reps 24 alternating order. load { 13.01 17.91 17.94 }
+us are one mul_forward_with_pieces call, inputs outside the timer, output dropped
+threads=1 n=1048576 live_pieces=2 four_min_us=99.8 four_med_us=107.1 live_min_us=101.0 live_med_us=110.2 faster_min=four four_over_live=0.9872
+threads=1 n=2097152 live_pieces=2 four_min_us=233.3 four_med_us=264.1 live_min_us=225.5 live_med_us=279.1 faster_min=live four_over_live=1.0346
+threads=1 n=4194304 live_pieces=2 four_min_us=508.0 four_med_us=571.8 live_min_us=512.7 live_med_us=565.2 faster_min=four four_over_live=0.9908
+threads=4 n=1048576 live_pieces=8 four_min_us=115.5 four_med_us=159.3 live_min_us=89.0 live_med_us=152.2 faster_min=live four_over_live=1.2978
+threads=4 n=2097152 live_pieces=8 four_min_us=164.3 four_med_us=210.3 live_min_us=144.2 live_med_us=185.6 faster_min=live four_over_live=1.1389
+threads=4 n=4194304 live_pieces=8 four_min_us=325.3 four_med_us=388.0 live_min_us=290.2 live_med_us=366.6 faster_min=live four_over_live=1.1207
+threads=6 n=1048576 live_pieces=12 four_min_us=89.1 four_med_us=124.9 live_min_us=94.4 live_med_us=140.9 faster_min=four four_over_live=0.9435
+threads=6 n=2097152 live_pieces=12 four_min_us=139.7 four_med_us=221.4 live_min_us=157.6 live_med_us=210.7 faster_min=four four_over_live=0.8861
+threads=6 n=4194304 live_pieces=12 four_min_us=296.2 four_med_us=370.7 live_min_us=277.6 live_med_us=356.1 faster_min=live four_over_live=1.0668
+threads=8 n=1048576 live_pieces=16 four_min_us=98.4 four_med_us=130.6 live_min_us=148.2 live_med_us=178.6 faster_min=four four_over_live=0.6636
+threads=8 n=2097152 live_pieces=16 four_min_us=142.8 four_med_us=219.8 live_min_us=174.2 live_med_us=214.2 faster_min=four four_over_live=0.8194
+threads=8 n=4194304 live_pieces=16 four_min_us=287.3 four_med_us=363.0 live_min_us=257.4 live_med_us=328.5 faster_min=live four_over_live=1.1162

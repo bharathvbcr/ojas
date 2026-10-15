@@ -7,25 +7,34 @@
 //! never depends on the grid. The GEMM grid maps one 16x16 thread tile to one
 //! 16x16 output tile, and each output's k-order is fixed by the kernel, so
 //! the grid does not change its bits either.
+//!
+//! Only [`view_range`] is in the library's `cuda` build (the buffer views);
+//! the launch shapes are the ladder's (`harness`).
 
 use crate::error::CudaError;
 
+#[cfg(feature = "harness")]
 /// Threads per block of every elementwise (K0) kernel.
 pub const THREADS_1D: u32 = 256;
 
+#[cfg(feature = "harness")]
 /// Cap on an elementwise grid. A fixed number, not a device query: the kernels
 /// grid-stride past it.
 pub const MAX_BLOCKS_1D: u32 = 65_535;
 
+#[cfg(feature = "harness")]
 /// Edge of the FFMA GEMM's square output tile and thread block.
 pub const GEMM_TILE: u32 = 16;
 
+#[cfg(feature = "harness")]
 /// `gridDim.y` limit on every CUDA architecture this crate targets.
 pub const MAX_GRID_Y: u32 = 65_535;
 
+#[cfg(feature = "harness")]
 /// `gridDim.x` limit on compute capability 3.0 and later.
 pub const MAX_GRID_X: u32 = 2_147_483_647;
 
+#[cfg(feature = "harness")]
 /// A kernel launch shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Launch {
@@ -35,6 +44,7 @@ pub struct Launch {
     pub block: (u32, u32, u32),
 }
 
+#[cfg(feature = "harness")]
 /// The grid-stride launch for `n` elements; `None` when there is nothing to do.
 pub fn grid_1d(n: u64) -> Option<Launch> {
     if n == 0 {
@@ -48,6 +58,7 @@ pub fn grid_1d(n: u64) -> Option<Launch> {
     })
 }
 
+#[cfg(feature = "harness")]
 /// The FFMA GEMM's launch for an `m x n` output: x over columns, y over rows.
 pub fn gemm_grid(m: usize, n: usize) -> Result<Launch, CudaError> {
     let tile = GEMM_TILE as usize;
@@ -121,6 +132,7 @@ mod tests {
         assert!(view_range(0, 0, 1, "v").is_err());
     }
 
+    #[cfg(feature = "harness")]
     /// Simulate the kernels' grid-stride loop and count visits per index.
     fn visits(n: u64, launch: Launch) -> Vec<u32> {
         let stride = u64::from(launch.grid.0) * u64::from(launch.block.0);
@@ -137,11 +149,13 @@ mod tests {
         seen
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn empty_work_launches_nothing() {
         assert_eq!(grid_1d(0), None);
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn grid_stride_visits_every_element_exactly_once() {
         for n in [1u64, 255, 256, 257, 1000, 65_535 * 256 + 3] {
@@ -153,12 +167,14 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn huge_elementwise_work_is_capped_not_overflowed() {
         let launch = grid_1d(u64::MAX).unwrap();
         assert_eq!(launch.grid.0, MAX_BLOCKS_1D);
     }
 
+    #[cfg(feature = "harness")]
     #[test]
     fn gemm_grid_tiles_the_output_and_refuses_too_many_rows() {
         let l = gemm_grid(130, 70).unwrap();

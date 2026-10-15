@@ -1,5 +1,6 @@
-//! Kernel source text. Backends compile these strings. HIP is not registered:
-//! the CUDA-C source is written so a future hiprtc path can reuse it unchanged.
+//! Kernel source text. Backends compile these strings. ojas-cuda's CUDA-C
+//! sources live in that crate (`ojas-cuda/src/kernels.rs` and the `*_kernels`
+//! modules), next to the runtime that compiles them.
 
 use ojas_core::OjasError;
 
@@ -26,23 +27,6 @@ fn main(
         return;
     }
     output_values[index] = input_values[index] * params.scale + params.bias;
-}
-"#
-}
-
-pub const fn affine_cuda() -> &'static str {
-    r#"
-extern "C" __global__ void affine_f32(
-    float* out,
-    const float* inp,
-    float scale,
-    float bias,
-    unsigned int n
-) {
-    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
-        out[i] = inp[i] * scale + bias;
-    }
 }
 "#
 }

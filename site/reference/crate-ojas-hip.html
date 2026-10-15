@@ -156,7 +156,9 @@
     HipContext --&gt; Ordinal[&#34;Check the ordinal &amp; hipSetDevice()&#34;]
     Ordinal --&gt; Buffer[&#34;Allocate HIP device memory (hipMalloc)&#34;]
     Buffer --&gt; Copy[&#34;Memory Transfer Probe (hipMemcpy HtoD / DtoH)&#34;]
-    Copy --&gt; Free[&#34;Deallocate HIP memory (hipFree)&#34;]</pre></figure>
+    Copy --&gt; Wait[&#34;Poll the copy&#39;s event (30 s bound)&#34;]
+    Wait --&gt;|Drained| Free[&#34;Deallocate HIP memory (hipFree)&#34;]
+    Wait --&gt;|&#34;Timed out or failed&#34;| Leak[&#34;Leak the buffers, stream and event&#34;]</pre></figure>
 <hr>
 <h2 id="architectural-role--boundaries">Architectural Role &amp; Boundaries <a class="anchor" href="#architectural-role--boundaries" aria-label="Link to this section">#</a></h2>
 <aside class="alert alert-note"><p class="alert-title">Note</p><p><code>ojas-hip</code> does <strong>not</strong> implement the <code>ojas_core::Backend</code> trait and carries no compute kernels. It operates strictly as an isolated device and memory transfer probe for AMD ROCm hardware. A full HIP backend is planned: see <a href="https://github.com/bharathvbcr/ojas/blob/main/tasks/gp-hip-backend.md" rel="noopener"><code>tasks/gp-hip-backend.md</code></a> and the HIP decision in <a href="backends.html"><code>docs/backends.md</code></a>.</p>
@@ -170,6 +172,8 @@
 <li><strong>Device Mismatch Defense:</strong> Passing a device kind other than <code>Device::Hip</code> to <code>HipDevice::copy_roundtrip</code> immediately raises <code>Err(DeviceError::DeviceMismatch)</code>.
 </li>
 <li><strong>Failures are named by class:</strong> a missing runtime or device (HIP status 3, 4, 35, 100, 101) is <code>NoDevice</code>; out of memory (2) is <code>Capacity</code>; any other status from a device that answered, including copy, stream and event failures, is <code>Launch</code>.
+</li>
+<li><strong>Every wait is bounded, and so is what follows it:</strong> the copy&#39;s event is polled for at most <code>COPY_TIMEOUT</code> (30 s) through <code>ojas_device::poll_until</code>, and the error names that bound. Once a copy is queued, its buffers, stream and event are freed only after a wait saw the stream drain (<code>ojas_device::leak_unless_idle</code>); after a timed-out or failed wait they are leaked, because freeing them would wait on the device again without a bound.
 </li>
 <li><strong>Every <code>unsafe</code> site carries a <code>// SAFETY:</code> comment.</strong> HIP calls go through a local <code>extern &#34;C&#34;</code> block that returns the raw <code>c_int</code> status, so a status the binding&#39;s <code>hipError_t</code> enum does not list cannot be an invalid enum value. The crate is <code>forbid(unsafe_code)</code> when the <code>hip</code> feature is off.
 </li>

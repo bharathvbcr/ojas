@@ -26,37 +26,10 @@
 
 use ojas_core::{exp_exact, rank_logits, OjasError};
 
-/// SplitMix64 with the state as an explicit counter: the same stream as
-/// `ojas_data::CounterRng`. ojas-infer does not depend on ojas-data, so the
-/// generator is repeated here and a test pins it to that crate's reference
-/// values.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SplitMix64 {
-    state: u64,
-}
-
-impl SplitMix64 {
-    pub fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    pub fn state(&self) -> u64 {
-        self.state
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// Uniform in `[0, 1)` from the top 53 bits.
-    pub fn next_f64(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
+/// The sampler's generator: ojas's one SplitMix64 (`ojas_kernels`), the same
+/// stream as `ojas_data::CounterRng`. `next_f64` is uniform in `[0, 1)`
+/// from the top 53 bits.
+pub use ojas_kernels::SplitMix64;
 
 /// `temperature == 0` is greedy. `top_k`, when set, is at least 1.
 /// `top_p`, when set, is in `(0, 1]`.

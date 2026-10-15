@@ -31,14 +31,15 @@ use cudarc::driver::{
     DriverError,
 };
 use ojas_core::Budget;
+use ojas_device::{free_bytes_fit, poll_until};
 
 use crate::budget::{bytes_for, AllocBudget, Reservation};
 use crate::error::CudaError;
+#[cfg(feature = "harness")]
 use crate::json::{Json, JsonObj};
 use crate::kernels::{CompileSpec, KernelModule};
 use crate::libprobe;
 use crate::nvrtc_cache::{CacheKey, CacheStats, NvrtcCache};
-use crate::wait::poll_until;
 
 /// The compute capability this crate is written and tested for (GH200:
 /// sm_90), required exactly. Stated once, in [`crate::kernels`], where the
@@ -109,8 +110,9 @@ pub struct DeviceInfo {
     pub cublas_workspace_bytes: usize,
 }
 
+#[cfg(feature = "harness")]
 impl DeviceInfo {
-    /// The report object.
+    /// The rung report's device object.
     pub fn to_json(&self) -> Json {
         JsonObj::new()
             .with("name", self.name.as_str())
@@ -162,7 +164,7 @@ pub fn cublas_error(op: &str, status: cublas_sys::cublasStatus_t) -> CudaError {
 /// Wait, at most `timeout`, for everything queued on `stream` so far, then
 /// report any error cudarc deferred from a drop path (frees, event waits).
 /// The crate's one device wait: an event is recorded and polled
-/// ([`poll_until`]), never an unbounded `cuStreamSynchronize`.
+/// ([`ojas_device::poll_until`]), never an unbounded `cuStreamSynchronize`.
 pub(crate) fn wait_stream(
     stream: &CudaStream,
     timeout: Duration,
@@ -355,6 +357,9 @@ impl Drop for CublasHandle {
 /// The device runtime. Fields drop in order: the cuBLAS handle (then its
 /// workspace), the module cache, the stream, the context.
 pub struct CudaRuntime {
+    // Held for its workspace and its drop order; read through
+    // `cublas_handle`, which only the ladder's GEMM (`harness`) calls yet.
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     blas: CublasHandle,
     cache: Mutex<NvrtcCache<Arc<CudaModule>>>,
     budget: AllocBudget,
@@ -482,6 +487,7 @@ impl CudaRuntime {
     }
 
     /// The raw cuBLAS handle, bound to [`Self::stream`].
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     pub(crate) fn cublas_handle(&self) -> cublas_sys::cublasHandle_t {
         self.blas.handle
     }
@@ -576,10 +582,8 @@ impl CudaRuntime {
             .ctx
             .mem_get_info()
             .map_err(|e| driver_error("cuMemGetInfo", e))?;
-        if usize::try_from(bytes).map_or(true, |b| b > free) {
-            return Err(CudaError::capacity_of(label, bytes, free as u64));
-        }
-        Ok(())
+        free_bytes_fit(u64::try_from(free).unwrap_or(u64::MAX), bytes)
+            .map_err(|short| CudaError::capacity_of(label, short.need, short.free))
     }
 
     /// A new device allocation holding a copy of `data`, already reserved by

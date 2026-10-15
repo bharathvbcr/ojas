@@ -252,9 +252,14 @@ jobs:
         # feature compiles and links without a CUDA toolkit. The device tests
         # (tests/device_*.rs, #[ignore]d, sm_90) and the rung binaries are built,
         # not run; ojas-cuda's host tests run in the linux job's workspace test.
+        # Any target that builds the tests turns on `harness` (the crate's
+        # dev-dependency on itself), so the two lib-only lints are the only
+        # check of the library's default surface, with and without `cuda`.
         working-directory: ${{ env.OJAS }}
         run: |
           cargo clippy -p ojas-cuda --features cuda --all-targets -- -D warnings
+          cargo clippy -p ojas-cuda --features cuda -- -D warnings
+          cargo clippy -p ojas-cuda -- -D warnings
           cargo test -p ojas-cuda --features cuda --no-run
       - name: ojas-hip, default features
         # hip-runtime-sys 0.1.2 panics in its build script when

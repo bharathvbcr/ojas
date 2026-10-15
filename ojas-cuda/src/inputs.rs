@@ -1,41 +1,19 @@
-//! Deterministic test inputs, with no dependency.
+//! Deterministic test inputs.
 //!
-//! - [`splitmix64`] / [`splitmix_f32`] are ojas's generator
-//!   (`ojas-kernels/src/harness.rs:31-45`), so the same seed gives the same
-//!   values here and in ojas's parity harness.
+//! - [`SplitMix64`] / [`splitmix_f32`] are ojas's one generator
+//!   (`ojas_kernels`), so the same seed gives the same values here and in
+//!   ojas's parity harness.
 //! - [`tessl_ragged_a`] / [`tessl_ragged_b`] are the inputs of tessl's
 //!   `gemm_bf16_nn_ragged_mn` test (`tessl/src/gemm.rs:2349-2350`), so the
 //!   GEMM shapes borrowed from that test also use its values.
 
-/// One SplitMix64 step.
-pub fn splitmix64(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
-}
-
-/// `n` values in `[-scale, scale)`, as ojas's `splitmix_f32`.
-pub fn splitmix_f32(seed: u64, n: usize, scale: f32) -> Vec<f32> {
-    let mut state = seed;
-    (0..n)
-        .map(|_| {
-            let z = splitmix64(&mut state);
-            // The top 24 bits are exact in f32.
-            let mantissa = (z >> 40) as f32 / (1u64 << 24) as f32;
-            scale * (2.0 * mantissa - 1.0)
-        })
-        .collect()
-}
+pub use ojas_kernels::{splitmix_f32, SplitMix64};
 
 /// `n` raw 32-bit patterns: every class of f32 (NaN, inf, subnormal, zero)
 /// appears, which is what a bit-exact cast test needs.
 pub fn splitmix_bits(seed: u64, n: usize) -> Vec<u32> {
-    let mut state = seed;
-    (0..n)
-        .map(|_| (splitmix64(&mut state) >> 32) as u32)
-        .collect()
+    let mut rng = SplitMix64::new(seed);
+    (0..n).map(|_| (rng.next_u64() >> 32) as u32).collect()
 }
 
 /// f32 values whose bit patterns sweep the rounding edge cases of an f32 to

@@ -22,8 +22,9 @@ flowchart TD
 
     subgraph KernelSubstrate["ojas-kernels (Pure Geometry & Shaders)"]
         Geo["geometry.rs\n- gemm_grid(M, N)\n- grid_1d(N, tile_size)\n- attention_tiles(head_dim, shared_bytes)\n- cached_attention_splits(rows, kv_len)\n- fold_grid(batch, rows)"]
-        Src["source.rs & wgsl/\n- wgsl_module(id)\n- affine_wgsl(), affine_cuda()"]
+        Src["source.rs & wgsl/\n- wgsl_module(id)\n- affine_wgsl()"]
         Harness["harness.rs\n- linear_close()\n- max_abs()\n- splitmix_f32()"]
+        Rng["rng.rs\n- SplitMix64"]
     end
 
     subgraph Core["Base Engine"]
@@ -81,7 +82,6 @@ flowchart TD
         GemmWGSL["gemm.wgsl\n64x64 and 128x128 register-blocked tiled matmul"]
         AttnWGSL["attention.wgsl\nTiled causal flash attention: online-softmax forward; dQ and dK/dV backward passes without atomics"]
         CachedWGSL["cached_attention.wgsl\nSplit-key attention against a time-major KV cache, merged in a fixed order"]
-        CudaKernels["CUDA PTX Kernels\nAffine and GEMM source templates"]
     end
 
     subgraph Assembly["wgsl_module(id)"]
@@ -102,6 +102,8 @@ flowchart TD
 ## Parity Verification Harness (`harness.rs`)
 
 `linear_close` runs `linear_forward` on two backends from the same deterministic inputs (`splitmix_f32`), moving data with each backend's own `upload` and `download`, so a device backend runs its kernel. `ojas-wgpu/tests/parity.rs` calls it against `ojas-cpu`.
+
+`SplitMix64` (`rng.rs`) is the workspace's one SplitMix64, with the state as an explicit counter. `splitmix_f32` draws from it, and so do `ojas-cuda`'s test inputs, `ojas-autograd`'s tiny-model initialiser, `ojas-infer`'s sampler and `ojas-data`'s `CounterRng` (a re-export), so one seed is one stream in every crate. Its tests pin the reference stream and the bits each replaced copy produced.
 
 > [!IMPORTANT]
 > `max_abs` returns `f64::INFINITY` when either side holds a non-finite value, so no tolerance accepts a NaN or infinite output.

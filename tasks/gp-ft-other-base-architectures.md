@@ -57,3 +57,9 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-model/src/spec.rs
 - ojas-model/src/llama/
 - ojas-data/src/bpe.rs
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Premises hold [A]: no ojas-model/src/llama, no gelu outside gemma-metal (ojas-qwen35/src/config.rs:208 refuses it), gemma-metal not a workspace member. "Every op exists" is optimistic: no llama3 rope scaling in ojas-core/src/rope.rs (rg -uu). spec.rs:38-43 cite moved (nanolab fields ~:44-70, SPEC_ARCH :28, to_json hard-codes qk_norm/gated_attention/value_residual at :253-256). Off the acceptance path.

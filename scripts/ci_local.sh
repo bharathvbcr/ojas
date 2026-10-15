@@ -18,8 +18,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 echo "==> cuda check"
 # cudarc loads the driver dynamically. This host can compile the feature
-# without a CUDA toolkit. It does not execute a kernel.
-cargo check -p ojas-cuda --features cuda
+# without a CUDA toolkit. It does not execute a kernel. The lib-only lints
+# check ojas-cuda's default surface: any target that builds its tests turns
+# on `harness` (its dev-dependency on itself).
+cargo clippy -p ojas-cuda --features cuda --all-targets -- -D warnings
+cargo clippy -p ojas-cuda --features cuda -- -D warnings
+cargo clippy -p ojas-cuda -- -D warnings
 
 echo "==> nightly simd (not a Cargo target)"
 ./scripts/simd_bench.sh

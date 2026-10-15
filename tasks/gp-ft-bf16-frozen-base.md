@@ -111,3 +111,11 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
   - They were measured on Qwen3.5-2B (identical text_config). 2B-Base and 0.8B-Base weights are not on the machine.
 - **Criterion 8: blocked** on gp-oom-error-class. No device OOM was reached: the peak was 33.9 GB of 51.5 GB.
 
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: merged at 03412af [V]; review is right. The follow-up ft-69744e54 (bf16 tied table) is on branch gitpulse/bf16-tied-embedding-table-embedding-forw-eab146a9 at 5afa1fb, not on main.
+- Criteria: 1, 3, 4 met [A]; 2 met, the note "blocked" is stale: Metal linear_backward_input takes the bf16 weight (backend.rs:1363-1389), pinned by ojas-metal/tests/frozen_adversarial.rs:62 and qwen35_lora_metal.rs:68 [A]; 5 partial: LoRA A/B f32, D17 and the span head do not exist yet [A]; 6 met with the recorded deviation; 7 open: gpu_memory_rows.rs has no LoRA arm and no 0.8B run [V]; 8 landed on main (classify_alloc, retrying) but only the Limit path is exercised by a real refusal (device.rs:3335); the Exhausted path only by injected strings [A].
+- Stale [V]: "2B-Base and 0.8B-Base weights are not on this machine" (here and in bench/results/2026-10-11-bf16-frozen-base/README.md): both were fetched 2026-10-12 (~/.cache/huggingface/hub, 4.5 GB and 1.7 GB shards). "Lappi's two open() call sites need the new argument": provider.rs:146 already passes Precision::F32. gpu_memory_rows.rs:19-20 "the Tape has no frozen leaves yet" is false (fixed on the tied-table branch).
+- Owed for criterion 7 [V]: Lappi's pre-registration requires the T = 9,638 memory row before the Mac run (campaign/lora-2b-preregistered.json:64). Inferred estimate for a LoRA step at T = 9,638: 13-14 GB (the 18.97 GB full-gradient row minus ~5.5 GB of linear weight gradients) [I]; the binding limit is the 32 GiB memguard, not the 51.5 GB working set.

@@ -68,3 +68,13 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-autograd/src/tape.rs
 - ojas-model/src/qwen35/forward.rs
 - bench/
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: backlog, not started; one item half done [A].
+- Criteria: the interleaved 2B A/B rows are open (only frozen_linear_bench.rs, T = 2,048, ignored, nothing committed) [A]; finite checks on frozen weights still run per call (device.rs:1410, 1505, 1534, 1568, 2850) [A]; no embedding gradient for a frozen table is done (tape.rs:1173-1175, frozen.rs:189) [A], the fused-CE half is open [V] (tape.rs:955-990: want_grad always true, both gradients required); the dW-skip share of a 2B step and the Tape-vs-provider tokens/s (the D1 metric) are unmeasured [A].
+- Fix seam for the fused-CE half [A]: a per-gradient want flag on `Backend::linear_cross_entropy_mean`, honoured by CPU and Metal, so a frozen head allocates no [V, d] gradient (2.03 GB at 2B, held from forward to backward) and runs no gw GEMM (~9.8 TFLOP per step at T = 9,638 [I]).
+- Stale: "embedding backward writes a dense ~2 GB gradient" is false for a frozen table; the "~22 GB re-read per micro-step" figure is consistent (~20.5 GB) but at ~300 GB/s is under 0.1 s of a ~30 s step [I], so its rank as a D1 decider is unsupported.
+- Acceptance path: the fused-CE half should land before the long run (2 GB and a quarter of the head's GEMM work every step). The D1 tokens/s reading is owed: the provider's 452 tok/s at T = 8,192 (Lappi) against the Tape's full-gradient lower bound of ~279 tok/s at T = 9,638 (from wall_ms, which includes load) leaves the 0.5 reversal threshold close [I].

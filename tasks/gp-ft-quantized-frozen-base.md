@@ -63,3 +63,11 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - ojas-core/src/quant.rs
 - ojas-metal/src/backend.rs
 - gemma-metal/src/quant.rs
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: backlog, gated, accurate; stays unbuilt [A].
+- The gate measurement is not run or written: Lappi has no docs/fine-tune-plan.md and no quantize script outside AUDIT and ledgers [A]. The memory-need condition looks unmet: the bf16 full-gradient row is 18.97 GB at T = 9,638 [V], an upper bound for LoRA.
+- Stale: gemma-metal kernels.rs:377 cite moved (divisions at :301, :342, guarded by callers at :272, :285; the panic is not shown reachable); mlx_lm's interpreter has mlx 0.32.3, not 0.31.2 [A].

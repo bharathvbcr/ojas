@@ -8,6 +8,7 @@
 
 mod geometry;
 mod harness;
+mod rng;
 mod source;
 
 pub use geometry::{
@@ -16,7 +17,8 @@ pub use geometry::{
     CACHED_ATTENTION_MAX_SPLIT, CACHED_ATTENTION_TARGET_GROUPS, GEMM_BIG_TILE, GEMM_TILE,
 };
 pub use harness::{linear_close, max_abs, splitmix_f32};
+pub use rng::SplitMix64;
 pub use source::{
-    affine_cuda, affine_wgsl, clip_slots, wgsl_module, WgslModule, CLIP_MAX_SLOTS, CLIP_NORM_BASE,
+    affine_wgsl, clip_slots, wgsl_module, WgslModule, CLIP_MAX_SLOTS, CLIP_NORM_BASE,
     CLIP_SCALE_BASE,
 };

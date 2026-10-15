@@ -159,8 +159,9 @@
 
     subgraph KernelSubstrate[&#34;ojas-kernels (Pure Geometry &amp; Shaders)&#34;]
         Geo[&#34;geometry.rs\n- gemm_grid(M, N)\n- grid_1d(N, tile_size)\n- attention_tiles(head_dim, shared_bytes)\n- cached_attention_splits(rows, kv_len)\n- fold_grid(batch, rows)&#34;]
-        Src[&#34;source.rs &amp; wgsl/\n- wgsl_module(id)\n- affine_wgsl(), affine_cuda()&#34;]
+        Src[&#34;source.rs &amp; wgsl/\n- wgsl_module(id)\n- affine_wgsl()&#34;]
         Harness[&#34;harness.rs\n- linear_close()\n- max_abs()\n- splitmix_f32()&#34;]
+        Rng[&#34;rng.rs\n- SplitMix64&#34;]
     end
 
     subgraph Core[&#34;Base Engine&#34;]
@@ -211,7 +212,6 @@
         GemmWGSL[&#34;gemm.wgsl\n64x64 and 128x128 register-blocked tiled matmul&#34;]
         AttnWGSL[&#34;attention.wgsl\nTiled causal flash attention: online-softmax forward; dQ and dK/dV backward passes without atomics&#34;]
         CachedWGSL[&#34;cached_attention.wgsl\nSplit-key attention against a time-major KV cache, merged in a fixed order&#34;]
-        CudaKernels[&#34;CUDA PTX Kernels\nAffine and GEMM source templates&#34;]
     end
 
     subgraph Assembly[&#34;wgsl_module(id)&#34;]
@@ -228,6 +228,7 @@
 <hr>
 <h2 id="parity-verification-harness-harnessrs">Parity Verification Harness (<code>harness.rs</code>) <a class="anchor" href="#parity-verification-harness-harnessrs" aria-label="Link to this section">#</a></h2>
 <p><code>linear_close</code> runs <code>linear_forward</code> on two backends from the same deterministic inputs (<code>splitmix_f32</code>), moving data with each backend&#39;s own <code>upload</code> and <code>download</code>, so a device backend runs its kernel. <code>ojas-wgpu/tests/parity.rs</code> calls it against <code>ojas-cpu</code>.</p>
+<p><code>SplitMix64</code> (<code>rng.rs</code>) is the workspace&#39;s one SplitMix64, with the state as an explicit counter. <code>splitmix_f32</code> draws from it, and so do <code>ojas-cuda</code>&#39;s test inputs, <code>ojas-autograd</code>&#39;s tiny-model initialiser, <code>ojas-infer</code>&#39;s sampler and <code>ojas-data</code>&#39;s <code>CounterRng</code> (a re-export), so one seed is one stream in every crate. Its tests pin the reference stream and the bits each replaced copy produced.</p>
 <aside class="alert alert-important"><p class="alert-title">Important</p><p><code>max_abs</code> returns <code>f64::INFINITY</code> when either side holds a non-finite value, so no tolerance accepts a NaN or infinite output.</p>
 </aside>
       </article>

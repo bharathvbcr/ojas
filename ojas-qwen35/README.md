@@ -249,8 +249,12 @@ with `Numerics::ExactF32`.
 
 Not measured:
 
-- a 2B `save_state` (one staging per kind, each recycled before the next);
-- `load_state`;
+- a 2B `save_state` and `load_state`. They are not measurable under this
+  Mac's 32 GiB memory guard: 30.13 GB resident plus about 7.5 GB of staging
+  per table. The row was retired on 2026-10-15 (Fable,
+  gp-qwen35-2b-metal-tape-run); the LoRA run's checkpoint is the adapters,
+  measured on the Tape under gp-ft-trainer-loop. The state format stays
+  pinned at tiny scale (`gpu_tiny_state_round_trip_is_bit_exact`);
 - `Bf16Operands`;
 - longer sequences.
 
@@ -300,9 +304,13 @@ step. `Qwen35TextConfig::tape_spec` hands it the shape this crate's parser
 validated, so `config.json` still has one reader. On tessl's tiny fixture it
 matches transformers on the CPU and on Metal
 (`ojas-model/tests/qwen35_{fixture,metal_tape}.rs`). `tests/gpu_tape_2b.rs`
-runs the real 2B through the Metal tape, each layer a checkpointed segment,
-against this provider's step on the same tokens. The two never hold the
-model at once.
+runs the real 2B-Base through the Metal tape, each layer a checkpointed
+segment, against transformers' own float32 step on tessl's real-2B reference
+(`make_train_fixture.py 2b`): loss within 4.54e-5, every one of the 149
+reference gradients within 4.05e-3 of its peak, a 17.60 GB step peak
+(`bench/results/2026-10-15-qwen35-2b-tape-gate`). This provider is not in
+that process: it would not fit beside the reference read-back under the
+machine's memory guard.
 
 ## JSON
 

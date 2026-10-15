@@ -128,3 +128,16 @@ fn empty_accumulation_does_not_step() {
     assert_eq!(train.step_index(), 0);
     assert_eq!(train.param("vr_lambda").unwrap(), &[1.0]);
 }
+
+/// The initial weights keep the bits the private SplitMix copy gave them
+/// before the shared `ojas_kernels::SplitMix64` replaced it: `tok_emb` takes
+/// the first draws, `0.02 * (2m - 1)` from the top 24 bits.
+#[test]
+fn initial_weights_keep_their_splitmix_bits() {
+    let train = TinyTrain::new(7).unwrap();
+    let first: Vec<u32> = train.param("tok_emb").unwrap()[..4]
+        .iter()
+        .map(|x| x.to_bits())
+        .collect();
+    assert_eq!(first, [0xbb90_6705, 0xbc9e_56bd, 0x3c83_523d, 0x3b59_658f]);
+}

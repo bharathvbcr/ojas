@@ -84,3 +84,20 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
 - Cargo.toml
 - ojas-model/src/qwen35/forward.rs
 - ojas-metal/src/backend.rs
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Status: ready; no ojas-train crate (not in Cargo.toml members) [A].
+- Superseded in part [V]: Lappi's AUDIT/ojas-train-move-2026-10-14/ (fable-ruling.md, delta-report.md, host-adamw-contingency.md) re-scopes the move: 8 modules (step, trainer, schedule, recipe, adamw, mock, run_control, pyjson) plus ojas-qwen35's groups.rs with OptimizerPlan as the one per-entry table; sha256 hand-rolled unless the owner approves `sha2` (unanswered); pyjson onto ojas_io::JsonValue; edition 2024 [A]. Fold the ruling into this brief's criteria.
+- Criteria: 1 open; 2 partial (the HANDOFF records one peer cleared; live lanes not re-checked); 3 open and mis-premised: ojas-qwen35 does not implement StepProvider, Lappi's qd-train-metal/src/provider.rs:297 does, so the adapter changes in the same step [A]; 4 open, seam cites moved (forward :535, backward :576, grad_sq_norm :668, adamw_step :693) and now feasible since LoRA merged at efa507f [A]; 5, 6, 9 open (no sha256 in ojas, ojas-data/src/rng.rs:5-6) [A]; 7 partial (one-step torch check only) [A]; 8 open: Metal AdamW still checks then writes per tensor (backend.rs:2266-2297); the brief's :2104 and device.rs:2937 now point at linear_cross_entropy_mean [A]; 10 partial (MemoryProbe, ResourcePlan and check_device_working_set exist; no planner for a Tape step) [A]; 11 holds [A].
+- Stale [A]: the "Lappi-side bugs fixed during the move" are already fixed in Lappi (--seed seeds the data order, --resume exists, --min-lr wired: qd-train-metal/src/args.rs:102-121, run.rs:237, :261). Lappi pins ojas at bc498c4, 35 commits behind main; the HANDOFF start sha 30a069d has drifted (6f88a00).
+- New, P2 [A]: groups.rs imports ojas-qwen35's TensorSpec and Qwen35Error, and that crate is macOS-only (lib.rs:25); moving it needs a decoupled table type. P2 [A]: ojas-cuda/src/step.rs:285 already defines a different StepProvider and a second AdamWHyper. P3 [I]: no design for summing LoRA gradients across tapes for a 35,403-token batch of widths up to 9,638.
+
+### Fable rulings (2026-10-15)
+Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two items directly (Lappi pin bump, hand-rolled sha256).
+- **Criterion 4:** D17 is a host entry (see gp-ft-decision-head-and-data-path), not a Tape leaf.
+- **sha256 is hand-rolled (owner, 2026-10-15); no sha2 dependency.** sha256.rs in ojas-train with FIPS 180-4 vectors and a parity pin against the pre-registration's recorded `safetensors_sha256` of the real 2B-Base file (Lappi campaign/lora-2b-preregistered.json).
+- **Criterion 9 gains the adapter checkpoint save and resume on the Tape** that replaces the provider's retired 2B save/load row (gp-qwen35-2b-metal-tape-run).
+- **Lappi pin bumped (owner, 2026-10-15):** bc498c4 -> 132b46e (ojas main, 38 commits), Lappi commit 21fb7ad on branch ojas-pin-88be893, not merged in Lappi. Verified: make pin PASS, qd-train-metal and qd-preflight clippy and tests, gpu_tiny --ignored 10/10. 132b46e is not on origin until ojas main is pushed. The later bump to the ojas-train sha is still owed.

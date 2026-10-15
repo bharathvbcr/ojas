@@ -127,7 +127,10 @@ impl<T: Element> CudaBuffer<T> {
 /// of rows of a larger matrix (K10's head chunk) is an operand without a copy.
 #[derive(Clone, Copy)]
 pub struct BufView<'a, T: Element> {
+    // Read by `device`, which only the ladder's kernels (`harness`) call yet.
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     buf: &'a CudaBuffer<T>,
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     off: usize,
     len: usize,
 }
@@ -144,6 +147,7 @@ impl<'a, T: Element> BufView<'a, T> {
     }
 
     /// The cudarc view: in range by construction.
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     pub(crate) fn device(&self) -> CudaView<'a, T> {
         self.buf.slice().slice(self.off..self.off + self.len)
     }
@@ -151,7 +155,10 @@ impl<'a, T: Element> BufView<'a, T> {
 
 /// A checked, non-empty element range of a [`CudaBuffer`], writable.
 pub struct BufViewMut<'a, T: Element> {
+    // Read by `device`, which only the ladder's kernels (`harness`) call yet.
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     buf: &'a mut CudaBuffer<T>,
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     off: usize,
     len: usize,
 }
@@ -168,6 +175,7 @@ impl<T: Element> BufViewMut<'_, T> {
     }
 
     /// The cudarc view: in range by construction.
+    #[cfg_attr(not(feature = "harness"), allow(dead_code))]
     pub(crate) fn device(&mut self) -> CudaViewMut<'_, T> {
         self.buf
             .slice_mut()

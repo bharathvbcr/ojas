@@ -346,9 +346,7 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 <p>Without the recycle, the same staging reached 52.44 GB and faulted, 4 of 4 runs. These numbers are from the gradient read after one step at 128 tokens with <code>Numerics::ExactF32</code>.</p>
 <p>Not measured:</p>
 <ul>
-<li>a 2B <code>save_state</code> (one staging per kind, each recycled before the next);
-</li>
-<li><code>load_state</code>;
+<li>a 2B <code>save_state</code> and <code>load_state</code>. They are not measurable under this Mac&#39;s 32 GiB memory guard: 30.13 GB resident plus about 7.5 GB of staging per table. The row was retired on 2026-10-15 (Fable, gp-qwen35-2b-metal-tape-run); the LoRA run&#39;s checkpoint is the adapters, measured on the Tape under gp-ft-trainer-loop. The state format stays pinned at tiny scale (<code>gpu_tiny_state_round_trip_is_bit_exact</code>);
 </li>
 <li><code>Bf16Operands</code>;
 </li>
@@ -389,7 +387,7 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_real_2b
 cargo test -p ojas-qwen35 --release --test gpu_tape_2b -- --ignored --test-threads=1 --nocapture gpu_real_2b</code></pre></div>
 <h2 id="the-same-tower-on-ojass-tape">The same tower on ojas&#39;s Tape <a class="anchor" href="#the-same-tower-on-ojass-tape" aria-label="Link to this section">#</a></h2>
-<p><code>ojas_model::qwen35</code> writes the Qwen3.5 text tower once over ojas-model&#39;s <code>Graph</code>, so it trains on <code>ojas_autograd::Tape</code> on any backend with the hybrid ops (CPU and Metal natively) instead of through tessl&#39;s monolithic step. <code>Qwen35TextConfig::tape_spec</code> hands it the shape this crate&#39;s parser validated, so <code>config.json</code> still has one reader. On tessl&#39;s tiny fixture it matches transformers on the CPU and on Metal (<code>ojas-model/tests/qwen35_{fixture,metal_tape}.rs</code>). <code>tests/gpu_tape_2b.rs</code> runs the real 2B through the Metal tape, each layer a checkpointed segment, against this provider&#39;s step on the same tokens. The two never hold the model at once.</p>
+<p><code>ojas_model::qwen35</code> writes the Qwen3.5 text tower once over ojas-model&#39;s <code>Graph</code>, so it trains on <code>ojas_autograd::Tape</code> on any backend with the hybrid ops (CPU and Metal natively) instead of through tessl&#39;s monolithic step. <code>Qwen35TextConfig::tape_spec</code> hands it the shape this crate&#39;s parser validated, so <code>config.json</code> still has one reader. On tessl&#39;s tiny fixture it matches transformers on the CPU and on Metal (<code>ojas-model/tests/qwen35_{fixture,metal_tape}.rs</code>). <code>tests/gpu_tape_2b.rs</code> runs the real 2B-Base through the Metal tape, each layer a checkpointed segment, against transformers&#39; own float32 step on tessl&#39;s real-2B reference (<code>make_train_fixture.py 2b</code>): loss within 4.54e-5, every one of the 149 reference gradients within 4.05e-3 of its peak, a 17.60 GB step peak (<code>bench/results/2026-10-15-qwen35-2b-tape-gate</code>). This provider is not in that process: it would not fit beside the reference read-back under the machine&#39;s memory guard.</p>
 <h2 id="json">JSON <a class="anchor" href="#json" aria-label="Link to this section">#</a></h2>
 <p><code>config.json</code> and <code>model.safetensors.index.json</code> are read with ojas-io&#39;s strict reader (<code>parse_json_with</code>). The limits are depth 32 and 16 MiB of input. Duplicate keys are refused.</p>
 <p>A dimension must be an integer literal; <code>2048.0</code> is refused. A float field written as an integer must be exact in <code>f64</code>, so <code>9007199254740993</code> is refused, not rounded. An integer literal beyond the <code>u64</code>/<code>i64</code> range is refused anywhere in the file.</p>

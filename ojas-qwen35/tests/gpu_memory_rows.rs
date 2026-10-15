@@ -29,7 +29,8 @@
 
 #![cfg(target_os = "macos")]
 
-use std::path::PathBuf;
+mod common;
+
 use std::time::Instant;
 
 use ojas_autograd::Tape;
@@ -43,27 +44,9 @@ use ojas_qwen35::{
     Sequence, Snapshot, WdRule,
 };
 
-const GIB: u64 = 1 << 30;
+use common::{refused, snapshot_dir, Row};
 
-fn snapshot_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("QWEN35_MEM_SNAPSHOT") {
-        return PathBuf::from(d);
-    }
-    let root = PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-        .join(".cache/huggingface/hub/models--Qwen--Qwen3.5-2B-Base/snapshots");
-    let dirs: Vec<PathBuf> = std::fs::read_dir(&root)
-        .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.join("config.json").is_file())
-        .collect();
-    assert_eq!(
-        dirs.len(),
-        1,
-        "expected one snapshot under {}",
-        root.display()
-    );
-    dirs[0].clone()
-}
+const GIB: u64 = 1 << 30;
 
 /// `n` deterministic ids below 150000 (ordinary text tokens), skipping the
 /// vision special tokens the config declares.
@@ -82,52 +65,6 @@ fn ids(n: usize, reserved: &[u32]) -> Vec<u32> {
     out
 }
 
-/// One measurement's fields, printed as a JSON object.
-struct Row {
-    fields: Vec<(&'static str, String)>,
-}
-
-impl Row {
-    fn new() -> Self {
-        Self { fields: Vec::new() }
-    }
-
-    fn num(&mut self, k: &'static str, v: u64) {
-        self.fields.push((k, v.to_string()));
-    }
-
-    fn text(&mut self, k: &'static str, v: &str) {
-        let escaped: String = v
-            .chars()
-            .flat_map(|c| match c {
-                '"' => vec!['\\', '"'],
-                '\\' => vec!['\\', '\\'],
-                '\n' => vec!['\\', 'n'],
-                c => vec![c],
-            })
-            .collect();
-        self.fields.push((k, format!("\"{escaped}\"")));
-    }
-
-    fn print(&self) {
-        let body: Vec<String> = self
-            .fields
-            .iter()
-            .map(|(k, v)| format!("\"{k}\":{v}"))
-            .collect();
-        println!("ROW {{{}}}", body.join(","));
-    }
-}
-
-/// Print the row with the refusal and fail.
-fn refused(mut row: Row, phase: &str, err: impl std::fmt::Debug) -> ! {
-    row.text("status", "refused");
-    row.text("phase", phase);
-    row.text("error", &format!("{err:?}"));
-    row.print();
-    panic!("{phase}: {err:?}");
-}
-
 #[test]
 #[ignore]
 fn gpu_memory_row() {
@@ -136,7 +73,7 @@ fn gpu_memory_row() {
         .expect("QWEN35_MEM_TOKENS")
         .parse()
         .expect("QWEN35_MEM_TOKENS");
-    let dir = snapshot_dir();
+    let dir = snapshot_dir("QWEN35_MEM_SNAPSHOT");
     let snap = Snapshot::from_dir(&dir).unwrap();
     let cfg = snap.config.clone();
     let reserved: Vec<u32> = cfg.reserved_token_ids.iter().map(|(_, id)| *id).collect();
@@ -167,11 +104,7 @@ fn provider(snap: &Snapshot, ids: &[u32], p: Precision, n: Numerics, mut r: Row)
     let open = s.device_bytes();
     r.num("resident_bytes", open.allocated);
     r.num("open_peak_bytes", open.peak);
-    // Printed now as well, so a process stopped later (the machine's
-    // memory guard) still leaves what it held at open.
-    r.text("status", "open");
-    r.print();
-    r.fields.pop();
+    r.phase("open");
     s.reset_peak_device_bytes();
     let rows: Vec<u32> = (0..ids.len() as u32 - 1).collect();
     let k = rows.len();
@@ -189,9 +122,7 @@ fn provider(snap: &Snapshot, ids: &[u32], p: Precision, n: Numerics, mut r: Row)
     let after_forward = s.device_bytes();
     r.num("after_forward_bytes", after_forward.allocated);
     r.num("forward_peak_bytes", after_forward.peak);
-    r.text("status", "forward");
-    r.print();
-    r.fields.pop();
+    r.phase("forward");
     if let Err(e) = s.backward(pending, None) {
         refused(r, "backward", e);
     }

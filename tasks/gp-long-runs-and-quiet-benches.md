@@ -1,6 +1,6 @@
 ---
 id: "gp-long-runs-and-quiet-benches"
-title: "Owed long runs and quiet benchmarks: 124M v1 acceptance run, real-2B Qwen3.5 Tape run and headroom, quiet GPU-vs-torch rerun, typed-storage parity, embedding regression"
+title: "Owed long runs and quiet benchmarks: 124M v1 acceptance run, quiet GPU-vs-torch rerun, typed-storage parity, embedding regression"
 status: backlog
 priority: 2
 severity: medium
@@ -20,8 +20,6 @@ planned_files:
   - "docs/status.md"
   - "docs/bench-gpu-vs-torch.md"
   - "docs/typed-storage-plan.md"
-  - "ojas-qwen35/README.md"
-  - "ojas-qwen35/tests/gpu_tape_2b.rs"
   - "README.md"
 acceptance_criteria:
   - "The v1 acceptance run is executed and recorded: Metal 124M (ModelSpec::nanolab_124m) against PyTorch nanolab per docs/framework-design.md section 10 (fp32, compile off, B=4 K=4 T=1024, warmup 30, cosine over 300 steps, shared init.safetensors and dumped batch starts, NS5 patched to fp32), with every pass criterion in that table reported as met or missed; results committed under bench/results/ and README/docs/status.md stop saying no full 124M run is recorded"
@@ -34,7 +32,7 @@ acceptance_criteria:
 # Task brief v1
 
 ## Title
-Owed long runs and quiet benchmarks: 124M v1 acceptance run, real-2B Qwen3.5 Tape run and headroom, quiet GPU-vs-torch rerun, typed-storage parity, embedding regression
+Owed long runs and quiet benchmarks: 124M v1 acceptance run, quiet GPU-vs-torch rerun, typed-storage parity, embedding regression
 
 Task: gp-long-runs-and-quiet-benches
 Type: test
@@ -53,7 +51,7 @@ Filed by the 2026-10-09 task audit (at d431949). These items are execution, not 
 
 Sources of each item:
 - **124M v1 acceptance run:** from gp-oracle-and-hardening-coverage, per docs/framework-design.md section 10.
-- **Real-2B Tape run and 2B save/load and long-sequence headroom:** from gp-autograd-and-model-primitives. ojas-qwen35/tests/gpu_tape_2b.rs:96 exists but has never run, and ojas-qwen35/README.md:230-235 says 'Not measured'.
+- ~~Real-2B Tape run and 2B save/load and long-sequence headroom~~: struck 2026-10-15 (Fable). The 2B Tape gate is gp-qwen35-2b-metal-tape-run; the provider save/load row is retired there; long-sequence headroom is the Tape memory rows (bench/results/2026-10-11-bf16-frozen-base, 2026-10-14-bf16-tied-table).
 - **Quiet GPU-vs-torch rerun, typed-storage parity.sh/block_ab.sh and the ~9% embedding-forward regression:** from gp-docs-and-bench-parity.
 - **The 124M wait split by trigger:** from gp-gpu-runtime-hardening's 'Not measured' line, measured under gp-device-memory-probes.
 
@@ -81,6 +79,15 @@ The user's current focus is LoRA fine-tuning on the Mac (Metal), run by sibling 
 - docs/status.md
 - docs/bench-gpu-vs-torch.md
 - docs/typed-storage-plan.md
-- ojas-qwen35/README.md
-- ojas-qwen35/tests/gpu_tape_2b.rs
 - README.md
+
+### Fine-tune track audit (2026-10-15, at 88be893)
+Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
+Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
+DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
+- Fine-tune scope only (the real-2B items). The real-2B Tape run was split to gp-qwen35-2b-metal-tape-run on 2026-10-09; this brief still lists gpu_tape_2b.rs and ojas-qwen35/README.md in its planned files [A]. Propose: strike the 2B item here so it is not counted twice.
+- Headroom: the only figure is README:213 (1.34 GB at the provider, 128 tokens); it is not comparable to the Tape rows (16-23 GB of 51.5 GB) [A].
+
+### Fable rulings (2026-10-15)
+Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two items directly (Lappi pin bump, hand-rolled sha256).
+- **Struck:** the real-2B Tape run, the 2B save/load row and long-sequence headroom, with gpu_tape_2b.rs and ojas-qwen35/README.md from the planned files. They live in gp-qwen35-2b-metal-tape-run (the save/load row is retired there).
