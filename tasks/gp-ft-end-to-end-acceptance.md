@@ -92,3 +92,16 @@ Critical path to this run, ordered (merge state at 88be893):
 6. gp-ft-trainer-loop: ojas-train per Lappi's 2026-10-14 Fable ruling, the Tape StepProvider, adapter checkpoint with sha256. Not started; Lappi pins ojas at bc498c4 and a pin bump needs the user.
 7. gp-ft-export: merged-bf16 tower export and the single-seed D17 route. Not started.
 8. This card: the reference-arm driver, the 0.8B 60-step smoke (GPU, ~2 h), the reduced 2B-Base run with kill -9 resume (GPU, 3-6 h).
+
+### Fable rulings (2026-10-15)
+Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two items directly (Lappi pin bump, hand-rolled sha256).
+Revised order. Start now on main:
+1. Run the two tiny GPU pins (gpu_save_state_bank.rs, gpu_parity.rs:654) and record them.
+2. gpu_tape_2b redesign against transformers' reference (gp-qwen35-2b-metal-tape-run); queue tessl's fixture generator first.
+3. The scaling-1 LoRA parity test (gp-ft-frozen-params-and-lora).
+
+After the tied-table branch (ft-69744e54) merges, the owner's call:
+4. Per-gradient want flags on the fused CE (ft-2bbced18); it conflicts with the branch's Metal linear_cross_entropy_mean rewrite. Not on the run's correctness path (D17 is host-side), but it decides the D1 tokens/s reading and the 0.8B full-vocab arm's cost, so it lands before the smoke.
+5. The LoRA arm in gpu_memory_rows in the run's configuration (bf16 linears and table, frozen base, r = 16, alpha = 16), 0.8B-Base and 2B-Base at T = 2,048 and 9,638 with tokens/s.
+
+Then the decision head with host-side D17, ojas-train with hand-rolled sha256, export with the one-seed D17 route, and the runs. The Lappi pin is bumped to 132b46e (Lappi 21fb7ad, branch ojas-pin-88be893); the bump to the ojas-train sha comes later.

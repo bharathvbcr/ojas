@@ -95,3 +95,7 @@ DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read 
 - Stale: cited lines moved (forward.rs:195 -> :377, state.rs:613 -> :617, config.rs:503-508 -> :505-512, safetensors.rs:26-34 -> :24-57); "batch 1, one GDN head, vocab 64" is false; the Metal gradient bound is METAL_GRAD_BOUND = 2e-4 (qwen35_metal_tape.rs:25), not 1e-4 [A].
 - New, P3: the head-grouping refusal says no grouped golden exists; tessl has `tiny_grouped_gdn_step_matches_transformers_autograd` (tessl tests/qwen35_train.rs:326) [A].
 - Acceptance path: nothing left in code.
+
+### Fable rulings (2026-10-15)
+Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two items directly (Lappi pin bump, hand-rolled sha256).
+- **Board: review now, done after a recorded run** of its only criterion 2 pin, `gpu_save_state_refuses_a_half_filled_gradient_bank` (ojas-qwen35/tests/gpu_save_state_bank.rs, #[ignore], a tiny-fixture GPU test), and of gpu_parity.rs:654. A check that has not run is not reported as passed.

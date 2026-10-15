@@ -82,3 +82,10 @@ DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read 
 - New, P2 [V via gp-ft-frozen-params-and-lora]: the report-only full-vocab CE over a frozen tied table pays the [V, d] head gradient (tape.rs:955-990) until ft-2bbced18 lands.
 - Stale: forward.rs:109 is now :241 [A].
 - Acceptance path: criteria 1-5 and the contract decision are on it; 6 and 7 can wait (Lappi sends token ids).
+
+### Fable rulings (2026-10-15)
+Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two items directly (Lappi pin bump, hand-rolled sha256).
+- **D17 lives host-side, like the span head; no StepProvider contract change.** The contract already carries it: a loss outside the model reads the final hidden state at `hidden_at` and returns its gradient through the callback (Lappi crates/qd-train/src/step.rs:21-26), and host entries step on their own count via `adamw_entry_step` (trainer.rs:863-870). D17 is [17, 2048] f32.
+  - The host reads `embed_tokens.weight[answer ids]` once from the checkpoint file by name (17 rows, bf16 to f32; never through `read_parameters`, which stages 7.5 GB), digests them, and holds D17 as a host entry. With R = E + D17 and z = h R^T: dz = (softmax(z) - onehot)/N, dh = dz R, dD17 = dz^T h. Where D17 and span-head positions coincide, one HiddenGrad callback pre-sums.
+  - The report-only full-vocab letter CE goes through RowTargets with scale = 0 (validate allows >= 0, step.rs:125); a Tape provider may skip the backward of a zero-scale term, documented as an optimisation.
+  - The host math is pinned against Lappi's AnswerRowDelta (python/qd_train/lora.py:245-300) with a committed fixture.
