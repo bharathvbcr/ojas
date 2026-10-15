@@ -1,0 +1,8 @@
+chunks_into triad thread A/B. warmup 3 reps 24 round-robin. ROW_MIN=32768. load { 37.95 27.31 22.76 }
+n=65536 bytes=262144 best_threads=2 t1_min_us=4.7 t1_med_us=4.8 t2_min_us=4.7 t2_med_us=4.9 t4_min_us=4.7 t4_med_us=5.0 t6_min_us=4.7 t6_med_us=4.9
+n=196608 bytes=786432 best_threads=1 t1_min_us=16.4 t1_med_us=18.3 t2_min_us=16.8 t2_med_us=18.6 t4_min_us=16.5 t4_med_us=18.5 t6_min_us=16.9 t6_med_us=18.1
+n=393216 bytes=1572864 best_threads=1 t1_min_us=29.9 t1_med_us=36.1 t2_min_us=31.1 t2_med_us=36.7 t4_min_us=31.5 t4_med_us=36.9 t6_min_us=32.5 t6_med_us=36.9
+n=786432 bytes=3145728 best_threads=1 t1_min_us=82.0 t1_med_us=92.6 t2_min_us=85.8 t2_med_us=136.4 t4_min_us=115.7 t4_med_us=173.9 t6_min_us=134.0 t6_med_us=242.2
+n=1572864 bytes=6291456 best_threads=4 t1_min_us=176.7 t1_med_us=247.1 t2_min_us=148.3 t2_med_us=249.1 t4_min_us=138.2 t4_med_us=276.0 t6_min_us=199.8 t6_med_us=302.1
+n=2097152 bytes=8388608 best_threads=4 t1_min_us=239.1 t1_med_us=290.0 t2_min_us=203.8 t2_med_us=298.9 t4_min_us=184.2 t4_med_us=283.2 t6_min_us=196.1 t6_med_us=307.2
+n=8388608 bytes=33554432 best_threads=4 t1_min_us=1158.9 t1_med_us=1292.1 t2_min_us=722.4 t2_med_us=1013.6 t4_min_us=609.2 t4_med_us=892.2 t6_min_us=628.8 t6_med_us=771.4

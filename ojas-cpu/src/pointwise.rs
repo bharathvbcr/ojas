@@ -529,11 +529,15 @@ pub(crate) fn silu_backward(
 /// threads, the same cut as [`fill_outs_chunked_trusted`] with width 1
 /// (`(n / ROW_MIN_ELEMS).clamp(1, threads * 2)`). One chunk, or one thread,
 /// stays on the calling thread. Fewer chunks lost on backward, so backward
-/// keeps that count. Forward does too, except at 6 threads for a length
-/// from `1024 * 1024` through `1024 * 2048` inclusive, which uses 4 pieces.
-/// Release, same process, alternating, min of 24 after 2 warmups: 4 pieces
-/// beat the 12-piece cut at both ends of that band and lost at double the
-/// upper end, which stays on the live cut. Each value is the same single
+/// keeps that count. Forward does too, except when the pool has at least 6
+/// threads and the length is from `1024 * 1024` through `1024 * 2048`
+/// inclusive, which uses 4 pieces. Measured 2026-10-14, same process,
+/// alternating, min of 24 after 3 warmups, at 1, 4, 6 and 8 threads
+/// (`bench/results/2026-10-14-cpu-gdn-followups/pieces-ab.txt`): 4 pieces
+/// lost to the live cut at 4 threads inside the band (1.30× and 1.14×) and
+/// won at 6 (0.94×, 0.89×) and at 8 (0.66×, 0.82×). At `1024 * 4096` the
+/// live cut won at 4, 6 and 8 threads, so that length stays on it. Threads
+/// 5 and 7 were not measured. Each value is the same single
 /// rounding wherever it is computed, so the bits do not depend on the split.
 /// A serial one-write was
 /// slower for this shape at 6 threads, and so was `vDSP_vmul` on those
@@ -562,16 +566,12 @@ pub(crate) fn mul_forward(
         })?;
     let reservation = budget.try_reserve(bytes)?;
     // Width-1 cut of `chunks_into_n` / `fill_outs_chunked_trusted`, except
-    // 6 threads on [1024*1024, 1024*2048]. Forward-only, release, same
-    // process, alternating, min of 24 after 2 warmups against the live cut
-    // (12 pieces at these lengths): 4 pieces was 0.0655 ms vs 0.0828 ms at
-    // the low end and 0.1227 ms vs 0.1383 ms at 1024*2048. At double
-    // (1024*4096) the live cut was faster, 0.2552 ms vs 0.2943 ms, so the
-    // band stops at the upper end.
+    // at least 6 threads on [1024*1024, 1024*2048]. The 2026-10-14 A/B is
+    // in the function comment. Bits do not depend on the split.
     let min_chunk = scoped::min_rows(1);
     let wide = exec.pool.threads().saturating_mul(2);
     let live = (n / min_chunk.max(1)).clamp(1, wide);
-    let pieces = if exec.pool.threads() == 6 && ((1024 * 1024)..=(1024 * 2048)).contains(&n) {
+    let pieces = if exec.pool.threads() >= 6 && ((1024 * 1024)..=(1024 * 2048)).contains(&n) {
         4
     } else {
         live
@@ -3259,7 +3259,7 @@ mod followup_bench {
     fn min_median(samples: &mut [f64]) -> (f64, f64) {
         samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mid = samples.len() / 2;
-        let median = if samples.len() % 2 == 0 {
+        let median = if samples.len().is_multiple_of(2) {
             (samples[mid - 1] + samples[mid]) / 2.0
         } else {
             samples[mid]

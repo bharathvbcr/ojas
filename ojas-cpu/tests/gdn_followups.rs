@@ -415,6 +415,58 @@ fn malformed_shapes_and_an_overflowing_product_are_refused_not_panicked() {
     );
 }
 
+/// Peak bytes for a serial forward (`CpuBackend::new`, so `inflight` is 1:
+/// these shapes are under `2 * TASK_WORK`).
+///
+/// Already live: the input tensors. `fill_outs` then charges the output,
+/// the final state and the checkpoints, and `room_for` charges
+/// `rows * 2 * Dk` normalized q and k, plus `rows * Dv` head-major output
+/// only when `H > 1`, plus one task (`Dk * Dv + 2 * Dv`). Each slot is 4
+/// bytes (`payload_bytes` / `Scratch::try_alloc`). The previous forward
+/// also charged two norm slots per row.
+///
+/// H = 1, B = 1, T = 2, Dk = Dv = 4, no state: inputs 28 f32 = 112;
+/// outputs 8 + 16 + 16 = 40 f32 = 160; scratch 16 + 0 + 24 = 40 f32 = 160;
+/// cap 432. H = 2: inputs 56 f32 = 224; outputs 16 + 32 + 32 = 80 f32 = 320;
+/// scratch 32 + 16 + 24 = 72 f32 = 288; cap 832.
+#[test]
+fn forward_budget_matches_the_scratch_that_is_allocated() {
+    fn run(h: usize, cap: u64, expect_ok: bool) {
+        let budget = Budget::new(cap);
+        let cpu = CpuBackend::new(budget.clone());
+        let case = build(
+            &budget,
+            Shape {
+                b: 1,
+                t: 2,
+                h,
+                dk: 4,
+                dv: 4,
+            },
+            false,
+        );
+        let inputs_live = budget.live_bytes().unwrap();
+        let got = cpu.chunked_gdn_forward(inputs(&case));
+        if expect_ok {
+            let y = got.expect("cap holds outputs plus the new scratch");
+            let outs = (y.output.num_elements().unwrap()
+                + y.final_state.num_elements().unwrap()
+                + y.checkpoints.num_elements().unwrap()) as u64
+                * 4;
+            assert_eq!(budget.live_bytes().unwrap(), inputs_live + outs);
+            assert!(y.output.to_f32_vec().unwrap().iter().all(|v| v.is_finite()));
+        } else {
+            let err = got.expect_err("one byte under the peak must refuse");
+            assert!(matches!(err, OjasError::CapacityExceeded { .. }), "{err:?}");
+            assert_eq!(budget.live_bytes().unwrap(), inputs_live);
+        }
+    }
+    run(1, 432, true);
+    run(1, 431, false);
+    run(2, 832, true);
+    run(2, 831, false);
+}
+
 #[test]
 fn mul_forward_bits_match_at_one_thread_and_six() {
     let n = 1024 * 1024;
@@ -441,7 +493,7 @@ fn loadavg() -> String {
 fn min_median(samples: &mut [f64]) -> (f64, f64) {
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = samples.len() / 2;
-    let median = if samples.len() % 2 == 0 {
+    let median = if samples.len().is_multiple_of(2) {
         (samples[mid - 1] + samples[mid]) / 2.0
     } else {
         samples[mid]
@@ -593,7 +645,13 @@ fn followup_bench_public() {
         env!("CARGO_MANIFEST_DIR")
     );
     fs::create_dir_all(&dir).unwrap();
-    let path = format!("{dir}/public.txt");
+    let tag = std::env::var("OJAS_FOLLOWUP_TAG").unwrap_or_default();
+    let name = if tag.is_empty() {
+        "public.txt".to_string()
+    } else {
+        format!("public-{tag}.txt")
+    };
+    let path = format!("{dir}/{name}");
     fs::write(&path, lines.join("\n") + "\n").unwrap();
     eprintln!("wrote {path}");
 }
