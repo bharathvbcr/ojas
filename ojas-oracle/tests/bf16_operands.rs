@@ -16,10 +16,10 @@ fn cpu_exact_keeps_the_bf16_operand_contract() {
     // 2 linear shapes x (3 + 7) mixes, 2 attention shapes x (7 + 31) mixes,
     // each packed and at an odd element offset.
     // The tied table: one Bf16 slot (2 layouts) in embedding_forward,
-    // embedding_backward and 4 fused cross-entropy calls (2 chunks, with
-    // and without gradients).
+    // embedding_backward and 8 fused cross-entropy calls (2 chunks, each
+    // asking for each of the four `CeGrads` combinations).
     assert!(r.table_lane);
-    assert_eq!(r.mixed_calls, 2 * (2 * 10 + 2 * 38) + 2 * 6);
+    assert_eq!(r.mixed_calls, 2 * (2 * 10 + 2 * 38) + 2 * 10);
     assert_eq!(r.refusals, 2 + 14);
     assert_eq!(r.non_finite, 2 * 5 + 2 * 8 + 3);
 }

@@ -1190,7 +1190,7 @@ impl Backend for CpuBackend {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: ojas_core::CeChunk,
-        want_grad: bool,
+        grads: ojas_core::CeGrads,
     ) -> Result<ojas_core::LinearCe, OjasError> {
         crate::fused_ce::linear_cross_entropy_mean(
             &self.budget,
@@ -1200,7 +1200,7 @@ impl Backend for CpuBackend {
             targets,
             ignore_index,
             chunk,
-            want_grad,
+            grads,
         )
     }
 

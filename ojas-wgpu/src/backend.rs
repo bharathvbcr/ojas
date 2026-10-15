@@ -80,8 +80,8 @@ use ojas_core::{
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
     sdpa_scale, silu_backward_dims, silu_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
-    BackendId, Budget, CeChunk, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
-    OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    BackendId, Budget, CeChunk, CeGrads, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics,
+    OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
     ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
@@ -2853,10 +2853,10 @@ impl Backend for WgpuBackend {
     /// Mean cross-entropy of `input @ weight^T` with at most `chunk.rows x
     /// chunk.cols` logits alive: one scratch tile, reused. For each block
     /// of rows, every vocabulary tile is computed by the GEMM and folded
-    /// into the rows' running max and sum (an online softmax); with
-    /// `want_grad`, each tile is then turned into its seed-1 gradient in
-    /// place and fed to two accumulating GEMMs, `grad_input[rows] += G W`
-    /// and `grad_weight[cols] += G^T x`. A row block whose vocabulary fits
+    /// into the rows' running max and sum (an online softmax); with a
+    /// gradient asked for, each tile is then turned into its seed-1 gradient
+    /// in place and fed to an accumulating GEMM per gradient asked for,
+    /// `grad_input[rows] += G W` and `grad_weight[cols] += G^T x`. A row block whose vocabulary fits
     /// in one tile reuses that tile; otherwise its tiles are recomputed.
     /// Targets are checked on the host and the valid count is global; an
     /// all-ignored batch is `NonFinite`, synchronously. A non-finite logit,
@@ -2868,7 +2868,7 @@ impl Backend for WgpuBackend {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         let op = LCE;
         let dims = linear_ce_dims(input, weight, targets, chunk)?;
@@ -2890,11 +2890,11 @@ impl Backend for WgpuBackend {
         let (has_ignore, ignore) = (u32::from(ignore_index.is_some()), ignore_index.unwrap_or(0));
         let denom = valid as f32;
         let (loss, loss_b) = self.out(op, &[])?;
-        let grads = if want_grad {
-            Some((self.out(op, &[n, d])?, self.out(op, &[vocab, d])?))
-        } else {
-            None
-        };
+        let gx = grads.input.then(|| self.out(op, &[n, d])).transpose()?;
+        let gw = grads
+            .weight
+            .then(|| self.out(op, &[vocab, d]))
+            .transpose()?;
         let mut job = self.job(op);
         let xb = bind(op, &mut job, &xv)?;
         let wb = bind(op, &mut job, &wv)?;
@@ -2940,9 +2940,9 @@ impl Backend for WgpuBackend {
                     self.groups(rr)?,
                 )?;
             }
-            let Some(((_, gxb), (_, gwb))) = &grads else {
+            if !grads.any() {
                 continue;
-            };
+            }
             for c0 in (0..vocab).step_by(cc) {
                 let cw = cc.min(vocab - c0);
                 if !single {
@@ -2964,34 +2964,38 @@ impl Backend for WgpuBackend {
                     &[&stats, &tb, &tile],
                     self.lanes(elems)?,
                 )?;
-                self.gemm_at(
-                    op,
-                    &mut job,
-                    Mm::Nn,
-                    &tile,
-                    &wb,
-                    gxb,
-                    (rr, d, cw),
-                    [cw, 1, d, 1],
-                    Place {
-                        offsets: [0, c0 * d, r0 * d],
-                        accumulate: c0 > 0,
-                    },
-                )?;
-                self.gemm_at(
-                    op,
-                    &mut job,
-                    Mm::Tn,
-                    &tile,
-                    &xb,
-                    gwb,
-                    (cw, d, rr),
-                    [1, cw, d, 1],
-                    Place {
-                        offsets: [0, r0 * d, c0 * d],
-                        accumulate: r0 > 0,
-                    },
-                )?;
+                if let Some((_, gxb)) = &gx {
+                    self.gemm_at(
+                        op,
+                        &mut job,
+                        Mm::Nn,
+                        &tile,
+                        &wb,
+                        gxb,
+                        (rr, d, cw),
+                        [cw, 1, d, 1],
+                        Place {
+                            offsets: [0, c0 * d, r0 * d],
+                            accumulate: c0 > 0,
+                        },
+                    )?;
+                }
+                if let Some((_, gwb)) = &gw {
+                    self.gemm_at(
+                        op,
+                        &mut job,
+                        Mm::Tn,
+                        &tile,
+                        &xb,
+                        gwb,
+                        (cw, d, rr),
+                        [1, cw, d, 1],
+                        Place {
+                            offsets: [0, r0 * d, c0 * d],
+                            accumulate: r0 > 0,
+                        },
+                    )?;
+                }
             }
         }
         job.dispatch(
@@ -3011,14 +3015,10 @@ impl Backend for WgpuBackend {
             &loss_b,
         )?;
         job.commit()?;
-        let (grad_input, grad_weight) = match grads {
-            Some(((gx, _), (gw, _))) => (Some(gx), Some(gw)),
-            None => (None, None),
-        };
         Ok(LinearCe {
             loss,
-            grad_input,
-            grad_weight,
+            grad_input: gx.map(|(t, _)| t),
+            grad_weight: gw.map(|(t, _)| t),
         })
     }
 

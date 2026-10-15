@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use ojas_core::{
-    linear_ce_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, DType, DeviceBuffer,
+    linear_ce_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, CeGrads, DType, DeviceBuffer,
     LinearCe, MuonNs5Config, Numerics, OjasError, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 use ojas_cpu::CpuBackend;
@@ -68,10 +68,12 @@ pub enum Fused {
     Composed,
     /// `Unsupported`, as the trait default.
     Unsupported,
-    /// Breaks the contract: no gradients although `want_grad` was set.
+    /// Breaks the contract: no gradients although some were asked for.
     NoGrads,
     /// Breaks the contract: `grad_weight` shaped like the input.
     WrongShape,
+    /// Breaks the contract: both gradients, whatever was asked for.
+    Unasked,
 }
 
 pub struct Resident {
@@ -483,7 +485,7 @@ impl Backend for Resident {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         const OP: &str = "linear_cross_entropy_mean";
         self.fused_calls.fetch_add(1, Ordering::SeqCst);
@@ -501,18 +503,31 @@ impl Backend for Resident {
         let loss = self
             .cpu
             .cross_entropy_mean_forward(&logits, &t, ignore_index)?;
-        let (grad_input, grad_weight) = if want_grad {
+        let composed = || -> Result<(Tensor, Tensor), OjasError> {
             let gl = self
                 .cpu
                 .cross_entropy_mean_backward(&logits, &t, ignore_index)?;
-            let (gx, gw) = self.cpu.linear_backward(&x, &w, &gl)?;
-            match self.fused {
-                Fused::NoGrads => (None, None),
-                Fused::WrongShape => (Some(self.dev(gx.clone())?), Some(self.dev(gx)?)),
-                _ => (Some(self.dev(gx)?), Some(self.dev(gw)?)),
+            self.cpu.linear_backward(&x, &w, &gl)
+        };
+        let (grad_input, grad_weight) = match self.fused {
+            Fused::NoGrads => (None, None),
+            Fused::Unasked => {
+                let (gx, gw) = composed()?;
+                (Some(self.dev(gx)?), Some(self.dev(gw)?))
             }
-        } else {
-            (None, None)
+            _ if !grads.any() => (None, None),
+            mode => {
+                let (gx, gw) = composed()?;
+                let gw = if mode == Fused::WrongShape {
+                    gx.clone()
+                } else {
+                    gw
+                };
+                (
+                    grads.input.then(|| self.dev(gx)).transpose()?,
+                    grads.weight.then(|| self.dev(gw)).transpose()?,
+                )
+            }
         };
         Ok(LinearCe {
             loss: self.dev(loss)?,

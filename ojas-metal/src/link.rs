@@ -14,7 +14,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
-use ojas_core::{BackendId, OjasError, MAX_PERMUTE_RANK};
+use ojas_core::{BackendId, CeGrads, OjasError, MAX_PERMUTE_RANK};
 
 pub(crate) type Res<T> = Result<T, OjasError>;
 
@@ -811,7 +811,8 @@ pub(crate) struct LceGeom {
     /// `w_half` weight always is: each tile is widened into the stage.
     pub stage_x: bool,
     pub stage_w: bool,
-    pub grad: bool,
+    /// The gradients the call returns.
+    pub grads: CeGrads,
     /// The weight is `Bf16` (the tied table at 2 bytes per element).
     pub w_half: bool,
 }
@@ -849,7 +850,7 @@ impl LceGeom {
         cols: usize,
         x_off: usize,
         w_off: usize,
-        grad: bool,
+        grads: CeGrads,
         w_half: bool,
     ) -> Self {
         let limit = i32::MAX as usize;
@@ -863,14 +864,15 @@ impl LceGeom {
             ct,
             stage_x: needs_stage(x_off, d, rt, n),
             stage_w: w_half || needs_stage(w_off, d, ct, v),
-            grad,
+            grads,
             w_half,
         }
     }
 
     /// Elements of device scratch: the logits tile, per-row (max, sum,
-    /// target logit), the loss rows and their reduction, and with gradients
-    /// the two GEMM destinations; plus any staging copies.
+    /// target logit), the loss rows and their reduction, and the GEMM
+    /// destination of each gradient asked for (`[rt, d]` for the input's,
+    /// `[ct, d]` for the weight's); plus any staging copies.
     pub(crate) fn scratch(&self) -> Option<usize> {
         let mut total = self.rt.checked_mul(self.ct)?;
         let mut add = |x: usize| -> Option<()> {
@@ -882,8 +884,10 @@ impl LceGeom {
         add(1 + reduce_groups(self.n))?;
         let x_tile = self.rt.checked_mul(self.d)?;
         let w_tile = self.ct.checked_mul(self.d)?;
-        if self.grad {
+        if self.grads.input {
             add(x_tile)?;
+        }
+        if self.grads.weight {
             add(w_tile)?;
         }
         if self.stage_x {

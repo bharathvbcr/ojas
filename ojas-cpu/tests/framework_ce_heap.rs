@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use common::SplitMix64;
-use ojas_core::{Backend, Budget, CeChunk, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, Budget, CeChunk, CeGrads, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 struct Counting;
@@ -105,9 +105,9 @@ fn run(
     be: &CpuBackend,
     i: &Inputs,
     chunk: CeChunk,
-    want_grad: bool,
+    grads: CeGrads,
 ) -> Result<Vec<Tensor>, OjasError> {
-    let out = be.linear_cross_entropy_mean(&i.x, &i.w, &i.t, Some(u32::MAX), chunk, want_grad)?;
+    let out = be.linear_cross_entropy_mean(&i.x, &i.w, &i.t, Some(u32::MAX), chunk, grads)?;
     let mut all = vec![out.loss];
     all.extend(out.grad_input);
     all.extend(out.grad_weight);
@@ -115,18 +115,18 @@ fn run(
 }
 
 /// Heap high-water growth while one call runs, outputs included.
-fn heap_peak(be: &CpuBackend, i: &Inputs, chunk: CeChunk, want_grad: bool) -> usize {
+fn heap_peak(be: &CpuBackend, i: &Inputs, chunk: CeChunk, grads: CeGrads) -> usize {
     let base = LIVE.load(Ordering::SeqCst);
     PEAK.store(base, Ordering::SeqCst);
-    let out = run(be, i, chunk, want_grad).unwrap();
+    let out = run(be, i, chunk, grads).unwrap();
     let peak = PEAK.load(Ordering::SeqCst) - base;
     drop(out);
     peak
 }
 
-fn accepts(be: &CpuBackend, room: u64, i: &Inputs, chunk: CeChunk, want_grad: bool) -> bool {
+fn accepts(be: &CpuBackend, room: u64, i: &Inputs, chunk: CeChunk, grads: CeGrads) -> bool {
     let filler = be.budget().try_reserve(HUGE - room).unwrap();
-    let ok = match run(be, i, chunk, want_grad) {
+    let ok = match run(be, i, chunk, grads) {
         Ok(_) => true,
         Err(OjasError::CapacityExceeded { .. }) => false,
         Err(err) => panic!("unexpected {err:?}"),
@@ -137,16 +137,16 @@ fn accepts(be: &CpuBackend, room: u64, i: &Inputs, chunk: CeChunk, want_grad: bo
 }
 
 /// Smallest room the call accepts.
-fn charged_peak(be: &CpuBackend, i: &Inputs, chunk: CeChunk, want_grad: bool) -> u64 {
+fn charged_peak(be: &CpuBackend, i: &Inputs, chunk: CeChunk, grads: CeGrads) -> u64 {
     let mut hi = 1u64 << 16;
-    while !accepts(be, hi, i, chunk, want_grad) {
+    while !accepts(be, hi, i, chunk, grads) {
         hi *= 2;
         assert!(hi < HUGE, "refused with {hi} bytes of room");
     }
     let mut lo = 0u64;
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
-        if accepts(be, mid, i, chunk, want_grad) {
+        if accepts(be, mid, i, chunk, grads) {
             hi = mid;
         } else {
             lo = mid;
@@ -170,8 +170,8 @@ fn heap_peak_is_far_below_the_logits() {
         cols: 8192,
     };
     let be = CpuBackend::with_threads(Budget::new(HUGE), 4).unwrap();
-    drop(run(&be, &i, chunk, true).unwrap());
-    let heap = heap_peak(&be, &i, chunk, true);
+    drop(run(&be, &i, chunk, CeGrads::BOTH).unwrap());
+    let heap = heap_peak(&be, &i, chunk, CeGrads::BOTH);
     let tile = 512 * 8192 * 4;
     let unavoidable = 2 * (n + v) * d * 4;
     println!(
@@ -201,15 +201,15 @@ fn heap_peak_stays_within_the_charged_peak() {
         let chunk = CeChunk { rows, cols };
         for threads in [1usize, 7] {
             for numerics in [Numerics::Exact, Numerics::Fast] {
-                for want_grad in [false, true] {
+                for grads in CeGrads::EACH {
                     let be = CpuBackend::with_threads(Budget::new(HUGE), threads)
                         .unwrap()
                         .with_numerics(numerics);
-                    drop(run(&be, &i, chunk, want_grad).unwrap());
-                    let charged = charged_peak(&be, &i, chunk, want_grad);
-                    let heap = heap_peak(&be, &i, chunk, want_grad);
+                    drop(run(&be, &i, chunk, grads).unwrap());
+                    let charged = charged_peak(&be, &i, chunk, grads);
+                    let heap = heap_peak(&be, &i, chunk, grads);
                     let what = format!(
-                        "n{n} d{d} v{v} chunk {rows}x{cols} threads {threads} {numerics:?} grad {want_grad}"
+                        "n{n} d{d} v{v} chunk {rows}x{cols} threads {threads} {numerics:?} grad {grads:?}"
                     );
                     println!("{what}: heap peak {heap} bytes, charged peak {charged} bytes");
                     if heap > charged as usize + METADATA_SLACK {

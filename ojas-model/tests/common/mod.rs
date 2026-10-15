@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use ojas_core::{forward_backend_methods, DataCursor};
 use ojas_core::{
-    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, DType,
+    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, CeGrads, DType,
     DeviceBuffer, LinearCe, MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
     Reservation, Tensor, ValueResidualGrad,
 };
@@ -505,7 +505,7 @@ impl Backend for Resident {
         t: &Tensor,
         ignore: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         const OP: &str = "linear_cross_entropy_mean";
         let r = self.cpu.linear_cross_entropy_mean(
@@ -514,7 +514,7 @@ impl Backend for Resident {
             &self.h(OP, t)?,
             ignore,
             chunk,
-            want_grad,
+            grads,
         )?;
         Ok(LinearCe {
             loss: self.d(r.loss)?,
@@ -1077,11 +1077,11 @@ impl<B: Backend> Backend for Probe<B> {
         t: &Tensor,
         ignore: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         self.gate("linear_cross_entropy_mean")?;
         self.inner
-            .linear_cross_entropy_mean(x, w, t, ignore, chunk, want_grad)
+            .linear_cross_entropy_mean(x, w, t, ignore, chunk, grads)
     }
     fn cached_attention_forward(
         &self,

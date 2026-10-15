@@ -11,7 +11,8 @@ mod common;
 
 use common::{bits, SplitMix64};
 use ojas_core::{
-    f32_to_bf16, round_f32_to_bf16, Backend, Budget, CeChunk, DType, Numerics, OjasError, Tensor,
+    f32_to_bf16, round_f32_to_bf16, Backend, Budget, CeChunk, CeGrads, DType, Numerics, OjasError,
+    Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -150,7 +151,7 @@ fn a_bf16_table_refuses_a_non_finite_value_in_an_unread_row() {
             assert!(nonfinite(be.embedding_forward(&ht, &bad_ids).map(drop)));
             assert!(nonfinite(be.embedding_backward(&ht, &ids, &grad).map(drop)));
             assert!(nonfinite(
-                be.linear_cross_entropy_mean(&x, &ht, &ids, None, chunk, true)
+                be.linear_cross_entropy_mean(&x, &ht, &ids, None, chunk, CeGrads::BOTH)
                     .map(drop)
             ));
             assert_eq!(be.budget().live_bytes().unwrap(), 0);
@@ -175,10 +176,10 @@ fn the_fused_head_widens_one_vocabulary_block_at_a_time() {
     for (cols, rows) in [(256usize, 4usize), (v + 1, n), (1000, 9)] {
         let chunk = CeChunk { rows, cols };
         let block = (cols.min(v) * d * 4) as u64;
-        for want_grad in [false, true] {
+        for grads in CeGrads::EACH {
             let reference = backend(1, Numerics::Exact, u64::MAX);
             let want = reference
-                .linear_cross_entropy_mean(&x, &wf, &targets, Some(3), chunk, want_grad)
+                .linear_cross_entropy_mean(&x, &wf, &targets, Some(3), chunk, grads)
                 .unwrap();
             let f32_peak = reference.budget().peak_bytes();
             let mut want_bits = vec![out_bits(&want.loss)];
@@ -189,12 +190,12 @@ fn the_fused_head_widens_one_vocabulary_block_at_a_time() {
                 for threads in THREADS {
                     let be = backend(threads, Numerics::Exact, u64::MAX);
                     let got = be
-                        .linear_cross_entropy_mean(&x, &ht, &targets, Some(3), chunk, want_grad)
+                        .linear_cross_entropy_mean(&x, &ht, &targets, Some(3), chunk, grads)
                         .unwrap();
                     let mut got_bits = vec![out_bits(&got.loss)];
                     got_bits.extend(got.grad_input.iter().map(out_bits));
                     got_bits.extend(got.grad_weight.iter().map(out_bits));
-                    let at = format!("cols {cols} grad {want_grad} offset {offset} t {threads}");
+                    let at = format!("cols {cols} grad {grads:?} offset {offset} t {threads}");
                     assert!(got_bits == want_bits, "{at}");
                     if let Some(gw) = &got.grad_weight {
                         assert_eq!(gw.dtype(), DType::F32, "{at}");
@@ -214,7 +215,7 @@ fn the_fused_head_widens_one_vocabulary_block_at_a_time() {
                                 &targets,
                                 Some(3),
                                 chunk,
-                                want_grad
+                                grads
                             ),
                             Err(OjasError::CapacityExceeded { .. })
                         ),
@@ -251,7 +252,7 @@ fn the_other_operands_of_the_table_ops_refuse_bf16() {
     };
     assert!(dtype(be.embedding_backward(&ht, &ids, &xb).map(drop)));
     assert!(dtype(
-        be.linear_cross_entropy_mean(&xb, &ht, &ids, None, chunk, true)
+        be.linear_cross_entropy_mean(&xb, &ht, &ids, None, chunk, CeGrads::BOTH)
             .map(drop)
     ));
     assert!(dtype(

@@ -12,7 +12,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, Budget, CeChunk, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{AdamWConfig, Backend, Budget, CeChunk, CeGrads, MuonNs5Config, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 /// The status slab's slot count (`SLAB_SLOTS` in `device.rs`).
@@ -436,11 +436,11 @@ fn host_refusals_stay_immediate_and_leave_nothing_pending() {
     let nan_w = up(&m, &nan_at_last(12, 16, &[4, 3]));
     let c = CeChunk { rows: 1, cols: 2 };
     for ww in [&w, &nan_w] {
-        let r = m.linear_cross_entropy_mean(&x, ww, &ids, None, c, true);
+        let r = m.linear_cross_entropy_mean(&x, ww, &ids, None, c, CeGrads::BOTH);
         assert!(matches!(r, Err(OjasError::OutOfRange { .. })), "{r:?}");
         nothing("lce target");
         let all = up(&m, &host_u32(&[1, 1], &[2]));
-        let r = m.linear_cross_entropy_mean(&x, ww, &all, Some(1), c, false);
+        let r = m.linear_cross_entropy_mean(&x, ww, &all, Some(1), c, CeGrads::NONE);
         assert!(matches!(r, Err(OjasError::NonFinite { .. })), "{r:?}");
         nothing("lce all ignored");
     }

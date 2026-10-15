@@ -2896,7 +2896,9 @@ impl Worker {
     /// With gradients, pass 2 makes each tile again, turns it into the
     /// gradient of the logits in place (with one vocabulary tile, the tile
     /// pass 1 left is reused rather than remade), and adds `G @ W_tile` into
-    /// grad_input's rows and `G^T @ x_tile` into grad_weight's rows. The
+    /// grad_input's rows and `G^T @ x_tile` into grad_weight's rows, each
+    /// only for a gradient `g.grads` asks for (a frozen head gets neither
+    /// the `[V, d]` output nor its GEMMs). The
     /// targets were range-checked, and `valid` counted, on the host. A
     /// `geom.w_half` (bf16) weight is scanned on its bits, and each `[ct, d]`
     /// weight tile is widened into the stage buffer when it is used, so no
@@ -2926,20 +2928,14 @@ impl Worker {
         let vocab = u32_of(v)?;
         let (has_ignore, ignore_id) = (u32::from(ignore.is_some()), ignore.unwrap_or(0));
         let loss = self.fresh(1)?;
-        let grads = if g.grad {
-            Some((self.fresh(n * d)?, self.fresh(v * d)?))
-        } else {
-            None
-        };
+        let gx = g.grads.input.then(|| self.fresh(n * d)).transpose()?;
+        let gw = g.grads.weight.then(|| self.fresh(v * d)).transpose()?;
         let tile = self.fresh(g.rt * g.ct)?;
         let stats = self.fresh(3 * g.rt)?;
         let loss_rows = self.fresh(n)?;
         let sum = self.fresh(1)?;
-        let temps = if g.grad {
-            Some((self.fresh(g.rt * d)?, self.fresh(g.ct * d)?))
-        } else {
-            None
-        };
+        let gx_tmp = g.grads.input.then(|| self.fresh(g.rt * d)).transpose()?;
+        let gw_tmp = g.grads.weight.then(|| self.fresh(g.ct * d)).transpose()?;
         let stage_x = if g.stage_x {
             Some(self.fresh(g.rt * d)?)
         } else {
@@ -2962,7 +2958,7 @@ impl Worker {
             let rr_u = u32_of(rr)?;
             let x_t = self.rows_operand(&xv, row0, rr, d, stage_x.as_ref())?;
             let t_rows = sub(&tv, row0, rr);
-            for pass in 0..if g.grad { 2 } else { 1 } {
+            for pass in 0..if g.grads.any() { 2 } else { 1 } {
                 for (ci, col0) in (0..v).step_by(g.ct).enumerate() {
                     let cc = g.ct.min(v - col0);
                     let (cc_u, col0_u) = (u32_of(cc)?, u32_of(col0)?);
@@ -3019,19 +3015,20 @@ impl Worker {
                         set_u32(b, ignore_id, 9);
                         set_u32(b, valid, 10);
                     })?;
-                    let (Some((gx, gw)), Some((gx_tmp, gw_tmp))) = (&grads, &temps) else {
-                        return Err(metal_err(format!("{OP}: gradient buffers missing")));
-                    };
-                    let gx_rows = sub(gx_tmp, 0, rr * d);
-                    let gw_rows = sub(gw_tmp, 0, cc * d);
-                    GemmOperands::ExactF32
-                        .nn(&tile_t, &w_t, &self.tt(&gx_rows, &[rr, d])?)
-                        .map_err(metal_err)?;
-                    self.add_into(&gx_rows, &sub(gx, row0 * d, rr * d), ci == 0)?;
-                    GemmOperands::ExactF32
-                        .tn(&tile_t, &x_t, &self.tt(&gw_rows, &[cc, d])?)
-                        .map_err(metal_err)?;
-                    self.add_into(&gw_rows, &sub(gw, col0 * d, cc * d), row0 == 0)?;
+                    if let (Some(gx), Some(gx_tmp)) = (&gx, &gx_tmp) {
+                        let gx_rows = sub(gx_tmp, 0, rr * d);
+                        GemmOperands::ExactF32
+                            .nn(&tile_t, &w_t, &self.tt(&gx_rows, &[rr, d])?)
+                            .map_err(metal_err)?;
+                        self.add_into(&gx_rows, &sub(gx, row0 * d, rr * d), ci == 0)?;
+                    }
+                    if let (Some(gw), Some(gw_tmp)) = (&gw, &gw_tmp) {
+                        let gw_rows = sub(gw_tmp, 0, cc * d);
+                        GemmOperands::ExactF32
+                            .tn(&tile_t, &x_t, &self.tt(&gw_rows, &[cc, d])?)
+                            .map_err(metal_err)?;
+                        self.add_into(&gw_rows, &sub(gw, col0 * d, cc * d), row0 == 0)?;
+                    }
                 }
                 if pass == 0 {
                     let loss_out = sub(&loss_rows, row0, rr);
@@ -3054,12 +3051,12 @@ impl Worker {
             bind(b, &loss, 2);
         })?;
         self.check(&st, &loss, ST_OUT)?;
+        // The order `MetalBackend::linear_cross_entropy_mean` unpacks: the
+        // loss, then each gradient asked for, the input's first.
         let mut outs = vec![loss];
-        if let Some((gx, gw)) = grads {
-            self.check(&st, &gx, ST_OUT)?;
-            self.check(&st, &gw, ST_OUT)?;
-            outs.push(gx);
-            outs.push(gw);
+        for grad in [gx, gw].into_iter().flatten() {
+            self.check(&st, &grad, ST_OUT)?;
+            outs.push(grad);
         }
         Ok(self.keep(outs))
     }

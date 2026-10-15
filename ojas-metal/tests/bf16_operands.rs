@@ -72,10 +72,10 @@ fn metal_keeps_the_bf16_operand_contract() {
         .unwrap_or_else(|f| panic!("{f}"));
     eprintln!("metal: {r:?}");
     // The tied table: one Bf16 slot (2 layouts) in embedding_forward,
-    // embedding_backward and 4 fused cross-entropy calls (2 chunks, with
-    // and without gradients).
+    // embedding_backward and 8 fused cross-entropy calls (2 chunks, each
+    // asking for each of the four `CeGrads` combinations).
     assert!(r.table_lane);
-    assert_eq!(r.mixed_calls, 2 * (2 * 10 + 2 * 38) + 2 * 6);
+    assert_eq!(r.mixed_calls, 2 * (2 * 10 + 2 * 38) + 2 * 10);
     assert_eq!(r.refusals, 2 + 14);
     assert_eq!(r.non_finite, 2 * 5 + 2 * 8 + 3);
 }
@@ -308,7 +308,7 @@ fn a_bf16_tied_table_is_read_in_place_by_the_gather_and_the_fused_head() {
         let lce = |t: &Tensor| -> Vec<Vec<u32>> {
             let r = ok(
                 "lce",
-                m.linear_cross_entropy_mean(&x, t, &ids, None, chunk, true),
+                m.linear_cross_entropy_mean(&x, t, &ids, None, chunk, ojas_core::CeGrads::BOTH),
             );
             let mut out = vec![bits(&r.loss)];
             out.extend(r.grad_input.iter().map(bits));
@@ -343,7 +343,7 @@ fn a_bf16_tied_table_is_read_in_place_by_the_gather_and_the_fused_head() {
     let g = ok("g small", small.upload(&rand(&[n, dim], 33, 1.0)));
     let r = ok(
         "lce small",
-        small.linear_cross_entropy_mean(&x, &th, &ids, None, chunk, true),
+        small.linear_cross_entropy_mean(&x, &th, &ids, None, chunk, ojas_core::CeGrads::BOTH),
     );
     ok("sync", small.sync());
     drop(r);

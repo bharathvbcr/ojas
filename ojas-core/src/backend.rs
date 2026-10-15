@@ -1233,7 +1233,10 @@ pub trait Backend {
     }
 
     /// Mean cross-entropy of `input @ weight^T` without materializing the
-    /// `[N, V]` logits, plus both gradients when `want_grad` is set.
+    /// `[N, V]` logits, plus the gradients `grads` asks for: each of
+    /// [`LinearCe`]'s gradients is present exactly when its flag is set, and
+    /// one that is not asked for is neither computed nor charged (a frozen
+    /// tied head takes no `[V, d]` gradient).
     ///
     /// `input` is `[N, d]` `F32`, `weight` is `[V, d]` `F32` or `Bf16` (the
     /// tied embedding, a bf16-operand slot of [`Self::bf16_operands`]),
@@ -1256,9 +1259,9 @@ pub trait Backend {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
-        let _ = (input, weight, targets, ignore_index, chunk, want_grad);
+        let _ = (input, weight, targets, ignore_index, chunk, grads);
         Err(OjasError::Unsupported {
             op: "linear_cross_entropy_mean",
             detail: format!(
@@ -1618,7 +1621,7 @@ macro_rules! with_backend_methods {
             op fn sync(&self) -> Result<(), $crate::OjasError>;
             op fn accumulate_grad(&self, acc: &mut $crate::Tensor, grad: &$crate::Tensor) -> Result<(), $crate::OjasError>;
             op fn scale_grad(&self, grad: &mut $crate::Tensor, scale: f32) -> Result<(), $crate::OjasError>;
-            op fn linear_cross_entropy_mean(&self, input: &$crate::Tensor, weight: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>, chunk: $crate::CeChunk, want_grad: bool) -> Result<$crate::LinearCe, $crate::OjasError>;
+            op fn linear_cross_entropy_mean(&self, input: &$crate::Tensor, weight: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>, chunk: $crate::CeChunk, grads: $crate::CeGrads) -> Result<$crate::LinearCe, $crate::OjasError>;
             op fn cached_attention_forward(&self, q: &$crate::Tensor, k_cache: &$crate::Tensor, v_cache: &$crate::Tensor, kv_len: usize, window: Option<usize>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn kv_cache_write(&self, cache: &mut $crate::Tensor, src: &$crate::Tensor, at: usize) -> Result<(), $crate::OjasError>;
             op fn argmax_rows(&self, x: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -1738,11 +1741,51 @@ pub struct CeChunk {
     pub cols: usize,
 }
 
+/// Which gradients [`Backend::linear_cross_entropy_mean`] returns, one flag
+/// per operand: [`LinearCe::grad_input`] for `input`, [`LinearCe::grad_weight`]
+/// for `weight`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CeGrads {
+    pub input: bool,
+    pub weight: bool,
+}
+
+impl CeGrads {
+    /// The loss alone.
+    pub const NONE: Self = Self {
+        input: false,
+        weight: false,
+    };
+    /// Both gradients.
+    pub const BOTH: Self = Self {
+        input: true,
+        weight: true,
+    };
+    /// Every combination, for a sweep over the op's contract.
+    pub const EACH: [Self; 4] = [
+        Self::NONE,
+        Self {
+            input: true,
+            weight: false,
+        },
+        Self {
+            input: false,
+            weight: true,
+        },
+        Self::BOTH,
+    ];
+
+    /// Whether any gradient is asked for.
+    pub fn any(self) -> bool {
+        self.input || self.weight
+    }
+}
+
 /// Loss and, when requested, gradients from [`Backend::linear_cross_entropy_mean`].
 ///
 /// `loss` has the shape [`Backend::cross_entropy_mean_forward`] returns.
-/// `grad_input` is `[N, d]` and `grad_weight` is `[V, d]`; both are `None`
-/// exactly when `want_grad` was false.
+/// `grad_input` is `[N, d]` and `grad_weight` is `[V, d]`; each is `Some`
+/// exactly when its [`CeGrads`] flag was set.
 #[derive(Debug)]
 pub struct LinearCe {
     pub loss: Tensor,
@@ -2330,7 +2373,7 @@ pub(crate) mod tests {
             op(backend.sync()),
             op(backend.accumulate_grad(&mut m, &t)),
             op(backend.scale_grad(&mut m, 0.5)),
-            op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, true)),
+            op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, CeGrads::BOTH)),
             op(backend.cached_attention_forward(&t, &t, &t, 1, None)),
             op(backend.kv_cache_write(&mut m, &t, 0)),
             op(backend.argmax_rows(&t)),
@@ -2502,7 +2545,7 @@ pub(crate) mod tests {
         };
         refused(
             backend
-                .linear_cross_entropy_mean(&x, &x, &ids, None, chunk, true)
+                .linear_cross_entropy_mean(&x, &x, &ids, None, chunk, CeGrads::BOTH)
                 .map(drop),
             "linear_cross_entropy_mean",
         );

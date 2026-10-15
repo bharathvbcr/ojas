@@ -10,14 +10,18 @@
 //! checkpointing).
 
 use ojas_core::{
-    inverse_permutation, permute_output_shape, Backend, BackendId, CeChunk, GdnInputs, OjasError,
-    Tensor,
+    inverse_permutation, permute_output_shape, Backend, BackendId, CeChunk, CeGrads, GdnInputs,
+    OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
 /// Index of a value on a [`Tape`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Var(pub usize);
+
+/// A fused cross-entropy's seed-1 `(input, weight)` gradients, each `None`
+/// when it was not asked for.
+type CeGradPair = (Option<Tensor>, Option<Tensor>);
 
 /// One recorded op: its input indices and whatever its backward needs.
 ///
@@ -130,8 +134,9 @@ enum Rec {
     },
     /// Fused `linear` → `cross_entropy` (`Backend::linear_cross_entropy_mean`).
     /// `grads` holds the seed-1 `(input, weight)` gradients from the forward
-    /// call. Backward moves them out, so the leaf gradient it produces is
-    /// not shared with this record; a later backward over the same node
+    /// call, each `None` when its operand is frozen ([`Tape::fused_ce`]).
+    /// Backward moves them out, so the leaf gradient it produces is not
+    /// shared with this record; a later backward over the same node
     /// recomputes them through the backend from `targets`, `ignore` and
     /// `chunk`.
     LinearCe {
@@ -140,7 +145,7 @@ enum Rec {
         targets: Tensor,
         ignore: Option<u32>,
         chunk: CeChunk,
-        grads: Option<(Tensor, Tensor)>,
+        grads: Option<CeGradPair>,
     },
     /// `src` viewed as `shape`; the gradient is viewed as `src_shape` on the
     /// way back.
@@ -373,8 +378,9 @@ impl<B: Backend> Tape<B> {
     /// [`Tape::take_grad`] return `None` (absent, not zero), and the
     /// backward skips the work only it would have used: a [`Tape::linear`]
     /// whose weight is frozen runs [`Backend::linear_backward_input`] (no
-    /// weight gradient) and an embedding with a frozen table runs no
-    /// backward at all. A frozen leaf seen through [`Tape::reshape`] or
+    /// weight gradient), a [`Tape::linear_cross_entropy`] with a frozen head
+    /// asks the backend for no head gradient, and an embedding with a frozen
+    /// table runs no backward at all. A frozen leaf seen through [`Tape::reshape`] or
     /// [`Tape::permute`] is frozen too. A graph with no trainable leaf
     /// makes [`Tape::backward`] a no-op that allocates nothing.
     ///
@@ -675,8 +681,10 @@ impl<B: Backend> Tape<B> {
     /// `[N, V]` logits.
     ///
     /// `x` is `[N, d]`, `w` is `[V, d]` (the tied embedding), `targets` is
-    /// `[N]` `U32`. The forward call asks for both gradients, and backward
-    /// only scales them by the upstream gradient (the seed of
+    /// `[N]` `U32`. The forward call asks for the gradient of each operand
+    /// that is not frozen ([`Tape::frozen_leaf`]): a frozen tied head takes
+    /// no `[V, d]` gradient, computed or charged. Backward only scales them
+    /// by the upstream gradient (the seed of
     /// [`Tape::backward_seeded`] when the loss is the root). A backend that
     /// does not implement the op returns its error, normally
     /// [`OjasError::Unsupported`]; this method does not fall back to the
@@ -953,9 +961,10 @@ impl<B: Backend> Tape<B> {
         })
     }
 
-    /// One fused call with `want_grad` set, checked against the trait
-    /// contract: a scalar loss, and both gradients present and shaped like
-    /// their inputs.
+    /// One fused call asking for the gradient of each operand that is not
+    /// frozen, checked against the trait contract: a scalar loss, and each
+    /// gradient present exactly when it was asked for and shaped like its
+    /// operand.
     fn fused_ce(
         &self,
         x: usize,
@@ -963,28 +972,44 @@ impl<B: Backend> Tape<B> {
         targets: &Tensor,
         ignore: Option<u32>,
         chunk: CeChunk,
-    ) -> Result<(Tensor, (Tensor, Tensor)), OjasError> {
+    ) -> Result<(Tensor, CeGradPair), OjasError> {
         let (xv, wv) = (&self.values[x], &self.values[w]);
+        let want = CeGrads {
+            input: !self.is_frozen(x),
+            weight: !self.is_frozen(w),
+        };
         let out = self
             .backend
-            .linear_cross_entropy_mean(xv, wv, targets, ignore, chunk, true)?;
+            .linear_cross_entropy_mean(xv, wv, targets, ignore, chunk, want)?;
         let contract = |detail: String| OjasError::Backend {
             id: self.backend.id(),
             detail: format!("linear_cross_entropy_mean: {detail}"),
         };
-        let (Some(gx), Some(gw)) = (out.grad_input, out.grad_weight) else {
-            return Err(contract(
-                "returned no gradient although want_grad was set".to_string(),
-            ));
-        };
-        if gx.shape() != xv.shape() || gw.shape() != wv.shape() {
-            return Err(contract(format!(
-                "gradients {:?} and {:?} do not match input {:?} and weight {:?}",
-                gx.shape(),
-                gw.shape(),
-                xv.shape(),
-                wv.shape()
-            )));
+        for (name, asked, got, operand) in [
+            ("input", want.input, &out.grad_input, xv),
+            ("weight", want.weight, &out.grad_weight, wv),
+        ] {
+            match got {
+                Some(g) if !asked => {
+                    return Err(contract(format!(
+                        "returned a {name} gradient {:?} that was not asked for",
+                        g.shape()
+                    )))
+                }
+                None if asked => {
+                    return Err(contract(format!(
+                        "returned no {name} gradient although it was asked for"
+                    )))
+                }
+                Some(g) if g.shape() != operand.shape() => {
+                    return Err(contract(format!(
+                        "{name} gradient {:?} does not match its operand {:?}",
+                        g.shape(),
+                        operand.shape()
+                    )))
+                }
+                _ => {}
+            }
         }
         if out.loss.num_elements()? != 1 {
             return Err(contract(format!(
@@ -992,7 +1017,7 @@ impl<B: Backend> Tape<B> {
                 out.loss.shape()
             )));
         }
-        Ok((out.loss, (gx, gw)))
+        Ok((out.loss, (out.grad_input, out.grad_weight)))
     }
 
     /// [`Tape::backward_seeded`] with seed 1: the gradient of the sum of
@@ -1392,10 +1417,15 @@ impl<B: Backend> Tape<B> {
                     Some(grads) => grads,
                     None => self.fused_ce(x, w, &targets, ignore, chunk)?.1,
                 };
-                let gx = self.scale_loss_grad(gx, grad, seed)?;
-                let gw = self.scale_loss_grad(gw, grad, seed)?;
-                self.acc(x, gx)?;
-                self.acc(w, gw)
+                if let Some(gx) = gx {
+                    let gx = self.scale_loss_grad(gx, grad, seed)?;
+                    self.acc(x, gx)?;
+                }
+                if let Some(gw) = gw {
+                    let gw = self.scale_loss_grad(gw, grad, seed)?;
+                    self.acc(w, gw)?;
+                }
+                Ok(())
             }
         }
     }

@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, CeChunk, MuonNs5Config, Ns5Precision, OjasError, Tensor,
+    AdamWConfig, Backend, Budget, CeChunk, CeGrads, MuonNs5Config, Ns5Precision, OjasError, Tensor,
 };
 
 pub type R<T> = Result<T, OjasError>;
@@ -890,7 +890,7 @@ fn linear_ce<Bk: Backend>(r: &mut Runner<'_, Bk>, rows: usize, cols: usize) {
         let chunk = CeChunk { rows, cols };
         r.op(&name, &s, TOL, |r| {
             let out =
-                r.be.linear_cross_entropy_mean(&x, &w, &t, None, chunk, true)?;
+                r.be.linear_cross_entropy_mean(&x, &w, &t, None, chunk, CeGrads::BOTH)?;
             let missing = || OjasError::Unsupported {
                 op: "linear_cross_entropy_mean",
                 detail: "want_grad was set but a gradient is missing".to_string(),

@@ -7,7 +7,7 @@
 //! op, so under `Numerics::Exact` their forward values are equal bit for bit.
 
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, BackendId, CeChunk, GdnInputs, OjasError, Tensor};
+use ojas_core::{Backend, BackendId, CeChunk, CeGrads, GdnInputs, OjasError, Tensor};
 
 use crate::spec::ModelSpec;
 
@@ -480,9 +480,9 @@ impl<B: Backend> Graph for Eval<B> {
         chunk: CeChunk,
     ) -> Result<Tensor, OjasError> {
         let targets = self.place(targets)?;
-        let out = self
-            .backend
-            .linear_cross_entropy_mean(x, w, &targets, ignore, chunk, false)?;
+        let out =
+            self.backend
+                .linear_cross_entropy_mean(x, w, &targets, ignore, chunk, CeGrads::NONE)?;
         if out.loss.num_elements()? != 1 {
             return Err(OjasError::Backend {
                 id: self.backend.id(),

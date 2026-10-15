@@ -466,9 +466,9 @@ fn table_cases<B: Backend + ?Sized>(
         },
     ];
     let targets = &targets;
-    let lce_call = |chunk: ojas_core::CeChunk, want_grad: bool| {
+    let lce_call = |chunk: ojas_core::CeChunk, grads: ojas_core::CeGrads| {
         move |b: &B, t: &[Tensor]| -> Result<Vec<Tensor>, OjasError> {
-            let out = b.linear_cross_entropy_mean(&t[0], &t[1], targets, None, chunk, want_grad)?;
+            let out = b.linear_cross_entropy_mean(&t[0], &t[1], targets, None, chunk, grads)?;
             let mut outs = vec![out.loss];
             outs.extend(out.grad_input);
             outs.extend(out.grad_weight);
@@ -490,8 +490,15 @@ fn table_cases<B: Backend + ?Sized>(
                 (
                     "linear_cross_entropy_mean weight",
                     Box::new(|| {
-                        b.linear_cross_entropy_mean(&ce[0], &ce[1], targets, None, chunks[0], true)
-                            .map(|_| ())
+                        b.linear_cross_entropy_mean(
+                            &ce[0],
+                            &ce[1],
+                            targets,
+                            None,
+                            chunks[0],
+                            ojas_core::CeGrads::BOTH,
+                        )
+                        .map(|_| ())
                     }),
                 ),
             ];
@@ -517,11 +524,11 @@ fn table_cases<B: Backend + ?Sized>(
     let name = format!("embedding_backward [{vocab}, {dim}]");
     report.mixed_calls += every_mix(b, &name, &embed_bwd, call_embed_bwd)?;
     for chunk in chunks {
-        for want_grad in [false, true] {
-            let call = lce_call(chunk, want_grad);
+        for grads in ojas_core::CeGrads::EACH {
+            let call = lce_call(chunk, grads);
             let name = format!(
                 "linear_cross_entropy_mean [{rows}, {dim}] x [{vocab}, {dim}] {chunk:?} \
-                 grad {want_grad}"
+                 grad {grads:?}"
             );
             report.mixed_calls += every_mix(b, &name, &lce, &call)?;
         }
@@ -535,7 +542,7 @@ fn table_cases<B: Backend + ?Sized>(
         f32::INFINITY,
         call_embed_bwd,
     )?;
-    let call = lce_call(chunks[0], true);
+    let call = lce_call(chunks[0], ojas_core::CeGrads::BOTH);
     refuses_non_finite(b, "linear_cross_entropy_mean", &lce, 1, f32::NAN, &call)?;
     report.non_finite += 3;
     Ok(())
@@ -578,8 +585,15 @@ fn other_ops_refuse<B: Backend + ?Sized>(
         (
             "linear_cross_entropy_mean input",
             Box::new(|| {
-                b.linear_cross_entropy_mean(&xb, &table, &ids, None, chunk, true)
-                    .map(|_| ())
+                b.linear_cross_entropy_mean(
+                    &xb,
+                    &table,
+                    &ids,
+                    None,
+                    chunk,
+                    ojas_core::CeGrads::BOTH,
+                )
+                .map(|_| ())
             }),
         ),
         (

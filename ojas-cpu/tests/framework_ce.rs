@@ -12,7 +12,7 @@
 mod common;
 
 use common::{assert_capacity, assert_nonfinite, assert_range, assert_shape, bits, SplitMix64};
-use ojas_core::{Backend, Budget, CeChunk, DType, LinearCe, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, Budget, CeChunk, CeGrads, DType, LinearCe, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 /// Fast mode: the composed GEMM over all of V can be one Accelerate call
@@ -133,7 +133,7 @@ fn exact_loss_and_grads_are_bitwise_for_every_chunk() {
                 for chunk in chunks(n, v) {
                     let what = format!("t{threads} n{n} d{d} v{v} {ignore:?} {chunk:?}");
                     let got = be
-                        .linear_cross_entropy_mean(&c.x, &c.w, &c.t, ignore, chunk, true)
+                        .linear_cross_entropy_mean(&c.x, &c.w, &c.t, ignore, chunk, CeGrads::BOTH)
                         .unwrap();
                     assert_exact(&what, &got, &want_loss, &want_gx, &want_gw);
                 }
@@ -181,7 +181,7 @@ fn exact_split_products_stay_bitwise() {
             CeChunk { rows: n, cols: v },
         ] {
             let got = be
-                .linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, true)
+                .linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, CeGrads::BOTH)
                 .unwrap();
             let what = format!("split t{threads} {chunk:?}");
             assert_exact(&what, &got, &want_loss, &want_gx, &want_gw);
@@ -203,7 +203,7 @@ fn fast_matches_the_composed_path_within_tolerance() {
                 for chunk in chunks(n, v) {
                     let what = format!("fast t{threads} n{n} d{d} v{v} {ignore:?} {chunk:?}");
                     let got = be
-                        .linear_cross_entropy_mean(&c.x, &c.w, &c.t, ignore, chunk, true)
+                        .linear_cross_entropy_mean(&c.x, &c.w, &c.t, ignore, chunk, CeGrads::BOTH)
                         .unwrap();
                     worst = worst
                         .max(rel_err(
@@ -244,7 +244,7 @@ fn loss_only_call_returns_no_gradients_and_the_same_loss() {
             &c.t,
             c.ignore,
             CeChunk { rows: 4, cols: 9 },
-            false,
+            CeGrads::NONE,
         )
         .unwrap();
     assert!(got.grad_input.is_none() && got.grad_weight.is_none());
@@ -267,7 +267,7 @@ fn one_valid_row_uses_the_global_count_and_all_ignored_is_nonfinite() {
     let (want_loss, (want_gx, want_gw)) = composed(&be, &c);
     for chunk in [CeChunk { rows: 2, cols: 3 }, CeChunk { rows: n, cols: v }] {
         let got = be
-            .linear_cross_entropy_mean(&c.x, &c.w, &c.t, ignore, chunk, true)
+            .linear_cross_entropy_mean(&c.x, &c.w, &c.t, ignore, chunk, CeGrads::BOTH)
             .unwrap();
         assert_exact(
             &format!("one valid row {chunk:?}"),
@@ -290,7 +290,7 @@ fn one_valid_row_uses_the_global_count_and_all_ignored_is_nonfinite() {
         &all_ignored,
         ignore,
         CeChunk { rows: 2, cols: 3 },
-        true,
+        CeGrads::BOTH,
     ));
     assert_eq!(be.budget().live_bytes().unwrap(), live);
 }
@@ -304,7 +304,7 @@ fn refusals_follow_linear_ce_dims_and_target_range() {
     let t = Tensor::from_u32(&[0, 1, 4], &[3], &ib).unwrap();
     let ok = CeChunk { rows: 2, cols: 2 };
     assert!(be
-        .linear_cross_entropy_mean(&x, &w, &t, None, ok, true)
+        .linear_cross_entropy_mean(&x, &w, &t, None, ok, CeGrads::BOTH)
         .is_ok());
     assert_shape(be.linear_cross_entropy_mean(
         &x,
@@ -312,7 +312,7 @@ fn refusals_follow_linear_ce_dims_and_target_range() {
         &t,
         None,
         CeChunk { rows: 0, cols: 2 },
-        true,
+        CeGrads::BOTH,
     ));
     assert_shape(be.linear_cross_entropy_mean(
         &x,
@@ -320,17 +320,17 @@ fn refusals_follow_linear_ce_dims_and_target_range() {
         &t,
         None,
         CeChunk { rows: 2, cols: 0 },
-        true,
+        CeGrads::BOTH,
     ));
     let w3 = Tensor::from_f32(&[0.25; 15], &[5, 3], &ib).unwrap();
-    assert_shape(be.linear_cross_entropy_mean(&x, &w3, &t, None, ok, true));
+    assert_shape(be.linear_cross_entropy_mean(&x, &w3, &t, None, ok, CeGrads::BOTH));
     let t2 = Tensor::from_u32(&[0, 1], &[2], &ib).unwrap();
-    assert_shape(be.linear_cross_entropy_mean(&x, &w, &t2, None, ok, true));
+    assert_shape(be.linear_cross_entropy_mean(&x, &w, &t2, None, ok, CeGrads::BOTH));
     let x3 = Tensor::from_f32(&[0.5; 12], &[1, 3, 4], &ib).unwrap();
-    assert_shape(be.linear_cross_entropy_mean(&x3, &w, &t, None, ok, true));
+    assert_shape(be.linear_cross_entropy_mean(&x3, &w, &t, None, ok, CeGrads::BOTH));
     let tf = Tensor::from_f32(&[0.0; 3], &[3], &ib).unwrap();
     assert!(matches!(
-        be.linear_cross_entropy_mean(&x, &w, &tf, None, ok, true),
+        be.linear_cross_entropy_mean(&x, &w, &tf, None, ok, CeGrads::BOTH),
         Err(OjasError::Dtype {
             expected: DType::U32,
             ..
@@ -338,10 +338,10 @@ fn refusals_follow_linear_ce_dims_and_target_range() {
     ));
     // A target outside the vocabulary that is not the ignore index.
     let bad = Tensor::from_u32(&[0, 5, 1], &[3], &ib).unwrap();
-    assert_range(be.linear_cross_entropy_mean(&x, &w, &bad, None, ok, true));
-    assert_range(be.linear_cross_entropy_mean(&x, &w, &bad, Some(4), ok, true));
+    assert_range(be.linear_cross_entropy_mean(&x, &w, &bad, None, ok, CeGrads::BOTH));
+    assert_range(be.linear_cross_entropy_mean(&x, &w, &bad, Some(4), ok, CeGrads::BOTH));
     assert!(be
-        .linear_cross_entropy_mean(&x, &w, &bad, Some(5), ok, true)
+        .linear_cross_entropy_mean(&x, &w, &bad, Some(5), ok, CeGrads::BOTH)
         .is_ok());
     assert_eq!(be.budget().live_bytes().unwrap(), 0);
 }
@@ -363,8 +363,8 @@ fn nonfinite_inputs_are_refused_before_any_charge() {
         ws[19] = bad;
         let w_bad = Tensor::from_f32(&ws, &[5, 4], &ib).unwrap();
         let w = Tensor::from_f32(&[0.25; 20], &[5, 4], &ib).unwrap();
-        assert_nonfinite(be.linear_cross_entropy_mean(&x_bad, &w, &t, None, chunk, true));
-        assert_nonfinite(be.linear_cross_entropy_mean(&x, &w_bad, &t, None, chunk, false));
+        assert_nonfinite(be.linear_cross_entropy_mean(&x_bad, &w, &t, None, chunk, CeGrads::BOTH));
+        assert_nonfinite(be.linear_cross_entropy_mean(&x, &w_bad, &t, None, chunk, CeGrads::NONE));
         assert_eq!(be.budget().live_bytes().unwrap(), 0);
     }
     // Finite inputs whose logits overflow are NonFinite too, as in
@@ -373,7 +373,7 @@ fn nonfinite_inputs_are_refused_before_any_charge() {
     let x = Tensor::from_f32(&[3.0e38; 4], &[1, 4], &ib).unwrap();
     let w = Tensor::from_f32(&[3.0e38; 8], &[2, 4], &ib).unwrap();
     let t1 = Tensor::from_u32(&[1], &[1], &ib).unwrap();
-    assert_nonfinite(big.linear_cross_entropy_mean(&x, &w, &t1, None, chunk, true));
+    assert_nonfinite(big.linear_cross_entropy_mean(&x, &w, &t1, None, chunk, CeGrads::BOTH));
     assert_eq!(big.budget().live_bytes().unwrap(), 0);
 }
 
@@ -384,12 +384,12 @@ fn budget_refusal_leaves_the_budget_balanced() {
     let mut rng = SplitMix64(0xce05);
     let c = case(&mut rng, 37, 12, 61, Some(3));
     let chunk = CeChunk { rows: 8, cols: 16 };
-    for want_grad in [false, true] {
+    for grads in CeGrads::EACH {
         for numerics in [Numerics::Exact, Numerics::Fast] {
             let mut accepted = None;
             for cap in (0..=40_000u64).step_by(256) {
                 let be = CpuBackend::new(Budget::new(cap)).with_numerics(numerics);
-                match be.linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, want_grad) {
+                match be.linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, grads) {
                     Ok(out) => {
                         accepted.get_or_insert(cap);
                         drop(out);
@@ -405,7 +405,7 @@ fn budget_refusal_leaves_the_budget_balanced() {
                 assert_eq!(be.budget().live_bytes().unwrap(), 0, "cap {cap}");
             }
             let cap = accepted.expect("no cap up to 40000 bytes admitted the op");
-            println!("want_grad {want_grad} {numerics:?}: smallest cap admitted {cap} bytes");
+            println!("grads {grads:?} {numerics:?}: smallest cap admitted {cap} bytes");
         }
     }
 }
@@ -425,7 +425,7 @@ fn a_budget_below_the_logits_runs_the_fused_op_and_refuses_the_composed_one() {
         cols: 8192,
     };
     let out = be
-        .linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, true)
+        .linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, CeGrads::BOTH)
         .unwrap();
     let loss = f(&out.loss)[0];
     assert!(loss.is_finite() && loss > 0.0, "{loss}");

@@ -1,5 +1,5 @@
-//! Mean cross-entropy of `x · Wᵀ` and both gradients, without the `[N, V]`
-//! logits.
+//! Mean cross-entropy of `x · Wᵀ` and the gradients asked for, without the
+//! `[N, V]` logits.
 //!
 //! The rows of `x` are walked in `chunk.rows` blocks and, inside each, the
 //! vocabulary in `chunk.cols` blocks; one `[rows, cols]` logit tile exists at
@@ -10,8 +10,10 @@
 //!
 //! 1. the row maximum;
 //! 2. `sum exp(l - max)` in ascending vocabulary order, and the target logit;
-//! 3. with `want_grad`, `G = (softmax - onehot) / n_valid` formed in the tile
-//!    in place, then `grad_x[rows] += G · W_c` and `grad_w[cols] += Gᵀ · x_c`.
+//! 3. with a gradient asked for, `G = (softmax - onehot) / n_valid` formed in
+//!    the tile in place, then `grad_x[rows] += G · W_c` and/or
+//!    `grad_w[cols] += Gᵀ · x_c`, each only when its gradient is asked for
+//!    (a frozen tied head takes no `[V, d]` output and no `Gᵀ · x_c`).
 //!
 //! The pass-1/pass-2 split (rather than an online, rescaled sum) keeps every
 //! loss term the f32 sequence `cross_entropy_mean_forward` computes, and the
@@ -46,7 +48,8 @@
 use std::ops::Range;
 
 use ojas_core::{
-    exp_exact, linear_ce_dims, Budget, CeChunk, DType, LinearCe, LinearCeDims, OjasError, Tensor,
+    exp_exact, linear_ce_dims, Budget, CeChunk, CeGrads, DType, LinearCe, LinearCeDims, OjasError,
+    Tensor,
 };
 
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
@@ -75,7 +78,7 @@ pub(crate) fn linear_cross_entropy_mean(
     targets: &Tensor,
     ignore: Option<u32>,
     chunk: CeChunk,
-    want_grad: bool,
+    grads: CeGrads,
 ) -> Result<LinearCe, OjasError> {
     let dims = linear_ce_dims(input, weight, targets, chunk)?;
     check_u32(OP, targets)?;
@@ -94,17 +97,33 @@ pub(crate) fn linear_cross_entropy_mean(
         ignore,
         valid: valid_rows(t, dims.vocab, ignore)?,
     };
-    let (loss, grad_input, grad_weight) = if want_grad {
-        let mut loss = 0.0f32;
-        let shapes = [input.shape(), weight.shape()];
-        let [gx, gw] = fill_outs(OP, budget, exec, shapes, |grads| {
-            loss = fused(budget, exec, x, w, &targets, dims, chunk, Some(grads))?;
-            Ok(())
-        })?;
-        (loss, Some(gx), Some(gw))
-    } else {
-        let loss = fused(budget, exec, x, w, &targets, dims, chunk, None)?;
-        (loss, None, None)
+    let mut loss = 0.0f32;
+    let mut run = |gx: Option<&mut [f32]>, gw: Option<&mut [f32]>| -> Result<(), OjasError> {
+        loss = fused(budget, exec, x, w, &targets, dims, chunk, [gx, gw])?;
+        Ok(())
+    };
+    let (grad_input, grad_weight) = match (grads.input, grads.weight) {
+        (true, true) => {
+            let shapes = [input.shape(), weight.shape()];
+            let [gx, gw] = fill_outs(OP, budget, exec, shapes, |[gx, gw]| run(Some(gx), Some(gw)))?;
+            (Some(gx), Some(gw))
+        }
+        (true, false) => {
+            let [gx] = fill_outs(OP, budget, exec, [input.shape()], |[gx]| {
+                run(Some(gx), None)
+            })?;
+            (Some(gx), None)
+        }
+        (false, true) => {
+            let [gw] = fill_outs(OP, budget, exec, [weight.shape()], |[gw]| {
+                run(None, Some(gw))
+            })?;
+            (None, Some(gw))
+        }
+        (false, false) => {
+            run(None, None)?;
+            (None, None)
+        }
     };
     let loss = alloc_f32(OP, budget, &[loss], &[])?;
     Ok(LinearCe {
@@ -163,7 +182,9 @@ fn valid_rows(targets: &[u32], vocab: usize, ignore: Option<u32>) -> Result<u32,
 /// Floats live at once besides the inputs and the two gradients: one logit
 /// tile, the larger of the two [`gemm_acc`] output snapshots (a split
 /// product copies its `[rows, d]` or `[cols, d]` output), three per-row
-/// statistics, and the largest [`scratch`] of the three GEMMs; with a
+/// statistics, and the largest [`scratch`] of the GEMMs that run (the logit
+/// product always, `G · W_c` for `grads.input`, `Gᵀ · x_c` for
+/// `grads.weight`); with a
 /// `widened` (`Bf16`) weight, one `[cols, d]` widened vocabulary block. The
 /// row block of `x` and an `F32` weight's block are views of the inputs,
 /// not copies. Every block is at most `rows x cols`, so the full-size block
@@ -173,7 +194,7 @@ fn tile_scratch(
     rows: usize,
     cols: usize,
     dim: usize,
-    want_grad: bool,
+    grads: CeGrads,
     widened: bool,
 ) -> Result<usize, OjasError> {
     let tile = product(OP, &[rows, cols])?;
@@ -185,11 +206,13 @@ fn tile_scratch(
     let stats = product(OP, &[rows, 3])?;
     let mut gemm_work = scratch(OP, exec, rows, dim, cols)?;
     let mut grad_product = 0;
-    if want_grad {
-        gemm_work = gemm_work
-            .max(scratch(OP, exec, rows, cols, dim)?)
-            .max(scratch(OP, exec, cols, rows, dim)?);
-        grad_product = product(OP, &[rows, dim])?.max(product(OP, &[cols, dim])?);
+    if grads.input {
+        gemm_work = gemm_work.max(scratch(OP, exec, rows, cols, dim)?);
+        grad_product = product(OP, &[rows, dim])?;
+    }
+    if grads.weight {
+        gemm_work = gemm_work.max(scratch(OP, exec, cols, rows, dim)?);
+        grad_product = grad_product.max(product(OP, &[cols, dim])?);
     }
     [tile, stats, gemm_work, grad_product, block]
         .into_iter()
@@ -237,8 +260,8 @@ struct Targets<'a> {
     valid: u32,
 }
 
-/// The scalar loss. With `grads`, also `[grad_x, grad_w]`, accumulated
-/// into the caller's zeroed outputs.
+/// The scalar loss. Each of `[grad_x, grad_w]` that is present is
+/// accumulated into the caller's zeroed output.
 #[allow(clippy::too_many_arguments)]
 fn fused(
     budget: &Budget,
@@ -248,7 +271,7 @@ fn fused(
     targets: &Targets<'_>,
     dims: LinearCeDims,
     chunk: CeChunk,
-    mut grads: Option<[&mut [f32]; 2]>,
+    [mut gx, mut gw]: [Option<&mut [f32]>; 2],
 ) -> Result<f32, OjasError> {
     let Targets {
         ids: targets,
@@ -266,21 +289,24 @@ fn fused(
             "fused cross-entropy data length does not match shape",
         ));
     }
-    if let Some([gx, gw]) = &grads {
-        if gx.len() != x.len() || gw.len() != w.len() {
-            return Err(shape(
-                OP,
-                "fused cross-entropy gradient length does not match its operand",
-            ));
-        }
+    if gx.as_ref().is_some_and(|g| g.len() != x.len())
+        || gw.as_ref().is_some_and(|g| g.len() != w.len())
+    {
+        return Err(shape(
+            OP,
+            "fused cross-entropy gradient length does not match its operand",
+        ));
     }
-    let want_grad = grads.is_some();
+    let grads = CeGrads {
+        input: gx.is_some(),
+        weight: gw.is_some(),
+    };
     let denom = valid as f32;
     let (rows, cols) = (chunk.rows.min(n), chunk.cols.min(v));
     // The tile charge ends when this function returns; the gradients are
     // the caller's.
     let widened = matches!(w, Weight::Bf16(_));
-    let scratch = tile_scratch(exec, rows, cols, d, want_grad, widened)?;
+    let scratch = tile_scratch(exec, rows, cols, d, grads, widened)?;
     let _tiles = room_for(OP, budget, scratch)?;
     let vocab_blocks = || (0..v).step_by(cols).map(move |c0| c0..(c0 + cols).min(v));
     let single = cols == v;
@@ -333,9 +359,9 @@ fn fused(
             total += maxes[i] + sum.ln() - picked[i];
         }
 
-        let Some([gx, gw]) = grads.as_mut() else {
+        if !grads.any() {
             continue;
-        };
+        }
         for range in vocab_blocks() {
             let width = range.len();
             let (mut g, w_block) = match kept.take() {
@@ -350,14 +376,18 @@ fn fused(
             softmax_grad(exec, &mut g, range.clone(), rows, &sums, denom)?;
             let g = Mat::row_major(&g, r, width);
             let w_block = Mat::row_major(w_block.values(), width, d);
-            gemm_acc(OP, exec, &g, &w_block, &mut gx[r0 * d..r1 * d])?;
-            gemm_acc(
-                OP,
-                exec,
-                &g.t(),
-                &x_block,
-                &mut gw[range.start * d..range.end * d],
-            )?;
+            if let Some(gx) = gx.as_deref_mut() {
+                gemm_acc(OP, exec, &g, &w_block, &mut gx[r0 * d..r1 * d])?;
+            }
+            if let Some(gw) = gw.as_deref_mut() {
+                gemm_acc(
+                    OP,
+                    exec,
+                    &g.t(),
+                    &x_block,
+                    &mut gw[range.start * d..range.end * d],
+                )?;
+            }
         }
     }
     let loss = total / denom;

@@ -22,9 +22,9 @@
 use std::sync::{Arc, Mutex};
 
 use ojas_core::{
-    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, GatedRmsGrad,
-    GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Numerics, OjasError,
-    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
+    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, CeGrads,
+    GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Numerics,
+    OjasError, OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 
 /// The per-call cancel check: `Err` carries the cancel's own message
@@ -612,11 +612,11 @@ impl<B: Backend> Backend for Gated<B> {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         self.enter("linear_cross_entropy_mean", true)?;
         self.inner
-            .linear_cross_entropy_mean(input, weight, targets, ignore_index, chunk, want_grad)
+            .linear_cross_entropy_mean(input, weight, targets, ignore_index, chunk, grads)
     }
     fn cached_attention_forward(
         &self,

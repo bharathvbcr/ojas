@@ -277,7 +277,6 @@ fn frozen_embedding_and_fused_head_leave_the_trainable_gradient_unchanged() {
 /// gradient: the tied Qwen3.5 lm_head is vocab x hidden (about 2 GiB at
 /// 248k x 2048 in f32) and is always frozen under LoRA.
 #[test]
-#[ignore = "BREAK: tracked by ft-2bbced18 (fused CE weight gradient with a frozen tied head)"]
 fn a_frozen_fused_head_allocates_no_head_sized_gradient() {
     let (n, d, v) = (4usize, 64usize, 8192usize);
     let head_bytes = (v * d * 4) as u64;

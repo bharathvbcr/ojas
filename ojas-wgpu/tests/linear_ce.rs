@@ -11,7 +11,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, CeChunk, OjasError, Tensor};
+use ojas_core::{Backend, Budget, CeChunk, CeGrads, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 struct Problem {
@@ -76,24 +76,26 @@ fn unfused(g: &WgpuBackend, p: &Problem) -> [Vec<f32>; 3] {
     [vals(g, &loss), vals(g, &gx), vals(g, &gw)]
 }
 
-fn fused(g: &WgpuBackend, p: &Problem, chunk: CeChunk, want_grad: bool) -> Vec<Vec<f32>> {
+fn fused(g: &WgpuBackend, p: &Problem, chunk: CeChunk, grads: CeGrads) -> Vec<Vec<f32>> {
     let (x, w, t) = (
         g.upload(&p.x).unwrap(),
         g.upload(&p.w).unwrap(),
         g.upload(&p.t).unwrap(),
     );
     let r = g
-        .linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk, want_grad)
+        .linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk, grads)
         .unwrap();
     assert_eq!(r.loss.shape(), &[] as &[usize]);
-    assert_eq!(r.grad_input.is_some(), want_grad);
-    assert_eq!(r.grad_weight.is_some(), want_grad);
+    assert_eq!(r.grad_input.is_some(), grads.input);
+    assert_eq!(r.grad_weight.is_some(), grads.weight);
     g.sync().unwrap();
     let mut out = vec![vals(g, &r.loss)];
-    if let (Some(gx), Some(gw)) = (&r.grad_input, &r.grad_weight) {
+    if let Some(gx) = &r.grad_input {
         assert_eq!(gx.shape(), p.x.shape());
-        assert_eq!(gw.shape(), p.w.shape());
         out.push(vals(g, gx));
+    }
+    if let Some(gw) = &r.grad_weight {
+        assert_eq!(gw.shape(), p.w.shape());
         out.push(vals(g, gw));
     }
     out
@@ -102,7 +104,7 @@ fn fused(g: &WgpuBackend, p: &Problem, chunk: CeChunk, want_grad: bool) -> Vec<V
 fn equals_composition(tag: &str, p: &Problem, chunk: CeChunk) -> f64 {
     let g = fresh();
     let want = unfused(&g, p);
-    let got = fused(&g, p, chunk, true);
+    let got = fused(&g, p, chunk, CeGrads::BOTH);
     let mut worst = 0.0f64;
     for (name, (a, b)) in ["loss", "grad_input", "grad_weight"]
         .iter()
@@ -112,13 +114,22 @@ fn equals_composition(tag: &str, p: &Problem, chunk: CeChunk) -> f64 {
         assert!(e <= 1e-6, "{tag} {chunk:?} {name}: rel {e:.3e} > 1e-6");
         worst = worst.max(e);
     }
-    let loss_only = fused(&g, p, chunk, false);
-    assert_eq!(loss_only.len(), 1);
-    assert_eq!(
-        loss_only[0][0].to_bits(),
-        got[0][0].to_bits(),
-        "{tag}: loss differs without grads"
-    );
+    // Asking for fewer gradients gives the same bits for what is returned.
+    for grads in CeGrads::EACH {
+        let part = fused(&g, p, chunk, grads);
+        let mut expect = vec![&got[0]];
+        if grads.input {
+            expect.push(&got[1]);
+        }
+        if grads.weight {
+            expect.push(&got[2]);
+        }
+        assert_eq!(part.len(), expect.len(), "{tag} {grads:?}");
+        for (a, b) in part.iter().zip(expect) {
+            let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert!(bits(a) == bits(b), "{tag} {grads:?}: differs from both");
+        }
+    }
     worst
 }
 
@@ -180,7 +191,7 @@ fn one_tile_covering_everything_gives_the_composition_loss_bit_for_bit() {
             rows: 200,
             cols: 700,
         },
-        true,
+        CeGrads::BOTH,
     );
     assert_eq!(got[0][0].to_bits(), want[0][0].to_bits(), "loss");
     for (name, (a, b)) in ["grad_input", "grad_weight"]
@@ -208,7 +219,7 @@ fn matches_the_cpu_reference() {
             rows: 100,
             cols: 1024,
         },
-        true,
+        CeGrads::BOTH,
     );
     for (name, (a, b)) in ["loss", "grad_input", "grad_weight"].iter().zip(
         got.iter()
@@ -237,7 +248,7 @@ fn matches_the_cpu_fused_op() {
                     rows: 128,
                     cols: 512,
                 },
-                true,
+                CeGrads::BOTH,
             )
             .unwrap();
         let got = fused(
@@ -247,7 +258,7 @@ fn matches_the_cpu_fused_op() {
                 rows: 77,
                 cols: 300,
             },
-            true,
+            CeGrads::BOTH,
         );
         let want = [
             want.loss.to_f32_vec().unwrap(),
@@ -291,7 +302,7 @@ fn runs_under_a_budget_too_small_for_the_logits() {
                 rows: 128,
                 cols: 512,
             },
-            true,
+            CeGrads::BOTH,
         )
         .unwrap();
     g.sync().unwrap();
@@ -307,7 +318,7 @@ fn runs_under_a_budget_too_small_for_the_logits() {
             rows: 512,
             cols: 4096,
         },
-        true,
+        CeGrads::BOTH,
     ) {
         Err(OjasError::CapacityExceeded { .. }) => {}
         other => panic!("an N x V tile should not fit: {other:?}"),
@@ -323,9 +334,9 @@ fn results_repeat_bit_for_bit() {
         rows: 33,
         cols: 100,
     };
-    let first = fused(&g, &p, chunk, true);
+    let first = fused(&g, &p, chunk, CeGrads::BOTH);
     for _ in 0..2 {
-        let again = fused(&g, &p, chunk, true);
+        let again = fused(&g, &p, chunk, CeGrads::BOTH);
         for (a, b) in again.iter().zip(&first) {
             let a: Vec<u32> = a.iter().map(|x| x.to_bits()).collect();
             let b: Vec<u32> = b.iter().map(|x| x.to_bits()).collect();
@@ -348,31 +359,38 @@ fn refusals_are_synchronous() {
     // Every target ignored: the mean has no rows.
     let all = g.upload(&host_u32(&[3; 6], &[6])).unwrap();
     assert!(matches!(
-        err(g.linear_cross_entropy_mean(&x, &w, &all, Some(3), chunk, true)),
+        err(g.linear_cross_entropy_mean(&x, &w, &all, Some(3), chunk, CeGrads::BOTH)),
         OjasError::NonFinite {
             op: "linear_cross_entropy_mean"
         }
     ));
     let far = g.upload(&host_u32(&[0, 1, 2, 9, 4, 5], &[6])).unwrap();
     assert!(matches!(
-        err(g.linear_cross_entropy_mean(&x, &w, &far, None, chunk, true)),
+        err(g.linear_cross_entropy_mean(&x, &w, &far, None, chunk, CeGrads::BOTH)),
         OjasError::OutOfRange { .. }
     ));
     let w_bad = g.upload(&host(1, &[9, 5])).unwrap();
     assert!(matches!(
-        err(g.linear_cross_entropy_mean(&x, &w_bad, &t, None, chunk, true)),
+        err(g.linear_cross_entropy_mean(&x, &w_bad, &t, None, chunk, CeGrads::BOTH)),
         OjasError::Shape { .. }
     ));
     assert!(matches!(
-        err(g.linear_cross_entropy_mean(&x, &w, &t, None, CeChunk { rows: 0, cols: 3 }, true)),
+        err(g.linear_cross_entropy_mean(
+            &x,
+            &w,
+            &t,
+            None,
+            CeChunk { rows: 0, cols: 3 },
+            CeGrads::BOTH
+        )),
         OjasError::Shape { .. }
     ));
     assert!(matches!(
-        err(g.linear_cross_entropy_mean(&p.x, &w, &t, None, chunk, true)),
+        err(g.linear_cross_entropy_mean(&p.x, &w, &t, None, chunk, CeGrads::BOTH)),
         OjasError::Placement { .. }
     ));
     assert!(matches!(
-        err(g.linear_cross_entropy_mean(&x, &w, &x, None, chunk, true)),
+        err(g.linear_cross_entropy_mean(&x, &w, &x, None, chunk, CeGrads::BOTH)),
         OjasError::Dtype { .. }
     ));
     g.sync().unwrap();
@@ -389,7 +407,14 @@ fn a_non_finite_input_surfaces_at_sync() {
             .upload(&Tensor::from_f32(&xs, &[20, 8], host_budget()).unwrap())
             .unwrap();
         let (w, t) = (g.upload(&p.w).unwrap(), g.upload(&p.t).unwrap());
-        let r = g.linear_cross_entropy_mean(&x, &w, &t, None, CeChunk { rows: 7, cols: 16 }, true);
+        let r = g.linear_cross_entropy_mean(
+            &x,
+            &w,
+            &t,
+            None,
+            CeChunk { rows: 7, cols: 16 },
+            CeGrads::BOTH,
+        );
         assert!(r.is_ok());
         match g.sync() {
             Err(OjasError::NonFinite { op }) => assert_eq!(op, "linear_cross_entropy_mean"),
@@ -422,7 +447,7 @@ fn matches_the_cpu_at_the_bench_shape() {
             rows: 1024,
             cols: 8192,
         },
-        true,
+        CeGrads::BOTH,
     );
     for (name, (a, b)) in ["loss", "grad_input", "grad_weight"].iter().zip(
         got.iter()
@@ -458,10 +483,10 @@ fn bench_fused_against_unfused() {
         drop((y, loss, gy, grads));
         s.elapsed().as_secs_f64()
     };
-    let fused_step = |chunk: CeChunk, want_grad: bool| {
+    let fused_step = |chunk: CeChunk, grads: CeGrads| {
         let s = std::time::Instant::now();
         let r = g
-            .linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk, want_grad)
+            .linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk, grads)
             .unwrap();
         g.sync().unwrap();
         drop(r);
@@ -497,9 +522,9 @@ fn bench_fused_against_unfused() {
                 rows: 1024,
                 cols: 8192,
             },
-            false,
+            CeGrads::NONE,
         ),
-        a => fused_step(chunks[a - 2], true),
+        a => fused_step(chunks[a - 2], CeGrads::BOTH),
     };
     for a in 0..arms {
         run(a);

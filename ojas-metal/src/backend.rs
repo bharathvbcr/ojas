@@ -83,11 +83,11 @@ use ojas_core::{
     rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
     sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
     topk_rows_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims,
-    GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
-    Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad,
-    Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad,
-    MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
+    AdamWConfig, Backend, BackendId, Budget, CeChunk, CeGrads, Conv1dDims, DType, DeviceBuffer,
+    GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe,
+    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
+    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
 };
 
 use crate::link::{
@@ -2108,7 +2108,7 @@ impl Backend for MetalBackend {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         const OP: &str = "linear_cross_entropy_mean";
         let dims = linear_ce_dims(input, weight, targets, chunk)?;
@@ -2127,7 +2127,7 @@ impl Backend for MetalBackend {
             chunk.cols,
             x.off,
             w.off,
-            want_grad,
+            grads,
             w_half,
         );
         let scratch = geom.scratch().ok_or_else(|| overflow(OP))?;
@@ -2139,25 +2139,31 @@ impl Backend for MetalBackend {
             ignore: ignore_index,
             valid,
         };
-        if !want_grad {
-            let loss = self.one(OP, &[], scratch, cmd)?;
-            return Ok(LinearCe {
-                loss,
-                grad_input: None,
-                grad_weight: None,
-            });
+        // The device returns the loss, then the input's gradient and the
+        // weight's, each only when asked for (`Worker::linear_ce`).
+        let mut shapes: Vec<&[usize]> = vec![&[]];
+        if grads.input {
+            shapes.push(input.shape());
         }
-        let mut out = self
-            .outputs(OP, &[&[], input.shape(), weight.shape()], scratch, cmd)?
-            .into_iter();
-        match (out.next(), out.next(), out.next()) {
-            (Some(loss), Some(gx), Some(gw)) => Ok(LinearCe {
-                loss,
-                grad_input: Some(gx),
-                grad_weight: Some(gw),
-            }),
-            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        if grads.weight {
+            shapes.push(weight.shape());
         }
+        let mut out = self.outputs(OP, &shapes, scratch, cmd)?.into_iter();
+        let missing = || metal_err(format!("{OP}: missing outputs"));
+        let loss = out.next().ok_or_else(missing)?;
+        let grad_input = grads
+            .input
+            .then(|| out.next().ok_or_else(missing))
+            .transpose()?;
+        let grad_weight = grads
+            .weight
+            .then(|| out.next().ok_or_else(missing))
+            .transpose()?;
+        Ok(LinearCe {
+            loss,
+            grad_input,
+            grad_weight,
+        })
     }
 
     /// Validated by [`cached_attention_dims`] and the Metal head-dim limit

@@ -4,7 +4,7 @@
 //! for the matmul-class ops, and only from a caller that holds it.
 
 use ojas_core::{
-    round_f32_to_bf16, Autocast, AutocastMode, Backend, Budget, CeChunk, Numerics, Tensor,
+    round_f32_to_bf16, Autocast, AutocastMode, Backend, Budget, CeChunk, CeGrads, Numerics, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -143,9 +143,9 @@ fn bf16_region_rounds_non_matmul_operands_in_f32_storage() {
     let table = dirty(vocab * d, 7, &budget, &[vocab, d]);
     let targets = Tensor::from_u32(&[1, 5, 9, 15], &[rows], &budget).unwrap();
     let chunk = CeChunk { rows: 2, cols: 8 };
-    let got = ac.linear_cross_entropy_mean(&x, &table, &targets, None, chunk, true);
+    let got = ac.linear_cross_entropy_mean(&x, &table, &targets, None, chunk, CeGrads::BOTH);
     let want = ac
-        .linear_cross_entropy_mean(&r(&x), &r(&table), &targets, None, chunk, true)
+        .linear_cross_entropy_mean(&r(&x), &r(&table), &targets, None, chunk, CeGrads::BOTH)
         .unwrap();
     let got = got.expect("linear cross-entropy");
     assert_eq!(bits(&got.loss), bits(&want.loss), "ce loss");
