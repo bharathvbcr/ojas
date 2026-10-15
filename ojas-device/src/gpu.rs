@@ -1,6 +1,7 @@
 //! What the crates that link a GPU runtime (`ojas-cuda`, `ojas-hip`) share:
-//! the one bounded wait and the one free-memory check. Neither opens a
-//! device; each runtime calls them with its own readiness query and error.
+//! the one bounded wait, the rule for a wait's buffers when it fails, and the
+//! one free-memory check. None opens a device; each runtime calls them with
+//! its own readiness query and error.
 
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,22 @@ pub fn poll_until<E>(
             return Err(timed_out(waited));
         }
         std::thread::sleep(interval.min(timeout - waited));
+    }
+}
+
+/// Hand back `resources` (the buffers, stream and event a device wait was
+/// for) only once `drained` says the device is done with them. On `Err` they
+/// are leaked, not dropped: the device may still write them, and freeing a
+/// buffer or destroying a stream with work queued waits for that work again,
+/// with no bound, on the device the wait just gave up on. The leak is the
+/// bounded cost.
+pub fn leak_unless_idle<T, E>(resources: T, drained: Result<(), E>) -> Result<T, E> {
+    match drained {
+        Ok(()) => Ok(resources),
+        Err(e) => {
+            std::mem::forget(resources);
+            Err(e)
+        }
     }
 }
 
@@ -163,6 +180,36 @@ mod tests {
         );
         assert_eq!(got, Err(E::TimedOut));
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// Counts its drops, standing in for a buffer whose `Drop` frees it.
+    struct Freed<'a>(&'a std::cell::Cell<u32>);
+    impl Drop for Freed<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[test]
+    fn resources_after_a_failed_wait_are_never_freed() {
+        let frees = std::cell::Cell::new(0);
+        let got = leak_unless_idle((Freed(&frees), Freed(&frees)), Err(E::TimedOut));
+        assert_eq!(got.err(), Some(E::TimedOut));
+        assert_eq!(frees.get(), 0, "a timed-out wait's resources were freed");
+
+        let got = leak_unless_idle(Freed(&frees), Err(E::Failed(7)));
+        assert_eq!(got.err(), Some(E::Failed(7)));
+        assert_eq!(frees.get(), 0);
+    }
+
+    #[test]
+    fn resources_after_a_drained_wait_come_back_and_free_once() {
+        let frees = std::cell::Cell::new(0);
+        let got = leak_unless_idle::<_, E>((Freed(&frees), Freed(&frees)), Ok(()));
+        let pair = got.expect("a drained wait hands the resources back");
+        assert_eq!(frees.get(), 0, "freed before the caller was done");
+        drop(pair);
+        assert_eq!(frees.get(), 2);
     }
 
     #[test]

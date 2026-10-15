@@ -3,7 +3,8 @@
 //! Callers name the device. This crate does not open a GPU runtime and does
 //! not substitute [`Device::Cpu`] when a GPU kind was requested.
 //! GPU probes live in the crates that link those runtimes; what they share,
-//! the bounded wait ([`poll_until`]) and the free-memory check
+//! the bounded wait ([`poll_until`]), what happens to a wait's buffers when
+//! it fails ([`leak_unless_idle`]) and the free-memory check
 //! ([`free_bytes_fit`]), lives here once.
 
 #![deny(unsafe_code)]
@@ -29,7 +30,7 @@ pub use bandwidth::{
     BANDWIDTH_MIN_BYTES,
 };
 pub use disk::available_disk_bytes;
-pub use gpu::{free_bytes_fit, poll_until, FreeShortfall};
+pub use gpu::{free_bytes_fit, leak_unless_idle, poll_until, FreeShortfall};
 pub use host::{probe_host, HostMemory, MemoryReport};
 pub use plan::{MemoryProbe, ResourcePlan, ResourcePolicy};
 pub use system::{probe_pressure, probe_system, MemoryArchitecture, MemoryPressure, SystemProfile};
