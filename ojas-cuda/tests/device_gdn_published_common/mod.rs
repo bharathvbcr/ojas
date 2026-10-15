@@ -22,7 +22,10 @@ pub struct CorpusFiles {
     pub q: &'static [u8],
     pub k: &'static [u8],
     pub v: &'static [u8],
+    /// The `alpha` array. Its file suffix is `alpha`, or `alpha_preclamp`
+    /// for a case that stores the gate before the clamp ([`Self::alpha_suffix`]).
     pub alpha: &'static [u8],
+    pub alpha_suffix: &'static str,
     pub beta: &'static [u8],
     pub golden: &'static [u8],
 }
@@ -42,12 +45,16 @@ macro_rules! corpus_file {
 
 macro_rules! corpus_case {
     ($name:literal) => {
+        corpus_case!($name, "alpha")
+    };
+    ($name:literal, $alpha:literal) => {
         CorpusFiles {
             name: $name,
             q: corpus_file!($name, "q"),
             k: corpus_file!($name, "k"),
             v: corpus_file!($name, "v"),
-            alpha: corpus_file!($name, "alpha"),
+            alpha: corpus_file!($name, $alpha),
+            alpha_suffix: $alpha,
             beta: corpus_file!($name, "beta"),
             golden: corpus_file!($name, "y_seq_f64"),
         }
@@ -63,7 +70,8 @@ pub const PUBLISHED_CORPUS: [CorpusFiles; 13] = [
     corpus_case!("L64"),
     corpus_case!("L64_gqa_kv2"),
     corpus_case!("L65"),
-    corpus_case!("L65_tinyalpha"),
+    // Its stored gate is the pre-clamp 1e-8; the golden used it clamped to 1e-4.
+    corpus_case!("L65_tinyalpha", "alpha_preclamp"),
     corpus_case!("L127"),
     corpus_case!("L127c16"),
     corpus_case!("L127c64"),
@@ -97,7 +105,7 @@ pub fn verify_embedded_corpus() -> usize {
             ("q", c.q),
             ("k", c.k),
             ("v", c.v),
-            ("alpha", c.alpha),
+            (c.alpha_suffix, c.alpha),
             ("beta", c.beta),
             ("y_seq_f64", c.golden),
         ] {
