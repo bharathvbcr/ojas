@@ -21,10 +21,12 @@ use std::path::Path;
 /// 100_000_000, not 100 MiB (104_857_600).
 pub const MAX_HEADER_BYTES: u64 = 100_000_000;
 
-/// Every dtype in the safetensors specification, so one tensor of an
-/// unfamiliar type never rejects the file that holds it. The header strings
-/// are the spec's: `"BOOL"`, `"F4"`, `"F6_E2M3"`, `"F6_E3M2"`, `"U8"`, `"I8"`,
-/// `"F8_E5M2"`, `"F8_E4M3"`, `"F8_E8M0"`, `"I16"`, `"U16"`, `"F16"`,
+/// Every dtype tag of the safetensors specification and of the released
+/// safetensors 0.8.0 (its adapter tables add `"F8_E4M3FNUZ"`, `"F8_E5M2FNUZ"`
+/// and `"C64"`), so one tensor of an unfamiliar type never rejects the file
+/// that holds it. The header strings are: `"BOOL"`, `"F4"`, `"F6_E2M3"`, `"F6_E3M2"`, `"U8"`, `"I8"`,
+/// `"F8_E5M2"`, `"F8_E4M3"`, `"F8_E8M0"`, `"F8_E4M3FNUZ"`, `"F8_E5M2FNUZ"`,
+/// `"C64"` (two f32, 8 bytes), `"I16"`, `"U16"`, `"F16"`,
 /// `"BF16"`, `"I32"`, `"U32"`, `"F32"`, `"F64"`, `"I64"` and `"U64"`.
 ///
 /// This crate decodes F32, BF16, F16, I64 and U16 ([`SafeTensors::read_f32`],
@@ -49,6 +51,9 @@ pub enum StDtype {
     F8E5M2,
     F8E4M3,
     F8E8M0,
+    F8E4M3Fnuz,
+    F8E5M2Fnuz,
+    C64,
     I16,
     I32,
     U32,
@@ -78,10 +83,12 @@ impl StDtype {
             | StDtype::I8
             | StDtype::F8E5M2
             | StDtype::F8E4M3
-            | StDtype::F8E8M0 => 1,
+            | StDtype::F8E8M0
+            | StDtype::F8E4M3Fnuz
+            | StDtype::F8E5M2Fnuz => 1,
             StDtype::U16 | StDtype::BF16 | StDtype::F16 | StDtype::I16 => 2,
             StDtype::F32 | StDtype::I32 | StDtype::U32 => 4,
-            StDtype::I64 | StDtype::F64 | StDtype::U64 => 8,
+            StDtype::I64 | StDtype::F64 | StDtype::U64 | StDtype::C64 => 8,
         }
     }
 
@@ -101,6 +108,9 @@ impl StDtype {
             StDtype::F8E5M2 => "F8_E5M2",
             StDtype::F8E4M3 => "F8_E4M3",
             StDtype::F8E8M0 => "F8_E8M0",
+            StDtype::F8E4M3Fnuz => "F8_E4M3FNUZ",
+            StDtype::F8E5M2Fnuz => "F8_E5M2FNUZ",
+            StDtype::C64 => "C64",
             StDtype::I16 => "I16",
             StDtype::I32 => "I32",
             StDtype::U32 => "U32",
@@ -125,6 +135,9 @@ impl StDtype {
             "F8_E5M2" => StDtype::F8E5M2,
             "F8_E4M3" => StDtype::F8E4M3,
             "F8_E8M0" => StDtype::F8E8M0,
+            "F8_E4M3FNUZ" => StDtype::F8E4M3Fnuz,
+            "F8_E5M2FNUZ" => StDtype::F8E5M2Fnuz,
+            "C64" => StDtype::C64,
             "I16" => StDtype::I16,
             "I32" => StDtype::I32,
             "U32" => StDtype::U32,
@@ -132,7 +145,7 @@ impl StDtype {
             "U64" => StDtype::U64,
             other => {
                 return Err(format!(
-                    "unknown dtype {other:?} (not in the safetensors spec)"
+                    "unknown dtype {other:?} (not a tag ojas knows; compared against safetensors 0.8.0)"
                 ))
             }
         })
