@@ -989,7 +989,9 @@ fn a_cancel_during_the_tokenizer_parse_installs_nothing() {
         }),
     )
     .unwrap();
-    let polls = polls.load(Ordering::Relaxed);
+    // Before the files are opened, once the session is held, and after the
+    // parse: the third poll is the one that can see a cancel made during it.
+    assert_eq!(polls.load(Ordering::Relaxed), 3);
     session::try_free(s.id).unwrap();
     let s = load_path("model.safetensors").unwrap();
     let payload = tokenizer_payload(s.id, "vocab.json", "merges.txt");
@@ -998,7 +1000,7 @@ fn a_cancel_during_the_tokenizer_parse_installs_nothing() {
     let err = crate::tokenize::load_request(
         &payload,
         Box::new(move || {
-            if counter.fetch_add(1, Ordering::Relaxed) + 1 == polls {
+            if counter.fetch_add(1, Ordering::Relaxed) + 1 >= 3 {
                 Err("cancelled: Explicit".to_string())
             } else {
                 Ok(())
