@@ -34,7 +34,7 @@ bytecode writing is disabled so that checkout is not touched).
 | `decode_rows.rs` | Whole-model decode rows (see "Decode rows"), generic over `ojas_core::Backend`, compiled with `ojas_rows.rs` into `ojas-infer/examples/decode_vs_torch.rs`. |
 | `gate_saved_ab.rs` | Per-head gate A/B: the plain forward and backward against the saved-sigmoid pair (`forward_saving`, `backward_saved`) at nanolab's shape (4096 rows, d_model 768, 12 heads of 64). Generic over `ojas_core::Backend`. It is compiled by `#[path]` into the ignored `bench_gate_saved_against_recomputed` tests of `ojas-metal/tests/gate_saved.rs` and `ojas-wgpu/tests/gate_saved.rs`. Each round times every variant once per iteration, alternating which goes first, with `Backend::sync` per call, and reports the min and median. Results are in `results/2026-10-07-gate-saved/`. |
 | `torch_rows.py` | The torch twin of every row. `ref` writes the reference outputs, `time` times the rows, `env` records versions and checks the optimizer parameter list against `GPT(Config())`. |
-| `aggregate.py` | Per-round ratios, spread flags, the ranked list and the load table, as markdown. |
+| `../scripts/benchreport` | `go run scripts/benchreport/main.go aggregate OUT` (Go): per-round ratios, spread flags, the ranked list and the load table, as markdown; it exits 1 when any row is missing, crashed or not ok in some round. With several run directories it prints the cross-run direction check. `... plots` redraws every chart in [bench-plots.md](../docs/bench-plots.md). |
 
 ## Protocol
 
@@ -156,7 +156,7 @@ prompt's last-position logits (1e-3). Greedy ids are not a gate: a
 decode row holds `DeviceDecoder::traffic()` per decode step (host tensors
 uploaded and bytes, bytes read back), and a `_gen_readback` record times one
 `[1, vocab]` logit readback (`Tensor::to_host` against
-`DeviceBuffer::read_bytes`). `aggregate.py` ends with a "Decode" table: per
+`DeviceBuffer::read_bytes`). The aggregate summary ends with a "Decode" table: per
 decode row, per-token ms = (decode - its model's prefill) / 31, tokens/s, and
 those records.
 

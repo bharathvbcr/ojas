@@ -1,6 +1,8 @@
 //! Compare native greedy stream vs `bench/results/golden_tokens_31b.json`.
 //! Usage: golden_parity [case_name] [n_tokens]
 //!        golden_parity --short-dump   # dump L0/L1 capture vs MLX golden on [2,105,4368,1246]
+//!        golden_parity --compare-intermediates GOLDEN.json NATIVE.json
+//!            # GPU-free: first divergent DFlash intermediate (gemma_metal::intermediates)
 //! Env: METAL_RUNTIME_HAZARD_BARRIERS=0 recommended for stable compare.
 
 use gemma_metal::gpu_model::{GpuDecodeSession, GpuSynthModel};
@@ -11,6 +13,14 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), String> {
     let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("--compare-intermediates") {
+        let [golden, native] = &argv[2..] else {
+            return Err("usage: golden_parity --compare-intermediates GOLDEN.json NATIVE.json".into());
+        };
+        let report = gemma_metal::intermediates::compare_files(golden.as_ref(), native.as_ref())?;
+        print!("{report}");
+        return Ok(());
+    }
     if argv.iter().any(|a| a == "--short-dump") {
         return short_dump();
     }

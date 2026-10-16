@@ -1642,9 +1642,9 @@ Metal SDPA backward at head dim 128 is mixed (14/15 rounds slower).
 ## Reproduce
 
 ```bash
-bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5                    # run A protocol
-BENCH_ITERS=30 bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5     # runs B and C
-/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/bharath/Code/research/ojas/bench/aggregate.py \
+bash bench/run_paired.sh 5                    # run A protocol
+BENCH_ITERS=30 bash bench/run_paired.sh 5     # runs B and C
+go run scripts/benchreport/main.go aggregate \
     bench/results/2026-10-01/runA bench/results/2026-10-01/runB bench/results/2026-10-01/runC   # direction table
 ```
 

@@ -20,14 +20,14 @@ backward and `embedding` forward are untouched controls.
 # in each tree (base: edeaf73 plus this tree's bench_ops.rs):
 cargo test -p ojas-cpu --release --test bench_ops --no-run
 bash run.sh BASE_BENCH_OPS AFTER_BENCH_OPS 3 OUT_DIR
-python3 summarize.py OUT_DIR > summary.md
+go run scripts/benchreport/main.go cpu-ab-linux OUT_DIR > summary.md   # from the repository root
 ```
 
 ## Files
 
 | file | what |
 | :-- | :-- |
-| `run.sh`, `summarize.py` | the runner and the table builder (analysis only) |
+| `run.sh` | the runner; the table builder is `benchreport cpu-ab-linux` (it was `summarize.py`, removed after the Go port reproduced `summary.md` byte for byte) |
 | `ab/` | 3 rounds of `bench_ops` per lane at 4 and 1 threads, and `load.txt` |
 | `summary.md` | minimum over rounds, base against after |
 | `bits.txt` | every case dumped by both binaries at 4 threads, Fast: 65 files, 0 differ |
