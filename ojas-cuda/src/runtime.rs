@@ -582,8 +582,15 @@ impl CudaRuntime {
             .ctx
             .mem_get_info()
             .map_err(|e| driver_error("cuMemGetInfo", e))?;
-        free_bytes_fit(u64::try_from(free).unwrap_or(u64::MAX), bytes)
-            .map_err(|short| CudaError::capacity_of(label, short.need, short.free))
+        free_bytes_fit(u64::try_from(free).unwrap_or(u64::MAX), bytes).map_err(|short| {
+            let refusal = CudaError::capacity_of(label, short.need, short.free);
+            // The budget's bytes ride with the refusal, as on every
+            // other backend; a budget that cannot report leaves them off.
+            match self.budget.used() {
+                Ok(live) => refusal.with_live(live),
+                Err(_) => refusal,
+            }
+        })
     }
 
     /// A new device allocation holding a copy of `data`, already reserved by
