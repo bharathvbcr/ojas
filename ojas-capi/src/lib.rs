@@ -16,6 +16,8 @@ mod engine;
 mod gate;
 #[cfg(test)]
 mod gate_adversarial;
+#[cfg(test)]
+mod gate_w11_adversarial;
 mod generate;
 mod load;
 mod model;
