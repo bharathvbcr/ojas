@@ -17,6 +17,10 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+/// Bytes a typed read decodes per `read_into`: the only buffer besides the
+/// output.
+const READ_CHUNK_BYTES: usize = 128 << 10;
+
 /// Largest header accepted. The format's reference implementation uses
 /// 100_000_000, not 100 MiB (104_857_600).
 pub const MAX_HEADER_BYTES: u64 = 100_000_000;
@@ -414,6 +418,8 @@ impl<'a> SafeTensors<'a> {
         self.read_typed(name, StDtype::U16, 2, |c| u16::from_le_bytes([c[0], c[1]]))
     }
 
+    /// `name` decoded `READ_CHUNK_BYTES` at a time into one fallibly reserved
+    /// output.
     fn read_typed<T, F>(
         &self,
         name: &str,
@@ -431,13 +437,29 @@ impl<'a> SafeTensors<'a> {
                 info.dtype
             )));
         }
-        let bytes = self.read_bytes(name)?;
-        if bytes.len() % width != 0 {
+        let span = info.end - info.begin;
+        let width_u64 = width as u64;
+        if span % width_u64 != 0 {
             return Err(IoError::new(format!(
                 "{name}: data is not a multiple of {width}"
             )));
         }
-        let values = bytes.chunks_exact(width).map(decode).collect();
+        let count = usize::try_from(span / width_u64)
+            .map_err(|_| IoError::new(format!("{name}: tensor too large for this host")))?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| IoError::new(format!("{name}: allocation of {count} elements refused")))?;
+        // One bounded chunk at a time into the reserved output: the peak is
+        // the output plus `READ_CHUNK_BYTES`, never a second tensor-sized copy.
+        let mut chunk = [0u8; READ_CHUNK_BYTES];
+        let per_chunk = READ_CHUNK_BYTES / width;
+        while values.len() < count {
+            let take = (count - values.len()).min(per_chunk);
+            let bytes = &mut chunk[..take * width];
+            self.read_into(name, (values.len() * width) as u64, bytes)?;
+            values.extend(bytes.chunks_exact(width).map(&decode));
+        }
         Ok((info.shape.clone(), values))
     }
 }

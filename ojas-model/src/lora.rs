@@ -459,14 +459,38 @@ impl LoraLinear {
             }
         };
         let delta = backend.linear_forward(&place(&self.b)?, &place(&at)?)?;
-        let delta = delta.to_host(&budget)?.to_f32_vec()?;
-        let w = widen(&self.weight)?;
+        // The product stays in its charged host tensor and the sum is written
+        // straight into the charged result, so no weight-sized buffer is
+        // held outside the budget.
+        let delta = delta.to_host(&budget)?;
+        let delta = delta.f32_slice()?;
         let s = self.config.scaling();
-        let merged: Vec<f32> = w.iter().zip(&delta).map(|(&w, &d)| w + s * d).collect();
-        if merged.iter().any(|v| !v.is_finite()) {
+        let mut merged = Tensor::zeros(&[out, inn], DType::F32, &budget)?;
+        let sum = merged.f32_slice_mut()?;
+        if delta.len() != sum.len() {
+            return Err(LoraError::Mismatch(format!(
+                "B A has {} elements, the weight {}",
+                delta.len(),
+                sum.len()
+            )));
+        }
+        match self.weight.dtype() {
+            DType::Bf16 => {
+                let w = self.weight.bf16_slice()?;
+                for ((m, &w), &d) in sum.iter_mut().zip(w).zip(delta) {
+                    *m = bf16_to_f32(w) + s * d;
+                }
+            }
+            _ => {
+                let w = self.weight.f32_slice()?;
+                for ((m, &w), &d) in sum.iter_mut().zip(w).zip(delta) {
+                    *m = w + s * d;
+                }
+            }
+        }
+        if sum.iter().any(|v| !v.is_finite()) {
             return Err(LoraError::Core(OjasError::NonFinite { op: "lora::merge" }));
         }
-        let merged = Tensor::from_f32(&merged, &[out, inn], &budget)?;
         self.original = Some(std::mem::replace(&mut self.weight, merged));
         Ok(())
     }
@@ -477,14 +501,6 @@ impl LoraLinear {
         let original = self.original.take().ok_or(LoraError::NotMerged)?;
         self.weight = original;
         Ok(())
-    }
-}
-
-/// A host tensor's values as f32: f32 as is, bf16 widened exactly.
-fn widen(t: &Tensor) -> Result<Vec<f32>, OjasError> {
-    match t.dtype() {
-        DType::Bf16 => Ok(t.bf16_slice()?.iter().map(|&b| bf16_to_f32(b)).collect()),
-        _ => t.to_f32_vec(),
     }
 }
 
