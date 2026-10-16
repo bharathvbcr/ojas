@@ -199,6 +199,95 @@ func TestParsePairedRecordsUnchartedRows(t *testing.T) {
 	}
 }
 
+func summarize1(t *testing.T, cmd string, args ...string) (string, string, int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code := runSummary(summaries[cmd], args, &out, &errb)
+	return out.String(), errb.String(), code
+}
+
+func TestSummariesMatchPythonOracle(t *testing.T) {
+	dir := writeRun(t, summaryFixture)
+	p := func(s string) string { return filepath.Join(dir, s) }
+	cases := []struct {
+		name, want string
+		cmd        string
+		args       []string
+	}{
+		{"bench-ops", wantBenchOps, "bench-ops", []string{"-parity", p("ops/parity.txt"), p("ops/r1.txt"), p("ops/r2.txt"), p("ops/t1.txt"), p("ops/t2.txt")}},
+		{"cpu-ab", wantCPUAB, "cpu-ab", []string{p("hot")}},
+		{"sweep-fit", wantSweepFit, "sweep-fit", []string{p("sweep")}},
+		{"decode-ab", wantDecodeAB, "decode-ab", []string{p("dec"), "min_ms"}},
+	}
+	for _, c := range cases {
+		got, stderr, code := summarize1(t, c.cmd, c.args...)
+		got = strings.ReplaceAll(got, dir, "FX")
+		if code != 0 || got != c.want {
+			t.Errorf("%s: exit %d (%s); output differs from the Python oracle\n--- got\n%s\n--- want\n%s", c.name, code, stderr, got, c.want)
+		}
+	}
+}
+
+func TestPySumIsCompensated(t *testing.T) {
+	tenths := make([]pyNumber, 10)
+	for i := range tenths {
+		tenths[i] = pyNumber{f: 0.1}
+	}
+	if got := pySum(tenths); got != wantSumTenths {
+		t.Errorf("sum of ten 0.1 = %v, Python says %v", got, wantSumTenths)
+	}
+	if got := pySum([]pyNumber{{f: 1e16}, {f: 1}, {f: -1e16}}); got != wantSumCancel {
+		t.Errorf("sum(1e16, 1, -1e16) = %v, Python says %v", got, wantSumCancel)
+	}
+	if got := pySum([]pyNumber{{isInt: true}, {isInt: true, i: 3}}); got != 3 {
+		t.Errorf("int sum = %v", got)
+	}
+}
+
+func TestSummariesFailLoudly(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		cmd   string
+		args  func(dir string) []string
+	}{
+		{"cpu-ab-linux cell without its after lane", map[string]string{"ops-1-base.txt": "OJAS_OP op=a dir=fwd threads=1 min_ms=1\n"},
+			"cpu-ab-linux", func(d string) []string { return []string{d} }},
+		{"bpe without the base lane", map[string]string{"r1_a.txt": "digest=ab tiktoken_parity=ok documents_matched=1/1\n| encode_docs | 1 | x | 2 | 3 |\n"},
+			"bpe", func(d string) []string { return []string{d, "base"} }},
+		{"bpe file without a digest", map[string]string{"r1_base.txt": "| encode_docs | 1 | x | 2 | 3 |\n"},
+			"bpe", func(d string) []string { return []string{d, "base"} }},
+		{"attn-ab round without its control", map[string]string{"ab.txt": "AB round=1 tree=old backend=metal shape=s window=full bwd_min=1 fwd_min=1\n" +
+			"AB round=1 tree=new backend=metal shape=s window=full bwd_min=1 fwd_min=1\n"},
+			"attn-ab", func(d string) []string { return []string{filepath.Join(d, "ab.txt")} }},
+		{"decode-ab blank line", map[string]string{"round1/metal-before.jsonl": "\n"},
+			"decode-ab", func(d string) []string { return []string{d} }},
+		{"sweep-fit bad record", map[string]string{"round1/a.jsonl": `{"runtime":"x"}` + "\n"},
+			"sweep-fit", func(d string) []string { return []string{d} }},
+		{"bench-ops op line without threads", map[string]string{"r.txt": "OJAS_OP op=a dir=fwd shape=[1] min_ms=1\n"},
+			"bench-ops", func(d string) []string { return []string{filepath.Join(d, "r.txt")} }},
+	}
+	for _, c := range cases {
+		dir := writeRun(t, c.files)
+		out, _, code := summarize1(t, c.cmd, c.args(dir)...)
+		if code != 1 || out != "" {
+			t.Errorf("%s: exit %d, stdout %q; want 1 and nothing on stdout", c.name, code, out)
+		}
+	}
+	if _, _, code := summarize1(t, "bpe", "only-one-arg"); code != 2 {
+		t.Errorf("bpe with one argument: exit %d, want 2", code)
+	}
+	// A record that is neither ok nor info is printed and fails the run.
+	dir := writeRun(t, map[string]string{
+		"round1/metal-before.jsonl": `{"row":"gen_prefill_p32","status":"ok","min_ms":1,"median_ms":1}` + "\n" + `{"row":"gen_x","status":"crash"}` + "\n",
+		"round1/metal-after.jsonl":  `{"row":"gen_prefill_p32","status":"ok","min_ms":1,"median_ms":1}` + "\n",
+	})
+	out, stderr, code := summarize1(t, "decode-ab", dir)
+	if code != 1 || !strings.Contains(out, `PROBLEM metal before 1 {"row":"gen_x","status":"crash"}`) || !strings.Contains(stderr, "neither ok nor info") {
+		t.Errorf("decode-ab problem record: exit %d\n%s\n%s", code, out, stderr)
+	}
+}
+
 // The committed charts and page are what the committed results produce.
 func TestCommittedPlotsAreCurrent(t *testing.T) {
 	root := filepath.Join("..", "..")
@@ -232,3 +321,38 @@ const wantGroupedSVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"890\" 
 const wantLineSVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"720\" height=\"380\" viewBox=\"0 0 720 380\" font-family=\"Helvetica,Arial,sans-serif\" font-size=\"12\">\n<rect width=\"100%\" height=\"100%\" fill=\"#fff\"/>\n<text x=\"16\" y=\"24\" font-size=\"15\" font-weight=\"bold\" fill=\"#111\">Lines</text>\n<text x=\"16\" y=\"44\" fill=\"#555\">sub</text>\n<line x1=\"70\" x2=\"570\" y1=\"305.6\" y2=\"305.6\" stroke=\"#e5e5e5\"/><text x=\"64\" y=\"309.6\" text-anchor=\"end\" fill=\"#444\">10</text>\n<line x1=\"70\" x2=\"570\" y1=\"245.4\" y2=\"245.4\" stroke=\"#e5e5e5\"/><text x=\"64\" y=\"249.4\" text-anchor=\"end\" fill=\"#444\">20</text>\n<line x1=\"70.0\" x2=\"70.0\" y1=\"74\" y2=\"320\" stroke=\"#eee\"/><text x=\"70.0\" y=\"336\" text-anchor=\"middle\" fill=\"#444\">1</text>\n<line x1=\"195.0\" x2=\"195.0\" y1=\"74\" y2=\"320\" stroke=\"#eee\"/><text x=\"195.0\" y=\"336\" text-anchor=\"middle\" fill=\"#444\">2</text>\n<line x1=\"570.0\" x2=\"570.0\" y1=\"74\" y2=\"320\" stroke=\"#eee\"/><text x=\"570.0\" y=\"336\" text-anchor=\"middle\" fill=\"#444\">5</text>\n<text x=\"320.0\" y=\"368\" text-anchor=\"middle\" fill=\"#333\">threads</text>\n<text x=\"16\" y=\"66\" fill=\"#333\">µs</text>\n<path d=\"M70.0,308.6 L195.0,292.0 L320.0,245.4 L570.0,185.3\" fill=\"none\" stroke=\"#3d6fb6\" stroke-width=\"2\"/>\n<circle cx=\"70.0\" cy=\"308.6\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<circle cx=\"195.0\" cy=\"292.0\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<circle cx=\"320.0\" cy=\"245.4\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<circle cx=\"570.0\" cy=\"185.3\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<rect x=\"582\" y=\"80\" width=\"10\" height=\"10\" fill=\"#3d6fb6\"/><text x=\"597\" y=\"89\" fill=\"#333\">min</text>\n<path d=\"M70.0,299.5 L570.0,137.1\" fill=\"none\" stroke=\"#e08e2b\" stroke-width=\"2\"/>\n<circle cx=\"70.0\" cy=\"299.5\" r=\"2.6\" fill=\"#e08e2b\"/>\n<circle cx=\"570.0\" cy=\"137.1\" r=\"2.6\" fill=\"#e08e2b\"/>\n<rect x=\"582\" y=\"116\" width=\"10\" height=\"10\" fill=\"#e08e2b\"/><text x=\"597\" y=\"125\" fill=\"#333\">med</text>\n</svg>"
 
 const wantLogLineSVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"720\" height=\"380\" viewBox=\"0 0 720 380\" font-family=\"Helvetica,Arial,sans-serif\" font-size=\"12\">\n<rect width=\"100%\" height=\"100%\" fill=\"#fff\"/>\n<text x=\"16\" y=\"24\" font-size=\"15\" font-weight=\"bold\" fill=\"#111\">Lines</text>\n<text x=\"16\" y=\"44\" fill=\"#555\">sub</text>\n<line x1=\"70\" x2=\"570\" y1=\"284.1\" y2=\"284.1\" stroke=\"#e5e5e5\"/><text x=\"64\" y=\"288.1\" text-anchor=\"end\" fill=\"#444\">10</text>\n<line x1=\"70\" x2=\"570\" y1=\"193.3\" y2=\"193.3\" stroke=\"#e5e5e5\"/><text x=\"64\" y=\"197.3\" text-anchor=\"end\" fill=\"#444\">20</text>\n<line x1=\"70.0\" x2=\"70.0\" y1=\"74\" y2=\"320\" stroke=\"#eee\"/><text x=\"70.0\" y=\"336\" text-anchor=\"middle\" fill=\"#444\">1</text>\n<line x1=\"285.3\" x2=\"285.3\" y1=\"74\" y2=\"320\" stroke=\"#eee\"/><text x=\"285.3\" y=\"336\" text-anchor=\"middle\" fill=\"#444\">2</text>\n<line x1=\"570.0\" x2=\"570.0\" y1=\"74\" y2=\"320\" stroke=\"#eee\"/><text x=\"570.0\" y=\"336\" text-anchor=\"middle\" fill=\"#444\">5</text>\n<text x=\"320.0\" y=\"368\" text-anchor=\"middle\" fill=\"#333\">threads</text>\n<text x=\"16\" y=\"66\" fill=\"#333\">µs</text>\n<path d=\"M70.0,290.8 L285.3,257.5 L411.3,193.3 L570.0,140.2\" fill=\"none\" stroke=\"#3d6fb6\" stroke-width=\"2\"/>\n<circle cx=\"70.0\" cy=\"290.8\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<circle cx=\"285.3\" cy=\"257.5\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<circle cx=\"411.3\" cy=\"193.3\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<circle cx=\"570.0\" cy=\"140.2\" r=\"2.6\" fill=\"#3d6fb6\"/>\n<rect x=\"582\" y=\"80\" width=\"10\" height=\"10\" fill=\"#3d6fb6\"/><text x=\"597\" y=\"89\" fill=\"#333\">min</text>\n<path d=\"M70.0,271.6 L570.0,109.2\" fill=\"none\" stroke=\"#e08e2b\" stroke-width=\"2\"/>\n<circle cx=\"70.0\" cy=\"271.6\" r=\"2.6\" fill=\"#e08e2b\"/>\n<circle cx=\"570.0\" cy=\"109.2\" r=\"2.6\" fill=\"#e08e2b\"/>\n<rect x=\"582\" y=\"116\" width=\"10\" height=\"10\" fill=\"#e08e2b\"/><text x=\"597\" y=\"125\" fill=\"#333\">med</text>\n</svg>"
+
+var summaryFixture = map[string]string{
+	"ops/r1.txt":                    "OJAS_OP op=add dir=fwd shape=[4,8] threads=1 min_ms=1.0\nOJAS_OP op=add dir=fwd shape=[4,8] threads=6 min_ms=0.5\nOJAS_OP op=sdpa dir=fwd shape=[1,2,3] threads=1 min_ms=12.5\nOJAS_OP op=clip dir=step shape=[9] threads=1 min_ms=0.25\nOJAS_OP op=block dir=fwd shape=[b] threads=1 min_ms=20.0\nOJAS_OP op=block dir=step shape=[b] threads=1 min_ms=45.0\nOJAS_OP op=rms_norm dir=fwd shape=[r] threads=1 min_ms=0.1\nOJAS_OP op=rms_norm dir=bwd shape=[r] threads=1 min_ms=0.2\nOJAS_OP op=add dir=bwd shape=[4,8] threads=1 min_ms=0.3\nnoise line\n",
+	"ops/r2.txt":                    "OJAS_OP op=add dir=fwd shape=[4,8] threads=1 min_ms=1.3\nOJAS_OP op=add dir=fwd shape=[4,8] threads=6 min_ms=0.55\nOJAS_OP op=sdpa dir=fwd shape=[1,2,3] threads=1 min_ms=11.0\nOJAS_OP op=clip dir=step shape=[9] threads=1 min_ms=0.2\n",
+	"ops/t1.txt":                    "TORCH_OP op=add dir=fwd variant=default min_ms=2.0\nTORCH_OP op=sdpa dir=fwd variant=math min_ms=10.0\nTORCH_OP op=sdpa dir=fwd variant=default min_ms=9.0\nTORCH_OP op=clip dir=step variant=default min_ms=0.0\nTORCH_OP op=block dir=fwd variant=math min_ms=25.0\nTORCH_OP op=block dir=step variant=math min_ms=50.0\n",
+	"ops/t2.txt":                    "TORCH_OP op=add dir=fwd variant=default min_ms=3.0\nTORCH_OP op=sdpa dir=fwd variant=math min_ms=13.0\n",
+	"ops/parity.txt":                "PARITY op=add dir=fwd variant=default out=y ok=True norm_err=1.5e-07 tol=1e-5\nPARITY op=add dir=fwd variant=default out=z ok=True norm_err=3e-08 tol=1e-5\nPARITY op=sdpa dir=fwd variant=math out=o ok=False norm_err=2e-3 tol=1e-4\nPARITY op=clip dir=step variant=default out=norm ok=False norm_err=0.004 tol=1e-4\nPARITY op=clip dir=step variant=default out=g ok=False norm_err=0.00401 tol=1e-4\nPARITY op=clip dir=step variant=default out=h ok=False norm_err=0.5 tol=1e-4\nPARITY op=block dir=fwd variant=math out=y ok=False tol=1e-3\nPARITY_F64 op=sdpa dir=fwd out=o ojas_ok=False ojas_err=1e-2 torch_err=1e-6\nPARITY_F64 op=clip dir=step out=norm ojas_ok=True ojas_err=1e-8 torch_err=0.004\n",
+	"hot/ops-1-base.txt":            "OJAS_OP op=mul dir=fwd min_ms=2.0\nOJAS_OP op=adamw_50304x768 dir=step min_ms=8.0\n",
+	"hot/ops-3-base.txt":            "OJAS_OP op=mul dir=fwd min_ms=2.5\n",
+	"hot/ops-1-after.txt":           "OJAS_OP op=mul dir=fwd min_ms=1.0\nOJAS_OP op=adamw_50304x768 dir=step min_ms=4.0\nOJAS_OP op=conv dir=bwd variant=im2col min_ms=3.0\n",
+	"hot/ops-2-after.txt":           "OJAS_OP op=mul dir=fwd min_ms=1.2\n",
+	"hot/ops-3-after.txt":           "OJAS_OP op=mul dir=fwd min_ms=0.9\n",
+	"hot/ops-1-torch.txt":           "TORCH_OP op=mul dir=fwd variant=default min_ms=1.5\nTORCH_OP op=adamw_50304x768 dir=step variant=fused min_ms=5.0\n",
+	"hot/tape-1-after.txt":          "junk OJAS_TAPE\nOJAS_TAPE row=fanin min_ms=4.0\n",
+	"hot/tape-1-base.txt":           "OJAS_TAPE row=fanin min_ms=5.0\n",
+	"hot/notes.txt":                 "ignored\n",
+	"sweep/round1/m.jsonl":          "{\"runtime\": \"ojas-metal\", \"row\": \"_device\", \"status\": \"info\"}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_silu_n1\", \"status\": \"ok\", \"min_ms\": 1.0, \"median_ms\": 1.1}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_silu_n1000\", \"status\": \"ok\", \"min_ms\": 1.5, \"median_ms\": 1.6}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_silu_n1000000\", \"status\": \"ok\", \"min_ms\": 4.0, \"median_ms\": 4.4}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_decode_b1\", \"status\": \"ok\", \"min_ms\": 2.0, \"median_ms\": 2.2}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_decode_b4\", \"status\": \"ok\", \"min_ms\": 3.0, \"median_ms\": 3.3}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_decode_x4\", \"status\": \"ok\", \"min_ms\": 7.0, \"median_ms\": 7.7}\n{\"runtime\": \"ojas-wgpu\", \"row\": \"sweep_silu_n1000\", \"status\": \"ok\", \"min_ms\": 2.0, \"median_ms\": 2.1}\n{\"runtime\": \"torch-mps\", \"row\": \"sweep_silu_n1\", \"status\": \"ok\", \"min_ms\": 0.5, \"median_ms\": 0.6}\n{\"runtime\": \"torch-mps\", \"row\": \"sweep_silu_n1000\", \"status\": \"failed\", \"detail\": \"x\"}\n{\"runtime\": \"torch-mps\", \"row\": \"sweep_decode_b4\", \"status\": \"ok\", \"min_ms\": 1.0, \"median_ms\": 1.2}\n\n",
+	"sweep/round2/m.jsonl":          "{\"runtime\": \"ojas-metal\", \"row\": \"sweep_silu_n1\", \"status\": \"ok\", \"min_ms\": 1.2, \"median_ms\": 1.3}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_silu_n1000\", \"status\": \"ok\", \"min_ms\": 1.4, \"median_ms\": 1.9}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_silu_n1000000\", \"status\": \"ok\", \"min_ms\": 3.0, \"median_ms\": 5.0}\n{\"runtime\": \"ojas-metal\", \"row\": \"sweep_decode_b4\", \"status\": \"ok\", \"min_ms\": 3.1, \"median_ms\": 3.0}\n{\"runtime\": \"torch-mps\", \"row\": \"sweep_silu_n1000\", \"status\": \"ok\", \"min_ms\": 0.7, \"median_ms\": 0.8}\n",
+	"dec/round1/metal-before.jsonl": "{\"runtime\": \"ojas-metal\", \"row\": \"_load\", \"status\": \"info\"}\n{\"runtime\": \"ojas-metal\", \"row\": \"gen_prefill_p32\", \"status\": \"ok\", \"min_ms\": 9.0, \"median_ms\": 9.5}\n{\"runtime\": \"ojas-metal\", \"row\": \"gen_greedy_p32_n32\", \"status\": \"ok\", \"min_ms\": 320.0, \"median_ms\": 330.25}\n",
+	"dec/round1/metal-after.jsonl":  "{\"runtime\": \"ojas-metal\", \"row\": \"gen_prefill_p32\", \"status\": \"ok\", \"min_ms\": 8.5, \"median_ms\": 9.0}\n{\"runtime\": \"ojas-metal\", \"row\": \"gen_greedy_p32_n32\", \"status\": \"ok\", \"min_ms\": 300, \"median_ms\": 310}\n",
+	"dec/round2/metal-before.jsonl": "{\"runtime\": \"ojas-metal\", \"row\": \"gen_prefill_p32\", \"status\": \"ok\", \"min_ms\": 9.2, \"median_ms\": 9.9}\n{\"runtime\": \"ojas-metal\", \"row\": \"gen_greedy_p32_n32\", \"status\": \"ok\", \"min_ms\": 321.0, \"median_ms\": 331.0}\n",
+	"dec/round2/metal-after.jsonl":  "{\"runtime\": \"ojas-metal\", \"row\": \"gen_greedy_p32_n32\", \"status\": \"ok\", \"min_ms\": 299.0, \"median_ms\": 305.5}\n",
+}
+
+const wantBenchOps = "rounds: ojas 2, torch 2; times in ms, min over rounds\n| op | dir | shape | ojas 1t | ojas 6t | torch | ratio 1t | ratio 6t | torch alt | spread>15% | parity |\n|---|---|---|---|---|---|---|---|---|---|---|\n| add | fwd | [4,8] | 1.000 | 0.500 | 2.000 | 2.00 | 4.00 | — | ojas1t 30%, torch 50% | pass 1.5e-07 (tol 1e-5) |\n| sdpa | fwd | [1,2,3] | 11.0 | — | 10.0 (math) | 0.91 | — | 9.000 (default) | torch 30% | FAIL (tol 1e-4); FAIL o: ojas off f64 by 1.0e-02 (torch 1.0e-06) |\n| clip | step | [9] | 0.200 | — | 0.000 | — | — | — | ojas1t 25% | FAIL (tol 1e-4); norm: torch off f64 by 4.0e-03, ojas 1.0e-08; g: 4.0e-03, inherits torch's f64 miss above; FAIL h 5.0e-01 |\n| block | fwd | [b] | 20.0 | — | 25.0 (math) | 1.25 | — | — | no | FAIL (tol 1e-3); FAIL y nan |\n| block | step | [b] | 45.0 | — | 50.0 (math) | 1.11 | — | — | no | MISSING |\n| rms_norm | fwd | [r] | 0.100 | — | — | — | — | — | no | MISSING |\n| rms_norm | bwd | [r] | 0.200 | — | — | — | — | — | no | MISSING |\n| add | bwd | [4,8] | 0.300 | — | — | — | — | — | no | MISSING |\nblock, ojas 1t: sum of op rows fwd 13.20 + bwd 6.40 = 19.60 ms; measured fwd 20.0, step 45.0, step - fwd 25.0\nblock, ojas 6t: sum of op rows fwd 1.00 + bwd 3.00 = 4.00 ms; measured fwd —, step —, step - fwd —\nblock, torch: sum of op rows fwd 14.00 + bwd 12.00 = 26.00 ms; measured fwd 25.0, step 50.0, step - fwd 25.0\n"
+
+const wantCPUAB = "rounds=3; cells are ms, min over rounds of each round's min-of-N\n\n| row | dir | base | after | after/base (min) | after/base (median of rounds) | torch | after/torch |\n| :-- | :-- | --: | --: | --: | --: | --: | --: |\n| adamw_50304x768 | step | 8.0000 | 4.0000 | 0.50 | 0.50 | 5.0000 | 0.80 |\n| conv | bwd/im2col |  | 3.0000 |  |  |  |  |\n| mul | fwd | 2.0000 | 0.9000 | 0.45 | 0.49 | 1.5000 | 0.60 |\n| tape | fanin | 5.0000 | 4.0000 | 0.80 | 0.80 |  |  |\n"
+
+const wantSweepFit = "## silu_forward over N values\n\nCells: min-of-round-minimums median (m) / median-of-medians (d) ms, spread of per-round medians.\n\n| N | ojas-metal | ojas-wgpu | torch-mps | metal/torch d ratio |\n| --: | :-- | :-- | :-- | --: |\n| 1 | 1.100 / 1.200 (18%) | missing | 0.500 / 0.600 (0%) | 0.50x |\n| 1000 | 1.450 / 1.750 (19%) | 2.000 / 2.100 (0%) | failed | -x |\n| 1000000 | 3.500 / 4.700 (14%) | missing | missing | -x |\n\n## Crossover where the per-value work equals the fixed cost\n\n| runtime | stat | floor a = t(1) ms | slope b ns/value | model N* = a/b | direct N (t = 2a) |\n| :-- | :-- | --: | --: | --: | --: |\n| ojas-metal | m | 1.100 | 2.0521 | 0.54M | 0.37M |\n| ojas-metal | d | 1.200 | 2.9530 | 0.41M | 0.22M |\n| ojas-wgpu | m | incomplete (1 sizes) | | | |\n| ojas-wgpu | d | incomplete (1 sizes) | | | |\n| torch-mps | m | incomplete (1 sizes) | | | |\n| torch-mps | d | incomplete (1 sizes) | | | |\n\n## Decode: B requests batched (b) vs B batch-1 calls, one sync (x)\n\nCells: median-of-medians ms (spread). Per-request = cell / B. Extra per call = (x - b) / (B - 1).\n\n| B | runtime | batched b | per request | split x | per request | extra per call |\n| --: | :-- | --: | --: | --: | --: | --: |\n| 1 | ojas-metal | 2.200 (0%) | 2.200 | - | - | - |\n| 1 | ojas-wgpu | missing | - | - | - | - |\n| 1 | torch-mps | missing | - | - | - | - |\n| 4 | ojas-metal | 3.150 (10%) | 0.787 | 7.700 (0%) | 1.925 | 1.517 |\n| 4 | ojas-wgpu | missing | - | missing | - | - |\n| 4 | torch-mps | 1.200 (0%) | 0.300 | missing | - | - |\n"
+
+const wantDecodeAB = "| lane | row | before min_ms | after min_ms | after / before per round, median [min-max] | rounds |\n| :-- | :-- | --: | --: | :-- | --: |\n| metal | gen_greedy_p32_n32 | 320.50 | 299.50 | 0.934 [0.931-0.938] | 2 |\n| metal | gen_prefill_p32 | 9.00 | 8.50 | 0.944 [0.944-0.944] | 1 |\n\n| lane | decode row | before ms / token | after ms / token | after - before ms / token, per round median [min-max] |\n| :-- | :-- | --: | --: | :-- |\n| metal | gen_greedy_p32_n32 | 10.045 | 9.403 | -0.629 [-0.629--0.629] |\n"
+
+// Python 3.14: sum([0.1] * 10) and sum([1e16, 1.0, -1e16]).
+const wantSumTenths = 1.0
+const wantSumCancel = 1.0

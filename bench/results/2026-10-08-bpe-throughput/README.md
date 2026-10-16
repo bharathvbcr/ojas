@@ -24,12 +24,12 @@ sessions' builds; read every ratio against that, and ratios between 0.9 and
 cargo build -p ojas-data --release --example bpe_throughput
 # one lane per binary; lanes alternate order every round
 bash run.sh OUT_DIR 3 base=BASE_BIN after=AFTER_BIN
-python3 summarize.py OUT_DIR base     # analysis only
+go run scripts/benchreport/main.go bpe OUT_DIR base   # from the repository root
 ```
 
 `run.sh` defaults `VOCAB_DIR` and `CORPUS_BIN` to the two local paths in
 `env.txt`. Each process runs one untimed warm-up and 5 timed rounds of every
-row and prints min and median; `summarize.py` takes the minimum over
+row and prints min and median; `benchreport bpe` takes the minimum over
 processes and the median of per-round ratios against the base lane.
 
 ## Baseline (`baseline/`, tree `c5aeee1`)

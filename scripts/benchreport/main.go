@@ -1,17 +1,28 @@
 // benchreport turns the measurement files under bench/results/ into markdown
-// summaries and SVG charts. It replaces bench/aggregate.py, bench/plot_all.py
-// and bench/plotlib.py, and reproduces their output byte for byte (checked
-// against the Python on every bench/results folder before the Python was
-// removed). Run it from the repository root:
+// summaries and SVG charts. It replaces bench/aggregate.py, bench/plot_all.py,
+// bench/plotlib.py and the per-folder summarizers, and reproduces their output
+// byte for byte (checked against the Python on every bench/results folder
+// before the Python was removed). Run it from the repository root:
 //
 //	go run scripts/benchreport/main.go aggregate OUT_DIR         # one bench/run_paired.sh run -> markdown on stdout
 //	go run scripts/benchreport/main.go aggregate DIR_A DIR_B...  # cross-run direction check
 //	go run scripts/benchreport/main.go plots                     # write site/assets/plots/bench/*.svg and docs/bench-plots.md
 //	go run scripts/benchreport/main.go plots -check              # exit 1 if any chart or the page is stale
 //
+// Per-folder summaries (each folder's README names the one it uses):
+//
+//	go run scripts/benchreport/main.go bench-ops [-parity FILE] LOG...  # ojas-cpu bench_ops.rs / torch_ops.py rounds
+//	go run scripts/benchreport/main.go cpu-ab OUT_DIR                   # base/after/torch OJAS_OP, TORCH_OP, OJAS_TAPE rounds
+//	go run scripts/benchreport/main.go cpu-ab-linux OUT_DIR             # base/after OJAS_OP rounds per thread count
+//	go run scripts/benchreport/main.go attn-ab AB_TXT                   # attention A/B "AB ..." lines
+//	go run scripts/benchreport/main.go bpe OUT_DIR BASE_LABEL           # bpe_throughput r<N>_<lane>.txt tables
+//	go run scripts/benchreport/main.go decode-ab OUT_DIR [KEY]          # ab_decode.sh before/after JSONL
+//	go run scripts/benchreport/main.go sweep-fit OUT_DIR                # sweep_ rows of a run_paired.sh run
+//
 // aggregate prints the whole summary, then exits 1 when any row is missing,
 // crashed or not "ok" in some round, so a runner cannot report a partial run
-// as complete.
+// as complete. decode-ab does the same for a record that is neither ok nor
+// info. Every summary refuses malformed input (exit 1, nothing on stdout).
 //
 // Every chart shows a time ratio on a log axis where lower is faster, or
 // absolute values as dots on a log axis.
@@ -53,12 +64,17 @@ func main() {
 		fs.Parse(os.Args[2:])
 		os.Exit(runPlots(*root, *check, os.Stdout, os.Stderr))
 	default:
+		if s, ok := summaries[os.Args[1]]; ok {
+			os.Exit(runSummary(s, os.Args[2:], os.Stdout, os.Stderr))
+		}
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: benchreport aggregate OUT_DIR [OUT_DIR...] | benchreport plots [-check] [-root DIR]")
+	fmt.Fprintln(os.Stderr, "usage: benchreport aggregate OUT_DIR [OUT_DIR...] | plots [-check] [-root DIR] |\n"+
+		"       bench-ops [-parity FILE] LOG... | cpu-ab OUT_DIR | cpu-ab-linux OUT_DIR | attn-ab AB_TXT |\n"+
+		"       bpe OUT_DIR BASE_LABEL | decode-ab OUT_DIR [KEY] | sweep-fit OUT_DIR")
 	os.Exit(2)
 }
 
@@ -3390,4 +3406,1504 @@ func runPlots(root string, check bool, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------- per-folder summaries
+//
+// Each was a small Python script next to the data it summarised; each port
+// prints the committed table again from the committed inputs.
+
+type summaryCmd struct {
+	usage string
+	run   func(args []string, w *strings.Builder) (problems int, err error)
+}
+
+var summaries = map[string]summaryCmd{
+	"bench-ops":    {"bench-ops [-parity FILE] LOG...", benchOps},
+	"cpu-ab":       {"cpu-ab OUT_DIR", cpuAB},
+	"cpu-ab-linux": {"cpu-ab-linux OUT_DIR", cpuABLinux},
+	"attn-ab":      {"attn-ab AB_TXT", attnAB},
+	"bpe":          {"bpe OUT_DIR BASE_LABEL", bpeSummary},
+	"decode-ab":    {"decode-ab OUT_DIR [KEY]", decodeAB},
+	"sweep-fit":    {"sweep-fit OUT_DIR", sweepFit},
+}
+
+var errUsage = errors.New("usage")
+
+func runSummary(s summaryCmd, args []string, stdout, stderr io.Writer) int {
+	var w strings.Builder
+	problems, err := s.run(args, &w)
+	if errors.Is(err, errUsage) {
+		fmt.Fprintln(stderr, "usage: benchreport", s.usage)
+		return 2
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "benchreport:", err)
+		return 1
+	}
+	io.WriteString(stdout, w.String())
+	if problems > 0 {
+		fmt.Fprintf(stderr, "benchreport: %d record(s) were neither ok nor info; see above\n", problems)
+		return 1
+	}
+	return 0
+}
+
+func pl(w *strings.Builder, s string) { w.WriteString(s); w.WriteByte('\n') }
+
+// pyPct is Python's format(x, ".0%").
+func pyPct(x float64) string { return ff(x*100, 0) + "%" }
+
+// pyE is Python's format(x, ".<prec>e"), which spells nan and inf in lower case.
+func pyE(x float64, prec int) string {
+	switch {
+	case math.IsNaN(x):
+		return "nan"
+	case math.IsInf(x, 1):
+		return "inf"
+	case math.IsInf(x, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(x, 'e', prec, 64)
+}
+
+// pyQuote is Python's repr() of a str.
+func pyQuote(s string) string {
+	q := byte('\'')
+	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
+		q = '"'
+	}
+	var b strings.Builder
+	b.WriteByte(q)
+	for _, r := range s {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == rune(q):
+			b.WriteByte('\\')
+			b.WriteByte(q)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte(q)
+	return b.String()
+}
+
+// pySum is Python 3.12+'s sum() over ints and floats, starting from int 0:
+// ints add exactly until the first float, then floats use Neumaier's
+// compensated sum and ints are added plainly, and the compensation is added
+// at the end.
+type pyNumber struct {
+	f     float64
+	isInt bool
+	i     int64
+}
+
+func pySum(items []pyNumber) float64 {
+	var iResult int64
+	i := 0
+	for ; i < len(items) && items[i].isInt; i++ {
+		iResult += items[i].i
+	}
+	if i == len(items) {
+		return float64(iResult)
+	}
+	fResult := float64(iResult) + items[i].f
+	c := 0.0
+	for _, it := range items[i+1:] {
+		if it.isInt {
+			fResult += float64(it.i)
+			continue
+		}
+		x := it.f
+		t := fResult + x
+		if math.Abs(fResult) >= math.Abs(x) {
+			c += (fResult - t) + x
+		} else {
+			c += (x - t) + fResult
+		}
+		fResult = t
+	}
+	if c != 0 && !math.IsInf(c, 0) && !math.IsNaN(c) {
+		fResult += c
+	}
+	return fResult
+}
+
+// splitKV is `dict(kv.split("=", 1) for kv in line.split()[1:] if "=" in kv)`.
+func splitKV(line string) map[string]string {
+	out := map[string]string{}
+	fs := strings.FieldsFunc(line, pyIsSpace)
+	for _, tok := range fs[min(1, len(fs)):] {
+		if k, v, ok := strings.Cut(tok, "="); ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func need(m map[string]string, k string) (string, error) {
+	v, ok := m[k]
+	if !ok {
+		return "", fmt.Errorf("KeyError: %q", k)
+	}
+	return v, nil
+}
+
+func needF(m map[string]string, k string) (float64, error) {
+	v, err := need(m, k)
+	if err != nil {
+		return 0, err
+	}
+	return pyFloat(v)
+}
+
+// ------------------------------------------- bench-ops: ojas-cpu bench_ops.rs / torch_ops.py rounds
+//
+// Each round log holds the OJAS_OP lines of one bench_ops run or the TORCH_OP
+// lines of one torch_ops.py run. The parity log holds PARITY and PARITY_F64
+// lines from `torch_ops.py --parity`. Per row the statistic is the minimum
+// over rounds of each round's min-of-N; spread is (max round min - min round
+// min) / min round min, flagged above 15%. Ratio is torch / ojas, so below 1
+// means ojas is slower. A row with no parity line prints MISSING.
+
+var (
+	opsPrimary = map[string]string{"sdpa": "math", "block": "math"}
+	opsAlt     = map[string]string{"sdpa": "default", "block": "default", "adamw_768x768": "fused",
+		"adamw_3072x768": "fused", "adamw_50304x768": "fused"}
+)
+
+const opsSpreadFlag = 0.15
+
+type opCount struct {
+	op, dir string
+	n       int64
+}
+
+// How many times each op row runs in one block step as bench_ops.rs composes
+// it (forward plus the hand-written backward). Residual-gradient sums in the
+// backward use add.fwd.
+var (
+	blockFwd = []opCount{{"rms_norm", "fwd", 2}, {"linear_qkvo", "fwd", 4}, {"linear_up", "fwd", 2},
+		{"linear_down", "fwd", 1}, {"qk_norm", "fwd", 1}, {"rope", "fwd", 2},
+		{"vres", "fwd", 1}, {"permute", "fwd", 4}, {"sdpa", "fwd", 1}, {"gate", "fwd", 1},
+		{"add", "fwd", 2}, {"silu", "fwd", 1}, {"mul", "fwd", 1}}
+	blockBwd = []opCount{{"rms_norm", "bwd", 2}, {"linear_qkvo", "bwd", 4}, {"linear_up", "bwd", 2},
+		{"linear_down", "bwd", 1}, {"qk_norm", "bwd", 1}, {"rope", "bwd", 2},
+		{"vres", "bwd", 1}, {"permute", "fwd", 4}, {"sdpa", "bwd", 1}, {"gate", "bwd", 1},
+		{"add", "fwd", 6}, {"silu", "bwd", 1}, {"mul", "bwd", 1}}
+)
+
+type parityLine struct {
+	out string
+	ok  bool
+	err float64
+	tol string
+}
+
+func opsFmt(ms *float64) string {
+	if ms == nil {
+		return "—"
+	}
+	if *ms < 10 {
+		return ff(*ms, 3)
+	}
+	return ff(*ms, 1)
+}
+
+// opsBest is (min, (max - min) / min) of the round minimums.
+func opsBest(series []float64) (*float64, *float64) {
+	if len(series) == 0 {
+		return nil, nil
+	}
+	lo, hi := minOf(series), maxOf(series)
+	s := 0.0
+	if lo > 0 {
+		s = (hi - lo) / lo
+	}
+	return &lo, &s
+}
+
+// pyMaxF is Python's max() over floats: the first maximal element, so a NaN
+// seen first stays.
+func pyMaxF(xs []float64) float64 {
+	m := xs[0]
+	for _, x := range xs[1:] {
+		if x > m {
+			m = x
+		}
+	}
+	return m
+}
+
+func benchOps(args []string, w *strings.Builder) (int, error) {
+	fs := flag.NewFlagSet("bench-ops", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	parityPath := fs.String("parity", "", "parity log from torch_ops.py --parity")
+	if err := fs.Parse(args); err != nil || fs.NArg() == 0 {
+		return 0, errUsage
+	}
+	type otKey struct {
+		op, dir string
+		t       int
+	}
+	type tvKey struct{ op, dir, variant string }
+	type odKey struct{ op, dir string }
+	ojas := map[otKey][]float64{}
+	torch := map[tvKey][]float64{}
+	shapes := map[odKey]string{}
+	var order []odKey
+	seen := map[odKey]bool{}
+	threadSet := map[int]bool{}
+	for _, path := range fs.Args() {
+		lines, err := fileLines(path)
+		if err != nil {
+			return 0, err
+		}
+		for _, line := range lines {
+			switch {
+			case strings.HasPrefix(line, "OJAS_OP "):
+				d := splitKV(line)
+				var v [4]string
+				for i, k := range []string{"op", "dir", "shape", "threads"} {
+					if v[i], err = need(d, k); err != nil {
+						return 0, fmt.Errorf("%s: %v", path, err)
+					}
+				}
+				t, err := strconv.Atoi(v[3])
+				if err != nil {
+					return 0, fmt.Errorf("%s: threads: %v", path, err)
+				}
+				ms, err := needF(d, "min_ms")
+				if err != nil {
+					return 0, fmt.Errorf("%s: %v", path, err)
+				}
+				k := odKey{v[0], v[1]}
+				if !seen[k] {
+					seen[k] = true
+					order = append(order, k)
+				}
+				shapes[k] = v[2]
+				threadSet[t] = true
+				ojas[otKey{v[0], v[1], t}] = append(ojas[otKey{v[0], v[1], t}], ms)
+			case strings.HasPrefix(line, "TORCH_OP "):
+				d := splitKV(line)
+				var v [3]string
+				for i, k := range []string{"op", "dir", "variant"} {
+					if v[i], err = need(d, k); err != nil {
+						return 0, fmt.Errorf("%s: %v", path, err)
+					}
+				}
+				ms, err := needF(d, "min_ms")
+				if err != nil {
+					return 0, fmt.Errorf("%s: %v", path, err)
+				}
+				torch[tvKey{v[0], v[1], v[2]}] = append(torch[tvKey{v[0], v[1], v[2]}], ms)
+			}
+		}
+	}
+	prow := map[tvKey][]parityLine{}
+	type f64Key struct{ op, dir, out string }
+	var f64Order []f64Key
+	f64 := map[f64Key]map[string]string{}
+	if *parityPath != "" {
+		lines, err := fileLines(*parityPath)
+		if err != nil {
+			return 0, err
+		}
+		for _, line := range lines {
+			switch {
+			case strings.HasPrefix(line, "PARITY "):
+				d := splitKV(line)
+				ne, ok := d["norm_err"]
+				if !ok {
+					ne = "nan"
+				}
+				e, err := pyFloat(ne)
+				if err != nil {
+					return 0, err
+				}
+				var v [6]string
+				for i, k := range []string{"op", "dir", "variant", "out", "ok", "tol"} {
+					if v[i], err = need(d, k); err != nil {
+						return 0, fmt.Errorf("%s: %v", *parityPath, err)
+					}
+				}
+				k := tvKey{v[0], v[1], v[2]}
+				prow[k] = append(prow[k], parityLine{v[3], v[4] == "True", e, v[5]})
+			case strings.HasPrefix(line, "PARITY_F64 "):
+				d := splitKV(line)
+				var v [3]string
+				for i, k := range []string{"op", "dir", "out"} {
+					if v[i], err = need(d, k); err != nil {
+						return 0, fmt.Errorf("%s: %v", *parityPath, err)
+					}
+				}
+				k := f64Key{v[0], v[1], v[2]}
+				if _, ok := f64[k]; !ok {
+					f64Order = append(f64Order, k)
+				}
+				f64[k] = d
+			}
+		}
+	}
+	parityCell := func(op, d, variant string) (string, error) {
+		lines := prow[tvKey{op, d, variant}]
+		if len(lines) == 0 {
+			return "MISSING", nil
+		}
+		var errs []float64
+		for _, l := range lines {
+			errs = append(errs, l.err)
+		}
+		worst, tol := pyMaxF(errs), lines[0].tol
+		var bad []parityLine
+		for _, l := range lines {
+			if !l.ok {
+				bad = append(bad, l)
+			}
+		}
+		if len(bad) == 0 {
+			return "pass " + pyE(worst, 1) + " (tol " + tol + ")", nil
+		}
+		// Torch errors an f64 arbiter already pinned on torch: an output scaled by
+		// that torch value (clip's gradients) inherits the same relative error.
+		var torchOff []float64
+		for _, k := range f64Order {
+			a := f64[k]
+			if k.op != op || k.dir != d {
+				continue
+			}
+			ok, err := need(a, "ojas_ok")
+			if err != nil {
+				return "", err
+			}
+			if ok == "True" {
+				te, err := needF(a, "torch_err")
+				if err != nil {
+					return "", err
+				}
+				torchOff = append(torchOff, te)
+			}
+		}
+		var notes []string
+		for _, b := range bad {
+			arb, has := f64[f64Key{op, d, b.out}]
+			inherits := false
+			for _, te := range torchOff {
+				if math.Abs(b.err-te) <= 0.01*te {
+					inherits = true
+					break
+				}
+			}
+			arbOK := false
+			if has {
+				s, err := need(arb, "ojas_ok")
+				if err != nil {
+					return "", err
+				}
+				arbOK = s == "True"
+			}
+			switch {
+			case !has && inherits:
+				notes = append(notes, b.out+": "+pyE(b.err, 1)+", inherits torch's f64 miss above")
+			case has && arbOK:
+				te, err := needF(arb, "torch_err")
+				if err != nil {
+					return "", err
+				}
+				oe, err := needF(arb, "ojas_err")
+				if err != nil {
+					return "", err
+				}
+				notes = append(notes, b.out+": torch off f64 by "+pyE(te, 1)+", ojas "+pyE(oe, 1))
+			case has:
+				oe, err := needF(arb, "ojas_err")
+				if err != nil {
+					return "", err
+				}
+				te, err := needF(arb, "torch_err")
+				if err != nil {
+					return "", err
+				}
+				notes = append(notes, "FAIL "+b.out+": ojas off f64 by "+pyE(oe, 1)+" (torch "+pyE(te, 1)+")")
+			default:
+				notes = append(notes, "FAIL "+b.out+" "+pyE(b.err, 1))
+			}
+		}
+		status := "pass vs f64"
+		for _, n := range notes {
+			if strings.HasPrefix(n, "FAIL") {
+				status = "FAIL"
+				break
+			}
+		}
+		return status + " (tol " + tol + "); " + strings.Join(notes, "; "), nil
+	}
+
+	var threads []int
+	for t := range threadSet {
+		threads = append(threads, t)
+	}
+	sort.Ints(threads)
+	oRounds, tRounds := 0, 0
+	for _, v := range ojas {
+		oRounds = max(oRounds, len(v))
+	}
+	for _, v := range torch {
+		tRounds = max(tRounds, len(v))
+	}
+	pl(w, fmt.Sprintf("rounds: ojas %d, torch %d; times in ms, min over rounds", oRounds, tRounds))
+	head := []string{"op", "dir", "shape"}
+	for _, t := range threads {
+		head = append(head, fmt.Sprintf("ojas %dt", t))
+	}
+	head = append(head, "torch")
+	for _, t := range threads {
+		head = append(head, fmt.Sprintf("ratio %dt", t))
+	}
+	head = append(head, "torch alt", "spread>15%", "parity")
+	pl(w, "| "+strings.Join(head, " | ")+" |")
+	pl(w, "|"+strings.Repeat("---|", len(head)))
+	mins := map[string]*float64{} // "op\x00dir\x00t" -> min, t a thread count or "torch"
+	mk := func(op, d, t string) string { return op + "\x00" + d + "\x00" + t }
+	for _, k := range order {
+		op, d := k.op, k.dir
+		variant, ok := opsPrimary[op]
+		if !ok {
+			variant = "default"
+		}
+		var flags, cells []string
+		for _, t := range threads {
+			m, s := opsBest(ojas[otKey{op, d, t}])
+			mins[mk(op, d, strconv.Itoa(t))] = m
+			cells = append(cells, opsFmt(m))
+			if s != nil && *s > opsSpreadFlag {
+				flags = append(flags, fmt.Sprintf("ojas%dt %s", t, pyPct(*s)))
+			}
+		}
+		tm, ts := opsBest(torch[tvKey{op, d, variant}])
+		mins[mk(op, d, "torch")] = tm
+		if ts != nil && *ts > opsSpreadFlag {
+			flags = append(flags, "torch "+pyPct(*ts))
+		}
+		var ratios []string
+		for _, t := range threads {
+			om := mins[mk(op, d, strconv.Itoa(t))]
+			if tm != nil && *tm != 0 && om != nil && *om != 0 {
+				ratios = append(ratios, ff(*tm / *om, 2))
+			} else {
+				ratios = append(ratios, "—")
+			}
+		}
+		altCell := "—"
+		if alt, ok := opsAlt[op]; ok {
+			if am, _ := opsBest(torch[tvKey{op, d, alt}]); am != nil {
+				altCell = opsFmt(am) + " (" + alt + ")"
+			}
+		}
+		tcell := opsFmt(tm)
+		if variant != "default" {
+			tcell += " (" + variant + ")"
+		}
+		flag := strings.Join(flags, ", ")
+		if flag == "" {
+			flag = "no"
+		}
+		pc, err := parityCell(op, d, variant)
+		if err != nil {
+			return 0, err
+		}
+		row := append([]string{op, d, shapes[k]}, cells...)
+		row = append(append(append(row, tcell), ratios...), altCell, flag, pc)
+		pl(w, "| "+strings.Join(row, " | ")+" |")
+	}
+	ts := []string{}
+	for _, t := range threads {
+		ts = append(ts, strconv.Itoa(t))
+	}
+	for _, t := range append(ts, "torch") {
+		total := func(counts []opCount) float64 {
+			var items []pyNumber
+			for _, c := range counts {
+				m := mins[mk(c.op, c.dir, t)]
+				if m == nil || *m == 0 { // `or 0`: an int zero
+					items = append(items, pyNumber{isInt: true})
+				} else {
+					items = append(items, pyNumber{f: float64(float64(c.n) * *m)})
+				}
+			}
+			return pySum(items)
+		}
+		f, b := total(blockFwd), total(blockBwd)
+		fwd, step := mins[mk("block", "fwd", t)], mins[mk("block", "step", t)]
+		label := "torch"
+		if t != "torch" {
+			label = "ojas " + t + "t"
+		}
+		diff := "—"
+		if fwd != nil && *fwd != 0 && step != nil && *step != 0 {
+			diff = opsFmt(fp(*step - *fwd))
+		}
+		pl(w, fmt.Sprintf("block, %s: sum of op rows fwd %s + bwd %s = %s ms; measured fwd %s, step %s, step - fwd %s",
+			label, ff(f, 2), ff(b, 2), ff(f+b, 2), opsFmt(fwd), opsFmt(step), diff))
+	}
+	return 0, nil
+}
+
+// ------------------------------------------- cpu-ab: 2026-10-08-cpu-hot-paths run.sh output
+//
+// Per row, the minimum over rounds of each lane's per-round minimum, the
+// after/base ratio by that minimum and by the median of the per-round ratios,
+// and after/torch where torch has the row.
+
+var cpuABFile = regexp.MustCompile(`^(ops|tape)-(\d+)-(\w+)\.txt`)
+
+func cpuAB(args []string, w *strings.Builder) (int, error) {
+	if len(args) != 1 {
+		return 0, errUsage
+	}
+	type rk struct{ a, b string }
+	// lanes[lane][round][key] = min_ms
+	lanes := map[string]map[int]map[rk]float64{}
+	for _, path := range globSorted(filepath.Join(args[0], "*-*-*.txt")) {
+		m := cpuABFile.FindStringSubmatch(filepath.Base(path))
+		if m == nil {
+			continue
+		}
+		kind, lane := m[1], m[3]
+		rnd, err := strconv.Atoi(m[2])
+		if err != nil {
+			return 0, err
+		}
+		prefix := "OJAS_TAPE"
+		if kind == "ops" {
+			prefix = "OJAS_OP"
+			if lane == "torch" {
+				prefix = "TORCH_OP"
+			}
+		}
+		lines, err := fileLines(path)
+		if err != nil {
+			return 0, err
+		}
+		if lanes[lane] == nil {
+			lanes[lane] = map[int]map[rk]float64{}
+		}
+		if lanes[lane][rnd] == nil {
+			lanes[lane][rnd] = map[rk]float64{}
+		}
+		for _, line := range lines {
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			f := splitKV(line)
+			var key rk
+			if prefix == "OJAS_TAPE" {
+				row, err := need(f, "row")
+				if err != nil {
+					return 0, fmt.Errorf("%s: %v", path, err)
+				}
+				key = rk{"tape", row}
+			} else {
+				op, err := need(f, "op")
+				if err != nil {
+					return 0, fmt.Errorf("%s: %v", path, err)
+				}
+				dir, err := need(f, "dir")
+				if err != nil {
+					return 0, fmt.Errorf("%s: %v", path, err)
+				}
+				if v, ok := f["variant"]; ok {
+					dir += "/" + v
+				}
+				key = rk{op, dir}
+			}
+			ms, err := needF(f, "min_ms")
+			if err != nil {
+				return 0, fmt.Errorf("%s: %v", path, err)
+			}
+			lanes[lane][rnd][key] = ms
+		}
+	}
+	sortedRounds := func(m map[int]map[rk]float64) []int {
+		var rs []int
+		for r := range m {
+			rs = append(rs, r)
+		}
+		sort.Ints(rs)
+		return rs
+	}
+	rounds := sortedRounds(lanes["after"])
+	keySet := map[rk]bool{}
+	for _, r := range lanes["after"] {
+		for k := range r {
+			keySet[k] = true
+		}
+	}
+	var keys []rk
+	for k := range keySet {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].a != keys[j].a {
+			return keys[i].a < keys[j].a
+		}
+		return keys[i].b < keys[j].b
+	})
+	pl(w, fmt.Sprintf("rounds=%d; cells are ms, min over rounds of each round's min-of-N\n", len(rounds)))
+	pl(w, "| row | dir | base | after | after/base (min) | after/base (median of rounds) | torch | after/torch |")
+	pl(w, "| :-- | :-- | --: | --: | --: | --: | --: | --: |")
+	// series is [lanes[lane][r].get(key) for r in rounds if r in lanes[lane]].
+	series := func(lane string, key rk) []*float64 {
+		var out []*float64
+		for _, r := range rounds {
+			rd, ok := lanes[lane][r]
+			if !ok {
+				continue
+			}
+			if v, ok := rd[key]; ok {
+				out = append(out, fp(v))
+			} else {
+				out = append(out, nil)
+			}
+		}
+		return out
+	}
+	minNN := func(xs []*float64) *float64 {
+		var m *float64
+		for _, x := range xs {
+			if x != nil && (m == nil || *x < *m) {
+				m = x
+			}
+		}
+		return m
+	}
+	f4 := func(v *float64) string {
+		if v == nil {
+			return ""
+		}
+		return ff(*v, 4)
+	}
+	ratio := func(x, y *float64) string {
+		if x == nil || y == nil {
+			return ""
+		}
+		return ff(*x / *y, 2)
+	}
+	for _, key := range keys {
+		b, a := series("base", key), series("after", key)
+		var per []float64
+		for i := 0; i < len(a) && i < len(b); i++ {
+			if a[i] != nil && b[i] != nil {
+				per = append(per, *a[i] / *b[i])
+			}
+		}
+		bmin, amin := minNN(b), minNN(a)
+		tkey := key
+		if key.a == "adamw_50304x768" {
+			tkey = rk{key.a, key.b + "/fused"}
+		}
+		t := series("torch", tkey)
+		allNil := true
+		for _, v := range t {
+			if v != nil {
+				allNil = false
+			}
+		}
+		if allNil {
+			t = series("torch", rk{key.a, key.b + "/default"})
+		}
+		tmin := minNN(t)
+		med := ""
+		if len(per) > 0 {
+			med = ff(median(per), 2)
+		}
+		pl(w, fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s |", key.a, key.b, f4(bmin), f4(amin), ratio(amin, bmin), med, f4(tmin), ratio(amin, tmin)))
+	}
+	return 0, nil
+}
+
+// ------------------------------------------- cpu-ab-linux: 2026-10-10-cpu-linux-hot-paths run.sh output
+
+func cpuABLinux(args []string, w *strings.Builder) (int, error) {
+	if len(args) != 1 {
+		return 0, errUsage
+	}
+	type key struct {
+		op, dir string
+		t       int
+	}
+	best := map[key]map[string]float64{}
+	for _, path := range globSorted(filepath.Join(args[0], "ops-*-*.txt")) {
+		stem := strings.TrimSuffix(filepath.Base(path), ".txt")
+		lane := stem[strings.LastIndexByte(stem, '-')+1:]
+		lines, err := fileLines(path)
+		if err != nil {
+			return 0, err
+		}
+		for _, line := range lines {
+			if !strings.HasPrefix(line, "OJAS_OP ") {
+				continue
+			}
+			f := kvOf(kvRe, line)
+			var v [3]string
+			for i, k := range []string{"op", "dir", "threads"} {
+				if v[i], err = need(f, k); err != nil {
+					return 0, fmt.Errorf("%s: %v", path, err)
+				}
+			}
+			t, err := strconv.Atoi(v[2])
+			if err != nil {
+				return 0, fmt.Errorf("%s: threads: %v", path, err)
+			}
+			ms, err := needF(f, "min_ms")
+			if err != nil {
+				return 0, fmt.Errorf("%s: %v", path, err)
+			}
+			k := key{v[0], v[1], t}
+			if best[k] == nil {
+				best[k] = map[string]float64{}
+			}
+			if old, ok := best[k][lane]; !ok || ms < old {
+				best[k][lane] = ms
+			}
+		}
+	}
+	var keys []key
+	for k := range best {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.op != b.op {
+			return a.op < b.op
+		}
+		if a.dir != b.dir {
+			return a.dir < b.dir
+		}
+		return a.t < b.t
+	})
+	pl(w, "| op | dir | threads | base ms | after ms | after/base |")
+	pl(w, "| :-- | :-- | --: | --: | --: | --: |")
+	for _, k := range keys {
+		b, okB := best[k]["base"]
+		a, okA := best[k]["after"]
+		if !okB || !okA {
+			return 0, fmt.Errorf("TypeError: %s %s %d lacks a base or after cell", k.op, k.dir, k.t)
+		}
+		ratio := "-"
+		if a != 0 && b != 0 {
+			ratio = ff(a/b, 2)
+		}
+		pl(w, fmt.Sprintf("| %s | %s | %d | %s | %s | %s |", k.op, k.dir, k.t, ff(b, 3), ff(a, 3), ratio))
+	}
+	return 0, nil
+}
+
+// ------------------------------------------- attn-ab: per-round new/old ratios of the attention A/B
+
+func attnAB(args []string, w *strings.Builder) (int, error) {
+	if len(args) != 1 {
+		return 0, errUsage
+	}
+	lines, err := fileLines(args[0])
+	if err != nil {
+		return 0, err
+	}
+	type key struct{ be, shape, w string }
+	type rt struct {
+		r    int
+		tree string
+	}
+	rows := map[key]map[rt]map[string]float64{}
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "AB ") {
+			continue
+		}
+		f := kvOf(kvRe, line)
+		var v [5]string
+		for i, k := range []string{"backend", "shape", "window", "round", "tree"} {
+			if v[i], err = need(f, k); err != nil {
+				return 0, err
+			}
+		}
+		r, err := strconv.Atoi(v[3])
+		if err != nil {
+			return 0, err
+		}
+		fields := map[string]float64{}
+		for k, s := range f {
+			if p := prefix(k, 3); p == "fwd" || p == "bwd" || p == "ctl" {
+				if fields[k], err = pyFloat(s); err != nil {
+					return 0, err
+				}
+			}
+		}
+		k := key{v[0], v[1], v[2]}
+		if rows[k] == nil {
+			rows[k] = map[rt]map[string]float64{}
+		}
+		rows[k][rt{r, v[4]}] = fields
+	}
+	var keys []key
+	for k := range rows {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.be != b.be {
+			return a.be < b.be
+		}
+		if a.shape != b.shape {
+			return a.shape < b.shape
+		}
+		return a.w < b.w
+	})
+	field := func(m map[string]float64, k string) (float64, error) {
+		v, ok := m[k]
+		if !ok {
+			return 0, fmt.Errorf("KeyError: %q", k)
+		}
+		return v, nil
+	}
+	pl(w, "| backend | shape | metric | old min ms (best) | new min ms (best) | new/old per round (median, range) | control new/old (median, range) |")
+	pl(w, "|:--|:--|:--|--:|--:|:--|:--|")
+	for _, k := range keys {
+		if k.w != "full" {
+			continue
+		}
+		d := rows[k]
+		rset := map[int]bool{}
+		for x := range d {
+			rset[x.r] = true
+		}
+		var rounds []int
+		for r := range rset {
+			rounds = append(rounds, r)
+		}
+		sort.Ints(rounds)
+		for _, metric := range []string{"bwd_min", "fwd_min"} {
+			var rat, ctl, olds, news []float64
+			for _, r := range rounds {
+				o, okO := d[rt{r, "old"}]
+				n, okN := d[rt{r, "new"}]
+				if okO {
+					v, err := field(o, metric)
+					if err != nil {
+						return 0, err
+					}
+					olds = append(olds, v)
+				}
+				if okN {
+					v, err := field(n, metric)
+					if err != nil {
+						return 0, err
+					}
+					news = append(news, v)
+				}
+				if okO && okN {
+					var v [4]float64
+					for i, x := range []struct {
+						m map[string]float64
+						k string
+					}{{n, metric}, {o, metric}, {n, "ctl_min"}, {o, "ctl_min"}} {
+						if v[i], err = field(x.m, x.k); err != nil {
+							return 0, err
+						}
+					}
+					rat, ctl = append(rat, v[0]/v[1]), append(ctl, v[2]/v[3])
+				}
+			}
+			if len(olds) == 0 || len(news) == 0 || len(rat) == 0 {
+				return 0, fmt.Errorf("%s %s: no paired rounds", k.be, k.shape)
+			}
+			pl(w, fmt.Sprintf("| %s | %s | %s | %s | %s | %s (%s-%s) | %s (%s-%s) |", k.be, k.shape, metric[:3],
+				ff(minOf(olds), 3), ff(minOf(news), 3),
+				ff(median(rat), 3), ff(minOf(rat), 3), ff(maxOf(rat), 3),
+				ff(median(ctl), 3), ff(minOf(ctl), 3), ff(maxOf(ctl), 3)))
+		}
+	}
+	pl(w, "")
+	pl(w, "| backend | shape | window | bwd min ms (best of rounds) | fwd min ms (best) |")
+	pl(w, "|:--|:--|:--|--:|--:|")
+	for _, k := range keys {
+		var bw, fw []float64
+		for x, v := range rows[k] {
+			if x.tree != "new" {
+				continue
+			}
+			b, err := field(v, "bwd_min")
+			if err != nil {
+				return 0, err
+			}
+			f, err := field(v, "fwd_min")
+			if err != nil {
+				return 0, err
+			}
+			bw, fw = append(bw, b), append(fw, f)
+		}
+		if len(bw) == 0 {
+			continue
+		}
+		pl(w, fmt.Sprintf("| %s | %s | %s | %s | %s |", k.be, k.shape, k.w, ff(minOf(bw), 3), ff(minOf(fw), 3)))
+	}
+	return 0, nil
+}
+
+// ------------------------------------------- bpe: bench/bpe_throughput.rs run.sh output
+//
+// Per lane and row: the minimum over rounds of each process's min, the MB/s
+// and Mtok/s at that minimum, and the median over rounds of (lane min / base
+// min) within the same round. Digests must agree across lanes.
+
+var (
+	bpeFile   = regexp.MustCompile(`^r(\d+)_(.+)\.txt`)
+	bpeDigest = regexp.MustCompile(`digest=(\w+)`)
+	bpeParity = regexp.MustCompile(`tiktoken_parity=(\S+) documents_matched=(\S+)`)
+)
+
+func bpeSummary(args []string, w *strings.Builder) (int, error) {
+	if len(args) != 2 {
+		return 0, errUsage
+	}
+	base := args[1]
+	type cellv struct{ s, mbs, mtok float64 }
+	type run struct {
+		order  []string
+		rows   map[string]cellv
+		digest string
+		parity [2]string
+	}
+	var laneOrder []string
+	runs := map[string]map[int]*run{}
+	roundOrder := map[string][]int{}
+	for _, path := range globSorted(filepath.Join(args[0], "r*_*.txt")) {
+		m := bpeFile.FindStringSubmatch(filepath.Base(path))
+		if m == nil {
+			return 0, fmt.Errorf("AttributeError: %s is not r<N>_<lane>.txt", path)
+		}
+		rnd, _ := strconv.Atoi(m[1])
+		label := m[2]
+		text, err := readText(path)
+		if err != nil {
+			return 0, err
+		}
+		rn := &run{rows: map[string]cellv{}}
+		for _, line := range strings.Split(text, "\n") {
+			cells := strings.Split(strings.Trim(line, "|"), "|")
+			for i := range cells {
+				cells[i] = pyStrip(cells[i])
+			}
+			if len(cells) == 5 && (strings.HasPrefix(cells[0], "encode") || strings.HasPrefix(cells[0], "decode")) {
+				v, err := floats(cells[1], cells[3], cells[4])
+				if err != nil {
+					return 0, fmt.Errorf("%s: %v", path, err)
+				}
+				if _, ok := rn.rows[cells[0]]; !ok {
+					rn.order = append(rn.order, cells[0])
+				}
+				rn.rows[cells[0]] = cellv{v[0], v[1], v[2]}
+			}
+		}
+		dg := bpeDigest.FindStringSubmatch(text)
+		pa := bpeParity.FindStringSubmatch(text)
+		if dg == nil || pa == nil {
+			return 0, fmt.Errorf("%s: no digest= or tiktoken_parity= line", path)
+		}
+		rn.digest, rn.parity = dg[1], [2]string{pa[1], pa[2]}
+		if runs[label] == nil {
+			runs[label] = map[int]*run{}
+			laneOrder = append(laneOrder, label)
+		}
+		if _, ok := runs[label][rnd]; !ok {
+			roundOrder[label] = append(roundOrder[label], rnd)
+		}
+		runs[label][rnd] = rn
+	}
+	digests, parities := map[string]bool{}, map[[2]string]bool{}
+	for _, l := range laneOrder {
+		for _, r := range runs[l] {
+			digests[r.digest] = true
+			parities[r.parity] = true
+		}
+	}
+	var ps [][2]string
+	for p := range parities {
+		ps = append(ps, p)
+	}
+	sort.Slice(ps, func(i, j int) bool {
+		if ps[i][0] != ps[j][0] {
+			return ps[i][0] < ps[j][0]
+		}
+		return ps[i][1] < ps[j][1]
+	})
+	var pss []string
+	for _, p := range ps {
+		pss = append(pss, "("+pyQuote(p[0])+", "+pyQuote(p[1])+")")
+	}
+	// sorted() sorts the raw strings; the list repr then quotes each.
+	var raw, ds []string
+	for d := range digests {
+		raw = append(raw, d)
+	}
+	sort.Strings(raw)
+	for _, d := range raw {
+		ds = append(ds, pyQuote(d))
+	}
+	pl(w, "digests: ["+strings.Join(ds, ", ")+"]  parity: ["+strings.Join(pss, ", ")+"]")
+	baseRuns, ok := runs[base]
+	if !ok {
+		return 0, fmt.Errorf("KeyError: no lane %q", base)
+	}
+	rounds := append([]int(nil), roundOrder[base]...)
+	sort.Ints(rounds)
+	rowNames := baseRuns[rounds[0]].order
+	pl(w, "")
+	pl(w, "| lane | row | min s | MB/s | Mtok/s | lane/base (min of mins) | median of round ratios |")
+	pl(w, "| :-- | :-- | --: | --: | --: | --: | --: |")
+	for _, label := range laneOrder {
+		lane := runs[label]
+		for _, row := range rowNames {
+			var best *cellv
+			var ratios []float64
+			for _, r := range roundOrder[label] {
+				c, ok := lane[r].rows[row]
+				if !ok {
+					return 0, fmt.Errorf("KeyError: lane %s round %d lacks %s", label, r, row)
+				}
+				if best == nil || c.s < best.s {
+					cc := c
+					best = &cc
+				}
+				if br, ok := baseRuns[r]; ok {
+					bc, ok := br.rows[row]
+					if !ok {
+						return 0, fmt.Errorf("KeyError: base round %d lacks %s", r, row)
+					}
+					ratios = append(ratios, c.s/bc.s)
+				}
+			}
+			var baseMins []float64
+			for _, r := range roundOrder[base] {
+				bc, ok := baseRuns[r].rows[row]
+				if !ok {
+					return 0, fmt.Errorf("KeyError: base round %d lacks %s", r, row)
+				}
+				baseMins = append(baseMins, bc.s)
+			}
+			if len(ratios) == 0 {
+				return 0, fmt.Errorf("lane %s shares no round with %s", label, base)
+			}
+			pl(w, fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |", label, row, ff(best.s, 4), ff(best.mbs, 2), ff(best.mtok, 3),
+				ff(best.s/minOf(baseMins), 3), ff(median(ratios), 3)))
+		}
+	}
+	return 0, nil
+}
+
+// ------------------------------------------- decode-ab: ab_decode.sh before/after JSONL
+//
+// Per lane and row: the median over rounds of each side's KEY, after/before
+// per round (median [min-max]), and decode ms per token = (decode row -
+// prefill row) / 31 per side.
+
+func decodeAB(args []string, w *strings.Builder) (int, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return 0, errUsage
+	}
+	key := "median_ms"
+	if len(args) == 2 {
+		key = args[1]
+	}
+	type lr struct{ lane, row string }
+	rows := map[lr]map[int]map[string]float64{}
+	problems := 0
+	var probText []string
+	for _, p := range globSorted(filepath.Join(args[0], "round*", "*.jsonl")) {
+		r, err := roundOf(p)
+		if err != nil {
+			return 0, err
+		}
+		base := filepath.Base(p)
+		parts := strings.Split(base[:max(len(base)-6, 0)], "-")
+		if len(parts) != 2 {
+			return 0, fmt.Errorf("ValueError: %s is not <lane>-<side>.jsonl", p)
+		}
+		lane, side := parts[0], parts[1]
+		lines, err := fileLines(p)
+		if err != nil {
+			return 0, err
+		}
+		for i, line := range lines {
+			d, err := decodeRecord(line)
+			if err != nil {
+				return 0, fmt.Errorf("%s:%d: %v", p, i+1, err)
+			}
+			st := d.get("status")
+			if _, isStr := d["status"].(string); !isStr {
+				st = "\x00" // neither ok nor info
+			}
+			if st == "ok" && d.has("median_ms") {
+				row, err := d.str("row")
+				if err != nil {
+					return 0, err
+				}
+				v, err := d.num(key)
+				if err != nil {
+					return 0, fmt.Errorf("%s:%d: %v", p, i+1, err)
+				}
+				k := lr{lane, row}
+				if rows[k] == nil {
+					rows[k] = map[int]map[string]float64{}
+				}
+				if rows[k][r] == nil {
+					rows[k][r] = map[string]float64{}
+				}
+				rows[k][r][side] = v
+			} else if st != "info" && st != "ok" {
+				problems++
+				probText = append(probText, fmt.Sprintf("PROBLEM %s %s %d %s", lane, side, r, pyStrip(line)))
+			}
+		}
+	}
+	for _, t := range probText {
+		pl(w, t)
+	}
+	var keys []lr
+	for k := range rows {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].lane != keys[j].lane {
+			return keys[i].lane < keys[j].lane
+		}
+		return keys[i].row < keys[j].row
+	})
+	pl(w, fmt.Sprintf("| lane | row | before %s | after %s | after / before per round, median [min-max] | rounds |", key, key))
+	pl(w, "| :-- | :-- | --: | --: | :-- | --: |")
+	for _, k := range keys {
+		var bs, as, ratios []float64
+		for _, x := range rows[k] {
+			b, okB := x["before"]
+			a, okA := x["after"]
+			if okB && okA {
+				bs, as, ratios = append(bs, b), append(as, a), append(ratios, a/b)
+			}
+		}
+		if len(bs) == 0 {
+			return 0, fmt.Errorf("StatisticsError: %s %s has no round with both sides", k.lane, k.row)
+		}
+		pl(w, fmt.Sprintf("| %s | %s | %s | %s | %s [%s-%s] | %d |", k.lane, k.row, ff(median(bs), 2), ff(median(as), 2),
+			ff(median(ratios), 3), ff(minOf(ratios), 3), ff(maxOf(ratios), 3), len(bs)))
+	}
+	pl(w, "")
+	pl(w, "| lane | decode row | before ms / token | after ms / token | after - before ms / token, per round median [min-max] |")
+	pl(w, "| :-- | :-- | --: | --: | :-- |")
+	plus := func(x float64) string { return fmt.Sprintf("%+.3f", x) }
+	for _, lane := range []string{"metal", "wgpu"} {
+		pre := rows[lr{lane, "gen_prefill_p32"}]
+		for _, k := range keys {
+			if k.lane != lane || k.row == "gen_prefill_p32" {
+				continue
+			}
+			rs := rows[k]
+			var rnds []int
+			for r := range rs {
+				rnds = append(rnds, r)
+			}
+			sort.Ints(rnds)
+			tok := map[string][]float64{}
+			var diffs []float64
+			for _, r := range rnds {
+				pr, ok := pre[r]
+				if !ok {
+					continue
+				}
+				t := map[string]float64{}
+				for _, s := range []string{"before", "after"} {
+					x, ok1 := rs[r][s]
+					y, ok2 := pr[s]
+					if ok1 && ok2 {
+						t[s] = (x - y) / 31
+						tok[s] = append(tok[s], t[s])
+					}
+				}
+				if len(t) == 2 {
+					diffs = append(diffs, t["after"]-t["before"])
+				}
+			}
+			if len(tok["before"]) == 0 || len(tok["after"]) == 0 || len(diffs) == 0 {
+				return 0, fmt.Errorf("StatisticsError: %s %s has no round paired with gen_prefill_p32", lane, k.row)
+			}
+			pl(w, fmt.Sprintf("| %s | %s | %s | %s | %s [%s-%s] |", lane, k.row, ff(median(tok["before"]), 3), ff(median(tok["after"]), 3),
+				plus(median(diffs)), plus(minOf(diffs)), plus(maxOf(diffs))))
+		}
+	}
+	return problems, nil
+}
+
+// ------------------------------------------- sweep-fit: the sweep_ rows of a run_paired.sh run
+//
+// Per runtime and row: m = median over rounds of the per-round minimum, d =
+// median over rounds of the per-round median (the conventions of
+// docs/bench-gpu-vs-torch.md). Spread = max / min of the per-round medians.
+//
+// silu: floor a = t(1); slope b from the two largest N; model crossover N* =
+// a / b (fixed part = per-value part). The direct crossover is where the
+// measured t(N) first reaches 2 * t(1), interpolated linearly between sweep
+// points; it needs no model.
+//
+// decode: B requests batched (b) vs B batch-1 calls before one sync (x).
+
+var sweepRuntimes = []string{"ojas-metal", "ojas-wgpu", "torch-mps"}
+
+type sweepStat struct {
+	status       string
+	n            int
+	m, d, spread float64
+}
+
+func sweepFit(args []string, w *strings.Builder) (int, error) {
+	if len(args) != 1 {
+		return 0, errUsage
+	}
+	type rr struct{ rt, row string }
+	per := map[rr]map[int]record{}
+	rowSet := map[string]bool{}
+	for _, path := range globSorted(filepath.Join(args[0], "round*", "*.jsonl")) {
+		r, err := roundOf(path)
+		if err != nil {
+			return 0, err
+		}
+		lines, err := fileLines(path)
+		if err != nil {
+			return 0, err
+		}
+		for i, line := range lines {
+			line = pyStrip(line)
+			if line == "" {
+				continue
+			}
+			d, err := decodeRecord(line)
+			if err != nil {
+				return 0, fmt.Errorf("%s:%d: %v", path, i+1, err)
+			}
+			row, err := d.str("row")
+			if err != nil {
+				return 0, fmt.Errorf("%s:%d: %v", path, i+1, err)
+			}
+			if strings.HasPrefix(row, "_") {
+				continue
+			}
+			rt, err := d.str("runtime")
+			if err != nil {
+				return 0, fmt.Errorf("%s:%d: %v", path, i+1, err)
+			}
+			if per[rr{rt, row}] == nil {
+				per[rr{rt, row}] = map[int]record{}
+			}
+			per[rr{rt, row}][r] = d
+			rowSet[row] = true
+		}
+	}
+	stats := func(rt, row string) (sweepStat, error) {
+		var bad []string
+		badSeen := map[string]bool{}
+		var mins, meds []float64
+		for _, d := range per[rr{rt, row}] {
+			st, err := d.str("status")
+			if err != nil {
+				return sweepStat{}, err
+			}
+			if st != "ok" {
+				if !badSeen[st] {
+					badSeen[st] = true
+					bad = append(bad, st)
+				}
+				continue
+			}
+			mn, err := d.num("min_ms")
+			if err != nil {
+				return sweepStat{}, err
+			}
+			md, err := d.num("median_ms")
+			if err != nil {
+				return sweepStat{}, err
+			}
+			mins, meds = append(mins, mn), append(meds, md)
+		}
+		sort.Strings(bad)
+		if len(bad) > 0 || len(mins) == 0 {
+			s := strings.Join(bad, ",")
+			if s == "" {
+				s = "missing"
+			}
+			return sweepStat{status: s, n: len(mins)}, nil
+		}
+		return sweepStat{"ok", len(mins), median(mins), median(meds), maxOf(meds)/minOf(meds) - 1}, nil
+	}
+	f := func(x *float64, nd int) string {
+		if x == nil {
+			return "-"
+		}
+		return ff(*x, nd)
+	}
+	var rows []string
+	for r := range rowSet {
+		rows = append(rows, r)
+	}
+	sort.Strings(rows)
+	type nrow struct {
+		n   int
+		row string
+	}
+	var silu []nrow
+	bset := map[int]bool{}
+	for _, r := range rows {
+		if strings.HasPrefix(r, "sweep_silu_n") {
+			parts := strings.Split(r, "_n")
+			n, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return 0, err
+			}
+			silu = append(silu, nrow{n, r})
+		}
+		if strings.HasPrefix(r, "sweep_decode_b") {
+			parts := strings.Split(r, "_b")
+			n, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return 0, err
+			}
+			bset[n] = true
+		}
+	}
+	sort.Slice(silu, func(i, j int) bool {
+		if silu[i].n != silu[j].n {
+			return silu[i].n < silu[j].n
+		}
+		return silu[i].row < silu[j].row
+	})
+	var bs []int
+	for b := range bset {
+		bs = append(bs, b)
+	}
+	sort.Ints(bs)
+
+	pl(w, "## silu_forward over N values\n")
+	pl(w, "Cells: min-of-round-minimums median (m) / median-of-medians (d) ms, spread of per-round medians.\n")
+	pl(w, "| N | "+strings.Join(sweepRuntimes, " | ")+" | metal/torch d ratio |")
+	pl(w, "| --: |"+strings.Repeat(" :-- |", len(sweepRuntimes))+" --: |")
+	for _, nr := range silu {
+		var cells []string
+		s := map[string]sweepStat{}
+		for _, rt := range sweepRuntimes {
+			st, err := stats(rt, nr.row)
+			if err != nil {
+				return 0, err
+			}
+			s[rt] = st
+			if st.status == "ok" {
+				cells = append(cells, f(&st.m, 3)+" / "+f(&st.d, 3)+" ("+pyPct(st.spread)+")")
+			} else {
+				cells = append(cells, st.status)
+			}
+		}
+		var ratio *float64
+		if s["torch-mps"].status == "ok" && s["ojas-metal"].status == "ok" {
+			ratio = fp(s["torch-mps"].d / s["ojas-metal"].d)
+		}
+		pl(w, fmt.Sprintf("| %d | ", nr.n)+strings.Join(cells, " | ")+" | "+f(ratio, 2)+"x |")
+	}
+
+	pl(w, "\n## Crossover where the per-value work equals the fixed cost\n")
+	pl(w, "| runtime | stat | floor a = t(1) ms | slope b ns/value | model N* = a/b | direct N (t = 2a) |")
+	pl(w, "| :-- | :-- | --: | --: | --: | --: |")
+	for _, rt := range sweepRuntimes {
+		for _, key := range []string{"m", "d"} {
+			type p2 struct {
+				n int
+				t float64
+			}
+			var pts []p2
+			for _, nr := range silu {
+				st, err := stats(rt, nr.row)
+				if err != nil {
+					return 0, err
+				}
+				if st.status == "ok" {
+					v := st.m
+					if key == "d" {
+						v = st.d
+					}
+					pts = append(pts, p2{nr.n, v})
+				}
+			}
+			if len(pts) < 3 || pts[0].n != 1 {
+				pl(w, fmt.Sprintf("| %s | %s | incomplete (%d sizes) | | | |", rt, key, len(pts)))
+				continue
+			}
+			a := pts[0].t
+			p0, p1 := pts[len(pts)-2], pts[len(pts)-1]
+			b := (p1.t - p0.t) / float64(p1.n-p0.n)
+			nstar := "-"
+			if b > 0 {
+				nstar = ff(a/b/1e6, 2) + "M"
+			}
+			dx := "-"
+			for i := 0; i+1 < len(pts); i++ {
+				n0, t0, n1, t1 := pts[i].n, pts[i].t, pts[i+1].n, pts[i+1].t
+				if t1 >= 2*a && 2*a > t0 {
+					x := float64(n0) + float64((2*a-t0)*float64(n1-n0))/(t1-t0)
+					dx = ff(x/1e6, 2) + "M"
+					break
+				}
+			}
+			pl(w, fmt.Sprintf("| %s | %s | %s | %s | %s | %s |", rt, key, f(&a, 3), f(fp(b*1e6), 4), nstar, dx))
+		}
+	}
+
+	pl(w, "\n## Decode: B requests batched (b) vs B batch-1 calls, one sync (x)\n")
+	pl(w, "Cells: median-of-medians ms (spread). Per-request = cell / B. Extra per call = (x - b) / (B - 1).\n")
+	pl(w, "| B | runtime | batched b | per request | split x | per request | extra per call |")
+	pl(w, "| --: | :-- | --: | --: | --: | --: | --: |")
+	for _, b := range bs {
+		for _, rt := range sweepRuntimes {
+			sb, err := stats(rt, fmt.Sprintf("sweep_decode_b%d", b))
+			if err != nil {
+				return 0, err
+			}
+			cb, pb := sb.status, "-"
+			if sb.status == "ok" {
+				cb = f(&sb.d, 3) + " (" + pyPct(sb.spread) + ")"
+				pb = f(fp(sb.d/float64(b)), 3)
+			}
+			cx, px, ex := "-", "-", "-"
+			if b > 1 {
+				sx, err := stats(rt, fmt.Sprintf("sweep_decode_x%d", b))
+				if err != nil {
+					return 0, err
+				}
+				if sx.status != "ok" {
+					cx = sx.status
+				} else {
+					cx, px = f(&sx.d, 3)+" ("+pyPct(sx.spread)+")", f(fp(sx.d/float64(b)), 3)
+					if sb.status == "ok" {
+						ex = f(fp((sx.d-sb.d)/float64(b-1)), 3)
+					}
+				}
+			}
+			pl(w, fmt.Sprintf("| %d | %s | %s | %s | %s | %s | %s |", b, rt, cb, pb, cx, px, ex))
+		}
+	}
+	return 0, nil
 }

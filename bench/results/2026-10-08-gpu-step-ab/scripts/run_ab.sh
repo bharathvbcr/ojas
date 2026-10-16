@@ -16,7 +16,9 @@
 #
 # Each round runs old-metal, new-metal, old-wgpu, new-wgpu and torch-mps;
 # odd rounds in that order, even rounds reversed. One JSONL per lane and
-# round, as run_paired.sh writes; `agg.py` reads them.
+# round, as run_paired.sh writes. The throwaway agg.py that read them was
+# removed (no rounds were kept to check a port against); it is in
+# `git show 040e1ed:bench/results/2026-10-08-gpu-step-ab/scripts/agg.py`.
 set -u
 REPO=/Users/bharath/Code/research/ojas
 D=$REPO/target-gpu-step-ab

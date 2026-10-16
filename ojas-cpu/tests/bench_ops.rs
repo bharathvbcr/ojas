@@ -1,6 +1,7 @@
 //! Per-op wall time of the nanolab training step on `CpuBackend` (Fast),
 //! paired with `ojas-cpu/benches/torch_ops.py` (torch oracle and timer) and
-//! summarized by `ojas-cpu/benches/summarize_ops.py`. Ignored by default.
+//! summarized by `go run scripts/benchreport/main.go bench-ops [-parity FILE] LOG...`.
+//! Ignored by default.
 //!
 //! Shapes are the nanolab block: d_model 768, 12 heads of 64, T 1024, B 1,
 //! SwiGLU hidden 2048 (`docs/framework-design.md` §2), vocab 50304.
