@@ -15,6 +15,16 @@ Use (OpenAI-compatible):
       -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true,"max_tokens":256}'
 
 Stdlib-only HTTP (single-user local serving); model loads once at startup.
+
+Language-policy waiver (recorded 2026-10-16 in tasks/gp-imported-research-trees.md):
+a shipped server is not a shape Python may take in ojas, and this one stays only
+because there is nothing native to put in its place. The Rust server,
+src/bin/serve.rs, is a stub, and native DFlash is not at parity. With bs=5,
+mean_accept is about 0 against MLX's 3.0 and the exact-vs-greedy check FAILs
+(docs/dflash_port.md, "MLX golden" table; docs/gates.md, "31B DFlash (this pass)").
+Unblock condition: native DFlash passes the 31B exact check and reaches an MLX-like
+mean_accept, and serve.rs serves it. Port the HTTP surface (chat completions, SSE,
+prompt-cache trim) to Rust then, and delete this file in the same change.
 """
 import argparse, json, time, threading, queue
 from http.server import BaseHTTPRequestHandler, HTTPServer

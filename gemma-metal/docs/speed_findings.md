@@ -12,7 +12,7 @@ factual/translate) **2.4–3.1×** (~30–36 tok/s), open-ended creative prose w
 (~19 tok/s, draft accept ~2.2 — unpredictable text is hard to draft). **Every prompt type
 still beats plain and clears the ≥15 gate; all but pure prose clear the ≥25 stretch gate.**
 Stack: DFlash block spec-decode × 4-bit draft × mlx 0.32 (M5 neural accelerators) × block=5.
-Shipped: `bench/dflash_fast_31b.py` (CLI), `bench/serve_dflash.py` (OpenAI-compatible :8788).
+MLX reference arm: `bench/dflash_fast_31b.py` (the comparator native DFlash is measured against, not a shipped CLI). Local serving: `bench/serve_dflash.py` (OpenAI-compatible :8788; Python under a recorded waiver until native DFlash reaches parity, see its docstring).
 Runtime: `~/.venvs/dflash32` (mlx 0.32.0 + dflash; dflash's `[mlx]` extra pins 0.31.2 — install separately).
 
 ## Levers, measured (all interleaved / drift-checked under GPU contention)
