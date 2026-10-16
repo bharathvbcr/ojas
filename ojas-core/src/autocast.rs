@@ -16,8 +16,8 @@
 //! [`Backend`]: crate::Backend
 
 use crate::backend::{
-    AdamWConfig, Backend, BackendId, CeChunk, GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad,
-    GdnInputs, LinearCe, MuonNs5Config, PerHeadGateGrad, ValueResidualGrad,
+    AdamWConfig, Backend, BackendId, CeChunk, CeGrads, GatedRmsGrad, GdnDecayGrad, GdnForward,
+    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, PerHeadGateGrad, ValueResidualGrad,
 };
 use crate::budget::Budget;
 use crate::dtype::DType;
@@ -1083,7 +1083,7 @@ impl<B: Backend> Backend for Autocast<B> {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         let input = self.prep(input)?;
         let weight = self.prep(weight)?;
@@ -1093,7 +1093,7 @@ impl<B: Backend> Backend for Autocast<B> {
             targets,
             ignore_index,
             chunk,
-            want_grad,
+            grads,
         )?;
         Ok(LinearCe {
             loss: out.loss,
@@ -1873,24 +1873,25 @@ mod tests {
             _targets: &Tensor,
             _ignore_index: Option<u32>,
             _chunk: CeChunk,
-            want_grad: bool,
+            grads: CeGrads,
         ) -> Result<LinearCe, OjasError> {
             finite("linear_cross_entropy_mean", input)?;
             finite("linear_cross_entropy_mean", weight)?;
             note(&self.seen_input, input);
             note(&self.seen_weight, weight);
             let loss = Tensor::from_f32(&[f32::from_bits(DIRTY)], &[1], self.budget())?;
-            if !want_grad {
-                return Ok(LinearCe {
-                    loss,
-                    grad_input: None,
-                    grad_weight: None,
-                });
-            }
             Ok(LinearCe {
                 loss,
-                grad_input: Some(dirty(self.budget(), input.shape())?),
-                grad_weight: Some(dirty(self.budget(), weight.shape())?),
+                grad_input: if grads.input {
+                    Some(dirty(self.budget(), input.shape())?)
+                } else {
+                    None
+                },
+                grad_weight: if grads.weight {
+                    Some(dirty(self.budget(), weight.shape())?)
+                } else {
+                    None
+                },
             })
         }
 
@@ -2770,7 +2771,7 @@ mod tests {
                 &targets,
                 None,
                 CeChunk { rows: 1, cols: 1 },
-                true,
+                CeGrads::BOTH,
             )
             .unwrap();
         assert_eq!(bits_of(&out.loss), DIRTY);

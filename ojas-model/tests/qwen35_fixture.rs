@@ -73,7 +73,7 @@ fn eval_gives_the_tapes_loss_bits() {
     let s = spec();
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let reference = SafeTensors::open(&dir().join("reference.safetensors")).unwrap();
-    let params = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap();
+    let params = load_hf(&s, &model, PREFIX, DType::F32, DType::F32, &budget()).unwrap();
     let (ids, targets) = ids_and_targets(&reference);
     let tables = Qwen35Tables::new(&s, ids.shape()[1], &budget()).unwrap();
     let mut eval = Eval::new(cpu());
@@ -99,7 +99,7 @@ fn a_mismatched_checkpoint_is_refused_by_name() {
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let mut s = spec();
     s.layers = vec![Qwen35Mixer::Attention, Qwen35Mixer::GatedDeltaNet];
-    let err = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap_err();
+    let err = load_hf(&s, &model, PREFIX, DType::F32, DType::F32, &budget()).unwrap_err();
     assert!(
         format!("{err:?}").contains("model.layers.0.self_attn.q_proj.weight"),
         "{err:?}"
@@ -107,7 +107,7 @@ fn a_mismatched_checkpoint_is_refused_by_name() {
     let mut s = spec();
     s.head_dim = 128;
     s.rotary_dim = 32;
-    let err = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap_err();
+    let err = load_hf(&s, &model, PREFIX, DType::F32, DType::F32, &budget()).unwrap_err();
     assert!(format!("{err:?}").contains("shape"), "{err:?}");
 }
 
@@ -135,8 +135,8 @@ fn a_bf16_frozen_base_holds_its_linears_at_two_bytes_and_keeps_the_rest_f32() {
     let s = spec();
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let (fb, hb) = (Budget::new(1 << 30), Budget::new(1 << 30));
-    let full = load_hf(&s, &model, PREFIX, DType::F32, &fb).unwrap();
-    let half = load_hf(&s, &model, PREFIX, DType::Bf16, &hb).unwrap();
+    let full = load_hf(&s, &model, PREFIX, DType::F32, DType::F32, &fb).unwrap();
+    let half = load_hf(&s, &model, PREFIX, DType::Bf16, DType::F32, &hb).unwrap();
 
     let lin_half = linears(&half);
     let lin_elems: u64 = lin_half.iter().map(|t| elems(t)).sum();
@@ -182,7 +182,7 @@ fn a_bf16_frozen_base_holds_its_linears_at_two_bytes_and_keeps_the_rest_f32() {
         assert_eq!(widened, want);
     }
 
-    let err = load_hf(&s, &model, PREFIX, DType::U32, &budget()).unwrap_err();
+    let err = load_hf(&s, &model, PREFIX, DType::U32, DType::F32, &budget()).unwrap_err();
     assert!(
         matches!(
             err,
@@ -203,9 +203,72 @@ fn a_bf16_frozen_base_gives_the_f32_loss_and_gradient_bits_on_the_cpu() {
         Tensor::clone,
         ActivationCheckpoint::Blocks,
         DType::Bf16,
+        DType::F32,
     );
     assert_eq!(half.loss.to_bits(), full.loss.to_bits());
     assert_eq!(bits(&half.grads), bits(&full.grads));
+}
+
+#[test]
+fn a_bf16_tied_table_holds_two_bytes_per_element_and_keeps_its_bits() {
+    let s = spec();
+    let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
+    let (fb, hb) = (Budget::new(1 << 30), Budget::new(1 << 30));
+    let full = load_hf(&s, &model, PREFIX, DType::F32, DType::F32, &fb).unwrap();
+    let half = load_hf(&s, &model, PREFIX, DType::Bf16, DType::Bf16, &hb).unwrap();
+
+    assert_eq!(half.embed.dtype(), DType::Bf16);
+    assert_eq!(half.embed.shape(), full.embed.shape());
+    let table = elems(&half.embed);
+    let lin: u64 = linears(&half).iter().map(|t| elems(t)).sum();
+    let all: u64 = half.values().iter().map(|t| elems(t)).sum();
+    // Resident bytes: 2 per table and linear element, 4 for the rest.
+    assert_eq!(fb.live_bytes().unwrap(), 4 * all);
+    assert_eq!(
+        hb.live_bytes().unwrap(),
+        2 * (table + lin) + 4 * (all - table - lin)
+    );
+
+    // The checkpoint is bf16: the table's bits are kept, and widen to the
+    // f32 load.
+    let widened: Vec<u32> = half
+        .embed
+        .bf16_slice()
+        .unwrap()
+        .iter()
+        .map(|&b| bf16_to_f32(b).to_bits())
+        .collect();
+    let want: Vec<u32> = full
+        .embed
+        .to_f32_vec()
+        .unwrap()
+        .iter()
+        .map(|v| v.to_bits())
+        .collect();
+    assert_eq!(widened, want);
+
+    // The table alone may be Bf16 too; any other table storage is refused.
+    let only = load_hf(&s, &model, PREFIX, DType::F32, DType::Bf16, &budget()).unwrap();
+    assert_eq!(only.embed.dtype(), DType::Bf16);
+    assert!(linears(&only).iter().all(|t| t.dtype() == DType::F32));
+    for bad in [DType::U32, DType::F16] {
+        let err = load_hf(&s, &model, PREFIX, DType::F32, bad, &budget()).unwrap_err();
+        assert!(
+            matches!(err, OjasError::Dtype { got, .. } if got == bad),
+            "{err:?}"
+        );
+    }
+}
+
+#[test]
+fn a_bf16_tied_table_gives_the_f32_loss_and_gradient_bits_on_the_cpu() {
+    for activations in [ActivationCheckpoint::Off, ActivationCheckpoint::Blocks] {
+        let full = run(cpu(), Tensor::clone, activations);
+        let half = run_with(cpu(), Tensor::clone, activations, DType::Bf16, DType::Bf16);
+        assert_eq!(half.loss.to_bits(), full.loss.to_bits());
+        assert_eq!(bits(&half.grads), bits(&full.grads));
+        assert_eq!(half.grads.embed.dtype(), DType::F32);
+    }
 }
 
 fn loss_with(
@@ -215,7 +278,7 @@ fn loss_with(
     let s = spec();
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let reference = SafeTensors::open(&dir().join("reference.safetensors")).unwrap();
-    let params = load_hf(&s, &model, PREFIX, DType::F32, &budget()).unwrap();
+    let params = load_hf(&s, &model, PREFIX, DType::F32, DType::F32, &budget()).unwrap();
     let (ids, targets) = ids_and_targets(&reference);
     let targets = targets_of(&targets);
     let tables = Qwen35Tables::new(&s, ids.shape()[1], &budget()).unwrap();

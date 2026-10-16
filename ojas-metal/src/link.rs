@@ -14,7 +14,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
-use ojas_core::{BackendId, OjasError, MAX_PERMUTE_RANK};
+use ojas_core::{BackendId, CeGrads, OjasError, MAX_PERMUTE_RANK};
 
 pub(crate) type Res<T> = Result<T, OjasError>;
 
@@ -389,6 +389,8 @@ pub(crate) enum Cmd {
     },
     Embed {
         table: Arg,
+        /// `table` is `Bf16`: `n` 2-byte elements, widened as gathered.
+        half: bool,
         ids: Arg,
         vocab: u32,
         dim: u32,
@@ -410,6 +412,8 @@ pub(crate) enum Cmd {
     /// `rows` is the host's grouping of the token ids ([`EmbedRows`]).
     EmbedBwd {
         table: Arg,
+        /// `table` is `Bf16` (only scanned, on its bits).
+        half: bool,
         grad: Arg,
         rows: EmbedRows,
         dim: u32,
@@ -803,10 +807,14 @@ pub(crate) struct LceGeom {
     pub rt: usize,
     pub ct: usize,
     /// Whether some x (or weight) row tile starts at a byte offset tessl's
-    /// GEMMs cannot take (not 16-aligned), so it is staged in a copy.
+    /// GEMMs cannot take (not 16-aligned), so it is staged in a copy. A
+    /// `w_half` weight always is: each tile is widened into the stage.
     pub stage_x: bool,
     pub stage_w: bool,
-    pub grad: bool,
+    /// The gradients the call returns.
+    pub grads: CeGrads,
+    /// The weight is `Bf16` (the tied table at 2 bytes per element).
+    pub w_half: bool,
 }
 
 /// Whether a row tile of a `[rows, step]` matrix at byte offset `off`, cut
@@ -831,7 +839,8 @@ pub(crate) fn reduce_groups(n: usize) -> usize {
 impl LceGeom {
     /// `rows` and `cols` are the caller's chunk, clamped to the problem and
     /// to the GEMMs' i32 element limit for one tile (a smaller tile only
-    /// lowers scratch).
+    /// lowers scratch). `w_half` is a `Bf16` weight, whose tiles are always
+    /// staged ([`Self::scratch`] then charges one `[ct, d]` f32 tile).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         n: usize,
@@ -841,7 +850,8 @@ impl LceGeom {
         cols: usize,
         x_off: usize,
         w_off: usize,
-        grad: bool,
+        grads: CeGrads,
+        w_half: bool,
     ) -> Self {
         let limit = i32::MAX as usize;
         let rt = rows.min(n).min(limit).max(1);
@@ -853,14 +863,16 @@ impl LceGeom {
             rt,
             ct,
             stage_x: needs_stage(x_off, d, rt, n),
-            stage_w: needs_stage(w_off, d, ct, v),
-            grad,
+            stage_w: w_half || needs_stage(w_off, d, ct, v),
+            grads,
+            w_half,
         }
     }
 
     /// Elements of device scratch: the logits tile, per-row (max, sum,
-    /// target logit), the loss rows and their reduction, and with gradients
-    /// the two GEMM destinations; plus any staging copies.
+    /// target logit), the loss rows and their reduction, and the GEMM
+    /// destination of each gradient asked for (`[rt, d]` for the input's,
+    /// `[ct, d]` for the weight's); plus any staging copies.
     pub(crate) fn scratch(&self) -> Option<usize> {
         let mut total = self.rt.checked_mul(self.ct)?;
         let mut add = |x: usize| -> Option<()> {
@@ -872,8 +884,10 @@ impl LceGeom {
         add(1 + reduce_groups(self.n))?;
         let x_tile = self.rt.checked_mul(self.d)?;
         let w_tile = self.ct.checked_mul(self.d)?;
-        if self.grad {
+        if self.grads.input {
             add(x_tile)?;
+        }
+        if self.grads.weight {
             add(w_tile)?;
         }
         if self.stage_x {

@@ -102,20 +102,22 @@ pub fn run<B: Backend>(
     up: impl Fn(&Tensor) -> Tensor,
     activations: ActivationCheckpoint,
 ) -> Run {
-    run_with(backend, up, activations, DType::F32)
+    run_with(backend, up, activations, DType::F32, DType::F32)
 }
 
-/// [`run`] with the linear weights loaded as `linears` (`load_hf`).
+/// [`run`] with the linear weights loaded as `linears` and the tied table
+/// as `table` (`load_hf`).
 pub fn run_with<B: Backend>(
     backend: B,
     up: impl Fn(&Tensor) -> Tensor,
     activations: ActivationCheckpoint,
     linears: DType,
+    table: DType,
 ) -> Run {
     let s = spec();
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     let reference = SafeTensors::open(&dir().join("reference.safetensors")).unwrap();
-    let host = load_hf(&s, &model, PREFIX, linears, &budget()).unwrap();
+    let host = load_hf(&s, &model, PREFIX, linears, table, &budget()).unwrap();
     let (ids, targets) = ids_and_targets(&reference);
     let tables = Qwen35Tables::new(&s, ids.shape()[1], &budget()).unwrap();
     let tables = Qwen35Tables {

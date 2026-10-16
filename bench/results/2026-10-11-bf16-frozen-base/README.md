@@ -89,4 +89,5 @@ f32 masters (`UpdateRule::F32Master`) and f32 moments.
 - **A Metal out-of-memory at these shapes as `CapacityExceeded`** (criterion 8). Nothing here
   reached the device limit, and the typed class is `gp-oom-error-class`.
 - **A bf16 embedding table.** It stays f32 here: the gather and the LM head are not in the four
-  bf16 lanes (Fable). A bf16 table would save another 1.02 GB resident.
+  bf16 lanes (Fable). A bf16 table would save another 1.02 GB resident. Measured since in
+  `2026-10-14-bf16-tied-table`: 1,017,118,720 bytes resident.

@@ -26,7 +26,7 @@ use ojas_core::{
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
     rope_half_split_forward_dims, silu_backward_dims, silu_forward_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
-    Budget, CeChunk, DType, MuonNs5Config, OjasError, Tensor,
+    Budget, CeChunk, CeGrads, DType, MuonNs5Config, OjasError, Tensor,
 };
 use ojas_wgpu::WgpuBackend;
 
@@ -694,7 +694,7 @@ fn cases() -> Vec<Case> {
             Some(nan),
             move |o| linear_ce_dims(&o[0], &o[1], &o[2], chunk).map(drop),
             move |b, o| {
-                b.linear_cross_entropy_mean(&o[0], &o[1], &o[2], None, chunk, true)
+                b.linear_cross_entropy_mean(&o[0], &o[1], &o[2], None, chunk, CeGrads::BOTH)
                     .map(drop)
             },
         ));

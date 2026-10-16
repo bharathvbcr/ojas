@@ -246,7 +246,15 @@ pub fn lora_step<B: Backend>(
 
 pub fn host_params() -> Qwen35Params<Tensor> {
     let model = base_file();
-    load_hf(&spec(), &model, PREFIX, ojas_core::DType::F32, &budget()).unwrap()
+    load_hf(
+        &spec(),
+        &model,
+        PREFIX,
+        ojas_core::DType::F32,
+        ojas_core::DType::F32,
+        &budget(),
+    )
+    .unwrap()
 }
 
 pub fn rel(got: f32, want: f32) -> f64 {

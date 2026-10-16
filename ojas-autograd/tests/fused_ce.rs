@@ -407,21 +407,31 @@ fn unsupported_propagates_with_no_fallback() {
     }
 }
 
-/// A backend that breaks the `LinearCe` contract (no gradients, or a
-/// gradient of the wrong shape) is refused with `Backend`, not unwrapped
-/// or passed on to fail later in backward.
+/// A backend that breaks the `LinearCe` contract (no gradient asked for, a
+/// gradient of the wrong shape, or one that was not asked for: a weight
+/// gradient for a frozen head) is refused with `Backend`, not unwrapped or
+/// passed on to fail later in backward.
 #[test]
 fn a_backend_breaking_the_fused_contract_is_refused() {
     let budget = Budget::new(1 << 20);
-    for mode in [Fused::NoGrads, Fused::WrongShape] {
+    let cases = [
+        (Fused::NoGrads, false),
+        (Fused::NoGrads, true),
+        (Fused::WrongShape, false),
+        (Fused::Unasked, true),
+    ];
+    for (mode, frozen_head) in cases {
         for make in [Resident::host, Resident::new] {
             let mut tape = Tape::new(make().with_fused(mode));
             let x = tape
                 .leaf(Tensor::from_f32(&data(1, N * D), &[N, D], &budget).unwrap())
                 .unwrap();
-            let w = tape
-                .leaf(Tensor::from_f32(&data(2, V * D), &[V, D], &budget).unwrap())
-                .unwrap();
+            let head = Tensor::from_f32(&data(2, V * D), &[V, D], &budget).unwrap();
+            let w = if frozen_head {
+                tape.frozen_leaf(head).unwrap()
+            } else {
+                tape.leaf(head).unwrap()
+            };
             let t = Tensor::from_u32(&targets(None), &[N], &budget).unwrap();
             match tape.linear_cross_entropy(x, w, t, None, CHUNK) {
                 Err(OjasError::Backend { detail, .. }) => {

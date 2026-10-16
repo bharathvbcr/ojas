@@ -347,8 +347,15 @@ fn negative_zero_alpha_is_the_base_model() {
 fn a_bf16_frozen_base_on_cpu_gives_the_f32_bits() {
     let (d, sites) = (data(), fixture_sites(&lora_file(), true));
     let f32_base = host_params();
-    let bf16_base: Qwen35Params<Tensor> =
-        load_hf(&spec(), &base_file(), PREFIX, DType::Bf16, &budget()).unwrap();
+    let bf16_base: Qwen35Params<Tensor> = load_hf(
+        &spec(),
+        &base_file(),
+        PREFIX,
+        DType::Bf16,
+        DType::F32,
+        &budget(),
+    )
+    .unwrap();
     let a = lora_step(cpu(), &f32_base, &sites, &d, &Opts::new());
     let b = lora_step(cpu(), &bf16_base, &sites, &d, &Opts::new());
     assert_eq!(a.loss.to_bits(), b.loss.to_bits());

@@ -116,7 +116,14 @@ fn gpu_real_2b_tape_forward_backward_matches_transformers() {
     let host_budget = Budget::new(24 * GIB);
     let device = {
         let file = SafeTensors::open(&snap.weights_path).unwrap();
-        let host = match load_hf(&spec, &file, &cfg.tower_prefix, DType::F32, &host_budget) {
+        let host = match load_hf(
+            &spec,
+            &file,
+            &cfg.tower_prefix,
+            DType::F32,
+            DType::F32,
+            &host_budget,
+        ) {
             Ok(h) => h,
             Err(e) => refused(r, "load_hf", e),
         };

@@ -199,8 +199,10 @@ Opcodes 1–5 keep their numbers.
 fn sync(&self) -> Result<(), OjasError> { Ok(()) }                                          // T1
 fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError>;         // T2: acc += grad
 fn linear_cross_entropy_mean(&self, input: &Tensor /*[N,d]*/, weight: &Tensor /*[V,d]*/,       // T3
-    targets: &Tensor /*U32 [N]*/, ignore_index: Option<u32>, chunk: CeChunk /*{rows, cols}*/, want_grad: bool)
-    -> Result<LinearCe, OjasError>; // LinearCe { loss, grad_input: Option<Tensor>, grad_weight: Option<Tensor> }
+    targets: &Tensor /*U32 [N]*/, ignore_index: Option<u32>, chunk: CeChunk /*{rows, cols}*/,
+    grads: CeGrads /*{input, weight}: bool each; was one want_grad: bool until ft-2bbced18*/)
+    -> Result<LinearCe, OjasError>; // LinearCe { loss, grad_input: Option<Tensor>, grad_weight: Option<Tensor> },
+                                    // each Some exactly when its CeGrads flag is set
 fn cached_attention_forward(&self, q: &Tensor /*[B,Tq,H,D]*/, k_cache: &Tensor /*[B,Tcap,Hkv,D]*/, // T4
     v_cache: &Tensor, kv_len: usize, window: Option<usize>) -> Result<Tensor, OjasError>;
     // the cache is a ring: position j is slot j % Tcap; query i sits at position p = kv_len-Tq+i

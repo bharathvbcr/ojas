@@ -11,7 +11,14 @@
 //! (grouped-query and windowed attention, a `Bf16` view at an odd element
 //! offset), then checks the edges of the contract:
 //!
-//! - every other op refuses a `Bf16` operand with [`OjasError::Dtype`];
+//! - the tied table (`embedding_forward`'s and `embedding_backward`'s
+//!   `table`, `linear_cross_entropy_mean`'s `weight`) takes the same rule
+//!   on a backend with the table lane, checked the same way, with the fused
+//!   cross-entropy over one vocabulary chunk and over several; a backend
+//!   without the lane must refuse every `Bf16` table with
+//!   [`OjasError::Dtype`] ([`Bf16Report::table_lane`] says which ran);
+//! - every other op, and every other operand of the table ops, refuses a
+//!   `Bf16` operand with [`OjasError::Dtype`];
 //! - a `Bf16` NaN or infinity in a matmul-class operand is
 //!   [`OjasError::NonFinite`], from the op or, on a backend that defers
 //!   faults, from the readback or [`Backend::sync`] after it;
@@ -36,8 +43,13 @@ pub struct Bf16Report {
     pub mixed_calls: usize,
     /// Non-matmul calls refused with [`OjasError::Dtype`].
     pub refusals: usize,
-    /// Matmul-class calls whose `Bf16` NaN or infinity was refused.
+    /// Matmul-class and table calls whose `Bf16` NaN or infinity was
+    /// refused.
     pub non_finite: usize,
+    /// Whether the backend took the tied-table lane. Without it, every
+    /// table call was refused with [`OjasError::Dtype`] and counted in
+    /// `refusals`.
+    pub table_lane: bool,
 }
 
 fn fail(check: &str, detail: impl Into<String>) -> ParityFailure {
@@ -403,8 +415,142 @@ fn sdpa_cases<B: Backend + ?Sized>(
     Ok(())
 }
 
-/// Every op outside the matmul class refuses a `Bf16` operand with
-/// [`OjasError::Dtype`], before it reads anything.
+/// A named call that must be refused.
+type Refusal<'a> = (&'a str, Box<dyn Fn() -> Result<(), OjasError> + 'a>);
+
+/// The tied table at `[vocab, dim]`: `embedding_forward` and
+/// `embedding_backward` over `ids`, and `linear_cross_entropy_mean` of an
+/// `[rows, dim]` input over every target, at a chunk of one vocabulary
+/// block and at one of several, with and without gradients. On a backend
+/// with the lane every mix of the table slot must give the `F32` table's
+/// bits and a `Bf16` NaN or infinity must be refused; on one without it,
+/// every `Bf16` table must be [`OjasError::Dtype`].
+fn table_cases<B: Backend + ?Sized>(
+    b: &B,
+    vocab: usize,
+    dim: usize,
+    rows: usize,
+    seed: u64,
+    report: &mut Bf16Report,
+) -> Result<(), ParityFailure> {
+    const CHECK: &str = "bf16 tied table";
+    let up_u32 = |data: &[u32], shape: &[usize]| {
+        Tensor::from_u32(data, shape, b.budget()).and_then(|t| b.upload(&t))
+    };
+    let picks: Vec<u32> = (0..rows as u32)
+        .map(|i| (i * 7 + 3) % vocab as u32)
+        .collect();
+    let ids = up_u32(&picks, &[rows]).map_err(ojas(CHECK))?;
+    let targets: Vec<u32> = picks.iter().map(|&i| (i + 5) % vocab as u32).collect();
+    let targets = up_u32(&targets, &[rows]).map_err(ojas(CHECK))?;
+    let table = || Slot::matmul(values(vocab * dim, seed, 1.0), &[vocab, dim]);
+    let embed = [table()];
+    let call_embed: Call<'_, B> = &|b, t| Ok(vec![b.embedding_forward(&t[0], &ids)?]);
+    let embed_bwd = [
+        table(),
+        Slot::f32_only(values(rows * dim, seed + 1, 1.0), &[rows, dim]),
+    ];
+    let call_embed_bwd: Call<'_, B> = &|b, t| Ok(vec![b.embedding_backward(&t[0], &ids, &t[1])?]);
+    let lce = [
+        Slot::f32_only(values(rows * dim, seed + 2, 2.0), &[rows, dim]),
+        table(),
+    ];
+    let chunks = [
+        ojas_core::CeChunk {
+            rows: 2,
+            cols: vocab.div_ceil(3),
+        },
+        ojas_core::CeChunk {
+            rows: rows + 1,
+            cols: vocab + 1,
+        },
+    ];
+    let targets = &targets;
+    let lce_call = |chunk: ojas_core::CeChunk, grads: ojas_core::CeGrads| {
+        move |b: &B, t: &[Tensor]| -> Result<Vec<Tensor>, OjasError> {
+            let out = b.linear_cross_entropy_mean(&t[0], &t[1], targets, None, chunk, grads)?;
+            let mut outs = vec![out.loss];
+            outs.extend(out.grad_input);
+            outs.extend(out.grad_weight);
+            Ok(outs)
+        }
+    };
+    let probe = operands(b, &embed, 1, Layout::Packed).map_err(ojas(CHECK))?;
+    match b.embedding_forward(&probe[0], &ids) {
+        Err(OjasError::Dtype { .. }) => {
+            // No table lane: every Bf16 table must be refused the same way.
+            report.refusals += 1;
+            let bwd = operands(b, &embed_bwd, 1, Layout::Packed).map_err(ojas(CHECK))?;
+            let ce = operands(b, &lce, 1 << 1, Layout::Packed).map_err(ojas(CHECK))?;
+            let rest: [Refusal<'_>; 2] = [
+                (
+                    "embedding_backward table",
+                    Box::new(|| b.embedding_backward(&bwd[0], &ids, &bwd[1]).map(|_| ())),
+                ),
+                (
+                    "linear_cross_entropy_mean weight",
+                    Box::new(|| {
+                        b.linear_cross_entropy_mean(
+                            &ce[0],
+                            &ce[1],
+                            targets,
+                            None,
+                            chunks[0],
+                            ojas_core::CeGrads::BOTH,
+                        )
+                        .map(|_| ())
+                    }),
+                ),
+            ];
+            for (name, call) in rest {
+                match call() {
+                    Err(OjasError::Dtype { .. }) => report.refusals += 1,
+                    Err(e) => return Err(fail(CHECK, format!("{name}: expected Dtype, got {e}"))),
+                    Ok(()) => {
+                        return Err(fail(
+                            CHECK,
+                            format!("{name}: accepted a Bf16 table that embedding_forward refused"),
+                        ))
+                    }
+                }
+            }
+            return Ok(());
+        }
+        Err(e) => return Err(fail(CHECK, format!("embedding_forward table: {e}"))),
+        Ok(_) => report.table_lane = true,
+    }
+    let name = format!("embedding_forward [{vocab}, {dim}]");
+    report.mixed_calls += every_mix(b, &name, &embed, call_embed)?;
+    let name = format!("embedding_backward [{vocab}, {dim}]");
+    report.mixed_calls += every_mix(b, &name, &embed_bwd, call_embed_bwd)?;
+    for chunk in chunks {
+        for grads in ojas_core::CeGrads::EACH {
+            let call = lce_call(chunk, grads);
+            let name = format!(
+                "linear_cross_entropy_mean [{rows}, {dim}] x [{vocab}, {dim}] {chunk:?} \
+                 grad {grads:?}"
+            );
+            report.mixed_calls += every_mix(b, &name, &lce, &call)?;
+        }
+    }
+    refuses_non_finite(b, "embedding_forward", &embed, 0, f32::NAN, call_embed)?;
+    refuses_non_finite(
+        b,
+        "embedding_backward",
+        &embed_bwd,
+        0,
+        f32::INFINITY,
+        call_embed_bwd,
+    )?;
+    let call = lce_call(chunks[0], ojas_core::CeGrads::BOTH);
+    refuses_non_finite(b, "linear_cross_entropy_mean", &lce, 1, f32::NAN, &call)?;
+    report.non_finite += 3;
+    Ok(())
+}
+
+/// Every op outside the matmul class and the table lane refuses a `Bf16`
+/// operand with [`OjasError::Dtype`], before it reads anything; so do the
+/// table ops' other operands.
 fn other_ops_refuse<B: Backend + ?Sized>(
     b: &B,
     report: &mut Bf16Report,
@@ -420,6 +566,8 @@ fn other_ops_refuse<B: Backend + ?Sized>(
     let ids = Tensor::from_u32(&[0, 3, 1, 2], &[4], b.budget())
         .and_then(|t| b.upload(&t))
         .map_err(ojas(CHECK))?;
+    let table = up_f32(&values(4 * 8, 16, 1.0), &[4, 8]).map_err(ojas(CHECK))?;
+    let chunk = ojas_core::CeChunk { rows: 2, cols: 2 };
     let xb = up_bf16(&x, &[4, 8]).map_err(ojas(CHECK))?;
     let xf = up_f32(&x, &[4, 8]).map_err(ojas(CHECK))?;
     let wb = up_bf16(&w, &[8]).map_err(ojas(CHECK))?;
@@ -429,11 +577,24 @@ fn other_ops_refuse<B: Backend + ?Sized>(
     let cos = up_f32(&values(16, 14, 1.0), &[4, 4]).map_err(ojas(CHECK))?;
     let sin = up_f32(&values(16, 15, 1.0), &[4, 4]).map_err(ojas(CHECK))?;
     let lambda = up_f32(&[0.5], &[]).map_err(ojas(CHECK))?;
-    type Refusal<'a> = (&'a str, Box<dyn Fn() -> Result<(), OjasError> + 'a>);
     let calls: Vec<Refusal<'_>> = vec![
         (
-            "embedding_forward table",
-            Box::new(|| b.embedding_forward(&xb, &ids).map(|_| ())),
+            "embedding_backward grad_output",
+            Box::new(|| b.embedding_backward(&table, &ids, &xb).map(|_| ())),
+        ),
+        (
+            "linear_cross_entropy_mean input",
+            Box::new(|| {
+                b.linear_cross_entropy_mean(
+                    &xb,
+                    &table,
+                    &ids,
+                    None,
+                    chunk,
+                    ojas_core::CeGrads::BOTH,
+                )
+                .map(|_| ())
+            }),
         ),
         (
             "rms_norm_forward input",
@@ -578,6 +739,7 @@ pub fn bf16_operand_contract<B: Backend + ?Sized>(b: &B) -> Result<Bf16Report, P
     linear_cases(b, &[64], 96, 80, 200, &mut report)?;
     sdpa_cases(b, 1, 2, 1, 7, 64, None, 300, &mut report)?;
     sdpa_cases(b, 2, 2, 2, 9, 64, Some(3), 400, &mut report)?;
+    table_cases(b, 11, 8, 5, 500, &mut report)?;
     other_ops_refuse(b, &mut report)?;
     b.sync().map_err(ojas("bf16 operands"))?;
     Ok(report)

@@ -12,7 +12,7 @@
 //! sees only what the op itself charges. The backend is single-threaded
 //! (`CpuBackend::new`), so the per-task terms are one task's.
 
-use ojas_core::{Backend, Budget, CeChunk, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{Backend, Budget, CeChunk, CeGrads, OjasError, Tensor, RMS_NORM_EPS};
 use ojas_cpu::CpuBackend;
 
 const F32: u64 = 4;
@@ -370,7 +370,7 @@ fn fused_cross_entropy_charges_its_gradients_and_tile_scratch_only() {
         "linear_cross_entropy_mean",
         (544 + 284) * F32,
         545 * F32,
-        |cpu| cpu.linear_cross_entropy_mean(&x, &w, &t, None, chunk, true),
+        |cpu| cpu.linear_cross_entropy_mean(&x, &w, &t, None, chunk, CeGrads::BOTH),
     );
 }
 

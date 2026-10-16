@@ -106,7 +106,38 @@ fn a_bf16_frozen_base_gives_the_f32_bits_on_metal() {
     };
     let up = |t: &Tensor| m.upload(t).unwrap();
     let full = run(m.clone(), up, ActivationCheckpoint::Blocks);
-    let half = run_with(m.clone(), up, ActivationCheckpoint::Blocks, DType::Bf16);
+    let half = run_with(
+        m.clone(),
+        up,
+        ActivationCheckpoint::Blocks,
+        DType::Bf16,
+        DType::F32,
+    );
+    assert_eq!(half.loss.to_bits(), full.loss.to_bits());
+    assert_eq!(bits(&half.grads), bits(&full.grads));
+}
+
+/// The tied table resident as `Bf16` too: the gather widens each picked row
+/// and the fused head each vocabulary tile on the device, so the run still
+/// gives the f32 load's loss and gradient bits, the table's own included.
+#[test]
+fn a_bf16_tied_table_gives_the_f32_bits_on_metal() {
+    let Some(m) = metal() else { return };
+    let bits = |p: &Qwen35Params<Tensor>| -> Vec<Vec<u32>> {
+        host(p)
+            .into_iter()
+            .map(|v| v.iter().map(|x| x.to_bits()).collect())
+            .collect()
+    };
+    let up = |t: &Tensor| m.upload(t).unwrap();
+    let full = run(m.clone(), up, ActivationCheckpoint::Blocks);
+    let half = run_with(
+        m.clone(),
+        up,
+        ActivationCheckpoint::Blocks,
+        DType::Bf16,
+        DType::Bf16,
+    );
     assert_eq!(half.loss.to_bits(), full.loss.to_bits());
     assert_eq!(bits(&half.grads), bits(&full.grads));
 }

@@ -28,8 +28,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, CeChunk, DType, MuonNs5Config, Ns5Precision, Numerics, OjasError,
-    Tensor, RMS_NORM_EPS,
+    AdamWConfig, Backend, Budget, CeChunk, CeGrads, DType, MuonNs5Config, Ns5Precision, Numerics,
+    OjasError, Tensor, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 
@@ -533,9 +533,8 @@ fn linear_ce_case(b: &Budget, name: &'static str, rows: usize, chunk: CeChunk) -
     let x = c.f32("x", &[rows, D], 1.0, 0.0);
     let w = c.f32("w", &[V, D], 0.035, 0.0);
     let targets = c.ids("targets", &[rows], V);
-    let run = move |cpu: &CpuBackend, t: &mut [Tensor], want_grad: bool| {
-        let ce =
-            cpu.linear_cross_entropy_mean(&t[x], &t[w], &t[targets], None, chunk, want_grad)?;
+    let run = move |cpu: &CpuBackend, t: &mut [Tensor], grads: CeGrads| {
+        let ce = cpu.linear_cross_entropy_mean(&t[x], &t[w], &t[targets], None, chunk, grads)?;
         let mut outs = vec![out("loss", ce.loss)];
         outs.extend(ce.grad_input.map(|g| out("gx", g)));
         outs.extend(ce.grad_weight.map(|g| out("gw", g)));
@@ -545,8 +544,8 @@ fn linear_ce_case(b: &Budget, name: &'static str, rows: usize, chunk: CeChunk) -
         name,
         format!("[{rows},{D}]x[{V},{D}] chunk {}x{}", chunk.rows, chunk.cols),
         vec![
-            dir("fwd", 3, move |cpu, t| run(cpu, t, false)),
-            dir("bwd", 3, move |cpu, t| run(cpu, t, true)),
+            dir("fwd", 3, move |cpu, t| run(cpu, t, CeGrads::NONE)),
+            dir("bwd", 3, move |cpu, t| run(cpu, t, CeGrads::BOTH)),
         ],
     )
 }

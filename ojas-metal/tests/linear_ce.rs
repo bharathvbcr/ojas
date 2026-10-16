@@ -19,7 +19,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, CeChunk, LinearCe, OjasError, Tensor};
+use ojas_core::{Backend, Budget, CeChunk, CeGrads, LinearCe, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const OP: &str = "linear_cross_entropy_mean";
@@ -145,7 +145,7 @@ fn fused(m: &MetalBackend, p: &Problem, chunk: CeChunk) -> Grads {
             &up(m, &p.t),
             p.ignore,
             chunk,
-            true,
+            CeGrads::BOTH,
         ),
     );
     let LinearCe {
@@ -154,7 +154,7 @@ fn fused(m: &MetalBackend, p: &Problem, chunk: CeChunk) -> Grads {
         grad_weight,
     } = out;
     let (Some(gx), Some(gw)) = (grad_input, grad_weight) else {
-        panic!("want_grad set but a gradient is missing");
+        panic!("both gradients asked for but one is missing");
     };
     assert_eq!(gx.shape(), p.x.shape(), "grad_input shape");
     assert_eq!(gw.shape(), p.w.shape(), "grad_weight shape");
@@ -284,7 +284,7 @@ fn without_gradients_returns_only_the_loss() {
             &up(&m, &p.t),
             p.ignore,
             chunk(8, 64),
-            false,
+            CeGrads::NONE,
         ),
     );
     assert!(out.grad_input.is_none() && out.grad_weight.is_none());
@@ -293,6 +293,72 @@ fn without_gradients_returns_only_the_loss() {
         (loss - want.loss).abs() <= 1e-6 * want.loss.abs(),
         "{loss} vs {}",
         want.loss
+    );
+}
+
+/// Each combination of gradients gives, in its slots, the bits the call
+/// asking for both gives, and charges exactly the outputs and GEMM
+/// destinations it asks for: a frozen tied head (input only) is charged no
+/// `[V, d]` gradient and no `[cols, d]` tile for one.
+#[test]
+fn each_gradient_alone_has_the_bits_of_both_and_charges_only_itself() {
+    let m = metal();
+    let (n, d, v) = (64usize, 32usize, 4096usize);
+    let (rows, cols) = (16usize, 512usize);
+    let p = problem(n, d, v, 7, true);
+    let (x, w, t) = (up(&m, &p.x), up(&m, &p.w), up(&m, &p.t));
+    let bits = |t: &Tensor| down(t).iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    let both = ok(
+        "both",
+        m.linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk(rows, cols), CeGrads::BOTH),
+    );
+    let (loss, gx, gw) = (
+        bits(&both.loss),
+        bits(both.grad_input.as_ref().expect("grad_input")),
+        bits(both.grad_weight.as_ref().expect("grad_weight")),
+    );
+    drop(both);
+    let mut charged = Vec::new();
+    for grads in CeGrads::EACH {
+        ok("sync", m.sync());
+        let live = ok("live", m.budget().live_bytes());
+        m.budget().reset_peak();
+        let out = ok(
+            "part",
+            m.linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk(rows, cols), grads),
+        );
+        charged.push(m.budget().peak_bytes() - live);
+        assert_eq!(bits(&out.loss), loss, "{grads:?}: loss");
+        assert_eq!(
+            out.grad_input.as_ref().map(bits),
+            grads.input.then(|| gx.clone()),
+            "{grads:?}"
+        );
+        assert_eq!(
+            out.grad_weight.as_ref().map(bits),
+            grads.weight.then(|| gw.clone()),
+            "{grads:?}"
+        );
+    }
+    let [none, input, weight, both] = charged[..] else {
+        unreachable!()
+    };
+    let f = |elems: usize| (elems * 4) as u64;
+    assert_eq!(
+        input - none,
+        f(n * d + rows * d),
+        "input: grad_input and its tile"
+    );
+    assert_eq!(
+        weight - none,
+        f(v * d + cols * d),
+        "weight: grad_weight and its tile"
+    );
+    assert_eq!(both - none, f(n * d + rows * d + v * d + cols * d), "both");
+    assert!(
+        input < f(v * d),
+        "a frozen head's call is charged {input} B, a head gradient is {}",
+        f(v * d)
     );
 }
 
@@ -311,7 +377,7 @@ fn runs_under_a_budget_smaller_than_the_logits() {
         "{r:?}"
     );
     // A chunk as large as the problem is charged as such and refused too.
-    let r = small.linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk(n, v), true);
+    let r = small.linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk(n, v), CeGrads::BOTH);
     assert!(
         matches!(r, Err(OjasError::CapacityExceeded { .. })),
         "{r:?}"
@@ -319,7 +385,7 @@ fn runs_under_a_budget_smaller_than_the_logits() {
     let live = ok("live", small.budget().live_bytes());
     let out = ok(
         "fused",
-        small.linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk(64, 512), true),
+        small.linear_cross_entropy_mean(&x, &w, &t, p.ignore, chunk(64, 512), CeGrads::BOTH),
     );
     let got = Grads {
         loss: scalar(&out.loss),
@@ -372,7 +438,7 @@ fn refusals() {
     let (x, w, t) = (up(&m, &p.x), up(&m, &p.w), up(&m, &p.t));
     let c = chunk(4, 8);
     let call = |x: &Tensor, w: &Tensor, t: &Tensor, ig: Option<u32>, c: CeChunk| {
-        m.linear_cross_entropy_mean(x, w, t, ig, c, true)
+        m.linear_cross_entropy_mean(x, w, t, ig, c, CeGrads::BOTH)
     };
     let nonfinite = |r: Result<LinearCe, OjasError>, what: &str| {
         assert!(

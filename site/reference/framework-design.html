@@ -388,8 +388,10 @@
 fn sync(&amp;self) -&gt; Result&lt;(), OjasError&gt; { Ok(()) }                                          // T1
 fn accumulate_grad(&amp;self, acc: &amp;mut Tensor, grad: &amp;Tensor) -&gt; Result&lt;(), OjasError&gt;;         // T2: acc += grad
 fn linear_cross_entropy_mean(&amp;self, input: &amp;Tensor /*[N,d]*/, weight: &amp;Tensor /*[V,d]*/,       // T3
-    targets: &amp;Tensor /*U32 [N]*/, ignore_index: Option&lt;u32&gt;, chunk: CeChunk /*{rows, cols}*/, want_grad: bool)
-    -&gt; Result&lt;LinearCe, OjasError&gt;; // LinearCe { loss, grad_input: Option&lt;Tensor&gt;, grad_weight: Option&lt;Tensor&gt; }
+    targets: &amp;Tensor /*U32 [N]*/, ignore_index: Option&lt;u32&gt;, chunk: CeChunk /*{rows, cols}*/,
+    grads: CeGrads /*{input, weight}: bool each; was one want_grad: bool until ft-2bbced18*/)
+    -&gt; Result&lt;LinearCe, OjasError&gt;; // LinearCe { loss, grad_input: Option&lt;Tensor&gt;, grad_weight: Option&lt;Tensor&gt; },
+                                    // each Some exactly when its CeGrads flag is set
 fn cached_attention_forward(&amp;self, q: &amp;Tensor /*[B,Tq,H,D]*/, k_cache: &amp;Tensor /*[B,Tcap,Hkv,D]*/, // T4
     v_cache: &amp;Tensor, kv_len: usize, window: Option&lt;usize&gt;) -&gt; Result&lt;Tensor, OjasError&gt;;
     // the cache is a ring: position j is slot j % Tcap; query i sits at position p = kv_len-Tq+i

@@ -133,6 +133,7 @@ const KERNELS: &[&str] = &[
     "ojas_permute",
     "ojas_round_bf16",
     "ojas_bf16_to_f32",
+    "ojas_check_finite_bf16",
     "ojas_f32_to_bf16",
     "ojas_silu_fwd",
     "ojas_silu_bwd",
@@ -156,6 +157,7 @@ const KERNELS: &[&str] = &[
     "ojas_vres_lambda",
     "ojas_rope",
     "ojas_embed_fwd",
+    "ojas_embed_fwd_bf16",
     "ojas_argmax_rows",
     "ojas_topk_rows",
     "ojas_embed_gather",
@@ -245,6 +247,33 @@ fn spawn_with(
 struct V {
     buf: GpuBuffer,
     off: usize,
+    n: usize,
+}
+
+/// The weight of a linear cross-entropy: an `F32` view, or a bf16 window
+/// widened one tile at a time.
+enum LceWeight {
+    F32(V),
+    Half(Half),
+}
+
+impl LceWeight {
+    fn n(&self) -> usize {
+        match self {
+            LceWeight::F32(v) => v.n,
+            LceWeight::Half(h) => h.n,
+        }
+    }
+}
+
+/// A contiguous bf16 window: `n` 2-byte elements from element `first` of a
+/// binding at byte `base`, the 4-byte boundary at or below the window's
+/// start (the kernels' bind alignment).
+#[derive(Clone)]
+struct Half {
+    buf: GpuBuffer,
+    base: usize,
+    first: usize,
     n: usize,
 }
 
@@ -732,6 +761,36 @@ impl Worker {
         })
     }
 
+    /// A bf16 window of `a` (`a.n` 2-byte elements from byte `a.off`).
+    fn half_view(&self, a: Arg) -> Res<Half> {
+        let buf = self
+            .bufs
+            .get(&a.id)
+            .cloned()
+            .ok_or_else(|| metal_err(format!("unknown device buffer {}", a.id)))?;
+        let end =
+            a.n.checked_mul(2)
+                .and_then(|b| b.checked_add(a.off))
+                .ok_or_else(|| metal_err("device window overflows"))?;
+        if !a.off.is_multiple_of(2) || end > buf.nbytes() {
+            return Err(metal_err(format!(
+                "bf16 window [{}, {end}) does not fit device buffer {} of {} bytes",
+                a.off,
+                a.id,
+                buf.nbytes()
+            )));
+        }
+        // Bound at the 4-byte boundary below the window, with the odd
+        // element, if any, as the kernels' first index.
+        let base = a.off & !3;
+        Ok(Half {
+            buf,
+            base,
+            first: (a.off - base) / 2,
+            n: a.n,
+        })
+    }
+
     /// A device allocation. See [`Self::retrying`].
     fn alloc(&self, bytes: usize) -> Res<GpuBuffer> {
         let buf = self.retrying(bytes, || self.try_alloc(bytes))?;
@@ -960,6 +1019,39 @@ impl Worker {
         })
     }
 
+    /// [`Self::check`] of a bf16 window, on its bits.
+    fn check_half(&self, st: &St, h: &Half, word: u32) -> Res<()> {
+        let (n, first) = (u32_of(h.n)?, u32_of(h.first)?);
+        self.k1(
+            "ojas_check_finite_bf16",
+            h.n.div_ceil(CHECK_PER_THREAD),
+            |b| {
+                set_gpu_buf_offset(b, &h.buf, h.base, 0);
+                bind_st(b, st, 1);
+                set_u32(b, n, 2);
+                set_u32(b, word, 3);
+                set_u32(b, first, 4);
+            },
+        )
+    }
+
+    /// Elements `start..start + dst.n` of `h` widened exactly into `dst`.
+    fn widen_into(&self, h: &Half, start: usize, dst: &V) -> Res<()> {
+        if start.checked_add(dst.n).is_none_or(|end| end > h.n) {
+            return Err(metal_err(format!(
+                "bf16 rows {start}..+{} are outside a window of {}",
+                dst.n, h.n
+            )));
+        }
+        let (n, first) = (u32_of(dst.n)?, u32_of(h.first + start)?);
+        self.k1("ojas_bf16_to_f32", dst.n, |b| {
+            set_gpu_buf_offset(b, &h.buf, h.base, 0);
+            bind(b, dst, 1);
+            set_u32(b, n, 2);
+            set_u32(b, first, 3);
+        })
+    }
+
     fn copy_if_clean(&self, st: &St, src: &V, dst: &V) -> Res<()> {
         let n = u32_of(dst.n)?;
         self.k1("ojas_copy_if_clean", dst.n, |b| {
@@ -1097,18 +1189,20 @@ impl Worker {
             } => self.permute(x, rank, &oshape, &istride),
             Cmd::Embed {
                 table,
+                half,
                 ids,
                 vocab,
                 dim,
-            } => self.embed(table, ids, vocab, dim),
+            } => self.embed(table, half, ids, vocab, dim),
             Cmd::Argmax { x, rows, cols } => self.argmax(x, rows, cols),
             Cmd::Topk { x, rows, cols, k } => self.topk(x, rows, cols, k),
             Cmd::EmbedBwd {
                 table,
+                half,
                 grad,
                 rows,
                 dim,
-            } => self.embed_bwd(table, grad, &rows, dim),
+            } => self.embed_bwd(table, half, grad, &rows, dim),
             Cmd::Linear {
                 x,
                 w,
@@ -1400,13 +1494,31 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    fn embed(&mut self, table: Arg, ids: Arg, vocab: u32, dim: u32) -> Res<Reply> {
+    /// The gather; a `half` (bf16) table is scanned on its bits and each
+    /// picked value widened in the gather (`ojas_embed_fwd_bf16`).
+    fn embed(&mut self, table: Arg, half: bool, ids: Arg, vocab: u32, dim: u32) -> Res<Reply> {
         const OP: &str = "embedding_forward";
-        let t = self.view(table)?;
         let ids = self.view(ids)?;
         let n = u32_of(ids.n)?;
         let out = self.fresh(ids.n * dim as usize)?;
         let st = self.status(OP)?;
+        if half {
+            let t = self.half_view(table)?;
+            let first = u32_of(t.first)?;
+            self.check_half(&st, &t, ST_IN)?;
+            self.k2("ojas_embed_fwd_bf16", dim as usize, ids.n, |b| {
+                set_gpu_buf_offset(b, &t.buf, t.base, 0);
+                bind(b, &ids, 1);
+                bind(b, &out, 2);
+                set_u32(b, n, 3);
+                set_u32(b, dim, 4);
+                set_u32(b, vocab, 5);
+                set_u32(b, first, 6);
+            })?;
+            self.check(&st, &out, ST_OUT)?;
+            return Ok(self.keep(vec![out]));
+        }
+        let t = self.view(table)?;
         self.check(&st, &t, ST_IN)?;
         self.k2("ojas_embed_fwd", dim as usize, ids.n, |b| {
             bind(b, &t, 0);
@@ -1469,9 +1581,16 @@ impl Worker {
     /// grouping of the token ids (`rows`, in fresh buffers written without a
     /// wait): row `v` sums its tokens' gradient rows in ascending token
     /// order, as the CPU reference adds them; a row with no token is 0.
-    fn embed_bwd(&mut self, table: Arg, grad: Arg, rows: &EmbedRows, dim: u32) -> Res<Reply> {
+    /// The table is only scanned (a `half` one on its bits).
+    fn embed_bwd(
+        &mut self,
+        table: Arg,
+        half: bool,
+        grad: Arg,
+        rows: &EmbedRows,
+        dim: u32,
+    ) -> Res<Reply> {
         const OP: &str = "embedding_backward";
-        let t = self.view(table)?;
         let g = self.view(grad)?;
         let v = rows.counts.len();
         let vocab = u32_of(v)?;
@@ -1480,7 +1599,11 @@ impl Worker {
         let pos = self.fresh_from(&rows.pos)?;
         let out = self.fresh(v * dim as usize)?;
         let st = self.status(OP)?;
-        self.check(&st, &t, ST_IN)?;
+        if half {
+            self.check_half(&st, &self.half_view(table)?, ST_IN)?;
+        } else {
+            self.check(&st, &self.view(table)?, ST_IN)?;
+        }
         self.check(&st, &g, ST_IN)?;
         self.k2("ojas_embed_gather", dim as usize, v, |b| {
             bind(b, &g, 0);
@@ -2392,35 +2515,9 @@ impl Worker {
     /// widened exactly into a new f32 buffer. No status slot and no finite
     /// scan: a NaN or infinity is carried to the op that reads the copy.
     fn widen_bf16(&mut self, x: Arg) -> Res<Reply> {
-        let buf = self
-            .bufs
-            .get(&x.id)
-            .cloned()
-            .ok_or_else(|| metal_err(format!("unknown device buffer {}", x.id)))?;
-        let end =
-            x.n.checked_mul(2)
-                .and_then(|b| b.checked_add(x.off))
-                .ok_or_else(|| metal_err("device window overflows"))?;
-        if !x.off.is_multiple_of(2) || end > buf.nbytes() {
-            return Err(metal_err(format!(
-                "bf16 window [{}, {end}) does not fit device buffer {} of {} bytes",
-                x.off,
-                x.id,
-                buf.nbytes()
-            )));
-        }
-        let n = u32_of(x.n)?;
-        // Bound at the 4-byte boundary below the window, with the odd
-        // element, if any, as the kernel's first index.
-        let base = x.off & !3;
-        let first = u32_of((x.off - base) / 2)?;
-        let y = self.fresh(x.n)?;
-        self.k1("ojas_bf16_to_f32", x.n, |b| {
-            set_gpu_buf_offset(b, &buf, base, 0);
-            bind(b, &y, 1);
-            set_u32(b, n, 2);
-            set_u32(b, first, 3);
-        })?;
+        let h = self.half_view(x)?;
+        let y = self.fresh(h.n)?;
+        self.widen_into(&h, 0, &y)?;
         Ok(self.keep(vec![y]))
     }
 
@@ -2799,8 +2896,13 @@ impl Worker {
     /// With gradients, pass 2 makes each tile again, turns it into the
     /// gradient of the logits in place (with one vocabulary tile, the tile
     /// pass 1 left is reused rather than remade), and adds `G @ W_tile` into
-    /// grad_input's rows and `G^T @ x_tile` into grad_weight's rows. The
-    /// targets were range-checked, and `valid` counted, on the host.
+    /// grad_input's rows and `G^T @ x_tile` into grad_weight's rows, each
+    /// only for a gradient `g.grads` asks for (a frozen head gets neither
+    /// the `[V, d]` output nor its GEMMs). The
+    /// targets were range-checked, and `valid` counted, on the host. A
+    /// `geom.w_half` (bf16) weight is scanned on its bits, and each `[ct, d]`
+    /// weight tile is widened into the stage buffer when it is used, so no
+    /// f32 copy of the whole table exists.
     fn linear_ce(
         &mut self,
         x: Arg,
@@ -2811,9 +2913,14 @@ impl Worker {
         valid: u32,
     ) -> Res<Reply> {
         const OP: &str = "linear_cross_entropy_mean";
-        let (xv, wv, tv) = (self.view(x)?, self.view(w)?, self.view(t)?);
+        let (xv, tv) = (self.view(x)?, self.view(t)?);
+        let wv = if g.w_half {
+            LceWeight::Half(self.half_view(w)?)
+        } else {
+            LceWeight::F32(self.view(w)?)
+        };
         let (n, d, v) = (g.n, g.d, g.v);
-        if xv.n != n * d || wv.n != v * d || tv.n != n {
+        if xv.n != n * d || wv.n() != v * d || tv.n != n {
             return Err(metal_err(format!(
                 "{OP}: windows do not match the dimensions"
             )));
@@ -2821,20 +2928,14 @@ impl Worker {
         let vocab = u32_of(v)?;
         let (has_ignore, ignore_id) = (u32::from(ignore.is_some()), ignore.unwrap_or(0));
         let loss = self.fresh(1)?;
-        let grads = if g.grad {
-            Some((self.fresh(n * d)?, self.fresh(v * d)?))
-        } else {
-            None
-        };
+        let gx = g.grads.input.then(|| self.fresh(n * d)).transpose()?;
+        let gw = g.grads.weight.then(|| self.fresh(v * d)).transpose()?;
         let tile = self.fresh(g.rt * g.ct)?;
         let stats = self.fresh(3 * g.rt)?;
         let loss_rows = self.fresh(n)?;
         let sum = self.fresh(1)?;
-        let temps = if g.grad {
-            Some((self.fresh(g.rt * d)?, self.fresh(g.ct * d)?))
-        } else {
-            None
-        };
+        let gx_tmp = g.grads.input.then(|| self.fresh(g.rt * d)).transpose()?;
+        let gw_tmp = g.grads.weight.then(|| self.fresh(g.ct * d)).transpose()?;
         let stage_x = if g.stage_x {
             Some(self.fresh(g.rt * d)?)
         } else {
@@ -2847,18 +2948,38 @@ impl Worker {
         };
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
-        self.check(&st, &wv, ST_IN)?;
+        match &wv {
+            LceWeight::F32(wv) => self.check(&st, wv, ST_IN)?,
+            LceWeight::Half(wh) => self.check_half(&st, wh, ST_IN)?,
+        }
         let one_col_tile = g.ct >= v;
         for row0 in (0..n).step_by(g.rt) {
             let rr = g.rt.min(n - row0);
             let rr_u = u32_of(rr)?;
             let x_t = self.rows_operand(&xv, row0, rr, d, stage_x.as_ref())?;
             let t_rows = sub(&tv, row0, rr);
-            for pass in 0..if g.grad { 2 } else { 1 } {
+            for pass in 0..if g.grads.any() { 2 } else { 1 } {
                 for (ci, col0) in (0..v).step_by(g.ct).enumerate() {
                     let cc = g.ct.min(v - col0);
                     let (cc_u, col0_u) = (u32_of(cc)?, u32_of(col0)?);
-                    let w_t = self.rows_operand(&wv, col0, cc, d, stage_w.as_ref())?;
+                    let w_t = match &wv {
+                        LceWeight::F32(wv) => {
+                            self.rows_operand(wv, col0, cc, d, stage_w.as_ref())?
+                        }
+                        // Nothing else writes the stage, so with one
+                        // vocabulary tile the first widening serves every
+                        // row tile and both passes.
+                        LceWeight::Half(wh) => {
+                            let stage = stage_w
+                                .as_ref()
+                                .ok_or_else(|| metal_err("unstaged bf16 weight tile"))?;
+                            let dst = sub(stage, 0, cc * d);
+                            if !one_col_tile || (pass == 0 && row0 == 0) {
+                                self.widen_into(wh, col0 * d, &dst)?;
+                            }
+                            self.tt(&dst, &[cc, d])?
+                        }
+                    };
                     let tile_t = self.tt(&tile, &[rr, cc])?;
                     // With one vocabulary tile, pass 1 left this row tile's
                     // logits in `tile` (the stats kernel only reads it), so
@@ -2894,19 +3015,20 @@ impl Worker {
                         set_u32(b, ignore_id, 9);
                         set_u32(b, valid, 10);
                     })?;
-                    let (Some((gx, gw)), Some((gx_tmp, gw_tmp))) = (&grads, &temps) else {
-                        return Err(metal_err(format!("{OP}: gradient buffers missing")));
-                    };
-                    let gx_rows = sub(gx_tmp, 0, rr * d);
-                    let gw_rows = sub(gw_tmp, 0, cc * d);
-                    GemmOperands::ExactF32
-                        .nn(&tile_t, &w_t, &self.tt(&gx_rows, &[rr, d])?)
-                        .map_err(metal_err)?;
-                    self.add_into(&gx_rows, &sub(gx, row0 * d, rr * d), ci == 0)?;
-                    GemmOperands::ExactF32
-                        .tn(&tile_t, &x_t, &self.tt(&gw_rows, &[cc, d])?)
-                        .map_err(metal_err)?;
-                    self.add_into(&gw_rows, &sub(gw, col0 * d, cc * d), row0 == 0)?;
+                    if let (Some(gx), Some(gx_tmp)) = (&gx, &gx_tmp) {
+                        let gx_rows = sub(gx_tmp, 0, rr * d);
+                        GemmOperands::ExactF32
+                            .nn(&tile_t, &w_t, &self.tt(&gx_rows, &[rr, d])?)
+                            .map_err(metal_err)?;
+                        self.add_into(&gx_rows, &sub(gx, row0 * d, rr * d), ci == 0)?;
+                    }
+                    if let (Some(gw), Some(gw_tmp)) = (&gw, &gw_tmp) {
+                        let gw_rows = sub(gw_tmp, 0, cc * d);
+                        GemmOperands::ExactF32
+                            .tn(&tile_t, &x_t, &self.tt(&gw_rows, &[cc, d])?)
+                            .map_err(metal_err)?;
+                        self.add_into(&gw_rows, &sub(gw, col0 * d, cc * d), row0 == 0)?;
+                    }
                 }
                 if pass == 0 {
                     let loss_out = sub(&loss_rows, row0, rr);
@@ -2929,12 +3051,12 @@ impl Worker {
             bind(b, &loss, 2);
         })?;
         self.check(&st, &loss, ST_OUT)?;
+        // The order `MetalBackend::linear_cross_entropy_mean` unpacks: the
+        // loss, then each gradient asked for, the input's first.
         let mut outs = vec![loss];
-        if let Some((gx, gw)) = grads {
-            self.check(&st, &gx, ST_OUT)?;
-            self.check(&st, &gw, ST_OUT)?;
-            outs.push(gx);
-            outs.push(gw);
+        for grad in [gx, gw].into_iter().flatten() {
+            self.check(&st, &grad, ST_OUT)?;
+            outs.push(grad);
         }
         Ok(self.keep(outs))
     }

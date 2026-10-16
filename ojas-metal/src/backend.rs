@@ -83,11 +83,11 @@ use ojas_core::{
     rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
     sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
     topk_rows_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, Conv1dDims, DType, DeviceBuffer, GateDims,
-    GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
-    Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad,
-    Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad,
-    MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
+    AdamWConfig, Backend, BackendId, Budget, CeChunk, CeGrads, Conv1dDims, DType, DeviceBuffer,
+    GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe,
+    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
+    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
 };
 
 use crate::link::{
@@ -1164,7 +1164,8 @@ impl Backend for MetalBackend {
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "embedding_forward";
         let dims = embedding_forward_dims(table, token_ids)?;
-        let t = self.f32(OP, table)?;
+        let half = table.dtype() == DType::Bf16;
+        let t = self.arg(OP, table, table.dtype())?;
         self.arg(OP, token_ids, DType::U32)?;
         let (vocab, dim) = (u32_dim(OP, dims.vocab)?, u32_dim(OP, dims.dim)?);
         u32_dim(OP, product(OP, &dims.out_shape)?)?;
@@ -1175,6 +1176,7 @@ impl Backend for MetalBackend {
             0,
             Cmd::Embed {
                 table: t,
+                half,
                 ids,
                 vocab,
                 dim,
@@ -1283,7 +1285,8 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "embedding_backward";
         let dims = embedding_backward_dims(table, token_ids, grad_output)?;
-        let t = self.f32(OP, table)?;
+        let half = table.dtype() == DType::Bf16;
+        let t = self.arg(OP, table, table.dtype())?;
         self.arg(OP, token_ids, DType::U32)?;
         let g = self.f32(OP, grad_output)?;
         let (vocab, dim) = (u32_dim(OP, dims.vocab)?, u32_dim(OP, dims.dim)?);
@@ -1300,6 +1303,7 @@ impl Backend for MetalBackend {
             scratch,
             Cmd::EmbedBwd {
                 table: t,
+                half,
                 grad: g,
                 rows,
                 dim,
@@ -1921,7 +1925,9 @@ impl Backend for MetalBackend {
     /// The matmul-class ops widen each `Bf16` operand on the device into
     /// an `F32` copy charged for the call, then run their `f32` kernels: a
     /// resident `Bf16` weight costs 2 bytes per element, and its widened
-    /// copy exists only while one op runs.
+    /// copy exists only while one op runs. The tied table is read in place:
+    /// the gather widens each picked value, and the fused head one weight
+    /// tile at a time into its staged tile.
     fn bf16_operands(&self) -> bool {
         true
     }
@@ -2087,7 +2093,9 @@ impl Backend for MetalBackend {
     /// this crate's kernels turn tiles into the loss and gradients (see
     /// `Worker::linear_ce`). The budget is charged for the outputs and for
     /// [`LceGeom::scratch`], whose only logits buffer is one tile, so a call
-    /// runs under a budget far below `N * V * 4` bytes.
+    /// runs under a budget far below `N * V * 4` bytes. A `Bf16` weight stays
+    /// at 2 bytes: each `[cols, d]` tile is widened on the device into the
+    /// one staged tile that scratch charges, never the whole table.
     ///
     /// An out-of-range target is [`OjasError::OutOfRange`] and an
     /// all-ignored batch [`OjasError::NonFinite`] at the call, from the
@@ -2100,12 +2108,13 @@ impl Backend for MetalBackend {
         targets: &Tensor,
         ignore_index: Option<u32>,
         chunk: CeChunk,
-        want_grad: bool,
+        grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         const OP: &str = "linear_cross_entropy_mean";
         let dims = linear_ce_dims(input, weight, targets, chunk)?;
         let x = self.f32(OP, input)?;
-        let w = self.f32(OP, weight)?;
+        let w_half = weight.dtype() == DType::Bf16;
+        let w = self.arg(OP, weight, weight.dtype())?;
         let (t, valid) = self.ids(OP, targets, u32_dim(OP, dims.vocab)?, ignore_index)?;
         if valid == 0 {
             return Err(OjasError::NonFinite { op: OP });
@@ -2118,7 +2127,8 @@ impl Backend for MetalBackend {
             chunk.cols,
             x.off,
             w.off,
-            want_grad,
+            grads,
+            w_half,
         );
         let scratch = geom.scratch().ok_or_else(|| overflow(OP))?;
         let cmd = Cmd::LinearCe {
@@ -2129,25 +2139,31 @@ impl Backend for MetalBackend {
             ignore: ignore_index,
             valid,
         };
-        if !want_grad {
-            let loss = self.one(OP, &[], scratch, cmd)?;
-            return Ok(LinearCe {
-                loss,
-                grad_input: None,
-                grad_weight: None,
-            });
+        // The device returns the loss, then the input's gradient and the
+        // weight's, each only when asked for (`Worker::linear_ce`).
+        let mut shapes: Vec<&[usize]> = vec![&[]];
+        if grads.input {
+            shapes.push(input.shape());
         }
-        let mut out = self
-            .outputs(OP, &[&[], input.shape(), weight.shape()], scratch, cmd)?
-            .into_iter();
-        match (out.next(), out.next(), out.next()) {
-            (Some(loss), Some(gx), Some(gw)) => Ok(LinearCe {
-                loss,
-                grad_input: Some(gx),
-                grad_weight: Some(gw),
-            }),
-            _ => Err(metal_err(format!("{OP}: missing outputs"))),
+        if grads.weight {
+            shapes.push(weight.shape());
         }
+        let mut out = self.outputs(OP, &shapes, scratch, cmd)?.into_iter();
+        let missing = || metal_err(format!("{OP}: missing outputs"));
+        let loss = out.next().ok_or_else(missing)?;
+        let grad_input = grads
+            .input
+            .then(|| out.next().ok_or_else(missing))
+            .transpose()?;
+        let grad_weight = grads
+            .weight
+            .then(|| out.next().ok_or_else(missing))
+            .transpose()?;
+        Ok(LinearCe {
+            loss,
+            grad_input,
+            grad_weight,
+        })
     }
 
     /// Validated by [`cached_attention_dims`] and the Metal head-dim limit
