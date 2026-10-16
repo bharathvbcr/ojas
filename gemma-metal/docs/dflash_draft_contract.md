@@ -30,7 +30,7 @@ first block uses the prefill hidden.
 
 ## ✅ GOLDEN REFERENCE (MLX, produced 2026-07-14) — compare native against these
 Input `[2,105,4368,1246]`, block 1 (bs=5 → S=4 ctx rows). Full: `bench/results/golden_intermediates_31b.json`.
-Run native `--dflash-31b` with an intermediate dump on the SAME input; diff via `bench/compare_intermediates.py`.
+Run native `--dflash-31b` with an intermediate dump on the SAME input; diff via `golden_parity --compare-intermediates` (`src/intermediates.rs`).
 
 | Quantity | MLX golden value |
 |---|---|

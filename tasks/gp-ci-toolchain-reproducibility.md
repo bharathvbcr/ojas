@@ -24,8 +24,7 @@ planned_files:
   - "ojas-oracle/README.md"
   - "bench/torch_rows.py"
   - "bench/run_paired.sh"
-  - "bench/aggregate.py"
-  - "ojas-cpu/benches/summarize_ops.py"
+  - "scripts/benchreport/"
   - "scripts/ci_local.sh"
   - "scripts/simd_bench.sh"
   - ".gitignore"
@@ -138,8 +137,7 @@ Run on a `git archive` mirror of HEAD under mac_heavy.sh [C]. Toolchain: rustc 1
 - ojas-oracle/README.md
 - bench/torch_rows.py
 - bench/run_paired.sh
-- bench/aggregate.py
-- ojas-cpu/benches/summarize_ops.py
+- scripts/benchreport/
 - scripts/ci_local.sh
 - scripts/simd_bench.sh
 - .gitignore
