@@ -2,6 +2,8 @@
 //! NEW, TRAIN_OPEN, TRAIN_STEP, SAVE, RESUME, TOKENIZER, TOKENIZE, SAMPLE.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use ojas_core::{BackendId, OjasError};
 
@@ -807,4 +809,291 @@ fn stress_cuda_and_every_unknown_device_are_refused_on_every_entry_point() {
         }
     }
     assert_eq!(session::session_count(), before);
+}
+
+/// Every file under `root` by relative path with its bytes; a directory is
+/// `None`. Links are not followed.
+fn tree_bytes(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        out: &mut std::collections::BTreeMap<String, Option<Vec<u8>>>,
+    ) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let e = e.unwrap();
+            let p = e.path();
+            let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            let kind = e.file_type().unwrap();
+            if kind.is_dir() {
+                out.insert(rel, None);
+                walk(root, &p, out);
+            } else if kind.is_symlink() {
+                out.insert(rel, Some(Vec::new()));
+            } else {
+                out.insert(rel, Some(std::fs::read(&p).unwrap()));
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+fn trained(dir: &Path) -> session::Session {
+    write_bin(dir, "tokens.bin");
+    let s = load_exact("model.safetensors").unwrap();
+    train_open(s.id, "tokens.bin").unwrap();
+    step(s.id).unwrap();
+    s
+}
+
+/// SAVE into an existing directory that is not an earlier checkpoint is
+/// refused, and every byte under the model root is as it was: a runs
+/// directory of other checkpoints, one with a stray file, a case variant of
+/// state.ojck, and an in-root symlink to such a directory (which resolves to
+/// the real directory).
+#[test]
+fn save_refuses_a_directory_that_is_not_a_checkpoint_and_deletes_nothing() {
+    let (_g, dir) = fresh();
+    let s = trained(&dir);
+    std::fs::create_dir_all(dir.join("runs")).unwrap();
+    save(s.id, "runs/a").unwrap();
+    save(s.id, "runs/b").unwrap();
+    std::fs::create_dir(dir.join("notes")).unwrap();
+    std::fs::write(dir.join("notes/log.txt"), b"keep me").unwrap();
+    std::fs::create_dir(dir.join("upper")).unwrap();
+    std::fs::write(dir.join("upper/STATE.OJCK"), b"not state.ojck").unwrap();
+    std::fs::create_dir(dir.join("stray")).unwrap();
+    save(s.id, "stray/ok").unwrap();
+    std::fs::rename(dir.join("stray/ok"), dir.join("stray2")).unwrap();
+    std::fs::write(dir.join("stray2/extra.bin"), b"extra").unwrap();
+    std::os::unix::fs::symlink("runs", dir.join("runs-link")).unwrap();
+    let before = tree_bytes(&dir);
+    for target in ["runs", "notes", "upper", "stray2", "runs-link"] {
+        let err = save(s.id, target).unwrap_err();
+        assert!(
+            err.contains("not a checkpoint directory"),
+            "{target}: {err}"
+        );
+        assert!(!err.starts_with("ojas:E_BUSY"), "{target}: {err}");
+        assert!(
+            tree_bytes(&dir) == before,
+            "{target}: the refusal changed the tree"
+        );
+    }
+    // The trainer is untouched by a refusal: it steps and saves on.
+    assert_eq!(step(s.id).unwrap().step, 2);
+}
+
+/// Over an earlier checkpoint, an empty directory and an absent path, SAVE
+/// writes the three files and resumes.
+#[test]
+fn save_over_a_checkpoint_an_empty_directory_and_an_absent_path_works() {
+    let (_g, dir) = fresh();
+    let s = trained(&dir);
+    std::fs::create_dir(dir.join("empty")).unwrap();
+    for target in ["fresh", "empty", "fresh", "empty"] {
+        save(s.id, target).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(dir.join(target))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                ojas_model::MODEL_FILE,
+                ojas_model::OPTIM_FILE,
+                ojas_model::STATE_FILE
+            ],
+            "{target}"
+        );
+    }
+    assert!(resume("fresh", "tokens.bin").unwrap().path.is_some());
+}
+
+/// A cancel during SAVE returns the cancel at the next tensor boundary, the
+/// earlier checkpoint is byte-identical, no stage is left, and an absent
+/// target stays absent.
+#[test]
+fn a_cancel_during_save_keeps_the_old_checkpoint_and_leaves_no_stage() {
+    let (_g, dir) = fresh();
+    let s = trained(&dir);
+    save(s.id, "ckpt").unwrap();
+    let polls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&polls);
+    let mut p = s.id.to_le_bytes().to_vec();
+    p.extend_from_slice(b"ckpt");
+    train::save_request(
+        &p,
+        Box::new(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }),
+    )
+    .unwrap();
+    let polls = polls.load(Ordering::Relaxed);
+    let tensors = ojas_model::param_count(&nano_spec()).unwrap();
+    assert!(
+        polls > tensors,
+        "SAVE polls less than once per tensor: {polls} for {tensors} parameters"
+    );
+    let before = tree_bytes(&dir);
+    for cut in [1, 2, polls / 2, polls] {
+        for target in ["ckpt", "absent"] {
+            let seen = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&seen);
+            let mut p = s.id.to_le_bytes().to_vec();
+            p.extend_from_slice(target.as_bytes());
+            let err = train::save_request(
+                &p,
+                Box::new(move || {
+                    if counter.fetch_add(1, Ordering::Relaxed) + 1 >= cut {
+                        Err("cancelled: Explicit".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }),
+            )
+            .unwrap_err();
+            assert_eq!(err, "cancelled: Explicit", "cut {cut} {target}");
+            assert!(
+                seen.load(Ordering::Relaxed) <= cut + 3,
+                "cut {cut}: SAVE kept working after the cancel"
+            );
+            assert!(
+                tree_bytes(&dir) == before,
+                "cut {cut} {target}: tree changed"
+            );
+        }
+    }
+    save(s.id, "absent").unwrap();
+    assert_eq!(step(s.id).unwrap().step, 2);
+}
+
+/// TOKENIZER honours a cancel that lands during the parse: nothing is
+/// installed.
+#[test]
+fn a_cancel_during_the_tokenizer_parse_installs_nothing() {
+    let (_g, dir) = fresh();
+    write_tokenizer(&dir);
+    let s = load_path("model.safetensors").unwrap();
+    let polls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&polls);
+    let payload = tokenizer_payload(s.id, "vocab.json", "merges.txt");
+    crate::tokenize::load_request(
+        &payload,
+        Box::new(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }),
+    )
+    .unwrap();
+    let polls = polls.load(Ordering::Relaxed);
+    session::try_free(s.id).unwrap();
+    let s = load_path("model.safetensors").unwrap();
+    let payload = tokenizer_payload(s.id, "vocab.json", "merges.txt");
+    let seen = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&seen);
+    let err = crate::tokenize::load_request(
+        &payload,
+        Box::new(move || {
+            if counter.fetch_add(1, Ordering::Relaxed) + 1 == polls {
+                Err("cancelled: Explicit".to_string())
+            } else {
+                Ok(())
+            }
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(err, "cancelled: Explicit");
+    let mut tok = s.id.to_le_bytes().to_vec();
+    tok.extend_from_slice(&crate::tokenize::TOKENIZE_ENCODE.to_le_bytes());
+    tok.extend_from_slice(b"hello");
+    let err = call(crate::OP_TOKENIZE, &tok).unwrap_err();
+    assert!(err.contains("no tokenizer is loaded"), "{err}");
+}
+
+/// A checkpoint directory holding only a weights file whose header names
+/// `spec`: enough for RESUME's preflight, and for nothing after it.
+fn header_only_checkpoint(dir: &Path, spec: &ojas_model::ModelSpec) {
+    std::fs::create_dir(dir).unwrap();
+    let json = spec.to_json().unwrap();
+    let bytes =
+        ojas_io::encode_safetensors(&[], &[(ojas_model::SPEC_METADATA_KEY, &json)]).unwrap();
+    std::fs::write(dir.join(ojas_model::MODEL_FILE), bytes).unwrap();
+}
+
+/// RESUME reads the spec header and preflights it before the device opens
+/// or the rest of the directory is read: a budget below the parameters is
+/// `E_CAPACITY` named for resume, and a Metal head_dim past the kernel
+/// limit is refused, both with no state file in the directory to trip over.
+#[test]
+fn resume_preflights_the_spec_header_before_anything_else() {
+    let (_g, dir) = fresh();
+    write_bin(&dir, "tokens.bin");
+    header_only_checkpoint(&dir.join("small"), &nano_spec());
+    let before = session::session_count();
+    let err = train::resume_request(
+        &resume_fields("small", "tokens.bin")
+            .u64(tag::BUDGET, 2048)
+            .finish(),
+        never(),
+    )
+    .unwrap_err();
+    assert!(err.starts_with("ojas:E_CAPACITY:"), "{err}");
+    assert!(err.contains("resume"), "{err}");
+    let wide = ojas_model::ModelSpec {
+        head_dim: ojas_core::METAL_MAX_HEAD_DIM as usize + 2,
+        ..nano_spec()
+    };
+    header_only_checkpoint(&dir.join("wide"), &wide);
+    let err = train::resume_request(
+        &train_fields(
+            Writer::default()
+                .str(tag::PATH, "wide")
+                .u32(tag::DEVICE, load::DEVICE_METAL),
+            "tokens.bin",
+        )
+        .finish(),
+        never(),
+    )
+    .unwrap_err();
+    assert!(err.contains("unsupported head dim"), "{err}");
+    assert_eq!(session::session_count(), before);
+}
+
+/// Two threads saving one target serialize, and a refused save in the middle
+/// of them deletes nothing: the directory is always a whole checkpoint.
+#[test]
+fn concurrent_saves_to_one_target_serialize_and_a_refusal_deletes_nothing() {
+    let (_g, dir) = fresh();
+    let a = trained(&dir);
+    let b = load_exact("model.safetensors").unwrap();
+    train_open(b.id, "tokens.bin").unwrap();
+    step(b.id).unwrap();
+    step(b.id).unwrap();
+    save(a.id, "shared").unwrap();
+    std::fs::create_dir(dir.join("notes")).unwrap();
+    std::fs::write(dir.join("notes/log.txt"), b"keep me").unwrap();
+    let notes = tree_bytes(&dir.join("notes"));
+    let ids = [a.id, b.id];
+    let workers: Vec<_> = ids
+        .into_iter()
+        .map(|id| {
+            std::thread::spawn(move || {
+                for _ in 0..4 {
+                    save(id, "shared").unwrap();
+                    let err = save(id, "notes").unwrap_err();
+                    assert!(err.contains("not a checkpoint directory"), "{err}");
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        w.join().unwrap();
+    }
+    assert!(tree_bytes(&dir.join("notes")) == notes);
+    let resumed = resume("shared", "tokens.bin").unwrap();
+    assert!(matches!(step(resumed.id).unwrap().step, 2 | 3));
 }

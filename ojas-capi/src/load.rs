@@ -368,6 +368,22 @@ pub(crate) fn preflight(op: &str, placement: &Placement, spec: &ModelSpec) -> Re
     Ok(())
 }
 
+/// The spec in the header of a checkpoint directory's weights file, read
+/// with no tensor bytes: [`Verified`]'s checks on `dir`'s `model.safetensors`
+/// (opened once with `O_NOFOLLOW`, still the entry the path names, under the
+/// root), then its `ojas.spec` metadata. RESUME preflights this spec before
+/// the device opens; `Trainer::resume_from` still checks the whole directory,
+/// the spec included, against the state file.
+pub(crate) fn checkpoint_spec(dir: &Path) -> Result<ModelSpec, String> {
+    let root = session::root()?;
+    let path = dir.join(ojas_model::MODEL_FILE);
+    let file = open_model(&path).map_err(|e| format!("resume: {e}"))?;
+    confirm_open_identity(&file, &path, &root)?;
+    let st = SafeTensors::from_file(file)
+        .map_err(|e| format!("resume: {}: {}", path.display(), e.detail()))?;
+    ojas_model::load_spec(&st).map_err(|e| crate::ojas_error("resume", &e))
+}
+
 /// Parameters read from a checked safetensors file.
 struct FromFile {
     spec: ModelSpec,

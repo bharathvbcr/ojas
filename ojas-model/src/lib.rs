@@ -36,7 +36,8 @@ pub use block::{
     ActivationCheckpoint, BlockOut, Rope,
 };
 pub use checkpoint::{
-    MODEL_FILE, OPTIM_FILE, RUN_METADATA_KEY, STATE_FILE, STATE_FORMAT, STEP_METADATA_KEY,
+    check_save_target, SaveError, SavePoll, MODEL_FILE, OPTIM_FILE, RUN_METADATA_KEY, STATE_FILE,
+    STATE_FORMAT, STEP_METADATA_KEY,
 };
 pub use graph::{Eval, Graph};
 pub use init::{fnv1a, init_params, init_values};

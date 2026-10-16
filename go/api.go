@@ -33,6 +33,19 @@
 // happened. Until the detached job stops, a pool of 1 queues the next call
 // behind it, and a larger pool returns ErrBusy for the same id.
 //
+// SaveCheckpoint polls the cancel before each tensor is downloaded and once
+// more before its swap, so a cancel stops it within one tensor's write; the
+// earlier checkpoint is then intact and no staging directory is left. A
+// cancel that lands after that last poll does not stop the swap: the new
+// checkpoint is in place even though the caller saw context.Canceled. The
+// model ops stop at their next op as above. LoadTokenizer polls before it
+// opens its files and again once both are parsed, and installs nothing when
+// cancelled; the two parses themselves (each file is capped at 32 MiB) run
+// to the end, so a cancel during them takes effect when they return. Not
+// cancellable once started: SetModelRoot, Free, SetMemoryCeiling, the
+// profile call, and the commit phase of TrainStep above. Tokenize,
+// Detokenize, DetokenizeLossy and TokenID check once before they run.
+//
 // Link the umbrella archive before `go test`. The gusset module's default
 // linker path is its own checkout, which does not contain ojas_engine_init,
 // so the test uses pkg-config. -a is required because Go's build cache does
@@ -462,8 +475,14 @@ func trainStep(ctx context.Context, payload []byte) (StepResult, error) {
 // SaveCheckpoint writes id's trainer to the checkpoint directory dir under
 // the model root: model.safetensors (loadable by LoadModel and torch),
 // optim.safetensors and state.ojck. dir may not exist yet; its parent must.
-// The directory is written beside dir and swapped in whole, so an error
-// leaves any earlier checkpoint as it was. A poisoned trainer is refused.
+// The directory is written beside dir and swapped in whole. An existing dir
+// is replaced only when it is empty or an earlier checkpoint (it holds
+// state.ojck and nothing but the three files above, each a regular file;
+// names are compared exactly, so STATE.OJCK is not state.ojck). Any other
+// existing directory, such as a runs directory or one holding a symlink, is
+// refused and every file in it is left as it was. Any other error leaves an
+// earlier checkpoint as it was too, and a cancel does (see the package
+// comment). A poisoned trainer is refused.
 func SaveCheckpoint(ctx context.Context, id uint64, dir string) error {
 	if len(dir) > inlineLimit {
 		return errors.New("path exceeds 4096 bytes")

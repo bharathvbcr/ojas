@@ -230,6 +230,23 @@ pub fn replace_dir_with<F>(target: &Path, fill: F) -> Result<(), IoError>
 where
     F: FnOnce(&Path) -> Result<(), IoError>,
 {
+    replace_dir_with_if(target, |_| Ok(()), fill)
+}
+
+/// [`replace_dir_with`] that first asks `allow` whether an existing target may
+/// be replaced. `allow` runs once, with the target's path, only when the
+/// target exists, inside the parent lock: after a lone backup has been
+/// restored over a missing target and before any stage is made or anything
+/// is renamed. No other writer that takes the lock can change the target
+/// between the check and the swap. An `Err` from `allow` is returned (with
+/// the target's path in front) and touches nothing: the target, its parent
+/// and any stage are as they were. An absent target is never offered to
+/// `allow`. `allow` must not take the same parent's replace lock.
+pub fn replace_dir_with_if<A, F>(target: &Path, allow: A, fill: F) -> Result<(), IoError>
+where
+    A: FnOnce(&Path) -> Result<(), IoError>,
+    F: FnOnce(&Path) -> Result<(), IoError>,
+{
     if cfg!(not(unix)) {
         return Err(IoError::new(format!(
             "{}: replace_dir_with needs unix rename and directory fsync",
@@ -239,6 +256,9 @@ where
     let what = target.display();
     let mut site = Site::lock(target)?;
     site.recover()?;
+    if site.exists {
+        allow(target).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?;
+    }
     site.sweep_stages()?;
     let mut stage = Stage {
         path: create_stage(site.parent, site.name, &SEQ)?,
