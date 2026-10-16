@@ -317,7 +317,7 @@ Each line the scorecard above left open, with the after tree of `bench/results/2
 
 ![Horizontal bars of after / base per benchmark row on a log axis, sorted fastest first. conv1d backward is 0.08, fused cross-entropy backward at seed one quarter 0.17, gated RMSNorm backward 0.25 and the 50304 by 768 gradient accumulate 0.29. Most other rows sit inside the plus or minus 10 percent noise band, and the unchanged control ops read 0.98 to 1.11.](../site/assets/plots/bench/2026-10-08-cpu-hot-paths--ab-vs-base.svg)
 
-*after / base per row (min over 5 rounds, circle = median of per-round ratios, grey band = ±10% noise). Source: `bench/results/2026-10-08-cpu-hot-paths/summary.md`, drawn by `bench/plot_all.py`.*
+*after / base per row (min over 5 rounds, circle = median of per-round ratios, grey band = ±10% noise). Source: `bench/results/2026-10-08-cpu-hot-paths/summary.md`, drawn by `scripts/benchreport`.*
 
 ![Horizontal bars of ojas divided by PyTorch 2.13 CPU time on the rows torch covers, log axis. Add backward is about 6.3 times, add forward 2.9, embedding forward 1.9, AdamW 1.5, and Muon 2048 by 768 is 0.64.](../site/assets/plots/bench/2026-10-08-cpu-hot-paths--ab-vs-torch.svg)
 

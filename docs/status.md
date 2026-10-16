@@ -26,7 +26,7 @@ Source: the 37 non-merge commits from `9668bfa` to `0e3254f` (`git log --since=2
 | bf16 GEMM and Muon | `fb98768` | Column-panel tile walk: the largest-B cases fall to 0.50–0.77 of the old time, controls stay near 1.0 (`bench/results/2026-10-06-gemm-bf16`); bf16 Muon throughput recorded in `2026-10-07-muon-bf16` (wgpu refuses bf16 Newton-Schulz). |
 | Imports | `1fc6a03`, `ca90094` | gemma-metal and the arch02 Rust trainers imported from MLSystemsLab; reference pages regenerated. |
 | Docs and tasks | `7eb09eb`, `b066122`, `cbd56ab`, `9668bfa`, `32e74b3`, `268c640`, `4be1069`, `afed9ad` | Op coverage, dtype, checkpoint and Metal fault docs synced; task briefs formatted to the GitPulse Task Brief v1 spec and consolidated into 9 roadmap and audit tasks, then 11 more briefs added. |
-| Benchmark plots | (this change) | [bench-plots.md](bench-plots.md): a chart for every folder under `bench/results/` (83 charts), drawn by `bench/plot_all.py`. Run `python3 -I bench/plot_all.py` from the repository root to regenerate them. |
+| Benchmark plots | (this change) | [bench-plots.md](bench-plots.md): a chart for every folder under `bench/results/` (83 charts), drawn by `scripts/benchreport` (Go). Run `go run scripts/benchreport/main.go plots` from the repository root to regenerate them. |
 
 Also landed after the 37 commits above: merge `8060846` brings in the `inference-decode-path` branch (`84ab777`, `topk_rows` on every backend for top-k sampling; new `ojas-{cpu,metal,wgpu}/tests/topk_rows.rs` and `ojas-infer/src/cache.rs`; `ojas-infer/src/kernels.rs` removed). That merge was concluded as another session had resolved and staged it. It was **not built or tested** in this session, so treat it as unverified until the workspace suites are re-run.
 

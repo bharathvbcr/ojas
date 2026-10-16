@@ -10,6 +10,8 @@ on:
       - 'README.md'
       - '*/README.md'
       - 'scripts/sitegen/**'
+      - 'scripts/benchreport/**'
+      - 'bench/results/**'
       - 'Cargo.toml'
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
@@ -43,6 +45,12 @@ jobs:
         run: go test -count=1 scripts/sitegen/main.go scripts/sitegen/main_test.go
       - name: site is generated from the markdown
         run: go run scripts/sitegen/main.go -check
+      - name: benchreport vet and test
+        run: |
+          go vet scripts/benchreport/main.go scripts/benchreport/main_test.go
+          go test -count=1 scripts/benchreport/main.go scripts/benchreport/main_test.go
+      - name: bench charts are generated from bench/results
+        run: go run scripts/benchreport/main.go plots -check
 
   deploy:
     needs: check
