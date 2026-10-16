@@ -156,20 +156,41 @@ fn snapshot_dir() -> PathBuf {
 }
 
 /// The device peak of a read of each table on the real 2B after one 128-token
-/// ExactF32 backward, against the recommended working set. Three entries are
-/// read (the 2 GB embedding, one MLP matrix and the final norm): the new path
-/// moves just those, the old one staged the whole table first.
+/// backward, against the recommended working set and against the bytes read.
+///
+/// Opened as `Precision::Bf16` + `Bf16Operands`, not f32. `Qwen35Step::open`
+/// allocates the whole 16 B/param state (weights, gradient bank, both AdamW
+/// moments: 30.1 GB on the 2B) at either precision, and there is no open
+/// without the optimizer. The f32 model also packs a 2 GB `[hidden, vocab]`
+/// head copy at the first forward, which put the process at 34.44 GB peak
+/// footprint (`/usr/bin/time -l`) after the backward alone, over memguard's
+/// 32 GiB (34.36 GB), so the run was SIGTERMed. The bf16 tower has no head
+/// copy. The path under test is the same: `read_entries` goes through
+/// `read_parameter_host`, `read_gradient_host` and `read_adamw_moment_host`
+/// per entry at both precisions.
+///
+/// The picks are an MLP matrix, a second MLP matrix and the final norm, not
+/// the 2 GB embedding: reading it costs 4 GB of host memory (the entry, then
+/// its tensor), which on top of the 30.1 GB resident state exceeds 32 GiB at
+/// either precision. The read path does not depend on entry size, and the
+/// whole-table staging of the old path (several GB per table) is far above
+/// what these picks weigh.
+///
+/// Each read's device peak must stay within the picked entries' f32 bytes of
+/// what was allocated before it (the new path measures about zero; the slack
+/// admits one staged copy of the picks, not of a table).
 #[test]
 #[ignore]
 fn gpu_real_2b_read_peaks() {
     let snap = Snapshot::from_dir(&snapshot_dir()).unwrap();
     let mut s = Qwen35Step::open(
         &snap,
-        Numerics::ExactF32,
-        Precision::F32,
+        Numerics::Bf16Operands,
+        Precision::Bf16,
         Budget::new(6 << 30),
     )
     .unwrap();
+    eprintln!("2B opened: {:?}", s.device_bytes());
     let ids: Vec<u32> = (0..128u32).map(|i| (i * 7919 + 13) % 100_000).collect();
     let rows: Vec<u32> = (0..127u32).collect();
     let pending = s
@@ -182,25 +203,50 @@ fn gpu_real_2b_read_peaks() {
         })
         .unwrap();
     s.backward(pending, None).unwrap();
+    eprintln!("2B backward done: {:?}", s.device_bytes());
     let recommended = tessl::GpuRuntime::new()
         .unwrap()
         .memory_info()
         .recommended_working_set;
     let picks = [
-        "embed_tokens.weight",
         "layers.0.mlp.gate_proj.weight",
+        "layers.3.mlp.down_proj.weight",
         "norm.weight",
     ];
+    let table = s.parameter_table();
+    let numel = |name: &str| -> u64 {
+        table
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("{name} is not in the parameter table"))
+            .shape
+            .iter()
+            .map(|&d| d as u64)
+            .product()
+    };
+    let picked_bytes: u64 = picks.iter().map(|n| 4 * numel(n)).sum();
+    let table_bytes: u64 = table
+        .iter()
+        .map(|t| 4 * t.shape.iter().map(|&d| d as u64).product::<u64>())
+        .sum();
+    assert!(
+        picked_bytes * 8 < table_bytes,
+        "the picks ({picked_bytes} B) must be far below a table ({table_bytes} B)"
+    );
     for which in ALL {
         let before = s.device_bytes().allocated;
         s.reset_peak_device_bytes();
         let got = s.read_entries(which, &picks).unwrap();
         drop(got);
         let peak = s.device_bytes().peak;
+        let rise = peak.saturating_sub(before);
         eprintln!(
-            "2B read {which:?}: allocated before {before} B, peak {peak} B (+{} B), recommended working set {recommended} B",
-            peak.saturating_sub(before)
+            "2B read {which:?}: allocated before {before} B, peak {peak} B (+{rise} B), picked {picked_bytes} B, table {table_bytes} B, recommended working set {recommended} B"
         );
         assert!(peak <= recommended);
+        assert!(
+            rise <= picked_bytes,
+            "{which:?}: the read raised the device peak by {rise} B for {picked_bytes} B of entries (a {table_bytes} B table)"
+        );
     }
 }
