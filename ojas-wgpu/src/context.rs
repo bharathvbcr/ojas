@@ -2505,3 +2505,7 @@ mod tests {
         assert!(matches!(plain, OjasError::Backend { .. }), "{plain:?}");
     }
 }
+
+#[cfg(test)]
+#[path = "adversarial_oom.rs"]
+mod adversarial_oom;

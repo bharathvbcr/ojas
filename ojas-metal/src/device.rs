@@ -3891,3 +3891,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "adversarial_oom.rs"]
+mod adversarial_oom;
