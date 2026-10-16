@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use ojas_core::{Backend, BackendId, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
-use ojas_wgpu::WgpuBackend;
+use ojas_wgpu::{WgpuBackend, WgpuContext};
 
 /// Relative to the largest reference magnitude in the tensor.
 pub const TOL: f64 = 1.0e-4;
@@ -112,4 +112,16 @@ pub fn close_vec(name: &str, got: &[f32], want: &[f32]) {
         want[worst.1],
         TOL
     );
+}
+
+/// A backend whose device reports `max` workgroups per dimension, so a few
+/// groups fold into a 2-D grid with spare workgroups (`fold_grid`).
+pub fn capped(max: u32) -> WgpuBackend {
+    let cap = wgpu::Limits {
+        max_compute_workgroups_per_dimension: max,
+        ..wgpu::Limits::default()
+    };
+    let ctx = WgpuContext::open_capped(&cap).expect("wgpu adapter");
+    assert_eq!(ctx.limits().max_compute_workgroups_per_dimension, max);
+    WgpuBackend::with_context(ctx, Budget::new(8 << 30))
 }
