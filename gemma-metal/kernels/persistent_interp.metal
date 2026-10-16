@@ -29,7 +29,7 @@
 // Not real softmax FA — only the grid-sync dependency shape.
 
 #include <metal_stdlib>
-#include "gelu.h"
+#include "act.h"
 using namespace metal;
 
 constant uint OP_HALT        = 0u;
