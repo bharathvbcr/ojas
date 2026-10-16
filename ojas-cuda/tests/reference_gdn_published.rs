@@ -96,6 +96,16 @@ fn bhld_to_blhd(x: &[f64], b: usize, h: usize, l: usize, d: usize) -> Vec<f64> {
 }
 
 fn load_case(name: &str) -> Case {
+    // A case that stores the gate before the clamp names its file
+    // `alpha_preclamp`; every other case stores the post-clamp `alpha`.
+    let alpha_suffix = if corpus_dir()
+        .join(format!("gdn_published_{name}_alpha_preclamp.npy"))
+        .exists()
+    {
+        "alpha_preclamp"
+    } else {
+        "alpha"
+    };
     let load = |suffix: &str| {
         npy::read(&corpus_dir().join(format!("gdn_published_{name}_{suffix}.npy")))
             .unwrap_or_else(|e| panic!("load {name}_{suffix}: {e}"))
@@ -111,7 +121,7 @@ fn load_case(name: &str) -> Case {
     let (k, v, alpha, beta, golden) = (
         load("k"),
         load("v"),
-        load("alpha"),
+        load(alpha_suffix),
         load("beta"),
         load("y_seq_f64"),
     );

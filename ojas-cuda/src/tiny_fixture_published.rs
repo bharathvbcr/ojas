@@ -8,9 +8,24 @@
 //! The copy here is `tests/fixtures/qwen35_train_published/`, byte-identical
 //! and pinned (`tests/fixture_pins.rs`). Its GDN gradients come from
 //! transformers' own Qwen3.5 module, which is the published operator; the
-//! name says so (Lappi rule 9). That the generator runs transformers' module
-//! is read from tessl's test docs, not re-run here
-//! (`GAP-L-CUDA-M1-TINY-FIXTURE-RULE-INFERRED-2026-10-01`).
+//! name says so (Lappi rule 9), and the name is confirmed rather than
+//! inferred. The generator, read in tessl's `tools/qwen35_ref/make_train_fixture.py`
+//! (`tiny`, `step`): it builds `Qwen3_5ForCausalLM(cfg)` and takes every
+//! gradient from `loss.backward()` through transformers' forward, with no
+//! cache, so the GDN layer takes the chunked branch (`torch_chunk_gated_delta_rule`,
+//! `modeling_qwen3_5.py:301`, transformers 5.17.0; the recurrent rule at `:438`
+//! runs only for a cached single-token step). Run under the oracle venv with
+//! the GDN entry points wrapped, the one tiny-fixture forward at T = 70 calls
+//! `torch_chunk_gated_delta_rule` exactly once per GDN layer and never the
+//! recurrent rule, for both the 1-over-1 and the 2-over-4 grouped model. Both
+//! rules decay the state before the read (`S <- g S; delta = beta (v - S^T k)`,
+//! `:483-488` for the recurrent one; tessl's `gdn_reference_matches_transformers`
+//! holds the chunked output to that recurrence), which is arXiv:2412.06464
+//! eq. 8, the published rule. If `flash-linear-attention` were installed
+//! its kernel would replace the torch rule behind the same entry point; the
+//! oracle venv has none, the generating machine's setup is unrecorded, and
+//! the operator is the same either way. Closes
+//! `GAP-L-CUDA-M1-TINY-FIXTURE-RULE-INFERRED-2026-10-01`.
 //!
 //! [`TinyFixture::embedded`] parses the copy compiled into the binary, so
 //! `runga` carries it to the box; [`TinyFixture::from_dir`] reads a

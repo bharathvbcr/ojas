@@ -237,6 +237,54 @@ fn a_float_field_holding_an_inexact_integer_is_refused() {
     );
 }
 
+/// The absent-key rule (`config.rs`, `require`): an absent `attn_output_gate`
+/// or `mamba_ssm_dtype` takes the implemented value, the implemented value
+/// itself is accepted, and any other value is refused by name. transformers
+/// declares neither key, so the real 2B config carries them as extras and the
+/// tiny fixture omits them.
+#[test]
+fn absent_matching_and_differing_attn_output_gate_and_mamba_ssm_dtype() {
+    // Remove the whole `"key": value,` line, asserting it was there.
+    let without = |line: &str| {
+        let out = mutate(line, "");
+        assert!(!out.contains(line.split(':').next().unwrap().trim()));
+        out
+    };
+    let want = Qwen35TextConfig::from_json(REAL).unwrap();
+
+    for (line, key, other) in [
+        (
+            "        \"attn_output_gate\": true,\n",
+            "attn_output_gate",
+            "false",
+        ),
+        (
+            "        \"mamba_ssm_dtype\": \"float32\",\n",
+            "mamba_ssm_dtype",
+            "\"bfloat16\"",
+        ),
+    ] {
+        // Absent: accepted, and the config is the one the present key gives.
+        let absent = Qwen35TextConfig::from_json(&without(line))
+            .unwrap_or_else(|e| panic!("an absent {key} must be accepted: {e}"));
+        assert_eq!(
+            format!("{absent:?}"),
+            format!("{want:?}"),
+            "{key}: absent must equal the implemented value"
+        );
+        // Matching: the real config states the implemented value and parsed
+        // above as `want`.
+        assert!(
+            REAL.contains(line.trim()),
+            "{key} missing from the real config"
+        );
+        // Differing: refused, naming the key.
+        let from = line.trim().trim_end_matches(',');
+        let to = format!("\"{key}\": {other}");
+        refused(&mutate(from, &to), key);
+    }
+}
+
 #[test]
 fn semantics_the_step_does_not_implement_are_refused() {
     refused(

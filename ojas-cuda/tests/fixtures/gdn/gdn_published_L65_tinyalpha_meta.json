@@ -10,6 +10,8 @@
   "h_kv": null,
   "kv_expansion": null,
   "alpha_mode": "tiny",
+  "alpha_array": "pre_clamp",
+  "alpha_array_note": "the stored alpha_preclamp array is the value BEFORE the alpha_clamp floor (all 1e-8, below 1e-4); y_chunked and y_seq_f64 were generated with the clamp applied, so a consumer must clamp it before the recurrence",
   "k_l2_normalized": true,
   "alpha_clamp": [
     0.0001,
@@ -26,7 +28,7 @@
     "gdn_published_L65_tinyalpha_q.npy",
     "gdn_published_L65_tinyalpha_k.npy",
     "gdn_published_L65_tinyalpha_v.npy",
-    "gdn_published_L65_tinyalpha_alpha.npy",
+    "gdn_published_L65_tinyalpha_alpha_preclamp.npy",
     "gdn_published_L65_tinyalpha_beta.npy",
     "gdn_published_L65_tinyalpha_y_chunked.npy",
     "gdn_published_L65_tinyalpha_y_seq_f64.npy"

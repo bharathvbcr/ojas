@@ -281,14 +281,33 @@ fn float_of(v: &JsonValue, path: &str) -> Result<f64> {
     }
 }
 
-/// `key`, when present, must be `want`. An absent key is transformers'
-/// default (`save_pretrained` writes only fields that differ from it), and
-/// every key this is called on defaults to the implemented value: `silu`,
-/// no attention bias, a gated attention output, no dropout, an f32 SSM
-/// state. For the two Qwen3.5-specific ones the evidence is tessl's tiny
-/// fixture (`tessl/tests/fixtures/qwen35_train/config.json`): it omits both
-/// `attn_output_gate` and `mamba_ssm_dtype`, and tessl's gated, f32-state
-/// step matches transformers' autograd on it (`tessl/tests/qwen35_train.rs`).
+/// `key`, when present, must be `want`. An absent key takes the value this
+/// provider implements, and a present key with a different value is refused.
+///
+/// Every key this is called on defaults to the implemented value: `silu`, no
+/// attention bias, a gated attention output, no dropout, an f32 SSM state. For
+/// the two Qwen3.5-specific keys the evidence is transformers' own source
+/// (5.17.0, `transformers/models/qwen3_5/`):
+///
+/// - `attn_output_gate` and `mamba_ssm_dtype` are declared by no model:
+///   `rg -uu 'mamba_ssm_dtype|attn_output_gate' transformers/models/` has
+///   0 hits, so no `config.json` transformers writes or reads carries them
+///   (`save_pretrained` writes only fields that differ from a declared
+///   default, and there is none to differ from).
+/// - The attention output gate is applied unconditionally:
+///   `attn_output = attn_output * torch.sigmoid(gate)`
+///   (`modeling_qwen3_5.py:818`), with `q_proj` always emitting the gate half.
+/// - The GDN rules cast to float32 unconditionally, whatever the model dtype:
+///   `.to(torch.float32, ...)` in `torch_chunk_gated_delta_rule`
+///   (`modeling_qwen3_5.py:339`) and `torch_recurrent_gated_delta_rule`
+///   (`:459`), and the gate `g` is computed from `A_log.float()` (`:619`).
+/// - `attention_dropout` defaults to `0.0` (`configuration_qwen3_5.py:96`).
+///
+/// A config that states one of these keys with another value describes a model
+/// transformers would not build the same way, so it is refused by name. The
+/// tiny fixture (`tessl/tests/fixtures/qwen35_train/config.json`) omits both
+/// keys and tessl's step matches transformers' autograd on it, which is
+/// consistent with the rule but not the evidence for it.
 fn require(obj: &JsonValue, key: &str, want: &JsonValue, why: &str) -> Result<()> {
     let Some(got) = member(obj, key)? else {
         return Ok(());
