@@ -2,8 +2,7 @@
 //! seeded variants of tessl's real allocation failures, and
 //! `Worker::retrying` under partial and interleaved failures.
 //!
-//! Tests marked `#[ignore = "BREAK: ..."]` assert the property the card or
-//! the doc comments promise and currently fail.
+//! Each test asserts a property the card or the doc comments promise.
 
 use super::*;
 use crate::link::Waits;
@@ -139,7 +138,6 @@ fn near_misses_of_the_exhausted_text_are_other() {
 
 /// A key is a number. A message whose "key" is not one is not tessl's text.
 #[test]
-#[ignore = "BREAK: classify_alloc takes any text between 'newBuffer(' and ') failed' as Exhausted, e.g. 'newBuffer(not a size) failed'"]
 fn the_key_must_be_a_number() {
     for s in [
         "newBuffer(not a size) failed",
@@ -191,7 +189,13 @@ fn random_text_never_panics_and_only_known_shapes_match() {
             .collect();
         let got = classify_alloc(&s);
         let limit = s.contains(LIMIT_A) || s.contains(LIMIT_B);
-        let shape = s.starts_with("newBuffer(") && s.ends_with(") failed");
+        // tessl's shape: `newBuffer(` + the decimal key + `) failed`. The key
+        // is a number (the_key_must_be_a_number); an oracle that accepted any
+        // text between the two would encode the bug that test pins.
+        let shape = s
+            .strip_prefix("newBuffer(")
+            .and_then(|rest| rest.strip_suffix(") failed"))
+            .is_some_and(|key| !key.is_empty() && key.chars().all(|c| c.is_ascii_digit()));
         let want = if limit {
             AllocFailure::Limit
         } else if shape {
@@ -329,7 +333,6 @@ fn partial_allocations_are_released_after_the_final_refusal() {
 /// sees, so the trigger that waits "before a command that would start past
 /// the memory cap" undercounts it.
 #[test]
-#[ignore = "BREAK: buffers dropped by a failed multi-buffer allocation are counted in neither alloc_since_wait nor freed_since_wait (device.rs retrying/gdn_workspace add only on success)"]
 fn dropped_partial_buffers_count_toward_a_wait_trigger() {
     let (w, _waits) = worker();
     w.recycle().unwrap();

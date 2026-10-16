@@ -2,8 +2,7 @@
 //! allocation leaves behind (device, budget, pool, error scopes), and what
 //! `live` reports.
 //!
-//! Tests marked `#[ignore = "BREAK: ..."]` assert the property the card
-//! promises and currently fail.
+//! Each test asserts a property the card promises.
 
 use super::*;
 use crate::WgpuBackend;
@@ -75,15 +74,18 @@ fn a_refused_upload_restores_the_budget() {
 /// it cannot say), so a refusal under a budget holding bytes shows a figure
 /// that is not the budget's.
 #[test]
-#[ignore = "BREAK: out_of_memory reports generate_allocator_report().total_reserved_bytes (0 when unavailable), not the budget's live bytes the card asks for (context.rs:928-939)"]
 fn the_live_figure_is_the_budgets() {
     let budget = Budget::new(1 << 22);
     let be = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
     let _resident = be.upload(&host(1 << 16, &budget)).expect("resident");
+    // The host source is charged to the same budget and is held while its
+    // upload is refused, so it is part of what the budget holds besides the
+    // refused request.
+    let src = host(1 << 18, &budget);
     let live = budget.live_bytes().unwrap();
     assert!(live > 0);
     be.context().fail_next_allocs(2);
-    let err = be.upload(&host(1 << 18, &budget)).map(|_| ()).unwrap_err();
+    let err = be.upload(&src).map(|_| ()).unwrap_err();
     match err {
         OjasError::CapacityExceeded { live: got, .. } => assert_eq!(got, live),
         other => panic!("{other:?}"),
@@ -94,7 +96,6 @@ fn the_live_figure_is_the_budgets() {
 /// unavailable the figure is 0 anyway, so a caller cannot tell "empty" from
 /// "unknown"; with a resident 4 MiB buffer the figure must not be 0.
 #[test]
-#[ignore = "BREAK: on this host (wgpu over Metal) generate_allocator_report() is None, so every CapacityExceeded.live is 0 whatever is resident (context.rs:933-937)"]
 fn live_is_not_zero_beside_a_resident_buffer() {
     let ctx = WgpuContext::open().expect("wgpu adapter");
     let _resident = ctx.tensor_buffer(4 << 20).expect("alloc");
@@ -115,7 +116,6 @@ fn live_is_not_zero_beside_a_resident_buffer() {
 /// call. Every backend caller checks `check_bytes` first, so this is a gap
 /// in the layer below them, not a reachable fault today.
 #[test]
-#[ignore = "BREAK (latent, callers guard it): alloc() of a size past max_buffer_size returns Ok(invalid buffer); the error is reported by the next unrelated check_errors as Backend"]
 fn a_request_past_the_buffer_limit_is_refused_at_the_alloc() {
     let cap = wgpu::Limits {
         max_buffer_size: 1 << 14,

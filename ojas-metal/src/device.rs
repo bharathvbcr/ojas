@@ -432,11 +432,18 @@ enum AllocFailure {
 fn classify_alloc(e: &str) -> AllocFailure {
     if e.contains("exceeds host/device allocation limit") || e.contains("exceeds device limit") {
         AllocFailure::Limit
-    } else if e.starts_with("newBuffer(") && e.ends_with(") failed") {
+    } else if is_new_buffer_failure(e) {
         AllocFailure::Exhausted
     } else {
         AllocFailure::Other
     }
+}
+
+/// tessl's `newBuffer({key}) failed`, with `key` the bucket size in decimal.
+fn is_new_buffer_failure(e: &str) -> bool {
+    e.strip_prefix("newBuffer(")
+        .and_then(|rest| rest.strip_suffix(") failed"))
+        .is_some_and(|key| !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit()))
 }
 
 struct Worker {
@@ -809,7 +816,22 @@ impl Worker {
     /// against the device's working set, with what the device holds now as
     /// `live`; a failure that is not an allocation's stays `Backend`.
     fn retrying<T>(&self, bytes: usize, mut attempt: impl FnMut() -> Result<T, String>) -> Res<T> {
-        let mut failed = match attempt() {
+        // An attempt that makes several buffers and then fails drops the ones
+        // it made. They return to the pool only at the next waited commit, so
+        // they count as freed bytes toward the wait trigger, like any other
+        // dropped buffer. The device-allocated figure is process-wide, so
+        // another thread's allocations can only inflate the count, which
+        // brings a wait forward and never delays one.
+        let mut run = || {
+            let before = self.rt.current_allocated_bytes();
+            let r = attempt();
+            if r.is_err() {
+                let left = self.rt.current_allocated_bytes().saturating_sub(before);
+                self.book.borrow_mut().freed_since_wait += left;
+            }
+            r
+        };
+        let mut failed = match run() {
             Ok(v) => return Ok(v),
             Err(e) => e,
         };
@@ -824,7 +846,7 @@ impl Worker {
             } else {
                 self.drop_pool();
             }
-            failed = match attempt() {
+            failed = match run() {
                 Ok(v) => return Ok(v),
                 Err(e) => e,
             };

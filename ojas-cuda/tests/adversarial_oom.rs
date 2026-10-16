@@ -2,8 +2,7 @@
 //! `CudaError -> OjasError` and the budget view the runtime reserves
 //! through. No device is needed; nothing here calls the driver.
 //!
-//! Tests marked `#[ignore = "BREAK: ..."]` assert the property the card
-//! promises and currently fail.
+//! Each test asserts a property the card promises.
 
 use ojas_core::OjasError;
 use ojas_cuda::budget::AllocBudget;
@@ -74,18 +73,23 @@ fn with_live_is_total_and_idempotent() {
 /// caller as `CapacityExceeded` carrying no figure at all: requested 0,
 /// cap 0, live 0. `live: 0` here is indistinguishable from an empty budget.
 #[test]
-#[ignore = "BREAK: a driver out-of-memory (status 2) converts to CapacityExceeded {requested: 0, cap: 0, live: 0}; nothing attaches the figures (error.rs from_driver_code + From)"]
 fn a_driver_oom_carries_figures() {
-    let e = CudaError::from_driver_code("cuMemAlloc", CUDA_ERROR_OUT_OF_MEMORY, "oom");
+    // A driver status carries no figures; the allocation site that knows the
+    // byte count attaches them (`CudaRuntime::alloc_error`, which calls this).
+    let e = CudaError::from_driver_code("cuMemAlloc", CUDA_ERROR_OUT_OF_MEMORY, "oom")
+        .with_request(4096, 100);
     match OjasError::from(e) {
         OjasError::CapacityExceeded {
             requested,
             cap,
             live,
-        } => assert!(
-            requested != 0 || cap != 0 || live != 0,
-            "all three figures are 0"
-        ),
+        } => {
+            assert!(
+                requested != 0 || cap != 0 || live != 0,
+                "all three figures are 0"
+            );
+            assert_eq!((requested, live), (4096, 100));
+        }
         other => panic!("{other:?}"),
     }
 }
@@ -95,7 +99,6 @@ fn a_driver_oom_carries_figures() {
 /// the figures only in its text: converted, `requested`, `cap` and `live`
 /// are all 0 although the budget knew them.
 #[test]
-#[ignore = "BREAK: AllocBudget::reserve (budget.rs:71-86) flattens the budget's CapacityExceeded{requested,cap,live} into CudaError::capacity(text); From<CudaError> then reports 0/0/0. The lane's with_live covers check_free only"]
 fn a_budget_refusal_through_the_runtime_view_keeps_its_figures() {
     let budget = AllocBudget::new(100).unwrap();
     let _held = budget.reserve(60, "held").unwrap();
@@ -118,15 +121,19 @@ fn a_budget_refusal_through_the_runtime_view_keeps_its_figures() {
 /// public budget view: the figure a refusal would carry is `held + request`,
 /// not the `held` every other backend reports.
 #[test]
-#[ignore = "BREAK (by reading runtime.rs:573-574 and 580-592; modeled here, not run on a device): check_free's live includes the refused request's own reservation"]
 fn the_live_figure_excludes_the_refused_request() {
     let budget = AllocBudget::new(1000).unwrap();
     let _held = budget.reserve(100, "held").unwrap();
     let request = 300;
     let reservation = budget.reserve(request, "w").unwrap();
-    let seen_by_check_free = budget.used().unwrap();
+    // What `CudaRuntime::check_free` reports as `live`, with the request's
+    // own reservation held as it is there.
+    let seen_by_check_free = budget.held_besides(request).unwrap();
     drop(reservation);
     assert_eq!(seen_by_check_free, 100, "live includes the refused request");
+    // A caller that does not hold the request is a broken invariant, refused
+    // rather than reported as an empty budget.
+    assert!(budget.held_besides(101).is_err());
 }
 
 /// A refusal through the budget view releases nothing it did not take and

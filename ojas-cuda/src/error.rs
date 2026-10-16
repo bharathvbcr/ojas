@@ -47,11 +47,12 @@ pub enum CudaError {
         /// The bytes asked for, when the refusing check knew them (the
         /// driver's own out-of-memory status does not say).
         requested: Option<u64>,
-        /// The bytes the refusing check found available (the budget's room,
-        /// or the device's free memory), when it knew them.
+        /// The cap the refusing check compared the request to (the
+        /// budget's cap, or the device's free memory), when it knew it.
         available: Option<u64>,
-        /// The bytes the runtime's budget holds, when the refusing check
-        /// could read it ([`Self::with_live`]).
+        /// The bytes the runtime's budget holds besides the refused
+        /// request, when the refusing check could read it
+        /// ([`Self::with_live`]).
         live: Option<u64>,
     },
     /// NVRTC failed to compile, or the driver failed to load the result.
@@ -116,6 +117,41 @@ impl CudaError {
             available: Some(available),
             live: None,
         }
+    }
+
+    /// A [`CudaError::Capacity`] with the figures a refusing check read: the
+    /// bytes asked for, the cap or room it compared them to, and the bytes
+    /// the budget held besides the request.
+    pub fn capacity_with(
+        op: impl Into<String>,
+        detail: impl Into<String>,
+        requested: u64,
+        cap: u64,
+        live: u64,
+    ) -> Self {
+        CudaError::Capacity {
+            op: op.into(),
+            detail: detail.into(),
+            requested: Some(requested),
+            available: Some(cap),
+            live: Some(live),
+        }
+    }
+
+    /// This error with the request a driver out-of-memory status was for.
+    /// The status carries no figures, so the allocation site that knows the
+    /// byte count attaches it with the bytes the budget held besides it.
+    /// A figure the error already has is kept; any other variant is
+    /// returned unchanged.
+    pub fn with_request(mut self, request: u64, held: u64) -> Self {
+        if let CudaError::Capacity {
+            requested, live, ..
+        } = &mut self
+        {
+            requested.get_or_insert(request);
+            live.get_or_insert(held);
+        }
+        self
     }
 
     /// This error with the bytes the budget holds now, which

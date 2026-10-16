@@ -281,6 +281,8 @@ pub struct CacheStats {
 
 #[derive(Default)]
 struct Counters {
+    /// Bytes of [`WgpuBuffer`]s handed out and not yet dropped.
+    resident_bytes: AtomicU64,
     compiles: AtomicU64,
     pool_hits: AtomicU64,
     alloc_retries: AtomicU64,
@@ -922,8 +924,7 @@ impl WgpuContext {
     /// The error for a device-memory creation wgpu refused under an
     /// out-of-memory error scope, which reports nothing else: the typed
     /// [`OjasError::CapacityExceeded`], with the device's binding cap as
-    /// `cap` and the bytes its allocator holds as `live` (0 when it cannot
-    /// report). A device that was lost is still [`OjasError::DeviceLost`],
+    /// `cap` and what the context holds as `live` ([`Self::live_bytes`]). A device that was lost is still [`OjasError::DeviceLost`],
     /// as [`Self::failure`] decides.
     fn out_of_memory(&self, requested: u64, detail: String) -> OjasError {
         match self.failure(detail) {
@@ -931,12 +932,25 @@ impl WgpuContext {
             _ => OjasError::CapacityExceeded {
                 requested,
                 cap: self.binding_cap(),
-                live: self
-                    .inner
-                    .device
-                    .generate_allocator_report()
-                    .map_or(0, |r| r.total_reserved_bytes),
+                live: self.live_bytes(),
             },
+        }
+    }
+
+    /// What this context holds on the device now: the allocator's total
+    /// where wgpu's backend can report it (it cannot over Metal), else the
+    /// buffers handed out and not dropped plus the pool's. Never 0 beside a
+    /// resident buffer. The backend replaces it with its budget's figure
+    /// where it holds a budget ([`crate::WgpuBackend`]).
+    fn live_bytes(&self) -> u64 {
+        match self.inner.device.generate_allocator_report() {
+            Some(r) => r.total_reserved_bytes,
+            None => self
+                .inner
+                .counters
+                .resident_bytes
+                .load(Ordering::Relaxed)
+                .saturating_add(lock(&self.inner.pool).bytes),
         }
     }
 
@@ -1025,6 +1039,17 @@ impl WgpuContext {
                 "refusing a {bytes}-byte device buffer"
             )));
         }
+        // A size past the device's buffer limit is a validation error, which
+        // the out-of-memory scope does not catch: wgpu would hand back an
+        // invalid buffer and report it at some later, unrelated call.
+        let limit = self.inner.limits.max_buffer_size;
+        if bytes > limit {
+            return Err(OjasError::CapacityExceeded {
+                requested: bytes,
+                cap: limit,
+                live: self.live_bytes(),
+            });
+        }
         {
             let mut pool = lock(&self.inner.pool);
             let taken = pool.free.get_mut(&bytes).and_then(Vec::pop);
@@ -1069,6 +1094,10 @@ impl WgpuContext {
     /// wrapping it in [`ojas_core::Tensor::from_device`].
     pub(crate) fn tensor_buffer(&self, bytes: u64) -> Result<WgpuBuffer, OjasError> {
         let buf = self.alloc(bytes)?;
+        self.inner
+            .counters
+            .resident_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
         Ok(WgpuBuffer {
             buf: Some(buf),
             bytes,
@@ -1102,6 +1131,7 @@ impl WgpuContext {
         let c = &self.inner.counters;
         c.uploads.fetch_add(1, Ordering::Relaxed);
         c.upload_bytes.fetch_add(len, Ordering::Relaxed);
+        c.resident_bytes.fetch_add(bytes, Ordering::Relaxed);
         Ok(WgpuBuffer {
             buf: Some(buf),
             bytes,
@@ -2055,6 +2085,10 @@ impl std::fmt::Debug for WgpuBuffer {
 impl Drop for WgpuBuffer {
     fn drop(&mut self) {
         if let Some(buf) = self.buf.take() {
+            self.ctx
+                .counters
+                .resident_bytes
+                .fetch_sub(self.bytes, Ordering::Relaxed);
             WgpuContext {
                 inner: Arc::clone(&self.ctx),
             }
