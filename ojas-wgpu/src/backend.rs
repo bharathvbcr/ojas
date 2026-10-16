@@ -651,6 +651,25 @@ impl WgpuBackend {
         check_ids(op, self.ids(op, a)?, vocab)
     }
 
+    /// `err` from a buffer creation the budget already charged `held` bytes
+    /// for, the refused request among them: a capacity refusal reports the
+    /// bytes the budget holds besides that charge as `live`, as every other
+    /// backend does, in place of the device's own figure. A budget that
+    /// cannot say fails the call with its error.
+    fn refused(&self, err: OjasError, held: u64) -> OjasError {
+        match err {
+            OjasError::CapacityExceeded { requested, cap, .. } => match self.budget.live_bytes() {
+                Ok(live) => OjasError::CapacityExceeded {
+                    requested,
+                    cap,
+                    live: live.saturating_sub(held),
+                },
+                Err(broken) => broken,
+            },
+            other => other,
+        }
+    }
+
     /// A new device tensor. The budget is charged before the buffer exists.
     fn out(&self, op: Op, dims: &[usize]) -> Result<(Tensor, wgpu::Buffer), OjasError> {
         let elems = product(op, dims)?;
@@ -659,7 +678,10 @@ impl WgpuBackend {
             .ok_or_else(|| overflow(op, "byte length overflows"))?;
         self.ctx.check_bytes(bytes, &self.budget)?;
         let charge = self.budget.try_reserve(bytes)?;
-        let wb = self.ctx.tensor_buffer(bytes)?;
+        let wb = self
+            .ctx
+            .tensor_buffer(bytes)
+            .map_err(|e| self.refused(e, bytes))?;
         let raw = wb.raw()?.clone();
         let t = Tensor::from_device_reserved(Arc::new(wb), dims, DType::F32, charge)?;
         Ok((t, raw))
@@ -1652,7 +1674,10 @@ impl Backend for WgpuBackend {
         let bytes = (words as u64) * 4;
         self.ctx.check_bytes(bytes, &self.budget)?;
         let charge = self.budget.try_reserve(bytes)?;
-        let wb = self.ctx.tensor_buffer(bytes)?;
+        let wb = self
+            .ctx
+            .tensor_buffer(bytes)
+            .map_err(|e| self.refused(e, bytes))?;
         let raw = wb.raw()?.clone();
         let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::Bf16, charge)?;
         let mut job = self.job(op);
@@ -1749,7 +1774,10 @@ impl Backend for WgpuBackend {
         } else {
             None
         };
-        let wb = self.ctx.upload_tensor(tensor, shadow)?;
+        let wb = self
+            .ctx
+            .upload_tensor(tensor, shadow)
+            .map_err(|e| self.refused(e, padded))?;
         Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), tensor.dtype(), charge)
     }
 
@@ -1826,7 +1854,11 @@ impl Backend for WgpuBackend {
             .ok_or_else(|| overflow(op, "byte length overflows"))?;
         self.ctx.check_bytes(bytes, &self.budget)?;
         let charge = self.budget.try_reserve(bytes)?;
-        let wb = self.ctx.tensor_buffer(bytes)?.bounded(words[1]);
+        let wb = self
+            .ctx
+            .tensor_buffer(bytes)
+            .map_err(|e| self.refused(e, bytes))?
+            .bounded(words[1]);
         let raw = wb.raw()?.clone();
         let y = Tensor::from_device_reserved(Arc::new(wb), &[rows], DType::U32, charge)?;
         let grid = self.groups(rows)?;
@@ -1867,8 +1899,15 @@ impl Backend for WgpuBackend {
         self.ctx.check_bytes(bytes, &self.budget)?;
         let value_charge = self.budget.try_reserve(bytes)?;
         let id_charge = self.budget.try_reserve(bytes)?;
-        let vb = self.ctx.tensor_buffer(bytes)?;
-        let ib = self.ctx.tensor_buffer(bytes)?.bounded(words[1]);
+        let vb = self
+            .ctx
+            .tensor_buffer(bytes)
+            .map_err(|e| self.refused(e, bytes.saturating_mul(2)))?;
+        let ib = self
+            .ctx
+            .tensor_buffer(bytes)
+            .map_err(|e| self.refused(e, bytes.saturating_mul(2)))?
+            .bounded(words[1]);
         let (v_raw, i_raw) = (vb.raw()?.clone(), ib.raw()?.clone());
         let values =
             Tensor::from_device_reserved(Arc::new(vb), &[rows, k], DType::F32, value_charge)?;
@@ -2259,7 +2298,10 @@ impl Backend for WgpuBackend {
             })?;
         self.ctx.check_bytes(bytes, &self.budget)?;
         let charge = self.budget.try_reserve(bytes)?;
-        let wb = self.ctx.tensor_buffer(bytes)?;
+        let wb = self
+            .ctx
+            .tensor_buffer(bytes)
+            .map_err(|e| self.refused(e, bytes))?;
         let raw_out = wb.raw()?.clone();
         let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::F32, charge)?;
         let mut job = self.job(CAST);

@@ -67,21 +67,47 @@ impl AllocBudget {
             .map_err(|e| CudaError::invalid("AllocBudget::used", e.to_string()))
     }
 
+    /// The bytes held besides `request`, for a caller that holds the
+    /// reservation for `request` and is refusing it: the figure a
+    /// refusal reports as `live`, as on every other backend. A count below
+    /// `request` means the caller does not hold it, which is a broken
+    /// invariant and is refused rather than reported as an empty budget.
+    pub fn held_besides(&self, request: u64) -> Result<u64, CudaError> {
+        let used = self.used()?;
+        used.checked_sub(request).ok_or_else(|| {
+            CudaError::invalid(
+                "AllocBudget::held_besides",
+                format!("the budget holds {used} bytes, fewer than the {request}-byte request"),
+            )
+        })
+    }
+
     /// Reserve `bytes` for `what`, or refuse without changing the count.
+    /// A refusal keeps the budget's figures: what was asked for, its cap,
+    /// and the bytes it held.
     pub fn reserve(&self, bytes: u64, what: &str) -> Result<Reservation, CudaError> {
         self.budget.try_reserve(bytes).map_err(|e| match e {
             OjasError::CapacityExceeded {
                 requested,
                 cap,
                 live,
-            } => CudaError::capacity(
+            } => CudaError::capacity_with(
                 what,
                 format!(
                     "{requested} bytes requested, {live} of the {cap} byte budget already reserved"
                 ),
+                requested,
+                cap,
+                live,
             ),
             // `live + bytes` overflowed u64.
-            other => CudaError::capacity(what, other.to_string()),
+            other => CudaError::Capacity {
+                op: what.to_string(),
+                detail: other.to_string(),
+                requested: Some(bytes),
+                available: Some(self.budget.cap_bytes()),
+                live: self.budget.live_bytes().ok(),
+            },
         })
     }
 }

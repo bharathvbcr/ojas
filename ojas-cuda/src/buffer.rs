@@ -9,7 +9,7 @@
 
 use cudarc::driver::{CudaSlice, CudaView, CudaViewMut, DeviceRepr, ValidAsZeroBits};
 
-use crate::budget::Reservation;
+use crate::budget::{bytes_for, Reservation};
 use crate::error::CudaError;
 use crate::runtime::{driver_error, CudaRuntime};
 
@@ -191,10 +191,11 @@ impl CudaRuntime {
         label: &str,
     ) -> Result<CudaBuffer<T>, CudaError> {
         let reservation = self.reserve::<T>(len, label)?;
+        let bytes = bytes_for(len, std::mem::size_of::<T>(), label)?;
         let slice = self
             .stream()
             .alloc_zeros::<T>(len)
-            .map_err(|e| driver_error(&format!("alloc {label}"), e))?;
+            .map_err(|e| self.alloc_error(e, &format!("alloc {label}"), bytes))?;
         Ok(CudaBuffer {
             slice,
             _reservation: reservation,
