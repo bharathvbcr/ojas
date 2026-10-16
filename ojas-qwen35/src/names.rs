@@ -9,10 +9,10 @@
 //! (and `Qwen35Step::open` refuses a live table that differs from this one).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use ojas_io::{SafeTensors, StDtype};
-use tessl::safetensors::{CheckpointView, TensorSource, INDEX_FILE_NAME};
+use ojas_io::StDtype;
+use tessl::safetensors::{CheckpointView, Dtype, TensorSource, INDEX_FILE_NAME};
 
 use crate::config::{LayerKind, Qwen35TextConfig};
 use crate::error::{Qwen35Error, Result};
@@ -121,6 +121,24 @@ pub fn check_header<'a>(
     entries: impl IntoIterator<Item = (&'a str, StDtype, &'a [u64])>,
     what: &str,
 ) -> Result<HeaderReport> {
+    check_entries(
+        cfg,
+        entries,
+        |d| matches!(d, StDtype::F32 | StDtype::BF16 | StDtype::F16),
+        what,
+    )
+}
+
+/// [`check_header`] over any dtype type: `is_float` says which dtypes the
+/// loader widens to f32. One body serves ojas-io's [`StDtype`] and tessl's
+/// [`Dtype`], so neither is converted to the other (neither has every variant
+/// of the other).
+fn check_entries<'a, D: std::fmt::Debug + Copy>(
+    cfg: &Qwen35TextConfig,
+    entries: impl IntoIterator<Item = (&'a str, D, &'a [u64])>,
+    is_float: impl Fn(D) -> bool,
+    what: &str,
+) -> Result<HeaderReport> {
     let expected: BTreeMap<String, Vec<usize>> = tower_tensors(cfg)
         .into_iter()
         .map(|t| (format!("{}{}", cfg.tower_prefix, t.name), t.shape))
@@ -142,7 +160,7 @@ pub fn check_header<'a>(
                         "{what}: {name} has shape {got:?}, the config says {want:?}"
                     )));
                 }
-                if !matches!(dtype, StDtype::F32 | StDtype::BF16 | StDtype::F16) {
+                if !is_float(dtype) {
                     return Err(Qwen35Error::Config(format!(
                         "{what}: {name} is {dtype:?}, not a float the loader widens to f32"
                     )));
@@ -184,67 +202,31 @@ pub fn check_header<'a>(
 /// may be (the index's fields, every shard's name, containment and format,
 /// and that the `weight_map` and the shards agree name for name), and it is
 /// the same call the loader makes, so nothing is accepted here that loading
-/// would refuse. Only then are the shards' headers read (ojas-io, header
-/// only) for the dtype and shape of each tensor, which the view does not
-/// expose.
+/// would refuse. The dtype and shape of each tensor come from the same view
+/// (`CheckpointView::tensor_info`), so there is no second read of the shards'
+/// headers to drift from the first.
 pub fn check_weights_file(cfg: &Qwen35TextConfig, path: &Path) -> Result<HeaderReport> {
     let what = path.display().to_string();
     let view = CheckpointView::open(path).map_err(Qwen35Error::Config)?;
-    let mut infos: Vec<(String, StDtype, Vec<u64>)> = Vec::new();
-    for shard in shard_files(path)? {
-        let st = SafeTensors::open(&shard)
-            .map_err(|e| Qwen35Error::Io(format!("{}: {e}", shard.display())))?;
-        for n in st.names() {
-            let i = st.info(n).map_err(|e| Qwen35Error::Io(e.to_string()))?;
-            infos.push((n.to_string(), i.dtype, i.shape.clone()));
-        }
+    let mut infos: Vec<(&str, Dtype, Vec<u64>)> = Vec::new();
+    for name in view.names() {
+        let info = view.tensor_info(name).ok_or_else(|| {
+            Qwen35Error::Io(format!(
+                "{what}: the view lists {name:?} but has no header entry for it"
+            ))
+        })?;
+        infos.push((
+            name,
+            info.dtype,
+            info.shape.iter().map(|&d| d as u64).collect(),
+        ));
     }
-    if infos.len() != view.names().count() {
-        return Err(Qwen35Error::Io(format!(
-            "{what}: the shards changed while the header was read"
-        )));
-    }
-    check_header(
+    check_entries(
         cfg,
-        infos.iter().map(|(n, d, s)| (n.as_str(), *d, s.as_slice())),
+        infos.iter().map(|(n, d, s)| (*n, *d, s.as_slice())),
+        |d| matches!(d, Dtype::F32 | Dtype::BF16 | Dtype::F16),
         &what,
     )
-}
-
-/// The `.safetensors` files behind a checkpoint [`CheckpointView::open`]
-/// accepted at `path`. The index is already validated, so this only reads
-/// which files its `weight_map` names.
-fn shard_files(path: &Path) -> Result<Vec<PathBuf>> {
-    let index = if path.is_dir() {
-        let index = path.join(INDEX_FILE_NAME);
-        if std::fs::symlink_metadata(&index).is_err() {
-            return Ok(vec![path.join("model.safetensors")]);
-        }
-        index
-    } else if path.extension().is_some_and(|e| e == "json") {
-        path.to_path_buf()
-    } else {
-        return Ok(vec![path.to_path_buf()]);
-    };
-    let what = index.display().to_string();
-    let text =
-        std::fs::read_to_string(&index).map_err(|e| Qwen35Error::Io(format!("{what}: {e}")))?;
-    let root = crate::config::parse_hf_json(&text, &what).map_err(Qwen35Error::Config)?;
-    let map = root
-        .field_opt("weight_map")
-        .ok()
-        .flatten()
-        .and_then(|m| m.as_object().ok())
-        .ok_or_else(|| Qwen35Error::Config(format!("{what}: no weight_map object")))?;
-    let dir = index.parent().unwrap_or_else(|| Path::new("."));
-    let files: std::collections::BTreeSet<&str> = map
-        .iter()
-        .filter_map(|(_, f)| match f {
-            ojas_io::JsonValue::String(f) => Some(f.as_str()),
-            _ => None,
-        })
-        .collect();
-    Ok(files.into_iter().map(|f| dir.join(f)).collect())
 }
 
 /// A snapshot resolved to the config and the checkpoint the provider loads,
