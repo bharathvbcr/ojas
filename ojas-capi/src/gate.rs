@@ -398,6 +398,31 @@ mod tests {
         }
     }
 
+    /// Per-call cost of the gate (admission, then the inner call) on ops that
+    /// do almost no work, so the wrapper dominates: `sync` (never polls) and a
+    /// four-element add (polls, then adds). Prints ns per call.
+    #[test]
+    #[ignore = "benchmark; run with --release --ignored --nocapture"]
+    fn gate_overhead_bench() {
+        const CALLS: usize = 1_000_000;
+        let slot = Arc::new(CancelSlot::default());
+        let g = gated(&slot);
+        let b = Budget::new(1 << 20);
+        let x = Tensor::from_f32(&[1.0, 2.0, 3.0, 4.0], &[4], &b).unwrap();
+        let per_call = |f: &mut dyn FnMut()| {
+            let start = std::time::Instant::now();
+            for _ in 0..CALLS {
+                f();
+            }
+            start.elapsed().as_nanos() as f64 / CALLS as f64
+        };
+        let sync = per_call(&mut || g.sync().unwrap());
+        let add = per_call(&mut || {
+            std::hint::black_box(g.residual_add_forward(&x, &x).unwrap());
+        });
+        println!("GATE-BENCH sync_ns={sync:.3} add_ns={add:.3}");
+    }
+
     #[test]
     fn an_error_with_no_cancel_keeps_its_kind() {
         let slot = Arc::new(CancelSlot::default());
