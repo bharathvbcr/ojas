@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17) · ojas reference</title>
+  <meta name="description" content="Audience: the owner, who starts the heavy runs. Base: ojas main 04277f8, Lappi main as read 2026-10-17. Labels: [V] read from the cited file today; [I] inferred. Nothing here was compiled or run. A s…">
+  <meta name="keywords" content="ojas, runbook: lappi decision-model lora on the m5 pro, bf16 then quantised (2026-10-17), rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/lappi-lora-mac-runbook.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/lappi-lora-mac-runbook.html">
+  <meta property="og:title" content="Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17) · ojas reference">
+  <meta property="og:description" content="Audience: the owner, who starts the heavy runs. Base: ojas main 04277f8, Lappi main as read 2026-10-17. Labels: [V] read from the cited file today; [I] inferred. Nothing here was compiled or run. A s…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17) · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17) · ojas reference">
+  <meta name="twitter:description" content="Audience: the owner, who starts the heavy runs. Base: ojas main 04277f8, Lappi main as read 2026-10-17. Labels: [V] read from the cited file today; [I] inferred. Nothing here was compiled or run. A s…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17) · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17) · ojas reference",
+    "description": "Audience: the owner, who starts the heavy runs. Base: ojas main 04277f8, Lappi main as read 2026-10-17. Labels: [V] read from the cited file today; [I] inferred. Nothing here was compiled or run. A s…",
+    "url": "https://ojas.vbcr.dev/reference/lappi-lora-mac-runbook.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="data-formats.html">Image data formats</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html" class="current" aria-current="page">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
+      <article class="prose-ojas">
+<h1 id="runbook-lappi-decision-model-lora-on-the-m5-pro-bf16-then-quantised-2026-10-17">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17) <a class="anchor" href="#runbook-lappi-decision-model-lora-on-the-m5-pro-bf16-then-quantised-2026-10-17" aria-label="Link to this section">#</a></h1>
+<p>Audience: the owner, who starts the heavy runs. Base: ojas main <code>04277f8</code>, Lappi main as read 2026-10-17. Labels: <strong>[V]</strong> read from the cited file today; <strong>[I]</strong> inferred. Nothing here was compiled or run. A step whose driver does not exist is written <code>BLOCKED on &lt;card/gap&gt;</code> with no command. No command below is invented: each names a script or test that exists today.</p>
+<p>Sources (all read): ojas <code>BUILD_REPORT-a6.md</code>, <code>backups/a6-tools/card-ft-{da2c4ab1,a1a4ba4d,b5e64557,2bbced18}.json</code>, <code>bench/results/2026-10-17-lora-step/README.md</code>, <code>ojas-qwen35/tests/gpu_memory_rows.rs</code>; Lappi <code>HANDOFF/lora2b-audit2-2026-10-17.md</code>, <code>AUDIT/lora-2b-audit2-2026-10-17/fable-final-ruling.md</code>, <code>AUDIT/lora-2b-quantised-2026-10-17/owner-decision.md</code>, <code>campaign/lora-2b-preregistered.json</code>, <code>tools/mac_heavy.sh</code>, <code>CLAUDE.md</code>.</p>
+<h2 id="0-today-three-blockers-in-order">0. Today: three blockers, in order <a class="anchor" href="#0-today-three-blockers-in-order" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Blocker</th><th>State [V]</th><th>What the owner does</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>The nine a6 lanes are uncommitted and unverified</td><td>No lane has compiled (<code>BUILD_REPORT-a6.md</code> headline). Lanes: <code>gp/a6-train</code>, <code>-adapters</code>, <code>-valuece</code>, <code>-fq8</code>, <code>-docsync</code>, <code>-stepcost</code>, <code>-preflight</code>, <code>-adamw100</code>, <code>-merge</code></td><td>Step 2 below runs the commits, the batch and the merges as one script</td></tr>
+<tr><td>2</td><td><code>owner-merge.sh</code> has not run</td><td>Commits all lanes, runs <code>owner-batch.sh</code>, stops on any red step or fixture drift, merges <code>--no-ff</code> into <strong>local</strong> main, regenerates the site, tests main in <code>target-a6-main</code>. Pushes nothing (script header)</td><td><code>! bash backups/a6-tools/owner-merge.sh</code> from the ojas main checkout</td></tr>
+<tr><td>3</td><td>Load</td><td><code>mac_heavy.sh</code> waits while the 1-minute load average exceeds <code>MAC_HEAVY_MAX_LOAD</code> (default <strong>12</strong>) or the process count exceeds <code>MAC_HEAVY_MAX_PROCS</code> (default 2500); it exits 76 if that does not clear within <code>MAC_HEAVY_MAX_WAIT_S</code> (default 4 h) (<code>Lappi-decision/tools/mac_heavy.sh</code> header lines 15, 55-57). Load was about 72 at 16:38 [owner&#39;s note], far above 12</td><td>Wait for a quiet machine, or raise <code>MAC_HEAVY_MAX_LOAD</code> on the launch line for <strong>CPU-only</strong> steps (the merge batch). That is the owner&#39;s choice. Never raise it for a GPU run: load 72 means other builds are running and the one-heavy-job rule exists because of the 2026-10-02 kernel panic at load ~350</td></tr>
+</tbody></table></div>
+<p>Also queued at the lock: pid 30722, a <code>saved-mem-torch</code> mac_heavy wrapper that is not this session&#39;s and not tessl&#39;s (<code>BUILD_REPORT-a6.md</code> section 4 item 7, section 5). Leave it. A job started behind it waits [V].</p>
+<p>Run order for blocker 2, with the load override only for the CPU batch (the variable is read by <code>mac_heavy.sh</code>, which the scripts call; whether the script forwards your environment is [I], check <code>owner-merge.sh</code> line 81 context):</p>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>! MAC_HEAVY_MAX_LOAD=&lt;n&gt; bash backups/a6-tools/owner-merge.sh</code></pre></div>
+<p><strong>Phase A (the ojas-train import) is BLOCKED on the Lappi freeze sha.</strong> <code>backups/a6-tools/owner-phase-a-import.sh</code> is <strong>planned</strong>: it does not exist yet [V <code>ls</code>, no such file]. It needs Lappi to land wave-l1/l2 and freeze <code>qd-train/src/{step,trainer,schedule,recipe,adamw,mock,run_control,pyjson,lib}.rs</code> (ft-b5e64557 criterion 2; <code>BUILD_REPORT-a6.md</code> section 5). Until it exists there is no ojas trainer for the Tape, and steps 2, 4, 5 and 6 below cannot start.</p>
+<p>Also pending before any training step (Lappi <code>campaign/lora-2b-preregistered.json</code> amendment 3 [V]): the v5r shards are <strong>withdrawn</strong>. LoRA-2B trains on a shard set rebuilt under the v6 data rules. The new shard paths, hashes and <code>max_width</code> are <code>pending_before_step_0</code>, as are a passing <code>qd-train-data</code> containment check and <code>qd-prereg-bind</code>. If the width distribution changes, N is re-derived by amendment 2&#39;s rule. Until that later amendment is committed, &#34;no LoRA-2B run is a registered row&#34;. The mechanics check on ft-da2c4ab1&#39;s last criterion names v5r train-shard rows: re-confirm which shard set it may read before running it.</p>
+<h2 id="1-fables-order">1. Fable&#39;s order <a class="anchor" href="#1-fables-order" aria-label="Link to this section">#</a></h2>
+<p>Order [V ft-da2c4ab1 criterion 12, ruling section 1]: LoRA rows, 0.8B bf16 smoke, amendment 1, reduced 2B bf16 run, quantised 0.8B smoke, reduced quantised 2B run. <strong>No quantised run starts before the bf16 reduced run&#39;s ledger row exists.</strong></p>
+<p>Measured rates all come from <code>bench/results/2026-10-17-lora-step/README.md</code> (checkpointing on, 28 GiB budget):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Row</th><th style="text-align:right">T</th><th style="text-align:right">Device peak</th><th style="text-align:right">Host footprint (memguard&#39;s metric)</th><th style="text-align:right">tokens/s</th></tr></thead>
+<tbody>
+<tr><td>0.8B-Base</td><td style="text-align:right">2,048</td><td style="text-align:right">3.94 GB</td><td style="text-align:right">4.45 GB</td><td style="text-align:right">658.2</td></tr>
+<tr><td>0.8B-Base</td><td style="text-align:right">9,638</td><td style="text-align:right">7.83 GB</td><td style="text-align:right">8.41 GB</td><td style="text-align:right">499.5</td></tr>
+<tr><td>2B-Base</td><td style="text-align:right">2,048</td><td style="text-align:right">6.65 GB</td><td style="text-align:right">7.95 GB</td><td style="text-align:right">335.9</td></tr>
+<tr><td>2B-Base</td><td style="text-align:right">9,638</td><td style="text-align:right"><strong>13.10 GB</strong></td><td style="text-align:right">14.31 GB</td><td style="text-align:right"><strong>261.6</strong></td></tr>
+<tr><td>2B-Base</td><td style="text-align:right">9,638, checkpointing off</td><td style="text-align:right">refused (<code>CapacityExceeded</code> at <code>forward</code>)</td><td style="text-align:right">-</td><td style="text-align:right">-</td></tr>
+</tbody></table></div>
+<p>Checkpointing must stay <strong>on</strong>: off does not fit 28 GiB at T=9,638 [V].</p>
+<h3 id="11-lora-memory-and-tokenss-rows-done">1.1 LoRA memory and tokens/s rows: DONE <a class="anchor" href="#11-lora-memory-and-tokenss-rows-done" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Item</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Card</td><td>ft-2bbced18 criteria 7 and 9 (status in_progress; the card is not moved by this runbook)</td></tr>
+<tr><td>Rows</td><td><code>bench/results/2026-10-17-lora-step/rows.jsonl</code>, committed at ojas <code>4da214b</code>; 2B T=9,638 is <code>rows.jsonl#L4</code>, 261.607027 tok/s [V Lappi amendment 2]</td></tr>
+<tr><td>N</td><td><strong>127</strong>: 17,280 x 261.607 / 35,403 = 127.69, floor 127; one step is 135.3 s [V README, amendment 2]</td></tr>
+<tr><td>Owner</td><td>ojas (done)</td></tr>
+<tr><td>Not covered</td><td>D17 and the span head (the arm scores every position through the fused tied head), real data, the provider and torch comparison rows [V README &#34;What this does not show&#34;]</td></tr>
+</tbody></table></div>
+<p>The same row can be re-taken. This is the command the handoff gives, and the test arm exists [V <code>gpu_memory_rows.rs:114</code>; env vars <code>QWEN35_MEM_ARM</code>, <code>QWEN35_MEM_TOKENS</code>, <code>QWEN35_MEM_CKPT</code> (<code>on</code> default or <code>off</code>), <code>QWEN35_MEM_SNAPSHOT</code>]:</p>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>QWEN35_MEM_ARM=tape-lora QWEN35_MEM_TOKENS=9638 \
+bash /Users/bharath/Code/research/Lappi-decision/tools/mac_heavy.sh lora-mem-row-2b-9638 \
+  cargo test --manifest-path /Users/bharath/Code/research/ojas/Cargo.toml -p ojas-qwen35 --release \
+  --test gpu_memory_rows -- --ignored --test-threads=1 --nocapture gpu_memory_row</code></pre></div>
+<p>Do not repeat it unless a row is in doubt: it costs a GPU window and N is already fixed from the committed row.</p>
+<h3 id="12-08b-bf16-smoke-bound-d-60-steps-both-objectives-blocked">1.2 0.8B bf16 smoke (bound d&#39;, 60 steps, both objectives): BLOCKED <a class="anchor" href="#12-08b-bf16-smoke-bound-d-60-steps-both-objectives-blocked" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Item</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Prerequisites</td><td>ojas ft-b5e64557 (phase A import, then phase B: Tape <code>StepProvider</code>, adapter checkpoint) [status ready, none built]; Lappi ft-3b8126cd (D17 host objective, torch reference-arm driver, LoRA parameter plan with the <code>lora</code> ledger row writer, checkpoint-to-scorer converter) [live Lappi lane]; the v6 shard rebuild (amendment 3); section 0 blockers 1 to 3</td></tr>
+<tr><td>Owner of each piece</td><td>ojas: Tape <code>StepProvider</code>, adapter checkpoint (layout v1 in <code>docs/adapter-checkpoint.md</code> on <code>gp/a6-adapters</code>). Lappi: D17, torch driver, ledger row, converter, shards. Owner: launches, which is the consent</td></tr>
+<tr><td>Command</td><td><strong>BLOCKED on ft-b5e64557 phase A/B and Lappi ft-3b8126cd.</strong> No ojas or Lappi driver runs the Tape under Lappi&#39;s loop today (<code>GAP-LORA2B-TAPE-PROVIDER-MISSING-2026-10-17</code>, <code>GAP-LORA2B-TORCH-DRIVER-MISSING-2026-10-17</code>). The existing <code>qd-train-metal</code> (<code>--resume</code>, <code>--seed</code>, <code>--epochs</code>) drives the provider full fine-tune, not the Tape LoRA, so it is not this step [I, from the ruling&#39;s section 1 verdict]</td></tr>
+<tr><td>Pass gate</td><td>ojas vs torch MPS bf16: |delta loss| &lt;= 0.02 nats for steps 1-50, EMA(0.9) &lt;= 0.05 after; fp32 torch CPU arm as the tight pin; both objectives (17-way D17 and full-vocab) [V ft-da2c4ab1 criterion 5]</td></tr>
+<tr><td>Memory</td><td>Device peak 7.83 GB, host 8.41 GB at T=9,638 (above); 28 GiB MetalBackend budget under the 32 GiB memguard cap. The pre-flight (<code>gp/a6-preflight</code>, after merge) refuses a shape that does not fit instead of dying to SIGTERM</td></tr>
+<tr><td>Wall time</td><td>60 steps x 35,403 tokens / 499.5 tok/s = 70.9 s per step, about <strong>71 min</strong> [I; Fable&#39;s estimate is 35 min to 1 h, scaled by params]</td></tr>
+<tr><td>Record</td><td>Per-step loss for ojas and both torch arms, peak bytes, tokens/s, a quick ledger row. Rows under ojas <code>bench/results/</code>. Not a promotion</td></tr>
+<tr><td>Interim, not the smoke</td><td>ft-da2c4ab1&#39;s last criterion: a 60-step mechanics check composed from merged primitives (frozen base bit-unchanged, only adapters move). <strong>No driver exists for it today</strong> (the <code>gpu_lora_step_trains_only_the_adapters</code> test is tiny-fixture, 2 steps). BLOCKED, no command. It writes no ledger row and cannot be cited as the smoke</td></tr>
+</tbody></table></div>
+<h3 id="13-amendment-1-lappi-n-fixed-from-the-row-done-in-lappi-with-one-reopening">1.3 Amendment 1 (Lappi; N fixed from the row): DONE in Lappi, with one reopening <a class="anchor" href="#13-amendment-1-lappi-n-fixed-from-the-row-done-in-lappi-with-one-reopening" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Item</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>State [V]</td><td><code>campaign/lora-2b-preregistered.json</code> <code>amendments[1]</code> (step definition, window rule) and <code>amendments[2]</code> (<strong>n = 127</strong>, row id <code>ojas@4da214b:bench/results/2026-10-17-lora-step/rows.jsonl#L4</code>, 261.607027 tok/s, warmup <code>max(1, N//20)</code> = 6, cosine over N) are committed on Lappi main; both recorded before any LoRA-2B result exists</td></tr>
+<tr><td>Reopened by</td><td><code>amendments[3]</code>: if the v6 rebuild changes the width distribution, N is <strong>re-derived by amendment 2&#39;s rule</strong> in the later data amendment. Otherwise N stays 127 [V]</td></tr>
+<tr><td>Owner</td><td>Lappi writes the later amendment; the owner approved the amendment path (&#34;merge all&#34;, &#34;procced with fable&#39;s advice&#34;) [V]</td></tr>
+<tr><td>Rule</td><td>An amendment made after any LoRA-2B result is read is void (<code>amendments_rule</code>). Write it <strong>before step 0 of the smoke</strong>, not after</td></tr>
+<tr><td>Wall budget</td><td>127 x 135.33 s = 17,186 s = 4.77 h, inside 17,280 s (80% of 6 h). A run that hits <code>WallClockCap</code> with fewer than 127 steps is no longer a registered row [V amendment 2]</td></tr>
+</tbody></table></div>
+<h3 id="14-reduced-2b-bf16-run-kill--9-resume-export-lappi-scorer-blocked">1.4 Reduced 2B bf16 run (kill -9 resume, export, Lappi scorer): BLOCKED <a class="anchor" href="#14-reduced-2b-bf16-run-kill--9-resume-export-lappi-scorer-blocked" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Item</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Prerequisites</td><td>1.2 passed; 1.3 data amendment committed; ft-b5e64557 adapter checkpoint (criterion 13: a kill -9 mid-run resumes to the same loss trajectory); ft-58e316a9 export (ojas <code>gp/a6-merge</code> provides <code>merge_bf16</code>, one RNE rounding; Lappi owns the converter, <code>GAP-LORA-CKPT-LAYOUT-NOT-OJAS-VERIFIED-2026-10-12</code>)</td></tr>
+<tr><td>Owner of each piece</td><td>ojas: trainer, checkpoint, <code>merge_bf16</code>. Lappi: converter into the <code>lora-merged</code> layout, <code>ckpt_average --from lora-merged</code>, <code>qd-export</code>, <code>qd-metal</code> score, ledger row. Owner: launch</td></tr>
+<tr><td>Command</td><td><strong>BLOCKED on ft-b5e64557 phase B, Lappi ft-3b8126cd (converter) and ft-58e316a9.</strong> No command exists</td></tr>
+<tr><td>Pass gate</td><td>N = 127 steps complete; a deliberate <code>kill -9</code> of <strong>its own pid</strong> mid-run resumes to the same loss trajectory as an unkilled run; export merges; Lappi&#39;s own scorer returns a quick row. The row cannot promote [V ft-da2c4ab1 criterion 6]</td></tr>
+<tr><td>Memory</td><td>Device peak 13.10 GB, host 14.31 GB at the widest sequence; a step&#39;s peak is the widest sequence&#39;s plus a ~63 MB f32 adapter bank [V ruling section 2, I for the bank size]. 13.10 GB is the measured number; the 28 GiB budget is the guard</td></tr>
+<tr><td>Wall time</td><td><strong>4.77 h</strong> (127 x 135.3 s) plus load, a kill and a resume, and the export and score [I]. Approved window 3-6 h</td></tr>
+<tr><td>Record</td><td>Ledger row with <code>n</code>, <code>row_id</code>, <code>tokens_per_s</code> copied from amendment 2; loss trajectory; peak bytes; tokens/s; the kill step and the resumed-vs-unkilled comparison; Lappi score. Name the shard hashes of the v6 rebuild</td></tr>
+</tbody></table></div>
+<h3 id="15-quantised-08b-smoke-fake-quant-q8-base-from-the-lappi-gate-tool-blocked">1.5 Quantised 0.8B smoke (fake-quant q8 base from the Lappi gate tool): BLOCKED <a class="anchor" href="#15-quantised-08b-smoke-fake-quant-q8-base-from-the-lappi-gate-tool-blocked" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Item</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Authority</td><td>Owner item 6 (the ~1 h quantised 0.8B smoke) approved by Fable under the owner&#39;s &#34;ask fable for decisions&#34; delegation [V <code>BUILD_REPORT-a6.md</code> section 4 item 3]. The owner launches each run; the launch is the consent. The same delegation said the &lt;=6 h reduced quantised 2B run is approved <strong>once the bf16 reduced row exists</strong></td></tr>
+<tr><td>Prerequisites</td><td>1.4&#39;s ledger row exists; Lappi gate tool (<code>GAP-LORA2B-QUANT-GATE-TOOL-MISSING-2026-10-17</code>, ft-2ed2fd55 criterion 5) has written the 0.8B-Base fake-quant file and its sha256 (the mlx call <code>mx.quantize(w, group_size=64, bits=8)</code>; q8 g64, bf16 scale and bias) and the D3 gate has been <strong>admitted</strong> (argmax agreement &gt;= 99.0%, mean |delta log-prob| &lt;= 0.02 nats, &gt;= 500 validation prompts, never held-out); <strong>owner item 5</strong> approved <code>campaign/lora-2b-q8-preregistered.json</code> and it is committed before any quantised result</td></tr>
+<tr><td>Owner of each piece</td><td>Lappi: gate tool, base files, sibling pre-registration, family id <code>lora-2b-q8</code>. ojas: the trainer unchanged, the checkpoint naming the base by the file&#39;s sha256 plus the quantiser record. ojas lane <code>gp/a6-fq8</code> (after merge) adds the tiny-fixture (a&#39;)(b&#39;)(c&#39;) parity over fake-quant weights only; it is a test fixture, not the Lappi gate tool</td></tr>
+<tr><td>Command</td><td><strong>BLOCKED on the Lappi gate tool (ft-2ed2fd55 criterion 5), owner item 5 (sibling pre-registration not drafted), and ft-b5e64557 phase A/B.</strong> The ojas fixture generator <code>ojas-oracle/python/qwen35_fakequant_base.py</code> is for the tiny fixture and is not the 0.8B base writer. Do not substitute it</td></tr>
+<tr><td>Pass gate</td><td>Same as 1.2 (bound d&#39;, 60 steps, both objectives), the torch arm run over the same fake-quant weights [V ft-da2c4ab1 criterion 8]</td></tr>
+<tr><td>Memory</td><td>Rows equal the bf16 rows by construction, because the file is bf16 (the quantised-rows criterion is superseded) [V ft-2bbced18 criterion 8 note]. The saving is 1.29 GB of a 12-14 GB step, which nothing needs</td></tr>
+<tr><td>Wall time</td><td>About 71 min, as 1.2 [I]</td></tr>
+<tr><td>Record</td><td>Family <code>lora-2b-q8</code>, <code>base.format = mlx-affine-q8-g64-fakequant</code>, base-file sha256, mlx version in every row. <code>optimizer_recipe &#34;lora&#34;</code> or <code>&#34;lora-q8&#34;</code> as the Lappi lane decides before the first row [V ruling section 3 item 5]</td></tr>
+</tbody></table></div>
+<h3 id="16-reduced-quantised-2b-run-only-after-the-bf16-row-exists-blocked">1.6 Reduced quantised 2B run (only after the bf16 row exists): BLOCKED <a class="anchor" href="#16-reduced-quantised-2b-run-only-after-the-bf16-row-exists-blocked" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Item</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Prerequisites</td><td>1.4 row exists; 1.5 passed; the 2B-Base fake-quant file and sha256; the sibling pre-registration fixes its own N (<strong>not</strong> assumed to be 127; at the same rate N = 127 [I])</td></tr>
+<tr><td>Command</td><td><strong>BLOCKED on everything in 1.5 plus the Lappi converter.</strong> Merge target is dequant(Q(W)) + (alpha/r) B A rounded once to bf16; merging into the original bf16 W is refused by base-sha mismatch [V ruling section 3 item 6]</td></tr>
+<tr><td>Pass gate</td><td>Same shape as 1.4; scored by Lappi&#39;s scorer; reported beside the bf16 quick row (loss trajectory, score, peak bytes, tokens/s). Cannot promote</td></tr>
+<tr><td>Memory, time</td><td>As 1.4: 13.10 GB device, about 4.8 h [I]. Approved up to 6 h</td></tr>
+<tr><td>Record</td><td>As 1.4, with the <code>lora-2b-q8</code> family fields from 1.5</td></tr>
+</tbody></table></div>
+<h2 id="2-safety">2. Safety <a class="anchor" href="#2-safety" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>One GPU job at a time.</strong> Launch every heavy command through <code>mac_heavy.sh</code>; it holds one lock (<code>MAC_HEAVY_LOCK</code>), refuses below <code>MAC_HEAVY_MIN_FREE_GB</code> (default 15) free, and sets <code>CARGO_BUILD_JOBS=2</code> [V header]. Never start a GPU run beside <code>owner-bench-stepcost.sh</code> or the merge batch. Check ListAgents/GitPulse for a live GPU owner first.
+</li>
+<li><strong>Kill only your own PIDs.</strong> Record the PID at launch and <code>kill &lt;pid&gt;</code>. Never <code>pkill</code>, <code>killall</code> or <code>pkill -f</code>. pid 30722 is not yours. For the kill -9 resume test, kill the training pid you started, not the <code>mac_heavy.sh</code> wrapper (the wrapper&#39;s SIGTERM path stops the whole tree [V header]).
+</li>
+<li><strong>memguard SIGTERMs any single process above 32 GiB</strong> (footprint, 2 s samples, SIGKILL 10 s later) and the largest process of 2 GiB or more under critical pressure for 3 samples. It writes <strong>no log</strong> on this Mac: a kill shows as signal 15 with no <code>mac_heavy</code> footprint message [V header, <code>Lappi-decision/CLAUDE.md</code>]. Keep the 28 GiB MetalBackend budget. The measured 2B step is 13.10 GB device and 14.31 GB host, so there is room, but a second process counts separately.
+</li>
+<li><strong>Rule 3: never held-out or validation rows in training.</strong> The smoke and runs read <strong>train</strong> shards only; the D3 gate may read validation prompts (never held-out). Amendment 3&#39;s containment check must exit 0 before step 0.
+</li>
+<li><strong>The quantised rows never pool with bf16.</strong> Family <code>lora-2b-q8</code>, <code>base.format</code> and the base-file sha256 in every row; a reader keyed on <code>optimizer_recipe</code> alone must also key on the family id. No quantised run before the bf16 reduced row exists.
+</li>
+<li><strong>Bound d&#39; is fixed</strong> (0.02 nats steps 1-50, EMA(0.9) 0.05 after). Do not retune it after reading a result; an amendment made after a result is read is void.
+</li>
+<li>The merge scripts never push and never touch main&#39;s dirty peer files (<code>.gitignore</code>, <code>bench/*</code>) [V <code>owner-merge.sh</code> header].
+</li>
+</ol>
+<h2 id="3-open-owner-items">3. Open owner items <a class="anchor" href="#3-open-owner-items" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Item</th><th>State</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Run <code>! bash backups/a6-tools/owner-merge.sh</code></td><td>open</td><td>Section 0. Then <code>owner-bench-stepcost.sh</code> (about 3-5 h GPU) only when the Mac is free; it does not gate the merge</td></tr>
+<tr><td>2</td><td>Pin bumps</td><td>Lappi 5b67cdd to 04277f8 ruled <strong>commit it</strong> by Fable (a Lappi session executes); later bumps to the a6 merge sha (for <code>Tape::linear_cross_entropy_value</code>) and to the phase-A sha</td><td>Each bump needs a clean ojas tree, a delta report and <code>make pin</code> PASS; report deltas and ask before bumping. Two Lappi agent worktrees both edit <code>upstream.lock.json</code>: check before either commits</td></tr>
+<tr><td>3</td><td>Push</td><td>open, needs a one-line yes</td><td>Publishes <strong>146</strong> commits; Fable recommends yes, since Lappi&#39;s lock url serves nothing until the push [V <code>BUILD_REPORT-a6.md</code> section 4 item 4]</td></tr>
+<tr><td>4</td><td>Manvi verify (<code>work.verify.task</code>)</td><td>open, owner only; agents stop at review</td><td>ft-29462f23, ft-6fb212ce, ft-531216ed (text fix in the docsync lane), ft-3cc9ed3f. Not <code>dev verify</code></td></tr>
+<tr><td>5</td><td>Archive duplicate cards</td><td>open, one click each</td><td>ft-29f7e4b6, ft-dc4bfe22, ft-e15ee76a, ft-ee2a3753, ft-a95d2145. Archive, do not merge; canonical map in <code>BUILD_REPORT-a6.md</code> section 2</td></tr>
+<tr><td>6</td><td>sibling pre-registration (item 5)</td><td>open</td><td>Approve <code>lora-2b-q8-preregistered.json</code> once drafted; it must be committed before any quantised result</td></tr>
+<tr><td>7</td><td>Quantised GPU time (item 6)</td><td>approved by Fable&#39;s delegation for the 0.8B smoke and for the reduced 2B run once the bf16 row exists</td><td>The launch is the consent</td></tr>
+<tr><td>8</td><td>peft (item 9)</td><td>open; keep &#34;not run&#34; unless answered</td><td>Test is not run</td></tr>
+<tr><td>9</td><td>4-bit and stage 2</td><td><strong>no</strong> and <strong>not now</strong> [V owner-decision]</td><td>q4 is measured in the gate, not built</td></tr>
+<tr><td>10</td><td>sha2</td><td>hand-rolled <code>sha256</code> stays unless the batch&#39;s bench is below 150 MB/s (min-of-7)</td><td>Then the owner is asked, with the number</td></tr>
+<tr><td>11</td><td>Window extension</td><td>optional</td><td>If the v6 rebuild shrinks N too far, the owner may extend the window instead of accepting a small N</td></tr>
+</tbody></table></div>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/lappi-lora-mac-runbook.md" rel="noopener"><code>docs/lappi-lora-mac-runbook.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="cuda-backend-scoping.html" rel="prev"><span>Previous</span>L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a>
+        <a href="metal-deferred-faults.html" rel="next" class="next"><span>Next</span>Metal deferred-fault contract</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#0-today-three-blockers-in-order">0. Today: three blockers, in order</a></li>
+<li><a href="#1-fables-order">1. Fable&#39;s order</a></li>
+<li class="sub"><a href="#11-lora-memory-and-tokenss-rows-done">1.1 LoRA memory and tokens/s rows: DONE</a></li>
+<li class="sub"><a href="#12-08b-bf16-smoke-bound-d-60-steps-both-objectives-blocked">1.2 0.8B bf16 smoke (bound d&#39;, 60 steps, both objectives): BLOCKED</a></li>
+<li class="sub"><a href="#13-amendment-1-lappi-n-fixed-from-the-row-done-in-lappi-with-one-reopening">1.3 Amendment 1 (Lappi; N fixed from the row): DONE in Lappi, with one reopening</a></li>
+<li class="sub"><a href="#14-reduced-2b-bf16-run-kill--9-resume-export-lappi-scorer-blocked">1.4 Reduced 2B bf16 run (kill -9 resume, export, Lappi scorer): BLOCKED</a></li>
+<li class="sub"><a href="#15-quantised-08b-smoke-fake-quant-q8-base-from-the-lappi-gate-tool-blocked">1.5 Quantised 0.8B smoke (fake-quant q8 base from the Lappi gate tool): BLOCKED</a></li>
+<li class="sub"><a href="#16-reduced-quantised-2b-run-only-after-the-bf16-row-exists-blocked">1.6 Reduced quantised 2B run (only after the bf16 row exists): BLOCKED</a></li>
+<li><a href="#2-safety">2. Safety</a></li>
+<li><a href="#3-open-owner-items">3. Open owner items</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

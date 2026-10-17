@@ -80,6 +80,7 @@
 <a href="./" class="ref-nav-home">All reference pages</a>
 <p class="ref-nav-cat">Design and contracts</p>
 <ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
 <li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
 <li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
 <li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
@@ -94,6 +95,7 @@
 <ul>
 <li><a href="baseline.html">p0-env Baseline</a></li>
 <li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
@@ -279,6 +281,8 @@
 <li><code>rope_partial_*</code> runs <code>ojas_rope</code> with a rotary width: the leading <code>R</code> values of each head turn and the rest are copied bit for bit. At <code>R = D</code> it is <code>rope_half_split</code>, bit for bit.
 </li>
 <li>tessl&#39;s kernels take a buffer and a column window, not a byte offset, so an operand that does not start its buffer is copied first. Every operand and output is checked for non-finite values, and a fault is deferred as for the other ops.
+</li>
+<li><code>MetalBackend::freeze_checked</code> (opt-in, Metal-only) scans a frozen parameter once and marks its buffer, so matmuls, gathers and the fused head skip their per-use finite scan; in-place writers refuse a marked buffer. See <code>docs/metal-deferred-faults.md</code> §3.1.
 </li>
 <li><code>sigmoid_*</code> (<code>ojas_sigmoid_fwd/bwd</code>) and <code>gdn_log_decay_*</code> (<code>ojas_gdn_decay_fwd</code>, <code>ojas_gdn_decay_bwd</code>, <code>ojas_gdn_decay_bwd_sum</code>) are ojas&#39;s own elementwise kernels; the softplus is tessl&#39;s <code>qwen35_softplus</code>, copied (a series below -3, where <code>log(1 + e^x)</code> loses most of the value). The <code>A_log</code> and <code>dt_bias</code> gradients are one thread per head summing the rows in ascending order. They bind operands at any byte offset, check their own operands and outputs, and defer a fault as the other elementwise kernels do.
 </li>

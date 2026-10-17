@@ -80,6 +80,7 @@
 <a href="./" class="ref-nav-home">All reference pages</a>
 <p class="ref-nav-cat">Design and contracts</p>
 <ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
 <li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
 <li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
 <li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
@@ -94,6 +95,7 @@
 <ul>
 <li><a href="baseline.html">p0-env Baseline</a></li>
 <li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
 <li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
@@ -345,16 +347,33 @@ step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</c
 </tbody></table></div>
 <p>That leaves <strong>1.34 GB of headroom</strong>.</p>
 <p>Without the recycle, the same staging reached 52.44 GB and faulted, 4 of 4 runs. These numbers are from the gradient read after one step at 128 tokens with <code>Numerics::ExactF32</code>.</p>
-<p>Not measured:</p>
+<p>Retired, not measured:</p>
 <ul>
-<li>a 2B <code>save_state</code> and <code>load_state</code>. They are not measurable under this Mac&#39;s 32 GiB memory guard: 30.13 GB resident plus about 7.5 GB of staging per table. The row was retired on 2026-10-15 (Fable, gp-qwen35-2b-metal-tape-run); the LoRA run&#39;s checkpoint is the adapters, measured on the Tape under gp-ft-trainer-loop. The state format stays pinned at tiny scale (<code>gpu_tiny_state_round_trip_is_bit_exact</code>);
-</li>
-<li><code>Bf16Operands</code>;
-</li>
-<li>longer sequences.
+<li>a 2B <code>save_state</code> and <code>load_state</code> on the provider. Fable retired the row on 2026-10-15 (gp-qwen35-2b-metal-tape-run). It is not measurable under this Mac&#39;s 32 GiB memory guard: 30.13 GB resident plus about 7.5 GB of staging per table. The LoRA run&#39;s checkpoint is the adapters, measured on the Tape under gp-ft-trainer-loop. The state format stays pinned at tiny scale (<code>gpu_tiny_state_round_trip_is_bit_exact</code>).
 </li>
 </ul>
-<p>Any of these that ends over the working set gets the refusal, not a timeout. Tessl reads that take one entry at a time would remove the staging, and the headroom question with it.</p>
+<p>Not measured to completion:</p>
+<ul>
+<li>the provider at <code>Precision::Bf16</code> with <code>Numerics::Bf16Operands</code>. At T = 2,048 it reached 32.98 GB after the forward and was then stopped in the backward, and at T = 9,638 it printed nothing past open (30.13 GB). The memguard (<code>-cap-gib 32</code>) is the inferred cause, not a Metal failure (<code>bench/results/2026-10-11-bf16-frozen-base/README.md</code>, Provider rows).
+</li>
+<li>the provider at T = 9,638 at either precision, for the same reason.
+</li>
+</ul>
+<p>Measured on the Tape, not the provider, at the longer sequences (Qwen3.5-2B weights, identical <code>text_config</code> to 2B-Base; every layer checkpointed except the last row):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Row</th><th style="text-align:right">T</th><th style="text-align:right">Device peak</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Full-gradient step, f32 linears</td><td style="text-align:right">2,048</td><td style="text-align:right">19.14 GB</td><td><code>bench/results/2026-10-11-bf16-frozen-base/README.md</code>, Tape rows</td></tr>
+<tr><td>Full-gradient step, bf16 linears</td><td style="text-align:right">2,048</td><td style="text-align:right">16.37 GB</td><td>same</td></tr>
+<tr><td>Full-gradient step, f32 linears</td><td style="text-align:right">9,638</td><td style="text-align:right">22.73 GB</td><td>same</td></tr>
+<tr><td>Full-gradient step, bf16 linears</td><td style="text-align:right">9,638</td><td style="text-align:right">18.97 GB</td><td>same</td></tr>
+<tr><td>Real 2B-Base step against transformers</td><td style="text-align:right">128</td><td style="text-align:right">17.60 GB</td><td><code>bench/results/2026-10-15-qwen35-2b-tape-gate/README.md</code></td></tr>
+<tr><td>LoRA step, 2B-Base, rank 16, checkpointing on</td><td style="text-align:right">2,048</td><td style="text-align:right">6.65 GB (335.9 tokens/s)</td><td><code>bench/results/2026-10-17-lora-step/README.md</code></td></tr>
+<tr><td>LoRA step, 2B-Base, rank 16, checkpointing on</td><td style="text-align:right">9,638</td><td style="text-align:right">13.10 GB (261.6 tokens/s)</td><td>same</td></tr>
+<tr><td>LoRA step, 2B-Base, rank 16, checkpointing off</td><td style="text-align:right">9,638</td><td style="text-align:right">refused at the forward (<code>CapacityExceeded</code>, 28 GiB budget)</td><td><code>bench/results/2026-10-17-lora-step/rows.jsonl</code>, row 5</td></tr>
+</tbody></table></div>
+<p>The full-gradient rows over-count a LoRA step by the frozen base&#39;s gradients, and the 2026-10-15 row is the 128-token gate, not a long-sequence row. The LoRA rows also carry 0.8B-Base: 3.94 GB at T = 2,048 and 7.83 GB at T = 9,638 (same README). They record the exact device peak and the host footprint (14.31 GB for 2B-Base at T = 9,638), and no column for the per-call bf16 widening transient.</p>
+<p>Anything that ends over the working set gets the refusal, not a timeout. Tessl reads that take one entry at a time would remove the staging, and the headroom question with it.</p>
 <h2 id="threading">Threading <a class="anchor" href="#threading" aria-label="Link to this section">#</a></h2>
 <p><code>Qwen35Step</code> is not <code>Send</code>, because tessl&#39;s <code>GpuRuntime</code> is not. Keep a provider on one thread.</p>
 <h2 id="tests">Tests <a class="anchor" href="#tests" aria-label="Link to this section">#</a></h2>

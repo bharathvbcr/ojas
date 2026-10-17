@@ -2,6 +2,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://ojas.vbcr.dev/</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/</loc></url>
+  <url><loc>https://ojas.vbcr.dev/reference/adapter-checkpoint.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/adaptive-resources.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/architecture.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/backends.html</loc></url>
@@ -13,6 +14,7 @@
   <url><loc>https://ojas.vbcr.dev/reference/shape-contract.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/baseline.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/cuda-backend-scoping.html</loc></url>
+  <url><loc>https://ojas.vbcr.dev/reference/lappi-lora-mac-runbook.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/metal-deferred-faults.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/pytorch-parity-plan.html</loc></url>
   <url><loc>https://ojas.vbcr.dev/reference/status.html</loc></url>

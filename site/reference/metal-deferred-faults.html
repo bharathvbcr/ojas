@@ -80,6 +80,7 @@
 <a href="./" class="ref-nav-home">All reference pages</a>
 <p class="ref-nav-cat">Design and contracts</p>
 <ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
 <li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
 <li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
 <li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
@@ -94,6 +95,7 @@
 <ul>
 <li><a href="baseline.html">p0-env Baseline</a></li>
 <li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
 <li><a href="metal-deferred-faults.html" class="current" aria-current="page">Metal deferred-fault contract</a></li>
 <li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
 <li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
@@ -268,6 +270,18 @@
 <tr><td><code>clip_grad_norm</code> scale</td><td>after the norm is read</td><td>after the norm is read (a sync point), then recorded</td><td>Scaling happens only when the read found no pending fault and a finite norm</td></tr>
 </tbody></table></div>
 <p>wgpu writes NaN into <code>acc</code> and relies on &#34;invalid&#34; (<code>ojas-wgpu/src/backend.rs:2133-2160</code>) (V). Metal keeps its stronger guarantee because it costs nothing extra.</p>
+<h3 id="31-freeze-checked-frozen-parameters-are-scanned-once">3.1 <code>freeze_checked</code>: frozen parameters are scanned once <a class="anchor" href="#31-freeze-checked-frozen-parameters-are-scanned-once" aria-label="Link to this section">#</a></h3>
+<p><code>MetalBackend::freeze_checked</code> (<code>ojas-metal/src/backend.rs:245</code>, <code>Cmd::Freeze</code> at <code>device.rs:1486</code>, <code>Worker::freeze</code> at <code>:1180</code>) scans an F32 or Bf16 tensor once and marks its device buffer in <code>Book::clean</code>, keyed by buffer id with the checked byte windows. Ops skip their per-use scan of a marked window (<code>known_clean</code> <code>:1133</code>, <code>check_operand</code> <code>:1147</code>): <code>linear_forward</code>, <code>linear_backward_input</code>, <code>linear_backward</code>, <code>embedding_forward</code> and the <code>linear_cross_entropy_mean</code> weight. A bf16 widening of a marked window is marked too, as a derived copy.</p>
+<ul>
+<li><strong>Writers refuse.</strong> <code>Worker::writable</code> (<code>:1164</code>) makes <code>adamw_step</code> (p, m, v), <code>muon_ns5_step</code> (p, m), in-place <code>accumulate_grad</code>, <code>scale_grad</code> and <code>kv_cache_write</code> return a typed <code>Backend</code> error before recording anything.
+</li>
+<li><strong>A faulting freeze scan</strong> is deferred like any other: <code>NonFinite { &#34;freeze_checked&#34; }</code> at the next sync. <code>scan</code> then removes the mark and every widened copy derived from it (<code>device.rs:800</code>), so later ops scan the buffer again.
+</li>
+<li><strong><code>free()</code> drops the mark</strong> (<code>device.rs:688</code>); ids are never reused.
+</li>
+<li><strong>Opt-in and Metal-only for now.</strong> A generic <code>Backend</code> hook belongs to the phase-B StepProvider (ft-b5e64557); wrapper forwarding of new trait methods is the open bug class ft-fe7dcee6.
+</li>
+</ul>
 <h2 id="4-batching-mechanics">4. Batching mechanics <a class="anchor" href="#4-batching-mechanics" aria-label="Link to this section">#</a></h2>
 <h3 id="41-recording-and-committing">4.1 Recording and committing <a class="anchor" href="#41-recording-and-committing" aria-label="Link to this section">#</a></h3>
 <p>Today each <code>Cmd</code> ends with <code>rt.synchronize()</code>, which is <code>commit(true)</code> in tessl (<code>tessl/src/runtime.rs:1788-1790</code>) (V). Under the contract a <code>Cmd</code> records its dispatches with tessl&#39;s async encode, already on (<code>device.rs</code>, <code>Worker::open</code>), and returns as soon as they are encoded. The device thread still runs one <code>Cmd</code> at a time, so recording order is channel order.</p>
@@ -808,7 +822,7 @@
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/metal-deferred-faults.md" rel="noopener"><code>docs/metal-deferred-faults.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
-        <a href="cuda-backend-scoping.html" rel="prev"><span>Previous</span>L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a>
+        <a href="lappi-lora-mac-runbook.html" rel="prev"><span>Previous</span>Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a>
         <a href="pytorch-parity-plan.html" rel="next" class="next"><span>Next</span>PyTorch parity plan</a>
       </nav>
     </main>
@@ -818,6 +832,7 @@
 <li class="sub"><a href="#21-sync-points">2.1 Sync points</a></li>
 <li class="sub"><a href="#22-what-stays-synchronous-immediate-err-nothing-recorded">2.2 What stays synchronous (immediate Err, nothing recorded)</a></li>
 <li><a href="#3-outputs-of-a-faulted-op-and-the-in-place-ops">3. Outputs of a faulted op, and the in-place ops</a></li>
+<li class="sub"><a href="#31-freeze-checked-frozen-parameters-are-scanned-once">3.1 freeze_checked: frozen parameters are scanned once</a></li>
 <li><a href="#4-batching-mechanics">4. Batching mechanics</a></li>
 <li class="sub"><a href="#41-recording-and-committing">4.1 Recording and committing</a></li>
 <li class="sub"><a href="#42-status-words-and-first-fault-naming">4.2 Status words and first-fault naming</a></li>

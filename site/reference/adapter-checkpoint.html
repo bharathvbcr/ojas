@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Adapter checkpoint, layout version 1 · ojas reference</title>
+  <meta name="description" content="The checkpoint of the Qwen3.5 Tape LoRA track: the trainable entries by name, their AdamW moments, and what a resume needs to continue the same run or refuse. Lappi&#39;s converter (ft-58e316a9) reads it…">
+  <meta name="keywords" content="ojas, adapter checkpoint, layout version 1, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/adapter-checkpoint.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/adapter-checkpoint.html">
+  <meta property="og:title" content="Adapter checkpoint, layout version 1 · ojas reference">
+  <meta property="og:description" content="The checkpoint of the Qwen3.5 Tape LoRA track: the trainable entries by name, their AdamW moments, and what a resume needs to continue the same run or refuse. Lappi&#39;s converter (ft-58e316a9) reads it…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Adapter checkpoint, layout version 1 · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Adapter checkpoint, layout version 1 · ojas reference">
+  <meta name="twitter:description" content="The checkpoint of the Qwen3.5 Tape LoRA track: the trainable entries by name, their AdamW moments, and what a resume needs to continue the same run or refuse. Lappi&#39;s converter (ft-58e316a9) reads it…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Adapter checkpoint, layout version 1 · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Adapter checkpoint, layout version 1 · ojas reference",
+    "description": "The checkpoint of the Qwen3.5 Tape LoRA track: the trainable entries by name, their AdamW moments, and what a resume needs to continue the same run or refuse. Lappi's converter (ft-58e316a9) reads it…",
+    "url": "https://ojas.vbcr.dev/reference/adapter-checkpoint.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adapter-checkpoint.html" class="current" aria-current="page">Adapter checkpoint, layout version 1</a></li>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="data-formats.html">Image data formats</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="adapter-checkpoint-layout-version-1">Adapter checkpoint, layout version 1 <a class="anchor" href="#adapter-checkpoint-layout-version-1" aria-label="Link to this section">#</a></h1>
+<p>The checkpoint of the Qwen3.5 Tape LoRA track: the trainable entries by name, their AdamW moments, and what a resume needs to continue the same run or refuse. Lappi&#39;s converter (ft-58e316a9) reads it by this contract.</p>
+<p>Writer and reader: <code>ojas-model/src/qwen35/adapters.rs</code> (<code>write_adapter_checkpoint</code>, <code>read_adapter_checkpoint</code>). Tests: <code>ojas-model/tests/qwen35_adapters.rs</code>. Where this page and the code disagree, the code wins and this page is the bug.</p>
+<p>This is not Checkpoint v1 (<code>docs/checkpoint-v1.md</code>, the nanolab trainer&#39;s format). It shares the file conventions of the nanolab checkpoint directory (safetensors, <code>adam_m.&lt;name&gt;</code> / <code>adam_v.&lt;name&gt;</code>) and its atomic replace.</p>
+<h2 id="directory">Directory <a class="anchor" href="#directory" aria-label="Link to this section">#</a></h2>
+<p>A checkpoint is a directory with exactly two files. It is written to a staging sibling and swapped in whole (<code>ojas_io::replace_dir_with_if</code>), so a reader sees the old directory or the new one. An existing target is replaced only if it is absent, empty, or an earlier adapter checkpoint (<code>.DS_Store</code> excepted); anything else is refused with nothing touched.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Content</th></tr></thead>
+<tbody>
+<tr><td><code>adapters.safetensors</code></td><td>One <code>F32</code> tensor per entry under its own name. All scalars of the checkpoint are its safetensors metadata (below).</td></tr>
+<tr><td><code>moments.safetensors</code></td><td><code>adam_m.&lt;name&gt;</code> (first moment) and <code>adam_v.&lt;name&gt;</code> (second moment) per entry, <code>F32</code>, each the shape of its entry.</td></tr>
+</tbody></table></div>
+<p>Tensors are row-major, little-endian, written in ascending byte-wise name order. Every value and every moment is finite, and every second moment is <code>&gt;= 0</code>.</p>
+<h2 id="entry-names">Entry names <a class="anchor" href="#entry-names" aria-label="Link to this section">#</a></h2>
+<p>A LoRA adapter is two entries, the PEFT convention:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Name</th><th>Shape</th><th></th></tr></thead>
+<tbody>
+<tr><td><code>&lt;module path&gt;.lora_A.weight</code></td><td><code>[r, in]</code></td><td><code>A</code></td></tr>
+<tr><td><code>&lt;module path&gt;.lora_B.weight</code></td><td><code>[out, r]</code></td><td><code>B</code>, fused</td></tr>
+</tbody></table></div>
+<p><code>&lt;module path&gt;</code> is the Hugging Face tensor name without <code>.weight</code>, for example <code>model.language_model.layers.3.self_attn.q_proj</code>. A fused Hugging Face tensor (<code>in_proj_qkv</code>, <code>q_proj</code>) has one fused <code>B</code> in its own row order, as PEFT shapes it, not the model&#39;s parts. The scaling is <code>alpha / r</code> and is not folded into either tensor.</p>
+<p>The host entries have fixed names, the ones Lappi&#39;s own checkpoint uses (<code>qd-export/src/layout.rs</code>: <code>d17.</code> + <code>delta</code>, <code>AnswerRowDelta.delta</code>; and <code>span_head.</code> + the torch state-dict keys of <code>qd-train/src/span_head.rs</code> <code>PARAMETER_NAMES</code>). Layout 1 holds no others:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Name</th><th>Shape (Lappi&#39;s)</th></tr></thead>
+<tbody>
+<tr><td><code>d17.delta</code></td><td><code>[17, H]</code></td></tr>
+<tr><td><code>span_head.start_proj.weight</code></td><td><code>[H, H]</code>, <code>[out, in]</code></td></tr>
+<tr><td><code>span_head.end_proj.weight</code></td><td><code>[H, H]</code>, <code>[out, in]</code></td></tr>
+<tr><td><code>span_head.abstain_start</code></td><td><code>[H]</code></td></tr>
+<tr><td><code>span_head.abstain_end</code></td><td><code>[H]</code></td></tr>
+</tbody></table></div>
+<p>Every entry name must be one of these or a <code>&lt;module&gt;.lora_A.weight</code> / <code>&lt;module&gt;.lora_B.weight</code> with a non-empty module; any other name is refused on save and on read (<code>UnknownEntryName</code>). The shapes are the caller&#39;s expectation, checked on resume, not fixed by layout 1. Host entries carry the same moment names (<code>adam_m.&lt;name&gt;</code>).</p>
+<h2 id="metadata">Metadata <a class="anchor" href="#metadata" aria-label="Link to this section">#</a></h2>
+<p>All values are strings. Keys of <code>adapters.safetensors</code>:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Key</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td><code>ojas.adapter.layout</code></td><td><code>1</code>. Also in <code>moments.safetensors</code>.</td></tr>
+<tr><td><code>ojas.adapter.step</code></td><td>Completed optimiser steps, decimal u64. This is the schedule step and the <code>step</code> argument of the next <code>Backend::adamw_step</code> (the count before that update). Also in <code>moments.safetensors</code>, and the two must agree.</td></tr>
+<tr><td><code>ojas.adapter.payload_fnv1a64</code></td><td>16 lowercase hex digits: FNV-1a 64 (offset <code>cbf29ce484222325</code>, prime <code>100000001b3</code>) over (1) the little-endian bytes of the file&#39;s tensors in ascending name order, then (2) every metadata pair of the file except this key, sorted by key, each pair as <code>len(key)</code> (u64 LE), key bytes, <code>len(value)</code> (u64 LE), value bytes. So a changed rng state, digest, step, base, quantizer, rank or alpha is detected even when it is still well-formed. Also in <code>moments.safetensors</code> (over that file&#39;s own tensors and metadata). An integrity check against truncation and bit rot, not an authenticity one.</td></tr>
+<tr><td><code>ojas.adapter.pair</code></td><td><code>moments.safetensors</code> only: the <code>ojas.adapter.payload_fnv1a64</code> of the <code>adapters.safetensors</code> it was written beside. Binds the two files, so moments from another save or run at the same step are refused.</td></tr>
+<tr><td><code>ojas.adapter.rng_state</code></td><td>Data/batch-order RNG state, lowercase hex of the caller&#39;s bytes (1 to 4096 bytes). Opaque to ojas.</td></tr>
+<tr><td><code>ojas.adapter.consumed_digest</code></td><td>The consumed-data digest, the caller&#39;s lowercase hex string (even length, at most 4096). Opaque to ojas.</td></tr>
+<tr><td><code>ojas.adapter.base_sha256</code></td><td>sha256 of the frozen base file, 64 lowercase hex digits.</td></tr>
+<tr><td><code>ojas.adapter.base_file</code></td><td>The name of that file (one plain file name, no directory). Layout 1 covers a single-file base only. A one-of-one name (<code>model.safetensors-00001-of-00001.safetensors</code>, as the local Qwen3.5 2B-Base and 0.8B-Base snapshots are named) is a single file and is accepted; a shard of several (<code>...-00001-of-00004.safetensors</code>) or an index (<code>...safetensors.index.json</code>) is refused at save with <code>ShardedBase</code>, since one sha256 would name an ambiguous set of files.</td></tr>
+<tr><td><code>ojas.adapter.lora_rank</code></td><td><code>r</code>, decimal.</td></tr>
+<tr><td><code>ojas.adapter.lora_alpha</code></td><td><code>alpha</code>, the f32 in Rust&#39;s shortest round-trip decimal (<code>16</code> for 16.0). A reader parses it as an f32 and compares the value (bit for bit), not the string.</td></tr>
+<tr><td><code>ojas.adapter.quant.format</code>, <code>ojas.adapter.quant.group_size</code>, <code>ojas.adapter.quant.mlx_version</code></td><td>The quantizer record of a fake-quant base, copied from the arm&#39;s pre-registration. All three present or all three absent. Strings, compared exactly.</td></tr>
+</tbody></table></div>
+<p>There is no dropout key: the recipe&#39;s LoRA dropout is 0 and a non-zero dropout refuses to checkpoint (<code>AdapterError::Dropout</code>), so a resume never depends on a dropout stream.</p>
+<p>The RNG state is the data-order RNG only. The frozen base is named by the name and sha256 of the single base file the run loaded (for the quantised arm, the fake-quant bf16 file) plus the quantizer record; the block-quantised storage dtype is not part of layout 1.</p>
+<h2 id="refusals">Refusals <a class="anchor" href="#refusals" aria-label="Link to this section">#</a></h2>
+<p>Save refuses, before touching the target: a dropout other than 0, a sharded or non-plain base file name, an entry name that is neither a LoRA A/B nor a fixed host entry, a malformed base sha256 / digest / RNG state / quantizer string, no entries, a duplicate or empty or reserved (<code>__metadata__</code>) name, a shape whose element count is 0 or overflows, a value or moment count that is not the shape&#39;s, a non-finite value or moment, a negative second moment.</p>
+<p>Read, given what the resume expects (base identity, LoRA rank and alpha, entry names and shapes), refuses in this order: an unreadable or truncated file; a layout version other than <code>1</code> (before anything else is interpreted, in both files); missing or malformed metadata; a different base sha256 or base file name; a different or one-sided quantizer record; a different rank or alpha; files written at different steps; a missing or extra entry in either file; a dtype other than <code>F32</code> or a different shape; any non-finite value; a payload hash that does not match the recorded one (either file); moments whose <code>ojas.adapter.pair</code> is not the adapters file&#39;s hash (<code>PairMismatch</code>); a negative second moment.</p>
+<h2 id="versioning">Versioning <a class="anchor" href="#versioning" aria-label="Link to this section">#</a></h2>
+<p>A change to a name, shape, dtype, metadata key or its meaning, or to the hash, is a new <code>ojas.adapter.layout</code>. Readers refuse a version they do not know; they do not guess or migrate.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/adapter-checkpoint.md" rel="noopener"><code>docs/adapter-checkpoint.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <span></span>
+        <a href="adaptive-resources.html" rel="next" class="next"><span>Next</span>Adaptive resources audit</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#directory">Directory</a></li>
+<li><a href="#entry-names">Entry names</a></li>
+<li><a href="#metadata">Metadata</a></li>
+<li><a href="#refusals">Refusals</a></li>
+<li><a href="#versioning">Versioning</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>
