@@ -221,16 +221,22 @@ fn widen(st: &SafeTensors<'_>, name: &str) -> Vec<f32> {
     let bytes = st.read_bytes(name).unwrap();
     match st.info(name).unwrap().dtype {
         StDtype::F32 => bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect(),
         StDtype::BF16 => bytes
-            .chunks_exact(2)
-            .map(|b| bf16_to_f32(u16::from_le_bytes([b[0], b[1]])))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| bf16_to_f32(u16::from_le_bytes(*b)))
             .collect(),
         StDtype::F16 => bytes
-            .chunks_exact(2)
-            .map(|b| f16_to_f32(u16::from_le_bytes([b[0], b[1]])))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| f16_to_f32(u16::from_le_bytes(*b)))
             .collect(),
         other => panic!("{name}: {other:?}"),
     }
@@ -244,8 +250,10 @@ fn read_as(st: &SafeTensors<'_>, name: &str, storage: DType) -> Vals {
         let bytes = st.read_bytes(name).unwrap();
         return Vals::Bf16(
             bytes
-                .chunks_exact(2)
-                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16::from_le_bytes(*b))
                 .collect(),
         );
     }
@@ -508,12 +516,11 @@ fn every_tensor_lands_in_the_storage_the_old_code_gave_it() {
 
 // ---- classification fragility --------------------------------------------
 
-/// `is_linear` (params.rs) is `name.ends_with(".weight") && name.contains("_proj")`
-/// over the FULL name, prefix included. A checkpoint prefix containing
-/// `_proj` makes every `.weight` norm a "linear", so under `Bf16` linears the
-/// norms silently become Bf16 where the old code always kept them F32.
+/// Storage follows each tensor's `HfKind`, never its name: a checkpoint
+/// prefix containing `_proj` must not turn a `.weight` norm into a Bf16
+/// "linear" (the old code always kept norms F32).
 #[test]
-fn real_bug_a_prefix_containing_proj_must_not_change_norm_storage() {
+fn a_prefix_containing_proj_does_not_change_norm_storage() {
     let spec = base_spec();
     let prefix = "vision_proj.";
     let mut rng = Lcg(9);

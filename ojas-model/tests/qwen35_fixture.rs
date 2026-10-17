@@ -18,7 +18,8 @@ mod qwen35_common;
 use ojas_core::{bf16_to_f32, f32_to_bf16, Budget, DType, OjasError, Tensor};
 use ojas_io::{encode_f32_as, encode_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::qwen35::{
-    bind, forward_loss, hf_tensors, load_hf, MixerParams, Qwen35Mixer, Qwen35Params, Qwen35Tables,
+    bind, forward_loss, hf_tensors, load_hf, HfKind, MixerParams, Qwen35Mixer, Qwen35Params,
+    Qwen35Tables,
 };
 use ojas_model::{ActivationCheckpoint, Eval, DEFAULT_CE_CHUNK};
 use qwen35_common::*;
@@ -512,14 +513,11 @@ fn load_hf_bits_match_the_whole_tensor_read_for_every_source_and_storage() {
 fn tower_bytes(linears: DType, table: DType) -> u64 {
     hf_tensors(&spec(), PREFIX)
         .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let storage = if i == 0 {
-                table
-            } else if t.name.ends_with(".weight") && t.name.contains("_proj") {
-                linears
-            } else {
-                DType::F32
+        .map(|t| {
+            let storage = match t.kind {
+                HfKind::Table => table,
+                HfKind::Linear => linears,
+                HfKind::Plain => DType::F32,
             };
             (t.shape.iter().product::<usize>() * storage.size()) as u64
         })

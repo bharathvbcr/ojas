@@ -452,8 +452,15 @@ impl<'a> SafeTensors<'a> {
             .map_err(|_| IoError::new(format!("{name}: allocation of {count} elements refused")))?;
         // One bounded chunk at a time into the reserved output: the peak is
         // the output plus `READ_CHUNK_BYTES`, never a second tensor-sized copy.
-        let mut chunk = [0u8; READ_CHUNK_BYTES];
-        let per_chunk = READ_CHUNK_BYTES / width;
+        // On the heap and sized to the tensor: a worker thread's stack may be
+        // 512 KiB.
+        let chunk_len = (count * width).min(READ_CHUNK_BYTES);
+        let mut chunk = Vec::new();
+        chunk.try_reserve_exact(chunk_len).map_err(|_| {
+            IoError::new(format!("{name}: allocation of {chunk_len} bytes refused"))
+        })?;
+        chunk.resize(chunk_len, 0u8);
+        let per_chunk = chunk_len / width;
         while values.len() < count {
             let take = (count - values.len()).min(per_chunk);
             let bytes = &mut chunk[..take * width];

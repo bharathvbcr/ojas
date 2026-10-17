@@ -162,59 +162,115 @@ impl<V> Qwen35Params<V> {
     }
 }
 
-/// One Hugging Face tensor of the tower: its name and stored shape.
+/// How [`load_hf`] stores a tensor: the tied embedding follows its `table`
+/// storage, the weights a `linear` reads follow `linears`, and everything
+/// else (norms, convolutions, `A_log`, `dt_bias`) is `F32`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HfKind {
+    Table,
+    Linear,
+    Plain,
+}
+
+/// One Hugging Face tensor of the tower: its name, stored shape and kind.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HfTensor {
     pub name: String,
     pub shape: Vec<usize>,
+    pub kind: HfKind,
 }
 
 /// Every Hugging Face tensor the tower reads under `prefix` (`"model."` for
 /// a text-only checkpoint, `"model.language_model."` under a `text_config`),
 /// in [`Qwen35Params::try_map`]'s order of the fused tensors.
 pub fn hf_tensors(spec: &Qwen35Spec, prefix: &str) -> Vec<HfTensor> {
-    let t = |name: String, shape: &[usize]| HfTensor {
+    let t = |kind: HfKind, name: String, shape: &[usize]| HfTensor {
         name,
         shape: shape.to_vec(),
+        kind,
     };
     let (d, f) = (spec.hidden, spec.intermediate);
-    let mut out = vec![t(format!("{prefix}embed_tokens.weight"), &[spec.vocab, d])];
+    let mut out = vec![t(
+        HfKind::Table,
+        format!("{prefix}embed_tokens.weight"),
+        &[spec.vocab, d],
+    )];
     for (i, kind) in spec.layers.iter().enumerate() {
         let l = format!("{prefix}layers.{i}.");
-        out.push(t(format!("{l}input_layernorm.weight"), &[d]));
+        out.push(t(HfKind::Plain, format!("{l}input_layernorm.weight"), &[d]));
         match kind {
             Qwen35Mixer::GatedDeltaNet => {
                 let [cq, ck, cv] = spec.gdn_qkv_channels();
                 let c = cq + ck + cv;
                 let (h, dv) = (spec.gdn_heads, spec.gdn_value_dim);
                 let m = format!("{l}linear_attn.");
-                out.push(t(format!("{m}in_proj_qkv.weight"), &[c, d]));
-                out.push(t(format!("{m}conv1d.weight"), &[c, 1, spec.conv_width]));
-                out.push(t(format!("{m}in_proj_z.weight"), &[h * dv, d]));
-                out.push(t(format!("{m}in_proj_a.weight"), &[h, d]));
-                out.push(t(format!("{m}in_proj_b.weight"), &[h, d]));
-                out.push(t(format!("{m}A_log"), &[h]));
-                out.push(t(format!("{m}dt_bias"), &[h]));
-                out.push(t(format!("{m}norm.weight"), &[dv]));
-                out.push(t(format!("{m}out_proj.weight"), &[d, h * dv]));
+                out.push(t(HfKind::Linear, format!("{m}in_proj_qkv.weight"), &[c, d]));
+                out.push(t(
+                    HfKind::Plain,
+                    format!("{m}conv1d.weight"),
+                    &[c, 1, spec.conv_width],
+                ));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}in_proj_z.weight"),
+                    &[h * dv, d],
+                ));
+                out.push(t(HfKind::Linear, format!("{m}in_proj_a.weight"), &[h, d]));
+                out.push(t(HfKind::Linear, format!("{m}in_proj_b.weight"), &[h, d]));
+                out.push(t(HfKind::Plain, format!("{m}A_log"), &[h]));
+                out.push(t(HfKind::Plain, format!("{m}dt_bias"), &[h]));
+                out.push(t(HfKind::Plain, format!("{m}norm.weight"), &[dv]));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}out_proj.weight"),
+                    &[d, h * dv],
+                ));
             }
             Qwen35Mixer::Attention => {
                 let (hq, hkv, hd) = (spec.q_heads, spec.kv_heads, spec.head_dim);
                 let m = format!("{l}self_attn.");
-                out.push(t(format!("{m}q_proj.weight"), &[hq * 2 * hd, d]));
-                out.push(t(format!("{m}k_proj.weight"), &[hkv * hd, d]));
-                out.push(t(format!("{m}v_proj.weight"), &[hkv * hd, d]));
-                out.push(t(format!("{m}q_norm.weight"), &[hd]));
-                out.push(t(format!("{m}k_norm.weight"), &[hd]));
-                out.push(t(format!("{m}o_proj.weight"), &[d, hq * hd]));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}q_proj.weight"),
+                    &[hq * 2 * hd, d],
+                ));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}k_proj.weight"),
+                    &[hkv * hd, d],
+                ));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}v_proj.weight"),
+                    &[hkv * hd, d],
+                ));
+                out.push(t(HfKind::Plain, format!("{m}q_norm.weight"), &[hd]));
+                out.push(t(HfKind::Plain, format!("{m}k_norm.weight"), &[hd]));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}o_proj.weight"),
+                    &[d, hq * hd],
+                ));
             }
         }
-        out.push(t(format!("{l}post_attention_layernorm.weight"), &[d]));
-        out.push(t(format!("{l}mlp.gate_proj.weight"), &[f, d]));
-        out.push(t(format!("{l}mlp.up_proj.weight"), &[f, d]));
-        out.push(t(format!("{l}mlp.down_proj.weight"), &[d, f]));
+        out.push(t(
+            HfKind::Plain,
+            format!("{l}post_attention_layernorm.weight"),
+            &[d],
+        ));
+        out.push(t(
+            HfKind::Linear,
+            format!("{l}mlp.gate_proj.weight"),
+            &[f, d],
+        ));
+        out.push(t(HfKind::Linear, format!("{l}mlp.up_proj.weight"), &[f, d]));
+        out.push(t(
+            HfKind::Linear,
+            format!("{l}mlp.down_proj.weight"),
+            &[d, f],
+        ));
     }
-    out.push(t(format!("{prefix}norm.weight"), &[d]));
+    out.push(t(HfKind::Plain, format!("{prefix}norm.weight"), &[d]));
     out
 }
 
@@ -263,17 +319,9 @@ fn interleave(q: &[f32], g: &[f32], heads: usize, d: usize, cols: usize) -> Vec<
     out
 }
 
-/// Bytes of the decode buffer [`load_hf`] reuses for every read: a fixed
-/// chunk, never a function of the tensor.
+/// Largest decode buffer [`load_hf`] reuses within one tensor's read. It is
+/// uncharged: the budget check covers the tensors, and the chunk is transient.
 const READ_CHUNK_BYTES: usize = LE_READ_CHUNK_BYTES;
-
-/// Whether `name` is one of the weights a `linear` reads (`q_proj`,
-/// `in_proj_a`, `gate_proj`, ...: a `.weight` with `_proj` in its name): the
-/// tensors that follow `load_hf`'s `linears` storage. The embedding
-/// follows `table`; everything else is `F32`.
-fn is_linear(name: &str) -> bool {
-    name.ends_with(".weight") && name.contains("_proj")
-}
 
 /// Where a tensor's values land in the output tensor, as one run of `len`
 /// elements starting `first` elements into the stored tensor.
@@ -309,8 +357,20 @@ fn load_runs(
         }
     };
     let mut out = Tensor::zeros(shape, storage, budget)?;
-    let mut chunk = [0u8; READ_CHUNK_BYTES];
-    let per_chunk = READ_CHUNK_BYTES / width;
+    // The decode buffer is on the heap, sized to the tensor when it is
+    // smaller than a chunk: a worker thread's stack may be 512 KiB.
+    let want: usize = runs.iter().map(|&(_, len)| len).sum::<usize>() * width;
+    let chunk_len = want.min(READ_CHUNK_BYTES);
+    let mut chunk = Vec::new();
+    chunk
+        .try_reserve_exact(chunk_len)
+        .map_err(|_| OjasError::CapacityExceeded {
+            requested: chunk_len as u64,
+            cap: budget.cap_bytes(),
+            live: budget.live_bytes().unwrap_or(0),
+        })?;
+    chunk.resize(chunk_len, 0u8);
+    let per_chunk = chunk_len / width;
     let mut at = 0usize;
     for &(first, len) in runs {
         let mut done = 0usize;
@@ -391,14 +451,10 @@ pub fn load_hf(
     }
     spec.validate()?;
     let names = hf_tensors(spec, prefix);
-    let storage_of = |name: &str| {
-        if name == names[0].name {
-            table
-        } else if is_linear(name) {
-            linears
-        } else {
-            DType::F32
-        }
+    let storage_of = |kind: HfKind| match kind {
+        HfKind::Table => table,
+        HfKind::Linear => linears,
+        HfKind::Plain => DType::F32,
     };
     let mut total = 0u64;
     for want in &names {
@@ -423,7 +479,7 @@ pub fn load_hf(
         }
         let bytes = u64::try_from(shape_product(&want.shape)?)
             .ok()
-            .and_then(|n| n.checked_mul(storage_of(&want.name).size() as u64))
+            .and_then(|n| n.checked_mul(storage_of(want.kind).size() as u64))
             .ok_or_else(|| refuse(OP, format!("{}: byte size overflows", want.name)))?;
         total = total
             .checked_add(bytes)
@@ -433,7 +489,9 @@ pub fn load_hf(
     // charged total is the whole footprint: refuse now, before a byte is read.
     budget.check_room(total)?;
     let run = |name: &str, shape: &[usize], runs: &[Run]| {
-        load_runs(file, name, storage_of(name), shape, runs, budget)
+        let kind = names.iter().find(|t| t.name == name).map(|t| t.kind);
+        let storage = storage_of(kind.unwrap_or(HfKind::Plain));
+        load_runs(file, name, storage, shape, runs, budget)
     };
     let whole = |name: String, shape: &[usize]| -> Result<Tensor, OjasError> {
         run(&name, shape, &[(0, shape_product(shape)?)])
