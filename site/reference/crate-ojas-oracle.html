@@ -151,7 +151,21 @@
 <li><strong><code>fixtures/tiny/</code></strong>: nanolab&#39;s GPT at a tiny size, exported from torch on CPU in fp32, plus the ojas <code>BatchSampler</code> window starts the torch side replays. This is framework-design.md §9 item 13. The model parity gates in <code>src/parity.rs</code> run against these once ojas-model implements <code>ParityModel</code> (see &#34;Enabling the model parity tests&#34;).
 </li>
 </ul>
+<ul>
+<li><strong><code>fixtures/variants/</code></strong>: the same tiny GPT with grouped-query attention (<code>gqa.safetensors</code>, 4 query heads over 2 KV heads) and with sliding-window attention (<code>swa.safetensors</code>, window 8, MHA), forward and backward, from nanolab&#39;s own model. The tiny fixtures above are MHA with full causal attention, so without these a GQA or window bug shared by ojas&#39;s CPU and GPU paths passes (<code>src/variants.rs</code>, <code>python/variant_fixture.py</code>).
+</li>
+<li><strong><code>fixtures/sampler/golden.txt</code></strong>: torch&#39;s filtered, renormalised probabilities and inverse-CDF choices for fixed logits, settings and uniforms, which <code>ojas-infer/tests/sampler_golden.rs</code> holds the host sampler to (<code>python/sampler_golden.py</code>).
+</li>
+</ul>
 <p>Python is used only to <em>generate</em> files (<code>python/</code>, a reference oracle); nothing in the crate runs it.</p>
+<h2 id="the-variant-goldens">The variant goldens <a class="anchor" href="#the-variant-goldens" aria-label="Link to this section">#</a></h2>
+<p><code>variant_fixture.py</code> builds nanolab&#39;s <code>GPT</code> for <code>gqa</code> (<code>n_kv_head = 2</code>; nanolab widens K and V with <code>repeat_interleave</code>, so query head <code>h</code> reads KV head <code>h // 2</code>) and <code>swa</code> (<code>mixer = &#34;swa&#34;</code>, <code>swa_window = 8</code>, <code>swa_sinks = 0</code>, which is ojas&#39;s <code>window = Some(8)</code>), on one micro-batch of B=2, T=32. Each file holds the parameters (<code>param/&lt;name&gt;</code>), the gradients of the loss at seed 1 (<code>grad/&lt;name&gt;</code>), <code>x</code>, <code>y</code>, <code>logits</code>, and in the metadata the spec (<code>ojas-spec-v1</code>, or <code>ojas-spec-v2</code> with <code>window</code>) and the loss.</p>
+<p>The parameters are nanolab&#39;s init with <code>zero_init_proj</code> off and every constant-initialised tensor (norm weights, gate, <code>vr_lambda</code>) moved by a fixed seeded draw, because at nanolab&#39;s own init <code>o_proj</code> and <code>ffn.down</code> are zero and every attention gradient is exactly zero. The generator refuses to write unless every gradient is non-zero and the variant changes the logits (window 8 against full causal: max |dlogit| 0.26; swapping the two KV heads: 0.50), so a model that ignores the variant cannot match. <code>ojas_oracle::variants::load_variant</code> refuses a file whose spec is not the tiny model with that variant&#39;s one change.</p>
+<p><code>parity::variant_forward_parity</code> and <code>parity::variant_grads_parity</code> run a <code>ParityModel</code> on them. A runner first calls <code>ParityModel::configure(&amp;spec)</code> with the fixture&#39;s spec; the default accepts only the tiny spec, so an adapter not written for another shape fails loudly instead of running the wrong model. <code>ojas-model/tests/oracle_parity.rs</code> runs CPU Exact, Metal and wgpu on both.</p>
+<h2 id="per-backend-gates">Per-backend gates <a class="anchor" href="#per-backend-gates" aria-label="Link to this section">#</a></h2>
+<p>The constants in <code>src/parity.rs</code> are <code>CpuBackend</code> (Exact)&#39;s, which sums sequentially like torch&#39;s CPU kernels. A device sums in another order, so the <code>_with</code> runners (<code>forward_parity_with</code>, <code>grads_parity_with</code>, <code>trace_parity_ns5_with</code>, <code>curve_parity_ns5_with</code>, <code>check_curve_with</code>) take a <code>Gates</code>; <code>Gates::EXACT</code> is the constants, every <code>_with</code> runner refuses a gate that is not positive and finite, and the plain runners always use <code>EXACT</code>. A device&#39;s own <code>Gates</code> live next to its tests, each field with the measurement it is derived from.</p>
+<h2 id="the-sampler-golden">The sampler golden <a class="anchor" href="#the-sampler-golden" aria-label="Link to this section">#</a></h2>
+<p><code>sampler_golden.py</code> writes, for 15 cases (greedy with ties, a signed-zero tie, a masked leader; temperature; top-k including a cut inside a tie; top-p; both; <code>-inf</code> masks; V = 256), what torch computes in float64 with a stable descending sort, <code>softmax(z / t)</code>, the shortest top-p prefix and the renormalised <code>cumsum</code>, and the inverse-CDF choice for 26 fixed uniforms. <code>ojas-infer/tests/sampler_golden.rs</code> places <code>SplitMix64</code> at the state whose next draw is each uniform (the generator&#39;s finalizer is a bijection) and requires torch&#39;s id, then recovers the sampler&#39;s cumulative probabilities by bisecting its choice over the 2^53 draws and compares them to torch&#39;s.</p>
 <h2 id="the-tiny-fixtures">The tiny fixtures <a class="anchor" href="#the-tiny-fixtures" aria-label="Link to this section">#</a></h2>
 <p>Model: 2 layers, d=64, 4 heads × 16, SwiGLU hidden <strong>192</strong>, V=256, T=32, tied embedding, QK-norm, RoPE base 10000, per-head gate, value residual. Batches: B=2, K=2, seed 1337, from <code>tokens.bin</code>.</p>
 <p>The hidden width is 192, not 128: nanolab derives it as <code>_swiglu_hidden(d_model)</code> (config.py:364-368), which is 192 at d=64, and it is not a <code>Config</code> field. 192 also matches framework-design.md §10.</p>
@@ -208,7 +222,7 @@
 <tr><td><code>value_residual</code></td><td>bool</td><td>blend layer 0&#39;s values with <code>sigmoid(vr_lambda)</code></td></tr>
 </tbody></table></div>
 <p>The exporter refuses any nanolab config ojas does not implement (another mixer, FFN, norm or position scheme, μP, loops, dropout, an attention-scale ablation), so the booleans are always true today; they are explicit so a reader can refuse rather than assume. Floats are JSON numbers (<code>1e-06</code>), so a reader needs an f64-capable JSON parser: <code>ojas_io::json</code> keeps integers exact and floats as f64. <code>ojas_oracle::spec::parse_spec</code> is a reference reader.</p>
-<p><code>ojas-spec-v2</code> is the same object with one more key, <code>window</code> (int, at least 1): sliding-window attention on every layer, query <code>t</code> seeing keys <code>t - window &lt; j &lt;= t</code>, which is nanolab&#39;s <code>swa</code> mixer with <code>swa_sinks = 0</code>. <code>ojas_model::ModelSpec::to_json</code> writes v1 for a spec without a window, so every exported file is unchanged, and v2 for one with a window; <code>ModelSpec::from_json</code> reads both (<code>window</code> is required in v2 and refused in v1). The exporter and <code>ojas_oracle::spec::parse_spec</code> stay at v1: they refuse any mixer but <code>attention</code>, so no windowed checkpoint is exported yet.</p>
+<p><code>ojas-spec-v2</code> is the same object with one more key, <code>window</code> (int, at least 1): sliding-window attention on every layer, query <code>t</code> seeing keys <code>t - window &lt; j &lt;= t</code>, which is nanolab&#39;s <code>swa</code> mixer with <code>swa_sinks = 0</code>. <code>ojas_model::ModelSpec::to_json</code> writes v1 for a spec without a window, so every exported file is unchanged, and v2 for one with a window; <code>ModelSpec::from_json</code> reads both (<code>window</code> is required in v2 and refused in v1). <code>ojas_oracle::spec::parse_spec</code> reads both the same way (<code>ModelSpec::window</code>), for the <code>swa</code> fixture. The exporter (<code>export_init.py</code>) stays at v1: it refuses any mixer but <code>attention</code>, so no windowed checkpoint is exported yet.</p>
 <p>Tensor names are nanolab <code>state_dict</code> keys (§2): <code>_orig_mod.</code> stripped, <code>lm_head.weight</code> not stored (the exporter first checks it is bit-equal to <code>tok_emb.weight</code>), all F32.</p>
 <h2 id="regenerating">Regenerating <a class="anchor" href="#regenerating" aria-label="Link to this section">#</a></h2>
 <p>Interpreter: <code>/opt/homebrew/opt/python@3.14/bin/python3.14</code> (Python 3.14.7, torch 2.13.0, numpy 2.4.6, safetensors 0.8.0), the one <code>bench/</code> uses. nanolab is read from <code>/Users/bharath/Code/research/MLSystemsLab</code> (<code>OJAS_NANOLAB_ROOT</code> overrides) with bytecode writing off. CPU only.</p>
@@ -216,6 +230,11 @@
 bash ojas-oracle/python/regen_tiny.sh
 # the same twice, failing unless every file is byte-identical
 bash ojas-oracle/python/check_determinism.sh 2
+
+# the GQA, sliding-window and sampler goldens (about 10 s); `check` writes
+# nothing and fails unless two runs and the checked-in files are identical
+bash ojas-oracle/python/regen_variants.sh
+bash ojas-oracle/python/regen_variants.sh check
 
 # one step at a time
 PY=/opt/homebrew/opt/python@3.14/bin/python3.14
@@ -281,6 +300,9 @@ impl ParityModel for Cpu {
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#the-variant-goldens">The variant goldens</a></li>
+<li><a href="#per-backend-gates">Per-backend gates</a></li>
+<li><a href="#the-sampler-golden">The sampler golden</a></li>
 <li><a href="#the-tiny-fixtures">The tiny fixtures</a></li>
 <li><a href="#the-batch-start-handoff">The batch-start handoff</a></li>
 <li><a href="#the-ojasspec-json-ojas-spec-v1">The ojas.spec JSON (ojas-spec-v1)</a></li>
