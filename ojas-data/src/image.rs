@@ -281,7 +281,9 @@ impl ImageSet {
             let take = left.min(CIFAR_CHUNK_RECORDS);
             file.read_exact(&mut chunk[..take * CIFAR10_RECORD_BYTES])
                 .map_err(|e| truncated(io_error(e), total, total))?;
-            for rec in chunk[..take * CIFAR10_RECORD_BYTES].chunks_exact(CIFAR10_RECORD_BYTES) {
+            let (records, _) =
+                chunk[..take * CIFAR10_RECORD_BYTES].as_chunks::<CIFAR10_RECORD_BYTES>();
+            for rec in records {
                 labels.push(rec[0]);
                 pixels.extend_from_slice(&rec[1..]);
             }

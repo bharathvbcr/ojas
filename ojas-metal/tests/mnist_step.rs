@@ -92,10 +92,10 @@ fn step<Bk: Backend>(b: &Bk, n: &mut Net, x: &Tensor, y: &Tensor) -> Result<f32,
     let (gh, gw2) = b.linear_backward(&h, &n.w2, &glogits)?;
     let gpre = b.silu_backward(&pre, &gh)?;
     let (_, gw1) = b.linear_backward(x, &n.w1, &gpre)?;
-    let cfg = AdamWConfig::nanolab(1e-2, 0.0);
+    let cfg = AdamWConfig::nanolab(1e-3, 0.0);
     let [(m1a, m2a), (m1b, m2b)] = &mut n.m;
-    b.adamw_step(&mut n.w1, &gw1, m1a, m2a, 0, cfg)?;
-    b.adamw_step(&mut n.w2, &gw2, m1b, m2b, 0, cfg)?;
+    b.adamw_step(&mut n.w1, &gw1, m1a, m2a, 1, cfg)?;
+    b.adamw_step(&mut n.w2, &gw2, m1b, m2b, 1, cfg)?;
     if b.id() == BackendId::Metal {
         for t in [&pre, &h, &logits, &gh, &gw1, &n.w1] {
             assert_eq!(t.device(), Some(BackendId::Metal), "left the device");

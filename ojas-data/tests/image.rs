@@ -168,7 +168,7 @@ fn wrong_magic_and_dtype_are_refused() {
     );
     // A label file in the image slot.
     assert!(matches!(
-        magic_err(idx_labels(2), idx_labels(2)),
+        magic_err(idx_labels(20), idx_labels(20)),
         ImageError::BadMagic { .. }
     ));
 }
@@ -438,7 +438,12 @@ fn run(
     (0..batches)
         .map(|_| {
             let n = s.next_batch(&mut x, &mut y).unwrap();
-            (x.iter().map(|v| v.to_bits()).collect(), y.clone(), n)
+            let floats = n * set.image_len();
+            (
+                x[..floats].iter().map(|v| v.to_bits()).collect(),
+                y[..n].to_vec(),
+                n,
+            )
         })
         .collect()
 }
@@ -785,10 +790,21 @@ fn bench_cifar_batch_128() {
     }
 }
 
-const PIN_NORM_0: u32 = 0;
-const PIN_NORM_128: u32 = 0;
-const PIN_NORM_255: u32 = 0;
-const PIN_NORM_CH1_0: u32 = 0;
-const PIN_NORM_CH2_0: u32 = 0;
-const PIN_DRAWS: [(usize, usize, bool); 0] = [];
-const PIN_ORDER: [usize; 0] = [];
+const PIN_NORM_0: u32 = 3221137171;
+const PIN_NORM_128: u32 = 1026498880;
+const PIN_NORM_255: u32 = 1073989747;
+const PIN_NORM_CH1_0: u32 = 3221060112;
+const PIN_NORM_CH2_0: u32 = 3218765969;
+/// `(dy, dx, flip)` of images 0..8, seed 2024, epoch 0, `Augment::CIFAR10`.
+const PIN_DRAWS: [(usize, usize, bool); 8] = [
+    (2, 8, true),
+    (5, 1, true),
+    (8, 3, true),
+    (8, 2, false),
+    (5, 3, false),
+    (3, 4, true),
+    (0, 8, true),
+    (7, 4, false),
+];
+/// The first 8 dataset indices of seed 2024's epoch-0 shuffle of 32 images.
+const PIN_ORDER: [usize; 8] = [29, 1, 13, 10, 30, 0, 26, 5];
