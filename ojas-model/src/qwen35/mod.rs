@@ -13,8 +13,16 @@
 //! - [`forward_hidden`]: the same tower to the final norm, for a host-side
 //!   head; [`gather_rows`] reads one hidden row per example with a gradient,
 //!   and [`RightPadded`] is the only padding it accepts.
+//! - [`adapters`], [`bank`] and [`optim`]: the trainable-entry side of the
+//!   LoRA track. [`bank::AdapterBank`] sums per-sequence gradients,
+//!   [`optim::adamw_all_or_nothing`] steps every entry or none, and
+//!   [`adapters`] writes and reads the adapter checkpoint
+//!   (`docs/adapter-checkpoint.md`).
 
+pub mod adapters;
+pub mod bank;
 mod forward;
+pub mod optim;
 mod params;
 mod spec;
 

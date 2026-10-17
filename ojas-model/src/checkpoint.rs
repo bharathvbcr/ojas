@@ -153,11 +153,19 @@ const FINDER_FILE: &str = ".DS_Store";
 /// [`Trainer::save`] runs this under the replace lock, so no writer that
 /// takes that lock can change the directory between this check and the swap.
 pub fn check_save_target(dir: &Path) -> Result<(), String> {
+    check_target_dir(dir, &[MODEL_FILE, OPTIM_FILE, STATE_FILE], STATE_FILE)
+}
+
+/// [`check_save_target`] for any checkpoint layout: `files` are the names it
+/// may hold and `marker` the one of them that proves a directory is a
+/// checkpoint. The adapter checkpoint ([`crate::qwen35::adapters`]) shares it.
+pub(crate) fn check_target_dir(dir: &Path, files: &[&str], marker: &str) -> Result<(), String> {
     let what = dir.display();
+    let listed = files.join(", ");
     let refuse = |why: String| {
         Err(format!(
             "{what}: {why}; SAVE replaces only an absent path, an empty directory or an \
-             earlier checkpoint ({MODEL_FILE}, {OPTIM_FILE}, {STATE_FILE}) and left it as it was"
+             earlier checkpoint ({listed}) and left it as it was"
         ))
     };
     let entries = match fs::read_dir(dir) {
@@ -178,10 +186,7 @@ pub fn check_save_target(dir: &Path) -> Result<(), String> {
                 _ => return refuse(format!("{FINDER_FILE} in it is not a regular file")),
             }
         }
-        if ![MODEL_FILE, OPTIM_FILE, STATE_FILE]
-            .iter()
-            .any(|f| name == OsStr::new(f))
-        {
+        if !files.iter().any(|f| name == OsStr::new(f)) {
             return refuse(format!(
                 "it is not a checkpoint directory: it holds {:?}",
                 name.to_string_lossy()
@@ -197,12 +202,12 @@ pub fn check_save_target(dir: &Path) -> Result<(), String> {
             }
             Err(e) => return refuse(format!("{:?} cannot be inspected ({e})", name)),
         }
-        has_state |= name == OsStr::new(STATE_FILE);
+        has_state |= name == OsStr::new(marker);
         held += 1;
     }
     if held > 0 && !has_state {
         return refuse(format!(
-            "it is not a checkpoint directory: it has no {STATE_FILE}"
+            "it is not a checkpoint directory: it has no {marker}"
         ));
     }
     Ok(())
