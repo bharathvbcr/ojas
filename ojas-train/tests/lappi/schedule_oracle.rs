@@ -84,8 +84,15 @@ fn real_ft_with_floor_reproduces_every_floor_zero_schedule_bit_for_bit() {
         }
         matched.push((peak, total));
     }
-    assert_eq!(matched.len(), 4, "floor-0 schedules on the real_ft rule: {matched:?}");
-    assert!(matched.contains(&(1e-5, 9683)), "F's epoch length at floor 0: {matched:?}");
+    assert_eq!(
+        matched.len(),
+        4,
+        "floor-0 schedules on the real_ft rule: {matched:?}"
+    );
+    assert!(
+        matched.contains(&(1e-5, 9683)),
+        "F's epoch length at floor 0: {matched:?}"
+    );
 }
 
 /// The oracle's case for `(peak, total, warmup, min_lr)`, its steps and Python's rates.
@@ -101,7 +108,12 @@ fn case(o: &serde_json::Value, peak: f64, total: u64, min_lr: f64) -> (Vec<u64>,
         })
         .unwrap_or_else(|| panic!("no oracle case ({peak:e}, {total}, min {min_lr:e})"));
     (
-        c["steps"].as_array().unwrap().iter().map(|s| s.as_u64().unwrap()).collect(),
+        c["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_u64().unwrap())
+            .collect(),
         common::fhex_list(&c["lr"]),
     )
 }
@@ -118,11 +130,23 @@ fn rung_d_schedule_is_the_recipes_formula_at_200_steps_bit_equal_at_every_step()
     let s = LrSchedule::real_ft(1e-5, 200).unwrap();
     assert_eq!(s.warmup_steps(), 10);
     assert_eq!(s.min_lr().to_bits(), (1e-5f64 / 10.0).to_bits());
-    assert_ne!(s.min_lr().to_bits(), 1e-6f64.to_bits(), "lr / 10 is not the literal 1e-6");
+    assert_ne!(
+        s.min_lr().to_bits(),
+        1e-6f64.to_bits(),
+        "lr / 10 is not the literal 1e-6"
+    );
     let (steps, want) = case(&o, 1e-5, 200, 1e-5 / 10.0);
-    assert_eq!(steps, (0..200).collect::<Vec<_>>(), "every step of the schedule is compared");
+    assert_eq!(
+        steps,
+        (0..200).collect::<Vec<_>>(),
+        "every step of the schedule is compared"
+    );
     for (step, w) in steps.iter().zip(&want) {
-        assert_eq!(s.lr_at(*step).unwrap().to_bits(), w.to_bits(), "rung (d) step {step}");
+        assert_eq!(
+            s.lr_at(*step).unwrap().to_bits(),
+            w.to_bits(),
+            "rung (d) step {step}"
+        );
     }
     assert!(s.lr_at(200).is_err(), "step 200 is past the schedule");
 
@@ -134,5 +158,7 @@ fn rung_d_schedule_is_the_recipes_formula_at_200_steps_bit_equal_at_every_step()
         assert_eq!(got.to_bits(), w.to_bits(), "literal schedule step {step}");
         differ += usize::from(got.to_bits() != s.lr_at(*step).unwrap().to_bits());
     }
-    eprintln!("rung (d): the literal min_lr=1e-6 schedule differs from the formula's at {differ} of 200 steps");
+    eprintln!(
+        "rung (d): the literal min_lr=1e-6 schedule differs from the formula's at {differ} of 200 steps"
+    );
 }

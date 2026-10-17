@@ -14,16 +14,17 @@
 //!   the repo's canonical digest of a tensor set, which pins the span-head init file
 //!   (Amendment 2 (iv); `tests/head_init.rs` checks them against Python's own functions).
 //!
-//! The consumed-batch digest (`ConsumedPrefix`) has one owner, beside the `Batch` it folds:
-//! [`crate::shards::ConsumedPrefix`].
+//! The consumed-batch digest ([`ConsumedPrefix`]) is here too; only the shard-specific folding
+//! of a `Batch` (`Batch::fold_into`) lives beside the `Batch`, in `shards`.
 
+use std::fmt;
 use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
 use serde_json::Value;
 
-use crate::pyjson::{dumps, float_hex, obj, PyJsonError, CANONICAL_ASCII};
+use crate::pyjson::{CANONICAL_ASCII, PyJsonError, dumps, float_hex, obj};
 
 /// `run_control.MAX_CAP_S`: 40 h. A cap above the program's cap is not a cap.
 pub const MAX_CAP_S: f64 = 40.0 * 3600.0;
@@ -38,17 +39,27 @@ pub const QUICK_CAP_S: f64 = 1_800.0;
 /// serialisation rule, kept equal to Python's so row hashes agree; it is never a run cap.
 pub const DEFAULT_CAP_S: f64 = QUICK_CAP_S;
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RunControlError {
-    #[error("{0}")]
     Invalid(String),
-    #[error(
-        "the clock went backwards: {now}s elapsed now against {high_water}s already observed. \
-         Clamping the difference away would extend the cap by the size of the step back; fix \
-         the clock, the cap cannot be trusted until you do."
-    )]
     ClockBackwards { now: f64, high_water: f64 },
 }
+
+impl fmt::Display for RunControlError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(m) => f.write_str(m),
+            Self::ClockBackwards { now, high_water } => write!(
+                f,
+                "the clock went backwards: {now}s elapsed now against {high_water}s already observed. \
+                 Clamping the difference away would extend the cap by the size of the step back; fix \
+                 the clock, the cap cannot be trusted until you do."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RunControlError {}
 
 /// The hard stop: positive, finite, at most [`MAX_CAP_S`]. There is no value meaning "no cap".
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,10 +70,14 @@ pub struct WallClockCap {
 impl WallClockCap {
     pub fn new(cap_s: f64) -> Result<Self, RunControlError> {
         if !cap_s.is_finite() {
-            return Err(RunControlError::Invalid(format!("cap_s must be finite, got {cap_s}")));
+            return Err(RunControlError::Invalid(format!(
+                "cap_s must be finite, got {cap_s}"
+            )));
         }
         if cap_s <= 0.0 {
-            return Err(RunControlError::Invalid(format!("cap_s must be positive, got {cap_s}")));
+            return Err(RunControlError::Invalid(format!(
+                "cap_s must be positive, got {cap_s}"
+            )));
         }
         if cap_s > MAX_CAP_S {
             return Err(RunControlError::Invalid(format!(
@@ -110,7 +125,9 @@ pub struct MonotonicClock {
 
 impl MonotonicClock {
     pub fn new() -> Self {
-        Self { origin: Instant::now() }
+        Self {
+            origin: Instant::now(),
+        }
     }
 }
 
@@ -138,7 +155,9 @@ impl<'c> RunClock<'c> {
     pub fn start(clock: &'c dyn Clock, cap: WallClockCap) -> Result<Self, RunControlError> {
         let t0 = clock.now_s();
         if !t0.is_finite() {
-            return Err(RunControlError::Invalid(format!("clock reading at start is {t0}")));
+            return Err(RunControlError::Invalid(format!(
+                "clock reading at start is {t0}"
+            )));
         }
         Ok(Self {
             clock,
@@ -187,7 +206,10 @@ pub struct LossPoint {
 impl LossPoint {
     fn validate(&self) -> Result<(), RunControlError> {
         if !self.loss.is_finite() {
-            return Err(RunControlError::Invalid(format!("LossPoint.loss must be finite, got {}", self.loss)));
+            return Err(RunControlError::Invalid(format!(
+                "LossPoint.loss must be finite, got {}",
+                self.loss
+            )));
         }
         if self.loss < 0.0 {
             return Err(RunControlError::Invalid(format!(
@@ -259,7 +281,12 @@ impl LossLog {
     }
 
     pub fn to_json(&self) -> Result<Value, PyJsonError> {
-        Ok(Value::Array(self.points.iter().map(LossPoint::to_json).collect::<Result<_, _>>()?))
+        Ok(Value::Array(
+            self.points
+                .iter()
+                .map(LossPoint::to_json)
+                .collect::<Result<_, _>>()?,
+        ))
     }
 
     /// `LossLog.digest`: sha256 over `json.dumps([...], sort_keys=True, separators=(",", ":"))`.
@@ -277,6 +304,72 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     s
 }
 
+/// `run_control.ConsumedPrefix.DOMAIN`.
+pub const CONSUMED_PREFIX_DOMAIN: &[u8] = b"qd-consumed-prefix-v1";
+/// Rust-only (Python's trainer has one epoch): the tag between the domain and the earlier
+/// epoch's digest in [`ConsumedPrefix::continuing`].
+const CONSUMED_PREFIX_EPOCH_LINK: &[u8] = b"qd-consumed-prefix-epoch-link-v1";
+
+/// `run_control.ConsumedPrefix`: a running sha256 over the batches consumed, in order. What
+/// one batch folds is the caller's (`Batch::fold_into` for a shard `Batch`).
+#[derive(Clone)]
+pub struct ConsumedPrefix {
+    hasher: Sha256,
+    n: u64,
+}
+
+impl Default for ConsumedPrefix {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConsumedPrefix {
+    /// An empty prefix, seeded with the domain string.
+    pub fn new() -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(CONSUMED_PREFIX_DOMAIN);
+        Self { hasher, n: 0 }
+    }
+
+    /// A prefix that continues an earlier epoch's: seeded with the domain string, then the
+    /// earlier digest (length-prefixed) and its fold count, so the digest of a second epoch
+    /// commits to everything the first consumed and `n_folded` counts across epochs. Epoch 0
+    /// never calls this, so its digest is `new()`'s and the Python oracle's.
+    pub fn continuing(prior_digest: &str, prior_n: u64) -> Self {
+        let mut prefix = Self::new();
+        prefix.hasher.update(CONSUMED_PREFIX_EPOCH_LINK);
+        prefix
+            .hasher
+            .update((prior_digest.len() as u64).to_be_bytes());
+        prefix.hasher.update(prior_digest.as_bytes());
+        prefix.n = prior_n;
+        prefix
+    }
+
+    /// `ConsumedPrefix.fold(*parts)`: every part length-prefixed, the count first.
+    pub fn fold(&mut self, parts: &[&[u8]]) {
+        let mut head = vec![0u8];
+        head.extend_from_slice(&(parts.len() as u32).to_be_bytes());
+        self.hasher.update(&head);
+        for p in parts {
+            self.hasher.update((p.len() as u64).to_be_bytes());
+            self.hasher.update(p);
+        }
+        self.n += 1;
+    }
+
+    /// Batches folded.
+    pub fn n_folded(&self) -> u64 {
+        self.n
+    }
+
+    /// The digest so far.
+    pub fn hexdigest(&self) -> String {
+        hex(&self.hasher.clone().finalize())
+    }
+}
+
 /// `run_control._TENSOR_REF_DOMAIN`.
 pub const TENSOR_REF_DOMAIN: &[u8] = b"qd-tensor-ref-v1";
 /// `run_control._SIDECAR_DOMAIN`.
@@ -286,7 +379,12 @@ pub const SIDECAR_DOMAIN: &[u8] = b"qd-checkpoint-sidecar-v1";
 /// the shape and the bytes, each length-prefixed big-endian (u32 for the name and the rank, u64
 /// for every axis and the byte count). `data` is the tensor's little-endian bytes. A byte count
 /// that disagrees with the shape is refused, as `TensorRef` refuses it.
-pub fn tensor_ref_digest(dtype: &str, shape: &[usize], element_bytes: usize, data: &[u8]) -> Result<String, RunControlError> {
+pub fn tensor_ref_digest(
+    dtype: &str,
+    shape: &[usize],
+    element_bytes: usize,
+    data: &[u8],
+) -> Result<String, RunControlError> {
     let elems = shape
         .iter()
         .try_fold(1usize, |a, &d| a.checked_mul(d))
@@ -298,7 +396,8 @@ pub fn tensor_ref_digest(dtype: &str, shape: &[usize], element_bytes: usize, dat
             data.len()
         )));
     }
-    let name_len = u32::try_from(dtype.len()).map_err(|e| RunControlError::Invalid(e.to_string()))?;
+    let name_len =
+        u32::try_from(dtype.len()).map_err(|e| RunControlError::Invalid(e.to_string()))?;
     let rank = u32::try_from(shape.len()).map_err(|e| RunControlError::Invalid(e.to_string()))?;
     let mut h = Sha256::new();
     h.update(TENSOR_REF_DOMAIN);
@@ -322,13 +421,18 @@ pub fn sidecar_digest(tensors: &[(String, String)]) -> Result<String, RunControl
     let mut sorted: Vec<&(String, String)> = tensors.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     if let Some(w) = sorted.windows(2).find(|w| w[0].0 == w[1].0) {
-        return Err(RunControlError::Invalid(format!("{} is named twice in one tensor set", w[0].0)));
+        return Err(RunControlError::Invalid(format!(
+            "{} is named twice in one tensor set",
+            w[0].0
+        )));
     }
     let mut h = Sha256::new();
     h.update(SIDECAR_DOMAIN);
     h.update((sorted.len() as u64).to_be_bytes());
     for (name, digest) in sorted {
-        let raw = unhex32(digest).ok_or_else(|| RunControlError::Invalid(format!("{name}: digest {digest:?} is not a sha256")))?;
+        let raw = unhex32(digest).ok_or_else(|| {
+            RunControlError::Invalid(format!("{name}: digest {digest:?} is not a sha256"))
+        })?;
         h.update((name.len() as u64).to_be_bytes());
         h.update(name.as_bytes());
         h.update(raw);
@@ -358,6 +462,21 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
+    #[test]
+    fn an_empty_prefix_has_a_real_digest() {
+        let empty = ConsumedPrefix::new().hexdigest();
+        assert_eq!(empty.len(), 64);
+        let mut one = ConsumedPrefix::new();
+        one.fold(&[b"ab"]);
+        let mut two = ConsumedPrefix::new();
+        two.fold(&[b"a", b"b"]);
+        assert_ne!(
+            one.hexdigest(),
+            two.hexdigest(),
+            "parts are length-prefixed"
+        );
+    }
+
     struct Fake(Cell<f64>);
     impl Clock for Fake {
         fn now_s(&self) -> f64 {
@@ -375,9 +494,15 @@ mod tests {
         clock.0.set(105.0);
         assert!(!rc.expired().unwrap());
         clock.0.set(110.0);
-        assert!(rc.expired().unwrap(), "elapsed == cap is expired, as Python's >=");
+        assert!(
+            rc.expired().unwrap(),
+            "elapsed == cap is expired, as Python's >="
+        );
         clock.0.set(104.0);
-        assert!(matches!(rc.elapsed_s(), Err(RunControlError::ClockBackwards { .. })));
+        assert!(matches!(
+            rc.elapsed_s(),
+            Err(RunControlError::ClockBackwards { .. })
+        ));
     }
 
     #[test]

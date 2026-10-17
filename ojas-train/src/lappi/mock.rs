@@ -21,9 +21,10 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use crate::adamw::{adamw_update, Moments};
+use crate::adamw::{Moments, adamw_update};
 use crate::step::{
-    check_per_entry, refuse_lr_scale, AdamWHyper, BankMode, HiddenGrad, ParamSpec, SequenceJob, StepError, StepProvider,
+    AdamWHyper, BankMode, HiddenGrad, ParamSpec, SequenceJob, StepError, StepProvider,
+    check_per_entry, refuse_lr_scale,
 };
 
 /// The toy model.
@@ -75,22 +76,39 @@ struct Forward {
 impl ToyProvider {
     pub fn new(vocab: usize, hidden: usize, layers: usize, seed: u64) -> Result<Self, StepError> {
         if vocab < 2 || hidden == 0 {
-            return Err(StepError::Contract(format!("vocab {vocab} and hidden {hidden} are too small")));
+            return Err(StepError::Contract(format!(
+                "vocab {vocab} and hidden {hidden} are too small"
+            )));
         }
         let mut specs = vec![ParamSpec::new("embed_tokens.weight", &[vocab, hidden])];
         for l in 0..layers {
-            specs.push(ParamSpec::new(format!("layers.{l}.mlp.weight"), &[hidden, hidden]));
+            specs.push(ParamSpec::new(
+                format!("layers.{l}.mlp.weight"),
+                &[hidden, hidden],
+            ));
         }
         specs.push(ParamSpec::new("norm.weight", &[hidden]));
         let mut rng = SplitMix::new(seed);
         let mut values = Vec::with_capacity(specs.len());
         for (i, s) in specs.iter().enumerate() {
             let n = s.numel()?;
-            let a = if i == EMBED { 1.0 } else if i == specs.len() - 1 { 0.1 } else { 0.5 / (hidden as f32).sqrt() };
+            let a = if i == EMBED {
+                1.0
+            } else if i == specs.len() - 1 {
+                0.1
+            } else {
+                0.5 / (hidden as f32).sqrt()
+            };
             values.push((0..n).map(|_| rng.uniform(a)).collect());
         }
-        let grads = specs.iter().map(|s| s.numel().map(|n| vec![0.0; n])).collect::<Result<_, _>>()?;
-        let moments = specs.iter().map(|s| s.numel().map(Moments::zeros)).collect::<Result<_, _>>()?;
+        let grads = specs
+            .iter()
+            .map(|s| s.numel().map(|n| vec![0.0; n]))
+            .collect::<Result<_, _>>()?;
+        let moments = specs
+            .iter()
+            .map(|s| s.numel().map(Moments::zeros))
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             vocab,
             hidden,
@@ -144,7 +162,10 @@ impl ToyProvider {
         // inputs[l][p] = h_l at p; acts[l][p] = tanh(W_l h_l)
         let mut inputs = Vec::with_capacity(self.layers + 1);
         let mut acts = Vec::with_capacity(self.layers);
-        let h0: Vec<Vec<f32>> = tokens.iter().map(|&t| e[t as usize * h..(t as usize + 1) * h].to_vec()).collect();
+        let h0: Vec<Vec<f32>> = tokens
+            .iter()
+            .map(|&t| e[t as usize * h..(t as usize + 1) * h].to_vec())
+            .collect();
         inputs.push(h0);
         for l in 0..self.layers {
             let w = &self.values[1 + l];
@@ -199,7 +220,13 @@ impl ToyProvider {
         let h = self.hidden;
         let e = &self.values[EMBED];
         let logits: Vec<f64> = (0..self.vocab)
-            .map(|v| e[v * h..(v + 1) * h].iter().zip(x).map(|(a, b)| f64::from(a * b)).sum())
+            .map(|v| {
+                e[v * h..(v + 1) * h]
+                    .iter()
+                    .zip(x)
+                    .map(|(a, b)| f64::from(a * b))
+                    .sum()
+            })
             .collect();
         let max = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let z: f64 = logits.iter().map(|l| (l - max).exp()).sum();
@@ -230,7 +257,9 @@ impl StepProvider for ToyProvider {
     ) -> Result<f64, StepError> {
         job.validate(self.vocab)?;
         if !job.hidden_at.is_empty() && external.is_none() {
-            return Err(StepError::Contract("hidden positions were requested with no loss to read them".into()));
+            return Err(StepError::Contract(
+                "hidden positions were requested with no loss to read them".into(),
+            ));
         }
         let h = self.hidden;
         let Forward { inputs, acts, x } = self.forward(job.tokens);
@@ -291,7 +320,11 @@ impl StepProvider for ToyProvider {
             for p in 0..t {
                 let a = &acts[l][p];
                 let hin = &inputs[l][p];
-                let du: Vec<f32> = dh_l[p].iter().zip(a).map(|(d, a)| d * (1.0 - a * a)).collect();
+                let du: Vec<f32> = dh_l[p]
+                    .iter()
+                    .zip(a)
+                    .map(|(d, a)| d * (1.0 - a * a))
+                    .collect();
                 let mut dprev = dh_l[p].clone();
                 for o in 0..h {
                     for i in 0..h {
@@ -333,7 +366,13 @@ impl StepProvider for ToyProvider {
         self.lr_scale_supported
     }
 
-    fn adamw_step(&mut self, hyper: &AdamWHyper, step: u64, lr_scale: &[f64], weight_decay: &[f64]) -> Result<(), StepError> {
+    fn adamw_step(
+        &mut self,
+        hyper: &AdamWHyper,
+        step: u64,
+        lr_scale: &[f64],
+        weight_decay: &[f64],
+    ) -> Result<(), StepError> {
         hyper.validate()?;
         check_per_entry(self.specs.len(), lr_scale, weight_decay)?;
         if !self.lr_scale_supported {
@@ -347,7 +386,15 @@ impl StepProvider for ToyProvider {
         }
         for i in 0..self.specs.len() {
             let lr = hyper.lr * lr_scale[i];
-            adamw_update(&mut self.values[i], &self.grads[i], &mut self.moments[i], hyper, lr, weight_decay[i], step)?;
+            adamw_update(
+                &mut self.values[i],
+                &self.grads[i],
+                &mut self.moments[i],
+                hyper,
+                lr,
+                weight_decay[i],
+                step,
+            )?;
         }
         self.step = step;
         Ok(())
@@ -386,15 +433,19 @@ impl StepProvider for ToyProvider {
             .create_new(true)
             .open(&path)
             .map_err(|e| StepError::Io(format!("{}: {e}", path.display())))?;
-        f.write_all(&bytes).map_err(|e| StepError::Io(format!("{}: {e}", path.display())))?;
-        f.sync_all().map_err(|e| StepError::Io(format!("{}: {e}", path.display())))?;
+        f.write_all(&bytes)
+            .map_err(|e| StepError::Io(format!("{}: {e}", path.display())))?;
+        f.sync_all()
+            .map_err(|e| StepError::Io(format!("{}: {e}", path.display())))?;
         Ok(vec![path])
     }
 
     fn load_state(&mut self, dir: &Path) -> Result<(), StepError> {
         let path = dir.join("toy-state.f32");
-        let bytes = fs::read(&path).map_err(|e| StepError::Io(format!("{}: {e}", path.display())))?;
-        let bad = || StepError::Contract(format!("{} does not describe this model", path.display()));
+        let bytes =
+            fs::read(&path).map_err(|e| StepError::Io(format!("{}: {e}", path.display())))?;
+        let bad =
+            || StepError::Contract(format!("{} does not describe this model", path.display()));
         let mut at = 0usize;
         let take8 = |at: &mut usize| -> Result<u64, StepError> {
             let s = bytes.get(*at..*at + 8).ok_or_else(bad)?;
@@ -412,7 +463,11 @@ impl StepProvider for ToyProvider {
             let read = |at: &mut usize| -> Result<Vec<f32>, StepError> {
                 let s = bytes.get(*at..*at + 4 * n).ok_or_else(bad)?;
                 *at += 4 * n;
-                Ok(s.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect())
+                Ok(s.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
+                    .collect())
             };
             values.push(read(&mut at)?);
             moments.push(Moments {

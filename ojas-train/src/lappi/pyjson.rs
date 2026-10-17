@@ -25,8 +25,9 @@
 //! [`float_hex`] / [`float_fromhex`] carry floats as bits. `tests/pyjson_oracle.rs` checks
 //! every one against what `tools/qd_train_oracle_trainer.py` dumped from Python itself.
 
+use std::fmt;
+
 use serde_json::{Map, Number, Value};
-use thiserror::Error;
 
 /// How `json.dumps` was called.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,26 +68,43 @@ pub const CANONICAL_ASCII: DumpOptions = DumpOptions {
 };
 
 /// A value Python's `json.dumps` would format in a way this port cannot reproduce exactly.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PyJsonError {
     /// A number serde_json holds as neither `i64`, `u64` nor a finite `f64`.
-    #[error("number {0} has no exact Python json.dumps rendering in this port")]
     UnrepresentableNumber(String),
     /// A float that is not finite: Python would write a bare `NaN`/`Infinity`, which is not
     /// JSON, and `float.hex` would write `nan`/`inf`.
-    #[error("{0} is not finite: Python would write it as a bare NaN/Infinity, which is not JSON")]
     NonFinite(String),
     /// An object built with the same key twice: the later value would win silently.
-    #[error("key {0:?} given twice")]
     DuplicateKey(String),
     /// A string that is not the 13-hex-digit form `float.hex()` writes.
-    #[error("{0:?} is not a float.hex() string")]
     NotFloatHex(String),
 }
 
+impl fmt::Display for PyJsonError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnrepresentableNumber(n) => write!(
+                f,
+                "number {n} has no exact Python json.dumps rendering in this port"
+            ),
+            Self::NonFinite(v) => write!(
+                f,
+                "{v} is not finite: Python would write it as a bare NaN/Infinity, which is not JSON"
+            ),
+            Self::DuplicateKey(k) => write!(f, "key {k:?} given twice"),
+            Self::NotFloatHex(s) => write!(f, "{s:?} is not a float.hex() string"),
+        }
+    }
+}
+
+impl std::error::Error for PyJsonError {}
+
 /// An object from `(key, value)` pairs, refusing a repeated key rather than letting the later
 /// value win silently.
-pub fn obj<K: Into<String>>(pairs: impl IntoIterator<Item = (K, Value)>) -> Result<Value, PyJsonError> {
+pub fn obj<K: Into<String>>(
+    pairs: impl IntoIterator<Item = (K, Value)>,
+) -> Result<Value, PyJsonError> {
     let mut out = Map::new();
     for (k, v) in pairs {
         let k = k.into();
@@ -354,7 +372,11 @@ mod tests {
         // round-trip; CPython's dtoa takes the even one (...655.2), Rust's `{:e}` the other.
         // Found by tools/qd_train_oracle_trainer.py's float sweep.
         let x = f64::from_bits(0x4308_3d7d_4ba9_fb7a);
-        assert_eq!(x * 4.0, 3_411_503_895_346_621.0, "x is exactly 852875973836655.25");
+        assert_eq!(
+            x * 4.0,
+            3_411_503_895_346_621.0,
+            "x is exactly 852875973836655.25"
+        );
         assert_eq!(float_repr(x), "852875973836655.2");
         assert_eq!(float_repr(-x), "-852875973836655.2");
     }
@@ -375,7 +397,10 @@ mod tests {
             assert_eq!(got, want);
             assert_eq!(float_fromhex(&got).unwrap().to_bits(), x.to_bits());
         }
-        assert!(float_fromhex("0x1.8p+1").is_err(), "only the 13-digit form Python writes");
+        assert!(
+            float_fromhex("0x1.8p+1").is_err(),
+            "only the 13-digit form Python writes"
+        );
         assert!(float_hex(f64::NAN).is_err());
     }
 

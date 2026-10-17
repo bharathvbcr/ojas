@@ -29,21 +29,25 @@
 //! checkpoint that resumes the exact trajectory (the consumed digest of the skipped prefix must
 //! match), and the three termination reasons.
 
+use std::fmt;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::adamw::{adamw_entry_step, EntryState, Moments};
+use crate::adamw::{EntryState, Moments, adamw_entry_step};
 use serde_json::Value;
 
-use crate::pyjson::{dumps, float_fromhex, float_hex, obj, PyJsonError, CANONICAL};
+use crate::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
 use crate::recipe::{self, OptimizerRecipe};
-use crate::run_control::{hex, Clock, LossLog, LossPoint, RunClock, RunControlError, WallClockCap};
+use crate::run_control::{
+    Clock, ConsumedPrefix, LossLog, LossPoint, RunClock, RunControlError, WallClockCap, hex,
+};
 use crate::schedule::{LrSchedule, ScheduleError};
-use crate::shards::ConsumedPrefix;
-use crate::step::{AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider};
+use crate::step::{
+    AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider,
+};
 
 /// `run_control.MAX_GRAD_ACCUM`.
 pub const MAX_GRAD_ACCUM: u32 = 4096;
@@ -53,24 +57,69 @@ pub const MAX_GRAD_ACCUM: u32 = 4096;
 /// would have to guess them.
 pub const CHECKPOINT_FORMAT: &str = "qd-train-checkpoint-v2";
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TrainError {
     /// `TrainerContractViolation`: the run was asked to do something its contract forbids.
-    #[error("refused: {0}")]
     Refused(String),
     /// A non-finite loss or gradient norm. The step it belongs to was not applied.
-    #[error("non-finite: {0}")]
     NonFinite(String),
-    #[error(transparent)]
-    Step(#[from] StepError),
-    #[error(transparent)]
-    Schedule(#[from] ScheduleError),
-    #[error(transparent)]
-    RunControl(#[from] RunControlError),
-    #[error(transparent)]
-    Json(#[from] PyJsonError),
-    #[error("io: {0}")]
+    Step(StepError),
+    Schedule(ScheduleError),
+    RunControl(RunControlError),
+    Json(PyJsonError),
     Io(String),
+}
+
+impl fmt::Display for TrainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refused(m) => write!(f, "refused: {m}"),
+            Self::NonFinite(m) => write!(f, "non-finite: {m}"),
+            Self::Step(e) => e.fmt(f),
+            Self::Schedule(e) => e.fmt(f),
+            Self::RunControl(e) => e.fmt(f),
+            Self::Json(e) => e.fmt(f),
+            Self::Io(m) => write!(f, "io: {m}"),
+        }
+    }
+}
+
+/// The wrapped errors were `#[error(transparent)]`: `source()` is the inner error's own
+/// source, not the inner error.
+impl std::error::Error for TrainError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Step(e) => e.source(),
+            Self::Schedule(e) => e.source(),
+            Self::RunControl(e) => e.source(),
+            Self::Json(e) => e.source(),
+            Self::Refused(_) | Self::NonFinite(_) | Self::Io(_) => None,
+        }
+    }
+}
+
+impl From<StepError> for TrainError {
+    fn from(e: StepError) -> Self {
+        Self::Step(e)
+    }
+}
+
+impl From<ScheduleError> for TrainError {
+    fn from(e: ScheduleError) -> Self {
+        Self::Schedule(e)
+    }
+}
+
+impl From<RunControlError> for TrainError {
+    fn from(e: RunControlError) -> Self {
+        Self::RunControl(e)
+    }
+}
+
+impl From<PyJsonError> for TrainError {
+    fn from(e: PyJsonError) -> Self {
+        Self::Json(e)
+    }
 }
 
 fn io(path: &Path, e: impl std::fmt::Display) -> TrainError {
@@ -84,8 +133,8 @@ pub trait ConsumedBatch {
     fn index(&self) -> u64;
 
     /// Fold this batch into `prefix` exactly as `trainer._fold` does, so the digest is the one
-    /// Python computes over the same batch: for a real [`crate::shards::Batch`],
-    /// [`ConsumedPrefix::fold_batch`]; for anything else, one call to [`ConsumedPrefix::fold`]
+    /// Python computes over the same batch: for a real shard `Batch`,
+    /// the shard `Batch::fold_into`; for anything else, one call to [`ConsumedPrefix::fold`]
     /// with the parts `[index (8 bytes BE), bucket (8 bytes BE), tokens, lengths, slot_kind,
     /// target_index, span_target, line_starts]`, each array as its numpy buffer's bytes (C
     /// order, its own dtype) and an absent optional array as no bytes.
@@ -156,7 +205,7 @@ pub struct MicroLoss {
 
 /// What the loop trains toward: how a batch becomes sequence jobs, the loss outside the model,
 /// and how the micro-batch's loss is formed. Lappi's letter + span objective is
-/// [`crate::objective::LetterSpanObjective`].
+/// `LetterSpanObjective` (the `objective` module).
 pub trait Objective {
     type Batch: ConsumedBatch;
 
@@ -169,7 +218,13 @@ pub trait Objective {
     /// The outside loss's gradient at sequence `seq` of the batch last planned: `hidden` is
     /// `[positions.len(), width]`, row-major; returns the same shape. Accumulates the host
     /// parameters' own gradients as a side effect.
-    fn hidden_grad(&mut self, seq: usize, positions: &[u32], hidden: &[f32], width: usize) -> Result<Vec<f32>, TrainError>;
+    fn hidden_grad(
+        &mut self,
+        seq: usize,
+        positions: &[u32],
+        hidden: &[f32],
+        width: usize,
+    ) -> Result<Vec<f32>, TrainError>;
 
     /// Close the micro-batch last planned, given the provider's unscaled row-loss sum per
     /// sequence.
@@ -205,7 +260,10 @@ impl Termination {
 
     /// Whether the run ended because it ran out of work, not because it ran out of time.
     pub fn finished(&self) -> bool {
-        matches!(self, Termination::DataExhausted | Termination::StepsExhausted)
+        matches!(
+            self,
+            Termination::DataExhausted | Termination::StepsExhausted
+        )
     }
 }
 
@@ -245,7 +303,13 @@ impl EtaRule {
 
     /// The projected seconds for this process's whole schedule, when the rule is evaluated
     /// after `optimizer_step` steps (only at `at_step`, and only by the process that took it).
-    fn projection(&self, optimizer_step: u64, first_step: u64, total_steps: u64, elapsed_s: f64) -> Option<f64> {
+    fn projection(
+        &self,
+        optimizer_step: u64,
+        first_step: u64,
+        total_steps: u64,
+        elapsed_s: f64,
+    ) -> Option<f64> {
         if optimizer_step != self.at_step || first_step >= self.at_step {
             return None;
         }
@@ -274,7 +338,12 @@ pub struct TrainConfig {
     pub grad_accum: u32,
     pub optimizer: OptimizerRecipe,
     pub max_grad_norm: f64,
+    /// The epoch this call trains. [`train`] runs exactly one; [`train_epochs`] sets it itself.
     pub epoch: u64,
+    /// How many epochs the whole run has (at least 1; `epoch < epochs`). The schedule's
+    /// `total_steps` covers all of them. A checkpoint of a run of more than one epoch records it,
+    /// and a resume of another count is refused; a one-epoch checkpoint records nothing.
+    pub epochs: u64,
     pub seed: u64,
     pub checkpoint: Option<CheckpointPolicy>,
     pub eta: Option<EtaRule>,
@@ -328,11 +397,30 @@ impl TrainResult {
     }
 }
 
+/// Where the consumed-batch digest stood when an epoch began: the earlier epochs' digest and
+/// how many batches they folded. The epoch's own digest is chained onto it
+/// ([`ConsumedPrefix::continuing`]), so the digest is never reset between epochs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpochLink {
+    pub digest: String,
+    pub n: u64,
+}
+
+impl EpochLink {
+    fn prefix(&self) -> ConsumedPrefix {
+        ConsumedPrefix::continuing(&self.digest, self.n)
+    }
+}
+
 /// A checkpoint read back: where the run was and what it had done.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResumeState {
     pub dir: PathBuf,
     pub epoch: u64,
+    /// How many epochs the run this checkpoint belongs to has (1 when it recorded none).
+    pub epochs: u64,
+    /// `None` in epoch 0; in a later epoch, what the earlier epochs consumed.
+    pub epoch_link: Option<EpochLink>,
     pub next_index: u64,
     pub optimizer_step: u64,
     pub seed: u64,
@@ -389,7 +477,16 @@ where
         )));
     }
     if !(cfg.max_grad_norm.is_finite() && cfg.max_grad_norm > 0.0) {
-        return Err(TrainError::Refused(format!("max_grad_norm must be positive, got {}", cfg.max_grad_norm)));
+        return Err(TrainError::Refused(format!(
+            "max_grad_norm must be positive, got {}",
+            cfg.max_grad_norm
+        )));
+    }
+    if cfg.epochs == 0 || cfg.epoch >= cfg.epochs {
+        return Err(TrainError::Refused(format!(
+            "epoch {} of {} epoch(s): a run has at least one epoch and trains one inside it",
+            cfg.epoch, cfg.epochs
+        )));
     }
     cfg.optimizer.validate()?;
     if let Some(eta) = &cfg.eta {
@@ -403,7 +500,10 @@ where
         )));
     }
     let entries = provider.parameters().to_vec();
-    let host_entries = objective.host_ref().map(|h| h.entries()).unwrap_or_default();
+    let host_entries = objective
+        .host_ref()
+        .map(|h| h.entries())
+        .unwrap_or_default();
     // Every per-entry number the optimizer uses comes out of this one table (Amendment 2 (ii)).
     let table = recipe::optimizer_table(&entries, &host_entries, &cfg.optimizer)?;
     let (provider_rows, host_rows) = table.split_at(entries.len());
@@ -412,10 +512,15 @@ where
     let host_rows = host_rows.to_vec();
     // One AdamWHyper serves every entry, so eps and the betas must be one value across the table.
     let Some(first) = table.first() else {
-        return Err(TrainError::Refused("the model has no parameters to train".into()));
+        return Err(TrainError::Refused(
+            "the model has no parameters to train".into(),
+        ));
     };
     let (beta1, beta2, eps) = (first.beta1, first.beta2, first.eps);
-    if let Some(e) = table.iter().find(|e| e.beta1 != beta1 || e.beta2 != beta2 || e.eps != eps) {
+    if let Some(e) = table
+        .iter()
+        .find(|e| e.beta1 != beta1 || e.beta2 != beta2 || e.eps != eps)
+    {
         return Err(TrainError::Refused(format!(
             "{} has betas ({}, {}) and eps {} but the step applies ({beta1}, {beta2}) and {eps} to every entry",
             e.name, e.beta1, e.beta2, e.eps
@@ -441,6 +546,8 @@ where
     let mut channel_log: Vec<(String, Vec<f64>)> = Vec::new();
     let mut start_index = 0u64;
     let mut resume_digest: Option<String> = None;
+    let mut epoch_link: Option<EpochLink> = None;
+    let mut resumed_from: Option<PathBuf> = None;
     if let Some(r) = resume {
         if r.seed != cfg.seed {
             return Err(TrainError::Refused(format!(
@@ -451,8 +558,17 @@ where
         }
         if r.epoch != cfg.epoch {
             return Err(TrainError::Refused(format!(
-                "checkpoint is at epoch {} but this call was given epoch {}",
+                "checkpoint is at epoch {} but this call was given epoch {}; a checkpoint's position \
+                 is in its own epoch's batch order, so the only way to the next epoch is \
+                 ResumeState::advance_to_epoch",
                 r.epoch, cfg.epoch
+            )));
+        }
+        if r.epochs != cfg.epochs {
+            return Err(TrainError::Refused(format!(
+                "checkpoint belongs to a run of {} epoch(s) but this run has {}; the schedule and the \
+                 batch plan of a run are fixed by its epoch count",
+                r.epochs, cfg.epochs
             )));
         }
         if r.schedule != cfg.schedule || r.grad_accum != cfg.grad_accum {
@@ -463,7 +579,9 @@ where
             ));
         }
         if r.host_entries != host_entries {
-            return Err(TrainError::Refused("the checkpoint's host parameters describe a different head".into()));
+            return Err(TrainError::Refused(
+                "the checkpoint's host parameters describe a different head".into(),
+            ));
         }
         provider.load_state(&r.dir.join("provider"))?;
         if provider.step_count() != r.optimizer_step {
@@ -476,7 +594,9 @@ where
         if let Some(h) = objective.host() {
             for ((value, _), saved) in h.values_and_grads().into_iter().zip(&r.host_values) {
                 if value.len() != saved.len() {
-                    return Err(TrainError::Refused("a host tensor changed size since the checkpoint".into()));
+                    return Err(TrainError::Refused(
+                        "a host tensor changed size since the checkpoint".into(),
+                    ));
                 }
                 value.copy_from_slice(saved);
             }
@@ -487,6 +607,7 @@ where
                 s.steps, r.optimizer_step
             )));
         }
+        resumed_from = Some(r.dir.clone());
         host_state = r.host_state;
         optimizer_step = r.optimizer_step;
         log = r.loss_log;
@@ -494,6 +615,7 @@ where
         channel_log = r.channel_log;
         start_index = r.next_index;
         resume_digest = Some(r.consumed_digest);
+        epoch_link = r.epoch_link;
     } else if provider.step_count() != 0 {
         return Err(TrainError::Refused(format!(
             "a fresh run was handed a provider that has already taken {} step(s)",
@@ -507,7 +629,9 @@ where
         .ok_or_else(|| TrainError::Refused("total_steps * grad_accum overflows".into()))?;
 
     let mut clock = RunClock::start(clock, cfg.cap)?;
-    let mut consumed = ConsumedPrefix::new();
+    let mut consumed = epoch_link
+        .as_ref()
+        .map_or_else(ConsumedPrefix::new, EpochLink::prefix);
     let mut source = batches.into_iter();
     let mut pending: Option<O::Batch> = None;
 
@@ -610,7 +734,9 @@ where
 
         let plan = objective.plan(&batch)?;
         if plan.sequences.is_empty() {
-            return Err(TrainError::Refused(format!("batch {index} planned no sequence")));
+            return Err(TrainError::Refused(format!(
+                "batch {index} planned no sequence"
+            )));
         }
         if first_in_group && let Some(h) = objective.host() {
             h.zero_grads();
@@ -618,7 +744,11 @@ where
         let width = provider.hidden_size();
         let mut row_sums = Vec::with_capacity(plan.sequences.len());
         for (i, seq) in plan.sequences.iter().enumerate() {
-            let mode = if first_in_group { BankMode::Overwrite } else { BankMode::Add };
+            let mode = if first_in_group {
+                BankMode::Overwrite
+            } else {
+                BankMode::Add
+            };
             first_in_group = false;
             let job = SequenceJob {
                 tokens: &seq.tokens,
@@ -640,7 +770,9 @@ where
                     obj.hidden_grad(i, pos, hidden, width).map_err(|e| {
                         let msg = e.to_string();
                         *err = Some(e);
-                        StepError::Contract(format!("the objective's hidden-state loss failed: {msg}"))
+                        StepError::Contract(format!(
+                            "the objective's hidden-state loss failed: {msg}"
+                        ))
                     })
                 };
                 provider.accumulate(&job, mode, Some(&mut ext))
@@ -661,7 +793,9 @@ where
             )));
         }
         if let Some((name, v)) = loss.channels.iter().find(|(_, v)| !v.is_finite()) {
-            return Err(TrainError::NonFinite(format!("non-finite {name} loss {v} at {where_}")));
+            return Err(TrainError::NonFinite(format!(
+                "non-finite {name} loss {v} at {where_}"
+            )));
         }
         group.losses.push(loss.total);
         group.channels.push(loss.channels);
@@ -698,8 +832,9 @@ where
             })
             .unwrap_or(0.0);
         let sq = tower_sq + host_sq;
-        let coef = recipe::clip_coefficient(sq, cfg.max_grad_norm)
-            .map_err(|e| TrainError::NonFinite(format!("at {where_}: {e}; this step was not applied")))?;
+        let coef = recipe::clip_coefficient(sq, cfg.max_grad_norm).map_err(|e| {
+            TrainError::NonFinite(format!("at {where_}: {e}; this step was not applied"))
+        })?;
         let hyper = AdamWHyper {
             lr,
             beta1,
@@ -711,18 +846,27 @@ where
         // Host shapes are checked before the provider moves, so the two halves move together.
         if let Some(h) = objective.host_ref() {
             if h.values().len() != host_rows.len() || host_state.len() != host_rows.len() {
-                return Err(TrainError::Refused("the host parameters no longer match the optimizer table".into()));
+                return Err(TrainError::Refused(
+                    "the host parameters no longer match the optimizer table".into(),
+                ));
             }
             for ((g, v), s) in h.grads().into_iter().zip(h.values()).zip(&host_state) {
                 if g.is_some_and(|g| g.len() != v.len()) || s.moments.m.len() != v.len() {
-                    return Err(TrainError::Refused("a host tensor's gradient or moments do not fit it".into()));
+                    return Err(TrainError::Refused(
+                        "a host tensor's gradient or moments do not fit it".into(),
+                    ));
                 }
             }
         }
         provider.adamw_step(&hyper, t, &lr_scale, &weight_decay)?;
         if let Some(h) = objective.host() {
             // Each host entry steps on its own count, and not at all without a gradient.
-            for (((value, grad), s), row) in h.values_and_grads().into_iter().zip(host_state.iter_mut()).zip(&host_rows) {
+            for (((value, grad), s), row) in h
+                .values_and_grads()
+                .into_iter()
+                .zip(host_state.iter_mut())
+                .zip(&host_rows)
+            {
                 adamw_entry_step(value, grad, s, row, lr, coef)?;
             }
         }
@@ -754,6 +898,7 @@ where
             if policy.every > 0 && done.is_multiple_of(policy.every) {
                 let state = CheckpointBody {
                     epoch: cfg.epoch,
+                    epochs: cfg.epochs,
                     next_index: index + 1,
                     optimizer_step,
                     seed: cfg.seed,
@@ -763,12 +908,21 @@ where
                     steps: &steps,
                     channel_log: &channel_log,
                     consumed: &consumed,
+                    epoch_link: epoch_link.as_ref(),
                 };
-                last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_state, last_checkpoint.as_deref())?);
+                last_checkpoint = Some(write_checkpoint(
+                    &policy.dir,
+                    &state,
+                    provider,
+                    objective,
+                    &host_state,
+                    last_checkpoint.as_deref(),
+                )?);
             }
         }
         if let Some(eta) = &cfg.eta
-            && let Some(projected) = eta.projection(optimizer_step, first_step, total_steps, clock.elapsed_s()?)
+            && let Some(projected) =
+                eta.projection(optimizer_step, first_step, total_steps, clock.elapsed_s()?)
         {
             eta_projected_s = Some(projected);
             if eta.stops(projected, cfg.cap.cap_s()) {
@@ -781,12 +935,26 @@ where
     let next_index = last_index.map_or(start_index, |i| i + 1);
     let wall = clock.elapsed_s()?;
     if let Some(policy) = &cfg.checkpoint {
-        let already = last_checkpoint
-            .as_ref()
-            .is_some_and(|p| p.file_name().and_then(|n| n.to_str()) == Some(checkpoint_name(optimizer_step).as_str()));
+        // A call that took no step (resumed at the cap, at the end of the schedule, or right
+        // after an epoch advance that the cap then stopped) has nothing to add to the checkpoint
+        // it resumed from, when that one is already this call's step in this call's directory:
+        // that checkpoint is its resume point, not a name to refuse.
+        if optimizer_step == first_step
+            && last_checkpoint.is_none()
+            && let Some(from) = &resumed_from
+            && from.parent() == Some(policy.dir.as_path())
+            && from.file_name().and_then(|n| n.to_str())
+                == Some(checkpoint_name(optimizer_step).as_str())
+        {
+            last_checkpoint = Some(from.clone());
+        }
+        let already = last_checkpoint.as_ref().is_some_and(|p| {
+            p.file_name().and_then(|n| n.to_str()) == Some(checkpoint_name(optimizer_step).as_str())
+        });
         if !already {
             let state = CheckpointBody {
                 epoch: cfg.epoch,
+                epochs: cfg.epochs,
                 next_index,
                 optimizer_step,
                 seed: cfg.seed,
@@ -796,8 +964,16 @@ where
                 steps: &steps,
                 channel_log: &channel_log,
                 consumed: &consumed,
+                epoch_link: epoch_link.as_ref(),
             };
-            last_checkpoint = Some(write_checkpoint(&policy.dir, &state, provider, objective, &host_state, last_checkpoint.as_deref())?);
+            last_checkpoint = Some(write_checkpoint(
+                &policy.dir,
+                &state,
+                provider,
+                objective,
+                &host_state,
+                last_checkpoint.as_deref(),
+            )?);
         }
     }
     Ok(TrainResult {
@@ -817,14 +993,168 @@ where
     })
 }
 
+/// One epoch's data as [`train_epochs`] asks for it: the batches in order and how many there are.
+/// The count is the caller's plan (the loop cannot know it: a truncated source also ends with
+/// `DataExhausted`); it is what proves an epoch finished before the next one starts.
+pub struct EpochSource<I> {
+    pub batches: I,
+    pub count: u64,
+}
+
+/// Run every epoch of `cfg.epochs`, one [`train`] call each, from `resume` (or the start) to the
+/// last. Epoch `e`'s data is `source(e)`, drawn by the caller from (seed, `e`); between epochs the
+/// epoch-end checkpoint is read back and moved on with [`ResumeState::advance_to_epoch`], so the
+/// step count, the moments, the loss log and the consumed digest continue and the schedule (whose
+/// `total_steps` covers all epochs) is one cosine over the run, never restarted. A resume
+/// checkpoint from the middle of epoch `k` continues into epoch `k` and on to the end; one cut at
+/// the very end of an epoch moves straight on to the next.
+///
+/// The wall-clock cap is the run's: each epoch gets what the earlier ones left. The ETA rule is
+/// refused for more than one epoch (its projection is over one process's steps and one cap), and
+/// so is a run with no checkpoint policy (the epoch-end checkpoint is how the model crosses an
+/// epoch). A run that stops early (`WallClockCap`, `EtaRule`) returns that epoch's result, whose
+/// checkpoint resumes it. The result is the last epoch's, its micro-batch and position counters
+/// and wall clock summed over the epochs this call ran. An epoch-end checkpoint the next epoch
+/// has superseded is removed.
+pub fn train_epochs<P, O, I, F>(
+    provider: &mut P,
+    objective: &mut O,
+    mut source: F,
+    cfg: &TrainConfig,
+    clock: &dyn Clock,
+    resume: Option<ResumeState>,
+    hooks: &mut Hooks<'_>,
+) -> Result<TrainResult, TrainError>
+where
+    P: StepProvider,
+    O: Objective,
+    I: IntoIterator<Item = Result<O::Batch, TrainError>>,
+    F: FnMut(u64) -> Result<EpochSource<I>, TrainError>,
+{
+    if cfg.epochs == 0 {
+        return Err(TrainError::Refused(
+            "a run has at least one epoch, got 0".into(),
+        ));
+    }
+    if cfg.epoch != 0 {
+        return Err(TrainError::Refused(format!(
+            "train_epochs owns the epoch and starts a fresh run at 0 (a resume carries its own), \
+             got epoch {}",
+            cfg.epoch
+        )));
+    }
+    if cfg.epochs > 1 {
+        if cfg.eta.is_some() {
+            return Err(TrainError::Refused(
+                "the ETA rule projects one process's steps against one cap and is not defined \
+                 across epochs; give no rule for a run of more than one epoch"
+                    .into(),
+            ));
+        }
+        if cfg.checkpoint.is_none() {
+            return Err(TrainError::Refused(
+                "a run of more than one epoch needs a checkpoint policy: the epoch-end checkpoint \
+                 is how the model and optimizer cross into the next epoch"
+                    .into(),
+            ));
+        }
+    }
+    let mut run_clock = RunClock::start(clock, cfg.cap)?;
+    let mut state = resume;
+    let mut epoch = state.as_ref().map_or(0, |r| r.epoch);
+    if epoch >= cfg.epochs {
+        return Err(TrainError::Refused(format!(
+            "the checkpoint is at epoch {epoch} of a run of {} epoch(s)",
+            cfg.epochs
+        )));
+    }
+    let mut micro_batches = 0u64;
+    let mut counts = BatchCounts::default();
+    // The epoch-end checkpoint the epoch now running started from; removed once it has a successor.
+    let mut crossed: Option<PathBuf> = None;
+    loop {
+        let EpochSource { batches, count } = source(epoch)?;
+        if let Some(s) = &state
+            && s.next_index == count
+            && epoch + 1 < cfg.epochs
+        {
+            // Cut exactly at an epoch's end: nothing of this epoch is left to train.
+            let dir = s.dir.clone();
+            state = state
+                .take()
+                .map(|s| s.advance_to_epoch(epoch + 1, count))
+                .transpose()?;
+            crossed = Some(dir);
+            epoch += 1;
+            continue;
+        }
+        let mut epoch_cfg = cfg.clone();
+        epoch_cfg.epoch = epoch;
+        let elapsed = run_clock.elapsed_s()?;
+        if elapsed > 0.0 {
+            epoch_cfg.cap = WallClockCap::new(cfg.cap.cap_s() - elapsed)?;
+        }
+        let mut result = train(
+            provider,
+            objective,
+            batches,
+            &epoch_cfg,
+            clock,
+            state.take(),
+            hooks,
+        )?;
+        micro_batches += result.micro_batches;
+        counts.add(&result.counts);
+        result.micro_batches = micro_batches;
+        result.counts = counts;
+        result.wall_clock_s = run_clock.elapsed_s()?;
+        if let (Some(old), Some(new), Some(policy)) =
+            (&crossed, &result.final_checkpoint, &cfg.checkpoint)
+            && old != new
+            && old.parent() == Some(policy.dir.as_path())
+        {
+            fs::remove_dir_all(old).map_err(|e| io(old, e))?;
+        }
+        if epoch + 1 == cfg.epochs || result.termination != Termination::DataExhausted {
+            if result.termination == Termination::StepsExhausted && epoch + 1 < cfg.epochs {
+                return Err(TrainError::Refused(format!(
+                    "the schedule's {} steps ended inside epoch {epoch} of {}: its total_steps \
+                     must cover every epoch",
+                    cfg.schedule.total_steps(),
+                    cfg.epochs
+                )));
+            }
+            return Ok(result);
+        }
+        if run_clock.expired()? {
+            result.termination = Termination::WallClockCap;
+            return Ok(result);
+        }
+        let Some(ckpt) = result.final_checkpoint.clone() else {
+            return Err(TrainError::Refused(format!(
+                "epoch {epoch} wrote no checkpoint to carry into epoch {}",
+                epoch + 1
+            )));
+        };
+        state = Some(ResumeState::read(&ckpt)?.advance_to_epoch(epoch + 1, count)?);
+        crossed = Some(ckpt);
+        epoch += 1;
+    }
+}
+
 /// sha256 over every parameter's f32 bytes (provider entries, then host entries, each with its
 /// name and shape), the identity of a trained model for a repeat-run comparison.
-pub fn parameters_digest<P: StepProvider>(provider: &mut P, host: Option<&dyn HostParams>) -> Result<String, TrainError> {
+pub fn parameters_digest<P: StepProvider>(
+    provider: &mut P,
+    host: Option<&dyn HostParams>,
+) -> Result<String, TrainError> {
     let mut h = Sha256::new();
     let values = provider.read_parameters()?;
     let entries = provider.parameters().to_vec();
     if values.len() != entries.len() {
-        return Err(TrainError::Refused("the provider read a different number of tensors than it lists".into()));
+        return Err(TrainError::Refused(
+            "the provider read a different number of tensors than it lists".into(),
+        ));
     }
     let mut feed = |e: &ParamSpec, v: &[f32]| {
         h.update((e.name.len() as u64).to_le_bytes());
@@ -852,6 +1182,7 @@ pub fn parameters_digest<P: StepProvider>(provider: &mut P, host: Option<&dyn Ho
 
 struct CheckpointBody<'a> {
     epoch: u64,
+    epochs: u64,
     next_index: u64,
     optimizer_step: u64,
     seed: u64,
@@ -861,6 +1192,7 @@ struct CheckpointBody<'a> {
     steps: &'a [StepRecord],
     channel_log: &'a [(String, Vec<f64>)],
     consumed: &'a ConsumedPrefix,
+    epoch_link: Option<&'a EpochLink>,
 }
 
 fn checkpoint_name(step: u64) -> String {
@@ -868,17 +1200,27 @@ fn checkpoint_name(step: u64) -> String {
 }
 
 fn hex_list(xs: &[f64]) -> Result<Value, PyJsonError> {
-    Ok(Value::Array(xs.iter().map(|x| float_hex(*x).map(Value::from)).collect::<Result<_, _>>()?))
+    Ok(Value::Array(
+        xs.iter()
+            .map(|x| float_hex(*x).map(Value::from))
+            .collect::<Result<_, _>>()?,
+    ))
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), TrainError> {
-    let mut f = fs::File::options().write(true).create_new(true).open(path).map_err(|e| io(path, e))?;
+    let mut f = fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| io(path, e))?;
     f.write_all(bytes).map_err(|e| io(path, e))?;
     f.sync_all().map_err(|e| io(path, e))
 }
 
 fn sync_dir(dir: &Path) -> Result<(), TrainError> {
-    fs::File::open(dir).and_then(|f| f.sync_all()).map_err(|e| io(dir, e))
+    fs::File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| io(dir, e))
 }
 
 /// Write `<dir>/ckpt-<step>/` through a staging directory and a rename, then remove the
@@ -896,7 +1238,10 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     let final_dir = dir.join(&name);
     let staging = dir.join(format!(".{name}.partial"));
     if final_dir.exists() || staging.exists() {
-        return Err(TrainError::Refused(format!("{} or its staging directory already exists", final_dir.display())));
+        return Err(TrainError::Refused(format!(
+            "{} or its staging directory already exists",
+            final_dir.display()
+        )));
     }
     fs::create_dir(&staging).map_err(|e| io(&staging, e))?;
     let provider_dir = staging.join("provider");
@@ -907,7 +1252,12 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         let bytes = fs::read(path).map_err(|e| io(path, e))?;
         let rel = path
             .strip_prefix(&provider_dir)
-            .map_err(|_| TrainError::Refused(format!("{} was written outside the provider directory", path.display())))?
+            .map_err(|_| {
+                TrainError::Refused(format!(
+                    "{} was written outside the provider directory",
+                    path.display()
+                ))
+            })?
             .to_string_lossy()
             .into_owned();
         provider_files.push((rel, Value::from(hex(&Sha256::digest(&bytes)))));
@@ -916,7 +1266,10 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     // Host values and moments: raw little-endian f32, value then m then v per entry. Each
     // entry's own AdamW step count goes in trainer.json beside its name.
     let mut host_bytes = Vec::new();
-    let host_entries = objective.host_ref().map(|h| h.entries()).unwrap_or_default();
+    let host_entries = objective
+        .host_ref()
+        .map(|h| h.entries())
+        .unwrap_or_default();
     if host_entries.len() != host_state.len() {
         return Err(TrainError::Refused(format!(
             "{} host entries and {} optimizer states",
@@ -934,6 +1287,22 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     let host_path = staging.join("host.f32");
     write_synced(&host_path, &host_bytes)?;
 
+    // Only a checkpoint past epoch 0 has a link; epoch 0's body is byte-for-byte what it was.
+    let epoch_link_json = body
+        .epoch_link
+        .map(|l| {
+            Ok::<_, PyJsonError>((
+                "epoch_link",
+                obj([
+                    ("digest", Value::from(l.digest.clone())),
+                    ("n", Value::from(l.n)),
+                ])?,
+            ))
+        })
+        .transpose()?;
+    // Only a run of several epochs records its count: a one-epoch body is byte-for-byte what it
+    // was before epochs existed.
+    let epochs_json = (body.epochs > 1).then(|| ("epochs", Value::from(body.epochs)));
     let body_json = obj([
         ("format", Value::from(CHECKPOINT_FORMAT)),
         ("epoch", Value::from(body.epoch)),
@@ -962,7 +1331,8 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         ),
         (
             "channel_log",
-            obj(body.channel_log
+            obj(body
+                .channel_log
                 .iter()
                 .map(|(n, vs)| Ok((n.clone(), hex_list(vs)?)))
                 .collect::<Result<Vec<_>, PyJsonError>>()?)?,
@@ -986,9 +1356,18 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
                     .collect::<Result<_, PyJsonError>>()?,
             ),
         ),
-        ("host_sha256", Value::from(hex(&Sha256::digest(&host_bytes)))),
-    ])?;
-    write_synced(&staging.join("trainer.json"), dumps(&body_json, CANONICAL)?.as_bytes())?;
+        (
+            "host_sha256",
+            Value::from(hex(&Sha256::digest(&host_bytes))),
+        ),
+    ]
+    .into_iter()
+    .chain(epoch_link_json)
+    .chain(epochs_json))?;
+    write_synced(
+        &staging.join("trainer.json"),
+        dumps(&body_json, CANONICAL)?.as_bytes(),
+    )?;
     sync_dir(&staging)?;
     fs::rename(&staging, &final_dir).map_err(|e| io(&final_dir, e))?;
     sync_dir(dir)?;
@@ -1000,25 +1379,87 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     Ok(final_dir)
 }
 
-fn field<'a>(v: &'a serde_json::Value, key: &str, path: &Path) -> Result<&'a serde_json::Value, TrainError> {
-    v.get(key)
-        .ok_or_else(|| TrainError::Refused(format!("{}: checkpoint has no {key:?}", path.display())))
+fn field<'a>(
+    v: &'a serde_json::Value,
+    key: &str,
+    path: &Path,
+) -> Result<&'a serde_json::Value, TrainError> {
+    v.get(key).ok_or_else(|| {
+        TrainError::Refused(format!("{}: checkpoint has no {key:?}", path.display()))
+    })
 }
 
 fn as_u64(v: &serde_json::Value, key: &str, path: &Path) -> Result<u64, TrainError> {
-    field(v, key, path)?
-        .as_u64()
-        .ok_or_else(|| TrainError::Refused(format!("{}: {key:?} is not a non-negative integer", path.display())))
+    field(v, key, path)?.as_u64().ok_or_else(|| {
+        TrainError::Refused(format!(
+            "{}: {key:?} is not a non-negative integer",
+            path.display()
+        ))
+    })
 }
 
 fn as_hex(v: &serde_json::Value, path: &Path) -> Result<f64, TrainError> {
-    let s = v
-        .as_str()
-        .ok_or_else(|| TrainError::Refused(format!("{}: expected a float.hex string", path.display())))?;
+    let s = v.as_str().ok_or_else(|| {
+        TrainError::Refused(format!("{}: expected a float.hex string", path.display()))
+    })?;
     Ok(float_fromhex(s)?)
 }
 
 impl ResumeState {
+    /// Move a checkpoint taken at the end of epoch `self.epoch` to the start of `epoch`, the
+    /// next one: position 0, the consumed digest chained onto the finished epoch's. Everything
+    /// else (step count, loss log, host moments, the provider directory) is carried as it is, so
+    /// the schedule and the optimizer continue where the last epoch stopped.
+    ///
+    /// `epoch_batches` is how many batches epoch `self.epoch` has, from the caller's plan; the
+    /// loop cannot know it (a truncated source also ends with `DataExhausted`). It is refused
+    /// unless the checkpoint consumed exactly that many, and unless `epoch` is the immediate
+    /// successor (no skipped epoch, no going back) and the schedule still has steps to take.
+    pub fn advance_to_epoch(mut self, epoch: u64, epoch_batches: u64) -> Result<Self, TrainError> {
+        if self.epoch.checked_add(1) != Some(epoch) {
+            return Err(TrainError::Refused(format!(
+                "a checkpoint at epoch {} can only advance to epoch {}, not {epoch}",
+                self.epoch,
+                self.epoch.saturating_add(1)
+            )));
+        }
+        if epoch_batches == 0 {
+            return Err(TrainError::Refused(
+                "an epoch has at least one batch; advancing past a zero-length epoch proves nothing"
+                    .into(),
+            ));
+        }
+        if self.next_index != epoch_batches {
+            return Err(TrainError::Refused(format!(
+                "epoch {} is not finished: the checkpoint consumed {} of its {epoch_batches} batches",
+                self.epoch, self.next_index
+            )));
+        }
+        let total = self.schedule.total_steps();
+        if self.optimizer_step >= total {
+            return Err(TrainError::Refused(format!(
+                "the schedule has no steps left ({} of {total} taken); epoch {epoch} would train \
+                 nothing",
+                self.optimizer_step
+            )));
+        }
+        let link = EpochLink {
+            digest: self.consumed_digest.clone(),
+            n: self.epoch_link.as_ref().map_or(0, |l| l.n) + self.next_index,
+        };
+        if epoch >= self.epochs {
+            return Err(TrainError::Refused(format!(
+                "the run has {} epoch(s); epoch {epoch} is past its last",
+                self.epochs
+            )));
+        }
+        self.consumed_digest = link.prefix().hexdigest();
+        self.epoch_link = Some(link);
+        self.epoch = epoch;
+        self.next_index = 0;
+        Ok(self)
+    }
+
     /// Read `ckpt_dir` (one `ckpt-<step>` directory), checking every recorded digest.
     pub fn read(ckpt_dir: &Path) -> Result<Self, TrainError> {
         let body_path = ckpt_dir.join("trainer.json");
@@ -1026,17 +1467,27 @@ impl ResumeState {
         let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| io(&body_path, e))?;
         let p = body_path.as_path();
         if field(&v, "format", p)?.as_str() != Some(CHECKPOINT_FORMAT) {
-            return Err(TrainError::Refused(format!("{}: not a {CHECKPOINT_FORMAT} checkpoint", p.display())));
+            return Err(TrainError::Refused(format!(
+                "{}: not a {CHECKPOINT_FORMAT} checkpoint",
+                p.display()
+            )));
         }
         let sched = field(&v, "schedule", p)?;
         let schedule = LrSchedule::new(
-            field(sched, "peak_lr", p)?.as_f64().ok_or_else(|| TrainError::Refused("peak_lr".into()))?,
+            field(sched, "peak_lr", p)?
+                .as_f64()
+                .ok_or_else(|| TrainError::Refused("peak_lr".into()))?,
             as_u64(sched, "total_steps", p)?,
             as_u64(sched, "warmup_steps", p)?,
-            field(sched, "min_lr", p)?.as_f64().ok_or_else(|| TrainError::Refused("min_lr".into()))?,
+            field(sched, "min_lr", p)?
+                .as_f64()
+                .ok_or_else(|| TrainError::Refused("min_lr".into()))?,
         )?;
         let mut loss_log = LossLog::new();
-        for pt in field(&v, "loss_log", p)?.as_array().ok_or_else(|| TrainError::Refused("loss_log".into()))? {
+        for pt in field(&v, "loss_log", p)?
+            .as_array()
+            .ok_or_else(|| TrainError::Refused("loss_log".into()))?
+        {
             loss_log.append(LossPoint {
                 optimizer_step: as_u64(pt, "step", p)?,
                 epoch: as_u64(pt, "epoch", p)?,
@@ -1045,7 +1496,10 @@ impl ResumeState {
             })?;
         }
         let mut steps = Vec::new();
-        for s in field(&v, "steps", p)?.as_array().ok_or_else(|| TrainError::Refused("steps".into()))? {
+        for s in field(&v, "steps", p)?
+            .as_array()
+            .ok_or_else(|| TrainError::Refused("steps".into()))?
+        {
             steps.push(StepRecord {
                 optimizer_step: as_u64(s, "step", p)?,
                 lr: as_hex(field(s, "lr_hex", p)?, p)?,
@@ -1055,7 +1509,10 @@ impl ResumeState {
             });
         }
         let mut channel_log = Vec::new();
-        for (name, vals) in field(&v, "channel_log", p)?.as_object().ok_or_else(|| TrainError::Refused("channel_log".into()))? {
+        for (name, vals) in field(&v, "channel_log", p)?
+            .as_object()
+            .ok_or_else(|| TrainError::Refused("channel_log".into()))?
+        {
             let xs = vals
                 .as_array()
                 .ok_or_else(|| TrainError::Refused("channel_log values".into()))?
@@ -1065,30 +1522,49 @@ impl ResumeState {
             channel_log.push((name.clone(), xs));
         }
         let provider_dir = ckpt_dir.join("provider");
-        for (rel, digest) in field(&v, "provider_files", p)?.as_object().ok_or_else(|| TrainError::Refused("provider_files".into()))? {
+        for (rel, digest) in field(&v, "provider_files", p)?
+            .as_object()
+            .ok_or_else(|| TrainError::Refused("provider_files".into()))?
+        {
             let path = provider_dir.join(rel);
             let bytes = fs::read(&path).map_err(|e| io(&path, e))?;
             if Some(hex(&Sha256::digest(&bytes)).as_str()) != digest.as_str() {
-                return Err(TrainError::Refused(format!("{} does not match its recorded sha256", path.display())));
+                return Err(TrainError::Refused(format!(
+                    "{} does not match its recorded sha256",
+                    path.display()
+                )));
             }
         }
         let mut host_entries = Vec::new();
         let mut host_steps = Vec::new();
-        for e in field(&v, "host_entries", p)?.as_array().ok_or_else(|| TrainError::Refused("host_entries".into()))? {
-            let name = field(e, "name", p)?.as_str().ok_or_else(|| TrainError::Refused("host entry name".into()))?;
+        for e in field(&v, "host_entries", p)?
+            .as_array()
+            .ok_or_else(|| TrainError::Refused("host_entries".into()))?
+        {
+            let name = field(e, "name", p)?
+                .as_str()
+                .ok_or_else(|| TrainError::Refused("host entry name".into()))?;
             let shape = field(e, "shape", p)?
                 .as_array()
                 .ok_or_else(|| TrainError::Refused("host entry shape".into()))?
                 .iter()
-                .map(|d| d.as_u64().and_then(|d| usize::try_from(d).ok()).ok_or_else(|| TrainError::Refused("host dim".into())))
+                .map(|d| {
+                    d.as_u64()
+                        .and_then(|d| usize::try_from(d).ok())
+                        .ok_or_else(|| TrainError::Refused("host dim".into()))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             host_steps.push(as_u64(e, "adamw_steps", p)?);
             host_entries.push(ParamSpec::new(name, &shape));
         }
         let host_path = ckpt_dir.join("host.f32");
         let host_bytes = fs::read(&host_path).map_err(|e| io(&host_path, e))?;
-        if Some(hex(&Sha256::digest(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str() {
-            return Err(TrainError::Refused(format!("{} does not match its recorded sha256", host_path.display())));
+        if Some(hex(&Sha256::digest(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str()
+        {
+            return Err(TrainError::Refused(format!(
+                "{} does not match its recorded sha256",
+                host_path.display()
+            )));
         }
         let floats: Vec<f32> = host_bytes
             .as_chunks::<4>()
@@ -1103,9 +1579,12 @@ impl ResumeState {
             let n = e.numel()?;
             let take = |at: &mut usize| -> Result<Vec<f32>, TrainError> {
                 let end = *at + n;
-                let s = floats
-                    .get(*at..end)
-                    .ok_or_else(|| TrainError::Refused(format!("{} is shorter than its entries", host_path.display())))?;
+                let s = floats.get(*at..end).ok_or_else(|| {
+                    TrainError::Refused(format!(
+                        "{} is shorter than its entries",
+                        host_path.display()
+                    ))
+                })?;
                 *at = end;
                 Ok(s.to_vec())
             };
@@ -1119,12 +1598,63 @@ impl ResumeState {
             });
         }
         if at != floats.len() {
-            return Err(TrainError::Refused(format!("{} is longer than its entries", host_path.display())));
+            return Err(TrainError::Refused(format!(
+                "{} is longer than its entries",
+                host_path.display()
+            )));
         }
-        let grad_accum = u32::try_from(as_u64(&v, "grad_accum", p)?).map_err(|e| TrainError::Refused(e.to_string()))?;
+        let grad_accum = u32::try_from(as_u64(&v, "grad_accum", p)?)
+            .map_err(|e| TrainError::Refused(e.to_string()))?;
+        let epoch = as_u64(&v, "epoch", p)?;
+        let epoch_link = match v.get("epoch_link") {
+            None => None,
+            Some(l) => {
+                let digest = field(l, "digest", p)?
+                    .as_str()
+                    .filter(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .ok_or_else(|| {
+                        TrainError::Refused(format!(
+                            "{}: epoch_link.digest is not a sha256 hex digest",
+                            p.display()
+                        ))
+                    })?
+                    .to_string();
+                Some(EpochLink {
+                    digest,
+                    n: as_u64(l, "n", p)?,
+                })
+            }
+        };
+        // advance_to_epoch is the only way past epoch 0 and always sets the link; epoch 0 never
+        // has one. The other two shapes are bodies no run wrote.
+        if (epoch == 0) != epoch_link.is_none() {
+            return Err(TrainError::Refused(format!(
+                "{}: epoch {epoch} with {} epoch_link; a checkpoint past epoch 0 carries the link \
+                 to the epochs before it and an epoch-0 checkpoint carries none",
+                p.display(),
+                if epoch_link.is_some() { "an" } else { "no" }
+            )));
+        }
+        let epochs = match v.get("epochs") {
+            None => 1,
+            Some(e) => e.as_u64().filter(|&e| e > 1).ok_or_else(|| {
+                TrainError::Refused(format!(
+                    "{}: \"epochs\" is {e}; a checkpoint records it only for a run of more than one",
+                    p.display()
+                ))
+            })?,
+        };
+        if epoch >= epochs {
+            return Err(TrainError::Refused(format!(
+                "{}: epoch {epoch} of a run of {epochs} epoch(s)",
+                p.display()
+            )));
+        }
         let state = Self {
             dir: ckpt_dir.to_path_buf(),
-            epoch: as_u64(&v, "epoch", p)?,
+            epoch,
+            epochs,
+            epoch_link,
             next_index: as_u64(&v, "next_index", p)?,
             optimizer_step: as_u64(&v, "optimizer_step", p)?,
             seed: as_u64(&v, "seed", p)?,
@@ -1141,7 +1671,9 @@ impl ResumeState {
             host_values,
             host_state,
         };
-        if state.loss_log.len() as u64 != state.optimizer_step || state.steps.len() as u64 != state.optimizer_step {
+        if state.loss_log.len() as u64 != state.optimizer_step
+            || state.steps.len() as u64 != state.optimizer_step
+        {
             return Err(TrainError::Refused(format!(
                 "{}: {} loss points and {} step records for optimizer step {}",
                 p.display(),
