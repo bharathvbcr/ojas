@@ -128,6 +128,8 @@ const MaxCPUThreads uint32 = 256
 //	ojas:E_PRESSURE:    the machine reports critical memory pressure, so a
 //	                    call that would allocate was refused before it
 //	                    started; transient, see ErrPressure
+//	ojas:E_TARGET:      SaveCheckpoint named an existing directory that is
+//	                    neither empty nor an earlier checkpoint; see ErrTarget
 var (
 	ErrCapacity   = errors.New("ojas: capacity")
 	ErrDeviceLost = errors.New("ojas: device lost")
@@ -144,6 +146,10 @@ var (
 	// model and trainer are as they were, and SaveCheckpoint and Free still
 	// run. Back off and retry the same call; it is not ErrCapacity.
 	ErrPressure = errors.New("ojas: memory pressure")
+	// ErrTarget is SaveCheckpoint's refusal of an existing directory that is
+	// neither empty nor an earlier checkpoint. Every file in it is as it
+	// was; save to an absent path or an empty directory instead.
+	ErrTarget = errors.New("ojas: save target is not a checkpoint directory")
 )
 
 // Numerics selects a CPU session's arithmetic contract.
@@ -478,9 +484,11 @@ func trainStep(ctx context.Context, payload []byte) (StepResult, error) {
 // The directory is written beside dir and swapped in whole. An existing dir
 // is replaced only when it is empty or an earlier checkpoint (it holds
 // state.ojck and nothing but the three files above, each a regular file;
-// names are compared exactly, so STATE.OJCK is not state.ojck). Any other
+// names are compared exactly, so STATE.OJCK is not state.ojck; Finder's
+// .DS_Store, as a regular file, is tolerated beside them or alone, and goes
+// with the old directory). Any other
 // existing directory, such as a runs directory or one holding a symlink, is
-// refused and every file in it is left as it was. Any other error leaves an
+// refused with ErrTarget and every file in it is left as it was. Any other error leaves an
 // earlier checkpoint as it was too, and a cancel does (see the package
 // comment). A poisoned trainer is refused.
 func SaveCheckpoint(ctx context.Context, id uint64, dir string) error {

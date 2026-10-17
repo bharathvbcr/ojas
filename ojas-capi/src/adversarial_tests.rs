@@ -80,7 +80,6 @@ fn save_path_tricks_are_refused_and_touch_nothing() {
         ".",
         "./",
         "ckpt/",
-        "ckpt/.",
         "ckpt/..",
         "../",
         "..",

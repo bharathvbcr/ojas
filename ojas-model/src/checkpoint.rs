@@ -9,7 +9,8 @@
 //! [`Trainer::save`] builds the three files in a staging directory and
 //! swaps it in with [`ojas_io::replace_dir_with_if`], after checking the
 //! staging filesystem has room for all three. An existing target is replaced
-//! only when it is empty or an earlier checkpoint ([`check_save_target`], run
+//! only when it is empty or an earlier checkpoint (Finder's `.DS_Store`
+//! excepted) ([`check_save_target`], run
 //! under the replace lock): anything else is refused with nothing touched. Each tensor is read back
 //! with one download and written before the next is read, so the host
 //! holds one tensor at a time. A device tensor is deliberately not read
@@ -132,13 +133,22 @@ impl std::error::Error for SaveError {}
 /// the caller's cancel message.
 pub type SavePoll<'a> = &'a mut dyn FnMut() -> Result<(), String>;
 
+/// The file Finder drops into a directory it has opened. [`check_save_target`]
+/// lets it ride along, as a regular file only.
+const FINDER_FILE: &str = ".DS_Store";
+
 /// May `dir`, an existing directory, be replaced by a checkpoint? Only an
 /// empty one, or one that holds [`STATE_FILE`] and nothing outside
 /// {[`MODEL_FILE`], [`OPTIM_FILE`], [`STATE_FILE`]}, each a regular file.
 /// Entries are judged without following links, and by exact name: on a
 /// case-insensitive filesystem `STATE.OJCK` is still not `state.ojck`. A
 /// symbolic link, a nested directory or any special file refuses, and so
-/// does a directory that cannot be listed. At most four entries are read.
+/// does a directory that cannot be listed. One exception: a `.DS_Store` that
+/// is a regular file (not a link or directory) is allowed beside the
+/// checkpoint files and in an otherwise empty directory, since Finder adds
+/// one to any directory it opens; it goes with the old directory. A
+/// directory holding only `.DS_Store` counts as empty. At most five entries
+/// are read.
 ///
 /// [`Trainer::save`] runs this under the replace lock, so no writer that
 /// takes that lock can change the directory between this check and the swap.
@@ -162,6 +172,12 @@ pub fn check_save_target(dir: &Path) -> Result<(), String> {
             Err(e) => return refuse(format!("the directory cannot be listed ({e})")),
         };
         let name = entry.file_name();
+        if name == OsStr::new(FINDER_FILE) {
+            match entry.file_type() {
+                Ok(kind) if kind.is_file() => continue,
+                _ => return refuse(format!("{FINDER_FILE} in it is not a regular file")),
+            }
+        }
         if ![MODEL_FILE, OPTIM_FILE, STATE_FILE]
             .iter()
             .any(|f| name == OsStr::new(f))
@@ -1091,6 +1107,26 @@ mod tests {
             }
         })
         .is_ok());
+        // Finder's file rides along only as a regular file.
+        assert!(case("finder", &|d| {
+            file(d, STATE_FILE);
+            file(d, ".DS_Store");
+        })
+        .is_ok());
+        assert!(case("finder-only", &|d| file(d, ".DS_Store")).is_ok());
+        assert!(case("finder-dir", &|d| {
+            std::fs::create_dir(d.join(".DS_Store")).unwrap()
+        })
+        .is_err());
+        assert!(case("finder-link", &|d| {
+            std::os::unix::fs::symlink("elsewhere", d.join(".DS_Store")).unwrap()
+        })
+        .is_err());
+        assert!(case("finder-no-state", &|d| {
+            file(d, MODEL_FILE);
+            file(d, ".DS_Store");
+        })
+        .is_err());
         // Without state.ojck, even a checkpoint's own files are not a checkpoint.
         assert!(case("no-state", &|d| file(d, MODEL_FILE)).is_err());
         assert!(case("extra", &|d| {

@@ -322,7 +322,9 @@ pub fn save_request(bytes: &[u8], mut check: Check) -> Result<(), String> {
             .and_then(|t| t.save_polled(&dir, &mut poll))
             .map_err(|e| match e {
                 SaveError::Cancelled(msg) => msg,
-                SaveError::TargetRefused(detail) => format!("save: {detail}"),
+                SaveError::TargetRefused(detail) => {
+                    crate::kinded(crate::ErrorKind::Target, format!("save: {detail}"))
+                }
                 SaveError::Failed(e) => armed.report("save", &e),
             });
         crate::settled("save", &m.backend, saved)

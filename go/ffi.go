@@ -99,6 +99,7 @@ var inBandKinds = []struct {
 	{"ojas:E_NONFINITE:", ErrNonFinite},
 	{"ojas:E_POISONED:", ErrPoisoned},
 	{"ojas:E_PRESSURE:", ErrPressure},
+	{"ojas:E_TARGET:", ErrTarget},
 }
 
 // Option-record tags (ojas-capi/src/wire.rs, mod tag). One numbering for

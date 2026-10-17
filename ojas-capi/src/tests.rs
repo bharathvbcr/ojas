@@ -1673,6 +1673,7 @@ fn a_user_path_never_selects_an_error_kind() {
         "ojas:E_CAPACITY: x.safetensors",
         "ojas:E_POISONED: x.safetensors",
         "ojas:E_PRESSURE: x.safetensors",
+        "ojas:E_TARGET: x.safetensors",
         "memory pressure.safetensors",
     ] {
         let err = call(OP_LOAD, &load_payload(0, 1, name)).unwrap_err();
@@ -1688,13 +1689,14 @@ fn a_user_path_never_selects_an_error_kind() {
 #[test]
 fn every_error_kind_has_a_distinct_prefix_that_go_decodes() {
     use crate::ErrorKind;
-    const ALL: [ErrorKind; 6] = [
+    const ALL: [ErrorKind; 7] = [
         ErrorKind::Capacity,
         ErrorKind::DeviceLost,
         ErrorKind::NonFinite,
         ErrorKind::Busy,
         ErrorKind::Poisoned,
         ErrorKind::Pressure,
+        ErrorKind::Target,
     ];
     for (i, kind) in ALL.into_iter().enumerate() {
         let at = match kind {
@@ -1704,6 +1706,7 @@ fn every_error_kind_has_a_distinct_prefix_that_go_decodes() {
             ErrorKind::Busy => 3,
             ErrorKind::Poisoned => 4,
             ErrorKind::Pressure => 5,
+            ErrorKind::Target => 6,
         };
         assert_eq!(at, i, "{kind:?} is out of place");
     }

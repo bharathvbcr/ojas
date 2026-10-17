@@ -301,6 +301,7 @@ func TestAUserPathNeverSelectsAnErrorKind(t *testing.T) {
 		"ojas:E_DEVICE_LOST: x.safetensors",
 		"ojas:E_POISONED: x.safetensors",
 		"ojas:E_PRESSURE: x.safetensors",
+		"ojas:E_TARGET: x.safetensors",
 	} {
 		_, err := load(name)
 		if err == nil || !strings.Contains(err.Error(), "missing file") || !strings.Contains(err.Error(), name) {
@@ -325,6 +326,7 @@ func TestInBandKindsMustLeadTheEngineMessage(t *testing.T) {
 		{"ojas:E_NONFINITE: step: non-finite value", ErrNonFinite},
 		{"ojas:E_POISONED: train_step: poisoned", ErrPoisoned},
 		{"ojas:E_PRESSURE: memory pressure: opcode 1 refused", ErrPressure},
+		{"ojas:E_TARGET: save: x: not a checkpoint directory", ErrTarget},
 		{"load: ojas:E_PRESSURE: inside", nil},
 		{"missing file: /root/ojas:E_BUSY: x", nil},
 		{"load: ojas:E_CAPACITY: inside", nil},

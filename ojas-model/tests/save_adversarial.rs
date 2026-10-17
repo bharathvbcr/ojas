@@ -179,11 +179,12 @@ fn lookalike_names_are_refused_by_their_on_disk_bytes() {
     assert!(check_save_target(&d).is_ok());
 }
 
-/// JUDGMENT CALL. Finder drops `.DS_Store` into any directory it opens. The
-/// strict policy refuses such a checkpoint: a re-save to a directory the
-/// user browsed in Finder fails until the file is removed by hand.
+/// Finder drops `.DS_Store` into any directory it opens. A regular
+/// `.DS_Store` rides along beside a checkpoint and in an otherwise empty
+/// directory; a link or directory of that name, and one beside a stray
+/// file, still refuse.
 #[test]
-fn a_finder_ds_store_blocks_re_saving_a_checkpoint() {
+fn a_finder_ds_store_does_not_block_re_saving_a_checkpoint() {
     let td = TempDir::new();
     let d = dir_with(&td.path, "ckpt", |d| {
         state(d);
@@ -191,12 +192,22 @@ fn a_finder_ds_store_blocks_re_saving_a_checkpoint() {
         fs::write(d.join(OPTIM_FILE), b"o").unwrap();
         fs::write(d.join(".DS_Store"), b"finder").unwrap();
     });
-    let err = check_save_target(&d).unwrap_err();
-    assert!(err.contains(".DS_Store"), "{err}");
+    check_save_target(&d).unwrap();
     let empty_but_ds = dir_with(&td.path, "ds-only", |d| {
         fs::write(d.join(".DS_Store"), b"finder").unwrap()
     });
-    assert!(check_save_target(&empty_but_ds).is_err());
+    check_save_target(&empty_but_ds).unwrap();
+    let linked = dir_with(&td.path, "ds-link", |d| {
+        state(d);
+        std::os::unix::fs::symlink("elsewhere", d.join(".DS_Store")).unwrap();
+    });
+    assert!(check_save_target(&linked).is_err());
+    let stray = dir_with(&td.path, "ds-stray", |d| {
+        state(d);
+        fs::write(d.join(".DS_Store"), b"finder").unwrap();
+        fs::write(d.join("notes.txt"), b"x").unwrap();
+    });
+    assert!(check_save_target(&stray).is_err());
 }
 
 /// A refused real save over each odd directory leaves every byte alone.

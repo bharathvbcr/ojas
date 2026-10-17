@@ -190,11 +190,15 @@ fn the_predicate_runs_under_the_parent_lock() {
     let first = {
         let target = target.clone();
         std::thread::spawn(move || {
+            let mut first = true;
             replace_dir_with_if(
                 &target,
                 |_| {
-                    entered_tx.send(()).unwrap();
-                    release_rx.recv().unwrap();
+                    // The predicate runs twice; only the first call parks.
+                    if std::mem::take(&mut first) {
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                    }
                     Ok(())
                 },
                 write_marker,

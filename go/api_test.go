@@ -1099,7 +1099,7 @@ func TestSaveCheckpointReplacesOnlyCheckpointDirectories(t *testing.T) {
 	before := dirDigest(t, dir)
 	for _, target := range []string{"runs", "notes", "upper", "nostat", "extra", "runs-link"} {
 		err := SaveCheckpoint(ctx, id, target)
-		if err == nil || !strings.Contains(err.Error(), "not a checkpoint directory") {
+		if err == nil || !strings.Contains(err.Error(), "not a checkpoint directory") || !errors.Is(err, ErrTarget) {
 			t.Fatalf("save to %s: %v", target, err)
 		}
 		if got := dirDigest(t, dir); !reflect.DeepEqual(got, before) {

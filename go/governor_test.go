@@ -29,6 +29,7 @@ func TestInBandKindsTable(t *testing.T) {
 	want := []string{
 		"ojas:E_CAPACITY:", "ojas:E_DEVICE_LOST:", "ojas:E_BUSY:",
 		"ojas:E_NONFINITE:", "ojas:E_POISONED:", "ojas:E_PRESSURE:",
+		"ojas:E_TARGET:",
 	}
 	if len(inBandKinds) != len(want) {
 		t.Fatalf("%d kinds, want %d", len(inBandKinds), len(want))

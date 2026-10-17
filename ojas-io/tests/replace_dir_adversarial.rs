@@ -103,46 +103,58 @@ fn the_lock_excludes_other_descriptors_not_just_threads() {
     assert!(blocked.get(), "a second descriptor took the parent lock");
 }
 
-/// CHARACTERIZATION of a known window, not a pass of the desired contract.
-/// A writer that does not take the parent flock (any plain `open`/`write`
-/// into the target, another tool, Finder, a shell) can add a file after the
-/// predicate passed. The swap then renames the target aside and deletes the
-/// backup, so that file is lost with no error. The doc says "writers that
-/// bypass this function are not excluded"; this pins the consequence.
+/// Allows an existing target only when it holds exactly `marker`.
+fn only_marker(dir: &Path) -> Result<(), IoError> {
+    if names(dir) == ["marker"] {
+        Ok(())
+    } else {
+        Err(IoError::new("not only a marker"))
+    }
+}
+
+/// A writer that does not take the parent flock (a plain `open`/`write` into
+/// the target, another tool, Finder, a shell) adds a file after the first
+/// predicate call passed. The predicate runs again just before the rename, so
+/// the swap is refused, the stray file survives and no stage is left.
 #[test]
-fn an_unlocked_writer_after_the_predicate_loses_its_file_silently() {
+fn an_unlocked_writer_after_the_predicate_is_caught_by_the_recheck() {
     let s = scratch("stray");
     let t = old_target(&s);
-    replace_dir_with_if(&t, needs_marker, |stage| {
-        // Between the predicate and the rename: someone else writes.
+    let err = replace_dir_with_if(&t, only_marker, |stage| {
         fs::write(t.join("late-user-file.txt"), "precious").unwrap();
         marker(stage)
     })
-    .unwrap();
-    assert_eq!(names(&t), ["marker"]);
-    assert_eq!(names(&s.0), ["ckpt"], "no backup is kept: the file is gone");
+    .unwrap_err();
+    assert!(err.detail().contains("not only a marker"), "{err}");
+    assert_eq!(names(&t), ["late-user-file.txt", "marker"]);
+    assert_eq!(fs::read(t.join("late-user-file.txt")).unwrap(), b"precious");
+    assert_eq!(fs::read(t.join("marker")).unwrap(), b"old");
+    assert_eq!(names(&s.0), ["ckpt"], "a stage or backup was left");
 }
 
-/// The target swapped for a symlink to another directory after the check:
-/// the symlink is what gets moved aside and removed (not followed), the real
-/// content of the other directory survives, and the new target is a real
-/// directory.
+/// The target swapped for a symlink to another directory after the first
+/// check: the re-check sees it is no longer a plain directory and refuses.
+/// Nothing is deleted through the link, the other directory survives, and the
+/// stage is removed.
 #[test]
-fn a_target_swapped_for_a_symlink_after_the_check_never_deletes_through_it() {
+fn a_target_swapped_for_a_symlink_after_the_check_is_refused_untouched() {
     let s = scratch("swap");
     let t = old_target(&s);
     let outside = s.0.join("outside");
     fs::create_dir(&outside).unwrap();
     fs::write(outside.join("sentinel"), "mine").unwrap();
     let moved = s.0.join("moved");
-    replace_dir_with_if(&t, needs_marker, |stage| {
+    let err = replace_dir_with_if(&t, needs_marker, |stage| {
         fs::rename(&t, &moved).unwrap();
         std::os::unix::fs::symlink(&outside, &t).unwrap();
         marker(stage)
     })
-    .unwrap();
-    assert!(!fs::symlink_metadata(&t).unwrap().file_type().is_symlink());
-    assert_eq!(fs::read(t.join("marker")).unwrap(), b"new");
+    .unwrap_err();
+    assert!(
+        err.detail().contains("no longer a plain directory"),
+        "{err}"
+    );
+    assert!(fs::symlink_metadata(&t).unwrap().file_type().is_symlink());
     assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"mine");
     assert_eq!(fs::read(moved.join("marker")).unwrap(), b"old");
     assert_eq!(names(&s.0), ["ckpt", "moved", "outside"]);
@@ -202,7 +214,8 @@ fn odd_target_paths_are_refused_or_normalized_without_touching_anything() {
         marker,
     )
     .unwrap();
-    assert_eq!(called.get(), 1);
+    // Once before the stage is made, once just before the rename.
+    assert_eq!(called.get(), 2);
     assert_eq!(fs::read(t.join("marker")).unwrap(), b"new");
     assert_eq!(names(&s.0), ["ckpt"]);
 }

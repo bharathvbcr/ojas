@@ -875,7 +875,7 @@ fn save_refuses_a_directory_that_is_not_a_checkpoint_and_deletes_nothing() {
             err.contains("not a checkpoint directory"),
             "{target}: {err}"
         );
-        assert!(!err.starts_with("ojas:E_BUSY"), "{target}: {err}");
+        assert!(err.starts_with("ojas:E_TARGET: "), "{target}: {err}");
         assert!(
             tree_bytes(&dir) == before,
             "{target}: the refusal changed the tree"
