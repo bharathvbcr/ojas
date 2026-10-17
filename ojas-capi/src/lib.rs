@@ -149,6 +149,8 @@ pub(crate) fn device_error(context: &str, err: &ojas_device::DeviceError) -> Str
 pub const SESSION_CAP: usize = session::SESSION_CAP;
 
 #[cfg(test)]
+mod adversarial_tests;
+#[cfg(test)]
 mod ops_tests;
 #[cfg(test)]
 mod tests;
