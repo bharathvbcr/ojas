@@ -14,20 +14,10 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, Tensor};
-use ojas_wgpu::{WgpuBackend, WgpuContext};
+use ojas_core::{Backend, Tensor};
+use ojas_wgpu::WgpuBackend;
 
 const CHUNK: usize = 4096;
-
-fn capped(max: u32) -> WgpuBackend {
-    let cap = wgpu::Limits {
-        max_compute_workgroups_per_dimension: max,
-        ..wgpu::Limits::default()
-    };
-    let ctx = WgpuContext::open_capped(&cap).expect("wgpu adapter");
-    assert_eq!(ctx.limits().max_compute_workgroups_per_dimension, max);
-    WgpuBackend::with_context(ctx, Budget::new(8 << 30))
-}
 
 /// `sizes.len()` gradients; the last chunk of the last one is a thousand times
 /// larger than the rest, so a dropped last chunk moves the norm.
@@ -154,8 +144,7 @@ fn pointwise_and_row_kernels_leave_spare_workgroups_inert_under_a_cap_of_two() {
     let g = capped(2);
     let c = cpu();
     let dev = |v: &[f32], shape: &[usize]| {
-        g.upload(&Tensor::from_f32(v, shape, host_budget()).unwrap())
-            .unwrap()
+        padded(&g, &Tensor::from_f32(v, shape, host_budget()).unwrap())
     };
     let back = |t: &Tensor| g.download(t).unwrap().to_f32_vec().unwrap();
     for n in [1usize, 255, 256, 257, 512, 513, 768, 769, 1023, 1024] {
