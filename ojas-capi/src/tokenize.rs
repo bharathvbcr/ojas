@@ -23,7 +23,11 @@ pub const TOKENIZE_DECODE_LOSSY: u32 = 3;
 pub const TOKENIZE_PIECE_ID: u32 = 4;
 
 /// TOKENIZER: `id: u64`, then `{vocab_json, merges_txt}`. Replaces the
-/// session's tokenizer only once the new one has loaded.
+/// session's tokenizer only once the new one has loaded and the call is
+/// still not cancelled. The cancel check runs before the files are opened,
+/// before the parse and after it; `ojas_data::load_hf_gpt2` reads and parses
+/// both files in one call with no hook, so a cancel during it takes effect
+/// when it returns.
 pub fn load_request(bytes: &[u8], mut check: Check) -> Result<(), String> {
     check()?;
     let mut r = Reader::new(bytes);
@@ -43,6 +47,9 @@ pub fn load_request(bytes: &[u8], mut check: Check) -> Result<(), String> {
     check()?;
     let bpe = ojas_data::load_hf_gpt2(&vocab.fd_path(), &merges.fd_path())
         .map_err(|e| format!("tokenizer: {}", merges.explain(&vocab.explain(e.detail()))))?;
+    // A cancel that landed during the parse installs nothing and keeps the
+    // session's earlier tokenizer.
+    check()?;
     state.tokenizer = Some(bpe);
     Ok(())
 }

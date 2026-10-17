@@ -134,6 +134,7 @@ func main() {
 | `ErrBusy` | `ojas:E_BUSY:` | another call holds this id (pool size > 1) |
 | `ErrPoisoned` | `ojas:E_POISONED:` | the trainer was left partly updated; Resume |
 | `ErrPressure` | `ojas:E_PRESSURE:` | critical memory pressure refused a call that would allocate, before it started; nothing changed, Save and Free still run; back off and retry |
+| `ErrTarget` | `ojas:E_TARGET:` | SaveCheckpoint named an existing directory that is neither empty nor an earlier checkpoint; every file in it is unchanged |
 | `context.Canceled` | (gusset) | the call's context ended; a cancelled step commits nothing |
 
 A kind counts only at the start of the engine's message, so a path that spells one never selects it.

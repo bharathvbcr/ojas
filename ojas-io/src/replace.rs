@@ -230,6 +230,34 @@ pub fn replace_dir_with<F>(target: &Path, fill: F) -> Result<(), IoError>
 where
     F: FnOnce(&Path) -> Result<(), IoError>,
 {
+    replace_dir_with_if(target, |_| Ok(()), fill)
+}
+
+/// [`replace_dir_with`] that asks `allow` whether an existing target may be
+/// replaced. `allow` runs only when the target exists, with the target's
+/// path, inside the parent lock, and it runs twice: once before a stage is
+/// made, and again after `fill` and the stage's sync, immediately before the
+/// first rename. An `Err` from either is returned (with the target's path in
+/// front); at the second the stage is removed. Either way the target is
+/// untouched. An absent target is never offered to `allow`. `allow` must not
+/// take the same parent's replace lock.
+///
+/// Recovery runs before the first call: a lone backup is restored over a
+/// missing target (and `allow` then judges the restored directory), and with
+/// the target present, stale backups are removed. A refusal therefore does
+/// not undo that recovery; stale stages are swept only after the first call
+/// passes.
+///
+/// What is excluded: writers that take this lock. A writer that bypasses it
+/// (a shell, Finder, another tool) can still add to the target after the
+/// second call and before the rename, and that file is lost with the old
+/// directory. That window is the few instructions between the re-check and
+/// the rename; before the re-check, such a file makes `allow` refuse.
+pub fn replace_dir_with_if<A, F>(target: &Path, mut allow: A, fill: F) -> Result<(), IoError>
+where
+    A: FnMut(&Path) -> Result<(), IoError>,
+    F: FnOnce(&Path) -> Result<(), IoError>,
+{
     if cfg!(not(unix)) {
         return Err(IoError::new(format!(
             "{}: replace_dir_with needs unix rename and directory fsync",
@@ -239,11 +267,27 @@ where
     let what = target.display();
     let mut site = Site::lock(target)?;
     site.recover()?;
+    if site.exists {
+        allow(target).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?;
+    }
     site.sweep_stages()?;
     let mut stage = Stage {
         path: create_stage(site.parent, site.name, &SEQ)?,
     };
     let staged = fill(&stage.path).and_then(|()| sync_tree(&stage.path, 0));
+    let staged = staged.and_then(|()| {
+        if !site.exists {
+            return Ok(());
+        }
+        let kind = fs::symlink_metadata(target)
+            .map_err(|e| IoError::new(format!("{what}: re-checked before the swap: {e}")))?;
+        if !kind.is_dir() {
+            return Err(IoError::new(format!(
+                "{what}: is no longer a plain directory; left as it is"
+            )));
+        }
+        allow(target)
+    });
     if let Err(e) = staged {
         return Err(match stage.remove() {
             Ok(()) => IoError::new(format!("{what}: {}", e.detail())),

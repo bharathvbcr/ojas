@@ -3,6 +3,8 @@
 //!
 //! Every call holds the session's model for its whole run and ends with
 //! [`crate::settled`], so a fault a device deferred is this call's error.
+//! A cancelled save leaves the old checkpoint whole and no stage; a save into
+//! a directory that is neither empty nor a checkpoint is refused untouched.
 //! A cancelled step commits nothing: the session's backend refuses ops once
 //! the call is cancelled, but only ops before the trainer's optimizer
 //! (`crate::gate`). A step that fails in its optimizer or finish leaves the
@@ -10,11 +12,12 @@
 //! until a Resume.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use ojas_core::{Autocast, AutocastMode, Backend, OjasError, Tensor};
 use ojas_cpu::{scaled_lr, CosineSchedule, LrSchedule, WsdSchedule};
 use ojas_data::{Batch, BinLayout, TokenBin, TokenWidth};
-use ojas_model::{NonFinitePolicy, TrainConfig, Trainer};
+use ojas_model::{ModelSpec, NonFinitePolicy, SaveError, TrainConfig, Trainer};
 
 use crate::gate::Check;
 use crate::load::{self, Verified, PLACEMENT_FIELDS};
@@ -290,7 +293,13 @@ fn step_on<B: Backend>(m: &mut Model<B>, batches: Option<&[Batch]>) -> Result<St
 
 /// SAVE: `id: u64`, then the checkpoint directory (the rest of the payload),
 /// relative to the root. It may not exist yet; its parent must.
-/// `Trainer::save` writes a staging directory and swaps it in whole.
+/// `Trainer::save_polled` writes a staging directory and swaps it in whole.
+/// An existing directory is replaced only when it is empty or an earlier
+/// checkpoint (`ojas_model::check_save_target`); any other is refused and
+/// left as it was. The cancel check runs before each tensor is downloaded
+/// and once more before the swap (the session's backend does not poll its
+/// downloads), so a cancel lands within one tensor's write and leaves the
+/// old checkpoint intact with no stage.
 pub fn save_request(bytes: &[u8], mut check: Check) -> Result<(), String> {
     check()?;
     let mut r = Reader::new(bytes);
@@ -300,11 +309,24 @@ pub fn save_request(bytes: &[u8], mut check: Check) -> Result<(), String> {
     let session = session::require(id)?;
     let mut guard = session.lock_state()?;
     let state = &mut *guard;
-    let armed = state.slot.arm(check);
+    // One check serves both the backend's per-op poll and SAVE's own.
+    let check = Arc::new(Mutex::new(check));
+    let armed = state.slot.arm({
+        let check = Arc::clone(&check);
+        Box::new(move || (check.lock().unwrap_or_else(|e| e.into_inner()))())
+    });
+    let mut poll = move || (check.lock().unwrap_or_else(|e| e.into_inner()))();
     on_model!(&mut state.engine, m => {
         let saved = trainer_mut(m)
-            .and_then(|t| t.save(&dir))
-            .map_err(|e| armed.report("save", &e));
+            .map_err(SaveError::from)
+            .and_then(|t| t.save_polled(&dir, &mut poll))
+            .map_err(|e| match e {
+                SaveError::Cancelled(msg) => msg,
+                SaveError::TargetRefused(detail) => {
+                    crate::kinded(crate::ErrorKind::Target, format!("save: {detail}"))
+                }
+                SaveError::Failed(e) => armed.report("save", &e),
+            });
         crate::settled("save", &m.backend, saved)
     })
 }
@@ -312,10 +334,15 @@ pub fn save_request(bytes: &[u8], mut check: Check) -> Result<(), String> {
 /// A trainer restored from a checkpoint directory.
 struct FromCheckpoint {
     dir: PathBuf,
+    spec: ModelSpec,
     setup: Setup,
 }
 
 impl Build for FromCheckpoint {
+    fn param_bytes(&self) -> Option<u64> {
+        ojas_model::param_bytes(&self.spec).ok()
+    }
+
     fn build<B: Backend + Clone>(self, backend: B) -> Result<Model<B>, OjasError> {
         let trainer = Trainer::resume_from(
             Autocast::new(backend.clone()),
@@ -347,12 +374,16 @@ pub fn resume_request(bytes: &[u8], mut check: Check) -> Result<session::Session
     let raw = required(f.str(tag::PATH), tag::PATH)?;
     let dir = load::resolve_dir_under_root(&session::root()?, raw, true)?;
     session::check_room()?;
+    // The spec header decides the same refusals LOAD makes (an unsupported
+    // Metal head_dim, parameters over the budget), before the device opens.
+    let spec = load::checkpoint_spec(&dir)?;
+    load::preflight("resume", &placement, &spec)?;
     let setup = setup(&f)?;
     load::create(
         Some(dir.clone()),
         &placement,
         check,
-        FromCheckpoint { dir, setup },
+        FromCheckpoint { dir, spec, setup },
     )
 }
 

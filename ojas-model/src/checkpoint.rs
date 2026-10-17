@@ -7,8 +7,11 @@
 //! | [`STATE_FILE`] | Checkpoint v1 with empty tensor sections. `rng_state` is [`SamplerRngState`] v1: the sampler is a keyed permutation, so its whole random state is the permutation's generator tag and its key, the config's `data_seed`. `config` is the JSON object `{"format","run","spec","train"}`. |
 //!
 //! [`Trainer::save`] builds the three files in a staging directory and
-//! swaps it in with [`ojas_io::replace_dir_with`], after checking the
-//! staging filesystem has room for all three. Each tensor is read back
+//! swaps it in with [`ojas_io::replace_dir_with_if`], after checking the
+//! staging filesystem has room for all three. An existing target is replaced
+//! only when it is empty or an earlier checkpoint (Finder's `.DS_Store`
+//! excepted) ([`check_save_target`], run
+//! under the replace lock): anything else is refused with nothing touched. Each tensor is read back
 //! with one download and written before the next is read, so the host
 //! holds one tensor at a time. A device tensor is deliberately not read
 //! back in pieces: `Backend` has no ranged download, and the one-tensor
@@ -24,7 +27,10 @@
 //! exactly the expected ones. Only then are tensors streamed in, one at a
 //! time, and the trainer built. A refusal leaves nothing behind.
 
-use std::fs::{File, OpenOptions};
+use std::cell::RefCell;
+use std::ffi::OsStr;
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
 use std::io::BufWriter;
 use std::path::Path;
 
@@ -32,7 +38,7 @@ use ojas_core::{Backend, CheckpointV1, DType, OjasError, OptimizerCheckpoint, Te
 use ojas_cpu::OptimGroup;
 use ojas_data::{SamplerRngState, TokenBin};
 use ojas_io::{
-    checkpoint_file_len, read_checkpoint_from, recover_replaced_dir, replace_dir_with,
+    checkpoint_file_len, read_checkpoint_from, recover_replaced_dir, replace_dir_with_if,
     safetensors_file_len, write_checkpoint, IoError, SafeTensors, SafeTensorsWriter, StDtype,
     TensorSpec,
 };
@@ -81,6 +87,125 @@ fn save_error(detail: String) -> OjasError {
         op: "Trainer::save",
         detail,
     }
+}
+
+/// Why [`Trainer::save_polled`] wrote nothing.
+#[derive(Debug)]
+pub enum SaveError {
+    /// The target exists and is neither empty nor an earlier checkpoint
+    /// ([`check_save_target`]). Nothing was touched.
+    TargetRefused(String),
+    /// The caller's poll returned this message between two tensors, or just
+    /// before the swap. The old directory is intact and no stage is left.
+    Cancelled(String),
+    /// Any other refusal or failure, as [`Trainer::save`] reports it.
+    Failed(OjasError),
+}
+
+impl SaveError {
+    /// The error as [`Trainer::save`] returns it.
+    pub fn into_ojas(self) -> OjasError {
+        match self {
+            SaveError::TargetRefused(detail) | SaveError::Cancelled(detail) => save_error(detail),
+            SaveError::Failed(e) => e,
+        }
+    }
+}
+
+impl From<OjasError> for SaveError {
+    fn from(e: OjasError) -> Self {
+        SaveError::Failed(e)
+    }
+}
+
+impl fmt::Display for SaveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SaveError::TargetRefused(detail) | SaveError::Cancelled(detail) => f.write_str(detail),
+            SaveError::Failed(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SaveError {}
+
+/// The poll [`Trainer::save_polled`] makes between tensors: `Err` carries
+/// the caller's cancel message.
+pub type SavePoll<'a> = &'a mut dyn FnMut() -> Result<(), String>;
+
+/// The file Finder drops into a directory it has opened. [`check_save_target`]
+/// lets it ride along, as a regular file only.
+const FINDER_FILE: &str = ".DS_Store";
+
+/// May `dir`, an existing directory, be replaced by a checkpoint? Only an
+/// empty one, or one that holds [`STATE_FILE`] and nothing outside
+/// {[`MODEL_FILE`], [`OPTIM_FILE`], [`STATE_FILE`]}, each a regular file.
+/// Entries are judged without following links, and by exact name: on a
+/// case-insensitive filesystem `STATE.OJCK` is still not `state.ojck`. A
+/// symbolic link, a nested directory or any special file refuses, and so
+/// does a directory that cannot be listed. One exception: a `.DS_Store` that
+/// is a regular file (not a link or directory) is allowed beside the
+/// checkpoint files and in an otherwise empty directory, since Finder adds
+/// one to any directory it opens; it goes with the old directory. A
+/// directory holding only `.DS_Store` counts as empty. At most five entries
+/// are read.
+///
+/// [`Trainer::save`] runs this under the replace lock, so no writer that
+/// takes that lock can change the directory between this check and the swap.
+pub fn check_save_target(dir: &Path) -> Result<(), String> {
+    let what = dir.display();
+    let refuse = |why: String| {
+        Err(format!(
+            "{what}: {why}; SAVE replaces only an absent path, an empty directory or an \
+             earlier checkpoint ({MODEL_FILE}, {OPTIM_FILE}, {STATE_FILE}) and left it as it was"
+        ))
+    };
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => return refuse(format!("the directory cannot be listed ({e})")),
+    };
+    let mut held = 0usize;
+    let mut has_state = false;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => return refuse(format!("the directory cannot be listed ({e})")),
+        };
+        let name = entry.file_name();
+        if name == OsStr::new(FINDER_FILE) {
+            match entry.file_type() {
+                Ok(kind) if kind.is_file() => continue,
+                _ => return refuse(format!("{FINDER_FILE} in it is not a regular file")),
+            }
+        }
+        if ![MODEL_FILE, OPTIM_FILE, STATE_FILE]
+            .iter()
+            .any(|f| name == OsStr::new(f))
+        {
+            return refuse(format!(
+                "it is not a checkpoint directory: it holds {:?}",
+                name.to_string_lossy()
+            ));
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_file() => {}
+            Ok(_) => {
+                return refuse(format!(
+                    "{:?} in it is not a regular file",
+                    name.to_string_lossy()
+                ))
+            }
+            Err(e) => return refuse(format!("{:?} cannot be inspected ({e})", name)),
+        }
+        has_state |= name == OsStr::new(STATE_FILE);
+        held += 1;
+    }
+    if held > 0 && !has_state {
+        return refuse(format!(
+            "it is not a checkpoint directory: it has no {STATE_FILE}"
+        ));
+    }
+    Ok(())
 }
 
 /// The optimizer tensors of one parameter, by its table row. The trainer
@@ -330,7 +455,8 @@ fn write_tensors<B: Backend + ?Sized>(
     path: &Path,
     tensors: &[(&str, &Tensor)],
     metadata: &[(&str, &str)],
-) -> Result<(), OjasError> {
+    poll: SavePoll<'_>,
+) -> Result<(), SaveError> {
     let what = path.display();
     let io = |e: IoError| save_error(format!("{what}: {}", e.detail()));
     let shapes = shapes_of(tensors);
@@ -351,12 +477,14 @@ fn write_tensors<B: Backend + ?Sized>(
     let mut writer = SafeTensorsWriter::new(BufWriter::new(file), &specs, metadata).map_err(io)?;
     let mut le = Vec::with_capacity(LE_CHUNK);
     for (name, tensor) in tensors {
+        poll().map_err(SaveError::Cancelled)?;
         if tensor.dtype() != DType::F32 {
             return Err(OjasError::Dtype {
                 op: "Trainer::save",
                 expected: DType::F32,
                 got: tensor.dtype(),
-            });
+            }
+            .into());
         }
         let host = backend.download(tensor)?;
         for piece in host.f32_slice()?.chunks(LE_CHUNK / 4) {
@@ -377,10 +505,13 @@ fn write_tensors<B: Backend + ?Sized>(
 }
 
 impl<B: Backend> Trainer<B> {
-    /// Write the checkpoint directory `dir`, replacing any earlier one
-    /// whole (see the module docs). A [`crate::TrainState::Poisoned`]
-    /// trainer is refused with [`OjasError::Poisoned`]: its parameters are
-    /// partly updated. On any error the previous `dir` is left as it was.
+    /// Write the checkpoint directory `dir`, replacing an earlier one whole
+    /// (see the module docs). An existing `dir` is replaced only when it is
+    /// empty or holds `state.ojck` and nothing but the three checkpoint
+    /// files ([`check_save_target`]); any other directory is refused. A
+    /// [`crate::TrainState::Poisoned`] trainer is refused with
+    /// [`OjasError::Poisoned`]: its parameters are partly updated. On any
+    /// error `dir` is left as it was.
     ///
     /// Before anything is written, the free space on the filesystem that
     /// stages `dir` ([`ojas_device::available_disk_bytes`] of its parent)
@@ -392,12 +523,31 @@ impl<B: Backend> Trainer<B> {
         self.save_with_free_space(dir, ojas_device::available_disk_bytes)
     }
 
+    /// [`Self::save`] that calls `poll` before each tensor is downloaded and
+    /// once more before the swap. A poll that fails stops the save with
+    /// [`SaveError::Cancelled`]: the old `dir` is intact and the stage is
+    /// removed. The longest stretch between polls is one tensor's download
+    /// and write.
+    pub fn save_polled(&self, dir: &Path, poll: SavePoll<'_>) -> Result<(), SaveError> {
+        self.save_inner(dir, ojas_device::available_disk_bytes, poll)
+    }
+
     /// [`Self::save`] with the free-space probe passed in.
     fn save_with_free_space(
         &self,
         dir: &Path,
         free: impl FnOnce(&Path) -> std::io::Result<u64>,
     ) -> Result<(), OjasError> {
+        self.save_inner(dir, free, &mut || Ok(()))
+            .map_err(SaveError::into_ojas)
+    }
+
+    fn save_inner(
+        &self,
+        dir: &Path,
+        free: impl FnOnce(&Path) -> std::io::Result<u64>,
+        poll: SavePoll<'_>,
+    ) -> Result<(), SaveError> {
         self.ready()?;
         let backend = self.tape.backend();
         let step = self.step.to_string();
@@ -423,7 +573,8 @@ impl<B: Backend> Trainer<B> {
                 return Err(save_error(format!(
                     "{}: optimizer state disagrees with its table row",
                     slot.info.name
-                )));
+                ))
+                .into());
             }
             optim.extend(names.into_iter().zip(tensors));
         }
@@ -477,28 +628,51 @@ impl<B: Backend> Trainer<B> {
                 lens[0],
                 lens[1],
                 lens[2]
-            )));
+            ))
+            .into());
         }
-        // `replace_dir_with` takes an `IoError`; the trainer's own error
-        // is kept here and returned as it was.
-        let mut failed: Option<OjasError> = None;
-        let swapped = replace_dir_with(dir, |stage| {
-            let written = write_tensors(backend, &stage.join(MODEL_FILE), &model, &model_meta)
-                .and_then(|()| write_tensors(backend, &stage.join(OPTIM_FILE), &optim, &optim_meta))
+        // `replace_dir_with_if` takes `IoError`s; the trainer's own error is
+        // kept here and returned as it was.
+        let failed: RefCell<Option<SaveError>> = RefCell::new(None);
+        let keep = |e: SaveError| {
+            let detail = e.to_string();
+            *failed.borrow_mut() = Some(e);
+            IoError::new(detail)
+        };
+        let poll = RefCell::new(poll);
+        let swapped = replace_dir_with_if(
+            dir,
+            |existing| check_save_target(existing).map_err(|d| keep(SaveError::TargetRefused(d))),
+            |stage| {
+                let mut poll = poll.borrow_mut();
+                let written = write_tensors(
+                    backend,
+                    &stage.join(MODEL_FILE),
+                    &model,
+                    &model_meta,
+                    &mut **poll,
+                )
+                .and_then(|()| {
+                    write_tensors(
+                        backend,
+                        &stage.join(OPTIM_FILE),
+                        &optim,
+                        &optim_meta,
+                        &mut **poll,
+                    )
+                })
                 .and_then(|()| {
                     write_checkpoint(&stage.join(STATE_FILE), &state)
-                        .map_err(|e| save_error(format!("{STATE_FILE}: {}", e.detail())))
-                });
-            written.map_err(|e| {
-                let detail = e.to_string();
-                failed = Some(e);
-                IoError::new(detail)
-            })
-        });
-        match (swapped, failed) {
+                        .map_err(|e| save_error(format!("{STATE_FILE}: {}", e.detail())).into())
+                })
+                .and_then(|()| (**poll)().map_err(SaveError::Cancelled));
+                written.map_err(keep)
+            },
+        );
+        match (swapped, failed.into_inner()) {
             (Ok(()), _) => Ok(()),
             (Err(_), Some(err)) => Err(err),
-            (Err(e), None) => Err(save_error(e.detail().to_string())),
+            (Err(e), None) => Err(save_error(e.detail().to_string()).into()),
         }
     }
 
@@ -892,5 +1066,196 @@ mod tests {
         t.save_with_free_space(&ckpt, |_| Ok(need)).unwrap();
         t.save(&root.0.join("real")).unwrap();
         assert!(root.0.join("real").join(STATE_FILE).is_file());
+    }
+
+    fn tiny_trainer(root: &Path) -> Trainer<ojas_cpu::CpuBackend> {
+        let tokens = root.join("tokens.bin");
+        let bytes: Vec<u8> = (0..20_000u32)
+            .flat_map(|i| ((i % 256) as u16).to_le_bytes())
+            .collect();
+        std::fs::write(&tokens, bytes).unwrap();
+        let bin = TokenBin::open_headerless(&tokens).unwrap();
+        let budget = ojas_core::Budget::new(1 << 30);
+        let params = crate::init_params(&ModelSpec::tiny(), 5, &budget).unwrap();
+        let backend = ojas_cpu::CpuBackend::new(budget);
+        Trainer::new(backend, ModelSpec::tiny(), &params, bin, cfg()).unwrap()
+    }
+
+    fn scratch_root(tag: &str) -> Root {
+        let root = Root(
+            std::env::temp_dir().join(format!("ojas-model-save-{tag}-{}", std::process::id())),
+        );
+        std::fs::create_dir_all(&root.0).unwrap();
+        root
+    }
+
+    #[test]
+    fn the_save_target_policy_judges_entries_by_exact_name_and_kind() {
+        let root = scratch_root("policy");
+        let case = |name: &str, build: &dyn Fn(&Path)| {
+            let dir = root.0.join(name);
+            std::fs::create_dir(&dir).unwrap();
+            build(&dir);
+            check_save_target(&dir)
+        };
+        let file = |d: &Path, n: &str| std::fs::write(d.join(n), b"x").unwrap();
+        assert!(case("empty", &|_| {}).is_ok());
+        assert!(case("state-only", &|d| file(d, STATE_FILE)).is_ok());
+        assert!(case("whole", &|d| {
+            for f in [MODEL_FILE, OPTIM_FILE, STATE_FILE] {
+                file(d, f);
+            }
+        })
+        .is_ok());
+        // Finder's file rides along only as a regular file.
+        assert!(case("finder", &|d| {
+            file(d, STATE_FILE);
+            file(d, ".DS_Store");
+        })
+        .is_ok());
+        assert!(case("finder-only", &|d| file(d, ".DS_Store")).is_ok());
+        assert!(case("finder-dir", &|d| {
+            std::fs::create_dir(d.join(".DS_Store")).unwrap()
+        })
+        .is_err());
+        assert!(case("finder-link", &|d| {
+            std::os::unix::fs::symlink("elsewhere", d.join(".DS_Store")).unwrap()
+        })
+        .is_err());
+        assert!(case("finder-no-state", &|d| {
+            file(d, MODEL_FILE);
+            file(d, ".DS_Store");
+        })
+        .is_err());
+        // Without state.ojck, even a checkpoint's own files are not a checkpoint.
+        assert!(case("no-state", &|d| file(d, MODEL_FILE)).is_err());
+        assert!(case("extra", &|d| {
+            file(d, STATE_FILE);
+            file(d, "notes.txt");
+        })
+        .is_err());
+        assert!(case("nested", &|d| {
+            file(d, STATE_FILE);
+            std::fs::create_dir(d.join(MODEL_FILE)).unwrap();
+        })
+        .is_err());
+        assert!(case("symlink", &|d| {
+            file(d, STATE_FILE);
+            std::fs::write(d.parent().unwrap().join("target"), b"y").unwrap();
+            std::os::unix::fs::symlink("../target", d.join(MODEL_FILE)).unwrap();
+        })
+        .is_err());
+        assert!(case("fifo", &|d| {
+            file(d, STATE_FILE);
+            let made = std::process::Command::new("mkfifo")
+                .arg(d.join(OPTIM_FILE))
+                .status()
+                .unwrap();
+            assert!(made.success());
+        })
+        .is_err());
+        // The name is compared byte for byte, even where the filesystem is not.
+        let err = case("upper", &|d| file(d, "STATE.OJCK")).unwrap_err();
+        assert!(err.contains("STATE.OJCK"), "{err}");
+        assert!(case("mixed", &|d| {
+            file(d, STATE_FILE);
+            file(d, "Model.safetensors");
+        })
+        .is_err());
+        assert!(check_save_target(&root.0.join("absent")).is_err());
+    }
+
+    /// A save over a directory that is not a checkpoint is refused with every
+    /// byte left as it was; over an empty directory, an earlier checkpoint
+    /// and an absent path it writes.
+    #[test]
+    fn save_replaces_only_empty_or_checkpoint_directories() {
+        let root = scratch_root("replace");
+        let t = tiny_trainer(&root.0);
+        let runs = root.0.join("runs");
+        std::fs::create_dir_all(runs.join("a")).unwrap();
+        std::fs::write(runs.join("a").join(STATE_FILE), b"another run").unwrap();
+        std::fs::write(runs.join("log.txt"), b"keep me").unwrap();
+        let before = listing(&root.0);
+        let err = t.save(&runs).unwrap_err();
+        assert!(
+            err.to_string().contains("not a checkpoint directory"),
+            "{err}"
+        );
+        assert!(
+            listing(&root.0) == before,
+            "a refused save changed the tree"
+        );
+        match t.save_polled(&runs, &mut || Ok(())).unwrap_err() {
+            SaveError::TargetRefused(d) => assert!(d.contains("not a checkpoint directory"), "{d}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            listing(&root.0) == before,
+            "a refused save changed the tree"
+        );
+
+        let empty = root.0.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        t.save(&empty).unwrap();
+        t.save(&empty).unwrap();
+        t.save(&root.0.join("absent")).unwrap();
+        for dir in ["empty", "absent"] {
+            let mut names: Vec<_> = std::fs::read_dir(root.0.join(dir))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            assert_eq!(names, [MODEL_FILE, OPTIM_FILE, STATE_FILE], "{dir}");
+        }
+    }
+
+    /// A poll that fails between tensors stops the save: the earlier
+    /// checkpoint is byte-identical and no stage is left beside it. The poll
+    /// is made once per tensor and once before the swap.
+    #[test]
+    fn a_cancelled_save_leaves_the_old_checkpoint_and_no_stage() {
+        let root = scratch_root("cancel");
+        let t = tiny_trainer(&root.0);
+        let ckpt = root.0.join("ckpt");
+        t.save(&ckpt).unwrap();
+        let before = listing(&root.0);
+        let mut polls = 0usize;
+        t.save_polled(&ckpt, &mut || {
+            polls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert!(polls > 3, "{polls}");
+        for stop_at in [1, 2, polls / 2, polls] {
+            let mut n = 0usize;
+            let err = t
+                .save_polled(&ckpt, &mut || {
+                    n += 1;
+                    if n == stop_at {
+                        Err("cancelled: Explicit".to_string())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+            match err {
+                SaveError::Cancelled(m) => assert_eq!(m, "cancelled: Explicit"),
+                other => panic!("stop {stop_at}: {other:?}"),
+            }
+            assert_eq!(n, stop_at, "the save polled past the cancel");
+            let names: Vec<_> = std::fs::read_dir(&root.0)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect();
+            assert!(
+                names.iter().all(|n| n == "ckpt" || n == "tokens.bin"),
+                "{names:?}"
+            );
+            for (path, bytes) in listing(&ckpt) {
+                let was = before.iter().find(|(p, _)| *p == path).unwrap();
+                assert_eq!(was.1, bytes, "{}", path.display());
+            }
+        }
     }
 }

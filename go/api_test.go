@@ -2,6 +2,7 @@ package ojas
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -1014,5 +1016,142 @@ func TestPkgconfigNamesAppleFrameworks(t *testing.T) {
 	}
 	if strings.Contains(string(linux), "-framework") || !strings.Contains(string(linux), "target/debug") || !strings.Contains(string(linux), "-lgusset") {
 		t.Fatalf("linux/gusset.pc must link target/debug libgusset without Apple frameworks:\n%s", linux)
+	}
+}
+
+// dirDigest is every entry under dir by relative path with a digest of its
+// bytes (symlinks and directories by kind), so a refused save can be shown to
+// have changed nothing.
+func dirDigest(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		switch {
+		case d.Type()&os.ModeSymlink != 0:
+			out[rel] = "link"
+		case d.IsDir():
+			out[rel] = "dir"
+		default:
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			out[rel] = fmt.Sprintf("%x", sha256.Sum256(body))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// SaveCheckpoint replaces an absent path, an empty directory and an earlier
+// checkpoint, and refuses every other existing directory with all of its
+// files unchanged.
+func TestSaveCheckpointReplacesOnlyCheckpointDirectories(t *testing.T) {
+	dir := harness(t)
+	ctx := context.Background()
+	id := trainedModel(t, LoadOptions{})
+	if _, err := TrainStep(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"fresh", "empty", "fresh", "empty"} {
+		if err := SaveCheckpoint(ctx, id, target); err != nil {
+			t.Fatalf("save to %s: %v", target, err)
+		}
+		entries, err := os.ReadDir(filepath.Join(dir, target))
+		if err != nil || len(entries) != 3 {
+			t.Fatalf("%s holds %v, %v", target, entries, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "runs", "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveCheckpoint(ctx, id, "runs/a"); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]string{
+		"notes":  {"log.txt"},
+		"upper":  {"STATE.OJCK"},
+		"nostat": {"model.safetensors"},
+		"extra":  {"state.ojck", "extra.bin"},
+	} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range body {
+			if err := os.WriteFile(filepath.Join(dir, name, f), []byte("keep "+f), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Symlink("runs", filepath.Join(dir, "runs-link")); err != nil {
+		t.Fatal(err)
+	}
+	before := dirDigest(t, dir)
+	for _, target := range []string{"runs", "notes", "upper", "nostat", "extra", "runs-link"} {
+		err := SaveCheckpoint(ctx, id, target)
+		if err == nil || !strings.Contains(err.Error(), "not a checkpoint directory") || !errors.Is(err, ErrTarget) {
+			t.Fatalf("save to %s: %v", target, err)
+		}
+		if got := dirDigest(t, dir); !reflect.DeepEqual(got, before) {
+			t.Fatalf("a refused save to %s changed the model root:\nbefore %v\nafter  %v", target, before, got)
+		}
+	}
+	if err := Free(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A SaveCheckpoint whose caller gave up leaves the earlier checkpoint whole
+// and no staging directory, and Close after it succeeds rather than leaving
+// the process in the stuck-close state.
+func TestCancelledSaveCheckpointThenCloseIsNotStuck(t *testing.T) {
+	dir := harness(t)
+	id := trainedModel(t, LoadOptions{})
+	if err := SaveCheckpoint(context.Background(), id, "ckpt"); err != nil {
+		t.Fatal(err)
+	}
+	before := dirDigest(t, dir)
+	for i := 0; i < 20; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(time.Duration(i) * 100 * time.Microsecond)
+			cancel()
+		}()
+		_ = SaveCheckpoint(ctx, id, "ckpt")
+		cancel()
+	}
+	closeCtx, stop := context.WithTimeout(context.Background(), time.Minute)
+	defer stop()
+	if err := Close(closeCtx); err != nil {
+		t.Fatalf("Close after cancelled saves: %v", err)
+	}
+	if err := SetModelRoot(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadModel(context.Background(), "model.safetensors", LoadOptions{}); err != nil {
+		t.Fatalf("a load after Close: %v", err)
+	}
+	// A save that finished before its cancel rewrote ckpt's bytes, never its
+	// entries: nothing else, a stage included, may be there.
+	got := dirDigest(t, dir)
+	for name := range got {
+		if _, ok := before[name]; !ok {
+			t.Fatalf("the model root gained %q", name)
+		}
+	}
+	for name := range before {
+		if _, ok := got[name]; !ok {
+			t.Fatalf("the model root lost %q", name)
+		}
 	}
 }

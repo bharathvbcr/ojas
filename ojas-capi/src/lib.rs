@@ -67,6 +67,9 @@ pub(crate) enum ErrorKind {
     /// same call can succeed once pressure eases. Unlike `Capacity`, it says
     /// nothing about whether the work fits.
     Pressure,
+    /// SAVE named an existing directory that is neither empty nor an earlier
+    /// checkpoint (`ojas_model::check_save_target`). It was left as it was.
+    Target,
 }
 
 impl ErrorKind {
@@ -78,6 +81,7 @@ impl ErrorKind {
             ErrorKind::Busy => "ojas:E_BUSY: ",
             ErrorKind::Poisoned => "ojas:E_POISONED: ",
             ErrorKind::Pressure => "ojas:E_PRESSURE: ",
+            ErrorKind::Target => "ojas:E_TARGET: ",
         }
     }
 }
@@ -150,6 +154,8 @@ pub(crate) fn device_error(context: &str, err: &ojas_device::DeviceError) -> Str
 
 pub const SESSION_CAP: usize = session::SESSION_CAP;
 
+#[cfg(test)]
+mod adversarial_tests;
 #[cfg(test)]
 mod ops_tests;
 #[cfg(test)]
