@@ -10,9 +10,11 @@ use std::sync::Arc;
 /// the counter.
 ///
 /// The live counter is an [`AtomicU64`] updated with `try_update`. A
-/// [`Budget::child`] charges its parent to completion, then itself. The two
-/// counters are never locked together. If the child refuses, the parent
-/// charge is released.
+/// [`Budget::child`] charges itself, then each ancestor in turn; the
+/// counters are never locked together. A request that does not fit anywhere
+/// on the chain is refused by a read-only check before any counter moves,
+/// and if an ancestor refuses after that check the levels already charged
+/// are released. A refusal therefore raises no peak.
 #[derive(Clone, Debug)]
 pub struct Budget {
     inner: Arc<Inner>,
@@ -68,8 +70,8 @@ impl Budget {
     /// A budget with its own cap that also charges this one.
     ///
     /// Creating the child does not charge either counter. [`Budget::try_reserve`]
-    /// on the child charges this budget first, then the child, and rolls the
-    /// parent charge back if the child refuses.
+    /// on the child charges the child first, then this budget, and rolls the
+    /// child charge back if an ancestor refuses.
     pub fn child(&self, cap_bytes: u64) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -124,9 +126,8 @@ impl Budget {
     /// [`Budget::reset_peak`] last ran. Never below the current live bytes.
     ///
     /// Each accepted charge records the exact value it reached, so
-    /// concurrent charges and releases cannot hide a peak. The figure can
-    /// only over-report: when a [`Budget::child`] refuses, the charge it
-    /// rolls back on this budget was briefly live and stays counted.
+    /// concurrent charges and releases cannot hide a peak. A refused charge
+    /// raises no peak on any level.
     pub fn peak_bytes(&self) -> u64 {
         self.inner.peak_bytes.load(Ordering::Acquire)
     }
@@ -144,11 +145,23 @@ impl Budget {
     /// Refuse now if `bytes` more would not fit this budget and every
     /// ancestor, exactly as [`Budget::try_reserve`] would; charge nothing.
     ///
-    /// For preflight checks. It reads one moment: another holder of an
+    /// Read-only: it compares `bytes` with the headroom of this budget and
+    /// each ancestor, and moves no live counter and no peak, so it never
+    /// takes room from a sibling. For preflight checks. It reads one moment: another holder of an
     /// ancestor can take the room afterwards, so a later charge can still be
     /// refused. A caller that needs the room kept holds a [`Reservation`].
     pub fn check_room(&self, bytes: u64) -> Result<(), OjasError> {
-        self.try_reserve(bytes).map(drop)
+        let mut node = Some(self);
+        while let Some(budget) = node {
+            let live = budget.inner.live_bytes.load(Ordering::Acquire);
+            let cap = budget.inner.cap_bytes;
+            match live.checked_add(bytes) {
+                Some(next) if next <= cap => {}
+                _ => return Err(Self::refusal(live, bytes, cap)),
+            }
+            node = budget.inner.parent.as_ref();
+        }
+        Ok(())
     }
 
     /// Reserve `bytes`, or refuse.
@@ -169,23 +182,55 @@ impl Budget {
         })
     }
 
+    /// Charge this budget and every ancestor, child first.
+    ///
+    /// A read-only pass over the chain refuses a request that cannot fit
+    /// before any counter moves, so a refusal never takes room on a shared
+    /// ancestor. The charge then goes level by level from this budget
+    /// upward. If a level refuses because another holder took the room
+    /// after the check, the levels already charged are released.
     fn charge(&self, bytes: u64) -> Result<(), OjasError> {
+        self.check_room(bytes)?;
+        self.charge_chain(bytes)
+    }
+
+    /// Charge this level, then the ancestors; roll back this level if an
+    /// ancestor refuses. A peak moves only once every level has accepted:
+    /// this level's peak is raised after its ancestors returned `Ok`, and
+    /// the levels below already hold their charge.
+    fn charge_chain(&self, bytes: u64) -> Result<(), OjasError> {
+        let reached = self.charge_self(bytes)?;
         if let Some(parent) = &self.inner.parent {
-            parent.charge(bytes)?;
-            if let Err(err) = self.charge_self(bytes) {
-                parent.release(bytes);
+            if let Err(err) = parent.charge_chain(bytes) {
+                self.release_self(bytes);
                 return Err(err);
             }
-            Ok(())
+        }
+        self.inner.peak_bytes.fetch_max(reached, Ordering::AcqRel);
+        Ok(())
+    }
+
+    /// The refusal for charging `bytes` on a budget holding `live` under `cap`.
+    fn refusal(live: u64, bytes: u64, cap: u64) -> OjasError {
+        if live.checked_add(bytes).is_none() {
+            OjasError::OutOfRange {
+                op: "Budget::try_reserve",
+                detail: format!("live {live} + {bytes} overflows u64"),
+            }
         } else {
-            self.charge_self(bytes)
+            OjasError::CapacityExceeded {
+                requested: bytes,
+                cap,
+                live,
+            }
         }
     }
 
-    fn charge_self(&self, bytes: u64) -> Result<(), OjasError> {
+    /// Add `bytes` to this level only, and return the value it reached.
+    /// The peak is left to the caller.
+    fn charge_self(&self, bytes: u64) -> Result<u64, OjasError> {
         let cap = self.inner.cap_bytes;
-        match self
-            .inner
+        self.inner
             .live_bytes
             .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 let next = live.checked_add(bytes)?;
@@ -194,31 +239,10 @@ impl Budget {
                 } else {
                     Some(next)
                 }
-            }) {
-            Ok(prev) => {
-                // The exact value this charge reached (`prev + bytes` was
-                // checked inside the update), so concurrent releases cannot
-                // hide it from the peak.
-                self.inner
-                    .peak_bytes
-                    .fetch_max(prev + bytes, Ordering::AcqRel);
-                Ok(())
-            }
-            Err(live) => {
-                if live.checked_add(bytes).is_none() {
-                    Err(OjasError::OutOfRange {
-                        op: "Budget::try_reserve",
-                        detail: format!("live {live} + {bytes} overflows u64"),
-                    })
-                } else {
-                    Err(OjasError::CapacityExceeded {
-                        requested: bytes,
-                        cap,
-                        live,
-                    })
-                }
-            }
-        }
+            })
+            // `prev + bytes` was checked inside the update.
+            .map(|prev| prev + bytes)
+            .map_err(|live| Self::refusal(live, bytes, cap))
     }
 
     fn release(&self, bytes: u64) {
@@ -762,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn child_charges_parent_first_and_rolls_back() {
+    fn child_charges_child_first_and_a_refusal_leaves_nothing() {
         let parent = Budget::new(100);
         let child = parent.child(40);
         let held = child.try_reserve(30).unwrap();
@@ -782,7 +806,19 @@ mod tests {
         assert_eq!(parent.live_bytes().unwrap(), 30);
         assert_eq!(child.live_bytes().unwrap(), 30);
 
+        // Over the child's own cap too: the child, charged first, refuses.
         let err = child.try_reserve(80).unwrap_err();
+        assert!(matches!(
+            err,
+            OjasError::CapacityExceeded {
+                cap: 40,
+                live: 30,
+                ..
+            }
+        ));
+        // Within the child's cap but not the parent's: the parent refuses.
+        let wide = parent.child(1000);
+        let err = wide.try_reserve(80).unwrap_err();
         assert!(matches!(
             err,
             OjasError::CapacityExceeded {
@@ -791,6 +827,7 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(wide.live_bytes().unwrap(), 0);
         assert_eq!(parent.live_bytes().unwrap(), 30);
         assert_eq!(child.live_bytes().unwrap(), 30);
 
@@ -907,13 +944,12 @@ mod tests {
         // Refused by the parent: no level moves.
         assert!(child.try_reserve(31).is_err());
         assert_eq!((parent.peak_bytes(), child.peak_bytes()), (70, 30));
-        // Refused by the child after the parent accepted: the rolled-back
-        // parent charge was live for a moment and over-reports (never under).
+        // Refused by the child: no level moves, the parent's peak included.
         assert!(child.try_reserve(21).is_err());
-        assert_eq!((parent.peak_bytes(), child.peak_bytes()), (91, 30));
+        assert_eq!((parent.peak_bytes(), child.peak_bytes()), (70, 30));
         assert_eq!(parent.live_bytes().unwrap(), 70);
         drop(a);
-        assert_eq!(parent.peak_bytes(), 91, "a release keeps the peak");
+        assert_eq!(parent.peak_bytes(), 70, "a release keeps the peak");
         parent.reset_peak();
         assert_eq!(parent.peak_bytes(), 40, "reset restarts at live");
         drop(b);
@@ -963,5 +999,160 @@ mod tests {
         assert!(budget.peak_bytes() >= seen.load(Ordering::Acquire));
         assert!(budget.peak_bytes() <= 4 * 97);
         assert_eq!(budget.live_bytes().unwrap(), 0);
+    }
+
+    #[test]
+    fn check_room_moves_no_live_counter_and_no_peak() {
+        let parent = Budget::new(100);
+        let child = parent.child(80);
+        let held = child.try_reserve(10).unwrap();
+        let before = (
+            parent.live_bytes().unwrap(),
+            child.live_bytes().unwrap(),
+            parent.peak_bytes(),
+            child.peak_bytes(),
+        );
+        child.check_room(70).unwrap();
+        assert!(child.check_room(91).is_err());
+        assert!(child.check_room(u64::MAX).is_err());
+        let after = (
+            parent.live_bytes().unwrap(),
+            child.live_bytes().unwrap(),
+            parent.peak_bytes(),
+            child.peak_bytes(),
+        );
+        assert_eq!(before, after);
+        assert_eq!(after, (10, 10, 10, 10));
+        drop(held);
+    }
+
+    #[test]
+    fn a_refused_charge_raises_no_peak_on_any_level() {
+        let root = Budget::new(100);
+        let mid = root.child(60);
+        let leaf = mid.child(50);
+        let held = leaf.try_reserve(20).unwrap();
+        let peaks = |b: &[&Budget]| b.iter().map(|x| x.peak_bytes()).collect::<Vec<_>>();
+        let before = peaks(&[&root, &mid, &leaf]);
+        // Over the leaf's own cap.
+        assert!(leaf.try_reserve(31).is_err());
+        // Within the leaf's cap, over the mid's.
+        assert!(leaf.try_reserve(45).is_err());
+        // Within both, over the root's (a sibling holds the root).
+        let other = root.try_reserve(80).unwrap();
+        let before_root = peaks(&[&root, &mid, &leaf]);
+        assert!(leaf.try_reserve(5).is_err());
+        assert_eq!(peaks(&[&root, &mid, &leaf]), before_root);
+        drop(other);
+        assert_eq!(before, vec![20, 20, 20]);
+        assert_eq!(before_root, vec![100, 20, 20]);
+        assert_eq!(
+            (root.live_bytes().unwrap(), mid.live_bytes().unwrap()),
+            (20, 20)
+        );
+        drop(held);
+    }
+
+    #[test]
+    fn a_siblings_preflight_and_refused_charge_never_refuse_a_fitting_charge() {
+        let root = Budget::new(100);
+        let a = root.child(10);
+        let b = root.child(100);
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let refused = AtomicU64::new(0);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                while !done.load(Ordering::Acquire) {
+                    // Would fit the root (50 <= 100) and takes it on a
+                    // parent-first reserve; never kept.
+                    let _ = a.check_room(50);
+                    let _ = a.try_reserve(50);
+                }
+            });
+            s.spawn(|| {
+                for _ in 0..200_000 {
+                    // 60 + a transient 50 would pass the root's cap.
+                    if b.try_reserve(60).is_err() {
+                        refused.fetch_add(1, Ordering::AcqRel);
+                    }
+                }
+                done.store(true, Ordering::Release);
+            });
+        });
+        assert_eq!(refused.load(Ordering::Acquire), 0);
+        assert_eq!(root.live_bytes().unwrap(), 0);
+    }
+
+    /// Three levels, many threads charging and releasing at every level.
+    /// Every live counter and peak stays within its cap at every
+    /// observation, and the tree is empty at the end. A child is charged
+    /// before its parent, so a child can briefly lead its parent's counter;
+    /// the sum identity holds only at rest, which the end checks.
+    #[test]
+    fn a_three_level_tree_never_overcommits_and_drains_to_zero() {
+        let root = Budget::new(1_000);
+        let mids = [root.child(400), root.child(400)];
+        let leaves = [
+            mids[0].child(250),
+            mids[0].child(250),
+            mids[1].child(250),
+            mids[1].child(250),
+        ];
+        let nodes: Vec<&Budget> = std::iter::once(&root)
+            .chain(mids.iter())
+            .chain(leaves.iter())
+            .collect();
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let violations = AtomicU64::new(0);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                while !done.load(Ordering::Acquire) {
+                    for n in &nodes {
+                        let live = n.live_bytes().unwrap();
+                        if live > n.cap_bytes() || n.peak_bytes() > n.cap_bytes() {
+                            violations.fetch_add(1, Ordering::AcqRel);
+                        }
+                    }
+                }
+            });
+            let workers: Vec<_> = (0..8u64)
+                .map(|t| {
+                    let nodes = &nodes;
+                    s.spawn(move || {
+                        let mut state = 0x9E37_79B9_7F4A_7C15u64 ^ (t + 1);
+                        let mut next = move || {
+                            state ^= state << 13;
+                            state ^= state >> 7;
+                            state ^= state << 17;
+                            state
+                        };
+                        let mut held: Vec<Reservation> = Vec::new();
+                        for _ in 0..20_000 {
+                            let r = next();
+                            if r % 3 == 0 && !held.is_empty() {
+                                let i = (next() as usize) % held.len();
+                                held.swap_remove(i);
+                            } else {
+                                let node = nodes[(next() as usize) % nodes.len()];
+                                let bytes = next() % 120 + 1;
+                                if r % 7 == 0 {
+                                    let _ = node.check_room(bytes);
+                                } else if let Ok(res) = node.try_reserve(bytes) {
+                                    held.push(res);
+                                }
+                            }
+                        }
+                    })
+                })
+                .collect();
+            for w in workers {
+                w.join().unwrap();
+            }
+            done.store(true, Ordering::Release);
+        });
+        assert_eq!(violations.load(Ordering::Acquire), 0);
+        for n in &nodes {
+            assert_eq!(n.live_bytes().unwrap(), 0);
+        }
     }
 }
