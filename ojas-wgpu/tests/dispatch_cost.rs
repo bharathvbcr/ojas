@@ -190,3 +190,57 @@ fn a_nan_in_a_late_slot_group_is_found_and_scales_nothing() {
     let first = g.download(&dg[0]).unwrap().to_f32_vec().unwrap();
     assert_eq!(first, hg[0].to_f32_vec().unwrap(), "a gradient was scaled");
 }
+
+/// Scratch is held until its commands are submitted, so a run of ops whose
+/// widened bf16 operands sum past the budget needs a submit before the
+/// budget is exhausted, not only after [`ojas_wgpu::FLUSH_AT`] dispatches.
+/// A call the budget cannot carry beside the pending scratch submits it and
+/// goes on; the submit count rises with the bytes. Before: the third call
+/// returned `CapacityExceeded`.
+#[test]
+#[ignore = "BREAK: fails on current code until ft-81e49280 lands (wgpu scratch held until submit stacks across ops)"]
+fn pending_scratch_that_outgrows_the_budget_triggers_a_submit() {
+    use ojas_core::{Budget, DType};
+    let (rows, k, n) = (256usize, 1024usize, 1024usize);
+    const CALLS: usize = 8;
+    let widen = ((rows * k + n * k) * 4) as u64;
+    let out = (rows * n * 4) as u64;
+    // Bf16 operands, every output kept, and room for one call's widened
+    // scratch and a little over: two calls' scratch does not fit.
+    let operands = ((rows * k + n * k) * 2) as u64;
+    let cap = operands + CALLS as u64 * out + widen + widen / 4;
+    let g = ojas_wgpu::WgpuBackend::open(Budget::new(cap)).expect("wgpu adapter");
+    let bits = |seed: u64, shape: &[usize]| {
+        let v = data(seed, shape.iter().product());
+        let b: Vec<u16> = v.iter().map(|x| (x.to_bits() >> 16) as u16).collect();
+        let t = Tensor::from_bf16_bits(&b, shape, host_budget()).unwrap();
+        assert_eq!(t.dtype(), DType::Bf16);
+        g.upload(&t).unwrap()
+    };
+    let x = bits(1, &[rows, k]);
+    let w = bits(2, &[n, k]);
+    let before = g.context().stats();
+    let mut ys = Vec::new();
+    for i in 0..CALLS {
+        ys.push(
+            g.linear_forward(&x, &w)
+                .unwrap_or_else(|e| panic!("call {i} of {CALLS}: {e}")),
+        );
+    }
+    g.sync().unwrap();
+    let after = g.context().stats();
+    let submits = after.submits - before.submits;
+    eprintln!(
+        "{CALLS} bf16 linear_forward: {submits} submits, {} dispatches",
+        after.dispatches - before.dispatches
+    );
+    assert!(
+        submits >= 2,
+        "{CALLS} calls of {widen} scratch bytes under {cap}: {submits} submits"
+    );
+    assert!(
+        after.dispatches - before.dispatches < ojas_wgpu::FLUSH_AT as u64,
+        "the dispatch count alone would have flushed"
+    );
+    assert_eq!(ys.len(), CALLS);
+}

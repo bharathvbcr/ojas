@@ -297,3 +297,48 @@ fn adamw_step_copies_no_state() {
         assert_eq!(after.dispatches - before.dispatches, 2, "check, then apply");
     }
 }
+
+/// `optimizer_scratch_bytes` is an upper bound on what one step reserves
+/// (`ojas-core/src/backend.rs`, `Backend::optimizer_scratch_bytes`), so a
+/// budget with room for the operands and one step's figure must carry any
+/// number of back-to-back steps. wgpu holds a call's scratch until the next
+/// submit; a call that finds the budget short for want of an earlier call's
+/// scratch submits it and goes on, so no step is refused after another has
+/// updated its parameter. Before: the third call returned `CapacityExceeded`
+/// with parameters 1 and 2 already updated in place.
+#[test]
+#[ignore = "BREAK: fails on current code until ft-81e49280 lands (wgpu scratch held until submit stacks across ops)"]
+fn consecutive_muon_steps_stay_inside_one_steps_scratch() {
+    use ojas_core::{MuonNs5Config, OptimizerKind};
+    let (rows, cols) = (2048usize, 6144usize);
+    let bytes = (rows * cols * 4) as u64;
+    let probe = fresh();
+    let scratch = probe
+        .optimizer_scratch_bytes(OptimizerKind::MuonNs5, rows, cols)
+        .unwrap()
+        .unwrap();
+    // Three parameters, each with a gradient and a momentum.
+    let cap = (9 * bytes + scratch) * 11 / 10;
+    drop(probe);
+    let g = WgpuBackend::open(Budget::new(cap)).expect("wgpu adapter");
+    let shape = [rows, cols];
+    let mut params: Vec<Tensor> = Vec::new();
+    let mut moms: Vec<Tensor> = Vec::new();
+    let mut grads: Vec<Tensor> = Vec::new();
+    for i in 0..3u64 {
+        params.push(g.upload(&host(10 + i, &shape)).unwrap());
+        grads.push(g.upload(&host(20 + i, &shape)).unwrap());
+        let zeros = Tensor::zeros(&shape, ojas_core::DType::F32, host_budget()).unwrap();
+        moms.push(g.upload(&zeros).unwrap());
+    }
+    let cfg = MuonNs5Config::nanolab_default();
+    let before = g.context().stats().submits;
+    for i in 0..3 {
+        g.muon_ns5_step(&mut params[i], &grads[i], &mut moms[i], cfg)
+            .unwrap_or_else(|e| panic!("step {i} of 3, no sync between: {e}"));
+    }
+    let submits = g.context().stats().submits - before;
+    eprintln!("three muon steps: {submits} submits");
+    assert!(submits >= 2, "scratch was never released: {submits}");
+    g.sync().unwrap();
+}
