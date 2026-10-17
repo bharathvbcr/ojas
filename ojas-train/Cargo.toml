@@ -1,0 +1,15 @@
+[package]
+name = "ojas-train"
+version = "0.1.0"
+# 2024, not the workspace's 2021: phase A moves Lappi's qd-train modules in
+# with their history, and Lappi builds them as edition 2024
+# (Lappi HANDOFF/ojas-train-move-2026-10-14.md step 2).
+edition = "2024"
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Training loop, schedules and recipes over ojas. Shell: SHA-256 for artifact digests."
+
+[dependencies]
+ojas-core = { path = "../ojas-core" }
+ojas-io = { path = "../ojas-io" }

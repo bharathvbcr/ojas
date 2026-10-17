@@ -723,6 +723,14 @@ name = "ojas-simd"
 version = "0.1.0"
 
 [[package]]
+name = "ojas-train"
+version = "0.1.0"
+dependencies = [
+ "ojas-core",
+ "ojas-io",
+]
+
+[[package]]
 name = "ojas-wgpu"
 version = "0.1.0"
 dependencies = [
