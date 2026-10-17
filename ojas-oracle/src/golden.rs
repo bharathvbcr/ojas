@@ -255,7 +255,7 @@ impl Provenance {
         })
     }
 
-    fn of(st: &SafeTensors<'_>) -> Result<Self, OjasError> {
+    pub(crate) fn of(st: &SafeTensors<'_>) -> Result<Self, OjasError> {
         let text = st
             .metadata("ojas.oracle")
             .ok_or_else(|| bad("missing __metadata__[\"ojas.oracle\"]"))?;
@@ -273,7 +273,7 @@ impl Provenance {
 }
 
 /// The nanolab `Config` fields must describe `spec`.
-fn check_config_matches_spec(cfg: &Meta, spec: &ModelSpec) -> Result<(), OjasError> {
+pub(crate) fn check_config_matches_spec(cfg: &Meta, spec: &ModelSpec) -> Result<(), OjasError> {
     let pairs = [
         ("vocab_size", spec.vocab),
         ("d_model", spec.n_embd),
@@ -419,7 +419,7 @@ pub struct ForwardFixture {
     pub provenance: Provenance,
 }
 
-fn ids(values: Vec<i64>, vocab: usize) -> Result<Vec<u32>, OjasError> {
+pub(crate) fn token_ids(values: Vec<i64>, vocab: usize) -> Result<Vec<u32>, OjasError> {
     values
         .into_iter()
         .map(|v| {
@@ -431,7 +431,7 @@ fn ids(values: Vec<i64>, vocab: usize) -> Result<Vec<u32>, OjasError> {
         .collect()
 }
 
-fn f32_exact(meta: &Meta, key: &str) -> Result<f32, OjasError> {
+pub(crate) fn f32_exact(meta: &Meta, key: &str) -> Result<f32, OjasError> {
     let v = meta.num(key)?;
     let f = v as f32;
     if f64::from(f) != v {
@@ -457,8 +457,8 @@ pub fn tiny_forward() -> Result<ForwardFixture, OjasError> {
         return Err(bad("forward tensors disagree on [batch, seq_len, vocab]"));
     }
     let batch = TokenBatch {
-        x: ids(st.i64s("x")?, spec.vocab)?,
-        y: ids(st.i64s("y")?, spec.vocab)?,
+        x: token_ids(st.i64s("x")?, spec.vocab)?,
+        y: token_ids(st.i64s("y")?, spec.vocab)?,
         batch: b,
         seq_len: t,
     };

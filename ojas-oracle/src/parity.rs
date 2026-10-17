@@ -7,6 +7,12 @@
 //! ojas-model (framework items 8 and 9) enables these by implementing
 //! [`ParityModel`] for its `Eval`/`Trainer` in its own tests; see
 //! `ojas-oracle/README.md`, "Enabling the model parity tests".
+//!
+//! The constants below are the gates of `CpuBackend` (Exact), which sums
+//! sequentially like torch's CPU kernels. A device backend sums in another
+//! order, so it is held to a [`Gates`] of its own, passed to the `_with`
+//! runners and stated, with its reason, where the backend is tested; the
+//! plain runners always use [`Gates::EXACT`].
 
 use std::fmt;
 
@@ -16,6 +22,8 @@ use crate::golden::{
     tiny_autocast_gap, tiny_forward, tiny_grads, tiny_init, tiny_trace, GradsAt, Ns5, TensorSet,
     TokenBatch, TrainSetup,
 };
+use crate::spec::{tiny_spec, ModelSpec};
+use crate::variants::VariantFixture;
 
 /// Forward loss: |Δ| / |torch| (framework item 13).
 pub const FORWARD_LOSS_REL_TOL: f64 = 1e-5;
@@ -64,6 +72,74 @@ pub const LR_MULT_REL_TOL: f64 = 1e-12;
 /// ops listed in `autocast.rs`), so the model's bf16 run is not gated on
 /// torch's bf16 run, only reported against it.
 pub const AUTOCAST_GAP_FACTOR: f64 = 2.0;
+
+/// The tolerances one backend is held to. [`Gates::EXACT`] is the constants
+/// above, which `CpuBackend` (Exact) meets; a device backend passes its own,
+/// every field of which must be positive and finite
+/// ([`Gates::validate`], checked by every `_with` runner).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gates {
+    /// Forward loss, relative ([`FORWARD_LOSS_REL_TOL`]).
+    pub forward_loss_rel: f64,
+    /// Forward logits, normwise relative ([`LOGITS_NORMWISE_REL_TOL`]).
+    pub logits_normwise_rel: f64,
+    /// Gradients, per parameter, normwise relative ([`GRAD_NORMWISE_REL_TOL`]).
+    pub grad_normwise_rel: f64,
+    /// 5-step trace, per-step mean loss, absolute ([`TRACE_LOSS_ABS_TOL`]).
+    pub trace_loss_abs: f64,
+    /// 5-step f32-NS5 trace, parameters, normwise relative
+    /// ([`TRACE_PARAM_NORMWISE_REL_TOL`]).
+    pub trace_param_normwise_rel: f64,
+    /// 5-step bf16-NS5 trace, parameters
+    /// ([`TRACE_BF16_PARAM_NORMWISE_REL_TOL`]).
+    pub trace_bf16_param_normwise_rel: f64,
+    /// 40-step curve, steps `1..=CURVE_EARLY_STEPS`, absolute
+    /// ([`CURVE_EARLY_ABS_TOL`]).
+    pub curve_early_abs: f64,
+    /// 40-step curve, later steps, absolute ([`CURVE_LATE_ABS_TOL`]).
+    pub curve_late_abs: f64,
+}
+
+impl Gates {
+    /// The gates of `CpuBackend` (Exact).
+    pub const EXACT: Gates = Gates {
+        forward_loss_rel: FORWARD_LOSS_REL_TOL,
+        logits_normwise_rel: LOGITS_NORMWISE_REL_TOL,
+        grad_normwise_rel: GRAD_NORMWISE_REL_TOL,
+        trace_loss_abs: TRACE_LOSS_ABS_TOL,
+        trace_param_normwise_rel: TRACE_PARAM_NORMWISE_REL_TOL,
+        trace_bf16_param_normwise_rel: TRACE_BF16_PARAM_NORMWISE_REL_TOL,
+        curve_early_abs: CURVE_EARLY_ABS_TOL,
+        curve_late_abs: CURVE_LATE_ABS_TOL,
+    };
+
+    /// Every tolerance positive and finite: a NaN or zero gate would pass or
+    /// fail everything for the wrong reason.
+    pub fn validate(&self) -> Result<(), ParityFailure> {
+        let fields = [
+            ("forward_loss_rel", self.forward_loss_rel),
+            ("logits_normwise_rel", self.logits_normwise_rel),
+            ("grad_normwise_rel", self.grad_normwise_rel),
+            ("trace_loss_abs", self.trace_loss_abs),
+            ("trace_param_normwise_rel", self.trace_param_normwise_rel),
+            (
+                "trace_bf16_param_normwise_rel",
+                self.trace_bf16_param_normwise_rel,
+            ),
+            ("curve_early_abs", self.curve_early_abs),
+            ("curve_late_abs", self.curve_late_abs),
+        ];
+        for (name, v) in fields {
+            if !(v.is_finite() && v > 0.0) {
+                return Err(fail(
+                    "gates",
+                    format!("{name} = {v} is not positive and finite"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 
 /// A gate that did not hold.
 #[derive(Clone, Debug, PartialEq)]
@@ -170,6 +246,22 @@ pub fn check_tensors(
 /// What a model must provide for the gates. Implemented by the model lane's
 /// test adapter; ojas-oracle does not depend on any model crate.
 pub trait ParityModel {
+    /// Select the model shape the next calls run. A runner calls this with
+    /// the fixture's spec before anything else, so a model is never left to
+    /// assume the shape. The default accepts only the tiny spec and refuses
+    /// every other, so an adapter that has not been written for another
+    /// shape fails loudly instead of running the wrong model.
+    fn configure(&mut self, spec: &ModelSpec) -> Result<(), OjasError> {
+        if *spec == tiny_spec() {
+            Ok(())
+        } else {
+            Err(OjasError::Unsupported {
+                op: "ParityModel::configure",
+                detail: format!("this adapter runs only the tiny spec, not {spec:?}"),
+            })
+        }
+    }
+
     /// Loss (mean cross-entropy over all `B·T` targets) and the logits
     /// `[B, T, V]` for `batch`, from `params` (nanolab names, §2 shapes).
     fn forward(
@@ -211,30 +303,116 @@ fn load(check: &str) -> impl Fn(OjasError) -> ParityFailure + '_ {
     move |e| fail(check, format!("fixture: {e}"))
 }
 
+/// What a passing forward gate measured.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ForwardReport {
+    /// |loss - torch| / |torch|.
+    pub loss_rel: f64,
+    /// Normwise relative error of the logits.
+    pub logits_normwise: f64,
+}
+
 /// (b) Forward loss within [`FORWARD_LOSS_REL_TOL`] and logits within
 /// [`LOGITS_NORMWISE_REL_TOL`], from the init on the fixture batch.
 pub fn forward_parity<M: ParityModel + ?Sized>(m: &mut M) -> Result<ParityReport, ParityFailure> {
+    let r = forward_parity_with(m, &Gates::EXACT)?;
+    Ok(ParityReport {
+        worst: r.loss_rel,
+        tolerance: FORWARD_LOSS_REL_TOL,
+    })
+}
+
+/// [`forward_parity`] under `gates`.
+pub fn forward_parity_with<M: ParityModel + ?Sized>(
+    m: &mut M,
+    gates: &Gates,
+) -> Result<ForwardReport, ParityFailure> {
     const C: &str = "forward";
+    gates.validate()?;
     let init = tiny_init().map_err(load(C))?;
     let fx = tiny_forward().map_err(load(C))?;
+    m.configure(&init.spec).map_err(from_ojas(C))?;
     let (loss, logits) = m.forward(&init.params, &fx.batch).map_err(from_ojas(C))?;
+    check_forward(C, loss, &logits, fx.loss, &fx.logits, gates)
+}
+
+/// A model's loss and logits against torch's, under `gates`.
+fn check_forward(
+    check: &str,
+    loss: f32,
+    logits: &[f32],
+    want_loss: f32,
+    want_logits: &[f32],
+    gates: &Gates,
+) -> Result<ForwardReport, ParityFailure> {
     if !loss.is_finite() {
-        return Err(fail(C, "loss is not finite"));
+        return Err(fail(check, "loss is not finite"));
     }
-    let rel = (f64::from(loss) - f64::from(fx.loss)).abs() / f64::from(fx.loss).abs();
-    if rel > FORWARD_LOSS_REL_TOL {
+    let rel = (f64::from(loss) - f64::from(want_loss)).abs() / f64::from(want_loss).abs();
+    if rel.is_nan() || rel > gates.forward_loss_rel {
         return Err(fail(
-            C,
-            format!("loss {loss} vs torch {}: relative {rel:e}", fx.loss),
+            check,
+            format!(
+                "loss {loss} vs torch {want_loss}: relative {rel:e} > {:e}",
+                gates.forward_loss_rel
+            ),
         ));
     }
-    let lrel = normwise_rel("forward logits", &logits, &fx.logits)?;
-    if lrel > LOGITS_NORMWISE_REL_TOL {
-        return Err(fail(C, format!("logits normwise relative {lrel:e}")));
+    let lrel = normwise_rel(&format!("{check} logits"), logits, want_logits)?;
+    if lrel > gates.logits_normwise_rel {
+        return Err(fail(
+            check,
+            format!(
+                "logits normwise relative {lrel:e} > {:e}",
+                gates.logits_normwise_rel
+            ),
+        ));
     }
+    Ok(ForwardReport {
+        loss_rel: rel,
+        logits_normwise: lrel,
+    })
+}
+
+/// (b) on a [`VariantFixture`]: the model is configured with the fixture's
+/// spec, then run on the fixture's parameters and batch.
+pub fn variant_forward_parity<M: ParityModel + ?Sized>(
+    m: &mut M,
+    fx: &VariantFixture,
+    gates: &Gates,
+) -> Result<ForwardReport, ParityFailure> {
+    let check = format!("forward {}", fx.variant.name());
+    gates.validate()?;
+    m.configure(&fx.spec).map_err(from_ojas(&check))?;
+    let (loss, logits) = m
+        .forward(&fx.params, &fx.batch)
+        .map_err(from_ojas(&check))?;
+    check_forward(&check, loss, &logits, fx.loss, &fx.logits, gates)
+}
+
+/// (c) on a [`VariantFixture`]: every gradient within
+/// `gates.grad_normwise_rel`, at the fixture's loss seed.
+pub fn variant_grads_parity<M: ParityModel + ?Sized>(
+    m: &mut M,
+    fx: &VariantFixture,
+    gates: &Gates,
+) -> Result<ParityReport, ParityFailure> {
+    let check = format!("grads {}", fx.variant.name());
+    gates.validate()?;
+    m.configure(&fx.spec).map_err(from_ojas(&check))?;
+    let got = m
+        .grads(&fx.params, &fx.batch, fx.loss_seed)
+        .map_err(from_ojas(&check))?;
+    let worst = check_tensors(
+        &check,
+        &got,
+        &fx.grads,
+        &fx.no_grad,
+        gates.grad_normwise_rel,
+    )?;
     Ok(ParityReport {
-        worst: rel,
-        tolerance: FORWARD_LOSS_REL_TOL,
+        worst,
+        tolerance: gates.grad_normwise_rel,
     })
 }
 
@@ -243,20 +421,31 @@ pub fn grads_parity<M: ParityModel + ?Sized>(
     m: &mut M,
     at: GradsAt,
 ) -> Result<ParityReport, ParityFailure> {
+    grads_parity_with(m, at, &Gates::EXACT)
+}
+
+/// [`grads_parity`] under `gates`.
+pub fn grads_parity_with<M: ParityModel + ?Sized>(
+    m: &mut M,
+    at: GradsAt,
+    gates: &Gates,
+) -> Result<ParityReport, ParityFailure> {
     const C: &str = "grads";
+    gates.validate()?;
     let fx = tiny_grads(at).map_err(load(C))?;
     let params = match at {
         GradsAt::Init => tiny_init().map_err(load(C))?.params,
         GradsAt::Step5 => tiny_trace(Ns5::F32).map_err(load(C))?.params,
     };
     let batch = tiny_forward().map_err(load(C))?.batch;
+    m.configure(&tiny_spec()).map_err(from_ojas(C))?;
     let got = m
         .grads(&params, &batch, fx.loss_seed)
         .map_err(from_ojas(C))?;
-    let worst = check_tensors(C, &got, &fx.grads, &fx.no_grad, GRAD_NORMWISE_REL_TOL)?;
+    let worst = check_tensors(C, &got, &fx.grads, &fx.no_grad, gates.grad_normwise_rel)?;
     Ok(ParityReport {
         worst,
-        tolerance: GRAD_NORMWISE_REL_TOL,
+        tolerance: gates.grad_normwise_rel,
     })
 }
 
@@ -267,6 +456,15 @@ pub fn trace_parity<M: ParityModel + ?Sized>(m: &mut M) -> Result<ParityReport, 
     trace_parity_ns5(m, Ns5::F32)
 }
 
+/// What a passing trace gate measured.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceReport {
+    /// Worst per-step |mean loss - torch|, in nats.
+    pub loss_abs: f64,
+    /// Worst per-tensor normwise relative error of the final parameters.
+    pub param_normwise: f64,
+}
+
 /// (d) against the trace of either NS5 precision. [`Ns5::Bf16`] is stock
 /// nanolab; the model is told which one through [`TrainSetup::ns5`]. The loss
 /// gate is the same for both; the bf16 trace's parameters are held to
@@ -275,10 +473,25 @@ pub fn trace_parity_ns5<M: ParityModel + ?Sized>(
     m: &mut M,
     ns5: Ns5,
 ) -> Result<ParityReport, ParityFailure> {
+    let r = trace_parity_ns5_with(m, ns5, &Gates::EXACT)?;
+    Ok(ParityReport {
+        worst: r.loss_abs,
+        tolerance: TRACE_LOSS_ABS_TOL,
+    })
+}
+
+/// [`trace_parity_ns5`] under `gates`.
+pub fn trace_parity_ns5_with<M: ParityModel + ?Sized>(
+    m: &mut M,
+    ns5: Ns5,
+    gates: &Gates,
+) -> Result<TraceReport, ParityFailure> {
     const C: &str = "trace";
+    gates.validate()?;
     let init = tiny_init().map_err(load(C))?;
     let fx = tiny_trace(ns5).map_err(load(C))?;
     let n = fx.params_after_step;
+    m.configure(&init.spec).map_err(from_ojas(C))?;
     let (losses, params) = m.train(&init.params, &fx.train, n).map_err(from_ojas(C))?;
     if losses.len() != n {
         return Err(fail(C, format!("{} losses for {n} steps", losses.len())));
@@ -286,22 +499,26 @@ pub fn trace_parity_ns5<M: ParityModel + ?Sized>(
     let mut worst = 0.0f64;
     for (step, (&got, &want)) in losses.iter().zip(&fx.mean_loss).enumerate() {
         let d = (got - want).abs();
-        if d.is_nan() || d > TRACE_LOSS_ABS_TOL {
+        if d.is_nan() || d > gates.trace_loss_abs {
             return Err(fail(
                 C,
-                format!("step {}: loss {got} vs torch {want} (|Δ| {d:e})", step + 1),
+                format!(
+                    "step {}: loss {got} vs torch {want} (|Δ| {d:e} > {:e})",
+                    step + 1,
+                    gates.trace_loss_abs
+                ),
             ));
         }
         worst = worst.max(d);
     }
     let param_tol = match ns5 {
-        Ns5::F32 => TRACE_PARAM_NORMWISE_REL_TOL,
-        Ns5::Bf16 => TRACE_BF16_PARAM_NORMWISE_REL_TOL,
+        Ns5::F32 => gates.trace_param_normwise_rel,
+        Ns5::Bf16 => gates.trace_bf16_param_normwise_rel,
     };
-    check_tensors(C, &params, &fx.params, &[], param_tol)?;
-    Ok(ParityReport {
-        worst,
-        tolerance: TRACE_LOSS_ABS_TOL,
+    let param_normwise = check_tensors(C, &params, &fx.params, &[], param_tol)?;
+    Ok(TraceReport {
+        loss_abs: worst,
+        param_normwise,
     })
 }
 
@@ -317,18 +534,40 @@ pub fn curve_parity_ns5<M: ParityModel + ?Sized>(
     m: &mut M,
     ns5: Ns5,
 ) -> Result<ParityReport, ParityFailure> {
+    curve_parity_ns5_with(m, ns5, &Gates::EXACT)
+}
+
+/// [`curve_parity_ns5`] under `gates`.
+pub fn curve_parity_ns5_with<M: ParityModel + ?Sized>(
+    m: &mut M,
+    ns5: Ns5,
+    gates: &Gates,
+) -> Result<ParityReport, ParityFailure> {
     const C: &str = "curve";
+    gates.validate()?;
     let init = tiny_init().map_err(load(C))?;
     let fx = tiny_trace(ns5).map_err(load(C))?;
+    m.configure(&init.spec).map_err(from_ojas(C))?;
     let (losses, _) = m
         .train(&init.params, &fx.train, fx.steps)
         .map_err(from_ojas(C))?;
-    check_curve(&losses, &fx.mean_loss, init.spec.vocab)
+    check_curve_with(&losses, &fx.mean_loss, init.spec.vocab, gates)
 }
 
 /// The §10 curve gate on recorded losses.
 pub fn check_curve(got: &[f64], want: &[f64], vocab: usize) -> Result<ParityReport, ParityFailure> {
+    check_curve_with(got, want, vocab, &Gates::EXACT)
+}
+
+/// [`check_curve`] under `gates`.
+pub fn check_curve_with(
+    got: &[f64],
+    want: &[f64],
+    vocab: usize,
+    gates: &Gates,
+) -> Result<ParityReport, ParityFailure> {
     const C: &str = "curve";
+    gates.validate()?;
     if got.len() != want.len() {
         return Err(fail(
             C,
@@ -338,9 +577,9 @@ pub fn check_curve(got: &[f64], want: &[f64], vocab: usize) -> Result<ParityRepo
     let mut worst = 0.0f64;
     for (i, (&g, &w)) in got.iter().zip(want).enumerate() {
         let tol = if i < CURVE_EARLY_STEPS {
-            CURVE_EARLY_ABS_TOL
+            gates.curve_early_abs
         } else {
-            CURVE_LATE_ABS_TOL
+            gates.curve_late_abs
         };
         let d = (g - w).abs();
         if d.is_nan() || d > tol {
@@ -358,7 +597,7 @@ pub fn check_curve(got: &[f64], want: &[f64], vocab: usize) -> Result<ParityRepo
     }
     Ok(ParityReport {
         worst,
-        tolerance: CURVE_LATE_ABS_TOL,
+        tolerance: gates.curve_late_abs,
     })
 }
 
