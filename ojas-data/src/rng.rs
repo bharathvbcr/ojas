@@ -9,6 +9,16 @@
 /// whole stream.
 pub use ojas_kernels::SplitMix64 as CounterRng;
 
+/// The stream addressed by `(seed, epoch, index)`: each coordinate is
+/// absorbed through one SplitMix64 step, so a stream depends on its three
+/// coordinates alone and not on how many streams were drawn before it.
+pub(crate) fn counter_stream(seed: u64, epoch: u64, index: u64) -> CounterRng {
+    let mut h = CounterRng::new(seed).next_u64();
+    h = CounterRng::new(h ^ epoch).next_u64();
+    h = CounterRng::new(h ^ index).next_u64();
+    CounterRng::new(h)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -30,6 +40,16 @@ mod tests {
         let n = a.next_u64();
         a.set_state(saved);
         assert_eq!(a.next_u64(), n);
+    }
+
+    #[test]
+    fn counter_stream_is_addressed_by_its_coordinates() {
+        let first = |s, e, i| counter_stream(s, e, i).next_u64();
+        assert_eq!(first(1, 2, 3), first(1, 2, 3));
+        assert_ne!(first(1, 2, 3), first(1, 2, 4));
+        assert_ne!(first(1, 2, 3), first(1, 3, 3));
+        assert_ne!(first(1, 2, 3), first(2, 2, 3));
+        assert_ne!(first(1, 0, 1), first(1, 1, 0));
     }
 
     #[test]
