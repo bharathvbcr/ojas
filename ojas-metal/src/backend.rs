@@ -87,7 +87,7 @@ use ojas_core::{
     GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe,
     MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
     PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
+    ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -699,11 +699,6 @@ fn muon_scratch_elems(op: &'static str, rows: usize, cols: usize) -> Res<usize> 
         .ok_or_else(|| overflow(op))
 }
 
-/// f32 values of tessl's `GdnTrainWorkspace` for these dims (its
-/// `bytes_for`): one 64-token chunk of recomputed `[128, 16]` state slices
-/// per (slice, batch x head), and per-slice partial `dq`, `dk` (128 wide),
-/// `dg` and `dbeta`. The device thread checks this against tessl's own
-/// figure before it allocates, so the two cannot drift silently.
 /// Widths tessl's `qwen35_conv1d_silu*` kernels take
 /// (`CONV_BWD_MAX_KW` in tessl's source).
 const METAL_CONV1D_WIDTHS: std::ops::RangeInclusive<usize> = 2..=8;
@@ -769,23 +764,6 @@ fn rope_partial_geom(op: &'static str, d: &PartialRopeDims) -> Res<([u32; 3], Ro
         ],
         mode,
     ))
-}
-
-fn gdn_workspace_elems(op: &'static str, d: &GdnDims) -> Res<usize> {
-    let slices = d.value_dim / METAL_GDN_VALUE_BLOCK;
-    let chunk = product(
-        op,
-        &[
-            d.batch,
-            d.heads,
-            slices,
-            ojas_core::GDN_CHECKPOINT_TOKENS,
-            METAL_GDN_KEY_DIM,
-            METAL_GDN_VALUE_BLOCK,
-        ],
-    )?;
-    let parts = product(op, &[slices, d.rows(), 2 * METAL_GDN_KEY_DIM + 2])?;
-    chunk.checked_add(parts).ok_or_else(|| overflow(op))
 }
 
 /// f32 values the device copies for `args` read `how` ([`Arg::copied`]).
@@ -1027,6 +1005,12 @@ impl MetalBackend {
         let s0 = inputs.initial_state.map(|t| self.f32(op, t)).transpose()?;
         refuse_unsupported_metal_gdn(BackendId::Metal, d.key_dim, d.value_dim)?;
         u32_dim(op, d.rows())?;
+        let (batch, seq, heads, v_dim) = (
+            u32_dim(op, d.batch)?,
+            u32_dim(op, d.seq)?,
+            u32_dim(op, d.heads)?,
+            u32_dim(op, d.value_dim)?,
+        );
         Ok(GdnArgs {
             q,
             k,
@@ -1034,11 +1018,11 @@ impl MetalBackend {
             g,
             beta,
             s0,
-            batch: u32_dim(op, d.batch)?,
-            seq: u32_dim(op, d.seq)?,
-            heads: u32_dim(op, d.heads)?,
-            v_dim: u32_dim(op, d.value_dim)?,
-            ws_elems: gdn_workspace_elems(op, d)?,
+            batch,
+            seq,
+            heads,
+            v_dim,
+            ws_elems: crate::device::gdn_backward_workspace_elems(batch, seq, heads, v_dim)?,
         })
     }
 }
@@ -1598,7 +1582,11 @@ impl Backend for MetalBackend {
             &dims.state_shape(),
             &dims.checkpoint_shape(),
         ];
-        let mut out = self.outputs(OP, &shapes, 0, Cmd::Gdn { x })?.into_iter();
+        // tessl's chunked forward allocates its prep buffers inside the call.
+        let scratch = crate::device::gdn_forward_transient_elems(x.batch, x.seq, x.heads, x.v_dim)?;
+        let mut out = self
+            .outputs(OP, &shapes, scratch, Cmd::Gdn { x })?
+            .into_iter();
         match (out.next(), out.next(), out.next()) {
             (Some(output), Some(final_state), Some(checkpoints)) => Ok(GdnForward {
                 output,
@@ -2492,6 +2480,8 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use ojas_core::METAL_GDN_KEY_DIM;
+
     use super::*;
 
     /// Run `f` on its own thread; panic if it neither returns nor panics in
@@ -3037,6 +3027,73 @@ mod tests {
             }
             assert_eq!(pending(&m), None);
         });
+    }
+
+    /// The GDN forward charges tessl's per-call prep buffers and the backward
+    /// tessl's workspace, both by tessl's own figures, so a tessl layout
+    /// change cannot leave the budget short. Each op runs under a fresh
+    /// budget whose peak is its outputs plus that scratch: T off the 64-token
+    /// chunk, and more than one batch row and head.
+    #[test]
+    fn gdn_charges_follow_tessls_own_scratch_figures() {
+        use tessl::gdn_train::{
+            gdn_train_forward_transient_bytes, GdnTrainDims, GdnTrainWorkspace,
+        };
+        let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+        let bytes = |ts: &[&Tensor]| -> u64 {
+            ts.iter()
+                .map(|t| 4 * t.shape().iter().product::<usize>() as u64)
+                .sum()
+        };
+        for (b, t, h, dv) in [(1usize, 130usize, 2usize, 32usize), (2, 70, 1, 16)] {
+            let dk = METAL_GDN_KEY_DIM;
+            let rows = b * t * h;
+            let q = put(&m, &vec![0.1; rows * dk], &[b, t, h, dk]);
+            let k = put(&m, &vec![0.2; rows * dk], &[b, t, h, dk]);
+            let v = put(&m, &vec![0.3; rows * dv], &[b, t, h, dv]);
+            let g = put(&m, &vec![-0.1; rows], &[b, t, h]);
+            let beta = put(&m, &vec![0.5; rows], &[b, t, h]);
+            let d_o = put(&m, &vec![0.1; rows * dv], &[b, t, h, dv]);
+            let x = GdnInputs {
+                q: &q,
+                k: &k,
+                v: &v,
+                g: &g,
+                beta: &beta,
+                initial_state: None,
+            };
+            let dims = GdnTrainDims {
+                batch: b as u32,
+                seq: t as u32,
+                heads: h as u32,
+                v_dim: dv as u32,
+            };
+
+            let fb = Budget::new(1 << 30);
+            let f = m
+                .with_budget(fb.clone())
+                .chunked_gdn_forward(x)
+                .expect("forward");
+            let prep = gdn_train_forward_transient_bytes(dims, h as u32).div_ceil(4) * 4;
+            assert!(prep > 0, "tessl's chunked forward allocates prep buffers");
+            assert_eq!(
+                fb.peak_bytes(),
+                bytes(&[&f.output, &f.final_state, &f.checkpoints]) + prep,
+                "forward {b}x{t}x{h}x{dv}: outputs plus tessl's transient bytes"
+            );
+
+            let bb = Budget::new(1 << 30);
+            let gr = m
+                .with_budget(bb.clone())
+                .chunked_gdn_backward(x, &f.checkpoints, &d_o, None)
+                .expect("backward");
+            let ws = GdnTrainWorkspace::bytes_for(dims) as u64;
+            assert_eq!(
+                bb.peak_bytes(),
+                bytes(&[&gr.q, &gr.k, &gr.v, &gr.g, &gr.beta]) + ws,
+                "backward {b}x{t}x{h}x{dv}: outputs plus tessl's workspace"
+            );
+        }
     }
 
     /// One GDN forward and backward (key dim 128, two value slices, T 130,

@@ -22,8 +22,8 @@ use std::thread;
 use ojas_core::{sdpa_scale, OjasError, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS};
 use tessl::dispatch::{self, set_f32, set_gpu_buf_offset, set_u32, Binder};
 use tessl::gdn_train::{
-    gdn_train_backward, gdn_train_forward, GdnTrainDims, GdnTrainGrads, GdnTrainInputs,
-    GdnTrainWorkspace, GDN_TRAIN_DK,
+    gdn_train_backward, gdn_train_forward, gdn_train_forward_transient_bytes, GdnTrainDims,
+    GdnTrainGrads, GdnTrainInputs, GdnTrainWorkspace, GDN_TRAIN_DK,
 };
 use tessl::gemm::{transpose_f32_into, GemmOperands};
 use tessl::qwen35::{conv1d_silu, gated_rms_norm, Cols, OutCols, StateIn};
@@ -194,6 +194,45 @@ const KERNELS: &[&str] = &[
     "ojas_per_head_gate_bwd_saved",
     "ojas_per_head_gate_dbias",
 ];
+
+/// tessl's dims for a dense GDN call (one key head per value head).
+fn gdn_dims(batch: u32, seq: u32, heads: u32, v_dim: u32) -> GdnTrainDims {
+    GdnTrainDims {
+        batch,
+        seq,
+        heads,
+        v_dim,
+    }
+}
+
+/// f32 values of tessl's backward workspace for these dims, from tessl's own
+/// `GdnTrainWorkspace::bytes_for`, so the backend's charge follows whichever
+/// kernel tessl routes production through.
+pub(crate) fn gdn_backward_workspace_elems(
+    batch: u32,
+    seq: u32,
+    heads: u32,
+    v_dim: u32,
+) -> Res<usize> {
+    Ok(GdnTrainWorkspace::bytes_for(gdn_dims(batch, seq, heads, v_dim)) / 4)
+}
+
+/// f32 values the forward allocates and frees inside one call, from tessl's
+/// `gdn_train_forward_transient_bytes`. That figure is pool-rounded, so the
+/// charge is at least the logical bytes.
+pub(crate) fn gdn_forward_transient_elems(
+    batch: u32,
+    seq: u32,
+    heads: u32,
+    v_dim: u32,
+) -> Res<usize> {
+    let bytes = gdn_train_forward_transient_bytes(gdn_dims(batch, seq, heads, v_dim), heads);
+    usize::try_from(bytes.div_ceil(4)).map_err(|_| {
+        metal_err(format!(
+            "chunked_gdn_forward: {bytes} transient bytes overflow usize"
+        ))
+    })
+}
 
 /// Start the device thread and wait until its runtime is up.
 pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
