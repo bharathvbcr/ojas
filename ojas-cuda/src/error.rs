@@ -47,9 +47,13 @@ pub enum CudaError {
         /// The bytes asked for, when the refusing check knew them (the
         /// driver's own out-of-memory status does not say).
         requested: Option<u64>,
-        /// The bytes the refusing check found available (the budget's room,
-        /// or the device's free memory), when it knew them.
+        /// The cap the refusing check compared the request to (the
+        /// budget's cap, or the device's free memory), when it knew it.
         available: Option<u64>,
+        /// The bytes the runtime's budget holds besides the refused
+        /// request, when the refusing check could read it
+        /// ([`Self::with_live`]).
+        live: Option<u64>,
     },
     /// NVRTC failed to compile, or the driver failed to load the result.
     Compile {
@@ -99,6 +103,7 @@ impl CudaError {
             detail: detail.into(),
             requested: None,
             available: None,
+            live: None,
         }
     }
 
@@ -110,7 +115,53 @@ impl CudaError {
             detail: format!("{requested} bytes requested, {available} bytes available"),
             requested: Some(requested),
             available: Some(available),
+            live: None,
         }
+    }
+
+    /// A [`CudaError::Capacity`] with the figures a refusing check read: the
+    /// bytes asked for, the cap or room it compared them to, and the bytes
+    /// the budget held besides the request.
+    pub fn capacity_with(
+        op: impl Into<String>,
+        detail: impl Into<String>,
+        requested: u64,
+        cap: u64,
+        live: u64,
+    ) -> Self {
+        CudaError::Capacity {
+            op: op.into(),
+            detail: detail.into(),
+            requested: Some(requested),
+            available: Some(cap),
+            live: Some(live),
+        }
+    }
+
+    /// This error with the request a driver out-of-memory status was for.
+    /// The status carries no figures, so the allocation site that knows the
+    /// byte count attaches it with the bytes the budget held besides it.
+    /// A figure the error already has is kept; any other variant is
+    /// returned unchanged.
+    pub fn with_request(mut self, request: u64, held: u64) -> Self {
+        if let CudaError::Capacity {
+            requested, live, ..
+        } = &mut self
+        {
+            requested.get_or_insert(request);
+            live.get_or_insert(held);
+        }
+        self
+    }
+
+    /// This error with the bytes the budget holds now, which
+    /// [`ojas_core::OjasError::CapacityExceeded`] reports as `live`. Any
+    /// other variant is returned unchanged.
+    pub fn with_live(mut self, bytes: u64) -> Self {
+        if let CudaError::Capacity { live, .. } = &mut self {
+            *live = Some(bytes);
+        }
+        self
     }
 
     /// `CUDA_ERROR_OUT_OF_MEMORY` is 2: that status is [`CudaError::Capacity`],
@@ -241,15 +292,16 @@ impl From<CudaError> for ojas_core::OjasError {
         } else if let CudaError::Capacity {
             requested,
             available,
+            live,
             ..
         } = &e
         {
-            // `live` is not known here: the runtime's budget is charged in
-            // `ojas_core` terms before this error exists.
+            // `live` is the budget's, when the refusing check read it
+            // ([`CudaError::with_live`]); the driver's own status has none.
             ojas_core::OjasError::CapacityExceeded {
                 requested: requested.unwrap_or(0),
                 cap: available.unwrap_or(0),
-                live: 0,
+                live: live.unwrap_or(0),
             }
         } else {
             ojas_core::OjasError::Backend {
@@ -376,6 +428,27 @@ mod tests {
             OjasError::from(text),
             OjasError::CapacityExceeded { .. }
         ));
+    }
+
+    /// The budget's live bytes ride the device-free refusal to the
+    /// `CapacityExceeded` a caller sees (`CudaRuntime::check_free` sets
+    /// them), and `with_live` leaves every other variant alone.
+    #[test]
+    fn a_refusal_carries_the_budgets_live_bytes() {
+        let e = CudaError::capacity_of("upload w", 4096, 1024).with_live(777);
+        assert!(
+            matches!(
+                OjasError::from(e),
+                OjasError::CapacityExceeded {
+                    requested: 4096,
+                    cap: 1024,
+                    live: 777
+                }
+            ),
+            "live kept"
+        );
+        let other = CudaError::invalid("op", "bad").with_live(5);
+        assert!(matches!(other, CudaError::Invalid { .. }), "{other}");
     }
 
     #[test]

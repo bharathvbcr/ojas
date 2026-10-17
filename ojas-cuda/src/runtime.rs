@@ -288,9 +288,14 @@ impl CublasHandle {
                 u64::try_from(workspace_bytes).unwrap_or(u64::MAX),
                 "cuBLAS workspace",
             )?;
-            let ws = stream
-                .alloc_zeros::<u8>(workspace_bytes)
-                .map_err(|e| driver_error("alloc cuBLAS workspace", e))?;
+            let ws = stream.alloc_zeros::<u8>(workspace_bytes).map_err(|e| {
+                let err = driver_error("alloc cuBLAS workspace", e);
+                let bytes = u64::try_from(workspace_bytes).unwrap_or(u64::MAX);
+                match budget.held_besides(bytes) {
+                    Ok(held) => err.with_request(bytes, held),
+                    Err(broken) => broken,
+                }
+            })?;
             {
                 let (ptr, _sync) = ws.device_ptr(stream);
                 // SAFETY: `ptr` is a live allocation of `workspace_bytes`, from
@@ -576,14 +581,34 @@ impl CudaRuntime {
     }
 
     /// Refuse `bytes` more than the device has free, before the driver is
-    /// asked to allocate them.
+    /// asked to allocate them. The caller holds the reservation for `bytes`
+    /// already, so the refusal's `live` is what the budget holds besides it
+    /// ([`AllocBudget::held_besides`]); a budget that cannot say fails the
+    /// call with that error, never with a `live` of 0.
     pub(crate) fn check_free(&self, bytes: u64, label: &str) -> Result<(), CudaError> {
         let (free, _total) = self
             .ctx
             .mem_get_info()
             .map_err(|e| driver_error("cuMemGetInfo", e))?;
-        free_bytes_fit(u64::try_from(free).unwrap_or(u64::MAX), bytes)
-            .map_err(|short| CudaError::capacity_of(label, short.need, short.free))
+        match free_bytes_fit(u64::try_from(free).unwrap_or(u64::MAX), bytes) {
+            Ok(()) => Ok(()),
+            Err(short) => Err(CudaError::capacity_of(label, short.need, short.free)
+                .with_live(self.budget.held_besides(bytes)?)),
+        }
+    }
+
+    /// `err`, a driver failure of an allocation of `bytes` that the caller
+    /// has reserved: an out-of-memory status gets the request and the bytes
+    /// the budget held besides it, which the status does not carry.
+    pub(crate) fn alloc_error(&self, err: DriverError, op: &str, bytes: u64) -> CudaError {
+        let err = driver_error(op, err);
+        if !matches!(err, CudaError::Capacity { .. }) {
+            return err;
+        }
+        match self.budget.held_besides(bytes) {
+            Ok(held) => err.with_request(bytes, held),
+            Err(broken) => broken,
+        }
     }
 
     /// A new device allocation holding a copy of `data`, already reserved by
@@ -599,10 +624,11 @@ impl CudaRuntime {
         label: &str,
     ) -> Result<CudaSlice<T>, CudaError> {
         let label = format!("upload {label}");
+        let bytes = u64::try_from(std::mem::size_of_val(data)).unwrap_or(u64::MAX);
         let slice = self
             .stream
             .clone_htod(data)
-            .map_err(|e| driver_error(&label, e))?;
+            .map_err(|e| self.alloc_error(e, &label, bytes))?;
         self.htod_done(&label)?;
         Ok(slice)
     }

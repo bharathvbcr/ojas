@@ -39,11 +39,29 @@ mod device {
 
     use crate::link::{Msg, Res, Waits};
 
+    const NO_METAL: &str =
+        "ojas-metal was built without Metal (needs macOS and the `metal` feature)";
+
     pub(crate) fn spawn(_waits: Arc<Waits>, _cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
         Err(OjasError::Unsupported {
             op: "MetalBackend::new",
-            detail: "ojas-metal was built without Metal (needs macOS and the `metal` feature)"
-                .to_string(),
+            detail: NO_METAL.to_string(),
+        })
+    }
+
+    /// tessl owns the GDN workspace sizes; without it there is no device to
+    /// run the op on, so the backend never gets this far.
+    pub(crate) fn gdn_backward_workspace_elems(_: u32, _: u32, _: u32, _: u32) -> Res<usize> {
+        Err(OjasError::Unsupported {
+            op: "chunked_gdn_backward",
+            detail: NO_METAL.to_string(),
+        })
+    }
+
+    pub(crate) fn gdn_forward_transient_elems(_: u32, _: u32, _: u32, _: u32) -> Res<usize> {
+        Err(OjasError::Unsupported {
+            op: "chunked_gdn_forward",
+            detail: NO_METAL.to_string(),
         })
     }
 }

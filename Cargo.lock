@@ -614,6 +614,7 @@ name = "ojas-data"
 version = "0.1.0"
 dependencies = [
  "ojas-core",
+ "ojas-io",
  "ojas-kernels",
 ]
 

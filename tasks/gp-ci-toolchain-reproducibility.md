@@ -24,8 +24,7 @@ planned_files:
   - "ojas-oracle/README.md"
   - "bench/torch_rows.py"
   - "bench/run_paired.sh"
-  - "bench/aggregate.py"
-  - "ojas-cpu/benches/summarize_ops.py"
+  - "scripts/benchreport/"
   - "scripts/ci_local.sh"
   - "scripts/simd_bench.sh"
   - ".gitignore"
@@ -108,11 +107,16 @@ Run on a `git archive` mirror of HEAD under mac_heavy.sh [C]. Toolchain: rustc 1
 | Go: engine build, go vet, go test -tags gusset_pkgconfig, gofmt -l | PASS |
 | sitegen -check (clean clone) | FAIL: docs/bench-plots.md has no category |
 
+### Python removal (2026-10-16, branch claude/trusting-ritchie-64a3c4)
+- **The policy-Python criterion is met.** The scripts it names are in `scripts/benchreport` (Go, standard library, the sitegen pattern): aggregate.py, plot_all.py, plotlib.py, summarize_ops.py, sweep_fit.py and the 10-08/10-10 folder summarizers. Each was byte-compared against the Python on the committed inputs before the Python was deleted: 16 run directories, 83 SVGs, and every committed summary table [C]. main_test.go pins goldens that the Python printed for synthetic edge cases. Two summarizers (gpu-step-ab agg.py and probe_agg.py) were deleted without a port, because the folder holds no data to check one against; a third (decode-after/ab/summarize.py) was deleted because the ab-k1 script, now ported, prints its table identically. Commits 2899020 and 9b28ea5.
+- **The runner-exit criterion is met only in part.** aggregate now exits 1 when any row is missing, crashed or not ok in some round, and run_paired.sh returns that status after writing summary.md. run_paired.sh:87-88 still carries on past a crashed lane, and gotip.sh/ci_local.sh are unchanged.
+- `plots -check` runs next to `sitegen -check` in test.yml, deploy-pages.yml and ci_local.sh, so docs/bench-plots.md can no longer go stale silently. It was stale here, missing five newer folders.
+
 ## Acceptance criteria
 - [ ] verified_20_strings_match_tiktoken_encode_ordinary (ojas-data/src/bpe.rs:1299-1316, hard-coded MLSystemsLab path at :1303) fails instead of returning when no GPT-2 rank table is found, and the second silent branch at :1334-1339 fails too; the table is vendored with its license checked (the untracked ojas-data/testdata/gpt2/ is decided here) or fetched by CI; TIKTOKEN_GPT2_BYTE_IDENTITY = "verified-20-strings" (bpe.rs:30), today asserted only against its own literal (:1039, :1313), is backed by that test
 - [ ] CI gains: a rustdoc build with -D warnings, an MSRV job on 1.97 (Cargo.toml rust-version) and a committed rust-toolchain.toml so a new stable clippy lint cannot break main (run 37855710888 failed on clippy 1.99 `manual_is_multiple_of`), gofmt -l and go vet, the determinism check, and a dependency audit
 - [ ] The Python oracle environment is pinned in a tracked uv lock/pyproject matching ojas-oracle/README.md:143 (torch 2.13, Python 3.14.7, numpy); regen_tiny.sh and bench/run_paired.sh stop hard-coding /opt/homebrew python; bench/torch_rows.py honours OJAS_NANOLAB_ROOT like ojas-oracle/python/common.py:28 instead of the hard-coded NANOLAB_ROOT (:50)
-- [ ] Python that is neither oracle nor binding is ported to Go/Rust or deleted: bench/aggregate.py, ojas-cpu/benches/summarize_ops.py, bench/results/2026-10-04-sweep/sweep_fit.py, and new since the brief bench/plot_all.py (706 lines), bench/plotlib.py (210) and the summarize/agg .py files in five bench/results/2026-10-08-* folders
+- [x] Python that is neither oracle nor binding is ported to Go/Rust or deleted: bench/aggregate.py, ojas-cpu/benches/summarize_ops.py, bench/results/2026-10-04-sweep/sweep_fit.py, and new since the brief bench/plot_all.py (706 lines), bench/plotlib.py (210) and the summarize/agg .py files in five bench/results/2026-10-08-* folders
 - [ ] Lint policy and shared deps move to [workspace.lints] / [workspace.dependencies]: one unsafe_code stance (forbid in 13 crates, deny in ojas-device/ojas-simd, none in ojas-cuda/ojas-hip/ojas-qwen35/ojas-gusset-engine), `ojas-core =` declared once instead of 15 times; libc is already pinned (0.2.189); [workspace.package] metadata the uncommitted Cargo.toml adds is either inherited by crates or dropped
 - [ ] scripts/ci_local.sh runs the same gate definition as test.yml under Lappi-decision/tools/mac_heavy.sh (today :19 runs `cargo check`, :2-3 claim 'no remote', and nothing takes the shared lock); scripts/simd_bench.sh stops printing 'skipped' and exiting 1 (:9-10)
 - [x] Root and tree clutter that is not lane build output is removed or ignored: ojas_cpu-*.rcgu.o at the repo root, .site-patch/, bench/__pycache__, bench/out, empty docs/guide and site/guide, .DS_Store files
@@ -133,8 +137,7 @@ Run on a `git archive` mirror of HEAD under mac_heavy.sh [C]. Toolchain: rustc 1
 - ojas-oracle/README.md
 - bench/torch_rows.py
 - bench/run_paired.sh
-- bench/aggregate.py
-- ojas-cpu/benches/summarize_ops.py
+- scripts/benchreport/
 - scripts/ci_local.sh
 - scripts/simd_bench.sh
 - .gitignore

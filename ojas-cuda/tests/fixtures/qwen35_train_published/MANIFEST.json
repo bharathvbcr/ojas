@@ -1,0 +1,211 @@
+{
+ "schema": 1,
+ "generator": "tools/qwen35_ref/make_train_fixture.py",
+ "generator_commit": "b2cdb31be5355bfe476426552cf27e21742ba6a3",
+ "versions": {
+  "torch": "2.14.1",
+  "transformers": "5.17.0",
+  "numpy": "2.5.3",
+  "python": "3.13.14"
+ },
+ "versions_role": "reproduced",
+ "inputs_source": "drawn: torch.Generator().manual_seed(20260930) feeds the parameter init and the token ids; the drawn model (model.safetensors) and ids.npy are committed, so the draws are the inputs. 1 key head over 1 value head.",
+ "files": {
+  "config.json": {
+   "role": "config",
+   "published": true,
+   "note": "the tiny model's config.json"
+  },
+  "grad.model.embed_tokens.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.input_layernorm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.A_log.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.conv1d.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.dt_bias.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.in_proj_a.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.in_proj_b.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.in_proj_qkv.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.in_proj_z.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.norm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.linear_attn.out_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.mlp.down_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.mlp.gate_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.mlp.up_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.0.post_attention_layernorm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.input_layernorm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.mlp.down_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.mlp.gate_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.mlp.up_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.post_attention_layernorm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.self_attn.k_norm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.self_attn.k_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.self_attn.o_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.self_attn.q_norm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.self_attn.q_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.layers.1.self_attn.v_proj.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "grad.model.norm.weight.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "float32 gradient from transformers' loss.backward()"
+  },
+  "ids.npy": {
+   "role": "input",
+   "published": true,
+   "note": "token ids the loss and gradients are at"
+  },
+  "loss.npy": {
+   "role": "golden",
+   "published": true,
+   "note": "mean cross-entropy, float64"
+  },
+  "model.safetensors": {
+   "role": "model",
+   "published": true,
+   "note": "bf16 checkpoint; the float32 model torch differentiated holds the same values"
+  }
+ },
+ "reproduction": {
+  "byte_identical": [
+   "ids.npy",
+   "model.safetensors"
+  ],
+  "differing_non_npy": [
+   "config.json"
+  ],
+  "max_relative_to_peak": {
+   "grad.model.embed_tokens.weight.npy": 4.0471292245326045e-07,
+   "grad.model.layers.0.input_layernorm.weight.npy": 7.424973023588011e-07,
+   "grad.model.layers.0.linear_attn.A_log.npy": 2.6452715384137944e-06,
+   "grad.model.layers.0.linear_attn.conv1d.weight.npy": 4.3657217498511287e-07,
+   "grad.model.layers.0.linear_attn.dt_bias.npy": 2.558310864717349e-06,
+   "grad.model.layers.0.linear_attn.in_proj_a.weight.npy": 1.261040181604198e-06,
+   "grad.model.layers.0.linear_attn.in_proj_b.weight.npy": 5.355240275625154e-07,
+   "grad.model.layers.0.linear_attn.in_proj_qkv.weight.npy": 4.2605227277939955e-07,
+   "grad.model.layers.0.linear_attn.in_proj_z.weight.npy": 7.216900669203517e-07,
+   "grad.model.layers.0.linear_attn.norm.weight.npy": 4.97536943361887e-07,
+   "grad.model.layers.0.linear_attn.out_proj.weight.npy": 7.360150230051621e-07,
+   "grad.model.layers.0.mlp.down_proj.weight.npy": 4.2591267305592465e-07,
+   "grad.model.layers.0.mlp.gate_proj.weight.npy": 3.92027945508241e-07,
+   "grad.model.layers.0.mlp.up_proj.weight.npy": 6.889561195235524e-07,
+   "grad.model.layers.0.post_attention_layernorm.weight.npy": 1.0206975778974064e-06,
+   "grad.model.layers.1.input_layernorm.weight.npy": 1.0794036017539383e-06,
+   "grad.model.layers.1.mlp.down_proj.weight.npy": 6.961717669241678e-07,
+   "grad.model.layers.1.mlp.gate_proj.weight.npy": 6.570131865174587e-07,
+   "grad.model.layers.1.mlp.up_proj.weight.npy": 6.023853144155624e-07,
+   "grad.model.layers.1.post_attention_layernorm.weight.npy": 9.785049374136012e-07,
+   "grad.model.layers.1.self_attn.k_norm.weight.npy": 1.5580952700815326e-06,
+   "grad.model.layers.1.self_attn.k_proj.weight.npy": 9.443840038681969e-07,
+   "grad.model.layers.1.self_attn.o_proj.weight.npy": 7.221689313231545e-07,
+   "grad.model.layers.1.self_attn.q_norm.weight.npy": 1.0850823337631021e-06,
+   "grad.model.layers.1.self_attn.q_proj.weight.npy": 8.976546796653447e-07,
+   "grad.model.layers.1.self_attn.v_proj.weight.npy": 7.29809065892563e-07,
+   "grad.model.norm.weight.npy": 2.806353257216869e-07,
+   "loss.npy": 8.18649088196832e-08
+  }
+ },
+ "drift": "goldens reproduce to 2.6e-06 of each file's peak under torch 2.14.1 / transformers 5.17.0 (this run: 2 files byte-identical incl. model.safetensors and ids.npy, the gradients and loss moved by arithmetic only); the audit of 2026-10-09 measured, under torch 2.13.0 / transformers 5.14.1, 25 of 29 gradients bit-identical and the other 4 within 2.4e-7 of peak (unverified here). The committed files were not regenerated.",
+ "gdn_path": "chunked: Qwen3_5ForCausalLM runs with no cache, so every GDN layer calls transformers' torch_chunk_gated_delta_rule (modeling_qwen3_5.py, 5.17.0 :301) and autograd differentiates it; the recurrent rule runs only for a cached single-token step. Both read the decayed state, which is the published rule (arXiv:2412.06464 eq. 8). Checked by wrapping both entry points over one forward at T=70."
+}

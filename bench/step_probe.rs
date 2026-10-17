@@ -7,10 +7,11 @@
 //! `iters` timed iterations after `warmup`, alternating which variant goes
 //! first each round. Each iteration ends with `Backend::sync`, so a time is
 //! device-complete. One JSON line per (probe, variant, round) goes to
-//! `OJAS_PROBE_OUT` with that round's min and median;
-//! `bench/results/2026-10-08-gpu-step-ab/scripts/probe_agg.py`
-//! reports, per variant, the min of the round minimums and the spread
-//! (max / min of the round minimums).
+//! `OJAS_PROBE_OUT` with that round's min and median. Per variant, report the
+//! min of the round minimums and the spread (max / min of the round minimums);
+//! the throwaway `probe_agg.py` that did this kept no output to check a port
+//! against and was removed (`git show
+//! 040e1ed:bench/results/2026-10-08-gpu-step-ab/scripts/probe_agg.py`).
 //!
 //! Probes (`OJAS_PROBES`, comma-separated prefixes; default all):
 //! - `adamw`: the 170 nanolab tensors as 170 `adamw_step` calls, against

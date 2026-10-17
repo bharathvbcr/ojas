@@ -22,8 +22,8 @@ fixed per-op cost stops dominating?
   overlap are quoted below as robust.
 
 **Files.**
-- `summary.md`: the standard paired table (`bench/aggregate.py`).
-- `fit.md`: floor, slope and crossover per runtime (`sweep_fit.py`, analysis only).
+- `summary.md`: the standard paired table (`bench/aggregate.py` then; now `go run scripts/benchreport/main.go aggregate`).
+- `fit.md`: floor, slope and crossover per runtime (`go run scripts/benchreport/main.go sweep-fit bench/results/2026-10-04-sweep`; it was `sweep_fit.py`, and the Go port prints `fit.md` byte for byte).
 - `round*/`, `env*`, `load.jsonl`: the raw record. `ref/` is not kept.
 
 ## Reading

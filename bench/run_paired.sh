@@ -103,6 +103,9 @@ for r in $(seq 1 "$ROUNDS"); do
     echo "round $r/$ROUNDS done ($order)" >&2
 done
 
-# 5. Per-round ratios, spread flags, ranking.
-"$PY" "$REPO/bench/aggregate.py" "$OUT" > "$OUT/summary.md"
+# 5. Per-round ratios, spread flags, ranking. The summary is always written;
+# the run fails when any row is missing, crashed or not ok in some round.
+status=0
+go run "$REPO/scripts/benchreport/main.go" aggregate "$OUT" > "$OUT/summary.md" || status=$?
 echo "summary: $OUT/summary.md" >&2
+exit "$status"

@@ -13,6 +13,7 @@
 #![allow(dead_code)]
 
 pub mod lora;
+pub mod readout;
 
 use std::path::PathBuf;
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Benchmark Plots, Every Result Folder · ojas reference</title>
-  <meta name="description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…">
+  <meta name="description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by scripts/benchreport (Go, standard library only). Regenerate with go run scripts/benchreport/main.go plots from the reposi…">
   <meta name="keywords" content="ojas, benchmark plots, every result folder, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
@@ -14,7 +14,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/reference/bench-plots.html">
   <meta property="og:title" content="Benchmark Plots, Every Result Folder · ojas reference">
-  <meta property="og:description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…">
+  <meta property="og:description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by scripts/benchreport (Go, standard library only). Regenerate with go run scripts/benchreport/main.go plots from the reposi…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Benchmark Plots, Every Result Folder · ojas reference">
-  <meta name="twitter:description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…">
+  <meta name="twitter:description" content="Each chart is drawn from the text files kept under bench/results/&lt;folder&gt;, by scripts/benchreport (Go, standard library only). Regenerate with go run scripts/benchreport/main.go plots from the reposi…">
   <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta name="twitter:image:alt" content="Benchmark Plots, Every Result Folder · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
@@ -40,7 +40,7 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Benchmark Plots, Every Result Folder · ojas reference",
-    "description": "Each chart is drawn from the text files kept under bench/results/\u003cfolder\u003e, by bench/plot_all.py. Regenerate with python3 -I bench/plot_all.py from the repository root. Ratio charts are times, so lowe…",
+    "description": "Each chart is drawn from the text files kept under bench/results/\u003cfolder\u003e, by scripts/benchreport (Go, standard library only). Regenerate with go run scripts/benchreport/main.go plots from the reposi…",
     "url": "https://ojas.vbcr.dev/reference/bench-plots.html",
     "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
     "author": {
@@ -143,7 +143,7 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Benchmarks</p>
       <article class="prose-ojas">
 <h1 id="benchmark-plots-every-result-folder">Benchmark Plots, Every Result Folder <a class="anchor" href="#benchmark-plots-every-result-folder" aria-label="Link to this section">#</a></h1>
-<p>Each chart is drawn from the text files kept under <code>bench/results/&lt;folder&gt;</code>, by <code>bench/plot_all.py</code>. Regenerate with <code>python3 -I bench/plot_all.py</code> from the repository root. Ratio charts are times, so <strong>lower is faster</strong> and 1x is parity. Green bars are faster by more than 10%, red are slower by more than 10%, grey is inside the 10% band, which is the noise this machine showed. A hollow bar means the run itself flagged the row noisy. Whiskers are the per-round range and circles are medians where the source gives them.</p>
+<p>Each chart is drawn from the text files kept under <code>bench/results/&lt;folder&gt;</code>, by <code>scripts/benchreport</code> (Go, standard library only). Regenerate with <code>go run scripts/benchreport/main.go plots</code> from the repository root. Ratio charts are times, so <strong>lower is faster</strong> and 1x is parity. Green bars are faster by more than 10%, red are slower by more than 10%, grey is inside the 10% band, which is the noise this machine showed. A hollow bar means the run itself flagged the row noisy. Whiskers are the per-round range and circles are medians where the source gives them.</p>
 <p>Two cautions on reading them. The paired GPU summaries print ratios to two decimals, so where the printed ratio is under 0.05x (ojas more than 20x slower) the chart uses the ratio of the two printed medians instead and draws no whisker. That is a different statistic from the median of per-round ratios, and on rows the run flagged noisy the two can differ by 2x or more. Dot charts of absolute times use a log axis, so distance between dots is a ratio, not a difference.</p>
 <p>Read each folder&#39;s own README or summary before quoting a number: several runs were taken under heavy load, and the charts show direction, not a verdict. The older prose analysis is in <a href="bench-gpu-vs-torch.html">bench-gpu-vs-torch.md</a> and <a href="bench-cpu-vs-torch.html">bench-cpu-vs-torch.md</a>.</p>
 <h2 id="2026-10-01">2026-10-01 <a class="anchor" href="#2026-10-01" aria-label="Link to this section">#</a></h2>
@@ -392,6 +392,8 @@
 <p><img src="../assets/plots/bench/2026-10-08-attn-lse-ab--gqa-scratch.svg" alt="2026-10-08-attn-lse-ab: scratch charged at the Qwen3.5 shape: Reading each KV head in place cuts the charged scratch to about a third of the expanded-heads path (forward) and 27% (backward)." loading="lazy"></p>
 <p><em>Reading each KV head in place cuts the charged scratch to about a third of the expanded-heads path (forward) and 27% (backward).</em></p>
 <p>Source: <code>bench/results/2026-10-08-attn-lse-ab/</code>.</p>
+<h2 id="2026-10-08-bpe-throughput">2026-10-08-bpe-throughput <a class="anchor" href="#2026-10-08-bpe-throughput" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
 <h2 id="2026-10-08-cpu-hot-paths">2026-10-08-cpu-hot-paths <a class="anchor" href="#2026-10-08-cpu-hot-paths" aria-label="Link to this section">#</a></h2>
 <h3 id="2026-10-08-cpu-hot-paths-interleaved-ab-base-against-after">2026-10-08-cpu-hot-paths: interleaved A/B, base against after <a class="anchor" href="#2026-10-08-cpu-hot-paths-interleaved-ab-base-against-after" aria-label="Link to this section">#</a></h3>
 <p><img src="../assets/plots/bench/2026-10-08-cpu-hot-paths--ab-vs-base.svg" alt="2026-10-08-cpu-hot-paths: interleaved A/B, base against after: 30 rows. Ratios between 0.9 and 1.1 are noise on this machine." loading="lazy"></p>
@@ -442,6 +444,20 @@
 <p><em>Every ojas lane produced the same 32 greedy ids as torch. ojas-cpu decodes at 5.09 ms per token against torch-mps at 5.88; the GPU lanes are slower.</em></p>
 <p>Source: <code>bench/results/2026-10-08-decode-before/</code>.</p>
 <h2 id="2026-10-08-gpu-step-ab">2026-10-08-gpu-step-ab <a class="anchor" href="#2026-10-08-gpu-step-ab" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+<h2 id="2026-10-10-bf16-memory">2026-10-10-bf16-memory <a class="anchor" href="#2026-10-10-bf16-memory" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+<h2 id="2026-10-10-cpu-linux-hot-paths">2026-10-10-cpu-linux-hot-paths <a class="anchor" href="#2026-10-10-cpu-linux-hot-paths" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+<h2 id="2026-10-10-decode-after">2026-10-10-decode-after <a class="anchor" href="#2026-10-10-decode-after" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+<h2 id="2026-10-11-bf16-frozen-base">2026-10-11-bf16-frozen-base <a class="anchor" href="#2026-10-11-bf16-frozen-base" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+<h2 id="2026-10-14-bf16-tied-table">2026-10-14-bf16-tied-table <a class="anchor" href="#2026-10-14-bf16-tied-table" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+<h2 id="2026-10-14-cpu-gdn-followups">2026-10-14-cpu-gdn-followups <a class="anchor" href="#2026-10-14-cpu-gdn-followups" aria-label="Link to this section">#</a></h2>
+<p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
+<h2 id="2026-10-15-qwen35-2b-tape-gate">2026-10-15-qwen35-2b-tape-gate <a class="anchor" href="#2026-10-15-qwen35-2b-tape-gate" aria-label="Link to this section">#</a></h2>
 <p>No chart: the folder holds only scripts, logs or text that is not a measurement table.</p>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/bench-plots.md" rel="noopener"><code>docs/bench-plots.md</code></a>. If this page and the repository disagree, the repository wins.</p>
@@ -540,6 +556,7 @@
 <li class="sub"><a href="#2026-10-08-attn-lse-ab-attention-backward-with-saved-log-sum-exp">2026-10-08-attn-lse-ab: attention backward with saved log-sum-exp</a></li>
 <li class="sub"><a href="#2026-10-08-attn-lse-ab-sliding-window-of-256-against-full-attention">2026-10-08-attn-lse-ab: sliding window of 256 against full attention</a></li>
 <li class="sub"><a href="#2026-10-08-attn-lse-ab-scratch-charged-at-the-qwen35-shape">2026-10-08-attn-lse-ab: scratch charged at the Qwen3.5 shape</a></li>
+<li><a href="#2026-10-08-bpe-throughput">2026-10-08-bpe-throughput</a></li>
 <li><a href="#2026-10-08-cpu-hot-paths">2026-10-08-cpu-hot-paths</a></li>
 <li class="sub"><a href="#2026-10-08-cpu-hot-paths-interleaved-ab-base-against-after">2026-10-08-cpu-hot-paths: interleaved A/B, base against after</a></li>
 <li class="sub"><a href="#2026-10-08-cpu-hot-paths-ojas--torch-213-cpu">2026-10-08-cpu-hot-paths: ojas / torch 2.13 CPU</a></li>
@@ -558,6 +575,13 @@
 <li class="sub"><a href="#2026-10-08-decode-before-ojas-cpu-host-vs-torch-mps">2026-10-08-decode-before: ojas-cpu-host vs torch-mps</a></li>
 <li class="sub"><a href="#2026-10-08-decode-before-generation-32-token-prompt-and-32-new-tokens">2026-10-08-decode-before: generation, 32-token prompt and 32 new tokens</a></li>
 <li><a href="#2026-10-08-gpu-step-ab">2026-10-08-gpu-step-ab</a></li>
+<li><a href="#2026-10-10-bf16-memory">2026-10-10-bf16-memory</a></li>
+<li><a href="#2026-10-10-cpu-linux-hot-paths">2026-10-10-cpu-linux-hot-paths</a></li>
+<li><a href="#2026-10-10-decode-after">2026-10-10-decode-after</a></li>
+<li><a href="#2026-10-11-bf16-frozen-base">2026-10-11-bf16-frozen-base</a></li>
+<li><a href="#2026-10-14-bf16-tied-table">2026-10-14-bf16-tied-table</a></li>
+<li><a href="#2026-10-14-cpu-gdn-followups">2026-10-14-cpu-gdn-followups</a></li>
+<li><a href="#2026-10-15-qwen35-2b-tape-gate">2026-10-15-qwen35-2b-tape-gate</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

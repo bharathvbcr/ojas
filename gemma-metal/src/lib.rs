@@ -17,6 +17,7 @@ pub mod dflash;
 pub mod error;
 pub mod forward;
 pub mod gpu_model;
+pub mod intermediates;
 pub mod kernels;
 pub mod kv;
 pub mod mtp;

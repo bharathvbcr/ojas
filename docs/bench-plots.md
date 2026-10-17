@@ -1,6 +1,6 @@
 # Benchmark Plots, Every Result Folder
 
-Each chart is drawn from the text files kept under `bench/results/<folder>`, by `bench/plot_all.py`. Regenerate with `python3 -I bench/plot_all.py` from the repository root. Ratio charts are times, so **lower is faster** and 1x is parity. Green bars are faster by more than 10%, red are slower by more than 10%, grey is inside the 10% band, which is the noise this machine showed. A hollow bar means the run itself flagged the row noisy. Whiskers are the per-round range and circles are medians where the source gives them.
+Each chart is drawn from the text files kept under `bench/results/<folder>`, by `scripts/benchreport` (Go, standard library only). Regenerate with `go run scripts/benchreport/main.go plots` from the repository root. Ratio charts are times, so **lower is faster** and 1x is parity. Green bars are faster by more than 10%, red are slower by more than 10%, grey is inside the 10% band, which is the noise this machine showed. A hollow bar means the run itself flagged the row noisy. Whiskers are the per-round range and circles are medians where the source gives them.
 
 Two cautions on reading them. The paired GPU summaries print ratios to two decimals, so where the printed ratio is under 0.05x (ojas more than 20x slower) the chart uses the ratio of the two printed medians instead and draws no whisker. That is a different statistic from the median of per-round ratios, and on rows the run flagged noisy the two can differ by 2x or more. Dot charts of absolute times use a log axis, so distance between dots is a ratio, not a difference.
 
@@ -498,6 +498,10 @@ Source: `bench/results/2026-10-07-muon-bf16/`.
 
 Source: `bench/results/2026-10-08-attn-lse-ab/`.
 
+## 2026-10-08-bpe-throughput
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
 ## 2026-10-08-cpu-hot-paths
 
 ### 2026-10-08-cpu-hot-paths: interleaved A/B, base against after
@@ -597,5 +601,33 @@ Source: `bench/results/2026-10-08-cpu-hot-paths/`.
 Source: `bench/results/2026-10-08-decode-before/`.
 
 ## 2026-10-08-gpu-step-ab
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-10-bf16-memory
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-10-cpu-linux-hot-paths
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-10-decode-after
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-11-bf16-frozen-base
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-14-bf16-tied-table
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-14-cpu-gdn-followups
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-15-qwen35-2b-tape-gate
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.

@@ -208,6 +208,10 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: ${{ env.OJAS }}
         run: go run scripts/sitegen/main.go -check
+      - name: bench charts are generated from bench/results
+        if: runner.os == 'Linux'
+        working-directory: ${{ env.OJAS }}
+        run: go run scripts/benchreport/main.go plots -check
       - name: Build libgusset.a (debug, the profile go/*.pc link)
         working-directory: ${{ env.OJAS }}
         run: cargo build -p ojas-gusset-engine

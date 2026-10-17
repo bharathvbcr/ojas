@@ -1,0 +1,21 @@
+=== DFlash intermediate diff (golden vs native) ===
+  target_hidden[layer 1]: DIVERGE — missing absmean
+  target_hidden[layer 12]: OK
+  target_hidden[layer 23]: OK
+  target_hidden[layer 35]: OK
+  target_hidden[layer 46]: OK
+  target_hidden[layer 57]: OK
+  fc_out_lastrow: DIVERGE — shape [5376] vs [1, 2]  (fc projection)
+  h_ctx_lastrow: DIVERGE — first8[3]: 0.06592 vs 1.06592  (hidden_norm)
+  draft_logits_lastpos: DIVERGE — sum: golden 544293.0625 vs native 1e+20  (draft forward output)
+  draft L0 offsets (sliding=True): OK
+  draft L1 offsets (sliding=True): OK
+  draft L2 offsets (sliding=True): OK
+  draft L3 offsets (sliding=True): OK
+  draft L4 offsets (sliding=False): OK
+  proposed_block_tokens: golden [14359, 532, 107, 563] vs native [14359, 532, 107, 563] — MATCH
+
+=== VERDICT ===
+FIRST DIVERGENCE: target_hidden[layer 1]  ->  suspect: ★1 capture tap/feed
+  detail: missing absmean
+  Fix this layer; everything downstream diverges from it.

@@ -36,6 +36,9 @@ fi
 go version
 echo "==> site (reference pages and docs mirror must match the markdown)"
 go run scripts/sitegen/main.go -check
+echo "==> bench charts (site/assets/plots/bench and docs/bench-plots.md must match bench/results)"
+go test -count=1 scripts/benchreport/main.go scripts/benchreport/main_test.go
+go run scripts/benchreport/main.go plots -check
 cargo build -p ojas-gusset-engine
 (
   cd "$ROOT/go"

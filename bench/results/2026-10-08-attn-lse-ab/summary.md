@@ -27,7 +27,7 @@ grouped-query path is not involved.
   backend; odd rounds put old first and even rounds new first. It ran under
   `mac_heavy.sh` at load 3.2 to 6.5 (`ab.txt` records the load before each
   process).
-- `scripts/agg.py` takes the min of each process's iterations, then the new/old
+- `go run scripts/benchreport/main.go attn-ab bench/results/2026-10-08-attn-lse-ab/ab.txt` (it was `scripts/agg.py`; the Go port prints `tables.md` byte for byte) takes the min of each process's iterations, then the new/old
   ratio per round. The control's ratio is computed the same way and should
   read about 1.00.
 

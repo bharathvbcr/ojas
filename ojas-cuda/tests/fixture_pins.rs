@@ -8,6 +8,8 @@
 //! - `tests/fixtures/qwen35_train_published/`: tessl's tiny Qwen3.5 training
 //!   fixture (`tessl/tests/fixtures/qwen35_train/`), pinned by
 //!   `qwen35_train_published_SHA256SUMS`. The tiny-fixture loader reads it.
+//!   The copy includes tessl's provenance `MANIFEST.json` (tessl 8356bb9),
+//!   which the loader does not read.
 //!
 //! The comparison with the live source fails loudly when the source checkout
 //! is absent: a pin test that silently skips is a pin test that passed
@@ -132,7 +134,11 @@ fn train_sums() -> Vec<(String, String)> {
 fn the_tiny_fixture_copy_equals_its_sums() {
     let dir = crate_dir().join("tests/fixtures/qwen35_train_published");
     let sums = train_sums();
-    assert_eq!(sums.len(), 31, "config, 27 gradients, ids, loss, model");
+    assert_eq!(
+        sums.len(),
+        32,
+        "config, 27 gradients, ids, loss, model, tessl's MANIFEST.json"
+    );
     let listed: BTreeSet<String> = sums.iter().map(|(f, _)| f.clone()).collect();
     assert_eq!(listed.len(), sums.len(), "a file is listed twice");
     assert_eq!(files_in(&dir), listed, "unpinned or missing files");

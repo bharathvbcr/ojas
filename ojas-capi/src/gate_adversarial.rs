@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use ojas_core::{forward_backend_methods, Backend, Budget, OjasError, Tensor};
+use ojas_core::{forward_backend_methods, Autocast, Backend, BackendId, Budget, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 use crate::gate::{CancelSlot, Gated};
@@ -93,22 +93,71 @@ fn the_gated_dx_only_backward_reaches_the_inner_override_and_polls() {
     assert_eq!(gated.inner().dx_only.load(Ordering::SeqCst), 1);
 }
 
-/// Every method name of the backend trait has a hand-written `fn` in
-/// `impl Backend for Gated`: a method added to the trait and forgotten here
-/// would run the trait default on the wrapper.
+/// Forwards every method to `inner` except
+/// `causal_sdpa_backward_recompute`, which `Recompute` overrides.
+macro_rules! all_but_recompute {
+    (causal_sdpa_backward_recompute, { $($item:tt)* }) => {};
+    ($name:ident, { $($item:tt)* }) => {
+        $($item)*
+    };
+}
+
+/// A backend whose `causal_sdpa_backward_recompute` is an override (the
+/// trait default composes the forward and the backward): it counts the call
+/// and answers with its own marker error.
+struct Recompute {
+    inner: CpuBackend,
+    calls: AtomicUsize,
+}
+
+impl Backend for Recompute {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_recompute }
+    );
+    fn causal_sdpa_backward_recompute(
+        &self,
+        _: &Tensor,
+        _: &Tensor,
+        _: &Tensor,
+        _: &Tensor,
+        _: Option<usize>,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(OjasError::Backend {
+            id: BackendId::Cpu,
+            detail: "spy:recompute".into(),
+        })
+    }
+}
+
+/// Card ft-fe7dcee6 criterion 1: the override is reached through `&B`,
+/// `Arc<B>`, `Autocast<B>`, `Gated<B>` and a stack of all four, each call
+/// counted exactly once (the trait default on a wrapper would count none).
 #[test]
-fn every_backend_method_has_a_gated_forward() {
-    let src = include_str!("gate.rs");
-    let body = src
-        .split("impl<B: Backend> Backend for Gated<B>")
-        .nth(1)
-        .expect("the Gated impl");
-    // The impl ends at the first `\n}\n` at column 0.
-    let body = body.split("\n}\n").next().unwrap();
-    let missing: Vec<&str> = ojas_core::BACKEND_METHODS
-        .iter()
-        .copied()
-        .filter(|name| !body.contains(&format!("fn {name}(")))
-        .collect();
-    assert!(missing.is_empty(), "Gated does not forward: {missing:?}");
+fn the_recompute_override_is_reached_through_every_wrapper() {
+    fn reach<W: Backend>(label: &str, wrapper: &W, spy: &Recompute) {
+        let before = spy.calls.load(Ordering::SeqCst);
+        let t = Tensor::from_f32(&[1.0], &[1], &Budget::new(1 << 10)).unwrap();
+        let err = wrapper
+            .causal_sdpa_backward_recompute(&t, &t, &t, &t, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("spy:recompute"), "{label}: {err}");
+        assert_eq!(
+            spy.calls.load(Ordering::SeqCst),
+            before + 1,
+            "{label}: the override did not run exactly once"
+        );
+    }
+    let spy = Arc::new(Recompute {
+        inner: CpuBackend::new(Budget::new(1 << 20)),
+        calls: AtomicUsize::new(0),
+    });
+    let slot = Arc::new(CancelSlot::default());
+    reach("&B", &&*spy, &spy);
+    reach("Arc<B>", &Arc::clone(&spy), &spy);
+    reach("Autocast<B>", &Autocast::new(&*spy), &spy);
+    reach("Gated<B>", &Gated::new(&*spy, Arc::clone(&slot)), &spy);
+    let stack = Gated::new(Autocast::new(Arc::new(&*spy)), Arc::clone(&slot));
+    reach("Gated<Autocast<Arc<&B>>>", &stack, &spy);
 }

@@ -2,8 +2,10 @@
 //! on a real GPT-2 rank table over a fixed multi-MB English text.
 //!
 //! Compiled by `#[path]` into `ojas-data/examples/bpe_throughput.rs`. It uses
-//! only `load_hf_gpt2`, `encode_ordinary`, `decode_ordinary` and `TokenBin`,
-//! so the same file builds against an older tree for an A/B.
+//! only `load_hf_gpt2_dir`, `encode_ordinary`, `decode_ordinary` and
+//! `TokenBin`. A tree older than `load_hf_gpt2_dir` builds it with
+//! `load_hf_gpt2(&dir.join("vocab.json"), &dir.join("merges.txt"))` in its
+//! place, which is the same load for a directory with no `tokenizer.json`.
 //!
 //! The text is nanolab's FineWeb-Edu `val.bin` (headerless `u16`, 2.5M
 //! tokens), which `nanolab/prep_fineweb.py` wrote as tiktoken 0.12
@@ -29,7 +31,7 @@
 //! Usage: `bpe_throughput VOCAB_DIR CORPUS_BIN [ROUNDS]` where `VOCAB_DIR`
 //! holds `vocab.json` and `merges.txt`.
 
-use ojas_data::{load_hf_gpt2, Bpe, TokenBin};
+use ojas_data::{load_hf_gpt2_dir, Bpe, TokenBin};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -119,10 +121,8 @@ pub fn main() {
     let rounds: usize = args.get(3).map_or(5, |r| r.parse().expect("ROUNDS"));
     assert!(rounds >= 1, "ROUNDS must be at least 1");
 
-    let (load_t, bpe) = time(|| {
-        load_hf_gpt2(&dir.join("vocab.json"), &dir.join("merges.txt"))
-            .unwrap_or_else(|e| panic!("rank table: {e}"))
-    });
+    let (load_t, bpe) =
+        time(|| load_hf_gpt2_dir(dir).unwrap_or_else(|e| panic!("rank table: {e}")));
     // Fingerprint: the GPT-2 table, not some other 50257-piece file.
     assert_eq!(bpe.decode_ordinary(&[31373]).unwrap(), "hello");
     assert_eq!(bpe.decode_ordinary(&[EOT]).unwrap(), "<|endoftext|>");

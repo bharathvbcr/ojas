@@ -848,7 +848,7 @@ impl GpuSynthModel {
             && self.intermediate == 10_240
     }
 
-    /// Graphs allowed to attach DecodeIcb under `GEMMA_METAL_DECODE_ICB=1`
+    /// Graphs allowed to attach DecodeIcb under `TESSL_DECODE_ICB=1`
     /// (still requires `GEMMA_METAL_ENCODE_ONCE=1`; both default OFF).
     ///
     /// Mini synth + real E4B Hot. 31B stays out (jetsam / graph size).
@@ -1857,8 +1857,8 @@ impl GpuDecodeSession {
             && self.model.decode_icb_graph_eligible()
         {
             // Tape-direct dispatch is the honest default (execute_icb inherit ≈
-            // residual no-op). ICB-capable pipelines when true ICB execute or
-            // freeze-binds is requested (both need supportIndirectCommandBuffers).
+            // residual no-op). ICB-capable pipelines when true ICB execute is
+            // requested (it needs supportIndirectCommandBuffers).
             let want_icb_exec = std::env::var("GEMMA_METAL_ICB_EXECUTE")
                 .ok()
                 .map(|v| matches!(v.as_str(), "1" | "true" | "icb"))
@@ -1867,8 +1867,11 @@ impl GpuDecodeSession {
                     .ok()
                     .map(|v| matches!(v.as_str(), "1" | "true" | "icb"))
                     .unwrap_or(false)
-                || tessl::icb_freeze_binds_enabled();
+                || tessl::icb_execute_enabled();
             tessl::set_icb_pipelines(want_icb_exec);
+            // tessl no longer reads `GEMMA_METAL_ICB_EXECUTE`; carry gemma-metal's
+            // own flag across so it still turns on true ICB execute.
+            tessl::set_icb_execute(want_icb_exec);
             if self.encode_once.decode_icb_layer_graph() && self.encode_once.has_ready_slot() {
                 if head {
                     // Densify shape stable; Q4 fuse_bf16 now expands bf16→f32 before
@@ -3336,7 +3339,7 @@ impl GpuDecodeSession {
                                 self.icb_scalar_write_tape = Some(tape);
                             }
                             // Triage probe: residual x, sampled per replayed command
-                            // when GEMMA_METAL_ICB_TRIAGE=1 (localizes the first
+                            // when TESSL_ICB_TRIAGE=1 (localizes the first
                             // diverging dispatch in one run).
                             icb.set_triage_probe(self.x.clone(), self.model.hidden);
                             self.encode_once.attach_decode_icb(icb);
@@ -6037,7 +6040,8 @@ mod tests {
                 "api_gap_summary": tessl::cb_replay_api_gap_summary(),
                 "live_encodes": sess.encode_once_scaffold().live_encodes(),
                 "not_wired_hits": sess.encode_once_scaffold().not_wired_hits(),
-                "icb_stub": sess.encode_once_scaffold().icb_stub().status_line(),
+                "decode_icb_wired": sess.encode_once_scaffold().decode_icb_wired(),
+                "decode_icb": sess.encode_once_scaffold().decode_icb().map(|d| d.status_line()),
                 "scaffold": sess.encode_once_scaffold().status_line(),
             },
             "notes": [
@@ -6131,10 +6135,9 @@ mod tests {
             once.encode_once_scaffold().not_wired_hits(),
             (prompts.len() as u64).saturating_sub(1)
         );
-        assert_eq!(
-            once.encode_once_scaffold().icb_stub().phase,
-            tessl::IcbStubPhase::Planned
-        );
+        // The ledger advanced on live encodes only: no DecodeIcb was attached.
+        assert!(!once.encode_once_scaffold().decode_icb_wired());
+        assert!(once.encode_once_scaffold().decode_icb().is_none());
         assert!(once
             .encode_once_scaffold()
             .status_line()
@@ -6720,7 +6723,7 @@ mod tests {
             .encode_once_scaffold()
             .decode_icb()
             .map(|d| d.status_line())
-            .unwrap_or_else(|| sess_on.encode_once_scaffold().icb_stub().status_line());
+            .unwrap_or_else(|| sess_on.encode_once_scaffold().status_line());
         let scalar_ops = sess_on
             .icb_scalar_write_tape
             .as_ref()
@@ -6901,7 +6904,7 @@ mod tests {
             .encode_once_scaffold()
             .decode_icb()
             .map(|d| d.status_line())
-            .unwrap_or_else(|| sess_on.encode_once_scaffold().icb_stub().status_line());
+            .unwrap_or_else(|| sess_on.encode_once_scaffold().status_line());
         let gaps: Vec<&'static str> = tessl::survey_cb_replay_api_gaps()
             .iter()
             .map(|g| g.as_str())

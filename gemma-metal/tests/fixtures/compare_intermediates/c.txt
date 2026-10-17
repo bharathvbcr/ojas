@@ -1,0 +1,19 @@
+=== DFlash intermediate diff (golden vs native) ===
+  target_hidden[layer 1]: OK
+  target_hidden[layer 12]: OK
+  target_hidden[layer 23]: OK
+  target_hidden[layer 35]: OK
+  target_hidden[layer 46]: OK
+  target_hidden[layer 57]: OK
+  fc_out_lastrow: OK  (fc projection)
+  h_ctx_lastrow: OK  (hidden_norm)
+  draft_logits_lastpos: OK  (draft forward output)
+  draft L0 offsets (sliding=True): OK
+  draft L1 offsets (sliding=True): OK
+  draft L2 offsets (sliding=True): OK
+  draft L3 offsets (sliding=True): OK
+  draft L4 offsets (sliding=False): OK
+  proposed_block_tokens: golden [14359, 532, 107, 563] vs native [14359, 532, 107, 563] — MATCH
+
+=== VERDICT ===
+Full match — draft is correct; if accept still ≈0 the bug is in the VERIFY path (target argmax offset / seed), not the draft. See contract closing note.

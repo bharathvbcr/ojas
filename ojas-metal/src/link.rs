@@ -269,7 +269,8 @@ pub(crate) struct RmsSide {
 /// tessl's `gdn_train` kernels: `q`, `k` `[B, T, H, 128]`, `v`
 /// `[B, T, H, v_dim]`, `g`, `beta` `[B, T, H]`, `s0` `[B, H, 128, v_dim]`.
 /// `ws_elems` is the f32 count of tessl's backward workspace the backend
-/// charged; the device refuses a command whose figure disagrees with tessl's.
+/// charged, taken from tessl's own `GdnTrainWorkspace::bytes_for`; the device
+/// still refuses a command whose figure disagrees with tessl's.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GdnArgs {
     pub q: Arg,

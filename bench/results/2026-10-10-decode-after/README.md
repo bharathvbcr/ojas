@@ -58,7 +58,7 @@ after back to back, in alternating order (odd rounds before first), rows
 `after/`'s torch references (every row passed its gate). The greedy row is
 the control: its code is the same in both binaries. Medians were contended
 (the control's after/before ratio of medians ranged 0.81 to 4.9 across the two lanes), so the table quotes
-each row's minimum (`summarize.py . min_ms`; `summary.md` has both).
+each row's minimum (`benchreport decode-ab ab min_ms`; `summary.md` has both).
 
 | lane | row | before ms / token | after ms / token | after - before per round, median [min-max] | row after / before (min_ms), median of rounds |
 | :-- | :-- | --: | --: | :-- | :-- |
@@ -207,9 +207,9 @@ so it is not the in-place change alone.
 | path | what |
 | :-- | :-- |
 | `base/`, `after/` | `env.txt`, `env_torch.json`, `load.jsonl`, `summary.md` and every round's JSONL, as `run_paired.sh` wrote them (not `ref/`), except that `summary.md`'s first line names the output directory relative to the scratch directory |
-| `ab/` | `ab_decode.sh` (the runner), `summarize.py` (the table; analysis only), `load.jsonl`, `summary.md` and every round's JSONL |
+| `ab/` | `ab_decode.sh` (the runner), `load.jsonl`, `summary.md` and every round's JSONL |
 | `probes/` | `probe_topk.rs` (the device-against-host selection probe) and `probe_topk.txt` (its two runs) |
-| `ab-k1/` | the `k` = 1 A/B: `ab_decode.sh` (`ab/`'s runner, with `BENCH_ROWS` overridable), `summarize.py` (`ab/`'s, over every decode row), `load.jsonl`, `summary.md` and every round's JSONL |
+| `ab-k1/` | the `k` = 1 A/B: `ab_decode.sh` (`ab/`'s runner, with `BENCH_ROWS` overridable), `load.jsonl`, `summary.md` and every round's JSONL. Both `summary.md` files are `go run scripts/benchreport/main.go decode-ab DIR min_ms` then `... median_ms` (it was a `summarize.py` in each folder; the Go port prints both byte for byte) |
 
 ## tessl revision
 

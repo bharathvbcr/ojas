@@ -19,7 +19,7 @@ against that noise. Ratios between 0.9 and 1.1 are not changes.
 # build each tree's binaries (see run.sh's header), then:
 bash run.sh BASE_BIN_DIR AFTER_BIN_DIR 5 OUT_DIR        # ab/
 TAPE_ONLY=1 bash run.sh BASE_BIN_DIR AFTER_BIN_DIR 5 OUT_DIR   # ab-tape/
-python3 summarize.py OUT_DIR
+go run scripts/benchreport/main.go cpu-ab OUT_DIR   # from the repository root
 ```
 
 Odd rounds run base, after, torch, and even rounds torch, after, base. Each
@@ -30,7 +30,7 @@ gives the minimum over the 5 rounds and the median of the per-round ratios.
 
 | file | what |
 | :-- | :-- |
-| `run.sh`, `summarize.py` | the runner and the table builder (`summarize.py` is analysis only) |
+| `run.sh` | the runner; the table builder is `benchreport cpu-ab` (it was `summarize.py`, removed after the Go port reproduced each table of `summary.md` byte for byte) |
 | `ab/` | 5 rounds of `bench_ops` (base, after, torch) and `tape_bench`, `load.txt`, and `parity.txt` (torch against the after tree's dump: 19 of 19 outputs ok) |
 | `ab-tape/` | 5 rounds of `tape_bench` only. In `ab/`, libtest's `test tape_bench ... ` prefix swallowed the fan-in line; `run.sh` now matches markers anywhere on a line |
 | `summary.md` | both tables |
