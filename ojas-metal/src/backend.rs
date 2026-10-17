@@ -93,7 +93,7 @@ use ojas_core::{
 use crate::link::{
     cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, Cmd,
     Conv1dGeom, EmbedRows, GdnArgs, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom,
-    WaitCounts, Waits,
+    WaitCounts, Waits, SQ_OUT_WORDS,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -2064,9 +2064,10 @@ impl Backend for MetalBackend {
             .iter()
             .map(|g| self.f32(OP, g))
             .collect::<Res<Vec<_>>>()?;
-        // Two floats per chunk of partials, and the finish's two words.
-        let chunks = args.iter().map(|a| norm_chunks(a.n)).sum::<usize>();
-        let _stats = self.reserve(OP, 2 * chunks + 2)?;
+        // tessl's sq_norm scratch: a 10-word slot per gradient, two words
+        // (sum, shift) per piece, and the six result words.
+        let pieces = args.iter().map(|a| norm_chunks(a.n)).sum::<usize>();
+        let _stats = self.reserve(OP, 10 * args.len() + 2 * pieces + SQ_OUT_WORDS)?;
         let norm = match self.link.call(Cmd::ClipNorm {
             grads: args.clone(),
         })? {

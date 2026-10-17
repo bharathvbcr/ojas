@@ -825,10 +825,19 @@ fn needs_stage(off: usize, step: usize, tile: usize, rows: usize) -> bool {
     !(off.is_multiple_of(16) && (tiles == 1 || tile_bytes.is_multiple_of(16)))
 }
 
-/// Chunks `ojas_norm_multi` cuts `n` gradient values into (`NORM_CHUNK`
-/// in the Metal source); `clip_grad_norm` charges two floats per chunk.
+/// Elements of one tessl `sq_norm` piece (`tessl::sq_norm::SQ_PIECE`, which
+/// `device.rs` asserts at compile time) and of one `ojas_scale_multi`
+/// threadgroup (`NORM_CHUNK` in the Metal source).
+pub(crate) const SQ_PIECE: usize = 4096;
+
+/// Result words of tessl's `sq_norm` (`tessl::sq_norm::SQ_OUT_WORDS`,
+/// asserted in `device.rs`).
+pub(crate) const SQ_OUT_WORDS: usize = 6;
+
+/// Chunks `clip_grad_norm` cuts `n` gradient values into: tessl `sq_norm`'s
+/// pieces, two words each, and `ojas_scale_multi`'s threadgroups.
 pub(crate) fn norm_chunks(n: usize) -> usize {
-    n.div_ceil(4096)
+    n.div_ceil(SQ_PIECE)
 }
 
 /// Partial sums `ojas_reduce_partial` uses for `n` values.
