@@ -382,6 +382,21 @@ struct Entry {
     /// Kept if its command later fails (`rms_sides`: q's side is the
     /// composition's first op, which would have returned `Ok`).
     sealed: bool,
+    /// The buffer whose [`Book::clean`] mark this slot's check earned
+    /// (`Worker::freeze`). A fault in the slot withdraws the mark.
+    clean_of: Option<u64>,
+}
+
+/// A buffer known finite and never written: a frozen parameter after
+/// [`Worker::freeze`], or an exact widening of one. Ops skip their finite
+/// scan of an operand window inside `windows`, and every in-place op refuses
+/// the buffer, so the mark cannot go stale.
+struct Clean {
+    /// Byte ranges `[start, end)` the check covered.
+    windows: Vec<(usize, usize)>,
+    /// The frozen buffer this one was widened from. Withdrawing that mark
+    /// withdraws this one too.
+    from: Option<u64>,
 }
 
 /// Recording state between waited commits.
@@ -407,6 +422,9 @@ struct Book {
     inline_since_wait: usize,
     /// Small uploads behind recorded work ride inline; off, they wait.
     inline_uploads: bool,
+    /// Buffers whose finite scan an op may skip, by buffer id. Ids are never
+    /// reused, and [`Worker::free`] drops the entry with the buffer.
+    clean: HashMap<u64, Clean>,
     overlap: usize,
     mem_cap: u64,
     ws_limit: u64,
@@ -525,6 +543,7 @@ impl Worker {
             freed_since_wait: 0,
             inline_since_wait: 0,
             inline_uploads: true,
+            clean: HashMap::new(),
             overlap: OVERLAP_DISPATCHES,
             mem_cap: MEM_CAP_CEILING.min(budget_cap / 4),
             ws_limit: ws / WS_DEN * WS_NUM,
@@ -666,6 +685,7 @@ impl Worker {
     /// Drop the buffer `id` names. Its bytes count toward [`Wait::Freed`]
     /// until the next waited commit.
     fn free(&mut self, id: u64) {
+        self.book.borrow_mut().clean.remove(&id);
         if let Some(buf) = self.bufs.remove(&id) {
             self.book.borrow_mut().freed_since_wait += buf.nbytes() as u64;
         }
@@ -748,14 +768,18 @@ impl Worker {
         let mut words = self.slab.try_contents_u32().map_err(metal_err)?;
         let mut kept = Vec::new();
         let mut fault = book.fault;
+        let mut withdrawn = Vec::new();
         for e in book.pending.drain(..) {
             if scan == Scan::BeforeCurrent && e.cmd == current {
                 kept.push(e);
                 continue;
             }
             let w = &words[e.slot * ST_WORDS..(e.slot + 1) * ST_WORDS];
-            if fault.is_none() && (w[ST_IN as usize] != 0 || w[ST_OUT as usize] != 0) {
-                fault = Some(e.op);
+            if w[ST_IN as usize] != 0 || w[ST_OUT as usize] != 0 {
+                withdrawn.extend(e.clean_of);
+                if fault.is_none() {
+                    fault = Some(e.op);
+                }
             }
         }
         // Every slot not still pending is cleared, including those of
@@ -770,6 +794,13 @@ impl Worker {
             book.used = 0;
         }
         book.pending = kept;
+        // A frozen buffer whose check faulted is not known finite: its mark,
+        // and its widened copies', go, so every later op scans it again.
+        if !withdrawn.is_empty() {
+            book.clean.retain(|id, c| {
+                !withdrawn.contains(id) && !c.from.is_some_and(|from| withdrawn.contains(&from))
+            });
+        }
         Ok(())
     }
 
@@ -1053,6 +1084,7 @@ impl Worker {
             op,
             cmd,
             sealed: false,
+            clean_of: None,
         });
         Ok(St {
             buf: self.slab.clone(),
@@ -1094,6 +1126,114 @@ impl Worker {
                 set_u32(b, first, 4);
             },
         )
+    }
+
+    /// Whether window `a` of `elem`-byte elements lies inside a range of its
+    /// buffer already checked finite and kept unwritten ([`Self::freeze`]).
+    fn known_clean(&self, a: Arg, elem: usize) -> bool {
+        let Some(end) = a.n.checked_mul(elem).and_then(|b| b.checked_add(a.off)) else {
+            return false;
+        };
+        self.book.borrow().clean.get(&a.id).is_some_and(|c| {
+            c.windows
+                .iter()
+                .any(|&(start, stop)| start <= a.off && end <= stop)
+        })
+    }
+
+    /// [`Self::check`] of `v`, the window `a` names, unless a frozen mark
+    /// already answers for it. An operand that is not a frozen parameter is
+    /// scanned as ever.
+    fn check_operand(&self, st: &St, a: Arg, v: &V, word: u32) -> Res<()> {
+        if self.known_clean(a, 4) {
+            return Ok(());
+        }
+        self.check(st, v, word)
+    }
+
+    /// [`Self::check_operand`] of a bf16 window.
+    fn check_half_operand(&self, st: &St, a: Arg, h: &Half, word: u32) -> Res<()> {
+        if self.known_clean(a, 2) {
+            return Ok(());
+        }
+        self.check_half(st, h, word)
+    }
+
+    /// Refuse a write into a frozen parameter: the mark says the buffer is
+    /// finite because it never changes, so no op may change it.
+    ///
+    /// A widened copy is the exception: it is a new buffer the caller owns
+    /// (`to_f32` of a frozen bf16 weight is public), so a write to it is
+    /// legitimate and withdraws its mark instead, and every later op scans it
+    /// again. The withdrawal precedes the write in the command order, so the
+    /// mark is never live over changed bytes.
+    fn writable(&self, op: &'static str, a: Arg) -> Res<()> {
+        let mut book = self.book.borrow_mut();
+        let derived = match book.clean.get(&a.id) {
+            None => return Ok(()),
+            Some(c) => c.from.is_some(),
+        };
+        if derived {
+            book.clean.remove(&a.id);
+            return Ok(());
+        }
+        Err(metal_err(format!(
+            "{op}: device buffer {} is a frozen, checked parameter and is not written",
+            a.id
+        )))
+    }
+
+    /// Whether window `a` of `elem`-byte elements is already inside a window
+    /// a [`Self::freeze`] scanned (not a widened copy's inherited one).
+    fn frozen_root(&self, a: Arg, elem: usize) -> bool {
+        let Some(end) = a.n.checked_mul(elem).and_then(|b| b.checked_add(a.off)) else {
+            return false;
+        };
+        self.book.borrow().clean.get(&a.id).is_some_and(|c| {
+            c.from.is_none()
+                && c.windows
+                    .iter()
+                    .any(|&(start, stop)| start <= a.off && end <= stop)
+        })
+    }
+
+    /// Check window `x` (bf16 when `half`) for NaN and infinity once, and
+    /// mark its buffer so later ops skip that scan ([`Self::check_operand`])
+    /// and refuse to write it ([`Self::writable`]). The check is recorded
+    /// like any other: a fault is reported at the next sync, and a faulted
+    /// check withdraws the mark in [`Self::scan`], so a buffer that is not
+    /// finite is never skipped.
+    fn freeze(&mut self, x: Arg, half: bool) -> Res<Reply> {
+        const OP: &str = "freeze_checked";
+        // Freezing a window again scans nothing and records nothing: the
+        // bytes cannot have changed, and a repeat must not grow the list
+        // every op's lookup walks.
+        if self.frozen_root(x, if half { 2 } else { 4 }) {
+            return Ok(Reply::Done);
+        }
+        // The views validate the window (its end cannot overflow below).
+        if half {
+            let h = self.half_view(x)?;
+            let st = self.status(OP)?;
+            self.check_half(&st, &h, ST_IN)?;
+        } else {
+            let v = self.view(x)?;
+            let st = self.status(OP)?;
+            self.check(&st, &v, ST_IN)?;
+        }
+        let end = x.off + x.n * if half { 2 } else { 4 };
+        let mut book = self.book.borrow_mut();
+        if let Some(e) = book.pending.last_mut() {
+            e.clean_of = Some(x.id);
+        }
+        let mark = book.clean.entry(x.id).or_insert_with(|| Clean {
+            windows: Vec::new(),
+            from: None,
+        });
+        // A widened copy frozen on purpose is a frozen parameter from now on.
+        mark.from = None;
+        mark.windows.push((x.off, end));
+        Ok(Reply::Done)
     }
 
     /// Elements `start..start + dst.n` of `h` widened exactly into `dst`.
@@ -1374,6 +1514,7 @@ impl Worker {
             } => self.gated_rms_bwd([x, z, w, gy], [rows, dim], eps, part),
             Cmd::RoundBf16 { x } => self.round_bf16(x),
             Cmd::ToF32 { x } => self.widen_bf16(x),
+            Cmd::Freeze { x, half } => self.freeze(x, half),
             Cmd::ToBf16 { x } => self.narrow_bf16(x),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
@@ -1566,7 +1707,7 @@ impl Worker {
         if half {
             let t = self.half_view(table)?;
             let first = u32_of(t.first)?;
-            self.check_half(&st, &t, ST_IN)?;
+            self.check_half_operand(&st, table, &t, ST_IN)?;
             self.k2("ojas_embed_fwd_bf16", dim as usize, ids.n, |b| {
                 set_gpu_buf_offset(b, &t.buf, t.base, 0);
                 bind(b, &ids, 1);
@@ -1580,7 +1721,7 @@ impl Worker {
             return Ok(self.keep(vec![out]));
         }
         let t = self.view(table)?;
-        self.check(&st, &t, ST_IN)?;
+        self.check_operand(&st, table, &t, ST_IN)?;
         self.k2("ojas_embed_fwd", dim as usize, ids.n, |b| {
             bind(b, &t, 0);
             bind(b, &ids, 1);
@@ -1686,7 +1827,7 @@ impl Worker {
         let y = self.fresh(rows * nout)?;
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
-        self.check(&st, &wv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
         GemmOperands::ExactF32
             .nt(
                 &self.mat(&xv, rows, kin)?,
@@ -1714,9 +1855,9 @@ impl Worker {
         let gx = self.fresh(rows * kin)?;
         let gw = self.fresh(nout * kin)?;
         let st = self.status(OP)?;
-        for v in [&xv, &wv, &gv] {
-            self.check(&st, v, ST_IN)?;
-        }
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        self.check(&st, &gv, ST_IN)?;
         let x_t = self.mat(&xv, rows, kin)?;
         let w_t = self.mat(&wv, nout, kin)?;
         let g_t = self.mat(&gv, rows, nout)?;
@@ -1747,10 +1888,11 @@ impl Worker {
         let gx = self.fresh(rows * kin)?;
         let st = self.status(OP)?;
         // `x` is not an operand of the product; it is checked as the full
-        // path checks it, so a poisoned activation is refused here too.
-        for v in [&xv, &wv, &gv] {
-            self.check(&st, v, ST_IN)?;
-        }
+        // path checks it, so a poisoned activation is refused here too. The
+        // weight is the one operand a frozen mark answers for.
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        self.check(&st, &gv, ST_IN)?;
         GemmOperands::ExactF32
             .nn(
                 &self.mat(&gv, rows, nout)?,
@@ -2577,9 +2719,26 @@ impl Worker {
     /// scan: a NaN or infinity is carried to the op that reads the copy.
     fn widen_bf16(&mut self, x: Arg) -> Res<Reply> {
         let h = self.half_view(x)?;
+        let from_frozen = self.known_clean(x, 2);
         let y = self.fresh(h.n)?;
         self.widen_into(&h, 0, &y)?;
-        Ok(self.keep(vec![y]))
+        let reply = self.keep(vec![y]);
+        // Widening is exact, so the copy of a window known finite is known
+        // finite, and nothing writes it: a matmul over a frozen bf16 weight
+        // skips its scan of the copy as it does of the weight.
+        if let (true, Reply::Bufs(bufs)) = (from_frozen, &reply) {
+            let mut book = self.book.borrow_mut();
+            for b in bufs {
+                book.clean.insert(
+                    b.id,
+                    Clean {
+                        windows: vec![(0, b.bytes)],
+                        from: Some(x.id),
+                    },
+                );
+            }
+        }
+        Ok(reply)
     }
 
     /// `x` (f32) rounded to bf16 into a new buffer of `n` 2-byte elements,
@@ -2902,6 +3061,9 @@ impl Worker {
             .iter()
             .map(|a| self.view(*a))
             .collect::<Res<Vec<_>>>()?;
+        for a in grads {
+            self.writable(OP, *a)?;
+        }
         let st = self.status(OP)?;
         for group in views.chunks(NORM_SLOTS) {
             let (tbl, groups) = norm_table(group)?;
@@ -3010,8 +3172,8 @@ impl Worker {
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
         match &wv {
-            LceWeight::F32(wv) => self.check(&st, wv, ST_IN)?,
-            LceWeight::Half(wh) => self.check_half(&st, wh, ST_IN)?,
+            LceWeight::F32(wv) => self.check_operand(&st, w, wv, ST_IN)?,
+            LceWeight::Half(wh) => self.check_half_operand(&st, w, wh, ST_IN)?,
         }
         let one_col_tile = g.ct >= v;
         for row0 in (0..n).step_by(g.rt) {
@@ -3213,6 +3375,7 @@ impl Worker {
         at: u32,
     ) -> Res<Reply> {
         const OP: &str = "kv_cache_write";
+        self.writable(OP, cache)?;
         let (cv, sv) = (self.view(cache)?, self.view(src)?);
         let span = u32_of(tn as usize * row as usize)?;
         let cap_span = u32_of(cap as usize * row as usize)?;
@@ -3249,6 +3412,9 @@ impl Worker {
     /// accumulator is first copied into a new buffer, which takes the add.
     fn accumulate(&mut self, acc: Arg, g: Arg, in_place: bool) -> Res<Reply> {
         const OP: &str = "accumulate_grad";
+        if in_place {
+            self.writable(OP, acc)?;
+        }
         let (av, gv) = (self.view(acc)?, self.view(g)?);
         let n = u32_of(av.n)?;
         let target = if in_place {
@@ -3279,6 +3445,9 @@ impl Worker {
     /// in place only if this call's status words are clear. No wait, no copies.
     fn adamw(&mut self, p: Arg, g: Arg, m: Arg, v: Arg, scalars: &[f32; 7]) -> Res<Reply> {
         const OP: &str = "adamw_step";
+        for written in [p, m, v] {
+            self.writable(OP, written)?;
+        }
         let (pv, gv, mv, vv) = (self.view(p)?, self.view(g)?, self.view(m)?, self.view(v)?);
         let n = pv.n;
         let n_u = u32_of(n)?;
@@ -3323,6 +3492,9 @@ impl Worker {
         bf16: bool,
     ) -> Res<Reply> {
         const OP: &str = "muon_ns5_step";
+        for written in [p, m] {
+            self.writable(OP, written)?;
+        }
         let (pv, gv, mv) = (self.view(p)?, self.view(g)?, self.view(m)?);
         let n = pv.n;
         let transposed = rows > cols;

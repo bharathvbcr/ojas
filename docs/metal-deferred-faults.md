@@ -84,6 +84,15 @@ Everything the host can decide without the device:
 
 wgpu writes NaN into `acc` and relies on "invalid" (`ojas-wgpu/src/backend.rs:2133-2160`) (V). Metal keeps its stronger guarantee because it costs nothing extra.
 
+### 3.1 `freeze_checked`: frozen parameters are scanned once
+
+`MetalBackend::freeze_checked` (`ojas-metal/src/backend.rs:245`, `Cmd::Freeze` at `device.rs:1486`, `Worker::freeze` at `:1180`) scans an F32 or Bf16 tensor once and marks its device buffer in `Book::clean`, keyed by buffer id with the checked byte windows. Ops skip their per-use scan of a marked window (`known_clean` `:1133`, `check_operand` `:1147`): `linear_forward`, `linear_backward_input`, `linear_backward`, `embedding_forward` and the `linear_cross_entropy_mean` weight. A bf16 widening of a marked window is marked too, as a derived copy.
+
+- **Writers refuse.** `Worker::writable` (`:1164`) makes `adamw_step` (p, m, v), `muon_ns5_step` (p, m), in-place `accumulate_grad`, `scale_grad` and `kv_cache_write` return a typed `Backend` error before recording anything.
+- **A faulting freeze scan** is deferred like any other: `NonFinite { "freeze_checked" }` at the next sync. `scan` then removes the mark and every widened copy derived from it (`device.rs:800`), so later ops scan the buffer again.
+- **`free()` drops the mark** (`device.rs:688`); ids are never reused.
+- **Opt-in and Metal-only for now.** A generic `Backend` hook belongs to the phase-B StepProvider (ft-b5e64557); wrapper forwarding of new trait methods is the open bug class ft-fe7dcee6.
+
 ## 4. Batching mechanics
 
 ### 4.1 Recording and committing

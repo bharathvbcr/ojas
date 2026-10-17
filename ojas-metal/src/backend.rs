@@ -225,6 +225,43 @@ impl MetalBackend {
         }
     }
 
+    /// Declare `tensor` a frozen parameter, once, at load: its values are
+    /// scanned for NaN and infinity now (an `F32` or `Bf16` device tensor),
+    /// and from then on no matmul, embedding gather or fused cross-entropy
+    /// that reads it (or an exact `f32` widening of it) scans it again. A
+    /// step over a frozen 2B base otherwise re-reads every weight once per
+    /// use for nothing: the weights cannot change.
+    ///
+    /// The mark is on the device buffer, so every view of the tensor shares
+    /// it, and it holds only while nothing writes that buffer: an
+    /// `adamw_step`, `muon_ns5_step`, `accumulate_grad`, `scale_grad` or
+    /// `kv_cache_write` that targets it is refused with
+    /// [`OjasError::Backend`] before it records anything. The scan is
+    /// recorded like any other: a NaN or infinity is [`OjasError::NonFinite`]
+    /// at the next [`Backend::sync`], and the mark is then withdrawn, so a
+    /// buffer that was not finite is scanned by every later op as before.
+    /// Freed with its buffer. Freezing a window of a buffer marks only that
+    /// window.
+    pub fn freeze_checked(&self, tensor: &Tensor) -> Result<(), OjasError> {
+        const OP: &str = "freeze_checked";
+        let half = match tensor.dtype() {
+            DType::F32 => false,
+            DType::Bf16 => true,
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::F32,
+                    got,
+                })
+            }
+        };
+        let x = self.arg(OP, tensor, tensor.dtype())?;
+        match self.link.call(Cmd::Freeze { x, half })? {
+            Reply::Done => Ok(()),
+            other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        }
+    }
+
     /// Waited GPU commits this backend's device thread has made since it
     /// opened, shared by every clone. Telemetry for tests and benches, not a
     /// stable API.

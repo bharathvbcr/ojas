@@ -570,6 +570,13 @@ pub(crate) enum Cmd {
     ToF32 {
         x: Arg,
     },
+    /// An `F32` (or, with `half`, `Bf16`) window checked once for NaN and
+    /// infinity, then marked frozen: later ops skip their scan of it and
+    /// refuse to write its buffer. Answers `Done`.
+    Freeze {
+        x: Arg,
+        half: bool,
+    },
     /// An `F32` window rounded into a new `Bf16` buffer of `n` 2-byte
     /// elements.
     ToBf16 {

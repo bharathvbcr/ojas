@@ -36,6 +36,18 @@
 //!   the device figures. `gpu_lora_step_trains_only_the_adapters` is the
 //!   tiny-fixture check that this step moves the adapters and nothing else.
 //!
+//! - `tape-lora-checked`: `tape-lora` with the base declared frozen to the
+//!   device once at load (`MetalBackend::freeze_checked`), so no matmul,
+//!   gather or fused head rescans a weight; the row adds `freeze_ms`, the one
+//!   scan's cost. `tape-lora-fulldw`: `tape-lora` with every base linear
+//!   weight a trainable leaf (the table and norms stay frozen), the step the
+//!   frozen-weight dW skip replaces. `QWEN35_MEM_PHASES=on` makes any
+//!   `tape-lora*` arm wait for its forward before the backward starts and
+//!   adds `min_forward_ms` and `min_backward_ms`, so the dW skip's share of
+//!   the backward is measured; without it the step is the plain one. Each
+//!   arm is a process: interleave the arms across processes and take the
+//!   minimum `min_step_ms` per arm (ft-2bbced18's A/B).
+//!
 //! Every position is scored (the causal loss as letter rows), micro-batch 1.
 //! The snapshot is `QWEN35_MEM_SNAPSHOT`, or the one snapshot of
 //! `Qwen/Qwen3.5-2B-Base` in the Hugging Face cache. The row is one line
@@ -51,11 +63,11 @@ use std::time::Instant;
 use ojas_core::{AdamWConfig, OjasError};
 use ojas_model::lora::{Entropy, LoraConfig, LoraSite};
 use ojas_model::qwen35::{
-    bind_frozen, forward_loss_lora, lora_targets, LoraForward, MixerLora, Qwen35Lora, Qwen35Params,
-    Qwen35Spec, LORA_KINDS,
+    bind_frozen, forward_loss_lora, lora_targets, LoraForward, MixerLora, MixerParams, Qwen35Lora,
+    Qwen35Params, Qwen35Spec, LORA_KINDS,
 };
 
-use ojas_autograd::Tape;
+use ojas_autograd::{Tape, Var};
 use ojas_core::{Backend, Budget, DType, Tensor};
 use ojas_io::SafeTensors;
 use ojas_metal::MetalBackend;
@@ -111,7 +123,25 @@ fn gpu_memory_row() {
         "tape-f32" => tape(&snap, &ids, DType::F32, DType::F32, row),
         "tape-bf16" => tape(&snap, &ids, DType::Bf16, DType::F32, row),
         "tape-bf16-table" => tape(&snap, &ids, DType::Bf16, DType::Bf16, row),
-        "tape-lora" => tape_lora(&snap, &ids, row),
+        "tape-lora" => tape_lora(&snap, &ids, row, StepVariant::default()),
+        "tape-lora-checked" => tape_lora(
+            &snap,
+            &ids,
+            row,
+            StepVariant {
+                freeze_checked: true,
+                ..StepVariant::default()
+            },
+        ),
+        "tape-lora-fulldw" => tape_lora(
+            &snap,
+            &ids,
+            row,
+            StepVariant {
+                full_dw: true,
+                ..StepVariant::default()
+            },
+        ),
         other => panic!("unknown QWEN35_MEM_ARM {other}"),
     };
     row.num("wall_ms", started.elapsed().as_millis() as u64);
@@ -339,6 +369,74 @@ fn adapter_tensors(lora: &mut Qwen35Lora<LoraSite<Tensor>>) -> Vec<&mut Tensor> 
     out
 }
 
+/// What a measured LoRA step does differently from the plain `tape-lora`
+/// arm, one knob per A/B of ft-2bbced18.
+#[derive(Clone, Copy, Debug, Default)]
+struct StepVariant {
+    /// The base is declared frozen to the device once, at load
+    /// (`MetalBackend::freeze_checked`), so no matmul rescans a weight.
+    freeze_checked: bool,
+    /// Every base linear weight takes a gradient (a trainable leaf) while the
+    /// table and the norms stay frozen: the step the frozen-weight dW skip
+    /// replaces, so the backward's time and peak with and without that skip
+    /// are measured, not assumed.
+    full_dw: bool,
+}
+
+/// `bind_frozen`, except that each layer's linear weights are trainable
+/// leaves (`StepVariant::full_dw`).
+fn bind_linear_dw(
+    tape: &mut Tape<MetalBackend>,
+    base: &Qwen35Params<Tensor>,
+) -> Result<Qwen35Params<Var>, OjasError> {
+    let mut bound = bind_frozen(tape, base)?;
+    for (layer, src) in bound.layers.iter_mut().zip(&base.layers) {
+        let mut leaf = |t: &Tensor| tape.leaf(t.clone());
+        layer.gate = leaf(&src.gate)?;
+        layer.up = leaf(&src.up)?;
+        layer.down = leaf(&src.down)?;
+        match (&mut layer.mixer, &src.mixer) {
+            (MixerParams::GatedDeltaNet(b), MixerParams::GatedDeltaNet(s)) => {
+                b.wq = leaf(&s.wq)?;
+                b.wk = leaf(&s.wk)?;
+                b.wv = leaf(&s.wv)?;
+                b.wz = leaf(&s.wz)?;
+                b.wa = leaf(&s.wa)?;
+                b.wb = leaf(&s.wb)?;
+                b.out = leaf(&s.out)?;
+            }
+            (MixerParams::Attention(b), MixerParams::Attention(s)) => {
+                b.wq = leaf(&s.wq)?;
+                b.wgate = leaf(&s.wgate)?;
+                b.wk = leaf(&s.wk)?;
+                b.wv = leaf(&s.wv)?;
+                b.wo = leaf(&s.wo)?;
+            }
+            _ => {
+                return Err(OjasError::Shape {
+                    op: "bind_linear_dw",
+                    detail: "a bound layer and its source have different mixers".to_string(),
+                })
+            }
+        }
+    }
+    Ok(bound)
+}
+
+/// The linear weights [`bind_linear_dw`] makes trainable: three MLP matrices
+/// per layer, and the mixer's seven (gated delta net) or five (attention).
+fn linear_leaf_count(base: &Qwen35Params<Tensor>) -> usize {
+    base.layers
+        .iter()
+        .map(|l| {
+            3 + match l.mixer {
+                MixerParams::GatedDeltaNet(_) => 7,
+                MixerParams::Attention(_) => 5,
+            }
+        })
+        .sum()
+}
+
 /// One LoRA training step over a frozen, device-resident base: the loop the
 /// fine-tune run composes from the merged primitives.
 struct LoraTrainer {
@@ -352,6 +450,16 @@ struct LoraTrainer {
     adamw: AdamWConfig,
     checkpoint: ActivationCheckpoint,
     steps: u64,
+    variant: StepVariant,
+    /// Wait for the forward before the backward starts, so `forward_ms` and
+    /// `backward_ms` are the phases' own walls.
+    phases: bool,
+    /// Wall of the last step's forward (the bind through the loss) and of
+    /// its backward (through the sync that finishes it), in milliseconds.
+    /// Without `phases` the forward's device work is still running when the
+    /// backward starts, and the two do not add up to a phase each.
+    forward_ms: f64,
+    backward_ms: f64,
 }
 
 impl LoraTrainer {
@@ -395,6 +503,10 @@ impl LoraTrainer {
             },
             checkpoint,
             steps: 0,
+            variant: StepVariant::default(),
+            phases: false,
+            forward_ms: 0.0,
+            backward_ms: 0.0,
         })
     }
 
@@ -411,8 +523,14 @@ impl LoraTrainer {
         let grads: Vec<Tensor>;
         let loss;
         {
+            let forward_start = Instant::now();
             let mut tape = Tape::new(self.backend.clone());
-            let params = bind_frozen(&mut tape, &self.base).map_err(at("bind"))?;
+            let bound_base = if self.variant.full_dw {
+                bind_linear_dw(&mut tape, &self.base)
+            } else {
+                bind_frozen(&mut tape, &self.base)
+            };
+            let params = bound_base.map_err(at("bind"))?;
             let bound = self
                 .adapters
                 .try_map(&mut |site| site.try_map(&mut |t| tape.leaf(t.clone())))
@@ -441,17 +559,46 @@ impl LoraTrainer {
                 self.checkpoint,
             )
             .map_err(at("forward"))?;
+            // The phase split waits for the forward to finish, which a plain
+            // step does not; only a row that asks for it pays that.
+            if self.phases {
+                self.backend.sync().map_err(at("sync forward"))?;
+            }
+            let backward_start = Instant::now();
+            self.forward_ms = ms(backward_start - forward_start);
             tape.backward(l).map_err(at("backward"))?;
             self.backend.sync().map_err(at("sync backward"))?;
+            self.backward_ms = ms(backward_start.elapsed());
+            // With the dW skip a base parameter holding a gradient is a
+            // fault; the full-dW variant gives the linears one on purpose.
             if let Some(i) = params
                 .values()
                 .iter()
                 .position(|v| tape.grad(**v).is_some())
+                .filter(|_| !self.variant.full_dw)
             {
                 return Err(StepFault {
                     phase: "frozen gradient",
                     error: format!("base parameter {i} holds a gradient"),
                 });
+            }
+            // The full-dW arm is only a measurement of the dW it names if
+            // every linear leaf really got one (and nothing else did): a
+            // silent fall back to the skipped backward would be the plain
+            // `tape-lora` row under another name.
+            if self.variant.full_dw {
+                let held = params
+                    .values()
+                    .iter()
+                    .filter(|v| tape.grad(***v).is_some())
+                    .count();
+                let want = linear_leaf_count(&self.base);
+                if held != want {
+                    return Err(StepFault {
+                        phase: "full dW",
+                        error: format!("{held} base gradients held, {want} linear leaves bound"),
+                    });
+                }
             }
             loss = tape
                 .value(l)
@@ -499,8 +646,30 @@ fn ms(d: std::time::Duration) -> f64 {
     d.as_secs_f64() * 1e3
 }
 
-fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
+fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> Row {
     let cfg = snap.config.clone();
+    let phases = match std::env::var("QWEN35_MEM_PHASES").as_deref() {
+        Ok("on") => true,
+        Ok("off") | Err(std::env::VarError::NotPresent) => false,
+        other => panic!("QWEN35_MEM_PHASES is on or off, got {other:?}"),
+    };
+    r.text(
+        "base_scan",
+        if variant.freeze_checked {
+            "once"
+        } else {
+            "per_use"
+        },
+    );
+    r.text(
+        "linear_dw",
+        if variant.full_dw {
+            "computed"
+        } else {
+            "skipped"
+        },
+    );
+    r.text("phases", if phases { "on" } else { "off" });
     let spec = cfg.tape_spec();
     let n = ids.len() - 1;
     let checkpoint = match std::env::var("QWEN35_MEM_CKPT").as_deref() {
@@ -561,6 +730,20 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
     if let Err(e) = m.sync() {
         refused(r, "sync weights", e);
     }
+    if variant.freeze_checked {
+        // The one scan of the frozen base, at load. A non-finite weight is
+        // reported by the sync, as a refusal row.
+        let t0 = Instant::now();
+        for t in base.values() {
+            if let Err(e) = m.freeze_checked(t) {
+                refused(r, "freeze_checked", e);
+            }
+        }
+        if let Err(e) = m.sync() {
+            refused(r, "sync freeze", e);
+        }
+        r.real("freeze_ms", ms(t0.elapsed()));
+    }
     let resident = m.memory_and_reset_peak().unwrap();
     r.num("resident_bytes", resident.allocated);
     r.num("budget_resident_bytes", m.budget().live_bytes().unwrap());
@@ -585,7 +768,11 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
         checkpoint,
         &host_budget,
     ) {
-        Ok(t) => t,
+        Ok(mut t) => {
+            t.variant = variant;
+            t.phases = phases;
+            t
+        }
         Err(f) => refused(r, f.phase, f.error),
     };
     let step = |trainer: &mut LoraTrainer, r: &Row| -> (f32, f64) {
@@ -606,10 +793,14 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
     r.num("first_step_footprint_max_bytes", fp.lifetime_max);
     r.phase("first step");
     let mut walls = Vec::with_capacity(TIMED_STEPS);
+    let mut forwards = Vec::with_capacity(TIMED_STEPS);
+    let mut backwards = Vec::with_capacity(TIMED_STEPS);
     let mut last_loss = first_loss;
     for _ in 0..TIMED_STEPS {
         let (loss, wall) = step(&mut trainer, &r);
         walls.push(wall);
+        forwards.push(trainer.forward_ms);
+        backwards.push(trainer.backward_ms);
         last_loss = loss;
     }
     let end = m.memory().unwrap();
@@ -618,6 +809,15 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
         r.real(k, *w);
     }
     r.real("mean_step_ms", mean_ms);
+    r.real(
+        "min_step_ms",
+        walls.iter().copied().fold(f64::INFINITY, f64::min),
+    );
+    if phases {
+        let min = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min);
+        r.real("min_forward_ms", min(&forwards));
+        r.real("min_backward_ms", min(&backwards));
+    }
     r.real("tokens_per_s", n as f64 / (mean_ms / 1e3));
     r.num("step_peak_bytes", end.peak_allocated);
     r.num("end_allocated_bytes", end.allocated);
