@@ -1,8 +1,8 @@
 ---
 id: "gp-qwen35-2b-metal-tape-run"
 title: "Run the real Qwen3.5-2B hybrid forward and backward through the Metal Tape, and measure 2B save/load and long-sequence headroom"
-status: ready
-priority: 0
+status: review
+priority: 1
 severity: high
 type: test
 owner: "unassigned"
@@ -33,8 +33,8 @@ Run the real Qwen3.5-2B hybrid forward and backward through the Metal Tape, and 
 
 Task: gp-qwen35-2b-metal-tape-run
 Type: test
-Status: ready
-Priority: 0 (Urgent)
+Status: review
+Priority: 1 (High)
 Severity: high
 Owner: unassigned
 Due: none
@@ -44,7 +44,7 @@ Labels: qwen35, metal, autograd, measurement, fine-tune
 - ojas
 
 ## Description
-Split out of gp-long-runs-and-quiet-benches (2026-10-09), which inherited it from gp-autograd-and-model-primitives. ojas-qwen35/tests/gpu_tape_2b.rs:96 exists but has never run, and ojas-qwen35/README.md:230-235 says 'Not measured'. Only the config and tokenizer are local, so the Qwen3.5-2B-Base weights must be downloaded first. Queue the run through Lappi-decision/tools/mac_heavy.sh.
+Split out of gp-long-runs-and-quiet-benches (2026-10-09), which inherited it from gp-autograd-and-model-primitives. ojas-qwen35/tests/gpu_tape_2b.rs:96 exists but has never run, and ~~ojas-qwen35/README.md:230-235~~ ojas-qwen35/README.md:250-255 (corrected 2026-10-17 at 5b67cdd) says 'Not measured'. ~~Only the config and tokenizer are local, so the Qwen3.5-2B-Base weights must be downloaded first.~~ (corrected 2026-10-17 at 5b67cdd: the Qwen3.5-2B-Base snapshot, with model.safetensors-00001-of-00001.safetensors, is in ~/.cache/huggingface/hub.) Queue the run through Lappi-decision/tools/mac_heavy.sh.
 
 ### Mac-training re-rank (2026-10-09)
 The user's current focus is LoRA fine-tuning on the Mac (Metal), run by sibling session ojas-7c. Its recommended path, provisional until its user decides, is ojas-model's Tape on ojas-metal, with the tessl provider (ojas-qwen35) getting small fixes only. 16-bit (bf16) LoRA is the critical path; 4/8-bit QLoRA is gated P2, per Unsloth's Qwen3.5 guidance and Lappi AUDIT/training-audit-2026-10-06.md:469.
@@ -99,3 +99,24 @@ Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two i
   - Tape on Metal, 2B-Base b1485b2f, weights sha256 928acbf1 (the pre-registration's): loss 3.81033921 vs 3.81016612 (4.54e-5, bound 1e-4); 149 of 149 gradients, worst 4.05e-3 of its peak (layers.20.linear_attn.conv1d.weight, bound 1e-2); resident 7.55 GB, exact step peak 17.60 GB under a 28 GiB budget. Row: bench/results/2026-10-15-qwen35-2b-tape-gate. clippy -D warnings clean; gpu_parity's gpu_tiny tests 8 passed after the helper move.
   - **The provider's leg was stopped by the memguard.** tessl's `real_2b_step_matches_transformers` (tessl 60a6240, `QWEN35_2B_SAFETENSORS` at the 2B-Base file) printed the loss (train 3.81033944, 4.55e-5) and was then SIGTERMed with no mac_heavy RSS-cap line, in the gradient comparison. The guard was not raised. On this machine the provider's real-2B gradients stay unchecked until tessl's test reads them with less held at once; that change is tessl's, to hand over. The Tape's own leg does not depend on it.
   - Criteria now: 2 met (snapshot and file sha recorded); 3a met for the Tape against transformers; 3b met (rows of 2026-10-11 and 2026-10-14); 1 retired (provider save/load) in favour of the adapter checkpoint in gp-ft-trainer-loop; 4 (a LoRA step to time) still open.
+
+### Fable ruling (2026-10-17)
+
+Synced from the GitPulse board by the 2026-10-17 brief sync; the board is canonical (Fable's final ruling of 2026-10-17, section 5), this section is the long-form record. Board card ft-531216ed802203374c90becae0bea3f2, revision 5: status review, priority 1, severity high. Criterion numbers are the board's, counted from 0 in the order of the card's acceptance criteria.
+
+Ruling set: status review (unchanged), priority 0 -> 1.
+
+Marks (the text of the existing criterion is otherwise unchanged on the board; nothing deleted, no threshold moved):
+
+- ft-531216ed802203374c90becae0bea3f2 criterion 2: [PROVIDER LEG OFF THE PATH 2026-10-17: D1 keeps the provider full-FT; tessl's real_2b_step_matches_transformers reading gradients with less held is tessl's item and does not hold this card]
+
+Criteria appended by the ruling, verbatim:
+
+- [ ] ft-531216ed802203374c90becae0bea3f2 criterion 5: (Fable 2026-10-17) Review closes on criterion 4's text and README amendment; criterion 3's tokens/s branch is decided by ft-2bbced18 criterion 7.
+
+Board criteria and marks already on the card before the ruling (2026-10-17 owner, gap and fold entries, and earlier audit marks), not previously in this brief, verbatim:
+
+- [ ] ft-531216ed802203374c90becae0bea3f2 criterion 0: [PARTLY — Metal Tape fwd+bwd and long-sequence headroom MET in committed results; save/load retired 2026-10-15 but text not amended (see criterion 5)] ojas-qwen35/tests/gpu_tape_2b.rs runs the real Qwen3.5-2B hybrid forward and backward through the Metal Tape (snapshot fetched and its revision recorded), and 2B save/load time and long-sequence peak memory headroom are measured and written into ojas-qwen35/README.md
+- [ ] ft-531216ed802203374c90becae0bea3f2 criterion 1: [MET — verified in source, with deviation: 2B-Base default, one weights sha, snapshot_dir panics instead of skipping] The run uses a documented local snapshot instead of skipping when it is absent: today the local Qwen3.5-2B (instruct) snapshot at ~/.cache/huggingface/hub/models--Qwen--Qwen3.5-2B serves (4.3 GB, single shard, same text config as 2B-Base: hidden 2048, 24 layers, GDN 16/16, attn 8/2, head_dim 256), with its revision and file shas recorded; no download needed
+- [ ] ft-531216ed802203374c90becae0bea3f2 criterion 3: [PARTLY — tokens/s branch open until ft-2bbced18 criterion 5] Reversal condition recorded: if the Tape fails the bound on real weights, or (after gp-ft-step-memory-and-throughput) its tokens/s at T=2048 is below half the provider's, LoRA moves into tessl's fused step (Fable D1)
+- [ ] ft-531216ed802203374c90becae0bea3f2 criterion 4: (audit-2026-10-16) Criterion 1's text is amended to the scope Fable retired on 2026-10-15 (no provider 2B save/load row), and ojas-qwen35/README.md:250-259 matches the committed bench/results/2026-10-11-bf16-frozen-base and 2026-10-15-qwen35-2b-tape-gate rows (no 'not measured' line for a measured sequence length).
