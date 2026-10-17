@@ -181,8 +181,9 @@ fn describe(path: &Path) -> String {
 
 /// The SHA-256 of the regular file `file` is open on, as 64 lowercase hex
 /// characters, read from the start to end of file `FILE_CHUNK_BYTES` at a
-/// time with positioned reads (the cursor is neither used nor moved, so a
-/// caller can keep using the same handle). Anything but a regular file is
+/// time with positioned reads. On Unix the cursor is neither used nor moved,
+/// so a caller can keep using the same handle; Windows' `seek_read` moves it,
+/// so seek before reading the handle further there. Anything but a regular file is
 /// refused before a byte is read, so a FIFO cannot block. A zero-length file
 /// is the digest of the empty message.
 ///
@@ -195,22 +196,47 @@ pub fn handle_sha256_hex(file: &File) -> Result<String, IoError> {
     if !meta.is_file() {
         return Err(IoError::new("not a regular file"));
     }
+    digest_exact(file, meta.len(), &mut ReadAt { file, pos: 0 })
+}
+
+/// Hashes exactly `len` bytes from `reader` (the length `file` had when the
+/// caller took it, once), then re-reads `file`'s length. A file that ends
+/// early, or whose length is not `len` afterwards, is refused: the digest
+/// would otherwise name bytes the caller's later parse of the same handle
+/// does not see.
+fn digest_exact(file: &File, len: u64, reader: &mut impl Read) -> Result<String, IoError> {
     let mut chunk = Vec::new();
+    let cap = usize::try_from(len).map_or(FILE_CHUNK_BYTES, |l| l.min(FILE_CHUNK_BYTES));
     chunk
-        .try_reserve_exact(FILE_CHUNK_BYTES)
-        .map_err(|_| IoError::new(format!("read buffer of {FILE_CHUNK_BYTES} bytes refused")))?;
-    chunk.resize(FILE_CHUNK_BYTES, 0u8);
-    let mut reader = ReadAt { file, pos: 0 };
+        .try_reserve_exact(cap)
+        .map_err(|_| IoError::new(format!("read buffer of {cap} bytes refused")))?;
+    chunk.resize(cap, 0u8);
     let mut hash = Sha256::new();
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => hash.update(&chunk[..n]),
-            Err(e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(e) => {
-                return Err(IoError::new(format!("read at byte {}: {e}", reader.pos)));
+    let mut done = 0u64;
+    while done < len {
+        let want = usize::try_from(len - done).map_or(cap, |r| r.min(cap));
+        match reader.read(&mut chunk[..want]) {
+            Ok(0) => {
+                return Err(IoError::new(format!(
+                    "file ended at byte {done} of {len} while hashing (it shrank)"
+                )));
             }
+            Ok(n) => {
+                hash.update(&chunk[..n]);
+                done += n as u64;
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(IoError::new(format!("read at byte {done}: {e}"))),
         }
+    }
+    let after = file
+        .metadata()
+        .map_err(|e| IoError::new(format!("metadata after hashing: {e}")))?
+        .len();
+    if after != len {
+        return Err(IoError::new(format!(
+            "file changed length while hashing: {len} bytes, now {after}"
+        )));
     }
     Ok(to_hex(&hash.finalize()))
 }
@@ -231,6 +257,17 @@ pub fn file_sha256_hex(path: &Path) -> Result<String, IoError> {
 /// that goes on to parse the file reads the very bytes that were hashed (a
 /// second `open` of the path could see a different file). Same errors.
 pub fn open_sha256_hex(path: &Path) -> Result<(File, String), IoError> {
+    // Opening a FIFO for reading blocks until a writer appears, so the path is
+    // judged by `stat` (which follows links) before it is opened; the handle is
+    // judged again in `handle_sha256_hex`.
+    let meta =
+        std::fs::metadata(path).map_err(|e| IoError::new(format!("{}: {e}", describe(path))))?;
+    if !meta.is_file() {
+        return Err(IoError::new(format!(
+            "{}: not a regular file",
+            describe(path)
+        )));
+    }
     let file = File::open(path).map_err(|e| IoError::new(format!("{}: {e}", describe(path))))?;
     let hex = handle_sha256_hex(&file)
         .map_err(|e| IoError::new(format!("{}: {}", describe(path), e.detail())))?;
@@ -382,6 +419,8 @@ mod tests {
         assert!(err.detail().contains("not a regular file"), "{err}");
     }
 
+    // Unix only: Windows' positioned read (`seek_read`) moves the cursor.
+    #[cfg(unix)]
     #[test]
     fn handle_digest_ignores_and_keeps_the_cursor() {
         let data = pattern(5000);
@@ -394,6 +433,109 @@ mod tests {
         let mut next = [0u8; 4];
         std::io::Read::read_exact(&mut open, &mut next).unwrap();
         assert_eq!(next, data[100..104]);
+    }
+
+    /// Appends to the file on the first read, as a writer racing the hash.
+    struct Growing<'a> {
+        file: &'a File,
+        path: &'a Path,
+        grown: bool,
+    }
+
+    impl Read for Growing<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.grown {
+                self.grown = true;
+                let mut w = std::fs::OpenOptions::new().append(true).open(self.path)?;
+                std::io::Write::write_all(&mut w, b"more")?;
+            }
+            crate::posread::read_at(self.file, buf, 0)
+        }
+    }
+
+    #[test]
+    fn a_file_that_grows_while_hashed_is_refused() {
+        let file = tmp("sha-grow");
+        std::fs::write(&file.0, pattern(5000)).unwrap();
+        let open = File::open(&file.0).unwrap();
+        let len = open.metadata().unwrap().len();
+        let mut r = Growing {
+            file: &open,
+            path: &file.0,
+            grown: false,
+        };
+        let err = digest_exact(&open, len, &mut r).unwrap_err();
+        assert!(err.detail().contains("changed length"), "{err}");
+    }
+
+    #[test]
+    fn a_file_that_ends_early_is_refused_not_hashed_short() {
+        let file = tmp("sha-short");
+        std::fs::write(&file.0, pattern(5000)).unwrap();
+        let open = File::open(&file.0).unwrap();
+        let mut r = std::io::Cursor::new(pattern(100));
+        let err = digest_exact(&open, 5000, &mut r).unwrap_err();
+        assert!(err.detail().contains("shrank"), "{err}");
+    }
+
+    /// One byte per read and an EINTR before each: the digest is unchanged.
+    struct Trickle {
+        data: Vec<u8>,
+        at: usize,
+        interrupt: bool,
+    }
+
+    impl Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.interrupt = !self.interrupt;
+            if self.interrupt {
+                return Err(std::io::Error::from(ErrorKind::Interrupted));
+            }
+            if self.at == self.data.len() {
+                return Ok(0);
+            }
+            buf[0] = self.data[self.at];
+            self.at += 1;
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn short_reads_and_interrupts_do_not_change_the_digest() {
+        let data = pattern(777);
+        let file = tmp("sha-trickle");
+        std::fs::write(&file.0, &data).unwrap();
+        let open = File::open(&file.0).unwrap();
+        let mut r = Trickle {
+            data: data.clone(),
+            at: 0,
+            interrupt: false,
+        };
+        assert_eq!(digest_exact(&open, 777, &mut r).unwrap(), sha256_hex(&data));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_without_blocking() {
+        let dir = tmp_dir("sha-fifo");
+        let fifo = dir.0.join("pipe");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if !made.is_ok_and(|s| s.success()) {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = fifo.clone();
+        let worker = std::thread::spawn(move || {
+            tx.send(file_sha256_hex(&p)).unwrap();
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(5));
+        if got.is_err() {
+            // Release the blocked open so the thread can end.
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        worker.join().unwrap();
+        let err = got.expect("open of a FIFO blocked").unwrap_err();
+        assert!(err.detail().contains("not a regular file"), "{err}");
     }
 
     #[cfg(unix)]

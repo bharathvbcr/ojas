@@ -1,5 +1,6 @@
-//! Positioned reads: the file cursor is neither used nor moved, so a `File`
-//! handed in by a caller reads the same whatever its cursor says.
+//! Positioned reads: the file cursor is not used, so a `File` handed in by a
+//! caller reads the same whatever its cursor says. On Unix the cursor is not
+//! moved either; Windows' `seek_read` leaves it after the bytes read.
 
 use std::fs::File;
 use std::io::{ErrorKind, Read};

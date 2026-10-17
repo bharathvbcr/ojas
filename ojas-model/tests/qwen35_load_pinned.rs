@@ -226,6 +226,41 @@ fn a_snapshot_link_is_judged_by_its_own_name_and_its_targets_bytes() {
     nothing_was_charged(&b);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_fifo_and_a_directory_are_unreadable_not_a_hang_and_charge_nothing() {
+    let scratch = Scratch::new("fifo");
+    let fifo = scratch.0.join(MODEL_FILE);
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    let b = budget();
+    if made.is_ok_and(|s| s.success()) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (p, e) = (fifo.clone(), right());
+        let worker = std::thread::spawn(move || {
+            let b = budget();
+            let res = pinned(&p, &e, &b).map(|_| ());
+            tx.send((res, b.live_bytes().unwrap(), b.peak_bytes()))
+                .unwrap();
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(5));
+        if got.is_err() {
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        worker.join().unwrap();
+        let (res, live, peak) = got.expect("pinned load of a FIFO blocked");
+        assert!(
+            matches!(res, Err(AdapterError::Unreadable { .. })),
+            "{res:?}"
+        );
+        assert_eq!((live, peak), (0, 0));
+    }
+    let dir = scratch.0.join("d").join(MODEL_FILE);
+    std::fs::create_dir_all(&dir).unwrap();
+    let err = pinned(&dir, &right(), &b).map(|_| ()).unwrap_err();
+    assert!(matches!(err, AdapterError::Unreadable { .. }), "{err:?}");
+    nothing_was_charged(&b);
+}
+
 #[test]
 fn unpinned_load_hf_is_unchanged() {
     let st = SafeTensors::open(&model_path()).unwrap();
