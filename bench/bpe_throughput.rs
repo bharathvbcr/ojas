@@ -121,10 +121,8 @@ pub fn main() {
     let rounds: usize = args.get(3).map_or(5, |r| r.parse().expect("ROUNDS"));
     assert!(rounds >= 1, "ROUNDS must be at least 1");
 
-    let (load_t, bpe) = time(|| {
-        load_hf_gpt2_dir(dir)
-            .unwrap_or_else(|e| panic!("rank table: {e}"))
-    });
+    let (load_t, bpe) =
+        time(|| load_hf_gpt2_dir(dir).unwrap_or_else(|e| panic!("rank table: {e}")));
     // Fingerprint: the GPT-2 table, not some other 50257-piece file.
     assert_eq!(bpe.decode_ordinary(&[31373]).unwrap(), "hello");
     assert_eq!(bpe.decode_ordinary(&[EOT]).unwrap(), "<|endoftext|>");
