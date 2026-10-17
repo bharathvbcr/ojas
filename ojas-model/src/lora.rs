@@ -20,9 +20,11 @@
 //! `alpha == r` the factor is exactly 1 and no op is recorded.
 //!
 //! A host-side [`LoraLinear`] holds the tensors and folds the adapter into
-//! the weight ([`LoraLinear::merge`]) and back ([`LoraLinear::unmerge`]).
+//! the weight ([`LoraLinear::merge`]) and back ([`LoraLinear::unmerge`]);
+//! [`merged_weight_bf16`] is the same fold rounded once to a bf16 tensor for
+//! a dense export.
 
-use ojas_core::{bf16_to_f32, Backend, BackendId, Budget, DType, OjasError, Tensor};
+use ojas_core::{bf16_to_f32, f32_to_bf16, Backend, BackendId, Budget, DType, OjasError, Tensor};
 use ojas_data::CounterRng;
 
 use crate::graph::Graph;
@@ -353,6 +355,137 @@ pub fn lora_linear<G: Graph>(
     g.add(&base, &delta)
 }
 
+/// `[out, in]` of `weight`, after checking `a` (`[r, in]`) and `b`
+/// (`[out, r]`, both f32) against `config`.
+fn check_operands(
+    config: &LoraConfig,
+    weight: &Tensor,
+    a: &Tensor,
+    b: &Tensor,
+) -> Result<(usize, usize), LoraError> {
+    let &[out, inn] = weight.shape() else {
+        return Err(LoraError::Mismatch(format!(
+            "weight {:?} is not [out, in]",
+            weight.shape()
+        )));
+    };
+    config.check_shape(inn, out)?;
+    if a.shape() != [config.rank, inn] || b.shape() != [out, config.rank] {
+        return Err(LoraError::Mismatch(format!(
+            "A {:?} and B {:?} for W {:?} at rank {}",
+            a.shape(),
+            b.shape(),
+            weight.shape(),
+            config.rank
+        )));
+    }
+    for t in [a, b] {
+        if t.dtype() != DType::F32 {
+            return Err(LoraError::Mismatch("A and B are f32".into()));
+        }
+    }
+    Ok((out, inn))
+}
+
+/// The unscaled product `B A` `[out, in]` as a charged host f32 tensor,
+/// computed on `backend`. Beside the result only `A^T` (`r * in`) and the
+/// backend's product scratch are charged, and both are gone on return.
+fn lora_product<B: Backend>(
+    backend: &B,
+    a: &Tensor,
+    b: &Tensor,
+    rank: usize,
+    inn: usize,
+) -> Result<Tensor, LoraError> {
+    let budget = backend.budget().clone();
+    // B A as `linear(B, A^T)`: `B [out, r]` rows against `A^T^T = A`'s
+    // transpose `[in, r]` as the weight.
+    let a = a.to_f32_vec()?;
+    let mut at = vec![0.0f32; inn * rank];
+    for k in 0..rank {
+        for j in 0..inn {
+            at[j * rank + k] = a[k * inn + j];
+        }
+    }
+    let at = Tensor::from_f32(&at, &[inn, rank], &budget)?;
+    let place = |t: &Tensor| -> Result<Tensor, OjasError> {
+        if backend.id() == BackendId::Cpu {
+            Ok(t.clone())
+        } else {
+            backend.upload(t)
+        }
+    };
+    let delta = backend.linear_forward(&place(b)?, &place(&at)?)?;
+    Ok(delta.to_host(&budget)?)
+}
+
+/// `W + (alpha/r) B A` as a bf16 tensor `[out, in]`: the sum in f32, exactly
+/// as [`LoraLinear::merge`] forms it (`w + s * d`, `s = alpha / r`, `d` the
+/// backend's `B A`), then rounded once to nearest even by
+/// [`ojas_core::f32_to_bf16`], the one bf16 conversion of every ojas path.
+/// [`LoraLinear::merge`] itself keeps the f32 sum; this is the export form.
+///
+/// `weight` is f32 or bf16 (a bf16 weight is widened exactly), `a` and `b`
+/// f32, all on the host. Nothing is mutated. `alpha == 0` gives `weight`
+/// itself for a bf16 weight and its single rounding for an f32 one, except
+/// that a stored `-0.0` becomes `+0.0` (`-0.0 + 0.0` in the f32 sum, as in
+/// [`LoraLinear::merge`]); rank 0 is
+/// refused by [`LoraConfig::new`]. A NaN or infinite weight, adapter or
+/// product, or a finite sum that rounds past the largest bf16, is
+/// [`OjasError::NonFinite`] and no tensor is returned. Charged: `A^T`, the
+/// backend's scratch and the f32 product `[out, in]` while the result
+/// `[out, in]` bf16 is written, so the peak is one f32 weight plus half a
+/// weight plus the small terms; no f32 merged weight is built.
+pub fn merged_weight_bf16<B: Backend>(
+    config: &LoraConfig,
+    weight: &Tensor,
+    a: &Tensor,
+    b: &Tensor,
+    backend: &B,
+) -> Result<Tensor, LoraError> {
+    const OP: &str = "lora::merged_weight_bf16";
+    let (out, inn) = check_operands(config, weight, a, b)?;
+    if !matches!(weight.dtype(), DType::F32 | DType::Bf16) {
+        return Err(LoraError::Mismatch(format!(
+            "weight is {:?}, not f32 or bf16",
+            weight.dtype()
+        )));
+    }
+    let budget = backend.budget().clone();
+    let delta = lora_product(backend, a, b, config.rank, inn)?;
+    let delta = delta.f32_slice()?;
+    let mut merged = Tensor::zeros(&[out, inn], DType::Bf16, &budget)?;
+    let sum = merged.bf16_slice_mut()?;
+    if delta.len() != sum.len() {
+        return Err(LoraError::Mismatch(format!(
+            "B A has {} elements, the weight {}",
+            delta.len(),
+            sum.len()
+        )));
+    }
+    let s = config.scaling();
+    match weight.dtype() {
+        DType::Bf16 => {
+            let w = weight.bf16_slice()?;
+            for ((m, &w), &d) in sum.iter_mut().zip(w).zip(delta) {
+                *m = f32_to_bf16(bf16_to_f32(w) + s * d);
+            }
+        }
+        _ => {
+            let w = weight.f32_slice()?;
+            for ((m, &w), &d) in sum.iter_mut().zip(w).zip(delta) {
+                *m = f32_to_bf16(w + s * d);
+            }
+        }
+    }
+    // A bf16 is finite exactly when its exponent field is not all ones; NaN
+    // and infinity keep that field through the rounding.
+    if sum.iter().any(|&bits| bits & 0x7F80 == 0x7F80) {
+        return Err(LoraError::Core(OjasError::NonFinite { op: OP }));
+    }
+    Ok(merged)
+}
+
 /// A LoRA linear's host tensors and its fold into the weight.
 ///
 /// `weight` is what a graph should read as `W`: the original while the
@@ -378,27 +511,7 @@ impl LoraLinear {
         a: Tensor,
         b: Tensor,
     ) -> Result<Self, LoraError> {
-        let &[out, inn] = weight.shape() else {
-            return Err(LoraError::Mismatch(format!(
-                "weight {:?} is not [out, in]",
-                weight.shape()
-            )));
-        };
-        config.check_shape(inn, out)?;
-        if a.shape() != [config.rank, inn] || b.shape() != [out, config.rank] {
-            return Err(LoraError::Mismatch(format!(
-                "A {:?} and B {:?} for W {:?} at rank {}",
-                a.shape(),
-                b.shape(),
-                weight.shape(),
-                config.rank
-            )));
-        }
-        for t in [&a, &b] {
-            if t.dtype() != DType::F32 {
-                return Err(LoraError::Mismatch("A and B are f32".into()));
-            }
-        }
+        check_operands(&config, &weight, &a, &b)?;
         Ok(Self {
             config,
             a,
@@ -440,29 +553,10 @@ impl LoraLinear {
         let &[out, inn] = self.weight.shape() else {
             return Err(LoraError::Mismatch("weight is not [out, in]".into()));
         };
-        let r = self.config.rank;
-        // B A as `linear(B, A^T)`: `B [out, r]` rows against `A^T^T = A`'s
-        // transpose `[in, r]` as the weight.
-        let a = self.a.to_f32_vec()?;
-        let mut at = vec![0.0f32; inn * r];
-        for k in 0..r {
-            for j in 0..inn {
-                at[j * r + k] = a[k * inn + j];
-            }
-        }
-        let at = Tensor::from_f32(&at, &[inn, r], &budget)?;
-        let place = |t: &Tensor| -> Result<Tensor, OjasError> {
-            if backend.id() == BackendId::Cpu {
-                Ok(t.clone())
-            } else {
-                backend.upload(t)
-            }
-        };
-        let delta = backend.linear_forward(&place(&self.b)?, &place(&at)?)?;
         // The product stays in its charged host tensor and the sum is written
         // straight into the charged result, so no weight-sized buffer is
         // held outside the budget.
-        let delta = delta.to_host(&budget)?;
+        let delta = lora_product(backend, &self.a, &self.b, self.config.rank, inn)?;
         let delta = delta.f32_slice()?;
         let s = self.config.scaling();
         let mut merged = Tensor::zeros(&[out, inn], DType::F32, &budget)?;
@@ -493,6 +587,13 @@ impl LoraLinear {
         }
         self.original = Some(std::mem::replace(&mut self.weight, merged));
         Ok(())
+    }
+
+    /// [`merged_weight_bf16`] of this layer's original weight (the stored
+    /// one while merged), leaving the layer as it is.
+    pub fn merged_weight_bf16<B: Backend>(&self, backend: &B) -> Result<Tensor, LoraError> {
+        let base = self.original.as_ref().unwrap_or(&self.weight);
+        merged_weight_bf16(&self.config, base, &self.a, &self.b, backend)
     }
 
     /// Put the original weight back, bit for bit. Without a prior merge it

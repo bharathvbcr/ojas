@@ -23,7 +23,7 @@
 use std::convert::Infallible;
 
 use ojas_core::{
-    f32_to_bf16, shape_product, Budget, DType, OjasError, Tensor, LE_READ_CHUNK_BYTES,
+    f32_to_bf16, shape_product, Backend, Budget, DType, OjasError, Tensor, LE_READ_CHUNK_BYTES,
 };
 use ojas_data::CounterRng;
 use ojas_io::{bf16_to_f32, f16_to_f32, SafeTensors, StDtype};
@@ -761,6 +761,104 @@ impl LoraTarget {
             _ => split_rows(fused, rank, &self.out_parts),
         }
     }
+
+    /// This target's merged export weight: the base tensor [`LoraTarget::name`]
+    /// of `file` plus `config`'s scaling times the fused `B A` of `site`,
+    /// summed in f32 and rounded once to nearest even to a bf16 tensor in the
+    /// Hugging Face layout (`[out, in]`, `in_proj_qkv` as `[q | k | v]`,
+    /// `q_proj` with query and gate rows interleaved per head). `B` is
+    /// [`LoraTarget::fuse_b`] of the site's parts, exactly the inverse of the
+    /// split the adapter trains under. See [`crate::lora::merged_weight_bf16`]
+    /// for the arithmetic, the refusals and the charge.
+    ///
+    /// The base is read once into a charged tensor: as stored from a BF16
+    /// file, widened exactly from an F32 or F16 one, so the sum has one
+    /// rounding whatever the file's dtype (for the quantised arm the file's
+    /// bf16 weight is `dequant(Q(W))`). That tensor and the fused `B` are
+    /// freed before this returns. The host copies of the `B` parts are
+    /// `out * r` f32, uncharged, and gone before the base is read.
+    pub fn merged_bf16<B: Backend>(
+        &self,
+        spec: &Qwen35Spec,
+        site: &LoraSite<Tensor>,
+        config: &LoraConfig,
+        file: &SafeTensors<'_>,
+        backend: &B,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "qwen35::merged_bf16";
+        let rank = config.rank();
+        let out: usize = self.out_parts.iter().sum();
+        if site.b.len() != self.out_parts.len() {
+            return Err(refuse(
+                OP,
+                format!(
+                    "{}: {} B parts for {} output parts",
+                    self.name,
+                    site.b.len(),
+                    self.out_parts.len()
+                ),
+            ));
+        }
+        for (b, &rows) in site.b.iter().zip(&self.out_parts) {
+            if b.shape() != [rows, rank] {
+                return Err(refuse(
+                    OP,
+                    format!(
+                        "{}: B part {:?}, expected [{rows}, {rank}]",
+                        self.name,
+                        b.shape()
+                    ),
+                ));
+            }
+        }
+        let query_rows = spec.q_heads * spec.head_dim;
+        if self.kind == LoraKind::AttnQ && self.out_parts.iter().any(|&rows| rows != query_rows) {
+            return Err(refuse(
+                OP,
+                format!(
+                    "{}: parts {:?} are not the spec's {query_rows} rows each",
+                    self.name, self.out_parts
+                ),
+            ));
+        }
+        let info = file
+            .info(&self.name)
+            .map_err(|e| refuse(OP, format!("{}: {e}", self.name)))?;
+        let got: Vec<usize> = info.shape.iter().map(|&n| n as usize).collect();
+        if got != [out, self.in_features] {
+            return Err(refuse(
+                OP,
+                format!(
+                    "{}: shape {got:?}, expected [{out}, {}]",
+                    self.name, self.in_features
+                ),
+            ));
+        }
+        let storage = match info.dtype {
+            StDtype::BF16 => DType::Bf16,
+            _ => DType::F32,
+        };
+        let budget = backend.budget().clone();
+        let fused_b = {
+            let parts = site
+                .b
+                .iter()
+                .map(Tensor::to_f32_vec)
+                .collect::<Result<Vec<_>, _>>()?;
+            Tensor::from_f32(&self.fuse_b(spec, &parts, rank), &[out, rank], &budget)?
+        };
+        let weight = load_runs(
+            file,
+            &self.name,
+            storage,
+            &[out, self.in_features],
+            &[(0, out * self.in_features)],
+            &budget,
+        )?;
+        Ok(crate::lora::merged_weight_bf16(
+            config, &weight, &site.a, &fused_b, backend,
+        )?)
+    }
 }
 
 /// Every [`LoraTarget`] of `spec` for `kinds`, layer by layer in the order
@@ -916,6 +1014,24 @@ impl<S> Qwen35Lora<S> {
         })
     }
 
+    /// [`Qwen35Lora::slot_mut`] by shared reference.
+    pub fn slot(&self, layer: usize, kind: LoraKind) -> Option<&Option<S>> {
+        let l = self.layers.get(layer)?;
+        Some(match (&l.mixer, kind) {
+            (MixerLora::GatedDeltaNet { qkv, .. }, LoraKind::GdnQkv) => qkv,
+            (MixerLora::GatedDeltaNet { z, .. }, LoraKind::GdnZ) => z,
+            (MixerLora::GatedDeltaNet { out, .. }, LoraKind::GdnOut) => out,
+            (MixerLora::Attention { q, .. }, LoraKind::AttnQ) => q,
+            (MixerLora::Attention { k, .. }, LoraKind::AttnK) => k,
+            (MixerLora::Attention { v, .. }, LoraKind::AttnV) => v,
+            (MixerLora::Attention { o, .. }, LoraKind::AttnO) => o,
+            (_, LoraKind::MlpGate) => &l.gate,
+            (_, LoraKind::MlpUp) => &l.up,
+            (_, LoraKind::MlpDown) => &l.down,
+            _ => return None,
+        })
+    }
+
     /// Every filled slot, layer by layer: a mixer's slots in
     /// [`LORA_KINDS`] order, then gate, up, down. This is the order of
     /// [`lora_targets`].
@@ -984,6 +1100,64 @@ impl Qwen35Lora<LoraSite<Tensor>> {
             *slot = Some(site);
         }
         Ok(lora)
+    }
+
+    /// [`LoraTarget::merged_bf16`] for every target, in `targets` order, each
+    /// handed to `sink` under its Hugging Face name and then dropped by the
+    /// sink or kept by it: a sink that writes and drops holds one merged
+    /// weight at a time. Nothing in `self` or `file` changes.
+    ///
+    /// Refused before anything is read: a layer count other than the spec's,
+    /// a duplicate target, a target whose slot is empty, and an adapter in a
+    /// slot no target names (it would be silently left out of the export). A
+    /// failure, or an error from `sink`, stops the run; tensors already
+    /// handed to `sink` stay with it.
+    pub fn merge_bf16<B: Backend>(
+        &self,
+        spec: &Qwen35Spec,
+        targets: &[LoraTarget],
+        config: &LoraConfig,
+        file: &SafeTensors<'_>,
+        backend: &B,
+        sink: &mut impl FnMut(&str, Tensor) -> Result<(), OjasError>,
+    ) -> Result<(), OjasError> {
+        const OP: &str = "qwen35::merge_bf16";
+        if self.layers.len() != spec.layers.len() {
+            return Err(refuse(
+                OP,
+                format!(
+                    "{} adapter layers for a spec of {}",
+                    self.layers.len(),
+                    spec.layers.len()
+                ),
+            ));
+        }
+        let mut sites = Vec::with_capacity(targets.len());
+        for (i, t) in targets.iter().enumerate() {
+            if targets[..i].iter().any(|u| u.name == t.name) {
+                return Err(refuse(OP, format!("{} is listed twice", t.name)));
+            }
+            let site = self
+                .slot(t.layer, t.kind)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| refuse(OP, format!("{}: its adapter slot is empty", t.name)))?;
+            sites.push(site);
+        }
+        if self.sites().len() != targets.len() {
+            return Err(refuse(
+                OP,
+                format!(
+                    "{} adapters for {} targets: an adapter would be left out",
+                    self.sites().len(),
+                    targets.len()
+                ),
+            ));
+        }
+        for (t, site) in targets.iter().zip(sites) {
+            let merged = t.merged_bf16(spec, site, config, file, backend)?;
+            sink(&t.name, merged)?;
+        }
+        Ok(())
     }
 }
 
