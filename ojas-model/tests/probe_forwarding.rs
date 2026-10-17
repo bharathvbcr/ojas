@@ -3,12 +3,16 @@
 //! not the trait defaults.
 
 mod common;
+#[path = "reach/mod.rs"]
+mod reach;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use common::Probe;
 use ojas_core::{forward_backend_methods, Backend, BackendId, Budget, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
+use reach::{call, op_names, Reach};
 
 /// Forwards every method to `inner` except
 /// `causal_sdpa_backward_recompute`, which `Spy` overrides.
@@ -109,4 +113,31 @@ fn the_probe_runs_the_cpu_sigmoid_forward() {
         .to_f32_vec()
         .unwrap();
     assert_eq!(got, want);
+}
+
+/// Card ft-fe7dcee6 criterion 4: every op reaches the wrapped backend
+/// through `Probe` exactly once, and is counted by the probe. `Reach` answers
+/// each op with an error naming it, so a method that is compiled out, answered
+/// locally or forwarded to another op fails here, whatever the source looks
+/// like (a source scan accepts `#[cfg(any())]` and a call inside a comment).
+#[test]
+fn probe_reaches_the_wrapped_backend_once_per_op() {
+    let reach = Arc::new(Reach::new());
+    let probe = Probe::new(&reach);
+    for name in op_names() {
+        let before = (reach.count(name), reach.total());
+        let err = call(&probe, name)
+            .unwrap()
+            .expect_err("Reach answers every op with an error");
+        assert!(
+            err.to_string().contains(&format!("reached:{name}")),
+            "Probe/{name} did not reach the inner op: {err}"
+        );
+        assert_eq!(
+            (reach.count(name), reach.total()),
+            (before.0 + 1, before.1 + 1),
+            "Probe/{name}: wrong inner call count"
+        );
+        assert_eq!(probe.count(name), 1, "Probe did not count {name}");
+    }
 }
