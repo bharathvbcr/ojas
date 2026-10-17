@@ -92,6 +92,7 @@ pub fn rel(got: &[f32], want: &[f64]) -> f64 {
 
 /// One measurement's fields, printed as a JSON object on a line starting
 /// `ROW `.
+#[derive(Clone)]
 pub struct Row {
     fields: Vec<(&'static str, String)>,
 }
@@ -103,6 +104,11 @@ impl Row {
 
     pub fn num(&mut self, k: &'static str, v: u64) {
         self.fields.push((k, v.to_string()));
+    }
+
+    /// A real number, printed with six decimals.
+    pub fn real(&mut self, k: &'static str, v: f64) {
+        self.fields.push((k, format!("{v:.6}")));
     }
 
     pub fn text(&mut self, k: &'static str, v: &str) {
@@ -144,4 +150,91 @@ pub fn refused(mut row: Row, phase: &str, err: impl std::fmt::Debug) -> ! {
     row.text("error", &format!("{err:?}"));
     row.print();
     panic!("{phase}: {err:?}");
+}
+
+/// This process's `phys_footprint` bytes: the figure memguard and
+/// `tools/mac_heavy.sh` act on (Metal allocations are in it, `ps` RSS does
+/// not show them). `now` is the current value, `lifetime_max` the process's
+/// high-water mark since it started (`ri_lifetime_max_phys_footprint`).
+#[derive(Clone, Copy, Debug)]
+pub struct Footprint {
+    pub now: u64,
+    pub lifetime_max: u64,
+}
+
+/// `rusage_info_v4` from `<sys/resource.h>`: a 16-byte uuid, then 35 `u64`
+/// fields. The two read here sit at 0-based positions 7 and 28 of those 35,
+/// the order `Lappi-decision/tools/mac_footprint.py` lists.
+#[repr(C)]
+struct RusageInfoV4 {
+    uuid: [u8; 16],
+    fields: [u64; 35],
+}
+
+const RUSAGE_INFO_V4: i32 = 4;
+const PHYS_FOOTPRINT: usize = 7;
+const LIFETIME_MAX_PHYS_FOOTPRINT: usize = 28;
+
+extern "C" {
+    fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV4) -> i32;
+}
+
+/// This process's [`Footprint`], or the `proc_pid_rusage` status that
+/// refused it: a footprint that could not be read is never reported as 0.
+pub fn footprint() -> Result<Footprint, i32> {
+    let mut info = RusageInfoV4 {
+        uuid: [0; 16],
+        fields: [0; 35],
+    };
+    // SAFETY: `info` is a live, writable `rusage_info_v4`-sized buffer, and
+    // flavor 4 is the layout `RusageInfoV4` mirrors.
+    let status = unsafe {
+        proc_pid_rusage(
+            std::process::id() as i32,
+            RUSAGE_INFO_V4,
+            std::ptr::addr_of_mut!(info),
+        )
+    };
+    if status != 0 {
+        return Err(status);
+    }
+    Ok(Footprint {
+        now: info.fields[PHYS_FOOTPRINT],
+        lifetime_max: info.fields[LIFETIME_MAX_PHYS_FOOTPRINT],
+    })
+}
+
+/// [`footprint`], or a refusal row from `row` if it cannot be read.
+pub fn footprint_or_refuse(row: &Row) -> Footprint {
+    footprint().unwrap_or_else(|code| {
+        refused(
+            row.clone(),
+            "footprint",
+            format!("proc_pid_rusage status {code}"),
+        )
+    })
+}
+
+/// The one `.safetensors` file of a snapshot whose `weights_path` is an
+/// index (`model.safetensors.index.json`): `SafeTensors::open` reads a
+/// single file, not an index. A snapshot with another number of shards is
+/// refused by name, not read partially.
+pub fn single_weights_file(weights_path: &Path) -> PathBuf {
+    if weights_path.extension().is_none_or(|e| e != "json") {
+        return weights_path.to_path_buf();
+    }
+    let dir = weights_path.parent().expect("index has a directory");
+    let shards: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "safetensors"))
+        .collect();
+    assert_eq!(
+        shards.len(),
+        1,
+        "{} names {} shard files; this arm reads a single-file snapshot",
+        weights_path.display(),
+        shards.len()
+    );
+    shards[0].clone()
 }
