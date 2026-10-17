@@ -247,20 +247,49 @@ Without the recycle, the same staging reached 52.44 GB and faulted, 4 of 4
 runs. These numbers are from the gradient read after one step at 128 tokens
 with `Numerics::ExactF32`.
 
-Not measured:
+Retired, not measured:
 
-- a 2B `save_state` and `load_state`. They are not measurable under this
+- a 2B `save_state` and `load_state` on the provider. Fable retired the row on
+  2026-10-15 (gp-qwen35-2b-metal-tape-run). It is not measurable under this
   Mac's 32 GiB memory guard: 30.13 GB resident plus about 7.5 GB of staging
-  per table. The row was retired on 2026-10-15 (Fable,
-  gp-qwen35-2b-metal-tape-run); the LoRA run's checkpoint is the adapters,
-  measured on the Tape under gp-ft-trainer-loop. The state format stays
-  pinned at tiny scale (`gpu_tiny_state_round_trip_is_bit_exact`);
-- `Bf16Operands`;
-- longer sequences.
+  per table. The LoRA run's checkpoint is the adapters, measured on the Tape
+  under gp-ft-trainer-loop. The state format stays pinned at tiny scale
+  (`gpu_tiny_state_round_trip_is_bit_exact`).
 
-Any of these that ends over the working set gets the refusal, not a
-timeout. Tessl reads that take one entry at a time would remove the
-staging, and the headroom question with it.
+Not measured to completion:
+
+- the provider at `Precision::Bf16` with `Numerics::Bf16Operands`. At
+  T = 2,048 it reached 32.98 GB after the forward and was then stopped in the
+  backward, and at T = 9,638 it printed nothing past open (30.13 GB). The
+  memguard (`-cap-gib 32`) is the inferred cause, not a Metal failure
+  (`bench/results/2026-10-11-bf16-frozen-base/README.md`, Provider rows).
+- the provider at T = 9,638 at either precision, for the same reason.
+
+Measured on the Tape, not the provider, at the longer sequences (Qwen3.5-2B
+weights, identical `text_config` to 2B-Base; every layer checkpointed except
+the last row):
+
+| Row | T | Device peak | Source |
+| --- | --: | --: | --- |
+| Full-gradient step, f32 linears | 2,048 | 19.14 GB | `bench/results/2026-10-11-bf16-frozen-base/README.md`, Tape rows |
+| Full-gradient step, bf16 linears | 2,048 | 16.37 GB | same |
+| Full-gradient step, f32 linears | 9,638 | 22.73 GB | same |
+| Full-gradient step, bf16 linears | 9,638 | 18.97 GB | same |
+| Real 2B-Base step against transformers | 128 | 17.60 GB | `bench/results/2026-10-15-qwen35-2b-tape-gate/README.md` |
+| LoRA step, 2B-Base, rank 16, checkpointing on | 2,048 | 6.65 GB (335.9 tokens/s) | `bench/results/2026-10-17-lora-step/README.md` |
+| LoRA step, 2B-Base, rank 16, checkpointing on | 9,638 | 13.10 GB (261.6 tokens/s) | same |
+| LoRA step, 2B-Base, rank 16, checkpointing off | 9,638 | refused at the forward (`CapacityExceeded`, 28 GiB budget) | `bench/results/2026-10-17-lora-step/rows.jsonl`, row 5 |
+
+The full-gradient rows over-count a LoRA step by the frozen base's gradients,
+and the 2026-10-15 row is the 128-token gate, not a long-sequence row. The
+LoRA rows also carry 0.8B-Base: 3.94 GB at T = 2,048 and 7.83 GB at
+T = 9,638 (same README). They record the exact device peak and the host
+footprint (14.31 GB for 2B-Base at T = 9,638), and no column for the
+per-call bf16 widening transient.
+
+Anything that ends over the working set gets the refusal, not a timeout.
+Tessl reads that take one entry at a time would remove the staging, and the
+headroom question with it.
 
 ## Threading
 
