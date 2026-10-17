@@ -38,16 +38,16 @@ fn main() {
             tessl_kernels.display()
         );
     }
-    let shared_gelu = tessl_kernels.join("gelu.h");
-    if !shared_gelu.is_file() {
+    let shared_act = tessl_kernels.join("act.h");
+    if !shared_act.is_file() {
         panic!(
-            "required Tessl shared GELU header missing: {}",
-            shared_gelu.display()
+            "required Tessl shared activation header (act.h) missing: {}",
+            shared_act.display()
         );
     }
     // This is outside gemma-metal's own `kernels/` tree, so Cargo cannot infer
     // the transitive include dependency from the source file.
-    println!("cargo:rerun-if-changed={}", shared_gelu.display());
+    println!("cargo:rerun-if-changed={}", shared_act.display());
 
     if env::var_os("GEMMA_METAL_SKIP_AOT").is_some() {
         println!("cargo:warning=GEMMA_METAL_SKIP_AOT set; skipping gemma metallib AOT");
