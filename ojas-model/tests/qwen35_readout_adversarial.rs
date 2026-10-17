@@ -428,14 +428,13 @@ mod metal {
         }
     }
 
-    /// BREAK (low): causality holds for finite padding only. A NaN embedding
-    /// row at a padding id turns the real positions of its row NaN on Metal
-    /// (probabilities of exactly 0 times a NaN value row is NaN), silently,
-    /// while the CPU backend refuses the same input (`NonFinite` in
-    /// `embedding_forward`). The Metal embedding does not check its output.
+    /// A NaN embedding row at a padding id fails closed on Metal as on CPU:
+    /// `embedding_forward` records the fault, and it surfaces as `NonFinite`
+    /// naming the op at the first `Backend::download` (a sync point) the step
+    /// reads through. Raw `Tensor::to_host` would not report it.
     #[test]
-    #[ignore = "BREAK: on Metal a NaN padding embedding row makes the real positions of its row NaN, no error; CPU fails closed (card ft-ab2f1daf criterion 6)"]
-    fn a_nan_padding_row_does_not_reach_the_readout_on_metal() {
+    #[should_panic(expected = "NonFinite")]
+    fn a_nan_padding_row_fails_closed_on_metal() {
         let Some(m) = device() else { return };
         let up = |t: &Tensor| m.upload(t).unwrap();
         leak_check(
@@ -448,8 +447,8 @@ mod metal {
     }
 
     #[test]
-    #[ignore = "BREAK: as the NaN case, with +inf (card ft-ab2f1daf criterion 6)"]
-    fn an_infinite_padding_row_does_not_reach_the_readout_on_metal() {
+    #[should_panic(expected = "NonFinite")]
+    fn an_infinite_padding_row_fails_closed_on_metal() {
         let Some(m) = device() else { return };
         let up = |t: &Tensor| m.upload(t).unwrap();
         leak_check(

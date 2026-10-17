@@ -27,10 +27,17 @@ use ojas_model::qwen35::{
 };
 use ojas_model::{ActivationCheckpoint, Graph, DEFAULT_CE_CHUNK};
 
-use super::lora::to_vec;
 use super::*;
 
 pub const ANSWERS: usize = 17;
+
+/// A tape value or gradient on the host, read through `Backend::download`: on
+/// a GPU backend that is a sync point, so a non-finite value an op produced
+/// surfaces here as `NonFinite` naming the op. Raw `Tensor::to_host` is not
+/// a fault point on Metal. On CPU `download` is `to_host`.
+pub fn read<B: Backend>(tape: &Tape<B>, t: &Tensor) -> Vec<f32> {
+    tape.backend().download(t).unwrap().to_f32_vec().unwrap()
+}
 
 pub fn fixture() -> SafeTensors<'static> {
     let path: PathBuf = dir()
@@ -167,7 +174,7 @@ pub fn step<B: Backend + Clone>(
         activations,
     )
     .unwrap();
-    let hidden = to_vec(tape.value(h).unwrap());
+    let hidden = read(&tape, tape.value(h).unwrap());
     let zeros = Tensor::from_f32(&vec![0.0; hidden.len()], &[batch, seq, s.hidden], &bud).unwrap();
     let probe = Graph::param(&mut tape, &up(&zeros)).unwrap();
     let hp = Graph::add(&mut tape, &h, &probe).unwrap();
@@ -223,13 +230,14 @@ pub fn step<B: Backend + Clone>(
         .unwrap()
     });
     tape.backward(loss).unwrap();
-    let scalar = |tape: &Tape<B>, v| to_vec(tape.value(v).unwrap())[0];
+    let scalar = |tape: &Tape<B>, v| read(tape, tape.value(v).unwrap())[0];
     let param_grads = match (base, &lora_fwd) {
         (Base::Trainable, _) => vars
             .values()
             .into_iter()
             .map(|v| {
-                to_vec(
+                read(
+                    &tape,
                     tape.grad(*v)
                         .expect("a trainable base parameter has a gradient"),
                 )
@@ -240,7 +248,7 @@ pub fn step<B: Backend + Clone>(
             .sites()
             .iter()
             .flat_map(|site| std::iter::once(&site.a).chain(&site.b))
-            .map(|v| to_vec(tape.grad(*v).expect("an adapter has a gradient")))
+            .map(|v| read(&tape, tape.grad(*v).expect("an adapter has a gradient")))
             .collect(),
         _ => {
             for v in vars.values() {
@@ -254,9 +262,9 @@ pub fn step<B: Backend + Clone>(
         loss_each: each.iter().map(|&v| scalar(&tape, v)).collect(),
         full_loss: full.map_or(f32::NAN, |v| scalar(&tape, v)),
         hidden,
-        rows: to_vec(tape.value(picked).unwrap()),
-        dh: to_vec(tape.grad(probe).expect("dH")),
-        d17_grad: to_vec(tape.grad(d17).expect("dD17")),
+        rows: read(&tape, tape.value(picked).unwrap()),
+        dh: read(&tape, tape.grad(probe).expect("dH")),
+        d17_grad: read(&tape, tape.grad(d17).expect("dD17")),
         param_grads,
     }
 }
@@ -342,7 +350,7 @@ pub fn check_gather<B: Backend + Clone>(backend: B, up: &impl Fn(&Tensor) -> Ten
     let upstream = Graph::frozen(&mut tape, &up(&up_host)).unwrap();
     let prod = Graph::mul(&mut tape, &pick, &upstream).unwrap();
     tape.backward(prod).unwrap();
-    let out = to_vec(tape.value(pick).unwrap());
+    let out = read(&tape, tape.value(pick).unwrap());
     let want = f32s(&f, "gather.out");
     assert_eq!(out.len(), batch * d);
     assert!(
@@ -351,7 +359,7 @@ pub fn check_gather<B: Backend + Clone>(backend: B, up: &impl Fn(&Tensor) -> Ten
             .all(|(a, b)| a.to_bits() == b.to_bits()),
         "forward"
     );
-    let dh = to_vec(tape.grad(h).expect("dH"));
+    let dh = read(&tape, tape.grad(h).expect("dH"));
     let want = f32s(&f, "gather.dh");
     assert_eq!(dh.len(), want.len());
     assert!(
@@ -387,12 +395,12 @@ pub fn check_same_position<B: Backend + Clone>(backend: B, up: &impl Fn(&Tensor)
     .unwrap();
     let prod = Graph::mul(&mut tape, &pick, &w).unwrap();
     tape.backward(prod).unwrap();
-    let got = to_vec(tape.value(pick).unwrap());
+    let got = read(&tape, tape.value(pick).unwrap());
     for b in 0..batch {
         let at = (b * seq + 5) * d;
         assert_eq!(got[b * d..(b + 1) * d], vals[at..at + d], "row {b}");
     }
-    let dh = to_vec(tape.grad(h).unwrap());
+    let dh = read(&tape, tape.grad(h).unwrap());
     for b in 0..batch {
         for t in 0..seq {
             let row = &dh[(b * seq + t) * d..(b * seq + t + 1) * d];
@@ -497,7 +505,7 @@ pub fn check_full_vocab_is_inert<B: Backend + Clone>(backend: B, up: &impl Fn(&T
     let class = Tensor::from_u32(&class, &[4], &bud).unwrap();
     let loss = Graph::lin_ce(&mut tape, &rows, &table, &class, None, DEFAULT_CE_CHUNK).unwrap();
     let e = rel(
-        to_vec(tape.value(loss).unwrap())[0],
+        read(&tape, tape.value(loss).unwrap())[0],
         f32s(&f, "row.full_loss")[0],
     );
     eprintln!("full-vocab loss {e:.2e} relative to torch");
