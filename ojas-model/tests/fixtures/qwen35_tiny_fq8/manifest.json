@@ -1,0 +1,167 @@
+{
+  "mlx_version": "0.31.2",
+  "call": "mx.dequantize(*mx.quantize(w, group_size=64, bits=8), group_size=64, bits=8)",
+  "mode": "affine",
+  "group_size": 64,
+  "bits": 8,
+  "scale_bias_dtype": "bfloat16 (quantised from the bf16 array; asserted)",
+  "source_dir": "qwen35_tiny",
+  "quantised": [
+    {
+      "name": "model.layers.0.linear_attn.in_proj_qkv.weight",
+      "shape": [
+        768,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    },
+    {
+      "name": "model.layers.0.linear_attn.in_proj_z.weight",
+      "shape": [
+        256,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    },
+    {
+      "name": "model.layers.0.linear_attn.out_proj.weight",
+      "shape": [
+        64,
+        256
+      ],
+      "in_features": 256,
+      "max_abs_error": 0.001953125,
+      "changed": true
+    },
+    {
+      "name": "model.layers.0.mlp.down_proj.weight",
+      "shape": [
+        64,
+        128
+      ],
+      "in_features": 128,
+      "max_abs_error": 0.001953125,
+      "changed": true
+    },
+    {
+      "name": "model.layers.0.mlp.gate_proj.weight",
+      "shape": [
+        128,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    },
+    {
+      "name": "model.layers.0.mlp.up_proj.weight",
+      "shape": [
+        128,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.0029296875,
+      "changed": true
+    },
+    {
+      "name": "model.layers.1.mlp.down_proj.weight",
+      "shape": [
+        64,
+        128
+      ],
+      "in_features": 128,
+      "max_abs_error": 0.001953125,
+      "changed": true
+    },
+    {
+      "name": "model.layers.1.mlp.gate_proj.weight",
+      "shape": [
+        128,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    },
+    {
+      "name": "model.layers.1.mlp.up_proj.weight",
+      "shape": [
+        128,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    },
+    {
+      "name": "model.layers.1.self_attn.k_proj.weight",
+      "shape": [
+        256,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    },
+    {
+      "name": "model.layers.1.self_attn.o_proj.weight",
+      "shape": [
+        64,
+        512
+      ],
+      "in_features": 512,
+      "max_abs_error": 0.00146484375,
+      "changed": true
+    },
+    {
+      "name": "model.layers.1.self_attn.q_proj.weight",
+      "shape": [
+        1024,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    },
+    {
+      "name": "model.layers.1.self_attn.v_proj.weight",
+      "shape": [
+        256,
+        64
+      ],
+      "in_features": 64,
+      "max_abs_error": 0.00390625,
+      "changed": true
+    }
+  ],
+  "copied_byte_identical": [
+    "model.embed_tokens.weight",
+    "model.layers.0.input_layernorm.weight",
+    "model.layers.0.linear_attn.A_log",
+    "model.layers.0.linear_attn.conv1d.weight",
+    "model.layers.0.linear_attn.dt_bias",
+    "model.layers.0.linear_attn.in_proj_a.weight",
+    "model.layers.0.linear_attn.in_proj_b.weight",
+    "model.layers.0.linear_attn.norm.weight",
+    "model.layers.0.post_attention_layernorm.weight",
+    "model.layers.1.input_layernorm.weight",
+    "model.layers.1.post_attention_layernorm.weight",
+    "model.layers.1.self_attn.k_norm.weight",
+    "model.layers.1.self_attn.q_norm.weight",
+    "model.norm.weight"
+  ],
+  "input_sha256": {
+    "config.json": "8e42fc45140c909c2ec5b1a462ce5838966a921d3a4c4cbb82602edce56f1e4a",
+    "model.safetensors": "79b7ba2ce8cdfcf72ca20ea9e159390141b3d7450a904323574b7976c381774f",
+    "reference.safetensors": "1472348865d9cd8bc38b715ea3755c6315673d02397030d0b7e583cdbc7f1500"
+  },
+  "output_sha256": {
+    "config.json": "8e42fc45140c909c2ec5b1a462ce5838966a921d3a4c4cbb82602edce56f1e4a",
+    "model.safetensors": "3c9ce96861d8d2cbfaf011e5648f4cd33ae7cfa256791b45df6d3bf4bac69d29",
+    "reference.safetensors": "319dbc2277b7918487cf68f36638f101785b5d04dcedf737937b688be7ed37b2"
+  }
+}
