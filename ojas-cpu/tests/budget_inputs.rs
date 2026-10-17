@@ -12,7 +12,10 @@
 //! sees only what the op itself charges. The backend is single-threaded
 //! (`CpuBackend::new`), so the per-task terms are one task's.
 
-use ojas_core::{Backend, Budget, CeChunk, CeGrads, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{
+    Backend, Budget, CeChunk, CeGrads, GdnInputs, OjasError, Tensor, GDN_CHECKPOINT_TOKENS,
+    RMS_NORM_EPS,
+};
 use ojas_cpu::CpuBackend;
 
 const F32: u64 = 4;
@@ -44,6 +47,12 @@ fn cases(inputs: &Budget) -> Vec<Case> {
     let qkv = f32t(inputs, 32, &[1, 2, 4, 4]);
     let lin_x = f32t(inputs, 32, &[4, 8]);
     let lin_w = f32t(inputs, 24, &[3, 8]);
+    let conv_x = f32t(inputs, 40, &[2, 5, 4]);
+    let conv_w = f32t(inputs, 12, &[4, 3]);
+    let rope_x = f32t(inputs, 64, &[1, 4, 2, 8]);
+    let rope_cs = f32t(inputs, 16, &[4, 4]);
+    let decay_a = f32t(inputs, 32, &[8, 4]);
+    let decay_h = f32t(inputs, 4, &[4]);
     vec![
         // Written in place, row chunk by row chunk, into the output tensor
         // (`scoped::rows_into`). Until 2026-10-02 the peak was the output
@@ -126,6 +135,84 @@ fn cases(inputs: &Budget) -> Vec<Case> {
             run: {
                 let q = qkv.clone();
                 Box::new(move |cpu| cpu.causal_sdpa_forward(&q, &q, &q, None).map(|(y, _)| y))
+            },
+        },
+        // The hybrid-layer ops (`ojas-cpu/src/hybrid.rs`) are row passes
+        // written in place into their output (`validate::fill_rows`), and
+        // none keeps a per-row scratch vector: the RMS scale is a local
+        // scalar and the sigmoid and the decay are pointwise. The peak is
+        // the output alone.
+        Case {
+            name: "causal_conv1d_silu_forward",
+            input_bytes: (40 + 12) * F32,
+            output_bytes: 40 * F32,
+            peak_bytes: 40 * F32,
+            run: {
+                let (x, w) = (conv_x.clone(), conv_w.clone());
+                Box::new(move |cpu| cpu.causal_conv1d_silu_forward(&x, &w))
+            },
+        },
+        // Unlike `rms_norm_forward` there is no rstd vector to charge.
+        Case {
+            name: "gated_rms_norm_forward",
+            input_bytes: (64 + 64 + 16) * F32,
+            output_bytes: 64 * F32,
+            peak_bytes: 64 * F32,
+            run: {
+                let (x, z, w) = (x.clone(), y.clone(), w16.clone());
+                Box::new(move |cpu| cpu.gated_rms_norm_forward(&x, &z, &w, RMS_NORM_EPS))
+            },
+        },
+        Case {
+            name: "rope_partial_forward",
+            input_bytes: (64 + 16 + 16) * F32,
+            output_bytes: 64 * F32,
+            peak_bytes: 64 * F32,
+            run: {
+                let (x, cs) = (rope_x.clone(), rope_cs.clone());
+                Box::new(move |cpu| cpu.rope_partial_forward(&x, &cs, &cs))
+            },
+        },
+        Case {
+            name: "rope_partial_backward",
+            input_bytes: (64 + 16 + 16) * F32,
+            output_bytes: 64 * F32,
+            peak_bytes: 64 * F32,
+            run: {
+                let (gy, cs) = (rope_x.clone(), rope_cs.clone());
+                Box::new(move |cpu| cpu.rope_partial_backward(&gy, &cs, &cs))
+            },
+        },
+        Case {
+            name: "sigmoid_forward",
+            input_bytes: 64 * F32,
+            output_bytes: 64 * F32,
+            peak_bytes: 64 * F32,
+            run: {
+                let x = x.clone();
+                Box::new(move |cpu| cpu.sigmoid_forward(&x))
+            },
+        },
+        Case {
+            name: "sigmoid_backward",
+            input_bytes: 128 * F32,
+            output_bytes: 64 * F32,
+            peak_bytes: 64 * F32,
+            run: {
+                let (x, gy) = (x.clone(), y.clone());
+                Box::new(move |cpu| cpu.sigmoid_backward(&x, &gy))
+            },
+        },
+        // The per-head rate `-exp(a_log)` is a `heads`-long host vector
+        // (4 floats here) that is not charged; the output alone is.
+        Case {
+            name: "gdn_log_decay_forward",
+            input_bytes: (32 + 4 + 4) * F32,
+            output_bytes: 32 * F32,
+            peak_bytes: 32 * F32,
+            run: {
+                let (a, al, dt) = (decay_a.clone(), decay_h.clone(), decay_h.clone());
+                Box::new(move |cpu| cpu.gdn_log_decay_forward(&a, &al, &dt))
             },
         },
         // `[4, 8] · [3, 8]ᵀ` is 96 multiply-adds, under the Fast whole-call
@@ -371,6 +458,142 @@ fn fused_cross_entropy_charges_its_gradients_and_tile_scratch_only() {
         (544 + 284) * F32,
         545 * F32,
         |cpu| cpu.linear_cross_entropy_mean(&x, &w, &t, None, chunk, CeGrads::BOTH),
+    );
+}
+
+/// The conv backward writes `grad_input` (`[2, 5, 4]`, 40 floats) and
+/// `grad_weight` (`[4, 3]`, 12) into their output tensors and charges, beside
+/// them, `da = gy * silu'(a)` (one value per input, 40 floats) and the
+/// weight gradient's tap-major sums (`K * channels in the piece` = 3 * 4 =
+/// 12 floats; one thread and 4 channels is one piece), the two terms the
+/// kernel documents (`hybrid.rs`, `conv1d_silu_backward`).
+#[test]
+fn conv1d_backward_charges_its_two_gradients_da_and_tap_sums_only() {
+    let inputs = Budget::new(1 << 20);
+    let x = f32t(&inputs, 40, &[2, 5, 4]);
+    let w = f32t(&inputs, 12, &[4, 3]);
+    let gy = f32t(&inputs, 40, &[2, 5, 4]);
+    let outputs = (40 + 12) * F32;
+    exact_peak(
+        "causal_conv1d_silu_backward",
+        outputs + (40 + 3 * 4) * F32,
+        outputs,
+        |cpu| cpu.causal_conv1d_silu_backward(&x, &w, &gy),
+    );
+}
+
+/// The gated RMSNorm backward writes `dx` and `dz` (`[4, 16]`, 64 floats
+/// each) and `dw` (16) into their output tensors and holds one `rstd` per
+/// row (4 floats) while the row pass runs (`gated_rms_backward`'s
+/// `room_for(rows)`).
+#[test]
+fn gated_rms_backward_charges_its_three_gradients_and_one_rstd_per_row_only() {
+    let inputs = Budget::new(1 << 20);
+    let x = f32t(&inputs, 64, &[4, 16]);
+    let z = f32t(&inputs, 64, &[4, 16]);
+    let w = f32t(&inputs, 16, &[16]);
+    let gy = f32t(&inputs, 64, &[4, 16]);
+    let outputs = (64 + 64 + 16) * F32;
+    exact_peak(
+        "gated_rms_norm_backward",
+        outputs + 4 * F32,
+        outputs,
+        |cpu| cpu.gated_rms_norm_backward(&x, &z, &w, &gy, RMS_NORM_EPS),
+    );
+}
+
+/// The decay backward writes `da` (`[8, 4]`, 32 floats), `da_log` and
+/// `ddt_bias` (4 each) and charges nothing else.
+#[test]
+fn gdn_log_decay_backward_charges_its_three_gradients_only() {
+    let inputs = Budget::new(1 << 20);
+    let a = f32t(&inputs, 32, &[8, 4]);
+    let h = f32t(&inputs, 4, &[4]);
+    let gy = f32t(&inputs, 32, &[8, 4]);
+    let outputs = (32 + 4 + 4) * F32;
+    exact_peak("gdn_log_decay_backward", outputs, outputs, |cpu| {
+        cpu.gdn_log_decay_backward(&a, &h, &h, &gy)
+    });
+}
+
+/// `B = 1, T = 5, H = 2, Dk = Dv = 4`, so `rows = B * T * H = 10`, one
+/// 64-token checkpoint chunk, and a per-head state of `Dk * Dv = 16`.
+struct Gdn {
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    g: Tensor,
+    beta: Tensor,
+    s0: Tensor,
+}
+
+impl Gdn {
+    fn new(inputs: &Budget) -> Self {
+        Self {
+            q: f32t(inputs, 40, &[1, 5, 2, 4]),
+            k: f32t(inputs, 40, &[1, 5, 2, 4]),
+            v: f32t(inputs, 40, &[1, 5, 2, 4]),
+            g: f32t(inputs, 10, &[1, 5, 2]),
+            beta: f32t(inputs, 10, &[1, 5, 2]),
+            s0: f32t(inputs, 32, &[1, 2, 4, 4]),
+        }
+    }
+
+    fn inputs(&self) -> GdnInputs<'_> {
+        GdnInputs {
+            q: &self.q,
+            k: &self.k,
+            v: &self.v,
+            g: &self.g,
+            beta: &self.beta,
+            initial_state: Some(&self.s0),
+        }
+    }
+}
+
+/// The delta rule's forward writes the output (`[1, 5, 2, 4]`, 40 floats),
+/// the final state (32) and the checkpoints (`[1, 2, 1, 4, 4]`, 32) into
+/// their tensors and holds, from `gdn::forward`'s own sum: the normalized q
+/// and k (`rows * 2 * Dk` = 80 floats), the head-major output because H > 1
+/// (`rows * Dv` = 40) and one task's state, `u` and `delta`
+/// (`Dk * Dv + 2 * Dv` = 24).
+#[test]
+fn gdn_forward_charges_its_three_outputs_and_the_documented_scratch_only() {
+    let inputs = Budget::new(1 << 20);
+    let gdn = Gdn::new(&inputs);
+    let outputs = (40 + 32 + 32) * F32;
+    exact_peak(
+        "chunked_gdn_forward",
+        outputs + (80 + 40 + 24) * F32,
+        outputs,
+        |cpu| cpu.chunked_gdn_forward(gdn.inputs()),
+    );
+}
+
+/// The delta rule's backward writes dq, dk, dv (40 floats each), dg and
+/// dbeta (10 each) and the initial-state gradient (32) and holds
+/// (`gdn::backward`): `rows * (4 * Dk + Dv + 4)` = 240 floats for the
+/// normalized q and k, their norms and the head-major gradients, and one
+/// task's `(64 + 4) * Dk * Dv + 4 * Dv + 3 * Dk` = 1116 floats for a chunk of
+/// states, the running state and its gradients, and the per-token vectors.
+#[test]
+fn gdn_backward_charges_its_six_gradients_and_the_documented_scratch_only() {
+    let inputs = Budget::new(1 << 20);
+    let gdn = Gdn::new(&inputs);
+    assert_eq!(
+        GDN_CHECKPOINT_TOKENS, 64,
+        "the 1116 above assumes 64-token chunks"
+    );
+    let fwd = CpuBackend::new(inputs.clone())
+        .chunked_gdn_forward(gdn.inputs())
+        .unwrap();
+    let gy = f32t(&inputs, 40, &[1, 5, 2, 4]);
+    let outputs = (3 * 40 + 2 * 10 + 32) * F32;
+    exact_peak(
+        "chunked_gdn_backward",
+        outputs + (240 + 1116) * F32,
+        outputs,
+        |cpu| cpu.chunked_gdn_backward(gdn.inputs(), &fwd.checkpoints, &gy, None),
     );
 }
 
