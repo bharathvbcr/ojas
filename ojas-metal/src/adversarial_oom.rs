@@ -328,30 +328,52 @@ fn partial_allocations_are_released_after_the_final_refusal() {
 /// The device's documented bound for what the budget does not charge counts
 /// "dropped buffers awaiting a commit" in two buckets: bytes freed
 /// (`freed_since_wait`) and bytes allocated since the last wait
-/// (`alloc_since_wait`). A partial allocation that is then dropped on error
-/// sits in neither: it is device memory awaiting a commit that no counter
-/// sees, so the trigger that waits "before a command that would start past
-/// the memory cap" undercounts it.
+/// (`alloc_since_wait`). A partial allocation that grows the device and is
+/// then dropped on error must land in one of them, or the trigger that waits
+/// "before a command that would start past the memory cap" undercounts it.
+///
+/// `retrying` counts a failed attempt's device growth, and makes a waited
+/// commit before it retries, which recycles (and stops counting) what earlier
+/// attempts dropped. Since tessl f05e88b an allocation made while the GPU is
+/// idle also takes what was dropped straight from the deferred queue, so an
+/// attempt that asks for the sizes an earlier one dropped grows nothing and
+/// is rightly counted as 0. Each attempt here therefore asks for sizes no
+/// earlier attempt made: the last attempt's partial buffers are fresh device
+/// memory, still awaiting a commit when `retrying` returns, and must be
+/// counted.
 #[test]
 fn dropped_partial_buffers_count_toward_a_wait_trigger() {
     let (w, _waits) = worker();
     w.recycle().unwrap();
+    w.drop_pool();
     let before = {
         let b = w.book.borrow();
         b.alloc_since_wait + b.freed_since_wait
     };
+    let mut attempt = 0u32;
+    let mut last_growth = 0u64;
     let _: Res<()> = w.retrying(3 << 20, || {
-        let _a = w.rt.alloc_buffer(1 << 20)?;
-        let _b = w.rt.alloc_buffer(2 << 20)?;
+        attempt += 1;
+        // 4 + 8 MiB, then 16 + 32 MiB, then 64 + 128 MiB: no bucket repeats.
+        let small = 1usize << (20 + 2 * attempt);
+        let start = w.rt.current_allocated_bytes();
+        let _a = w.rt.alloc_buffer(small)?;
+        let _b = w.rt.alloc_buffer(small * 2)?;
+        last_growth = w.rt.current_allocated_bytes().saturating_sub(start);
         Err("newBuffer(1048576) failed".to_string())
     });
     let after = {
         let b = w.book.borrow();
         b.alloc_since_wait + b.freed_since_wait
     };
+    assert!(attempt >= 2, "retrying made {attempt} attempt(s)");
     assert!(
-        after >= before + (3 << 20),
-        "3 MiB sat on the device unaccounted: {before} -> {after}"
+        last_growth > 0,
+        "the last attempt's sizes were served without growing the device"
+    );
+    assert!(
+        after >= before + last_growth,
+        "{last_growth} fresh bytes sat on the device unaccounted: {before} -> {after}"
     );
 }
 
