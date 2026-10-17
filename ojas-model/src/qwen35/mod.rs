@@ -8,6 +8,8 @@
 //! - [`load_hf`] reads a Hugging Face checkpoint into [`Qwen35Params`],
 //!   splitting the fused tensors; [`fuse_grads`] is the inverse for
 //!   gradients ([`params`]'s docs say how each fused tensor splits).
+//!   [`load_hf_pinned`] is `load_hf` of a single file that must match an
+//!   adapter checkpoint's [`adapters::BaseIdentity`] (name and sha256).
 //! - [`forward_loss`]: the tower to the fused tied-head cross-entropy, each
 //!   layer optionally an activation-checkpointed segment.
 //! - [`forward_hidden`]: the same tower to the final norm, for a host-side
@@ -31,7 +33,7 @@ pub use forward::{
     gather_rows, LoraForward, Qwen35Tables, RightPadded,
 };
 pub use params::{
-    fuse_grads, hf_tensors, load_hf, lora_targets, AttnParams, GdnParams, HfKind, HfTensor,
+    fuse_grads, hf_tensors, load_hf, load_hf_pinned, lora_targets, AttnParams, GdnParams, HfKind, HfTensor,
     HfValues, LayerLora, LayerParams, LoraKind, LoraTarget, MixerLora, MixerParams, Qwen35Lora,
     Qwen35Params, LORA_KINDS,
 };

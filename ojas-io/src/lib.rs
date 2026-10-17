@@ -11,6 +11,9 @@
 //! built on it. [`SafeTensors::from_file`] reads a file the caller opened.
 //! [`replace_dir_with`] swaps in a whole directory; its docs give what a
 //! reader sees if the writer dies at each step.
+//!
+//! [`sha256`] is the workspace's one SHA-256 (streaming, one-shot, and
+//! [`sha256::file_sha256_hex`], a digest of a file read in bounded chunks).
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +25,7 @@ mod open;
 mod posread;
 mod replace;
 mod safetensors;
+pub mod sha256;
 #[cfg(test)]
 mod test_util;
 

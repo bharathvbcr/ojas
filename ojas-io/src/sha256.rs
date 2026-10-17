@@ -1,8 +1,15 @@
-//! SHA-256 (FIPS 180-4), streaming and one-shot.
+//! SHA-256 (FIPS 180-4), streaming and one-shot, and a bounded-memory digest
+//! of a file.
 //!
 //! Hand-rolled because ojas carries no `sha2` dependency. It is for artifact
 //! and checkpoint digests (integrity pins), not for anything secret: it makes
 //! no constant-time claim.
+
+use crate::error::IoError;
+use crate::posread::ReadAt;
+use std::fs::File;
+use std::io::{ErrorKind, Read};
+use std::path::Path;
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -155,6 +162,81 @@ pub fn sha256_hex(data: &[u8]) -> String {
     to_hex(&sha256(data))
 }
 
+/// Bytes read per call by [`file_sha256_hex`] and [`handle_sha256_hex`]: the
+/// only buffer they hold, whatever the file's size.
+pub const FILE_CHUNK_BYTES: usize = 1 << 20;
+
+/// `path` for an error message. A symbolic link also names where it
+/// resolves, so a refusal about a snapshot link says which blob it read.
+/// The resolved path is for the message only; no identity is taken from it.
+fn describe(path: &Path) -> String {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => match std::fs::canonicalize(path) {
+            Ok(resolved) => format!("{} (resolves to {})", path.display(), resolved.display()),
+            Err(_) => format!("{} (symbolic link that does not resolve)", path.display()),
+        },
+        _ => path.display().to_string(),
+    }
+}
+
+/// The SHA-256 of the regular file `file` is open on, as 64 lowercase hex
+/// characters, read from the start to end of file `FILE_CHUNK_BYTES` at a
+/// time with positioned reads (the cursor is neither used nor moved, so a
+/// caller can keep using the same handle). Anything but a regular file is
+/// refused before a byte is read, so a FIFO cannot block. A zero-length file
+/// is the digest of the empty message.
+///
+/// Hashing the handle a caller then parses closes the window between "hash
+/// the path" and "open the path" in which the file could be swapped.
+pub fn handle_sha256_hex(file: &File) -> Result<String, IoError> {
+    let meta = file
+        .metadata()
+        .map_err(|e| IoError::new(format!("metadata: {e}")))?;
+    if !meta.is_file() {
+        return Err(IoError::new("not a regular file"));
+    }
+    let mut chunk = Vec::new();
+    chunk
+        .try_reserve_exact(FILE_CHUNK_BYTES)
+        .map_err(|_| IoError::new(format!("read buffer of {FILE_CHUNK_BYTES} bytes refused")))?;
+    chunk.resize(FILE_CHUNK_BYTES, 0u8);
+    let mut reader = ReadAt { file, pos: 0 };
+    let mut hash = Sha256::new();
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => hash.update(&chunk[..n]),
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => {
+                return Err(IoError::new(format!("read at byte {}: {e}", reader.pos)));
+            }
+        }
+    }
+    Ok(to_hex(&hash.finalize()))
+}
+
+/// The SHA-256 of the file at `path` as 64 lowercase hex characters.
+///
+/// Memory is bounded by [`FILE_CHUNK_BYTES`], never the file's size. A
+/// symbolic link is followed (a Hugging Face snapshot file is one); an error
+/// about a link names the path it resolves to. A missing path, a directory
+/// and any other non-regular file are errors; a zero-length file hashes to
+/// the empty message's digest. The whole file is read once: at this module's
+/// measured throughput that is seconds per GB (see `bench/sha256_throughput.rs`).
+pub fn file_sha256_hex(path: &Path) -> Result<String, IoError> {
+    open_sha256_hex(path).map(|(_, hex)| hex)
+}
+
+/// [`file_sha256_hex`] that also hands back the handle it hashed, so a caller
+/// that goes on to parse the file reads the very bytes that were hashed (a
+/// second `open` of the path could see a different file). Same errors.
+pub fn open_sha256_hex(path: &Path) -> Result<(File, String), IoError> {
+    let file = File::open(path).map_err(|e| IoError::new(format!("{}: {e}", describe(path))))?;
+    let hex = handle_sha256_hex(&file)
+        .map_err(|e| IoError::new(format!("{}: {}", describe(path), e.detail())))?;
+    Ok((file, hex))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +345,77 @@ mod tests {
                 assert_ne!(digests[i], digests[j], "lengths {} and {}", 54 + i, 54 + j);
             }
         }
+    }
+
+    use crate::test_util::{tmp, tmp_dir};
+
+    #[test]
+    fn file_digest_equals_one_shot_around_the_chunk_size() {
+        const MIB: usize = 1 << 20;
+        assert_eq!(FILE_CHUNK_BYTES, MIB);
+        for len in [0, 1, MIB - 1, MIB, MIB + 1, 3 * MIB + 17] {
+            let data = pattern(len);
+            let file = tmp("sha-file");
+            std::fs::write(&file.0, &data).unwrap();
+            assert_eq!(
+                file_sha256_hex(&file.0).unwrap(),
+                sha256_hex(&data),
+                "len {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_length_file_is_the_empty_digest() {
+        let file = tmp("sha-empty");
+        std::fs::write(&file.0, b"").unwrap();
+        assert_eq!(file_sha256_hex(&file.0).unwrap(), EMPTY);
+    }
+
+    #[test]
+    fn missing_path_and_directory_are_refused() {
+        let dir = tmp_dir("sha-dir");
+        let missing = dir.0.join("missing");
+        let err = file_sha256_hex(&missing).unwrap_err();
+        assert!(err.detail().contains("missing"), "{err}");
+        let err = file_sha256_hex(&dir.0).unwrap_err();
+        assert!(err.detail().contains("not a regular file"), "{err}");
+    }
+
+    #[test]
+    fn handle_digest_ignores_and_keeps_the_cursor() {
+        let data = pattern(5000);
+        let file = tmp("sha-cursor");
+        std::fs::write(&file.0, &data).unwrap();
+        let mut open = File::open(&file.0).unwrap();
+        let mut skip = [0u8; 100];
+        std::io::Read::read_exact(&mut open, &mut skip).unwrap();
+        assert_eq!(handle_sha256_hex(&open).unwrap(), sha256_hex(&data));
+        let mut next = [0u8; 4];
+        std::io::Read::read_exact(&mut open, &mut next).unwrap();
+        assert_eq!(next, data[100..104]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_is_followed_and_errors_name_the_target() {
+        let dir = tmp_dir("sha-link");
+        let real = dir.0.join("blob");
+        let data = pattern(3000);
+        std::fs::write(&real, &data).unwrap();
+        let link = dir.0.join("snapshot");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(file_sha256_hex(&link).unwrap(), sha256_hex(&data));
+
+        let dir_link = dir.0.join("dir-link");
+        std::os::unix::fs::symlink(&dir.0, &dir_link).unwrap();
+        let err = file_sha256_hex(&dir_link).unwrap_err();
+        assert!(err.detail().contains("resolves to"), "{err}");
+        assert!(err.detail().contains("not a regular file"), "{err}");
+
+        let dangling = dir.0.join("dangling");
+        std::os::unix::fs::symlink(dir.0.join("nowhere"), &dangling).unwrap();
+        let err = file_sha256_hex(&dangling).unwrap_err();
+        assert!(err.detail().contains("does not resolve"), "{err}");
     }
 }

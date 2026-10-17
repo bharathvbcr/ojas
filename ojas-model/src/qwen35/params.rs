@@ -21,6 +21,7 @@
 //! and for writing them under Hugging Face names.
 
 use std::convert::Infallible;
+use std::path::Path;
 
 use ojas_core::{
     f32_to_bf16, shape_product, Backend, Budget, DType, OjasError, Tensor, LE_READ_CHUNK_BYTES,
@@ -31,6 +32,7 @@ use ojas_io::{bf16_to_f32, f16_to_f32, SafeTensors, StDtype};
 use crate::init::fnv1a;
 use crate::lora::{LoraConfig, LoraSite};
 
+use crate::qwen35::adapters::{verify_base_file, AdapterError, BaseIdentity};
 use crate::qwen35::spec::{Qwen35Mixer, Qwen35Spec};
 
 /// A gated delta net layer's mixer.
@@ -566,6 +568,40 @@ pub fn load_hf(
         layers,
         norm,
     })
+}
+
+/// [`load_hf`] of the single-file base at `path`, only if that file is
+/// `expected` ([`verify_base_file`]: the file's name and sha256, a sharded
+/// name refused, one-of-one allowed). The opt-in pin of a LoRA run's frozen
+/// base: `expected` is the [`BaseIdentity`] the adapter checkpoint records.
+///
+/// A mismatch is refused before any tensor is allocated and before the
+/// budget is charged or even checked. The cost is one extra read of the whole
+/// file, in bounded chunks, before the load's own reads: about 4.5 GB at 2B,
+/// on the order of 10 to 20 s at the bench's SHA-256 throughput (inferred).
+/// The hashed handle is the one parsed, so the bytes loaded are the bytes
+/// hashed. The quantizer record is checked for shape only: the file holds no
+/// record to compare it with.
+///
+/// Errors are [`AdapterError`]: [`AdapterError::BaseFileMismatch`],
+/// [`AdapterError::BaseMismatch`], [`AdapterError::ShardedBase`],
+/// [`AdapterError::InvalidField`] and [`AdapterError::Unreadable`] from the
+/// pin or the header parse, [`AdapterError::Core`] from [`load_hf`].
+pub fn load_hf_pinned(
+    spec: &Qwen35Spec,
+    path: &Path,
+    expected: &BaseIdentity,
+    prefix: &str,
+    linears: DType,
+    table: DType,
+    budget: &Budget,
+) -> Result<Qwen35Params<Tensor>, AdapterError> {
+    let file = verify_base_file(path, expected)?;
+    let st = SafeTensors::from_file(file).map_err(|e| AdapterError::Unreadable {
+        file: expected.file_name.clone(),
+        detail: e.detail().to_string(),
+    })?;
+    Ok(load_hf(spec, &st, prefix, linears, table, budget)?)
 }
 
 /// One tensor under its Hugging Face name, on the host.

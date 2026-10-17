@@ -51,11 +51,12 @@
 
 use std::cell::RefCell;
 use std::fmt;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::BufWriter;
 use std::path::Path;
 
 use ojas_core::{Budget, OjasError, Tensor};
+use ojas_io::sha256::open_sha256_hex;
 use ojas_io::{
     recover_replaced_dir, replace_dir_with_if, IoError, SafeTensors, SafeTensorsWriter, StDtype,
     TensorSpec,
@@ -490,6 +491,47 @@ fn check_base(base: &BaseIdentity) -> Result<(), AdapterError> {
         check_string("quantizer mlx_version", &q.mlx_version)?;
     }
     Ok(())
+}
+
+/// Opens the base file at `path` and returns the handle only if it is
+/// `expected`: the same file name as `expected.file_name` (the path's own
+/// last component, so a Hugging Face snapshot link is judged by the link's
+/// name, not its blob's) and the sha256 `expected.sha256`.
+///
+/// `expected` is first held to the layout's own rules ([`check_base`]): a
+/// shard or index name is [`AdapterError::ShardedBase`], so a pin never names
+/// more than one file, and one-of-one (`-00001-of-00001`) is fine. The name is
+/// compared before any byte is read. The file is then read once, start to
+/// end, in bounded chunks, through the returned handle, so the caller parses
+/// the bytes that were hashed. At the bench's SHA-256 throughput a 2B base
+/// (about 4.5 GB) is on the order of 10 to 20 s (inferred, not measured here).
+///
+/// The quantizer record is checked for shape only (non-empty, bounded
+/// strings). The base file carries no quantizer record to compare it with;
+/// the sha256 is what binds the record to the bytes.
+pub fn verify_base_file(path: &Path, expected: &BaseIdentity) -> Result<File, AdapterError> {
+    check_base(expected)?;
+    let found_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| invalid_field("base path", "has no UTF-8 file name"))?;
+    if found_name != expected.file_name {
+        return Err(AdapterError::BaseFileMismatch {
+            expected: expected.file_name.clone(),
+            found: found_name.to_string(),
+        });
+    }
+    let (file, found) = open_sha256_hex(path).map_err(|e| AdapterError::Unreadable {
+        file: found_name.to_string(),
+        detail: e.detail().to_string(),
+    })?;
+    if found != expected.sha256 {
+        return Err(AdapterError::BaseMismatch {
+            expected: expected.sha256.clone(),
+            found,
+        });
+    }
+    Ok(file)
 }
 
 fn numel(name: &str, shape: &[usize]) -> Result<usize, AdapterError> {
