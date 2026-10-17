@@ -27,6 +27,7 @@ mod json;
 mod load;
 pub mod lora;
 mod names;
+pub mod preflight;
 pub mod qwen35;
 mod spec;
 mod trainer;
