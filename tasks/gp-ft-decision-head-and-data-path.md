@@ -16,7 +16,6 @@ repositories:
   - "ojas"
 planned_files:
   - "ojas-model/src/qwen35/forward.rs"
-  - "ojas-model/src/heads.rs"
   - "ojas-autograd/src/tape.rs"
   - "ojas-data/src/bpe.rs"
 acceptance_criteria:
