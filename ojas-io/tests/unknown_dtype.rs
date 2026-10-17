@@ -2,7 +2,7 @@
 //! the others stay readable, and only a typed read of that tensor is refused,
 //! naming the tensor and its dtype.
 
-use ojas_io::SafeTensors;
+use ojas_io::{encode_safetensors, SafeTensors, StDtype, TensorOut};
 
 fn frame(header: &str, data: &[u8]) -> Vec<u8> {
     let mut h = header.as_bytes().to_vec();
@@ -45,6 +45,8 @@ fn bf16_tensors_read_beside_a_u8_tensor() {
 
 #[test]
 fn every_spec_dtype_parses_and_a_name_outside_the_spec_still_fails() {
+    // The 19 spec tags plus the three safetensors 0.8.0 adds ("F8_E4M3FNUZ",
+    // "F8_E5M2FNUZ", "C64"), compared against the 0.8.0 release's adapter tables.
     let spec = [
         ("BOOL", 8u64),
         ("U8", 8),
@@ -65,6 +67,9 @@ fn every_spec_dtype_parses_and_a_name_outside_the_spec_still_fails() {
         ("F4", 4),
         ("F6_E2M3", 6),
         ("F6_E3M2", 6),
+        ("F8_E4M3FNUZ", 8),
+        ("F8_E5M2FNUZ", 8),
+        ("C64", 64),
     ];
     for (tag, bits) in spec {
         // 8 elements: whole bytes for every width, including F4 and F6.
@@ -81,6 +86,88 @@ fn every_spec_dtype_parses_and_a_name_outside_the_spec_still_fails() {
     );
     let err = SafeTensors::parse(&bytes).unwrap_err().to_string();
     assert!(err.contains("F7"), "{err}");
+    assert!(!err.contains("not in the safetensors spec"), "{err}");
+    assert!(err.contains("0.8.0"), "{err}");
+}
+
+#[test]
+fn safetensors_0_8_0_tags_parse_carry_bytes_and_refuse_typed_reads() {
+    // a: F8_E4M3FNUZ [8], b: F8_E5M2FNUZ [8], c: C64 [3] = 24 bytes, w: BF16 [2]
+    let header = r#"{"a":{"dtype":"F8_E4M3FNUZ","shape":[8],"data_offsets":[0,8]},"b":{"dtype":"F8_E5M2FNUZ","shape":[8],"data_offsets":[8,16]},"c":{"dtype":"C64","shape":[3],"data_offsets":[16,40]},"w":{"dtype":"BF16","shape":[2],"data_offsets":[40,44]}}"#;
+    let a: Vec<u8> = (1..=8).collect();
+    let b: Vec<u8> = (11..=18).collect();
+    let c: Vec<u8> = (21..45).collect();
+    let mut data = [a.clone(), b.clone(), c.clone()].concat();
+    for v in [1.5f32, -2.0] {
+        data.extend_from_slice(&((v.to_bits() >> 16) as u16).to_le_bytes());
+    }
+    let bytes = frame(header, &data);
+    let st = SafeTensors::parse(&bytes).expect("0.8.0 tags must parse");
+    assert_eq!(st.read_f32_widened("w").unwrap().1, vec![1.5, -2.0]);
+    for (name, want, dtype) in [
+        ("a", &a, "F8E4M3Fnuz"),
+        ("b", &b, "F8E5M2Fnuz"),
+        ("c", &c, "C64"),
+    ] {
+        assert_eq!(st.read_bytes(name).unwrap(), *want, "{name}");
+        assert_eq!(format!("{:?}", st.info(name).unwrap().dtype), dtype);
+        for err in [
+            st.read_f32(name).unwrap_err(),
+            st.read_f32_widened(name).unwrap_err(),
+            st.read_bf16_bits(name).unwrap_err(),
+        ] {
+            let text = err.to_string();
+            assert!(text.contains(name) && text.contains(dtype), "{text}");
+        }
+    }
+    assert_eq!(st.info("c").unwrap().end - st.info("c").unwrap().begin, 24);
+
+    // write_safetensors / encode round-trips every new tag byte for byte.
+    let items = [
+        TensorOut {
+            name: "a",
+            dtype: StDtype::F8E4M3Fnuz,
+            shape: &[8],
+            data: &a,
+        },
+        TensorOut {
+            name: "b",
+            dtype: StDtype::F8E5M2Fnuz,
+            shape: &[8],
+            data: &b,
+        },
+        TensorOut {
+            name: "c",
+            dtype: StDtype::C64,
+            shape: &[3],
+            data: &c,
+        },
+    ];
+    let out = encode_safetensors(&items, &[]).unwrap();
+    let text = String::from_utf8_lossy(&out);
+    for tag in ["F8_E4M3FNUZ", "F8_E5M2FNUZ", "C64"] {
+        assert!(text.contains(tag), "{tag}");
+    }
+    let back = SafeTensors::parse(&out).unwrap();
+    for (name, want) in [("a", &a), ("b", &b), ("c", &c)] {
+        assert_eq!(back.read_bytes(name).unwrap(), *want);
+        assert_eq!(back.info(name).unwrap().dtype, st.info(name).unwrap().dtype);
+    }
+    let path =
+        std::env::temp_dir().join(format!("ojas-io-fnuz-{}.safetensors", std::process::id()));
+    ojas_io::write_safetensors(&path, &items, &[]).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), out);
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[test]
+fn c64_with_a_short_span_is_refused() {
+    // C64 [3] needs 24 bytes; [0,23] is one short.
+    let bytes = frame(
+        r#"{"c":{"dtype":"C64","shape":[3],"data_offsets":[0,23]}}"#,
+        &[0u8; 23],
+    );
+    assert!(SafeTensors::parse(&bytes).is_err());
 }
 
 #[test]

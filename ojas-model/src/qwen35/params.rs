@@ -22,9 +22,11 @@
 
 use std::convert::Infallible;
 
-use ojas_core::{f32_to_bf16, Budget, DType, OjasError, Tensor};
+use ojas_core::{
+    f32_to_bf16, shape_product, Budget, DType, OjasError, Tensor, LE_READ_CHUNK_BYTES,
+};
 use ojas_data::CounterRng;
-use ojas_io::SafeTensors;
+use ojas_io::{bf16_to_f32, f16_to_f32, SafeTensors, StDtype};
 
 use crate::init::fnv1a;
 use crate::lora::{LoraConfig, LoraSite};
@@ -160,59 +162,115 @@ impl<V> Qwen35Params<V> {
     }
 }
 
-/// One Hugging Face tensor of the tower: its name and stored shape.
+/// How [`load_hf`] stores a tensor: the tied embedding follows its `table`
+/// storage, the weights a `linear` reads follow `linears`, and everything
+/// else (norms, convolutions, `A_log`, `dt_bias`) is `F32`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HfKind {
+    Table,
+    Linear,
+    Plain,
+}
+
+/// One Hugging Face tensor of the tower: its name, stored shape and kind.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HfTensor {
     pub name: String,
     pub shape: Vec<usize>,
+    pub kind: HfKind,
 }
 
 /// Every Hugging Face tensor the tower reads under `prefix` (`"model."` for
 /// a text-only checkpoint, `"model.language_model."` under a `text_config`),
 /// in [`Qwen35Params::try_map`]'s order of the fused tensors.
 pub fn hf_tensors(spec: &Qwen35Spec, prefix: &str) -> Vec<HfTensor> {
-    let t = |name: String, shape: &[usize]| HfTensor {
+    let t = |kind: HfKind, name: String, shape: &[usize]| HfTensor {
         name,
         shape: shape.to_vec(),
+        kind,
     };
     let (d, f) = (spec.hidden, spec.intermediate);
-    let mut out = vec![t(format!("{prefix}embed_tokens.weight"), &[spec.vocab, d])];
+    let mut out = vec![t(
+        HfKind::Table,
+        format!("{prefix}embed_tokens.weight"),
+        &[spec.vocab, d],
+    )];
     for (i, kind) in spec.layers.iter().enumerate() {
         let l = format!("{prefix}layers.{i}.");
-        out.push(t(format!("{l}input_layernorm.weight"), &[d]));
+        out.push(t(HfKind::Plain, format!("{l}input_layernorm.weight"), &[d]));
         match kind {
             Qwen35Mixer::GatedDeltaNet => {
                 let [cq, ck, cv] = spec.gdn_qkv_channels();
                 let c = cq + ck + cv;
                 let (h, dv) = (spec.gdn_heads, spec.gdn_value_dim);
                 let m = format!("{l}linear_attn.");
-                out.push(t(format!("{m}in_proj_qkv.weight"), &[c, d]));
-                out.push(t(format!("{m}conv1d.weight"), &[c, 1, spec.conv_width]));
-                out.push(t(format!("{m}in_proj_z.weight"), &[h * dv, d]));
-                out.push(t(format!("{m}in_proj_a.weight"), &[h, d]));
-                out.push(t(format!("{m}in_proj_b.weight"), &[h, d]));
-                out.push(t(format!("{m}A_log"), &[h]));
-                out.push(t(format!("{m}dt_bias"), &[h]));
-                out.push(t(format!("{m}norm.weight"), &[dv]));
-                out.push(t(format!("{m}out_proj.weight"), &[d, h * dv]));
+                out.push(t(HfKind::Linear, format!("{m}in_proj_qkv.weight"), &[c, d]));
+                out.push(t(
+                    HfKind::Plain,
+                    format!("{m}conv1d.weight"),
+                    &[c, 1, spec.conv_width],
+                ));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}in_proj_z.weight"),
+                    &[h * dv, d],
+                ));
+                out.push(t(HfKind::Linear, format!("{m}in_proj_a.weight"), &[h, d]));
+                out.push(t(HfKind::Linear, format!("{m}in_proj_b.weight"), &[h, d]));
+                out.push(t(HfKind::Plain, format!("{m}A_log"), &[h]));
+                out.push(t(HfKind::Plain, format!("{m}dt_bias"), &[h]));
+                out.push(t(HfKind::Plain, format!("{m}norm.weight"), &[dv]));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}out_proj.weight"),
+                    &[d, h * dv],
+                ));
             }
             Qwen35Mixer::Attention => {
                 let (hq, hkv, hd) = (spec.q_heads, spec.kv_heads, spec.head_dim);
                 let m = format!("{l}self_attn.");
-                out.push(t(format!("{m}q_proj.weight"), &[hq * 2 * hd, d]));
-                out.push(t(format!("{m}k_proj.weight"), &[hkv * hd, d]));
-                out.push(t(format!("{m}v_proj.weight"), &[hkv * hd, d]));
-                out.push(t(format!("{m}q_norm.weight"), &[hd]));
-                out.push(t(format!("{m}k_norm.weight"), &[hd]));
-                out.push(t(format!("{m}o_proj.weight"), &[d, hq * hd]));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}q_proj.weight"),
+                    &[hq * 2 * hd, d],
+                ));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}k_proj.weight"),
+                    &[hkv * hd, d],
+                ));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}v_proj.weight"),
+                    &[hkv * hd, d],
+                ));
+                out.push(t(HfKind::Plain, format!("{m}q_norm.weight"), &[hd]));
+                out.push(t(HfKind::Plain, format!("{m}k_norm.weight"), &[hd]));
+                out.push(t(
+                    HfKind::Linear,
+                    format!("{m}o_proj.weight"),
+                    &[d, hq * hd],
+                ));
             }
         }
-        out.push(t(format!("{l}post_attention_layernorm.weight"), &[d]));
-        out.push(t(format!("{l}mlp.gate_proj.weight"), &[f, d]));
-        out.push(t(format!("{l}mlp.up_proj.weight"), &[f, d]));
-        out.push(t(format!("{l}mlp.down_proj.weight"), &[d, f]));
+        out.push(t(
+            HfKind::Plain,
+            format!("{l}post_attention_layernorm.weight"),
+            &[d],
+        ));
+        out.push(t(
+            HfKind::Linear,
+            format!("{l}mlp.gate_proj.weight"),
+            &[f, d],
+        ));
+        out.push(t(HfKind::Linear, format!("{l}mlp.up_proj.weight"), &[f, d]));
+        out.push(t(
+            HfKind::Linear,
+            format!("{l}mlp.down_proj.weight"),
+            &[d, f],
+        ));
     }
-    out.push(t(format!("{prefix}norm.weight"), &[d]));
+    out.push(t(HfKind::Plain, format!("{prefix}norm.weight"), &[d]));
     out
 }
 
@@ -261,45 +319,98 @@ fn interleave(q: &[f32], g: &[f32], heads: usize, d: usize, cols: usize) -> Vec<
     out
 }
 
-/// One linear weight's values as read, in the storage [`load_hf`] keeps it.
-enum Rows {
-    F32(Vec<f32>),
-    Bf16(Vec<u16>),
-}
+/// Largest decode buffer [`load_hf`] reuses within one tensor's read. It is
+/// uncharged: the budget check covers the tensors, and the chunk is transient.
+const READ_CHUNK_BYTES: usize = LE_READ_CHUNK_BYTES;
 
-impl Rows {
-    fn split(&self, cols: usize, counts: &[usize]) -> Vec<Rows> {
-        match self {
-            Rows::F32(v) => split_rows(v, cols, counts)
-                .into_iter()
-                .map(Rows::F32)
-                .collect(),
-            Rows::Bf16(v) => split_rows(v, cols, counts)
-                .into_iter()
-                .map(Rows::Bf16)
-                .collect(),
+/// Where a tensor's values land in the output tensor, as one run of `len`
+/// elements starting `first` elements into the stored tensor.
+type Run = (usize, usize);
+
+/// One output tensor's values, decoded from `runs` of the stored tensor `name`
+/// in order, `READ_CHUNK_BYTES` at a time, straight into storage of
+/// `storage`. A BF16 checkpoint read as `Bf16` is copied as stored; any other
+/// source is widened to f32 (exactly, for bf16 and f16) and, for `Bf16`
+/// storage, rounded once to nearest even. No tensor-sized buffer besides the
+/// output exists.
+fn load_runs(
+    file: &SafeTensors<'_>,
+    name: &str,
+    storage: DType,
+    shape: &[usize],
+    runs: &[Run],
+    budget: &Budget,
+) -> Result<Tensor, OjasError> {
+    const OP: &str = "qwen35::load_hf";
+    let stored = file
+        .info(name)
+        .map_err(|e| refuse(OP, format!("{name}: {e}")))?
+        .dtype;
+    let width = match stored {
+        StDtype::F32 => 4,
+        StDtype::BF16 | StDtype::F16 => 2,
+        other => {
+            return Err(refuse(
+                OP,
+                format!("{name}: {other:?} is not a floating-point tensor this crate decodes"),
+            ))
         }
-    }
-
-    fn deinterleave(&self, heads: usize, d: usize, cols: usize) -> (Rows, Rows) {
-        match self {
-            Rows::F32(v) => {
-                let (q, g) = deinterleave(v, heads, d, cols);
-                (Rows::F32(q), Rows::F32(g))
+    };
+    let mut out = Tensor::zeros(shape, storage, budget)?;
+    // The decode buffer is on the heap, sized to the tensor when it is
+    // smaller than a chunk: a worker thread's stack may be 512 KiB.
+    let want: usize = runs.iter().map(|&(_, len)| len).sum::<usize>() * width;
+    let chunk_len = want.min(READ_CHUNK_BYTES);
+    let mut chunk = Vec::new();
+    chunk
+        .try_reserve_exact(chunk_len)
+        .map_err(|_| OjasError::CapacityExceeded {
+            requested: chunk_len as u64,
+            cap: budget.cap_bytes(),
+            live: budget.live_bytes().unwrap_or(0),
+        })?;
+    chunk.resize(chunk_len, 0u8);
+    let per_chunk = chunk_len / width;
+    let mut at = 0usize;
+    for &(first, len) in runs {
+        let mut done = 0usize;
+        while done < len {
+            let n = (len - done).min(per_chunk);
+            let bytes = &mut chunk[..n * width];
+            let offset = u64::try_from((first + done) * width)
+                .map_err(|_| refuse(OP, format!("{name}: offset exceeds u64")))?;
+            file.read_into(name, offset, bytes)
+                .map_err(|e| refuse(OP, format!("{name}: {e}")))?;
+            let to = at + done..at + done + n;
+            match storage {
+                DType::F32 => {
+                    let dst = &mut out.f32_slice_mut()?[to];
+                    for (slot, b) in dst.iter_mut().zip(bytes.chunks_exact(width)) {
+                        *slot = match stored {
+                            StDtype::F32 => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                            StDtype::BF16 => bf16_to_f32(u16::from_le_bytes([b[0], b[1]])),
+                            _ => f16_to_f32(u16::from_le_bytes([b[0], b[1]])),
+                        };
+                    }
+                }
+                _ => {
+                    let dst = &mut out.bf16_slice_mut()?[to];
+                    for (slot, b) in dst.iter_mut().zip(bytes.chunks_exact(width)) {
+                        *slot = match stored {
+                            StDtype::F32 => {
+                                f32_to_bf16(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                            }
+                            StDtype::BF16 => u16::from_le_bytes([b[0], b[1]]),
+                            _ => f32_to_bf16(f16_to_f32(u16::from_le_bytes([b[0], b[1]]))),
+                        };
+                    }
+                }
             }
-            Rows::Bf16(v) => {
-                let (q, g) = deinterleave(v, heads, d, cols);
-                (Rows::Bf16(q), Rows::Bf16(g))
-            }
+            done += n;
         }
+        at += len;
     }
-
-    fn tensor(&self, shape: &[usize], budget: &Budget) -> Result<Tensor, OjasError> {
-        match self {
-            Rows::F32(v) => Tensor::from_f32(v, shape, budget),
-            Rows::Bf16(v) => Tensor::from_bf16_bits(v, shape, budget),
-        }
-    }
+    Ok(out)
 }
 
 /// The tower's parameters from a Hugging Face checkpoint, split as the
@@ -340,6 +451,12 @@ pub fn load_hf(
     }
     spec.validate()?;
     let names = hf_tensors(spec, prefix);
+    let storage_of = |kind: HfKind| match kind {
+        HfKind::Table => table,
+        HfKind::Linear => linears,
+        HfKind::Plain => DType::F32,
+    };
+    let mut total = 0u64;
     for want in &names {
         let info = file
             .info(&want.name)
@@ -351,88 +468,99 @@ pub fn load_hf(
                 format!("{}: shape {got:?}, expected {:?}", want.name, want.shape),
             ));
         }
+        if !matches!(info.dtype, StDtype::F32 | StDtype::BF16 | StDtype::F16) {
+            return Err(refuse(
+                OP,
+                format!(
+                    "{}: {:?} is not a floating-point tensor this crate decodes",
+                    want.name, info.dtype
+                ),
+            ));
+        }
+        let bytes = u64::try_from(shape_product(&want.shape)?)
+            .ok()
+            .and_then(|n| n.checked_mul(storage_of(want.kind).size() as u64))
+            .ok_or_else(|| refuse(OP, format!("{}: byte size overflows", want.name)))?;
+        total = total
+            .checked_add(bytes)
+            .ok_or_else(|| refuse(OP, "total parameter bytes overflow".to_string()))?;
     }
-    let read = |name: &str| -> Result<Vec<f32>, OjasError> {
-        file.read_f32_widened(name)
-            .map(|(_, v)| v)
-            .map_err(|e| refuse(OP, format!("{name}: {e}")))
+    // Every tensor is decoded straight into its charged output, so the
+    // charged total is the whole footprint: refuse now, before a byte is read.
+    budget.check_room(total)?;
+    let run = |name: &str, shape: &[usize], runs: &[Run]| {
+        let kind = names.iter().find(|t| t.name == name).map(|t| t.kind);
+        let storage = storage_of(kind.unwrap_or(HfKind::Plain));
+        load_runs(file, name, storage, shape, runs, budget)
     };
-    let new = |v: &[f32], shape: &[usize]| Tensor::from_f32(v, shape, budget);
-    let read_as = |name: &str, storage: DType| -> Result<Rows, OjasError> {
-        if storage == DType::F32 {
-            return read(name).map(Rows::F32);
-        }
-        let stored = file
-            .info(name)
-            .map_err(|e| refuse(OP, format!("{name}: {e}")))?
-            .dtype;
-        if stored == ojas_io::StDtype::BF16 {
-            return file
-                .read_bf16_bits(name)
-                .map(|(_, v)| Rows::Bf16(v))
-                .map_err(|e| refuse(OP, format!("{name}: {e}")));
-        }
-        Ok(Rows::Bf16(
-            read(name)?.into_iter().map(f32_to_bf16).collect(),
-        ))
+    let whole = |name: String, shape: &[usize]| -> Result<Tensor, OjasError> {
+        run(&name, shape, &[(0, shape_product(shape)?)])
     };
-    let read_lin = |name: &str| read_as(name, linears);
-    let lin = |name: String, shape: &[usize]| read_lin(&name)?.tensor(shape, budget);
     let d = spec.hidden;
     let f = spec.intermediate;
-    let embed = read_as(&names[0].name, table)?.tensor(&[spec.vocab, d], budget)?;
+    let embed = whole(names[0].name.clone(), &[spec.vocab, d])?;
     let mut layers = Vec::with_capacity(spec.layers.len());
     for (i, kind) in spec.layers.iter().enumerate() {
         let l = format!("{prefix}layers.{i}.");
-        let input_norm = new(&read(&format!("{l}input_layernorm.weight"))?, &[d])?;
+        let input_norm = whole(format!("{l}input_layernorm.weight"), &[d])?;
         let mixer = match kind {
             Qwen35Mixer::GatedDeltaNet => {
                 let m = format!("{l}linear_attn.");
                 let chans = spec.gdn_qkv_channels();
                 let (h, dv, k) = (spec.gdn_heads, spec.gdn_value_dim, spec.conv_width);
-                let w = read_lin(&format!("{m}in_proj_qkv.weight"))?.split(d, &chans);
-                let c = split_rows(&read(&format!("{m}conv1d.weight"))?, k, &chans);
+                let w = format!("{m}in_proj_qkv.weight");
+                let c = format!("{m}conv1d.weight");
+                // The fused weight's row blocks are runs of the stored tensor.
+                let block = |cols: usize, i: usize| -> Run {
+                    let before: usize = chans[..i].iter().sum();
+                    (before * cols, chans[i] * cols)
+                };
                 MixerParams::GatedDeltaNet(GdnParams {
-                    wq: w[0].tensor(&[chans[0], d], budget)?,
-                    wk: w[1].tensor(&[chans[1], d], budget)?,
-                    wv: w[2].tensor(&[chans[2], d], budget)?,
-                    conv_q: new(&c[0], &[chans[0], k])?,
-                    conv_k: new(&c[1], &[chans[1], k])?,
-                    conv_v: new(&c[2], &[chans[2], k])?,
-                    wz: lin(format!("{m}in_proj_z.weight"), &[h * dv, d])?,
-                    wa: lin(format!("{m}in_proj_a.weight"), &[h, d])?,
-                    wb: lin(format!("{m}in_proj_b.weight"), &[h, d])?,
-                    a_log: new(&read(&format!("{m}A_log"))?, &[h])?,
-                    dt_bias: new(&read(&format!("{m}dt_bias"))?, &[h])?,
-                    norm: new(&read(&format!("{m}norm.weight"))?, &[dv])?,
-                    out: lin(format!("{m}out_proj.weight"), &[d, h * dv])?,
+                    wq: run(&w, &[chans[0], d], &[block(d, 0)])?,
+                    wk: run(&w, &[chans[1], d], &[block(d, 1)])?,
+                    wv: run(&w, &[chans[2], d], &[block(d, 2)])?,
+                    conv_q: run(&c, &[chans[0], k], &[block(k, 0)])?,
+                    conv_k: run(&c, &[chans[1], k], &[block(k, 1)])?,
+                    conv_v: run(&c, &[chans[2], k], &[block(k, 2)])?,
+                    wz: whole(format!("{m}in_proj_z.weight"), &[h * dv, d])?,
+                    wa: whole(format!("{m}in_proj_a.weight"), &[h, d])?,
+                    wb: whole(format!("{m}in_proj_b.weight"), &[h, d])?,
+                    a_log: whole(format!("{m}A_log"), &[h])?,
+                    dt_bias: whole(format!("{m}dt_bias"), &[h])?,
+                    norm: whole(format!("{m}norm.weight"), &[dv])?,
+                    out: whole(format!("{m}out_proj.weight"), &[d, h * dv])?,
                 })
             }
             Qwen35Mixer::Attention => {
                 let m = format!("{l}self_attn.");
                 let (hq, hkv, hd) = (spec.q_heads, spec.kv_heads, spec.head_dim);
-                let (q, g) = read_lin(&format!("{m}q_proj.weight"))?.deinterleave(hq, hd, d);
+                // Per head, `hd` query rows then `hd` gate rows.
+                let q_proj = format!("{m}q_proj.weight");
+                let rows = hd * d;
+                let (query, gate): (Vec<Run>, Vec<Run>) = (0..hq)
+                    .map(|h| ((h * 2 * rows, rows), (h * 2 * rows + rows, rows)))
+                    .unzip();
                 MixerParams::Attention(AttnParams {
-                    wq: q.tensor(&[hq * hd, d], budget)?,
-                    wgate: g.tensor(&[hq * hd, d], budget)?,
-                    wk: lin(format!("{m}k_proj.weight"), &[hkv * hd, d])?,
-                    wv: lin(format!("{m}v_proj.weight"), &[hkv * hd, d])?,
-                    q_norm: new(&read(&format!("{m}q_norm.weight"))?, &[hd])?,
-                    k_norm: new(&read(&format!("{m}k_norm.weight"))?, &[hd])?,
-                    wo: lin(format!("{m}o_proj.weight"), &[d, hq * hd])?,
+                    wq: run(&q_proj, &[hq * hd, d], &query)?,
+                    wgate: run(&q_proj, &[hq * hd, d], &gate)?,
+                    wk: whole(format!("{m}k_proj.weight"), &[hkv * hd, d])?,
+                    wv: whole(format!("{m}v_proj.weight"), &[hkv * hd, d])?,
+                    q_norm: whole(format!("{m}q_norm.weight"), &[hd])?,
+                    k_norm: whole(format!("{m}k_norm.weight"), &[hd])?,
+                    wo: whole(format!("{m}o_proj.weight"), &[d, hq * hd])?,
                 })
             }
         };
         layers.push(LayerParams {
             input_norm,
             mixer,
-            post_norm: new(&read(&format!("{l}post_attention_layernorm.weight"))?, &[d])?,
-            gate: lin(format!("{l}mlp.gate_proj.weight"), &[f, d])?,
-            up: lin(format!("{l}mlp.up_proj.weight"), &[f, d])?,
-            down: lin(format!("{l}mlp.down_proj.weight"), &[d, f])?,
+            post_norm: whole(format!("{l}post_attention_layernorm.weight"), &[d])?,
+            gate: whole(format!("{l}mlp.gate_proj.weight"), &[f, d])?,
+            up: whole(format!("{l}mlp.up_proj.weight"), &[f, d])?,
+            down: whole(format!("{l}mlp.down_proj.weight"), &[d, f])?,
         });
     }
-    let norm = new(&read(&format!("{prefix}norm.weight"))?, &[d])?;
+    let norm = whole(format!("{prefix}norm.weight"), &[d])?;
     Ok(Qwen35Params {
         embed,
         layers,

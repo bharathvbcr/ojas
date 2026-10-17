@@ -15,10 +15,11 @@
 
 mod qwen35_common;
 
-use ojas_core::{bf16_to_f32, Budget, DType, OjasError, Tensor};
-use ojas_io::SafeTensors;
+use ojas_core::{bf16_to_f32, f32_to_bf16, Budget, DType, OjasError, Tensor};
+use ojas_io::{encode_f32_as, encode_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::qwen35::{
-    bind, forward_loss, hf_tensors, load_hf, MixerParams, Qwen35Mixer, Qwen35Params, Qwen35Tables,
+    bind, forward_loss, hf_tensors, load_hf, HfKind, MixerParams, Qwen35Mixer, Qwen35Params,
+    Qwen35Tables,
 };
 use ojas_model::{ActivationCheckpoint, Eval, DEFAULT_CE_CHUNK};
 use qwen35_common::*;
@@ -338,4 +339,238 @@ fn a_batch_with_every_target_ignored_is_refused() {
     })
     .unwrap_err();
     assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+}
+
+/// The fixture's tower re-encoded as one checkpoint of `source` dtype, with
+/// the first elements of every tensor replaced by awkward bit patterns (a
+/// subnormal, a NaN with a payload, negative zero) that a decode must carry
+/// through unchanged.
+fn source_file(source: StDtype) -> Vec<u8> {
+    let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
+    let (special, width): ([u32; 3], usize) = match source {
+        StDtype::F32 => ([0x0000_0001, 0x7FC0_0001, 0x8000_0000], 4),
+        StDtype::BF16 => ([0x0001, 0x7FC1, 0x8000], 2),
+        _ => ([0x0001, 0x7E01, 0x8000], 2),
+    };
+    let tensors: Vec<(String, Vec<u64>, Vec<u8>)> = hf_tensors(&spec(), PREFIX)
+        .into_iter()
+        .map(|t| {
+            let (shape, values) = model.read_f32_widened(&t.name).unwrap();
+            let mut bytes = encode_f32_as(source, &values).unwrap();
+            for (i, bits) in special.iter().enumerate().take(values.len()) {
+                bytes[i * width..(i + 1) * width].copy_from_slice(&bits.to_le_bytes()[..width]);
+            }
+            (t.name, shape, bytes)
+        })
+        .collect();
+    let items: Vec<TensorOut<'_>> = tensors
+        .iter()
+        .map(|(name, shape, data)| TensorOut {
+            name,
+            dtype: source,
+            shape,
+            data,
+        })
+        .collect();
+    encode_safetensors(&items, &[]).unwrap()
+}
+
+/// Every parameter's stored bits in [`Qwen35Params::values`] order, read the
+/// way `load_hf` read them before it streamed: each tensor whole through
+/// `read_f32_widened` (or `read_bf16_bits`), then cut into its parts.
+fn whole_tensor_oracle(file: &SafeTensors<'_>, linears: DType, table: DType) -> Vec<Vec<u32>> {
+    let s = spec();
+    let get = |name: &str, storage: DType| -> Vec<u32> {
+        let stored = file.info(name).unwrap().dtype;
+        match (storage, stored) {
+            (DType::Bf16, StDtype::BF16) => file
+                .read_bf16_bits(name)
+                .unwrap()
+                .1
+                .into_iter()
+                .map(u32::from)
+                .collect(),
+            (DType::Bf16, _) => file
+                .read_f32_widened(name)
+                .unwrap()
+                .1
+                .into_iter()
+                .map(|v| u32::from(f32_to_bf16(v)))
+                .collect(),
+            _ => file
+                .read_f32_widened(name)
+                .unwrap()
+                .1
+                .iter()
+                .map(|v| v.to_bits())
+                .collect(),
+        }
+    };
+    let rows = |v: &[u32], cols: usize, first: usize, n: usize| {
+        v[first * cols..(first + n) * cols].to_vec()
+    };
+    let d = s.hidden;
+    let mut out = vec![get(&format!("{PREFIX}embed_tokens.weight"), table)];
+    for (i, kind) in s.layers.iter().enumerate() {
+        let l = format!("{PREFIX}layers.{i}.");
+        out.push(get(&format!("{l}input_layernorm.weight"), DType::F32));
+        match kind {
+            Qwen35Mixer::GatedDeltaNet => {
+                let m = format!("{l}linear_attn.");
+                let chans = s.gdn_qkv_channels();
+                let w = get(&format!("{m}in_proj_qkv.weight"), linears);
+                let c = get(&format!("{m}conv1d.weight"), DType::F32);
+                let (mut at, mut parts) = (0, Vec::new());
+                for &n in &chans {
+                    parts.push((at, n));
+                    at += n;
+                }
+                for &(first, n) in &parts {
+                    out.push(rows(&w, d, first, n));
+                }
+                for &(first, n) in &parts {
+                    out.push(rows(&c, s.conv_width, first, n));
+                }
+                for name in ["in_proj_z.weight", "in_proj_a.weight", "in_proj_b.weight"] {
+                    out.push(get(&format!("{m}{name}"), linears));
+                }
+                for name in ["A_log", "dt_bias", "norm.weight"] {
+                    out.push(get(&format!("{m}{name}"), DType::F32));
+                }
+                out.push(get(&format!("{m}out_proj.weight"), linears));
+            }
+            Qwen35Mixer::Attention => {
+                let m = format!("{l}self_attn.");
+                let q = get(&format!("{m}q_proj.weight"), linears);
+                let block = s.head_dim * d;
+                let (mut query, mut gate) = (Vec::new(), Vec::new());
+                for h in 0..s.q_heads {
+                    query.extend_from_slice(&q[2 * h * block..(2 * h + 1) * block]);
+                    gate.extend_from_slice(&q[(2 * h + 1) * block..(2 * h + 2) * block]);
+                }
+                out.push(query);
+                out.push(gate);
+                out.push(get(&format!("{m}k_proj.weight"), linears));
+                out.push(get(&format!("{m}v_proj.weight"), linears));
+                out.push(get(&format!("{m}q_norm.weight"), DType::F32));
+                out.push(get(&format!("{m}k_norm.weight"), DType::F32));
+                out.push(get(&format!("{m}o_proj.weight"), linears));
+            }
+        }
+        out.push(get(
+            &format!("{l}post_attention_layernorm.weight"),
+            DType::F32,
+        ));
+        for name in ["gate_proj.weight", "up_proj.weight", "down_proj.weight"] {
+            out.push(get(&format!("{l}mlp.{name}"), linears));
+        }
+    }
+    out.push(get(&format!("{PREFIX}norm.weight"), DType::F32));
+    out
+}
+
+fn stored_bits(t: &Tensor) -> Vec<u32> {
+    match t.dtype() {
+        DType::Bf16 => t
+            .bf16_slice()
+            .unwrap()
+            .iter()
+            .map(|&b| u32::from(b))
+            .collect(),
+        _ => t.f32_slice().unwrap().iter().map(|v| v.to_bits()).collect(),
+    }
+}
+
+/// F32, BF16 and F16 checkpoints into F32 and Bf16 storage give the bits the
+/// whole-tensor read gave, subnormals, NaN payloads and negative zero
+/// included.
+#[test]
+fn load_hf_bits_match_the_whole_tensor_read_for_every_source_and_storage() {
+    for source in [StDtype::F32, StDtype::BF16, StDtype::F16] {
+        let bytes = source_file(source);
+        let file = SafeTensors::parse(&bytes).unwrap();
+        for (linears, table) in [
+            (DType::F32, DType::F32),
+            (DType::Bf16, DType::Bf16),
+            (DType::Bf16, DType::F32),
+            (DType::F32, DType::Bf16),
+        ] {
+            let got = load_hf(&spec(), &file, PREFIX, linears, table, &budget()).unwrap();
+            let got: Vec<Vec<u32>> = got.values().into_iter().map(stored_bits).collect();
+            let want = whole_tensor_oracle(&file, linears, table);
+            assert_eq!(got.len(), want.len());
+            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    g == w,
+                    "{source:?} -> {linears:?}/{table:?}: parameter {i} differs"
+                );
+            }
+        }
+    }
+}
+
+/// The tower's charged bytes for `linears` and `table`, from the header.
+fn tower_bytes(linears: DType, table: DType) -> u64 {
+    hf_tensors(&spec(), PREFIX)
+        .iter()
+        .map(|t| {
+            let storage = match t.kind {
+                HfKind::Table => table,
+                HfKind::Linear => linears,
+                HfKind::Plain => DType::F32,
+            };
+            (t.shape.iter().product::<usize>() * storage.size()) as u64
+        })
+        .sum()
+}
+
+/// A budget one byte short of the tower is refused from the header sizes
+/// alone: nothing was ever charged, so no tensor was allocated and no byte
+/// was read. A budget of exactly the tower loads it.
+#[test]
+fn a_budget_one_byte_short_is_refused_before_any_read() {
+    let bytes = source_file(StDtype::BF16);
+    let file = SafeTensors::parse(&bytes).unwrap();
+    for (linears, table) in [(DType::F32, DType::F32), (DType::Bf16, DType::Bf16)] {
+        let total = tower_bytes(linears, table);
+        let short = Budget::new(total - 1);
+        let err = load_hf(&spec(), &file, PREFIX, linears, table, &short).unwrap_err();
+        assert!(matches!(err, OjasError::CapacityExceeded { .. }), "{err:?}");
+        assert_eq!(
+            short.peak_bytes(),
+            0,
+            "a tensor was allocated before the refusal"
+        );
+        let exact = Budget::new(total);
+        let params = load_hf(&spec(), &file, PREFIX, linears, table, &exact).unwrap();
+        assert_eq!(exact.live_bytes().unwrap(), total);
+        assert_eq!(exact.peak_bytes(), total);
+        drop(params);
+    }
+}
+
+/// Wall time of loading the tiny fixture, the best of five loads per storage:
+/// `cargo test --release --test qwen35_fixture -- --ignored --nocapture
+/// load_hf_wall_time`. Not a gate.
+#[test]
+#[ignore = "timing report, run by hand"]
+fn load_hf_wall_time() {
+    let s = spec();
+    let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
+    for (linears, table) in [(DType::F32, DType::F32), (DType::Bf16, DType::Bf16)] {
+        let best = (0..5)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let p = load_hf(&s, &model, PREFIX, linears, table, &budget()).unwrap();
+                let took = start.elapsed();
+                drop(p);
+                took
+            })
+            .min()
+            .unwrap();
+        eprintln!(
+            "load_hf {linears:?}/{table:?} best of 5: {} us",
+            best.as_micros()
+        );
+    }
 }
