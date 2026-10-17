@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image data formats · ojas reference</title>
+  <meta name="description" content="ojas-data reads two image datasets with std-only code. No decoder crate was added (decision E4); PNG and JPEG are not supported. Code: ojas-data/src/image.rs. Tests: ojas-data/tests/image.rs and ojas…">
+  <meta name="keywords" content="ojas, image data formats, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/data-formats.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/data-formats.html">
+  <meta property="og:title" content="Image data formats · ojas reference">
+  <meta property="og:description" content="ojas-data reads two image datasets with std-only code. No decoder crate was added (decision E4); PNG and JPEG are not supported. Code: ojas-data/src/image.rs. Tests: ojas-data/tests/image.rs and ojas…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Image data formats · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Image data formats · ojas reference">
+  <meta name="twitter:description" content="ojas-data reads two image datasets with std-only code. No decoder crate was added (decision E4); PNG and JPEG are not supported. Code: ojas-data/src/image.rs. Tests: ojas-data/tests/image.rs and ojas…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Image data formats · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Image data formats · ojas reference",
+    "description": "ojas-data reads two image datasets with std-only code. No decoder crate was added (decision E4); PNG and JPEG are not supported. Code: ojas-data/src/image.rs. Tests: ojas-data/tests/image.rs and ojas…",
+    "url": "https://ojas.vbcr.dev/reference/data-formats.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="data-formats.html" class="current" aria-current="page">Image data formats</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="image-data-formats">Image data formats <a class="anchor" href="#image-data-formats" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-data</code> reads two image datasets with std-only code. No decoder crate was added (decision E4); PNG and JPEG are not supported. Code: <code>ojas-data/src/image.rs</code>. Tests: <code>ojas-data/tests/image.rs</code> and <code>ojas-metal/tests/mnist_step.rs</code>.</p>
+<h2 id="supported-formats">Supported formats <a class="anchor" href="#supported-formats" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Format</th><th>Files</th><th>Layout</th></tr></thead>
+<tbody>
+<tr><td>MNIST idx</td><td>image file, label file</td><td>Big-endian. Images: magic <code>0x00000803</code> (two zero bytes, dtype <code>0x08</code> = <code>u8</code>, 3 dimensions), then <code>count</code>, <code>rows</code>, <code>cols</code> as <code>u32</code>, then <code>count*rows*cols</code> bytes. Labels: magic <code>0x00000801</code>, <code>count</code>, then <code>count</code> bytes.</td></tr>
+<tr><td>CIFAR-10 binary</td><td>one <code>data_batch_*.bin</code> or <code>test_batch.bin</code></td><td>No header. Records of 3073 bytes: one label byte, then 3 x 32 x 32 <code>u8</code> in CHW order. The count is <code>file_len / 3073</code>; a remainder is an error.</td></tr>
+</tbody></table></div>
+<p>Labels are <code>0..10</code> in both. <code>ImageSet::from_mnist</code> and <code>ImageSet::from_cifar10</code> take any <code>Read + Seek</code> (a <code>File</code> or a <code>Cursor</code>) and a <code>ojas_core::Budget</code>.</p>
+<h2 id="what-is-refused">What is refused <a class="anchor" href="#what-is-refused" aria-label="Link to this section">#</a></h2>
+<p>Each case is a typed <code>ImageError</code> and none of them panics:</p>
+<ul>
+<li>wrong magic (<code>BadMagic</code>) or a dtype byte other than <code>0x08</code> (<code>BadDtype</code>);
+</li>
+<li>a dimension product that overflows (<code>DimensionOverflow</code>, checked arithmetic);
+</li>
+<li>a stream shorter than its header declares (<code>Truncated</code>) or longer (<code>TrailingBytes</code>);
+</li>
+<li>image and label counts that differ (<code>CountMismatch</code>), a zero count or a zero-sized image (<code>Empty</code>);
+</li>
+<li>a label <code>&gt;= 10</code> (<code>LabelOutOfRange</code>);
+</li>
+<li>a payload over the <code>Budget</code> (<code>OverBudget</code>). Sizes are checked against the stream length and then the budget before the payload is read or allocated; the buffers are <code>try_reserve</code>d and read in bounded chunks. The bytes stay charged to the budget until the <code>ImageSet</code> drops.
+</li>
+</ul>
+<p><code>ImageError</code> converts into <code>DataError</code> for callers that use that type.</p>
+<h2 id="host-storage-and-layout-decision-e3">Host storage and layout (decision E3) <a class="anchor" href="#host-storage-and-layout-decision-e3" aria-label="Link to this section">#</a></h2>
+<p>Pixels stay <code>u8</code> on the host (a 128-image CIFAR batch is 384 KiB as <code>u8</code>, 1.5 MiB as <code>f32</code>). <code>DType</code> has no <code>U8</code>: nothing <code>u8</code> is built as a tensor type. <code>ImageBatchSampler</code> widens to <code>f32</code> per batch, into a caller-owned buffer, in NCHW order (<code>[count, C, H, W]</code>), with labels as <code>u32</code>. A device-side cast-normalise from a <code>U8</code> upload is deferred until the vision benchmark baseline (G-BENCH) measures what the <code>f32</code> upload costs.</p>
+<h2 id="normalisation">Normalisation <a class="anchor" href="#normalisation" aria-label="Link to this section">#</a></h2>
+<p>Per channel, <code>(p / 255 - mean) / std</code>, computed in <code>f32</code> through a 256-entry table per channel, so the batch with augmentation off is bit-identical to the raw decode normalised that way. <code>Normalization::MNIST</code> is mean 0.1307, std 0.3081; <code>Normalization::CIFAR10</code> is mean (0.4914, 0.4822, 0.4465) and std (0.2470, 0.2435, 0.2616). <code>Normalization::new</code> takes any 1 to 3 channels and refuses non-finite values and a non-positive std.</p>
+<h2 id="sampling-resume-and-augmentation-determinism">Sampling, resume and augmentation determinism <a class="anchor" href="#sampling-resume-and-augmentation-determinism" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Each epoch visits every image once, in a Fisher-Yates order driven by the counter RNG stream <code>(seed, epoch)</code>.
+</li>
+<li>A batch never straddles an epoch. <code>next_batch</code> returns the number of images written. With <code>drop_last: false</code> the last batch of an epoch is short (its count is below <code>batch</code>, and entries past it are untouched); with <code>drop_last: true</code> that tail is skipped and the cursor moves to the next epoch.
+</li>
+<li>The cursor is a <code>DataCursor</code>: <code>shard</code> is the epoch, <code>token_index</code> the position in that epoch&#39;s order. Resuming from it is bit-identical, across an epoch boundary too. Seed, batch size and <code>drop_last</code> are configuration.
+</li>
+<li>Augmentation is <code>Augment { crop_pad, flip }</code> (<code>Augment::CIFAR10</code> is pad 4 plus flip). Image <code>i</code> in epoch <code>e</code> draws from the stream <code>(seed, e, i)</code>: the crop offset <code>dy</code>, <code>dx</code> in <code>0..=2*pad</code>, then the flip. Three draws are always consumed, so toggling one feature does not move the other&#39;s mask. Because the stream is addressed by the image&#39;s dataset index, not its position in a batch, the same seed gives the same augmentation whatever the batch size or resume point. Padding is zero in pixel space, so a padded pixel normalises to <code>(0 - mean) / std</code>. The flip applies to the cropped image.
+</li>
+<li>After construction <code>next_batch</code> allocates nothing (counting-allocator test, 128 CIFAR images).
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/data-formats.md" rel="noopener"><code>docs/data-formats.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="checkpoint-v1.html" rel="prev"><span>Previous</span>Checkpoint v1 Specification</a>
+        <a href="dtype-policy.html" rel="next" class="next"><span>Next</span>Dtype Policy (v1)</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#supported-formats">Supported formats</a></li>
+<li><a href="#what-is-refused">What is refused</a></li>
+<li><a href="#host-storage-and-layout-decision-e3">Host storage and layout (decision E3)</a></li>
+<li><a href="#normalisation">Normalisation</a></li>
+<li><a href="#sampling-resume-and-augmentation-determinism">Sampling, resume and augmentation determinism</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>
