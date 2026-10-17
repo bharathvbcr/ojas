@@ -16,10 +16,11 @@
 //! a directory whose files disagree on any of these, or that lacks or adds a
 //! tensor, is refused before anything is written into the model.
 //!
-//! Costs on the 2B, from tessl's API rather than this format: tessl's
-//! `read_parameters` / `write_parameters` / `*_adamw_moment` move every
-//! tensor of a kind in one call, so a save or a load stages one kind (8 GB of
-//! f32) in extra device tensors at a time. On the host a save holds one entry
+//! Costs on the 2B: tessl's per-entry host-mapped reads and writes
+//! (`read_parameter_host`, `write_parameter_host`, `read_gradient_host`,
+//! `read_adamw_moment_host`, `write_adamw_moment_host`) move one entry at a
+//! time straight between its device buffer and the host, so a save or a load
+//! allocates nothing on the device. On the host a save holds one entry
 //! at a time: [`write_kind`] streams each entry into its shard through
 //! ojas-io's `SafeTensorsWriter` in 1 MiB pieces, so the peak is the largest
 //! entry (the 2 GB embedding), not a shard. A load reads one entry at a
@@ -312,8 +313,13 @@ pub fn check_new_state_dir(dir: &Path) -> Result<()> {
 /// A state directory whose headers have all been checked against a table.
 pub struct StateIndex {
     pub step: u64,
-    /// For each kind, for each table entry, the file that holds it.
-    files: Vec<Vec<PathBuf>>,
+    /// For each kind, for each table entry, the index in `shards` of the
+    /// file that holds it.
+    files: Vec<Vec<usize>>,
+    /// Every state file, opened once and held: a header that passed is the
+    /// file that is later read, so a file replaced after [`Self::read`]
+    /// cannot swap in a different entry.
+    shards: Vec<(PathBuf, SafeTensors<'static>)>,
     table: Vec<TensorSpec>,
 }
 
@@ -339,6 +345,7 @@ impl StateIndex {
         }
         let mut step: Option<u64> = None;
         let mut files = Vec::with_capacity(3);
+        let mut held: Vec<(PathBuf, SafeTensors<'static>)> = Vec::new();
         for (k, kind) in Kind::ALL.iter().enumerate() {
             let mut shards = std::mem::take(&mut by_kind[k]);
             shards.sort();
@@ -350,7 +357,7 @@ impl StateIndex {
                 )));
             }
             let n = shards.len();
-            let mut where_: Vec<Option<PathBuf>> = vec![None; table.len()];
+            let mut where_: Vec<Option<usize>> = vec![None; table.len()];
             let index: std::collections::HashMap<&str, usize> = table
                 .iter()
                 .enumerate()
@@ -418,7 +425,7 @@ impl StateIndex {
                             info.shape
                         )));
                     }
-                    if where_[i].replace(path.clone()).is_some() {
+                    if where_[i].replace(held.len()).is_some() {
                         return Err(Qwen35Error::Io(format!(
                             "{}: {tname} appears in two {} files",
                             dir.display(),
@@ -426,6 +433,7 @@ impl StateIndex {
                         )));
                     }
                 }
+                held.push((path.clone(), st));
             }
             let mut kind_files = Vec::with_capacity(table.len());
             for (i, w) in where_.into_iter().enumerate() {
@@ -444,6 +452,7 @@ impl StateIndex {
             step: step
                 .ok_or_else(|| Qwen35Error::Io(format!("{}: no state files", dir.display())))?,
             files,
+            shards: held,
             table: table.to_vec(),
         })
     }
@@ -455,117 +464,64 @@ impl StateIndex {
             Kind::ExpAvg => 1,
             Kind::ExpAvgSq => 2,
         };
-        let path = &self.files[k][i];
-        let st = SafeTensors::open(path)
+        let (path, st) = &self.shards[self.files[k][i]];
+        let (_, values) = st
+            .read_f32(&self.table[i].name)
             .map_err(|e| Qwen35Error::Io(format!("{}: {e}", path.display())))?;
-        let (shape, values) = st.read_f32(&self.table[i].name)?;
-        let want: Vec<u64> = self.table[i].shape.iter().map(|&d| d as u64).collect();
-        if shape != want {
-            return Err(Qwen35Error::Io(format!(
-                "{}: {} changed shape since the index was read",
-                path.display(),
-                self.table[i].name
-            )));
-        }
         Ok(values)
     }
 }
 
 impl Qwen35Step {
-    /// Fresh device tensors for one whole table in tessl's storage layout
-    /// (tessl's copies take every entry at once), allocated only after the
-    /// step's freed device memory is really free, and refused if they leave
-    /// the device over its recommended working set.
-    ///
-    /// The `synchronize` comes first because tessl recycles a freed buffer
-    /// only at its next waited commit. A backward returns with its scratch
-    /// (on the 2B, the 2 GB head gradient among it) still allocated and
-    /// resident. Staging 7.5 GB on top of that took the 2B to 52.44 GB
-    /// allocated, against a recommended working set of 51.54 GB. Making
-    /// that set resident then timed out the next command buffer
-    /// (`MTL4CommandQueueErrorTimeout`), which poisons the runtime. With the
-    /// recycle first, the same staging peaks at 50.20 GB and the step
-    /// passes. The check after the allocation turns the next such overrun
-    /// into a refusal before any GPU work. It compares the device's measured
-    /// figure, not "before + staging": that projection undercounts tessl's
-    /// allocations and would have passed the run that faulted (see
-    /// [`check_device_working_set`]). A refused staging is dropped and
-    /// recycled by a second `synchronize` before the error returns. Without
-    /// that, the next command buffer would still carry it in the resident
-    /// set.
-    fn staging_tensors(&self, op: &'static str) -> Result<Vec<tessl::Tensor>> {
-        self.rt
-            .synchronize()
-            .map_err(tessl("synchronize before staging"))?;
-        let mut staging = 0u64;
-        let ts = self
-            .table
-            .iter()
-            .zip(&self.transposed)
-            .map(|(t, &tr)| {
-                let shape = if tr {
-                    vec![t.shape[1], t.shape[0]]
-                } else {
-                    t.shape.clone()
-                };
-                staging += t.numel() as u64 * 4;
-                self.rt
-                    .alloc_tensor_f32(&shape)
-                    .map_err(tessl("alloc staging tensor"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let fits = check_device_working_set(
-            op,
-            self.rt.current_allocated_bytes(),
-            staging,
-            self.rt.memory_info().recommended_working_set,
-        );
-        if let Err(refused) = fits {
-            drop(ts);
-            self.rt.synchronize().map_err(|e| Qwen35Error::Tessl {
-                op: "synchronize after a refused staging",
-                detail: format!("{e} (after: {refused})"),
-            })?;
-            return Err(refused);
-        }
-        Ok(ts)
-    }
-
-    /// One kind of table copied by tessl into [`Self::staging_tensors`].
-    fn device_copies(&self, which: Which, op: &'static str) -> Result<Vec<tessl::Tensor>> {
-        let ts = self.staging_tensors(op)?;
+    /// Entry `i` of `which` on the host, in tessl's storage layout (the
+    /// transposed `[in, out]` order for a linear layer), through tessl's
+    /// per-entry host-mapped reads: no device tensor is allocated for it, so a
+    /// read-back's device peak is the model's own, at any model size. Each
+    /// read waits for prior GPU work and is refused as "runtime busy" while
+    /// another host mapping is live.
+    fn read_host(&self, which: Which, i: usize) -> Result<Vec<f32>> {
+        let mut dst = vec![0f32; self.table[i].numel()];
         match which {
             Which::Parameters => self
                 .model
-                .read_parameters(&ts)
-                .map_err(tessl("read_parameters"))?,
+                .read_parameter_host(i, &mut dst)
+                .map_err(tessl("read_parameter_host"))?,
             Which::Gradients => self
                 .model
-                .read_gradients(&self.bank, &ts)
-                .map_err(tessl("read_gradients"))?,
+                .read_gradient_host(&self.bank, i, &mut dst)
+                .map_err(tessl("read_gradient_host"))?,
             Which::ExpAvg => self
                 .model
-                .read_adamw_moment(&self.adamw, Moment::First, &ts)
-                .map_err(tessl("read_adamw_moment"))?,
+                .read_adamw_moment_host(&self.adamw, Moment::First, i, &mut dst)
+                .map_err(tessl("read_adamw_moment_host"))?,
             Which::ExpAvgSq => self
                 .model
-                .read_adamw_moment(&self.adamw, Moment::Second, &ts)
-                .map_err(tessl("read_adamw_moment"))?,
+                .read_adamw_moment_host(&self.adamw, Moment::Second, i, &mut dst)
+                .map_err(tessl("read_adamw_moment_host"))?,
         }
-        Ok(ts)
+        Ok(dst)
+    }
+
+    /// Entry `i` of `which` on the host in transformers' layout.
+    fn read_hf(&self, which: Which, i: usize) -> Result<Vec<f32>> {
+        storage_to_hf(
+            &self.table[i],
+            self.transposed[i],
+            self.read_host(which, i)?,
+        )
     }
 
     /// Every entry of `which` on the host, in transformers' names and layout,
-    /// charged to the provider's host budget (8 GB per table on the 2B, plus
-    /// the same again staged on the device while it is read).
+    /// charged to the provider's host budget (8 GB per table on the 2B). Each
+    /// entry is read from its device buffer directly; nothing is staged on
+    /// the device.
     pub fn read_table(&self, which: Which) -> Result<Vec<NamedTensor>> {
         let all: Vec<&str> = self.table.iter().map(|t| t.name.as_str()).collect();
         self.read_entries(which, &all)
     }
 
     /// [`Self::read_table`] for the named entries only (in the order given).
-    /// The device side still stages the whole table (tessl's copies take
-    /// every entry at once); only the host copies shrink.
+    /// Only those entries are read from the device.
     pub fn read_entries(&self, which: Which, names: &[&str]) -> Result<Vec<NamedTensor>> {
         const OP: &str = "Qwen35Step::read_entries";
         self.check_live()?;
@@ -584,15 +540,10 @@ impl Qwen35Step {
                     .ok_or_else(|| invalid(OP, format!("{n} is not a parameter of this tower")))
             })
             .collect::<Result<_>>()?;
-        let ts = self.device_copies(which, OP)?;
         let mut out = Vec::with_capacity(picks.len());
         for i in picks {
             let spec = &self.table[i];
-            let v = storage_to_hf(
-                spec,
-                self.transposed[i],
-                ts[i].read_f32().map_err(tessl("read staging tensor"))?,
-            )?;
+            let v = self.read_hf(which, i)?;
             out.push(NamedTensor {
                 name: spec.name.clone(),
                 tensor: Tensor::from_f32(&v, &spec.shape, &self.budget)?,
@@ -647,13 +598,8 @@ impl Qwen35Step {
                     (Kind::ExpAvg, Which::ExpAvg),
                     (Kind::ExpAvgSq, Which::ExpAvgSq),
                 ] {
-                    let ts = self.device_copies(which, OP)?;
                     write_kind(stage, kind, step, &summary, &self.table, &shards, |i| {
-                        storage_to_hf(
-                            &self.table[i],
-                            self.transposed[i],
-                            ts[i].read_f32().map_err(tessl("read staging tensor"))?,
-                        )
+                        self.read_hf(which, i)
                     })?;
                 }
                 Ok(())
@@ -679,34 +625,43 @@ impl Qwen35Step {
         self.check_live()?;
         self.require_f32_state("Qwen35Step::load_state")?;
         let idx = StateIndex::read(dir, &self.table, &self.cfg.canonical_summary())?;
+        self.load_state_from_index(&idx)
+    }
+
+    /// [`Self::load_state`] from a [`StateIndex`] already read for this
+    /// tower. Every header, shape, dtype and byte length of every kind was
+    /// checked when the index was read, so a malformed directory is refused
+    /// before the first write and leaves the provider usable. Only a failure
+    /// after a write has landed (a file cut short underneath the held index,
+    /// a device error) poisons it: a refused first write moved nothing.
+    pub fn load_state_from_index(&mut self, idx: &StateIndex) -> Result<()> {
+        self.check_live()?;
+        self.require_f32_state("Qwen35Step::load_state")?;
+        if idx.table != self.table {
+            return Err(invalid(
+                "Qwen35Step::load_state",
+                "the state index was read for a different parameter table",
+            ));
+        }
         let mut wrote = false;
         for kind in Kind::ALL {
-            let staged = self.stage(&idx, kind);
-            let result = staged.and_then(|ts| {
-                wrote = true;
-                match kind {
-                    Kind::Masters => self
-                        .model
-                        .write_parameters(&ts)
-                        .map_err(tessl("write_parameters")),
-                    Kind::ExpAvg => self
-                        .model
-                        .write_adamw_moment(&mut self.adamw, Moment::First, &ts)
-                        .map_err(tessl("write_adamw_moment")),
-                    Kind::ExpAvgSq => self
-                        .model
-                        .write_adamw_moment(&mut self.adamw, Moment::Second, &ts)
-                        .map_err(tessl("write_adamw_moment")),
+            for i in 0..self.table.len() {
+                let result = idx
+                    .read_entry(kind, i)
+                    .and_then(|v| hf_to_storage(&self.table[i], self.transposed[i], v))
+                    .and_then(|v| self.write_host(kind, i, &v));
+                match result {
+                    Ok(()) => wrote = true,
+                    Err(e) => {
+                        if wrote {
+                            self.poisoned = Some(format!(
+                                "load_state failed part-way ({} entry {i}): {e}",
+                                kind.tag()
+                            ));
+                        }
+                        return Err(e);
+                    }
                 }
-            });
-            if let Err(e) = result {
-                if wrote {
-                    self.poisoned = Some(format!(
-                        "load_state from {} failed part-way: {e}",
-                        dir.display()
-                    ));
-                }
-                return Err(e);
             }
         }
         self.adamw.set_step_count(idx.step);
@@ -730,17 +685,23 @@ impl Qwen35Step {
         Ok(())
     }
 
-    /// One kind read from disk into device tensors in tessl's layout.
-    fn stage(&self, idx: &StateIndex, kind: Kind) -> Result<Vec<tessl::Tensor>> {
-        let ts = self.staging_tensors("Qwen35Step::load_state")?;
-        for (i, (t, (spec, &tr))) in ts
-            .iter()
-            .zip(self.table.iter().zip(&self.transposed))
-            .enumerate()
-        {
-            t.write_f32(&hf_to_storage(spec, tr, idx.read_entry(kind, i)?)?)
-                .map_err(tessl("write staging tensor"))?;
+    /// Entry `i` of `kind`, in tessl's storage layout, written into the
+    /// model through tessl's per-entry host-mapped writes. A parameter write
+    /// bumps tessl's parameter generation before its first byte lands.
+    fn write_host(&mut self, kind: Kind, i: usize, v: &[f32]) -> Result<()> {
+        match kind {
+            Kind::Masters => self
+                .model
+                .write_parameter_host(i, v)
+                .map_err(tessl("write_parameter_host")),
+            Kind::ExpAvg => self
+                .model
+                .write_adamw_moment_host(&mut self.adamw, Moment::First, i, v)
+                .map_err(tessl("write_adamw_moment_host")),
+            Kind::ExpAvgSq => self
+                .model
+                .write_adamw_moment_host(&mut self.adamw, Moment::Second, i, v)
+                .map_err(tessl("write_adamw_moment_host")),
         }
-        Ok(ts)
     }
 }
