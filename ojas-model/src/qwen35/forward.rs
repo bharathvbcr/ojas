@@ -315,10 +315,13 @@ pub fn forward_loss_lora<G: Graph>(
 /// Every layer is causal, so row `b`'s positions `0..n` depend on `ids[b,
 /// ..n]` alone: finite tokens after them, such as right padding, change
 /// nothing the row reads. That holds for finite padding only: a non-finite
-/// value in a padding token's embedding is refused by the CPU backend, but on
-/// Metal it can reach the row's real positions as NaN (a backend issue
-/// tracked on card ft-ab2f1daf, criterion 6). [`RightPadded`] is the input
-/// form that makes only right padding representable.
+/// value in a padding token's embedding is refused as `NonFinite`, naming
+/// the op. The CPU backend refuses it at the op; a GPU backend records the
+/// fault and reports it at `Backend::sync` or `Backend::download`, so read
+/// results of a GPU tape through those (raw `Tensor::to_host` is not a fault
+/// point on Metal and would hand the caller NaN with no error).
+/// [`RightPadded`] is the input form that makes only right padding
+/// representable.
 pub fn forward_hidden<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
