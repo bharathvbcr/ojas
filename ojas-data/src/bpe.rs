@@ -594,7 +594,9 @@ pub fn load_hf_gpt2(vocab_json: &Path, merges_txt: &Path) -> Result<Bpe, DataErr
 /// Load a model directory's `vocab.json` and `merges.txt` as [`load_hf_gpt2`]
 /// does, after checking its `tokenizer.json`, when it has one, with
 /// [`check_gpt2_pre_tokenizer`]. A directory with no `tokenizer.json` (the
-/// original GPT-2 release has none) is loaded unchecked.
+/// original GPT-2 release has none) is loaded unchecked; a `tokenizer.json`
+/// that is present but unreachable (a dangling symlink) or not a regular file
+/// (a directory, a FIFO) is an error.
 ///
 /// Use this wherever a directory is in hand. [`load_hf_gpt2`] itself never
 /// opens `tokenizer.json`, and the C API's tokenizer entry
@@ -605,7 +607,10 @@ pub fn load_hf_gpt2(vocab_json: &Path, merges_txt: &Path) -> Result<Bpe, DataErr
 /// what feeds a Qwen3.5 run.
 pub fn load_hf_gpt2_dir(dir: &Path) -> Result<Bpe, DataError> {
     let tokenizer_json = dir.join("tokenizer.json");
-    match std::fs::metadata(&tokenizer_json) {
+    // `symlink_metadata` tells absent from present-but-unreachable: a dangling
+    // symlink is present, and `metadata` (which follows it) would call it
+    // absent and load the tables unchecked.
+    match std::fs::symlink_metadata(&tokenizer_json) {
         Ok(_) => check_gpt2_pre_tokenizer(&tokenizer_json)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(DataError::new(format!("{}: {e}", tokenizer_json.display()))),
@@ -625,32 +630,75 @@ const TOKENIZER_JSON_LIMITS: JsonLimits = JsonLimits {
     tree_bytes_floor: 1 << 20,
 };
 
-/// Refuse a `tokenizer.json` whose `pre_tokenizer` is not GPT-2's, which is
-/// what [`gpt2_split`] and the byte alphabet implement:
-/// `{"type": "ByteLevel", "add_prefix_space": false, "use_regex": true}`
-/// (`use_regex` may be absent, Hugging Face's default; `trim_offsets` only
-/// moves offsets and is not read). Refused, naming what was found: `null`,
-/// a `Sequence` (Qwen2/3's `Split` regex then `ByteLevel` with `use_regex`
-/// false), `add_prefix_space` true or absent (Hugging Face defaults it to
-/// true), `use_regex` false or not a boolean, any other `type`, a missing
-/// `pre_tokenizer` key, malformed JSON, and a file over [`HF_TEXT_CAP`].
+/// Refuse a `tokenizer.json` that is not GPT-2's, by exactly these checks
+/// (the contract [`gpt2_split`], the byte alphabet and the merge table
+/// implement), each error naming what was found:
+///
+/// - `pre_tokenizer` is `{"type": "ByteLevel", "add_prefix_space": false,
+///   "use_regex": true}`; `use_regex` may be absent (Hugging Face's default)
+///   and `trim_offsets` only moves offsets, so it is not read. Refused:
+///   `null`, a `Sequence` (Qwen2/3's `Split` regex then `ByteLevel` with
+///   `use_regex` false), `add_prefix_space` true or absent (Hugging Face
+///   defaults it to true), `use_regex` false or not a boolean, any other
+///   `type`, and a missing key.
+/// - `normalizer` is absent or `null` (GPT-2 has none; Qwen's is NFC, which
+///   changes ids on non-NFC text).
+/// - `model.type` is `BPE`.
+///
+/// Also refused: a path that is not a regular file once symlinks are followed
+/// (a FIFO would block `open`), malformed JSON (duplicate keys included) and
+/// a file over [`HF_TEXT_CAP`]. Nothing else in the file is read: the added tokens, the
+/// post-processor and the decoder do not change what `encode_ordinary`
+/// returns.
 pub fn check_gpt2_pre_tokenizer(tokenizer_json: &Path) -> Result<(), DataError> {
     let shown = tokenizer_json.display();
     let fail = |why: &str| DataError::new(format!("{shown}: {why}"));
+    // Only a regular file (after following a symlink) is opened: opening a FIFO
+    // with no writer blocks forever. `read_capped` itself does not check, as it
+    // also serves the C API's `/dev/fd/N` paths, which may be pipes.
+    let kind = std::fs::metadata(tokenizer_json).map_err(|e| fail(&e.to_string()))?;
+    if !kind.is_file() {
+        return Err(fail("tokenizer.json is not a regular file"));
+    }
     let text = read_capped(tokenizer_json)?;
     let root = parse_json_with(&text, &TOKENIZER_JSON_LIMITS)
         .map_err(|e| fail(&format!("not a tokenizer.json: {}", e.detail())))?;
-    let pre = root
-        .field_opt("pre_tokenizer")
-        .map_err(|e| fail(&format!("not a tokenizer.json: {}", e.detail())))?
-        .ok_or_else(|| fail("has no pre_tokenizer key"))?;
-    match gpt2_pre_tokenizer_mismatch(pre) {
-        None => Ok(()),
-        Some(found) => Err(fail(&format!(
+    let key = |name: &str| {
+        root.field_opt(name)
+            .map_err(|e| fail(&format!("not a tokenizer.json: {}", e.detail())))
+    };
+    let pre = key("pre_tokenizer")?.ok_or_else(|| fail("has no pre_tokenizer key"))?;
+    if let Some(found) = gpt2_pre_tokenizer_mismatch(pre) {
+        return Err(fail(&format!(
             "pre_tokenizer is {found}, not GPT-2's ByteLevel(add_prefix_space=false, \
              use_regex=true); this loader's GPT-2 split and byte alphabet would give wrong ids"
-        ))),
+        )));
     }
+    match key("normalizer")? {
+        None | Some(JsonValue::Null) => {}
+        Some(n) => {
+            let kind = match n.field_opt("type") {
+                Ok(Some(JsonValue::String(s))) => s.as_str(),
+                _ => "an untyped value",
+            };
+            return Err(fail(&format!(
+                "normalizer is {kind}, not null: GPT-2 has none, and this loader applies none"
+            )));
+        }
+    }
+    let model_kind = match key("model")? {
+        Some(m) => match m.field_opt("type") {
+            Ok(Some(JsonValue::String(s))) => s.as_str(),
+            _ => "an untyped value",
+        },
+        None => "missing",
+    };
+    if model_kind != "BPE" {
+        return Err(fail(&format!(
+            "model is {model_kind}, not BPE: this loader reads a BPE vocabulary and merges"
+        )));
+    }
+    Ok(())
 }
 
 /// What `pre` is when it is not GPT-2's pre-tokenizer; `None` when it is.
@@ -1517,7 +1565,7 @@ mod pre_tokenizer_tests {
     }
 
     fn with_pre(pre: &str) -> String {
-        format!(r#"{{"pre_tokenizer":{pre},"model":{{}}}}"#)
+        format!(r#"{{"pre_tokenizer":{pre},"model":{{"type":"BPE"}}}}"#)
     }
 
     #[test]

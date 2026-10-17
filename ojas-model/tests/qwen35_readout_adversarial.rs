@@ -167,7 +167,6 @@ fn the_flat_index_edges_are_exact() {
 /// so a hostile batch size is a panic (or an allocation of `8 * batch` bytes
 /// that is touched, past the 32 GiB memguard at `batch` = 2^32), not an error.
 #[test]
-#[ignore = "BREAK: RightPadded::full allocates vec![seq; batch] before the u32 check (forward.rs full)"]
 fn full_refuses_a_huge_batch_before_allocating() {
     let r = catch_unwind(|| RightPadded::full(usize::MAX, 1));
     assert!(matches!(r, Ok(Err(OjasError::Shape { .. }))), "{r:?}");
@@ -178,7 +177,6 @@ fn full_refuses_a_huge_batch_before_allocating() {
 /// the capacity is attacker-chosen: `usize::MAX` panics with "capacity
 /// overflow"; 2^40 asks malloc for 8 TiB and aborts the process.
 #[test]
-#[ignore = "BREAK: RightPadded::from_attention_mask reserves Vec::with_capacity(batch) before validating batch (forward.rs from_attention_mask)"]
 fn from_attention_mask_refuses_a_huge_batch_with_zero_seq_before_allocating() {
     let r = catch_unwind(|| RightPadded::from_attention_mask(&[], usize::MAX, 0));
     assert!(matches!(r, Ok(Err(_))), "{r:?}");
@@ -436,7 +434,7 @@ mod metal {
     /// while the CPU backend refuses the same input (`NonFinite` in
     /// `embedding_forward`). The Metal embedding does not check its output.
     #[test]
-    #[ignore = "BREAK: on Metal a NaN padding embedding row makes the real positions of its row NaN, no error; CPU fails closed"]
+    #[ignore = "BREAK: on Metal a NaN padding embedding row makes the real positions of its row NaN, no error; CPU fails closed (card ft-ab2f1daf criterion 6)"]
     fn a_nan_padding_row_does_not_reach_the_readout_on_metal() {
         let Some(m) = device() else { return };
         let up = |t: &Tensor| m.upload(t).unwrap();
@@ -450,7 +448,7 @@ mod metal {
     }
 
     #[test]
-    #[ignore = "BREAK: as the NaN case, with +inf"]
+    #[ignore = "BREAK: as the NaN case, with +inf (card ft-ab2f1daf criterion 6)"]
     fn an_infinite_padding_row_does_not_reach_the_readout_on_metal() {
         let Some(m) = device() else { return };
         let up = |t: &Tensor| m.upload(t).unwrap();

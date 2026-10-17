@@ -313,9 +313,12 @@ pub fn forward_loss_lora<G: Graph>(
 /// fused tied-head cross-entropy.
 ///
 /// Every layer is causal, so row `b`'s positions `0..n` depend on `ids[b,
-/// ..n]` alone: tokens after them, such as right padding, change nothing
-/// the row reads ([`RightPadded`] is the input form that makes only that
-/// padding representable).
+/// ..n]` alone: finite tokens after them, such as right padding, change
+/// nothing the row reads. That holds for finite padding only: a non-finite
+/// value in a padding token's embedding is refused by the CPU backend, but on
+/// Metal it can reach the row's real positions as NaN (a backend issue
+/// tracked on card ft-ab2f1daf, criterion 6). [`RightPadded`] is the input
+/// form that makes only right padding representable.
 pub fn forward_hidden<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
@@ -457,8 +460,8 @@ const MAX_FLAT_ROWS: u64 = u32::MAX as u64;
 /// How long each row of a right-padded batch really is, out of `seq`
 /// columns. Only right padding is representable: row `b` holds its `lengths[b]
 /// >= 1` tokens in columns `0..lengths[b]` and padding after them, which the
-/// causal tower cannot carry into the row's own positions
-/// ([`forward_hidden`]). Left padding shifts a row's tokens to other
+/// causal tower cannot carry into the row's own positions as long as the
+/// padding is finite ([`forward_hidden`] says what non-finite padding does). Left padding shifts a row's tokens to other
 /// positions, and a hole or a packed row lets one segment read another, so
 /// [`RightPadded::from_attention_mask`] refuses both.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -475,22 +478,7 @@ impl RightPadded {
     /// index [`gather_rows`] uses; that is checked before anything is
     /// allocated for it.
     pub fn new(lengths: Vec<usize>, seq: usize) -> Result<Self, OjasError> {
-        if lengths.is_empty() || seq == 0 {
-            return Err(shape(
-                Self::OP,
-                format!("{} rows of {seq} columns", lengths.len()),
-            ));
-        }
-        let rows = (lengths.len() as u64).checked_mul(seq as u64);
-        if rows.is_none_or(|n| n > MAX_FLAT_ROWS) {
-            return Err(shape(
-                Self::OP,
-                format!(
-                    "{} rows of {seq} columns exceed the {MAX_FLAT_ROWS} rows a u32 index addresses",
-                    lengths.len()
-                ),
-            ));
-        }
+        Self::check_extent(lengths.len(), seq)?;
         if let Some((b, &n)) = lengths.iter().enumerate().find(|(_, &n)| n == 0 || n > seq) {
             return Err(shape(
                 Self::OP,
@@ -500,9 +488,32 @@ impl RightPadded {
         Ok(Self { lengths, seq })
     }
 
-    /// `batch` rows with no padding.
+    /// `batch` rows with no padding. The extent is checked before the
+    /// lengths are allocated.
     pub fn full(batch: usize, seq: usize) -> Result<Self, OjasError> {
+        Self::check_extent(batch, seq)?;
         Self::new(vec![seq; batch], seq)
+    }
+
+    /// `batch` and `seq` are both positive and `batch * seq` fits the `u32`
+    /// flat row index [`gather_rows`] uses. Every constructor calls this
+    /// before it allocates anything sized by `batch`.
+    fn check_extent(batch: usize, seq: usize) -> Result<(), OjasError> {
+        if batch == 0 || seq == 0 {
+            return Err(shape(Self::OP, format!("{batch} rows of {seq} columns")));
+        }
+        if (batch as u64)
+            .checked_mul(seq as u64)
+            .is_none_or(|n| n > MAX_FLAT_ROWS)
+        {
+            return Err(shape(
+                Self::OP,
+                format!(
+                    "{batch} rows of {seq} columns exceed the {MAX_FLAT_ROWS} rows a u32 index addresses"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// The lengths of Hugging Face's `attention_mask`, `[batch, seq]` row
@@ -517,6 +528,7 @@ impl RightPadded {
                 format!("{} mask values for {batch} rows of {seq}", mask.len()),
             ));
         }
+        Self::check_extent(batch, seq)?;
         if let Some(v) = mask.iter().find(|&&v| v != 0 && v != 1) {
             return Err(shape(
                 Self::OP,

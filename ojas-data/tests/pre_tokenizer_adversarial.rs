@@ -124,7 +124,6 @@ fn a_sequence_of_one_gpt2_byte_level_is_refused_conservatively() {
 /// pre-tokenizer beside a non-null `normalizer` (Qwen's is NFC) is accepted,
 /// though ids differ from `encode_ordinary`'s on non-NFC text.
 #[test]
-#[ignore = "BREAK: the guard accepts a GPT-2 pre_tokenizer beside a non-null normalizer; ids differ on non-NFC text"]
 fn a_normalizer_beside_a_gpt2_pre_tokenizer_is_refused() {
     let body = format!(
         r#"{{"normalizer":{{"type":"NFC"}},"pre_tokenizer":{GPT2_PRE},"model":{{"type":"BPE","vocab":{{}},"merges":[]}}}}"#
@@ -133,7 +132,6 @@ fn a_normalizer_beside_a_gpt2_pre_tokenizer_is_refused() {
 }
 
 #[test]
-#[ignore = "BREAK: the guard accepts a GPT-2 pre_tokenizer beside a non-BPE model section"]
 fn a_non_bpe_model_beside_a_gpt2_pre_tokenizer_is_refused() {
     let body = format!(
         r#"{{"normalizer":null,"pre_tokenizer":{GPT2_PRE},"model":{{"type":"Unigram","vocab":[]}}}}"#
@@ -232,7 +230,7 @@ fn bom_nul_invalid_utf8_and_junk_are_refused() {
 #[test]
 fn a_huge_string_is_bounded_and_never_a_pass_by_accident() {
     let big = "a".repeat(20 * 1024 * 1024);
-    let body = format!(r#"{{"x":"{big}","pre_tokenizer":{GPT2_PRE}}}"#);
+    let body = format!(r#"{{"x":"{big}","pre_tokenizer":{GPT2_PRE},"model":{{"type":"BPE"}}}}"#);
     check_bytes("bigstr", body.as_bytes()).unwrap();
     let seq =
         format!(r#"{{"x":"{big}","pre_tokenizer":{{"type":"Sequence","pretokenizers":[]}}}}"#);
@@ -293,7 +291,6 @@ fn symlinks_directories_and_unreadable_files() {
 /// dangling `tokenizer.json` symlink is a present-but-unreachable file.
 #[cfg(unix)]
 #[test]
-#[ignore = "BREAK: a dangling tokenizer.json symlink is treated as absent and the tables load unchecked (load_hf_gpt2_dir uses metadata, not symlink_metadata)"]
 fn a_dangling_tokenizer_json_symlink_is_an_error() {
     let d = scratch("dangling");
     write_tables(&d);
@@ -311,7 +308,6 @@ fn a_dangling_tokenizer_json_symlink_is_an_error() {
 /// untrusted directory hangs. The test unblocks its own thread.
 #[cfg(unix)]
 #[test]
-#[ignore = "BREAK: a FIFO in place of tokenizer.json hangs check_gpt2_pre_tokenizer in open(2) (read_capped has no regular-file check)"]
 fn a_fifo_in_place_of_tokenizer_json_does_not_hang() {
     let d = scratch("fifo");
     let f = d.join("tokenizer.json");
@@ -326,9 +322,15 @@ fn a_fifo_in_place_of_tokenizer_json_does_not_hang() {
         let _ = tx.send(check_gpt2_pre_tokenizer(&path).is_err());
     });
     let got = rx.recv_timeout(Duration::from_secs(5));
-    // Release the thread whatever happened: open a writer, then drop it.
-    let _ = std::fs::OpenOptions::new().write(true).open(&f);
-    h.join().unwrap();
+    if got.is_ok() {
+        h.join().unwrap();
+    } else {
+        // Only when the check is stuck in `open(2)`: a writer releases it.
+        // (Opening a FIFO for writing blocks until a reader exists, so this is
+        // never done when the check returned, or the test would hang itself.)
+        let _ = std::fs::OpenOptions::new().write(true).open(&f);
+        h.join().unwrap();
+    }
     let _ = std::fs::remove_dir_all(d);
     assert_eq!(got, Ok(true), "check hung on a FIFO");
 }
