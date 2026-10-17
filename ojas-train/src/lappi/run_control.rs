@@ -28,8 +28,15 @@ use crate::pyjson::{dumps, float_hex, obj, PyJsonError, CANONICAL_ASCII};
 /// `run_control.MAX_CAP_S`: 40 h. A cap above the program's cap is not a cap.
 pub const MAX_CAP_S: f64 = 40.0 * 3600.0;
 
-/// `real_ft_run.WALL_CLOCK_CAP_S`, the cap a run carries when none is given.
-pub const DEFAULT_CAP_S: f64 = 1_800.0;
+/// The cap a run that says `quick` carries when it names none (`real_ft_run.WALL_CLOCK_CAP_S`).
+/// A registered run has no such default: see [`WallClockCap::resolve`]
+/// (GAP-LORA2B-REDUCED-RUN-DEFAULT-CAP-1800S-2026-10-17: a registered run silently stopped after
+/// about 13 steps on this value).
+pub const QUICK_CAP_S: f64 = 1_800.0;
+
+/// The value at which the ledger's canonical `ft` form omits `wall_clock_cap_s`. It is a
+/// serialisation rule, kept equal to Python's so row hashes agree; it is never a run cap.
+pub const DEFAULT_CAP_S: f64 = QUICK_CAP_S;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum RunControlError {
@@ -64,6 +71,22 @@ impl WallClockCap {
             )));
         }
         Ok(Self { cap_s })
+    }
+
+    /// The cap a run starts with. A registered run (`quick == false`) must name its cap: `None`
+    /// is refused, never filled with a default. Only a run that says `quick` may omit it, and
+    /// then it gets [`QUICK_CAP_S`]. The result is validated like [`WallClockCap::new`].
+    pub fn resolve(cap_s: Option<f64>, quick: bool) -> Result<Self, RunControlError> {
+        match (cap_s, quick) {
+            (Some(c), _) => Self::new(c),
+            (None, true) => Self::new(QUICK_CAP_S),
+            (None, false) => Err(RunControlError::Invalid(
+                "a registered run must name its wall-clock cap: there is no default. Pass the \
+                 cap the registration was sized for, or mark the run quick (which excludes it \
+                 from every decision)."
+                    .into(),
+            )),
+        }
     }
 
     pub fn cap_s(&self) -> f64 {
@@ -355,6 +378,18 @@ mod tests {
         assert!(rc.expired().unwrap(), "elapsed == cap is expired, as Python's >=");
         clock.0.set(104.0);
         assert!(matches!(rc.elapsed_s(), Err(RunControlError::ClockBackwards { .. })));
+    }
+
+    #[test]
+    fn a_registered_run_has_no_default_cap_and_only_quick_may_omit_it() {
+        assert!(matches!(
+            WallClockCap::resolve(None, false),
+            Err(RunControlError::Invalid(m)) if m.contains("no default")
+        ));
+        assert_eq!(WallClockCap::resolve(Some(21_600.0), false).unwrap().cap_s(), 21_600.0);
+        assert_eq!(WallClockCap::resolve(None, true).unwrap().cap_s(), QUICK_CAP_S);
+        assert!(WallClockCap::resolve(Some(0.0), true).is_err(), "an explicit bad cap is not defaulted");
+        assert!(WallClockCap::resolve(Some(MAX_CAP_S + 1.0), false).is_err());
     }
 
     #[test]
