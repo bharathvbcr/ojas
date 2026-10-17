@@ -202,7 +202,7 @@ fn a_merge_that_does_not_fit_leaves_weight_and_charge_untouched() {
 #[test]
 fn a_non_float_weight_is_refused_not_misread() {
     let budget = Budget::new(1 << 20);
-    let wt = Tensor::from_u32(&vec![1u32; OUT * INN], &[OUT, INN], &budget).unwrap();
+    let wt = Tensor::from_u32(&[1u32; OUT * INN], &[OUT, INN], &budget).unwrap();
     let mut l = layer(
         &budget,
         wt,
