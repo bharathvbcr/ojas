@@ -36,12 +36,17 @@ pub const WD: f64 = 0.01;
 pub struct Fixture {
     pub dir: &'static str,
     pub alpha: f32,
+    /// The base checkpoint directory beside `qwen35_tiny` the references were
+    /// computed over (config.json, model.safetensors, and a
+    /// reference.safetensors holding `ids` and `labels`).
+    pub base: &'static str,
 }
 
 /// Rank 4, alpha 8: scaling 2, so a dropped scaling cannot pass.
 pub const SCALING_2: Fixture = Fixture {
     dir: "qwen35_tiny_lora",
     alpha: ALPHA,
+    base: "qwen35_tiny",
 };
 
 /// Rank 4, alpha 4: scaling 1, the pre-registered run's alpha == r, where
@@ -49,9 +54,36 @@ pub const SCALING_2: Fixture = Fixture {
 pub const SCALING_1: Fixture = Fixture {
     dir: "qwen35_tiny_lora_s1",
     alpha: 4.0,
+    base: "qwen35_tiny",
+};
+
+/// Rank 4, alpha 8 over the fake-quant q8 base (`qwen35_tiny_fq8`: the ten
+/// wrapped linears replaced by `dequantize(quantize(W))` from mlx, q8 g64, see
+/// its `manifest.json`): the base a Lappi LoRA trains over. The same (a'),
+/// (b'), (c') clauses and bounds as [`SCALING_2`].
+pub const FQ8: Fixture = Fixture {
+    dir: "qwen35_tiny_lora_fq8",
+    alpha: ALPHA,
+    base: "qwen35_tiny_fq8",
 };
 
 impl Fixture {
+    pub fn base_dir(self) -> PathBuf {
+        dir().parent().unwrap().join(self.base)
+    }
+
+    pub fn base_file(self) -> SafeTensors<'static> {
+        SafeTensors::open(&self.base_dir().join("model.safetensors")).unwrap()
+    }
+
+    pub fn host_params(self) -> Qwen35Params<Tensor> {
+        host_params_of(&self.base_file())
+    }
+
+    pub fn data(self) -> Data {
+        data_in(&self.base_dir())
+    }
+
     pub fn file(self) -> SafeTensors<'static> {
         let path: PathBuf = dir()
             .parent()
@@ -145,7 +177,12 @@ pub struct Data {
 }
 
 pub fn data() -> Data {
-    let reference = SafeTensors::open(&dir().join("reference.safetensors")).unwrap();
+    data_in(&dir())
+}
+
+/// The batch and tables from `base`'s `reference.safetensors` (`ids`, `labels`).
+pub fn data_in(base: &std::path::Path) -> Data {
+    let reference = SafeTensors::open(&base.join("reference.safetensors")).unwrap();
     let (ids, tg) = ids_and_targets(&reference);
     let tables = Qwen35Tables::new(&spec(), ids.shape()[1], &budget()).unwrap();
     Data {
@@ -245,10 +282,14 @@ pub fn lora_step<B: Backend>(
 }
 
 pub fn host_params() -> Qwen35Params<Tensor> {
-    let model = base_file();
+    host_params_of(&base_file())
+}
+
+/// The f32 host parameters of the base checkpoint `model`.
+pub fn host_params_of(model: &SafeTensors<'_>) -> Qwen35Params<Tensor> {
     load_hf(
         &spec(),
-        &model,
+        model,
         PREFIX,
         ojas_core::DType::F32,
         ojas_core::DType::F32,
@@ -299,7 +340,7 @@ pub struct Trajectory {
 /// batch every step, under `lora` and `cfg` (the fixture's own, or a
 /// deliberately wrong one for the sensitivity tests).
 pub fn trajectory(fx: Fixture, lora: &LoraConfig, cfg: AdamWConfig) -> Trajectory {
-    let (s, tg, d, host) = (spec(), targets(), data(), host_params());
+    let (s, tg, d, host) = (spec(), targets(), fx.data(), fx.host_params());
     let backend = cpu();
     let mut sites = fixture_sites(&fx.file(), false);
     // Moments follow the leaves: A, then each B part, per site.
@@ -425,9 +466,9 @@ pub fn check_a_prime(fx: Fixture) {
     let file = fx.file();
     let run = lora_step(
         cpu(),
-        &host_params(),
+        &fx.host_params(),
         &fixture_sites(&file, true),
-        &data(),
+        &fx.data(),
         &fx.opts(),
     );
     let want = read(&file, "a.loss")[0];
@@ -463,8 +504,8 @@ pub fn check_a_prime(fx: Fixture) {
 /// and dA exactly zero there.
 pub fn check_c_prime(fx: Fixture) {
     let file = fx.file();
-    let d = data();
-    let host = host_params();
+    let d = fx.data();
+    let host = fx.host_params();
     let run = lora_step(cpu(), &host, &fixture_sites(&file, false), &d, &fx.opts());
     let mut tape = Tape::new(cpu());
     let vars = bind(&mut tape, &host).unwrap();

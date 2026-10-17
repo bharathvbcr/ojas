@@ -17,7 +17,9 @@ The base model is the widened tiny Qwen3.5 (`qwen35_tiny`, written by
 `qwen35_wide_fixture.py`), loaded from its bf16 checkpoint into float32, so
 ojas and torch hold the same base values. Rank 4 and alpha 8 (scaling 2, so
 a dropped scaling cannot pass); `--alpha 4` writes the scaling-1 twin
-(`qwen35_tiny_lora_s1`), the pre-registered run's alpha == r, where ojas
+(`qwen35_tiny_lora_s1`); `--base DIR --out DIR` regenerates every reference over
+another base of the same shape (the fake-quant q8 one, `qwen35_fakequant_base.py`);
+the pre-registered run's alpha == r, where ojas
 skips the scale node. The seed is shared, so both fixtures hold the same A,
 B and data and differ only by the scale. Four cases, every one on CPU, fp32, one
 thread, deterministic algorithms:
@@ -118,11 +120,11 @@ def adapters(model):
             yield f"{name}.lora_B.weight", m.lora_B.weight
 
 
-def build_model():
-    cfg = mq.Qwen3_5TextConfig.from_dict(json.load(open(os.path.join(BASE, "config.json"))))
+def build_model(base=BASE):
+    cfg = mq.Qwen3_5TextConfig.from_dict(json.load(open(os.path.join(base, "config.json"))))
     cfg._attn_implementation = "eager"
     model = mq.Qwen3_5ForCausalLM(cfg).float()
-    state = load_file(os.path.join(BASE, "model.safetensors"))
+    state = load_file(os.path.join(base, "model.safetensors"))
     missing, unexpected = model.load_state_dict({k: v.float() for k, v in state.items()}, strict=False)
     assert not unexpected and missing == ["lm_head.weight"], (missing, unexpected)
     model.tie_weights()
@@ -130,9 +132,11 @@ def build_model():
     return model
 
 
-def batch():
-    ref = load_file(os.path.join(BASE, "reference.safetensors"))
-    return ref["ids"], ref["labels"], ref["loss"].item()
+def batch(base=BASE):
+    """ids, labels and the base loss transformers computed (None for a derived
+    base such as the fake-quant one, whose reference carries only ids and labels)."""
+    ref = load_file(os.path.join(base, "reference.safetensors"))
+    return ref["ids"], ref["labels"], (ref["loss"].item() if "loss" in ref else None)
 
 
 def loss_of(model, ids, labels):
@@ -144,18 +148,22 @@ def main():
     ap.add_argument("--alpha", type=int, default=ALPHA,
                     help="LoRA alpha at rank 4 (default 8: scaling 2; 4 is scaling 1, the run's)")
     ap.add_argument("--out", default=OUT, help="where to write lora.safetensors")
+    ap.add_argument("--base", default=BASE,
+                    help="base checkpoint dir: config.json, model.safetensors, and reference.safetensors "
+                         "holding ids and labels (default: qwen35_tiny)")
     args = ap.parse_args()
-    alpha, out_dir = args.alpha, args.out
+    alpha, out_dir, base_dir = args.alpha, args.out, args.base
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
     os.makedirs(out_dir, exist_ok=True)
-    ids, labels, base_loss = batch()
+    ids, labels, base_loss = batch(base_dir)
     out = {}
 
     # c: B = 0, the init.
-    model = build_model()
+    model = build_model(base_dir)
     base = loss_of(model, ids, labels).item()
-    assert abs(base - base_loss) <= 1e-6 * abs(base_loss), (base, base_loss)
+    if base_loss is not None:
+        assert abs(base - base_loss) <= 1e-6 * abs(base_loss), (base, base_loss)
     names = attach_lora(model, seed=SEED, r=RANK, alpha=alpha)
     init = {n: p.detach().clone() for n, p in adapters(model)}
     c_loss = loss_of(model, ids, labels).item()
@@ -187,7 +195,7 @@ def main():
     print(f"a: loss {a_loss.item():.7f}, {len(frozen)} frozen parameters without a gradient")
 
     # b: 20 AdamW steps from the init (A random, B = 0).
-    model = build_model()
+    model = build_model(base_dir)
     attach_lora(model, seed=SEED, r=RANK, alpha=alpha)
     params = [p for _, p in adapters(model)]
     opt = torch.optim.AdamW(params, lr=LR, betas=(0.9, 0.999), eps=1e-8, weight_decay=WD)
@@ -204,7 +212,7 @@ def main():
     print("b: losses", [f"{x:.5f}" for x in losses[:3]], "...", f"{losses[-1]:.5f}")
 
     # b64: the same trajectory in float64.
-    m64 = build_model().double()
+    m64 = build_model(base_dir).double()
     attach_lora(m64, seed=SEED, r=RANK, alpha=alpha)
     with torch.no_grad():
         for n, p in adapters(m64):
@@ -251,6 +259,8 @@ def main():
 
     meta = {"torch": torch.__version__, "rank": str(RANK), "alpha": str(alpha), "seed": str(SEED),
             "steps": str(STEPS), "lr": str(LR), "weight_decay": str(WD), "targets": json.dumps(names)}
+    if os.path.abspath(base_dir) != os.path.abspath(BASE):  # the default fixture's bytes stay as they were
+        meta["base"] = os.path.basename(os.path.normpath(base_dir))
     save_file(out, os.path.join(out_dir, "lora.safetensors"), metadata=meta)
     print(f"{len(out)} tensors -> {out_dir}")
 
