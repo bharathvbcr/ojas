@@ -108,14 +108,14 @@ Labels: [V] re-read at d431949 by the writer of this brief (2026-10-09 fine-tune
   - Interim full-gradient Tape rows at 2B are committed (bench/results/2026-10-11-bf16-frozen-base). They are
     labelled as not the LoRA step: bf16 peaks are 16.37 GB at T=2048 and 18.97 GB at T=9,638.
   - T=9,638 fits, so the fallback is not triggered.
-  - They were measured on Qwen3.5-2B (identical text_config). 2B-Base and 0.8B-Base weights are not on the machine.
+  - They were measured on Qwen3.5-2B (identical text_config). ~~2B-Base and 0.8B-Base weights are not on the machine~~ (corrected 2026-10-17 at 5b67cdd: the 2B-Base and 0.8B-Base snapshots, each with model.safetensors-00001-of-00001.safetensors, are in ~/.cache/huggingface/hub).
 - **Criterion 8: blocked** on gp-oom-error-class. No device OOM was reached: the peak was 33.9 GB of 51.5 GB.
 
 ### Fine-tune track audit (2026-10-15, at 88be893)
 Read-only re-audit of the fine-tune track at main 88be893. No cargo, GPU or device run was made in this audit.
 Labels: [V] re-read by the writer of this note; [A] read by an audit subagent at 88be893, not re-read; [I] inferred.
 DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read at 4b0b3b8.
-- Status: merged at 03412af [V]; review is right. The follow-up ft-69744e54 (bf16 tied table) is on branch gitpulse/bf16-tied-embedding-table-embedding-forw-eab146a9 at 5afa1fb, not on main.
+- Status: merged at 03412af [V]; review is right. The follow-up ft-69744e54 (bf16 tied table) ~~is on branch gitpulse/bf16-tied-embedding-table-embedding-forw-eab146a9 at 5afa1fb, not on main~~ (corrected 2026-10-17 at 5b67cdd: merged to main as 040e1ed, 5afa1fb is an ancestor of main).
 - Criteria: 1, 3, 4 met [A]; 2 met, the note "blocked" is stale: Metal linear_backward_input takes the bf16 weight (backend.rs:1363-1389), pinned by ojas-metal/tests/frozen_adversarial.rs:62 and qwen35_lora_metal.rs:68 [A]; 5 partial: LoRA A/B f32, D17 and the span head do not exist yet [A]; 6 met with the recorded deviation; 7 open: gpu_memory_rows.rs has no LoRA arm and no 0.8B run [V]; 8 landed on main (classify_alloc, retrying) but only the Limit path is exercised by a real refusal (device.rs:3335); the Exhausted path only by injected strings [A].
 - Stale [V]: "2B-Base and 0.8B-Base weights are not on this machine" (here and in bench/results/2026-10-11-bf16-frozen-base/README.md): both were fetched 2026-10-12 (~/.cache/huggingface/hub, 4.5 GB and 1.7 GB shards). "Lappi's two open() call sites need the new argument": provider.rs:146 already passes Precision::F32. gpu_memory_rows.rs:19-20 "the Tape has no frozen leaves yet" is false (fixed on the tied-table branch).
 - Owed for criterion 7 [V]: Lappi's pre-registration requires the T = 9,638 memory row before the Mac run (campaign/lora-2b-preregistered.json:64). Inferred estimate for a LoRA step at T = 9,638: 13-14 GB (the 18.97 GB full-gradient row minus ~5.5 GB of linear weight gradients) [I]; the binding limit is the 32 GiB memguard, not the 51.5 GB working set.
@@ -123,3 +123,28 @@ DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read 
 ### Brought up to main (2026-10-15)
 - Merge commit 36f1994 takes main b47cc33 (the real-2B Tape gate, scaling-1 LoRA parity, fine-tune audit). One conflict, `ojas-qwen35/tests/gpu_tape_2b.rs`: main's gate is kept, with this branch's table dtype (`DType::F32`) added to its `load_hf` call. `gpu_memory_rows.rs` merged clean onto the shared `tests/common` row.
 - Run (M5 Pro, under mac_heavy, 2026-10-15T18:32Z): `cargo clippy --workspace --all-targets --release -- -D warnings` clean; `cargo test --release --no-fail-fast -p ojas-model -p ojas-cpu -p ojas-qwen35 -p ojas-metal -p ojas-core -p ojas-autograd`: 1,065 passed, 0 failed, 44 ignored over 133 test binaries; `gpu_parity -- --ignored gpu_tiny`: 8 passed.
+
+### Fable ruling (2026-10-17)
+
+Synced from the GitPulse board by the 2026-10-17 brief sync; the board is canonical (Fable's final ruling of 2026-10-17, section 5), this section is the long-form record. Board card ft-3cc9ed3f01f08ad71b71f403438c3aa0, revision 5: status review, priority 1, severity high. Criterion numbers are the board's, counted from 0 in the order of the card's acceptance criteria.
+
+Ruling set: status review (unchanged), priority 1.
+
+Marks (the text of the existing criterion is otherwise unchanged on the board; nothing deleted, no threshold moved):
+
+- ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 6: [HOMED 2026-10-17 at ft-2bbced18 criterion 7 and its 2026-10-17 criterion (the tape-lora arm); waived here]
+
+Criteria appended by the ruling, verbatim:
+
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 9: (Fable 2026-10-17) The tied-table lane is on main (merge 040e1ed, rows bench/results/2026-10-14-bf16-tied-table); the brief's "not on main" is stale. Review closes on criterion 8's documentation and line-reference clean-up.
+
+Board criteria and marks already on the card before the ruling (2026-10-17 owner, gap and fold entries, and earlier audit marks), not previously in this brief, verbatim:
+
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 0: [MET — verified in source, by widening to a charged f32 copy per call (backend.rs:359-369, :1317)] Metal linear_forward accepts a bf16 weight (2 bytes per element resident) with f32 input and f32 accumulation; today Metal refuses bf16 operands (ojas-metal/src/backend.rs:1257, 1283) [V by Fable]
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 1: [MET — verified in source, by widening (backend.rs:1367-1377)] Metal linear_backward_input (from gp-ft-frozen-params-and-lora) accepts the same bf16 weight
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 2: [MET — verified in source, by widening (backend.rs:1521, :1539)] Metal SDPA forward and backward accept bf16 operands with f32 accumulation (backend.rs:1427, 1443 refuse today) [V by Fable]
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 3: [MET — verified in source (params.rs:361-376; qwen35_fixture.rs:161-165)] HF bf16 safetensors load into bf16 frozen weights without widening to f32 (today ojas-model/src/qwen35/params.rs:304 reads through read_f32_widened [A]); a test asserts resident bytes for the frozen base
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 4: [PARTLY — D17 and span head not in source (ft-9c4ae3c8)] LoRA weights, D17, the span head, norm weights, the residual stream and optimizer state stay f32
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 5: [MET — verified in source; bf16 provider step peak not measured (memguard SIGTERM)] Qwen35Step::open takes a precision and passes Precision::Bf16 to tessl's Qwen35Model::load; today it hard-codes Precision::F32 (ojas-qwen35/src/step.rs:361) [V] although tessl trains a bf16-stored model with f32 masters (qwen35_model.rs:389-392) [V by Fable]. A 2B memory row f32 vs bf16 is committed
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 7: [NOT MET — depends on ft-cab0fdf1] A Metal out-of-memory at these shapes surfaces as the typed capacity error (gp-oom-error-class)
+- [ ] ft-3cc9ed3f01f08ad71b71f403438c3aa0 criterion 8: (audit-2026-10-16) docs/dtype-policy.md and the card text say the Metal bf16 lanes widen each Bf16 operand into a charged f32 copy per call and run the ExactF32 kernels (no bf16 GEMM); the per-call widening transient is reported as its own column in the criterion-7 rows; and the card's stale line references (backend.rs:1257, :1283, :1427, :1443; params.rs:304) are replaced with the current sites.

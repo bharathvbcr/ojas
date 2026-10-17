@@ -1,7 +1,7 @@
 ---
 id: "gp-ft-frozen-params-and-lora"
 title: "Frozen parameters and LoRA on the Tape: frozen leaves with no gradient, a dX-only linear backward, PEFT-initialised LoRA on every Qwen3.5 linear (attention, GDN linear_attn, MLP), merge/unmerge, Fable's parity bounds (a')-(c')"
-status: ready
+status: review
 priority: 1
 severity: high
 type: feature
@@ -45,7 +45,7 @@ Frozen parameters and LoRA on the Tape: frozen leaves with no gradient, a dX-onl
 
 Task: gp-ft-frozen-params-and-lora
 Type: feature
-Status: ready
+Status: review
 Priority: 1 (High)
 Severity: high
 Owner: unassigned
@@ -56,7 +56,7 @@ Labels: fine-tune, lora, autograd, qwen35, metal, parity
 - ojas
 
 ## Description
-Filed by the 2026-10-09 fine-tune audit (at d431949); updated by Fable's ruling the same day (Lappi AUDIT/lora-2b-2026-10-09/fable-ft-decisions.md, D1, D6, D7). There is no LoRA code in ojas, tessl or Lappi (rg -uu) [V], and no way to freeze a parameter on the Tape.
+Filed by the 2026-10-09 fine-tune audit (at d431949); updated by Fable's ruling the same day (Lappi AUDIT/lora-2b-2026-10-09/fable-ft-decisions.md, D1, D6, D7). ~~There is no LoRA code in ojas, tessl or Lappi (rg -uu) [V], and no way to freeze a parameter on the Tape.~~ (corrected 2026-10-17 at 5b67cdd: ojas has ojas-model/src/lora.rs and forward_loss_lora forward.rs:275, Tape::frozen_leaf is tape.rs:390, and Lappi has python/qd_train/lora.py.)
 
 Decided (Fable D1, 2026-10-09): LoRA lives on the Tape (ojas-model qwen35 over ojas-core Backend, CPU + Metal), not in tessl's fused step. On the Tape LoRA is composition (two small f32 leaves and existing linear/add ops) plus one Backend method; rule 6 holds because ojas-metal's hybrid ops call tessl kernels. Reversal: if gp-qwen35-2b-metal-tape-run fails its parity bound on real weights, or the Tape's tokens/s at T=2048 stays below half the provider's after gp-ft-step-memory-and-throughput, LoRA moves into tessl's fused step.
 
@@ -96,7 +96,7 @@ DevMap (main checkout, generation 6968, fresh) and rg were used; Lappi was read 
 - Criteria: 1 partial: frozen leaves take no gradient (tape.rs:384, :1460-1462; tests frozen.rs:123-228) [A], but the optimizer-state, clip-norm and finite-check clauses have no consumer because no Qwen3.5 Tape trainer exists (gp-ft-trainer-loop) [A]; 2 partial: dX-only exists on the trait, CPU, Metal, Autocast and Gated with bit-parity and no-dW-charge tests, but the A/B bench (frozen_linear_bench.rs) is ignored and no result is committed [A]; 3, 4, 5, 7 met [A]; 6 partial: losses and bit-identical rerun pinned, but the final-adapter bound was relaxed to max(1e-5, 3 x torch's own fp32 noise floor) (qwen35_lora.rs, `b_prime_final_adapters_are_within_the_oracles_own_noise_floor`) and the literal 1e-5 test was dropped in 60efedc [V]; the brief needs amending or the relaxation ratified; 8 partial: LoraLinear merge/unmerge tested, the model-level fold exists only inside a test [A]; 9 met as documented, its pin gpu_parity.rs:654 is #[ignore] [A].
 - New, P2 [V]: no model-level LoRA test runs at scaling 1. Every (a'), (b'), (c') run uses RANK 4, ALPHA 8 (qwen35_common/lora.rs:21-22); the (b') sensitivity mutants vary alpha only by +1% and +0.1%. The pre-registered recipe is r = 16, alpha = 16, where `scaled_b` (lora.rs:308-316) returns B unscaled and LoraForward records no consts: the path the run takes is the one path no parity test exercises.
 - New, P2 [V]: no adapter read or write in src (`rg -uu lora_A|lora_B` over ojas-model, ojas-qwen35, ojas-io src finds only a doc comment, lora.rs:289); `fixture_sites` is a test helper. Shared-init parity and the kill -9 resume need it. Home: gp-ft-trainer-loop (checkpoint) or gp-ft-export (PEFT format).
-- Known, P1 [V]: a frozen tied head still gets a weight gradient: `Tape::fused_ce` always calls with want_grad = true and requires both gradients (tape.rs:955-990). Tracked by ft-2bbced18 (BREAK test frozen_adversarial.rs:280).
+- Known, P1 [V]: ~~a frozen tied head still gets a weight gradient: `Tape::fused_ce` always calls with want_grad = true and requires both gradients (tape.rs:955-990).~~ (corrected 2026-10-17 at 5b67cdd: fixed on main; Tape::fused_ce is tape.rs:968, its gradients are optional per operand, CeGrads is ojas-core/src/backend.rs:1748, and the frozen-head test is not ignored, frozen_adversarial.rs:280.) Tracked by ft-2bbced18 (BREAK test frozen_adversarial.rs:280).
 - Stale: line 59 "no LoRA code ... no way to freeze a parameter" and the "Today ..." clauses of criteria 1, 2 and 9 are false; cited lines moved (tape.rs:362-365 -> :365-386, backend.rs:653-659 -> :659-690, step.rs:572-586 -> :655-686) [A].
 
 ### Fable rulings (2026-10-15)
@@ -174,3 +174,25 @@ Landed for review on branch gitpulse/fused-ce-want-flags (off the tied-table bra
 - Not reproduced here: BUILD_REPORT.md's note that `ojas-model/src/trainer.rs` binds frozen moment slots with `g.param` (no such line in this tree; the file is untracked in the main checkout, not in this branch).
 - Run (M5 Pro, under mac_heavy, 2026-10-15T21:42Z, cw-check2): `cargo clippy --workspace --all-targets --release -- -D warnings` clean; `cargo test --release --no-fail-fast -p ojas-core -p ojas-autograd -p ojas-cpu -p ojas-metal -p ojas-wgpu -p ojas-model -p ojas-capi -p ojas-oracle -p ojas-qwen35`: 1,385 passed, 2 failed, 50 ignored over 173 test binaries; the 2 were the oracle table-lane count pins (204 vs 212 mixed calls, the four-combination sweep), updated and rerun below; `gpu_parity -- --ignored gpu_tiny`: 8 passed.
 - The count pins (`ojas-oracle/tests/bf16_operands.rs:22`, `ojas-metal/tests/bf16_operands.rs:78`) now read `2 * (2 * 10 + 2 * 38) + 2 * 10`. Their rerun (clippy on ojas-oracle and ojas-metal, both `bf16_operands` tests) was queued for the heavy-job lock when this was committed; its result is the next line.
+
+### Fable ruling (2026-10-17)
+
+Synced from the GitPulse board by the 2026-10-17 brief sync; the board is canonical (Fable's final ruling of 2026-10-17, section 5), this section is the long-form record. Board card ft-6fb212ce8744aef3bdf4e5c6ff1fdf44, revision 8: status review, priority 1, severity high. Criterion numbers are the board's, counted from 0 in the order of the card's acceptance criteria.
+
+Ruling set: status review (unchanged; owner verify to done), priority 1.
+
+Marks (the text of the existing criterion is otherwise unchanged on the board; nothing deleted, no threshold moved):
+
+- ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 3: [MET 2026-10-17: LoraKind::suffix (ojas-model/src/qwen35/params.rs:697-708) equals Lappi LORA_TARGET_SUFFIXES (python/qd_train/lora.py:89-100) ten for ten; 150 linears at 2B by construction; names read from the tensor index (lora_targets :771)]
+- ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 9: [HOMED 2026-10-17 at ft-2bbced18 criteria 3 and 4 (the end-to-end dW-skip share and the interleaved rows); criterion 2's benchmark clause is waived here]
+
+Board criteria and marks already on the card before the ruling (2026-10-17 owner, gap and fold entries, and earlier audit marks), not previously in this brief, verbatim:
+
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 0: [MET — verified in source] The Tape can mark a leaf frozen: no gradient buffer, excluded from grads(), optimizer state, the clip norm and per-step finite checks. Today Tape::leaf records every leaf as Rec::Leaf (ojas-autograd/src/tape.rs:362-365) and the walk keeps a gradient for every leaf [V]
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 1: [MET — verified in source; A/B record NOT committed, see criterion 10] Backend gains linear_backward_input (dX only) with CPU and Metal bodies, and a frozen linear never computes dW. Today linear_backward always returns (grad_input, grad_weight) (ojas-core/src/backend.rs:653-659) [V]. Autocast/Gated wrappers forward it (gp-backend-wrapper-forwarding). A test asserts dX equals the full path bit for bit and that no dW buffer is allocated (budget delta 0); an A/B benchmark at the 2B layer shapes reports the backward-time saving
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 2: [MET — verified in source] A LoRA linear computes y = x W^T + (alpha/r) * (x A^T) B^T with r, alpha and dropout configurable; init as PEFT does: kaiming_uniform_(A, a=sqrt(5)), B = 0, scaling = alpha/r [V by Fable from peft/tuners/lora/layer.py]. Generic over Backend, not Qwen3.5-specific
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 4: [MET — verified in source] Bound (a'), CPU f32 on the widened tiny fixture: LoRA forward loss <= 1e-5 rel against plain torch; dX, dA, dB within 1e-5 of each tensor's max; frozen leaves have no gradient (absent, not zero)
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 5: [MET — verified in source, under the 2026-10-14 amendment] Bound (b'): a 20-step tiny trajectory, torch fp32 CPU vs ojas CPU Exact: per-step loss <= 1e-5 rel for steps 0-5 and <= 1e-4 to step 20; final A, B: each tensor within max(1e-5, 3x torch's own fp32-vs-fp64 gap) of each tensor's max, against torch fp32 and against fp64, and ojas closer to fp64 than torch fp32 on a majority of tensors; two ojas runs bit-identical; Metal vs CPU <= 2^-8 on loss with bf16 operands
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 6: [MET — verified in source] Bound (c'): Tape-with-LoRA at B = 0 gives a loss bit-equal to Tape-without-LoRA on CPU (identity at init)
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 7: [MET — verified in source] merge folds (alpha/r) B A into W in f32 and reproduces unmerged logits within the stated bound; unmerge restores the f32 W bit for bit
+- [ ] ft-6fb212ce8744aef3bdf4e5c6ff1fdf44 criterion 8: [MET — verified in source, as doc + pin] Provider freeze semantics are fixed or documented: today lr_scale 0 still feeds grad_sq_norm (ojas-qwen35/src/step.rs:572-578) and updates moments (step.rs:584-586) [V]. Under Fable D1 the provider stays full-FT, so the minimum is a doc and a test pinning the behaviour; the fix (exclude scale-0 entries from the norm and the moments) is preferred

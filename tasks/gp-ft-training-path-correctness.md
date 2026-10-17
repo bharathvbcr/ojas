@@ -2,7 +2,7 @@
 id: "gp-ft-training-path-correctness"
 title: "Fine-tune path bugs before any feature work: Qwen3.5 Tape loss cannot mask labels, save_state drops a half-filled gradient bank, a stale 4B refusal states a false reason, one unknown safetensors dtype rejects the whole file; widen the tiny fixture so torch sees batch, heads and CE tiling"
 status: review
-priority: 0
+priority: 1
 severity: high
 type: bug
 owner: "unassigned"
@@ -38,8 +38,8 @@ Fine-tune path bugs before any feature work: Qwen3.5 Tape loss cannot mask label
 
 Task: gp-ft-training-path-correctness
 Type: bug
-Status: ready
-Priority: 0 (Urgent)
+Status: review
+Priority: 1 (High)
 Severity: high
 Owner: unassigned
 Due: none
@@ -101,3 +101,17 @@ Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two i
 - **Board: review now, done after a recorded run** of its only criterion 2 pin, `gpu_save_state_refuses_a_half_filled_gradient_bank` (ojas-qwen35/tests/gpu_save_state_bank.rs, #[ignore], a tiny-fixture GPU test), and of gpu_parity.rs:654. A check that has not run is not reported as passed.
 - **Recorded run (2026-10-15, main 132b46e, M5 Pro, under mac_heavy, `cargo test --release -p ojas-qwen35 --test gpu_save_state_bank --test gpu_parity -- --ignored --exact ... --test-threads=1`):** `gpu_save_state_refuses_a_half_filled_gradient_bank ... ok` (1 passed); `gpu_tiny_scale_zero_entry_still_feeds_the_norm ... ok` (1 passed, 9 filtered out).
 - Board: done.
+
+### Fable ruling (2026-10-17)
+
+Synced from the GitPulse board by the 2026-10-17 brief sync; the board is canonical (Fable's final ruling of 2026-10-17, section 5), this section is the long-form record. Board card ft-29462f23af79fa6d72825ecb7afd1944, revision 11: status review, priority 1, severity high. Criterion numbers are the board's, counted from 0 in the order of the card's acceptance criteria.
+
+Ruling set: status review (unchanged; ready for the owner's verify to done: Fable 2026-10-15 ruled "Board: done" after the recorded run of 2026-10-15), priority 0 -> 1 (nothing on the LoRA path waits on it; criterion 6's dtype-parse sweep is not on the path: Qwen weights are BF16/F32).
+
+Board criteria and marks already on the card before the ruling (2026-10-17 owner, gap and fold entries, and earlier audit marks), not previously in this brief, verbatim:
+
+- [ ] ft-29462f23af79fa6d72825ecb7afd1944 criterion 0: [MET — verified in source; Metal run unverifiable here] The Qwen3.5 Tape forward_loss takes the same ignore argument as the GPT forward_loss (ojas-model/src/block.rs:430 `ignore: Option<u32>`) and passes it to lin_ce; today ojas-model/src/qwen35/forward.rs:195 passes None [V], so prompt and pad tokens are trained on with no error. A test with -100 labels on prompt and padding matches torch cross_entropy(ignore_index=-100) on CPU and Metal, and fails at d431949
+- [ ] ft-29462f23af79fa6d72825ecb7afd1944 criterion 1: [MET — verified in source] Qwen35Step::save_state refuses with a typed error while the gradient bank holds a partial accumulation (or persists it and load_state restores it). Today save_state (ojas-qwen35/src/state.rs:613) never checks bank_state [V], so a checkpoint taken mid-accumulation silently loses those gradients on resume. A test covers the chosen outcome
+- [ ] ft-29462f23af79fa6d72825ecb7afd1944 criterion 2: [MET — verified in source; message clause about the grouped golden is stale] The GDN head-grouping refusal states a true reason: ojas-qwen35/src/config.rs:503-508 says 'tessl's gdn_train has no head grouping' [V], but tessl now repeats key heads over value heads and sums the gradients back (tessl qwen35_train.rs:23-26) [V by Fable]. Either lift the refusal behind a grouped golden, or keep it with a message naming the real missing piece; a test pins the message. (Lifting it for 4B is gp-qwen35-above-2b's work, dormant in this track)
+- [ ] ft-29462f23af79fa6d72825ecb7afd1944 criterion 4: [MET — verified in source] The tiny Qwen3.5 fixture is widened so the paths above are checked against torch: batch >= 2, >= 2 GDN heads, vocab > 8192 (more than one fused-CE column tile) and -100 labels; today it is batch 1, one GDN head, vocab 64 [A]. This is the fixture Fable's bound (a') is measured on
+- [ ] ft-29462f23af79fa6d72825ecb7afd1944 criterion 6: (audit-2026-10-16) A file with one tensor each of `F8_E4M3FNUZ` [8], `F8_E5M2FNUZ` [8], `C64` [3] and one `BF16` tensor parses; `read_f32_widened` of the BF16 tensor returns its values; `read_bytes` of each new tensor returns its exact bytes; `read_f32`/`read_f32_widened`/`read_bf16_bits` of each new tensor return `Err` naming the tensor and dtype; `C64` [3] spans 24 bytes and a header declaring `data_offsets` [0,23] for it is refused; `"F7"` still fails and the message no longer says "not in the safetensors spec"; `write_safetensors` round-trips each new tag byte for byte; the doc at safetensors.rs:24-28 and the test comment name the upstream release compared against (0.8.0 or later).

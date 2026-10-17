@@ -97,3 +97,19 @@ Checked by this session [V]: the local Qwen3.5-2B snapshot exists (4.3 GB). ojas
 - ojas-cpu/src/fused_ce.rs
 - ojas-cpu/src/pointwise.rs
 - ojas-metal/kernels/ojas_backend.metal
+
+### Fable ruling (2026-10-17)
+
+Synced from the GitPulse board by the 2026-10-17 brief sync; the board is canonical (Fable's final ruling of 2026-10-17, section 5), this section is the long-form record. Board card ft-9c13f47224dbb204fe9534c264500a5b, revision 5: status ready, priority 2, severity medium. Criterion numbers are the board's, counted from 0 in the order of the card's acceptance criteria.
+
+Ruling set: status ready, priority 2 (unchanged).
+
+Criteria appended by the ruling, verbatim:
+
+- [ ] ft-9c13f47224dbb204fe9534c264500a5b criterion 11: (Fable 2026-10-17) Not on the LoRA-2B path: the Tape StepProvider runs under Lappi's loop (its own clip max_norm/(norm+1e-6), non-finite refusal before AdamW, grad_accum 1), not ojas-model's Trainer; criteria 5, 7 and 10 apply to the nanolab Trainer only.
+
+Board criteria and marks already on the card before the ruling (2026-10-17 owner, gap and fold entries, and earlier audit marks), not previously in this brief, verbatim:
+
+- [ ] ft-9c13f47224dbb204fe9534c264500a5b criterion 8: (audit-2026-10-16) With SkipBatch, N consecutive NonFinite steps (N documented) are followed by a distinct error that does not advance the cursor; a test with `Fault::NanOutput` on every `linear_forward` pins N and the final cursor; either `resume_from` refuses a checkpoint whose `model.safetensors` holds a NaN (test edits one f32 in place, length unchanged) or the decision not to scan is recorded beside load.rs:16 with the reason; `skip_batch_advances_the_cursor_and_abort_keeps_it` is unchanged.
+- [ ] ft-9c13f47224dbb204fe9534c264500a5b criterion 9: (audit-2026-10-16) `label_smoothing` and per-class `weight` on cross-entropy match torch `F.cross_entropy` in forward and gradient on CPU (f64 gradcheck, torch golden), with a Metal forward and backward kernel and a Metal-vs-CPU parity test at vocab 10 and 100; the fused linear-CE path either supports them or refuses with a typed error naming the option; Autocast and Gated forward the changed signature (ft-fe7dcee6's completeness tests).
+- [ ] ft-9c13f47224dbb204fe9534c264500a5b criterion 10: [w12 fold 2026-10-17, Fable ruling] grad_clip == 0: trainer.rs:226 accepts 0 and clip_scale returns 0 (ojas-core/src/backend.rs:183-187), zeroing every gradient — torch clip_grad_norm_(max_norm=0) does the same; decide against nanolab's meaning of 0 (off vs zero) and document it at both sites with a test pinning the decision.

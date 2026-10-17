@@ -2,7 +2,7 @@
 id: "gp-ft-export"
 title: "LoRA-2B release export: merged dense bf16 tower plus D17 and span head through Lappi's ckpt_average and qd-export; seed averaging on merged weights only; PEFT-format adapters for the reference arm"
 status: backlog
-priority: 2
+priority: 1
 severity: medium
 type: feature
 owner: "unassigned"
@@ -35,7 +35,7 @@ LoRA-2B release export: merged dense bf16 tower plus D17 and span head through L
 Task: gp-ft-export
 Type: feature
 Status: backlog
-Priority: 2 (Normal)
+Priority: 1 (High)
 Severity: medium
 Owner: unassigned
 Due: none
@@ -78,3 +78,22 @@ Fable ruled on the audit's open decisions on 2026-10-15; the owner decided two i
 - **New criterion (one-seed route):** the one-seed Metal export carries merged bf16 `tower.*`, f32 `span_head.*` and `d17.delta` [17, H] f32, with `n_tensors` counting it and a `d17` manifest block; Lappi's `_metal_export_weights` / `read_average` accept the optional `d17.` prefix and pass it to qd-metal's `set_answer_delta`. The scorer already scores one seed's Metal export without ckpt_average (Lappi tools/real_ft_run.py:7426-7434, :7741-7742) but refuses keys other than tower.* and span_head.* (:8006-8007); the release side already defines d17. (crates/qd-export/src/layout.rs:38-44, crates/qd-metal/src/weights.rs:334-360).
 - **No merged-only fallback:** folding D17 into the 17 tied rows changes those tokens' input embeddings and full-vocab head rows, so it would score a model that was not trained. The Lappi half goes to Lappi's board (gp-ft-lora-2b-lane).
 - Criterion 8 of gp-ft-frozen-params-and-lora (the model-level fold) is owned here.
+
+### Fable ruling (2026-10-17)
+
+Synced from the GitPulse board by the 2026-10-17 brief sync; the board is canonical (Fable's final ruling of 2026-10-17, section 5), this section is the long-form record. Board card ft-58e316a9bae421a3a2d71c26192aaea8, revision 5: status backlog, priority 1, severity medium. Criterion numbers are the board's, counted from 0 in the order of the card's acceptance criteria.
+
+Ruling set: status backlog, priority 1 (unchanged), severity medium (unchanged).
+
+Marks (the text of the existing criterion is otherwise unchanged on the board; nothing deleted, no threshold moved):
+
+- ft-58e316a9bae421a3a2d71c26192aaea8 criterion 6: [DECIDED 2026-10-17: see the next criteria]
+
+Criteria appended by the ruling, verbatim:
+
+- [ ] ft-58e316a9bae421a3a2d71c26192aaea8 criterion 7: (Fable 2026-10-17) The quantised arm's merge target is dequant(Q(W)) + (alpha/r) B A, the base the adapters trained over (the fake-quant file), rounded once to bf16 RNE; merging into the original bf16 W is refused with a typed error naming the base-sha mismatch. The release is a dense bf16 tower scored by qd-export and qd-metal unchanged; serving a quantised base is not in this track (D5's reversal is not triggered). The manifest records base format, group size, mlx version and the base file's sha256.
+- [ ] ft-58e316a9bae421a3a2d71c26192aaea8 criterion 8: (Fable 2026-10-17) The checkpoint-to-scorer bridge is Lappi's (ft-2ed2fd55): a converter reads ojas's adapter checkpoint (ft-b5e64557 criterion 13's documented layout) into the lora-merged layout tools/ckpt_average.py already accepts (frozen tower, lora_A/lora_B by module name, lora_r, lora_alpha, d17, span_head; ckpt_average.py:152-160) and closes GAP-LORA-CKPT-LAYOUT-NOT-OJAS-VERIFIED-2026-10-12 with a round-trip test; ojas's part here is a parity test that the merged tower from that route equals ojas's own per-site merge (lora.rs merge) within the stated bf16 bound.
+
+Board criteria and marks already on the card before the ruling (2026-10-17 owner, gap and fold entries, and earlier audit marks), not previously in this brief, verbatim:
+
+- [ ] ft-58e316a9bae421a3a2d71c26192aaea8 criterion 5: (audit-2026-10-16) `fuse_b`/`split_b` return `Result` and refuse wrong arity and every wrong length (short, long, empty) for each `LoraKind` with `OjasError::Shape`; `LoraSite::init` refuses an `out_parts` sum that overflows; `scale_constant` with a shape past the Budget returns `CapacityExceeded` without allocating.
