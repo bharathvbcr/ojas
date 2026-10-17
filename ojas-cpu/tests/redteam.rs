@@ -2,7 +2,7 @@
 //! behavior the op must have; a failure here is a logic bug.
 
 use ojas_core::{
-    next_step, AdamWConfig, Backend, Budget, DType, MuonNs5Config, OjasError, Tensor,
+    next_step, AdamWConfig, Backend, Budget, DType, GdnInputs, MuonNs5Config, OjasError, Tensor,
     CLIP_GRAD_NORM_EPS, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_cpu::CpuBackend;
@@ -547,6 +547,208 @@ fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
     let got = run(&tight, &budget);
     assert_eq!(got, run(&roomy, roomy.budget()));
     assert_ne!(f32::from_bits(got[0]), 1.5);
+}
+
+/// Deterministic values in `[lo, hi)`.
+fn spread(seed: u64, n: usize, lo: f32, hi: f32) -> Vec<f32> {
+    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+    (0..n)
+        .map(|_| {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            lo + (hi - lo) * ((s >> 40) as f32 / (1u64 << 24) as f32)
+        })
+        .collect()
+}
+
+/// `data` as a contiguous view into the middle of a larger buffer: three
+/// NaNs before it (a 12-byte offset) and two after. An op that reads from
+/// the start of the storage, or scans the whole buffer, sees a NaN; the
+/// view's own values are all finite. Returns the view and its parent.
+fn nan_framed(cpu: &CpuBackend, data: &[f32], shape: &[usize]) -> (Tensor, Tensor) {
+    let mut framed = vec![f32::NAN; 3];
+    framed.extend_from_slice(data);
+    framed.extend([f32::NAN; 2]);
+    let parent = f32t(cpu, &framed, &[framed.len()]);
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+    let view = parent.narrow(12, shape, &strides).unwrap();
+    assert_eq!(view.byte_offset(), 12);
+    assert_eq!(view.to_f32_vec().unwrap(), data);
+    (view, parent)
+}
+
+/// `run` on operands that are non-zero-offset views and on compact copies
+/// of the same values: every output bit equal, and no parent buffer written
+/// (its NaN frame and its window unchanged).
+fn offset_views_equal_compact_copies(
+    name: &str,
+    operands: &[(Vec<f32>, Vec<usize>)],
+    run: impl Fn(&CpuBackend, &[Tensor]) -> Result<Vec<Tensor>, OjasError>,
+) {
+    let cpu = wide();
+    let compact: Vec<Tensor> = operands.iter().map(|(d, s)| f32t(&cpu, d, s)).collect();
+    let framed: Vec<(Tensor, Tensor)> = operands
+        .iter()
+        .map(|(d, s)| nan_framed(&cpu, d, s))
+        .collect();
+    let views: Vec<Tensor> = framed.iter().map(|(v, _)| v.clone()).collect();
+    let before: Vec<Vec<u32>> = framed
+        .iter()
+        .map(|(_, p)| bits(&p.to_f32_vec().unwrap()))
+        .collect();
+    let want = run(&cpu, &compact).unwrap_or_else(|e| panic!("{name}: compact: {e:?}"));
+    let got = run(&cpu, &views).unwrap_or_else(|e| panic!("{name}: view: {e:?}"));
+    assert_eq!(want.len(), got.len(), "{name}");
+    for (i, (w, g)) in want.iter().zip(&got).enumerate() {
+        assert_eq!(w.shape(), g.shape(), "{name} output {i}");
+        assert_eq!(
+            bits(&g.to_f32_vec().unwrap()),
+            bits(&w.to_f32_vec().unwrap()),
+            "{name}: output {i} differs between a view and a compact copy"
+        );
+    }
+    for (i, ((_, parent), was)) in framed.iter().zip(&before).enumerate() {
+        assert_eq!(
+            &bits(&parent.to_f32_vec().unwrap()),
+            was,
+            "{name}: operand {i}'s parent buffer was written"
+        );
+    }
+}
+
+fn gdn_inputs(o: &[Tensor]) -> GdnInputs<'_> {
+    GdnInputs {
+        q: &o[0],
+        k: &o[1],
+        v: &o[2],
+        g: &o[3],
+        beta: &o[4],
+        initial_state: Some(&o[5]),
+    }
+}
+
+fn op(data: Vec<f32>, shape: &[usize]) -> (Vec<f32>, Vec<usize>) {
+    (data, shape.to_vec())
+}
+
+/// The hybrid-layer ops read a non-contiguous-offset operand at its offset
+/// and scan only its window, and write nothing back to it.
+#[test]
+fn hybrid_ops_read_offset_views_in_place() {
+    let n = |shape: &[usize]| shape.iter().product::<usize>();
+    let (cx, cw) = ([2usize, 5, 4], [4usize, 3]);
+    let conv = || {
+        [
+            op(spread(1, n(&cx), -1.0, 1.0), &cx),
+            op(spread(2, n(&cw), -1.0, 1.0), &cw),
+        ]
+    };
+    offset_views_equal_compact_copies("conv1d forward", &conv(), |b, o| {
+        b.causal_conv1d_silu_forward(&o[0], &o[1]).map(|y| vec![y])
+    });
+    let mut with_grad = conv().to_vec();
+    with_grad.push(op(spread(3, n(&cx), -1.0, 1.0), &cx));
+    offset_views_equal_compact_copies("conv1d backward", &with_grad, |b, o| {
+        b.causal_conv1d_silu_backward(&o[0], &o[1], &o[2])
+            .map(|(gx, gw)| vec![gx, gw])
+    });
+
+    let rows = [6usize, 16];
+    let gated = vec![
+        op(spread(4, n(&rows), -1.0, 1.0), &rows),
+        op(spread(5, n(&rows), -1.0, 1.0), &rows),
+        op(spread(6, 16, 0.5, 1.5), &[16]),
+    ];
+    offset_views_equal_compact_copies("gated_rms_norm forward", &gated, |b, o| {
+        b.gated_rms_norm_forward(&o[0], &o[1], &o[2], 1e-6)
+            .map(|y| vec![y])
+    });
+    let mut gated_back = gated.clone();
+    gated_back.push(op(spread(7, n(&rows), -1.0, 1.0), &rows));
+    offset_views_equal_compact_copies("gated_rms_norm backward", &gated_back, |b, o| {
+        b.gated_rms_norm_backward(&o[0], &o[1], &o[2], &o[3], 1e-6)
+            .map(|g| vec![g.input, g.gate, g.weight])
+    });
+
+    let (rx, rt) = ([1usize, 4, 2, 8], [4usize, 4]);
+    let rope = vec![
+        op(spread(8, n(&rx), -1.0, 1.0), &rx),
+        op(spread(9, n(&rt), -1.0, 1.0), &rt),
+        op(spread(10, n(&rt), -1.0, 1.0), &rt),
+    ];
+    offset_views_equal_compact_copies("rope_partial forward", &rope, |b, o| {
+        b.rope_partial_forward(&o[0], &o[1], &o[2]).map(|y| vec![y])
+    });
+    offset_views_equal_compact_copies("rope_partial backward", &rope, |b, o| {
+        b.rope_partial_backward(&o[0], &o[1], &o[2])
+            .map(|y| vec![y])
+    });
+
+    let sx = [3usize, 5];
+    let pair = vec![
+        op(spread(11, n(&sx), -4.0, 4.0), &sx),
+        op(spread(12, n(&sx), -1.0, 1.0), &sx),
+    ];
+    offset_views_equal_compact_copies("sigmoid forward", &pair[..1], |b, o| {
+        b.sigmoid_forward(&o[0]).map(|y| vec![y])
+    });
+    offset_views_equal_compact_copies("sigmoid backward", &pair, |b, o| {
+        b.sigmoid_backward(&o[0], &o[1]).map(|y| vec![y])
+    });
+
+    let (da, dh) = ([6usize, 4], [4usize]);
+    let decay = vec![
+        op(spread(13, n(&da), -3.0, 3.0), &da),
+        op(spread(14, 4, -1.0, 1.0), &dh),
+        op(spread(15, 4, -1.0, 1.0), &dh),
+    ];
+    offset_views_equal_compact_copies("gdn_log_decay forward", &decay, |b, o| {
+        b.gdn_log_decay_forward(&o[0], &o[1], &o[2])
+            .map(|y| vec![y])
+    });
+    let mut decay_back = decay.clone();
+    decay_back.push(op(spread(16, n(&da), -1.0, 1.0), &da));
+    offset_views_equal_compact_copies("gdn_log_decay backward", &decay_back, |b, o| {
+        b.gdn_log_decay_backward(&o[0], &o[1], &o[2], &o[3])
+            .map(|g| vec![g.input, g.a_log, g.dt_bias])
+    });
+
+    // B 1, T 5, H 2, Dk = Dv = 4: q, k, v, g, beta, the initial state.
+    let (qk, g3, st) = ([1usize, 5, 2, 4], [1usize, 5, 2], [1usize, 2, 4, 4]);
+    let decay_g: Vec<f32> = spread(20, n(&g3), 0.05, 0.4).iter().map(|x| -x).collect();
+    let delta = vec![
+        op(spread(17, n(&qk), -1.0, 1.0), &qk),
+        op(spread(18, n(&qk), -1.0, 1.0), &qk),
+        op(spread(19, n(&qk), -1.0, 1.0), &qk),
+        op(decay_g, &g3),
+        op(spread(21, n(&g3), 0.1, 0.9), &g3),
+        op(spread(22, n(&st), -0.5, 0.5), &st),
+    ];
+    offset_views_equal_compact_copies("chunked_gdn forward", &delta, |b, o| {
+        b.chunked_gdn_forward(gdn_inputs(o))
+            .map(|f| vec![f.output, f.final_state, f.checkpoints])
+    });
+    let checkpoints = {
+        let cpu = wide();
+        let t: Vec<Tensor> = delta.iter().map(|(d, s)| f32t(&cpu, d, s)).collect();
+        cpu.chunked_gdn_forward(gdn_inputs(&t)).unwrap().checkpoints
+    };
+    let mut delta_back = delta.clone();
+    delta_back.push(op(checkpoints.to_f32_vec().unwrap(), checkpoints.shape()));
+    delta_back.push(op(spread(23, n(&qk), -1.0, 1.0), &qk));
+    delta_back.push(op(spread(24, n(&st), -1.0, 1.0), &st));
+    offset_views_equal_compact_copies("chunked_gdn backward", &delta_back, |b, o| {
+        b.chunked_gdn_backward(gdn_inputs(o), &o[6], &o[7], Some(&o[8]))
+            .map(|g| {
+                let mut all = vec![g.q, g.k, g.v, g.g, g.beta];
+                all.extend(g.initial_state);
+                all
+            })
+    });
 }
 
 #[test]

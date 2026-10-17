@@ -11,15 +11,19 @@
 //! - (c) with a NaN in a well-formed operand, under an ample budget.
 
 use ojas_core::{
-    accumulate_grad_dims, cached_attention_dims, causal_sdpa_backward_dims,
-    causal_sdpa_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
-    linear_forward_dims, mul_backward_dims, mul_forward_dims, per_head_sigmoid_gate_backward_dims,
+    accumulate_grad_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
+    causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
+    chunked_gdn_backward_dims, chunked_gdn_forward_dims, gated_rms_norm_backward_dims,
+    gated_rms_norm_forward_dims, gdn_log_decay_backward_dims, gdn_log_decay_forward_dims,
+    kv_cache_write_dims, linear_backward_dims, linear_ce_dims, linear_forward_dims,
+    mul_backward_dims, mul_forward_dims, per_head_sigmoid_gate_backward_dims,
     per_head_sigmoid_gate_forward_dims, permute_dims, residual_add_backward_dims,
     residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, silu_backward_dims, silu_forward_dims,
+    rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
+    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, Backend, Budget,
-    CeChunk, CeGrads, DType, OjasError, Tensor,
+    CeChunk, CeGrads, DType, GdnInputs, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -78,6 +82,35 @@ where
 
 const EPS: f32 = 1e-6;
 const CHUNK: CeChunk = CeChunk { rows: 2, cols: 2 };
+
+/// The gated delta rule's operands `q, k, v, g, beta, initial_state` as the
+/// backends take them; the backward's `checkpoints`, `grad_output` and
+/// optional final-state gradient follow at 6, 7 and 8.
+fn gdn_inputs(o: &[Tensor]) -> GdnInputs<'_> {
+    GdnInputs {
+        q: &o[0],
+        k: &o[1],
+        v: &o[2],
+        g: &o[3],
+        beta: &o[4],
+        initial_state: o.get(5),
+    }
+}
+
+/// Well-formed gated-delta-rule operands (B 1, T 3, H 2, Dk 4, Dv 4) with
+/// the slot `which` replaced by `bad`.
+fn gdn_with(which: usize, bad: Tensor) -> Vec<Tensor> {
+    let mut ops = vec![
+        f(&[1, 3, 2, 4]),
+        f(&[1, 3, 2, 4]),
+        f(&[1, 3, 2, 4]),
+        f(&[1, 3, 2]),
+        f(&[1, 3, 2]),
+        f(&[1, 2, 4, 4]),
+    ];
+    ops[which] = bad;
+    ops
+}
 
 #[allow(clippy::too_many_lines)]
 fn cases() -> Vec<Case> {
@@ -606,6 +639,241 @@ fn cases() -> Vec<Case> {
             move |b, o| {
                 let mut cache = o[0].clone();
                 b.kv_cache_write(&mut cache, &o[1], at)
+            },
+        ));
+    }
+
+    // ---- causal conv1d + SiLU: input [B, T, C], weight [C, K] ------------
+    for (name, x, w, nan) in [
+        ("input rank 2", f(&[3, 4]), f(&[4, 2]), Some(1)),
+        ("weight rank 1", f(&[1, 3, 4]), f(&[4]), Some(0)),
+        ("weight rank 3", f(&[1, 3, 4]), f(&[4, 2, 1]), Some(0)),
+        ("channels", f(&[1, 3, 4]), f(&[5, 2]), Some(0)),
+        (
+            "u32 input after a NaN weight",
+            u(&[1, 3, 4]),
+            f(&[4, 2]),
+            Some(1),
+        ),
+        ("empty time", f(&[1, 0, 4]), f(&[4, 2]), Some(1)),
+    ] {
+        v.push(case(
+            &format!("causal_conv1d_silu_forward {name}"),
+            vec![x, w],
+            nan,
+            |o| causal_conv1d_silu_forward_dims(&o[0], &o[1]).map(drop),
+            |b, o| b.causal_conv1d_silu_forward(&o[0], &o[1]).map(drop),
+        ));
+    }
+    for (name, x, w, g, nan) in [
+        ("grad shape", f(&[1, 3, 4]), f(&[4, 2]), f(&[1, 2, 4]), 0),
+        ("grad rank", f(&[1, 3, 4]), f(&[4, 2]), f(&[3, 4]), 1),
+        ("channels", f(&[1, 3, 4]), f(&[5, 2]), f(&[1, 3, 4]), 0),
+        // The grad-shape check runs before the weight's layout.
+        (
+            "grad before weight",
+            f(&[1, 3, 4]),
+            f(&[8]),
+            f(&[2, 3, 4]),
+            0,
+        ),
+    ] {
+        v.push(case(
+            &format!("causal_conv1d_silu_backward {name}"),
+            vec![x, w, g],
+            Some(nan),
+            |o| causal_conv1d_silu_backward_dims(&o[0], &o[1], &o[2]).map(drop),
+            |b, o| b.causal_conv1d_silu_backward(&o[0], &o[1], &o[2]).map(drop),
+        ));
+    }
+
+    // ---- gated RMSNorm: input and gate [.., D], weight [D] ---------------
+    for (name, x, z, w, eps, nan) in [
+        ("gate shape", f(&[2, 4]), f(&[2, 3]), f(&[4]), EPS, 0),
+        ("weight dim", f(&[2, 4]), f(&[2, 4]), f(&[3]), EPS, 0),
+        ("weight rank 2", f(&[2, 4]), f(&[2, 4]), f(&[1, 4]), EPS, 0),
+        ("input rank 0", f(&[]), f(&[]), f(&[1]), EPS, 2),
+        ("eps NaN", f(&[2, 4]), f(&[2, 4]), f(&[4]), f32::NAN, 0),
+    ] {
+        v.push(case(
+            &format!("gated_rms_norm_forward {name}"),
+            vec![x, z, w],
+            Some(nan),
+            move |o| gated_rms_norm_forward_dims(&o[0], &o[1], &o[2], eps).map(drop),
+            move |b, o| b.gated_rms_norm_forward(&o[0], &o[1], &o[2], eps).map(drop),
+        ));
+    }
+    for (name, x, z, w, g, nan) in [
+        ("grad shape", f(&[2, 4]), f(&[2, 4]), f(&[4]), f(&[2, 3]), 0),
+        ("gate shape", f(&[2, 4]), f(&[3, 4]), f(&[4]), f(&[2, 4]), 3),
+        ("weight dim", f(&[2, 4]), f(&[2, 4]), f(&[3]), f(&[2, 4]), 0),
+        // The grad-shape check runs before the weight.
+        (
+            "grad before weight",
+            f(&[2, 4]),
+            f(&[2, 4]),
+            f(&[3]),
+            f(&[4, 2]),
+            0,
+        ),
+    ] {
+        v.push(case(
+            &format!("gated_rms_norm_backward {name}"),
+            vec![x, z, w, g],
+            Some(nan),
+            |o| gated_rms_norm_backward_dims(&o[0], &o[1], &o[2], &o[3], EPS).map(drop),
+            |b, o| {
+                b.gated_rms_norm_backward(&o[0], &o[1], &o[2], &o[3], EPS)
+                    .map(drop)
+            },
+        ));
+    }
+
+    // ---- partial RoPE: x [B, T, H, D], tables [T, rotary] ----------------
+    for (name, x, c, s) in [
+        ("x rank 3", f(&[1, 2, 8]), f(&[2, 4]), f(&[2, 4])),
+        ("cos vs sin", f(&[1, 2, 1, 8]), f(&[2, 4]), f(&[4, 2])),
+        ("time axis", f(&[1, 2, 1, 8]), f(&[3, 4]), f(&[3, 4])),
+        ("odd rotary dim", f(&[1, 2, 1, 8]), f(&[2, 3]), f(&[2, 3])),
+        (
+            "rotary above head dim",
+            f(&[1, 2, 1, 8]),
+            f(&[2, 10]),
+            f(&[2, 10]),
+        ),
+        (
+            "table rank 3",
+            f(&[1, 2, 1, 8]),
+            f(&[1, 2, 4]),
+            f(&[1, 2, 4]),
+        ),
+    ] {
+        v.push(case(
+            &format!("rope_partial_forward {name}"),
+            vec![x.clone(), c.clone(), s.clone()],
+            Some(0),
+            |o| rope_partial_forward_dims(&o[0], &o[1], &o[2]).map(drop),
+            |b, o| b.rope_partial_forward(&o[0], &o[1], &o[2]).map(drop),
+        ));
+        v.push(case(
+            &format!("rope_partial_backward {name}"),
+            vec![x, c, s],
+            Some(0),
+            |o| rope_partial_backward_dims(&o[0], &o[1], &o[2]).map(drop),
+            |b, o| b.rope_partial_backward(&o[0], &o[1], &o[2]).map(drop),
+        ));
+    }
+
+    // ---- sigmoid ---------------------------------------------------------
+    for (name, x) in [("u32 input", u(&[2, 3])), ("empty", f(&[2, 0]))] {
+        v.push(case(
+            &format!("sigmoid_forward {name}"),
+            vec![x],
+            None,
+            |o| sigmoid_forward_dims(&o[0]).map(drop),
+            |b, o| b.sigmoid_forward(&o[0]).map(drop),
+        ));
+    }
+    for (name, x, g, nan) in [
+        ("grad", f(&[2, 3]), f(&[3, 2]), 0),
+        ("u32 grad after a NaN input", f(&[2, 3]), u(&[2, 3]), 0),
+    ] {
+        v.push(case(
+            &format!("sigmoid_backward {name}"),
+            vec![x, g],
+            Some(nan),
+            |o| sigmoid_backward_dims(&o[0], &o[1]).map(drop),
+            |b, o| b.sigmoid_backward(&o[0], &o[1]).map(drop),
+        ));
+    }
+
+    // ---- gdn_log_decay: a [.., H], a_log and dt_bias [H] -----------------
+    for (name, a, al, dt, nan) in [
+        ("input rank 0", f(&[]), f(&[1]), f(&[1]), 1),
+        ("a_log", f(&[2, 3]), f(&[2]), f(&[3]), 0),
+        ("dt_bias", f(&[2, 3]), f(&[3]), f(&[4]), 0),
+        ("a_log rank 2", f(&[2, 3]), f(&[1, 3]), f(&[3]), 0),
+    ] {
+        v.push(case(
+            &format!("gdn_log_decay_forward {name}"),
+            vec![a, al, dt],
+            Some(nan),
+            |o| gdn_log_decay_forward_dims(&o[0], &o[1], &o[2]).map(drop),
+            |b, o| b.gdn_log_decay_forward(&o[0], &o[1], &o[2]).map(drop),
+        ));
+    }
+    for (name, a, al, dt, g, nan) in [
+        ("grad", f(&[2, 3]), f(&[3]), f(&[3]), f(&[3, 2]), 0),
+        ("a_log", f(&[2, 3]), f(&[2]), f(&[3]), f(&[2, 3]), 3),
+        ("dt_bias", f(&[2, 3]), f(&[3]), f(&[2]), f(&[2, 3]), 0),
+        // The grad's dtype is checked before the layout.
+        (
+            "u32 grad before layout",
+            f(&[2, 3]),
+            f(&[2]),
+            f(&[3]),
+            u(&[2, 3]),
+            0,
+        ),
+    ] {
+        v.push(case(
+            &format!("gdn_log_decay_backward {name}"),
+            vec![a, al, dt, g],
+            Some(nan),
+            |o| gdn_log_decay_backward_dims(&o[0], &o[1], &o[2], &o[3]).map(drop),
+            |b, o| {
+                b.gdn_log_decay_backward(&o[0], &o[1], &o[2], &o[3])
+                    .map(drop)
+            },
+        ));
+    }
+
+    // ---- chunked gated delta rule ----------------------------------------
+    for (name, ops, nan) in [
+        ("q rank 3", gdn_with(0, f(&[3, 2, 4])), 1),
+        ("k vs q", gdn_with(1, f(&[1, 3, 2, 5])), 0),
+        ("v tokens", gdn_with(2, f(&[1, 2, 2, 4])), 0),
+        ("g shape", gdn_with(3, f(&[1, 3, 3])), 0),
+        ("beta shape", gdn_with(4, f(&[1, 2, 2])), 0),
+        ("state shape", gdn_with(5, f(&[1, 2, 4, 5])), 0),
+        ("u32 beta after a NaN q", gdn_with(4, u(&[1, 3, 2])), 0),
+    ] {
+        v.push(case(
+            &format!("chunked_gdn_forward {name}"),
+            ops,
+            Some(nan),
+            |o| chunked_gdn_forward_dims(gdn_inputs(o)).map(drop),
+            |b, o| b.chunked_gdn_forward(gdn_inputs(o)).map(drop),
+        ));
+    }
+    // Backward operands: the six above, then checkpoints [1, 2, 1, 4, 4]
+    // (one 64-token chunk), grad_output shaped like v, and optionally the
+    // final-state gradient [1, 2, 4, 4].
+    let gdn_back = |which: usize, bad: Tensor| -> Vec<Tensor> {
+        let mut ops = gdn_with(0, f(&[1, 3, 2, 4]));
+        ops.extend([f(&[1, 2, 1, 4, 4]), f(&[1, 3, 2, 4]), f(&[1, 2, 4, 4])]);
+        ops[which] = bad;
+        ops
+    };
+    for (name, ops, nan) in [
+        ("checkpoints", gdn_back(6, f(&[1, 2, 2, 4, 4])), 0),
+        ("grad shape", gdn_back(7, f(&[1, 3, 2, 5])), 0),
+        ("final state grad", gdn_back(8, f(&[1, 2, 4, 5])), 0),
+        ("state", gdn_back(5, f(&[1, 2, 4, 5])), 7),
+        (
+            "u32 checkpoints after a NaN q",
+            gdn_back(6, u(&[1, 2, 1, 4, 4])),
+            0,
+        ),
+    ] {
+        v.push(case(
+            &format!("chunked_gdn_backward {name}"),
+            ops,
+            Some(nan),
+            |o| chunked_gdn_backward_dims(gdn_inputs(o), &o[6], &o[7], o.get(8)).map(drop),
+            |b, o| {
+                b.chunked_gdn_backward(gdn_inputs(o), &o[6], &o[7], o.get(8))
+                    .map(drop)
             },
         ));
     }

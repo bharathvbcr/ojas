@@ -1882,10 +1882,16 @@ kernel void ojas_permute(
 // block's, are never visited.
 //
 // Q, K, V, dO are MPP tensors over the plane with extents (D, T): the
-// matrix units read nothing past row T or column D, and every block entry
-// outside the window or past T is set to exactly 0 before it is
-// multiplied. DM is the compiled reduction width; D <= DM is the real head
-// dimension. One (b, h) plane must fit i32 extents; the host checks.
+// matrix units read nothing past row T or column D. The score-side block is
+// what is zeroed, not those operands: the probability P (forward, dV) and the
+// score gradient dS (dQ, dK) of every entry outside the window or past T is
+// set to exactly 0 before it multiplies V, K, Q or dO. A V row outside a
+// query's window but inside a tile the kernel visits is still multiplied (as
+// 0 * V), so a non-finite one reaches that query's O as 0 * NaN, and the
+// host's output check reports it as a NonFinite fault, the one a V row inside
+// the window gets. The backward checks every operand up front. DM is the
+// compiled reduction width; D <= DM is the real head dimension. One (b, h)
+// plane must fit i32 extents; the host checks.
 
 using namespace mpp::tensor_ops;
 

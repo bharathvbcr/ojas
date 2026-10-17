@@ -77,6 +77,8 @@ flowchart LR
 > [!WARNING]
 > Both `MetalBackend` and `WgpuBackend` enforce $d_{\text{head}} \le 256$ for attention operations (`METAL_MAX_HEAD_DIM`; `ATTENTION_MAX_HEAD_DIM` for wgpu). A larger head dimension raises `OjasError::UnsupportedHeadDim` loud and early. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64. Causal SDPA accepts grouped-query head counts on CPU, Metal and wgpu.
 
+> Attention and a non-finite `V` row: it is a fault on every backend, because the query at that position always attends to its own key. On Metal the tiled attention kernel zeroes `P` (not `V`) outside the window and multiplies the whole 64-key tile, so a non-finite `V` row in a visited tile reaches `O` as `0 * NaN` for every row that visits the tile, and the output check reports the op's `NonFinite` at the next `sync`; the backward checks every operand up front. wgpu skips out-of-window keys, so only the rows that see the key are non-finite; the CPU refuses the call before it runs (`attention_masked_nonfinite.rs` in each backend's tests).
+
 ---
 
 ## Package Adoption Decisions

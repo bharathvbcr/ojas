@@ -1,5 +1,5 @@
-//! The `ojas.spec` JSON (`ojas-spec-v1`) and the framework-design.md §2
-//! parameter table it implies.
+//! The `ojas.spec` JSON (`ojas-spec-v1`, and `ojas-spec-v2` with a sliding
+//! window) and the framework-design.md §2 parameter table it implies.
 //!
 //! `python/export_init.py` writes the spec into `__metadata__["ojas.spec"]`
 //! of every exported `model.safetensors`; the schema is documented in
@@ -12,6 +12,8 @@ use ojas_core::OjasError;
 use crate::{bad, field, parse_json_with, Json, JsonExt, GOLDEN_JSON};
 
 pub const SPEC_FORMAT: &str = "ojas-spec-v1";
+/// v1 plus `window`: sliding-window attention on every layer.
+pub const SPEC_FORMAT_V2: &str = "ojas-spec-v2";
 pub const SPEC_ARCH: &str = "nanolab-gpt";
 
 /// One parsed spec. Field names follow ojas-infer's `GptConfig`.
@@ -31,6 +33,9 @@ pub struct ModelSpec {
     pub qk_norm: bool,
     pub gated_attention: bool,
     pub value_residual: bool,
+    /// Sliding-window attention on every layer (v2 only): query `t` sees keys
+    /// `t - window < j <= t`. `None` is full causal attention.
+    pub window: Option<usize>,
 }
 
 /// The fixture model: 2 layers, d=64, 4 heads of 16, SwiGLU 192, V=256, T=32.
@@ -50,13 +55,16 @@ pub fn tiny_spec() -> ModelSpec {
         qk_norm: true,
         gated_attention: true,
         value_residual: true,
+        window: None,
     }
 }
 
 /// Parse and validate a spec. Unknown keys are refused, so a newer writer
-/// cannot add a field an older reader would silently ignore.
+/// cannot add a field an older reader would silently ignore. `window` is
+/// known only to `ojas-spec-v2`, where it is required: in a v1 spec it is
+/// an unknown key, as it is for `ojas_model::ModelSpec::from_json`.
 pub fn parse_spec(text: &str) -> Result<ModelSpec, OjasError> {
-    const KEYS: [&str; 16] = [
+    const KEYS: [&str; 17] = [
         "format",
         "arch",
         "vocab",
@@ -73,6 +81,7 @@ pub fn parse_spec(text: &str) -> Result<ModelSpec, OjasError> {
         "qk_norm",
         "gated_attention",
         "value_residual",
+        "window",
     ];
     let root = parse_json_with(text, GOLDEN_JSON)?;
     let obj = root.object()?;
@@ -80,8 +89,13 @@ pub fn parse_spec(text: &str) -> Result<ModelSpec, OjasError> {
         return Err(bad(&format!("spec has unknown key {key:?}")));
     }
     let text_field = |key: &str| field(obj, key).and_then(Json::text);
-    if text_field("format") != Some(SPEC_FORMAT) {
-        return Err(bad("spec format is not ojas-spec-v1"));
+    let windowed = match text_field("format") {
+        Some(SPEC_FORMAT) => false,
+        Some(SPEC_FORMAT_V2) => true,
+        _ => return Err(bad("spec format is not ojas-spec-v1 or ojas-spec-v2")),
+    };
+    if !windowed && field(obj, "window").is_some() {
+        return Err(bad("spec has unknown key \"window\" (a v1 spec has none)"));
     }
     if text_field("arch") != Some(SPEC_ARCH) {
         return Err(bad("spec arch is not nanolab-gpt"));
@@ -125,6 +139,11 @@ pub fn parse_spec(text: &str) -> Result<ModelSpec, OjasError> {
         qk_norm: flag("qk_norm")?,
         gated_attention: flag("gated_attention")?,
         value_residual: flag("value_residual")?,
+        window: if windowed {
+            Some(count("window")?)
+        } else {
+            None
+        },
     };
     if !spec.n_head.is_multiple_of(spec.n_kv_head) {
         return Err(bad("spec n_head is not a multiple of n_kv_head"));

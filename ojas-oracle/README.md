@@ -11,8 +11,69 @@ test time. Two kinds:
   `src/parity.rs` run against these once ojas-model implements
   `ParityModel` (see "Enabling the model parity tests").
 
+- **`fixtures/variants/`**: the same tiny GPT with grouped-query attention
+  (`gqa.safetensors`, 4 query heads over 2 KV heads) and with sliding-window
+  attention (`swa.safetensors`, window 8, MHA), forward and backward, from
+  nanolab's own model. The tiny fixtures above are MHA with full causal
+  attention, so without these a GQA or window bug shared by ojas's CPU and GPU
+  paths passes (`src/variants.rs`, `python/variant_fixture.py`).
+- **`fixtures/sampler/golden.txt`**: torch's filtered, renormalised
+  probabilities and inverse-CDF choices for fixed logits, settings and
+  uniforms, which `ojas-infer/tests/sampler_golden.rs` holds the host sampler
+  to (`python/sampler_golden.py`).
+
 Python is used only to *generate* files (`python/`, a reference oracle);
 nothing in the crate runs it.
+
+## The variant goldens
+
+`variant_fixture.py` builds nanolab's `GPT` for `gqa` (`n_kv_head = 2`;
+nanolab widens K and V with `repeat_interleave`, so query head `h` reads KV
+head `h // 2`) and `swa` (`mixer = "swa"`, `swa_window = 8`, `swa_sinks = 0`,
+which is ojas's `window = Some(8)`), on one micro-batch of B=2, T=32. Each
+file holds the parameters (`param/<name>`), the gradients of the loss at
+seed 1 (`grad/<name>`), `x`, `y`, `logits`, and in the metadata the spec
+(`ojas-spec-v1`, or `ojas-spec-v2` with `window`) and the loss.
+
+The parameters are nanolab's init with `zero_init_proj` off and every
+constant-initialised tensor (norm weights, gate, `vr_lambda`) moved by a
+fixed seeded draw, because at nanolab's own init `o_proj` and `ffn.down`
+are zero and every attention gradient is exactly zero. The generator refuses
+to write unless every gradient is non-zero and the variant changes the
+logits (window 8 against full causal: max |dlogit| 0.26; swapping the two KV
+heads: 0.50), so a model that ignores the variant cannot match.
+`ojas_oracle::variants::load_variant` refuses a file whose spec is not the
+tiny model with that variant's one change.
+
+`parity::variant_forward_parity` and `parity::variant_grads_parity` run a
+`ParityModel` on them. A runner first calls `ParityModel::configure(&spec)`
+with the fixture's spec; the default accepts only the tiny spec, so an
+adapter not written for another shape fails loudly instead of running the
+wrong model. `ojas-model/tests/oracle_parity.rs` runs CPU Exact, Metal and
+wgpu on both.
+
+## Per-backend gates
+
+The constants in `src/parity.rs` are `CpuBackend` (Exact)'s, which sums
+sequentially like torch's CPU kernels. A device sums in another order, so
+the `_with` runners (`forward_parity_with`, `grads_parity_with`,
+`trace_parity_ns5_with`, `curve_parity_ns5_with`, `check_curve_with`) take a
+`Gates`; `Gates::EXACT` is the constants, every `_with` runner refuses a
+gate that is not positive and finite, and the plain runners always use
+`EXACT`. A device's own `Gates` live next to its tests, each field with the
+measurement it is derived from.
+
+## The sampler golden
+
+`sampler_golden.py` writes, for 15 cases (greedy with ties, a signed-zero
+tie, a masked leader; temperature; top-k including a cut inside a tie;
+top-p; both; `-inf` masks; V = 256), what torch computes in float64 with a
+stable descending sort, `softmax(z / t)`, the shortest top-p prefix and the
+renormalised `cumsum`, and the inverse-CDF choice for 26 fixed uniforms.
+`ojas-infer/tests/sampler_golden.rs` places `SplitMix64` at the state whose
+next draw is each uniform (the generator's finalizer is a bijection) and
+requires torch's id, then recovers the sampler's cumulative probabilities by
+bisecting its choice over the 2^53 draws and compares them to torch's.
 
 ## The tiny fixtures
 
@@ -141,8 +202,10 @@ reader.
 `ojas_model::ModelSpec::to_json` writes v1 for a spec without a window, so
 every exported file is unchanged, and v2 for one with a window;
 `ModelSpec::from_json` reads both (`window` is required in v2 and refused in
-v1). The exporter and `ojas_oracle::spec::parse_spec` stay at v1: they
-refuse any mixer but `attention`, so no windowed checkpoint is exported yet.
+v1). `ojas_oracle::spec::parse_spec` reads both the same way
+(`ModelSpec::window`), for the `swa` fixture. The exporter (`export_init.py`)
+stays at v1: it refuses any mixer but `attention`, so no windowed checkpoint
+is exported yet.
 
 Tensor names are nanolab `state_dict` keys (§2): `_orig_mod.` stripped,
 `lm_head.weight` not stored (the exporter first checks it is bit-equal to
@@ -160,6 +223,11 @@ nanolab is read from `/Users/bharath/Code/research/MLSystemsLab`
 bash ojas-oracle/python/regen_tiny.sh
 # the same twice, failing unless every file is byte-identical
 bash ojas-oracle/python/check_determinism.sh 2
+
+# the GQA, sliding-window and sampler goldens (about 10 s); `check` writes
+# nothing and fails unless two runs and the checked-in files are identical
+bash ojas-oracle/python/regen_variants.sh
+bash ojas-oracle/python/regen_variants.sh check
 
 # one step at a time
 PY=/opt/homebrew/opt/python@3.14/bin/python3.14

@@ -36,7 +36,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use common::SplitMix64;
-use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, Backend, Budget, GdnInputs, MuonNs5Config, Numerics, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 struct Counting;
@@ -164,6 +166,26 @@ impl Case {
             run: Box::new(run),
         }
     }
+}
+
+/// Cases whose heap peak is known to exceed their charge: kept out of the
+/// gate above and run by the ignored test below, which fails until fixed.
+fn broken_cases() -> Vec<Case> {
+    let mut rng = SplitMix64(0x0b5e_55ee);
+    // Many short rows: the backward keeps one rstd per row.
+    let (x, z, w, gy) = (
+        input(&mut rng, &[32768, 32]),
+        input(&mut rng, &[32768, 32]),
+        input(&mut rng, &[32]),
+        input(&mut rng, &[32768, 32]),
+    );
+    vec![Case::new(
+        "gated_rms_norm_backward rows 32768",
+        move |be, _| {
+            be.gated_rms_norm_backward(&x, &z, &w, &gy, 1e-6)
+                .map(|g| vec![g.input, g.gate, g.weight])
+        },
+    )]
 }
 
 fn cases() -> Vec<Case> {
@@ -332,6 +354,156 @@ fn cases() -> Vec<Case> {
             .map(|y| vec![y])
     }));
 
+    // The hybrid-layer ops. Every output below is 512 KiB or more.
+    // Conv: [batch, time, channels] with a [channels, width] filter.
+    let (x, w, gy) = (
+        input(&mut rng, &[8, 512, 64]),
+        input(&mut rng, &[64, 4]),
+        input(&mut rng, &[8, 512, 64]),
+    );
+    let (x2, w2) = (x.clone(), w.clone());
+    out.push(Case::new("causal_conv1d_silu_forward", move |be, _| {
+        be.causal_conv1d_silu_forward(&x, &w).map(|y| vec![y])
+    }));
+    out.push(Case::new("causal_conv1d_silu_backward", move |be, _| {
+        be.causal_conv1d_silu_backward(&x2, &w2, &gy)
+            .map(|(gx, gw)| vec![gx, gw])
+    }));
+
+    let (x, z, w, gy) = (
+        input(&mut rng, &[512, 512]),
+        input(&mut rng, &[512, 512]),
+        input(&mut rng, &[512]),
+        input(&mut rng, &[512, 512]),
+    );
+    let (x2, z2, w2) = (x.clone(), z.clone(), w.clone());
+    out.push(Case::new("gated_rms_norm_forward", move |be, _| {
+        be.gated_rms_norm_forward(&x, &z, &w, 1e-6).map(|y| vec![y])
+    }));
+    out.push(Case::new("gated_rms_norm_backward", move |be, _| {
+        be.gated_rms_norm_backward(&x2, &z2, &w2, &gy, 1e-6)
+            .map(|g| vec![g.input, g.gate, g.weight])
+    }));
+    // Partial RoPE: [batch, time, heads, dim] with [time, rotary] tables,
+    // rotary 128 of 256.
+    let (x, cos, sin) = (
+        input(&mut rng, &[2, 128, 4, 256]),
+        input(&mut rng, &[128, 128]),
+        input(&mut rng, &[128, 128]),
+    );
+    let (gy, cos2, sin2) = (x.clone(), cos.clone(), sin.clone());
+    out.push(Case::new("rope_partial_forward", move |be, _| {
+        be.rope_partial_forward(&x, &cos, &sin).map(|y| vec![y])
+    }));
+    out.push(Case::new("rope_partial_backward", move |be, _| {
+        be.rope_partial_backward(&gy, &cos2, &sin2).map(|y| vec![y])
+    }));
+
+    let (a, gy) = (input(&mut rng, &[256, 1024]), input(&mut rng, &[256, 1024]));
+    let a2 = a.clone();
+    out.push(Case::new("sigmoid_forward", move |be, _| {
+        be.sigmoid_forward(&a).map(|y| vec![y])
+    }));
+    out.push(Case::new("sigmoid_backward", move |be, _| {
+        be.sigmoid_backward(&a2, &gy).map(|y| vec![y])
+    }));
+
+    // Decay: a [rows, heads], a_log and dt_bias [heads].
+    let (a, al, dt, gy) = (
+        input(&mut rng, &[4096, 64]),
+        input(&mut rng, &[64]),
+        input(&mut rng, &[64]),
+        input(&mut rng, &[4096, 64]),
+    );
+    let (a2, al2, dt2) = (a.clone(), al.clone(), dt.clone());
+    out.push(Case::new("gdn_log_decay_forward", move |be, _| {
+        be.gdn_log_decay_forward(&a, &al, &dt).map(|y| vec![y])
+    }));
+    out.push(Case::new("gdn_log_decay_backward", move |be, _| {
+        be.gdn_log_decay_backward(&a2, &al2, &dt2, &gy)
+            .map(|g| vec![g.input, g.a_log, g.dt_bias])
+    }));
+
+    // The gated delta rule: B 1, T 1024, H 4, Dk = Dv = 32 (16 checkpoint
+    // chunks). The decay is negative and beta in (0, 1), so the state stays
+    // finite over the whole sequence.
+    let (gq, gk, gv) = (
+        input(&mut rng, &[1, 1024, 4, 32]),
+        input(&mut rng, &[1, 1024, 4, 32]),
+        input(&mut rng, &[1, 1024, 4, 32]),
+    );
+    let decay: Vec<f32> = rng
+        .vec(1024 * 4, 1.0)
+        .iter()
+        .map(|x| -0.05 - 0.2 * x.abs())
+        .collect();
+    let rate: Vec<f32> = rng
+        .vec(1024 * 4, 1.0)
+        .iter()
+        .map(|x| 0.5 + 0.4 * x)
+        .collect();
+    let (gg, gbeta) = (
+        Tensor::from_f32(&decay, &[1, 1024, 4], &Budget::new(u64::MAX)).unwrap(),
+        Tensor::from_f32(&rate, &[1, 1024, 4], &Budget::new(u64::MAX)).unwrap(),
+    );
+    let (gs0, gdy) = (
+        input(&mut rng, &[1, 4, 32, 32]),
+        input(&mut rng, &[1, 1024, 4, 32]),
+    );
+    let ckpt = {
+        let unbounded = CpuBackend::new(Budget::new(HUGE));
+        unbounded
+            .chunked_gdn_forward(GdnInputs {
+                q: &gq,
+                k: &gk,
+                v: &gv,
+                g: &gg,
+                beta: &gbeta,
+                initial_state: Some(&gs0),
+            })
+            .unwrap()
+            .checkpoints
+    };
+    let (gq2, gk2, gv2, gg2, gbeta2, gs02) = (
+        gq.clone(),
+        gk.clone(),
+        gv.clone(),
+        gg.clone(),
+        gbeta.clone(),
+        gs0.clone(),
+    );
+    out.push(Case::new("chunked_gdn_forward", move |be, _| {
+        be.chunked_gdn_forward(GdnInputs {
+            q: &gq,
+            k: &gk,
+            v: &gv,
+            g: &gg,
+            beta: &gbeta,
+            initial_state: Some(&gs0),
+        })
+        .map(|f| vec![f.output, f.final_state, f.checkpoints])
+    }));
+    out.push(Case::new("chunked_gdn_backward", move |be, _| {
+        be.chunked_gdn_backward(
+            GdnInputs {
+                q: &gq2,
+                k: &gk2,
+                v: &gv2,
+                g: &gg2,
+                beta: &gbeta2,
+                initial_state: Some(&gs02),
+            },
+            &ckpt,
+            &gdy,
+            None,
+        )
+        .map(|g| {
+            let mut all = vec![g.q, g.k, g.v, g.g, g.beta];
+            all.extend(g.initial_state);
+            all
+        })
+    }));
+
     let p = input(&mut rng, &[64, 128, 64]);
     out.push(Case::new("permute", move |be, _| {
         be.permute(&p, &[2, 0, 1]).map(|y| vec![y])
@@ -488,15 +660,12 @@ fn backends() -> Vec<(String, usize, CpuBackend)> {
     out
 }
 
-/// Heap peak <= charged peak + `SLACK` for every op, thread count and
-/// numerics contract.
-#[test]
-fn every_op_heap_peak_stays_within_its_charged_peak() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let cases = cases();
+/// Cases whose heap peak exceeds their charged peak by more than `SLACK`,
+/// as `case label: heap > charged` rows.
+fn heap_failures(cases: &[Case]) -> Vec<String> {
     let mut failures = Vec::new();
     for (label, _threads, be) in backends() {
-        for case in &cases {
+        for case in cases {
             // Warm the pool so worker spawns are not counted.
             drop(with_room(&be, case, HUGE).unwrap());
             let charged = charged_peak(&be, case);
@@ -514,6 +683,34 @@ fn every_op_heap_peak_stays_within_its_charged_peak() {
             }
         }
     }
+    failures
+}
+
+/// Heap peak <= charged peak + `SLACK` for every op, thread count and
+/// numerics contract.
+#[test]
+fn every_op_heap_peak_stays_within_its_charged_peak() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let failures = heap_failures(&cases());
+    assert!(
+        failures.is_empty(),
+        "uncharged heap growth:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// BREAK: `gated_rms_backward` (`ojas-cpu/src/hybrid.rs`) charges
+/// `room_for(rows)` floats for the per-row `rstd`s, but they are on the heap
+/// twice: in each piece's returned `Vec` and again in `parts.concat()`. At
+/// 32768 rows that is 131 KB past `SLACK` (heap 8651168 against 8519808
+/// charged), the shape `rms_norm_backward rows 32768` above was written for.
+/// The fix is in `hybrid.rs` (drop the parts as they are joined, or charge
+/// twice), outside this card's files.
+#[test]
+#[ignore = "BREAK: gated_rms_norm_backward holds its per-row rstds twice on the heap, 131 KB uncharged at 32768 rows (ojas-cpu/src/hybrid.rs)"]
+fn gated_rms_norm_backward_many_rows_heap_peak_stays_within_its_charged_peak() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let failures = heap_failures(&broken_cases());
     assert!(
         failures.is_empty(),
         "uncharged heap growth:\n{}",

@@ -1,8 +1,20 @@
 //! The ojas-oracle torch fixtures (framework-design.md §9 item 13) against
-//! this crate on `CpuBackend` (Exact): forward loss and logits, gradients
-//! at the init and at step 5, the 5-step trace and the §10 40-step curve,
-//! each against both the f32-NS5 trace and stock nanolab's bf16-NS5 one. The runners in `ojas_oracle::parity` own the fixtures and the
-//! tolerances; this file only adapts the model to `ParityModel`.
+//! this crate on `CpuBackend` (Exact), and against the Metal and wgpu
+//! trainers: forward loss and logits, gradients at the init and at step 5,
+//! the 5-step trace and the §10 40-step curve, each against both the
+//! f32-NS5 trace and stock nanolab's bf16-NS5 one. The runners in
+//! `ojas_oracle::parity` own the fixtures and the tolerances; this file only
+//! adapts the model to `ParityModel`.
+//!
+//! The grouped-query and sliding-window goldens (`ojas_oracle::variants`,
+//! forward and backward, written by `python/variant_fixture.py` from
+//! nanolab's own model) run on all three backends too, so neither the GQA KV
+//! mapping nor the window mask is checked only against ojas itself.
+//!
+//! A device that cannot open fails its test unless `OJAS_ALLOW_NO_GPU=1`
+//! (the convention of `device.rs`), so a missing GPU is never a pass.
+
+use std::sync::{Mutex, MutexGuard};
 
 use ojas_autograd::Tape;
 use ojas_core::{
@@ -19,10 +31,65 @@ use ojas_model::{
     Init, ModelSpec, Rope, StepReport, TrainConfig, Trainer, DEFAULT_CE_CHUNK,
 };
 use ojas_oracle::golden::{
-    tiny_init, tiny_trace, HostTensor, Ns5, TensorSet, TokenBatch, TrainSetup, TINY_DIR,
+    tiny_init, tiny_trace, GradsAt, HostTensor, Ns5, TensorSet, TokenBatch, TrainSetup, TINY_DIR,
 };
-use ojas_oracle::parity::{self, ParityModel};
+use ojas_oracle::parity::{self, Gates, ParityModel};
 use ojas_oracle::spec::{expected_params, tiny_spec, Group};
+use ojas_oracle::variants::{variant, Variant};
+
+const ALLOW_NO_GPU: &str = "OJAS_ALLOW_NO_GPU";
+
+/// Device tests share one GPU and one lock, so they run one at a time.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn skip_or_fail(what: &str, err: &dyn std::fmt::Display) {
+    if std::env::var(ALLOW_NO_GPU).as_deref() == Ok("1") {
+        eprintln!("SKIP ({ALLOW_NO_GPU}=1): {what}: {err}");
+    } else {
+        panic!("{what} failed: {err}. Set {ALLOW_NO_GPU}=1 to skip explicitly");
+    }
+}
+
+/// The gates of the Metal and wgpu trainers: `Gates::EXACT` except the
+/// early steps of the curve (`curve_early_abs` 5e-4, below). Both
+/// devices sum in another order than CPU Exact, and measured against torch
+/// (2026-10-16, Apple M5 Pro) they land where CPU Exact does:
+///
+/// | quantity (worst observed)        | CPU Exact | Metal   | wgpu    | gate  |
+/// | :------------------------------- | --------: | ------: | ------: | ----: |
+/// | forward loss, relative           | 8.6e-8    | 0       | 0       | 1e-5  |
+/// | forward logits, normwise         | 2.2e-7    | 8.4e-8  | 8.2e-8  | 1e-5  |
+/// | gradients at step 5, normwise    | 1.3e-5    | 1.4e-5  | 9.6e-6  | 1e-4  |
+/// | f32 trace loss / parameters      | 4.8e-7 / 1.3e-6 | 4.8e-7 / 1.3e-6 | 4.8e-7 / 1.4e-6 | 1e-4 / 1e-4 |
+/// | bf16 trace loss / parameters     | 2.4e-5 / 2.1e-2 | 7.1e-5 / 2.1e-2 | 7.7e-5 / 2.1e-2 | 1e-4 / 5e-2 |
+/// | 40-step curve, f32: worst step   | 1.2e-6    | 7.2e-7  | 9.5e-7  | 2e-4 / 2e-3 |
+/// | 40-step curve, bf16: steps 1-10  | <= 2e-4   | 3.4e-4  | 2.8e-4  | 5e-4 (CPU 2e-4) |
+/// | 40-step curve, bf16: later steps | 1.3e-3    | 1.4e-3  | 1.2e-3  | 2e-3  |
+/// | GQA / window grads, normwise     | 7.3e-7 / 1.8e-6 | 6.9e-7 / 1.4e-6 | 5.8e-7 / 7.4e-7 | 1e-4  |
+///
+/// The f32 quantities sit two orders under the gates on every backend. The
+/// bf16 trace loss is the one that moves: its Newton-Schulz rounds to bf16
+/// and a one-ulp difference flips a rounding (README, "NS5 patch"), so the
+/// devices see up to 3.2x CPU's 2.4e-5, still inside 1e-4, which is what
+/// tells a bf16 iteration from an f32 one (they differ by 1.8e-4). The one
+/// gate that does not hold is the bf16 curve's first ten steps, 2e-4 on CPU:
+/// the same rounding flips put Metal at 3.4e-4 (step 8) and wgpu at 2.8e-4
+/// (step 9). They are set to 5e-4, 1.5x the worst, still under the 1.1e-3
+/// that torch's own f32 and bf16 curves differ by over 40 steps.
+const GPU_GATES: Gates = Gates {
+    curve_early_abs: 5e-4,
+    ..Gates::EXACT
+};
+/// The pre-clip gradient norm, relative, per step. Observed worst over both
+/// NS5 precisions: Metal 3.8e-5, wgpu 7.4e-5 (bf16, step 5; CPU Exact's own
+/// 2.0e-5 there, f32 traces at most 1.4e-6 everywhere), which is the bf16
+/// rounding flip above acting on the weights the gradient is taken at. 2e-4
+/// is that worst case with a factor of 2.7.
+const GPU_GRAD_NORM_REL: f64 = 2e-4;
 
 fn exact() -> CpuBackend {
     CpuBackend::new(Budget::new(1 << 30)).with_numerics(Numerics::Exact)
@@ -105,27 +172,106 @@ fn train_config(setup: &TrainSetup) -> Result<TrainConfig, OjasError> {
     Ok(cfg)
 }
 
-/// `ParityModel` over `Eval`, `Tape` and `Trainer` on CPU Exact. Keeps the
-/// step reports of the last `train` call for the extra checks below.
-#[derive(Default)]
-struct Cpu {
+/// The oracle's spec as this crate's, field for field. Destructured, so a
+/// field the oracle adds is a compile error here, not a silent default.
+fn model_spec(o: &ojas_oracle::spec::ModelSpec) -> Result<ModelSpec, OjasError> {
+    let ojas_oracle::spec::ModelSpec {
+        vocab,
+        n_embd,
+        n_layer,
+        n_head,
+        n_kv_head,
+        head_dim,
+        hidden,
+        max_seq,
+        rope_base,
+        rms_eps,
+        tie_embeddings,
+        qk_norm,
+        gated_attention,
+        value_residual,
+        window,
+    } = o.clone();
+    if !(qk_norm && gated_attention && value_residual) {
+        return Err(refuse(
+            "the model always has QK-norm, gate and value residual".into(),
+        ));
+    }
+    let spec = ModelSpec {
+        vocab,
+        n_embd,
+        n_layer,
+        n_head,
+        n_kv_head,
+        head_dim,
+        hidden,
+        max_seq,
+        rope_base,
+        rms_eps,
+        tie_embeddings,
+        window,
+    };
+    spec.validate()?;
+    Ok(spec)
+}
+
+/// `t`'s values on the host, read back through `be` when it lives on a device.
+fn host_values<B: Backend>(be: &B, t: &Tensor) -> Result<Vec<f32>, OjasError> {
+    if t.device().is_some() {
+        be.download(t)?.to_f32_vec()
+    } else {
+        t.to_f32_vec()
+    }
+}
+
+/// `ParityModel` over `Eval`, `Tape` and `Trainer` on the backend `open`
+/// makes (a fresh one per call, so budgets and device state never carry
+/// over). Keeps the step reports of the last `train` call for the extra
+/// checks below.
+struct Device<B: Backend> {
+    open: Box<dyn Fn() -> Result<B, OjasError>>,
+    spec: ModelSpec,
     reports: Vec<StepReport>,
 }
 
-impl ParityModel for Cpu {
+impl<B: Backend> Device<B> {
+    fn new(open: impl Fn() -> Result<B, OjasError> + 'static) -> Self {
+        Self {
+            open: Box::new(open),
+            spec: ModelSpec::tiny(),
+            reports: Vec::new(),
+        }
+    }
+}
+
+/// CPU, Exact: the numerics that sum in torch's order.
+fn cpu_model() -> Device<CpuBackend> {
+    Device::new(|| Ok(exact()))
+}
+
+impl<B: Backend> ParityModel for Device<B> {
+    fn configure(&mut self, spec: &ojas_oracle::spec::ModelSpec) -> Result<(), OjasError> {
+        self.spec = model_spec(spec)?;
+        Ok(())
+    }
+
     fn forward(
         &mut self,
         params: &TensorSet,
         batch: &TokenBatch,
     ) -> Result<(f32, Vec<f32>), OjasError> {
-        let spec = ModelSpec::tiny();
-        let cpu = exact();
-        let budget = cpu.budget().clone();
+        let spec = self.spec;
+        let be = (self.open)()?;
+        let budget = be.budget().clone();
         let host = params_of(&spec, params, &budget)?;
-        let rope = Rope::new(&spec, batch.seq_len, &budget)?;
+        let values = host
+            .iter()
+            .map(|t| be.upload(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        let rope = Rope::new(&spec, batch.seq_len, &budget)?.upload(&be)?;
         let (x, y) = ids(batch, &budget)?;
-        let mut eval = Eval::new(cpu);
-        let p = bind(&mut eval, &spec, &host)?;
+        let mut eval = Eval::new(&be);
+        let p = bind(&mut eval, &spec, &values)?;
         let loss = forward_loss(
             &mut eval,
             &spec,
@@ -138,7 +284,7 @@ impl ParityModel for Cpu {
             Off,
         )?;
         let logits = forward_logits(&mut eval, &spec, &p, &x, &rope)?;
-        Ok((loss.to_f32_vec()?[0], logits.to_f32_vec()?))
+        Ok((host_values(&be, &loss)?[0], host_values(&be, &logits)?))
     }
 
     fn grads(
@@ -147,14 +293,18 @@ impl ParityModel for Cpu {
         batch: &TokenBatch,
         seed: f32,
     ) -> Result<TensorSet, OjasError> {
-        let spec = ModelSpec::tiny();
-        let cpu = exact();
-        let budget = cpu.budget().clone();
+        let spec = self.spec;
+        let be = (self.open)()?;
+        let budget = be.budget().clone();
         let host = params_of(&spec, params, &budget)?;
-        let rope = Rope::new(&spec, batch.seq_len, &budget)?;
+        let values = host
+            .iter()
+            .map(|t| be.upload(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        let rope = Rope::new(&spec, batch.seq_len, &budget)?.upload(&be)?;
         let (x, y) = ids(batch, &budget)?;
-        let mut tape = Tape::new(cpu);
-        let p = bind(&mut tape, &spec, &host)?;
+        let mut tape = Tape::new(&be);
+        let p = bind(&mut tape, &spec, &values)?;
         let loss = forward_loss(
             &mut tape,
             &spec,
@@ -174,7 +324,7 @@ impl ParityModel for Cpu {
                 out.push(HostTensor {
                     name: info.name,
                     shape: info.shape,
-                    data: g.to_f32_vec()?,
+                    data: host_values(&be, &g)?,
                 });
             }
         }
@@ -187,12 +337,12 @@ impl ParityModel for Cpu {
         setup: &TrainSetup,
         steps: usize,
     ) -> Result<(Vec<f64>, TensorSet), OjasError> {
-        let spec = ModelSpec::tiny();
+        let spec = self.spec;
         let cfg = train_config(setup)?;
         let host = params_of(&spec, params, &Budget::new(1 << 30))?;
         let bin = TokenBin::open_headerless(&setup.token_bin)
             .map_err(|e| refuse(format!("token bin: {e}")))?;
-        let mut t = Trainer::new(exact(), spec, &host, bin, cfg)?;
+        let mut t = Trainer::new((self.open)()?, spec, &host, bin, cfg)?;
         self.reports.clear();
         for _ in 0..steps {
             self.reports.push(t.step()?);
@@ -212,7 +362,7 @@ impl ParityModel for Cpu {
 
 #[test]
 fn oracle_forward_loss_and_logits() {
-    let r = parity::forward_parity(&mut Cpu::default()).unwrap();
+    let r = parity::forward_parity(&mut cpu_model()).unwrap();
     eprintln!(
         "forward: loss relative error {:e} (tol {:e})",
         r.worst, r.tolerance
@@ -221,7 +371,7 @@ fn oracle_forward_loss_and_logits() {
 
 #[test]
 fn oracle_grads_at_init() {
-    let r = parity::grads_parity(&mut Cpu::default(), ojas_oracle::golden::GradsAt::Init).unwrap();
+    let r = parity::grads_parity(&mut cpu_model(), ojas_oracle::golden::GradsAt::Init).unwrap();
     eprintln!(
         "grads at init: worst normwise {:e} (tol {:e})",
         r.worst, r.tolerance
@@ -230,7 +380,7 @@ fn oracle_grads_at_init() {
 
 #[test]
 fn oracle_grads_at_step5() {
-    let r = parity::grads_parity(&mut Cpu::default(), ojas_oracle::golden::GradsAt::Step5).unwrap();
+    let r = parity::grads_parity(&mut cpu_model(), ojas_oracle::golden::GradsAt::Step5).unwrap();
     eprintln!(
         "grads at step 5: worst normwise {:e} (tol {:e})",
         r.worst, r.tolerance
@@ -239,7 +389,7 @@ fn oracle_grads_at_step5() {
 
 #[test]
 fn oracle_five_step_trace_with_grad_norms_and_schedule() {
-    five_step_trace(Ns5::F32);
+    five_step_trace(&mut cpu_model(), Ns5::F32, &Gates::EXACT, 1e-4);
 }
 
 /// Stock nanolab (`X = G.bfloat16()` in Newton-Schulz) against ojas's bf16
@@ -247,29 +397,43 @@ fn oracle_five_step_trace_with_grad_norms_and_schedule() {
 /// steps, so the 1e-4 gate tells the two iterations apart.
 #[test]
 fn oracle_five_step_trace_bf16_ns5_matches_stock_nanolab() {
-    five_step_trace(Ns5::Bf16);
+    five_step_trace(&mut cpu_model(), Ns5::Bf16, &Gates::EXACT, 1e-4);
 }
 
-fn five_step_trace(ns5: Ns5) {
-    let mut m = Cpu::default();
-    let r = parity::trace_parity_ns5(&mut m, ns5).unwrap();
+/// The 5-step trace gate under `gates`, and beyond the runner the pre-clip
+/// grad norm (within `grad_norm_rel`, relative) and the LR multiplier (to
+/// 1e-12, a schedule computed in f64 on every backend) of every step, from
+/// the same run. Returns the worst grad-norm relative error.
+fn five_step_trace<B: Backend>(
+    m: &mut Device<B>,
+    ns5: Ns5,
+    gates: &Gates,
+    grad_norm_rel: f64,
+) -> f64 {
+    let r = parity::trace_parity_ns5_with(m, ns5, gates).unwrap();
     eprintln!(
-        "trace {ns5:?}: worst |dloss| {:e} (tol {:e})",
-        r.worst, r.tolerance
+        "trace {ns5:?}: worst |dloss| {:e} (tol {:e}), worst parameter normwise {:e} (tol {:e})",
+        r.loss_abs,
+        gates.trace_loss_abs,
+        r.param_normwise,
+        match ns5 {
+            Ns5::F32 => gates.trace_param_normwise_rel,
+            Ns5::Bf16 => gates.trace_bf16_param_normwise_rel,
+        }
     );
-    // Beyond the runner: the pre-clip grad norm and the LR multiplier of
-    // every step, from the same run.
     let fx = tiny_trace(ns5).unwrap();
+    let mut worst = 0.0f64;
     for (i, report) in m.reports.iter().enumerate() {
         let want = fx.grad_norm[i];
         let rel = (f64::from(report.grad_norm) - want).abs() / want;
+        worst = worst.max(rel);
         eprintln!(
             "trace step {}: grad norm {} torch {want} rel {rel:e}",
             i + 1,
             report.grad_norm
         );
         assert!(
-            rel <= 1e-4,
+            rel <= grad_norm_rel,
             "step {}: grad norm {} vs {want}",
             i + 1,
             report.grad_norm
@@ -282,11 +446,12 @@ fn five_step_trace(ns5: Ns5) {
             report.lr_multiplier
         );
     }
+    worst
 }
 
 #[test]
 fn oracle_forty_step_curve() {
-    let r = parity::curve_parity(&mut Cpu::default()).unwrap();
+    let r = parity::curve_parity(&mut cpu_model()).unwrap();
     eprintln!("curve: worst |dloss| {:e} (tol {:e})", r.worst, r.tolerance);
 }
 
@@ -316,7 +481,7 @@ fn oracle_autocast_bf16_loss_divergence_is_bounded() {
     let f32 = autocast_losses(AutocastMode::Off);
     let bf16 = autocast_losses(AutocastMode::Bf16);
     let plain = {
-        let mut m = Cpu::default();
+        let mut m = cpu_model();
         let init = tiny_init().unwrap();
         let fx = tiny_trace(Ns5::F32).unwrap();
         m.train(&init.params, &fx.train, fx.steps).unwrap().0
@@ -340,11 +505,229 @@ fn oracle_autocast_bf16_loss_divergence_is_bounded() {
 
 #[test]
 fn oracle_forty_step_curve_bf16_ns5() {
-    let r = parity::curve_parity_ns5(&mut Cpu::default(), Ns5::Bf16).unwrap();
+    let r = parity::curve_parity_ns5(&mut cpu_model(), Ns5::Bf16).unwrap();
     eprintln!(
         "curve bf16 ns5: worst |dloss| {:e} (tol {:e})",
         r.worst, r.tolerance
     );
+}
+
+// ---------------------------------------------------------------------------
+// The grouped-query and sliding-window goldens
+// ---------------------------------------------------------------------------
+
+/// Forward and gradients of both variant fixtures under `gates`, printing
+/// the observed errors. Returns the worst of each: (loss, logits, grads).
+fn variant_suite<B: Backend>(name: &str, m: &mut Device<B>, gates: &Gates) -> (f64, f64, f64) {
+    let mut worst = (0.0f64, 0.0f64, 0.0f64);
+    for v in Variant::ALL {
+        let fx = variant(v).unwrap();
+        let f = parity::variant_forward_parity(m, &fx, gates)
+            .unwrap_or_else(|e| panic!("{name} {v:?}: {e}"));
+        let g = parity::variant_grads_parity(m, &fx, gates)
+            .unwrap_or_else(|e| panic!("{name} {v:?}: {e}"));
+        eprintln!(
+            "{name} {v:?}: loss rel {:e} (tol {:e}), logits normwise {:e} (tol {:e}), \
+             worst gradient normwise {:e} (tol {:e})",
+            f.loss_rel,
+            gates.forward_loss_rel,
+            f.logits_normwise,
+            gates.logits_normwise_rel,
+            g.worst,
+            g.tolerance
+        );
+        worst = (
+            worst.0.max(f.loss_rel),
+            worst.1.max(f.logits_normwise),
+            worst.2.max(g.worst),
+        );
+    }
+    worst
+}
+
+/// GQA and window goldens on CPU Exact, at the CPU gates.
+#[test]
+fn cpu_matches_torch_on_gqa_and_sliding_window_forward_and_backward() {
+    variant_suite("cpu", &mut cpu_model(), &Gates::EXACT);
+}
+
+/// Wraps a CPU model and edits what it is told, to show each variant gate
+/// can tell the variant from its absence: the window stripped from the spec,
+/// or the two KV heads' projections swapped.
+struct Edited {
+    inner: Device<CpuBackend>,
+    strip_window: bool,
+    swap_kv_heads: bool,
+}
+
+impl Edited {
+    fn params(&self, params: &TensorSet) -> TensorSet {
+        if !self.swap_kv_heads {
+            return params.clone();
+        }
+        let tensors = params
+            .iter()
+            .map(|t| {
+                let mut t = t.clone();
+                if t.name.contains(".k_proj.") || t.name.contains(".v_proj.") {
+                    let half = t.data.len() / 2;
+                    t.data.rotate_left(half);
+                }
+                t
+            })
+            .collect();
+        TensorSet::new(tensors).unwrap()
+    }
+}
+
+impl ParityModel for Edited {
+    fn configure(&mut self, spec: &ojas_oracle::spec::ModelSpec) -> Result<(), OjasError> {
+        let mut spec = spec.clone();
+        if self.strip_window {
+            spec.window = None;
+        }
+        self.inner.configure(&spec)
+    }
+
+    fn forward(
+        &mut self,
+        params: &TensorSet,
+        batch: &TokenBatch,
+    ) -> Result<(f32, Vec<f32>), OjasError> {
+        self.inner.forward(&self.params(params), batch)
+    }
+
+    fn grads(
+        &mut self,
+        params: &TensorSet,
+        batch: &TokenBatch,
+        seed: f32,
+    ) -> Result<TensorSet, OjasError> {
+        self.inner.grads(&self.params(params), batch, seed)
+    }
+
+    fn train(
+        &mut self,
+        params: &TensorSet,
+        setup: &TrainSetup,
+        steps: usize,
+    ) -> Result<(Vec<f64>, TensorSet), OjasError> {
+        self.inner.train(params, setup, steps)
+    }
+}
+
+#[test]
+fn the_variant_goldens_fail_a_model_without_the_window_or_with_the_wrong_kv_heads() {
+    let edited = |strip_window, swap_kv_heads| Edited {
+        inner: cpu_model(),
+        strip_window,
+        swap_kv_heads,
+    };
+    // Control: the unedited wrapper passes both fixtures.
+    for v in Variant::ALL {
+        let fx = variant(v).unwrap();
+        parity::variant_forward_parity(&mut edited(false, false), &fx, &Gates::EXACT).unwrap();
+    }
+    let swa = variant(Variant::Swa).unwrap();
+    let e = parity::variant_forward_parity(&mut edited(true, false), &swa, &Gates::EXACT)
+        .expect_err("full causal attention matched the windowed golden");
+    eprintln!("window stripped: {e}");
+    assert!(parity::variant_grads_parity(&mut edited(true, false), &swa, &Gates::EXACT).is_err());
+    let gqa = variant(Variant::Gqa).unwrap();
+    let e = parity::variant_forward_parity(&mut edited(false, true), &gqa, &Gates::EXACT)
+        .expect_err("swapped KV heads matched the GQA golden");
+    eprintln!("kv heads swapped: {e}");
+    assert!(parity::variant_grads_parity(&mut edited(false, true), &gqa, &Gates::EXACT).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The device trainers against torch
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+fn open_metal() -> Result<ojas_metal::MetalBackend, OjasError> {
+    ojas_metal::MetalBackend::new(Budget::new(1 << 30))
+}
+
+fn open_wgpu() -> Result<ojas_wgpu::WgpuBackend, OjasError> {
+    ojas_wgpu::WgpuBackend::open(Budget::new(1 << 30))
+        .map_err(|e| refuse(format!("WgpuBackend::open: {e}")))
+}
+
+/// Run `body` on a model over `open`, or skip loudly when the device does
+/// not open (`skip_or_fail`: a failure unless `OJAS_ALLOW_NO_GPU=1`).
+fn on_device<B: Backend + 'static>(
+    what: &str,
+    open: fn() -> Result<B, OjasError>,
+    body: impl FnOnce(&mut Device<B>),
+) {
+    let _guard = serial();
+    match open() {
+        Ok(probe) => {
+            drop(probe);
+            body(&mut Device::new(open));
+        }
+        Err(err) => skip_or_fail(what, &err),
+    }
+}
+
+/// The full tiny-fixture gate set on one device: forward, both gradient
+/// sets, the 5-step traces and the 40-step curves against torch, each NS5
+/// precision, under `gates`.
+fn device_suite<B: Backend>(name: &str, m: &mut Device<B>, gates: &Gates, grad_norm_rel: f64) {
+    let f = parity::forward_parity_with(m, gates).unwrap_or_else(|e| panic!("{name}: {e}"));
+    eprintln!(
+        "{name} forward: loss rel {:e} (tol {:e}), logits normwise {:e} (tol {:e})",
+        f.loss_rel, gates.forward_loss_rel, f.logits_normwise, gates.logits_normwise_rel
+    );
+    for at in [GradsAt::Init, GradsAt::Step5] {
+        let g = parity::grads_parity_with(m, at, gates)
+            .unwrap_or_else(|e| panic!("{name} grads {at:?}: {e}"));
+        eprintln!(
+            "{name} grads {at:?}: worst normwise {:e} (tol {:e})",
+            g.worst, g.tolerance
+        );
+    }
+    for ns5 in [Ns5::F32, Ns5::Bf16] {
+        let worst = five_step_trace(m, ns5, gates, grad_norm_rel);
+        eprintln!("{name} trace {ns5:?}: worst grad-norm rel {worst:e} (tol {grad_norm_rel:e})");
+        let c = parity::curve_parity_ns5_with(m, ns5, gates)
+            .unwrap_or_else(|e| panic!("{name} curve {ns5:?}: {e}"));
+        eprintln!(
+            "{name} curve {ns5:?}: worst |dloss| {:e} (tol {:e})",
+            c.worst, c.tolerance
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_trainer_matches_torch_on_the_tiny_fixtures() {
+    on_device("MetalBackend::new", open_metal, |m| {
+        device_suite("metal", m, &GPU_GATES, GPU_GRAD_NORM_REL);
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn metal_matches_torch_on_gqa_and_sliding_window_forward_and_backward() {
+    on_device("MetalBackend::new", open_metal, |m| {
+        variant_suite("metal", m, &GPU_GATES);
+    });
+}
+
+#[test]
+fn wgpu_trainer_matches_torch_on_the_tiny_fixtures() {
+    on_device("WgpuBackend::open", open_wgpu, |m| {
+        device_suite("wgpu", m, &GPU_GATES, GPU_GRAD_NORM_REL);
+    });
+}
+
+#[test]
+fn wgpu_matches_torch_on_gqa_and_sliding_window_forward_and_backward() {
+    on_device("WgpuBackend::open", open_wgpu, |m| {
+        variant_suite("wgpu", m, &GPU_GATES);
+    });
 }
 
 #[test]

@@ -10,6 +10,9 @@
 //! - [`parity`]: the tolerances later lanes are held to, and runners that
 //!   apply them to any model implementing [`parity::ParityModel`].
 //! - [`spec`]: the `ojas.spec` JSON schema and the §2 parameter table.
+//! - [`variants`]: torch goldens for grouped-query and sliding-window
+//!   attention (forward and backward), which the tiny MHA fixtures do not
+//!   cover.
 //! - [`safetensors`]: the fixture policy over `ojas_io::SafeTensors`.
 //! - [`bf16_operands`]: the bf16 operand contract of
 //!   `Backend::bf16_operands`, run on any backend that reports it.
@@ -31,6 +34,7 @@ pub mod golden;
 pub mod parity;
 pub mod safetensors;
 pub mod spec;
+pub mod variants;
 
 use ojas_core::OjasError;
 use ojas_io::{IoError, JsonLimits, JsonValue};
