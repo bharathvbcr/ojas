@@ -266,6 +266,11 @@ pub fn forward_loss<G: Graph>(
 /// [`forward_loss`] with LoRA branches on the linears `lora` has sites for
 /// (`None` is [`forward_loss`] exactly). The base `params` are used as
 /// bound: bind them with [`bind_frozen`] to train the adapters alone.
+///
+/// The tower to the final norm is [`forward_hidden_lora`]; this function
+/// adds only the `targets` check and the fused tied-head cross-entropy over
+/// every position, so its values and gradients are those of the single
+/// function it was split from.
 #[allow(clippy::too_many_arguments)]
 pub fn forward_loss_lora<G: Graph>(
     g: &mut G,
@@ -293,15 +298,90 @@ pub fn forward_loss_lora<G: Graph>(
             format!("targets {:?} for ids {:?}", targets.shape(), ids.shape()),
         ));
     }
+    let h = tower(g, OP, spec, params, lora, ids, tables, activations)?;
+    let rows = batch * seq;
+    let h = g.reshape(&h, &[rows, spec.hidden])?;
+    let targets = targets.reshape(&[rows])?;
+    g.lin_ce(&h, &params.embed, &targets, ignore, chunk)
+}
+
+/// The tower to the final norm: transformers' `Qwen3_5TextModel` output,
+/// `last_hidden_state`, `[B, T, hidden]`, before the tied head. `ids` is
+/// `U32` `[B, T]` with `T` at most the tables' length. A host-side head
+/// (an answer head, a span pointer) reads rows of it with [`gather_rows`]
+/// and trains through them on a tape; [`forward_loss`] is this plus the
+/// fused tied-head cross-entropy.
+///
+/// Every layer is causal, so row `b`'s positions `0..n` depend on `ids[b,
+/// ..n]` alone: finite tokens after them, such as right padding, change
+/// nothing the row reads. That holds for finite padding only: a non-finite
+/// value in a padding token's embedding is refused by the CPU backend, but on
+/// Metal it can reach the row's real positions as NaN (a backend issue
+/// tracked on card ft-ab2f1daf, criterion 6). [`RightPadded`] is the input
+/// form that makes only right padding representable.
+pub fn forward_hidden<G: Graph>(
+    g: &mut G,
+    spec: &Qwen35Spec,
+    params: &Qwen35Params<G::V>,
+    ids: &Tensor,
+    tables: &Qwen35Tables,
+    activations: ActivationCheckpoint,
+) -> Result<G::V, OjasError> {
+    forward_hidden_lora(g, spec, params, None, ids, tables, activations)
+}
+
+/// [`forward_hidden`] with LoRA branches (`None` is [`forward_hidden`]
+/// exactly), under the same contract as [`forward_loss_lora`].
+pub fn forward_hidden_lora<G: Graph>(
+    g: &mut G,
+    spec: &Qwen35Spec,
+    params: &Qwen35Params<G::V>,
+    lora: Option<&LoraForward<G::V>>,
+    ids: &Tensor,
+    tables: &Qwen35Tables,
+    activations: ActivationCheckpoint,
+) -> Result<G::V, OjasError> {
+    tower(
+        g,
+        "qwen35::forward_hidden",
+        spec,
+        params,
+        lora,
+        ids,
+        tables,
+        activations,
+    )
+}
+
+/// The one implementation behind [`forward_hidden_lora`] and
+/// [`forward_loss_lora`]; `op` names the public entry in its errors.
+#[allow(clippy::too_many_arguments)]
+fn tower<G: Graph>(
+    g: &mut G,
+    op: &'static str,
+    spec: &Qwen35Spec,
+    params: &Qwen35Params<G::V>,
+    lora: Option<&LoraForward<G::V>>,
+    ids: &Tensor,
+    tables: &Qwen35Tables,
+    activations: ActivationCheckpoint,
+) -> Result<G::V, OjasError> {
+    spec.validate()?;
+    let &[batch, seq] = ids.shape() else {
+        return Err(shape(
+            op,
+            format!("ids {:?} are not [batch, time]", ids.shape()),
+        ));
+    };
     if seq == 0 || seq > tables.len() {
         return Err(shape(
-            OP,
+            op,
             format!("{seq} positions for tables of {}", tables.len()),
         ));
     }
     if params.layers.len() != spec.layers.len() {
         return Err(shape(
-            OP,
+            op,
             format!(
                 "{} layers for a spec of {}",
                 params.layers.len(),
@@ -343,7 +423,7 @@ pub fn forward_loss_lora<G: Graph>(
     if let Some(lora) = lora {
         if lora.sites.layers.len() != params.layers.len() {
             return Err(shape(
-                OP,
+                op,
                 format!(
                     "{} LoRA layers for a spec of {}",
                     lora.sites.layers.len(),
@@ -366,15 +446,197 @@ pub fn forward_loss_lora<G: Graph>(
                     layer(g, spec, l, n, ctx.as_ref(), &x, &dims).map(|y| vec![y])
                 })?;
                 outs.pop()
-                    .ok_or_else(|| shape(OP, "a checkpointed layer returned no output".into()))?
+                    .ok_or_else(|| shape(op, "a checkpointed layer returned no output".into()))?
             }
         };
     }
-    let h = g.rms_norm(&x, &final_norm, spec.eps)?;
-    let rows = batch * seq;
-    let h = g.reshape(&h, &[rows, spec.hidden])?;
-    let targets = targets.reshape(&[rows])?;
-    g.lin_ce(&h, &params.embed, &targets, ignore, chunk)
+    g.rms_norm(&x, &final_norm, spec.eps)
+}
+
+/// The most rows a flat `[B * T]` index can address: `embedding` takes `u32`
+/// ids, and a flat index is `b * T + position`.
+const MAX_FLAT_ROWS: u64 = u32::MAX as u64;
+
+/// How long each row of a right-padded batch really is, out of `seq`
+/// columns. Only right padding is representable: row `b` holds its `lengths[b]
+/// >= 1` tokens in columns `0..lengths[b]` and padding after them, which the
+/// causal tower cannot carry into the row's own positions as long as the
+/// padding is finite ([`forward_hidden`] says what non-finite padding does). Left padding shifts a row's tokens to other
+/// positions, and a hole or a packed row lets one segment read another, so
+/// [`RightPadded::from_attention_mask`] refuses both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RightPadded {
+    lengths: Vec<usize>,
+    seq: usize,
+}
+
+impl RightPadded {
+    const OP: &'static str = "qwen35::RightPadded";
+
+    /// A batch of `lengths.len()` rows of `seq` columns. Every length is in
+    /// `1..=seq`, the batch is not empty, and `B * T` fits the `u32` flat row
+    /// index [`gather_rows`] uses; that is checked before anything is
+    /// allocated for it.
+    pub fn new(lengths: Vec<usize>, seq: usize) -> Result<Self, OjasError> {
+        Self::check_extent(lengths.len(), seq)?;
+        if let Some((b, &n)) = lengths.iter().enumerate().find(|(_, &n)| n == 0 || n > seq) {
+            return Err(shape(
+                Self::OP,
+                format!("row {b} has length {n}, not in 1..={seq}"),
+            ));
+        }
+        Ok(Self { lengths, seq })
+    }
+
+    /// `batch` rows with no padding. The extent is checked before the
+    /// lengths are allocated.
+    pub fn full(batch: usize, seq: usize) -> Result<Self, OjasError> {
+        Self::check_extent(batch, seq)?;
+        Self::new(vec![seq; batch], seq)
+    }
+
+    /// `batch` and `seq` are both positive and `batch * seq` fits the `u32`
+    /// flat row index [`gather_rows`] uses. Every constructor calls this
+    /// before it allocates anything sized by `batch`.
+    fn check_extent(batch: usize, seq: usize) -> Result<(), OjasError> {
+        if batch == 0 || seq == 0 {
+            return Err(shape(Self::OP, format!("{batch} rows of {seq} columns")));
+        }
+        if (batch as u64)
+            .checked_mul(seq as u64)
+            .is_none_or(|n| n > MAX_FLAT_ROWS)
+        {
+            return Err(shape(
+                Self::OP,
+                format!(
+                    "{batch} rows of {seq} columns exceed the {MAX_FLAT_ROWS} rows a u32 index addresses"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The lengths of Hugging Face's `attention_mask`, `[batch, seq]` row
+    /// major, `1` for a token and `0` for padding. Refused: a value other
+    /// than 0 or 1; a row whose first entry is 0 and that has a 1 later (left
+    /// padding); a 0 followed by a 1 after the row's first tokens (a hole, or
+    /// packed rows); a row of all zeros.
+    pub fn from_attention_mask(mask: &[i64], batch: usize, seq: usize) -> Result<Self, OjasError> {
+        if batch.checked_mul(seq) != Some(mask.len()) {
+            return Err(shape(
+                Self::OP,
+                format!("{} mask values for {batch} rows of {seq}", mask.len()),
+            ));
+        }
+        Self::check_extent(batch, seq)?;
+        if let Some(v) = mask.iter().find(|&&v| v != 0 && v != 1) {
+            return Err(shape(
+                Self::OP,
+                format!("attention_mask holds {v}, not 0 or 1"),
+            ));
+        }
+        let mut lengths = Vec::with_capacity(batch);
+        for (b, row) in mask.chunks_exact(seq.max(1)).enumerate() {
+            let n = row.iter().take_while(|&&v| v == 1).count();
+            let rest_has_token = row[n..].contains(&1);
+            if n == 0 && !rest_has_token {
+                return Err(shape(Self::OP, format!("row {b} is all padding")));
+            }
+            if n == 0 {
+                return Err(shape(
+                    Self::OP,
+                    format!("row {b} is left padded: only right padding is supported"),
+                ));
+            }
+            if rest_has_token {
+                return Err(shape(
+                    Self::OP,
+                    format!("row {b} has a token after padding (a hole or a packed row)"),
+                ));
+            }
+            lengths.push(n);
+        }
+        Self::new(lengths, seq)
+    }
+
+    pub fn batch(&self) -> usize {
+        self.lengths.len()
+    }
+
+    pub fn seq(&self) -> usize {
+        self.seq
+    }
+
+    pub fn lengths(&self) -> &[usize] {
+        &self.lengths
+    }
+
+    /// The flat index `b * seq + positions[b]` into `[B * T]` rows, one per
+    /// example. Refused: not exactly one position per row, and a position at
+    /// or beyond its row's length, which would read padding.
+    pub fn flat_ids(&self, positions: &[usize]) -> Result<Vec<u32>, OjasError> {
+        if positions.len() != self.lengths.len() {
+            return Err(shape(
+                "qwen35::gather_rows",
+                format!(
+                    "{} positions for {} rows",
+                    positions.len(),
+                    self.lengths.len()
+                ),
+            ));
+        }
+        positions
+            .iter()
+            .zip(&self.lengths)
+            .enumerate()
+            .map(|(b, (&p, &n))| {
+                if p >= n {
+                    return Err(shape(
+                        "qwen35::gather_rows",
+                        format!("row {b}: position {p} is not inside its {n} tokens"),
+                    ));
+                }
+                u32::try_from(b * self.seq + p).map_err(|_| {
+                    shape(
+                        "qwen35::gather_rows",
+                        format!("row {b}: flat index overflows u32"),
+                    )
+                })
+            })
+            .collect()
+    }
+}
+
+/// Row `positions[b]` of example `b` of `h`, `[B, T, D]` to `[B, D]`: how a
+/// host-side head reads the hidden state ([`forward_hidden`]) at an answer
+/// position per example, with a gradient. The rows are gathered with
+/// [`Graph::embedding`] over `h` reshaped to `[B * T, D]` as a computed
+/// table: the backward is its scatter-add, so the gradient lands on the
+/// gathered rows of `h` and is exactly zero everywhere else. `rows` fixes `B`
+/// and `T` (they must match `h`) and bounds every position by its row's true
+/// length.
+pub fn gather_rows<G: Graph>(
+    g: &mut G,
+    h: &G::V,
+    rows: &RightPadded,
+    positions: &[usize],
+    budget: &Budget,
+) -> Result<G::V, OjasError> {
+    const OP: &str = "qwen35::gather_rows";
+    let want = [rows.batch(), rows.seq()];
+    let hidden = match g.tensor(h)?.shape() {
+        &[b, t, d] if [b, t] == want => d,
+        other => {
+            return Err(shape(
+                OP,
+                format!("h {other:?} is not [{}, {}, hidden]", want[0], want[1]),
+            ))
+        }
+    };
+    let flat = rows.flat_ids(positions)?;
+    let ids = Tensor::from_u32(&flat, &[flat.len()], budget)?;
+    let table = g.reshape(h, &[want[0] * want[1], hidden])?;
+    g.embedding(&table, &ids)
 }
 
 struct Dims<'a> {

@@ -3,7 +3,10 @@
 //! [`fixture_bpe`] round-trips a hand-written vocabulary. It does not use
 //! tiktoken ranks.
 //!
-//! [`load_hf_gpt2`] reads a Hugging Face `vocab.json` and `merges.txt`.
+//! [`load_hf_gpt2`] reads a Hugging Face `vocab.json` and `merges.txt`;
+//! [`load_hf_gpt2_dir`] reads them from a model directory and, when the
+//! directory has a `tokenizer.json`, refuses a tokenizer whose pre-tokenizer
+//! is not GPT-2's ([`check_gpt2_pre_tokenizer`]).
 //! [`Bpe::encode_ordinary`] applies the GPT-2 regex split, the byte alphabet,
 //! then those merges. Twenty strings match tiktoken 0.12.0 `encode_ordinary`
 //! ([`TIKTOKEN_GPT2_BYTE_IDENTITY`]). That is not a million-line check.
@@ -13,6 +16,7 @@
 
 use crate::error::DataError;
 use crate::gpt2_class::{is_letter, is_number, is_space};
+use ojas_io::{parse_json_with, JsonLimits, JsonValue};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -587,6 +591,169 @@ pub fn load_hf_gpt2(vocab_json: &Path, merges_txt: &Path) -> Result<Bpe, DataErr
     Bpe::from_ranked_pieces(pieces, pairs)
 }
 
+/// Load a model directory's `vocab.json` and `merges.txt` as [`load_hf_gpt2`]
+/// does, after checking its `tokenizer.json`, when it has one, with
+/// [`check_gpt2_pre_tokenizer`]. A directory with no `tokenizer.json` (the
+/// original GPT-2 release has none) is loaded unchecked; a `tokenizer.json`
+/// that is present but unreachable (a dangling symlink) or not a regular file
+/// (a directory, a FIFO) is an error.
+///
+/// Use this wherever a directory is in hand. [`load_hf_gpt2`] itself never
+/// opens `tokenizer.json`, and the C API's tokenizer entry
+/// (`ojas-capi/src/tokenize.rs`) calls it on descriptor paths, so a Qwen2/3
+/// vocabulary handed to it is accepted and tokenized with the wrong
+/// pre-tokenizer. That path stays unguarded by decision: the Lappi caller
+/// tokenizes offline and sends ids to ojas, so the C API's tokenizer is not
+/// what feeds a Qwen3.5 run.
+pub fn load_hf_gpt2_dir(dir: &Path) -> Result<Bpe, DataError> {
+    let tokenizer_json = dir.join("tokenizer.json");
+    // `symlink_metadata` tells absent from present-but-unreachable: a dangling
+    // symlink is present, and `metadata` (which follows it) would call it
+    // absent and load the tables unchecked.
+    match std::fs::symlink_metadata(&tokenizer_json) {
+        Ok(_) => check_gpt2_pre_tokenizer(&tokenizer_json)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(DataError::new(format!("{}: {e}", tokenizer_json.display()))),
+    }
+    load_hf_gpt2(&dir.join("vocab.json"), &dir.join("merges.txt"))
+}
+
+/// Limits for a whole `tokenizer.json`: the [`HF_TEXT_CAP`] input cap, a
+/// depth past anything a pre-tokenizer `Sequence` nests, at most one node per
+/// two input bytes, and a tree budget wide enough for a 250k-piece
+/// vocabulary plus its merges as arrays of strings (Qwen3.5's file).
+const TOKENIZER_JSON_LIMITS: JsonLimits = JsonLimits {
+    max_input_bytes: HF_TEXT_CAP as usize,
+    max_depth: 16,
+    max_nodes: (HF_TEXT_CAP / 2) as usize,
+    tree_bytes_per_input_byte: 48,
+    tree_bytes_floor: 1 << 20,
+};
+
+/// Refuse a `tokenizer.json` that is not GPT-2's, by exactly these checks
+/// (the contract [`gpt2_split`], the byte alphabet and the merge table
+/// implement), each error naming what was found:
+///
+/// - `pre_tokenizer` is `{"type": "ByteLevel", "add_prefix_space": false,
+///   "use_regex": true}`; `use_regex` may be absent (Hugging Face's default)
+///   and `trim_offsets` only moves offsets, so it is not read. Refused:
+///   `null`, a `Sequence` (Qwen2/3's `Split` regex then `ByteLevel` with
+///   `use_regex` false), `add_prefix_space` true or absent (Hugging Face
+///   defaults it to true), `use_regex` false or not a boolean, any other
+///   `type`, and a missing key.
+/// - `normalizer` is absent or `null` (GPT-2 has none; Qwen's is NFC, which
+///   changes ids on non-NFC text).
+/// - `model.type` is `BPE`.
+///
+/// Also refused: a path that is not a regular file once symlinks are followed
+/// (a FIFO would block `open`), malformed JSON (duplicate keys included) and
+/// a file over [`HF_TEXT_CAP`]. Nothing else in the file is read: the added tokens, the
+/// post-processor and the decoder do not change what `encode_ordinary`
+/// returns.
+pub fn check_gpt2_pre_tokenizer(tokenizer_json: &Path) -> Result<(), DataError> {
+    let shown = tokenizer_json.display();
+    let fail = |why: &str| DataError::new(format!("{shown}: {why}"));
+    // Only a regular file (after following a symlink) is opened: opening a FIFO
+    // with no writer blocks forever. `read_capped` itself does not check, as it
+    // also serves the C API's `/dev/fd/N` paths, which may be pipes.
+    let kind = std::fs::metadata(tokenizer_json).map_err(|e| fail(&e.to_string()))?;
+    if !kind.is_file() {
+        return Err(fail("tokenizer.json is not a regular file"));
+    }
+    let text = read_capped(tokenizer_json)?;
+    let root = parse_json_with(&text, &TOKENIZER_JSON_LIMITS)
+        .map_err(|e| fail(&format!("not a tokenizer.json: {}", e.detail())))?;
+    let key = |name: &str| {
+        root.field_opt(name)
+            .map_err(|e| fail(&format!("not a tokenizer.json: {}", e.detail())))
+    };
+    let pre = key("pre_tokenizer")?.ok_or_else(|| fail("has no pre_tokenizer key"))?;
+    if let Some(found) = gpt2_pre_tokenizer_mismatch(pre) {
+        return Err(fail(&format!(
+            "pre_tokenizer is {found}, not GPT-2's ByteLevel(add_prefix_space=false, \
+             use_regex=true); this loader's GPT-2 split and byte alphabet would give wrong ids"
+        )));
+    }
+    match key("normalizer")? {
+        None | Some(JsonValue::Null) => {}
+        Some(n) => {
+            let kind = match n.field_opt("type") {
+                Ok(Some(JsonValue::String(s))) => s.as_str(),
+                _ => "an untyped value",
+            };
+            return Err(fail(&format!(
+                "normalizer is {kind}, not null: GPT-2 has none, and this loader applies none"
+            )));
+        }
+    }
+    let model_kind = match key("model")? {
+        Some(m) => match m.field_opt("type") {
+            Ok(Some(JsonValue::String(s))) => s.as_str(),
+            _ => "an untyped value",
+        },
+        None => "missing",
+    };
+    if model_kind != "BPE" {
+        return Err(fail(&format!(
+            "model is {model_kind}, not BPE: this loader reads a BPE vocabulary and merges"
+        )));
+    }
+    Ok(())
+}
+
+/// What `pre` is when it is not GPT-2's pre-tokenizer; `None` when it is.
+fn gpt2_pre_tokenizer_mismatch(pre: &JsonValue) -> Option<String> {
+    if matches!(pre, JsonValue::Null) {
+        return Some("null (no pre-tokenization)".to_string());
+    }
+    let Ok(Some(kind)) = pre.field_opt("type") else {
+        return Some("not an object with a type".to_string());
+    };
+    let Ok(kind) = kind.as_str() else {
+        return Some("an object whose type is not a string".to_string());
+    };
+    match kind {
+        "ByteLevel" => {
+            match pre.field_opt("add_prefix_space") {
+                Ok(Some(JsonValue::Bool(false))) => {}
+                Ok(Some(JsonValue::Bool(true))) => {
+                    return Some("ByteLevel with add_prefix_space true".to_string())
+                }
+                Ok(None) => {
+                    return Some(
+                        "ByteLevel with add_prefix_space unset (Hugging Face defaults it to true)"
+                            .to_string(),
+                    )
+                }
+                _ => return Some("ByteLevel with a non-boolean add_prefix_space".to_string()),
+            }
+            match pre.field_opt("use_regex") {
+                Ok(None | Some(JsonValue::Bool(true))) => None,
+                Ok(Some(JsonValue::Bool(false))) => Some(
+                    "ByteLevel with use_regex false (an earlier pre-tokenizer does the split)"
+                        .to_string(),
+                ),
+                _ => Some("ByteLevel with a non-boolean use_regex".to_string()),
+            }
+        }
+        "Sequence" => {
+            let inner = match pre.field_opt("pretokenizers") {
+                Ok(Some(JsonValue::Array(items))) => items
+                    .iter()
+                    .map(|i| match i.field_opt("type") {
+                        Ok(Some(JsonValue::String(s))) => s.as_str(),
+                        _ => "?",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                _ => "?".to_string(),
+            };
+            Some(format!("a Sequence of [{inner}]"))
+        }
+        other => Some(format!("a {other} pre-tokenizer")),
+    }
+}
+
 fn read_capped(path: &Path) -> Result<String, DataError> {
     use std::io::Read;
     let file = std::fs::File::open(path)
@@ -651,12 +818,11 @@ const VOCAB_ENTRY_OVERHEAD: usize = 104;
 const VOCAB_BYTE_FACTOR: usize = 7;
 const VOCAB_BYTE_FLOOR: usize = 256 * 1024;
 
-/// `ojas-io`'s JSON parser is not used here. It accepts surrogate pairs and
-/// only non-negative integers, while a vocab key rejects every surrogate
-/// (`parse_json_string`). `ojas-oracle` needs f64, signs, and exponents, and
-/// refuses escapes. Pointing either crate at `ojas-io` would also add a path
-/// dependency whose lockfile this session cannot edit. Each parser therefore
-/// keeps its grammar and caps its own input and tree.
+/// `ojas-io`'s JSON parser is not used for `vocab.json`. It accepts surrogate
+/// pairs and only non-negative integers, while a vocab key rejects every
+/// surrogate (`parse_json_string`). It is used for `tokenizer.json`
+/// ([`check_gpt2_pre_tokenizer`]), which is read for one key. Each parser keeps
+/// its grammar and caps its own input and tree.
 fn parse_vocab_json(text: &str) -> Result<Vec<String>, DataError> {
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -1356,5 +1522,224 @@ mod tests {
             assert_eq!(got, ids, "{text:?}");
             assert_eq!(bpe.decode_ordinary(&got).unwrap(), text);
         }
+    }
+}
+
+#[cfg(test)]
+mod pre_tokenizer_tests {
+    use super::*;
+
+    /// GPT-2's own `tokenizer.json` head, as `openai-community/gpt2` ships it
+    /// (the pre-tokenizer is the part that matters; the model is a stub).
+    const GPT2: &str = r#"{"version":"1.0","truncation":null,"padding":null,"added_tokens":[],
+        "normalizer":null,
+        "pre_tokenizer":{"type":"ByteLevel","add_prefix_space":false,"trim_offsets":true,"use_regex":true},
+        "post_processor":{"type":"ByteLevel","add_prefix_space":true,"trim_offsets":false,"use_regex":true},
+        "decoder":{"type":"ByteLevel","add_prefix_space":true,"trim_offsets":true,"use_regex":true},
+        "model":{"type":"BPE","vocab":{"a":0},"merges":[]}}"#;
+
+    /// Qwen2/3's: a `Split` on the Qwen regex, then `ByteLevel` without its own.
+    const QWEN: &str = r#"{"version":"1.0","pre_tokenizer":{"type":"Sequence","pretokenizers":[
+        {"type":"Split","pattern":{"Regex":"(?i:'s|'t)|\\p{N}| ?[^\\s\\p{L}\\p{N}]+"},"behavior":"Isolated","invert":false},
+        {"type":"ByteLevel","add_prefix_space":false,"trim_offsets":false,"use_regex":false}]},
+        "model":{"type":"BPE","vocab":{"a":0},"merges":[]}}"#;
+
+    fn tmp(tag: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ojas-pretok-{tag}-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tokenizer.json");
+        std::fs::write(&file, body).unwrap();
+        (dir, file)
+    }
+
+    fn check(tag: &str, body: &str) -> Result<(), String> {
+        let (dir, file) = tmp(tag, body);
+        let r = check_gpt2_pre_tokenizer(&file).map_err(|e| e.to_string());
+        let _ = std::fs::remove_dir_all(dir);
+        r
+    }
+
+    fn with_pre(pre: &str) -> String {
+        format!(r#"{{"pre_tokenizer":{pre},"model":{{"type":"BPE"}}}}"#)
+    }
+
+    #[test]
+    fn gpt2s_pre_tokenizer_is_accepted() {
+        check("gpt2", GPT2).unwrap();
+        // `use_regex` absent is Hugging Face's default (true).
+        check(
+            "noregex",
+            &with_pre(r#"{"type":"ByteLevel","add_prefix_space":false}"#),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn qwens_pre_tokenizer_is_refused_by_name() {
+        let err = check("qwen", QWEN).unwrap_err();
+        assert!(err.contains("a Sequence of [Split, ByteLevel]"), "{err}");
+        assert!(err.contains("tokenizer.json"), "{err}");
+    }
+
+    #[test]
+    fn every_other_pre_tokenizer_is_refused_naming_what_was_found() {
+        let cases: [(&str, String, &str); 10] = [
+            ("null", with_pre("null"), "null"),
+            (
+                "prefix",
+                with_pre(r#"{"type":"ByteLevel","add_prefix_space":true,"use_regex":true}"#),
+                "add_prefix_space true",
+            ),
+            (
+                "unsetprefix",
+                with_pre(r#"{"type":"ByteLevel","use_regex":true}"#),
+                "add_prefix_space unset",
+            ),
+            (
+                "noregex",
+                with_pre(r#"{"type":"ByteLevel","add_prefix_space":false,"use_regex":false}"#),
+                "use_regex false",
+            ),
+            (
+                "badregex",
+                with_pre(r#"{"type":"ByteLevel","add_prefix_space":false,"use_regex":"yes"}"#),
+                "non-boolean use_regex",
+            ),
+            (
+                "badprefix",
+                with_pre(r#"{"type":"ByteLevel","add_prefix_space":0}"#),
+                "non-boolean add_prefix_space",
+            ),
+            (
+                "whitespace",
+                with_pre(r#"{"type":"Whitespace"}"#),
+                "a Whitespace pre-tokenizer",
+            ),
+            (
+                "notype",
+                with_pre(r#"{"add_prefix_space":false}"#),
+                "not an object with a type",
+            ),
+            (
+                "string",
+                with_pre(r#""ByteLevel""#),
+                "not an object with a type",
+            ),
+            ("badtype", with_pre(r#"{"type":7}"#), "type is not a string"),
+        ];
+        for (tag, body, found) in cases {
+            let err = check(tag, &body).unwrap_err();
+            assert!(err.contains(found), "{tag}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_missing_key_malformed_json_and_a_non_object_are_refused() {
+        let err = check("nokey", r#"{"model":{}}"#).unwrap_err();
+        assert!(err.contains("no pre_tokenizer key"), "{err}");
+        for (tag, body) in [
+            ("trailing", r#"{"pre_tokenizer":null,}"#),
+            ("truncated", r#"{"pre_tokenizer":{"type":"ByteLevel""#),
+            ("empty", ""),
+            ("array", "[]"),
+            ("dup", r#"{"pre_tokenizer":null,"pre_tokenizer":null}"#),
+        ] {
+            let err = check(tag, body).unwrap_err();
+            assert!(err.contains("not a tokenizer.json"), "{tag}: {err}");
+        }
+    }
+
+    #[test]
+    fn an_oversized_tokenizer_json_is_refused_before_it_is_read() {
+        let (dir, file) = tmp("cap", "{}");
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_len(HF_TEXT_CAP + 1)
+            .unwrap();
+        let err = check_gpt2_pre_tokenizer(&file).unwrap_err().to_string();
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(err.contains("exceeds"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_file_is_an_error_not_a_pass() {
+        assert!(check_gpt2_pre_tokenizer(Path::new("/no/such/ojas-tokenizer.json")).is_err());
+    }
+
+    fn write_tables(dir: &Path) {
+        std::fs::write(dir.join("vocab.json"), r#"{"a":0}"#).unwrap();
+        std::fs::write(dir.join("merges.txt"), "#version: 0.2\n").unwrap();
+    }
+
+    #[test]
+    fn the_directory_entry_checks_tokenizer_json_before_it_loads_the_tables() {
+        let (dir, _) = tmp("dir-qwen", QWEN);
+        write_tables(&dir);
+        let err = load_hf_gpt2_dir(&dir).map(|_| ()).unwrap_err().to_string();
+        assert!(err.contains("Sequence"), "{err}");
+        // The unguarded entry on the same directory accepts it: that is the gap.
+        assert!(load_hf_gpt2(&dir.join("vocab.json"), &dir.join("merges.txt")).is_ok());
+        std::fs::write(dir.join("tokenizer.json"), GPT2).unwrap();
+        assert!(load_hf_gpt2_dir(&dir).is_ok());
+        // No tokenizer.json at all: loaded unchecked, as the original GPT-2 release is.
+        std::fs::remove_file(dir.join("tokenizer.json")).unwrap();
+        assert!(load_hf_gpt2_dir(&dir).is_ok());
+        // A tokenizer.json that is not readable is an error, not a skip.
+        std::fs::create_dir(dir.join("tokenizer.json")).unwrap();
+        assert!(load_hf_gpt2_dir(&dir).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The real Qwen3.5 `tokenizer.json` from the local Hugging Face cache,
+    /// when there is one (not committed). Ignored by default: it parses a
+    /// 12 MB file.
+    ///
+    /// ```text
+    /// cargo test -p ojas-data --lib -- --ignored real_qwen
+    /// ```
+    #[test]
+    #[ignore]
+    fn real_qwen35_tokenizer_json_is_refused_and_fits_the_parser_limits() {
+        let Some(home) = std::env::var_os("HOME") else {
+            panic!("no HOME");
+        };
+        let hub = std::path::PathBuf::from(home).join(".cache/huggingface/hub");
+        let mut found = 0;
+        for model in std::fs::read_dir(&hub).unwrap().flatten() {
+            let name = model.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("models--Qwen--Qwen3.5") {
+                continue;
+            }
+            let Ok(snaps) = std::fs::read_dir(model.path().join("snapshots")) else {
+                continue;
+            };
+            for snap in snaps.flatten() {
+                let file = snap.path().join("tokenizer.json");
+                if !file.exists() {
+                    continue;
+                }
+                let err = check_gpt2_pre_tokenizer(&file).unwrap_err().to_string();
+                assert!(
+                    err.contains("a Sequence of [Split, ByteLevel]"),
+                    "{name}: {err}"
+                );
+                found += 1;
+            }
+        }
+        assert!(
+            found > 0,
+            "no Qwen3.5 tokenizer.json under {}",
+            hub.display()
+        );
+        eprintln!(
+            "{found} real Qwen3.5 tokenizer.json files refused as Sequence of [Split, ByteLevel]"
+        );
     }
 }

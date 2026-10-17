@@ -9,7 +9,7 @@
 //! fastest run. `ids_fnv` hashes the encoded ids, so two builds can be
 //! compared for bit-identical output.
 
-use ojas_data::{bytes_to_unicode, gpt2_split, load_hf_gpt2, Bpe, BpeBuilder, CounterRng};
+use ojas_data::{bytes_to_unicode, gpt2_split, load_hf_gpt2_dir, Bpe, BpeBuilder, CounterRng};
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::time::Instant;
@@ -311,7 +311,7 @@ fn encode_ordinary_and_decode_throughput() {
     let (vocab, bpe) = match std::env::var_os("OJAS_GPT2_DIR") {
         Some(dir) => {
             let dir = std::path::PathBuf::from(dir);
-            let bpe = load_hf_gpt2(&dir.join("vocab.json"), &dir.join("merges.txt"))
+            let bpe = load_hf_gpt2_dir(&dir)
                 .unwrap_or_else(|e| panic!("OJAS_GPT2_DIR {}: {e}", dir.display()));
             ("gpt2", bpe)
         }

@@ -10,12 +10,18 @@
 //!   gradients ([`params`]'s docs say how each fused tensor splits).
 //! - [`forward_loss`]: the tower to the fused tied-head cross-entropy, each
 //!   layer optionally an activation-checkpointed segment.
+//! - [`forward_hidden`]: the same tower to the final norm, for a host-side
+//!   head; [`gather_rows`] reads one hidden row per example with a gradient,
+//!   and [`RightPadded`] is the only padding it accepts.
 
 mod forward;
 mod params;
 mod spec;
 
-pub use forward::{bind, bind_frozen, forward_loss, forward_loss_lora, LoraForward, Qwen35Tables};
+pub use forward::{
+    bind, bind_frozen, forward_hidden, forward_hidden_lora, forward_loss, forward_loss_lora,
+    gather_rows, LoraForward, Qwen35Tables, RightPadded,
+};
 pub use params::{
     fuse_grads, hf_tensors, load_hf, lora_targets, AttnParams, GdnParams, HfTensor, HfValues,
     LayerLora, LayerParams, LoraKind, LoraTarget, MixerLora, MixerParams, Qwen35Lora, Qwen35Params,
