@@ -1,4 +1,5 @@
-//! Token bins, a seeded epoch batch sampler, a counter RNG, and a BPE
+//! Token bins, MNIST/CIFAR-10 image readers and a seeded `f32` image batch
+//! sampler, a seeded epoch batch sampler, a counter RNG, and a BPE
 //! tokenizer.
 //!
 //! Twenty strings match tiktoken 0.12.0 `gpt2` `encode_ordinary`
@@ -18,6 +19,7 @@
 mod bpe;
 mod error;
 mod gpt2_class;
+mod image;
 mod rng;
 mod sampler;
 mod tokens;
@@ -27,6 +29,11 @@ pub use bpe::{
     load_hf_gpt2_dir, Bpe, BpeBuilder, ENDOFTEXT, TIKTOKEN_GPT2_BYTE_IDENTITY,
 };
 pub use error::DataError;
+pub use image::{
+    augment_draw, Augment, AugmentDraw, ImageBatchSampler, ImageError, ImageSamplerConfig,
+    ImageSet, Normalization, CIFAR10_CHANNELS, CIFAR10_RECORD_BYTES, CIFAR10_SIDE, MAX_CHANNELS,
+    MNIST_IMAGES_MAGIC, MNIST_LABELS_MAGIC, NUM_CLASSES,
+};
 pub use rng::CounterRng;
 pub use sampler::{
     Batch, BatchSampler, SamplerConfig, SamplerRngState, RNG_GENERATOR_FEISTEL4_SPLITMIX64,

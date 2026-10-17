@@ -675,6 +675,7 @@ version = "0.1.0"
 dependencies = [
  "ojas-core",
  "ojas-cpu",
+ "ojas-data",
  "ojas-device",
  "ojas-oracle",
  "tessl",
