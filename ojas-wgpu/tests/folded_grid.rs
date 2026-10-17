@@ -144,8 +144,7 @@ fn pointwise_and_row_kernels_leave_spare_workgroups_inert_under_a_cap_of_two() {
     let g = capped(2);
     let c = cpu();
     let dev = |v: &[f32], shape: &[usize]| {
-        g.upload(&Tensor::from_f32(v, shape, host_budget()).unwrap())
-            .unwrap()
+        padded(&g, &Tensor::from_f32(v, shape, host_budget()).unwrap())
     };
     let back = |t: &Tensor| g.download(t).unwrap().to_f32_vec().unwrap();
     for n in [1usize, 255, 256, 257, 512, 513, 768, 769, 1023, 1024] {

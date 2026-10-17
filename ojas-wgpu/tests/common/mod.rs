@@ -3,7 +3,7 @@
 
 use std::sync::OnceLock;
 
-use ojas_core::{Backend, BackendId, Budget, Numerics, Tensor};
+use ojas_core::{Backend, BackendId, Budget, DType, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_wgpu::{WgpuBackend, WgpuContext};
 
@@ -124,4 +124,40 @@ pub fn capped(max: u32) -> WgpuBackend {
     let ctx = WgpuContext::open_capped(&cap).expect("wgpu adapter");
     assert_eq!(ctx.limits().max_compute_workgroups_per_dimension, max);
     WgpuBackend::with_context(ctx, Budget::new(8 << 30))
+}
+
+/// Elements of poison after every padded input.
+pub const PAD: usize = 4096;
+/// What the padding of an `f32` input holds: a NaN, which any spare lane that
+/// reads it carries into its result and into the op's fault word.
+pub const POISON: f32 = f32::NAN;
+
+/// `t` on the device as the leading view of a larger buffer whose tail is
+/// poison (`POISON`, or id 0 for a `u32` tensor). A kernel binds the whole
+/// buffer, so a spare lane that skips its tail guard reads the poison. With
+/// exactly sized inputs a spare lane reads the owner's own (clamped) value,
+/// and its write past the end of an output lands in allocation slack, so an
+/// unguarded kernel would be indistinguishable from a guarded one.
+pub fn padded(g: &impl Backend, t: &Tensor) -> Tensor {
+    let n = t.num_elements().unwrap();
+    let wide = match t.dtype() {
+        DType::U32 => {
+            let mut v = t.to_u32_vec().unwrap();
+            v.resize(n + PAD, 0);
+            Tensor::from_u32(&v, &[n + PAD], host_budget())
+        }
+        _ => {
+            let mut v = t.to_f32_vec().unwrap();
+            v.resize(n + PAD, POISON);
+            Tensor::from_f32(&v, &[n + PAD], host_budget())
+        }
+    }
+    .unwrap();
+    let parent = g.upload(&wide).unwrap();
+    let shape = t.shape().to_vec();
+    let mut strides = vec![1usize; shape.len()];
+    for i in (0..shape.len().saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+    parent.view(&shape, &strides, 0).unwrap()
 }

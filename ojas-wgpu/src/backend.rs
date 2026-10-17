@@ -3548,4 +3548,57 @@ mod tests {
             }
         }
     }
+
+    /// Bits against `CpuBackend` (`Numerics::Exact`: ascending f64 sums)
+    /// for the norm that clip and Muon share (`global_norm`), clip's public
+    /// total, and the sum stage (a CPU backend has no sum op to compare
+    /// with, so it is held to an f64 sum and to an f32 left-to-right sum).
+    /// Bit equality does not hold: the CPU adds ascending in f64 and rounds
+    /// once, the device sums f32 chunk partials scaled by their maximum. The
+    /// distances measured on Apple M-series are at most 2 ulp for the norms
+    /// and 1 ulp for the sum, and are asserted as such.
+    #[test]
+    fn norm_and_sum_stay_within_ulps_of_the_cpu() {
+        let cpu = CpuBackend::new(Budget::new(1 << 30)).with_numerics(Numerics::Exact);
+        let ulps =
+            |a: f32, b: f32| (i64::from(a.to_bits() as i32) - i64::from(b.to_bits() as i32)).abs();
+        for cap in [2u32, 3, 4] {
+            let gpu = capped(cap);
+            let (mut sizes, mut norm_unequal, mut clip_unequal, mut sum_f64_unequal) = (0, 0, 0, 0);
+            let (mut worst_norm, mut worst_clip, mut worst_sum) = (0i64, 0i64, 0i64);
+            for n in grid_sizes(cap) {
+                sizes += 1;
+                let v = spiked(n);
+                let mut host = [Tensor::from_f32(&v, &[n], cpu.budget()).unwrap()];
+                let want = cpu.clip_grad_norm(&mut host, f32::MAX).unwrap();
+                let (got, _) = norm_of(&gpu, &v);
+                worst_norm = worst_norm.max(ulps(got, want));
+                norm_unequal += usize::from(got.to_bits() != want.to_bits());
+                let mut dev = [gpu
+                    .upload(&Tensor::from_f32(&v, &[n], &gpu.budget).unwrap())
+                    .unwrap()];
+                let clip = gpu.clip_grad_norm(&mut dev, f32::MAX).unwrap();
+                worst_clip = worst_clip.max(ulps(clip, want));
+                clip_unequal += usize::from(clip.to_bits() != want.to_bits());
+                let sum = sum_of(&gpu, &v);
+                let exact = v.iter().map(|&x| f64::from(x)).sum::<f64>() as f32;
+                worst_sum = worst_sum.max(ulps(sum, exact));
+                sum_f64_unequal += usize::from(sum.to_bits() != exact.to_bits());
+            }
+            eprintln!(
+                "MEASURE cap {cap}: {sizes} sizes; global_norm vs cpu: {norm_unequal} unequal, worst {worst_norm} ulp; \
+                 clip_grad_norm vs cpu: {clip_unequal} unequal, worst {worst_clip} ulp; \
+                 sum vs f64: {sum_f64_unequal} unequal, worst {worst_sum} ulp"
+            );
+            assert!(
+                worst_norm <= 2,
+                "cap {cap}: global_norm {worst_norm} ulp from the cpu"
+            );
+            assert!(
+                worst_clip <= 2,
+                "cap {cap}: clip_grad_norm {worst_clip} ulp from the cpu"
+            );
+            assert!(worst_sum <= 1, "cap {cap}: sum {worst_sum} ulp from f64");
+        }
+    }
 }
