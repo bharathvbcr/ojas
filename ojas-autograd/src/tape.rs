@@ -711,6 +711,31 @@ impl<B: Backend> Tape<B> {
         })
     }
 
+    /// The value of [`Tape::linear_cross_entropy`] with nothing recorded:
+    /// the same fused forward, asked for no gradient at all, so no `[N, d]`
+    /// or `[V, d]` gradient is computed or charged, and no node is pushed
+    /// (the tape's length is unchanged, a later [`Tape::backward`] never
+    /// visits it). This is the report-only call, e.g. a full-vocabulary loss
+    /// logged beside the objective actually trained; it is the same value
+    /// bit for bit, since the forward does not depend on which gradients
+    /// are asked for. Returns the scalar loss, resident on the backend. The
+    /// operand and error contract is [`Tape::linear_cross_entropy`]'s.
+    pub fn linear_cross_entropy_value(
+        &self,
+        x: Var,
+        w: Var,
+        targets: &Tensor,
+        ignore: Option<u32>,
+        chunk: CeChunk,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "Tape::linear_cross_entropy_value";
+        let x = self.index(x, OP)?;
+        let w = self.index(w, OP)?;
+        let targets = self.place(targets.clone())?;
+        let (loss, _) = self.fused_ce_asking(CeGrads::NONE, x, w, &targets, ignore, chunk)?;
+        Ok(loss)
+    }
+
     /// Record `body`'s ops as one checkpointed segment: the tape keeps the
     /// outputs `body` returns and the records of every op it made, but none
     /// of their other values. When the backward walk reaches the segment it
@@ -973,11 +998,24 @@ impl<B: Backend> Tape<B> {
         ignore: Option<u32>,
         chunk: CeChunk,
     ) -> Result<(Tensor, CeGradPair), OjasError> {
-        let (xv, wv) = (&self.values[x], &self.values[w]);
         let want = CeGrads {
             input: !self.is_frozen(x),
             weight: !self.is_frozen(w),
         };
+        self.fused_ce_asking(want, x, w, targets, ignore, chunk)
+    }
+
+    /// [`Tape::fused_ce`] with the gradients to compute named by the caller.
+    fn fused_ce_asking(
+        &self,
+        want: CeGrads,
+        x: usize,
+        w: usize,
+        targets: &Tensor,
+        ignore: Option<u32>,
+        chunk: CeChunk,
+    ) -> Result<(Tensor, CeGradPair), OjasError> {
+        let (xv, wv) = (&self.values[x], &self.values[w]);
         let out = self
             .backend
             .linear_cross_entropy_mean(xv, wv, targets, ignore, chunk, want)?;
