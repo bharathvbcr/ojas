@@ -2106,7 +2106,11 @@ impl Backend for MetalBackend {
             for g in grads.iter_mut() {
                 self.unique(OP, g)?;
             }
-            match self.link.call(Cmd::Scale { grads: args, scale })? {
+            match self.link.call(Cmd::Scale {
+                op: OP,
+                grads: args,
+                scale,
+            })? {
                 Reply::Done => {}
                 other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
             }
@@ -2301,6 +2305,33 @@ impl Backend for MetalBackend {
             },
         )?;
         *acc = sum;
+        Ok(())
+    }
+
+    /// In place on the device when `grad` solely owns its buffer, so a
+    /// frozen buffer is refused ([`Self::freeze_checked`]); a shared `grad`
+    /// is replaced by the product, as the trait default does, and the buffer
+    /// it shared is not written.
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        const OP: &str = "scale_grad";
+        if !scale.is_finite() {
+            return Err(OjasError::NonFinite { op: OP });
+        }
+        let g = self.f32(OP, grad)?;
+        if self.unique(OP, grad).is_ok() {
+            return match self.link.call(Cmd::Scale {
+                op: OP,
+                grads: vec![g],
+                scale,
+            })? {
+                Reply::Done => Ok(()),
+                other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
+            };
+        }
+        let host = Tensor::from_f32(&[scale], &[1], self.budget())?;
+        let scalar = self.upload(&host)?;
+        let full = ojas_core::broadcast_scalar(self, &scalar, grad.shape())?;
+        *grad = self.mul_forward(grad, &full)?;
         Ok(())
     }
 

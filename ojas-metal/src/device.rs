@@ -1547,7 +1547,7 @@ impl Worker {
                 grad,
             } => self.ce(logits, targets, rows, vocab, ignore, valid, grad),
             Cmd::ClipNorm { grads } => self.clip_norm(&grads),
-            Cmd::Scale { grads, scale } => self.scale(&grads, scale),
+            Cmd::Scale { op, grads, scale } => self.scale(op, &grads, scale),
             Cmd::Accumulate { acc, g, in_place } => self.accumulate(acc, g, in_place),
             Cmd::LinearCe {
                 x,
@@ -3055,16 +3055,15 @@ impl Worker {
 
     /// Every gradient times `scale` in place, `NORM_SLOTS` gradients per
     /// dispatch; a non-finite product is flagged by the same kernel.
-    fn scale(&mut self, grads: &[Arg], scale: f32) -> Res<Reply> {
-        const OP: &str = "clip_grad_norm";
+    fn scale(&mut self, op: &'static str, grads: &[Arg], scale: f32) -> Res<Reply> {
         let views = grads
             .iter()
             .map(|a| self.view(*a))
             .collect::<Res<Vec<_>>>()?;
         for a in grads {
-            self.writable(OP, *a)?;
+            self.writable(op, *a)?;
         }
-        let st = self.status(OP)?;
+        let st = self.status(op)?;
         for group in views.chunks(NORM_SLOTS) {
             let (tbl, groups) = norm_table(group)?;
             let used = u32_of(group.len())?;

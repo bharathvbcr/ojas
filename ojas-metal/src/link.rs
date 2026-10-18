@@ -646,6 +646,8 @@ pub(crate) enum Cmd {
     },
     /// Multiplies every gradient by `scale` in place.
     Scale {
+        /// The public op that sent it, named in a frozen-buffer refusal.
+        op: &'static str,
         grads: Vec<Arg>,
         scale: f32,
     },

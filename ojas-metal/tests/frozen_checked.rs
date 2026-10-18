@@ -308,3 +308,83 @@ fn ops_that_ran_on_the_mark_before_its_fault_surfaced_do_not_hide_it() {
     let r = m.linear_forward(&x, &w);
     deferred(&m, "scanned again after the report", r, "linear_forward");
 }
+
+fn halved(t: &Tensor) -> Vec<u32> {
+    down(t).iter().map(|v| (v * 0.5).to_bits()).collect()
+}
+
+#[test]
+fn scale_grad_of_a_shared_frozen_grad_replaces_it_and_never_writes_the_buffer() {
+    let m = metal();
+    let mut p = up(&m, &rand(&[4, 8], 41, 1.0));
+    ok("freeze", m.freeze_checked(&p));
+    ok("sync", m.sync());
+    let before = bits(&p);
+    let want = halved(&p);
+    let keep = p.clone();
+    ok(
+        "a shared grad is replaced, not refused",
+        m.scale_grad(&mut p, 0.5),
+    );
+    ok("sync", m.sync());
+    assert_eq!(
+        bits(&keep),
+        before,
+        "the shared frozen buffer is not written"
+    );
+    assert_eq!(bits(&p), want, "the replacement holds the products");
+}
+
+#[test]
+fn scale_grad_of_a_widened_copy_writes_it_and_withdraws_its_mark() {
+    let m = metal();
+    let shape = [4usize, 8];
+    let (_, frozen) = twins(&m, &shape, 42, true);
+    let mut p = ok("to_f32", m.to_f32(&frozen));
+    ok("sync", m.sync());
+    let want = halved(&p);
+    ok(
+        "a widened copy is the caller's to scale",
+        m.scale_grad(&mut p, 0.5),
+    );
+    ok("sync", m.sync());
+    assert_eq!(bits(&p), want, "the copy was scaled in place");
+    let plain = up(&m, &host(&down(&p), &shape));
+    ok("sync", m.sync());
+    let x = up(&m, &rand(&[2, 8], 7, 1.0));
+    let (_, d_copy) = counted(&m, || m.linear_forward(&x, &p));
+    let (_, d_plain) = counted(&m, || m.linear_forward(&x, &plain));
+    assert_eq!(d_copy, d_plain, "a scaled copy is scanned again");
+    ok("sync", m.sync());
+}
+
+#[test]
+fn scale_grad_refuses_a_non_finite_scale_at_the_call_and_leaves_the_grad() {
+    let m = metal();
+    let mut g = up(&m, &rand(&[4, 8], 43, 1.0));
+    ok("sync", m.sync());
+    let before = bits(&g);
+    for s in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        match m.scale_grad(&mut g, s) {
+            Err(OjasError::NonFinite { op }) => assert_eq!(op, "scale_grad"),
+            other => panic!("scale {s}: expected NonFinite at the call, got {other:?}"),
+        }
+    }
+    ok("sync", m.sync());
+    assert_eq!(bits(&g), before, "a refused scale writes nothing");
+}
+
+#[test]
+fn scale_grad_overflow_is_deferred_to_the_sync_like_other_in_place_ops() {
+    let m = metal();
+    let mut g = up(&m, &host(&[3.0e38, 1.0], &[2]));
+    ok("sync", m.sync());
+    ok(
+        "the product is checked on the device",
+        m.scale_grad(&mut g, 4.0),
+    );
+    match m.sync() {
+        Err(OjasError::NonFinite { op }) => assert_eq!(op, "scale_grad"),
+        other => panic!("the overflow is reported at sync: {other:?}"),
+    }
+}
