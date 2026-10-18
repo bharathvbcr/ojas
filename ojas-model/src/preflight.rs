@@ -471,7 +471,10 @@ pub struct DryRun<R> {
 /// [`OjasError::CapacityExceeded`] becomes a
 /// [`PreflightRefusal`] with [`RefusalReason::DryRun`]: `estimated_bytes` is
 /// the refused charge's `live + requested`, saturating at `u64::MAX`, and
-/// `measured_peak_bytes` is the child's peak. Any other step error is
+/// `measured_peak_bytes` is the child's peak. A request so large that
+/// `live + requested` overflows `u64` (which `Budget` reports as
+/// [`OjasError::OutOfRange`]) is the same refusal with `u64::MAX` as the
+/// estimate and the child's own live bytes. Any other step error is
 /// [`PreflightError::Step`]. Zero or negative `widest_tokens` is refused
 /// before the closure runs.
 pub fn dry_run<B, R>(
@@ -504,9 +507,27 @@ where
             extrapolated: false,
             measured_peak_bytes: Some(child.peak_bytes()),
         })),
+        Err(OjasError::OutOfRange {
+            op: BUDGET_OVERFLOW_OP,
+            ..
+        }) => Err(PreflightError::Refused(PreflightRefusal {
+            tokens,
+            bucket: tokens,
+            estimated_bytes: u64::MAX,
+            cap_bytes: child.cap_bytes(),
+            live_bytes: child.live_bytes().map_err(PreflightError::Step)?,
+            reason: RefusalReason::DryRun,
+            extrapolated: false,
+            measured_peak_bytes: Some(child.peak_bytes()),
+        })),
         Err(other) => Err(PreflightError::Step(other)),
     }
 }
+
+/// The `op` [`Budget::try_reserve`] reports when `live + requested` overflows
+/// `u64`. Such a request can never fit under any cap, so the dry run treats it
+/// as a capacity refusal with a saturated estimate.
+const BUDGET_OVERFLOW_OP: &str = "Budget::try_reserve";
 
 fn positive_tokens(tokens: i64) -> Result<u64, PreflightError> {
     u64::try_from(tokens)
