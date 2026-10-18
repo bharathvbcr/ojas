@@ -78,6 +78,11 @@ bytecode writing is disabled so that checkout is not touched).
   call uses 0.9 times the previous norm, computed outside the timer, so every
   timed call scales on both sides (ojas skips the multiply when it would not
   scale; torch always multiplies).
+- `clip_norm_only`: the norm pass of `clip_grad_norm_full` alone, over the
+  same gradients. ojas calls `clip_grad_norm` with a `max_norm` of `1e30`, so
+  the scale is 1 and every backend skips the multiply; torch calls
+  `torch.nn.utils.get_total_norm`. `clip_grad_norm_full` minus this row
+  approximates the scale pass (it also holds the coefficient's arithmetic). `BENCH_ROWS=clip_` runs both.
 - `adamw_full`: the same 170 tensors; ojas makes one `adamw_step` call per
   tensor, torch one `torch.optim.AdamW.step()` with its default implementation
   selection. Hyperparameters are ojas's (betas 0.9/0.95, eps 1e-8), lr 1e-3,

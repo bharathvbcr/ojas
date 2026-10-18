@@ -628,6 +628,18 @@ def _clip():
         return {"outs": outs, "step": step, "after": after}
     ROWS.append(("clip_grad_norm_full", sp, make))
 
+    def make_norm():
+        gs = [gen(s, 1000 + i, -6) for i, s in enumerate(shapes)]
+
+        def outs():
+            return [torch.nn.utils.get_total_norm(gs).reshape(1)]
+
+        def step():
+            return torch.nn.utils.get_total_norm(gs)
+        return {"outs": outs, "step": step}
+    # The norm pass of clip_grad_norm_ without the scale (ojas_rows.rs).
+    ROWS.append(("clip_norm_only", "clip:params:1000:-6:normonly", make_norm))
+
 
 def _adamw():
     shapes = param_shapes()

@@ -32,7 +32,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, CeChunk, CeGrads, MuonNs5Config, Ns5Precision, OjasError, Tensor,
+    clip_scale, AdamWConfig, Backend, Budget, CeChunk, CeGrads, MuonNs5Config, Ns5Precision,
+    OjasError, Tensor,
 };
 
 pub type R<T> = Result<T, OjasError>;
@@ -1001,6 +1002,46 @@ fn clip<Bk: Backend>(r: &mut Runner<'_, Bk>) {
             |r, st| {
                 let norm = r.be.clip_grad_norm(&mut st.0, st.1)?;
                 st.1 = 0.9 * norm;
+                Ok(Vec::new())
+            },
+        );
+        Ok(())
+    });
+    // The same call with a max_norm no norm reaches, so the scale is 1 and
+    // every backend skips the multiply: the norm pass alone, to split
+    // clip_grad_norm_full into its norm and scale costs. Torch's twin is
+    // `torch.nn.utils.get_total_norm`. 1e30 / (norm + 1e-6) is finite for
+    // every finite norm, so `clip_scale` returns exactly 1; the first call
+    // checks that, so a change to `clip_scale` cannot turn this row back
+    // into the full clip without failing it.
+    r.group(&["clip_norm_only"], |r| {
+        let shapes = param_shapes();
+        let mut grads = Vec::with_capacity(shapes.len());
+        for (i, s) in shapes.iter().enumerate() {
+            grads.push(r.dev(s, 1000 + i as u64, -6)?);
+        }
+        const NO_CLIP: f32 = 1.0e30;
+        let s = "clip:params:1000:-6:normonly".to_string();
+        r.run(
+            "clip_norm_only",
+            &s,
+            TOL,
+            &mut grads,
+            |r, g| {
+                let norm = r.be.clip_grad_norm(g, NO_CLIP)?;
+                let scale = clip_scale(NO_CLIP, norm)?;
+                if scale != 1.0 {
+                    return Err(OjasError::OutOfRange {
+                        op: "clip_norm_only",
+                        detail: format!(
+                            "clip_scale({NO_CLIP:e}, {norm}) = {scale}, so the call would scale"
+                        ),
+                    });
+                }
+                Ok(vec![vec![norm]])
+            },
+            |r, g| {
+                r.be.clip_grad_norm(g, NO_CLIP)?;
                 Ok(Vec::new())
             },
         );
