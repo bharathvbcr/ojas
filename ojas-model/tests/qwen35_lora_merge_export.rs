@@ -182,18 +182,28 @@ fn checkpoint(base: &SafeTensors<'_>, edits: &BTreeMap<String, (StDtype, Vec<u8>
     encode_safetensors(&items, &[]).unwrap()
 }
 
-/// The base with every adapted linear stored as bf16, rounded once.
-fn bf16_base_bytes() -> Vec<u8> {
+/// The fixture base with every adapted linear stored as `dtype` (the fixture
+/// itself is stored as bf16, so an F32 copy widens exactly and a BF16 copy
+/// is the fixture's own bits).
+fn base_bytes_as(dtype: StDtype) -> Vec<u8> {
     let base = base_file();
     let edits = targets()
         .iter()
         .map(|t| {
             let w = base.read_f32_widened(&t.name).unwrap().1;
-            let bytes = encode_f32_as(StDtype::BF16, &w).unwrap();
-            (t.name.clone(), (StDtype::BF16, bytes))
+            let bytes = encode_f32_as(dtype, &w).unwrap();
+            (t.name.clone(), (dtype, bytes))
         })
         .collect();
     checkpoint(&base, &edits)
+}
+
+fn bf16_base_bytes() -> Vec<u8> {
+    base_bytes_as(StDtype::BF16)
+}
+
+fn f32_base_bytes() -> Vec<u8> {
+    base_bytes_as(StDtype::F32)
 }
 
 fn bits_of(t: &Tensor) -> Vec<u16> {
@@ -258,7 +268,8 @@ fn the_export_is_the_adapted_linears_under_the_bases_hugging_face_names() {
 /// the host recomputation's bits, and the adapters are not a no-op.
 #[test]
 fn merged_tensors_are_bit_identical_to_the_host_recomputation() {
-    let f32_base = base_file();
+    let f32_bytes = f32_base_bytes();
+    let f32_base = SafeTensors::parse(&f32_bytes).unwrap();
     let bf16_bytes = bf16_base_bytes();
     let bf16_base = SafeTensors::parse(&bf16_bytes).unwrap();
     for (label, base) in [("f32", &f32_base), ("bf16", &bf16_base)] {
@@ -678,7 +689,7 @@ fn the_budget_peak_is_one_weight_plus_temporaries() {
     let (out, inn) = (out_rows(big), big.in_features);
     let weight_f32 = (out * inn * 4) as u64;
     let (a, fused) = adapter(&lora_file(), big);
-    let w = base.read_f32(&big.name).unwrap().1;
+    let w = base.read_f32_widened(&big.name).unwrap().1;
     let mut layer = LoraLinear::new(
         cfg,
         Tensor::from_f32(&w, &[out, inn], &bud).unwrap(),
@@ -690,7 +701,9 @@ fn the_budget_peak_is_one_weight_plus_temporaries() {
     bud.reset_peak();
     layer.merge(&be).unwrap();
     let merge_transient = bud.peak_bytes() - live1;
-    let export_transient = single(&base, big);
+    let f32_bytes = f32_base_bytes();
+    let f32_base = SafeTensors::parse(&f32_bytes).unwrap();
+    let export_transient = single(&f32_base, big);
     assert!(
         export_transient <= merge_transient + weight_f32,
         "export {export_transient} over merge {merge_transient} + one weight {weight_f32}"

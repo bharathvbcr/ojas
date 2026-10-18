@@ -122,8 +122,9 @@ pub fn targets() -> Vec<LoraTarget> {
     lora_targets(&spec(), &base_file(), PREFIX, &LORA_KINDS).unwrap()
 }
 
+/// An F32 or BF16 tensor as f32 (a bf16 base widens exactly).
 pub fn read(file: &SafeTensors<'_>, name: &str) -> Vec<f32> {
-    file.read_f32(name).unwrap().1
+    file.read_f32_widened(name).unwrap().1
 }
 
 /// Host adapters from fused `A`/`B` values by module name.

@@ -10,6 +10,7 @@ use ojas_core::{AdamWConfig, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_io::{write_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::lora::LoraConfig;
+use ojas_model::qwen35::adapters::{lora_a_name, lora_b_name};
 use ojas_model::qwen35::adapters::{
     read_adapter_checkpoint, write_adapter_checkpoint, AdapterCheckpoint, AdapterEntry,
     AdapterError, BaseIdentity, DataState, Expected, ExpectedEntry, ADAPTERS_FILE, KEY_DIGEST,
@@ -338,13 +339,28 @@ fn step_zero_and_u64_max_round_trip() {
 fn awkward_entry_names_round_trip() {
     let t = Tmp::new();
     let mut c = checkpoint(1);
-    c.entries
-        .push(entry("日本.\"q\".back\\slash x.weight", &[2], 3));
-    c.entries.push(entry("a.b.c.d.e", &[1], 4));
+    let awkward = "日本.\"q\".back\\slash x";
+    c.entries.push(entry(&lora_a_name(awkward), &[4, 3], 3));
+    c.entries.push(entry(&lora_b_name(awkward), &[2, 4], 4));
+    c.entries.push(entry(&lora_a_name("a.b.c.d.e"), &[4, 1], 5));
+    c.entries.push(entry(&lora_b_name("a.b.c.d.e"), &[1, 4], 6));
     let dir = t.ckpt();
     write_adapter_checkpoint(&dir, &c).unwrap();
     let back = read_adapter_checkpoint(&dir, &expected(&c)).unwrap();
     same(&c, &back);
+}
+
+#[test]
+fn a_bare_awkward_entry_name_is_refused() {
+    let t = Tmp::new();
+    let mut c = checkpoint(1);
+    c.entries
+        .push(entry("日本.\"q\".back\\slash x.weight", &[2], 3));
+    let err = write_adapter_checkpoint(&t.ckpt(), &c).unwrap_err();
+    assert!(
+        matches!(&err, AdapterError::UnknownEntryName(n) if n == "日本.\"q\".back\\slash x.weight"),
+        "{err}"
+    );
 }
 
 #[test]
