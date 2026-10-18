@@ -29,7 +29,7 @@ fn config(i: usize) -> AdamWConfig {
         beta1: 0.9,
         beta2: 0.999,
         eps: 1e-8,
-        weight_decay: if i % 2 == 0 { 0.01 } else { 0.0 },
+        weight_decay: if i.is_multiple_of(2) { 0.01 } else { 0.0 },
     }
 }
 
