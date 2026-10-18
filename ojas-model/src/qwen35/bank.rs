@@ -1,26 +1,27 @@
 //! The f32 gradient bank: the sum of one optimiser step's per-sequence
-//! gradients, one slot per trainable entry.
+//! gradients, one slot per trainable tensor.
 //!
 //! A token-budget batch is several sequences, and each one runs on its own
 //! tape. A tape's activations are freed when the tape is dropped; only the
-//! gradients of the trainable entries (the adapters, and the host entries
-//! the span head and D17 own) outlive it, and they are summed here. The
-//! step's device peak is therefore the widest sequence's, never the
-//! batch's, and the bank holds exactly one gradient per entry.
+//! gradients of the trainable tensors (the adapters) outlive it, and they are
+//! summed here. The step's device peak is therefore the widest sequence's,
+//! never the batch's, and the bank holds exactly one gradient per entry. The
+//! host entries of the LoRA run (D17, the span head) are not here: the
+//! training loop's objective owns them.
 //!
 //! [`BankMode::Overwrite`] is the first sequence of a step: its gradient
 //! replaces whatever the slot held. [`BankMode::Add`] is every later one.
-//! This is the pair Lappi's loop feeds (`qd-train/src/trainer.rs`).
+//! This is the pair Lappi's loop feeds (`qd-train/src/trainer.rs`); the enum
+//! is [`ojas_train::lappi::step::BankMode`], the loop's own.
 //!
 //! # Sum order
 //!
 //! A slot is a left fold in arrival order, in f32: after sequences
 //! `g1, g2, g3` it holds `(g1 + g2) + g3`, each `+` one f32 rounding per
-//! element and nothing else (no scaling, no compensated sum). Backend
-//! slots add through [`Backend::accumulate_grad`], which is that same
-//! elementwise f32 add; host slots add on the host in index order. A caller
-//! that wants a different association builds it by changing the order it
-//! feeds the sequences.
+//! element and nothing else (no scaling, no compensated sum). Slots add
+//! through [`Backend::accumulate_grad`], which is that same elementwise f32
+//! add. A caller that wants a different association builds it by changing the
+//! order it feeds the sequences.
 //!
 //! # Contract
 //!
@@ -28,8 +29,8 @@
 //!   shape and `F32` dtype; a wrong one is an error and the slot is left
 //!   as it was for an `Add` (never truncated, never broadcast), and empty
 //!   for an `Overwrite`: a refused first gradient must not leave the
-//!   previous step's sum for later `Add`s to extend. A wrongly placed
-//!   gradient or an unknown index touches nothing.
+//!   previous step's sum for later `Add`s to extend. An unknown index
+//!   touches nothing.
 //! - `Add` into a slot with nothing in it is an error: a step that skipped
 //!   its `Overwrite` would otherwise sum into the previous step's gradient
 //!   or start from nothing without saying so.
@@ -42,32 +43,15 @@
 
 use std::fmt;
 
-use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{Backend, DType, OjasError, Tensor};
 
-/// Whether a sequence's gradient replaces its slot or adds to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BankMode {
-    Overwrite,
-    Add,
-}
-
-/// Where a slot's gradient lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Residence {
-    /// A [`Tensor`] in the backend's placement, fed by
-    /// [`AdapterBank::accumulate`]. The adapters.
-    Backend,
-    /// A host `Vec<f32>`, fed by [`AdapterBank::accumulate_host`]. The
-    /// host entries (D17, span head).
-    Host,
-}
+pub use ojas_train::lappi::step::BankMode;
 
 /// One entry the bank holds a gradient for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BankEntry {
     pub name: String,
     pub shape: Vec<usize>,
-    pub residence: Residence,
 }
 
 /// Why the bank refused.
@@ -90,19 +74,10 @@ pub enum BankError {
         name: String,
         got: DType,
     },
-    /// A backend gradient was fed to a host slot, or the reverse.
-    Residence {
-        entry: usize,
-        name: String,
-        slot: Residence,
-    },
     /// `Add` into a slot that holds no gradient.
     AddWithoutBase { entry: usize, name: String },
     /// A gradient was asked of a slot that holds none.
     Unfilled { entry: usize, name: String },
-    /// [`AdapterBank::take_grads`] met a host slot: a host gradient becomes
-    /// a tensor only through [`AdapterBank::grad`], which takes a budget.
-    HostSlot { entry: usize, name: String },
     /// A gradient value is NaN or infinite ([`AdapterBank::sq_norm`]).
     NonFinite { entry: usize, name: String },
     /// The backend or tensor layer refused.
@@ -135,11 +110,6 @@ impl fmt::Display for BankError {
                 f,
                 "bank: entry {entry} ({name}): gradient dtype {got:?}, expected F32"
             ),
-            Self::Residence { entry, name, slot } => write!(
-                f,
-                "bank: entry {entry} ({name}): the slot is {slot:?}-resident, \
-                 fed through the other accumulate"
-            ),
             Self::AddWithoutBase { entry, name } => write!(
                 f,
                 "bank: entry {entry} ({name}): Add into an empty slot (no Overwrite this step)"
@@ -147,11 +117,6 @@ impl fmt::Display for BankError {
             Self::Unfilled { entry, name } => {
                 write!(f, "bank: entry {entry} ({name}): no gradient accumulated")
             }
-            Self::HostSlot { entry, name } => write!(
-                f,
-                "bank: entry {entry} ({name}): a host slot cannot be taken as a tensor \
-                 without a budget; read it with grad or host_values"
-            ),
             Self::NonFinite { entry, name } => write!(
                 f,
                 "bank: entry {entry} ({name}): the gradient holds a non-finite value"
@@ -170,8 +135,7 @@ impl std::error::Error for BankError {}
 #[derive(Debug)]
 enum Slot {
     Empty,
-    Backend(Tensor),
-    Host(Vec<f32>),
+    Filled(Tensor),
 }
 
 /// The per-step gradient sums, keyed by entry index (the order of the
@@ -244,10 +208,9 @@ impl AdapterBank {
         }
     }
 
-    /// Fold one sequence's gradient of backend-resident entry `entry` into
-    /// the bank. `grad` is taken by value: after an `Overwrite` the bank is
-    /// its only owner, so a later in-place add cannot write through to a
-    /// handle the caller kept.
+    /// Fold one sequence's gradient of entry `entry` into the bank. `grad` is
+    /// taken by value: after an `Overwrite` the bank is its only owner, so a
+    /// later in-place add cannot write through to a handle the caller kept.
     pub fn accumulate<B: Backend + ?Sized>(
         &mut self,
         backend: &B,
@@ -257,13 +220,6 @@ impl AdapterBank {
     ) -> Result<(), BankError> {
         let e = self.entry(entry)?;
         let name = e.name.clone();
-        if e.residence != Residence::Backend {
-            return Err(BankError::Residence {
-                entry,
-                name,
-                slot: e.residence,
-            });
-        }
         let refusal = if grad.shape() != e.shape.as_slice() {
             Some(BankError::Shape {
                 entry,
@@ -286,17 +242,18 @@ impl AdapterBank {
         }
         match mode {
             BankMode::Overwrite => {
-                self.slots[entry] = Slot::Backend(grad);
+                self.slots[entry] = Slot::Filled(grad);
                 Ok(())
             }
             BankMode::Add => {
-                let Slot::Backend(mut acc) = std::mem::replace(&mut self.slots[entry], Slot::Empty)
+                let Slot::Filled(mut acc) =
+                    std::mem::replace(&mut self.slots[entry], Slot::Empty)
                 else {
                     return Err(BankError::AddWithoutBase { entry, name });
                 };
                 match backend.accumulate_grad(&mut acc, &grad) {
                     Ok(()) => {
-                        self.slots[entry] = Slot::Backend(acc);
+                        self.slots[entry] = Slot::Filled(acc);
                         Ok(())
                     }
                     // The slot stays empty: see the module's contract.
@@ -310,106 +267,40 @@ impl AdapterBank {
         }
     }
 
-    /// [`AdapterBank::accumulate`] for a host entry: `grad` is row-major
-    /// with the entry's element count.
-    pub fn accumulate_host(
-        &mut self,
-        entry: usize,
-        mode: BankMode,
-        grad: &[f32],
-    ) -> Result<(), BankError> {
-        let e = self.entry(entry)?;
-        let name = e.name.clone();
-        if e.residence != Residence::Host {
-            return Err(BankError::Residence {
-                entry,
-                name,
-                slot: e.residence,
-            });
-        }
-        let want = elements(&e.name, &e.shape)?;
-        if grad.len() != want {
-            let err = BankError::Shape {
-                entry,
-                name,
-                expected: e.shape.clone(),
-                got: vec![grad.len()],
-            };
-            self.refuse_overwrite(entry, mode);
-            return Err(err);
-        }
-        match mode {
-            BankMode::Overwrite => {
-                self.slots[entry] = Slot::Host(grad.to_vec());
-                Ok(())
-            }
-            BankMode::Add => match &mut self.slots[entry] {
-                Slot::Host(acc) => {
-                    for (a, g) in acc.iter_mut().zip(grad) {
-                        *a += *g;
-                    }
-                    Ok(())
-                }
-                _ => Err(BankError::AddWithoutBase { entry, name }),
-            },
-        }
-    }
-
-    /// The summed gradient of `entry` as a tensor: a share of the backend
-    /// slot's allocation, or a new host tensor charged to `budget` for a
-    /// host slot.
-    pub fn grad(&self, entry: usize, budget: &Budget) -> Result<Tensor, BankError> {
+    /// The summed gradient of `entry`: a share of the slot's allocation.
+    pub fn grad(&self, entry: usize) -> Result<Tensor, BankError> {
         let e = self.entry(entry)?;
         match &self.slots[entry] {
             Slot::Empty => Err(BankError::Unfilled {
                 entry,
                 name: e.name.clone(),
             }),
-            Slot::Backend(t) => Ok(t.clone()),
-            Slot::Host(v) => {
-                Tensor::from_f32(v, &e.shape, budget).map_err(|source| BankError::Core {
-                    entry,
-                    name: e.name.clone(),
-                    source,
-                })
-            }
+            Slot::Filled(t) => Ok(t.clone()),
         }
     }
 
     /// Every entry's summed gradient, in entry order. The first slot that
     /// holds none is the error.
-    pub fn grads(&self, budget: &Budget) -> Result<Vec<Tensor>, BankError> {
-        (0..self.entries.len())
-            .map(|i| self.grad(i, budget))
-            .collect()
+    pub fn grads(&self) -> Result<Vec<Tensor>, BankError> {
+        (0..self.entries.len()).map(|i| self.grad(i)).collect()
     }
 
     /// Move every entry's summed gradient out, in entry order, leaving the
     /// bank empty (the next step starts from `Overwrite`). The bank must be
-    /// complete and every slot backend-resident: the first empty slot is
-    /// [`BankError::Unfilled`] and the first host slot [`BankError::HostSlot`],
-    /// and on either refusal nothing has moved.
+    /// complete: the first empty slot is [`BankError::Unfilled`], and on that
+    /// refusal nothing has moved.
     pub fn take_grads(&mut self) -> Result<Vec<Tensor>, BankError> {
         for (entry, (e, slot)) in self.entries.iter().zip(&self.slots).enumerate() {
-            match slot {
-                Slot::Empty => {
-                    return Err(BankError::Unfilled {
-                        entry,
-                        name: e.name.clone(),
-                    })
-                }
-                Slot::Host(_) => {
-                    return Err(BankError::HostSlot {
-                        entry,
-                        name: e.name.clone(),
-                    })
-                }
-                Slot::Backend(_) => {}
+            if matches!(slot, Slot::Empty) {
+                return Err(BankError::Unfilled {
+                    entry,
+                    name: e.name.clone(),
+                });
             }
         }
         let mut out = Vec::with_capacity(self.slots.len());
         for slot in &mut self.slots {
-            if let Slot::Backend(t) = std::mem::replace(slot, Slot::Empty) {
+            if let Slot::Filled(t) = std::mem::replace(slot, Slot::Empty) {
                 out.push(t);
             }
         }
@@ -418,34 +309,27 @@ impl AdapterBank {
 
     /// The squared L2 norm of every gradient in the bank: each value is
     /// widened to f64, squared and added to one f64 accumulator, entries in
-    /// order and elements in row-major order. Backend slots are downloaded
-    /// first. The first empty slot is [`BankError::Unfilled`]; the first
-    /// NaN or infinity is [`BankError::NonFinite`] naming its entry.
+    /// order and elements in row-major order. Slots are downloaded first. The
+    /// first empty slot is [`BankError::Unfilled`]; the first NaN or infinity
+    /// is [`BankError::NonFinite`] naming its entry.
     pub fn sq_norm<B: Backend + ?Sized>(&self, backend: &B) -> Result<f64, BankError> {
         let mut acc = 0.0f64;
         for (entry, (e, slot)) in self.entries.iter().zip(&self.slots).enumerate() {
-            let downloaded;
-            let values: &[f32] = match slot {
-                Slot::Empty => {
-                    return Err(BankError::Unfilled {
-                        entry,
-                        name: e.name.clone(),
-                    })
-                }
-                Slot::Host(v) => v,
-                Slot::Backend(t) => {
-                    downloaded = backend
-                        .download(t)
-                        .and_then(|h| h.to_f32_vec())
-                        .map_err(|source| BankError::Core {
-                            entry,
-                            name: e.name.clone(),
-                            source,
-                        })?;
-                    &downloaded
-                }
+            let Slot::Filled(t) = slot else {
+                return Err(BankError::Unfilled {
+                    entry,
+                    name: e.name.clone(),
+                });
             };
-            for &x in values {
+            let values = backend
+                .download(t)
+                .and_then(|h| h.to_f32_vec())
+                .map_err(|source| BankError::Core {
+                    entry,
+                    name: e.name.clone(),
+                    source,
+                })?;
+            for x in values {
                 if !x.is_finite() {
                     return Err(BankError::NonFinite {
                         entry,
@@ -457,13 +341,5 @@ impl AdapterBank {
             }
         }
         Ok(acc)
-    }
-
-    /// The host slot's values, or `None` for an empty or backend slot.
-    pub fn host_values(&self, entry: usize) -> Option<&[f32]> {
-        match self.slots.get(entry)? {
-            Slot::Host(v) => Some(v),
-            _ => None,
-        }
     }
 }

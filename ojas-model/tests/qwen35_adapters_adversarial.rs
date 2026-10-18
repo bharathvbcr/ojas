@@ -16,7 +16,7 @@ use ojas_model::qwen35::adapters::{
     AdapterError, BaseIdentity, DataState, Expected, ExpectedEntry, ADAPTERS_FILE, KEY_DIGEST,
     KEY_LAYOUT, KEY_RANK, KEY_RNG, KEY_STEP, MOMENTS_FILE,
 };
-use ojas_model::qwen35::bank::{AdapterBank, BankEntry, BankError, BankMode, Residence};
+use ojas_model::qwen35::bank::{AdapterBank, BankEntry, BankError, BankMode};
 use ojas_model::qwen35::optim::{adamw_all_or_nothing, AdamWEntry, OptimError};
 
 const BASE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -229,19 +229,18 @@ fn a_refused_overwrite_empties_the_slot_so_later_adds_cannot_extend_the_last_ste
         BankEntry {
             name: "a".to_string(),
             shape: vec![2, 2],
-            residence: Residence::Backend,
         },
         BankEntry {
             name: "h".to_string(),
             shape: vec![3],
-            residence: Residence::Host,
         },
     ])
     .unwrap();
     let good = Tensor::from_f32(&[1.0; 4], &[2, 2], &b).unwrap();
     bank.accumulate(&backend, 0, BankMode::Overwrite, good)
         .unwrap();
-    bank.accumulate_host(1, BankMode::Overwrite, &[1.0; 3])
+    let good_h = Tensor::from_f32(&[1.0; 3], &[3], &b).unwrap();
+    bank.accumulate(&backend, 1, BankMode::Overwrite, good_h)
         .unwrap();
 
     let wrong = Tensor::from_f32(&[1.0; 4], &[4], &b).unwrap();
@@ -249,8 +248,9 @@ fn a_refused_overwrite_empties_the_slot_so_later_adds_cannot_extend_the_last_ste
         bank.accumulate(&backend, 0, BankMode::Overwrite, wrong),
         Err(BankError::Shape { .. })
     ));
+    let wrong_h = Tensor::from_f32(&[1.0; 2], &[2], &b).unwrap();
     assert!(matches!(
-        bank.accumulate_host(1, BankMode::Overwrite, &[1.0; 2]),
+        bank.accumulate(&backend, 1, BankMode::Overwrite, wrong_h),
         Err(BankError::Shape { .. })
     ));
     // The previous step's sums are gone: the next Add has nothing to extend.
@@ -259,12 +259,12 @@ fn a_refused_overwrite_empties_the_slot_so_later_adds_cannot_extend_the_last_ste
         bank.accumulate(&backend, 0, BankMode::Add, next),
         Err(BankError::AddWithoutBase { .. })
     ));
+    let next_h = Tensor::from_f32(&[1.0; 3], &[3], &b).unwrap();
     assert!(matches!(
-        bank.accumulate_host(1, BankMode::Add, &[1.0; 3]),
+        bank.accumulate(&backend, 1, BankMode::Add, next_h),
         Err(BankError::AddWithoutBase { .. })
     ));
     assert!(!bank.is_complete());
-    assert!(bank.host_values(1).is_none());
 }
 
 #[test]

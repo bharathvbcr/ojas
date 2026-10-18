@@ -20,6 +20,9 @@
 //!   [`optim::adamw_all_or_nothing`] steps every entry or none, and
 //!   [`adapters`] writes and reads the adapter checkpoint
 //!   (`docs/adapter-checkpoint.md`).
+//! - [`step_provider::TapeStepProvider`] puts them together as an
+//!   `ojas_train::lappi::step::StepProvider`: one tape per sequence, the
+//!   bank, AdamW over the trainable entries and the adapter checkpoint.
 
 pub mod adapters;
 pub mod bank;
@@ -39,3 +42,4 @@ pub use params::{
     Qwen35Params, LORA_KINDS,
 };
 pub use spec::{Qwen35Mixer, Qwen35Spec};
+pub use step_provider::{DeviceHooks, LoraInit, OpenConfig, TapeStepProvider};
