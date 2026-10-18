@@ -27,6 +27,7 @@ mod forward;
 pub mod optim;
 mod params;
 mod spec;
+pub mod step_provider;
 
 pub use forward::{
     bind, bind_frozen, forward_hidden, forward_hidden_lora, forward_loss, forward_loss_lora,

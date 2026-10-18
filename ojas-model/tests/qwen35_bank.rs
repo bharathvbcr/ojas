@@ -283,3 +283,132 @@ fn a_shape_whose_element_count_overflows_is_refused_at_construction() {
     }]);
     assert!(matches!(r, Err(BankError::ShapeOverflow { .. })));
 }
+
+fn filled_bank(backend: &CpuBackend, b: &Budget, a: &[f32], h: Option<&[f32]>) -> AdapterBank {
+    let mut bank = AdapterBank::new(entries()).unwrap();
+    bank.accumulate(backend, 0, BankMode::Overwrite, tensor(a, &[RANK, IN], b))
+        .unwrap();
+    if let Some(h) = h {
+        bank.accumulate_host(1, BankMode::Overwrite, h).unwrap();
+    }
+    bank
+}
+
+fn backend_entries() -> Vec<BankEntry> {
+    [
+        "layers.0.q_proj.lora_A.weight",
+        "layers.0.q_proj.lora_B.weight",
+    ]
+    .iter()
+    .map(|n| BankEntry {
+        name: n.to_string(),
+        shape: vec![RANK, IN],
+        residence: Residence::Backend,
+    })
+    .collect()
+}
+
+#[test]
+fn take_grads_moves_every_slot_out_in_entry_order() {
+    let (backend, b) = (cpu(), budget());
+    let (g0, g1) = (sequence_grad(5, 0), sequence_grad(9, 1));
+    let mut bank = AdapterBank::new(backend_entries()).unwrap();
+    for (i, g) in [&g0, &g1].into_iter().enumerate() {
+        bank.accumulate(&backend, i, BankMode::Overwrite, tensor(g, &[RANK, IN], &b))
+            .unwrap();
+    }
+    let taken = bank.take_grads().unwrap();
+    assert_eq!(taken.len(), 2);
+    assert_eq!(bits(&taken[0].to_f32_vec().unwrap()), bits(&g0));
+    assert_eq!(bits(&taken[1].to_f32_vec().unwrap()), bits(&g1));
+    // The bank is empty after the move: a second take is refused at entry 0.
+    assert!(!bank.is_complete());
+    assert!(matches!(
+        bank.take_grads(),
+        Err(BankError::Unfilled { entry: 0, .. })
+    ));
+}
+
+#[test]
+fn take_grads_refuses_an_empty_or_host_slot_and_moves_nothing() {
+    let (backend, b) = (cpu(), budget());
+    let g0 = sequence_grad(5, 0);
+    let mut bank = AdapterBank::new(backend_entries()).unwrap();
+    bank.accumulate(
+        &backend,
+        0,
+        BankMode::Overwrite,
+        tensor(&g0, &[RANK, IN], &b),
+    )
+    .unwrap();
+    assert!(matches!(
+        bank.take_grads(),
+        Err(BankError::Unfilled { entry: 1, .. })
+    ));
+    // Entry 0 was not moved by the refused call.
+    let kept = bank.grad(0, &b).unwrap().to_f32_vec().unwrap();
+    assert_eq!(bits(&kept), bits(&g0));
+
+    let mut mixed = filled_bank(&backend, &b, &g0, Some(&[1.0, 2.0, 3.0]));
+    assert!(matches!(
+        mixed.take_grads(),
+        Err(BankError::HostSlot { entry: 1, .. })
+    ));
+    assert!(mixed.is_complete());
+}
+
+#[test]
+fn sq_norm_accumulates_in_f64_over_backend_and_host_slots() {
+    let (backend, b) = (cpu(), budget());
+    let a = sequence_grad(13, 2);
+    let h = head_grad(7);
+    let bank = filled_bank(&backend, &b, &a, Some(&h));
+    let mut reference = 0.0f64;
+    for &x in a.iter().chain(&h) {
+        reference += f64::from(x) * f64::from(x);
+    }
+    let got = bank.sq_norm(&backend).unwrap();
+    assert_eq!(got.to_bits(), reference.to_bits());
+}
+
+#[test]
+fn sq_norm_refuses_an_empty_slot_and_names_the_non_finite_entry() {
+    let (backend, b) = (cpu(), budget());
+    let a = sequence_grad(5, 0);
+    let bank = filled_bank(&backend, &b, &a, None);
+    assert!(matches!(
+        bank.sq_norm(&backend),
+        Err(BankError::Unfilled { entry: 1, .. })
+    ));
+
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut poisoned = sequence_grad(5, 1);
+        poisoned[RANK * IN - 1] = bad;
+        let mut bank = filled_bank(&backend, &b, &a, Some(&[1.0, 2.0, 3.0]));
+        assert!(bank.sq_norm(&backend).is_ok());
+        bank.accumulate(
+            &backend,
+            0,
+            BankMode::Overwrite,
+            tensor(&poisoned, &[RANK, IN], &b),
+        )
+        .unwrap();
+        assert!(matches!(
+            bank.sq_norm(&backend),
+            Err(BankError::NonFinite { entry: 0, .. })
+        ));
+        bank.accumulate_host(1, BankMode::Overwrite, &[1.0, bad, 3.0])
+            .unwrap();
+        bank.accumulate(
+            &backend,
+            0,
+            BankMode::Overwrite,
+            tensor(&a, &[RANK, IN], &b),
+        )
+        .unwrap();
+        assert!(matches!(
+            bank.sq_norm(&backend),
+            Err(BankError::NonFinite { entry: 1, .. })
+        ));
+    }
+}

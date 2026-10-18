@@ -36,7 +36,8 @@
 //! - If the backend refuses an add, the slot is emptied, because a backend
 //!   that defers faults ([`Backend::accumulate_grad`]) leaves the sum
 //!   invalid. The step must restart with `Overwrite`.
-//! - Finiteness is not judged here; [`super::optim::adamw_all_or_nothing`]
+//! - Accumulating does not judge finiteness; [`AdapterBank::sq_norm`]
+//!   refuses a non-finite value, and [`super::optim::adamw_all_or_nothing`]
 //!   scans every gradient before any parameter moves.
 
 use std::fmt;
@@ -99,6 +100,11 @@ pub enum BankError {
     AddWithoutBase { entry: usize, name: String },
     /// A gradient was asked of a slot that holds none.
     Unfilled { entry: usize, name: String },
+    /// [`AdapterBank::take_grads`] met a host slot: a host gradient becomes
+    /// a tensor only through [`AdapterBank::grad`], which takes a budget.
+    HostSlot { entry: usize, name: String },
+    /// A gradient value is NaN or infinite ([`AdapterBank::sq_norm`]).
+    NonFinite { entry: usize, name: String },
     /// The backend or tensor layer refused.
     Core {
         entry: usize,
@@ -141,6 +147,15 @@ impl fmt::Display for BankError {
             Self::Unfilled { entry, name } => {
                 write!(f, "bank: entry {entry} ({name}): no gradient accumulated")
             }
+            Self::HostSlot { entry, name } => write!(
+                f,
+                "bank: entry {entry} ({name}): a host slot cannot be taken as a tensor \
+                 without a budget; read it with grad or host_values"
+            ),
+            Self::NonFinite { entry, name } => write!(
+                f,
+                "bank: entry {entry} ({name}): the gradient holds a non-finite value"
+            ),
             Self::Core {
                 entry,
                 name,
@@ -367,6 +382,81 @@ impl AdapterBank {
         (0..self.entries.len())
             .map(|i| self.grad(i, budget))
             .collect()
+    }
+
+    /// Move every entry's summed gradient out, in entry order, leaving the
+    /// bank empty (the next step starts from `Overwrite`). The bank must be
+    /// complete and every slot backend-resident: the first empty slot is
+    /// [`BankError::Unfilled`] and the first host slot [`BankError::HostSlot`],
+    /// and on either refusal nothing has moved.
+    pub fn take_grads(&mut self) -> Result<Vec<Tensor>, BankError> {
+        for (entry, (e, slot)) in self.entries.iter().zip(&self.slots).enumerate() {
+            match slot {
+                Slot::Empty => {
+                    return Err(BankError::Unfilled {
+                        entry,
+                        name: e.name.clone(),
+                    })
+                }
+                Slot::Host(_) => {
+                    return Err(BankError::HostSlot {
+                        entry,
+                        name: e.name.clone(),
+                    })
+                }
+                Slot::Backend(_) => {}
+            }
+        }
+        let mut out = Vec::with_capacity(self.slots.len());
+        for slot in &mut self.slots {
+            if let Slot::Backend(t) = std::mem::replace(slot, Slot::Empty) {
+                out.push(t);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The squared L2 norm of every gradient in the bank: each value is
+    /// widened to f64, squared and added to one f64 accumulator, entries in
+    /// order and elements in row-major order. Backend slots are downloaded
+    /// first. The first empty slot is [`BankError::Unfilled`]; the first
+    /// NaN or infinity is [`BankError::NonFinite`] naming its entry.
+    pub fn sq_norm<B: Backend + ?Sized>(&self, backend: &B) -> Result<f64, BankError> {
+        let mut acc = 0.0f64;
+        for (entry, (e, slot)) in self.entries.iter().zip(&self.slots).enumerate() {
+            let downloaded;
+            let values: &[f32] = match slot {
+                Slot::Empty => {
+                    return Err(BankError::Unfilled {
+                        entry,
+                        name: e.name.clone(),
+                    })
+                }
+                Slot::Host(v) => v,
+                Slot::Backend(t) => {
+                    downloaded = backend
+                        .download(t)
+                        .and_then(|h| h.to_f32_vec())
+                        .map_err(|source| BankError::Core {
+                            entry,
+                            name: e.name.clone(),
+                            source,
+                        })?;
+                    &downloaded
+                }
+            };
+            for &x in values {
+                if !x.is_finite() {
+                    return Err(BankError::NonFinite {
+                        entry,
+                        name: e.name.clone(),
+                    });
+                }
+                let x = f64::from(x);
+                acc += x * x;
+            }
+        }
+        Ok(acc)
     }
 
     /// The host slot's values, or `None` for an empty or backend slot.
