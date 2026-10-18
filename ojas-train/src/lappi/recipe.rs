@@ -224,8 +224,6 @@ pub fn clip_coefficient(sq_norm: f64, max_norm: f64) -> Result<f64, StepError> {
 // adapter leaf; the host entries must be D17 or a span-head tensor.
 // ---------------------------------------------------------------------------------------------
 
-/// The host entry D17 is held under (`tools/gen_span_fixture.py`, qd-export's `d17.delta`).
-pub const D17_ENTRY_NAME: &str = "d17.delta";
 /// `lora.HEAD_LR_SCALE = D17_LR / LORA_LR` = 1e-4 / 2e-4: D17 and the span head share the one
 /// schedule at half the adapters' rate.
 pub const HEAD_LR_SCALE: f64 = 0.5;
@@ -367,15 +365,16 @@ pub fn lora_param_groups(
                 h.name
             )));
         }
-        if h.name == D17_ENTRY_NAME {
+        if h.name == crate::d17::D17_ENTRY {
             d17.push(h.name.clone());
         } else if crate::span_head::PARAMETER_NAMES.contains(&h.name.as_str()) {
             head.push(h.name.clone());
         } else {
             return Err(StepError::Contract(format!(
-                "host entry {} is neither D17 ({D17_ENTRY_NAME}) nor a span-head tensor: a base \
+                "host entry {} is neither D17 ({}) nor a span-head tensor: a base \
                  parameter marked trainable under the lora recipe",
-                h.name
+                h.name,
+                crate::d17::D17_ENTRY
             )));
         }
     }
