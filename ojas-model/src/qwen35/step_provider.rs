@@ -836,6 +836,33 @@ impl<B: Backend> TapeStepProvider<B> {
         self.leaves.len()
     }
 
+    fn accumulate_into_bank(
+        &mut self,
+        job: &SequenceJob<'_>,
+        mode: BankMode,
+        external: Option<&mut HiddenGrad<'_>>,
+    ) -> Result<f64, StepError> {
+        self.require_ready()?;
+        job.validate(self.spec.vocab)?;
+        if job.tokens.len() > self.widest {
+            return Err(contract(format!(
+                "a sequence of {} tokens is wider than the {} the tables were built for",
+                job.tokens.len(),
+                self.widest
+            )));
+        }
+        let out =
+            run_sequence(&self.backend, &self.seq(), job, external).map_err(Fail::into_step)?;
+        for (i, grad) in out.grads.into_iter().enumerate() {
+            if let Err(e) = self.bank.accumulate(&self.backend, i, mode, grad) {
+                // A half-written bank must not look complete.
+                self.bank.clear();
+                return Err(bank_err(e));
+            }
+        }
+        Ok(out.value)
+    }
+
     fn seq(&self) -> Seq<'_> {
         Seq {
             spec: &self.spec,
@@ -970,6 +997,9 @@ impl<B: Backend> TapeStepProvider<B> {
         cap_bytes: u64,
         external_live_bytes: u64,
     ) -> Result<preflight::Plan, StepError> {
+        // A pass is for one plan: a later pre-flight that refuses must not
+        // leave the gate open on an earlier pass.
+        self.preflighted = false;
         let tokens = i64::try_from(widest_tokens)
             .map_err(|_| contract(format!("{widest_tokens} tokens do not fit i64")))?;
         let plan = preflight::plan(calibration, tokens, buckets, cap_bytes, external_live_bytes)
@@ -1057,25 +1087,14 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
         mode: BankMode,
         external: Option<&mut HiddenGrad<'_>>,
     ) -> Result<f64, StepError> {
-        self.require_ready()?;
-        job.validate(self.spec.vocab)?;
-        if job.tokens.len() > self.widest {
-            return Err(contract(format!(
-                "a sequence of {} tokens is wider than the {} the tables were built for",
-                job.tokens.len(),
-                self.widest
-            )));
+        let result = self.accumulate_into_bank(job, mode, external);
+        if result.is_err() && mode == BankMode::Overwrite {
+            // A refused first sequence of a step must not leave the previous
+            // sum for the following `Add`s to extend (the bank's own rule for
+            // a refused `Overwrite`, held here for every refusal).
+            self.bank.clear();
         }
-        let out =
-            run_sequence(&self.backend, &self.seq(), job, external).map_err(Fail::into_step)?;
-        for (i, grad) in out.grads.into_iter().enumerate() {
-            if let Err(e) = self.bank.accumulate(&self.backend, i, mode, grad) {
-                // A half-written bank must not look complete.
-                self.bank.clear();
-                return Err(bank_err(e));
-            }
-        }
-        Ok(out.value)
+        result
     }
 
     fn grad_sq_norm(&mut self) -> Result<f64, StepError> {

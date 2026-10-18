@@ -802,3 +802,178 @@ fn a_passing_preflight_opens_the_gate_and_a_missing_rebind_never_passes() {
     // The dry run's scratch bank is not the provider's.
     assert!(p.bank().is_complete());
 }
+
+fn grads_of(p: &mut P) -> Vec<Vec<f32>> {
+    p.read_gradients().unwrap()
+}
+
+/// Largest absolute difference between two gradient sets, over the largest
+/// absolute value of `want`.
+fn max_rel(got: &[Vec<f32>], want: &[Vec<f32>]) -> f32 {
+    assert_eq!(got.len(), want.len());
+    let peak = want.iter().flatten().fold(0.0f32, |p, x| p.max(x.abs()));
+    assert!(peak > 0.0, "an all-zero reference checks nothing");
+    let diff = got
+        .iter()
+        .flatten()
+        .zip(want.iter().flatten())
+        .fold(0.0f32, |d, (a, b)| d.max((a - b).abs()));
+    diff / peak
+}
+
+/// A fresh provider's bank after one `Overwrite` of `j`.
+fn grads_after(j: &Job, with_outside: bool) -> Vec<Vec<f32>> {
+    let mut p = open(16, true);
+    if with_outside {
+        let mut ext = outside;
+        p.accumulate(&j.view(), BankMode::Overwrite, Some(&mut ext))
+            .unwrap();
+    } else {
+        p.accumulate(&j.view(), BankMode::Overwrite, None).unwrap();
+    }
+    grads_of(&mut p)
+}
+
+#[test]
+fn a_refused_overwrite_empties_the_bank_so_later_adds_cannot_extend_the_previous_sum() {
+    let mut p = open(16, true);
+    p.accumulate(&job(8, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    assert!(p.bank().is_complete());
+
+    // The next step's first sequence fails in its callback, after the tower ran.
+    let with_hidden = job(8, 3, 1.0, true);
+    let mut failing = |_: &[u32], _: &[f32]| -> Result<Vec<f32>, StepError> {
+        Err(StepError::Contract("the outside loss refused".into()))
+    };
+    assert!(p
+        .accumulate(&with_hidden.view(), BankMode::Overwrite, Some(&mut failing))
+        .is_err());
+    assert!(
+        !p.bank().is_complete(),
+        "a failed Overwrite left the previous step's sum in the bank"
+    );
+    // A caller that ignored the error and went on with Add is refused.
+    assert!(p
+        .accumulate(&job(8, 4, 1.0, false).view(), BankMode::Add, None)
+        .is_err());
+    // Validation refusals are the same: nothing of the old sum survives.
+    p.accumulate(&job(8, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    assert!(p
+        .accumulate(&job(17, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .is_err());
+    assert!(!p.bank().is_complete());
+    let (lr_scale, wd) = per_entry(n_trainable(&p));
+    assert!(p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).is_err());
+    assert_eq!(p.step_count(), 0);
+}
+
+#[test]
+fn a_failed_add_keeps_the_sum_of_the_sequences_before_it_and_leaks_no_device_memory() {
+    let mut p = open(16, true);
+    let budget = p.backend().budget().clone();
+    p.accumulate(&job(8, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    p.accumulate(&job(9, 3, 1.0, false).view(), BankMode::Add, None)
+        .unwrap();
+    let live = budget.live_bytes().unwrap();
+    let before = bits_all(&grads_of(&mut p));
+
+    let with_hidden = job(8, 4, 1.0, true);
+    let mut failing = |_: &[u32], _: &[f32]| -> Result<Vec<f32>, StepError> {
+        Err(StepError::Contract("the outside loss refused".into()))
+    };
+    assert!(p
+        .accumulate(&with_hidden.view(), BankMode::Add, Some(&mut failing))
+        .is_err());
+    assert_eq!(budget.live_bytes().unwrap(), live, "a failed sequence leaked");
+    assert_eq!(bits_all(&grads_of(&mut p)), before);
+
+    let mut ext = outside;
+    p.accumulate(&job(12, 5, 1.0, true).view(), BankMode::Add, Some(&mut ext))
+        .unwrap();
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        live,
+        "a sequence's tape outlived it"
+    );
+}
+
+#[test]
+fn the_row_scale_is_linear_and_the_two_roots_add() {
+    // scale * N on the mean is scale times the gradient of the sum.
+    let one = grads_after(&job(10, 1, 1.0, false), false);
+    let half = grads_after(&job(10, 1, 0.5, false), false);
+    let half_of_one: Vec<Vec<f32>> = one
+        .iter()
+        .map(|g| g.iter().map(|x| 0.5 * x).collect())
+        .collect();
+    assert!(max_rel(&half, &half_of_one) < 1e-5);
+
+    // Rows and outside loss in one backward are the sum of each alone, and
+    // the provider does not scale the outside gradient.
+    let both = grads_after(&job(10, 1, 0.7, true), true);
+    let rows_only = grads_after(
+        &Job {
+            hidden: Vec::new(),
+            ..job(10, 1, 0.7, true)
+        },
+        false,
+    );
+    let dh_only = grads_after(
+        &Job {
+            positions: Vec::new(),
+            targets: Vec::new(),
+            ..job(10, 1, 0.7, true)
+        },
+        true,
+    );
+    let sum: Vec<Vec<f32>> = rows_only
+        .iter()
+        .zip(&dh_only)
+        .map(|(a, b)| a.iter().zip(b).map(|(x, y)| x + y).collect())
+        .collect();
+    assert!(max_rel(&both, &sum) < 1e-4);
+
+    // Scale 0 with an outside loss still back-propagates the outside
+    // gradient: it equals the outside loss alone.
+    let zero_rows = grads_after(&job(10, 1, 0.0, true), true);
+    assert!(max_rel(&zero_rows, &dh_only) < 1e-5);
+}
+
+#[test]
+fn a_failed_preflight_closes_a_gate_an_earlier_pass_opened() {
+    let calibration = Calibration::from_points(
+        "tiny",
+        1,
+        &[
+            Point {
+                tokens: 8,
+                peak_bytes: 1 << 20,
+            },
+            Point {
+                tokens: 16,
+                peak_bytes: 2 << 20,
+            },
+        ],
+    )
+    .unwrap();
+    let j = job(8, 5, 1.0, false);
+    let mut p = device_provider(with_rebind());
+    p.preflight(&calibration, 8, &[8, 16], 1 << 30, 0).unwrap();
+    // The pre-flight leaves no state behind: the bank is empty, no step taken.
+    assert!(!p.bank().is_complete());
+    assert_eq!(p.step_count(), 0);
+    p.accumulate(&j.view(), BankMode::Overwrite, None).unwrap();
+
+    assert!(p.preflight(&calibration, 8, &[8, 16], 1 << 19, 0).is_err());
+    let err = p
+        .accumulate(&j.view(), BankMode::Overwrite, None)
+        .unwrap_err();
+    assert!(err.to_string().contains("pre-flight"), "{err}");
+
+    // A second passing pre-flight reopens it.
+    p.preflight(&calibration, 8, &[8, 16], 1 << 30, 0).unwrap();
+    p.accumulate(&j.view(), BankMode::Overwrite, None).unwrap();
+}
