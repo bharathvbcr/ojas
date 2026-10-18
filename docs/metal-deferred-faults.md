@@ -93,6 +93,10 @@ wgpu writes NaN into `acc` and relies on "invalid" (`ojas-wgpu/src/backend.rs:21
 - **`free()` drops the mark** (`device.rs:688`); ids are never reused.
 - **Opt-in and Metal-only for now.** A generic `Backend` hook belongs to the phase-B StepProvider (ft-b5e64557); wrapper forwarding of new trait methods is the open bug class ft-fe7dcee6.
 
+### 3.2 The freeze hook of `TapeStepProvider`
+
+The phase-B provider (`ojas-model/src/qwen35/step_provider.rs`) takes the generic seam as `DeviceHooks` closures, not a `Backend` method, so a wrapper backend cannot drop it (ft-fe7dcee6). A Metal caller passes `freeze: |m, t| m.freeze_checked(t)` and `rebind: |m, b| m.with_budget(b)`. `open_lora` applies `freeze` to every frozen base tensor after the pinned load and then calls `Backend::sync`, so a faulting freeze scan (`NonFinite { "freeze_checked" }`, §3.1) is the refusal `open_lora` returns (`StepError::Backend`), never a later step's. A backend with no `freeze` hook (the CPU) skips both. `ojas-qwen35/tests/gpu_tape_provider.rs` runs the provider with both hooks on Metal.
+
 ## 4. Batching mechanics
 
 ### 4.1 Recording and committing

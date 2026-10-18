@@ -693,6 +693,7 @@ dependencies = [
  "ojas-io",
  "ojas-metal",
  "ojas-oracle",
+ "ojas-train",
  "ojas-wgpu",
 ]
 
@@ -712,9 +713,11 @@ version = "0.1.0"
 dependencies = [
  "ojas-autograd",
  "ojas-core",
+ "ojas-cpu",
  "ojas-io",
  "ojas-metal",
  "ojas-model",
+ "ojas-train",
  "tessl",
 ]
 

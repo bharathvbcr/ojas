@@ -13,3 +13,21 @@ description = "Training loop, schedules and recipes over ojas. Shell: SHA-256 fo
 [dependencies]
 ojas-core = { path = "../ojas-core" }
 ojas-io = { path = "../ojas-io" }
+
+# The moved Lappi oracle tests live in tests/lappi/ (subdirectories are not
+# auto-discovered); each declares `mod common;`, which resolves beside it.
+[[test]]
+name = "adamw_decay_sensitive"
+path = "tests/lappi/adamw_decay_sensitive.rs"
+
+[[test]]
+name = "adamw_oracle"
+path = "tests/lappi/adamw_oracle.rs"
+
+[[test]]
+name = "pyjson_oracle"
+path = "tests/lappi/pyjson_oracle.rs"
+
+[[test]]
+name = "schedule_oracle"
+path = "tests/lappi/schedule_oracle.rs"

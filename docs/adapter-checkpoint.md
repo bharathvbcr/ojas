@@ -4,6 +4,14 @@ The checkpoint of the Qwen3.5 Tape LoRA track: the trainable entries by name, th
 
 Writer and reader: `ojas-model/src/qwen35/adapters.rs` (`write_adapter_checkpoint`, `read_adapter_checkpoint`). Tests: `ojas-model/tests/qwen35_adapters.rs`. Where this page and the code disagree, the code wins and this page is the bug.
 
+## Where it sits in a training checkpoint (Fable ruling, 2026-10-18)
+
+A LoRA training run's checkpoint is the training loop's `ckpt-<step>/` directory (`ojas-train/src/lappi/trainer.rs`, format `qd-train-checkpoint-v2`). It has two parts:
+- **`provider/`** is this layout: the LoRA entries, their moments, the base identity, and the rank and alpha. The Qwen3.5 Tape `StepProvider` writes it.
+- **`trainer.json` and `host.f32`** are the loop's own part: the host entries D17 (`d17.delta`) and the span head (`span_head.*`), each with its value, both AdamW moments and its own AdamW step count (`host_entries[].adamw_steps`), plus the schedule step, seed, epoch and consumed digest. The loop's objective owns these entries. It computes their gradients and steps them on their own counts; the span head skips a step on a letter-only batch.
+
+So a checkpoint written by the Tape provider holds **LoRA entries only**. The host-entry names below stay valid for this layout (other writers may use them), but the training run's D17 and span head live in `host.f32`. Lappi's converter reads both parts. The loop passes `rng_state` and `consumed_digest` to the provider when it saves.
+
 This is not Checkpoint v1 (`docs/checkpoint-v1.md`, the nanolab trainer's format). It shares the file conventions of the nanolab checkpoint directory (safetensors, `adam_m.<name>` / `adam_v.<name>`) and its atomic replace.
 
 ## Directory
