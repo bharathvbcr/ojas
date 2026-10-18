@@ -1,0 +1,59 @@
+{
+ "what": "Pre-registration of the decay-sensitive per-entry AdamW golden: rung (a) test 2 of ojas plan Q3 Amendment 2 (ii) (AUDIT/ojas-training-2026-10-01/fable-rung-b-bars.md, Q2 test 2). Committed before the golden is generated; the generator (tools/qd_train_oracle_adamw.py) reads its settings from this file and refuses if they disagree. L-trainer consumes the golden.",
+ "lane": "L-oracle",
+ "date": "2026-10-01",
+ "settings": {
+  "builder": "F's own construction, nothing retyped: qd_train.optim.layerwise_param_groups(named tower entries, lower_layers_n=8, lower_lr_scale=real_ft_run.RSI_LOWER_LR_SCALE, extra=span-head entries), then qd_train.optim.build_optimizer(groups, spec=real_ft_run.optimizer_spec('bf16', 'master'), lr=1e-2, total_steps=5, beta2=qd_train.optim.DEFAULT_BETA2) -> MasterWeightAdamW (bf16 tower entries with fp32 masters, fp32 span-head entries their own masters), as QwenDecisionStep builds F's optimizer",
+  "lr": 0.01,
+  "lr_schedule": "constant: qd_train.optim.apply_lr(optimizer, 0.01) before every step, as QwenDecisionStep.apply does; no clip (the clip is rung (a)'s separate host test, Amendment 2 (iii))",
+  "steps": 5,
+  "lower_layers_n": 8,
+  "lower_lr_scale": "real_ft_run.RSI_LOWER_LR_SCALE (0.1), read, not typed",
+  "eps_weight_decay_betas": "whatever the builder gives (expected 1e-8, 0.01, (0.9, 0.999)); read off the built optimizer's param_groups and recorded per entry, never passed in",
+  "deviation_from_the_ruling_example": "The ruling's example setting says weight decay 0.1. build_optimizer takes no weight_decay argument, so F's builder yields 0.01; passing 0.1 would type F's hyperparameter in by hand, which is exactly GAP-OJAS-K11-GOLDEN-RETYPES-F-HYPER-2026-10-01. The builder's 0.01 is kept, and the decay targets carry |w| near 1 so D1 and D3 still clear 100x (predicted below). The lead may override.",
+  "data_seed": 20261002,
+  "dtype_of_inputs": "tower entries: init and gradients rounded to bf16 (the live bf16 parameter and its bf16 grad, upcast exactly to the fp32 master); span-head entries: f32 init and f32 gradients",
+  "init": "init = base + 0.1 * N(0,1) per element (torch.Generator seeded data_seed, entries in the order below), then bf16-rounded for tower entries; the abstain vectors are exactly zero, as heads.py initialises them",
+  "gradients": "grad_t = grad_scale * N(0,1) per element for every step t in grad_steps, drawn in step-major then entry order from the same generator; bf16-rounded for tower entries. An entry absent from grad_steps at step t has grad None at t (torch AdamW then skips it: no decay, no moment update, no step count)"
+ },
+ "entries": [
+  {"name": "embed_tokens.weight", "shape": [8, 4], "live_dtype": "bf16", "expected_group": "base", "base": 0.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5]},
+  {"name": "layers.0.input_layernorm.weight", "shape": [4], "live_dtype": "bf16", "expected_group": "base_lower", "base": 1.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "norm in the 0.1 group: D1 and D3 target"},
+  {"name": "layers.0.linear_attn.A_log", "shape": [2], "live_dtype": "bf16", "expected_group": "base_lower", "base": 0.5, "grad_scale": 0.01, "grad_steps": [1, 2, 3, 4, 5]},
+  {"name": "layers.0.linear_attn.dt_bias", "shape": [2], "live_dtype": "bf16", "expected_group": "base_lower", "base": -1.0, "grad_scale": 0.01, "grad_steps": [1, 2, 3, 4, 5], "role": "dt_bias in the 0.1 group: D1 and D3 target"},
+  {"name": "layers.0.linear_attn.conv1d.weight", "shape": [4, 1, 4], "live_dtype": "bf16", "expected_group": "base_lower", "base": 0.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5]},
+  {"name": "layers.0.linear_attn.norm.weight", "shape": [4], "live_dtype": "bf16", "expected_group": "base_lower", "base": 1.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "GDN gated norm ('norm' segment): D1 target"},
+  {"name": "layers.0.linear_attn.in_proj_qkv.weight", "shape": [6, 4], "live_dtype": "bf16", "expected_group": "base_lower", "base": 0.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5]},
+  {"name": "layers.3.self_attn.q_norm.weight", "shape": [4], "live_dtype": "bf16", "expected_group": "base_lower", "base": 1.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "'_norm' segment in a full-attention layer: D1 target"},
+  {"name": "layers.7.mlp.down_proj.weight", "shape": [4, 6], "live_dtype": "bf16", "expected_group": "base_lower", "base": 0.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "last layer of the 0.1 group"},
+  {"name": "layers.8.mlp.down_proj.weight", "shape": [4, 6], "live_dtype": "bf16", "expected_group": "base", "base": 0.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "first layer of the 1.0 group"},
+  {"name": "layers.8.post_attention_layernorm.weight", "shape": [4], "live_dtype": "bf16", "expected_group": "base", "base": 1.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "norm in the 1.0 group: D1 target"},
+  {"name": "layers.9.linear_attn.dt_bias", "shape": [2], "live_dtype": "bf16", "expected_group": "base", "base": -1.0, "grad_scale": 1e-06, "grad_steps": [1, 2, 3, 4, 5], "role": "dt_bias in the 1.0 group (D1 target) with gradients near eps: the eps-placement target"},
+  {"name": "layers.23.input_layernorm.weight", "shape": [4], "live_dtype": "bf16", "expected_group": "base", "base": 1.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "deepest layer, so lower_layers_n=8 passes the builder's deepest-layer check"},
+  {"name": "layers.23.mlp.up_proj.weight", "shape": [6, 4], "live_dtype": "bf16", "expected_group": "base", "base": 0.5, "grad_scale": 0.1, "grad_steps": [], "role": "D7: no gradient on any step; the golden holds it bit-identical to its init (no decay)"},
+  {"name": "norm.weight", "shape": [4], "live_dtype": "bf16", "expected_group": "base", "base": 1.0, "grad_scale": 0.1, "grad_steps": [1, 2, 3, 4, 5], "role": "final norm: D1 target"},
+  {"name": "span_head.start_proj.weight", "shape": [4, 4], "live_dtype": "f32", "expected_group": "base", "base": 0.0, "grad_scale": 0.1, "grad_steps": [1, 3, 5], "role": "D7: the span head has no gradient on letter-only batches (steps 2 and 4); its own step count lags"},
+  {"name": "span_head.end_proj.weight", "shape": [4, 4], "live_dtype": "f32", "expected_group": "base", "base": 0.0, "grad_scale": 0.1, "grad_steps": [1, 3, 5]},
+  {"name": "span_head.abstain_start", "shape": [4], "live_dtype": "f32", "expected_group": "base", "base": "zeros", "grad_scale": 0.1, "grad_steps": [1, 3, 5]},
+  {"name": "span_head.abstain_end", "shape": [4], "live_dtype": "f32", "expected_group": "base", "base": "zeros", "grad_scale": 0.1, "grad_steps": [1, 3, 5]}
+ ],
+ "measure": {
+  "definition": "max over steps t = 1..5, entries and elements of |w_t(impl) - w_t(golden)|, absolute, in f32, where w_t(golden) is the fp32 master after optimizer step t",
+  "bound": 1e-06,
+  "why_this_form": "rung (a)'s 'AdamW <= 1e-6' (fable-advice.md Q3 rung a); absolute per element as canonical tessl's tests/qwen35_adamw.rs states its own bound (2e-6 absolute per element)"
+ },
+ "criteria": {
+  "each_mutation": "measure(mutant) / 1e-6 >= 100",
+  "floor": "the unmutated f32 restatement of torch's single-tensor AdamW (the instrument every mutant is built on) is within 1e-8 (1/100 of the bound) of the torch golden, so a ratio measures the mutation and not the instrument",
+  "on_failure": "a mutation under 100x fails this pre-registration and is reported as failed; the settings are not retuned to pass it -- a new pre-registration, committed before its own run, would be needed"
+ },
+ "mutations": [
+  {"id": "D1_tessl_default_weight_decay", "definition": "weight decay 0 on every entry canonical tessl's excluded_from_weight_decay matches (names containing 'bias', 'layernorm' or 'rmsnorm', or a dot-segment equal to 'norm' or ending '_norm'; restated as qd_train_oracle_tiny.tessl_excluded_from_weight_decay); 0.01 elsewhere", "predicted_ratio_at_least": 400, "prediction": "a base-group norm with |w| ~ 1 misses lr * wd * |w| = 1e-4 per step: ~5e-4 after 5 steps, ~500x"},
+  {"id": "D3_decay_not_lr_scaled", "definition": "decay factor 1 - lr * wd for every entry, instead of 1 - (lr * lr_scale) * wd", "predicted_ratio_at_least": 400, "prediction": "a 0.1-group norm with |w| ~ 1 over-decays by 0.9 * lr * wd * |w| = 9e-5 per step: ~4.5e-4 after 5 steps, ~450x"},
+  {"id": "eps_inside_sqrt", "definition": "denom = sqrt(v_hat + eps) instead of sqrt(v_hat) + eps", "predicted_ratio_at_least": 1000, "prediction": "on layers.9.linear_attn.dt_bias (|g| ~ 1e-6) the update falls from ~0.99 lr to ~0.01 lr: ~1e-2 per step"},
+  {"id": "eps_before_bias_correction", "definition": "denom = (sqrt(v) + eps) / sqrt(1 - beta2^t) instead of sqrt(v) / sqrt(1 - beta2^t) + eps", "predicted_ratio_at_least": 1000, "prediction": "at t = 1, eps / sqrt(1 - beta2) = 3.2e-7 against |g| ~ 1e-6: the update falls by ~20%, ~2e-3 per step"},
+  {"id": "lr_scale_missing", "definition": "every entry at lr_scale 1.0 (its lr and its decay)", "predicted_ratio_at_least": 1000, "prediction": "a 0.1-group entry moves ~0.9 * lr = 9e-3 per step more"},
+  {"id": "D7_no_grad_stepped_as_zero", "definition": "an entry with no gradient at step t is stepped with a zero gradient instead of skipped (decay applied, moments decayed, step count advanced)", "predicted_ratio_at_least": 200, "prediction": "the no-gradient entry (|w| ~ 0.5) decays by lr * wd * |w| = 5e-5 per step (~2.5e-4, ~250x); the span head moves on its own momentum at steps 2 and 4 (~lr * 0.5 per step)"},
+  {"id": "D7_model_wide_step_count", "definition": "bias corrections use the model-wide optimizer step count instead of each entry's own; entries with no gradient are still skipped", "predicted_ratio_at_least": 300, "prediction": "the span head at step 3 corrects with t = 3 instead of 2: its update changes by ~16%, ~8e-4"}
+ ]
+}

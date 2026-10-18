@@ -1,0 +1,138 @@
+{
+ "what": "decay-sensitive per-entry AdamW golden (ojas plan Q3 Amendment 2 (ii), rung (a) test 2), F's optimizer built by F's builder at the pre-registered setting",
+ "preregistration": {
+  "file": "preregistration.json",
+  "sha256": "c037a462a0d4b6d1bc47946df8dfa63472cf488392c5ac076830e3d9a3c52a38"
+ },
+ "generator": {
+  "script": "tools/qd_train_oracle_adamw.py",
+  "script_sha256": "c4335a9a6f62c3cce79ef988eb8c99eac73474c8c6fadddc94fd695625fede3e",
+  "command": "PYTHONPATH=python /Users/bharath/.venvs/ml/bin/python tools/qd_train_oracle_adamw.py --out crates/qd-train/tests/fixtures/adamw-decay-sensitive",
+  "git_head": "fd5fe80f6fbe6d3e635b87a25f3e93982db9c3d8",
+  "python": "3.14.7",
+  "torch": "2.12.1",
+  "safetensors": "0.8.0",
+  "device": "cpu",
+  "torch_threads": 1
+ },
+ "optimizer": {
+  "class": "qd_train.optim.MasterWeightAdamW",
+  "inner": "torch.optim.adamw.AdamW",
+  "torch_dispatch_on_this_host": {
+   "fused": false,
+   "foreach": false
+  },
+  "lr": 0.01,
+  "steps": 5,
+  "lower_layers_n": 8,
+  "lower_lr_scale": 0.1,
+  "beta2": 0.999
+ },
+ "measure": {
+  "definition": "max over steps t = 1..5, entries and elements of |w_t(impl) - w_t(golden)|, absolute, in f32, where w_t(golden) is the fp32 master after optimizer step t",
+  "bound": 1e-06,
+  "why_this_form": "rung (a)'s 'AdamW <= 1e-6' (fable-advice.md Q3 rung a); absolute per element as canonical tessl's tests/qwen35_adamw.rs states its own bound (2e-6 absolute per element)"
+ },
+ "instrument_floor": {
+  "max_abs": 0.0,
+  "at_step": 0,
+  "entry": "",
+  "within_bound_over_100": true
+ },
+ "mutations": {
+  "D1_tessl_default_weight_decay": {
+   "max_abs": 0.0006325244903564453,
+   "at_step": 5,
+   "entry": "norm.weight",
+   "ratio_over_bound": 632.5244903564453,
+   "predicted_ratio_at_least": 400,
+   "clears_100x": true,
+   "meets_prediction": true
+  },
+  "D3_decay_not_lr_scaled": {
+   "max_abs": 0.0005002021789550781,
+   "at_step": 5,
+   "entry": "layers.3.self_attn.q_norm.weight",
+   "ratio_over_bound": 500.2021789550781,
+   "predicted_ratio_at_least": 400,
+   "clears_100x": true,
+   "meets_prediction": true
+  },
+  "eps_inside_sqrt": {
+   "max_abs": 0.035895705223083496,
+   "at_step": 5,
+   "entry": "layers.9.linear_attn.dt_bias",
+   "ratio_over_bound": 35895.705223083496,
+   "predicted_ratio_at_least": 1000,
+   "clears_100x": true,
+   "meets_prediction": true
+  },
+  "eps_before_bias_correction": {
+   "max_abs": 0.004876375198364258,
+   "at_step": 5,
+   "entry": "layers.9.linear_attn.dt_bias",
+   "ratio_over_bound": 4876.375198364258,
+   "predicted_ratio_at_least": 1000,
+   "clears_100x": true,
+   "meets_prediction": true
+  },
+  "lr_scale_missing": {
+   "max_abs": 0.042531609535217285,
+   "at_step": 5,
+   "entry": "layers.0.input_layernorm.weight",
+   "ratio_over_bound": 42531.609535217285,
+   "predicted_ratio_at_least": 1000,
+   "clears_100x": true,
+   "meets_prediction": true
+  },
+  "D7_no_grad_stepped_as_zero": {
+   "max_abs": 0.011716514825820923,
+   "at_step": 4,
+   "entry": "span_head.start_proj.weight",
+   "ratio_over_bound": 11716.514825820923,
+   "predicted_ratio_at_least": 200,
+   "clears_100x": true,
+   "meets_prediction": true
+  },
+  "D7_model_wide_step_count": {
+   "max_abs": 0.002864733338356018,
+   "at_step": 5,
+   "entry": "span_head.start_proj.weight",
+   "ratio_over_bound": 2864.733338356018,
+   "predicted_ratio_at_least": 300,
+   "clears_100x": true,
+   "meets_prediction": true
+  }
+ },
+ "all_mutations_clear_100x": true,
+ "d7_no_gradient_entries_bit_identical_to_init": {
+  "entries": [
+   "layers.23.mlp.up_proj.weight"
+  ],
+  "holds": true
+ },
+ "contents": {
+  "preregistration.json": "the settings, entries, measure, criteria and mutations, committed before this generator first ran",
+  "inputs.safetensors": "init.<entry> and grad.step<t>.<entry>, f32",
+  "golden.safetensors": "w/exp_avg/exp_avg_sq.step<t>.<entry>, f32, t = 1..steps",
+  "table.json": "per entry, read off the built optimizer: group, lr_scale, weight_decay, eps, betas, the steps it has a gradient on, torch's per-entry step count after the run, and whether tessl's default decay mask excludes it"
+ },
+ "files": {
+  "golden.safetensors": {
+   "bytes": 39624,
+   "sha256": "c797c9eecfb8ea912faa7146a71638b88ea2116e472a69168b80d5d656f53cb8"
+  },
+  "inputs.safetensors": {
+   "bytes": 14352,
+   "sha256": "e0bff4265359c271e452cda49d08ee0422fb3ac795ce2089faf49d39a57d28aa"
+  },
+  "preregistration.json": {
+   "bytes": 9880,
+   "sha256": "c037a462a0d4b6d1bc47946df8dfa63472cf488392c5ac076830e3d9a3c52a38"
+  },
+  "table.json": {
+   "bytes": 5924,
+   "sha256": "3e3830cec5d510f6aa3544a99698ecc535e0209f433f502dd87b4ff6591693e1"
+  }
+ }
+}
