@@ -185,7 +185,8 @@ fn a_wrong_gradient_is_an_error_and_the_slot_is_kept() {
     // is never reinterpreted.
     // An `Add` that is refused keeps the sum; a refused `Overwrite` empties
     // the slot instead (`qwen35_adapters_adversarial.rs`).
-    for mode in [BankMode::Add] {
+    {
+        let mode = BankMode::Add;
         let transposed = tensor(&good, &[IN, RANK], &b);
         let err = bank.accumulate(&backend, 0, mode, transposed).unwrap_err();
         assert!(

@@ -458,7 +458,7 @@ fn bad_shapes_dtypes_ranks_and_non_finite_inputs_are_refused_and_charge_nothing(
         run(&ints, &f(&a, &[R, INN]), &f(&b, &[OUT, R])),
         Err(LoraError::Mismatch(_))
     ));
-    let bf_a = Tensor::from_bf16_bits(&vec![0u16; R * INN], &[R, INN], &bud).unwrap();
+    let bf_a = Tensor::from_bf16_bits(&[0u16; R * INN], &[R, INN], &bud).unwrap();
     assert!(matches!(
         run(&wt, &bf_a, &f(&b, &[OUT, R])),
         Err(LoraError::Mismatch(_))
