@@ -2089,8 +2089,10 @@ impl Backend for MetalBackend {
             .iter()
             .map(|g| self.f32(OP, g))
             .collect::<Res<Vec<_>>>()?;
-        // tessl's sq_norm scratch: a 10-word slot per gradient, two words
-        // (sum, shift) per piece, and the six result words.
+        // tessl's sq_norm scratch, reserved before the worker builds the plan:
+        // a 10-word slot per gradient, the parts buffer (two words, sum and
+        // shift, per piece: `SqNormPlan::parts_words`, which the worker
+        // allocates by), and the six result words.
         let pieces = args.iter().map(|a| norm_chunks(a.n)).sum::<usize>();
         let _stats = self.reserve(OP, 10 * args.len() + 2 * pieces + SQ_OUT_WORDS)?;
         let norm = match self.link.call(Cmd::ClipNorm {

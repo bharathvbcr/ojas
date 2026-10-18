@@ -3040,7 +3040,7 @@ impl Worker {
             return Err(metal_err(format!("{OP}: no gradient values")));
         }
         let table = self.fresh_from(plan.table_words())?;
-        let part = self.fresh(2 * plan.pieces())?;
+        let part = self.fresh(plan.parts_words())?;
         let out = self.fresh(SQ_OUT_WORDS)?;
         plan.encode(
             &self.rt,

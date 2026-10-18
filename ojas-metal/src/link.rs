@@ -845,7 +845,8 @@ pub(crate) const SQ_PIECE: usize = 4096;
 pub(crate) const SQ_OUT_WORDS: usize = 6;
 
 /// Chunks `clip_grad_norm` cuts `n` gradient values into: tessl `sq_norm`'s
-/// pieces, two words each, and `ojas_scale_multi`'s threadgroups.
+/// pieces (two words each in its parts buffer, `SqNormPlan::parts_words`)
+/// and `ojas_scale_multi`'s threadgroups.
 pub(crate) fn norm_chunks(n: usize) -> usize {
     n.div_ceil(SQ_PIECE)
 }
