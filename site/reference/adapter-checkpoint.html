@@ -148,6 +148,15 @@
 <h1 id="adapter-checkpoint-layout-version-1">Adapter checkpoint, layout version 1 <a class="anchor" href="#adapter-checkpoint-layout-version-1" aria-label="Link to this section">#</a></h1>
 <p>The checkpoint of the Qwen3.5 Tape LoRA track: the trainable entries by name, their AdamW moments, and what a resume needs to continue the same run or refuse. Lappi&#39;s converter (ft-58e316a9) reads it by this contract.</p>
 <p>Writer and reader: <code>ojas-model/src/qwen35/adapters.rs</code> (<code>write_adapter_checkpoint</code>, <code>read_adapter_checkpoint</code>). Tests: <code>ojas-model/tests/qwen35_adapters.rs</code>. Where this page and the code disagree, the code wins and this page is the bug.</p>
+<h2 id="where-it-sits-in-a-training-checkpoint-fable-ruling-2026-10-18">Where it sits in a training checkpoint (Fable ruling, 2026-10-18) <a class="anchor" href="#where-it-sits-in-a-training-checkpoint-fable-ruling-2026-10-18" aria-label="Link to this section">#</a></h2>
+<p>A LoRA training run&#39;s checkpoint is the training loop&#39;s <code>ckpt-&lt;step&gt;/</code> directory (<code>ojas-train/src/lappi/trainer.rs</code>, format <code>qd-train-checkpoint-v2</code>). It has two parts:</p>
+<ul>
+<li><strong><code>provider/</code></strong> is this layout: the LoRA entries, their moments, the base identity, and the rank and alpha. The Qwen3.5 Tape <code>StepProvider</code> writes it.
+</li>
+<li><strong><code>trainer.json</code> and <code>host.f32</code></strong> are the loop&#39;s own part: the host entries D17 (<code>d17.delta</code>) and the span head (<code>span_head.*</code>), each with its value, both AdamW moments and its own AdamW step count (<code>host_entries[].adamw_steps</code>), plus the schedule step, seed, epoch and consumed digest. The loop&#39;s objective owns these entries. It computes their gradients and steps them on their own counts; the span head skips a step on a letter-only batch.
+</li>
+</ul>
+<p>So a checkpoint written by the Tape provider holds <strong>LoRA entries only</strong>. The host-entry names below stay valid for this layout (other writers may use them), but the training run&#39;s D17 and span head live in <code>host.f32</code>. Lappi&#39;s converter reads both parts. The loop passes <code>rng_state</code> and <code>consumed_digest</code> to the provider when it saves.</p>
 <p>This is not Checkpoint v1 (<code>docs/checkpoint-v1.md</code>, the nanolab trainer&#39;s format). It shares the file conventions of the nanolab checkpoint directory (safetensors, <code>adam_m.&lt;name&gt;</code> / <code>adam_v.&lt;name&gt;</code>) and its atomic replace.</p>
 <h2 id="directory">Directory <a class="anchor" href="#directory" aria-label="Link to this section">#</a></h2>
 <p>A checkpoint is a directory with exactly two files. It is written to a staging sibling and swapped in whole (<code>ojas_io::replace_dir_with_if</code>), so a reader sees the old directory or the new one. An existing target is replaced only if it is absent, empty, or an earlier adapter checkpoint (<code>.DS_Store</code> excepted); anything else is refused with nothing touched.</p>
@@ -210,6 +219,7 @@
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#where-it-sits-in-a-training-checkpoint-fable-ruling-2026-10-18">Where it sits in a training checkpoint (Fable ruling, 2026-10-18)</a></li>
 <li><a href="#directory">Directory</a></li>
 <li><a href="#entry-names">Entry names</a></li>
 <li><a href="#metadata">Metadata</a></li>

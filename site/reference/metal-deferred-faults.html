@@ -282,6 +282,8 @@
 <li><strong>Opt-in and Metal-only for now.</strong> A generic <code>Backend</code> hook belongs to the phase-B StepProvider (ft-b5e64557); wrapper forwarding of new trait methods is the open bug class ft-fe7dcee6.
 </li>
 </ul>
+<h3 id="32-the-freeze-hook-of-tapestepprovider">3.2 The freeze hook of <code>TapeStepProvider</code> <a class="anchor" href="#32-the-freeze-hook-of-tapestepprovider" aria-label="Link to this section">#</a></h3>
+<p>The phase-B provider (<code>ojas-model/src/qwen35/step_provider.rs</code>) takes the generic seam as <code>DeviceHooks</code> closures, not a <code>Backend</code> method, so a wrapper backend cannot drop it (ft-fe7dcee6). A Metal caller passes <code>freeze: |m, t| m.freeze_checked(t)</code> and <code>rebind: |m, b| m.with_budget(b)</code>. <code>open_lora</code> applies <code>freeze</code> to every frozen base tensor after the pinned load and then calls <code>Backend::sync</code>, so a faulting freeze scan (<code>NonFinite { &#34;freeze_checked&#34; }</code>, §3.1) is the refusal <code>open_lora</code> returns (<code>StepError::Backend</code>), never a later step&#39;s. A backend with no <code>freeze</code> hook (the CPU) skips both. <code>ojas-qwen35/tests/gpu_tape_provider.rs</code> runs the provider with both hooks on Metal.</p>
 <h2 id="4-batching-mechanics">4. Batching mechanics <a class="anchor" href="#4-batching-mechanics" aria-label="Link to this section">#</a></h2>
 <h3 id="41-recording-and-committing">4.1 Recording and committing <a class="anchor" href="#41-recording-and-committing" aria-label="Link to this section">#</a></h3>
 <p>Today each <code>Cmd</code> ends with <code>rt.synchronize()</code>, which is <code>commit(true)</code> in tessl (<code>tessl/src/runtime.rs:1788-1790</code>) (V). Under the contract a <code>Cmd</code> records its dispatches with tessl&#39;s async encode, already on (<code>device.rs</code>, <code>Worker::open</code>), and returns as soon as they are encoded. The device thread still runs one <code>Cmd</code> at a time, so recording order is channel order.</p>
@@ -833,6 +835,7 @@
 <li class="sub"><a href="#22-what-stays-synchronous-immediate-err-nothing-recorded">2.2 What stays synchronous (immediate Err, nothing recorded)</a></li>
 <li><a href="#3-outputs-of-a-faulted-op-and-the-in-place-ops">3. Outputs of a faulted op, and the in-place ops</a></li>
 <li class="sub"><a href="#31-freeze-checked-frozen-parameters-are-scanned-once">3.1 freeze_checked: frozen parameters are scanned once</a></li>
+<li class="sub"><a href="#32-the-freeze-hook-of-tapestepprovider">3.2 The freeze hook of TapeStepProvider</a></li>
 <li><a href="#4-batching-mechanics">4. Batching mechanics</a></li>
 <li class="sub"><a href="#41-recording-and-committing">4.1 Recording and committing</a></li>
 <li class="sub"><a href="#42-status-words-and-first-fault-naming">4.2 Status words and first-fault naming</a></li>
