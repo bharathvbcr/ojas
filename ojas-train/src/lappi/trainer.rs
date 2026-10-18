@@ -45,7 +45,8 @@ use super::run_control::{
 };
 use super::schedule::{LrSchedule, ScheduleError};
 use super::step::{
-    AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider,
+    AdamWHyper, BankMode, CheckpointContext, ParamSpec, RowTargets, SequenceJob, StepError,
+    StepProvider,
 };
 
 /// `run_control.MAX_GRAD_ACCUM`.
@@ -498,7 +499,14 @@ where
             cfg.optimizer.lr
         )));
     }
-    let entries = provider.parameters().to_vec();
+    // Frozen entries have no gradient, moments or step: the optimizer table, the per-entry
+    // vectors and the provider's bank are all the trainable subsequence.
+    let entries: Vec<ParamSpec> = provider
+        .parameters()
+        .iter()
+        .filter(|e| e.trainable)
+        .cloned()
+        .collect();
     let host_entries = objective
         .host_ref()
         .map(|h| h.entries())
@@ -582,7 +590,15 @@ where
                 "the checkpoint's host parameters describe a different head".into(),
             ));
         }
-        provider.load_state(&r.dir.join("provider"))?;
+        provider.load_state_with(
+            &r.dir.join("provider"),
+            &CheckpointContext {
+                optimizer_step: r.optimizer_step,
+                seed: r.seed,
+                epoch: r.epoch,
+                consumed_digest: r.consumed_digest.clone(),
+            },
+        )?;
         if provider.step_count() != r.optimizer_step {
             return Err(TrainError::Refused(format!(
                 "the provider's restored step count is {} but the checkpoint is at step {}",
@@ -1141,7 +1157,7 @@ where
     }
 }
 
-/// sha256 over every parameter's f32 bytes (provider entries, then host entries, each with its
+/// sha256 over every trainable parameter's f32 bytes (provider entries, then host entries, each with its
 /// name and shape), the identity of a trained model for a repeat-run comparison.
 pub fn parameters_digest<P: StepProvider>(
     provider: &mut P,
@@ -1149,10 +1165,15 @@ pub fn parameters_digest<P: StepProvider>(
 ) -> Result<String, TrainError> {
     let mut h = Sha256::new();
     let values = provider.read_parameters()?;
-    let entries = provider.parameters().to_vec();
+    let entries: Vec<ParamSpec> = provider
+        .parameters()
+        .iter()
+        .filter(|e| e.trainable)
+        .cloned()
+        .collect();
     if values.len() != entries.len() {
         return Err(TrainError::Refused(
-            "the provider read a different number of tensors than it lists".into(),
+            "the provider read a different number of tensors than it lists as trainable".into(),
         ));
     }
     let mut feed = |e: &ParamSpec, v: &[f32]| {
@@ -1245,7 +1266,15 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     fs::create_dir(&staging).map_err(|e| io(&staging, e))?;
     let provider_dir = staging.join("provider");
     fs::create_dir(&provider_dir).map_err(|e| io(&provider_dir, e))?;
-    let written = provider.save_state(&provider_dir)?;
+    let written = provider.save_state_with(
+        &provider_dir,
+        &CheckpointContext {
+            optimizer_step: body.optimizer_step,
+            seed: body.seed,
+            epoch: body.epoch,
+            consumed_digest: body.consumed.hexdigest(),
+        },
+    )?;
     let mut provider_files = Vec::new();
     for path in &written {
         let bytes = fs::read(path).map_err(|e| io(path, e))?;

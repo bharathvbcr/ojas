@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use super::adamw::{Moments, adamw_update};
 use super::step::{
     AdamWHyper, BankMode, HiddenGrad, ParamSpec, SequenceJob, StepError, StepProvider,
-    check_per_entry, refuse_lr_scale,
+    StorageDtype, check_per_entry, refuse_lr_scale,
 };
 
 /// The toy model.
@@ -32,8 +32,13 @@ pub struct ToyProvider {
     vocab: usize,
     hidden: usize,
     layers: usize,
+    /// Every entry, frozen ones included ([`ToyProvider::with_frozen_entry`]).
     specs: Vec<ParamSpec>,
+    /// The trainable entries' values, in `specs` order with the frozen ones skipped. `grads`
+    /// and `moments` are indexed alike.
     values: Vec<Vec<f32>>,
+    /// The frozen entries' values, in `specs` order. No forward reads them, no step moves them.
+    frozen_values: Vec<Vec<f32>>,
     grads: Vec<Vec<f32>>,
     moments: Vec<Moments>,
     step: u64,
@@ -115,11 +120,44 @@ impl ToyProvider {
             layers,
             specs,
             values,
+            frozen_values: Vec::new(),
             grads,
             moments,
             step: 0,
             lr_scale_supported: true,
         })
+    }
+
+    /// The same model with one more, frozen, entry listed right after the embedding. It is in
+    /// [`StepProvider::parameters`] but not in the bank, the moments, the per-entry vectors or
+    /// [`StepProvider::read_parameters`], and the forward never reads it, so training matches
+    /// the model without it.
+    pub fn with_frozen_entry(
+        mut self,
+        name: &str,
+        shape: &[usize],
+        storage: StorageDtype,
+    ) -> Result<Self, StepError> {
+        let spec = ParamSpec::frozen(name, shape, storage);
+        let n = spec.numel()?;
+        self.frozen_values
+            .push((0..n).map(|k| 0.25 + k as f32 * 0.5).collect());
+        self.specs.insert(1, spec);
+        Ok(self)
+    }
+
+    /// The frozen entries' values, in [`StepProvider::parameters`] order.
+    pub fn frozen_values(&self) -> &[Vec<f32>] {
+        &self.frozen_values
+    }
+
+    fn trainable_specs(&self) -> impl Iterator<Item = &ParamSpec> {
+        self.specs.iter().filter(|s| s.trainable)
+    }
+
+    /// The norm's index in `values`: the entry after the embedding and the layers.
+    fn norm_index(&self) -> usize {
+        self.layers + 1
     }
 
     /// The same model, refusing any per-entry learning rate other than 1.0, as tessl does
@@ -152,7 +190,7 @@ impl ToyProvider {
     }
 
     fn norm(&self) -> &[f32] {
-        &self.values[self.specs.len() - 1]
+        &self.values[self.norm_index()]
     }
 
     /// The final hidden state `x` at every position, and every layer's input and activation.
@@ -304,7 +342,7 @@ impl StepProvider for ToyProvider {
             }
         }
         // Back through the norm, the layers and the gather.
-        let last = self.specs.len() - 1;
+        let last = self.norm_index();
         let n = self.norm().to_vec();
         let mut dh_l: Vec<Vec<f32>> = Vec::with_capacity(t);
         for p in 0..t {
@@ -374,7 +412,7 @@ impl StepProvider for ToyProvider {
         weight_decay: &[f64],
     ) -> Result<(), StepError> {
         hyper.validate()?;
-        check_per_entry(self.specs.len(), lr_scale, weight_decay)?;
+        check_per_entry(self.values.len(), lr_scale, weight_decay)?;
         if !self.lr_scale_supported {
             refuse_lr_scale(lr_scale, "this toy provider (built without_lr_scale)")?;
         }
@@ -384,7 +422,7 @@ impl StepProvider for ToyProvider {
                 self.step
             )));
         }
-        for i in 0..self.specs.len() {
+        for i in 0..self.values.len() {
             let lr = hyper.lr * lr_scale[i];
             adamw_update(
                 &mut self.values[i],
@@ -422,7 +460,12 @@ impl StepProvider for ToyProvider {
         let path = dir.join("toy-state.f32");
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.step.to_le_bytes());
-        for ((v, m), s) in self.values.iter().zip(&self.moments).zip(&self.specs) {
+        for ((v, m), s) in self
+            .values
+            .iter()
+            .zip(&self.moments)
+            .zip(self.trainable_specs())
+        {
             bytes.extend_from_slice(&(s.numel()? as u64).to_le_bytes());
             for x in v.iter().chain(&m.m).chain(&m.v) {
                 bytes.extend_from_slice(&x.to_le_bytes());
@@ -455,7 +498,7 @@ impl StepProvider for ToyProvider {
         let step = take8(&mut at)?;
         let mut values = Vec::new();
         let mut moments = Vec::new();
-        for s in &self.specs {
+        for s in self.trainable_specs() {
             let n = s.numel()?;
             if take8(&mut at)? != n as u64 {
                 return Err(bad());

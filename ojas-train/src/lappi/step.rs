@@ -45,17 +45,48 @@ use std::path::{Path, PathBuf};
 /// One parameter-table entry: its name and its shape, as the model's reference implementation
 /// (transformers, for Qwen3.5) names and shapes it. Values read through
 /// [`StepProvider::read_parameters`] are row-major in exactly this shape.
+///
+/// An entry is trainable or frozen. A frozen entry (a quantized or bf16 base weight a LoRA
+/// adapter rides on) is listed so the table is complete, but it has no gradient, no moments and
+/// no AdamW step: every per-entry vector, [`StepProvider::grad_sq_norm`],
+/// [`StepProvider::read_parameters`] and [`super::trainer::parameters_digest`] cover the
+/// trainable subsequence only, in [`StepProvider::parameters`] order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamSpec {
     pub name: String,
     pub shape: Vec<usize>,
+    /// Whether the optimizer updates this entry.
+    pub trainable: bool,
+    /// How the provider stores the entry's values. Values read back are f32 regardless.
+    pub storage: StorageDtype,
+}
+
+/// How a provider stores an entry's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StorageDtype {
+    F32,
+    Bf16,
 }
 
 impl ParamSpec {
+    /// A trainable f32 entry.
     pub fn new(name: impl Into<String>, shape: &[usize]) -> Self {
         Self {
             name: name.into(),
             shape: shape.to_vec(),
+            trainable: true,
+            storage: StorageDtype::F32,
+        }
+    }
+
+    /// A frozen entry stored as `storage`.
+    pub fn frozen(name: impl Into<String>, shape: &[usize], storage: StorageDtype) -> Self {
+        Self {
+            name: name.into(),
+            shape: shape.to_vec(),
+            trainable: false,
+            storage,
         }
     }
 
@@ -71,6 +102,22 @@ impl ParamSpec {
                 ))
             })
     }
+}
+
+/// What the loop knows about a checkpoint when it saves or resumes one, for a provider whose
+/// own state must agree with it (a LoRA provider that records the step its adapters were taken
+/// at). The Objective's host entries (D17, the span head) are not here: the loop checkpoints
+/// them itself, and the provider's checkpoint holds the provider's entries only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckpointContext {
+    /// Optimizer steps taken when the checkpoint was cut.
+    pub optimizer_step: u64,
+    /// The run's seed (the batch order is a function of it).
+    pub seed: u64,
+    /// The epoch the checkpoint is in.
+    pub epoch: u64,
+    /// The consumed-batch digest at the checkpoint, lowercase hex.
+    pub consumed_digest: String,
 }
 
 /// Whether a sequence's gradients replace the bank or add to it.
@@ -218,8 +265,10 @@ impl std::error::Error for StepError {}
 /// A model a training loop can drive one sequence at a time. See the module docs for the
 /// contract every method is held to.
 pub trait StepProvider {
-    /// Every trainable parameter, in the provider's fixed order. `lr_scale` and
-    /// `weight_decay` vectors are indexed by this order.
+    /// Every parameter-table entry, in the provider's fixed order, frozen ones included
+    /// ([`ParamSpec::trainable`]). The `lr_scale` and `weight_decay` vectors, the gradient bank
+    /// and [`StepProvider::read_parameters`] are indexed by the TRAINABLE subsequence of this
+    /// order. A provider whose entries are all trainable sees no difference.
     fn parameters(&self) -> &[ParamSpec];
 
     /// Width of the hidden state [`HiddenGrad`] blocks carry.
@@ -262,8 +311,8 @@ pub trait StepProvider {
     /// Optimizer steps taken so far (torch's `state["step"]`).
     fn step_count(&self) -> u64;
 
-    /// Every parameter's current value, f32, row-major in its [`ParamSpec::shape`], in
-    /// [`StepProvider::parameters`] order.
+    /// Every trainable parameter's current value, f32, row-major in its [`ParamSpec::shape`], in
+    /// [`StepProvider::parameters`] order (frozen entries skipped).
     fn read_parameters(&mut self) -> Result<Vec<Vec<f32>>, StepError>;
 
     /// A short description of what runs (backend, kernels, operand precision), for the ledger.
@@ -276,6 +325,26 @@ pub trait StepProvider {
 
     /// Restore what [`StepProvider::save_state`] wrote.
     fn load_state(&mut self, dir: &Path) -> Result<(), StepError>;
+
+    /// [`StepProvider::save_state`] with the loop's checkpoint context. The loop calls this
+    /// form; a provider that does not need the context keeps the default.
+    fn save_state_with(
+        &mut self,
+        dir: &Path,
+        _context: &CheckpointContext,
+    ) -> Result<Vec<PathBuf>, StepError> {
+        self.save_state(dir)
+    }
+
+    /// [`StepProvider::load_state`] with the loop's checkpoint context (the resumed
+    /// checkpoint's). The loop calls this form.
+    fn load_state_with(
+        &mut self,
+        dir: &Path,
+        _context: &CheckpointContext,
+    ) -> Result<(), StepError> {
+        self.load_state(dir)
+    }
 }
 
 /// `lr_scale` and `weight_decay` fit `n` entries and hold finite values in range. A shared
