@@ -48,6 +48,26 @@
 //!   arm is a process: interleave the arms across processes and take the
 //!   minimum `min_step_ms` per arm (ft-2bbced18's A/B).
 //!
+//! - `tape-provider`: the fine-tune loop's step through `TapeStepProvider`
+//!   (`ojas-model/src/qwen35/step_provider.rs`) on `MetalBackend` under the same
+//!   28 GiB budget: the base loaded pinned to its sha256 (bf16 linears and
+//!   table), rank 16 / alpha 16 adapters on the ten `LoraKind` linears,
+//!   `DeviceHooks { freeze: freeze_checked, rebind: with_budget }`, a passing
+//!   `preflight`, then one warmup step and three timed steps of
+//!   `accumulate` (one sequence at the widest bucket, every position a scored
+//!   row at scale 1/rows, so the loss is the mean cross-entropy) plus
+//!   `adamw_step`. `QWEN35_MEM_CKPT` is `on` (default) or `off`; run each in
+//!   its own process, since the device peaks are process-wide. The row has
+//!   `tape-lora`'s step fields (`first_step_ms`, `first_step_peak_bytes`,
+//!   `step1_ms`..`step3_ms`, `mean_step_ms`, `min_step_ms`, `tokens_per_s` as
+//!   the mean of the three after the warmup, `step_peak_bytes` the exact
+//!   device peak since the pre-flight, `end_allocated_bytes`, the host
+//!   `phys_footprint` figures) and adds `open_ms` (pinned load, freeze and
+//!   upload) and the pre-flight's `preflight_ms` and `preflight_peak_bytes`. The
+//!   pre-flight's calibration is nominal (resident bytes plus 1 GiB per half
+//!   width), so its gate is the real dry run under the 28 GiB cap, not the
+//!   estimate (`preflight_estimate_nominal_bytes`).
+//!
 //! Every position is scored (the causal loss as letter rows), micro-batch 1.
 //! The snapshot is `QWEN35_MEM_SNAPSHOT`, or the one snapshot of
 //! `Qwen/Qwen3.5-2B-Base` in the Hugging Face cache. The row is one line
@@ -69,10 +89,18 @@ use ojas_model::qwen35::{
 
 use ojas_autograd::{Tape, Var};
 use ojas_core::{Backend, Budget, DType, Tensor};
+use ojas_io::sha256::open_sha256_hex;
 use ojas_io::SafeTensors;
 use ojas_metal::MetalBackend;
-use ojas_model::qwen35::{bind, forward_loss, load_hf, Qwen35Tables};
+use ojas_model::preflight::{Calibration, Point};
+use ojas_model::qwen35::adapters::BaseIdentity;
+use ojas_model::qwen35::{
+    bind, forward_loss, load_hf, DeviceHooks, LoraInit, OpenConfig, Qwen35Tables,
+    TapeStepProvider,
+};
 use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};
+use ojas_train::lappi::step as lstep;
+use ojas_train::lappi::step::StepProvider as _;
 use ojas_qwen35::{
     AdamWHyper, GroupSpec, LrRule, Numerics, OptimizerPlan, Precision, Qwen35Step, Select,
     Sequence, Snapshot, WdRule,
@@ -142,6 +170,7 @@ fn gpu_memory_row() {
                 ..StepVariant::default()
             },
         ),
+        "tape-provider" => tape_provider(&snap, &ids, row),
         other => panic!("unknown QWEN35_MEM_ARM {other}"),
     };
     row.num("wall_ms", started.elapsed().as_millis() as u64);
@@ -826,6 +855,225 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
     r.num("end_footprint_bytes", fp.now);
     r.num("footprint_max_bytes", fp.lifetime_max);
     drop(trainer);
+    r
+}
+
+/// The base's file name and sha256 for `TapeStepProvider`'s pinned load: a
+/// Hugging Face cache blob is named by its sha256, so a link to one is read
+/// (one `read_link`, not a hash of 4.5 GB); any other file is hashed.
+/// `load_hf_pinned` checks the claim against the file's bytes either way.
+fn provider_base_identity(path: &std::path::Path) -> BaseIdentity {
+    let blob = std::fs::read_link(path).ok().and_then(|l| {
+        l.file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| n.len() == 64 && n.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+            .map(str::to_string)
+    });
+    let sha256 = blob.unwrap_or_else(|| open_sha256_hex(path).unwrap().1);
+    BaseIdentity {
+        file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+        sha256,
+        quantizer: None,
+    }
+}
+
+/// One `tape-provider` step: `accumulate` of one sequence of `n` tokens with
+/// every position a row at scale `1/n`, then `adamw_step`. The mean
+/// cross-entropy and the wall in milliseconds, or the phase that refused.
+fn provider_step(
+    p: &mut TapeStepProvider<MetalBackend>,
+    ids: &[u32],
+    n: usize,
+    entries: usize,
+) -> Result<(f64, f64), (&'static str, String)> {
+    let started = Instant::now();
+    let positions: Vec<u32> = (0..n as u32).collect();
+    let job = lstep::SequenceJob {
+        tokens: &ids[..n],
+        rows: lstep::RowTargets {
+            positions: &positions,
+            targets: &ids[1..],
+            scale: 1.0 / n as f32,
+        },
+        hidden_at: &[],
+    };
+    let sum = p
+        .accumulate(&job, lstep::BankMode::Overwrite, None)
+        .map_err(|e| ("accumulate", format!("{e:?}")))?;
+    let hyper = lstep::AdamWHyper {
+        lr: LORA_LR,
+        beta1: 0.9,
+        beta2: 0.999,
+        eps: 1e-8,
+        grad_scale: 1.0,
+    };
+    let next = p.step_count() + 1;
+    p.adamw_step(&hyper, next, &vec![1.0; entries], &vec![0.0; entries])
+        .map_err(|e| ("adamw_step", format!("{e:?}")))?;
+    Ok((sum / n as f64, ms(started.elapsed())))
+}
+
+/// The `tape-provider` arm: see the file's header.
+fn tape_provider(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
+    let cfg = snap.config.clone();
+    let spec = cfg.tape_spec();
+    let n = ids.len() - 1;
+    let checkpoint = match std::env::var("QWEN35_MEM_CKPT").as_deref() {
+        Ok("on") | Err(std::env::VarError::NotPresent) => ActivationCheckpoint::Blocks,
+        Ok("off") => ActivationCheckpoint::Off,
+        other => panic!("QWEN35_MEM_CKPT is on or off, got {other:?}"),
+    };
+    r.text(
+        "checkpointing",
+        if checkpoint == ActivationCheckpoint::Blocks {
+            "on"
+        } else {
+            "off"
+        },
+    );
+    r.num("positions", n as u64);
+    r.num("lora_rank", LORA_RANK as u64);
+    r.num("device_budget_bytes", LORA_DEVICE_BUDGET);
+    if n < 2 {
+        refused(r, "tokens", format!("{n} positions: the calibration needs two widths"));
+    }
+    let m = match MetalBackend::new(Budget::new(LORA_DEVICE_BUDGET)) {
+        Ok(m) => m,
+        Err(e) => refused(r, "MetalBackend::new", e),
+    };
+    let host_budget = Budget::new(24 * GIB);
+    let config = LoraConfig::new(LORA_RANK, LORA_ALPHA, 0.0).unwrap();
+    let weights = single_weights_file(&snap.weights_path);
+    let (targets, adapters) = {
+        let file = SafeTensors::open(&weights).unwrap();
+        let targets = match lora_targets(&spec, &file, &cfg.tower_prefix, &LORA_KINDS) {
+            Ok(t) => t,
+            Err(e) => refused(r, "lora_targets", e),
+        };
+        let adapters = match Qwen35Lora::init(&spec, &targets, &config, LORA_SEED, &host_budget) {
+            Ok(a) => a,
+            Err(e) => refused(r, "lora init", e),
+        };
+        (targets, adapters)
+    };
+    r.num("adapter_sites", targets.len() as u64);
+    let open_cfg = OpenConfig {
+        spec,
+        prefix: cfg.tower_prefix.clone(),
+        base_id: provider_base_identity(&weights),
+        base_path: weights,
+        linears: DType::Bf16,
+        table: DType::Bf16,
+        widest: n,
+        chunk: DEFAULT_CE_CHUNK,
+        activations: checkpoint,
+    };
+    let hooks = DeviceHooks {
+        freeze: Some(Box::new(|b: &MetalBackend, t: &Tensor| b.freeze_checked(t))),
+        rebind: Some(Box::new(|b: &MetalBackend, budget: Budget| {
+            b.with_budget(budget)
+        })),
+    };
+    let opened = Instant::now();
+    let mut p = match TapeStepProvider::open_lora(
+        m.clone(),
+        hooks,
+        open_cfg,
+        LoraInit {
+            config,
+            targets,
+            adapters,
+        },
+    ) {
+        Ok(p) => p,
+        Err(e) => refused(r, "open_lora", e),
+    };
+    if let Err(e) = m.sync() {
+        refused(r, "sync open", e);
+    }
+    r.real("open_ms", ms(opened.elapsed()));
+    let resident = m.memory_and_reset_peak().unwrap();
+    r.num("resident_bytes", resident.allocated);
+    r.num("budget_resident_bytes", m.budget().live_bytes().unwrap());
+    r.num("working_set_bytes", resident.recommended_working_set);
+    let fp = footprint_or_refuse(&r);
+    r.num("resident_footprint_bytes", fp.now);
+    r.num("resident_footprint_max_bytes", fp.lifetime_max);
+    r.phase("resident");
+
+    let calibration = match Calibration::from_points(
+        "tape-provider nominal",
+        resident.allocated,
+        &[
+            Point {
+                tokens: (n / 2) as u64,
+                peak_bytes: resident.allocated + GIB,
+            },
+            Point {
+                tokens: n as u64,
+                peak_bytes: resident.allocated + 2 * GIB,
+            },
+        ],
+    ) {
+        Ok(c) => c,
+        Err(e) => refused(r, "calibration", e),
+    };
+    let pre = Instant::now();
+    let plan = match p.preflight(&calibration, n, &[n as u64], LORA_DEVICE_BUDGET, 0) {
+        Ok(plan) => plan,
+        Err(e) => refused(r, "preflight", e),
+    };
+    r.real("preflight_ms", ms(pre.elapsed()));
+    r.num("preflight_estimate_nominal_bytes", plan.estimated_bytes);
+    r.num(
+        "preflight_peak_bytes",
+        m.memory_and_reset_peak().unwrap().peak_allocated,
+    );
+    r.phase("preflight");
+
+    let entries = p.parameters().iter().filter(|s| s.trainable).count();
+    r.num("trainable_entries", entries as u64);
+    // The first step is the warmup: its wall includes shader compilation and
+    // first-use allocation, which is what a run's first step costs.
+    let (first_loss, first_ms) = match provider_step(&mut p, ids, n, entries) {
+        Ok(v) => v,
+        Err((phase, e)) => refused(r, phase, e),
+    };
+    let first = m.memory().unwrap();
+    r.real("first_step_ms", first_ms);
+    r.num("first_step_peak_bytes", first.peak_allocated);
+    r.text("first_step_loss", &format!("{first_loss:.6}"));
+    let fp = footprint_or_refuse(&r);
+    r.num("first_step_footprint_max_bytes", fp.lifetime_max);
+    r.phase("first step");
+    let mut walls = Vec::with_capacity(TIMED_STEPS);
+    let mut last_loss = first_loss;
+    for _ in 0..TIMED_STEPS {
+        let (loss, wall) = match provider_step(&mut p, ids, n, entries) {
+            Ok(v) => v,
+            Err((phase, e)) => refused(r, phase, e),
+        };
+        walls.push(wall);
+        last_loss = loss;
+    }
+    let end = m.memory().unwrap();
+    let mean_ms = walls.iter().sum::<f64>() / walls.len() as f64;
+    for (k, w) in ["step1_ms", "step2_ms", "step3_ms"].into_iter().zip(&walls) {
+        r.real(k, *w);
+    }
+    r.real("mean_step_ms", mean_ms);
+    r.real(
+        "min_step_ms",
+        walls.iter().copied().fold(f64::INFINITY, f64::min),
+    );
+    r.real("tokens_per_s", n as f64 / (mean_ms / 1e3));
+    r.num("step_peak_bytes", end.peak_allocated);
+    r.num("end_allocated_bytes", end.allocated);
+    r.text("last_loss", &format!("{last_loss:.6}"));
+    let fp = footprint_or_refuse(&r);
+    r.num("end_footprint_bytes", fp.now);
+    r.num("footprint_max_bytes", fp.lifetime_max);
+    drop(p);
     r
 }
 

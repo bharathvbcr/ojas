@@ -25,3 +25,9 @@ ojas-model = { path = "../ojas-model" }
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 ojas-autograd = { path = "../ojas-autograd" }
 ojas-metal = { path = "../ojas-metal" }
+# The Tape step provider's tests and memory row (`gpu_tape_provider.rs`,
+# `gpu_memory_rows.rs`): the `StepProvider` contract and the CPU backend the
+# Metal run is compared with. Both are workspace crates `ojas-model` already
+# depends on.
+ojas-train = { path = "../ojas-train" }
+ojas-cpu = { path = "../ojas-cpu" }
