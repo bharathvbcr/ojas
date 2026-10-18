@@ -626,9 +626,121 @@ impl JsonValue {
     }
 }
 
+impl From<bool> for JsonValue {
+    fn from(b: bool) -> Self {
+        JsonValue::Bool(b)
+    }
+}
+
+impl From<i64> for JsonValue {
+    /// The form the parser reads the same literal as: `U64` when `>= 0`.
+    fn from(n: i64) -> Self {
+        match u64::try_from(n) {
+            Ok(u) => JsonValue::Number(JsonNumber::U64(u)),
+            Err(_) => JsonValue::Number(JsonNumber::I64(n)),
+        }
+    }
+}
+
+static NULL: JsonValue = JsonValue::Null;
+
+/// `value["key"]`: the member, or `null` for a missing key or a value that
+/// is not an object, so a chain of lookups in a fixture fails at the typed
+/// accessor that finally reads it. Readers of untrusted input use
+/// [`JsonValue::field`], which names the key it did not find.
+impl std::ops::Index<&str> for JsonValue {
+    type Output = JsonValue;
+
+    fn index(&self, key: &str) -> &JsonValue {
+        match self {
+            JsonValue::Object(o) => o.iter().find(|(k, _)| k == key).map_or(&NULL, |(_, v)| v),
+            _ => &NULL,
+        }
+    }
+}
+
+/// `value[i]`: the element, or `null` past the end or on a non-array.
+impl std::ops::Index<usize> for JsonValue {
+    type Output = JsonValue;
+
+    fn index(&self, i: usize) -> &JsonValue {
+        match self {
+            JsonValue::Array(a) => a.get(i).unwrap_or(&NULL),
+            _ => &NULL,
+        }
+    }
+}
+
+impl From<u32> for JsonValue {
+    fn from(n: u32) -> Self {
+        JsonValue::Number(JsonNumber::U64(u64::from(n)))
+    }
+}
+
+impl From<u64> for JsonValue {
+    fn from(n: u64) -> Self {
+        JsonValue::Number(JsonNumber::U64(n))
+    }
+}
+
+impl From<usize> for JsonValue {
+    fn from(n: usize) -> Self {
+        JsonValue::Number(JsonNumber::U64(n as u64))
+    }
+}
+
+impl From<&str> for JsonValue {
+    fn from(s: &str) -> Self {
+        JsonValue::String(s.to_owned())
+    }
+}
+
+impl From<String> for JsonValue {
+    fn from(s: String) -> Self {
+        JsonValue::String(s)
+    }
+}
+
+impl<T: Into<JsonValue>> From<Vec<T>> for JsonValue {
+    fn from(items: Vec<T>) -> Self {
+        JsonValue::Array(items.into_iter().map(Into::into).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_impls_build_the_values_the_parser_reads() {
+        assert_eq!(JsonValue::from(true), JsonValue::Bool(true));
+        assert_eq!(parse_json("7").unwrap(), JsonValue::from(7u32));
+        assert_eq!(parse_json("7").unwrap(), JsonValue::from(7u64));
+        assert_eq!(parse_json("7").unwrap(), JsonValue::from(7usize));
+        assert_eq!(parse_json("\"é\"").unwrap(), JsonValue::from("é"));
+        assert_eq!(parse_json("\"é\"").unwrap(), JsonValue::from(String::from("é")));
+        assert_eq!(
+            parse_json("[1,2,3]").unwrap(),
+            JsonValue::from(vec![1usize, 2, 3])
+        );
+        assert_eq!(parse_json("[]").unwrap(), JsonValue::from(Vec::<u64>::new()));
+    }
+
+    #[test]
+    fn index_reads_members_and_elements_and_answers_null_on_a_miss() {
+        let v = parse_json(r#"{"a":[10,{"b":true}],"n":-3}"#).unwrap();
+        assert_eq!(v["a"][0], u(10));
+        assert_eq!(v["a"][1]["b"], JsonValue::Bool(true));
+        assert_eq!(v["n"], i(-3));
+        assert!(v["missing"].is_null());
+        assert!(v["a"][2].is_null());
+        assert!(v["a"]["b"].is_null(), "a key on an array");
+        assert!(v["n"][0].is_null(), "an index on a number");
+        assert!(v["missing"]["deeper"][3].is_null());
+        assert_eq!(JsonValue::from(-3i64), i(-3));
+        assert_eq!(JsonValue::from(3i64), u(3));
+        assert_eq!(parse_json("-3").unwrap(), JsonValue::from(-3i64));
+    }
 
     fn parse(text: &str) -> Result<JsonValue, String> {
         parse_json(text).map_err(|e| e.detail().to_string())

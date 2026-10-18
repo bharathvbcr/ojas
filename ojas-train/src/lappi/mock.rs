@@ -2,7 +2,7 @@
 //!
 //! It is a real [`StepProvider`], not a stub: a forward, an analytic backward that
 //! `tests/trainer_loop.rs` checks against central differences, AdamW through
-//! [`crate::adamw::adamw_update`], and a checkpoint that resumes bit for bit. What it does not
+//! [`super::adamw::adamw_update`], and a checkpoint that resumes bit for bit. What it does not
 //! do is resemble Qwen3.5 beyond the parts the contract touches:
 //!
 //! ```text
@@ -21,8 +21,8 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use crate::adamw::{Moments, adamw_update};
-use crate::step::{
+use super::adamw::{Moments, adamw_update};
+use super::step::{
     AdamWHyper, BankMode, HiddenGrad, ParamSpec, SequenceJob, StepError, StepProvider,
     check_per_entry, refuse_lr_scale,
 };

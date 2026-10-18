@@ -26,23 +26,32 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use qd_export::safetensors::{Dtype, SafeTensorsFile};
-use qd_train::adamw::{EntryState, adamw_entry_step};
-use qd_train::recipe::{self, EntryHyper, LowerLayers, OptimizerRecipe, optimizer_table};
-use qd_train::step::ParamSpec;
-use serde_json::Value;
+use ojas_io::SafeTensors;
+use ojas_io::json::{JsonValue as Value, parse_json};
+use ojas_train::lappi::adamw::{EntryState, adamw_entry_step};
+use ojas_train::lappi::recipe::{self, EntryHyper, LowerLayers, OptimizerRecipe, optimizer_table};
+use ojas_train::lappi::step::ParamSpec;
 
 const HEAD_PREFIX: &str = "span_head.";
 
 fn dir() -> PathBuf {
-    common::crate_dir().join("tests/fixtures/adamw-decay-sensitive")
+    common::crate_dir().join("tests/lappi/fixtures/adamw-decay-sensitive")
 }
 
 fn json(path: &Path) -> Value {
-    serde_json::from_str(
+    parse_json(
         &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
     )
     .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// An object's members by key, so an assertion does not depend on the file's key order.
+fn members(v: &Value) -> BTreeMap<&str, &Value> {
+    v.as_object()
+        .expect("an object")
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect()
 }
 
 /// The manifest, after every file it pins has been checked against its pin (sha256 and byte
@@ -51,7 +60,7 @@ fn json(path: &Path) -> Value {
 fn pinned_manifest() -> Value {
     let dir = common::pins::verified(&dir(), common::pins::Form::JsonFiles);
     let m = json(&dir.join(common::pins::MANIFEST_JSON));
-    let files = m["files"].as_object().expect("manifest.files");
+    let files = members(&m["files"]);
     let want = [
         "golden.safetensors",
         "inputs.safetensors",
@@ -59,7 +68,7 @@ fn pinned_manifest() -> Value {
         "table.json",
     ];
     assert_eq!(
-        files.keys().map(String::as_str).collect::<Vec<_>>(),
+        files.keys().copied().collect::<Vec<_>>(),
         want,
         "the manifest pins exactly these files"
     );
@@ -72,22 +81,13 @@ fn pinned_manifest() -> Value {
 
 /// Every tensor of a safetensors file, f32 only (the golden's dtype for inputs and outputs).
 fn tensors(path: &Path) -> BTreeMap<String, Vec<f32>> {
-    let file = SafeTensorsFile::open(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    file.tensors()
-        .iter()
-        .map(|(name, info)| {
-            assert_eq!(info.dtype, Dtype::F32, "{name}");
-            let n: usize = info.shape.iter().product();
-            let mut b = vec![0u8; n * 4];
-            file.read_tensor_range(info, 0, &mut b).unwrap();
-            (
-                name.clone(),
-                b.as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|c| f32::from_le_bytes(*c))
-                    .collect(),
-            )
+    let file = SafeTensors::open(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    file.names()
+        .map(|name| {
+            let (_, values) = file
+                .read_f32(name)
+                .unwrap_or_else(|e| panic!("{}: {name}: {e}", path.display()));
+            (name.to_owned(), values)
         })
         .collect()
 }
@@ -138,16 +138,19 @@ fn load() -> Golden {
             lr_scale: 0.1,
         }),
     };
-    assert_eq!(o["lr"].as_f64(), Some(recipe.lr));
-    assert_eq!(pre["settings"]["lr"].as_f64(), Some(recipe.lr));
-    assert_eq!(o["lower_layers_n"].as_u64(), Some(8));
-    assert_eq!(o["lower_lr_scale"].as_f64(), Some(0.1));
-    assert_eq!(o["beta2"].as_f64(), Some(recipe.beta2));
-    assert_eq!(o["class"], "qd_train.optim.MasterWeightAdamW");
+    assert_eq!(o["lr"].as_f64().ok(), Some(recipe.lr));
+    assert_eq!(pre["settings"]["lr"].as_f64().ok(), Some(recipe.lr));
+    assert_eq!(o["lower_layers_n"].as_u64().ok(), Some(8));
+    assert_eq!(o["lower_lr_scale"].as_f64().ok(), Some(0.1));
+    assert_eq!(o["beta2"].as_f64().ok(), Some(recipe.beta2));
+    assert_eq!(
+        o["class"].as_str().ok(),
+        Some("qd_train.optim.MasterWeightAdamW")
+    );
     let steps = o["steps"].as_u64().unwrap();
-    assert_eq!(pre["settings"]["steps"].as_u64(), Some(steps));
+    assert_eq!(pre["settings"]["steps"].as_u64().ok(), Some(steps));
     let bound = m["measure"]["bound"].as_f64().unwrap();
-    assert_eq!(pre["measure"]["bound"].as_f64(), Some(bound));
+    assert_eq!(pre["measure"]["bound"].as_f64().ok(), Some(bound));
     Golden {
         entries,
         lr: recipe.lr,
@@ -278,14 +281,14 @@ fn run(g: &Golden, table: &BTreeMap<String, EntryHyper>) -> Outcome {
 fn the_trainers_table_is_fs_builders_on_the_goldens_entries() {
     let g = load();
     let table = trainer_table(&g);
-    let want = g.table.as_object().unwrap();
+    let want = members(&g.table);
     assert_eq!(
-        table.keys().collect::<Vec<_>>(),
-        want.keys().collect::<Vec<_>>(),
+        table.keys().map(String::as_str).collect::<Vec<_>>(),
+        want.keys().copied().collect::<Vec<_>>(),
         "the same 19 names"
     );
     for (name, row) in &table {
-        let w = &want[name];
+        let w = want[name.as_str()];
         let got = [
             row.lr_scale,
             row.weight_decay,
@@ -308,10 +311,10 @@ fn the_trainers_table_is_fs_builders_on_the_goldens_entries() {
         );
     }
     // The pre-registered decay targets really are decayed, and the 0.1 group really is scaled.
-    let excluded: Vec<&String> = want
+    let excluded: Vec<&str> = want
         .iter()
-        .filter(|(_, w)| w["tessl_default_excludes"] == true)
-        .map(|(n, _)| n)
+        .filter(|(_, w)| w["tessl_default_excludes"].as_bool().ok() == Some(true))
+        .map(|(n, _)| *n)
         .collect();
     assert!(excluded.len() >= 6, "{excluded:?}");
     assert!(
@@ -365,7 +368,7 @@ fn the_trainers_entry_step_reproduces_the_golden_within_the_preregistered_bound(
     for (name, taken) in &out.steps_taken {
         assert_eq!(
             Some(*taken),
-            g.table[name]["adamw_steps_taken"].as_u64(),
+            g.table[name.as_str()]["adamw_steps_taken"].as_u64().ok(),
             "{name}: AdamW steps taken"
         );
     }

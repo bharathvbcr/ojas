@@ -5,7 +5,7 @@
 //! optimizer step cannot be the provider's. It is the SAME optimizer as the tower's: one
 //! `torch.optim.AdamW` over both in the PyTorch trainer (`python/qd_train/optim.py:402-405`),
 //! the same betas, eps, weight decay, learning rate, step count and clip coefficient. This is
-//! that update for one f32 tensor, and [`crate::mock::ToyProvider`] uses it for its parameters
+//! that update for one f32 tensor, and [`super::mock::ToyProvider`] uses it for its parameters
 //! too.
 //!
 //! **What is reproduced, line by line** (`torch/optim/adam.py`, `_single_tensor_adam`, torch
@@ -32,8 +32,8 @@
 //! values `tools/qd_train_oracle_trainer.py` dumped from torch itself, and reports how many
 //! elements are bit-identical.
 
-use crate::recipe::EntryHyper;
-use crate::step::{AdamWHyper, StepError};
+use super::recipe::EntryHyper;
+use super::step::{AdamWHyper, StepError};
 
 /// The two moments of one tensor.
 #[derive(Debug, Clone, PartialEq)]

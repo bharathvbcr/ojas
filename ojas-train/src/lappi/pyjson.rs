@@ -27,7 +27,7 @@
 
 use std::fmt;
 
-use serde_json::{Map, Number, Value};
+use ojas_io::json::{JsonNumber, JsonValue as Value};
 
 /// How `json.dumps` was called.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub const CANONICAL_ASCII: DumpOptions = DumpOptions {
 /// A value Python's `json.dumps` would format in a way this port cannot reproduce exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PyJsonError {
-    /// A number serde_json holds as neither `i64`, `u64` nor a finite `f64`.
+    /// A number held as neither `i64`, `u64` nor a finite `f64`.
     UnrepresentableNumber(String),
     /// A float that is not finite: Python would write a bare `NaN`/`Infinity`, which is not
     /// JSON, and `float.hex` would write `nan`/`inf`.
@@ -105,23 +105,25 @@ impl std::error::Error for PyJsonError {}
 pub fn obj<K: Into<String>>(
     pairs: impl IntoIterator<Item = (K, Value)>,
 ) -> Result<Value, PyJsonError> {
-    let mut out = Map::new();
+    let mut out: Vec<(String, Value)> = Vec::new();
     for (k, v) in pairs {
         let k = k.into();
-        if out.contains_key(&k) {
+        if out.iter().any(|(seen, _)| *seen == k) {
             return Err(PyJsonError::DuplicateKey(k));
         }
-        out.insert(k, v);
+        out.push((k, v));
     }
     Ok(Value::Object(out))
 }
 
-/// A float as a JSON number Python reads back as a `float` (serde_json keeps it a float even
-/// when it is integral, so `1.0` is written `1.0`, not `1`). Refused when not finite.
+/// A float as a JSON number Python reads back as a `float` (a `JsonNumber::F64` stays a float
+/// even when it is integral, so `1.0` is written `1.0`, not `1`). Refused when not finite.
 pub fn float(x: f64) -> Result<Value, PyJsonError> {
-    Number::from_f64(x)
-        .map(Value::Number)
-        .ok_or_else(|| PyJsonError::NonFinite(format!("{x}")))
+    if x.is_finite() {
+        Ok(Value::Number(JsonNumber::F64(x)))
+    } else {
+        Err(PyJsonError::NonFinite(format!("{x}")))
+    }
 }
 
 /// `json.dumps(value, ...)` with the given options.
@@ -136,17 +138,11 @@ fn write_value(out: &mut String, value: &Value, opts: DumpOptions) -> Result<(),
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
         Value::Bool(false) => out.push_str("false"),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                out.push_str(&i.to_string());
-            } else if let Some(u) = n.as_u64() {
-                out.push_str(&u.to_string());
-            } else {
-                match n.as_f64() {
-                    Some(f) if f.is_finite() => out.push_str(&float_repr(f)),
-                    _ => return Err(PyJsonError::UnrepresentableNumber(n.to_string())),
-                }
-            }
+        Value::Number(JsonNumber::I64(i)) => out.push_str(&i.to_string()),
+        Value::Number(JsonNumber::U64(u)) => out.push_str(&u.to_string()),
+        Value::Number(JsonNumber::F64(f)) if f.is_finite() => out.push_str(&float_repr(*f)),
+        Value::Number(JsonNumber::F64(f)) => {
+            return Err(PyJsonError::UnrepresentableNumber(format!("{f}")));
         }
         Value::String(s) => write_string(out, s, opts.ensure_ascii),
         Value::Array(items) => {
@@ -160,12 +156,10 @@ fn write_value(out: &mut String, value: &Value, opts: DumpOptions) -> Result<(),
             out.push(']');
         }
         Value::Object(map) => {
-            // Sorted here rather than trusting the map's iteration order: serde_json's `Map`
-            // is a BTreeMap unless some crate in the build enables `preserve_order`, and
-            // feature unification makes that a property of the whole workspace, not of this
-            // crate. Python sorts str keys by code point; Rust's `str` order is UTF-8 byte
-            // order, which is the same order.
-            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            // Sorted here because an `ojas_io` object keeps its members in input order.
+            // Python sorts str keys by code point; Rust's `str` order is UTF-8 byte order,
+            // which is the same order.
+            let mut entries: Vec<(&String, &Value)> = map.iter().map(|(k, v)| (k, v)).collect();
             if opts.sort_keys {
                 entries.sort_by(|a, b| a.0.cmp(b.0));
             }
@@ -339,7 +333,11 @@ pub fn float_fromhex(s: &str) -> Result<f64, PyJsonError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use ojas_io::json::parse_json;
+
+    fn json(text: &str) -> Value {
+        parse_json(text).unwrap()
+    }
 
     #[test]
     fn floats_take_pythons_layout_in_both_regimes() {
@@ -408,8 +406,8 @@ mod tests {
     fn canonical_ascii_escapes_and_obj_refuses_a_repeated_key() {
         let v = obj([
             ("b", float(1e-5).unwrap()),
-            ("a", json!([1, null, true])),
-            ("é", json!("tab\there \"q\" \u{1}")),
+            ("a", json("[1, null, true]")),
+            ("é", Value::from("tab\there \"q\" \u{1}")),
             ("f", float(1.0).unwrap()),
         ])
         .unwrap();
@@ -427,7 +425,7 @@ mod tests {
 
     #[test]
     fn canonical_is_compact_sorted_and_keeps_non_ascii() {
-        let v = json!({"b": [1, 2.5, "é\n"], "a": {"z": null, "y": true}});
+        let v = json(r#"{"b": [1, 2.5, "é\n"], "a": {"z": null, "y": true}}"#);
         assert_eq!(
             dumps(&v, CANONICAL).unwrap(),
             "{\"a\":{\"y\":true,\"z\":null},\"b\":[1,2.5,\"é\\n\"]}"
@@ -436,7 +434,11 @@ mod tests {
 
     #[test]
     fn sorted_default_spaces_and_escapes_non_ascii_with_surrogates() {
-        let v = json!({"k": "é\u{7f}😀", "a": []});
+        let v = obj([
+            ("k", Value::from("é\u{7f}😀")),
+            ("a", Value::from(Vec::<u64>::new())),
+        ])
+        .unwrap();
         assert_eq!(
             dumps(&v, SORTED_DEFAULT).unwrap(),
             "{\"a\": [], \"k\": \"\\u00e9\\u007f\\ud83d\\ude00\"}"
@@ -445,7 +447,7 @@ mod tests {
 
     #[test]
     fn control_characters_use_lowercase_four_digit_escapes() {
-        let v = json!("\u{01}\u{1f}\u{08}\u{0c}\t\r\"\\");
+        let v = Value::from("\u{01}\u{1f}\u{08}\u{0c}\t\r\"\\");
         assert_eq!(
             dumps(&v, CANONICAL).unwrap(),
             "\"\\u0001\\u001f\\b\\f\\t\\r\\\"\\\\\""

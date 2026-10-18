@@ -20,11 +20,10 @@
 use std::fmt;
 use std::time::Instant;
 
-use sha2::{Digest, Sha256};
+use ojas_io::json::JsonValue as Value;
+use ojas_io::sha256::{Sha256, sha256};
 
-use serde_json::Value;
-
-use crate::pyjson::{CANONICAL_ASCII, PyJsonError, dumps, float_hex, obj};
+use super::pyjson::{CANONICAL_ASCII, PyJsonError, dumps, float_hex, obj};
 
 /// `run_control.MAX_CAP_S`: 40 h. A cap above the program's cap is not a cap.
 pub const MAX_CAP_S: f64 = 40.0 * 3600.0;
@@ -245,7 +244,7 @@ impl LossLog {
 
     pub fn append(&mut self, point: LossPoint) -> Result<(), RunControlError> {
         point.validate()?;
-        if self.points.len() as u64 >= crate::schedule::MAX_LOSS_POINTS {
+        if self.points.len() as u64 >= super::schedule::MAX_LOSS_POINTS {
             return Err(RunControlError::Invalid(
                 "loss log reached MAX_LOSS_POINTS; a loop that logs more steps than any schedule \
                  declares is not terminating"
@@ -292,16 +291,12 @@ impl LossLog {
     /// `LossLog.digest`: sha256 over `json.dumps([...], sort_keys=True, separators=(",", ":"))`.
     pub fn digest(&self) -> Result<String, PyJsonError> {
         let body = dumps(&self.to_json()?, CANONICAL_ASCII)?;
-        Ok(hex(&Sha256::digest(body.as_bytes())))
+        Ok(hex(&sha256(body.as_bytes())))
     }
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    ojas_io::sha256::to_hex(bytes)
 }
 
 /// `run_control.ConsumedPrefix.DOMAIN`.
@@ -341,7 +336,7 @@ impl ConsumedPrefix {
         prefix.hasher.update(CONSUMED_PREFIX_EPOCH_LINK);
         prefix
             .hasher
-            .update((prior_digest.len() as u64).to_be_bytes());
+            .update(&(prior_digest.len() as u64).to_be_bytes());
         prefix.hasher.update(prior_digest.as_bytes());
         prefix.n = prior_n;
         prefix
@@ -353,7 +348,7 @@ impl ConsumedPrefix {
         head.extend_from_slice(&(parts.len() as u32).to_be_bytes());
         self.hasher.update(&head);
         for p in parts {
-            self.hasher.update((p.len() as u64).to_be_bytes());
+            self.hasher.update(&(p.len() as u64).to_be_bytes());
             self.hasher.update(p);
         }
         self.n += 1;
@@ -401,13 +396,13 @@ pub fn tensor_ref_digest(
     let rank = u32::try_from(shape.len()).map_err(|e| RunControlError::Invalid(e.to_string()))?;
     let mut h = Sha256::new();
     h.update(TENSOR_REF_DOMAIN);
-    h.update(name_len.to_be_bytes());
+    h.update(&name_len.to_be_bytes());
     h.update(dtype.as_bytes());
-    h.update(rank.to_be_bytes());
+    h.update(&rank.to_be_bytes());
     for &axis in shape {
-        h.update((axis as u64).to_be_bytes());
+        h.update(&(axis as u64).to_be_bytes());
     }
-    h.update((data.len() as u64).to_be_bytes());
+    h.update(&(data.len() as u64).to_be_bytes());
     h.update(data);
     Ok(hex(&h.finalize()))
 }
@@ -428,14 +423,14 @@ pub fn sidecar_digest(tensors: &[(String, String)]) -> Result<String, RunControl
     }
     let mut h = Sha256::new();
     h.update(SIDECAR_DOMAIN);
-    h.update((sorted.len() as u64).to_be_bytes());
+    h.update(&(sorted.len() as u64).to_be_bytes());
     for (name, digest) in sorted {
         let raw = unhex32(digest).ok_or_else(|| {
             RunControlError::Invalid(format!("{name}: digest {digest:?} is not a sha256"))
         })?;
-        h.update((name.len() as u64).to_be_bytes());
+        h.update(&(name.len() as u64).to_be_bytes());
         h.update(name.as_bytes());
-        h.update(raw);
+        h.update(&raw);
     }
     Ok(hex(&h.finalize()))
 }

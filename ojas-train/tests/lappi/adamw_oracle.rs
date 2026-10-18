@@ -9,11 +9,12 @@
 
 mod common;
 
-use qd_train::adamw::{Moments, adamw_update};
-use qd_train::recipe;
-use qd_train::step::AdamWHyper;
+use ojas_io::json::JsonValue;
+use ojas_train::lappi::adamw::{Moments, adamw_update};
+use ojas_train::lappi::recipe;
+use ojas_train::lappi::step::AdamWHyper;
 
-fn as_f32(v: &serde_json::Value) -> Vec<f32> {
+fn as_f32(v: &JsonValue) -> Vec<f32> {
     common::fhex_list(v).into_iter().map(|x| x as f32).collect()
 }
 

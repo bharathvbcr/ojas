@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use sha2::{Digest, Sha256};
+use ojas_io::json::{JsonValue, parse_json};
 
 /// The coreutils manifest's file name.
 pub const SHA256SUMS: &str = "SHA256SUMS";
@@ -66,10 +66,7 @@ impl Form {
 
 /// Lower-case hex sha256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    ojas_io::sha256::sha256_hex(bytes)
 }
 
 /// Lower-case hex sha256 of the file at `path`; panics naming the path if it cannot be read.
@@ -148,10 +145,11 @@ pub fn parse_sha256sums(bytes: &[u8]) -> Result<BTreeMap<PathBuf, Pin>, String> 
 }
 
 /// A JSON manifest's `files` map as `path -> pin`, or every reason it is not one.
-pub fn parse_files_map(
-    manifest: &serde_json::Value,
-) -> Result<BTreeMap<PathBuf, Pin>, Vec<String>> {
-    let Some(files) = manifest.get("files").and_then(serde_json::Value::as_object) else {
+pub fn parse_files_map(manifest: &JsonValue) -> Result<BTreeMap<PathBuf, Pin>, Vec<String>> {
+    let Ok(Some(files)) = manifest
+        .field_opt("files")
+        .map(|f| f.and_then(|f| f.as_object().ok()))
+    else {
         return Err(vec!["has no `files` object".into()]);
     };
     if files.is_empty() {
@@ -164,14 +162,14 @@ pub fn parse_files_map(
             errors.push(format!("files key {path:?} is not a plain relative path"));
             continue;
         };
-        let sha256 = entry.get("sha256").and_then(serde_json::Value::as_str);
-        let bytes = entry.get("bytes").and_then(serde_json::Value::as_u64);
+        let sha256 = entry["sha256"].as_str().ok();
+        let bytes = entry["bytes"].as_u64().ok();
         match (sha256, bytes) {
             (Some(s), Some(b)) if is_sha256_hex(s) => {
                 pins.insert(rel, Pin { sha256: s.to_owned(), bytes: Some(b) });
             }
             _ => errors.push(format!(
-                "files.{path:?} needs `sha256` (64 lower-case hex digits) and `bytes` (an integer), got {entry}"
+                "files.{path:?} needs `sha256` (64 lower-case hex digits) and `bytes` (an integer), got {entry:?}"
             )),
         }
     }
@@ -305,7 +303,9 @@ pub fn check(dir: &Path, form: Form) -> Result<usize, Vec<String>> {
     let pins = match form {
         Form::Sha256Sums => parse_sha256sums(&raw).map_err(|e| vec![format!("{manifest} {e}")])?,
         Form::JsonFiles => {
-            let value: serde_json::Value = serde_json::from_slice(&raw)
+            let text = std::str::from_utf8(&raw)
+                .map_err(|e| vec![format!("{manifest} does not parse: not UTF-8: {e}")])?;
+            let value = parse_json(text)
                 .map_err(|e| vec![format!("{manifest} does not parse: {e}")])?;
             parse_files_map(&value).map_err(|es| {
                 es.into_iter()

@@ -18,9 +18,9 @@
 
 use std::fmt;
 
-use serde_json::Value;
+use ojas_io::json::JsonValue as Value;
 
-use crate::pyjson::{PyJsonError, float, obj};
+use super::pyjson::{PyJsonError, float, obj};
 
 /// `run_control.MAX_LOSS_POINTS`: one loss point per optimizer step bounds the schedule too.
 pub const MAX_LOSS_POINTS: u64 = 5_000_000;

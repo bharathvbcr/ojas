@@ -19,7 +19,7 @@
 //!    a non-finite norm is refused before AdamW -- stricter than torch, which would write NaN
 //!    parameters, and the reason this loop can promise the moments never move on a bad step.
 //! 4. AdamW: the provider with per-entry learning-rate scales and weight decays from Lappi's
-//!    recipe ([`crate::recipe`]), the host parameters with the same scalars at scale 1.0 (the
+//!    recipe ([`super::recipe`]), the host parameters with the same scalars at scale 1.0 (the
 //!    span head joins the base group), the same `t`, the same clip coefficient.
 //! 5. The cap is polled only between groups (rule 2), so no half-accumulated gradient is
 //!    discarded; overshoot is at most one step.
@@ -34,18 +34,17 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
+use ojas_io::json::{JsonValue as Value, parse_json};
+use ojas_io::sha256::{Sha256, sha256};
 
-use crate::adamw::{EntryState, Moments, adamw_entry_step};
-use serde_json::Value;
-
-use crate::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
-use crate::recipe::{self, OptimizerRecipe};
-use crate::run_control::{
+use super::adamw::{EntryState, Moments, adamw_entry_step};
+use super::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
+use super::recipe::{self, OptimizerRecipe};
+use super::run_control::{
     Clock, ConsumedPrefix, LossLog, LossPoint, RunClock, RunControlError, WallClockCap, hex,
 };
-use crate::schedule::{LrSchedule, ScheduleError};
-use crate::step::{
+use super::schedule::{LrSchedule, ScheduleError};
+use super::step::{
     AdamWHyper, BankMode, ParamSpec, RowTargets, SequenceJob, StepError, StepProvider,
 };
 
@@ -145,7 +144,7 @@ pub trait ConsumedBatch {
 ///
 /// A gradient is `None` until a loss reaches the tensor, as torch's `p.grad` is after
 /// `zero_grad(set_to_none=True)`. The loop skips a `None` entry's AdamW step entirely
-/// ([`crate::adamw::adamw_entry_step`]). This matters for the span head: a letter-only batch
+/// ([`super::adamw::adamw_entry_step`]). This matters for the span head: a letter-only batch
 /// never reaches it.
 pub trait HostParams {
     /// One entry per tensor, in a fixed order.
@@ -1157,14 +1156,14 @@ pub fn parameters_digest<P: StepProvider>(
         ));
     }
     let mut feed = |e: &ParamSpec, v: &[f32]| {
-        h.update((e.name.len() as u64).to_le_bytes());
+        h.update(&(e.name.len() as u64).to_le_bytes());
         h.update(e.name.as_bytes());
-        h.update((e.shape.len() as u64).to_le_bytes());
+        h.update(&(e.shape.len() as u64).to_le_bytes());
         for d in &e.shape {
-            h.update((*d as u64).to_le_bytes());
+            h.update(&(*d as u64).to_le_bytes());
         }
         for x in v {
-            h.update(x.to_le_bytes());
+            h.update(&x.to_le_bytes());
         }
     };
     for (e, v) in entries.iter().zip(&values) {
@@ -1260,7 +1259,7 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
             })?
             .to_string_lossy()
             .into_owned();
-        provider_files.push((rel, Value::from(hex(&Sha256::digest(&bytes)))));
+        provider_files.push((rel, Value::from(hex(&sha256(&bytes)))));
     }
 
     // Host values and moments: raw little-endian f32, value then m then v per entry. Each
@@ -1358,7 +1357,7 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         ),
         (
             "host_sha256",
-            Value::from(hex(&Sha256::digest(&host_bytes))),
+            Value::from(hex(&sha256(&host_bytes))),
         ),
     ]
     .into_iter()
@@ -1379,18 +1378,18 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
     Ok(final_dir)
 }
 
-fn field<'a>(
-    v: &'a serde_json::Value,
-    key: &str,
-    path: &Path,
-) -> Result<&'a serde_json::Value, TrainError> {
-    v.get(key).ok_or_else(|| {
-        TrainError::Refused(format!("{}: checkpoint has no {key:?}", path.display()))
-    })
+fn field<'a>(v: &'a Value, key: &str, path: &Path) -> Result<&'a Value, TrainError> {
+    match v.field_opt(key) {
+        Ok(Some(found)) => Ok(found),
+        Ok(None) | Err(_) => Err(TrainError::Refused(format!(
+            "{}: checkpoint has no {key:?}",
+            path.display()
+        ))),
+    }
 }
 
-fn as_u64(v: &serde_json::Value, key: &str, path: &Path) -> Result<u64, TrainError> {
-    field(v, key, path)?.as_u64().ok_or_else(|| {
+fn as_u64(v: &Value, key: &str, path: &Path) -> Result<u64, TrainError> {
+    field(v, key, path)?.as_u64().map_err(|_| {
         TrainError::Refused(format!(
             "{}: {key:?} is not a non-negative integer",
             path.display()
@@ -1398,11 +1397,21 @@ fn as_u64(v: &serde_json::Value, key: &str, path: &Path) -> Result<u64, TrainErr
     })
 }
 
-fn as_hex(v: &serde_json::Value, path: &Path) -> Result<f64, TrainError> {
-    let s = v.as_str().ok_or_else(|| {
+fn as_hex(v: &Value, path: &Path) -> Result<f64, TrainError> {
+    let s = v.as_str().map_err(|_| {
         TrainError::Refused(format!("{}: expected a float.hex string", path.display()))
     })?;
     Ok(float_fromhex(s)?)
+}
+
+fn as_array<'a>(v: &'a Value, what: &str) -> Result<&'a [Value], TrainError> {
+    v.as_array()
+        .map_err(|_| TrainError::Refused(what.to_owned()))
+}
+
+fn as_object<'a>(v: &'a Value, what: &str) -> Result<&'a [(String, Value)], TrainError> {
+    v.as_object()
+        .map_err(|_| TrainError::Refused(what.to_owned()))
 }
 
 impl ResumeState {
@@ -1464,9 +1473,9 @@ impl ResumeState {
     pub fn read(ckpt_dir: &Path) -> Result<Self, TrainError> {
         let body_path = ckpt_dir.join("trainer.json");
         let text = fs::read_to_string(&body_path).map_err(|e| io(&body_path, e))?;
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| io(&body_path, e))?;
+        let v = parse_json(&text).map_err(|e| io(&body_path, e))?;
         let p = body_path.as_path();
-        if field(&v, "format", p)?.as_str() != Some(CHECKPOINT_FORMAT) {
+        if field(&v, "format", p)?.as_str().ok() != Some(CHECKPOINT_FORMAT) {
             return Err(TrainError::Refused(format!(
                 "{}: not a {CHECKPOINT_FORMAT} checkpoint",
                 p.display()
@@ -1476,18 +1485,15 @@ impl ResumeState {
         let schedule = LrSchedule::new(
             field(sched, "peak_lr", p)?
                 .as_f64()
-                .ok_or_else(|| TrainError::Refused("peak_lr".into()))?,
+                .map_err(|_| TrainError::Refused("peak_lr".into()))?,
             as_u64(sched, "total_steps", p)?,
             as_u64(sched, "warmup_steps", p)?,
             field(sched, "min_lr", p)?
                 .as_f64()
-                .ok_or_else(|| TrainError::Refused("min_lr".into()))?,
+                .map_err(|_| TrainError::Refused("min_lr".into()))?,
         )?;
         let mut loss_log = LossLog::new();
-        for pt in field(&v, "loss_log", p)?
-            .as_array()
-            .ok_or_else(|| TrainError::Refused("loss_log".into()))?
-        {
+        for pt in as_array(field(&v, "loss_log", p)?, "loss_log")? {
             loss_log.append(LossPoint {
                 optimizer_step: as_u64(pt, "step", p)?,
                 epoch: as_u64(pt, "epoch", p)?,
@@ -1496,10 +1502,7 @@ impl ResumeState {
             })?;
         }
         let mut steps = Vec::new();
-        for s in field(&v, "steps", p)?
-            .as_array()
-            .ok_or_else(|| TrainError::Refused("steps".into()))?
-        {
+        for s in as_array(field(&v, "steps", p)?, "steps")? {
             steps.push(StepRecord {
                 optimizer_step: as_u64(s, "step", p)?,
                 lr: as_hex(field(s, "lr_hex", p)?, p)?,
@@ -1509,26 +1512,18 @@ impl ResumeState {
             });
         }
         let mut channel_log = Vec::new();
-        for (name, vals) in field(&v, "channel_log", p)?
-            .as_object()
-            .ok_or_else(|| TrainError::Refused("channel_log".into()))?
-        {
-            let xs = vals
-                .as_array()
-                .ok_or_else(|| TrainError::Refused("channel_log values".into()))?
+        for (name, vals) in as_object(field(&v, "channel_log", p)?, "channel_log")? {
+            let xs = as_array(vals, "channel_log values")?
                 .iter()
                 .map(|x| as_hex(x, p))
                 .collect::<Result<Vec<_>, _>>()?;
             channel_log.push((name.clone(), xs));
         }
         let provider_dir = ckpt_dir.join("provider");
-        for (rel, digest) in field(&v, "provider_files", p)?
-            .as_object()
-            .ok_or_else(|| TrainError::Refused("provider_files".into()))?
-        {
+        for (rel, digest) in as_object(field(&v, "provider_files", p)?, "provider_files")? {
             let path = provider_dir.join(rel);
             let bytes = fs::read(&path).map_err(|e| io(&path, e))?;
-            if Some(hex(&Sha256::digest(&bytes)).as_str()) != digest.as_str() {
+            if Some(hex(&sha256(&bytes)).as_str()) != digest.as_str().ok() {
                 return Err(TrainError::Refused(format!(
                     "{} does not match its recorded sha256",
                     path.display()
@@ -1537,19 +1532,15 @@ impl ResumeState {
         }
         let mut host_entries = Vec::new();
         let mut host_steps = Vec::new();
-        for e in field(&v, "host_entries", p)?
-            .as_array()
-            .ok_or_else(|| TrainError::Refused("host_entries".into()))?
-        {
+        for e in as_array(field(&v, "host_entries", p)?, "host_entries")? {
             let name = field(e, "name", p)?
                 .as_str()
-                .ok_or_else(|| TrainError::Refused("host entry name".into()))?;
-            let shape = field(e, "shape", p)?
-                .as_array()
-                .ok_or_else(|| TrainError::Refused("host entry shape".into()))?
+                .map_err(|_| TrainError::Refused("host entry name".into()))?;
+            let shape = as_array(field(e, "shape", p)?, "host entry shape")?
                 .iter()
                 .map(|d| {
                     d.as_u64()
+                        .ok()
                         .and_then(|d| usize::try_from(d).ok())
                         .ok_or_else(|| TrainError::Refused("host dim".into()))
                 })
@@ -1559,7 +1550,7 @@ impl ResumeState {
         }
         let host_path = ckpt_dir.join("host.f32");
         let host_bytes = fs::read(&host_path).map_err(|e| io(&host_path, e))?;
-        if Some(hex(&Sha256::digest(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str()
+        if Some(hex(&sha256(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str().ok()
         {
             return Err(TrainError::Refused(format!(
                 "{} does not match its recorded sha256",
@@ -1606,11 +1597,12 @@ impl ResumeState {
         let grad_accum = u32::try_from(as_u64(&v, "grad_accum", p)?)
             .map_err(|e| TrainError::Refused(e.to_string()))?;
         let epoch = as_u64(&v, "epoch", p)?;
-        let epoch_link = match v.get("epoch_link") {
+        let epoch_link = match v.field_opt("epoch_link").map_err(|e| io(p, e))? {
             None => None,
             Some(l) => {
                 let digest = field(l, "digest", p)?
                     .as_str()
+                    .ok()
                     .filter(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit()))
                     .ok_or_else(|| {
                         TrainError::Refused(format!(
@@ -1635,11 +1627,11 @@ impl ResumeState {
                 if epoch_link.is_some() { "an" } else { "no" }
             )));
         }
-        let epochs = match v.get("epochs") {
+        let epochs = match v.field_opt("epochs").map_err(|e| io(p, e))? {
             None => 1,
-            Some(e) => e.as_u64().filter(|&e| e > 1).ok_or_else(|| {
+            Some(e) => e.as_u64().ok().filter(|&n| n > 1).ok_or_else(|| {
                 TrainError::Refused(format!(
-                    "{}: \"epochs\" is {e}; a checkpoint records it only for a run of more than one",
+                    "{}: \"epochs\" is {e:?}; a checkpoint records it only for a run of more than one",
                     p.display()
                 ))
             })?,
@@ -1665,7 +1657,7 @@ impl ResumeState {
             channel_log,
             consumed_digest: field(&v, "consumed_digest", p)?
                 .as_str()
-                .ok_or_else(|| TrainError::Refused("consumed_digest".into()))?
+                .map_err(|_| TrainError::Refused("consumed_digest".into()))?
                 .to_string(),
             host_entries,
             host_values,

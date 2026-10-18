@@ -3,7 +3,8 @@
 
 mod common;
 
-use qd_train::schedule::LrSchedule;
+use ojas_io::json::JsonValue;
+use ojas_train::lappi::schedule::LrSchedule;
 
 #[test]
 fn every_dumped_rate_is_pythons_to_the_bit() {
@@ -96,14 +97,14 @@ fn real_ft_with_floor_reproduces_every_floor_zero_schedule_bit_for_bit() {
 }
 
 /// The oracle's case for `(peak, total, warmup, min_lr)`, its steps and Python's rates.
-fn case(o: &serde_json::Value, peak: f64, total: u64, min_lr: f64) -> (Vec<u64>, Vec<f64>) {
+fn case(o: &JsonValue, peak: f64, total: u64, min_lr: f64) -> (Vec<u64>, Vec<f64>) {
     let c = o["schedule"]
         .as_array()
         .unwrap()
         .iter()
         .find(|c| {
             common::fhex(&c["peak_lr"]).to_bits() == peak.to_bits()
-                && c["total_steps"].as_u64() == Some(total)
+                && c["total_steps"].as_u64().ok() == Some(total)
                 && common::fhex(&c["min_lr"]).to_bits() == min_lr.to_bits()
         })
         .unwrap_or_else(|| panic!("no oracle case ({peak:e}, {total}, min {min_lr:e})"));

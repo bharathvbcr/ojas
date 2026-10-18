@@ -6,11 +6,41 @@ mod common;
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use qd_train::ledger::isoformat_utc;
-use qd_train::pyjson::{CANONICAL, CANONICAL_ASCII, dumps, float, float_hex, float_repr, obj};
-use qd_train::run_control::ConsumedPrefix;
-use qd_train::run_control::{LossLog, LossPoint};
-use serde_json::Value;
+use ojas_io::json::JsonValue as Value;
+use ojas_train::lappi::pyjson::{CANONICAL, CANONICAL_ASCII, dumps, float, float_hex, float_repr, obj};
+use ojas_train::lappi::run_control::ConsumedPrefix;
+use ojas_train::lappi::run_control::{LossLog, LossPoint};
+
+/// `datetime.now(UTC).isoformat()` for `t`: microseconds when non-zero, `+00:00`. The same
+/// civil-from-days arithmetic as Lappi's `ledger::isoformat_utc`, which does not move with
+/// this crate; only this oracle needs it.
+fn isoformat_utc(t: std::time::SystemTime) -> Result<String, String> {
+    let d = t
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("a time before 1970: {e}"))?;
+    let secs = i64::try_from(d.as_secs()).map_err(|e| e.to_string())?;
+    let micros = d.subsec_micros();
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let frac = if micros == 0 {
+        String::new()
+    } else {
+        format!(".{micros:06}")
+    };
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}{frac}+00:00"
+    ))
+}
 
 #[test]
 fn repr_and_hex_match_python_on_every_dumped_float() {
@@ -39,13 +69,13 @@ fn rebuild(v: &Value) -> Value {
     match v {
         Value::Null | Value::Bool(_) | Value::String(_) => v.clone(),
         Value::Array(xs) => Value::Array(xs.iter().map(rebuild).collect()),
-        Value::Object(m) => {
-            if let Some(h) = m.get("$f") {
+        Value::Object(_) => {
+            if let Some(h) = v.field_opt("$f").unwrap() {
                 float(common::fhex(h)).unwrap()
-            } else if let Some(i) = m.get("$int") {
+            } else if let Some(i) = v.field_opt("$int").unwrap() {
                 Value::from(i.as_i64().unwrap())
             } else {
-                let pairs = m["$obj"].as_array().unwrap().iter().map(|kv| {
+                let pairs = v["$obj"].as_array().unwrap().iter().map(|kv| {
                     let kv = kv.as_array().unwrap();
                     (kv[0].as_str().unwrap().to_string(), rebuild(&kv[1]))
                 });

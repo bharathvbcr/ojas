@@ -6,7 +6,7 @@
 //! It speaks only of token sequences, parameter-table entries, a gradient bank, gradients at
 //! hidden states and AdamW. Its first implementor is canonical tessl's Qwen3.5 step (through
 //! ojas's `ojas-qwen35`, adapted in `crates/qd-train-metal`); its second will be ojas's Tape
-//! model. [`crate::mock::ToyProvider`] implements it on the CPU so the loop is tested end to end
+//! model. [`super::mock::ToyProvider`] implements it on the CPU so the loop is tested end to end
 //! without a GPU.
 //!
 //! **The contract, as the loop relies on it:**
@@ -249,7 +249,7 @@ pub trait StepProvider {
     /// Every provider entry is stepped, with this one model-wide count. That is torch's
     /// per-parameter AdamW only while every entry has a gradient on every step. A transformer
     /// tower does: each entry is on the forward path of every sequence. The span head does not,
-    /// so it is a host entry ([`crate::adamw::adamw_entry_step`]). A provider whose model can
+    /// so it is a host entry ([`super::adamw::adamw_entry_step`]). A provider whose model can
     /// leave an entry without a gradient breaks this contract.
     fn adamw_step(
         &mut self,

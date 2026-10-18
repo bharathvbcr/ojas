@@ -1,5 +1,5 @@
 //! Lappi's fine-tuning optimizer recipe, as the PyTorch trainer runs it, and the per-entry
-//! vectors a [`crate::step::StepProvider`] is driven with.
+//! vectors a [`super::step::StepProvider`] is driven with.
 //!
 //! **Where each number comes from (read 2026-10-01, `GAP-OJAS-ADVICE-F-ADAMW-EPS-WD-UNREAD-2026-10-01`):**
 //!
@@ -15,7 +15,7 @@
 //!   `0 .. lower_layers_n - 1` at `lower_lr_scale` times the schedule, everything else (the span
 //!   head included) at 1.0; refused when it would scale nothing, or everything.
 
-use crate::step::{ParamSpec, StepError};
+use super::step::{ParamSpec, StepError};
 
 /// AdamW's first-moment decay, fixed in `build_optimizer` (`betas = (0.9, beta2)`).
 pub const BETA1: f64 = 0.9;
@@ -177,7 +177,7 @@ pub struct EntryHyper {
 /// base group). Amendment 2 (ii) holds it equal, name by name and with no tolerance, to what
 /// `layerwise_param_groups` + `build_optimizer` produce on the 2B
 /// (`tests/optimizer_table.rs`), and the loop derives every vector it hands
-/// [`crate::step::StepProvider::adamw_step`] from it, so the table tested is the table run.
+/// [`super::step::StepProvider::adamw_step`] from it, so the table tested is the table run.
 pub fn optimizer_table(
     entries: &[ParamSpec],
     host: &[ParamSpec],
@@ -346,14 +346,26 @@ pub fn lora_adapter_layout(
     Ok((rank, a_of.into_iter().map(|(m, _, i)| (m, i)).collect()))
 }
 
+/// The host-entry names a LoRA plan recognises, passed by the caller so this crate holds no
+/// name of the caller's own modules: the one D17 entry and the span head's tensors.
+#[derive(Debug, Clone, Copy)]
+pub struct LoraHostNames<'a> {
+    /// The single D17 host entry's name.
+    pub d17_entry: &'a str,
+    /// Every span-head tensor name.
+    pub span_head: &'a [&'a str],
+}
+
 /// What `lora_param_groups` returns for these parameters, by name: `"lora"` (adapters, 1.0),
 /// then `"d17"` and `"span_head"` (each [`HEAD_LR_SCALE`]) when the host holds them, all at
-/// [`LORA_WEIGHT_DECAY`]. Refused: no adapter, an adapter outside D6's table (the GDN gates
-/// included), half an adapter, a trainable base parameter, a host entry that is neither D17 nor
-/// a span-head tensor, and any name given twice.
+/// [`LORA_WEIGHT_DECAY`]. `names` says which host entries are D17 and which are span-head
+/// tensors. Refused: no adapter, an adapter outside D6's table (the GDN gates included), half
+/// an adapter, a trainable base parameter, a host entry that is neither D17 nor a span-head
+/// tensor, and any name given twice.
 pub fn lora_param_groups(
     entries: &[ParamSpec],
     host: &[ParamSpec],
+    names: &LoraHostNames<'_>,
 ) -> Result<Vec<LoraGroup>, StepError> {
     lora_adapter_layout(entries)?;
     let mut seen = std::collections::BTreeSet::new();
@@ -365,16 +377,15 @@ pub fn lora_param_groups(
                 h.name
             )));
         }
-        if h.name == crate::d17::D17_ENTRY {
+        if h.name == names.d17_entry {
             d17.push(h.name.clone());
-        } else if crate::span_head::PARAMETER_NAMES.contains(&h.name.as_str()) {
+        } else if names.span_head.contains(&h.name.as_str()) {
             head.push(h.name.clone());
         } else {
             return Err(StepError::Contract(format!(
                 "host entry {} is neither D17 ({}) nor a span-head tensor: a base \
                  parameter marked trainable under the lora recipe",
-                h.name,
-                crate::d17::D17_ENTRY
+                h.name, names.d17_entry
             )));
         }
     }
@@ -405,6 +416,7 @@ pub fn lora_optimizer_table(
     entries: &[ParamSpec],
     host: &[ParamSpec],
     recipe: &OptimizerRecipe,
+    names: &LoraHostNames<'_>,
 ) -> Result<Vec<EntryHyper>, StepError> {
     recipe.validate()?;
     if recipe.lower_layers.is_some() {
@@ -414,7 +426,7 @@ pub fn lora_optimizer_table(
                 .into(),
         ));
     }
-    let groups = lora_param_groups(entries, host)?;
+    let groups = lora_param_groups(entries, host, names)?;
     let scale_of = |name: &str| {
         groups
             .iter()
@@ -441,6 +453,32 @@ mod tests {
 
     fn specs(names: &[&str]) -> Vec<ParamSpec> {
         names.iter().map(|n| ParamSpec::new(*n, &[1])).collect()
+    }
+
+    #[test]
+    fn lora_groups_classify_host_entries_by_the_names_the_caller_passes() {
+        let names = LoraHostNames {
+            d17_entry: "host.d17",
+            span_head: &["host.head.a", "host.head.b"],
+        };
+        let adapters = vec![
+            ParamSpec::new("layers.0.self_attn.q_proj.lora_A.weight", &[2, 4]),
+            ParamSpec::new("layers.0.self_attn.q_proj.lora_B.weight", &[3, 2]),
+        ];
+        let host = specs(&["host.d17", "host.head.b", "host.head.a"]);
+        let groups = lora_param_groups(&adapters, &host, &names).unwrap();
+        let by_name = |n: &str| groups.iter().find(|g| g.name == n).unwrap().params.clone();
+        assert_eq!(by_name("d17"), vec!["host.d17"]);
+        assert_eq!(by_name("span_head"), vec!["host.head.b", "host.head.a"]);
+        // A name the caller did not pass is a base parameter marked trainable.
+        let stray = specs(&["host.other"]);
+        assert!(lora_param_groups(&adapters, &stray, &names).is_err());
+        // The same entry set under different names is classified by those names.
+        let renamed = LoraHostNames {
+            d17_entry: "host.other",
+            span_head: &[],
+        };
+        assert!(lora_param_groups(&adapters, &stray, &renamed).is_ok());
     }
 
     #[test]
