@@ -1,7 +1,7 @@
 //! The Metal pre-flight: calibration from the committed LoRA-step rows, the
 //! analytic plan, and the dry run. CPU only; the rows file is the real one.
 
-use ojas_core::{Backend, Budget, OjasError};
+use ojas_core::{Budget, OjasError};
 use ojas_cpu::CpuBackend;
 use ojas_io::parse_json;
 use ojas_model::preflight::{
