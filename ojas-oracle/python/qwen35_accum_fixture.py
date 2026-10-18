@@ -13,20 +13,30 @@ equal that fixture's `init.*` and `bnz.*`):
 
 - three rows of widths 5, 9 and 13 tokens, cut from the fixture's ids (flattened)
   at offsets 0, 3 and 7;
-- per row, CE targets at `ce_pos` (random vocabulary ids) and `dh` at `dh_pos`
-  (hidden positions, drawn independently of the CE ones);
-- loss of a row = `scale * sum_CE(logits[ce_pos], targets) + sum(h[dh_pos] * dh)`,
-  `h` the final-norm hidden state and `logits = lm_head(h)` (tied head);
+- per row, CE targets at `positions` (random vocabulary ids in `targets`) and
+  `dh` at `hidden_at` (hidden positions, drawn independently of the CE ones);
+- the backward objective of a row = `scale * sum_CE(logits[positions], targets)
+  + sum(h[hidden_at] * dh)`, `h` the final-norm hidden state and
+  `logits = lm_head(h)` (tied head); `loss.<i>` is the UNSCALED `sum_CE`, the
+  value `TapeStepProvider::accumulate` returns;
 - `backward()` once per row, gradients left to sum in `.grad` across rows.
 
 fp32, CPU, one thread, deterministic algorithms. Written next to this
-into `--out` as `accum.safetensors` and `manifest.json`:
+into `--out` as `accum.safetensors` and `manifest.json`, in the layout
+`ojas-model/tests/qwen35_step_provider.rs` reads
+(`three_row_accumulate_matches_the_torch_fixture`):
 
-- `ids.<i>`, `ce_pos.<i>`, `ce_tgt.<i>`, `dh_pos.<i>`, `dh.<i>`: the inputs of row i
-  (int64 ids, positions and targets; f32 `dh` of shape [k, hidden]);
-- `scale`: `[1/rows]`; `loss.<i>`: the row's loss; `loss.sum`: their sum;
-- `init.<hf module>.lora_A.weight`, `bnz.<hf module>.lora_B.weight`: the adapters;
-- `grad.<hf module>.lora_{A,B}.weight`: dA and dB summed over the rows;
+- `ids.<i>`, `positions.<i>`, `targets.<i>`, `hidden_at.<i>`: I64 (ids `[T_i]`,
+  the others `[n_i]` / `[m_i]`); `dh.<i>`: F32 `[m_i, hidden]`;
+- `scale`: F32 `[1]`, `1/rows`; `loss.<i>`: F32 `[1]`, row i's `sum_CE`;
+- `grad.<hf module>.lora_A.weight` `[r, in]` and `grad.<hf module>.lora_B.weight`
+  `[out, r]`: dA and dB summed over the rows. The torch `lora_B` is the one
+  fused Hugging Face `[out, r]` weight (`in_proj_qkv` as `[q|k|v]`, `q_proj` with
+  query and gate rows interleaved per head), which is the order
+  `LoraTarget::fuse_b` (ojas-model/src/qwen35/params.rs) rebuilds from the
+  model's parts, so no regrouping is needed;
+- the adapters are NOT written: the test reads `init.*` and `bnz.*` from
+  `qwen35_tiny_lora`, which this script reproduces from the same seeds;
 - the manifest holds the torch version, the arguments, the widths and the
   sha256 of `accum.safetensors`.
 
@@ -149,9 +159,9 @@ def draw_rows(flat_ids, vocab, hidden):
         check_positions("dh_pos", dh_pos, width)
         rows.append({
             "ids": flat_ids[offset:offset + width].clone().long(),
-            "ce_pos": torch.tensor(ce_pos, dtype=torch.int64),
-            "ce_tgt": torch.randint(0, vocab, (CE_PER_ROW,), generator=gen, dtype=torch.int64),
-            "dh_pos": torch.tensor(dh_pos, dtype=torch.int64),
+            "positions": torch.tensor(ce_pos, dtype=torch.int64),
+            "targets": torch.randint(0, vocab, (CE_PER_ROW,), generator=gen, dtype=torch.int64),
+            "hidden_at": torch.tensor(dh_pos, dtype=torch.int64),
             "dh": (DH_STD * torch.randn(DH_PER_ROW, hidden, generator=gen)).contiguous(),
         })
     return rows
@@ -160,8 +170,8 @@ def draw_rows(flat_ids, vocab, hidden):
 def row_loss(model, row, scale):
     h = model.model(input_ids=row["ids"].unsqueeze(0)).last_hidden_state[0]
     logits = model.lm_head(h)
-    ce = F.cross_entropy(logits[row["ce_pos"]], row["ce_tgt"], reduction="sum")
-    return scale * ce + (h[row["dh_pos"]] * row["dh"]).sum()
+    ce = F.cross_entropy(logits[row["positions"]], row["targets"], reduction="sum")
+    return scale * ce + (h[row["hidden_at"]] * row["dh"]).sum(), ce
 
 
 def main():
@@ -183,22 +193,18 @@ def main():
     model = build_model(args.base)
     names = attach_lora(model, seed=SEED, r=RANK, alpha=args.alpha)
     out = {}
-    for n, p in adapters(model):
-        if n.endswith("lora_A.weight"):
-            out[f"init.{n}"] = p.detach().clone().contiguous()
     gen = torch.Generator().manual_seed(SEED + 1)
     with torch.no_grad():
         for n, p in adapters(model):
             if n.endswith("lora_B.weight"):
                 p.copy_(0.05 * torch.randn(p.shape, generator=gen))
-                out[f"bnz.{n}"] = p.detach().clone().contiguous()
 
     model.zero_grad(set_to_none=True)
     losses = []
     for i, row in enumerate(rows):
-        loss = row_loss(model, row, scale)
-        loss.backward()
-        losses.append(loss.item())
+        objective, ce = row_loss(model, row, scale)
+        objective.backward()
+        losses.append(ce.item())
         for k, v in row.items():
             out[f"{k}.{i}"] = v
         out[f"loss.{i}"] = torch.tensor([losses[-1]], dtype=torch.float32)
@@ -207,7 +213,6 @@ def main():
         assert p.grad is not None, n
         out[f"grad.{n}"] = p.grad.detach().clone().contiguous()
     out["scale"] = torch.tensor([scale], dtype=torch.float32)
-    out["loss.sum"] = torch.tensor([sum(losses)], dtype=torch.float32)
 
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, "accum.safetensors")
