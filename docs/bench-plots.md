@@ -632,6 +632,10 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
 
+## 2026-10-17-clip-sqnorm-ab
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
 ## 2026-10-17-lora-step
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.

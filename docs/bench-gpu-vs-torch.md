@@ -80,7 +80,7 @@ Up to PyTorch 2.14, MPS ran `clip_grad_norm_` (`linalg.vector_norm`) on a single
 | **2.15.0.dev20261004** | 8.36 ms | 8.54 ms | 8.45 ms | 7.90 ms |
 
 - The nightly is ~16× faster than 2.14.1 on this reduction.
-- Against ojas round 5 (`bench/results/2026-10-02-r5/summary.md`), which measured ojas at 18.96 ms median on Metal and 19.12 ms on wgpu, ojas is ~0.45× of the 2.15 nightly on this row. **Superseded for Metal:** round 5 timed the path from before 0e3254f. Current Metal takes 7.07 ms median (min 6.60), and with tessl's `sq_norm` wired in 7.45 ms (min 6.49), with no speed change shown ([`bench/results/2026-10-17-clip-sqnorm-ab`](../bench/results/2026-10-17-clip-sqnorm-ab/README.md)). That is about 1.2× the 2.15 nightly, unpaired. wgpu was not re-run. The previously measured 4.58× / 8.13× lead came from PyTorch's older single-threadgroup kernel.
+- Against ojas round 5 (`bench/results/2026-10-02-r5/summary.md`), which measured ojas at 18.96 ms median on Metal and 19.12 ms on wgpu, ojas is ~0.45× of the 2.15 nightly on this row. **Superseded for Metal:** round 5 timed the path from before 0e3254f. Current Metal takes 7.07 ms median (min 6.60), and with tessl's `sq_norm` wired in 7.45 ms (min 6.49), with no speed change shown ([`bench/results/2026-10-17-clip-sqnorm-ab`](../bench/results/2026-10-17-clip-sqnorm-ab/README.md)). That is about 1.13× the 2.15 nightly's 8.45 ms with `sq_norm` (about 1.2× with the replaced kernel), unpaired. wgpu was not re-run. The previously measured 4.58× / 8.13× lead came from PyTorch's older single-threadgroup kernel.
 
 
 ## Fixed cost against op size and request batching: 2026-10-04
