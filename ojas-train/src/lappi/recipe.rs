@@ -216,6 +216,226 @@ pub fn clip_coefficient(sq_norm: f64, max_norm: f64) -> Result<f64, StepError> {
     Ok(coef.min(1.0))
 }
 
+// ---------------------------------------------------------------------------------------------
+// The LoRA-2B plan (`python/qd_train/lora.py::lora_param_groups`, D6 in
+// `campaign/lora-2b-preregistered.json`): adapters at the schedule's rate, D17 and the span head
+// at `HEAD_LR_SCALE` of it, weight decay 0.01 on every trainable tensor, and no lower-layer
+// split. The provider's entries are the *trainable* parameters, so every one of them must be an
+// adapter leaf; the host entries must be D17 or a span-head tensor.
+// ---------------------------------------------------------------------------------------------
+
+/// The host entry D17 is held under (`tools/gen_span_fixture.py`, qd-export's `d17.delta`).
+pub const D17_ENTRY_NAME: &str = "d17.delta";
+/// `lora.HEAD_LR_SCALE = D17_LR / LORA_LR` = 1e-4 / 2e-4: D17 and the span head share the one
+/// schedule at half the adapters' rate.
+pub const HEAD_LR_SCALE: f64 = 0.5;
+/// `lora.LORA_WEIGHT_DECAY`: on every trainable tensor, equal to [`WEIGHT_DECAY`] and stated
+/// again because the pre-registration states it for this recipe.
+pub const LORA_WEIGHT_DECAY: f64 = 0.01;
+/// `lora.LORA_TARGET_SUFFIXES` (D6's table), matched on the dotted tail of a module name.
+pub const LORA_TARGET_SUFFIXES: [&str; 10] = [
+    "self_attn.q_proj",
+    "self_attn.k_proj",
+    "self_attn.v_proj",
+    "self_attn.o_proj",
+    "linear_attn.in_proj_qkv",
+    "linear_attn.in_proj_z",
+    "linear_attn.out_proj",
+    "mlp.gate_proj",
+    "mlp.up_proj",
+    "mlp.down_proj",
+];
+/// `lora.LORA_UNADAPTED_LINEAR_SUFFIXES`: GDN linears the table leaves out on purpose.
+pub const LORA_UNADAPTED_LINEAR_SUFFIXES: [&str; 2] =
+    ["linear_attn.in_proj_a", "linear_attn.in_proj_b"];
+
+const LORA_A_LEAF: &str = ".lora_A.weight";
+const LORA_B_LEAF: &str = ".lora_B.weight";
+
+/// One of `lora_param_groups`' optimizer groups: `"lora"` (every adapter leaf), `"d17"` and
+/// `"span_head"`, with the names of the parameters in it in the order they were given.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoraGroup {
+    pub name: &'static str,
+    pub lr_scale: f64,
+    pub weight_decay: f64,
+    pub params: Vec<String>,
+}
+
+fn is_target(module: &str) -> bool {
+    LORA_TARGET_SUFFIXES
+        .iter()
+        .any(|s| module == *s || module.ends_with(&format!(".{s}")))
+}
+
+/// The adapted modules of a LoRA plan, in the order their `A` leaf was given (which must be
+/// `model.named_modules()` order, as `lora_parameters` lists them): `(module, in_features)` and
+/// the one rank every adapter shares. Refuses what [`lora_param_groups`] refuses.
+pub fn lora_adapter_layout(
+    entries: &[ParamSpec],
+) -> Result<(usize, Vec<(String, usize)>), StepError> {
+    let refuse = |m: String| Err(StepError::Contract(m));
+    let mut a_of: Vec<(String, usize, usize)> = Vec::new();
+    let mut b_of: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    for e in entries {
+        let (module, is_a) = if let Some(m) = e.name.strip_suffix(LORA_A_LEAF) {
+            (m, true)
+        } else if let Some(m) = e.name.strip_suffix(LORA_B_LEAF) {
+            (m, false)
+        } else {
+            return refuse(format!(
+                "{} is trainable but is not an adapter leaf (<module>{LORA_A_LEAF} or \
+                 <module>{LORA_B_LEAF}): a LoRA run trains the adapters, D17 and the span head \
+                 over a frozen base, and a base parameter that trains is a different model",
+                e.name
+            ));
+        };
+        if LORA_UNADAPTED_LINEAR_SUFFIXES
+            .iter()
+            .any(|s| module == *s || module.ends_with(&format!(".{s}")))
+        {
+            return refuse(format!(
+                "{}: {module} is a GDN gate that D6's table leaves unadapted on purpose \
+                 (in_proj_a, in_proj_b)",
+                e.name
+            ));
+        }
+        if !is_target(module) {
+            return refuse(format!(
+                "{}: module {module} is not in D6's target table {LORA_TARGET_SUFFIXES:?}",
+                e.name
+            ));
+        }
+        let &[d0, d1] = e.shape.as_slice() else {
+            return refuse(format!(
+                "{}: an adapter leaf is a matrix, got shape {:?}",
+                e.name, e.shape
+            ));
+        };
+        if d0 == 0 || d1 == 0 {
+            return refuse(format!("{}: shape {:?} has a zero axis", e.name, e.shape));
+        }
+        if is_a {
+            if a_of.iter().any(|(m, _, _)| m == module) {
+                return refuse(format!("{} is listed twice", e.name));
+            }
+            a_of.push((module.to_owned(), d0, d1));
+        } else if b_of.insert(module.to_owned(), (d0, d1)).is_some() {
+            return refuse(format!("{} is listed twice", e.name));
+        }
+    }
+    if a_of.is_empty() {
+        return refuse(
+            "no adapter parameters: a LoRA run over a model that carries no lora_A/lora_B would \
+             train nothing and report a run"
+                .into(),
+        );
+    }
+    let rank = a_of[0].1;
+    for (module, r, _) in &a_of {
+        let Some(&(out, br)) = b_of.get(module) else {
+            return refuse(format!("{module} has a lora_A and no lora_B"));
+        };
+        if *r != rank || br != rank || out == 0 {
+            return refuse(format!(
+                "{module}: A has rank {r}, B has rank {br}; every adapter shares rank {rank}"
+            ));
+        }
+    }
+    if let Some(m) = b_of.keys().find(|m| !a_of.iter().any(|(a, _, _)| a == *m)) {
+        return refuse(format!("{m} has a lora_B and no lora_A"));
+    }
+    Ok((rank, a_of.into_iter().map(|(m, _, i)| (m, i)).collect()))
+}
+
+/// What `lora_param_groups` returns for these parameters, by name: `"lora"` (adapters, 1.0),
+/// then `"d17"` and `"span_head"` (each [`HEAD_LR_SCALE`]) when the host holds them, all at
+/// [`LORA_WEIGHT_DECAY`]. Refused: no adapter, an adapter outside D6's table (the GDN gates
+/// included), half an adapter, a trainable base parameter, a host entry that is neither D17 nor
+/// a span-head tensor, and any name given twice.
+pub fn lora_param_groups(
+    entries: &[ParamSpec],
+    host: &[ParamSpec],
+) -> Result<Vec<LoraGroup>, StepError> {
+    lora_adapter_layout(entries)?;
+    let mut seen = std::collections::BTreeSet::new();
+    let (mut d17, mut head): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    for h in host {
+        if !seen.insert(h.name.as_str()) {
+            return Err(StepError::Contract(format!(
+                "host entry {} is listed twice",
+                h.name
+            )));
+        }
+        if h.name == D17_ENTRY_NAME {
+            d17.push(h.name.clone());
+        } else if crate::span_head::PARAMETER_NAMES.contains(&h.name.as_str()) {
+            head.push(h.name.clone());
+        } else {
+            return Err(StepError::Contract(format!(
+                "host entry {} is neither D17 ({D17_ENTRY_NAME}) nor a span-head tensor: a base \
+                 parameter marked trainable under the lora recipe",
+                h.name
+            )));
+        }
+    }
+    let group = |name, lr_scale, params| LoraGroup {
+        name,
+        lr_scale,
+        weight_decay: LORA_WEIGHT_DECAY,
+        params,
+    };
+    let mut out = vec![group(
+        "lora",
+        1.0,
+        entries.iter().map(|e| e.name.clone()).collect(),
+    )];
+    if !d17.is_empty() {
+        out.push(group("d17", HEAD_LR_SCALE, d17));
+    }
+    if !head.is_empty() {
+        out.push(group("span_head", HEAD_LR_SCALE, head));
+    }
+    Ok(out)
+}
+
+/// The LoRA analogue of [`optimizer_table`]: the same per-entry rows (provider entries, then host
+/// entries) with the scales of [`lora_param_groups`]. The 0.1x lower-layer split is refused here,
+/// because D6 dropped it for LoRA: a layer index in an adapter's name scales nothing.
+pub fn lora_optimizer_table(
+    entries: &[ParamSpec],
+    host: &[ParamSpec],
+    recipe: &OptimizerRecipe,
+) -> Result<Vec<EntryHyper>, StepError> {
+    recipe.validate()?;
+    if recipe.lower_layers.is_some() {
+        return Err(StepError::Contract(
+            "the lora recipe has no lower-layer split (D6 dropped the 0.1x split for LoRA); \
+             a split request under it would record a scale the adapters never train at"
+                .into(),
+        ));
+    }
+    let groups = lora_param_groups(entries, host)?;
+    let scale_of = |name: &str| {
+        groups
+            .iter()
+            .find(|g| g.params.iter().any(|p| p == name))
+            .map_or(1.0, |g| g.lr_scale)
+    };
+    Ok(entries
+        .iter()
+        .chain(host)
+        .map(|e| EntryHyper {
+            name: e.name.clone(),
+            lr_scale: scale_of(&e.name),
+            weight_decay: LORA_WEIGHT_DECAY,
+            eps: EPS,
+            beta1: BETA1,
+            beta2: recipe.beta2,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
