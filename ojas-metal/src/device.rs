@@ -31,6 +31,7 @@ use tessl::qwen35_bwd::{
     conv1d_silu_bwd, conv1d_silu_bwd_part_len, gated_rms_norm_bwd, gated_rms_norm_bwd_part_len,
 };
 use tessl::runtime::GpuRuntime;
+use tessl::sq_norm::{decode_sq_norm, SqNormPlan, SqWindow};
 use tessl::tensor::{gpu_copy, GpuBuffer, Tensor as TT};
 use tessl::DType;
 
@@ -38,7 +39,8 @@ use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, EmbedRows, GdnArgs, LceGeom,
-    Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
+    Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS,
+    SQ_PIECE,
 };
 
 const ST_IN: u32 = 0;
@@ -50,9 +52,13 @@ const ST_WORDS: usize = 8;
 /// for mid-size tensors.
 const CHECK_PER_THREAD: usize = 4;
 const ST_BYTES: usize = ST_WORDS * 4;
-/// Gradients one `ojas_norm_multi` / `ojas_scale_multi` dispatch binds
-/// (`NORM_SLOTS` in the Metal source).
+/// Gradients one `ojas_scale_multi` dispatch binds (`NORM_SLOTS` in the
+/// Metal source).
 const NORM_SLOTS: usize = 24;
+
+// link.rs builds without tessl, so it mirrors these; they must agree.
+const _: () = assert!(SQ_PIECE == tessl::sq_norm::SQ_PIECE);
+const _: () = assert!(SQ_OUT_WORDS == tessl::sq_norm::SQ_OUT_WORDS);
 
 /// Status slots in the slab. A full slab forces a waited commit.
 const SLAB_SLOTS: usize = 4096;
@@ -163,8 +169,6 @@ const KERNELS: &[&str] = &[
     "ojas_embed_gather",
     "ojas_reduce_partial",
     "ojas_reduce_final",
-    "ojas_norm_multi",
-    "ojas_norm_finish",
     "ojas_scale_multi",
     "ojas_ce_fused",
     "ojas_ce_mean",
@@ -341,7 +345,7 @@ fn rms_groups(rows: u32) -> usize {
     (rows as usize).div_ceil(RMS_ROWS_PER_TG)
 }
 
-/// The slot table of one multi-tensor clip dispatch over `group` (at most
+/// The slot table of one `ojas_scale_multi` dispatch over `group` (at most
 /// [`NORM_SLOTS`] views): per slot its element count and the index of its
 /// first chunk in the dispatch, as native-endian bytes; and the dispatch's
 /// chunk count, its threadgroups.
@@ -3009,48 +3013,54 @@ impl Worker {
         Ok(self.keep(vec![loss]))
     }
 
-    /// The global L2 norm of `grads` in `ceil(len / NORM_SLOTS)` fused
-    /// dispatches and one finish: each chunk's max |g| and its sum of
-    /// (g / max)^2 in a single read, a non-finite gradient flagged by the
-    /// same kernel, and the finish rescaling every chunk to the global max
-    /// (`ojas_norm_multi`, `ojas_norm_finish`). A sync point: it waits, then
-    /// reports the first pending fault (an earlier op's, or a non-finite
-    /// gradient here) before the norm.
+    /// The global L2 norm of `grads`: tessl's [`SqNormPlan`] over every
+    /// non-empty gradient, two dispatches whatever their count (the squares
+    /// in pieces through a table of GPU addresses, then an exact integer
+    /// sum), so the norm is deterministic, finite for any finite gradients
+    /// and rounded once to f64 before its square root. A sync point: it
+    /// waits, then reports the first pending fault (an earlier op's) before
+    /// the norm; a non-finite gradient makes the sum non-finite, reported as
+    /// [`OjasError::NonFinite`] for this op. The table, pieces and result
+    /// are this worker's scratch, charged by the caller.
     fn clip_norm(&mut self, grads: &[Arg]) -> Res<Reply> {
         const OP: &str = "clip_grad_norm";
         let views = grads
             .iter()
             .map(|a| self.view(*a))
             .collect::<Res<Vec<_>>>()?;
-        let chunks = views.iter().map(|v| norm_chunks(v.n)).sum::<usize>();
-        let part = self.fresh(2 * chunks)?;
-        let out = self.fresh(2)?;
-        let st = self.status(OP)?;
-        let mut base = 0usize;
-        for group in views.chunks(NORM_SLOTS) {
-            let (tbl, groups) = norm_table(group)?;
-            let used = u32_of(group.len())?;
-            self.ktg("ojas_norm_multi", groups, 1, 256, |b| {
-                for slot in 0..NORM_SLOTS {
-                    bind(b, group.get(slot).unwrap_or(&group[0]), slot);
-                }
-                set_gpu_buf_offset(b, &part.buf, part.off + base * 8, 24);
-                bind_st(b, &st, 25);
-                b.bind_bytes(&tbl, 26);
-                set_u32(b, used, 27);
-            })?;
-            base += groups;
+        // The backend refused empty gradients and an empty list
+        // (`clip_grad_norm_dims`), and tessl refuses an empty window, so
+        // there is at least one piece: `out` is always written.
+        let windows: Vec<SqWindow<'_>> = views
+            .iter()
+            .map(|v| SqWindow::dense(&v.buf, v.off, DType::F32, v.n))
+            .collect();
+        let plan = SqNormPlan::new(&self.rt, &windows, OP).map_err(metal_err)?;
+        if plan.pieces() == 0 {
+            return Err(metal_err(format!("{OP}: no gradient values")));
         }
-        let count = u32_of(chunks)?;
-        self.ktg("ojas_norm_finish", 1, 1, 256, |b| {
-            bind(b, &part, 0);
-            bind(b, &out, 1);
-            set_u32(b, count, 2);
-        })?;
+        let table = self.fresh_from(plan.table_words())?;
+        let part = self.fresh(2 * plan.pieces())?;
+        let out = self.fresh(SQ_OUT_WORDS)?;
+        plan.encode(
+            &self.rt,
+            (&table.buf, table.off),
+            (&part.buf, part.off),
+            (&out.buf, out.off),
+            OP,
+        )
+        .map_err(metal_err)?;
         self.settle(Scan::All, Wait::ClipNorm)?;
         self.report()?;
-        let map = out.buf.try_contents_f32().map_err(metal_err)?;
-        Ok(Reply::Norm(map[out.off / 4]))
+        let sq = {
+            let map = out.buf.try_contents_u32().map_err(metal_err)?;
+            let at = out.off / 4;
+            decode_sq_norm(&map[at..at + SQ_OUT_WORDS]).map_err(metal_err)?
+        };
+        if !sq.is_finite() {
+            return Err(OjasError::NonFinite { op: OP });
+        }
+        Ok(Reply::Norm(sq.sqrt() as f32))
     }
 
     /// Every gradient times `scale` in place, `NORM_SLOTS` gradients per

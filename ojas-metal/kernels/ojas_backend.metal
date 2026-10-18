@@ -1045,11 +1045,12 @@ kernel void ojas_reduce_final(
 
 // ------------------------------------------------- multi-tensor clip ---
 //
-// `clip_grad_norm` over many gradients in few dispatches. One dispatch binds
-// up to NORM_SLOTS gradients at buffers 0..23; `tbl` holds each slot's
-// element count and the dispatch-local index of its first chunk, so
-// threadgroup g finds its slot and its NORM_CHUNK-element chunk without a
-// per-tensor launch. The slot choice is uniform across a threadgroup.
+// `clip_grad_norm`'s scale over many gradients in few dispatches (its norm
+// is tessl's `sq_norm`). One dispatch binds up to NORM_SLOTS gradients at
+// buffers 0..23; `tbl` holds each slot's element count and the
+// dispatch-local index of its first chunk, so threadgroup g finds its slot
+// and its NORM_CHUNK-element chunk without a per-tensor launch. The slot
+// choice is uniform across a threadgroup.
 
 #define NORM_SLOTS 24u
 #define NORM_CHUNK 4096u
@@ -1068,125 +1069,8 @@ inline uint norm_slot(constant uint *tbl, uint used, uint g)
     return s;
 }
 
-/// One pass over each chunk: its max |g| m and its sum of (g / m)^2 (0 when
-/// m is 0), both kept so the finish can rescale every chunk to the global
-/// max with no f32 overflow while the norm is finite. A non-finite element
-/// sets st[ST_IN] and is left out of both. part[g] = (m, sum).
-kernel void ojas_norm_multi(
-    device const float *g0 [[buffer(0)]],
-    device const float *g1 [[buffer(1)]],
-    device const float *g2 [[buffer(2)]],
-    device const float *g3 [[buffer(3)]],
-    device const float *g4 [[buffer(4)]],
-    device const float *g5 [[buffer(5)]],
-    device const float *g6 [[buffer(6)]],
-    device const float *g7 [[buffer(7)]],
-    device const float *g8 [[buffer(8)]],
-    device const float *g9 [[buffer(9)]],
-    device const float *g10 [[buffer(10)]],
-    device const float *g11 [[buffer(11)]],
-    device const float *g12 [[buffer(12)]],
-    device const float *g13 [[buffer(13)]],
-    device const float *g14 [[buffer(14)]],
-    device const float *g15 [[buffer(15)]],
-    device const float *g16 [[buffer(16)]],
-    device const float *g17 [[buffer(17)]],
-    device const float *g18 [[buffer(18)]],
-    device const float *g19 [[buffer(19)]],
-    device const float *g20 [[buffer(20)]],
-    device const float *g21 [[buffer(21)]],
-    device const float *g22 [[buffer(22)]],
-    device const float *g23 [[buffer(23)]],
-    device float2 *part [[buffer(24)]],
-    device atomic_uint *st [[buffer(25)]],
-    constant uint *tbl [[buffer(26)]],
-    constant uint &used [[buffer(27)]],
-    uint g [[threadgroup_position_in_grid]],
-    uint lane [[thread_index_in_threadgroup]])
-{
-    threadgroup float sh[NORM_TG];
-    const uint s = norm_slot(tbl, used, g);
-    const uint n = tbl[2u * s];
-    const ulong lo = (ulong)(g - tbl[2u * s + 1u]) * NORM_CHUNK;
-    device const float *x = NORM_PICK(s);
-    float v[NORM_PER];
-    float peak = 0.0f;
-    bool bad = false;
-    for (uint j = 0u; j < NORM_PER; ++j) {
-        const ulong i = lo + (ulong)(j * NORM_TG + lane);
-        float a = i < n ? x[i] : 0.0f;
-        if (!isfinite(a)) {
-            bad = true;
-            a = 0.0f;
-        }
-        v[j] = a;
-        peak = max(peak, fabs(a));
-    }
-    if (bad) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
-    sh[lane] = peak;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
-        if (lane < off) sh[lane] = max(sh[lane], sh[lane + off]);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    const float m = sh[0];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float acc = 0.0f;
-    if (m > 0.0f) {
-        for (uint j = 0u; j < NORM_PER; ++j) {
-            const float t = precise::divide(v[j], m);
-            acc += t * t;
-        }
-    }
-    sh[lane] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
-        if (lane < off) sh[lane] = sh[lane] + sh[lane + off];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (lane == 0u) part[g] = float2(m, sh[0]);
-}
-
-/// One threadgroup folds `count` chunk partials: M = max m, then
-/// total = sum sum_c * (m_c / M)^2, out[0] = M * sqrt(total), out[1] = M.
-kernel void ojas_norm_finish(
-    device const float2 *part [[buffer(0)]],
-    device float *out [[buffer(1)]],
-    constant uint &count [[buffer(2)]],
-    uint lane [[thread_index_in_threadgroup]])
-{
-    threadgroup float sh[NORM_TG];
-    float peak = 0.0f;
-    for (uint i = lane; i < count; i += NORM_TG) peak = max(peak, part[i].x);
-    sh[lane] = peak;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
-        if (lane < off) sh[lane] = max(sh[lane], sh[lane + off]);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    const float big = sh[0];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float acc = 0.0f;
-    if (big > 0.0f) {
-        for (uint i = lane; i < count; i += NORM_TG) {
-            const float r = precise::divide(part[i].x, big);
-            acc += part[i].y * (r * r);
-        }
-    }
-    sh[lane] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint off = NORM_TG / 2u; off > 0u; off >>= 1u) {
-        if (lane < off) sh[lane] = sh[lane] + sh[lane + off];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (lane == 0u) {
-        out[0] = big * precise::sqrt(sh[0]);
-        out[1] = big;
-    }
-}
-
 /// Every gradient of the dispatch times `scale`, in place; a non-finite
-/// product sets st[ST_OUT]. Same slot table as `ojas_norm_multi`.
+/// product sets st[ST_OUT].
 kernel void ojas_scale_multi(
     device float *g0 [[buffer(0)]],
     device float *g1 [[buffer(1)]],
