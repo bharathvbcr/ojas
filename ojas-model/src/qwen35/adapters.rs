@@ -161,10 +161,12 @@ pub enum AdapterError {
     /// An entry name that is neither a LoRA `A`/`B` nor one of
     /// [`HOST_ENTRY_NAMES`].
     UnknownEntryName(String),
-    /// The quantizer record differs, or is present on one side only.
+    /// The quantizer record differs, or is present on one side only. Boxed so
+    /// the error stays small (clippy `result_large_err`): every
+    /// `Result<_, AdapterError>` would otherwise carry two inline records.
     QuantizerMismatch {
-        expected: Option<QuantizerRecord>,
-        found: Option<QuantizerRecord>,
+        expected: Option<Box<QuantizerRecord>>,
+        found: Option<Box<QuantizerRecord>>,
     },
     /// The LoRA rank or alpha differs.
     LoraMismatch { detail: String },
@@ -405,7 +407,7 @@ fn is_lower_hex(s: &str) -> bool {
 }
 
 fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 || !is_lower_hex(s) {
+    if !s.len().is_multiple_of(2) || !is_lower_hex(s) {
         return None;
     }
     let nibble = |b: u8| {
@@ -417,8 +419,10 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
     };
     Some(
         s.as_bytes()
-            .chunks_exact(2)
-            .map(|p| nibble(p[0]) << 4 | nibble(p[1]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[hi, lo]| nibble(*hi) << 4 | nibble(*lo))
             .collect(),
     )
 }
@@ -696,7 +700,7 @@ pub fn write_adapter_checkpoint(dir: &Path, ckpt: &AdapterCheckpoint) -> Result<
     let digest = &ckpt.data.consumed_digest;
     if digest.is_empty()
         || digest.len() > MAX_FIELD_BYTES
-        || digest.len() % 2 != 0
+        || !digest.len().is_multiple_of(2)
         || !is_lower_hex(digest)
     {
         return Err(invalid_field(
@@ -968,8 +972,8 @@ pub fn read_adapter_checkpoint(
     }
     if quantizer != expected.base.quantizer {
         return Err(AdapterError::QuantizerMismatch {
-            expected: expected.base.quantizer.clone(),
-            found: quantizer,
+            expected: expected.base.quantizer.clone().map(Box::new),
+            found: quantizer.map(Box::new),
         });
     }
     let rank = usize::try_from(adapters.canonical_u64(KEY_RANK)?)
