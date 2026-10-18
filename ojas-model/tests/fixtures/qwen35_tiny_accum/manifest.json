@@ -1,0 +1,45 @@
+{
+  "torch": "2.13.0",
+  "args": {
+    "base": "qwen35_tiny",
+    "alpha": 8,
+    "rank": 4
+  },
+  "seed": 20261013,
+  "data_seed": 20261020,
+  "widths": [
+    5,
+    9,
+    13
+  ],
+  "offsets": [
+    0,
+    3,
+    7
+  ],
+  "ce_per_row": 3,
+  "dh_per_row": 2,
+  "dh_std": 0.1,
+  "scale": 0.3333333333333333,
+  "targets": [
+    "model.layers.0.linear_attn.out_proj",
+    "model.layers.0.linear_attn.in_proj_qkv",
+    "model.layers.0.linear_attn.in_proj_z",
+    "model.layers.0.mlp.gate_proj",
+    "model.layers.0.mlp.up_proj",
+    "model.layers.0.mlp.down_proj",
+    "model.layers.1.self_attn.q_proj",
+    "model.layers.1.self_attn.k_proj",
+    "model.layers.1.self_attn.v_proj",
+    "model.layers.1.self_attn.o_proj",
+    "model.layers.1.mlp.gate_proj",
+    "model.layers.1.mlp.up_proj",
+    "model.layers.1.mlp.down_proj"
+  ],
+  "losses": [
+    35.91542053222656,
+    35.561275482177734,
+    36.68549346923828
+  ],
+  "accum.safetensors.sha256": "7da394b8654d89579d8ab0fa06c0a6312857163421ba2c2a999ef360be126103"
+}

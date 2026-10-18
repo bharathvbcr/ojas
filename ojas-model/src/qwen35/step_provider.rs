@@ -117,6 +117,9 @@ use crate::qwen35::{
 /// Freeze a weight on the device.
 pub type FreezeHook<B> = Box<dyn Fn(&B, &Tensor) -> Result<(), OjasError>>;
 
+/// Both AdamW moments of every trainable entry, in table order: `(first, second)`.
+pub type HostMoments = Vec<(Vec<f32>, Vec<f32>)>;
+
 /// Another handle on the backend that charges the given budget.
 pub type RebindHook<B> = Box<dyn Fn(&B, Budget) -> B>;
 
@@ -945,7 +948,7 @@ impl<B: Backend> TapeStepProvider<B> {
 
     /// Both AdamW moments of every trainable entry, in table order, `B`
     /// fused (LoRA provider).
-    pub fn read_moments(&mut self) -> Result<Vec<(Vec<f32>, Vec<f32>)>, StepError> {
+    pub fn read_moments(&mut self) -> Result<HostMoments, StepError> {
         Ok(self
             .host_entries()?
             .into_iter()

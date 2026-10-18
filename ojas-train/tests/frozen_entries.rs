@@ -120,7 +120,7 @@ fn with_frozen() -> ToyProvider {
 fn config(steps: u64, checkpoint: Option<CheckpointPolicy>) -> TrainConfig {
     TrainConfig {
         schedule: LrSchedule::new(LR, steps, 1, LR / 10.0).expect("schedule"),
-        cap: WallClockCap::new(1.0e6).expect("cap"),
+        cap: WallClockCap::new(3600.0).expect("cap"),
         grad_accum: 1,
         optimizer: OptimizerRecipe {
             lr: LR,
@@ -253,38 +253,42 @@ fn training_with_a_frozen_entry_is_the_all_trainable_trajectory() {
 #[test]
 fn an_all_trainable_loop_step_is_the_direct_provider_step() {
     let mut looped = plain();
-    let r = run(&mut looped, 1, 1, None, None);
-    let rec = r.steps[0];
+    // The schedule refuses a warmup that is not shorter than the run, so the run has two steps;
+    // each loop step is compared with the direct provider step on the same batch.
+    let r = run(&mut looped, 2, 2, None, None);
+    assert_eq!(r.steps.len(), 2);
 
     let mut direct = plain();
-    let all = batches(1);
-    let b = &all[0];
-    let (positions, targets, scale) = job(&b.tokens, 1.0 / (b.tokens.len() - 1) as f32);
-    let j = SequenceJob {
-        tokens: &b.tokens,
-        rows: RowTargets {
-            positions: &positions,
-            targets: &targets,
-            scale,
-        },
-        hidden_at: &[],
-    };
-    direct.accumulate(&j, BankMode::Overwrite, None).unwrap();
-    let sq = direct.grad_sq_norm().unwrap();
-    assert_eq!(rec.grad_norm.to_bits(), sq.sqrt().to_bits());
-    let coef = recipe::clip_coefficient(sq, 1.0).unwrap();
-    assert_eq!(rec.clip_coefficient.to_bits(), coef.to_bits());
-    let hyper = AdamWHyper {
-        lr: rec.lr,
-        beta1: BETA1,
-        beta2: BETA2,
-        eps: EPS,
-        grad_scale: coef,
-    };
-    let n = direct.parameters().len();
-    direct
-        .adamw_step(&hyper, 1, &vec![1.0; n], &vec![WEIGHT_DECAY; n])
-        .unwrap();
+    let all = batches(2);
+    for (i, b) in all.iter().enumerate() {
+        let rec = r.steps[i];
+        let (positions, targets, scale) = job(&b.tokens, 1.0 / (b.tokens.len() - 1) as f32);
+        let j = SequenceJob {
+            tokens: &b.tokens,
+            rows: RowTargets {
+                positions: &positions,
+                targets: &targets,
+                scale,
+            },
+            hidden_at: &[],
+        };
+        direct.accumulate(&j, BankMode::Overwrite, None).unwrap();
+        let sq = direct.grad_sq_norm().unwrap();
+        assert_eq!(rec.grad_norm.to_bits(), sq.sqrt().to_bits(), "step {}", i + 1);
+        let coef = recipe::clip_coefficient(sq, 1.0).unwrap();
+        assert_eq!(rec.clip_coefficient.to_bits(), coef.to_bits(), "step {}", i + 1);
+        let hyper = AdamWHyper {
+            lr: rec.lr,
+            beta1: BETA1,
+            beta2: BETA2,
+            eps: EPS,
+            grad_scale: coef,
+        };
+        let n = direct.parameters().len();
+        direct
+            .adamw_step(&hyper, i as u64 + 1, &vec![1.0; n], &vec![WEIGHT_DECAY; n])
+            .unwrap();
+    }
     for (x, y) in looped.values().iter().zip(direct.values()) {
         assert!(x.iter().zip(y).all(|(p, q)| p.to_bits() == q.to_bits()));
     }

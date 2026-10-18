@@ -408,7 +408,6 @@ fn a_non_finite_gradient_in_a_later_entry_leaves_every_tensor_and_moment_unchang
 fn scale_zero_returns_the_value_runs_no_backward_and_allocates_no_vocab_gradient() {
     let mut p = open(16, true);
     let budget = p.backend().budget().clone();
-    let vd_bytes = (spec().vocab * spec().hidden * 4) as u64;
     let zero = job(8, 3, 0.0, false);
     let one = Job {
         scale: 1.0,
@@ -420,11 +419,7 @@ fn scale_zero_returns_the_value_runs_no_backward_and_allocates_no_vocab_gradient
     let v0 = p
         .accumulate(&zero.view(), BankMode::Overwrite, None)
         .unwrap();
-    let delta = budget.peak_bytes().saturating_sub(live);
-    assert!(
-        delta < vd_bytes,
-        "a scale-0 step charged {delta} bytes, a [V, d] gradient is {vd_bytes}"
-    );
+    let delta_zero = budget.peak_bytes().saturating_sub(live);
     // No backward ran: the bank holds zeros, and it is complete, so an
     // Overwrite replaced whatever the last step left.
     assert!(p.bank().is_complete());
@@ -434,11 +429,24 @@ fn scale_zero_returns_the_value_runs_no_backward_and_allocates_no_vocab_gradient
     assert_eq!(p.grad_sq_norm().unwrap(), 0.0);
 
     // The same value as the node-recording path, bit for bit.
+    let live = budget.live_bytes().unwrap();
+    budget.reset_peak();
     let v1 = p
         .accumulate(&one.view(), BankMode::Overwrite, None)
         .unwrap();
+    let delta_one = budget.peak_bytes().saturating_sub(live);
     assert_eq!(v0.to_bits(), v1.to_bits());
     assert!(v1 > 0.0);
+    // The forward activations and the fused-CE chunk scratch alone exceed one
+    // [V, d], so the bound is relative: on the same input and provider the
+    // scale-0 step must peak strictly below the scale-1 step, which runs the
+    // backward. (In LoRA mode the tied head is frozen, so neither step
+    // allocates a [V, d] gradient; the zero-gradient bank above is the
+    // evidence for the scale-0 step.)
+    assert!(
+        delta_zero < delta_one,
+        "a scale-0 step charged {delta_zero} bytes, not below the scale-1 step's {delta_one}"
+    );
 
     // A scale-0 sequence adds nothing to a sum already in the bank.
     let before = bits_all(&p.read_gradients().unwrap());
