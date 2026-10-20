@@ -528,3 +528,23 @@ Plan (do not edit as status source of truth here): Cursor plan
 - **Decision:** ship Audit 7 + Audit 8 FA_FWD_FAST defaults. Remaining ceiling
   is modest (muon + MLP sandwich + glue floor) — not another 2×. Architecture
   truth locked in `optimization_map.md` Audit 9.
+
+## M17. Gram Newton-Schulz and MLP recompute flags (2026-10-20)
+
+- **Flags (default off):** `METAL_NATIVE_MUON_GRAM=1` runs `gram_ns_bank` for Muon
+  banks with aspect ratio >= 2: iterate the polynomial on the p x p Gram matrix,
+  apply it to X once, one restart after iteration 2 (f32 drift with Polar
+  coefficients 9e-5 without it, ~1e-5 with it). `METAL_NATIVE_MLP_RECOMPUTE=1`
+  keeps only `mlp_pre_act` per layer and rebuilds the post-act hidden in backward
+  into one shared `[BT, mlp]` scratch.
+- **Parity:** `metal_gram_ns_matches_standard_and_host` (|gram-standard| 0.6-1.7e-6,
+  NS5 and Polar, tall and wide); `mlp_recompute_matches_taped_hidden` (worst 7e-10,
+  at run-to-run atomic noise). 30-step f32 trajectory: recompute vs stored 9.5e-7
+  against a 2.9e-6 same-config floor.
+- **Measured (128M, synthetic golden batches, interleaved A/B, 3 reps, min):** Gram
+  optimizer 419 -> 361 ms (Polar) and 446 -> 387 ms (NorMuon), saving 56-70 ms in
+  all 6 pairs; step -7 to -8%. Recompute: footprint -414 MB (bf16 hidden), forward
+  -13%, step -4.6% (one rep inside noise).
+- **Open:** bf16 recompute trajectory gap 2.1-4.2e-3 vs same-config spread
+  0.7-2.1e-3 over 30 steps, not separable at n=3. No FineWeb quality run (shards
+  absent), so neither flag is a default.

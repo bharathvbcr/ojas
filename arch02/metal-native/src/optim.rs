@@ -1527,6 +1527,7 @@ fn muon_bank(
             first_step,
             optim_step,
             direction_scale,
+            crate::ab_flags::muon_gram(),
         );
     }
     let tpg = 256usize;
@@ -1647,6 +1648,130 @@ fn batched_tensorops_gemm(
     })
 }
 
+/// Gram Newton-Schulz over a bank, in place on `x` (wide: rows <= cols, else tall).
+/// Standard NS forms X X^T and applies the polynomial to the full X every
+/// iteration. Here R = X0 X0^T (p x p) is iterated with Z = aI + bR + cR^2,
+/// Q <- Q Z, R <- Z R Z, and X is touched only at the end (O = Q X0, or X0 Q
+/// when tall). One restart after iteration 2 (X0 <- Q X0, R recomputed, Q <- I)
+/// bounds the drift of R from the product it stands for: f32 drift with the
+/// Polar Express coefficients reached 9e-5 without it and ~1e-5 with it.
+/// Scratch layout: R = `gram`, Z = `gram2`, Q and a temporary T live in `y`
+/// (needs 2 p^2 <= rows*cols, i.e. aspect ratio >= 2).
+#[allow(clippy::too_many_arguments)]
+fn gram_ns_bank(
+    rt: &Arc<GpuRuntime>,
+    flat: &Tensor,
+    x: &Tensor,
+    y: &Tensor,
+    r: &Tensor,
+    z: &Tensor,
+    batch: usize,
+    rows: usize,
+    cols: usize,
+    coeffs: &[(f32, f32, f32)],
+) -> Result<(), String> {
+    const RESTART_AFTER: usize = 2;
+    let p = rows.min(cols);
+    let wide = rows <= cols;
+    let mat_bank = batch * rows * cols;
+    let gram_bank = batch * p * p;
+    if 2 * gram_bank > mat_bank {
+        return Err(format!(
+            "Gram NS needs aspect ratio >= 2, got {rows}x{cols}"
+        ));
+    }
+    let q = flat.view(&[batch, p, p], mat_bank);
+    let t = flat.view(&[batch, p, p], mat_bank + gram_bank);
+    let poly = rt.pipeline("muon_tensorops_poly_combine_f32")?;
+    let add_diag = rt.pipeline("muon_gram_add_diag_f32")?;
+    let copy = rt.pipeline("muon_gram_copy_f32")?;
+    let nn = "matmul2d_tensorops_batched_f32";
+    let copy_into = |dst: &Tensor, src: &Tensor, n: usize| {
+        dispatch_1d(rt, &copy, n, |bnd| {
+            set_tensor(bnd, dst, 0);
+            set_tensor(bnd, src, 1);
+            set_u32(bnd, n as u32, 2);
+        })
+    };
+    let gram_of_x = |out: &Tensor| {
+        if wide {
+            batched_tensorops_gemm(
+                rt,
+                "matmul2d_tensorops_batched_nt_f32",
+                x,
+                x,
+                out,
+                batch,
+                rows,
+                rows,
+                cols,
+            )
+        } else {
+            batched_tensorops_gemm(
+                rt,
+                "matmul2d_tensorops_batched_tn_f32",
+                x,
+                x,
+                out,
+                batch,
+                cols,
+                cols,
+                rows,
+            )
+        }
+    };
+    // x <- Q x (wide) or x Q (tall), with Q first copied into `r` because the
+    // product lands in `y`, which also holds Q.
+    let apply_q = || -> Result<(), String> {
+        copy_into(r, &q, gram_bank)?;
+        if wide {
+            batched_tensorops_gemm(rt, nn, r, x, y, batch, rows, cols, rows)?;
+        } else {
+            batched_tensorops_gemm(rt, nn, x, r, y, batch, rows, cols, cols)?;
+        }
+        copy_into(x, y, mat_bank)
+    };
+
+    gram_of_x(r)?;
+    let mut q_is_identity = true;
+    for (i, &(a, b, c)) in coeffs.iter().enumerate() {
+        if i == RESTART_AFTER && coeffs.len() > RESTART_AFTER + 1 {
+            apply_q()?;
+            gram_of_x(r)?;
+            q_is_identity = true;
+        }
+        batched_tensorops_gemm(rt, nn, r, r, z, batch, p, p, p)?;
+        dispatch_1d(rt, &poly, gram_bank, |bnd| {
+            set_tensor(bnd, r, 0);
+            set_tensor(bnd, z, 1);
+            set_f32(bnd, b, 2);
+            set_f32(bnd, c, 3);
+            set_u32(bnd, gram_bank as u32, 4);
+        })?;
+        dispatch_1d(rt, &add_diag, batch * p, |bnd| {
+            set_tensor(bnd, z, 0);
+            set_f32(bnd, a, 1);
+            set_u32(bnd, p as u32, 2);
+            set_u32(bnd, (batch * p) as u32, 3);
+        })?;
+        if q_is_identity {
+            copy_into(&q, z, gram_bank)?;
+            q_is_identity = false;
+        } else {
+            batched_tensorops_gemm(rt, nn, &q, z, &t, batch, p, p, p)?;
+            copy_into(&q, &t, gram_bank)?;
+        }
+        if i + 1 < coeffs.len() {
+            batched_tensorops_gemm(rt, nn, z, r, &t, batch, p, p, p)?;
+            batched_tensorops_gemm(rt, nn, &t, z, r, batch, p, p, p)?;
+        }
+    }
+    if q_is_identity {
+        return Ok(());
+    }
+    apply_q()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn muon_bank_tensorops(
     rt: &Arc<GpuRuntime>,
@@ -1676,6 +1801,7 @@ fn muon_bank_tensorops(
     first_step: bool,
     optim_step: usize,
     direction_scale: f32,
+    gram_ns: bool,
 ) -> Result<(), String> {
     let (batch, rows, cols) = (n as usize, rows as usize, cols as usize);
     let mat = rows * cols;
@@ -1745,7 +1871,17 @@ fn muon_bank_tensorops(
 
     let poly = rt.pipeline("muon_tensorops_poly_combine_f32")?;
     let x_combine = rt.pipeline("muon_tensorops_x_combine_f32")?;
-    for (a, b, c) in orthogonalizer.coefficients() {
+    // Gram NS needs two p x p temporaries inside `y`, which holds them only when
+    // the long side is at least twice the short side.
+    let mut ns_coeffs = orthogonalizer.coefficients();
+    if gram_ns && rows.max(cols) >= 2 * p {
+        gram_ns_bank(
+            rt, &flat, &x, &y, &gram, &gram2, batch, rows, cols, &ns_coeffs,
+        )?;
+        mprof.lap(rt, "muon_gram_ns")?;
+        ns_coeffs.clear();
+    }
+    for (a, b, c) in ns_coeffs {
         if rows <= cols {
             batched_tensorops_gemm(
                 rt,
@@ -2870,7 +3006,8 @@ mod ns5_tests {
         n: u32,
         rows: u32,
         cols: u32,
-        ns_steps: u32,
+        orthogonalizer: MuonOrthogonalizer,
+        gram: bool,
     ) -> Result<Vec<f32>, String> {
         let param = zeros_like(rt, g)?;
         let mom = zeros_like(rt, g)?;
@@ -2901,7 +3038,7 @@ mod ns5_tests {
             1.0,
             None,
             0.0,
-            MuonOrthogonalizer::NewtonSchulz(ns_steps),
+            orthogonalizer,
             0,
             0.95,
             0,
@@ -2910,6 +3047,7 @@ mod ns5_tests {
             true,
             0,
             0.2,
+            gram,
         )?;
         rt.synchronize()?;
         Ok(param.buffer.read_f32().iter().map(|x| -x).collect())
@@ -3093,6 +3231,7 @@ mod ns5_tests {
             true,
             0,
             0.2,
+            false,
         )
         .unwrap();
         rt.synchronize().unwrap();
@@ -3182,6 +3321,7 @@ mod ns5_tests {
                 step == 0,
                 step,
                 0.2,
+                false,
             )
             .unwrap();
         }
@@ -3271,6 +3411,7 @@ mod ns5_tests {
             true,
             0,
             0.2,
+            false,
         )
         .unwrap();
         rt.synchronize().unwrap();
@@ -3377,7 +3518,16 @@ mod ns5_tests {
                 .alloc_tensor_f32(&[n as usize, rows as usize, cols as usize])
                 .unwrap();
             g.buffer.write_f32(&data);
-            let got = run_ns_tensorops_only(&rt, &g, n, rows, cols, 3).unwrap();
+            let got = run_ns_tensorops_only(
+                &rt,
+                &g,
+                n,
+                rows,
+                cols,
+                MuonOrthogonalizer::NewtonSchulz(3),
+                false,
+            )
+            .unwrap();
             let mut expected = Vec::with_capacity(data.len());
             for m in data.chunks_exact(matrix) {
                 expected.extend(host_ns(m, rows as usize, cols as usize, 3));
@@ -3388,6 +3538,73 @@ mod ns5_tests {
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f32, crate::parity::max_finite_error);
             assert!(max_abs < 1e-3, "TensorOps {rows}x{cols} mismatch {max_abs}");
+        }
+    }
+
+    #[test]
+    fn metal_gram_ns_matches_standard_and_host() {
+        let rt = crate::gpu_runtime().expect("gpu");
+        let mut seed = 0x9e37_79b9u32;
+        // Wide and tall, aspect 2..4, and sizes off the TensorOps tile grid.
+        for &(n, rows, cols) in &[
+            (2u32, 64u32, 256u32),
+            (3, 256, 64),
+            (2, 48, 96),
+            (2, 120, 40),
+        ] {
+            let matrix = rows as usize * cols as usize;
+            let data: Vec<f32> = (0..n as usize * matrix)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+                })
+                .collect();
+            for orth in [
+                MuonOrthogonalizer::NewtonSchulz(5),
+                MuonOrthogonalizer::PolarExpress,
+            ] {
+                let g = rt
+                    .alloc_tensor_f32(&[n as usize, rows as usize, cols as usize])
+                    .unwrap();
+                g.buffer.write_f32(&data);
+                rt.take_dispatch_count();
+                let standard = run_ns_tensorops_only(&rt, &g, n, rows, cols, orth, false).unwrap();
+                let standard_dispatches = rt.take_dispatch_count();
+                let gram = run_ns_tensorops_only(&rt, &g, n, rows, cols, orth, true).unwrap();
+                let gram_dispatches = rt.take_dispatch_count();
+                assert_ne!(
+                    standard_dispatches, gram_dispatches,
+                    "{rows}x{cols}: Gram path did not run"
+                );
+                let mut host = Vec::with_capacity(data.len());
+                for m in data.chunks_exact(matrix) {
+                    host.extend(host_orth(
+                        m,
+                        rows as usize,
+                        cols as usize,
+                        &orth.coefficients(),
+                        orth.norm_scale(),
+                    ));
+                }
+                let diff = |a: &[f32], b: &[f32]| {
+                    a.iter()
+                        .zip(b)
+                        .map(|(x, y)| (x - y).abs())
+                        .fold(0.0f32, crate::parity::max_finite_error)
+                };
+                let vs_standard = diff(&gram, &standard);
+                let vs_host = diff(&gram, &host);
+                eprintln!(
+                    "gram {rows}x{cols} kind={}: |gram-standard|={vs_standard:.2e} |gram-host|={vs_host:.2e} \
+                     dispatches {standard_dispatches}->{gram_dispatches}",
+                    orth.kernel_kind()
+                );
+                assert!(
+                    vs_standard < OPTIM_ATOL,
+                    "{rows}x{cols} gram vs standard {vs_standard}"
+                );
+                assert!(vs_host < 1e-3, "{rows}x{cols} gram vs host {vs_host}");
+            }
         }
     }
 

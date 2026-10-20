@@ -102,6 +102,8 @@ struct AbFlags {
     fa_blocksoft: bool,
     optim_profile: bool,
     glue_rowblock: bool,
+    muon_gram: bool,
+    mlp_recompute: bool,
 }
 
 fn flags() -> &'static AbFlags {
@@ -134,7 +136,26 @@ fn flags() -> &'static AbFlags {
         optim_profile: env_truthy("METAL_NATIVE_OPTIM_PROFILE").unwrap_or(false),
         // Rowblock cut atomics ~128× but A/B ≈ noise (Audit 8 glue sweep) — keep OFF.
         glue_rowblock: env_truthy("METAL_NATIVE_GLUE_ROWBLOCK").unwrap_or(false),
+        // Gram Newton-Schulz for Muon banks with aspect ratio >= 2. Same polynomial,
+        // different association; A/B candidate. Default off.
+        muon_gram: env_truthy("METAL_NATIVE_MUON_GRAM").unwrap_or(false),
+        // Recompute the MLP hidden activation in backward instead of keeping it on
+        // the tape. Trades one elementwise pass for B*T*mlp floats per layer. Default off.
+        mlp_recompute: env_truthy("METAL_NATIVE_MLP_RECOMPUTE").unwrap_or(false),
     })
+}
+
+/// Gram Newton-Schulz Muon banks (`METAL_NATIVE_MUON_GRAM=1`): iterate the
+/// polynomial on the small p x p Gram matrix and apply it to X once, for banks
+/// whose long side is at least 2x the short side. Default: false.
+pub fn muon_gram() -> bool {
+    flags().muon_gram
+}
+
+/// MLP activation recompute (`METAL_NATIVE_MLP_RECOMPUTE=1`): backward rebuilds
+/// `act(mlp_pre_act)` instead of reading a per-layer `mlp_hidden`. Default: false.
+pub fn mlp_recompute() -> bool {
+    flags().mlp_recompute
 }
 
 /// Number of row-blocks for the glue-bwd reduction (`METAL_NATIVE_GLUE_ROWBLOCKS`).

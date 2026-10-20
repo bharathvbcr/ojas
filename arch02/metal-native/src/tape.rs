@@ -25,6 +25,13 @@ pub struct Tape {
     /// Layer-0 raw V before λ mix `[B,T,Hkv,D]`.
     pub v0: Option<Tensor>,
     pub layer: Vec<LayerTape>,
+    /// `METAL_NATIVE_MLP_RECOMPUTE` as decided by the forward that filled this
+    /// tape: `mlp_hidden` is then never taped and backward rebuilds it from
+    /// `mlp_pre_act` into `mlp_scratch`.
+    pub mlp_recompute: bool,
+    /// Single `[BT, mlp]` post-activation buffer shared by every layer (f32, or
+    /// bf16 under the persistent-bf16 GEMM path). Set only when `mlp_recompute`.
+    pub mlp_scratch: Option<Tensor>,
     /// Encoder skip tensors in push order (layer 0, then 1).
     pub skips: Vec<Tensor>,
     /// Final RMSNorm input (= last layer x_out, post skip).
@@ -87,7 +94,7 @@ pub struct LayerTape {
     pub mlp_in: Option<Tensor>,
     /// Pre-activation MLP hidden `[BT, mlp]`.
     pub mlp_pre_act: Option<Tensor>,
-    /// Post-activation hidden (input to down proj).
+    /// Post-activation hidden (input to down proj). `None` under `mlp_recompute`.
     pub mlp_hidden: Option<Tensor>,
     pub mlp_out: Option<Tensor>,
     pub x_out: Option<Tensor>,
@@ -115,6 +122,8 @@ impl Tape {
         self.x0 = None;
         self.v0 = None;
         self.skips.clear();
+        self.mlp_recompute = false;
+        self.mlp_scratch = None;
         self.pre_final_norm = None;
         self.final_norm = None;
         self.logits_pre = None;
