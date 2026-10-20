@@ -151,3 +151,6 @@ arch02/metal-native/out/
 .devcouncil/*
 !/.devcouncil/
 !.devcouncil/config.yaml
+
+# Session scratch: logs, board dumps and other sessions' backups (kept out of git; see tools/a6/README.md)
+backups/
