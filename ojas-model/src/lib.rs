@@ -22,6 +22,7 @@
 mod block;
 mod checkpoint;
 mod graph;
+pub mod image_mlp;
 mod init;
 mod json;
 mod load;

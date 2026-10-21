@@ -237,7 +237,7 @@ impl Fail {
     }
 }
 
-fn core_err(e: OjasError) -> StepError {
+pub(crate) fn core_err(e: OjasError) -> StepError {
     StepError::Backend(e.to_string())
 }
 
@@ -253,7 +253,7 @@ fn adapter_err(e: AdapterError) -> StepError {
     }
 }
 
-fn bank_err(e: BankError) -> StepError {
+pub(crate) fn bank_err(e: BankError) -> StepError {
     match e {
         BankError::Core { .. } | BankError::NonFinite { .. } => StepError::Backend(e.to_string()),
         other => StepError::Contract(other.to_string()),

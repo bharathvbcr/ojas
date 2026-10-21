@@ -65,14 +65,24 @@ impl Normal {
 /// once to f32. `Zeros` is `+0.0` and `Ones` is `1.0`, exactly. A
 /// non-positive or non-finite `std` is [`OjasError::OutOfRange`].
 pub fn init_values(info: &ParamInfo, seed: u64) -> Result<Vec<f32>, OjasError> {
+    init_param(&info.name, &info.shape, info.init, seed)
+}
+
+/// [`init_values`] for a parameter that is not a row of the nanolab table: its `name` (the
+/// stream key), `shape` and `init` rule under `seed`.
+pub fn init_param(
+    name: &str,
+    shape: &[usize],
+    init: Init,
+    seed: u64,
+) -> Result<Vec<f32>, OjasError> {
     const OP: &str = "init_values";
-    let n = info
-        .shape
+    let n = shape
         .iter()
         .try_fold(1usize, |acc, &d| acc.checked_mul(d))
         .ok_or_else(|| OjasError::OutOfRange {
             op: OP,
-            detail: format!("{}: element count overflows", info.name),
+            detail: format!("{name}: element count overflows"),
         })?;
     let mut out = Vec::new();
     out.try_reserve_exact(n)
@@ -81,17 +91,17 @@ pub fn init_values(info: &ParamInfo, seed: u64) -> Result<Vec<f32>, OjasError> {
             cap: 0,
             live: 0,
         })?;
-    match info.init {
+    match init {
         Init::Zeros => out.resize(n, 0.0),
         Init::Ones => out.resize(n, 1.0),
         Init::Normal { std } => {
             if !(std.is_finite() && std > 0.0) {
                 return Err(OjasError::OutOfRange {
                     op: OP,
-                    detail: format!("{}: std {std} is not positive and finite", info.name),
+                    detail: format!("{name}: std {std} is not positive and finite"),
                 });
             }
-            let mut normal = Normal::new(seed ^ fnv1a(info.name.as_bytes()));
+            let mut normal = Normal::new(seed ^ fnv1a(name.as_bytes()));
             let std = f64::from(std);
             out.extend((0..n).map(|_| (std * normal.next()) as f32));
         }
