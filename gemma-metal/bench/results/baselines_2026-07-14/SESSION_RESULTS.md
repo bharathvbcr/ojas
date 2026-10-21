@@ -15,6 +15,13 @@ E4B **23.92**, 31B **6.83**. Session floor ~4.5 on 31B.
 | 4 K+V + layer_scalar | **landed** | 23.99 | **5.30** | `kv_store_timestep_pair`; scale folded into post-ff residual |
 | 5 one-pass argmax | **landed** | 23.99 | **5.26** | `softcap_argmax_one_pass`; `GEMMA_METAL_ARGMAX_MULTIPASS=1` rollback |
 
+> **Audit 2026-10-20:** "landed" above means the code merged, not that a speed gain was shown.
+> Every E4B delta in the table is 23.67–24.90 and the 31B deltas 4.54–5.57 on a host the header
+> calls noisy (load ~4–5), single runs; the A/B-off arm of step 3 (24.45 / 5.57) is within noise
+> of the "on" arm (24.90 / 5.41). Treat step gains as undemonstrated. The quiet "31B 6.83" in
+> the header is not reproduced by any run in this table (max 5.41); later single runs gave
+> 5.64–5.71 (`fusion_ab_31b_20260719T080223Z.json`, 2026-07-19).
+
 Standing gates: E4B ≥23 ✓ · 31B greedy finite ✓ · E4B path untouched ✓
 
 ### Native #3 details

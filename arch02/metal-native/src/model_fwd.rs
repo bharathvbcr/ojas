@@ -50,13 +50,48 @@ pub fn forward_f32(
     target_ids_i32: &[i32],
     tape: &mut Tape,
 ) -> Result<ForwardOutputs, String> {
+    forward_f32_with(
+        rt,
+        w,
+        input_ids_i32,
+        target_ids_i32,
+        tape,
+        crate::ab_flags::mlp_recompute(),
+    )
+}
+
+/// [`forward_f32`] with the MLP-recompute decision passed explicitly instead of
+/// read from the process-wide env flag (A/B tests run both in one process).
+pub fn forward_f32_with(
+    rt: &Arc<GpuRuntime>,
+    w: &Weights,
+    input_ids_i32: &[i32],
+    target_ids_i32: &[i32],
+    tape: &mut Tape,
+    mlp_recompute: bool,
+) -> Result<ForwardOutputs, String> {
     let cfg = &w.cfg;
     let b = cfg.batch;
     let t = cfg.seq_len;
     let bt = b * t;
     let ids = upload_i32(rt, &[b, t], input_ids_i32)?;
     let tgts = upload_i32(rt, &[bt], target_ids_i32)?;
-    forward_f32_uploaded(rt, w, ids, tgts, tape)
+    forward_f32_uploaded_with(rt, w, ids, tgts, tape, mlp_recompute)
+}
+
+/// The shared MLP scratch is rewritten by every layer, so layer L+1's activation
+/// write must not overtake layer L's down-projection read. Only the always-on
+/// Device barrier orders that write-after-read; with it skipped the gradients
+/// would be silently wrong, so refuse instead.
+fn recompute_needs_auto_barriers(skip_auto_barriers: bool) -> Result<(), String> {
+    if skip_auto_barriers {
+        return Err(
+            "METAL_NATIVE_MLP_RECOMPUTE=1 shares one MLP scratch across layers and needs \
+             the always-on dispatch barrier; unset TESSL_HAZARD_BARRIERS"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// Forward with pre-uploaded (e.g. ping-pong) id/target buffers.
@@ -66,6 +101,17 @@ pub fn forward_f32_uploaded(
     ids: Tensor,
     tgts: Tensor,
     tape: &mut Tape,
+) -> Result<ForwardOutputs, String> {
+    forward_f32_uploaded_with(rt, w, ids, tgts, tape, crate::ab_flags::mlp_recompute())
+}
+
+fn forward_f32_uploaded_with(
+    rt: &Arc<GpuRuntime>,
+    w: &Weights,
+    ids: Tensor,
+    tgts: Tensor,
+    tape: &mut Tape,
+    mlp_recompute: bool,
 ) -> Result<ForwardOutputs, String> {
     let cfg = &w.cfg;
     let b = cfg.batch;
@@ -77,6 +123,20 @@ pub fn forward_f32_uploaded(
 
     tape.clear_activations();
     tape.step += 1;
+    if mlp_recompute {
+        recompute_needs_auto_barriers(crate::ab_flags::hazard_barriers())?;
+        // One post-act buffer for every layer: fwd writes it before the down
+        // GEMM, bwd rewrites it from `mlp_pre_act` before the dW_down GEMM.
+        // Dtype follows the down-proj GEMM operand (bf16 only on the
+        // persistent-bf16 path), so bwd can pick the matching act kernel.
+        let shape = [bt, cfg.mlp_dim];
+        tape.mlp_scratch = Some(if use_persistent_bf16(rt, backend) {
+            rt.alloc_tensor_bf16(&shape)?
+        } else {
+            rt.alloc_tensor_f32(&shape)?
+        });
+        tape.mlp_recompute = true;
+    }
 
     tape.input_ids = Some(ids.clone());
     tape.target_ids = Some(tgts.clone());
@@ -538,23 +598,33 @@ fn block_fwd(
     }
     // Audit 9C: under Bf16, fuse act → bf16 and skip the post-act cast into
     // the down-proj GEMM. Pre-act stays f32 for bwd (`mlp_act_bwd_f32`).
+    // Recompute mode: the tape's shared scratch replaces the per-layer buffer.
+    let scratch = tape.as_ref().and_then(|t| t.mlp_scratch.clone());
     let (hidden_for_down, taped_hidden) = if use_persistent_bf16(rt, backend) {
-        let hidden_bf = rt.alloc_tensor_bf16(&[bt, mlp])?;
+        let hidden_bf = match scratch {
+            Some(ref s) => s.clone(),
+            None => rt.alloc_tensor_bf16(&[bt, mlp])?,
+        };
         mlp_act_to_bf16(rt, &hidden_pre, &hidden_bf)?;
         if let Some(p) = fprof.as_deref_mut() {
             p.lap(rt, "mlp_act")?;
         }
         (hidden_bf.clone(), hidden_bf)
     } else {
-        let hidden = rt.alloc_tensor_f32(&[bt, mlp])?;
+        let hidden = match scratch {
+            Some(ref s) => s.clone(),
+            None => rt.alloc_tensor_f32(&[bt, mlp])?,
+        };
         mlp_act(rt, &hidden_pre, &hidden)?;
         if let Some(p) = fprof.as_deref_mut() {
             p.lap(rt, "mlp_act")?;
         }
         (hidden.clone(), hidden)
     };
-    if let Some(lt) = tape.as_mut().and_then(|t| t.layer.get_mut(layer)) {
-        lt.mlp_hidden = Some(taped_hidden);
+    if scratch.is_none() {
+        if let Some(lt) = tape.as_mut().and_then(|t| t.layer.get_mut(layer)) {
+            lt.mlp_hidden = Some(taped_hidden);
+        }
     }
     let mlp_out_flat = rt.alloc_tensor_f32(&[bt, c])?;
     if use_persistent_bf16(rt, backend) {
@@ -1049,7 +1119,7 @@ fn skip_add(
     Ok(out)
 }
 
-fn mlp_act(rt: &Arc<GpuRuntime>, x: &Tensor, y: &Tensor) -> Result<(), String> {
+pub(crate) fn mlp_act(rt: &Arc<GpuRuntime>, x: &Tensor, y: &Tensor) -> Result<(), String> {
     let n = x.numel();
     assert_eq!(n, y.numel());
     let p = rt.pipeline("mlp_act_sq_leaky_f32")?;
@@ -1061,7 +1131,7 @@ fn mlp_act(rt: &Arc<GpuRuntime>, x: &Tensor, y: &Tensor) -> Result<(), String> {
     Ok(())
 }
 
-fn mlp_act_to_bf16(rt: &Arc<GpuRuntime>, x: &Tensor, y: &Tensor) -> Result<(), String> {
+pub(crate) fn mlp_act_to_bf16(rt: &Arc<GpuRuntime>, x: &Tensor, y: &Tensor) -> Result<(), String> {
     let n = x.numel();
     assert_eq!(n, y.numel());
     assert_eq!(x.dtype, crate::tensor::DType::F32);
@@ -1628,6 +1698,13 @@ fn mingru_fwd_rust(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mlp_recompute_refuses_skipped_auto_barriers() {
+        assert!(recompute_needs_auto_barriers(false).is_ok());
+        let err = recompute_needs_auto_barriers(true).unwrap_err();
+        assert!(err.contains("TESSL_HAZARD_BARRIERS"), "{err}");
+    }
 
     #[test]
     fn flash_head_dim_above_64_is_refused_on_the_host() {

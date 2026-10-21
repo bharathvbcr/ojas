@@ -61,7 +61,8 @@ cargo run --release --bin train -- --bench --bench-steps 15 --tok-mult 1 \
   --data-dir ../../../parameter-golf/data/datasets/fineweb10B_sp1024 \
   --out out/bench_b16 --f32
 
-# 3k sota toy (warmdown=0 default) — Soft EMA ~2.02 with FA_TILED
+# 3k sota toy (warmdown=0 default) — Soft EMA ~2.02 with FA_TILED (historical, n=1;
+# current code measures ~2.106 for this recipe, DECISIONS M17)
 cargo run --release --bin train -- \
   --data-dir ../../../parameter-golf/data/datasets/fineweb10B_sp1024 \
   --token-bytes ../burn-port/token_bytes.json \
@@ -103,6 +104,9 @@ WSD arm (`out/.../100k_..._wsd/`): FINAL EMA **1.8828**, best live **1.8819**,
 live **1.8819 @96999**, ~5.6 h wall / ~60k tok/s (M5 Pro). Through the former
 ~21–50k cliff: live BPB kept improving (~1.91→~1.90) vs failed rebound to ~1.97;
 hold mean gnorm ~919 (failed ~3.4k).
+> **Audit 2026-10-20:** wall and rate disagree: 100000 steps x 4096 tok/step /
+> 60000 tok/s = ~1.9 h, not 5.6 h (DECISIONS M11 audit note). Unreconciled;
+> artifacts not in this tree.
 
 ### ~16M Soft scale-up (`--preset 16m`)
 
@@ -286,6 +290,9 @@ Packages land in `out/coreml_export/`:
 **BPB gap (updated 2026-07-12 Soft-harden):** default Soft EMA **2.0502**
 (`out/sota_f32_clipsoft_seed1337_harden/`, accum off); quality recipe
 `METAL_NATIVE_FA_TILED=1` → **2.0369**. CUDA **1.9944** (Δ ≈ 0.04–0.06).
+(Historical, single seed; DECISIONS M17 measures the Soft-split + FA_TILED 3k
+recipe at ~2.106 under current code, so these 2.02-2.05 figures are not
+reproducible today.)
 Audit6 + `multiply_accumulate` Soft **2.058** / late gnorm~9 was rejected as
 default. Remaining gap is FA numerics (not late explosion on the harden path).
 
@@ -301,6 +308,11 @@ Re-verified **2026-07-12** Soft-harden: `--bench --bench-steps 20 --f32`
 | metal-native B=16 + FA_TILED | **~69** | **~60k** | Soft EMA **2.037** quality recipe |
 | burn-port sota (ref) | ~2900–3400 | ~1200–1400 | |
 | 3070 Ti CUDA (ref) | ~650–840 | — | bf16 PyTorch |
+
+> **Audit 2026-10-20:** the CUDA row is the original grad-accum 2x8 shape,
+> untuned, with ~±40% run-to-run spread on identical config (DECISIONS D2: 644 vs
+> 1030 ms). Ratios against it are not like-for-like. The burn-port "16x1 ~6x faster
+> than 2x8" is an M5-vs-M5 comparison (~2,900 vs ~17,000 ms), not vs the 3070 Ti.
 
 ### Full 3000-step sota (seed 1337, FineWeb) — f32 clip-soft 2026-07-12
 
@@ -323,6 +335,10 @@ Quality Soft (best EMA @3k): prefix `METAL_NATIVE_FA_TILED=1`.
 | late gnorm @2999 | **~3.4** | **~4.0** | **~5.7** | — |
 | Final EMA sliding BPB @3k | **2.0502** | **2.0369** | **2.0222** | **1.9944** |
 | Soft-split continue →8k FINAL EMA | — | explode **2.25** | **1.9469** | — |
+
+> **Audit 2026-10-20:** n=1 seed (1337); the 0.01-0.04 gaps between columns are
+> historical and not reproducible under current code (M17: ~2.106 vs 2.0222). The
+> 1.9469 (8k) is not step-matched against the 3000-step CUDA 1.9944.
 
 **Default clip = Soft (`Muon×√c`, `AdamW×c`).** Soft-everywhere (`√c` on AdamW too)
 explodes ~3.5–4.5k on 20k FA_TILED (FINAL EMA **2.2575**). Soft-split continue from
@@ -362,6 +378,11 @@ cargo run --release --bin train -- \
 | gnorm @19999 (1337 / 42 reseed) | **216 / 60** | 636 / — | — |
 | Wall (M5 Pro, FA_TILED) | **~24–27 min** | ~23 min | ~4–5 h |
 
+> **Audit 2026-10-20:** the CUDA 1.9944 is a 3000-step ladder (burn-port/README.md),
+> so it is step-matched only to the 3k rows; the 20k Metal rows ran 6.7x the steps
+> and "beat" is not a like-for-like win. The CUDA wall cell (~4-5 h) does not match
+> a 3000-step run (3000 x ~0.65-0.84 s = ~33-42 min); its origin is unverified.
+
 Artifacts:
 `out/sota_f32_clipsoft_seed1337_20k_fa_tiled_softsplit_warmdown/` (golden-init),
 `out/sota_f32_clipsoft_seed42_20k_fa_tiled_softsplit_warmdown_reseed/` (true
@@ -371,7 +392,7 @@ Artifacts:
 
 | Horizon | Schedule | Notes |
 |---------|----------|-------|
-| **3k** | `--warmdown 0` (default) | Soft FA_TILED EMA ~2.02 |
+| **3k** | `--warmdown 0` (default) | Soft FA_TILED EMA ~2.02 (historical; ~2.106 under current code, M17) |
 | **20k** | `--warmdown 3500` | linear 1→0 from 16500; EMA **1.8969** |
 | **100k** | `--warmdown-start 16000 --warmdown 24000 --lr-floor 0.1 --final-warmdown 10000` | WSD; FINAL EMA **1.8828**; **not** last-10% alone |
 
@@ -404,6 +425,11 @@ cargo run --release --bin train -- \
 
 Smoke (300 steps) showed early loss divergence: step0 6.930 vs 6.927; step100
 4.528 vs 4.434; FINAL@300 EMA 3.033 vs 3.042.
+
+> **Audit 2026-10-20:** "faithful"/"within seed noise" is not established by this
+> smoke (one seed, three points; the step-100 gap is ~0.09 here and 0.40 in the
+> burn-port comparison). Fidelity is unproven; the golden parity gates are the
+> gate, not loss-curve proximity.
 
 
 ### Core ML inference (M5 Pro, int8 palettized, T=256)
@@ -453,6 +479,14 @@ matrix-lr 0.05**. The current champion is
 | long20k FINAL EMA | — | **1.8155** @ ~1582 ms (`out/long20k_128m_audit8`) |
 | current physical | ~13510 MB | ~13510 MB |
 
+> **Audit 2026-10-20:** (1) "unlocked muon_polar_adamw @ 0.05" / "champion" names a
+> polar@0.05 systems configuration, not an optimizer winner: the selection is
+> RETIRED by `MLSystemsLab/research/d7-lr-retune.json` (ordering crosses over in
+> LR; at both candidates' best-tested LR 0.008 the paired gap is 0.004097, ci95
+> ±0.005085, includes zero; the funnel compared polar@0.05 against normuon@0.1).
+> (2) 2.0107 vs 2.015576 is a ~0.005 delta against a ~0.03 seed spread (seed2026
+> gave 2.0404): a BPB tie; the replacement is justified on ms/step.
+
 > **Scale note.** The `1.9944` / `~650–840 ms` 3070 Ti references elsewhere in
 > this README are for `--preset sota` (4L × 128d × mlp384). `arch02-128m` is
 > 24 × 768 × 2304, ~100× the parameters. **Do not compare 128M results against
@@ -471,7 +505,10 @@ Opt-out: `METAL_NATIVE_FA_FAST=0` / `FA_BF16=0` / `BWD_CAST_ONCE=0` /
 WIN synced budget: **bwd ~457 · fwd ~412 · optim ~413** (`muon_banks` 99.8% of
 optim — primary leftover). Instruments: `METAL_NATIVE_{BWD,FWD,OPTIM}_PROFILE=1`;
 harness `scripts/bench_128m_ab.sh` / `scripts/blog_results.sh`. Architecture
-truth: `docs/optimization_map.md` Audit 9.
+truth: `/Users/bharath/Code/research/tessl/docs/apple-silicon/optimization_map.md`
+Audit 9 (not under this repo). Its ~10.7 TFLOP/s backward-GEMM figure has no named
+hardware peak, so "headroom is thin" is unsupported; the same map lists the forward
+MLP block at ~4.1 TFLOP/s.
 
 Funnel machinery (kept for reruns):
 
@@ -504,9 +541,18 @@ Those four advance to exact 128M/500. The mandatory AdamW control completed but
 degraded to mean BPB **11.2789** at its short-sweep-selected LR and is excluded
 from exact scale.
 
+> **Audit 2026-10-20:** the funnel's ranking is superseded by
+> `MLSystemsLab/research/d7-lr-retune.json` (2026-08-23): selection RETIRED, not
+> reversed. The AdamW anchor's LR came from the 100-step sweep, so its exclusion
+> reflects a weak baseline, not AdamW's ceiling. Stage winners (polar, MONA, etc.)
+> were each ranked at LRs picked by a short sweep; the funnel compared polar@0.05
+> with normuon@0.1, which "measures the learning rates, not the optimizers".
+
 1. **BPB parity** — @3k Soft-split FA_TILED EMA **2.0222** vs CUDA **1.9944**
-   (Δ ≈ 0.03). @20k Soft+warmdown seed 1337 EMA **1.8969** and @100k WSD
-   **1.8828** **beat** CUDA **1.9944**. Residual @3k gap: f32 vs CUDA bf16 +
+   (Δ ≈ 0.03; historical n=1 figure, current code measures ~2.106, DECISIONS M17).
+   @20k Soft+warmdown seed 1337 EMA **1.8969** and @100k WSD **1.8828** are below
+   the CUDA **1.9944**, which is a 3000-step ladder: 6.7x / 33x the steps, so not a
+   step-matched win. Residual @3k gap: f32 vs CUDA bf16 +
    FA-2 vs flash-attn-3. **No bf16 BPB claim** until f32 3k closer to ~1.99.
 2. **bf16 residual stream** — **landed** megakernel twins
    (`resid_mix_rms_norm_scale_bf16`, `residual_scale_add_rms_norm_scale_bf16`)

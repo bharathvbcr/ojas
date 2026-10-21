@@ -61,6 +61,13 @@ Details that matter for us:
   spread almost exactly.
 - TTFT degrades under concurrency with spec-decode — irrelevant at bs=1 local.
 
+> **Audit 2026-10-20:** the MLX A/B proposed below ran on 2026-07-19 and the MTP arm could not
+> be measured on M5 (`bench/results/mlx_mtp_vs_dflash_ab_2026-07-19.md`: mlx-lm PR #1276 loads
+> the assistant but `shared_kv_states` wiring is missing). So MTP vs DFlash on M5 is
+> **unmeasured**; the DFlash number there is one prompt, 64 tokens (23.59 vs greedy 13.26).
+> The H100 table above, the only head-to-head, has MTP ahead on 31B dense (125.3 vs 122.1).
+> Statements that DFlash "supersedes" MTP (D14) are about clustered MTP only.
+
 **Action for gemma-metal:** we bet on DFlash-only for 31B (D14) partly because clustered
 per-token MTP measured poorly. But `google/gemma-4-31B-it-assistant` + **MLX MTP support**
 now exists — a 30-minute A/B on the MLX side (MTP drafter vs our DFlash serve at bs=5) decides
@@ -138,6 +145,15 @@ risky. The practical ladder on Apple GPUs, in increasing ambition:
 
 Steps 1+2 together attack the full 17 ms/token launch tax with no scheduling heroics, and are
 the concrete version of audit plan items #3/#7.
+
+> **Audit 2026-10-20:** the "~37 µs/dispatch", "17 ms/token launch tax" (§4 intro, table row
+> ~116, and here), the "~2.5 ms host encode" and the §5 targets ("~180 dispatches: E4B
+> ~24 → ~40+", item 3 "+2–3 ms/token") were extrapolated from one mini-graph point and are
+> falsified on real E4B: −90 dispatches moved tok/s 23.58 → 23.26
+> (`fusion_ab_e4b_20260720T012511Z.json`); launch tax for that cut is 3.3 ms of 42.4 ms and host
+> encode is 170 µs (`decode_profile_e4b_20260720T015429Z.json`: `fusion_both_delta`,
+> `trace1_host_encode_us_shipping`). Encode-once measured ~flat (23.56 vs 23.46,
+> `encode_once_e4b_toks_20260720T013526Z.json`).
 
 ### Metal/Apple-specific kernel resources
 

@@ -80,6 +80,11 @@ path (`src/mtp.rs`: presets, cross-KV, activation bridge, E4B centroids head, ad
 draft, greedy verify). No real assistant weights on disk; no measured MTP tok/s yet.
 Primary Mac speed lever after honest INT4 decode.
 
+> **Audit 2026-10-20:** stale. The E4B assistant (`google/gemma-4-E4B-it-assistant`) is loaded
+> and MTP e2e was measured: accept 6/8 tokens (75%), 2 rounds, **10.01** tok/s
+> (`bench/results/mtp_e2e_accept.txt`) and **12.13** tok/s (`mtp_e2e_accept2.txt`), n=1 each;
+> see D7 and `gates.md` Phase 5.
+
 ## Encode substrate
 
 `tessl`: Metal 4-only CB/encoder, Hot/Cold residency, packed binder, const arena, GEMM, the promoted NN kernel library (RMSNorm, MLP activations, flash attention, quantized GEMV/GEMM, KV stores, sampling), MTLTensor prep hooks. `gemma-metal/build.rs` compiles only the Gemma-specific overlay (PLE, persistent interpreter).

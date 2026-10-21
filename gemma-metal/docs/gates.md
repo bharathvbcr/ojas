@@ -41,6 +41,13 @@ Product gates from the plan (do not loosen). Phase-0 measurements calibrate the
 | 31B plain mlx-lm 4bit | **~12.7 tok/s** | `mlx-community/gemma-4-31b-it-4bit` (bench harness) |
 | **31B + DFlash spec-decode** | **~31 tok/s median** (2.5×); range **19–36** across prompt types (37 peak on code/json, 19 on creative prose) | **mlx 0.32.0** + `z-lab/gemma-4-31B-it-DFlash` 4-bit draft, **block=5** · `bench/dflash_fast_31b.py` · serve `bench/serve_dflash.py` · via `~/.venvs/dflash32` · **clears ≥15 on all prompt types; ≥25 on all but creative prose** |
 
+> **Audit 2026-10-20 (evidence labels for the DFlash row):** ~31 median / 2.5× / range 19–36 =
+> `diversity_sweep_result.json`, 8 prompts × 1 run (median 31.7, min 18.94, max 36.12; no
+> exactness field). The "37 peak on code/json" is not in that sweep (code 32.5, json 36.12);
+> 37.17 is a single-prompt block-5 median (`block_finesweep32_result.json`). Exactness evidence
+> is `golden_tokens_31b.json` (5 prompts, 64 tokens, `dflash_exact_vs_greedy: true`).
+> `mlx032_nax_ab_31b.json` (27.77 vs 18.64) is one prompt at block 8.
+
 **DFlash note (2026-07-13):** exact verify → output identical to greedy 31B (no quality burn;
 honest-lane compatible). mlx **0.32.0 is required for the speed** (M5 GPU Neural Accelerators
 make the M=8 block-verify quantized GEMMs 1.5–2× faster; 0.31.2 gives only ~18.6). dflash's
@@ -127,6 +134,15 @@ target for gemma-metal MTP (supersedes clustered-assistant per-token verify).
 
 **Honest verdict:** ~**23.9 tok/s** this pass (prior peak **~25.1**) — still **~2.0× below** gate lower band (48) and **~3.2× below** Phase-0 mlx (~76). Landed interleaved **bfloat2** Hot scale+bias + true MLX **qdot**/pointer-walk; tok/s **flat**. Interleaved4 weight pack A/B **regressed** (~22.8) → default off. Interim ≥30 **not** cleared. Do **not** claim gate clearance.
 
+> **Audit 2026-10-20 (comparability caveat):** the "~3.2× below mlx" ratio is not like-for-like.
+> The default E4B graph does not take the Gemma-4 dual-norm residual algebra: `use_gemma4_dual_norm
+> = has_pre_ff && (!has_ple || e4b_dual_norm_enabled())` (`src/gpu_model.rs:2089-2090`) and
+> `e4b_dual_norm_enabled()` defaults to `false` (`src/kernels.rs:3404-3406`, doc comment 3388-3394:
+> E4B runs the legacy pre-LN algebra, `layer_scalar` dropped). So the 23.9 tok/s is a speed
+> measurement of a graph that differs from the mlx-lm model it is compared with, and there is no
+> real-weight HF/MLX logit parity (README Phase 3 row) to say the outputs agree. Treat the ratio
+> as indicative only.
+
 **Speed work this pass**
 
 1. Hot Q4Mlx scale+bias → interleaved **bfloat2** (one 4B load/group); embed/PLE/GEMV updated together
@@ -145,7 +161,7 @@ target for gemma-metal MTP (supersedes clustered-assistant per-token verify).
 | Activation bridge + clustered LM head | **Real weights** (centroids/embeds/pre/post + 4 Q-consumer layers) |
 | Adaptive draft + verify | **Wired** (`generate_mtp_smoke`) |
 | Decode-loop draft→verify smoke | **Done** — synthetic + real-weight draft |
-| Accept-rate / tok/s with real draft vs backbone | **Measured** — accept **75% (6/8)**; e2e **~10.0 tok/s** (draft+full verify; no early-reject skip). Artifact: `bench/results/mtp_e2e_accept.txt` / `latest_mtp.json` |
+| Accept-rate / tok/s with real draft vs backbone | **Measured** — accept **75% (6/8)**; e2e **~10.0 tok/s** (draft+full verify; no early-reject skip). Artifact: `bench/results/mtp_e2e_accept.txt` / `latest_mtp.json` *(Audit 2026-10-20: 6/8 tokens, 2 rounds, n=1; `mtp_e2e_accept2.txt` is a second run of the same test at **12.13** tok/s, wall_ms 659 vs 799. The "no early-reject skip" attribution for the 10.0 is not recorded in either artifact — unverified. `docs/architecture.md` previously said no measured MTP tok/s; that is stale.)* |
 | E4B assistant on disk | **Present** — `google/gemma-4-E4B-it-assistant` (~160 MB) |
 
 **Phase 5 criteria:** synthetic E2E **met**; real weights **loaded**; shared-KV draft forward **wired**; product MTP tok/s still below gate (~90–110) until verify early-exit + faster draft.
@@ -202,6 +218,10 @@ cargo run --release --bin bench -- --model "$HOME/.cache/huggingface/hub/models-
 | TTFT | **548.8 ms** (T=4) | ~426 ms (warm) | — |
 | RSS / peak | footprint **~38 GiB** · peak **~55 GiB** (ps RSS under-counts) | ~5.3 GB (ollama procs) | fits 64 GB |
 | Hot weights | **17.87 GiB** | nvfp4 via Ollama | — |
+
+> **Audit 2026-10-20:** the 6.83 above is the 2026-07-13/14 single-run figure (16 steps). Later
+> single runs on the same stack: 5.64–5.71 (2026-07-19, `fusion_ab_31b_20260719T080223Z.json`).
+> Quote 31B as ~5.6–6.8 tok/s, n small, host noise ±10%.
 
 ### 31B memory / serve plan
 
@@ -309,13 +329,20 @@ before reading the E4B row as a property of the silicon.
 **Caveat on the absolute rate.** The ~3.5 tok/s above is *not* comparable to the
 ~23.9 tok/s quiet figure elsewhere in this file. Per
 [`bottleneck.md`](bottleneck.md) roughly 77 % of a decode token is host-side
-per-token overhead, so a contended CPU depresses decode directly. A matched burst
+per-token overhead, so a contended CPU depresses decode directly
+*(Audit 2026-10-20: the 77% is a residual, not a measured host cost; the 2026-07-20 profile
+measured host encode at 170 µs and the layer stack at ~90% GPU, `decode_profile_e4b_20260720T015429Z.json`.
+Why a contended host cut decode ~7× here is therefore unexplained by that figure)*. A matched burst
 bench (`GEMMA_METAL_BENCH_STEPS=200`) measured 3.29 tok/s on the same host —
 i.e. the gate agrees with the burst bench at the same KV depth, and the gap is
 the host, not the gate.
 
 **31B is wired but unrun:** `mlx-community/gemma-4-31b-it-4bit` is not in the HF
 cache on this machine, so the `31b` gate label has never executed.
+*(Audit 2026-10-20: describes the 2026-08-31 host state and conflicts with the "mlx-lm 31B Cached", Phase 6 "Weight sources" and "Serve path" rows
+above and DECISIONS D11, which record the shards as complete (~17 GB / 4 shards) on 2026-07-13.
+The cache state was not re-checked in this audit; whether the shards were later removed is
+unverified.)*
 
 ---
 
@@ -324,8 +351,8 @@ cache on this machine, so the `31b` gate label has never executed.
 | Gate | Target | Now | Gap |
 |------|--------|-----|-----|
 | E4B Q4 | ≥48–60 (pract. ≥76) | **~23.9** gemma-metal | ~2.0–3.2× |
-| E4B + MTP | ~90–110 | accept **75%**; e2e **~12.1 tok/s** (early-reject) | need base ≥48 + GPU draft |
-| 31B Q4 | ≥15 | Ollama **~12.3**; custom Hot **~6.83** | ~2.2× vs gate; ~1.8× vs Ollama |
+| E4B + MTP | ~90–110 | accept **75%** (6/8 tokens, n=1); e2e **~10.0–12.1 tok/s** (two single runs, `mtp_e2e_accept*.txt`; early-reject attribution unverified) | need base ≥48 + GPU draft |
+| 31B Q4 | ≥15 | Ollama **~12.3**; custom Hot **~6.83** *(2026-07-14 single session; 5.64–5.71 on 2026-07-19, `fusion_ab_31b_20260719T080223Z.json`, n=1/arm — audit 2026-10-20)* | ~2.2× vs gate; ~1.8× vs Ollama *(ratios use 6.83; at 5.64–5.71 they are ~2.6–2.7× / ~2.2×)* |
 | 31B + MTP | ≥25 | native DFlash pre-fix **~1.17** / accept≈0; MLX **~28–37** | unmet; GEMM dual-norm/`layer_scalar` fix landing — rebench |
 
 ---

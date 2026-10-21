@@ -1324,6 +1324,146 @@ mod tests {
         eprintln!("bf16 smoke ok | loss={loss:.6} tok_emb.grad[0]={g0:.6e}");
     }
 
+    /// Every gradient tensor of `g`, host-read, in a fixed order.
+    fn read_all_grads(rt: &Arc<GpuRuntime>, g: &Grads) -> Vec<(String, Vec<f32>)> {
+        rt.synchronize().unwrap();
+        let mut named: Vec<(String, &Tensor)> = vec![
+            ("tok_emb".into(), &g.tok_emb),
+            ("bigram_emb".into(), &g.bigram_emb),
+            ("bigram_proj".into(), &g.bigram_proj),
+            ("bigram_scale".into(), &g.bigram_scale),
+            ("smear_gate".into(), &g.smear_gate),
+            ("ve_emb".into(), &g.ve_emb),
+            ("ve_proj".into(), &g.ve_proj),
+            ("ve_scale".into(), &g.ve_scale),
+            ("skip_weights".into(), &g.skip_weights),
+            ("qo_bank".into(), &g.qo_bank),
+            ("kv_bank".into(), &g.kv_bank),
+            ("mlp_up".into(), &g.mlp_up),
+            ("mlp_down".into(), &g.mlp_down),
+        ];
+        for (i, t) in g.ve_layer_scales.iter().enumerate() {
+            named.push((format!("ve_layer_scales.{i}"), t));
+        }
+        for (i, b) in g.blocks.iter().enumerate() {
+            named.push((format!("blocks.{i}.q_gain"), &b.q_gain));
+            named.push((format!("blocks.{i}.vr_lambda"), &b.vr_lambda));
+            named.push((format!("blocks.{i}.attn_scale"), &b.attn_scale));
+            named.push((format!("blocks.{i}.mlp_scale"), &b.mlp_scale));
+            named.push((format!("blocks.{i}.resid_mix"), &b.resid_mix));
+        }
+        let optional = [
+            ("mingru_to_z", &g.mingru_to_z),
+            ("mingru_to_h", &g.mingru_to_h),
+            ("mingru_out", &g.mingru_out),
+            ("mingru_v_proj", &g.mingru_v_proj),
+            ("mingru_v0_up", &g.mingru_v0_up),
+            ("mamba_in_proj", &g.mamba_in_proj),
+            ("mamba_conv1d_weight", &g.mamba_conv1d_weight),
+            ("mamba_conv1d_bias", &g.mamba_conv1d_bias),
+            ("mamba_out_proj", &g.mamba_out_proj),
+            ("mamba_a_log", &g.mamba_a_log),
+            ("mamba_d", &g.mamba_d),
+            ("mamba_dt_bias", &g.mamba_dt_bias),
+            ("mamba_norm", &g.mamba_norm),
+        ];
+        for (name, t) in optional {
+            if let Some(t) = t {
+                named.push((name.into(), t));
+            }
+        }
+        named
+            .into_iter()
+            .map(|(n, t)| {
+                let v = t
+                    .read_f32()
+                    .unwrap_or_else(|e| panic!("read grad {n}: {e}"));
+                (n, v)
+            })
+            .collect()
+    }
+
+    /// `METAL_NATIVE_MLP_RECOMPUTE`: recomputing `act(mlp_pre_act)` in backward
+    /// into one shared scratch must give the same gradients as the per-layer
+    /// `mlp_hidden` tape. Backward has float atomics, so two plain runs are
+    /// also compared to measure run-to-run noise; the recompute run must stay
+    /// within 1e-6 plus that noise on every tensor.
+    #[test]
+    fn mlp_recompute_matches_taped_hidden() {
+        check_mlp_recompute(crate::runtime::PrecisionMode::F32);
+    }
+
+    /// The persistent-bf16 path keeps a bf16 scratch and recomputes through
+    /// `mlp_act_to_bf16`; same contract as the f32 test. Each `gpu_runtime()`
+    /// is a fresh runtime, so setting its precision touches no other test.
+    #[test]
+    fn mlp_recompute_matches_taped_hidden_bf16() {
+        check_mlp_recompute(crate::runtime::PrecisionMode::Bf16);
+    }
+
+    fn check_mlp_recompute(precision: crate::runtime::PrecisionMode) {
+        // Self-referential (taped vs recomputed), so only weights and inputs are
+        // needed — not the gitignored forward activations.
+        let golden = golden_dir();
+        let rt = crate::gpu_runtime().expect("GpuRuntime");
+        let bf16 = precision == crate::runtime::PrecisionMode::Bf16;
+        if bf16 && !rt.has_tensorops() {
+            eprintln!("skipping bf16 mlp_recompute: no TensorOps");
+            return;
+        }
+        rt.set_precision(precision);
+        let cfg = ModelConfig::sota_toy();
+        let w = Weights::load_from_golden(&rt, &golden, cfg).unwrap();
+        let ids = load_input_ids(&golden, 0).unwrap();
+        let tgts = load_target_ids(&golden, 0).unwrap();
+        let run = |recompute: bool| {
+            let mut tape = Tape::new_sota();
+            crate::model_fwd::forward_f32_with(&rt, &w, &ids, &tgts, &mut tape, recompute).unwrap();
+            assert_eq!(tape.mlp_recompute, recompute);
+            assert_eq!(tape.mlp_scratch.is_some(), recompute);
+            if let Some(s) = &tape.mlp_scratch {
+                use crate::tensor::DType;
+                let want = if bf16 { DType::BF16 } else { DType::F32 };
+                assert_eq!(s.dtype, want, "scratch dtype: wrong recompute path ran");
+            }
+            for lt in &tape.layer {
+                assert_eq!(lt.mlp_hidden.is_none(), recompute, "mlp_hidden taped");
+                assert!(lt.mlp_pre_act.is_some());
+            }
+            let mut grads = Grads::zeros_like(&rt, &w).unwrap();
+            backward_f32_opts(&rt, &w, &tape, &mut grads, false).unwrap();
+            read_all_grads(&rt, &grads)
+        };
+        let base = run(false);
+        let base2 = run(false);
+        let rec = run(true);
+        assert_eq!(base.len(), rec.len());
+        let mut worst = 0.0f32;
+        for (((name, a), (_, a2)), (_, r)) in base.iter().zip(&base2).zip(&rec) {
+            assert!(r.iter().all(|x| x.is_finite()), "{name}: non-finite grad");
+            let noise = max_abs_err(a2, a);
+            let err = max_abs_err(r, a);
+            worst = worst.max(err);
+            eprintln!(
+                "mlp_recompute {precision:?} {name}: recompute-vs-taped={err:e} run-noise={noise:e}"
+            );
+            assert!(
+                err <= 1e-6 + noise,
+                "{name}: recompute differs from taped hidden by {err:e} (noise {noise:e})"
+            );
+        }
+        let mlp_down_max = rec
+            .iter()
+            .find(|(n, _)| n == "mlp_down")
+            .map(|(_, v)| v.iter().fold(0.0f32, |m, x| m.max(x.abs())))
+            .unwrap();
+        assert!(
+            mlp_down_max > 0.0,
+            "mlp_down grad is all zero; test is vacuous"
+        );
+        eprintln!("mlp_recompute worst tensor diff = {worst:e}");
+    }
+
     /// Audit 7: head-dim-specialized row FA bwd must match the generic row
     /// kernels. The `_d32_f32` variants only remove loop-invariant device
     /// reloads and register spills, so they must agree to f32 round-off; the

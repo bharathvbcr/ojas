@@ -5,13 +5,20 @@
 **Quiet decode (TRACE/INFER off):** **~23.9 tok/s** · TTFT ~142 ms  
 **vs Phase-0:** mlx-lm **~75.7** · Ollama **~55.8** · gate ≥48–60 · MTP e2e **~10–12** @ 75% accept
 
-Honest lane is **GPU-bound**: host encode of ~779 dispatches is ~2–3 ms when not sync-tracing; nearly all wall time is waiting on the Metal CB at the token boundary. Simdgroup Q4 GEMV (`gemv_q4_mlx_simd`, bfloat2 sb + qdot) is the default path (BlockedBn / Interleaved4 opt-in).
+Honest lane is **GPU-bound**: host encode of ~779 dispatches is ~2–3 ms *(2026-07-13 estimate; the 2026-07-20 profile measured `trace1_host_encode_us_shipping` 170 µs at ~600 dispatches, `decode_profile_e4b_20260720T015429Z.json`; see D16 note on the encode-once units)* when not sync-tracing; nearly all wall time is waiting on the Metal CB at the token boundary. Simdgroup Q4 GEMV (`gemv_q4_mlx_simd`, bfloat2 sb + qdot) is the default path (BlockedBn / Interleaved4 opt-in).
 
 **Occupancy knobs (2026-07-20 quiet A/B):** shipping **SIMD_ROWS=4 × SG=2** already matches MLX `qmv_fast`; simd kernels use **no TG mem**. Retuned `rows=2` → exactness FAIL + 0.99×; `SG=4` → exact PASS but **+1.3%** (noise). Prior `rows=8` slower. **Park** — no product default change. Artifact `bench/results/simd_occ_ab_e4b_20260720T021250Z.json`.
 
 **Interleaved4 Hot (2026-07-20 quiet A/B):** `GEMV_INTERLEAVE=1` exactness **PASS** @ HAZARD=0 but **0.953×** vs row-major (17.86 vs 18.75 tok/s paired). Keep default **OFF**. Artifact `bench/results/gemv_interleave_ab_e4b_20260720T021529Z.json`.
 
 **Lane pause:** local layout/occupancy/fusion/encode-once levers exhausted for tok/s; honest bottleneck remains **MLP GEMV bandwidth (~75%)**. Resume only with a new BW hypothesis (≫10% token-time), not another dispatch-glue A/B.
+
+> **Audit 2026-10-20 (evidence strength of the A/Bs above and in DECISIONS D15/D16):** the
+> "slower" / "NO-WIN" / 0.895× / 0.953× verdicts are single-run (n=1), 16-token, sequential
+> arms; read them as **no demonstrated win**, not demonstrated losses. Host run-to-run noise is
+> about ±10% or more (`gates.md` sustained section: 0.86–1.08 between six identical 60 s runs).
+> The 0.895× arm pair (7.32 vs 6.55) came from a run whose own `tok_s_note` says absolute tok/s
+> was ~7–9 against a 23.58 quiet reference (`gemv_blocked_ab_e4b_20260720T015644Z.json`).
 
 ---
 
@@ -34,6 +41,21 @@ on mlx: DFlash 31B ~12.7 → 27.8 tok/s with mlx 0.32 M=8 NAX GEMM; see
 `bench/results/mlx032_nax_ab_31b.json`); (3) encode/GPU overlap.
 
 The section below is retained for history but its BW-utilization numbers are superseded.
+
+> **Audit 2026-10-20:** the "~77% is per-token overhead / the gap is overhead, not GEMV"
+> reading is not supported as a *host or dispatch* overhead claim. (a) It is a residual:
+> 46.5 ms minus ~10.6 ms of streaming at the isolated-microbench rate
+> (`kernel_roofline_finding.json` `roofline`), so it also contains GPU kernel time spent below
+> that rate in situ. (b) The microbench is isolated and was "measured under GPU contention from
+> a concurrent session" (`note`), with banks uploaded once and 200 iterations; in situ,
+> `gates.md` (Phase 4 table, 2026-07-13 qdot row) records TRACE mid-MLP at ~41 GB/s vs ~240 for
+> `lm_head`. (c) The later decode profile shows the GPU layer stack at ~90% of the token (MLP
+> ~75% inside it) and host encode at `trace1_host_encode_us_shipping` 170 µs
+> (`decode_profile_e4b_20260720T015429Z.json`; DECISIONS D15), and −90 dispatches was flat
+> (23.58 → 23.26 tok/s). The "Time breakdown" section below (MLP GEMVs ~75–78%, host encode
+> ~2 ms) is the consistent picture; the headline "overhead" figure and the "3.5× gap is
+> overhead" conclusion are superseded. The roofline JSON's absolute GB/s are isolated, contended
+> numbers, not in-situ ones.
 
 ---
 
@@ -86,6 +108,10 @@ Code-level gaps vs `mlx-lm` / Metal matmul:
 
 Accept rate is fine (**75%**); the schedule is not speculative throughput.
 
+> **Audit 2026-10-20:** the 75% is 6/8 tokens over 2 rounds (one run), and the "~10 tok/s"
+> below is one of two committed runs of that test: 10.01 (`mtp_e2e_accept.txt`) and 12.13
+> (`mtp_e2e_accept2.txt`). "~10–12, n=1 each" is what the artifacts support.
+
 | Mechanism | Code | Effect |
 |-----------|------|--------|
 | **Full backbone verify every draft token** | `GpuDecodeSession::generate_mtp_smoke` loops `self.step(tok)?` per draft | Each accepted token still costs a **full 42-layer** decode — no batch/tree verify; work ≥ greedy |
@@ -102,7 +128,7 @@ Until verify is a **single parallel/batch forward** over K draft tokens (classic
 
 | Rank | Fix | Expected impact | Effort |
 |------|-----|-----------------|--------|
-| **1** | **Fewer dispatches / token** — fuse phases toward megakernel / persistent decode (ALU peel / bfloat2 sb landed; tok/s flat) | **~2–3×** if overhead falls toward mlx's ~2.6 ms | High |
+| **1** | **Fewer dispatches / token** — fuse phases toward megakernel / persistent decode (ALU peel / bfloat2 sb landed; tok/s flat) | **~2–3×** if overhead falls toward mlx's ~2.6 ms *(falsified 2026-10-20: −90 dispatches gave 23.58 → 23.26 tok/s, launch tax 3.3 ms ≈ 7.8% of the token; `fusion_ab_e4b_20260720T012511Z.json`, `decode_profile_e4b_20260720T015429Z.json`)* | High |
 | **2** | **Speculative verify** — one batched backbone step for K drafts; GPU draft + shared KV | MTP **≥1.5–1.7×** when accept stays ~70%+ | Med |
 | **3** | **Fuse MLP** (gate∥up→gelu→down) deepen + QKV; cut launches + re-reads of `x` | **~1.2–1.5×** on top | Med–high |
 | 4 | Trim RAW barriers / overlap where hazards allow; keep single CB / token | Small **(~5–10%)** unless fused | Low |

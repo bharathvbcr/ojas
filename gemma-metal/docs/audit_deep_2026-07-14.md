@@ -172,6 +172,12 @@ So: kernels can be near-roofline in isolation, while e2e still shows **~25% peak
 3. DFlash extras: draft `synchronize` after propose; GEMM verify **per-capture-layer host readback**; conditioner FC GEMVs; verify softcap loop ×M.
 4. API `step()` / generate readback stalls (secondary to 1–2 on quiet bench).
 
+> **Audit 2026-10-20:** the "~75% non-streaming overhead" row is a residual against the
+> isolated, contended microbench rate (`kernel_roofline_finding.json`), not a measured
+> host/sync cost. Later profile: host encode 170 µs, layer stack ~90% GPU (MLP ~75%), and
+> −90 dispatches flat (23.58 → 23.26 tok/s) — `bench/results/decode_profile_e4b_20260720T015429Z.json`.
+> See `bottleneck.md` audit note.
+
 **Implication:** more ALU peel / pack tricks ≤ ~1.3×. Closing E4B 48–76 needs fusion/megakernel or speculative amortization (working DFlash), not another qdot tweak.
 
 ---

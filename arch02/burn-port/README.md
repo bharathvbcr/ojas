@@ -7,8 +7,13 @@ Apple Silicon. Runs on **Metal via CubeCL's native MSL compiler**
 batched Muon NS5) executes on the 20-core GPU with zero CUDA dependencies.
 
 Status: **compiles, 18/18 unit tests green, CPU + Metal smoke-tested; training
-dynamics verified against the original 3070 Ti run logs** (sota preset, loss at
-step 50: 4.94 on M5/f32 vs 4.89 on 3070 Ti/bf16 — within seed noise).
+dynamics compared against the original 3070 Ti run logs** (sota preset, loss at
+step 50: 4.94 on M5/f32 vs 4.89 on 3070 Ti/bf16).
+
+> **Audit 2026-10-20:** that is one seed and three points (steps 0, 50, 100; the
+> step-100 gap is 0.40, 4.92 vs 4.52, DECISIONS D8), so "within seed noise" and
+> "faithful" are not established. Fidelity is unproven; the golden parity tests are
+> the gate, not loss-curve proximity.
 
 ## Measured on the M5 Pro (20-core GPU, Burn 0.21 Metal/MSL, f32)
 
@@ -22,7 +27,9 @@ step 50: 4.94 on M5/f32 vs 4.89 on 3070 Ti/bf16 — within seed noise).
 Takeaways so far (from `out/metrics.jsonl` + phase profiles):
 - At toy scale the run is **kernel-dispatch-overhead bound** (wgpu/Metal
   command overhead), so fewer+larger dispatches win: `micro_batch 16 × accum 1`
-  is ~6× faster than the 3070 Ti's `2 × 8` shape at identical math.
+  is ~6× faster than the same `2 × 8` shape run on the M5 (~2,900 vs ~17,000 ms,
+  table above; M5 vs M5, not vs the 3070 Ti, whose 2×8 bf16 row is untuned with
+  ~±40% run-to-run spread, DECISIONS D2).
 - At sprint scale the [B,8,T,T] attention scores dominate (memory-bound) —
   the fix is a fused flash kernel with backward support, which Burn/CubeCL
   does not have for training yet (see below).
@@ -145,11 +152,11 @@ Three layers of visibility, cheapest first:
 | On-device loss accumulation | was: `into_scalar()` × 96 micro-steps/step — each forces a full pipeline flush |
 | On-device global grad clip over **bank stacks** | was: ~200 per-tensor readbacks/step → now 1 scalar readback; norm+scale touch 4 stacked tensors instead of 66 |
 | RoPE tables + causal mask cached per seq_len | was: CPU trig + upload × 11 layers × 96 micro-steps ≈ 1000/step |
-| BankedMuon batched NS5 | 66 small NS5 loops → 4 batched-matmul NS5 banks (~50× fewer dispatches); grads stacked once, shared with the clip |
+| BankedMuon batched NS5 | 66 small NS5 loops → 4 batched-matmul NS5 banks (66→4 = ~16× fewer NS5 loops; the "~50×" dispatch figure was not measured, no dispatch counts recorded here); grads stacked once, shared with the clip |
 | Grouped GQA (no `repeat_dim`) | K/V read once per KV head; fewer/larger batched matmuls |
 | PrefetchLoader thread | shard IO + bigram hashing off the critical path |
 | Batched sliding eval (`--eval-batch`) | ~1000 batch-1 forwards+readbacks → ~64 batched forwards (16 k-token eval: 11.6 s) |
-| Micro-batch over grad-accum at toy scale | accumulation multiplies dispatch count; `16×1` ≈ 6× faster than `2×8` at identical math |
+| Micro-batch over grad-accum at toy scale | accumulation multiplies dispatch count; `16×1` ≈ 6× faster than `2×8` at identical math (M5 vs M5: ~2,900 vs ~17,000 ms; not a comparison with the 3070 Ti) |
 | `--bench` sweep | picks micro_batch empirically (64 GB unified memory allows ≫ the 3070 Ti's 4) |
 
 Not done (documented): Burn 0.21's flash-attention kernel is inference-only in

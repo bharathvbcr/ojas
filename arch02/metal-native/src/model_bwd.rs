@@ -388,7 +388,12 @@ pub fn backward_f32_opts_clip(
         let mlp_out = lt.mlp_out.as_ref().ok_or("mlp_out")?;
         let mlp_in = lt.mlp_in.as_ref().ok_or("mlp_in")?;
         let mlp_pre = lt.mlp_pre_act.as_ref().ok_or("mlp_pre")?;
-        let mlp_hid = lt.mlp_hidden.as_ref().ok_or("mlp_hid")?;
+        // Recompute mode never tapes the post-act hidden (see `Tape::mlp_recompute`).
+        let mlp_hid = if tape.mlp_recompute {
+            None
+        } else {
+            Some(lt.mlp_hidden.as_ref().ok_or("mlp_hid")?)
+        };
         let attn_in = lt.attn_in.as_ref().ok_or("attn_in")?;
 
         if !is_decoder {
@@ -429,7 +434,20 @@ pub fn backward_f32_opts_clip(
         };
         let d_hid = rt.alloc_tensor_f32(&[bt, mlp])?;
         let d_mlp_flat = reshape_view(&d_mlp_out, &[bt, c]);
-        let hid_flat = reshape_view(mlp_hid, &[bt, mlp]);
+        let hid_flat = match mlp_hid {
+            Some(hid) => reshape_view(hid, &[bt, mlp]),
+            None => {
+                // hidden = act(pre) into the shared scratch, with the fwd kernel
+                // matching the scratch dtype (bf16 on the persistent-bf16 path).
+                let scratch = tape.mlp_scratch.as_ref().ok_or("mlp_scratch")?;
+                if scratch.dtype == crate::tensor::DType::BF16 {
+                    crate::model_fwd::mlp_act_to_bf16(rt, mlp_pre, scratch)?;
+                } else {
+                    crate::model_fwd::mlp_act(rt, mlp_pre, scratch)?;
+                }
+                reshape_view(scratch, &[bt, mlp])
+            }
+        };
         {
             // Audit 7: d_mlp_flat feeds dH + dW — cast once under BWD_CAST_ONCE.
             let d_mlp_op = bf16_once(rt, backend, &d_mlp_flat)?;

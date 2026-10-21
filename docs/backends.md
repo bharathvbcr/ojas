@@ -67,7 +67,7 @@ flowchart LR
 | Backend | Implements `Backend` | Numerics | Tests | Notes |
 | :--- | :--- | :--- | :--- | :--- |
 | `CpuBackend` (`ojas-cpu`) | Yes | `Fast` default; `Exact` opt-in | <!--count:crate.ojas-cpu-->291 passed, 12 ignored<!--/count--> | Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (`FAST_WHOLE_CALL_MACS`) dispatch to Accelerate `cblas_sgemm`; smaller stay on `tile_fast`. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup |
-| `ojas-simd` | No (kernels for `ojas-cpu`) | — | <!--count:crate.ojas-simd-->40 passed (workspace; 34 standalone)<!--/count--> | NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. ARM64 NEON embedding gather, nanolab head pair splitting, token bands, Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling |
+| `ojas-simd` | No (kernels for `ojas-cpu`) | — | <!--count:crate.ojas-simd-->40 passed (workspace; 34 standalone)<!--/count--> | NEON ~110 GFLOP/s single thread (unverified: no artifact); Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs (derivable only at the top: `bench-cpu-vs-torch.md:431-432` gives 1.95 TFLOP/s at 512×768×768 and 1.77 at 2048³, under load; `baseline.md:86-106` records 772–1112 GFLOP/s best f32; the ~1.4 low end is unverified). ARM64 NEON embedding gather, nanolab head pair splitting, token bands, Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling |
 | `MetalBackend` (`ojas-metal`) | Yes, every op, device-resident | `Fast` | <!--count:crate.ojas-metal-->175 passed<!--/count--> | Tiled causal attention, head dim above 256 refused. Faults surface at the next `sync` ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Attention forward/backward, device-resident training step |
 | `WgpuBackend` (`ojas-wgpu`) | Yes, device-resident | `Fast`, 1e-4 relative tolerance | <!--count:crate.ojas-wgpu-->131 passed, 3 ignored<!--/count--> | Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (`accumulate_grad`), KV cache writes, tiled linear cross-entropy (`linear_ce`), and deferred fault reporting at next `sync` |
 | `ojas-kernels` | No (shared geometry and sources) | — | <!--count:crate.ojas-kernels-->11 passed<!--/count--> | Launch geometry (`gemm_grid`, `attention_tiles`, `ATTENTION_MAX_HEAD_DIM`), WGSL modules in `src/wgsl/`, NaN-safe parity harness |
@@ -94,7 +94,7 @@ flowchart LR
     end
 
     subgraph Rejected["Rejected Frameworks"]
-        Burn["Burn (~2,900 ms/step vs 56.6 ms/step)"]
+        Burn["Burn (hand port, ~2,900 ms/step vs 56.6 ms/step; see table)"]
         Candle["Candle (Avoid heavy generic dependency)"]
         Cubecl["CubeCL (Indirect compiler dependency)"]
         Cust["Cust (Superseded by cudarc)"]
@@ -116,7 +116,7 @@ flowchart LR
 
 | Package | Version | Reason for Rejection |
 | :--- | :--- | :--- |
-| `burn` | `0.21.0` | Heavy runtime; measured ~2,900–3,400 ms/step vs 56.6 ms/step native. |
+| `burn` | `0.21.0` | Heavy runtime; ~2,900–3,400 ms/step vs 56.6 ms/step native, per `arch02/metal-native/README.md:294-302` (re-verified 2026-07-12, M5 Pro, B=16, f32). The Burn side is that README's hand-ported baseline ("burn-port sota"), not a tuned Burn run, and no artifact for it is kept here (unverified). |
 | `candle-core` | `0.11.0` | Avoid broad general runtime dependency on performance-critical paths. |
 | `cubecl` | `0.10.0` | JIT kernel compiler layer; ojas relies on static native Metal & WGSL shaders. |
 | `cust` | `0.3.2` | Unmaintained legacy rust-cuda bindings; superseded by `cudarc`. |

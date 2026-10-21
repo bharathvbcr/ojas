@@ -17,15 +17,17 @@
 //!                                       slower at T=256 (~69 ms); **required** for
 //!                                       the default 20k Soft recipe (DECISIONS M11)
 //!   METAL_NATIVE_MUON_SG=0            → hand-loop NS5 (much slower)
-//!   METAL_NATIVE_GEMM_INTERIOR=1      → interior offset tiles on f32 GEMM
-//!   METAL_NATIVE_HAZARD_BARRIERS=1    → skip always-on Device barrier after each
+//!   TESSL_HAZARD_BARRIERS=1           → skip always-on Device barrier after each
 //!                                       dispatch (packed ops keep explicit barriers).
 //!                                       A/B REJECT as default: NaNs by ~step 3.
-//!   METAL_NATIVE_GEMM_ACCUM=1         → TensorOps multiply_accumulate for bwd
-//!                                       dW/dx (Audit 6 P1a/P1a2). Default **off**:
-//!                                       Soft EMA/gnorm regress with accum on
-//!                                       (2.058 / late gnorm~9 vs 2.050 / ~3.4).
-//!                                       Opt-in for binder/step-time A/B (211 vs 250).
+//!                                       Read by tessl's runtime; [`hazard_barriers`]
+//!                                       reports it. Default MLP recompute steps
+//!                                       aside under it; an explicit
+//!                                       MLP_RECOMPUTE=1 is refused.
+//!   METAL_NATIVE_MUON_GRAM=0          → standard NS for every Muon bank (default
+//!                                       ON: Gram NS on aspect >= 2, DECISIONS M20)
+//!   METAL_NATIVE_MLP_RECOMPUTE=0      → keep the per-layer MLP hidden on the tape
+//!                                       (default ON: recompute in bwd, M20)
 //!   METAL_NATIVE_RESID_BWD_FUSE=0     → Soft-bisect: unfused rms + resid/scale bwd
 //!                                       instead of Audit 6 megakernels (P1b)
 //!   METAL_NATIVE_MLP_COOP_POSTFIX=1   → reserved (not wired; needs NAX util + kernel)
@@ -41,11 +43,7 @@
 //!                                       operands to bf16 once per site instead
 //!                                       of once per GEMM (bit-identical inputs
 //!                                       to each GEMM; pure dispatch/bandwidth)
-//!   METAL_NATIVE_GEMM_ACCUM_DX=1      → multiply_accumulate for **dX** NT
-//!                                       accums only (fresh pre-zeroed buffers).
-//!                                       dW bank accum stays temp+add — the
-//!                                       Audit 6 Soft regression suspect.
-//!   METAL_NATIVE_FA_FAST=1            → head-dim-specialized **row** FA bwd
+//!   METAL_NATIVE_FA_FAST=1           → head-dim-specialized **row** FA bwd
 //!                                       (`*_d32_f32`): hoists loop-invariant
 //!                                       Q/dO and K/V out of the inner loop and
 //!                                       keeps accumulators in registers.
@@ -74,6 +72,15 @@
 //!                                       exp/log + fma). Soft@3k quality probe
 //!                                       (Phase G). Not bit-identical to the
 //!                                       sequential path. Default **off**.
+//!
+//! Retired (2026-10-20): `METAL_NATIVE_GEMM_ACCUM`, `METAL_NATIVE_GEMM_ACCUM_DX`,
+//! `METAL_NATIVE_GEMM_INTERIOR` and `METAL_NATIVE_HAZARD_BARRIERS` were read here
+//! but nothing consumed them after the import (1fc6a03), so setting them changed
+//! nothing. tessl dropped its own accumulate and interior flags on 2026-10-10:
+//! training accumulates now always run the TensorOps accumulate kernels
+//! (`tessl::gemm::gemm_tn_accum_train`), which is the path Audit 6 measured as
+//! the Soft regression suspect. The "accum off" defaults above describe the
+//! pre-2026-10-10 code, not what runs now.
 
 use std::sync::OnceLock;
 
@@ -88,13 +95,9 @@ fn env_truthy(name: &str) -> Option<bool> {
 struct AbFlags {
     fa_tiled: bool,
     muon_sg: bool,
-    gemm_interior: bool,
-    hazard_barriers: bool,
-    gemm_accum: bool,
     resid_bwd_fuse: bool,
     bwd_profile: bool,
     bwd_cast_once: bool,
-    gemm_accum_dx: bool,
     fa_fast: bool,
     fa_bf16: bool,
     fwd_profile: bool,
@@ -102,6 +105,8 @@ struct AbFlags {
     fa_blocksoft: bool,
     optim_profile: bool,
     glue_rowblock: bool,
+    muon_gram: bool,
+    mlp_recompute: Option<bool>,
 }
 
 fn flags() -> &'static AbFlags {
@@ -109,10 +114,6 @@ fn flags() -> &'static AbFlags {
     FLAGS.get_or_init(|| AbFlags {
         fa_tiled: env_truthy("METAL_NATIVE_FA_TILED").unwrap_or(false),
         muon_sg: env_truthy("METAL_NATIVE_MUON_SG").unwrap_or(true),
-        gemm_interior: env_truthy("METAL_NATIVE_GEMM_INTERIOR").unwrap_or(false),
-        hazard_barriers: env_truthy("METAL_NATIVE_HAZARD_BARRIERS").unwrap_or(false),
-        // Default OFF: Audit 6 multiply_accumulate regresses Soft late gnorm / BPB.
-        gemm_accum: env_truthy("METAL_NATIVE_GEMM_ACCUM").unwrap_or(false),
         resid_bwd_fuse: env_truthy("METAL_NATIVE_RESID_BWD_FUSE").unwrap_or(true),
         bwd_profile: env_truthy("METAL_NATIVE_BWD_PROFILE").unwrap_or(false),
         // Audit 7 KEEPs — **default ON** after the 2000-step champion rerun
@@ -123,9 +124,6 @@ fn flags() -> &'static AbFlags {
         // bf16 FA bwd additionally requires PrecisionMode::Bf16 + head_dim 32
         // (checked in model_bwd), so f32 golden runs keep the exact path.
         fa_bf16: env_truthy("METAL_NATIVE_FA_BF16").unwrap_or(true),
-        // ACCUM_DX stays OFF: two seeds could not separate it from noise
-        // (sign flipped), and it inherits the Audit 6 accumulate-mode risk.
-        gemm_accum_dx: env_truthy("METAL_NATIVE_GEMM_ACCUM_DX").unwrap_or(false),
         fwd_profile: env_truthy("METAL_NATIVE_FWD_PROFILE").unwrap_or(false),
         // Audit 8 KEEP / Audit 9A: default ON (flash 264→39 ms; D=32 gate in dispatch).
         fa_fwd_fast: env_truthy("METAL_NATIVE_FA_FWD_FAST").unwrap_or(true),
@@ -134,7 +132,36 @@ fn flags() -> &'static AbFlags {
         optim_profile: env_truthy("METAL_NATIVE_OPTIM_PROFILE").unwrap_or(false),
         // Rowblock cut atomics ~128× but A/B ≈ noise (Audit 8 glue sweep) — keep OFF.
         glue_rowblock: env_truthy("METAL_NATIVE_GLUE_ROWBLOCK").unwrap_or(false),
+        // Gram Newton-Schulz for Muon banks with aspect ratio >= 2. Same polynomial,
+        // different association. Default ON (DECISIONS M20): optimizer -13 to -14%
+        // at 128M, trajectory within same-config noise.
+        muon_gram: env_truthy("METAL_NATIVE_MUON_GRAM").unwrap_or(true),
+        // Recompute the MLP hidden activation in backward instead of keeping it on
+        // the tape. Default ON (DECISIONS M20); unset means "on unless the runtime
+        // skips its auto barriers", see [`mlp_recompute`].
+        mlp_recompute: env_truthy("METAL_NATIVE_MLP_RECOMPUTE"),
     })
+}
+
+/// Gram Newton-Schulz Muon banks: iterate the polynomial on the small p x p Gram
+/// matrix and apply it to X once, for banks whose long side is at least 2x the
+/// short side. Default: **true**; `METAL_NATIVE_MUON_GRAM=0` restores standard NS.
+pub fn muon_gram() -> bool {
+    flags().muon_gram
+}
+
+/// MLP activation recompute: backward rebuilds `act(mlp_pre_act)` instead of
+/// reading a per-layer `mlp_hidden`. Default: **true**, except when the runtime
+/// skips its auto barriers (`TESSL_HAZARD_BARRIERS=1`), which the shared scratch
+/// needs; then the default quietly keeps the taped hidden. An explicit
+/// `METAL_NATIVE_MLP_RECOMPUTE=1` under hazard mode is refused at forward time
+/// instead. `=0` restores the taped hidden.
+pub fn mlp_recompute() -> bool {
+    resolve_mlp_recompute(flags().mlp_recompute, hazard_barriers())
+}
+
+fn resolve_mlp_recompute(explicit: Option<bool>, skip_auto_barriers: bool) -> bool {
+    explicit.unwrap_or(!skip_auto_barriers)
 }
 
 /// Number of row-blocks for the glue-bwd reduction (`METAL_NATIVE_GLUE_ROWBLOCKS`).
@@ -159,24 +186,12 @@ pub fn muon_simdgroup() -> bool {
     flags().muon_sg
 }
 
-/// Use interior offset tile extents in f32 GEMM. Default: false.
-pub fn gemm_interior_offsets() -> bool {
-    flags().gemm_interior
-}
-
-/// Skip always-on Dispatch→Dispatch Device barrier after every `Binder::dispatch`.
-/// Packed multi-dispatch ops still insert explicit barriers. Default: false
-/// (golden-safe). **Do not enable as default** — A/B produced NaNs by ~step 3.
+/// Whether the runtime skips the always-on Dispatch→Dispatch Device barrier
+/// (`TESSL_HAZARD_BARRIERS=1`). arch02's binders pass no override, so tessl's
+/// flag is the one that decides. Default: false (golden-safe). **Do not enable
+/// as default** — A/B produced NaNs by ~step 3.
 pub fn hazard_barriers() -> bool {
-    flags().hazard_barriers
-}
-
-/// Use TensorOps `multiply_accumulate` for bwd dW / dx accumulate (P1a/P1a2).
-/// Default: **false** (temp GEMM + add_inplace). Soft A/B: accum-on → EMA 2.058 /
-/// late gnorm ~9; accum-off → EMA 2.050 / late gnorm ~3.4. Set
-/// `METAL_NATIVE_GEMM_ACCUM=1` for binder/step-time A/B (~211 vs ~250).
-pub fn gemm_accum() -> bool {
-    flags().gemm_accum
+    tessl::ab_flags::hazard_barriers()
 }
 
 /// Use fused resid/RMS bwd megakernels (P1b). Default: true.
@@ -198,13 +213,6 @@ pub fn bwd_profile() -> bool {
 /// data) — saves cast dispatches + bandwidth. Default: **true** (Audit 7 KEEP).
 pub fn bwd_cast_once() -> bool {
     flags().bwd_cast_once
-}
-
-/// TensorOps `multiply_accumulate` for **dX** NT accumulates only (fresh
-/// pre-zeroed activation-grad buffers). dW bank accumulation keeps temp+add.
-/// Default: **false** — two-seed quality noise + Audit 6 accumulate risk.
-pub fn gemm_accum_dx() -> bool {
-    flags().gemm_accum_dx
 }
 
 /// Per-section **forward** timing (`METAL_NATIVE_FWD_PROFILE=1`). Syncs between
@@ -261,4 +269,22 @@ pub fn fa_fast_row() -> bool {
 /// signature-compatible with their f32 counterparts.
 pub fn fa_bf16_row() -> bool {
     flags().fa_bf16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_mlp_recompute;
+
+    #[test]
+    fn mlp_recompute_default_on_and_yields_to_hazard_mode() {
+        assert!(resolve_mlp_recompute(None, false), "default is on");
+        assert!(
+            !resolve_mlp_recompute(None, true),
+            "default steps aside in hazard mode"
+        );
+        // Explicit choices win; an explicit on under hazard mode is refused later
+        // by the forward guard, not silently dropped here.
+        assert!(resolve_mlp_recompute(Some(true), true));
+        assert!(!resolve_mlp_recompute(Some(false), false));
+    }
 }

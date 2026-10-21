@@ -426,6 +426,25 @@ kernel void muon_tensorops_x_combine_f32(
     if (gid < n) x[gid] = a * x[gid] + y[gid];
 }
 
+// Gram Newton-Schulz: z += a*I on each p x p matrix of the bank.
+kernel void muon_gram_add_diag_f32(
+    device float *z [[buffer(0)]], constant float &a [[buffer(1)]],
+    constant uint &p [[buffer(2)]], constant uint &n [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < n) {
+        uint b = gid / p, i = gid % p;
+        z[(b * p + i) * p + i] += a;
+    }
+}
+
+kernel void muon_gram_copy_f32(
+    device float *dst [[buffer(0)]], device const float *src [[buffer(1)]],
+    constant uint &n [[buffer(2)]], uint gid [[thread_position_in_grid]])
+{
+    if (gid < n) dst[gid] = src[gid];
+}
+
 kernel void normuon_row_post_f32(
     device float *x [[buffer(0)]], device float *row_second [[buffer(1)]],
     constant uint &N [[buffer(2)]], constant uint &rows [[buffer(3)]],

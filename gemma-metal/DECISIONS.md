@@ -69,6 +69,13 @@ Inference-stack decisions for agents. Training decisions stay in
 - **Why:** Biggest open Mac lever after INT4.
   - **Status:** `google/gemma-4-E4B-it-assistant` **loaded**; cross-KV from GPU shared
   buffers; accept **75% (6/8)**; e2e ~**12.1 tok/s** with early-reject.
+  > **Audit 2026-10-20:** the 75% is 6/8 tokens in 2 rounds from a single test run, not a
+  > rate estimate (no interval). Two committed single runs of the same test disagree on tok/s:
+  > `bench/results/mtp_e2e_accept.txt` → `tok_s=10.01 … wall_ms=799` and
+  > `bench/results/mtp_e2e_accept2.txt` → `tok_s=12.13 … wall_ms=659`, both
+  > `out_new=8 accept=6/8 rounds=2`. Neither file records an early-reject setting, so
+  > attributing 10.0 vs 12.1 to early-reject (here vs `gates.md`) is unverified; treat MTP e2e as
+  > ~10–12 tok/s, n=1 each, and it is below the ~23.5 greedy baseline either way.
 
 ---
 
@@ -103,6 +110,13 @@ Inference-stack decisions for agents. Training decisions stay in
   Default decode = row-major `gemv_q4_mlx_simd` with **interleaved bfloat2** Hot sb +
   MLX **qdot**/pointer-walk; Interleaved4 weight pack opt-in (`GEMMA_METAL_GEMV_INTERLEAVE=1`,
   measured ~22.8 — left off). BlockedBn opt-in. Fuse MLP + producer K∥V on by default.
+  > **Audit 2026-10-20:** (1) the E4B-vs-mlx comparison is not like-for-like: the default E4B
+  > graph skips the Gemma-4 dual-norm algebra (`src/gpu_model.rs:2089-2090`;
+  > `e4b_dual_norm_enabled()` default `false`, `src/kernels.rs:3404-3406`) and there is no
+  > real-weight logit parity. (2) The 31B "~6.83" is one quiet-session figure from 2026-07-14
+  > (`baselines_2026-07-14/SESSION_RESULTS.md`); later single runs measured 5.64–5.71
+  > (`fusion_ab_31b_20260719T080223Z.json`, n=1 per arm, 16 tokens). Quote 31B as ~5.6–6.8
+  > tok/s, n small, host noise ±10%.
 - **PLE:** Q4 Hot residual lookup on; per-layer gate/proj still skipped.
 
 ---
@@ -112,6 +126,10 @@ Inference-stack decisions for agents. Training decisions stay in
 - **Decision:** HF `mlx-community/gemma-4-31b-it-4bit` **complete** (~17 GB / 4 shards).
   Ollama floor remains ~12.3 tok/s. Custom Hot measured **~6.83 tok/s** (TTFT ~0.55 s) —
   below gate ≥15. Serve `--preset 31b` Hot path confirmed; `attention_k_eq_v` shares K/V Hot.
+  > **Audit 2026-10-20:** "~6.83" is a 2026-07-14 single-session figure, not a current value.
+  > Same-stack measurements: 4.54–5.41 in `SESSION_RESULTS.md` (2026-07-14, noisy host) and
+  > 5.64–5.71 in `fusion_ab_31b_20260719T080223Z.json` (2026-07-19, n=1 per arm, 16 tokens).
+  > Use "~5.6–6.8 tok/s (n small, host noise ±10%)".
 - **Overturn if:** Same decode stack lifts E4B toward mlx (~76) and re-bench 31B ≥15.
 
 ---
@@ -143,11 +161,28 @@ Inference-stack decisions for agents. Training decisions stay in
   (16 steps after prefill T=4), TRACE off, FUSE_LAYER off — not mini-graph lines.
 - **Caveat:** E4B token streams under skip-auto are **non-deterministic** across runs
   (incomplete RAW coverage). Exactness / fusion gates must pin `HAZARD_BARRIERS=0`.
+  > **Audit 2026-10-20:** the ~1.27× is one run per arm (n=1; `hazard_ab_e4b_20260719T065759Z.json`
+  > arms `hazard0` 17.72, `hazard1` 22.54, `default` 23.24; 16 steps), with arms run
+  > sequentially and no spread recorded; host run-to-run drift of 0.86–1.08 between identical
+  > runs is documented in `docs/gates.md` (sustained section). The direction (always-on
+  > barriers slower) is plausible but the magnitude is not established. Because token streams
+  > under skip-auto are non-deterministic, those tok/s arms did not necessarily decode the same
+  > tokens. The 22.54–23.24 spread is two arms of the *same* shipping mode
+  > (`default_matches_hazard1: true`), i.e. a ~3% noise sample.
 - **Why:** TTFT / WS / parity hooks from plan P1/P3 without SWA amputation.
 
 ---
 
 ## D14. DFlash block-verify supersedes clustered MTP for 31B×path
+
+> **Audit 2026-10-20 (qualifier):** "supersedes" holds only against the *clustered-assistant
+> per-token* MTP in `mtp.rs` (E4B experiment, 75% accept on 8 tokens, ~10–12 tok/s). The official
+> block-verify MTP drafter was never measured on M5: the MLX MTP arm is "blocked"
+> (`bench/results/mlx_mtp_vs_dflash_ab_2026-07-19.md`, `NotImplementedError` on
+> `shared_kv_states`), and the only DFlash A/B datum there is one prompt, max_tokens 64
+> (23.59 vs greedy 13.26). The one head-to-head that exists is on H100/vLLM and has **MTP
+> winning on 31B dense** (125.3 vs DFlash 122.1 tok/s; `research_2026-07-18_inference_frontier.md`
+> §2 table). Read this decision as "DFlash is the measured lane", not "DFlash beats MTP".
 
 - **Decision:** Port `z-lab` DFlash block-verify into gemma-metal ([`docs/dflash_port.md`](docs/dflash_port.md)).
   Step 1 = `step_verify(tokens[M≤8])` + `trim_kv` / `commit_verify` + MLX-aligned
@@ -158,6 +193,12 @@ Inference-stack decisions for agents. Training decisions stay in
   Clustered-assistant `mtp.rs` remains for E4B experiments but is not the 31B≥25 path.
 - **Evidence:** MLX 0.32 + DFlash block=5 → ~37 tok/s on 31B. Engine after GEMM wire:
   mini ~387 vs greedy ~677; 31B ~2.02 vs greedy ~5.48 (e2e still capture/draft-bound).
+  > **Audit 2026-10-20:** the "~37 tok/s" is a single-prompt, block-5 median
+  > (`block_finesweep32_result.json` `best_median` 37.17; three repeats of one prompt), not a
+  > prompt-type result; the 8-prompt sweep is median 31.7, max 36.12, 1 run each
+  > (`diversity_sweep_result.json`). The MLX path's "lossless" claim rests on
+  > `golden_tokens_31b.json` (5 prompts, 64 tokens, `dflash_exact_vs_greedy: true`). The native
+  > numbers here (mini 387 vs 677; 31B 2.02 vs 5.48) show native DFlash slower than greedy.
 - **Next:** device-side capture (no mid-layer sync); draft GEMM; batched softcap; finite
   31B greedy logits → exact-vs-greedy; product ≥25.
 
@@ -171,6 +212,14 @@ Inference-stack decisions for agents. Training decisions stay in
   Existing kernels untouched (append-only), so the default compiled path is byte-identical.
 - **Why:** `docs/audit_deep_2026-07-18.md` F2 measured **~37 µs fixed cost per dispatch**
   → ~17 ms of a ~42 ms E4B token over ~460–560 dispatches.
+  > **Audit 2026-10-20:** falsified as a predictor. The ~37 µs is one mini-graph point
+  > (746 tok/s ÷ ~36 dispatches, `audit_deep_2026-07-18.md` F2) where kernels are free; it did
+  > not transfer to real E4B. Measured: −90 dispatches (599.9 → 509.9) moved tok/s
+  > 23.58 → 23.26 (`fusion_ab_e4b_20260720T012511Z.json`, `baseline` vs `both`), and
+  > `decode_profile_e4b_20260720T015429Z.json` `fusion_both_delta` puts the launch tax at
+  > `launch_tax_ms_est` 3.3 (`pct_token_budget` 7.8) of `quiet_ms_per_token_est` 42.4.
+  > The "~17 ms", "dispatch count worth ~2×" and "E4B ~24 → 48–55" figures are not supported.
+  > See the decode profile entry below.
 - **Scope limit:** only fusions with **local** dependencies. Full attn/MLP block kernels
   (~4–5 disp/layer) need grid-wide sync / persistent interpreter — **not shipped**; next
   after encode-once A/B, not attempted as silent math changes.
@@ -300,6 +349,16 @@ Inference-stack decisions for agents. Training decisions stay in
   2026-07-14 ~22.8 vs ~23.8 under current stack. **Do not default-on
   `GEMV_INTERLEAVE`.** Harness `bench/gemv_interleave_ab.sh`. Artifact
   `bench/results/gemv_interleave_ab_e4b_20260720T021529Z.json`.
+  > **Audit 2026-10-20 (applies to the BlockedBn 0.895×, simd-occupancy 0.990×/1.013× and
+  > Interleaved4 0.953× verdicts above, and the D16 freeze/range/coarse verdicts):** each is a
+  > single paired run (n=1), 16 tokens, arms run sequentially, so "slower" / "NO-WIN" reads as
+  > **no demonstrated win**, not a demonstrated loss. Host noise is ±10% or worse
+  > (`docs/gates.md` sustained section: 0.86–1.08 between identical 60 s runs). The 7.32 vs 6.55
+  > pair was taken when the artifact's own `tok_s_note` says the host ran ~7–9 tok/s against the
+  > 23.58 quiet reference (`gemv_blocked_ab_e4b_20260720T015644Z.json`), and the Interleaved4
+  > pair (18.75 vs 17.86) and the occupancy arms (~20.5) also sit well under the ~23.5 quiet
+  > level. The exactness FAILs (BlockedBn tok0, r2 tok1) are deterministic and stand;
+  > the tok/s ratios do not carry a significance claim.
 - **Lane pause (2026-07-20):** local tok/s levers exhausted — fusion exact/flat
   (−90 disp ≪10% ceiling), encode-once flat, `GEMV_BLOCKED` PARK, simd occ
   PARK/NO-WIN, Interleaved4 NO-WIN. Profile still **~75% MLP GEMV BW**
@@ -390,6 +449,20 @@ Inference-stack decisions for agents. Training decisions stay in
     setAddress 42/5003. Artifact: `encode_once_e4b_hot_ab_latest.json`.
     Full E4B token-parity still not claimed (would need dual Hot or careful
     replay compare).
+    > **Audit 2026-10-20:** the tok/s 14.88 → 18.48 (+24%) is not a product win and not
+    > evidence of encode-once benefit: the same A/B harness's `encode_us` equals the whole
+    > per-token wall time (1e6/14.88 ≈ 67205 ≈ 67195; 1e6/18.48 ≈ 54113 ≈ 54101 — arithmetic
+    > from the figures above; likewise `encode_once_e4b_hot_ab_latest.json`: 1e6/19.54 ≈ 51170 ≈
+    > `encode_us_off` 51164), so it is a sequential light-harness step time, and the harness
+    > numbers are far below the ~23.5 quiet level. Quiet product A/B on the same flags measured
+    > 23.50 vs 23.38 (below, ~flat; `encode_once_e4b_toks_latest.json`: 23.56 vs 23.46), and
+    > `encode_once_e4b_hot_ab_latest.json` itself shows ratio 1.0626 (on slower) with a
+    > different config. The +24% is a harness/load artifact, not an encode-once effect.
+    > **Host-encode figures, three different quantities:** ~0.17 ms = `TRACE=1` shipping host
+    > encode (`trace1_host_encode_us_shipping` 170, `decode_profile_e4b_20260720T015429Z.json`;
+    > D16 below: "host encode 245 → 171 µs"); 2–3 ms (bottleneck.md, D16 item 3 "~2.5 ms",
+    > audit F2) = 2026-07-13 estimates, superseded by the 170 µs measurement; 54–67 ms
+    > = harness `encode_us`, which is total step time, not host encode.
   - **A2 E4B Immediate residual cleared (2026-07-19, v0.5.5):** E4B
     post_ff_norm residual-replace used inline `copy_f32` + const-arena
     `set_u32(hidden)` → **1 Immediate bind/layer × 42**. Migrated to
@@ -518,6 +591,10 @@ Inference-stack decisions for agents. Training decisions stay in
   true-ICB (freeze/range/coarse) vs prebuilt; keep encode-once on prebuilt
   tape for ~flat tok/s; chase GPU dispatch count next. Artifact
   `encode_once_e4b_toks_20260720T001404Z_*`.
+  > **Audit 2026-10-20:** the freeze (−3.6%), range-batch (19.56 → 18.61) and coarse
+  > (20.57 → 19.85) deltas are single quiet-window pairs (n=1) taken at different host-load
+  > levels (19.56 vs 23.48 shipping across windows is itself a ~17% swing), so they show
+  > no demonstrated win, not a measured regression. Same caveat as the D15 note above.
 - **Quiet re-measure post bank-split (2026-07-20):** shipping **23.56** vs
   prebuilt `ENCODE_ONCE`+`DECODE_ICB` **23.46** (~flat). Still no product win.
   Artifact `encode_once_e4b_toks_20260720T013526Z`. Flags stay OFF.
