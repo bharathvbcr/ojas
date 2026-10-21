@@ -5,9 +5,10 @@
 # **default ON** — CAST_ONCE, FA_FAST, FA_BF16. Baseline arms below set them to 0.
 #   METAL_NATIVE_BWD_PROFILE=1    per-section backward timing (diagnostic)
 #   METAL_NATIVE_BWD_CAST_ONCE=1  single bf16 cast for shared grad operands
-#   METAL_NATIVE_GEMM_ACCUM_DX=1  multiply_accumulate for dX only (dW stays temp+add)
-#   METAL_NATIVE_GEMM_ACCUM=1     Audit 6 full accum (known Soft-regress; speed ref)
-#   METAL_NATIVE_FA_TILED=1       tiled FA bwd (16M Soft quality winner; untested at 128M)
+#   (METAL_NATIVE_GEMM_ACCUM / _ACCUM_DX are retired: nothing read them after the
+#    import, and tessl always runs the accumulate kernels since 2026-10-10, so
+#    their arms measured the control twice. See src/ab_flags.rs.)
+#   METAL_NATIVE_FA_TILED=1      tiled FA bwd (16M Soft quality winner; untested at 128M)
 #   METAL_NATIVE_FA_FAST=1        head-dim-32 row FA bwd, identical numerics (Audit 7)
 #   METAL_NATIVE_FA_BF16=1        as FA_FAST + bf16 Q/K/V (matches the bf16 fwd's LSE)
 #
@@ -24,7 +25,6 @@
 # Gates (docs/optimization_map.md conventions):
 #   - Speed flip KEEPs only on a clear ms/step win at equal loss trajectory.
 #   - CAST_ONCE requires EXACT loss match in cast-parity before any KEEP.
-#   - ACCUM_DX requires the quality probe (or a 1k Soft ladder) before default-on.
 #   - Record every result in docs/optimization_map.md “Live baselines”.
 
 set -euo pipefail
@@ -91,9 +91,6 @@ speed() {
   ensure_build
   bench_one baseline           METAL_NATIVE_BWD_CAST_ONCE=0 METAL_NATIVE_FA_FAST=0 METAL_NATIVE_FA_BF16=0
   bench_one cast_once          METAL_NATIVE_BWD_CAST_ONCE=1
-  bench_one accum_dx           METAL_NATIVE_GEMM_ACCUM_DX=1
-  bench_one cast_once_accum_dx METAL_NATIVE_BWD_CAST_ONCE=1 METAL_NATIVE_GEMM_ACCUM_DX=1
-  bench_one accum_full_ref     METAL_NATIVE_GEMM_ACCUM=1   # speed ref only; Soft-REJECT default
   bench_one fa_tiled           METAL_NATIVE_FA_TILED=1
   echo
   echo "Compare ms/step + dispatches vs the 2816 ms / 1701 disp M13 smoke gate."
@@ -135,8 +132,7 @@ fa() {
   bench_one fa_fast      METAL_NATIVE_FA_FAST=1
   bench_one fa_bf16      METAL_NATIVE_FA_BF16=1
   # Stack the FA winner on the Audit 7 GEMM flips.
-  bench_one fa_bf16_full METAL_NATIVE_FA_BF16=1 METAL_NATIVE_BWD_CAST_ONCE=1 \
-                         METAL_NATIVE_GEMM_ACCUM_DX=1
+  bench_one fa_bf16_full METAL_NATIVE_FA_BF16=1 METAL_NATIVE_BWD_CAST_ONCE=1
   # Tiled + bf16: the Phase 4 twins, unreferenced before Audit 7.
   bench_one fa_tiled_bf16 METAL_NATIVE_FA_TILED=1 METAL_NATIVE_FA_BF16=1
   echo
@@ -147,7 +143,7 @@ fa() {
 
 fa_quality() {
   ensure_build
-  # NOTE: these probes stack CAST_ONCE+ACCUM_DX, so they are NOT comparable to
+  # NOTE: these probes stack CAST_ONCE (ACCUM_DX is retired), so they are NOT comparable to
   # the clean 2.4209/2.4163 baselines from `quality`. They compare FA variants
   # against *each other*. Use `seed-repeat` to isolate a single flag.
   echo "== 500-step BPB probes for the FA variants (~25 min each) =="
@@ -158,7 +154,7 @@ fa_quality() {
       fa_tiled_bf16) envs=(METAL_NATIVE_FA_TILED=1 METAL_NATIVE_FA_BF16=1) ;;
     esac
     echo "-- $name --"
-    env "${envs[@]}" METAL_NATIVE_BWD_CAST_ONCE=1 METAL_NATIVE_GEMM_ACCUM_DX=1 \
+    env "${envs[@]}" METAL_NATIVE_BWD_CAST_ONCE=1 \
       "$BIN" "${PRESET[@]}" "${DATA[@]}" "${CHAMP[@]}" \
       --total-steps 500 --seed 1337 --log-every 50 --eval-every 250 \
       --no-final-weight-save --out "$OUT/quality_$name" 2>&1 | tail -3
@@ -233,16 +229,14 @@ seed_repeat() {
   # The 500-step single-seed deltas (~0.004-0.005 BPB) are the same magnitude
   # the funnel already called "statistically tied" at 1000 steps, so they cannot
   # decide anything alone. This mirrors the funnel's two-seed methodology on the
-  # two open questions, holding CAST_ONCE fixed (parity-clean, free speed):
+  # open question, holding CAST_ONCE fixed (parity-clean, free speed):
   #   ctl      = CAST_ONCE                  (control)
-  #   accumdx  = CAST_ONCE + ACCUM_DX       (does dX accumulate cost quality?)
   #   fabf16   = CAST_ONCE + FA_BF16        (does bf16 FA bwd help?)
-  # 6 runs x ~23 min ~= 2.3 h.
+  # 4 runs x ~23 min ~= 1.5 h.
   for seed in 42 2026; do
-    for name in ctl accumdx fabf16; do
+    for name in ctl fabf16; do
       case $name in
         ctl)     envs=(METAL_NATIVE_BWD_CAST_ONCE=1 METAL_NATIVE_FA_BF16=0 METAL_NATIVE_FA_FAST=1) ;;
-        accumdx) envs=(METAL_NATIVE_BWD_CAST_ONCE=1 METAL_NATIVE_FA_BF16=0 METAL_NATIVE_FA_FAST=1 METAL_NATIVE_GEMM_ACCUM_DX=1) ;;
         fabf16)  envs=(METAL_NATIVE_BWD_CAST_ONCE=1 METAL_NATIVE_FA_BF16=1 METAL_NATIVE_FA_FAST=1) ;;
       esac
       echo "-- $name seed $seed --"

@@ -1390,10 +1390,28 @@ mod tests {
     /// within 1e-6 plus that noise on every tensor.
     #[test]
     fn mlp_recompute_matches_taped_hidden() {
+        check_mlp_recompute(crate::runtime::PrecisionMode::F32);
+    }
+
+    /// The persistent-bf16 path keeps a bf16 scratch and recomputes through
+    /// `mlp_act_to_bf16`; same contract as the f32 test. Each `gpu_runtime()`
+    /// is a fresh runtime, so setting its precision touches no other test.
+    #[test]
+    fn mlp_recompute_matches_taped_hidden_bf16() {
+        check_mlp_recompute(crate::runtime::PrecisionMode::Bf16);
+    }
+
+    fn check_mlp_recompute(precision: crate::runtime::PrecisionMode) {
         // Self-referential (taped vs recomputed), so only weights and inputs are
         // needed — not the gitignored forward activations.
         let golden = golden_dir();
         let rt = crate::gpu_runtime().expect("GpuRuntime");
+        let bf16 = precision == crate::runtime::PrecisionMode::Bf16;
+        if bf16 && !rt.has_tensorops() {
+            eprintln!("skipping bf16 mlp_recompute: no TensorOps");
+            return;
+        }
+        rt.set_precision(precision);
         let cfg = ModelConfig::sota_toy();
         let w = Weights::load_from_golden(&rt, &golden, cfg).unwrap();
         let ids = load_input_ids(&golden, 0).unwrap();
@@ -1403,6 +1421,11 @@ mod tests {
             crate::model_fwd::forward_f32_with(&rt, &w, &ids, &tgts, &mut tape, recompute).unwrap();
             assert_eq!(tape.mlp_recompute, recompute);
             assert_eq!(tape.mlp_scratch.is_some(), recompute);
+            if let Some(s) = &tape.mlp_scratch {
+                use crate::tensor::DType;
+                let want = if bf16 { DType::BF16 } else { DType::F32 };
+                assert_eq!(s.dtype, want, "scratch dtype: wrong recompute path ran");
+            }
             for lt in &tape.layer {
                 assert_eq!(lt.mlp_hidden.is_none(), recompute, "mlp_hidden taped");
                 assert!(lt.mlp_pre_act.is_some());
@@ -1421,7 +1444,9 @@ mod tests {
             let noise = max_abs_err(a2, a);
             let err = max_abs_err(r, a);
             worst = worst.max(err);
-            eprintln!("mlp_recompute {name}: recompute-vs-taped={err:e} run-noise={noise:e}");
+            eprintln!(
+                "mlp_recompute {precision:?} {name}: recompute-vs-taped={err:e} run-noise={noise:e}"
+            );
             assert!(
                 err <= 1e-6 + noise,
                 "{name}: recompute differs from taped hidden by {err:e} (noise {noise:e})"

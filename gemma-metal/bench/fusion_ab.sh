@@ -38,6 +38,8 @@ set -euo pipefail
 
 MODEL="${1:-e4b}"
 cd "$(dirname "$0")/.." || exit 1
+# shellcheck source=stream_check.sh
+. bench/stream_check.sh
 OUT="bench/results/fusion_ab_${MODEL}_$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p bench/results
 
@@ -285,8 +287,16 @@ echo "=== VERDICT ==="
 base_tok="$(kv_get TOKENS baseline)"
 fail=0
 
+base_degenerate=false
 if [ -z "$base_tok" ]; then
   echo "  EXACTNESS: INDETERMINATE — baseline produced no token line"
+  fail=1
+elif degen="$(stream_degenerate "$base_tok")"; then
+  # Identical collapsed streams agree for any arm that preserves the collapse.
+  echo "  EXACTNESS: INDETERMINATE — baseline stream is degenerate ($degen);"
+  echo "      arm-vs-baseline agreement proves nothing here. Gate against a"
+  echo "      reference stream instead (src/bin/golden_parity.rs)."
+  base_degenerate=true
   fail=1
 else
   for arm in "${ARM_NAMES[@]}"; do
@@ -372,6 +382,7 @@ done
   echo "  \"exactness_hazard\": 0,"
   echo "  \"tok_s_hazard\": \"shipping_skip_auto\","
   echo "  \"exactness_all_pass\": $([ "$fail" -eq 0 ] && echo true || echo false),"
+  echo "  \"baseline_degenerate\": $base_degenerate,"
   echo "  \"pin\": {\"FUSE_KV\": ${FUSE_KV_PIN}, \"GEMV_INTERLEAVE\": 0, \"GEMV_SIMD\": 1},"
   echo '  "arms": {'
   n=${#ARM_NAMES[@]}
@@ -384,7 +395,7 @@ done
     ts="$(kv_get TOKS "$arm")"
     d="$(kv_get DISP "$arm")"
     exact=false
-    [ "$tok" = "$base_tok" ] && exact=true
+    [ "$tok" = "$base_tok" ] && [ "$base_degenerate" = false ] && exact=true
     echo "    \"$arm\": {\"tok_s\": ${ts:-null}, \"dispatches\": ${d:-null}, \"tokens\": \"$tok\", \"exact\": $exact}$sep"
   done
   echo '  }'

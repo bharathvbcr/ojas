@@ -79,6 +79,21 @@ pub fn forward_f32_with(
     forward_f32_uploaded_with(rt, w, ids, tgts, tape, mlp_recompute)
 }
 
+/// The shared MLP scratch is rewritten by every layer, so layer L+1's activation
+/// write must not overtake layer L's down-projection read. Only the always-on
+/// Device barrier orders that write-after-read; with it skipped the gradients
+/// would be silently wrong, so refuse instead.
+fn recompute_needs_auto_barriers(skip_auto_barriers: bool) -> Result<(), String> {
+    if skip_auto_barriers {
+        return Err(
+            "METAL_NATIVE_MLP_RECOMPUTE=1 shares one MLP scratch across layers and needs \
+             the always-on dispatch barrier; unset TESSL_HAZARD_BARRIERS"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Forward with pre-uploaded (e.g. ping-pong) id/target buffers.
 pub fn forward_f32_uploaded(
     rt: &Arc<GpuRuntime>,
@@ -109,6 +124,7 @@ fn forward_f32_uploaded_with(
     tape.clear_activations();
     tape.step += 1;
     if mlp_recompute {
+        recompute_needs_auto_barriers(crate::ab_flags::hazard_barriers())?;
         // One post-act buffer for every layer: fwd writes it before the down
         // GEMM, bwd rewrites it from `mlp_pre_act` before the dW_down GEMM.
         // Dtype follows the down-proj GEMM operand (bf16 only on the
@@ -1682,6 +1698,13 @@ fn mingru_fwd_rust(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mlp_recompute_refuses_skipped_auto_barriers() {
+        assert!(recompute_needs_auto_barriers(false).is_ok());
+        let err = recompute_needs_auto_barriers(true).unwrap_err();
+        assert!(err.contains("TESSL_HAZARD_BARRIERS"), "{err}");
+    }
 
     #[test]
     fn flash_head_dim_above_64_is_refused_on_the_host() {

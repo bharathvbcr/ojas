@@ -129,15 +129,26 @@ Plan (do not edit as status source of truth here): Cursor plan
   - Soft (Muon√c / AdamW×c) FA_TILED **from-scratch 3k**: EMA **2.0222**, late
     gnorm ~5.7 — **better than Soft-everywhere 2.0369**
   - Soft (Muon√c / AdamW×c) continue Soft 3k dump →8k: FINAL **1.9469**, best live
-    **1.9635 @6499** — **KEEP** (beats failed Soft 2.2575 and CUDA ref 1.9944 @8k)
+    **1.9635 @6499** — **KEEP** (beats failed Soft 2.2575; the CUDA ref 1.9944 is a
+    3000-step ladder, so this 8k figure is not step-matched against it)
   - Soft (Muon√c / AdamW×c) **from-scratch 20k** FA_TILED (no warmdown): FINAL EMA
-    **1.9178** (beats CUDA 1.9944) but late raw gnorm O(100–600), chronic Soft
+    **1.9178** (below the 3000-step CUDA 1.9944; not step-matched) but late raw gnorm O(100–600), chronic Soft
     clip≈0, `vr_λ` 0.7→2.0, `attn_scale` 11→7 — BPB improves via clip+EMA despite
     rising pre-clip norm
   - Soft-everywhere row FA continue also explodes — FA_TILED not required for fail
   - Soft harden (accum off, no FA_TILED) 3k: EMA **2.0502**, late gnorm ~3.4
   - Match 3k: EMA **2.0649**, late gnorm max ~2.8
   - Python: diverges ~2500 (gnorm→500+)
+  > **Audit 2026-10-20:** every KEEP/REJECT above rests on one seed (1337) with
+  > gaps of ~0.01-0.04 (e.g. 2.0222 vs 2.0369 vs 2.0502 vs 2.0649). Treat as
+  > historical, not reproducible under current code: M17 measures the same Soft-split
+  > + FA_TILED 3k recipe at ~2.106 vs the 2.0222 here, an unattributed drift larger
+  > than these gaps. The gross failures (gnorm explosion, FINAL 2.2575) are large
+  > enough to stand; the fine rankings are not established.
+  > CUDA 1.9944 is a 3000-step ladder (burn-port/README.md step-matched config), so
+  > only the 3k rows are step-matched; the earlier "@8k" label on the CUDA ref was
+  > wrong (it is @3k). The 8k/20k/100k Metal numbers beating 1.9944 are not a
+  > like-for-like win.
 - **Why Soft split:** Soft √c on AdamW over-updates `vr_λ` / `attn_scale` under
   chronic clip; banks shrink via WD while scales climb → gnorm explode. Soft on
   Muon alone keeps the bank-starvation fix without scalar runaway.
@@ -147,7 +158,8 @@ Plan (do not edit as status source of truth here): Cursor plan
   FineWeb/`token_bytes`. Seed 1337 (**`--golden-init`**, FineWeb skip=0): FINAL
   EMA **1.8969**, gnorm @19999 **216**. True seed-42 arm (seeded init + FineWeb
   skip; `out/.../seed42_..._warmdown_reseed/`): FINAL EMA **1.8876**, gnorm
-  @19999 **60**; 2-seed Soft mean **1.8922** (beats CUDA ~1.990). Prior
+  @19999 **60**; 2-seed Soft mean **1.8922** (below the 3000-step CUDA ~1.990; not
+  step-matched). Prior
   unused-seed “seed 42” was re-run noise (FINAL EMA **1.8925**). CLI `--warmdown`
   default stays **0** (3k Soft unchanged); banner warns when `total_iters≥20000`
   and warmdown=0.
@@ -184,8 +196,14 @@ Plan (do not edit as status source of truth here): Cursor plan
   no sustained streak; wall **~5.6 h** @ ~60k tok/s (M5 Pro). Occasional
   single-step spikes (max ~6.3k @73k under floor) remain under Soft clip — not
   Soft-everywhere diverge.
+  > **Audit 2026-10-20:** the wall figure does not reconcile with its own rate:
+  > 100000 steps x 4096 tok/step (M9) / 60000 tok/s = ~6830 s = ~1.9 h, not 5.6 h
+  > (5.6 h implies ~20k tok/s effective). Either the wall includes contention, eval
+  > or restarts, or the rate is wrong; the run's artifacts are not in this tree, so
+  > this is unverified. Do not quote 5.6 h as 100k at ~60k tok/s.
 - **Remaining Δ vs CUDA @3k (~1.99):** FA numerics; @20k Soft+warmdown and @100k
-  WSD already beat CUDA seed-1337 on EMA sliding BPB.
+  WSD reach lower EMA sliding BPB than the CUDA 3000-step seed-1337 figure, but at
+  6.7x / 33x the steps, so this is not a step-matched win.
 
 ## M8. Flash attention: simdgroup FA-2 production; TensorOps multi-block blocked
 
@@ -200,6 +218,9 @@ Plan (do not edit as status source of truth here): Cursor plan
   - **Hot path (step-time):** row-wise FA-2 bwd default @ T=256.
   - **Soft quality opt-in:** `METAL_NATIVE_FA_TILED=1` (BR=BC=32) — Soft EMA
     **2.0369** vs row **2.050** (seed 1337, accum off); ~69 vs ~57 ms/step.
+    > **Audit 2026-10-20:** n=1 seed, gap 0.013; see the M11 audit note (M17 later
+    > measured the FA_TILED recipe at ~2.106). Historical, not reproducible under
+    > current code.
   - **Metallib probes (not training default):**
     - `flash_attn_tensorops_tile_f32` — session 330 single Br×Bc tile
     - `flash_attn_tensorops_online_f32` — experimental multi-block causal GQA
@@ -310,7 +331,7 @@ Plan (do not edit as status source of truth here): Cursor plan
   | Config | ms/step | tok/s | RSS | Notes |
   |---|---:|---:|---:|---|
   | FA_TILED B8 T512 | **1259** | 3252 | ~5.5 GB | prior default |
-  | row FA B8 T512 | ~1314* | ~3118* | ~5.5 GB | FA_TILED wins ~7% |
+  | row FA B8 T512 | ~1314* | ~3118* | ~5.5 GB | FA_TILED faster by ~4.2% (1259 vs ~1314; proxy, n=1) |
   | FA_TILED **B16 T256** | **954** | **4292** | ~5.5 GB | **KEEP default** |
   | FA_TILED B16 T256 +tf32 | 949 | 4314 | ~5.5 GB | within noise; leave off |
   | FA_TILED B16 T512 | 2176 | 3764 | ~9.8 GB | 2× tok/step; not worth RSS |
@@ -357,7 +378,8 @@ Plan (do not edit as status source of truth here): Cursor plan
   with momentum+Frobenius normalization, polynomial combines, master update,
   weight decay, and EMA. Tall and wide batched NS3 match the host oracle.
 - **Measured exact-scale result:** first step **478.8 ms optimizer / 2930.5 ms
-  total** (Muon **8.8x** faster); six-step steady state after three warmups
+  total** (Muon **8.8x** faster than the old path's 4201 ms first step; first-step vs
+  first-step only, the old path's steady state was never measured); six-step steady state after three warmups
   **2816.2 ms/step, 1454 tok/s**, fixed **1701 dispatches**, RSS settles at
   **16.1 GB**, no NaN/swap/dispatch rollover. First-step loss/gnorm/clip are
   unchanged at **6.9624 / 1.046 / 0.287**.
@@ -387,6 +409,15 @@ Plan (do not edit as status source of truth here): Cursor plan
   exact-128M top-four 500, and exact-128M top-two/two-seed 1000 stages. AdamW and
   NS5 remain mandatory anchors. `../MLSystemsLab/research/champion-run.json` stays locked until
   advancement completes.
+  > **Audit 2026-10-20:** the selection described here is superseded by
+  > `MLSystemsLab/research/d7-lr-retune.json` (2026-08-23): the muon_polar_adamw /
+  > normuon_adamw ordering crosses over in LR, and the funnel's `exact_128m_1000`
+  > compared polar at lr 0.05 against normuon at lr 0.1, both far up the high-LR
+  > wall, so its 0.031226 margin "measures the learning rates, not the optimizers".
+  > At each candidate's best-tested LR (both 0.008) the paired gap is 0.004097,
+  > ci95 half-width 0.005085, interval includes zero. Selection status: RETIRED, not
+  > reversed (normuon is not crowned either). The AdamW anchor's LR came from the
+  > 100-step sweep, a weak baseline (it later degraded to mean BPB 11.2789).
 - **Exact preflight:** checkpoint/replay at 128,367,988 params, B16/T256 passes:
   loss delta `0`, gradient delta `7.15e-7`, sampled master-weight delta
   `2.41e-6`, current physical **13.16 GiB**, **1707 dispatches**, zero swap.
@@ -412,6 +443,10 @@ Plan (do not edit as status source of truth here): Cursor plan
   `scripts/cuda_ref_128m.sh` with disclosed `GRAD_ACCUM_STEPS`. Timing was
   ~2.94–3.07 s/step, 1392 tok/s, 1975 dispatches, 13.5 GiB current physical,
   and zero nonfinite values. It ran **without** `METAL_NATIVE_FA_TILED`.
+  > **Audit 2026-10-20:** "unlocked muon_polar_adamw @ 0.05" / "Champion" is a
+  > systems result for the polar@0.05 stack, not an optimizer winner: the
+  > selection is RETIRED by `MLSystemsLab/research/d7-lr-retune.json` (see the M14
+  > audit note). The 2.0158 BPB is the BPB of that configuration only.
 - **Phase wall:** fwd ~300 ms · **bwd ~2170 ms** · optim ~450 ms. Backward is
   ~74% of the step, so Audit 7 targets backward exclusively.
 - **GEMM-side flips (measured, KEEP pending champion rerun):**
@@ -421,6 +456,9 @@ Plan (do not edit as status source of truth here): Cursor plan
   accumulation on temp+add — the Audit 6 Soft-regression suspect. Together:
   **~3028 → ~2811 ms/step, 1702 → 1482 dispatches (−7.2% / −220)**, beating the
   full Audit 6 accum reference on both axes.
+  > **Audit 2026-10-20:** the `ACCUM_DX` KEEP and the combined −7.2% / −220 claim
+  > were withdrawn in M16 (default OFF, not in WIN; its seed-spread analysis shows
+  > the quality effect unresolved). Only `BWD_CAST_ONCE` carried forward.
 - **CAST_ONCE parity:** step 0 is bit-identical; steps 1–2 differ by ~3e-6,
   the same order as measured off-vs-off run noise (~4e-6). This is inside the
   M13/M14 replay-equivalence atol of `1e-5`. A bit-identical gate is **not**
@@ -437,6 +475,9 @@ Plan (do not edit as status source of truth here): Cursor plan
   the row path at T=256/128M, so BR=BC=32 tiling is not the lever. Its value is
   quality: 500-step champion-config EMA BPB **2.4163 vs 2.4209** row (−0.0046,
   single seed).
+  > **Audit 2026-10-20:** −0.0046 is far below the measured 500-step seed spread
+  > (0.0319, M16); read this as no measurable quality effect at n=1, not a quality
+  > value.
 - **Two structural defects in the row FA bwd kernels** (fixed in
   `kernels/flash_attn_bwd_fast.metal`, `*_row_d32_*`):
   1. Loop-invariant `Q`/`dO` (dQ) and `K`/`V` (dKV) are re-read from device
@@ -454,6 +495,9 @@ Plan (do not edit as status source of truth here): Cursor plan
   mismatch. `METAL_NATIVE_FA_BF16=1` reads bf16 Q/K/V with f32
   dO/L/Delta/scores/accum/grads, matching `flash_attn_fwd_bf16`. dO stays f32
   because dV accumulates `p * dO` directly.
+  > **Audit 2026-10-20:** the consistency-repair rationale for bf16 FA bwd was
+  > withdrawn in M16 (`use_bf16_flash` returned false, so the forward never ran
+  > bf16 flash); it is justified empirically only.
 - **Scope limits:** both FA flags require `head_dim == 32` (host-guarded, warns
   once and falls back otherwise) and are ignored under FA_TILED — the
   specialized kernels are row-path only. A tiled bf16 twin is follow-up work,
@@ -497,6 +541,11 @@ Plan (do not edit as status source of truth here): Cursor plan
   total synced backward 1281 → 446 ms. The backward is now GEMM-dominated
   (mlp_gemms 29%, fa_dqdkv 18%, qkv_gemms 15%, resid_glue 14%) and those GEMMs
   run at ~10.7 TFLOP/s, so remaining backward headroom is thin.
+  > **Audit 2026-10-20:** no hardware peak is named, so "thin" is unsupported as a
+  > ratio. The same optimization_map section lists the forward MLP block at only
+  > ~4.1 TFLOP/s (2.6x below 10.7, "the largest unexplained item left"). The map
+  > lives at `/Users/bharath/Code/research/tessl/docs/apple-silicon/optimization_map.md`
+  > (not under this repo).
 - **P2 / MLP coop postfix stays closed.** It targets the 11–29% GEMM sections
   that already run on TensorOps/NAX.
 - **New instruments:** `METAL_NATIVE_FWD_PROFILE` and
@@ -519,6 +568,9 @@ Plan (do not edit as status source of truth here): Cursor plan
   FINAL EMA **2.0107** (~1683 ms/step mid-run); seed2026 **2.0404**; long20k
   **1.8155** @ ~1582 ms/step. WIN profile: bwd ~457 / fwd ~412 / optim ~413 with
   **muon_banks 99.8%** of optim — primary leftover wall (Audit 9B).
+  > **Audit 2026-10-20:** 2.0107 vs the audit7 2.015576 is a delta of ~0.005 against
+  > a measured ~0.03 seed spread (0.0319, above), and seed2026 gave 2.0404: a BPB
+  > tie. "Replaced" is justified on ms/step (2005 -> ~1683 mid-run), not on BPB.
 - **Harness hazard.** Every `bench_128m_ab.sh` mode began with
   `[ -x "$BIN" ] || build`, which runs a **stale binary** after a source change
   — the same failure the funnel explicitly guards against. One `fwd` run was
@@ -529,7 +581,7 @@ Plan (do not edit as status source of truth here): Cursor plan
   is modest (muon + MLP sandwich + glue floor) — not another 2×. Architecture
   truth locked in `optimization_map.md` Audit 9.
 
-## M17. Gram Newton-Schulz and MLP recompute flags (2026-10-20)
+## M18. Gram Newton-Schulz and MLP recompute flags (2026-10-20)
 
 - **Flags (default off):** `METAL_NATIVE_MUON_GRAM=1` runs `gram_ns_bank` for Muon
   banks with aspect ratio >= 2: iterate the polynomial on the p x p Gram matrix,
@@ -545,6 +597,56 @@ Plan (do not edit as status source of truth here): Cursor plan
   optimizer 419 -> 361 ms (Polar) and 446 -> 387 ms (NorMuon), saving 56-70 ms in
   all 6 pairs; step -7 to -8%. Recompute: footprint -414 MB (bf16 hidden), forward
   -13%, step -4.6% (one rep inside noise).
-- **Open:** bf16 recompute trajectory gap 2.1-4.2e-3 vs same-config spread
-  0.7-2.1e-3 over 30 steps, not separable at n=3. No FineWeb quality run (shards
-  absent), so neither flag is a default.
+- **bf16 resolved:** the 30-step bf16 trajectory gap (2.1-4.2e-3 vs same-config
+  spread 0.7-2.1e-3, n=3) is amplified run-to-run noise, not a recompute bug:
+  `mlp_recompute_matches_taped_hidden_bf16` (persistent-bf16 scratch path) matches
+  the taped gradients to 4.7e-10 against 7.0e-10 run noise after one step.
+- **Guard:** recompute refuses `TESSL_HAZARD_BARRIERS=1` (shared scratch needs the
+  always-on barrier; `mlp_recompute_refuses_skipped_auto_barriers`).
+- **Open:** no FineWeb quality run (shards absent). Both flags became defaults in M20
+  on equivalence evidence; the quality run is still owed.
+
+## M19. Dead A/B flags retired; accumulate GEMMs are always on (2026-10-20)
+
+- **Found:** `METAL_NATIVE_GEMM_ACCUM`, `METAL_NATIVE_GEMM_ACCUM_DX`,
+  `METAL_NATIVE_GEMM_INTERIOR` and `METAL_NATIVE_HAZARD_BARRIERS` were parsed in
+  `ab_flags.rs` but had no caller in this crate since the import (1fc6a03), and
+  tessl reads none of those names (`rg -uu`). Setting them changed nothing, so the
+  `bench_128m_ab.sh` accum arms re-measured the control.
+- **What runs now:** tessl dropped its own accumulate/interior flags on 2026-10-10
+  (`tessl/src/gemm.rs`, `gemm_tn_accum_train` doc): training accumulates always
+  use the TensorOps accumulate kernels. M15/M16's "ACCUM off / ACCUM_DX stays OFF"
+  and Audit 6's "accum on regresses Soft BPB" describe the pre-2026-10-10 code;
+  current arch02 runs the accumulate path. Its Soft-quality cost under current code
+  is unmeasured (needs FineWeb).
+- **Change:** the four flags are removed; `ab_flags::hazard_barriers()` now reports
+  tessl's `TESSL_HAZARD_BARRIERS`, which is what the runtime obeys; the dead arms
+  are removed from `bench_128m_ab.sh`.
+
+## M20. Gram NS and MLP recompute default ON (2026-10-20)
+
+- **Decision:** `METAL_NATIVE_MUON_GRAM` and `METAL_NATIVE_MLP_RECOMPUTE` default
+  on (owner's call). `=0` restores the previous path for each. Recompute's default
+  steps aside when `TESSL_HAZARD_BARRIERS=1`; an explicit `=1` there is refused.
+- **Evidence (equivalence, not quality):** M18's parity tests and 128M A/Bs. With
+  the regenerated forward goldens and step grads (below), the full lib suite is
+  59/59 on the old defaults and 60/60 on the new ones (the extra test is the
+  default-resolution test). `fwd/bwd_parity_vs_goldens` run through
+  `forward_f32`, so the backward golden gate now covers recompute (f32).
+  `optim_step3_parity_vs_goldens` does **not** cover Gram NS: sota_toy banks are
+  under 256 on the short side and take the simdgroup NS5 path, not TensorOps.
+  Rebuilt `train` smoke, 16m, 12 steps, synthetic, 2 interleaved reps: optimizer
+  42.1/42.5 -> 38.1/38.1 ms, forward 27/24 -> 22/20 ms, footprint 4513/4502 ->
+  4400/4402 MB, final loss 5.5187/5.5186 -> 5.5188/5.5187.
+- **Goldens regenerated:** `golden/fwd/` (gitignored) and
+  `/tmp/metal_native_grads_steps` were absent, so three golden tests could not
+  run. They were rebuilt with `scripts/export_goldens.py` /
+  `export_step_grads.py` against the reference trainer now at
+  `MLSystemsLab/research/parameter-golf/arch_02_value_resid/train_gpt_sprint_native.py`
+  (sha256 5441f112…), torch on MPS with the SDPA fallback. Not bit-identical to
+  the committed manifest (119/230 tensors match exactly), but within the gates'
+  tolerances where both exist: inputs and weights_init identical, grads max
+  |diff| 9.5e-7, optim_step3 7.3e-5 (OPTIM_ATOL 1e-4). The committed goldens
+  were left untouched.
+- **Owed:** a FineWeb BPB run with each flag on vs off at equal LR; Gram NS has
+  no PyTorch golden at a shape that reaches the TensorOps path.
