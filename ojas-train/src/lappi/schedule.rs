@@ -46,22 +46,131 @@ impl fmt::Display for ScheduleError {
 
 impl std::error::Error for ScheduleError {}
 
-/// Linear warmup, then cosine decay to `min_lr`.
+/// How the rate falls from the peak to `min_lr` once the warmup ends. The warmup is the same
+/// linear ramp for every kind.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Decay {
+    /// Lappi's schedule: `0.5 * (1 + cos(pi * x))`. What [`LrSchedule::new`] builds.
+    Cosine,
+    /// The peak, held to the last step.
+    Constant,
+    /// `1 - x`: straight down toward `min_lr`, which the last step approaches but does not reach.
+    Linear,
+    /// `gamma^k`, `k = (step - warmup) / every` (integer division): the rate is multiplied by
+    /// `gamma` every `every` steps. Evaluated with `f64::powi`, not with a Python `**` oracle;
+    /// the two may differ in the last bit.
+    Step { every: u64, gamma: f64 },
+}
+
+impl Decay {
+    /// The decay a schedule object records: the inverse of [`LrSchedule::to_json`]'s `"decay"`
+    /// member. Absent is cosine (what Python's four-key form means); an unknown kind, a
+    /// missing or ill-typed field, a member the kind does not have, or a step decay that
+    /// [`Decay::validate`] refuses is an error.
+    pub fn from_json(schedule: &Value) -> Result<Self, ScheduleError> {
+        let bad = |m: String| ScheduleError::Invalid(m);
+        let d = match schedule.field_opt("decay") {
+            Ok(None) => return Ok(Self::Cosine),
+            Ok(Some(d)) => d,
+            Err(e) => return Err(bad(format!("schedule is not an object: {e}"))),
+        };
+        let member = |key: &str| match d.field_opt(key) {
+            Ok(Some(v)) => Ok(v),
+            _ => Err(bad(format!("decay has no {key:?}"))),
+        };
+        let kind = member("kind")?
+            .as_str()
+            .map_err(|_| bad("decay kind is not a string".into()))?;
+        let (decay, allowed): (Self, &[&str]) = match kind {
+            "constant" => (Self::Constant, &["kind"]),
+            "linear" => (Self::Linear, &["kind"]),
+            "step" => (
+                Self::Step {
+                    every: member("every")?
+                        .as_u64()
+                        .map_err(|_| bad("decay every is not a non-negative integer".into()))?,
+                    gamma: member("gamma")?
+                        .as_f64()
+                        .map_err(|_| bad("decay gamma is not a number".into()))?,
+                },
+                &["kind", "every", "gamma"],
+            ),
+            other => {
+                return Err(bad(format!(
+                    "decay kind {other:?} is not constant, linear or step"
+                )));
+            }
+        };
+        d.deny_unknown_keys(allowed)
+            .map_err(|e| bad(format!("decay {kind:?}: {e}")))?;
+        decay.validate()?;
+        Ok(decay)
+    }
+
+    /// The one owner of the decay's own rule, called by [`LrSchedule::with_decay`] and by
+    /// [`Decay::from_json`]: a step decay needs `every > 0` and a `gamma` that is finite and
+    /// in `(0, 1]` (so `-0.0`, and a literal that underflows to `0.0`, are refused).
+    pub fn validate(&self) -> Result<(), ScheduleError> {
+        if let Self::Step { every, gamma } = *self {
+            if every == 0 {
+                return Err(ScheduleError::Invalid(
+                    "step decay: every must be positive, got 0".into(),
+                ));
+            }
+            if !(gamma.is_finite() && gamma > 0.0 && gamma <= 1.0) {
+                return Err(ScheduleError::Invalid(format!(
+                    "step decay: gamma must be finite and in (0, 1], got {gamma}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The `"decay"` member [`LrSchedule::to_json`] writes for a kind other than cosine.
+    fn to_json(self) -> Result<Option<Value>, PyJsonError> {
+        Ok(match self {
+            Self::Cosine => None,
+            Self::Constant => Some(obj([("kind", Value::from("constant"))])?),
+            Self::Linear => Some(obj([("kind", Value::from("linear"))])?),
+            Self::Step { every, gamma } => Some(obj([
+                ("kind", Value::from("step")),
+                ("every", Value::from(every)),
+                ("gamma", float(gamma)?),
+            ])?),
+        })
+    }
+}
+
+/// Linear warmup, then a [`Decay`] (cosine by default) to `min_lr`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LrSchedule {
     peak_lr: f64,
     total_steps: u64,
     warmup_steps: u64,
     min_lr: f64,
+    decay: Decay,
 }
 
 impl LrSchedule {
-    /// The checks of `LRSchedule.__post_init__`, in its order.
+    /// The checks of `LRSchedule.__post_init__`, in its order; cosine decay.
     pub fn new(
         peak_lr: f64,
         total_steps: u64,
         warmup_steps: u64,
         min_lr: f64,
+    ) -> Result<Self, ScheduleError> {
+        Self::with_decay(peak_lr, total_steps, warmup_steps, min_lr, Decay::Cosine)
+    }
+
+    /// [`LrSchedule::new`] with the decay given. Every check of `new` applies to every kind;
+    /// a step decay is also refused for `every == 0` and for a `gamma` that is not finite or
+    /// is outside `(0, 1]`.
+    pub fn with_decay(
+        peak_lr: f64,
+        total_steps: u64,
+        warmup_steps: u64,
+        min_lr: f64,
+        decay: Decay,
     ) -> Result<Self, ScheduleError> {
         let bad = |m: String| Err(ScheduleError::Invalid(m));
         if !peak_lr.is_finite() {
@@ -97,11 +206,13 @@ impl LrSchedule {
                  describes a rate this run never uses"
             ));
         }
+        decay.validate()?;
         Ok(Self {
             peak_lr,
             total_steps,
             warmup_steps,
             min_lr,
+            decay,
         })
     }
 
@@ -135,6 +246,9 @@ impl LrSchedule {
     pub fn min_lr(&self) -> f64 {
         self.min_lr
     }
+    pub fn decay(&self) -> Decay {
+        self.decay
+    }
 
     /// The rate for `step`, 0-based over optimizer steps.
     pub fn lr_at(&self, step: u64) -> Result<f64, ScheduleError> {
@@ -150,18 +264,36 @@ impl LrSchedule {
         }
         let span = self.total_steps - self.warmup_steps;
         let progress = (step - self.warmup_steps) as f64 / span as f64;
-        let decay = 0.5 * (1.0 + (std::f64::consts::PI * progress).cos());
+        let decay = match self.decay {
+            Decay::Cosine => 0.5 * (1.0 + (std::f64::consts::PI * progress).cos()),
+            Decay::Constant => 1.0,
+            Decay::Linear => 1.0 - progress,
+            Decay::Step { every, gamma } => {
+                let k = i32::try_from((step - self.warmup_steps) / every).map_err(|_| {
+                    ScheduleError::Invalid(format!(
+                        "step decay exponent for step {step} does not fit an i32"
+                    ))
+                })?;
+                gamma.powi(k)
+            }
+        };
         Ok(self.min_lr + (self.peak_lr - self.min_lr) * decay)
     }
 
-    /// `LRSchedule.to_json`, as the checkpoint and the manifest record it.
+    /// `LRSchedule.to_json`, as the checkpoint and the manifest record it. A cosine schedule
+    /// writes exactly Python's four keys; any other decay adds a `"decay"` object (Python's
+    /// reader never sees one, because Lappi's runs are cosine).
     pub fn to_json(&self) -> Result<Value, PyJsonError> {
-        obj([
+        let mut pairs = vec![
             ("peak_lr", float(self.peak_lr)?),
             ("total_steps", Value::from(self.total_steps)),
             ("warmup_steps", Value::from(self.warmup_steps)),
             ("min_lr", float(self.min_lr)?),
-        ])
+        ];
+        if let Some(d) = self.decay.to_json()? {
+            pairs.push(("decay", d));
+        }
+        obj(pairs)
     }
 }
 
