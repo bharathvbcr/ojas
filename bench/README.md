@@ -18,7 +18,7 @@ BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
 
 The runner prints the output directory; `summary.md` in it holds the tables.
 Requirements: Apple silicon, the `tessl` checkout beside `ojas` (ojas-metal's
-path dependency), Python 3.14 with torch 2.13 (MPS), and the nanolab checkout
+path dependency), Python 3.14 with torch 2.13 (MPS; the harness default, and each result folder's `env_torch.json` is authoritative for the version that run used), and the nanolab checkout
 at `/Users/bharath/Code/research/MLSystemsLab` (the torch side imports its real
 `Block`, `GPT`, `Config`, `apply_rope` and `zeropower_via_newtonschulz5`;
 bytecode writing is disabled so that checkout is not touched).

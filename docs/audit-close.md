@@ -53,7 +53,7 @@ flowchart TD
 ```
 
 ### CPU larger step, about 0.46 ms
-Not a defect. `docs/bench-cpu-vs-torch.md` records two later release runs of the larger shape (`B=2`, `T=32`, `d=64`, vocab 128): Rust medians `4.620420000e-4` s and `4.546040000e-4` s, torch CPU medians `4.559369918e-4` s and `4.629169998e-4` s (`docs/bench-cpu-vs-torch.md:177-184`). Run 1 is about 6 µs slower than torch. Run 2 is about 8 µs faster. That spread is inside one run’s noise. This session did not retime it.
+Not a defect. `docs/bench-cpu-vs-torch.md` records two later release runs of the larger shape (`B=2`, `T=32`, `d=64`, vocab 128): Rust medians `4.620420000e-4` s and `4.546040000e-4` s, torch CPU medians `4.559369918e-4` s and `4.629169998e-4` s (`docs/bench-cpu-vs-torch.md:177-184`). Run 1 is about 6 µs slower than torch. Run 2 is about 8 µs faster. That spread is inside one run’s noise. This session did not retime it. This is a wall-time comparison on a toy shape (2 recorded runs); the loss was not compared with torch at this shape.
 
 The same file still says the larger loss is finite and is not a torch match (`docs/bench-cpu-vs-torch.md:42`). The wall-time test only asserts `larger.loss.is_finite()` (`ojas-cpu/tests/torch_ref.rs:358-364`). The frozen torch comparison remains the tiny step.
 
@@ -80,5 +80,5 @@ Verified by reading source. `TIKTOKEN_GPT2_BYTE_IDENTITY` is `"verified-20-strin
 > [!NOTE]
 > 1. **Index Freshness:** CLI indexes are fresh across `ojas` (generation 885), `tessl` (846), and `gusset` (804).
 > 2. **Dead Code Elimination:** No high-confidence symbols survived as confirmed dead code. All candidate rows are resolver misses or dynamic string pipeline dispatches (e.g. `qwen35_residual_add_f32`).
-> 3. **CPU Parity:** The larger CPU step (~0.46 ms) matches PyTorch CPU within normal run-to-run noise margins.
+> 3. **CPU wall time (toy shape):** The larger CPU step (~0.46 ms, `B=2`, `T=32`, `d=64`, 2 recorded runs) is within run-to-run noise of PyTorch CPU wall time. Loss was not compared with torch at this shape (`docs/bench-cpu-vs-torch.md:64`).
 > 4. **Hardware Refusal:** CUDA and HIP strictly refuse execution with `DeviceError::NotCompiled`, upholding the zero-silent-fallback guarantee.

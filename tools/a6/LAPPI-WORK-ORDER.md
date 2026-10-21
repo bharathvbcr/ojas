@@ -45,7 +45,7 @@ The order follows Fable's 2026-10-17 run order: LoRA rows (done) → 0.8B bf16 s
 - **Status (updated 2026-10-18 14:45):** **merged and verified on ojas main `4123dfb`** (merge `fb057d4`), imported with history at Lappi `fecfd5d`.
   - ojas-train now exports `ojas_train::lappi::{step, trainer, schedule, recipe, adamw, mock, run_control, pyjson}`, plus `LoraHostNames`.
   - The ojas Tape `StepProvider` (`ojas_model::qwen35::TapeStepProvider`) is in place.
-  - All tests are green, including the moved Lappi oracles.
+  - Verified by selected suites only (run 9, `docs/reports/BUILD_REPORT-a6.md:51-58`): qwen35 CPU 42/42, provider CPU 14/14, Metal provider 5/5, clippy clean, ojas-io + ojas-train 180/180, gpu_parity 9/10 (the one failure is environmental: a missing `tessl/target/qwen35_train_ref/ids.npy`). The done gate was not run (`BUILD_REPORT-a6.md:553`).
   - **Pin target: ojas `4123dfb`.** It is on ojas origin/main as of 2026-10-19, so the lock's url can serve it.
 - **Keep frozen until then:** `crates/qd-train/src/{step,trainer,schedule,recipe,adamw,mock,run_control,pyjson}.rs`, `tests/{adamw_decay_sensitive,adamw_oracle,schedule_oracle,pyjson_oracle}.rs`, `tests/common/`, and the two fixtures.
 - **Then:** bump `upstream.lock.json` to the ojas main sha that contains phase A (ojas will post it), depend on `ojas-train`, delete the moved copies, and repoint `d17.rs`, `lora_init.rs`, `ledger.rs` and `trainer_loop.rs` to `ojas_train::lappi::…`. `lora_param_groups` and `lora_optimizer_table` now take `&LoraHostNames { d17_entry: d17::D17_ENTRY, span_head: &span_head::PARAMETER_NAMES }`. Replace `sha2` and `serde_json` uses that moved.

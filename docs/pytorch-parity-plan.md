@@ -281,6 +281,8 @@ The paired protocol ran 5 rounds × 3 runs, alternating which runtime went first
 - **Magnitudes** below are run A medians, with the 15-round range as the uncertainty.
 - A quiet-GPU re-run is required before any ratio is quoted as a number.
 
+> **Audit 2026-10-20:** the table below is round 1 (`bench/results/2026-10-01/`), run under a saturated GPU, so it is kept for history and is superseded by rounds 2-5 in [`bench-gpu-vs-torch.md`](bench-gpu-vs-torch.md). Metal `block_fwd_bwd` (torch median / ojas median, torch 2.13.0 per each folder's `env_torch.json`): 0.59x in round 2 (`bench/results/2026-10-01-r2/summary.md:69`, no noisy flag), 0.92x in round 3 (`bench/results/2026-10-01-r3b/summary.md:69`, flagged "noisy - not quoted"), 1.07x [0.96-1.16] in round 5 (`bench/results/2026-10-02-r5/summary.md:69`, flagged noisy, GPU 100% busy). Metal `adamw_full` was 1.55x in round 3 (`bench-gpu-vs-torch.md:683`, noisy, unpaired). The `clip_grad_norm` rows are against torch 2.13, whose MPS norm ran on one threadgroup, and do not hold against torch 2.15: round 5's 18.96 ms path was about 0.45x of the 2.15 nightly, while the Metal path measured after `0e3254f` (7.07-7.45 ms) is about 1.13x, unpaired (`bench-gpu-vs-torch.md:83`).
+
 In this table, a ratio is torch time / ojas time, so below 1 means ojas is slower.
 
 | | Metal | wgpu |

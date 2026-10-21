@@ -25,6 +25,11 @@ PR#1276 lands the model class only; speculative-decode wiring (`shared_kv_states
 
 **Not overturned.** DFlash wins the measurable A/B (23.59 vs 13.26 tok/s). MTP could not be measured; no native MTP port.
 
+> **Audit 2026-10-20:** "wins the measurable A/B" is DFlash vs *greedy* (one prompt, 64 tokens,
+> n=1); there is no MTP datum on M5, so this file neither overturns nor supports D14 against
+> official MTP. The H100/vLLM table in `docs/research_2026-07-18_inference_frontier.md` §2 has
+> MTP ahead on 31B dense (125.3 vs 122.1).
+
 ## Artifacts
 
 - `bench/results/mlx_ab_final.txt`

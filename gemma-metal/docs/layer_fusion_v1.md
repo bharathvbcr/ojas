@@ -85,6 +85,14 @@ moved it ±1%, so the cost is the launch, not the barrier). At ~460 dispatches/t
 **~17 ms of a ~42 ms E4B token**. Kernels themselves already run at 62–100% of the ~273 GB/s
 roofline, so more GEMV peel is worth ≤1.3×; dispatch count is worth ~2×.
 
+> **Audit 2026-10-20:** falsified for real E4B. The ~37 µs/dispatch comes from one mini-graph
+> point (kernels free); on E4B, −90 dispatches (599.9 → 509.9) gave tok/s 23.58 → 23.26
+> (`fusion_ab_e4b_20260720T012511Z.json`), and `decode_profile_e4b_20260720T015429Z.json`
+> `fusion_both_delta` gives `launch_tax_ms_est` 3.3 (`pct_token_budget` 7.8) of
+> `quiet_ms_per_token_est` 42.4. "~17 ms" and "dispatch count is worth ~2×" do not hold; see
+> [DECISIONS D15](../DECISIONS.md) decode time profile. (The "Predicted vs measured" table
+> below already carries the measured columns.)
+
 For reference, CUDA pays 1.3–2.1 µs/launch ([Hazy Research megakernel][hazy]) — Metal 4
 dispatch + argument-table set is roughly **20× more expensive per launch**, which is why this
 lever is bigger here than the equivalent `torch.compile` step was in the Fast Gemma Challenge.
@@ -329,6 +337,11 @@ under skip-auto, even the unfused baseline stream is non-deterministic across ru
     **~0.81**); tok/s **14.88 → 18.48**; cmds=594; prebuilt=594;
     elided=5003; last_setAddress **0/5003** (was 42). Artifact
     `encode_once_e4b_hot_ab_latest.json`. See D16.
+    > **Audit 2026-10-20:** the +24% tok/s is a light-harness step-time figure, not a product
+    > win: `encode_us` here equals total per-token wall time (1e6/14.88 ≈ 67205 ≈ 67195;
+    > 1e6/18.48 ≈ 54113 ≈ 54101), so it is not host encode. The quiet product A/B measured
+    > 23.50 vs 23.38 (item 17) and 23.56 vs 23.46 (item 30), ~flat; `TRACE=1` host encode is
+    > 170 µs (`decode_profile_e4b_20260720T015429Z.json`). See DECISIONS D16 audit note.
 16. **A2 prebuilt arg-tables SHIPPED (v0.5.4)** — per-cmd
     `MTL4ArgumentTable` freezes Buf binds; execute `setArgumentTable` × cmds.
     Mini: last_setAddress **0/427**; ratio **~0.44**; parity PASS; prebuilt=71.
@@ -360,6 +373,10 @@ under skip-auto, even the unfused baseline stream is non-deterministic across ru
 23. **E4B QKV+PLE `fusion_ab` re-measure (2026-07-20)** — PLE exactness+dispatch
     PASS (Δ=42); QKV/both exactness **FAIL** despite dispatch drops (Δ=24/90).
     Artifact `fusion_ab_e4b_20260720T001652Z.json`. Do not ship QKV/both.
+    > **Audit 2026-10-20:** overturned by items 27–29: the QKV/both FAIL was baseline
+    > dual-accumulate `gemv_kv` ULP drift, and after the bank-split fix qkv/ple/both exactness
+    > is PASS (`fusion_ab_e4b_20260720T012511Z.json`). "Do not ship" stands only because tok/s
+    > is flat, not because exactness fails.
 24. **E4B QKV triage (2026-07-20):** unit float parity PASS (isolated); Hot stream
     FAIL @ tok5. Extra Device barrier / sync-after-fuse do **not** restore
     fused≡unfused.

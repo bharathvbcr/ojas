@@ -19,7 +19,8 @@ at **no extra draft cost** (distributions already computed).
 - **Papers:** DDTree (arxiv 2604.12989, code `github.com/liranringel/ddtree`), TAPS (2606.00487),
   Cost-Aware Diffusion Draft Trees (2606.01813). All Transformers/CUDA — **no MLX impl yet**.
 - **Expected here:** lifts the 2.2-accept prose case most; plausible median 31 → ~38–42 tok/s
-  and prose 19 → ~26. Biggest remaining MLX win.
+  and prose 19 → ~26. Biggest remaining MLX win. *(Audit 2026-10-20: these are projections from
+  the cited papers, not measurements; the ROI section below models them at ~1.0× on 31B.)*
 
 ### MLX implementation sketch (fork of `dflash.model_mlx.stream_generate`)
 1. Draft: keep `draft_logits` (already have them); take `top_k` per position (K≈4, B≈16–24).
@@ -41,7 +42,7 @@ path uses a plain causal SDPA). Medium effort; validate against `golden_tokens_3
 SGLang's Spec V2 (lmsys blog 2026-06-15) got +33% by **overlapping host cleanup / KV alloc with
 GPU compute** (not a model change; CUDA). The analog on the **custom gemma-metal engine** is the
 same per-token-overhead fight already underway there (fuse dispatches, encode/GPU overlap; see
-corrected `bottleneck.md` — 77% of the token is overhead). Not an MLX-path lever (mlx-lm already
+corrected `bottleneck.md` — 77% of the token is overhead *[Audit 2026-10-20: superseded; the 77% is a residual vs an isolated contended microbench, and dispatch-count cuts measured flat on E4B (23.58 → 23.26 tok/s, host encode 170 µs, `decode_profile_e4b_20260720T015429Z.json`); see `bottleneck.md` audit note]*). Not an MLX-path lever (mlx-lm already
 overlaps via lazy eval), but confirms the native-engine direction is right. No new draft model
 (Spec V2 released only a Qwen3.5 draft).
 
@@ -62,6 +63,13 @@ M=8→452, **M=10→588 (cliff)**, M=16→594.
 
 Throughput(N) = accept(N)/(T_draft + T_verify(N)) with accept saturating at +35% (paper cap):
 
+> **Audit 2026-10-20: the table below is a model output, not a measurement.** Only the
+> verify-cost points (M=1…16 µs) were measured (one mlp shape); the `accept` column is the
+> paper-capped assumption (+35% saturation) applied to the measured linear accept 3.56, and the
+> relative-throughput column is computed from them (T_draft is not stated here). No tree was
+> run end to end, so "BREAK-EVEN" is a modeled verdict. The unit checks (19/19) cover tree
+> construction/mask/accept logic only.
+
 | tree budget N | accept | rel. throughput vs linear(M=6) |
 |---|---|---|
 | linear (M=6) | 3.56 | 1.00 |
@@ -80,7 +88,10 @@ was on **small** models (Qwen3-4B/8B) where verify is cheap vs draft; at 31B, ve
 2. **E4B (smaller target)** — verify cheaper relative to draft; re-run the model there.
 
 ## Recommendation (updated)
-MLX path is **fully exhausted** — every lever now has a measured/analyzed verdict:
+MLX path is **fully exhausted** *(Audit 2026-10-20: overstated. Measured levers: DFlash, q4
+draft, mlx 0.32, block size, wired memory, adaptive block. Modeled only: draft trees. Not
+tried and unmeasured on M5: official MTP drafter (blocked, see `bench/results/mlx_mtp_vs_dflash_ab_2026-07-19.md`).
+"Exhausted" means "no further lever was tested", not "no lever exists")* — every lever now has a measured/analyzed verdict:
 DFlash ✓ (2.5×), q4 draft ✓ (+6%), mlx 0.32 NAX ✓ (1.49×), block=5 ✓, adaptive ✗ (<4%),
 wired mem ✗, lower-bit ✗ (doctrine/marginal), **draft trees ✗ on 31B (break-even; deferred to
 native M>1 verify or E4B).** Remaining real speed is on the native engine (efficient batched

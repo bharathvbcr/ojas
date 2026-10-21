@@ -117,8 +117,14 @@ missing.
 Needs macOS 26+ Metal 4 for GPU tests. Overlay: `kernels/*.metal` → `GEMMA_METAL_METALLIB`.
 
 **Test count:** ~65 `#[test]`s (config/quant/PLE/KV/kernels/forward/gpu_model/mtp/parity/…).
+*(Audit 2026-10-20: stale; the 2026-07-19 full suite was 118/118 green, per the test-suite note in
+[`layer_fusion_v1.md`](layer_fusion_v1.md). The count was not re-run in this audit.)*
 
 ## Module map (`gemma-metal/src/`)
+
+> **Audit 2026-10-20:** status column reflects 2026-07-13. Since then the real E4B assistant is
+> loaded (`mtp` row: accept 6/8 measured, see `gates.md` Phase 5) and `parity` still has no
+> real-weight HF/MLX logits. Current source: `gates.md`, DECISIONS D7/D10/D11.
 
 | Module | Status | Role |
 |--------|--------|------|
@@ -148,6 +154,12 @@ Version: `gemma-metal-0.1.0-phase6`.
 | Hot `upload_quant_hot` | Q4/Q8 → `BufferKind::Hot` residency |
 
 ### Remaining gaps
+
+> **Audit 2026-10-20:** items 1, 3 and 4 below are stale (2026-07-13). Current: E4B ~23.86
+> tok/s, ~3.2× below mlx (not like-for-like; `gates.md` caveat) rather than ~4.8×/15.9; MTP
+> accept measured at 6/8 tokens (e2e 10.01 / 12.13 tok/s, n=1 each); 31B 4-bit shards are
+> complete (D11) and custom Hot 31B measured 5.64–6.83 tok/s. Items 2 (HF/MLX logit parity) and
+> 5 (PLE Hot) are unchanged per README Phase 3 / D10.
 
 1. E4B still ~4.8× below mlx (~15.9 vs ~76); lm_head / GEMV BW + packing.
 2. HF/MLX logit parity.

@@ -12,6 +12,16 @@ factual/translate) **2.4–3.1×** (~30–36 tok/s), open-ended creative prose w
 (~19 tok/s, draft accept ~2.2 — unpredictable text is hard to draft). **Every prompt type
 still beats plain and clears the ≥15 gate; all but pure prose clear the ≥25 stretch gate.**
 Stack: DFlash block spec-decode × 4-bit draft × mlx 0.32 (M5 neural accelerators) × block=5.
+
+> **Audit 2026-10-20 (evidence labels):** the ~31 median / 2.5× / 19–36 range come from
+> `diversity_sweep_result.json`: 8 prompts × 1 run each, max_tokens 160, `dflash_median` 31.7,
+> `speedup_median` 2.49, `dflash_min` 18.94, `dflash_max` 36.12; that file has no exactness
+> field. "Exact / lossless" is supported by a different artifact, `golden_tokens_31b.json`
+> (5 prompts, max_tokens 64, block 5, `dflash_exact_vs_greedy: true`, per-prompt
+> `dflash_matches_greedy: true`), not by the 8 sweep prompts. The "37" figure is a single-prompt
+> peak (`block_finesweep32_result.json`, `best_median` 37.17 at block 5, `all` = 3 repeats of one
+> prompt), not a prompt-type result (sweep max is 36.12, json). `mlx032_nax_ab_31b.json` (1.49×,
+> 27.77 vs 18.64) is one prompt, block 8, max_tokens 128.
 MLX reference arm: `bench/dflash_fast_31b.py` (the comparator native DFlash is measured against, not a shipped CLI). Local serving: `bench/serve_dflash.py` (OpenAI-compatible :8788; Python under a recorded waiver until native DFlash reaches parity, see its docstring).
 Runtime: `~/.venvs/dflash32` (mlx 0.32.0 + dflash; dflash's `[mlx]` extra pins 0.31.2 — install separately).
 
@@ -32,6 +42,12 @@ Runtime: `~/.venvs/dflash32` (mlx 0.32.0 + dflash; dflash's `[mlx]` extra pins 0
    of ~273 GB/s. The "~6–20% / 4×" figure came from a microbench (`gemv_quant_host`) that
    re-uploaded weights each call. ~77% of a decode token is per-token overhead. → the real
    levers are dispatch-count reduction and block-verify, not faster GEMV. (`kernel_roofline_finding.json`)
+   > **Audit 2026-10-20:** the "~77% per-token overhead" is a residual against an isolated,
+   > contended microbench rate, not a measured host/dispatch cost, and the dispatch-count
+   > lever was later measured flat on E4B (−90 dispatches: 23.58 → 23.26 tok/s; host encode
+   > 170 µs; layer stack ~90% GPU, MLP ~75%). See the audit note in [bottleneck.md](bottleneck.md),
+   > `bench/results/decode_profile_e4b_20260720T015429Z.json`. Block-verify (DFlash) remains
+   > measured on the MLX path only.
 2. **M5 NAX helps decode indirectly.** Apple's research says NAX is prefill-only; but
    block-verify is a mini-prefill (M=block), so spec-decode converts a prefill-only HW
    feature into a decode win.

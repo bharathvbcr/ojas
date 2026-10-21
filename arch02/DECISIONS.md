@@ -117,6 +117,9 @@ every phase; then eval parity; then Metal training; arch_01 flag from day 1.
 4. **Banked Muon**: 66 matrices → 4 shape-stacks ([2L,512,512], [2L,512,256],
    [L,512,1536], [L,1536,512]); NS5 as batched matmuls (~50× fewer
    dispatches); momentum buffers as 3D banks; ID-preserving write-back.
+   > **Audit 2026-10-20:** 66→4 banks is ~16× fewer NS5 loops; the "~50×"
+   > dispatch ratio was never measured (no dispatch counts recorded in this repo
+   > for the Burn path). Treat "~50×" as unverified.
 5. **Attention**: GQA `repeat_dim` K/V copy removed via grouped reshape
    (fold group into matmul rows, batch over B·kv); flash path behind flag
    (see D1 caveat).
@@ -187,7 +190,9 @@ Always compare M5 BPB against this preset, not against the sprint defaults.
 | reference | 3070 Ti CUDA bf16 | ~700–840 ms | — |
 
 At toy scale Metal is dispatch-overhead-bound: collapsing grad_accum 8→1
-(identical tokens/step) gave ~6× on the M5. Burn/Metal f32 is still ~4×
+(identical tokens/step) gave ~6× on the M5 (M5 vs M5: ~17,000 vs ~2,900 ms, per
+burn-port/README.md; the 3070 Ti 2×8 bf16 row is untuned, ~±40% run-to-run, D2).
+Burn/Metal f32 is still ~4×
 slower than PyTorch/CUDA bf16 at this size; phase profiles put the remaining
 cost in forward/backward dispatch (clip/Muon now minor after banking).
 
@@ -201,6 +206,10 @@ Seed 1337, `--preset sota`, live log
 | 0 | 6.93 | ~6.9 |
 | 50 | 4.93 | 4.89 |
 | 100 | 4.92 | 4.52 (ref) / tracking within smoothing |
+
+> **Audit 2026-10-20:** the section title and "faithful" framing overreach: one
+> seed, three points, and the step-100 gap is 0.40 (4.92 vs 4.52), not "within
+> smoothing". Fidelity is unproven; the golden parity tests (D4, D7.1) are the gate.
 
 A full reproduction run was left running after the optimization session
 (seed 1337, sota preset). When it finishes, compare

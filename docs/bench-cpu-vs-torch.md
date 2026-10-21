@@ -436,13 +436,13 @@ Compared against PyTorch MPS:
 
 | Measurement | ojas Metal | Torch MPS |
 | :--- | ---: | ---: |
-| **Full step, d=768, B=4, T=128, V=50304, resident** | ~141 ms | 146 ms |
+| **Full step, d=768, B=4, T=128, V=50304, resident** (unverified: no artifact kept, n unknown, load 30–48; superseded by the paired runs in [`bench-gpu-vs-torch.md`](bench-gpu-vs-torch.md)) | ~141 ms | 146 ms |
 | **Linear forward, 2048³** | 3.86 ms | 2.81 ms |
 | **Attention backward, T=2048** | 306 ms (old scalar kernel, superseded) | 60 ms |
 
 The attention backward row is from the old scalar kernel. The tiled backward that replaced it is measured in [`bench-gpu-vs-torch.md`](bench-gpu-vs-torch.md).
 
 ### 3. wgpu (`WgpuBackend`)
-* **GEMM 2048³ (Resident):** Operates at ~2.0 TFLOP/s (~7.5× faster than 6-thread CPU on the same shape).
+* **GEMM 2048³ (Resident):** Operates at ~2.0 TFLOP/s (~7.5× faster than ojas's own 6-thread CPU path on the same shape, not than Accelerate: Accelerate alone is 9.7 ms at 2048³ in the table above, about 1.77 TFLOP/s, so ~2.0 TFLOP/s is about 1.1× Accelerate; no artifact is kept for the 2.0 TFLOP/s figure, recorded at load 30–48).
 * **Attention (T=2048):** Runs at approximately the same latency as CPU.
 * **Tolerance:** `Fast` numerics match CPU within $10^{-4}$ relative tolerance.

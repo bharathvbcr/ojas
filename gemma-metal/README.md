@@ -41,6 +41,15 @@ Reuse the runtime substrate (~encode/GEMM). Do **not** drag bwd/Muon/XSA/VE or f
 
 ## Status (tree as of 2026-07-13)
 
+> **Audit 2026-10-20:** this table reflects 2026-07-13 and is stale in the Phase 4, 5 and 6
+> rows. Current source: [`docs/gates.md`](docs/gates.md) (Phase 4: E4B **23.86** tok/s / TTFT
+> 142 ms, ~3.2× below mlx-lm 75.7 — not like-for-like, see the caveat there; Phase 5: assistant
+> loaded, accept 6/8 measured, e2e 10.01 / 12.13 tok/s, n=1 each; Phase 6: 31B 4-bit shards
+> **complete** per DECISIONS D11, custom Hot 31B 5.64–6.83 tok/s) and
+> [DECISIONS](DECISIONS.md) D10, D11, D15. Full suite 118/118 green as of 2026-07-19
+> ([`docs/layer_fusion_v1.md`](docs/layer_fusion_v1.md) test-suite note). Per-row stale values
+> are left below as history.
+
 | Phase | Plan | In tree |
 |-------|------|---------|
 | **0** Baselines + gates | Measure LiteRT/MLX/Ollama | **Done** — measured rows in [`docs/gates.md`](docs/gates.md) |

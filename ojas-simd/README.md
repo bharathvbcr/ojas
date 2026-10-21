@@ -21,7 +21,7 @@ flowchart TD
     end
 
     subgraph ComputeEngines["SIMD Compute Kernels"]
-        NEON["ARM64 NEON Kernel\n(arch::neon, ~110 GFLOP/s single thread)"]
+        NEON["ARM64 NEON Kernel\n(arch::neon, ~110 GFLOP/s single thread, unverified)"]
         AVX2["x86_64 AVX2 + FMA Kernel\n(arch::avx2)"]
         Portable["Portable Fallback\n(f32::mul_add chains)"]
         AppleBLAS["Apple Accelerate BLAS\n(cblas_sgemm, ~1.4–1.9 TFLOP/s)"]
@@ -128,5 +128,5 @@ When compiled with the `accelerate` feature on macOS, `ojas-simd` exposes vector
 
 ## Performance Profile (Apple M5 Pro)
 
-* **NEON SIMD:** ~110 GFLOP/s single-threaded throughput.
-* **Apple Accelerate:** ~1.4–1.9 TFLOP/s on medium-to-large matrices ($256^3$, $512 \times 768 \times 768$, $2048^3$).
+* **NEON SIMD:** ~110 GFLOP/s single-threaded throughput (unverified: no artifact kept).
+* **Apple Accelerate:** ~1.4–1.9 TFLOP/s on medium-to-large matrices ($256^3$, $512 \times 768 \times 768$, $2048^3$). Only the upper part is derivable: `docs/bench-cpu-vs-torch.md:431-432` gives 0.31 ms at 512×768×768 (about 1.95 TFLOP/s) and 9.7 ms at 2048³ (about 1.77), taken under load; `docs/baseline.md:86-106` records 772–1112 GFLOP/s best for f32. The ~1.4 low end and the $256^3$ case are unverified.

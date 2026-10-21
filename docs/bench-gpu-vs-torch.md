@@ -3,7 +3,7 @@
 > Charts of every run behind this page, one per result folder, are in [bench-plots.md](bench-plots.md).
 
 Paired A/B of ojas's two GPU backends, `MetalBackend` (`ojas-metal`) and
-`WgpuBackend` (`ojas-wgpu`), against PyTorch 2.13 MPS, at nanolab's default
+`WgpuBackend` (`ojas-wgpu`), against PyTorch 2.13 MPS (torch version is per section: later sections name 2.14.1 or the 2.15 nightly, and each result folder's `env_torch.json` is authoritative; round 1 has none), at nanolab's default
 shapes: d 768, 12 heads of 64, SwiGLU hidden 2048, vocabulary 50304, B 4,
 T 1024 (4096 rows). Each kernel is timed forward and backward where it has a
 backward. One composed nanolab block is timed forward, and forward plus
@@ -1595,6 +1595,8 @@ over the 824 MB input and the 824 MB output. Metal linear trails at
 and the inputs (inferred).
 
 ## Where ojas is faster (verified direction, 15/15 rounds)
+
+> **Audit 2026-10-20:** this table is round 1 (`bench/results/2026-10-01/`, torch 2.13, saturated GPU, 83 of 88 rows flagged noisy in run A), kept for history. The two `clip_grad_norm_full` rows are against torch 2.13-2.14, whose MPS norm used a single threadgroup; against the 2.15 nightly ojas's round-5 path (18.96 ms) was about 0.45x, and the Metal path measured after `0e3254f` is about 1.13x, unpaired (section "torch `clip_grad_norm_` on MPS: 2.14.1 against 2.15 nightly"). Metal SDPA backward leads at head dim 64 only; it is mixed at 128 (below).
 
 | backend | row | run A median ratio [15-round range] | why (inferred) |
 | :-- | :-- | :-- | :-- |

@@ -105,6 +105,14 @@ Same model explains 31B Hot (~60 layers × ~11 ≈ 660 dispatches ≈ 24 ms laun
 token → ~30%): fusion alone takes 31B greedy ~8.5 → ~11–12; ≥15 needs fusion **and** working
 DFlash.
 
+> **Audit 2026-10-20:** the ~37 µs/dispatch extrapolation (one mini-graph point), the ~17 ms
+> launch-tax row and the "~48–55 tok/s" fusion prediction (also plan item 3, ~242) are
+> falsified on real E4B: −90 dispatches (599.9 → 509.9) moved tok/s 23.58 → 23.26
+> (`bench/results/fusion_ab_e4b_20260720T012511Z.json`); the decode profile
+> (`decode_profile_e4b_20260720T015429Z.json` `fusion_both_delta`) bounds the −90 launch tax at
+> 3.3 ms (7.8% of a 42.4 ms token). Host encode was `trace1_host_encode_us_shipping` 170 µs, not
+> ~2.5 ms (budget row 1). The model is retained as history.
+
 **Where to fuse first (by dispatch count per layer):** rms_input + Q/KV GEMV (3→1), rope+kv_store
 (2–3→1), FA+o_proj+post-attn-residual (3→1), rms_pre_ff+gate_up_gelu+down+residual (3–4→1).
 All operands are already Hot-resident and the fused dual-norm epilogues
@@ -135,6 +143,14 @@ If it moves ≥10%, make the session ctor set the lane explicitly (and update do
 right now doc and code disagree about what the numbers even measure).
 
 ---
+
+> **Audit 2026-10-20:** F3 is stale. Code now defaults hazard skip-auto **ON** for inference:
+> `GemmaGpu::new_inference` calls `set_hazard_barriers(skip_auto)` with `skip_auto` true unless
+> `METAL_RUNTIME_HAZARD_BARRIERS` is `0/false/no/off` (`src/kernels.rs:829-840`), so the
+> "every recent real-model number was always-on" premise no longer applies. The proposed
+> experiment was run once per arm (`bench/results/hazard_ab_e4b_20260719T065759Z.json`:
+> hazard0 17.72, hazard1 22.54, default 23.24 tok/s; n=1, 16 steps, E4B streams under skip-auto
+> non-deterministic) — see DECISIONS D13 audit note for its limits.
 
 ## F4. Host-side taxes in the hot loop (small, but pure waste and they gate latency)
 
