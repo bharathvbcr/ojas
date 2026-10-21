@@ -28,6 +28,7 @@ acceptance_criteria:
   - "Scale-pass cost reported as clip_grad_norm_full − clip_norm_only for both ojas and torch, with achieved GB/s for each pass"
   - "A GPU read+write ceiling is measured in the same session with tessl's plain read-and-write reference pass (the 283 GB/s figure), and the clip row is reported as a % of it"
   - "docs/bench-gpu-vs-torch.md clip section quotes the paired ratio, replacing the unpaired ~1.13x; if paired ojas is slower than torch it is recorded as a red row, not dropped"
+  - "The wgpu clip row re-timed after 0e3254f (the docs say it was never re-run) and the docs updated"
 ---
 
 # Task brief v1
@@ -57,3 +58,4 @@ Scope note: the full quiet GPU-vs-torch scorecard re-run belongs to `gp-long-run
 - [ ] Scale-pass cost reported as clip_grad_norm_full − clip_norm_only for both ojas and torch, with achieved GB/s for each pass
 - [ ] A GPU read+write ceiling is measured in the same session with tessl's plain read-and-write reference pass (the 283 GB/s figure), and the clip row is reported as a % of it
 - [ ] docs/bench-gpu-vs-torch.md clip section quotes the paired ratio, replacing the unpaired ~1.13x; if paired ojas is slower than torch it is recorded as a red row, not dropped
+- [ ] The wgpu clip row re-timed after 0e3254f (the docs say it was never re-run) and the docs updated
