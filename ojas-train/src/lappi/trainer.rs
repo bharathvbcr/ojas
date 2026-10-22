@@ -43,7 +43,7 @@ use super::recipe::{self, OptimizerRecipe};
 use super::run_control::{
     Clock, ConsumedPrefix, LossLog, LossPoint, RunClock, RunControlError, WallClockCap, hex,
 };
-use super::schedule::{LrSchedule, ScheduleError};
+use super::schedule::{Decay, LrSchedule, ScheduleError};
 use super::step::{
     AdamWHyper, BankMode, CheckpointContext, ParamSpec, RowTargets, SequenceJob, StepError,
     StepProvider,
@@ -1443,6 +1443,13 @@ fn as_object<'a>(v: &'a Value, what: &str) -> Result<&'a [(String, Value)], Trai
         .map_err(|_| TrainError::Refused(what.to_owned()))
 }
 
+/// The schedule's `"decay"` member: absent is cosine (every checkpoint written before decay
+/// kinds existed, and Python's own); anything unrecognised or ill-typed is refused.
+fn read_decay(sched: &Value, path: &Path) -> Result<Decay, TrainError> {
+    Decay::from_json(sched)
+        .map_err(|e| TrainError::Refused(format!("{}: schedule decay: {e}", path.display())))
+}
+
 impl ResumeState {
     /// Move a checkpoint taken at the end of epoch `self.epoch` to the start of `epoch`, the
     /// next one: position 0, the consumed digest chained onto the finished epoch's. Everything
@@ -1511,7 +1518,7 @@ impl ResumeState {
             )));
         }
         let sched = field(&v, "schedule", p)?;
-        let schedule = LrSchedule::new(
+        let schedule = LrSchedule::with_decay(
             field(sched, "peak_lr", p)?
                 .as_f64()
                 .map_err(|_| TrainError::Refused("peak_lr".into()))?,
@@ -1520,6 +1527,7 @@ impl ResumeState {
             field(sched, "min_lr", p)?
                 .as_f64()
                 .map_err(|_| TrainError::Refused("min_lr".into()))?,
+            read_decay(sched, p)?,
         )?;
         let mut loss_log = LossLog::new();
         for pt in as_array(field(&v, "loss_log", p)?, "loss_log")? {

@@ -146,6 +146,19 @@ impl ToyProvider {
         Ok(self)
     }
 
+    /// The same model with one more TRAINABLE entry appended after the norm. No forward reads
+    /// it, so its gradient stays zero, but the optimizer table and `adamw_step` see it like any
+    /// other entry: a way to put a parameter of any name and shape through the real step.
+    pub fn with_trainable_entry(mut self, name: &str, shape: &[usize]) -> Result<Self, StepError> {
+        let spec = ParamSpec::new(name, shape);
+        let n = spec.numel()?;
+        self.values.push(vec![0.5; n]);
+        self.grads.push(vec![0.0; n]);
+        self.moments.push(Moments::zeros(n));
+        self.specs.push(spec);
+        Ok(self)
+    }
+
     /// The frozen entries' values, in [`StepProvider::parameters`] order.
     pub fn frozen_values(&self) -> &[Vec<f32>] {
         &self.frozen_values
