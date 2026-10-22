@@ -16,6 +16,20 @@
 - **[I]** inferred.
 - **[U]** unverified.
 
+**tessl commit names (note added 2026-10-22):** tessl's history was rewritten on 2026-10-18 (see the run-9 bullet
+below), so the four tessl commits this report cites have new names with identical trees. The report keeps the
+names that were on disk when each run happened. The full map is `docs/history/2026-10-18-scrub-sha-map.tsv` in
+tessl (102 rows). The old names stop resolving once tessl prunes the refs that still reach the pre-scrub history.
+
+| cited here | current tessl name | what it was |
+| :-- | :-- | :-- |
+| `bf091a2` | `cef623ee701ee1f669fe421d5a88de45b6ee114a` | tessl main under re-run 8 |
+| `a37a0c2` | `8c5131981d335b572d00247c79987385f661c0cf` | tessl main after the eg2 fast-forward |
+| `41d8866` | `a083088bcf0f0d03c6d9d26b1c20bdb8421b1609` | tessl main under run 9 |
+| `4e99ca6` | `a1fccca8bb10bea601a231a25c5b5ceb0d936f83` | the doc commit on 41d8866 |
+
+`42f1d52` was never renamed.
+
 ## Headline
 
 > **WRAP-UP (2026-10-19):** ojas main **`4123dfb` = origin/main**. It was pushed after the merge; ojas-a6 did not push. One branch (`main`), one worktree, no uncommitted tracked changes, no agents, scheduled jobs or verify runs left running.
@@ -474,7 +488,8 @@ None measured yet. The sha256 throughput row is new (there is no before), and it
     - No existing kernel's slots changed, and there are no numerics changes for existing paths.
     - The next ojas batch includes gpu_parity, the qwen35 CPU tests and the Tape provider tests on it.
   - **tessl heads-up (not landed): `train_step_bytes` / `step_forward` pre-flight raised** (it omitted GDN forward transients and CE staging; +25 to +405 MB at 2B, up to +3.8%). **No ojas impact [V rg]:** ojas never calls `train_step_bytes`, the Lappi path uses ojas's own Tape pre-flight (calibrated from measured rows), and tessl's 2B provider step already exceeds memguard's cap, so a refusal there just becomes typed. No hold.
-  - **tessl history rewritten** by the eg2 session (filter-branch scrubbing an LGPL-derived `resample.rs`). Every tessl sha is renamed, with identical trees: **41d8866 (verified by run 9) = a083088**; the doc commit 4e99ca6 = **a1fccca** (current tip, verified on disk). ojas pins tessl only by path, and Lappi's lock does not pin tessl, so nothing breaks [V rg]. Provenance shas such as `42f1d52` in `bench/results/2026-10-17-lora-step/env.txt` stay historical and resolve through tessl's leftover refs; tessl-d5 was asked to keep them or publish a map.
+  - **tessl history rewritten** by the eg2 session (filter-branch scrubbing an LGPL-derived `resample.rs`). Every tessl sha is renamed, with identical trees: **41d8866 (verified by run 9) = a083088**; the doc commit 4e99ca6 = **a1fccca** (current tip, verified on disk). ojas pins tessl only by path, and Lappi's lock does not pin tessl, so nothing breaks [V rg]. Provenance shas such as `42f1d52` in `bench/results/2026-10-17-lora-step/env.txt` stay historical and resolve through tessl's leftover refs; tessl-d5 was asked to keep them or publish a map. (2026-10-22: the map is
+    published; see the note on tessl commit names at the top. `42f1d52` was never renamed.)
   - **Run 9 done 20:21: ojas 4123dfb VERIFIED on tessl 41d8866 [V `logs/rerun9/`]:** qwen35 CPU **42/42**; gpu_parity **9/10**; provider CPU **14/14**; **Metal provider 5/5**; **clippy clean**. Nothing moved numerically from tessl's `precise::rsqrt` change. tessl-d5 was told "verified", and the gate cron is deleted.
     - The one failure is **environmental**: `gpu_real_2b_single_step_matches_the_transformers_reference` cannot find `tessl/target/qwen35_train_ref/ids.npy`, which was wiped with tessl's `target/` in the disk cleanup.
     - Regenerating it is tessl's. tessl-d5's gate refuses `mac_heavy.sh`, and ojas declined to run it on tessl's behalf (that would be laundering a refused action, and it is cross-repo work).
