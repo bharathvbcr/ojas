@@ -141,7 +141,12 @@ workspace suite (only the three touched crates and their dependants' targets).
 
 ## New tasks filed
 
-None. Each finding fits an existing card:
+- **ft-091e7fc2** (inbox, P2): expose tessl's `Qwen35Model::train_step_fused_adamw` (tessl main `69f60b0`, the
+  waves 21-22 merge) through ojas-qwen35, and map its torn-state latch to a typed error. The card carries
+  tessl-ad's API notes, a parity criterion against the bank path, and a measured memory row (tessl reports the
+  2B f32 AdamW arm drops from 34.9 to 25.3 GiB). Whether to add a C entry point for it is an owner decision.
+
+Every adversarial finding fits an existing card:
 - F3/F4 and the Lappi converter note are on ft-b5e64557.
 - The fmt and sitegen drift is ft-b4f9ce4e.
 
@@ -151,8 +156,9 @@ None. Each finding fits an existing card:
   re-run tiny rows carry `tessl: 6aa333a`.
 - tessl-ad regenerated `tessl/target/qwen35_train_ref`. ojas's 2B `gpu_parity` case still cannot run here: it holds
   about 40 GB, over the 32 GiB memguard, as its own doc says.
-- Next from tessl: wave 21-22 adds `Qwen35Model::train_step_fused_adamw`. ojas-qwen35 is to expose it as a new
-  task.
+- tessl main then moved to `69f60b0` (a --no-ff merge of waves 21-22, ci_local 3472 passed / 0 failed per
+  tessl-ad) after ojas-7a confirmed no ojas build was in flight. It is additive; the next ojas build picks it up.
+  This branch was verified against `c2c1612` and `6aa333a`, not `69f60b0`.
 
 ## Owner decisions pending
 
