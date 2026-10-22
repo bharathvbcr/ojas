@@ -110,16 +110,19 @@ use common::{footprint_or_refuse, refused, single_weights_file, snapshot_dir, Ro
 
 const GIB: u64 = 1 << 30;
 
-/// `n` deterministic ids below 150000 (ordinary text tokens), skipping the
-/// vision special tokens the config declares.
-fn ids(n: usize, reserved: &[u32]) -> Vec<u32> {
+/// `n` deterministic ids below `min(150000, vocab)` (ordinary text tokens),
+/// skipping the vision special tokens the config declares. The real 0.8B and
+/// 2B vocabularies exceed 150000, so their ids are the same as before the
+/// bound; the tiny fixture's 8320-token vocabulary needs it.
+fn ids(n: usize, vocab: u32, reserved: &[u32]) -> Vec<u32> {
+    let bound = u64::from(vocab.min(150_000));
     let mut s = 0x9e37_79b9_7f4a_7c15u64;
     let mut out = Vec::with_capacity(n);
     while out.len() < n {
         s ^= s << 13;
         s ^= s >> 7;
         s ^= s << 17;
-        let id = (s % 150_000) as u32;
+        let id = (s % bound) as u32;
         if !reserved.contains(&id) {
             out.push(id);
         }
@@ -139,7 +142,7 @@ fn gpu_memory_row() {
     let snap = Snapshot::from_dir(&dir).unwrap();
     let cfg = snap.config.clone();
     let reserved: Vec<u32> = cfg.reserved_token_ids.iter().map(|(_, id)| *id).collect();
-    let ids = ids(tokens, &reserved);
+    let ids = ids(tokens, cfg.vocab, &reserved);
     let mut row = Row::new();
     row.text("arm", &arm);
     row.text("snapshot", &dir.display().to_string());
