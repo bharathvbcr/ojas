@@ -100,7 +100,9 @@ pub struct TrainConfig {
     pub matrix_lr: f64,
     /// AdamW peak LR for the embedding and every vector.
     pub adam_lr: f64,
-    /// Global-norm clip.
+    /// Global-norm clip: finite and positive. 0 is refused by
+    /// [`Self::validate`], since torch's and [`ojas_core::clip_scale`]'s 0
+    /// zeroes every gradient; there is no "off" value.
     pub grad_clip: f32,
     pub on_nonfinite: NonFinitePolicy,
     /// Target id that does not count toward the loss (nanolab's `-1`).
@@ -223,9 +225,14 @@ impl TrainConfig {
                 return Err(range(format!("{name} {lr} is not finite and non-negative")));
             }
         }
-        if !(self.grad_clip.is_finite() && self.grad_clip >= 0.0) {
+        // 0 is refused, not read as "no clipping": torch's
+        // `clip_grad_norm_(max_norm=0)`, which nanolab calls unconditionally
+        // (`train.py:347`), multiplies every gradient by 0, and so does
+        // `clip_scale`, so a 0 run would never learn.
+        if !(self.grad_clip.is_finite() && self.grad_clip > 0.0) {
             return Err(range(format!(
-                "grad_clip {} is not finite and non-negative",
+                "grad_clip {} is not finite and positive (torch's clip_grad_norm_ with \
+                 max_norm 0 zeroes every gradient)",
                 self.grad_clip
             )));
         }
@@ -964,5 +971,74 @@ fn fresh<B: Backend + ?Sized>(backend: &B, host: &Tensor) -> Result<Tensor, Ojas
         Tensor::from_f32(host.f32_slice()?, host.shape(), backend.budget())
     } else {
         backend.upload(host)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ojas_core::{Budget, Numerics};
+    use ojas_cpu::{CosineSchedule, CpuBackend};
+
+    /// A trainable slot that the backward pass leaves without a gradient
+    /// fails the step closed, before any optimizer call: nothing it holds
+    /// is skipped silently. Layer 0's `vr_lambda` is the one parameter the
+    /// model never differentiates (`ParamInfo::trains`), so it is marked
+    /// trainable here to make one.
+    #[test]
+    fn a_trainable_slot_without_a_gradient_fails_the_step_and_changes_nothing() {
+        let spec = ModelSpec::tiny();
+        let budget = Budget::new(1 << 30);
+        let params = crate::init_params(&spec, 5, &budget).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "ojas-model-trainer-unit-{}.bin",
+            std::process::id()
+        ));
+        let tokens: Vec<u8> = (0..20_000u32)
+            .flat_map(|i| (((i * 5 + 3) % 256) as u16).to_le_bytes())
+            .collect();
+        std::fs::write(&path, &tokens).unwrap();
+        let bin = TokenBin::open_headerless(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let schedule = LrSchedule::Cosine(CosineSchedule::new(2, 40).unwrap());
+        let cfg = TrainConfig::nanolab(2, 32, 1, 1337, schedule);
+        let backend = CpuBackend::new(Budget::new(1 << 30)).with_numerics(Numerics::Exact);
+        let mut t = Trainer::new(backend, spec, &params, bin, cfg).unwrap();
+        let unused = t.slots.iter().position(|s| !s.info.trains).unwrap();
+        let zeros = || Tensor::zeros(&[1], DType::F32, t.backend().budget()).unwrap();
+        let moments = Moments::AdamW {
+            m: zeros(),
+            v: zeros(),
+        };
+        let name = t.slots[unused].info.name.clone();
+        t.slots[unused].moments = moments;
+        let before: Vec<Vec<f32>> = t
+            .slots
+            .iter()
+            .map(|s| s.value.to_f32_vec().unwrap())
+            .collect();
+        let x: Vec<u32> = (0..64).map(|i| (i * 29 + 1) % 256).collect();
+        let y: Vec<u32> = x.iter().map(|v| (v * 5 + 3) % 256).collect();
+        let batch = Batch {
+            x,
+            y,
+            batch: 2,
+            seq_len: 32,
+        };
+        let err = t.step_tokens(&[batch]).unwrap_err();
+        assert!(
+            matches!(&err, OjasError::Shape { detail, .. }
+                if *detail == format!("{name} received no gradient")),
+            "{err:?}"
+        );
+        assert_eq!(t.step_count(), 0);
+        for (slot, want) in t.slots.iter().zip(&before) {
+            assert_eq!(
+                &slot.value.to_f32_vec().unwrap(),
+                want,
+                "{}",
+                slot.info.name
+            );
+        }
     }
 }

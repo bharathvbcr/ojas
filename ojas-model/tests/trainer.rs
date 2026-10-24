@@ -514,6 +514,34 @@ fn construction_and_step_tokens_refuse_bad_input() {
     assert_untouched(&t, &before, &err);
 }
 
+/// `grad_clip` 0 would zero every gradient (torch's `clip_grad_norm_` and
+/// `clip_scale` both give a coefficient of 0), so the run would never
+/// learn. It is refused with the config, not read as "no clipping".
+#[test]
+fn a_zero_grad_clip_is_refused_at_validation() {
+    for grad_clip in [0.0f32, -0.0] {
+        let cfg = TrainConfig {
+            grad_clip,
+            ..config(1)
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            matches!(&err, OjasError::OutOfRange { detail, .. } if detail.contains("zeroes")),
+            "{err:?}"
+        );
+        let (_tmp, bin) = token_bin(20_000, 256);
+        assert!(matches!(
+            Trainer::new(exact(1 << 30), ModelSpec::tiny(), &host_params(5), bin, cfg),
+            Err(OjasError::OutOfRange { .. })
+        ));
+    }
+    let tiny = TrainConfig {
+        grad_clip: f32::MIN_POSITIVE,
+        ..config(1)
+    };
+    tiny.validate().unwrap();
+}
+
 #[test]
 fn the_callers_parameters_are_never_written() {
     let params = host_params(5);
