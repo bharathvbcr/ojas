@@ -152,6 +152,44 @@ pub(crate) enum ReadAs {
     Matrix,
 }
 
+/// The operands of one of a linear's GEMMs (`Worker::linear`,
+/// `Worker::linear_bwd`, `Worker::linear_bwd_input`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// tessl `GemmOperands::ExactF32`: f32 operands, exact products, the
+    /// 1-simdgroup tile.
+    ExactF32,
+    /// Both operands bf16-exact (`Tensor::bf16_exact`, what `Autocast`
+    /// hands its inner backend): tessl `GemmOperands::Bf16`, the
+    /// 4-simdgroup cooperative TensorOps kernels (128×64 or 64×64 NN, the
+    /// TN and NT ones), on bf16 copies tessl makes of the two operands. A
+    /// product of two bf16 values is exact in f32, so only the order of the
+    /// f32 sums differs from [`Lane::ExactF32`]. A device without TensorOps
+    /// runs [`Lane::ExactF32`].
+    Bf16,
+}
+
+impl Lane {
+    /// [`Lane::Bf16`] when both operands are bf16-exact.
+    pub(crate) fn of(a_bf16_exact: bool, b_bf16_exact: bool) -> Self {
+        if a_bf16_exact && b_bf16_exact {
+            Self::Bf16
+        } else {
+            Self::ExactF32
+        }
+    }
+
+    /// f32 values' worth of the bf16 copies tessl makes, for the call, of
+    /// f32 operands of `a` and `b` elements: none on [`Lane::ExactF32`].
+    /// `None` on overflow.
+    pub(crate) fn copies(self, a: usize, b: usize) -> Option<usize> {
+        match self {
+            Self::ExactF32 => Some(0),
+            Self::Bf16 => a.div_ceil(2).checked_add(b.div_ceil(2)),
+        }
+    }
+}
+
 /// Whether the device copies a window at byte offset `off` before reading
 /// it `as`. The copy lives for the command, and the backend charges it
 /// with the op's scratch.
@@ -425,7 +463,9 @@ pub(crate) enum Cmd {
         rows: usize,
         kin: usize,
         nout: usize,
+        lane: Lane,
     },
+    /// `gx = gy @ w` on `gx_lane`, `gw = gyᵀ @ x` on `gw_lane`.
     LinearBwd {
         x: Arg,
         w: Arg,
@@ -433,6 +473,8 @@ pub(crate) enum Cmd {
         rows: usize,
         kin: usize,
         nout: usize,
+        gx_lane: Lane,
+        gw_lane: Lane,
     },
     /// `LinearBwd`'s `grad_x` alone: no weight gradient is allocated.
     LinearBwdInput {
@@ -442,6 +484,7 @@ pub(crate) enum Cmd {
         rows: usize,
         kin: usize,
         nout: usize,
+        lane: Lane,
     },
     /// RMSNorm forward, or backward when the sides carry `gy`, of one side
     /// (`rms_norm_*`) or two (q then k, `rms_qk_norm_*`) in one command.

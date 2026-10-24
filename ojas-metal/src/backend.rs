@@ -43,6 +43,12 @@
 //!
 //! Numerics are [`Numerics::Fast`]: GEMMs are tessl TensorOps with their own
 //! reduction order, and reductions are threadgroup trees, not ascending f32.
+//! A linear GEMM whose two operands are both [`Tensor::bf16_exact`] (what
+//! [`ojas_core::Autocast`] hands this backend in a bf16 region) runs on
+//! tessl's bf16 lane, the 4-simdgroup cooperative kernels, instead of the
+//! exact-f32 1-simdgroup tile: the products are the same, the f32 sums run
+//! in another order. Untagged `F32` and `Bf16` operands keep the exact-f32
+//! lane, so a `Bf16` operand still gives its widened copy's bits.
 //!
 //! Faults are deferred (`docs/metal-deferred-faults.md`). Ops are recorded
 //! into tessl's command buffer and return without waiting. A NaN or infinity
@@ -92,8 +98,8 @@ use ojas_core::{
 
 use crate::link::{
     cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, Cmd,
-    Conv1dGeom, EmbedRows, GdnArgs, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom,
-    WaitCounts, Waits, SQ_OUT_WORDS,
+    Conv1dGeom, EmbedRows, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode,
+    SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -812,6 +818,12 @@ fn copied_elems(op: &'static str, how: ReadAs, args: &[Arg]) -> Res<usize> {
         .ok_or_else(|| overflow(op))
 }
 
+/// Scratch values of the bf16 copies a linear GEMM on `lane` makes of
+/// operands of `a` and `b` elements ([`Lane::copies`]).
+fn lane_copies(op: &'static str, lane: Lane, a: usize, b: usize) -> Res<usize> {
+    lane.copies(a, b).ok_or_else(|| overflow(op))
+}
+
 /// `a + b` scratch values, or the op's overflow error.
 fn plus(op: &'static str, a: usize, b: usize) -> Res<usize> {
     a.checked_add(b).ok_or_else(|| overflow(op))
@@ -1335,20 +1347,27 @@ impl Backend for MetalBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
+        let lane = Lane::of(input.bf16_exact(), weight.bf16_exact());
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let x = self.f32(OP, &input)?;
         let w = self.f32(OP, &weight)?;
         u32_dim(OP, product(OP, &dims.out_shape)?)?;
+        let scratch = plus(
+            OP,
+            copied_elems(OP, ReadAs::Matrix, &[x, w])?,
+            lane_copies(OP, lane, x.n, w.n)?,
+        )?;
         self.one(
             OP,
             &dims.out_shape,
-            copied_elems(OP, ReadAs::Matrix, &[x, w])?,
+            scratch,
             Cmd::Linear {
                 x,
                 w,
                 rows: dims.rows,
                 kin: dims.in_features,
                 nout: dims.out_features,
+                lane,
             },
         )
     }
@@ -1361,6 +1380,8 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
+        let gx_lane = Lane::of(grad_output.bf16_exact(), weight.bf16_exact());
+        let gw_lane = Lane::of(grad_output.bf16_exact(), input.bf16_exact());
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
         let grad_output = self.widened(grad_output)?;
@@ -1374,8 +1395,20 @@ impl Backend for MetalBackend {
             rows: dims.rows,
             kin: dims.in_features,
             nout: dims.out_features,
+            gx_lane,
+            gw_lane,
         };
-        let copies = copied_elems(OP, ReadAs::Matrix, &[x, w, gy])?;
+        // Each GEMM's bf16 copies live until the command's commit, so both
+        // are charged.
+        let copies = plus(
+            OP,
+            copied_elems(OP, ReadAs::Matrix, &[x, w, gy])?,
+            plus(
+                OP,
+                lane_copies(OP, gx_lane, gy.n, w.n)?,
+                lane_copies(OP, gw_lane, gy.n, x.n)?,
+            )?,
+        )?;
         let mut out = self
             .outputs(OP, &[input.shape(), weight.shape()], copies, cmd)?
             .into_iter();
@@ -1393,16 +1426,22 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_backward_input";
         let dims = linear_backward_dims(input, weight, grad_output)?;
+        let lane = Lane::of(grad_output.bf16_exact(), weight.bf16_exact());
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
         let grad_output = self.widened(grad_output)?;
         let x = self.f32(OP, &input)?;
         let w = self.f32(OP, &weight)?;
         let gy = self.f32(OP, &grad_output)?;
+        let scratch = plus(
+            OP,
+            copied_elems(OP, ReadAs::Matrix, &[x, w, gy])?,
+            lane_copies(OP, lane, gy.n, w.n)?,
+        )?;
         self.one(
             OP,
             input.shape(),
-            copied_elems(OP, ReadAs::Matrix, &[x, w, gy])?,
+            scratch,
             Cmd::LinearBwdInput {
                 x,
                 w,
@@ -1410,6 +1449,7 @@ impl Backend for MetalBackend {
                 rows: dims.rows,
                 kin: dims.in_features,
                 nout: dims.out_features,
+                lane,
             },
         )
     }
