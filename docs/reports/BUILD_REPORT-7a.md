@@ -230,6 +230,37 @@ Every adversarial finding fits an existing card:
   (`node scripts/vendor-crates.mjs`, `check:vendor-schema`), a rebuild and a reinstall, then
   `bun run check:schema-parity` from the GitPulse checkout. ojas-7a cannot run those from ojas.
 
+## Cards pending filing (GitPulse blocked, 2026-10-24)
+
+Fable ruled that the wrap-up is done with a named gap: these items are not on the board until GitPulse reads
+schema 10.
+
+**Owner commands** (from a session rooted in `/Users/bharath/Code/devtools/GitPulse`; script names from its
+`package.json`):
+
+```sh
+bun run vendor                # node scripts/vendor-crates.mjs
+bun run check:vendor-schema
+bun run mcp:install           # cargo install gitpulse-mcp + gitpulse-hook, then record-install
+bun run mcp:doctor            # OK on all three verdicts
+bun run check:schema-parity   # also covers the gitpulse-mcp inside GitPulse.app, so rebuild the app too
+```
+
+Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json <out.jsonl> <id>`, piped into
+`gitpulse-mcp`).
+
+1. **Orphaned target-excluded cross-entropy rewrite** (P2, medium, label `numerics`). This is
+   `backups/gp/wrap5.json` verbatim:
+
+   ```json
+   [{"name":"gitpulse_add_task","arguments":{"repo_path":"/Users/bharath/Code/research/ojas","title":"Orphaned target-excluded cross-entropy rewrite (softmax collapse past the f32 cliff): owner decision, then verify and land","priority":2,"severity":"medium","labels":["numerics"],"description":"Found at ojas-7a wrap-up (2026-10-24). Worktree .gitpulse/worktrees/repair-softmax-collapse-in-the-logit-los-4c0e0a2a (branch gitpulse/repair-softmax-collapse-in-the-logit-los-4c0e0a2a at 42d5a9f, no commits, no live session) holds an uncommitted, unverified rewrite of cross-entropy to the target-excluded form loss = ln(1 + sum_{j!=t} exp(z_j - z_t)) on CPU, Metal, wgpu and CUDA, with tests on every backend (new ojas-cpu/tests/softmax_collapse.rs). Past the f32 cliff (margin >~ 16.6) the old p - 1 target gradient rounds to 0 and the row stops summing to zero. Saved as backups/7a-tools/softmax-collapse-4c0e0a2a-vs-42d5a9f.patch (16 files, sha256 a09f082fb1e797287403d3e85fb10a575a4a77a73967631826df5805dc43e88c; git apply -p3 --check passes on main). Fable: preserve, do not merge without the owner. Details: docs/reports/BUILD_REPORT-7a.md.","acceptance_criteria":["Owner decides the Exact CE contract change (it moves ojas-cpu/tests/exact_golden.rs:271-272 ce_loss/ce_grad digests and retires the 'as tessl does' claim in ojas-cuda/src/ce_rows.rs)","If yes: the patch committed on its own branch, the digests re-recorded with the decision cited, CPU/Metal/wgpu/CUDA-host tests green","CPU Fast-path CE A/B (bench_ops.rs::ce_case) shows no regression over 5% from the per-lane skip compare in exp_sub_sum/exp_sub_store/row_max, or the loops are restructured","The worktree and branch removed after the patch lands or is discarded"]}}]
+   ```
+
+2. **ft-2c183b71: the `gp/4b-gpu-step` branch is empty.** It is still at `42d5a9f`, with no commits from the
+   ojas-4b session. Its worktree `backups/x/wt-4b` has a local `Cargo.toml` edit that drops the `ojas-capi` and
+   `ojas-gusset-engine` members, which must never merge. The owner decides whether to keep or abandon it. The
+   branch and worktree are left in place. Log this on ft-2c183b71 rather than as a new card.
+
 ## Left behind
 
 - `target-7a/` (1.9 GB) for follow-up runs on the branch.
