@@ -915,11 +915,14 @@ fn newton_schulz(
         } else {
             ns_gemm_out(exec, a_mat, a_mat, &mut a2)?;
         }
+        // Under bf16 the GEMM output is rounded inside the combination pass
+        // that reads it (`r(a2v)`), not in a pass of its own: each value is
+        // rounded alone, so the bits are the separate pass's and one full
+        // read and write of the buffer is saved. `B X` below is the same.
         if bf16 {
-            round_bf16_in_place(exec, &mut a2)?;
             zip_into(exec, &am, &mut a2, |am, a2v| {
                 let r = round_f32_to_bf16;
-                r(r(b_coef * am) + r(c_coef * a2v))
+                r(r(b_coef * am) + r(c_coef * r(a2v)))
             })?;
         } else {
             zip_into(exec, &am, &mut a2, |am, a2v| b_coef * am + c_coef * a2v)?;
@@ -937,10 +940,9 @@ fn newton_schulz(
             ns_gemm_out(exec, bm, xm, &mut bx)?;
         }
         if bf16 {
-            round_bf16_in_place(exec, &mut bx)?;
             zip_into(exec, &x, &mut bx, |xv, bxv| {
                 let r = round_f32_to_bf16;
-                r(r(a * xv) + bxv)
+                r(r(a * xv) + r(bxv))
             })?;
         } else {
             zip_into(exec, &x, &mut bx, |xv, bxv| a * xv + bxv)?;
