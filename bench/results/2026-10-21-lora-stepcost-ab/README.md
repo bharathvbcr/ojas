@@ -55,8 +55,13 @@ Per-rep `min_step_ms` of each arm against `tape-lora` in the same rep (%):
 ## Noise and what this does not show
 
 - **Contention:** the lock is per arm, so other sessions' jobs ran between arms. The T = 9,638 reps 4-5 ran during
-  hours of machine contention (per-arm spread up to 3x, every arm slower) and are kept in `rows.jsonl` but carry no
-  weight in the reading: min-of-5 is unaffected by them, and the paired deltas above are read from reps 1-3.
+  hours of machine contention (per-arm spread up to 3x, every arm slower) and are kept in `rows.jsonl`; the paired
+  deltas above are read from reps 1-3. Min step and min backward come from reps 1-3; one minimum does not:
+  `tape-lora`'s min forward at T = 9,638 (11,906 ms) is rep 4's (reps 1-3 give 11,926 ms).
+- **Arm order was fixed, not rotated:** every rep ran `tape-lora`, then `-checked`, then `-fulldw`. The
+  base-scanned-once reading (-0.7%, 5 of 5 reps) therefore cannot be told apart from a position effect; the dW-skip
+  reading (+9 to +15%) is too large for position to explain. A rotated rerun is filed as a follow-up.
+- **Rounding:** a few cells truncate rather than round (e.g. 5,441 is 5,441.999); no delta changes.
   Per-arm spread (max/min - 1) of `min_step_ms` over the uncontended reps is 4.5-5.4% at T = 2,048 (reps 1-5)
   and 1.2-2.7% at T = 9,638 (reps 1-3), so the criterion-2 effect at T = 2,048 (-0.7%) is below the spread and
   rests on its paired sign consistency (5 of 5), not on its size.

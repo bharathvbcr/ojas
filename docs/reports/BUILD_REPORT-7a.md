@@ -1,10 +1,15 @@
 # Build report: ojas-7a, training wave (in-progress and priority training cards)
 
-**Run:** 2026-10-20 to 2026-10-22, orchestrated from the main checkout by session ojas-7a. This file is separate so
+**Run:** 2026-10-20 to 2026-10-24, orchestrated from the main checkout by session ojas-7a. This file is separate so
 that no peer report (`BUILD_REPORT.md`, `-w11`, `-a6`) is overwritten.
 
-**Base:** `main` at `40dd135`. **Result:** branch `gp/7a-training` at `6335e00`, five commits, **not merged to
-main and not pushed** (merging to the default branch is the owner's call).
+**Base:** `main` at `40dd135`. **Result:** branch `gp/7a-training`, merged into local main on the owner's
+instruction as `6981f07` (2026-10-22, `--no-ff`; branch deleted). Then `42d5a9f`, the tessl commit-name note
+for the a6 record. **Not pushed:** origin/main is still `4123dfb`.
+
+**Independent check (2026-10-24):** an Opus verifier re-read every claim here against the code and the run logs.
+No code or test claim was wrong. It corrected stale text in this report (merge status, card revision, the fmt
+wording) and found the gaps listed under "Follow-up cards" below.
 
 **Focus:** the owner asked to "finish in-progress and priority tasks for training".
 
@@ -26,7 +31,7 @@ step inside `Lappi-decision/tools/mac_heavy.sh`. This session's shell gate refus
 | Card | Before | After | Evidence |
 | :-- | :-- | :-- | :-- |
 | ft-02256073 sharded Qwen3.5 load | in_progress | **review** (done requested; held for Manvi) | all 3 criteria [V]; adversarial 26/26; GPU sharded == single-file load, first logged runs |
-| ft-b5e64557 ojas-train (P0) | in_progress | in_progress (rev 20) | crits 6, 11, 12, 13 met [V]; 1, 2, 5 wait on the owner's Lappi pin bump |
+| ft-b5e64557 ojas-train (P0) | in_progress | in_progress (rev 21) | crits 6, 11, 12, 13 met [V]; 1, 2, 5 wait on the owner's Lappi pin bump |
 | ft-2bbced18 LoRA step cost (P1) | in_progress | in_progress (rev 14) | crits 1 and 4 met with the committed A/B [V]; 5, 6, 7 open |
 | ft-71629756 CUDA provider | in_progress | in_progress, blocked marker logged | needs a CUDA host nobody has |
 | ft-a1a4ba4d quantised arm, ft-da2c4ab1 LoRA-2B umbrella | in_progress / ready | unchanged | remaining work is Lappi-side or owner approvals |
@@ -65,9 +70,10 @@ inside the repo. None of the tested crates depend on them.
   across backends is not claimed.
 - Loss falls from 2.25 to about 0.25 over 12 steps.
 
-**Format.** The new files are rustfmt-clean. `scripts/fmt_check.sh` still fails on drift that predates this work, in
-files no lane changed (`ojas-io/src/json.rs`, `ojas-model/src/qwen35/{bank,step_provider}.rs`, `trainer.rs`
-:1384/:1579 and others). I confirmed it against the clean worktree, and it belongs to ft-b4f9ce4e.
+**Format.** The new files are rustfmt-clean. `scripts/fmt_check.sh` still fails on drift that predates this work, on
+lines no lane changed: `ojas-io/src/json.rs`, `ojas-model/src/qwen35/bank.rs`, and pre-existing spots in
+`step_provider.rs`, `trainer.rs` (:1384/:1579 at base) and `gpu_memory_rows.rs`, files the lanes edited elsewhere.
+I confirmed it against the clean worktree, and it belongs to ft-b4f9ce4e.
 
 **Site and plots.**
 - `go run scripts/benchreport/main.go plots -check` is up to date.
@@ -157,13 +163,19 @@ Every adversarial finding fits an existing card:
 - tessl-ad regenerated `tessl/target/qwen35_train_ref`. ojas's 2B `gpu_parity` case still cannot run here: it holds
   about 40 GB, over the 32 GiB memguard, as its own doc says.
 - tessl main then moved to `69f60b0` (a --no-ff merge of waves 21-22, ci_local 3472 passed / 0 failed per
-  tessl-ad) after ojas-7a confirmed no ojas build was in flight. It is additive; the next ojas build picks it up.
-  This branch was verified against `c2c1612` and `6aa333a`, not `69f60b0`.
+  tessl-ad) after ojas-7a confirmed no ojas build was in flight.
+- Post-merge: main `6981f07` passed on tessl `e636223` (all three crates' suites, clippy, Linux check, both
+  Metal tests; logs `verify-merge`). Main `42d5a9f` then passed on tessl `fc778a2` (waves 23-24: `TensorSource`
+  methods, the `Weight` enum, fail-closed loaders): `cargo check --workspace --all-targets`, ojas-qwen35,
+  ojas-model and ojas-metal suites, the GPU sharded load and Tape provider tests (logs `check-tessl`). That
+  second run did not include ojas-train or the image-MLP Metal test.
+- tessl-ad pruned the 12 refs that kept the scrubbed LGPL blobs reachable (owner-approved in its session, Fable's
+  amended criterion); the four old tessl names in `BUILD_REPORT-a6.md` are mapped by `42d5a9f`.
 
 ## Owner decisions pending
 
-1. **Merge `gp/7a-training` into main** (5 commits, +6.3k lines, mostly tests and rows), and push if wanted.
-2. **The Lappi pin bump** for ft-b5e64557 crits 1, 2 and 5. The target becomes the merge sha, not `4123dfb`.
+1. **Push main** to origin, if wanted (merged locally on 2026-10-22).
+2. **The Lappi pin bump** for ft-b5e64557 crits 1, 2 and 5. The target becomes `6981f07` or later, not `4123dfb`.
    Lappi's converter (ft-58e316a9) must refuse an unknown `decay` member.
 3. **Manvi `work.verify.task`** for ft-02256073, now in review, and the older review cards listed on ft-da2c4ab1
    (owner item 8).

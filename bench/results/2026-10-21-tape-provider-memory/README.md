@@ -24,7 +24,9 @@ every position a scored row) plus `adamw_step`. One process per row, under `Lapp
 - **tokens/s**: positions (T - 1) / mean step wall, the arm's convention.
 - **refused** is a typed row: at 0.8B-Base, T = 9,638, checkpointing off, the pre-flight's dry run needs
   30,070,117,160 bytes against the 30,064,771,072 cap (measured peak before the refusal 28,298,555,432 bytes).
-  That shape does not fit 28 GiB without checkpointing; with checkpointing it peaks at 7.87 GB.
+  That shape does not fit 28 GiB without checkpointing; with checkpointing it peaks at 7.87 GB. Its process
+  exited 101 with `test result: FAILED`: the harness prints the refusal row and then panics by design
+  (`ojas-qwen35/tests/common/mod.rs`, `refused`), so a refusal row is always a failing test run.
 
 ## Provenance and caveats
 
