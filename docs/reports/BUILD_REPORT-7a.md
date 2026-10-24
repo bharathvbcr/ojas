@@ -205,8 +205,25 @@ Every adversarial finding fits an existing card:
   (branch `gitpulse/repair-softmax-collapse-…`, no commits beyond `42d5a9f`, no live session) holds an uncommitted
   softmax-collapse fix. It touches `ojas-core/src/{autocast,exp_exact,lib}.rs`,
   `ojas-cpu/src/{exp,fused_ce,pointwise}.rs`, `ojas-cpu/tests/heavy_ops.rs`, `ojas-cuda/src/ce_rows.rs`, and adds
-  `ojas-cpu/tests/softmax_collapse.rs`. `git worktree remove` refused it as dirty, and it was not forced. It needs
-  a session to finish, verify and commit it, or the owner to discard it.
+  `ojas-cpu/tests/softmax_collapse.rs`. `git worktree remove` refused it as dirty, and it was not forced.
+  - **Fable (2026-10-24): preserve, do not merge.** It is a complete-looking, uncommitted, **unverified** rewrite
+    of cross-entropy to the target-excluded form (`loss = ln(1 + Σ_{j≠t} exp(z_j − z_t))`) on CPU, Metal, wgpu and
+    CUDA, with tests on every backend. Past the f32 cliff (margin ≳ 16.6) the old target gradient rounds to 0 and
+    the row stops summing to zero.
+  - **Saved:** `backups/7a-tools/softmax-collapse-4c0e0a2a-vs-42d5a9f.patch` (gitignored; 16 files, 2,235 lines,
+    sha256 `a09f082fb1e797287403d3e85fb10a575a4a77a73967631826df5805dc43e88c`). `git apply -p3 --check` against
+    main passes. The worktree, its branch and its `.devcouncil/` are left in place.
+  - **Before it can merge:**
+    - The owner's yes on the contract change. It moves the pinned Exact `ce_loss`/`ce_grad` digests in
+      `ojas-cpu/tests/exact_golden.rs:271-272`, which it does not re-record, so the CPU suite goes red until they
+      are re-recorded. It also retires the "as tessl does" claim in `ojas-cuda/src/ce_rows.rs`.
+    - A Metal test run.
+    - A CPU Fast-path CE A/B (`bench_ops.rs::ce_case`): a per-lane skip compare in `exp_sub_sum`,
+      `exp_sub_store` and `row_max` may defeat vectorisation.
+    - The CUDA host-mirror tests.
+  - **No overlap** with the live autocast branch. The main checkout's unclaimed README/status edits are not from
+    this worktree.
+  - **Why not committed as WIP:** the gate refuses git against the sibling worktree, so that needs a per-case yes.
 - **Stale GitPulse reader:** at 2026-10-24 ~14:35 the installed `gitpulse-mcp` started refusing board reads with
   `unsupported DevCouncil schema version 10; this binary knows 9`. Card writes worked minutes earlier, and the
   wrap-up cards were filed before the change. Per the cross-app schema rule, GitPulse needs re-vendoring
