@@ -64,6 +64,7 @@ const MUL_BACKWARD: &str = "mul_backward";
 const ADD_FORWARD: &str = "residual_add_forward";
 const ADD_BACKWARD: &str = "residual_add_backward";
 const ACCUMULATE_GRAD: &str = "accumulate_grad";
+const SCALE_GRAD: &str = "scale_grad";
 const PERMUTE: &str = "permute";
 const CE_FORWARD: &str = "cross_entropy_mean_forward";
 const CE_BACKWARD: &str = "cross_entropy_mean_backward";
@@ -1272,6 +1273,12 @@ pub fn residual_add_backward_dims(
 /// `accumulate_grad`). Returns the element count.
 pub fn accumulate_grad_dims(acc: &Tensor, grad: &Tensor) -> Result<usize, OjasError> {
     same_shape(ACCUMULATE_GRAD, &[acc, grad])
+}
+
+/// [`crate::Backend::scale_grad`]: an `F32` `grad` of any rank. Returns the
+/// element count.
+pub fn scale_grad_dims(grad: &Tensor) -> Result<usize, OjasError> {
+    f32_operand(SCALE_GRAD, grad)
 }
 
 /// Largest rank [`crate::Backend::permute`] accepts.

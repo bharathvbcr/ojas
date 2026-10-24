@@ -22,8 +22,6 @@
 //! (it went red for every removal above).
 //!
 //! Kernels with no capped run:
-//! - `scale`: no backend constant dispatches it (the other `scale` strings
-//!   in `ojas-wgpu` are labels); `scale_grad` composes a broadcast gemm.
 //! - `col_finish`: one lane per column, `ceil(cols / 256)` groups, the same
 //!   count as the x extent of the column-sum grid before it; that grid
 //!   refuses more than the cap per axis, so `col_finish` never folds.
@@ -507,6 +505,38 @@ fn the_attention_backward_row_pass_leaves_spare_workgroups_inert() {
     same("attn dq", &back(&g, &gq), &cq.to_f32_vec().unwrap());
     same("attn dk", &back(&g, &gk), &ck.to_f32_vec().unwrap());
     same("attn dv", &back(&g, &gv), &cv.to_f32_vec().unwrap());
+}
+
+/// `scale_grad` in place (`scale_multi`) on a sole owner, and through the
+/// pointwise `scale` kernel on a shared gradient (the other handle keeps
+/// its values), at every group boundary of the capped grid.
+#[test]
+fn scale_grad_leaves_spare_workgroups_inert() {
+    let g = capped(2);
+    let c = cpu();
+    let want = |x: &Tensor| {
+        let mut w = fresh_copy(x);
+        c.scale_grad(&mut w, 0.375).unwrap();
+        w.to_f32_vec().unwrap()
+    };
+    for n in LANES.iter().copied().chain([4096 + 1, 3 * 4096 + 5]) {
+        let x = host(151, &[n]);
+        let mut sole = exact(&g, &x);
+        g.scale_grad(&mut sole, 0.375).unwrap();
+        same(&format!("in place {n}"), &back(&g, &sole), &want(&x));
+    }
+    for n in LANES {
+        let x = host(152, &[n]);
+        let mut shared = dev(&g, &x);
+        let keep = shared.clone();
+        g.scale_grad(&mut shared, 0.375).unwrap();
+        same(&format!("shared {n}"), &back(&g, &shared), &want(&x));
+        same(
+            &format!("kept {n}"),
+            &back(&g, &keep),
+            &x.to_f32_vec().unwrap(),
+        );
+    }
 }
 
 /// `scale_multi` runs only when the norm exceeds `max_norm`: clip three

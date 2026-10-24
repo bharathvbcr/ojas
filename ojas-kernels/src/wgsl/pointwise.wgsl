@@ -77,6 +77,21 @@ fn add_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: v
     put0(i, x0[i] + x1[i]);
 }
 
+// y0 = y1 = x2. x0 and x1 are read only for their checks: the backward of an
+// add refuses a non-finite forward input like every other op (Metal's
+// ojas_add_bwd).
+@compute @workgroup_size(256, 1, 1)
+fn add_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let i = lane_index(wg, nwg, lid);
+    if (i >= pw(0u)) { return; }
+    report(x0[i]);
+    report(x1[i]);
+    let g = x2[i];
+    report(g);
+    y0[i] = g;
+    y1[i] = g;
+}
+
 // y0 += x0, in place (accumulate_grad): the CPU's `acc + grad`.
 @compute @workgroup_size(256, 1, 1)
 fn add_inplace(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
