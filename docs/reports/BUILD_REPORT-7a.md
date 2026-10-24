@@ -187,6 +187,18 @@ Every adversarial finding fits an existing card:
 6. **Disk:** 64 GiB free at the end (was 298 GiB at the start), mostly from other sessions. Below about 50 GiB a
    cold ojas build risks ENOSPC.
 
+## Follow-up cards (filed at wrap-up, 2026-10-24)
+
+- **ft-307275ca** (P2): the gaps from the independent check. Crit 12's card wording, `Decay::from_json` error
+  messages and the explicit cosine kind, the inherited F3/F4 rate edges, the image MLP's memory pre-check, the
+  refused-AdamW bank behaviour, a re-run of ojas-train and the image-MLP Metal test on the current tessl, and the
+  StepProvider job generalisation.
+- **ft-6d69dd5b** (P1): the owner queue. Push, the Lappi pin bump, Manvi verify, ft-71629756, disk, and the
+  unclaimed uncommitted doc edits in the main checkout.
+- **ft-2bbced18** (logged, rev 15): rerun the A/B with the arm order rotated, and an A/B for crit 3 or a ruling
+  that exempts it.
+- **ft-091e7fc2** (P2, filed earlier): expose tessl's `train_step_fused_adamw`.
+
 ## Left behind
 
 - `target-7a/` (1.9 GB) for follow-up runs on the branch.
