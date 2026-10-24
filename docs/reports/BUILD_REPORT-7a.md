@@ -199,6 +199,20 @@ Every adversarial finding fits an existing card:
   that exempts it.
 - **ft-091e7fc2** (P2, filed earlier): expose tessl's `train_step_fused_adamw`.
 
+## Found at wrap-up, needing the owner (2026-10-24)
+
+- **Orphaned uncommitted work:** worktree `.gitpulse/worktrees/repair-softmax-collapse-in-the-logit-los-4c0e0a2a`
+  (branch `gitpulse/repair-softmax-collapse-…`, no commits beyond `42d5a9f`, no live session) holds an uncommitted
+  softmax-collapse fix. It touches `ojas-core/src/{autocast,exp_exact,lib}.rs`,
+  `ojas-cpu/src/{exp,fused_ce,pointwise}.rs`, `ojas-cpu/tests/heavy_ops.rs`, `ojas-cuda/src/ce_rows.rs`, and adds
+  `ojas-cpu/tests/softmax_collapse.rs`. `git worktree remove` refused it as dirty, and it was not forced. It needs
+  a session to finish, verify and commit it, or the owner to discard it.
+- **Stale GitPulse reader:** at 2026-10-24 ~14:35 the installed `gitpulse-mcp` started refusing board reads with
+  `unsupported DevCouncil schema version 10; this binary knows 9`. Card writes worked minutes earlier, and the
+  wrap-up cards were filed before the change. Per the cross-app schema rule, GitPulse needs re-vendoring
+  (`node scripts/vendor-crates.mjs`, `check:vendor-schema`), a rebuild and a reinstall, then
+  `bun run check:schema-parity` from the GitPulse checkout. ojas-7a cannot run those from ojas.
+
 ## Left behind
 
 - `target-7a/` (1.9 GB) for follow-up runs on the branch.
