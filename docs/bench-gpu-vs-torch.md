@@ -80,7 +80,30 @@ Up to PyTorch 2.14, MPS ran `clip_grad_norm_` (`linalg.vector_norm`) on a single
 | **2.15.0.dev20261004** | 8.36 ms | 8.54 ms | 8.45 ms | 7.90 ms |
 
 - The nightly is ~16× faster than 2.14.1 on this reduction.
-- Against ojas round 5 (`bench/results/2026-10-02-r5/summary.md`), which measured ojas at 18.96 ms median on Metal and 19.12 ms on wgpu, ojas is ~0.45× of the 2.15 nightly on this row. **Superseded for Metal:** round 5 timed the path from before 0e3254f. Current Metal takes 7.07 ms median (min 6.60), and with tessl's `sq_norm` wired in 7.45 ms (min 6.49), with no speed change shown ([`bench/results/2026-10-17-clip-sqnorm-ab`](../bench/results/2026-10-17-clip-sqnorm-ab/README.md)). That is about 1.13× the 2.15 nightly's 8.45 ms with `sq_norm` (about 1.2× with the replaced kernel), unpaired. wgpu was not re-run. The previously measured 4.58× / 8.13× lead came from PyTorch's older single-threadgroup kernel.
+- **Current Metal: 7.45 ms median (min 6.49)**, about 1.13× the 2.15
+  nightly's 8.45 ms, unpaired (different days; the torch side was not re-run
+  next to it). Source: the 2026-10-17 interleaved A/B
+  ([`bench/results/2026-10-17-clip-sqnorm-ab`](../bench/results/2026-10-17-clip-sqnorm-ab/README.md),
+  7 rounds, load 46–50), whose `sq_norm` binary is what main runs; the
+  `ojas_norm_multi` kernel it replaced measured 7.07 ms (min 6.60), within
+  that run's noise.
+- **How:** one command for any number of gradients. The norm is tessl's
+  `SqNormPlan` (two kernels in one binder scope, `Worker::clip_norm` in
+  `ojas-metal/src/device.rs`) and the scale goes 24 gradients per
+  `ojas_scale_multi` dispatch. `ojas-metal/tests/clip_multi.rs` pins the
+  counts on 170 gradients.
+- **What the row now costs:** the norm reads the 123.7M gradients once and
+  the scale reads and writes them once more, about 1.5 GB per call at about
+  230 GB/s. Going faster means folding the clip coefficient into the
+  optimizer step, a `Backend` trait change that needs the owner's sign-off.
+- **Historical, superseded:** round 5 (`bench/results/2026-10-02-r5/summary.md`)
+  measured 18.96 ms on Metal and 19.12 ms on wgpu, about 0.45× the nightly.
+  That timed Metal's path from before 0e3254f, about five dispatches per
+  gradient. wgpu was not re-run. The earlier 4.58× / 8.13× lead came from
+  PyTorch's older single-threadgroup kernel.
+- No paired torch 2.15 re-run was made for this update (2026-10-24): the
+  2026-10-17 run found no 2.15 nightly installed, and the machine sat at
+  load 85–97.
 
 
 ## Fixed cost against op size and request batching: 2026-10-04
