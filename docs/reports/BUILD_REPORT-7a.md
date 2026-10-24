@@ -256,10 +256,12 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
    [{"name":"gitpulse_add_task","arguments":{"repo_path":"/Users/bharath/Code/research/ojas","title":"Orphaned target-excluded cross-entropy rewrite (softmax collapse past the f32 cliff): owner decision, then verify and land","priority":2,"severity":"medium","labels":["numerics"],"description":"Found at ojas-7a wrap-up (2026-10-24). Worktree .gitpulse/worktrees/repair-softmax-collapse-in-the-logit-los-4c0e0a2a (branch gitpulse/repair-softmax-collapse-in-the-logit-los-4c0e0a2a at 42d5a9f, no commits, no live session) holds an uncommitted, unverified rewrite of cross-entropy to the target-excluded form loss = ln(1 + sum_{j!=t} exp(z_j - z_t)) on CPU, Metal, wgpu and CUDA, with tests on every backend (new ojas-cpu/tests/softmax_collapse.rs). Past the f32 cliff (margin >~ 16.6) the old p - 1 target gradient rounds to 0 and the row stops summing to zero. Saved as backups/7a-tools/softmax-collapse-4c0e0a2a-vs-42d5a9f.patch (16 files, sha256 a09f082fb1e797287403d3e85fb10a575a4a77a73967631826df5805dc43e88c; git apply -p3 --check passes on main). Fable: preserve, do not merge without the owner. Details: docs/reports/BUILD_REPORT-7a.md.","acceptance_criteria":["Owner decides the Exact CE contract change (it moves ojas-cpu/tests/exact_golden.rs:271-272 ce_loss/ce_grad digests and retires the 'as tessl does' claim in ojas-cuda/src/ce_rows.rs)","If yes: the patch committed on its own branch, the digests re-recorded with the decision cited, CPU/Metal/wgpu/CUDA-host tests green","CPU Fast-path CE A/B (bench_ops.rs::ce_case) shows no regression over 5% from the per-lane skip compare in exp_sub_sum/exp_sub_store/row_max, or the loops are restructured","The worktree and branch removed after the patch lands or is discarded"]}}]
    ```
 
-2. **ft-2c183b71: the `gp/4b-gpu-step` branch is empty.** It is still at `42d5a9f`, with no commits from the
-   ojas-4b session. Its worktree `backups/x/wt-4b` has a local `Cargo.toml` edit that drops the `ojas-capi` and
-   `ojas-gusset-engine` members, which must never merge. The owner decides whether to keep or abandon it. The
-   branch and worktree are left in place. Log this on ft-2c183b71 rather than as a new card.
+2. **ft-2c183b71: `gp/4b-gpu-step` is at `def246a` and unverified.** That is one commit on `42d5a9f`: 8 files,
+   +305/-57, across ojas-wgpu, ojas-kernels and ojas-core. The ojas-4b session's verify job is queued on the
+   cargo slots, and its pre-fix red run timed out before it ran. Bench and profile criteria are still owed. Its
+   worktree `backups/x/wt-4b` has a local `Cargo.toml` edit that drops the `ojas-capi` and `ojas-gusset-engine`
+   members, which must never merge. Merge only after ojas-4b reports green. Log this on ft-2c183b71 rather than as
+   a new card.
 
 ## Left behind
 
