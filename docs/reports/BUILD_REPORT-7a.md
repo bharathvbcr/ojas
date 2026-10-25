@@ -241,19 +241,26 @@ stay unmerged, with their worktrees intact and their queued verify jobs left run
 1. **Free the cargo slots.** Both slots in `~/.cache/cargo-slots` have been held since at least 18:18Z on 2026-10-24
    (still held at 00:34Z on the 25th) by a process the gate would not let ojas-7a identify. Run
    `lsof ~/.cache/cargo-slots/slot1 ~/.cache/cargo-slots/slot2`. Card 3 below.
+   - **Update, 2026-10-25:** the slots freed later on the 24th, and the peers' jobs then ran. The holder was never
+     identified, so card 3 still stands for the bound on hold time.
 2. **Rebuild GitPulse** for schema 10 with the commands below. Card 4 below.
+   - **Update, 2026-10-25 ~11:20Z:** `~/.cargo/bin/gitpulse-mcp` was reinstalled at 22:49 on 2026-10-24 and now
+     reads schema 10. Every call is still refused, now with `schema_upgrade_required: workbench schema 13 must be
+     upgraded to 14 before this request, and this host does not upgrade a shared profile; open the desktop app
+     once to upgrade it`. GitPulse.app is still the Oct 17 build, so what remains is to rebuild the app and open
+     it once.
 3. **File the cards:** `backups/gp/wrap5.json` and `backups/gp/wrap6.json` through `backups/gp/mkreq.sh`, plus the
-   two card notes below.
-4. **Merge each peer branch only after its verify job is green:**
+   ft-2c183b71 note below and the seven ft-e15ee76a card drafts in `docs/reports/BUILD_REPORT-e15.cards.json`.
+4. **Peer branches:**
+   - The autocast branch (ft-e15ee76a) is **merged**: main `5f5666a`, a `--no-ff` merge of `d351fc5`. Its
+     worktree and branch are removed once its session confirms it no longer needs them.
+   - `gp/4b-gpu-step` (ft-2c183b71) merges only after ojas-4b reports green:
 
-   ```sh
-   git merge --no-ff gitpulse/route-ojas-metal-fast-autocast-to-tessl-6223aeac   # 95c4bb3, ft-e15ee76a
-   git worktree remove .gitpulse/worktrees/route-ojas-metal-fast-autocast-to-tessl-6223aeac
-   git branch -d gitpulse/route-ojas-metal-fast-autocast-to-tessl-6223aeac
-   git merge --no-ff gp/4b-gpu-step   # def246a, ft-2c183b71; the Cargo.toml member drop is uncommitted and stays out
-   ```
+     ```sh
+     git merge --no-ff gp/4b-gpu-step   # the Cargo.toml member drop is uncommitted and stays out
+     ```
 
-   Remove `backups/x/wt-4b` only after you discard or restore its local `Cargo.toml` edit.
+     Remove `backups/x/wt-4b` only after you discard or restore its local `Cargo.toml` edit.
 5. **The five unclaimed edits in the main checkout:** `README.md`, `docs/status.md`, `site/index.html`,
    `docs/reports/BUILD_REPORT-a6.md` and `tools/a6/README.md`. They are untouched and not from ojas-7a; see
    ft-6d69dd5b.
@@ -304,6 +311,12 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
      including autocast_lane 3/3, which confirms the dispatch arithmetic by a run. Still running then:
      lora-metal, oracle-parity and clippy; core-lib reruns in verify2, followed by the Muon A/B. ojas-7a did not
      check these logs. The peer's `docs/reports/BUILD_REPORT-e15.md` supersedes this item.
+   - **Merged 2026-10-25 as `5f5666a`.** The branch finished at `d351fc5`, with `b352ca6` and `b42676d` coming from
+     its independent Opus check. ojas-7a re-read the per-step logs and the trial-merge `c828c9e` logs. That trial
+     combined main `e999e35` with `gp/4b-gpu-step` at `7aba6b3` and ran the core, cpu, kernels, oracle-parity,
+     metal, wgpu and model suites. Every `test result` line is ok, there are no `FAILED` lines, and clippy exited 0.
+     The commit after the trial adds only `BUILD_REPORT-e15.md`. The branch touches none of the five unclaimed
+     dirty files.
 
 ## Left behind
 
