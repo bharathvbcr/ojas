@@ -280,6 +280,16 @@ python3 /tmp/ojas_cpu_bench.py</code></pre></div>
 <div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test -p ojas-cpu --release --lib bench_packed_against_accelerate -- --ignored --nocapture --test-threads=1</code></pre></div>
 <div class="code"><span class="code-lang">bash</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>OJAS_BENCH_OPS=linear_dec_qkvo,linear_dec_up,linear_dec_down OJAS_BENCH_THREADS=6 cargo test -p ojas-cpu --release --test bench_ops -- --ignored --nocapture --test-threads=1</code></pre></div>
 <hr>
+<h2 id="muon-bf16-newton-schulz-rounding-folded-into-the-combination-passes-2026-10-25">Muon bf16 Newton-Schulz: rounding folded into the combination passes (2026-10-25) <a class="anchor" href="#muon-bf16-newton-schulz-rounding-folded-into-the-combination-passes-2026-10-25" aria-label="Link to this section">#</a></h2>
+<p><code>0a8f76a</code> rounds <code>A²</code> and <code>B·X</code> where the combination passes read them, instead of in two separate passes. The result is bit identical (ojas-oracle <code>ojas_cpu_bf16_muon_step_matches_stock_nanolab</code>). In a 5-round interleaved A/B against <code>42d5a9f</code> (6 threads, Fast; <a href="https://github.com/bharathvbcr/ojas/blob/main/bench/results/2026-10-25-cpu-muon-bf16-fold/README.md" rel="noopener"><code>bench/results/2026-10-25-cpu-muon-bf16-fold</code></a>), the unchanged f32 rows give a noise floor of 0.96–1.09 per round:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>shape</th><th style="text-align:right">bf16 base / new, min-of-mins ms</th><th style="text-align:right">median new/base</th><th>new faster in</th><th>bf16 over f32, base → new</th></tr></thead>
+<tbody>
+<tr><td>768x768</td><td style="text-align:right">11.537 / 11.060</td><td style="text-align:right">0.940</td><td>5/5</td><td>1.38x → 1.32x</td></tr>
+<tr><td>2048x768</td><td style="text-align:right">22.708 / 22.544</td><td style="text-align:right">0.987 (within noise)</td><td>4/5</td><td>1.25x → 1.23x</td></tr>
+<tr><td>3072x768</td><td style="text-align:right">29.016 / 28.230</td><td style="text-align:right">0.967 (within noise)</td><td>4/5</td><td>1.27x → 1.23x</td></tr>
+</tbody></table></div>
+<p>The bf16 slowdown is smaller at 768x768 and otherwise unchanged within noise. What remains is card <code>gp-cpu-bf16-muon-bfmmla-kernel</code> (<code>docs/reports/BUILD_REPORT-e15.cards.json</code>).</p>
 <h2 id="every-bench-ops-case-against-torch-after-typed-storage-step-3-2026-10-02">Every <code>bench_ops</code> Case against Torch, after Typed Storage Step 3 (2026-10-02) <a class="anchor" href="#every-bench-ops-case-against-torch-after-typed-storage-step-3-2026-10-02" aria-label="Link to this section">#</a></h2>
 <p>Same cases and shapes as the next section, now all 27, with every output written in place and each storage scanned for NaN once until written. Both sides run the same dumped inputs: <code>bench_ops</code> dump mode writes them, and <code>ojas-cpu/benches/torch_ops.py</code> reads them for parity and timing. ojas is Fast with 6 threads, torch 2.13 CPU 6 threads. Each cell is the minimum over 3 interleaved rounds (ojas, then torch), each itself a minimum over the case&#39;s calls. Load average 5–6, with no other build or benchmark running. Ratio is ojas / torch: below 1, ojas is faster. Reproduce with <code>bash cpu_vs_torch.sh 3</code> (a gitignored lane file, not kept); the full log is <code>cpu_vs_torch.txt</code> (a gitignored lane file, not kept).</p>
 <p><strong>Parity:</strong> 124 of 127 outputs are within tolerance of torch. The other three are the clip norm and two outputs scaled by it, where torch is the one that is off: against an f64 evaluation of the same 123.7M gradients, ojas&#39;s norm is within 5.5e-9 and torch&#39;s f32 norm is 1.6e-3 low (<code>PARITY_F64</code>).</p>
@@ -473,14 +483,14 @@ python3 /tmp/ojas_cpu_bench.py</code></pre></div>
 <div class="table-wrap"><table>
 <thead><tr><th>Measurement</th><th style="text-align:right">ojas Metal</th><th style="text-align:right">Torch MPS</th></tr></thead>
 <tbody>
-<tr><td><strong>Full step, d=768, B=4, T=128, V=50304, resident</strong></td><td style="text-align:right">~141 ms</td><td style="text-align:right">146 ms</td></tr>
+<tr><td><strong>Full step, d=768, B=4, T=128, V=50304, resident</strong> (unverified: no artifact kept, n unknown, load 30–48; superseded by the paired runs in <a href="bench-gpu-vs-torch.html"><code>bench-gpu-vs-torch.md</code></a>)</td><td style="text-align:right">~141 ms</td><td style="text-align:right">146 ms</td></tr>
 <tr><td><strong>Linear forward, 2048³</strong></td><td style="text-align:right">3.86 ms</td><td style="text-align:right">2.81 ms</td></tr>
 <tr><td><strong>Attention backward, T=2048</strong></td><td style="text-align:right">306 ms (old scalar kernel, superseded)</td><td style="text-align:right">60 ms</td></tr>
 </tbody></table></div>
 <p>The attention backward row is from the old scalar kernel. The tiled backward that replaced it is measured in <a href="bench-gpu-vs-torch.html"><code>bench-gpu-vs-torch.md</code></a>.</p>
 <h3 id="3-wgpu-wgpubackend">3. wgpu (<code>WgpuBackend</code>) <a class="anchor" href="#3-wgpu-wgpubackend" aria-label="Link to this section">#</a></h3>
 <ul>
-<li><strong>GEMM 2048³ (Resident):</strong> Operates at ~2.0 TFLOP/s (~7.5× faster than 6-thread CPU on the same shape).
+<li><strong>GEMM 2048³ (Resident):</strong> Operates at ~2.0 TFLOP/s (~7.5× faster than ojas&#39;s own 6-thread CPU path on the same shape, not than Accelerate: Accelerate alone is 9.7 ms at 2048³ in the table above, about 1.77 TFLOP/s, so ~2.0 TFLOP/s is about 1.1× Accelerate; no artifact is kept for the 2.0 TFLOP/s figure, recorded at load 30–48).
 </li>
 <li><strong>Attention (T=2048):</strong> Runs at approximately the same latency as CPU.
 </li>
@@ -504,6 +514,7 @@ python3 /tmp/ojas_cpu_bench.py</code></pre></div>
 <li><a href="#single-linear-projection-benchmark">Single Linear Projection Benchmark</a></li>
 <li class="sub"><a href="#earlier-medians-exact-only-before-the-2026-10-01-overhead-work">Earlier medians (Exact only, before the 2026-10-01 overhead work)</a></li>
 <li class="sub"><a href="#2026-10-01-both-tiers-symmetric-min-of-n">2026-10-01: both tiers, symmetric min-of-N</a></li>
+<li><a href="#muon-bf16-newton-schulz-rounding-folded-into-the-combination-passes-2026-10-25">Muon bf16 Newton-Schulz: rounding folded into the combination passes (2026-10-25)</a></li>
 <li><a href="#every-bench-ops-case-against-torch-after-typed-storage-step-3-2026-10-02">Every bench_ops Case against Torch, after Typed Storage Step 3 (2026-10-02)</a></li>
 <li><a href="#scorecard-pairs-2026-10-04">Scorecard pairs (2026-10-04)</a></li>
 <li class="sub"><a href="#progress-2026-10-04">Progress (2026-10-04)</a></li>

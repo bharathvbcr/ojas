@@ -162,7 +162,7 @@
     end
 
     subgraph ComputeEngines[&#34;SIMD Compute Kernels&#34;]
-        NEON[&#34;ARM64 NEON Kernel\n(arch::neon, ~110 GFLOP/s single thread)&#34;]
+        NEON[&#34;ARM64 NEON Kernel\n(arch::neon, ~110 GFLOP/s single thread, unverified)&#34;]
         AVX2[&#34;x86_64 AVX2 + FMA Kernel\n(arch::avx2)&#34;]
         Portable[&#34;Portable Fallback\n(f32::mul_add chains)&#34;]
         AppleBLAS[&#34;Apple Accelerate BLAS\n(cblas_sgemm, ~1.4–1.9 TFLOP/s)&#34;]
@@ -275,9 +275,9 @@
 <hr>
 <h2 id="performance-profile-apple-m5-pro">Performance Profile (Apple M5 Pro) <a class="anchor" href="#performance-profile-apple-m5-pro" aria-label="Link to this section">#</a></h2>
 <ul>
-<li><strong>NEON SIMD:</strong> ~110 GFLOP/s single-threaded throughput.
+<li><strong>NEON SIMD:</strong> ~110 GFLOP/s single-threaded throughput (unverified: no artifact kept).
 </li>
-<li><strong>Apple Accelerate:</strong> ~1.4–1.9 TFLOP/s on medium-to-large matrices ($256^3$, $512 \times 768 \times 768$, $2048^3$).
+<li><strong>Apple Accelerate:</strong> ~1.4–1.9 TFLOP/s on medium-to-large matrices ($256^3$, $512 \times 768 \times 768$, $2048^3$). Only the upper part is derivable: <code>docs/bench-cpu-vs-torch.md:431-432</code> gives 0.31 ms at 512×768×768 (about 1.95 TFLOP/s) and 9.7 ms at 2048³ (about 1.77), taken under load; <code>docs/baseline.md:86-106</code> records 772–1112 GFLOP/s best for f32. The ~1.4 low end and the $256^3$ case are unverified.
 </li>
 </ul>
       </article>

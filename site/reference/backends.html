@@ -193,7 +193,7 @@
 <thead><tr><th>Backend</th><th>Implements <code>Backend</code></th><th>Numerics</th><th>Tests</th><th>Notes</th></tr></thead>
 <tbody>
 <tr><td><code>CpuBackend</code> (<code>ojas-cpu</code>)</td><td>Yes</td><td><code>Fast</code> default; <code>Exact</code> opt-in</td><td>291 passed, 12 ignored</td><td>Exact: packed GEMM, persistent thread pool, bit-identical to golden digests across thread counts. Fast on macOS: $\ge 2^{13}$ multiply-adds (<code>FAST_WHOLE_CALL_MACS</code>) dispatch to Accelerate <code>cblas_sgemm</code>; smaller stay on <code>tile_fast</code>. Off macOS cutoff $2^{21}$. Hardened layout, pointwise parallelization across scoped worker threads, in-place AdamW, and embedding lookup</td></tr>
-<tr><td><code>ojas-simd</code></td><td>No (kernels for <code>ojas-cpu</code>)</td><td>—</td><td>40 passed (workspace; 34 standalone)</td><td>NEON ~110 GFLOP/s single thread; Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs. ARM64 NEON embedding gather, nanolab head pair splitting, token bands, Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling</td></tr>
+<tr><td><code>ojas-simd</code></td><td>No (kernels for <code>ojas-cpu</code>)</td><td>—</td><td>40 passed (workspace; 34 standalone)</td><td>NEON ~110 GFLOP/s single thread (unverified: no artifact); Accelerate ~1.4–1.9 TFLOP/s on medium/large GEMMs (derivable only at the top: <code>bench-cpu-vs-torch.md:431-432</code> gives 1.95 TFLOP/s at 512×768×768 and 1.77 at 2048³, under load; <code>baseline.md:86-106</code> records 772–1112 GFLOP/s best f32; the ~1.4 low end is unverified). ARM64 NEON embedding gather, nanolab head pair splitting, token bands, Apple Accelerate vDSP/vForce vectorization, vector sign/abs/neg, and IEEE 754 edge float handling</td></tr>
 <tr><td><code>MetalBackend</code> (<code>ojas-metal</code>)</td><td>Yes, every op, device-resident</td><td><code>Fast</code></td><td>175 passed</td><td>Tiled causal attention, head dim above 256 refused. Faults surface at the next <code>sync</code> (<a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>). Attention forward/backward, device-resident training step</td></tr>
 <tr><td><code>WgpuBackend</code> (<code>ojas-wgpu</code>)</td><td>Yes, device-resident</td><td><code>Fast</code>, 1e-4 relative tolerance</td><td>131 passed, 3 ignored</td><td>Muon NS5 in f32, checked against CPU. Tiled FlashAttention-2, head dim above 256 refused. Gradient accumulation (<code>accumulate_grad</code>), KV cache writes, tiled linear cross-entropy (<code>linear_ce</code>), and deferred fault reporting at next <code>sync</code></td></tr>
 <tr><td><code>ojas-kernels</code></td><td>No (shared geometry and sources)</td><td>—</td><td>11 passed</td><td>Launch geometry (<code>gemm_grid</code>, <code>attention_tiles</code>, <code>ATTENTION_MAX_HEAD_DIM</code>), WGSL modules in <code>src/wgsl/</code>, NaN-safe parity harness</td></tr>
@@ -216,7 +216,7 @@
     end
 
     subgraph Rejected[&#34;Rejected Frameworks&#34;]
-        Burn[&#34;Burn (~2,900 ms/step vs 56.6 ms/step)&#34;]
+        Burn[&#34;Burn (hand port, ~2,900 ms/step vs 56.6 ms/step; see table)&#34;]
         Candle[&#34;Candle (Avoid heavy generic dependency)&#34;]
         Cubecl[&#34;CubeCL (Indirect compiler dependency)&#34;]
         Cust[&#34;Cust (Superseded by cudarc)&#34;]
@@ -236,7 +236,7 @@
 <div class="table-wrap"><table>
 <thead><tr><th>Package</th><th>Version</th><th>Reason for Rejection</th></tr></thead>
 <tbody>
-<tr><td><code>burn</code></td><td><code>0.21.0</code></td><td>Heavy runtime; measured ~2,900–3,400 ms/step vs 56.6 ms/step native.</td></tr>
+<tr><td><code>burn</code></td><td><code>0.21.0</code></td><td>Heavy runtime; ~2,900–3,400 ms/step vs 56.6 ms/step native, per <code>arch02/metal-native/README.md:294-302</code> (re-verified 2026-07-12, M5 Pro, B=16, f32). The Burn side is that README&#39;s hand-ported baseline (&#34;burn-port sota&#34;), not a tuned Burn run, and no artifact for it is kept here (unverified).</td></tr>
 <tr><td><code>candle-core</code></td><td><code>0.11.0</code></td><td>Avoid broad general runtime dependency on performance-critical paths.</td></tr>
 <tr><td><code>cubecl</code></td><td><code>0.10.0</code></td><td>JIT kernel compiler layer; ojas relies on static native Metal &amp; WGSL shaders.</td></tr>
 <tr><td><code>cust</code></td><td><code>0.3.2</code></td><td>Unmaintained legacy rust-cuda bindings; superseded by <code>cudarc</code>.</td></tr>
