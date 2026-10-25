@@ -316,8 +316,12 @@ go run scripts/sitegen/main.go -check
 
 - `git merge-tree --write-tree` against main is clean at every main this run saw: `216f3ed` gives tree `f03986f`,
   `464547a` gives `836d5db`, and `6bfa82e` gives `6aa9bc3` [V]. `216f3ed..6bfa82e` changes only
-  `ojas-metal/tests/autocast_lane.rs` and two reports (`git diff --stat`) [V], so verify9 covers all of main's
-  source and verify10 runs the one changed test against this branch.
+  `ojas-metal/tests/autocast_lane.rs` and two reports (`git diff --stat`) [V]. So verify9's tree has the same Rust
+  source as any later merge except that one test, which verify10 ran. verify9 tested every crate this branch
+  touches, plus main's ojas-core, ojas-metal and ojas-model changes. It did not run ojas-cpu's tests (only clippy)
+  and did not build main's `go/api.go` change.
+- verify8's 36 Metal targets and 291 passes became 37 and 294 in verify9: main added `autocast_lane`, with 3 tests
+  at `216f3ed` (4 at `6bfa82e`).
 - The branch carries no `Cargo.toml` or `Cargo.lock` change.
 - sitegen was not run in the worktree: its member drop would remove the capi/gusset crate pages. The regeneration
   belongs in main after the merge. Commit the regenerated `site/`, or the next session's `-check` fails.
