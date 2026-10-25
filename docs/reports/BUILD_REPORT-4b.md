@@ -4,8 +4,8 @@
 `gp/4b-gpu-step`. This file is separate so that no peer report (`BUILD_REPORT.md`, `-7a`, `-a6`, `-w11`) is
 overwritten.
 
-**Base:** `main` at `42d5a9f`. **Result:** three code commits on the branch (listed under "Commits"), with this
-report in a fourth. **Not merged, not pushed.** The merge happens in the main checkout (see "Merge").
+**Base:** `main` at `42d5a9f`. **Result:** four code commits on the branch (listed under "Commits"). This
+report came in `7aba6b3` and was brought up to date in the branch's last commit. **Not merged, not pushed.** The merge happens in the main checkout (see "Merge").
 
 **Builds:** the owner authorised a detached in-repo launcher (`backups/4b-tools/`, gitignored), with every
 cargo step inside `Lappi-decision/tools/mac_heavy.sh` and its own `CARGO_TARGET_DIR` (`target-4b`). The
@@ -29,8 +29,14 @@ ruled out timing benches. No speedup is claimed. Every row that needs a number i
 - A short last group of a multi-tensor scale no longer binds one gradient read-write in several slots. On wgpu it
   dispatches the Clip module with exactly its count of slots; on Metal the unused slots bind a worker-owned
   spare [V in source; see crit 21 for why no test can fail first on this device].
-- A Metal `U32` upload behind recorded work never waits, at any size. It goes through tessl's
-  `alloc_buffer_from_u32` [V].
+- A Metal `U32` upload behind recorded work takes no upload wait, at any size. It is written on the host into a
+  buffer fresh from tessl's pool (`Worker::fresh_from`, `alloc_buffer_from_u32`) [V].
+  - **Waits that can still happen:** a memory-cap wait (its bytes count toward the trigger like any allocation's),
+    and a recycle when the device refuses the allocation.
+  - **"Never waits", used in `e575db5`'s message, is wrong** for that reason. The second review caught it.
+  - **Small uploads take this path too.** The criterion asked only for uploads above the 64 KiB inline cap. This
+    path is cheaper than inline: it uses no constant-arena room, dispatches no `ojas_upload_words`, and makes no
+    encode copy on the host [V in source]. Its speed is not measured (card 1).
 - The wgpu upload cost (1 fresh buffer and 1 blocking scope pop per upload) is pinned by a test and accepted by a
   recorded ruling [V].
 
@@ -41,6 +47,7 @@ ruled out timing benches. No speedup is claimed. Every row that needs a number i
 | `def246a` | wgpu: one-dispatch residual_add_backward, in-place scale_grad, shared multi-tensor scale |
 | `6cbd7db` | wgpu: short clip/scale groups bind exactly their slots; upload cost pinned |
 | `e575db5` | metal: U32 uploads behind recorded work never wait; scale binds a spare |
+| `740df7a` | metal: id uploads share fresh_from and its fault injection; pool-reuse and retry tests |
 
 ## Criteria (brief order, 1–23)
 
@@ -67,7 +74,7 @@ ruled out timing benches. No speedup is claimed. Every row that needs a number i
 | 19 | clip_grad_norm mid-step sync | Needs owner sign-off → card 6. |
 | 20 | Upload cost covered and pooled or accepted | Accepted by ruling B, pinned by a test [V] → MET. Pooled A/B → card 3. |
 | 21 | Unused slots stop aliasing group[0] read-write | wgpu and Metal both done [V in source]; regression guards on both → MET (see below). |
-| 22 | Metal U32 uploads above the inline cap don't wait | Done; the test fails first [V] → MET, except its A/B → card 1. |
+| 22 | Metal U32 uploads above the inline cap don't wait | Done: no upload wait, the test fails first [V]. The retry/refusal path and the pool-reuse safety are tested too → MET, except its A/B → card 1. |
 | 23 | Metal clip_grad_norm within 1.2× torch | Timing → card 1. |
 
 ### Counts recorded (crits 2, 9, 10, 11)
@@ -121,7 +128,8 @@ base by design.
 ### Crit 21: why no test fails first
 
 - **wgpu:** wgpu-core 30.0.1 accepts one buffer bound `STORAGE_READ_WRITE` in several slots of a bind group. It ORs
-  the uses and has no overlap check (the independent review read `track/mod.rs:333-336`, `track/buffer.rs:761-763`).
+  the uses and has no overlap check. This is the independent reviewer's reading of `track/mod.rs:333-336` and
+  `track/buffer.rs:761-763` [I: I did not re-read it]. The base's tests binding `group[0]` repeatedly passed here.
 - **Metal:** binds buffers by pointer with no aliasing check [I]. The base already repeated `group[0]` there,
   and its tests passed.
 
@@ -182,9 +190,49 @@ The sources were restored after the pre-fix stages. The shasums before and after
 | `cargo test -p ojas-metal --lib -- --test-threads=1` | 81 passed, 0 failed, 1 ignored, `adversarial_oom` included [V] |
 | `clip_multi` on 42d5a9f's `device.rs` | 8 passed: `every_last_group…` is a guard, green before the fix as stated [V] |
 
-Every other ojas-metal target passed in verify6. The two code commits differ from the verified trees only in doc
-comments: the `upload_ids` doc, plus the faults-doc wording about the `Ids::Host` copy, corrected after
+Every other ojas-metal target passed in verify6. `6cbd7db` and `e575db5` differ from the verified trees only in
+doc comments: the `upload_ids` doc, plus the faults-doc wording about the `Ids::Host` copy, corrected after
 verify7. rustfmt `--check` on `device.rs` exit 0 afterwards [V].
+
+**verify8** ran after the second review, on the `740df7a` tree: the U32 upload through `fresh_from`, the hook in
+`injected_failure`, and the two new tests. tessl was `5d6f786`, clean. The committed files' shasums match the
+tested ones (run.out) [V].
+
+| stage | result |
+|---|---|
+| rustfmt `--check` on `device.rs`, `backend.rs`, `wait_triggers.rs` | exit 0 [V] |
+| `cargo test -p ojas-metal -- --test-threads=1`, every target | 36 targets, 291 passed, 0 failed, 2 ignored [V] |
+| `cargo test -p ojas-model --test device --test metal_waits` | 5 passed, 0 failed, 1 ignored [V] |
+| `cargo clippy -p ojas-metal --all-targets -D warnings` | exit 0 [V] |
+| the retry test on `e575db5`'s `device.rs` | red as expected: recycle count 0 vs 1, because the hook never reached the U32 path (`backend.rs:3483`) [V] |
+| `wait_triggers` on `42d5a9f`'s `device.rs` | red as expected: `a_large_id_upload…` (`upload: 1`) and `an_id_upload_never_takes…` (upload waits 4 vs 0). The other 4 passed [V] |
+
+**verify9** tested the combined tree as it will be merged. It made a detached trial merge in `wt-4b` of main
+`216f3ed` (ft-e15ee76a merged, which also changes ojas-core, ojas-metal and ojas-model) into `740df7a`. No branch or
+ref moved. `git merge-tree` gave a clean tree `f03986f`; the merge auto-merged `ojas-metal/src/backend.rs` and
+`device.rs` and made combined HEAD `96d3383` with that same tree. tessl was `5d6f786`, clean. Afterwards the worktree
+went back to `gp/4b-gpu-step` at `740df7a` (run.out) [V].
+
+| stage | result |
+|---|---|
+| `cargo test -p ojas-metal -- --test-threads=1`, every target | 37 targets, 294 passed, 0 failed, 2 ignored (with main's new `autocast_lane`) [V] |
+| `cargo test -p ojas-model --test device --test metal_waits --test trainer` | 3 targets, 24 passed, 0 failed, 1 ignored [V] |
+| `cargo test -p ojas-core --lib` | 155 passed, 0 failed, 3 ignored [V] |
+| `cargo test -p ojas-kernels` | 2 targets, 18 passed, 0 failed [V] |
+| `cargo test -p ojas-wgpu`, every target | 28 targets, 205 passed, 0 failed, 7 ignored [V] |
+| `cargo clippy -p ojas-core -p ojas-cpu -p ojas-kernels -p ojas-wgpu -p ojas-metal -p ojas-model --all-targets -D warnings` | exit 0, no warnings [V] |
+
+This branch changes no ojas-cpu file. main's `ojas-cpu/src/optim.rs` change passed clippy here, but its tests were
+not run in this tree.
+
+**verify10** ran after main moved on to `464547a` and then `6bfa82e`. Of the two, only `4c1640a` changes code: it
+rewrites `ojas-metal/tests/autocast_lane.rs` (a TensorOps canary for Apple M5, exact-bit backward checks). verify10
+made a detached trial merge of main `6bfa82e` into `740df7a` the same way. It was clean, giving combined HEAD
+`f104a21`, tree `6aa9bc3`, and the worktree went back to `gp/4b-gpu-step` at `740df7a` (run.out) [V].
+
+| stage | result |
+|---|---|
+| `cargo test -p ojas-metal --test autocast_lane -- --test-threads=1` | 4 passed, 0 failed, 0 ignored, `an_apple_m5_reports_tensorops` included [V] |
 
 ## Independent review
 
@@ -202,9 +250,47 @@ blocking. Its three low/info findings, each fixed in `6cbd7db`:
 An earlier in-run failure also led to a fix. `accumulate_grad`'s exact peak test saw 88 B vs 84 B when
 `global_norm` bound an uncharged spare. Reverted: `global_norm` repeats its first read-only gradient.
 
+### Second review: `e575db5`
+
+A second Opus reviewer read only `e575db5`, the Metal commit, which the first review predates. It read code only,
+in ojas and tessl. It found nothing blocking.
+
+**Safety argument (its claim 1): holds [V by its read].**
+- A dropped buffer goes back to tessl's pool at `release_point = event_value + 1` (tessl `runtime.rs:1397`), so only
+  after the commit holding the commands recorded against it completes.
+- `recycle_if_idle` (`runtime.rs:1531`) does nothing while a command buffer is open.
+
+**Its other checks were clean:**
+- `retrying` around `alloc_buffer_from_u32`;
+- the `note_dispatches` move;
+- the off switch;
+- the spare: the kernel's `norm_slot` loops `k < used` (`ojas_backend.metal:1066`), and offset 92 of 96 bytes
+  passes tessl's offset check.
+
+**Its findings, each acted on in `740df7a`:**
+1. **"Never waits" overstated it.** The upload's bytes feed the memory-cap trigger, and a refusal recycles. Fixed in
+   the `Worker::upload` doc, the faults doc §9.1 and this report. `e575db5`'s message keeps the old wording.
+2. **The test hook `fail_allocs` did not reach the U32 path**, so its retry and refusal were untested.
+   - Fixed: the hook moved into `Worker::injected_failure`, which both `try_alloc` and `fresh_from` consult.
+   - The U32 upload now calls `fresh_from`, so `upload_ids`, a near-copy of it, is deleted.
+   - New test: `backend.rs` `an_id_upload_behind_recorded_work_retries_and_refuses_like_any_allocation`. It checks
+     one injected refusal (a recycle, no upload wait, identical readback) and a persistent one (`CapacityExceeded`
+     for 1 MiB, the budget charge returned).
+   - No existing `fail_allocs` test reaches `fresh_from`; its only other callers are `embed_bwd` and `clip_norm`.
+3. **Nothing tested pool reuse.** New test: `wait_triggers.rs`
+   `an_id_upload_never_takes_a_buffer_that_recorded_work_still_reads`. Four rounds each free the 1 MiB of ids a
+   pending `embedding_forward` reads, then upload as many new ids. Each gather must match its own ids.
+   - This is a guard of tessl's release rule, not a regression test. `e575db5` makes the same tessl call, so it
+     should pass there too [I: not run on `e575db5`]. On `42d5a9f`'s `device.rs` it fails on the upload-wait
+     count (4 vs 0) before reaching the values (verify8).
+   - It would fail if tessl returned a dropped buffer before its readers' commit completed [I].
+
+The reviewer also noted that `dispatches()` drops by one for each small U32 upload behind recorded work, since no
+`ojas_upload_words` runs. It found no test that counts dispatches across such an upload.
+
 ## Cards
 
-The board refuses writes: the installed `gitpulse-mcp` knows schema 9, and the store is 10. Seven
+The board refuses writes: the installed `gitpulse-mcp` knows schema 9, and the store is 10. Eight
 `gitpulse_add_task` payloads are drafted in `backups/gp/wrap-4b.json`, ready to file once the reader is rebuilt:
 1. The bench remainder: crits 1, 4–8, 15–17, 23, timing rows for 2 and 9–11, and the re-bench of residual_add and
    scale_grad.
@@ -214,6 +300,9 @@ The board refuses writes: the installed `gitpulse-mcp` knows schema 9, and the s
 5. The Metal LCE tile recompute (crit 14).
 6. The clip_grad_norm mid-step sync, which needs owner sign-off (crit 19).
 7. Metal's inline F32/BF16 upload host copy, ≤64 KiB and uncharged (crit 12 remainder).
+8. `clip_scale(f32::MAX, norm)` refuses as `NonFinite` when the norm is below about 1. The coefficient overflows
+   before the `min(1, ·)`, so "`max_norm = f32::MAX` means don't clip" fails. This is documented, but it cost this
+   run a red test.
 
 ## Merge
 
@@ -225,11 +314,22 @@ go run scripts/sitegen/main.go
 go run scripts/sitegen/main.go -check
 ```
 
+- `git merge-tree --write-tree` against main is clean at every main this run saw: `216f3ed` gives tree `f03986f`,
+  `464547a` gives `836d5db`, and `6bfa82e` gives `6aa9bc3` [V]. `216f3ed..6bfa82e` changes only
+  `ojas-metal/tests/autocast_lane.rs` and two reports (`git diff --stat`) [V], so verify9 covers all of main's
+  source and verify10 runs the one changed test against this branch.
 - The branch carries no `Cargo.toml` or `Cargo.lock` change.
 - sitegen was not run in the worktree: its member drop would remove the capi/gusset crate pages. The regeneration
-  belongs in main after the merge.
+  belongs in main after the merge. Commit the regenerated `site/`, or the next session's `-check` fails.
+- `adversarial_oom::partial_allocations_are_released_after_the_final_refusal` passes only single-threaded. Its own
+  doc says so, and it saw a 16 MiB delta from sibling tests under a parallel run here. A parallel post-merge failure
+  of that test alone is that known gap, not this branch. I did not re-run it in parallel on the base, so "known" is
+  by the test's doc, not by measurement [I].
+- verify6 ran against tessl `8bc0468`; verify7 through verify10 ran against `5d6f786`.
 
 ## Left behind
 
 - `target-4b` (this run's target dir) in the main checkout. Delete it if disk is needed.
 - The gitignored launcher and logs under `backups/4b-tools/`.
+- The trial merge commits from verify9 and verify10 (`96d3383` and `f104a21`). No ref names them,
+  so git's gc will drop them.
