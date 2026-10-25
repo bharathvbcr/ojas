@@ -518,6 +518,11 @@ struct Worker {
     /// Waited commits, shared with every handle (`MetalBackend::waits`).
     waits: Arc<Waits>,
     slab: GpuBuffer,
+    /// One word per `ojas_scale_multi` slot, at offset `4 * slot`, bound in
+    /// the slots a short last group leaves unused. The kernel never touches
+    /// them; binding these, not a repeat of a gradient, keeps every
+    /// read-write binding of a dispatch on memory of its own.
+    spare: GpuBuffer,
     book: RefCell<Book>,
 }
 
@@ -538,6 +543,7 @@ impl Worker {
         }
         let slab = rt.alloc_buffer(SLAB_SLOTS * ST_BYTES).map_err(metal_err)?;
         slab.try_contents_u32().map_err(metal_err)?.fill(0);
+        let spare = rt.alloc_buffer(NORM_SLOTS * 4).map_err(metal_err)?;
         let ws = rt.memory_info().recommended_working_set;
         let book = Book {
             used: 0,
@@ -566,6 +572,7 @@ impl Worker {
             poisoned: false,
             waits,
             slab,
+            spare,
             book: RefCell::new(book),
         })
     }
@@ -948,17 +955,23 @@ impl Worker {
 
     fn try_alloc(&self, bytes: usize) -> Result<GpuBuffer, String> {
         #[cfg(test)]
-        {
-            let mut book = self.book.borrow_mut();
-            let (skip, fail) = book.fail_allocs;
-            if skip > 0 {
-                book.fail_allocs.0 -= 1;
-            } else if fail > 0 {
-                book.fail_allocs.1 -= 1;
-                return Err(format!("newBuffer({bytes}) failed"));
-            }
-        }
+        self.injected_failure(bytes)?;
         self.rt.alloc_buffer(bytes)
+    }
+
+    /// [`Cmd::Tune`]'s `fail_allocs`, consulted by every device allocation
+    /// attempt ([`Self::try_alloc`], [`Self::fresh_from`]).
+    #[cfg(test)]
+    fn injected_failure(&self, bytes: usize) -> Result<(), String> {
+        let mut book = self.book.borrow_mut();
+        let (skip, fail) = book.fail_allocs;
+        if skip > 0 {
+            book.fail_allocs.0 -= 1;
+        } else if fail > 0 {
+            book.fail_allocs.1 -= 1;
+            return Err(format!("newBuffer({bytes}) failed"));
+        }
+        Ok(())
     }
 
     /// A waited commit for its recycling. It runs even with nothing
@@ -1000,10 +1013,15 @@ impl Worker {
 
     /// A new buffer holding `data`, written on the host without a wait: no
     /// recorded command can be using a buffer fresh from the pool (tessl
-    /// `alloc_buffer_from_u32`). For small host-built index data.
+    /// `alloc_buffer_from_u32`). For host-built index data and `U32`
+    /// uploads behind recorded work.
     fn fresh_from(&self, data: &[u32]) -> Res<V> {
         let bytes = data.len().max(1) * 4;
-        let buf = self.retrying(bytes, || self.rt.alloc_buffer_from_u32(data))?;
+        let buf = self.retrying(bytes, || {
+            #[cfg(test)]
+            self.injected_failure(bytes)?;
+            self.rt.alloc_buffer_from_u32(data)
+        })?;
         self.book.borrow_mut().alloc_since_wait += bytes as u64;
         Ok(V {
             buf,
@@ -1621,8 +1639,14 @@ impl Worker {
     /// nothing recorded that costs no wait, so the bytes are mapped in. With
     /// work recorded, a small upload rides in the command itself: its words
     /// go into tessl's constant arena and `ojas_upload_words` copies them,
-    /// in order with the recorded work, so nothing waits. Any other upload
-    /// waits ([`Wait::Upload`]) and maps.
+    /// in order with the recorded work, so nothing waits. A `U32` upload
+    /// (token ids, targets) behind recorded work, at any size, is written
+    /// on the host into a buffer fresh from the pool ([`Self::fresh_from`]),
+    /// which no recorded command can be using: no upload wait, no room in
+    /// the constant arena, and no copy but the one into the buffer. Its
+    /// bytes count toward the memory-cap trigger like any allocation's, so
+    /// a large one can still bring a [`Wait::MemCap`] forward. Any other
+    /// upload waits ([`Wait::Upload`]) and maps.
     /// A new buffer holding `src`'s contiguous window. Small uploads behind
     /// recorded work ride inline (encoded into at most
     /// [`INLINE_UPLOAD_BYTES`] of host memory); the rest wait and are
@@ -1633,6 +1657,15 @@ impl Worker {
             .num_elements()?
             .checked_mul(src.dtype().size())
             .ok_or_else(|| metal_err("upload size overflows"))?;
+        self.note_dispatches();
+        let behind = {
+            let book = self.book.borrow();
+            book.dirty && book.inline_uploads
+        };
+        if behind && src.dtype() == ojas_core::DType::U32 {
+            let ids = self.fresh_from(src.u32_slice()?)?;
+            return Ok(self.adopt(ids.buf, len));
+        }
         let buf = self.alloc(len)?;
         self.note_dispatches();
         let inline = {
@@ -1658,10 +1691,15 @@ impl Worker {
             let mut map = buf.try_contents_u8().map_err(metal_err)?;
             src.write_ne_bytes(&mut map[..len])?;
         }
+        Ok(self.adopt(buf, len))
+    }
+
+    /// Give a new upload of `len` bytes its id.
+    fn adopt(&mut self, buf: GpuBuffer, len: usize) -> Reply {
         let id = self.next_id;
         self.next_id += 1;
         self.bufs.insert(id, buf);
-        Ok(Reply::Bufs(vec![NewBuf { id, bytes: len }]))
+        Reply::Bufs(vec![NewBuf { id, bytes: len }])
     }
 
     /// A raw read waits and scans, holding any fault for the next sync point.
@@ -3104,12 +3142,16 @@ impl Worker {
             self.writable(op, *a)?;
         }
         let st = self.status(op)?;
+        let spare = &self.spare;
         for group in views.chunks(NORM_SLOTS) {
             let (tbl, groups) = norm_table(group)?;
             let used = u32_of(group.len())?;
             self.ktg("ojas_scale_multi", groups, 1, 256, |b| {
                 for slot in 0..NORM_SLOTS {
-                    bind(b, group.get(slot).unwrap_or(&group[0]), slot);
+                    match group.get(slot) {
+                        Some(v) => bind(b, v, slot),
+                        None => set_gpu_buf_offset(b, spare, 4 * slot, slot),
+                    }
                 }
                 bind_st(b, &st, 25);
                 b.bind_bytes(&tbl, 26);

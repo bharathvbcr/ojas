@@ -306,7 +306,11 @@ All in `ojas-metal/src/device.rs` unless named.
 - **Uploads.** tessl maps a buffer for the host only after `commit_m4(true)` (`tensor.rs:165-199`, `runtime.rs:572-579`) (V). So a mapped upload made while work is recorded waits.
   - **Inline uploads.** An upload made behind recorded work skips that wait when it is at most `INLINE_UPLOAD_BYTES` (64 KiB) and a whole number of words. Instead its bytes go into tessl's constant arena with `bind_bytes`, and a recorded `ojas_upload_words` kernel copies them into the new buffer.
   - **Arena budget.** The arena is 16 MiB, reset only by a waited commit, and poisons the runtime when exhausted. So inline bytes are also capped at `INLINE_ARENA_BYTES` (1 MiB) per wait window. Past either cap, the worker waits as before (`settle` in `Worker::upload`), and the wait is counted and scanned.
-  - **Off switch.** `MetalBackend::set_inline_uploads(false)` (doc-hidden) restores the waiting path for A/B counts.
+  - **U32 uploads.** A `U32` upload behind recorded work (token ids, targets) takes no upload wait at any size, inline cap or not (ft-2c183b71, S2-07). `Worker::upload` passes the tensor's borrowed window (`Tensor::u32_slice`) to `Worker::fresh_from`, the path for host-built index tables. That calls tessl's `alloc_buffer_from_u32`, which writes the window on the host into a buffer fresh from the pool.
+    - **Why no recorded command can be using that buffer.** tessl returns a dropped buffer to its pool only after the commit holding the commands recorded against it completes (`release_point`). `tests/wait_triggers.rs` (`an_id_upload_never_takes_a_buffer_that_recorded_work_still_reads`) frees ids that a pending gather reads and uploads as many again, four times over (V).
+    - **What the upload skips.** It takes no room in the constant arena and dispatches no `ojas_upload_words`, and the device thread copies the window only into the new buffer.
+    - **What still applies.** Its bytes count toward the memory-cap trigger like any allocation's, so a large one can still bring a `mem_cap` wait forward. A refused allocation is retried like any other (`recycle`). The backend's `Ids::Host` copy of every `U32` upload's ids (`MetalBackend::upload`) predates this and is unchanged. The budget is still charged before the device call, so a capped backend refuses with `CapacityExceeded` first.
+  - **Off switch.** `MetalBackend::set_inline_uploads(false)` (doc-hidden) restores the waiting path for A/B counts. It turns off both the inline path and the U32 path.
   - **Tests.** `tests/wait_triggers.rs` pins both paths and the arena fallback (17 × 64 KiB uploads give exactly one upload wait) (V).
 - **Wait counter, by trigger.**
   - `MetalBackend::wait_counts()` (doc-hidden) returns a `WaitCounts` with one counter per reason for a waited commit: `upload`, `read`, `sync`, `clip_norm`, `mem_cap`, `working_set`, `slab_full` and `recycle` (the allocation retry). `settle` takes the reason and counts it only when there was recorded work to wait for.
@@ -408,8 +412,9 @@ The overlap path was verified, not assumed:
 
 - **Upload waits** were the largest share after memory caps (28 host uploads per trainer step).
   - Closed for uploads of 64 KiB or less by inline uploads (§9.1): 11 → 0 per tiny step (§9.3).
-  - A larger upload behind recorded work still waits and is counted under `upload`. At 124M the token ids and the targets are 16 KiB each per micro-batch (B 4 × T 1024 × 4 bytes), within the cap (I: by size; not measured at 124M).
-  - tessl still has no unwaited host write for a fresh buffer of any size.
+  - A larger `F32` or `BF16` upload behind recorded work still waits and is counted under `upload`. At 124M the token ids and the targets are 16 KiB each per micro-batch (B 4 × T 1024 × 4 bytes), within the cap (I: by size; not measured at 124M).
+  - A `U32` upload of any size no longer waits (§9.1, U32 uploads). `tests/wait_triggers.rs` (`a_large_id_upload_while_work_is_recorded_does_not_wait`) checks this with 1 MiB of ids: no wait, identical readback, the off switch's one wait, and a capped backend's refusal (V).
+  - tessl's only unwaited host write for a fresh buffer is `alloc_buffer_from_u32`, so an `F32` upload has no equivalent yet.
 - **Memory-cap commits are now counted per trigger** (`WaitCounts::mem_cap`, `working_set`). The 124M split (about 41, inferred in §9.3) has not been re-measured with the counter. The cap trades waits for resident memory: at 1 GiB, the step's freed temporaries recycle every 1 GiB of allocation.
 - **The capi early-return test runs on wgpu only** (`an_early_return_never_leaks_a_deferred_fault_into_the_next_call`). A Metal twin would pin `settled` on Metal; that file belongs to the coordinator.
 - **Stale text outside this lane:**

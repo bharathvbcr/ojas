@@ -50,6 +50,43 @@ fn clip_norm_is_one_scope_and_scale_goes_by_slot_groups() {
     }
 }
 
+/// Gradient counts at each edge of a 24-slot group: a last group of 1, 23,
+/// a full one, and a full one plus 1. The slots a short group leaves unused
+/// bind the worker's spare words, never a gradient again. Every scaled
+/// value against the CPU, and the dispatch count.
+#[test]
+fn every_last_group_size_scales_like_the_cpu() {
+    let (m, c) = (metal(), cpu());
+    for count in [1usize, 23, 24, 25, 47] {
+        let mut hg: Vec<Tensor> = (0..count)
+            .map(|i| vec1(&values(1 + (i * 613) % 5000, 500 + i as u64, 1.0)))
+            .collect();
+        let mut dg: Vec<Tensor> = hg.iter().map(|t| m.upload(t).unwrap()).collect();
+        let cn = c.clip_grad_norm(&mut hg.clone(), 1.0e9).unwrap();
+        m.sync().unwrap();
+        let before = m.dispatches();
+        let gn = m.clip_grad_norm(&mut dg, cn * 0.5).unwrap();
+        m.sync().unwrap();
+        assert_eq!(
+            m.dispatches() - before,
+            1 + count.div_ceil(24) as u64,
+            "count {count}"
+        );
+        assert!((gn - cn).abs() <= 1e-5 * cn, "count {count}: {gn} vs {cn}");
+        c.clip_grad_norm(&mut hg, cn * 0.5).unwrap();
+        for (i, (d, h)) in dg.iter().zip(&hg).enumerate() {
+            let got = m.download(d).unwrap().to_f32_vec().unwrap();
+            let want = h.to_f32_vec().unwrap();
+            for (j, (a, b)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    (a - b).abs() <= 1e-6 + 1e-5 * b.abs(),
+                    "count {count}: {i}[{j}]: {a} vs {b}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn clip_norm_of_huge_values_is_finite_and_right() {
     let m = metal();

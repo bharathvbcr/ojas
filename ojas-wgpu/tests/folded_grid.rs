@@ -180,6 +180,10 @@ fn pointwise_and_row_kernels_leave_spare_workgroups_inert_under_a_cap_of_two() {
         let (ca, cb) = c.mul_backward(&ha, &hb, &hg).unwrap();
         close_vec(&format!("mul' a {n}"), &back(&ga), &want(ca));
         close_vec(&format!("mul' b {n}"), &back(&gb), &want(cb));
+        let (gx, gy2) = g.residual_add_backward(&da, &db, &dg).unwrap();
+        let (cx, cy) = c.residual_add_backward(&ha, &hb, &hg).unwrap();
+        close_vec(&format!("add' x {n}"), &back(&gx), &want(cx));
+        close_vec(&format!("add' y {n}"), &back(&gy2), &want(cy));
     }
     // Rows: dim 4 packs 64 rows per workgroup, dim 256 one.
     for (rows, dim) in [(130usize, 4usize), (129, 4), (3, 256), (4, 256), (2, 256)] {

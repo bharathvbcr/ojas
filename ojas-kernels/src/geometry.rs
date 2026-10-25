@@ -163,6 +163,7 @@ pub const KERNEL_GRIDS: &[(&str, GridKind)] = &[
     ("mul_fwd", GridKind::Folded("lane i >= word 0 (elements)")),
     ("mul_bwd", GridKind::Folded("lane i >= word 0 (elements)")),
     ("add_fwd", GridKind::Folded("lane i >= word 0 (elements)")),
+    ("add_bwd", GridKind::Folded("lane i >= word 0 (elements)")),
     (
         "add_inplace",
         GridKind::Folded("lane i >= word 0 (elements)"),

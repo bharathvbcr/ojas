@@ -78,7 +78,7 @@ use ojas_core::{
     refuse_bf16_table, require_ns5, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    sdpa_scale, silu_backward_dims, silu_forward_dims, topk_rows_dims,
+    scale_grad_dims, sdpa_scale, silu_backward_dims, silu_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
     BackendId, Budget, CeChunk, CeGrads, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics,
     OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
@@ -101,7 +101,7 @@ pub const WGPU_TOPK_MAX_K: usize = 1024;
 /// One fault bit per op, by index. The fault words hold a 64-bit mask
 /// ([`FAULT_OPS`]); `OP_NAMES` may grow to that many, and the build refuses
 /// more.
-const OP_NAMES: [&str; 37] = [
+const OP_NAMES: [&str; 38] = [
     "embedding_forward",
     "embedding_backward",
     "linear_forward",
@@ -139,6 +139,7 @@ const OP_NAMES: [&str; 37] = [
     "topk_rows",
     "to_bf16",
     "to_f32",
+    "scale_grad",
 ];
 
 const _: () = assert!(
@@ -196,6 +197,7 @@ const ARGMAX: Op = Op(33);
 const TOPK: Op = Op(34);
 const TO_BF16: Op = Op(35);
 const TO_F32: Op = Op(36);
+const SCALE: Op = Op(37);
 
 const fn k(module: WgslModule, entry: &'static str, slots: &'static [Slot]) -> Kernel {
     Kernel {
@@ -227,7 +229,9 @@ const SILU_BWD: Kernel = k(Pointwise, "silu_bwd", &[R(2), R(3), W(6)]);
 const MUL_FWD: Kernel = k(Pointwise, "mul_fwd", &[R(2), R(3), W(6)]);
 const MUL_BWD: Kernel = k(Pointwise, "mul_bwd", &[R(2), R(3), R(4), W(6), W(7)]);
 const ADD_FWD: Kernel = k(Pointwise, "add_fwd", &[R(2), R(3), W(6)]);
+const ADD_BWD: Kernel = k(Pointwise, "add_bwd", &[R(2), R(3), R(4), W(6), W(7)]);
 const ADD_INPLACE: Kernel = k(Pointwise, "add_inplace", &[R(2), W(6)]);
+const SCALE_K: Kernel = k(Pointwise, "scale", &[R(2), W(6)]);
 const CHECK_FINITE: Kernel = k(Pointwise, "check_finite", &[R(2)]);
 const VR_FWD: Kernel = k(Pointwise, "vr_fwd", &[R(2), R(3), R(4), W(6)]);
 const VR_BWD: Kernel = k(Pointwise, "vr_bwd", &[R(2), R(4), W(6), W(7)]);
@@ -1119,6 +1123,9 @@ impl WgpuBackend {
                 Some(&next) => next as usize,
                 None => total,
             };
+            // The gradient slots are read-only, so a short group repeats its
+            // first gradient in the unused ones and charges nothing beyond
+            // `norm_scratch`.
             let mut bufs: Vec<&dyn Binding> = vec![&partial as &dyn Binding, &table, status];
             for slot in 0..k {
                 bufs.push(group.get(slot).unwrap_or(&group[0]).0);
@@ -1140,6 +1147,58 @@ impl WgpuBackend {
             &[&partial, status],
             (1, 1, 1),
         )
+    }
+
+    /// Every buffer of `raws` (element counts `sizes`) times `scale` in
+    /// place: `ceil(len / k)` dispatches of `scale_multi`, each binding `k`
+    /// buffers read-write ([`Self::clip_slots`]). A non-finite product
+    /// raises `op`'s fault.
+    fn scale_multi(
+        &self,
+        op: Op,
+        raws: &[wgpu::Buffer],
+        sizes: &[usize],
+        scale: f32,
+    ) -> Result<(), OjasError> {
+        let k = self.clip_slots()?;
+        let (tbl, chunks) = self.clip_table(op, sizes)?;
+        self.groups(chunks)?;
+        let mut job = self.job(op);
+        let table = job.upload_u32(&tbl)?;
+        for (g, group) in raws.chunks(k).enumerate() {
+            let t0 = g * k;
+            let first = tbl[2 * t0 + 1] as usize;
+            let end = match tbl.get(2 * (t0 + group.len()) + 1) {
+                Some(&next) => next as usize,
+                None => chunks,
+            };
+            // A short last group gets the module with exactly its count of
+            // read-write slots, so no slot is left to fill with a repeat of
+            // a gradient (one buffer bound writable twice, which stricter
+            // WebGPU implementations refuse) or with an uncharged spare.
+            let kernel = Kernel {
+                module: WgslModule::Clip(u(op, group.len())?),
+                entry: "scale_multi",
+                slots: &CLIP_SCALE_SLOTS[..1 + group.len()],
+            };
+            let mut bufs: Vec<&dyn Binding> = vec![&table as &dyn Binding];
+            for b in group {
+                bufs.push(b);
+            }
+            job.dispatch(
+                &kernel,
+                &[
+                    u(op, t0)?,
+                    u(op, group.len())?,
+                    u(op, first)?,
+                    scale.to_bits(),
+                    u(op, end)?,
+                ],
+                &bufs,
+                self.groups(end - first)?,
+            )?;
+        }
+        job.commit()
     }
 
     /// One elementwise `y = s0 * x0 + s1 * x1` over `n` values.
@@ -2383,8 +2442,9 @@ impl Backend for WgpuBackend {
         out.pop().ok_or_else(|| shape(op, "no output"))
     }
 
-    /// Two fresh copies of `grad_output`, so each can be clipped in place.
-    /// `x` and `y` are only scanned for non-finite values, as the CPU does.
+    /// Two fresh copies of `grad_output`, so each can be clipped in place,
+    /// written by one kernel that also scans `x` and `y` for non-finite
+    /// values, as the CPU does.
     fn residual_add_backward(
         &self,
         x: &Tensor,
@@ -2392,24 +2452,13 @@ impl Backend for WgpuBackend {
         grad_output: &Tensor,
     ) -> Result<(Tensor, Tensor), OjasError> {
         let op = ADD_B;
-        let n = residual_add_backward_dims(x, y, grad_output)?;
+        residual_add_backward_dims(x, y, grad_output)?;
         let xv = self.placed(op, x)?;
         let yv = self.placed(op, y)?;
         let gy = self.placed(op, grad_output)?;
-        self.lanes(n)?;
-        let (gx, gxb) = self.out(op, xv.shape())?;
-        let (gyy, gyb) = self.out(op, yv.shape())?;
-        let mut job = self.job(op);
-        let xb = bind(op, &mut job, &xv)?;
-        let yb = bind(op, &mut job, &yv)?;
-        let gb = bind(op, &mut job, &gy)?;
-        self.check_finite(op, &mut job, &xb, n)?;
-        self.check_finite(op, &mut job, &yb, n)?;
-        self.check_finite(op, &mut job, &gb, n)?;
-        let bytes = (n as u64) * 4;
-        job.copy(&gb, 0, &gxb, bytes);
-        job.copy(&gb, 0, &gyb, bytes);
-        job.commit()?;
+        let mut out = self.pointwise(op, &ADD_BWD, &[&xv, &yv, &gy], 2, &[])?;
+        let gyy = out.pop().ok_or_else(|| shape(op, "no output"))?;
+        let gx = out.pop().ok_or_else(|| shape(op, "no output"))?;
         Ok((gx, gyy))
     }
 
@@ -2516,7 +2565,6 @@ impl Backend for WgpuBackend {
         let (_, chunks) = self.clip_table(op, &sizes)?;
         self.groups(chunks)?;
         self.fits(op, 2 * chunks)?;
-        let k = self.clip_slots()?;
         // The status words are read in a later submission. Job scratch goes
         // back to the pool at the next submit by any thread, where another
         // caller could take and overwrite it before that read; a tensor's
@@ -2557,41 +2605,33 @@ impl Backend for WgpuBackend {
             for g in grads.iter_mut() {
                 raws.push(exclusive(op, g)?);
             }
-            let (tbl, _) = self.clip_table(op, &sizes)?;
-            let mut job = self.job(op);
-            let table = job.upload_u32(&tbl)?;
-            let kernel = Kernel {
-                module: WgslModule::Clip(k as u32),
-                entry: "scale_multi",
-                slots: &CLIP_SCALE_SLOTS[..1 + k],
-            };
-            for (g, group) in raws.chunks(k).enumerate() {
-                let t0 = g * k;
-                let first = tbl[2 * t0 + 1] as usize;
-                let end = match tbl.get(2 * (t0 + group.len()) + 1) {
-                    Some(&next) => next as usize,
-                    None => chunks,
-                };
-                let mut bufs: Vec<&dyn Binding> = vec![&table as &dyn Binding];
-                for slot in 0..k {
-                    bufs.push(group.get(slot).unwrap_or(&group[0]));
-                }
-                job.dispatch(
-                    &kernel,
-                    &[
-                        u(op, t0)?,
-                        u(op, group.len())?,
-                        u(op, first)?,
-                        scale.to_bits(),
-                        u(op, end)?,
-                    ],
-                    &bufs,
-                    self.groups(end - first)?,
-                )?;
-            }
-            job.commit()?;
+            self.scale_multi(op, &raws, &sizes, scale)?;
         }
         Ok(norm)
+    }
+
+    /// In place on the device when `grad` solely owns its buffer from byte
+    /// 0; a shared `grad` (or a view further in) is replaced by the product,
+    /// as the trait default does, and the buffer it shared is not written.
+    /// A non-finite product surfaces as `NonFinite` naming `scale_grad` at
+    /// the next sync point.
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        let op = SCALE;
+        if !scale.is_finite() {
+            return Err(OjasError::NonFinite { op: op.name() });
+        }
+        let n = scale_grad_dims(grad)?;
+        self.placed(op, grad)?;
+        if grad.byte_offset() == 0 && grad.device_buffer_mut().is_ok() {
+            let raw = exclusive(op, grad)?;
+            return self.scale_multi(op, &[raw], &[n], scale);
+        }
+        let mut out = {
+            let gv = self.placed(op, grad)?;
+            self.pointwise(op, &SCALE_K, &[&gv], 1, &[scale.to_bits()])?
+        };
+        *grad = out.pop().ok_or_else(|| shape(op, "no output"))?;
+        Ok(())
     }
 
     fn optimizer_scratch_bytes(
