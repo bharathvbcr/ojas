@@ -511,19 +511,6 @@ fn exclusive(op: Op, t: &mut Tensor) -> Result<wgpu::Buffer, OjasError> {
     Ok(buf.raw()?.clone())
 }
 
-/// A one-word buffer for the unused slots of a multi-tensor dispatch's last
-/// group, when `len` tensors do not fill whole groups of `k`. The kernels
-/// never touch a slot past the group's count; binding a buffer of its own
-/// there, not a repeat of a gradient, keeps one buffer from being bound
-/// writable more than once in a dispatch, which WebGPU does not allow.
-fn spare_slot(job: &mut Job<'_>, len: usize, k: usize) -> Result<Option<wgpu::Buffer>, OjasError> {
-    if len % k == 0 {
-        Ok(None)
-    } else {
-        job.scratch(4).map(Some)
-    }
-}
-
 /// Lanes per RMSNorm row: the row length rounded up to a power of two, at
 /// most 256, so `256 / width` rows share a workgroup (see `norm.wgsl`).
 fn rms_width(dim: usize) -> usize {
@@ -1123,7 +1110,6 @@ impl WgpuBackend {
         self.fits(op, pairs)?;
         let partial = job.scratch((pairs as u64) * 4)?;
         let table = job.upload_u32(&tbl)?;
-        let spare = spare_slot(job, parts.len(), k)?;
         job.clear(status);
         let kernel = Kernel {
             module,
@@ -1137,15 +1123,12 @@ impl WgpuBackend {
                 Some(&next) => next as usize,
                 None => total,
             };
+            // The gradient slots are read-only, so a short group repeats its
+            // first gradient in the unused ones and charges nothing beyond
+            // `norm_scratch`.
             let mut bufs: Vec<&dyn Binding> = vec![&partial as &dyn Binding, &table, status];
             for slot in 0..k {
-                bufs.push(match (group.get(slot), &spare) {
-                    (Some(&(b, _)), _) => b,
-                    (None, Some(s)) => s,
-                    (None, None) => {
-                        return Err(shape(op, "no spare buffer for a short slot group"))
-                    }
-                });
+                bufs.push(group.get(slot).unwrap_or(&group[0]).0);
             }
             job.dispatch(
                 &kernel,
@@ -1182,12 +1165,6 @@ impl WgpuBackend {
         self.groups(chunks)?;
         let mut job = self.job(op);
         let table = job.upload_u32(&tbl)?;
-        let spare = spare_slot(&mut job, raws.len(), k)?;
-        let kernel = Kernel {
-            module: WgslModule::Clip(k as u32),
-            entry: "scale_multi",
-            slots: &CLIP_SCALE_SLOTS[..1 + k],
-        };
         for (g, group) in raws.chunks(k).enumerate() {
             let t0 = g * k;
             let first = tbl[2 * t0 + 1] as usize;
@@ -1195,15 +1172,18 @@ impl WgpuBackend {
                 Some(&next) => next as usize,
                 None => chunks,
             };
+            // A short last group gets the module with exactly its count of
+            // read-write slots, so no slot is left to fill with a repeat of
+            // a gradient (one buffer bound writable twice, which stricter
+            // WebGPU implementations refuse) or with an uncharged spare.
+            let kernel = Kernel {
+                module: WgslModule::Clip(u(op, group.len())?),
+                entry: "scale_multi",
+                slots: &CLIP_SCALE_SLOTS[..1 + group.len()],
+            };
             let mut bufs: Vec<&dyn Binding> = vec![&table as &dyn Binding];
-            for slot in 0..k {
-                bufs.push(match (group.get(slot), &spare) {
-                    (Some(b), _) => b,
-                    (None, Some(s)) => s,
-                    (None, None) => {
-                        return Err(shape(op, "no spare buffer for a short slot group"))
-                    }
-                });
+            for b in group {
+                bufs.push(b);
             }
             job.dispatch(
                 &kernel,

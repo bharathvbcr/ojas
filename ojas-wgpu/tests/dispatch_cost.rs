@@ -40,6 +40,51 @@ fn a_steady_dispatch_creates_nothing_and_pops_no_error_scope() {
     assert_eq!(d(|s| s.pool_hits), N);
 }
 
+/// An upload is one fresh mapped-at-creation buffer under one blocking
+/// out-of-memory scope pop, with or without work recorded, and no dispatch.
+/// It does not take a pooled buffer: a queue write lands before recorded
+/// work that may still read that buffer's old contents. The cost is
+/// accepted (`docs/reports/BUILD_REPORT-4b.md`): a trainer step uploads its
+/// ids and targets, two per micro-batch.
+#[test]
+fn an_upload_is_one_fresh_buffer_and_one_scope_pop() {
+    let g = fresh();
+    let x = g.upload(&host(1, &[4096])).unwrap();
+    for _ in 0..3 {
+        drop(g.silu_forward(&x).unwrap());
+        g.sync().unwrap();
+    }
+    let ids: Vec<u32> = (0..4096u32)
+        .map(|i| i.wrapping_mul(2_654_435_761))
+        .collect();
+    let t = Tensor::from_u32(&ids, &[ids.len()], host_budget()).unwrap();
+    for recorded in [false, true] {
+        let pending = recorded.then(|| g.silu_forward(&x).unwrap());
+        const N: u64 = 8;
+        let before = g.context().stats();
+        let ups: Vec<Tensor> = (0..N).map(|_| g.upload(&t).unwrap()).collect();
+        let after = g.context().stats();
+        let d = |f: fn(&ojas_wgpu::CacheStats) -> u64| f(&after) - f(&before);
+        assert_eq!(d(|s| s.uploads), N, "recorded {recorded}");
+        assert_eq!(
+            d(|s| s.scope_pops),
+            N,
+            "recorded {recorded}: {before:?} -> {after:?}"
+        );
+        assert_eq!(d(|s| s.pool_hits), 0, "recorded {recorded}");
+        assert_eq!(d(|s| s.dispatches), 0, "recorded {recorded}");
+        drop(pending);
+        for u in &ups {
+            let back = g.download(u).unwrap();
+            assert_eq!(
+                back.u32_slice().unwrap(),
+                ids.as_slice(),
+                "recorded {recorded}"
+            );
+        }
+    }
+}
+
 #[test]
 fn offset_views_bind_in_place_when_the_device_allows_it() {
     // A fused projection's q, k and v as three row blocks of one buffer.
@@ -228,10 +273,9 @@ fn scale_grad_of_a_sole_owner_is_in_place_and_charges_no_transient() {
     g.sync().unwrap();
     let after = g.context().stats();
     let took = g.budget().peak_bytes() - live;
-    assert!(
-        took < bytes / 8,
-        "peak rose {took} B over a {bytes} B gradient"
-    );
+    // The slot table alone: two words for the one tensor. No copy of the
+    // gradient, and nothing for unused slots (the dispatch binds exactly one).
+    assert_eq!(took, 8, "peak rose {took} B over a {bytes} B gradient");
     assert_eq!(after.dispatches - before.dispatches, 1);
     let want: Vec<f32> = x.to_f32_vec().unwrap().iter().map(|v| v * 0.25).collect();
     assert_eq!(g.download(&grad).unwrap().to_f32_vec().unwrap(), want);
@@ -281,6 +325,30 @@ fn scale_grad_of_a_shared_gradient_replaces_it_and_leaves_the_other_handle() {
         g.download(&keep).unwrap().to_f32_vec().unwrap(),
         x.to_f32_vec().unwrap()
     );
+}
+
+/// A gradient that solely owns its buffer but starts past byte 0 cannot be
+/// scaled in place (the multi-tensor kernel binds whole buffers), so it is
+/// replaced by the product at byte 0; the rows before it are not written.
+#[test]
+fn scale_grad_of_a_sole_owner_at_an_offset_replaces_it() {
+    let g = fresh();
+    let (rows, cols) = (4usize, 1000usize);
+    let x = host(23, &[rows, cols]);
+    let tall = g.upload(&x).unwrap();
+    let mut grad = tall
+        .narrow(cols * 4, &[rows - 1, cols], &[cols, 1])
+        .unwrap();
+    drop(tall);
+    assert!(
+        grad.device_buffer_mut().is_ok(),
+        "the view is the sole owner"
+    );
+    g.scale_grad(&mut grad, 3.0).unwrap();
+    assert_eq!(grad.byte_offset(), 0);
+    let all = x.to_f32_vec().unwrap();
+    let want: Vec<f32> = all[cols..].iter().map(|v| v * 3.0).collect();
+    assert_eq!(g.download(&grad).unwrap().to_f32_vec().unwrap(), want);
 }
 
 /// Values near f32's top: the squares overflow, the norm does not. Every

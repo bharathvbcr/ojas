@@ -19,7 +19,9 @@
 //! `adam_check`, `muon_*`, `topk_rows` and `scale_multi`. Their guards are
 //! held by the static audit, `ojas_kernels::KERNEL_GRIDS`, whose unit test
 //! fails on a kernel that is missing or whose guard follows a buffer access
-//! (it went red for every removal above).
+//! (it went red for every removal above). `add_bwd` and `scale`, dispatched
+//! since that audit (ft-2c183b71), have not been through the removal run;
+//! the static audit and the capped cases here hold their guards.
 //!
 //! Kernels with no capped run:
 //! - `col_finish`: one lane per column, `ceil(cols / 256)` groups, the same
@@ -519,7 +521,13 @@ fn scale_grad_leaves_spare_workgroups_inert() {
         c.scale_grad(&mut w, 0.375).unwrap();
         w.to_f32_vec().unwrap()
     };
-    for n in LANES.iter().copied().chain([4096 + 1, 3 * 4096 + 5]) {
+    // In place, one workgroup per 4,096-value chunk: three chunks give the
+    // (2, 2) grid with a spare.
+    for n in LANES
+        .iter()
+        .copied()
+        .chain([4096 + 1, 2 * 4096 + 1, 3 * 4096 + 5])
+    {
         let x = host(151, &[n]);
         let mut sole = exact(&g, &x);
         g.scale_grad(&mut sole, 0.375).unwrap();
