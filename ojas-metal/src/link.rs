@@ -790,6 +790,7 @@ pub(crate) struct Link {
 }
 
 /// What the device thread reports once its runtime is up.
+#[derive(Debug)]
 pub(crate) struct DeviceInfo {
     pub(crate) name: String,
     /// The device runs tessl's cooperative TensorOps kernels.
