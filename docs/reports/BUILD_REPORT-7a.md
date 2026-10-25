@@ -233,7 +233,30 @@ Every adversarial finding fits an existing card:
 ## Cards pending filing (GitPulse blocked, 2026-10-24)
 
 Fable ruled that the wrap-up is done with a named gap: these items are not on the board until GitPulse reads
-schema 10.
+schema 10. On 2026-10-25 Fable ruled to close out without waiting for the peers' verification. Both peer branches
+stay unmerged, with their worktrees intact and their queued verify jobs left running.
+
+**Owner actions, in order:**
+
+1. **Free the cargo slots.** Both slots in `~/.cache/cargo-slots` have been held since at least 18:18Z on 2026-10-24
+   (still held at 00:34Z on the 25th) by a process the gate would not let ojas-7a identify. Run
+   `lsof ~/.cache/cargo-slots/slot1 ~/.cache/cargo-slots/slot2`. Card 3 below.
+2. **Rebuild GitPulse** for schema 10 with the commands below. Card 4 below.
+3. **File the cards:** `backups/gp/wrap5.json` and `backups/gp/wrap6.json` through `backups/gp/mkreq.sh`, plus the
+   two card notes below.
+4. **Merge each peer branch only after its verify job is green:**
+
+   ```sh
+   git merge --no-ff gitpulse/route-ojas-metal-fast-autocast-to-tessl-6223aeac   # 95c4bb3, ft-e15ee76a
+   git worktree remove .gitpulse/worktrees/route-ojas-metal-fast-autocast-to-tessl-6223aeac
+   git branch -d gitpulse/route-ojas-metal-fast-autocast-to-tessl-6223aeac
+   git merge --no-ff gp/4b-gpu-step   # def246a, ft-2c183b71; the Cargo.toml member drop is uncommitted and stays out
+   ```
+
+   Remove `backups/x/wt-4b` only after you discard or restore its local `Cargo.toml` edit.
+5. **The five unclaimed edits in the main checkout:** `README.md`, `docs/status.md`, `site/index.html`,
+   `docs/reports/BUILD_REPORT-a6.md` and `tools/a6/README.md`. They are untouched and not from ojas-7a; see
+   ft-6d69dd5b.
 
 **Owner commands** (from a session rooted in `/Users/bharath/Code/devtools/GitPulse`; script names from its
 `package.json`):
@@ -262,6 +285,20 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
    worktree `backups/x/wt-4b` has a local `Cargo.toml` edit that drops the `ojas-capi` and `ojas-gusset-engine`
    members, which must never merge. Merge only after ojas-4b reports green. Log this on ft-2c183b71 rather than as
    a new card.
+3. **Cargo-slot starvation** (new card, P1, `backups/gp/wrap6.json` entry 1). Both slots have been held for more
+   than 6 hours by an unidentified holder, so every verify job in this repo starves. The card asks for the holder
+   to be identified and released, and for mac_heavy to bound how long a slot can be held.
+4. **GitPulse reader at schema 9** (new card, P1, `backups/gp/wrap6.json` entry 2). It needs the rebuild above,
+   confirmed by `mcp:doctor` and `check:schema-parity`.
+5. **ft-e15ee76a: the autocast branch is at `95c4bb3` and unverified.** That is 4 commits on `42d5a9f`: `5aa04db`,
+   `bc19d9a`, `0a8f76a` and `95c4bb3`. Log this on ft-e15ee76a.
+   - In its verify job, `STEPS.txt` shows `core-lib exit=142`, a slot timeout before any test ran. `model-lib` was
+     still waiting at 00:34Z. Logs are in
+     `.gitpulse/worktrees/route-…-6223aeac/backups/e15-tools/logs/verify1/`.
+   - **Open:** `tests/autocast_lane.rs` asserts +2 dispatches per bf16 GEMM, a figure inferred from tessl source
+     and not yet seen in a run. The CPU Muon bf16 A/B (`backups/e15-tools/jobs/muonab.sh`) has not run, so
+     `0a8f76a`'s speed claim is unmeasured. Only its bit-identity is pinned, by `ojas_cpu_parity`.
+   - The card goes to review, not done; the Manvi verify step is the owner's.
 
 ## Left behind
 
