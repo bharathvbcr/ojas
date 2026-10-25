@@ -80,16 +80,20 @@ Up to PyTorch 2.14, MPS ran `clip_grad_norm_` (`linalg.vector_norm`) on a single
 | **2.15.0.dev20261004** | 8.36 ms | 8.54 ms | 8.45 ms | 7.90 ms |
 
 - The nightly is ~16× faster than 2.14.1 on this reduction.
-- **Current Metal: 7.45 ms median (min 6.49)**, about 1.13× the 2.15
-  nightly's 8.45 ms, unpaired (different days; the torch side was not re-run
-  next to it). Source: the 2026-10-17 interleaved A/B
+- **Last measured Metal: 7.45 ms median (min 6.49)**, from the 2026-10-17
+  interleaved A/B
   ([`bench/results/2026-10-17-clip-sqnorm-ab`](../bench/results/2026-10-17-clip-sqnorm-ab/README.md),
-  7 rounds, load 46–50), whose `sq_norm` binary is what main runs; the
-  `ojas_norm_multi` kernel it replaced measured 7.07 ms (min 6.60), within
-  that run's noise.
-- **How:** one command for any number of gradients. The norm is tessl's
-  `SqNormPlan` (two kernels in one binder scope, `Worker::clip_norm` in
-  `ojas-metal/src/device.rs`) and the scale goes 24 gradients per
+  7 rounds, load 46–50) of ojas `6426c5d` with tessl `1b900ec` plus the
+  `sq_norm` branch; the `ojas_norm_multi` kernel it replaced measured 7.07 ms
+  (min 6.60), within that run's noise. Only that README's summary table is
+  committed; its `out/*.jsonl` rows are not. Against the nightly's 8.45 ms
+  this points to ojas being somewhat faster on this row, but the two were
+  measured on different days under different load, so no ratio is quoted
+  until the paired run in `tasks/gp-clip-paired-torch215-norm-only-and-bw-ceiling.md`.
+- **How:** the norm is one GPU command for any number of gradients: tessl's
+  `SqNormPlan`, two kernels in one binder scope (`Worker::clip_norm` in
+  `ojas-metal/src/device.rs`). The host reads the norm back and computes the
+  scale with `clip_scale`, then a second command scales 24 gradients per
   `ojas_scale_multi` dispatch. `ojas-metal/tests/clip_multi.rs` pins the
   counts on 170 gradients.
 - **What the row now costs:** the norm reads the 123.7M gradients once and
