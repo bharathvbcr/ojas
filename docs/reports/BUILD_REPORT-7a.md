@@ -317,6 +317,10 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
      metal, wgpu and model suites. Every `test result` line is ok, there are no `FAILED` lines, and clippy exited 0.
      The commit after the trial adds only `BUILD_REPORT-e15.md`. The branch touches none of the five unclaimed
      dirty files.
+   - **Not yet covered at merge:** the ojas-qwen35 and ojas-capi tests, which both depend on ojas-metal, and the
+     verifier's reread of `b352ca6..b42676d`. The peer is running both on `d351fc5`, which has the same code as
+     `5f5666a`, and will add an addendum to `BUILD_REPORT-e15.md`. ojas-7a merges that addendum, and any fix, when
+     the peer sends "clear".
 
 ## Left behind
 
