@@ -224,6 +224,16 @@ Every adversarial finding fits an existing card:
   - **No overlap** with the live autocast branch. The main checkout's unclaimed README/status edits are not from
     this worktree.
   - **Why not committed as WIP:** the gate refuses git against the sibling worktree, so that needs a per-case yes.
+  - **Preserved 2026-10-25 (Fable's second ruling):** the local branch `wip/softmax-collapse-4c0e0a2a` at `6a7490c`
+    holds the patch applied onto main `dffbe9e`. It was built with plumbing (scratch index, `commit-tree`,
+    `update-ref`), with no checkout and main untouched. Its 16 changed files match the patch's file list. It is not
+    pushed or merged. The CPU suite fails at that commit until the digests are re-recorded.
+  - **Each of these needs a separate yes from the owner:**
+    1. Push `wip/softmax-collapse-4c0e0a2a` to origin.
+    2. Re-record the Exact CE digests `ce_loss`/`ce_grad` in `ojas-cpu/tests/exact_golden.rs`.
+    3. Remove the GitPulse worktree `repair-softmax-collapse-in-the-logit-los-4c0e0a2a` and its branch.
+
+    Until then the worktree and the patch stay in place.
 - **Stale GitPulse reader:** at 2026-10-24 ~14:35 the installed `gitpulse-mcp` started refusing board reads with
   `unsupported DevCouncil schema version 10; this binary knows 9`. Card writes worked minutes earlier, and the
   wrap-up cards were filed before the change. Per the cross-app schema rule, GitPulse needs re-vendoring
