@@ -321,6 +321,12 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
      verifier's reread of `b352ca6..b42676d`. The peer is running both on `d351fc5`, which has the same code as
      `5f5666a`, and will add an addendum to `BUILD_REPORT-e15.md`. ojas-7a merges that addendum, and any fix, when
      the peer sends "clear".
+   - **Closed 2026-10-25, follow-up merged as `464547a`** (branch head `22e6959`). verify4 ran on `d351fc5`:
+     ojas-qwen35, ojas-capi and their clippy run all exited 0. verify5 ran on the test-only commit `4c1640a`, which
+     adds a TensorOps canary and exact-bit backward checks: `autocast_lane` and ojas-metal clippy exited 0, and the
+     log shows `Apple M5 Pro: has_tensorops true`. ojas-7a read the STEPS files and found no `FAILED` lines. The
+     worktree and branch are removed, and `../tessl` is intact.
+   - **Remaining gap:** `4c1640a`'s two new checks have not run on main combined with the final `gp/4b-gpu-step`.
 
 ## Left behind
 
