@@ -249,18 +249,13 @@ stay unmerged, with their worktrees intact and their queued verify jobs left run
      upgraded to 14 before this request, and this host does not upgrade a shared profile; open the desktop app
      once to upgrade it`. GitPulse.app is still the Oct 17 build, so what remains is to rebuild the app and open
      it once.
-3. **File the cards:** `backups/gp/wrap5.json` and `backups/gp/wrap6.json` through `backups/gp/mkreq.sh`, plus the
+3. **File the cards:** `backups/gp/wrap5.json`, `backups/gp/wrap6.json` and `backups/gp/wrap-4b.json` through `backups/gp/mkreq.sh`, plus the
    ft-2c183b71 note below and the seven ft-e15ee76a card drafts in `docs/reports/BUILD_REPORT-e15.cards.json`.
 4. **Peer branches:**
    - The autocast branch (ft-e15ee76a) is **merged**: main `5f5666a`, a `--no-ff` merge of `d351fc5`. Its
      worktree and branch are removed once its session confirms it no longer needs them.
-   - `gp/4b-gpu-step` (ft-2c183b71) merges only after ojas-4b reports green:
-
-     ```sh
-     git merge --no-ff gp/4b-gpu-step   # the Cargo.toml member drop is uncommitted and stays out
-     ```
-
-     Remove `backups/x/wt-4b` only after you discard or restore its local `Cargo.toml` edit.
+   - `gp/4b-gpu-step` (ft-2c183b71) is **merged**: main `8ae6014`, a `--no-ff` merge of `5d784ca`. The site page
+     is regenerated in `7bd6a49`. See card note 2.
 5. **The five unclaimed edits in the main checkout:** `README.md`, `docs/status.md`, `site/index.html`,
    `docs/reports/BUILD_REPORT-a6.md` and `tools/a6/README.md`. They are untouched and not from ojas-7a; see
    ft-6d69dd5b.
@@ -286,12 +281,30 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
    [{"name":"gitpulse_add_task","arguments":{"repo_path":"/Users/bharath/Code/research/ojas","title":"Orphaned target-excluded cross-entropy rewrite (softmax collapse past the f32 cliff): owner decision, then verify and land","priority":2,"severity":"medium","labels":["numerics"],"description":"Found at ojas-7a wrap-up (2026-10-24). Worktree .gitpulse/worktrees/repair-softmax-collapse-in-the-logit-los-4c0e0a2a (branch gitpulse/repair-softmax-collapse-in-the-logit-los-4c0e0a2a at 42d5a9f, no commits, no live session) holds an uncommitted, unverified rewrite of cross-entropy to the target-excluded form loss = ln(1 + sum_{j!=t} exp(z_j - z_t)) on CPU, Metal, wgpu and CUDA, with tests on every backend (new ojas-cpu/tests/softmax_collapse.rs). Past the f32 cliff (margin >~ 16.6) the old p - 1 target gradient rounds to 0 and the row stops summing to zero. Saved as backups/7a-tools/softmax-collapse-4c0e0a2a-vs-42d5a9f.patch (16 files, sha256 a09f082fb1e797287403d3e85fb10a575a4a77a73967631826df5805dc43e88c; git apply -p3 --check passes on main). Fable: preserve, do not merge without the owner. Details: docs/reports/BUILD_REPORT-7a.md.","acceptance_criteria":["Owner decides the Exact CE contract change (it moves ojas-cpu/tests/exact_golden.rs:271-272 ce_loss/ce_grad digests and retires the 'as tessl does' claim in ojas-cuda/src/ce_rows.rs)","If yes: the patch committed on its own branch, the digests re-recorded with the decision cited, CPU/Metal/wgpu/CUDA-host tests green","CPU Fast-path CE A/B (bench_ops.rs::ce_case) shows no regression over 5% from the per-lane skip compare in exp_sub_sum/exp_sub_store/row_max, or the loops are restructured","The worktree and branch removed after the patch lands or is discarded"]}}]
    ```
 
-2. **ft-2c183b71: `gp/4b-gpu-step` is at `def246a` and unverified.** That is one commit on `42d5a9f`: 8 files,
-   +305/-57, across ojas-wgpu, ojas-kernels and ojas-core. The ojas-4b session's verify job is queued on the
-   cargo slots, and its pre-fix red run timed out before it ran. Bench and profile criteria are still owed. Its
-   worktree `backups/x/wt-4b` has a local `Cargo.toml` edit that drops the `ojas-capi` and `ojas-gusset-engine`
-   members, which must never merge. Merge only after ojas-4b reports green. Log this on ft-2c183b71 rather than as
-   a new card.
+2. **ft-2c183b71: `gp/4b-gpu-step` is merged as `8ae6014`** (branch head `5d784ca`, 7 commits on `42d5a9f`: two
+   wgpu, two Metal, three report). Log this on ft-2c183b71, and set it to review, not done. The details are in the
+   peer's `docs/reports/BUILD_REPORT-4b.md`.
+   - **Evidence:** verify9 ran on a detached merge of the tested code `740df7a` with main `216f3ed`: metal 294
+     passed, model 24, core 155, kernels 18 and wgpu 205, with 0 failed, and clippy on six crates with
+     `-D warnings` exited 0. verify10 ran on a merge with `6bfa82e`: `autocast_lane` 4/4, including the TensorOps
+     canary. That closes the gap left by ft-e15ee76a's `4c1640a`.
+     - `5d784ca` differs from `740df7a` only in its report, and `216f3ed..6bfa82e` changes only `autocast_lane.rs`
+       and reports.
+     - ojas-7a read both runs' `STEPS.txt` (every stage exited 0, no `FAILED` lines) and confirmed the merge tree is
+       `7032997`, the tree the peer's merge-tree predicted.
+     - Pre-fix red runs on `42d5a9f` are in `backups/4b-tools/logs/verify{3,6,8}/`.
+   - **Site:** `scripts/sitegen` ran in a clean worktree of `8ae6014`, because the checkout's unclaimed `README.md`
+     and `docs/status.md` edits would otherwise leak into `readme.html` and `status.html`. Only
+     `site/reference/metal-deferred-faults.html` was stale, and it is committed as `7bd6a49`.
+   - **Not covered:** ojas-cpu's tests on the combined tree (only clippy ran; this branch changes no ojas-cpu
+     file) and a build of `go/api.go`.
+     - `adversarial_oom::partial_allocations_are_released_after_the_final_refusal` passes only when run
+       single-threaded, as its own doc says.
+     - Bench and profile criteria are still owed.
+   - **Cards:** eight drafts are in `backups/gp/wrap-4b.json`. They cover benches, the crit 3 decision, the crit 20
+     follow-up, crits 13 and 14, the crit 19 sign-off, the Metal inline host copy, and `clip_scale` with `f32::MAX`.
+   - The worktree `backups/x/wt-4b` holds an uncommitted `Cargo.toml` member drop that was never merged. It is
+     removed, along with the branch, once ojas-4b confirms it no longer needs it.
 3. **Cargo-slot starvation** (new card, P1, `backups/gp/wrap6.json` entry 1). Both slots have been held for more
    than 6 hours by an unidentified holder, so every verify job in this repo starves. The card asks for the holder
    to be identified and released, and for mac_heavy to bound how long a slot can be held.
