@@ -34,6 +34,23 @@ fn counted<T>(m: &MetalBackend, op: impl FnOnce() -> Result<T, OjasError>) -> (T
     (out, m.dispatches() - before)
 }
 
+/// The lane tests below branch on `has_tensorops`, so a flag that read false
+/// by mistake would pass them on the exact lane alone. tessl sets it when its
+/// library holds `matmul2d_tensorops_f32`; the M5 Pro these tests were
+/// written on has it, so an Apple M5 that reports none is a broken build.
+#[test]
+fn an_apple_m5_reports_tensorops() {
+    let m = metal();
+    eprintln!("{}: has_tensorops {}", m.device_name(), m.has_tensorops());
+    if m.device_name().starts_with("Apple M5") {
+        assert!(
+            m.has_tensorops(),
+            "{} reports no TensorOps: tessl's library lacks matmul2d_tensorops_f32",
+            m.device_name()
+        );
+    }
+}
+
 /// Cast dispatches a GEMM on two bf16-exact operands adds: tessl casts each
 /// f32 operand to bf16 on the bf16 lane, which only a TensorOps device runs.
 fn casts(m: &MetalBackend) -> u64 {
@@ -97,6 +114,10 @@ fn bf16_exact_linear_backward_runs_the_bf16_lane_per_gemm() {
     close("grad_input", &down(&gx), &down(&gx_e), ATOL, RTOL);
     // gW sums over the 256 rows.
     close("grad_weight", &down(&gw), &down(&gw_e), 2.0 * ATOL, RTOL);
+    if !m.has_tensorops() {
+        assert_eq!(bits(&gx), bits(&gx_e), "no TensorOps: the exact lane");
+        assert_eq!(bits(&gw), bits(&gw_e), "no TensorOps: the exact lane");
+    }
 
     // Only gW's pair (gy, x) is bf16-exact: gX keeps the exact lane's bits.
     let ((gx_m, gw_m), mixed_n) = counted(&m, || m.linear_backward(&x, &wp, &gy));
