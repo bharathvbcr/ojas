@@ -8,7 +8,7 @@ These are the scripts session ojas-a6 used to build, verify and land the LoRA-2B
 
 Card **ft-0e1d7ad5** replaces them with a tracked, gate-aware verification harness. Until then, read a script before reusing it.
 
-The tessl commit names in these scripts' comments (`bf091a2`, `a37a0c2`, `41d8866`) predate tessl's 2026-10-18 history rewrite. Their current names are in the table at the top of `docs/reports/BUILD_REPORT-a6.md`.
+The tessl commit names in these scripts' comments (`bf091a2`, `a37a0c2`, `41d8866`) predate tessl's 2026-10-18 history rewrite. Their current names are in the table at the top of `docs/reports/BUILD_REPORT-a6.md`. The old names no longer resolve in tessl since its 2026-10-23 prune.
 
 | Group | Files | What they do |
 |---|---|---|

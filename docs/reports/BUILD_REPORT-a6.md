@@ -19,7 +19,7 @@
 **tessl commit names (note added 2026-10-22):** tessl's history was rewritten on 2026-10-18 (see the run-9 bullet
 below), so the four tessl commits this report cites have new names with identical trees. The report keeps the
 names that were on disk when each run happened. The full map is `docs/history/2026-10-18-scrub-sha-map.tsv` in
-tessl (102 rows). The old names stop resolving once tessl prunes the refs that still reach the pre-scrub history.
+tessl (102 rows). The old names stop resolving once tessl prunes the refs that still reach the pre-scrub history. *Update 2026-10-23: tessl reports that prune done (its `BUILD_REPORT.md`, "History prune (ft-faf24ae5)"), so they no longer resolve.*
 
 | cited here | current tessl name | what it was |
 | :-- | :-- | :-- |

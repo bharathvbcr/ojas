@@ -118,7 +118,7 @@ flowchart TD
         C2["AdamW step counter overflow: next_step checked_add refuses u64::MAX"]
         C3["All-ignored cross-entropy: Zero valid targets returns Err(NonFinite)"]
         C4["AdamW non-finite store: Aborts before touching moment buffers"]
-        C5["Metal head dim limit: Dimensions > 64 produce UnsupportedHeadDim"]
+        C5["Metal head dim limit: Dimensions > 256 produce UnsupportedHeadDim (the tiny training step in gpu.rs keeps 64)"]
         C6["Safetensors parser: Capped 100MB header, max depth 64, no overlaps"]
     end
 ```
