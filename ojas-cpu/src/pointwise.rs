@@ -39,8 +39,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use ojas_core::{
-    bf16_to_f32, exp_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims, Numerics,
-    OjasError, Reservation, Scratch, Tensor,
+    bf16_to_f32, excluded_ce, exp_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims,
+    Numerics, OjasError, Reservation, Scratch, Tensor,
 };
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
@@ -2206,20 +2206,19 @@ fn ce_valid(
 const MAGNITUDE: u32 = 0x7fff_ffff;
 const NON_FINITE: u32 = 0x7f80_0000;
 
-/// Largest value of a row, and whether every value is finite: the scalar
-/// loop under Exact, lane maxima under Fast. Every value is read either
-/// way, so this pass is also the row's NaN scan. Among finite values the
-/// order of comparisons cannot change the maximum.
-fn row_max(row: &[f32], numerics: Numerics) -> (f32, bool) {
-    let value = |v: &f32| *v;
+/// Largest value of a row except index `skip`, and whether every value is
+/// finite, `skip` included: the scalar loop under Exact, lane maxima under
+/// Fast. Every value is read either way, so this pass is also the row's NaN
+/// scan. Among finite values the order of comparisons cannot change the
+/// maximum. An empty other-set leaves the maximum at `-inf`.
+fn row_max(row: &[f32], skip: usize, numerics: Numerics) -> (f32, bool) {
     let bits = |v: &f32| v.to_bits() & MAGNITUDE;
     match numerics {
         Numerics::Exact => {
             let (mut max, mut top) = (f32::NEG_INFINITY, 0u32);
-            for word in row {
-                let v = value(word);
-                if v > max {
-                    max = v;
+            for (i, word) in row.iter().enumerate() {
+                if i != skip && *word > max {
+                    max = *word;
                 }
                 top = top.max(bits(word));
             }
@@ -2229,16 +2228,23 @@ fn row_max(row: &[f32], numerics: Numerics) -> (f32, bool) {
             let (chunks, rest) = row.as_chunks::<LANES>();
             let mut acc = [f32::NEG_INFINITY; LANES];
             let mut top = [0u32; LANES];
-            for chunk in chunks {
-                for ((a, t), word) in acc.iter_mut().zip(top.iter_mut()).zip(chunk) {
-                    *a = a.max(value(word));
+            for (chunk_i, chunk) in chunks.iter().enumerate() {
+                for (lane, ((a, t), word)) in
+                    acc.iter_mut().zip(top.iter_mut()).zip(chunk).enumerate()
+                {
+                    if chunk_i * LANES + lane != skip {
+                        *a = a.max(*word);
+                    }
                     *t = (*t).max(bits(word));
                 }
             }
             let mut max = acc.iter().fold(f32::NEG_INFINITY, |m, &v| m.max(v));
             let mut top = top.iter().fold(0u32, |m, &t| m.max(t));
-            for word in rest {
-                max = max.max(value(word));
+            let base = chunks.len() * LANES;
+            for (k, word) in rest.iter().enumerate() {
+                if base + k != skip {
+                    max = max.max(*word);
+                }
                 top = top.max(bits(word));
             }
             (max, top < NON_FINITE)
@@ -2246,21 +2252,37 @@ fn row_max(row: &[f32], numerics: Numerics) -> (f32, bool) {
     }
 }
 
-/// `sum_j e^(x_j - max)` of one row, each term also written to `store` when
-/// it is given. Exact: [`exp_exact`] and an ascending f32 sum, the reference
-/// order. Fast: [`crate::exp`] in its fixed lane order.
+/// `sum_j e^(x_j - max)` of one row, skipping `skip`, each term also written
+/// to `store` when it is given (the skipped index is stored as 0). Exact:
+/// [`exp_exact`] and an ascending f32 sum, the reference order. Fast:
+/// [`crate::exp`] in its fixed lane order. A non-finite max is an empty
+/// other-set: the sum is 0 and nothing is exponentiated. A non-finite sum
+/// is refused; an empty sum is not.
 fn row_exp_sum(
     op: &'static str,
     row: &[f32],
     max: f32,
     numerics: Numerics,
+    skip: usize,
     store: Option<&mut [f32]>,
 ) -> Result<f32, OjasError> {
+    if !max.is_finite() {
+        if let Some(out) = store {
+            out.fill(0.0);
+        }
+        return Ok(0.0);
+    }
     let sum = match (numerics, store) {
         (Numerics::Exact, store) => {
             let mut sum = 0.0f32;
             let mut store = store;
             for (col, word) in row.iter().enumerate() {
+                if col == skip {
+                    if let Some(out) = store.as_deref_mut() {
+                        out[col] = 0.0;
+                    }
+                    continue;
+                }
                 let e = exp_exact(*word - max);
                 if !e.is_finite() {
                     return Err(nonfinite(op));
@@ -2272,10 +2294,10 @@ fn row_exp_sum(
             }
             sum
         }
-        (Numerics::Fast, Some(out)) => exp_sub_store(row, max, out),
-        (Numerics::Fast, None) => exp_sub_sum(row, max),
+        (Numerics::Fast, Some(out)) => exp_sub_store(row, max, out, Some(skip)),
+        (Numerics::Fast, None) => exp_sub_sum(row, max, Some(skip)),
     };
-    if !(sum.is_finite() && sum > 0.0) {
+    if !sum.is_finite() {
         return Err(nonfinite(op));
     }
     Ok(sum)
@@ -2294,16 +2316,18 @@ pub(crate) struct CeInput<'a> {
 }
 
 impl CeInput<'_> {
-    /// One row's loss term `max + ln(sum) - x[target]`, or `None` for an
-    /// ignored row. With `grad`, the row's `(softmax - onehot) / valid` is
-    /// written into it. Every logit of the row is checked finite, ignored
-    /// rows included.
+    /// One row's loss, `softplus` of the negated margin against the other
+    /// classes, or `None` for an ignored row. With `grad`, the other-class
+    /// gradients are `exp(z - max_other) * scale / valid` and the target is
+    /// their negation, so the row sums to 0 in the working precision. Every
+    /// logit of the row is checked finite, ignored rows included. The target
+    /// is not part of the exponential sum.
     fn row(
         &self,
         op: &'static str,
         numerics: Numerics,
         n: usize,
-        grad: Option<&mut [f32]>,
+        mut grad: Option<&mut [f32]>,
     ) -> Result<Option<f32>, OjasError> {
         let row = self
             .logits
@@ -2317,26 +2341,28 @@ impl CeInput<'_> {
                 Err(nonfinite(op))
             };
         }
-        let (max, finite) = row_max(row, numerics);
+        let class = target as usize;
+        let (max, finite) = row_max(row, class, numerics);
         if !finite {
             return Err(nonfinite(op));
         }
-        let class = target as usize;
         let picked = row[class];
-        let sum = match grad {
-            None => row_exp_sum(op, row, max, numerics, None)?,
-            Some(dst) => {
-                let sum = row_exp_sum(op, row, max, numerics, Some(&mut *dst))?;
-                let denom = self.valid as f32;
-                for slot in dst.iter_mut() {
-                    let p = *slot / sum;
-                    *slot = p / denom;
+        let sum = row_exp_sum(op, row, max, numerics, class, grad.as_deref_mut())?;
+        let ex = excluded_ce(max, sum, picked);
+        if !ex.loss.is_finite() || (grad.is_some() && !ex.scale.is_finite()) {
+            return Err(nonfinite(op));
+        }
+        if let Some(dst) = grad {
+            let scale = ex.scale / self.valid as f32;
+            for (j, slot) in dst.iter_mut().enumerate() {
+                if j == class {
+                    *slot = -sum * scale;
+                } else {
+                    *slot *= scale;
                 }
-                dst[class] -= 1.0 / denom;
-                sum
             }
-        };
-        Ok(Some(max + sum.ln() - picked))
+        }
+        Ok(Some(ex.loss))
     }
 
     /// The mean loss, in fixed blocks of rows on the pool's threads; with
@@ -2417,10 +2443,11 @@ pub(crate) fn ce_input<'a>(
 /// shaped `shape`: `out` holds `rows * vocab` zeroed f32 values. The loss is
 /// formed too and a non-finite loss is refused, as the forward refuses it.
 ///
-/// Every value is `(e / sum) / valid` with `e = e^(x - max)` in `[0, 1]` and
-/// `sum >= 1` (the maximum's own term is exactly 1), minus `1 / valid` at
-/// the target, so the gradient is finite by construction and is not scanned
-/// again.
+/// Each other class is `exp(z - max_other) * scale / valid` with the exp in
+/// `(0, 1]` and `scale` in `(0, 1]`, and the target is the negation of that
+/// row. The sum of the other exponentials is at most the vocabulary, so the
+/// gradient is finite by construction and is not scanned again. A one-class
+/// row (`sum == 0`) is all zeros.
 pub(crate) fn cross_entropy_grad(
     op: &'static str,
     exec: Exec<'_>,

@@ -43,21 +43,72 @@ fn embed_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg:
 fn row_target(row: u32) -> u32 { return u0[row]; }
 fn ignored(tgt: u32) -> bool { return pw(2u) == 1u && tgt == pw(3u); }
 
-fn row_peak(lane: u32, base: u32, vocab: u32) -> f32 {
-    var peak = -3.40282347e+38;
-    for (var c = lane; c < vocab; c = c + 256u) {
-        peak = max(peak, x0[base + c]);
+// Empty-max sentinel. A lane that skips every column keeps this, and
+// tree_max of an empty other-set stays here. It is finite, so a sum of 0
+// is what distinguishes "no other class" from a non-finite logit.
+const CE_EMPTY: f32 = -3.40282347e+38;
+
+fn ce_nan() -> f32 { return bitcast<f32>(0x7fc00000u); }
+
+// softplus(-(max_other - target)). sum == 0 is 0, including when max_other
+// is CE_EMPTY. When 1 + q rounds to 1 the loss is q, not log(1 + q).
+fn ce_loss(max_o: f32, sum_o: f32, target: f32) -> f32 {
+    if (nonfinite(sum_o) || nonfinite(target) || sum_o < 0.0) { return ce_nan(); }
+    if (!(sum_o > 0.0)) { return 0.0; }
+    if (nonfinite(max_o)) { return ce_nan(); }
+    let delta = max_o - target;
+    if (delta <= 0.0) {
+        let q = sum_o * exp(delta);
+        let u = 1.0 + q;
+        if (u == 1.0) { return q; }
+        return log(u) * q / (u - 1.0);
+    }
+    let e = exp(-delta);
+    return delta + log(sum_o + e);
+}
+
+// Unnormalized scale. The target gradient is -sum * scale; each other class
+// is exp(z - max) * scale. sum == 0 returns 0 and the caller does not exp.
+fn ce_scale(max_o: f32, sum_o: f32, target: f32) -> f32 {
+    if (nonfinite(sum_o) || nonfinite(target) || sum_o < 0.0) { return ce_nan(); }
+    if (!(sum_o > 0.0)) { return 0.0; }
+    if (nonfinite(max_o)) { return ce_nan(); }
+    let delta = max_o - target;
+    if (delta <= 0.0) {
+        let e = exp(delta);
+        let q = sum_o * e;
+        return e / (1.0 + q);
+    }
+    let e = exp(-delta);
+    return 1.0 / (e + sum_o);
+}
+
+// skip_col < 0 excludes nothing. Every column is reported, including one
+// that is left out of the max, so a NaN target cannot disappear.
+fn row_peak(lane: u32, base: u32, n: u32, skip_col: i32) -> f32 {
+    var peak = CE_EMPTY;
+    for (var c = lane; c < n; c = c + 256u) {
+        let x = x0[base + c];
+        report(x);
+        if (i32(c) != skip_col) {
+            peak = max(peak, x);
+        }
     }
     return tree_max(lane, peak);
 }
 
-fn row_exp_sum(lane: u32, base: u32, vocab: u32, peak: f32) -> f32 {
+// A skipped column is not exponentiated. An empty other-set (every column
+// skipped, or a target-only tile) sums to 0 and does not raise: that row's
+// loss is 0. A non-finite sum still raises.
+fn row_exp_sum(lane: u32, base: u32, n: u32, peak: f32, skip_col: i32) -> f32 {
     var acc = 0.0;
-    for (var c = lane; c < vocab; c = c + 256u) {
-        acc = acc + exp(x0[base + c] - peak);
+    for (var c = lane; c < n; c = c + 256u) {
+        if (i32(c) != skip_col) {
+            acc = acc + exp(x0[base + c] - peak);
+        }
     }
     let sum = tree_sum(lane, acc);
-    if (nonfinite(sum) || !(sum > 0.0)) {
+    if (nonfinite(sum)) {
         if (lane == 0u) { raise(); }
     }
     return sum;
@@ -71,21 +122,25 @@ fn ce_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
     if (row >= pw(0u)) { return; }
     let vocab = pw(1u);
     let base = row * vocab;
-    let peak = row_peak(lid.x, base, vocab);
-    let sum = row_exp_sum(lid.x, base, vocab, peak);
+    let tgt = row_target(row);
+    let skip = ignored(tgt);
+    var skip_col = -1;
+    if (!skip) { skip_col = i32(tgt); }
+    let peak = row_peak(lid.x, base, vocab, skip_col);
+    let sum = row_exp_sum(lid.x, base, vocab, peak, skip_col);
     if (lid.x == 0u) {
-        let tgt = row_target(row);
         var loss = 0.0;
-        if (!ignored(tgt)) {
-            loss = peak + log(sum) - x0[base + tgt];
+        if (!skip) {
+            loss = ce_loss(peak, sum, x0[base + tgt]);
         }
         report(loss);
         y0[row] = loss;
     }
 }
 
-// One workgroup per row. grad = softmax / valid, minus 1 / valid at the
-// target; an ignored row is 0.
+// One workgroup per row. Other classes are exp(z - max) * scale / valid and
+// the target is the negation of their sum; an ignored row, and a one-class
+// row, is 0.
 @compute @workgroup_size(256, 1, 1)
 fn ce_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let row = flat_group(wg, nwg);
@@ -93,16 +148,22 @@ fn ce_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
     let vocab = pw(1u);
     let denom = pf(4u);
     let base = row * vocab;
-    let peak = row_peak(lid.x, base, vocab);
-    let sum = row_exp_sum(lid.x, base, vocab, peak);
     let tgt = row_target(row);
     let skip = ignored(tgt);
+    var skip_col = -1;
+    if (!skip) { skip_col = i32(tgt); }
+    let peak = row_peak(lid.x, base, vocab, skip_col);
+    let sum = row_exp_sum(lid.x, base, vocab, peak, skip_col);
+    var target = 0.0;
+    if (!skip) { target = x0[base + tgt]; }
+    let scale = ce_scale(peak, sum, target) / denom;
     for (var c = lid.x; c < vocab; c = c + 256u) {
         var g = 0.0;
-        if (!skip) {
-            g = exp(x0[base + c] - peak) / sum / denom;
+        if (!skip && sum > 0.0) {
             if (c == tgt) {
-                g = g - 1.0 / denom;
+                g = -sum * scale;
+            } else {
+                g = exp(x0[base + c] - peak) * scale;
             }
         }
         report(g);
@@ -125,22 +186,30 @@ fn lce_stats(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg:
     if (row >= pw(0u)) { return; }
     let cols = pw(1u);
     let base = row * cols;
-    let peak = row_peak(lid.x, base, cols);
-    let sum = row_exp_sum(lid.x, base, cols, peak);
+    let n = pw(7u);
+    let c0 = pw(4u);
+    let g = pw(5u) + row;
+    let tgt = u0[g];
+    // An ignored id may lie outside the vocabulary. Skip the target column
+    // only when this tile holds it and the row is counted.
+    var skip_col = -1;
+    if (!ignored(tgt) && tgt >= c0 && tgt < c0 + cols) {
+        skip_col = i32(tgt - c0);
+    }
+    let peak = row_peak(lid.x, base, cols, skip_col);
+    let sum = row_exp_sum(lid.x, base, cols, peak, skip_col);
     if (lid.x == 0u) {
-        let n = pw(7u);
-        let c0 = pw(4u);
-        let g = pw(5u) + row;
         if (pw(6u) == 1u) {
             y0[g] = peak;
             y0[n + g] = sum;
         } else {
             let m = y0[g];
             let m2 = max(m, peak);
+            // Both exponents are <= 0. An empty tile (peak == CE_EMPTY,
+            // sum == 0) contributes 0 and leaves the other side unchanged.
             y0[n + g] = y0[n + g] * exp(m - m2) + sum * exp(peak - m2);
             y0[g] = m2;
         }
-        let tgt = u0[g];
         if (tgt >= c0 && tgt < c0 + cols) {
             y0[2u * n + g] = x0[base + tgt - c0];
         }
@@ -148,7 +217,8 @@ fn lce_stats(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg:
 }
 
 // One lane per row. Words: 0 N. x0 = stats, u0 = targets, y0 = row loss
-// (m + log s - t, or 0 for an ignored row), summed by the reduce module.
+// (softplus of the negated margin, or 0 for an ignored row or a one-class
+// row), summed by the reduce module.
 @compute @workgroup_size(256, 1, 1)
 fn lce_finish(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let g = flat_group(wg, nwg) * 256u + lid.x;
@@ -156,14 +226,15 @@ fn lce_finish(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg
     if (g >= n) { return; }
     var loss = 0.0;
     if (!ignored(u0[g])) {
-        loss = x0[g] + log(x0[n + g]) - x0[2u * n + g];
+        loss = ce_loss(x0[g], x0[n + g], x0[2u * n + g]);
     }
     report(loss);
     y0[g] = loss;
 }
 
 // One lane per tile element, in place: the tile's logits become the seed-1
-// gradient, ce_bwd's expression with the row's final m and s. Words: 0
+// gradient, ce_bwd's excluded-sum expression with the row's final m and s.
+// Words: 0
 // R' * C', 1 C', 4 c0, 5 r0, 6 valid count bits (f32), 7 N. x0 = stats,
 // u0 = targets, y0 = tile.
 @compute @workgroup_size(256, 1, 1)
@@ -177,9 +248,15 @@ fn lce_grad(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: 
     let tgt = u0[g];
     var grad = 0.0;
     if (!ignored(tgt)) {
-        grad = exp(y0[i] - x0[g]) / x0[n + g] / denom;
-        if (pw(4u) + i % cols == tgt) {
-            grad = grad - 1.0 / denom;
+        let mx = x0[g];
+        let sum = x0[n + g];
+        let scale = ce_scale(mx, sum, x0[2u * n + g]) / denom;
+        if (sum > 0.0) {
+            if (pw(4u) + i % cols == tgt) {
+                grad = -sum * scale;
+            } else {
+                grad = exp(y0[i] - mx) * scale;
+            }
         }
     }
     report(grad);
