@@ -952,17 +952,23 @@ impl Worker {
 
     fn try_alloc(&self, bytes: usize) -> Result<GpuBuffer, String> {
         #[cfg(test)]
-        {
-            let mut book = self.book.borrow_mut();
-            let (skip, fail) = book.fail_allocs;
-            if skip > 0 {
-                book.fail_allocs.0 -= 1;
-            } else if fail > 0 {
-                book.fail_allocs.1 -= 1;
-                return Err(format!("newBuffer({bytes}) failed"));
-            }
-        }
+        self.injected_failure(bytes)?;
         self.rt.alloc_buffer(bytes)
+    }
+
+    /// [`Cmd::Tune`]'s `fail_allocs`, consulted by every device allocation
+    /// attempt ([`Self::try_alloc`], [`Self::fresh_from`]).
+    #[cfg(test)]
+    fn injected_failure(&self, bytes: usize) -> Result<(), String> {
+        let mut book = self.book.borrow_mut();
+        let (skip, fail) = book.fail_allocs;
+        if skip > 0 {
+            book.fail_allocs.0 -= 1;
+        } else if fail > 0 {
+            book.fail_allocs.1 -= 1;
+            return Err(format!("newBuffer({bytes}) failed"));
+        }
+        Ok(())
     }
 
     /// A waited commit for its recycling. It runs even with nothing
@@ -1004,10 +1010,15 @@ impl Worker {
 
     /// A new buffer holding `data`, written on the host without a wait: no
     /// recorded command can be using a buffer fresh from the pool (tessl
-    /// `alloc_buffer_from_u32`). For small host-built index data.
+    /// `alloc_buffer_from_u32`). For host-built index data and `U32`
+    /// uploads behind recorded work.
     fn fresh_from(&self, data: &[u32]) -> Res<V> {
         let bytes = data.len().max(1) * 4;
-        let buf = self.retrying(bytes, || self.rt.alloc_buffer_from_u32(data))?;
+        let buf = self.retrying(bytes, || {
+            #[cfg(test)]
+            self.injected_failure(bytes)?;
+            self.rt.alloc_buffer_from_u32(data)
+        })?;
         self.book.borrow_mut().alloc_since_wait += bytes as u64;
         Ok(V {
             buf,
@@ -1622,8 +1633,13 @@ impl Worker {
     /// work recorded, a small upload rides in the command itself: its words
     /// go into tessl's constant arena and `ojas_upload_words` copies them,
     /// in order with the recorded work, so nothing waits. A `U32` upload
-    /// behind recorded work takes [`Self::upload_ids`] at any size. Any
-    /// other upload waits ([`Wait::Upload`]) and maps.
+    /// (token ids, targets) behind recorded work, at any size, is written
+    /// on the host into a buffer fresh from the pool ([`Self::fresh_from`]),
+    /// which no recorded command can be using: no upload wait, no room in
+    /// the constant arena, and no copy but the one into the buffer. Its
+    /// bytes count toward the memory-cap trigger like any allocation's, so
+    /// a large one can still bring a [`Wait::MemCap`] forward. Any other
+    /// upload waits ([`Wait::Upload`]) and maps.
     /// A new buffer holding `src`'s contiguous window. Small uploads behind
     /// recorded work ride inline (encoded into at most
     /// [`INLINE_UPLOAD_BYTES`] of host memory); the rest wait and are
@@ -1640,7 +1656,8 @@ impl Worker {
             book.dirty && book.inline_uploads
         };
         if behind && src.dtype() == ojas_core::DType::U32 {
-            return self.upload_ids(src, len);
+            let ids = self.fresh_from(src.u32_slice()?)?;
+            return Ok(self.adopt(ids.buf, len));
         }
         let buf = self.alloc(len)?;
         self.note_dispatches();
@@ -1667,19 +1684,6 @@ impl Worker {
             let mut map = buf.try_contents_u8().map_err(metal_err)?;
             src.write_ne_bytes(&mut map[..len])?;
         }
-        Ok(self.adopt(buf, len))
-    }
-
-    /// A `U32` upload (token ids, targets) behind recorded work: tessl
-    /// writes the borrowed window on the host into a buffer fresh from the
-    /// pool, which no recorded command can be using (`alloc_buffer_from_u32`,
-    /// as [`Self::fresh_from`] does). So it never waits and takes no room in
-    /// the constant arena, at any size, and this thread copies the window
-    /// only into the new buffer.
-    fn upload_ids(&mut self, src: &ojas_core::Tensor, len: usize) -> Res<Reply> {
-        let words = src.u32_slice()?;
-        let buf = self.retrying(len, || self.rt.alloc_buffer_from_u32(words))?;
-        self.book.borrow_mut().alloc_since_wait += len as u64;
         Ok(self.adopt(buf, len))
     }
 

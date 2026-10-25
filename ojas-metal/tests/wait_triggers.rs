@@ -182,6 +182,42 @@ fn a_large_id_upload_while_work_is_recorded_does_not_wait() {
 }
 
 #[test]
+fn an_id_upload_never_takes_a_buffer_that_recorded_work_still_reads() {
+    // The ids are written on the host into a buffer fresh from tessl's pool,
+    // without a wait. tessl returns a dropped buffer to that pool only after
+    // the commit holding the commands recorded against it completes, so the
+    // new buffer can never be one a pending command reads. Each round frees
+    // the ids a pending gather reads and uploads as many new ones, the size
+    // the pool would hand back.
+    let m = metal();
+    let (vocab, dim, n) = (64usize, 4usize, 1usize << 18);
+    let table = values(vocab * dim, 8, 1.0);
+    let dt = up(&m, &host(&table, &[vocab, dim]));
+    let gather = |ids: &[u32]| -> Vec<f32> {
+        ids.iter()
+            .flat_map(|&i| table[i as usize * dim..][..dim].iter().copied())
+            .collect()
+    };
+    let mut cur = ids(n, 100, vocab as u32);
+    let mut dev = up(&m, &host_u32(&cur, &[n]));
+    let c0 = settled(&m);
+    let mut pending = Vec::new();
+    for round in 0..4u64 {
+        let y = ok("embed", m.embedding_forward(&dt, &dev));
+        pending.push((y, gather(&cur)));
+        drop(dev);
+        cur = ids(n, 101 + round, vocab as u32);
+        dev = up(&m, &host_u32(&cur, &[n]));
+    }
+    assert_eq!(m.wait_counts().since(&c0).upload, 0);
+    for (round, (y, want)) in pending.iter().enumerate() {
+        assert!(down(y) == *want, "round {round}: a gather read later ids");
+    }
+    let got = ok("download", m.download(&dev));
+    assert_eq!(ok("u32", got.u32_slice()), cur.as_slice());
+}
+
+#[test]
 fn inline_uploads_past_their_share_of_the_constant_arena_fall_back_to_a_wait() {
     // tessl resets its constant arena only at a waited commit, and a full
     // arena poisons the runtime: inline uploads stop at 1 MiB per window.

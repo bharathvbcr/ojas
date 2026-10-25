@@ -3462,6 +3462,46 @@ mod tests {
         });
     }
 
+    /// A `U32` upload behind recorded work allocates through the same
+    /// retries: a refusal is retried after a recycling commit, never as an
+    /// upload wait, and a refusal that persists is `CapacityExceeded` that
+    /// returns the budget charge.
+    #[test]
+    fn an_id_upload_behind_recorded_work_retries_and_refuses_like_any_allocation() {
+        watchdog(120, || {
+            let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            let x = put(&m, &[0.5; 1024], &[1024]);
+            let want: Vec<u32> = (0..1u32 << 18)
+                .map(|i| i.wrapping_mul(2_654_435_761))
+                .collect();
+            let ids = Tensor::from_u32(&want, &[want.len()], &Budget::new(1 << 30)).expect("host");
+            let _recorded = m.silu_forward(&x).expect("recorded");
+            let before = m.wait_counts();
+            tune(&m, None, None, None, (0, 1));
+            let d = m.upload(&ids).expect("the retry allocates");
+            let after = m.wait_counts();
+            assert_eq!(after.recycle, before.recycle + 1);
+            assert_eq!(after.upload, before.upload);
+            let got = m.download(&d).expect("download");
+            assert_eq!(got.u32_slice().expect("u32"), want.as_slice());
+
+            let _recorded = m.silu_forward(&x).expect("recorded");
+            tune(&m, None, None, None, (0, u32::MAX));
+            let live_before = m.budget().live_bytes().expect("live");
+            let before = m.wait_counts();
+            match m.upload(&ids) {
+                Err(OjasError::CapacityExceeded { requested, .. }) => {
+                    assert_eq!(requested, 4 << 18);
+                }
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(m.wait_counts().upload, before.upload);
+            tune(&m, None, None, None, (0, 0));
+            assert_eq!(pending(&m), None);
+            assert_eq!(m.budget().live_bytes().expect("live"), live_before);
+        });
+    }
+
     /// `kv_cache_write`'s range refusal happens on the host, before any
     /// command: on a poisoned backend, where every command that reaches the
     /// device answers `Poisoned`, it is still `OutOfRange`. A write in range
