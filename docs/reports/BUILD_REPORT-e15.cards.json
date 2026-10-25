@@ -1,0 +1,125 @@
+[
+  {
+    "repo_path": "/Users/bharath/Code/research/ojas",
+    "task_id": "gp-cpu-bf16-muon-bfmmla-kernel",
+    "title": "CPU bf16 Muon NS5: ARM64 BFMMLA micro-kernel in ojas-simd, gated on a profile and a win over Accelerate",
+    "description": "Split from ft-e15ee76acc8f98cb3214afa3b9bcb2fa criterion 4 by Fable's ruling (2026-10-24).\n\nState at split (verified):\n- Rust 1.99 stdarch has no `vbfmmlaq_f32` or any bf16 NEON intrinsic (checked in rust-src core_arch/aarch64); only `is_aarch64_feature_detected!(\"bf16\")` is stable. A kernel needs `core::arch::asm!` with `bfmmla`.\n- This M5 Pro has FEAT_BF16, FEAT_EBF16, FEAT_SME (`sysctl hw.optional.arm.*`). Non-EBF16 BFMMLA rounds intermediates non-IEEE (round-to-odd, denormal flush) unless FPCR.EBF=1: read the Arm ARM before stating the oracle tolerance. CI's M1 runner may lack FEAT_BF16, so runtime detection with a fallback is required.\n- On macOS the f32 baseline is Accelerate `cblas_sgemm`/`ssyrk` (AMX/SME-backed), in 6 row bands (`ojas-cpu/src/optim.rs` `ns_gemm_out`). Off macOS the GEMM is ojas-simd's NEON f32 8x12 kernel, where a BFMMLA kernel is the like-for-like comparison.\n- ft-e15ee76a commit 0a8f76a folded two of the three per-step bf16 rounding passes into the combination passes (bit-identical, pinned by ojas-oracle `ojas_cpu_bf16_muon_step_matches_stock_nanolab`). Its A/B is in docs/reports/BUILD_REPORT-e15.md; the remaining gap, if any, is what this card addresses.",
+    "status": "backlog",
+    "priority": 2,
+    "severity": "medium",
+    "kind": "perf",
+    "labels": ["cpu", "simd", "muon", "bf16", "performance"],
+    "planned_files": ["ojas-simd/src/arch.rs", "ojas-simd/src/gemm.rs", "ojas-cpu/src/optim.rs", "docs/bench-gpu-vs-torch.md"],
+    "acceptance_criteria": [
+      "A profile of `ojas-cpu/tests/bench_ops.rs` muon_*_bf16 (after 0a8f76a) attributes the bf16-over-f32 time between GEMMs and elementwise passes; if elementwise dominates, the card closes with that number and no kernel",
+      "If built: a BFMMLA micro-kernel in ojas-simd behind runtime `bf16` detection with the f32 fallback, Numerics::Fast only, with a parity test against an f64 oracle at a tolerance derived from the Arm ARM's BFMMLA rounding (FPCR.EBF state stated)",
+      "It is wired into bf16 Newton-Schulz only where a committed interleaved min-of-N A/B beats the strongest baseline at 768x768, 2048x768 and 3072x768 (Accelerate on macOS, the NEON f32 kernel elsewhere); otherwise it is not wired and the result is recorded"
+    ]
+  },
+  {
+    "repo_path": "/Users/bharath/Code/research/ojas",
+    "task_id": "gp-gpu-muon-bank-ns5",
+    "title": "GPU Muon NS5 over banks of same-shape matrices: one Backend op for a group of slots instead of one call per matrix",
+    "description": "Split from ft-e15ee76acc8f98cb3214afa3b9bcb2fa criterion 4 by Fable's ruling (2026-10-24): it changes the frozen Backend contract.\n\nToday `Backend::muon_ns5_step(param, grad, momentum, config)` takes one matrix (ojas-core/src/backend.rs); Metal runs each as its own command (`Worker` muon in ojas-metal/src/device.rs, GemmOperands::Bf16 under Ns5Precision::Bf16). nanolab's 12 layers hold several same-shape matrices per shape (q/k/v/o 768x768, ffn 2048x768 / 768x2048), so a batched GEMM over a bank could cut per-call fixed cost.\n\nShape (Fable): a bank op over same-shape slots, with the per-matrix method delegating to it or retired, not two paths. It must go through Autocast, the hand-written Gated wrapper list (ft-fe7dcee6), CPU, Metal, wgpu and CUDA (CUDA must compile).",
+    "status": "backlog",
+    "priority": 2,
+    "severity": "medium",
+    "kind": "perf",
+    "labels": ["metal", "muon", "bf16", "performance", "backend-trait"],
+    "planned_files": ["ojas-core/src/backend.rs", "ojas-core/src/autocast.rs", "ojas-metal/src/backend.rs", "ojas-metal/src/device.rs", "ojas-cpu/src/optim.rs", "ojas-model/src/trainer.rs"],
+    "acceptance_criteria": [
+      "Owner sign-off on the Backend trait change recorded before the first edit",
+      "One bank op for a group of same-shape Muon slots on every backend (per-matrix method delegates or is retired); Autocast and Gated forward it, with ft-fe7dcee6's completeness tests",
+      "Metal runs a bank as batched GEMMs in one command; parity with the per-matrix result (bit-exact on CPU Exact, stated tolerance on Metal) and a dispatch-count test",
+      "A committed interleaved A/B of the trainer's Muon phase at nanolab 124M shapes against the per-matrix path, f32 and bf16 NS5"
+    ]
+  },
+  {
+    "repo_path": "/Users/bharath/Code/research/ojas",
+    "task_id": "gp-metal-relaxed-f32-linear-lane",
+    "title": "Metal untagged f32 Linear on a cooperative TensorOps tile: needs a per-call tessl lane (relaxed tf32 or exact-f32 cooperative plain GEMM) and a Numerics tier decision",
+    "description": "Split from ft-e15ee76acc8f98cb3214afa3b9bcb2fa criterion 1 by Fable's ruling (2026-10-24). That card routed Autocast's bf16-exact operands to tessl's GemmOperands::Bf16 cooperative lane (commits bc19d9a, b352ca6). Untagged f32 Linear stays on GemmOperands::ExactF32, the 1-simdgroup tile, because (verified in tessl/src/gemm.rs at main 8bc0468 by the independent check):\n- tf32-relaxed is a runtime-global switch (`GpuRuntime::set_relaxed_precision`, runtime.rs:1089); while on, every `GemmOperands::ExactF32` call refuses (gemm.rs:1341-1347), and ojas-metal uses ExactF32 at many sites (attention, GDN, linear CE, gpu.rs).\n- relaxed f32 has cooperative kernels for NN only (CoopElem::RelaxedF32); Linear forward is NT (ojas-metal device.rs linear).\n- tessl's exact-f32 cooperative kernels are reachable only through `gemm_epilogue`, which accepts only NN (gemm.rs:970) and falls back to the plain GEMM for an identity epilogue; Linear has no bias or activation to fuse.\n- relaxed changes products (10-bit mantissa), not just order: outside ojas-core's Numerics::Fast contract (reorder/fuse only).\n\nAlso parked here: Metal Muon f32 `B = b*A + c*A^2` as one `gemm_epilogue` (NN, non-identity, reaches the exact cooperative kernel; order-only); illegal under bf16 NS5, which rounds each GEMM output. conv2d is G-V2 (ft-96023b34) and inherits whatever lane this card lands.",
+    "status": "backlog",
+    "priority": 2,
+    "severity": "medium",
+    "kind": "perf",
+    "labels": ["metal", "tessl", "performance", "numerics"],
+    "planned_files": ["ojas-core/src/backend.rs", "ojas-metal/src/device.rs", "ojas-metal/src/link.rs"],
+    "repositories": ["tessl"],
+    "acceptance_criteria": [
+      "A decision recorded in ojas-core's Numerics docs: whether a tf32-class tier exists, opt-in only, with its stated tolerance against Exact",
+      "tessl (its own card) exposes a per-call lane: a relaxed GemmOperands variant with NT/TN kernels, or an exact-f32 cooperative plain GEMM, without the runtime-global switch",
+      "ojas-metal Linear uses it under the decided tier, with parity and dispatch-label tests and a committed A/B of linear rows against torch MPS",
+      "Metal Muon f32 combination as one gemm_epilogue, wired only on a committed A/B win"
+    ]
+  },
+  {
+    "repo_path": "/Users/bharath/Code/research/ojas",
+    "task_id": "gp-metal-bf16-lane-measure-and-extend",
+    "title": "Metal bf16 lane: measure it, then extend it to linear CE, attention and gate GEMMs, with one bf16 cast per operand",
+    "description": "Gaps in ft-e15ee76acc8f98cb3214afa3b9bcb2fa criterion 1, found by the independent Opus check (2026-10-25).\n\nbc19d9a/b352ca6 route Linear forward/backward GEMMs to tessl's GemmOperands::Bf16 (4-simdgroup cooperative) when both operands are Autocast's bf16-exact F32 and the device has TensorOps. Verified by ojas-metal/tests/autocast_lane.rs (dispatch deltas from tessl's ensure_bf16 casts, which only that lane makes) on an M5 Pro. Open:\n- No speed number exists for the lane (the commit is labelled perf).\n- The LM head (`linear_ce`, ojas-metal/src/device.rs ~3245/3277), the gate and the attention GEMMs still run ExactF32 on bf16-exact operands.\n- Every bf16-lane call casts twice: Autocast rounds to F32, then tessl copies to bf16 again; `linear_bwd` casts gy once per GEMM.\n- Resident Bf16 weights (the frozen-base LoRA case) stay on the exact lane by design, because the Bf16-operand contract pins the widened copy's bits; whether that contract should change is a ruling, not an edit.",
+    "status": "backlog",
+    "priority": 2,
+    "severity": "medium",
+    "kind": "perf",
+    "labels": ["metal", "tessl", "bf16", "autocast", "performance"],
+    "planned_files": ["ojas-metal/src/backend.rs", "ojas-metal/src/device.rs", "ojas-metal/src/link.rs", "ojas-metal/tests/autocast_lane.rs", "bench/results"],
+    "acceptance_criteria": [
+      "A committed interleaved min-of-N A/B of Metal linear forward and backward at nanolab shapes (768/2048/50304 widths, T=1024x8), bf16 lane against the exact lane, with the noise floor stated",
+      "linear_ce, attention and gate GEMMs take GemmOperands::Bf16 when both operands are bf16-exact on a TensorOps device, each with a dispatch-delta test and an order-only tolerance test",
+      "One bf16 cast per operand per call, shown by dispatch count: Autocast hands Metal its bf16 copy, or tessl reads bf16-exact F32 without copying",
+      "A recorded ruling on whether resident Bf16 weights may take the bf16 lane (it changes the Bf16-operand bit contract)"
+    ]
+  },
+  {
+    "repo_path": "/Users/bharath/Code/research/ojas",
+    "task_id": "gp-metal-splitk-scratch-budget",
+    "title": "Metal GEMM split-K partials are not charged to the Budget (both lanes)",
+    "description": "Found by the independent Opus check of ft-e15ee76acc8f98cb3214afa3b9bcb2fa (2026-10-25). tessl's TN split-K route allocates its partial sums (up to 4M floats, tessl/src/gemm.rs ~1662) inside the call. ojas-metal's linear scratch charge (`copied_elems` + `lane_copies` in ojas-metal/src/backend.rs) does not include them on the bf16 lane or the exact-f32 lane, so a tight Budget can admit a call whose real device footprint exceeds it. Inferred from source; not reproduced.",
+    "status": "backlog",
+    "priority": 2,
+    "severity": "medium",
+    "kind": "bug",
+    "labels": ["metal", "tessl", "budget", "memory"],
+    "planned_files": ["ojas-metal/src/backend.rs", "ojas-metal/src/link.rs"],
+    "repositories": ["tessl"],
+    "acceptance_criteria": [
+      "A test at k >= 2048 that first shows the split-K partials are allocated but not charged (tight Budget admits the call), against unmodified code",
+      "Both lanes charge the split-K partials using a size tessl exposes (not a copied formula), and the tight-budget test then refuses with CapacityExceeded before anything runs"
+    ]
+  },
+  {
+    "repo_path": "/Users/bharath/Code/research/ojas",
+    "task_id": "gp-arch02-grad-clip-flag",
+    "title": "arch02 metal-native: --grad-clip does not drive the device clip, and 0 is accepted",
+    "description": "Found by the independent Opus check of ft-e15ee76acc8f98cb3214afa3b9bcb2fa (2026-10-25). ojas-model now refuses grad_clip 0 (5aa04db). arch02/metal-native is separate: `--grad-clip` is parsed without a range check (src/bin/train.rs:477); the on-device clip uses the constant `GRAD_CLIP = 0.3` (src/model_bwd.rs:23, :834); `hp.grad_clip` only feeds the reported `clip_factor` (src/engine.rs:278). So the flag changes the log, not the clipping (inferred from source). `scripts/export_goldens.py:685` treats 0 as \"off\", unlike torch and ojas-model.",
+    "status": "backlog",
+    "priority": 3,
+    "severity": "low",
+    "kind": "bug",
+    "labels": ["arch02", "training", "numerics"],
+    "planned_files": ["arch02/metal-native/src/bin/train.rs", "arch02/metal-native/src/model_bwd.rs", "arch02/metal-native/src/engine.rs", "arch02/metal-native/scripts/export_goldens.py"],
+    "acceptance_criteria": [
+      "A test that shows --grad-clip not changing the device clip on unmodified code",
+      "--grad-clip drives clip_grad_norm_device (or the flag is removed), and a non-finite or non-positive value is refused with a message naming torch's max_norm 0 behaviour",
+      "export_goldens.py's 0-means-off branch is removed or documented as a golden-generation-only switch"
+    ]
+  },
+  {
+    "repo_path": "/Users/bharath/Code/research/ojas",
+    "task_id": "gp-no-gradient-slot-ruling",
+    "title": "Ruling: a trainable slot with no gradient fails the step (ft-e15ee76a) or is skipped as torch does (semantics brief)",
+    "description": "Two briefs disagree. ft-e15ee76acc8f98cb3214afa3b9bcb2fa criterion 3 asks the trainer to fail closed when a trainable slot gets no gradient; ojas-model already does (ojas-model/src/trainer.rs ~862-868, Shape error \"{name} received no gradient\") and 5aa04db pins it with `a_trainable_slot_without_a_gradient_fails_the_step_and_changes_nothing`. tasks/gp-training-semantics-parity.md (last criterion) asks for torch's behaviour instead: skip the slot, so a head or adapter a batch does not use does not abort training. Needs the owner's ruling before either test or code changes.",
+    "status": "backlog",
+    "priority": 2,
+    "severity": "medium",
+    "kind": "decision",
+    "labels": ["training", "semantics", "owner-decision"],
+    "planned_files": ["ojas-model/src/trainer.rs", "tasks/gp-training-semantics-parity.md"],
+    "acceptance_criteria": [
+      "The owner's ruling is recorded on this card and in tasks/gp-training-semantics-parity.md",
+      "If skip: the slot keeps its moments and parameter bits for that step, the pinning test is rewritten to assert that, and a frozen-by-accident slot is still caught (e.g. a slot that never gets a gradient over N steps is reported)",
+      "If fail-closed: the semantics brief's criterion is struck with the ruling cited"
+    ]
+  }
+]
