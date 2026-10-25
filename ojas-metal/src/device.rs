@@ -38,8 +38,8 @@ use tessl::DType;
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
-    norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, EmbedRows, GdnArgs, Lane,
-    LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
+    norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, DeviceInfo, EmbedRows, GdnArgs,
+    Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
     SQ_OUT_WORDS, SQ_PIECE,
 };
 
@@ -239,7 +239,7 @@ pub(crate) fn gdn_forward_transient_elems(
 }
 
 /// Start the device thread and wait until its runtime is up.
-pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
+pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
     spawn_with(move || Worker::open(waits, budget_cap))
 }
 
@@ -249,9 +249,9 @@ pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg
 /// closes.
 fn spawn_with(
     open: impl FnOnce() -> Res<Worker> + Send + 'static,
-) -> Res<(mpsc::Sender<Msg>, String)> {
+) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
     let (tx, rx) = mpsc::channel::<Msg>();
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<Res<String>>(1);
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Res<DeviceInfo>>(1);
     let handle = thread::Builder::new()
         .name("ojas-metal-device".to_string())
         .spawn(move || {
@@ -264,15 +264,18 @@ fn spawn_with(
                     return;
                 }
             };
-            let _ = ready_tx.send(Ok(worker.rt.device_name()));
+            let _ = ready_tx.send(Ok(DeviceInfo {
+                name: worker.rt.device_name(),
+                tensorops: worker.rt.has_tensorops(),
+            }));
             drop(ready_tx);
             worker.serve(rx);
         })
         .map_err(|e| metal_err(format!("could not spawn the Metal device thread: {e}")))?;
     match ready_rx.recv() {
-        Ok(Ok(name)) => {
+        Ok(Ok(device)) => {
             drop(handle);
-            Ok((tx, name))
+            Ok((tx, device))
         }
         Ok(Err(err)) => {
             let _ = handle.join();
@@ -1829,7 +1832,9 @@ impl Worker {
     }
 
     /// tessl's operands for `lane` on this device: [`Lane::Bf16`] needs
-    /// TensorOps, and a device without them takes the exact products.
+    /// TensorOps, and a device without them takes the exact products. The
+    /// backend already picks linear lanes by the same test (`Link::lane`);
+    /// this one also covers Muon's bf16 Newton-Schulz.
     fn gemm_lane(&self, lane: Lane) -> GemmOperands {
         match lane {
             Lane::Bf16 if self.rt.has_tensorops() => GemmOperands::Bf16,

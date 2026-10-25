@@ -37,12 +37,12 @@ mod device {
 
     use ojas_core::OjasError;
 
-    use crate::link::{Msg, Res, Waits};
+    use crate::link::{DeviceInfo, Msg, Res, Waits};
 
     const NO_METAL: &str =
         "ojas-metal was built without Metal (needs macOS and the `metal` feature)";
 
-    pub(crate) fn spawn(_waits: Arc<Waits>, _cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
+    pub(crate) fn spawn(_waits: Arc<Waits>, _cap: u64) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
         Err(OjasError::Unsupported {
             op: "MetalBackend::new",
             detail: NO_METAL.to_string(),

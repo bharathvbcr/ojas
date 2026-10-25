@@ -46,9 +46,11 @@
 //! A linear GEMM whose two operands are both [`Tensor::bf16_exact`] (what
 //! [`ojas_core::Autocast`] hands this backend in a bf16 region) runs on
 //! tessl's bf16 lane, the 4-simdgroup cooperative kernels, instead of the
-//! exact-f32 1-simdgroup tile: the products are the same, the f32 sums run
-//! in another order. Untagged `F32` and `Bf16` operands keep the exact-f32
-//! lane, so a `Bf16` operand still gives its widened copy's bits.
+//! exact-f32 1-simdgroup tile, on a device with TensorOps
+//! ([`MetalBackend::has_tensorops`]): the products are the same while they
+//! stay in f32's normal range, and the f32 sums run in another order.
+//! Untagged `F32` and `Bf16` operands keep the exact-f32 lane, so a `Bf16`
+//! operand still gives its widened copy's bits.
 //!
 //! Faults are deferred (`docs/metal-deferred-faults.md`). Ops are recorded
 //! into tessl's command buffer and return without waiting. A NaN or infinity
@@ -185,15 +187,21 @@ impl MetalBackend {
     /// the `metal` feature, this is [`OjasError::Unsupported`].
     pub fn new(budget: Budget) -> Result<Self, OjasError> {
         let waits = Arc::new(Waits::default());
-        let (tx, name) = crate::device::spawn(Arc::clone(&waits), budget.cap_bytes())?;
+        let (tx, device) = crate::device::spawn(Arc::clone(&waits), budget.cap_bytes())?;
         Ok(Self {
-            link: Arc::new(Link::new(tx, name, waits)),
+            link: Arc::new(Link::new(tx, device, waits)),
             budget,
         })
     }
 
     pub fn device_name(&self) -> &str {
         self.link.device_name()
+    }
+
+    /// Whether the device runs tessl's cooperative TensorOps kernels. Without
+    /// them, bf16-exact operands take the exact-f32 lane like any other.
+    pub fn has_tensorops(&self) -> bool {
+        self.link.has_tensorops()
     }
 
     /// The device's recommended working set and what this process holds on
@@ -1347,7 +1355,7 @@ impl Backend for MetalBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
-        let lane = Lane::of(input.bf16_exact(), weight.bf16_exact());
+        let lane = self.link.lane(input.bf16_exact(), weight.bf16_exact());
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let x = self.f32(OP, &input)?;
         let w = self.f32(OP, &weight)?;
@@ -1380,8 +1388,10 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
-        let gx_lane = Lane::of(grad_output.bf16_exact(), weight.bf16_exact());
-        let gw_lane = Lane::of(grad_output.bf16_exact(), input.bf16_exact());
+        let gx_lane = self
+            .link
+            .lane(grad_output.bf16_exact(), weight.bf16_exact());
+        let gw_lane = self.link.lane(grad_output.bf16_exact(), input.bf16_exact());
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
         let grad_output = self.widened(grad_output)?;
@@ -1426,7 +1436,9 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_backward_input";
         let dims = linear_backward_dims(input, weight, grad_output)?;
-        let lane = Lane::of(grad_output.bf16_exact(), weight.bf16_exact());
+        let lane = self
+            .link
+            .lane(grad_output.bf16_exact(), weight.bf16_exact());
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
         let grad_output = self.widened(grad_output)?;

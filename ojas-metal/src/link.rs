@@ -164,15 +164,16 @@ pub(crate) enum Lane {
     /// 4-simdgroup cooperative TensorOps kernels (128×64 or 64×64 NN, the
     /// TN and NT ones), on bf16 copies tessl makes of the two operands. A
     /// product of two bf16 values is exact in f32, so only the order of the
-    /// f32 sums differs from [`Lane::ExactF32`]. A device without TensorOps
-    /// runs [`Lane::ExactF32`].
+    /// f32 sums differs from [`Lane::ExactF32`].
     Bf16,
 }
 
 impl Lane {
-    /// [`Lane::Bf16`] when both operands are bf16-exact.
-    pub(crate) fn of(a_bf16_exact: bool, b_bf16_exact: bool) -> Self {
-        if a_bf16_exact && b_bf16_exact {
+    /// [`Lane::Bf16`] when the device has TensorOps and both operands are
+    /// bf16-exact. A device without them runs [`Lane::ExactF32`], and the
+    /// backend charges no copies for it.
+    pub(crate) fn of(tensorops: bool, a_bf16_exact: bool, b_bf16_exact: bool) -> Self {
+        if tensorops && a_bf16_exact && b_bf16_exact {
             Self::Bf16
         } else {
             Self::ExactF32
@@ -784,21 +785,34 @@ pub(crate) struct Msg {
 /// made; the device thread exits when the last one drops.
 pub(crate) struct Link {
     tx: mpsc::Sender<Msg>,
-    device_name: String,
+    device: DeviceInfo,
     waits: Arc<Waits>,
 }
 
+/// What the device thread reports once its runtime is up.
+pub(crate) struct DeviceInfo {
+    pub(crate) name: String,
+    /// The device runs tessl's cooperative TensorOps kernels.
+    pub(crate) tensorops: bool,
+}
+
 impl Link {
-    pub(crate) fn new(tx: mpsc::Sender<Msg>, device_name: String, waits: Arc<Waits>) -> Self {
-        Self {
-            tx,
-            device_name,
-            waits,
-        }
+    pub(crate) fn new(tx: mpsc::Sender<Msg>, device: DeviceInfo, waits: Arc<Waits>) -> Self {
+        Self { tx, device, waits }
     }
 
     pub(crate) fn device_name(&self) -> &str {
-        &self.device_name
+        &self.device.name
+    }
+
+    pub(crate) fn has_tensorops(&self) -> bool {
+        self.device.tensorops
+    }
+
+    /// The lane for a GEMM of two operands with these bf16-exact flags on
+    /// this device ([`Lane::of`]).
+    pub(crate) fn lane(&self, a_bf16_exact: bool, b_bf16_exact: bool) -> Lane {
+        Lane::of(self.device.tensorops, a_bf16_exact, b_bf16_exact)
     }
 
     /// Waited GPU commits the device thread has made so far, by trigger.

@@ -3,7 +3,9 @@
 //! 4-simdgroup cooperative TensorOps kernels, instead of the exact-f32
 //! 1-simdgroup tile. The products are the exact lane's, so the outputs
 //! differ only by the order of the f32 sums. A pair with one untagged
-//! operand, and a `Bf16` operand, stay on the exact-f32 lane.
+//! operand, and a `Bf16` operand, stay on the exact-f32 lane. A device
+//! without TensorOps runs every pair on the exact-f32 lane, which these
+//! tests assert there instead.
 
 mod common;
 
@@ -32,6 +34,16 @@ fn counted<T>(m: &MetalBackend, op: impl FnOnce() -> Result<T, OjasError>) -> (T
     (out, m.dispatches() - before)
 }
 
+/// Cast dispatches a GEMM on two bf16-exact operands adds: tessl casts each
+/// f32 operand to bf16 on the bf16 lane, which only a TensorOps device runs.
+fn casts(m: &MetalBackend) -> u64 {
+    if m.has_tensorops() {
+        2
+    } else {
+        0
+    }
+}
+
 /// `t` rounded by `Autocast` (tagged bf16-exact), and an untagged upload of
 /// the same bits.
 fn rounded(m: &MetalBackend, ac: &Autocast<MetalBackend>, t: &Tensor) -> (Tensor, Tensor) {
@@ -52,8 +64,11 @@ fn bf16_exact_linear_forward_runs_the_bf16_lane() {
     let (exact, exact_n) = counted(&m, || m.linear_forward(&xp, &wp));
     let (lane, lane_n) = counted(&m, || m.linear_forward(&x, &w));
     // The bf16 lane casts its two f32 operands to bf16 before the GEMM.
-    assert_eq!(lane_n, exact_n + 2, "bf16 lane dispatches");
+    assert_eq!(lane_n, exact_n + casts(&m), "bf16 lane dispatches");
     close("forward", &down(&lane), &down(&exact), ATOL, RTOL);
+    if !m.has_tensorops() {
+        assert_eq!(bits(&lane), bits(&exact), "no TensorOps: the exact lane");
+    }
 
     // One untagged operand: the exact lane, bit for bit.
     let (mixed, mixed_n) = counted(&m, || m.linear_forward(&x, &wp));
@@ -78,20 +93,20 @@ fn bf16_exact_linear_backward_runs_the_bf16_lane_per_gemm() {
     let ((gx_e, gw_e), exact_n) = counted(&m, || m.linear_backward(&xp, &wp, &gyp));
     let ((gx, gw), lane_n) = counted(&m, || m.linear_backward(&x, &w, &gy));
     // Two GEMMs on the bf16 lane, each casting its two operands.
-    assert_eq!(lane_n, exact_n + 4, "bf16 lane dispatches");
+    assert_eq!(lane_n, exact_n + 2 * casts(&m), "bf16 lane dispatches");
     close("grad_input", &down(&gx), &down(&gx_e), ATOL, RTOL);
     // gW sums over the 256 rows.
     close("grad_weight", &down(&gw), &down(&gw_e), 2.0 * ATOL, RTOL);
 
     // Only gW's pair (gy, x) is bf16-exact: gX keeps the exact lane's bits.
     let ((gx_m, gw_m), mixed_n) = counted(&m, || m.linear_backward(&x, &wp, &gy));
-    assert_eq!(mixed_n, exact_n + 2, "one GEMM on the bf16 lane");
+    assert_eq!(mixed_n, exact_n + casts(&m), "one GEMM on the bf16 lane");
     assert_eq!(bits(&gx_m), bits(&gx_e));
     assert_eq!(bits(&gw_m), bits(&gw));
 
     let (gx_i, input_n) = counted(&m, || m.linear_backward_input(&x, &w, &gy));
     let (gx_ie, input_exact_n) = counted(&m, || m.linear_backward_input(&xp, &wp, &gyp));
-    assert_eq!(input_n, input_exact_n + 2, "bf16 lane dispatches");
+    assert_eq!(input_n, input_exact_n + casts(&m), "bf16 lane dispatches");
     assert_eq!(bits(&gx_i), bits(&gx));
     assert_eq!(bits(&gx_ie), bits(&gx_e));
 }
@@ -99,6 +114,7 @@ fn bf16_exact_linear_backward_runs_the_bf16_lane_per_gemm() {
 /// The bf16 copies tessl makes are charged with the op's scratch: a budget
 /// that holds the exact lane's call but not the copies refuses the bf16
 /// lane before anything runs, and the exact lane still runs under it.
+/// Without TensorOps no copies are made, so none are charged.
 #[test]
 fn the_bf16_lane_charges_its_operand_copies() {
     let m = metal();
@@ -109,9 +125,13 @@ fn the_bf16_lane_charges_its_operand_copies() {
     let out = (ROWS * NOUT * 4) as u64;
     let copies = ((ROWS * KIN + NOUT * KIN) * 2) as u64;
     let tight = m.with_budget(Budget::new(out + copies / 2));
-    assert!(matches!(
-        tight.linear_forward(&x, &w),
-        Err(OjasError::CapacityExceeded { .. })
-    ));
+    if m.has_tensorops() {
+        assert!(matches!(
+            tight.linear_forward(&x, &w),
+            Err(OjasError::CapacityExceeded { .. })
+        ));
+    } else {
+        ok("no TensorOps: no copies", tight.linear_forward(&x, &w));
+    }
     ok("exact lane", tight.linear_forward(&xp, &wp));
 }
