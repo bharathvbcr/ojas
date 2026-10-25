@@ -299,6 +299,11 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
      and not yet seen in a run. The CPU Muon bf16 A/B (`backups/e15-tools/jobs/muonab.sh`) has not run, so
      `0a8f76a`'s speed claim is unmeasured. Only its bit-identity is pinned, by `ojas_cpu_parity`.
    - The card goes to review, not done; the Manvi verify step is the owner's.
+   - **Later (peer report):** once the slots freed, the peer reported these results: model-lib 28/28,
+     model-trainer 19/19, cpu-lib 56 pass/5 ignored, oracle-cpu-parity 4/4, and all 36 metal binaries green,
+     including autocast_lane 3/3, which confirms the dispatch arithmetic by a run. Still running then:
+     lora-metal, oracle-parity and clippy; core-lib reruns in verify2, followed by the Muon A/B. ojas-7a did not
+     check these logs. The peer's `docs/reports/BUILD_REPORT-e15.md` supersedes this item.
 
 ## Left behind
 
