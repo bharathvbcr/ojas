@@ -132,8 +132,14 @@ Drafts, as `gitpulse_add_task` arguments: [`BUILD_REPORT-e15.cards.json`](BUILD_
 
 ## Owner actions, in order
 
-1. **Rebuild GitPulse for DevCouncil schema 10**, from a session rooted in `/Users/bharath/Code/devtools/GitPulse`
-   (the commands are in `BUILD_REPORT-7a.md`, "Owner commands"), and confirm with `bun run check:schema-parity`.
+1. **Finish the GitPulse upgrade.** State at 2026-10-25 11:16Z [V]: `~/.cargo/bin/gitpulse-mcp` (1.5.0,
+   installed 2026-10-24 22:49) now reads DevCouncil schema 10 but answers every call with
+   `schema_upgrade_required: workbench schema 13 must be upgraded to 14 before this request, and this host does
+   not upgrade a shared profile; open the desktop app once to upgrade it`. `GitPulse.app` is still the
+   2026-10-17 build, and its `gitpulse-mcp` still says `unsupported DevCouncil schema version 10; this binary
+   knows 9`. So: rebuild and reinstall the app from a session rooted in `/Users/bharath/Code/devtools/GitPulse`
+   (commands in `BUILD_REPORT-7a.md`, "Owner commands"), open it once so it upgrades the workbench to 14, then
+   confirm with `bun run check:schema-parity`.
 2. **File the cards and set ft-e15ee76a to review**, from the ojas main checkout once the board answers:
 
    ```sh
