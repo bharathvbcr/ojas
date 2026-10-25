@@ -303,8 +303,9 @@ Then file the cards below from ojas (`backups/gp/mkreq.sh backups/gp/wrap5.json 
      - Bench and profile criteria are still owed.
    - **Cards:** eight drafts are in `backups/gp/wrap-4b.json`. They cover benches, the crit 3 decision, the crit 20
      follow-up, crits 13 and 14, the crit 19 sign-off, the Metal inline host copy, and `clip_scale` with `f32::MAX`.
-   - The worktree `backups/x/wt-4b` holds an uncommitted `Cargo.toml` member drop that was never merged. It is
-     removed, along with the branch, once ojas-4b confirms it no longer needs it.
+   - **Cleaned 2026-10-25:** ojas-4b confirmed it was done. The worktree `backups/x/wt-4b` was force-removed, which
+     discarded only its unmerged `Cargo.toml`/`Cargo.lock` member drop (diffed before removal), and the branch was
+     deleted. Its logs stay in `backups/4b-tools/logs/`.
 3. **Cargo-slot starvation** (new card, P1, `backups/gp/wrap6.json` entry 1). Both slots have been held for more
    than 6 hours by an unidentified holder, so every verify job in this repo starves. The card asks for the holder
    to be identified and released, and for mac_heavy to bound how long a slot can be held.
