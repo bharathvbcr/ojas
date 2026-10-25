@@ -154,3 +154,12 @@ arch02/metal-native/out/
 
 # Session scratch: logs, board dumps and other sessions' backups (kept out of git; see tools/a6/README.md)
 backups/
+
+# Worktrees and graph index that GitPulse / DevMap create in the checkout
+/.gitpulse/worktrees/
+/.devmap/
+# Agent session reports belong in docs/reports/ (committed deliberately), never at the root
+/BUILD_REPORT*.md
+/BRANCH_REPORT*.md
+/AUDIT_REPORT*.md
+/HANDOFF*.md
