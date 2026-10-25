@@ -533,6 +533,8 @@
 <li>A quiet-GPU re-run is required before any ratio is quoted as a number.
 </li>
 </ul>
+<blockquote><p><strong>Audit 2026-10-20:</strong> the table below is round 1 (<code>bench/results/2026-10-01/</code>), run under a saturated GPU, so it is kept for history and is superseded by rounds 2-5 in <a href="bench-gpu-vs-torch.html"><code>bench-gpu-vs-torch.md</code></a>. Metal <code>block_fwd_bwd</code> (torch median / ojas median, torch 2.13.0 per each folder&#39;s <code>env_torch.json</code>): 0.59x in round 2 (<code>bench/results/2026-10-01-r2/summary.md:69</code>, no noisy flag), 0.92x in round 3 (<code>bench/results/2026-10-01-r3b/summary.md:69</code>, flagged &#34;noisy - not quoted&#34;), 1.07x [0.96-1.16] in round 5 (<code>bench/results/2026-10-02-r5/summary.md:69</code>, flagged noisy, GPU 100% busy). Metal <code>adamw_full</code> was 1.55x in round 3 (<code>bench-gpu-vs-torch.md:683</code>, noisy, unpaired). The <code>clip_grad_norm</code> rows are against torch 2.13, whose MPS norm ran on one threadgroup, and do not hold against torch 2.15: round 5&#39;s 18.96 ms path was about 0.45x of the 2.15 nightly, while the Metal path measured after <code>0e3254f</code> (7.07-7.45 ms) is about 1.13x, unpaired (<code>bench-gpu-vs-torch.md:83</code>).</p>
+</blockquote>
 <p>In this table, a ratio is torch time / ojas time, so below 1 means ojas is slower.</p>
 <div class="table-wrap"><table>
 <thead><tr><th></th><th>Metal</th><th>wgpu</th></tr></thead>

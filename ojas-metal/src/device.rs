@@ -38,9 +38,9 @@ use tessl::DType;
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
-    norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, EmbedRows, GdnArgs, LceGeom,
-    Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS,
-    SQ_PIECE,
+    norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, DeviceInfo, EmbedRows, GdnArgs,
+    Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
+    SQ_OUT_WORDS, SQ_PIECE,
 };
 
 const ST_IN: u32 = 0;
@@ -239,7 +239,7 @@ pub(crate) fn gdn_forward_transient_elems(
 }
 
 /// Start the device thread and wait until its runtime is up.
-pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, String)> {
+pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
     spawn_with(move || Worker::open(waits, budget_cap))
 }
 
@@ -249,9 +249,9 @@ pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg
 /// closes.
 fn spawn_with(
     open: impl FnOnce() -> Res<Worker> + Send + 'static,
-) -> Res<(mpsc::Sender<Msg>, String)> {
+) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
     let (tx, rx) = mpsc::channel::<Msg>();
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<Res<String>>(1);
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Res<DeviceInfo>>(1);
     let handle = thread::Builder::new()
         .name("ojas-metal-device".to_string())
         .spawn(move || {
@@ -264,15 +264,18 @@ fn spawn_with(
                     return;
                 }
             };
-            let _ = ready_tx.send(Ok(worker.rt.device_name()));
+            let _ = ready_tx.send(Ok(DeviceInfo {
+                name: worker.rt.device_name(),
+                tensorops: worker.rt.has_tensorops(),
+            }));
             drop(ready_tx);
             worker.serve(rx);
         })
         .map_err(|e| metal_err(format!("could not spawn the Metal device thread: {e}")))?;
     match ready_rx.recv() {
-        Ok(Ok(name)) => {
+        Ok(Ok(device)) => {
             drop(handle);
-            Ok((tx, name))
+            Ok((tx, device))
         }
         Ok(Err(err)) => {
             let _ = handle.join();
@@ -1414,7 +1417,8 @@ impl Worker {
                 rows,
                 kin,
                 nout,
-            } => self.linear(x, w, rows, kin, nout),
+                lane,
+            } => self.linear(x, w, rows, kin, nout, lane),
             Cmd::LinearBwd {
                 x,
                 w,
@@ -1422,7 +1426,9 @@ impl Worker {
                 rows,
                 kin,
                 nout,
-            } => self.linear_bwd(x, w, gy, rows, kin, nout),
+                gx_lane,
+                gw_lane,
+            } => self.linear_bwd(x, w, gy, rows, kin, nout, [gx_lane, gw_lane]),
             Cmd::LinearBwdInput {
                 x,
                 w,
@@ -1430,7 +1436,8 @@ impl Worker {
                 rows,
                 kin,
                 nout,
-            } => self.linear_bwd_input(x, w, gy, rows, kin, nout),
+                lane,
+            } => self.linear_bwd_input(x, w, gy, rows, kin, nout, lane),
             Cmd::Rms { sides, eps } => self.rms_sides(&sides, eps),
             Cmd::Rope {
                 op,
@@ -1824,7 +1831,26 @@ impl Worker {
         Ok(self.keep(vec![out]))
     }
 
-    fn linear(&mut self, x: Arg, w: Arg, rows: usize, kin: usize, nout: usize) -> Res<Reply> {
+    /// tessl's operands for `lane` on this device: [`Lane::Bf16`] needs
+    /// TensorOps, and a device without them takes the exact products. The
+    /// backend already picks linear lanes by the same test (`Link::lane`);
+    /// this one also covers Muon's bf16 Newton-Schulz.
+    fn gemm_lane(&self, lane: Lane) -> GemmOperands {
+        match lane {
+            Lane::Bf16 if self.rt.has_tensorops() => GemmOperands::Bf16,
+            Lane::Bf16 | Lane::ExactF32 => GemmOperands::ExactF32,
+        }
+    }
+
+    fn linear(
+        &mut self,
+        x: Arg,
+        w: Arg,
+        rows: usize,
+        kin: usize,
+        nout: usize,
+        lane: Lane,
+    ) -> Res<Reply> {
         const OP: &str = "linear_forward";
         let xv = self.view(x)?;
         let wv = self.view(w)?;
@@ -1832,7 +1858,7 @@ impl Worker {
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
-        GemmOperands::ExactF32
+        self.gemm_lane(lane)
             .nt(
                 &self.mat(&xv, rows, kin)?,
                 &self.mat(&wv, nout, kin)?,
@@ -1843,6 +1869,7 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn linear_bwd(
         &mut self,
         x: Arg,
@@ -1851,6 +1878,7 @@ impl Worker {
         rows: usize,
         kin: usize,
         nout: usize,
+        [gx_lane, gw_lane]: [Lane; 2],
     ) -> Res<Reply> {
         const OP: &str = "linear_backward";
         let xv = self.view(x)?;
@@ -1865,10 +1893,10 @@ impl Worker {
         let x_t = self.mat(&xv, rows, kin)?;
         let w_t = self.mat(&wv, nout, kin)?;
         let g_t = self.mat(&gv, rows, nout)?;
-        GemmOperands::ExactF32
+        self.gemm_lane(gx_lane)
             .nn(&g_t, &w_t, &self.tt(&gx, &[rows, kin])?)
             .map_err(metal_err)?;
-        GemmOperands::ExactF32
+        self.gemm_lane(gw_lane)
             .tn(&g_t, &x_t, &self.tt(&gw, &[nout, kin])?)
             .map_err(metal_err)?;
         self.check(&st, &gx, ST_OUT)?;
@@ -1876,6 +1904,7 @@ impl Worker {
         Ok(self.keep(vec![gx, gw]))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn linear_bwd_input(
         &mut self,
         x: Arg,
@@ -1884,6 +1913,7 @@ impl Worker {
         rows: usize,
         kin: usize,
         nout: usize,
+        lane: Lane,
     ) -> Res<Reply> {
         const OP: &str = "linear_backward_input";
         let xv = self.view(x)?;
@@ -1897,7 +1927,7 @@ impl Worker {
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
         self.check(&st, &gv, ST_IN)?;
-        GemmOperands::ExactF32
+        self.gemm_lane(lane)
             .nn(
                 &self.mat(&gv, rows, nout)?,
                 &self.mat(&wv, nout, kin)?,
@@ -3564,11 +3594,7 @@ impl Worker {
             set_u32(b, 2, 4);
         })?;
         round(&x)?;
-        let lane = if bf16 && self.rt.has_tensorops() {
-            GemmOperands::Bf16
-        } else {
-            GemmOperands::ExactF32
-        };
+        let lane = self.gemm_lane(if bf16 { Lane::Bf16 } else { Lane::ExactF32 });
         let a = self.fresh(r * r)?;
         let a2 = self.fresh(r * r)?;
         let bm = self.fresh(r * r)?;

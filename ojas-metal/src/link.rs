@@ -152,6 +152,45 @@ pub(crate) enum ReadAs {
     Matrix,
 }
 
+/// The operands of one of a linear's GEMMs (`Worker::linear`,
+/// `Worker::linear_bwd`, `Worker::linear_bwd_input`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// tessl `GemmOperands::ExactF32`: f32 operands, exact products, the
+    /// 1-simdgroup tile.
+    ExactF32,
+    /// Both operands bf16-exact (`Tensor::bf16_exact`, what `Autocast`
+    /// hands its inner backend): tessl `GemmOperands::Bf16`, the
+    /// 4-simdgroup cooperative TensorOps kernels (128×64 or 64×64 NN, the
+    /// TN and NT ones), on bf16 copies tessl makes of the two operands. A
+    /// product of two bf16 values is exact in f32, so only the order of the
+    /// f32 sums differs from [`Lane::ExactF32`].
+    Bf16,
+}
+
+impl Lane {
+    /// [`Lane::Bf16`] when the device has TensorOps and both operands are
+    /// bf16-exact. A device without them runs [`Lane::ExactF32`], and the
+    /// backend charges no copies for it.
+    pub(crate) fn of(tensorops: bool, a_bf16_exact: bool, b_bf16_exact: bool) -> Self {
+        if tensorops && a_bf16_exact && b_bf16_exact {
+            Self::Bf16
+        } else {
+            Self::ExactF32
+        }
+    }
+
+    /// f32 values' worth of the bf16 copies tessl makes, for the call, of
+    /// f32 operands of `a` and `b` elements: none on [`Lane::ExactF32`].
+    /// `None` on overflow.
+    pub(crate) fn copies(self, a: usize, b: usize) -> Option<usize> {
+        match self {
+            Self::ExactF32 => Some(0),
+            Self::Bf16 => a.div_ceil(2).checked_add(b.div_ceil(2)),
+        }
+    }
+}
+
 /// Whether the device copies a window at byte offset `off` before reading
 /// it `as`. The copy lives for the command, and the backend charges it
 /// with the op's scratch.
@@ -425,7 +464,9 @@ pub(crate) enum Cmd {
         rows: usize,
         kin: usize,
         nout: usize,
+        lane: Lane,
     },
+    /// `gx = gy @ w` on `gx_lane`, `gw = gyᵀ @ x` on `gw_lane`.
     LinearBwd {
         x: Arg,
         w: Arg,
@@ -433,6 +474,8 @@ pub(crate) enum Cmd {
         rows: usize,
         kin: usize,
         nout: usize,
+        gx_lane: Lane,
+        gw_lane: Lane,
     },
     /// `LinearBwd`'s `grad_x` alone: no weight gradient is allocated.
     LinearBwdInput {
@@ -442,6 +485,7 @@ pub(crate) enum Cmd {
         rows: usize,
         kin: usize,
         nout: usize,
+        lane: Lane,
     },
     /// RMSNorm forward, or backward when the sides carry `gy`, of one side
     /// (`rms_norm_*`) or two (q then k, `rms_qk_norm_*`) in one command.
@@ -741,21 +785,35 @@ pub(crate) struct Msg {
 /// made; the device thread exits when the last one drops.
 pub(crate) struct Link {
     tx: mpsc::Sender<Msg>,
-    device_name: String,
+    device: DeviceInfo,
     waits: Arc<Waits>,
 }
 
+/// What the device thread reports once its runtime is up.
+#[derive(Debug)]
+pub(crate) struct DeviceInfo {
+    pub(crate) name: String,
+    /// The device runs tessl's cooperative TensorOps kernels.
+    pub(crate) tensorops: bool,
+}
+
 impl Link {
-    pub(crate) fn new(tx: mpsc::Sender<Msg>, device_name: String, waits: Arc<Waits>) -> Self {
-        Self {
-            tx,
-            device_name,
-            waits,
-        }
+    pub(crate) fn new(tx: mpsc::Sender<Msg>, device: DeviceInfo, waits: Arc<Waits>) -> Self {
+        Self { tx, device, waits }
     }
 
     pub(crate) fn device_name(&self) -> &str {
-        &self.device_name
+        &self.device.name
+    }
+
+    pub(crate) fn has_tensorops(&self) -> bool {
+        self.device.tensorops
+    }
+
+    /// The lane for a GEMM of two operands with these bf16-exact flags on
+    /// this device ([`Lane::of`]).
+    pub(crate) fn lane(&self, a_bf16_exact: bool, b_bf16_exact: bool) -> Lane {
+        Lane::of(self.device.tensorops, a_bf16_exact, b_bf16_exact)
     }
 
     /// Waited GPU commits the device thread has made so far, by trigger.

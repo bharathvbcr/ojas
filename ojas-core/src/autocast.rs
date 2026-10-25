@@ -2789,17 +2789,22 @@ mod tests {
     fn storage_tag_follows_reshape_and_clears_on_mutation() {
         let budget = Budget::new(1 << 16);
         let tensor = Tensor::from_f32(&[1.0, 2.0], &[2], &budget).unwrap();
+        assert!(!tensor.bf16_exact());
         tag(&tensor);
+        assert!(tensor.bf16_exact());
         let viewed = tensor.reshape(&[1, 2]).unwrap();
         assert_eq!(viewed.compute_tag(), COMPUTE_BF16);
+        assert!(viewed.bf16_exact());
         viewed.set_compute_tag(COMPUTE_F32);
         assert_eq!(tensor.compute_tag(), COMPUTE_F32);
+        assert!(!tensor.bf16_exact());
         drop(viewed);
 
         tag(&tensor);
         let mut unique = tensor;
         unique.f32_slice_mut().unwrap()[0] = 3.0;
         assert_eq!(unique.compute_tag(), COMPUTE_F32);
+        assert!(!unique.bf16_exact());
 
         let shared = host(&budget, ONE);
         tag(&shared);

@@ -189,6 +189,25 @@ OJAS_BENCH_OPS=linear_dec_qkvo,linear_dec_up,linear_dec_down OJAS_BENCH_THREADS=
 
 ---
 
+## Muon bf16 Newton-Schulz: rounding folded into the combination passes (2026-10-25)
+
+`0a8f76a` rounds `A²` and `B·X` where the combination passes read them,
+instead of in two separate passes. The result is bit identical (ojas-oracle
+`ojas_cpu_bf16_muon_step_matches_stock_nanolab`). In a 5-round interleaved A/B
+against `42d5a9f` (6 threads, Fast;
+[`bench/results/2026-10-25-cpu-muon-bf16-fold`](../bench/results/2026-10-25-cpu-muon-bf16-fold/README.md)),
+the unchanged f32 rows give a noise floor of 0.96–1.09 per round:
+
+| shape | bf16 base / new, min-of-mins ms | median new/base | new faster in | bf16 over f32, base → new |
+| :-- | --: | --: | :-- | :-- |
+| 768x768 | 11.537 / 11.060 | 0.940 | 5/5 | 1.38x → 1.32x |
+| 2048x768 | 22.708 / 22.544 | 0.987 (within noise) | 4/5 | 1.25x → 1.23x |
+| 3072x768 | 29.016 / 28.230 | 0.967 (within noise) | 4/5 | 1.27x → 1.23x |
+
+The bf16 slowdown is smaller at 768x768 and otherwise unchanged within noise.
+What remains is card `gp-cpu-bf16-muon-bfmmla-kernel`
+(`docs/reports/BUILD_REPORT-e15.cards.json`).
+
 ## Every `bench_ops` Case against Torch, after Typed Storage Step 3 (2026-10-02)
 
 Same cases and shapes as the next section, now all 27, with every output written in place and each storage scanned for NaN once until written. Both sides run the same dumped inputs: `bench_ops` dump mode writes them, and `ojas-cpu/benches/torch_ops.py` reads them for parity and timing. ojas is Fast with 6 threads, torch 2.13 CPU 6 threads. Each cell is the minimum over 3 interleaved rounds (ojas, then torch), each itself a minimum over the case's calls. Load average 5–6, with no other build or benchmark running. Ratio is ojas / torch: below 1, ojas is faster. Reproduce with `bash cpu_vs_torch.sh 3` (a gitignored lane file, not kept); the full log is `cpu_vs_torch.txt` (a gitignored lane file, not kept).

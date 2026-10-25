@@ -169,6 +169,11 @@ pub fn pow_u64(base: f64, mut exp: u64) -> f64 {
 /// A non-finite `max_norm`, `total_norm` or coefficient is
 /// [`OjasError::NonFinite`]; a negative `max_norm` is
 /// [`OjasError::OutOfRange`]. The caller scales only on `Ok`.
+///
+/// A `max_norm` of 0 is accepted and gives 0, so the gradients are zeroed:
+/// torch's `clip_grad_norm_(max_norm=0)` does the same, and the oracle
+/// compares this op to torch. It is not "no clipping". ojas-model's
+/// `TrainConfig::validate` refuses a `grad_clip` of 0 for that reason.
 pub fn clip_scale(max_norm: f32, total_norm: f32) -> Result<f32, OjasError> {
     const OP: &str = "clip_grad_norm";
     if !max_norm.is_finite() || !total_norm.is_finite() {
@@ -2164,6 +2169,8 @@ pub(crate) mod tests {
     #[test]
     fn clip_scale_refuses_nonfinite_and_negative() {
         assert_eq!(clip_scale(1.0, 0.5).unwrap(), 1.0);
+        // torch's max_norm 0 zeroes the gradients; it is not "off".
+        assert_eq!(clip_scale(0.0, 4.0).unwrap(), 0.0);
         let coef = clip_scale(1.0, 4.0).unwrap();
         assert!(coef < 0.25 && coef > 0.2499);
         for (max_norm, norm) in [

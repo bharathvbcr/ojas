@@ -338,8 +338,11 @@ type TrainConfig struct {
 	// MatrixLR is the Muon peak for hidden matrices; AdamLR the AdamW peak
 	// for the embedding and every vector.
 	MatrixLR, AdamLR float64
-	GradClip         float32
-	OnNonFinite      NonFinitePolicy
+	// GradClip is the global-norm clip: finite and positive. 0 is refused,
+	// not "no clipping": torch's clip_grad_norm_ with max_norm 0 zeroes every
+	// gradient, and so would this.
+	GradClip    float32
+	OnNonFinite NonFinitePolicy
 	// TokenizerHash names the tokenizer that made the bin. It is saved with
 	// every checkpoint and Resume refuses a different one.
 	TokenizerHash [32]byte
