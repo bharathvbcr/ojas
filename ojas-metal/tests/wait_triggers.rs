@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::Backend;
+use ojas_core::{Backend, Budget, OjasError};
 use ojas_metal::{MetalBackend, WaitCounts};
 
 /// Open `m` with nothing recorded, so the next wait is the one under test.
@@ -128,6 +128,57 @@ fn a_large_upload_while_work_is_recorded_waits_and_is_counted_as_an_upload() {
         }
     );
     assert_eq!(down(&d), big);
+}
+
+#[test]
+fn a_large_id_upload_while_work_is_recorded_does_not_wait() {
+    // Pre-fix, token ids and targets past the 64 KiB inline cap waited like
+    // any other upload (S2-07). A U32 upload behind recorded work now goes
+    // into a buffer fresh from the pool, written on the host, at any size.
+    let m = metal();
+    let x = up(&m, &rand(&[64], 6, 1.0));
+    // 1 MiB of ids.
+    let want = ids(1 << 18, 6, u32::MAX);
+    let c0 = settled(&m);
+    let _pending = ok("silu", m.silu_forward(&x));
+    let d = up(&m, &host_u32(&want, &[want.len()]));
+    let _after = ok("silu", m.silu_forward(&x));
+    assert_eq!(
+        m.wait_counts().since(&c0),
+        WaitCounts::default(),
+        "a 1 MiB id upload behind recorded work waited"
+    );
+    let got = ok("download", m.download(&d));
+    assert_eq!(ok("u32", got.u32_slice()), want.as_slice());
+
+    // The off switch restores the wait, for before/after counts.
+    ok("inline off", m.set_inline_uploads(false));
+    let c1 = settled(&m);
+    let _pending = ok("silu", m.silu_forward(&x));
+    let d = up(&m, &host_u32(&want, &[want.len()]));
+    assert_eq!(
+        m.wait_counts().since(&c1),
+        WaitCounts {
+            upload: 1,
+            ..WaitCounts::default()
+        }
+    );
+    let got = ok("download", m.download(&d));
+    assert_eq!(ok("u32", got.u32_slice()), want.as_slice());
+    ok("inline on", m.set_inline_uploads(true));
+
+    // A budget with no room for the ids refuses them before the device
+    // sees them, and nothing waits.
+    let small = ok("new", MetalBackend::new(Budget::new(512 * 1024)));
+    let xs = up(&small, &rand(&[64], 7, 1.0));
+    let c2 = settled(&small);
+    let _pending = ok("silu", small.silu_forward(&xs));
+    let r = small.upload(&host_u32(&want, &[want.len()]));
+    assert!(
+        matches!(r, Err(OjasError::CapacityExceeded { .. })),
+        "{r:?}"
+    );
+    assert_eq!(small.wait_counts().since(&c2), WaitCounts::default());
 }
 
 #[test]

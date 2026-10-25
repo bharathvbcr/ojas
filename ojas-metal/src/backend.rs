@@ -288,10 +288,11 @@ impl MetalBackend {
         self.link.wait_counts()
     }
 
-    /// Carry uploads of at most 64 KiB inline while work is recorded (the
-    /// default), or turn that off so every such upload waits as it did
-    /// before inline uploads existed. For before/after wait measurements;
-    /// not a stable API.
+    /// Carry uploads of at most 64 KiB inline, and `U32` uploads of any size
+    /// through a host-written fresh buffer, while work is recorded (the
+    /// default); or turn both off so every such upload waits as it did
+    /// before either existed. For before/after wait measurements; not a
+    /// stable API.
     #[doc(hidden)]
     pub fn set_inline_uploads(&self, on: bool) -> Result<(), OjasError> {
         match self.link.call(Cmd::InlineUploads { on })? {

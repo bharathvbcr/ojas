@@ -515,6 +515,11 @@ struct Worker {
     /// Waited commits, shared with every handle (`MetalBackend::waits`).
     waits: Arc<Waits>,
     slab: GpuBuffer,
+    /// One word per `ojas_scale_multi` slot, at offset `4 * slot`, bound in
+    /// the slots a short last group leaves unused. The kernel never touches
+    /// them; binding these, not a repeat of a gradient, keeps every
+    /// read-write binding of a dispatch on memory of its own.
+    spare: GpuBuffer,
     book: RefCell<Book>,
 }
 
@@ -535,6 +540,7 @@ impl Worker {
         }
         let slab = rt.alloc_buffer(SLAB_SLOTS * ST_BYTES).map_err(metal_err)?;
         slab.try_contents_u32().map_err(metal_err)?.fill(0);
+        let spare = rt.alloc_buffer(NORM_SLOTS * 4).map_err(metal_err)?;
         let ws = rt.memory_info().recommended_working_set;
         let book = Book {
             used: 0,
@@ -563,6 +569,7 @@ impl Worker {
             poisoned: false,
             waits,
             slab,
+            spare,
             book: RefCell::new(book),
         })
     }
@@ -1614,8 +1621,9 @@ impl Worker {
     /// nothing recorded that costs no wait, so the bytes are mapped in. With
     /// work recorded, a small upload rides in the command itself: its words
     /// go into tessl's constant arena and `ojas_upload_words` copies them,
-    /// in order with the recorded work, so nothing waits. Any other upload
-    /// waits ([`Wait::Upload`]) and maps.
+    /// in order with the recorded work, so nothing waits. A `U32` upload
+    /// behind recorded work takes [`Self::upload_ids`] at any size. Any
+    /// other upload waits ([`Wait::Upload`]) and maps.
     /// A new buffer holding `src`'s contiguous window. Small uploads behind
     /// recorded work ride inline (encoded into at most
     /// [`INLINE_UPLOAD_BYTES`] of host memory); the rest wait and are
@@ -1626,6 +1634,14 @@ impl Worker {
             .num_elements()?
             .checked_mul(src.dtype().size())
             .ok_or_else(|| metal_err("upload size overflows"))?;
+        self.note_dispatches();
+        let behind = {
+            let book = self.book.borrow();
+            book.dirty && book.inline_uploads
+        };
+        if behind && src.dtype() == ojas_core::DType::U32 {
+            return self.upload_ids(src, len);
+        }
         let buf = self.alloc(len)?;
         self.note_dispatches();
         let inline = {
@@ -1651,10 +1667,28 @@ impl Worker {
             let mut map = buf.try_contents_u8().map_err(metal_err)?;
             src.write_ne_bytes(&mut map[..len])?;
         }
+        Ok(self.adopt(buf, len))
+    }
+
+    /// A `U32` upload (token ids, targets) behind recorded work: tessl
+    /// writes the borrowed window on the host into a buffer fresh from the
+    /// pool, which no recorded command can be using (`alloc_buffer_from_u32`,
+    /// as [`Self::fresh_from`] does). So it never waits and takes no room in
+    /// the constant arena, at any size, and this thread copies the window
+    /// only into the new buffer.
+    fn upload_ids(&mut self, src: &ojas_core::Tensor, len: usize) -> Res<Reply> {
+        let words = src.u32_slice()?;
+        let buf = self.retrying(len, || self.rt.alloc_buffer_from_u32(words))?;
+        self.book.borrow_mut().alloc_since_wait += len as u64;
+        Ok(self.adopt(buf, len))
+    }
+
+    /// Give a new upload of `len` bytes its id.
+    fn adopt(&mut self, buf: GpuBuffer, len: usize) -> Reply {
         let id = self.next_id;
         self.next_id += 1;
         self.bufs.insert(id, buf);
-        Ok(Reply::Bufs(vec![NewBuf { id, bytes: len }]))
+        Reply::Bufs(vec![NewBuf { id, bytes: len }])
     }
 
     /// A raw read waits and scans, holding any fault for the next sync point.
@@ -3074,12 +3108,16 @@ impl Worker {
             self.writable(op, *a)?;
         }
         let st = self.status(op)?;
+        let spare = &self.spare;
         for group in views.chunks(NORM_SLOTS) {
             let (tbl, groups) = norm_table(group)?;
             let used = u32_of(group.len())?;
             self.ktg("ojas_scale_multi", groups, 1, 256, |b| {
                 for slot in 0..NORM_SLOTS {
-                    bind(b, group.get(slot).unwrap_or(&group[0]), slot);
+                    match group.get(slot) {
+                        Some(v) => bind(b, v, slot),
+                        None => set_gpu_buf_offset(b, spare, 4 * slot, slot),
+                    }
                 }
                 bind_st(b, &st, 25);
                 b.bind_bytes(&tbl, 26);

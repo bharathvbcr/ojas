@@ -306,7 +306,8 @@ All in `ojas-metal/src/device.rs` unless named.
 - **Uploads.** tessl maps a buffer for the host only after `commit_m4(true)` (`tensor.rs:165-199`, `runtime.rs:572-579`) (V). So a mapped upload made while work is recorded waits.
   - **Inline uploads.** An upload made behind recorded work skips that wait when it is at most `INLINE_UPLOAD_BYTES` (64 KiB) and a whole number of words. Instead its bytes go into tessl's constant arena with `bind_bytes`, and a recorded `ojas_upload_words` kernel copies them into the new buffer.
   - **Arena budget.** The arena is 16 MiB, reset only by a waited commit, and poisons the runtime when exhausted. So inline bytes are also capped at `INLINE_ARENA_BYTES` (1 MiB) per wait window. Past either cap, the worker waits as before (`settle` in `Worker::upload`), and the wait is counted and scanned.
-  - **Off switch.** `MetalBackend::set_inline_uploads(false)` (doc-hidden) restores the waiting path for A/B counts.
+  - **U32 uploads.** A `U32` upload behind recorded work (token ids, targets) waits at no size, inline cap or not (ft-2c183b71, S2-07). `Worker::upload_ids` passes the tensor's borrowed window (`Tensor::u32_slice`) to tessl's `alloc_buffer_from_u32`, which writes it on the host into a buffer fresh from the pool. No recorded command can be using such a buffer, as for `fresh_from`'s index tables. So the upload takes no room in the constant arena, and the device thread copies the window only into the new buffer. The backend's `Ids::Host` copy of every `U32` upload's ids (`MetalBackend::upload`) predates this and is unchanged. The budget is still charged before the device call, so a capped backend refuses with `CapacityExceeded` first.
+  - **Off switch.** `MetalBackend::set_inline_uploads(false)` (doc-hidden) restores the waiting path for A/B counts. It turns off both the inline path and the U32 path.
   - **Tests.** `tests/wait_triggers.rs` pins both paths and the arena fallback (17 × 64 KiB uploads give exactly one upload wait) (V).
 - **Wait counter, by trigger.**
   - `MetalBackend::wait_counts()` (doc-hidden) returns a `WaitCounts` with one counter per reason for a waited commit: `upload`, `read`, `sync`, `clip_norm`, `mem_cap`, `working_set`, `slab_full` and `recycle` (the allocation retry). `settle` takes the reason and counts it only when there was recorded work to wait for.
@@ -408,8 +409,9 @@ The overlap path was verified, not assumed:
 
 - **Upload waits** were the largest share after memory caps (28 host uploads per trainer step).
   - Closed for uploads of 64 KiB or less by inline uploads (§9.1): 11 → 0 per tiny step (§9.3).
-  - A larger upload behind recorded work still waits and is counted under `upload`. At 124M the token ids and the targets are 16 KiB each per micro-batch (B 4 × T 1024 × 4 bytes), within the cap (I: by size; not measured at 124M).
-  - tessl still has no unwaited host write for a fresh buffer of any size.
+  - A larger `F32` or `BF16` upload behind recorded work still waits and is counted under `upload`. At 124M the token ids and the targets are 16 KiB each per micro-batch (B 4 × T 1024 × 4 bytes), within the cap (I: by size; not measured at 124M).
+  - A `U32` upload of any size no longer waits (§9.1, U32 uploads). `tests/wait_triggers.rs` (`a_large_id_upload_while_work_is_recorded_does_not_wait`) checks this with 1 MiB of ids: no wait, identical readback, the off switch's one wait, and a capped backend's refusal (V).
+  - tessl's only unwaited host write for a fresh buffer is `alloc_buffer_from_u32`, so an `F32` upload has no equivalent yet.
 - **Memory-cap commits are now counted per trigger** (`WaitCounts::mem_cap`, `working_set`). The 124M split (about 41, inferred in §9.3) has not been re-measured with the counter. The cap trades waits for resident memory: at 1 GiB, the step's freed temporaries recycle every 1 GiB of allocation.
 - **The capi early-return test runs on wgpu only** (`an_early_return_never_leaks_a_deferred_fault_into_the_next_call`). A Metal twin would pin `settled` on Metal; that file belongs to the coordinator.
 - **Stale text outside this lane:**
