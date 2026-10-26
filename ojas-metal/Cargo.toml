@@ -29,3 +29,7 @@ ojas-oracle = { path = "../ojas-oracle" }
 [[example]]
 name = "metal_bench"
 required-features = ["metal"]
+
+[[example]]
+name = "attention_vision_bench"
+required-features = ["metal"]
