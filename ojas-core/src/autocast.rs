@@ -1153,10 +1153,20 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
+    /// Pointwise, like SiLU: an output computed from a bf16-tagged input
+    /// is rounded and tagged; one from an untagged input is left alone.
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
         let out = self.inner.gelu_erf_forward(input)?;
-        Ok(self.keep_f32(out))
+        self.promote(on, tagged, out)
+    }
+
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.relu_forward(input)?;
+        self.promote(on, tagged, out)
     }
 
     /// A matmul-class op: the operands round in a region and the output
@@ -1173,22 +1183,29 @@ impl<B: Backend> Backend for Autocast<B> {
         self.emit(out)
     }
 
+    /// Pointwise, like [`Backend::residual_add_forward`]: rounded and
+    /// tagged only when both operands are bf16-tagged.
     fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
         let out = self.inner.broadcast_add_forward(a, b)?;
-        Ok(self.keep_f32(out))
+        self.promote(on, tagged, out)
     }
 
+    /// Pointwise, like [`Backend::mul_forward`].
     fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
         let out = self.inner.broadcast_mul_forward(a, b)?;
-        Ok(self.keep_f32(out))
+        self.promote(on, tagged, out)
     }
 
+    /// Pointwise on one operand, like [`Backend::silu_forward`].
     fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
-        self.pass()?;
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
         let out = self.inner.scale_forward(input, scale)?;
-        Ok(self.keep_f32(out))
+        self.promote(on, tagged, out)
     }
 
     fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

@@ -14,6 +14,8 @@
 //!   attention (forward and backward), which the tiny MHA fixtures do not
 //!   cover.
 //! - [`safetensors`]: the fixture policy over `ojas_io::SafeTensors`.
+//! - [`sam_fixtures`]: parity of the encoder, spatial and attention ops against
+//!   SpikeTrack's SAM 3.1 activation fixtures, generic over the backend.
 //! - [`bf16_operands`]: the bf16 operand contract of
 //!   `Backend::bf16_operands`, run on any backend that reports it.
 //! - [`gdn`]: the gated delta rule's f64 forward and transformers' published
@@ -33,6 +35,7 @@ pub mod gdn;
 pub mod golden;
 pub mod parity;
 pub mod safetensors;
+pub mod sam_fixtures;
 pub mod spec;
 pub mod variants;
 

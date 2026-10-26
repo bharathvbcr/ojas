@@ -60,7 +60,7 @@ pub use shapes::{
     layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
     linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    permute_output_shape, residual_add_backward_dims, residual_add_forward_dims,
+    permute_output_shape, relu_forward_dims, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
     rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims, scale_grad_dims,

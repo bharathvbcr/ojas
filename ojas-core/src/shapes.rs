@@ -69,6 +69,7 @@ const PERMUTE: &str = "permute";
 const LAYER_NORM_FORWARD: &str = "layer_norm_forward";
 const CHANNEL_LAYER_NORM_FORWARD: &str = "channel_layer_norm_forward";
 const GELU_ERF_FORWARD: &str = "gelu_erf_forward";
+const RELU_FORWARD: &str = "relu_forward";
 const LINEAR_BIAS_FORWARD: &str = "linear_bias_forward";
 const BROADCAST_ADD_FORWARD: &str = "broadcast_add_forward";
 const BROADCAST_MUL_FORWARD: &str = "broadcast_mul_forward";
@@ -1415,6 +1416,12 @@ pub fn channel_layer_norm_forward_dims(
 /// Returns its element count.
 pub fn gelu_erf_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(GELU_ERF_FORWARD, &[input])
+}
+
+/// [`crate::Backend::relu_forward`]: one `F32` tensor of any rank. Returns
+/// its element count.
+pub fn relu_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
+    same_shape(RELU_FORWARD, &[input])
 }
 
 /// [`crate::Backend::linear_bias_forward`]: the rules of
@@ -4044,6 +4051,17 @@ mod tests {
         let s = softmax_forward_dims(&x).unwrap();
         assert_eq!((s.rows, s.dim), (6, 5));
         shape_err(softmax_forward_dims(&f(&[])), "softmax_forward", "rank 0");
+    }
+
+    #[test]
+    fn relu_dims_take_any_rank_of_f32_and_refuse_the_rest() {
+        let op = "relu_forward";
+        assert_eq!(relu_forward_dims(&f(&[2, 3, 4])).unwrap(), 24);
+        assert_eq!(relu_forward_dims(&f(&[])).unwrap(), 1);
+        dtype_err(relu_forward_dims(&u(&[2, 5])), op, DType::F32, DType::U32);
+        shape_err(relu_forward_dims(&f(&[0, 3])), op, "empty tensor");
+        let big = broadcast(DType::F32, &[1 << 40, 1 << 40]);
+        range_err(relu_forward_dims(&big), op, "shape product");
     }
 
     #[test]

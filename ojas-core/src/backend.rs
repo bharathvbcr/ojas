@@ -902,7 +902,10 @@ pub trait Backend {
     ///
     /// The inference form: a backend that does not need the log-sum-exp
     /// can skip it. A backend without the op returns
-    /// [`OjasError::Unsupported`].
+    /// [`OjasError::Unsupported`] under this method's own name, not under
+    /// [`Self::attention_forward_saving`]'s: the default does not delegate,
+    /// so a backend that implements the saving form implements this one too
+    /// (the CPU and Metal backends both do).
     fn attention_forward(
         &self,
         q: &Tensor,
@@ -910,8 +913,8 @@ pub trait Backend {
         v: &Tensor,
         opts: AttentionOpts<'_>,
     ) -> Result<Tensor, OjasError> {
-        self.attention_forward_saving(q, k, v, opts)
-            .map(|(output, _)| output)
+        let _ = (q, k, v, opts);
+        Err(unsupported_inference(self.id(), "attention_forward"))
     }
 
     /// [`Self::attention_forward`] and each query row's log-sum-exp `ln
@@ -1364,11 +1367,13 @@ pub trait Backend {
     /// (`[..., dim]`, `weight` and `bias` `[dim]`): torch's
     /// `F.layer_norm`. Each row is centred on its mean, divided by
     /// `sqrt(var + eps)` with the biased variance (divisor `dim`), then
-    /// scaled and shifted. The mean and variance are `f32` sums that ascend
-    /// from index 0, so the value does not depend on the thread count, and a
-    /// `var + eps` that is not finite and positive is
-    /// [`OjasError::NonFinite`]. [`crate::layer_norm_forward_dims`]
-    /// validates. The default refuses with [`OjasError::Unsupported`].
+    /// scaled and shifted. The mean and variance are two-pass `f64` sums
+    /// that ascend from index 0 (the deviations are taken from the `f64`
+    /// mean), so a row whose mean is far from zero keeps its accuracy and the
+    /// value does not depend on the thread count; a `var + eps` that is not
+    /// finite and positive is [`OjasError::NonFinite`].
+    /// [`crate::layer_norm_forward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
     fn layer_norm_forward(
         &self,
         input: &Tensor,
@@ -1411,6 +1416,15 @@ pub trait Backend {
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
         Err(unsupported_inference(self.id(), "gelu_erf_forward"))
+    }
+
+    /// `max(x, 0)`, torch's `F.relu`: `x` where `x >= 0` and `+0` where
+    /// `x < 0`, so every output is an input value or zero and no rounding
+    /// happens. [`crate::relu_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_inference(self.id(), "relu_forward"))
     }
 
     /// `y = x @ W^T + b` for `x` `[..., in]`, `W` `[out, in]` and an `F32`
@@ -1981,6 +1995,7 @@ macro_rules! with_backend_methods {
             op fn layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn channel_layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gelu_erf_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_add_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_mul_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2516,6 +2531,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn default_attention_forward_refuses_under_its_own_name() {
+        let budget = Budget::new(1 << 10);
+        let t = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
+        for id in [BackendId::Wgpu, BackendId::Cuda, BackendId::Hip] {
+            let backend = NoUpload {
+                id,
+                budget: budget.clone(),
+            };
+            match backend.attention_forward(&t, &t, &t, AttentionOpts::default()) {
+                Err(OjasError::Unsupported { op, detail }) => {
+                    assert_eq!(op, "attention_forward", "{id:?}");
+                    assert!(
+                        detail.contains(&format!("{id:?}"))
+                            && detail.contains("does not implement attention_forward"),
+                        "{detail}"
+                    );
+                }
+                other => panic!("{id:?}: expected Unsupported, got {other:?}"),
+            }
+            match backend.attention_forward_saving(&t, &t, &t, AttentionOpts::default()) {
+                Err(OjasError::Unsupported { op, .. }) => {
+                    assert_eq!(op, "attention_forward_saving", "{id:?}");
+                }
+                other => panic!("{id:?}: expected Unsupported, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn pow_u64_matches_repeated_multiplication_and_underflows() {
         // Squaring and repeated multiplication round differently, so compare
         // with a relative tolerance of 64 ulps rather than bits.
@@ -2756,6 +2800,7 @@ pub(crate) mod tests {
             op(backend.layer_norm_forward(&t, &t, &t, 1e-6)),
             op(backend.channel_layer_norm_forward(&t, &t, &t, 1e-6)),
             op(backend.gelu_erf_forward(&t)),
+            op(backend.relu_forward(&t)),
             op(backend.linear_bias_forward(&t, &t, &t)),
             op(backend.broadcast_add_forward(&t, &t)),
             op(backend.broadcast_mul_forward(&t, &t)),
@@ -2834,6 +2879,7 @@ pub(crate) mod tests {
             "layer_norm_forward",
             "channel_layer_norm_forward",
             "gelu_erf_forward",
+            "relu_forward",
             "linear_bias_forward",
             "broadcast_add_forward",
             "broadcast_mul_forward",
