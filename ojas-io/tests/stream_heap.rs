@@ -138,7 +138,9 @@ fn a_64_mebibyte_bf16_read_holds_the_output_and_one_chunk() {
 #[test]
 fn an_oversized_declared_tensor_on_a_sparse_file_is_an_error_quickly() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    const BYTES: u64 = 1 << 47;
+    // 8 TiB: past any host's memory, yet inside the 16 TiB file-size limit of
+    // ext4, so the sparse file can be created on a Linux runner as well.
+    const BYTES: u64 = 1 << 43;
     let path = sparse_file("oversized", "BF16", BYTES / 2, BYTES);
     let st = SafeTensors::open(&path).unwrap();
     let start = std::time::Instant::now();
