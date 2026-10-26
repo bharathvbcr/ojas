@@ -3,15 +3,20 @@
 //! GELU, a linear layer's bias, broadcast add and multiply, a scalar scale,
 //! and a standalone softmax.
 //!
-//! Every row, channel and softmax reduction ascends from index 0 in `f32`
-//! without `mul_add`, and no output value depends on which chunk computed
-//! it, so the bits do not depend on the thread count, and `Fast` and `Exact`
-//! agree bit for bit, except for the softmax exponential (below). Each output is
-//! scanned for NaN and infinity as it is stored ([`fill_rows`]).
+//! Every row, channel and softmax reduction ascends from index 0 without
+//! `mul_add` (LayerNorm's in `f64`, the softmax sum in `f32`), and no output
+//! value depends on which chunk computed it, so the bits do not depend on the
+//! thread count, and `Fast` and `Exact` agree bit for bit, except for the
+//! softmax exponential (below). Each output is scanned for NaN and infinity
+//! as it is stored ([`fill_rows`]).
 //!
 //! - LayerNorm is torch's: `(x - mean) * rstd * weight + bias` with the
 //!   biased variance, `mean = sum / dim` and `var = sum((x - mean)^2) / dim`,
-//!   each sum ascending, `rstd = 1 / sqrt(var + eps)`.
+//!   `rstd = 1 / sqrt(var + eps)`. The reference is exact rather than fast: both
+//!   sums are `f64`, ascending, and the deviation is taken from the `f64`
+//!   mean, so a row whose mean is far from zero (SAM's residual stream) is not
+//!   limited by an `f32` sum's rounding. The normalized value `(x - mean) *
+//!   rstd` is rounded once to `f32`, then scaled and shifted in `f32`.
 //! - GELU is [`ojas_core::gelu_erf_exact`], the same bits on every platform.
 //! - Softmax subtracts the row maximum, exponentiates with
 //!   [`ojas_core::exp_exact`] under [`Numerics::Exact`] and with the vector
@@ -28,8 +33,8 @@ use crate::pool::Exec;
 use crate::validate::{fill_rows, nonfinite, product, room_for, shape};
 
 /// `1 / sqrt(sum_sq / dim + eps)`, refusing a result that is not finite.
-fn layer_rstd(op: &'static str, sum_sq_dev: f32, dim: usize, eps: f32) -> Result<f32, OjasError> {
-    let denom = sum_sq_dev / dim as f32 + eps;
+fn layer_rstd(op: &'static str, sum_sq_dev: f64, dim: usize, eps: f32) -> Result<f64, OjasError> {
+    let denom = sum_sq_dev / dim as f64 + f64::from(eps);
     if !(denom.is_finite() && denom > 0.0) {
         return Err(nonfinite(op));
     }
@@ -38,6 +43,13 @@ fn layer_rstd(op: &'static str, sum_sq_dev: f32, dim: usize, eps: f32) -> Result
         return Err(nonfinite(op));
     }
     Ok(rstd)
+}
+
+/// One normalized, scaled and shifted element: the shared arithmetic of
+/// [`layer_norm_forward`] and [`channel_layer_norm_forward`], so the two agree
+/// bit for bit.
+fn normalized(v: f32, mean: f64, rstd: f64, weight: f32, bias: f32) -> f32 {
+    (((f64::from(v) - mean) * rstd) as f32) * weight + bias
 }
 
 /// `dims` comes from [`ojas_core::layer_norm_forward_dims`], which also
@@ -61,19 +73,19 @@ pub(crate) fn layer_norm_forward(
     fill_rows(op, budget, exec, out_shape, rows, dim, |range, y| {
         let src = &x[range.start * dim..range.end * dim];
         for (dst, row) in y.chunks_exact_mut(dim).zip(src.chunks_exact(dim)) {
-            let mut sum = 0.0f32;
+            let mut sum = 0.0f64;
             for &v in row {
-                sum += v;
+                sum += f64::from(v);
             }
-            let mean = sum / dim as f32;
-            let mut dev = 0.0f32;
+            let mean = sum / dim as f64;
+            let mut dev = 0.0f64;
             for &v in row {
-                let d = v - mean;
+                let d = f64::from(v) - mean;
                 dev += d * d;
             }
             let rstd = layer_rstd(op, dev, dim, eps)?;
             for (((out, &v), &w), &b) in dst.iter_mut().zip(row).zip(weight).zip(bias) {
-                *out = (v - mean) * rstd * w + b;
+                *out = normalized(v, mean, rstd, w, b);
             }
         }
         Ok(())
@@ -83,7 +95,8 @@ pub(crate) fn layer_norm_forward(
 /// LayerNorm over the channel axis of `[batch, channels, spatial]`. A batch
 /// element is one chunk: its `spatial` means, variances and reciprocal
 /// deviations are built by walking the channels in order, each walk
-/// contiguous over `spatial`, so a position's sums ascend over its channels.
+/// contiguous over `spatial`, so a position's sums ascend over its channels
+/// exactly as [`layer_norm_forward`]'s row sums do.
 /// `dims` comes from [`ojas_core::channel_layer_norm_forward_dims`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn channel_layer_norm_forward(
@@ -112,13 +125,14 @@ pub(crate) fn channel_layer_norm_forward(
             "channel_layer_norm data length does not match shape",
         ));
     }
-    // Per task: the mean and reciprocal deviation of each position, held
-    // beside the output (at most two tasks a thread, as [`fill_rows`] cuts).
+    // Per task: the mean and reciprocal deviation of each position, in `f64`,
+    // held beside the output (at most two tasks a thread, as [`fill_rows`]
+    // cuts). Charged in `f32` elements, two apiece.
     let tasks = exec.pool.threads().saturating_mul(2).max(1);
-    let _hold = room_for(op, budget, spatial.saturating_mul(2).saturating_mul(tasks))?;
+    let _hold = room_for(op, budget, spatial.saturating_mul(4).saturating_mul(tasks))?;
     fill_rows(op, budget, exec, out_shape, batch, width, |range, y| {
-        let mut mean = vec![0.0f32; spatial];
-        let mut rstd = vec![0.0f32; spatial];
+        let mut mean = vec![0.0f64; spatial];
+        let mut rstd = vec![0.0f64; spatial];
         for (dst, img) in y
             .chunks_exact_mut(width)
             .zip(x[range.start * width..range.end * width].chunks_exact(width))
@@ -126,16 +140,16 @@ pub(crate) fn channel_layer_norm_forward(
             mean.fill(0.0);
             for plane in img.chunks_exact(spatial) {
                 for (m, &v) in mean.iter_mut().zip(plane) {
-                    *m += v;
+                    *m += f64::from(v);
                 }
             }
             for m in &mut mean {
-                *m /= channels as f32;
+                *m /= channels as f64;
             }
             rstd.fill(0.0);
             for plane in img.chunks_exact(spatial) {
                 for ((r, &v), &m) in rstd.iter_mut().zip(plane).zip(&mean) {
-                    let d = v - m;
+                    let d = f64::from(v) - m;
                     *r += d * d;
                 }
             }
@@ -148,7 +162,7 @@ pub(crate) fn channel_layer_norm_forward(
                 .zip(weight.iter().zip(bias))
             {
                 for (((out, &v), &m), &r) in out_plane.iter_mut().zip(plane).zip(&mean).zip(&rstd) {
-                    *out = (v - m) * r * w + b;
+                    *out = normalized(v, m, r, w, b);
                 }
             }
         }

@@ -1367,11 +1367,13 @@ pub trait Backend {
     /// (`[..., dim]`, `weight` and `bias` `[dim]`): torch's
     /// `F.layer_norm`. Each row is centred on its mean, divided by
     /// `sqrt(var + eps)` with the biased variance (divisor `dim`), then
-    /// scaled and shifted. The mean and variance are `f32` sums that ascend
-    /// from index 0, so the value does not depend on the thread count, and a
-    /// `var + eps` that is not finite and positive is
-    /// [`OjasError::NonFinite`]. [`crate::layer_norm_forward_dims`]
-    /// validates. The default refuses with [`OjasError::Unsupported`].
+    /// scaled and shifted. The mean and variance are two-pass `f64` sums
+    /// that ascend from index 0 (the deviations are taken from the `f64`
+    /// mean), so a row whose mean is far from zero keeps its accuracy and the
+    /// value does not depend on the thread count; a `var + eps` that is not
+    /// finite and positive is [`OjasError::NonFinite`].
+    /// [`crate::layer_norm_forward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
     fn layer_norm_forward(
         &self,
         input: &Tensor,
