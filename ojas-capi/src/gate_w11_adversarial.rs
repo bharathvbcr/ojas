@@ -64,7 +64,7 @@ fn the_call_table_covers_every_op() {
     }
     assert_eq!(
         ops.len(),
-        58,
+        61,
         "op count changed: pin the new op's admission"
     );
 }
