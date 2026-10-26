@@ -594,7 +594,9 @@ pub(crate) enum Cmd {
     },
     /// General attention forward; replies with the output and the `[bh,
     /// q_len]` row log-sum-exp. `bias` and `lens` are bound when present.
+    /// `op` names a fault: the form that was called.
     Attn {
+        op: &'static str,
         q: Arg,
         k: Arg,
         v: Arg,

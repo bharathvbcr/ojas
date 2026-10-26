@@ -644,6 +644,7 @@ impl MetalBackend {
                 &shapes,
                 0,
                 Cmd::Attn {
+                    op,
                     q: qa,
                     k: ka,
                     v: va,

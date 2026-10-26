@@ -1497,13 +1497,14 @@ impl Worker {
             } => self.rope(op, [x, cos, sin], [rows, dim, rotary], mode, backward),
             Cmd::Sdpa { q, k, v, geom } => self.sdpa(q, k, v, geom),
             Cmd::Attn {
+                op,
                 q,
                 k,
                 v,
                 bias,
                 lens,
                 geom,
-            } => self.attn_gen([q, k, v], bias, lens, geom),
+            } => self.attn_gen(op, [q, k, v], bias, lens, geom),
             Cmd::Conv2d {
                 op,
                 x,
@@ -2262,18 +2263,18 @@ impl Worker {
     /// output word.
     fn attn_gen(
         &mut self,
+        op: &'static str,
         [q, k, v]: [Arg; 3],
         bias: Option<Arg>,
         lens: Option<Arg>,
         g: AttnGeom,
     ) -> Res<Reply> {
-        const OP: &str = "attention_forward_saving";
         // One simdgroup per query row, four to a threadgroup.
         const ROWS_PER_TG: usize = ATTN_THREADS / 32;
         let scale = sdpa_scale(g.d)?;
         if g.d > ATTN_MAX_HEAD_DIM || g.rep == 0 || !g.bh.is_multiple_of(g.rep) {
             return Err(metal_err(format!(
-                "{OP}: head dim {} over {} planes of {} per KV plane",
+                "{op}: head dim {} over {} planes of {} per KV plane",
                 g.d, g.bh, g.rep
             )));
         }
@@ -2296,13 +2297,13 @@ impl Worker {
             && planes.is_multiple_of(g.heads as usize);
         if !fits {
             return Err(metal_err(format!(
-                "{OP}: buffers do not hold {planes} query planes of [{q_len}, {d}],                  {} kv planes of [{kv_len}, {d}] and the bias and key lengths asked for",
+                "{op}: buffers do not hold {planes} query planes of [{q_len}, {d}],                  {} kv planes of [{kv_len}, {d}] and the bias and key lengths asked for",
                 planes / g.rep as usize
             )));
         }
         let o = self.fresh(qv.n)?;
         let lse = self.fresh(planes * q_len)?;
-        let st = self.status(OP)?;
+        let st = self.status(op)?;
         self.check_operand(&st, q, &qv, ST_IN)?;
         self.check_operand(&st, k, &kv, ST_IN)?;
         self.check_operand(&st, v, &vv, ST_IN)?;
