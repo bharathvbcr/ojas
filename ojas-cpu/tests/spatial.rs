@@ -657,6 +657,8 @@ fn axial_tables_rotate_columns_then_rows() {
     assert_range(axial_rope_2d_tables(8, 2, 2, 1.0, 1.0, be.budget()));
     assert_range(axial_rope_2d_tables(8, 2, 2, theta, 0.0, be.budget()));
     assert_shape(axial_rope_2d_tables(8, 0, 2, theta, 1.0, be.budget()));
+    // An angle that overflows f32 is refused, not stored as NaN.
+    assert_range(axial_rope_2d_tables(8, 1, 4, theta, f32::MAX, be.budget()));
 }
 
 // ---- layout ops ------------------------------------------------------------

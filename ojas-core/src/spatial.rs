@@ -500,7 +500,8 @@ pub fn rope_interleaved_backward_dims(
 /// this is the rotation alone, with no QK-norm.
 ///
 /// Refused: `head_dim` not a positive multiple of 4, an empty grid, `theta`
-/// not finite and above 1, `scale_pos` not finite and positive.
+/// not finite and above 1, `scale_pos` not finite and positive, or one that
+/// makes an angle overflow f32.
 pub fn axial_rope_2d_tables(
     head_dim: usize,
     grid_h: usize,
@@ -547,7 +548,13 @@ pub fn axial_rope_2d_tables(
             let (col, row) = (col * scale_pos, row * scale_pos);
             for (j, &f) in freqs.iter().enumerate() {
                 for (pair, pos) in [(j, col), (quarter + j, row)] {
-                    let (sv, cv) = f64::from(pos * f).sin_cos();
+                    let angle = pos * f;
+                    if !angle.is_finite() {
+                        return Err(range(format!(
+                            "scale_pos {scale_pos} overflows the angle at token {t}"
+                        )));
+                    }
+                    let (sv, cv) = f64::from(angle).sin_cos();
                     c_row[pair] = cv as f32;
                     s_row[pair] = sv as f32;
                 }
