@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use ojas_core::{
     broadcast_add_forward_dims, broadcast_mul_forward_dims, channel_layer_norm_forward_dims,
-    gelu_erf_forward_dims, layer_norm_forward_dims, linear_bias_forward_dims, scale_forward_dims,
-    softmax_forward_dims,
+    gelu_erf_forward_dims, layer_norm_forward_dims, linear_bias_forward_dims, relu_forward_dims,
+    scale_forward_dims, softmax_forward_dims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
@@ -36,7 +36,7 @@ use crate::attn::general::{self, Extras, Geom};
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
 use crate::encoder_ops::{
     add_row_bias, broadcast_zip, channel_layer_norm_forward, gelu_erf_forward, layer_norm_forward,
-    scale_forward, softmax_forward,
+    relu_forward, scale_forward, softmax_forward,
 };
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
@@ -1296,6 +1296,13 @@ impl Backend for CpuBackend {
         gelu_erf_forward_dims(input)?;
         let [x] = f32_operands(OP, self.exec(), [input])?;
         gelu_erf_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "relu_forward";
+        relu_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        relu_forward(OP, &self.budget, self.exec(), x, input.shape())
     }
 
     fn linear_bias_forward(

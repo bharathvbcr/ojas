@@ -1162,6 +1162,13 @@ impl<B: Backend> Backend for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.relu_forward(input)?;
+        self.promote(on, tagged, out)
+    }
+
     /// A matmul-class op: the operands round in a region and the output
     /// rounds, as [`Backend::linear_forward`] does. The bias stays `f32`.
     fn linear_bias_forward(

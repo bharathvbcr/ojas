@@ -186,6 +186,24 @@ pub(crate) fn gelu_erf_forward(
     })
 }
 
+/// `max(x, 0)` of every element: `x` unless it is negative, then `+0`. A
+/// negative zero passes through as it is (it is not negative); torch's own
+/// sign for that one value was not checked.
+pub(crate) fn relu_forward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    x: &[f32],
+    out_shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    fill_rows(op, budget, exec, out_shape, x.len(), 1, |range, y| {
+        for (out, &v) in y.iter_mut().zip(&x[range]) {
+            *out = if v < 0.0 { 0.0 } else { v };
+        }
+        Ok(())
+    })
+}
+
 /// `y[r, :] += bias` over `[rows, out]` rows in place: the one `f32` add
 /// [`ojas_core::Backend::linear_bias_forward`] makes after the product.
 pub(crate) fn add_row_bias(op: &'static str, y: &mut [f32], bias: &[f32]) -> Result<(), OjasError> {

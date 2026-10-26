@@ -1418,6 +1418,15 @@ pub trait Backend {
         Err(unsupported_inference(self.id(), "gelu_erf_forward"))
     }
 
+    /// `max(x, 0)`, torch's `F.relu`: `x` where `x >= 0` and `+0` where
+    /// `x < 0`, so every output is an input value or zero and no rounding
+    /// happens. [`crate::relu_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_inference(self.id(), "relu_forward"))
+    }
+
     /// `y = x @ W^T + b` for `x` `[..., in]`, `W` `[out, in]` and an `F32`
     /// `bias` `[out]`: [`Self::linear_forward`] and then one `f32` add of the
     /// bias, so the product is the `linear_forward` bits and the bias adds
@@ -1986,6 +1995,7 @@ macro_rules! with_backend_methods {
             op fn layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn channel_layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gelu_erf_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_add_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_mul_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2790,6 +2800,7 @@ pub(crate) mod tests {
             op(backend.layer_norm_forward(&t, &t, &t, 1e-6)),
             op(backend.channel_layer_norm_forward(&t, &t, &t, 1e-6)),
             op(backend.gelu_erf_forward(&t)),
+            op(backend.relu_forward(&t)),
             op(backend.linear_bias_forward(&t, &t, &t)),
             op(backend.broadcast_add_forward(&t, &t)),
             op(backend.broadcast_mul_forward(&t, &t)),
@@ -2868,6 +2879,7 @@ pub(crate) mod tests {
             "layer_norm_forward",
             "channel_layer_norm_forward",
             "gelu_erf_forward",
+            "relu_forward",
             "linear_bias_forward",
             "broadcast_add_forward",
             "broadcast_mul_forward",
