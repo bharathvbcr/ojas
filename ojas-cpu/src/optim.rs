@@ -1014,12 +1014,19 @@ fn scratch_overflow(op: &'static str) -> OjasError {
 
 #[cfg(test)]
 mod tests {
+    // The only test here is macOS-only (it counts Accelerate calls), so the
+    // imports are too; elsewhere they would trip `unused_imports`.
+    #[cfg(target_os = "macos")]
     use std::sync::Arc;
 
+    #[cfg(target_os = "macos")]
     use ojas_core::{Ns5Precision, Numerics};
 
+    #[cfg(target_os = "macos")]
     use super::newton_schulz;
+    #[cfg(target_os = "macos")]
     use crate::gemm::whole_calls;
+    #[cfg(target_os = "macos")]
     use crate::pool::{Exec, Pool};
 
     /// A square 768 Fast Newton-Schulz run on one thread (every band inline,
