@@ -81,31 +81,31 @@ use ojas_core::{
     cached_attention_dims, causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims,
     causal_sdpa_backward_dims, causal_sdpa_forward_dims, channel_layer_norm_forward_dims,
     check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
-    clip_scale, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
-    embedding_backward_dims, embedding_forward_dims, gated_rms_norm_backward_dims,
-    gated_rms_norm_forward_dims, gdn_log_decay_backward_dims, gdn_log_decay_forward_dims,
-    gelu_erf_forward_dims, kv_cache_write_dims, layer_norm_forward_dims, linear_backward_dims,
-    linear_bias_forward_dims, linear_ce_dims, linear_forward_dims, mul_backward_dims,
-    mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_unsupported_metal_gdn,
-    refuse_unsupported_metal_head_dim, residual_add_backward_dims, residual_add_forward_dims,
-    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
-    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims,
-    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
-    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    clip_scale, conv2d_forward_dims, cross_entropy_mean_backward_dims,
+    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
+    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
+    gdn_log_decay_forward_dims, gelu_erf_forward_dims, kv_cache_write_dims,
+    layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
+    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
+    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
+    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
+    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
+    rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
+    scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
+    silu_forward_dims, softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
     value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
-    BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, DType, DeviceBuffer, GateDims,
-    GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
-    Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad,
-    Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad,
-    MAX_PERMUTE_RANK,
+    BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
+    DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad,
+    GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
     cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom, Cmd,
-    Conv1dGeom, EmbedRows, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode,
-    SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
+    Conv1dGeom, ConvGeom, EmbedRows, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide,
+    RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -964,6 +964,43 @@ fn rope_mode(op: &'static str, dims: &RopeDims) -> Res<(u32, u32, RopeMode)> {
         },
     };
     Ok((u32_dim(op, dims.rows)?, u32_dim(op, dims.dim)?, mode))
+}
+
+/// Refuse a convolution the GEMM reformulation does not cover: only a
+/// kernel equal to its stride with no padding, or stride 1 with any padding,
+/// at dilation 1 and one group, runs. The validator has run, so every
+/// refusal here is a device limit, never a malformed call.
+fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
+    let p = d.params;
+    let patches = p.stride == d.kernel && p.padding == [0, 0];
+    if p.groups == 1 && p.dilation == [1, 1] && (patches || p.stride == [1, 1]) {
+        return Ok(());
+    }
+    Err(OjasError::Unsupported {
+        op,
+        detail: format!(
+            "Metal runs kernel == stride without padding, or stride 1, at dilation 1 and one \
+             group; got kernel {:?}, stride {:?}, padding {:?}, dilation {:?}, groups {}",
+            d.kernel, p.stride, p.padding, p.dilation, p.groups
+        ),
+    })
+}
+
+/// The convolution kernels' geometry of validated `dims`.
+fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
+    let pair = |v: [usize; 2]| -> Res<[u32; 2]> { Ok([u32_dim(op, v[0])?, u32_dim(op, v[1])?]) };
+    Ok(ConvGeom {
+        batch: u32_dim(op, d.batch)?,
+        c: u32_dim(op, d.in_channels)?,
+        h: u32_dim(op, d.height)?,
+        w: u32_dim(op, d.width)?,
+        o: u32_dim(op, d.out_channels)?,
+        kernel: pair(d.kernel)?,
+        stride: pair(d.params.stride)?,
+        padding: pair(d.params.padding)?,
+        oh: u32_dim(op, d.out_height)?,
+        ow: u32_dim(op, d.out_width)?,
+    })
 }
 
 /// The attention kernels' geometry of validated `dims`, with Metal's
@@ -2027,6 +2064,45 @@ impl Backend for MetalBackend {
         const OP: &str = "rope_partial_backward";
         let dims = rope_partial_backward_dims(grad_output, cos, sin)?;
         rope_partial(self, OP, &dims, [grad_output, cos, sin], true)
+    }
+
+    /// The SAM cases as im2col, a GEMM and a layout pass: a kernel equal to
+    /// its stride without padding (the patch embedding), and stride 1 with
+    /// any padding (1x1 and 3x3 convolutions). Dilation, groups and any other
+    /// stride are [`OjasError::Unsupported`].
+    fn conv2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: Conv2dParams,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "conv2d_forward";
+        let dims = conv2d_forward_dims(input, weight, bias, params)?;
+        refuse_unsupported_conv2d(OP, &dims)?;
+        let (input, weight) = (self.widened(input)?, self.widened(weight)?);
+        let bias = bias.map(|b| self.widened(b)).transpose()?;
+        let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
+        let bias_arg = bias.as_ref().map(|b| self.f32(OP, b)).transpose()?;
+        let geom = conv_geom(OP, &dims)?;
+        let rows = product(OP, &[dims.batch, dims.out_height, dims.out_width])?;
+        let width = product(OP, &[dims.in_channels, dims.kernel[0], dims.kernel[1]])?;
+        let cols = product(OP, &[rows, width])?;
+        let prod = product(OP, &[rows, dims.out_channels])?;
+        u32_dim(OP, cols)?;
+        let scratch = plus(
+            OP,
+            plus(OP, cols, prod)?,
+            copied_elems(OP, ReadAs::Matrix, &[w])?,
+        )?;
+        let cmd = Cmd::Conv2d {
+            op: OP,
+            x,
+            w,
+            bias: bias_arg,
+            geom,
+        };
+        self.one(OP, &dims.out_shape(), scratch, cmd)
     }
 
     fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
