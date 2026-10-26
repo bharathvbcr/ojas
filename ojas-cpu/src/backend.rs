@@ -20,6 +20,11 @@ use ojas_core::{
     silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
     RmsDims,
 };
+use ojas_core::{
+    conv2d_forward_dims, conv_transpose2d_forward_dims, interpolate_bilinear_forward_dims,
+    max_pool2d_forward_dims, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
+    Conv2dParams, ConvTranspose2dParams,
+};
 
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
@@ -41,6 +46,10 @@ use crate::pointwise::{
     silu_forward, value_residual_backward, value_residual_forward,
 };
 use crate::pool::{Exec, Pool};
+use crate::spatial::{
+    conv2d_forward, conv_transpose2d_forward, interpolate_bilinear_forward, max_pool2d_forward,
+    operands_with_bias, rope_interleaved,
+};
 use crate::validate::{
     alloc_f32, check_f32s, f32_checked, f32_layouts, f32_operands, f32_values, fill_out, fill_outs,
     headroom, matmul_operands, nonfinite_first, payload_bytes, product, scan_matmul_operand,
@@ -970,6 +979,96 @@ impl Backend for CpuBackend {
             a_log,
             dt_bias,
         })
+    }
+
+    fn conv2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: Conv2dParams,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "conv2d_forward";
+        let dims = conv2d_forward_dims(input, weight, bias, params)?;
+        let exec = self.exec();
+        let (x, w, bias) = operands_with_bias(OP, exec, input, weight, bias)?;
+        conv2d_forward(OP, &self.budget, exec, dims, x, w, bias)
+    }
+
+    fn conv_transpose2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: ConvTranspose2dParams,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "conv_transpose2d_forward";
+        let dims = conv_transpose2d_forward_dims(input, weight, bias, params)?;
+        let exec = self.exec();
+        let (x, w, bias) = operands_with_bias(OP, exec, input, weight, bias)?;
+        conv_transpose2d_forward(OP, &self.budget, exec, dims, x, w, bias)
+    }
+
+    fn max_pool2d_forward(
+        &self,
+        input: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "max_pool2d_forward";
+        let dims = max_pool2d_forward_dims(input, kernel, stride)?;
+        let exec = self.exec();
+        let [x] = f32_operands(OP, exec, [input])?;
+        max_pool2d_forward(OP, &self.budget, exec, dims, x)
+    }
+
+    fn interpolate_bilinear_forward(
+        &self,
+        input: &Tensor,
+        out_size: [usize; 2],
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "interpolate_bilinear_forward";
+        let dims = interpolate_bilinear_forward_dims(input, out_size)?;
+        let exec = self.exec();
+        let [x] = f32_operands(OP, exec, [input])?;
+        interpolate_bilinear_forward(OP, &self.budget, exec, dims, x, align_corners)
+    }
+
+    fn rope_interleaved_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_interleaved_forward";
+        let dims = rope_interleaved_forward_dims(x, cos, sin)?;
+        let exec = self.exec();
+        let [xs, c, s] = f32_operands(OP, exec, [x, cos, sin])?;
+        rope_interleaved(OP, &self.budget, exec, dims, xs, c, s, false, x.shape())
+    }
+
+    fn rope_interleaved_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_interleaved_backward";
+        let dims = rope_interleaved_backward_dims(grad_output, cos, sin)?;
+        let exec = self.exec();
+        let [g, c, s] = f32_operands(OP, exec, [grad_output, cos, sin])?;
+        rope_interleaved(
+            OP,
+            &self.budget,
+            exec,
+            dims,
+            g,
+            c,
+            s,
+            true,
+            grad_output.shape(),
+        )
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
