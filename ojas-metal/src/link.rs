@@ -356,6 +356,23 @@ pub(crate) struct AttnGeom {
     pub has_lens: bool,
 }
 
+/// A convolution as GEMM, validated and within the kernels' limits:
+/// `[batch, c, h, w]` input, `[o, c, kh, kw]` weight, `[batch, o, oh, ow]`
+/// output, dilation 1, one group.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ConvGeom {
+    pub batch: u32,
+    pub c: u32,
+    pub h: u32,
+    pub w: u32,
+    pub o: u32,
+    pub kernel: [u32; 2],
+    pub stride: [u32; 2],
+    pub padding: [u32; 2],
+    pub oh: u32,
+    pub ow: u32,
+}
+
 /// Causal conv1d geometry, validated and within the kernels' limits.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Conv1dGeom {
@@ -581,6 +598,25 @@ pub(crate) enum Cmd {
         bias: Option<Arg>,
         lens: Option<Arg>,
         geom: AttnGeom,
+    },
+    /// `conv2d_forward` as im2col, a GEMM and a layout pass; replies with the
+    /// NCHW output. `op` names a fault, and `bias` is read when present.
+    Conv2d {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        geom: ConvGeom,
+    },
+    /// `conv_transpose2d_forward` with kernel == stride: a permute to NHWC, a
+    /// GEMM and a layout pass; `geom` holds the input extents, the output
+    /// channels and the kernel, and `oh`, `ow` the output extents.
+    ConvTranspose2d {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        geom: ConvGeom,
     },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {

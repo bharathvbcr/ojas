@@ -118,7 +118,15 @@ pub fn same_tensor(what: &str, got: &Tensor, want: &Tensor, atol: f32, rtol: f32
         Some(ojas_core::BackendId::Metal),
         "{what}: residency"
     );
-    close(what, &down(got), &ok(what, want.to_f32_vec()), atol, rtol);
+    let (got, want) = (down(got), ok(what, want.to_f32_vec()));
+    // The worst gap, for a report run with `--nocapture`.
+    let worst = got
+        .iter()
+        .zip(&want)
+        .map(|(g, w)| (g - w).abs())
+        .fold(0.0f32, f32::max);
+    eprintln!("MAXERR {what}: {worst:e}");
+    close(what, &got, &want, atol, rtol);
 }
 
 /// A device-detected fault under the deferred-fault contract

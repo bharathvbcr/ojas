@@ -1735,6 +1735,104 @@ kernel void ojas_permute(
     y[i] = x[src];
 }
 
+// ---------------------------------------------------------- convolution ---
+//
+// A convolution as GEMM (`Backend::conv2d_forward`): `ojas_im2col` lays each
+// output pixel's window out as a row of `cols`, tessl's GEMM multiplies it
+// by the weight, and `ojas_conv_nchw` turns the `[pixels, out]` product into
+// NCHW, adding the bias last as the CPU does. Dilation is 1 and there is one
+// group; `total` <= u32::MAX.
+
+/// cols[p][k]: p = (n, oy, ox) row-major, k = (c, ky, kx) row-major; the
+/// input value at (oy * sh + ky - ph, ox * sw + kx - pw), 0 where that lies
+/// outside the image. One thread per element of `cols`.
+kernel void ojas_im2col(
+    device const float *x [[buffer(0)]],
+    device float *cols [[buffer(1)]],
+    constant uint &total [[buffer(2)]],
+    constant uint &c [[buffer(3)]],
+    constant uint &h [[buffer(4)]],
+    constant uint &w [[buffer(5)]],
+    constant uint &kh [[buffer(6)]],
+    constant uint &kw [[buffer(7)]],
+    constant uint &sh [[buffer(8)]],
+    constant uint &sw [[buffer(9)]],
+    constant uint &ph [[buffer(10)]],
+    constant uint &pw [[buffer(11)]],
+    constant uint &oh [[buffer(12)]],
+    constant uint &ow [[buffer(13)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint window = kh * kw;
+    const uint width = c * window;
+    const uint pixel = i / width;
+    const uint k = i % width;
+    const uint ox = pixel % ow;
+    const uint oy = (pixel / ow) % oh;
+    const uint n = pixel / (ow * oh);
+    const uint ci = k / window;
+    const uint ky = (k % window) / kw;
+    const uint kx = k % kw;
+    const int iy = (int)(oy * sh + ky) - (int)ph;
+    const int ix = (int)(ox * sw + kx) - (int)pw;
+    float v = 0.0f;
+    if (iy >= 0 && iy < (int)h && ix >= 0 && ix < (int)w) {
+        v = x[(((ulong)n * c + ci) * h + (uint)iy) * w + (uint)ix];
+    }
+    cols[i] = v;
+}
+
+/// y[n][o][pixel] = prod[n * pixels + pixel][o] + bias[o], over y of
+/// [batch, out, pixels]. `has_bias` 0 leaves the product as it is.
+kernel void ojas_conv_nchw(
+    device const float *prod [[buffer(0)]],
+    device const float *bias [[buffer(1)]],
+    device float *y [[buffer(2)]],
+    constant uint &total [[buffer(3)]],
+    constant uint &out_c [[buffer(4)]],
+    constant uint &pixels [[buffer(5)]],
+    constant uint &has_bias [[buffer(6)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint pixel = i % pixels;
+    const uint o = (i / pixels) % out_c;
+    const uint n = i / (pixels * out_c);
+    const float v = prod[((ulong)n * pixels + pixel) * out_c + o];
+    y[i] = has_bias != 0u ? v + bias[o] : v;
+}
+
+/// `conv_transpose2d_forward` with kernel == stride and no padding: the
+/// product `prod[(n, y, x)][(o, i, j)]` of the NHWC input with the
+/// `[c, o kh kw]` weight is the output pixel (y kh + i, x kw + j) of channel
+/// o, since each output pixel has exactly one source pixel; the bias is
+/// added last. y is [batch, out, h kh, w kw], one thread per element.
+kernel void ojas_convt_nchw(
+    device const float *prod [[buffer(0)]],
+    device const float *bias [[buffer(1)]],
+    device float *y [[buffer(2)]],
+    constant uint &total [[buffer(3)]],
+    constant uint &out_c [[buffer(4)]],
+    constant uint &h [[buffer(5)]],
+    constant uint &w [[buffer(6)]],
+    constant uint &kh [[buffer(7)]],
+    constant uint &kw [[buffer(8)]],
+    constant uint &has_bias [[buffer(9)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint width = w * kw;
+    const uint height = h * kh;
+    const uint ox = i % width;
+    const uint oy = (i / width) % height;
+    const uint o = (i / (width * height)) % out_c;
+    const uint n = i / (width * height * out_c);
+    const ulong src_pixel = ((ulong)n * h + oy / kh) * w + ox / kw;
+    const float v = prod[src_pixel * out_c * kh * kw + ((ulong)o * kh + oy % kh) * kw + ox % kw];
+    y[i] = has_bias != 0u ? v + bias[o] : v;
+}
+
 // ---------------------------------------- broadcast, scale and softmax ---
 //
 // Forward ops of the encoder family (see `Backend::broadcast_add_forward`,
