@@ -1,7 +1,7 @@
-//! LayerNorm of rows whose mean is far from zero and whose squared
-//! deviation exceeds f32, against exact f64 (the two-pass f64 sums).
+//! LayerNorm of rows whose mean is far from zero, and the bf16 region's
+//! rounding of the elementwise encoder ops.
 
-use ojas_core::{Backend, Budget, Numerics, Tensor};
+use ojas_core::{round_f32_to_bf16, Autocast, AutocastMode, Backend, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;
@@ -74,4 +74,50 @@ fn a_row_whose_squared_deviation_exceeds_f32_is_still_normalized_exactly() {
     for (got, want) in y.iter().zip([1.0f32, -1.0, 1.0, -1.0]) {
         assert!((got - want).abs() <= 1e-6, "{y:?}");
     }
+}
+
+// ---- bf16 region ----
+
+fn is_bf16_exact(values: &[f32]) -> bool {
+    values
+        .iter()
+        .all(|&x| round_f32_to_bf16(x).to_bits() == x.to_bits())
+}
+
+#[test]
+fn bf16_region_rounds_elementwise_outputs_like_residual_add() {
+    let wrapped = Autocast::new(backend(Numerics::Exact));
+    let eye = t(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let tiny = f32::from_bits(0x3b00_0000); // 2^-9, exactly representable in bf16
+    let region = wrapped.autocast_region(AutocastMode::Bf16).unwrap();
+    // Outputs of a matmul-class op are tagged as already rounded.
+    let a = wrapped
+        .linear_forward(&t(&[1.0, tiny], &[1, 2]), &eye)
+        .unwrap();
+    let b = wrapped
+        .linear_forward(&t(&[tiny, 1.0], &[1, 2]), &eye)
+        .unwrap();
+    // Premise: the existing elementwise ops keep the tag by rounding.
+    assert!(is_bf16_exact(&v(&wrapped
+        .residual_add_forward(&a, &b)
+        .unwrap())));
+    assert!(is_bf16_exact(&v(&wrapped.silu_forward(&a).unwrap())));
+    // The new ones: 1 + 2^-9 is not a bf16 value.
+    let sum = v(&wrapped.broadcast_add_forward(&a, &b).unwrap());
+    assert!(is_bf16_exact(&sum), "broadcast_add left {sum:?} unrounded");
+    // (1 + 2^-7)^2 needs 14 mantissa bits: not a bf16 value.
+    let c = wrapped
+        .linear_forward(&t(&[1.007_812_5, 1.007_812_5], &[1, 2]), &eye)
+        .unwrap();
+    assert!(is_bf16_exact(&v(&wrapped.mul_forward(&c, &c).unwrap())));
+    let prod = v(&wrapped.broadcast_mul_forward(&c, &c).unwrap());
+    assert!(
+        is_bf16_exact(&prod),
+        "broadcast_mul left {prod:?} unrounded"
+    );
+    let gelu = v(&wrapped.gelu_erf_forward(&a).unwrap());
+    assert!(is_bf16_exact(&gelu), "gelu left {gelu:?} unrounded");
+    let scaled = v(&wrapped.scale_forward(&a, 1.0 + f32::EPSILON * 4.0).unwrap());
+    assert!(is_bf16_exact(&scaled), "scale left {scaled:?} unrounded");
+    drop(region);
 }
