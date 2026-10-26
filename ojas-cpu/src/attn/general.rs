@@ -195,6 +195,17 @@ fn scratch_overflow(op: &'static str) -> OjasError {
     }
 }
 
+/// Tasks that hold scratch at once: one when the pass stays on the calling
+/// thread (`fill_parts` runs a pass under `2 * TASK_WORK` serially), else
+/// at most one per worker.
+fn in_flight(exec: Exec<'_>, work: usize, tasks: usize) -> usize {
+    if exec.pool.threads() <= 1 || work < 2 * TASK_WORK {
+        1
+    } else {
+        tasks.min(exec.pool.threads()).max(1)
+    }
+}
+
 /// `inflight` tasks' scores, probabilities and packed keys.
 fn forward_scratch(op: &'static str, g: &Geom, inflight: usize) -> Result<usize, OjasError> {
     let per_task = g
@@ -285,11 +296,7 @@ pub(crate) fn attention_forward(
     };
     let cuts = even_cuts(g.q_len, blocks);
     let launched = planes.saturating_mul(blocks).max(1);
-    let inflight = if exec.pool.threads() <= 1 {
-        1
-    } else {
-        launched.min(exec.pool.threads()).max(1)
-    };
+    let inflight = in_flight(exec, work, launched);
     let _hold = room_for(op, budget, forward_scratch(op, &g, inflight)?)?;
     let cancel = exec.pool.cancel_hook();
     // Task `plane * blocks + block` writes rows `cuts[block]..cuts[block + 1]`
@@ -441,11 +448,7 @@ pub(crate) fn attention_backward(
     // contiguous and accumulate into the same grad_k / grad_v in increasing
     // query-head order, so a group is never split.
     let groups = g.batch * g.kv_heads;
-    let inflight = if exec.pool.threads() <= 1 {
-        1
-    } else {
-        groups.min(exec.pool.threads()).max(1)
-    };
+    let inflight = in_flight(exec, g.work(), groups);
     let _hold = room_for(op, budget, backward_scratch(op, &g, inflight)?)?;
     let cancel = exec.pool.cancel_hook();
     let rep = g.rep();
@@ -587,11 +590,7 @@ pub(crate) fn bias_backward(
     }
     check_extras(op, &g, &extras, true)?;
     let planes = bias.batch * bias.heads;
-    let inflight = if exec.pool.threads() <= 1 {
-        1
-    } else {
-        planes.min(exec.pool.threads()).max(1)
-    };
+    let inflight = in_flight(exec, g.work(), planes);
     let _hold = room_for(op, budget, backward_scratch(op, &g, inflight)?)?;
     let cancel = exec.pool.cancel_hook();
     let plane_len = bias.queries * g.kv_len;

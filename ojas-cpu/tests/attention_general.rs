@@ -619,3 +619,48 @@ fn a_non_finite_operand_is_refused() {
         other => panic!("expected NonFinite, got {other:?}"),
     }
 }
+
+/// A pass too small to fan out runs on the calling thread, so it needs one
+/// task's scratch whatever the pool size: many heads of tiny work must fit
+/// a budget that only holds the outputs and a single task's buffers.
+#[test]
+fn a_serial_pass_reserves_one_tasks_scratch_not_one_per_worker() {
+    let c = Case::new(1, 32, 32, 2, 16, 8).causal(None);
+    let x = inputs(&c, 77);
+    let built = Built::new(&c, &x);
+    let tight = CpuBackend::with_threads(Budget::new(4096), 8)
+        .unwrap()
+        .with_numerics(Numerics::Exact);
+    let (out, lse) = tight
+        .attention_forward_saving(&built.q, &built.k, &built.v, built.opts(&c))
+        .unwrap();
+    let roomy = backend(8, Numerics::Exact);
+    let (want, want_lse) = roomy
+        .attention_forward_saving(&built.q, &built.k, &built.v, built.opts(&c))
+        .unwrap();
+    assert_eq!(bits(&out), bits(&want));
+    assert_eq!(bits(&lse), bits(&want_lse));
+    // Backward: the output, its lse, the three gradients and one task's two
+    // length-Tk buffers fit; eight tasks' worth (1 KiB) would not.
+    let (kv_bytes, q_bytes) = (32 * 16 * 8 * 4, 32 * 2 * 8 * 4);
+    let backward = CpuBackend::with_threads(
+        Budget::new((q_bytes + 32 * 2 * 4 + q_bytes + 2 * kv_bytes + 512) as u64),
+        8,
+    )
+    .unwrap()
+    .with_numerics(Numerics::Exact);
+    let (out, lse) = backward
+        .attention_forward_saving(&built.q, &built.k, &built.v, built.opts(&c))
+        .unwrap();
+    let grad = backward.attention_backward(
+        &built.q,
+        &built.k,
+        &built.v,
+        &out,
+        &lse,
+        &out,
+        built.opts(&c),
+        false,
+    );
+    assert!(grad.is_ok(), "{grad:?}");
+}
