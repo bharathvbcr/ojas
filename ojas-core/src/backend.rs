@@ -7,6 +7,7 @@
 use crate::autocast::{bf16_to_f32, f32_to_bf16, round_f32_to_bf16, AutocastGuard, AutocastMode};
 use crate::budget::Budget;
 use crate::dtype::DType;
+use crate::spatial::{Conv2dParams, ConvTranspose2dParams};
 use crate::tensor::Tensor;
 use crate::OjasError;
 
@@ -489,6 +490,16 @@ fn unsupported_hybrid(id: BackendId, op: &'static str) -> OjasError {
 /// bias, broadcast add and mul, scale, softmax) that backend `id` does not
 /// implement. There is no host fallback.
 fn unsupported_inference(id: BackendId, op: &'static str) -> OjasError {
+    OjasError::Unsupported {
+        op,
+        detail: format!("{id:?} backend does not implement {op}"),
+    }
+}
+
+/// The refusal of a spatial op (2D convolution, pooling, resampling,
+/// interleaved RoPE) that backend `id` does not implement. There is no host
+/// fallback.
+fn unsupported_spatial(id: BackendId, op: &'static str) -> OjasError {
     OjasError::Unsupported {
         op,
         detail: format!("{id:?} backend does not implement {op}"),
@@ -1101,6 +1112,111 @@ pub trait Backend {
     ) -> Result<GdnDecayGrad, OjasError> {
         let _ = (a, a_log, dt_bias, grad_output);
         Err(unsupported_hybrid(self.id(), "gdn_log_decay_backward"))
+    }
+
+    /// 2D convolution over `NCHW` images: `input` `[N, C, H, W]`, `weight`
+    /// `[O, C / groups, kh, kw]` (PyTorch's layout) and an optional `bias`
+    /// `[O]`, giving `[N, O, Ho, Wo]`. A group is an im2col matrix times
+    /// the group's weight, so patch embedding, 1x1 and strided 3x3
+    /// convolutions are one GEMM per image; `groups == C` is the depthwise
+    /// convolution. Each output sums its taps in `(channel, kh, kw)` order
+    /// and adds the bias last.
+    /// [`crate::conv2d_forward_dims`] validates the shapes. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn conv2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: Conv2dParams,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, weight, bias, params);
+        Err(unsupported_spatial(self.id(), "conv2d_forward"))
+    }
+
+    /// Transposed 2D convolution (`torch.nn.ConvTranspose2d`, one group):
+    /// `input` `[N, C, H, W]`, `weight` `[C, O, kh, kw]`, an optional `bias`
+    /// `[O]`, giving `[N, O, Ho, Wo]`. Each input pixel scatters a
+    /// weighted `kh x kw` patch; an output pixel sums its contributions in
+    /// ascending `(kh, kw)` order, then adds the bias.
+    /// [`crate::conv_transpose2d_forward_dims`] validates the shapes. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn conv_transpose2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: ConvTranspose2dParams,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, weight, bias, params);
+        Err(unsupported_spatial(self.id(), "conv_transpose2d_forward"))
+    }
+
+    /// `torch.nn.functional.max_pool2d` without padding or dilation over
+    /// `[N, C, H, W]`. [`crate::max_pool2d_forward_dims`] validates the
+    /// shapes. The default refuses with [`OjasError::Unsupported`].
+    fn max_pool2d_forward(
+        &self,
+        input: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, kernel, stride);
+        Err(unsupported_spatial(self.id(), "max_pool2d_forward"))
+    }
+
+    /// `torch.nn.functional.interpolate(mode="bilinear")` of `[N, C, H, W]`
+    /// to `out_size = [out_h, out_w]`, without antialiasing. With
+    /// `align_corners` false, source coordinate `(dst + 0.5) * in / out -
+    /// 0.5` clamped at 0; with it true, `dst * (in - 1) / (out - 1)`.
+    /// [`crate::interpolate_bilinear_forward_dims`] validates the shapes.
+    /// The default refuses with [`OjasError::Unsupported`].
+    fn interpolate_bilinear_forward(
+        &self,
+        input: &Tensor,
+        out_size: [usize; 2],
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, out_size, align_corners);
+        Err(unsupported_spatial(
+            self.id(),
+            "interpolate_bilinear_forward",
+        ))
+    }
+
+    /// RoPE that rotates adjacent pairs `(x[2i], x[2i + 1])`, the complex
+    /// multiplication of SAM2 and SAM3's `apply_rotary_enc`, with no norm:
+    ///
+    /// ```text
+    /// out[2i]     = x[2i] * cos[t, i] - x[2i + 1] * sin[t, i]
+    /// out[2i + 1] = x[2i] * sin[t, i] + x[2i + 1] * cos[t, i]
+    /// ```
+    ///
+    /// `x` is `[B, T, H, D]` with `D` even and the tables `[T, D / 2]`.
+    /// [`crate::axial_rope_2d_tables`] builds the 2D axial tables; any
+    /// position scheme works. [`crate::rope_interleaved_forward_dims`]
+    /// validates the shapes. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn rope_interleaved_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (x, cos, sin);
+        Err(unsupported_spatial(self.id(), "rope_interleaved_forward"))
+    }
+
+    /// Gradient of [`Self::rope_interleaved_forward`]: the rotation by
+    /// `-angle`.
+    fn rope_interleaved_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (grad_output, cos, sin);
+        Err(unsupported_spatial(self.id(), "rope_interleaved_backward"))
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError>;
@@ -1730,6 +1846,12 @@ macro_rules! with_backend_methods {
             op fn sigmoid_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gdn_log_decay_forward(&self, a: &$crate::Tensor, a_log: &$crate::Tensor, dt_bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gdn_log_decay_backward(&self, a: &$crate::Tensor, a_log: &$crate::Tensor, dt_bias: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::GdnDecayGrad, $crate::OjasError>;
+            op fn conv2d_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: Option<&$crate::Tensor>, params: $crate::Conv2dParams) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn conv_transpose2d_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: Option<&$crate::Tensor>, params: $crate::ConvTranspose2dParams) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn max_pool2d_forward(&self, input: &$crate::Tensor, kernel: [usize; 2], stride: [usize; 2]) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn interpolate_bilinear_forward(&self, input: &$crate::Tensor, out_size: [usize; 2], align_corners: bool) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn rope_interleaved_forward(&self, x: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn rope_interleaved_backward(&self, grad_output: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn silu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn silu_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn mul_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2492,6 +2614,12 @@ pub(crate) mod tests {
             op(backend.sigmoid_backward(&t, &t)),
             op(backend.gdn_log_decay_forward(&t, &t, &t)),
             op(backend.gdn_log_decay_backward(&t, &t, &t, &t).map(drop)),
+            op(backend.conv2d_forward(&t, &t, None, Conv2dParams::new())),
+            op(backend.conv_transpose2d_forward(&t, &t, None, ConvTranspose2dParams::new())),
+            op(backend.max_pool2d_forward(&t, [2, 2], [2, 2])),
+            op(backend.interpolate_bilinear_forward(&t, [2, 2], false)),
+            op(backend.rope_interleaved_forward(&t, &t, &t)),
+            op(backend.rope_interleaved_backward(&t, &t, &t)),
             op(backend.silu_forward(&t)),
             op(backend.silu_backward(&t, &t)),
             op(backend.mul_forward(&t, &t)),
@@ -2561,6 +2689,12 @@ pub(crate) mod tests {
             "sigmoid_backward",
             "gdn_log_decay_forward",
             "gdn_log_decay_backward",
+            "conv2d_forward",
+            "conv_transpose2d_forward",
+            "max_pool2d_forward",
+            "interpolate_bilinear_forward",
+            "rope_interleaved_forward",
+            "rope_interleaved_backward",
             "silu_forward",
             "silu_backward",
             "mul_forward",
@@ -2768,6 +2902,36 @@ pub(crate) mod tests {
         refused(
             backend.gdn_log_decay_backward(&x, &x, &x, &x).map(drop),
             "gdn_log_decay_backward",
+        );
+        refused(
+            backend
+                .conv2d_forward(&x, &x, None, Conv2dParams::new())
+                .map(drop),
+            "conv2d_forward",
+        );
+        refused(
+            backend
+                .conv_transpose2d_forward(&x, &x, None, ConvTranspose2dParams::new())
+                .map(drop),
+            "conv_transpose2d_forward",
+        );
+        refused(
+            backend.max_pool2d_forward(&x, [2, 2], [2, 2]).map(drop),
+            "max_pool2d_forward",
+        );
+        refused(
+            backend
+                .interpolate_bilinear_forward(&x, [2, 2], false)
+                .map(drop),
+            "interpolate_bilinear_forward",
+        );
+        refused(
+            backend.rope_interleaved_forward(&x, &x, &x).map(drop),
+            "rope_interleaved_forward",
+        );
+        refused(
+            backend.rope_interleaved_backward(&x, &x, &x).map(drop),
+            "rope_interleaved_backward",
         );
     }
 

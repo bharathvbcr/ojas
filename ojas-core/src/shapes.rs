@@ -265,7 +265,7 @@ pub struct MuonDims {
     pub cols: usize,
 }
 
-fn refuse(op: &'static str, detail: impl Into<String>) -> OjasError {
+pub(crate) fn refuse(op: &'static str, detail: impl Into<String>) -> OjasError {
     OjasError::Shape {
         op,
         detail: detail.into(),
@@ -275,7 +275,7 @@ fn refuse(op: &'static str, detail: impl Into<String>) -> OjasError {
 /// A count that does not fit `usize`. This is [`OjasError::OutOfRange`], as
 /// every backend and [`crate::shape_product`] already report it, so adopting
 /// these validators does not change that variant.
-fn too_large(op: &'static str, detail: impl Into<String>) -> OjasError {
+pub(crate) fn too_large(op: &'static str, detail: impl Into<String>) -> OjasError {
     OjasError::OutOfRange {
         op,
         detail: detail.into(),
@@ -297,7 +297,7 @@ fn sized_product(op: &'static str, dims: &[usize], elem_size: usize) -> Result<u
 }
 
 /// Product of `dims` as a count of `f32` values.
-fn f32_product(op: &'static str, dims: &[usize]) -> Result<usize, OjasError> {
+pub(crate) fn f32_product(op: &'static str, dims: &[usize]) -> Result<usize, OjasError> {
     sized_product(op, dims, DType::F32.size())
 }
 
@@ -317,7 +317,7 @@ fn operand(op: &'static str, tensor: &Tensor, dtype: DType) -> Result<usize, Oja
     sized_product(op, tensor.shape(), dtype.size())
 }
 
-fn f32_operand(op: &'static str, tensor: &Tensor) -> Result<usize, OjasError> {
+pub(crate) fn f32_operand(op: &'static str, tensor: &Tensor) -> Result<usize, OjasError> {
     operand(op, tensor, DType::F32)
 }
 
@@ -342,14 +342,14 @@ fn matmul_operands(op: &'static str, tensors: &[&Tensor]) -> Result<(), OjasErro
 }
 
 /// [`f32_operand`] over every tensor, in order.
-fn f32_operands(op: &'static str, tensors: &[&Tensor]) -> Result<(), OjasError> {
+pub(crate) fn f32_operands(op: &'static str, tensors: &[&Tensor]) -> Result<(), OjasError> {
     for t in tensors {
         f32_operand(op, t)?;
     }
     Ok(())
 }
 
-fn same(op: &'static str, a: &[usize], b: &[usize]) -> Result<(), OjasError> {
+pub(crate) fn same(op: &'static str, a: &[usize], b: &[usize]) -> Result<(), OjasError> {
     if a == b {
         Ok(())
     } else {

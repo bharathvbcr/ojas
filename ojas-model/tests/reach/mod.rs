@@ -10,7 +10,8 @@ use std::sync::Mutex;
 
 use ojas_core::{
     with_backend_methods, AdamWConfig, AutocastMode, Backend, BackendId, Budget, CeChunk, CeGrads,
-    GdnInputs, MuonNs5Config, Numerics, OjasError, OptimizerKind, Tensor,
+    Conv2dParams, ConvTranspose2dParams, GdnInputs, MuonNs5Config, Numerics, OjasError,
+    OptimizerKind, Tensor,
 };
 
 /// Every `Backend` op, answered with its own name.
@@ -160,6 +161,18 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
         "sigmoid_backward" => b.sigmoid_backward(&t, &t).map(|_| ()),
         "gdn_log_decay_forward" => b.gdn_log_decay_forward(&t, &t, &t).map(|_| ()),
         "gdn_log_decay_backward" => b.gdn_log_decay_backward(&t, &t, &t, &t).map(|_| ()),
+        "conv2d_forward" => b
+            .conv2d_forward(&t, &t, None, Conv2dParams::new())
+            .map(|_| ()),
+        "conv_transpose2d_forward" => b
+            .conv_transpose2d_forward(&t, &t, None, ConvTranspose2dParams::new())
+            .map(|_| ()),
+        "max_pool2d_forward" => b.max_pool2d_forward(&t, [2, 2], [2, 2]).map(|_| ()),
+        "interpolate_bilinear_forward" => b
+            .interpolate_bilinear_forward(&t, [2, 2], false)
+            .map(|_| ()),
+        "rope_interleaved_forward" => b.rope_interleaved_forward(&t, &t, &t).map(|_| ()),
+        "rope_interleaved_backward" => b.rope_interleaved_backward(&t, &t, &t).map(|_| ()),
         "silu_forward" => b.silu_forward(&t).map(|_| ()),
         "silu_backward" => b.silu_backward(&t, &t).map(|_| ()),
         "mul_forward" => b.mul_forward(&t, &t).map(|_| ()),
