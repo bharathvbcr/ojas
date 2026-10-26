@@ -428,35 +428,42 @@ mod metal {
         }
     }
 
+    /// Runs the leak check with a non-finite padding row and asserts it panics
+    /// with `NonFinite`. A `#[should_panic]` test cannot do this: when the
+    /// runner has no Metal 4 device (`OJAS_ALLOW_NO_GPU=1`) the test skips by
+    /// returning early, which `#[should_panic]` reports as a failure.
+    fn fails_closed_on_metal(fill: f32) {
+        let Some(m) = device() else { return };
+        let up = |t: &Tensor| m.upload(t).unwrap();
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leak_check(
+                m.clone(),
+                &up,
+                &Base::Frozen,
+                ActivationCheckpoint::Off,
+                fill,
+            )
+        }))
+        .expect_err("a non-finite padding row must fail closed");
+        let msg = err
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_default();
+        assert!(msg.contains("NonFinite"), "unexpected panic: {msg}");
+    }
+
     /// A NaN embedding row at a padding id fails closed on Metal as on CPU:
     /// `embedding_forward` records the fault, and it surfaces as `NonFinite`
     /// naming the op at the first `Backend::download` (a sync point) the step
     /// reads through. Raw `Tensor::to_host` would not report it.
     #[test]
-    #[should_panic(expected = "NonFinite")]
     fn a_nan_padding_row_fails_closed_on_metal() {
-        let Some(m) = device() else { return };
-        let up = |t: &Tensor| m.upload(t).unwrap();
-        leak_check(
-            m.clone(),
-            &up,
-            &Base::Frozen,
-            ActivationCheckpoint::Off,
-            f32::NAN,
-        );
+        fails_closed_on_metal(f32::NAN);
     }
 
     #[test]
-    #[should_panic(expected = "NonFinite")]
     fn an_infinite_padding_row_fails_closed_on_metal() {
-        let Some(m) = device() else { return };
-        let up = |t: &Tensor| m.upload(t).unwrap();
-        leak_check(
-            m.clone(),
-            &up,
-            &Base::Frozen,
-            ActivationCheckpoint::Off,
-            f32::INFINITY,
-        );
+        fails_closed_on_metal(f32::INFINITY);
     }
 }

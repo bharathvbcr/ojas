@@ -718,12 +718,18 @@ mod tests {
         assert_eq!(parse_json("7").unwrap(), JsonValue::from(7u64));
         assert_eq!(parse_json("7").unwrap(), JsonValue::from(7usize));
         assert_eq!(parse_json("\"é\"").unwrap(), JsonValue::from("é"));
-        assert_eq!(parse_json("\"é\"").unwrap(), JsonValue::from(String::from("é")));
+        assert_eq!(
+            parse_json("\"é\"").unwrap(),
+            JsonValue::from(String::from("é"))
+        );
         assert_eq!(
             parse_json("[1,2,3]").unwrap(),
             JsonValue::from(vec![1usize, 2, 3])
         );
-        assert_eq!(parse_json("[]").unwrap(), JsonValue::from(Vec::<u64>::new()));
+        assert_eq!(
+            parse_json("[]").unwrap(),
+            JsonValue::from(Vec::<u64>::new())
+        );
     }
 
     #[test]

@@ -7,7 +7,9 @@ mod common;
 use std::time::{Duration, UNIX_EPOCH};
 
 use ojas_io::json::JsonValue as Value;
-use ojas_train::lappi::pyjson::{CANONICAL, CANONICAL_ASCII, dumps, float, float_hex, float_repr, obj};
+use ojas_train::lappi::pyjson::{
+    CANONICAL, CANONICAL_ASCII, dumps, float, float_hex, float_repr, obj,
+};
 use ojas_train::lappi::run_control::ConsumedPrefix;
 use ojas_train::lappi::run_control::{LossLog, LossPoint};
 

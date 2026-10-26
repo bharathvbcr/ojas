@@ -37,9 +37,9 @@ pub use forward::{
     gather_rows, LoraForward, Qwen35Tables, RightPadded,
 };
 pub use params::{
-    fuse_grads, hf_tensors, load_hf, load_hf_pinned, lora_targets, AttnParams, GdnParams, HfKind, HfTensor,
-    HfValues, LayerLora, LayerParams, LoraKind, LoraTarget, MixerLora, MixerParams, Qwen35Lora,
-    Qwen35Params, LORA_KINDS,
+    fuse_grads, hf_tensors, load_hf, load_hf_pinned, lora_targets, AttnParams, GdnParams, HfKind,
+    HfTensor, HfValues, LayerLora, LayerParams, LoraKind, LoraTarget, MixerLora, MixerParams,
+    Qwen35Lora, Qwen35Params, LORA_KINDS,
 };
 pub use spec::{Qwen35Mixer, Qwen35Spec};
 pub use step_provider::{DeviceHooks, LoraInit, OpenConfig, TapeStepProvider};

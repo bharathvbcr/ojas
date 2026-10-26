@@ -506,9 +506,20 @@ mod tests {
             WallClockCap::resolve(None, false),
             Err(RunControlError::Invalid(m)) if m.contains("no default")
         ));
-        assert_eq!(WallClockCap::resolve(Some(21_600.0), false).unwrap().cap_s(), 21_600.0);
-        assert_eq!(WallClockCap::resolve(None, true).unwrap().cap_s(), QUICK_CAP_S);
-        assert!(WallClockCap::resolve(Some(0.0), true).is_err(), "an explicit bad cap is not defaulted");
+        assert_eq!(
+            WallClockCap::resolve(Some(21_600.0), false)
+                .unwrap()
+                .cap_s(),
+            21_600.0
+        );
+        assert_eq!(
+            WallClockCap::resolve(None, true).unwrap().cap_s(),
+            QUICK_CAP_S
+        );
+        assert!(
+            WallClockCap::resolve(Some(0.0), true).is_err(),
+            "an explicit bad cap is not defaulted"
+        );
         assert!(WallClockCap::resolve(Some(MAX_CAP_S + 1.0), false).is_err());
     }
 

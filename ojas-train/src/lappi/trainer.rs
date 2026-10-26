@@ -1384,10 +1384,7 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
                     .collect::<Result<_, PyJsonError>>()?,
             ),
         ),
-        (
-            "host_sha256",
-            Value::from(hex(&sha256(&host_bytes))),
-        ),
+        ("host_sha256", Value::from(hex(&sha256(&host_bytes)))),
     ]
     .into_iter()
     .chain(epoch_link_json)
@@ -1587,8 +1584,7 @@ impl ResumeState {
         }
         let host_path = ckpt_dir.join("host.f32");
         let host_bytes = fs::read(&host_path).map_err(|e| io(&host_path, e))?;
-        if Some(hex(&sha256(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str().ok()
-        {
+        if Some(hex(&sha256(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str().ok() {
             return Err(TrainError::Refused(format!(
                 "{} does not match its recorded sha256",
                 host_path.display()

@@ -993,7 +993,7 @@ func TestPkgconfigNamesAppleFrameworks(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(body)
-		for _, fragment := range []string{"-framework Metal", "-framework Foundation", "-framework QuartzCore", "-framework CoreFoundation", "-framework CoreGraphics", "-framework Accelerate", "-lobjc"} {
+		for _, fragment := range []string{"-framework Metal", "-framework Foundation", "-framework QuartzCore", "-framework CoreFoundation", "-framework CoreGraphics", "-framework Accelerate", "-framework AudioToolbox", "-framework AVFoundation", "-framework CoreMedia", "-framework CoreVideo", "-framework ImageIO", "-framework VideoToolbox", "-lobjc"} {
 			if !strings.Contains(text, fragment) {
 				t.Fatalf("%s missing %s", path, fragment)
 			}
