@@ -76,26 +76,28 @@ use std::fmt;
 use std::sync::Arc;
 
 use ojas_core::{
-    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
-    causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
-    causal_sdpa_forward_dims, check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims,
-    clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, broadcast_add_forward_dims,
+    broadcast_mul_forward_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
+    causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
+    channel_layer_norm_forward_dims, check_adamw, chunked_gdn_backward_dims,
+    chunked_gdn_forward_dims, clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
     cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
     gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
-    gdn_log_decay_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
+    gdn_log_decay_forward_dims, gelu_erf_forward_dims, kv_cache_write_dims,
+    layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
     linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
     refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
     residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
     rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
-    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
-    topk_rows_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, CeGrads, Conv1dDims, DType, DeviceBuffer,
-    GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe,
-    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
-    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK,
+    scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
+    silu_forward_dims, softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    value_residual_blend_forward_dims, AdamWConfig, Backend, BackendId, BroadcastDims, Budget,
+    CeChunk, CeGrads, Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad,
+    GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics,
+    OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims,
+    RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -543,6 +545,37 @@ impl MetalBackend {
     fn one(&self, op: &'static str, s: &[usize], scratch: usize, cmd: Cmd) -> Res<Tensor> {
         let mut v = self.outputs(op, &[s], scratch, cmd)?;
         v.pop().ok_or_else(|| metal_err(format!("{op}: no output")))
+    }
+
+    /// `a + b` or `a * b` over a broadcast whose dims the caller validated.
+    fn broadcast(
+        &self,
+        op: &'static str,
+        mul: bool,
+        a: &Tensor,
+        b: &Tensor,
+        dims: &BroadcastDims,
+    ) -> Res<Tensor> {
+        let (x, y) = (self.f32(op, a)?, self.f32(op, b)?);
+        let mut oshape = [1u32; MAX_PERMUTE_RANK];
+        let mut xstride = [0u32; MAX_PERMUTE_RANK];
+        let mut ystride = [0u32; MAX_PERMUTE_RANK];
+        for axis in 0..dims.out_shape.len() {
+            oshape[axis] = u32_dim(op, dims.out_shape[axis])?;
+            xstride[axis] = u32_dim(op, dims.a_strides[axis])?;
+            ystride[axis] = u32_dim(op, dims.b_strides[axis])?;
+        }
+        u32_dim(op, product(op, &dims.out_shape)?)?;
+        let cmd = Cmd::Bcast {
+            x,
+            y,
+            mul,
+            rank: u32_dim(op, dims.out_shape.len())?,
+            oshape,
+            xstride,
+            ystride,
+        };
+        self.one(op, &dims.out_shape, 0, cmd)
     }
 
     fn two(&self, op: &'static str, a: &[usize], b: &[usize], cmd: Cmd) -> Res<(Tensor, Tensor)> {
@@ -2113,6 +2146,120 @@ impl Backend for MetalBackend {
         let (xa, ya) = (self.f32(OP, x)?, self.f32(OP, y)?);
         let gy = self.f32(OP, grad_output)?;
         self.two(OP, x.shape(), y.shape(), Cmd::AddBwd { x: xa, y: ya, gy })
+    }
+
+    /// tessl's `bert::layer_norm`, which needs `eps > 0` (the CPU also takes
+    /// 0 for a row with variance).
+    fn layer_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "layer_norm_forward";
+        let dims = layer_norm_forward_dims(input, weight, bias, eps)?;
+        if eps <= 0.0 {
+            return Err(OjasError::Unsupported {
+                op: OP,
+                detail: format!("tessl's LayerNorm needs eps > 0, got {eps}"),
+            });
+        }
+        let (x, w, b) = (
+            self.f32(OP, input)?,
+            self.f32(OP, weight)?,
+            self.f32(OP, bias)?,
+        );
+        let (rows, dim) = gated_rms_geom(OP, &dims)?;
+        let copies = copied_elems(OP, ReadAs::Whole, &[x, w, b])?;
+        let cmd = Cmd::LayerNorm {
+            x,
+            w,
+            b,
+            rows,
+            dim,
+            eps,
+        };
+        self.one(OP, input.shape(), copies, cmd)
+    }
+
+    /// Permute to channels-last, [`Self::layer_norm_forward`], and back; a
+    /// rank-2 `[N, C]` input is already channels-last.
+    fn channel_layer_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        let dims = channel_layer_norm_forward_dims(input, weight, bias, eps)?;
+        let rank = input.shape().len();
+        if dims.spatial == 1 {
+            let flat = input.reshape(&[dims.batch, dims.channels])?;
+            let out = self.layer_norm_forward(&flat, weight, bias, eps)?;
+            return out.reshape(input.shape());
+        }
+        let mut to_last = vec![0usize];
+        to_last.extend(2..rank);
+        to_last.push(1);
+        let mut back = vec![0usize; rank];
+        for (out_axis, &in_axis) in to_last.iter().enumerate() {
+            back[in_axis] = out_axis;
+        }
+        let moved = self.permute(input, &to_last)?;
+        let normed = self.layer_norm_forward(&moved, weight, bias, eps)?;
+        self.permute(&normed, &back)
+    }
+
+    /// tessl's `bert::bias_gelu_erf` with a zero bias.
+    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_erf_forward";
+        gelu_erf_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        u32_dim(OP, x.n)?;
+        // The one-element zero bias.
+        self.one(OP, input.shape(), 1, Cmd::GeluErf { x })
+    }
+
+    /// [`Self::linear_forward`] and then [`Self::broadcast_add_forward`] of
+    /// the bias: the CPU's definition, with the product held beside the sum.
+    fn linear_bias_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        linear_bias_forward_dims(input, weight, bias)?;
+        let product = self.linear_forward(input, weight)?;
+        self.broadcast_add_forward(&product, bias)
+    }
+
+    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_add_forward";
+        let dims = broadcast_add_forward_dims(a, b)?;
+        self.broadcast(OP, false, a, b, &dims)
+    }
+
+    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_mul_forward";
+        let dims = broadcast_mul_forward_dims(a, b)?;
+        self.broadcast(OP, true, a, b, &dims)
+    }
+
+    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "scale_forward";
+        scale_forward_dims(input, scale)?;
+        let x = self.f32(OP, input)?;
+        u32_dim(OP, x.n)?;
+        self.one(OP, input.shape(), 0, Cmd::ScaleFwd { x, scale })
+    }
+
+    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "softmax_forward";
+        let dims = softmax_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        let (rows, dim) = gated_rms_geom(OP, &dims)?;
+        self.one(OP, input.shape(), 0, Cmd::Softmax { x, rows, dim })
     }
 
     fn cross_entropy_mean_forward(

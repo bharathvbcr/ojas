@@ -137,6 +137,9 @@ const KERNELS: &[&str] = &[
     "ojas_cached_attn",
     "ojas_cached_attn_merge",
     "ojas_permute",
+    "ojas_bcast_binary",
+    "ojas_scale_fwd",
+    "ojas_softmax_rows",
     "ojas_round_bf16",
     "ojas_bf16_to_f32",
     "ojas_check_finite_bf16",
@@ -1413,6 +1416,26 @@ impl Worker {
                 oshape,
                 istride,
             } => self.permute(x, rank, &oshape, &istride),
+            Cmd::LayerNorm {
+                x,
+                w,
+                b,
+                rows,
+                dim,
+                eps,
+            } => self.layer_norm([x, w, b], [rows, dim], eps),
+            Cmd::GeluErf { x } => self.gelu_erf(x),
+            Cmd::Bcast {
+                x,
+                y,
+                mul,
+                rank,
+                oshape,
+                xstride,
+                ystride,
+            } => self.bcast([x, y], mul, rank, &oshape, &xstride, &ystride),
+            Cmd::ScaleFwd { x, scale } => self.scale_fwd(x, scale),
+            Cmd::Softmax { x, rows, dim } => self.softmax(x, rows, dim),
             Cmd::Embed {
                 table,
                 half,
@@ -3006,6 +3029,115 @@ impl Worker {
             bind_st(b, &st, 4);
         })?;
         Ok(self.keep(vec![out]))
+    }
+
+    /// tessl's `bert::layer_norm`, which scans nothing: the operands and the
+    /// output are checked here.
+    fn layer_norm(&mut self, args: [Arg; 3], [rows, dim]: [u32; 2], eps: f32) -> Res<Reply> {
+        const OP: &str = "layer_norm_forward";
+        let [xv, wv, bv] = self.wholes(args)?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        for v in [&xv, &wv, &bv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        tessl::bert::layer_norm(&self.rt, &xv.buf, &wv.buf, &bv.buf, &y.buf, rows, dim, eps)
+            .map_err(metal_err)?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// tessl's in-place `bert::bias_gelu_erf` over a copy of the operand, one
+    /// column of zero bias (`x + 0.0` is `x`). It scans nothing, so the
+    /// operand and the output are checked here.
+    fn gelu_erf(&mut self, x: Arg) -> Res<Reply> {
+        const OP: &str = "gelu_erf_forward";
+        let xv = self.view(x)?;
+        let n = u32_of(xv.n)?;
+        let y = self.fresh(xv.n)?;
+        let zero = self.fresh_from(&[0u32])?;
+        let st = self.status(OP)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.copy(&xv, &y)?;
+        tessl::bert::bias_gelu_erf(&self.rt, &y.buf, &zero.buf, n, 1).map_err(metal_err)?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// `x + y` or `x * y` over a numpy broadcast, one thread per output
+    /// element; the kernel also checks both operands and the output.
+    fn bcast(
+        &mut self,
+        [x, y]: [Arg; 2],
+        mul: bool,
+        rank: u32,
+        oshape: &[u32],
+        xstride: &[u32],
+        ystride: &[u32],
+    ) -> Res<Reply> {
+        let op = if mul {
+            "broadcast_mul_forward"
+        } else {
+            "broadcast_add_forward"
+        };
+        let (xv, yv) = (self.view(x)?, self.view(y)?);
+        let out_n = oshape
+            .iter()
+            .take(rank as usize)
+            .try_fold(1usize, |acc, &d| acc.checked_mul(d as usize))
+            .ok_or_else(|| metal_err(format!("{op}: output size overflows")))?;
+        let n = u32_of(out_n)?;
+        let out = self.fresh(out_n)?;
+        let words = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|w| w.to_ne_bytes()).collect() };
+        let (shape_bytes, x_bytes, y_bytes) = (words(oshape), words(xstride), words(ystride));
+        let st = self.status(op)?;
+        self.k1("ojas_bcast_binary", out_n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &yv, 1);
+            bind(b, &out, 2);
+            set_u32(b, n, 3);
+            set_u32(b, rank, 4);
+            set_u32(b, u32::from(mul), 5);
+            b.bind_bytes(&shape_bytes, 6);
+            b.bind_bytes(&x_bytes, 7);
+            b.bind_bytes(&y_bytes, 8);
+            bind_st(b, &st, 9);
+        })?;
+        Ok(self.keep(vec![out]))
+    }
+
+    /// `x * scale` in one pass that also checks `x` and the output.
+    fn scale_fwd(&mut self, x: Arg, scale: f32) -> Res<Reply> {
+        const OP: &str = "scale_forward";
+        let xv = self.view(x)?;
+        let n = u32_of(xv.n)?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        self.k1("ojas_scale_fwd", xv.n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, n, 2);
+            set_f32(b, scale, 3);
+            bind_st(b, &st, 4);
+        })?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// Softmax of each row, one thread per row summing in ascending order;
+    /// the kernel also checks the operand and the output.
+    fn softmax(&mut self, x: Arg, rows: u32, dim: u32) -> Res<Reply> {
+        const OP: &str = "softmax_forward";
+        let xv = self.view(x)?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        self.k1("ojas_softmax_rows", rows as usize, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, rows, 2);
+            set_u32(b, dim, 3);
+            bind_st(b, &st, 4);
+        })?;
+        Ok(self.keep(vec![y]))
     }
 
     /// Both gradients are copies of `gy`, written in one pass that also

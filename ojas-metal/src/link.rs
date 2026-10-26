@@ -427,6 +427,45 @@ pub(crate) enum Cmd {
         oshape: [u32; MAX_PERMUTE_RANK],
         istride: [u32; MAX_PERMUTE_RANK],
     },
+    /// `LayerNorm(x) * w + b` over `rows` rows of `dim`, tessl's
+    /// `bert::layer_norm`. `eps` is finite and positive.
+    LayerNorm {
+        x: Arg,
+        w: Arg,
+        b: Arg,
+        rows: u32,
+        dim: u32,
+        eps: f32,
+    },
+    /// The exact (erf) GELU of `x`: tessl's `bert::bias_gelu_erf` over a
+    /// copy of `x` with a zero bias.
+    GeluErf {
+        x: Arg,
+    },
+    /// `x + y`, or `x * y` when `mul`, over the numpy broadcast of rank
+    /// `rank`: `oshape` is the output shape and `xstride` / `ystride` each
+    /// operand's element stride along every output axis (0 where it is
+    /// stretched); entries past `rank` are 1 and 0.
+    Bcast {
+        x: Arg,
+        y: Arg,
+        mul: bool,
+        rank: u32,
+        oshape: [u32; MAX_PERMUTE_RANK],
+        xstride: [u32; MAX_PERMUTE_RANK],
+        ystride: [u32; MAX_PERMUTE_RANK],
+    },
+    /// `x * scale` into a new buffer.
+    ScaleFwd {
+        x: Arg,
+        scale: f32,
+    },
+    /// Softmax over each of `rows` rows of `dim`.
+    Softmax {
+        x: Arg,
+        rows: u32,
+        dim: u32,
+    },
     Embed {
         table: Arg,
         /// `table` is `Bf16`: `n` 2-byte elements, widened as gathered.

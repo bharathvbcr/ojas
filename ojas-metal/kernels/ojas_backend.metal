@@ -1735,6 +1735,99 @@ kernel void ojas_permute(
     y[i] = x[src];
 }
 
+// ---------------------------------------- broadcast, scale and softmax ---
+//
+// Forward ops of the encoder family (see `Backend::broadcast_add_forward`,
+// `scale_forward`, `softmax_forward`). Each sets status words 0 and 1 from
+// the elements it reads and writes, like the other elementwise kernels.
+
+#define BCAST_MAX_RANK 8u
+
+/// y = a + b (`is_mul` 0) or a * b over the numpy broadcast of a and b: one
+/// thread per output element, `oshape` the output shape and `astride` /
+/// `bstride` each operand's element stride per output axis (0 where it is
+/// stretched). One IEEE operation per element.
+kernel void ojas_bcast_binary(
+    device const float *a [[buffer(0)]],
+    device const float *b [[buffer(1)]],
+    device float *y [[buffer(2)]],
+    constant uint &n [[buffer(3)]],
+    constant uint &rank [[buffer(4)]],
+    constant uint &is_mul [[buffer(5)]],
+    constant uint *oshape [[buffer(6)]],
+    constant uint *astride [[buffer(7)]],
+    constant uint *bstride [[buffer(8)]],
+    device atomic_uint *st [[buffer(9)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n || rank > BCAST_MAX_RANK) return;
+    uint rem = i;
+    uint ai = 0u;
+    uint bi = 0u;
+    for (uint axis = rank; axis > 0u; --axis) {
+        const uint extent = oshape[axis - 1u];
+        const uint idx = rem % extent;
+        rem /= extent;
+        ai += idx * astride[axis - 1u];
+        bi += idx * bstride[axis - 1u];
+    }
+    const float av = a[ai];
+    const float bv = b[bi];
+    const float r = (is_mul != 0u) ? (av * bv) : (av + bv);
+    y[i] = r;
+    if (!isfinite(av) || !isfinite(bv)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
+/// y = x * scale.
+kernel void ojas_scale_fwd(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    constant float &scale [[buffer(3)]],
+    device atomic_uint *st [[buffer(4)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const float v = x[i];
+    const float r = v * scale;
+    y[i] = r;
+    if (!isfinite(v)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
+/// Softmax over each row of `dim`: e^(x - max) / sum, the sum ascending from
+/// column 0 on the row's one thread, as the CPU's Exact path sums it.
+kernel void ojas_softmax_rows(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &rows [[buffer(2)]],
+    constant uint &dim [[buffer(3)]],
+    device atomic_uint *st [[buffer(4)]],
+    uint r [[thread_position_in_grid]])
+{
+    if (r >= rows || dim == 0u) return;
+    device const float *xr = x + (ulong)r * dim;
+    device float *yr = y + (ulong)r * dim;
+    float mx = xr[0];
+    for (uint j = 1u; j < dim; ++j) {
+        mx = max(mx, xr[j]);
+    }
+    float sum = 0.0f;
+    for (uint j = 0u; j < dim; ++j) {
+        const float v = xr[j];
+        if (!isfinite(v)) ojas_flag(st, ST_IN);
+        const float e = precise::exp(v - mx);
+        yr[j] = e;
+        sum += e;
+    }
+    for (uint j = 0u; j < dim; ++j) {
+        const float p = yr[j] / sum;
+        yr[j] = p;
+        if (!isfinite(p)) ojas_flag(st, ST_OUT);
+    }
+}
+
 // ---------------------------------------------------- causal attention ---
 //
 // FlashAttention-2, forward and backward, on the TensorOps matrix units,
