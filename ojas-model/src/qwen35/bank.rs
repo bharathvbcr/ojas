@@ -246,8 +246,7 @@ impl AdapterBank {
                 Ok(())
             }
             BankMode::Add => {
-                let Slot::Filled(mut acc) =
-                    std::mem::replace(&mut self.slots[entry], Slot::Empty)
+                let Slot::Filled(mut acc) = std::mem::replace(&mut self.slots[entry], Slot::Empty)
                 else {
                     return Err(BankError::AddWithoutBase { entry, name });
                 };

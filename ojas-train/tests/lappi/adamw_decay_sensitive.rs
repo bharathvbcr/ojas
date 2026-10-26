@@ -39,10 +39,8 @@ fn dir() -> PathBuf {
 }
 
 fn json(path: &Path) -> Value {
-    parse_json(
-        &std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
-    )
-    .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    parse_json(&std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 /// An object's members by key, so an assertion does not depend on the file's key order.

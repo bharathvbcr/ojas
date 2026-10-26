@@ -1028,29 +1028,34 @@ impl<B: Backend> TapeStepProvider<B> {
         let last = [(bucket - 1) as u32];
         let target = [0u32];
         let seq = self.seq();
-        preflight::dry_run(&self.backend, i64::try_from(bucket).unwrap_or(i64::MAX), |budget| {
-            let scratch = rebind(&self.backend, budget.clone());
-            let job = SequenceJob {
-                tokens: &tokens,
-                rows: RowTargets {
-                    positions: &last,
-                    targets: &target,
-                    scale: 1.0,
-                },
-                hidden_at: &last,
-            };
-            let mut zero = |_: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> {
-                Ok(vec![0.0; h.len()])
-            };
-            let out = run_sequence(&scratch, &seq, &job, Some(&mut zero)).map_err(Fail::into_ojas)?;
-            let mut bank =
-                AdapterBank::new(self.bank.entries().to_vec()).map_err(bank_to_ojas)?;
-            for (i, g) in out.grads.into_iter().enumerate() {
-                bank.accumulate(&scratch, i, BankMode::Overwrite, g)
-                    .map_err(bank_to_ojas)?;
-            }
-            Ok(out.value)
-        })
+        preflight::dry_run(
+            &self.backend,
+            i64::try_from(bucket).unwrap_or(i64::MAX),
+            |budget| {
+                let scratch = rebind(&self.backend, budget.clone());
+                let job = SequenceJob {
+                    tokens: &tokens,
+                    rows: RowTargets {
+                        positions: &last,
+                        targets: &target,
+                        scale: 1.0,
+                    },
+                    hidden_at: &last,
+                };
+                let mut zero = |_: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> {
+                    Ok(vec![0.0; h.len()])
+                };
+                let out =
+                    run_sequence(&scratch, &seq, &job, Some(&mut zero)).map_err(Fail::into_ojas)?;
+                let mut bank =
+                    AdapterBank::new(self.bank.entries().to_vec()).map_err(bank_to_ojas)?;
+                for (i, g) in out.grads.into_iter().enumerate() {
+                    bank.accumulate(&scratch, i, BankMode::Overwrite, g)
+                        .map_err(bank_to_ojas)?;
+                }
+                Ok(out.value)
+            },
+        )
         .map_err(preflight_err)?;
         self.preflighted = true;
         Ok(plan)
@@ -1166,11 +1171,9 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
 
     fn read_parameters(&mut self) -> Result<Vec<Vec<f32>>, StepError> {
         match &self.trainable {
-            Trainable::Lora { .. } => Ok(self
-                .host_entries()?
-                .into_iter()
-                .map(|e| e.values)
-                .collect()),
+            Trainable::Lora { .. } => {
+                Ok(self.host_entries()?.into_iter().map(|e| e.values).collect())
+            }
             Trainable::Full { template } => {
                 let mut leaves = self.leaves.iter();
                 let params = template
@@ -1257,7 +1260,10 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
         dir: &Path,
         context: &CheckpointContext,
     ) -> Result<(), StepError> {
-        let Trainable::Lora { config, targets, .. } = &self.trainable else {
+        let Trainable::Lora {
+            config, targets, ..
+        } = &self.trainable
+        else {
             return Err(StepError::Unsupported(
                 "the adapter checkpoint holds LoRA entries; the full provider has none".into(),
             ));
@@ -1273,7 +1279,8 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
                 })
                 .collect(),
         };
-        let ckpt = read_adapter_checkpoint(&dir.join("provider"), &expected).map_err(adapter_err)?;
+        let ckpt =
+            read_adapter_checkpoint(&dir.join("provider"), &expected).map_err(adapter_err)?;
         if ckpt.step != context.optimizer_step {
             return Err(contract(format!(
                 "the adapter checkpoint is at step {} but the loop resumes at step {}",
