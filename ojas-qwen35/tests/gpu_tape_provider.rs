@@ -379,9 +379,7 @@ fn hyper(grad_scale: f64) -> AdamWHyper {
 
 fn per_entry(n: usize) -> (Vec<f64>, Vec<f64>) {
     (
-        (0..n)
-            .map(|i| if i % 2 == 0 { 1.0 } else { 0.5 })
-            .collect(),
+        (0..n).map(|i| if i % 2 == 0 { 1.0 } else { 0.5 }).collect(),
         (0..n)
             .map(|i| if i % 3 == 0 { 0.01 } else { 0.0 })
             .collect(),
@@ -578,10 +576,7 @@ fn gpu_a_non_finite_gradient_leaves_every_tensor_and_moment_unchanged() {
         .unwrap();
     let (lr_scale, wd) = per_entry(n_trainable(&p));
     let err = p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).unwrap_err();
-    assert!(
-        err.to_string().contains("no tensor was stepped"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("no tensor was stepped"), "{err}");
     assert_eq!(bits_all(&p.read_parameters().unwrap()), params);
     assert_eq!(moments(&mut p), moments_before);
     assert_eq!(p.step_count(), 0);
@@ -647,8 +642,8 @@ fn open_2b(tokens: usize) -> P<MetalBackend> {
     let (targets, adapters) = {
         let file = SafeTensors::open(&base_path).unwrap();
         let targets = lora_targets(&spec, &file, &prefix, &LORA_KINDS).unwrap();
-        let adapters = Qwen35Lora::init(&spec, &targets, &config, KR_LORA_SEED, &host_budget)
-            .unwrap();
+        let adapters =
+            Qwen35Lora::init(&spec, &targets, &config, KR_LORA_SEED, &host_budget).unwrap();
         (targets, adapters)
     };
     let backend = MetalBackend::new(Budget::new(KR_DEVICE_BUDGET)).unwrap();
@@ -770,7 +765,10 @@ fn gpu_tape_provider_kill_resume_child() {
         let ckpt = checkpoint_dir(&dir, done);
         std::fs::create_dir_all(&ckpt).unwrap();
         p.save_state_with(&ckpt, &kr_context(done)).unwrap();
-        let body: String = losses.iter().map(|l| format!("{:016x}\n", l.to_bits())).collect();
+        let body: String = losses
+            .iter()
+            .map(|l| format!("{:016x}\n", l.to_bits()))
+            .collect();
         let tmp = dir.join(format!("step-{done}.done.tmp"));
         std::fs::write(&tmp, body).unwrap();
         std::fs::rename(&tmp, marker(&dir, done)).unwrap();

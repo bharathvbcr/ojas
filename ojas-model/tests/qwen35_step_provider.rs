@@ -196,9 +196,7 @@ fn hyper(grad_scale: f64) -> AdamWHyper {
 
 fn per_entry(n: usize) -> (Vec<f64>, Vec<f64>) {
     (
-        (0..n)
-            .map(|i| if i % 2 == 0 { 1.0 } else { 0.5 })
-            .collect(),
+        (0..n).map(|i| if i % 2 == 0 { 1.0 } else { 0.5 }).collect(),
         (0..n)
             .map(|i| if i % 3 == 0 { 0.01 } else { 0.0 })
             .collect(),
@@ -287,7 +285,10 @@ fn three_row_accumulate_matches_the_torch_fixture() {
         assert_eq!(calls, 1, "the outside loss is asked once per sequence");
         let want = f64::from(file.read_f32(&format!("loss.{i}")).unwrap().1[0]);
         let rel = (got - want).abs() / want.abs();
-        assert!(rel <= LORA_LOSS_BOUND, "loss.{i}: {got} vs {want}, {rel:.3e}");
+        assert!(
+            rel <= LORA_LOSS_BOUND,
+            "loss.{i}: {got} vs {want}, {rel:.3e}"
+        );
         total += got;
         want_total += want;
     }
@@ -296,7 +297,10 @@ fn three_row_accumulate_matches_the_torch_fixture() {
         "the fixture's rows must have unequal widths: {widths:?}"
     );
     let rel = (total - want_total).abs() / want_total.abs();
-    assert!(rel <= LORA_LOSS_BOUND, "summed loss {total} vs {want_total}");
+    assert!(
+        rel <= LORA_LOSS_BOUND,
+        "summed loss {total} vs {want_total}"
+    );
 
     let grads = p.read_gradients().unwrap();
     let specs: Vec<_> = p.parameters().iter().filter(|s| s.trainable).collect();
@@ -381,10 +385,7 @@ fn a_non_finite_gradient_in_a_later_entry_leaves_every_tensor_and_moment_unchang
         .unwrap();
     let (lr_scale, wd) = per_entry(n_trainable(&p));
     let err = p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).unwrap_err();
-    assert!(
-        err.to_string().contains("no tensor was stepped"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("no tensor was stepped"), "{err}");
     assert_eq!(bits_all(&p.read_parameters().unwrap()), params);
     let after: Vec<(Vec<u32>, Vec<u32>)> = p
         .read_moments()
@@ -470,7 +471,10 @@ fn six_straight_steps_equal_three_then_a_checkpoint_a_fresh_provider_and_three_m
         consumed_digest: "ab".repeat(32),
     };
     let files = first.save_state_with(&tmp.0, &ctx).unwrap();
-    assert!(!files.is_empty() && files.iter().all(|f| f.is_file()), "{files:?}");
+    assert!(
+        !files.is_empty() && files.iter().all(|f| f.is_file()),
+        "{files:?}"
+    );
 
     // A fresh provider over different adapters (B zero): the load is what
     // makes it the checkpointed one.
@@ -513,7 +517,11 @@ fn six_straight_steps_equal_three_then_a_checkpoint_a_fresh_provider_and_three_m
             resumed.load_state_with(&tmp.0, &wrong).is_err(),
             "a checkpoint resumed under another {what}"
         );
-        assert_eq!(resumed.step_count(), 0, "{what}: a refused load moved state");
+        assert_eq!(
+            resumed.step_count(),
+            0,
+            "{what}: a refused load moved state"
+        );
     }
     resumed.load_state_with(&tmp.0, &ctx).unwrap();
     assert_eq!(resumed.step_count(), 3);
@@ -572,8 +580,7 @@ fn a_checkpoint_of_another_base_or_rank_is_refused() {
     let mut other = lora_init(true);
     other.config = LoraConfig::new(RANK, 4.0, 0.0).unwrap();
     let mut other_alpha =
-        TapeStepProvider::open_lora(cpu(), DeviceHooks::default(), open_config(16), other)
-            .unwrap();
+        TapeStepProvider::open_lora(cpu(), DeviceHooks::default(), open_config(16), other).unwrap();
     let err = other_alpha.load_state_with(&tmp.0, &ctx).unwrap_err();
     assert!(err.to_string().contains("LoRA"), "{err}");
     same.load_state_with(&tmp.0, &ctx).unwrap();
@@ -608,16 +615,14 @@ fn refusals_are_loud_and_leave_the_step_intact() {
         p.accumulate(&with_hidden.view(), BankMode::Overwrite, None),
         Err(StepError::Contract(_))
     ));
-    let mut short = |_: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> {
-        Ok(vec![0.0; h.len() - 1])
-    };
+    let mut short =
+        |_: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> { Ok(vec![0.0; h.len() - 1]) };
     assert!(matches!(
         p.accumulate(&with_hidden.view(), BankMode::Overwrite, Some(&mut short)),
         Err(StepError::Contract(_))
     ));
-    let mut nan = |_: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> {
-        Ok(vec![f32::NAN; h.len()])
-    };
+    let mut nan =
+        |_: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> { Ok(vec![f32::NAN; h.len()]) };
     assert!(matches!(
         p.accumulate(&with_hidden.view(), BankMode::Overwrite, Some(&mut nan)),
         Err(StepError::Contract(_))
@@ -652,18 +657,19 @@ fn refusals_are_loud_and_leave_the_step_intact() {
 
 #[test]
 fn the_full_provider_trains_every_hugging_face_tensor() {
-    let mut p = TapeStepProvider::open_full(
-        cpu(),
-        DeviceHooks::default(),
-        open_config(16),
-    )
-    .unwrap();
+    let mut p =
+        TapeStepProvider::open_full(cpu(), DeviceHooks::default(), open_config(16)).unwrap();
     let hf = hf_tensors(&spec(), PREFIX);
     assert_eq!(p.parameters().len(), hf.len());
     assert_eq!(n_trainable(&p), hf.len());
     let before = p.read_parameters().unwrap();
     for (values, h) in before.iter().zip(&hf) {
-        assert_eq!(values.len(), h.shape.iter().product::<usize>(), "{}", h.name);
+        assert_eq!(
+            values.len(),
+            h.shape.iter().product::<usize>(),
+            "{}",
+            h.name
+        );
     }
     let a = job(10, 4, 1.0, true);
     let mut ext = outside;
@@ -675,7 +681,11 @@ fn the_full_provider_trains_every_hugging_face_tensor() {
     let (lr_scale, wd) = per_entry(n_trainable(&p));
     p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).unwrap();
     let after = p.read_parameters().unwrap();
-    assert_ne!(bits(&after[0]), bits(&before[0]), "the embedding did not move");
+    assert_ne!(
+        bits(&after[0]),
+        bits(&before[0]),
+        "the embedding did not move"
+    );
     // A full fine-tune has no adapter checkpoint.
     assert!(matches!(
         p.save_state_with(
@@ -755,11 +765,11 @@ fn a_device_backend_refuses_to_accumulate_until_the_preflight_has_passed() {
     assert!(err.to_string().contains("pre-flight"), "{err}");
 
     // A plan that does not fit refuses with the shape, and the gate stays shut.
-    let tight = p.preflight(&calibration, 8, &[8, 16], 1 << 19, 0).unwrap_err();
+    let tight = p
+        .preflight(&calibration, 8, &[8, 16], 1 << 19, 0)
+        .unwrap_err();
     assert!(tight.to_string().contains("preflight refused"), "{tight}");
-    assert!(p
-        .accumulate(&j.view(), BankMode::Overwrite, None)
-        .is_err());
+    assert!(p.accumulate(&j.view(), BankMode::Overwrite, None).is_err());
 
     // A bucket wider than the tables is refused too: 16 tokens round up to
     // the 32-token bucket, and the tables hold 16 positions.
@@ -767,9 +777,7 @@ fn a_device_backend_refuses_to_accumulate_until_the_preflight_has_passed() {
         .preflight(&calibration, 16, &[8, 32], 1 << 30, 0)
         .unwrap_err();
     assert!(wide.to_string().contains("wider"), "{wide}");
-    assert!(p
-        .accumulate(&j.view(), BankMode::Overwrite, None)
-        .is_err());
+    assert!(p.accumulate(&j.view(), BankMode::Overwrite, None).is_err());
 }
 
 #[test]
@@ -803,9 +811,7 @@ fn a_passing_preflight_opens_the_gate_and_a_missing_rebind_never_passes() {
     let mut p = device_provider(with_rebind());
     let plan = p.preflight(&calibration, 8, &[8, 16], 1 << 30, 0).unwrap();
     assert_eq!(plan.bucket, 8);
-    let v = p
-        .accumulate(&j.view(), BankMode::Overwrite, None)
-        .unwrap();
+    let v = p.accumulate(&j.view(), BankMode::Overwrite, None).unwrap();
     assert!(v.is_finite() && v > 0.0);
     // The dry run's scratch bank is not the provider's.
     assert!(p.bank().is_complete());
@@ -895,7 +901,11 @@ fn a_failed_add_keeps_the_sum_of_the_sequences_before_it_and_leaks_no_device_mem
     assert!(p
         .accumulate(&with_hidden.view(), BankMode::Add, Some(&mut failing))
         .is_err());
-    assert_eq!(budget.live_bytes().unwrap(), live, "a failed sequence leaked");
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        live,
+        "a failed sequence leaked"
+    );
     assert_eq!(bits_all(&grads_of(&mut p)), before);
 
     let mut ext = outside;

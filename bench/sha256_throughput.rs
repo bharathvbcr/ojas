@@ -12,7 +12,7 @@
 //!
 //! Usage: `sha256_throughput [ROUNDS]` (default 7).
 
-use ojas_train::sha256::{sha256, to_hex, Sha256};
+use ojas_train::sha256::{Sha256, sha256, to_hex};
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
