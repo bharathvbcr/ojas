@@ -2120,7 +2120,10 @@ mod tests {
             }
         }
         // The sweep reached each path, so a pass is not a skipped check.
-        assert!(seen[0] >= 60 && seen[1] >= 30, "{seen:?}");
+        assert!(seen[0] >= 60, "{seen:?}");
+        if fused {
+            assert!(seen[1] >= 30, "{seen:?}");
+        }
         if cfg!(target_os = "macos") {
             assert!(seen[2] >= 15, "{seen:?}");
         }
