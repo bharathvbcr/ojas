@@ -375,10 +375,14 @@ pub(crate) fn max_pool2d_forward(
     )
 }
 
+/// One output index of a bilinear axis: the two source indices and the weight
+/// of the second.
+type BilinearTap = (usize, usize, f32);
+
 /// One axis of the bilinear resample: for each output index, the two source
 /// indices and the weight of the second, as `torch` computes them
 /// (`area_pixel_compute_source_index`, `guard_index_and_lambda`).
-fn bilinear_axis(size: usize, out: usize, align_corners: bool) -> Vec<(usize, usize, f32)> {
+fn bilinear_axis(size: usize, out: usize, align_corners: bool) -> Vec<BilinearTap> {
     let scale = if align_corners {
         if out > 1 {
             (size - 1) as f32 / (out - 1) as f32
@@ -421,6 +425,12 @@ pub(crate) fn interpolate_bilinear_forward(
         out_height,
         out_width,
     } = d;
+    // The two axis tables are heap scratch, charged before they exist so a
+    // cap refuses a skinny `1 x n` output instead of growing the process.
+    let table_f32s = std::mem::size_of::<BilinearTap>()
+        .div_ceil(std::mem::size_of::<f32>())
+        .saturating_mul(out_height.saturating_add(out_width));
+    let _tables = room_for(op, budget, table_f32s)?;
     let ys = bilinear_axis(height, out_height, align_corners);
     let xs = bilinear_axis(width, out_width, align_corners);
     let p = out_height * out_width;

@@ -855,3 +855,14 @@ fn a_budget_too_small_for_the_output_or_the_im2col_matrix_is_refused() {
     );
     common::assert_capacity(tight.conv2d_forward(&x, &w, None, p));
 }
+
+#[test]
+fn a_budget_too_small_for_the_bilinear_axis_tables_is_refused() {
+    // A 1 x 4096 output is 16 KiB, which the cap holds, but its axis tables
+    // are about 96 KiB of heap that the cap must refuse before they exist.
+    let big = cpu(1, Numerics::Exact);
+    let x = t(&big, &[1.0, 2.0], &[1, 1, 1, 2]);
+    let tight = CpuBackend::with_threads(Budget::new(32 * 1024), 1).unwrap();
+    let x = x.to_host(tight.budget()).unwrap();
+    common::assert_capacity(tight.interpolate_bilinear_forward(&x, [1, 4096], false));
+}
