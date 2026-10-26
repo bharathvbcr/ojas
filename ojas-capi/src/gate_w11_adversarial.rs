@@ -156,7 +156,7 @@ fn a_tripped_gate_refuses_polling_ops_without_repolling_and_keeps_commit_ops_ope
         );
         refused += usize::from(was_refused);
     }
-    assert_eq!(refused, 54);
+    assert_eq!(refused, 57);
     assert_eq!(
         polls.load(Ordering::SeqCst),
         1,
