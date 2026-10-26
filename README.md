@@ -436,6 +436,11 @@ cd go && PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -time
 
 ---
 
-## License
+## License & Acknowledgements
 
 Dual-licensed under either **MIT** ([`LICENSE-MIT`](LICENSE-MIT)) or **Apache-2.0** ([`LICENSE-APACHE`](LICENSE-APACHE)) at your option.
+
+- **[Keller Jordan (`KellerJordan/modded-nanogpt`)](https://github.com/KellerJordan/modded-nanogpt)** & **[OpenAI (`openai/parameter-golf`)](https://github.com/openai/parameter-golf)** — Inspired the `arch02` value-residual GPT architecture, Muon Newton-Schulz optimizer, and parameter-golf speedrun benchmarks.
+- **[Andrej Karpathy (`karpathy/nanoGPT`)](https://github.com/karpathy/nanoGPT)** — Minimalist GPT training reference that informed `ojas-Models` and `nanolab`.
+- **Google DeepMind (`Gemma`)** & **Alibaba Cloud (`Qwen`)** — Reference transformer architectures targeted by `gemma-metal/` and `ojas-serve`.
+- **[Apple MLX (`ml-explore/mlx`)](https://github.com/ml-explore/mlx)** — Reference Apple Silicon Metal runtime benchmarked in `gemma-metal/`.

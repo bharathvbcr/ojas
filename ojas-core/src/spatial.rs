@@ -500,8 +500,12 @@ pub fn rope_interleaved_backward_dims(
 /// this is the rotation alone, with no QK-norm.
 ///
 /// Refused: `head_dim` not a positive multiple of 4, an empty grid, `theta`
-/// not finite and above 1, `scale_pos` not finite and positive, or one that
-/// makes an angle overflow f32.
+/// not finite and above 1 as an f32 (the power is formed in f32, so a theta
+/// that rounds to infinity or to 1 there is refused, not silently
+/// degenerate), `scale_pos` not finite and positive, or one that makes an
+/// angle overflow f32. The two `[tokens, head_dim / 2]` tables and the
+/// `head_dim / 4` frequencies are checked against `budget` before anything is
+/// allocated, and the frequencies are charged while they exist.
 pub fn axial_rope_2d_tables(
     head_dim: usize,
     grid_h: usize,
@@ -523,8 +527,11 @@ pub fn axial_rope_2d_tables(
             format!("grid {grid_h} x {grid_w} must be non-empty"),
         ));
     }
-    if !(theta.is_finite() && theta > 1.0) {
-        return Err(range(format!("theta {theta} must be finite and above 1")));
+    let theta32 = theta as f32;
+    if !(theta.is_finite() && theta > 1.0 && theta32.is_finite() && theta32 > 1.0) {
+        return Err(range(format!(
+            "theta {theta} must be finite and above 1 as an f32"
+        )));
     }
     if !(scale_pos.is_finite() && scale_pos > 0.0) {
         return Err(range(format!(
@@ -535,9 +542,33 @@ pub fn axial_rope_2d_tables(
         .checked_mul(grid_w)
         .ok_or_else(|| too_large(OP, "grid size overflows"))?;
     let (half, quarter) = (head_dim / 2, head_dim / 4);
-    let freqs: Vec<f32> = (0..quarter)
-        .map(|j| 1.0 / (theta as f32).powf((4 * j) as f32 / head_dim as f32))
-        .collect();
+    // Everything that will exist at once, in bytes: both tables and the
+    // frequencies. Refused before the first allocation, so a huge `head_dim`
+    // is an error and not an allocator abort.
+    let f32_bytes = DType::F32.size();
+    let bytes = |elements: Option<usize>| {
+        elements
+            .and_then(|n| n.checked_mul(f32_bytes))
+            .ok_or_else(|| too_large(OP, "table size overflows"))
+    };
+    let table_bytes = bytes(tokens.checked_mul(half))?;
+    let freq_bytes = bytes(Some(quarter))?;
+    let total = table_bytes
+        .checked_mul(2)
+        .and_then(|t| t.checked_add(freq_bytes))
+        .and_then(|t| u64::try_from(t).ok())
+        .ok_or_else(|| too_large(OP, "table size overflows"))?;
+    budget.check_room(total)?;
+    let _freqs_hold = budget.try_reserve(freq_bytes as u64)?;
+    let mut freqs: Vec<f32> = Vec::new();
+    if freqs.try_reserve_exact(quarter).is_err() {
+        return Err(OjasError::CapacityExceeded {
+            requested: freq_bytes as u64,
+            cap: budget.cap_bytes(),
+            live: budget.live_bytes()?,
+        });
+    }
+    freqs.extend((0..quarter).map(|j| 1.0 / theta32.powf((4 * j) as f32 / head_dim as f32)));
     let mut cos = Tensor::zeros(&[tokens, half], DType::F32, budget)?;
     let mut sin = Tensor::zeros(&[tokens, half], DType::F32, budget)?;
     {
