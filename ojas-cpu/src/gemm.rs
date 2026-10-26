@@ -2120,10 +2120,10 @@ mod tests {
             }
         }
         // The sweep reached each path, so a pass is not a skipped check.
-        assert!(seen[0] >= 60, "{seen:?}");
-        if fused {
-            assert!(seen[1] >= 30, "{seen:?}");
-        }
+        // Without a compile-time FMA feature (a default x86_64 build) the Fast
+        // products are held to the f64 bound instead, so they count there.
+        let fast = if fused { seen[1] } else { seen[1] + seen[2] };
+        assert!(seen[0] >= 60 && fast >= 30, "{seen:?}");
         if cfg!(target_os = "macos") {
             assert!(seen[2] >= 15, "{seen:?}");
         }
