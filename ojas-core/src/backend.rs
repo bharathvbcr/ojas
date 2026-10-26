@@ -902,7 +902,10 @@ pub trait Backend {
     ///
     /// The inference form: a backend that does not need the log-sum-exp
     /// can skip it. A backend without the op returns
-    /// [`OjasError::Unsupported`].
+    /// [`OjasError::Unsupported`] under this method's own name, not under
+    /// [`Self::attention_forward_saving`]'s: the default does not delegate,
+    /// so a backend that implements the saving form implements this one too
+    /// (the CPU and Metal backends both do).
     fn attention_forward(
         &self,
         q: &Tensor,
@@ -910,8 +913,8 @@ pub trait Backend {
         v: &Tensor,
         opts: AttentionOpts<'_>,
     ) -> Result<Tensor, OjasError> {
-        self.attention_forward_saving(q, k, v, opts)
-            .map(|(output, _)| output)
+        let _ = (q, k, v, opts);
+        Err(unsupported_inference(self.id(), "attention_forward"))
     }
 
     /// [`Self::attention_forward`] and each query row's log-sum-exp `ln
@@ -2512,6 +2515,35 @@ pub(crate) mod tests {
         match backend.permute(&host, &[1, 0]) {
             Err(OjasError::Unsupported { op, .. }) => assert_eq!(op, "permute"),
             other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn default_attention_forward_refuses_under_its_own_name() {
+        let budget = Budget::new(1 << 10);
+        let t = Tensor::from_f32(&[1.0], &[1, 1, 1, 1], &budget).unwrap();
+        for id in [BackendId::Wgpu, BackendId::Cuda, BackendId::Hip] {
+            let backend = NoUpload {
+                id,
+                budget: budget.clone(),
+            };
+            match backend.attention_forward(&t, &t, &t, AttentionOpts::default()) {
+                Err(OjasError::Unsupported { op, detail }) => {
+                    assert_eq!(op, "attention_forward", "{id:?}");
+                    assert!(
+                        detail.contains(&format!("{id:?}"))
+                            && detail.contains("does not implement attention_forward"),
+                        "{detail}"
+                    );
+                }
+                other => panic!("{id:?}: expected Unsupported, got {other:?}"),
+            }
+            match backend.attention_forward_saving(&t, &t, &t, AttentionOpts::default()) {
+                Err(OjasError::Unsupported { op, .. }) => {
+                    assert_eq!(op, "attention_forward_saving", "{id:?}");
+                }
+                other => panic!("{id:?}: expected Unsupported, got {other:?}"),
+            }
         }
     }
 
