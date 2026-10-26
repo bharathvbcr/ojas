@@ -76,25 +76,26 @@ use std::fmt;
 use std::sync::Arc;
 
 use ojas_core::{
-    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, attention_forward_saving_dims,
-    cached_attention_dims, causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims,
-    causal_sdpa_backward_dims, causal_sdpa_forward_dims, check_adamw, chunked_gdn_backward_dims,
-    chunked_gdn_forward_dims, clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
-    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
-    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
-    gdn_log_decay_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
-    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
-    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
-    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
-    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
-    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
-    topk_rows_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, AttentionDims, AttentionOpts, Backend, BackendId, Budget, CeChunk, CeGrads,
-    Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward,
-    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, attention_forward_dims,
+    attention_forward_saving_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
+    causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
+    check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
+    clip_scale, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
+    embedding_backward_dims, embedding_forward_dims, gated_rms_norm_backward_dims,
+    gated_rms_norm_forward_dims, gdn_log_decay_backward_dims, gdn_log_decay_forward_dims,
+    kv_cache_write_dims, linear_backward_dims, linear_ce_dims, linear_forward_dims,
+    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
+    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_unsupported_metal_gdn,
+    refuse_unsupported_metal_head_dim, residual_add_backward_dims, residual_add_forward_dims,
+    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
+    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
+    rope_partial_backward_dims, rope_partial_forward_dims, sigmoid_backward_dims,
+    sigmoid_forward_dims, silu_backward_dims, silu_forward_dims, topk_rows_dims,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
+    AttentionDims, AttentionOpts, Backend, BackendId, Budget, CeChunk, CeGrads, Conv1dDims, DType,
+    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
+    LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
+    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
     ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
@@ -1690,6 +1691,23 @@ impl Backend for MetalBackend {
             [q, k, v, output, grad_output].map(|t| self.widened(t));
         let (q, k, v, output, grad_output) = (q?, k?, v?, output?, grad_output?);
         self.sdpa_backward(OP, &dims, window, [&q, &k, &v, &output, lse, &grad_output])
+    }
+
+    /// The inference form of [`Self::attention_forward_saving`]: it refuses
+    /// a malformed call under its own name, as the CPU backend does.
+    fn attention_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "attention_forward";
+        let dims = attention_forward_dims(q, k, v, &opts)?;
+        let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
+        let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
+        self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
+            .map(|(output, _)| output)
     }
 
     /// Bidirectional and cross attention, a bias and key lengths on the
