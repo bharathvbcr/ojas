@@ -138,7 +138,15 @@ fn a_64_mebibyte_bf16_read_holds_the_output_and_one_chunk() {
 #[test]
 fn an_oversized_declared_tensor_on_a_sparse_file_is_an_error_quickly() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    const BYTES: u64 = 1 << 47;
+    // The reader refuses by failing to reserve, so the size must be one the host's allocator
+    // refuses up front. Linux (overcommit heuristic) refuses 8 TiB, and ext4 cannot hold a
+    // sparse file over 16 TiB (EFBIG). macOS reserves lazily whatever fits the 47-bit address
+    // space, so it needs 128 TiB, which APFS holds.
+    const BYTES: u64 = if cfg!(target_os = "macos") {
+        1 << 47
+    } else {
+        1 << 43
+    };
     let path = sparse_file("oversized", "BF16", BYTES / 2, BYTES);
     let st = SafeTensors::open(&path).unwrap();
     let start = std::time::Instant::now();

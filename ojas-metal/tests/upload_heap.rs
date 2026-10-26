@@ -3,6 +3,7 @@
 //! the budget) and then copied it into the device mapping; now the window
 //! is encoded into the mapping a bounded piece at a time. A counting global
 //! allocator in this test binary measures the host heap's peak.
+#![cfg(target_os = "macos")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

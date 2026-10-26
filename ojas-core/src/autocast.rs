@@ -22,6 +22,7 @@ use crate::backend::{
 use crate::budget::Budget;
 use crate::dtype::DType;
 use crate::error::OjasError;
+use crate::spatial::{Conv2dParams, ConvTranspose2dParams};
 use crate::tensor::{Tensor, COMPUTE_BF16, COMPUTE_F32};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -914,6 +915,90 @@ impl<B: Backend> Backend for Autocast<B> {
             a_log: self.keep_f32(grad.a_log),
             dt_bias: self.keep_f32(grad.dt_bias),
         })
+    }
+
+    fn conv2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: Conv2dParams,
+    ) -> Result<Tensor, OjasError> {
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let bias = bias.map(|b| self.prep(b)).transpose()?;
+        let out = self
+            .inner
+            .conv2d_forward(&input, &weight, bias.as_deref(), params)?;
+        self.emit(out)
+    }
+
+    fn conv_transpose2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: ConvTranspose2dParams,
+    ) -> Result<Tensor, OjasError> {
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let bias = bias.map(|b| self.prep(b)).transpose()?;
+        let out = self
+            .inner
+            .conv_transpose2d_forward(&input, &weight, bias.as_deref(), params)?;
+        self.emit(out)
+    }
+
+    fn max_pool2d_forward(
+        &self,
+        input: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.max_pool2d_forward(input, kernel, stride)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn interpolate_bilinear_forward(
+        &self,
+        input: &Tensor,
+        out_size: [usize; 2],
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self
+            .inner
+            .interpolate_bilinear_forward(input, out_size, align_corners)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn rope_interleaved_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = x.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.rope_interleaved_forward(x, cos, sin)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn rope_interleaved_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self
+            .inner
+            .rope_interleaved_backward(grad_output, cos, sin)?;
+        self.promote(on, tagged, out)
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

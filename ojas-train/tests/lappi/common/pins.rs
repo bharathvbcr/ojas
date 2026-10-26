@@ -305,8 +305,8 @@ pub fn check(dir: &Path, form: Form) -> Result<usize, Vec<String>> {
         Form::JsonFiles => {
             let text = std::str::from_utf8(&raw)
                 .map_err(|e| vec![format!("{manifest} does not parse: not UTF-8: {e}")])?;
-            let value = parse_json(text)
-                .map_err(|e| vec![format!("{manifest} does not parse: {e}")])?;
+            let value =
+                parse_json(text).map_err(|e| vec![format!("{manifest} does not parse: {e}")])?;
             parse_files_map(&value).map_err(|es| {
                 es.into_iter()
                     .map(|e| format!("{manifest} {e}"))

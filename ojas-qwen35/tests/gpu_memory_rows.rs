@@ -95,16 +95,15 @@ use ojas_metal::MetalBackend;
 use ojas_model::preflight::{Calibration, Point};
 use ojas_model::qwen35::adapters::BaseIdentity;
 use ojas_model::qwen35::{
-    bind, forward_loss, load_hf, DeviceHooks, LoraInit, OpenConfig, Qwen35Tables,
-    TapeStepProvider,
+    bind, forward_loss, load_hf, DeviceHooks, LoraInit, OpenConfig, Qwen35Tables, TapeStepProvider,
 };
 use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};
-use ojas_train::lappi::step as lstep;
-use ojas_train::lappi::step::StepProvider as _;
 use ojas_qwen35::{
     AdamWHyper, GroupSpec, LrRule, Numerics, OptimizerPlan, Precision, Qwen35Step, Select,
     Sequence, Snapshot, WdRule,
 };
+use ojas_train::lappi::step as lstep;
+use ojas_train::lappi::step::StepProvider as _;
 
 use common::{footprint_or_refuse, refused, single_weights_file, snapshot_dir, Row};
 
@@ -938,7 +937,11 @@ fn tape_provider(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
     r.num("lora_rank", LORA_RANK as u64);
     r.num("device_budget_bytes", LORA_DEVICE_BUDGET);
     if n < 2 {
-        refused(r, "tokens", format!("{n} positions: the calibration needs two widths"));
+        refused(
+            r,
+            "tokens",
+            format!("{n} positions: the calibration needs two widths"),
+        );
     }
     let m = match MetalBackend::new(Budget::new(LORA_DEVICE_BUDGET)) {
         Ok(m) => m,

@@ -18,6 +18,7 @@ mod exp_exact;
 mod limits;
 mod rope;
 mod shapes;
+mod spatial;
 mod tensor;
 
 pub use autocast::{
@@ -61,6 +62,13 @@ pub use shapes::{
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, CeDims, Conv1dDims,
     EmbeddingDims, GateDims, GdnDecayDims, GdnDims, KvDims, LinearCeDims, LinearDims, MuonDims,
     PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims, MAX_PERMUTE_RANK,
+};
+pub use spatial::{
+    axial_rope_2d_tables, conv2d_forward_dims, conv_transpose2d_forward_dims,
+    interpolate_bilinear_forward_dims, max_pool2d_forward_dims, pixel_shuffle, pixel_unshuffle,
+    rope_interleaved_backward_dims, rope_interleaved_forward_dims, window_merge, window_partition,
+    BilinearDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams,
+    InterleavedRopeDims, MaxPool2dDims,
 };
 pub use tensor::{
     device_readbacks, f32_all_finite, DeviceBuffer, HostElement, Tensor, LE_READ_CHUNK_BYTES,

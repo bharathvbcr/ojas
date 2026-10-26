@@ -78,6 +78,7 @@ mod optim;
 mod pointwise;
 mod pool;
 mod schedule;
+mod spatial;
 mod train;
 mod validate;
 

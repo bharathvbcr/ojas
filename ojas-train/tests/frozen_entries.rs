@@ -16,7 +16,7 @@ use ojas_train::lappi::step::{
     StepProvider, StorageDtype,
 };
 use ojas_train::lappi::trainer::{
-    BatchCounts, CheckpointPolicy, ConsumedBatch, HostParams, Hooks, MicroBatchPlan, MicroLoss,
+    BatchCounts, CheckpointPolicy, ConsumedBatch, Hooks, HostParams, MicroBatchPlan, MicroLoss,
     Objective, ResumeState, SequenceWork, TrainConfig, TrainError, TrainResult, parameters_digest,
     train,
 };
@@ -37,7 +37,9 @@ fn batches(n: u64) -> Vec<Batch> {
     (0..n)
         .map(|i| Batch {
             index: i,
-            tokens: (0..5).map(|k| ((i * 3 + k * 2) % VOCAB as u64) as u32).collect(),
+            tokens: (0..5)
+                .map(|k| ((i * 3 + k * 2) % VOCAB as u64) as u32)
+                .collect(),
         })
         .collect()
 }
@@ -88,7 +90,9 @@ impl Objective for NextToken {
         _hidden: &[f32],
         _width: usize,
     ) -> Result<Vec<f32>, TrainError> {
-        Err(TrainError::Refused("this objective has no outside loss".into()))
+        Err(TrainError::Refused(
+            "this objective has no outside loss".into(),
+        ))
     }
 
     fn close(&mut self, row_loss_sums: &[f64]) -> Result<MicroLoss, TrainError> {
@@ -176,7 +180,11 @@ fn a_frozen_entry_is_listed_but_absent_from_every_trainable_view() {
     let frozen: Vec<&ParamSpec> = b.parameters().iter().filter(|s| !s.trainable).collect();
     assert_eq!(frozen.len(), 1);
     assert_eq!(frozen[0].storage, StorageDtype::Bf16);
-    assert!(a.parameters().iter().all(|s| s.trainable && s.storage == StorageDtype::F32));
+    assert!(
+        a.parameters()
+            .iter()
+            .all(|s| s.trainable && s.storage == StorageDtype::F32)
+    );
 
     assert_eq!(b.read_parameters().unwrap(), a.read_parameters().unwrap());
     assert_eq!(b.grads().len(), a.grads().len());
@@ -274,9 +282,19 @@ fn an_all_trainable_loop_step_is_the_direct_provider_step() {
         };
         direct.accumulate(&j, BankMode::Overwrite, None).unwrap();
         let sq = direct.grad_sq_norm().unwrap();
-        assert_eq!(rec.grad_norm.to_bits(), sq.sqrt().to_bits(), "step {}", i + 1);
+        assert_eq!(
+            rec.grad_norm.to_bits(),
+            sq.sqrt().to_bits(),
+            "step {}",
+            i + 1
+        );
         let coef = recipe::clip_coefficient(sq, 1.0).unwrap();
-        assert_eq!(rec.clip_coefficient.to_bits(), coef.to_bits(), "step {}", i + 1);
+        assert_eq!(
+            rec.clip_coefficient.to_bits(),
+            coef.to_bits(),
+            "step {}",
+            i + 1
+        );
         let hyper = AdamWHyper {
             lr: rec.lr,
             beta1: BETA1,
