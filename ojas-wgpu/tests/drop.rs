@@ -11,13 +11,22 @@ use std::time::{Duration, Instant};
 use ojas_core::{Backend, Budget, Tensor};
 use ojas_wgpu::WgpuBackend;
 
-const N: usize = 4096;
+/// The matrix side on a fast GPU, where 4096^3 GEMMs keep the queue busy for
+/// longer than the drop bound without queueing thousands of them.
+const FAST_N: usize = 4096;
+/// The side on a slow adapter (a software Vulkan such as lavapipe, where one
+/// 4096^3 GEMM takes ~10 s and the recorder's minimum flush of `FLUSH_AT`
+/// dispatches would queue minutes of work).
+const SLOW_N: usize = 1024;
+/// A SLOW_N GEMM slower than this marks the adapter slow: `FLUSH_AT` of them
+/// still outlast the drop bound.
+const SLOW_GEMM: Duration = Duration::from_millis(20);
 
-fn square(seed: u32, b: &WgpuBackend) -> Tensor {
-    let host: Vec<f32> = (0..N * N)
+fn square(seed: u32, n: usize, b: &WgpuBackend) -> Tensor {
+    let host: Vec<f32> = (0..n * n)
         .map(|i| ((i as u32).wrapping_mul(2654435761).wrapping_add(seed) % 1000) as f32 * 1e-3)
         .collect();
-    b.upload(&Tensor::from_f32(&host, &[N, N], b.budget()).unwrap())
+    b.upload(&Tensor::from_f32(&host, &[n, n], b.budget()).unwrap())
         .unwrap()
 }
 
@@ -26,8 +35,20 @@ fn dropping_a_busy_backend_returns_within_its_bound() {
     let g = WgpuBackend::open(Budget::new(4 << 30)).expect("wgpu adapter");
     let bound = Duration::from_millis(300);
     g.context().set_drop_wait(bound);
-    let x = square(1, &g);
-    let w = square(2, &g);
+    // Time one small GEMM to pick a matrix size whose queued work outlasts
+    // the bound on this adapter yet drains in a reasonable time.
+    let probe = (square(3, SLOW_N, &g), square(4, SLOW_N, &g));
+    let mut small = Duration::MAX;
+    for _ in 0..3 {
+        let t = Instant::now();
+        drop(g.linear_forward(&probe.0, &probe.1).unwrap());
+        g.sync().unwrap();
+        small = small.min(t.elapsed());
+    }
+    drop(probe);
+    let side = if small >= SLOW_GEMM { SLOW_N } else { FAST_N };
+    let x = square(1, side, &g);
+    let w = square(2, side, &g);
     // One GEMM's time, so the queued work is known to outlast the bound.
     let mut one = Duration::MAX;
     for _ in 0..3 {
