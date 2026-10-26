@@ -106,8 +106,8 @@ use ojas_core::{
 
 use crate::link::{
     cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom, Cmd,
-    Conv1dGeom, ConvGeom, EmbedRows, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide,
-    RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
+    Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res,
+    RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -622,6 +622,40 @@ impl MetalBackend {
         }
     }
 
+    /// Self-attention of validated `dims` on tessl's tiled `encoder_attn`
+    /// ([`routes_to_encoder_attn`] says which calls). Scratch: the permuted
+    /// Q, K, V and the kernel's output, one length per batch row, and a copy
+    /// of each operand that is a view.
+    fn encoder_attn_forward(
+        &self,
+        op: &'static str,
+        dims: &AttentionDims,
+        [q, k, v]: [&Tensor; 3],
+    ) -> Res<Tensor> {
+        let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
+        let geom = EncAttnGeom {
+            batch: u32_dim(op, dims.batch)?,
+            heads: u32_dim(op, dims.heads)?,
+            seq: u32_dim(op, dims.q_len)?,
+            d: u32_dim(op, dims.head_dim)?,
+        };
+        let n = product(op, &[dims.batch, dims.heads, dims.q_len, dims.head_dim])?;
+        u32_dim(op, n)?;
+        let scratch = plus(
+            op,
+            plus(op, product(op, &[4, n])?, dims.batch)?,
+            copied_elems(op, ReadAs::Whole, &[qa, ka, va])?,
+        )?;
+        let cmd = Cmd::EncoderAttn {
+            op,
+            q: qa,
+            k: ka,
+            v: va,
+            geom,
+        };
+        self.one(op, q.shape(), scratch, cmd)
+    }
+
     /// General attention forward after its validator: the output and the
     /// `[B, H, Tq]` row log-sum-exp. Nothing beyond the two outputs is
     /// charged; grouped-query heads read their KV head in place.
@@ -1021,6 +1055,37 @@ fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
         oh: u32_dim(op, d.out_height)?,
         ow: u32_dim(op, d.out_width)?,
     })
+}
+
+/// The one head dim `encoder_attn` is routed at: the SAM vision attention
+/// (64), where it measured 22.8 ms against 606 ms for `ojas_attn_gen_fwd`
+/// on `[1, 16, 5184, 64]` and 4.7 ms against 77 ms on `[9, 16, 576, 64]`
+/// (bench/results/2026-10-26-attention-vision). The other head dims tessl's
+/// tiled kernels compile (32, 256) have no measurement here.
+const ENCODER_ATTN_HEAD_DIM: usize = 64;
+
+/// Whether `attention_forward` runs on tessl's tiled `encoder_attn` rather
+/// than `ojas_attn_gen_fwd`: bidirectional self-attention over equal head
+/// counts with no bias, key lengths or window, at [`ENCODER_ATTN_HEAD_DIM`],
+/// on a device with TensorOps, with one head's plane addressable in `i32`
+/// as tessl's matrix-unit views require. Everything else keeps the general
+/// kernel. `attention_forward_saving` never routes: `encoder_attn` returns
+/// no log-sum-exp.
+fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
+    let plane = dims
+        .q_len
+        .checked_mul(dims.heads)
+        .and_then(|p| p.checked_mul(dims.head_dim))
+        .is_some_and(|p| i32::try_from(p).is_ok());
+    tensorops
+        && !dims.causal
+        && dims.window.is_none()
+        && dims.bias.is_none()
+        && !dims.key_lens
+        && dims.q_len == dims.kv_len
+        && dims.heads == dims.kv_heads
+        && dims.head_dim == ENCODER_ATTN_HEAD_DIM
+        && plane
 }
 
 /// The attention kernels' geometry of validated `dims`, with Metal's
@@ -1796,6 +1861,9 @@ impl Backend for MetalBackend {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
+        if routes_to_encoder_attn(&dims, self.link.has_tensorops()) {
+            return self.encoder_attn_forward(OP, &dims, [&q, &k, &v]);
+        }
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
             .map(|(output, _)| output)
@@ -4053,5 +4121,107 @@ mod tests {
                 assert!(matches!(r, Err(OjasError::Poisoned)), "at {at}: {r:?}");
             }
         });
+    }
+
+    fn vision_dims() -> AttentionDims {
+        AttentionDims {
+            batch: 1,
+            heads: 16,
+            kv_heads: 16,
+            q_len: 5184,
+            kv_len: 5184,
+            head_dim: 64,
+            causal: false,
+            window: None,
+            bias: None,
+            key_lens: false,
+        }
+    }
+
+    #[test]
+    fn only_plain_self_attention_at_head_dim_64_routes_to_encoder_attn() {
+        let base = vision_dims();
+        assert!(routes_to_encoder_attn(&base, true));
+        assert!(!routes_to_encoder_attn(&base, false), "no TensorOps");
+        let bias = ojas_core::AttentionBias {
+            batch: 1,
+            heads: 1,
+            queries: 1,
+        };
+        let stays = [
+            (
+                "causal",
+                AttentionDims {
+                    causal: true,
+                    ..base
+                },
+            ),
+            (
+                "window",
+                AttentionDims {
+                    window: Some(8),
+                    ..base
+                },
+            ),
+            (
+                "bias",
+                AttentionDims {
+                    bias: Some(bias),
+                    ..base
+                },
+            ),
+            (
+                "key lengths",
+                AttentionDims {
+                    key_lens: true,
+                    ..base
+                },
+            ),
+            ("Tq != Tk", AttentionDims { kv_len: 77, ..base }),
+            (
+                "grouped heads",
+                AttentionDims {
+                    kv_heads: 8,
+                    ..base
+                },
+            ),
+            (
+                "head dim 16",
+                AttentionDims {
+                    head_dim: 16,
+                    ..base
+                },
+            ),
+            (
+                "head dim 32",
+                AttentionDims {
+                    head_dim: 32,
+                    ..base
+                },
+            ),
+            (
+                "head dim 256",
+                AttentionDims {
+                    head_dim: 256,
+                    ..base
+                },
+            ),
+            (
+                "a plane past i32",
+                AttentionDims {
+                    q_len: 1 << 20,
+                    kv_len: 1 << 20,
+                    heads: 64,
+                    kv_heads: 64,
+                    ..base
+                },
+            ),
+        ];
+        for (what, d) in stays {
+            assert!(
+                !routes_to_encoder_attn(&d, true),
+                "{what} must keep the general kernel"
+            );
+        }
     }
 }

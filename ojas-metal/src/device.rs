@@ -21,6 +21,7 @@ use std::thread;
 
 use ojas_core::{sdpa_scale, OjasError, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS};
 use tessl::dispatch::{self, set_f32, set_gpu_buf_offset, set_u32, Binder};
+use tessl::embedgemma2::{encoder_attn, EncoderAttnDims};
 use tessl::gdn_train::{
     gdn_train_backward, gdn_train_forward, gdn_train_forward_transient_bytes, GdnTrainDims,
     GdnTrainGrads, GdnTrainInputs, GdnTrainWorkspace, GDN_TRAIN_DK,
@@ -39,8 +40,8 @@ use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, Cmd, Conv1dGeom, ConvGeom, DeviceInfo,
-    EmbedRows, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode,
-    SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
+    EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide,
+    RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
 };
 
 const ST_IN: u32 = 0;
@@ -1519,6 +1520,7 @@ impl Worker {
                 bias,
                 geom,
             } => self.conv_transpose2d(op, [x, w], bias, geom),
+            Cmd::EncoderAttn { op, q, k, v, geom } => self.encoder_attn(op, [q, k, v], geom),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
@@ -2524,6 +2526,67 @@ impl Worker {
                 set_u32(b, v, 4 + i);
             }
         })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// Bidirectional self-attention on tessl's `embedgemma2::encoder_attn`
+    /// (the tiled TensorOps kernel at head dim 64), which wants
+    /// `[batch, seq, heads, d]`: each operand is permuted in, the output is
+    /// permuted back. tessl scales `q . k` by `scale` (here `sdpa_scale(d)`,
+    /// the CPU reference's `1 / sqrt(d)`) and masks by a per-batch length
+    /// buffer, built per call as `seq` for every batch (every key visible).
+    /// The kernel scans nothing, so the operands and the output are checked
+    /// here; the output of a non-finite input is flagged under `op`.
+    fn encoder_attn(&mut self, op: &'static str, args: [Arg; 3], g: EncAttnGeom) -> Res<Reply> {
+        let [qv, kv, vv] = self.wholes(args)?;
+        let n = (g.batch as usize)
+            .checked_mul(g.heads as usize)
+            .and_then(|n| n.checked_mul(g.seq as usize))
+            .and_then(|n| n.checked_mul(g.d as usize))
+            .ok_or_else(|| metal_err(format!("{op}: attention extent overflows")))?;
+        if [&qv, &kv, &vv].iter().any(|v| v.n != n) {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold [{}, {}, {}, {}]",
+                g.batch, g.heads, g.seq, g.d
+            )));
+        }
+        u32_of(n)?;
+        let scale = sdpa_scale(g.d)?;
+        let (b, h, t, d) = (g.batch, g.heads, g.seq, g.d);
+        // [B, H, T, D] -> [B, T, H, D] reads the input at (H T D, D, T D, 1);
+        // back reads [B, T, H, D] at (T H D, D, H D, 1).
+        let to_bthd = ([b, t, h, d], [h * t * d, d, t * d, 1]);
+        let to_bhtd = ([b, h, t, d], [t * h * d, d, h * d, 1]);
+        let (qt, kt, vt) = (self.fresh(n)?, self.fresh(n)?, self.fresh(n)?);
+        let (o, y) = (self.fresh(n)?, self.fresh(n)?);
+        let lens = self.fresh_from(&vec![t; b as usize])?;
+        let st = self.status(op)?;
+        for v in [&qv, &kv, &vv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        for (src, dst) in [(&qv, &qt), (&kv, &kt), (&vv, &vt)] {
+            self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1)?;
+        }
+        encoder_attn(
+            &self.rt,
+            &qt.buf,
+            &kt.buf,
+            &vt.buf,
+            &o.buf,
+            &lens.buf,
+            EncoderAttnDims {
+                batch: b,
+                seq: t,
+                heads: h,
+                heads_kv: h,
+                head_dim: d,
+                window: 0,
+                scale,
+            },
+        )
+        .map_err(metal_err)?;
+        self.permute_into(&o, &y, 4, &to_bhtd.0, &to_bhtd.1)?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }

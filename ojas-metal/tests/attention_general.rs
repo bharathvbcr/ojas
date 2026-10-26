@@ -121,12 +121,31 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
     );
     same_tensor(&format!("{tag} output"), &got, &want, tol(c.tk), 1e-4);
     same_tensor(&format!("{tag} lse"), &got_lse, &want_lse, tol(c.tk), 1e-4);
-    // The inference form is the saving form's output.
+    // The inference form is the saving form's output: bit for bit on the
+    // general kernel, and within the forward tolerance where it routes to
+    // tessl's `encoder_attn` (see `attention_routing.rs`).
     let plain = ok(
         &tag,
         m.attention_forward(&dev.q, &dev.k, &dev.v, dev.opts(c)),
     );
-    assert_eq!(down(&plain), down(&got), "{tag}: forward forms differ");
+    if routes_to_encoder_attn(m, c) {
+        same_tensor(&format!("{tag} routed"), &plain, &want, tol(c.tk), 1e-4);
+    } else {
+        assert_eq!(down(&plain), down(&got), "{tag}: forward forms differ");
+    }
+}
+
+/// Whether `attention_forward` takes tessl's `encoder_attn` for this case:
+/// plain self-attention at head dim 64 on a device with TensorOps.
+fn routes_to_encoder_attn(m: &MetalBackend, c: &Case) -> bool {
+    m.has_tensorops()
+        && !c.causal
+        && c.window.is_none()
+        && c.bias.is_none()
+        && c.lens.is_none()
+        && c.tq == c.tk
+        && c.h == c.hkv
+        && c.d == 64
 }
 
 #[test]

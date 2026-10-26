@@ -356,6 +356,16 @@ pub(crate) struct AttnGeom {
     pub has_lens: bool,
 }
 
+/// One bidirectional self-attention launch on tessl's `encoder_attn`:
+/// `q`, `k`, `v` are `[batch, heads, seq, d]`, every key visible.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EncAttnGeom {
+    pub batch: u32,
+    pub heads: u32,
+    pub seq: u32,
+    pub d: u32,
+}
+
 /// A convolution as GEMM, validated and within the kernels' limits:
 /// `[batch, c, h, w]` input, `[o, c, kh, kw]` weight, `[batch, o, oh, ow]`
 /// output, dilation 1, one group.
@@ -622,6 +632,16 @@ pub(crate) enum Cmd {
         w: Arg,
         bias: Option<Arg>,
         geom: ConvGeom,
+    },
+    /// Bidirectional self-attention without a bias, key lengths or window
+    /// on tessl's tiled `encoder_attn` (head dim 64): permutes in, attends,
+    /// permutes out. Replies with the output alone; `op` names a fault.
+    EncoderAttn {
+        op: &'static str,
+        q: Arg,
+        k: Arg,
+        v: Arg,
+        geom: EncAttnGeom,
     },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {
