@@ -2144,6 +2144,7 @@ impl Worker {
         let (mode_u, time, heads) = match mode {
             RopeMode::Same => (0u32, 1u32, 1u32),
             RopeMode::TimeDim { time, heads } => (1, time, heads),
+            RopeMode::Interleaved { time, heads } => (2, time, heads),
         };
         let st = self.status(op)?;
         for v in [&xv, &cv, &sv] {

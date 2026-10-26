@@ -91,15 +91,17 @@ use ojas_core::{
     refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
     residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
-    scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
-    silu_forward_dims, softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    rope_half_split_forward_dims, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
+    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims,
+    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
+    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
     value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
     BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
     ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
-    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision,
-    Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims,
-    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
+    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe,
+    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
+    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -2083,6 +2085,28 @@ impl Backend for MetalBackend {
         rope_partial(self, OP, &dims, [grad_output, cos, sin], true)
     }
 
+    fn rope_interleaved_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_interleaved_forward";
+        let dims = rope_interleaved_forward_dims(x, cos, sin)?;
+        rope_interleaved(self, OP, &dims, [x, cos, sin], false)
+    }
+
+    fn rope_interleaved_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_interleaved_backward";
+        let dims = rope_interleaved_backward_dims(grad_output, cos, sin)?;
+        rope_interleaved(self, OP, &dims, [grad_output, cos, sin], true)
+    }
+
     /// The SAM cases as im2col, a GEMM and a layout pass: a kernel equal to
     /// its stride without padding (the patch embedding), and stride 1 with
     /// any padding (1x1 and 3x3 convolutions). Dilation, groups and any other
@@ -2958,6 +2982,40 @@ fn rope_partial(
             rows,
             dim,
             rotary,
+            mode,
+            backward,
+        },
+    )
+}
+
+/// Interleaved rope of validated `dims` on `ojas_rope` (mode 2): every pair
+/// of adjacent columns rotates, nothing is copied.
+fn rope_interleaved(
+    be: &MetalBackend,
+    op: &'static str,
+    dims: &InterleavedRopeDims,
+    [x, cos, sin]: [&Tensor; 3],
+    backward: bool,
+) -> Res<Tensor> {
+    let (xa, ca, sa) = (be.f32(op, x)?, be.f32(op, cos)?, be.f32(op, sin)?);
+    u32_dim(op, product(op, &[dims.rows, dims.dim])?)?;
+    let mode = RopeMode::Interleaved {
+        time: u32_dim(op, dims.time)?,
+        heads: u32_dim(op, dims.heads)?,
+    };
+    let dim = u32_dim(op, dims.dim)?;
+    be.one(
+        op,
+        x.shape(),
+        0,
+        Cmd::Rope {
+            op,
+            x: xa,
+            cos: ca,
+            sin: sa,
+            rows: u32_dim(op, dims.rows)?,
+            dim,
+            rotary: dim,
             mode,
             backward,
         },

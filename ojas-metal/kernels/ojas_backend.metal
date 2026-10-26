@@ -719,6 +719,11 @@ kernel void ojas_vres_lambda(
 /// `mode` 1: x is [batch, time, heads, dim] and cos/sin are [time, rot].
 /// Forward:  y1 = x1 c1 + (-x2) s1,  y2 = x2 c2 + x1 s2.
 /// Backward: g1' = g1 c1 + g2 s2,    g2' = -g1 s1 + g2 c2.
+/// `mode` 2 is the interleaved layout (SAM2 and SAM3, `rot == dim`): x is
+/// [batch, time, heads, dim], cos/sin are [time, dim/2], and pair `i` is
+/// the adjacent columns `2i, 2i+1`.
+/// Forward:  y0 = a c - b s,  y1 = a s + b c  (a, b = x[2i], x[2i+1]).
+/// Backward: the same with s negated (the inverse rotation).
 /// Grid: x = unit in [0, rot/2 + dim - rot), y = row. Unit u < rot/2 rotates
 /// pair u; a later unit copies column rot + (u - rot/2).
 kernel void ojas_rope(
@@ -739,11 +744,21 @@ kernel void ojas_rope(
     const uint col = gid.x;
     const uint row = gid.y;
     if (rot > dim || col >= half_rot + (dim - rot) || row >= rows) return;
-    if (mode == 1u && (heads == 0u || time == 0u)) return;
+    if (mode >= 1u && (heads == 0u || time == 0u)) return;
     const ulong base = (ulong)row * dim;
     if (col >= half_rot) {
         const ulong c = base + rot + (col - half_rot);
         y[c] = x[c];
+        return;
+    }
+    if (mode == 2u) {
+        const ulong tbase = (ulong)((row / heads) % time) * half_rot;
+        const float xa = x[base + 2u * col];
+        const float xb = x[base + 2u * col + 1u];
+        const float tc = cs[tbase + col];
+        const float ts = backward == 0u ? sn[tbase + col] : -sn[tbase + col];
+        y[base + 2u * col] = xa * tc - xb * ts;
+        y[base + 2u * col + 1u] = xa * ts + xb * tc;
         return;
     }
     const ulong cbase = mode == 0u ? base : (ulong)((row / heads) % time) * rot;

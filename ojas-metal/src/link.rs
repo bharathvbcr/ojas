@@ -388,6 +388,9 @@ pub(crate) enum RopeMode {
     Same,
     /// x is `[batch, time, heads, dim]`, cos/sin are `[time, dim]`.
     TimeDim { time: u32, heads: u32 },
+    /// Interleaved pairs (`2i`, `2i + 1`) over `[batch, time, heads, dim]`
+    /// with cos/sin `[time, dim / 2]`; `rotary == dim`.
+    Interleaved { time: u32, heads: u32 },
 }
 
 /// One op. Dimensions are validated by the caller; the device thread checks
