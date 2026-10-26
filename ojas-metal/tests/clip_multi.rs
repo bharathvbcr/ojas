@@ -4,6 +4,7 @@
 //! two two-stage reductions (5 dispatches) and two more to scale; from it
 //! until tessl's norm was wired in, 24 gradients per `ojas_norm_multi`
 //! dispatch and one finish.
+#![cfg(target_os = "macos")]
 
 mod common;
 

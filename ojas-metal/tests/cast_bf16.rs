@@ -1,4 +1,5 @@
 //! Device bf16 round: bit-exact with the host round, and a NaN is not a fault.
+#![cfg(target_os = "macos")]
 
 mod common;
 

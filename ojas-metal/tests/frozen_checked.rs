@@ -11,6 +11,7 @@
 //! scanned by every later op as before.
 //!
 //! Needs a Metal device; run under the mac_heavy lock.
+#![cfg(target_os = "macos")]
 
 mod common;
 
