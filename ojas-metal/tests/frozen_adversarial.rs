@@ -2,6 +2,7 @@
 //! dX bit-identical to `linear_backward`'s at awkward shapes, a bf16 weight,
 //! budget accounting (no dW), repeatability, and agreement with the CPU.
 //! Needs a Metal device; run under the mac_heavy lock.
+#![cfg(target_os = "macos")]
 
 mod common;
 

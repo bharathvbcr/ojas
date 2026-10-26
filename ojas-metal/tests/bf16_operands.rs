@@ -3,6 +3,7 @@
 //! `Bf16` weight costs 2 bytes per element, and the widened copy is charged
 //! only while the op runs. Device `to_bf16` / `to_f32` are bit-exact with
 //! ojas-core's host conversions.
+#![cfg(target_os = "macos")]
 
 mod common;
 

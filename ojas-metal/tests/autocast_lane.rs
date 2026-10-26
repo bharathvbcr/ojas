@@ -6,6 +6,7 @@
 //! operand, and a `Bf16` operand, stay on the exact-f32 lane. A device
 //! without TensorOps runs every pair on the exact-f32 lane, which these
 //! tests assert there instead.
+#![cfg(target_os = "macos")]
 
 mod common;
 
