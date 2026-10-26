@@ -196,6 +196,7 @@ const KERNELS: &[&str] = &[
     "ojas_attn_gen_fwd",
     "ojas_im2col",
     "ojas_conv_nchw",
+    "ojas_convt_nchw",
     "ojas_attn_bwd_dq_d256",
     "ojas_attn_bwd_dkv_d256",
     "ojas_per_head_gate_fwd",
@@ -1510,6 +1511,13 @@ impl Worker {
                 bias,
                 geom,
             } => self.conv2d(op, [x, w], bias, geom),
+            Cmd::ConvTranspose2d {
+                op,
+                x,
+                w,
+                bias,
+                geom,
+            } => self.conv_transpose2d(op, [x, w], bias, geom),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
@@ -1769,21 +1777,27 @@ impl Worker {
     fn permute(&mut self, x: Arg, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<Reply> {
         const OP: &str = "permute";
         let xv = self.view(x)?;
-        let n = u32_of(xv.n)?;
         let y = self.fresh(xv.n)?;
-        let shape_bytes: Vec<u8> = oshape.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        let stride_bytes: Vec<u8> = istride.iter().flat_map(|v| v.to_ne_bytes()).collect();
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
+        self.permute_into(&xv, &y, rank, oshape, istride)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// `ojas_permute` of `xv` into `y`: output axis `a` has extent
+    /// `oshape[a]` and reads the input at `istride[a]`.
+    fn permute_into(&self, xv: &V, y: &V, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<()> {
+        let n = u32_of(xv.n)?;
+        let shape_bytes: Vec<u8> = oshape.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let stride_bytes: Vec<u8> = istride.iter().flat_map(|v| v.to_ne_bytes()).collect();
         self.k1("ojas_permute", xv.n, |b| {
-            bind(b, &xv, 0);
-            bind(b, &y, 1);
+            bind(b, xv, 0);
+            bind(b, y, 1);
             set_u32(b, n, 2);
             set_u32(b, rank, 3);
             b.bind_bytes(&shape_bytes, 4);
             b.bind_bytes(&stride_bytes, 5);
-        })?;
-        Ok(self.keep(vec![y]))
+        })
     }
 
     /// The gather; a `half` (bf16) table is scanned on its bits and each
@@ -2425,6 +2439,88 @@ impl Worker {
             set_u32(b, g.o, 4);
             set_u32(b, pixels_u, 5);
             set_u32(b, u32::from(bv.is_some()), 6);
+        })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// A transposed convolution whose kernel equals its stride, as GEMM: the
+    /// input is permuted to `[n h w, c]`, tessl's exact-f32 NN GEMM takes it
+    /// by the `[c, o kh kw]` weight, and `ojas_convt_nchw` places each
+    /// product value at its output pixel and adds the bias last. Scans and
+    /// faults as [`Self::conv2d`].
+    fn conv_transpose2d(
+        &mut self,
+        op: &'static str,
+        [x, w]: [Arg; 2],
+        bias: Option<Arg>,
+        g: ConvGeom,
+    ) -> Res<Reply> {
+        let xv = self.view(x)?;
+        let wv = self.view(w)?;
+        let bv = bias.map(|a| self.view(a)).transpose()?;
+        let big = |dims: &[u32]| -> Res<usize> {
+            dims.iter()
+                .try_fold(1usize, |acc, &d| acc.checked_mul(d as usize))
+                .ok_or_else(|| metal_err(format!("{op}: convolution extent overflows")))
+        };
+        let [kh, kw] = g.kernel;
+        let rows = big(&[g.batch, g.h, g.w])?;
+        let okk = big(&[g.o, kh, kw])?;
+        let out_n = big(&[g.batch, g.o, g.oh, g.ow])?;
+        let out_c = g.o as usize;
+        if g.oh != g.h * kh
+            || g.ow != g.w * kw
+            || xv.n != big(&[g.batch, g.c, g.h, g.w])?
+            || wv.n != big(&[g.c])? * okk
+            || bv.as_ref().is_some_and(|b| b.n != out_c)
+        {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold a [{}, {}, {}, {}] input, a [{}, {}, {kh}, {kw}] weight and the bias asked for",
+                g.batch, g.c, g.h, g.w, g.c, g.o
+            )));
+        }
+        let out_u = u32_of(out_n)?;
+        let (xp_n, prod_n) = (big(&[g.batch, g.h, g.w, g.c])?, rows * okk);
+        let xp = self.fresh(xp_n)?;
+        let prod = self.fresh(prod_n)?;
+        let y = self.fresh(out_n)?;
+        let st = self.status(op)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
+            self.check_operand(&st, a, b, ST_IN)?;
+        }
+        // NCHW -> [n, h, w, c] reads the input at (c h w, w, 1, h w).
+        let (c, h, wd) = (g.c, g.h, g.w);
+        self.permute_into(
+            &xv,
+            &xp,
+            4,
+            &[g.batch, h, wd, c],
+            &[c * h * wd, wd, 1, h * wd],
+        )?;
+        self.gemm_lane(Lane::ExactF32)
+            .nn(
+                &self.tt(&xp, &[rows, g.c as usize])?,
+                &self.mat(&wv, g.c as usize, okk)?,
+                &self.tt(&prod, &[rows, okk])?,
+            )
+            .map_err(metal_err)?;
+        // Bound even when the kernel does not read it: every declared
+        // argument is set.
+        let bias_buf = bv.as_ref().unwrap_or(&xv);
+        self.k1("ojas_convt_nchw", out_n, |b| {
+            bind(b, &prod, 0);
+            bind(b, bias_buf, 1);
+            bind(b, &y, 2);
+            set_u32(b, out_u, 3);
+            for (i, v) in [g.o, g.h, g.w, kh, kw, u32::from(bv.is_some())]
+                .into_iter()
+                .enumerate()
+            {
+                set_u32(b, v, 4 + i);
+            }
         })?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))

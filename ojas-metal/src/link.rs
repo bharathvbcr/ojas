@@ -608,6 +608,16 @@ pub(crate) enum Cmd {
         bias: Option<Arg>,
         geom: ConvGeom,
     },
+    /// `conv_transpose2d_forward` with kernel == stride: a permute to NHWC, a
+    /// GEMM and a layout pass; `geom` holds the input extents, the output
+    /// channels and the kernel, and `oh`, `ow` the output extents.
+    ConvTranspose2d {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        geom: ConvGeom,
+    },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {
         args: [Arg; 6],

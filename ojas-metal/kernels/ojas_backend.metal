@@ -1803,6 +1803,36 @@ kernel void ojas_conv_nchw(
     y[i] = has_bias != 0u ? v + bias[o] : v;
 }
 
+/// `conv_transpose2d_forward` with kernel == stride and no padding: the
+/// product `prod[(n, y, x)][(o, i, j)]` of the NHWC input with the
+/// `[c, o kh kw]` weight is the output pixel (y kh + i, x kw + j) of channel
+/// o, since each output pixel has exactly one source pixel; the bias is
+/// added last. y is [batch, out, h kh, w kw], one thread per element.
+kernel void ojas_convt_nchw(
+    device const float *prod [[buffer(0)]],
+    device const float *bias [[buffer(1)]],
+    device float *y [[buffer(2)]],
+    constant uint &total [[buffer(3)]],
+    constant uint &out_c [[buffer(4)]],
+    constant uint &h [[buffer(5)]],
+    constant uint &w [[buffer(6)]],
+    constant uint &kh [[buffer(7)]],
+    constant uint &kw [[buffer(8)]],
+    constant uint &has_bias [[buffer(9)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint width = w * kw;
+    const uint height = h * kh;
+    const uint ox = i % width;
+    const uint oy = (i / width) % height;
+    const uint o = (i / (width * height)) % out_c;
+    const uint n = i / (width * height * out_c);
+    const ulong src_pixel = ((ulong)n * h + oy / kh) * w + ox / kw;
+    const float v = prod[src_pixel * out_c * kh * kw + ((ulong)o * kh + oy % kh) * kw + ox % kw];
+    y[i] = has_bias != 0u ? v + bias[o] : v;
+}
+
 // ---------------------------------------- broadcast, scale and softmax ---
 //
 // Forward ops of the encoder family (see `Backend::broadcast_add_forward`,

@@ -81,12 +81,12 @@ use ojas_core::{
     cached_attention_dims, causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims,
     causal_sdpa_backward_dims, causal_sdpa_forward_dims, channel_layer_norm_forward_dims,
     check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
-    clip_scale, conv2d_forward_dims, cross_entropy_mean_backward_dims,
-    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
-    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
-    gdn_log_decay_forward_dims, gelu_erf_forward_dims, kv_cache_write_dims,
-    layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
-    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    clip_scale, conv2d_forward_dims, conv_transpose2d_forward_dims,
+    cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
+    embedding_forward_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
+    gdn_log_decay_backward_dims, gdn_log_decay_forward_dims, gelu_erf_forward_dims,
+    kv_cache_write_dims, layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims,
+    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
     refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
     residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
@@ -96,10 +96,10 @@ use ojas_core::{
     silu_forward_dims, softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
     value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
     BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
-    DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad,
-    GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK,
+    ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
+    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision,
+    Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims,
+    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -982,6 +982,23 @@ fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
             "Metal runs kernel == stride without padding, or stride 1, at dilation 1 and one \
              group; got kernel {:?}, stride {:?}, padding {:?}, dilation {:?}, groups {}",
             d.kernel, p.stride, p.padding, p.dilation, p.groups
+        ),
+    })
+}
+
+/// Refuse a transposed convolution the GEMM reformulation does not cover:
+/// only a kernel equal to its stride, without padding or output padding.
+fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims) -> Res<()> {
+    let p = d.params;
+    if p.stride == d.kernel && p.padding == [0, 0] && p.output_padding == [0, 0] {
+        return Ok(());
+    }
+    Err(OjasError::Unsupported {
+        op,
+        detail: format!(
+            "Metal runs kernel == stride without padding or output padding; got kernel {:?}, \
+             stride {:?}, padding {:?}, output_padding {:?}",
+            d.kernel, p.stride, p.padding, p.output_padding
         ),
     })
 }
@@ -2096,6 +2113,57 @@ impl Backend for MetalBackend {
             copied_elems(OP, ReadAs::Matrix, &[w])?,
         )?;
         let cmd = Cmd::Conv2d {
+            op: OP,
+            x,
+            w,
+            bias: bias_arg,
+            geom,
+        };
+        self.one(OP, &dims.out_shape(), scratch, cmd)
+    }
+
+    /// A transposed convolution whose kernel equals its stride (the SAM
+    /// neck's 2 x 2 stride 2) as a permute, a GEMM and a layout pass. Any
+    /// other stride, padding or output padding is [`OjasError::Unsupported`].
+    fn conv_transpose2d_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: ConvTranspose2dParams,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "conv_transpose2d_forward";
+        let dims = conv_transpose2d_forward_dims(input, weight, bias, params)?;
+        refuse_unsupported_conv_transpose2d(OP, &dims)?;
+        let (input, weight) = (self.widened(input)?, self.widened(weight)?);
+        let bias = bias.map(|b| self.widened(b)).transpose()?;
+        let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
+        let bias_arg = bias.as_ref().map(|b| self.f32(OP, b)).transpose()?;
+        let pair =
+            |v: [usize; 2]| -> Res<[u32; 2]> { Ok([u32_dim(OP, v[0])?, u32_dim(OP, v[1])?]) };
+        let geom = ConvGeom {
+            batch: u32_dim(OP, dims.batch)?,
+            c: u32_dim(OP, dims.in_channels)?,
+            h: u32_dim(OP, dims.height)?,
+            w: u32_dim(OP, dims.width)?,
+            o: u32_dim(OP, dims.out_channels)?,
+            kernel: pair(dims.kernel)?,
+            stride: pair(dims.params.stride)?,
+            padding: pair(dims.params.padding)?,
+            oh: u32_dim(OP, dims.out_height)?,
+            ow: u32_dim(OP, dims.out_width)?,
+        };
+        let rows = product(OP, &[dims.batch, dims.height, dims.width])?;
+        let cols = product(OP, &[dims.out_channels, dims.kernel[0], dims.kernel[1]])?;
+        let permuted = product(OP, &[rows, dims.in_channels])?;
+        let prod = product(OP, &[rows, cols])?;
+        u32_dim(OP, prod)?;
+        let scratch = plus(
+            OP,
+            plus(OP, permuted, prod)?,
+            copied_elems(OP, ReadAs::Matrix, &[w])?,
+        )?;
+        let cmd = Cmd::ConvTranspose2d {
             op: OP,
             x,
             w,
