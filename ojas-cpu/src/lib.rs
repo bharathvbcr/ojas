@@ -65,6 +65,7 @@
 mod accum;
 mod attn;
 mod backend;
+mod encoder_ops;
 mod exp;
 mod fused_ce;
 mod gdn;

@@ -66,6 +66,14 @@ const ADD_BACKWARD: &str = "residual_add_backward";
 const ACCUMULATE_GRAD: &str = "accumulate_grad";
 const SCALE_GRAD: &str = "scale_grad";
 const PERMUTE: &str = "permute";
+const LAYER_NORM_FORWARD: &str = "layer_norm_forward";
+const CHANNEL_LAYER_NORM_FORWARD: &str = "channel_layer_norm_forward";
+const GELU_ERF_FORWARD: &str = "gelu_erf_forward";
+const LINEAR_BIAS_FORWARD: &str = "linear_bias_forward";
+const BROADCAST_ADD_FORWARD: &str = "broadcast_add_forward";
+const BROADCAST_MUL_FORWARD: &str = "broadcast_mul_forward";
+const SCALE_FORWARD: &str = "scale_forward";
+const SOFTMAX_FORWARD: &str = "softmax_forward";
 const CE_FORWARD: &str = "cross_entropy_mean_forward";
 const CE_BACKWARD: &str = "cross_entropy_mean_backward";
 const CLIP: &str = "clip_grad_norm";
@@ -103,6 +111,27 @@ pub struct RmsDims {
     /// Product of the leading axes.
     pub rows: usize,
     pub dim: usize,
+}
+
+/// Dimensions of a channel-wise LayerNorm over `[batch, channels, *spatial]`:
+/// each of the `batch * spatial` positions is normalized across its
+/// `channels` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelNormDims {
+    pub batch: usize,
+    pub channels: usize,
+    /// Product of the axes after the channel axis; 1 when there are none.
+    pub spatial: usize,
+}
+
+/// A numpy-style broadcast of two shapes: the output shape, and each
+/// operand's element stride along every output axis (0 where the operand has
+/// extent 1 or no such axis), for contiguous row-major operands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BroadcastDims {
+    pub out_shape: Vec<usize>,
+    pub a_strides: Vec<usize>,
+    pub b_strides: Vec<usize>,
 }
 
 /// How the RoPE tables map onto the rotated tensor.
@@ -1279,6 +1308,204 @@ pub fn accumulate_grad_dims(acc: &Tensor, grad: &Tensor) -> Result<usize, OjasEr
 /// element count.
 pub fn scale_grad_dims(grad: &Tensor) -> Result<usize, OjasError> {
     f32_operand(SCALE_GRAD, grad)
+}
+
+/// [`crate::Backend::layer_norm_forward`]: `input` `[..., dim]` of rank 1 or
+/// more, `weight` and `bias` `[dim]`, all `F32`. Returns the row count and
+/// `dim`; a non-finite `eps` is [`OjasError::NonFinite`], as for RMSNorm.
+pub fn layer_norm_forward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    eps: f32,
+) -> Result<RmsDims, OjasError> {
+    const OP: &str = LAYER_NORM_FORWARD;
+    f32_operands(OP, &[input, weight, bias])?;
+    if !eps.is_finite() {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    let (lead, dim) = split_last(OP, input.shape(), "layer_norm input rank 0")?;
+    for (name, t) in [("weight", weight), ("bias", bias)] {
+        if t.shape() != [dim] {
+            return Err(refuse(
+                OP,
+                format!("{name} shape {:?} is not [{dim}]", t.shape()),
+            ));
+        }
+    }
+    Ok(RmsDims {
+        rows: f32_product(OP, lead)?,
+        dim,
+    })
+}
+
+/// [`crate::Backend::channel_layer_norm_forward`]: `input`
+/// `[batch, channels, *spatial]` of rank 2 or more (`[N, C]`, `[N, C, L]`,
+/// `[N, C, H, W]`), `weight` and `bias` `[channels]`, all `F32`.
+pub fn channel_layer_norm_forward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    eps: f32,
+) -> Result<ChannelNormDims, OjasError> {
+    const OP: &str = CHANNEL_LAYER_NORM_FORWARD;
+    f32_operands(OP, &[input, weight, bias])?;
+    if !eps.is_finite() {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    let shape = input.shape();
+    if shape.len() < 2 {
+        return Err(refuse(
+            OP,
+            format!("input rank {} < 2 ([batch, channels, ...])", shape.len()),
+        ));
+    }
+    let channels = shape[1];
+    for (name, t) in [("weight", weight), ("bias", bias)] {
+        if t.shape() != [channels] {
+            return Err(refuse(
+                OP,
+                format!("{name} shape {:?} is not [{channels}]", t.shape()),
+            ));
+        }
+    }
+    f32_product(OP, shape)?;
+    Ok(ChannelNormDims {
+        batch: shape[0],
+        channels,
+        spatial: shape[2..].iter().product(),
+    })
+}
+
+/// [`crate::Backend::gelu_erf_forward`]: one `F32` tensor of any rank.
+/// Returns its element count.
+pub fn gelu_erf_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
+    same_shape(GELU_ERF_FORWARD, &[input])
+}
+
+/// [`crate::Backend::linear_bias_forward`]: the rules of
+/// [`linear_forward_dims`] (`input` `[..., in]` and `weight` `[out, in]`,
+/// each `F32` or `Bf16`) and an `F32` `bias` `[out]`.
+pub fn linear_bias_forward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+) -> Result<LinearDims, OjasError> {
+    const OP: &str = LINEAR_BIAS_FORWARD;
+    matmul_operands(OP, &[input, weight])?;
+    f32_operand(OP, bias)?;
+    let dims = linear_dims(OP, input, weight)?;
+    if bias.shape() != [dims.out_features] {
+        return Err(refuse(
+            OP,
+            format!(
+                "bias shape {:?} is not [{}]",
+                bias.shape(),
+                dims.out_features
+            ),
+        ));
+    }
+    Ok(dims)
+}
+
+/// Largest rank of either operand of a broadcast op.
+pub const MAX_BROADCAST_RANK: usize = 8;
+
+/// The broadcast of `a` and `b` as numpy does it: shapes aligned at the
+/// last axis, each pair of extents equal or one of them 1. Reads shapes
+/// only. A rank above [`MAX_BROADCAST_RANK`] or extents that differ with
+/// neither 1 is [`OjasError::Shape`].
+pub fn broadcast_shapes(
+    op: &'static str,
+    a: &[usize],
+    b: &[usize],
+) -> Result<BroadcastDims, OjasError> {
+    let rank = a.len().max(b.len());
+    if rank > MAX_BROADCAST_RANK {
+        return Err(refuse(
+            op,
+            format!("rank {rank} exceeds {MAX_BROADCAST_RANK}"),
+        ));
+    }
+    let mut out_shape = vec![0usize; rank];
+    let mut a_strides = vec![0usize; rank];
+    let mut b_strides = vec![0usize; rank];
+    let (mut a_run, mut b_run) = (1usize, 1usize);
+    for axis in (0..rank).rev() {
+        let back = rank - axis;
+        let ad = if back <= a.len() {
+            a[a.len() - back]
+        } else {
+            1
+        };
+        let bd = if back <= b.len() {
+            b[b.len() - back]
+        } else {
+            1
+        };
+        out_shape[axis] = match (ad, bd) {
+            (x, y) if x == y => x,
+            (1, y) => y,
+            (x, 1) => x,
+            _ => {
+                return Err(refuse(
+                    op,
+                    format!("shape {a:?} cannot broadcast with {b:?}"),
+                ))
+            }
+        };
+        a_strides[axis] = if ad == 1 { 0 } else { a_run };
+        b_strides[axis] = if bd == 1 { 0 } else { b_run };
+        // A running product of extents that already fit a tensor.
+        a_run = a_run.saturating_mul(ad);
+        b_run = b_run.saturating_mul(bd);
+    }
+    Ok(BroadcastDims {
+        out_shape,
+        a_strides,
+        b_strides,
+    })
+}
+
+fn broadcast_dims(op: &'static str, a: &Tensor, b: &Tensor) -> Result<BroadcastDims, OjasError> {
+    f32_operands(op, &[a, b])?;
+    let dims = broadcast_shapes(op, a.shape(), b.shape())?;
+    f32_product(op, &dims.out_shape)?;
+    Ok(dims)
+}
+
+/// [`crate::Backend::broadcast_add_forward`]: `a` and `b` `F32`, shapes
+/// broadcastable ([`broadcast_shapes`]).
+pub fn broadcast_add_forward_dims(a: &Tensor, b: &Tensor) -> Result<BroadcastDims, OjasError> {
+    broadcast_dims(BROADCAST_ADD_FORWARD, a, b)
+}
+
+/// [`crate::Backend::broadcast_mul_forward`]: as [`broadcast_add_forward_dims`].
+pub fn broadcast_mul_forward_dims(a: &Tensor, b: &Tensor) -> Result<BroadcastDims, OjasError> {
+    broadcast_dims(BROADCAST_MUL_FORWARD, a, b)
+}
+
+/// [`crate::Backend::scale_forward`]: an `F32` `input` of any rank and a
+/// finite `scale` ([`OjasError::NonFinite`] otherwise). Returns the element
+/// count.
+pub fn scale_forward_dims(input: &Tensor, scale: f32) -> Result<usize, OjasError> {
+    let n = f32_operand(SCALE_FORWARD, input)?;
+    if !scale.is_finite() {
+        return Err(OjasError::NonFinite { op: SCALE_FORWARD });
+    }
+    Ok(n)
+}
+
+/// [`crate::Backend::softmax_forward`]: an `F32` `input` `[..., dim]` of
+/// rank 1 or more. Returns the row count and `dim`.
+pub fn softmax_forward_dims(input: &Tensor) -> Result<RmsDims, OjasError> {
+    const OP: &str = SOFTMAX_FORWARD;
+    f32_operand(OP, input)?;
+    let (lead, dim) = split_last(OP, input.shape(), "softmax input rank 0")?;
+    Ok(RmsDims {
+        rows: f32_product(OP, lead)?,
+        dim,
+    })
 }
 
 /// Largest rank [`crate::Backend::permute`] accepts.
@@ -3509,5 +3736,115 @@ mod tests {
         range_err(topk_rows_dims(&wide, 1), op, "does not fit u32");
         let tall = broadcast(DType::F32, &[1 << 32, 2]);
         range_err(topk_rows_dims(&tall, 1), op, "does not fit u32");
+    }
+
+    #[test]
+    fn broadcast_shapes_aligns_at_the_last_axis_and_zeroes_stretched_strides() {
+        let d = broadcast_shapes("op", &[2, 3, 4], &[3, 1]).unwrap();
+        assert_eq!(d.out_shape, [2, 3, 4]);
+        assert_eq!(d.a_strides, [12, 4, 1]);
+        assert_eq!(d.b_strides, [0, 1, 0]);
+        let d = broadcast_shapes("op", &[], &[5]).unwrap();
+        assert_eq!(
+            (d.out_shape, d.a_strides, d.b_strides),
+            (vec![5], vec![0], vec![1])
+        );
+        let d = broadcast_shapes("op", &[], &[]).unwrap();
+        assert!(d.out_shape.is_empty());
+        shape_err(
+            broadcast_shapes("op", &[2, 3], &[4]),
+            "op",
+            "cannot broadcast",
+        );
+        shape_err(
+            broadcast_shapes("op", &[2, 3], &[2]),
+            "op",
+            "cannot broadcast",
+        );
+        shape_err(broadcast_shapes("op", &[1; 9], &[1]), "op", "exceeds 8");
+    }
+
+    #[test]
+    fn layer_norm_and_softmax_dims_split_the_last_axis() {
+        let (x, w, b) = (f(&[2, 3, 5]), f(&[5]), f(&[5]));
+        let d = layer_norm_forward_dims(&x, &w, &b, 1e-5).unwrap();
+        assert_eq!((d.rows, d.dim), (6, 5));
+        let op = "layer_norm_forward";
+        shape_err(
+            layer_norm_forward_dims(&x, &f(&[4]), &b, 1e-5),
+            op,
+            "weight shape",
+        );
+        shape_err(
+            layer_norm_forward_dims(&x, &w, &f(&[2, 5]), 1e-5),
+            op,
+            "bias shape",
+        );
+        shape_err(layer_norm_forward_dims(&f(&[]), &w, &b, 1e-5), op, "rank 0");
+        dtype_err(
+            layer_norm_forward_dims(&u(&[2, 5]), &w, &b, 1e-5),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        assert!(matches!(
+            layer_norm_forward_dims(&x, &w, &b, f32::NAN),
+            Err(OjasError::NonFinite {
+                op: "layer_norm_forward"
+            })
+        ));
+        let s = softmax_forward_dims(&x).unwrap();
+        assert_eq!((s.rows, s.dim), (6, 5));
+        shape_err(softmax_forward_dims(&f(&[])), "softmax_forward", "rank 0");
+    }
+
+    #[test]
+    fn channel_layer_norm_dims_take_channels_from_axis_one() {
+        let (w, b) = (f(&[6]), f(&[6]));
+        let d = channel_layer_norm_forward_dims(&f(&[2, 6, 4, 5]), &w, &b, 1e-6).unwrap();
+        assert_eq!((d.batch, d.channels, d.spatial), (2, 6, 20));
+        let d = channel_layer_norm_forward_dims(&f(&[3, 6]), &w, &b, 1e-6).unwrap();
+        assert_eq!((d.batch, d.channels, d.spatial), (3, 6, 1));
+        let op = "channel_layer_norm_forward";
+        shape_err(
+            channel_layer_norm_forward_dims(&f(&[6]), &w, &b, 1e-6),
+            op,
+            "rank 1 < 2",
+        );
+        shape_err(
+            channel_layer_norm_forward_dims(&f(&[2, 5, 4]), &w, &b, 1e-6),
+            op,
+            "weight shape",
+        );
+    }
+
+    #[test]
+    fn linear_bias_dims_need_a_bias_per_output_feature() {
+        let (x, w) = (f(&[4, 7]), f(&[3, 7]));
+        let d = linear_bias_forward_dims(&x, &w, &f(&[3])).unwrap();
+        assert_eq!((d.rows, d.in_features, d.out_features), (4, 7, 3));
+        let op = "linear_bias_forward";
+        shape_err(linear_bias_forward_dims(&x, &w, &f(&[4])), op, "bias shape");
+        dtype_err(
+            linear_bias_forward_dims(&x, &w, &of(DType::Bf16, &[3])),
+            op,
+            DType::F32,
+            DType::Bf16,
+        );
+        // The matmul operands may be bf16, as for linear_forward.
+        linear_bias_forward_dims(&x, &of(DType::Bf16, &[3, 7]), &f(&[3])).unwrap();
+    }
+
+    #[test]
+    fn scale_dims_refuse_a_non_finite_scale() {
+        assert_eq!(scale_forward_dims(&f(&[2, 3]), 0.5).unwrap(), 6);
+        for scale in [f32::NAN, f32::INFINITY] {
+            assert!(matches!(
+                scale_forward_dims(&f(&[2]), scale),
+                Err(OjasError::NonFinite {
+                    op: "scale_forward"
+                })
+            ));
+        }
     }
 }

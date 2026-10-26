@@ -959,6 +959,76 @@ impl<B: Backend> Backend for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
+    fn layer_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.layer_norm_forward(input, weight, bias, eps)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn channel_layer_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self
+            .inner
+            .channel_layer_norm_forward(input, weight, bias, eps)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.gelu_erf_forward(input)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// A matmul-class op: the operands round in a region and the output
+    /// rounds, as [`Backend::linear_forward`] does. The bias stays `f32`.
+    fn linear_bias_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let out = self.inner.linear_bias_forward(&input, &weight, bias)?;
+        self.emit(out)
+    }
+
+    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.broadcast_add_forward(a, b)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.broadcast_mul_forward(a, b)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.scale_forward(input, scale)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.softmax_forward(input)?;
+        Ok(self.keep_f32(out))
+    }
+
     fn residual_add_backward(
         &self,
         x: &Tensor,

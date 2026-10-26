@@ -13,6 +13,7 @@ mod backend;
 mod budget;
 mod checkpoint;
 mod dtype;
+mod erf_exact;
 mod error;
 mod exp_exact;
 mod limits;
@@ -39,28 +40,32 @@ pub use checkpoint::{
     OptimizerCheckpoint, CHECKPOINT_MAGIC, CHECKPOINT_VERSION,
 };
 pub use dtype::DType;
+pub use erf_exact::{erf_exact, erf_f64, gelu_erf_exact};
 pub use error::OjasError;
 pub use exp_exact::{exp_exact, log_sum_exp_exact};
 pub use limits::{shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE};
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
-    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, broadcast_add_forward_dims,
+    broadcast_mul_forward_dims, broadcast_shapes, cached_attention_dims,
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
-    causal_sdpa_forward_dims, chunked_gdn_backward_dims, chunked_gdn_forward_dims,
-    clip_grad_norm_dims, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
-    embedding_backward_dims, embedding_forward_dims, gated_rms_norm_backward_dims,
-    gated_rms_norm_forward_dims, gdn_log_decay_backward_dims, gdn_log_decay_forward_dims,
-    inverse_permutation, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
+    causal_sdpa_forward_dims, channel_layer_norm_forward_dims, chunked_gdn_backward_dims,
+    chunked_gdn_forward_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
+    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
+    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
+    gdn_log_decay_forward_dims, gelu_erf_forward_dims, inverse_permutation, kv_cache_write_dims,
+    layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
     linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
     permute_output_shape, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    rope_partial_backward_dims, rope_partial_forward_dims, scale_grad_dims, sigmoid_backward_dims,
-    sigmoid_forward_dims, silu_backward_dims, silu_forward_dims, topk_rows_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, CeDims, Conv1dDims,
+    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims, scale_grad_dims,
+    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
+    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    value_residual_blend_forward_dims, BroadcastDims, CeDims, ChannelNormDims, Conv1dDims,
     EmbeddingDims, GateDims, GdnDecayDims, GdnDims, KvDims, LinearCeDims, LinearDims, MuonDims,
-    PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims, MAX_PERMUTE_RANK,
+    PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims, MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
 };
 pub use tensor::{
     device_readbacks, f32_all_finite, DeviceBuffer, HostElement, Tensor, LE_READ_CHUNK_BYTES,

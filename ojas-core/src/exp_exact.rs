@@ -53,7 +53,13 @@ fn exp_exact_wide(x: f32) -> f64 {
     if x < EXACT_LO {
         return 0.0;
     }
-    let xd = f64::from(x);
+    exp_in_range_f64(f64::from(x))
+}
+
+/// `e^x` for `x` in `[EXACT_LO, EXACT_HI]`, the `f64` value [`exp_exact`]
+/// rounds. [`crate::erf_exact`] takes it without the `f32` rounding.
+#[inline(always)]
+pub(crate) fn exp_in_range_f64(xd: f64) -> f64 {
     // |xd · 256/ln 2| < 38500: the shift rounds it exactly to an integer.
     let kf = (xd * INV_LN2_256 + ROUND_F64) - ROUND_F64;
     let k = kf as i64;

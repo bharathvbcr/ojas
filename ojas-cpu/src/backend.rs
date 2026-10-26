@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
 use ojas_core::{
+    broadcast_add_forward_dims, broadcast_mul_forward_dims, channel_layer_norm_forward_dims,
+    gelu_erf_forward_dims, layer_norm_forward_dims, linear_bias_forward_dims, scale_forward_dims,
+    softmax_forward_dims,
+};
+use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
     gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
     gdn_log_decay_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
@@ -22,6 +27,10 @@ use ojas_core::{
 };
 
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
+use crate::encoder_ops::{
+    add_row_bias, broadcast_zip, channel_layer_norm_forward, gelu_erf_forward, layer_norm_forward,
+    scale_forward, softmax_forward,
+};
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
 use crate::hybrid::{
@@ -1033,6 +1042,105 @@ impl Backend for CpuBackend {
         // tensors (pointwise.rs `add_backward`); nothing is decoded.
         residual_add_backward_dims(x, y, grad_output)?;
         add_backward("residual_add_backward", &self.budget, x, y, grad_output)
+    }
+
+    fn layer_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "layer_norm_forward";
+        let dims = layer_norm_forward_dims(input, weight, bias, eps)?;
+        let [x, w, b] = f32_operands(OP, self.exec(), [input, weight, bias])?;
+        layer_norm_forward(
+            OP,
+            &self.budget,
+            self.exec(),
+            x,
+            w,
+            b,
+            dims,
+            eps,
+            input.shape(),
+        )
+    }
+
+    fn channel_layer_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "channel_layer_norm_forward";
+        let dims = channel_layer_norm_forward_dims(input, weight, bias, eps)?;
+        let [x, w, b] = f32_operands(OP, self.exec(), [input, weight, bias])?;
+        channel_layer_norm_forward(
+            OP,
+            &self.budget,
+            self.exec(),
+            x,
+            w,
+            b,
+            dims,
+            eps,
+            input.shape(),
+        )
+    }
+
+    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_erf_forward";
+        gelu_erf_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        gelu_erf_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn linear_bias_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "linear_bias_forward";
+        let dims = linear_bias_forward_dims(input, weight, bias)?;
+        let exec = self.exec();
+        let wide = matmul_operands(OP, exec, &self.budget, [input, weight])?;
+        let [x, w] = wide.each_ref().map(Wide::values);
+        let [b] = f32_operands(OP, exec, [bias])?;
+        fill_out(OP, &self.budget, exec, &dims.out_shape, |y| {
+            linear_forward(OP, &self.budget, exec, x, w, &dims, y)?;
+            add_row_bias(OP, y, b)
+        })
+    }
+
+    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_add_forward";
+        let dims = broadcast_add_forward_dims(a, b)?;
+        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
+        broadcast_zip(OP, &self.budget, self.exec(), av, bv, &dims, |x, y| x + y)
+    }
+
+    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_mul_forward";
+        let dims = broadcast_mul_forward_dims(a, b)?;
+        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
+        broadcast_zip(OP, &self.budget, self.exec(), av, bv, &dims, |x, y| x * y)
+    }
+
+    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "scale_forward";
+        scale_forward_dims(input, scale)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        scale_forward(OP, &self.budget, self.exec(), x, scale, input.shape())
+    }
+
+    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "softmax_forward";
+        let dims = softmax_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        softmax_forward(OP, &self.budget, self.exec(), x, dims, input.shape())
     }
 
     fn cross_entropy_mean_forward(
