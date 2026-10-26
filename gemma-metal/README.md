@@ -91,3 +91,10 @@ cd bench && python3 bench.py probe
 ```
 
 See [`docs/dev.md`](docs/dev.md) and [`bench/README.md`](bench/README.md).
+
+## License & Acknowledgements
+
+Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
+
+- **Google DeepMind (`Gemma 3` / `Gemma 4`)** — Model architecture (dual FlashAttention, Per-Layer Embeddings, Multi-Token Prediction) implemented by this engine.
+- **[Apple MLX (`ml-explore/mlx`)](https://github.com/ml-explore/mlx)** — Reference Apple Silicon framework used for Phase-0 parity and throughput baselines.
