@@ -84,14 +84,8 @@ fn streaming_a_gibibyte_keeps_peak_heap_under_a_mebibyte() {
 }
 
 /// A safetensors file of one tensor `t` of `dtype`, `bytes` long, sparse:
-/// the data region is a hole, so the file costs no disk. The error is the
-/// filesystem's refusal to size the file (`EFBIG` past ext4's 16 TiB).
-fn try_sparse_file(
-    tag: &str,
-    dtype: &str,
-    shape_len: u64,
-    bytes: u64,
-) -> std::io::Result<std::path::PathBuf> {
+/// the data region is a hole, so the file costs no disk.
+fn sparse_file(tag: &str, dtype: &str, shape_len: u64, bytes: u64) -> std::path::PathBuf {
     let header = format!(
         r#"{{"t":{{"dtype":"{dtype}","shape":[{shape_len}],"data_offsets":[0,{bytes}]}}}}"#
     );
@@ -101,18 +95,11 @@ fn try_sparse_file(
     }
     let path =
         std::env::temp_dir().join(format!("ojas-io-{tag}-{}.safetensors", std::process::id()));
-    let mut f = std::fs::File::create(&path)?;
-    f.write_all(&(h.len() as u64).to_le_bytes())?;
-    f.write_all(&h)?;
-    if let Err(e) = f.set_len(8 + h.len() as u64 + bytes) {
-        std::fs::remove_file(&path).ok();
-        return Err(e);
-    }
-    Ok(path)
-}
-
-fn sparse_file(tag: &str, dtype: &str, shape_len: u64, bytes: u64) -> std::path::PathBuf {
-    try_sparse_file(tag, dtype, shape_len, bytes).unwrap()
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(&(h.len() as u64).to_le_bytes()).unwrap();
+    f.write_all(&h).unwrap();
+    f.set_len(8 + h.len() as u64 + bytes).unwrap();
+    path
 }
 
 #[test]
@@ -152,15 +139,7 @@ fn a_64_mebibyte_bf16_read_holds_the_output_and_one_chunk() {
 fn an_oversized_declared_tensor_on_a_sparse_file_is_an_error_quickly() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     const BYTES: u64 = 1 << 47;
-    let path = match try_sparse_file("oversized", "BF16", BYTES / 2, BYTES) {
-        Ok(path) => path,
-        // ext4 caps a file at 16 TiB; there is no 128 TiB hole to declare.
-        Err(e) if e.kind() == std::io::ErrorKind::FileTooLarge => {
-            eprintln!("skipped: the filesystem cannot size a {BYTES}-byte file: {e}");
-            return;
-        }
-        Err(e) => panic!("{e}"),
-    };
+    let path = sparse_file("oversized", "BF16", BYTES / 2, BYTES);
     let st = SafeTensors::open(&path).unwrap();
     let start = std::time::Instant::now();
     let results = [
