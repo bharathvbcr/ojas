@@ -227,11 +227,15 @@ Every adversarial finding fits an existing card:
   - **Preserved 2026-10-25 (Fable's second ruling):** the local branch `wip/softmax-collapse-4c0e0a2a` at `6a7490c`
     holds the patch applied onto main `dffbe9e`. It was built with plumbing (scratch index, `commit-tree`,
     `update-ref`), with no checkout and main untouched. Its 16 changed files match the patch's file list. It is not
-    pushed or merged. The CPU suite fails at that commit until the digests are re-recorded.
-  - **Each of these needs a separate yes from the owner:**
-    1. Push `wip/softmax-collapse-4c0e0a2a` to origin.
-    2. Re-record the Exact CE digests `ce_loss`/`ce_grad` in `ojas-cpu/tests/exact_golden.rs`.
-    3. Remove the GitPulse worktree `repair-softmax-collapse-in-the-logit-los-4c0e0a2a` and its branch.
+    merged. The CPU suite fails at that commit until the digests are re-recorded.
+  - **Owner answers (2026-10-25):**
+    1. **Push: yes, done.** `origin/wip/softmax-collapse-4c0e0a2a` is at `6a7490c`. Its CI `test` run
+       (`40240545599`) is expected to fail on `exact_golden` until the digests are re-recorded.
+    2. **Re-record the Exact CE digests** (`ce_loss`/`ce_grad` in `ojas-cpu/tests/exact_golden.rs`): still open.
+       This is the contract decision.
+    3. **Remove the GitPulse worktree** `repair-softmax-collapse-in-the-logit-los-4c0e0a2a` and its branch: yes,
+       **once `wip/softmax-collapse-4c0e0a2a` is merged into main**. Do not remove them before that. After the
+       merge, also delete the `wip/` branch, local and remote, and the saved patch in `backups/7a-tools/`.
 
     Until then the worktree and the patch stay in place.
 - **Stale GitPulse reader:** at 2026-10-24 ~14:35 the installed `gitpulse-mcp` started refusing board reads with
