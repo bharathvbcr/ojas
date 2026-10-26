@@ -337,6 +337,25 @@ pub(crate) struct SdpaGeom {
     pub window: u32,
 }
 
+/// One general attention launch (`ojas_attn_gen_fwd`): `bh` query planes of
+/// `[q_len, d]` over `bh / rep` KV planes of `[kv_len, d]`, `heads` query
+/// heads per batch row. `window` is `0` for none. `bias` is the extents
+/// `[batch, heads, queries]` of an additive bias whose last axis is `kv_len`
+/// (each `1` to broadcast); `has_lens` says the key-length buffer is bound.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AttnGeom {
+    pub bh: u32,
+    pub heads: u32,
+    pub rep: u32,
+    pub q_len: u32,
+    pub kv_len: u32,
+    pub d: u32,
+    pub causal: bool,
+    pub window: u32,
+    pub bias: Option<[u32; 3]>,
+    pub has_lens: bool,
+}
+
 /// Causal conv1d geometry, validated and within the kernels' limits.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Conv1dGeom {
@@ -552,6 +571,16 @@ pub(crate) enum Cmd {
         k: Arg,
         v: Arg,
         geom: SdpaGeom,
+    },
+    /// General attention forward; replies with the output and the `[bh,
+    /// q_len]` row log-sum-exp. `bias` and `lens` are bound when present.
+    Attn {
+        q: Arg,
+        k: Arg,
+        v: Arg,
+        bias: Option<Arg>,
+        lens: Option<Arg>,
+        geom: AttnGeom,
     },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {

@@ -28,12 +28,13 @@ pub use autocast::{
 pub use backend::{
     broadcast_scalar, check_adamw, clip_scale, next_step, pow_u64, rank_logits,
     refuse_bf16_operands, refuse_bf16_table, refuse_unsupported_metal_gdn,
-    refuse_unsupported_metal_head_dim, require_ns5, sdpa_scale, AdamWConfig, Backend, BackendId,
-    CeChunk, CeGrads, GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe,
-    MuonNs5Config, Ns5Precision, Numerics, OptimizerKind, PerHeadGateGrad, ValueResidualGrad,
-    ADAMW_BETA1, ADAMW_BETA2, ADAMW_EPS, BACKEND_METHODS, CLIP_GRAD_NORM_EPS,
-    GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, METAL_GDN_KEY_DIM, METAL_GDN_VALUE_BLOCK,
-    METAL_MAX_HEAD_DIM, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS, RMS_NORM_EPS,
+    refuse_unsupported_metal_head_dim, require_ns5, sdpa_scale, AdamWConfig, AttentionGrad,
+    AttentionOpts, Backend, BackendId, CeChunk, CeGrads, GatedRmsGrad, GdnDecayGrad, GdnForward,
+    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OptimizerKind,
+    PerHeadGateGrad, ValueResidualGrad, ADAMW_BETA1, ADAMW_BETA2, ADAMW_EPS, BACKEND_METHODS,
+    CLIP_GRAD_NORM_EPS, GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, METAL_GDN_KEY_DIM,
+    METAL_GDN_VALUE_BLOCK, METAL_MAX_HEAD_DIM, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    RMS_NORM_EPS,
 };
 pub use budget::{Budget, Reservation, Scratch};
 pub use checkpoint::{
@@ -47,7 +48,8 @@ pub use exp_exact::{exp_exact, log_sum_exp_exact};
 pub use limits::{shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE};
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
-    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, broadcast_add_forward_dims,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, attention_backward_dims,
+    attention_forward_dims, attention_forward_saving_dims, broadcast_add_forward_dims,
     broadcast_mul_forward_dims, broadcast_shapes, cached_attention_dims,
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
     causal_sdpa_forward_dims, channel_layer_norm_forward_dims, chunked_gdn_backward_dims,
@@ -64,9 +66,10 @@ pub use shapes::{
     rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims, scale_grad_dims,
     sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
     softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, BroadcastDims, CeDims, ChannelNormDims, Conv1dDims,
-    EmbeddingDims, GateDims, GdnDecayDims, GdnDims, KvDims, LinearCeDims, LinearDims, MuonDims,
-    PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims, MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
+    value_residual_blend_forward_dims, AttentionBias, AttentionDims, BroadcastDims, CeDims,
+    ChannelNormDims, Conv1dDims, EmbeddingDims, GateDims, GdnDecayDims, GdnDims, KvDims,
+    LinearCeDims, LinearDims, MuonDims, PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims,
+    MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
 };
 pub use spatial::{
     axial_rope_2d_tables, conv2d_forward_dims, conv_transpose2d_forward_dims,

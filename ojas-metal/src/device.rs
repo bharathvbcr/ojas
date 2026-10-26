@@ -38,9 +38,9 @@ use tessl::DType;
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
-    norm_chunks, reduce_groups, rms_w_chunks, Arg, Cmd, Conv1dGeom, DeviceInfo, EmbedRows, GdnArgs,
-    Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
-    SQ_OUT_WORDS, SQ_PIECE,
+    norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, Cmd, Conv1dGeom, DeviceInfo,
+    EmbedRows, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode,
+    SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
 };
 
 const ST_IN: u32 = 0;
@@ -193,6 +193,7 @@ const KERNELS: &[&str] = &[
     "ojas_attn_bwd_dq_d128",
     "ojas_attn_bwd_dkv_d128",
     "ojas_attn_fwd_d256",
+    "ojas_attn_gen_fwd",
     "ojas_attn_bwd_dq_d256",
     "ojas_attn_bwd_dkv_d256",
     "ojas_per_head_gate_fwd",
@@ -1492,6 +1493,14 @@ impl Worker {
                 backward,
             } => self.rope(op, [x, cos, sin], [rows, dim, rotary], mode, backward),
             Cmd::Sdpa { q, k, v, geom } => self.sdpa(q, k, v, geom),
+            Cmd::Attn {
+                q,
+                k,
+                v,
+                bias,
+                lens,
+                geom,
+            } => self.attn_gen([q, k, v], bias, lens, geom),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
@@ -2215,6 +2224,102 @@ impl Worker {
                 set_u32(b, g.window, 9);
                 set_f32(b, scale, 10);
             })?;
+        }
+        self.check(&st, &o, ST_OUT)?;
+        self.check(&st, &lse, ST_OUT)?;
+        Ok(self.keep(vec![o, lse]))
+    }
+
+    /// General attention forward (`ojas_attn_gen_fwd`): bidirectional or
+    /// causal, `Tq != Tk`, an additive bias and per-batch key lengths, one
+    /// simdgroup per query row. Replies with the output and each query row's
+    /// log-sum-exp. Every operand is scanned for NaN and infinity first, as
+    /// the CPU refuses one wherever it sits; a score that overflows sets the
+    /// output word.
+    fn attn_gen(
+        &mut self,
+        [q, k, v]: [Arg; 3],
+        bias: Option<Arg>,
+        lens: Option<Arg>,
+        g: AttnGeom,
+    ) -> Res<Reply> {
+        const OP: &str = "attention_forward_saving";
+        // One simdgroup per query row, four to a threadgroup.
+        const ROWS_PER_TG: usize = ATTN_THREADS / 32;
+        let scale = sdpa_scale(g.d)?;
+        if g.d > ATTN_MAX_HEAD_DIM || g.rep == 0 || !g.bh.is_multiple_of(g.rep) {
+            return Err(metal_err(format!(
+                "{OP}: head dim {} over {} planes of {} per KV plane",
+                g.d, g.bh, g.rep
+            )));
+        }
+        let (qv, kv, vv) = (self.view(q)?, self.view(k)?, self.view(v)?);
+        let bv = bias.map(|a| self.view(a)).transpose()?;
+        let lv = lens.map(|a| self.view(a)).transpose()?;
+        let (q_len, kv_len, d) = (g.q_len as usize, g.kv_len as usize, g.d as usize);
+        let planes = g.bh as usize;
+        let q_n = planes * q_len * d;
+        let kv_n = (planes / g.rep as usize) * kv_len * d;
+        let bias_n = g
+            .bias
+            .map(|[b, h, t]| b as usize * h as usize * t as usize * kv_len);
+        let batches = planes / g.heads as usize;
+        let fits = qv.n == q_n
+            && kv.n == kv_n
+            && vv.n == kv_n
+            && bv.as_ref().map(|b| b.n) == bias_n
+            && lv.as_ref().map(|l| l.n) == g.has_lens.then_some(batches)
+            && planes.is_multiple_of(g.heads as usize);
+        if !fits {
+            return Err(metal_err(format!(
+                "{OP}: buffers do not hold {planes} query planes of [{q_len}, {d}],                  {} kv planes of [{kv_len}, {d}] and the bias and key lengths asked for",
+                planes / g.rep as usize
+            )));
+        }
+        let o = self.fresh(qv.n)?;
+        let lse = self.fresh(planes * q_len)?;
+        let st = self.status(OP)?;
+        self.check_operand(&st, q, &qv, ST_IN)?;
+        self.check_operand(&st, k, &kv, ST_IN)?;
+        self.check_operand(&st, v, &vv, ST_IN)?;
+        if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
+            self.check_operand(&st, a, b, ST_IN)?;
+        }
+        if qv.n > 0 {
+            let flags = u32::from(g.causal)
+                | (u32::from(g.bias.is_some()) << 1)
+                | (u32::from(g.has_lens) << 2);
+            let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
+            // A buffer the kernel does not read this call is still bound:
+            // Metal's validation wants every declared argument set.
+            let (bias_buf, lens_buf) = (bv.as_ref().unwrap_or(&qv), lv.as_ref().unwrap_or(&qv));
+            self.ktg(
+                "ojas_attn_gen_fwd",
+                q_len.div_ceil(ROWS_PER_TG),
+                planes,
+                ATTN_THREADS,
+                |b| {
+                    bind(b, &qv, 0);
+                    bind(b, &kv, 1);
+                    bind(b, &vv, 2);
+                    bind(b, &o, 3);
+                    bind(b, &lse, 4);
+                    bind(b, bias_buf, 5);
+                    bind(b, lens_buf, 6);
+                    bind_st(b, &st, 7);
+                    set_u32(b, g.q_len, 8);
+                    set_u32(b, g.kv_len, 9);
+                    set_u32(b, g.d, 10);
+                    set_u32(b, g.heads, 11);
+                    set_u32(b, g.rep, 12);
+                    set_u32(b, flags, 13);
+                    set_u32(b, g.window, 14);
+                    set_u32(b, bias_b, 15);
+                    set_u32(b, bias_h, 16);
+                    set_u32(b, bias_q, 17);
+                    set_f32(b, scale, 18);
+                },
+            )?;
         }
         self.check(&st, &o, ST_OUT)?;
         self.check(&st, &lse, ST_OUT)?;

@@ -2267,3 +2267,124 @@ OJAS_ATTN_TILED(32)
 OJAS_ATTN_TILED(64)
 OJAS_ATTN_TILED(128)
 OJAS_ATTN_TILED(256)
+
+// ------------------------------------------ general attention (forward) ---
+//
+// The contract of `Backend::attention_forward_saving`: bidirectional or causal
+// attention, a query length that differs from the key length, an additive
+// score bias and per-batch key lengths. One simdgroup per query row, after
+// `ojas_cached_attn`: lane `l` owns head dims l, l + 32, ... of the query and
+// of the output, the score is a `simd_sum` (whose order is fixed), and the
+// softmax is online over the keys the row sees, so results repeat bit for
+// bit. Scalar f32 on purpose: it takes any head dim up to 32 * AG_PER_LANE and
+// is the reference a tiled kernel is held to; it is not the fast path.
+//
+//   S   = scale * Q Kᵀ + bias,   O = softmax(S) V,   lse = log sum_j exp(S_ij)
+//
+//   flags  bit 0 causal   bit 1 a bias is bound   bit 2 key lengths are bound
+//   causal: query i sits at position pos = i + Tk - Tq and sees keys
+//           pos - W < j <= pos (W = 0: every earlier key); pos < 0 sees none
+//   lens:   keys j < lens[b], clamped to Tk (0 hides every key of that batch)
+//   bias:   [bias_b, bias_h, bias_q, Tk], an extent of 1 broadcasts
+//
+// Grouped-query heads read their KV plane in place: query plane bh = b * H + h
+// reads KV plane b * (H / rep) + h / rep. A row that sees no key writes zeros
+// and an lse of 0, as the CPU does. A score that is not finite is skipped and
+// sets ST_OUT.
+#define AG_PER_LANE 8u
+#define AG_ROWS 4u
+
+kernel void ojas_attn_gen_fwd(
+    device const float *q [[buffer(0)]],
+    device const float *k [[buffer(1)]],
+    device const float *v [[buffer(2)]],
+    device float *o [[buffer(3)]],
+    device float *lse [[buffer(4)]],
+    device const float *bias [[buffer(5)]],
+    device const uint *lens [[buffer(6)]],
+    device atomic_uint *st [[buffer(7)]],
+    constant uint &Tq [[buffer(8)]],
+    constant uint &Tk [[buffer(9)]],
+    constant uint &D [[buffer(10)]],
+    constant uint &H [[buffer(11)]],
+    constant uint &rep [[buffer(12)]],
+    constant uint &flags [[buffer(13)]],
+    constant uint &W [[buffer(14)]],
+    constant uint &bias_b [[buffer(15)]],
+    constant uint &bias_h [[buffer(16)]],
+    constant uint &bias_q [[buffer(17)]],
+    constant float &scale [[buffer(18)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    // The whole simdgroup leaves together: `i` depends on the simdgroup only.
+    const uint i = tg.x * AG_ROWS + sg;
+    if (i >= Tq) return;
+    const uint bh = tg.y;
+    const uint b = bh / H;
+    const uint h = bh - b * H;
+    const ulong q_at = ((ulong)bh * Tq + i) * D;
+    const ulong kv_base = ((ulong)b * (H / rep) + h / rep) * Tk * D;
+
+    uint hi = Tk;
+    if ((flags & 4u) != 0u) hi = min(hi, lens[b]);
+    uint lo = 0u;
+    if ((flags & 1u) != 0u) {
+        const int pos = (int)i + (int)Tk - (int)Tq;
+        if (pos < 0) {
+            hi = 0u;
+        } else {
+            hi = min(hi, (uint)pos + 1u);
+            if (W != 0u && (uint)pos + 1u > W) lo = (uint)pos + 1u - W;
+        }
+    }
+
+    float qv[AG_PER_LANE];
+    float acc[AG_PER_LANE];
+    for (uint t = 0u; t < AG_PER_LANE; ++t) {
+        const uint c = lane + 32u * t;
+        qv[t] = (c < D) ? q[q_at + c] : 0.0f;
+        acc[t] = 0.0f;
+    }
+    ulong bias_at = 0;
+    if ((flags & 2u) != 0u) {
+        const ulong plane = (ulong)(bias_b == 1u ? 0u : b) * bias_h + (bias_h == 1u ? 0u : h);
+        bias_at = (plane * bias_q + (bias_q == 1u ? 0u : i)) * Tk;
+    }
+
+    float m = -INFINITY;
+    float l = 0.0f;
+    bool bad = false;
+    for (uint j = lo; j < hi; ++j) {
+        const ulong kv_at = kv_base + (ulong)j * D;
+        float part = 0.0f;
+        for (uint t = 0u; t < AG_PER_LANE; ++t) {
+            const uint c = lane + 32u * t;
+            if (c < D) part += qv[t] * k[kv_at + c];
+        }
+        float s = simd_sum(part) * scale;
+        if ((flags & 2u) != 0u) s += bias[bias_at + j];
+        // `s` is the same on every lane, so this branch is uniform.
+        if (!isfinite(s)) {
+            bad = true;
+            continue;
+        }
+        const float m_new = max(m, s);
+        const float alpha = (m == -INFINITY) ? 0.0f : precise::exp(m - m_new);
+        const float p = precise::exp(s - m_new);
+        l = l * alpha + p;
+        for (uint t = 0u; t < AG_PER_LANE; ++t) {
+            const uint c = lane + 32u * t;
+            if (c < D) acc[t] = acc[t] * alpha + p * v[kv_at + c];
+        }
+        m = m_new;
+    }
+    if (bad && lane == 0u) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
+    const float inv = (l > 0.0f) ? precise::divide(1.0f, l) : 0.0f;
+    for (uint t = 0u; t < AG_PER_LANE; ++t) {
+        const uint c = lane + 32u * t;
+        if (c < D) o[q_at + c] = acc[t] * inv;
+    }
+    if (lane == 0u) lse[(ulong)bh * Tq + i] = (l > 0.0f) ? m + precise::log(l) : 0.0f;
+}

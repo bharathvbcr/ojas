@@ -279,6 +279,8 @@
 </li>
 <li><code>conv2d_forward_dims</code>, <code>conv_transpose2d_forward_dims</code>, <code>max_pool2d_forward_dims</code>, <code>interpolate_bilinear_forward_dims</code> and <code>rope_interleaved_*_dims</code> (in <code>ojas_core::spatial</code>) validate the SAM-style spatial ops (<code>Conv2dDims</code>, <code>ConvTranspose2dDims</code>, <code>MaxPool2dDims</code>, <code>BilinearDims</code>, <code>InterleavedRopeDims</code>). Images are <code>NCHW</code> and weights PyTorch&#39;s layout.
 </li>
+<li><code>attention_forward_dims</code>, <code>attention_forward_saving_dims</code> and <code>attention_backward_dims</code> (<code>AttentionDims</code>) validate general attention before any kernel runs: rank-4 <code>[B, H, T, D]</code> operands, <code>k</code> and <code>v</code> alike, <code>Hq % Hkv == 0</code>, <code>Tq</code> may differ from <code>Tk</code>; <code>window</code> needs <code>causal</code> and is at least 1; <code>bias</code> is rank 4 <code>[Bb, Hb, Tqb, Tk]</code> with each of the first three extents full or 1; <code>key_lens</code> is U32 <code>[B]</code>; <code>bias_grad</code> needs a bias. Unit cases in <code>ojas-core/src/shapes.rs</code>; CPU refusals in <code>ojas-cpu/tests/shape_first.rs</code> and <code>attention_general.rs</code>.
+</li>
 <li><code>sigmoid_*_dims</code> (one <code>F32</code> shape) and <code>gdn_log_decay_*_dims</code> (<code>a</code> <code>[..., H]</code> of rank 1 or more, <code>a_log</code> and <code>dt_bias</code> <code>[H]</code>, <code>GdnDecayDims</code>; 2026-10-08) validate the attention output gate and the delta rule&#39;s gates. Unit cases in <code>ojas-core/src/shapes.rs</code>; CPU and Metal refusals in <code>ojas-{cpu,metal}/tests/hybrid.rs</code>.
 </li>
 </ul>

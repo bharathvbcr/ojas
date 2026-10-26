@@ -29,7 +29,7 @@
 //! ([`crate::check_adamw`], [`crate::clip_scale`]), and device limits such as
 //! [`crate::METAL_MAX_HEAD_DIM`], 32-bit index caps and workgroup limits.
 
-use crate::{CeChunk, DType, GdnInputs, OjasError, Tensor, GDN_CHECKPOINT_TOKENS};
+use crate::{AttentionOpts, CeChunk, DType, GdnInputs, OjasError, Tensor, GDN_CHECKPOINT_TOKENS};
 
 const EMBEDDING_FORWARD: &str = "embedding_forward";
 const EMBEDDING_BACKWARD: &str = "embedding_backward";
@@ -166,6 +166,40 @@ pub struct SdpaDims {
     pub kv_heads: usize,
     pub seq: usize,
     pub head_dim: usize,
+}
+
+/// The bias of [`crate::AttentionOpts`]: each field is `1` (the bias
+/// broadcasts along that axis) or the full extent of the axis it matches
+/// (`B`, `H`, `Tq`). Its last axis is always `Tk`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttentionBias {
+    pub batch: usize,
+    pub heads: usize,
+    pub queries: usize,
+}
+
+/// Dimensions of [`crate::Backend::attention_forward`]. Query is `[B, H,
+/// Tq, D]`; K and V are `[B, Hkv, Tk, D]`, `H` a positive multiple of `Hkv`.
+/// Every extent is non-zero and the product of each tensor, in `f32` bytes,
+/// fits `usize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttentionDims {
+    pub batch: usize,
+    /// Query heads.
+    pub heads: usize,
+    /// Key and value heads. Query head `h` reads KV head `h / (heads / kv_heads)`.
+    pub kv_heads: usize,
+    /// Queries per head, `Tq`.
+    pub q_len: usize,
+    /// Keys per head, `Tk`.
+    pub kv_len: usize,
+    pub head_dim: usize,
+    pub causal: bool,
+    /// Always `None` without `causal`, and for a window of at least `Tk`.
+    pub window: Option<usize>,
+    pub bias: Option<AttentionBias>,
+    /// A `key_lens` tensor `[B]` was given.
+    pub key_lens: bool,
 }
 
 /// Dimensions of the gated delta rule ([`crate::GdnInputs`]): `q`, `k`
@@ -1745,6 +1779,220 @@ impl KvDims {
         };
         start..p + 1
     }
+}
+
+const ATTENTION_FORWARD: &str = "attention_forward";
+const ATTENTION_SAVING: &str = "attention_forward_saving";
+const ATTENTION_BACKWARD: &str = "attention_backward";
+
+/// The rules both attention validators share, after the per-operand dtype
+/// checks: ranks, the batch and head-dimension agreement of `q`, `k` and
+/// `v`, head grouping, then the masks and the bias.
+fn attention_layout(
+    op: &'static str,
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    opts: &AttentionOpts<'_>,
+) -> Result<AttentionDims, OjasError> {
+    let (qs, ks, vs) = (q.shape(), k.shape(), v.shape());
+    let &[batch, heads, q_len, head_dim] = qs else {
+        return Err(refuse(
+            op,
+            format!("attention query rank {} != 4 [B, H, Tq, D]", qs.len()),
+        ));
+    };
+    if ks != vs {
+        return Err(refuse(
+            op,
+            format!("attention k {ks:?} and v {vs:?} differ"),
+        ));
+    }
+    let &[kb, kv_heads, kv_len, kd] = ks else {
+        return Err(refuse(
+            op,
+            format!("attention k {ks:?} must be rank 4 [B, Hkv, Tk, D]"),
+        ));
+    };
+    if kb != batch || kd != head_dim {
+        return Err(refuse(
+            op,
+            format!("attention shapes q {qs:?} k {ks:?} v {vs:?} differ"),
+        ));
+    }
+    if kv_heads > heads || heads % kv_heads != 0 {
+        return Err(refuse(
+            op,
+            format!("attention has {heads} query heads over {kv_heads} kv heads"),
+        ));
+    }
+    if opts.window == Some(0) {
+        return Err(refuse(op, "attention window must be at least 1"));
+    }
+    if opts.window.is_some() && !opts.causal {
+        return Err(refuse(op, "attention window needs causal"));
+    }
+    let bias = match opts.bias {
+        None => None,
+        Some(bias) => {
+            let &[bb, bh, bq, bk] = bias.shape() else {
+                return Err(refuse(
+                    op,
+                    format!(
+                        "attention bias {:?} must be rank 4 [Bb, Hb, Tqb, Tk]",
+                        bias.shape()
+                    ),
+                ));
+            };
+            let fits = |extent: usize, full: usize| extent == 1 || extent == full;
+            if !(fits(bb, batch) && fits(bh, heads) && fits(bq, q_len) && bk == kv_len) {
+                return Err(refuse(
+                    op,
+                    format!(
+                        "attention bias {:?} does not broadcast to [{batch}, {heads}, {q_len}, {kv_len}]",
+                        bias.shape()
+                    ),
+                ));
+            }
+            Some(AttentionBias {
+                batch: bb,
+                heads: bh,
+                queries: bq,
+            })
+        }
+    };
+    if let Some(lens) = opts.key_lens {
+        if lens.shape() != [batch] {
+            return Err(refuse(
+                op,
+                format!("attention key_lens {:?} != [{batch}]", lens.shape()),
+            ));
+        }
+    }
+    Ok(AttentionDims {
+        batch,
+        heads,
+        kv_heads,
+        q_len,
+        kv_len,
+        head_dim,
+        causal: opts.causal,
+        window: opts.window.filter(|&w| w < kv_len),
+        bias,
+        key_lens: opts.key_lens.is_some(),
+    })
+}
+
+/// The dtype of each operand that `opts` carries: the bias a bf16-operand
+/// slot, the key lengths `U32`.
+fn attention_opts_operands(op: &'static str, opts: &AttentionOpts<'_>) -> Result<(), OjasError> {
+    if let Some(bias) = opts.bias {
+        matmul_operand(op, bias)?;
+    }
+    if let Some(lens) = opts.key_lens {
+        operand(op, lens, DType::U32)?;
+    }
+    Ok(())
+}
+
+/// [`crate::Backend::attention_forward`]: `q`, `k`, `v` and the bias each
+/// `F32` or `Bf16`, `key_lens` `U32`, checked in that order; the output is
+/// `F32` shaped like `q`, and the log-sum-exp of the saving form `[B, H,
+/// Tq]`. Query is rank 4 `[B, H, Tq, D]`; K and V are `[B, Hkv, Tk, D]`
+/// with `H` a positive multiple of `Hkv`; the other rules are
+/// [`crate::AttentionOpts`]'s. The head-dimension limit of a device is the
+/// backend's.
+pub fn attention_forward_dims(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    opts: &AttentionOpts<'_>,
+) -> Result<AttentionDims, OjasError> {
+    attention_dims(ATTENTION_FORWARD, q, k, v, opts)
+}
+
+/// [`attention_forward_dims`] under the name of the saving form.
+pub fn attention_forward_saving_dims(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    opts: &AttentionOpts<'_>,
+) -> Result<AttentionDims, OjasError> {
+    attention_dims(ATTENTION_SAVING, q, k, v, opts)
+}
+
+fn attention_dims(
+    op: &'static str,
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    opts: &AttentionOpts<'_>,
+) -> Result<AttentionDims, OjasError> {
+    matmul_operands(op, &[q, k, v])?;
+    attention_opts_operands(op, opts)?;
+    attention_layout(op, q, k, v, opts)
+}
+
+/// [`crate::Backend::attention_backward`]: `lse` `F32`, every other
+/// operand as the forward's, checked in argument order; the gradients are
+/// `F32`. `grad_output` and `output` are shaped like `q` and `lse` is `[B,
+/// H, Tq]`; then the forward's rules. `bias_grad` needs a bias.
+#[allow(clippy::too_many_arguments)]
+pub fn attention_backward_dims(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    output: &Tensor,
+    lse: &Tensor,
+    grad_output: &Tensor,
+    opts: &AttentionOpts<'_>,
+    bias_grad: bool,
+) -> Result<AttentionDims, OjasError> {
+    const OP: &str = ATTENTION_BACKWARD;
+    matmul_operands(OP, &[q, k, v, output])?;
+    f32_operand(OP, lse)?;
+    matmul_operand(OP, grad_output)?;
+    attention_opts_operands(OP, opts)?;
+    causal_sdpa_grad_shape_for(OP, q, grad_output)?;
+    if output.shape() != q.shape() {
+        return Err(refuse(
+            OP,
+            format!(
+                "attention output shape {:?} != query {:?}",
+                output.shape(),
+                q.shape()
+            ),
+        ));
+    }
+    let rows = &q.shape()[..q.shape().len().saturating_sub(1)];
+    if lse.shape() != rows {
+        return Err(refuse(
+            OP,
+            format!("attention lse shape {:?} != {rows:?}", lse.shape()),
+        ));
+    }
+    if bias_grad && opts.bias.is_none() {
+        return Err(refuse(OP, "attention bias gradient asked without a bias"));
+    }
+    attention_layout(OP, q, k, v, opts)
+}
+
+fn causal_sdpa_grad_shape_for(
+    op: &'static str,
+    q: &Tensor,
+    grad_output: &Tensor,
+) -> Result<(), OjasError> {
+    if grad_output.shape() != q.shape() {
+        return Err(refuse(
+            op,
+            format!(
+                "attention grad shape {:?} != query {:?}",
+                grad_output.shape(),
+                q.shape()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn rank4(op: &'static str, name: &str, tensor: &Tensor) -> Result<[usize; 4], OjasError> {

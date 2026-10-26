@@ -9,9 +9,9 @@
 use std::sync::Mutex;
 
 use ojas_core::{
-    with_backend_methods, AdamWConfig, AutocastMode, Backend, BackendId, Budget, CeChunk, CeGrads,
-    Conv2dParams, ConvTranspose2dParams, GdnInputs, MuonNs5Config, Numerics, OjasError,
-    OptimizerKind, Tensor,
+    with_backend_methods, AdamWConfig, AttentionOpts, AutocastMode, Backend, BackendId, Budget,
+    CeChunk, CeGrads, Conv2dParams, ConvTranspose2dParams, GdnInputs, MuonNs5Config, Numerics,
+    OjasError, OptimizerKind, Tensor,
 };
 
 /// Every `Backend` op, answered with its own name.
@@ -132,6 +132,15 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
             .map(|_| ()),
         "causal_sdpa_backward_recompute" => b
             .causal_sdpa_backward_recompute(&t, &t, &t, &t, None)
+            .map(|_| ()),
+        "attention_forward" => b
+            .attention_forward(&t, &t, &t, AttentionOpts::default())
+            .map(|_| ()),
+        "attention_forward_saving" => b
+            .attention_forward_saving(&t, &t, &t, AttentionOpts::default())
+            .map(|_| ()),
+        "attention_backward" => b
+            .attention_backward(&t, &t, &t, &t, &t, &t, AttentionOpts::default(), false)
             .map(|_| ()),
         "per_head_sigmoid_gate_forward" => {
             b.per_head_sigmoid_gate_forward(&t, &t, &t, &t).map(|_| ())

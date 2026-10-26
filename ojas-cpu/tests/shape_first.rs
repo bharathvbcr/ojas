@@ -11,7 +11,8 @@
 //! - (c) with a NaN in a well-formed operand, under an ample budget.
 
 use ojas_core::{
-    accumulate_grad_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
+    accumulate_grad_dims, attention_backward_dims, attention_forward_dims,
+    attention_forward_saving_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
     causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
     chunked_gdn_backward_dims, chunked_gdn_forward_dims, gated_rms_norm_backward_dims,
     gated_rms_norm_forward_dims, gdn_log_decay_backward_dims, gdn_log_decay_forward_dims,
@@ -22,8 +23,8 @@ use ojas_core::{
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
     rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
     sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, Backend, Budget,
-    CeChunk, CeGrads, DType, GdnInputs, OjasError, Tensor,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AttentionOpts, Backend,
+    Budget, CeChunk, CeGrads, DType, GdnInputs, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -61,6 +62,18 @@ fn u(shape: &[usize]) -> Tensor {
 fn nan_like(t: &Tensor) -> Tensor {
     let n: usize = t.shape().iter().product();
     Tensor::from_f32(&vec![f32::NAN; n], t.shape(), &pool()).unwrap()
+}
+
+/// Attention options from operands `q, k, v` and an optional fourth: the
+/// bias when it is `F32`, the key lengths when it is `U32`.
+fn attention_opts(o: &[Tensor], causal: bool, window: Option<usize>) -> AttentionOpts<'_> {
+    let extra = o.get(3);
+    AttentionOpts {
+        causal,
+        window,
+        bias: extra.filter(|t| t.dtype() == DType::F32),
+        key_lens: extra.filter(|t| t.dtype() == DType::U32),
+    }
 }
 
 fn case<C, R>(name: &str, operands: Vec<Tensor>, nan_at: Option<usize>, check: C, run: R) -> Case
@@ -332,6 +345,182 @@ fn cases() -> Vec<Case> {
             |b, o| {
                 b.causal_sdpa_backward(&o[0], &o[1], &o[2], &o[3], &o[4], &o[5], None)
                     .map(drop)
+            },
+        ));
+    }
+
+    // ---- general attention: q [1, 2, 3, 4], k and v [1, 2, 5, 4] ----------
+    let (aq, akv) = ([1usize, 2, 3, 4], [1usize, 2, 5, 4]);
+    // Operands: q, k, v, then a bias (F32) or key lengths (U32) at 3.
+    for (name, ops, causal, window, nan) in [
+        (
+            "rank 3",
+            vec![f(&[2, 3, 4]), f(&akv), f(&akv)],
+            false,
+            None,
+            1,
+        ),
+        (
+            "k differs",
+            vec![f(&aq), f(&akv), f(&[1, 2, 4, 4])],
+            false,
+            None,
+            0,
+        ),
+        (
+            "head dim",
+            vec![f(&aq), f(&[1, 2, 5, 3]), f(&[1, 2, 5, 3])],
+            false,
+            None,
+            0,
+        ),
+        (
+            "kv heads",
+            vec![f(&aq), f(&[1, 3, 5, 4]), f(&[1, 3, 5, 4])],
+            false,
+            None,
+            0,
+        ),
+        ("window 0", vec![f(&aq), f(&akv), f(&akv)], true, Some(0), 0),
+        (
+            "window without causal",
+            vec![f(&aq), f(&akv), f(&akv)],
+            false,
+            Some(2),
+            0,
+        ),
+        (
+            "bias last axis",
+            vec![f(&aq), f(&akv), f(&akv), f(&[1, 1, 1, 4])],
+            false,
+            None,
+            0,
+        ),
+        (
+            "bias queries",
+            vec![f(&aq), f(&akv), f(&akv), f(&[1, 1, 2, 5])],
+            false,
+            None,
+            0,
+        ),
+        (
+            "bias heads",
+            vec![f(&aq), f(&akv), f(&akv), f(&[1, 3, 3, 5])],
+            false,
+            None,
+            0,
+        ),
+        (
+            "bias rank",
+            vec![f(&aq), f(&akv), f(&akv), f(&[3, 5])],
+            false,
+            None,
+            0,
+        ),
+        (
+            "key_lens shape",
+            vec![f(&aq), f(&akv), f(&akv), u(&[2])],
+            false,
+            None,
+            0,
+        ),
+    ] {
+        v.push(case(
+            &format!("attention_forward {name}"),
+            ops.clone(),
+            Some(nan),
+            move |o| {
+                attention_forward_dims(&o[0], &o[1], &o[2], &attention_opts(o, causal, window))
+                    .map(drop)
+            },
+            move |b, o| {
+                b.attention_forward(&o[0], &o[1], &o[2], attention_opts(o, causal, window))
+                    .map(drop)
+            },
+        ));
+        v.push(case(
+            &format!("attention_forward_saving {name}"),
+            ops,
+            Some(nan),
+            move |o| {
+                attention_forward_saving_dims(
+                    &o[0],
+                    &o[1],
+                    &o[2],
+                    &attention_opts(o, causal, window),
+                )
+                .map(drop)
+            },
+            move |b, o| {
+                b.attention_forward_saving(&o[0], &o[1], &o[2], attention_opts(o, causal, window))
+                    .map(drop)
+            },
+        ));
+    }
+    // Operands: q, k, v, output, lse, grad_output.
+    let arows = [1usize, 2, 3];
+    for (name, ops, bias_grad, nan) in [
+        (
+            "grad shape",
+            [
+                f(&aq),
+                f(&akv),
+                f(&akv),
+                f(&aq),
+                f(&arows),
+                f(&[1, 2, 3, 5]),
+            ],
+            false,
+            0,
+        ),
+        (
+            "output shape",
+            [f(&aq), f(&akv), f(&akv), f(&akv), f(&arows), f(&aq)],
+            false,
+            5,
+        ),
+        (
+            "lse shape",
+            [f(&aq), f(&akv), f(&akv), f(&aq), f(&[1, 2, 5]), f(&aq)],
+            false,
+            3,
+        ),
+        (
+            "bias gradient without a bias",
+            [f(&aq), f(&akv), f(&akv), f(&aq), f(&arows), f(&aq)],
+            true,
+            0,
+        ),
+    ] {
+        v.push(case(
+            &format!("attention_backward {name}"),
+            ops.to_vec(),
+            Some(nan),
+            move |o| {
+                attention_backward_dims(
+                    &o[0],
+                    &o[1],
+                    &o[2],
+                    &o[3],
+                    &o[4],
+                    &o[5],
+                    &AttentionOpts::default(),
+                    bias_grad,
+                )
+                .map(drop)
+            },
+            move |b, o| {
+                b.attention_backward(
+                    &o[0],
+                    &o[1],
+                    &o[2],
+                    &o[3],
+                    &o[4],
+                    &o[5],
+                    AttentionOpts::default(),
+                    bias_grad,
+                )
+                .map(drop)
             },
         ));
     }

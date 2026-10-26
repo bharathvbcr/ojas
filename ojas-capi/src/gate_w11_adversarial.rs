@@ -64,7 +64,7 @@ fn the_call_table_covers_every_op() {
     }
     assert_eq!(
         ops.len(),
-        72,
+        75,
         "op count changed: pin the new op's admission"
     );
 }
@@ -156,7 +156,7 @@ fn a_tripped_gate_refuses_polling_ops_without_repolling_and_keeps_commit_ops_ope
         );
         refused += usize::from(was_refused);
     }
-    assert_eq!(refused, 68);
+    assert_eq!(refused, 71);
     assert_eq!(
         polls.load(Ordering::SeqCst),
         1,
