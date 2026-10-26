@@ -11,6 +11,7 @@ use ojas_core::{
 // Every op below runs its `ojas_core::shapes` validator before it checks
 // values, copies an input or charges the budget (docs/shape-contract.md).
 use ojas_core::{
+    attention_backward_dims, attention_forward_dims, attention_forward_saving_dims,
     causal_sdpa_backward_dims, causal_sdpa_forward_dims, chunked_gdn_backward_dims,
     chunked_gdn_forward_dims, linear_backward_dims, linear_forward_dims, mul_backward_dims,
     mul_forward_dims, per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims,
@@ -18,9 +19,10 @@ use ojas_core::{
     rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
     rope_half_split_backward_dims, rope_half_split_forward_dims, silu_backward_dims,
     silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    RmsDims,
+    AttentionDims, AttentionGrad, AttentionOpts, RmsDims,
 };
 
+use crate::attn::general::{self, Extras, Geom};
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
@@ -185,6 +187,34 @@ impl CpuBackend {
             causal_sdpa_backward(op, &self.budget, exec, ins, dims, grads)
         })?;
         Ok((grad_q, grad_k, grad_v))
+    }
+
+    /// General attention forward after its validator: the output and the
+    /// `[B, H, Tq]` row log-sum-exp.
+    fn attention_fwd(
+        &self,
+        op: &'static str,
+        dims: AttentionDims,
+        [q, k, v]: [&Tensor; 3],
+        opts: &AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let exec = self.exec();
+        let geom = Geom::new(op, dims)?;
+        let wide = matmul_operands(op, exec, &self.budget, [q, k, v])?;
+        let qkv = wide.each_ref().map(Wide::values);
+        let bias = opts
+            .bias
+            .map(|b| matmul_operands(op, exec, &self.budget, [b]))
+            .transpose()?;
+        let extras = Extras {
+            bias: bias.as_ref().map(|[b]| b.values()),
+            key_lens: opts.key_lens.map(|t| u32_values(op, t)).transpose()?,
+        };
+        let lse_shape = &q.shape()[..q.shape().len().saturating_sub(1)];
+        let [out, lse] = fill_outs(op, &self.budget, exec, [q.shape(), lse_shape], |outs| {
+            general::attention_forward(op, &self.budget, exec, qkv, extras, geom, outs)
+        })?;
+        Ok((out, lse))
     }
 
     /// RMSNorm forward after its validator: the op itself, and each half of
@@ -625,6 +655,78 @@ impl Backend for CpuBackend {
         let dims = causal_sdpa_backward_dims(q, k, v, output, lse, grad_output, window)?;
         let dims = SdpaKernelDims::new(OP, dims, window)?;
         self.sdpa_backward(OP, dims, [q, k, v, output, lse, grad_output])
+    }
+
+    fn attention_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "attention_forward";
+        let dims = attention_forward_dims(q, k, v, &opts)?;
+        self.attention_fwd(OP, dims, [q, k, v], &opts)
+            .map(|(output, _)| output)
+    }
+
+    fn attention_forward_saving(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "attention_forward_saving";
+        let dims = attention_forward_saving_dims(q, k, v, &opts)?;
+        self.attention_fwd(OP, dims, [q, k, v], &opts)
+    }
+
+    fn attention_backward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
+        grad_output: &Tensor,
+        opts: AttentionOpts<'_>,
+        bias_grad: bool,
+    ) -> Result<AttentionGrad, OjasError> {
+        const OP: &str = "attention_backward";
+        let dims = attention_backward_dims(q, k, v, output, lse, grad_output, &opts, bias_grad)?;
+        let geom = Geom::new(OP, dims)?;
+        let exec = self.exec();
+        let operands = [q, k, v, output, lse, grad_output];
+        let wide = matmul_operands(OP, exec, &self.budget, operands)?;
+        let ins = wide.each_ref().map(Wide::values);
+        let bias = opts
+            .bias
+            .map(|b| matmul_operands(OP, exec, &self.budget, [b]))
+            .transpose()?;
+        let extras = Extras {
+            bias: bias.as_ref().map(|[b]| b.values()),
+            key_lens: opts.key_lens.map(|t| u32_values(OP, t)).transpose()?,
+        };
+        let shapes = [q.shape(), k.shape(), v.shape()];
+        let [grad_q, grad_k, grad_v] = fill_outs(OP, &self.budget, exec, shapes, |grads| {
+            general::attention_backward(OP, &self.budget, exec, ins, extras, geom, grads)
+        })?;
+        let grad_bias = match (bias_grad, opts.bias) {
+            (true, Some(b)) => {
+                let [grad] = fill_outs(OP, &self.budget, exec, [b.shape()], |[grad]| {
+                    general::bias_backward(OP, &self.budget, exec, ins, extras, geom, grad)
+                })?;
+                Some(grad)
+            }
+            _ => None,
+        };
+        Ok(AttentionGrad {
+            q: grad_q,
+            k: grad_k,
+            v: grad_v,
+            bias: grad_bias,
+        })
     }
 
     fn per_head_sigmoid_gate_forward(

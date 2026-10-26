@@ -16,8 +16,9 @@
 //! [`Backend`]: crate::Backend
 
 use crate::backend::{
-    AdamWConfig, Backend, BackendId, CeChunk, CeGrads, GatedRmsGrad, GdnDecayGrad, GdnForward,
-    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, PerHeadGateGrad, ValueResidualGrad,
+    AdamWConfig, AttentionGrad, AttentionOpts, Backend, BackendId, CeChunk, CeGrads, GatedRmsGrad,
+    GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, PerHeadGateGrad,
+    ValueResidualGrad,
 };
 use crate::budget::Budget;
 use crate::dtype::DType;
@@ -635,6 +636,88 @@ impl<B: Backend> Backend for Autocast<B> {
             self.inner
                 .causal_sdpa_backward_recompute(&q, &k, &v, &grad_output, window)?;
         Ok((self.emit(gq)?, self.emit(gk)?, self.emit(gv)?))
+    }
+
+    /// The output is emitted like any activation. The bias is an operand
+    /// of the score, rounded with `q`, `k` and `v`; the key lengths are
+    /// integers and pass through.
+    fn attention_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<Tensor, OjasError> {
+        let q = self.prep(q)?;
+        let k = self.prep(k)?;
+        let v = self.prep(v)?;
+        let bias = opts.bias.map(|b| self.prep(b)).transpose()?;
+        let opts = AttentionOpts {
+            bias: bias.as_deref(),
+            ..opts
+        };
+        let out = self.inner.attention_forward(&q, &k, &v, opts)?;
+        self.emit(out)
+    }
+
+    /// The log-sum-exp stays `F32` unrounded, as the causal forward's does.
+    fn attention_forward_saving(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let q = self.prep(q)?;
+        let k = self.prep(k)?;
+        let v = self.prep(v)?;
+        let bias = opts.bias.map(|b| self.prep(b)).transpose()?;
+        let opts = AttentionOpts {
+            bias: bias.as_deref(),
+            ..opts
+        };
+        let (out, lse) = self.inner.attention_forward_saving(&q, &k, &v, opts)?;
+        Ok((self.emit(out)?, lse))
+    }
+
+    /// `lse` is passed through unrounded (see the forward).
+    fn attention_backward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
+        grad_output: &Tensor,
+        opts: AttentionOpts<'_>,
+        bias_grad: bool,
+    ) -> Result<AttentionGrad, OjasError> {
+        let q = self.prep(q)?;
+        let k = self.prep(k)?;
+        let v = self.prep(v)?;
+        let output = self.prep(output)?;
+        let grad_output = self.prep(grad_output)?;
+        let bias = opts.bias.map(|b| self.prep(b)).transpose()?;
+        let opts = AttentionOpts {
+            bias: bias.as_deref(),
+            ..opts
+        };
+        let grads = self.inner.attention_backward(
+            &q,
+            &k,
+            &v,
+            &output,
+            lse,
+            &grad_output,
+            opts,
+            bias_grad,
+        )?;
+        Ok(AttentionGrad {
+            q: self.emit(grads.q)?,
+            k: self.emit(grads.k)?,
+            v: self.emit(grads.v)?,
+            bias: grads.bias.map(|g| self.emit(g)).transpose()?,
+        })
     }
 
     fn per_head_sigmoid_gate_forward(

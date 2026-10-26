@@ -76,10 +76,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use ojas_core::{
-    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
-    causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
-    causal_sdpa_forward_dims, check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims,
-    clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
+    accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, attention_forward_saving_dims,
+    cached_attention_dims, causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims,
+    causal_sdpa_backward_dims, causal_sdpa_forward_dims, check_adamw, chunked_gdn_backward_dims,
+    chunked_gdn_forward_dims, clip_grad_norm_dims, clip_scale, cross_entropy_mean_backward_dims,
     cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
     gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
     gdn_log_decay_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
@@ -91,15 +91,15 @@ use ojas_core::{
     rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
     sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
     topk_rows_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AdamWConfig, Backend, BackendId, Budget, CeChunk, CeGrads, Conv1dDims, DType, DeviceBuffer,
-    GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe,
-    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
-    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    AdamWConfig, AttentionDims, AttentionOpts, Backend, BackendId, Budget, CeChunk, CeGrads,
+    Conv1dDims, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward,
+    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
     ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
-    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, Cmd,
+    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom, Cmd,
     Conv1dGeom, EmbedRows, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode,
     SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
@@ -585,6 +585,43 @@ impl MetalBackend {
         }
     }
 
+    /// General attention forward after its validator: the output and the
+    /// `[B, H, Tq]` row log-sum-exp. Nothing beyond the two outputs is
+    /// charged; grouped-query heads read their KV head in place.
+    fn attn_forward(
+        &self,
+        op: &'static str,
+        dims: &AttentionDims,
+        [q, k, v]: [&Tensor; 3],
+        bias: Option<&Tensor>,
+        key_lens: Option<&Tensor>,
+    ) -> Res<(Tensor, Tensor)> {
+        let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
+        let bias_arg = bias.map(|b| self.f32(op, b)).transpose()?;
+        let lens_arg = key_lens.map(|l| self.arg(op, l, DType::U32)).transpose()?;
+        let geom = attn_launch(op, dims)?;
+        let shapes = [q.shape(), lse_shape(q.shape())];
+        let mut out = self
+            .outputs(
+                op,
+                &shapes,
+                0,
+                Cmd::Attn {
+                    q: qa,
+                    k: ka,
+                    v: va,
+                    bias: bias_arg,
+                    lens: lens_arg,
+                    geom,
+                },
+            )?
+            .into_iter();
+        match (out.next(), out.next()) {
+            (Some(y), Some(lse)) => Ok((y, lse)),
+            _ => Err(metal_err(format!("{op}: missing outputs"))),
+        }
+    }
+
     /// Causal SDPA backward after its validator, from the forward's output
     /// and log-sum-exp: `[q, k, v, output, lse, grad_output]`. The only
     /// scratch is the per-row `Dr = dO · O`, `B * H * T` floats; grouped-query
@@ -919,6 +956,46 @@ fn sdpa_launch(op: &'static str, dims: &SdpaDims, window: Option<usize>) -> Res<
         d,
         rep: u32_dim(op, rep)?,
         window,
+    })
+}
+
+/// The general attention kernel's geometry of validated `dims`, with
+/// Metal's head-dim cap: a device limit, so after the validator (D9). The
+/// kernel forms positions in `i32`, so both lengths stay below it. A window
+/// of at least `Tk` arrives as `None` and is sent as `0`.
+fn attn_launch(op: &'static str, dims: &AttentionDims) -> Res<AttnGeom> {
+    let d = u32_dim(op, dims.head_dim)?;
+    refuse_unsupported_metal_head_dim(BackendId::Metal, d)?;
+    let bh = product(op, &[dims.batch, dims.heads])?;
+    let positions = |n: usize| {
+        i32::try_from(n)
+            .ok()
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| OjasError::Unsupported {
+                op,
+                detail: format!("sequence length {n} exceeds the kernel's 31-bit positions"),
+            })
+    };
+    Ok(AttnGeom {
+        bh: u32_dim(op, bh)?,
+        heads: u32_dim(op, dims.heads)?,
+        rep: u32_dim(op, dims.heads / dims.kv_heads)?,
+        q_len: positions(dims.q_len)?,
+        kv_len: positions(dims.kv_len)?,
+        d,
+        causal: dims.causal,
+        window: dims.window.map_or(Ok(0), |w| u32_dim(op, w))?,
+        bias: dims
+            .bias
+            .map(|b| {
+                Ok::<_, OjasError>([
+                    u32_dim(op, b.batch)?,
+                    u32_dim(op, b.heads)?,
+                    u32_dim(op, b.queries)?,
+                ])
+            })
+            .transpose()?,
+        has_lens: dims.key_lens,
     })
 }
 
@@ -1613,6 +1690,23 @@ impl Backend for MetalBackend {
             [q, k, v, output, grad_output].map(|t| self.widened(t));
         let (q, k, v, output, grad_output) = (q?, k?, v?, output?, grad_output?);
         self.sdpa_backward(OP, &dims, window, [&q, &k, &v, &output, lse, &grad_output])
+    }
+
+    /// Bidirectional and cross attention, a bias and key lengths on the
+    /// scalar `ojas_attn_gen_fwd`. There is no backward on Metal yet:
+    /// `attention_backward` is `Unsupported`, as the default says.
+    fn attention_forward_saving(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "attention_forward_saving";
+        let dims = attention_forward_saving_dims(q, k, v, &opts)?;
+        let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
+        let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
+        self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
     }
 
     fn per_head_sigmoid_gate_forward(

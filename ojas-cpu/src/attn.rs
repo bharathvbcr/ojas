@@ -27,6 +27,7 @@ use crate::pool::{scoped, Exec};
 use crate::validate::{nonfinite, product, room_for, shape};
 
 mod flash;
+pub(crate) mod general;
 
 /// Work units ([`Dims::work`]) per pool task. A pass with fewer than two
 /// tasks' worth stays on the calling thread.

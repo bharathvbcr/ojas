@@ -345,6 +345,48 @@ pub struct PerHeadGateGrad {
     pub attn_out: Tensor,
 }
 
+/// How [`Backend::attention_forward`] masks and biases the scores
+/// `scale * q . k`, with `scale = `[`sdpa_scale`]`(D)`. The default is
+/// bidirectional attention over every key, no bias.
+///
+/// A key is visible to query `i` of batch `b` when it passes every mask
+/// that is set, and a row that sees no key outputs zeros (its
+/// log-sum-exp is stored as 0; see [`Backend::attention_forward_saving`]):
+///
+/// - `causal`: query `i` sits at position `p = i + Tk - Tq` and sees keys
+///   `j <= p`. With `Tq == Tk` that is the usual lower triangle; with
+///   `Tq < Tk` the queries are the last `Tq` positions (a KV-cache prefill),
+///   and with `Tq > Tk` the first `Tq - Tk` queries see nothing.
+/// - `window` (only with `causal`, at least 1): also `j + window > p`. A
+///   window of at least `Tk` is no window.
+/// - `key_lens`: a `U32` tensor `[B]`; also `j < key_lens[b]`. A length
+///   above `Tk` is `Tk`, and 0 hides every key of that batch row. This is
+///   the mask of a padded text prompt: the padded keys are the tail.
+///
+/// `bias` is added to the scores before the softmax: `F32` (or `Bf16`)
+/// `[Bb, Hb, Tqb, Tk]` with `Bb` in `{1, B}`, `Hb` in `{1, H}` and `Tqb` in
+/// `{1, Tq}`; an extent of 1 broadcasts. A bias is finite, as every operand
+/// is; a mask that hides a key is `key_lens`, `causal` or `window`, not a
+/// large negative number.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AttentionOpts<'a> {
+    pub causal: bool,
+    pub window: Option<usize>,
+    pub bias: Option<&'a Tensor>,
+    pub key_lens: Option<&'a Tensor>,
+}
+
+/// Gradients of [`Backend::attention_backward`].
+#[derive(Clone, Debug)]
+pub struct AttentionGrad {
+    pub q: Tensor,
+    pub k: Tensor,
+    pub v: Tensor,
+    /// Shaped like the bias, summed over the extents it broadcast across.
+    /// `None` unless the caller asked for it.
+    pub bias: Option<Tensor>,
+}
+
 /// Gradients of the value-residual blend. `lambda` is the scalar parameter.
 #[derive(Clone, Debug)]
 pub struct ValueResidualGrad {
@@ -824,6 +866,81 @@ pub trait Backend {
         crate::shapes::causal_sdpa_grad_shape(q, grad_output)?;
         let (output, lse) = self.causal_sdpa_forward(q, k, v, window)?;
         self.causal_sdpa_backward(q, k, v, &output, &lse, grad_output, window)
+    }
+
+    /// Scaled dot-product attention with the masks and bias of
+    /// [`AttentionOpts`]: bidirectional by default, and the query and key
+    /// lengths may differ (cross-attention).
+    ///
+    /// `q` is `[B, H, Tq, D]`; `k` and `v` are `[B, Hkv, Tk, D]`, with `H` a
+    /// positive multiple of `Hkv` (query head `h` reads KV head `h / (H /
+    /// Hkv)`). Returns the output, shaped like `q`. With `causal` set,
+    /// `Tq == Tk`, no bias and no `key_lens` it equals
+    /// [`Self::causal_sdpa_forward`]. A device may refuse `D` above its own
+    /// limit. Validate with [`crate::attention_forward_dims`].
+    ///
+    /// The inference form: a backend that does not need the log-sum-exp
+    /// can skip it. A backend without the op returns
+    /// [`OjasError::Unsupported`].
+    fn attention_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<Tensor, OjasError> {
+        self.attention_forward_saving(q, k, v, opts)
+            .map(|(output, _)| output)
+    }
+
+    /// [`Self::attention_forward`] and each query row's log-sum-exp `ln
+    /// sum_j e^(s_ij)` over the keys it sees, `[B, H, Tq]`, which
+    /// [`Self::attention_backward`] consumes. A row that sees no key has
+    /// output zeros and log-sum-exp 0 (the empty sum's `-inf` is not a
+    /// finite value); the backward gives it no gradient.
+    fn attention_forward_saving(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let _ = (q, k, v, opts);
+        Err(OjasError::Unsupported {
+            op: "attention_forward_saving",
+            detail: format!(
+                "{:?} backend does not implement attention_forward_saving",
+                self.id()
+            ),
+        })
+    }
+
+    /// The gradients of [`Self::attention_forward_saving`] from its `output`
+    /// and `lse` for the same operands and `opts`: the probabilities are
+    /// `e^(s - lse)` and each row's `Dr = dO . O`. `bias_grad` asks for the
+    /// bias gradient too, which needs a bias in `opts`; a constant bias
+    /// (a mask) leaves it off and pays nothing for it. `grad_k` and `grad_v`
+    /// sum the query heads of each KV head in increasing query-head order.
+    #[allow(clippy::too_many_arguments)]
+    fn attention_backward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
+        grad_output: &Tensor,
+        opts: AttentionOpts<'_>,
+        bias_grad: bool,
+    ) -> Result<AttentionGrad, OjasError> {
+        let _ = (q, k, v, output, lse, grad_output, opts, bias_grad);
+        Err(OjasError::Unsupported {
+            op: "attention_backward",
+            detail: format!(
+                "{:?} backend does not implement attention_backward",
+                self.id()
+            ),
+        })
     }
 
     fn per_head_sigmoid_gate_forward(
@@ -1593,6 +1710,9 @@ macro_rules! with_backend_methods {
             op fn causal_sdpa_forward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn causal_sdpa_backward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, output: &$crate::Tensor, lse: &$crate::Tensor, grad_output: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn causal_sdpa_backward_recompute(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, grad_output: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn attention_forward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, opts: $crate::AttentionOpts<'_>) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn attention_forward_saving(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, opts: $crate::AttentionOpts<'_>) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn attention_backward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, output: &$crate::Tensor, lse: &$crate::Tensor, grad_output: &$crate::Tensor, opts: $crate::AttentionOpts<'_>, bias_grad: bool) -> Result<$crate::AttentionGrad, $crate::OjasError>;
             op fn per_head_sigmoid_gate_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, attn_out: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn per_head_sigmoid_gate_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, attn_out: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::PerHeadGateGrad, $crate::OjasError>;
             op fn per_head_sigmoid_gate_forward_saving(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, attn_out: &$crate::Tensor) -> Result<($crate::Tensor, Option<$crate::Tensor>), $crate::OjasError>;
@@ -2345,6 +2465,13 @@ pub(crate) mod tests {
             op(backend.causal_sdpa_forward(&t, &t, &t, None)),
             op(backend.causal_sdpa_backward(&t, &t, &t, &t, &t, &t, None)),
             op(backend.causal_sdpa_backward_recompute(&t, &t, &t, &t, None)),
+            op(backend.attention_forward(&t, &t, &t, AttentionOpts::default())),
+            op(backend
+                .attention_forward_saving(&t, &t, &t, AttentionOpts::default())
+                .map(drop)),
+            op(backend
+                .attention_backward(&t, &t, &t, &t, &t, &t, AttentionOpts::default(), false)
+                .map(drop)),
             op(backend.per_head_sigmoid_gate_forward(&t, &t, &t, &t)),
             op(backend.per_head_sigmoid_gate_backward(&t, &t, &t, &t, &t)),
             op(backend
@@ -2408,6 +2535,9 @@ pub(crate) mod tests {
             "causal_sdpa_forward",
             "causal_sdpa_backward",
             "causal_sdpa_backward_recompute",
+            "attention_forward",
+            "attention_forward_saving",
+            "attention_backward",
             "per_head_sigmoid_gate_forward",
             "per_head_sigmoid_gate_backward",
             "per_head_sigmoid_gate_forward_saving",

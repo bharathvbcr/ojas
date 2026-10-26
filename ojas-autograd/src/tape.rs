@@ -10,8 +10,8 @@
 //! checkpointing).
 
 use ojas_core::{
-    inverse_permutation, permute_output_shape, Backend, BackendId, CeChunk, CeGrads, GdnInputs,
-    OjasError, Tensor,
+    inverse_permutation, permute_output_shape, AttentionOpts, Backend, BackendId, CeChunk, CeGrads,
+    GdnInputs, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -61,6 +61,20 @@ enum Rec {
         v: usize,
         out: usize,
         lse: Option<Tensor>,
+        window: Option<usize>,
+    },
+    /// General attention ([`Backend::attention_forward_saving`]): `bias` is
+    /// a differentiable input, `key_lens` a constant. `out` and `lse` are as
+    /// [`Rec::Sdpa`]'s.
+    Attn {
+        q: usize,
+        k: usize,
+        v: usize,
+        bias: Option<usize>,
+        key_lens: Option<Tensor>,
+        out: usize,
+        lse: Option<Tensor>,
+        causal: bool,
         window: Option<usize>,
     },
     Gate {
@@ -205,6 +219,27 @@ impl Rec {
                 lse,
                 window,
             },
+            Rec::Attn {
+                q,
+                k,
+                v,
+                bias,
+                key_lens,
+                out,
+                lse,
+                causal,
+                window,
+            } => Rec::Attn {
+                q: m(q),
+                k: m(k),
+                v: m(v),
+                bias: bias.map(m),
+                key_lens,
+                out: m(out),
+                lse,
+                causal,
+                window,
+            },
             Rec::Gate {
                 x,
                 w,
@@ -300,7 +335,7 @@ impl Rec {
     /// which a replay computes again.
     fn stripped(mut self) -> Self {
         match &mut self {
-            Rec::Sdpa { lse, .. } => *lse = None,
+            Rec::Sdpa { lse, .. } | Rec::Attn { lse, .. } => *lse = None,
             Rec::Gate { scales, .. } => *scales = None,
             Rec::Gdn { checkpoints, .. } => *checkpoints = None,
             Rec::LinearCe { grads, .. } => *grads = None,
@@ -515,6 +550,42 @@ impl<B: Backend> Tape<B> {
             v,
             out: self.values.len(),
             lse: None,
+            window,
+        })
+    }
+
+    /// General attention ([`Backend::attention_forward_saving`]): bidirectional
+    /// unless `causal`, `q` `[B, H, Tq, D]`, `k` and `v` `[B, Hkv, Tk, D]`,
+    /// an optional additive score `bias` (a variable, so it takes a gradient
+    /// unless it is frozen), optional `U32` `key_lens` `[B]`, and an optional
+    /// sliding `window` with `causal`. The row log-sum-exp is kept on the
+    /// tape for the backward.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attention(
+        &mut self,
+        q: Var,
+        k: Var,
+        v: Var,
+        bias: Option<Var>,
+        key_lens: Option<Tensor>,
+        causal: bool,
+        window: Option<usize>,
+    ) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::attention";
+        let q = self.index(q, OP)?;
+        let k = self.index(k, OP)?;
+        let v = self.index(v, OP)?;
+        let bias = bias.map(|b| self.index(b, OP)).transpose()?;
+        let key_lens = key_lens.map(|t| self.place(t)).transpose()?;
+        self.record(Rec::Attn {
+            q,
+            k,
+            v,
+            bias,
+            key_lens,
+            out: self.values.len(),
+            lse: None,
+            causal,
             window,
         })
     }
@@ -884,6 +955,36 @@ impl<B: Backend> Tape<B> {
                     v: vi,
                     out: v.len(),
                     lse: Some(lse),
+                    window,
+                };
+                (y, rec)
+            }
+            Rec::Attn {
+                q,
+                k,
+                v: vi,
+                bias,
+                key_lens,
+                causal,
+                window,
+                ..
+            } => {
+                let opts = AttentionOpts {
+                    causal,
+                    window,
+                    bias: bias.map(|b| &v[b]),
+                    key_lens: key_lens.as_ref(),
+                };
+                let (y, lse) = be.attention_forward_saving(&v[q], &v[k], &v[vi], opts)?;
+                let rec = Rec::Attn {
+                    q,
+                    k,
+                    v: vi,
+                    bias,
+                    key_lens,
+                    out: v.len(),
+                    lse: Some(lse),
+                    causal,
                     window,
                 };
                 (y, rec)
@@ -1287,6 +1388,43 @@ impl<B: Backend> Tape<B> {
                 self.acc(q, gq)?;
                 self.acc(k, gk)?;
                 self.acc(v, gv)
+            }
+            Rec::Attn {
+                q,
+                k,
+                v,
+                bias,
+                key_lens,
+                out,
+                lse,
+                causal,
+                window,
+            } => {
+                let lse = lse.ok_or_else(|| self.missing("attention's lse"))?;
+                let opts = AttentionOpts {
+                    causal,
+                    window,
+                    bias: bias.map(|b| &self.values[b]),
+                    key_lens: key_lens.as_ref(),
+                };
+                let bias_grad = bias.is_some_and(|b| !self.is_frozen(b));
+                let g = self.backend.attention_backward(
+                    &self.values[q],
+                    &self.values[k],
+                    &self.values[v],
+                    &self.values[out],
+                    &lse,
+                    grad,
+                    opts,
+                    bias_grad,
+                )?;
+                self.acc(q, g.q)?;
+                self.acc(k, g.k)?;
+                self.acc(v, g.v)?;
+                match (bias, g.bias) {
+                    (Some(b), Some(gb)) => self.acc(b, gb),
+                    _ => Ok(()),
+                }
             }
             Rec::Gate {
                 x,
