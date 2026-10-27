@@ -354,6 +354,11 @@ pub(crate) struct AttnGeom {
     pub window: u32,
     pub bias: Option<[u32; 3]>,
     pub has_lens: bool,
+    /// Key ranges of the split-K tiled kernel (`ojas_xattn_part_dD`), each
+    /// `per_split` keys; `0` runs the scalar `ojas_attn_gen_fwd`. Only a
+    /// non-causal call at head dim 16 or 32 may ask for it.
+    pub splits: u32,
+    pub per_split: u32,
 }
 
 /// One bidirectional attention launch on tessl's `encoder_attn`: `k` and `v`

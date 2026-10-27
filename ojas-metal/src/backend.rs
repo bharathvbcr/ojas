@@ -692,22 +692,47 @@ impl MetalBackend {
         let lens_arg = key_lens.map(|l| self.arg(op, l, DType::U32)).transpose()?;
         let geom = attn_launch(op, dims)?;
         let shapes = [q.shape(), lse_shape(q.shape())];
-        let mut out = self
-            .outputs(
+        let command = |geom: AttnGeom| Cmd::Attn {
+            op,
+            q: qa,
+            k: ka,
+            v: va,
+            bias: bias_arg,
+            lens: lens_arg,
+            geom,
+        };
+        // The split-K tiled kernel where it covers the call, with its
+        // partial results charged as scratch; a budget that holds only the
+        // outputs runs the scalar kernel, which needs nothing more.
+        let tiled = xattn_splits(&geom).and_then(|(splits, per_split)| {
+            let words = product(
                 op,
-                &shapes,
-                0,
-                Cmd::Attn {
-                    op,
-                    q: qa,
-                    k: ka,
-                    v: va,
-                    bias: bias_arg,
-                    lens: lens_arg,
-                    geom,
+                &[
+                    splits as usize,
+                    geom.bh as usize,
+                    geom.q_len as usize,
+                    geom.d as usize + 2,
+                ],
+            )
+            .ok()?;
+            Some((
+                AttnGeom {
+                    splits,
+                    per_split,
+                    ..geom
                 },
-            )?
-            .into_iter();
+                words,
+            ))
+        });
+        let run = |g: AttnGeom, scratch: usize| self.outputs(op, &shapes, scratch, command(g));
+        let outputs = match tiled {
+            Some((tiled_geom, words)) => match run(tiled_geom, words) {
+                Err(OjasError::CapacityExceeded { .. }) => run(geom, 0),
+                other => other,
+            },
+            None => run(geom, 0),
+        };
+        let mut out = outputs?.into_iter();
         match (out.next(), out.next()) {
             (Some(y), Some(lse)) => Ok((y, lse)),
             _ => Err(metal_err(format!("{op}: missing outputs"))),
@@ -1218,7 +1243,38 @@ fn attn_launch(op: &'static str, dims: &AttentionDims) -> Res<AttnGeom> {
             })
             .transpose()?,
         has_lens: dims.key_lens,
+        splits: 0,
+        per_split: 0,
     })
+}
+
+/// Keys per tile of `ojas_xattn_part_dD` (`XA_TILE`) and its threadgroup's
+/// query rows (`XA_ROWS`).
+const XATTN_TILE: u32 = 64;
+const XATTN_ROWS: u32 = 128;
+/// Threadgroups the split-K kernel aims to launch, so a short Q over a long K
+/// still fills the GPU.
+const XATTN_TARGET_GROUPS: u64 = 384;
+/// Most key ranges one row is cut into.
+const XATTN_MAX_SPLITS: u32 = 64;
+
+/// `(splits, per_split)` of the split-K tiled kernel for `g`, or `None` when
+/// the scalar kernel must run it (causal or windowed, or a head dim other
+/// than 16 and 32). Each range is a whole number of key tiles and none is
+/// empty.
+fn xattn_splits(g: &AttnGeom) -> Option<(u32, u32)> {
+    if g.causal || g.window != 0 || !matches!(g.d, 16 | 32) || g.q_len == 0 || g.kv_len == 0 {
+        return None;
+    }
+    let groups = u64::from(g.q_len.div_ceil(XATTN_ROWS)) * u64::from(g.bh);
+    let wanted = XATTN_TARGET_GROUPS.div_ceil(groups).max(1);
+    let by_keys = g.kv_len.div_ceil(XATTN_TILE);
+    let splits = u32::try_from(wanted)
+        .unwrap_or(XATTN_MAX_SPLITS)
+        .clamp(1, XATTN_MAX_SPLITS)
+        .min(by_keys);
+    let per_split = g.kv_len.div_ceil(splits).div_ceil(XATTN_TILE) * XATTN_TILE;
+    Some((g.kv_len.div_ceil(per_split), per_split))
 }
 
 /// `[B, H, T]`: one log-sum-exp per query row of a `[B, H, T, D]` query.

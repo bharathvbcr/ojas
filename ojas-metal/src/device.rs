@@ -111,6 +111,8 @@ const WS_GROWTH: u64 = 64 << 20;
 /// The forward kernel's key tile is wider (`ATT_FWD_BK`); its grid is
 /// still one threadgroup per query block.
 const ATTN_THREADS: usize = 128;
+/// Query rows of one `ojas_xattn_part_dD` threadgroup (`XA_ROWS` in the kernel).
+const XA_ROWS: usize = 128;
 const ATTN_ROWS: usize = 32;
 /// Largest head dim the tiled attention kernels are compiled for.
 const ATTN_MAX_HEAD_DIM: u32 = 256;
@@ -197,6 +199,10 @@ const KERNELS: &[&str] = &[
     "ojas_attn_fwd_d256",
     "ojas_attn_gen_fwd",
     "ojas_im2col",
+    "ojas_xattn_part_d16",
+    "ojas_xattn_combine_d16",
+    "ojas_xattn_part_d32",
+    "ojas_xattn_combine_d32",
     "ojas_conv_nchw",
     "ojas_bilinear",
     "ojas_dwconv",
@@ -2317,8 +2323,26 @@ impl Worker {
                 planes / g.rep as usize
             )));
         }
+        let tiled = g.splits > 0;
+        if tiled && (g.causal || g.window != 0 || !matches!(g.d, 16 | 32) || g.per_split == 0) {
+            return Err(metal_err(format!(
+                "{op}: the split-K kernel runs non-causal head dim 16 or 32, not causal {} window {} d {}",
+                g.causal, g.window, g.d
+            )));
+        }
         let o = self.fresh(qv.n)?;
         let lse = self.fresh(planes * q_len)?;
+        // One (m, l, acc[D]) per split and row.
+        let part = if tiled {
+            let rows = planes * q_len;
+            let words = (g.splits as usize)
+                .checked_mul(rows)
+                .and_then(|n| n.checked_mul(d + 2))
+                .ok_or_else(|| metal_err(format!("{op}: split scratch overflows")))?;
+            Some(self.fresh(words)?)
+        } else {
+            None
+        };
         let st = self.status(op)?;
         self.check_operand(&st, q, &qv, ST_IN)?;
         self.check_operand(&st, k, &kv, ST_IN)?;
@@ -2326,7 +2350,50 @@ impl Worker {
         if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, b, ST_IN)?;
         }
-        if qv.n > 0 {
+        if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
+            let flags = (u32::from(g.bias.is_some()) << 1) | (u32::from(g.has_lens) << 2);
+            let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
+            let (bias_buf, lens_buf) = (bv.as_ref().unwrap_or(&qv), lv.as_ref().unwrap_or(&qv));
+            let rows = u32_of(planes * q_len)?;
+            self.ktg(
+                &format!("ojas_xattn_part_d{}", g.d),
+                q_len.div_ceil(XA_ROWS),
+                planes * g.splits as usize,
+                XA_ROWS,
+                |b| {
+                    bind(b, &qv, 0);
+                    bind(b, &kv, 1);
+                    bind(b, &vv, 2);
+                    bind(b, part, 3);
+                    bind(b, bias_buf, 4);
+                    bind(b, lens_buf, 5);
+                    bind_st(b, &st, 6);
+                    set_u32(b, g.q_len, 7);
+                    set_u32(b, g.kv_len, 8);
+                    set_u32(b, g.heads, 9);
+                    set_u32(b, g.rep, 10);
+                    set_u32(b, flags, 11);
+                    set_u32(b, bias_b, 12);
+                    set_u32(b, bias_h, 13);
+                    set_u32(b, bias_q, 14);
+                    set_u32(b, g.splits, 15);
+                    set_u32(b, g.per_split, 16);
+                    set_u32(b, g.bh, 17);
+                    set_f32(b, scale, 18);
+                },
+            )?;
+            self.k1(
+                &format!("ojas_xattn_combine_d{}", g.d),
+                rows as usize,
+                |b| {
+                    bind(b, part, 0);
+                    bind(b, &o, 1);
+                    bind(b, &lse, 2);
+                    set_u32(b, rows, 3);
+                    set_u32(b, g.splits, 4);
+                },
+            )?;
+        } else if qv.n > 0 {
             let flags = u32::from(g.causal)
                 | (u32::from(g.bias.is_some()) << 1)
                 | (u32::from(g.has_lens) << 2);
