@@ -197,6 +197,7 @@ const KERNELS: &[&str] = &[
     "ojas_attn_gen_fwd",
     "ojas_im2col",
     "ojas_conv_nchw",
+    "ojas_dwconv",
     "ojas_convt_nchw",
     "ojas_attn_bwd_dq_d256",
     "ojas_attn_bwd_dkv_d256",
@@ -1521,6 +1522,13 @@ impl Worker {
                 geom,
             } => self.conv_transpose2d(op, [x, w], bias, geom),
             Cmd::EncoderAttn { op, q, k, v, geom } => self.encoder_attn(op, [q, k, v], geom),
+            Cmd::DepthwiseConv2d {
+                op,
+                x,
+                w,
+                bias,
+                geom,
+            } => self.depthwise_conv2d(op, [x, w], bias, geom),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
@@ -2443,6 +2451,77 @@ impl Worker {
             set_u32(b, g.o, 4);
             set_u32(b, pixels_u, 5);
             set_u32(b, u32::from(bv.is_some()), 6);
+        })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// A depthwise convolution on `ojas_dwconv`, one thread per output
+    /// element. The operands are scanned here and the output after, all
+    /// under `op`.
+    fn depthwise_conv2d(
+        &mut self,
+        op: &'static str,
+        [x, w]: [Arg; 2],
+        bias: Option<Arg>,
+        g: ConvGeom,
+    ) -> Res<Reply> {
+        let xv = self.view(x)?;
+        let wv = self.view(w)?;
+        let bv = bias.map(|a| self.view(a)).transpose()?;
+        let big = |dims: &[u32]| -> Res<usize> {
+            dims.iter()
+                .try_fold(1usize, |acc, &d| acc.checked_mul(d as usize))
+                .ok_or_else(|| metal_err(format!("{op}: convolution extent overflows")))
+        };
+        let [kh, kw] = g.kernel;
+        let out_n = big(&[g.batch, g.o, g.oh, g.ow])?;
+        if g.c != g.o
+            || xv.n != big(&[g.batch, g.c, g.h, g.w])?
+            || wv.n != big(&[g.c, kh, kw])?
+            || bv.as_ref().is_some_and(|b| b.n != g.o as usize)
+        {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold a [{}, {}, {}, {}] input, a [{}, 1, {kh}, {kw}] weight and the bias asked for",
+                g.batch, g.c, g.h, g.w, g.c
+            )));
+        }
+        let out_u = u32_of(out_n)?;
+        let y = self.fresh(out_n)?;
+        let st = self.status(op)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
+            self.check_operand(&st, a, b, ST_IN)?;
+        }
+        // Bound even when the kernel does not read it: every declared
+        // argument is set.
+        let bias_buf = bv.as_ref().unwrap_or(&xv);
+        self.k1("ojas_dwconv", out_n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &wv, 1);
+            bind(b, bias_buf, 2);
+            bind(b, &y, 3);
+            set_u32(b, out_u, 4);
+            for (i, v) in [
+                g.c,
+                g.h,
+                g.w,
+                kh,
+                kw,
+                g.stride[0],
+                g.stride[1],
+                g.padding[0],
+                g.padding[1],
+                g.oh,
+                g.ow,
+                u32::from(bv.is_some()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                set_u32(b, v, 5 + i);
+            }
         })?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))

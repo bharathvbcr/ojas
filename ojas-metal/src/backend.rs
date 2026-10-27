@@ -1003,21 +1003,25 @@ fn rope_mode(op: &'static str, dims: &RopeDims) -> Res<(u32, u32, RopeMode)> {
     Ok((u32_dim(op, dims.rows)?, u32_dim(op, dims.dim)?, mode))
 }
 
-/// Refuse a convolution the GEMM reformulation does not cover: dilation
-/// above 1 and more than one group. Any stride and padding runs
-/// (`ojas_im2col` forms the window of every output pixel). The validator has
-/// run, so every refusal here is a device limit, never a malformed call.
+/// Refuse a convolution Metal does not run: dilation above 1, and a grouped
+/// convolution that is not depthwise (`groups == in == out`, one filter per
+/// channel). Any stride and padding runs: `ojas_im2col` forms the window of
+/// every output pixel, and the depthwise kernel does the same inline. The
+/// validator has run, so every refusal here is a device limit, never a
+/// malformed call.
 fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
     let p = d.params;
-    if p.groups == 1 && p.dilation == [1, 1] {
+    let depthwise = p.groups == d.in_channels && d.in_channels == d.out_channels;
+    if p.dilation == [1, 1] && (p.groups == 1 || depthwise) {
         return Ok(());
     }
     Err(OjasError::Unsupported {
         op,
         detail: format!(
-            "Metal runs dilation 1 and one group, at any stride and padding; got kernel {:?}, \
-             stride {:?}, padding {:?}, dilation {:?}, groups {}",
-            d.kernel, p.stride, p.padding, p.dilation, p.groups
+            "Metal runs dilation 1 with one group or one filter per channel (depthwise), at any \
+             stride and padding; got kernel {:?}, stride {:?}, padding {:?}, dilation {:?}, \
+             groups {} of {} in and {} out channels",
+            d.kernel, p.stride, p.padding, p.dilation, p.groups, d.in_channels, d.out_channels
         ),
     })
 }
@@ -2185,7 +2189,8 @@ impl Backend for MetalBackend {
 
     /// A convolution as im2col, a GEMM and a layout pass, at any stride and
     /// padding (the patch embedding, 1x1 and 3x3 convolutions, the strided
-    /// downsampler). Dilation above 1 and groups are
+    /// downsampler); a depthwise one (`groups == in == out`) on its own
+    /// direct kernel. Dilation above 1 and other grouped convolutions are
     /// [`OjasError::Unsupported`].
     fn conv2d_forward(
         &self,
@@ -2202,6 +2207,18 @@ impl Backend for MetalBackend {
         let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
         let bias_arg = bias.as_ref().map(|b| self.f32(OP, b)).transpose()?;
         let geom = conv_geom(OP, &dims)?;
+        if dims.params.groups > 1 {
+            // Depthwise: one direct kernel, no im2col matrix and no scratch.
+            u32_dim(OP, product(OP, &dims.out_shape())?)?;
+            let cmd = Cmd::DepthwiseConv2d {
+                op: OP,
+                x,
+                w,
+                bias: bias_arg,
+                geom,
+            };
+            return self.one(OP, &dims.out_shape(), 0, cmd);
+        }
         let rows = product(OP, &[dims.batch, dims.out_height, dims.out_width])?;
         let width = product(OP, &[dims.in_channels, dims.kernel[0], dims.kernel[1]])?;
         let cols = product(OP, &[rows, width])?;

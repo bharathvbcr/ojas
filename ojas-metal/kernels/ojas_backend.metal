@@ -1818,6 +1818,49 @@ kernel void ojas_conv_nchw(
     y[i] = has_bias != 0u ? v + bias[o] : v;
 }
 
+/// Depthwise convolution (`groups == c == o`, one filter per channel), one
+/// thread per output element: the taps in ascending `(i, j)` order, a tap on
+/// padding skipped, the bias added last, so every value is the CPU's bit for
+/// bit. `w` is `[c, kh, kw]`; `has_bias` 0 leaves the sum as it is.
+kernel void ojas_dwconv(
+    device const float *x [[buffer(0)]],
+    device const float *w [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant uint &total [[buffer(4)]],
+    constant uint &c [[buffer(5)]],
+    constant uint &h [[buffer(6)]],
+    constant uint &wd [[buffer(7)]],
+    constant uint &kh [[buffer(8)]],
+    constant uint &kw [[buffer(9)]],
+    constant uint &sh [[buffer(10)]],
+    constant uint &sw [[buffer(11)]],
+    constant uint &ph [[buffer(12)]],
+    constant uint &pw [[buffer(13)]],
+    constant uint &oh [[buffer(14)]],
+    constant uint &ow [[buffer(15)]],
+    constant uint &has_bias [[buffer(16)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint ox = i % ow;
+    const uint oy = (i / ow) % oh;
+    const uint ch = (i / (ow * oh)) % c;
+    const uint n = i / (ow * oh * c);
+    const ulong plane = ((ulong)n * c + ch) * h * wd;
+    float acc = 0.0f;
+    for (uint ky = 0u; ky < kh; ++ky) {
+        const int iy = (int)(oy * sh + ky) - (int)ph;
+        if (iy < 0 || iy >= (int)h) continue;
+        for (uint kx = 0u; kx < kw; ++kx) {
+            const int ix = (int)(ox * sw + kx) - (int)pw;
+            if (ix < 0 || ix >= (int)wd) continue;
+            acc += w[((ulong)ch * kh + ky) * kw + kx] * x[plane + (ulong)iy * wd + (uint)ix];
+        }
+    }
+    y[i] = has_bias != 0u ? acc + bias[ch] : acc;
+}
+
 /// `conv_transpose2d_forward` with kernel == stride and no padding: the
 /// product `prod[(n, y, x)][(o, i, j)]` of the NHWC input with the
 /// `[c, o kh kw]` weight is the output pixel (y kh + i, x kw + j) of channel

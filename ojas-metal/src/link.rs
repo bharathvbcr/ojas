@@ -643,6 +643,15 @@ pub(crate) enum Cmd {
         v: Arg,
         geom: EncAttnGeom,
     },
+    /// `conv2d_forward` with `groups == c == o`: one direct kernel, no
+    /// im2col. `geom.c == geom.o`; `bias` is read when present.
+    DepthwiseConv2d {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        geom: ConvGeom,
+    },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {
         args: [Arg; 6],
