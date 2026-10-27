@@ -54,7 +54,7 @@ pub use shapes::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
     causal_sdpa_forward_dims, channel_layer_norm_forward_dims, chunked_gdn_backward_dims,
     chunked_gdn_forward_dims, clip_grad_norm_dims, concat_dims, cross_entropy_mean_backward_dims,
-    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
+    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims, fill_dims,
     gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
     gdn_log_decay_forward_dims, gelu_erf_forward_dims, group_norm_forward_dims,
     inverse_permutation, kv_cache_write_dims, layer_norm_forward_dims, linear_backward_dims,

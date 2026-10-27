@@ -1,7 +1,7 @@
-//! Axis permutation, concatenation and slicing along an axis: values move,
-//! nothing is computed.
+//! Axis permutation, concatenation and slicing along an axis, and a constant
+//! fill: values move or are written, nothing is computed.
 
-use ojas_core::{permute_dims, Budget, ConcatDims, OjasError, Scratch, SliceDims, Tensor};
+use ojas_core::{permute_dims, Budget, ConcatDims, DType, OjasError, Scratch, SliceDims, Tensor};
 #[cfg(target_os = "macos")]
 use ojas_core::{BackendId, Numerics};
 
@@ -186,6 +186,43 @@ pub(crate) fn slice(
         dst.copy_from_slice(&src[from..from + run]);
     }
     Tensor::from_scratch(out, &out_shape)
+}
+
+/// A tensor of `shape` and `dtype` with every element `value`. `dtype` and
+/// `value` come from [`ojas_core::fill_dims`], which refused a value the
+/// dtype cannot hold exactly: an `F32` fill stores `value`'s bits, a `U32`
+/// fill its integer, a `Bf16` fill the high half of its bits (the low half is
+/// clear). The output is the only charge, and nothing is read.
+pub(crate) fn fill(
+    op: &'static str,
+    budget: &Budget,
+    shape: &[usize],
+    dtype: DType,
+    value: f32,
+) -> Result<Tensor, OjasError> {
+    let n = product(op, shape)?;
+    match dtype {
+        DType::F32 => {
+            let mut out = Scratch::<f32>::try_alloc(n, budget)?;
+            out.as_mut_slice().fill(value);
+            Tensor::from_scratch(out, shape)
+        }
+        DType::U32 => {
+            let mut out = Scratch::<u32>::try_alloc(n, budget)?;
+            out.as_mut_slice().fill(value as u32);
+            Tensor::from_scratch(out, shape)
+        }
+        DType::Bf16 => {
+            let mut out = Tensor::zeros(shape, DType::Bf16, budget)?;
+            out.bf16_slice_mut()?.fill((value.to_bits() >> 16) as u16);
+            Ok(out)
+        }
+        got => Err(OjasError::Dtype {
+            op,
+            expected: DType::F32,
+            got,
+        }),
+    }
 }
 
 /// How to move `src` into an output-ordered buffer.

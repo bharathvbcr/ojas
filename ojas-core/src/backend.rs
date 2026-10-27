@@ -1476,6 +1476,19 @@ pub trait Backend {
         Err(unsupported_inference(self.id(), "slice"))
     }
 
+    /// A new tensor of `shape` and `dtype` with every element `value`, torch's
+    /// `torch.full(shape, value, dtype=dtype)`, made on this backend: no host
+    /// buffer is uploaded. `F32` stores `value`'s bits; `Bf16` takes only a
+    /// value a bf16 holds exactly and `U32` only an integer in `0..2^32`, and
+    /// anything else is [`OjasError::OutOfRange`], never rounded; a NaN or an
+    /// infinity is [`OjasError::NonFinite`], as no op takes or stores one.
+    /// The output is the only charge. [`crate::fill_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        let _ = (shape, dtype, value);
+        Err(unsupported_inference(self.id(), "fill"))
+    }
+
     /// `y = x @ W^T + b` for `x` `[..., in]`, `W` `[out, in]` and an `F32`
     /// `bias` `[out]`: [`Self::linear_forward`] and then one `f32` add of the
     /// bias, so the product is the `linear_forward` bits and the bias adds
@@ -2048,6 +2061,7 @@ macro_rules! with_backend_methods {
             op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn concat(&self, inputs: &[&$crate::Tensor], axis: usize) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn slice(&self, input: &$crate::Tensor, axis: usize, start: usize, len: usize) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn fill(&self, shape: &[usize], dtype: $crate::DType, value: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_add_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_mul_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2856,6 +2870,7 @@ pub(crate) mod tests {
             op(backend.relu_forward(&t)),
             op(backend.concat(&[&t, &t], 0)),
             op(backend.slice(&t, 0, 0, 1)),
+            op(backend.fill(&[1], DType::F32, 0.0)),
             op(backend.linear_bias_forward(&t, &t, &t)),
             op(backend.broadcast_add_forward(&t, &t)),
             op(backend.broadcast_mul_forward(&t, &t)),
@@ -2938,6 +2953,7 @@ pub(crate) mod tests {
             "relu_forward",
             "concat",
             "slice",
+            "fill",
             "linear_bias_forward",
             "broadcast_add_forward",
             "broadcast_mul_forward",

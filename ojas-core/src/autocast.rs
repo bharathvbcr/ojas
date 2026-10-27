@@ -1190,6 +1190,14 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(out)
     }
 
+    /// A constant is exact in its dtype ([`crate::fill_dims`] refuses a value
+    /// that is not), so nothing is rounded and the output keeps the backend's
+    /// tag.
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        self.inner.fill(shape, dtype, value)
+    }
+
     /// Data movement, as [`Self::permute`]: the tag follows the input.
     fn slice(
         &self,

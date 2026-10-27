@@ -29,6 +29,7 @@
 //! ([`crate::check_adamw`], [`crate::clip_scale`]), and device limits such as
 //! [`crate::METAL_MAX_HEAD_DIM`], 32-bit index caps and workgroup limits.
 
+use crate::autocast::round_f32_to_bf16;
 use crate::{AttentionOpts, CeChunk, DType, GdnInputs, OjasError, Tensor, GDN_CHECKPOINT_TOKENS};
 
 const EMBEDDING_FORWARD: &str = "embedding_forward";
@@ -73,6 +74,7 @@ const GELU_ERF_FORWARD: &str = "gelu_erf_forward";
 const RELU_FORWARD: &str = "relu_forward";
 const CONCAT: &str = "concat";
 const SLICE: &str = "slice";
+const FILL: &str = "fill";
 const LINEAR_BIAS_FORWARD: &str = "linear_bias_forward";
 const BROADCAST_ADD_FORWARD: &str = "broadcast_add_forward";
 const BROADCAST_MUL_FORWARD: &str = "broadcast_mul_forward";
@@ -1584,6 +1586,49 @@ pub fn concat_dims(inputs: &[&Tensor], axis: usize) -> Result<ConcatDims, OjasEr
         axis_lens,
         out_shape,
     })
+}
+
+/// [`crate::Backend::fill`]: a `shape` with no zero extent whose element and
+/// byte counts fit `usize` ([`OjasError::OutOfRange`]; rank 0 is one
+/// element), a `dtype` of `F32`, `Bf16` or `U32` (`F16` is a
+/// [`OjasError::Dtype`] naming `F32`), and then the value, which must be
+/// finite ([`OjasError::NonFinite`], as no op takes or stores a NaN or an
+/// infinity) and exactly representable in `dtype`: any finite `f32` for
+/// `F32`; one a bf16 holds bit for bit for `Bf16`; an integer in `0..2^32`
+/// for `U32` (`-0.0` is 0). Anything else is [`OjasError::OutOfRange`], never
+/// rounded or truncated. Returns the element count.
+pub fn fill_dims(shape: &[usize], dtype: DType, value: f32) -> Result<usize, OjasError> {
+    const OP: &str = FILL;
+    if dtype == DType::F16 {
+        return Err(OjasError::Dtype {
+            op: OP,
+            expected: DType::F32,
+            got: dtype,
+        });
+    }
+    if shape.contains(&0) {
+        return Err(refuse(OP, "empty tensor"));
+    }
+    let n = sized_product(OP, shape, dtype.size())?;
+    if !value.is_finite() {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    match dtype {
+        DType::Bf16 if round_f32_to_bf16(value).to_bits() != value.to_bits() => {
+            return Err(too_large(
+                OP,
+                format!("{value:e} is not exactly representable in bf16"),
+            ));
+        }
+        DType::U32 if value.fract() != 0.0 || value < 0.0 || value >= 4_294_967_296.0 => {
+            return Err(too_large(
+                OP,
+                format!("{value:e} is not an integer in 0..2^32"),
+            ));
+        }
+        _ => {}
+    }
+    Ok(n)
 }
 
 /// [`crate::Backend::slice`]: an `F32` `input` and `axis` below its rank;
@@ -4411,6 +4456,73 @@ mod tests {
             op,
             "overflows",
         );
+    }
+
+    #[test]
+    fn fill_dims_take_exactly_representable_finite_values() {
+        let op = "fill";
+        assert_eq!(fill_dims(&[2, 3], DType::F32, 1.5).unwrap(), 6);
+        assert_eq!(fill_dims(&[], DType::F32, -0.0).unwrap(), 1);
+        for value in [f32::MAX, f32::MIN, f32::MIN_POSITIVE, 1e-45, -0.0] {
+            assert_eq!(fill_dims(&[4], DType::F32, value).unwrap(), 4);
+        }
+        // bf16 holds a value with its low 16 bits clear, and no other.
+        for value in [1.0, -2.5, 0.15625, -0.0, f32::from_bits(0x7f7f_0000)] {
+            assert_eq!(fill_dims(&[2], DType::Bf16, value).unwrap(), 2, "{value}");
+        }
+        for value in [
+            0.1,
+            1.0 + f32::EPSILON,
+            f32::from_bits(0x3f80_0001),
+            f32::MAX,
+        ] {
+            range_err(fill_dims(&[2], DType::Bf16, value), op, "bf16");
+        }
+        // U32 takes integers in 0..2^32 only.
+        for value in [0.0, -0.0, 1.0, 255.0, 16_777_216.0, 4_294_967_040.0] {
+            assert_eq!(fill_dims(&[2], DType::U32, value).unwrap(), 2, "{value}");
+        }
+        for value in [
+            0.5,
+            -0.5,
+            -1.0,
+            1e-45,
+            4_294_967_296.0,
+            1e30,
+            f32::MAX,
+            f32::MIN,
+        ] {
+            range_err(fill_dims(&[2], DType::U32, value), op, "0..2^32");
+        }
+        for dtype in [DType::F32, DType::Bf16, DType::U32] {
+            for value in [
+                f32::NAN,
+                f32::from_bits(0x7f80_0001),
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+            ] {
+                assert!(
+                    matches!(
+                        fill_dims(&[2], dtype, value),
+                        Err(OjasError::NonFinite { op: "fill" })
+                    ),
+                    "{dtype:?} {value}"
+                );
+            }
+        }
+        dtype_err(fill_dims(&[2], DType::F16, 1.0), op, DType::F32, DType::F16);
+        // Shape rules come first: a NaN in an empty fill reports the shape.
+        shape_err(fill_dims(&[2, 0], DType::F32, f32::NAN), op, "empty tensor");
+        shape_err(fill_dims(&[0], DType::U32, 0.5), op, "empty tensor");
+        range_err(
+            fill_dims(&[1 << 40, 1 << 40], DType::F32, f32::NAN),
+            op,
+            "shape product",
+        );
+        range_err(fill_dims(&[usize::MAX], DType::F32, 0.0), op, "byte length");
+        range_err(fill_dims(&[1 << 62], DType::U32, 0.0), op, "byte length");
+        // bf16 elements are two bytes, so twice as many fit.
+        assert_eq!(fill_dims(&[1 << 62], DType::Bf16, 0.0).unwrap(), 1 << 62);
     }
 
     #[test]
