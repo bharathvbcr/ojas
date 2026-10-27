@@ -1,0 +1,12 @@
+mac_heavy: 2026-10-27T04:22:02Z '78-c2-clippy2' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-10-27T04:23:03Z '78-c2-clippy2' waiting 60s for the lock; holder: label=tessl-attn-bf16-gdn-diag2 pid=88211 start=2026-10-27T04:18:21Z cwd=/Users/bharath/Code/research/tessl 
+mac_heavy: 2026-10-27T04:27:03Z '78-c2-clippy2' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-10-27T04:32:04Z '78-c2-clippy2' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-10-27T04:37:05Z '78-c2-clippy2' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-10-27T04:42:06Z '78-c2-clippy2' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-10-27T04:45:46Z '78-c2-clippy2' waiting 1420s for the lock; holder: label=78-b2-cpu pid=1982 start=2026-10-27T04:24:37Z cwd=/Users/bharath/Code/research/ojas/backups/78-tools/jobs 
+mac_heavy: 2026-10-27T04:47:06Z '78-c2-clippy2' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-10-27T04:47:47Z '78-c2-clippy2' holds the lock (waited 1540s; load 12.25, 1025 processes); running: cargo clippy -p ojas-metal --example attention_spiketrack_bench --manifest-path /Users/bharath/Code/research/ojas-78c/Cargo.toml -- -D warnings
+    Checking ojas-metal v0.1.0 (/Users/bharath/Code/research/ojas-78c/ojas-metal)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.97s
+mac_heavy: 2026-10-27T04:47:49Z '78-c2-clippy2' finished with exit 0
