@@ -116,6 +116,35 @@ mod bench {
         [v[0], v[1], v[2]]
     }
 
+    /// `vm_stat` Pageouts and Swapins (cumulative page counts) and `vm.swapusage`.
+    fn vm_pressure() -> (u64, u64, String) {
+        let vm = Command::new("vm_stat").output().expect("vm_stat");
+        let text = String::from_utf8_lossy(&vm.stdout).into_owned();
+        let field = |name: &str| -> u64 {
+            text.lines()
+                .find_map(|l| l.trim().strip_prefix(name))
+                .and_then(|r| {
+                    r.trim_start_matches(':')
+                        .trim()
+                        .trim_end_matches('.')
+                        .parse()
+                        .ok()
+                })
+                .unwrap_or_else(|| panic!("vm_stat has no {name}: {text:?}"))
+        };
+        let swap = Command::new("sysctl")
+            .args(["-n", "vm.swapusage"])
+            .output()
+            .expect("sysctl vm.swapusage");
+        (
+            field("Pageouts"),
+            field("Swapins"),
+            String::from_utf8_lossy(&swap.stdout)
+                .trim()
+                .replace('\t', " "),
+        )
+    }
+
     struct Stat {
         min: f64,
         p10: f64,
@@ -234,6 +263,7 @@ mod bench {
         let all: Vec<&Arm<'_>> = arms.iter().chain(std::iter::once(control)).collect();
         let count = all.len();
         let load_start = load();
+        let vm0 = vm_pressure();
         let mut samples: Vec<Vec<Sample>> = vec![Vec::with_capacity(runs); 2 * count];
         for round in 0..warmups + runs {
             for pass in 0..2 {
@@ -253,6 +283,9 @@ mod bench {
             }
         }
         let load_end = load();
+        let vm1 = vm_pressure();
+        let pageouts = vm1.0.saturating_sub(vm0.0);
+        let swapins = vm1.1.saturating_sub(vm0.1);
         let mut noisy_gating = 0;
         let mut control_tflops = 0.0;
         for (i, arm) in all.iter().enumerate() {
@@ -292,6 +325,24 @@ mod bench {
                 );
             }
         }
+        for (i, arm) in all.iter().enumerate() {
+            for pass in 0..2 {
+                for (round, s) in samples[pass * count + i].iter().enumerate() {
+                    let trig: Vec<String> = (0..9)
+                        .filter(|&t| s.by[t] > 0.0)
+                        .map(|t| format!("{}={:.2}", TRIGGERS[t], s.by[t]))
+                        .collect();
+                    println!(
+                        "# sample\t{label}\t{attempt}\t{}\t{pass}\t{round}\t{:.4}\t{:.2}\t{:.2}\t{}",
+                        arm.name,
+                        s.ms,
+                        s.waits,
+                        s.dispatches,
+                        trig.join(" ")
+                    );
+                }
+            }
+        }
         // Rounds in which the control, run in the same round, stayed within
         // CONTROL_TOL of its own median in both passes: a contended round shows up
         // in the control. Per arm, the median over those rounds and over all rounds
@@ -329,16 +380,25 @@ mod bench {
         }
         let load_ok = load_start[0] <= MAX_LOAD && load_end[0] <= MAX_LOAD;
         let control_ok = (control_tflops / CONTROL_TFLOPS - 1.0).abs() <= CONTROL_TOL;
-        let clean = load_ok && control_ok && noisy_gating == 0;
+        let pressure = pageouts != 0 || swapins != 0;
+        let clean = load_ok && control_ok && noisy_gating == 0 && !pressure;
         println!(
-            "# attempt\t{label}\t{attempt}\tload_start {:.2} {:.2} {:.2}\tload_end {:.2} {:.2} {:.2}\tcontrol_tflops {control_tflops:.2}\tcontrol_ok {control_ok}\tnoisy_pairs_gating {noisy_gating}\tverdict {}",
+            "# attempt\t{label}\t{attempt}\tload_start {:.2} {:.2} {:.2}\tload_end {:.2} {:.2} {:.2}\tcontrol_tflops {control_tflops:.2}\tcontrol_ok {control_ok}\tnoisy_pairs_gating {noisy_gating}\tpageouts_delta {pageouts}\tswapins_delta {swapins}\tswap_before {}\tswap_after {}\tverdict {}",
             load_start[0],
             load_start[1],
             load_start[2],
             load_end[0],
             load_end[1],
             load_end[2],
-            if clean { "clean" } else { "repeat" }
+            vm0.2,
+            vm1.2,
+            if clean {
+                "clean"
+            } else if pressure {
+                "pressure"
+            } else {
+                "repeat"
+            }
         );
         clean
     }
