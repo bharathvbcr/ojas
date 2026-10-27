@@ -207,6 +207,9 @@ const KERNELS: &[&str] = &[
     "ojas_xattn_combine_d32",
     "ojas_conv_nchw",
     "ojas_bilinear",
+    "ojas_concat_part",
+    "ojas_slice",
+    "ojas_fill_words",
     "ojas_gn_sum",
     "ojas_gn_sq",
     "ojas_gn_apply",
@@ -1544,6 +1547,21 @@ impl Worker {
                 geom,
             } => self.depthwise_conv2d(op, [x, w], bias, geom),
             Cmd::Bilinear { x, geom } => self.bilinear(x, geom),
+            Cmd::Concat {
+                xs,
+                outer,
+                inner,
+                axis_lens,
+            } => self.concat(&xs, outer, inner, &axis_lens),
+            Cmd::Slice {
+                x,
+                outer,
+                inner,
+                axis_len,
+                start,
+                len,
+            } => self.slice([x], [outer, inner, axis_len, start, len]),
+            Cmd::Fill { bytes, word } => self.fill(bytes, word),
             Cmd::GroupNorm { x, w, b, geom, eps } => self.group_norm([x, w, b], geom, eps),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
@@ -2701,6 +2719,126 @@ impl Worker {
         // `ojas_gn_apply` flags a non-finite output and a non-finite mean or
         // variance itself: no scan of `y` follows.
         Ok(self.keep(vec![y]))
+    }
+
+    /// `concat`: one `ojas_concat_part` per input, each writing its rows
+    /// into the output at its offset along the axis. Each input is scanned
+    /// by its kernel.
+    fn concat(&mut self, xs: &[Arg], outer: u32, inner: u32, axis_lens: &[u32]) -> Res<Reply> {
+        const OP: &str = "concat";
+        if xs.is_empty() || xs.len() != axis_lens.len() || outer == 0 || inner == 0 {
+            return Err(metal_err(format!("{OP}: no inputs or a zero extent")));
+        }
+        let axis_total = axis_lens
+            .iter()
+            .try_fold(0u32, |acc, &l| acc.checked_add(l))
+            .ok_or_else(|| metal_err(format!("{OP}: summed axis overflows")))?;
+        let row_out = axis_total
+            .checked_mul(inner)
+            .ok_or_else(|| metal_err(format!("{OP}: output row overflows")))?;
+        let total = (outer as usize)
+            .checked_mul(row_out as usize)
+            .ok_or_else(|| metal_err(format!("{OP}: output extent overflows")))?;
+        let views = xs.iter().map(|a| self.view(*a)).collect::<Res<Vec<V>>>()?;
+        let mut offset = 0u32;
+        for (v, &len) in views.iter().zip(axis_lens) {
+            let row_in = len
+                .checked_mul(inner)
+                .ok_or_else(|| metal_err(format!("{OP}: input row overflows")))?;
+            if len == 0 || v.n != outer as usize * row_in as usize {
+                return Err(metal_err(format!(
+                    "{OP}: an input of {} values is not {outer} rows of {row_in}",
+                    v.n
+                )));
+            }
+        }
+        let y = self.fresh(total)?;
+        let st = self.status(OP)?;
+        for (v, &len) in views.iter().zip(axis_lens) {
+            let row_in = len * inner;
+            let n = u32_of(v.n)?;
+            self.k1("ojas_concat_part", v.n, |b| {
+                bind(b, v, 0);
+                bind(b, &y, 1);
+                set_u32(b, n, 2);
+                set_u32(b, row_in, 3);
+                set_u32(b, row_out, 4);
+                set_u32(b, offset, 5);
+                bind_st(b, &st, 6);
+            })?;
+            offset += row_in;
+        }
+        Ok(self.keep(vec![y]))
+    }
+
+    /// `slice`: the whole input is scanned (the CPU refuses a non-finite value
+    /// wherever it sits), then `ojas_slice` copies the rows.
+    fn slice(
+        &mut self,
+        [x]: [Arg; 1],
+        [outer, inner, axis_len, start, len]: [u32; 5],
+    ) -> Res<Reply> {
+        const OP: &str = "slice";
+        let xv = self.view(x)?;
+        let row_out = len
+            .checked_mul(inner)
+            .ok_or_else(|| metal_err(format!("{OP}: output row overflows")))?;
+        let row_in = axis_len
+            .checked_mul(inner)
+            .ok_or_else(|| metal_err(format!("{OP}: input row overflows")))?;
+        let offset = start
+            .checked_mul(inner)
+            .ok_or_else(|| metal_err(format!("{OP}: offset overflows")))?;
+        let total = (outer as usize)
+            .checked_mul(row_out as usize)
+            .ok_or_else(|| metal_err(format!("{OP}: output extent overflows")))?;
+        if len == 0
+            || u64::from(start) + u64::from(len) > u64::from(axis_len)
+            || xv.n != outer as usize * row_in as usize
+        {
+            return Err(metal_err(format!(
+                "{OP}: rows {start}..+{len} of {axis_len} do not fit {} values",
+                xv.n
+            )));
+        }
+        let n = u32_of(total)?;
+        let y = self.fresh(total)?;
+        let st = self.status(OP)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.k1("ojas_slice", total, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, n, 2);
+            set_u32(b, row_out, 3);
+            set_u32(b, row_in, 4);
+            set_u32(b, offset, 5);
+        })?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// `fill`: every word of a fresh `bytes`-byte buffer is `word`. The
+    /// buffer is a whole number of words; a bf16 tensor of odd length ends in
+    /// a half that is padding.
+    fn fill(&mut self, bytes: usize, word: u32) -> Res<Reply> {
+        let words = bytes.div_ceil(4);
+        let n = u32_of(words)?;
+        let buf = self.alloc(
+            words
+                .checked_mul(4)
+                .ok_or_else(|| metal_err("fill size overflows"))?
+                .max(4),
+        )?;
+        let y = V {
+            buf,
+            off: 0,
+            n: words,
+        };
+        self.k1("ojas_fill_words", words, |b| {
+            bind(b, &y, 0);
+            set_u32(b, n, 1);
+            set_u32(b, word, 2);
+        })?;
+        Ok(self.adopt(y.buf, bytes))
     }
 
     /// Bilinear resample on `ojas_bilinear`. The whole input is scanned

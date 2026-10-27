@@ -700,6 +700,30 @@ pub(crate) enum Cmd {
         geom: GroupNormGeom,
         eps: f32,
     },
+    /// `concat` of `xs` along an axis: one `ojas_concat_part` per input into
+    /// the output, whose rows are `axis_lens.sum() * inner` long. Every
+    /// input is `outer` rows of `axis_lens[i] * inner`.
+    Concat {
+        xs: Vec<Arg>,
+        outer: u32,
+        inner: u32,
+        axis_lens: Vec<u32>,
+    },
+    /// `slice`: `len` rows of `inner` starting at row `start` of each of
+    /// `outer` blocks of `axis_len` rows.
+    Slice {
+        x: Arg,
+        outer: u32,
+        inner: u32,
+        axis_len: u32,
+        start: u32,
+        len: u32,
+    },
+    /// `fill`: a fresh buffer of `bytes` bytes whose every word is `word`.
+    Fill {
+        bytes: usize,
+        word: u32,
+    },
     /// `interpolate_bilinear_forward` on `ojas_bilinear`.
     Bilinear {
         x: Arg,

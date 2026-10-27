@@ -2162,6 +2162,66 @@ kernel void ojas_gn_apply(
     if (bad) ojas_flag(st, ST_OUT);
 }
 
+// ---------------------------------------------- concat, slice and fill ---
+//
+// `Backend::concat`, `slice` and `fill`: values move as bits, no arithmetic.
+// A copy kernel reads each element as a word and writes it to its place. The
+// CPU refuses a non-finite input as NonFinite wherever it sits, so a concat
+// kernel sets ST_IN on every element it copies (it copies the whole input),
+// and a slice, which copies only part, has its whole input scanned by the
+// host: the output holds only copied finite bits, so it needs no check.
+//
+//   ojas_concat_part  one input of a concat: element i of the input (rows of
+//                     `row_in = len_i * inner`) lands in rows of `row_out =
+//                     axis_total * inner` at column `offset = start_i * inner`
+//   ojas_slice        element i of the output (rows of `row_out = len * inner`)
+//                     reads the input's rows of `row_in = axis_len * inner` at
+//                     `offset = start * inner`
+//   ojas_fill_words   every word of the output is `word` (an f32 or u32 value,
+//                     or a bf16 pattern in both halves)
+
+kernel void ojas_concat_part(
+    device const uint *x [[buffer(0)]],
+    device uint *y [[buffer(1)]],
+    constant uint &total [[buffer(2)]],
+    constant uint &row_in [[buffer(3)]],
+    constant uint &row_out [[buffer(4)]],
+    constant uint &offset [[buffer(5)]],
+    device atomic_uint *st [[buffer(6)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint o = i / row_in;
+    const uint r = i - o * row_in;
+    const uint v = x[i];
+    y[(ulong)o * row_out + offset + r] = v;
+    if (!isfinite(as_type<float>(v))) ojas_flag(st, ST_IN);
+}
+
+kernel void ojas_slice(
+    device const uint *x [[buffer(0)]],
+    device uint *y [[buffer(1)]],
+    constant uint &total [[buffer(2)]],
+    constant uint &row_out [[buffer(3)]],
+    constant uint &row_in [[buffer(4)]],
+    constant uint &offset [[buffer(5)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint o = i / row_out;
+    const uint r = i - o * row_out;
+    y[i] = x[(ulong)o * row_in + offset + r];
+}
+
+kernel void ojas_fill_words(
+    device uint *y [[buffer(0)]],
+    constant uint &words [[buffer(1)]],
+    constant uint &word [[buffer(2)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i < words) y[i] = word;
+}
+
 // ---------------------------------------- broadcast, scale and softmax ---
 //
 // Forward ops of the encoder family (see `Backend::broadcast_add_forward`,

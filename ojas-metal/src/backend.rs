@@ -81,9 +81,9 @@ use ojas_core::{
     cached_attention_dims, causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims,
     causal_sdpa_backward_dims, causal_sdpa_forward_dims, channel_layer_norm_forward_dims,
     check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
-    clip_scale, conv2d_forward_dims, conv_transpose2d_forward_dims,
+    clip_scale, concat_dims, conv2d_forward_dims, conv_transpose2d_forward_dims,
     cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
-    embedding_forward_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
+    embedding_forward_dims, fill_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
     gdn_log_decay_backward_dims, gdn_log_decay_forward_dims, gelu_erf_forward_dims,
     group_norm_forward_dims, interpolate_bilinear_forward_dims, kv_cache_write_dims,
     layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
@@ -95,13 +95,13 @@ use ojas_core::{
     rope_half_split_backward_dims, rope_half_split_forward_dims, rope_interleaved_backward_dims,
     rope_interleaved_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
     scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
-    silu_forward_dims, softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
-    BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
-    ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
-    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe,
-    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
-    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    silu_forward_dims, slice_dims, softmax_forward_dims, topk_rows_dims,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
+    AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk, CeGrads,
+    Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams, DType,
+    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
+    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
     ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
@@ -2527,6 +2527,94 @@ impl Backend for MetalBackend {
             scratch,
             Cmd::GroupNorm { x, w, b, geom, eps },
         )
+    }
+
+    /// A bit copy of every input into place along `axis`, one dispatch per
+    /// input; a non-finite input is a deferred fault under `concat`. The
+    /// output is the only charge.
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        const OP: &str = "concat";
+        let dims = concat_dims(inputs, axis)?;
+        let xs = inputs
+            .iter()
+            .map(|t| self.f32(OP, t))
+            .collect::<Res<Vec<Arg>>>()?;
+        u32_dim(OP, product(OP, &dims.out_shape)?)?;
+        let cmd = Cmd::Concat {
+            xs,
+            outer: u32_dim(OP, dims.outer)?,
+            inner: u32_dim(OP, dims.inner)?,
+            axis_lens: dims
+                .axis_lens
+                .iter()
+                .map(|&l| u32_dim(OP, l))
+                .collect::<Res<Vec<u32>>>()?,
+        };
+        self.one(OP, &dims.out_shape, 0, cmd)
+    }
+
+    /// A bit copy of rows `start..start + len` of `axis`; a non-finite element
+    /// anywhere in the input is a deferred fault under `slice`, as the CPU
+    /// refuses it. The output is the only charge.
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "slice";
+        let dims = slice_dims(input, axis, start, len)?;
+        let x = self.f32(OP, input)?;
+        u32_dim(OP, product(OP, &dims.out_shape)?)?;
+        let cmd = Cmd::Slice {
+            x,
+            outer: u32_dim(OP, dims.outer)?,
+            inner: u32_dim(OP, dims.inner)?,
+            axis_len: u32_dim(OP, dims.axis_len)?,
+            start: u32_dim(OP, dims.start)?,
+            len: u32_dim(OP, dims.len)?,
+        };
+        self.one(OP, &dims.out_shape, 0, cmd)
+    }
+
+    /// A buffer filled on the device (no host buffer is uploaded): `F32` and
+    /// `U32` store the value, `Bf16` its pattern. The output is the only
+    /// charge.
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "fill";
+        let n = fill_dims(shape, dtype, value)?;
+        let bytes = n.checked_mul(dtype.size()).ok_or_else(|| overflow(OP))?;
+        u32_dim(OP, bytes.div_ceil(4))?;
+        let word = match dtype {
+            DType::F32 => value.to_bits(),
+            // The value is exactly a bf16: its high half is the pattern.
+            DType::Bf16 => {
+                let half = value.to_bits() >> 16;
+                half | (half << 16)
+            }
+            // An integer in 0..2^32 (fill_dims), so the cast is exact.
+            DType::U32 => value as u32,
+            other => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::F32,
+                    got: other,
+                })
+            }
+        };
+        let reservation = self.budget.try_reserve(bytes as u64)?;
+        let nb = match self.link.call(Cmd::Fill { bytes, word })? {
+            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
+            id: nb.id,
+            len: nb.bytes,
+            link: Arc::clone(&self.link),
+            ids: None,
+        });
+        Tensor::from_device_reserved(buf, shape, dtype, reservation)
     }
 
     fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
