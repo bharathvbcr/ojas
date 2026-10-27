@@ -1,0 +1,84 @@
+# Variant sweep of the stage 2 kernel (job a-at2s; code on branch wip/78-attn2-simdgroup). One process per (variant, row), `attention_stage2_bench 5 25 <row>` with OJAS_XMMA_VARIANT set. Variant rX_bY_lZ: X eight-row fragments per simdgroup (so 8 X rows each, 128 rows a threadgroup), Y keys per threadgroup-memory tile, Z = 1 skips the rescale of O on a tile where no row's max moved. The default of attempt 2 in bench-output.txt is r2_b64_l0.
+# These runs were NOT load-clean (the 1-minute load at each run's start is on its `# sweep` line, 5.8 to 12.1, against the rules' 6.0): they are a comparison of kernel shapes within a run, not gate rows. Every run's split-K arm, in the same process, is the reference (35 to 37 ms at m = 15584 and 82 to 94 ms at m = 36320, as in the clean attempt).
+# Reading: more fragments per simdgroup is much slower (r4 against r2: 228 to 247 ms against 84 to 109 at m = 15584), a smaller key tile is faster (b32 against b64), the lazy rescale is a few percent. That is the signature of register pressure; no variant is within a factor of 2 of split-K.
+# Each block: the `# row` summary the example prints (stage 2 against split-K) and the stage 2 and split-K rows (p10, median, p90 in ms).
+# sweep r2_b32_l0__16 load_start 6.98 6.77 8.92
+# row decoder D16 [1,8,80,16]x5184 | stage2-vs-splitK max abs out 1.30e-8 lse 9.54e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 0.199 ms (noise bar 0.043) REGRESSION
+decoder D16 [1,8,80,16]x5184	stage 2	p10 0.556 median 0.582 p90 0.599
+decoder D16 [1,8,80,16]x5184	split-K	p10 0.366 median 0.383 p90 0.392
+# sweep r2_b32_l0_detector load_start 6.98 6.77 8.92
+# row detector bias [1,8,201,32]x5184 | stage2-vs-splitK max abs out 1.86e-8 lse 1.91e-6 dispatches stage2 8 split-K 8 | stage2 - splitK = 1.040 ms (noise bar 0.139) REGRESSION
+detector bias [1,8,201,32]x5184	stage 2	p10 2.129 median 2.162 p90 2.268
+detector bias [1,8,201,32]x5184	split-K	p10 1.090 median 1.122 p90 1.168
+# sweep r2_b32_l0_m_15584 load_start 5.83 6.53 8.97
+# row memory cross m=15584 | stage2-vs-splitK max abs out 6.15e-8 lse 4.77e-6 vs pad-q 1.14e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 54.074 ms (noise bar 5.981) REGRESSION
+memory cross m=15584	stage 2	p10 88.933 median 91.080 p90 94.914
+memory cross m=15584	split-K	p10 35.333 median 37.006 p90 39.156
+# sweep r2_b32_l0_m_36320 load_start 7.06 6.77 9.03
+# row memory cross m=36320 | stage2-vs-splitK max abs out 5.96e-8 lse 5.72e-6 vs pad-q 1.37e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 133.926 ms (noise bar 23.368) REGRESSION
+memory cross m=36320	stage 2	p10 218.140 median 228.014 p90 241.508
+memory cross m=36320	split-K	p10 85.491 median 94.089 p90 99.858
+# sweep r2_b32_l1__16 load_start 6.70 6.71 8.64
+# row decoder D16 [1,8,80,16]x5184 | stage2-vs-splitK max abs out 1.30e-8 lse 9.54e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 0.184 ms (noise bar 0.063) REGRESSION
+decoder D16 [1,8,80,16]x5184	stage 2	p10 0.528 median 0.565 p90 0.592
+decoder D16 [1,8,80,16]x5184	split-K	p10 0.355 median 0.382 p90 0.412
+# sweep r2_b32_l1_detector load_start 6.70 6.71 8.64
+# row detector bias [1,8,201,32]x5184 | stage2-vs-splitK max abs out 1.86e-8 lse 1.91e-6 dispatches stage2 8 split-K 8 | stage2 - splitK = 0.976 ms (noise bar 0.098) REGRESSION
+detector bias [1,8,201,32]x5184	stage 2	p10 1.991 median 2.053 p90 2.089
+detector bias [1,8,201,32]x5184	split-K	p10 1.047 median 1.076 p90 1.115
+# sweep r2_b32_l1_m_15584 load_start 6.41 6.69 8.75
+# row memory cross m=15584 | stage2-vs-splitK max abs out 6.15e-8 lse 4.77e-6 vs pad-q 1.14e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 47.392 ms (noise bar 5.524) REGRESSION
+memory cross m=15584	stage 2	p10 81.308 median 84.507 p90 86.832
+memory cross m=15584	split-K	p10 35.419 median 37.115 p90 38.146
+# sweep r2_b32_l1_m_36320 load_start 6.04 6.60 8.69
+# row memory cross m=36320 | stage2-vs-splitK max abs out 5.96e-8 lse 5.72e-6 vs pad-q 1.37e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 113.267 ms (noise bar 20.279) REGRESSION
+memory cross m=36320	stage 2	p10 199.067 median 204.604 p90 219.346
+memory cross m=36320	split-K	p10 85.593 median 91.336 p90 100.170
+# sweep r2_b64_l1__16 load_start 6.41 6.69 8.75
+# row decoder D16 [1,8,80,16]x5184 | stage2-vs-splitK max abs out 1.30e-8 lse 9.54e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 0.322 ms (noise bar 0.053) REGRESSION
+decoder D16 [1,8,80,16]x5184	stage 2	p10 0.692 median 0.728 p90 0.745
+decoder D16 [1,8,80,16]x5184	split-K	p10 0.385 median 0.406 p90 0.438
+# sweep r2_b64_l1_detector load_start 6.53 6.72 8.77
+# row detector bias [1,8,201,32]x5184 | stage2-vs-splitK max abs out 2.61e-8 lse 1.91e-6 dispatches stage2 8 split-K 8 | stage2 - splitK = 1.360 ms (noise bar 0.179) REGRESSION
+detector bias [1,8,201,32]x5184	stage 2	p10 2.419 median 2.501 p90 2.598
+detector bias [1,8,201,32]x5184	split-K	p10 1.096 median 1.141 p90 1.209
+# sweep r2_b64_l1_m_15584 load_start 6.98 6.77 8.92
+# row memory cross m=15584 | stage2-vs-splitK max abs out 6.15e-8 lse 4.77e-6 vs pad-q 1.15e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 75.543 ms (noise bar 8.351) REGRESSION
+memory cross m=15584	stage 2	p10 107.681 median 112.969 p90 116.033
+memory cross m=15584	split-K	p10 35.846 median 37.426 p90 38.748
+# sweep r2_b64_l1_m_36320 load_start 7.14 6.81 8.90
+# row memory cross m=36320 | stage2-vs-splitK max abs out 6.05e-8 lse 5.72e-6 vs pad-q 1.36e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 180.633 ms (noise bar 34.575) REGRESSION
+memory cross m=36320	stage 2	p10 252.250 median 271.797 p90 286.825
+memory cross m=36320	split-K	p10 82.524 median 91.164 p90 97.819
+# sweep r4_b32_l0__16 load_start 11.21 7.94 8.90
+# row decoder D16 [1,8,80,16]x5184 | stage2-vs-splitK max abs out 1.30e-8 lse 9.54e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 0.672 ms (noise bar 0.154) REGRESSION
+decoder D16 [1,8,80,16]x5184	stage 2	p10 1.028 median 1.080 p90 1.182
+decoder D16 [1,8,80,16]x5184	split-K	p10 0.368 median 0.407 p90 0.482
+# sweep r4_b32_l0_detector load_start 11.66 7.98 8.92
+# row detector bias [1,8,201,32]x5184 | stage2-vs-splitK max abs out 1.86e-8 lse 1.91e-6 dispatches stage2 8 split-K 8 | stage2 - splitK = 3.012 ms (noise bar 0.188) REGRESSION
+detector bias [1,8,201,32]x5184	stage 2	p10 4.028 median 4.142 p90 4.216
+detector bias [1,8,201,32]x5184	split-K	p10 1.053 median 1.130 p90 1.178
+# sweep r4_b32_l0_m_15584 load_start 6.70 6.71 8.64
+# row memory cross m=15584 | stage2-vs-splitK max abs out 6.15e-8 lse 4.77e-6 vs pad-q 1.14e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 212.089 ms (noise bar 5.213) REGRESSION
+memory cross m=15584	stage 2	p10 243.937 median 247.149 p90 249.150
+memory cross m=15584	split-K	p10 34.766 median 35.061 p90 35.973
+# sweep r4_b32_l0_m_36320 load_start 6.63 6.70 8.58
+# row memory cross m=36320 | stage2-vs-splitK max abs out 5.96e-8 lse 5.72e-6 vs pad-q 1.37e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 496.164 ms (noise bar 20.804) REGRESSION
+memory cross m=36320	stage 2	p10 574.240 median 578.030 p90 595.044
+memory cross m=36320	split-K	p10 80.928 median 81.865 p90 87.295
+# sweep r4_b32_l1__16 load_start 12.09 8.73 9.10
+# row decoder D16 [1,8,80,16]x5184 | stage2-vs-splitK max abs out 1.30e-8 lse 9.54e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 0.678 ms (noise bar 0.139) REGRESSION
+decoder D16 [1,8,80,16]x5184	stage 2	p10 1.078 median 1.130 p90 1.178
+decoder D16 [1,8,80,16]x5184	split-K	p10 0.393 median 0.452 p90 0.532
+# sweep r4_b32_l1_detector load_start 12.09 8.73 9.10
+# row detector bias [1,8,201,32]x5184 | stage2-vs-splitK max abs out 1.86e-8 lse 1.91e-6 dispatches stage2 8 split-K 8 | stage2 - splitK = 2.980 ms (noise bar 0.260) REGRESSION
+detector bias [1,8,201,32]x5184	stage 2	p10 4.064 median 4.157 p90 4.324
+detector bias [1,8,201,32]x5184	split-K	p10 1.118 median 1.177 p90 1.243
+# sweep r4_b32_l1_m_15584 load_start 11.21 7.94 8.90
+# row memory cross m=15584 | stage2-vs-splitK max abs out 6.15e-8 lse 4.77e-6 vs pad-q 1.14e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 192.693 ms (noise bar 10.219) REGRESSION
+memory cross m=15584	stage 2	p10 226.952 median 227.887 p90 237.172
+memory cross m=15584	split-K	p10 34.783 median 35.194 p90 36.131
+# sweep r4_b32_l1_m_36320 load_start 10.37 7.95 8.88
+# row memory cross m=36320 | stage2-vs-splitK max abs out 5.96e-8 lse 5.72e-6 vs pad-q 1.37e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 455.669 ms (noise bar 47.757) REGRESSION
+memory cross m=36320	stage 2	p10 529.534 median 545.595 p90 577.292
+memory cross m=36320	split-K	p10 81.787 median 89.926 p90 95.029
