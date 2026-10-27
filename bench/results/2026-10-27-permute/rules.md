@@ -1,0 +1,27 @@
+Decision rules, fixed before the first measurement (committed ahead of the results). No timing of `ojas_permute_runs` or `ojas_permute_tile` had been seen when this file was written. The numbers already on record for the current kernel are `bench/results/2026-10-27-memory-bound/bench-output.txt` (two clean runs).
+
+Question. Can the permutes of the SpikeTrack frame (about 116.5 ms per frame at every F: trunk head swaps 60.0 ms, window moves 30.8 ms, about 26 ms elsewhere; ledger numbers, projections) run at close to a streaming copy's rate by replacing the generic rank-loop kernel (`ojas_permute`, one thread per element, an integer divide per axis) with a planner and two specialised kernels (`src/permute.rs`: row copies of the contiguous inner run as `uint4`, and a shared-memory tile for a batched transpose), with every bit of every output unchanged?
+
+Pre-stated gate, verbatim from the coordinator's brief (Fable's ruling, scratchpad/fable-wave4.md), for the permute work:
+
+- Gate:
+  - head swap [9,576,16,64] and [1,5184,16,64] by [0,2,1,3]: <= 0.35 ms;
+  - window partition/merge [1,3,24,3,24,1024] by [0,1,3,2,4,5]: <= 0.36 ms;
+  - interleaved against the current kernel in the same process (the old kernel stays as an arm, behind a test-only or bench-only entry if it must), load recorded at start and end, a rerun if contended;
+  - the dispatch count checked;
+  - bitwise parity with the CPU permute and the current Metal permute, at every SpikeTrack call-site shape (memory-bound summary table), plus odd shapes, ranks 1-8, size-1 axes, offset views and non-finite handling identical to today's.
+- If the gate misses, report where the time goes and don't commit the slower path.
+- Also check whether the transposing rows ([1,1024,72,72] by [0,2,3,1], [256,82944] by [1,0]) are worth a tiled transpose under the same gate style.
+
+How it is measured (set here, before timing):
+
+- Harness: `ojas-metal/examples/memory_bound_bench.rs`, the permute rows, `5 25`, the same machinery as the memory-bound re-measurement: every arm runs twice per round (A and A'), odd rounds reverse the arm order, load average 1/5/15 minutes printed at the start and the end, verdict `clean` only if both 1-minute loads are at most 6.0 and every A-vs-A' gap is within the pair's p90 - p10 spread. A run that is not clean is repeated (up to three attempts); a row of a run that is not clean counts for nothing. The gate is read on the median of a clean run.
+- Arms of each permute row: `permute` (the planner's kernel, what `Backend::permute` runs), `permute (generic kernel)` (`MetalBackend::permute_generic`, the old `ojas_permute`, in the same process and the same pairs), and `relu (streaming reference)` (a read and a write of the same bytes). So the old kernel is an in-process interleaved arm, which the previous bench could not offer.
+- The harness times each call with a sync around it, which carries a floor of about 0.12 to 0.15 ms (a permute of 0.4 MB measures 0.145 ms; relu over 42 MB measures 0.31 ms on the same harness). The 0.35 ms and 0.36 ms bounds are read on this harness, floor included, which is how the numbers they are compared against were taken.
+- Dispatch count: `MetalBackend::dispatches` around `permute` plus `sync` is the same for the planner's kernels and the generic kernel on every shape tested (one scan and one kernel); a test pins it.
+- Which kernel ran: the pattern planner is a host function that the device dispatch calls; `MetalBackend::permute_pattern` names its choice. Tests pin the pattern at every call-site shape (`"runs"`, `"transpose"`, `"generic"`), and a unit test in `src/permute.rs` pins the planner on the strides alone.
+- Parity: every call-site shape of the memory-bound table, plus odd shapes (extents that are not multiples of 4 or 32, size-1 axes, ranks 1 to 8, every rank-4 permutation, offset views at 16-byte-aligned and unaligned offsets, outer strides that are not whole vectors), compared by bits with the CPU backend's permute and with `permute_generic`. Values include negative zero, subnormals, extremes and distinct payload bits. A NaN or infinity input is refused as it is today: the call records and the next sync names `permute`.
+
+Transposing rows: a tile kernel is kept only if, on its row, the planner's median is at least 15% below the generic kernel's and beyond both arms' spreads, and it meets these bounds: [1,1024,72,72] by [0,2,3,1] and [1,72,72,1024] by [0,3,1,2] at most 0.40 ms (generic 0.46 to 0.49, streaming 0.31), [256,82944] by [1,0] at most 1.00 ms (generic 1.37, streaming 0.79). Otherwise the planner returns the generic kernel for transposes and `ojas_permute_tile` is deleted in the same change.
+
+What would refute the result: any parity difference by a bit; a head-swap or window row above its bound on the median of a clean run; a dispatch count that differs from the generic kernel's; the old arm's median drifting from the memory-bound record (0.46 ms for the head swap, 0.55 ms for the window rows) by more than its own spread (then the machine moved and the run is repeated).
