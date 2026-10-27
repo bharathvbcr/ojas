@@ -546,3 +546,24 @@ func TestAdvNestedBracketAltImage(t *testing.T) {
 		t.Errorf("image left as literal markdown: %s", got)
 	}
 }
+
+func TestTableRowsWithAnUnescapedPipeAreCounted(t *testing.T) {
+	header := []string{"| a | b | c |", "|---|---|---|"}
+	for _, tc := range []struct {
+		row    string
+		ragged int
+	}{
+		{"| 1 | 2 | 3 |", 0},
+		{"| 1 | `a|b` | 3 |", 0},  // a pipe inside code is part of the cell
+		{`| 1 | x \| y | 3 |`, 0}, // an escaped pipe is part of the cell
+		{"| 1 | |x| | 3 |", 1},    // an unescaped one splits it
+		{"| 1 | 2 |", 1},          // a short row
+		{"| 1 | 2 | 3 | 4 |", 1},  // a long row
+	} {
+		r := newRenderer("docs/page.md", "site/assets/a.png")
+		r.table(append(append([]string{}, header...), tc.row))
+		if r.ragged != tc.ragged {
+			t.Errorf("%s: ragged = %d, want %d", tc.row, r.ragged, tc.ragged)
+		}
+	}
+}
