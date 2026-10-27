@@ -34,7 +34,7 @@
 mod bench {
     use std::time::Instant;
 
-    use ojas_core::{Autocast, AutocastMode, Backend, Budget, Conv2dParams, Tensor};
+    use ojas_core::{Autocast, AutocastMode, Backend, Budget, Conv2dParams, DType, Tensor};
     use ojas_metal::MetalBackend;
 
     fn values(n: usize, seed: u64, scale: f32) -> Vec<f32> {
@@ -307,7 +307,37 @@ mod bench {
                 padding: [pad, pad],
                 ..Conv2dParams::new()
             };
+            // Probes that isolate the passes of the convolution: the same
+            // im2col matrix with 8 output channels (its GEMM is a thin read of
+            // the matrix), the thin GEMM alone, the write floor of the matrix
+            // and of the output, and the product's transpose.
+            let w8 = up(&host(
+                &values(8 * k, 8, 0.05),
+                &[8, ch, c.kernel, c.kernel],
+            ));
+            let w8_2 = up(&host(&values(8 * k, 8, 0.05), &[8, k]));
+            let prod = up(&host(&values(m * c.out, 9, 1.0), &[m, c.out]));
             let arms: Vec<Arm<'_>> = vec![
+                (
+                    "probe conv2d o=8 (im2col + thin GEMM)",
+                    Box::new(|| drop(metal.conv2d_forward(&x, &w8, None, params).expect("p1"))),
+                ),
+                (
+                    "probe GEMM o=8 (thin read of the matrix)",
+                    Box::new(|| drop(metal.linear_forward(&cols, &w8_2).expect("p2"))),
+                ),
+                (
+                    "probe fill [m,k] (write floor of the matrix)",
+                    Box::new(|| drop(metal.fill(&[m, k], DType::F32, 1.0).expect("p3"))),
+                ),
+                (
+                    "probe fill [m,o] (write floor of the output)",
+                    Box::new(|| drop(metal.fill(&[m, c.out], DType::F32, 1.0).expect("p4"))),
+                ),
+                (
+                    "probe permute [m,o] -> [o,m]",
+                    Box::new(|| drop(metal.permute(&prod, &[1, 0]).expect("p5"))),
+                ),
                 (
                     "conv2d f32 (im2col + GEMM + layout)",
                     Box::new(|| {
