@@ -1833,10 +1833,13 @@ kernel void ojas_permute_runs(
 /// Planes of `rows x cols` words, output `[plane][b][a]` from input
 /// `x[plane offset + b + a * col_stride]`: `b` is contiguous in the input and
 /// `a` in the output, so a threadgroup reads a 32 x 32 tile along `b` into
-/// threadgroup memory and writes it along `a`. Grid: `ceil(rows / 32)`
-/// threadgroups in x, `planes * col_tiles` in y (`col_tiles = ceil(cols / 32)`),
-/// 256 threads each. The plane's input offset is walked over the `outer`
-/// axes that pick it.
+/// threadgroup memory and writes it along `a`. Grid: one dimension of
+/// `planes * col_tiles * row_tiles` threadgroups (tile counts `ceil(cols / 32)`
+/// and `ceil(rows / 32)`), 256 threads each, decomposed here into the tile
+/// and the plane. That is at most `n / 64` groups for `n` elements, below the
+/// `n / 32` groups a one-dimensional elementwise dispatch of the same tensor
+/// already uses. The plane's input offset is walked over the `outer` axes
+/// that pick it.
 kernel void ojas_permute_tile(
     device const uint *x [[buffer(0)]],
     device uint *y [[buffer(1)]],
@@ -1849,15 +1852,16 @@ kernel void ojas_permute_tile(
     constant uint *istride [[buffer(8)]],
     device atomic_uint *st [[buffer(9)]],
     constant uint &check_word [[buffer(10)]],
-    uint2 tg [[threadgroup_position_in_grid]],
+    constant uint &row_tiles [[buffer(11)]],
+    uint tg [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]])
 {
     threadgroup uint tile[PERMUTE_TILE][PERMUTE_TILE + 1u];
     bool bad = false;
     if (outer > PERMUTE_MAX_RANK) return;
-    const uint b0 = tg.x * PERMUTE_TILE;
-    const uint a0 = (tg.y % col_tiles) * PERMUTE_TILE;
-    const uint plane = tg.y / col_tiles;
+    const uint b0 = (tg % row_tiles) * PERMUTE_TILE;
+    const uint a0 = ((tg / row_tiles) % col_tiles) * PERMUTE_TILE;
+    const uint plane = tg / (row_tiles * col_tiles);
     uint rem = plane;
     uint base = 0u;
     for (uint k = outer; k > 0u; --k) {

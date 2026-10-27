@@ -189,6 +189,43 @@ pub(crate) fn plan(
     Plan::Generic
 }
 
+/// Threadgroups of `ojas_permute_tile` over `planes` planes of `rows x cols`
+/// words, in one grid dimension. For `n` output words that is at most
+/// `n / 64` (tiles of 32 x 32 over extents of at least [`MIN_TILE_EXTENT`]),
+/// so below the `n / 32` threadgroups a one-dimensional elementwise dispatch
+/// of the same tensor uses (`dispatch_1d`), whose grid dimension tessl caps at
+/// `u32::MAX`. Apple's documentation states no lower limit per grid
+/// dimension, and Ojas dispatches 1-D grids of 1.3e8 groups already.
+pub(crate) fn transpose_groups(rows: u32, cols: u32, planes: u64) -> u64 {
+    u64::from(rows.div_ceil(TILE)) * u64::from(cols.div_ceil(TILE)) * planes
+}
+
+/// Output words the plan's kernel writes, `None` for the generic kernel
+/// (which has a thread per output word and no tail to leave).
+pub(crate) fn covers(plan: &Plan) -> Option<u64> {
+    match plan {
+        Plan::Generic => None,
+        Plan::Runs { run, outer } => Some(u64::from(*run) * outer.count()),
+        Plan::Transpose {
+            rows, cols, outer, ..
+        } => Some(u64::from(*rows) * u64::from(*cols) * outer.count()),
+    }
+}
+
+/// `Ok` when the plan's kernel writes exactly `out_words` words: the row copy
+/// has no thread for a partial span and the transpose tiles whole planes, so
+/// a plan built from a shape other than the output's would leave words
+/// unwritten or write past them.
+pub(crate) fn check_covers(plan: &Plan, out_words: usize) -> Result<(), String> {
+    match covers(plan) {
+        Some(words) if words != out_words as u64 => Err(format!(
+            "the {} plan covers {words} words but the output holds {out_words}",
+            plan.name()
+        )),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +361,80 @@ mod tests {
         // Size-1 axes vanish and the neighbours across them merge.
         let c = canonical(4, &[2, 1, 3, 4], &[12, 99, 4, 1]);
         assert_eq!((c.len, c.extent[0], c.stride[0]), (1, 24, 1));
+    }
+
+    /// What reaches which kernel among the `ojas_core::spatial` permutes:
+    /// the window split and merge run as row copies when the window line
+    /// (`window * C` floats) is a whole number of 16-float spans, whatever C
+    /// is on its own; pixel shuffle and unshuffle stay generic below r = 8,
+    /// where a transpose tile would be mostly padding.
+    #[test]
+    fn spatial_permutes_reach_the_kernels_the_docs_name() {
+        // window_partition [B, H, W, C] -> [1, 3, w, 3, w, C] by [0,1,3,2,4,5].
+        for (window, c, runs) in [
+            (24usize, 1024usize, true),
+            (24, 16, true),
+            (24, 2, true),  // 48 floats: whole spans though C is not a multiple of 16
+            (14, 8, true),  // 112 floats
+            (24, 3, false), // 72 floats
+            (24, 1, false), // 24 floats
+            (7, 16, true),  // 112 floats
+            (7, 4, false),  // 28 floats
+        ] {
+            let shape = [1, 3, window, 3, window, c];
+            let want = if runs { "runs" } else { "generic" };
+            assert_eq!(of(&shape, &[0, 1, 3, 2, 4, 5]).name(), want, "{shape:?}");
+        }
+        // pixel_shuffle [N, C, r, r, H, W] by [0,1,4,2,5,3]; unshuffle
+        // [N, C, H, r, W, r] by [0,1,3,5,2,4].
+        for r in [2usize, 4] {
+            assert_eq!(
+                of(&[1, 4, r, r, 64, 64], &[0, 1, 4, 2, 5, 3]),
+                Plan::Generic,
+                "pixel_shuffle r = {r}"
+            );
+            assert_eq!(
+                of(&[1, 4, 64, r, 64, r], &[0, 1, 3, 5, 2, 4]),
+                Plan::Generic,
+                "pixel_unshuffle r = {r}"
+            );
+        }
+    }
+
+    /// A plan is only run over an output it tiles exactly.
+    #[test]
+    fn a_plan_that_does_not_tile_its_output_is_refused() {
+        let runs = of(&[9, 576, 16, 64], &[0, 2, 1, 3]);
+        let words = 9 * 576 * 16 * 64;
+        assert_eq!(covers(&runs), Some(words as u64));
+        assert!(check_covers(&runs, words).is_ok());
+        assert!(check_covers(&runs, words - 16).is_err());
+        assert!(check_covers(&runs, words + 16).is_err());
+        let tile = of(&[2, 40, 36], &[0, 2, 1]);
+        assert_eq!(covers(&tile), Some(2 * 40 * 36));
+        assert!(check_covers(&tile, 2 * 40 * 36).is_ok());
+        assert!(check_covers(&tile, 2 * 40 * 36 - 1).is_err());
+        // The generic kernel has a thread per output word: nothing to refuse.
+        assert!(check_covers(&Plan::Generic, 7).is_ok());
+    }
+
+    /// The transpose grid never exceeds a 1-D elementwise grid over the same
+    /// tensor, even at the 32-bit limit on the output size and the smallest
+    /// tile extents the planner accepts.
+    #[test]
+    fn the_transpose_grid_stays_below_an_elementwise_grid() {
+        let n = u64::from(u32::MAX);
+        for (rows, cols) in [
+            (MIN_TILE_EXTENT, MIN_TILE_EXTENT),
+            (MIN_TILE_EXTENT, 4096),
+            (4096, MIN_TILE_EXTENT),
+            (82944, 256),
+            (33, 33),
+        ] {
+            let planes = n / (u64::from(rows) * u64::from(cols));
+            let groups = transpose_groups(rows, cols, planes);
+            assert!(groups <= n / 32, "{rows} x {cols}: {groups} groups");
+            assert!(groups <= u64::from(u32::MAX));
+        }
     }
 }

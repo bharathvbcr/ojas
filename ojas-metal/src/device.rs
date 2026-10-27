@@ -1890,6 +1890,10 @@ impl Worker {
         (st, word): (&St, u32),
     ) -> Res<()> {
         let n = u32_of(y.n)?;
+        // The kernels cover whole rows and tiles and have no tail: refuse a
+        // plan that does not tile the output exactly, rather than leave
+        // elements unwritten.
+        permute::check_covers(&plan, y.n).map_err(|why| metal_err(format!("permute: {why}")))?;
         let words = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|w| w.to_ne_bytes()).collect() };
         match plan {
             Plan::Generic => {
@@ -1926,16 +1930,16 @@ impl Worker {
                 col_stride,
                 outer,
             } => {
-                let planes = u32_of(outer.count() as usize)?;
-                let col_tiles = cols.div_ceil(permute::TILE);
-                let groups_y = planes
-                    .checked_mul(col_tiles)
-                    .ok_or_else(|| metal_err("permute: transpose grid overflows"))?;
+                let (row_tiles, col_tiles) =
+                    (rows.div_ceil(permute::TILE), cols.div_ceil(permute::TILE));
+                let groups = permute::transpose_groups(rows, cols, outer.count());
+                let groups = u32::try_from(groups)
+                    .map_err(|_| metal_err("permute: transpose grid overflows"))?;
                 let (shape_bytes, stride_bytes) = (words(&outer.extent), words(&outer.stride));
                 self.ktg(
                     "ojas_permute_tile",
-                    rows.div_ceil(permute::TILE) as usize,
-                    groups_y as usize,
+                    groups as usize,
+                    1,
                     PERMUTE_TILE_THREADS,
                     |b| {
                         bind(b, xv, 0);
@@ -1949,6 +1953,7 @@ impl Worker {
                         b.bind_bytes(&stride_bytes, 8);
                         bind_st(b, st, 9);
                         set_u32(b, word, 10);
+                        set_u32(b, row_tiles, 11);
                     },
                 )
             }
