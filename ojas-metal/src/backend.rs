@@ -2483,7 +2483,9 @@ impl Backend for MetalBackend {
     /// is corrected by its residual, so a row far from zero keeps its
     /// accuracy). The per-chunk partial sums (three arrays of `rows * chunks`)
     /// are charged as scratch. A mean or variance that overflows f32 is a
-    /// deferred fault where the CPU's `f64` ones finish.
+    /// deferred fault (a row sum, a square or the variance overflowing f32,
+    /// checked before the variance is clamped) where the CPU's `f64` ones
+    /// finish.
     fn group_norm_forward(
         &self,
         input: &Tensor,
@@ -2612,7 +2614,7 @@ impl Backend for MetalBackend {
             id: nb.id,
             len: nb.bytes,
             link: Arc::clone(&self.link),
-            ids: None,
+            ids,
         });
         Tensor::from_device_reserved(buf, shape, dtype, reservation)
     }

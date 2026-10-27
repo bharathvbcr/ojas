@@ -2007,11 +2007,12 @@ kernel void ojas_bilinear(
 //   ojas_gn_sq     the row mean from the partial sums, then partial sums of
 //                  d = x - mean and of d^2
 //   ojas_gn_apply  the residual `r = sum(d) / n` of the first mean, the
-//                  variance `(sum(d^2) - sum(d)^2 / n) / n`, then
+//                  variance `(sum(d^2) - r * sum(d)) / n`, then
 //                  (((x - mean0) - r) * rsqrt(var + eps)) * weight + bias
 //
-// The first mean `mean0` carries f32 summation error (about 3e-4 on a row of
-// 2.65 million values near 1e3); `sum(d)` is the residual of that error. The
+// The first mean `mean0` carries f32 summation error (a few 1e-6 to 1e-4 on a
+// row of 2.65 million values near 1e3, by summation order); `sum(d)` is the
+// residual of that error. The
 // variance subtracts it, and the output subtracts it after `x - mean0`, which
 // is exact for x near the mean, rather than folding it into one f32 mean (whose
 // spacing, 6e-5 at 1e3, is itself 0.3% of a spread of 0.017). So the output is
@@ -2022,10 +2023,13 @@ kernel void ojas_bilinear(
 // the chunk partials in ascending order, so a result repeats bit for bit. The
 // CPU's are f64 sums rounded once; the two differ by f32 summation error.
 // The operands are scanned by `ojas_check_finite` dispatches; a non-finite
-// output, or a mean or variance that is not finite, sets ST_OUT. The range
-// differs from the CPU's: f32 sums overflow for |x| above about 1e32 and
-// `d * d` for |x - mean| above about 1.8e19, where the CPU's f64 ones still
-// finish; those calls fault here rather than return a wrong value.
+// output, or a mean or variance that is not finite, sets ST_OUT. The variance
+// is checked as computed, before it is clamped at 0 (a clamp would turn a
+// -inf into 0 and every output into a finite, wrong value). The range differs
+// from the CPU's, whose f64 sums finish where these do not: a row sum
+// overflows f32 past abs(x) of 3.4e38 / n (1.3e32 at 2.65 million values a
+// row, more for a shorter one), and `d * d` past abs(x - mean) of 1.8e19.
+// Those calls fault here instead of returning the bias or a wrong value.
 //
 // tessl has no group norm, and `bert::layer_norm` does not fit: it runs one
 // threadgroup per row, so SAM's 8 rows would use 8 threadgroups, and its
@@ -2066,7 +2070,7 @@ kernel void ojas_gn_sum(
     threadgroup float sh[GN_THREADS / 32u];
     const ulong base = (ulong)tg.y * width;
     const uint lo = min(width, tg.x * chunk_len);
-    const uint hi = min(width, lo + chunk_len);
+    const uint hi = (uint)min((ulong)width, (ulong)lo + chunk_len);
     float acc = 0.0f;
     for (ulong i = (ulong)lo + tid; i < hi; i += GN_THREADS) acc += x[base + i];
     const float total = ojas_gn_block_sum(acc, sh, tid, sg, lane);
@@ -2094,7 +2098,7 @@ kernel void ojas_gn_sq(
     const float mean = mean_sh;
     const ulong base = (ulong)tg.y * width;
     const uint lo = min(width, tg.x * chunk_len);
-    const uint hi = min(width, lo + chunk_len);
+    const uint hi = (uint)min((ulong)width, (ulong)lo + chunk_len);
     float acc_dev = 0.0f;
     float acc_sq = 0.0f;
     for (ulong i = (ulong)lo + tid; i < hi; i += GN_THREADS) {
@@ -2136,13 +2140,16 @@ kernel void ojas_gn_apply(
         const float sum_d = ojas_gn_total(part_dev, tg.y, chunks);
         const float sum_sq = ojas_gn_total(part_sq, tg.y, chunks);
         const float resid = precise::divide(sum_d, n);
-        const float var = max(precise::divide(sum_sq - precise::divide(sum_d * sum_d, n), n), 0.0f);
+        // sum(d)^2 / n is resid * sum(d): the same value, overflowing much later.
+        const float var_raw = precise::divide(sum_sq - resid * sum_d, n);
+        const float var = max(var_raw, 0.0f);
         stats[0] = mean0;
         stats[1] = precise::divide(1.0f, precise::sqrt(var + eps));
         stats[2] = resid;
         // A mean or variance that overflowed would turn every output into the
-        // bias, finite and unflagged: refuse it.
-        if (!isfinite(mean0 + resid) || !isfinite(var)) ojas_flag(st, ST_OUT);
+        // bias, finite and unflagged: refuse it. The variance is tested before
+        // the clamp, which would hide a -inf and make a NaN unspecified.
+        if (!isfinite(mean0 + resid) || !isfinite(var_raw)) ojas_flag(st, ST_OUT);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     const float mean0 = stats[0];
@@ -2151,7 +2158,7 @@ kernel void ojas_gn_apply(
     const ulong base = (ulong)tg.y * width;
     const uint first = (tg.y % groups) * per_group;
     const uint lo = min(width, tg.x * chunk_len);
-    const uint hi = min(width, lo + chunk_len);
+    const uint hi = (uint)min((ulong)width, (ulong)lo + chunk_len);
     bool bad = false;
     for (ulong i = (ulong)lo + tid; i < hi; i += GN_THREADS) {
         const uint ch = first + (uint)(i / spatial);
@@ -2168,8 +2175,9 @@ kernel void ojas_gn_apply(
 // A copy kernel reads each element as a word and writes it to its place. The
 // CPU refuses a non-finite input as NonFinite wherever it sits, so a concat
 // kernel sets ST_IN on every element it copies (it copies the whole input),
-// and a slice, which copies only part, has its whole input scanned by the
-// host: the output holds only copied finite bits, so it needs no check.
+// and a slice, which copies only part, has its whole input scanned by an
+// `ojas_check_finite` dispatch first: the output holds only copied finite
+// bits, so it needs no check.
 //
 //   ojas_concat_part  one input of a concat: element i of the input (rows of
 //                     `row_in = len_i * inner`) lands in rows of `row_out =

@@ -429,3 +429,53 @@ fn a_variance_that_overflows_f32_is_a_fault_not_the_bias() {
     let r = m.group_norm_forward(&x, &w, &b, 1, EPS);
     deferred(&m, "variance overflow", r, "group_norm_forward");
 }
+
+/// A mean so far from zero that `sum(d)^2` overflows f32 while the row itself
+/// is finite and well-conditioned for the CPU's `f64` sums: `sum(d)` is about
+/// `n` times the f32 error of the mean, so at 2.65 million values a row it
+/// overflows its square once the mean passes about 1e19. The variance used to
+/// be clamped at 0 before its finiteness was tested, so `-inf` became 0 and
+/// every output a finite, wrong value (off by about 1e17 at mean 1e20). The
+/// kernel now computes `r * sum(d)` and tests the unclamped variance: these
+/// rows match the CPU.
+#[test]
+fn a_mean_near_1e20_with_a_small_spread_matches_cpu_at_sam_size() {
+    let (m, c) = (metal(), cpu());
+    for (mean, spread, seed) in [(1.0e20f32, 1.0e14f32, 130u64), (1.0e21, 1.0e15, 131)] {
+        let x: Vec<f32> = values(256 * 288 * 288, seed, spread)
+            .into_iter()
+            .map(|v| v + mean)
+            .collect();
+        let x = host(&x, &[1, 256, 288, 288]);
+        let w = rand(&[256], seed + 1, 2.0);
+        let b = rand(&[256], seed + 2, 1.0);
+        let want = ok("cpu", c.group_norm_forward(&x, &w, &b, 8, EPS));
+        let got = ok(
+            "metal",
+            m.group_norm_forward(&up(&m, &x), &up(&m, &w), &up(&m, &b), 8, EPS),
+        );
+        ok("sync", m.sync());
+        same_tensor(
+            &format!("mean {mean:e} spread {spread:e}"),
+            &got,
+            &want,
+            ATOL,
+            RTOL,
+        );
+    }
+}
+
+/// A row whose sums are finite but whose mean overflows the check (`mean0 +
+/// resid` is not finite) and one whose variance overflows through `sum(d^2)`
+/// both fault; neither returns the bias.
+#[test]
+fn rows_whose_sums_overflow_f32_fault_instead_of_returning_the_bias() {
+    let m = metal();
+    // Row sum overflow: 1e38 over 32 values a row.
+    let x = host(&[1.0e38f32; 2 * 4 * 4], &[1, 2, 4, 4]);
+    let w = host(&[1.0, 1.0], &[2]);
+    let b = host(&[0.5, -0.5], &[2]);
+    let (dx, dw, db) = (up(&m, &x), up(&m, &w), up(&m, &b));
+    let r = m.group_norm_forward(&dx, &dw, &db, 1, EPS);
+    deferred(&m, "row sum overflow", r, "group_norm_forward");
+}
