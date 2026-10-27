@@ -1936,8 +1936,9 @@ inline void ojas_bilinear_tap(uint o, uint size, float scale, uint align,
 }
 
 /// y[plane][oy][ox] = (1 - ly) ((1 - lx) v00 + lx v01) + ly ((1 - lx) v10 + lx v11),
-/// one thread per output element. A NaN or infinity in the input flags the
-/// input word, and one in the output the output word.
+/// one thread per output element. A NaN or infinity in the output flags the
+/// output word; the host scans the whole input (a pixel no output samples
+/// included).
 kernel void ojas_bilinear(
     device const float *x [[buffer(0)]],
     device float *y [[buffer(1)]],
@@ -1970,7 +1971,6 @@ kernel void ojas_bilinear(
     const float bottom = w0 * p10 + w1 * p11;
     const float r = (1.0f - ly) * top + ly * bottom;
     y[i] = r;
-    if (!isfinite(p00) || !isfinite(p01) || !isfinite(p10) || !isfinite(p11)) ojas_flag(st, ST_IN);
     if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
