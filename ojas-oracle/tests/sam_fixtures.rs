@@ -13,8 +13,8 @@ use ojas_oracle::sam_fixtures::{
     ROPE_THETA,
 };
 use ojas_oracle::sam_fixtures::{
-    conv2d, conv_transpose2d, layer_norm_weighted, linear_bias, qkv_linear, weight_name,
-    weighted_ops, ConvCase, WEIGHTS_PREFIX,
+    conv2d, conv_transpose2d, layer_norm_rows, layer_norm_weighted, linear_bias, qkv_linear,
+    weight_name, weighted_ops, ConvCase, VIT_LN_EPS, WEIGHTS_PREFIX,
 };
 use support::{build, f32_raw, Raw};
 
@@ -860,4 +860,125 @@ fn a_weights_file_missing_names_is_an_error_not_an_empty_list() {
     );
     let w = Fixture::parse(&weights).unwrap();
     assert!(weighted_ops(&w).is_err());
+}
+
+/// Rows whose variance is about 3e-4 (a mean of 10, a spread of 0.03), where
+/// eps 1e-5 against 1e-6 moves the output by about 1.5 per cent: the case the
+/// real file only catches through one row's relative error.
+fn low_variance_norm_fixture() -> (Vec<u8>, Vec<u8>) {
+    let (rows, dim) = (6usize, 16usize);
+    let mut acts = Vec::new();
+    let mut weights = Vec::new();
+    let mut seed = 70u64;
+    let mut modules = vec![("trunk.ln_pre".to_string(), "trunk.ln_pre.out".to_string())];
+    for block in [0, 7] {
+        for norm in ["norm1", "norm2"] {
+            let m = format!("trunk.blocks.{block}.{norm}");
+            modules.push((m.clone(), m));
+        }
+    }
+    for (module, out) in &modules {
+        seed += 1;
+        let x: Vec<f32> = values(rows * dim, seed, 0.03)
+            .iter()
+            .map(|v| v + 10.0)
+            .collect();
+        let w: Vec<f32> = values(dim, seed + 100, 0.5)
+            .iter()
+            .map(|v| v + 1.0)
+            .collect();
+        let b = values(dim, seed + 200, 1.0);
+        // "torch": eps 1e-5, in f64.
+        let want = layer_norm_f64(&x, dim, 1e-5, &w, &b);
+        acts.push(f32_raw(&format!("{out}.in"), &[rows, dim], &x));
+        acts.push(f32_raw(out, &[rows, dim], &want));
+        weights.push(f32_raw(&wname(module, "weight"), &[dim], &w));
+        weights.push(f32_raw(&wname(module, "bias"), &[dim], &b));
+    }
+    (build(&acts, &[]), build(&weights, &[]))
+}
+
+#[test]
+fn a_reverted_vit_ln_eps_fails_without_the_real_files() {
+    assert_eq!(VIT_LN_EPS, 1e-5);
+    let be = cpu();
+    let (acts, weights) = low_variance_norm_fixture();
+    let (a, w) = (
+        Fixture::parse(&acts).unwrap(),
+        Fixture::parse(&weights).unwrap(),
+    );
+    // The helper, at the constant, matches torch's eps on every norm.
+    let rows = layer_norm_rows(&be, &a, &w).unwrap();
+    assert_eq!(rows.len(), 5);
+    assert!(rows.iter().all(|r| r.pass), "{rows:#?}");
+    // The same rows at the old eps 1e-6 fail LAYER_NORM_TOL, abs and rel.
+    for (module, input, output) in [
+        ("trunk.ln_pre", "trunk.ln_pre.out.in", "trunk.ln_pre.out"),
+        (
+            "trunk.blocks.0.norm1",
+            "trunk.blocks.0.norm1.in",
+            "trunk.blocks.0.norm1",
+        ),
+        (
+            "trunk.blocks.7.norm2",
+            "trunk.blocks.7.norm2.in",
+            "trunk.blocks.7.norm2",
+        ),
+    ] {
+        let old = layer_norm_weighted(&be, &a, &w, module, input, output, 1e-6).unwrap();
+        assert!(!old.pass && old.max_abs > 1e-4, "{old}");
+    }
+}
+
+#[test]
+fn a_transposed_square_weight_is_seen_as_a_wrong_answer_not_a_shape_error() {
+    let be = cpu();
+    // proj is the one square weight in SAM's trunk: [4, 4] here.
+    let x = values(24, 80, 2.0);
+    let (w, b) = (values(16, 81, 0.5), values(4, 82, 1.0));
+    let x64: Vec<f64> = x.iter().map(|&v| f64::from(v)).collect();
+    let want = mat(&x64, 6, 4, &w, 4, &b);
+    let mut wt = vec![0.0f32; 16];
+    for o in 0..4 {
+        for c in 0..4 {
+            wt[c * 4 + o] = w[o * 4 + c];
+        }
+    }
+    let acts = build(
+        &[
+            f32_raw("p.in", &[2, 3, 4], &x),
+            f32_raw("p.out", &[2, 3, 4], &want),
+        ],
+        &[],
+    );
+    let mk = |weight: &[f32]| {
+        build(
+            &[
+                f32_raw(
+                    &wname("trunk.blocks.0.attn.proj", "weight"),
+                    &[4, 4],
+                    weight,
+                ),
+                f32_raw(&wname("trunk.blocks.0.attn.proj", "bias"), &[4], &b),
+            ],
+            &[],
+        )
+    };
+    let (good, bad) = (mk(&w), mk(&wt));
+    let a = Fixture::parse(&acts).unwrap();
+    let m = "trunk.blocks.0.attn.proj";
+    let ok = linear_bias(&be, &a, &Fixture::parse(&good).unwrap(), m, "p.in", "p.out").unwrap();
+    assert!(ok.pass, "{ok}");
+    // The shape is right, so only the comparison can refuse it.
+    let transposed =
+        linear_bias(&be, &a, &Fixture::parse(&bad).unwrap(), m, "p.in", "p.out").unwrap();
+    assert!(!transposed.pass, "{transposed}");
+}
+
+#[test]
+fn fixture_shape_reads_the_header_and_refuses_an_unknown_name() {
+    let bytes = build(&[f32_raw("a", &[2, 3, 4], &values(24, 90, 1.0))], &[]);
+    let fx = Fixture::parse(&bytes).unwrap();
+    assert_eq!(fx.shape("a").unwrap(), vec![2, 3, 4]);
+    assert!(fx.shape("missing").is_err());
 }

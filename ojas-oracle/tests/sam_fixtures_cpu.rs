@@ -182,8 +182,9 @@ fn the_ops_the_fixture_cannot_check_are_recorded() {
         !skipped.is_empty(),
         "the fixture now holds weights: add the weight-bearing ops"
     );
-    // With the weights file named, each of those ops is checked (by the tests
-    // below) and is reported as CHECKED; without it, SKIPPED as before.
+    // With the weights file named, each of those ops has its weights present and
+    // is reported as WEIGHTS PRESENT, naming the test below that compares it
+    // (this test compares nothing); without the file, SKIPPED as before.
     let Some(w) =
         Fixture::from_env_var(ENV_WEIGHTS).unwrap_or_else(|e| panic!("{ENV_WEIGHTS}: {e}"))
     else {
@@ -195,7 +196,10 @@ fn the_ops_the_fixture_cannot_check_are_recorded() {
     let checked = weighted_ops(&w).unwrap();
     for s in &skipped {
         match checked.iter().find(|c| c.op == s.op) {
-            Some(c) => println!("CHECKED {}: {} (from {ENV_WEIGHTS})", c.op, c.tensors),
+            Some(c) => println!(
+                "WEIGHTS PRESENT {}: {} (from {ENV_WEIGHTS}); compared by the test {}, not by this one",
+                c.op, c.tensors, c.compared_by
+            ),
             None => panic!(
                 "SKIPPED {}: {}: the weights file does not cover it",
                 s.op, s.tensors

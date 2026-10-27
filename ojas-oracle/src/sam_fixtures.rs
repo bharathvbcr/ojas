@@ -308,6 +308,15 @@ impl<'a> Fixture<'a> {
         self.st.names().collect()
     }
 
+    /// A tensor's shape, from the header alone: no tensor data is read.
+    pub fn shape(&self, name: &str) -> Result<Vec<usize>, OjasError> {
+        let info = self.st.info(name).map_err(io)?;
+        info.shape
+            .iter()
+            .map(|&d| usize::try_from(d).map_err(|_| bad(&format!("{name}: extent exceeds usize"))))
+            .collect()
+    }
+
     /// An `F32` tensor's shape and values.
     pub fn tensor(&self, name: &str) -> Result<(Vec<usize>, Vec<f32>), OjasError> {
         let info = self.st.info(name).map_err(io)?;
@@ -717,6 +726,15 @@ pub fn layer_norm_affine_recovered<B: Backend + ?Sized>(
 // and torch's output from the activation fixture and its weight and bias from
 // the weights file, so an op is checked against torch's own values.
 
+// What these rows do not cover, by construction of the SAM 3.1 shapes:
+//  - every transposed convolution here has kernel == stride (2x2, stride 2),
+//    so its taps never overlap; overlapping taps are untested against torch;
+//  - the window cut is 72 / 24 = 3 windows a side, so `window_partition`'s
+//    padding (there is none) is untested;
+//  - the real `attn.proj` is the one square weight ([1024, 1024]), so a
+//    transposed copy of it would not fail on shape; the synthetic tests
+//    carry that negative, the real rows rely on the other weights' shapes.
+
 /// The environment variable that names the SAM 3.1 weights file.
 pub const ENV_WEIGHTS: &str = "OJAS_SAM_WEIGHTS";
 
@@ -728,16 +746,17 @@ pub const WEIGHTS_PREFIX: &str = "detector.backbone.vision_backbone.";
 ///
 /// A linear layer or convolution sums `K` products in `f32` (`K` is 1024 for
 /// qkv, proj and fc1, 4736 for fc2, 588 to 2304 for the convolutions, and
-/// 256 to 1024 for the transposed convolutions, whose taps do not overlap).
+/// 512 or 1024 for the transposed convolutions, whose taps do not overlap).
 /// Torch's blocked GEMM and ours add them in different orders, so the two
 /// differ by about `1e-7 * sqrt(K) * sum|a_i b_i|`: a few `1e-6` times the
 /// output scale for activations of order one to ten. `max_abs` 1e-3 is
 /// two to three orders above that and below the size of any wrong weight,
 /// bias, layout or transposition, which moves outputs by their own scale.
-/// `max_rel` is judged against `1e-3 * max|want|`, so a near-zero output
-/// from a cancelling sum shows the whole absolute error divided by that
-/// floor: 0.1 is deliberately weak, and the absolute bound and the cosine
-/// are the binding ones.
+/// `max_rel` is per element, `|d| / max(|want_i|, 1e-3 * max|want|)`: an
+/// element above the floor is judged by its ordinary relative error, and a
+/// near-zero output from a cancelling sum by its whole absolute error divided
+/// by the floor. 0.1 is deliberately weak, and the absolute bound and the
+/// cosine are the binding ones.
 pub const LINEAR_TOL: Tolerance = Tolerance {
     max_abs: 1e-3,
     max_rel: 1e-1,
@@ -1006,9 +1025,10 @@ pub fn conv_transpose2d<B: Backend + ?Sized>(
 /// `norm_layer="LayerNorm"`, which `vitdet.py` turns into
 /// `partial(nn.LayerNorm, eps=1e-5)` (`sam3/model/vitdet.py:868-869`) and hands
 /// to every `Block` (`:907`, used at `:703` and `:726`) and to `ln_pre`
-/// (`:947`). With the real weights, eps 1e-5 fits all four block norms to
-/// 1e-6 absolute and 1e-4 relative; 1e-6 is off by 1e-5 absolute and 2e-3
-/// relative (`blocks.0.norm1`).
+/// (`:947`). With the real weights, eps 1e-5 fits the four block norms to
+/// 1.4e-6 to 2.9e-6 absolute and 2.7e-5 to 1.0e-4 relative (CPU and Metal);
+/// 1e-6 is off by 1.2e-5 to 2.7e-5 absolute and 5e-4 to 2e-3 relative
+/// (`blocks.0.norm1`).
 pub const VIT_LN_EPS: f32 = 1e-5;
 
 /// Every LayerNorm with weights the fixture records: `ln_pre` and `norm1` and
@@ -1154,12 +1174,18 @@ pub fn conv_transpose2d_rows<B: Backend + ?Sized>(
     .collect()
 }
 
-/// An op that [`skipped_ops`] lists and the weights file lets us check, with
-/// the checkpoint tensors it reads.
+/// An op that [`skipped_ops`] lists and whose weights the file holds, with
+/// the checkpoint tensors it needs and the test that compares it. Holding the
+/// weights is not a comparison: [`weighted_ops`] reads headers only, so a
+/// report built from it says the weights are present and names `compared_by`,
+/// never that the op was checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checked {
     pub op: &'static str,
     pub tensors: String,
+    /// The `#[ignore]`d test, in both the CPU and the Metal test file, that
+    /// compares the op with torch.
+    pub compared_by: &'static str,
 }
 
 /// Every weight and bias the four skipped ops need, looked up in `weights`
@@ -1168,8 +1194,7 @@ pub struct Checked {
 pub fn weighted_ops(weights: &Fixture<'_>) -> Result<Vec<Checked>, OjasError> {
     let need = |module: &str, part: &str, shape: &[usize]| -> Result<(), OjasError> {
         let name = weight_name(module, part)?;
-        let (got, _) = weights.tensor(&name)?;
-        shape_is(&name, &got, shape)
+        shape_is(&name, &weights.shape(&name)?, shape)
     };
     for norm in [
         "trunk.ln_pre",
@@ -1213,21 +1238,25 @@ pub fn weighted_ops(weights: &Fixture<'_>) -> Result<Vec<Checked>, OjasError> {
         Checked {
             op: "layer_norm_forward (direct)",
             tensors: "trunk.ln_pre and trunk.blocks.{0,7}.norm{1,2}: weight and bias".into(),
+            compared_by: "layer_norm_with_the_true_affine_matches_torch",
         },
         Checked {
             op: "linear_bias_forward",
             tensors: "trunk.blocks.{0,7}.{attn.qkv, attn.proj, mlp.fc1, mlp.fc2}: weight and bias"
                 .into(),
+            compared_by: "linear_bias_matches_torch",
         },
         Checked {
             op: "conv2d_forward",
             tensors:
                 "trunk.patch_embed.proj.weight, neck.convs.{0,1,2}.conv_{1x1,3x3}: weight and bias"
                     .into(),
+            compared_by: "conv2d_matches_torch",
         },
         Checked {
             op: "conv_transpose2d_forward",
             tensors: "neck.convs.0.dconv_2x2_{0,1}, neck.convs.1.dconv_2x2: weight and bias".into(),
+            compared_by: "conv_transpose2d_matches_torch",
         },
     ])
 }

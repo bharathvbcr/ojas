@@ -177,7 +177,10 @@ fn the_ops_the_fixture_cannot_check_are_recorded() {
     let checked = weighted_ops(&w).unwrap();
     for s in &skipped {
         match checked.iter().find(|c| c.op == s.op) {
-            Some(c) => println!("CHECKED {}: {} (from {ENV_WEIGHTS})", c.op, c.tensors),
+            Some(c) => println!(
+                "WEIGHTS PRESENT {}: {} (from {ENV_WEIGHTS}); compared by the test {}, not by this one",
+                c.op, c.tensors, c.compared_by
+            ),
             None => panic!(
                 "SKIPPED {}: {}: the weights file does not cover it",
                 s.op, s.tensors
