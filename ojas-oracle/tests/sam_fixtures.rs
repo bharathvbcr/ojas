@@ -8,8 +8,9 @@ mod support;
 use ojas_core::{erf_f64, Budget, Numerics, OjasError};
 use ojas_cpu::CpuBackend;
 use ojas_oracle::sam_fixtures::{
-    attention, axial_tables, compare, gelu, layer_norm_affine_recovered, rope_interleaved,
-    skipped_ops, Fixture, Kind, Tolerance, GELU_TOL, ROPE_THETA,
+    attention, axial_tables, compare, gelu, group_norm, group_norm_header,
+    layer_norm_affine_recovered, rope_interleaved, skipped_ops, Fixture, Kind, Tolerance, GELU_TOL,
+    ROPE_THETA,
 };
 use support::{build, f32_raw, Raw};
 
@@ -383,4 +384,101 @@ fn a_header_claiming_too_many_elements_is_refused_before_it_is_read() {
     let bytes = build(&[huge], &[]);
     let parsed = Fixture::parse(&bytes);
     assert!(parsed.is_err() || parsed.unwrap().tensor("t").is_err());
+}
+
+/// `(x - mean) / sqrt(var + eps) * w[c] + b[c]` per `(image, group)`, in f64.
+fn group_norm_f64(
+    x: &[f32],
+    [n, c, hw]: [usize; 3],
+    groups: usize,
+    eps: f64,
+    w: &[f32],
+    b: &[f32],
+) -> Vec<f32> {
+    let per = c / groups;
+    let len = per * hw;
+    let mut out = vec![0.0f32; x.len()];
+    for img in 0..n {
+        for g in 0..groups {
+            let start = (img * c + g * per) * hw;
+            let vals: Vec<f64> = x[start..start + len]
+                .iter()
+                .map(|&v| f64::from(v))
+                .collect();
+            let mean = vals.iter().sum::<f64>() / len as f64;
+            let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / len as f64;
+            let rstd = 1.0 / (var + eps).sqrt();
+            for (i, v) in vals.iter().enumerate() {
+                let ch = g * per + i / hw;
+                out[start + i] = ((v - mean) * rstd * f64::from(w[ch]) + f64::from(b[ch])) as f32;
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn group_norm_matches_an_f64_reference_and_sees_a_wrong_grouping_or_eps() {
+    let (n, c, h, w) = (2usize, 8usize, 5usize, 6usize);
+    let x = values(n * c * h * w, 21, 3.0);
+    let (wt, bs) = (values(c, 22, 2.0), values(c, 23, 1.0));
+    let good = group_norm_f64(&x, [n, c, h * w], 4, 1e-5, &wt, &bs);
+    let other_groups = group_norm_f64(&x, [n, c, h * w], 2, 1e-5, &wt, &bs);
+    let other_eps = group_norm_f64(&x, [n, c, h * w], 4, 1.0, &wt, &bs);
+    let shape = [n, c, h, w];
+    let bytes = build(
+        &[
+            f32_raw("gn.input", &shape, &x),
+            f32_raw("gn.weight", &[c], &wt),
+            f32_raw("gn.bias", &[c], &bs),
+            f32_raw("gn.output", &shape, &good),
+            f32_raw("bg.input", &shape, &x),
+            f32_raw("bg.weight", &[c], &wt),
+            f32_raw("bg.bias", &[c], &bs),
+            f32_raw("bg.output", &shape, &other_groups),
+            f32_raw("be.input", &shape, &x),
+            f32_raw("be.weight", &[c], &wt),
+            f32_raw("be.bias", &[c], &bs),
+            f32_raw("be.output", &shape, &other_eps),
+        ],
+        &[("groups", "4"), ("eps", "1e-5")],
+    );
+    let fx = Fixture::parse(&bytes).unwrap();
+    assert_eq!(group_norm_header(&fx).unwrap(), (4, 1e-5));
+    let be = cpu();
+    let ok = group_norm(&be, &fx, "gn", 4, 1e-5).unwrap();
+    assert!(ok.pass, "{ok}");
+    assert_eq!(ok.kind, Kind::Direct);
+    assert!(!group_norm(&be, &fx, "bg", 4, 1e-5).unwrap().pass);
+    assert!(!group_norm(&be, &fx, "be", 4, 1e-5).unwrap().pass);
+    // The call must agree with the header, and a missing tensor is an error.
+    assert!(group_norm(&be, &fx, "gn", 2, 1e-5).is_err());
+    assert!(group_norm(&be, &fx, "gn", 4, 1e-6).is_err());
+    assert!(group_norm(&be, &fx, "absent", 4, 1e-5).is_err());
+}
+
+#[test]
+fn a_group_norm_fixture_without_a_usable_header_is_refused() {
+    let x = values(8, 31, 1.0);
+    let tensors = || {
+        [
+            f32_raw("gn.input", &[1, 2, 2, 2], &x),
+            f32_raw("gn.weight", &[2], &[1.0, 1.0]),
+            f32_raw("gn.bias", &[2], &[0.0, 0.0]),
+            f32_raw("gn.output", &[1, 2, 2, 2], &x),
+        ]
+    };
+    let be = cpu();
+    for metadata in [
+        &[][..],
+        &[("groups", "2")],
+        &[("eps", "1e-5")],
+        &[("groups", "two"), ("eps", "1e-5")],
+        &[("groups", "2"), ("eps", "tiny")],
+    ] {
+        let bytes = build(&tensors(), metadata);
+        let fx = Fixture::parse(&bytes).unwrap();
+        assert!(group_norm_header(&fx).is_err(), "{metadata:?}");
+        assert!(group_norm(&be, &fx, "gn", 2, 1e-5).is_err(), "{metadata:?}");
+    }
 }
