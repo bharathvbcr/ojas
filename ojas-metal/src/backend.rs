@@ -1027,6 +1027,20 @@ fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
     })
 }
 
+/// One bilinear axis's source-index scale, in f32 with the CPU's own
+/// expressions (`ojas-cpu/src/spatial.rs` `bilinear_axis`).
+fn bilinear_scale(size: usize, out: usize, align_corners: bool) -> f32 {
+    if align_corners {
+        if out > 1 {
+            (size - 1) as f32 / (out - 1) as f32
+        } else {
+            0.0
+        }
+    } else {
+        size as f32 / out as f32
+    }
+}
+
 /// Refuse a transposed convolution the GEMM reformulation does not cover:
 /// only a kernel equal to its stride, without padding or output padding.
 fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims) -> Res<()> {
@@ -1042,20 +1056,6 @@ fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims
             d.kernel, p.stride, p.padding, p.output_padding
         ),
     })
-}
-
-/// One bilinear axis's source-index scale, in f32 with the CPU's own
-/// expressions (`ojas-cpu/src/spatial.rs` `bilinear_axis`).
-fn bilinear_scale(size: usize, out: usize, align_corners: bool) -> f32 {
-    if align_corners {
-        if out > 1 {
-            (size - 1) as f32 / (out - 1) as f32
-        } else {
-            0.0
-        }
-    } else {
-        size as f32 / out as f32
-    }
 }
 
 /// The convolution kernels' geometry of validated `dims`.
