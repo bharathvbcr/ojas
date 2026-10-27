@@ -854,7 +854,8 @@ mod bench {
         let (warmups, runs) = (num(0, 5), num(1, 25));
         let only = args.get(2).cloned().unwrap_or_default();
         let budget = Budget::new(24 << 30);
-        let metal = MetalBackend::new(budget.clone()).expect("Metal device");
+        let metal_owner = MetalBackend::new(budget.clone()).expect("Metal device");
+        let metal = &metal_owner;
         assert!(
             metal.has_tensorops(),
             "the control and the Autocast arm need TensorOps: this device has none"
@@ -868,7 +869,7 @@ mod bench {
         let ctl = Control {
             x: dev(&[FC1.0, FC1.1], 91, 1.0),
             w: dev(&[FC1.2, FC1.1], 92, 0.05),
-            metal: &metal,
+            metal,
         };
         let start_load = load();
         println!(
@@ -911,9 +912,7 @@ mod bench {
                     .enumerate()
                     .map(|(i, sh)| dev(sh, 10 + i as u64, if i == 0 { 1.0 } else { 0.05 }))
                     .collect();
-                let t = &t;
-                let ac = Autocast::new(&metal);
-                let acr = &ac;
+                let ac = Autocast::new(metal);
                 let _region = ac.autocast_region(AutocastMode::Bf16).expect("region");
                 let arms: Vec<Arm<'_>> = match row.op {
                     Op::LayerNorm => {
@@ -1154,7 +1153,7 @@ mod bench {
                 };
                 let mut clean = false;
                 for n in 1..=ATTEMPTS {
-                    if attempt(&metal, &ctl, &label, n, &arms, warmups, runs) {
+                    if attempt(metal, &ctl, &label, n, &arms, warmups, runs) {
                         clean = true;
                         break;
                     }
