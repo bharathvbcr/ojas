@@ -135,8 +135,9 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
     ok("sync", m.sync());
     let plain_dispatches = m.dispatches() - before;
     // The inference form is the saving form's output, bit for bit on the
-    // general kernel. Unmasked self-attention at head dim 32 or 64 on a TensorOps
-    // device is the exception: `attention_forward` runs tessl's tiled
+    // general kernel. Unmasked attention at head dim 32 or 64 with
+    // `Tq <= Tk <= 8 Tq` on a TensorOps device is the exception:
+    // `attention_forward` runs tessl's tiled
     // `encoder_attn` (26x faster at [1, 16, 5184, 64]), whose sums are in
     // another order, so the two forms agree to the forward tolerance (they
     // measured 1.5e-7 apart) and no closer.

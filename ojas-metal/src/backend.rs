@@ -1112,7 +1112,9 @@ const ENCODER_ATTN_MAX_PAD_RATIO: usize = 8;
 /// Whether `attention_forward` runs on tessl's tiled `encoder_attn` rather
 /// than `ojas_attn_gen_fwd`: bidirectional attention over equal head counts
 /// with no bias, key lengths or window, at one of [`ENCODER_ATTN_HEAD_DIMS`],
-/// with `Tq <= Tk <= ENCODER_ATTN_MAX_PAD_RATIO * Tq` (a shorter Q is padded),
+/// with `0 < Tq <= Tk <= ENCODER_ATTN_MAX_PAD_RATIO * Tq` (a shorter Q is
+/// padded; an empty call takes the general kernel, which returns an empty
+/// output),
 /// on a device with TensorOps, with one head's `Tk`-row plane addressable in
 /// `i32` as tessl's matrix-unit views require and the padded tensor within
 /// the kernels' 32-bit element indexing (the permutes index it in `u32`).
@@ -1133,7 +1135,8 @@ fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
         .and_then(|bt| bt.checked_mul(dims.heads))
         .and_then(|bth| bth.checked_mul(dims.head_dim))
         .is_some_and(|n| u32::try_from(n).is_ok());
-    let padded_ok = dims.q_len <= dims.kv_len
+    let padded_ok = dims.q_len > 0
+        && dims.q_len <= dims.kv_len
         && dims
             .q_len
             .checked_mul(ENCODER_ATTN_MAX_PAD_RATIO)
@@ -4258,7 +4261,7 @@ mod tests {
     }
 
     #[test]
-    fn only_plain_self_attention_at_head_dim_32_or_64_routes_to_encoder_attn() {
+    fn only_plain_attention_at_head_dim_32_or_64_with_tq_at_most_tk_routes_to_encoder_attn() {
         let base = vision_dims();
         assert!(routes_to_encoder_attn(&base, true));
         assert!(
@@ -4334,6 +4337,25 @@ mod tests {
                 },
             ),
             ("Tq > Tk", AttentionDims { kv_len: 77, ..base }),
+            (
+                "an empty query",
+                AttentionDims {
+                    q_len: 0,
+                    kv_len: 0,
+                    ..base
+                },
+            ),
+            (
+                "an empty query at head dim 32",
+                AttentionDims {
+                    q_len: 0,
+                    kv_len: 0,
+                    head_dim: 32,
+                    heads: 8,
+                    kv_heads: 8,
+                    ..base
+                },
+            ),
             (
                 "Tk more than 8x Tq",
                 AttentionDims {
