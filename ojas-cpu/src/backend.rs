@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use ojas_core::{
     broadcast_add_forward_dims, broadcast_mul_forward_dims, channel_layer_norm_forward_dims,
-    gelu_erf_forward_dims, group_norm_forward_dims, layer_norm_forward_dims,
-    linear_bias_forward_dims, relu_forward_dims, scale_forward_dims, softmax_forward_dims,
+    concat_dims, gelu_erf_forward_dims, group_norm_forward_dims, layer_norm_forward_dims,
+    linear_bias_forward_dims, relu_forward_dims, scale_forward_dims, slice_dims,
+    softmax_forward_dims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
@@ -45,7 +46,7 @@ use crate::hybrid::{
     gdn_log_decay_backward, gdn_log_decay_forward, rope_partial, sigmoid_backward, sigmoid_forward,
     Turn,
 };
-use crate::layout::permute;
+use crate::layout::{concat, permute, slice};
 use crate::linalg::{linear_backward, linear_backward_input, linear_forward};
 use crate::norm::{rms_backward, rms_forward, rope_backward, rope_forward};
 use crate::optim::{
@@ -1327,6 +1328,22 @@ impl Backend for CpuBackend {
         relu_forward_dims(input)?;
         let [x] = f32_operands(OP, self.exec(), [input])?;
         relu_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        let dims = concat_dims(inputs, axis)?;
+        concat("concat", &self.budget, self.exec(), inputs, dims)
+    }
+
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        let dims = slice_dims(input, axis, start, len)?;
+        slice("slice", &self.budget, self.exec(), input, dims)
     }
 
     fn linear_bias_forward(

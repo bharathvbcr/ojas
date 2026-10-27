@@ -71,6 +71,8 @@ const CHANNEL_LAYER_NORM_FORWARD: &str = "channel_layer_norm_forward";
 const GROUP_NORM_FORWARD: &str = "group_norm_forward";
 const GELU_ERF_FORWARD: &str = "gelu_erf_forward";
 const RELU_FORWARD: &str = "relu_forward";
+const CONCAT: &str = "concat";
+const SLICE: &str = "slice";
 const LINEAR_BIAS_FORWARD: &str = "linear_bias_forward";
 const BROADCAST_ADD_FORWARD: &str = "broadcast_add_forward";
 const BROADCAST_MUL_FORWARD: &str = "broadcast_mul_forward";
@@ -136,6 +138,32 @@ pub struct GroupNormDims {
     pub groups: usize,
     /// `height * width`.
     pub spatial: usize,
+}
+
+/// Dimensions of a concatenation along one axis: input `i` is
+/// `[outer, axis_lens[i], inner]` and the output `[outer, sum(axis_lens),
+/// inner]`, `outer` and `inner` being the products of the axes before and
+/// after `axis`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConcatDims {
+    pub outer: usize,
+    pub inner: usize,
+    /// Extent of each input along the concatenated axis.
+    pub axis_lens: Vec<usize>,
+    pub out_shape: Vec<usize>,
+}
+
+/// Dimensions of a slice along one axis: the input is `[outer, axis_len,
+/// inner]` and the output `[outer, len, inner]`, the rows `start..start +
+/// len` of the axis.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SliceDims {
+    pub outer: usize,
+    pub inner: usize,
+    pub axis_len: usize,
+    pub start: usize,
+    pub len: usize,
+    pub out_shape: Vec<usize>,
 }
 
 /// A numpy-style broadcast of two shapes: the output shape, and each
@@ -1490,6 +1518,117 @@ pub fn gelu_erf_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
 /// its element count.
 pub fn relu_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(RELU_FORWARD, &[input])
+}
+
+/// [`crate::Backend::concat`]: at least one `F32` tensor, all of one rank
+/// and all equal on every axis but `axis`, which must be below that rank.
+/// Refused in this order: no inputs, each operand's own rules in turn (dtype,
+/// an empty extent, an element or byte count that overflows), the axis, a
+/// rank that differs from the first input's, an extent off `axis` that
+/// differs, then a summed axis or an output whose element or byte count
+/// overflows ([`OjasError::OutOfRange`]). No input is empty, so the output
+/// never is.
+pub fn concat_dims(inputs: &[&Tensor], axis: usize) -> Result<ConcatDims, OjasError> {
+    const OP: &str = CONCAT;
+    let Some((first, rest)) = inputs.split_first() else {
+        return Err(refuse(OP, "no inputs"));
+    };
+    for t in inputs {
+        f32_operand(OP, t)?;
+    }
+    let shape = first.shape();
+    if axis >= shape.len() {
+        return Err(refuse(
+            OP,
+            format!("axis {axis} is not below the rank {}", shape.len()),
+        ));
+    }
+    for (i, t) in rest.iter().enumerate() {
+        let other = t.shape();
+        if other.len() != shape.len() {
+            return Err(refuse(
+                OP,
+                format!(
+                    "input {} has rank {}, input 0 has {}",
+                    i + 1,
+                    other.len(),
+                    shape.len()
+                ),
+            ));
+        }
+        if let Some(a) = (0..shape.len()).find(|&a| a != axis && other[a] != shape[a]) {
+            return Err(refuse(
+                OP,
+                format!(
+                    "input {} shape {other:?} differs from input 0 {shape:?} off axis {axis}, at axis {a}",
+                    i + 1
+                ),
+            ));
+        }
+    }
+    let mut total = 0usize;
+    let mut axis_lens = Vec::with_capacity(inputs.len());
+    for t in inputs {
+        let n = t.shape()[axis];
+        total = total
+            .checked_add(n)
+            .ok_or_else(|| too_large(OP, format!("summed extent of axis {axis} overflows")))?;
+        axis_lens.push(n);
+    }
+    let mut out_shape = shape.to_vec();
+    out_shape[axis] = total;
+    f32_product(OP, &out_shape)?;
+    Ok(ConcatDims {
+        outer: shape[..axis].iter().product(),
+        inner: shape[axis + 1..].iter().product(),
+        axis_lens,
+        out_shape,
+    })
+}
+
+/// [`crate::Backend::slice`]: an `F32` `input` and `axis` below its rank;
+/// the rows `start..start + len` of that axis, `len` at least 1. Refused in
+/// this order: the operand's rules, the axis ([`OjasError::Shape`]), `len`
+/// of 0 (an empty output, [`OjasError::Shape`]), a `start + len` that
+/// overflows or passes the axis extent ([`OjasError::OutOfRange`]).
+pub fn slice_dims(
+    input: &Tensor,
+    axis: usize,
+    start: usize,
+    len: usize,
+) -> Result<SliceDims, OjasError> {
+    const OP: &str = SLICE;
+    f32_operand(OP, input)?;
+    let shape = input.shape();
+    if axis >= shape.len() {
+        return Err(refuse(
+            OP,
+            format!("axis {axis} is not below the rank {}", shape.len()),
+        ));
+    }
+    if len == 0 {
+        return Err(refuse(OP, "empty slice: len 0"));
+    }
+    let axis_len = shape[axis];
+    let end = start
+        .checked_add(len)
+        .ok_or_else(|| too_large(OP, format!("start {start} + len {len} overflows")))?;
+    if end > axis_len {
+        return Err(too_large(
+            OP,
+            format!("rows {start}..{end} pass the extent {axis_len} of axis {axis}"),
+        ));
+    }
+    let mut out_shape = shape.to_vec();
+    out_shape[axis] = len;
+    Ok(SliceDims {
+        outer: shape[..axis].iter().product(),
+        inner: shape[axis + 1..].iter().product(),
+        axis_len,
+        start,
+        len,
+        out_shape,
+    })
 }
 
 /// [`crate::Backend::linear_bias_forward`]: the rules of
@@ -4211,6 +4350,107 @@ mod tests {
             group_norm_forward_dims(&big, &w, &b, 3, 1e-5),
             op,
             "shape product",
+        );
+    }
+
+    #[test]
+    fn concat_dims_view_each_input_as_outer_axis_inner() {
+        let op = "concat";
+        let (a, b, c) = (f(&[2, 3, 4]), f(&[2, 5, 4]), f(&[2, 1, 4]));
+        let d = concat_dims(&[&a, &b, &c], 1).unwrap();
+        assert_eq!(
+            d,
+            ConcatDims {
+                outer: 2,
+                inner: 4,
+                axis_lens: vec![3, 5, 1],
+                out_shape: vec![2, 9, 4],
+            }
+        );
+        let d = concat_dims(&[&a], 2).unwrap();
+        assert_eq!((d.outer, d.inner, d.out_shape), (6, 1, vec![2, 3, 4]));
+        let d = concat_dims(&[&a, &a], 0).unwrap();
+        assert_eq!((d.outer, d.inner, d.out_shape), (1, 12, vec![4, 3, 4]));
+        // Rank 0 has no axis to join along.
+        shape_err(concat_dims(&[&f(&[])], 0), op, "axis 0");
+        shape_err(concat_dims(&[], 0), op, "no inputs");
+        shape_err(concat_dims(&[&a, &b], 3), op, "axis 3");
+        shape_err(concat_dims(&[&a, &b], usize::MAX), op, "axis");
+        shape_err(concat_dims(&[&a, &f(&[2, 3])], 1), op, "rank 2");
+        shape_err(concat_dims(&[&a, &f(&[2, 3, 4, 1])], 1), op, "rank 4");
+        // An extent off the axis that differs, and which one.
+        shape_err(concat_dims(&[&a, &f(&[3, 3, 4])], 1), op, "at axis 0");
+        shape_err(concat_dims(&[&a, &f(&[2, 3, 5])], 1), op, "at axis 2");
+        shape_err(concat_dims(&[&a, &a, &f(&[2, 3, 5])], 1), op, "input 2");
+        // Per-operand rules come before the axis and the other shapes.
+        shape_err(concat_dims(&[&a, &f(&[2, 0, 4])], 1), op, "empty tensor");
+        shape_err(concat_dims(&[&f(&[0, 3])], 9), op, "empty tensor");
+        dtype_err(
+            concat_dims(&[&a, &u(&[2, 3, 4])], 1),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        dtype_err(
+            concat_dims(&[&u(&[2, 3, 4]), &a], 1),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        dtype_err(
+            concat_dims(&[&a, &of(DType::Bf16, &[2, 3, 4])], 1),
+            op,
+            DType::F32,
+            DType::Bf16,
+        );
+        // A summed axis whose output overflows is out of range, not wrapped.
+        let big = broadcast(DType::F32, &[1 << 40, 1 << 20]);
+        range_err(concat_dims(&[&big, &big, &big, &big], 0), op, "overflows");
+        range_err(
+            concat_dims(&[&broadcast(DType::F32, &[1 << 40, 1 << 22])], 0),
+            op,
+            "overflows",
+        );
+    }
+
+    #[test]
+    fn slice_dims_check_the_axis_then_the_rows() {
+        let op = "slice";
+        let x = f(&[2, 6, 4]);
+        let d = slice_dims(&x, 1, 2, 3).unwrap();
+        assert_eq!(
+            d,
+            SliceDims {
+                outer: 2,
+                inner: 4,
+                axis_len: 6,
+                start: 2,
+                len: 3,
+                out_shape: vec![2, 3, 4],
+            }
+        );
+        // The whole axis, and the last row, are legal.
+        assert_eq!(slice_dims(&x, 1, 0, 6).unwrap().out_shape, [2, 6, 4]);
+        assert_eq!(slice_dims(&x, 1, 5, 1).unwrap().out_shape, [2, 1, 4]);
+        assert_eq!(slice_dims(&x, 0, 1, 1).unwrap().out_shape, [1, 6, 4]);
+        assert_eq!(slice_dims(&x, 2, 0, 4).unwrap().inner, 1);
+        shape_err(slice_dims(&x, 3, 0, 1), op, "axis 3");
+        shape_err(slice_dims(&x, usize::MAX, 0, 1), op, "axis");
+        shape_err(slice_dims(&f(&[]), 0, 0, 1), op, "axis 0");
+        shape_err(slice_dims(&x, 1, 0, 0), op, "len 0");
+        // len 0 is refused even where the start would be out of range.
+        shape_err(slice_dims(&x, 1, 99, 0), op, "len 0");
+        range_err(slice_dims(&x, 1, 6, 1), op, "6..7");
+        range_err(slice_dims(&x, 1, 4, 3), op, "4..7");
+        range_err(slice_dims(&x, 1, 0, 7), op, "0..7");
+        range_err(slice_dims(&x, 1, usize::MAX, 1), op, "overflows");
+        range_err(slice_dims(&x, 1, 1, usize::MAX), op, "overflows");
+        shape_err(slice_dims(&f(&[2, 0, 4]), 1, 0, 1), op, "empty tensor");
+        dtype_err(
+            slice_dims(&u(&[2, 6, 4]), 1, 0, 1),
+            op,
+            DType::F32,
+            DType::U32,
         );
     }
 

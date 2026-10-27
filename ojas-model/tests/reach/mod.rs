@@ -193,6 +193,8 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
         "group_norm_forward" => b.group_norm_forward(&t, &t, &t, 1, 1e-5).map(|_| ()),
         "gelu_erf_forward" => b.gelu_erf_forward(&t).map(|_| ()),
         "relu_forward" => b.relu_forward(&t).map(|_| ()),
+        "concat" => b.concat(&[&t, &t], 0).map(|_| ()),
+        "slice" => b.slice(&t, 0, 0, 1).map(|_| ()),
         "linear_bias_forward" => b.linear_bias_forward(&t, &t, &t).map(|_| ()),
         "broadcast_add_forward" => b.broadcast_add_forward(&t, &t).map(|_| ()),
         "broadcast_mul_forward" => b.broadcast_mul_forward(&t, &t).map(|_| ()),

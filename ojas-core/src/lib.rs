@@ -53,7 +53,7 @@ pub use shapes::{
     broadcast_mul_forward_dims, broadcast_shapes, cached_attention_dims,
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims,
     causal_sdpa_forward_dims, channel_layer_norm_forward_dims, chunked_gdn_backward_dims,
-    chunked_gdn_forward_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
+    chunked_gdn_forward_dims, clip_grad_norm_dims, concat_dims, cross_entropy_mean_backward_dims,
     cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
     gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
     gdn_log_decay_forward_dims, gelu_erf_forward_dims, group_norm_forward_dims,
@@ -65,11 +65,11 @@ pub use shapes::{
     rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
     rope_half_split_backward_dims, rope_half_split_forward_dims, rope_partial_backward_dims,
     rope_partial_forward_dims, scale_forward_dims, scale_grad_dims, sigmoid_backward_dims,
-    sigmoid_forward_dims, silu_backward_dims, silu_forward_dims, softmax_forward_dims,
+    sigmoid_forward_dims, silu_backward_dims, silu_forward_dims, slice_dims, softmax_forward_dims,
     topk_rows_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AttentionBias, AttentionDims, BroadcastDims, CeDims, ChannelNormDims, Conv1dDims,
+    AttentionBias, AttentionDims, BroadcastDims, CeDims, ChannelNormDims, ConcatDims, Conv1dDims,
     EmbeddingDims, GateDims, GdnDecayDims, GdnDims, GroupNormDims, KvDims, LinearCeDims,
-    LinearDims, MuonDims, PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims,
+    LinearDims, MuonDims, PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims, SliceDims,
     MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
 };
 pub use spatial::{

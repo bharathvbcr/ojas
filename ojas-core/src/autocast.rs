@@ -1179,6 +1179,30 @@ impl<B: Backend> Backend for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
+    /// Data movement: no value is rounded or computed. The output is bf16-
+    /// tagged only when every input is, since only then is every value
+    /// bf16-exact.
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.concat(inputs, axis)?;
+        let all_bf16 = inputs.iter().all(|t| t.compute_tag() == COMPUTE_BF16);
+        out.set_compute_tag(if all_bf16 { COMPUTE_BF16 } else { COMPUTE_F32 });
+        Ok(out)
+    }
+
+    /// Data movement, as [`Self::permute`]: the tag follows the input.
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.slice(input, axis, start, len)?;
+        Ok(self.copy_tag(input, out))
+    }
+
     fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let on = self.region()?;
         let tagged = input.compute_tag() == COMPUTE_BF16;
