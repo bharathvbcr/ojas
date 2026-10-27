@@ -2653,7 +2653,7 @@ impl Worker {
     }
 
     /// Bidirectional self-attention on tessl's `embedgemma2::encoder_attn`
-    /// (the tiled TensorOps kernel at head dim 64), which wants
+    /// (the tiled TensorOps kernel at head dim 32 or 64), which wants
     /// `[batch, seq, heads, d]`: each operand is permuted in, the output is
     /// permuted back. tessl scales `q . k` by `scale` (here `sdpa_scale(d)`,
     /// the CPU reference's `1 / sqrt(d)`) and masks by a per-batch length

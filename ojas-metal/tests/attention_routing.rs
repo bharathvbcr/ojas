@@ -50,6 +50,15 @@ fn dispatches_of(
 
 #[test]
 fn routed_self_attention_matches_cpu_on_small_and_vision_head_slices() {
+    routed_matches_cpu(64);
+}
+
+#[test]
+fn routed_self_attention_at_head_dim_32_matches_cpu() {
+    routed_matches_cpu(32);
+}
+
+fn routed_matches_cpu(d: usize) {
     let (m, c) = (metal(), cpu());
     for (i, (b, h, t)) in [
         (1usize, 1usize, 1usize),
@@ -63,7 +72,7 @@ fn routed_self_attention_matches_cpu_on_small_and_vision_head_slices() {
     .enumerate()
     {
         let seed = 10 * i as u64;
-        let [q, k, v] = qkv(b, h, t, 64, seed);
+        let [q, k, v] = qkv(b, h, t, d, seed + d as u64);
         let want = ok(
             "cpu",
             c.attention_forward(&q, &k, &v, AttentionOpts::default()),
@@ -78,16 +87,27 @@ fn routed_self_attention_matches_cpu_on_small_and_vision_head_slices() {
             ),
         );
         ok("sync", m.sync());
-        same_tensor(&format!("[{b},{h},{t},64]"), &got, &want, tol(t), 1e-4);
+        same_tensor(&format!("[{b},{h},{t},{d}]"), &got, &want, tol(t), 1e-4);
     }
 }
 
 #[test]
 fn routed_self_attention_matches_the_general_kernel_at_the_sam_shapes() {
+    routed_matches_general(64, &[(9, 16, 576), (1, 16, 5184)]);
+}
+
+/// The detector's head dim: 8 heads of 32 over the 72 x 72 grid, and a
+/// windowed shape.
+#[test]
+fn routed_self_attention_at_head_dim_32_matches_the_general_kernel() {
+    routed_matches_general(32, &[(9, 8, 576), (1, 8, 5184)]);
+}
+
+fn routed_matches_general(d: usize, shapes: &[(usize, usize, usize)]) {
     let m = metal();
     // `attention_forward_saving` never routes, so it is the general kernel.
-    for (b, h, t) in [(9usize, 16usize, 576usize), (1, 16, 5184)] {
-        let [q, k, v] = qkv(b, h, t, 64, 100 + t as u64);
+    for &(b, h, t) in shapes {
+        let [q, k, v] = qkv(b, h, t, d, 100 + t as u64);
         let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
         let (want, _lse) = ok(
             "general",
@@ -99,7 +119,13 @@ fn routed_self_attention_matches_the_general_kernel_at_the_sam_shapes() {
         );
         ok("sync", m.sync());
         let want_host = ok("down", want.to_host(&ojas_core::Budget::new(8 * GIB)));
-        same_tensor(&format!("[{b},{h},{t},64]"), &got, &want_host, tol(t), 1e-4);
+        same_tensor(
+            &format!("[{b},{h},{t},{d}]"),
+            &got,
+            &want_host,
+            tol(t),
+            1e-4,
+        );
     }
 }
 
@@ -144,13 +170,32 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
         assert_eq!(plain, general, "no TensorOps: nothing may route");
     }
 
+    // Head dim 32 is routed too: more dispatches than the general kernel.
+    let (q32, k32, v32) = (
+        up(&m, &rand(&[1, 2, 64, 32], 12, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 32], 13, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 32], 14, 1.0)),
+    );
+    let routed32 = dispatches_of(&m, &q32, &k32, &v32, AttentionOpts::default());
+    let kg32 = up(&m, &rand(&[1, 1, 64, 32], 15, 1.0));
+    let vg32 = up(&m, &rand(&[1, 1, 64, 32], 16, 1.0));
+    let general32 = dispatches_of(&m, &q32, &kg32, &vg32, AttentionOpts::default());
+    if m.has_tensorops() {
+        assert!(
+            routed32 > general32,
+            "head dim 32: routed {routed32} vs general {general32}"
+        );
+    } else {
+        assert_eq!(routed32, general32, "no TensorOps: nothing may route");
+    }
+
     let bias = up(&m, &rand(&[1, 2, 64, 64], 4, 1.0));
     let lens = up(&m, &host_u32(&[64], &[1]));
     let q_short = up(&m, &rand(&[1, 2, 17, 64], 5, 1.0));
-    let (q32, k32, v32) = (
-        up(&m, &rand(&[1, 2, 64, 32], 6, 1.0)),
-        up(&m, &rand(&[1, 2, 64, 32], 7, 1.0)),
-        up(&m, &rand(&[1, 2, 64, 32], 8, 1.0)),
+    let (q128, k128, v128) = (
+        up(&m, &rand(&[1, 2, 64, 128], 6, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 128], 7, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 128], 8, 1.0)),
     );
     let (q16, k16, v16) = (
         up(&m, &rand(&[1, 2, 64, 16], 9, 1.0)),
@@ -216,8 +261,8 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
             dispatches_of(&m, &q_short, &dk, &dv, AttentionOpts::default()),
         ),
         (
-            "head dim 32",
-            dispatches_of(&m, &q32, &k32, &v32, AttentionOpts::default()),
+            "head dim 128",
+            dispatches_of(&m, &q128, &k128, &v128, AttentionOpts::default()),
         ),
         (
             "head dim 16",
@@ -275,20 +320,26 @@ fn the_calls_that_stay_on_the_general_kernel_still_match_cpu() {
 #[test]
 fn a_non_finite_operand_faults_under_the_name_that_was_called_on_the_routed_path() {
     let m = metal();
-    let [q, k, v] = qkv(1, 2, 64, 64, 41);
+    for d in [64usize, 32] {
+        non_finite_faults(&m, d);
+    }
+}
+
+fn non_finite_faults(m: &MetalBackend, d: usize) {
+    let [q, k, v] = qkv(1, 2, 64, d, 41);
     for (what, which) in [("q", 0usize), ("k", 1), ("v", 2)] {
         for bad in [f32::NAN, f32::INFINITY] {
             let mut ops = [q.clone(), k.clone(), v.clone()];
             let mut data = ok("host", ops[which].to_f32_vec());
             data[5] = bad;
-            ops[which] = host(&data, &[1, 2, 64, 64]);
+            ops[which] = host(&data, &[1, 2, 64, d]);
             let r = m.attention_forward(
-                &up(&m, &ops[0]),
-                &up(&m, &ops[1]),
-                &up(&m, &ops[2]),
+                &up(m, &ops[0]),
+                &up(m, &ops[1]),
+                &up(m, &ops[2]),
                 AttentionOpts::default(),
             );
-            deferred(&m, &format!("{bad} in {what}"), r, "attention_forward");
+            deferred(m, &format!("{bad} in {what}"), r, "attention_forward");
         }
     }
 }
@@ -299,8 +350,14 @@ fn a_non_finite_operand_faults_under_the_name_that_was_called_on_the_routed_path
 /// which is finite throughout, and stay finite.
 #[test]
 fn routed_attention_with_scores_past_the_exp_overflow_matches_cpu() {
+    for d in [64usize, 32] {
+        large_scores_match_cpu(d);
+    }
+}
+
+fn large_scores_match_cpu(d: usize) {
     let (m, c) = (metal(), cpu());
-    let (b, h, t, d) = (2usize, 2usize, 128usize, 64usize);
+    let (b, h, t) = (2usize, 2usize, 128usize);
     let q = rand(&[b, h, t, d], 91, 15.0);
     let k = rand(&[b, h, t, d], 92, 15.0);
     let v = rand(&[b, h, t, d], 93, 1.0);
@@ -345,7 +402,13 @@ fn routed_attention_with_scores_past_the_exp_overflow_matches_cpu() {
 /// fail with `CapacityExceeded`, and leave nothing charged behind.
 #[test]
 fn a_budget_that_holds_the_output_but_not_the_routed_scratch_runs_the_general_kernel() {
-    let (b, h, t, d) = (1usize, 2usize, 256usize, 64usize);
+    for d in [64usize, 32] {
+        budget_fallback(d);
+    }
+}
+
+fn budget_fallback(d: usize) {
+    let (b, h, t) = (1usize, 2usize, 256usize);
     let n = b * h * t * d;
     let [q, k, v] = qkv(b, h, t, d, 77);
     let want = ok(
@@ -429,4 +492,45 @@ fn detector_cross_attention_wall_clock() {
         }
     }
     eprintln!("DETECTOR_CROSS_ATTENTION min of 5: {best:.3} ms");
+}
+
+/// Wall clock of the routed path against the general kernel at the
+/// detector's head dim, `[1, 8, 5184, 32]` (the 72 x 72 grid, 8 heads):
+/// minimum of 5 after 2 warm-up calls, each ended by a sync. The saving form
+/// never routes, so it is the general kernel. Run with `--ignored
+/// --nocapture`.
+#[test]
+#[ignore = "timing, not a correctness check"]
+fn head_dim_32_routed_against_general_wall_clock() {
+    let m = metal();
+    let (q, k, v) = (
+        up(&m, &rand(&[1, 8, 5184, 32], 1, 1.0)),
+        up(&m, &rand(&[1, 8, 5184, 32], 2, 1.0)),
+        up(&m, &rand(&[1, 8, 5184, 32], 3, 1.0)),
+    );
+    let time = |routed: bool| {
+        let mut best = f64::MAX;
+        for i in 0..7 {
+            ok("sync", m.sync());
+            let start = Instant::now();
+            if routed {
+                drop(ok(
+                    "routed",
+                    m.attention_forward(&q, &k, &v, AttentionOpts::default()),
+                ));
+            } else {
+                drop(ok(
+                    "general",
+                    m.attention_forward_saving(&q, &k, &v, AttentionOpts::default()),
+                ));
+            }
+            ok("sync", m.sync());
+            if i >= 2 {
+                best = best.min(start.elapsed().as_secs_f64() * 1e3);
+            }
+        }
+        best
+    };
+    let (general, routed) = (time(false), time(true));
+    eprintln!("D32_ROUTING [1,8,5184,32]: general {general:.2} ms, routed {routed:.2} ms");
 }

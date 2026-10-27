@@ -135,7 +135,7 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
     ok("sync", m.sync());
     let plain_dispatches = m.dispatches() - before;
     // The inference form is the saving form's output, bit for bit on the
-    // general kernel. Unmasked self-attention at head dim 64 on a TensorOps
+    // general kernel. Unmasked self-attention at head dim 32 or 64 on a TensorOps
     // device is the exception: `attention_forward` runs tessl's tiled
     // `encoder_attn` (26x faster at [1, 16, 5184, 64]), whose sums are in
     // another order, so the two forms agree to the forward tolerance (they
@@ -168,7 +168,7 @@ fn down_host(t: &Tensor) -> Tensor {
 }
 
 /// Whether `attention_forward` takes tessl's `encoder_attn` for this case:
-/// plain self-attention at head dim 64 on a device with TensorOps.
+/// plain self-attention at head dim 32 or 64 on a device with TensorOps.
 fn routes_to_encoder_attn(m: &MetalBackend, c: &Case) -> bool {
     m.has_tensorops()
         && !c.causal
@@ -177,7 +177,7 @@ fn routes_to_encoder_attn(m: &MetalBackend, c: &Case) -> bool {
         && c.lens.is_none()
         && c.tq == c.tk
         && c.h == c.hkv
-        && c.d == 64
+        && (c.d == 32 || c.d == 64)
 }
 
 #[test]

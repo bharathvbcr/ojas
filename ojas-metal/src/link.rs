@@ -649,7 +649,7 @@ pub(crate) enum Cmd {
         geom: ConvGeom,
     },
     /// Bidirectional self-attention without a bias, key lengths or window
-    /// on tessl's tiled `encoder_attn` (head dim 64): permutes in, attends,
+    /// on tessl's tiled `encoder_attn` (head dim 32 or 64): permutes in, attends,
     /// permutes out. Replies with the output alone; `op` names a fault.
     EncoderAttn {
         op: &'static str,

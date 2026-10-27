@@ -1090,16 +1090,18 @@ fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
     })
 }
 
-/// The one head dim `encoder_attn` is routed at: the SAM vision attention
-/// (64), where it measured 22.8 ms against 606 ms for `ojas_attn_gen_fwd`
-/// on `[1, 16, 5184, 64]` and 4.7 ms against 77 ms on `[9, 16, 576, 64]`
-/// (bench/results/2026-10-26-attention-vision). The other head dims tessl's
-/// tiled kernels compile (32, 256) have no measurement here.
-const ENCODER_ATTN_HEAD_DIM: usize = 64;
+/// The head dims `encoder_attn` is routed at. 64 is the SAM vision attention,
+/// where it measured 22.8 ms against 606 ms for `ojas_attn_gen_fwd` on
+/// `[1, 16, 5184, 64]` and 4.7 ms against 77 ms on `[9, 16, 576, 64]`
+/// (bench/results/2026-10-26-attention-vision). 32 is the same tiled kernel
+/// family (`ENCODER_TILED_KERNEL`, one simdgroup and 16 queries a group) with
+/// the same i32-plane and length semantics. The head dims tessl compiles
+/// beyond these (256, 512) have no measurement here.
+const ENCODER_ATTN_HEAD_DIMS: [usize; 2] = [32, 64];
 
 /// Whether `attention_forward` runs on tessl's tiled `encoder_attn` rather
 /// than `ojas_attn_gen_fwd`: bidirectional self-attention over equal head
-/// counts with no bias, key lengths or window, at [`ENCODER_ATTN_HEAD_DIM`],
+/// counts with no bias, key lengths or window, at one of [`ENCODER_ATTN_HEAD_DIMS`],
 /// on a device with TensorOps, with one head's plane addressable in `i32`
 /// as tessl's matrix-unit views require and the whole tensor within the
 /// kernels' 32-bit element indexing (the permutes index it in `u32`).
@@ -1127,7 +1129,7 @@ fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
         && !dims.key_lens
         && dims.q_len == dims.kv_len
         && dims.heads == dims.kv_heads
-        && dims.head_dim == ENCODER_ATTN_HEAD_DIM
+        && ENCODER_ATTN_HEAD_DIMS.contains(&dims.head_dim)
         && plane
         && elements
 }
@@ -1898,7 +1900,7 @@ impl Backend for MetalBackend {
     /// non-finite operand faults under `attention_forward`.
     ///
     /// Not bit-identical to the saving form for unmasked self-attention at
-    /// head dim 64 on a TensorOps device (`routes_to_encoder_attn`): that
+    /// head dim 32 or 64 on a TensorOps device (`routes_to_encoder_attn`): that
     /// call runs tessl's tiled `encoder_attn`, 26x faster at `[1, 16, 5184,
     /// 64]` (22.8 ms against 606 ms), whose sums add in another order. The
     /// two forms agree within the forward tolerance (1.5e-7 measured at the
@@ -4239,9 +4241,21 @@ mod tests {
     }
 
     #[test]
-    fn only_plain_self_attention_at_head_dim_64_routes_to_encoder_attn() {
+    fn only_plain_self_attention_at_head_dim_32_or_64_routes_to_encoder_attn() {
         let base = vision_dims();
         assert!(routes_to_encoder_attn(&base, true));
+        assert!(
+            routes_to_encoder_attn(
+                &AttentionDims {
+                    head_dim: 32,
+                    heads: 8,
+                    kv_heads: 8,
+                    ..base
+                },
+                true
+            ),
+            "head dim 32 routes"
+        );
         assert!(!routes_to_encoder_attn(&base, false), "no TensorOps");
         let bias = ojas_core::AttentionBias {
             batch: 1,
@@ -4293,9 +4307,9 @@ mod tests {
                 },
             ),
             (
-                "head dim 32",
+                "head dim 128",
                 AttentionDims {
-                    head_dim: 32,
+                    head_dim: 128,
                     ..base
                 },
             ),
