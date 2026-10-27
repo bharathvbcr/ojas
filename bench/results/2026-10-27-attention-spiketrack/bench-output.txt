@@ -1,0 +1,343 @@
+mac_heavy: 2026-10-27T04:47:49Z '78-c2-bench' holds the lock (waited 0s; load 11.67, 1027 processes); running: cargo run --release -p ojas-metal --example attention_spiketrack_bench --manifest-path /Users/bharath/Code/research/ojas-78c/Cargo.toml -- 25 /Users/bharath/Code/research/ojas-78c/bench/results/2026-10-27-attention-spiketrack
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/research/ojas-78c/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 2.17s
+     Running `/Users/bharath/Code/research/ojas/target-78c/release/examples/attention_spiketrack_bench 25 /Users/bharath/Code/research/ojas-78c/bench/results/2026-10-27-attention-spiketrack`
+device: Apple M5 Pro, tensorops true
+tessl kernel picked at D=32: Tiled
+start: GPU 15%, load 11.67 15.86 16.37
+25 reps of two passes over the arms after 5 warm-ups of each; rows ["a", "b", "c1", "c2", "c3", "d", "e", "f33", "f20", "g", "g20", "bx"]
+
+## a: D32 self-attention [1,8,5184,32] [B=1, H=8, Tq=5184, Tk=5184, D=32]
+dispatches per call: ojas 6 (MetalBackend::dispatches), tessl (with permutes) 9 (infer_trace; expected 9)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs tessl (with permutes), whole output | 3.800e-7 | 0.1342 | 2.832e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 0 | 4.917e-7 | 0.1133 | 4.341e-6 | 0.000 | pass |
+| tessl (with permutes) vs CPU Exact, plane 0 | 4.321e-7 | 0.1133 | 3.814e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 7 | 3.725e-7 | 0.1310 | 2.845e-6 | 0.000 | pass |
+| tessl (with permutes) vs CPU Exact, plane 7 | 3.874e-7 | 0.1310 | 2.958e-6 | 0.000 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 226.212 | 228.557 | 227.198 | 231.228 | 231.912 | 4.031 |
+| ojas scalar (repeat) | 25 | 224.459 | 228.973 | 226.514 | 231.379 | 233.208 | 4.865 |
+| ojas scalar pooled | 50 | 224.459 | 228.973 | 227.036 | 231.248 | 233.208 | 4.213 |
+| tessl (with permutes) | 25 | 5.615 | 5.822 | 5.644 | 6.217 | 6.619 | 0.573 |
+| tessl (with permutes) (repeat) | 25 | 5.614 | 5.688 | 5.641 | 6.014 | 6.238 | 0.372 |
+| tessl (with permutes) pooled | 50 | 5.614 | 5.699 | 5.644 | 6.176 | 6.619 | 0.532 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.416 ms, pooled p90 - p10 = 4.213 ms
+contention: start GPU 0%, load 11.67 15.86 16.37; end GPU 99%, load 10.42 15.37 16.19
+tessl (with permutes): median 5.699 ms vs scalar 228.973 ms: margin 223.274 ms (ratio 0.0249), spread 4.213 ms, faster in 50/50 paired rounds -> ROUTE
+per layer 228.973 ms x 10 layers = 2289.732 ms per frame (scalar, contended)
+per layer 5.699 ms x 10 layers = 56.990 ms per frame (tessl arm, contended)
+
+## b: detector cross-attention with bias q [1,8,201,32] kv [1,8,5184,32] bias [1,8,201,5184] [B=1, H=8, Tq=201, Tk=5184, D=32, bias]
+dispatches per call: ojas 7 (MetalBackend::dispatches)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs CPU Exact, plane 0 | 3.725e-7 | 0.1023 | 3.642e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 1 | 4.768e-7 | 0.1094 | 4.359e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 2 | 3.912e-7 | 0.1110 | 3.523e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 3 | 3.427e-7 | 0.0968 | 3.539e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 4 | 2.794e-7 | 0.1181 | 2.367e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 5 | 3.278e-7 | 0.1442 | 2.273e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 6 | 3.055e-7 | 0.0918 | 3.329e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 7 | 5.737e-7 | 0.1054 | 5.440e-6 | 0.000 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 11.099 | 12.111 | 11.531 | 12.538 | 12.770 | 1.007 |
+| ojas scalar (repeat) | 25 | 11.118 | 12.021 | 11.557 | 12.387 | 12.595 | 0.830 |
+| ojas scalar pooled | 50 | 11.099 | 12.060 | 11.557 | 12.387 | 12.770 | 0.830 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.091 ms, pooled p90 - p10 = 0.830 ms
+contention: start GPU 0%, load 10.42 15.37 16.19; end GPU 96%, load 10.42 15.37 16.19
+per layer 12.060 ms x 6 layers = 72.358 ms per frame (scalar, contended)
+bias rule: per-frame 72.358 ms > 35 ms (10% of the measured 0.3495 s CoreML frame) and <= 275 ms (provisional, 10% of 2.75 s) -> tiled bias kernel WARRANTED against the measured threshold
+
+## c1: memory cross-attention m=5200 (frame 1) [B=1, H=8, Tq=5184, Tk=5200, D=32]
+dispatches per call: ojas 6 (MetalBackend::dispatches), tessl, q padded, fused slice 10 (infer_trace; expected 10), tessl, q padded, explicit pad+slice copies 12 (infer_trace; expected 12)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs tessl, q padded, fused slice, whole output | 3.725e-7 | 0.1401 | 2.658e-6 | 0.000 | pass |
+| ojas vs tessl, q padded, explicit pad+slice copies, whole output | 3.725e-7 | 0.1401 | 2.658e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 0 | 3.800e-7 | 0.1215 | 3.127e-6 | 0.000 | pass |
+| tessl, q padded, fused slice vs CPU Exact, plane 0 | 4.470e-7 | 0.1215 | 3.679e-6 | 0.000 | pass |
+| tessl, q padded, explicit pad+slice copies vs CPU Exact, plane 0 | 4.470e-7 | 0.1215 | 3.679e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 7 | 5.811e-7 | 0.1401 | 4.147e-6 | 0.000 | pass |
+| tessl, q padded, fused slice vs CPU Exact, plane 7 | 5.960e-7 | 0.1401 | 4.254e-6 | 0.000 | pass |
+| tessl, q padded, explicit pad+slice copies vs CPU Exact, plane 7 | 5.960e-7 | 0.1401 | 4.254e-6 | 0.000 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 227.097 | 230.023 | 227.926 | 234.915 | 235.645 | 6.988 |
+| ojas scalar (repeat) | 25 | 225.608 | 230.158 | 227.603 | 233.504 | 242.714 | 5.900 |
+| ojas scalar pooled | 50 | 225.608 | 230.156 | 227.691 | 234.800 | 242.714 | 7.109 |
+| tessl, q padded, fused slice | 25 | 5.674 | 5.769 | 5.685 | 6.221 | 19.584 | 0.536 |
+| tessl, q padded, fused slice (repeat) | 25 | 5.679 | 5.749 | 5.692 | 6.345 | 12.571 | 0.653 |
+| tessl, q padded, fused slice pooled | 50 | 5.674 | 5.769 | 5.686 | 6.239 | 19.584 | 0.552 |
+| tessl, q padded, explicit pad+slice copies | 25 | 5.747 | 5.855 | 5.761 | 6.319 | 11.690 | 0.559 |
+| tessl, q padded, explicit pad+slice copies (repeat) | 25 | 5.712 | 5.846 | 5.746 | 6.462 | 15.017 | 0.716 |
+| tessl, q padded, explicit pad+slice copies pooled | 50 | 5.712 | 5.849 | 5.760 | 6.319 | 15.017 | 0.559 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.135 ms, pooled p90 - p10 = 7.109 ms
+contention: start GPU 0%, load 10.42 15.37 16.19; end GPU 98%, load 9.61 14.95 16.02
+tessl, q padded, fused slice: median 5.769 ms vs scalar 230.156 ms: margin 224.386 ms (ratio 0.0251), spread 7.109 ms, faster in 50/50 paired rounds -> ROUTE
+tessl, q padded, explicit pad+slice copies: median 5.849 ms vs scalar 230.156 ms: margin 224.307 ms (ratio 0.0254), spread 7.109 ms, faster in 50/50 paired rounds -> ROUTE
+per layer 230.156 ms x 4 layers = 920.622 ms per frame (scalar, contended)
+per layer 5.849 ms x 4 layers = 23.394 ms per frame (tessl arm, contended)
+
+## c2: memory cross-attention m=15616 [B=1, H=8, Tq=5184, Tk=15616, D=32]
+dispatches per call: ojas 6 (MetalBackend::dispatches), tessl, q padded, fused slice 10 (infer_trace; expected 10), tessl, q padded, explicit pad+slice copies 12 (infer_trace; expected 12)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs tessl, q padded, fused slice, whole output | 3.614e-7 | 0.0763 | 4.738e-6 | 0.000 | pass |
+| ojas vs tessl, q padded, explicit pad+slice copies, whole output | 3.614e-7 | 0.0763 | 4.738e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 0 | 4.582e-7 | 0.0688 | 6.663e-6 | 0.000 | pass |
+| tessl, q padded, fused slice vs CPU Exact, plane 0 | 3.986e-7 | 0.0688 | 5.797e-6 | 0.000 | pass |
+| tessl, q padded, explicit pad+slice copies vs CPU Exact, plane 0 | 3.986e-7 | 0.0688 | 5.797e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 7 | 4.098e-7 | 0.0763 | 5.373e-6 | 0.000 | pass |
+| tessl, q padded, fused slice vs CPU Exact, plane 7 | 3.949e-7 | 0.0763 | 5.177e-6 | 0.000 | pass |
+| tessl, q padded, explicit pad+slice copies vs CPU Exact, plane 7 | 3.949e-7 | 0.0763 | 5.177e-6 | 0.000 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 636.679 | 642.110 | 637.331 | 647.475 | 659.829 | 10.144 |
+| ojas scalar (repeat) | 25 | 635.225 | 642.183 | 637.362 | 646.667 | 667.879 | 9.306 |
+| ojas scalar pooled | 50 | 635.225 | 642.183 | 637.362 | 646.667 | 667.879 | 9.306 |
+| tessl, q padded, fused slice | 25 | 47.297 | 47.957 | 47.385 | 48.769 | 56.348 | 1.384 |
+| tessl, q padded, fused slice (repeat) | 25 | 47.140 | 47.941 | 47.285 | 48.875 | 59.448 | 1.590 |
+| tessl, q padded, fused slice pooled | 50 | 47.140 | 47.957 | 47.385 | 48.830 | 59.448 | 1.445 |
+| tessl, q padded, explicit pad+slice copies | 25 | 47.329 | 48.189 | 47.582 | 49.035 | 61.598 | 1.453 |
+| tessl, q padded, explicit pad+slice copies (repeat) | 25 | 47.142 | 48.131 | 47.606 | 49.806 | 58.355 | 2.201 |
+| tessl, q padded, explicit pad+slice copies pooled | 50 | 47.142 | 48.181 | 47.590 | 49.543 | 61.598 | 1.953 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.073 ms, pooled p90 - p10 = 9.306 ms
+contention: start GPU 0%, load 9.61 14.95 16.02; end GPU 99%, load 8.97 14.12 15.66
+tessl, q padded, fused slice: median 47.957 ms vs scalar 642.183 ms: margin 594.226 ms (ratio 0.0747), spread 9.306 ms, faster in 50/50 paired rounds -> ROUTE
+tessl, q padded, explicit pad+slice copies: median 48.181 ms vs scalar 642.183 ms: margin 594.002 ms (ratio 0.0750), spread 9.306 ms, faster in 50/50 paired rounds -> ROUTE
+per layer 642.183 ms x 4 layers = 2568.732 ms per frame (scalar, contended)
+per layer 48.181 ms x 4 layers = 192.725 ms per frame (tessl arm, contended)
+
+## c3: memory cross-attention m=36544 (max) [B=1, H=8, Tq=5184, Tk=36544, D=32]
+dispatches per call: ojas 6 (MetalBackend::dispatches), tessl, q padded, fused slice 10 (infer_trace; expected 10), tessl, q padded, explicit pad+slice copies 12 (infer_trace; expected 12)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs tessl, q padded, fused slice, whole output | 2.664e-7 | 0.0444 | 5.993e-6 | 0.000 | pass |
+| ojas vs tessl, q padded, explicit pad+slice copies, whole output | 2.664e-7 | 0.0444 | 5.993e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 0 | 4.210e-7 | 0.0430 | 9.795e-6 | 0.000 | pass |
+| tessl, q padded, fused slice vs CPU Exact, plane 0 | 4.731e-7 | 0.0430 | 1.101e-5 | 0.000 | pass |
+| tessl, q padded, explicit pad+slice copies vs CPU Exact, plane 0 | 4.731e-7 | 0.0430 | 1.101e-5 | 0.000 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 1471.734 | 1478.439 | 1473.569 | 1484.681 | 1485.918 | 11.112 |
+| ojas scalar (repeat) | 25 | 1471.216 | 1478.272 | 1474.284 | 1482.086 | 1484.901 | 7.802 |
+| ojas scalar pooled | 50 | 1471.216 | 1478.439 | 1474.176 | 1483.371 | 1485.918 | 9.196 |
+| tessl, q padded, fused slice | 25 | 268.137 | 274.527 | 269.846 | 280.545 | 282.379 | 10.699 |
+| tessl, q padded, fused slice (repeat) | 25 | 268.985 | 274.041 | 270.275 | 279.762 | 283.960 | 9.487 |
+| tessl, q padded, fused slice pooled | 50 | 268.137 | 274.431 | 270.275 | 279.762 | 283.960 | 9.487 |
+| tessl, q padded, explicit pad+slice copies | 25 | 266.238 | 276.065 | 267.311 | 280.015 | 288.775 | 12.704 |
+| tessl, q padded, explicit pad+slice copies (repeat) | 25 | 269.974 | 275.603 | 271.661 | 280.726 | 284.320 | 9.065 |
+| tessl, q padded, explicit pad+slice copies pooled | 50 | 266.238 | 276.018 | 269.991 | 280.069 | 288.775 | 10.078 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.167 ms, pooled p90 - p10 = 9.196 ms
+contention: start GPU 0%, load 8.97 14.12 15.66; end GPU 99%, load 5.72 11.31 14.36
+tessl, q padded, fused slice: median 274.431 ms vs scalar 1478.439 ms: margin 1204.008 ms (ratio 0.1856), spread 9.196 ms, faster in 50/50 paired rounds -> ROUTE
+tessl, q padded, explicit pad+slice copies: median 276.018 ms vs scalar 1478.439 ms: margin 1202.421 ms (ratio 0.1867), spread 9.196 ms, faster in 50/50 paired rounds -> ROUTE
+per layer 1478.439 ms x 4 layers = 5913.756 ms per frame (scalar, contended)
+per layer 276.018 ms x 4 layers = 1104.070 ms per frame (tessl arm, contended)
+
+## d: decoder D16 q [1,8,16,16] kv [1,8,4096,16] [B=1, H=8, Tq=16, Tk=4096, D=16]
+dispatches per call: ojas 6 (MetalBackend::dispatches)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs CPU Exact, plane 0 | 1.490e-7 | 0.0576 | 2.585e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 1 | 2.272e-7 | 0.0660 | 3.445e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 2 | 1.304e-7 | 0.0793 | 1.643e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 3 | 1.490e-7 | 0.0586 | 2.545e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 4 | 2.757e-7 | 0.0715 | 3.857e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 5 | 1.602e-7 | 0.0526 | 3.048e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 6 | 1.788e-7 | 0.0767 | 2.331e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 7 | 2.235e-7 | 0.0864 | 2.587e-6 | 0.000 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 1.974 | 2.027 | 1.997 | 2.420 | 2.663 | 0.423 |
+| ojas scalar (repeat) | 25 | 1.978 | 2.027 | 1.988 | 2.448 | 2.937 | 0.459 |
+| ojas scalar pooled | 50 | 1.974 | 2.027 | 1.997 | 2.420 | 2.937 | 0.423 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.000 ms, pooled p90 - p10 = 0.423 ms
+contention: start GPU 0%, load 5.72 11.31 14.36; end GPU 87%, load 5.72 11.31 14.36
+
+## e: decoder self-attention [1,8,201,32] [B=1, H=8, Tq=201, Tk=201, D=32]
+dispatches per call: ojas 6 (MetalBackend::dispatches), tessl (with permutes) 9 (infer_trace; expected 9)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs tessl (with permutes), whole output | 3.278e-7 | 0.5066 | 6.471e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 0 | 3.576e-7 | 0.4669 | 7.660e-7 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 0 | 2.831e-7 | 0.4669 | 6.064e-7 | 0.000 | pass |
+| ojas vs CPU Exact, plane 1 | 4.172e-7 | 0.3897 | 1.071e-6 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 1 | 4.470e-7 | 0.3897 | 1.147e-6 | 0.001 | pass |
+| ojas vs CPU Exact, plane 2 | 2.980e-7 | 0.4565 | 6.528e-7 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 2 | 2.980e-7 | 0.4565 | 6.528e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 3 | 3.874e-7 | 0.3634 | 1.066e-6 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 3 | 4.172e-7 | 0.3634 | 1.148e-6 | 0.001 | pass |
+| ojas vs CPU Exact, plane 4 | 3.278e-7 | 0.5066 | 6.471e-7 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 4 | 2.682e-7 | 0.5066 | 5.294e-7 | 0.000 | pass |
+| ojas vs CPU Exact, plane 5 | 5.364e-7 | 0.4475 | 1.199e-6 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 5 | 5.066e-7 | 0.4475 | 1.132e-6 | 0.001 | pass |
+| ojas vs CPU Exact, plane 6 | 3.576e-7 | 0.4052 | 8.826e-7 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 6 | 4.023e-7 | 0.4052 | 9.929e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 7 | 3.874e-7 | 0.4113 | 9.419e-7 | 0.001 | pass |
+| tessl (with permutes) vs CPU Exact, plane 7 | 2.980e-7 | 0.4113 | 7.245e-7 | 0.001 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 0.543 | 0.556 | 0.544 | 0.577 | 0.906 | 0.032 |
+| ojas scalar (repeat) | 25 | 0.540 | 0.552 | 0.543 | 0.579 | 0.602 | 0.036 |
+| ojas scalar pooled | 50 | 0.540 | 0.553 | 0.544 | 0.577 | 0.906 | 0.032 |
+| tessl (with permutes) | 25 | 0.178 | 0.189 | 0.182 | 0.214 | 0.254 | 0.032 |
+| tessl (with permutes) (repeat) | 25 | 0.180 | 0.188 | 0.181 | 0.216 | 0.247 | 0.034 |
+| tessl (with permutes) pooled | 50 | 0.178 | 0.189 | 0.182 | 0.214 | 0.254 | 0.032 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.003 ms, pooled p90 - p10 = 0.032 ms
+contention: start GPU 0%, load 5.72 11.31 14.36; end GPU 0%, load 5.72 11.31 14.36
+tessl (with permutes): median 0.189 ms vs scalar 0.553 ms: margin 0.364 ms (ratio 0.3413), spread 0.032 ms, faster in 50/50 paired rounds -> ROUTE
+per layer 0.553 ms x 6 layers = 3.320 ms per frame (scalar, contended)
+per layer 0.189 ms x 6 layers = 1.133 ms per frame (tessl arm, contended)
+
+## f33: encoder to text q [1,8,5184,32] kv [1,8,33,32] key_lens [33] [B=1, H=8, Tq=5184, Tk=33, D=32, key_lens [33]]
+dispatches per call: ojas 6 (MetalBackend::dispatches)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs CPU Exact, plane 0 | 4.768e-7 | 0.8405 | 5.673e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 1 | 5.364e-7 | 0.8408 | 6.380e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 2 | 5.960e-7 | 0.8343 | 7.145e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 3 | 5.364e-7 | 0.8304 | 6.460e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 4 | 5.364e-7 | 0.8277 | 6.481e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 5 | 5.364e-7 | 0.8119 | 6.608e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 6 | 5.513e-7 | 0.8664 | 6.364e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 7 | 5.960e-7 | 0.8447 | 7.056e-7 | 0.002 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 1.586 | 1.623 | 1.590 | 1.653 | 1.701 | 0.063 |
+| ojas scalar (repeat) | 25 | 1.589 | 1.619 | 1.594 | 1.641 | 1.657 | 0.048 |
+| ojas scalar pooled | 50 | 1.586 | 1.623 | 1.593 | 1.652 | 1.701 | 0.058 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.004 ms, pooled p90 - p10 = 0.058 ms
+contention: start GPU 0%, load 5.72 11.31 14.36; end GPU 83%, load 5.72 11.31 14.36
+per layer 1.623 ms x 6 layers = 9.736 ms per frame (scalar, contended)
+
+## f20: encoder to text q [1,8,5184,32] kv [1,8,33,32] key_lens [20] [B=1, H=8, Tq=5184, Tk=33, D=32, key_lens [20]]
+dispatches per call: ojas 6 (MetalBackend::dispatches)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs CPU Exact, plane 0 | 5.364e-7 | 0.9013 | 5.952e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 1 | 6.557e-7 | 0.8712 | 7.526e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 2 | 5.513e-7 | 0.8875 | 6.212e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 3 | 5.066e-7 | 0.8945 | 5.664e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 4 | 5.215e-7 | 0.8911 | 5.853e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 5 | 4.768e-7 | 0.8992 | 5.303e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 6 | 5.662e-7 | 0.8976 | 6.308e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 7 | 4.768e-7 | 0.8941 | 5.333e-7 | 0.002 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 1.073 | 1.095 | 1.077 | 1.118 | 1.159 | 0.041 |
+| ojas scalar (repeat) | 25 | 1.068 | 1.088 | 1.074 | 1.110 | 1.697 | 0.036 |
+| ojas scalar pooled | 50 | 1.068 | 1.093 | 1.075 | 1.113 | 1.697 | 0.038 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.008 ms, pooled p90 - p10 = 0.038 ms
+contention: start GPU 0%, load 5.72 11.31 14.36; end GPU 32%, load 5.72 11.31 14.36
+per layer 1.093 ms x 6 layers = 6.556 ms per frame (scalar, contended)
+
+## g: decoder to text q [1,8,201,32] kv [1,8,33,32] [B=1, H=8, Tq=201, Tk=33, D=32]
+dispatches per call: ojas 6 (MetalBackend::dispatches)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs CPU Exact, plane 0 | 2.980e-7 | 0.7261 | 4.104e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 1 | 3.576e-7 | 0.7049 | 5.073e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 2 | 4.172e-7 | 0.7713 | 5.409e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 3 | 3.129e-7 | 0.6844 | 4.572e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 4 | 4.768e-7 | 0.7718 | 6.178e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 5 | 4.172e-7 | 0.7534 | 5.538e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 6 | 4.023e-7 | 0.7964 | 5.052e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 7 | 4.321e-7 | 0.6994 | 6.178e-7 | 0.002 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 0.208 | 0.220 | 0.212 | 0.241 | 0.255 | 0.029 |
+| ojas scalar (repeat) | 25 | 0.211 | 0.225 | 0.212 | 0.247 | 0.315 | 0.036 |
+| ojas scalar pooled | 50 | 0.208 | 0.223 | 0.212 | 0.245 | 0.315 | 0.033 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.005 ms, pooled p90 - p10 = 0.033 ms
+contention: start GPU 0%, load 5.72 11.31 14.36; end GPU 0%, load 5.72 11.31 14.36
+per layer 0.223 ms x 6 layers = 1.339 ms per frame (scalar, contended)
+
+## g20: decoder to text q [1,8,201,32] kv [1,8,33,32] key_lens [20] [B=1, H=8, Tq=201, Tk=33, D=32, key_lens [20]]
+dispatches per call: ojas 6 (MetalBackend::dispatches)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs CPU Exact, plane 0 | 3.800e-7 | 0.8375 | 4.537e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 1 | 2.682e-7 | 0.7048 | 3.805e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 2 | 4.172e-7 | 0.8294 | 5.031e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 3 | 3.278e-7 | 0.8344 | 3.929e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 4 | 4.172e-7 | 0.7953 | 5.247e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 5 | 3.576e-7 | 0.8188 | 4.368e-7 | 0.001 | pass |
+| ojas vs CPU Exact, plane 6 | 4.172e-7 | 0.8340 | 5.003e-7 | 0.002 | pass |
+| ojas vs CPU Exact, plane 7 | 5.364e-7 | 0.7268 | 7.381e-7 | 0.002 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 0.190 | 0.202 | 0.192 | 0.234 | 0.822 | 0.042 |
+| ojas scalar (repeat) | 25 | 0.190 | 0.203 | 0.193 | 0.227 | 0.242 | 0.034 |
+| ojas scalar pooled | 50 | 0.190 | 0.202 | 0.193 | 0.227 | 0.822 | 0.034 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.001 ms, pooled p90 - p10 = 0.034 ms
+contention: start GPU 0%, load 5.72 11.31 14.36; end GPU 0%, load 5.72 11.31 14.36
+per layer 0.202 ms x 6 layers = 1.215 ms per frame (scalar, contended)
+
+bias batch 16: bias 530841600 bytes accepted by the Budget
+
+## bx: detector cross-attention with bias, default shape, largest batch that fits [B=16, H=8, Tq=200, Tk=5184, D=32, bias]
+dispatches per call: ojas 7 (MetalBackend::dispatches)
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| ojas vs CPU Exact, plane 0 | 3.725e-7 | 0.1023 | 3.642e-6 | 0.000 | pass |
+| ojas vs CPU Exact, plane 127 | 3.204e-7 | 0.1037 | 3.090e-6 | 0.000 | pass |
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ojas scalar | 25 | 154.232 | 160.403 | 155.707 | 162.603 | 167.053 | 6.896 |
+| ojas scalar (repeat) | 25 | 157.034 | 159.786 | 157.603 | 163.078 | 163.892 | 5.475 |
+| ojas scalar pooled | 50 | 154.232 | 159.867 | 157.528 | 162.822 | 167.053 | 5.294 |
+
+noise floor (ojas scalar vs its repeat): |median gap| = 0.617 ms, pooled p90 - p10 = 5.294 ms
+contention: start GPU 96%, load 5.72 11.31 14.36; end GPU 99%, load 5.99 11.18 14.28
+per layer 159.867 ms x 6 layers = 959.205 ms per frame (scalar, contended)
+per frame at batch 16: per-layer 159.867 ms x 6 / 16 = 59.950 ms (informational)
+
+end: GPU 0%, load 5.99 11.18 14.28
+
+## per-frame totals (median ms x layers, contended)
+| memory length | scalar everywhere | best route per rule | rows counted |
+|---|---:|---:|---|
+| c1 | 3297.1 | 165.0 | a x10, b x6, c1 x4, e x6, f33 x6, g x6 |
+| c2 | 4945.2 | 334.3 | a x10, b x6, c2 x4, e x6, f33 x6, g x6 |
+| c3 | 8290.2 | 1245.6 | a x10, b x6, c3 x4, e x6, f33 x6, g x6 |
+mac_heavy: 2026-10-27T04:51:10Z '78-c2-bench' finished with exit 0

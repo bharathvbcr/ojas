@@ -896,7 +896,7 @@ mod bench {
                     samples[i][pass].push(ms);
                     Sink::write(
                         &mut sink.csv,
-                        &format!("{id},{},{pass},{round},{ms:.4}\n", arms[i].0),
+                        &format!("{id},\"{}\",{pass},{round},{ms:.4}\n", arms[i].0),
                     )?;
                 }
             }
