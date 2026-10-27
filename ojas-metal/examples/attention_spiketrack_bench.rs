@@ -97,9 +97,14 @@ mod bench {
     const WARMUPS: usize = 5;
     const REL: f32 = 1e-4;
     const ATOL_SCALE: f32 = 4e-5;
-    /// Provisional bias-kernel threshold: 10% of 2.75 s per frame (the
-    /// CoreML port's 2.05 s backbone + 0.7 s tracker, SpikeTrack HANDOFF.md:16).
-    const BIAS_THRESHOLD_MS: f64 = 275.0;
+    /// Bias-kernel threshold: 10% of the CoreML port's frame on this M5 Pro,
+    /// 0.272 s backbone + 0.0775 s track step = 0.3495 s (SpikeTrack
+    /// bench/results/baselines/coreml.json, median of 5, contended).
+    const BIAS_THRESHOLD_MS: f64 = 35.0;
+    /// The provisional threshold the rule was first stated with: 10% of the
+    /// port's published 2.75 s (2.05 s backbone + 0.7 s tracker, SpikeTrack
+    /// HANDOFF.md:16).
+    const BIAS_THRESHOLD_PROVISIONAL_MS: f64 = 275.0;
     const ALL_ROWS: [&str; 12] = [
         "a", "b", "c1", "c2", "c3", "d", "e", "f33", "f20", "g", "g20", "bx",
     ];
@@ -836,13 +841,17 @@ mod bench {
         rt: &Arc<GpuRuntime>,
         sink: &mut Sink,
         reps: usize,
-        id: &'static str,
-        title: &str,
-        case: Case,
-        tessl: &[Pad],
-        layers: Option<u32>,
-        rule: Rule,
+        row: &Row,
     ) -> R<Measured> {
+        let Row {
+            id,
+            title,
+            case,
+            ref tessl,
+            layers,
+            rule,
+        } = *row;
+        let (id, case) = (id, case);
         println!(
             "\n## {id}: {title} [B={}, H={}, Tq={}, Tk={}, D={}{}{}]",
             case.b,
@@ -879,6 +888,8 @@ mod bench {
         // samples[arm][pass][round]
         let mut samples = vec![[vec![], vec![]]; arms.len()];
         for round in 0..reps {
+            // `pass` is a sample label as well as an index into the pair.
+            #[allow(clippy::needless_range_loop)]
             for pass in 0..2 {
                 for (i, (_, a)) in arms.iter().enumerate() {
                     let ms = timed(*a)?;
@@ -981,8 +992,9 @@ mod bench {
             if let Rule::Threshold(limit) = rule {
                 let frame = per(base.median);
                 println!(
-                    "bias rule: per-frame {frame:.3} ms {} {limit:.0} ms (provisional 10% of 2.75 s) -> tiled bias kernel {}",
+                    "bias rule: per-frame {frame:.3} ms {} {limit:.0} ms (10% of the measured 0.3495 s CoreML frame) and {} {BIAS_THRESHOLD_PROVISIONAL_MS:.0} ms (provisional, 10% of 2.75 s) -> tiled bias kernel {} against the measured threshold",
                     if frame > limit { ">" } else { "<=" },
+                    if frame > BIAS_THRESHOLD_PROVISIONAL_MS { ">" } else { "<=" },
                     if frame > limit { "WARRANTED" } else { "NOT WARRANTED" }
                 );
                 let _ = write!(
@@ -1029,18 +1041,15 @@ mod bench {
                         4 * case.bias_elems()
                     );
                     drop(h);
-                    let r = run_row(
-                        m,
-                        rt,
-                        sink,
-                        reps,
-                        "bx",
-                        "detector cross-attention with bias, default shape, largest batch that fits",
+                    let row = Row {
+                        id: "bx",
+                        title: "detector cross-attention with bias, default shape, largest batch that fits",
                         case,
-                        &[],
-                        Some(6),
-                        Rule::Info,
-                    )?;
+                        tessl: vec![],
+                        layers: Some(6),
+                        rule: Rule::Info,
+                    };
+                    let r = run_row(m, rt, sink, reps, &row)?;
                     println!(
                         "per frame at batch {b}: per-layer {:.3} ms x 6 / {b} = {:.3} ms (informational)",
                         r.scalar,
@@ -1112,10 +1121,7 @@ mod bench {
         let mut done = vec![];
         for row in rows() {
             if wanted.contains(&row.id) {
-                done.push(run_row(
-                    &m, &rt, &mut sink, reps, row.id, row.title, row.case, &row.tessl, row.layers,
-                    row.rule,
-                )?);
+                done.push(run_row(&m, &rt, &mut sink, reps, &row)?);
             }
         }
         if wanted.contains(&"bx") {
