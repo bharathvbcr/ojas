@@ -111,6 +111,8 @@ const WS_GROWTH: u64 = 64 << 20;
 /// The forward kernel's key tile is wider (`ATT_FWD_BK`); its grid is
 /// still one threadgroup per query block.
 const ATTN_THREADS: usize = 128;
+/// Query rows of one `ojas_xattn_part_dD` threadgroup (`XA_ROWS` in the kernel).
+const XA_ROWS: usize = 128;
 const ATTN_ROWS: usize = 32;
 /// Largest head dim the tiled attention kernels are compiled for.
 const ATTN_MAX_HEAD_DIM: u32 = 256;
@@ -197,9 +199,14 @@ const KERNELS: &[&str] = &[
     "ojas_attn_fwd_d256",
     "ojas_attn_gen_fwd",
     "ojas_im2col",
+    "ojas_xattn_part_d16",
+    "ojas_xattn_combine_d16",
+    "ojas_xattn_part_d32",
+    "ojas_xattn_combine_d32",
     "ojas_conv_nchw",
     "ojas_bilinear",
     "ojas_dwconv",
+    "ojas_pad_q",
     "ojas_convt_nchw",
     "ojas_attn_bwd_dq_d256",
     "ojas_attn_bwd_dkv_d256",
@@ -1799,13 +1806,14 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    /// `ojas_permute` of `xv` into `y`: output axis `a` has extent
-    /// `oshape[a]` and reads the input at `istride[a]`.
+    /// `ojas_permute` into `y`, one thread per element of `y`: output axis
+    /// `a` has extent `oshape[a]` and reads `xv` at `istride[a]`. `y` may be
+    /// smaller than `xv` (a slice of it).
     fn permute_into(&self, xv: &V, y: &V, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<()> {
-        let n = u32_of(xv.n)?;
+        let n = u32_of(y.n)?;
         let shape_bytes: Vec<u8> = oshape.iter().flat_map(|v| v.to_ne_bytes()).collect();
         let stride_bytes: Vec<u8> = istride.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        self.k1("ojas_permute", xv.n, |b| {
+        self.k1("ojas_permute", y.n, |b| {
             bind(b, xv, 0);
             bind(b, y, 1);
             set_u32(b, n, 2);
@@ -2315,8 +2323,30 @@ impl Worker {
                 planes / g.rep as usize
             )));
         }
+        let tiled = g.splits > 0;
+        // The ranges must cover every key, or some would be dropped silently.
+        let covers = u64::from(g.splits) * u64::from(g.per_split) >= u64::from(g.kv_len);
+        if tiled
+            && (g.causal || g.window != 0 || !matches!(g.d, 16 | 32) || g.per_split == 0 || !covers)
+        {
+            return Err(metal_err(format!(
+                "{op}: the split-K kernel runs non-causal head dim 16 or 32 over ranges that cover every key, not causal {} window {} d {} splits {} x {} for {} keys",
+                g.causal, g.window, g.d, g.splits, g.per_split, g.kv_len
+            )));
+        }
         let o = self.fresh(qv.n)?;
         let lse = self.fresh(planes * q_len)?;
+        // One (m, l, acc[D]) per split and row.
+        let part = if tiled {
+            let rows = planes * q_len;
+            let words = (g.splits as usize)
+                .checked_mul(rows)
+                .and_then(|n| n.checked_mul(d + 2))
+                .ok_or_else(|| metal_err(format!("{op}: split scratch overflows")))?;
+            Some(self.fresh(words)?)
+        } else {
+            None
+        };
         let st = self.status(op)?;
         self.check_operand(&st, q, &qv, ST_IN)?;
         self.check_operand(&st, k, &kv, ST_IN)?;
@@ -2324,7 +2354,50 @@ impl Worker {
         if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, b, ST_IN)?;
         }
-        if qv.n > 0 {
+        if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
+            let flags = (u32::from(g.bias.is_some()) << 1) | (u32::from(g.has_lens) << 2);
+            let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
+            let (bias_buf, lens_buf) = (bv.as_ref().unwrap_or(&qv), lv.as_ref().unwrap_or(&qv));
+            let rows = u32_of(planes * q_len)?;
+            self.ktg(
+                &format!("ojas_xattn_part_d{}", g.d),
+                q_len.div_ceil(XA_ROWS),
+                planes * g.splits as usize,
+                XA_ROWS,
+                |b| {
+                    bind(b, &qv, 0);
+                    bind(b, &kv, 1);
+                    bind(b, &vv, 2);
+                    bind(b, part, 3);
+                    bind(b, bias_buf, 4);
+                    bind(b, lens_buf, 5);
+                    bind_st(b, &st, 6);
+                    set_u32(b, g.q_len, 7);
+                    set_u32(b, g.kv_len, 8);
+                    set_u32(b, g.heads, 9);
+                    set_u32(b, g.rep, 10);
+                    set_u32(b, flags, 11);
+                    set_u32(b, bias_b, 12);
+                    set_u32(b, bias_h, 13);
+                    set_u32(b, bias_q, 14);
+                    set_u32(b, g.splits, 15);
+                    set_u32(b, g.per_split, 16);
+                    set_u32(b, g.bh, 17);
+                    set_f32(b, scale, 18);
+                },
+            )?;
+            self.k1(
+                &format!("ojas_xattn_combine_d{}", g.d),
+                rows as usize,
+                |b| {
+                    bind(b, part, 0);
+                    bind(b, &o, 1);
+                    bind(b, &lse, 2);
+                    set_u32(b, rows, 3);
+                    set_u32(b, g.splits, 4);
+                },
+            )?;
+        } else if qv.n > 0 {
             let flags = u32::from(g.causal)
                 | (u32::from(g.bias.is_some()) << 1)
                 | (u32::from(g.has_lens) << 2);
@@ -2652,8 +2725,8 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    /// Bidirectional self-attention on tessl's `embedgemma2::encoder_attn`
-    /// (the tiled TensorOps kernel at head dim 64), which wants
+    /// Bidirectional attention on tessl's `embedgemma2::encoder_attn`
+    /// (the tiled TensorOps kernel at head dim 32 or 64), which wants
     /// `[batch, seq, heads, d]`: each operand is permuted in, the output is
     /// permuted back. tessl scales `q . k` by `scale` (here `sdpa_scale(d)`,
     /// the CPU reference's `1 / sqrt(d)`) and masks by a per-batch length
@@ -2662,32 +2735,48 @@ impl Worker {
     /// here; the output of a non-finite input is flagged under `op`.
     fn encoder_attn(&mut self, op: &'static str, args: [Arg; 3], g: EncAttnGeom) -> Res<Reply> {
         let [qv, kv, vv] = self.wholes(args)?;
-        let n = (g.batch as usize)
-            .checked_mul(g.heads as usize)
-            .and_then(|n| n.checked_mul(g.seq as usize))
-            .and_then(|n| n.checked_mul(g.d as usize))
-            .ok_or_else(|| metal_err(format!("{op}: attention extent overflows")))?;
-        if [&qv, &kv, &vv].iter().any(|v| v.n != n) {
+        let elems = |rows: u32| {
+            (g.batch as usize)
+                .checked_mul(g.heads as usize)
+                .and_then(|n| n.checked_mul(rows as usize))
+                .and_then(|n| n.checked_mul(g.d as usize))
+                .ok_or_else(|| metal_err(format!("{op}: attention extent overflows")))
+        };
+        let (nq, nk) = (elems(g.q_len)?, elems(g.seq)?);
+        if g.q_len == 0 || g.q_len > g.seq || qv.n != nq || kv.n != nk || vv.n != nk {
             return Err(metal_err(format!(
-                "{op}: buffers do not hold [{}, {}, {}, {}]",
-                g.batch, g.heads, g.seq, g.d
+                "{op}: buffers do not hold q [{}, {}, {}, {}] over k and v [.., {}, ..]",
+                g.batch, g.heads, g.q_len, g.d, g.seq
             )));
         }
-        u32_of(n)?;
+        u32_of(nk)?;
         let scale = sdpa_scale(g.d)?;
-        let (b, h, t, d) = (g.batch, g.heads, g.seq, g.d);
+        let (b, h, t, tq, d) = (g.batch, g.heads, g.seq, g.q_len, g.d);
         // [B, H, T, D] -> [B, T, H, D] reads the input at (H T D, D, T D, 1);
-        // back reads [B, T, H, D] at (T H D, D, H D, 1).
+        // back reads the first Tq rows of [B, T, H, D] at (T H D, D, H D, 1).
         let to_bthd = ([b, t, h, d], [h * t * d, d, t * d, 1]);
-        let to_bhtd = ([b, h, t, d], [t * h * d, d, h * d, 1]);
-        let (qt, kt, vt) = (self.fresh(n)?, self.fresh(n)?, self.fresh(n)?);
-        let (o, y) = (self.fresh(n)?, self.fresh(n)?);
+        let to_bhtd = ([b, h, tq, d], [t * h * d, d, h * d, 1]);
+        let (qt, kt, vt) = (self.fresh(nk)?, self.fresh(nk)?, self.fresh(nk)?);
+        let (o, y) = (self.fresh(nk)?, self.fresh(nq)?);
         let lens = self.fresh_from(&vec![t; b as usize])?;
         let st = self.status(op)?;
         for v in [&qv, &kv, &vv] {
             self.check(&st, v, ST_IN)?;
         }
-        for (src, dst) in [(&qv, &qt), (&kv, &kt), (&vv, &vt)] {
+        if tq == t {
+            self.permute_into(&qv, &qt, 4, &to_bthd.0, &to_bthd.1)?;
+        } else {
+            self.k1("ojas_pad_q", nk, |bd| {
+                bind(bd, &qv, 0);
+                bind(bd, &qt, 1);
+                set_u32(bd, nk as u32, 2);
+                set_u32(bd, h, 3);
+                set_u32(bd, tq, 4);
+                set_u32(bd, t, 5);
+                set_u32(bd, d, 6);
+            })?;
+        }
+        for (src, dst) in [(&kv, &kt), (&vv, &vt)] {
             self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1)?;
         }
         encoder_attn(
