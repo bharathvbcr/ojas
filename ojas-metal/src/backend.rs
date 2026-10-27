@@ -85,29 +85,29 @@ use ojas_core::{
     cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
     embedding_forward_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
     gdn_log_decay_backward_dims, gdn_log_decay_forward_dims, gelu_erf_forward_dims,
-    kv_cache_write_dims, layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims,
-    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
-    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
-    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
-    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
-    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims,
-    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
-    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
-    BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
-    ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
-    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe,
-    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
-    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    interpolate_bilinear_forward_dims, kv_cache_write_dims, layer_norm_forward_dims,
+    linear_backward_dims, linear_bias_forward_dims, linear_ce_dims, linear_forward_dims,
+    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
+    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_unsupported_metal_gdn,
+    refuse_unsupported_metal_head_dim, residual_add_backward_dims, residual_add_forward_dims,
+    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
+    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
+    rope_interleaved_backward_dims, rope_interleaved_forward_dims, rope_partial_backward_dims,
+    rope_partial_forward_dims, scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims,
+    silu_backward_dims, silu_forward_dims, softmax_forward_dims, topk_rows_dims,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
+    AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk, CeGrads,
+    Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams, DType,
+    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
+    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
     ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
-    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom, Cmd,
-    Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res,
-    RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
+    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom,
+    BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Link,
+    ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -1041,6 +1041,20 @@ fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims
             d.kernel, p.stride, p.padding, p.output_padding
         ),
     })
+}
+
+/// One bilinear axis's source-index scale, in f32 with the CPU's own
+/// expressions (`ojas-cpu/src/spatial.rs` `bilinear_axis`).
+fn bilinear_scale(size: usize, out: usize, align_corners: bool) -> f32 {
+    if align_corners {
+        if out > 1 {
+            (size - 1) as f32 / (out - 1) as f32
+        } else {
+            0.0
+        }
+    } else {
+        size as f32 / out as f32
+    }
 }
 
 /// The convolution kernels' geometry of validated `dims`.
@@ -2288,6 +2302,32 @@ impl Backend for MetalBackend {
             geom,
         };
         self.one(OP, &dims.out_shape(), scratch, cmd)
+    }
+
+    /// Torch's bilinear rule on `ojas_bilinear`: each thread forms its own
+    /// taps from the host's f32 axis scales, so there are no axis tables to
+    /// charge (the CPU charges its two tables to the budget) and no scratch.
+    fn interpolate_bilinear_forward(
+        &self,
+        input: &Tensor,
+        out_size: [usize; 2],
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "interpolate_bilinear_forward";
+        let dims = interpolate_bilinear_forward_dims(input, out_size)?;
+        let x = self.f32(OP, input)?;
+        let geom = BilinearGeom {
+            planes: u32_dim(OP, product(OP, &[dims.batch, dims.channels])?)?,
+            h: u32_dim(OP, dims.height)?,
+            w: u32_dim(OP, dims.width)?,
+            oh: u32_dim(OP, dims.out_height)?,
+            ow: u32_dim(OP, dims.out_width)?,
+            scale_y: bilinear_scale(dims.height, dims.out_height, align_corners),
+            scale_x: bilinear_scale(dims.width, dims.out_width, align_corners),
+            align_corners,
+        };
+        u32_dim(OP, product(OP, &dims.out_shape())?)?;
+        self.one(OP, &dims.out_shape(), 0, Cmd::Bilinear { x, geom })
     }
 
     fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

@@ -366,6 +366,21 @@ pub(crate) struct EncAttnGeom {
     pub d: u32,
 }
 
+/// A bilinear resample of `planes` `[h, w]` images to `[oh, ow]`; `scale_y`
+/// and `scale_x` are the axes' f32 source-index scales, formed on the host
+/// as the CPU forms them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BilinearGeom {
+    pub planes: u32,
+    pub h: u32,
+    pub w: u32,
+    pub oh: u32,
+    pub ow: u32,
+    pub scale_y: f32,
+    pub scale_x: f32,
+    pub align_corners: bool,
+}
+
 /// A convolution as GEMM, validated and within the kernels' limits:
 /// `[batch, c, h, w]` input, `[o, c, kh, kw]` weight, `[batch, o, oh, ow]`
 /// output, dilation 1, one group.
@@ -651,6 +666,11 @@ pub(crate) enum Cmd {
         w: Arg,
         bias: Option<Arg>,
         geom: ConvGeom,
+    },
+    /// `interpolate_bilinear_forward` on `ojas_bilinear`.
+    Bilinear {
+        x: Arg,
+        geom: BilinearGeom,
     },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {

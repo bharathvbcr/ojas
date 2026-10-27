@@ -39,9 +39,9 @@ use tessl::DType;
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
-    norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, Cmd, Conv1dGeom, ConvGeom, DeviceInfo,
-    EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide,
-    RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
+    norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
+    ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs,
+    Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
 };
 
 const ST_IN: u32 = 0;
@@ -197,6 +197,7 @@ const KERNELS: &[&str] = &[
     "ojas_attn_gen_fwd",
     "ojas_im2col",
     "ojas_conv_nchw",
+    "ojas_bilinear",
     "ojas_dwconv",
     "ojas_convt_nchw",
     "ojas_attn_bwd_dq_d256",
@@ -1529,6 +1530,7 @@ impl Worker {
                 bias,
                 geom,
             } => self.depthwise_conv2d(op, [x, w], bias, geom),
+            Cmd::Bilinear { x, geom } => self.bilinear(x, geom),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
@@ -2524,6 +2526,43 @@ impl Worker {
             }
         })?;
         self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// Bilinear resample on `ojas_bilinear`; the kernel checks its input and
+    /// output itself.
+    fn bilinear(&mut self, x: Arg, g: BilinearGeom) -> Res<Reply> {
+        const OP: &str = "interpolate_bilinear_forward";
+        let xv = self.view(x)?;
+        let in_n = (g.planes as usize)
+            .checked_mul(g.h as usize)
+            .and_then(|n| n.checked_mul(g.w as usize));
+        let out_n = (g.planes as usize)
+            .checked_mul(g.oh as usize)
+            .and_then(|n| n.checked_mul(g.ow as usize))
+            .ok_or_else(|| metal_err(format!("{OP}: output extent overflows")))?;
+        if in_n != Some(xv.n) || g.h == 0 || g.w == 0 || g.oh == 0 || g.ow == 0 {
+            return Err(metal_err(format!(
+                "{OP}: the buffer does not hold {} planes of [{}, {}]",
+                g.planes, g.h, g.w
+            )));
+        }
+        let out_u = u32_of(out_n)?;
+        let y = self.fresh(out_n)?;
+        let st = self.status(OP)?;
+        self.k1("ojas_bilinear", out_n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, out_u, 2);
+            set_u32(b, g.h, 3);
+            set_u32(b, g.w, 4);
+            set_u32(b, g.oh, 5);
+            set_u32(b, g.ow, 6);
+            set_f32(b, g.scale_y, 7);
+            set_f32(b, g.scale_x, 8);
+            set_u32(b, u32::from(g.align_corners), 9);
+            bind_st(b, &st, 10);
+        })?;
         Ok(self.keep(vec![y]))
     }
 

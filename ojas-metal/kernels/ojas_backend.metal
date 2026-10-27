@@ -1891,6 +1891,66 @@ kernel void ojas_convt_nchw(
     y[i] = has_bias != 0u ? v + bias[o] : v;
 }
 
+// ------------------------------------------------------------- bilinear ---
+//
+// `Backend::interpolate_bilinear_forward`, torch's source-index rule in f32
+// as `ojas-cpu/src/spatial.rs` forms it: the host computes each axis's
+// `scale` with the CPU's own f32 expression, and every thread forms its two
+// source indices and weights from it with the same IEEE operations (contract
+// off), so each value is the CPU's bit for bit and no axis table exists.
+
+/// One axis of an output index `o`: source indices `lo` and `hi` and the
+/// weight `lambda` of `hi`. `size` >= 1.
+inline void ojas_bilinear_tap(uint o, uint size, float scale, uint align,
+                              thread uint &lo, thread uint &hi, thread float &lambda)
+{
+    const float src = align != 0u
+        ? scale * (float)o
+        : max(scale * ((float)o + 0.5f) - 0.5f, 0.0f);
+    lo = min((uint)floor(src), size - 1u);
+    lambda = clamp(src - (float)lo, 0.0f, 1.0f);
+    hi = lo + ((lo + 1u < size) ? 1u : 0u);
+}
+
+/// y[plane][oy][ox] = (1 - ly) ((1 - lx) v00 + lx v01) + ly ((1 - lx) v10 + lx v11),
+/// one thread per output element. A NaN or infinity in the input flags the
+/// input word, and one in the output the output word.
+kernel void ojas_bilinear(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &total [[buffer(2)]],
+    constant uint &h [[buffer(3)]],
+    constant uint &w [[buffer(4)]],
+    constant uint &oh [[buffer(5)]],
+    constant uint &ow [[buffer(6)]],
+    constant float &scale_y [[buffer(7)]],
+    constant float &scale_x [[buffer(8)]],
+    constant uint &align [[buffer(9)]],
+    device atomic_uint *st [[buffer(10)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint ox = i % ow;
+    const uint oy = (i / ow) % oh;
+    const ulong plane = (ulong)(i / (ow * oh)) * h * w;
+    uint y0, y1, x0, x1;
+    float ly, lx;
+    ojas_bilinear_tap(oy, h, scale_y, align, y0, y1, ly);
+    ojas_bilinear_tap(ox, w, scale_x, align, x0, x1, lx);
+    const float w0 = 1.0f - lx;
+    const float w1 = lx;
+    const float p00 = x[plane + (ulong)y0 * w + x0];
+    const float p01 = x[plane + (ulong)y0 * w + x1];
+    const float p10 = x[plane + (ulong)y1 * w + x0];
+    const float p11 = x[plane + (ulong)y1 * w + x1];
+    const float top = w0 * p00 + w1 * p01;
+    const float bottom = w0 * p10 + w1 * p11;
+    const float r = (1.0f - ly) * top + ly * bottom;
+    y[i] = r;
+    if (!isfinite(p00) || !isfinite(p01) || !isfinite(p10) || !isfinite(p11)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
 // ---------------------------------------- broadcast, scale and softmax ---
 //
 // Forward ops of the encoder family (see `Backend::broadcast_add_forward`,
