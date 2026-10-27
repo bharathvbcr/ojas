@@ -11,7 +11,9 @@
 //! `rows` is a comma list of row ids (default: all, in this order):
 //! `a b c1 c2 c3 d e f33 f20 g g20 bx`. `bx` is the extra
 //! `[16, 8, 200, 32]` detector shape with the largest batch the Budget lets
-//! through (16, 8, 4, 2).
+//! through (16, 8, 4, 2). The crossover rows `x5200 x10400 x10624 x15616`
+//! (alias `xover`, all four) are opt-in and described at the end of this
+//! header.
 //!
 //! The scalar arm is genuinely scalar: this crate has no routing to
 //! `encoder_attn` at the commit this was run from (no
@@ -71,6 +73,27 @@
 //!
 //! Rules (fixed before the first measurement; summary.md states them):
 //! see `bench/results/2026-10-27-attention-spiketrack/summary.md`.
+//!
+//! # Crossover rows: tiled kernel against the pad-q route
+//!
+//! `x<m>` times memory cross-attention, q `[1, 8, 5184, 32]` and k and v
+//! `[1, 8, m, 32]` (no bias, no key lengths, non-causal), through the two
+//! `MetalBackend` entry points that force each kernel:
+//! - **tiled**: `attention_forward_saving`, which never routes to tessl and
+//!   runs the split-K tiled kernel at head dim 32 (its log-sum-exp output is
+//!   dropped);
+//! - **pad-q**: `attention_forward`, which pads Q to Tk and runs tessl's
+//!   `encoder_attn` where `routes_to_encoder_attn` says so.
+//!
+//! Each arm owns its uploads. Before any timing, for every m: the dispatch
+//! counts of both arms, on fresh uploads and again on the same tensors, must
+//! equal those of a small yardstick shape that is known to take each route
+//! (`[1, 8, 40, 32]` against 80 keys, plus the causal scalar call on 40
+//! keys), the two arms must agree within 1e-5 max abs over the whole output,
+//! and both must agree with `CpuBackend` under `Numerics::Exact`. Timing is
+//! 5 warm-ups of each arm, then `reps` rounds of two passes; odd rounds
+//! reverse the arm order inside each pass, so no arm is always second. The
+//! verdict rules are `bench/results/2026-10-27-tiled-vs-padq/rules.md`.
 
 #[cfg(target_os = "macos")]
 mod bench {
@@ -313,9 +336,24 @@ mod bench {
         fn run(&self) -> R<()>;
     }
 
+    /// Which `MetalBackend` entry point a [`Direct`] arm calls.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Entry {
+        /// `attention_forward`: tessl's `encoder_attn` (Q padded to Tk) where
+        /// `routes_to_encoder_attn` says so, else the general kernel.
+        Forward,
+        /// `attention_forward_saving`: never routes; the split-K tiled kernel
+        /// at head dim 16 or 32, non-causal.
+        Saving,
+        /// `attention_forward_saving` with `causal: true`: only the scalar
+        /// kernel runs it. The dispatch yardstick of the crossover rows.
+        Scalar,
+    }
+
     /// The ojas arm.
     struct Direct<'a> {
         m: &'a MetalBackend,
+        entry: Entry,
         q: Tensor,
         k: Tensor,
         v: Tensor,
@@ -330,6 +368,7 @@ mod bench {
             };
             Ok(Direct {
                 m,
+                entry: Entry::Forward,
                 q: dev(&h.q, &c.q_dims())?,
                 k: dev(&h.k, &c.kv_dims())?,
                 v: dev(&h.v, &c.kv_dims())?,
@@ -345,21 +384,29 @@ mod bench {
             })
         }
 
+        fn with_entry(self, entry: Entry) -> Self {
+            Direct { entry, ..self }
+        }
+
         fn out(&self) -> R<Tensor> {
-            let out = self
-                .m
-                .attention_forward(
-                    &self.q,
-                    &self.k,
-                    &self.v,
-                    AttentionOpts {
-                        causal: false,
-                        window: None,
-                        bias: self.bias.as_ref(),
-                        key_lens: self.lens.as_ref(),
-                    },
-                )
-                .map_err(e("attention_forward"))?;
+            let opts = AttentionOpts {
+                causal: self.entry == Entry::Scalar,
+                window: None,
+                bias: self.bias.as_ref(),
+                key_lens: self.lens.as_ref(),
+            };
+            let out = match self.entry {
+                Entry::Forward => self
+                    .m
+                    .attention_forward(&self.q, &self.k, &self.v, opts)
+                    .map_err(e("attention_forward"))?,
+                Entry::Saving | Entry::Scalar => {
+                    self.m
+                        .attention_forward_saving(&self.q, &self.k, &self.v, opts)
+                        .map_err(e("attention_forward_saving"))?
+                        .0
+                }
+            };
             self.m.sync().map_err(e("sync"))?;
             Ok(out)
         }
@@ -709,7 +756,6 @@ mod bench {
         routed: &[Routed],
     ) -> R<(Errors, String)> {
         let atol = ATOL_SCALE * (c.tk as f32).sqrt();
-        let cpu = CpuBackend::new(Budget::new(8 * GIB)).with_numerics(Numerics::Exact);
         let d0 = m.dispatches();
         let ojas = download(&direct.out()?)?;
         let ojas_dispatches = m.dispatches() - d0;
@@ -751,6 +797,19 @@ mod bench {
         for (name, got) in &outs {
             errs.cmp(&format!("ojas vs {name}, whole output"), &ojas, got, atol);
         }
+        let mut arms: Vec<(&str, &[f32])> = vec![("ojas", &ojas)];
+        arms.extend(outs.iter().map(|(name, got)| (*name, got.as_slice())));
+        compare_cpu(c, h, &arms, &mut errs)?;
+        Ok((errs, dispatch_note))
+    }
+
+    /// Each of `arms` (a label and a whole `[B, H, Tq, D]` output) against
+    /// `CpuBackend` under `Numerics::Exact` on the same inputs: every head
+    /// plane when cheap, else the first and last, and only the first when a
+    /// plane is over 3e9 multiply-adds.
+    fn compare_cpu(c: &Case, h: &Host, arms: &[(&str, &[f32])], errs: &mut Errors) -> R<()> {
+        let atol = ATOL_SCALE * (c.tk as f32).sqrt();
+        let cpu = CpuBackend::new(Budget::new(8 * GIB)).with_numerics(Numerics::Exact);
         let plane_q = c.tq * c.d;
         let planes_n = c.b * c.h;
         let plane_cost = c.tq * c.tk * c.d;
@@ -785,13 +844,7 @@ mod bench {
                 .map_err(e("cpu attention_forward"))?;
             let want = want.to_f32_vec().map_err(e("cpu output"))?;
             let at = p * plane_q..(p + 1) * plane_q;
-            errs.cmp(
-                &format!("ojas vs CPU Exact, plane {p}"),
-                &ojas[at.clone()],
-                &want,
-                atol,
-            );
-            for (name, got) in &outs {
+            for (name, got) in arms {
                 errs.cmp(
                     &format!("{name} vs CPU Exact, plane {p}"),
                     &got[at.clone()],
@@ -800,7 +853,7 @@ mod bench {
                 );
             }
         }
-        Ok((errs, dispatch_note))
+        Ok(())
     }
 
     /// One row's measured result, for the per-frame totals.
@@ -1066,6 +1119,505 @@ mod bench {
         Err("no bias batch from 16 down to 2 fit".into())
     }
 
+    /// The crossover rows' ids and key lengths; q is `XOVER_TQ` rows.
+    const XOVER_ROWS: [(&str, usize); 4] = [
+        ("x5200", 5200),
+        ("x10400", 10400),
+        ("x10624", 10624),
+        ("x15616", 15616),
+    ];
+    const XOVER_TQ: usize = 5184;
+    /// The two arms must agree within this max abs error over the whole
+    /// output before anything is timed.
+    const XOVER_GATE_ABS: f32 = 1e-5;
+    /// A winner must be faster in at least this share of the paired
+    /// `(round, pass)` samples (9 in 10).
+    const XOVER_SIGN_TENTHS: usize = 9;
+    /// Fable's chosen range for the routing bound, as `m / 5184`, and the
+    /// span within which it stands (rules.md, R2 and R3).
+    const FABLE_RANGE: (f64, f64) = (2.25, 2.5);
+    const R2_RANGE: (f64, f64) = (2.05, 2.5);
+    const R3_RANGE: (f64, f64) = (1.5, 3.0);
+    const TILED: &str = "tiled (attention_forward_saving)";
+    const PADQ: &str = "pad-q (attention_forward)";
+
+    fn xover_case(tq: usize, tk: usize) -> Case {
+        Case {
+            b: 1,
+            h: 8,
+            tq,
+            tk,
+            d: 32,
+            bias: false,
+            lens: None,
+        }
+    }
+
+    /// Dispatches of the first call on fresh uploads and of the second call
+    /// on the same tensors.
+    type Counts = (u64, u64);
+
+    fn counts(m: &MetalBackend, arm: &Direct) -> R<Counts> {
+        let mut seen = [0u64; 2];
+        for slot in &mut seen {
+            m.sync().map_err(e("sync"))?;
+            let before = m.dispatches();
+            arm.out().map(drop)?;
+            *slot = m.dispatches() - before;
+        }
+        Ok((seen[0], seen[1]))
+    }
+
+    /// What each route issues on a small shape that is known to take it:
+    /// the causal scalar call on `[1, 8, 40, 32]` against 40 keys, and the
+    /// tiled and pad-q calls on the same q against 80 keys.
+    struct Yardstick {
+        scalar: Counts,
+        tiled: Counts,
+        padq: Counts,
+    }
+
+    fn yardstick(m: &MetalBackend) -> R<Yardstick> {
+        let arm = |tk: usize, entry: Entry| -> R<Counts> {
+            let case = xover_case(40, tk);
+            let h = Host::new(&case);
+            counts(m, &Direct::new(m, &case, &h)?.with_entry(entry))
+        };
+        let y = Yardstick {
+            scalar: arm(40, Entry::Scalar)?,
+            tiled: arm(80, Entry::Saving)?,
+            padq: arm(80, Entry::Forward)?,
+        };
+        println!(
+            "yardstick dispatches (first call, repeat): scalar {:?}, tiled {:?}, pad-q {:?}",
+            y.scalar, y.tiled, y.padq
+        );
+        if y.tiled != (y.scalar.0 + 1, y.scalar.1 + 1) {
+            return Err(format!(
+                "the tiled yardstick {:?} is not the scalar kernel's {:?} plus one dispatch",
+                y.tiled, y.scalar
+            ));
+        }
+        if y.padq.0 <= y.tiled.0 || y.padq.1 <= y.tiled.1 {
+            return Err(format!(
+                "the pad-q yardstick {:?} does not issue more dispatches than the tiled {:?}: \
+                 the call did not take the pad route",
+                y.padq, y.tiled
+            ));
+        }
+        Ok(y)
+    }
+
+    /// One m's correctness and dispatch gate, passed.
+    struct Gate {
+        tiled: Counts,
+        padq: Counts,
+        arms_max_abs: f32,
+        cpu_max_abs: f32,
+    }
+
+    fn gate(m: &MetalBackend, y: &Yardstick, tk: usize) -> R<Gate> {
+        let case = xover_case(XOVER_TQ, tk);
+        println!("\n## gate x{tk}: q [1,8,{XOVER_TQ},32], k and v [1,8,{tk},32]");
+        let h = Host::new(&case);
+        let tiled = Direct::new(m, &case, &h)?.with_entry(Entry::Saving);
+        let padq = Direct::new(m, &case, &h)?.with_entry(Entry::Forward);
+        let (tc, pc) = (counts(m, &tiled)?, counts(m, &padq)?);
+        println!(
+            "dispatches (first call, repeat): tiled {tc:?} (yardstick {:?}), pad-q {pc:?} (yardstick {:?})",
+            y.tiled, y.padq
+        );
+        if tc != y.tiled || pc != y.padq {
+            return Err(format!(
+                "m = {tk}: dispatch counts tiled {tc:?} / pad-q {pc:?} are not the routes' {:?} / {:?}",
+                y.tiled, y.padq
+            ));
+        }
+        let a = download(&tiled.out()?)?;
+        let b = download(&padq.out()?)?;
+        let d = diff(&a, &b, 0.0);
+        println!(
+            "tiled vs pad-q, whole output: max abs diff {:.3e} (bound {XOVER_GATE_ABS:.0e}), max abs {:.4}, non-finite {}",
+            d.max_abs, d.max_ref, d.nonfinite
+        );
+        if d.nonfinite != 0 || d.max_abs > XOVER_GATE_ABS {
+            return Err(format!(
+                "m = {tk}: the arms disagree by {:.3e} (non-finite {}), over {XOVER_GATE_ABS:.0e}; no timings",
+                d.max_abs, d.nonfinite
+            ));
+        }
+        println!("\n| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |");
+        println!("|---|---:|---:|---:|---:|---|");
+        let mut errs = Errors::default();
+        compare_cpu(&case, &h, &[("tiled", &a), ("pad-q", &b)], &mut errs)?;
+        if !errs.pass() {
+            return Err(format!(
+                "m = {tk}: an arm disagrees with the CPU beyond the bound; no timings"
+            ));
+        }
+        Ok(Gate {
+            tiled: tc,
+            padq: pc,
+            arms_max_abs: d.max_abs,
+            cpu_max_abs: errs.rows.iter().map(|r| r.1).fold(0.0f32, f32::max),
+        })
+    }
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Winner {
+        Tiled,
+        PadQ,
+        Tie,
+    }
+
+    impl Winner {
+        fn name(self) -> &'static str {
+            match self {
+                Winner::Tiled => "tiled",
+                Winner::PadQ => "pad-q",
+                Winner::Tie => "tie",
+            }
+        }
+    }
+
+    /// `margin` is pad-q's median minus tiled's, so a positive margin favours
+    /// tiled. A winner needs a margin over `bar` and to be faster in at least
+    /// 9 in 10 of the `total` paired samples.
+    fn judge(
+        margin: f64,
+        bar: f64,
+        tiled_faster: usize,
+        padq_faster: usize,
+        total: usize,
+    ) -> Winner {
+        let steady = |n: usize| n * 10 >= total * XOVER_SIGN_TENTHS;
+        if margin > bar && steady(tiled_faster) {
+            Winner::Tiled
+        } else if -margin > bar && steady(padq_faster) {
+            Winner::PadQ
+        } else {
+            Winner::Tie
+        }
+    }
+
+    /// One m's timing, for the R1 to R4 outcome.
+    struct Crossover {
+        tk: usize,
+        tiled: Stats,
+        padq: Stats,
+        /// The larger of the two arms' pooled p90 - p10.
+        noise: f64,
+        /// The larger of the two arms' A-vs-A' median gaps.
+        gap: f64,
+        primary: Winner,
+        secondary: Winner,
+        gate: Gate,
+    }
+
+    impl Crossover {
+        fn ratio(&self) -> f64 {
+            self.tk as f64 / XOVER_TQ as f64
+        }
+        /// Pad-q's median minus tiled's: positive when tiled is faster.
+        fn margin(&self) -> f64 {
+            self.padq.median - self.tiled.median
+        }
+    }
+
+    fn run_crossover_row(
+        m: &MetalBackend,
+        sink: &mut Sink,
+        reps: usize,
+        tk: usize,
+        gate: Gate,
+    ) -> R<Crossover> {
+        let id = format!("x{tk}");
+        let case = xover_case(XOVER_TQ, tk);
+        println!(
+            "\n## {id}: memory cross-attention m = {tk}, ratio {:.4}",
+            tk as f64 / XOVER_TQ as f64
+        );
+        let start = format!("GPU {}, load {}", gpu_util(), load());
+        let h = Host::new(&case);
+        let tiled = Direct::new(m, &case, &h)?.with_entry(Entry::Saving);
+        let padq = Direct::new(m, &case, &h)?.with_entry(Entry::Forward);
+        drop(h);
+        let arms: [(&str, &dyn Arm); 2] = [(TILED, &tiled), (PADQ, &padq)];
+        for _ in 0..WARMUPS {
+            for (_, a) in &arms {
+                timed(*a)?;
+            }
+        }
+        // samples[arm][pass][round]
+        let mut samples = [[vec![], vec![]], [vec![], vec![]]];
+        for round in 0..reps {
+            // Odd rounds run the arms in reverse inside each pass.
+            let order = if round % 2 == 0 { [0, 1] } else { [1, 0] };
+            // `pass` is a sample label as well as an index into the pair.
+            #[allow(clippy::needless_range_loop)]
+            for pass in 0..2 {
+                for i in order {
+                    let ms = timed(arms[i].1)?;
+                    samples[i][pass].push(ms);
+                    Sink::write(
+                        &mut sink.csv,
+                        &format!("{id},\"{}\",{pass},{round},{ms:.4}\n", arms[i].0),
+                    )?;
+                }
+            }
+        }
+        let end = format!("GPU {}, load {}", gpu_util(), load());
+        println!("\n| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |");
+        println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+        let mut pooled = vec![];
+        let mut gaps = vec![];
+        for (i, (name, _)) in arms.iter().enumerate() {
+            let (s0, s1) = (stats(&samples[i][0]), stats(&samples[i][1]));
+            print_row(name, reps, &s0);
+            print_row(&format!("{name} (repeat)"), reps, &s1);
+            let p = [samples[i][0].as_slice(), samples[i][1].as_slice()].concat();
+            let st = stats(&p);
+            print_row(&format!("{name} pooled"), p.len(), &st);
+            pooled.push(st);
+            gaps.push((s0.median - s1.median).abs());
+        }
+        let (ts, ps) = (pooled[0], pooled[1]);
+        let noise = (ts.p90 - ts.p10).max(ps.p90 - ps.p10);
+        let gap = gaps[0].max(gaps[1]);
+        let total = 2 * reps;
+        let paired = |a: usize, b: usize| {
+            (0..2)
+                .flat_map(|p| (0..reps).map(move |r| (p, r)))
+                .filter(|&(p, r)| samples[a][p][r] < samples[b][p][r])
+                .count()
+        };
+        let (tiled_faster, padq_faster) = (paired(0, 1), paired(1, 0));
+        let margin = ps.median - ts.median;
+        let primary = judge(margin, noise, tiled_faster, padq_faster, total);
+        let secondary = judge(margin, gap, tiled_faster, padq_faster, total);
+        println!(
+            "\nmedian margin (pad-q - tiled) {margin:.3} ms; noise {noise:.3} ms (larger pooled p90 - p10); A-vs-A' median gap {gap:.3} ms (larger of the two arms); tiled faster in {tiled_faster}/{total} paired samples, pad-q in {padq_faster}/{total}"
+        );
+        println!(
+            "winner beyond noise: {} (primary, bar = noise); {} (secondary, bar = A-vs-A' gap)",
+            primary.name(),
+            secondary.name()
+        );
+        println!("contention: start {start}; end {end}");
+        let json = format!(
+            "{{\"row\":\"{id}\",\"m\":{tk},\"ratio\":{:.5},\"reps\":{reps},\"start\":\"{start}\",\"end\":\"{end}\",\"dispatches\":{{\"tiled\":[{},{}],\"padq\":[{},{}]}},\"gate_arms_max_abs\":{:.3e},\"gate_cpu_max_abs\":{:.3e},\"noise_ms\":{noise:.4},\"aa_gap_ms\":{gap:.4},\"margin_ms\":{margin:.4},\"tiled_faster\":{tiled_faster},\"padq_faster\":{padq_faster},\"paired\":{total},\"winner_primary\":\"{}\",\"winner_secondary\":\"{}\",\"arms\":{{\"tiled\":{{\"pooled\":{},\"pass0\":{},\"pass1\":{}}},\"padq\":{{\"pooled\":{},\"pass0\":{},\"pass1\":{}}}}}}}\n",
+            tk as f64 / XOVER_TQ as f64,
+            gate.tiled.0,
+            gate.tiled.1,
+            gate.padq.0,
+            gate.padq.1,
+            gate.arms_max_abs,
+            gate.cpu_max_abs,
+            primary.name(),
+            secondary.name(),
+            json_stats(&ts),
+            json_stats(&stats(&samples[0][0])),
+            json_stats(&stats(&samples[0][1])),
+            json_stats(&ps),
+            json_stats(&stats(&samples[1][0])),
+            json_stats(&stats(&samples[1][1])),
+        );
+        Sink::write(&mut sink.jsonl, &json)?;
+        Ok(Crossover {
+            tk,
+            tiled: ts,
+            padq: ps,
+            noise,
+            gap,
+            primary,
+            secondary,
+            gate,
+        })
+    }
+
+    /// Where the routing bound lies, by rules R1 to R4 (rules.md).
+    #[derive(Clone, Copy, Debug)]
+    enum Estimate {
+        /// Tiled's raw median is faster at the smallest m.
+        Below,
+        /// The first zero of the piecewise-linear margin over the raw
+        /// medians, as `m / 5184`.
+        At(f64),
+        /// Pad-q's raw median is faster at every m.
+        Above,
+    }
+
+    fn estimate(rows: &[Crossover]) -> Estimate {
+        if rows[0].margin() > 0.0 {
+            return Estimate::Below;
+        }
+        for w in rows.windows(2) {
+            let (a, b) = (&w[0], &w[1]);
+            if a.margin() <= 0.0 && b.margin() > 0.0 {
+                let t = -a.margin() / (b.margin() - a.margin());
+                return Estimate::At(a.ratio() + t * (b.ratio() - a.ratio()));
+            }
+        }
+        Estimate::Above
+    }
+
+    /// The R1 to R4 outcome over every m, in the order of rules.md. The rules
+    /// were committed before the first timing; this only applies them.
+    fn outcome(rows: &[Crossover], sink: &mut Sink) -> R<()> {
+        println!("\n## verdict table");
+        println!("| m | ratio | tiled median ms | pad-q median ms | noise ms | A-vs-A' gap ms | winner (primary) | winner (secondary) | dispatches tiled / pad-q (first, repeat) |");
+        println!("|---:|---:|---:|---:|---:|---:|---|---|---|");
+        for r in rows {
+            println!(
+                "| {} | {:.4} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} | {:?} / {:?} |",
+                r.tk,
+                r.ratio(),
+                r.tiled.median,
+                r.padq.median,
+                r.noise,
+                r.gap,
+                r.primary.name(),
+                r.secondary.name(),
+                r.gate.tiled,
+                r.gate.padq
+            );
+        }
+        let hi = rows.iter().position(|r| r.primary == Winner::Tiled);
+        let lo = rows
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| r.primary == Winner::PadQ && hi.is_none_or(|h| *i < h))
+            .map(|(i, _)| i)
+            .next_back();
+        let non_monotone = hi.is_some_and(|h| rows[h..].iter().any(|r| r.primary == Winner::PadQ));
+        let name = |i: Option<usize>| {
+            i.map_or("none".to_string(), |i| {
+                format!("m = {} (ratio {:.4})", rows[i].tk, rows[i].ratio())
+            })
+        };
+        println!(
+            "\nR1: pad-q wins beyond noise up to {}; tiled wins beyond noise from {}; the ties between them: {}",
+            name(lo),
+            name(hi),
+            rows.iter()
+                .enumerate()
+                .filter(|(i, r)| r.primary == Winner::Tie
+                    && lo.is_none_or(|l| *i > l)
+                    && hi.is_none_or(|h| *i < h))
+                .map(|(_, r)| r.tk.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if non_monotone {
+            println!("R1: pad-q wins beyond noise at an m above the first tiled win: non-monotone, the bracket is UNRESOLVED");
+        }
+        let bound = lo.map(|i| rows[i].ratio());
+        match bound {
+            Some(b) => println!(
+                "R1 routing bound (pad-q only where it beat tiled beyond noise; ties favour tiled): ratio {b:.4}, below tiled's first win {}",
+                hi.map_or("(none on the grid)".to_string(), |h| format!("{:.4}", rows[h].ratio()))
+            ),
+            None => println!("R1 routing bound: pad-q beat tiled beyond noise at no m; route nothing to pad-q"),
+        }
+        let est = estimate(rows);
+        println!("crossover point estimate (zero of the piecewise-linear raw-median margin, inferred): {est:?}");
+        let flag_r3 = match est {
+            Estimate::Below => true,
+            Estimate::Above => true,
+            Estimate::At(x) => !(R3_RANGE.0..=R3_RANGE.1).contains(&x),
+        };
+        let established = match est {
+            Estimate::Below => rows[0].primary == Winner::Tiled,
+            Estimate::Above => rows[rows.len() - 1].primary == Winner::PadQ,
+            Estimate::At(_) => true,
+        };
+        match est {
+            Estimate::At(x) if (R2_RANGE.0..=R2_RANGE.1).contains(&x) => println!(
+                "R2: crossover ratio {x:.4} is inside [{}, {}]: Fable's chosen range {}-{} STANDS; gap to the range ends: {:+.4} from {}, {:+.4} from {}; the bracket is {}",
+                R2_RANGE.0, R2_RANGE.1, FABLE_RANGE.0, FABLE_RANGE.1,
+                x - FABLE_RANGE.0, FABLE_RANGE.0, x - FABLE_RANGE.1, FABLE_RANGE.1,
+                format_args!("({}, {}]", name(lo), name(hi))
+            ),
+            Estimate::At(x) if !flag_r3 => println!(
+                "R2: crossover ratio {x:.4} is outside [{}, {}] but inside [{}, {}]: neither R2 nor R3; the range moves to the measured bracket ({}, {}]",
+                R2_RANGE.0, R2_RANGE.1, R3_RANGE.0, R3_RANGE.1, name(lo), name(hi)
+            ),
+            _ => println!("R2: not applicable (the crossover is outside [{}, {}])", R3_RANGE.0, R3_RANGE.1),
+        }
+        if flag_r3 {
+            println!(
+                "R3: RESET THE CONSTANT (crossover {est:?} is outside [{}, {}]); {}",
+                R3_RANGE.0,
+                R3_RANGE.1,
+                if established {
+                    "established beyond noise at the end of the grid"
+                } else {
+                    "not established beyond noise: the end-of-grid row is a tie"
+                }
+            );
+        } else {
+            println!("R3: not triggered");
+        }
+        if rows[0].primary == Winner::Tiled {
+            println!(
+                "R4: tiled beats pad-q at m = {} beyond noise: DELETE PAD-Q",
+                rows[0].tk
+            );
+        } else {
+            println!(
+                "R4: not triggered at m = {} (winner {}, raw margin {:+.3} ms)",
+                rows[0].tk,
+                rows[0].primary.name(),
+                rows[0].margin()
+            );
+        }
+        let g = &rows[0].gate;
+        let (fewer, other) = if g.tiled.0 <= g.padq.0 {
+            ("tiled", "pad-q")
+        } else {
+            ("pad-q", "tiled")
+        };
+        println!(
+            "tie-break: ties favour {fewer} ({} dispatches against {other}'s {}); scratch is not measured here, see summary.md",
+            g.tiled.0.min(g.padq.0),
+            g.tiled.0.max(g.padq.0)
+        );
+        let json = format!(
+            "{{\"row\":\"verdict\",\"r1_lo_m\":{},\"r1_hi_m\":{},\"routing_bound_ratio\":{},\"non_monotone\":{non_monotone},\"estimate\":\"{est:?}\",\"r3_reset\":{flag_r3},\"r3_established\":{established},\"r4_delete_padq\":{}}}\n",
+            lo.map_or("null".to_string(), |i| rows[i].tk.to_string()),
+            hi.map_or("null".to_string(), |i| rows[i].tk.to_string()),
+            bound.map_or("null".to_string(), |b| format!("{b:.5}")),
+            rows[0].primary == Winner::Tiled,
+        );
+        Sink::write(&mut sink.jsonl, &json)
+    }
+
+    /// The crossover rows: every gate first, then the timings, then the
+    /// outcome. A subset of the four prints the table without an outcome.
+    fn run_crossover(m: &MetalBackend, sink: &mut Sink, reps: usize, tks: &[usize]) -> R<()> {
+        if !m.has_tensorops() {
+            return Err("no TensorOps: attention_forward would not take the pad route".into());
+        }
+        let y = yardstick(m)?;
+        let mut gates = vec![];
+        for &tk in tks {
+            gates.push(gate(m, &y, tk)?);
+        }
+        let mut rows = vec![];
+        for (&tk, g) in tks.iter().zip(gates) {
+            rows.push(run_crossover_row(m, sink, reps, tk, g)?);
+        }
+        if rows.len() == XOVER_ROWS.len() {
+            outcome(&rows, sink)
+        } else {
+            println!(
+                "\nR1 to R4 need all four m; this run had {}: no outcome",
+                rows.len()
+            );
+            Ok(())
+        }
+    }
+
     pub fn main() -> R<()> {
         let args: Vec<String> = std::env::args().collect();
         let reps: usize = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(25);
@@ -1086,15 +1638,33 @@ mod bench {
             Sink::write(&mut sink.csv, "row,arm,pass,round,ms\n")?;
         }
         let wanted: Vec<&str> = match args.get(3) {
-            Some(list) => list.split(',').collect(),
+            Some(list) => list
+                .split(',')
+                .flat_map(|id| {
+                    if id == "xover" {
+                        XOVER_ROWS.iter().map(|(id, _)| *id).collect()
+                    } else {
+                        vec![id]
+                    }
+                })
+                .collect(),
             None => ALL_ROWS.to_vec(),
         };
         for w in &wanted {
-            if !ALL_ROWS.contains(w) {
+            if !ALL_ROWS.contains(w) && !XOVER_ROWS.iter().any(|(id, _)| id == w) {
                 return Err(format!("unknown row {w}"));
             }
         }
         let m = MetalBackend::new(Budget::new(8 * GIB)).map_err(e("MetalBackend::new"))?;
+        println!("device: {}", m.device_name());
+        let xover: Vec<usize> = XOVER_ROWS
+            .iter()
+            .filter(|(id, _)| wanted.contains(id))
+            .map(|&(_, tk)| tk)
+            .collect();
+        let old_rows = wanted.iter().any(|w| ALL_ROWS.contains(w));
+        // Every run checks that tessl would run its tiled kernel: the pad-q
+        // arm of the crossover rows is that kernel, and the other rows time it.
         let rt = GpuRuntime::new()?;
         rt.set_pool_cache_cap_bytes(GIB as usize);
         rt.set_async_encode(true)?;
@@ -1102,11 +1672,7 @@ mod bench {
             env!("OUT_DIR"),
             "/ojas_per_head_gate.metallib"
         )))?;
-        println!(
-            "device: {}, tensorops {}",
-            m.device_name(),
-            rt.has_tensorops()
-        );
+        println!("tessl runtime: tensorops {}", rt.has_tensorops());
         println!(
             "tessl kernel picked at D=32: {:?}",
             encoder_attn_kernel(&rt, 32)
@@ -1127,8 +1693,13 @@ mod bench {
         if wanted.contains(&"bx") {
             run_bias_batch(&m, &rt, &mut sink, reps)?;
         }
+        if !xover.is_empty() {
+            run_crossover(&m, &mut sink, reps, &xover)?;
+        }
         println!("\nend: GPU {}, load {}", gpu_util(), load());
-        totals(&done);
+        if old_rows {
+            totals(&done);
+        }
         Ok(())
     }
 
