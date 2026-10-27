@@ -1,6 +1,6 @@
 //! Forward ops of a transformer encoder that is not nanolab's GPT: LayerNorm
-//! with a bias (plain, and across the channel axis of an image), the exact
-//! GELU, a linear layer's bias, broadcast add and multiply, a scalar scale,
+//! with a bias (plain, across the channel axis of an image, and per channel
+//! group), the exact GELU, a linear layer's bias, broadcast add and multiply, a scalar scale,
 //! and a standalone softmax.
 //!
 //! Every row, channel and softmax reduction ascends from index 0 without
@@ -17,6 +17,10 @@
 //!   mean, so a row whose mean is far from zero (SAM's residual stream) is not
 //!   limited by an `f32` sum's rounding. The normalized value `(x - mean) *
 //!   rstd` is rounded once to `f32`, then scaled and shifted in `f32`.
+//! - GroupNorm is torch's `nn.GroupNorm`: each `(batch, group)` row of
+//!   `channels / groups` channels and every position is normalized with the
+//!   same two-pass `f64` statistics and [`normalized`] arithmetic as LayerNorm,
+//!   `weight` and `bias` indexed by the channel.
 //! - GELU is [`ojas_core::gelu_erf_exact`], the same bits on every platform.
 //! - Softmax subtracts the row maximum, exponentiates with
 //!   [`ojas_core::exp_exact`] under [`Numerics::Exact`] and with the vector
@@ -24,8 +28,8 @@
 //!   (Fast: in the fixed lane order of [`exp_sub_store`]) and divides.
 
 use ojas_core::{
-    exp_exact, gelu_erf_exact, BroadcastDims, Budget, ChannelNormDims, Numerics, OjasError,
-    RmsDims, Tensor,
+    exp_exact, gelu_erf_exact, BroadcastDims, Budget, ChannelNormDims, GroupNormDims, Numerics,
+    OjasError, RmsDims, Tensor,
 };
 
 use crate::exp::exp_sub_store;
@@ -163,6 +167,74 @@ pub(crate) fn channel_layer_norm_forward(
             {
                 for (((out, &v), &m), &r) in out_plane.iter_mut().zip(plane).zip(&mean).zip(&rstd) {
                     *out = normalized(v, m, r, w, b);
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+/// GroupNorm over `[batch, channels, spatial]`. A `(batch, group)` pair is a
+/// row: its `channels / groups` channels are contiguous, so the row's two
+/// `f64` sums ascend over them and `spatial` exactly as
+/// [`layer_norm_forward`]'s row sums do, and a row needs no scratch beyond
+/// the output [`fill_rows`] charges. Channel `g * (channels / groups) + j`
+/// supplies `weight` and `bias` for the `j`th run of `spatial` values.
+/// `dims` comes from [`ojas_core::group_norm_forward_dims`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn group_norm_forward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    x: &[f32],
+    weight: &[f32],
+    bias: &[f32],
+    dims: GroupNormDims,
+    eps: f32,
+    out_shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    let GroupNormDims {
+        batch,
+        channels,
+        groups,
+        spatial,
+    } = dims;
+    if groups == 0 || !channels.is_multiple_of(groups) {
+        return Err(shape(op, "group_norm groups do not divide the channels"));
+    }
+    let per_group = channels / groups;
+    let width = product(op, &[per_group, spatial])?;
+    let rows = product(op, &[batch, groups])?;
+    if x.len() != product(op, &[rows, width])? || weight.len() != channels || bias.len() != channels
+    {
+        return Err(shape(op, "group_norm data length does not match shape"));
+    }
+    fill_rows(op, budget, exec, out_shape, rows, width, |range, y| {
+        let src = &x[range.start * width..range.end * width];
+        for (row, (dst, grp)) in range.zip(y.chunks_exact_mut(width).zip(src.chunks_exact(width))) {
+            let mut sum = 0.0f64;
+            for &v in grp {
+                sum += f64::from(v);
+            }
+            let mean = sum / width as f64;
+            let mut dev = 0.0f64;
+            for &v in grp {
+                let d = f64::from(v) - mean;
+                dev += d * d;
+            }
+            let rstd = layer_rstd(op, dev, width, eps)?;
+            let first = (row % groups) * per_group;
+            for ((out_plane, plane), (&w, &b)) in dst
+                .chunks_exact_mut(spatial)
+                .zip(grp.chunks_exact(spatial))
+                .zip(
+                    weight[first..first + per_group]
+                        .iter()
+                        .zip(&bias[first..first + per_group]),
+                )
+            {
+                for (out, &v) in out_plane.iter_mut().zip(plane) {
+                    *out = normalized(v, mean, rstd, w, b);
                 }
             }
         }

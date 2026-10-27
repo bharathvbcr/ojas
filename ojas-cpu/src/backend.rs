@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use ojas_core::{
     broadcast_add_forward_dims, broadcast_mul_forward_dims, channel_layer_norm_forward_dims,
-    gelu_erf_forward_dims, layer_norm_forward_dims, linear_bias_forward_dims, relu_forward_dims,
-    scale_forward_dims, softmax_forward_dims,
+    concat_dims, fill_dims, gelu_erf_forward_dims, group_norm_forward_dims,
+    layer_norm_forward_dims, linear_bias_forward_dims, relu_forward_dims, scale_forward_dims,
+    slice_dims, softmax_forward_dims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
@@ -35,8 +36,8 @@ use ojas_core::{
 use crate::attn::general::{self, Extras, Geom};
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
 use crate::encoder_ops::{
-    add_row_bias, broadcast_zip, channel_layer_norm_forward, gelu_erf_forward, layer_norm_forward,
-    relu_forward, scale_forward, softmax_forward,
+    add_row_bias, broadcast_zip, channel_layer_norm_forward, gelu_erf_forward, group_norm_forward,
+    layer_norm_forward, relu_forward, scale_forward, softmax_forward,
 };
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
@@ -45,7 +46,7 @@ use crate::hybrid::{
     gdn_log_decay_backward, gdn_log_decay_forward, rope_partial, sigmoid_backward, sigmoid_forward,
     Turn,
 };
-use crate::layout::permute;
+use crate::layout::{concat, fill, permute, slice};
 use crate::linalg::{linear_backward, linear_backward_input, linear_forward};
 use crate::norm::{rms_backward, rms_forward, rope_backward, rope_forward};
 use crate::optim::{
@@ -1291,6 +1292,30 @@ impl Backend for CpuBackend {
         )
     }
 
+    fn group_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "group_norm_forward";
+        let dims = group_norm_forward_dims(input, weight, bias, groups, eps)?;
+        let [x, w, b] = f32_operands(OP, self.exec(), [input, weight, bias])?;
+        group_norm_forward(
+            OP,
+            &self.budget,
+            self.exec(),
+            x,
+            w,
+            b,
+            dims,
+            eps,
+            input.shape(),
+        )
+    }
+
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "gelu_erf_forward";
         gelu_erf_forward_dims(input)?;
@@ -1303,6 +1328,27 @@ impl Backend for CpuBackend {
         relu_forward_dims(input)?;
         let [x] = f32_operands(OP, self.exec(), [input])?;
         relu_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        let dims = concat_dims(inputs, axis)?;
+        concat("concat", &self.budget, self.exec(), inputs, dims)
+    }
+
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        let dims = slice_dims(input, axis, start, len)?;
+        slice("slice", &self.budget, self.exec(), input, dims)
+    }
+
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        fill_dims(shape, dtype, value)?;
+        fill("fill", &self.budget, shape, dtype, value)
     }
 
     fn linear_bias_forward(

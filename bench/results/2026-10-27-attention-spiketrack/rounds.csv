@@ -1,0 +1,1001 @@
+row,arm,pass,round,ms
+a,"ojas scalar",0,0,228.4887
+a,"tessl (with permutes)",0,0,5.6990
+a,"ojas scalar",1,0,232.8973
+a,"tessl (with permutes)",1,0,5.6976
+a,"ojas scalar",0,1,231.0469
+a,"tessl (with permutes)",0,1,5.8721
+a,"ojas scalar",1,1,229.4882
+a,"tessl (with permutes)",1,1,5.6697
+a,"ojas scalar",0,2,226.2123
+a,"tessl (with permutes)",0,2,6.1826
+a,"ojas scalar",1,2,227.2923
+a,"tessl (with permutes)",1,2,5.6138
+a,"ojas scalar",0,3,231.9123
+a,"tessl (with permutes)",0,3,5.9248
+a,"ojas scalar",1,3,229.3785
+a,"tessl (with permutes)",1,3,5.7650
+a,"ojas scalar",0,4,229.5634
+a,"tessl (with permutes)",0,4,5.6758
+a,"ojas scalar",1,4,233.2085
+a,"tessl (with permutes)",1,4,5.6415
+a,"ojas scalar",0,5,227.0355
+a,"tessl (with permutes)",0,5,5.7919
+a,"ojas scalar",1,5,227.6119
+a,"tessl (with permutes)",1,5,5.7366
+a,"ojas scalar",0,6,230.9343
+a,"tessl (with permutes)",0,6,6.0138
+a,"ojas scalar",1,6,228.8039
+a,"tessl (with permutes)",1,6,5.6794
+a,"ojas scalar",0,7,228.5351
+a,"tessl (with permutes)",0,7,6.1764
+a,"ojas scalar",1,7,229.4306
+a,"tessl (with permutes)",1,7,5.6876
+a,"ojas scalar",0,8,227.1977
+a,"tessl (with permutes)",0,8,6.0347
+a,"ojas scalar",1,8,227.3174
+a,"tessl (with permutes)",1,8,5.9895
+a,"ojas scalar",0,9,228.3337
+a,"tessl (with permutes)",0,9,6.0051
+a,"ojas scalar",1,9,228.0775
+a,"tessl (with permutes)",1,9,5.6763
+a,"ojas scalar",0,10,230.3588
+a,"tessl (with permutes)",0,10,5.9188
+a,"ojas scalar",1,10,230.0257
+a,"tessl (with permutes)",1,10,6.0136
+a,"ojas scalar",0,11,227.9163
+a,"tessl (with permutes)",0,11,5.6440
+a,"ojas scalar",1,11,231.2483
+a,"tessl (with permutes)",1,11,6.0377
+a,"ojas scalar",0,12,231.2283
+a,"tessl (with permutes)",0,12,5.6532
+a,"ojas scalar",1,12,229.6536
+a,"tessl (with permutes)",1,12,6.2381
+a,"ojas scalar",0,13,229.3258
+a,"tessl (with permutes)",0,13,6.2674
+a,"ojas scalar",1,13,225.6695
+a,"tessl (with permutes)",1,13,5.8453
+a,"ojas scalar",0,14,231.7653
+a,"tessl (with permutes)",0,14,6.2169
+a,"ojas scalar",1,14,224.4590
+a,"tessl (with permutes)",1,14,5.6477
+a,"ojas scalar",0,15,228.1095
+a,"tessl (with permutes)",0,15,6.1649
+a,"ojas scalar",1,15,231.3794
+a,"tessl (with permutes)",1,15,5.6704
+a,"ojas scalar",0,16,230.8350
+a,"tessl (with permutes)",0,16,6.6193
+a,"ojas scalar",1,16,229.5182
+a,"tessl (with permutes)",1,16,5.6622
+a,"ojas scalar",0,17,230.3970
+a,"tessl (with permutes)",0,17,5.6884
+a,"ojas scalar",1,17,228.5780
+a,"tessl (with permutes)",1,17,5.8555
+a,"ojas scalar",0,18,230.6431
+a,"tessl (with permutes)",0,18,5.8220
+a,"ojas scalar",1,18,226.5140
+a,"tessl (with permutes)",1,18,5.7450
+a,"ojas scalar",0,19,229.6358
+a,"tessl (with permutes)",0,19,5.6892
+a,"ojas scalar",1,19,228.1109
+a,"tessl (with permutes)",1,19,5.6870
+a,"ojas scalar",0,20,227.9891
+a,"tessl (with permutes)",0,20,5.6869
+a,"ojas scalar",1,20,229.2782
+a,"tessl (with permutes)",1,20,5.6709
+a,"ojas scalar",0,21,228.5573
+a,"tessl (with permutes)",0,21,5.6347
+a,"ojas scalar",1,21,228.9871
+a,"tessl (with permutes)",1,21,5.6307
+a,"ojas scalar",0,22,227.6075
+a,"tessl (with permutes)",0,22,5.6147
+a,"ojas scalar",1,22,228.9732
+a,"tessl (with permutes)",1,22,5.6946
+a,"ojas scalar",0,23,228.3003
+a,"tessl (with permutes)",0,23,5.6603
+a,"ojas scalar",1,23,226.6865
+a,"tessl (with permutes)",1,23,5.6720
+a,"ojas scalar",0,24,228.2699
+a,"tessl (with permutes)",0,24,5.6770
+a,"ojas scalar",1,24,227.3322
+a,"tessl (with permutes)",1,24,5.9073
+b,"ojas scalar",0,0,12.5379
+b,"ojas scalar",1,0,11.7743
+b,"ojas scalar",0,1,12.7704
+b,"ojas scalar",1,1,11.6240
+b,"ojas scalar",0,2,12.1731
+b,"ojas scalar",1,2,11.8233
+b,"ojas scalar",0,3,12.5568
+b,"ojas scalar",1,3,12.2565
+b,"ojas scalar",0,4,12.0034
+b,"ojas scalar",1,4,12.3869
+b,"ojas scalar",0,5,11.9974
+b,"ojas scalar",1,5,12.1280
+b,"ojas scalar",0,6,12.1113
+b,"ojas scalar",1,6,11.9925
+b,"ojas scalar",0,7,11.1209
+b,"ojas scalar",1,7,12.0206
+b,"ojas scalar",0,8,12.0132
+b,"ojas scalar",1,8,12.1476
+b,"ojas scalar",0,9,12.0968
+b,"ojas scalar",1,9,11.9299
+b,"ojas scalar",0,10,12.1748
+b,"ojas scalar",1,10,11.8030
+b,"ojas scalar",0,11,11.9706
+b,"ojas scalar",1,11,12.0596
+b,"ojas scalar",0,12,12.2981
+b,"ojas scalar",1,12,12.0042
+b,"ojas scalar",0,13,12.0392
+b,"ojas scalar",1,13,11.1177
+b,"ojas scalar",0,14,12.1303
+b,"ojas scalar",1,14,12.4400
+b,"ojas scalar",0,15,12.2428
+b,"ojas scalar",1,15,12.0230
+b,"ojas scalar",0,16,11.5312
+b,"ojas scalar",1,16,12.2166
+b,"ojas scalar",0,17,11.8123
+b,"ojas scalar",1,17,12.1729
+b,"ojas scalar",0,18,12.2198
+b,"ojas scalar",1,18,12.1592
+b,"ojas scalar",0,19,12.2726
+b,"ojas scalar",1,19,11.5570
+b,"ojas scalar",0,20,12.1748
+b,"ojas scalar",1,20,11.9978
+b,"ojas scalar",0,21,12.2573
+b,"ojas scalar",1,21,11.9858
+b,"ojas scalar",0,22,12.0330
+b,"ojas scalar",1,22,11.4378
+b,"ojas scalar",0,23,11.7650
+b,"ojas scalar",1,23,12.1593
+b,"ojas scalar",0,24,11.0994
+b,"ojas scalar",1,24,12.5947
+c1,"ojas scalar",0,0,235.6445
+c1,"tessl, q padded, fused slice",0,0,19.5836
+c1,"tessl, q padded, explicit pad+slice copies",0,0,10.6532
+c1,"ojas scalar",1,0,242.7140
+c1,"tessl, q padded, fused slice",1,0,6.1832
+c1,"tessl, q padded, explicit pad+slice copies",1,0,5.8486
+c1,"ojas scalar",0,1,230.4964
+c1,"tessl, q padded, fused slice",0,1,6.2171
+c1,"tessl, q padded, explicit pad+slice copies",0,1,11.6897
+c1,"ojas scalar",1,1,237.4284
+c1,"tessl, q padded, fused slice",1,1,5.8181
+c1,"tessl, q padded, explicit pad+slice copies",1,1,5.7605
+c1,"ojas scalar",0,2,232.0010
+c1,"tessl, q padded, fused slice",0,2,5.6850
+c1,"tessl, q padded, explicit pad+slice copies",0,2,5.7607
+c1,"ojas scalar",1,2,227.6097
+c1,"tessl, q padded, fused slice",1,2,5.6935
+c1,"tessl, q padded, explicit pad+slice copies",1,2,5.7922
+c1,"ojas scalar",0,3,234.9146
+c1,"tessl, q padded, fused slice",0,3,6.4112
+c1,"tessl, q padded, explicit pad+slice copies",0,3,5.7819
+c1,"ojas scalar",1,3,229.4579
+c1,"tessl, q padded, fused slice",1,3,5.7024
+c1,"tessl, q padded, explicit pad+slice copies",1,3,5.8249
+c1,"ojas scalar",0,4,227.8634
+c1,"tessl, q padded, fused slice",0,4,6.2215
+c1,"tessl, q padded, explicit pad+slice copies",0,4,6.3194
+c1,"ojas scalar",1,4,228.0738
+c1,"tessl, q padded, fused slice",1,4,5.7028
+c1,"tessl, q padded, explicit pad+slice copies",1,4,5.8282
+c1,"ojas scalar",0,5,231.7904
+c1,"tessl, q padded, fused slice",0,5,5.7732
+c1,"tessl, q padded, explicit pad+slice copies",0,5,5.8545
+c1,"ojas scalar",1,5,228.8264
+c1,"tessl, q padded, fused slice",1,5,5.6974
+c1,"tessl, q padded, explicit pad+slice copies",1,5,6.4621
+c1,"ojas scalar",0,6,230.6748
+c1,"tessl, q padded, fused slice",0,6,5.8547
+c1,"tessl, q padded, explicit pad+slice copies",0,6,6.1629
+c1,"ojas scalar",1,6,228.3035
+c1,"tessl, q padded, fused slice",1,6,5.6864
+c1,"tessl, q padded, explicit pad+slice copies",1,6,5.9735
+c1,"ojas scalar",0,7,230.0233
+c1,"tessl, q padded, fused slice",0,7,5.7512
+c1,"tessl, q padded, explicit pad+slice copies",0,7,5.8445
+c1,"ojas scalar",1,7,227.6035
+c1,"tessl, q padded, fused slice",1,7,5.8212
+c1,"tessl, q padded, explicit pad+slice copies",1,7,5.9592
+c1,"ojas scalar",0,8,229.2056
+c1,"tessl, q padded, fused slice",0,8,5.7690
+c1,"tessl, q padded, explicit pad+slice copies",0,8,6.1753
+c1,"ojas scalar",1,8,227.6911
+c1,"tessl, q padded, fused slice",1,8,5.7910
+c1,"tessl, q padded, explicit pad+slice copies",1,8,5.7117
+c1,"ojas scalar",0,9,235.4515
+c1,"tessl, q padded, fused slice",0,9,5.6933
+c1,"tessl, q padded, explicit pad+slice copies",0,9,5.7846
+c1,"ojas scalar",1,9,225.6081
+c1,"tessl, q padded, fused slice",1,9,5.8737
+c1,"tessl, q padded, explicit pad+slice copies",1,9,5.8827
+c1,"ojas scalar",0,10,228.2715
+c1,"tessl, q padded, fused slice",0,10,5.8231
+c1,"tessl, q padded, explicit pad+slice copies",0,10,5.7473
+c1,"ojas scalar",1,10,230.6525
+c1,"tessl, q padded, fused slice",1,10,5.7487
+c1,"tessl, q padded, explicit pad+slice copies",1,10,5.7812
+c1,"ojas scalar",0,11,227.0973
+c1,"tessl, q padded, fused slice",0,11,5.7265
+c1,"tessl, q padded, explicit pad+slice copies",0,11,5.7948
+c1,"ojas scalar",1,11,233.2268
+c1,"tessl, q padded, fused slice",1,11,5.6954
+c1,"tessl, q padded, explicit pad+slice copies",1,11,5.7992
+c1,"ojas scalar",0,12,227.9261
+c1,"tessl, q padded, fused slice",0,12,5.6807
+c1,"tessl, q padded, explicit pad+slice copies",0,12,5.7929
+c1,"ojas scalar",1,12,228.1333
+c1,"tessl, q padded, fused slice",1,12,5.7984
+c1,"tessl, q padded, explicit pad+slice copies",1,12,6.1670
+c1,"ojas scalar",0,13,229.2884
+c1,"tessl, q padded, fused slice",0,13,5.7431
+c1,"tessl, q padded, explicit pad+slice copies",0,13,5.7818
+c1,"ojas scalar",1,13,230.1555
+c1,"tessl, q padded, fused slice",1,13,5.6918
+c1,"tessl, q padded, explicit pad+slice copies",1,13,5.7461
+c1,"ojas scalar",0,14,228.0043
+c1,"tessl, q padded, fused slice",0,14,5.8220
+c1,"tessl, q padded, explicit pad+slice copies",0,14,5.8462
+c1,"ojas scalar",1,14,227.1952
+c1,"tessl, q padded, fused slice",1,14,5.8212
+c1,"tessl, q padded, explicit pad+slice copies",1,14,5.8384
+c1,"ojas scalar",0,15,229.7028
+c1,"tessl, q padded, fused slice",0,15,5.8265
+c1,"tessl, q padded, explicit pad+slice copies",0,15,5.7745
+c1,"ojas scalar",1,15,230.8182
+c1,"tessl, q padded, fused slice",1,15,5.7146
+c1,"tessl, q padded, explicit pad+slice copies",1,15,6.3029
+c1,"ojas scalar",0,16,229.8202
+c1,"tessl, q padded, fused slice",0,16,5.9349
+c1,"tessl, q padded, explicit pad+slice copies",0,16,5.7605
+c1,"ojas scalar",1,16,230.4264
+c1,"tessl, q padded, fused slice",1,16,5.7413
+c1,"tessl, q padded, explicit pad+slice copies",1,16,5.7732
+c1,"ojas scalar",0,17,230.8059
+c1,"tessl, q padded, fused slice",0,17,5.7553
+c1,"tessl, q padded, explicit pad+slice copies",0,17,5.9252
+c1,"ojas scalar",1,17,230.1581
+c1,"tessl, q padded, fused slice",1,17,5.7095
+c1,"tessl, q padded, explicit pad+slice copies",1,17,5.9523
+c1,"ojas scalar",0,18,228.9848
+c1,"tessl, q padded, fused slice",0,18,5.8482
+c1,"tessl, q padded, explicit pad+slice copies",0,18,5.9183
+c1,"ojas scalar",1,18,230.1627
+c1,"tessl, q padded, fused slice",1,18,6.2386
+c1,"tessl, q padded, explicit pad+slice copies",1,18,5.8451
+c1,"ojas scalar",0,19,228.0147
+c1,"tessl, q padded, fused slice",0,19,5.7657
+c1,"tessl, q padded, explicit pad+slice copies",0,19,5.8768
+c1,"ojas scalar",1,19,233.5037
+c1,"tessl, q padded, fused slice",1,19,6.3445
+c1,"tessl, q padded, explicit pad+slice copies",1,19,5.8961
+c1,"ojas scalar",0,20,230.1425
+c1,"tessl, q padded, fused slice",0,20,5.6857
+c1,"tessl, q padded, explicit pad+slice copies",0,20,5.8557
+c1,"ojas scalar",1,20,231.4613
+c1,"tessl, q padded, fused slice",1,20,5.8380
+c1,"tessl, q padded, explicit pad+slice copies",1,20,5.7457
+c1,"ojas scalar",0,21,229.1463
+c1,"tessl, q padded, fused slice",0,21,5.6979
+c1,"tessl, q padded, explicit pad+slice copies",0,21,5.8902
+c1,"ojas scalar",1,21,228.8238
+c1,"tessl, q padded, fused slice",1,21,5.6789
+c1,"tessl, q padded, explicit pad+slice copies",1,21,5.8965
+c1,"ojas scalar",0,22,231.2785
+c1,"tessl, q padded, fused slice",0,22,5.6739
+c1,"tessl, q padded, explicit pad+slice copies",0,22,5.7974
+c1,"ojas scalar",1,22,231.4728
+c1,"tessl, q padded, fused slice",1,22,12.5708
+c1,"tessl, q padded, explicit pad+slice copies",1,22,15.0168
+c1,"ojas scalar",0,23,234.8003
+c1,"tessl, q padded, fused slice",0,23,5.8241
+c1,"tessl, q padded, explicit pad+slice copies",0,23,5.8845
+c1,"ojas scalar",1,23,232.0551
+c1,"tessl, q padded, fused slice",1,23,5.7027
+c1,"tessl, q padded, explicit pad+slice copies",1,23,5.8460
+c1,"ojas scalar",0,24,231.9320
+c1,"tessl, q padded, fused slice",0,24,5.7401
+c1,"tessl, q padded, explicit pad+slice copies",0,24,5.8603
+c1,"ojas scalar",1,24,232.5736
+c1,"tessl, q padded, fused slice",1,24,6.5498
+c1,"tessl, q padded, explicit pad+slice copies",1,24,7.4691
+c2,"ojas scalar",0,0,642.6153
+c2,"tessl, q padded, fused slice",0,0,47.3854
+c2,"tessl, q padded, explicit pad+slice copies",0,0,47.6427
+c2,"ojas scalar",1,0,641.7602
+c2,"tessl, q padded, fused slice",1,0,47.6659
+c2,"tessl, q padded, explicit pad+slice copies",1,0,48.0710
+c2,"ojas scalar",0,1,638.8263
+c2,"tessl, q padded, fused slice",0,1,48.7690
+c2,"tessl, q padded, explicit pad+slice copies",0,1,47.3295
+c2,"ojas scalar",1,1,639.7833
+c2,"tessl, q padded, fused slice",1,1,47.9702
+c2,"tessl, q padded, explicit pad+slice copies",1,1,48.8089
+c2,"ojas scalar",0,2,644.9710
+c2,"tessl, q padded, fused slice",0,2,47.6499
+c2,"tessl, q padded, explicit pad+slice copies",0,2,47.5900
+c2,"ojas scalar",1,2,644.7854
+c2,"tessl, q padded, fused slice",1,2,47.9363
+c2,"tessl, q padded, explicit pad+slice copies",1,2,48.0159
+c2,"ojas scalar",0,3,637.8193
+c2,"tessl, q padded, fused slice",0,3,48.0943
+c2,"tessl, q padded, explicit pad+slice copies",0,3,48.2561
+c2,"ojas scalar",1,3,645.7575
+c2,"tessl, q padded, fused slice",1,3,47.4180
+c2,"tessl, q padded, explicit pad+slice copies",1,3,47.5754
+c2,"ojas scalar",0,4,642.2561
+c2,"tessl, q padded, fused slice",0,4,48.1390
+c2,"tessl, q padded, explicit pad+slice copies",0,4,48.8914
+c2,"ojas scalar",1,4,646.6675
+c2,"tessl, q padded, fused slice",1,4,49.0900
+c2,"tessl, q padded, explicit pad+slice copies",1,4,48.1314
+c2,"ojas scalar",0,5,638.3943
+c2,"tessl, q padded, fused slice",0,5,48.0942
+c2,"tessl, q padded, explicit pad+slice copies",0,5,48.2461
+c2,"ojas scalar",1,5,646.1878
+c2,"tessl, q padded, fused slice",1,5,47.7086
+c2,"tessl, q padded, explicit pad+slice copies",1,5,47.8398
+c2,"ojas scalar",0,6,636.9418
+c2,"tessl, q padded, fused slice",0,6,47.3408
+c2,"tessl, q padded, explicit pad+slice copies",0,6,48.2205
+c2,"ojas scalar",1,6,642.4778
+c2,"tessl, q padded, fused slice",1,6,48.4715
+c2,"tessl, q padded, explicit pad+slice copies",1,6,48.7966
+c2,"ojas scalar",0,7,643.8549
+c2,"tessl, q padded, fused slice",0,7,48.3377
+c2,"tessl, q padded, explicit pad+slice copies",0,7,48.0994
+c2,"ojas scalar",1,7,637.3617
+c2,"tessl, q padded, fused slice",1,7,47.8130
+c2,"tessl, q padded, explicit pad+slice copies",1,7,47.7403
+c2,"ojas scalar",0,8,644.0708
+c2,"tessl, q padded, fused slice",0,8,48.3287
+c2,"tessl, q padded, explicit pad+slice copies",0,8,47.8268
+c2,"ojas scalar",1,8,643.8428
+c2,"tessl, q padded, fused slice",1,8,59.4483
+c2,"tessl, q padded, explicit pad+slice copies",1,8,52.3692
+c2,"ojas scalar",0,9,647.4749
+c2,"tessl, q padded, fused slice",0,9,48.5533
+c2,"tessl, q padded, explicit pad+slice copies",0,9,48.2107
+c2,"ojas scalar",1,9,642.1829
+c2,"tessl, q padded, fused slice",1,9,48.3744
+c2,"tessl, q padded, explicit pad+slice copies",1,9,48.4740
+c2,"ojas scalar",0,10,645.8152
+c2,"tessl, q padded, fused slice",0,10,47.5052
+c2,"tessl, q padded, explicit pad+slice copies",0,10,48.2505
+c2,"ojas scalar",1,10,638.0526
+c2,"tessl, q padded, fused slice",1,10,48.8303
+c2,"tessl, q padded, explicit pad+slice copies",1,10,58.3555
+c2,"ojas scalar",0,11,659.8287
+c2,"tessl, q padded, fused slice",0,11,47.6619
+c2,"tessl, q padded, explicit pad+slice copies",0,11,48.1887
+c2,"ojas scalar",1,11,643.4620
+c2,"tessl, q padded, fused slice",1,11,47.5560
+c2,"tessl, q padded, explicit pad+slice copies",1,11,48.5245
+c2,"ojas scalar",0,12,648.6545
+c2,"tessl, q padded, fused slice",0,12,47.7775
+c2,"tessl, q padded, explicit pad+slice copies",0,12,48.0684
+c2,"ojas scalar",1,12,641.8061
+c2,"tessl, q padded, fused slice",1,12,47.8567
+c2,"tessl, q padded, explicit pad+slice copies",1,12,49.8064
+c2,"ojas scalar",0,13,637.3309
+c2,"tessl, q padded, fused slice",0,13,56.3480
+c2,"tessl, q padded, explicit pad+slice copies",0,13,61.5977
+c2,"ojas scalar",1,13,667.8794
+c2,"tessl, q padded, fused slice",1,13,48.8750
+c2,"tessl, q padded, explicit pad+slice copies",1,13,48.1028
+c2,"ojas scalar",0,14,642.1102
+c2,"tessl, q padded, fused slice",0,14,47.7856
+c2,"tessl, q padded, explicit pad+slice copies",0,14,49.0351
+c2,"ojas scalar",1,14,643.8470
+c2,"tessl, q padded, fused slice",1,14,48.2642
+c2,"tessl, q padded, explicit pad+slice copies",1,14,49.7401
+c2,"ojas scalar",0,15,639.3332
+c2,"tessl, q padded, fused slice",0,15,49.3783
+c2,"tessl, q padded, explicit pad+slice copies",0,15,47.7432
+c2,"ojas scalar",1,15,646.3635
+c2,"tessl, q padded, fused slice",1,15,48.0637
+c2,"tessl, q padded, explicit pad+slice copies",1,15,48.1814
+c2,"ojas scalar",0,16,643.1637
+c2,"tessl, q padded, fused slice",0,16,47.9569
+c2,"tessl, q padded, explicit pad+slice copies",0,16,48.3498
+c2,"ojas scalar",1,16,635.3390
+c2,"tessl, q padded, fused slice",1,16,48.3908
+c2,"tessl, q padded, explicit pad+slice copies",1,16,47.7810
+c2,"ojas scalar",0,17,638.0109
+c2,"tessl, q padded, fused slice",0,17,48.4002
+c2,"tessl, q padded, explicit pad+slice copies",0,17,48.3461
+c2,"ojas scalar",1,17,642.0605
+c2,"tessl, q padded, fused slice",1,17,47.9598
+c2,"tessl, q padded, explicit pad+slice copies",1,17,47.7750
+c2,"ojas scalar",0,18,639.3560
+c2,"tessl, q padded, fused slice",0,18,47.7351
+c2,"tessl, q padded, explicit pad+slice copies",0,18,47.7449
+c2,"ojas scalar",1,18,642.0412
+c2,"tessl, q padded, fused slice",1,18,47.3858
+c2,"tessl, q padded, explicit pad+slice copies",1,18,48.2611
+c2,"ojas scalar",0,19,643.8192
+c2,"tessl, q padded, fused slice",0,19,47.2969
+c2,"tessl, q padded, explicit pad+slice copies",0,19,48.0244
+c2,"ojas scalar",1,19,647.5545
+c2,"tessl, q padded, fused slice",1,19,48.2120
+c2,"tessl, q padded, explicit pad+slice copies",1,19,48.5237
+c2,"ojas scalar",0,20,641.4252
+c2,"tessl, q padded, fused slice",0,20,47.5464
+c2,"tessl, q padded, explicit pad+slice copies",0,20,48.2623
+c2,"ojas scalar",1,20,637.7432
+c2,"tessl, q padded, fused slice",1,20,47.2750
+c2,"tessl, q padded, explicit pad+slice copies",1,20,48.0697
+c2,"ojas scalar",0,21,640.0947
+c2,"tessl, q padded, fused slice",0,21,48.1245
+c2,"tessl, q padded, explicit pad+slice copies",0,21,47.5411
+c2,"ojas scalar",1,21,639.1314
+c2,"tessl, q padded, fused slice",1,21,47.5317
+c2,"tessl, q padded, explicit pad+slice copies",1,21,48.1222
+c2,"ojas scalar",0,22,638.2660
+c2,"tessl, q padded, fused slice",0,22,48.3203
+c2,"tessl, q padded, explicit pad+slice copies",0,22,47.5927
+c2,"ojas scalar",1,22,643.3855
+c2,"tessl, q padded, fused slice",1,22,47.1400
+c2,"tessl, q padded, explicit pad+slice copies",1,22,47.1417
+c2,"ojas scalar",0,23,642.3880
+c2,"tessl, q padded, fused slice",0,23,47.4673
+c2,"tessl, q padded, explicit pad+slice copies",0,23,47.5819
+c2,"ojas scalar",1,23,641.5130
+c2,"tessl, q padded, fused slice",1,23,47.2855
+c2,"tessl, q padded, explicit pad+slice copies",1,23,47.6056
+c2,"ojas scalar",0,24,636.6785
+c2,"tessl, q padded, fused slice",0,24,47.4732
+c2,"tessl, q padded, explicit pad+slice copies",0,24,49.1982
+c2,"ojas scalar",1,24,635.2248
+c2,"tessl, q padded, fused slice",1,24,47.9413
+c2,"tessl, q padded, explicit pad+slice copies",1,24,49.5431
+c3,"ojas scalar",0,0,1483.3714
+c3,"tessl, q padded, fused slice",0,0,282.3788
+c3,"tessl, q padded, explicit pad+slice copies",0,0,288.7746
+c3,"ojas scalar",1,0,1482.0527
+c3,"tessl, q padded, fused slice",1,0,278.6622
+c3,"tessl, q padded, explicit pad+slice copies",1,0,272.4653
+c3,"ojas scalar",0,1,1480.6710
+c3,"tessl, q padded, fused slice",0,1,274.5273
+c3,"tessl, q padded, explicit pad+slice copies",0,1,270.8690
+c3,"ojas scalar",1,1,1478.2720
+c3,"tessl, q padded, fused slice",1,1,283.9598
+c3,"tessl, q padded, explicit pad+slice copies",1,1,280.0693
+c3,"ojas scalar",0,2,1481.3772
+c3,"tessl, q padded, fused slice",0,2,280.5450
+c3,"tessl, q padded, explicit pad+slice copies",0,2,280.0152
+c3,"ojas scalar",1,2,1479.9434
+c3,"tessl, q padded, fused slice",1,2,270.0800
+c3,"tessl, q padded, explicit pad+slice copies",1,2,280.7261
+c3,"ojas scalar",0,3,1484.3565
+c3,"tessl, q padded, fused slice",0,3,281.5833
+c3,"tessl, q padded, explicit pad+slice copies",0,3,278.5556
+c3,"ojas scalar",1,3,1478.5153
+c3,"tessl, q padded, fused slice",1,3,273.7000
+c3,"tessl, q padded, explicit pad+slice copies",1,3,284.3196
+c3,"ojas scalar",0,4,1485.9185
+c3,"tessl, q padded, fused slice",0,4,275.8257
+c3,"tessl, q padded, explicit pad+slice copies",0,4,281.5811
+c3,"ojas scalar",1,4,1477.0506
+c3,"tessl, q padded, fused slice",1,4,279.7623
+c3,"tessl, q padded, explicit pad+slice copies",1,4,276.5547
+c3,"ojas scalar",0,5,1478.4390
+c3,"tessl, q padded, fused slice",0,5,274.4313
+c3,"tessl, q padded, explicit pad+slice copies",0,5,279.4716
+c3,"ojas scalar",1,5,1474.3182
+c3,"tessl, q padded, fused slice",1,5,280.7465
+c3,"tessl, q padded, explicit pad+slice copies",1,5,279.5512
+c3,"ojas scalar",0,6,1480.8630
+c3,"tessl, q padded, fused slice",0,6,277.0475
+c3,"tessl, q padded, explicit pad+slice copies",0,6,277.9500
+c3,"ojas scalar",1,6,1481.2868
+c3,"tessl, q padded, fused slice",1,6,273.5952
+c3,"tessl, q padded, explicit pad+slice copies",1,6,279.4009
+c3,"ojas scalar",0,7,1484.6810
+c3,"tessl, q padded, fused slice",0,7,275.1432
+c3,"tessl, q padded, explicit pad+slice copies",0,7,278.1513
+c3,"ojas scalar",1,7,1478.6739
+c3,"tessl, q padded, fused slice",1,7,277.7446
+c3,"tessl, q padded, explicit pad+slice copies",1,7,271.6905
+c3,"ojas scalar",0,8,1485.8010
+c3,"tessl, q padded, fused slice",0,8,275.4785
+c3,"tessl, q padded, explicit pad+slice copies",0,8,276.4041
+c3,"ojas scalar",1,8,1474.2844
+c3,"tessl, q padded, fused slice",1,8,274.4307
+c3,"tessl, q padded, explicit pad+slice copies",1,8,277.1724
+c3,"ojas scalar",0,9,1475.2827
+c3,"tessl, q padded, fused slice",0,9,274.3173
+c3,"tessl, q padded, explicit pad+slice copies",0,9,276.0645
+c3,"ojas scalar",1,9,1477.2165
+c3,"tessl, q padded, fused slice",1,9,278.9321
+c3,"tessl, q padded, explicit pad+slice copies",1,9,284.2885
+c3,"ojas scalar",0,10,1476.1670
+c3,"tessl, q padded, fused slice",0,10,277.9250
+c3,"tessl, q padded, explicit pad+slice copies",0,10,278.8576
+c3,"ojas scalar",1,10,1482.1612
+c3,"tessl, q padded, fused slice",1,10,274.7273
+c3,"tessl, q padded, explicit pad+slice copies",1,10,275.4910
+c3,"ojas scalar",0,11,1482.2704
+c3,"tessl, q padded, fused slice",0,11,273.6955
+c3,"tessl, q padded, explicit pad+slice copies",0,11,267.3110
+c3,"ojas scalar",1,11,1475.4293
+c3,"tessl, q padded, fused slice",1,11,276.4404
+c3,"tessl, q padded, explicit pad+slice copies",1,11,276.0175
+c3,"ojas scalar",0,12,1473.5691
+c3,"tessl, q padded, fused slice",0,12,278.4271
+c3,"tessl, q padded, explicit pad+slice copies",0,12,274.3354
+c3,"ojas scalar",1,12,1475.8165
+c3,"tessl, q padded, fused slice",1,12,270.2752
+c3,"tessl, q padded, explicit pad+slice copies",1,12,269.9743
+c3,"ojas scalar",0,13,1477.0173
+c3,"tessl, q padded, fused slice",0,13,274.1122
+c3,"tessl, q padded, explicit pad+slice copies",0,13,266.2384
+c3,"ojas scalar",1,13,1475.6338
+c3,"tessl, q padded, fused slice",1,13,272.5481
+c3,"tessl, q padded, explicit pad+slice copies",1,13,271.8980
+c3,"ojas scalar",0,14,1476.7779
+c3,"tessl, q padded, fused slice",0,14,275.4050
+c3,"tessl, q padded, explicit pad+slice copies",0,14,271.9628
+c3,"ojas scalar",1,14,1475.3280
+c3,"tessl, q padded, fused slice",1,14,277.5463
+c3,"tessl, q padded, explicit pad+slice copies",1,14,277.5047
+c3,"ojas scalar",0,15,1471.7341
+c3,"tessl, q padded, fused slice",0,15,276.7607
+c3,"tessl, q padded, explicit pad+slice copies",0,15,279.8669
+c3,"ojas scalar",1,15,1477.4722
+c3,"tessl, q padded, fused slice",1,15,272.0260
+c3,"tessl, q padded, explicit pad+slice copies",1,15,273.1694
+c3,"ojas scalar",0,16,1473.0733
+c3,"tessl, q padded, fused slice",0,16,271.0985
+c3,"tessl, q padded, explicit pad+slice copies",0,16,266.7278
+c3,"ojas scalar",1,16,1479.3502
+c3,"tessl, q padded, fused slice",1,16,274.6237
+c3,"tessl, q padded, explicit pad+slice copies",1,16,275.6034
+c3,"ojas scalar",0,17,1482.9650
+c3,"tessl, q padded, fused slice",0,17,272.0776
+c3,"tessl, q padded, explicit pad+slice copies",0,17,272.3666
+c3,"ojas scalar",1,17,1474.6261
+c3,"tessl, q padded, fused slice",1,17,272.4848
+c3,"tessl, q padded, explicit pad+slice copies",1,17,274.4450
+c3,"ojas scalar",0,18,1479.1846
+c3,"tessl, q padded, fused slice",0,18,269.8455
+c3,"tessl, q padded, explicit pad+slice copies",0,18,271.9264
+c3,"ojas scalar",1,18,1482.0861
+c3,"tessl, q padded, fused slice",1,18,273.7404
+c3,"tessl, q padded, explicit pad+slice copies",1,18,273.6686
+c3,"ojas scalar",0,19,1477.5471
+c3,"tessl, q padded, fused slice",0,19,273.6390
+c3,"tessl, q padded, explicit pad+slice copies",0,19,274.3841
+c3,"ojas scalar",1,19,1474.1755
+c3,"tessl, q padded, fused slice",1,19,273.2934
+c3,"tessl, q padded, explicit pad+slice copies",1,19,279.4946
+c3,"ojas scalar",0,20,1474.6676
+c3,"tessl, q padded, fused slice",0,20,273.1321
+c3,"tessl, q padded, explicit pad+slice copies",0,20,269.7388
+c3,"ojas scalar",1,20,1480.6808
+c3,"tessl, q padded, fused slice",1,20,270.7040
+c3,"tessl, q padded, explicit pad+slice copies",1,20,271.6608
+c3,"ojas scalar",0,21,1480.4614
+c3,"tessl, q padded, fused slice",0,21,277.8644
+c3,"tessl, q padded, explicit pad+slice copies",0,21,276.8008
+c3,"ojas scalar",1,21,1484.9015
+c3,"tessl, q padded, fused slice",1,21,274.0412
+c3,"tessl, q padded, explicit pad+slice copies",1,21,272.4250
+c3,"ojas scalar",0,22,1476.2439
+c3,"tessl, q padded, fused slice",0,22,271.6568
+c3,"tessl, q padded, explicit pad+slice copies",0,22,272.4735
+c3,"ojas scalar",1,22,1479.5783
+c3,"tessl, q padded, fused slice",1,22,268.9854
+c3,"tessl, q padded, explicit pad+slice copies",1,22,274.6132
+c3,"ojas scalar",0,23,1475.5881
+c3,"tessl, q padded, fused slice",0,23,268.1372
+c3,"tessl, q padded, explicit pad+slice copies",0,23,269.9910
+c3,"ojas scalar",1,23,1478.8443
+c3,"tessl, q padded, fused slice",1,23,274.3942
+c3,"tessl, q padded, explicit pad+slice copies",1,23,271.2783
+c3,"ojas scalar",0,24,1473.7690
+c3,"tessl, q padded, fused slice",0,24,269.6403
+c3,"tessl, q padded, explicit pad+slice copies",0,24,277.7875
+c3,"ojas scalar",1,24,1471.2162
+c3,"tessl, q padded, fused slice",1,24,271.7832
+c3,"tessl, q padded, explicit pad+slice copies",1,24,276.5897
+d,"ojas scalar",0,0,2.0448
+d,"ojas scalar",1,0,1.9885
+d,"ojas scalar",0,1,2.0252
+d,"ojas scalar",1,1,2.3784
+d,"ojas scalar",0,2,2.0289
+d,"ojas scalar",1,2,2.0001
+d,"ojas scalar",0,3,2.0225
+d,"ojas scalar",1,3,2.0153
+d,"ojas scalar",0,4,2.0179
+d,"ojas scalar",1,4,1.9784
+d,"ojas scalar",0,5,1.9966
+d,"ojas scalar",1,5,2.0066
+d,"ojas scalar",0,6,2.0086
+d,"ojas scalar",1,6,2.3870
+d,"ojas scalar",0,7,2.0444
+d,"ojas scalar",1,7,2.0281
+d,"ojas scalar",0,8,2.0245
+d,"ojas scalar",1,8,2.0231
+d,"ojas scalar",0,9,2.0254
+d,"ojas scalar",1,9,1.9850
+d,"ojas scalar",0,10,2.4801
+d,"ojas scalar",1,10,2.1736
+d,"ojas scalar",0,11,2.0233
+d,"ojas scalar",1,11,2.0266
+d,"ojas scalar",0,12,2.0291
+d,"ojas scalar",1,12,2.0092
+d,"ojas scalar",0,13,2.6633
+d,"ojas scalar",1,13,2.0361
+d,"ojas scalar",0,14,2.2740
+d,"ojas scalar",1,14,2.6290
+d,"ojas scalar",0,15,2.0270
+d,"ojas scalar",1,15,2.1170
+d,"ojas scalar",0,16,1.9736
+d,"ojas scalar",1,16,2.4479
+d,"ojas scalar",0,17,2.0388
+d,"ojas scalar",1,17,2.0181
+d,"ojas scalar",0,18,2.3175
+d,"ojas scalar",1,18,2.9370
+d,"ojas scalar",0,19,2.0470
+d,"ojas scalar",1,19,2.0327
+d,"ojas scalar",0,20,2.4201
+d,"ojas scalar",1,20,2.0320
+d,"ojas scalar",0,21,2.0275
+d,"ojas scalar",1,21,2.0039
+d,"ojas scalar",0,22,1.9975
+d,"ojas scalar",1,22,2.0001
+d,"ojas scalar",0,23,1.9995
+d,"ojas scalar",1,23,2.2621
+d,"ojas scalar",0,24,1.9815
+d,"ojas scalar",1,24,2.0016
+e,"ojas scalar",0,0,0.5742
+e,"tessl (with permutes)",0,0,0.1831
+e,"ojas scalar",1,0,0.5735
+e,"tessl (with permutes)",1,0,0.1830
+e,"ojas scalar",0,1,0.5445
+e,"tessl (with permutes)",0,1,0.2076
+e,"ojas scalar",1,1,0.5475
+e,"tessl (with permutes)",1,1,0.2015
+e,"ojas scalar",0,2,0.5441
+e,"tessl (with permutes)",0,2,0.1926
+e,"ojas scalar",1,2,0.5558
+e,"tessl (with permutes)",1,2,0.2050
+e,"ojas scalar",0,3,0.5520
+e,"tessl (with permutes)",0,3,0.1835
+e,"ojas scalar",1,3,0.5533
+e,"tessl (with permutes)",1,3,0.1798
+e,"ojas scalar",0,4,0.5556
+e,"tessl (with permutes)",0,4,0.2000
+e,"ojas scalar",1,4,0.5450
+e,"tessl (with permutes)",1,4,0.1842
+e,"ojas scalar",0,5,0.5685
+e,"tessl (with permutes)",0,5,0.1857
+e,"ojas scalar",1,5,0.5860
+e,"tessl (with permutes)",1,5,0.1910
+e,"ojas scalar",0,6,0.5585
+e,"tessl (with permutes)",0,6,0.1840
+e,"ojas scalar",1,6,0.5413
+e,"tessl (with permutes)",1,6,0.1800
+e,"ojas scalar",0,7,0.5455
+e,"tessl (with permutes)",0,7,0.1821
+e,"ojas scalar",1,7,0.5483
+e,"tessl (with permutes)",1,7,0.1876
+e,"ojas scalar",0,8,0.5770
+e,"tessl (with permutes)",0,8,0.1820
+e,"ojas scalar",1,8,0.5508
+e,"tessl (with permutes)",1,8,0.1838
+e,"ojas scalar",0,9,0.5521
+e,"tessl (with permutes)",0,9,0.1819
+e,"ojas scalar",1,9,0.6020
+e,"tessl (with permutes)",1,9,0.1923
+e,"ojas scalar",0,10,0.5724
+e,"tessl (with permutes)",0,10,0.1846
+e,"ojas scalar",1,10,0.5659
+e,"tessl (with permutes)",1,10,0.1905
+e,"ojas scalar",0,11,0.5496
+e,"tessl (with permutes)",0,11,0.2098
+e,"ojas scalar",1,11,0.5430
+e,"tessl (with permutes)",1,11,0.1889
+e,"ojas scalar",0,12,0.5515
+e,"tessl (with permutes)",0,12,0.1838
+e,"ojas scalar",1,12,0.5453
+e,"tessl (with permutes)",1,12,0.1843
+e,"ojas scalar",0,13,0.5440
+e,"tessl (with permutes)",0,13,0.1894
+e,"ojas scalar",1,13,0.5525
+e,"tessl (with permutes)",1,13,0.1824
+e,"ojas scalar",0,14,0.5586
+e,"tessl (with permutes)",0,14,0.1866
+e,"ojas scalar",1,14,0.5516
+e,"tessl (with permutes)",1,14,0.2015
+e,"ojas scalar",0,15,0.5766
+e,"tessl (with permutes)",0,15,0.2542
+e,"ojas scalar",1,15,0.5594
+e,"tessl (with permutes)",1,15,0.1851
+e,"ojas scalar",0,16,0.5694
+e,"tessl (with permutes)",0,16,0.2152
+e,"ojas scalar",1,16,0.5556
+e,"tessl (with permutes)",1,16,0.2462
+e,"ojas scalar",0,17,0.5766
+e,"tessl (with permutes)",0,17,0.1778
+e,"ojas scalar",1,17,0.5648
+e,"tessl (with permutes)",1,17,0.1844
+e,"ojas scalar",0,18,0.5761
+e,"tessl (with permutes)",0,18,0.1840
+e,"ojas scalar",1,18,0.5500
+e,"tessl (with permutes)",1,18,0.2155
+e,"ojas scalar",0,19,0.5425
+e,"tessl (with permutes)",0,19,0.1936
+e,"ojas scalar",1,19,0.5791
+e,"tessl (with permutes)",1,19,0.2071
+e,"ojas scalar",0,20,0.5517
+e,"tessl (with permutes)",0,20,0.2135
+e,"ojas scalar",1,20,0.5510
+e,"tessl (with permutes)",1,20,0.1828
+e,"ojas scalar",0,21,0.5502
+e,"tessl (with permutes)",0,21,0.1945
+e,"ojas scalar",1,21,0.5398
+e,"tessl (with permutes)",1,21,0.1811
+e,"ojas scalar",0,22,0.5614
+e,"tessl (with permutes)",0,22,0.2010
+e,"ojas scalar",1,22,0.5476
+e,"tessl (with permutes)",1,22,0.1990
+e,"ojas scalar",0,23,0.9061
+e,"tessl (with permutes)",0,23,0.1949
+e,"ojas scalar",1,23,0.5670
+e,"tessl (with permutes)",1,23,0.2469
+e,"ojas scalar",0,24,0.5515
+e,"tessl (with permutes)",0,24,0.1912
+e,"ojas scalar",1,24,0.5605
+e,"tessl (with permutes)",1,24,0.1827
+f33,"ojas scalar",0,0,1.6516
+f33,"ojas scalar",1,0,1.6192
+f33,"ojas scalar",0,1,1.6320
+f33,"ojas scalar",1,1,1.6165
+f33,"ojas scalar",0,2,1.6794
+f33,"ojas scalar",1,2,1.6059
+f33,"ojas scalar",0,3,1.5900
+f33,"ojas scalar",1,3,1.6019
+f33,"ojas scalar",0,4,1.6025
+f33,"ojas scalar",1,4,1.6477
+f33,"ojas scalar",0,5,1.6532
+f33,"ojas scalar",1,5,1.6162
+f33,"ojas scalar",0,6,1.6137
+f33,"ojas scalar",1,6,1.6247
+f33,"ojas scalar",0,7,1.5968
+f33,"ojas scalar",1,7,1.6261
+f33,"ojas scalar",0,8,1.6270
+f33,"ojas scalar",1,8,1.5894
+f33,"ojas scalar",0,9,1.6358
+f33,"ojas scalar",1,9,1.6062
+f33,"ojas scalar",0,10,1.7010
+f33,"ojas scalar",1,10,1.6373
+f33,"ojas scalar",0,11,1.6227
+f33,"ojas scalar",1,11,1.6383
+f33,"ojas scalar",0,12,1.6500
+f33,"ojas scalar",1,12,1.6274
+f33,"ojas scalar",0,13,1.6395
+f33,"ojas scalar",1,13,1.6567
+f33,"ojas scalar",0,14,1.6410
+f33,"ojas scalar",1,14,1.5998
+f33,"ojas scalar",0,15,1.6148
+f33,"ojas scalar",1,15,1.6000
+f33,"ojas scalar",0,16,1.5857
+f33,"ojas scalar",1,16,1.6351
+f33,"ojas scalar",0,17,1.6220
+f33,"ojas scalar",1,17,1.5910
+f33,"ojas scalar",0,18,1.5932
+f33,"ojas scalar",1,18,1.6277
+f33,"ojas scalar",0,19,1.6127
+f33,"ojas scalar",1,19,1.6124
+f33,"ojas scalar",0,20,1.6522
+f33,"ojas scalar",1,20,1.6337
+f33,"ojas scalar",0,21,1.5856
+f33,"ojas scalar",1,21,1.6168
+f33,"ojas scalar",0,22,1.6154
+f33,"ojas scalar",1,22,1.5935
+f33,"ojas scalar",0,23,1.5949
+f33,"ojas scalar",1,23,1.6239
+f33,"ojas scalar",0,24,1.6263
+f33,"ojas scalar",1,24,1.6412
+f20,"ojas scalar",0,0,1.1177
+f20,"ojas scalar",1,0,1.6973
+f20,"ojas scalar",0,1,1.1093
+f20,"ojas scalar",1,1,1.0927
+f20,"ojas scalar",0,2,1.1248
+f20,"ojas scalar",1,2,1.0810
+f20,"ojas scalar",0,3,1.0771
+f20,"ojas scalar",1,3,1.1037
+f20,"ojas scalar",0,4,1.0846
+f20,"ojas scalar",1,4,1.0744
+f20,"ojas scalar",0,5,1.0927
+f20,"ojas scalar",1,5,1.1030
+f20,"ojas scalar",0,6,1.1061
+f20,"ojas scalar",1,6,1.0878
+f20,"ojas scalar",0,7,1.0954
+f20,"ojas scalar",1,7,1.1018
+f20,"ojas scalar",0,8,1.1095
+f20,"ojas scalar",1,8,1.1060
+f20,"ojas scalar",0,9,1.1593
+f20,"ojas scalar",1,9,1.1094
+f20,"ojas scalar",0,10,1.0855
+f20,"ojas scalar",1,10,1.1099
+f20,"ojas scalar",0,11,1.0872
+f20,"ojas scalar",1,11,1.1019
+f20,"ojas scalar",0,12,1.0740
+f20,"ojas scalar",1,12,1.0821
+f20,"ojas scalar",0,13,1.1052
+f20,"ojas scalar",1,13,1.0804
+f20,"ojas scalar",0,14,1.0792
+f20,"ojas scalar",1,14,1.0742
+f20,"ojas scalar",0,15,1.0727
+f20,"ojas scalar",1,15,1.0915
+f20,"ojas scalar",0,16,1.1021
+f20,"ojas scalar",1,16,1.1543
+f20,"ojas scalar",0,17,1.1125
+f20,"ojas scalar",1,17,1.0678
+f20,"ojas scalar",0,18,1.1066
+f20,"ojas scalar",1,18,1.0784
+f20,"ojas scalar",0,19,1.0808
+f20,"ojas scalar",1,19,1.0752
+f20,"ojas scalar",0,20,1.0781
+f20,"ojas scalar",1,20,1.0818
+f20,"ojas scalar",0,21,1.0766
+f20,"ojas scalar",1,21,1.0761
+f20,"ojas scalar",0,22,1.0995
+f20,"ojas scalar",1,22,1.0747
+f20,"ojas scalar",0,23,1.0884
+f20,"ojas scalar",1,23,1.0792
+f20,"ojas scalar",0,24,1.1041
+f20,"ojas scalar",1,24,1.0993
+g,"ojas scalar",0,0,0.2148
+g,"ojas scalar",1,0,0.2352
+g,"ojas scalar",0,1,0.2145
+g,"ojas scalar",1,1,0.3154
+g,"ojas scalar",0,2,0.2132
+g,"ojas scalar",1,2,0.2146
+g,"ojas scalar",0,3,0.2076
+g,"ojas scalar",1,3,0.2442
+g,"ojas scalar",0,4,0.2202
+g,"ojas scalar",1,4,0.2539
+g,"ojas scalar",0,5,0.2412
+g,"ojas scalar",1,5,0.2392
+g,"ojas scalar",0,6,0.2207
+g,"ojas scalar",1,6,0.2146
+g,"ojas scalar",0,7,0.2177
+g,"ojas scalar",1,7,0.2161
+g,"ojas scalar",0,8,0.2233
+g,"ojas scalar",1,8,0.2249
+g,"ojas scalar",0,9,0.2550
+g,"ojas scalar",1,9,0.2314
+g,"ojas scalar",0,10,0.2279
+g,"ojas scalar",1,10,0.2167
+g,"ojas scalar",0,11,0.2192
+g,"ojas scalar",1,11,0.2190
+g,"ojas scalar",0,12,0.2259
+g,"ojas scalar",1,12,0.2474
+g,"ojas scalar",0,13,0.2404
+g,"ojas scalar",1,13,0.2451
+g,"ojas scalar",0,14,0.2116
+g,"ojas scalar",1,14,0.2107
+g,"ojas scalar",0,15,0.2130
+g,"ojas scalar",1,15,0.2105
+g,"ojas scalar",0,16,0.2123
+g,"ojas scalar",1,16,0.2456
+g,"ojas scalar",0,17,0.2442
+g,"ojas scalar",1,17,0.2116
+g,"ojas scalar",0,18,0.2137
+g,"ojas scalar",1,18,0.2240
+g,"ojas scalar",0,19,0.2264
+g,"ojas scalar",1,19,0.2398
+g,"ojas scalar",0,20,0.2194
+g,"ojas scalar",1,20,0.2130
+g,"ojas scalar",0,21,0.2410
+g,"ojas scalar",1,21,0.2232
+g,"ojas scalar",0,22,0.2172
+g,"ojas scalar",1,22,0.2155
+g,"ojas scalar",0,23,0.2293
+g,"ojas scalar",1,23,0.2383
+g,"ojas scalar",0,24,0.2225
+g,"ojas scalar",1,24,0.2435
+g20,"ojas scalar",0,0,0.8217
+g20,"ojas scalar",1,0,0.2297
+g20,"ojas scalar",0,1,0.2218
+g20,"ojas scalar",1,1,0.2267
+g20,"ojas scalar",0,2,0.2017
+g20,"ojas scalar",1,2,0.1940
+g20,"ojas scalar",0,3,0.2168
+g20,"ojas scalar",1,3,0.2000
+g20,"ojas scalar",0,4,0.1980
+g20,"ojas scalar",1,4,0.2147
+g20,"ojas scalar",0,5,0.1943
+g20,"ojas scalar",1,5,0.1991
+g20,"ojas scalar",0,6,0.2238
+g20,"ojas scalar",1,6,0.2243
+g20,"ojas scalar",0,7,0.1955
+g20,"ojas scalar",1,7,0.2036
+g20,"ojas scalar",0,8,0.2210
+g20,"ojas scalar",1,8,0.2420
+g20,"ojas scalar",0,9,0.1963
+g20,"ojas scalar",1,9,0.2005
+g20,"ojas scalar",0,10,0.2558
+g20,"ojas scalar",1,10,0.2091
+g20,"ojas scalar",0,11,0.2344
+g20,"ojas scalar",1,11,0.2066
+g20,"ojas scalar",0,12,0.2023
+g20,"ojas scalar",1,12,0.2202
+g20,"ojas scalar",0,13,0.1957
+g20,"ojas scalar",1,13,0.1927
+g20,"ojas scalar",0,14,0.1898
+g20,"ojas scalar",1,14,0.1946
+g20,"ojas scalar",0,15,0.2017
+g20,"ojas scalar",1,15,0.1933
+g20,"ojas scalar",0,16,0.2110
+g20,"ojas scalar",1,16,0.2247
+g20,"ojas scalar",0,17,0.1971
+g20,"ojas scalar",1,17,0.2206
+g20,"ojas scalar",0,18,0.1948
+g20,"ojas scalar",1,18,0.1897
+g20,"ojas scalar",0,19,0.2040
+g20,"ojas scalar",1,19,0.2114
+g20,"ojas scalar",0,20,0.2025
+g20,"ojas scalar",1,20,0.1995
+g20,"ojas scalar",0,21,0.2154
+g20,"ojas scalar",1,21,0.1986
+g20,"ojas scalar",0,22,0.2042
+g20,"ojas scalar",1,22,0.1898
+g20,"ojas scalar",0,23,0.1897
+g20,"ojas scalar",1,23,0.1947
+g20,"ojas scalar",0,24,0.1925
+g20,"ojas scalar",1,24,0.2030
+bx,"ojas scalar",0,0,159.1779
+bx,"ojas scalar",1,0,161.5035
+bx,"ojas scalar",0,1,155.5994
+bx,"ojas scalar",1,1,163.0779
+bx,"ojas scalar",0,2,161.2262
+bx,"ojas scalar",1,2,159.7858
+bx,"ojas scalar",0,3,162.1881
+bx,"ojas scalar",1,3,162.8217
+bx,"ojas scalar",0,4,161.1764
+bx,"ojas scalar",1,4,160.5787
+bx,"ojas scalar",0,5,162.3281
+bx,"ojas scalar",1,5,157.7159
+bx,"ojas scalar",0,6,159.7693
+bx,"ojas scalar",1,6,159.4166
+bx,"ojas scalar",0,7,157.2915
+bx,"ojas scalar",1,7,157.5277
+bx,"ojas scalar",0,8,161.6317
+bx,"ojas scalar",1,8,163.6300
+bx,"ojas scalar",0,9,155.7067
+bx,"ojas scalar",1,9,162.8083
+bx,"ojas scalar",0,10,158.4665
+bx,"ojas scalar",1,10,159.1613
+bx,"ojas scalar",0,11,157.9402
+bx,"ojas scalar",1,11,162.1140
+bx,"ojas scalar",0,12,158.7281
+bx,"ojas scalar",1,12,159.2396
+bx,"ojas scalar",0,13,161.0205
+bx,"ojas scalar",1,13,160.0828
+bx,"ojas scalar",0,14,160.8341
+bx,"ojas scalar",1,14,158.7368
+bx,"ojas scalar",0,15,158.6534
+bx,"ojas scalar",1,15,157.0339
+bx,"ojas scalar",0,16,161.3029
+bx,"ojas scalar",1,16,159.5395
+bx,"ojas scalar",0,17,158.3363
+bx,"ojas scalar",1,17,159.8675
+bx,"ojas scalar",0,18,163.4133
+bx,"ojas scalar",1,18,158.0948
+bx,"ojas scalar",0,19,167.0526
+bx,"ojas scalar",1,19,158.9112
+bx,"ojas scalar",0,20,157.7772
+bx,"ojas scalar",1,20,158.8486
+bx,"ojas scalar",0,21,154.2318
+bx,"ojas scalar",1,21,160.8069
+bx,"ojas scalar",0,22,162.6025
+bx,"ojas scalar",1,22,157.6030
+bx,"ojas scalar",0,23,160.4026
+bx,"ojas scalar",1,23,160.7591
+bx,"ojas scalar",0,24,161.6135
+bx,"ojas scalar",1,24,163.8920

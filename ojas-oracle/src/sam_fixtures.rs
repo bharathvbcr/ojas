@@ -41,6 +41,11 @@ use crate::{bad, io};
 /// The environment variable that names the fixture file.
 pub const ENV_FIXTURES: &str = "OJAS_SAM_FIXTURES";
 
+/// The environment variable that names the GroupNorm fixture file
+/// (`fixtures/groupnorm/pixel_decoder.safetensors`): the SpikeTrack pixel
+/// decoder's two norms, a different file from the backbone's.
+pub const ENV_GROUPNORM_FIXTURES: &str = "OJAS_SAM_GROUPNORM_FIXTURES";
+
 /// A tensor above this many elements is refused before it is read: the
 /// largest fixture tensor is 25 million, and a header that claims more is not
 /// one of ours.
@@ -90,6 +95,17 @@ pub const GELU_TOL: Tolerance = Tolerance {
 /// LayerNorm outputs, f32 row sums against torch's: a few ulp of the output
 /// scale (SAM's outlier channels reach tens).
 pub const LAYER_NORM_TOL: Tolerance = Tolerance {
+    max_abs: 1e-4,
+    max_rel: 1e-3,
+    min_cosine: 1.0 - 1e-9,
+};
+
+/// GroupNorm outputs: the same few-ulp-of-the-output-scale bound as
+/// [`LAYER_NORM_TOL`], whose reasoning carries over. Torch's f32 statistics
+/// over 0.66 to 2.6 million values per group and ours in `f64` differ by the
+/// rounding of torch's sums, which is far below this bound; the bound is not
+/// derived from the measurement.
+pub const GROUP_NORM_TOL: Tolerance = Tolerance {
     max_abs: 1e-4,
     max_rel: 1e-3,
     min_cosine: 1.0 - 1e-9,
@@ -257,7 +273,13 @@ impl Fixture<'static> {
 
     /// The file `OJAS_SAM_FIXTURES` names, or `None` when it is unset or empty.
     pub fn from_env() -> Result<Option<Self>, OjasError> {
-        match std::env::var_os(ENV_FIXTURES) {
+        Self::from_env_var(ENV_FIXTURES)
+    }
+
+    /// The file the environment variable `var` names, or `None` when it is
+    /// unset or empty.
+    pub fn from_env_var(var: &str) -> Result<Option<Self>, OjasError> {
+        match std::env::var_os(var) {
             Some(path) if !path.is_empty() => Self::open(Path::new(&path)).map(Some),
             _ => Ok(None),
         }
@@ -270,6 +292,11 @@ impl<'a> Fixture<'a> {
         Ok(Self {
             st: SafeTensors::parse(bytes).map_err(io)?,
         })
+    }
+
+    /// A value of the file's `__metadata__` header.
+    pub fn metadata(&self, key: &str) -> Option<&str> {
+        self.st.metadata().get(key).map(String::as_str)
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -537,6 +564,72 @@ pub fn gelu<B: Backend + ?Sized>(
         &get(backend, &y)?,
         &want,
         GELU_TOL,
+    )
+}
+
+/// `groups` and `eps` the GroupNorm fixture recorded in its header. Both
+/// must be present and parse: a fixture without them cannot say what it
+/// checked.
+pub fn group_norm_header(fixture: &Fixture<'_>) -> Result<(usize, f32), OjasError> {
+    let field = |key: &str| {
+        fixture
+            .metadata(key)
+            .ok_or_else(|| bad(&format!("group_norm fixture header has no `{key}`")))
+    };
+    let groups = field("groups")?
+        .parse::<usize>()
+        .map_err(|e| bad(&format!("group_norm fixture `groups`: {e}")))?;
+    let eps = field("eps")?
+        .parse::<f32>()
+        .map_err(|e| bad(&format!("group_norm fixture `eps`: {e}")))?;
+    Ok((groups, eps))
+}
+
+/// GroupNorm on `{prefix}.input`, `{prefix}.weight` and `{prefix}.bias`,
+/// against torch's `{prefix}.output`, with the header's `groups` and `eps`
+/// checked against the ones the caller expects.
+pub fn group_norm<B: Backend + ?Sized>(
+    backend: &B,
+    fixture: &Fixture<'_>,
+    prefix: &str,
+    groups: usize,
+    eps: f32,
+) -> Result<OpReport, OjasError> {
+    let header = group_norm_header(fixture)?;
+    if header != (groups, eps) {
+        return Err(bad(&format!(
+            "{prefix}: the header records {header:?}, the call expects {:?}",
+            (groups, eps)
+        )));
+    }
+    let name = |part: &str| format!("{prefix}.{part}");
+    let (shape, x) = fixture.tensor(&name("input"))?;
+    let (w_shape, w) = fixture.tensor(&name("weight"))?;
+    let (b_shape, b) = fixture.tensor(&name("bias"))?;
+    let (o_shape, want) = fixture.tensor(&name("output"))?;
+    shape_is(&name("output"), &o_shape, &shape)?;
+    let Some(&channels) = shape.get(1) else {
+        return Err(bad(&format!(
+            "{prefix}.input: shape {shape:?} is not [N, C, H, W]"
+        )));
+    };
+    shape_is(&name("weight"), &w_shape, &[channels])?;
+    shape_is(&name("bias"), &b_shape, &[channels])?;
+    let y = backend.group_norm_forward(
+        &put(backend, &x, &shape)?,
+        &put(backend, &w, &w_shape)?,
+        &put(backend, &b, &b_shape)?,
+        groups,
+        eps,
+    )?;
+    shape_is("group_norm output", y.shape(), &shape)?;
+    compare(
+        "group_norm_forward",
+        &format!("{prefix} {shape:?} groups {groups} eps {eps:e}"),
+        Kind::Direct,
+        &get(backend, &y)?,
+        &want,
+        GROUP_NORM_TOL,
     )
 }
 

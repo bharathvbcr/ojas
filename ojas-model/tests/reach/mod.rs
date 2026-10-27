@@ -10,8 +10,8 @@ use std::sync::Mutex;
 
 use ojas_core::{
     with_backend_methods, AdamWConfig, AttentionOpts, AutocastMode, Backend, BackendId, Budget,
-    CeChunk, CeGrads, Conv2dParams, ConvTranspose2dParams, GdnInputs, MuonNs5Config, Numerics,
-    OjasError, OptimizerKind, Tensor,
+    CeChunk, CeGrads, Conv2dParams, ConvTranspose2dParams, DType, GdnInputs, MuonNs5Config,
+    Numerics, OjasError, OptimizerKind, Tensor,
 };
 
 /// Every `Backend` op, answered with its own name.
@@ -190,8 +190,12 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
         "residual_add_backward" => b.residual_add_backward(&t, &t, &t).map(|_| ()),
         "layer_norm_forward" => b.layer_norm_forward(&t, &t, &t, 1e-6).map(|_| ()),
         "channel_layer_norm_forward" => b.channel_layer_norm_forward(&t, &t, &t, 1e-6).map(|_| ()),
+        "group_norm_forward" => b.group_norm_forward(&t, &t, &t, 1, 1e-5).map(|_| ()),
         "gelu_erf_forward" => b.gelu_erf_forward(&t).map(|_| ()),
         "relu_forward" => b.relu_forward(&t).map(|_| ()),
+        "concat" => b.concat(&[&t, &t], 0).map(|_| ()),
+        "slice" => b.slice(&t, 0, 0, 1).map(|_| ()),
+        "fill" => b.fill(&[1], DType::F32, 0.0).map(|_| ()),
         "linear_bias_forward" => b.linear_bias_forward(&t, &t, &t).map(|_| ()),
         "broadcast_add_forward" => b.broadcast_add_forward(&t, &t).map(|_| ()),
         "broadcast_mul_forward" => b.broadcast_mul_forward(&t, &t).map(|_| ()),
