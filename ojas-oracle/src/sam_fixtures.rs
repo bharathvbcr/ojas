@@ -709,6 +709,519 @@ pub fn layer_norm_affine_recovered<B: Backend + ?Sized>(
     )
 }
 
+// ---- weight-bearing ops, against the real SAM 3.1 weights -----------------
+//
+// The activation fixture has no weights; `OJAS_SAM_WEIGHTS` names the
+// converted checkpoint (`sam3.1_multiplex.safetensors`), a second [`Fixture`]
+// kept apart from the activations. Each function below reads one op's input
+// and torch's output from the activation fixture and its weight and bias from
+// the weights file, so an op is checked against torch's own values.
+
+/// The environment variable that names the SAM 3.1 weights file.
+pub const ENV_WEIGHTS: &str = "OJAS_SAM_WEIGHTS";
+
+/// Where the vision backbone's modules sit in the checkpoint.
+pub const WEIGHTS_PREFIX: &str = "detector.backbone.vision_backbone.";
+
+/// Tolerances for the weight-bearing ops, set before any of them was run
+/// against the real file, and not changed after.
+///
+/// A linear layer or convolution sums `K` products in `f32` (`K` is 1024 for
+/// qkv, proj and fc1, 4736 for fc2, 588 to 2304 for the convolutions, and
+/// 256 to 1024 for the transposed convolutions, whose taps do not overlap).
+/// Torch's blocked GEMM and ours add them in different orders, so the two
+/// differ by about `1e-7 * sqrt(K) * sum|a_i b_i|`: a few `1e-6` times the
+/// output scale for activations of order one to ten. `max_abs` 1e-3 is
+/// two to three orders above that and below the size of any wrong weight,
+/// bias, layout or transposition, which moves outputs by their own scale.
+/// `max_rel` is judged against `1e-3 * max|want|`, so a near-zero output
+/// from a cancelling sum shows the whole absolute error divided by that
+/// floor: 0.1 is deliberately weak, and the absolute bound and the cosine
+/// are the binding ones.
+pub const LINEAR_TOL: Tolerance = Tolerance {
+    max_abs: 1e-3,
+    max_rel: 1e-1,
+    min_cosine: 1.0 - 1e-9,
+};
+
+/// Convolutions and transposed convolutions: [`LINEAR_TOL`]'s reasoning
+/// (a sum of `K` f32 products in a different order), the same bounds.
+pub const CONV_TOL: Tolerance = LINEAR_TOL;
+
+/// The checkpoint name of a fixture module's weight or bias. `module` is the
+/// fixture's own spelling: `trunk.…` names a module under the ViT trunk
+/// (`trunk.blocks.0.attn.qkv`), `neck.convs.N.…` one of the neck's
+/// (`neck.convs.0.conv_3x3`), and `part` is `weight` or `bias`. The neck's
+/// modules are `convs.N.…` in the checkpoint, with no `neck.` segment. Any
+/// other module is refused.
+pub fn weight_name(module: &str, part: &str) -> Result<String, OjasError> {
+    if part != "weight" && part != "bias" {
+        return Err(bad(&format!("weight part `{part}` is not weight or bias")));
+    }
+    let local = if let Some(rest) = module.strip_prefix("neck.convs.") {
+        format!("convs.{rest}")
+    } else if module.starts_with("trunk.") {
+        module.to_string()
+    } else {
+        return Err(bad(&format!(
+            "module `{module}` is neither under trunk. nor neck.convs."
+        )));
+    };
+    Ok(format!("{WEIGHTS_PREFIX}{local}.{part}"))
+}
+
+/// A module's weight and its bias, each with its shape; the bias is `None`
+/// when `has_bias` is false.
+type Params = (Vec<usize>, Vec<f32>, Option<(Vec<usize>, Vec<f32>)>);
+
+fn params(weights: &Fixture<'_>, module: &str, has_bias: bool) -> Result<Params, OjasError> {
+    let (ws, w) = weights.tensor(&weight_name(module, "weight")?)?;
+    let bias = if has_bias {
+        Some(weights.tensor(&weight_name(module, "bias")?)?)
+    } else {
+        None
+    };
+    Ok((ws, w, bias))
+}
+
+/// LayerNorm over the last axis with torch's own weight and bias: `module`
+/// is the norm (`trunk.ln_pre`, `trunk.blocks.0.norm1`), `input` and `output`
+/// the activation fixture's tensors. Compared directly, with
+/// [`LAYER_NORM_TOL`].
+pub fn layer_norm_weighted<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+    module: &str,
+    input: &str,
+    output: &str,
+    eps: f32,
+) -> Result<OpReport, OjasError> {
+    let (shape, x) = acts.tensor(input)?;
+    let (o_shape, want) = acts.tensor(output)?;
+    shape_is(output, &o_shape, &shape)?;
+    let (ws, w, bias) = params(weights, module, true)?;
+    let (bs, b) = bias.ok_or_else(|| bad("layer norm bias missing"))?;
+    let dim = *shape.last().ok_or_else(|| bad("layer norm of a scalar"))?;
+    shape_is(&weight_name(module, "weight")?, &ws, &[dim])?;
+    shape_is(&weight_name(module, "bias")?, &bs, &[dim])?;
+    let y = backend.layer_norm_forward(
+        &put(backend, &x, &shape)?,
+        &put(backend, &w, &ws)?,
+        &put(backend, &b, &bs)?,
+        eps,
+    )?;
+    shape_is("layer_norm output", y.shape(), &shape)?;
+    compare(
+        "layer_norm_forward",
+        &format!("{input} -> {output} {shape:?}, eps {eps:e}, weight and bias of {module}"),
+        Kind::Direct,
+        &get(backend, &y)?,
+        &want,
+        LAYER_NORM_TOL,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn linear_rows<B: Backend + ?Sized>(
+    backend: &B,
+    weights: &Fixture<'_>,
+    module: &str,
+    shape: &[usize],
+    x: &[f32],
+    output: &str,
+    want: &[f32],
+    want_shape: &[usize],
+    how: &str,
+) -> Result<OpReport, OjasError> {
+    let (ws, w, bias) = params(weights, module, true)?;
+    let (bs, b) = bias.ok_or_else(|| bad("linear bias missing"))?;
+    let y = backend.linear_bias_forward(
+        &put(backend, x, shape)?,
+        &put(backend, &w, &ws)?,
+        &put(backend, &b, &bs)?,
+    )?;
+    shape_is("linear_bias output", y.shape(), want_shape)?;
+    compare(
+        "linear_bias_forward",
+        &format!("{how} -> {output} {want_shape:?}, weight {ws:?} and bias of {module}"),
+        Kind::Direct,
+        &get(backend, &y)?,
+        want,
+        LINEAR_TOL,
+    )
+}
+
+/// `linear_bias_forward` on the activation fixture's `input` with `module`'s
+/// weight and bias, against `output`, with [`LINEAR_TOL`].
+pub fn linear_bias<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+    module: &str,
+    input: &str,
+    output: &str,
+) -> Result<OpReport, OjasError> {
+    let (shape, x) = acts.tensor(input)?;
+    let (o_shape, want) = acts.tensor(output)?;
+    linear_rows(
+        backend, weights, module, &shape, &x, output, &want, &o_shape, input,
+    )
+}
+
+/// A block's qkv projection. The fixture records qkv's output but not its
+/// input, which is the block's `norm1` output: used as it is for a global
+/// block (`window` is `None`), and cut into `window x window` windows by
+/// [`ojas_core::window_partition`] for a windowed one. The windowed row says
+/// so in its detail, because a mismatch there could be the window order and
+/// not the linear.
+pub fn qkv_linear<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+    block: &str,
+    window: Option<usize>,
+) -> Result<OpReport, OjasError> {
+    let norm = format!("{block}.norm1");
+    let output = format!("{block}.attn.qkv");
+    let (shape, x) = acts.tensor(&norm)?;
+    let (o_shape, want) = acts.tensor(&output)?;
+    let (shape, x, how) = match window {
+        None => (shape, x, format!("{norm} (global, no window)")),
+        Some(window) => {
+            let cut = ojas_core::window_partition(backend, &put(backend, &x, &shape)?, window)?;
+            (
+                cut.shape().to_vec(),
+                get(backend, &cut)?,
+                format!("{norm} derived via window_partition({window})"),
+            )
+        }
+    };
+    linear_rows(
+        backend, weights, &output, &shape, &x, &output, &want, &o_shape, &how,
+    )
+}
+
+/// One convolution to compare.
+#[derive(Clone, Copy, Debug)]
+pub struct ConvCase<'a> {
+    /// The module whose weight is used (`neck.convs.0.conv_3x3`,
+    /// `trunk.patch_embed.proj`).
+    pub module: &'a str,
+    /// The activation fixture's input and output tensors.
+    pub input: &'a str,
+    pub output: &'a str,
+    pub params: ojas_core::Conv2dParams,
+    pub has_bias: bool,
+    /// The recorded output is NHWC (the ViT patch embedding): the NCHW
+    /// result is permuted to it before comparing.
+    pub output_nhwc: bool,
+}
+
+/// `conv2d_forward` with the module's real weight (and bias), against torch's
+/// output, with [`CONV_TOL`].
+pub fn conv2d<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+    case: &ConvCase<'_>,
+) -> Result<OpReport, OjasError> {
+    let (shape, x) = acts.tensor(case.input)?;
+    let (o_shape, want) = acts.tensor(case.output)?;
+    let (ws, w, bias) = params(weights, case.module, case.has_bias)?;
+    let bias_t = match &bias {
+        Some((bs, b)) => Some(put(backend, b, bs)?),
+        None => None,
+    };
+    let mut y = backend.conv2d_forward(
+        &put(backend, &x, &shape)?,
+        &put(backend, &w, &ws)?,
+        bias_t.as_ref(),
+        case.params,
+    )?;
+    if case.output_nhwc {
+        y = backend.permute(&y, &[0, 2, 3, 1])?;
+    }
+    shape_is("conv2d output", y.shape(), &o_shape)?;
+    compare(
+        "conv2d_forward",
+        &format!(
+            "{} {shape:?} -> {} {o_shape:?}, weight {ws:?} of {}, stride {:?} padding {:?}{}{}",
+            case.input,
+            case.output,
+            case.module,
+            case.params.stride,
+            case.params.padding,
+            if case.has_bias { ", bias" } else { ", no bias" },
+            if case.output_nhwc {
+                ", output permuted to NHWC"
+            } else {
+                ""
+            },
+        ),
+        Kind::Direct,
+        &get(backend, &y)?,
+        &want,
+        CONV_TOL,
+    )
+}
+
+/// `conv_transpose2d_forward` (kernel equal to stride) with the module's real
+/// weight and bias, against torch's output, with [`CONV_TOL`].
+pub fn conv_transpose2d<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+    module: &str,
+    input: &str,
+    output: &str,
+    stride: usize,
+) -> Result<OpReport, OjasError> {
+    let (shape, x) = acts.tensor(input)?;
+    let (o_shape, want) = acts.tensor(output)?;
+    let (ws, w, bias) = params(weights, module, true)?;
+    let (bs, b) = bias.ok_or_else(|| bad("conv transpose bias missing"))?;
+    let y = backend.conv_transpose2d_forward(
+        &put(backend, &x, &shape)?,
+        &put(backend, &w, &ws)?,
+        Some(&put(backend, &b, &bs)?),
+        ojas_core::ConvTranspose2dParams {
+            stride: [stride, stride],
+            ..ojas_core::ConvTranspose2dParams::new()
+        },
+    )?;
+    shape_is("conv_transpose2d output", y.shape(), &o_shape)?;
+    compare(
+        "conv_transpose2d_forward",
+        &format!("{input} {shape:?} -> {output} {o_shape:?}, weight {ws:?} and bias of {module}, stride {stride}"),
+        Kind::Direct,
+        &get(backend, &y)?,
+        &want,
+        CONV_TOL,
+    )
+}
+
+/// Every LayerNorm with weights the fixture records: `ln_pre` at eps 1e-5
+/// (torch's default) and `norm1` and `norm2` of blocks 0 and 7 at 1e-6.
+pub fn layer_norm_rows<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+) -> Result<Vec<OpReport>, OjasError> {
+    let mut rows = vec![layer_norm_weighted(
+        backend,
+        acts,
+        weights,
+        "trunk.ln_pre",
+        "trunk.ln_pre.out.in",
+        "trunk.ln_pre.out",
+        1e-5,
+    )?];
+    for block in ["trunk.blocks.0", "trunk.blocks.7"] {
+        for norm in ["norm1", "norm2"] {
+            rows.push(layer_norm_weighted(
+                backend,
+                acts,
+                weights,
+                &format!("{block}.{norm}"),
+                &format!("{block}.{norm}.in"),
+                &format!("{block}.{norm}"),
+                1e-6,
+            )?);
+        }
+    }
+    Ok(rows)
+}
+
+/// qkv, proj, fc1 and fc2 of blocks 0 (windowed, 24x24 windows) and 7
+/// (global).
+pub fn linear_bias_rows<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+) -> Result<Vec<OpReport>, OjasError> {
+    let mut rows = Vec::new();
+    for (block, window) in [("trunk.blocks.0", Some(24)), ("trunk.blocks.7", None)] {
+        rows.push(qkv_linear(backend, acts, weights, block, window)?);
+        for (module, input, output) in [
+            ("attn.proj", "attn.proj.in", "attn.proj"),
+            ("mlp.fc1", "mlp.fc1.in", "mlp.fc1.out"),
+            ("mlp.fc2", "mlp.fc2.in", "mlp.fc2"),
+        ] {
+            rows.push(linear_bias(
+                backend,
+                acts,
+                weights,
+                &format!("{block}.{module}"),
+                &format!("{block}.{input}"),
+                &format!("{block}.{output}"),
+            )?);
+        }
+    }
+    Ok(rows)
+}
+
+/// The ViT patch embedding (14x14, stride 14, no bias, NHWC output) and the
+/// neck's 1x1 and 3x3 convolutions at its three scales.
+pub fn conv2d_rows<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+) -> Result<Vec<OpReport>, OjasError> {
+    use ojas_core::Conv2dParams;
+    let mut rows = vec![conv2d(
+        backend,
+        acts,
+        weights,
+        &ConvCase {
+            module: "trunk.patch_embed.proj",
+            input: "trunk.patch_embed.out.in",
+            output: "trunk.patch_embed.out",
+            params: Conv2dParams {
+                stride: [14, 14],
+                ..Conv2dParams::new()
+            },
+            has_bias: false,
+            output_nhwc: true,
+        },
+    )?];
+    for n in 0..3 {
+        let (m1, m3) = (
+            format!("neck.convs.{n}.conv_1x1"),
+            format!("neck.convs.{n}.conv_3x3"),
+        );
+        for (module, params) in [
+            (&m1, Conv2dParams::new()),
+            (
+                &m3,
+                Conv2dParams {
+                    padding: [1, 1],
+                    ..Conv2dParams::new()
+                },
+            ),
+        ] {
+            rows.push(conv2d(
+                backend,
+                acts,
+                weights,
+                &ConvCase {
+                    module,
+                    input: &format!("{module}.in"),
+                    output: module,
+                    params,
+                    has_bias: true,
+                    output_nhwc: false,
+                },
+            )?);
+        }
+    }
+    Ok(rows)
+}
+
+/// The neck's three 2x2 stride-2 transposed convolutions.
+pub fn conv_transpose2d_rows<B: Backend + ?Sized>(
+    backend: &B,
+    acts: &Fixture<'_>,
+    weights: &Fixture<'_>,
+) -> Result<Vec<OpReport>, OjasError> {
+    [
+        "neck.convs.0.dconv_2x2_0",
+        "neck.convs.0.dconv_2x2_1",
+        "neck.convs.1.dconv_2x2",
+    ]
+    .iter()
+    .map(|module| {
+        conv_transpose2d(
+            backend,
+            acts,
+            weights,
+            module,
+            &format!("{module}.in"),
+            module,
+            2,
+        )
+    })
+    .collect()
+}
+
+/// An op that [`skipped_ops`] lists and the weights file lets us check, with
+/// the checkpoint tensors it reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Checked {
+    pub op: &'static str,
+    pub tensors: String,
+}
+
+/// Every weight and bias the four skipped ops need, looked up in `weights`
+/// by name and shape-checked against the module they feed; an error names
+/// the first one missing or misshapen.
+pub fn weighted_ops(weights: &Fixture<'_>) -> Result<Vec<Checked>, OjasError> {
+    let need = |module: &str, part: &str, shape: &[usize]| -> Result<(), OjasError> {
+        let name = weight_name(module, part)?;
+        let (got, _) = weights.tensor(&name)?;
+        shape_is(&name, &got, shape)
+    };
+    for norm in [
+        "trunk.ln_pre",
+        "trunk.blocks.0.norm1",
+        "trunk.blocks.0.norm2",
+        "trunk.blocks.7.norm1",
+        "trunk.blocks.7.norm2",
+    ] {
+        need(norm, "weight", &[1024])?;
+        need(norm, "bias", &[1024])?;
+    }
+    for block in ["trunk.blocks.0", "trunk.blocks.7"] {
+        for (module, out, inp) in [
+            ("attn.qkv", 3072, 1024),
+            ("attn.proj", 1024, 1024),
+            ("mlp.fc1", 4736, 1024),
+            ("mlp.fc2", 1024, 4736),
+        ] {
+            need(&format!("{block}.{module}"), "weight", &[out, inp])?;
+            need(&format!("{block}.{module}"), "bias", &[out])?;
+        }
+    }
+    need("trunk.patch_embed.proj", "weight", &[1024, 3, 14, 14])?;
+    for (n, cin) in [(0, 256), (1, 512), (2, 1024)] {
+        let m1 = format!("neck.convs.{n}.conv_1x1");
+        need(&m1, "weight", &[256, cin, 1, 1])?;
+        need(&m1, "bias", &[256])?;
+        let m3 = format!("neck.convs.{n}.conv_3x3");
+        need(&m3, "weight", &[256, 256, 3, 3])?;
+        need(&m3, "bias", &[256])?;
+    }
+    for (module, cin, cout) in [
+        ("neck.convs.0.dconv_2x2_0", 1024, 512),
+        ("neck.convs.0.dconv_2x2_1", 512, 256),
+        ("neck.convs.1.dconv_2x2", 1024, 512),
+    ] {
+        need(module, "weight", &[cin, cout, 2, 2])?;
+        need(module, "bias", &[cout])?;
+    }
+    Ok(vec![
+        Checked {
+            op: "layer_norm_forward (direct)",
+            tensors: "trunk.ln_pre and trunk.blocks.{0,7}.norm{1,2}: weight and bias".into(),
+        },
+        Checked {
+            op: "linear_bias_forward",
+            tensors: "trunk.blocks.{0,7}.{attn.qkv, attn.proj, mlp.fc1, mlp.fc2}: weight and bias"
+                .into(),
+        },
+        Checked {
+            op: "conv2d_forward",
+            tensors:
+                "trunk.patch_embed.proj.weight, neck.convs.{0,1,2}.conv_{1x1,3x3}: weight and bias"
+                    .into(),
+        },
+        Checked {
+            op: "conv_transpose2d_forward",
+            tensors: "neck.convs.0.dconv_2x2_{0,1}, neck.convs.1.dconv_2x2: weight and bias".into(),
+        },
+    ])
+}
+
 /// The ops this fixture cannot check directly because they need a weight, one
 /// entry per op, with the reason read from `fixture`'s own tensor names. An
 /// empty list means the file does hold weights and these ops should be added.

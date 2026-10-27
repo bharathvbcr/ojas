@@ -12,6 +12,10 @@ use ojas_oracle::sam_fixtures::{
     layer_norm_affine_recovered, rope_interleaved, skipped_ops, Fixture, Kind, Tolerance, GELU_TOL,
     ROPE_THETA,
 };
+use ojas_oracle::sam_fixtures::{
+    conv2d, conv_transpose2d, layer_norm_weighted, linear_bias, qkv_linear, weight_name,
+    weighted_ops, ConvCase, WEIGHTS_PREFIX,
+};
 use support::{build, f32_raw, Raw};
 
 fn cpu() -> CpuBackend {
@@ -481,4 +485,379 @@ fn a_group_norm_fixture_without_a_usable_header_is_refused() {
         assert!(group_norm_header(&fx).is_err(), "{metadata:?}");
         assert!(group_norm(&be, &fx, "gn", 2, 1e-5).is_err(), "{metadata:?}");
     }
+}
+
+fn wname(module: &str, part: &str) -> String {
+    format!("{WEIGHTS_PREFIX}{module}.{part}")
+}
+
+#[test]
+fn weight_names_map_the_fixture_modules_to_the_checkpoint() {
+    let p = "detector.backbone.vision_backbone.";
+    for (module, part, want) in [
+        (
+            "trunk.blocks.0.attn.qkv",
+            "weight",
+            "trunk.blocks.0.attn.qkv.weight",
+        ),
+        (
+            "trunk.blocks.7.mlp.fc2",
+            "bias",
+            "trunk.blocks.7.mlp.fc2.bias",
+        ),
+        ("trunk.ln_pre", "weight", "trunk.ln_pre.weight"),
+        (
+            "trunk.patch_embed.proj",
+            "weight",
+            "trunk.patch_embed.proj.weight",
+        ),
+        // The neck is `convs.N` in the checkpoint, with no `neck.` segment.
+        ("neck.convs.0.conv_3x3", "weight", "convs.0.conv_3x3.weight"),
+        (
+            "neck.convs.0.dconv_2x2_1",
+            "bias",
+            "convs.0.dconv_2x2_1.bias",
+        ),
+        ("neck.convs.2.conv_1x1", "weight", "convs.2.conv_1x1.weight"),
+    ] {
+        assert_eq!(weight_name(module, part).unwrap(), format!("{p}{want}"));
+    }
+    for (module, part) in [
+        ("neck.pos_enc.0", "weight"),
+        ("tracker.model.x", "weight"),
+        ("convs.0.conv_3x3", "weight"),
+        ("trunk.blocks.0.norm1", "scale"),
+        ("", "bias"),
+    ] {
+        assert!(weight_name(module, part).is_err(), "{module} {part}");
+    }
+}
+
+fn mat(x: &[f64], rows: usize, cols: usize, w: &[f32], out: usize, b: &[f32]) -> Vec<f32> {
+    // y[r][o] = sum_c x[r][c] * w[o][c] + b[o], in f64.
+    let mut y = Vec::with_capacity(rows * out);
+    for r in 0..rows {
+        for o in 0..out {
+            let dot: f64 = (0..cols)
+                .map(|c| x[r * cols + c] * f64::from(w[o * cols + c]))
+                .sum();
+            y.push((dot + f64::from(b[o])) as f32);
+        }
+    }
+    y
+}
+
+#[test]
+fn layer_norm_and_linear_use_the_real_weights_and_see_a_wrong_bias() {
+    let be = cpu();
+    // LayerNorm with a real affine.
+    let (rows, dim) = (6usize, 8usize);
+    let x = values(rows * dim, 40, 2.0);
+    let (w, b) = (values(dim, 41, 1.5), values(dim, 42, 1.0));
+    let want = layer_norm_f64(&x, dim, 1e-6, &w, &b);
+    // Linear: x [2, 3, 4] -> [2, 3, 5].
+    let lx = values(24, 43, 2.0);
+    let (lw, lb) = (values(20, 44, 0.5), values(5, 45, 1.0));
+    let lx64: Vec<f64> = lx.iter().map(|&v| f64::from(v)).collect();
+    let good = mat(&lx64, 6, 4, &lw, 5, &lb);
+    let lb_bad: Vec<f32> = lb.iter().map(|v| v + 1e-2).collect();
+    let bad_out = mat(&lx64, 6, 4, &lw, 5, &lb_bad);
+    let acts = build(
+        &[
+            f32_raw("n.in", &[rows, dim], &x),
+            f32_raw("n.out", &[rows, dim], &want),
+            f32_raw("l.in", &[2, 3, 4], &lx),
+            f32_raw("l.out", &[2, 3, 5], &good),
+            f32_raw("l.bad", &[2, 3, 5], &bad_out),
+        ],
+        &[],
+    );
+    let weights = build(
+        &[
+            f32_raw(&wname("trunk.ln_pre", "weight"), &[dim], &w),
+            f32_raw(&wname("trunk.ln_pre", "bias"), &[dim], &b),
+            f32_raw(&wname("trunk.blocks.0.mlp.fc1", "weight"), &[5, 4], &lw),
+            f32_raw(&wname("trunk.blocks.0.mlp.fc1", "bias"), &[5], &lb),
+        ],
+        &[],
+    );
+    let (a, wt) = (
+        Fixture::parse(&acts).unwrap(),
+        Fixture::parse(&weights).unwrap(),
+    );
+    let ln = layer_norm_weighted(&be, &a, &wt, "trunk.ln_pre", "n.in", "n.out", 1e-6).unwrap();
+    assert!(ln.pass && ln.kind == Kind::Direct, "{ln}");
+    let m = "trunk.blocks.0.mlp.fc1";
+    let ok = linear_bias(&be, &a, &wt, m, "l.in", "l.out").unwrap();
+    assert!(ok.pass, "{ok}");
+    // A bias that is off by 1e-2 is outside LINEAR_TOL's 1e-3.
+    let bad = linear_bias(&be, &a, &wt, m, "l.in", "l.bad").unwrap();
+    assert!(!bad.pass, "{bad}");
+    // A missing weight is an error, not a pass.
+    assert!(linear_bias(&be, &a, &wt, "trunk.blocks.0.mlp.fc2", "l.in", "l.out").is_err());
+    // A weight of the wrong shape is refused.
+    assert!(linear_bias(&be, &a, &wt, m, "n.in", "n.out").is_err());
+}
+
+#[test]
+fn qkv_cuts_windows_in_row_major_grid_order_and_a_global_block_does_not() {
+    let be = cpu();
+    // norm1 [1, 4, 4, 4]; windows of 2: [4, 2, 2, 4].
+    let n1 = values(64, 50, 2.0);
+    let (w, b) = (values(24, 51, 0.5), values(6, 52, 1.0));
+    let at = |r: usize, c: usize, ch: usize| f64::from(n1[(r * 4 + c) * 4 + ch]);
+    let mut windowed = Vec::new();
+    for win in 0..4 {
+        let (wi, wj) = (win / 2, win % 2);
+        for r in 0..2 {
+            for c in 0..2 {
+                windowed.extend((0..4).map(|ch| at(2 * wi + r, 2 * wj + c, ch)));
+            }
+        }
+    }
+    let global: Vec<f64> = n1.iter().map(|&v| f64::from(v)).collect();
+    let acts = build(
+        &[
+            f32_raw("trunk.blocks.0.norm1", &[1, 4, 4, 4], &n1),
+            f32_raw(
+                "trunk.blocks.0.attn.qkv",
+                &[4, 2, 2, 6],
+                &mat(&windowed, 16, 4, &w, 6, &b),
+            ),
+            f32_raw("trunk.blocks.7.norm1", &[1, 4, 4, 4], &n1),
+            f32_raw(
+                "trunk.blocks.7.attn.qkv",
+                &[1, 4, 4, 6],
+                &mat(&global, 16, 4, &w, 6, &b),
+            ),
+        ],
+        &[],
+    );
+    let mut tensors = Vec::new();
+    for block in ["trunk.blocks.0", "trunk.blocks.7"] {
+        tensors.push(f32_raw(
+            &wname(&format!("{block}.attn.qkv"), "weight"),
+            &[6, 4],
+            &w,
+        ));
+        tensors.push(f32_raw(
+            &wname(&format!("{block}.attn.qkv"), "bias"),
+            &[6],
+            &b,
+        ));
+    }
+    let weights = build(&tensors, &[]);
+    let (a, wt) = (
+        Fixture::parse(&acts).unwrap(),
+        Fixture::parse(&weights).unwrap(),
+    );
+    let win = qkv_linear(&be, &a, &wt, "trunk.blocks.0", Some(2)).unwrap();
+    assert!(win.pass, "{win}");
+    // The windowed row says its input is derived.
+    assert!(
+        win.detail.contains("derived via window_partition"),
+        "{}",
+        win.detail
+    );
+    let glob = qkv_linear(&be, &a, &wt, "trunk.blocks.7", None).unwrap();
+    assert!(glob.pass && !glob.detail.contains("derived"), "{glob}");
+    // The wrong order (no window against a windowed output) fails.
+    assert!(qkv_linear(&be, &a, &wt, "trunk.blocks.0", None).is_err());
+}
+
+#[test]
+fn conv_and_conv_transpose_use_the_real_weights_layouts_and_nhwc() {
+    let be = cpu();
+    // Patch embedding: [1, 2, 6, 6], weight [4, 2, 2, 2], stride 2, no bias,
+    // NCHW [1, 4, 3, 3] recorded as NHWC [1, 3, 3, 4].
+    let x = values(72, 60, 2.0);
+    let w = values(32, 61, 0.5);
+    let px = |c: usize, r: usize, q: usize| f64::from(x[(c * 6 + r) * 6 + q]);
+    let mut nchw = vec![0.0f32; 4 * 9];
+    for o in 0..4 {
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut acc = 0.0f64;
+                for c in 0..2 {
+                    for a in 0..2 {
+                        for b in 0..2 {
+                            acc += px(c, 2 * i + a, 2 * j + b)
+                                * f64::from(w[((o * 2 + c) * 2 + a) * 2 + b]);
+                        }
+                    }
+                }
+                nchw[(o * 3 + i) * 3 + j] = acc as f32;
+            }
+        }
+    }
+    let mut nhwc = vec![0.0f32; 36];
+    for o in 0..4 {
+        for i in 0..3 {
+            for j in 0..3 {
+                nhwc[(i * 3 + j) * 4 + o] = nchw[(o * 3 + i) * 3 + j];
+            }
+        }
+    }
+    // A 3x3, padding 1 convolution with a bias: [1, 2, 4, 4] -> [1, 3, 4, 4].
+    let cx = values(32, 62, 2.0);
+    let (cw, cb) = (values(54, 63, 0.5), values(3, 64, 1.0));
+    let mut conv = vec![0.0f32; 3 * 16];
+    for o in 0..3 {
+        for i in 0..4i64 {
+            for j in 0..4i64 {
+                let mut acc = f64::from(cb[o]);
+                for c in 0..2 {
+                    for a in 0..3i64 {
+                        for b in 0..3i64 {
+                            let (r, q) = (i + a - 1, j + b - 1);
+                            if (0..4).contains(&r) && (0..4).contains(&q) {
+                                acc += f64::from(cx[(c * 4 + r as usize) * 4 + q as usize])
+                                    * f64::from(
+                                        cw[((o * 2 + c) * 3 + a as usize) * 3 + b as usize],
+                                    );
+                            }
+                        }
+                    }
+                }
+                conv[(o * 4 + i as usize) * 4 + j as usize] = acc as f32;
+            }
+        }
+    }
+    // A 2x2 stride-2 transposed convolution: [1, 2, 3, 3], weight [2, 3, 2, 2].
+    let tx = values(18, 65, 2.0);
+    let (tw, tb) = (values(24, 66, 0.5), values(3, 67, 1.0));
+    let mut tconv = vec![0.0f32; 3 * 36];
+    for o in 0..3 {
+        for i in 0..3 {
+            for j in 0..3 {
+                for a in 0..2 {
+                    for b in 0..2 {
+                        let mut acc = f64::from(tb[o]);
+                        for c in 0..2 {
+                            acc += f64::from(tx[(c * 3 + i) * 3 + j])
+                                * f64::from(tw[((c * 3 + o) * 2 + a) * 2 + b]);
+                        }
+                        tconv[(o * 6 + 2 * i + a) * 6 + 2 * j + b] = acc as f32;
+                    }
+                }
+            }
+        }
+    }
+    let acts = build(
+        &[
+            f32_raw("p.in", &[1, 2, 6, 6], &x),
+            f32_raw("p.out", &[1, 3, 3, 4], &nhwc),
+            f32_raw("p.nchw", &[1, 4, 3, 3], &nchw),
+            f32_raw("neck.convs.0.conv_3x3.in", &[1, 2, 4, 4], &cx),
+            f32_raw("neck.convs.0.conv_3x3", &[1, 3, 4, 4], &conv),
+            f32_raw("neck.convs.1.dconv_2x2.in", &[1, 2, 3, 3], &tx),
+            f32_raw("neck.convs.1.dconv_2x2", &[1, 3, 6, 6], &tconv),
+        ],
+        &[],
+    );
+    let weights = build(
+        &[
+            f32_raw(
+                &wname("trunk.patch_embed.proj", "weight"),
+                &[4, 2, 2, 2],
+                &w,
+            ),
+            f32_raw(&wname("convs.0.conv_3x3", "weight"), &[3, 2, 3, 3], &cw),
+            f32_raw(&wname("convs.0.conv_3x3", "bias"), &[3], &cb),
+            f32_raw(&wname("convs.1.dconv_2x2", "weight"), &[2, 3, 2, 2], &tw),
+            f32_raw(&wname("convs.1.dconv_2x2", "bias"), &[3], &tb),
+        ],
+        &[],
+    );
+    let (a, wt) = (
+        Fixture::parse(&acts).unwrap(),
+        Fixture::parse(&weights).unwrap(),
+    );
+    let patch = ConvCase {
+        module: "trunk.patch_embed.proj",
+        input: "p.in",
+        output: "p.out",
+        params: ojas_core::Conv2dParams {
+            stride: [2, 2],
+            ..ojas_core::Conv2dParams::new()
+        },
+        has_bias: false,
+        output_nhwc: true,
+    };
+    let r = conv2d(&be, &a, &wt, &patch).unwrap();
+    assert!(
+        r.pass && r.detail.contains("NHWC") && r.detail.contains("no bias"),
+        "{r}"
+    );
+    // Without the permute the NCHW record matches, and the NHWC one does not.
+    let plain = ConvCase {
+        output: "p.nchw",
+        output_nhwc: false,
+        ..patch
+    };
+    assert!(conv2d(&be, &a, &wt, &plain).unwrap().pass);
+    assert!(conv2d(
+        &be,
+        &a,
+        &wt,
+        &ConvCase {
+            output_nhwc: false,
+            ..patch
+        }
+    )
+    .is_err());
+    let three = ConvCase {
+        module: "neck.convs.0.conv_3x3",
+        input: "neck.convs.0.conv_3x3.in",
+        output: "neck.convs.0.conv_3x3",
+        params: ojas_core::Conv2dParams {
+            padding: [1, 1],
+            ..ojas_core::Conv2dParams::new()
+        },
+        has_bias: true,
+        output_nhwc: false,
+    };
+    assert!(conv2d(&be, &a, &wt, &three).unwrap().pass);
+    // No padding changes the output shape: refused, not a pass.
+    let unpadded = ConvCase {
+        params: ojas_core::Conv2dParams::new(),
+        ..three
+    };
+    assert!(conv2d(&be, &a, &wt, &unpadded).is_err());
+    let t = conv_transpose2d(
+        &be,
+        &a,
+        &wt,
+        "neck.convs.1.dconv_2x2",
+        "neck.convs.1.dconv_2x2.in",
+        "neck.convs.1.dconv_2x2",
+        2,
+    )
+    .unwrap();
+    assert!(t.pass, "{t}");
+    // Stride 1 would not give the recorded size.
+    assert!(conv_transpose2d(
+        &be,
+        &a,
+        &wt,
+        "neck.convs.1.dconv_2x2",
+        "neck.convs.1.dconv_2x2.in",
+        "neck.convs.1.dconv_2x2",
+        1,
+    )
+    .is_err());
+}
+
+#[test]
+fn a_weights_file_missing_names_is_an_error_not_an_empty_list() {
+    let weights = build(
+        &[f32_raw(
+            &wname("trunk.ln_pre", "weight"),
+            &[1024],
+            &[0.0f32; 1024],
+        )],
+        &[],
+    );
+    let w = Fixture::parse(&weights).unwrap();
+    assert!(weighted_ops(&w).is_err());
 }
