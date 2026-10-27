@@ -1,0 +1,466 @@
+# permute bench, final kernels (row copies of 4 uint4 per thread with the finite test fused, transpose tile with the finite test fused, generic kernel unchanged), six attempts of `memory_bound_bench 5 25 permute`.
+# Compact form of the example's output (the job logs under backups/78-tools/logs/a-pm3 hold every column, including bytes, GB/s, min and the primed rows' own spread): per (shape, arm), the A pass's p10, median and p90 in ms, the A' pass's median, and the pair verdict (A-vs-A' gap within spread). Every pair is ok in every attempt.
+# Columns: shape (all rows are `permute <shape>`; call sites are in the example), arm, p10_ms, median_ms, p90_ms, median_ms_of_A', pair
+# An attempt line carries its load averages (1, 5, 15 minutes) at the start and the end, the number of NOISY pairs and the example's verdict. The rules' extra contention check (generic window row in 0.50-0.60 ms and streaming reference on [9, 576, 16, 64] in 0.28-0.34 ms) flagged every attempt. The generic kernel's window rows (ALU-bound, six axes) moved between 0.55 and 1.5 ms across attempts while the new kernels stayed at the identity and streaming floors in every attempt, so the check was not a usable test of contention for the new arms; see the commit message.
+# attempt 1: load_start 4.23 4.38 4.34 | load_end 4.45 4.43 4.36 | noisy_pairs 0 | verdict clean
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute	0.320	0.359	0.425	0.346	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.316	0.371	0.479	0.368	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.669	1.274	1.386	0.781	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.317	0.441	0.544	0.422	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute	0.311	0.323	0.348	0.326	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.319	0.339	0.362	0.333	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.670	0.689	0.724	0.689	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.314	0.330	0.354	0.332	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute	0.314	0.324	0.356	0.329	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.309	0.322	0.353	0.340	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.678	0.796	0.845	0.779	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.317	0.342	0.385	0.343	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute	0.331	0.380	0.445	0.363	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.331	0.383	0.491	0.374	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.940	1.046	1.326	1.135	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.349	0.437	0.548	0.429	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.322	0.354	0.424	0.358	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.325	0.359	0.413	0.352	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.869	0.903	0.936	0.907	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.320	0.354	0.393	0.356	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.327	0.354	0.467	0.352	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.326	0.356	0.416	0.360	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.866	0.907	1.073	0.900	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.322	0.355	0.443	0.364	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute	0.314	0.334	0.381	0.324	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.300	0.324	0.417	0.322	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.677	0.703	0.844	0.687	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.315	0.327	0.434	0.335	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute	0.311	0.332	0.347	0.333	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute identity (copy floor)	0.304	0.320	0.345	0.316	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute (generic kernel)	0.682	0.781	0.844	0.780	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	relu (streaming reference)	0.315	0.338	0.358	0.343	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute	0.205	0.224	0.284	0.227	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.186	0.216	0.251	0.210	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.309	0.391	0.528	0.365	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.192	0.233	0.307	0.222	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute	0.229	0.257	0.333	0.253	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute identity (copy floor)	0.225	0.259	0.280	0.253	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute (generic kernel)	0.453	0.468	0.503	0.476	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	relu (streaming reference)	0.242	0.261	0.291	0.259	ok
+[1, 256, 5184] by [0, 2, 1]	permute	0.232	0.254	0.273	0.260	ok
+[1, 256, 5184] by [0, 2, 1]	permute identity (copy floor)	0.225	0.237	0.263	0.248	ok
+[1, 256, 5184] by [0, 2, 1]	permute (generic kernel)	0.448	0.462	0.497	0.461	ok
+[1, 256, 5184] by [0, 2, 1]	relu (streaming reference)	0.242	0.264	0.285	0.257	ok
+[1, 5184, 256] by [0, 2, 1]	permute	0.230	0.239	0.270	0.239	ok
+[1, 5184, 256] by [0, 2, 1]	permute identity (copy floor)	0.221	0.233	0.277	0.237	ok
+[1, 5184, 256] by [0, 2, 1]	permute (generic kernel)	0.411	0.423	0.477	0.421	ok
+[1, 5184, 256] by [0, 2, 1]	relu (streaming reference)	0.240	0.259	0.275	0.248	ok
+[256, 82944] by [1, 0]	permute	0.802	0.823	0.909	0.829	ok
+[256, 82944] by [1, 0]	permute identity (copy floor)	0.794	0.825	0.851	0.831	ok
+[256, 82944] by [1, 0]	permute (generic kernel)	1.412	1.447	1.538	1.433	ok
+[256, 82944] by [1, 0]	relu (streaming reference)	0.810	0.825	0.866	0.828	ok
+[32, 82944] by [1, 0]	permute	0.192	0.201	0.225	0.198	ok
+[32, 82944] by [1, 0]	permute identity (copy floor)	0.186	0.193	0.223	0.191	ok
+[32, 82944] by [1, 0]	permute (generic kernel)	0.253	0.269	0.297	0.267	ok
+[32, 82944] by [1, 0]	relu (streaming reference)	0.204	0.218	0.243	0.213	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute	0.140	0.153	0.191	0.159	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.147	0.159	0.188	0.160	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.191	0.205	0.234	0.206	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.160	0.171	0.198	0.176	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute	0.139	0.151	0.186	0.150	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.138	0.155	0.187	0.150	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.185	0.198	0.223	0.196	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.156	0.167	0.196	0.171	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute	0.176	0.188	0.219	0.190	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.174	0.185	0.224	0.185	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.258	0.279	0.314	0.269	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.199	0.213	0.245	0.210	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute	0.125	0.140	0.161	0.133	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.124	0.136	0.165	0.140	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.120	0.140	0.177	0.136	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.126	0.139	0.147	0.136	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute	0.119	0.133	0.179	0.136	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.127	0.135	0.156	0.135	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.124	0.138	0.165	0.133	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.120	0.129	0.142	0.131	ok
+# attempt 2: load_start 3.84 4.27 4.30 | load_end 3.84 4.27 4.30 | noisy_pairs 0 | verdict clean
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute	0.306	0.316	0.336	0.319	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.311	0.320	0.358	0.318	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.456	0.560	0.689	0.508	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.309	0.317	0.352	0.328	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute	0.307	0.318	0.343	0.317	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.301	0.314	0.352	0.316	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.449	0.462	0.481	0.460	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.307	0.313	0.333	0.316	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute	0.301	0.315	0.340	0.309	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.292	0.305	0.336	0.303	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.460	0.474	0.515	0.492	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.305	0.316	0.344	0.314	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute	0.307	0.317	0.339	0.312	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.298	0.314	0.340	0.310	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.497	0.525	0.584	0.537	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.309	0.317	0.334	0.314	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.316	0.343	0.407	0.337	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.317	0.346	0.383	0.341	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.788	0.922	1.246	0.926	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.321	0.345	0.453	0.349	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.308	0.360	0.437	0.360	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.309	0.380	0.425	0.362	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.576	0.759	1.134	0.800	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.313	0.364	0.433	0.375	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute	0.299	0.314	0.346	0.302	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.297	0.316	0.367	0.308	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.452	0.463	0.500	0.471	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.304	0.314	0.358	0.309	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute	0.299	0.310	0.323	0.303	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute identity (copy floor)	0.292	0.305	0.356	0.304	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute (generic kernel)	0.475	0.486	0.530	0.487	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	relu (streaming reference)	0.302	0.314	0.347	0.310	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute	0.153	0.166	0.194	0.161	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.152	0.165	0.197	0.163	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.201	0.211	0.246	0.213	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.172	0.179	0.204	0.181	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute	0.163	0.189	0.236	0.188	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute identity (copy floor)	0.164	0.185	0.279	0.192	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute (generic kernel)	0.242	0.297	0.465	0.298	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	relu (streaming reference)	0.173	0.195	0.268	0.201	ok
+[1, 256, 5184] by [0, 2, 1]	permute	0.157	0.169	0.218	0.166	ok
+[1, 256, 5184] by [0, 2, 1]	permute identity (copy floor)	0.153	0.165	0.193	0.163	ok
+[1, 256, 5184] by [0, 2, 1]	permute (generic kernel)	0.215	0.227	0.255	0.232	ok
+[1, 256, 5184] by [0, 2, 1]	relu (streaming reference)	0.176	0.182	0.218	0.191	ok
+[1, 5184, 256] by [0, 2, 1]	permute	0.149	0.159	0.192	0.158	ok
+[1, 5184, 256] by [0, 2, 1]	permute identity (copy floor)	0.150	0.157	0.185	0.156	ok
+[1, 5184, 256] by [0, 2, 1]	permute (generic kernel)	0.193	0.199	0.218	0.206	ok
+[1, 5184, 256] by [0, 2, 1]	relu (streaming reference)	0.167	0.174	0.218	0.174	ok
+[256, 82944] by [1, 0]	permute	0.782	0.812	0.884	0.820	ok
+[256, 82944] by [1, 0]	permute identity (copy floor)	0.770	0.805	0.873	0.806	ok
+[256, 82944] by [1, 0]	permute (generic kernel)	1.373	1.418	1.469	1.415	ok
+[256, 82944] by [1, 0]	relu (streaming reference)	0.784	0.823	0.911	0.832	ok
+[32, 82944] by [1, 0]	permute	0.186	0.199	0.213	0.196	ok
+[32, 82944] by [1, 0]	permute identity (copy floor)	0.189	0.200	0.244	0.195	ok
+[32, 82944] by [1, 0]	permute (generic kernel)	0.260	0.270	0.300	0.268	ok
+[32, 82944] by [1, 0]	relu (streaming reference)	0.216	0.221	0.250	0.222	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute	0.153	0.160	0.185	0.161	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.150	0.161	0.192	0.159	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.202	0.211	0.242	0.214	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.172	0.180	0.210	0.183	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute	0.144	0.158	0.171	0.160	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.148	0.159	0.193	0.160	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.194	0.200	0.226	0.205	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.158	0.171	0.210	0.174	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute	0.187	0.194	0.220	0.203	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.185	0.192	0.222	0.191	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.269	0.282	0.320	0.278	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.209	0.234	0.274	0.228	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute	0.130	0.139	0.152	0.140	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.132	0.145	0.181	0.142	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.129	0.139	0.172	0.139	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.126	0.139	0.171	0.138	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute	0.124	0.137	0.185	0.136	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.131	0.138	0.147	0.141	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.132	0.140	0.165	0.138	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.131	0.140	0.184	0.142	ok
+# attempt 3: load_start 3.12 3.99 4.19 | load_end 3.11 3.97 4.19 | noisy_pairs 0 | verdict clean
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute	0.312	0.329	0.368	0.324	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.317	0.328	0.360	0.326	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.668	0.679	0.808	0.683	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.317	0.328	0.448	0.327	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute	0.304	0.323	0.356	0.319	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.312	0.324	0.351	0.324	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.664	0.677	0.697	0.677	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.314	0.324	0.356	0.323	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute	0.320	0.331	0.383	0.324	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.310	0.324	0.365	0.323	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.680	0.777	0.860	0.780	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.321	0.339	0.358	0.347	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute	0.326	0.366	0.426	0.376	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.343	0.381	0.467	0.393	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.948	0.984	1.570	1.268	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.373	0.454	0.541	0.437	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.315	0.323	0.411	0.320	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.317	0.326	0.351	0.324	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.851	0.861	0.939	0.868	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.319	0.325	0.358	0.327	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.315	0.322	0.353	0.324	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.316	0.325	0.402	0.325	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.855	0.868	0.910	0.867	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.314	0.323	0.383	0.326	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute	0.315	0.326	0.371	0.322	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.309	0.321	0.389	0.317	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.672	0.703	0.855	0.713	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.314	0.327	0.350	0.328	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute	0.328	0.357	0.423	0.355	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute identity (copy floor)	0.321	0.354	0.398	0.356	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute (generic kernel)	0.796	0.962	1.253	0.953	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	relu (streaming reference)	0.347	0.411	0.461	0.386	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute	0.234	0.246	0.289	0.242	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.229	0.238	0.285	0.241	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.456	0.481	0.508	0.478	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.247	0.264	0.294	0.261	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute	0.232	0.252	0.274	0.246	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute identity (copy floor)	0.222	0.247	0.278	0.240	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute (generic kernel)	0.446	0.466	0.532	0.458	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	relu (streaming reference)	0.241	0.268	0.294	0.264	ok
+[1, 256, 5184] by [0, 2, 1]	permute	0.172	0.238	0.272	0.242	ok
+[1, 256, 5184] by [0, 2, 1]	permute identity (copy floor)	0.177	0.235	0.285	0.234	ok
+[1, 256, 5184] by [0, 2, 1]	permute (generic kernel)	0.266	0.456	0.531	0.452	ok
+[1, 256, 5184] by [0, 2, 1]	relu (streaming reference)	0.178	0.249	0.306	0.246	ok
+[1, 5184, 256] by [0, 2, 1]	permute	0.169	0.174	0.221	0.175	ok
+[1, 5184, 256] by [0, 2, 1]	permute identity (copy floor)	0.168	0.175	0.200	0.174	ok
+[1, 5184, 256] by [0, 2, 1]	permute (generic kernel)	0.242	0.253	0.285	0.253	ok
+[1, 5184, 256] by [0, 2, 1]	relu (streaming reference)	0.177	0.185	0.204	0.187	ok
+[256, 82944] by [1, 0]	permute	0.795	0.833	0.857	0.828	ok
+[256, 82944] by [1, 0]	permute identity (copy floor)	0.815	0.835	0.875	0.830	ok
+[256, 82944] by [1, 0]	permute (generic kernel)	1.399	1.456	1.640	1.446	ok
+[256, 82944] by [1, 0]	relu (streaming reference)	0.808	0.834	0.874	0.831	ok
+[32, 82944] by [1, 0]	permute	0.192	0.199	0.226	0.196	ok
+[32, 82944] by [1, 0]	permute identity (copy floor)	0.187	0.193	0.218	0.194	ok
+[32, 82944] by [1, 0]	permute (generic kernel)	0.261	0.278	0.312	0.268	ok
+[32, 82944] by [1, 0]	relu (streaming reference)	0.206	0.218	0.245	0.217	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute	0.146	0.155	0.183	0.156	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.149	0.154	0.184	0.154	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.198	0.203	0.230	0.205	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.170	0.176	0.211	0.173	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute	0.144	0.151	0.193	0.152	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.145	0.156	0.189	0.155	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.189	0.200	0.216	0.200	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.160	0.166	0.175	0.172	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute	0.181	0.189	0.232	0.190	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.182	0.190	0.210	0.191	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.267	0.281	0.323	0.276	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.202	0.217	0.249	0.217	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute	0.125	0.136	0.150	0.138	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.128	0.140	0.180	0.139	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.120	0.136	0.161	0.141	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.122	0.145	0.166	0.138	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute	0.126	0.138	0.148	0.136	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.122	0.132	0.145	0.138	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.132	0.142	0.176	0.134	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.128	0.140	0.177	0.140	ok
+# attempt 4: load_start 3.60 3.93 4.15 | load_end 3.60 3.93 4.15 | noisy_pairs 0 | verdict clean
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute	0.313	0.325	0.360	0.329	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.308	0.319	0.358	0.321	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.553	0.568	0.704	0.566	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.313	0.321	0.367	0.321	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute	0.306	0.316	0.324	0.315	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.305	0.316	0.338	0.315	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.450	0.460	0.488	0.461	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.307	0.314	0.336	0.320	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute	0.305	0.310	0.329	0.305	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.296	0.306	0.337	0.305	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.459	0.474	0.499	0.474	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.298	0.312	0.337	0.309	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute	0.296	0.310	0.337	0.308	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.293	0.308	0.336	0.305	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.490	0.536	0.592	0.529	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.304	0.311	0.382	0.310	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.316	0.325	0.351	0.329	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.311	0.328	0.362	0.329	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.797	0.940	1.266	1.014	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.316	0.339	0.398	0.343	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.326	0.369	0.450	0.358	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.354	0.387	0.484	0.384	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	1.273	1.522	1.796	1.450	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.369	0.433	0.542	0.421	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute	0.360	0.442	0.562	0.440	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.336	0.386	0.489	0.395	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.951	1.216	1.360	1.253	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.374	0.443	0.559	0.464	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute	0.307	0.323	0.423	0.313	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute identity (copy floor)	0.297	0.312	0.383	0.318	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute (generic kernel)	0.509	0.601	1.322	0.593	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	relu (streaming reference)	0.307	0.318	0.455	0.317	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute	0.154	0.164	0.263	0.160	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.151	0.158	0.189	0.164	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.201	0.210	0.250	0.210	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.172	0.179	0.199	0.180	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute	0.151	0.158	0.201	0.160	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute identity (copy floor)	0.148	0.158	0.185	0.156	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute (generic kernel)	0.199	0.206	0.253	0.206	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	relu (streaming reference)	0.165	0.176	0.213	0.177	ok
+[1, 256, 5184] by [0, 2, 1]	permute	0.151	0.159	0.200	0.161	ok
+[1, 256, 5184] by [0, 2, 1]	permute identity (copy floor)	0.143	0.160	0.200	0.184	ok
+[1, 256, 5184] by [0, 2, 1]	permute (generic kernel)	0.202	0.221	0.251	0.216	ok
+[1, 256, 5184] by [0, 2, 1]	relu (streaming reference)	0.161	0.176	0.212	0.174	ok
+[1, 5184, 256] by [0, 2, 1]	permute	0.148	0.165	0.205	0.166	ok
+[1, 5184, 256] by [0, 2, 1]	permute identity (copy floor)	0.142	0.160	0.195	0.166	ok
+[1, 5184, 256] by [0, 2, 1]	permute (generic kernel)	0.208	0.226	0.255	0.230	ok
+[1, 5184, 256] by [0, 2, 1]	relu (streaming reference)	0.163	0.179	0.211	0.178	ok
+[256, 82944] by [1, 0]	permute	0.795	0.821	0.871	0.827	ok
+[256, 82944] by [1, 0]	permute identity (copy floor)	0.800	0.827	0.890	0.829	ok
+[256, 82944] by [1, 0]	permute (generic kernel)	1.405	1.444	1.503	1.429	ok
+[256, 82944] by [1, 0]	relu (streaming reference)	0.801	0.826	0.863	0.831	ok
+[32, 82944] by [1, 0]	permute	0.185	0.195	0.238	0.193	ok
+[32, 82944] by [1, 0]	permute identity (copy floor)	0.179	0.189	0.223	0.194	ok
+[32, 82944] by [1, 0]	permute (generic kernel)	0.253	0.262	0.297	0.268	ok
+[32, 82944] by [1, 0]	relu (streaming reference)	0.205	0.218	0.261	0.217	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute	0.149	0.153	0.196	0.155	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.148	0.155	0.201	0.153	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.196	0.208	0.264	0.206	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.169	0.177	0.237	0.177	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute	0.146	0.153	0.183	0.156	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.148	0.158	0.198	0.157	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.198	0.202	0.221	0.207	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.167	0.172	0.218	0.172	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute	0.179	0.192	0.230	0.187	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.182	0.196	0.215	0.191	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.269	0.285	0.315	0.275	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.208	0.228	0.253	0.213	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute	0.128	0.140	0.172	0.140	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.131	0.139	0.176	0.136	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.130	0.137	0.179	0.134	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.132	0.138	0.184	0.140	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute	0.129	0.135	0.148	0.139	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.122	0.139	0.183	0.141	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.129	0.136	0.173	0.135	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.129	0.143	0.176	0.137	ok
+# attempt 5: load_start 3.76 3.93 4.14 | load_end 3.76 3.93 4.14 | noisy_pairs 0 | verdict clean
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute	0.358	0.386	0.444	0.392	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.359	0.393	0.461	0.389	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.707	0.738	1.310	0.731	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.359	0.380	0.467	0.384	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute	0.307	0.319	0.393	0.317	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.303	0.315	0.396	0.319	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.457	0.500	0.614	0.492	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.307	0.323	0.377	0.341	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute	0.299	0.310	0.337	0.307	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.295	0.307	0.363	0.304	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.453	0.479	0.509	0.464	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.307	0.315	0.346	0.316	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute	0.297	0.306	0.327	0.305	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.296	0.303	0.357	0.301	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.451	0.465	0.510	0.463	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.302	0.312	0.346	0.309	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.305	0.313	0.332	0.311	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.304	0.314	0.335	0.313	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.544	0.554	0.592	0.554	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.307	0.314	0.348	0.317	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.304	0.316	0.341	0.314	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.298	0.312	0.326	0.309	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	0.539	0.551	0.581	0.556	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.304	0.314	0.356	0.322	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute	0.295	0.308	0.330	0.304	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.293	0.299	0.331	0.301	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.454	0.467	0.499	0.462	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.301	0.313	0.361	0.311	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute	0.301	0.312	0.338	0.306	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute identity (copy floor)	0.292	0.302	0.319	0.303	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute (generic kernel)	0.478	0.491	0.502	0.494	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	relu (streaming reference)	0.303	0.311	0.343	0.309	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute	0.151	0.163	0.193	0.164	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.153	0.158	0.191	0.159	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.203	0.212	0.246	0.212	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.172	0.181	0.220	0.190	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute	0.149	0.154	0.189	0.162	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute identity (copy floor)	0.148	0.153	0.181	0.158	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute (generic kernel)	0.201	0.217	0.232	0.205	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	relu (streaming reference)	0.168	0.176	0.201	0.182	ok
+[1, 256, 5184] by [0, 2, 1]	permute	0.152	0.157	0.188	0.158	ok
+[1, 256, 5184] by [0, 2, 1]	permute identity (copy floor)	0.149	0.157	0.200	0.154	ok
+[1, 256, 5184] by [0, 2, 1]	permute (generic kernel)	0.199	0.204	0.235	0.206	ok
+[1, 256, 5184] by [0, 2, 1]	relu (streaming reference)	0.169	0.175	0.211	0.179	ok
+[1, 5184, 256] by [0, 2, 1]	permute	0.149	0.158	0.175	0.153	ok
+[1, 5184, 256] by [0, 2, 1]	permute identity (copy floor)	0.147	0.160	0.185	0.159	ok
+[1, 5184, 256] by [0, 2, 1]	permute (generic kernel)	0.186	0.195	0.225	0.197	ok
+[1, 5184, 256] by [0, 2, 1]	relu (streaming reference)	0.160	0.171	0.187	0.171	ok
+[256, 82944] by [1, 0]	permute	0.794	0.831	0.906	0.816	ok
+[256, 82944] by [1, 0]	permute identity (copy floor)	0.786	0.809	0.844	0.810	ok
+[256, 82944] by [1, 0]	permute (generic kernel)	1.393	1.425	1.495	1.419	ok
+[256, 82944] by [1, 0]	relu (streaming reference)	0.790	0.825	0.895	0.835	ok
+[32, 82944] by [1, 0]	permute	0.191	0.202	0.214	0.195	ok
+[32, 82944] by [1, 0]	permute identity (copy floor)	0.189	0.197	0.225	0.195	ok
+[32, 82944] by [1, 0]	permute (generic kernel)	0.258	0.266	0.292	0.270	ok
+[32, 82944] by [1, 0]	relu (streaming reference)	0.208	0.216	0.237	0.221	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute	0.152	0.160	0.195	0.155	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.148	0.156	0.182	0.168	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.196	0.205	0.225	0.207	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.167	0.175	0.200	0.187	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute	0.147	0.159	0.196	0.156	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.147	0.159	0.205	0.159	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.193	0.201	0.212	0.204	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.162	0.171	0.210	0.173	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute	0.185	0.208	0.245	0.192	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.184	0.203	0.240	0.199	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.267	0.281	0.312	0.277	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.206	0.224	0.244	0.222	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute	0.135	0.142	0.160	0.136	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.130	0.140	0.165	0.139	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.128	0.138	0.178	0.140	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.130	0.138	0.174	0.135	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute	0.132	0.143	0.162	0.144	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.130	0.143	0.177	0.137	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.125	0.140	0.181	0.142	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.127	0.138	0.165	0.140	ok
+# attempt 6: load_start 4.00 3.94 4.12 | load_end 3.83 3.91 4.11 | noisy_pairs 0 | verdict clean
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute	0.309	0.327	0.368	0.326	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.311	0.320	0.360	0.319	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.659	0.668	0.803	0.671	ok
+[9, 576, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.308	0.325	0.427	0.326	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute	0.302	0.312	0.324	0.312	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.300	0.311	0.339	0.322	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.545	0.558	0.584	0.556	ok
+[9, 16, 576, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.301	0.309	0.332	0.314	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute	0.314	0.329	0.355	0.321	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.301	0.321	0.346	0.315	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.567	0.611	0.658	0.611	ok
+[1, 5184, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.309	0.325	0.349	0.321	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute	0.309	0.325	0.359	0.313	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.306	0.315	0.406	0.312	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.689	0.774	0.986	0.771	ok
+[1, 16, 5184, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.318	0.344	0.377	0.344	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.331	0.357	0.415	0.360	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.346	0.370	0.409	0.370	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	1.257	1.291	1.734	1.291	ok
+[1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.355	0.407	0.504	0.421	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute	0.323	0.347	0.431	0.351	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute identity (copy floor)	0.340	0.379	0.422	0.382	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	permute (generic kernel)	1.250	1.276	1.592	1.278	ok
+[1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5]	relu (streaming reference)	0.369	0.421	0.487	0.403	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute	0.347	0.369	0.460	0.368	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.338	0.367	0.447	0.363	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.937	0.979	1.157	0.966	ok
+[1, 1024, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.354	0.403	0.497	0.401	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute	0.349	0.374	0.454	0.358	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute identity (copy floor)	0.312	0.355	0.411	0.360	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	permute (generic kernel)	0.943	0.984	1.189	0.991	ok
+[1, 72, 72, 1024] by [0, 3, 1, 2]	relu (streaming reference)	0.348	0.406	0.512	0.414	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute	0.195	0.207	0.297	0.206	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute identity (copy floor)	0.193	0.211	0.233	0.203	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	permute (generic kernel)	0.352	0.369	0.463	0.368	ok
+[1, 256, 72, 72] by [0, 2, 3, 1]	relu (streaming reference)	0.203	0.227	0.291	0.225	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute	0.216	0.233	0.275	0.242	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute identity (copy floor)	0.198	0.231	0.278	0.237	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	permute (generic kernel)	0.352	0.451	0.542	0.446	ok
+[1, 72, 72, 256] by [0, 3, 1, 2]	relu (streaming reference)	0.214	0.240	0.296	0.240	ok
+[1, 256, 5184] by [0, 2, 1]	permute	0.232	0.255	0.271	0.254	ok
+[1, 256, 5184] by [0, 2, 1]	permute identity (copy floor)	0.225	0.230	0.269	0.236	ok
+[1, 256, 5184] by [0, 2, 1]	permute (generic kernel)	0.446	0.463	0.477	0.466	ok
+[1, 256, 5184] by [0, 2, 1]	relu (streaming reference)	0.234	0.249	0.326	0.249	ok
+[1, 5184, 256] by [0, 2, 1]	permute	0.229	0.241	0.264	0.239	ok
+[1, 5184, 256] by [0, 2, 1]	permute identity (copy floor)	0.222	0.236	0.266	0.242	ok
+[1, 5184, 256] by [0, 2, 1]	permute (generic kernel)	0.407	0.425	0.467	0.422	ok
+[1, 5184, 256] by [0, 2, 1]	relu (streaming reference)	0.241	0.251	0.273	0.247	ok
+[256, 82944] by [1, 0]	permute	0.806	0.827	0.873	0.825	ok
+[256, 82944] by [1, 0]	permute identity (copy floor)	0.807	0.821	0.857	0.823	ok
+[256, 82944] by [1, 0]	permute (generic kernel)	1.401	1.435	1.488	1.435	ok
+[256, 82944] by [1, 0]	relu (streaming reference)	0.812	0.831	0.893	0.829	ok
+[32, 82944] by [1, 0]	permute	0.182	0.191	0.217	0.188	ok
+[32, 82944] by [1, 0]	permute identity (copy floor)	0.181	0.190	0.209	0.187	ok
+[32, 82944] by [1, 0]	permute (generic kernel)	0.252	0.256	0.292	0.262	ok
+[32, 82944] by [1, 0]	relu (streaming reference)	0.202	0.208	0.232	0.206	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute	0.148	0.157	0.189	0.159	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.147	0.155	0.222	0.159	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.195	0.206	0.227	0.202	ok
+[1, 5184, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.160	0.175	0.188	0.175	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute	0.136	0.154	0.191	0.155	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.139	0.155	0.197	0.151	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.184	0.196	0.214	0.204	ok
+[1, 8, 5184, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.152	0.163	0.184	0.167	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute	0.168	0.187	0.225	0.184	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.170	0.191	0.219	0.185	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.257	0.275	0.296	0.275	ok
+[1, 10400, 8, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.195	0.208	0.237	0.212	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute	0.125	0.135	0.179	0.143	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute identity (copy floor)	0.128	0.136	0.162	0.136	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	permute (generic kernel)	0.129	0.134	0.162	0.141	ok
+[1, 8, 201, 32] by [0, 2, 1, 3]	relu (streaming reference)	0.129	0.142	0.195	0.136	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute	0.122	0.136	0.160	0.137	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute identity (copy floor)	0.131	0.143	0.164	0.138	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	permute (generic kernel)	0.129	0.142	0.178	0.139	ok
+[1, 32, 16, 64] by [0, 2, 1, 3]	relu (streaming reference)	0.126	0.140	0.156	0.141	ok

@@ -111,6 +111,7 @@ use crate::link::{
     LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits,
     SQ_OUT_WORDS,
 };
+use crate::permute;
 
 /// A Metal allocation owned by the device thread, named by id.
 pub struct MetalBuffer {
@@ -298,6 +299,36 @@ impl MetalBackend {
     #[doc(hidden)]
     pub fn dispatches(&self) -> u64 {
         self.link.dispatches()
+    }
+
+    /// [`Backend::permute`] on the generic one-thread-per-element kernel
+    /// whatever the pattern planner would pick: the reference arm of the
+    /// pattern tests and the permute bench. Not a stable API.
+    #[doc(hidden)]
+    pub fn permute_generic(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
+        let (out, cmd) = self.permute_cmd(input, dims, true)?;
+        self.one("permute", &out, 0, cmd)
+    }
+
+    /// The kernel [`Backend::permute`] of `input` by `dims` runs on:
+    /// `"runs"`, `"transpose"` or `"generic"` (`src/permute.rs`). Validates
+    /// as `permute` does and records nothing. Not a stable API.
+    #[doc(hidden)]
+    pub fn permute_pattern(
+        &self,
+        input: &Tensor,
+        dims: &[usize],
+    ) -> Result<&'static str, OjasError> {
+        match self.permute_cmd(input, dims, false)?.1 {
+            Cmd::Permute {
+                x,
+                rank,
+                oshape,
+                istride,
+                ..
+            } => Ok(permute::plan(rank as usize, &oshape, &istride, x.off, 0).name()),
+            _ => Err(metal_err("permute_pattern: not a permute command")),
+        }
     }
 
     /// [`Self::waits`] by trigger: every waited commit counted once, under
@@ -551,6 +582,34 @@ impl MetalBackend {
     fn one(&self, op: &'static str, s: &[usize], scratch: usize, cmd: Cmd) -> Res<Tensor> {
         let mut v = self.outputs(op, &[s], scratch, cmd)?;
         v.pop().ok_or_else(|| metal_err(format!("{op}: no output")))
+    }
+
+    /// The output shape and the [`Cmd::Permute`] of `input` by `dims`, after
+    /// `permute_dims` has validated them.
+    fn permute_cmd(
+        &self,
+        input: &Tensor,
+        dims: &[usize],
+        generic: bool,
+    ) -> Result<(Vec<usize>, Cmd), OjasError> {
+        const OP: &str = "permute";
+        let out = permute_dims(input, dims)?;
+        let x = self.f32(OP, input)?;
+        let in_strides = row_major_strides(input.shape());
+        let mut oshape = [1u32; MAX_PERMUTE_RANK];
+        let mut istride = [0u32; MAX_PERMUTE_RANK];
+        for (a, &axis) in dims.iter().enumerate() {
+            oshape[a] = u32_dim(OP, out[a])?;
+            istride[a] = u32_dim(OP, in_strides[axis])?;
+        }
+        let cmd = Cmd::Permute {
+            x,
+            rank: u32_dim(OP, dims.len())?,
+            oshape,
+            istride,
+            generic,
+        };
+        Ok((out, cmd))
     }
 
     /// `a + b` or `a * b` over a broadcast whose dims the caller validated.
@@ -1567,27 +1626,8 @@ impl Backend for MetalBackend {
     /// with a zero-length axis is [`OjasError::Shape`], as for every Metal
     /// op: a Metal tensor is never empty.
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
-        const OP: &str = "permute";
-        let out = permute_dims(input, dims)?;
-        let x = self.f32(OP, input)?;
-        let in_strides = row_major_strides(input.shape());
-        let mut oshape = [1u32; MAX_PERMUTE_RANK];
-        let mut istride = [0u32; MAX_PERMUTE_RANK];
-        for (a, &axis) in dims.iter().enumerate() {
-            oshape[a] = u32_dim(OP, out[a])?;
-            istride[a] = u32_dim(OP, in_strides[axis])?;
-        }
-        self.one(
-            OP,
-            &out,
-            0,
-            Cmd::Permute {
-                x,
-                rank: u32_dim(OP, dims.len())?,
-                oshape,
-                istride,
-            },
-        )
+        let (out, cmd) = self.permute_cmd(input, dims, false)?;
+        self.one("permute", &out, 0, cmd)
     }
 
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {

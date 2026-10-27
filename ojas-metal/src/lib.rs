@@ -23,6 +23,7 @@ pub use ojas_core::BackendId;
 mod backend;
 mod link;
 mod memory;
+mod permute;
 
 pub use backend::{MetalBackend, MetalBuffer, METAL_TOPK_MAX_K};
 pub use link::WaitCounts;

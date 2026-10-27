@@ -1773,6 +1773,124 @@ kernel void ojas_permute(
     y[i] = x[src];
 }
 
+// Two kernels for the permutes `src/permute.rs` recognises. Both move words
+// as `uint`s (a `uint4` is four of them), so every bit pattern is copied
+// unchanged, as in `ojas_permute`; the host has checked the alignment and the
+// strides they need.
+
+/// Rows of `run4` `uint4` words that are contiguous in both tensors: a thread
+/// copies `PERMUTE_WORDS_PER_THREAD` consecutive words of one row (`run4` is a
+/// multiple of it), so the divide that finds the row and the walk over the
+/// `outer` axes that pick its input offset (strides in `uint4` units) are
+/// paid once per that many words. `total4` is `n / 4`, a multiple of it.
+#define PERMUTE_WORDS_PER_THREAD 4u
+
+/// `check_word` value that turns the finite test off (the caller has scanned
+/// the input): every word of a `permute`'s input is read exactly once, so the
+/// kernels test what they read and flag `check_word` of `st`, which is what
+/// the separate `ojas_check_finite` pass would have flagged.
+#define PERMUTE_NO_CHECK 0xFFFFFFFFu
+
+/// Whether any of four words is the bit pattern of a NaN or infinity.
+inline bool ojas_has_nonfinite(uint4 v)
+{
+    return any((v & uint4(0x7f800000u)) == uint4(0x7f800000u));
+}
+
+kernel void ojas_permute_runs(
+    device const uint4 *x [[buffer(0)]],
+    device uint4 *y [[buffer(1)]],
+    constant uint &total4 [[buffer(2)]],
+    constant uint &run4 [[buffer(3)]],
+    constant uint &outer [[buffer(4)]],
+    constant uint *oshape [[buffer(5)]],
+    constant uint *istride4 [[buffer(6)]],
+    device atomic_uint *st [[buffer(7)]],
+    constant uint &check_word [[buffer(8)]],
+    uint i [[thread_position_in_grid]])
+{
+    const uint word = i * PERMUTE_WORDS_PER_THREAD;
+    if (word >= total4 || outer > PERMUTE_MAX_RANK) return;
+    uint row = word / run4;
+    uint src = word - row * run4;
+    for (uint a = outer; a > 0u; --a) {
+        const uint extent = oshape[a - 1u];
+        src += (row % extent) * istride4[a - 1u];
+        row /= extent;
+    }
+    bool bad = false;
+    for (uint k = 0u; k < PERMUTE_WORDS_PER_THREAD; ++k) {
+        const uint4 v = x[src + k];
+        bad = bad || ojas_has_nonfinite(v);
+        y[word + k] = v;
+    }
+    if (bad && check_word != PERMUTE_NO_CHECK) ojas_flag(st, check_word);
+}
+
+#define PERMUTE_TILE 32u
+#define PERMUTE_TILE_THREADS 256u
+
+/// Planes of `rows x cols` words, output `[plane][b][a]` from input
+/// `x[plane offset + b + a * col_stride]`: `b` is contiguous in the input and
+/// `a` in the output, so a threadgroup reads a 32 x 32 tile along `b` into
+/// threadgroup memory and writes it along `a`. Grid: one dimension of
+/// `planes * col_tiles * row_tiles` threadgroups (tile counts `ceil(cols / 32)`
+/// and `ceil(rows / 32)`), 256 threads each, decomposed here into the tile
+/// and the plane. That is at most `n / 64` groups for `n` elements, below the
+/// `n / 32` groups a one-dimensional elementwise dispatch of the same tensor
+/// already uses. The plane's input offset is walked over the `outer` axes
+/// that pick it.
+kernel void ojas_permute_tile(
+    device const uint *x [[buffer(0)]],
+    device uint *y [[buffer(1)]],
+    constant uint &rows [[buffer(2)]],
+    constant uint &cols [[buffer(3)]],
+    constant uint &col_stride [[buffer(4)]],
+    constant uint &col_tiles [[buffer(5)]],
+    constant uint &outer [[buffer(6)]],
+    constant uint *oshape [[buffer(7)]],
+    constant uint *istride [[buffer(8)]],
+    device atomic_uint *st [[buffer(9)]],
+    constant uint &check_word [[buffer(10)]],
+    constant uint &row_tiles [[buffer(11)]],
+    uint tg [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup uint tile[PERMUTE_TILE][PERMUTE_TILE + 1u];
+    bool bad = false;
+    if (outer > PERMUTE_MAX_RANK) return;
+    const uint b0 = (tg % row_tiles) * PERMUTE_TILE;
+    const uint a0 = ((tg / row_tiles) % col_tiles) * PERMUTE_TILE;
+    const uint plane = tg / (row_tiles * col_tiles);
+    uint rem = plane;
+    uint base = 0u;
+    for (uint k = outer; k > 0u; --k) {
+        const uint extent = oshape[k - 1u];
+        base += (rem % extent) * istride[k - 1u];
+        rem /= extent;
+    }
+    const uint lx = tid % PERMUTE_TILE;
+    const uint ly = tid / PERMUTE_TILE;
+    for (uint j = 0u; j < PERMUTE_TILE / 8u; ++j) {
+        const uint la = ly + 8u * j;
+        const uint b = b0 + lx;
+        const uint a = a0 + la;
+        if (b < rows && a < cols) {
+            const uint v = x[base + b + a * col_stride];
+            bad = bad || (v & 0x7f800000u) == 0x7f800000u;
+            tile[la][lx] = v;
+        }
+    }
+    if (bad && check_word != PERMUTE_NO_CHECK) ojas_flag(st, check_word);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint j = 0u; j < PERMUTE_TILE / 8u; ++j) {
+        const uint lb = ly + 8u * j;
+        const uint a = a0 + lx;
+        const uint b = b0 + lb;
+        if (b < rows && a < cols) y[(plane * rows + b) * cols + a] = tile[lx][lb];
+    }
+}
+
 // ---------------------------------------------------------- convolution ---
 //
 // A convolution as GEMM (`Backend::conv2d_forward`): `ojas_im2col` lays each

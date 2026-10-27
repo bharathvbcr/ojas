@@ -43,7 +43,13 @@ use crate::link::{
     ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Msg,
     NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
 };
+use crate::permute::{self, Plan};
 
+/// Threads of an `ojas_permute_tile` threadgroup (`PERMUTE_TILE_THREADS`).
+const PERMUTE_TILE_THREADS: usize = 256;
+/// The status word that tells `ojas_permute_runs` and `ojas_permute_tile` not
+/// to test what they read (`PERMUTE_NO_CHECK`): the caller has scanned it.
+const PERMUTE_NO_CHECK: u32 = u32::MAX;
 const ST_IN: u32 = 0;
 const ST_OUT: u32 = 1;
 const ST_WORDS: usize = 8;
@@ -142,6 +148,8 @@ const KERNELS: &[&str] = &[
     "ojas_cached_attn",
     "ojas_cached_attn_merge",
     "ojas_permute",
+    "ojas_permute_runs",
+    "ojas_permute_tile",
     "ojas_bcast_binary",
     "ojas_scale_fwd",
     "ojas_softmax_rows",
@@ -1438,7 +1446,8 @@ impl Worker {
                 rank,
                 oshape,
                 istride,
-            } => self.permute(x, rank, &oshape, &istride),
+                generic,
+            } => self.permute(x, rank, &oshape, &istride, generic),
             Cmd::LayerNorm {
                 x,
                 w,
@@ -1818,33 +1827,137 @@ impl Worker {
     }
 
     /// A bit copy. A NaN or infinity in the input is refused, as the CPU
-    /// reference refuses one; the output holds only copied finite bits, so
-    /// it needs no check of its own.
-    fn permute(&mut self, x: Arg, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<Reply> {
+    /// reference refuses one; the output holds only copied bits of the input,
+    /// so it needs no check of its own. The row-copy and transpose kernels
+    /// test each word they read for the finite check; the generic kernel has
+    /// a scan dispatch before it, as it always had.
+    fn permute(
+        &mut self,
+        x: Arg,
+        rank: u32,
+        oshape: &[u32],
+        istride: &[u32],
+        generic: bool,
+    ) -> Res<Reply> {
         const OP: &str = "permute";
         let xv = self.view(x)?;
         let y = self.fresh(xv.n)?;
         let st = self.status(OP)?;
-        self.check(&st, &xv, ST_IN)?;
-        self.permute_into(&xv, &y, rank, oshape, istride)?;
+        let plan = if generic {
+            Plan::Generic
+        } else {
+            permute::plan(rank as usize, oshape, istride, xv.off, y.off)
+        };
+        let word = if plan == Plan::Generic {
+            self.check(&st, &xv, ST_IN)?;
+            PERMUTE_NO_CHECK
+        } else {
+            ST_IN
+        };
+        self.permute_planned(&xv, &y, rank, oshape, istride, plan, (&st, word))?;
         Ok(self.keep(vec![y]))
     }
 
-    /// `ojas_permute` into `y`, one thread per element of `y`: output axis
-    /// `a` has extent `oshape[a]` and reads `xv` at `istride[a]`. `y` may be
-    /// smaller than `xv` (a slice of it).
-    fn permute_into(&self, xv: &V, y: &V, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<()> {
+    /// A permute into `y` for a caller that has scanned `xv` itself: the
+    /// kernel [`permute::plan`] picks, flagging nothing.
+    fn permute_into(
+        &self,
+        xv: &V,
+        y: &V,
+        rank: u32,
+        oshape: &[u32],
+        istride: &[u32],
+        st: &St,
+    ) -> Res<()> {
+        let plan = permute::plan(rank as usize, oshape, istride, xv.off, y.off);
+        self.permute_planned(xv, y, rank, oshape, istride, plan, (st, PERMUTE_NO_CHECK))
+    }
+
+    /// One dispatch of `plan`'s kernel: output axis `a` has extent
+    /// `oshape[a]` and reads `xv` at `istride[a]`. `y` may be smaller than
+    /// `xv` (a slice of it). `check` is a status slot and the word the
+    /// row-copy and transpose kernels flag in it when a word they read is a
+    /// NaN or infinity, or [`PERMUTE_NO_CHECK`]; `ojas_permute` never checks.
+    #[allow(clippy::too_many_arguments)]
+    fn permute_planned(
+        &self,
+        xv: &V,
+        y: &V,
+        rank: u32,
+        oshape: &[u32],
+        istride: &[u32],
+        plan: Plan,
+        (st, word): (&St, u32),
+    ) -> Res<()> {
         let n = u32_of(y.n)?;
-        let shape_bytes: Vec<u8> = oshape.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        let stride_bytes: Vec<u8> = istride.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        self.k1("ojas_permute", y.n, |b| {
-            bind(b, xv, 0);
-            bind(b, y, 1);
-            set_u32(b, n, 2);
-            set_u32(b, rank, 3);
-            b.bind_bytes(&shape_bytes, 4);
-            b.bind_bytes(&stride_bytes, 5);
-        })
+        // The kernels cover whole rows and tiles and have no tail: refuse a
+        // plan that does not tile the output exactly, rather than leave
+        // elements unwritten.
+        permute::check_covers(&plan, y.n).map_err(|why| metal_err(format!("permute: {why}")))?;
+        let words = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|w| w.to_ne_bytes()).collect() };
+        match plan {
+            Plan::Generic => {
+                let (shape_bytes, stride_bytes) = (words(oshape), words(istride));
+                self.k1("ojas_permute", y.n, |b| {
+                    bind(b, xv, 0);
+                    bind(b, y, 1);
+                    set_u32(b, n, 2);
+                    set_u32(b, rank, 3);
+                    b.bind_bytes(&shape_bytes, 4);
+                    b.bind_bytes(&stride_bytes, 5);
+                })
+            }
+            Plan::Runs { run, outer } => {
+                let stride4: Vec<u32> = outer.stride.iter().map(|s| s / permute::VECTOR).collect();
+                let (shape_bytes, stride_bytes) = (words(&outer.extent), words(&stride4));
+                let total4 = n / permute::VECTOR;
+                let threads = (total4 / permute::WORDS_PER_THREAD) as usize;
+                self.k1("ojas_permute_runs", threads, |b| {
+                    bind(b, xv, 0);
+                    bind(b, y, 1);
+                    set_u32(b, total4, 2);
+                    set_u32(b, run / permute::VECTOR, 3);
+                    set_u32(b, outer.len as u32, 4);
+                    b.bind_bytes(&shape_bytes, 5);
+                    b.bind_bytes(&stride_bytes, 6);
+                    bind_st(b, st, 7);
+                    set_u32(b, word, 8);
+                })
+            }
+            Plan::Transpose {
+                rows,
+                cols,
+                col_stride,
+                outer,
+            } => {
+                let (row_tiles, col_tiles) =
+                    (rows.div_ceil(permute::TILE), cols.div_ceil(permute::TILE));
+                let groups = permute::transpose_groups(rows, cols, outer.count());
+                let groups = u32::try_from(groups)
+                    .map_err(|_| metal_err("permute: transpose grid overflows"))?;
+                let (shape_bytes, stride_bytes) = (words(&outer.extent), words(&outer.stride));
+                self.ktg(
+                    "ojas_permute_tile",
+                    groups as usize,
+                    1,
+                    PERMUTE_TILE_THREADS,
+                    |b| {
+                        bind(b, xv, 0);
+                        bind(b, y, 1);
+                        set_u32(b, rows, 2);
+                        set_u32(b, cols, 3);
+                        set_u32(b, col_stride, 4);
+                        set_u32(b, col_tiles, 5);
+                        set_u32(b, outer.len as u32, 6);
+                        b.bind_bytes(&shape_bytes, 7);
+                        b.bind_bytes(&stride_bytes, 8);
+                        bind_st(b, st, 9);
+                        set_u32(b, word, 10);
+                        set_u32(b, row_tiles, 11);
+                    },
+                )
+            }
+        }
     }
 
     /// The gather; a `half` (bf16) table is scanned on its bits and each
@@ -2935,6 +3048,7 @@ impl Worker {
             4,
             &[g.batch, h, wd, c],
             &[c * h * wd, wd, 1, h * wd],
+            &st,
         )?;
         self.gemm_lane(Lane::ExactF32)
             .nn(
@@ -3001,7 +3115,7 @@ impl Worker {
             self.check(&st, v, ST_IN)?;
         }
         if tq == t {
-            self.permute_into(&qv, &qt, 4, &to_bthd.0, &to_bthd.1)?;
+            self.permute_into(&qv, &qt, 4, &to_bthd.0, &to_bthd.1, &st)?;
         } else {
             self.k1("ojas_pad_q", nk, |bd| {
                 bind(bd, &qv, 0);
@@ -3014,7 +3128,7 @@ impl Worker {
             })?;
         }
         for (src, dst) in [(&kv, &kt), (&vv, &vt)] {
-            self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1)?;
+            self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1, &st)?;
         }
         encoder_attn(
             &self.rt,
@@ -3034,7 +3148,7 @@ impl Worker {
             },
         )
         .map_err(metal_err)?;
-        self.permute_into(&o, &y, 4, &to_bhtd.0, &to_bhtd.1)?;
+        self.permute_into(&o, &y, 4, &to_bhtd.0, &to_bhtd.1, &st)?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
