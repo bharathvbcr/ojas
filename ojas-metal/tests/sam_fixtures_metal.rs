@@ -17,8 +17,8 @@
 use ojas_core::Budget;
 use ojas_metal::MetalBackend;
 use ojas_oracle::sam_fixtures::{
-    attention, axial_tables, gelu, layer_norm_affine_recovered, rope_interleaved, skipped_ops,
-    Fixture, OpReport, ENV_FIXTURES,
+    attention, axial_tables, gelu, group_norm, group_norm_header, layer_norm_affine_recovered,
+    rope_interleaved, skipped_ops, Fixture, OpReport, ENV_FIXTURES, ENV_GROUPNORM_FIXTURES,
 };
 
 fn fixture() -> Fixture<'static> {
@@ -157,4 +157,27 @@ fn the_ops_the_fixture_cannot_check_are_recorded() {
         !skipped.is_empty(),
         "the fixture now holds weights: add the weight-bearing ops"
     );
+}
+
+#[test]
+#[ignore = "needs OJAS_SAM_GROUPNORM_FIXTURES (SpikeTrack groupnorm fixture)"]
+fn group_norm_matches_torch_at_both_pixel_decoder_sizes() {
+    let fx = Fixture::from_env_var(ENV_GROUPNORM_FIXTURES)
+        .unwrap_or_else(|e| panic!("{ENV_GROUPNORM_FIXTURES}: {e}"))
+        .unwrap_or_else(|| panic!("{ENV_GROUPNORM_FIXTURES} is not set: this test cannot run"));
+    // The values the fixture's header must record, asserted rather than
+    // taken from it silently: `group_norm` refuses a header that differs.
+    let (groups, eps) = group_norm_header(&fx).unwrap();
+    assert_eq!((groups, eps), (8, 1e-5));
+    let be = metal();
+    let rows: Vec<OpReport> = ["gn0", "gn1"]
+        .iter()
+        .map(|prefix| {
+            let started = std::time::Instant::now();
+            let row = group_norm(&be, &fx, prefix, groups, eps).unwrap();
+            println!("{prefix}: {:?}", started.elapsed());
+            row
+        })
+        .collect();
+    show(&rows);
 }

@@ -40,8 +40,8 @@ use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
-    ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs,
-    Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
+    ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Msg,
+    NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
 };
 
 const ST_IN: u32 = 0;
@@ -113,6 +113,8 @@ const WS_GROWTH: u64 = 64 << 20;
 const ATTN_THREADS: usize = 128;
 /// Query rows of one `ojas_xattn_part_dD` threadgroup (`XA_ROWS` in the kernel).
 const XA_ROWS: usize = 128;
+/// Threads of one GroupNorm threadgroup (`GN_THREADS` in the kernel).
+const GN_THREADS: usize = 256;
 const ATTN_ROWS: usize = 32;
 /// Largest head dim the tiled attention kernels are compiled for.
 const ATTN_MAX_HEAD_DIM: u32 = 256;
@@ -205,6 +207,9 @@ const KERNELS: &[&str] = &[
     "ojas_xattn_combine_d32",
     "ojas_conv_nchw",
     "ojas_bilinear",
+    "ojas_gn_sum",
+    "ojas_gn_sq",
+    "ojas_gn_apply",
     "ojas_dwconv",
     "ojas_pad_q",
     "ojas_convt_nchw",
@@ -1539,6 +1544,7 @@ impl Worker {
                 geom,
             } => self.depthwise_conv2d(op, [x, w], bias, geom),
             Cmd::Bilinear { x, geom } => self.bilinear(x, geom),
+            Cmd::GroupNorm { x, w, b, geom, eps } => self.group_norm([x, w, b], geom, eps),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
@@ -2600,6 +2606,96 @@ impl Worker {
                 set_u32(b, v, 5 + i);
             }
         })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// GroupNorm in three passes over `geom.chunks` threadgroups per row
+    /// (`ojas_gn_sum`, `ojas_gn_sq`, `ojas_gn_apply`), with the partial sums
+    /// as scratch. The operands are scanned here and the kernel checks the
+    /// output.
+    fn group_norm(&mut self, args: [Arg; 3], g: GroupNormGeom, eps: f32) -> Res<Reply> {
+        const OP: &str = "group_norm_forward";
+        let [x, w, b] = args;
+        let (xv, wv, bv) = (self.view(x)?, self.view(w)?, self.view(b)?);
+        let channels = g.groups as usize * g.per_group as usize;
+        let n = (g.rows as usize)
+            .checked_mul(g.width as usize)
+            .ok_or_else(|| metal_err(format!("{OP}: extent overflows")))?;
+        if g.chunks == 0
+            || g.chunk_len == 0
+            || u64::from(g.chunks) * u64::from(g.chunk_len) < u64::from(g.width)
+            || g.spatial == 0
+            || u64::from(g.per_group) * u64::from(g.spatial) != u64::from(g.width)
+            || g.groups == 0
+            || xv.n != n
+            || wv.n != channels
+            || bv.n != channels
+        {
+            return Err(metal_err(format!(
+                "{OP}: buffers do not hold {} rows of {} over {channels} channels",
+                g.rows, g.width
+            )));
+        }
+        let parts = (g.rows as usize)
+            .checked_mul(g.chunks as usize)
+            .ok_or_else(|| metal_err(format!("{OP}: partials overflow")))?;
+        let y = self.fresh(n)?;
+        let (sums, squares) = (self.fresh(parts)?, self.fresh(parts)?);
+        let st = self.status(OP)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        self.check_operand(&st, b, &bv, ST_IN)?;
+        let (width, chunks, chunk_len) = (g.width, g.chunks, g.chunk_len);
+        self.ktg(
+            "ojas_gn_sum",
+            chunks as usize,
+            g.rows as usize,
+            GN_THREADS,
+            |bd| {
+                bind(bd, &xv, 0);
+                bind(bd, &sums, 1);
+                set_u32(bd, width, 2);
+                set_u32(bd, chunks, 3);
+                set_u32(bd, chunk_len, 4);
+            },
+        )?;
+        self.ktg(
+            "ojas_gn_sq",
+            chunks as usize,
+            g.rows as usize,
+            GN_THREADS,
+            |bd| {
+                bind(bd, &xv, 0);
+                bind(bd, &sums, 1);
+                bind(bd, &squares, 2);
+                set_u32(bd, width, 3);
+                set_u32(bd, chunks, 4);
+                set_u32(bd, chunk_len, 5);
+            },
+        )?;
+        self.ktg(
+            "ojas_gn_apply",
+            chunks as usize,
+            g.rows as usize,
+            GN_THREADS,
+            |bd| {
+                bind(bd, &xv, 0);
+                bind(bd, &wv, 1);
+                bind(bd, &bv, 2);
+                bind(bd, &sums, 3);
+                bind(bd, &squares, 4);
+                bind(bd, &y, 5);
+                bind_st(bd, &st, 6);
+                set_u32(bd, width, 7);
+                set_u32(bd, chunks, 8);
+                set_u32(bd, chunk_len, 9);
+                set_u32(bd, g.spatial, 10);
+                set_u32(bd, g.per_group, 11);
+                set_u32(bd, g.groups, 12);
+                set_f32(bd, eps, 13);
+            },
+        )?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }

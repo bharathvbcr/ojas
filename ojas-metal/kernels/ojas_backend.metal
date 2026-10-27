@@ -1995,6 +1995,142 @@ kernel void ojas_bilinear(
     if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
+// ------------------------------------------------------------- group norm ---
+//
+// `Backend::group_norm_forward`: each (image, group) row is `per_group`
+// channels of `spatial` values, contiguous. A row has far more values than one
+// threadgroup should walk (0.66 to 2.65 million at SAM's pixel decoder, 8
+// rows), so the statistics take two passes over `chunks` threadgroups per row
+// and a third pass normalizes:
+//
+//   ojas_gn_sum    partial sums of each chunk
+//   ojas_gn_sq     the row mean from the partial sums, then partial sums of
+//                  (x - mean)^2
+//   ojas_gn_apply  mean and variance from the partials, then
+//                  ((x - mean) * rsqrt(var + eps)) * weight + bias
+//
+// Statistics are f32 (Metal has no f64): a thread sums a strided share of its
+// chunk, a threadgroup reduces its threads in a fixed order, and a pass reads
+// the chunk partials in ascending order, so a result repeats bit for bit. The
+// CPU's are f64 sums rounded once; the two differ by f32 summation error.
+// A non-finite output sets ST_OUT (the host scans the inputs).
+//
+// tessl has no group norm, and `bert::layer_norm` does not fit: it runs one
+// threadgroup per row, so SAM's 8 rows would use 8 threadgroups, and its
+// affine is one weight per column of the row where GroupNorm's is one per
+// channel over blocks of `spatial` values.
+#define GN_THREADS 256u
+
+inline float ojas_gn_block_sum(float v, threadgroup float *sh, uint tid, uint sg, uint lane)
+{
+    v = simd_sum(v);
+    if (lane == 0u) sh[sg] = v;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total = 0.0f;
+    if (tid == 0u) {
+        for (uint i = 0u; i < GN_THREADS / 32u; ++i) total += sh[i];
+    }
+    return total;
+}
+
+inline float ojas_gn_total(device const float *part, uint row, uint chunks)
+{
+    float total = 0.0f;
+    for (uint c = 0u; c < chunks; ++c) total += part[(ulong)row * chunks + c];
+    return total;
+}
+
+kernel void ojas_gn_sum(
+    device const float *x [[buffer(0)]],
+    device float *part [[buffer(1)]],
+    constant uint &width [[buffer(2)]],
+    constant uint &chunks [[buffer(3)]],
+    constant uint &chunk_len [[buffer(4)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float sh[GN_THREADS / 32u];
+    const ulong base = (ulong)tg.y * width;
+    const uint lo = min(width, tg.x * chunk_len);
+    const uint hi = min(width, lo + chunk_len);
+    float acc = 0.0f;
+    for (uint i = lo + tid; i < hi; i += GN_THREADS) acc += x[base + i];
+    const float total = ojas_gn_block_sum(acc, sh, tid, sg, lane);
+    if (tid == 0u) part[(ulong)tg.y * chunks + tg.x] = total;
+}
+
+kernel void ojas_gn_sq(
+    device const float *x [[buffer(0)]],
+    device const float *part_sum [[buffer(1)]],
+    device float *part_sq [[buffer(2)]],
+    constant uint &width [[buffer(3)]],
+    constant uint &chunks [[buffer(4)]],
+    constant uint &chunk_len [[buffer(5)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float sh[GN_THREADS / 32u];
+    threadgroup float mean_sh;
+    if (tid == 0u) mean_sh = precise::divide(ojas_gn_total(part_sum, tg.y, chunks), (float)width);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float mean = mean_sh;
+    const ulong base = (ulong)tg.y * width;
+    const uint lo = min(width, tg.x * chunk_len);
+    const uint hi = min(width, lo + chunk_len);
+    float acc = 0.0f;
+    for (uint i = lo + tid; i < hi; i += GN_THREADS) {
+        const float d = x[base + i] - mean;
+        acc += d * d;
+    }
+    const float total = ojas_gn_block_sum(acc, sh, tid, sg, lane);
+    if (tid == 0u) part_sq[(ulong)tg.y * chunks + tg.x] = total;
+}
+
+kernel void ojas_gn_apply(
+    device const float *x [[buffer(0)]],
+    device const float *weight [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device const float *part_sum [[buffer(3)]],
+    device const float *part_sq [[buffer(4)]],
+    device float *y [[buffer(5)]],
+    device atomic_uint *st [[buffer(6)]],
+    constant uint &width [[buffer(7)]],
+    constant uint &chunks [[buffer(8)]],
+    constant uint &chunk_len [[buffer(9)]],
+    constant uint &spatial [[buffer(10)]],
+    constant uint &per_group [[buffer(11)]],
+    constant uint &groups [[buffer(12)]],
+    constant float &eps [[buffer(13)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float stats[2];
+    if (tid == 0u) {
+        stats[0] = precise::divide(ojas_gn_total(part_sum, tg.y, chunks), (float)width);
+        const float var = precise::divide(ojas_gn_total(part_sq, tg.y, chunks), (float)width);
+        stats[1] = precise::divide(1.0f, precise::sqrt(var + eps));
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float mean = stats[0];
+    const float rstd = stats[1];
+    const ulong base = (ulong)tg.y * width;
+    const uint first = (tg.y % groups) * per_group;
+    const uint lo = min(width, tg.x * chunk_len);
+    const uint hi = min(width, lo + chunk_len);
+    bool bad = false;
+    for (uint i = lo + tid; i < hi; i += GN_THREADS) {
+        const uint ch = first + i / spatial;
+        const float r = ((x[base + i] - mean) * rstd) * weight[ch] + bias[ch];
+        y[base + i] = r;
+        bad = bad || !isfinite(r);
+    }
+    if (bad) ojas_flag(st, ST_OUT);
+}
+
 // ---------------------------------------- broadcast, scale and softmax ---
 //
 // Forward ops of the encoder family (see `Backend::broadcast_add_forward`,

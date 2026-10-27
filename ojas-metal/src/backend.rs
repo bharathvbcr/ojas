@@ -85,17 +85,17 @@ use ojas_core::{
     cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
     embedding_forward_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
     gdn_log_decay_backward_dims, gdn_log_decay_forward_dims, gelu_erf_forward_dims,
-    interpolate_bilinear_forward_dims, kv_cache_write_dims, layer_norm_forward_dims,
-    linear_backward_dims, linear_bias_forward_dims, linear_ce_dims, linear_forward_dims,
-    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_unsupported_metal_gdn,
-    refuse_unsupported_metal_head_dim, relu_forward_dims, residual_add_backward_dims,
-    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
-    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
-    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims,
-    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
-    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    group_norm_forward_dims, interpolate_bilinear_forward_dims, kv_cache_write_dims,
+    layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
+    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
+    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, relu_forward_dims,
+    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
+    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
+    rope_half_split_backward_dims, rope_half_split_forward_dims, rope_interleaved_backward_dims,
+    rope_interleaved_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
+    scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
+    silu_forward_dims, softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
     value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
     BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
     ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
@@ -107,8 +107,9 @@ use ojas_core::{
 
 use crate::link::{
     cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom,
-    BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Link,
-    ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
+    BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane,
+    LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits,
+    SQ_OUT_WORDS,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -1104,6 +1105,22 @@ fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims
             d.kernel, p.stride, p.padding, p.output_padding
         ),
     })
+}
+
+/// Threadgroups the GroupNorm passes aim to launch, so a few large rows
+/// (SAM's 8 rows of 0.66 to 2.65 million values) fill the GPU, and the fewest
+/// values a threadgroup is given.
+const GROUP_NORM_TARGET_GROUPS: usize = 512;
+const GROUP_NORM_MIN_CHUNK: usize = 1024;
+
+/// `(chunks, chunk_len)` of a GroupNorm row of `width` values among `rows`
+/// rows: enough chunks to reach the target, none shorter than the minimum,
+/// and the ranges cover the row.
+fn group_norm_chunks(rows: usize, width: usize) -> (usize, usize) {
+    let wanted = GROUP_NORM_TARGET_GROUPS.div_ceil(rows.max(1));
+    let chunks = wanted.clamp(1, width.div_ceil(GROUP_NORM_MIN_CHUNK).max(1));
+    let chunk_len = width.div_ceil(chunks);
+    (width.div_ceil(chunk_len).max(1), chunk_len)
 }
 
 /// The convolution kernels' geometry of validated `dims`.
@@ -2454,6 +2471,48 @@ impl Backend for MetalBackend {
         };
         u32_dim(OP, product(OP, &dims.out_shape())?)?;
         self.one(OP, &dims.out_shape(), 0, Cmd::Bilinear { x, geom })
+    }
+
+    /// GroupNorm as three passes over many threadgroups per `(image, group)`
+    /// row (see `ojas_gn_sum`): f32 two-pass statistics, so values agree with
+    /// the CPU's `f64` ones to f32 summation error, not bit for bit. The
+    /// per-chunk partial sums are charged as scratch.
+    fn group_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "group_norm_forward";
+        let dims = group_norm_forward_dims(input, weight, bias, groups, eps)?;
+        let (x, w, b) = (
+            self.f32(OP, input)?,
+            self.f32(OP, weight)?,
+            self.f32(OP, bias)?,
+        );
+        let rows = product(OP, &[dims.batch, dims.groups])?;
+        let per_group = dims.channels / dims.groups;
+        let width = product(OP, &[per_group, dims.spatial])?;
+        u32_dim(OP, product(OP, &[rows, width])?)?;
+        let (chunks, chunk_len) = group_norm_chunks(rows, width);
+        let geom = GroupNormGeom {
+            rows: u32_dim(OP, rows)?,
+            width: u32_dim(OP, width)?,
+            chunks: u32_dim(OP, chunks)?,
+            chunk_len: u32_dim(OP, chunk_len)?,
+            spatial: u32_dim(OP, dims.spatial)?,
+            per_group: u32_dim(OP, per_group)?,
+            groups: u32_dim(OP, dims.groups)?,
+        };
+        let scratch = product(OP, &[2, rows, chunks])?;
+        self.one(
+            OP,
+            input.shape(),
+            scratch,
+            Cmd::GroupNorm { x, w, b, geom, eps },
+        )
     }
 
     fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
