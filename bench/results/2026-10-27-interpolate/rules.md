@@ -1,0 +1,18 @@
+Decision rules, fixed before the first measurement (committed ahead of the results). No timing of the rows below had been seen when this file was written.
+
+Question. The frame ledger (`bench/results/2026-10-27-frame-ledger`, 11f5091) has one row it could not number: `interpolate_bilinear_forward [2, 1, 288, 288]`, 2 calls per frame, whose output size the profile does not carry. tessl-45 supplied it: the two calls are session.rs:525 (the memory-encoder input, a fixed 1152 x 1152 output from `[n, 1, 288, 288]`) and session.rs:589 (the output at the video's own size, from `[total, 1, 288, 288]`, e.g. 480 x 640 for VISEM). What does each cost on a quiet M5 Pro? Measurement only: no kernel, routing or Backend change.
+
+align_corners. Read from the call sites in SpikeTrack (`/Users/bharath/Code/research/SpikeTrack`, df306f0): `false` at session.rs:525, 589 and 646, state.rs:378, vos.rs:275, 287, 419, and memory_encoder.rs:90. The bench passes `false`.
+
+Rows (added to the `ROWS` table of `ojas-metal/examples/frame_ops_bench.rs`; method unchanged from `bench/results/2026-10-27-frame-ops/rules.md`):
+- `[2, 1, 288, 288] -> [1152, 1152]` (session.rs:525);
+- `[2, 1, 288, 288] -> [480, 640]` (session.rs:589 at the VISEM demo size, the one the ledger will use);
+- `[2, 1, 288, 288] -> [480, 854]` (session.rs:589 at 480p landscape; the size of the profiled DAVIS judo frame is inferred, not read from the profile log, so this row is a sensitivity point and is not charged to the ledger).
+
+n and total. The ledger gives 2 objects for the profiled frame (`[2, 1, 288, 288]`), so n = total = 2. The input is per object (one 288 x 288 mask each) and does not depend on F: the memory length m enters only the attention rows. The same per-call figure therefore applies at F = 1, 2, 3 and 7; no per-F re-measurement is made. This is an inference from the call sites (session.rs:515-525, 575-589), not a measured result; if the demo's n or total differs from 2 at F = 7, the figure scales with it (the op is memory-bound), and the row is to be re-run with that count.
+
+Arms and method (same as frame_ops): device-resident uniform [-1, 1] input uploaded once; 5 warm-ups, 25 timed rounds; arms A and A' (the repeat) interleaved, odd rounds reversed; an f32 `linear_forward` at fc1 (`[5184,1024]x[4736,1024]`) as the control in every row's run, which must repeat 6.3 TFLOP/s within 3% (6.11 to 6.49); min, p10, median, p90; 1-minute load average at start and end of every attempt (clean at most 6.0); a pair is NOISY when |median(A) - median(A')| exceeds the larger p90 - p10; a row attempt is clean when load, control and pairs all pass; up to 3 attempts per row; a row with no clean attempt gets no number. The ledger figure is the median of arm A.
+
+What goes into the ledger. The one row `[2, 1, 288, 288]` (2 calls) is split into two ledger rows of one call each, `[2, 1, 288, 288] -> [1152, 1152]` and `[2, 1, 288, 288] -> [480, 640]`, with the figures from this run at every F; the totals are recomputed by the same arithmetic as before, so the interpolate family goes from 1 numbered row of 2 to 3 numbered rows of 3, and the ledger has 168 rows. `[480, 854]` is reported here only.
+
+What would change a reading: a control outside 6.11 to 6.49 (the run is contended and repeated); a NOISY pair in every attempt (no number); an interpolation refused at an output size (reported as a gap); a per-call figure for the video-size call that is large next to the 1152 x 1152 one (the output size is then the cost). Not timed: SpikeTrack follows each call with `host_of`, a device-to-host read of the result; this bench times the interpolation alone with a device-resident output, as the other frame_ops rows do, so the readback is not in the figure.

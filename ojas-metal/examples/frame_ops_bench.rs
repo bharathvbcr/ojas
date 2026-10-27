@@ -357,6 +357,24 @@ mod bench {
             extra: &[1152, 1152],
         },
         Row {
+            op: Op::Interpolate,
+            key: "[2, 1, 288, 288] -> [1152, 1152]",
+            shapes: &[&[2, 1, 288, 288]],
+            extra: &[1152, 1152],
+        },
+        Row {
+            op: Op::Interpolate,
+            key: "[2, 1, 288, 288] -> [480, 640]",
+            shapes: &[&[2, 1, 288, 288]],
+            extra: &[480, 640],
+        },
+        Row {
+            op: Op::Interpolate,
+            key: "[2, 1, 288, 288] -> [480, 854]",
+            shapes: &[&[2, 1, 288, 288]],
+            extra: &[480, 854],
+        },
+        Row {
             op: Op::LayerNorm,
             key: "[1, 1, 256] x [256] x [256]",
             shapes: &[&[1, 1, 256], &[256], &[256]],
