@@ -1,8 +1,9 @@
 //! `conv2d_forward` on Metal against the CPU backend: im2col, tessl's exact
 //! f32 GEMM and a layout pass, for the SAM cases (the 14 x 14 stride-14
 //! patch embedding without bias, 1 x 1 and 3 x 3 padded convolutions with
-//! bias at the neck's 256 channels). Every other configuration is
-//! `Unsupported` and names the op and the configuration; a malformed call is
+//! bias at the neck's 256 channels, the memory encoder's stride-2 3 x 3
+//! downsampler) at any stride and padding. Dilation above 1 and groups are
+//! `Unsupported` and name the op and the configuration; a malformed call is
 //! refused as the validator refuses it; a non-finite operand is a deferred
 //! fault under `conv2d_forward`.
 
@@ -261,12 +262,7 @@ fn a_configuration_the_gemm_does_not_cover_is_unsupported_and_named() {
     let x = up(&m, &rand(&[1, 4, 12, 12], 70, 1.0));
     let w3 = up(&m, &rand(&[4, 4, 3, 3], 71, 1.0));
     let w2 = up(&m, &rand(&[4, 2, 3, 3], 72, 1.0));
-    let w1 = up(&m, &rand(&[4, 1, 3, 3], 73, 1.0));
     let cases: Vec<(&str, &Tensor, Conv2dParams)> = vec![
-        ("stride 2 with a 3x3 kernel", &w3, params([2, 2], [1, 1])),
-        ("stride 2 unpadded 3x3", &w3, params([2, 2], [0, 0])),
-        ("kernel == stride with padding", &w3, params([3, 3], [1, 1])),
-        ("anisotropic stride", &w3, params([1, 2], [0, 0])),
         (
             "dilation 2",
             &w3,
@@ -276,19 +272,20 @@ fn a_configuration_the_gemm_does_not_cover_is_unsupported_and_named() {
             },
         ),
         (
-            "groups 2",
-            &w2,
+            "dilation 1 x 2",
+            &w3,
             Conv2dParams {
-                groups: 2,
+                dilation: [1, 2],
+                stride: [2, 2],
+                padding: [1, 1],
                 ..Conv2dParams::new()
             },
         ),
         (
-            "depthwise",
-            &w1,
+            "groups 2",
+            &w2,
             Conv2dParams {
-                groups: 4,
-                padding: [1, 1],
+                groups: 2,
                 ..Conv2dParams::new()
             },
         ),
@@ -301,7 +298,7 @@ fn a_configuration_the_gemm_does_not_cover_is_unsupported_and_named() {
             Err(OjasError::Unsupported { op, ref detail }) => {
                 assert_eq!(op, "conv2d_forward", "{what}");
                 assert!(
-                    detail.contains("stride") && detail.contains("groups"),
+                    detail.contains("dilation") && detail.contains("groups"),
                     "{what}: the detail names the configuration: {detail}"
                 );
             }
@@ -309,6 +306,184 @@ fn a_configuration_the_gemm_does_not_cover_is_unsupported_and_named() {
         }
         ok("sync", m.sync());
     }
+}
+
+#[test]
+fn strided_and_padded_convolutions_match_cpu() {
+    let m = metal();
+    let p = |stride: [usize; 2], padding: [usize; 2]| params(stride, padding);
+    check(
+        &m,
+        "3x3 s2 p1",
+        &[2, 4, 12, 12],
+        &[6, 4, 3, 3],
+        true,
+        p([2, 2], [1, 1]),
+        110,
+    );
+    check(
+        &m,
+        "3x3 s2 p1 odd",
+        &[1, 3, 13, 17],
+        &[5, 3, 3, 3],
+        true,
+        p([2, 2], [1, 1]),
+        111,
+    );
+    check(
+        &m,
+        "3x3 s2 p0",
+        &[1, 2, 9, 8],
+        &[3, 2, 3, 3],
+        false,
+        p([2, 2], [0, 0]),
+        112,
+    );
+    check(
+        &m,
+        "3x3 s(1,2) p(1,0)",
+        &[1, 2, 7, 9],
+        &[3, 2, 3, 3],
+        true,
+        p([1, 2], [1, 0]),
+        113,
+    );
+    check(
+        &m,
+        "5x5 s3 p2",
+        &[1, 3, 16, 16],
+        &[4, 3, 5, 5],
+        true,
+        p([3, 3], [2, 2]),
+        114,
+    );
+    check(
+        &m,
+        "k14 s14 p1",
+        &[1, 3, 30, 30],
+        &[4, 3, 14, 14],
+        true,
+        p([14, 14], [1, 1]),
+        115,
+    );
+    check(
+        &m,
+        "1x1 s2",
+        &[1, 8, 9, 9],
+        &[4, 8, 1, 1],
+        true,
+        p([2, 2], [0, 0]),
+        116,
+    );
+    // Padding at and past the kernel edge: windows that see only zeros.
+    check(
+        &m,
+        "3x3 p3",
+        &[1, 2, 4, 4],
+        &[2, 2, 3, 3],
+        true,
+        p([1, 1], [3, 3]),
+        117,
+    );
+    check(
+        &m,
+        "3x3 s2 p5",
+        &[1, 2, 4, 5],
+        &[2, 2, 3, 3],
+        true,
+        p([2, 2], [5, 5]),
+        118,
+    );
+}
+
+#[test]
+fn the_memory_encoder_downsampler_matches_cpu_at_its_channel_counts() {
+    let m = metal();
+    let p = params([2, 2], [1, 1]);
+    // 3x3 s2 p1 with bias: 32 -> 16 -> 64 -> 256 -> 1024, each halving the
+    // side; 1152 -> 576 -> 288 -> 144 -> 72 in the model, 1/8 of that here.
+    check(
+        &m,
+        "ds 32->16 144->72",
+        &[1, 32, 144, 144],
+        &[16, 32, 3, 3],
+        true,
+        p,
+        120,
+    );
+    check(
+        &m,
+        "ds 16->64 72->36",
+        &[1, 16, 72, 72],
+        &[64, 16, 3, 3],
+        true,
+        p,
+        121,
+    );
+    check(
+        &m,
+        "ds 64->256 36->18",
+        &[1, 64, 36, 36],
+        &[256, 64, 3, 3],
+        true,
+        p,
+        122,
+    );
+    check(
+        &m,
+        "ds 256->1024 18->9",
+        &[1, 256, 18, 18],
+        &[1024, 256, 3, 3],
+        true,
+        p,
+        123,
+    );
+}
+
+/// The downsampler at its real first stage, `[1, 32, 1152, 1152]` to 576 x
+/// 576: the im2col matrix is `331776 x 288` f32 (382 MB) and the product
+/// `331776 x 16` (21 MB).
+#[test]
+#[ignore = "slow: 1152 x 1152 reference on the CPU; run with --ignored"]
+fn the_downsampler_at_1152_matches_cpu() {
+    let m = metal();
+    let p = params([2, 2], [1, 1]);
+    check(
+        &m,
+        "ds 32->16 1152->576",
+        &[1, 32, 1152, 1152],
+        &[16, 32, 3, 3],
+        true,
+        p,
+        130,
+    );
+    check(
+        &m,
+        "ds 16->64 576->288",
+        &[1, 16, 576, 576],
+        &[64, 16, 3, 3],
+        true,
+        p,
+        131,
+    );
+    check(
+        &m,
+        "ds 64->256 288->144",
+        &[1, 64, 288, 288],
+        &[256, 64, 3, 3],
+        true,
+        p,
+        132,
+    );
+    check(
+        &m,
+        "ds 256->1024 144->72",
+        &[1, 256, 144, 144],
+        &[1024, 256, 3, 3],
+        true,
+        p,
+        133,
+    );
 }
 
 #[test]
@@ -439,4 +614,36 @@ fn the_neck_scales_144_and_288_match_cpu() {
         params([1, 1], [0, 0]),
         102,
     );
+}
+
+/// Metal wall clock of the memory-encoder downsampler at its real sizes
+/// (every stage 3x3 stride 2 padding 1 with bias): minimum of 3 calls after
+/// one warm-up, each ended by a sync. Run with `--ignored --nocapture`.
+#[test]
+#[ignore = "timing, not a correctness check"]
+fn the_downsampler_at_1152_wall_clock() {
+    let m = metal();
+    let p = params([2, 2], [1, 1]);
+    for (what, x, w) in [
+        ("32->16 1152->576", [1, 32, 1152, 1152], [16, 32, 3, 3]),
+        ("16->64 576->288", [1, 16, 576, 576], [64, 16, 3, 3]),
+        ("64->256 288->144", [1, 64, 288, 288], [256, 64, 3, 3]),
+        ("256->1024 144->72", [1, 256, 144, 144], [1024, 256, 3, 3]),
+    ] {
+        let (dx, dw) = (up(&m, &rand(&x, 1, 1.0)), up(&m, &rand(&w, 2, 0.1)));
+        let db = up(&m, &rand(&[w[0]], 3, 1.0));
+        let mut best = f64::MAX;
+        for i in 0..4 {
+            ok("sync", m.sync());
+            let start = std::time::Instant::now();
+            let y = ok("conv", m.conv2d_forward(&dx, &dw, Some(&db), p));
+            ok("sync", m.sync());
+            let ms = start.elapsed().as_secs_f64() * 1e3;
+            drop(y);
+            if i > 0 {
+                best = best.min(ms);
+            }
+        }
+        eprintln!("DOWNSAMPLER {what}: {best:.2} ms (min of 3)");
+    }
 }

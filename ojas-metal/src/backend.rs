@@ -1003,21 +1003,20 @@ fn rope_mode(op: &'static str, dims: &RopeDims) -> Res<(u32, u32, RopeMode)> {
     Ok((u32_dim(op, dims.rows)?, u32_dim(op, dims.dim)?, mode))
 }
 
-/// Refuse a convolution the GEMM reformulation does not cover: only a
-/// kernel equal to its stride with no padding, or stride 1 with any padding,
-/// at dilation 1 and one group, runs. The validator has run, so every
-/// refusal here is a device limit, never a malformed call.
+/// Refuse a convolution the GEMM reformulation does not cover: dilation
+/// above 1 and more than one group. Any stride and padding runs
+/// (`ojas_im2col` forms the window of every output pixel). The validator has
+/// run, so every refusal here is a device limit, never a malformed call.
 fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
     let p = d.params;
-    let patches = p.stride == d.kernel && p.padding == [0, 0];
-    if p.groups == 1 && p.dilation == [1, 1] && (patches || p.stride == [1, 1]) {
+    if p.groups == 1 && p.dilation == [1, 1] {
         return Ok(());
     }
     Err(OjasError::Unsupported {
         op,
         detail: format!(
-            "Metal runs kernel == stride without padding, or stride 1, at dilation 1 and one \
-             group; got kernel {:?}, stride {:?}, padding {:?}, dilation {:?}, groups {}",
+            "Metal runs dilation 1 and one group, at any stride and padding; got kernel {:?}, \
+             stride {:?}, padding {:?}, dilation {:?}, groups {}",
             d.kernel, p.stride, p.padding, p.dilation, p.groups
         ),
     })
@@ -2184,10 +2183,10 @@ impl Backend for MetalBackend {
         rope_interleaved(self, OP, &dims, [grad_output, cos, sin], true)
     }
 
-    /// The SAM cases as im2col, a GEMM and a layout pass: a kernel equal to
-    /// its stride without padding (the patch embedding), and stride 1 with
-    /// any padding (1x1 and 3x3 convolutions). Dilation, groups and any other
-    /// stride are [`OjasError::Unsupported`].
+    /// A convolution as im2col, a GEMM and a layout pass, at any stride and
+    /// padding (the patch embedding, 1x1 and 3x3 convolutions, the strided
+    /// downsampler). Dilation above 1 and groups are
+    /// [`OjasError::Unsupported`].
     fn conv2d_forward(
         &self,
         input: &Tensor,
