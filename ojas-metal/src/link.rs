@@ -375,6 +375,20 @@ pub(crate) struct EncAttnGeom {
     pub d: u32,
 }
 
+/// GroupNorm over `rows` (image, group) rows of `width` contiguous values,
+/// `per_group` channels of `spatial` each; every row is cut into `chunks`
+/// ranges of `chunk_len` values, one threadgroup each.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GroupNormGeom {
+    pub rows: u32,
+    pub width: u32,
+    pub chunks: u32,
+    pub chunk_len: u32,
+    pub spatial: u32,
+    pub per_group: u32,
+    pub groups: u32,
+}
+
 /// A bilinear resample of `planes` `[h, w]` images to `[oh, ow]`; `scale_y`
 /// and `scale_x` are the axes' f32 source-index scales, formed on the host
 /// as the CPU forms them.
@@ -676,6 +690,39 @@ pub(crate) enum Cmd {
         w: Arg,
         bias: Option<Arg>,
         geom: ConvGeom,
+    },
+    /// `group_norm_forward` in three passes (`ojas_gn_sum`, `ojas_gn_sq`,
+    /// `ojas_gn_apply`); the per-chunk partial sums are scratch.
+    GroupNorm {
+        x: Arg,
+        w: Arg,
+        b: Arg,
+        geom: GroupNormGeom,
+        eps: f32,
+    },
+    /// `concat` of `xs` along an axis: one `ojas_concat_part` per input into
+    /// the output, whose rows are `axis_lens.sum() * inner` long. Every
+    /// input is `outer` rows of `axis_lens[i] * inner`.
+    Concat {
+        xs: Vec<Arg>,
+        outer: u32,
+        inner: u32,
+        axis_lens: Vec<u32>,
+    },
+    /// `slice`: `len` rows of `inner` starting at row `start` of each of
+    /// `outer` blocks of `axis_len` rows.
+    Slice {
+        x: Arg,
+        outer: u32,
+        inner: u32,
+        axis_len: u32,
+        start: u32,
+        len: u32,
+    },
+    /// `fill`: a fresh buffer of `bytes` bytes whose every word is `word`.
+    Fill {
+        bytes: usize,
+        word: u32,
     },
     /// `interpolate_bilinear_forward` on `ojas_bilinear`.
     Bilinear {

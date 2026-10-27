@@ -138,7 +138,7 @@ func run(check bool) error {
 		sources[p] = gen
 		files[p] = []byte(gen)
 	}
-	unresolved := 0
+	unresolved, ragged := 0, 0
 	for _, d := range docs {
 		text, ok := sources[d.Src]
 		if !ok {
@@ -159,6 +159,10 @@ func run(check bool) error {
 		}
 		d.Desc = r.desc
 		unresolved += r.unresolved
+		ragged += r.ragged
+	}
+	if ragged > 0 {
+		return fmt.Errorf("%d table rows have a different number of cells than their header; escape a | inside a cell as \\| or write it another way", ragged)
 	}
 	if unresolved > 0 {
 		return fmt.Errorf("%d links in the markdown point at nothing; fix the source", unresolved)
@@ -493,6 +497,10 @@ type renderer struct {
 	title      string
 	desc       string
 	unresolved int
+	// ragged counts table rows whose cell count differs from the header's:
+	// an unescaped | in a cell splits it, and the renderer would otherwise
+	// drop the cells past the header's width without a word.
+	ragged int
 }
 
 var (
@@ -808,6 +816,9 @@ func (r *renderer) table(rows []string) string {
 	for _, row := range rows[2:] {
 		b.WriteString("<tr>")
 		cells := splitRow(row)
+		if len(cells) != len(head) {
+			r.ragged++
+		}
 		for i := range head {
 			s := ""
 			if i < len(cells) {
