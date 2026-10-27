@@ -273,17 +273,19 @@ fn softmax_grad(
     b.arg(set.logits.slice_mut())
         .arg(ws.m.slice())
         .arg(ws.s.slice())
+        .arg(ws.t.slice())
         .arg(ws.targets.slice())
         .arg(&n)
         .arg(&wd)
         .arg(&ld)
         .arg(&v0)
         .arg(&factor);
-    // SAFETY: (float* logits, const float* m, const float* s, const unsigned
-    // int* targets, ull n_rows, ull width, ull ld, ull v0, float scale);
-    // logits is [n, wd] dense and m, s, targets hold n (CeWorkspace::new
-    // sized them from the plan). The grid strides over n * wd with one writer per logit, in
-    // place; logits is a distinct allocation from m, s and targets.
+    // SAFETY: (float* logits, const float* m, const float* s, const float*
+    // tlogit, const unsigned int* targets, ull n_rows, ull width, ull ld, ull
+    // v0, float scale); logits is [n, wd] dense and m, s, tlogit, targets hold
+    // n (CeWorkspace::new sized them from the plan). The grid strides over
+    // n * wd with one writer per logit, in place; logits is a distinct
+    // allocation from m, s, tlogit and targets.
     unsafe { b.launch(cfg(l)) }.map_err(|e| driver_error(CE_SOFTMAX_GRAD, e))?;
     Ok(())
 }

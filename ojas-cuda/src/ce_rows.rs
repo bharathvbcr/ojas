@@ -15,15 +15,17 @@
 //!    row's running max `m` and running `s = sum(exp(logit - m))` with an
 //!    **online log-sum-exp** (`m_new = max(m_old, chunk max)`,
 //!    `s = s_old * exp(m_old - m_new) + sum(exp(logit - m_new))`), and picks up
-//!    the target's logit when its chunk passes. The per-row loss is
-//!    `m + ln(s) - logit[target]`, formed in f64 on the host from the three
-//!    f32s, as tessl does (`cross_entropy.rs:376-381`);
+//!    the target's logit when its chunk passes. The target column is left out
+//!    of `m` and of `s`. The per-row loss is softplus of the negated margin,
+//!    `ln(1 + s · exp(m - logit[target]))`, formed in f64 on the host from the
+//!    three f32s. `s == 0` (one class, or a target-only chunk so far) is loss 0;
 //! 3. **second walk** (with gradients): the chunk's logits are recomputed and
-//!    `qd_ce_softmax_grad_f32` turns them, in place, into
-//!    `dlogits = (exp(logit - lse) - onehot) * scale'` (`scale' = scale / n`
-//!    for the mean); then `dh (+)= dlogits @ W_c` (K1 `nn`; the first chunk
-//!    overwrites, the rest add) and `dW[v0..v0+w] = dlogitsᵀ @ h` (K1 `tn`).
-//!    `dW` is overwritten; with the tied embedding, K9's backward adds onto it.
+//!    `qd_ce_softmax_grad_f32` turns them, in place, into the other-class
+//!    gradient `exp(logit - m) * scale'` and the target column `-s * scale'`
+//!    (`scale' = scale / n` for the mean), so a row sums to 0 in f32; then
+//!    `dh (+)= dlogits @ W_c` (K1 `nn`; the first chunk overwrites, the rest
+//!    add) and `dW[v0..v0+w] = dlogitsᵀ @ h` (K1 `tn`). `dW` is overwritten;
+//!    with the tied embedding, K9's backward adds onto it.
 //!
 //! Scratch is bounded by the chunk: `[n, chunk]` logits and `[n]` row state.
 //! K1's GEMMs take buffer views, so the head chunk is read from `W` and the
@@ -32,24 +34,26 @@
 //! [`chunk_copy_bytes`]). A vocabulary that is not a multiple of the chunk
 //! needs a second logits block at the tail width ([`CeRowsPlan::widths`]).
 //!
-//! **Numerics.** The three `exp`s have non-positive arguments by
-//! construction (`m_new` is a max over what it is subtracted from, and
-//! `lse = m + ln(s) >= m` because `s >= 1`: the row's maximum contributes
-//! `exp(0) = 1` exactly and every other term is non-negative), so they are
-//! `k8_act`'s `qd_exp_nonpos`; the log is `k8_act`'s `qd_log` (lead's ruling,
-//! 2026-10-01). Both have bit-identical host twins, every reduction here has a
-//! fixed shape ([`crate::small_common`]), and the GEMMs' FFMA engine is
-//! bit-identical to `host_ref::gemm_ffma_f32`. So [`ce_rows_mirror`] is a
-//! **bitwise** mirror of the device walk on the FFMA engine (cuBLAS's bf16
-//! engine sums in its own order). A NaN or infinity anywhere makes a row's
-//! loss non-finite, which the host refuses.
+//! **Numerics.** Every `exp` has a non-positive argument by construction:
+//! the online update subtracts the new max, a non-target logit is at most
+//! `m`, and [`excluded_scale_f32`] exponentiates `m - target` only when that
+//! difference is not positive. They are `k8_act`'s `qd_exp_nonpos`, which has
+//! a bit-identical host twin. `s` is the sum over the other classes, so a
+//! one-class row has `s == 0` and is not treated as `ln(0)`. Every reduction
+//! here has a fixed shape ([`crate::small_common`]), and the GEMMs' FFMA
+//! engine is bit-identical to `host_ref::gemm_ffma_f32`. So [`ce_rows_mirror`]
+//! is a **bitwise** mirror of the device walk on the FFMA engine (cuBLAS's
+//! bf16 engine sums in its own order). A NaN or infinity anywhere makes a
+//! row's loss non-finite, which the host refuses. An empty other-set does not.
 
 use crate::error::CudaError;
 use crate::gemm_plan::{GemmLayout, GemmShape};
 use crate::host_ref::{gemm_ffma_f32, Operands};
-use crate::k8_act::{exp_nonpos_f32, log_f32};
+use crate::k8_act::exp_nonpos_f32;
 use crate::kernels::KernelModule;
-use crate::small_common::{add, exact_len, mul, nonzero, row_max, row_sum, Window, ROW_THREADS};
+use crate::small_common::{
+    add, exact_len, mul, nonzero, row_max, row_sum, Window, NEG_FLT_MAX, ROW_THREADS,
+};
 
 /// tessl's vocabulary chunk for training (`tessl/src/qwen35_train.rs:56`).
 pub const CE_CHUNK: u64 = 8192;
@@ -73,6 +77,9 @@ const SOURCE: &str = concat!(
     r#"
 // One block per row n of a [n_rows, width] chunk (row stride ld) of the
 // vocabulary columns [v0, v0 + width). first != 0 on the chunk at v0 = 0.
+// The target column is left out of the max and the sum and is still stored
+// in tlogit. The skip stays inside the element loops, before either block
+// reduction, so every thread reaches the barriers.
 extern "C" __global__ void qd_ce_lse_update_f32(
     const float* logits, float* m, float* s, float* tlogit, const unsigned int* targets,
     unsigned long long n_rows, unsigned long long width, unsigned long long ld,
@@ -84,15 +91,21 @@ extern "C" __global__ void qd_ce_lse_update_f32(
         return;  // uniform per block
     }
     const float* row = logits + n * ld;
+    const unsigned long long t = (unsigned long long)targets[n];
     float mx = QD_NEG_FLT_MAX;
     for (unsigned long long c = threadIdx.x; c < width; c += blockDim.x) {
-        mx = fmaxf(mx, row[c]);
+        if (!(t >= v0 && t - v0 == c)) {
+            mx = fmaxf(mx, row[c]);
+        }
     }
     mx = qd_block_max(mx, scratch);
     const float m_old = first ? mx : m[n];
     const float m_new = fmaxf(m_old, mx);
     float acc = 0.0f;
     for (unsigned long long c = threadIdx.x; c < width; c += blockDim.x) {
+        if (t >= v0 && t - v0 == c) {
+            continue;
+        }
         acc = acc + qd_exp_nonpos(row[c] - m_new);
     }
     acc = qd_block_sum(acc, scratch);
@@ -100,17 +113,36 @@ extern "C" __global__ void qd_ce_lse_update_f32(
         const float carried = first ? 0.0f : s[n] * qd_exp_nonpos(m_old - m_new);
         s[n] = carried + acc;
         m[n] = m_new;
-        const unsigned long long t = targets[n];
         if (t >= v0 && t - v0 < width) {
             tlogit[n] = row[t - v0];
         }
     }
 }
 
-// logits[n, c] = (exp(logits[n, c] - lse[n]) - [v0 + c == target]) * scale,
-// lse = m + log(s) from the completed first walk.
+// Unnormalized scale. Other classes are exp(logit - max_o) * scale and the
+// target column is -sum_o * scale. Every exp argument is non-positive.
+// sum_o == 0 (one class) returns 0; the caller then writes 0 and does not
+// exponentiate the empty-max sentinel.
+__device__ float qd_ce_excluded_scale(float max_o, float sum_o, float target)
+{
+    if (!(sum_o > 0.0f)) {
+        return 0.0f;
+    }
+    const float delta = max_o - target;
+    if (delta <= 0.0f) {
+        const float e = qd_exp_nonpos(delta);
+        const float q = sum_o * e;
+        return e / (1.0f + q);
+    }
+    const float e = qd_exp_nonpos(-delta);
+    return 1.0f / (e + sum_o);
+}
+
+// logits[n, c] becomes the target-excluded gradient times scale. tlogit is
+// the target logit from the first walk, which this chunk may not hold.
 extern "C" __global__ void qd_ce_softmax_grad_f32(
-    float* logits, const float* m, const float* s, const unsigned int* targets,
+    float* logits, const float* m, const float* s, const float* tlogit,
+    const unsigned int* targets,
     unsigned long long n_rows, unsigned long long width, unsigned long long ld,
     unsigned long long v0, float scale)
 {
@@ -118,13 +150,18 @@ extern "C" __global__ void qd_ce_softmax_grad_f32(
     QD_GRID_STRIDE(i, total) {
         const unsigned long long n = i / width;
         const unsigned long long c = i - n * width;
-        const float lse = m[n] + qd_log(s[n]);
         const unsigned long long at = n * ld + c;
-        float p = qd_exp_nonpos(logits[at] - lse);
-        if (v0 + c == (unsigned long long)targets[n]) {
-            p = p - 1.0f;
+        const float sum_o = s[n];
+        if (!(sum_o > 0.0f)) {
+            logits[at] = 0.0f;
+        } else {
+            const float sc = qd_ce_excluded_scale(m[n], sum_o, tlogit[n]) * scale;
+            if (v0 + c == (unsigned long long)targets[n]) {
+                logits[at] = -sum_o * sc;
+            } else {
+                logits[at] = qd_exp_nonpos(logits[at] - m[n]) * sc;
+            }
         }
-        logits[at] = p * scale;
     }
 }
 "#
@@ -298,18 +335,55 @@ impl CeRowsPlan {
 pub struct CeOutput {
     /// The reduced loss.
     pub loss: f64,
-    /// `m + ln(s) - logit[target]` for each supplied row.
+    /// Softplus of the negated margin for each supplied row. An empty
+    /// other-set is 0.
     pub per_row: Vec<f64>,
 }
 
+/// `ln(1 + s · exp(m - t))` in f64, stable on both sides of the margin.
+/// `s == 0` is 0 even when `m` is the empty-max sentinel. A non-finite input
+/// or a negative sum is NaN.
+fn excluded_loss_f64(max_o: f32, sum_o: f32, target: f32) -> f64 {
+    if !max_o.is_finite() || !sum_o.is_finite() || !target.is_finite() || sum_o < 0.0 {
+        return f64::NAN;
+    }
+    if sum_o == 0.0 {
+        return 0.0;
+    }
+    let delta = f64::from(max_o) - f64::from(target);
+    if delta <= 0.0 {
+        (f64::from(sum_o) * delta.exp()).ln_1p()
+    } else {
+        delta + (f64::from(sum_o) + (-delta).exp()).ln()
+    }
+}
+
+/// Host twin of `qd_ce_excluded_scale`. `sum_o == 0` is 0 and does not
+/// exponentiate. No extra finite checks: a NaN target with a positive sum
+/// falls through to `exp_nonpos_f32` and comes back NaN, matching the device.
+fn excluded_scale_f32(max_o: f32, sum_o: f32, target: f32) -> f32 {
+    if !(sum_o > 0.0) {
+        return 0.0;
+    }
+    let delta = max_o - target;
+    if delta <= 0.0 {
+        let e = exp_nonpos_f32(delta);
+        let q = sum_o * e;
+        e / (1.0 + q)
+    } else {
+        let e = exp_nonpos_f32(-delta);
+        1.0 / (e + sum_o)
+    }
+}
+
 /// The per-row losses and their reduction from the walk's `(m, s, tlogit)`,
-/// in f64 as tessl forms them; a non-finite row is refused, naming it.
+/// in f64. A non-finite row is refused, naming it. An empty other-set is 0.
 pub fn losses(plan: &CeRowsPlan, m: &[f32], s: &[f32], t: &[f32]) -> Result<CeOutput, CudaError> {
     let per_row: Vec<f64> = m
         .iter()
         .zip(s)
         .zip(t)
-        .map(|((&m, &s), &t)| f64::from(m) + f64::from(s).ln() - f64::from(t))
+        .map(|((&m, &s), &t)| excluded_loss_f64(m, s, t))
         .collect();
     if let Some(i) = per_row.iter().position(|l| !l.is_finite()) {
         return Err(CudaError::invalid(
@@ -336,10 +410,26 @@ pub fn lse_update_mirror(
     let threads = ROW_THREADS as usize;
     for n in 0..n_rows {
         let row = &logits[n * width..(n + 1) * width];
-        let mx = row_max(threads, width, |c| row[c]);
+        let t = targets[n] as usize;
+        let skipped = |c: usize| t >= v0 && c == t - v0;
+        // A skipped column contributes the running-max identity, which is
+        // also `row_max`'s start value, so an all-skipped chunk stays there.
+        let mx = row_max(threads, width, |c| {
+            if skipped(c) {
+                NEG_FLT_MAX
+            } else {
+                row[c]
+            }
+        });
         let m_old = if first { mx } else { m[n] };
         let m_new = m_old.max(mx);
-        let acc = row_sum(threads, width, |c| exp_nonpos_f32(row[c] - m_new));
+        let acc = row_sum(threads, width, |c| {
+            if skipped(c) {
+                0.0
+            } else {
+                exp_nonpos_f32(row[c] - m_new)
+            }
+        });
         let carried = if first {
             0.0
         } else {
@@ -347,31 +437,36 @@ pub fn lse_update_mirror(
         };
         s[n] = carried + acc;
         m[n] = m_new;
-        let t = targets[n] as usize;
         if t >= v0 && t - v0 < width {
             tlogit[n] = row[t - v0];
         }
     }
 }
 
-/// `qd_ce_softmax_grad_f32` on the host for one chunk, in place.
+/// `qd_ce_softmax_grad_f32` on the host for one chunk, in place. `tlogit`
+/// is the target logit recorded by the first walk.
 pub fn softmax_grad_mirror(
     logits: &mut [f32],
     (n_rows, width): (usize, usize),
-    (m, s): (&[f32], &[f32]),
+    (m, s, tlogit): (&[f32], &[f32], &[f32]),
     targets: &[u32],
     v0: usize,
     factor: f32,
 ) {
     for n in 0..n_rows {
-        let lse = m[n] + log_f32(s[n]);
+        let sum_o = s[n];
         for c in 0..width {
             let at = n * width + c;
-            let mut p = exp_nonpos_f32(logits[at] - lse);
-            if v0 + c == targets[n] as usize {
-                p -= 1.0;
+            if !(sum_o > 0.0) {
+                logits[at] = 0.0;
+                continue;
             }
-            logits[at] = p * factor;
+            let sc = excluded_scale_f32(m[n], sum_o, tlogit[n]) * factor;
+            if v0 + c == targets[n] as usize {
+                logits[at] = -sum_o * sc;
+            } else {
+                logits[at] = exp_nonpos_f32(logits[at] - m[n]) * sc;
+            }
         }
     }
 }
@@ -445,7 +540,7 @@ pub fn ce_rows_mirror(
     for (v0, wd) in plan.chunks() {
         let (v0, wd) = (u(v0), u(wd));
         let (mut logits, wc) = logits_of(v0, wd)?;
-        softmax_grad_mirror(&mut logits, (n, wd), (&m, &s), targets, v0, factor);
+        softmax_grad_mirror(&mut logits, (n, wd), (&m, &s, &t), targets, v0, factor);
         let prev = (v0 != 0).then_some(dh.as_slice());
         dh = gemm_ffma_f32(
             GemmLayout::Nn,
@@ -494,6 +589,7 @@ pub fn chunk_copy_bytes(plan: &CeRowsPlan, with_grads: bool) -> u64 {
 mod tests {
     use super::*;
     use crate::inputs::splitmix_f32;
+    use crate::small_common::NEG_FLT_MAX;
 
     /// What the views removed, at Qwen3.5-2B's head (V = 248,320, H = 2048):
     /// three `[V, H]` f32 copies with gradients, ~12.2 GB of device traffic
@@ -608,15 +704,25 @@ mod tests {
         let p = plan(2, 8, 10, 4);
         let e = losses(&p, &[1.0, f32::NAN], &[1.0, 1.0], &[0.0, 0.0]).unwrap_err();
         assert!(e.to_string().contains("row 1"), "{e}");
-        assert!(losses(&p, &[1.0, 1.0], &[0.0, 1.0], &[0.0, 0.0]).is_err());
+        // An empty excluded sum is the one-class identity, not ln(0).
+        let empty = losses(&p, &[1.0, NEG_FLT_MAX], &[0.0, 1.0], &[4.0, 0.0]).unwrap();
+        assert_eq!(empty.per_row[0], 0.0);
+        // A NaN target is refused even when the other-set is empty.
+        let nan_target = losses(&p, &[NEG_FLT_MAX, 1.0], &[0.0, 1.0], &[f32::NAN, 0.0]);
+        assert!(nan_target.is_err(), "{nan_target:?}");
     }
 
     #[test]
-    fn the_cuda_source_rescales_the_carried_sum_and_uses_the_crates_exp_and_log() {
+    fn the_cuda_source_excludes_the_target_and_uses_the_crates_exp() {
         assert!(SOURCE
             .contains("const float carried = first ? 0.0f : s[n] * qd_exp_nonpos(m_old - m_new);"));
-        assert!(SOURCE.contains("const float lse = m[n] + qd_log(s[n]);"));
         assert!(SOURCE.contains("acc = acc + qd_exp_nonpos(row[c] - m_new);"));
+        assert!(SOURCE.contains("qd_ce_excluded_scale"));
+        assert!(SOURCE.contains("const float* tlogit"));
+        assert!(
+            !SOURCE.contains("const float lse = m[n] + qd_log(s[n]);"),
+            "the max term of 1 is still inside the sum"
+        );
         assert!(
             !SOURCE.contains("expf("),
             "libdevice expf is not host-reproducible"
@@ -625,5 +731,109 @@ mod tests {
             !SOURCE.contains("logf("),
             "libdevice logf is not host-reproducible"
         );
+    }
+
+    /// `|got - want|` in units of the f32 spacing at `want`.
+    fn ulps(got: f32, want: f64) -> f64 {
+        let w = want as f32;
+        let spacing = if w == 0.0 || !w.is_normal() {
+            f64::from(f32::from_bits(1))
+        } else {
+            let next = f32::from_bits(w.abs().to_bits() + 1);
+            f64::from(next) - f64::from(w.abs())
+        };
+        (f64::from(got) - want).abs() / spacing
+    }
+
+    /// Paper shape `[9, -9, -9]`, target 0. The margin is 18, past the f32
+    /// cliff (~16.6), where `1 + exp(-m)` rounds to 1 and a `p - 1` target
+    /// gradient is 0.
+    fn cliff_oracle() -> (f64, [f64; 3]) {
+        let z = [9.0f64, -9.0, -9.0];
+        let max_o = z[1].max(z[2]);
+        let sum_o = (z[1] - max_o).exp() + (z[2] - max_o).exp();
+        let delta = max_o - z[0];
+        let q = sum_o * delta.exp();
+        let loss = q.ln_1p();
+        let scale = delta.exp() / (1.0 + q);
+        let g1 = (z[1] - max_o).exp() * scale;
+        (loss, [-sum_o * scale, g1, g1])
+    }
+
+    fn assert_cliff(loss: f64, grad: &[f32]) {
+        let (want_loss, want_g) = cliff_oracle();
+        assert!(grad[0] != 0.0, "target gradient collapsed: {grad:?}");
+        let sum: f64 = grad.iter().map(|g| f64::from(*g)).sum();
+        let peak = grad.iter().fold(0.0f32, |m, g| m.max(g.abs()));
+        let spacing = {
+            let next = f32::from_bits(peak.to_bits() + 1);
+            f64::from(next) - f64::from(peak)
+        };
+        assert!(
+            sum.abs() <= 8.0 * spacing,
+            "row sum {sum} of {grad:?} is more than 8 ulps of the peak {peak}"
+        );
+        assert!(
+            ulps(loss as f32, want_loss) <= 16.0,
+            "loss {loss} vs {want_loss}"
+        );
+        for (j, (&got, &want)) in grad.iter().zip(&want_g).enumerate() {
+            let u = ulps(got, want);
+            assert!(u <= 16.0, "grad[{j}] {got} vs {want} ({u} ulps)");
+        }
+    }
+
+    #[test]
+    fn a_row_past_the_fp32_cliff_keeps_a_nonzero_target_gradient() {
+        let logits = [9.0f32, -9.0, -9.0];
+        let targets = [0u32];
+        let p = plan(1, 1, 3, 3);
+
+        let mut m = [0.0f32; 1];
+        let mut s = [0.0f32; 1];
+        let mut t = [0.0f32; 1];
+        lse_update_mirror(
+            &logits,
+            (1, 3),
+            (&mut m, &mut s, &mut t),
+            &targets,
+            (0, true),
+        );
+        let wide = losses(&p, &m, &s, &t).unwrap();
+        let mut grad = logits;
+        softmax_grad_mirror(&mut grad, (1, 3), (&m, &s, &t), &targets, 0, 1.0);
+        assert_cliff(wide.per_row[0], &grad);
+
+        let mut m = [0.0f32; 1];
+        let mut s = [0.0f32; 1];
+        let mut t = [0.0f32; 1];
+        for (i, &logit) in logits.iter().enumerate() {
+            lse_update_mirror(
+                &[logit],
+                (1, 1),
+                (&mut m, &mut s, &mut t),
+                &targets,
+                (i, i == 0),
+            );
+        }
+        let chunked = losses(&p, &m, &s, &t).unwrap();
+        let mut parts = [0.0f32; 3];
+        for (i, &logit) in logits.iter().enumerate() {
+            let mut chunk = [logit];
+            softmax_grad_mirror(&mut chunk, (1, 1), (&m, &s, &t), &targets, i, 1.0);
+            parts[i] = chunk[0];
+        }
+        assert_cliff(chunked.per_row[0], &parts);
+
+        // One class: loss 0, gradient 0, and no exp against the empty max.
+        let mut m = [0.0f32; 1];
+        let mut s = [0.0f32; 1];
+        let mut t = [0.0f32; 1];
+        lse_update_mirror(&[4.0], (1, 1), (&mut m, &mut s, &mut t), &[0], (0, true));
+        let one = losses(&plan(1, 1, 1, 1), &m, &s, &t).unwrap();
+        assert_eq!(one.per_row[0], 0.0);
+        let mut g = [4.0f32];
+        softmax_grad_mirror(&mut g, (1, 1), (&m, &s, &t), &[0], 0, 1.0);
+        assert_eq!(g[0], 0.0);
     }
 }
