@@ -38,7 +38,7 @@ The conv table in this section came from a run on a contended machine, and its i
 | neck 3x3 p1 [1,256,288,288] | 25.28-25.29 | 16.64-16.93 | 8.4-8.6 ms (about 33%), not 36.7 ms (68%) |
 | neck 3x3 p1 [1,256,144,144] | 6.13-6.16 | 4.27-4.33 | 1.8 ms, not 8.7 ms |
 
-The GEMM, compute-bound, moved by under 2% between the runs; the memory-bound im2col and layout passes ran about 2.4x slower in the contended run [inferred: load was not recorded in that run]. The bias-add column above is memory-bound too and was taken in the same run, so read it as an upper bound until re-measured on a quiet machine. The f32 and bf16 GEMM columns are compute-bound and agree with the quiet runs.
+The GEMM, compute-bound, moved by under 2% between the runs; the memory-bound im2col and layout passes ran about 2.4x slower in the contended run [inferred: load was not recorded in that run]. The bias-add column above is memory-bound too and was taken in the same run; re-measured quiet (`bench/results/2026-10-27-memory-bound`, load recorded) it repeats within about 4% (fc1 0.966 against 0.928 ms, qkv 0.672 against 0.669), so it stands. The f32 and bf16 GEMM columns are compute-bound and agree with the quiet runs.
 
 ## Conv, median ms (contended run; superseded by the correction above)
 
