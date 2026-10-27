@@ -21,6 +21,7 @@ use std::thread;
 
 use ojas_core::{sdpa_scale, OjasError, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS};
 use tessl::dispatch::{self, set_f32, set_gpu_buf_offset, set_u32, Binder};
+use tessl::embedgemma2::{encoder_attn, EncoderAttnDims};
 use tessl::gdn_train::{
     gdn_train_backward, gdn_train_forward, gdn_train_forward_transient_bytes, GdnTrainDims,
     GdnTrainGrads, GdnTrainInputs, GdnTrainWorkspace, GDN_TRAIN_DK,
@@ -38,9 +39,9 @@ use tessl::DType;
 use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
-    norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, Cmd, Conv1dGeom, ConvGeom, DeviceInfo,
-    EmbedRows, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode,
-    SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
+    norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
+    ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Msg, NewBuf, ReadAs,
+    Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
 };
 
 const ST_IN: u32 = 0;
@@ -147,6 +148,7 @@ const KERNELS: &[&str] = &[
     "ojas_silu_fwd",
     "ojas_silu_bwd",
     "ojas_sigmoid_fwd",
+    "ojas_relu_fwd",
     "ojas_sigmoid_bwd",
     "ojas_gdn_decay_fwd",
     "ojas_gdn_decay_bwd",
@@ -196,6 +198,8 @@ const KERNELS: &[&str] = &[
     "ojas_attn_gen_fwd",
     "ojas_im2col",
     "ojas_conv_nchw",
+    "ojas_bilinear",
+    "ojas_dwconv",
     "ojas_convt_nchw",
     "ojas_attn_bwd_dq_d256",
     "ojas_attn_bwd_dkv_d256",
@@ -1497,13 +1501,14 @@ impl Worker {
             } => self.rope(op, [x, cos, sin], [rows, dim, rotary], mode, backward),
             Cmd::Sdpa { q, k, v, geom } => self.sdpa(q, k, v, geom),
             Cmd::Attn {
+                op,
                 q,
                 k,
                 v,
                 bias,
                 lens,
                 geom,
-            } => self.attn_gen([q, k, v], bias, lens, geom),
+            } => self.attn_gen(op, [q, k, v], bias, lens, geom),
             Cmd::Conv2d {
                 op,
                 x,
@@ -1518,6 +1523,15 @@ impl Worker {
                 bias,
                 geom,
             } => self.conv_transpose2d(op, [x, w], bias, geom),
+            Cmd::EncoderAttn { op, q, k, v, geom } => self.encoder_attn(op, [q, k, v], geom),
+            Cmd::DepthwiseConv2d {
+                op,
+                x,
+                w,
+                bias,
+                geom,
+            } => self.depthwise_conv2d(op, [x, w], bias, geom),
+            Cmd::Bilinear { x, geom } => self.bilinear(x, geom),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
             Cmd::Gate {
                 x,
@@ -1597,6 +1611,7 @@ impl Worker {
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
             Cmd::Sigmoid { x } => self.sigmoid(x, None),
+            Cmd::Relu { x } => self.relu(x),
             Cmd::SigmoidBwd { x, gy } => self.sigmoid(x, Some(gy)),
             Cmd::GdnDecay {
                 a,
@@ -2144,6 +2159,7 @@ impl Worker {
         let (mode_u, time, heads) = match mode {
             RopeMode::Same => (0u32, 1u32, 1u32),
             RopeMode::TimeDim { time, heads } => (1, time, heads),
+            RopeMode::Interleaved { time, heads } => (2, time, heads),
         };
         let st = self.status(op)?;
         for v in [&xv, &cv, &sv] {
@@ -2261,18 +2277,18 @@ impl Worker {
     /// output word.
     fn attn_gen(
         &mut self,
+        op: &'static str,
         [q, k, v]: [Arg; 3],
         bias: Option<Arg>,
         lens: Option<Arg>,
         g: AttnGeom,
     ) -> Res<Reply> {
-        const OP: &str = "attention_forward_saving";
         // One simdgroup per query row, four to a threadgroup.
         const ROWS_PER_TG: usize = ATTN_THREADS / 32;
         let scale = sdpa_scale(g.d)?;
         if g.d > ATTN_MAX_HEAD_DIM || g.rep == 0 || !g.bh.is_multiple_of(g.rep) {
             return Err(metal_err(format!(
-                "{OP}: head dim {} over {} planes of {} per KV plane",
+                "{op}: head dim {} over {} planes of {} per KV plane",
                 g.d, g.bh, g.rep
             )));
         }
@@ -2295,13 +2311,13 @@ impl Worker {
             && planes.is_multiple_of(g.heads as usize);
         if !fits {
             return Err(metal_err(format!(
-                "{OP}: buffers do not hold {planes} query planes of [{q_len}, {d}],                  {} kv planes of [{kv_len}, {d}] and the bias and key lengths asked for",
+                "{op}: buffers do not hold {planes} query planes of [{q_len}, {d}],                  {} kv planes of [{kv_len}, {d}] and the bias and key lengths asked for",
                 planes / g.rep as usize
             )));
         }
         let o = self.fresh(qv.n)?;
         let lse = self.fresh(planes * q_len)?;
-        let st = self.status(OP)?;
+        let st = self.status(op)?;
         self.check_operand(&st, q, &qv, ST_IN)?;
         self.check_operand(&st, k, &kv, ST_IN)?;
         self.check_operand(&st, v, &vv, ST_IN)?;
@@ -2444,6 +2460,114 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
+    /// A depthwise convolution on `ojas_dwconv`, one thread per output
+    /// element. The operands are scanned here and the output after, all
+    /// under `op`.
+    fn depthwise_conv2d(
+        &mut self,
+        op: &'static str,
+        [x, w]: [Arg; 2],
+        bias: Option<Arg>,
+        g: ConvGeom,
+    ) -> Res<Reply> {
+        let xv = self.view(x)?;
+        let wv = self.view(w)?;
+        let bv = bias.map(|a| self.view(a)).transpose()?;
+        let big = |dims: &[u32]| -> Res<usize> {
+            dims.iter()
+                .try_fold(1usize, |acc, &d| acc.checked_mul(d as usize))
+                .ok_or_else(|| metal_err(format!("{op}: convolution extent overflows")))
+        };
+        let [kh, kw] = g.kernel;
+        let out_n = big(&[g.batch, g.o, g.oh, g.ow])?;
+        if g.c != g.o
+            || xv.n != big(&[g.batch, g.c, g.h, g.w])?
+            || wv.n != big(&[g.c, kh, kw])?
+            || bv.as_ref().is_some_and(|b| b.n != g.o as usize)
+        {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold a [{}, {}, {}, {}] input, a [{}, 1, {kh}, {kw}] weight and the bias asked for",
+                g.batch, g.c, g.h, g.w, g.c
+            )));
+        }
+        let out_u = u32_of(out_n)?;
+        let y = self.fresh(out_n)?;
+        let st = self.status(op)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
+            self.check_operand(&st, a, b, ST_IN)?;
+        }
+        // Bound even when the kernel does not read it: every declared
+        // argument is set.
+        let bias_buf = bv.as_ref().unwrap_or(&xv);
+        self.k1("ojas_dwconv", out_n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &wv, 1);
+            bind(b, bias_buf, 2);
+            bind(b, &y, 3);
+            set_u32(b, out_u, 4);
+            for (i, v) in [
+                g.c,
+                g.h,
+                g.w,
+                kh,
+                kw,
+                g.stride[0],
+                g.stride[1],
+                g.padding[0],
+                g.padding[1],
+                g.oh,
+                g.ow,
+                u32::from(bv.is_some()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                set_u32(b, v, 5 + i);
+            }
+        })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// Bilinear resample on `ojas_bilinear`; the kernel checks its input and
+    /// output itself.
+    fn bilinear(&mut self, x: Arg, g: BilinearGeom) -> Res<Reply> {
+        const OP: &str = "interpolate_bilinear_forward";
+        let xv = self.view(x)?;
+        let in_n = (g.planes as usize)
+            .checked_mul(g.h as usize)
+            .and_then(|n| n.checked_mul(g.w as usize));
+        let out_n = (g.planes as usize)
+            .checked_mul(g.oh as usize)
+            .and_then(|n| n.checked_mul(g.ow as usize))
+            .ok_or_else(|| metal_err(format!("{OP}: output extent overflows")))?;
+        if in_n != Some(xv.n) || g.h == 0 || g.w == 0 || g.oh == 0 || g.ow == 0 {
+            return Err(metal_err(format!(
+                "{OP}: the buffer does not hold {} planes of [{}, {}]",
+                g.planes, g.h, g.w
+            )));
+        }
+        let out_u = u32_of(out_n)?;
+        let y = self.fresh(out_n)?;
+        let st = self.status(OP)?;
+        self.k1("ojas_bilinear", out_n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, out_u, 2);
+            set_u32(b, g.h, 3);
+            set_u32(b, g.w, 4);
+            set_u32(b, g.oh, 5);
+            set_u32(b, g.ow, 6);
+            set_f32(b, g.scale_y, 7);
+            set_f32(b, g.scale_x, 8);
+            set_u32(b, u32::from(g.align_corners), 9);
+            bind_st(b, &st, 10);
+        })?;
+        Ok(self.keep(vec![y]))
+    }
+
     /// A transposed convolution whose kernel equals its stride, as GEMM: the
     /// input is permuted to `[n h w, c]`, tessl's exact-f32 NN GEMM takes it
     /// by the `[c, o kh kw]` weight, and `ojas_convt_nchw` places each
@@ -2522,6 +2646,67 @@ impl Worker {
                 set_u32(b, v, 4 + i);
             }
         })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// Bidirectional self-attention on tessl's `embedgemma2::encoder_attn`
+    /// (the tiled TensorOps kernel at head dim 64), which wants
+    /// `[batch, seq, heads, d]`: each operand is permuted in, the output is
+    /// permuted back. tessl scales `q . k` by `scale` (here `sdpa_scale(d)`,
+    /// the CPU reference's `1 / sqrt(d)`) and masks by a per-batch length
+    /// buffer, built per call as `seq` for every batch (every key visible).
+    /// The kernel scans nothing, so the operands and the output are checked
+    /// here; the output of a non-finite input is flagged under `op`.
+    fn encoder_attn(&mut self, op: &'static str, args: [Arg; 3], g: EncAttnGeom) -> Res<Reply> {
+        let [qv, kv, vv] = self.wholes(args)?;
+        let n = (g.batch as usize)
+            .checked_mul(g.heads as usize)
+            .and_then(|n| n.checked_mul(g.seq as usize))
+            .and_then(|n| n.checked_mul(g.d as usize))
+            .ok_or_else(|| metal_err(format!("{op}: attention extent overflows")))?;
+        if [&qv, &kv, &vv].iter().any(|v| v.n != n) {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold [{}, {}, {}, {}]",
+                g.batch, g.heads, g.seq, g.d
+            )));
+        }
+        u32_of(n)?;
+        let scale = sdpa_scale(g.d)?;
+        let (b, h, t, d) = (g.batch, g.heads, g.seq, g.d);
+        // [B, H, T, D] -> [B, T, H, D] reads the input at (H T D, D, T D, 1);
+        // back reads [B, T, H, D] at (T H D, D, H D, 1).
+        let to_bthd = ([b, t, h, d], [h * t * d, d, t * d, 1]);
+        let to_bhtd = ([b, h, t, d], [t * h * d, d, h * d, 1]);
+        let (qt, kt, vt) = (self.fresh(n)?, self.fresh(n)?, self.fresh(n)?);
+        let (o, y) = (self.fresh(n)?, self.fresh(n)?);
+        let lens = self.fresh_from(&vec![t; b as usize])?;
+        let st = self.status(op)?;
+        for v in [&qv, &kv, &vv] {
+            self.check(&st, v, ST_IN)?;
+        }
+        for (src, dst) in [(&qv, &qt), (&kv, &kt), (&vv, &vt)] {
+            self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1)?;
+        }
+        encoder_attn(
+            &self.rt,
+            &qt.buf,
+            &kt.buf,
+            &vt.buf,
+            &o.buf,
+            &lens.buf,
+            EncoderAttnDims {
+                batch: b,
+                seq: t,
+                heads: h,
+                heads_kv: h,
+                head_dim: d,
+                window: 0,
+                scale,
+            },
+        )
+        .map_err(metal_err)?;
+        self.permute_into(&o, &y, 4, &to_bhtd.0, &to_bhtd.1)?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
@@ -3224,6 +3409,23 @@ impl Worker {
                 bind_st(b, &st, 4);
             })?,
         }
+        Ok(self.keep(vec![y]))
+    }
+
+    /// `max(x, 0)`. The kernel checks its input itself; the output holds only
+    /// input values and zero.
+    fn relu(&mut self, x: Arg) -> Res<Reply> {
+        const OP: &str = "relu_forward";
+        let xv = self.view(x)?;
+        let n = u32_of(xv.n)?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        self.k1("ojas_relu_fwd", xv.n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, n, 2);
+            bind_st(b, &st, 3);
+        })?;
         Ok(self.keep(vec![y]))
     }
 

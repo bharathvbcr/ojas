@@ -356,6 +356,31 @@ pub(crate) struct AttnGeom {
     pub has_lens: bool,
 }
 
+/// One bidirectional self-attention launch on tessl's `encoder_attn`:
+/// `q`, `k`, `v` are `[batch, heads, seq, d]`, every key visible.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EncAttnGeom {
+    pub batch: u32,
+    pub heads: u32,
+    pub seq: u32,
+    pub d: u32,
+}
+
+/// A bilinear resample of `planes` `[h, w]` images to `[oh, ow]`; `scale_y`
+/// and `scale_x` are the axes' f32 source-index scales, formed on the host
+/// as the CPU forms them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BilinearGeom {
+    pub planes: u32,
+    pub h: u32,
+    pub w: u32,
+    pub oh: u32,
+    pub ow: u32,
+    pub scale_y: f32,
+    pub scale_x: f32,
+    pub align_corners: bool,
+}
+
 /// A convolution as GEMM, validated and within the kernels' limits:
 /// `[batch, c, h, w]` input, `[o, c, kh, kw]` weight, `[batch, o, oh, ow]`
 /// output, dilation 1, one group.
@@ -388,6 +413,9 @@ pub(crate) enum RopeMode {
     Same,
     /// x is `[batch, time, heads, dim]`, cos/sin are `[time, dim]`.
     TimeDim { time: u32, heads: u32 },
+    /// Interleaved pairs (`2i`, `2i + 1`) over `[batch, time, heads, dim]`
+    /// with cos/sin `[time, dim / 2]`; `rotary == dim`.
+    Interleaved { time: u32, heads: u32 },
 }
 
 /// One op. Dimensions are validated by the caller; the device thread checks
@@ -591,7 +619,9 @@ pub(crate) enum Cmd {
     },
     /// General attention forward; replies with the output and the `[bh,
     /// q_len]` row log-sum-exp. `bias` and `lens` are bound when present.
+    /// `op` names a fault: the form that was called.
     Attn {
+        op: &'static str,
         q: Arg,
         k: Arg,
         v: Arg,
@@ -617,6 +647,30 @@ pub(crate) enum Cmd {
         w: Arg,
         bias: Option<Arg>,
         geom: ConvGeom,
+    },
+    /// Bidirectional self-attention without a bias, key lengths or window
+    /// on tessl's tiled `encoder_attn` (head dim 64): permutes in, attends,
+    /// permutes out. Replies with the output alone; `op` names a fault.
+    EncoderAttn {
+        op: &'static str,
+        q: Arg,
+        k: Arg,
+        v: Arg,
+        geom: EncAttnGeom,
+    },
+    /// `conv2d_forward` with `groups == c == o`: one direct kernel, no
+    /// im2col. `geom.c == geom.o`; `bias` is read when present.
+    DepthwiseConv2d {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        geom: ConvGeom,
+    },
+    /// `interpolate_bilinear_forward` on `ojas_bilinear`.
+    Bilinear {
+        x: Arg,
+        geom: BilinearGeom,
     },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {
@@ -738,6 +792,10 @@ pub(crate) enum Cmd {
         gy: Arg,
     },
     Sigmoid {
+        x: Arg,
+    },
+    /// `max(x, 0)` of `x`.
+    Relu {
         x: Arg,
     },
     SigmoidBwd {

@@ -85,27 +85,30 @@ use ojas_core::{
     cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
     embedding_forward_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
     gdn_log_decay_backward_dims, gdn_log_decay_forward_dims, gelu_erf_forward_dims,
-    kv_cache_write_dims, layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims,
-    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
-    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, residual_add_backward_dims,
+    interpolate_bilinear_forward_dims, kv_cache_write_dims, layer_norm_forward_dims,
+    linear_backward_dims, linear_bias_forward_dims, linear_ce_dims, linear_forward_dims,
+    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
+    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_unsupported_metal_gdn,
+    refuse_unsupported_metal_head_dim, relu_forward_dims, residual_add_backward_dims,
     residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
-    scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
-    silu_forward_dims, softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    rope_half_split_forward_dims, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
+    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims,
+    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
+    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
     value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
     BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
     ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
-    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, Ns5Precision,
-    Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims,
-    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
+    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe,
+    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
+    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
-    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom, Cmd,
-    Conv1dGeom, ConvGeom, EmbedRows, GdnArgs, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide,
-    RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
+    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom,
+    BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, Lane, LceGeom, Link,
+    ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 
 /// A Metal allocation owned by the device thread, named by id.
@@ -620,6 +623,40 @@ impl MetalBackend {
         }
     }
 
+    /// Self-attention of validated `dims` on tessl's tiled `encoder_attn`
+    /// ([`routes_to_encoder_attn`] says which calls). Scratch: the permuted
+    /// Q, K, V and the kernel's output, one length per batch row, and a copy
+    /// of each operand that is a view.
+    fn encoder_attn_forward(
+        &self,
+        op: &'static str,
+        dims: &AttentionDims,
+        [q, k, v]: [&Tensor; 3],
+    ) -> Res<Tensor> {
+        let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
+        let geom = EncAttnGeom {
+            batch: u32_dim(op, dims.batch)?,
+            heads: u32_dim(op, dims.heads)?,
+            seq: u32_dim(op, dims.q_len)?,
+            d: u32_dim(op, dims.head_dim)?,
+        };
+        let n = product(op, &[dims.batch, dims.heads, dims.q_len, dims.head_dim])?;
+        u32_dim(op, n)?;
+        let scratch = plus(
+            op,
+            plus(op, product(op, &[4, n])?, dims.batch)?,
+            copied_elems(op, ReadAs::Whole, &[qa, ka, va])?,
+        )?;
+        let cmd = Cmd::EncoderAttn {
+            op,
+            q: qa,
+            k: ka,
+            v: va,
+            geom,
+        };
+        self.one(op, q.shape(), scratch, cmd)
+    }
+
     /// General attention forward after its validator: the output and the
     /// `[B, H, Tq]` row log-sum-exp. Nothing beyond the two outputs is
     /// charged; grouped-query heads read their KV head in place.
@@ -642,6 +679,7 @@ impl MetalBackend {
                 &shapes,
                 0,
                 Cmd::Attn {
+                    op,
                     q: qa,
                     k: ka,
                     v: va,
@@ -966,24 +1004,41 @@ fn rope_mode(op: &'static str, dims: &RopeDims) -> Res<(u32, u32, RopeMode)> {
     Ok((u32_dim(op, dims.rows)?, u32_dim(op, dims.dim)?, mode))
 }
 
-/// Refuse a convolution the GEMM reformulation does not cover: only a
-/// kernel equal to its stride with no padding, or stride 1 with any padding,
-/// at dilation 1 and one group, runs. The validator has run, so every
-/// refusal here is a device limit, never a malformed call.
+/// Refuse a convolution Metal does not run: dilation above 1, and a grouped
+/// convolution that is not depthwise (`groups == in == out`, one filter per
+/// channel). Any stride and padding runs: `ojas_im2col` forms the window of
+/// every output pixel, and the depthwise kernel does the same inline. The
+/// validator has run, so every refusal here is a device limit, never a
+/// malformed call.
 fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
     let p = d.params;
-    let patches = p.stride == d.kernel && p.padding == [0, 0];
-    if p.groups == 1 && p.dilation == [1, 1] && (patches || p.stride == [1, 1]) {
+    let depthwise = p.groups == d.in_channels && d.in_channels == d.out_channels;
+    if p.dilation == [1, 1] && (p.groups == 1 || depthwise) {
         return Ok(());
     }
     Err(OjasError::Unsupported {
         op,
         detail: format!(
-            "Metal runs kernel == stride without padding, or stride 1, at dilation 1 and one \
-             group; got kernel {:?}, stride {:?}, padding {:?}, dilation {:?}, groups {}",
-            d.kernel, p.stride, p.padding, p.dilation, p.groups
+            "Metal runs dilation 1 with one group or one filter per channel (depthwise), at any \
+             stride and padding; got kernel {:?}, stride {:?}, padding {:?}, dilation {:?}, \
+             groups {} of {} in and {} out channels",
+            d.kernel, p.stride, p.padding, p.dilation, p.groups, d.in_channels, d.out_channels
         ),
     })
+}
+
+/// One bilinear axis's source-index scale, in f32 with the CPU's own
+/// expressions (`ojas-cpu/src/spatial.rs` `bilinear_axis`).
+fn bilinear_scale(size: usize, out: usize, align_corners: bool) -> f32 {
+    if align_corners {
+        if out > 1 {
+            (size - 1) as f32 / (out - 1) as f32
+        } else {
+            0.0
+        }
+    } else {
+        size as f32 / out as f32
+    }
 }
 
 /// Refuse a transposed convolution the GEMM reformulation does not cover:
@@ -1018,6 +1073,37 @@ fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
         oh: u32_dim(op, d.out_height)?,
         ow: u32_dim(op, d.out_width)?,
     })
+}
+
+/// The one head dim `encoder_attn` is routed at: the SAM vision attention
+/// (64), where it measured 22.8 ms against 606 ms for `ojas_attn_gen_fwd`
+/// on `[1, 16, 5184, 64]` and 4.7 ms against 77 ms on `[9, 16, 576, 64]`
+/// (bench/results/2026-10-26-attention-vision). The other head dims tessl's
+/// tiled kernels compile (32, 256) have no measurement here.
+const ENCODER_ATTN_HEAD_DIM: usize = 64;
+
+/// Whether `attention_forward` runs on tessl's tiled `encoder_attn` rather
+/// than `ojas_attn_gen_fwd`: bidirectional self-attention over equal head
+/// counts with no bias, key lengths or window, at [`ENCODER_ATTN_HEAD_DIM`],
+/// on a device with TensorOps, with one head's plane addressable in `i32`
+/// as tessl's matrix-unit views require. Everything else keeps the general
+/// kernel. `attention_forward_saving` never routes: `encoder_attn` returns
+/// no log-sum-exp.
+fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
+    let plane = dims
+        .q_len
+        .checked_mul(dims.heads)
+        .and_then(|p| p.checked_mul(dims.head_dim))
+        .is_some_and(|p| i32::try_from(p).is_ok());
+    tensorops
+        && !dims.causal
+        && dims.window.is_none()
+        && dims.bias.is_none()
+        && !dims.key_lens
+        && dims.q_len == dims.kv_len
+        && dims.heads == dims.kv_heads
+        && dims.head_dim == ENCODER_ATTN_HEAD_DIM
+        && plane
 }
 
 /// The attention kernels' geometry of validated `dims`, with Metal's
@@ -1782,7 +1868,15 @@ impl Backend for MetalBackend {
     }
 
     /// The inference form of [`Self::attention_forward_saving`]: it refuses
-    /// a malformed call under its own name, as the CPU backend does.
+    /// a malformed call under its own name, as the CPU backend does, and a
+    /// non-finite operand faults under `attention_forward`.
+    ///
+    /// Not bit-identical to the saving form for unmasked self-attention at
+    /// head dim 64 on a TensorOps device (`routes_to_encoder_attn`): that
+    /// call runs tessl's tiled `encoder_attn`, 26x faster at `[1, 16, 5184,
+    /// 64]` (22.8 ms against 606 ms), whose sums add in another order. The
+    /// two forms agree within the forward tolerance (1.5e-7 measured at the
+    /// SAM shapes); every other call is bit-identical to the saving form.
     fn attention_forward(
         &self,
         q: &Tensor,
@@ -1793,6 +1887,9 @@ impl Backend for MetalBackend {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
+        if routes_to_encoder_attn(&dims, self.link.has_tensorops()) {
+            return self.encoder_attn_forward(OP, &dims, [&q, &k, &v]);
+        }
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
             .map(|(output, _)| output)
@@ -2083,10 +2180,33 @@ impl Backend for MetalBackend {
         rope_partial(self, OP, &dims, [grad_output, cos, sin], true)
     }
 
-    /// The SAM cases as im2col, a GEMM and a layout pass: a kernel equal to
-    /// its stride without padding (the patch embedding), and stride 1 with
-    /// any padding (1x1 and 3x3 convolutions). Dilation, groups and any other
-    /// stride are [`OjasError::Unsupported`].
+    fn rope_interleaved_forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_interleaved_forward";
+        let dims = rope_interleaved_forward_dims(x, cos, sin)?;
+        rope_interleaved(self, OP, &dims, [x, cos, sin], false)
+    }
+
+    fn rope_interleaved_backward(
+        &self,
+        grad_output: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "rope_interleaved_backward";
+        let dims = rope_interleaved_backward_dims(grad_output, cos, sin)?;
+        rope_interleaved(self, OP, &dims, [grad_output, cos, sin], true)
+    }
+
+    /// A convolution as im2col, a GEMM and a layout pass, at any stride and
+    /// padding (the patch embedding, 1x1 and 3x3 convolutions, the strided
+    /// downsampler); a depthwise one (`groups == in == out`) on its own
+    /// direct kernel. Dilation above 1 and other grouped convolutions are
+    /// [`OjasError::Unsupported`].
     fn conv2d_forward(
         &self,
         input: &Tensor,
@@ -2102,6 +2222,18 @@ impl Backend for MetalBackend {
         let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
         let bias_arg = bias.as_ref().map(|b| self.f32(OP, b)).transpose()?;
         let geom = conv_geom(OP, &dims)?;
+        if dims.params.groups > 1 {
+            // Depthwise: one direct kernel, no im2col matrix and no scratch.
+            u32_dim(OP, product(OP, &dims.out_shape())?)?;
+            let cmd = Cmd::DepthwiseConv2d {
+                op: OP,
+                x,
+                w,
+                bias: bias_arg,
+                geom,
+            };
+            return self.one(OP, &dims.out_shape(), 0, cmd);
+        }
         let rows = product(OP, &[dims.batch, dims.out_height, dims.out_width])?;
         let width = product(OP, &[dims.in_channels, dims.kernel[0], dims.kernel[1]])?;
         let cols = product(OP, &[rows, width])?;
@@ -2171,6 +2303,39 @@ impl Backend for MetalBackend {
             geom,
         };
         self.one(OP, &dims.out_shape(), scratch, cmd)
+    }
+
+    /// Torch's bilinear rule on `ojas_bilinear`: each thread forms its own
+    /// taps from the host's f32 axis scales, so there are no axis tables to
+    /// charge (the CPU charges its two tables to the budget) and no scratch.
+    fn interpolate_bilinear_forward(
+        &self,
+        input: &Tensor,
+        out_size: [usize; 2],
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "interpolate_bilinear_forward";
+        let dims = interpolate_bilinear_forward_dims(input, out_size)?;
+        let x = self.f32(OP, input)?;
+        let geom = BilinearGeom {
+            planes: u32_dim(OP, product(OP, &[dims.batch, dims.channels])?)?,
+            h: u32_dim(OP, dims.height)?,
+            w: u32_dim(OP, dims.width)?,
+            oh: u32_dim(OP, dims.out_height)?,
+            ow: u32_dim(OP, dims.out_width)?,
+            scale_y: bilinear_scale(dims.height, dims.out_height, align_corners),
+            scale_x: bilinear_scale(dims.width, dims.out_width, align_corners),
+            align_corners,
+        };
+        u32_dim(OP, product(OP, &dims.out_shape())?)?;
+        self.one(OP, &dims.out_shape(), 0, Cmd::Bilinear { x, geom })
+    }
+
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "relu_forward";
+        relu_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        self.one(OP, input.shape(), 0, Cmd::Relu { x })
     }
 
     fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
@@ -2958,6 +3123,40 @@ fn rope_partial(
             rows,
             dim,
             rotary,
+            mode,
+            backward,
+        },
+    )
+}
+
+/// Interleaved rope of validated `dims` on `ojas_rope` (mode 2): every pair
+/// of adjacent columns rotates, nothing is copied.
+fn rope_interleaved(
+    be: &MetalBackend,
+    op: &'static str,
+    dims: &InterleavedRopeDims,
+    [x, cos, sin]: [&Tensor; 3],
+    backward: bool,
+) -> Res<Tensor> {
+    let (xa, ca, sa) = (be.f32(op, x)?, be.f32(op, cos)?, be.f32(op, sin)?);
+    u32_dim(op, product(op, &[dims.rows, dims.dim])?)?;
+    let mode = RopeMode::Interleaved {
+        time: u32_dim(op, dims.time)?,
+        heads: u32_dim(op, dims.heads)?,
+    };
+    let dim = u32_dim(op, dims.dim)?;
+    be.one(
+        op,
+        x.shape(),
+        0,
+        Cmd::Rope {
+            op,
+            x: xa,
+            cos: ca,
+            sin: sa,
+            rows: u32_dim(op, dims.rows)?,
+            dim,
+            rotary: dim,
             mode,
             backward,
         },
@@ -3994,5 +4193,107 @@ mod tests {
                 assert!(matches!(r, Err(OjasError::Poisoned)), "at {at}: {r:?}");
             }
         });
+    }
+
+    fn vision_dims() -> AttentionDims {
+        AttentionDims {
+            batch: 1,
+            heads: 16,
+            kv_heads: 16,
+            q_len: 5184,
+            kv_len: 5184,
+            head_dim: 64,
+            causal: false,
+            window: None,
+            bias: None,
+            key_lens: false,
+        }
+    }
+
+    #[test]
+    fn only_plain_self_attention_at_head_dim_64_routes_to_encoder_attn() {
+        let base = vision_dims();
+        assert!(routes_to_encoder_attn(&base, true));
+        assert!(!routes_to_encoder_attn(&base, false), "no TensorOps");
+        let bias = ojas_core::AttentionBias {
+            batch: 1,
+            heads: 1,
+            queries: 1,
+        };
+        let stays = [
+            (
+                "causal",
+                AttentionDims {
+                    causal: true,
+                    ..base
+                },
+            ),
+            (
+                "window",
+                AttentionDims {
+                    window: Some(8),
+                    ..base
+                },
+            ),
+            (
+                "bias",
+                AttentionDims {
+                    bias: Some(bias),
+                    ..base
+                },
+            ),
+            (
+                "key lengths",
+                AttentionDims {
+                    key_lens: true,
+                    ..base
+                },
+            ),
+            ("Tq != Tk", AttentionDims { kv_len: 77, ..base }),
+            (
+                "grouped heads",
+                AttentionDims {
+                    kv_heads: 8,
+                    ..base
+                },
+            ),
+            (
+                "head dim 16",
+                AttentionDims {
+                    head_dim: 16,
+                    ..base
+                },
+            ),
+            (
+                "head dim 32",
+                AttentionDims {
+                    head_dim: 32,
+                    ..base
+                },
+            ),
+            (
+                "head dim 256",
+                AttentionDims {
+                    head_dim: 256,
+                    ..base
+                },
+            ),
+            (
+                "a plane past i32",
+                AttentionDims {
+                    q_len: 1 << 20,
+                    kv_len: 1 << 20,
+                    heads: 64,
+                    kv_heads: 64,
+                    ..base
+                },
+            ),
+        ];
+        for (what, d) in stays {
+            assert!(
+                !routes_to_encoder_attn(&d, true),
+                "{what} must keep the general kernel"
+            );
+        }
     }
 }

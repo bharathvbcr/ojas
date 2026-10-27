@@ -228,6 +228,29 @@ kernel void ojas_sigmoid_fwd(
     if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
+/// `max(x, 0)` as torch's `F.relu`: `x` where `x >= 0` (a negative zero stays
+/// as it is) and `+0` where `x < 0`, so no value is rounded. The sign is read
+/// from the bits, not by a float compare: the GPU's `v < 0.0f` treats a
+/// negative subnormal as zero and would pass it through, where the CPU
+/// returns `+0`. A NaN stays as it is. A NaN or infinity in `x` flags the
+/// input word; the output holds only inputs and zero, so it has no flag of
+/// its own.
+kernel void ojas_relu_fwd(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    device atomic_uint *st [[buffer(3)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const float v = x[i];
+    const uint bits = as_type<uint>(v);
+    const uint magnitude = bits & 0x7fffffffu;
+    const bool negative = (bits >> 31) != 0u && magnitude != 0u && magnitude <= 0x7f800000u;
+    y[i] = as_type<float>(negative ? 0u : bits);
+    if (!isfinite(v)) ojas_flag(st, ST_IN);
+}
+
 kernel void ojas_sigmoid_bwd(
     device const float *x [[buffer(0)]],
     device const float *g [[buffer(1)]],
@@ -719,6 +742,11 @@ kernel void ojas_vres_lambda(
 /// `mode` 1: x is [batch, time, heads, dim] and cos/sin are [time, rot].
 /// Forward:  y1 = x1 c1 + (-x2) s1,  y2 = x2 c2 + x1 s2.
 /// Backward: g1' = g1 c1 + g2 s2,    g2' = -g1 s1 + g2 c2.
+/// `mode` 2 is the interleaved layout (SAM2 and SAM3, `rot == dim`): x is
+/// [batch, time, heads, dim], cos/sin are [time, dim/2], and pair `i` is
+/// the adjacent columns `2i, 2i+1`.
+/// Forward:  y0 = a c - b s,  y1 = a s + b c  (a, b = x[2i], x[2i+1]).
+/// Backward: the same with s negated (the inverse rotation).
 /// Grid: x = unit in [0, rot/2 + dim - rot), y = row. Unit u < rot/2 rotates
 /// pair u; a later unit copies column rot + (u - rot/2).
 kernel void ojas_rope(
@@ -739,11 +767,21 @@ kernel void ojas_rope(
     const uint col = gid.x;
     const uint row = gid.y;
     if (rot > dim || col >= half_rot + (dim - rot) || row >= rows) return;
-    if (mode == 1u && (heads == 0u || time == 0u)) return;
+    if (mode >= 1u && (heads == 0u || time == 0u)) return;
     const ulong base = (ulong)row * dim;
     if (col >= half_rot) {
         const ulong c = base + rot + (col - half_rot);
         y[c] = x[c];
+        return;
+    }
+    if (mode == 2u) {
+        const ulong tbase = (ulong)((row / heads) % time) * half_rot;
+        const float xa = x[base + 2u * col];
+        const float xb = x[base + 2u * col + 1u];
+        const float tc = cs[tbase + col];
+        const float ts = backward == 0u ? sn[tbase + col] : -sn[tbase + col];
+        y[base + 2u * col] = xa * tc - xb * ts;
+        y[base + 2u * col + 1u] = xa * ts + xb * tc;
         return;
     }
     const ulong cbase = mode == 0u ? base : (ulong)((row / heads) % time) * rot;
@@ -1803,6 +1841,49 @@ kernel void ojas_conv_nchw(
     y[i] = has_bias != 0u ? v + bias[o] : v;
 }
 
+/// Depthwise convolution (`groups == c == o`, one filter per channel), one
+/// thread per output element: the taps in ascending `(i, j)` order, a tap on
+/// padding skipped, the bias added last, so every value is the CPU's bit for
+/// bit. `w` is `[c, kh, kw]`; `has_bias` 0 leaves the sum as it is.
+kernel void ojas_dwconv(
+    device const float *x [[buffer(0)]],
+    device const float *w [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *y [[buffer(3)]],
+    constant uint &total [[buffer(4)]],
+    constant uint &c [[buffer(5)]],
+    constant uint &h [[buffer(6)]],
+    constant uint &wd [[buffer(7)]],
+    constant uint &kh [[buffer(8)]],
+    constant uint &kw [[buffer(9)]],
+    constant uint &sh [[buffer(10)]],
+    constant uint &sw [[buffer(11)]],
+    constant uint &ph [[buffer(12)]],
+    constant uint &pw [[buffer(13)]],
+    constant uint &oh [[buffer(14)]],
+    constant uint &ow [[buffer(15)]],
+    constant uint &has_bias [[buffer(16)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint ox = i % ow;
+    const uint oy = (i / ow) % oh;
+    const uint ch = (i / (ow * oh)) % c;
+    const uint n = i / (ow * oh * c);
+    const ulong plane = ((ulong)n * c + ch) * h * wd;
+    float acc = 0.0f;
+    for (uint ky = 0u; ky < kh; ++ky) {
+        const int iy = (int)(oy * sh + ky) - (int)ph;
+        if (iy < 0 || iy >= (int)h) continue;
+        for (uint kx = 0u; kx < kw; ++kx) {
+            const int ix = (int)(ox * sw + kx) - (int)pw;
+            if (ix < 0 || ix >= (int)wd) continue;
+            acc += w[((ulong)ch * kh + ky) * kw + kx] * x[plane + (ulong)iy * wd + (uint)ix];
+        }
+    }
+    y[i] = has_bias != 0u ? acc + bias[ch] : acc;
+}
+
 /// `conv_transpose2d_forward` with kernel == stride and no padding: the
 /// product `prod[(n, y, x)][(o, i, j)]` of the NHWC input with the
 /// `[c, o kh kw]` weight is the output pixel (y kh + i, x kw + j) of channel
@@ -1831,6 +1912,66 @@ kernel void ojas_convt_nchw(
     const ulong src_pixel = ((ulong)n * h + oy / kh) * w + ox / kw;
     const float v = prod[src_pixel * out_c * kh * kw + ((ulong)o * kh + oy % kh) * kw + ox % kw];
     y[i] = has_bias != 0u ? v + bias[o] : v;
+}
+
+// ------------------------------------------------------------- bilinear ---
+//
+// `Backend::interpolate_bilinear_forward`, torch's source-index rule in f32
+// as `ojas-cpu/src/spatial.rs` forms it: the host computes each axis's
+// `scale` with the CPU's own f32 expression, and every thread forms its two
+// source indices and weights from it with the same IEEE operations (contract
+// off), so each value is the CPU's bit for bit and no axis table exists.
+
+/// One axis of an output index `o`: source indices `lo` and `hi` and the
+/// weight `lambda` of `hi`. `size` >= 1.
+inline void ojas_bilinear_tap(uint o, uint size, float scale, uint align,
+                              thread uint &lo, thread uint &hi, thread float &lambda)
+{
+    const float src = align != 0u
+        ? scale * (float)o
+        : max(scale * ((float)o + 0.5f) - 0.5f, 0.0f);
+    lo = min((uint)floor(src), size - 1u);
+    lambda = clamp(src - (float)lo, 0.0f, 1.0f);
+    hi = lo + ((lo + 1u < size) ? 1u : 0u);
+}
+
+/// y[plane][oy][ox] = (1 - ly) ((1 - lx) v00 + lx v01) + ly ((1 - lx) v10 + lx v11),
+/// one thread per output element. A NaN or infinity in the input flags the
+/// input word, and one in the output the output word.
+kernel void ojas_bilinear(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &total [[buffer(2)]],
+    constant uint &h [[buffer(3)]],
+    constant uint &w [[buffer(4)]],
+    constant uint &oh [[buffer(5)]],
+    constant uint &ow [[buffer(6)]],
+    constant float &scale_y [[buffer(7)]],
+    constant float &scale_x [[buffer(8)]],
+    constant uint &align [[buffer(9)]],
+    device atomic_uint *st [[buffer(10)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint ox = i % ow;
+    const uint oy = (i / ow) % oh;
+    const ulong plane = (ulong)(i / (ow * oh)) * h * w;
+    uint y0, y1, x0, x1;
+    float ly, lx;
+    ojas_bilinear_tap(oy, h, scale_y, align, y0, y1, ly);
+    ojas_bilinear_tap(ox, w, scale_x, align, x0, x1, lx);
+    const float w0 = 1.0f - lx;
+    const float w1 = lx;
+    const float p00 = x[plane + (ulong)y0 * w + x0];
+    const float p01 = x[plane + (ulong)y0 * w + x1];
+    const float p10 = x[plane + (ulong)y1 * w + x0];
+    const float p11 = x[plane + (ulong)y1 * w + x1];
+    const float top = w0 * p00 + w1 * p01;
+    const float bottom = w0 * p10 + w1 * p11;
+    const float r = (1.0f - ly) * top + ly * bottom;
+    y[i] = r;
+    if (!isfinite(p00) || !isfinite(p01) || !isfinite(p10) || !isfinite(p11)) ojas_flag(st, ST_IN);
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
 // ---------------------------------------- broadcast, scale and softmax ---
