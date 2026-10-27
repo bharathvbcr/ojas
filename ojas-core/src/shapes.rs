@@ -225,7 +225,12 @@ pub struct AttentionBias {
 /// Dimensions of [`crate::Backend::attention_forward`]. Query is `[B, H,
 /// Tq, D]`; K and V are `[B, Hkv, Tk, D]`, `H` a positive multiple of `Hkv`.
 /// Every extent is non-zero and the product of each tensor, in `f32` bytes,
-/// fits `usize`.
+/// fits `usize`: [`attention_forward_dims`], [`attention_forward_saving_dims`]
+/// and [`attention_backward_dims`] refuse a zero extent in any operand
+/// (`q`, `k`, `v`, the bias, `key_lens`, and the backward's output, gradient
+/// and `lse`) before the layout is read. The layout check itself refuses zero
+/// head counts. A backend kernel handed an empty tensor directly is outside
+/// these validators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AttentionDims {
     pub batch: usize,
@@ -2080,7 +2085,9 @@ fn attention_layout(
             format!("attention shapes q {qs:?} k {ks:?} v {vs:?} differ"),
         ));
     }
-    if kv_heads > heads || heads % kv_heads != 0 {
+    // The operands' own rule already refused a zero extent; the head counts
+    // are checked again here so the remainder never depends on that order.
+    if heads == 0 || kv_heads == 0 || kv_heads > heads || heads % kv_heads != 0 {
         return Err(refuse(
             op,
             format!("attention has {heads} query heads over {kv_heads} kv heads"),
@@ -4396,6 +4403,49 @@ mod tests {
             group_norm_forward_dims(&big, &w, &b, 3, 1e-5),
             op,
             "shape product",
+        );
+    }
+
+    #[test]
+    fn attention_layout_refuses_zero_head_counts_without_dividing() {
+        // `attention_layout` takes its operands already checked, so a zero
+        // extent never reaches it through the public validators. It is called
+        // directly here: with zero kv heads it must refuse, not divide by zero.
+        let op = "attention_forward";
+        let opts = AttentionOpts::default();
+        for (q, k) in [
+            (&[1, 2, 4, 8][..], &[1, 0, 4, 8][..]),
+            (&[1, 0, 4, 8], &[1, 0, 4, 8]),
+            (&[1, 0, 4, 8], &[1, 2, 4, 8]),
+            (&[1, 3, 4, 8], &[1, 0, 4, 8]),
+        ] {
+            shape_err(
+                attention_layout(op, &f(q), &f(k), &f(k), &opts).map(|_| ()),
+                op,
+                "query heads",
+            );
+        }
+        // Grouping is unchanged for non-zero heads.
+        let d = attention_layout(
+            op,
+            &f(&[1, 4, 2, 8]),
+            &f(&[1, 2, 2, 8]),
+            &f(&[1, 2, 2, 8]),
+            &opts,
+        )
+        .unwrap();
+        assert_eq!((d.heads, d.kv_heads), (4, 2));
+        shape_err(
+            attention_layout(
+                op,
+                &f(&[1, 4, 2, 8]),
+                &f(&[1, 3, 2, 8]),
+                &f(&[1, 3, 2, 8]),
+                &opts,
+            )
+            .map(|_| ()),
+            op,
+            "query heads",
         );
     }
 
