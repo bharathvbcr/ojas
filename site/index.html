@@ -1080,7 +1080,7 @@
           <h2 class="text-2xl font-bold text-white mt-1 mb-3">Breadth</h2>
           <ul class="space-y-2 text-sm text-slate-300">
             <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>bf16 compute. Weights can be stored as BF16 and F16. Every backend computes in f32.</span></li>
-            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Activation checkpointing, GELU, and ReLU². The activation that runs today is SiLU. Training v1 refuses grouped-query attention; nanolab's default is multi-head.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Activation checkpointing, backward for GELU and ReLU, and ReLU². SiLU and sigmoid run forward and backward and have <span class="font-mono">Tape</span> ops. Erf-GELU and ReLU run forward only, on CPU and Metal. ReLU², tanh and tanh-GELU exist on no backend. Training v1 refuses grouped-query attention; nanolab's default is multi-head.</span></li>
             <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>CUDA and HIP as backends. Each is a probe behind a feature and returns <span class="font-mono">NotCompiled</span> when the feature is off.</span></li>
             <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>A tokenizer check past the twenty reference strings against tiktoken.</span></li>
           </ul>
