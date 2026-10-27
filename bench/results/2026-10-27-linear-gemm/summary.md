@@ -29,7 +29,18 @@ The 256-wide linears are in `bench-output.txt` (2 to 4.7 TFLOP/s on f32; the [20
 - The separate bias add is 5-16% of large f32 linears, 15-21% under bf16, and 28-52% of the 256-wide ones. tessl's fused, bit-exact `gemm_epilogue` is NN only; Ojas weights are NT `[n, k]`.
 - fc1 measures 8.70 ms with bias here against 12.4 ms per call in the d5d33cc frame profile; the gap (about 40%) is the profile's contention and sync, not the kernel.
 
-## Conv, median ms
+## Correction (2026-10-27, later the same day): the conv rows below were contended
+
+The conv table in this section came from a run on a contended machine, and its im2col + layout share is wrong. Re-measured on a quieter machine (load average 4 to 5, recorded; three runs, 25 interleaved rounds each; `bench/results/2026-10-27-conv-im2col/old-path-repeats.txt`), the same conv2d path gives:
+
+| Shape | conv2d | GEMM alone | im2col + layout |
+|---|---|---|---|
+| neck 3x3 p1 [1,256,288,288] | 25.28-25.29 | 16.64-16.93 | 8.4-8.6 ms (about 33%), not 36.7 ms (68%) |
+| neck 3x3 p1 [1,256,144,144] | 6.13-6.16 | 4.27-4.33 | 1.8 ms, not 8.7 ms |
+
+The GEMM, compute-bound, moved by under 2% between the runs; the memory-bound im2col and layout passes ran about 2.4x slower in the contended run [inferred: load was not recorded in that run]. The bias-add column above is memory-bound too and was taken in the same run, so read it as an upper bound until re-measured on a quiet machine. The f32 and bf16 GEMM columns are compute-bound and agree with the quiet runs.
+
+## Conv, median ms (contended run; superseded by the correction above)
 
 | Shape | conv2d (im2col + GEMM + layout) | GEMM alone | im2col + layout share |
 |---|---|---|---|
@@ -43,7 +54,7 @@ At the two large neck convs the im2col and layout passes cost more than the GEMM
 ## Reading
 
 - f32 linear: at its lane's ceiling. Faster linear means another lane (bf16, measured; relaxed f32, documented only), both of which change numerics, or bias fusion (bit-exact, 5-16% on f32).
-- Conv: the bit-exact win is in im2col and layout, not the GEMM.
+- Conv: on a quiet machine im2col and layout are about a third of the large neck convs (8.4 ms at 288^2), within 1.25x of im2col's write floor; the GEMM is the larger part. See the correction above.
 
 ## Limits
 
