@@ -1,0 +1,21 @@
+Decision rules, fixed before the first measurement (committed ahead of the results).
+
+Common definitions. Each row runs 5 warm-ups of every arm, then 25 rounds; a round is two passes over the arms in order (arm 1, arm 2, ..., arm 1', arm 2', ...). Arm 1 is always the Ojas scalar kernel, so arm 1 vs arm 1' is the A-vs-A pair. "Median" is the median of the pooled samples of the two passes. "Spread" is the p90 - p10 of the pooled scalar samples (arm 1 and arm 1', 50 samples), the definition Lane C used; the median gap |median(arm 1) - median(arm 1')| is also reported, and a verdict that holds against the spread also holds against the gap. "Sign consistent" means the alternative arm is faster than the scalar arm in every paired round (pass 0 against pass 0, pass 1 against pass 1: 50 of 50). Absolute milliseconds are contended (the GPU is shared with other sessions); only arm-vs-arm ratios are quoted as findings.
+
+Correctness gate. Before any timing, every arm must match the Ojas CPU backend (`Numerics::Exact`) on the same inputs with `max|a-b| / max|ref| <= 1e-4` and `|a-b| <= 4e-5 sqrt(Tk) + 1e-4 |ref|` per element, and each arm's dispatch count must equal what its intended path issues. A failure stops the row with no timings.
+
+(a) D32 self-attention [1,8,5184,32] for q, k and v, no mask. Arm 1: Ojas `attention_forward` on Metal (the scalar kernel at 105e203). Arm 2: tessl `encoder_attn` at head dim 32, including the permutes. Per-layer ms x 10 layers per frame (6 detector encoder + 4 memory attention). Rule: routing D32 is recommended iff arm 2's median margin exceeds the A-vs-A spread and the sign is consistent across rounds.
+
+(b) Detector cross-attention with additive bias: q [1,8,201,32], k and v [1,8,5184,32], bias [1,8,201,5184] f32, scalar kernel only. Per-frame cost = per-layer median x 6 layers. Rule: a tiled bias kernel is warranted iff the per-frame cost exceeds 10% of the CoreML frame time. That time is not yet measured on the M5 Pro; the provisional denominator is 2.75 s per frame (the port's published 2.05 s backbone + 0.7 s tracker, SpikeTrack HANDOFF.md:16), so the provisional threshold is 275 ms per frame. If the Budget refuses the bias, report it and run the largest batch that fits. Extra row (not rule-bearing): the earlier default shape q [16,8,200,32], k and v [16,8,5184,32], bias [16,8,200,5184] at the largest batch the Budget lets through.
+
+(c) Memory cross-attention: q [1,8,5184,32], k and v [1,8,m,32], no mask, m in {5200 (frame 1), 15616, 36544 (max)}; 4 layers per frame. Arm 1: scalar. Arm 2: tessl `encoder_attn` with q zero-padded to m rows, lens = m, and the output sliced back to 5184 rows, with the pad and slice copies counted in the arm's time. Two variants are timed: fused (the permute writes straight into the padded buffer and the closing permute reads the first 5184 rows) and explicit (separate pad copy and slice copy). The rule is judged on the explicit variant, the conservative one. Rule: the padding route is recommended iff it wins by more than the spread at the given m (same sign-consistency requirement as (a)). For m < 5184 the route is unavailable: padding k would be needed and `lens` zeroes the query rows. SpikeTrack's m is always above 5184, so the m < 5184 case does not arise.
+
+(d) Decoder D16 sanity row: q [1,8,16,16], k and v [1,8,4096,16], scalar only. Expectation: under 1 ms. No rule; the number is reported.
+
+(e) Detector decoder self-attention [1,8,201,32], Tq = Tk, no mask, 6 layers; scalar against tessl `encoder_attn` (D32). Rule: same as (a), judged at this shape.
+
+(f) Encoder to text cross-attention: q [1,8,5184,32], k and v [1,8,33,32], key_lens [33] and [20], 6 layers, scalar only (Tq > Tk, no pad route). No rule; the cost is reported.
+
+(g) Decoder to text cross-attention: q [1,8,201,32], k and v [1,8,33,32], no mask and key_lens [20], 6 layers, scalar only. No rule; the cost is reported.
+
+Per-frame totals: median ms x layers summed over a (x10), b (x6), c at each m (x4), e (x6), f33 (x6), g (x6), once with the scalar kernel everywhere and once with each rule-bearing row on its tessl arm where its rule says route. d has no layer count and is excluded; f20, g20 and the extra batch row are variants and excluded.
