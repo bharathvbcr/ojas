@@ -359,6 +359,10 @@ pub(crate) struct AttnGeom {
     /// non-causal call at head dim 16 or 32 may ask for it.
     pub splits: u32,
     pub per_split: u32,
+    /// Run the TensorOps flash kernel (`ojas_attn_fwd_d32` with `cross`):
+    /// one dispatch, no partials. Only a non-causal call at head dim 32 with
+    /// no window, bias or key lengths may ask for it, and `splits` is 0.
+    pub flash: bool,
 }
 
 /// One bidirectional attention launch on tessl's `encoder_attn`: `k` and `v`

@@ -147,11 +147,30 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
     // Fresh uploads for each call, so no operand scan is skipped in one.
     let tiled = dispatches_of(m, &host.up(m), false);
     let scalar = dispatches_of(m, &host.up(m), true);
-    assert_eq!(
-        tiled,
-        scalar + 1,
-        "{tag}: the tiled kernel is two dispatches, the scalar one"
-    );
+    // Head dim 32 with no bias and no key lengths is the TensorOps flash
+    // kernel: one dispatch, as the scalar kernel is, and no partials. Every
+    // other call here is split-K: partials and combine, one dispatch more.
+    if c.d == 32 && c.bias.is_none() && c.lens.is_none() {
+        let dev = host.up(m);
+        assert_eq!(
+            ok(
+                &tag,
+                m.attention_saving_kernel(&dev.q, &dev.k, &dev.v, dev.opts(false))
+            ),
+            "flash",
+            "{tag}: planned kernel"
+        );
+        assert_eq!(
+            tiled, scalar,
+            "{tag}: the flash kernel is one dispatch, as the scalar one"
+        );
+    } else {
+        assert_eq!(
+            tiled,
+            scalar + 1,
+            "{tag}: the split-K kernels are two dispatches, the scalar one"
+        );
+    }
 }
 
 #[test]
@@ -363,8 +382,31 @@ fn causal_and_other_head_dims_stay_on_the_scalar_kernel() {
     let causal = dispatches_of(&m, &base, true);
     let other = Operands::host(&Case::new(1, 2, 2, 40, 90, 64), 61).up(&m);
     let d64 = dispatches_of(&m, &other, false);
-    let tiled = dispatches_of(&m, &base, false);
-    assert_eq!(tiled, causal + 1, "head dim 32 non-causal is tiled");
+    let flash = dispatches_of(&m, &base, false);
+    assert_eq!(
+        flash, causal,
+        "head dim 32 non-causal, no bias or key lengths is the flash kernel: one dispatch"
+    );
+    // Split-K keeps its dispatch pin: head dim 16, and head dim 32 with a bias
+    // or with key lengths, are partials and combine, one dispatch more.
+    let d16 = Operands::host(&Case::new(1, 2, 2, 40, 40, 16), 62).up(&m);
+    assert_eq!(
+        dispatches_of(&m, &d16, false),
+        dispatches_of(&m, &d16, true) + 1,
+        "head dim 16 non-causal is split-K"
+    );
+    let biased = Operands::host(&Case::new(1, 2, 2, 40, 40, 32).bias([1, 2, 40]), 63).up(&m);
+    assert_eq!(
+        dispatches_of(&m, &biased, false),
+        dispatches_of(&m, &biased, true) + 1,
+        "head dim 32 with a bias is split-K"
+    );
+    let lensed = Operands::host(&Case::new(1, 2, 2, 40, 40, 32).lens(&[17]), 64).up(&m);
+    assert_eq!(
+        dispatches_of(&m, &lensed, false),
+        dispatches_of(&m, &lensed, true) + 1,
+        "head dim 32 with key lengths is split-K"
+    );
     assert_eq!(
         d64, causal,
         "head dim 64 with Tq != Tk is the scalar kernel"

@@ -80,7 +80,7 @@ mod bench {
         let mut samples: Vec<[Vec<f64>; 2]> =
             (0..count).map(|_| [Vec::new(), Vec::new()]).collect();
         for round in 0..warmups + runs {
-            for pass in 0..2 {
+            for pass in [0usize, 1] {
                 for step in 0..count {
                     let i = if round % 2 == 0 {
                         step

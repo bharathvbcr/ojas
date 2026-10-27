@@ -577,17 +577,22 @@ fn opts<'a>(causal: bool, bias: Option<&'a Tensor>, lens: Option<&'a Tensor>) ->
 
 /// One dispatcher per shape class, pinned on both sides of each bound.
 /// `Tk / Tq <= 2.25` at head dim 32 or 64 with no bias or lengths takes the
-/// pad route; beyond it, and at any ratio with a bias, key lengths or head
-/// dim 16, the inference form takes the split-K tiled kernel at head dim 16
-/// and 32 (one dispatch more than the scalar kernel) and the scalar kernel at
-/// head dim 64. Which one ran is read off the dispatches of the call against
-/// the same call made `causal` (always scalar) and against the saving form
-/// (never routed), and every call is checked against the CPU.
+/// pad route; beyond it at head dim 32 with no bias or lengths the inference
+/// form takes the TensorOps flash kernel (one dispatch, as the scalar kernel);
+/// with a bias or key lengths, or at head dim 16, at any ratio, it takes the
+/// split-K tiled kernels (one dispatch more than the scalar kernel); at head
+/// dim 64 beyond the bound the scalar kernel. Which one ran is read off the
+/// dispatches of the call against the same call made `causal` (always
+/// scalar) and against the saving form (never routed to the pad route),
+/// with the kernel the dispatcher plans (`attention_saving_kernel`) telling
+/// flash from scalar, which cost the same; every call is checked against the
+/// CPU.
 #[test]
 fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum Ran {
         Pad,
+        Flash,
         Tiled,
         Scalar,
     }
@@ -595,11 +600,11 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
     // (head dim, Tq, Tk, bias, lens, expected). 2.25 Tq is exactly 9 for Tq 4.
     let cases = [
         (32usize, 4usize, 9usize, false, false, Ran::Pad),
-        (32, 4, 10, false, false, Ran::Tiled),
+        (32, 4, 10, false, false, Ran::Flash),
         (64, 4, 9, false, false, Ran::Pad),
         (64, 4, 10, false, false, Ran::Scalar),
         (32, 8, 18, false, false, Ran::Pad),
-        (32, 8, 19, false, false, Ran::Tiled),
+        (32, 8, 19, false, false, Ran::Flash),
         (32, 40, 64, false, false, Ran::Pad),
         (32, 40, 64, true, false, Ran::Tiled),
         (32, 40, 64, false, true, Ran::Tiled),
@@ -662,8 +667,23 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
             ));
         });
         if m.has_tensorops() {
+            let planned = ok(
+                "planned",
+                m.attention_saving_kernel(
+                    &dq,
+                    &dk,
+                    &dv,
+                    opts(false, dbias.as_ref(), dlens.as_ref()),
+                ),
+            );
             let ran = if plain == scalar {
-                Ran::Scalar
+                // One dispatch: the flash kernel or the scalar one, which the
+                // plan tells apart.
+                if planned == "flash" {
+                    Ran::Flash
+                } else {
+                    Ran::Scalar
+                }
             } else if plain == scalar + 1 {
                 Ran::Tiled
             } else {
@@ -671,11 +691,15 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
             };
             assert_eq!(
                 ran, expected,
-                "{tag}: {plain} dispatches; scalar {scalar}, saving form {saving}"
+                "{tag}: {plain} dispatches; scalar {scalar}, saving form {saving}, planned {planned}"
             );
-            // The saving form never routes: tiled at head dim 16 and 32,
-            // scalar at 64.
-            assert_eq!(saving, if d == 64 { scalar } else { scalar + 1 }, "{tag}");
+            // The saving form never takes the pad route: the flash kernel at
+            // head dim 32 with no bias or lengths (one dispatch), split-K
+            // otherwise at head dim 16 and 32 (one dispatch more than the
+            // scalar kernel), scalar at 64.
+            let flash = d == 32 && !with_bias && !with_lens;
+            let want_saving = if d == 64 || flash { scalar } else { scalar + 1 };
+            assert_eq!(saving, want_saving, "{tag}");
         }
         same_tensor(&tag, &out, &want, tol(tk), 1e-4);
     }

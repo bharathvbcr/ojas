@@ -1,13 +1,15 @@
-//! Stage 2 of the tiled general attention (the simdgroup-matrix partials kernel
-//! `ojas_xattn_mma_part_f32_dD`) against the scalar split-K partials kernel it
-//! replaced and tessl's pad-q route, at SpikeTrack's cross-attention shapes.
+//! The TensorOps flash kernel on cross-attention (`ojas_attn_fwd_d32` run with
+//! `cross`) against the split-K kernels and tessl's pad-q route, at
+//! SpikeTrack's cross-attention shapes. The rules are
+//! `bench/results/2026-10-27-attention-mpp/rules.md`.
 //!
-//! `cargo run -p ojas-metal --release --example attention_stage2_bench [warmups] [runs] [only]`
+//! `cargo run -p ojas-metal --release --example attention_flash_bench [warmups] [runs] [only]`
 //!
-//! Defaults 5 and 25; `only` is a substring of a row name. The rules are
-//! `bench/results/2026-10-27-attention-stage2/rules.md`. Arms:
-//! - `stage 2`: `attention_forward_saving`, the dispatcher's kernel;
-//! - `split-K`: `attention_forward_saving_splitk`, the scalar partials kernel;
+//! Defaults 5 and 25; `only` is a substring of a row name. Arms:
+//! - `flash` (head dim 32 with no bias: the rows the route covers) or
+//!   `dispatcher` (the bias and head-dim-16 rows, which stay split-K):
+//!   `attention_forward_saving`, the dispatcher's kernel;
+//! - `split-K`: `attention_forward_saving_splitk`;
 //! - `pad-q`: `attention_forward_padq`, tessl's `encoder_attn` over Q padded
 //!   to `Tk` rows, with the pad ratio bound lifted (where no bias, key lengths
 //!   or head dim 16 rule it out).
@@ -15,11 +17,17 @@
 //! Every arm of a row runs twice per round (A, then A'), odd rounds in reverse
 //! order. Rows give p10, median and p90 of the A pass in ms, the A' median,
 //! the A-vs-A' gap and the pair's spread, and `ok` when the gap is within the
-//! spread. Before any timing every row is checked: stage 2 against split-K and
-//! pad-q over the whole output and against the CPU on the first head plane, and
-//! the dispatch counts of stage 2 and split-K must match. The 1-minute load
-//! average is printed at the start and the end, the fc1 linear is timed as the
-//! control row, and the last line is the verdict (`clean` or `repeat`).
+//! spread. Before any timing every row is checked: the dispatcher's output
+//! against split-K, the scalar kernel (flash rows) and pad-q over the whole
+//! output and against the CPU on the first head plane, and its dispatch count
+//! (a flash call is the scalar call's, split-K's is one more, a split-K row's
+//! equals split-K's). The 1-minute load average is printed at the start and
+//! the end, the fc1 linear is timed as the control row, and the last line is
+//! the verdict (`clean` or `repeat`). The `# stand-in` lines are the rules'
+//! pre-stated substitution when no clean window exists: the interleaved
+//! dispatcher / pad-q ratio times the quiet pad-q median of
+//! `bench/results/2026-10-27-attention-stage2`, beside the pad-q arm against
+//! that quiet anchor.
 
 #[cfg(target_os = "macos")]
 mod bench {
@@ -32,6 +40,18 @@ mod bench {
 
     const MAX_LOAD: f64 = 6.0;
     const CONTROL_TFLOPS: (f64, f64) = (6.3 * 0.97, 6.3 * 1.03);
+    /// Quiet pad-q medians (ms) at q `[1, 8, 5184, 32]` over m keys: stage 2's
+    /// clean attempt 2, `bench/results/2026-10-27-attention-stage2/bench-output.txt`
+    /// (load 3.9 to 5.8, fc1 control 6.33 TFLOP/s).
+    const QUIET_PADQ_MS: [(usize, f64); 5] = [
+        (5200, 5.601),
+        (10400, 21.056),
+        (10624, 21.863),
+        (15584, 46.836),
+        (36320, 281.832),
+    ];
+    /// The gate's per-call bounds (ms) at m = 15584 and 36320.
+    const GATES_MS: [(usize, f64); 2] = [(15584, 20.0), (36320, 45.0)];
 
     fn values(n: usize, seed: u64, scale: f32) -> Vec<f32> {
         let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
@@ -323,10 +343,12 @@ mod bench {
                 key_lens: None,
             };
 
+            // The rows the flash route covers (head dim 32, no bias).
+            let flash_row = !r.bias && d == 32;
             // Correctness and dispatch counts before any timing.
             let (s2, s2_lse) = metal
                 .attention_forward_saving(&q, &k, &v, opts())
-                .expect("stage 2");
+                .expect("dispatcher");
             let (sk, sk_lse) = metal
                 .attention_forward_saving_splitk(&q, &k, &v, opts())
                 .expect("split-K");
@@ -351,10 +373,37 @@ mod bench {
                 .to_f32_vec()
                 .expect("f32");
             let (d_out, d_lse) = (max_abs(&s2v, &skv), max_abs(&s2l, &skl));
-            let mut note = format!("stage2-vs-splitK max abs out {d_out:.2e} lse {d_lse:.2e}");
+            let mut note = format!("dispatcher-vs-splitK max abs out {d_out:.2e} lse {d_lse:.2e}");
             if d_out > 1e-5 || d_lse > 1e-4 {
                 println!("# CORRECTNESS FAIL {}: {note}", r.name);
                 failed = true;
+            }
+            if flash_row {
+                let (sc, sc_lse) = metal
+                    .attention_forward_saving_scalar(&q, &k, &v, opts())
+                    .expect("scalar");
+                metal.sync().expect("sync");
+                let scv = sc
+                    .to_host(&budget)
+                    .expect("host")
+                    .to_f32_vec()
+                    .expect("f32");
+                let scl = sc_lse
+                    .to_host(&budget)
+                    .expect("host")
+                    .to_f32_vec()
+                    .expect("f32");
+                note.push_str(&format!(
+                    " vs scalar out {:.2e} lse {:.2e}",
+                    max_abs(&s2v, &scv),
+                    max_abs(&s2l, &scl)
+                ));
+                for (what, got, w) in [("output", &s2v, &scv), ("lse", &s2l, &scl)] {
+                    if let Err(e) = cpu_agrees(got, w, tk) {
+                        println!("# CORRECTNESS FAIL {} vs scalar {what}: {e}", r.name);
+                        failed = true;
+                    }
+                }
             }
             if r.padq {
                 let pq = metal
@@ -401,7 +450,7 @@ mod bench {
                     failed = true;
                 }
             }
-            let count = |splitk: bool| {
+            let count = |which: &str| {
                 metal.sync().expect("sync");
                 let fresh = (
                     up(&host(&qd, &[b, h, tq, d])),
@@ -417,19 +466,30 @@ mod bench {
                 };
                 metal.sync().expect("sync");
                 let before = metal.dispatches();
-                let out = if splitk {
-                    metal.attention_forward_saving_splitk(&fresh.0, &fresh.1, &fresh.2, o)
-                } else {
-                    metal.attention_forward_saving(&fresh.0, &fresh.1, &fresh.2, o)
+                let out = match which {
+                    "splitk" => {
+                        metal.attention_forward_saving_splitk(&fresh.0, &fresh.1, &fresh.2, o)
+                    }
+                    "scalar" => {
+                        metal.attention_forward_saving_scalar(&fresh.0, &fresh.1, &fresh.2, o)
+                    }
+                    _ => metal.attention_forward_saving(&fresh.0, &fresh.1, &fresh.2, o),
                 }
                 .expect("count");
                 metal.sync().expect("sync");
                 drop(out);
                 metal.dispatches() - before
             };
-            let (n2, nk) = (count(false), count(true));
-            note.push_str(&format!(" dispatches stage2 {n2} split-K {nk}"));
-            if n2 != nk {
+            let (n_auto, n_splitk, n_scalar) = (count("auto"), count("splitk"), count("scalar"));
+            note.push_str(&format!(
+                " dispatches dispatcher {n_auto} split-K {n_splitk} scalar {n_scalar}"
+            ));
+            let dispatch_ok = if flash_row {
+                n_auto == n_scalar && n_splitk == n_scalar + 1
+            } else {
+                n_auto == n_splitk
+            };
+            if !dispatch_ok {
                 println!("# DISPATCH FAIL {}: {note}", r.name);
                 failed = true;
             }
@@ -437,7 +497,7 @@ mod bench {
 
             let mut arms: Vec<Arm<'_>> = vec![
                 (
-                    "stage 2",
+                    if flash_row { "flash" } else { "dispatcher" },
                     Box::new(|| {
                         drop(
                             metal
@@ -481,7 +541,7 @@ mod bench {
             let (s2m, skm) = (stats[0], stats[1]);
             let noise_sk = (s2m.2 - s2m.1).max(skm.2 - skm.1);
             println!(
-                "# row {} | {note} | stage2 - splitK = {:.3} ms (noise bar {:.3}) {}",
+                "# row {} | {note} | dispatcher - splitK = {:.3} ms (noise bar {:.3}) {}",
                 r.name,
                 s2m.0 - skm.0,
                 noise_sk,
@@ -506,7 +566,7 @@ mod bench {
                     .count();
                 let total = samples[0].ms[0].len() + samples[0].ms[1].len();
                 println!(
-                    "# row {} | pad-q - stage2 = {:.3} ms (noise bar {:.3}), stage 2 faster in {wins}/{total} paired samples; better of split-K and pad-q = {:.3} ms",
+                    "# row {} | pad-q - dispatcher = {:.3} ms (noise bar {:.3}), dispatcher faster in {wins}/{total} paired samples; better of split-K and pad-q = {:.3} ms",
                     r.name,
                     pqm.0 - s2m.0,
                     noise_pq,
@@ -514,9 +574,27 @@ mod bench {
                 );
                 if r.cross {
                     println!(
-                        "# cross {} | stage 2 beats pad-q beyond noise: {}",
+                        "# cross {} | dispatcher beats pad-q beyond noise: {}",
                         r.name,
                         pqm.0 - s2m.0 > noise_pq && wins * 10 >= total * 9
+                    );
+                }
+                // The pre-stated substitution: the interleaved ratio times
+                // the quiet pad-q median, beside the pad-q arm against its
+                // quiet anchor (a high ratio there says the run was slow).
+                if let Some(&(_, anchor)) = QUIET_PADQ_MS.iter().find(|(m, _)| *m == tk) {
+                    let ratio = s2m.0 / pqm.0;
+                    let gate = GATES_MS.iter().find(|(m, _)| *m == tk).map(|&(_, g)| g);
+                    println!(
+                        "# stand-in {} | dispatcher / pad-q = {ratio:.3} x quiet pad-q {anchor:.3} ms = {:.2} ms{}; pad-q arm {:.2} ms against its quiet anchor {anchor:.2} ms (x{:.2})",
+                        r.name,
+                        ratio * anchor,
+                        gate.map_or(String::new(), |g| format!(
+                            " (gate {g} ms: {})",
+                            if ratio * anchor <= g { "met" } else { "missed" }
+                        )),
+                        pqm.0,
+                        pqm.0 / anchor
                     );
                 }
             }
@@ -547,5 +625,5 @@ fn main() {
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
-    eprintln!("attention_stage2_bench needs macOS");
+    eprintln!("attention_flash_bench needs macOS");
 }

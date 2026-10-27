@@ -310,6 +310,107 @@ impl MetalBackend {
         self.one("permute", &out, 0, cmd)
     }
 
+    /// [`Backend::attention_forward_saving`] on the split-K tiled kernels
+    /// (the scalar kernel where they cannot run) whatever the dispatcher
+    /// would pick: the split-K reference arm of the flash tests and bench.
+    /// Not a stable API.
+    #[doc(hidden)]
+    pub fn attention_forward_saving_splitk(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.saving_with(q, k, v, opts, AttnKernel::SplitK)
+    }
+
+    /// [`Backend::attention_forward_saving`] on the scalar `ojas_attn_gen_fwd`
+    /// whatever the dispatcher would pick: the oracle arm of the flash tests.
+    /// Not a stable API.
+    #[doc(hidden)]
+    pub fn attention_forward_saving_scalar(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.saving_with(q, k, v, opts, AttnKernel::Scalar)
+    }
+
+    fn saving_with(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+        kernel: AttnKernel,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "attention_forward_saving";
+        let dims = attention_forward_saving_dims(q, k, v, &opts)?;
+        let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
+        let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
+        self.attn_forward_with(
+            OP,
+            &dims,
+            [&q, &k, &v],
+            bias.as_ref(),
+            opts.key_lens,
+            kernel,
+        )
+    }
+
+    /// [`Backend::attention_forward`] with the pad ratio bound lifted, so
+    /// tessl's `encoder_attn` runs wherever its other conditions hold: the
+    /// pad-q arm of the flash bench above `ENCODER_ATTN_MAX_PAD_RATIO`. Not a
+    /// stable API.
+    #[doc(hidden)]
+    pub fn attention_forward_padq(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "attention_forward";
+        let dims = attention_forward_dims(q, k, v, &opts)?;
+        let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
+        if routes_to_encoder_attn_within(&dims, self.link.has_tensorops(), f64::INFINITY) {
+            if let Some(output) = self.encoder_attn_forward(OP, &dims, [&q, &k, &v])? {
+                return Ok(output);
+            }
+        }
+        let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
+        self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
+            .map(|(output, _)| output)
+    }
+
+    /// The kernel `attention_forward_saving` plans for these operands:
+    /// `"flash"` (the TensorOps kernel, one dispatch), `"splitk"` (partials and
+    /// combine) or `"scalar"` (`ojas_attn_gen_fwd`: causal, windowed, another
+    /// head dim). A budget that cannot hold split-K's partials runs the scalar
+    /// kernel whatever this says; the flash kernel needs no scratch. Not a
+    /// stable API.
+    #[doc(hidden)]
+    pub fn attention_saving_kernel(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<&'static str, OjasError> {
+        let dims = attention_forward_saving_dims(q, k, v, &opts)?;
+        let geom = attn_launch("attention_forward_saving", &dims)?;
+        Ok(if self.link.has_tensorops() && flash_cross_route(&geom) {
+            "flash"
+        } else if xattn_splits(&geom).is_some() {
+            "splitk"
+        } else {
+            "scalar"
+        })
+    }
+
     /// The kernel [`Backend::permute`] of `input` by `dims` runs on:
     /// `"runs"`, `"transpose"` or `"generic"` (`src/permute.rs`). Validates
     /// as `permute` does and records nothing. Not a stable API.
@@ -737,19 +838,38 @@ impl MetalBackend {
     }
 
     /// General attention forward after its validator: the output and the
-    /// `[B, H, Tq]` row log-sum-exp. A non-causal, unwindowed call at head dim
-    /// 16 or 32 runs the split-K tiled kernels and is charged their partial
-    /// results (`splits * B * H * Tq * (D + 2)` values) as scratch; when the
-    /// budget cannot hold them it runs the scalar `ojas_attn_gen_fwd`, which
-    /// is charged nothing beyond the two outputs, as is every other call.
-    /// Grouped-query heads read their KV head in place.
+    /// `[B, H, Tq]` row log-sum-exp. A call [`flash_cross_route`] admits (head
+    /// dim 32, non-causal, no window, bias or key lengths, on a TensorOps
+    /// device) runs the TensorOps flash kernel `ojas_attn_fwd_d32`, one
+    /// dispatch and no scratch. Any other non-causal, unwindowed call at head
+    /// dim 16 or 32 runs the split-K tiled kernels and is charged their
+    /// partial results (`splits * B * H * Tq * (D + 2)` values) as scratch;
+    /// when the budget cannot hold them it runs the scalar
+    /// `ojas_attn_gen_fwd`, which is charged nothing beyond the two outputs,
+    /// as is every other call. Grouped-query heads read their KV head in
+    /// place.
     fn attn_forward(
+        &self,
+        op: &'static str,
+        dims: &AttentionDims,
+        qkv: [&Tensor; 3],
+        bias: Option<&Tensor>,
+        key_lens: Option<&Tensor>,
+    ) -> Res<(Tensor, Tensor)> {
+        self.attn_forward_with(op, dims, qkv, bias, key_lens, AttnKernel::Auto)
+    }
+
+    /// [`Self::attn_forward`] with the kernel family chosen: what the
+    /// dispatcher picks (`Auto`), or a reference kernel the tests and the
+    /// bench hold the dispatcher's against.
+    fn attn_forward_with(
         &self,
         op: &'static str,
         dims: &AttentionDims,
         [q, k, v]: [&Tensor; 3],
         bias: Option<&Tensor>,
         key_lens: Option<&Tensor>,
+        kernel: AttnKernel,
     ) -> Res<(Tensor, Tensor)> {
         let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
         let bias_arg = bias.map(|b| self.f32(op, b)).transpose()?;
@@ -765,29 +885,53 @@ impl MetalBackend {
             lens: lens_arg,
             geom,
         };
+        // The TensorOps flash kernel where it covers the call: no scratch,
+        // so no budget fallback.
+        if kernel == AttnKernel::Auto && self.link.has_tensorops() && flash_cross_route(&geom) {
+            return self
+                .outputs(
+                    op,
+                    &shapes,
+                    0,
+                    command(AttnGeom {
+                        flash: true,
+                        ..geom
+                    }),
+                )
+                .and_then(|outs| {
+                    let mut it = outs.into_iter();
+                    match (it.next(), it.next()) {
+                        (Some(y), Some(lse)) => Ok((y, lse)),
+                        _ => Err(metal_err(format!("{op}: missing outputs"))),
+                    }
+                });
+        }
         // The split-K tiled kernel where it covers the call, with its
         // partial results charged as scratch; a budget that holds only the
         // outputs runs the scalar kernel, which needs nothing more.
-        let tiled = xattn_splits(&geom).and_then(|(splits, per_split)| {
-            let words = product(
-                op,
-                &[
-                    splits as usize,
-                    geom.bh as usize,
-                    geom.q_len as usize,
-                    geom.d as usize + 2,
-                ],
-            )
-            .ok()?;
-            Some((
-                AttnGeom {
-                    splits,
-                    per_split,
-                    ..geom
-                },
-                words,
-            ))
-        });
+        let tiled = (kernel != AttnKernel::Scalar)
+            .then(|| xattn_splits(&geom))
+            .flatten()
+            .and_then(|(splits, per_split)| {
+                let words = product(
+                    op,
+                    &[
+                        splits as usize,
+                        geom.bh as usize,
+                        geom.q_len as usize,
+                        geom.d as usize + 2,
+                    ],
+                )
+                .ok()?;
+                Some((
+                    AttnGeom {
+                        splits,
+                        per_split,
+                        ..geom
+                    },
+                    words,
+                ))
+            });
         let run = |g: AttnGeom, scratch: usize| self.outputs(op, &shapes, scratch, command(g));
         let outputs = match tiled {
             Some((tiled_geom, words)) => match run(tiled_geom, words) {
@@ -1243,6 +1387,12 @@ const ENCODER_ATTN_MAX_PAD_RATIO: f64 = 2.25;
 /// `attention_forward_saving` never routes: `encoder_attn` returns no
 /// log-sum-exp.
 fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
+    routes_to_encoder_attn_within(dims, tensorops, ENCODER_ATTN_MAX_PAD_RATIO)
+}
+
+/// [`routes_to_encoder_attn`] with the pad ratio bound given: the bench's
+/// pad-q arm lifts it to time the route above [`ENCODER_ATTN_MAX_PAD_RATIO`].
+fn routes_to_encoder_attn_within(dims: &AttentionDims, tensorops: bool, max_ratio: f64) -> bool {
     let plane = dims
         .kv_len
         .checked_mul(dims.heads)
@@ -1256,7 +1406,7 @@ fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
         .is_some_and(|n| u32::try_from(n).is_ok());
     let padded_ok = dims.q_len > 0
         && dims.q_len <= dims.kv_len
-        && dims.kv_len as f64 <= ENCODER_ATTN_MAX_PAD_RATIO * dims.q_len as f64;
+        && dims.kv_len as f64 <= max_ratio * dims.q_len as f64;
     tensorops
         && !dims.causal
         && dims.window.is_none()
@@ -1336,6 +1486,7 @@ fn attn_launch(op: &'static str, dims: &AttentionDims) -> Res<AttnGeom> {
         has_lens: dims.key_lens,
         splits: 0,
         per_split: 0,
+        flash: false,
     })
 }
 
@@ -1348,6 +1499,44 @@ const XATTN_ROWS: u32 = 128;
 const XATTN_TARGET_GROUPS: u64 = 384;
 /// Most key ranges one row is cut into.
 const XATTN_MAX_SPLITS: u32 = 64;
+
+/// The kernel family `attn_forward` runs: what the dispatcher picks, or one
+/// of the reference kernels the tests and the bench hold it against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttnKernel {
+    /// The dispatcher's choice: the TensorOps flash kernel where
+    /// [`flash_cross_route`] admits the call, else split-K, else scalar.
+    Auto,
+    /// Split-K tiles (and the scalar kernel where they cannot run).
+    SplitK,
+    /// The scalar `ojas_attn_gen_fwd`, the oracle of the others.
+    Scalar,
+}
+
+/// Head dims the TensorOps flash cross-attention route is compiled for
+/// (`ojas_attn_fwd_dD` run with `cross`). The route is a contract split from
+/// split-K: it covers a non-causal call with no window, bias or key lengths
+/// at these head dims, and split-K keeps everything else it ran (a bias, key
+/// lengths, head dim 16).
+const FLASH_CROSS_HEAD_DIMS: [u32; 1] = [32];
+
+/// Whether `g` is a call the TensorOps flash kernel takes: its head dim is in
+/// [`FLASH_CROSS_HEAD_DIMS`], it is non-causal and unwindowed, has neither a
+/// bias nor key lengths, has queries and keys, and a head's query and key
+/// planes are addressable in `i32` as the matrix-unit views require.
+/// Grouped-query heads are covered (the kernel reads KV plane `bh / rep`).
+fn flash_cross_route(g: &AttnGeom) -> bool {
+    let plane = |t: u32| u64::from(t) * u64::from(g.d) <= i32::MAX as u64;
+    FLASH_CROSS_HEAD_DIMS.contains(&g.d)
+        && !g.causal
+        && g.window == 0
+        && g.bias.is_none()
+        && !g.has_lens
+        && g.q_len > 0
+        && g.kv_len > 0
+        && plane(g.q_len)
+        && plane(g.kv_len)
+}
 
 /// `(splits, per_split)` of the split-K tiled kernel for `g`, or `None` when
 /// the scalar kernel must run it (causal or windowed, or a head dim other
@@ -4743,6 +4932,7 @@ mod tests {
                             has_lens: false,
                             splits: 0,
                             per_split: 0,
+                            flash: false,
                         };
                         let (splits, per_split) = xattn_splits(&g).expect("tiled");
                         let at = format!("bh {bh} Tq {q_len} Tk {kv_len} d {d}");
@@ -4773,6 +4963,7 @@ mod tests {
             has_lens: false,
             splits: 0,
             per_split: 0,
+            flash: false,
         };
         assert!(xattn_splits(&causal).is_none(), "causal stays scalar");
         assert!(
