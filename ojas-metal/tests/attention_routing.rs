@@ -50,6 +50,15 @@ fn dispatches_of(
 
 #[test]
 fn routed_self_attention_matches_cpu_on_small_and_vision_head_slices() {
+    routed_matches_cpu(64);
+}
+
+#[test]
+fn routed_self_attention_at_head_dim_32_matches_cpu() {
+    routed_matches_cpu(32);
+}
+
+fn routed_matches_cpu(d: usize) {
     let (m, c) = (metal(), cpu());
     for (i, (b, h, t)) in [
         (1usize, 1usize, 1usize),
@@ -63,7 +72,7 @@ fn routed_self_attention_matches_cpu_on_small_and_vision_head_slices() {
     .enumerate()
     {
         let seed = 10 * i as u64;
-        let [q, k, v] = qkv(b, h, t, 64, seed);
+        let [q, k, v] = qkv(b, h, t, d, seed + d as u64);
         let want = ok(
             "cpu",
             c.attention_forward(&q, &k, &v, AttentionOpts::default()),
@@ -78,16 +87,27 @@ fn routed_self_attention_matches_cpu_on_small_and_vision_head_slices() {
             ),
         );
         ok("sync", m.sync());
-        same_tensor(&format!("[{b},{h},{t},64]"), &got, &want, tol(t), 1e-4);
+        same_tensor(&format!("[{b},{h},{t},{d}]"), &got, &want, tol(t), 1e-4);
     }
 }
 
 #[test]
 fn routed_self_attention_matches_the_general_kernel_at_the_sam_shapes() {
+    routed_matches_general(64, &[(9, 16, 576), (1, 16, 5184)]);
+}
+
+/// The detector's head dim: 8 heads of 32 over the 72 x 72 grid, and a
+/// windowed shape.
+#[test]
+fn routed_self_attention_at_head_dim_32_matches_the_general_kernel() {
+    routed_matches_general(32, &[(9, 8, 576), (1, 8, 5184)]);
+}
+
+fn routed_matches_general(d: usize, shapes: &[(usize, usize, usize)]) {
     let m = metal();
     // `attention_forward_saving` never routes, so it is the general kernel.
-    for (b, h, t) in [(9usize, 16usize, 576usize), (1, 16, 5184)] {
-        let [q, k, v] = qkv(b, h, t, 64, 100 + t as u64);
+    for &(b, h, t) in shapes {
+        let [q, k, v] = qkv(b, h, t, d, 100 + t as u64);
         let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
         let (want, _lse) = ok(
             "general",
@@ -99,7 +119,13 @@ fn routed_self_attention_matches_the_general_kernel_at_the_sam_shapes() {
         );
         ok("sync", m.sync());
         let want_host = ok("down", want.to_host(&ojas_core::Budget::new(8 * GIB)));
-        same_tensor(&format!("[{b},{h},{t},64]"), &got, &want_host, tol(t), 1e-4);
+        same_tensor(
+            &format!("[{b},{h},{t},{d}]"),
+            &got,
+            &want_host,
+            tol(t),
+            1e-4,
+        );
     }
 }
 
@@ -144,13 +170,42 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
         assert_eq!(plain, general, "no TensorOps: nothing may route");
     }
 
+    // Head dim 32 is routed too: more dispatches than the general kernel.
+    let (q32, k32, v32) = (
+        up(&m, &rand(&[1, 2, 64, 32], 12, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 32], 13, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 32], 14, 1.0)),
+    );
+    let routed32 = dispatches_of(&m, &q32, &k32, &v32, AttentionOpts::default());
+    let kg32 = up(&m, &rand(&[1, 1, 64, 32], 15, 1.0));
+    let vg32 = up(&m, &rand(&[1, 1, 64, 32], 16, 1.0));
+    let general32 = dispatches_of(&m, &q32, &kg32, &vg32, AttentionOpts::default());
+    if m.has_tensorops() {
+        assert!(
+            routed32 > general32,
+            "head dim 32: routed {routed32} vs general {general32}"
+        );
+    } else {
+        assert_eq!(routed32, general32, "no TensorOps: nothing may route");
+    }
+
     let bias = up(&m, &rand(&[1, 2, 64, 64], 4, 1.0));
     let lens = up(&m, &host_u32(&[64], &[1]));
+    // Tq < Tk is routed (Q is padded), Tq > Tk and a Tk past 8 Tq are not.
     let q_short = up(&m, &rand(&[1, 2, 17, 64], 5, 1.0));
-    let (q32, k32, v32) = (
-        up(&m, &rand(&[1, 2, 64, 32], 6, 1.0)),
-        up(&m, &rand(&[1, 2, 64, 32], 7, 1.0)),
-        up(&m, &rand(&[1, 2, 64, 32], 8, 1.0)),
+    let q_long = up(&m, &rand(&[1, 2, 80, 64], 5, 1.0));
+    let q_tiny = up(&m, &rand(&[1, 2, 4, 64], 5, 1.0));
+    let routed_cross = dispatches_of(&m, &q_short, &dk, &dv, AttentionOpts::default());
+    if m.has_tensorops() {
+        assert!(
+            routed_cross > general,
+            "Tq 17 over Tk 64 routes: {routed_cross} vs general {general}"
+        );
+    }
+    let (q128, k128, v128) = (
+        up(&m, &rand(&[1, 2, 64, 128], 6, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 128], 7, 1.0)),
+        up(&m, &rand(&[1, 2, 64, 128], 8, 1.0)),
     );
     let (q16, k16, v16) = (
         up(&m, &rand(&[1, 2, 64, 16], 9, 1.0)),
@@ -212,12 +267,16 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
             ),
         ),
         (
-            "Tq != Tk",
-            dispatches_of(&m, &q_short, &dk, &dv, AttentionOpts::default()),
+            "Tq > Tk",
+            dispatches_of(&m, &q_long, &dk, &dv, AttentionOpts::default()),
         ),
         (
-            "head dim 32",
-            dispatches_of(&m, &q32, &k32, &v32, AttentionOpts::default()),
+            "Tk more than 8x Tq",
+            dispatches_of(&m, &q_tiny, &dk, &dv, AttentionOpts::default()),
+        ),
+        (
+            "head dim 128",
+            dispatches_of(&m, &q128, &k128, &v128, AttentionOpts::default()),
         ),
         (
             "head dim 16",
@@ -275,20 +334,37 @@ fn the_calls_that_stay_on_the_general_kernel_still_match_cpu() {
 #[test]
 fn a_non_finite_operand_faults_under_the_name_that_was_called_on_the_routed_path() {
     let m = metal();
-    let [q, k, v] = qkv(1, 2, 64, 64, 41);
-    for (what, which) in [("q", 0usize), ("k", 1), ("v", 2)] {
-        for bad in [f32::NAN, f32::INFINITY] {
-            let mut ops = [q.clone(), k.clone(), v.clone()];
-            let mut data = ok("host", ops[which].to_f32_vec());
-            data[5] = bad;
-            ops[which] = host(&data, &[1, 2, 64, 64]);
-            let r = m.attention_forward(
-                &up(&m, &ops[0]),
-                &up(&m, &ops[1]),
-                &up(&m, &ops[2]),
-                AttentionOpts::default(),
-            );
-            deferred(&m, &format!("{bad} in {what}"), r, "attention_forward");
+    for d in [64usize, 32] {
+        non_finite_faults(&m, d);
+    }
+}
+
+fn non_finite_faults(m: &MetalBackend, d: usize) {
+    // Tq == Tk, then Tq < Tk (the padded route: `ojas_pad_q` runs under the
+    // fault); the general kernel's contract is the same for both.
+    for (tq, tk) in [(64usize, 64usize), (24, 64)] {
+        let q = rand(&[1, 2, tq, d], 41, 1.0);
+        let k = rand(&[1, 2, tk, d], 42, 1.0);
+        let v = rand(&[1, 2, tk, d], 43, 1.0);
+        for (what, which) in [("q", 0usize), ("k", 1), ("v", 2)] {
+            for bad in [f32::NAN, f32::INFINITY] {
+                let mut ops = [q.clone(), k.clone(), v.clone()];
+                let mut data = ok("host", ops[which].to_f32_vec());
+                data[5] = bad;
+                ops[which] = host(&data, ops[which].shape());
+                let r = m.attention_forward(
+                    &up(m, &ops[0]),
+                    &up(m, &ops[1]),
+                    &up(m, &ops[2]),
+                    AttentionOpts::default(),
+                );
+                deferred(
+                    m,
+                    &format!("{bad} in {what}, D{d} {tq}x{tk}"),
+                    r,
+                    "attention_forward",
+                );
+            }
         }
     }
 }
@@ -299,8 +375,14 @@ fn a_non_finite_operand_faults_under_the_name_that_was_called_on_the_routed_path
 /// which is finite throughout, and stay finite.
 #[test]
 fn routed_attention_with_scores_past_the_exp_overflow_matches_cpu() {
+    for d in [64usize, 32] {
+        large_scores_match_cpu(d);
+    }
+}
+
+fn large_scores_match_cpu(d: usize) {
     let (m, c) = (metal(), cpu());
-    let (b, h, t, d) = (2usize, 2usize, 128usize, 64usize);
+    let (b, h, t) = (2usize, 2usize, 128usize);
     let q = rand(&[b, h, t, d], 91, 15.0);
     let k = rand(&[b, h, t, d], 92, 15.0);
     let v = rand(&[b, h, t, d], 93, 1.0);
@@ -345,7 +427,13 @@ fn routed_attention_with_scores_past_the_exp_overflow_matches_cpu() {
 /// fail with `CapacityExceeded`, and leave nothing charged behind.
 #[test]
 fn a_budget_that_holds_the_output_but_not_the_routed_scratch_runs_the_general_kernel() {
-    let (b, h, t, d) = (1usize, 2usize, 256usize, 64usize);
+    for d in [64usize, 32] {
+        budget_fallback(d);
+    }
+}
+
+fn budget_fallback(d: usize) {
+    let (b, h, t) = (1usize, 2usize, 256usize);
     let n = b * h * t * d;
     let [q, k, v] = qkv(b, h, t, d, 77);
     let want = ok(
@@ -400,6 +488,260 @@ fn a_budget_that_holds_the_output_but_not_the_routed_scratch_runs_the_general_ke
     }
 }
 
+/// Cross-attention (`Tq < Tk`) routes by zero-padding Q to `Tk` rows and
+/// keeping the first `Tq` output rows. Parity with the CPU on small shapes
+/// and on one head of the memory encoder's `[5184] x [5200, 10400]`, at both
+/// routed head dims.
+#[test]
+fn routed_cross_attention_matches_cpu() {
+    let (m, c) = (metal(), cpu());
+    for d in [32usize, 64] {
+        for (b, h, tq, tk) in [
+            (2usize, 3usize, 17usize, 40usize),
+            (1, 4, 33, 64),
+            (2, 2, 100, 101),
+            (1, 1, 5184, 5200),
+            (1, 1, 5184, 10400),
+        ] {
+            let q = rand(&[b, h, tq, d], 200 + d as u64, 1.0);
+            let k = rand(&[b, h, tk, d], 201 + d as u64, 1.0);
+            let v = rand(&[b, h, tk, d], 202 + d as u64, 1.0);
+            let want = ok(
+                "cpu",
+                c.attention_forward(&q, &k, &v, AttentionOpts::default()),
+            );
+            let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+            let got = ok(
+                "metal",
+                m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+            );
+            ok("sync", m.sync());
+            same_tensor(
+                &format!("[{b},{h},{tq}x{tk},{d}]"),
+                &got,
+                &want,
+                tol(tk),
+                1e-4,
+            );
+        }
+    }
+}
+
+/// The memory encoder's cross-attention at its real shapes, 8 heads of 32,
+/// against the general kernel (`attention_forward_saving` never routes), and
+/// the route taken: more dispatches than the general kernel, which fails if
+/// the predicate rejects D32 cross-attention.
+#[test]
+fn routed_cross_attention_matches_the_general_kernel_at_the_memory_shapes() {
+    let m = metal();
+    for tk in [5200usize, 10400] {
+        let q = rand(&[1, 8, 5184, 32], 210, 1.0);
+        let k = rand(&[1, 8, tk, 32], 211, 1.0);
+        let v = rand(&[1, 8, tk, 32], 212, 1.0);
+        let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+        ok("sync", m.sync());
+        let before = m.dispatches();
+        let (want, _lse) = ok(
+            "general",
+            m.attention_forward_saving(&dq, &dk, &dv, AttentionOpts::default()),
+        );
+        ok("sync", m.sync());
+        let general = m.dispatches() - before;
+        let before = m.dispatches();
+        let got = ok(
+            "routed",
+            m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+        );
+        ok("sync", m.sync());
+        let routed = m.dispatches() - before;
+        if m.has_tensorops() {
+            assert!(
+                routed > general,
+                "5184x{tk}: the D32 cross-attention route was not taken ({routed} vs {general})"
+            );
+        }
+        let want_host = ok("down", want.to_host(&ojas_core::Budget::new(8 * GIB)));
+        same_tensor(&format!("5184x{tk}"), &got, &want_host, tol(tk), 1e-4);
+    }
+}
+
+/// The ratio bound: at `Tk = 8 Tq` the call routes, one key more and it does
+/// not, and both agree with the CPU. Routing is read off the dispatches of
+/// the call against the saving form (never routed) of the same shape.
+#[test]
+fn the_pad_ratio_boundary_routes_at_8_and_not_at_8_plus_one_key() {
+    let (m, c) = (metal(), cpu());
+    for d in [32usize, 64] {
+        for (tq, tk, routes) in [
+            (4usize, 32usize, true),
+            (4, 33, false),
+            (9, 72, true),
+            (9, 73, false),
+        ] {
+            let q = rand(&[1, 2, tq, d], 230 + d as u64, 1.0);
+            let k = rand(&[1, 2, tk, d], 231 + d as u64, 1.0);
+            let v = rand(&[1, 2, tk, d], 232 + d as u64, 1.0);
+            let want = ok(
+                "cpu",
+                c.attention_forward(&q, &k, &v, AttentionOpts::default()),
+            );
+            let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+            ok("sync", m.sync());
+            let before = m.dispatches();
+            let got = ok(
+                "metal",
+                m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+            );
+            ok("sync", m.sync());
+            let plain = m.dispatches() - before;
+            let before = m.dispatches();
+            drop(ok(
+                "scalar",
+                m.attention_forward_saving(&dq, &dk, &dv, AttentionOpts::default()),
+            ));
+            ok("sync", m.sync());
+            let scalar = m.dispatches() - before;
+            if m.has_tensorops() {
+                assert_eq!(
+                    plain > scalar,
+                    routes,
+                    "D{d} Tq {tq} Tk {tk}: {plain} dispatches, scalar kernel {scalar}"
+                );
+            }
+            same_tensor(&format!("D{d} {tq}x{tk}"), &got, &want, tol(tk), 1e-4);
+        }
+    }
+}
+
+/// An empty call (zero query and key rows, or an empty query over keys) must
+/// not route: the padded route has no rows to run, and the worker refuses it.
+/// The inference form does what the general kernel does, and agrees with the
+/// CPU's empty output where it returns one. A device tensor cannot be empty
+/// by upload, so the operands are zero-row views of a real buffer.
+#[test]
+fn empty_calls_return_empty_outputs_as_the_cpu_does() {
+    let (m, c) = (metal(), cpu());
+    for d in [32usize, 64] {
+        let base = up(&m, &rand(&[1, 2, 4, d], 240, 1.0));
+        // Row-major strides of [1, 2, 0, d].
+        let empty = base.view(&[1, 2, 0, d], &[0, 0, d, 1], 0);
+        let empty = ok("view", empty);
+        let real = up(&m, &rand(&[1, 2, 64, d], 241, 1.0));
+        let host_empty = host(&[], &[1, 2, 0, d]);
+        let host_real = rand(&[1, 2, 64, d], 241, 1.0);
+        // Tq = Tk = 0, then Tq = 0 over 64 keys.
+        let cases = [
+            ("0x0", &empty, &empty, &empty, &host_empty, &host_empty),
+            ("0x64", &empty, &real, &real, &host_empty, &host_real),
+        ];
+        for (what, q, k, v, hq, hk) in cases {
+            // The inference form must do what the general kernel does with
+            // the same operands (it must not route), and what it does must
+            // not contradict the CPU's empty output.
+            let got = m
+                .attention_forward(q, k, v, AttentionOpts::default())
+                .map(|t| t.shape().to_vec());
+            let general = m
+                .attention_forward_saving(q, k, v, AttentionOpts::default())
+                .map(|(t, _)| t.shape().to_vec());
+            match (&got, &general) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b, "D{d} {what}"),
+                (Err(a), Err(b)) => assert_eq!(
+                    std::mem::discriminant(a),
+                    std::mem::discriminant(b),
+                    "D{d} {what}: {a:?} vs {b:?}"
+                ),
+                other => panic!("D{d} {what}: the two forms disagree: {other:?}"),
+            }
+            if let (Ok(shape), Ok(want)) = (
+                &got,
+                c.attention_forward(hq, hk, hk, AttentionOpts::default()),
+            ) {
+                assert_eq!(shape.as_slice(), want.shape(), "D{d} {what} vs the CPU");
+            }
+            ok("sync", m.sync());
+        }
+    }
+}
+
+/// The padded route holds Q, K, V and the `Tk`-row output beside the
+/// result, so it asks for more than the general kernel; a budget that holds
+/// only the general kernel's output and log-sum-exp runs the general kernel.
+#[test]
+fn a_cross_attention_budget_without_room_for_the_padded_scratch_runs_the_general_kernel() {
+    let (b, h, tq, tk, d) = (1usize, 2usize, 200usize, 400usize, 32usize);
+    let (nq, nk) = (b * h * tq * d, b * h * tk * d);
+    let q = rand(&[b, h, tq, d], 220, 1.0);
+    let k = rand(&[b, h, tk, d], 221, 1.0);
+    let v = rand(&[b, h, tk, d], 222, 1.0);
+    let want = ok(
+        "cpu",
+        cpu().attention_forward(&q, &k, &v, AttentionOpts::default()),
+    );
+    let room = ((nq + 2 * nk + nq + b * h * tq) * 4 + 1024) as u64;
+    let tight = MetalBackend::new(ojas_core::Budget::new(room))
+        .unwrap_or_else(|e| panic!("Metal device unavailable: {e:?}"));
+    let (dq, dk, dv) = (up(&tight, &q), up(&tight, &k), up(&tight, &v));
+    let baseline = ok("live", tight.budget().live_bytes());
+    let general = dispatches_of(&tight, &dq, &dk, &dv, AttentionOpts::default());
+    let saving_before = tight.dispatches();
+    drop(ok(
+        "saving",
+        tight.attention_forward_saving(&dq, &dk, &dv, AttentionOpts::default()),
+    ));
+    ok("sync", tight.sync());
+    assert_eq!(general, tight.dispatches() - saving_before);
+    let got = ok(
+        "tight cross",
+        tight.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+    );
+    ok("sync", tight.sync());
+    same_tensor("tight cross", &got, &want, tol(tk), 1e-4);
+    drop(got);
+    assert_eq!(ok("live", tight.budget().live_bytes()), baseline);
+}
+
+/// Wall clock of the padded route against the general kernel for the memory
+/// cross-attention, `q [1, 8, 5184, 32]` over `k, v [1, 8, m, 32]`:
+/// minimum of 3 after 1 warm-up. Run with `--ignored --nocapture`.
+#[test]
+#[ignore = "timing, not a correctness check"]
+fn cross_attention_padded_route_against_general_wall_clock() {
+    let m = metal();
+    let q = up(&m, &rand(&[1, 8, 5184, 32], 1, 1.0));
+    for tk in [5200usize, 10400, 36544] {
+        let (k, v) = (
+            up(&m, &rand(&[1, 8, tk, 32], 2, 1.0)),
+            up(&m, &rand(&[1, 8, tk, 32], 3, 1.0)),
+        );
+        let time = |routed: bool| {
+            let mut best = f64::MAX;
+            for i in 0..4 {
+                ok("sync", m.sync());
+                let start = Instant::now();
+                if routed {
+                    drop(ok(
+                        "routed",
+                        m.attention_forward(&q, &k, &v, AttentionOpts::default()),
+                    ));
+                } else {
+                    drop(ok(
+                        "general",
+                        m.attention_forward_saving(&q, &k, &v, AttentionOpts::default()),
+                    ));
+                }
+                ok("sync", m.sync());
+                if i >= 1 {
+                    best = best.min(start.elapsed().as_secs_f64() * 1e3);
+                }
+            }
+            best
+        };
+        let (general, routed) = (time(false), time(true));
+        eprintln!("CROSS_ATTENTION m={tk}: general {general:.1} ms, padded route {routed:.1} ms");
+    }
+}
+
 /// The detector's cross-attention on the general kernel (`Tq != Tk`, a bias):
 /// wall clock, minimum of 5 after 2 warm-up calls. Run with
 /// `--ignored --nocapture`.
@@ -429,4 +771,45 @@ fn detector_cross_attention_wall_clock() {
         }
     }
     eprintln!("DETECTOR_CROSS_ATTENTION min of 5: {best:.3} ms");
+}
+
+/// Wall clock of the routed path against the general kernel at the
+/// detector's head dim, `[1, 8, 5184, 32]` (the 72 x 72 grid, 8 heads):
+/// minimum of 5 after 2 warm-up calls, each ended by a sync. The saving form
+/// never routes, so it is the general kernel. Run with `--ignored
+/// --nocapture`.
+#[test]
+#[ignore = "timing, not a correctness check"]
+fn head_dim_32_routed_against_general_wall_clock() {
+    let m = metal();
+    let (q, k, v) = (
+        up(&m, &rand(&[1, 8, 5184, 32], 1, 1.0)),
+        up(&m, &rand(&[1, 8, 5184, 32], 2, 1.0)),
+        up(&m, &rand(&[1, 8, 5184, 32], 3, 1.0)),
+    );
+    let time = |routed: bool| {
+        let mut best = f64::MAX;
+        for i in 0..7 {
+            ok("sync", m.sync());
+            let start = Instant::now();
+            if routed {
+                drop(ok(
+                    "routed",
+                    m.attention_forward(&q, &k, &v, AttentionOpts::default()),
+                ));
+            } else {
+                drop(ok(
+                    "general",
+                    m.attention_forward_saving(&q, &k, &v, AttentionOpts::default()),
+                ));
+            }
+            ok("sync", m.sync());
+            if i >= 2 {
+                best = best.min(start.elapsed().as_secs_f64() * 1e3);
+            }
+        }
+        best
+    };
+    let (general, routed) = (time(false), time(true));
+    eprintln!("D32_ROUTING [1,8,5184,32]: general {general:.2} ms, routed {routed:.2} ms");
 }

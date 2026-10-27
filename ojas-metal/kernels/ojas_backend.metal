@@ -1841,6 +1841,27 @@ kernel void ojas_conv_nchw(
     y[i] = has_bias != 0u ? v + bias[o] : v;
 }
 
+/// Q of a cross-attention for tessl's `encoder_attn`, which takes equal query
+/// and key lengths: x `[B, H, Tq, D]` to y `[B, Tk, H, D]` with rows `t >= Tq`
+/// zero. One thread per element of y; values move as bits.
+kernel void ojas_pad_q(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &total [[buffer(2)]],
+    constant uint &h [[buffer(3)]],
+    constant uint &tq [[buffer(4)]],
+    constant uint &tk [[buffer(5)]],
+    constant uint &d [[buffer(6)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint di = i % d;
+    const uint hi = (i / d) % h;
+    const uint t = (i / (d * h)) % tk;
+    const uint b = i / (d * h * tk);
+    y[i] = t < tq ? x[(((ulong)b * h + hi) * tq + t) * d + di] : 0.0f;
+}
+
 /// Depthwise convolution (`groups == c == o`, one filter per channel), one
 /// thread per output element: the taps in ascending `(i, j)` order, a tap on
 /// padding skipped, the bias added last, so every value is the CPU's bit for
@@ -2627,3 +2648,149 @@ kernel void ojas_attn_gen_fwd(
     }
     if (lane == 0u) lse[(ulong)bh * Tq + i] = (l > 0.0f) ? m + precise::log(l) : 0.0f;
 }
+
+// ----------------------------- general attention, split-K tiles (D 16, 32) ---
+//
+// The same contract as `ojas_attn_gen_fwd` (S = scale Q Kᵀ + bias, softmax
+// over the keys a row sees, lse = log sum exp, a row that sees no key writes
+// zeros and lse 0, a non-finite score is skipped and sets ST_OUT), without
+// causal and window, in two kernels:
+//
+//   ojas_xattn_part_dD    one thread per query row, XA_ROWS rows to a threadgroup.
+//                         K and V go through threadgroup memory XA_TILE keys at a
+//                         time, shared by every row, and each thread walks its
+//                         tile keeping a running max, sum and output; the keys
+//                         are cut into `splits` ranges of `per_split`, one
+//                         threadgroup row each, so a short Q over a long K still
+//                         fills the GPU. A split writes (m, l, acc[D]) per row.
+//   ojas_xattn_combine_dD one thread per row merges its splits by their maxima:
+//                         M = max m_s, L = sum l_s e^(m_s - M), O = sum acc_s
+//                         e^(m_s - M) / L, lse = M + log L.
+//
+// The score is a sequential f32 dot over D, not the scalar kernel's lane sums,
+// so values agree with it to rounding, not bit for bit. Grid y of the first
+// kernel is `bh * splits + split`.
+#define XA_ROWS 128u
+#define XA_TILE 64u
+
+#define OJAS_XATTN(DD)                                                          \
+kernel void ojas_xattn_part_d##DD(                                              \
+    device const float *q [[buffer(0)]],                                        \
+    device const float *k [[buffer(1)]],                                        \
+    device const float *v [[buffer(2)]],                                        \
+    device float *part [[buffer(3)]],                                           \
+    device const float *bias [[buffer(4)]],                                     \
+    device const uint *lens [[buffer(5)]],                                      \
+    device atomic_uint *st [[buffer(6)]],                                       \
+    constant uint &Tq [[buffer(7)]],                                            \
+    constant uint &Tk [[buffer(8)]],                                            \
+    constant uint &H [[buffer(9)]],                                             \
+    constant uint &rep [[buffer(10)]],                                          \
+    constant uint &flags [[buffer(11)]],                                        \
+    constant uint &bias_b [[buffer(12)]],                                       \
+    constant uint &bias_h [[buffer(13)]],                                       \
+    constant uint &bias_q [[buffer(14)]],                                       \
+    constant uint &splits [[buffer(15)]],                                       \
+    constant uint &per_split [[buffer(16)]],                                    \
+    constant uint &planes [[buffer(17)]],                                       \
+    constant float &scale [[buffer(18)]],                                       \
+    uint2 tg [[threadgroup_position_in_grid]],                                  \
+    uint tid [[thread_index_in_threadgroup]])                                   \
+{                                                                               \
+    threadgroup float ks[XA_TILE * DD];                                         \
+    threadgroup float vs[XA_TILE * DD];                                         \
+    const uint bh = tg.y / splits;                                              \
+    const uint split = tg.y - bh * splits;                                      \
+    const uint b = bh / H;                                                      \
+    const uint h = bh - b * H;                                                  \
+    const uint row = tg.x * XA_ROWS + tid;                                      \
+    const bool live = row < Tq;                                                 \
+    const ulong kv_base = ((ulong)b * (H / rep) + h / rep) * Tk * DD;           \
+    uint hi = Tk;                                                               \
+    if ((flags & 4u) != 0u) hi = min(hi, lens[b]);                              \
+    const uint lo = min(hi, split * per_split);                                 \
+    const uint end = min(hi, lo + per_split);                                   \
+    float qv[DD];                                                               \
+    float acc[DD];                                                              \
+    for (uint c = 0u; c < DD; ++c) {                                            \
+        qv[c] = live ? q[((ulong)bh * Tq + row) * DD + c] : 0.0f;               \
+        acc[c] = 0.0f;                                                          \
+    }                                                                           \
+    ulong bias_at = 0;                                                          \
+    if ((flags & 2u) != 0u && live) {                                           \
+        const ulong plane = (ulong)(bias_b == 1u ? 0u : b) * bias_h             \
+            + (bias_h == 1u ? 0u : h);                                          \
+        bias_at = (plane * bias_q + (bias_q == 1u ? 0u : row)) * Tk;            \
+    }                                                                           \
+    float m = -INFINITY;                                                        \
+    float l = 0.0f;                                                             \
+    bool bad = false;                                                           \
+    for (uint base = lo; base < end; base += XA_TILE) {                         \
+        const uint n = min(XA_TILE, end - base);                                \
+        threadgroup_barrier(mem_flags::mem_threadgroup);                        \
+        for (uint e = tid; e < n * DD; e += XA_ROWS) {                          \
+            ks[e] = k[kv_base + (ulong)base * DD + e];                          \
+            vs[e] = v[kv_base + (ulong)base * DD + e];                          \
+        }                                                                       \
+        threadgroup_barrier(mem_flags::mem_threadgroup);                        \
+        if (live) {                                                             \
+            for (uint j = 0u; j < n; ++j) {                                     \
+                float dot = 0.0f;                                               \
+                for (uint c = 0u; c < DD; ++c) dot += qv[c] * ks[j * DD + c];   \
+                float sc = dot * scale;                                         \
+                if ((flags & 2u) != 0u) sc += bias[bias_at + base + j];         \
+                if (!isfinite(sc)) {                                            \
+                    bad = true;                                                 \
+                    continue;                                                   \
+                }                                                               \
+                const float m_new = max(m, sc);                                 \
+                const float alpha = (m == -INFINITY) ? 0.0f                     \
+                                                     : precise::exp(m - m_new); \
+                const float p = precise::exp(sc - m_new);                       \
+                l = l * alpha + p;                                              \
+                for (uint c = 0u; c < DD; ++c)                                  \
+                    acc[c] = acc[c] * alpha + p * vs[j * DD + c];               \
+                m = m_new;                                                      \
+            }                                                                   \
+        }                                                                       \
+    }                                                                           \
+    if (bad) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);      \
+    if (live) {                                                                 \
+        const ulong at = (((ulong)split * planes + bh) * Tq + row) * (DD + 2u); \
+        part[at] = m;                                                           \
+        part[at + 1u] = l;                                                      \
+        for (uint c = 0u; c < DD; ++c) part[at + 2u + c] = acc[c];              \
+    }                                                                           \
+}                                                                               \
+kernel void ojas_xattn_combine_d##DD(                                           \
+    device const float *part [[buffer(0)]],                                     \
+    device float *o [[buffer(1)]],                                              \
+    device float *lse [[buffer(2)]],                                            \
+    constant uint &rows [[buffer(3)]],                                          \
+    constant uint &splits [[buffer(4)]],                                        \
+    uint r [[thread_position_in_grid]])                                         \
+{                                                                               \
+    if (r >= rows) return;                                                      \
+    float top = -INFINITY;                                                      \
+    for (uint s = 0u; s < splits; ++s)                                          \
+        top = max(top, part[((ulong)s * rows + r) * (DD + 2u)]);                \
+    float total = 0.0f;                                                         \
+    float acc[DD];                                                              \
+    for (uint c = 0u; c < DD; ++c) acc[c] = 0.0f;                               \
+    if (top != -INFINITY) {                                                     \
+        for (uint s = 0u; s < splits; ++s) {                                    \
+            const ulong at = ((ulong)s * rows + r) * (DD + 2u);                 \
+            const float ms = part[at];                                          \
+            if (ms == -INFINITY) continue;                                      \
+            const float w = precise::exp(ms - top);                             \
+            total += part[at + 1u] * w;                                         \
+            for (uint c = 0u; c < DD; ++c) acc[c] += part[at + 2u + c] * w;     \
+        }                                                                       \
+    }                                                                           \
+    const float inv = (total > 0.0f) ? precise::divide(1.0f, total) : 0.0f;     \
+    for (uint c = 0u; c < DD; ++c) o[(ulong)r * DD + c] = acc[c] * inv;         \
+    lse[r] = (total > 0.0f) ? top + precise::log(total) : 0.0f;                 \
+}
+
+OJAS_XATTN(16)
+OJAS_XATTN(32)
