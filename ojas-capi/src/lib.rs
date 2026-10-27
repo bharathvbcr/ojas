@@ -33,7 +33,7 @@ pub use engine::{
     OP_RESUME, OP_SAMPLE, OP_SAVE, OP_SET_MEMORY_CEILING, OP_STEP_RETIRED, OP_SYSTEM_PROFILE,
     OP_TOKENIZE, OP_TOKENIZER, OP_TRAIN_OPEN, OP_TRAIN_STEP,
 };
-pub use generate::{argmax, GEN_LOGITS};
+pub use generate::{argmax, generate_argmax, GEN_LOGITS};
 pub use load::{inspect, resolve_dir_under_root, resolve_under_root, INLINE_PATH_MAX};
 pub use session::{
     clear_last_error, clear_sessions, last_error, memory_ceiling, reset_sessions, session_count,

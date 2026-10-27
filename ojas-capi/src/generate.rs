@@ -27,6 +27,19 @@ pub fn argmax(logits: &[f32]) -> Result<u32, String> {
     argmax_token(logits).map_err(|e| crate::ojas_error("generate", &e))
 }
 
+/// Argmax of caller logits, the body of GENERATE mode [`GEN_LOGITS`].
+///
+/// `probe` is the admission `dispatch` runs before `op_generate`: ask the
+/// kernel, and refuse when it reports critical pressure. The session lookup
+/// and the wire parse are in neither arm, so the two arms differ by that
+/// probe alone.
+pub fn generate_argmax(logits: &[f32], probe: bool) -> Result<u32, String> {
+    if probe {
+        crate::engine::admit(crate::OP_GENERATE, ojas_device::probe_pressure())?;
+    }
+    argmax(logits)
+}
+
 /// SAMPLE: `id: u64`, then `{temperature, top_k?, top_p?, seed,
 /// max_new_tokens, stop?, prompt}`. Returns the new ids (a stop token, when
 /// emitted, is the last).
@@ -92,4 +105,23 @@ fn sample_on<B: Backend + Clone>(
     let params = ModelParams::from_flat(&m.spec, m.params()?)?;
     let mut decoder = DeviceDecoder::new(m.backend.clone(), &m.spec, &params, capacity)?;
     decoder.generate(prompt, cfg)
+}
+
+#[cfg(test)]
+mod generate_argmax_tests {
+    use super::{argmax, generate_argmax};
+
+    #[test]
+    fn without_the_probe_matches_argmax_and_the_probe_either_matches_or_refuses() {
+        let logits: Vec<f32> = (0..32).map(|i| i as f32 * 0.25).collect();
+        let plain = argmax(&logits).unwrap();
+        assert_eq!(generate_argmax(&logits, false).unwrap(), plain);
+        match generate_argmax(&logits, true) {
+            Ok(token) => assert_eq!(token, plain),
+            Err(err) => assert!(
+                err.contains("critical memory pressure"),
+                "probe arm failed for another reason: {err}"
+            ),
+        }
+    }
 }

@@ -18,6 +18,11 @@
 //! `OJAS_BENCH_OPS=a,b` keeps only those cases; `OJAS_BENCH_THREADS=6,18` sets
 //! the thread counts (the first is used by `dump` and `loop`).
 //!
+//! The `audit_*` cases are the 2026-10-16 slice-audit baselines. Each names
+//! its own numerics (`CpuBackend` stays Fast unless the case says Exact).
+//! An `OJAS_OP` line's `spread_ms` is that run's max minus its min. Select
+//! one case per process to interleave an A/B.
+//!
 //! ```text
 //! OJAS_BENCH_MODE=dump cargo test -p ojas-cpu --release --test bench_ops -- --ignored --nocapture --test-threads=1
 //! cargo test -p ojas-cpu --release --test bench_ops -- --ignored --nocapture --test-threads=1
@@ -70,6 +75,9 @@ struct Case {
     names: Vec<String>,
     tensors: Vec<Tensor>,
     dirs: Vec<Dir>,
+    /// `CpuBackend`'s contract. Fast, unless an audit row sets Exact.
+    /// The `Numerics` enum's own default is Exact; this field does not follow it.
+    numerics: Numerics,
 }
 
 fn dir<F>(name: &'static str, n: usize, f: F) -> Dir
@@ -185,8 +193,19 @@ impl Ctx {
             names: self.names,
             tensors: self.tensors,
             dirs,
+            numerics: Numerics::Fast,
         }
     }
+}
+
+/// Drop a host tensor's cached "already finite" bit so the next op scans it.
+/// `permute` and `residual_add_backward` scan serially, and only when the
+/// cache is unknown. A reused bench tensor would skip that scan after the
+/// first call.
+fn forget_finite(t: &mut Tensor) -> Result<(), OjasError> {
+    let n = t.f32_slice_mut()?.len();
+    std::hint::black_box(n);
+    Ok(())
 }
 
 /// Row-major view of a contiguous tensor with a new shape; no copy.
@@ -1146,6 +1165,222 @@ fn block_case(b: &Budget) -> Case {
     )
 }
 
+/// 16 × 2^20 floats, as 4096 × 4096. `permute` and `residual_add_backward`
+/// scan this serially when the finite cache is cold.
+const AUDIT_SCAN_N: usize = 16 * 1024 * 1024;
+
+fn audit_rms_bwd(b: &Budget, name: &'static str, rows: usize, dim: usize) -> Case {
+    let mut c = Ctx::new(b, name);
+    let x = c.f32("x", &[rows, dim], 1.0, 0.0);
+    let w = c.f32("w", &[dim], 0.1, 1.0);
+    let gy = c.f32("gy", &[rows, dim], 0.01, 0.0);
+    c.case(
+        name,
+        format!("[{rows},{dim}]"),
+        vec![dir("bwd", 5, move |cpu, t| {
+            let (gx, gw) = cpu.rms_norm_backward(&t[x], &t[w], &t[gy], RMS_NORM_EPS)?;
+            Ok(vec![out("gx", gx), out("gw", gw)])
+        })],
+    )
+}
+
+fn audit_conv1d_bwd(b: &Budget) -> Case {
+    let name = "audit_conv1d_silu_bwd_qwen";
+    let mut c = Ctx::new(b, name);
+    let x = c.f32("x", &[1, T, QCONV], 1.0, 0.0);
+    let w = c.f32("w", &[QCONV, QK], 0.5, 0.0);
+    let gy = c.f32("gy", &[1, T, QCONV], 0.01, 0.0);
+    c.case(
+        name,
+        format!("[1,{T},{QCONV}]k{QK}"),
+        vec![dir("bwd", 5, move |cpu, t| {
+            let (gx, gw) = cpu.causal_conv1d_silu_backward(&t[x], &t[w], &t[gy])?;
+            Ok(vec![out("gx", gx), out("gw", gw)])
+        })],
+    )
+}
+
+fn audit_gated_rms_bwd(b: &Budget) -> Case {
+    let name = "audit_gated_rms_bwd_qwen";
+    let mut c = Ctx::new(b, name);
+    let rows = T * QGH;
+    let x = c.f32("x", &[rows, QGD], 1.0, 0.0);
+    let z = c.f32("z", &[rows, QGD], 1.0, 0.0);
+    let w = c.f32("w", &[QGD], 0.1, 1.0);
+    let gy = c.f32("gy", &[rows, QGD], 0.01, 0.0);
+    c.case(
+        name,
+        format!("[{rows},{QGD}]"),
+        vec![dir("bwd", 5, move |cpu, t| {
+            let g = cpu.gated_rms_norm_backward(&t[x], &t[z], &t[w], &t[gy], RMS_NORM_EPS)?;
+            Ok(vec![
+                out("gx", g.input),
+                out("gz", g.gate),
+                out("gw", g.weight),
+            ])
+        })],
+    )
+}
+
+fn audit_fused_ce(
+    b: &Budget,
+    name: &'static str,
+    rows: usize,
+    hidden: usize,
+    vocab: usize,
+    numerics: Numerics,
+) -> Case {
+    let mut c = Ctx::new(b, name);
+    let x = c.f32("x", &[rows, hidden], 1.0, 0.0);
+    let w = c.f32("w", &[vocab, hidden], 0.035, 0.0);
+    let targets = c.ids("targets", &[rows], vocab);
+    let run = move |cpu: &CpuBackend, t: &mut [Tensor], grads: CeGrads| {
+        let ce = cpu.linear_cross_entropy_mean(
+            &t[x],
+            &t[w],
+            &t[targets],
+            None,
+            CeChunk { rows, cols: vocab },
+            grads,
+        )?;
+        let mut outs = vec![out("loss", ce.loss)];
+        outs.extend(ce.grad_input.map(|g| out("gx", g)));
+        outs.extend(ce.grad_weight.map(|g| out("gw", g)));
+        Ok(outs)
+    };
+    let mut case = c.case(
+        name,
+        format!("[{rows},{hidden}]x[{vocab},{hidden}] chunk {rows}x{vocab} {numerics:?}"),
+        vec![
+            dir("fwd", 3, move |cpu, t| run(cpu, t, CeGrads::NONE)),
+            dir("bwd", 3, move |cpu, t| run(cpu, t, CeGrads::BOTH)),
+        ],
+    );
+    case.numerics = numerics;
+    case
+}
+
+fn audit_gemv_exact(b: &Budget) -> Case {
+    let name = "audit_gemv_1x2048x6144_exact";
+    let mut c = Ctx::new(b, name);
+    let x = c.f32("x", &[1, QH], 1.0, 0.0);
+    let w = c.f32("w", &[QCONV, QH], 0.035, 0.0);
+    let mut case = c.case(
+        name,
+        format!("1x{QH}x{QCONV} Exact"),
+        vec![dir("fwd", 11, move |cpu, t| {
+            Ok(vec![out("y", cpu.linear_forward(&t[x], &t[w])?)])
+        })],
+    );
+    case.numerics = Numerics::Exact;
+    case
+}
+
+fn audit_muon(
+    b: &Budget,
+    name: &'static str,
+    rows: usize,
+    cols: usize,
+    n: usize,
+    numerics: Numerics,
+) -> Case {
+    let mut case = muon_case(b, name, rows, cols, n, Ns5Precision::F32);
+    case.numerics = numerics;
+    case
+}
+
+fn audit_gdn(b: &Budget) -> Case {
+    const LEN: usize = 2048;
+    let name = "audit_gdn_b1_t2048_h16_d128";
+    let mut c = Ctx::new(b, name);
+    let q = c.f32("q", &[1, LEN, QGH, QGD], 1.0, 0.0);
+    let k = c.f32("k", &[1, LEN, QGH, QGD], 1.0, 0.0);
+    let v = c.f32("v", &[1, LEN, QGH, QGD], 1.0, 0.0);
+    let g = c.f32("g", &[1, LEN, QGH], 0.05, -0.1);
+    let beta = c.f32("beta", &[1, LEN, QGH], 0.25, 0.5);
+    let gy = c.f32("gy", &[1, LEN, QGH, QGD], 0.01, 0.0);
+    let ix = [q, k, v, g, beta];
+    let ckpt = CpuBackend::new(b.clone())
+        .chunked_gdn_forward(gdn_inputs(&c.tensors, ix))
+        .unwrap()
+        .checkpoints;
+    let ckpt = c.push("checkpoints", ckpt);
+    c.case(
+        name,
+        format!("[1,{LEN},{QGH},{QGD}]"),
+        vec![
+            dir("fwd", 3, move |cpu, t| {
+                let f = cpu.chunked_gdn_forward(gdn_inputs(t, ix))?;
+                Ok(vec![out("y", f.output), out("state", f.final_state)])
+            }),
+            dir("bwd", 3, move |cpu, t| {
+                let gr = cpu.chunked_gdn_backward(gdn_inputs(t, ix), &t[ckpt], &t[gy], None)?;
+                Ok(vec![
+                    out("gq", gr.q),
+                    out("gk", gr.k),
+                    out("gv", gr.v),
+                    out("gg", gr.g),
+                    out("gbeta", gr.beta),
+                ])
+            }),
+        ],
+    )
+}
+
+fn audit_nan_permute(b: &Budget) -> Case {
+    let name = "audit_nan_scan_permute_16m";
+    let mut c = Ctx::new(b, name);
+    let side = 4096;
+    assert_eq!(side * side, AUDIT_SCAN_N);
+    let x = c.f32("x", &[side, side], 1.0, 0.0);
+    c.case(
+        name,
+        format!("[{side},{side}] cold-finite-cache"),
+        vec![dir("fwd", 5, move |cpu, t| {
+            forget_finite(&mut t[x])?;
+            Ok(vec![out("y", cpu.permute(&t[x], &[1, 0])?)])
+        })],
+    )
+}
+
+fn audit_nan_add_bwd(b: &Budget) -> Case {
+    let name = "audit_nan_scan_add_bwd_16m";
+    let mut c = Ctx::new(b, name);
+    let side = 4096;
+    assert_eq!(side * side, AUDIT_SCAN_N);
+    let x = c.f32("x", &[side, side], 1.0, 0.0);
+    let y = c.f32("y", &[side, side], 1.0, 0.0);
+    let gy = c.f32("gy", &[side, side], 0.01, 0.0);
+    c.case(
+        name,
+        format!("[{side},{side}] cold-finite-cache"),
+        vec![dir("bwd", 5, move |cpu, t| {
+            forget_finite(&mut t[x])?;
+            forget_finite(&mut t[y])?;
+            forget_finite(&mut t[gy])?;
+            let (gx, gy2) = cpu.residual_add_backward(&t[x], &t[y], &t[gy])?;
+            Ok(vec![out("gx", gx), out("gy", gy2)])
+        })],
+    )
+}
+
+fn audit_cached(b: &Budget, name: &'static str, kv_len: usize, n: usize) -> Case {
+    let mut c = Ctx::new(b, name);
+    let q = c.f32("q", &[1, 1, NH, HD], 1.0, 0.0);
+    let k = c.f32("k_cache", &[1, kv_len, NH, HD], 1.0, 0.0);
+    let v = c.f32("v_cache", &[1, kv_len, NH, HD], 1.0, 0.0);
+    c.case(
+        name,
+        format!("q[1,1,{NH},{HD}] cache[1,{kv_len},{NH},{HD}] kv_len {kv_len}"),
+        vec![dir("fwd", n, move |cpu, t| {
+            Ok(vec![out(
+                "out",
+                cpu.cached_attention_forward(&t[q], &t[k], &t[v], kv_len, None)?,
+            )])
+        })],
+    )
+}
+
 type Builder = fn(&Budget) -> Case;
 
 fn builders() -> Vec<(&'static str, Builder)> {
@@ -1257,6 +1492,76 @@ fn builders() -> Vec<(&'static str, Builder)> {
                 },
             )
         }),
+        ("audit_rms_bwd_8192x2048", |b| {
+            audit_rms_bwd(b, "audit_rms_bwd_8192x2048", 8192, QH)
+        }),
+        ("audit_rms_bwd_65536x128", |b| {
+            audit_rms_bwd(b, "audit_rms_bwd_65536x128", 65536, QGD)
+        }),
+        ("audit_conv1d_silu_bwd_qwen", audit_conv1d_bwd),
+        ("audit_gated_rms_bwd_qwen", audit_gated_rms_bwd),
+        ("audit_fused_ce_v50304_exact", |b| {
+            audit_fused_ce(
+                b,
+                "audit_fused_ce_v50304_exact",
+                T / 8,
+                D,
+                V,
+                Numerics::Exact,
+            )
+        }),
+        ("audit_fused_ce_v50304_fast", |b| {
+            audit_fused_ce(b, "audit_fused_ce_v50304_fast", T / 8, D, V, Numerics::Fast)
+        }),
+        ("audit_fused_ce_v248320_exact", |b| {
+            audit_fused_ce(
+                b,
+                "audit_fused_ce_v248320_exact",
+                1,
+                QH,
+                248_320,
+                Numerics::Exact,
+            )
+        }),
+        ("audit_fused_ce_v248320_fast", |b| {
+            audit_fused_ce(
+                b,
+                "audit_fused_ce_v248320_fast",
+                1,
+                QH,
+                248_320,
+                Numerics::Fast,
+            )
+        }),
+        ("audit_gemv_1x2048x6144_exact", audit_gemv_exact),
+        ("audit_muon_768x768_exact", |b| {
+            audit_muon(b, "audit_muon_768x768_exact", D, D, 5, Numerics::Exact)
+        }),
+        ("audit_muon_768x768_fast", |b| {
+            audit_muon(b, "audit_muon_768x768_fast", D, D, 5, Numerics::Fast)
+        }),
+        ("audit_muon_6144x2048_exact", |b| {
+            audit_muon(
+                b,
+                "audit_muon_6144x2048_exact",
+                QCONV,
+                QH,
+                3,
+                Numerics::Exact,
+            )
+        }),
+        ("audit_muon_6144x2048_fast", |b| {
+            audit_muon(b, "audit_muon_6144x2048_fast", QCONV, QH, 3, Numerics::Fast)
+        }),
+        ("audit_gdn_b1_t2048_h16_d128", audit_gdn),
+        ("audit_nan_scan_permute_16m", audit_nan_permute),
+        ("audit_nan_scan_add_bwd_16m", audit_nan_add_bwd),
+        ("audit_cached_attn_8k", |b| {
+            audit_cached(b, "audit_cached_attn_8k", 8192, 7)
+        }),
+        ("audit_cached_attn_32k", |b| {
+            audit_cached(b, "audit_cached_attn_32k", 32768, 5)
+        }),
     ]
 }
 
@@ -1304,10 +1609,22 @@ fn bench_dir() -> PathBuf {
     }
 }
 
-fn backend(budget: &Budget, threads: usize) -> CpuBackend {
-    let cpu = CpuBackend::with_threads(budget.clone(), threads).unwrap();
+fn backend_for(budget: &Budget, threads: usize, numerics: Numerics) -> CpuBackend {
+    let cpu = CpuBackend::with_threads(budget.clone(), threads)
+        .unwrap()
+        .with_numerics(numerics);
     // Before any timed call, so a Fast gate can use a worker that already exists.
     cpu.start_workers().unwrap();
+    assert_eq!(
+        cpu.numerics(),
+        numerics,
+        "backend numerics were not applied"
+    );
+    cpu
+}
+
+fn backend(budget: &Budget, threads: usize) -> CpuBackend {
+    let cpu = backend_for(budget, threads, Numerics::Fast);
     assert_eq!(
         cpu.numerics(),
         Numerics::Fast,
@@ -1353,10 +1670,10 @@ fn dump_tensor(dir: &Path, manifest: &mut impl std::io::Write, kind: &str, name:
 
 fn run_dump(budget: &Budget) {
     let threads = thread_counts()[0];
-    let cpu = backend(budget, threads);
     let root = bench_dir();
     for (name, build) in selected() {
         let mut case = build(budget);
+        let cpu = backend_for(budget, threads, case.numerics);
         let dir = root.join(name);
         std::fs::create_dir_all(&dir).unwrap();
         let mut manifest = Vec::new();
@@ -1383,17 +1700,24 @@ fn run_dump(budget: &Budget) {
 }
 
 fn run_time(budget: &Budget) {
-    let backends: Vec<CpuBackend> = thread_counts()
+    let fast: Vec<CpuBackend> = thread_counts()
         .into_iter()
         .map(|t| backend(budget, t))
         .collect();
     println!(
         "OJAS_META pid={} numerics=Fast threads={:?}",
         std::process::id(),
-        backends.iter().map(CpuBackend::threads).collect::<Vec<_>>()
+        fast.iter().map(CpuBackend::threads).collect::<Vec<_>>()
     );
     for (name, build) in selected() {
         let mut case = build(budget);
+        let backends: Vec<CpuBackend> = match case.numerics {
+            Numerics::Exact => thread_counts()
+                .into_iter()
+                .map(|t| backend_for(budget, t, Numerics::Exact))
+                .collect(),
+            Numerics::Fast => fast.clone(),
+        };
         for cpu in &backends {
             for d in &case.dirs {
                 for _ in 0..2 {
@@ -1408,14 +1732,19 @@ fn run_time(budget: &Budget) {
                     ns.push(dt.as_nanos());
                 }
                 ns.sort_unstable();
+                let min_ns = ns[0];
+                let max_ns = ns[ns.len() - 1];
                 println!(
-                    "OJAS_OP op={name} dir={} shape={} threads={} n={} min_ms={:.4} med_ms={:.4}",
+                    "OJAS_OP op={name} dir={} shape={} threads={} n={} min_ms={:.4} med_ms={:.4} max_ms={:.4} spread_ms={:.4} numerics={:?}",
                     d.name,
                     case.shape.replace(' ', "_"),
                     cpu.threads(),
                     d.n,
-                    ns[0] as f64 / 1e6,
-                    ns[ns.len() / 2] as f64 / 1e6
+                    min_ns as f64 / 1e6,
+                    ns[ns.len() / 2] as f64 / 1e6,
+                    max_ns as f64 / 1e6,
+                    (max_ns - min_ns) as f64 / 1e6,
+                    cpu.numerics()
                 );
             }
         }
@@ -1436,9 +1765,9 @@ fn run_loop(budget: &Budget) {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
-    let cpu = backend(budget, thread_counts()[0]);
     let (name, build) = cases[0];
     let mut case = build(budget);
+    let cpu = backend_for(budget, thread_counts()[0], case.numerics);
     let d = case
         .dirs
         .iter()
@@ -1473,6 +1802,33 @@ fn run_loop(budget: &Budget) {
         cpu.threads(),
         busy.as_secs_f64() * 1e3 / calls.max(1) as f64
     );
+}
+
+#[test]
+fn audit_baseline_cases_are_registered() {
+    let names: Vec<&str> = builders().into_iter().map(|(name, _)| name).collect();
+    for need in [
+        "audit_rms_bwd_8192x2048",
+        "audit_rms_bwd_65536x128",
+        "audit_conv1d_silu_bwd_qwen",
+        "audit_gated_rms_bwd_qwen",
+        "audit_fused_ce_v50304_exact",
+        "audit_fused_ce_v50304_fast",
+        "audit_fused_ce_v248320_exact",
+        "audit_fused_ce_v248320_fast",
+        "audit_gemv_1x2048x6144_exact",
+        "audit_muon_768x768_exact",
+        "audit_muon_768x768_fast",
+        "audit_muon_6144x2048_exact",
+        "audit_muon_6144x2048_fast",
+        "audit_gdn_b1_t2048_h16_d128",
+        "audit_nan_scan_permute_16m",
+        "audit_nan_scan_add_bwd_16m",
+        "audit_cached_attn_8k",
+        "audit_cached_attn_32k",
+    ] {
+        assert!(names.contains(&need), "missing audit baseline case {need}");
+    }
 }
 
 #[test]
