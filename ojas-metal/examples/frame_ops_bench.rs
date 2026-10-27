@@ -912,7 +912,9 @@ mod bench {
                     .enumerate()
                     .map(|(i, sh)| dev(sh, 10 + i as u64, if i == 0 { 1.0 } else { 0.05 }))
                     .collect();
+                let t = &t;
                 let ac = Autocast::new(metal);
+                let acr = &ac;
                 let _region = ac.autocast_region(AutocastMode::Bf16).expect("region");
                 let arms: Vec<Arm<'_>> = match row.op {
                     Op::LayerNorm => {
