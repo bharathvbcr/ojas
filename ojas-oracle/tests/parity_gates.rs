@@ -351,6 +351,9 @@ fn normwise_and_tensor_checks_fail_closed() {
     assert_eq!(normwise_rel("t", &[0.0, 0.0], &[0.0, 0.0]).unwrap(), 0.0);
     assert_eq!(normwise_rel("t", &[1e-30], &[0.0]).unwrap(), f64::INFINITY);
     assert!(normwise_rel("t", &[f32::NAN], &[1.0]).is_err());
+    assert!(normwise_rel("t", &[1.0], &[f32::NAN]).is_err());
+    assert!(normwise_rel("t", &[1.0], &[f32::INFINITY]).is_err());
+    assert!(normwise_rel("t", &[1.0], &[f32::NEG_INFINITY]).is_err());
     assert!(normwise_rel("t", &[1.0], &[1.0, 2.0]).is_err());
     assert!(
         (normwise_rel("t", &[3.0, 4.0], &[3.0, 4.5]).unwrap() - 0.5 / (9.0f64 + 20.25).sqrt())
@@ -365,6 +368,12 @@ fn normwise_and_tensor_checks_fail_closed() {
     let want = TensorSet::new(vec![t("a", vec![2], vec![1.0, 2.0])]).unwrap();
     let reshaped = TensorSet::new(vec![t("a", vec![2, 1], vec![1.0, 2.0])]).unwrap();
     assert!(check_tensors("t", &reshaped, &want, &[], 1e-4).is_err());
+    let one = TensorSet::new(vec![t("a", vec![1], vec![1.0])]).unwrap();
+    let nan_want = TensorSet::new(vec![t("a", vec![1], vec![f32::NAN])]).unwrap();
+    let inf_want = TensorSet::new(vec![t("a", vec![1], vec![f32::INFINITY])]).unwrap();
+    assert!(check_tensors("t", &one, &nan_want, &[], 1e-4).is_err());
+    assert!(check_tensors("t", &one, &inf_want, &[], 1e-4).is_err());
+    assert!(check_tensors("t", &one, &one, &[], 1e-4).is_ok());
     assert!(TensorSet::new(vec![t("a", vec![3], vec![1.0])]).is_err());
     assert!(TensorSet::new(vec![t("a", vec![1], vec![1.0]), t("a", vec![1], vec![1.0])]).is_err());
 }

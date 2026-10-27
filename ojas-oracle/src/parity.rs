@@ -168,8 +168,10 @@ fn from_ojas(check: &str) -> impl Fn(OjasError) -> ParityFailure + '_ {
 }
 
 /// ‖got − want‖₂ / ‖want‖₂ in f64. `Ok(0.0)` when both are exactly zero;
-/// `Ok(f64::INFINITY)` when `want` is zero and `got` is not. Non-finite
-/// values in `got` and length mismatches are failures.
+/// `Ok(f64::INFINITY)` when `want` is zero and `got` is not. A length
+/// mismatch, or a non-finite value in `got` or in `want`, is a failure.
+/// A NaN reference used to return `Ok(NaN)`, and `NaN > tol` is false, so
+/// the tensor gate accepted it.
 pub fn normwise_rel(check: &str, got: &[f32], want: &[f32]) -> Result<f64, ParityFailure> {
     if got.len() != want.len() {
         return Err(fail(
@@ -179,6 +181,9 @@ pub fn normwise_rel(check: &str, got: &[f32], want: &[f32]) -> Result<f64, Parit
     }
     if let Some(i) = got.iter().position(|v| !v.is_finite()) {
         return Err(fail(check, format!("non-finite value at {i}")));
+    }
+    if let Some(i) = want.iter().position(|v| !v.is_finite()) {
+        return Err(fail(check, format!("non-finite reference at {i}")));
     }
     let (mut diff, mut norm) = (0.0f64, 0.0f64);
     for (&g, &w) in got.iter().zip(want) {
@@ -193,9 +198,9 @@ pub fn normwise_rel(check: &str, got: &[f32], want: &[f32]) -> Result<f64, Parit
 }
 
 /// Every tensor of `want` must be in `got` with the same shape and within
-/// `tol` normwise. `got` may hold extra tensors only if they are listed in
-/// `allowed_extra` and are exactly zero (a gradient torch leaves as `None`).
-/// Returns the worst relative error.
+/// `tol` normwise. A non-finite value in either tensor fails. `got` may hold
+/// extra tensors only if they are listed in `allowed_extra` and are exactly
+/// zero (a gradient torch leaves as `None`). Returns the worst relative error.
 pub fn check_tensors(
     check: &str,
     got: &TensorSet,
@@ -215,7 +220,8 @@ pub fn check_tensors(
             ));
         }
         let rel = normwise_rel(&format!("{check} {}", w.name), &g.data, &w.data)?;
-        if rel > tol {
+        // `!(rel <= tol)` rejects NaN. `rel > tol` does not: a NaN comparison is false.
+        if !(rel <= tol) {
             return Err(fail(
                 check,
                 format!("{}: normwise relative error {rel:e} > {tol:e}", w.name),
@@ -348,8 +354,18 @@ fn check_forward(
     if !loss.is_finite() {
         return Err(fail(check, "loss is not finite"));
     }
-    let rel = (f64::from(loss) - f64::from(want_loss)).abs() / f64::from(want_loss).abs();
-    if rel.is_nan() || rel > gates.forward_loss_rel {
+    if !want_loss.is_finite() {
+        return Err(fail(check, "torch loss is not finite"));
+    }
+    // Identical zeros are a match. 0/0 is NaN, and `!(NaN <= tol)` would
+    // reject a model that agrees with torch on a zero loss. A zero torch
+    // loss with a non-zero model loss stays a non-finite ratio and fails below.
+    let rel = if loss == 0.0 && want_loss == 0.0 {
+        0.0
+    } else {
+        (f64::from(loss) - f64::from(want_loss)).abs() / f64::from(want_loss).abs()
+    };
+    if !(rel <= gates.forward_loss_rel) {
         return Err(fail(
             check,
             format!(
@@ -359,7 +375,7 @@ fn check_forward(
         ));
     }
     let lrel = normwise_rel(&format!("{check} logits"), logits, want_logits)?;
-    if lrel > gates.logits_normwise_rel {
+    if !(lrel <= gates.logits_normwise_rel) {
         return Err(fail(
             check,
             format!(
@@ -680,4 +696,23 @@ pub fn check_autocast_divergence(
         torch_worst,
         vs_torch_bf16,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_forward, Gates};
+
+    #[test]
+    fn both_zero_losses_match_and_a_non_finite_torch_loss_does_not() {
+        let gates = Gates::EXACT;
+        let matched = check_forward("forward", 0.0, &[0.0], 0.0, &[0.0], &gates).unwrap();
+        assert_eq!(matched.loss_rel, 0.0);
+        assert!(check_forward("forward", 1.0, &[1.0], 0.0, &[1.0], &gates).is_err());
+        assert!(check_forward("forward", 1.0, &[1.0], f32::NAN, &[1.0], &gates).is_err());
+        assert!(check_forward("forward", 1.0, &[1.0], f32::INFINITY, &[1.0], &gates).is_err());
+        assert!(check_forward("forward", f32::NAN, &[1.0], 1.0, &[1.0], &gates).is_err());
+        assert!(check_forward("forward", 1.0 + 2.0e-5, &[1.0], 1.0, &[1.0], &gates).is_err());
+        let hit = check_forward("forward", 1.0, &[1.0], 1.0, &[1.0], &gates).unwrap();
+        assert_eq!(hit.loss_rel, 0.0);
+    }
 }
