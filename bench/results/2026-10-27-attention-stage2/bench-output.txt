@@ -1,0 +1,87 @@
+# Stage 2 (simdgroup-matrix partials kernel, default variant r2_b64_l0: two 8-row fragments per simdgroup, 64-key tiles, no lazy rescale) against split-K and pad-q. Job a-at2s (backups/78-tools/logs/a-at2s), `attention_stage2_bench 5 25`, code on branch wip/78-attn2-simdgroup (e6ae3aa).
+# Two attempts. Attempt 1: load 6.80 at the start (above the rules' 6.0), verdict repeat. Attempt 2: load 3.91 to 5.83, no NOISY pair, fc1 control 6.33 TFLOP/s (within 6.11 to 6.49), verdict clean. The gate is read on attempt 2; attempt 1 agrees with it on every row.
+# Columns: row, arm, p10 ms, median ms, p90 ms (A pass), median ms of the A' pass, |A-A'| gap, the pair's spread, pair verdict, note. `# row` lines: stage 2 against split-K and pad-q (max abs differences over the whole output, dispatch counts, the paired-sample count the rules define).
+# attempt 1
+# load_start 6.80 8.10 10.13
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	note
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	7.880	7.938	8.042	7.922	0.016	0.162	ok	6.33 TFLOP/s
+memory cross m=5200	stage 2	36.125	36.594	37.426	36.629	0.035	1.301	ok	0.75 TFLOP/s on the useful work
+memory cross m=5200	split-K	11.705	11.761	12.011	11.815	0.055	0.333	ok	2.35 TFLOP/s on the useful work
+memory cross m=5200	pad-q	5.607	5.651	5.717	5.645	0.006	0.169	ok	4.88 TFLOP/s on the useful work
+# row memory cross m=5200 | stage2-vs-splitK max abs out 6.71e-8 lse 2.86e-6 vs pad-q 1.43e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 24.834 ms (noise bar 1.301) REGRESSION
+# row memory cross m=5200 | pad-q - stage2 = -30.943 ms (noise bar 1.301), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 5.651 ms
+# cross memory cross m=5200 | stage 2 beats pad-q beyond noise: false
+memory cross m=10400	stage 2	72.511	73.234	74.805	72.506	0.728	3.576	ok	0.75 TFLOP/s on the useful work
+memory cross m=10400	split-K	23.195	23.452	24.496	23.637	0.186	1.336	ok	2.35 TFLOP/s on the useful work
+memory cross m=10400	pad-q	20.506	20.956	21.438	21.135	0.179	0.942	ok	2.63 TFLOP/s on the useful work
+# row memory cross m=10400 | stage2-vs-splitK max abs out 5.12e-8 lse 3.81e-6 vs pad-q 1.13e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 49.783 ms (noise bar 2.294) REGRESSION
+# row memory cross m=10400 | pad-q - stage2 = -52.278 ms (noise bar 2.294), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 20.956 ms
+# cross memory cross m=10400 | stage 2 beats pad-q beyond noise: false
+memory cross m=10624	stage 2	73.072	74.096	75.845	73.904	0.191	2.773	ok	0.76 TFLOP/s on the useful work
+memory cross m=10624	split-K	23.829	24.080	24.837	23.885	0.196	1.027	ok	2.34 TFLOP/s on the useful work
+memory cross m=10624	pad-q	21.366	21.821	22.076	21.917	0.096	0.814	ok	2.58 TFLOP/s on the useful work
+# row memory cross m=10624 | stage2-vs-splitK max abs out 5.40e-8 lse 3.81e-6 vs pad-q 1.06e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 50.016 ms (noise bar 2.773) REGRESSION
+# row memory cross m=10624 | pad-q - stage2 = -52.275 ms (noise bar 2.773), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 21.821 ms
+# cross memory cross m=10624 | stage 2 beats pad-q beyond noise: false
+memory cross m=15584	stage 2	107.970	109.830	127.297	109.811	0.019	19.327	ok	0.75 TFLOP/s on the useful work
+memory cross m=15584	split-K	34.677	35.246	38.711	35.049	0.197	4.034	ok	2.35 TFLOP/s on the useful work
+memory cross m=15584	pad-q	46.784	47.134	50.382	47.269	0.135	3.920	ok	1.76 TFLOP/s on the useful work
+# row memory cross m=15584 | stage2-vs-splitK max abs out 6.15e-8 lse 4.77e-6 vs pad-q 1.15e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 74.584 ms (noise bar 19.327) REGRESSION
+# row memory cross m=15584 | pad-q - stage2 = -62.696 ms (noise bar 19.327), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 35.246 ms
+# cross memory cross m=15584 | stage 2 beats pad-q beyond noise: false
+memory cross m=36320	stage 2	251.640	257.783	264.252	255.850	1.933	12.612	ok	0.75 TFLOP/s on the useful work
+memory cross m=36320	split-K	80.724	81.422	83.169	81.655	0.233	3.533	ok	2.37 TFLOP/s on the useful work
+memory cross m=36320	pad-q	275.245	276.882	281.490	276.931	0.049	7.094	ok	0.70 TFLOP/s on the useful work
+# row memory cross m=36320 | stage2-vs-splitK max abs out 6.05e-8 lse 5.72e-6 vs pad-q 1.36e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 176.361 ms (noise bar 12.612) REGRESSION
+# row memory cross m=36320 | pad-q - stage2 = 19.100 ms (noise bar 12.612), stage 2 faster in 50/50 paired samples; better of split-K and pad-q = 81.422 ms
+detector bias [1,8,201,32]x5184	stage 2	2.228	2.276	2.342	2.271	0.005	0.113	ok	0.47 TFLOP/s on the useful work
+detector bias [1,8,201,32]x5184	split-K	0.994	1.030	1.124	1.040	0.010	0.130	ok	1.04 TFLOP/s on the useful work
+# row detector bias [1,8,201,32]x5184 | stage2-vs-splitK max abs out 2.61e-8 lse 1.91e-6 dispatches stage2 8 split-K 8 | stage2 - splitK = 1.246 ms (noise bar 0.130) REGRESSION
+decoder D16 [1,8,80,16]x5184	stage 2	0.645	0.679	0.708	0.674	0.004	0.063	ok	0.31 TFLOP/s on the useful work
+decoder D16 [1,8,80,16]x5184	split-K	0.359	0.394	0.405	0.400	0.005	0.046	ok	0.54 TFLOP/s on the useful work
+# row decoder D16 [1,8,80,16]x5184 | stage2-vs-splitK max abs out 1.30e-8 lse 9.54e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 0.284 ms (noise bar 0.063) REGRESSION
+# load_end 4.77 7.18 9.61
+# noisy_pairs 0
+# verdict repeat
+# attempt 2
+# load_start 3.91 6.45 9.17
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	note
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	7.853	7.942	8.429	7.988	0.046	0.577	ok	6.33 TFLOP/s
+memory cross m=5200	stage 2	36.029	36.639	38.286	36.676	0.037	2.256	ok	0.75 TFLOP/s on the useful work
+memory cross m=5200	split-K	11.727	11.957	12.380	11.786	0.171	0.653	ok	2.31 TFLOP/s on the useful work
+memory cross m=5200	pad-q	5.554	5.601	5.719	5.615	0.014	0.165	ok	4.93 TFLOP/s on the useful work
+# row memory cross m=5200 | stage2-vs-splitK max abs out 6.71e-8 lse 2.86e-6 vs pad-q 1.43e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 24.682 ms (noise bar 2.256) REGRESSION
+# row memory cross m=5200 | pad-q - stage2 = -31.039 ms (noise bar 2.256), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 5.601 ms
+# cross memory cross m=5200 | stage 2 beats pad-q beyond noise: false
+memory cross m=10400	stage 2	71.936	73.201	76.117	72.941	0.260	4.323	ok	0.75 TFLOP/s on the useful work
+memory cross m=10400	split-K	23.213	23.656	24.098	23.510	0.147	0.885	ok	2.33 TFLOP/s on the useful work
+memory cross m=10400	pad-q	20.560	21.056	21.352	21.228	0.172	0.818	ok	2.62 TFLOP/s on the useful work
+# row memory cross m=10400 | stage2-vs-splitK max abs out 5.12e-8 lse 3.81e-6 vs pad-q 1.13e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 49.544 ms (noise bar 4.181) REGRESSION
+# row memory cross m=10400 | pad-q - stage2 = -52.145 ms (noise bar 4.181), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 21.056 ms
+# cross memory cross m=10400 | stage 2 beats pad-q beyond noise: false
+memory cross m=10624	stage 2	72.933	73.970	75.576	73.507	0.463	2.643	ok	0.76 TFLOP/s on the useful work
+memory cross m=10624	split-K	23.606	24.041	24.793	24.040	0.001	1.187	ok	2.35 TFLOP/s on the useful work
+memory cross m=10624	pad-q	21.619	21.863	22.059	21.862	0.000	0.658	ok	2.58 TFLOP/s on the useful work
+# row memory cross m=10624 | stage2-vs-splitK max abs out 5.40e-8 lse 3.81e-6 vs pad-q 1.06e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 49.929 ms (noise bar 2.643) REGRESSION
+# row memory cross m=10624 | pad-q - stage2 = -52.107 ms (noise bar 2.643), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 21.863 ms
+# cross memory cross m=10624 | stage 2 beats pad-q beyond noise: false
+memory cross m=15584	stage 2	107.885	109.338	110.818	109.028	0.310	3.167	ok	0.76 TFLOP/s on the useful work
+memory cross m=15584	split-K	34.646	35.026	36.290	35.011	0.015	1.644	ok	2.36 TFLOP/s on the useful work
+memory cross m=15584	pad-q	46.604	46.836	47.342	47.084	0.248	0.914	ok	1.77 TFLOP/s on the useful work
+# row memory cross m=15584 | stage2-vs-splitK max abs out 6.15e-8 lse 4.77e-6 vs pad-q 1.15e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 74.312 ms (noise bar 2.933) REGRESSION
+# row memory cross m=15584 | pad-q - stage2 = -62.502 ms (noise bar 2.933), stage 2 faster in 0/50 paired samples; better of split-K and pad-q = 35.026 ms
+# cross memory cross m=15584 | stage 2 beats pad-q beyond noise: false
+memory cross m=36320	stage 2	255.741	259.367	265.317	261.014	1.647	10.333	ok	0.74 TFLOP/s on the useful work
+memory cross m=36320	split-K	81.287	83.892	87.112	83.462	0.431	5.825	ok	2.30 TFLOP/s on the useful work
+memory cross m=36320	pad-q	278.325	281.832	286.727	283.276	1.443	10.081	ok	0.68 TFLOP/s on the useful work
+# row memory cross m=36320 | stage2-vs-splitK max abs out 6.05e-8 lse 5.72e-6 vs pad-q 1.36e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 175.475 ms (noise bar 9.576) REGRESSION
+# row memory cross m=36320 | pad-q - stage2 = 22.465 ms (noise bar 9.576), stage 2 faster in 50/50 paired samples; better of split-K and pad-q = 83.892 ms
+detector bias [1,8,201,32]x5184	stage 2	2.228	2.266	2.317	2.251	0.015	0.092	ok	0.47 TFLOP/s on the useful work
+detector bias [1,8,201,32]x5184	split-K	0.995	1.025	1.049	1.042	0.017	0.064	ok	1.04 TFLOP/s on the useful work
+# row detector bias [1,8,201,32]x5184 | stage2-vs-splitK max abs out 2.61e-8 lse 1.91e-6 dispatches stage2 8 split-K 8 | stage2 - splitK = 1.241 ms (noise bar 0.089) REGRESSION
+decoder D16 [1,8,80,16]x5184	stage 2	0.634	0.667	0.694	0.656	0.011	0.060	ok	0.32 TFLOP/s on the useful work
+decoder D16 [1,8,80,16]x5184	split-K	0.350	0.376	0.401	0.375	0.001	0.051	ok	0.56 TFLOP/s on the useful work
+# row decoder D16 [1,8,80,16]x5184 | stage2-vs-splitK max abs out 1.30e-8 lse 9.54e-7 dispatches stage2 7 split-K 7 | stage2 - splitK = 0.291 ms (noise bar 0.060) REGRESSION
+# load_end 5.83 6.53 8.97
+# noisy_pairs 0
+# verdict clean
