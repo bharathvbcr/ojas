@@ -9,7 +9,7 @@
 //!
 //! `cargo run -p ojas-metal --release --example frame_ops_bench [warmups] [runs] [only]`
 //!
-//! Defaults 5 and 25; `only` is a substring of a row label. Every row is its
+//! Defaults 5 and 25; `only` is a `|`-separated list of row keys (substrings) or `=op\\tkey` labels. Every row is its
 //! own run of arms: the op (two arms for a linear, f32 and Autocast) and an f32
 //! linear control (fc1, `[5184,1024]x[4736,1024]`), each run twice per round,
 //! once in each of two passes (the repeat is the arm's A'); odd rounds walk the
@@ -881,8 +881,16 @@ mod bench {
         );
         let (mut rows_clean, mut rows_total) = (0usize, 0usize);
 
-        for row in ROWS.iter().filter(|r| r.key.contains(&only)) {
-            rows_total += 1;
+        // `only`: `|`-separated items; an item starting with `=` must equal a row's
+        // `op\tkey` label, any other is a substring of the key.
+        let wanted = |label: &str, key: &str| {
+            only.is_empty()
+                || only.split('|').any(|item| match item.strip_prefix('=') {
+                    Some(exact) => exact == label,
+                    None => key.contains(item),
+                })
+        };
+        for row in ROWS.iter() {
             let label = format!(
                 "{}\t{}",
                 match row.op {
@@ -904,6 +912,10 @@ mod bench {
                 },
                 row.key
             );
+            if !wanted(&label, row.key) {
+                continue;
+            }
+            rows_total += 1;
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let s = row.shapes;
                 // Device operands, one per shape; weights small, activations of order one.
