@@ -1,0 +1,72 @@
+# Day-0 kill check, job a-at3k (backups/78-tools/logs/a-at3k), `attention_causal_rate_bench 5 25`, four attempts. NO attempt is clean by the rules: the 1-minute load was 6.3 to 16.7 throughout (other lanes' jobs; the rules need at most 6.0 at both ends), and attempt 3's control (5.84 TFLOP/s) is outside 6.11 to 6.49. Attempts 5 and 6 did not run: the build directory (target-78a) had been deleted by someone else between attempts 4 and 5, so the binary was gone (exit 127); they are not retried (the job is bounded at six).
+# Every A-vs-A' pair is ok in every attempt. The kill line printed by the example says "(b) dies" in each attempt, but is "read on a clean run only"; none was clean, so the rule has not been read. See the commit message for the reading.
+# Columns: row, arm, p10 ms, median ms, p90 ms (A pass), median ms of A', gap, spread, pair verdict, effective rate (useful work over the median: the visible pairs for the causal arm, all T^2 pairs for encoder_attn).
+# attempt 1
+# load_start 9.63 11.69 11.72
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	effective
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	7.899	8.053	8.473	8.026	0.028	0.573	ok	6.24 TFLOP/s
+# self-attention [1,8,5184,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,5184,32]	causal ojas_attn_fwd_d32	3.355	3.791	4.035	3.779	0.012	0.680	ok	3.63 TFLOP/s
+self-attention [1,8,5184,32]	encoder_attn (Tq = Tk, bidirectional)	6.236	6.914	7.431	7.071	0.158	1.195	ok	3.98 TFLOP/s
+# self-attention [1,8,15584,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,15584,32]	causal ojas_attn_fwd_d32	33.109	33.429	34.189	33.752	0.323	1.080	ok	3.72 TFLOP/s
+self-attention [1,8,15584,32]	encoder_attn (Tq = Tk, bidirectional)	62.074	62.595	63.111	63.023	0.428	1.648	ok	3.97 TFLOP/s
+# self-attention [1,8,36320,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,36320,32]	causal ojas_attn_fwd_d32	189.710	200.486	211.500	199.731	0.755	23.234	ok	3.37 TFLOP/s
+self-attention [1,8,36320,32]	encoder_attn (Tq = Tk, bidirectional)	357.465	367.212	379.339	364.953	2.259	23.020	ok	3.68 TFLOP/s
+# load_end 9.12 11.34 11.59
+# noisy_pairs 0
+# kill-check T = 15584: causal ojas_attn_fwd_d32 3.72 TFLOP/s effective against 4.3 -> (b) dies (read on a clean run only)
+# verdict repeat
+# attempt 2
+# load_start 6.26 10.16 11.13
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	effective
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	7.928	8.003	8.131	8.037	0.034	0.269	ok	6.28 TFLOP/s
+# self-attention [1,8,5184,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,5184,32]	causal ojas_attn_fwd_d32	2.962	3.003	3.077	2.997	0.006	0.136	ok	4.58 TFLOP/s
+self-attention [1,8,5184,32]	encoder_attn (Tq = Tk, bidirectional)	5.475	5.531	5.643	5.516	0.015	0.177	ok	4.98 TFLOP/s
+# self-attention [1,8,15584,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,15584,32]	causal ojas_attn_fwd_d32	28.748	29.442	31.020	29.527	0.085	2.271	ok	4.22 TFLOP/s
+self-attention [1,8,15584,32]	encoder_attn (Tq = Tk, bidirectional)	53.480	54.513	57.528	54.726	0.213	4.252	ok	4.56 TFLOP/s
+# self-attention [1,8,36320,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,36320,32]	causal ojas_attn_fwd_d32	156.324	185.436	193.301	187.661	2.225	36.978	ok	3.64 TFLOP/s
+self-attention [1,8,36320,32]	encoder_attn (Tq = Tk, bidirectional)	302.632	340.264	354.084	338.450	1.814	52.034	ok	3.97 TFLOP/s
+# load_end 6.26 9.71 10.93
+# noisy_pairs 0
+# kill-check T = 15584: causal ojas_attn_fwd_d32 4.22 TFLOP/s effective against 4.3 -> (b) dies (read on a clean run only)
+# verdict repeat
+# attempt 3
+# load_start 16.18 11.59 11.52
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	effective
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	8.450	8.614	8.900	8.623	0.009	0.450	ok	5.84 TFLOP/s
+# control 5.84 TFLOP/s outside 6.11 to 6.49
+# self-attention [1,8,5184,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,5184,32]	causal ojas_attn_fwd_d32	3.258	3.522	4.350	3.496	0.026	1.092	ok	3.91 TFLOP/s
+self-attention [1,8,5184,32]	encoder_attn (Tq = Tk, bidirectional)	6.071	6.446	6.712	6.377	0.068	0.656	ok	4.27 TFLOP/s
+# self-attention [1,8,15584,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,15584,32]	causal ojas_attn_fwd_d32	32.458	33.344	33.853	33.314	0.030	1.709	ok	3.73 TFLOP/s
+self-attention [1,8,15584,32]	encoder_attn (Tq = Tk, bidirectional)	59.417	61.025	62.082	60.353	0.673	2.665	ok	4.08 TFLOP/s
+# self-attention [1,8,36320,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,36320,32]	causal ojas_attn_fwd_d32	181.858	187.599	194.681	187.816	0.217	12.842	ok	3.60 TFLOP/s
+self-attention [1,8,36320,32]	encoder_attn (Tq = Tk, bidirectional)	342.248	349.171	358.086	351.085	1.914	15.948	ok	3.87 TFLOP/s
+# load_end 12.13 11.07 11.33
+# noisy_pairs 0
+# kill-check T = 15584: causal ojas_attn_fwd_d32 3.73 TFLOP/s effective against 4.3 -> (b) dies (read on a clean run only)
+# verdict repeat
+# attempt 4
+# load_start 9.64 10.61 11.14
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	effective
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	7.913	7.966	8.154	8.053	0.087	0.241	ok	6.31 TFLOP/s
+# self-attention [1,8,5184,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,5184,32]	causal ojas_attn_fwd_d32	2.964	3.019	3.203	3.038	0.018	0.239	ok	4.56 TFLOP/s
+self-attention [1,8,5184,32]	encoder_attn (Tq = Tk, bidirectional)	5.506	5.552	5.791	5.529	0.023	0.425	ok	4.96 TFLOP/s
+# self-attention [1,8,15584,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,15584,32]	causal ojas_attn_fwd_d32	31.269	31.671	32.333	31.691	0.020	1.064	ok	3.93 TFLOP/s
+self-attention [1,8,15584,32]	encoder_attn (Tq = Tk, bidirectional)	58.337	58.997	60.002	59.142	0.145	2.630	ok	4.22 TFLOP/s
+# self-attention [1,8,36320,32] dispatches per call: causal 3 encoder_attn route 9
+self-attention [1,8,36320,32]	causal ojas_attn_fwd_d32	178.543	182.473	189.254	182.100	0.373	10.710	ok	3.70 TFLOP/s
+self-attention [1,8,36320,32]	encoder_attn (Tq = Tk, bidirectional)	342.488	347.110	359.828	350.659	3.549	17.340	ok	3.89 TFLOP/s
+# load_end 16.65 12.18 11.68
+# noisy_pairs 0
+# kill-check T = 15584: causal ojas_attn_fwd_d32 3.93 TFLOP/s effective against 4.3 -> (b) dies (read on a clean run only)
+# verdict repeat
