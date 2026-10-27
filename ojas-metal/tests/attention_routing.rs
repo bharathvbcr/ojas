@@ -70,7 +70,12 @@ fn routed_self_attention_matches_cpu_on_small_and_vision_head_slices() {
         );
         let got = ok(
             "metal",
-            m.attention_forward(&up(&m, &q), &up(&m, &k), &up(&m, &v), AttentionOpts::default()),
+            m.attention_forward(
+                &up(&m, &q),
+                &up(&m, &k),
+                &up(&m, &v),
+                AttentionOpts::default(),
+            ),
         );
         ok("sync", m.sync());
         same_tensor(&format!("[{b},{h},{t},64]"), &got, &want, tol(t), 1e-4);
@@ -285,6 +290,113 @@ fn a_non_finite_operand_faults_under_the_name_that_was_called_on_the_routed_path
             );
             deferred(&m, &format!("{bad} in {what}"), r, "attention_forward");
         }
+    }
+}
+
+/// tessl's `encoder_attn` is compiled with fast math. With q and k scaled so
+/// the scores reach the hundreds (`exp` of them overflows f32 unless the row
+/// maximum is subtracted first) the routed output must still match the CPU,
+/// which is finite throughout, and stay finite.
+#[test]
+fn routed_attention_with_scores_past_the_exp_overflow_matches_cpu() {
+    let (m, c) = (metal(), cpu());
+    let (b, h, t, d) = (2usize, 2usize, 128usize, 64usize);
+    let q = rand(&[b, h, t, d], 91, 15.0);
+    let k = rand(&[b, h, t, d], 92, 15.0);
+    let v = rand(&[b, h, t, d], 93, 1.0);
+    let want = ok(
+        "cpu",
+        c.attention_forward(&q, &k, &v, AttentionOpts::default()),
+    );
+    let scores = ok("q", q.to_f32_vec());
+    assert!(
+        scores.iter().any(|x| x.abs() > 14.0),
+        "the inputs must be large for this test to mean anything"
+    );
+    // The general kernel's dispatches, on fresh uploads, as the yardstick.
+    let (gq, gk, gv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+    ok("sync", m.sync());
+    let general_before = m.dispatches();
+    let _saved = ok(
+        "saving",
+        m.attention_forward_saving(&gq, &gk, &gv, AttentionOpts::default()),
+    );
+    ok("sync", m.sync());
+    let general = m.dispatches() - general_before;
+    let (rq, rk, rv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+    let routed_before = m.dispatches();
+    let got = ok(
+        "metal",
+        m.attention_forward(&rq, &rk, &rv, AttentionOpts::default()),
+    );
+    ok("sync", m.sync());
+    if m.has_tensorops() {
+        assert!(
+            m.dispatches() - routed_before > general,
+            "the routed path ran"
+        );
+    }
+    same_tensor("large scores", &got, &want, 1e-3, 1e-3);
+}
+
+/// The routed path holds, besides the output, four permuted copies and a
+/// length per batch row. A budget with room for the general kernel's output
+/// and log-sum-exp but not for that scratch must run the general kernel, not
+/// fail with `CapacityExceeded`, and leave nothing charged behind.
+#[test]
+fn a_budget_that_holds_the_output_but_not_the_routed_scratch_runs_the_general_kernel() {
+    let (b, h, t, d) = (1usize, 2usize, 256usize, 64usize);
+    let n = b * h * t * d;
+    let [q, k, v] = qkv(b, h, t, d, 77);
+    let want = ok(
+        "cpu",
+        cpu().attention_forward(&q, &k, &v, AttentionOpts::default()),
+    );
+
+    // Inputs, the output and the log-sum-exp, and no more than 1 KiB over:
+    // the routed scratch (4n + B values) needs 512 KiB more.
+    let room = ((3 * n + n + b * h * t) * 4 + 1024) as u64;
+    let tight = MetalBackend::new(ojas_core::Budget::new(room))
+        .unwrap_or_else(|e| panic!("Metal device unavailable: {e:?}"));
+    let (dq, dk, dv) = (up(&tight, &q), up(&tight, &k), up(&tight, &v));
+    let baseline = ok("live", tight.budget().live_bytes());
+
+    let general = dispatches_of(&tight, &dq, &dk, &dv, AttentionOpts::default());
+    let saving_before = tight.dispatches();
+    let (saved, lse) = ok(
+        "saving",
+        tight.attention_forward_saving(&dq, &dk, &dv, AttentionOpts::default()),
+    );
+    ok("sync", tight.sync());
+    let saving = tight.dispatches() - saving_before;
+    drop((saved, lse));
+    assert_eq!(
+        general, saving,
+        "a call that did not fit the routed scratch ran the saving form's dispatches"
+    );
+
+    let got = ok(
+        "attention_forward under a tight budget",
+        tight.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+    );
+    ok("sync", tight.sync());
+    same_tensor("tight budget", &got, &want, tol(t), 1e-4);
+    drop(got);
+    assert_eq!(
+        ok("live", tight.budget().live_bytes()),
+        baseline,
+        "the refused reservation left nothing charged"
+    );
+
+    // With room the same call routes: more dispatches than the general kernel.
+    if tight.has_tensorops() {
+        let roomy = metal();
+        let (rq, rk, rv) = (up(&roomy, &q), up(&roomy, &k), up(&roomy, &v));
+        let routed = dispatches_of(&roomy, &rq, &rk, &rv, AttentionOpts::default());
+        assert!(
+            routed > general,
+            "routed {routed} dispatches vs general {general}"
+        );
     }
 }
 
