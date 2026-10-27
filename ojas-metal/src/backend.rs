@@ -1112,10 +1112,14 @@ fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims
 /// values a threadgroup is given.
 const GROUP_NORM_TARGET_GROUPS: usize = 512;
 const GROUP_NORM_MIN_CHUNK: usize = 1024;
+/// Threads of a GroupNorm threadgroup (`GN_THREADS`).
+const GROUP_NORM_THREADS: usize = 256;
 
 /// `(chunks, chunk_len)` of a GroupNorm row of `width` values among `rows`
-/// rows: enough chunks to reach the target, none shorter than the minimum,
-/// and the ranges cover the row.
+/// rows: enough chunks to reach the target, but no more than one per
+/// `GROUP_NORM_MIN_CHUNK` values of the row (rounded up, so a chunk can be
+/// shorter than the minimum: a row of 1025 gives two of 513), and the ranges
+/// cover the row.
 fn group_norm_chunks(rows: usize, width: usize) -> (usize, usize) {
     let wanted = GROUP_NORM_TARGET_GROUPS.div_ceil(rows.max(1));
     let chunks = wanted.clamp(1, width.div_ceil(GROUP_NORM_MIN_CHUNK).max(1));
@@ -2475,8 +2479,11 @@ impl Backend for MetalBackend {
 
     /// GroupNorm as three passes over many threadgroups per `(image, group)`
     /// row (see `ojas_gn_sum`): f32 two-pass statistics, so values agree with
-    /// the CPU's `f64` ones to f32 summation error, not bit for bit. The
-    /// per-chunk partial sums are charged as scratch.
+    /// the CPU's `f64` ones to f32 summation error, not bit for bit (the mean
+    /// is corrected by its residual, so a row far from zero keeps its
+    /// accuracy). The per-chunk partial sums (three arrays of `rows * chunks`)
+    /// are charged as scratch. A mean or variance that overflows f32 is a
+    /// deferred fault where the CPU's `f64` ones finish.
     fn group_norm_forward(
         &self,
         input: &Tensor,
@@ -2496,6 +2503,13 @@ impl Backend for MetalBackend {
         let per_group = dims.channels / dims.groups;
         let width = product(OP, &[per_group, dims.spatial])?;
         u32_dim(OP, product(OP, &[rows, width])?)?;
+        // The kernels step a row's index by the threadgroup size in 32 bits.
+        u32_dim(
+            OP,
+            width
+                .checked_add(GROUP_NORM_THREADS)
+                .ok_or_else(|| overflow(OP))?,
+        )?;
         let (chunks, chunk_len) = group_norm_chunks(rows, width);
         let geom = GroupNormGeom {
             rows: u32_dim(OP, rows)?,
@@ -2506,7 +2520,7 @@ impl Backend for MetalBackend {
             per_group: u32_dim(OP, per_group)?,
             groups: u32_dim(OP, dims.groups)?,
         };
-        let scratch = product(OP, &[2, rows, chunks])?;
+        let scratch = product(OP, &[3, rows, chunks])?;
         self.one(
             OP,
             input.shape(),

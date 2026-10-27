@@ -1,0 +1,19 @@
+# group_norm_bench, final run (after the Sigma d correction): a-gn2
+shape,path,min_ms,median_ms
+[1,256,144,144],a metal first call,5.020,
+[1,256,144,144],a metal device-resident,0.878,1.201
+[1,256,144,144],b cpu,6.577,6.603
+[1,256,144,144],c download + cpu + upload,7.990,8.103
+[1,256,288,288],a metal first call,9.766,
+[1,256,288,288],a metal device-resident,2.003,2.062
+[1,256,288,288],b cpu,26.373,26.439
+[1,256,288,288],c download + cpu + upload,31.969,32.244
+
+# first run (before the Sigma d correction, machine under load from other lanes): a-gnb
+shape,path,min_ms,median_ms
+[1,256,144,144],a metal device-resident,1.029,1.087
+[1,256,144,144],b cpu,6.567,6.599
+[1,256,144,144],c download + cpu + upload,8.003,8.135
+[1,256,288,288],a metal device-resident,2.191,2.264
+[1,256,288,288],b cpu,26.380,26.457
+[1,256,288,288],c download + cpu + upload,32.231,32.491

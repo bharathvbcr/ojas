@@ -305,7 +305,8 @@ fn a_non_finite_operand_is_a_deferred_fault_under_the_op_name() {
 #[test]
 fn the_partial_sums_are_charged_to_the_budget() {
     // [1, 16, 64, 64], 8 groups: 8 rows of 8192 values, 8 chunks each, so
-    // 2 * 8 * 8 = 128 partial values (512 bytes).
+    // 3 * 8 * 8 = 192 partial values (768 bytes): the sums, the residuals of
+    // the mean and the squares.
     let case = Case {
         n: 1,
         c: 16,
@@ -316,7 +317,7 @@ fn the_partial_sums_are_charged_to_the_budget() {
     let [x, w, b] = operands(&case, 97, 0.0);
     let inputs = (x.num_elements().unwrap() + 2 * 16) * 4;
     let output = x.num_elements().unwrap() * 4;
-    let partials = 128 * 4;
+    let partials = 192 * 4;
     for (room, runs) in [
         (inputs + output + partials - 4, false),
         (inputs + output + partials, true),
@@ -344,8 +345,9 @@ fn the_partial_sums_are_charged_to_the_budget() {
     }
 }
 
-/// Three kernels and the same operand and output scans as `layer_norm_forward`
-/// (one tessl kernel): two dispatches more.
+/// Three kernels and the same operand scans as `layer_norm_forward` (one tessl
+/// kernel), but no scan of the output (`ojas_gn_apply` flags it itself): one
+/// dispatch more. (Before the output rescan was dropped it was two more.)
 #[test]
 fn group_norm_is_three_kernels() {
     let m = metal();
@@ -371,5 +373,59 @@ fn group_norm_is_three_kernels() {
     let lx = up(&m, &rand(&[1024, 16], 99, 1.0));
     let (lw, lb) = (up(&m, &w), up(&m, &b));
     let ln = count(&|| drop(ok("ln", m.layer_norm_forward(&lx, &lw, &lb, EPS))));
-    assert_eq!(gn, ln + 2, "group norm {gn}, layer norm {ln}");
+    assert_eq!(gn, ln + 1, "group norm {gn}, layer norm {ln}");
+}
+
+/// The mean's f32 rounding error is corrected by the residual `sum(d)`: a row
+/// far from zero relative to its spread, at SAM's size (2.65 million values a
+/// row), must match the CPU's `f64` statistics. Without the correction the
+/// mean is off by about 3e-4 at mean 1e3, so a std of 1e-2 gives outputs
+/// off by tens of 1e-3 (the 2e-5 bound fails).
+#[test]
+fn a_row_with_a_large_mean_and_a_small_spread_matches_cpu_at_sam_size() {
+    let (m, c) = (metal(), cpu());
+    for (mean, scale, seed) in [
+        (1000.0f32, 0.0173f32, 120u64),
+        (1000.0, 1.7, 121),
+        (50.0, 0.01, 122),
+    ] {
+        let x: Vec<f32> = values(256 * 288 * 288, seed, scale)
+            .into_iter()
+            .map(|v| v + mean)
+            .collect();
+        let x = host(&x, &[1, 256, 288, 288]);
+        let w = rand(&[256], seed + 1, 2.0);
+        let b = rand(&[256], seed + 2, 1.0);
+        let want = ok("cpu", c.group_norm_forward(&x, &w, &b, 8, EPS));
+        let got = ok(
+            "metal",
+            m.group_norm_forward(&up(&m, &x), &up(&m, &w), &up(&m, &b), 8, EPS),
+        );
+        ok("sync", m.sync());
+        same_tensor(
+            &format!("mean {mean} spread {scale}"),
+            &got,
+            &want,
+            ATOL,
+            RTOL,
+        );
+    }
+}
+
+/// `d * d` overflows f32 for `|x - mean|` above 1.8e19, which would make the
+/// variance infinite, the reciprocal deviation 0 and every output the bias:
+/// finite, so unflagged. It is a deferred fault instead (the CPU's `f64`
+/// statistics finish this input; the difference is documented).
+#[test]
+fn a_variance_that_overflows_f32_is_a_fault_not_the_bias() {
+    let m = metal();
+    let n = 2 * 4 * 4;
+    let x: Vec<f32> = (0..n)
+        .map(|i| if i % 2 == 0 { 3.0e19 } else { -3.0e19 })
+        .collect();
+    let x = up(&m, &host(&x, &[1, 2, 4, 4]));
+    let w = up(&m, &host(&[1.0, 1.0], &[2]));
+    let b = up(&m, &host(&[0.5, -0.5], &[2]));
+    let r = m.group_norm_forward(&x, &w, &b, 1, EPS);
+    deferred(&m, "variance overflow", r, "group_norm_forward");
 }

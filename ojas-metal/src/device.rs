@@ -2612,8 +2612,8 @@ impl Worker {
 
     /// GroupNorm in three passes over `geom.chunks` threadgroups per row
     /// (`ojas_gn_sum`, `ojas_gn_sq`, `ojas_gn_apply`), with the partial sums
-    /// as scratch. The operands are scanned here and the kernel checks the
-    /// output.
+    /// as scratch. The operands are scanned here (`ojas_check_finite`) and
+    /// `ojas_gn_apply` checks the output and the statistics.
     fn group_norm(&mut self, args: [Arg; 3], g: GroupNormGeom, eps: f32) -> Res<Reply> {
         const OP: &str = "group_norm_forward";
         let [x, w, b] = args;
@@ -2641,7 +2641,7 @@ impl Worker {
             .checked_mul(g.chunks as usize)
             .ok_or_else(|| metal_err(format!("{OP}: partials overflow")))?;
         let y = self.fresh(n)?;
-        let (sums, squares) = (self.fresh(parts)?, self.fresh(parts)?);
+        let (sums, devs, squares) = (self.fresh(parts)?, self.fresh(parts)?, self.fresh(parts)?);
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
@@ -2668,10 +2668,11 @@ impl Worker {
             |bd| {
                 bind(bd, &xv, 0);
                 bind(bd, &sums, 1);
-                bind(bd, &squares, 2);
-                set_u32(bd, width, 3);
-                set_u32(bd, chunks, 4);
-                set_u32(bd, chunk_len, 5);
+                bind(bd, &devs, 2);
+                bind(bd, &squares, 3);
+                set_u32(bd, width, 4);
+                set_u32(bd, chunks, 5);
+                set_u32(bd, chunk_len, 6);
             },
         )?;
         self.ktg(
@@ -2684,19 +2685,21 @@ impl Worker {
                 bind(bd, &wv, 1);
                 bind(bd, &bv, 2);
                 bind(bd, &sums, 3);
-                bind(bd, &squares, 4);
-                bind(bd, &y, 5);
-                bind_st(bd, &st, 6);
-                set_u32(bd, width, 7);
-                set_u32(bd, chunks, 8);
-                set_u32(bd, chunk_len, 9);
-                set_u32(bd, g.spatial, 10);
-                set_u32(bd, g.per_group, 11);
-                set_u32(bd, g.groups, 12);
-                set_f32(bd, eps, 13);
+                bind(bd, &devs, 4);
+                bind(bd, &squares, 5);
+                bind(bd, &y, 6);
+                bind_st(bd, &st, 7);
+                set_u32(bd, width, 8);
+                set_u32(bd, chunks, 9);
+                set_u32(bd, chunk_len, 10);
+                set_u32(bd, g.spatial, 11);
+                set_u32(bd, g.per_group, 12);
+                set_u32(bd, g.groups, 13);
+                set_f32(bd, eps, 14);
             },
         )?;
-        self.check(&st, &y, ST_OUT)?;
+        // `ojas_gn_apply` flags a non-finite output and a non-finite mean or
+        // variance itself: no scan of `y` follows.
         Ok(self.keep(vec![y]))
     }
 
