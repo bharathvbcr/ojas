@@ -37,3 +37,11 @@ required-features = ["metal"]
 [[example]]
 name = "group_norm_bench"
 required-features = ["metal"]
+
+[[example]]
+name = "linear_gemm_bench"
+required-features = ["metal"]
+
+[[example]]
+name = "memory_bound_bench"
+required-features = ["metal"]

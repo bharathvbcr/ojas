@@ -1,0 +1,24 @@
+# Old path (this branch's base, 928d443 plus the probe arms), three back-to-back runs of `linear_gemm_bench 5 25 neck`, quiet machine.
+# Load averages (1, 5, 15 min) at run start and end: run 1 3.98 4.81 5.21 / 3.98 4.79 5.20; run 2 3.98 4.79 5.20 / 4.54 4.89 5.23; run 3 4.54 4.89 5.23 / 4.58 4.90 5.23.
+shape	arm	min_ms	p10_ms	median_ms	p90_ms	median_tflops
+# run 1
+neck 3x3 p1 [1,256,288,288]	conv2d f32 (im2col + GEMM + layout)	25.199	25.222	25.284	25.366	3.87
+neck 3x3 p1 [1,256,288,288]	GEMM alone f32 (the conv's [m,k]x[n,k])	16.385	16.471	16.644	17.061	5.88
+neck 3x3 p1 [1,256,144,144]	conv2d f32 (im2col + GEMM + layout)	6.027	6.045	6.129	6.199	3.99
+neck 3x3 p1 [1,256,144,144]	GEMM alone f32 (the conv's [m,k]x[n,k])	4.188	4.209	4.273	4.377	5.73
+neck 3x3 p1 [1,256,72,72]	conv2d f32 (im2col + GEMM + layout)	1.652	1.660	1.689	1.741	3.62
+neck 3x3 p1 [1,256,72,72]	GEMM alone f32 (the conv's [m,k]x[n,k])	1.225	1.235	1.279	1.309	4.78
+# run 2
+neck 3x3 p1 [1,256,288,288]	conv2d f32 (im2col + GEMM + layout)	25.170	25.212	25.282	25.354	3.87
+neck 3x3 p1 [1,256,288,288]	GEMM alone f32 (the conv's [m,k]x[n,k])	16.681	16.712	16.925	17.059	5.78
+neck 3x3 p1 [1,256,144,144]	conv2d f32 (im2col + GEMM + layout)	6.067	6.093	6.160	6.478	3.97
+neck 3x3 p1 [1,256,144,144]	GEMM alone f32 (the conv's [m,k]x[n,k])	4.268	4.284	4.329	4.450	5.65
+neck 3x3 p1 [1,256,72,72]	conv2d f32 (im2col + GEMM + layout)	1.655	1.667	1.682	1.703	3.63
+neck 3x3 p1 [1,256,72,72]	GEMM alone f32 (the conv's [m,k]x[n,k])	1.247	1.267	1.282	1.316	4.77
+# run 3
+neck 3x3 p1 [1,256,288,288]	conv2d f32 (im2col + GEMM + layout)	25.175	25.212	25.286	25.452	3.87
+neck 3x3 p1 [1,256,288,288]	GEMM alone f32 (the conv's [m,k]x[n,k])	16.563	16.697	16.897	17.114	5.79
+neck 3x3 p1 [1,256,144,144]	conv2d f32 (im2col + GEMM + layout)	6.069	6.086	6.147	6.201	3.98
+neck 3x3 p1 [1,256,144,144]	GEMM alone f32 (the conv's [m,k]x[n,k])	4.240	4.278	4.319	4.383	5.66
+neck 3x3 p1 [1,256,72,72]	conv2d f32 (im2col + GEMM + layout)	1.667	1.670	1.693	1.741	3.61
+neck 3x3 p1 [1,256,72,72]	GEMM alone f32 (the conv's [m,k]x[n,k])	1.256	1.279	1.290	1.334	4.74
