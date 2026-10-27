@@ -36,3 +36,69 @@ Reading, fixed now. The reference ratio is each arm's median over arm A's median
 Not tested here, and why: the working-set trigger (it needs this process to hold more than 3/4 of the recommended working set; the example prints `recommended_working_set` and `allocated` for both backends, and a bench cannot hold that much without leaving the 24 GiB budget); other processes' GPU use (the profile's load of 16 to 24 is the other sessions' work and cannot be reproduced in a quiet run).
 
 The load gate: the job waits, outside the mac_heavy lock, for a 1-minute load of at most 5.0 before it takes the lock, and does not run while the queued interpolate bench holds it (the lock serializes them).
+
+Addendum (2026-10-27, Fable ruling fable-alloc.md, committed before any timing from alloc_bench had been seen).
+
+A clean attempt now also requires no memory pressure: the vm_stat Pageouts and Swapins deltas
+across the attempt (or across the bench step, where only the job script records them) are both
+zero. An attempt that fails this is "pressure", not clean, whatever its load and control. Reason:
+Metal shared buffers are pageable; eviction of pooled buffers shrinks E minus A and reclaim before
+first touch inflates it, so pressure can fake either verdict.
+
+The reading of section "Reading, fixed now" is unchanged and applies to clean attempts only. No
+ratio of arms measured under contention stands in for it, now or at the deadline: a constant
+contention term compresses E/A and B2/A while inflated allocation syscalls expand them, so the
+sign of the error is unknown. The wave-5 attention stand-in does not transfer because there the
+ratio was observed flat across loads before use and contention was not a hypothesis under test.
+
+A contended attempt (load above 6.0 at either end, or control out of band, or pressure) is written
+to alloc-output-contended.txt and yields only the readings below. Each is labelled "contended" in
+the report and none is a verdict on (1).
+
+(i) Counters. waits_mean, waits_max and the triggers by name are deterministic in the pool state
+and are read at any load. A rise in freed, mem_cap, working_set, slab_full or recycle waits in B,
+B2, C28 or E over A names the waited-commit route and is a finding; no rise confirms the in-situ
+refutation of that route. This reading says nothing about first-touch cost.
+
+(ii) One-sided "small" readings, from differences in ms, never ratios, taken within the same
+attempt. Dsync minus Dnosync is read from the printed medians. E minus A and B2 minus A are
+paired per round and pass from # sample lines; if the pass was run without them, those two
+readings are UNAVAILABLE and are not reconstructed from medians.
+  - Dsync minus Dnosync per call: contention can only inflate sync wake-up latency, so a value
+    under 2 ms on the conv row refutes per-op sync as the gap's cause on a quiet machine too.
+  - E minus A and B2 minus A: valid one-sided ONLY on a pressure-free contended attempt (Pageouts
+    and Swapins deltas zero), because contention without pressure can only inflate allocation and
+    first-touch cost. Then, if the larger of the two is under half the row's profile gap, the
+    gap taken at the LOW end of the profile band so the reading is the stricter one (conv
+    46.0 - 25.3 = 20.7 ms, half 10.4; convT 13.2 - 5.7 = 7.5, half 3.7; bilinear 8.0 - 1.9 =
+    6.1, half 3.0; linear 3.17 - 1.72 = 1.45, half 0.7), and its p90 over rounds is under the
+    full gap, (1) is PROVISIONALLY REFUTED for that row: first-touch under
+    contention costs less than half the gap, and a quiet machine cannot make it cost more. A
+    clean attempt converts this to REFUTED; it is not a verdict on its own. A large difference
+    confirms nothing (contention may have inflated it) and reads "consistent with (1),
+    unconfirmed". Under pressure this reading is void.
+
+(iii) Arm A in the profile's load regime: 1-minute load between 6 and 30 at both ends of the
+attempt (the cbd5565 profile ran at 16 to 24, the in-situ pass after 15). This tests whether the
+environment alone, with no churn and with pool hits, reproduces the frame's price; it tests
+"environment at this load", not "GPU contention" specifically, since pressure and CPU load are
+not separated. Per row, A's all-round median:
+  - conv: at or above 46.0 ms, environment SUFFICIENT; at or below 30.4 ms (1.2 x 25.3),
+    INSUFFICIENT; between, inconclusive.
+  - convT: 13.2 / 6.8.   bilinear: 8.0 / 2.3.   linear: 3.17 / 2.06.
+SUFFICIENT means the frame's price for the row is reproduced without allocation churn, so (1) is
+not needed to explain it; it does not exclude (1), which only (ii) on a pressure-free attempt or a
+clean run can do. The SUFFICIENT thresholds are the cbd5565 profile's LOW end (F = 1); matching
+the in-situ pass (conv 59 to 66 ms, bilinear 10.7 to 16.0) needs A at or above 59 ms and 10.7 ms
+on those rows, and a reading between the two is "reproduces the low end only", not "explains
+everything". INSUFFICIENT means the environment at the profile's load does not reproduce the
+gap, which leaves (1) and the untested in-frame state as the candidates and raises the priority
+of the clean run.
+
+The quiet-round filter on a contended attempt selects rounds at the attempt's modal contention
+level, not quiet rounds. It stabilises a difference; it certifies nothing. The precedent already
+recorded fc1 in band while 30-200 ms arms ran 16-34% slow.
+
+Deadline: if no clean attempt exists for a row by 2026-10-28 12:00 local, the row is UNREAD. An
+unread card proposes no pool or policy change. The report then carries the contended readings
+with their labels, the minimum 1-minute load observed while waiting, and the swap state.
