@@ -228,6 +228,29 @@ kernel void ojas_sigmoid_fwd(
     if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
+/// `max(x, 0)` as torch's `F.relu`: `x` where `x >= 0` (a negative zero stays
+/// as it is) and `+0` where `x < 0`, so no value is rounded. The sign is read
+/// from the bits, not by a float compare: the GPU's `v < 0.0f` treats a
+/// negative subnormal as zero and would pass it through, where the CPU
+/// returns `+0`. A NaN stays as it is. A NaN or infinity in `x` flags the
+/// input word; the output holds only inputs and zero, so it has no flag of
+/// its own.
+kernel void ojas_relu_fwd(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &n [[buffer(2)]],
+    device atomic_uint *st [[buffer(3)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= n) return;
+    const float v = x[i];
+    const uint bits = as_type<uint>(v);
+    const uint magnitude = bits & 0x7fffffffu;
+    const bool negative = (bits >> 31) != 0u && magnitude != 0u && magnitude <= 0x7f800000u;
+    y[i] = as_type<float>(negative ? 0u : bits);
+    if (!isfinite(v)) ojas_flag(st, ST_IN);
+}
+
 kernel void ojas_sigmoid_bwd(
     device const float *x [[buffer(0)]],
     device const float *g [[buffer(1)]],

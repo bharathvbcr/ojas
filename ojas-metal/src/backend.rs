@@ -89,18 +89,19 @@ use ojas_core::{
     linear_backward_dims, linear_bias_forward_dims, linear_ce_dims, linear_forward_dims,
     mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
     per_head_sigmoid_gate_forward_dims, permute_dims, refuse_unsupported_metal_gdn,
-    refuse_unsupported_metal_head_dim, residual_add_backward_dims, residual_add_forward_dims,
-    rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
-    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    rope_interleaved_backward_dims, rope_interleaved_forward_dims, rope_partial_backward_dims,
-    rope_partial_forward_dims, scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims,
-    silu_backward_dims, silu_forward_dims, softmax_forward_dims, topk_rows_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
-    AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk, CeGrads,
-    Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams, DType,
-    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
-    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    refuse_unsupported_metal_head_dim, relu_forward_dims, residual_add_backward_dims,
+    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
+    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
+    rope_half_split_forward_dims, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
+    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims,
+    sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
+    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
+    value_residual_blend_forward_dims, AdamWConfig, AttentionDims, AttentionOpts, Backend,
+    BackendId, BroadcastDims, Budget, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams,
+    ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
+    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe,
+    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
+    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
     ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
@@ -2328,6 +2329,13 @@ impl Backend for MetalBackend {
         };
         u32_dim(OP, product(OP, &dims.out_shape())?)?;
         self.one(OP, &dims.out_shape(), 0, Cmd::Bilinear { x, geom })
+    }
+
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "relu_forward";
+        relu_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        self.one(OP, input.shape(), 0, Cmd::Relu { x })
     }
 
     fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

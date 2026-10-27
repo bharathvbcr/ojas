@@ -148,6 +148,7 @@ const KERNELS: &[&str] = &[
     "ojas_silu_fwd",
     "ojas_silu_bwd",
     "ojas_sigmoid_fwd",
+    "ojas_relu_fwd",
     "ojas_sigmoid_bwd",
     "ojas_gdn_decay_fwd",
     "ojas_gdn_decay_bwd",
@@ -1610,6 +1611,7 @@ impl Worker {
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
             Cmd::Sigmoid { x } => self.sigmoid(x, None),
+            Cmd::Relu { x } => self.relu(x),
             Cmd::SigmoidBwd { x, gy } => self.sigmoid(x, Some(gy)),
             Cmd::GdnDecay {
                 a,
@@ -3407,6 +3409,23 @@ impl Worker {
                 bind_st(b, &st, 4);
             })?,
         }
+        Ok(self.keep(vec![y]))
+    }
+
+    /// `max(x, 0)`. The kernel checks its input itself; the output holds only
+    /// input values and zero.
+    fn relu(&mut self, x: Arg) -> Res<Reply> {
+        const OP: &str = "relu_forward";
+        let xv = self.view(x)?;
+        let n = u32_of(xv.n)?;
+        let y = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        self.k1("ojas_relu_fwd", xv.n, |b| {
+            bind(b, &xv, 0);
+            bind(b, &y, 1);
+            set_u32(b, n, 2);
+            bind_st(b, &st, 3);
+        })?;
         Ok(self.keep(vec![y]))
     }
 

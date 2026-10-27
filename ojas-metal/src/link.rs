@@ -794,6 +794,10 @@ pub(crate) enum Cmd {
     Sigmoid {
         x: Arg,
     },
+    /// `max(x, 0)` of `x`.
+    Relu {
+        x: Arg,
+    },
     SigmoidBwd {
         x: Arg,
         gy: Arg,
