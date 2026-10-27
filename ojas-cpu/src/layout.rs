@@ -192,7 +192,10 @@ pub(crate) fn slice(
 /// `value` come from [`ojas_core::fill_dims`], which refused a value the
 /// dtype cannot hold exactly: an `F32` fill stores `value`'s bits, a `U32`
 /// fill its integer, a `Bf16` fill the high half of its bits (the low half is
-/// clear). The output is the only charge, and nothing is read.
+/// clear). The output is the only charge, and nothing is read. An `F32` or
+/// `U32` output is built with [`Scratch::try_extend`], so each element is
+/// written once with no zero fill; `Bf16` has no [`Scratch`] element type, so
+/// it is a zeroed [`Tensor::zeros`] allocation that is then filled.
 pub(crate) fn fill(
     op: &'static str,
     budget: &Budget,
@@ -203,13 +206,11 @@ pub(crate) fn fill(
     let n = product(op, shape)?;
     match dtype {
         DType::F32 => {
-            let mut out = Scratch::<f32>::try_alloc(n, budget)?;
-            out.as_mut_slice().fill(value);
+            let out = Scratch::<f32>::try_extend(n, budget, |v| v.resize(n, value))?;
             Tensor::from_scratch(out, shape)
         }
         DType::U32 => {
-            let mut out = Scratch::<u32>::try_alloc(n, budget)?;
-            out.as_mut_slice().fill(value as u32);
+            let out = Scratch::<u32>::try_extend(n, budget, |v| v.resize(n, value as u32))?;
             Tensor::from_scratch(out, shape)
         }
         DType::Bf16 => {

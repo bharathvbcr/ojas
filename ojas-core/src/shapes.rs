@@ -225,7 +225,12 @@ pub struct AttentionBias {
 /// Dimensions of [`crate::Backend::attention_forward`]. Query is `[B, H,
 /// Tq, D]`; K and V are `[B, Hkv, Tk, D]`, `H` a positive multiple of `Hkv`.
 /// Every extent is non-zero and the product of each tensor, in `f32` bytes,
-/// fits `usize`.
+/// fits `usize`: [`attention_forward_dims`], [`attention_forward_saving_dims`]
+/// and [`attention_backward_dims`] refuse a zero extent in any operand
+/// (`q`, `k`, `v`, the bias, `key_lens`, and the backward's output, gradient
+/// and `lse`) before the layout is read. The layout check itself refuses zero
+/// head counts. A backend kernel handed an empty tensor directly is outside
+/// these validators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AttentionDims {
     pub batch: usize,
@@ -1588,10 +1593,11 @@ pub fn concat_dims(inputs: &[&Tensor], axis: usize) -> Result<ConcatDims, OjasEr
     })
 }
 
-/// [`crate::Backend::fill`]: a `shape` with no zero extent whose element and
-/// byte counts fit `usize` ([`OjasError::OutOfRange`]; rank 0 is one
-/// element), a `dtype` of `F32`, `Bf16` or `U32` (`F16` is a
-/// [`OjasError::Dtype`] naming `F32`), and then the value, which must be
+/// [`crate::Backend::fill`]: refused in this order. A `shape` with a zero
+/// extent is [`OjasError::Shape`] (rank 0 is one element); then a `dtype` of
+/// `F16` is a [`OjasError::Dtype`] naming `F32` (`F32`, `Bf16` and `U32` are
+/// accepted); then element and byte counts that overflow `usize` are
+/// [`OjasError::OutOfRange`]; and then the value, which must be
 /// finite ([`OjasError::NonFinite`], as no op takes or stores a NaN or an
 /// infinity) and exactly representable in `dtype`: any finite `f32` for
 /// `F32`; one a bf16 holds bit for bit for `Bf16`; an integer in `0..2^32`
@@ -1599,15 +1605,15 @@ pub fn concat_dims(inputs: &[&Tensor], axis: usize) -> Result<ConcatDims, OjasEr
 /// rounded or truncated. Returns the element count.
 pub fn fill_dims(shape: &[usize], dtype: DType, value: f32) -> Result<usize, OjasError> {
     const OP: &str = FILL;
+    if shape.contains(&0) {
+        return Err(refuse(OP, "empty tensor"));
+    }
     if dtype == DType::F16 {
         return Err(OjasError::Dtype {
             op: OP,
             expected: DType::F32,
             got: dtype,
         });
-    }
-    if shape.contains(&0) {
-        return Err(refuse(OP, "empty tensor"));
     }
     let n = sized_product(OP, shape, dtype.size())?;
     if !value.is_finite() {
@@ -2079,7 +2085,9 @@ fn attention_layout(
             format!("attention shapes q {qs:?} k {ks:?} v {vs:?} differ"),
         ));
     }
-    if kv_heads > heads || heads % kv_heads != 0 {
+    // The operands' own rule already refused a zero extent; the head counts
+    // are checked again here so the remainder never depends on that order.
+    if heads == 0 || kv_heads == 0 || kv_heads > heads || heads % kv_heads != 0 {
         return Err(refuse(
             op,
             format!("attention has {heads} query heads over {kv_heads} kv heads"),
@@ -4399,6 +4407,49 @@ mod tests {
     }
 
     #[test]
+    fn attention_layout_refuses_zero_head_counts_without_dividing() {
+        // `attention_layout` takes its operands already checked, so a zero
+        // extent never reaches it through the public validators. It is called
+        // directly here: with zero kv heads it must refuse, not divide by zero.
+        let op = "attention_forward";
+        let opts = AttentionOpts::default();
+        for (q, k) in [
+            (&[1, 2, 4, 8][..], &[1, 0, 4, 8][..]),
+            (&[1, 0, 4, 8], &[1, 0, 4, 8]),
+            (&[1, 0, 4, 8], &[1, 2, 4, 8]),
+            (&[1, 3, 4, 8], &[1, 0, 4, 8]),
+        ] {
+            shape_err(
+                attention_layout(op, &f(q), &f(k), &f(k), &opts).map(|_| ()),
+                op,
+                "query heads",
+            );
+        }
+        // Grouping is unchanged for non-zero heads.
+        let d = attention_layout(
+            op,
+            &f(&[1, 4, 2, 8]),
+            &f(&[1, 2, 2, 8]),
+            &f(&[1, 2, 2, 8]),
+            &opts,
+        )
+        .unwrap();
+        assert_eq!((d.heads, d.kv_heads), (4, 2));
+        shape_err(
+            attention_layout(
+                op,
+                &f(&[1, 4, 2, 8]),
+                &f(&[1, 3, 2, 8]),
+                &f(&[1, 3, 2, 8]),
+                &opts,
+            )
+            .map(|_| ()),
+            op,
+            "query heads",
+        );
+    }
+
+    #[test]
     fn concat_dims_view_each_input_as_outer_axis_inner() {
         let op = "concat";
         let (a, b, c) = (f(&[2, 3, 4]), f(&[2, 5, 4]), f(&[2, 1, 4]));
@@ -4511,6 +4562,12 @@ mod tests {
             }
         }
         dtype_err(fill_dims(&[2], DType::F16, 1.0), op, DType::F32, DType::F16);
+        // A zero extent is a shape error whatever the dtype, F16 included,
+        // and before an F16 fill's own refusal.
+        for dtype in [DType::F32, DType::Bf16, DType::U32, DType::F16] {
+            shape_err(fill_dims(&[2, 0], dtype, 1.0), op, "empty tensor");
+            shape_err(fill_dims(&[0], dtype, f32::NAN), op, "empty tensor");
+        }
         // Shape rules come first: a NaN in an empty fill reports the shape.
         shape_err(fill_dims(&[2, 0], DType::F32, f32::NAN), op, "empty tensor");
         shape_err(fill_dims(&[0], DType::U32, 0.5), op, "empty tensor");
